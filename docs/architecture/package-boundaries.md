@@ -5,7 +5,7 @@
 通用规则：
 
 - 所有 package/app 都是 private ESM workspace project。
-- 所有公共 API 从 `src/index.ts` 导出；构建产物从 `dist/` 暴露，禁止深层 `src` import。
+- 所有公共 API 从 `src/index.ts` 导出；workspace 开发可直接解析这个入口，Node package 构建仍生成 `dist/`，禁止深层 `src` import。
 - app 只能向下依赖 package；package 绝不依赖 app。
 - 内部 package 依赖使用 `@caelush/*` 包名与 `workspace:*` 协议。
 - `protocol` 位于最底层，只承载跨边界 Contract，不依赖其他 Caelush feature package；当前唯一真实的内部依赖是 `core → protocol`。
