@@ -16,6 +16,9 @@ Caelush 是一个 TypeScript/Node.js 通用 Agent Kernel 项目。CLI、Web 和�
 - ToolDefinition 只能是数据描述；可执行函数、Dispatcher、Permission 和 Runtime 实现必须留在后续对应 package。
 - Run status 迁移必须经过 Core 的 canonical Run State Machine；不能在调用方复制一套转移规则。
 - Durable Event 的 sequence 是恢复和消费的权威顺序，不能用 timestamp 代替；Step 与 PlanItem 也必须保持不同职责。
+- Durable Event 必须先持久化、再发布；EventBus 的 replay 使用排他游标并与 live watch 无缝衔接，不能重复或丢失事件。
+- Storage 必须通过显式 SQLite 路径与 committed migration 初始化；public API 不能泄漏 `DatabaseSync`、Drizzle client 或数据库 row 类型。
+- Repository 负责 Protocol entity 的 CRUD 与 JSON codec；数据库列只做查询索引，不能演变成第二套状态模型或 Event Sourcing projection。
 - 公共 API 只能从每个 package 的 `src/index.ts` 进入；禁止 `@caelush/*/src/...` 和深层相对路径跨 package import。
 
 ## Development Rules
@@ -41,6 +44,6 @@ pnpm check
 
 ## V1 Phase Boundary
 
-当前是 Phase 1：Protocol & State Model。已正式定义 AgentSession、AgentRun、AgentStep、AgentState、AgentEvent、ToolDefinition、ToolInvocation、Observation、ApprovalRequest、VerificationResult 和 Run State Machine；仍不实现 AgentLoop、LLM、Tool 执行、Runtime、Storage、Fastify API、SSE、Ink CLI 功能或 React Web 功能。
+当前是 Phase 2：Storage & EventBus。除 Phase 1 已正式定义的 AgentSession、AgentRun、AgentStep、AgentState、AgentEvent、ToolDefinition、ToolInvocation、Observation、ApprovalRequest、VerificationResult 和 Run State Machine 外，已实现 SQLite/Drizzle Storage、Repository、Run State Snapshot、Durable Event Store、EventBus、Replay 与 Live Watch；仍不实现 AgentLoop、LLM、Tool 执行、Runtime、Fastify API、SSE、Ink CLI 功能或 React Web 功能。
 
-下一阶段是 Phase 2：Storage & EventBus。
+下一阶段由后续任务另行定义；不得提前实现 AgentLoop 或其他宿主产品功能。
