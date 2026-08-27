@@ -25,7 +25,7 @@ Storage / Events / Trace
 Durability and observability consumers
 ```
 
-当前 Phase 0 只落地目录、公共入口、严格配置和架构守卫。上图中的运行时行为会在后续 Phase 逐步实现；空 package 不是功能缺失的临时替代，而是刻意冻结的边界。
+当前已完成 Phase 0 的仓库基础，并在 Phase 1 落地 `@caelush/protocol` 的稳定 Contract、Typed AgentEvent 与 `@caelush/core` 的 Run State Machine。LLM、Tool 执行、Runtime、持久化、服务端和 UI 的运行时行为仍会在后续 Phase 逐步实现；空 package 不是功能缺失的临时替代，而是刻意冻结的边界。
 
 依赖方向遵循：
 
@@ -38,3 +38,5 @@ protocol（稳定底层 Contract）
 ```
 
 实际 package 的职责、允许依赖和禁止依赖见 [package-boundaries.md](package-boundaries.md)。
+
+Phase 1 的协议细节见 [protocol-v1.md](protocol-v1.md)。

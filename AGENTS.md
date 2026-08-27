@@ -12,6 +12,10 @@ Caelush 是一个 TypeScript/Node.js 通用 Agent Kernel 项目。CLI、Web 和�
 - Runtime 必须可替换，不能把本地执行细节写死在 Core。
 - 用户可见的执行过程来自 AgentEvent/Event Stream，而不是 UI 自己猜测 Core 状态。
 - 任务完成必须经过 Verification，不能只根据 LLM 的自然语言结束判断完成。
+- Protocol Schema 是跨 package Contract 的 source of truth；Protocol 值必须保持 JSON-safe，不能泄漏 Provider SDK、数据库、Runtime 或 UI 类型。
+- ToolDefinition 只能是数据描述；可执行函数、Dispatcher、Permission 和 Runtime 实现必须留在后续对应 package。
+- Run status 迁移必须经过 Core 的 canonical Run State Machine；不能在调用方复制一套转移规则。
+- Durable Event 的 sequence 是恢复和消费的权威顺序，不能用 timestamp 代替；Step 与 PlanItem 也必须保持不同职责。
 - 公共 API 只能从每个 package 的 `src/index.ts` 进入；禁止 `@caelush/*/src/...` 和深层相对路径跨 package import。
 
 ## Development Rules
@@ -37,6 +41,6 @@ pnpm check
 
 ## V1 Phase Boundary
 
-当前是 Phase 0：只建立 Repository & Architecture Foundation。当前阶段不实现 AgentLoop、LLM、Tool、Runtime、正式 Agent State/Session/Run、Storage、Fastify API、SSE、Ink CLI 功能或 React Web 功能。
+当前是 Phase 1：Protocol & State Model。已正式定义 AgentSession、AgentRun、AgentStep、AgentState、AgentEvent、ToolDefinition、ToolInvocation、Observation、ApprovalRequest、VerificationResult 和 Run State Machine；仍不实现 AgentLoop、LLM、Tool 执行、Runtime、Storage、Fastify API、SSE、Ink CLI 功能或 React Web 功能。
 
-下一阶段是 Phase 1：Protocol & State Model。届时再正式定义 AgentSession、AgentRun、AgentStep、AgentState、AgentEvent、ToolDefinition、ToolInvocation、Observation、ApprovalRequest、VerificationResult 和 Run State Machine。
+下一阶段是 Phase 2：Storage & EventBus。
