@@ -49,6 +49,21 @@ describe("package boundaries", () => {
     ).toBe(false);
   });
 
+  it("keeps Events provider-neutral and Storage below Core", async () => {
+    const events = await readManifest("packages/events/package.json");
+    const storage = await readManifest("packages/storage/package.json");
+    const core = await readManifest("packages/core/package.json");
+    const eventDependencies = Object.keys(dependencyEntries(events));
+    const storageDependencies = Object.keys(dependencyEntries(storage));
+    const coreDependencies = Object.keys(dependencyEntries(core));
+
+    expect(eventDependencies).toContain("@caelush/protocol");
+    expect(eventDependencies).not.toContain("@caelush/storage");
+    expect(storageDependencies).toContain("@caelush/events");
+    expect(storageDependencies).toContain("@caelush/protocol");
+    expect(coreDependencies).not.toContain("@caelush/storage");
+  });
+
   it("requires workspace protocol for every internal dependency", async () => {
     for (const manifestPath of allWorkspaceManifestPaths()) {
       const manifestExists = await pathExists(manifestPath);

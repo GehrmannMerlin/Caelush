@@ -1,0 +1,612 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "id": "be1bd8a9-ac73-4c93-8693-06b328b3431d",
+  "prevIds": ["00000000-0000-0000-0000-000000000000"],
+  "ddl": [
+    {
+      "name": "agent_events",
+      "entityType": "tables"
+    },
+    {
+      "name": "agent_runs",
+      "entityType": "tables"
+    },
+    {
+      "name": "agent_sessions",
+      "entityType": "tables"
+    },
+    {
+      "name": "agent_state_snapshots",
+      "entityType": "tables"
+    },
+    {
+      "name": "agent_steps",
+      "entityType": "tables"
+    },
+    {
+      "name": "event_sequences",
+      "entityType": "tables"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "event_id",
+      "entityType": "columns",
+      "table": "agent_events"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "run_id",
+      "entityType": "columns",
+      "table": "agent_events"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "agent_events"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "step_id",
+      "entityType": "columns",
+      "table": "agent_events"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "aggregate_sequence",
+      "entityType": "columns",
+      "table": "agent_events"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "event_type",
+      "entityType": "columns",
+      "table": "agent_events"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "event_schema_version",
+      "entityType": "columns",
+      "table": "agent_events"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "visibility",
+      "entityType": "columns",
+      "table": "agent_events"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "timestamp_ms",
+      "entityType": "columns",
+      "table": "agent_events"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "data_json",
+      "entityType": "columns",
+      "table": "agent_events"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "agent_runs"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "agent_runs"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "protocol_version",
+      "entityType": "columns",
+      "table": "agent_runs"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "status",
+      "entityType": "columns",
+      "table": "agent_runs"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at_ms",
+      "entityType": "columns",
+      "table": "agent_runs"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "started_at_ms",
+      "entityType": "columns",
+      "table": "agent_runs"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "finished_at_ms",
+      "entityType": "columns",
+      "table": "agent_runs"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "data_json",
+      "entityType": "columns",
+      "table": "agent_runs"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "agent_sessions"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "protocol_version",
+      "entityType": "columns",
+      "table": "agent_sessions"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at_ms",
+      "entityType": "columns",
+      "table": "agent_sessions"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at_ms",
+      "entityType": "columns",
+      "table": "agent_sessions"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "data_json",
+      "entityType": "columns",
+      "table": "agent_sessions"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "run_id",
+      "entityType": "columns",
+      "table": "agent_state_snapshots"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revision",
+      "entityType": "columns",
+      "table": "agent_state_snapshots"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at_ms",
+      "entityType": "columns",
+      "table": "agent_state_snapshots"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "data_json",
+      "entityType": "columns",
+      "table": "agent_state_snapshots"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "agent_steps"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "run_id",
+      "entityType": "columns",
+      "table": "agent_steps"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "sequence",
+      "entityType": "columns",
+      "table": "agent_steps"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "status",
+      "entityType": "columns",
+      "table": "agent_steps"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "started_at_ms",
+      "entityType": "columns",
+      "table": "agent_steps"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "finished_at_ms",
+      "entityType": "columns",
+      "table": "agent_steps"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "data_json",
+      "entityType": "columns",
+      "table": "agent_steps"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "run_id",
+      "entityType": "columns",
+      "table": "event_sequences"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "last_sequence",
+      "entityType": "columns",
+      "table": "event_sequences"
+    },
+    {
+      "columns": ["run_id"],
+      "tableTo": "agent_runs",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "fk_agent_events_run_id_agent_runs_id_fk",
+      "entityType": "fks",
+      "table": "agent_events"
+    },
+    {
+      "columns": ["session_id"],
+      "tableTo": "agent_sessions",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "fk_agent_events_session_id_agent_sessions_id_fk",
+      "entityType": "fks",
+      "table": "agent_events"
+    },
+    {
+      "columns": ["step_id"],
+      "tableTo": "agent_steps",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "fk_agent_events_step_id_agent_steps_id_fk",
+      "entityType": "fks",
+      "table": "agent_events"
+    },
+    {
+      "columns": ["session_id"],
+      "tableTo": "agent_sessions",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "fk_agent_runs_session_id_agent_sessions_id_fk",
+      "entityType": "fks",
+      "table": "agent_runs"
+    },
+    {
+      "columns": ["run_id"],
+      "tableTo": "agent_runs",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "fk_agent_state_snapshots_run_id_agent_runs_id_fk",
+      "entityType": "fks",
+      "table": "agent_state_snapshots"
+    },
+    {
+      "columns": ["run_id"],
+      "tableTo": "agent_runs",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "fk_agent_steps_run_id_agent_runs_id_fk",
+      "entityType": "fks",
+      "table": "agent_steps"
+    },
+    {
+      "columns": ["run_id"],
+      "tableTo": "agent_runs",
+      "columnsTo": ["id"],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "fk_event_sequences_run_id_agent_runs_id_fk",
+      "entityType": "fks",
+      "table": "event_sequences"
+    },
+    {
+      "columns": ["event_id"],
+      "nameExplicit": false,
+      "name": "agent_events_pk",
+      "table": "agent_events",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "agent_runs_pk",
+      "table": "agent_runs",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "agent_sessions_pk",
+      "table": "agent_sessions",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["run_id"],
+      "nameExplicit": false,
+      "name": "agent_state_snapshots_pk",
+      "table": "agent_state_snapshots",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["id"],
+      "nameExplicit": false,
+      "name": "agent_steps_pk",
+      "table": "agent_steps",
+      "entityType": "pks"
+    },
+    {
+      "columns": ["run_id"],
+      "nameExplicit": false,
+      "name": "event_sequences_pk",
+      "table": "event_sequences",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        {
+          "value": "run_id",
+          "isExpression": false
+        },
+        {
+          "value": "aggregate_sequence",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "agent_events_run_sequence_unique",
+      "entityType": "indexes",
+      "table": "agent_events"
+    },
+    {
+      "columns": [
+        {
+          "value": "run_id",
+          "isExpression": false
+        },
+        {
+          "value": "aggregate_sequence",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "agent_events_run_sequence_idx",
+      "entityType": "indexes",
+      "table": "agent_events"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "agent_runs_session_id_idx",
+      "entityType": "indexes",
+      "table": "agent_runs"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "created_at_ms",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "agent_runs_session_created_at_idx",
+      "entityType": "indexes",
+      "table": "agent_runs"
+    },
+    {
+      "columns": [
+        {
+          "value": "status",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "agent_runs_status_idx",
+      "entityType": "indexes",
+      "table": "agent_runs"
+    },
+    {
+      "columns": [
+        {
+          "value": "run_id",
+          "isExpression": false
+        },
+        {
+          "value": "sequence",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "agent_steps_run_sequence_unique",
+      "entityType": "indexes",
+      "table": "agent_steps"
+    }
+  ],
+  "renames": []
+}
