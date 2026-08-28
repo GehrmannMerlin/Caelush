@@ -3,6 +3,7 @@ import type {
   LLMCapabilities,
   LLMError,
   LLMProvider,
+  LLMProviderCallContext,
   LLMProviderRequest,
   LLMStreamEvent,
   ProviderId,
@@ -32,6 +33,11 @@ export class FakeLLMProvider implements LLMProvider {
   readonly error: LLMError | undefined;
   readonly capabilities: LLMCapabilities;
   observedRequest: LLMProviderRequest | undefined;
+  readonly observedRequests: LLMProviderRequest[] = [];
+  readonly observedContexts: LLMProviderCallContext[] = [];
+  streamCallCount = 0;
+  lastSignal: AbortSignal | undefined;
+  lastCallId: LLMProviderCallContext["callId"] | undefined;
   private readonly modelPredicate: (model: ModelRef) => boolean;
 
   constructor(options: FakeLLMProviderOptions) {
@@ -51,9 +57,17 @@ export class FakeLLMProvider implements LLMProvider {
     return this.capabilities;
   }
 
-  async *stream(request: LLMProviderRequest, signal: AbortSignal): AsyncIterable<LLMStreamEvent> {
+  async *stream(
+    request: LLMProviderRequest,
+    context: LLMProviderCallContext,
+  ): AsyncIterable<LLMStreamEvent> {
     this.observedRequest = request;
-    if (signal.aborted) {
+    this.observedRequests.push(request);
+    this.observedContexts.push(context);
+    this.streamCallCount += 1;
+    this.lastSignal = context.signal;
+    this.lastCallId = context.callId;
+    if (context.signal.aborted) {
       throw new LLMAbortedError();
     }
     if (this.error !== undefined) {

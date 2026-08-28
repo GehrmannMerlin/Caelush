@@ -41,5 +41,10 @@ export {
 } from "./errors.js";
 export type { LLMErrorCode, LLMErrorContext } from "./errors.js";
 export { ProviderIdSchema } from "./provider.js";
-export type { LLMProvider, LLMProviderRequest, ProviderId } from "./provider.js";
+export type {
+  LLMProvider,
+  LLMProviderCallContext,
+  LLMProviderRequest,
+  ProviderId,
+} from "./provider.js";
 export { LLMProviderRegistry } from "./provider-registry.js";

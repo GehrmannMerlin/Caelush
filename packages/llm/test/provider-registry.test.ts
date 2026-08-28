@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createLLMCallId } from "@caelush/protocol";
 import type { LLMProvider } from "../src/index.js";
 import { LLMProviderError, LLMProviderNotFoundError, LLMProviderRegistry } from "../src/index.js";
 import { FakeLLMProvider } from "./support/fake-provider.js";
@@ -70,7 +71,10 @@ describe("LLM provider registry", () => {
     const request = { model: { provider: "local", model: "test-model" }, messages: [] };
     const received = [];
 
-    for await (const event of fake.stream(request, new AbortController().signal)) {
+    for await (const event of fake.stream(request, {
+      callId: createLLMCallId(),
+      signal: new AbortController().signal,
+    })) {
       received.push(event);
     }
 
