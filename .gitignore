@@ -3,6 +3,7 @@ dist/
 coverage/
 .vite/
 .turbo/
+.worktrees/
 *.tsbuildinfo
 .env
 .env.*
