@@ -26,3 +26,4 @@ export type {
 } from "./agent-decision.js";
 export { classifyAgentDecision } from "./agent-decision-mapper.js";
 export { summarizeAgentDecision, summarizeAgentLoopOutcome } from "./agent-summary.js";
+export { normalizeToolResultBatch } from "./agent-tool-results.js";
