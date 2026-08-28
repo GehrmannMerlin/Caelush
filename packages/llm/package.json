@@ -11,6 +11,10 @@
     "./messages": {
       "types": "./dist/messages.d.ts",
       "import": "./dist/messages.js"
+    },
+    "./turn": {
+      "types": "./dist/turn.d.ts",
+      "import": "./dist/turn.js"
     }
   },
   "scripts": {
