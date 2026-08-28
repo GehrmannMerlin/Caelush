@@ -25,6 +25,21 @@ export type {
   AgentToolCallsDecision,
   AgentToolRequest,
 } from "./agent-decision.js";
+export type {
+  AwaitingVerificationContinuation,
+  RunContinuationCheckpoint,
+  WaitingToolResultsContinuation,
+} from "./agent-continuation.js";
+export {
+  AgentDecisionSchema,
+  AgentFinalCandidateDecisionSchema,
+  AgentModelTurnSchema,
+  AgentToolCallsDecisionSchema,
+  AgentToolRequestSchema,
+  AwaitingVerificationContinuationSchema,
+  RunContinuationCheckpointSchema,
+  WaitingToolResultsContinuationSchema,
+} from "./agent-continuation-schema.js";
 export { classifyAgentDecision } from "./agent-decision-mapper.js";
 export { summarizeAgentDecision, summarizeAgentLoopOutcome } from "./agent-summary.js";
 export { normalizeToolResultBatch } from "./agent-tool-results.js";
@@ -64,5 +79,8 @@ export type {
   AgentRelevantFilePlannerPort,
   AgentClock,
   AgentStepIdFactory,
+  AgentBeforeProviderTurn,
+  AgentLoopLifecycleHooks,
+  AgentProviderTurnState,
 } from "./agent-loop-ports.js";
 export { AgentLoop } from "./agent-loop.js";

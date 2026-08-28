@@ -54,6 +54,25 @@ export const agentStateSnapshots = sqliteTable("agent_state_snapshots", {
   dataJson: text("data_json").notNull(),
 });
 
+export const agentMessages = sqliteTable(
+  "agent_messages",
+  {
+    runId: text("run_id")
+      .notNull()
+      .references(() => agentRuns.id),
+    sequence: integer("sequence").notNull(),
+    role: text("role").notNull(),
+    sourceStepId: text("source_step_id").references(() => agentSteps.id),
+    protocolVersion: integer("protocol_version").notNull(),
+    createdAtMs: integer("created_at_ms").notNull(),
+    dataJson: text("data_json").notNull(),
+  },
+  (table) => [
+    uniqueIndex("agent_messages_run_sequence_unique").on(table.runId, table.sequence),
+    index("agent_messages_run_sequence_idx").on(table.runId, table.sequence),
+  ],
+);
+
 export const eventSequences = sqliteTable("event_sequences", {
   runId: text("run_id")
     .primaryKey()
@@ -90,6 +109,7 @@ export const storageSchema = {
   agentRuns,
   agentSteps,
   agentStateSnapshots,
+  agentMessages,
   eventSequences,
   agentEvents,
 };

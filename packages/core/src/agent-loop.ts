@@ -147,11 +147,40 @@ export class AgentLoop {
       startedAt,
     });
     const activeState = beginAgentStepState(input.state, step.id, startedAt);
+    try {
+      await this.dependencies.lifecycle?.beforeProviderTurn({
+        run: input.run,
+        state: activeState,
+        step,
+        model: input.run.model,
+      });
+    } catch (error) {
+      return this.failureAfterStep(
+        input,
+        activeState,
+        step,
+        prepared.context,
+        appendPrefix,
+        error,
+        undefined,
+        "NOT_STARTED",
+      );
+    }
+
     let result: LLMTurnResult;
     try {
       result = await this.dependencies.llmClient.complete(prepared.request);
     } catch (error) {
-      return this.failureAfterStep(input, activeState, step, prepared.context, appendPrefix, error);
+      return this.failureAfterStep(
+        input,
+        activeState,
+        step,
+        prepared.context,
+        appendPrefix,
+        error,
+        undefined,
+        "FAILED",
+      );
     }
 
     try {
@@ -172,12 +201,12 @@ export class AgentLoop {
         return this.outcome(decision, verifyingState, completedStep, prepared.context, [
           ...appendPrefix,
           decision.modelTurn.assistantMessage,
-        ]);
+        ], "COMPLETED");
       }
       return this.outcome(decision, settledState, completedStep, prepared.context, [
         ...appendPrefix,
         decision.modelTurn.assistantMessage,
-      ]);
+      ], "COMPLETED");
     } catch (error) {
       const parsed = LLMTurnResultSchema.safeParse(result);
       const usage = parsed.success ? parsed.data.usage : undefined;
@@ -189,6 +218,7 @@ export class AgentLoop {
         appendPrefix,
         error,
         usage,
+        "COMPLETED",
       );
     }
   }
@@ -201,6 +231,7 @@ export class AgentLoop {
     appendPrefix: readonly LLMMessage[],
     error: unknown,
     usage?: import("@caelush/llm/turn").LLMUsage,
+    providerTurnState: import("./agent-loop-ports.js").AgentProviderTurnState = "FAILED",
   ): AgentLoopFailureResult {
     const finishedAt = this.dependencies.clock.now();
     const failedStep = failAgentStep(step, finishedAt);
@@ -217,6 +248,7 @@ export class AgentLoop {
       step: failedStep,
       messagesToAppend: [...appendPrefix],
       contextReport: context.report,
+      providerTurnState,
     };
   }
 
@@ -225,7 +257,13 @@ export class AgentLoop {
     error: ReturnType<typeof mapAgentLoopError>,
     messagesToAppend: readonly LLMMessage[],
   ): AgentLoopFailureResult {
-    return { status: "FAILED", error, state, messagesToAppend: [...messagesToAppend] };
+    return {
+      status: "FAILED",
+      error,
+      state,
+      messagesToAppend: [...messagesToAppend],
+      providerTurnState: "NOT_STARTED",
+    };
   }
 
   private maxStepsResult(
@@ -238,6 +276,7 @@ export class AgentLoop {
       outcome,
       state: markAgentStateMaxStepsReached(state, this.dependencies.clock.now()),
       messagesToAppend: [...messagesToAppend],
+      providerTurnState: "NOT_STARTED",
     };
   }
 
@@ -247,6 +286,7 @@ export class AgentLoop {
     step: AgentStep,
     context: BuiltModelContext,
     messagesToAppend: readonly LLMMessage[],
+    providerTurnState: import("./agent-loop-ports.js").AgentProviderTurnState,
   ): AgentLoopOutcomeResult {
     return {
       status: "OUTCOME",
@@ -255,6 +295,7 @@ export class AgentLoop {
       step,
       contextReport: context.report,
       messagesToAppend: [...messagesToAppend],
+      providerTurnState,
     };
   }
 }

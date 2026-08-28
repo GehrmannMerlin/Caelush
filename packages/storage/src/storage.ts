@@ -12,6 +12,10 @@ import {
 } from "./repositories/run-state-repository.js";
 import { SqliteDurableEventStore } from "./events/sqlite-durable-event-store.js";
 import type { DurableEventStore } from "@caelush/events";
+import {
+  SqliteConversationRepository,
+  type ConversationRepository,
+} from "./repositories/conversation-repository.js";
 
 export interface CaelushStorage {
   readonly sessions: SessionRepository;
@@ -19,6 +23,7 @@ export interface CaelushStorage {
   readonly steps: StepRepository;
   readonly runStates: RunStateRepository;
   readonly events: DurableEventStore;
+  readonly messages: ConversationRepository;
   close(): Promise<void>;
 }
 
@@ -33,6 +38,7 @@ export async function openCaelushStorage(options: { path: string }): Promise<Cae
       steps: new SqliteStepRepository(database),
       runStates: new SqliteRunStateRepository(database),
       events: new SqliteDurableEventStore(database),
+      messages: new SqliteConversationRepository(database),
       close: async () => database.close(),
     };
   } catch (error) {

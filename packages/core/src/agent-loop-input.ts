@@ -12,7 +12,7 @@ import type {
   ToolDefinition,
 } from "@caelush/protocol";
 import type { AgentToolCallsDecision, AgentLoopOutcome } from "./agent-decision.js";
-import type { AgentLoopDependencies } from "./agent-loop-ports.js";
+import type { AgentLoopDependencies, AgentProviderTurnState } from "./agent-loop-ports.js";
 
 export interface AgentLoopModelSettings {
   readonly maxOutputTokens?: number;
@@ -46,6 +46,7 @@ export interface AgentLoopOutcomeResult {
   readonly step?: AgentStep;
   readonly messagesToAppend: readonly LLMMessage[];
   readonly contextReport?: ContextBuildReport;
+  readonly providerTurnState: AgentProviderTurnState;
 }
 
 export interface AgentLoopFailureResult {
@@ -55,6 +56,7 @@ export interface AgentLoopFailureResult {
   readonly step?: AgentStep;
   readonly messagesToAppend: readonly LLMMessage[];
   readonly contextReport?: ContextBuildReport;
+  readonly providerTurnState: AgentProviderTurnState;
 }
 
 export type AgentLoopExecutionResult = AgentLoopOutcomeResult | AgentLoopFailureResult;

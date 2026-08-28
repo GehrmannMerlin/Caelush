@@ -78,6 +78,9 @@ importers:
       '@caelush/protocol':
         specifier: workspace:*
         version: link:../protocol
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
 
   packages/events:
     dependencies:
@@ -122,6 +125,9 @@ importers:
       '@caelush/events':
         specifier: workspace:*
         version: link:../events
+      '@caelush/llm':
+        specifier: workspace:*
+        version: link:../llm
       '@caelush/protocol':
         specifier: workspace:*
         version: link:../protocol

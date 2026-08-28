@@ -7,6 +7,14 @@ export type { RunListOptions, RunRepository } from "./repositories/run-repositor
 export type { StepRepository } from "./repositories/step-repository.js";
 export type { RunStateRepository } from "./repositories/run-state-repository.js";
 export {
+  SqliteConversationRepository,
+} from "./repositories/conversation-repository.js";
+export type {
+  ConversationAppendInput,
+  ConversationRepository,
+  RunConversationEntry,
+} from "./repositories/conversation-repository.js";
+export {
   StorageConflictError,
   StorageDecodeError,
   StorageError,
