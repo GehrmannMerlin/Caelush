@@ -11,7 +11,7 @@ const modelName = process.env.CAELUSH_OPENAI_COMPATIBLE_MODEL;
 const includeTool = process.env.CAELUSH_LLM_SMOKE_TOOL === "1";
 
 if (process.env.CAELUSH_LLM_SMOKE !== "1") {
-  console.log("OpenAI-compatible smoke: SKIPPED (set CAELUSH_LLM_SMOKE=1 to opt in). ");
+  console.log("OpenAI-compatible smoke: SKIPPED (set CAELUSH_LLM_SMOKE=1 to opt in).");
 } else if (baseURL === undefined || apiKey === undefined || modelName === undefined) {
   console.log(
     "OpenAI-compatible smoke: SKIPPED (set CAELUSH_OPENAI_COMPATIBLE_BASE_URL, CAELUSH_OPENAI_COMPATIBLE_API_KEY, and CAELUSH_OPENAI_COMPATIBLE_MODEL).",
@@ -27,9 +27,9 @@ if (process.env.CAELUSH_LLM_SMOKE !== "1") {
   providers.register(provider);
   const gateway = new LLMGateway({ providers });
   const tool: ToolDefinition = {
-    name: "read_file",
-    description: "Read a file by path.",
-    inputSchema: { type: "object", properties: { path: { type: "string" } } },
+    name: "get_test_value",
+    description: "Return a test value.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
     outputSchema: { type: "object" },
     riskLevel: "LOW",
     requiredCapabilities: ["FS_READ"],
@@ -43,8 +43,8 @@ if (process.env.CAELUSH_LLM_SMOKE !== "1") {
         {
           role: "user",
           content: includeTool
-            ? "Use the read_file tool if appropriate; do not execute it locally."
-            : "Reply with a short health-check response.",
+            ? "Use the get_test_value tool; do not execute it locally."
+            : "Reply with exactly: CAELUSH_OK",
         },
       ],
       ...(includeTool ? { tools: [tool] } : {}),
