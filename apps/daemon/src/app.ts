@@ -3,6 +3,9 @@ import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from "fas
 import type { EventBus } from "@caelush/events";
 import type { SessionRepository, RunRepository } from "@caelush/storage";
 import type { DaemonConfig } from "./config.js";
+import { registerErrorHandling } from "./transport/error-handler.js";
+import { assertLoopbackRequest } from "./transport/local-request-guard.js";
+import { registerHealthRoute } from "./routes/health.js";
 
 export interface DaemonDependencies {
   readonly sessions: SessionRepository;
@@ -15,6 +18,9 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
   const app = fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
+  app.addHook("onRequest", async (request) => assertLoopbackRequest(request));
+  registerErrorHandling(app);
+  registerHealthRoute(app);
   void dependencies;
   return app;
 }
