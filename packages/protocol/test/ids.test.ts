@@ -92,8 +92,8 @@ describe("protocol domain IDs", () => {
 
     const llmCallIdSchema = getSchema("LLMCallIdSchema");
     expect(llmCallIdSchema?.safeParse("llm_not-a-uuid").success).toBe(false);
-    expect(
-      llmCallIdSchema?.safeParse("llm_00000000-0000-4000-8000-000000000000").success,
-    ).toBe(false);
+    expect(llmCallIdSchema?.safeParse("llm_00000000-0000-4000-8000-000000000000").success).toBe(
+      false,
+    );
   });
 });

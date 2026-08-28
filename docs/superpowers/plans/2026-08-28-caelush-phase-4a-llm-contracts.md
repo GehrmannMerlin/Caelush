@@ -30,11 +30,13 @@
 ### Task 1: Add the missing Protocol LLM call identifier
 
 **Files:**
+
 - Modify: `packages/protocol/src/primitives/ids.ts`
 - Modify: `packages/protocol/src/index.ts`
 - Modify: `packages/protocol/test/ids.test.ts`
 
 **Interfaces:**
+
 - Consumes: existing `createPrefixedIdSchema`, `uuid@14.0.2`, and the current ID test table.
 - Produces: `LLMCallIdSchema`, `LLMCallId`, and `createLLMCallId()` with the `llm_` prefix and UUIDv7 validation from `@caelush/protocol`.
 
@@ -79,12 +81,14 @@ git commit -m "feat(protocol): add llm call identifiers"
 ### Task 2: Establish the LLM package dependency and message contracts
 
 **Files:**
+
 - Modify: `packages/llm/package.json`
 - Modify: `pnpm-lock.yaml`
 - Create: `packages/llm/src/messages.ts`
 - Create: `packages/llm/test/messages.test.ts`
 
 **Interfaces:**
+
 - Consumes: Protocol `JsonObjectSchema`, `ToolNameSchema`, and `zod@4.4.3`.
 - Produces: `LLMSystemMessageSchema`, `LLMUserMessageSchema`, `LLMAssistantContentSchema`, `LLMAssistantMessageSchema`, `LLMToolResultMessageSchema`, `LLMMessageSchema`, and their inferred types.
 
@@ -109,14 +113,32 @@ const fixtures = [
     role: "assistant",
     content: [
       { type: "text", text: "I need one file." },
-      { type: "tool-call", toolCallId: "call-1", toolName: "read_file", input: { path: "README.md" } },
+      {
+        type: "tool-call",
+        toolCallId: "call-1",
+        toolName: "read_file",
+        input: { path: "README.md" },
+      },
     ],
   },
   {
     role: "assistant",
-    content: [{ type: "tool-call", toolCallId: "call-2", toolName: "read_file", input: { path: "AGENTS.md" } }],
+    content: [
+      {
+        type: "tool-call",
+        toolCallId: "call-2",
+        toolName: "read_file",
+        input: { path: "AGENTS.md" },
+      },
+    ],
   },
-  { role: "tool", toolCallId: "call-1", toolName: "read_file", content: "file contents", isError: false },
+  {
+    role: "tool",
+    toolCallId: "call-1",
+    toolName: "read_file",
+    content: "file contents",
+    isError: false,
+  },
 ] as const;
 
 describe("LLM messages", () => {
@@ -132,10 +154,25 @@ describe("LLM messages", () => {
   });
 
   it("keeps each role schema strict and rejects unsupported content", () => {
-    expect(LLMSystemMessageSchema.safeParse({ role: "system", content: "ok", typo: true }).success).toBe(false);
-    expect(LLMUserMessageSchema.safeParse({ role: "user", content: "ok", image: "..." }).success).toBe(false);
-    expect(LLMAssistantMessageSchema.safeParse({ role: "assistant", content: [] }).success).toBe(false);
-    expect(LLMToolResultMessageSchema.safeParse({ role: "tool", toolCallId: "x", toolName: "x", content: "", isError: false, details: {} }).success).toBe(false);
+    expect(
+      LLMSystemMessageSchema.safeParse({ role: "system", content: "ok", typo: true }).success,
+    ).toBe(false);
+    expect(
+      LLMUserMessageSchema.safeParse({ role: "user", content: "ok", image: "..." }).success,
+    ).toBe(false);
+    expect(LLMAssistantMessageSchema.safeParse({ role: "assistant", content: [] }).success).toBe(
+      false,
+    );
+    expect(
+      LLMToolResultMessageSchema.safeParse({
+        role: "tool",
+        toolCallId: "x",
+        toolName: "x",
+        content: "",
+        isError: false,
+        details: {},
+      }).success,
+    ).toBe(false);
   });
 });
 ```
@@ -166,6 +203,7 @@ git commit -m "feat(llm): define llm message contracts"
 ### Task 3: Add request, tool choice, capabilities, usage, and normalized result schemas
 
 **Files:**
+
 - Create: `packages/llm/src/request.ts`
 - Create: `packages/llm/src/capabilities.ts`
 - Create: `packages/llm/src/usage.ts`
@@ -175,6 +213,7 @@ git commit -m "feat(llm): define llm message contracts"
 - Create: `packages/llm/test/capabilities.test.ts`
 
 **Interfaces:**
+
 - Consumes: `LLMMessageSchema`, Protocol `ModelRefSchema`, Protocol `ToolDefinitionSchema`, and `JsonObjectSchema`.
 - Produces: `LLMToolChoiceSchema`, `LLMRequestSchema`/`LLMRequest`, `CapabilitySupportSchema`, `LLMCapabilitiesSchema`/`LLMCapabilities`, `LLMUsageSchema`/`LLMUsage`, `LLMToolCallSchema`/`LLMToolCall`, `FinishReasonSchema`, and `LLMTurnResultSchema`/`LLMTurnResult`.
 
@@ -200,14 +239,16 @@ const LLMToolChoiceSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("TOOL"), toolName: ToolNameSchema }).strict(),
 ]);
 
-const LLMRequestSchema = z.object({
-  model: ModelRefSchema,
-  messages: z.array(LLMMessageSchema),
-  tools: z.array(ToolDefinitionSchema).optional(),
-  toolChoice: LLMToolChoiceSchema.optional(),
-  maxOutputTokens: z.number().int().positive().optional(),
-  temperature: z.number().finite().min(0).max(2).optional(),
-}).strict();
+const LLMRequestSchema = z
+  .object({
+    model: ModelRefSchema,
+    messages: z.array(LLMMessageSchema),
+    tools: z.array(ToolDefinitionSchema).optional(),
+    toolChoice: LLMToolChoiceSchema.optional(),
+    maxOutputTokens: z.number().int().positive().optional(),
+    temperature: z.number().finite().min(0).max(2).optional(),
+  })
+  .strict();
 ```
 
 Define `CapabilitySupportSchema` as the exact enum `SUPPORTED | UNSUPPORTED | UNKNOWN`; use it for all six capability fields. Define optional positive integer limits. Define `LLMUsageSchema` with only optional nonnegative integer fields. Define `LLMToolCallSchema` with `id`, `name`, and `input` only. Define `FinishReasonSchema` as `STOP | LENGTH | TOOL_CALLS | CONTENT_FILTER | OTHER`. Define a strict `LLMTurnResultSchema` containing `callId`, `providerId`, `model`, `text`, `toolCalls`, `finishReason`, and optional `usage`.
@@ -228,10 +269,12 @@ git commit -m "feat(llm): define llm request and result contracts"
 ### Task 4: Add the normalized stream event union and prove TypeScript narrowing
 
 **Files:**
+
 - Create: `packages/llm/src/events.ts`
 - Create: `packages/llm/test/events.test.ts`
 
 **Interfaces:**
+
 - Consumes: Protocol `LLMCallIdSchema`/`ModelRefSchema`, `ProviderIdSchema`, `LLMToolCallSchema`, `LLMUsageSchema`, and `FinishReasonSchema`.
 - Produces: `LLMStreamEventSchema`, `LLMStreamEvent`, and event-specific inferred types for the exact seven event literals.
 
@@ -242,13 +285,20 @@ Create tests that parse one valid fixture for every allowed event, reject `strea
 ```ts
 function summarize(event: LLMStreamEvent): string {
   switch (event.type) {
-    case "stream.start": return event.payload.providerId;
-    case "text.delta": return event.payload.text;
-    case "tool_call.start": return event.payload.toolName;
-    case "tool_call.delta": return event.payload.delta;
-    case "tool_call.completed": return event.payload.name;
-    case "usage": return String(event.payload.totalTokens ?? "unknown");
-    case "stream.finish": return event.payload.finishReason;
+    case "stream.start":
+      return event.payload.providerId;
+    case "text.delta":
+      return event.payload.text;
+    case "tool_call.start":
+      return event.payload.toolName;
+    case "tool_call.delta":
+      return event.payload.delta;
+    case "tool_call.completed":
+      return event.payload.name;
+    case "usage":
+      return String(event.payload.totalTokens ?? "unknown");
+    case "stream.finish":
+      return event.payload.finishReason;
   }
 }
 ```
@@ -281,11 +331,13 @@ git commit -m "feat(llm): add normalized stream contracts"
 ### Task 5: Add typed LLM errors and the runtime provider boundary
 
 **Files:**
+
 - Create: `packages/llm/src/errors.ts`
 - Create: `packages/llm/src/provider.ts`
 - Create: `packages/llm/test/errors.test.ts`
 
 **Interfaces:**
+
 - Consumes: `ModelRef`, `LLMRequest`, `LLMCapabilities`, and `LLMStreamEvent`.
 - Produces: `LLMError`, the nine requested typed subclasses, `LLMErrorCode`, `ProviderIdSchema`/`ProviderId`, `LLMProviderRequest` (alias of `LLMRequest`), and `LLMProvider`.
 
@@ -330,11 +382,13 @@ git commit -m "feat(llm): define provider boundary and typed errors"
 ### Task 6: Add explicit provider registry and deterministic test fake
 
 **Files:**
+
 - Create: `packages/llm/src/provider-registry.ts`
 - Create: `packages/llm/test/provider-registry.test.ts`
 - Create: `packages/llm/test/support/fake-provider.ts`
 
 **Interfaces:**
+
 - Consumes: `LLMProvider`, `ProviderIdSchema`, and `LLMProviderError`/`LLMProviderNotFoundError`.
 - Produces: `LLMProviderRegistry` with `register`, `get`, `has`, and `listProviderIds`; test-only `FakeLLMProvider` with deterministic events/error/capabilities and observed request.
 
@@ -370,6 +424,7 @@ git commit -m "feat(llm): add explicit provider registry"
 ### Task 7: Wire the public API, architecture guards, docs, and repository status
 
 **Files:**
+
 - Modify: `packages/llm/src/index.ts`
 - Create: `packages/llm/test/public-api.test.ts`
 - Modify: `tests/architecture/package-boundaries.test.ts`
@@ -379,6 +434,7 @@ git commit -m "feat(llm): add explicit provider registry"
 - Create: `docs/architecture/llm-gateway.md`
 
 **Interfaces:**
+
 - Consumes: all Phase 4A production modules and the built-package export convention.
 - Produces: complete `@caelush/llm` root API, architecture checks for dependency/SDK isolation/no explicit production `any`, Phase 4A architecture documentation, and updated project status/rules.
 
@@ -414,9 +470,11 @@ git commit -m "docs: document caelush llm architecture"
 ### Task 8: Run full TDD-era verification and remove generated artifacts safely
 
 **Files:**
+
 - Modify only files required by formatting or test fixes discovered during verification; do not add Phase 4B behavior.
 
 **Interfaces:**
+
 - Consumes: all Phase 4A implementation and documentation from Tasks 1–7.
 - Produces: verified Phase 4A tree with no generated `dist` or `*.tsbuildinfo` artifacts left in the final working tree.
 

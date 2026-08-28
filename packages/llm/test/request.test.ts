@@ -62,9 +62,7 @@ describe("LLM requests", () => {
   it("normalizes completed tool calls without retaining raw input", () => {
     const call = { id: "call-1", name: "list_files", input: { path: "." } };
     expect(LLMToolCallSchema.parse(call)).toEqual(call);
-    expect(LLMToolCallSchema.safeParse({ ...call, rawInput: "{\"path\":\".\"}" }).success).toBe(
-      false,
-    );
+    expect(LLMToolCallSchema.safeParse({ ...call, rawInput: '{"path":"."}' }).success).toBe(false);
     expect(FinishReasonSchema.parse("TOOL_CALLS")).toBe("TOOL_CALLS");
     expect(
       LLMTurnResultSchema.parse({

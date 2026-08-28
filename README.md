@@ -2,7 +2,7 @@
 
 Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI、Web 和其他宿主共享同一个可观察、可取消、可验证、可扩展的 Agent Core。
 
-当前仓库处于 **V1 Phase 3：Local Agent Service**。Phase 1 的 JSON-safe Protocol Contract、Typed AgentEvent 和 Core Run State Machine，以及 Phase 2 的可恢复 SQLite 持久化、Durable Event Store 和 EventBus 已完成；本阶段补齐唯一的本地 Daemon、Session/Run HTTP API 和 SSE Event Stream，但仍不能自主执行 Agent Task。
+当前仓库处于 **V1 Phase 4A：LLM Contracts & Provider Foundation**。Phase 1 的 JSON-safe Protocol Contract、Typed AgentEvent 和 Core Run State Machine、Phase 2 的可恢复 SQLite 持久化/Durable Event Store/EventBus，以及 Phase 3 的唯一本地 Daemon、Session/Run HTTP API 和 SSE Event Stream 已完成；本阶段建立 Caelush 自有的 LLM message/request/capability/usage/stream/error/provider contracts，但仍不能调用真实模型、执行 AgentLoop 或执行本地 Tool。
 
 ## 技术栈
 
@@ -55,4 +55,4 @@ pnpm check
 
 ## Packages 基础说明
 
-Phase 1 在 `@caelush/protocol` 中定义 Session、Run、Step、State、Tool/Observation/Approval/Verification 和 Event Contract，在 `@caelush/core` 中提供 Run State Machine。Phase 2 在 `@caelush/storage` 中提供 Repository、Run State Snapshot、SQLite Migration 和 Durable Event Store，在 `@caelush/events` 中提供 EventBus、Replay 与 Live Watch。Phase 3 在 `@caelush/daemon` 中提供 Local HTTP Service、Session API、Run API 和 SSE Event Stream。仍未实现 AgentLoop、LLM Provider、Tool 执行、Runtime、CLI 产品或 Web 产品；Run creation 也不会启动 Agent。详见 [Package Boundaries](docs/architecture/package-boundaries.md)、[Architecture Overview](docs/architecture/README.md)、[Protocol V1](docs/architecture/protocol-v1.md)、[Storage & Events](docs/architecture/storage-and-events.md) 和 [Local Agent Service](docs/architecture/local-agent-service.md)。
+Phase 1 在 `@caelush/protocol` 中定义 Session、Run、Step、State、Tool/Observation/Approval/Verification 和 Event Contract，在 `@caelush/core` 中提供 Run State Machine。Phase 2 在 `@caelush/storage` 中提供 Repository、Run State Snapshot、SQLite Migration 和 Durable Event Store，在 `@caelush/events` 中提供 EventBus、Replay 与 Live Watch。Phase 3 在 `@caelush/daemon` 中提供 Local HTTP Service、Session API、Run API 和 SSE Event Stream。Phase 4A 在 `@caelush/llm` 中定义 provider-neutral LLM contracts 和显式 Provider Registry；Phase 4B 的 Gateway runtime、Phase 4C 的具体 provider/AI SDK adapter、AgentLoop、Tool 执行、Runtime、CLI 产品和 Web 产品仍未实现；Run creation 也不会启动 Agent。详见 [Package Boundaries](docs/architecture/package-boundaries.md)、[Architecture Overview](docs/architecture/README.md)、[Protocol V1](docs/architecture/protocol-v1.md)、[Storage & Events](docs/architecture/storage-and-events.md)、[Local Agent Service](docs/architecture/local-agent-service.md) 和 [LLM Gateway](docs/architecture/llm-gateway.md)。

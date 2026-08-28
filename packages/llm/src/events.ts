@@ -1,8 +1,4 @@
-import {
-  LLMCallIdSchema,
-  ModelRefSchema,
-  ToolNameSchema,
-} from "@caelush/protocol";
+import { LLMCallIdSchema, ModelRefSchema, ToolNameSchema } from "@caelush/protocol";
 import { z } from "zod";
 import { FinishReasonSchema } from "./tool-call.js";
 import { LLMToolCallSchema } from "./tool-call.js";

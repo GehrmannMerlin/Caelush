@@ -46,14 +46,12 @@ export class FakeLLMProvider implements LLMProvider {
     return this.modelPredicate(model);
   }
 
-  getCapabilities(_model: ModelRef): LLMCapabilities {
+  getCapabilities(model: ModelRef): LLMCapabilities {
+    void model;
     return this.capabilities;
   }
 
-  async *stream(
-    request: LLMProviderRequest,
-    signal: AbortSignal,
-  ): AsyncIterable<LLMStreamEvent> {
+  async *stream(request: LLMProviderRequest, signal: AbortSignal): AsyncIterable<LLMStreamEvent> {
     this.observedRequest = request;
     if (signal.aborted) {
       throw new LLMAbortedError();

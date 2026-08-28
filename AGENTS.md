@@ -27,6 +27,15 @@ Caelush 是一个 TypeScript/Node.js 通用 Agent Kernel 项目。CLI、Web 和�
 - Durable SSE event 使用 Durable sequence 作为 SSE id；Ephemeral SSE event 永远不得携带 SSE id。
 - SSE route 必须消费 `EventBus.watch()`，不得重新实现 replay；graceful shutdown 必须先关闭 streaming consumers，再关闭 Storage。
 - Cancellation endpoint 必须等到真实 abort semantics 存在后实现；Approval resolution endpoint 必须等到 ApprovalManager 存在后实现。
+- Caelush owns the AgentLoop.
+- An LLM provider performs exactly one provider turn.
+- LLM providers never execute local tools.
+- AI SDK types must not leak outside provider adapter implementations.
+- Provider credentials are runtime-only.
+- Raw model chain-of-thought must not enter public Caelush contracts.
+- Tool definitions passed to LLMs remain data-only.
+- LLM retry policy is not owned by provider adapters.
+- Do not create global provider registries.
 
 ## Development Rules
 
@@ -51,6 +60,6 @@ pnpm check
 
 ## V1 Phase Boundary
 
-当前是 Phase 3：Local Agent Service。除 Phase 1 已正式定义的 AgentSession、AgentRun、AgentStep、AgentState、AgentEvent、ToolDefinition、ToolInvocation、Observation、ApprovalRequest、VerificationResult 和 Run State Machine，以及 Phase 2 的 SQLite/Drizzle Storage、Repository、Run State Snapshot、Durable Event Store、EventBus、Replay 与 Live Watch 外，已实现 loopback-only Daemon、Health/Session/Run HTTP API 和 Durable/Ephemeral SSE Event Stream；仍不实现 AgentLoop、LLM、Tool 执行、Runtime、Cancellation、Approval resolution、Ink CLI 功能或 React Web 功能。
+当前是 Phase 4A：LLM Contracts & Provider Foundation。除 Phase 1 已正式定义的 AgentSession、AgentRun、AgentStep、AgentState、AgentEvent、ToolDefinition、ToolInvocation、Observation、ApprovalRequest、VerificationResult 和 Run State Machine，以及 Phase 2 的 SQLite/Drizzle Storage、Repository、Run State Snapshot、Durable Event Store、EventBus、Replay 与 Live Watch、Phase 3 的 loopback-only Daemon、Health/Session/Run HTTP API 和 Durable/Ephemeral SSE Event Stream 外，Phase 4A 已建立 Caelush-owned LLM message/request/capability/usage/stream/error contracts、LLMProvider 和显式 Provider Registry；仍不实现 LLMGateway runtime、AgentLoop、真实 LLM/provider adapter、Tool 执行、Runtime、Cancellation、Approval resolution、Ink CLI 功能或 React Web 功能。
 
 下一阶段由后续任务另行定义；不得提前实现 AgentLoop 或其他宿主产品功能。

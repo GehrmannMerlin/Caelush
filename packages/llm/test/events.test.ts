@@ -37,7 +37,10 @@ describe("LLM stream events", () => {
         payload: { id: "tool-call-1", name: "list_files", input: { path: "." } },
       },
       { type: "usage", payload: { inputTokens: 4, outputTokens: 6, totalTokens: 10 } },
-      { type: "stream.finish", payload: { finishReason: "TOOL_CALLS", finalUsage: { totalTokens: 10 } } },
+      {
+        type: "stream.finish",
+        payload: { finishReason: "TOOL_CALLS", finalUsage: { totalTokens: 10 } },
+      },
     ] as const;
 
     for (const event of events) {
@@ -49,10 +52,19 @@ describe("LLM stream events", () => {
   });
 
   it("rejects control/data vocabulary outside the contract", () => {
-    expect(LLMStreamEventSchema.safeParse({ type: "stream.error", payload: { error: "no" } }).success).toBe(false);
-    expect(LLMStreamEventSchema.safeParse({ type: "reasoning.delta", payload: { text: "hidden" } }).success).toBe(false);
-    expect(LLMStreamEventSchema.safeParse({ type: "tool_result", payload: {} }).success).toBe(false);
-    expect(LLMStreamEventSchema.safeParse({ type: "text.delta", payload: { text: "" } }).success).toBe(false);
+    expect(
+      LLMStreamEventSchema.safeParse({ type: "stream.error", payload: { error: "no" } }).success,
+    ).toBe(false);
+    expect(
+      LLMStreamEventSchema.safeParse({ type: "reasoning.delta", payload: { text: "hidden" } })
+        .success,
+    ).toBe(false);
+    expect(LLMStreamEventSchema.safeParse({ type: "tool_result", payload: {} }).success).toBe(
+      false,
+    );
+    expect(
+      LLMStreamEventSchema.safeParse({ type: "text.delta", payload: { text: "" } }).success,
+    ).toBe(false);
     expect(
       LLMStreamEventSchema.safeParse({
         type: "tool_call.completed",

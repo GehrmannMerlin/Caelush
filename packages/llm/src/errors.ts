@@ -103,7 +103,10 @@ export class LLMAbortedError extends LLMError {
 }
 
 export class LLMInvalidResponseError extends LLMError {
-  constructor(message = "LLM provider returned an invalid response.", context: LLMErrorContext = {}) {
+  constructor(
+    message = "LLM provider returned an invalid response.",
+    context: LLMErrorContext = {},
+  ) {
     super("LLM_INVALID_RESPONSE", message, withRetryability(context, false));
   }
 }

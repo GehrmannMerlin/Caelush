@@ -1,9 +1,12 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   allWorkspaceManifestPaths,
   dependencyEntries,
   pathExists,
   readManifest,
+  repositoryRoot,
   workspaceSourceContents,
 } from "./support/workspace.js";
 
@@ -11,6 +14,8 @@ const appPackageNames = new Set(["@caelush/daemon", "@caelush/cli", "@caelush/we
 const protocolPackageName = "@caelush/protocol";
 const internalPackagePattern = /^@caelush\//;
 const deepSourceImportPattern = /\.\.\/(?:\.\.\/)+packages\/[^\s"'`]+\/src\//;
+const forbiddenLlmSdkImportPattern = /\bfrom\s+["'](?:ai|@ai-sdk\/)/;
+const explicitAnyPattern = /\bany\b/;
 
 describe("package boundaries", () => {
   it("prevents packages from depending on applications", async () => {
@@ -47,6 +52,46 @@ describe("package boundaries", () => {
           internalPackagePattern.test(dependency) && dependency !== protocolPackageName,
       ),
     ).toBe(false);
+  });
+
+  it("keeps the LLM package below the provider boundary and above Protocol only", async () => {
+    const manifest = await readManifest("packages/llm/package.json");
+    const dependencies = dependencyEntries(manifest);
+    expect(dependencies[protocolPackageName]).toBe("workspace:*");
+    expect(dependencies.zod).toBe("4.4.3");
+    expect(
+      Object.keys(dependencies).some((dependency) =>
+        ["ai", "@ai-sdk/core", "@ai-sdk/openai", "openai", "anthropic"].includes(dependency),
+      ),
+    ).toBe(false);
+
+    const sourceContents = await workspaceSourceContents();
+    expect(sourceContents.some((contents) => contents.includes('from "@caelush/protocol"'))).toBe(
+      true,
+    );
+  });
+
+  it("keeps AI SDK imports and explicit any out of production source", async () => {
+    const llmSourceContents = await Promise.all(
+      [
+        "messages.ts",
+        "request.ts",
+        "capabilities.ts",
+        "usage.ts",
+        "tool-call.ts",
+        "result.ts",
+        "events.ts",
+        "errors.ts",
+        "provider.ts",
+        "provider-registry.ts",
+      ].map((fileName) =>
+        readFile(path.join(repositoryRoot, "packages", "llm", "src", fileName), "utf8"),
+      ),
+    );
+    expect(llmSourceContents.some((contents) => forbiddenLlmSdkImportPattern.test(contents))).toBe(
+      false,
+    );
+    expect(llmSourceContents.some((contents) => explicitAnyPattern.test(contents))).toBe(false);
   });
 
   it("keeps Events provider-neutral and Storage below Core", async () => {

@@ -74,7 +74,10 @@ describe("LLM errors and provider boundary", () => {
       id: "local",
       supportsModel: (candidate) => candidate.provider === "local",
       getCapabilities: () => capabilities,
-      async *stream(request: LLMProviderRequest, signal: AbortSignal): AsyncIterable<LLMStreamEvent> {
+      async *stream(
+        request: LLMProviderRequest,
+        signal: AbortSignal,
+      ): AsyncIterable<LLMStreamEvent> {
         void request;
         void signal;
         yield event;
@@ -84,7 +87,10 @@ describe("LLM errors and provider boundary", () => {
     expect(provider.supportsModel(model)).toBe(true);
     expect(provider.getCapabilities(model)).toEqual(capabilities);
     const streamed = [];
-    for await (const value of provider.stream({ model, messages: [] }, new AbortController().signal)) {
+    for await (const value of provider.stream(
+      { model, messages: [] },
+      new AbortController().signal,
+    )) {
       streamed.push(value);
     }
     expect(streamed).toEqual([event]);
