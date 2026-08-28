@@ -85,3 +85,10 @@ export type WorkspaceId = z.infer<typeof WorkspaceIdSchema>;
 export function createWorkspaceId(): WorkspaceId {
   return WorkspaceIdSchema.parse(`wsp_${v7()}`);
 }
+
+const llmCallId = createPrefixedIdSchema<"llm_", "LLMCallId">("llm_");
+export const LLMCallIdSchema = llmCallId;
+export type LLMCallId = z.infer<typeof LLMCallIdSchema>;
+export function createLLMCallId(): LLMCallId {
+  return LLMCallIdSchema.parse(`llm_${v7()}`);
+}

@@ -38,6 +38,7 @@ const idContracts = [
   ["VerificationResultIdSchema", "createVerificationResultId", "ver_"],
   ["PlanItemIdSchema", "createPlanItemId", "plan_"],
   ["WorkspaceIdSchema", "createWorkspaceId", "wsp_"],
+  ["LLMCallIdSchema", "createLLMCallId", "llm_"],
 ] as const;
 
 describe("protocol domain IDs", () => {
@@ -68,6 +69,16 @@ describe("protocol domain IDs", () => {
     expect(runIdSchema.safeParse(sessionIdFactory()).success).toBe(false);
   });
 
+  it("rejects a valid LLM call UUID with the wrong resource prefix", () => {
+    const llmCallIdSchema = getSchema("LLMCallIdSchema");
+    const runIdFactory = getFactory("createRunId");
+    if (llmCallIdSchema === undefined || runIdFactory === undefined) {
+      return;
+    }
+
+    expect(llmCallIdSchema.safeParse(runIdFactory()).success).toBe(false);
+  });
+
   it("rejects malformed and non-v7 UUID identifiers", () => {
     const sessionIdSchema = getSchema("SessionIdSchema");
     if (sessionIdSchema === undefined) {
@@ -78,5 +89,11 @@ describe("protocol domain IDs", () => {
     expect(sessionIdSchema.safeParse("ses_00000000-0000-4000-8000-000000000000").success).toBe(
       false,
     );
+
+    const llmCallIdSchema = getSchema("LLMCallIdSchema");
+    expect(llmCallIdSchema?.safeParse("llm_not-a-uuid").success).toBe(false);
+    expect(
+      llmCallIdSchema?.safeParse("llm_00000000-0000-4000-8000-000000000000").success,
+    ).toBe(false);
   });
 });

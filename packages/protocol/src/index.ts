@@ -1,6 +1,7 @@
 export {
   ApprovalRequestIdSchema,
   EventIdSchema,
+  LLMCallIdSchema,
   ObservationIdSchema,
   PlanItemIdSchema,
   RunIdSchema,
@@ -11,6 +12,7 @@ export {
   WorkspaceIdSchema,
   createApprovalRequestId,
   createEventId,
+  createLLMCallId,
   createObservationId,
   createPlanItemId,
   createRunId,
@@ -23,6 +25,7 @@ export {
 export type {
   ApprovalRequestId,
   EventId,
+  LLMCallId,
   ObservationId,
   PlanItemId,
   RunId,
