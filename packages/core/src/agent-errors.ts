@@ -67,4 +67,11 @@ export class AgentKernelStateError extends Error {
   }
 }
 
+export class AgentLoopInputError extends Error {
+  constructor(reason: string) {
+    super(`Agent loop input rejected: ${reason}.`);
+    this.name = "AgentLoopInputError";
+  }
+}
+
 export type AgentStepUsage = Pick<LLMUsage, "inputTokens" | "outputTokens">;

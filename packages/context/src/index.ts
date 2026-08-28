@@ -102,3 +102,13 @@ export type {
   ContextRelevantFilesReport,
   ContextSystemReport,
 } from "./context-build-report.js";
+export {
+  estimateLLMMessage,
+  selectRecentConversation,
+  validateAndGroupConversation,
+} from "./conversation-history.js";
+export type {
+  ConversationTurnGroup,
+  SelectedConversation,
+  ValidatedConversation,
+} from "./conversation-history.js";
