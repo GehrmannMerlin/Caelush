@@ -61,7 +61,7 @@ describe("ContextBuilder contracts", () => {
     expect(() =>
       new ContextBuilder().build(
         input({
-          maxInputTokens: 100,
+          maxInputTokens: 1000,
           safetyMarginTokens: 0,
           maxConversationTokens: 0,
           maxRelevantFileTokens: 0,

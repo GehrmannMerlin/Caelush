@@ -57,6 +57,9 @@ importers:
 
   packages/context:
     dependencies:
+      '@caelush/llm':
+        specifier: workspace:*
+        version: link:../llm
       '@caelush/protocol':
         specifier: workspace:*
         version: link:../protocol
