@@ -9,6 +9,9 @@ import {
 import { validateLLMRequestSemantics, validateTimeoutMs } from "./request-validation.js";
 import { LLMRequestSchema } from "./request.js";
 import type { LLMTurnResult } from "./result.js";
+import { LLMTurnResultSchema } from "./result.js";
+import type { FinishReason, LLMToolCall } from "./tool-call.js";
+import type { LLMUsage } from "./usage.js";
 import type {
   LLMProvider,
   LLMProviderCallContext,
@@ -136,7 +139,52 @@ export class LLMGateway {
     return new LLMAbortedError(undefined, { providerId, model });
   }
 
-  complete(_request: LLMProviderRequest, _options?: LLMStreamOptions): Promise<LLMTurnResult> {
-    throw new Error("LLMGateway.complete is not implemented yet.");
+  async complete(request: LLMProviderRequest, options?: LLMStreamOptions): Promise<LLMTurnResult> {
+    const stream = this.stream(request, options);
+    let text = "";
+    const toolCalls: LLMToolCall[] = [];
+    let usage: LLMUsage | undefined;
+    let finishReason: FinishReason | undefined;
+
+    for await (const event of stream.events) {
+      switch (event.type) {
+        case "text.delta":
+          text += event.payload.text;
+          break;
+        case "tool_call.completed":
+          toolCalls.push(event.payload);
+          break;
+        case "usage":
+          usage = event.payload;
+          break;
+        case "stream.finish":
+          finishReason = event.payload.finishReason;
+          if (event.payload.finalUsage !== undefined) {
+            usage = event.payload.finalUsage;
+          }
+          break;
+        case "stream.start":
+        case "tool_call.start":
+        case "tool_call.delta":
+          break;
+      }
+    }
+
+    if (finishReason === undefined) {
+      throw new LLMInvalidResponseError("LLM provider stream did not provide a finish reason.", {
+        providerId: request.model.provider,
+        model: request.model,
+      });
+    }
+    const result = {
+      callId: stream.callId,
+      providerId: request.model.provider,
+      model: request.model,
+      text,
+      toolCalls,
+      finishReason,
+      ...(usage === undefined ? {} : { usage }),
+    };
+    return LLMTurnResultSchema.parse(result);
   }
 }
