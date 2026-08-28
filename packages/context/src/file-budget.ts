@@ -1,4 +1,3 @@
-import path from "node:path";
 import { ContextError } from "./errors.js";
 import type { ContextFileSystem } from "./filesystem.js";
 import type { ContextDiagnostic } from "./project-profile.js";

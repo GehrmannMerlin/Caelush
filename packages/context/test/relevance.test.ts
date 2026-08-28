@@ -1,5 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createWorkspaceId } from "@caelush/protocol";
 import type { CandidateFile } from "../src/file-discovery.js";
 import type { ProjectIntelligenceSnapshot } from "../src/snapshot.js";
 import { RelevantPathRanker, tokenizeRelevantQuery } from "../src/relevance.js";
@@ -9,7 +10,7 @@ function snapshot(): ProjectIntelligenceSnapshot {
   const cwd = path.join(root, "packages", "app", "src");
   return {
     workspace: {
-      workspace: { id: "workspace-test", path: root },
+      workspace: { id: createWorkspaceId(), path: root },
       logicalRoot: root,
       realRoot: root,
       cwd,

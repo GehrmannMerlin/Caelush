@@ -102,11 +102,6 @@ function normalizeMatcherPath(targetPath: string): string {
   return targetPath.replaceAll("\\", "/").replace(/^\/+/, "");
 }
 
-function relativeDirectoryDepth(relativePath: string): number {
-  if (relativePath === "") return 0;
-  return relativePath.split("/").length;
-}
-
 function isSensitiveName(fileName: string): boolean {
   const normalized = fileName.toLowerCase();
   if (sensitiveExactNames.has(normalized)) return true;

@@ -154,7 +154,8 @@ describe("package boundaries", () => {
     const dependencies = dependencyEntries(context);
 
     expect(dependencies[protocolPackageName]).toBe("workspace:*");
-    expect(Object.keys(dependencies)).toEqual([protocolPackageName]);
+    expect(dependencies.ignore).toBe("7.0.6");
+    expect(Object.keys(dependencies).sort()).toEqual(["@caelush/protocol", "ignore"]);
   });
 
   it("allows the daemon to compose protocol, storage, and events through public entries", async () => {
