@@ -1,12 +1,14 @@
 import * as core from "../src/index.js";
 import { describe, expect, it } from "vitest";
 
-describe("Core Phase 6A public API", () => {
+describe("Core Phase 6B public API", () => {
   it("exports the required Kernel contracts and helpers", () => {
     const required = [
       "AgentModelOutputError",
       "AgentToolResultBatchError",
       "AgentKernelStateError",
+      "AgentLoopInputError",
+      "AgentLoop",
       "classifyAgentDecision",
       "normalizeToolResultBatch",
       "summarizeAgentDecision",
@@ -29,8 +31,8 @@ describe("Core Phase 6A public API", () => {
     }
   });
 
-  it("does not expose an AgentLoop during Phase 6A", () => {
-    expect((core as Record<string, unknown>).AgentLoop).toBeUndefined();
+  it("exposes the resumable AgentLoop without exposing a duplicate runner", () => {
+    expect((core as Record<string, unknown>).AgentLoop).toBeDefined();
     expect((core as Record<string, unknown>).runAgentLoop).toBeUndefined();
   });
 });

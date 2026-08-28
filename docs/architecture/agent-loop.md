@@ -3,74 +3,106 @@
 Caelush Phase 6 is fixed to exactly three rounds:
 
 1. **6A Contracts & State**
-2. **6B Resumable Loop**
+2. **6B Context → LLM Resumable Decision Loop**
 3. **6C Run Controller / Persistence / Events**
 
 No additional Phase 6 rounds.
 
-Phase 6A defines the language of the Agent Kernel without implementing the autonomous loop. The Kernel classifies one provider turn, exposes a tool boundary, tracks compact `AgentState` and `AgentStep` projections, and stops final answers at verification. Phase 6B will connect these contracts to context and the LLM Gateway. Phase 6C will add controller, persistence, and event trace integration.
+## Phase 6B execution boundary
 
-## Execution boundary
+Phase 6B is the first real `AgentLoop`, but it is intentionally a resumable decision loop rather than a local tool-execution loop. Every `run()` or `resumeWithToolResults()` invocation performs at most one provider turn and returns control to its caller at a stable boundary.
 
 ```text
-Observe
+Start / Resume input
+  ↓ validate immutable Run + State pair
+Step Gate (maxSteps only)
+  ├── exhausted → MAX_STEPS_REACHED outcome
   ↓
-Build Context
+ProjectInspector
   ↓
-LLM Provider Turn
+RelevantFilePlanner
   ↓
-Agent Decision
+ContextBuilder
+  ↓
+LLMRequest composer
+  ↓
+one AgentLLMClient provider turn
+  ↓
+classifyAgentDecision
+  ├── TOOL_CALLS_REQUESTED → external Tool boundary
+  │                              ↓
+  │                         caller executes tools
+  │                              ↓
+  │                         normalized complete result batch
+  │                              ↓
+  │                         resumeWithToolResults()
   │
-  ├──────── Tool Calls
-  │             ↓
-  │       External Tool Boundary
-  │             ↓
-  │         Tool Results
-  │             ↓
-  │        Resume Next Step
-  │
-  └──────── Final Candidate
-                ↓
-             VERIFYING
-                ↓
-         Future Verification
+  └── FINAL_CANDIDATE → VERIFYING boundary
+                         ↓
+                   Phase 6C / future Verification
 ```
 
-One settled LLM provider turn equals one Agent Step attempt. This includes a provider failure or a rejected model output after the step has started; a settled step is counted in `UsageState.steps`. A step helper receives its ID, sequence, and timestamps from its caller. The Kernel does not own a clock or an ID generator.
+The loop owns orchestration and immutable returned projections: updated `AgentState`, one `AgentStep`, a `ContextBuildReport` when context preparation started, an `AgentLoopOutcome` or sanitized failure, and messages that the caller may append to durable history. It does not own persistence, event publication, or a second copy of the Run state machine.
 
-The decision union contains only:
+## Ports and dependency direction
 
-- `TOOL_CALLS_REQUESTED`, with provider call identity preserved as `AgentToolRequest.externalCallId`.
-- `FINAL_CANDIDATE`, with the exact original model text and no completion claim.
+`@caelush/core` depends on the public `@caelush/context` entry point, Protocol, and provider-independent LLM narrow subpaths (`/messages`, `/request`, `/turn`, `/errors`). Runtime implementations are injected through these ports:
 
-Tool calls are requested by the Agent Kernel but executed outside the Phase 6 Agent Kernel. The Kernel does not know concrete tools, does not own a registry or dispatcher, and does not create `ToolInvocationId` values. Tool results return through a complete resume batch. A batch must have exactly one result per requested call, match both call identity and tool name, and may contain an error result. Execution completion order is allowed to differ from assistant source order; normalization restores request order before model history is built.
+| Port                                | Responsibility                                          | Explicitly not owned by Core                       |
+| ----------------------------------- | ------------------------------------------------------- | -------------------------------------------------- |
+| `AgentProjectInspectorPort`         | Read project intelligence for the current workspace/cwd | Shell, credentials, tool execution                 |
+| `AgentRelevantFilePlannerPort`      | Select task-relevant file context                       | Prompt rendering or model calls                    |
+| `AgentContextBuilderPort`           | Assemble bounded provider-independent messages          | Provider SDK types or retries                      |
+| `AgentLLMClient`                    | Perform one validated provider turn                     | Tool execution, loop retries, Gateway policy       |
+| `AgentClock` / `AgentStepIdFactory` | Supply time and step identity                           | Global clocks or generated IDs inside pure helpers |
 
-## Finish reason matrix
+Core production code must not import the root `@caelush/llm` entry, AI SDK packages, filesystem/network APIs, concrete tools, ToolRegistry, ToolDispatcher, Storage, EventBus, Daemon, or host runtime types. The real integration test composes the existing local Context ports with `LLMGateway`, while the production loop remains unaware of the concrete provider.
 
-| Finish reason    | With one or more tool calls                            | Without tool calls                                        |
-| ---------------- | ------------------------------------------------------ | --------------------------------------------------------- |
-| `STOP`           | `TOOL_CALLS_REQUESTED`                                 | `FINAL_CANDIDATE` when text is nonblank; otherwise reject |
-| `OTHER`          | `TOOL_CALLS_REQUESTED`                                 | `FINAL_CANDIDATE` when text is nonblank; otherwise reject |
-| `TOOL_CALLS`     | `TOOL_CALLS_REQUESTED`                                 | Reject as missing tool calls                              |
-| `LENGTH`         | Reject as truncated; never execute even if JSON parses | Reject as truncated                                       |
-| `CONTENT_FILTER` | Reject filtered output                                 | Reject filtered output                                    |
+## User Turn and Open User Turn
 
-Tool presence takes precedence over a normal stop reason. Text and tool calls are both preserved in the canonical assistant message, with the text part first and tool-call parts in the original provider order. Unknown schema-valid tool names are preserved for a later Tool System to validate; Phase 6A does not consult advertised definitions.
+The ContextBuilder receives one of two explicit current-turn modes:
 
-## Model output and public summaries
+- `USER_TURN`: the current user goal is a new user message. Context order is `System → previous completed history → relevant-file synthetic user context → current user message`.
+- `TOOL_CONTINUATION`: the current turn is the complete open conversation group from the original user message through the assistant tool request and the normalized tool results. Context order is `System → previous completed history → relevant-file synthetic user context → whole current turn`.
 
-The mapper validates `LLMTurnResult` at the Kernel boundary, checks provider/model identity, rejects duplicate tool-call IDs, and validates the constructed `LLMAssistantMessage`. `LENGTH`, `CONTENT_FILTER`, blank finals, empty turns, and inconsistent tool-call output become sanitized `AgentModelOutputError` values. Error metadata is limited to non-sensitive identity/count fields.
+The continuation must contain no system message, exactly one structurally valid conversation group, and end with a tool message. The builder never duplicates the original goal, never treats an assistant/tool suffix as ordinary history, and reports current-turn message count and estimated tokens separately. In continuation mode current-user tokens are zero; the complete open turn is the mandatory current payload.
 
-`summarizeAgentDecision` is a public execution summary. A final candidate summary says that verification is required. A tool summary shows at most five tool names and a count. Summaries never include model answer text, hidden reasoning, tool arguments, provider responses, credentials, or secrets. They may later populate `AgentStep.reasoningSummary` or a public reasoning event, but they are not chain-of-thought.
+Relevant-file context is synthetic and belongs to the current model input, but it is never appended to durable conversation history. Only the current user message, the assistant response, normalized tool results, or the max-step boundary message are returned in `messagesToAppend`.
 
-## AgentState and AgentStep
+## Resume integrity and ordering
 
-`createInitialAgentState` projects a pending `AgentRun` into the existing compact `AgentState`: run/session identity, goal, workspace/runtime/policy fields, empty plan and observations, `NOT_RUN` verification, zero usage, and caller-supplied `updatedAt`. It does not copy model, limits, final result, or creation time. `startAgentState` uses the canonical Run State Machine for `PENDING → RUNNING`.
+`resumeWithToolResults()` first validates and normalizes the external batch with the Phase 6A helper. The batch must contain exactly one result for every pending request, match both external call identity and tool name, and may contain an error result. Results can arrive in completion order, but the normalized batch is emitted and inserted into model history in assistant source order.
 
-Beginning a step records `currentStepId` but does not increment steps. Settling it clears the active step and increments `UsageState.steps`, accumulating only known LLM input/output tokens. Missing token fields preserve existing totals; `totalTokens`, cached tokens, and reasoning tokens are not added to Protocol state. Model-requested tool calls do not increment `UsageState.toolCalls`, which is reserved for future actual Tool invocation accounting.
+The loop also validates the assistant tail that introduced the pending request. It rejects missing or malformed assistant tool calls, mismatched ID/name/arguments, duplicate supplied result IDs, and histories that do not end at the expected open turn. Unknown schema-valid tool names are preserved for the later Tool System; Core does not consult a concrete tool registry.
 
-A final candidate can move an idle running state to `VERIFYING`, resetting verification to `NOT_RUN`. It never moves directly to `COMPLETED`. The only structural gate in Phase 6A is `maxSteps`; exhaustion is an expected `MAX_STEPS_REACHED` `AgentLoopOutcome`, not an LLM decision. Retry, backoff, timeout, token/cost/tool budgets, and verification execution remain later-phase responsibilities.
+Input Run, State, history, and tool definitions are caller-owned. The loop does not mutate them; every returned state, step, and append list is a new projection. A caller contract violation raises `AgentLoopInputError` or returns a sanitized failure before expensive ports are called, according to the boundary where it is detected.
+
+## Step, state, usage, and append ledger
+
+One settled provider turn equals one Agent Step attempt, including a provider failure or rejected model output after step creation. The step is created only after the gate and context/request preparation succeed. A preparation failure therefore creates no step and does not increment usage. A provider/model failure settles a failed step, increments `UsageState.steps`, preserves the Run as `RUNNING`, and returns a sanitized `AgentLoopFailureResult`.
+
+`UsageState.steps` counts settled attempts. `UsageState.toolCalls` remains reserved for actual external Tool invocation accounting and is not incremented when the model merely requests a tool. Only known input/output token fields are accumulated; the loop does not invent totals, cached-token counts, or reasoning-token counts.
+
+The append ledger is explicit:
+
+| Boundary                          | `messagesToAppend`                               |
+| --------------------------------- | ------------------------------------------------ |
+| Successful start                  | current user message, assistant message          |
+| Successful resume                 | normalized tool results, assistant message       |
+| Provider/model failure after step | current prefix already accepted at that boundary |
+| Invalid tool-result batch         | empty                                            |
+| Max-step start                    | current user message                             |
+| Max-step resume                   | normalized tool results                          |
+| Synthetic relevant-file context   | never appended                                   |
+
+Final text is a `FINAL_CANDIDATE`, not a completion claim. The successful final boundary moves state to `VERIFYING`; Phase 6B never enters `COMPLETED` and never executes Verification.
+
+## Error and policy ownership
+
+The loop has no retry, backoff, timeout policy, run-level cancellation, doom-loop detector, token/cost budget, or tool-call budget. It owns only the structural `maxSteps` gate. Provider and Context failures are mapped to fixed, sanitized public Agent errors; raw prompts, tool arguments, provider payloads, credentials, hidden reasoning, and secrets are excluded.
+
+`AgentLLMClient.complete()` is called exactly once per loop invocation. The client may be an injected `LLMGateway`, but Core does not know its registry, provider adapter, SDK, call lifecycle, or stream implementation. This preserves the one-provider-turn contract and leaves repeated execution policy to the next layer.
 
 ## Phase boundaries
 
-Phase 6A has no AgentLoop, repeated LLM call, `ContextBuilder` or `LLMGateway` invocation, Tool execution, `ToolRegistry`, `ToolDispatcher`, approval resolution, Verification execution, Storage, EventBus, daemon integration, or host-specific runtime. The intended future loop is resumable: a tool decision yields at the external boundary, a complete normalized result batch resumes the next model step, and a final candidate proceeds to the verification boundary.
+Phase 6A defines deterministic decisions, steps, tool-result normalization, state helpers, and the `maxSteps` gate. Phase 6B connects those contracts to Project Intelligence, Relevant File Planning, ContextBuilder, and one LLM turn, then stops at the external Tool or Verification boundary. Phase 6C will own RunController orchestration, Storage integration, durable event trace, replay/live observation, and the remaining lifecycle integration. None of those responsibilities are implemented here.

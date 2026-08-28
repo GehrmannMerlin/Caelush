@@ -28,7 +28,10 @@ function makeInput(): AgentLoopCommonInput {
   });
   return {
     run,
-    state: startAgentState(createInitialAgentState({ ...run, status: "PENDING" }, 100), 100),
+    state: startAgentState(
+      createInitialAgentState({ ...run, status: "PENDING" }, createTimestampMs(100)),
+      createTimestampMs(100),
+    ),
     history: [],
     baseSystemPrompt: "base",
     contextLimits: { maxInputTokens: 1000 },

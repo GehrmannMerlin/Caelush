@@ -6,6 +6,7 @@ export {
 } from "./run-state-machine.js";
 export {
   AgentKernelStateError,
+  AgentLoopInputError,
   AgentModelOutputError,
   AgentToolResultBatchError,
 } from "./agent-errors.js";
@@ -64,3 +65,4 @@ export type {
   AgentClock,
   AgentStepIdFactory,
 } from "./agent-loop-ports.js";
+export { AgentLoop } from "./agent-loop.js";

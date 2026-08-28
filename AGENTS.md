@@ -77,6 +77,14 @@ Phase 6 rules:
 - `UsageState.toolCalls` is reserved for actual Tool invocation accounting and is not incremented merely because the model requested tools.
 - Phase 6A owns only `maxSteps` as a structural loop guard; retry, timeout, token/cost budgets and tool-call budgets remain Phase 10 responsibilities.
 - Phase 6A Kernel helpers must be deterministic and must not own wall-clock time or ID generation.
+- Phase 6B `AgentLoop.run()` and `resumeWithToolResults()` each perform at most one `AgentLLMClient.complete()` call and return at an external Tool or Verification boundary.
+- Phase 6B is a resumable decision loop, not a Tool execution loop; Core must never invoke a concrete Tool, ToolRegistry, ToolDispatcher, Runtime, Storage, EventBus, RunController, or Verification executor.
+- `AgentLoop` must receive ProjectInspector, RelevantFilePlanner, ContextBuilder, LLM client, clock, and Step ID factory through injected ports; Core production code may use only public Context and narrow provider-independent LLM contract subpaths.
+- A Tool continuation must preserve the complete open user turn, including the original user message, assistant tool-call message, and normalized tool results; it must not duplicate the original goal or treat the open turn as ordinary completed history.
+- Tool results must be normalized in assistant source order before entering model history. Invalid batches and invalid caller history are rejected without provider calls; unknown schema-valid tool names remain outside Core's concern.
+- Relevant-file context is synthetic model input and must never be returned as a durable-history append. The append ledger contains only caller-visible user, assistant, normalized tool-result, and max-step boundary messages.
+- Context preparation failures create no AgentStep and do not increment usage. Provider/model failures after step creation settle a failed step, increment `UsageState.steps`, preserve `RUNNING`, and return a sanitized failure.
+- Input Run, State, history, and Tool definitions are caller-owned and must not be mutated. `maxSteps` is the only Phase 6B loop gate; retry, timeout, cancellation, token/cost budgets, doom-loop detection, and tool-call budgets remain later responsibilities.
 
 Phase 5A context rules:
 
@@ -116,9 +124,9 @@ pnpm check
 
 ## V1 Phase Boundary
 
-当前是 Phase 6A 完成边界。除 Phase 1 已正式定义的 AgentSession、AgentRun、AgentStep、AgentState、AgentEvent、ToolDefinition、ToolInvocation、Observation、ApprovalRequest、VerificationResult 和 Run State Machine，以及 Phase 2 的 SQLite/Drizzle Storage、Repository、Run State Snapshot、Durable Event Store、EventBus、Replay 与 Live Watch、Phase 3 的 loopback-only Daemon、Health/Session/Run HTTP API 和 Durable/Ephemeral SSE Event Stream 外，Phase 4A 已建立 Caelush-owned LLM contracts、LLMProvider 和显式 Provider Registry，Phase 4B 已建立注入式 LLMGateway 的 single-turn streaming runtime、runtime event validation、tool-call lifecycle validation、abort/timeout/cancellation 和 result aggregation，Phase 4C-1 已建立仅位于 `@caelush/llm` Provider Adapter 内的 OpenAI-compatible AI SDK transport，Phase 4C-2 已完成真实 OpenAI-shaped SSE 兼容性矩阵、工具调用 identity/round-trip 安全、reasoning/usage/finish/error/secret 回归，以及仅 adapter-private 的歧义 identity fail-closed guard；Phase 5A/5B/5C 已完成 Project Intelligence、Relevant File Planning 与 ContextBuilder finalization；Phase 6A 已建立 deterministic Agent decision、step、tool-boundary、tool-result resume、AgentState、AgentStep 和 maxSteps contracts。仍不实现 AgentLoop、Tool 执行、Runtime、AgentEvent bridge、Storage integration、Approval resolution、Daemon model config、Ink CLI 功能或 React Web 功能；真正可恢复 AgentLoop 属于 Phase 6B。
+当前是 Phase 6B 完成边界。除 Phase 1 已正式定义的 AgentSession、AgentRun、AgentStep、AgentState、AgentEvent、ToolDefinition、ToolInvocation、Observation、ApprovalRequest、VerificationResult 和 Run State Machine，以及 Phase 2 的 SQLite/Drizzle Storage、Repository、Run State Snapshot、Durable Event Store、EventBus、Replay 与 Live Watch、Phase 3 的 loopback-only Daemon、Health/Session/Run HTTP API 和 Durable/Ephemeral SSE Event Stream 外，Phase 4A 已建立 Caelush-owned LLM contracts、LLMProvider 和显式 Provider Registry，Phase 4B 已建立注入式 LLMGateway 的 single-turn streaming runtime、runtime event validation、tool-call lifecycle validation、abort/timeout/cancellation 和 result aggregation，Phase 4C-1 已建立仅位于 `@caelush/llm` Provider Adapter 内的 OpenAI-compatible AI SDK transport，Phase 4C-2 已完成真实 OpenAI-shaped SSE 兼容性矩阵、工具调用 identity/round-trip 安全、reasoning/usage/finish/error/secret 回归，以及仅 adapter-private 的歧义 identity fail-closed guard；Phase 5A/5B/5C 已完成 Project Intelligence、Relevant File Planning 与 ContextBuilder finalization；Phase 6A 已建立 deterministic Agent decision、step、tool-boundary、tool-result resume、AgentState、AgentStep 和 maxSteps contracts；Phase 6B 已完成注入式 Context → LLM resumable decision loop。Phase 6B 仍不实现 Tool 执行、Runtime、AgentEvent bridge、Storage integration、RunController、Approval resolution、Daemon model config、Ink CLI 功能、React Web 功能、重试、run-level cancellation、doom-loop detection、Verification execution 或 `COMPLETED` transition；这些属于 Phase 6C 或后续明确阶段。
 
-下一阶段由后续任务另行定义；不得提前实现 AgentLoop 或其他宿主产品功能。
+下一阶段为 Phase 6C；不得提前实现 RunController、Persistence/Event Trace 或其他宿主产品功能。
 
 Phase 5B context rules:
 

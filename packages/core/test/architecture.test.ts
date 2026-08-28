@@ -11,7 +11,7 @@ async function sourceContents(): Promise<string> {
   ).join("\n");
 }
 
-describe("Core Phase 6A architecture", () => {
+describe("Core Phase 6B architecture", () => {
   it("keeps Core imports inside the approved narrow contract edges", async () => {
     const source = await sourceContents();
     const imports = [...source.matchAll(/from\s+["'](@caelush\/[^"']+)["']/g)].map(
@@ -20,12 +20,19 @@ describe("Core Phase 6A architecture", () => {
     expect(
       imports.filter(
         (value) =>
-          !["@caelush/protocol", "@caelush/llm/messages", "@caelush/llm/turn"].includes(value),
+          ![
+            "@caelush/context",
+            "@caelush/protocol",
+            "@caelush/llm/errors",
+            "@caelush/llm/messages",
+            "@caelush/llm/request",
+            "@caelush/llm/turn",
+          ].includes(value),
       ),
     ).toEqual([]);
     expect(source).not.toMatch(/from\s+["']@caelush\/llm["']/);
     expect(source).not.toMatch(
-      /from\s+["']@caelush\/(?:context|storage|events|runtime|tools|security|verification|daemon)/,
+      /from\s+["']@caelush\/(?:storage|events|runtime|tools|security|verification|daemon)/,
     );
   });
 
@@ -50,7 +57,7 @@ describe("Core Phase 6A architecture", () => {
     expect(declaration).toContain("@caelush/llm/messages");
     expect(declaration).toContain("@caelush/llm/turn");
     expect(declaration).not.toMatch(
-      /from\s+["'](?:@caelush\/llm["']|@caelush\/(?:context|storage|events|runtime|tools|security|verification|daemon)|ai|@ai-sdk\/)/,
+      /from\s+["'](?:@caelush\/llm["']|@caelush\/(?:storage|events|runtime|tools|security|verification|daemon)|ai|@ai-sdk\/)/,
     );
   });
 });

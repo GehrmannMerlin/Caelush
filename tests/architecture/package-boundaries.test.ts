@@ -149,6 +149,16 @@ describe("package boundaries", () => {
     expect(coreDependencies).not.toContain("@caelush/storage");
   });
 
+  it("keeps the Phase 6B loop above Context and narrow LLM contracts", async () => {
+    const core = await readManifest("packages/core/package.json");
+    const dependencies = dependencyEntries(core);
+    expect(dependencies["@caelush/context"]).toBe("workspace:*");
+    expect(dependencies["@caelush/llm"]).toBe("workspace:*");
+    expect(dependencies["@caelush/protocol"]).toBe("workspace:*");
+    expect(Object.keys(dependencies)).not.toContain("ai");
+    expect(Object.keys(dependencies)).not.toContain("@ai-sdk/openai-compatible");
+  });
+
   it("allows context to reuse Protocol while keeping it below all execution boundaries", async () => {
     const context = await readManifest("packages/context/package.json");
     const dependencies = dependencyEntries(context);

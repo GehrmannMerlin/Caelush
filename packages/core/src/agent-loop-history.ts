@@ -5,7 +5,6 @@ import {
   type LLMToolResultMessage,
 } from "@caelush/llm/messages";
 import { validateAndGroupConversation, type ContextConversationError } from "@caelush/context";
-import type { AgentRun, AgentState } from "@caelush/protocol";
 import type { AgentToolCallsDecision, AgentToolRequest } from "./agent-decision.js";
 import { AgentLoopInputError } from "./agent-errors.js";
 import type { AgentLoopCommonInput } from "./agent-loop-input.js";
@@ -155,14 +154,4 @@ export function prepareResumeHistory(
   assertCompleteHistory(historyBeforeCurrentTurn, "previous history is incomplete");
   assertCompleteHistory(currentTurnMessages, "current open turn is invalid");
   return { historyBeforeCurrentTurn, currentTurnMessages };
-}
-
-export function assertRunStatePair(run: AgentRun, state: AgentState): void {
-  validateAgentLoopInput({
-    run,
-    state,
-    history: [],
-    baseSystemPrompt: "",
-    contextLimits: { maxInputTokens: 1 },
-  });
 }
