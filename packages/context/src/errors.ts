@@ -31,3 +31,15 @@ export class ContextIOError extends ContextError {
     super("FILESYSTEM_IO", message, options);
   }
 }
+
+export class ContextIgnoreError extends ContextError {
+  constructor(message: string, options?: ErrorOptions) {
+    super("IGNORE_POLICY_FAILURE", message, options);
+  }
+}
+
+export class ContextDiscoveryError extends ContextError {
+  constructor(message: string, options?: ErrorOptions) {
+    super("DISCOVERY_FAILURE", message, options);
+  }
+}

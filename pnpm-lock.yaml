@@ -60,6 +60,9 @@ importers:
       '@caelush/protocol':
         specifier: workspace:*
         version: link:../protocol
+      ignore:
+        specifier: 7.0.6
+        version: 7.0.6
 
   packages/core:
     dependencies:

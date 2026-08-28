@@ -1,6 +1,8 @@
 export {
   ContextBoundaryError,
   ContextError,
+  ContextDiscoveryError,
+  ContextIgnoreError,
   ContextInstructionError,
   ContextIOError,
   ContextInvalidWorkspaceError,
@@ -41,3 +43,13 @@ export type { ProjectRootDetectionResult, ProjectRootReason } from "./project-ro
 export type { ProjectIntelligenceSnapshot } from "./snapshot.js";
 export { WorkspaceScopeResolver } from "./workspace.js";
 export type { WorkspaceScope } from "./workspace.js";
+export { IgnorePolicy } from "./ignore-policy.js";
+export type { IgnoreDecision, IgnorePolicyDependencies } from "./ignore-policy.js";
+export { CandidateFileDiscovery } from "./file-discovery.js";
+export type {
+  CandidateDiscoveryOptions,
+  CandidateFile,
+  CandidateFileDiscoveryDependencies,
+  CandidateFileDiscoveryResult,
+  RelevantFileDiscoveryStats,
+} from "./file-discovery.js";
