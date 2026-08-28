@@ -15,6 +15,14 @@
     "./turn": {
       "types": "./dist/turn.d.ts",
       "import": "./dist/turn.js"
+    },
+    "./request": {
+      "types": "./dist/request.d.ts",
+      "import": "./dist/request.js"
+    },
+    "./errors": {
+      "types": "./dist/errors.d.ts",
+      "import": "./dist/errors.js"
     }
   },
   "scripts": {
