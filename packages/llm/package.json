@@ -14,7 +14,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@ai-sdk/openai-compatible": "3.0.39",
     "@caelush/protocol": "workspace:*",
+    "ai": "7.0.83",
     "zod": "4.4.3"
   }
 }

@@ -16,6 +16,33 @@ const internalPackagePattern = /^@caelush\//;
 const deepSourceImportPattern = /\.\.\/(?:\.\.\/)+packages\/[^\s"'`]+\/src\//;
 const forbiddenLlmSdkImportPattern = /\bfrom\s+["'](?:ai|@ai-sdk\/)/;
 const explicitAnyPattern = /\bany\b/;
+const openAICompatibleAdapterRoot = path.join(
+  repositoryRoot,
+  "packages",
+  "llm",
+  "src",
+  "providers",
+  "openai-compatible",
+);
+
+async function sourceFiles(directory: string): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const nestedFiles = await Promise.all(
+    entries.map(async (entry) => {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) return sourceFiles(entryPath);
+      return entry.isFile() && entry.name.endsWith(".ts") ? [entryPath] : [];
+    }),
+  );
+  return nestedFiles.flat();
+}
+
+function isOpenAICompatibleAdapterPath(filePath: string): boolean {
+  return (
+    filePath === openAICompatibleAdapterRoot ||
+    filePath.startsWith(`${openAICompatibleAdapterRoot}${path.sep}`)
+  );
+}
 
 describe("package boundaries", () => {
   it("prevents packages from depending on applications", async () => {
@@ -59,9 +86,11 @@ describe("package boundaries", () => {
     const dependencies = dependencyEntries(manifest);
     expect(dependencies[protocolPackageName]).toBe("workspace:*");
     expect(dependencies.zod).toBe("4.4.3");
+    expect(dependencies.ai).toBe("7.0.83");
+    expect(dependencies["@ai-sdk/openai-compatible"]).toBe("3.0.39");
     expect(
       Object.keys(dependencies).some((dependency) =>
-        ["ai", "@ai-sdk/core", "@ai-sdk/openai", "openai", "anthropic"].includes(dependency),
+        ["@ai-sdk/core", "@ai-sdk/openai", "openai", "anthropic"].includes(dependency),
       ),
     ).toBe(false);
 
@@ -71,19 +100,20 @@ describe("package boundaries", () => {
     );
   });
 
-  it("keeps AI SDK imports and explicit any out of production source", async () => {
-    const llmSourceFileNames = (
-      await readdir(path.join(repositoryRoot, "packages", "llm", "src"))
-    ).filter((fileName) => fileName.endsWith(".ts"));
+  it("keeps AI SDK imports inside the OpenAI-compatible adapter and explicit any out of production source", async () => {
+    const llmSourcePaths = await sourceFiles(path.join(repositoryRoot, "packages", "llm", "src"));
     const llmSourceContents = await Promise.all(
-      llmSourceFileNames.map((fileName) =>
-        readFile(path.join(repositoryRoot, "packages", "llm", "src", fileName), "utf8"),
-      ),
+      llmSourcePaths.map(async (filePath) => ({
+        filePath,
+        contents: await readFile(filePath, "utf8"),
+      })),
     );
-    expect(llmSourceContents.some((contents) => forbiddenLlmSdkImportPattern.test(contents))).toBe(
-      false,
-    );
-    expect(llmSourceContents.some((contents) => explicitAnyPattern.test(contents))).toBe(false);
+    const violations = llmSourceContents
+      .filter(({ filePath }) => !isOpenAICompatibleAdapterPath(filePath))
+      .filter(({ contents }) => forbiddenLlmSdkImportPattern.test(contents))
+      .map(({ filePath }) => path.relative(repositoryRoot, filePath));
+    expect(violations).toEqual([]);
+    expect(llmSourceContents.some(({ contents }) => explicitAnyPattern.test(contents))).toBe(false);
   });
 
   it("keeps the Phase 4B gateway isolated from adapters and host execution", async () => {

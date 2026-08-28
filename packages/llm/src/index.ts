@@ -51,3 +51,5 @@ export type {
 export { LLMProviderRegistry } from "./provider-registry.js";
 export { LLMGateway } from "./gateway.js";
 export type { LLMGatewayDependencies, LLMStream, LLMStreamOptions } from "./gateway.js";
+export { createOpenAICompatibleLLMProvider } from "./providers/openai-compatible/index.js";
+export type { OpenAICompatibleLLMProviderOptions } from "./providers/openai-compatible/index.js";

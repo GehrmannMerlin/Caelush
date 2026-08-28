@@ -8,7 +8,8 @@ Phase 4 is intentionally split into three rounds:
 
 - **Phase 4A — LLM Contracts & Provider Foundation:** complete. It defines Caelush-owned messages, `LLMRequest`, capabilities, usage, normalized stream events, typed errors, `LLMProvider`, and an explicit provider registry. It does not connect a real model.
 - **Phase 4B — LLMGateway & Streaming Runtime:** complete for the current round. It routes one request through an injected registry, creates the call identity, lazily invokes one provider turn, validates the runtime stream, handles abort scope, and aggregates `LLMTurnResult`.
-- **Phase 4C — OpenAI-Compatible + AI SDK Adapter:** pending. It will add concrete provider-wire adapters. AI SDK types may appear only inside adapter implementation modules.
+- **Phase 4C-1 — OpenAI-Compatible Adapter Foundation:** complete. `@caelush/llm` now contains a runtime-only OpenAI-compatible adapter built on the pinned AI SDK transport, with message/tool projection, normalized streaming, usage/finish mapping, typed transport errors, and custom-fetch integration coverage.
+- **Phase 4C-2 — OpenAI-Compatible Compatibility Hardening:** pending. It will address provider-specific malformed and fragmented tool-stream behavior, compatibility matrices, and optional real-provider smoke tests.
 
 ```text
 Future AgentLoop
@@ -22,9 +23,9 @@ Future AgentLoop
       ▼
  LLMProvider (one turn)
       │
-      ├── Future OpenAI-compatible adapter (Phase 4C)
-      ├── Future Anthropic adapter (Phase 4C)
-      ├── Future Gemini adapter (Phase 4C)
+      ├── OpenAI-compatible adapter (Phase 4C-1)
+      ├── Future Anthropic adapter
+      ├── Future Gemini adapter
       └── Deterministic test provider
 ```
 
@@ -174,10 +175,29 @@ Timers and abort listeners are cleaned after normal finish, error, abort, timeou
 
 ## AI SDK isolation and raw reasoning rule
 
-No AI SDK dependency is installed in Phase 4B. The public LLM contract does not import `ai`, `@ai-sdk/*`, or provider SDK types. Future Phase 4C adapters may know those SDKs only inside adapter implementation modules; Caelush messages, request/result types, event vocabulary, Gateway contracts, and Core remain SDK-independent.
+The OpenAI-compatible adapter is the only current runtime boundary allowed to import `ai` and `@ai-sdk/openai-compatible`. The public LLM contract does not import `ai`, `@ai-sdk/*`, or provider SDK types. `createOpenAICompatibleLLMProvider()` exposes only Caelush-owned options; AI SDK messages, tools, models, stream results, and errors remain adapter-private. Architecture and declaration tests enforce this isolation across Core, Protocol, Events, Storage, Daemon, and the rest of `@caelush/llm`.
+
+## OpenAI-compatible adapter boundary
+
+```text
+LLMGateway (Phase 4B)
+        │ existing LLMProvider contract
+        ▼
+OpenAICompatibleLLMProvider (Phase 4C-1)
+        │ adapter-private message/tool/stream/error conversion
+        ▼
+AI SDK `streamText()`
+        │ `@ai-sdk/openai-compatible` chat model
+        ▼
+OpenAI-compatible HTTP API
+```
+
+AI SDK is not Caelush's Agent Runtime. The adapter performs exactly one provider turn and never runs an Agent, Workflow, ToolLoop, `stopWhen`, `prepareStep`, or local tool callback. Caelush messages are projected to the current AI SDK `ModelMessage` shape: system and user text are preserved, assistant tool-only messages remain tool-only, assistant tool calls retain their IDs, and tool failures use the AI SDK error-text result form. Tool definitions project only `name`, `description`, and the existing JSON Schema; the generated AI SDK tools deliberately have no `execute`, approval, or execution callback.
+
+The Gateway remains the owner of `LLMCallId`, timeout, abort-cause semantics, stream lifecycle validation, and result aggregation. The adapter forwards the Gateway-owned `AbortSignal` unchanged, does not create a timeout, and sets AI SDK `maxRetries: 0`; retry policy belongs to a future policy layer. The adapter emits only Caelush `stream.start`, text, tool lifecycle, usage, and finish events, drops raw reasoning text, and normalizes provider errors without exposing credentials or raw SDK payloads.
 
 Raw provider chain-of-thought is not a Caelush public contract. There is no reasoning delta event, chain-of-thought field, or hidden-thinking content type. A provider may report reasoning token counts through `LLMUsage`; a future AgentLoop may expose its own public `reasoning.summary`, but that is not provider hidden reasoning.
 
 ## Pending work
 
-Gateway runtime is implemented for Phase 4B, but no real model provider is connected. OpenAI-compatible, Anthropic, Gemini, and AI SDK adapters, network integration fixtures, HTTP error normalization, and optional real smoke tests are explicitly deferred to **Phase 4C — OpenAI-Compatible + AI SDK Adapter**.
+Gateway runtime and the first OpenAI-compatible adapter foundation are implemented for Phase 4B and Phase 4C-1. No AgentLoop, local tool execution, Daemon model configuration, Storage integration, or EventBus bridge exists yet. **Phase 4C-2 — OpenAI-Compatible Compatibility Hardening** remains pending for fragmented arguments, late or missing tool IDs/names, non-zero or reused indexes, premature completion, complex parallel streams, provider compatibility matrices, optional real-provider smoke, and final Phase 4 verification.
