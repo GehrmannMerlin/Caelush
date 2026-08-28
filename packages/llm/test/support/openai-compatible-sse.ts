@@ -54,7 +54,7 @@ export function finishChunk(input: {
     model: input.model,
     delta: {},
     finishReason: input.finishReason,
-    usage: input.usage,
+    ...(input.usage === undefined ? {} : { usage: input.usage }),
   });
 }
 

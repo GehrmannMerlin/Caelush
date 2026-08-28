@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ToolDefinition } from "@caelush/protocol";
+import { LLMInvalidResponseError } from "../src/index.js";
 import {
   createOpenAICompatibleLLMProvider,
   LLMGateway,
@@ -419,5 +420,210 @@ describe("OpenAI-compatible compatibility matrix", () => {
     });
 
     expect(result.toolCalls.map((call) => call.id)).toEqual(["call-order-three", "call-order-one"]);
+  });
+
+  it("accepts an empty tool-call ID on a continuation", async () => {
+    const gateway = createGateway(async () =>
+      sseResponse([
+        openAIChunk({
+          id: "chatcmpl-empty-id",
+          model: model.model,
+          delta: {
+            role: "assistant",
+            tool_calls: [
+              toolCallDelta({
+                index: 0,
+                id: "call-empty-id",
+                name: "read_file",
+                arguments: '{"path":"',
+              }),
+            ],
+          },
+        }),
+        openAIChunk({
+          id: "chatcmpl-empty-id",
+          model: model.model,
+          delta: { tool_calls: [toolCallDelta({ index: 0, id: "", arguments: 'a"}' })] },
+        }),
+        finishChunk({ id: "chatcmpl-empty-id", model: model.model, finishReason: "tool_calls" }),
+      ]),
+    );
+
+    const result = await gateway.complete({
+      model,
+      messages: [{ role: "user", content: "Read a." }],
+      tools: [readFileTool],
+    });
+
+    expect(result.toolCalls).toEqual([
+      { id: "call-empty-id", name: "read_file", input: { path: "a" } },
+    ]);
+  });
+
+  it("fails closed for a whitespace tool-call ID continuation", async () => {
+    const gateway = createGateway(async () =>
+      sseResponse([
+        openAIChunk({
+          id: "chatcmpl-whitespace-id",
+          model: model.model,
+          delta: {
+            role: "assistant",
+            tool_calls: [
+              toolCallDelta({
+                index: 0,
+                id: "call-whitespace-id",
+                name: "read_file",
+                arguments: '{"path":"',
+              }),
+            ],
+          },
+        }),
+        openAIChunk({
+          id: "chatcmpl-whitespace-id",
+          model: model.model,
+          delta: { tool_calls: [toolCallDelta({ index: 0, id: "   ", arguments: 'a"}' })] },
+        }),
+        finishChunk({
+          id: "chatcmpl-whitespace-id",
+          model: model.model,
+          finishReason: "tool_calls",
+        }),
+      ]),
+    );
+
+    await expect(
+      gateway.complete({
+        model,
+        messages: [{ role: "user", content: "Read a." }],
+        tools: [readFileTool],
+      }),
+    ).rejects.toBeInstanceOf(LLMInvalidResponseError);
+  });
+
+  it("fails closed when the first tool-call ID is missing", async () => {
+    const gateway = createGateway(async () =>
+      sseResponse([
+        openAIChunk({
+          id: "chatcmpl-missing-id",
+          model: model.model,
+          delta: {
+            role: "assistant",
+            tool_calls: [toolCallDelta({ index: 0, name: "read_file", arguments: '{"path":"a"}' })],
+          },
+        }),
+        finishChunk({ id: "chatcmpl-missing-id", model: model.model, finishReason: "tool_calls" }),
+      ]),
+    );
+
+    await expect(
+      gateway.complete({
+        model,
+        messages: [{ role: "user", content: "Read a." }],
+        tools: [readFileTool],
+      }),
+    ).rejects.toBeInstanceOf(LLMInvalidResponseError);
+  });
+
+  it("fails closed instead of merging distinct calls with the same ID", async () => {
+    const gateway = createGateway(async () =>
+      sseResponse([
+        openAIChunk({
+          id: "chatcmpl-duplicate-id",
+          model: model.model,
+          delta: {
+            role: "assistant",
+            tool_calls: [
+              toolCallDelta({
+                index: 0,
+                id: "call-same",
+                name: "read_file",
+                arguments: '{"path":"a"}',
+              }),
+            ],
+          },
+        }),
+        openAIChunk({
+          id: "chatcmpl-duplicate-id",
+          model: model.model,
+          delta: {
+            tool_calls: [
+              toolCallDelta({
+                index: 1,
+                id: "call-same",
+                name: "search_text",
+                arguments: '{"query":"b"}',
+              }),
+            ],
+          },
+        }),
+        finishChunk({
+          id: "chatcmpl-duplicate-id",
+          model: model.model,
+          finishReason: "tool_calls",
+        }),
+      ]),
+    );
+
+    await expect(
+      gateway.complete({
+        model,
+        messages: [{ role: "user", content: "Read a and search b." }],
+        tools: [readFileTool, searchTextTool],
+      }),
+    ).rejects.toBeInstanceOf(LLMInvalidResponseError);
+  });
+
+  it("fails closed for a delta with neither ID nor index while calls are open", async () => {
+    const gateway = createGateway(async () =>
+      sseResponse([
+        openAIChunk({
+          id: "chatcmpl-ambiguous-delta",
+          model: model.model,
+          delta: {
+            role: "assistant",
+            tool_calls: [
+              toolCallDelta({
+                index: 0,
+                id: "call-ambiguous-a",
+                name: "read_file",
+                arguments: '{"path":"a"}',
+              }),
+            ],
+          },
+        }),
+        openAIChunk({
+          id: "chatcmpl-ambiguous-delta",
+          model: model.model,
+          delta: {
+            tool_calls: [
+              toolCallDelta({
+                index: 1,
+                id: "call-ambiguous-b",
+                name: "search_text",
+                arguments: '{"query":"b"}',
+              }),
+            ],
+          },
+        }),
+        openAIChunk({
+          id: "chatcmpl-ambiguous-delta",
+          model: model.model,
+          delta: { tool_calls: [toolCallDelta({ arguments: "" })] },
+        }),
+        finishChunk({
+          id: "chatcmpl-ambiguous-delta",
+          model: model.model,
+          finishReason: "tool_calls",
+        }),
+      ]),
+    );
+
+    await expect(
+      gateway.complete({
+        model,
+        messages: [{ role: "user", content: "Read a and search b." }],
+        tools: [readFileTool, searchTextTool],
+      }),
+    ).rejects.toBeInstanceOf(LLMInvalidResponseError);
   });
 });

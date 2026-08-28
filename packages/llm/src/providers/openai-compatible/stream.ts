@@ -10,6 +10,7 @@ import { toAISDKToolChoice, toAISDKTools } from "./tools.js";
 import { normalizeAISDKUsage } from "./usage.js";
 import type { OpenAICompatibleProvider } from "@ai-sdk/openai-compatible";
 import { normalizeOpenAICompatibleError } from "./errors.js";
+import { assertRawToolCallIdentity, createRawToolCallState } from "./raw-chunk.js";
 
 interface ToolLifecycle {
   readonly name: string;
@@ -44,7 +45,7 @@ async function* createStream(
         : { maxOutputTokens: request.maxOutputTokens }),
       abortSignal: context.signal,
       maxRetries: 0,
-      includeRawChunks: false,
+      includeRawChunks: true,
       onError: () => undefined,
     });
 
@@ -58,8 +59,9 @@ async function* createStream(
     };
 
     const toolLifecycles = new Map<string, ToolLifecycle>();
+    const rawToolCallState = createRawToolCallState();
     for await (const part of result.fullStream) {
-      yield* normalizeStreamPart(part, toolLifecycles, request, context);
+      yield* normalizeStreamPart(part, toolLifecycles, rawToolCallState, request, context);
     }
   } catch (error) {
     throw normalizeOpenAICompatibleError(error, request);
@@ -69,10 +71,22 @@ async function* createStream(
 function* normalizeStreamPart(
   part: TextStreamPart<ToolSet>,
   toolLifecycles: Map<string, ToolLifecycle>,
+  rawToolCallState: ReturnType<typeof createRawToolCallState>,
   request: LLMProviderRequest,
   context: LLMProviderCallContext,
 ): Generator<LLMStreamEvent> {
   switch (part.type) {
+    case "raw":
+      try {
+        assertRawToolCallIdentity(part.rawValue, rawToolCallState);
+      } catch {
+        throw invalidResponse(
+          "OpenAI-compatible stream contained ambiguous tool identity.",
+          request,
+          context,
+        );
+      }
+      return;
     case "text-delta":
       if (part.text.length > 0) yield { type: "text.delta", payload: { text: part.text } };
       return;
