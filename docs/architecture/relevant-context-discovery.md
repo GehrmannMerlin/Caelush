@@ -93,6 +93,10 @@ If content is truncated and contains a newline, the final incomplete line is rem
 
 Empty and whitespace-only files do not consume budget. Ordinary read failures and non-text files become diagnostics and are skipped. Each `RelevantFileContextSection` retains `FileContextProvenance` with its absolute path, project-relative path, score, reasons, estimated tokens, included bytes, and truncation state. `RelevantFileContextPlan` is a runtime planning value, not a Protocol DTO, event, storage row, prompt, or LLM request.
 
+## Phase 5C handoff
+
+The planner ends at `RelevantFileContextPlan`. Phase 5C consumes `sections` in their existing ranking order and performs a second, final model-input fit. It renders selected files into a synthetic user reference message, preserves relative-path provenance and truncation state, counts rendering overhead, and never re-plans or re-reads content. See [ContextBuilder](context-builder.md).
+
 ## Explicit non-goals
 
-Phase 5B does not implement `ContextBuilder`, conversation history assembly, compaction, summarization, model context-window allocation, `AgentLoop`, Tool execution, Storage, EventBus, Daemon integration, network access, or an `@caelush/llm` dependency.
+Phase 5B does not implement conversation history assembly, compaction, summarization, model context-window detection, `AgentLoop`, Tool execution, Storage, EventBus, Daemon integration, or network access. Phase 5C adds only the in-memory `ContextBuilder` boundary and the narrow `@caelush/llm/messages` contract dependency; it still does not call the Gateway or execute an Agent.

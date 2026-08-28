@@ -99,7 +99,7 @@ pnpm check
 
 ## V1 Phase Boundary
 
-当前是 Phase 4 完成边界。除 Phase 1 已正式定义的 AgentSession、AgentRun、AgentStep、AgentState、AgentEvent、ToolDefinition、ToolInvocation、Observation、ApprovalRequest、VerificationResult 和 Run State Machine，以及 Phase 2 的 SQLite/Drizzle Storage、Repository、Run State Snapshot、Durable Event Store、EventBus、Replay 与 Live Watch、Phase 3 的 loopback-only Daemon、Health/Session/Run HTTP API 和 Durable/Ephemeral SSE Event Stream 外，Phase 4A 已建立 Caelush-owned LLM contracts、LLMProvider 和显式 Provider Registry，Phase 4B 已建立注入式 LLMGateway 的 single-turn streaming runtime、runtime event validation、tool-call lifecycle validation、abort/timeout/cancellation 和 result aggregation，Phase 4C-1 已建立仅位于 `@caelush/llm` Provider Adapter 内的 OpenAI-compatible AI SDK transport，Phase 4C-2 已完成真实 OpenAI-shaped SSE 兼容性矩阵、工具调用 identity/round-trip 安全、reasoning/usage/finish/error/secret 回归，以及仅 adapter-private 的歧义 identity fail-closed guard；仍不实现 AgentLoop、Tool 执行、Runtime、AgentEvent bridge、Storage integration、Approval resolution、Daemon model config、Ink CLI 功能或 React Web 功能。Phase 5 由后续任务另行定义。
+当前是 Phase 5 完成边界。除 Phase 1 已正式定义的 AgentSession、AgentRun、AgentStep、AgentState、AgentEvent、ToolDefinition、ToolInvocation、Observation、ApprovalRequest、VerificationResult 和 Run State Machine，以及 Phase 2 的 SQLite/Drizzle Storage、Repository、Run State Snapshot、Durable Event Store、EventBus、Replay 与 Live Watch、Phase 3 的 loopback-only Daemon、Health/Session/Run HTTP API 和 Durable/Ephemeral SSE Event Stream 外，Phase 4A 已建立 Caelush-owned LLM contracts、LLMProvider 和显式 Provider Registry，Phase 4B 已建立注入式 LLMGateway 的 single-turn streaming runtime、runtime event validation、tool-call lifecycle validation、abort/timeout/cancellation 和 result aggregation，Phase 4C-1 已建立仅位于 `@caelush/llm` Provider Adapter 内的 OpenAI-compatible AI SDK transport，Phase 4C-2 已完成真实 OpenAI-shaped SSE 兼容性矩阵、工具调用 identity/round-trip 安全、reasoning/usage/finish/error/secret 回归，以及仅 adapter-private 的歧义 identity fail-closed guard；Phase 5A/5B/5C 已完成 Project Intelligence、Relevant File Planning 与 ContextBuilder finalization。仍不实现 AgentLoop、Tool 执行、Runtime、AgentEvent bridge、Storage integration、Approval resolution、Daemon model config、Ink CLI 功能或 React Web 功能。下一阶段是 Phase 6 AgentLoop。
 
 下一阶段由后续任务另行定义；不得提前实现 AgentLoop 或其他宿主产品功能。
 
@@ -119,3 +119,18 @@ Phase 5B context rules:
 - Relevant file content must stay as structured runtime sections; Phase 5B must not render the final LLM prompt.
 - Context discovery must not depend on @caelush/llm.
 - Phase 5B must not perform conversation compaction or summarization.
+
+Phase 5 final ContextBuilder rules:
+
+- Phase 5 contains exactly 5A, 5B, and 5C and is complete after ContextBuilder finalization.
+- `ProjectIntelligenceSnapshot`, `RelevantFileContextPlan`, and `BuiltModelContext` are separate runtime concepts and must not be merged.
+- ContextBuilder consumes already-discovered project facts and relevant files; it must not perform filesystem discovery.
+- ContextBuilder may depend only on the provider-independent `@caelush/llm/messages` subpath, never the `@caelush/llm` root or provider adapters.
+- The final model message order is system context, selected history, optional relevant-file reference context, then the exact current user message.
+- Current user content must never be silently trimmed, rewritten, or merged with synthetic project context.
+- Project instructions are project-level instructions; project metadata and project files are reference data and must be labeled accordingly.
+- Conversation history selection keeps a newest contiguous suffix of complete turns and must never orphan tool calls or tool results.
+- Conversation overflow may mark `requiresCompaction` but Phase 5 must not invoke an LLM to summarize history.
+- Relevant-file context may be further truncated to fit the final model-input budget but must preserve provenance and truncation state.
+- ContextBuilder does not know models, providers, tools, or provider context windows; the caller supplies `maxInputTokens`.
+- ContextBuilder must never call `LLMGateway` or emit `AgentEvents`.
