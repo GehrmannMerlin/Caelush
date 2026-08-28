@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
+import type { LLMCapabilities } from "../src/index.js";
+import type { ToolDefinition } from "@caelush/protocol";
 import { LLMCapabilityUnsupportedError, LLMInvalidRequestError } from "../src/index.js";
 import { validateLLMRequestSemantics, validateTimeoutMs } from "../src/request-validation.js";
 
 const model = { provider: "local", model: "test-model" };
-const tool = {
+const tool: ToolDefinition = {
   name: "list_files",
   description: "List files",
   inputSchema: { type: "object" },
@@ -11,8 +13,8 @@ const tool = {
   riskLevel: "LOW",
   requiredCapabilities: ["FS_READ"],
   runtimeRequirements: { kind: "local" },
-} as const;
-const capabilities = {
+};
+const capabilities: LLMCapabilities = {
   textStreaming: "SUPPORTED",
   toolCalling: "SUPPORTED",
   parallelToolCalls: "UNKNOWN",
