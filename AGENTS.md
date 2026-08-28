@@ -53,6 +53,13 @@ Caelush 是一个 TypeScript/Node.js 通用 Agent Kernel 项目。CLI、Web 和�
 - Adapters must not own timeout or retry policy; AI SDK automatic retry must be disabled with `maxRetries: 0`.
 - AI SDK tools must not contain `execute` callbacks or local tool execution hooks.
 - Provider raw reasoning content must be dropped, and provider SDK types must never leak through `@caelush/llm` public contracts.
+- OpenAI-compatible streaming quirks must be characterized through the real AI SDK path before adding adapter behavior; do not infer compatibility from mocked `streamText` calls.
+- The Gateway must remain provider-independent; never weaken its schemas or lifecycle rules for one provider's malformed stream.
+- Adapters must not synthesize tool-call identity, silently merge duplicate IDs, or use a `latestToolCall` heuristic for an ambiguous delta.
+- Ambiguous tool identity must fail closed as a sanitized `LLMInvalidResponseError`; raw SSE, credentials, prompts, and tool arguments must not enter public error messages.
+- A compatibility workaround must be adapter-private, deterministic, narrowly tested, and documented with its removal condition; prefer an upstream fix when a pinned regression is fixed.
+- Do not patch `node_modules`, use `pnpm patch`, or upgrade pinned AI SDK dependencies unless a failing pinned regression and verified stable exact-version fix justify it.
+- OpenAI-compatible compatibility tests must exercise real OpenAI-shaped SSE through `LLMGateway → OpenAICompatibleLLMProvider → streamText → @ai-sdk/openai-compatible → fetch`.
 
 ## Development Rules
 
@@ -77,6 +84,6 @@ pnpm check
 
 ## V1 Phase Boundary
 
-当前是 Phase 4C-1：OpenAI-Compatible Adapter Foundation。除 Phase 1 已正式定义的 AgentSession、AgentRun、AgentStep、AgentState、AgentEvent、ToolDefinition、ToolInvocation、Observation、ApprovalRequest、VerificationResult 和 Run State Machine，以及 Phase 2 的 SQLite/Drizzle Storage、Repository、Run State Snapshot、Durable Event Store、EventBus、Replay 与 Live Watch、Phase 3 的 loopback-only Daemon、Health/Session/Run HTTP API 和 Durable/Ephemeral SSE Event Stream 外，Phase 4A 已建立 Caelush-owned LLM contracts、LLMProvider 和显式 Provider Registry，Phase 4B 已建立注入式 LLMGateway 的 single-turn streaming runtime、runtime event validation、tool-call lifecycle validation、abort/timeout/cancellation 和 result aggregation，Phase 4C-1 已建立仅位于 `@caelush/llm` Provider Adapter 内的 OpenAI-compatible AI SDK transport、消息/工具/流/usage/finish/error 转换与真实 custom-fetch 集成测试；仍不实现 AgentLoop、Tool 执行、Runtime、AgentEvent bridge、Storage integration、Approval resolution、Daemon model config、Ink CLI 功能或 React Web 功能。Phase 4C-2 的复杂 Provider 兼容性加固仍未开始。
+当前是 Phase 4 完成边界。除 Phase 1 已正式定义的 AgentSession、AgentRun、AgentStep、AgentState、AgentEvent、ToolDefinition、ToolInvocation、Observation、ApprovalRequest、VerificationResult 和 Run State Machine，以及 Phase 2 的 SQLite/Drizzle Storage、Repository、Run State Snapshot、Durable Event Store、EventBus、Replay 与 Live Watch、Phase 3 的 loopback-only Daemon、Health/Session/Run HTTP API 和 Durable/Ephemeral SSE Event Stream 外，Phase 4A 已建立 Caelush-owned LLM contracts、LLMProvider 和显式 Provider Registry，Phase 4B 已建立注入式 LLMGateway 的 single-turn streaming runtime、runtime event validation、tool-call lifecycle validation、abort/timeout/cancellation 和 result aggregation，Phase 4C-1 已建立仅位于 `@caelush/llm` Provider Adapter 内的 OpenAI-compatible AI SDK transport，Phase 4C-2 已完成真实 OpenAI-shaped SSE 兼容性矩阵、工具调用 identity/round-trip 安全、reasoning/usage/finish/error/secret 回归，以及仅 adapter-private 的歧义 identity fail-closed guard；仍不实现 AgentLoop、Tool 执行、Runtime、AgentEvent bridge、Storage integration、Approval resolution、Daemon model config、Ink CLI 功能或 React Web 功能。Phase 5 由后续任务另行定义。
 
 下一阶段由后续任务另行定义；不得提前实现 AgentLoop 或其他宿主产品功能。

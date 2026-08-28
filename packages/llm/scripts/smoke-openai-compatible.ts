@@ -5,16 +5,16 @@ import {
 } from "../dist/index.js";
 import type { ToolDefinition } from "@caelush/protocol";
 
-const baseURL = process.env.CAELUSH_LLM_SMOKE_BASE_URL;
-const apiKey = process.env.CAELUSH_LLM_SMOKE_API_KEY;
-const modelName = process.env.CAELUSH_LLM_SMOKE_MODEL;
+const baseURL = process.env.CAELUSH_OPENAI_COMPATIBLE_BASE_URL;
+const apiKey = process.env.CAELUSH_OPENAI_COMPATIBLE_API_KEY;
+const modelName = process.env.CAELUSH_OPENAI_COMPATIBLE_MODEL;
 const includeTool = process.env.CAELUSH_LLM_SMOKE_TOOL === "1";
 
 if (process.env.CAELUSH_LLM_SMOKE !== "1") {
   console.log("OpenAI-compatible smoke: SKIPPED (set CAELUSH_LLM_SMOKE=1 to opt in). ");
 } else if (baseURL === undefined || apiKey === undefined || modelName === undefined) {
   console.log(
-    "OpenAI-compatible smoke: SKIPPED (set CAELUSH_LLM_SMOKE_BASE_URL, CAELUSH_LLM_SMOKE_API_KEY, and CAELUSH_LLM_SMOKE_MODEL).",
+    "OpenAI-compatible smoke: SKIPPED (set CAELUSH_OPENAI_COMPATIBLE_BASE_URL, CAELUSH_OPENAI_COMPATIBLE_API_KEY, and CAELUSH_OPENAI_COMPATIBLE_MODEL).",
   );
 } else {
   const providerId = "openai-compatible-smoke";
@@ -49,9 +49,17 @@ if (process.env.CAELUSH_LLM_SMOKE !== "1") {
       ],
       ...(includeTool ? { tools: [tool] } : {}),
     });
-    console.log(
-      `OpenAI-compatible smoke: PASS (finish=${result.finishReason}, textLength=${result.text.length}, toolCalls=${result.toolCalls.length}).`,
-    );
+    if (includeTool) {
+      if (result.toolCalls.length === 0) {
+        console.log("OpenAI-compatible smoke: SKIPPED / unsupported (no tool call returned).");
+      } else {
+        console.log("OpenAI-compatible smoke: PASS (tool call returned; no tool executed).");
+      }
+    } else if (result.text.trim() !== "CAELUSH_OK") {
+      console.log("OpenAI-compatible smoke: SKIPPED (provider did not return trimmed CAELUSH_OK).");
+    } else {
+      console.log("OpenAI-compatible smoke: PASS (CAELUSH_OK).");
+    }
   } catch {
     console.error("OpenAI-compatible smoke: FAIL (provider call did not complete safely).");
     process.exitCode = 1;

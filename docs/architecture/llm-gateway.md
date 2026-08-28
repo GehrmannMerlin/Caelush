@@ -9,7 +9,7 @@ Phase 4 is intentionally split into three rounds:
 - **Phase 4A — LLM Contracts & Provider Foundation:** complete. It defines Caelush-owned messages, `LLMRequest`, capabilities, usage, normalized stream events, typed errors, `LLMProvider`, and an explicit provider registry. It does not connect a real model.
 - **Phase 4B — LLMGateway & Streaming Runtime:** complete for the current round. It routes one request through an injected registry, creates the call identity, lazily invokes one provider turn, validates the runtime stream, handles abort scope, and aggregates `LLMTurnResult`.
 - **Phase 4C-1 — OpenAI-Compatible Adapter Foundation:** complete. `@caelush/llm` now contains a runtime-only OpenAI-compatible adapter built on the pinned AI SDK transport, with message/tool projection, normalized streaming, usage/finish mapping, typed transport errors, and custom-fetch integration coverage.
-- **Phase 4C-2 — OpenAI-Compatible Compatibility Hardening:** pending. It will address provider-specific malformed and fragmented tool-stream behavior, compatibility matrices, and optional real-provider smoke tests.
+- **Phase 4C-2 — OpenAI-Compatible Compatibility Hardening:** complete. It characterizes fragmented and malformed tool streams through the real AI SDK path, preserves safe provider identities, fails closed for ambiguous identity, records the compatibility matrix, and provides an opt-in real-provider smoke utility.
 
 ```text
 Future AgentLoop
@@ -42,7 +42,7 @@ The Gateway owns:
 - runtime event, stream, and tool-call invariants;
 - one-turn text/tool/usage aggregation.
 
-The Provider owns exactly one upstream provider turn and normalizes that provider's output into Caelush's `LLMStreamEvent` vocabulary. The future AgentLoop owns continuation, tool dispatch, context construction, verification, and run-level policy; none of those are in Phase 4B.
+The Provider owns exactly one upstream provider turn and normalizes that provider's output into Caelush's `LLMStreamEvent` vocabulary. The future AgentLoop owns continuation, tool dispatch, context construction, verification, and run-level policy; none of those are in Phase 4.
 
 ## Provider boundary and call context
 
@@ -198,6 +198,13 @@ The Gateway remains the owner of `LLMCallId`, timeout, abort-cause semantics, st
 
 Raw provider chain-of-thought is not a Caelush public contract. There is no reasoning delta event, chain-of-thought field, or hidden-thinking content type. A provider may report reasoning token counts through `LLMUsage`; a future AgentLoop may expose its own public `reasoning.summary`, but that is not provider hidden reasoning.
 
-## Pending work
+## Phase 4 completion boundary
 
-Gateway runtime and the first OpenAI-compatible adapter foundation are implemented for Phase 4B and Phase 4C-1. No AgentLoop, local tool execution, Daemon model configuration, Storage integration, or EventBus bridge exists yet. **Phase 4C-2 — OpenAI-Compatible Compatibility Hardening** remains pending for fragmented arguments, late or missing tool IDs/names, non-zero or reused indexes, premature completion, complex parallel streams, provider compatibility matrices, optional real-provider smoke, and final Phase 4 verification.
+Gateway runtime and the first OpenAI-compatible adapter are complete for
+Phase 4B, Phase 4C-1, and Phase 4C-2. The compatibility matrix is documented
+in `docs/architecture/openai-compatible-compatibility.md`. The adapter has one
+narrow private raw-chunk identity guard for ambiguous multi-call deltas; it
+does not patch the Gateway, invent tool identities, or reimplement the SSE
+parser. No AgentLoop, local tool execution, Daemon model configuration,
+Storage integration, or EventBus bridge exists yet. Those capabilities belong
+to subsequent work, with Phase 5 explicitly out of scope for this boundary.
