@@ -4,6 +4,7 @@ import type { RunRepository } from "@caelush/storage";
 import { StorageNotFoundError } from "@caelush/storage";
 import type { FastifyInstance } from "fastify";
 import { mapAgentEventToSse } from "../transport/sse-event-mapper.js";
+import { InvalidEventCursorError } from "../transport/error-handler.js";
 
 export interface ActiveStreamRegistry {
   readonly controllers: Set<AbortController>;
@@ -11,6 +12,28 @@ export interface ActiveStreamRegistry {
 
 async function* mapEvents(events: AsyncIterable<AgentEvent>) {
   for await (const event of events) yield mapAgentEventToSse(event);
+}
+
+function parseCursor(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "number") {
+    if (Number.isInteger(value) && value >= 0) return value;
+    throw new InvalidEventCursorError();
+  }
+  if (typeof value === "string" && /^\d+$/.test(value)) return Number(value);
+  throw new InvalidEventCursorError();
+}
+
+export function resolveEventCursor(
+  lastEventId: string | undefined,
+  queryAfterSequence: unknown,
+): number {
+  const headerCursor = parseCursor(lastEventId);
+  const queryCursor = parseCursor(queryAfterSequence);
+  if (headerCursor !== undefined && queryCursor !== undefined && headerCursor !== queryCursor) {
+    throw new InvalidEventCursorError();
+  }
+  return headerCursor ?? queryCursor ?? 0;
 }
 
 export function registerEventStreamRoute(
@@ -33,6 +56,9 @@ export function registerEventStreamRoute(
       if (!run) throw new StorageNotFoundError("AgentRun", runId);
 
       const query = request.query as EventStreamQuery;
+      const header = request.headers["last-event-id"];
+      const lastEventId = Array.isArray(header) ? header[0] : header;
+      const afterSequence = resolveEventCursor(lastEventId, query.afterSequence);
       const controller = new AbortController();
       dependencies.activeStreams.controllers.add(controller);
       reply.sse.onClose(() => controller.abort());
@@ -41,7 +67,7 @@ export function registerEventStreamRoute(
         await reply.sse.send(
           mapEvents(
             dependencies.eventBus.watch(runId as never, {
-              afterSequence: query.afterSequence ?? 0,
+              afterSequence,
               signal: controller.signal,
             }),
           ),
