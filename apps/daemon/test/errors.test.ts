@@ -24,7 +24,10 @@ describe("daemon error mapping", () => {
   });
 
   it("maps validation-shaped errors to INVALID_REQUEST", () => {
-    const mapped = toApiErrorResponse({ validation: [{ instancePath: "/title", keyword: "minLength" }] }, "req-456");
+    const mapped = toApiErrorResponse(
+      { validation: [{ instancePath: "/title", keyword: "minLength" }] },
+      "req-456",
+    );
     expect(mapped.statusCode).toBe(400);
     expect(mapped.body.error.code).toBe("INVALID_REQUEST");
     expect(mapped.body.error.requestId).toBe("req-456");

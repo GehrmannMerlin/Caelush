@@ -150,7 +150,9 @@ describe("SSE reconnect", () => {
     await eventBus.publish(eventDraft(run, 4));
     const live = await Promise.race([
       liveFrame,
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("live SSE timeout")), 1000)),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("live SSE timeout")), 1000),
+      ),
     ]);
     expect(new TextDecoder().decode(live.value)).toContain("id: 4");
     await reader.cancel();

@@ -1,6 +1,10 @@
 import fastify, { type FastifyInstance } from "fastify";
 import { fastifySSE } from "@fastify/sse";
-import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from "fastify-type-provider-zod";
+import {
+  serializerCompiler,
+  validatorCompiler,
+  type ZodTypeProvider,
+} from "fastify-type-provider-zod";
 import type { EventBus } from "@caelush/events";
 import type { SessionRepository, RunRepository } from "@caelush/storage";
 import type { DaemonConfig } from "./config.js";

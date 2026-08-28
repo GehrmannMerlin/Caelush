@@ -9,7 +9,9 @@ export class LocalRequestRejectedError extends Error {
 
 function isLoopbackHost(value: string | undefined): boolean {
   if (!value) return false;
-  return /^(?:127\.0\.0\.1|localhost)(?::\d{1,5})?$/i.test(value) || /^\[::1\](?::\d{1,5})?$/.test(value);
+  return (
+    /^(?:127\.0\.0\.1|localhost)(?::\d{1,5})?$/i.test(value) || /^\[::1\](?::\d{1,5})?$/.test(value)
+  );
 }
 
 function isLoopbackOrigin(value: string): boolean {

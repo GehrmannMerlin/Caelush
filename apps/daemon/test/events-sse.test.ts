@@ -113,7 +113,9 @@ describe("event stream route", () => {
     if (!reader) throw new Error("SSE response has no body");
     const first = await Promise.race([
       reader.read(),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("SSE read timeout")), 1000)),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("SSE read timeout")), 1000),
+      ),
     ]);
     const text = new TextDecoder().decode(first.value);
     expect(text).toContain("event: shell.output");

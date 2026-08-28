@@ -21,7 +21,9 @@ export function registerSessionRoutes(app: FastifyInstance, service: SessionServ
 
   app.get(
     "/api/v1/sessions",
-    { schema: { querystring: SessionListQuerySchema, response: { 200: SessionListResponseSchema } } },
+    {
+      schema: { querystring: SessionListQuerySchema, response: { 200: SessionListResponseSchema } },
+    },
     async (request) => {
       const query = request.query as SessionListQuery;
       return { items: await service.listSessions(query.limit) };

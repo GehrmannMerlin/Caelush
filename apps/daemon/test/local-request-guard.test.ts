@@ -33,7 +33,12 @@ describe("local request guards", () => {
   });
 
   it("allows no Origin and loopback Origins but rejects a public Origin", async () => {
-    const allowed = [undefined, "http://127.0.0.1:43120", "http://localhost:43120", "http://[::1]:43120"];
+    const allowed = [
+      undefined,
+      "http://127.0.0.1:43120",
+      "http://localhost:43120",
+      "http://[::1]:43120",
+    ];
     for (const origin of allowed) {
       const app = makeApp();
       const response = await app.inject({

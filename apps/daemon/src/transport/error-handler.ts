@@ -30,7 +30,11 @@ function mapError(error: unknown): MappedError {
     return { statusCode: 403, code: "INVALID_REQUEST", message: "Request is not allowed." };
   }
   if (error instanceof InvalidEventCursorError) {
-    return { statusCode: 400, code: "INVALID_EVENT_CURSOR", message: "The event cursor is invalid." };
+    return {
+      statusCode: 400,
+      code: "INVALID_EVENT_CURSOR",
+      message: "The event cursor is invalid.",
+    };
   }
   if (isValidationError(error)) {
     return { statusCode: 400, code: "INVALID_REQUEST", message: "The request is invalid." };
@@ -39,7 +43,11 @@ function mapError(error: unknown): MappedError {
     return { statusCode: 404, code: "NOT_FOUND", message: "Requested resource was not found." };
   }
   if (error instanceof StorageConflictError) {
-    return { statusCode: 409, code: "CONFLICT", message: "The request conflicts with stored data." };
+    return {
+      statusCode: 409,
+      code: "CONFLICT",
+      message: "The request conflicts with stored data.",
+    };
   }
   if (error instanceof StorageDecodeError || error instanceof StorageError) {
     return { statusCode: 500, code: "STORAGE_ERROR", message: "Stored data could not be read." };
@@ -47,7 +55,10 @@ function mapError(error: unknown): MappedError {
   return { statusCode: 500, code: "INTERNAL_ERROR", message: "An internal error occurred." };
 }
 
-export function toApiErrorResponse(error: unknown, requestId: string): {
+export function toApiErrorResponse(
+  error: unknown,
+  requestId: string,
+): {
   readonly statusCode: number;
   readonly body: ApiErrorResponse;
 } {

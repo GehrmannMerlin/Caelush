@@ -109,7 +109,11 @@ describe("run API", () => {
     });
     expect(missingParent.statusCode).toBe(404);
 
-    for (const payload of [{ ...runInput, id: "run_client" }, { ...runInput, status: "RUNNING" }, { ...runInput, sessionId: "other" }]) {
+    for (const payload of [
+      { ...runInput, id: "run_client" },
+      { ...runInput, status: "RUNNING" },
+      { ...runInput, sessionId: "other" },
+    ]) {
       const session = await createSession(app);
       const response = await app.inject({
         method: "POST",

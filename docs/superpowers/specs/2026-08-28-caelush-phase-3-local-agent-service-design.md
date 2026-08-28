@@ -113,14 +113,14 @@ GET  /api/v1/runs/:runId
 
 错误代码和状态：
 
-| 来源 | HTTP | code |
-|---|---:|---|
-| Zod/Fastify request validation | 400 | `INVALID_REQUEST` |
-| 非法或冲突的 SSE cursor | 400 | `INVALID_EVENT_CURSOR` |
-| `StorageNotFoundError` | 404 | `NOT_FOUND` |
-| `StorageConflictError` | 409 | `CONFLICT` |
-| `StorageDecodeError` 或其他 Storage error | 500 | `STORAGE_ERROR` |
-| 未知内部错误 | 500 | `INTERNAL_ERROR` |
+| 来源                                      | HTTP | code                   |
+| ----------------------------------------- | ---: | ---------------------- |
+| Zod/Fastify request validation            |  400 | `INVALID_REQUEST`      |
+| 非法或冲突的 SSE cursor                   |  400 | `INVALID_EVENT_CURSOR` |
+| `StorageNotFoundError`                    |  404 | `NOT_FOUND`            |
+| `StorageConflictError`                    |  409 | `CONFLICT`             |
+| `StorageDecodeError` 或其他 Storage error |  500 | `STORAGE_ERROR`        |
+| 未知内部错误                              |  500 | `INTERNAL_ERROR`       |
 
 错误响应不得泄漏 stack trace、SQL、数据库路径、secret、环境变量、内部文件路径、损坏 JSON 或数据库 row。未知路由也返回该 JSON contract。
 

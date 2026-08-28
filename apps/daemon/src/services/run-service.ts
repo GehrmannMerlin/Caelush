@@ -7,11 +7,7 @@ import {
   type RunListQuery,
   type SessionId,
 } from "@caelush/protocol";
-import {
-  StorageNotFoundError,
-  type RunRepository,
-  type SessionRepository,
-} from "@caelush/storage";
+import { StorageNotFoundError, type RunRepository, type SessionRepository } from "@caelush/storage";
 
 export interface RunServiceOptions {
   readonly sessions: SessionRepository;

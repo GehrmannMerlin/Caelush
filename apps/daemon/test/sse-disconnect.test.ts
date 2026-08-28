@@ -84,10 +84,9 @@ describe("SSE disconnect cleanup", () => {
     const address = app.server.address();
     if (!address || typeof address === "string") throw new Error("server did not bind a TCP port");
 
-    const responsePromise = fetch(
-      `http://127.0.0.1:${address.port}/api/v1/runs/${run.id}/events`,
-      { headers: { accept: "text/event-stream" } },
-    );
+    const responsePromise = fetch(`http://127.0.0.1:${address.port}/api/v1/runs/${run.id}/events`, {
+      headers: { accept: "text/event-stream" },
+    });
     await new Promise((resolve) => setTimeout(resolve, 50));
     await eventBus.publish(makeEvent(run.id, sessionId) as never);
     const response = await responsePromise;

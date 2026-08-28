@@ -9,7 +9,8 @@ const directories: string[] = [];
 
 afterEach(async () => {
   for (const handle of handles.splice(0)) await handle.close().catch(() => undefined);
-  for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true });
+  for (const directory of directories.splice(0))
+    await rm(directory, { recursive: true, force: true });
 });
 
 async function makeDatabasePath(name: string) {
@@ -41,18 +42,21 @@ describe("daemon lifecycle", () => {
       method: "POST",
       body: "{}",
     });
-    const { body: run } = await jsonRequest<{ id: string }>(`${handle.url}/api/v1/sessions/${session.id}/runs`, {
-      method: "POST",
-      body: JSON.stringify({
-        goal: "shutdown",
-        workspace: { id: "wsp_00000000-0000-7000-8000-000000000000", path: "C:/workspace" },
-        model: { provider: "test", model: "test-model" },
-        runtime: { id: "local", kind: "test" },
-        permissionProfile: "READ_ONLY",
-        approvalPolicy: "ALWAYS_ASK",
-        limits: { maxSteps: 10, maxToolCalls: 10, timeoutMs: 1000 },
-      }),
-    });
+    const { body: run } = await jsonRequest<{ id: string }>(
+      `${handle.url}/api/v1/sessions/${session.id}/runs`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          goal: "shutdown",
+          workspace: { id: "wsp_00000000-0000-7000-8000-000000000000", path: "C:/workspace" },
+          model: { provider: "test", model: "test-model" },
+          runtime: { id: "local", kind: "test" },
+          permissionProfile: "READ_ONLY",
+          approvalPolicy: "ALWAYS_ASK",
+          limits: { maxSteps: 10, maxToolCalls: 10, timeoutMs: 1000 },
+        }),
+      },
+    );
     const stream = fetch(`${handle.url}/api/v1/runs/${run.id}/events`, {
       headers: { accept: "text/event-stream" },
     });
@@ -60,7 +64,9 @@ describe("daemon lifecycle", () => {
 
     await Promise.race([
       handle.close(),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("daemon close timeout")), 2000)),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("daemon close timeout")), 2000),
+      ),
     ]);
     await expect(handle.close()).resolves.toBeUndefined();
     const streamResponse = await stream;

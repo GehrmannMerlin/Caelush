@@ -18,9 +18,7 @@ function makeEvent(kind: "DURABLE" | "EPHEMERAL") {
     timestamp: 1_700_000_000_000,
     visibility: "USER_VISIBLE",
     durability:
-      kind === "DURABLE"
-        ? { kind: "DURABLE", version: 1, sequence: 10 }
-        : { kind: "EPHEMERAL" },
+      kind === "DURABLE" ? { kind: "DURABLE", version: 1, sequence: 10 } : { kind: "EPHEMERAL" },
     payload: { invocationId: createToolInvocationId(), stream: "stdout", chunk: "hello" },
   });
 }
