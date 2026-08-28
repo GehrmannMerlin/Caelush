@@ -43,3 +43,37 @@ export class ContextDiscoveryError extends ContextError {
     super("DISCOVERY_FAILURE", message, options);
   }
 }
+
+export class ContextBuildError extends ContextError {
+  constructor(
+    message: string,
+    code: "CONTEXT_BUILD_FAILURE" | "CONTEXT_BUDGET_EXCEEDED" | "CONTEXT_CONVERSATION_INVALID" =
+      "CONTEXT_BUILD_FAILURE",
+    options?: ErrorOptions,
+  ) {
+    super(code, message, options);
+  }
+}
+
+export interface ContextBudgetBreakdown {
+  readonly maxInputTokens: number;
+  readonly safetyMarginTokens: number;
+  readonly systemTokens: number;
+  readonly currentUserTokens: number;
+  readonly mandatoryTokens: number;
+}
+
+export class ContextBudgetExceededError extends ContextBuildError {
+  readonly breakdown: ContextBudgetBreakdown;
+
+  constructor(breakdown: ContextBudgetBreakdown, options?: ErrorOptions) {
+    super("context mandatory content exceeds the input token budget", "CONTEXT_BUDGET_EXCEEDED", options);
+    this.breakdown = breakdown;
+  }
+}
+
+export class ContextConversationError extends ContextBuildError {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, "CONTEXT_CONVERSATION_INVALID", options);
+  }
+}

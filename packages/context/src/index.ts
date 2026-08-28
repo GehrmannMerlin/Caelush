@@ -1,12 +1,16 @@
 export {
   ContextBoundaryError,
+  ContextBuildError,
+  ContextBudgetExceededError,
   ContextError,
+  ContextConversationError,
   ContextDiscoveryError,
   ContextIgnoreError,
   ContextInstructionError,
   ContextIOError,
   ContextInvalidWorkspaceError,
 } from "./errors.js";
+export type { ContextBudgetBreakdown } from "./errors.js";
 export type {
   ContextDirectoryEntry,
   ContextFileKind,
@@ -80,3 +84,17 @@ export type {
   RelevantFilePlannerDependencies,
   RelevantFilePlannerInput,
 } from "./relevant-file-planner.js";
+export { ContextBuilder, createDefaultContextBuilder } from "./context-builder.js";
+export type {
+  BuiltModelContext,
+  ContextBuildInput,
+  ContextBuildLimits,
+  ContextBuilderOptions,
+} from "./context-builder.js";
+export type {
+  ContextBuildLimitsReport,
+  ContextBuildReport,
+  ContextConversationReport,
+  ContextRelevantFilesReport,
+  ContextSystemReport,
+} from "./context-build-report.js";
