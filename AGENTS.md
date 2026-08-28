@@ -61,6 +61,21 @@ Caelush 是一个 TypeScript/Node.js 通用 Agent Kernel 项目。CLI、Web 和�
 - Do not patch `node_modules`, use `pnpm patch`, or upgrade pinned AI SDK dependencies unless a failing pinned regression and verified stable exact-version fix justify it.
 - OpenAI-compatible compatibility tests must exercise real OpenAI-shaped SSE through `LLMGateway → OpenAICompatibleLLMProvider → streamText → @ai-sdk/openai-compatible → fetch`.
 
+Phase 5A context rules:
+
+- `@caelush/context` owns workspace/project discovery but does not assemble LLM prompts.
+- Workspace root, project root, and cwd are distinct concepts.
+- Project discovery must never walk above the Workspace boundary.
+- Context filesystem access is read-only and must remain behind `ContextFileSystem`.
+- Project root detection is evidence-driven and must not rely on shell commands.
+- Project detection must not recursively scan the repository during Phase 5A.
+- Project instructions are discovered from project root to cwd; within one directory `AGENTS.override.md` takes precedence over `AGENTS.md`, which takes precedence over configured fallback files.
+- Project instruction reads must stay inside the real Workspace boundary.
+- Project manifest parse failures produce diagnostics; unreadable project instructions fail closed.
+- Context discovery must not expose `process.env`, credentials, or provider configuration.
+- `ProjectIntelligenceSnapshot` is runtime project knowledge, not a persisted Storage snapshot and not an LLM prompt.
+- Context must not depend on `@caelush/llm` during Phase 5A.
+
 ## Development Rules
 
 - 优先最小改动，保护已有用户文件和已有架构决策。

@@ -149,6 +149,14 @@ describe("package boundaries", () => {
     expect(coreDependencies).not.toContain("@caelush/storage");
   });
 
+  it("allows context to reuse Protocol while keeping it below all execution boundaries", async () => {
+    const context = await readManifest("packages/context/package.json");
+    const dependencies = dependencyEntries(context);
+
+    expect(dependencies[protocolPackageName]).toBe("workspace:*");
+    expect(Object.keys(dependencies)).toEqual([protocolPackageName]);
+  });
+
   it("allows the daemon to compose protocol, storage, and events through public entries", async () => {
     const daemon = await readManifest("apps/daemon/package.json");
     const dependencies = Object.keys(dependencyEntries(daemon));

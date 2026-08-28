@@ -5,7 +5,6 @@ export {
   ContextIOError,
   ContextInvalidWorkspaceError,
 } from "./errors.js";
-export { LocalContextFileSystem } from "./filesystem.js";
 export type {
   ContextDirectoryEntry,
   ContextFileKind,

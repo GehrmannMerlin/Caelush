@@ -11,11 +11,17 @@ const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
+    temporaryDirectories
+      .splice(0)
+      .map((directory) => rm(directory, { recursive: true, force: true })),
   );
 });
 
-async function scopeFixture(): Promise<{ root: string; cwd: string; scope: Awaited<ReturnType<WorkspaceScopeResolver["resolve"]>> }> {
+async function scopeFixture(): Promise<{
+  root: string;
+  cwd: string;
+  scope: Awaited<ReturnType<WorkspaceScopeResolver["resolve"]>>;
+}> {
   const root = await mkdtemp(path.join(os.tmpdir(), "caelush-context-root-"));
   const cwd = path.join(root, "packages", "app", "src");
   await mkdir(cwd, { recursive: true });
@@ -50,7 +56,9 @@ describe("ProjectRootDetector", () => {
     const nestedRoot = path.join(root, "packages");
     await mkdir(path.join(nestedRoot, ".git"));
 
-    await expect(new ProjectRootDetector(new LocalContextFileSystem()).detect(scope)).resolves.toMatchObject({
+    await expect(
+      new ProjectRootDetector(new LocalContextFileSystem()).detect(scope),
+    ).resolves.toMatchObject({
       projectRoot: nestedRoot,
       reason: "VCS_MARKER",
     });
@@ -62,7 +70,9 @@ describe("ProjectRootDetector", () => {
     await writeFile(path.join(root, "pnpm-workspace.yaml"), "packages:\n  - packages/*\n", "utf8");
     await writeFile(path.join(root, "packages", "app", "package.json"), '{"name":"app"}', "utf8");
 
-    await expect(new ProjectRootDetector(new LocalContextFileSystem()).detect(scope)).resolves.toMatchObject({
+    await expect(
+      new ProjectRootDetector(new LocalContextFileSystem()).detect(scope),
+    ).resolves.toMatchObject({
       projectRoot: root,
       reason: "WORKSPACE_MARKER",
       marker: "pnpm-workspace.yaml",
@@ -71,16 +81,28 @@ describe("ProjectRootDetector", () => {
 
   it("recognizes package.json workspaces and known project manifests", async () => {
     const workspace = await scopeFixture();
-    await writeFile(path.join(workspace.root, "package.json"), '{"workspaces":["packages/*"]}', "utf8");
-    await expect(new ProjectRootDetector(new LocalContextFileSystem()).detect(workspace.scope)).resolves.toMatchObject({
+    await writeFile(
+      path.join(workspace.root, "package.json"),
+      '{"workspaces":["packages/*"]}',
+      "utf8",
+    );
+    await expect(
+      new ProjectRootDetector(new LocalContextFileSystem()).detect(workspace.scope),
+    ).resolves.toMatchObject({
       projectRoot: workspace.root,
       reason: "WORKSPACE_MARKER",
       marker: "package.json#workspaces",
     });
 
     const manifest = await scopeFixture();
-    await writeFile(path.join(manifest.root, "packages", "app", "Cargo.toml"), "[package]\nname=\"app\"\n", "utf8");
-    await expect(new ProjectRootDetector(new LocalContextFileSystem()).detect(manifest.scope)).resolves.toMatchObject({
+    await writeFile(
+      path.join(manifest.root, "packages", "app", "Cargo.toml"),
+      '[package]\nname="app"\n',
+      "utf8",
+    );
+    await expect(
+      new ProjectRootDetector(new LocalContextFileSystem()).detect(manifest.scope),
+    ).resolves.toMatchObject({
       projectRoot: path.join(manifest.root, "packages", "app"),
       reason: "PROJECT_MANIFEST",
       marker: "Cargo.toml",
@@ -91,7 +113,9 @@ describe("ProjectRootDetector", () => {
     const { root, cwd, scope } = await scopeFixture();
     await writeFile(path.join(path.dirname(root), ".git"), "outside", "utf8");
 
-    await expect(new ProjectRootDetector(new LocalContextFileSystem()).detect(scope)).resolves.toEqual({
+    await expect(
+      new ProjectRootDetector(new LocalContextFileSystem()).detect(scope),
+    ).resolves.toEqual({
       projectRoot: cwd,
       reason: "CWD_FALLBACK",
     });

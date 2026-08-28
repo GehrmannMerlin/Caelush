@@ -10,10 +10,18 @@ import { WorkspaceScopeResolver } from "../src/workspace.js";
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+  await Promise.all(
+    temporaryDirectories
+      .splice(0)
+      .map((directory) => rm(directory, { recursive: true, force: true })),
+  );
 });
 
-async function profileFixture(): Promise<{ root: string; cwd: string; scope: Awaited<ReturnType<WorkspaceScopeResolver["resolve"]>> }> {
+async function profileFixture(): Promise<{
+  root: string;
+  cwd: string;
+  scope: Awaited<ReturnType<WorkspaceScopeResolver["resolve"]>>;
+}> {
   const root = await mkdtemp(path.join(os.tmpdir(), "caelush-context-profile-"));
   const cwd = path.join(root, "packages", "app", "src");
   await mkdir(cwd, { recursive: true });
@@ -42,9 +50,16 @@ describe("ProjectProfileDetector", () => {
     );
     await writeFile(path.join(root, "pnpm-workspace.yaml"), "packages:\n  - packages/*\n", "utf8");
     await writeFile(path.join(root, "tsconfig.json"), "{}", "utf8");
-    await writeFile(path.join(root, "packages", "app", "package.json"), '{"name":"active-app"}', "utf8");
+    await writeFile(
+      path.join(root, "packages", "app", "package.json"),
+      '{"name":"active-app"}',
+      "utf8",
+    );
 
-    const result = await new ProjectProfileDetector(new LocalContextFileSystem()).detect(scope, root);
+    const result = await new ProjectProfileDetector(new LocalContextFileSystem()).detect(
+      scope,
+      root,
+    );
 
     expect(result.diagnostics).toEqual([]);
     expect(result.profile.ecosystems).toEqual(["NODE"]);
@@ -77,7 +92,10 @@ describe("ProjectProfileDetector", () => {
     await writeFile(path.join(root, "go.mod"), "module example.com/demo\n", "utf8");
     await writeFile(path.join(root, "pom.xml"), "<project />", "utf8");
 
-    const result = await new ProjectProfileDetector(new LocalContextFileSystem()).detect(scope, root);
+    const result = await new ProjectProfileDetector(new LocalContextFileSystem()).detect(
+      scope,
+      root,
+    );
 
     expect(result.profile.ecosystems).toEqual(["PYTHON", "RUST", "GO", "JAVA"]);
     expect(result.profile.packageManager).toMatchObject({ name: "uv", source: "LOCKFILE" });
@@ -92,7 +110,10 @@ describe("ProjectProfileDetector", () => {
     await writeFile(path.join(root, "pnpm-lock.yaml"), "lockfileVersion: 9\n", "utf8");
     await writeFile(path.join(root, "package-lock.json"), "{}", "utf8");
 
-    const result = await new ProjectProfileDetector(new LocalContextFileSystem()).detect(scope, root);
+    const result = await new ProjectProfileDetector(new LocalContextFileSystem()).detect(
+      scope,
+      root,
+    );
 
     expect(result.profile.packageManager).toMatchObject({ name: "UNKNOWN", source: "AMBIGUOUS" });
     expect(result.diagnostics).toEqual(
@@ -105,7 +126,10 @@ describe("ProjectProfileDetector", () => {
     await writeFile(path.join(root, "package.json"), '{"name":', "utf8");
     await writeFile(path.join(root, "pyproject.toml"), "[project]\nname='demo'\n", "utf8");
 
-    const result = await new ProjectProfileDetector(new LocalContextFileSystem()).detect(scope, root);
+    const result = await new ProjectProfileDetector(new LocalContextFileSystem()).detect(
+      scope,
+      root,
+    );
 
     expect(result.profile.ecosystems).toEqual(["NODE", "PYTHON"]);
     expect(result.rootPackage).toBeUndefined();

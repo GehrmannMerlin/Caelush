@@ -34,9 +34,12 @@ export class ProjectInspector {
   constructor(private readonly dependencies: ProjectInspectorDependencies) {
     this.scopeResolver = new WorkspaceScopeResolver(dependencies.filesystem);
     this.environmentDetector = dependencies.environmentDetector ?? new LocalEnvironmentDetector();
-    this.projectRootDetector = dependencies.projectRootDetector ?? new ProjectRootDetector(dependencies.filesystem);
-    this.profileDetector = dependencies.profileDetector ?? new ProjectProfileDetector(dependencies.filesystem);
-    this.instructionDiscovery = dependencies.instructionDiscovery ?? new ProjectInstructionDiscovery(dependencies.filesystem);
+    this.projectRootDetector =
+      dependencies.projectRootDetector ?? new ProjectRootDetector(dependencies.filesystem);
+    this.profileDetector =
+      dependencies.profileDetector ?? new ProjectProfileDetector(dependencies.filesystem);
+    this.instructionDiscovery =
+      dependencies.instructionDiscovery ?? new ProjectInstructionDiscovery(dependencies.filesystem);
   }
 
   async inspect(input: ProjectInspectorInput): Promise<ProjectIntelligenceSnapshot> {

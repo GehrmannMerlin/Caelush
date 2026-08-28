@@ -6,14 +6,7 @@ import { isWithinWorkspace } from "./workspace.js";
 
 export type ProjectEcosystem = "NODE" | "PYTHON" | "RUST" | "GO" | "JAVA";
 export type ProjectLanguageSignal = "TYPESCRIPT";
-export type PackageManagerName =
-  | "pnpm"
-  | "yarn"
-  | "npm"
-  | "bun"
-  | "uv"
-  | "poetry"
-  | "UNKNOWN";
+export type PackageManagerName = "pnpm" | "yarn" | "npm" | "bun" | "uv" | "poetry" | "UNKNOWN";
 
 export interface ContextDiagnostic {
   readonly code: string;
@@ -104,7 +97,11 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function parsePackage(value: unknown, packagePath: string, projectRoot: string): ProjectPackage | null {
+function parsePackage(
+  value: unknown,
+  packagePath: string,
+  projectRoot: string,
+): ProjectPackage | null {
   if (!isRecord(value)) return null;
   const scripts = isRecord(value.scripts)
     ? Object.entries(value.scripts)
@@ -161,7 +158,9 @@ async function readManifest(
   try {
     const realPath = await filesystem.realpath(targetPath);
     if (!isWithinWorkspace(scope.realRoot, realPath)) {
-      diagnostics.push(diagnostic("MANIFEST_OUTSIDE_WORKSPACE", "manifest resolves outside workspace", targetPath));
+      diagnostics.push(
+        diagnostic("MANIFEST_OUTSIDE_WORKSPACE", "manifest resolves outside workspace", targetPath),
+      );
       return null;
     }
     return (await filesystem.readTextFile(targetPath, { maxBytes: 1024 * 1024 })).text;
@@ -200,9 +199,10 @@ export class ProjectProfileDetector {
         const targetPath = path.join(directory, manifest.name);
         if (!(await exists(this.filesystem, targetPath))) continue;
         const evidence = evidencePath(projectRoot, targetPath);
-        const manifestEvidenceEntry = manifest.ecosystem === undefined
-          ? evidence
-          : { ...evidence, ecosystem: manifest.ecosystem };
+        const manifestEvidenceEntry =
+          manifest.ecosystem === undefined
+            ? evidence
+            : { ...evidence, ecosystem: manifest.ecosystem };
         if (manifest.ecosystem !== undefined) ecosystems.add(manifest.ecosystem);
         manifestEvidence.push(manifestEvidenceEntry);
         if (manifest.name === "package.json") {
@@ -213,40 +213,53 @@ export class ProjectProfileDetector {
             const projectPackage = parsePackage(parsed, targetPath, projectRoot);
             if (projectPackage !== null) packages.push(projectPackage);
           } catch {
-            diagnostics.push(diagnostic("MALFORMED_MANIFEST", "package.json is not valid JSON", targetPath));
+            diagnostics.push(
+              diagnostic("MALFORMED_MANIFEST", "package.json is not valid JSON", targetPath),
+            );
           }
         }
       }
       const tsconfigPath = path.join(directory, "tsconfig.json");
-      if (await exists(this.filesystem, tsconfigPath) && !languageSignals.includes("TYPESCRIPT")) {
+      if (
+        (await exists(this.filesystem, tsconfigPath)) &&
+        !languageSignals.includes("TYPESCRIPT")
+      ) {
         languageSignals.push("TYPESCRIPT");
       }
     }
 
-    const rootPackage = packages.find((entry) => entry.path === path.join(projectRoot, "package.json"));
+    const rootPackage = packages.find(
+      (entry) => entry.path === path.join(projectRoot, "package.json"),
+    );
     const activePackage = packages.at(-1);
     const monorepoEvidence: ProjectManifestEvidence[] = [];
     for (const name of monorepoMarkers) {
       const targetPath = path.join(projectRoot, name);
-      if (await exists(this.filesystem, targetPath)) monorepoEvidence.push(evidencePath(projectRoot, targetPath));
+      if (await exists(this.filesystem, targetPath))
+        monorepoEvidence.push(evidencePath(projectRoot, targetPath));
     }
     if (rootPackage?.workspaces !== undefined) {
-      monorepoEvidence.push({ ...evidencePath(projectRoot, rootPackage.path), type: "package.json#workspaces" });
+      monorepoEvidence.push({
+        ...evidencePath(projectRoot, rootPackage.path),
+        type: "package.json#workspaces",
+      });
     }
 
     const manager = await this.detectPackageManager(rootPackage, projectRoot, diagnostics);
     const tooling = await this.detectTooling(manifestEvidence);
     const profile: ProjectProfile = {
-        ecosystems: (["NODE", "PYTHON", "RUST", "GO", "JAVA"] as const).filter((entry) => ecosystems.has(entry)),
-        languageSignals,
-        manifestEvidence,
-        packageManager: manager,
-        tooling,
-        isMonorepo: monorepoEvidence.length > 0,
-        monorepoEvidence,
-        ...(rootPackage === undefined ? {} : { rootPackage }),
-        ...(activePackage === undefined ? {} : { activePackage }),
-      };
+      ecosystems: (["NODE", "PYTHON", "RUST", "GO", "JAVA"] as const).filter((entry) =>
+        ecosystems.has(entry),
+      ),
+      languageSignals,
+      manifestEvidence,
+      packageManager: manager,
+      tooling,
+      isMonorepo: monorepoEvidence.length > 0,
+      monorepoEvidence,
+      ...(rootPackage === undefined ? {} : { rootPackage }),
+      ...(activePackage === undefined ? {} : { activePackage }),
+    };
     return {
       profile,
       diagnostics,
@@ -269,12 +282,23 @@ export class ProjectProfileDetector {
     const evidence = [] as Array<{ manager: PackageManagerName; path: string }>;
     for (const lockfile of lockfiles) {
       const targetPath = path.join(projectRoot, lockfile.name);
-      if (await exists(this.filesystem, targetPath)) evidence.push({ manager: lockfile.manager, path: targetPath });
+      if (await exists(this.filesystem, targetPath))
+        evidence.push({ manager: lockfile.manager, path: targetPath });
     }
     const managers = [...new Set(evidence.map((entry) => entry.manager))];
     if (managers.length > 1) {
-      diagnostics.push(diagnostic("AMBIGUOUS_PACKAGE_MANAGER", "multiple conflicting lockfiles were found", projectRoot));
-      return { name: "UNKNOWN", source: "AMBIGUOUS", evidencePaths: evidence.map((entry) => entry.path) };
+      diagnostics.push(
+        diagnostic(
+          "AMBIGUOUS_PACKAGE_MANAGER",
+          "multiple conflicting lockfiles were found",
+          projectRoot,
+        ),
+      );
+      return {
+        name: "UNKNOWN",
+        source: "AMBIGUOUS",
+        evidencePaths: evidence.map((entry) => entry.path),
+      };
     }
     const manager = managers[0];
     return manager === undefined

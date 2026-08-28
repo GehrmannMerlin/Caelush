@@ -50,11 +50,12 @@ export class WorkspaceScopeResolver {
       throw new ContextInvalidWorkspaceError(`workspace is not a directory: ${logicalRoot}`);
     }
 
-    const logicalCwd = cwd === undefined
-      ? logicalRoot
-      : path.isAbsolute(cwd)
-        ? path.normalize(cwd)
-        : path.resolve(logicalRoot, cwd);
+    const logicalCwd =
+      cwd === undefined
+        ? logicalRoot
+        : path.isAbsolute(cwd)
+          ? path.normalize(cwd)
+          : path.resolve(logicalRoot, cwd);
     if (!isInside(logicalRoot, logicalCwd)) {
       throw new ContextBoundaryError(`cwd is outside workspace: ${logicalCwd}`);
     }

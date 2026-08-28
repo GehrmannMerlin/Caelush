@@ -3,10 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createWorkspaceId } from "@caelush/protocol";
-import {
-  ContextBoundaryError,
-  ContextInvalidWorkspaceError,
-} from "../src/errors.js";
+import { ContextBoundaryError, ContextInvalidWorkspaceError } from "../src/errors.js";
 import { LocalContextFileSystem } from "../src/filesystem.js";
 import { WorkspaceScopeResolver } from "../src/workspace.js";
 
@@ -14,7 +11,9 @@ const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
+    temporaryDirectories
+      .splice(0)
+      .map((directory) => rm(directory, { recursive: true, force: true })),
   );
 });
 
@@ -54,7 +53,9 @@ describe("WorkspaceScopeResolver", () => {
     await expect(resolver.resolve(ref, "packages/app")).resolves.toMatchObject({
       cwd: path.join(workspace, "packages", "app"),
     });
-    await expect(resolver.resolve(ref, path.join(workspace, "packages/app"))).resolves.toMatchObject({
+    await expect(
+      resolver.resolve(ref, path.join(workspace, "packages/app")),
+    ).resolves.toMatchObject({
       cwd: path.join(workspace, "packages", "app"),
     });
   });
@@ -89,7 +90,9 @@ describe("WorkspaceScopeResolver", () => {
     try {
       await symlink(outside, link, process.platform === "win32" ? "junction" : "dir");
     } catch (error) {
-      skip(`symlink creation unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      skip(
+        `symlink creation unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
     const resolver = new WorkspaceScopeResolver(new LocalContextFileSystem());
 

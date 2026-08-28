@@ -3,10 +3,7 @@ import type { ContextFileSystem } from "./filesystem.js";
 import type { WorkspaceScope } from "./workspace.js";
 
 export type ProjectRootReason =
-  | "VCS_MARKER"
-  | "WORKSPACE_MARKER"
-  | "PROJECT_MANIFEST"
-  | "CWD_FALLBACK";
+  "VCS_MARKER" | "WORKSPACE_MARKER" | "PROJECT_MANIFEST" | "CWD_FALLBACK";
 
 export interface ProjectRootDetectionResult {
   readonly projectRoot: string;
@@ -88,7 +85,12 @@ export class ProjectRootDetector {
     for (const directory of directories) {
       const gitPath = path.join(directory, ".git");
       if (await exists(this.filesystem, gitPath)) {
-        return { projectRoot: directory, reason: "VCS_MARKER", marker: ".git", evidencePath: gitPath };
+        return {
+          projectRoot: directory,
+          reason: "VCS_MARKER",
+          marker: ".git",
+          evidencePath: gitPath,
+        };
       }
     }
 
@@ -96,7 +98,10 @@ export class ProjectRootDetector {
     if (simpleMarker !== null) return simpleMarker;
     for (const directory of directories) {
       const packagePath = path.join(directory, "package.json");
-      if (await exists(this.filesystem, packagePath) && await hasWorkspacesField(this.filesystem, packagePath)) {
+      if (
+        (await exists(this.filesystem, packagePath)) &&
+        (await hasWorkspacesField(this.filesystem, packagePath))
+      ) {
         return {
           projectRoot: directory,
           reason: "WORKSPACE_MARKER",

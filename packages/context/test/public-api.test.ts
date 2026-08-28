@@ -5,7 +5,6 @@ describe("@caelush/context public API", () => {
   it("exports the application-facing inspector and approved value classes", () => {
     expect(context.ProjectInspector).toBeDefined();
     expect(context.createLocalProjectInspector).toBeDefined();
-    expect(context.LocalContextFileSystem).toBeDefined();
     expect(context.WorkspaceScopeResolver).toBeDefined();
     expect(context.ProjectRootDetector).toBeDefined();
     expect(context.ProjectProfileDetector).toBeDefined();
