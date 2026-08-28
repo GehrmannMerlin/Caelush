@@ -102,3 +102,20 @@ pnpm check
 当前是 Phase 4 完成边界。除 Phase 1 已正式定义的 AgentSession、AgentRun、AgentStep、AgentState、AgentEvent、ToolDefinition、ToolInvocation、Observation、ApprovalRequest、VerificationResult 和 Run State Machine，以及 Phase 2 的 SQLite/Drizzle Storage、Repository、Run State Snapshot、Durable Event Store、EventBus、Replay 与 Live Watch、Phase 3 的 loopback-only Daemon、Health/Session/Run HTTP API 和 Durable/Ephemeral SSE Event Stream 外，Phase 4A 已建立 Caelush-owned LLM contracts、LLMProvider 和显式 Provider Registry，Phase 4B 已建立注入式 LLMGateway 的 single-turn streaming runtime、runtime event validation、tool-call lifecycle validation、abort/timeout/cancellation 和 result aggregation，Phase 4C-1 已建立仅位于 `@caelush/llm` Provider Adapter 内的 OpenAI-compatible AI SDK transport，Phase 4C-2 已完成真实 OpenAI-shaped SSE 兼容性矩阵、工具调用 identity/round-trip 安全、reasoning/usage/finish/error/secret 回归，以及仅 adapter-private 的歧义 identity fail-closed guard；仍不实现 AgentLoop、Tool 执行、Runtime、AgentEvent bridge、Storage integration、Approval resolution、Daemon model config、Ink CLI 功能或 React Web 功能。Phase 5 由后续任务另行定义。
 
 下一阶段由后续任务另行定义；不得提前实现 AgentLoop 或其他宿主产品功能。
+
+Phase 5B context rules:
+
+- Phase 5 is fixed to exactly 5A, 5B, and 5C; do not add additional Phase 5 rounds.
+- Relevant-file discovery is task-dependent and must remain separate from ProjectInspector.
+- Automatic context discovery must stay within the detected project root and real Workspace boundary.
+- Automatic context discovery must not traverse .worktrees, node_modules, VCS metadata, generated-output directories, or directory symlinks.
+- .gitignore semantics must use the pinned ignore library rather than a hand-written glob parser.
+- Common credential files must not enter ambient model context automatically.
+- Project instruction files already represented by ProjectIntelligenceSnapshot must not be duplicated as relevant source files.
+- Candidate discovery must operate on metadata first and must not eagerly read every source file.
+- Path ranking must be deterministic and explainable through score reasons.
+- Relevant-file token estimation is provider-independent planning, not billing-token truth.
+- Relevant-file budgets are not the final model context budget.
+- Relevant file content must stay as structured runtime sections; Phase 5B must not render the final LLM prompt.
+- Context discovery must not depend on @caelush/llm.
+- Phase 5B must not perform conversation compaction or summarization.

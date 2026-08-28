@@ -1,6 +1,6 @@
 # Context and Project Intelligence
 
-Phase 5A gives Caelush a bounded, read-only way to understand the workspace and project it is operating in. It discovers facts and their evidence; it does not choose facts for an LLM prompt. Future `ContextBuilder` work owns prompt assembly and relevant source-file selection.
+Phase 5A gives Caelush a bounded, read-only way to understand the workspace and project it is operating in. It discovers facts and their evidence; it does not choose facts for an LLM prompt. Phase 5B separately owns task-dependent relevant source-file discovery and budgeting, while future `ContextBuilder` work owns final prompt assembly. See [Relevant Context Discovery](relevant-context-discovery.md).
 
 ## Pipeline
 
@@ -81,4 +81,4 @@ The default total budget is **32768 bytes**, not a token budget. If a file excee
 
 ## Phase boundary
 
-Phase 5A stops at project intelligence. It does not automatically build model context. Phase 5B will separately define candidate file discovery, ignore policy, path scoring, metadata ranking, provenance sections, token estimation, and context budget allocation.
+Phase 5A stops at project intelligence. Phase 5B now defines candidate file discovery, ignore policy, path scoring, metadata ranking, provenance sections, token estimation, and relevant-file budget allocation. Phase 5C will separately assemble the final model context.
