@@ -32,6 +32,15 @@ const searchTextTool: ToolDefinition = {
   requiredCapabilities: ["FS_READ"],
   runtimeRequirements: { kind: "local" },
 };
+const parameterlessTool: ToolDefinition = {
+  name: "get_test_value",
+  description: "Return a test value.",
+  inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  outputSchema: { type: "object" },
+  riskLevel: "LOW",
+  requiredCapabilities: [],
+  runtimeRequirements: { kind: "local" },
+};
 
 function createGateway(fetch: typeof globalThis.fetch): LLMGateway {
   const provider = createOpenAICompatibleLLMProvider({
@@ -625,5 +634,172 @@ describe("OpenAI-compatible compatibility matrix", () => {
         tools: [readFileTool, searchTextTool],
       }),
     ).rejects.toBeInstanceOf(LLMInvalidResponseError);
+  });
+
+  it.each([
+    ["empty arguments", ""],
+    ["empty object arguments", "{}"],
+  ] as const)("normalizes a parameterless tool with %s", async (_label, argumentsValue) => {
+    const gateway = createGateway(async () =>
+      sseResponse([
+        openAIChunk({
+          id: "chatcmpl-parameterless",
+          model: model.model,
+          delta: {
+            role: "assistant",
+            tool_calls: [
+              toolCallDelta({
+                index: 0,
+                id: "call-parameterless",
+                name: "get_test_value",
+                arguments: argumentsValue,
+              }),
+            ],
+          },
+        }),
+        finishChunk({
+          id: "chatcmpl-parameterless",
+          model: model.model,
+          finishReason: "tool_calls",
+        }),
+      ]),
+    );
+
+    const result = await gateway.complete({
+      model,
+      messages: [{ role: "user", content: "Get the test value." }],
+      tools: [parameterlessTool],
+    });
+
+    expect(result.toolCalls).toEqual([
+      { id: "call-parameterless", name: "get_test_value", input: {} },
+    ]);
+  });
+
+  it("isolates interleaved parallel calls with different names", async () => {
+    const gateway = createGateway(async () =>
+      sseResponse([
+        openAIChunk({
+          id: "chatcmpl-parallel-different",
+          model: model.model,
+          delta: {
+            role: "assistant",
+            tool_calls: [
+              toolCallDelta({
+                index: 0,
+                id: "call-parallel-read",
+                name: "read_file",
+                arguments: '{"path":"',
+              }),
+            ],
+          },
+        }),
+        openAIChunk({
+          id: "chatcmpl-parallel-different",
+          model: model.model,
+          delta: {
+            tool_calls: [
+              toolCallDelta({
+                index: 1,
+                id: "call-parallel-search",
+                name: "search_text",
+                arguments: '{"query":"',
+              }),
+            ],
+          },
+        }),
+        openAIChunk({
+          id: "chatcmpl-parallel-different",
+          model: model.model,
+          delta: { tool_calls: [toolCallDelta({ index: 0, arguments: 'a"}' })] },
+        }),
+        openAIChunk({
+          id: "chatcmpl-parallel-different",
+          model: model.model,
+          delta: { tool_calls: [toolCallDelta({ index: 1, arguments: 'b"}' })] },
+        }),
+        finishChunk({
+          id: "chatcmpl-parallel-different",
+          model: model.model,
+          finishReason: "tool_calls",
+        }),
+      ]),
+    );
+
+    const result = await gateway.complete({
+      model,
+      messages: [{ role: "user", content: "Read a and search b." }],
+      tools: [readFileTool, searchTextTool],
+    });
+
+    expect(result.toolCalls).toEqual([
+      { id: "call-parallel-read", name: "read_file", input: { path: "a" } },
+      { id: "call-parallel-search", name: "search_text", input: { query: "b" } },
+    ]);
+  });
+
+  it("isolates interleaved parallel calls with the same name by ID", async () => {
+    const gateway = createGateway(async () =>
+      sseResponse([
+        openAIChunk({
+          id: "chatcmpl-parallel-same",
+          model: model.model,
+          delta: {
+            role: "assistant",
+            tool_calls: [
+              toolCallDelta({
+                index: 0,
+                id: "call-same-a",
+                name: "read_file",
+                arguments: '{"path":"',
+              }),
+            ],
+          },
+        }),
+        openAIChunk({
+          id: "chatcmpl-parallel-same",
+          model: model.model,
+          delta: {
+            tool_calls: [
+              toolCallDelta({
+                index: 1,
+                id: "call-same-b",
+                name: "read_file",
+                arguments: '{"path":"',
+              }),
+            ],
+          },
+        }),
+        openAIChunk({
+          id: "chatcmpl-parallel-same",
+          model: model.model,
+          delta: { tool_calls: [toolCallDelta({ index: 1, arguments: 'b"}' })] },
+        }),
+        openAIChunk({
+          id: "chatcmpl-parallel-same",
+          model: model.model,
+          delta: { tool_calls: [toolCallDelta({ index: 0, arguments: 'a"}' })] },
+        }),
+        finishChunk({
+          id: "chatcmpl-parallel-same",
+          model: model.model,
+          finishReason: "tool_calls",
+        }),
+      ]),
+    );
+
+    const result = await gateway.complete({
+      model,
+      messages: [{ role: "user", content: "Read a and b." }],
+      tools: [readFileTool],
+    });
+
+    expect(result.toolCalls).toHaveLength(2);
+    expect(result.toolCalls).toEqual(
+      expect.arrayContaining([
+        { id: "call-same-a", name: "read_file", input: { path: "a" } },
+        { id: "call-same-b", name: "read_file", input: { path: "b" } },
+      ]),
+    );
   });
 });
