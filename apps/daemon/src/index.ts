@@ -1,1 +1,4 @@
-export {};
+export { buildDaemonApp } from "./app.js";
+export type { DaemonDependencies } from "./app.js";
+export { DEFAULT_DAEMON_CONFIG, createDaemonConfig } from "./config.js";
+export type { DaemonConfig } from "./config.js";
