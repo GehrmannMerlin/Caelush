@@ -22,6 +22,15 @@ const readFileTool: ToolDefinition = {
   requiredCapabilities: ["FS_READ"],
   runtimeRequirements: { kind: "local" },
 };
+const searchTextTool: ToolDefinition = {
+  name: "search_text",
+  description: "Search text.",
+  inputSchema: { type: "object", properties: { query: { type: "string" } } },
+  outputSchema: { type: "object" },
+  riskLevel: "LOW",
+  requiredCapabilities: ["FS_READ"],
+  runtimeRequirements: { kind: "local" },
+};
 
 function createGateway(fetch: typeof globalThis.fetch): LLMGateway {
   const provider = createOpenAICompatibleLLMProvider({
@@ -196,5 +205,219 @@ describe("OpenAI-compatible compatibility matrix", () => {
         payload: { id: "call-late-name", name: "read_file", input: { path: "src/index.ts" } },
       },
     ]);
+  });
+
+  it("accepts a non-zero starting tool-call index", async () => {
+    const gateway = createGateway(async () =>
+      sseResponse([
+        openAIChunk({
+          id: "chatcmpl-index-one",
+          model: model.model,
+          delta: {
+            role: "assistant",
+            tool_calls: [
+              toolCallDelta({
+                index: 1,
+                id: "call-index-one",
+                name: "read_file",
+                arguments: '{"path":"a"}',
+              }),
+            ],
+          },
+        }),
+        finishChunk({ id: "chatcmpl-index-one", model: model.model, finishReason: "tool_calls" }),
+      ]),
+    );
+
+    const result = await gateway.complete({
+      model,
+      messages: [{ role: "user", content: "Read a." }],
+      tools: [readFileTool],
+    });
+
+    expect(result.toolCalls).toEqual([
+      { id: "call-index-one", name: "read_file", input: { path: "a" } },
+    ]);
+  });
+
+  it("accepts non-contiguous tool-call indexes without cross-contamination", async () => {
+    const gateway = createGateway(async () =>
+      sseResponse([
+        openAIChunk({
+          id: "chatcmpl-index-gap",
+          model: model.model,
+          delta: {
+            role: "assistant",
+            tool_calls: [
+              toolCallDelta({
+                index: 1,
+                id: "call-gap-a",
+                name: "read_file",
+                arguments: '{"path":"a"}',
+              }),
+            ],
+          },
+        }),
+        openAIChunk({
+          id: "chatcmpl-index-gap",
+          model: model.model,
+          delta: {
+            tool_calls: [
+              toolCallDelta({
+                index: 3,
+                id: "call-gap-b",
+                name: "search_text",
+                arguments: '{"query":"b"}',
+              }),
+            ],
+          },
+        }),
+        finishChunk({ id: "chatcmpl-index-gap", model: model.model, finishReason: "tool_calls" }),
+      ]),
+    );
+
+    const result = await gateway.complete({
+      model,
+      messages: [{ role: "user", content: "Read a and search b." }],
+      tools: [readFileTool, searchTextTool],
+    });
+
+    expect(result.toolCalls).toEqual([
+      { id: "call-gap-a", name: "read_file", input: { path: "a" } },
+      { id: "call-gap-b", name: "search_text", input: { query: "b" } },
+    ]);
+  });
+
+  it("accepts reused indexes when stable IDs identify independent calls", async () => {
+    const gateway = createGateway(async () =>
+      sseResponse([
+        openAIChunk({
+          id: "chatcmpl-index-reused",
+          model: model.model,
+          delta: {
+            role: "assistant",
+            tool_calls: [
+              toolCallDelta({
+                index: 0,
+                id: "call-reused-a",
+                name: "read_file",
+                arguments: '{"path":"a"}',
+              }),
+            ],
+          },
+        }),
+        openAIChunk({
+          id: "chatcmpl-index-reused",
+          model: model.model,
+          delta: {
+            tool_calls: [
+              toolCallDelta({
+                index: 0,
+                id: "call-reused-b",
+                name: "search_text",
+                arguments: '{"query":"b"}',
+              }),
+            ],
+          },
+        }),
+        finishChunk({
+          id: "chatcmpl-index-reused",
+          model: model.model,
+          finishReason: "tool_calls",
+        }),
+      ]),
+    );
+
+    const result = await gateway.complete({
+      model,
+      messages: [{ role: "user", content: "Read a and search b." }],
+      tools: [readFileTool, searchTextTool],
+    });
+
+    expect(result.toolCalls).toEqual([
+      { id: "call-reused-a", name: "read_file", input: { path: "a" } },
+      { id: "call-reused-b", name: "search_text", input: { query: "b" } },
+    ]);
+  });
+
+  it("accepts a missing index when the stable ID is sufficient", async () => {
+    const gateway = createGateway(async () =>
+      sseResponse([
+        openAIChunk({
+          id: "chatcmpl-index-missing",
+          model: model.model,
+          delta: {
+            role: "assistant",
+            tool_calls: [
+              toolCallDelta({
+                id: "call-index-missing",
+                name: "read_file",
+                arguments: '{"path":"a"}',
+              }),
+            ],
+          },
+        }),
+        finishChunk({
+          id: "chatcmpl-index-missing",
+          model: model.model,
+          finishReason: "tool_calls",
+        }),
+      ]),
+    );
+
+    const result = await gateway.complete({
+      model,
+      messages: [{ role: "user", content: "Read a." }],
+      tools: [readFileTool],
+    });
+
+    expect(result.toolCalls).toEqual([
+      { id: "call-index-missing", name: "read_file", input: { path: "a" } },
+    ]);
+  });
+
+  it("keeps out-of-order index calls in completed-event arrival order", async () => {
+    const gateway = createGateway(async () =>
+      sseResponse([
+        openAIChunk({
+          id: "chatcmpl-index-order",
+          model: model.model,
+          delta: {
+            role: "assistant",
+            tool_calls: [
+              toolCallDelta({
+                index: 3,
+                id: "call-order-three",
+                name: "search_text",
+                arguments: '{"query":"three"}',
+              }),
+            ],
+          },
+        }),
+        openAIChunk({
+          id: "chatcmpl-index-order",
+          model: model.model,
+          delta: {
+            tool_calls: [
+              toolCallDelta({
+                index: 1,
+                id: "call-order-one",
+                name: "read_file",
+                arguments: '{"path":"one"}',
+              }),
+            ],
+          },
+        }),
+        finishChunk({ id: "chatcmpl-index-order", model: model.model, finishReason: "tool_calls" }),
+      ]),
+    );
+
+    const result = await gateway.complete({
+      model,
+      messages: [{ role: "user", content: "Search three and read one." }],
+      tools: [readFileTool, searchTextTool],
+    });
+
+    expect(result.toolCalls.map((call) => call.id)).toEqual(["call-order-three", "call-order-one"]);
   });
 });
