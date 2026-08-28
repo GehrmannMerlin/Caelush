@@ -102,3 +102,29 @@ export { AgentStepSchema, StepStatusSchema } from "./step.js";
 export type { AgentStep, StepStatus } from "./step.js";
 export { PlanItemSchema, PlanStatusSchema } from "./plan.js";
 export type { PlanItem, PlanStatus } from "./plan.js";
+export {
+  ApiErrorCodeSchema,
+  ApiErrorResponseSchema,
+  ApiErrorSchema,
+  CreateRunRequestSchema,
+  CreateSessionRequestSchema,
+  EventStreamQuerySchema,
+  HealthResponseSchema,
+  RunListQuerySchema,
+  RunListResponseSchema,
+  SessionListQuerySchema,
+  SessionListResponseSchema,
+} from "./api/index.js";
+export type {
+  ApiError,
+  ApiErrorCode,
+  ApiErrorResponse,
+  CreateRunRequest,
+  CreateSessionRequest,
+  EventStreamQuery,
+  HealthResponse,
+  RunListQuery,
+  RunListResponse,
+  SessionListQuery,
+  SessionListResponse,
+} from "./api/index.js";
