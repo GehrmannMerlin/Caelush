@@ -64,6 +64,17 @@ describe("package boundaries", () => {
     expect(coreDependencies).not.toContain("@caelush/storage");
   });
 
+  it("allows the daemon to compose protocol, storage, and events through public entries", async () => {
+    const daemon = await readManifest("apps/daemon/package.json");
+    const dependencies = Object.keys(dependencyEntries(daemon));
+
+    expect(dependencies).toContain("@caelush/protocol");
+    expect(dependencies).toContain("@caelush/storage");
+    expect(dependencies).toContain("@caelush/events");
+    expect(dependencies).not.toContain("@caelush/cli");
+    expect(dependencies).not.toContain("@caelush/web");
+  });
+
   it("requires workspace protocol for every internal dependency", async () => {
     for (const manifestPath of allWorkspaceManifestPaths()) {
       const manifestExists = await pathExists(manifestPath);

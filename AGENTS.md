@@ -20,6 +20,13 @@ Caelush 是一个 TypeScript/Node.js 通用 Agent Kernel 项目。CLI、Web 和�
 - Storage 必须通过显式 SQLite 路径与 committed migration 初始化；public API 不能泄漏 `DatabaseSync`、Drizzle client 或数据库 row 类型。
 - Repository 负责 Protocol entity 的 CRUD 与 JSON codec；数据库列只做查询索引，不能演变成第二套状态模型或 Event Sourcing projection。
 - 公共 API 只能从每个 package 的 `src/index.ts` 进入；禁止 `@caelush/*/src/...` 和深层相对路径跨 package import。
+- Daemon 是唯一的本地 Service Composition Root；CLI/Web 不得创建自己的 Agent runtime。
+- Production daemon 默认只能绑定 loopback；不得启用 permissive CORS。
+- HTTP routes 必须保持薄；Application Service 不得依赖 Fastify；API DTO 属于 Protocol 且必须保持 transport/runtime free。
+- Run creation 不代表 run execution；PENDING Run 不得发布 `run.started`。
+- Durable SSE event 使用 Durable sequence 作为 SSE id；Ephemeral SSE event 永远不得携带 SSE id。
+- SSE route 必须消费 `EventBus.watch()`，不得重新实现 replay；graceful shutdown 必须先关闭 streaming consumers，再关闭 Storage。
+- Cancellation endpoint 必须等到真实 abort semantics 存在后实现；Approval resolution endpoint 必须等到 ApprovalManager 存在后实现。
 
 ## Development Rules
 
@@ -44,6 +51,6 @@ pnpm check
 
 ## V1 Phase Boundary
 
-当前是 Phase 2：Storage & EventBus。除 Phase 1 已正式定义的 AgentSession、AgentRun、AgentStep、AgentState、AgentEvent、ToolDefinition、ToolInvocation、Observation、ApprovalRequest、VerificationResult 和 Run State Machine 外，已实现 SQLite/Drizzle Storage、Repository、Run State Snapshot、Durable Event Store、EventBus、Replay 与 Live Watch；仍不实现 AgentLoop、LLM、Tool 执行、Runtime、Fastify API、SSE、Ink CLI 功能或 React Web 功能。
+当前是 Phase 3：Local Agent Service。除 Phase 1 已正式定义的 AgentSession、AgentRun、AgentStep、AgentState、AgentEvent、ToolDefinition、ToolInvocation、Observation、ApprovalRequest、VerificationResult 和 Run State Machine，以及 Phase 2 的 SQLite/Drizzle Storage、Repository、Run State Snapshot、Durable Event Store、EventBus、Replay 与 Live Watch 外，已实现 loopback-only Daemon、Health/Session/Run HTTP API 和 Durable/Ephemeral SSE Event Stream；仍不实现 AgentLoop、LLM、Tool 执行、Runtime、Cancellation、Approval resolution、Ink CLI 功能或 React Web 功能。
 
 下一阶段由后续任务另行定义；不得提前实现 AgentLoop 或其他宿主产品功能。
