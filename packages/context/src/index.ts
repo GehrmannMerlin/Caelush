@@ -53,3 +53,30 @@ export type {
   CandidateFileDiscoveryResult,
   RelevantFileDiscoveryStats,
 } from "./file-discovery.js";
+export { RelevantPathRanker, tokenizeRelevantQuery } from "./relevance.js";
+export type {
+  RelevantFileCandidate,
+  RelevantFileQuery,
+  RelevanceReason,
+  RelevantPathRankerOptions,
+} from "./relevance.js";
+export { Utf8HeuristicTokenEstimator } from "./token-estimator.js";
+export type { TokenEstimator } from "./token-estimator.js";
+export {
+  FileBudgetSelector,
+  defaultRelevantFileBudget,
+  validateRelevantFileBudget,
+} from "./file-budget.js";
+export type { FileBudgetSelectionResult, FileBudgetSelectorDependencies } from "./file-budget.js";
+export type {
+  FileContextProvenance,
+  RelevantFileBudget,
+  RelevantFileBudgetReport,
+  RelevantFileContextPlan,
+  RelevantFileContextSection,
+} from "./relevant-file-plan.js";
+export { RelevantFilePlanner, createLocalRelevantFilePlanner } from "./relevant-file-planner.js";
+export type {
+  RelevantFilePlannerDependencies,
+  RelevantFilePlannerInput,
+} from "./relevant-file-planner.js";

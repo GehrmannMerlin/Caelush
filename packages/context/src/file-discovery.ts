@@ -298,6 +298,10 @@ export class CandidateFileDiscovery {
           depth: current.depth,
         });
         stats.candidateFiles += 1;
+        if (candidates.length >= maxCandidateFiles) {
+          markLimit();
+          break;
+        }
       }
     }
 

@@ -15,5 +15,14 @@ describe("@caelush/context public API", () => {
     expect(context.ContextBoundaryError).toBeDefined();
     expect(context.ContextInstructionError).toBeDefined();
     expect(context.ContextIOError).toBeDefined();
+    expect(context.ContextIgnoreError).toBeDefined();
+    expect(context.ContextDiscoveryError).toBeDefined();
+    expect(context.IgnorePolicy).toBeDefined();
+    expect(context.CandidateFileDiscovery).toBeDefined();
+    expect(context.RelevantPathRanker).toBeDefined();
+    expect(context.Utf8HeuristicTokenEstimator).toBeDefined();
+    expect(context.FileBudgetSelector).toBeDefined();
+    expect(context.RelevantFilePlanner).toBeDefined();
+    expect(context.createLocalRelevantFilePlanner).toBeDefined();
   });
 });

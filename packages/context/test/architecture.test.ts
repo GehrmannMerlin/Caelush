@@ -40,7 +40,11 @@ describe("context architecture guards", () => {
   it("keeps generated public declarations independent from Node filesystem implementation types", async () => {
     const declaration = await readFile(path.resolve("packages/context/dist/index.d.ts"), "utf8");
 
-    expect(declaration).not.toMatch(/(?:Stats|Dirent|FileHandle)/);
+    expect(declaration).not.toMatch(
+      /\b(?:Stats|Dirent|FileHandle|IgnoreRuleLayer|matcher|PendingDirectory)\b/i,
+    );
     expect(declaration).not.toContain("LocalContextFileSystem");
+    expect(declaration).toContain("RelevantFilePlanner");
+    expect(declaration).toContain("RelevantFileContextPlan");
   });
 });
