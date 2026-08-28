@@ -6,6 +6,8 @@ import type { DaemonConfig } from "./config.js";
 import { registerErrorHandling } from "./transport/error-handler.js";
 import { assertLoopbackRequest } from "./transport/local-request-guard.js";
 import { registerHealthRoute } from "./routes/health.js";
+import { registerSessionRoutes } from "./routes/sessions.js";
+import { SessionService } from "./services/session-service.js";
 
 export interface DaemonDependencies {
   readonly sessions: SessionRepository;
@@ -21,6 +23,7 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
   app.addHook("onRequest", async (request) => assertLoopbackRequest(request));
   registerErrorHandling(app);
   registerHealthRoute(app);
+  registerSessionRoutes(app, new SessionService({ repository: dependencies.sessions }));
   void dependencies;
   return app;
 }
