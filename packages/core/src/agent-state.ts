@@ -58,10 +58,7 @@ export interface SettleAgentStepInput {
   readonly now: TimestampMs;
 }
 
-export function settleAgentStepState(
-  state: AgentState,
-  input: SettleAgentStepInput,
-): AgentState {
+export function settleAgentStepState(state: AgentState, input: SettleAgentStepInput): AgentState {
   assertMonotonicTimestamp(state, input.now);
   if (state.status !== "RUNNING") {
     throw new AgentKernelStateError("agent step settlement requires a RUNNING state");
@@ -96,10 +93,7 @@ export function markAgentStateVerifying(state: AgentState, now: TimestampMs): Ag
   });
 }
 
-export function markAgentStateMaxStepsReached(
-  state: AgentState,
-  now: TimestampMs,
-): AgentState {
+export function markAgentStateMaxStepsReached(state: AgentState, now: TimestampMs): AgentState {
   assertBoundaryState(state, "MAX_STEPS_REACHED", now);
   return AgentStateSchema.parse({ ...state, status: "MAX_STEPS_REACHED", updatedAt: now });
 }

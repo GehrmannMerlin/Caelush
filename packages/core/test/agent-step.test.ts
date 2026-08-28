@@ -7,12 +7,7 @@ import {
   nextAgentStepSequence,
 } from "../src/index.js";
 import type { AgentState } from "@caelush/protocol";
-import {
-  AgentStepSchema,
-  createRunId,
-  createStepId,
-  createTimestampMs,
-} from "@caelush/protocol";
+import { AgentStepSchema, createRunId, createStepId, createTimestampMs } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 
 function runningStep() {
@@ -52,7 +47,11 @@ describe("Agent step lifecycle", () => {
   it("creates a running step with caller-owned ID, sequence, and clock", () => {
     const step = runningStep();
     expect(AgentStepSchema.parse(step)).toEqual(step);
-    expect(step).toMatchObject({ status: "RUNNING", sequence: 1, startedAt: createTimestampMs(100) });
+    expect(step).toMatchObject({
+      status: "RUNNING",
+      sequence: 1,
+      startedAt: createTimestampMs(100),
+    });
   });
 
   it("completes a running step and preserves its public reasoning summary", () => {
@@ -74,16 +73,19 @@ describe("Agent step lifecycle", () => {
 
   it("rejects terminal rewrites and a finish timestamp before start", () => {
     const step = runningStep();
-    expect(() => completeAgentStep(step, { finishedAt: createTimestampMs(99), reasoningSummary: "done" })).toThrow(
-      AgentKernelStateError,
-    );
+    expect(() =>
+      completeAgentStep(step, { finishedAt: createTimestampMs(99), reasoningSummary: "done" }),
+    ).toThrow(AgentKernelStateError);
     const completed = completeAgentStep(step, {
       finishedAt: createTimestampMs(110),
       reasoningSummary: "done",
     });
-    expect(() => completeAgentStep(completed, { finishedAt: createTimestampMs(120), reasoningSummary: "again" })).toThrow(
-      AgentKernelStateError,
-    );
+    expect(() =>
+      completeAgentStep(completed, {
+        finishedAt: createTimestampMs(120),
+        reasoningSummary: "again",
+      }),
+    ).toThrow(AgentKernelStateError);
     expect(() => failAgentStep(completed, createTimestampMs(120))).toThrow(AgentKernelStateError);
     expect(() => cancelAgentStep(completed, createTimestampMs(120))).toThrow(AgentKernelStateError);
   });

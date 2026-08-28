@@ -49,6 +49,7 @@ describe("Agent decision contracts", () => {
     });
     const decision = classifyAgentDecision(result);
     expect(decision.type).toBe("TOOL_CALLS_REQUESTED");
+    if (decision.type !== "TOOL_CALLS_REQUESTED") throw new Error("expected tool decision");
     expect(decision.toolRequests.map((request) => request.externalCallId)).toEqual([
       "call_a",
       "call_b",
@@ -109,9 +110,9 @@ describe("Agent decision contracts", () => {
         }),
       ),
     ).toThrow(AgentModelOutputError);
-    expect(() =>
-      classifyAgentDecision(makeTurnResult({ providerId: "other" })),
-    ).toThrow(AgentModelOutputError);
+    expect(() => classifyAgentDecision(makeTurnResult({ providerId: "other" }))).toThrow(
+      AgentModelOutputError,
+    );
   });
 
   it("allows parallel same-name calls when external IDs differ and permits unknown names", () => {
@@ -125,6 +126,7 @@ describe("Agent decision contracts", () => {
       }),
     );
     expect(decision.type).toBe("TOOL_CALLS_REQUESTED");
+    if (decision.type !== "TOOL_CALLS_REQUESTED") throw new Error("expected tool decision");
     expect(decision.toolRequests.map((request) => request.toolName)).toEqual([
       "read_file",
       "read_file",

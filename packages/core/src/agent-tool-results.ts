@@ -1,10 +1,5 @@
-import {
-  LLMToolResultMessageSchema,
-  type LLMToolResultMessage,
-} from "@caelush/llm/messages";
-import {
-  AgentToolResultBatchError,
-} from "./agent-errors.js";
+import { LLMToolResultMessageSchema, type LLMToolResultMessage } from "@caelush/llm/messages";
+import { AgentToolResultBatchError } from "./agent-errors.js";
 import type { AgentToolRequest } from "./agent-decision.js";
 
 export function normalizeToolResultBatch(

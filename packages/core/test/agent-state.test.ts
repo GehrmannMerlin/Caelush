@@ -82,9 +82,9 @@ describe("Agent state kernel", () => {
       startedAt: createTimestampMs(110),
       updatedAt: createTimestampMs(110),
     });
-    expect(() => startAgentState(startAgentState(state, createTimestampMs(110)), createTimestampMs(109))).toThrow(
-      AgentKernelStateError,
-    );
+    expect(() =>
+      startAgentState(startAgentState(state, createTimestampMs(110)), createTimestampMs(109)),
+    ).toThrow(AgentKernelStateError);
   });
 
   it("begins and settles the current step while accumulating known LLM usage", () => {
@@ -122,10 +122,12 @@ describe("Agent state kernel", () => {
     expect(() => beginAgentStepState(active, createStepId(), createTimestampMs(121))).toThrow(
       AgentKernelStateError,
     );
-    expect(() => settleAgentStepState(active, { stepId: createStepId(), now: createTimestampMs(121) })).toThrow(
+    expect(() =>
+      settleAgentStepState(active, { stepId: createStepId(), now: createTimestampMs(121) }),
+    ).toThrow(AgentKernelStateError);
+    expect(() => markAgentStateVerifying(active, createTimestampMs(121))).toThrow(
       AgentKernelStateError,
     );
-    expect(() => markAgentStateVerifying(active, createTimestampMs(121))).toThrow(AgentKernelStateError);
     const idle = settleAgentStepState(active, { stepId, now: createTimestampMs(130) });
     expect(markAgentStateVerifying(idle, createTimestampMs(140))).toMatchObject({
       status: "VERIFYING",

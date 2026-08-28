@@ -43,9 +43,6 @@ export {
   failAgentStep,
   nextAgentStepSequence,
 } from "./agent-step.js";
-export type {
-  CompleteAgentStepInput,
-  CreateRunningAgentStepInput,
-} from "./agent-step.js";
+export type { CompleteAgentStepInput, CreateRunningAgentStepInput } from "./agent-step.js";
 export { evaluateAgentStepGate } from "./agent-step-gate.js";
 export type { AgentStepGate } from "./agent-step-gate.js";

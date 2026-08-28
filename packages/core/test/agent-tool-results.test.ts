@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  AgentToolResultBatchError,
-  normalizeToolResultBatch,
-} from "../src/index.js";
+import { AgentToolResultBatchError, normalizeToolResultBatch } from "../src/index.js";
 import type { AgentToolRequest } from "../src/index.js";
 import type { LLMToolResultMessage } from "@caelush/llm/messages";
 
@@ -10,11 +7,7 @@ function request(toolCallId: string, toolName = "read_file"): AgentToolRequest {
   return { externalCallId: toolCallId, toolName, args: { path: `${toolCallId}.ts` } };
 }
 
-function result(
-  toolCallId: string,
-  toolName = "read_file",
-  isError = false,
-): LLMToolResultMessage {
+function result(toolCallId: string, toolName = "read_file", isError = false): LLMToolResultMessage {
   return { role: "tool", toolCallId, toolName, content: `${toolCallId} output`, isError };
 }
 
@@ -29,9 +22,10 @@ describe("Agent tool result batches", () => {
   });
 
   it("accepts an error result as a valid result for its request", () => {
-    const normalized = normalizeToolResultBatch([request("call_a")], [
-      result("call_a", "read_file", true),
-    ]);
+    const normalized = normalizeToolResultBatch(
+      [request("call_a")],
+      [result("call_a", "read_file", true)],
+    );
     expect(normalized[0]?.isError).toBe(true);
   });
 

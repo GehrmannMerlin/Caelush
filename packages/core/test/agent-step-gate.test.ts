@@ -1,7 +1,4 @@
-import {
-  AgentKernelStateError,
-  evaluateAgentStepGate,
-} from "../src/index.js";
+import { AgentKernelStateError, evaluateAgentStepGate } from "../src/index.js";
 import type { AgentState, RunLimits } from "@caelush/protocol";
 import {
   createRunId,
@@ -57,7 +54,9 @@ describe("Agent step gate", () => {
   });
 
   it("rejects a non-running state or an already active step", () => {
-    expect(() => evaluateAgentStepGate(state(0, "VERIFYING"), limits)).toThrow(AgentKernelStateError);
+    expect(() => evaluateAgentStepGate(state(0, "VERIFYING"), limits)).toThrow(
+      AgentKernelStateError,
+    );
     expect(() =>
       evaluateAgentStepGate({ ...state(0), currentStepId: createStepId() }, limits),
     ).toThrow(AgentKernelStateError);

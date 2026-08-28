@@ -18,10 +18,7 @@ export interface CompleteAgentStepInput {
   readonly reasoningSummary: string;
 }
 
-export function completeAgentStep(
-  step: AgentStep,
-  input: CompleteAgentStepInput,
-): AgentStep {
+export function completeAgentStep(step: AgentStep, input: CompleteAgentStepInput): AgentStep {
   assertRunningStep(step);
   assertFinishedAt(step, input.finishedAt);
   return AgentStepSchema.parse({

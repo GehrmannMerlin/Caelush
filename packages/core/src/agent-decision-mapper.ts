@@ -1,12 +1,6 @@
-import {
-  LLMAssistantMessageSchema,
-  type LLMAssistantContent,
-} from "@caelush/llm/messages";
+import { LLMAssistantMessageSchema, type LLMAssistantContent } from "@caelush/llm/messages";
 import { LLMTurnResultSchema, type LLMTurnResult } from "@caelush/llm/turn";
-import {
-  AgentModelOutputError,
-  type AgentModelOutputMetadata,
-} from "./agent-errors.js";
+import { AgentModelOutputError, type AgentModelOutputMetadata } from "./agent-errors.js";
 import type { AgentDecision, AgentModelTurn, AgentToolRequest } from "./agent-decision.js";
 
 export function classifyAgentDecision(result: LLMTurnResult): AgentDecision {
