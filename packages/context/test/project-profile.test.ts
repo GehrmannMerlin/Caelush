@@ -132,7 +132,7 @@ describe("ProjectProfileDetector", () => {
     );
 
     expect(result.profile.ecosystems).toEqual(["NODE", "PYTHON"]);
-    expect(result.rootPackage).toBeUndefined();
+    expect(result.profile.rootPackage).toBeUndefined();
     expect(result.diagnostics).toEqual([
       expect.objectContaining({ code: "MALFORMED_MANIFEST", severity: "WARNING" }),
     ]);

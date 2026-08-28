@@ -27,6 +27,7 @@
 ### Task 1: Context errors and read-only filesystem port
 
 **Files:**
+
 - Create: `packages/context/src/errors.ts`
 - Create: `packages/context/src/filesystem.ts`
 - Modify: `packages/context/package.json`
@@ -34,6 +35,7 @@
 - Test: `packages/context/test/filesystem.test.ts`
 
 **Interfaces:**
+
 - `ContextFileMetadata = { kind: "FILE" | "DIRECTORY" | "SYMLINK" }`.
 - `ContextTextFile = { text: string; bytes: number; truncated: boolean }`.
 - `ContextDirectoryEntry = { name: string; kind: "FILE" | "DIRECTORY" | "SYMLINK" }`.
@@ -50,10 +52,12 @@
 ### Task 2: Workspace scope and boundary resolver
 
 **Files:**
+
 - Create: `packages/context/src/workspace.ts`
 - Test: `packages/context/test/workspace.test.ts`
 
 **Interfaces:**
+
 - `WorkspaceScope = { workspace: WorkspaceRef; logicalRoot: string; realRoot: string; cwd: string; realCwd: string }`.
 - `WorkspaceScopeResolver` accepts a `ContextFileSystem` and exposes `resolve(workspace: WorkspaceRef, cwd?: string): Promise<WorkspaceScope>`.
 
@@ -66,10 +70,12 @@
 ### Task 3: Evidence-based project root detector
 
 **Files:**
+
 - Create: `packages/context/src/project-root.ts`
 - Test: `packages/context/test/project-root.test.ts`
 
 **Interfaces:**
+
 - `ProjectRootReason = "VCS_MARKER" | "WORKSPACE_MARKER" | "PROJECT_MANIFEST" | "CWD_FALLBACK"`.
 - `ProjectRootDetectionResult = { projectRoot: string; reason: ProjectRootReason; marker?: string; evidencePath?: string }`.
 - `ProjectRootDetector` accepts a `ContextFileSystem` and exposes `detect(scope: WorkspaceScope): Promise<ProjectRootDetectionResult>`.
@@ -83,10 +89,12 @@
 ### Task 4: Allowlisted environment snapshot
 
 **Files:**
+
 - Create: `packages/context/src/environment.ts`
 - Test: `packages/context/test/environment.test.ts`
 
 **Interfaces:**
+
 - `EnvironmentSnapshot = { platform: NodeJS.Platform; arch: string; hostNodeVersion: string; pathStyle: "POSIX" | "WINDOWS"; workspaceRoot: string; projectRoot: string; cwd: string }`.
 - `EnvironmentDetector` exposes `detect(scope: WorkspaceScope, projectRoot: string): EnvironmentSnapshot`.
 - `LocalEnvironmentDetector` is the default implementation.
@@ -100,10 +108,12 @@
 ### Task 5: Evidence-driven project profile
 
 **Files:**
+
 - Create: `packages/context/src/project-profile.ts`
 - Test: `packages/context/test/project-profile.test.ts`
 
 **Interfaces:**
+
 - `ProjectEcosystem = "NODE" | "PYTHON" | "RUST" | "GO" | "JAVA"`.
 - `ProjectManifestEvidence = { path: string; relativePath: string; type: string; ecosystem?: ProjectEcosystem }`.
 - `ProjectPackage = { path: string; relativePath: string; name?: string; packageManager?: string; nodeVersionRange?: string; scripts: readonly { name: string; command: string }[]; workspaces?: boolean | readonly string[] }`.
@@ -120,10 +130,12 @@
 ### Task 6: Hierarchical project instructions
 
 **Files:**
+
 - Create: `packages/context/src/instructions.ts`
 - Test: `packages/context/test/instructions.test.ts`
 
 **Interfaces:**
+
 - `InstructionKind = "OVERRIDE" | "AGENTS" | "FALLBACK"`.
 - `ProjectInstruction = { path: string; relativePath: string; kind: InstructionKind; depth: number; content: string; bytes: number; truncated: boolean }`.
 - `ProjectInstructions = { entries: readonly ProjectInstruction[]; totalBytes: number; maxBytes: number }`.
@@ -138,6 +150,7 @@
 ### Task 7: Inspector orchestration and public entry
 
 **Files:**
+
 - Create: `packages/context/src/snapshot.ts`
 - Create: `packages/context/src/project-inspector.ts`
 - Modify: `packages/context/src/index.ts`
@@ -146,6 +159,7 @@
 - Test: `packages/context/test/public-api.test.ts`
 
 **Interfaces:**
+
 - `ProjectIntelligenceSnapshot = { workspace: WorkspaceScope; projectRoot: ProjectRootDetectionResult; environment: EnvironmentSnapshot; profile: ProjectProfile; instructions: ProjectInstructions; diagnostics: readonly ContextDiagnostic[] }`.
 - `ProjectInspector` accepts injected `ContextFileSystem`, optional detectors, and optional instruction options; `inspect({ workspace: WorkspaceRef; cwd?: string }): Promise<ProjectIntelligenceSnapshot>` is its sole application-facing operation.
 - `createLocalProjectInspector(options?): ProjectInspector` composes the local filesystem/environment detector without starting a daemon or causing import side effects.
@@ -159,6 +173,7 @@
 ### Task 8: Architecture guards and documentation
 
 **Files:**
+
 - Modify: `tests/architecture/package-boundaries.test.ts`
 - Create: `packages/context/test/architecture.test.ts`
 - Create: `docs/architecture/context-and-project-intelligence.md`
@@ -175,6 +190,7 @@
 ### Task 9: Full verification and remote handoff
 
 **Files:**
+
 - No new production files; inspect and verify all Phase 5A files.
 
 - [ ] Run focused tests for workspace, root, environment, profile, instructions, inspector, public API, architecture, and existing architecture suites; record test files/tests/failures.
