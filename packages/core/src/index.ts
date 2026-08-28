@@ -27,3 +27,12 @@ export type {
 export { classifyAgentDecision } from "./agent-decision-mapper.js";
 export { summarizeAgentDecision, summarizeAgentLoopOutcome } from "./agent-summary.js";
 export { normalizeToolResultBatch } from "./agent-tool-results.js";
+export {
+  beginAgentStepState,
+  createInitialAgentState,
+  markAgentStateMaxStepsReached,
+  markAgentStateVerifying,
+  settleAgentStepState,
+  startAgentState,
+} from "./agent-state.js";
+export type { SettleAgentStepInput } from "./agent-state.js";
