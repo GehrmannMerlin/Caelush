@@ -11,7 +11,8 @@
   },
   "scripts": {
     "build": "tsc --build",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/main.js"
   },
   "dependencies": {
     "@caelush/events": "workspace:*",
