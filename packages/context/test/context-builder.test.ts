@@ -106,6 +106,7 @@ describe("ContextBuilder", () => {
     expect(built.messages.at(-1)).toEqual(current);
     expect(built.messages.at(-1)?.content).toBe("  fix this\n\nplease  ");
     expect(built.report.system.instructionCount).toBe(0);
+    expect(built.report.snapshotDiagnosticCount).toBe(0);
     expect(built.report.relevantFiles.selectedFiles).toBe(1);
     expect(built.report.estimatedInputTokens + limits.safetyMarginTokens).toBeLessThanOrEqual(
       limits.maxInputTokens,

@@ -43,6 +43,7 @@ export interface ContextBuildReport {
   readonly systemTokens: number;
   readonly currentUserTokens: number;
   readonly mandatoryTokens: number;
+  readonly snapshotDiagnosticCount: number;
   readonly conversation: ContextConversationReport;
   readonly relevantFiles: ContextRelevantFilesReport;
   readonly system: ContextSystemReport;

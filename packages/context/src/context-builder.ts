@@ -115,6 +115,7 @@ export class ContextBuilder {
       systemTokens: budget.systemTokens,
       currentUserTokens: budget.currentUserTokens,
       mandatoryTokens: budget.mandatoryTokens,
+      snapshotDiagnosticCount: input.snapshot.diagnostics.length,
       conversation: budget.conversation,
       relevantFiles: budget.relevantFiles,
       system: {
