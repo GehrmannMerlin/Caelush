@@ -802,4 +802,199 @@ describe("OpenAI-compatible compatibility matrix", () => {
       ]),
     );
   });
+
+  it("preserves a single ToolCallId across two provider turns", async () => {
+    const requests: Request[] = [];
+    let requestCount = 0;
+    const gateway = createGateway(async (input, init) => {
+      requests.push(new Request(input, init));
+      requestCount += 1;
+      if (requestCount === 1) {
+        return sseResponse([
+          openAIChunk({
+            id: "chatcmpl-roundtrip-one",
+            model: model.model,
+            delta: {
+              role: "assistant",
+              tool_calls: [
+                toolCallDelta({
+                  index: 0,
+                  id: "call-roundtrip-one",
+                  name: "read_file",
+                  arguments: '{"path":"a"}',
+                }),
+              ],
+            },
+          }),
+          finishChunk({
+            id: "chatcmpl-roundtrip-one",
+            model: model.model,
+            finishReason: "tool_calls",
+          }),
+        ]);
+      }
+      return sseResponse([
+        openAIChunk({
+          id: "chatcmpl-roundtrip-two",
+          model: model.model,
+          delta: { role: "assistant", content: "done" },
+        }),
+        finishChunk({ id: "chatcmpl-roundtrip-two", model: model.model, finishReason: "stop" }),
+      ]);
+    });
+
+    const first = await gateway.complete({
+      model,
+      messages: [{ role: "user", content: "Read a." }],
+      tools: [readFileTool],
+    });
+    const firstCall = first.toolCalls[0];
+    if (firstCall === undefined) throw new Error("Turn 1 did not return a tool call.");
+
+    await gateway.complete({
+      model,
+      messages: [
+        { role: "user", content: "Read a." },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "tool-call",
+              toolCallId: firstCall.id,
+              toolName: firstCall.name,
+              input: firstCall.input,
+            },
+          ],
+        },
+        {
+          role: "tool",
+          toolCallId: firstCall.id,
+          toolName: firstCall.name,
+          content: "contents of a",
+          isError: false,
+        },
+        { role: "user", content: "Summarize it." },
+      ],
+      tools: [readFileTool],
+    });
+
+    const secondRequest = requests[1];
+    if (secondRequest === undefined) throw new Error("Turn 2 did not reach the provider.");
+    const secondBody = (await secondRequest.json()) as {
+      messages?: Array<Record<string, unknown>>;
+    };
+    const toolMessage = secondBody.messages?.find((message) => message.role === "tool");
+    expect(toolMessage).toMatchObject({ role: "tool", tool_call_id: firstCall.id });
+  });
+
+  it("preserves parallel ToolCallIds with their own results across turns", async () => {
+    const requests: Request[] = [];
+    let requestCount = 0;
+    const gateway = createGateway(async (input, init) => {
+      requests.push(new Request(input, init));
+      requestCount += 1;
+      if (requestCount === 1) {
+        return sseResponse([
+          openAIChunk({
+            id: "chatcmpl-roundtrip-parallel-one",
+            model: model.model,
+            delta: {
+              role: "assistant",
+              tool_calls: [
+                toolCallDelta({
+                  index: 0,
+                  id: "call-roundtrip-a",
+                  name: "read_file",
+                  arguments: '{"path":"a"}',
+                }),
+              ],
+            },
+          }),
+          openAIChunk({
+            id: "chatcmpl-roundtrip-parallel-one",
+            model: model.model,
+            delta: {
+              tool_calls: [
+                toolCallDelta({
+                  index: 1,
+                  id: "call-roundtrip-b",
+                  name: "search_text",
+                  arguments: '{"query":"b"}',
+                }),
+              ],
+            },
+          }),
+          finishChunk({
+            id: "chatcmpl-roundtrip-parallel-one",
+            model: model.model,
+            finishReason: "tool_calls",
+          }),
+        ]);
+      }
+      return sseResponse([
+        openAIChunk({
+          id: "chatcmpl-roundtrip-parallel-two",
+          model: model.model,
+          delta: { role: "assistant", content: "done" },
+        }),
+        finishChunk({
+          id: "chatcmpl-roundtrip-parallel-two",
+          model: model.model,
+          finishReason: "stop",
+        }),
+      ]);
+    });
+
+    const first = await gateway.complete({
+      model,
+      messages: [{ role: "user", content: "Read a and search b." }],
+      tools: [readFileTool, searchTextTool],
+    });
+    expect(first.toolCalls).toHaveLength(2);
+
+    await gateway.complete({
+      model,
+      messages: [
+        { role: "user", content: "Read a and search b." },
+        {
+          role: "assistant",
+          content: first.toolCalls.map((call) => ({
+            type: "tool-call" as const,
+            toolCallId: call.id,
+            toolName: call.name,
+            input: call.input,
+          })),
+        },
+        {
+          role: "tool",
+          toolCallId: "call-roundtrip-b",
+          toolName: "search_text",
+          content: "found b",
+          isError: false,
+        },
+        {
+          role: "tool",
+          toolCallId: "call-roundtrip-a",
+          toolName: "read_file",
+          content: "contents of a",
+          isError: false,
+        },
+        { role: "user", content: "Summarize both." },
+      ],
+      tools: [readFileTool, searchTextTool],
+    });
+
+    const secondRequest = requests[1];
+    if (secondRequest === undefined) throw new Error("Turn 2 did not reach the provider.");
+    const secondBody = (await secondRequest.json()) as {
+      messages?: Array<Record<string, unknown>>;
+    };
+    const toolMessages = secondBody.messages?.filter((message) => message.role === "tool");
+    expect(toolMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ tool_call_id: "call-roundtrip-a", content: "contents of a" }),
+        expect.objectContaining({ tool_call_id: "call-roundtrip-b", content: "found b" }),
+      ]),
+    );
+  });
 });
