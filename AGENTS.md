@@ -61,6 +61,23 @@ Caelush 是一个 TypeScript/Node.js 通用 Agent Kernel 项目。CLI、Web 和�
 - Do not patch `node_modules`, use `pnpm patch`, or upgrade pinned AI SDK dependencies unless a failing pinned regression and verified stable exact-version fix justify it.
 - OpenAI-compatible compatibility tests must exercise real OpenAI-shaped SSE through `LLMGateway → OpenAICompatibleLLMProvider → streamText → @ai-sdk/openai-compatible → fetch`.
 
+Phase 6 rules:
+
+- Phase 6 contains exactly 6A, 6B, and 6C; do not add additional Phase 6 rounds.
+- One settled LLM provider turn is one Agent Step attempt.
+- Agent decisions are limited to `TOOL_CALLS_REQUESTED` or `FINAL_CANDIDATE`; structural max-step exhaustion is an `AgentLoopOutcome` rather than an LLM decision.
+- Tool execution is outside the Phase 6 Agent Kernel. Phase 6 must never execute a Tool directly.
+- Tool calls with a `LENGTH` finish reason must never be executed because their arguments may be truncated even if the partial JSON parses.
+- A final model response is only a `FINAL_CANDIDATE` and must move the Run toward `VERIFYING`, never directly to `COMPLETED`.
+- Agent Kernel code must not know concrete tools such as `read_file`, `shell`, or `apply_patch`.
+- Tool result batches must contain exactly one matching result for every requested tool call before the next provider turn.
+- Parallel tool results may arrive in completion order but must be normalized to assistant source order before entering model history.
+- Public reasoning summaries must never expose raw hidden reasoning, model answer text, tool arguments, or secrets.
+- `UsageState.steps` counts settled Agent Step attempts, including failed attempts.
+- `UsageState.toolCalls` is reserved for actual Tool invocation accounting and is not incremented merely because the model requested tools.
+- Phase 6A owns only `maxSteps` as a structural loop guard; retry, timeout, token/cost budgets and tool-call budgets remain Phase 10 responsibilities.
+- Phase 6A Kernel helpers must be deterministic and must not own wall-clock time or ID generation.
+
 Phase 5A context rules:
 
 - `@caelush/context` owns workspace/project discovery but does not assemble LLM prompts.
@@ -99,7 +116,7 @@ pnpm check
 
 ## V1 Phase Boundary
 
-当前是 Phase 5 完成边界。除 Phase 1 已正式定义的 AgentSession、AgentRun、AgentStep、AgentState、AgentEvent、ToolDefinition、ToolInvocation、Observation、ApprovalRequest、VerificationResult 和 Run State Machine，以及 Phase 2 的 SQLite/Drizzle Storage、Repository、Run State Snapshot、Durable Event Store、EventBus、Replay 与 Live Watch、Phase 3 的 loopback-only Daemon、Health/Session/Run HTTP API 和 Durable/Ephemeral SSE Event Stream 外，Phase 4A 已建立 Caelush-owned LLM contracts、LLMProvider 和显式 Provider Registry，Phase 4B 已建立注入式 LLMGateway 的 single-turn streaming runtime、runtime event validation、tool-call lifecycle validation、abort/timeout/cancellation 和 result aggregation，Phase 4C-1 已建立仅位于 `@caelush/llm` Provider Adapter 内的 OpenAI-compatible AI SDK transport，Phase 4C-2 已完成真实 OpenAI-shaped SSE 兼容性矩阵、工具调用 identity/round-trip 安全、reasoning/usage/finish/error/secret 回归，以及仅 adapter-private 的歧义 identity fail-closed guard；Phase 5A/5B/5C 已完成 Project Intelligence、Relevant File Planning 与 ContextBuilder finalization。仍不实现 AgentLoop、Tool 执行、Runtime、AgentEvent bridge、Storage integration、Approval resolution、Daemon model config、Ink CLI 功能或 React Web 功能。下一阶段是 Phase 6 AgentLoop。
+当前是 Phase 6A 完成边界。除 Phase 1 已正式定义的 AgentSession、AgentRun、AgentStep、AgentState、AgentEvent、ToolDefinition、ToolInvocation、Observation、ApprovalRequest、VerificationResult 和 Run State Machine，以及 Phase 2 的 SQLite/Drizzle Storage、Repository、Run State Snapshot、Durable Event Store、EventBus、Replay 与 Live Watch、Phase 3 的 loopback-only Daemon、Health/Session/Run HTTP API 和 Durable/Ephemeral SSE Event Stream 外，Phase 4A 已建立 Caelush-owned LLM contracts、LLMProvider 和显式 Provider Registry，Phase 4B 已建立注入式 LLMGateway 的 single-turn streaming runtime、runtime event validation、tool-call lifecycle validation、abort/timeout/cancellation 和 result aggregation，Phase 4C-1 已建立仅位于 `@caelush/llm` Provider Adapter 内的 OpenAI-compatible AI SDK transport，Phase 4C-2 已完成真实 OpenAI-shaped SSE 兼容性矩阵、工具调用 identity/round-trip 安全、reasoning/usage/finish/error/secret 回归，以及仅 adapter-private 的歧义 identity fail-closed guard；Phase 5A/5B/5C 已完成 Project Intelligence、Relevant File Planning 与 ContextBuilder finalization；Phase 6A 已建立 deterministic Agent decision、step、tool-boundary、tool-result resume、AgentState、AgentStep 和 maxSteps contracts。仍不实现 AgentLoop、Tool 执行、Runtime、AgentEvent bridge、Storage integration、Approval resolution、Daemon model config、Ink CLI 功能或 React Web 功能；真正可恢复 AgentLoop 属于 Phase 6B。
 
 下一阶段由后续任务另行定义；不得提前实现 AgentLoop 或其他宿主产品功能。
 

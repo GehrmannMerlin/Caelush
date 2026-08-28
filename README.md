@@ -2,7 +2,15 @@
 
 Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI、Web 和其他宿主共享同一个可观察、可取消、可验证、可扩展的 Agent Core。
 
-当前仓库处于 **V1 Phase 5：Context / Environment / Project Detector（已完成）**。Phase 1 的 JSON-safe Protocol Contract、Typed AgentEvent 和 Core Run State Machine、Phase 2 的可恢复 SQLite 持久化/Durable Event Store/EventBus、Phase 3 的唯一本地 Daemon/Session/Run HTTP API/SSE Event Stream，以及 Phase 4 的 Caelush-owned LLM contracts、Provider Registry 和单次 provider-turn streaming runtime 已完成；Phase 5A 建立只读 workspace/project intelligence，Phase 5B 针对具体任务发现、排序并预算项目文件，Phase 5C 将项目事实、指令、相关文件和最近完整对话按 caller-supplied input budget 组装为 provider-independent、LLMRequest-ready 的 `LLMMessage[]`。Caelush 仍不能自动执行 AgentLoop 或本地 Tool。
+当前仓库处于 **V1 Phase 6A：Agent Execution Contracts & Kernel State**。Phase 1 的 JSON-safe Protocol Contract、Typed AgentEvent 和 Core Run State Machine、Phase 2 的可恢复 SQLite 持久化/Durable Event Store/EventBus、Phase 3 的唯一本地 Daemon/Session/Run HTTP API/SSE Event Stream，以及 Phase 4 的 Caelush-owned LLM contracts、Provider Registry 和单次 provider-turn streaming runtime 已完成；Phase 5A 建立只读 workspace/project intelligence，Phase 5B 针对具体任务发现、排序并预算项目文件，Phase 5C 将项目事实、指令、相关文件和最近完整对话按 caller-supplied input budget 组装为 provider-independent、LLMRequest-ready 的 `LLMMessage[]`；Phase 6A 现在定义 deterministic Agent decision、step、tool-boundary 和 kernel-state semantics。Caelush 仍不能自动执行 AgentLoop 或本地 Tool。
+
+## Phase 6 Status
+
+- Phase 6A — Agent Execution Contracts & Kernel State: **IN PROGRESS**
+- Phase 6B — Context → LLM Resumable Decision Loop: **NOT STARTED**
+- Phase 6C — RunController, Persistence & Event Trace: **NOT STARTED**
+
+Caelush now defines deterministic Agent decision, step, tool-boundary, tool-result resume, and kernel-state semantics. A model turn can be classified as a tool request or a final candidate, state can be advanced through a bounded step gate, and a final candidate stops at verification. It does not autonomously execute agent tasks yet; the resumable AgentLoop belongs to Phase 6B.
 
 ## Phase 5 Status
 
@@ -10,7 +18,7 @@ Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI�
 - Phase 5B — Relevant File Discovery & Context Budget: **COMPLETED**
 - Phase 5C — ContextBuilder & Final Context Assembly: **COMPLETED**
 
-Caelush can build provider-independent, budgeted LLMRequest-ready message context from project facts, project instructions, relevant files, and conversation history. It does not autonomously execute agent tasks; Phase 6 will define the AgentLoop boundary.
+Caelush can build provider-independent, budgeted LLMRequest-ready message context from project facts, project instructions, relevant files, and conversation history. Phase 6A now defines the deterministic AgentLoop boundary contracts; it does not autonomously execute agent tasks, and the resumable AgentLoop belongs to Phase 6B.
 
 ## 技术栈
 
