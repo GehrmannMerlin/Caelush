@@ -46,3 +46,21 @@ export {
 export type { CompleteAgentStepInput, CreateRunningAgentStepInput } from "./agent-step.js";
 export { evaluateAgentStepGate } from "./agent-step-gate.js";
 export type { AgentStepGate } from "./agent-step-gate.js";
+export type {
+  AgentLoopCommonInput,
+  AgentLoopExecutionResult,
+  AgentLoopFailureResult,
+  AgentLoopModelSettings,
+  AgentLoopOutcomeResult,
+  AgentLoopResumeInput,
+  AgentLoopStartInput,
+} from "./agent-loop-input.js";
+export type {
+  AgentContextBuilderPort,
+  AgentLLMClient,
+  AgentLoopDependencies,
+  AgentProjectInspectorPort,
+  AgentRelevantFilePlannerPort,
+  AgentClock,
+  AgentStepIdFactory,
+} from "./agent-loop-ports.js";

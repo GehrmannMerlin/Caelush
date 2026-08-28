@@ -62,7 +62,7 @@ export interface ContextBudgetBreakdown {
   readonly safetyMarginTokens: number;
   readonly systemTokens: number;
   readonly currentUserTokens: number;
-  readonly currentTurnTokens: number;
+  readonly currentTurnTokens?: number;
   readonly mandatoryTokens: number;
 }
 
