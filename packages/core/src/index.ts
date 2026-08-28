@@ -36,3 +36,16 @@ export {
   startAgentState,
 } from "./agent-state.js";
 export type { SettleAgentStepInput } from "./agent-state.js";
+export {
+  cancelAgentStep,
+  completeAgentStep,
+  createRunningAgentStep,
+  failAgentStep,
+  nextAgentStepSequence,
+} from "./agent-step.js";
+export type {
+  CompleteAgentStepInput,
+  CreateRunningAgentStepInput,
+} from "./agent-step.js";
+export { evaluateAgentStepGate } from "./agent-step-gate.js";
+export type { AgentStepGate } from "./agent-step-gate.js";
