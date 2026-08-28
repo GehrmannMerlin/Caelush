@@ -1,9 +1,11 @@
 import { createLLMCallId } from "@caelush/protocol";
 import {
   LLMAbortedError,
+  LLMError,
   LLMInvalidRequestError,
   LLMInvalidResponseError,
   LLMModelUnsupportedError,
+  LLMProviderError,
   LLMTimeoutError,
 } from "./errors.js";
 import { validateLLMRequestSemantics, validateTimeoutMs } from "./request-validation.js";
@@ -113,6 +115,15 @@ export class LLMGateway {
         validator.accept(parsedEvent.data);
         yield parsedEvent.data;
       }
+    } catch (error) {
+      if (error instanceof LLMError) {
+        throw error;
+      }
+      throw new LLMProviderError("LLM provider threw an unexpected error.", {
+        providerId: provider.id,
+        model: request.model,
+        cause: error,
+      });
     } finally {
       if (!completed && scope.kind() === undefined) {
         scope.abortConsumer();

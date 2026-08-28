@@ -1,7 +1,6 @@
 import type { ModelRef } from "@caelush/protocol";
 import type {
   LLMCapabilities,
-  LLMError,
   LLMProvider,
   LLMProviderCallContext,
   LLMProviderRequest,
@@ -31,7 +30,7 @@ export interface FakeLLMProviderOptions {
     context: LLMProviderCallContext,
   ) => readonly unknown[];
   readonly waitUntilAborted?: boolean;
-  readonly error?: LLMError;
+  readonly error?: unknown;
   readonly capabilities?: LLMCapabilities;
   readonly supportsModel?: (model: ModelRef) => boolean;
 }
@@ -47,7 +46,7 @@ export class FakeLLMProvider implements LLMProvider {
     | undefined;
   private readonly waitUntilAborted: boolean;
   iteratorCleanup = false;
-  readonly error: LLMError | undefined;
+  readonly error: unknown;
   readonly capabilities: LLMCapabilities;
   observedRequest: LLMProviderRequest | undefined;
   readonly observedRequests: LLMProviderRequest[] = [];
