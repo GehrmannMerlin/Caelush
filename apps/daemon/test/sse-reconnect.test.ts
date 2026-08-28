@@ -157,4 +157,35 @@ describe("SSE reconnect", () => {
     expect(new TextDecoder().decode(live.value)).toContain("id: 4");
     await reader.cancel();
   });
+
+  it("supports query cursors and returns typed errors for invalid cursor input", async () => {
+    const { eventBus, run, url } = await makeServer();
+    await eventBus.publish(eventDraft(run, 1));
+    await eventBus.publish(eventDraft(run, 2));
+
+    const queryResponse = await fetch(`${url}/api/v1/runs/${run.id}/events?afterSequence=1`, {
+      headers: { accept: "text/event-stream" },
+    });
+    expect(queryResponse.status).toBe(200);
+    const queryReader = queryResponse.body?.getReader();
+    if (!queryReader) throw new Error("query SSE response has no body");
+    const queryFrame = await nextFrame(queryReader);
+    expect(frameId(queryFrame.frame)).toBe("2");
+    await queryReader.cancel();
+
+    for (const cursor of ["abc", "-1", "1.5", "NaN"]) {
+      const response = await fetch(
+        `${url}/api/v1/runs/${run.id}/events?afterSequence=${encodeURIComponent(cursor)}`,
+        { headers: { accept: "text/event-stream" } },
+      );
+      expect(response.status).toBe(400);
+      expect((await response.json()).error.code).toBe("INVALID_EVENT_CURSOR");
+    }
+
+    const conflict = await fetch(`${url}/api/v1/runs/${run.id}/events?afterSequence=2`, {
+      headers: { accept: "text/event-stream", "last-event-id": "1" },
+    });
+    expect(conflict.status).toBe(400);
+    expect((await conflict.json()).error.code).toBe("INVALID_EVENT_CURSOR");
+  });
 });

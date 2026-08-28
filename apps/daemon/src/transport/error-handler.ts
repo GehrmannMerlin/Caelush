@@ -21,8 +21,26 @@ interface MappedError {
   readonly message: string;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 function isValidationError(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "validation" in error;
+  return isRecord(error) && "validation" in error;
+}
+
+function isEventCursorValidationError(error: unknown): boolean {
+  if (
+    !isRecord(error) ||
+    error.validationContext !== "querystring" ||
+    !Array.isArray(error.validation)
+  ) {
+    return false;
+  }
+  return (
+    error.validation.length > 0 &&
+    error.validation.every((issue) => isRecord(issue) && issue.instancePath === "/afterSequence")
+  );
 }
 
 function mapError(error: unknown): MappedError {
@@ -30,6 +48,13 @@ function mapError(error: unknown): MappedError {
     return { statusCode: 403, code: "INVALID_REQUEST", message: "Request is not allowed." };
   }
   if (error instanceof InvalidEventCursorError) {
+    return {
+      statusCode: 400,
+      code: "INVALID_EVENT_CURSOR",
+      message: "The event cursor is invalid.",
+    };
+  }
+  if (isEventCursorValidationError(error)) {
     return {
       statusCode: 400,
       code: "INVALID_EVENT_CURSOR",

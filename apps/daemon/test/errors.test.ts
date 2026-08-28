@@ -32,4 +32,16 @@ describe("daemon error mapping", () => {
     expect(mapped.body.error.code).toBe("INVALID_REQUEST");
     expect(mapped.body.error.requestId).toBe("req-456");
   });
+
+  it("maps malformed event query cursors to INVALID_EVENT_CURSOR", () => {
+    const mapped = toApiErrorResponse(
+      {
+        validationContext: "querystring",
+        validation: [{ instancePath: "/afterSequence", keyword: "invalid_type" }],
+      },
+      "req-789",
+    );
+    expect(mapped.statusCode).toBe(400);
+    expect(mapped.body.error.code).toBe("INVALID_EVENT_CURSOR");
+  });
 });
