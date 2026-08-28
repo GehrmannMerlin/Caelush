@@ -106,7 +106,12 @@ export class ProjectInstructionDiscovery {
   ): Promise<Candidate | null> {
     for (const candidate of possibleCandidates) {
       const candidatePath = path.join(directory, candidate.filename);
-      const metadata = await this.filesystem.getMetadata(candidatePath);
+      let metadata;
+      try {
+        metadata = await this.filesystem.getMetadata(candidatePath);
+      } catch (error) {
+        throw instructionError(`could not inspect project instruction: ${candidatePath}`, error);
+      }
       if (metadata === null) continue;
       if (metadata.kind === "DIRECTORY") {
         throw instructionError(`project instruction is not a file: ${candidatePath}`);

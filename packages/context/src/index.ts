@@ -39,5 +39,5 @@ export { ProjectProfileDetector } from "./project-profile.js";
 export { ProjectRootDetector } from "./project-root.js";
 export type { ProjectRootDetectionResult, ProjectRootReason } from "./project-root.js";
 export type { ProjectIntelligenceSnapshot } from "./snapshot.js";
-export { WorkspaceScopeResolver, isWithinWorkspace } from "./workspace.js";
+export { WorkspaceScopeResolver } from "./workspace.js";
 export type { WorkspaceScope } from "./workspace.js";

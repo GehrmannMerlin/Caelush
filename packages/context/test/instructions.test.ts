@@ -3,8 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createWorkspaceId } from "@caelush/protocol";
-import { ContextInstructionError } from "../src/errors.js";
-import { LocalContextFileSystem } from "../src/filesystem.js";
+import { ContextInstructionError, ContextIOError } from "../src/errors.js";
+import {
+  LocalContextFileSystem,
+  type ContextDirectoryEntry,
+  type ContextFileMetadata,
+  type ContextFileSystem,
+  type ContextTextFile,
+} from "../src/filesystem.js";
 import { ProjectInstructionDiscovery } from "../src/instructions.js";
 import { WorkspaceScopeResolver } from "../src/workspace.js";
 
@@ -141,6 +147,29 @@ describe("ProjectInstructionDiscovery", () => {
         escaped.root,
         escaped.cwd,
       ),
+    ).rejects.toBeInstanceOf(ContextInstructionError);
+  });
+
+  it("converts unreadable instruction metadata into a typed instruction error", async () => {
+    const { root, cwd, scope } = await instructionFixture();
+    await writeFile(path.join(root, "AGENTS.md"), "cannot read", "utf8");
+    const local = new LocalContextFileSystem();
+    const filesystem: ContextFileSystem = {
+      getMetadata: async (targetPath): Promise<ContextFileMetadata | null> => {
+        if (path.basename(targetPath) === "AGENTS.md") {
+          throw new ContextIOError("permission denied");
+        }
+        return local.getMetadata(targetPath);
+      },
+      readTextFile: (targetPath, options): Promise<ContextTextFile> =>
+        local.readTextFile(targetPath, options),
+      readDirectory: (targetPath): Promise<readonly ContextDirectoryEntry[]> =>
+        local.readDirectory(targetPath),
+      realpath: (targetPath): Promise<string> => local.realpath(targetPath),
+    };
+
+    await expect(
+      new ProjectInstructionDiscovery(filesystem).discover(scope, root, cwd),
     ).rejects.toBeInstanceOf(ContextInstructionError);
   });
 });
