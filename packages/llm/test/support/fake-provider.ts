@@ -26,6 +26,10 @@ export interface FakeLLMProviderOptions {
     request: LLMProviderRequest,
     context: LLMProviderCallContext,
   ) => readonly LLMStreamEvent[];
+  readonly rawEventsForContext?: (
+    request: LLMProviderRequest,
+    context: LLMProviderCallContext,
+  ) => readonly unknown[];
   readonly error?: LLMError;
   readonly capabilities?: LLMCapabilities;
   readonly supportsModel?: (model: ModelRef) => boolean;
@@ -36,6 +40,9 @@ export class FakeLLMProvider implements LLMProvider {
   readonly events: readonly LLMStreamEvent[];
   private readonly eventsForContext:
     | ((request: LLMProviderRequest, context: LLMProviderCallContext) => readonly LLMStreamEvent[])
+    | undefined;
+  private readonly rawEventsForContext:
+    | ((request: LLMProviderRequest, context: LLMProviderCallContext) => readonly unknown[])
     | undefined;
   readonly error: LLMError | undefined;
   readonly capabilities: LLMCapabilities;
@@ -51,6 +58,7 @@ export class FakeLLMProvider implements LLMProvider {
     this.id = options.id;
     this.events = options.events ?? [];
     this.eventsForContext = options.eventsForContext;
+    this.rawEventsForContext = options.rawEventsForContext;
     this.error = options.error;
     this.capabilities = options.capabilities ?? unknownCapabilities;
     this.modelPredicate = options.supportsModel ?? ((model) => model.provider === this.id);
@@ -82,6 +90,13 @@ export class FakeLLMProvider implements LLMProvider {
       throw this.error;
     }
     const events = this.eventsForContext?.(request, context) ?? this.events;
+    const rawEvents = this.rawEventsForContext?.(request, context);
+    if (rawEvents !== undefined) {
+      for (const event of rawEvents) {
+        yield event as LLMStreamEvent;
+      }
+      return;
+    }
     for (const event of events) {
       yield event;
     }

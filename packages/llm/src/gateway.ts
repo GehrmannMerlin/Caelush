@@ -1,5 +1,5 @@
 import { createLLMCallId } from "@caelush/protocol";
-import { LLMInvalidRequestError, LLMModelUnsupportedError } from "./errors.js";
+import { LLMInvalidRequestError, LLMInvalidResponseError, LLMModelUnsupportedError } from "./errors.js";
 import { validateLLMRequestSemantics, validateTimeoutMs } from "./request-validation.js";
 import { LLMRequestSchema } from "./request.js";
 import type { LLMTurnResult } from "./result.js";
@@ -11,6 +11,8 @@ import type {
 import type { LLMStreamEvent } from "./events.js";
 import type { LLMProviderRegistry } from "./provider-registry.js";
 import type { LLMCallId } from "@caelush/protocol";
+import { LLMStreamEventSchema } from "./events.js";
+import { createStreamValidator } from "./stream-validator.js";
 
 export interface LLMStreamOptions {
   readonly signal?: AbortSignal;
@@ -68,14 +70,23 @@ export class LLMGateway {
     const controller = new AbortController();
     const context: LLMProviderCallContext = { callId, signal: controller.signal };
     const providerEvents = provider.stream(request, context);
+    const validator = createStreamValidator(callId, provider.id, request.model);
     for await (const event of providerEvents) {
-      yield event;
+      const parsedEvent = LLMStreamEventSchema.safeParse(event);
+      if (!parsedEvent.success) {
+        throw new LLMInvalidResponseError("LLM provider returned an invalid stream event.", {
+          providerId: provider.id,
+          model: request.model,
+          cause: parsedEvent.error,
+        });
+      }
+      validator.accept(parsedEvent.data);
+      yield parsedEvent.data;
     }
+    validator.assertFinished();
   }
 
   complete(_request: LLMProviderRequest, _options?: LLMStreamOptions): Promise<LLMTurnResult> {
     throw new Error("LLMGateway.complete is not implemented yet.");
   }
 }
-
-void DEFAULT_TIMEOUT_MS;
