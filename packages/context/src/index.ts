@@ -87,13 +87,17 @@ export type {
 export { ContextBuilder, createDefaultContextBuilder } from "./context-builder.js";
 export type {
   BuiltModelContext,
+  ContextBuildCommonInput,
   ContextBuildInput,
   ContextBuildLimits,
   ContextBuilderOptions,
+  ToolContinuationContextBuildInput,
+  UserTurnContextBuildInput,
 } from "./context-builder.js";
 export type {
   ContextBuildLimitsReport,
   ContextBuildReport,
+  ContextCurrentTurnReport,
   ContextConversationReport,
   ContextRelevantFilesReport,
   ContextSystemReport,

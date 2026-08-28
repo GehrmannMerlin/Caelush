@@ -36,12 +36,19 @@ export interface ContextSystemReport {
   readonly activePackage?: string;
 }
 
+export interface ContextCurrentTurnReport {
+  readonly type: "USER_TURN" | "TOOL_CONTINUATION";
+  readonly messageCount: number;
+  readonly estimatedTokens: number;
+}
+
 export interface ContextBuildReport {
   readonly limits: ContextBuildLimitsReport;
   readonly estimatedInputTokens: number;
   readonly remainingTokens: number;
   readonly systemTokens: number;
   readonly currentUserTokens: number;
+  readonly currentTurn: ContextCurrentTurnReport;
   readonly mandatoryTokens: number;
   readonly snapshotDiagnosticCount: number;
   readonly conversation: ContextConversationReport;

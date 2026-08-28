@@ -7,7 +7,7 @@ import {
 import type { ContextBuildReport } from "./context-build-report.js";
 import { assembleContextBudget } from "./context-budget.js";
 import { validateAndGroupConversation } from "./conversation-history.js";
-import { ContextBuildError } from "./errors.js";
+import { ContextBuildError, ContextConversationError } from "./errors.js";
 import { renderSystemContext } from "./context-renderer.js";
 import type { RelevantFileContextPlan } from "./relevant-file-plan.js";
 import type { ProjectIntelligenceSnapshot } from "./snapshot.js";
@@ -21,14 +21,25 @@ export interface ContextBuildLimits {
   readonly minRelevantFileTokens?: number;
 }
 
-export interface ContextBuildInput {
+export interface ContextBuildCommonInput {
   readonly baseSystemPrompt: string;
   readonly snapshot: ProjectIntelligenceSnapshot;
   readonly relevantFiles?: RelevantFileContextPlan;
   readonly history?: readonly LLMMessage[];
-  readonly currentUserMessage: LLMUserMessage;
   readonly limits: ContextBuildLimits;
 }
+
+export interface UserTurnContextBuildInput extends ContextBuildCommonInput {
+  readonly mode?: "USER_TURN";
+  readonly currentUserMessage: LLMUserMessage;
+}
+
+export interface ToolContinuationContextBuildInput extends ContextBuildCommonInput {
+  readonly mode: "TOOL_CONTINUATION";
+  readonly currentTurnMessages: readonly LLMMessage[];
+}
+
+export type ContextBuildInput = UserTurnContextBuildInput | ToolContinuationContextBuildInput;
 
 export interface BuiltModelContext {
   readonly messages: readonly LLMMessage[];
@@ -89,15 +100,32 @@ export class ContextBuilder {
 
   build(input: ContextBuildInput): BuiltModelContext {
     const limits = validateContextBuildLimits(input.limits);
-    if (!LLMUserMessageSchema.safeParse(input.currentUserMessage).success) {
+    const isContinuation = input.mode === "TOOL_CONTINUATION";
+    const currentTurn = isContinuation ? input.currentTurnMessages : [input.currentUserMessage];
+    if (currentTurn.length === 0) throw new ContextBuildError("current turn must not be empty");
+    if (!isContinuation && !LLMUserMessageSchema.safeParse(input.currentUserMessage).success) {
       throw new ContextBuildError("current user message is invalid");
+    }
+    if (isContinuation) {
+      if (currentTurn.some((message) => message.role === "system")) {
+        throw new ContextConversationError("current continuation cannot contain system messages");
+      }
+      const currentConversation = validateAndGroupConversation(currentTurn, this.tokenEstimator);
+      if (currentConversation.groups.length !== 1) {
+        throw new ContextConversationError("current continuation must contain one turn group");
+      }
+      if (currentTurn.at(-1)?.role !== "tool") {
+        throw new ContextConversationError("current continuation must end with a tool result");
+      }
     }
     const history = input.history ?? [];
     const conversation = validateAndGroupConversation(history, this.tokenEstimator);
     const system = renderSystemContext(input.baseSystemPrompt, input.snapshot);
     const budget = assembleContextBudget({
       system: system.message,
-      current: input.currentUserMessage,
+      ...(isContinuation ? {} : { current: input.currentUserMessage }),
+      currentTurn,
+      currentTurnType: isContinuation ? "TOOL_CONTINUATION" : "USER_TURN",
       groups: conversation.groups,
       files: input.relevantFiles?.sections ?? [],
       limits,
@@ -114,6 +142,11 @@ export class ContextBuilder {
       remainingTokens: budget.remainingTokens,
       systemTokens: budget.systemTokens,
       currentUserTokens: budget.currentUserTokens,
+      currentTurn: {
+        type: isContinuation ? "TOOL_CONTINUATION" : "USER_TURN",
+        messageCount: currentTurn.length,
+        estimatedTokens: budget.currentTurnTokens,
+      },
       mandatoryTokens: budget.mandatoryTokens,
       snapshotDiagnosticCount: input.snapshot.diagnostics.length,
       conversation: budget.conversation,

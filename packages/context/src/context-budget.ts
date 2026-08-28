@@ -16,7 +16,9 @@ import type { TokenEstimator } from "./token-estimator.js";
 
 export interface ContextBudgetInput {
   readonly system: LLMSystemMessage;
-  readonly current: LLMUserMessage;
+  readonly current?: LLMUserMessage;
+  readonly currentTurn?: readonly LLMMessage[];
+  readonly currentTurnType?: "USER_TURN" | "TOOL_CONTINUATION";
   readonly groups: readonly ConversationTurnGroup[];
   readonly files: readonly RelevantFileContextSection[];
   readonly limits: Required<ContextBuildLimits>;
@@ -31,6 +33,7 @@ export interface ContextBudgetResult {
   readonly mandatoryTokens: number;
   readonly systemTokens: number;
   readonly currentUserTokens: number;
+  readonly currentTurnTokens: number;
   readonly conversationTarget: number;
   readonly fileTarget: number;
   readonly conversation: ContextConversationReport;
@@ -159,14 +162,30 @@ function relevantFilesReport(
 }
 
 export function assembleContextBudget(input: ContextBudgetInput): ContextBudgetResult {
+  const currentTurn = input.currentTurn ?? (input.current === undefined ? [] : [input.current]);
   const systemTokens = estimateLLMMessage(input.system, input.estimator);
-  const currentUserTokens = estimateLLMMessage(input.current, input.estimator);
-  const mandatoryTokens = systemTokens + currentUserTokens;
+  if (currentTurn.length === 0) {
+    throw new ContextBudgetExceededError({
+      maxInputTokens: input.limits.maxInputTokens,
+      safetyMarginTokens: input.limits.safetyMarginTokens,
+      systemTokens,
+      currentUserTokens: 0,
+      currentTurnTokens: 0,
+      mandatoryTokens: systemTokens,
+    });
+  }
+  const currentTurnTokens = estimateMessages(currentTurn, input.estimator);
+  const currentUserTokens =
+    (input.currentTurnType ?? "USER_TURN") === "USER_TURN" && input.current !== undefined
+      ? estimateLLMMessage(input.current, input.estimator)
+      : 0;
+  const mandatoryTokens = systemTokens + currentTurnTokens;
   const breakdown: ContextBudgetBreakdown = {
     maxInputTokens: input.limits.maxInputTokens,
     safetyMarginTokens: input.limits.safetyMarginTokens,
     systemTokens,
     currentUserTokens,
+    currentTurnTokens,
     mandatoryTokens,
   };
   if (mandatoryTokens + input.limits.safetyMarginTokens > input.limits.maxInputTokens) {
@@ -216,7 +235,7 @@ export function assembleContextBudget(input: ContextBudgetInput): ContextBudgetR
     input.system,
     ...selectedGroups.flatMap((group) => group.messages),
     ...(selectedFiles.message === undefined ? [] : [selectedFiles.message]),
-    input.current,
+    ...currentTurn,
   ];
   let messages = compose();
   while (
@@ -262,6 +281,7 @@ export function assembleContextBudget(input: ContextBudgetInput): ContextBudgetR
     mandatoryTokens,
     systemTokens,
     currentUserTokens,
+    currentTurnTokens,
     conversationTarget,
     fileTarget,
     conversation: conversationReport(
