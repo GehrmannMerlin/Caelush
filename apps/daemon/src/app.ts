@@ -8,6 +8,8 @@ import { assertLoopbackRequest } from "./transport/local-request-guard.js";
 import { registerHealthRoute } from "./routes/health.js";
 import { registerSessionRoutes } from "./routes/sessions.js";
 import { SessionService } from "./services/session-service.js";
+import { registerRunRoutes } from "./routes/runs.js";
+import { RunService } from "./services/run-service.js";
 
 export interface DaemonDependencies {
   readonly sessions: SessionRepository;
@@ -24,6 +26,10 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
   registerErrorHandling(app);
   registerHealthRoute(app);
   registerSessionRoutes(app, new SessionService({ repository: dependencies.sessions }));
+  registerRunRoutes(
+    app,
+    new RunService({ sessions: dependencies.sessions, runs: dependencies.runs }),
+  );
   void dependencies;
   return app;
 }
