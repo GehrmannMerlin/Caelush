@@ -5,11 +5,10 @@ import {
   type LLMUserMessage,
 } from "@caelush/llm/messages";
 import type { ContextBuildReport } from "./context-build-report.js";
-import {
-  ContextBuildError,
-  ContextBudgetExceededError,
-  type ContextBudgetBreakdown,
-} from "./errors.js";
+import { assembleContextBudget } from "./context-budget.js";
+import { validateAndGroupConversation } from "./conversation-history.js";
+import { ContextBuildError } from "./errors.js";
+import { renderSystemContext } from "./context-renderer.js";
 import type { RelevantFileContextPlan } from "./relevant-file-plan.js";
 import type { ProjectIntelligenceSnapshot } from "./snapshot.js";
 import { Utf8HeuristicTokenEstimator, type TokenEstimator } from "./token-estimator.js";
@@ -79,50 +78,6 @@ export function validateContextBuildLimits(input: ContextBuildLimits): Required<
   };
 }
 
-function emptyReport(
-  limits: Required<ContextBuildLimits>,
-  estimator: TokenEstimator,
-  currentUser: LLMUserMessage,
-  snapshot: ProjectIntelligenceSnapshot,
-): ContextBuildReport {
-  const currentUserTokens = estimator.estimateText(JSON.stringify(currentUser));
-  return {
-    limits,
-    estimatedInputTokens: currentUserTokens,
-    remainingTokens: limits.maxInputTokens - limits.safetyMarginTokens - currentUserTokens,
-    systemTokens: 0,
-    currentUserTokens,
-    mandatoryTokens: currentUserTokens,
-    conversation: {
-      providedMessages: 0,
-      selectedMessages: 0,
-      droppedMessages: 0,
-      providedTurns: 0,
-      selectedTurns: 0,
-      droppedTurns: 0,
-      estimatedTokensUsed: 0,
-      requiresCompaction: false,
-      latestTurnTooLarge: false,
-    },
-    relevantFiles: {
-      providedFiles: 0,
-      selectedFiles: 0,
-      droppedFiles: 0,
-      estimatedTokensUsed: 0,
-      furtherTruncatedFiles: 0,
-    },
-    system: {
-      instructionCount: snapshot.instructions.entries.length,
-      instructionBytes: snapshot.instructions.totalBytes,
-      snapshotDiagnosticCount: snapshot.diagnostics.length,
-      projectRoot: snapshot.projectRoot.projectRoot,
-      ...(snapshot.profile.activePackage?.relativePath === undefined
-        ? {}
-        : { activePackage: snapshot.profile.activePackage.relativePath }),
-    },
-  };
-}
-
 export class ContextBuilder {
   private readonly tokenEstimator: TokenEstimator;
 
@@ -135,25 +90,42 @@ export class ContextBuilder {
     if (!LLMUserMessageSchema.safeParse(input.currentUserMessage).success) {
       throw new ContextBuildError("current user message is invalid");
     }
-    if (input.history !== undefined) {
-      for (const message of input.history) {
-        if (!LLMMessageSchema.safeParse(message).success) {
-          throw new ContextBuildError("conversation history contains an invalid message");
-        }
+    const history = input.history ?? [];
+    const conversation = validateAndGroupConversation(history, this.tokenEstimator);
+    const system = renderSystemContext(input.baseSystemPrompt, input.snapshot);
+    const budget = assembleContextBudget({
+      system: system.message,
+      current: input.currentUserMessage,
+      groups: conversation.groups,
+      files: input.relevantFiles?.sections ?? [],
+      limits,
+      estimator: this.tokenEstimator,
+    });
+    for (const message of budget.messages) {
+      if (!LLMMessageSchema.safeParse(message).success) {
+        throw new ContextBuildError("context builder produced an invalid message");
       }
     }
-    const report = emptyReport(limits, this.tokenEstimator, input.currentUserMessage, input.snapshot);
-    const breakdown: ContextBudgetBreakdown = {
-      maxInputTokens: limits.maxInputTokens,
-      safetyMarginTokens: limits.safetyMarginTokens,
-      systemTokens: report.systemTokens,
-      currentUserTokens: report.currentUserTokens,
-      mandatoryTokens: report.mandatoryTokens,
+    const report: ContextBuildReport = {
+      limits,
+      estimatedInputTokens: budget.estimatedInputTokens,
+      remainingTokens: budget.remainingTokens,
+      systemTokens: budget.systemTokens,
+      currentUserTokens: budget.currentUserTokens,
+      mandatoryTokens: budget.mandatoryTokens,
+      conversation: budget.conversation,
+      relevantFiles: budget.relevantFiles,
+      system: {
+        instructionCount: system.instructionCount,
+        instructionBytes: system.instructionBytes,
+        snapshotDiagnosticCount: input.snapshot.diagnostics.length,
+        projectRoot: input.snapshot.projectRoot.projectRoot,
+        ...(input.snapshot.profile.activePackage?.relativePath === undefined
+          ? {}
+          : { activePackage: input.snapshot.profile.activePackage.relativePath }),
+      },
     };
-    if (report.mandatoryTokens + limits.safetyMarginTokens > limits.maxInputTokens) {
-      throw new ContextBudgetExceededError(breakdown);
-    }
-    return { messages: [input.currentUserMessage], report };
+    return { messages: budget.messages, report };
   }
 }
 
