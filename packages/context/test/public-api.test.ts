@@ -24,5 +24,12 @@ describe("@caelush/context public API", () => {
     expect(context.FileBudgetSelector).toBeDefined();
     expect(context.RelevantFilePlanner).toBeDefined();
     expect(context.createLocalRelevantFilePlanner).toBeDefined();
+    expect(context.ContextBuilder).toBeDefined();
+    expect(context.createDefaultContextBuilder).toBeDefined();
+    expect(context.ContextBuildError).toBeDefined();
+    expect(context.ContextBudgetExceededError).toBeDefined();
+    expect(context.ContextConversationError).toBeDefined();
+    expect(context.ConversationTurnGroup).toBeUndefined();
+    expect(context.renderSystemContext).toBeUndefined();
   });
 });

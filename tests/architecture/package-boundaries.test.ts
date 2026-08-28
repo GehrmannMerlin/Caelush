@@ -155,7 +155,18 @@ describe("package boundaries", () => {
 
     expect(dependencies[protocolPackageName]).toBe("workspace:*");
     expect(dependencies.ignore).toBe("7.0.6");
-    expect(Object.keys(dependencies).sort()).toEqual(["@caelush/protocol", "ignore"]);
+    expect(Object.keys(dependencies).sort()).toEqual(["@caelush/llm", "@caelush/protocol", "ignore"]);
+  });
+
+  it("allows Context to import only the provider-independent messages subpath", async () => {
+    const sourceRoot = path.join(repositoryRoot, "packages", "context", "src");
+    const files = await sourceFiles(sourceRoot);
+    const source = (await Promise.all(files.map((filePath) => readFile(filePath, "utf8")))).join("\n");
+    const imports = [...source.matchAll(/from\s+["'](@caelush\/llm(?:\/[^"']*)?)["']/g)].map(
+      (match) => match[1],
+    );
+    expect(imports).toContain("@caelush/llm/messages");
+    expect(imports.filter((value) => value !== "@caelush/llm/messages")).toEqual([]);
   });
 
   it("allows the daemon to compose protocol, storage, and events through public entries", async () => {
