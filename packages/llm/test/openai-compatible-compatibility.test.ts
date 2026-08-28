@@ -11,6 +11,7 @@ import {
   openAIChunk,
   sseResponse,
   toolCallDelta,
+  usageChunk,
 } from "./support/openai-compatible-sse.js";
 
 const model = { provider: "compat-fixture", model: "fixture-model" };
@@ -996,5 +997,128 @@ describe("OpenAI-compatible compatibility matrix", () => {
         expect.objectContaining({ tool_call_id: "call-roundtrip-b", content: "found b" }),
       ]),
     );
+  });
+
+  it("does not expose provider reasoning content as public text", async () => {
+    const gateway = createGateway(async () =>
+      sseResponse([
+        openAIChunk({
+          id: "chatcmpl-reasoning-tool",
+          model: model.model,
+          delta: { role: "assistant", reasoning_content: "private reasoning" },
+        }),
+        openAIChunk({
+          id: "chatcmpl-reasoning-tool",
+          model: model.model,
+          delta: {
+            tool_calls: [
+              toolCallDelta({
+                index: 0,
+                id: "call-reasoning-tool",
+                name: "read_file",
+                arguments: '{"path":"README.md"}',
+              }),
+            ],
+          },
+        }),
+        finishChunk({
+          id: "chatcmpl-reasoning-tool",
+          model: model.model,
+          finishReason: "tool_calls",
+        }),
+      ]),
+    );
+
+    const result = await gateway.complete({
+      model,
+      messages: [{ role: "user", content: "Read the README." }],
+      tools: [readFileTool],
+    });
+
+    expect(result.text).toBe("");
+    expect(result.text).not.toContain("private reasoning");
+    expect(result.toolCalls).toEqual([
+      expect.objectContaining({
+        id: "call-reasoning-tool",
+        name: "read_file",
+        input: { path: "README.md" },
+      }),
+    ]);
+  });
+
+  it("preserves usage and finish reason from an OpenAI-compatible stream", async () => {
+    const gateway = createGateway(async () =>
+      sseResponse([
+        openAIChunk({
+          id: "chatcmpl-usage-finish",
+          model: model.model,
+          delta: {
+            tool_calls: [
+              toolCallDelta({
+                index: 0,
+                id: "call-usage-a",
+                name: "read_file",
+                arguments: '{"path":"a.txt"}',
+              }),
+              toolCallDelta({
+                index: 1,
+                id: "call-usage-b",
+                name: "search_text",
+                arguments: '{"query":"b"}',
+              }),
+            ],
+          },
+        }),
+        usageChunk({
+          id: "chatcmpl-usage-finish",
+          model: model.model,
+          usage: { prompt_tokens: 11, completion_tokens: 4, total_tokens: 15 },
+        }),
+        finishChunk({
+          id: "chatcmpl-usage-finish",
+          model: model.model,
+          finishReason: "tool_calls",
+          usage: { prompt_tokens: 11, completion_tokens: 4, total_tokens: 15 },
+        }),
+      ]),
+    );
+
+    const result = await gateway.complete({
+      model,
+      messages: [{ role: "user", content: "Read a and search b." }],
+      tools: [readFileTool, searchTextTool],
+    });
+
+    expect(result.finishReason).toBe("TOOL_CALLS");
+    expect(result.usage).toEqual({
+      inputTokens: 11,
+      outputTokens: 4,
+      totalTokens: 15,
+      cachedInputTokens: 0,
+      reasoningTokens: 0,
+    });
+    expect(result.toolCalls).toHaveLength(2);
+  });
+
+  it("does not leak malformed upstream payloads or secrets", async () => {
+    const secret = "CAELUSH_TEST_SECRET_DO_NOT_LEAK_42";
+    const gateway = createGateway(
+      async () =>
+        new Response(`data: malformed ${secret}\n\n`, {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        }),
+    );
+
+    let caught: unknown;
+    try {
+      await gateway.complete({ model, messages: [{ role: "user", content: "hello" }] });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(LLMInvalidResponseError);
+    expect(String(caught)).not.toContain(secret);
+    expect(JSON.stringify(caught)).not.toContain(secret);
   });
 });
