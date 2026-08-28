@@ -12,5 +12,9 @@
   "scripts": {
     "build": "tsc --build",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@caelush/protocol": "workspace:*",
+    "zod": "4.4.3"
   }
 }
