@@ -24,3 +24,5 @@ export { FinishReasonSchema, LLMToolCallSchema } from "./tool-call.js";
 export type { FinishReason, LLMToolCall } from "./tool-call.js";
 export { LLMTurnResultSchema } from "./result.js";
 export type { LLMTurnResult } from "./result.js";
+export { LLMStreamEventSchema } from "./events.js";
+export type { LLMStreamEvent } from "./events.js";
