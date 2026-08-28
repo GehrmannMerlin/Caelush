@@ -31,7 +31,7 @@ describe("SSE event mapper", () => {
     expect(mapAgentEventToSse(event)).toEqual({
       event: "shell.output",
       id: "10",
-      data: JSON.stringify(event),
+      data: event,
     });
   });
 
@@ -39,7 +39,7 @@ describe("SSE event mapper", () => {
     const event = makeEvent("EPHEMERAL");
     const mapped = mapAgentEventToSse(event);
     expect(mapped.event).toBe("shell.output");
-    expect(mapped.data).toBe(JSON.stringify(event));
+    expect(mapped.data).toEqual(event);
     expect(mapped).not.toHaveProperty("id");
   });
 });

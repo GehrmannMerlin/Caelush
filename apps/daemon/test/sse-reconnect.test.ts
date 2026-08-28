@@ -2,7 +2,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  AgentEventSchema,
   AgentRunSchema,
   AgentSessionSchema,
   createEventId,
@@ -15,6 +14,7 @@ import { EventBus } from "@caelush/events";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildDaemonApp } from "../src/index.js";
+import { resolveEventCursor } from "../src/routes/events.js";
 
 let app: ReturnType<typeof buildDaemonApp> | undefined;
 let storage: CaelushStorage | undefined;
@@ -108,6 +108,25 @@ function frameId(frame: string): string | undefined {
 }
 
 describe("SSE reconnect", () => {
+  it("accepts valid cursors and rejects malformed or conflicting cursors", () => {
+    expect(resolveEventCursor(undefined, undefined)).toBe(0);
+    expect(resolveEventCursor("12", undefined)).toBe(12);
+    expect(resolveEventCursor(undefined, 12)).toBe(12);
+    expect(resolveEventCursor("12", "12")).toBe(12);
+
+    for (const [lastEventId, afterSequence] of [
+      ["abc", undefined],
+      ["-1", undefined],
+      ["1.5", undefined],
+      ["NaN", undefined],
+      [undefined, -1],
+      [undefined, 1.5],
+      ["1", "2"],
+    ] as const) {
+      expect(() => resolveEventCursor(lastEventId, afterSequence)).toThrow();
+    }
+  });
+
   it("replays after Last-Event-ID without gaps or duplicates, then tails live", async () => {
     const { eventBus, run, url } = await makeServer();
     await eventBus.publish(eventDraft(run, 1));
@@ -125,7 +144,6 @@ describe("SSE reconnect", () => {
     const first = await nextFrame(reader, buffer);
     buffer = first.rest;
     const second = await nextFrame(reader, buffer);
-    buffer = second.rest;
     expect([frameId(first.frame), frameId(second.frame)]).toEqual(["2", "3"]);
 
     const liveFrame = reader.read();

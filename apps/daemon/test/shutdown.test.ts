@@ -18,12 +18,15 @@ async function makeDatabasePath(name: string) {
   return join(directory, "caelush.db");
 }
 
-async function jsonRequest(url: string, init: RequestInit = {}) {
+async function jsonRequest<T extends Record<string, unknown> = Record<string, unknown>>(
+  url: string,
+  init: RequestInit = {},
+): Promise<{ response: Response; body: T }> {
   const response = await fetch(url, {
     ...init,
     headers: { "content-type": "application/json", ...(init.headers ?? {}) },
   });
-  return { response, body: (await response.json()) as Record<string, any> };
+  return { response, body: (await response.json()) as T };
 }
 
 describe("daemon lifecycle", () => {
@@ -34,8 +37,11 @@ describe("daemon lifecycle", () => {
     const health = await fetch(`${handle.url}/api/v1/health`);
     expect(health.status).toBe(200);
 
-    const { body: session } = await jsonRequest(`${handle.url}/api/v1/sessions`, { method: "POST", body: "{}" });
-    const { body: run } = await jsonRequest(`${handle.url}/api/v1/sessions/${session.id}/runs`, {
+    const { body: session } = await jsonRequest<{ id: string }>(`${handle.url}/api/v1/sessions`, {
+      method: "POST",
+      body: "{}",
+    });
+    const { body: run } = await jsonRequest<{ id: string }>(`${handle.url}/api/v1/sessions/${session.id}/runs`, {
       method: "POST",
       body: JSON.stringify({
         goal: "shutdown",
