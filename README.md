@@ -6,7 +6,7 @@ Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI�
 
 ## Phase 6 Status
 
-- Phase 6A — Agent Execution Contracts & Kernel State: **IN PROGRESS**
+- Phase 6A — Agent Execution Contracts & Kernel State: **COMPLETED**
 - Phase 6B — Context → LLM Resumable Decision Loop: **NOT STARTED**
 - Phase 6C — RunController, Persistence & Event Trace: **NOT STARTED**
 
