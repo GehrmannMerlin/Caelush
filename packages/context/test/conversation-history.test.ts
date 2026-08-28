@@ -21,10 +21,7 @@ const toolCall = (toolCallId: string, toolName = "read_file"): LLMAssistantMessa
   role: "assistant",
   content: [{ type: "tool-call", toolCallId, toolName, input: { path: "src/a.ts" } }],
 });
-const toolResult = (
-  toolCallId: string,
-  toolName = "read_file",
-): LLMToolResultMessage => ({
+const toolResult = (toolCallId: string, toolName = "read_file"): LLMToolResultMessage => ({
   role: "tool",
   toolCallId,
   toolName,
@@ -64,10 +61,15 @@ describe("conversation history", () => {
     ["system message", [{ role: "system", content: "old" }]],
     ["orphan tool result", [user("x"), toolResult("missing")]],
     ["wrong tool name", [user("x"), toolCall("call"), toolResult("call", "shell")]],
-    ["duplicate tool result", [user("x"), toolCall("call"), toolResult("call"), toolResult("call")]],
+    [
+      "duplicate tool result",
+      [user("x"), toolCall("call"), toolResult("call"), toolResult("call")],
+    ],
     ["missing tool result", [user("x"), toolCall("call")]],
-  ] satisfies Array<[string, LLMMessage[]]>)('%s fails closed', (_name, messages) => {
-    expect(() => validateAndGroupConversation(messages, estimator)).toThrow(ContextConversationError);
+  ] satisfies Array<[string, LLMMessage[]]>)("%s fails closed", (_name, messages) => {
+    expect(() => validateAndGroupConversation(messages, estimator)).toThrow(
+      ContextConversationError,
+    );
   });
 
   it("rejects malformed runtime values without leaking schema details", () => {
@@ -78,7 +80,14 @@ describe("conversation history", () => {
   });
 
   it("selects only the newest contiguous complete suffix", () => {
-    const messages = [user("one"), assistant("a"), user("two"), assistant("b"), user("three"), assistant("c")];
+    const messages = [
+      user("one"),
+      assistant("a"),
+      user("two"),
+      assistant("b"),
+      user("three"),
+      assistant("c"),
+    ];
     const validation = validateAndGroupConversation(messages, estimator);
     const selected = selectRecentConversation(validation.groups, 182);
     expect(selected.messages).toEqual(messages.slice(2));

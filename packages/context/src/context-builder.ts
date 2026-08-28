@@ -56,7 +56,9 @@ function requireSafeInteger(name: string, value: number, minimum: number): void 
   }
 }
 
-export function validateContextBuildLimits(input: ContextBuildLimits): Required<ContextBuildLimits> {
+export function validateContextBuildLimits(
+  input: ContextBuildLimits,
+): Required<ContextBuildLimits> {
   requireSafeInteger("maxInputTokens", input.maxInputTokens, 1);
   const safetyMarginTokens = input.safetyMarginTokens ?? DEFAULT_SAFETY_MARGIN;
   const maxConversationTokens = input.maxConversationTokens ?? DEFAULT_MAX_CONVERSATION;

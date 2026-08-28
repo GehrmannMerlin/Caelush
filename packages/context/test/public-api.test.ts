@@ -1,6 +1,8 @@
 import * as context from "../src/index.js";
 import { describe, expect, it } from "vitest";
 
+const api = context as Record<string, unknown>;
+
 describe("@caelush/context public API", () => {
   it("exports the application-facing inspector and approved value classes", () => {
     expect(context.ProjectInspector).toBeDefined();
@@ -29,7 +31,7 @@ describe("@caelush/context public API", () => {
     expect(context.ContextBuildError).toBeDefined();
     expect(context.ContextBudgetExceededError).toBeDefined();
     expect(context.ContextConversationError).toBeDefined();
-    expect(context.ConversationTurnGroup).toBeUndefined();
-    expect(context.renderSystemContext).toBeUndefined();
+    expect(api.ConversationTurnGroup).toBeUndefined();
+    expect(api.renderSystemContext).toBeUndefined();
   });
 });

@@ -1,7 +1,4 @@
-import type {
-  LLMSystemMessage,
-  LLMUserMessage,
-} from "@caelush/llm/messages";
+import type { LLMSystemMessage, LLMUserMessage } from "@caelush/llm/messages";
 import type { ProjectInstruction } from "./instructions.js";
 import type { ProjectPackage, ProjectScript } from "./project-profile.js";
 import type { RelevantFileContextSection } from "./relevant-file-plan.js";
@@ -53,10 +50,14 @@ function renderPackage(label: string, packageInfo: ProjectPackage): string[] {
     `  <${label} relative_path="${escapeXmlAttribute(modelPath(packageInfo.relativePath))}"${packageInfo.name === undefined ? "" : ` name="${escapeXmlAttribute(packageInfo.name)}"`}>`,
   ];
   if (packageInfo.packageManager !== undefined) {
-    lines.push(`    <package_manager><![CDATA[${cdata(packageInfo.packageManager)}]]></package_manager>`);
+    lines.push(
+      `    <package_manager><![CDATA[${cdata(packageInfo.packageManager)}]]></package_manager>`,
+    );
   }
   if (packageInfo.nodeVersionRange !== undefined) {
-    lines.push(`    <node_version><![CDATA[${cdata(packageInfo.nodeVersionRange)}]]></node_version>`);
+    lines.push(
+      `    <node_version><![CDATA[${cdata(packageInfo.nodeVersionRange)}]]></node_version>`,
+    );
   }
   const scripts = renderScripts(packageInfo);
   if (scripts.length > 0) lines.push("    <scripts>", ...scripts, "    </scripts>");
@@ -73,7 +74,8 @@ function renderMetadata(snapshot: ProjectIntelligenceSnapshot): string[] {
     `  <package_manager name="${escapeXmlAttribute(profile.packageManager.name)}"${profile.packageManager.versionHint === undefined ? "" : ` version_hint="${escapeXmlAttribute(profile.packageManager.versionHint)}"`} />`,
     `  <monorepo>${profile.isMonorepo}</monorepo>`,
   ];
-  if (profile.rootPackage !== undefined) lines.push(...renderPackage("root_package", profile.rootPackage));
+  if (profile.rootPackage !== undefined)
+    lines.push(...renderPackage("root_package", profile.rootPackage));
   if (
     profile.activePackage !== undefined &&
     profile.activePackage.path !== profile.rootPackage?.path

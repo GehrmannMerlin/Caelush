@@ -1,8 +1,4 @@
-import {
-  LLMMessageSchema,
-  type LLMAssistantMessage,
-  type LLMMessage,
-} from "@caelush/llm/messages";
+import { LLMMessageSchema, type LLMAssistantMessage, type LLMMessage } from "@caelush/llm/messages";
 import { ContextConversationError } from "./errors.js";
 import type { ContextConversationReport } from "./context-build-report.js";
 import type { TokenEstimator } from "./token-estimator.js";
@@ -61,9 +57,11 @@ export function validateAndGroupConversation(
   for (const message of messages) {
     const parsed = LLMMessageSchema.safeParse(message);
     if (!parsed.success) throw invalidHistory();
-    if (message.role === "system") throw new ContextConversationError("system messages are not allowed in conversation history");
+    if (message.role === "system")
+      throw new ContextConversationError("system messages are not allowed in conversation history");
     if (message.role === "user") {
-      if (pendingTools.size > 0) throw new ContextConversationError("conversation history has a missing tool result");
+      if (pendingTools.size > 0)
+        throw new ContextConversationError("conversation history has a missing tool result");
       closeGroup();
       current.push(message);
       continue;
@@ -123,8 +121,9 @@ export function selectRecentConversation(
     messages: selectedMessages,
     providedMessages: groups.reduce((total, group) => total + group.messages.length, 0),
     selectedMessages: selectedMessages.length,
-    droppedMessages:
-      groups.slice(0, firstSelected).reduce((total, group) => total + group.messages.length, 0),
+    droppedMessages: groups
+      .slice(0, firstSelected)
+      .reduce((total, group) => total + group.messages.length, 0),
     providedTurns: groups.length,
     selectedTurns,
     droppedTurns,

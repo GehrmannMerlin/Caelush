@@ -1,8 +1,4 @@
-import {
-  type LLMMessage,
-  type LLMSystemMessage,
-  type LLMUserMessage,
-} from "@caelush/llm/messages";
+import { type LLMMessage, type LLMSystemMessage, type LLMUserMessage } from "@caelush/llm/messages";
 import type { ContextBuildLimits } from "./context-builder.js";
 import type {
   ContextConversationReport,
@@ -126,7 +122,6 @@ function selectFiles(
 function conversationReport(
   provided: readonly ConversationTurnGroup[],
   selected: readonly ConversationTurnGroup[],
-  estimator: TokenEstimator,
   latestTurnTooLarge: boolean,
 ): ContextConversationReport {
   const selectedMessages = selected.flatMap((group) => group.messages);
@@ -178,12 +173,16 @@ export function assembleContextBudget(input: ContextBudgetInput): ContextBudgetR
     throw new ContextBudgetExceededError(breakdown);
   }
 
-  const optionalBudget = input.limits.maxInputTokens - input.limits.safetyMarginTokens - mandatoryTokens;
+  const optionalBudget =
+    input.limits.maxInputTokens - input.limits.safetyMarginTokens - mandatoryTokens;
   const conversationTarget = Math.min(
     Math.floor((optionalBudget * 2) / 5),
     input.limits.maxConversationTokens,
   );
-  const fileTarget = Math.min(optionalBudget - Math.floor((optionalBudget * 2) / 5), input.limits.maxRelevantFileTokens);
+  const fileTarget = Math.min(
+    optionalBudget - Math.floor((optionalBudget * 2) / 5),
+    input.limits.maxRelevantFileTokens,
+  );
   const firstConversation = selectRecentConversation(input.groups, conversationTarget);
   const firstFiles = selectFiles(
     input.files,
@@ -191,17 +190,21 @@ export function assembleContextBudget(input: ContextBudgetInput): ContextBudgetR
     input.estimator,
     input.limits.minRelevantFileTokens,
   );
-  const conversationUnused = Math.max(0, conversationTarget - firstConversation.estimatedTokensUsed);
+  const conversationUnused = Math.max(
+    0,
+    conversationTarget - firstConversation.estimatedTokensUsed,
+  );
   const fileUnused = Math.max(0, fileTarget - firstFiles.estimatedTokensUsed);
   const secondConversationTarget = Math.min(
     input.limits.maxConversationTokens,
     conversationTarget + fileUnused,
   );
-  const secondFileTarget = Math.min(input.limits.maxRelevantFileTokens, fileTarget + conversationUnused);
-  const secondConversation = selectRecentConversation(input.groups, secondConversationTarget);
-  let selectedGroups = input.groups.slice(
-    input.groups.length - secondConversation.selectedTurns,
+  const secondFileTarget = Math.min(
+    input.limits.maxRelevantFileTokens,
+    fileTarget + conversationUnused,
   );
+  const secondConversation = selectRecentConversation(input.groups, secondConversationTarget);
+  let selectedGroups = input.groups.slice(input.groups.length - secondConversation.selectedTurns);
   let selectedFiles = selectFiles(
     input.files,
     secondFileTarget,
@@ -216,14 +219,24 @@ export function assembleContextBudget(input: ContextBudgetInput): ContextBudgetR
     input.current,
   ];
   let messages = compose();
-  while (estimateMessages(messages, input.estimator) + input.limits.safetyMarginTokens > input.limits.maxInputTokens) {
+  while (
+    estimateMessages(messages, input.estimator) + input.limits.safetyMarginTokens >
+    input.limits.maxInputTokens
+  ) {
     if (selectedFiles.sections.length > 0) {
+      const removed = selectedFiles.sections.at(-1);
+      const original = input.files.find(
+        (section) => section.provenance.relativePath === removed?.provenance.relativePath,
+      );
+      const removedByFurtherTruncation =
+        removed !== undefined && original !== undefined && original.content !== removed.content;
       selectedFiles = {
         ...selectedFiles,
         sections: selectedFiles.sections.slice(0, -1),
         message: renderRelevantFileContext(selectedFiles.sections.slice(0, -1)),
         estimatedTokensUsed: 0,
-        furtherTruncatedFiles: selectedFiles.furtherTruncatedFiles,
+        furtherTruncatedFiles:
+          selectedFiles.furtherTruncatedFiles - (removedByFurtherTruncation ? 1 : 0),
       };
       selectedFiles = {
         ...selectedFiles,
@@ -243,7 +256,8 @@ export function assembleContextBudget(input: ContextBudgetInput): ContextBudgetR
   return {
     messages,
     estimatedInputTokens,
-    remainingTokens: input.limits.maxInputTokens - input.limits.safetyMarginTokens - estimatedInputTokens,
+    remainingTokens:
+      input.limits.maxInputTokens - input.limits.safetyMarginTokens - estimatedInputTokens,
     safetyMarginTokens: input.limits.safetyMarginTokens,
     mandatoryTokens,
     systemTokens,
@@ -253,7 +267,6 @@ export function assembleContextBudget(input: ContextBudgetInput): ContextBudgetR
     conversation: conversationReport(
       input.groups,
       selectedGroups,
-      input.estimator,
       secondConversation.latestTurnTooLarge,
     ),
     relevantFiles: relevantFilesReport(input.files, selectedFiles, input.estimator),

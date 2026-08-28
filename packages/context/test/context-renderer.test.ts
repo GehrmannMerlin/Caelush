@@ -1,5 +1,4 @@
 import { createWorkspaceId } from "@caelush/protocol";
-import type { LLMUserMessage } from "@caelush/llm/messages";
 import { describe, expect, it } from "vitest";
 import type { RelevantFileContextSection } from "../src/relevant-file-plan.js";
 import type { ProjectIntelligenceSnapshot } from "../src/snapshot.js";
@@ -79,7 +78,11 @@ function snapshot(): ProjectIntelligenceSnapshot {
   };
 }
 
-function section(content: string, relativePath: string, truncated = false): RelevantFileContextSection {
+function section(
+  content: string,
+  relativePath: string,
+  truncated = false,
+): RelevantFileContextSection {
   return {
     provenance: {
       kind: "PROJECT_FILE",
@@ -111,7 +114,7 @@ describe("context renderers", () => {
       rendered.message.content.indexOf('relative_path="packages/app/AGENTS.md"'),
     );
     expect(rendered.message.content).toContain("]]]]><![CDATA[>");
-    expect(rendered.message.content).toContain("truncated=\"true\"");
+    expect(rendered.message.content).toContain('truncated="true"');
     expect(rendered.message.content).not.toContain("not rendered");
     expect(rendered.instructionCount).toBe(2);
   });

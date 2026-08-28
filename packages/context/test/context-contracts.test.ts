@@ -8,6 +8,7 @@ import {
   ContextConversationError,
 } from "../src/index.js";
 import type { ProjectIntelligenceSnapshot } from "../src/snapshot.js";
+import type { ContextBuildLimits } from "../src/context-builder.js";
 
 function snapshot(): ProjectIntelligenceSnapshot {
   const root = "/repo";
@@ -40,7 +41,7 @@ function snapshot(): ProjectIntelligenceSnapshot {
 
 const user: LLMUserMessage = { role: "user", content: "hello" };
 
-function input(limits: Record<string, number>) {
+function input(limits: ContextBuildLimits) {
   return {
     baseSystemPrompt: "base",
     snapshot: snapshot(),
@@ -51,7 +52,9 @@ function input(limits: Record<string, number>) {
 
 describe("ContextBuilder contracts", () => {
   it("requires a positive caller-supplied maxInputTokens", () => {
-    expect(() => new ContextBuilder().build(input({ maxInputTokens: 0 }))).toThrow(ContextBuildError);
+    expect(() => new ContextBuilder().build(input({ maxInputTokens: 0 }))).toThrow(
+      ContextBuildError,
+    );
     expect(() => new ContextBuilder().build(input({ maxInputTokens: 100.5 }))).toThrow(
       ContextBuildError,
     );
@@ -69,18 +72,34 @@ describe("ContextBuilder contracts", () => {
         }),
       ),
     ).not.toThrow(ContextBuildError);
-    expect(() => new ContextBuilder().build(input({ maxInputTokens: 100, safetyMarginTokens: -1 }))).toThrow(
-      ContextBuildError,
-    );
-    expect(() => new ContextBuilder().build(input({ maxInputTokens: 100, minRelevantFileTokens: 0 }))).toThrow(
-      ContextBuildError,
-    );
+    expect(() =>
+      new ContextBuilder().build(input({ maxInputTokens: 100, safetyMarginTokens: -1 })),
+    ).toThrow(ContextBuildError);
+    expect(() =>
+      new ContextBuilder().build(input({ maxInputTokens: 100, minRelevantFileTokens: 0 })),
+    ).toThrow(ContextBuildError);
   });
 
   it("keeps build errors typed and reports contain no content fields", () => {
-    expect(new ContextBudgetExceededError({ maxInputTokens: 1, safetyMarginTokens: 0, systemTokens: 1, currentUserTokens: 1, mandatoryTokens: 2 })).toBeInstanceOf(ContextBuildError);
+    expect(
+      new ContextBudgetExceededError({
+        maxInputTokens: 1,
+        safetyMarginTokens: 0,
+        systemTokens: 1,
+        currentUserTokens: 1,
+        mandatoryTokens: 2,
+      }),
+    ).toBeInstanceOf(ContextBuildError);
     expect(new ContextConversationError("invalid history")).toBeInstanceOf(ContextBuildError);
-    expect(new ContextBudgetExceededError({ maxInputTokens: 1, safetyMarginTokens: 0, systemTokens: 1, currentUserTokens: 1, mandatoryTokens: 2 })).toMatchObject({
+    expect(
+      new ContextBudgetExceededError({
+        maxInputTokens: 1,
+        safetyMarginTokens: 0,
+        systemTokens: 1,
+        currentUserTokens: 1,
+        mandatoryTokens: 2,
+      }),
+    ).toMatchObject({
       code: "CONTEXT_BUDGET_EXCEEDED",
     });
   });

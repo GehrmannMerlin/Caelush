@@ -47,8 +47,10 @@ export class ContextDiscoveryError extends ContextError {
 export class ContextBuildError extends ContextError {
   constructor(
     message: string,
-    code: "CONTEXT_BUILD_FAILURE" | "CONTEXT_BUDGET_EXCEEDED" | "CONTEXT_CONVERSATION_INVALID" =
-      "CONTEXT_BUILD_FAILURE",
+    code:
+      | "CONTEXT_BUILD_FAILURE"
+      | "CONTEXT_BUDGET_EXCEEDED"
+      | "CONTEXT_CONVERSATION_INVALID" = "CONTEXT_BUILD_FAILURE",
     options?: ErrorOptions,
   ) {
     super(code, message, options);
@@ -67,7 +69,11 @@ export class ContextBudgetExceededError extends ContextBuildError {
   readonly breakdown: ContextBudgetBreakdown;
 
   constructor(breakdown: ContextBudgetBreakdown, options?: ErrorOptions) {
-    super("context mandatory content exceeds the input token budget", "CONTEXT_BUDGET_EXCEEDED", options);
+    super(
+      "context mandatory content exceeds the input token budget",
+      "CONTEXT_BUDGET_EXCEEDED",
+      options,
+    );
     this.breakdown = breakdown;
   }
 }

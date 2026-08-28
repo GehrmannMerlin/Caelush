@@ -1,7 +1,4 @@
-import type {
-  LLMSystemMessage,
-  LLMUserMessage,
-} from "@caelush/llm/messages";
+import type { LLMSystemMessage, LLMUserMessage } from "@caelush/llm/messages";
 import { describe, expect, it } from "vitest";
 import { ContextBudgetExceededError } from "../src/errors.js";
 import { assembleContextBudget } from "../src/context-budget.js";
@@ -25,7 +22,13 @@ const group = (content: string): ConversationTurnGroup => ({
   estimatedTokens: JSON.stringify({ role: "user", content }).length,
 });
 const file = (content: string, relativePath = "src/file.ts"): RelevantFileContextSection => ({
-  provenance: { kind: "PROJECT_FILE", path: `/repo/${relativePath}`, relativePath, score: 10, reasons: [] },
+  provenance: {
+    kind: "PROJECT_FILE",
+    path: `/repo/${relativePath}`,
+    relativePath,
+    score: 10,
+    reasons: [],
+  },
   content,
   estimatedTokens: content.length,
   bytesIncluded: Buffer.byteLength(content, "utf8"),
@@ -34,9 +37,16 @@ const file = (content: string, relativePath = "src/file.ts"): RelevantFileContex
 
 describe("final context budget", () => {
   it("fails closed when mandatory rendered messages plus safety exceed the budget", () => {
-    expect(() => assembleContextBudget({ system, current, groups: [], files: [], limits: limits(2, { safetyMarginTokens: 1 }), estimator })).toThrow(
-      ContextBudgetExceededError,
-    );
+    expect(() =>
+      assembleContextBudget({
+        system,
+        current,
+        groups: [],
+        files: [],
+        limits: limits(2, { safetyMarginTokens: 1 }),
+        estimator,
+      }),
+    ).toThrow(ContextBudgetExceededError);
   });
 
   it("uses integer 40/60 optional allocation and keeps final rendered budget", () => {
@@ -64,7 +74,9 @@ describe("final context budget", () => {
       limits: limits(500),
       estimator,
     });
-    expect(result.messages.some((message) => message.role === "user" && message !== current)).toBe(true);
+    expect(result.messages.some((message) => message.role === "user" && message !== current)).toBe(
+      true,
+    );
     expect(result.relevantFiles.selectedFiles).toBeGreaterThan(0);
   });
 
