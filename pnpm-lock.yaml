@@ -55,7 +55,11 @@ importers:
 
   apps/web: {}
 
-  packages/context: {}
+  packages/context:
+    dependencies:
+      '@caelush/protocol':
+        specifier: workspace:*
+        version: link:../protocol
 
   packages/core:
     dependencies:
