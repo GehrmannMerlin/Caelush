@@ -19,5 +19,8 @@ export interface LLMProvider {
   readonly id: ProviderId;
   supportsModel(model: ModelRef): boolean;
   getCapabilities(model: ModelRef): LLMCapabilities;
-  stream(request: LLMProviderRequest, context: LLMProviderCallContext): AsyncIterable<LLMStreamEvent>;
+  stream(
+    request: LLMProviderRequest,
+    context: LLMProviderCallContext,
+  ): AsyncIterable<LLMStreamEvent>;
 }

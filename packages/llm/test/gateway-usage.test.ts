@@ -1,14 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { LLMGateway, LLMProviderRegistry } from "../src/index.js";
-import type {
-  LLMProviderCallContext,
-  LLMProviderRequest,
-  LLMStreamEvent,
-} from "../src/index.js";
+import type { LLMProviderCallContext, LLMProviderRequest, LLMStreamEvent } from "../src/index.js";
 import { FakeLLMProvider } from "./support/fake-provider.js";
 
 const model = { provider: "local", model: "test-model" };
-type EventFactory = (request: LLMProviderRequest, context: LLMProviderCallContext) => readonly LLMStreamEvent[];
+type EventFactory = (
+  request: LLMProviderRequest,
+  context: LLMProviderCallContext,
+) => readonly LLMStreamEvent[];
 
 function createGateway(eventsForContext: EventFactory) {
   const provider = new FakeLLMProvider({ id: "local", eventsForContext });

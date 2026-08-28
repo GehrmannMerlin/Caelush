@@ -19,8 +19,9 @@ function gatewayWithError(error: unknown) {
 }
 
 async function consumeError(gateway: LLMGateway): Promise<void> {
-  for await (const _event of gateway.stream({ model, messages: [] }).events) {
+  for await (const event of gateway.stream({ model, messages: [] }).events) {
     // The provider is expected to fail before producing a complete stream.
+    void event;
   }
 }
 
@@ -44,9 +45,11 @@ describe("LLM gateway provider errors", () => {
     const unknownError = new Error("Authorization: super-secret apiKey=abc");
     const first = gatewayWithError(unknownError);
     await expect(consumeError(first.gateway)).rejects.toSatisfy((error: unknown) => {
-      return error instanceof LLMProviderError &&
+      return (
+        error instanceof LLMProviderError &&
         !error.message.includes("super-secret") &&
-        !error.message.includes("apiKey");
+        !error.message.includes("apiKey")
+      );
     });
 
     const second = gatewayWithError("boom");

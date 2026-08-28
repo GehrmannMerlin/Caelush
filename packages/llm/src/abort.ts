@@ -12,7 +12,10 @@ interface AbortScope {
   readonly cleanup: () => void;
 }
 
-export function createAbortScope(externalSignal: AbortSignal | undefined, timeoutMs: number): AbortScope {
+export function createAbortScope(
+  externalSignal: AbortSignal | undefined,
+  timeoutMs: number,
+): AbortScope {
   const controller = new AbortController();
   let abortKind: AbortKind | undefined;
   let resolveAborted: ((kind: AbortKind) => void) | undefined;

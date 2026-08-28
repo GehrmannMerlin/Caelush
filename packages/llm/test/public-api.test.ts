@@ -29,9 +29,11 @@ const requiredRuntimeExports = [
   "LLMTimeoutError",
   "LLMAbortedError",
   "LLMInvalidResponseError",
+  "LLMInvalidRequestError",
   "LLMProviderError",
   "ProviderIdSchema",
   "LLMProviderRegistry",
+  "LLMGateway",
 ] as const;
 
 function eventSummary(event: LLMStreamEvent): string {

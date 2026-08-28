@@ -14,11 +14,12 @@ describe("LLM provider call context", () => {
       signal: new AbortController().signal,
     };
 
-    for await (const _event of provider.stream(
+    for await (const event of provider.stream(
       { model: { provider: "local", model: "test-model" }, messages: [] },
       context,
     )) {
       // Consume the deterministic provider turn.
+      void event;
     }
 
     expect(provider.observedContexts).toEqual([context]);

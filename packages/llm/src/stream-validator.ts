@@ -74,14 +74,19 @@ export function createStreamValidator(
         if (toolStates.has(event.payload.toolCallId)) {
           fail(`LLM provider emitted duplicate tool call start for "${event.payload.toolCallId}".`);
         }
-        toolStates.set(event.payload.toolCallId, { state: "STARTED", name: event.payload.toolName });
+        toolStates.set(event.payload.toolCallId, {
+          state: "STARTED",
+          name: event.payload.toolName,
+        });
         return;
       }
 
       if (event.type === "tool_call.delta") {
         const lifecycle = toolStates.get(event.payload.toolCallId);
         if (lifecycle === undefined || lifecycle.state !== "STARTED") {
-          fail(`LLM provider emitted tool call delta for inactive call "${event.payload.toolCallId}".`);
+          fail(
+            `LLM provider emitted tool call delta for inactive call "${event.payload.toolCallId}".`,
+          );
         }
         return;
       }

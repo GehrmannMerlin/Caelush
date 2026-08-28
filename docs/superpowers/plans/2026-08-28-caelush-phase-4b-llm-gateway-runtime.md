@@ -29,12 +29,14 @@
 ### Task 1: Pass gateway-owned provider call context
 
 **Files:**
+
 - Modify: `packages/llm/src/provider.ts` to define runtime-only `LLMProviderCallContext` and change `LLMProvider.stream` to accept it.
 - Modify: `packages/llm/src/index.ts` to export `LLMProviderCallContext` and the adjusted provider types.
 - Modify: `packages/llm/test/support/fake-provider.ts` to record all requests/contexts and support deterministic cleanup/abort fixtures.
 - Test: `packages/llm/test/errors.test.ts`, `packages/llm/test/provider-registry.test.ts`, and a new `packages/llm/test/provider-context.test.ts`.
 
 **Interfaces:**
+
 - Consumes: Phase 4A `LLMRequest`, `LLMStreamEvent`, `LLMProvider`, Protocol `LLMCallId`.
 - Produces: `LLMProviderCallContext = { readonly callId: LLMCallId; readonly signal: AbortSignal }`; `LLMProvider.stream(request, context)`; fake observations `observedRequests`, `observedContexts`, `streamCallCount`, `lastSignal`, `lastCallId` and cleanup controls for later gateway tests.
 
@@ -47,12 +49,14 @@
 ### Task 2: Add invalid-request error and semantic validator
 
 **Files:**
+
 - Modify: `packages/llm/src/errors.ts` to add `LLM_INVALID_REQUEST` and `LLMInvalidRequestError`.
 - Create: `packages/llm/src/request-validation.ts` for cross-field request validation and timeout validation helpers.
 - Modify: `packages/llm/src/index.ts` to export only the public invalid-request error, not the private validator helper.
 - Test: new `packages/llm/test/request-validation.test.ts` and `packages/llm/test/errors.test.ts`.
 
 **Interfaces:**
+
 - Consumes: parsed `LLMRequest`, `LLMToolChoice`, Protocol `ToolDefinition`, `LLMCapabilities`.
 - Produces: private `validateLLMRequestSemantics(request, capabilities)` and `validateTimeoutMs(timeoutMs)` that throw `LLMInvalidRequestError` for missing/surplus tool relationships, duplicate tool names, known max-output limit violations, and non-positive/non-finite/non-integer timeout values. `UNKNOWN` max-output limits remain allowed and `temperature` is not capability-preflighted.
 
@@ -65,11 +69,13 @@
 ### Task 3: Implement routing, synchronous preflight, and lazy stream shell
 
 **Files:**
+
 - Create: `packages/llm/src/gateway.ts` with public `LLMGateway`, `LLMStream`, and `LLMStreamOptions` declarations plus routing/preflight and lazy event wrapper.
 - Modify: `packages/llm/src/index.ts` to export gateway runtime types/classes.
 - Test: new `packages/llm/test/gateway-routing.test.ts` and `packages/llm/test/gateway-request-validation.test.ts`.
 
 **Interfaces:**
+
 - Consumes: `LLMProviderRegistry`, `LLMProviderCallContext`, request semantic validator, Protocol `createLLMCallId`/`ModelRef`.
 - Produces: `new LLMGateway({ providers })`; `gateway.stream(request, options?): LLMStream` where `LLMStream` has `readonly callId` and `readonly events`; synchronous provider lookup/model support/capability preflight/call-id creation; lazy provider invocation on first event consumption; no provider call at `stream()` construction.
 
@@ -82,11 +88,13 @@
 ### Task 4: Add runtime event and stream lifecycle validation
 
 **Files:**
+
 - Create: `packages/llm/src/stream-validator.ts` with private stream/tool state machines and an exported internal validation function used only by the gateway.
 - Modify: `packages/llm/src/gateway.ts` to safe-parse every provider event, correlate start identity, validate event ordering, and wrap failures as `LLMInvalidResponseError`.
 - Test: new `packages/llm/test/gateway-stream-validation.test.ts`.
 
 **Interfaces:**
+
 - Consumes: `LLMStreamEventSchema`, selected provider id/model/call id, `LLMInvalidResponseError`.
 - Produces: validated downstream event stream with `NOT_STARTED → STARTED → FINISHED`; exactly one matching start and finish; no events after finish; normal iterator end without finish is invalid; no exported validator state internals.
 
@@ -99,10 +107,12 @@
 ### Task 5: Enforce tool-call lifecycle validation
 
 **Files:**
+
 - Modify: `packages/llm/src/stream-validator.ts` to track each tool call independently.
 - Test: new `packages/llm/test/gateway-tool-stream.test.ts`.
 
 **Interfaces:**
+
 - Consumes: validated `tool_call.start`, `tool_call.delta`, and `tool_call.completed` events.
 - Produces: interleaved tool streams accepted when each id follows `NOT_STARTED → STARTED → COMPLETED`; invalid transitions reject before downstream emission; completion id/name must match start; finish rejects open calls; completed input remains the provider-supplied `JsonObject` and gateway never parses partial delta JSON.
 
@@ -115,12 +125,14 @@
 ### Task 6: Implement abort scope, timeout, and consumer cancellation
 
 **Files:**
+
 - Create: `packages/llm/src/abort.ts` containing private timeout/consumer sentinels and explicit combined abort-scope setup/cleanup.
 - Modify: `packages/llm/src/gateway.ts` to use the abort scope around provider iteration and distinguish typed abort/timeout errors.
 - Modify: `packages/llm/test/support/fake-provider.ts` to support wait-until-aborted and `finally` cleanup observations.
 - Test: new `packages/llm/test/gateway-abort.test.ts`.
 
 **Interfaces:**
+
 - Consumes: `LLMStreamOptions.signal`, validated timeout, `LLMProviderCallContext.signal`.
 - Produces: pre-abort avoids provider invocation; external abort throws `LLMAbortedError`; timeout throws `LLMTimeoutError`; early consumer break aborts the provider and attempts iterator return without throwing an unhandled internal error; all timers/listeners are cleaned on finish/error/abort/cancellation.
 
@@ -133,10 +145,12 @@
 ### Task 7: Aggregate normalized events into `LLMTurnResult`
 
 **Files:**
+
 - Modify: `packages/llm/src/gateway.ts` to add `complete(request, options?): Promise<LLMTurnResult>` built exclusively on `stream()`.
 - Test: new `packages/llm/test/gateway-usage.test.ts` and `packages/llm/test/gateway-complete.test.ts`.
 
 **Interfaces:**
+
 - Consumes: validated event stream and existing `LLMTurnResultSchema`/`LLMTurnResult`.
 - Produces: ordered text concatenation, completed-tool-call arrival order, latest usage snapshot, finish finalUsage precedence, omitted missing fields, finish reason copied exactly, and exactly one provider invocation for text/tool/parallel-tool scenarios.
 
@@ -149,10 +163,12 @@
 ### Task 8: Normalize provider/runtime errors and prove no retry
 
 **Files:**
+
 - Modify: `packages/llm/src/gateway.ts` to preserve typed `LLMError` subclasses, wrap unknown `Error`/thrown values as contextual `LLMProviderError`, and convert schema/lifecycle failures to `LLMInvalidResponseError`.
 - Test: new `packages/llm/test/gateway-errors.test.ts`.
 
 **Interfaces:**
+
 - Consumes: provider thrown values and `LLMError` hierarchy.
 - Produces: preserved authentication/rate-limit/network/timeout/abort subclasses, safe provider-error messages with provider/model context but no prompts/tool args/credentials, no retry/sleep, and one provider call for each failure class.
 
@@ -165,6 +181,7 @@
 ### Task 9: Public API, architecture guards, documentation, and final verification
 
 **Files:**
+
 - Modify: `packages/llm/src/index.ts` and `tests/architecture/package-boundaries.test.ts` for the final public/architecture contract.
 - Modify: `packages/llm/test/public-api.test.ts` with gateway/context/error exports and type-narrowing coverage without `as any`.
 - Modify: `docs/architecture/llm-gateway.md` with the Phase 4B lifecycle, responsibilities, state machines, usage, abort, timeout, cancellation, one-turn/no-retry rules, and Phase 4C pending marker.
@@ -173,6 +190,7 @@
 - Test: architecture/public API tests and all package tests.
 
 **Interfaces:**
+
 - Consumes: completed gateway implementation and final source tree.
 - Produces: built-root exports for `LLMGateway`, `LLMStream`, `LLMStreamOptions`, `LLMProviderCallContext`, and `LLMInvalidRequestError`; no exports for fake/validator/abort internals; documented public boundary.
 

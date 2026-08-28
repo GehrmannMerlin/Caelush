@@ -1,18 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  LLMAbortedError,
-  LLMGateway,
-  LLMProviderRegistry,
-  LLMTimeoutError,
-} from "../src/index.js";
+import { LLMAbortedError, LLMGateway, LLMProviderRegistry, LLMTimeoutError } from "../src/index.js";
 import type { LLMProviderCallContext, LLMProviderRequest } from "../src/index.js";
 import { FakeLLMProvider } from "./support/fake-provider.js";
 
 const model = { provider: "local", model: "test-model" };
-type EventFactory = (request: LLMProviderRequest, context: LLMProviderCallContext) => readonly unknown[];
+type EventFactory = (
+  request: LLMProviderRequest,
+  context: LLMProviderCallContext,
+) => readonly unknown[];
 
 function createAbortFixture(waitUntilAborted: boolean, eventsForContext: EventFactory) {
-  const provider = new FakeLLMProvider({ id: "local", waitUntilAborted, rawEventsForContext: eventsForContext });
+  const provider = new FakeLLMProvider({
+    id: "local",
+    waitUntilAborted,
+    rawEventsForContext: eventsForContext,
+  });
   const providers = new LLMProviderRegistry();
   providers.register(provider);
   return { gateway: new LLMGateway({ providers }), provider };
@@ -33,11 +35,14 @@ describe("LLM gateway abort scope", () => {
     const { gateway, provider } = createAbortFixture(false, () => []);
     const stream = gateway.stream({ model, messages: [] }, { signal: controller.signal });
 
-    await expect((async () => {
-      for await (const _event of stream.events) {
-        // The pre-abort must fail before the first provider event.
-      }
-    })()).rejects.toBeInstanceOf(LLMAbortedError);
+    await expect(
+      (async () => {
+        for await (const event of stream.events) {
+          // The pre-abort must fail before the first provider event.
+          void event;
+        }
+      })(),
+    ).rejects.toBeInstanceOf(LLMAbortedError);
     expect(provider.streamCallCount).toBe(0);
   });
 
@@ -47,8 +52,12 @@ describe("LLM gateway abort scope", () => {
       { type: "stream.start", payload: { callId: context.callId, providerId: "local", model } },
     ]);
     const consuming = (async () => {
-      for await (const _event of gateway.stream({ model, messages: [] }, { signal: controller.signal }).events) {
+      for await (const event of gateway.stream(
+        { model, messages: [] },
+        { signal: controller.signal },
+      ).events) {
         // Keep consuming until the external controller aborts.
+        void event;
       }
     })();
     await waitForProviderCall(provider);
@@ -64,8 +73,9 @@ describe("LLM gateway abort scope", () => {
       { type: "stream.start", payload: { callId: context.callId, providerId: "local", model } },
     ]);
     const consuming = (async () => {
-      for await (const _event of gateway.stream({ model, messages: [] }, { timeoutMs: 10 }).events) {
+      for await (const event of gateway.stream({ model, messages: [] }, { timeoutMs: 10 }).events) {
         // Keep consuming until the gateway timeout fires.
+        void event;
       }
     })();
     await waitForProviderCall(provider);
@@ -79,7 +89,8 @@ describe("LLM gateway abort scope", () => {
     const { gateway, provider } = createAbortFixture(true, (_request, context) => [
       { type: "stream.start", payload: { callId: context.callId, providerId: "local", model } },
     ]);
-    for await (const _event of gateway.stream({ model, messages: [] }).events) {
+    for await (const event of gateway.stream({ model, messages: [] }).events) {
+      void event;
       break;
     }
 
@@ -94,8 +105,9 @@ describe("LLM gateway abort scope", () => {
         { type: "stream.start", payload: { callId: context.callId, providerId: "local", model } },
         { type: "stream.finish", payload: { finishReason: "STOP" } },
       ]);
-      for await (const _event of gateway.stream({ model, messages: [] }).events) {
+      for await (const event of gateway.stream({ model, messages: [] }).events) {
         // Consume the complete turn.
+        void event;
       }
       expect(vi.getTimerCount()).toBe(0);
     } finally {

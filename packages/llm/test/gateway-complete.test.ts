@@ -1,17 +1,13 @@
 import { describe, expect, it } from "vitest";
-import {
-  LLMGateway,
-  LLMProviderRegistry,
-} from "../src/index.js";
-import type {
-  LLMProviderCallContext,
-  LLMProviderRequest,
-  LLMStreamEvent,
-} from "../src/index.js";
+import { LLMGateway, LLMProviderRegistry } from "../src/index.js";
+import type { LLMProviderCallContext, LLMProviderRequest, LLMStreamEvent } from "../src/index.js";
 import { FakeLLMProvider } from "./support/fake-provider.js";
 
 const model = { provider: "local", model: "test-model" };
-type EventFactory = (request: LLMProviderRequest, context: LLMProviderCallContext) => readonly LLMStreamEvent[];
+type EventFactory = (
+  request: LLMProviderRequest,
+  context: LLMProviderCallContext,
+) => readonly LLMStreamEvent[];
 
 function createGateway(eventsForContext: EventFactory) {
   const provider = new FakeLLMProvider({ id: "local", eventsForContext });
@@ -44,8 +40,14 @@ describe("LLM gateway complete aggregation", () => {
       { type: "stream.start", payload: { callId: context.callId, providerId: "local", model } },
       { type: "tool_call.start", payload: { toolCallId: "a", toolName: "first_tool" } },
       { type: "tool_call.start", payload: { toolCallId: "b", toolName: "second_tool" } },
-      { type: "tool_call.completed", payload: { id: "b", name: "second_tool", input: { order: 2 } } },
-      { type: "tool_call.completed", payload: { id: "a", name: "first_tool", input: { order: 1 } } },
+      {
+        type: "tool_call.completed",
+        payload: { id: "b", name: "second_tool", input: { order: 2 } },
+      },
+      {
+        type: "tool_call.completed",
+        payload: { id: "a", name: "first_tool", input: { order: 1 } },
+      },
       { type: "stream.finish", payload: { finishReason: "TOOL_CALLS" } },
     ]);
 

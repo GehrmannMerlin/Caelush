@@ -55,10 +55,18 @@ describe("LLM gateway request preflight", () => {
 
   it("allows UNKNOWN capabilities but rejects UNSUPPORTED tool calling", () => {
     expect(() =>
-      gatewayWithCapabilities({ toolCalling: "UNKNOWN" }).stream({ model, messages: [], tools: [tool] }),
+      gatewayWithCapabilities({ toolCalling: "UNKNOWN" }).stream({
+        model,
+        messages: [],
+        tools: [tool],
+      }),
     ).not.toThrow();
     expect(() =>
-      gatewayWithCapabilities({ toolCalling: "UNSUPPORTED" }).stream({ model, messages: [], tools: [tool] }),
+      gatewayWithCapabilities({ toolCalling: "UNSUPPORTED" }).stream({
+        model,
+        messages: [],
+        tools: [tool],
+      }),
     ).toThrow(LLMCapabilityUnsupportedError);
   });
 });

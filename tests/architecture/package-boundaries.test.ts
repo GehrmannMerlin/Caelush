@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -72,19 +72,11 @@ describe("package boundaries", () => {
   });
 
   it("keeps AI SDK imports and explicit any out of production source", async () => {
+    const llmSourceFileNames = (
+      await readdir(path.join(repositoryRoot, "packages", "llm", "src"))
+    ).filter((fileName) => fileName.endsWith(".ts"));
     const llmSourceContents = await Promise.all(
-      [
-        "messages.ts",
-        "request.ts",
-        "capabilities.ts",
-        "usage.ts",
-        "tool-call.ts",
-        "result.ts",
-        "events.ts",
-        "errors.ts",
-        "provider.ts",
-        "provider-registry.ts",
-      ].map((fileName) =>
+      llmSourceFileNames.map((fileName) =>
         readFile(path.join(repositoryRoot, "packages", "llm", "src", fileName), "utf8"),
       ),
     );
@@ -92,6 +84,24 @@ describe("package boundaries", () => {
       false,
     );
     expect(llmSourceContents.some((contents) => explicitAnyPattern.test(contents))).toBe(false);
+  });
+
+  it("keeps the Phase 4B gateway isolated from adapters and host execution", async () => {
+    const llmSourceFileNames = (
+      await readdir(path.join(repositoryRoot, "packages", "llm", "src"))
+    ).filter((fileName) => fileName.endsWith(".ts"));
+    const llmSourceContents = await Promise.all(
+      llmSourceFileNames.map((fileName) =>
+        readFile(path.join(repositoryRoot, "packages", "llm", "src", fileName), "utf8"),
+      ),
+    );
+    const productionSource = llmSourceContents.join("\n");
+    expect(productionSource).not.toMatch(/from\s+["']@caelush\/(?:daemon|storage|events|core)["']/);
+    expect(productionSource).not.toMatch(/from\s+["'](?:ai|@ai-sdk\/|openai|anthropic|@google\/)/);
+    expect(productionSource).not.toMatch(/\b(?:fetch|ToolDispatcher|AgentLoop|runAgent)\s*\(/);
+    expect(productionSource).not.toContain("providerOptions");
+    expect(productionSource).not.toContain("stream.error");
+    expect(productionSource).not.toContain("reasoning.delta");
   });
 
   it("keeps Events provider-neutral and Storage below Core", async () => {

@@ -41,10 +41,7 @@ describe("LLM gateway request semantics", () => {
       ),
     ).toThrow(LLMInvalidRequestError);
     expect(() =>
-      validateLLMRequestSemantics(
-        { model, messages: [], tools: [tool, tool] },
-        capabilities,
-      ),
+      validateLLMRequestSemantics({ model, messages: [], tools: [tool, tool] }, capabilities),
     ).toThrow(LLMInvalidRequestError);
   });
 
