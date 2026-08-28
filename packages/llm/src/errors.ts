@@ -4,6 +4,7 @@ export type LLMErrorCode =
   | "LLM_PROVIDER_NOT_FOUND"
   | "LLM_MODEL_UNSUPPORTED"
   | "LLM_CAPABILITY_UNSUPPORTED"
+  | "LLM_INVALID_REQUEST"
   | "LLM_AUTHENTICATION"
   | "LLM_RATE_LIMIT"
   | "LLM_NETWORK"
@@ -69,6 +70,12 @@ export class LLMCapabilityUnsupportedError extends LLMError {
       `LLM model "${model.model}" does not support capability "${capability}".`,
       withRetryability({ model, providerId: model.provider }, false),
     );
+  }
+}
+
+export class LLMInvalidRequestError extends LLMError {
+  constructor(message = "LLM request is invalid.", context: LLMErrorContext = {}) {
+    super("LLM_INVALID_REQUEST", message, withRetryability(context, false));
   }
 }
 

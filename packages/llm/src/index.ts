@@ -32,6 +32,7 @@ export {
   LLMCapabilityUnsupportedError,
   LLMError,
   LLMInvalidResponseError,
+  LLMInvalidRequestError,
   LLMModelUnsupportedError,
   LLMNetworkError,
   LLMProviderError,

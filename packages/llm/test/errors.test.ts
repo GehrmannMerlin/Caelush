@@ -12,6 +12,7 @@ import {
   LLMCapabilityUnsupportedError,
   LLMError,
   LLMInvalidResponseError,
+  LLMInvalidRequestError,
   LLMModelUnsupportedError,
   LLMNetworkError,
   LLMProviderError,
@@ -43,6 +44,7 @@ describe("LLM errors and provider boundary", () => {
       new LLMTimeoutError("request timed out", { providerId: "local" }),
       new LLMAbortedError("request aborted", { providerId: "local" }),
       new LLMInvalidResponseError("malformed response", { providerId: "local" }),
+      new LLMInvalidRequestError("invalid request", { providerId: "local" }),
       new LLMProviderError("provider failed", { providerId: "local" }),
     ];
 
@@ -76,10 +78,10 @@ describe("LLM errors and provider boundary", () => {
       getCapabilities: () => capabilities,
       async *stream(
         request: LLMProviderRequest,
-        signal: AbortSignal,
+        context: { callId: ReturnType<typeof createLLMCallId>; signal: AbortSignal },
       ): AsyncIterable<LLMStreamEvent> {
         void request;
-        void signal;
+        void context;
         yield event;
       },
     };
@@ -89,7 +91,7 @@ describe("LLM errors and provider boundary", () => {
     const streamed = [];
     for await (const value of provider.stream(
       { model, messages: [] },
-      new AbortController().signal,
+      { callId: createLLMCallId(), signal: new AbortController().signal },
     )) {
       streamed.push(value);
     }
