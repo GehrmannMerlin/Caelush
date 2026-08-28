@@ -25,3 +25,4 @@ export type {
   AgentToolRequest,
 } from "./agent-decision.js";
 export { classifyAgentDecision } from "./agent-decision-mapper.js";
+export { summarizeAgentDecision, summarizeAgentLoopOutcome } from "./agent-summary.js";
