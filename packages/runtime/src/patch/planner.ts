@@ -103,13 +103,14 @@ export async function preparePatch(
     const source = await sourceFile(context.pathResolver, context.filesystem, operation.path);
     const beforeVersion = version(source.bytes);
     if (operation.kind === "DELETE") {
+      const decoded = decodePatchText(operation.path, source.bytes);
       changes.push({
         operation,
         source: source.resolved,
         beforeBytes: source.bytes,
         beforeVersion,
         additions: 0,
-        deletions: source.bytes.byteLength === 0 ? 0 : 1,
+        deletions: decoded.text.length === 0 ? 0 : decoded.originalLines.length,
       });
       preparedBytes += source.bytes.byteLength;
       ensurePreparedBudget(preparedBytes);

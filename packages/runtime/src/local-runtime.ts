@@ -72,7 +72,7 @@ export class LocalRuntime implements Runtime {
       textSearch: this.textSearch,
       patch: createRuntimePatchService(
         new WorkspacePathResolver(scope),
-        createLocalPatchMutationFileSystem(),
+        createLocalPatchMutationFileSystem(logicalRoot),
       ),
     };
   }

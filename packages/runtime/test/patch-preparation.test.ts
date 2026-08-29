@@ -129,4 +129,32 @@ describe("patch preparation contract", () => {
       ),
     ).rejects.toThrowError(expect.objectContaining({ code: "BINARY_FILE" }));
   });
+
+  it("rejects binary delete sources because all existing patch sources are text-only", async () => {
+    const parent = await mkdtemp(path.join(os.tmpdir(), "caelush-patch-delete-binary-"));
+    temporaryDirectories.push(parent);
+    const workspace = path.join(parent, "workspace");
+    await mkdir(workspace);
+    await writeFile(path.join(workspace, "binary.png"), Uint8Array.from([0, 1, 2]));
+    const scope = await new LocalRuntime().openWorkspace({
+      id: createWorkspaceId(),
+      path: workspace,
+    });
+    const filesystem: PatchMutationFileSystem = {
+      readFileBytes: async (absolutePath) => new Uint8Array(await readFile(absolutePath)),
+      getMetadata: (absolutePath) => scope.filesystem.getMetadata(absolutePath),
+      writePatchFile: async () => undefined,
+      removePatchFile: async () => undefined,
+      movePatchFile: async () => undefined,
+      makePatchDirectory: async () => undefined,
+      removePatchDirectoryIfEmpty: async () => undefined,
+    };
+
+    await expect(
+      preparePatch(
+        parsePatch(["*** Begin Patch", "*** Delete File: binary.png", "*** End Patch"].join("\n")),
+        { pathResolver: scope.pathResolver, filesystem },
+      ),
+    ).rejects.toThrowError(expect.objectContaining({ code: "BINARY_FILE" }));
+  });
 });

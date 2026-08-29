@@ -104,7 +104,37 @@ function localKind(stats: {
   return "OTHER" as const;
 }
 
-export function createLocalPatchMutationFileSystem(): PatchMutationFileSystem {
+async function assertNoSymlinkAncestors(
+  absolutePath: string,
+  workspaceRoot: string,
+): Promise<void> {
+  const normalizedRoot = path.normalize(workspaceRoot);
+  let current = path.dirname(absolutePath);
+  while (path.normalize(current) !== normalizedRoot) {
+    try {
+      const stats = await lstat(current);
+      if (stats.isSymbolicLink()) {
+        throw new RuntimePatchError("SYMLINK_MUTATION_NOT_ALLOWED");
+      }
+    } catch (error) {
+      if (error instanceof RuntimePatchError) throw error;
+      if (filesystemErrorCode(error) !== "ENOENT") throw error;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+}
+
+export function createLocalPatchMutationFileSystem(
+  workspaceRoot?: string,
+): PatchMutationFileSystem {
+  const mutationRoot = workspaceRoot === undefined ? undefined : path.normalize(workspaceRoot);
+  const assertAncestors = (absolutePath: string) =>
+    mutationRoot === undefined
+      ? Promise.resolve()
+      : assertNoSymlinkAncestors(absolutePath, mutationRoot);
+
   return {
     async readFileBytes(absolutePath) {
       return new Uint8Array(await readFile(absolutePath));
@@ -122,16 +152,20 @@ export function createLocalPatchMutationFileSystem(): PatchMutationFileSystem {
       }
     },
     async writePatchFile(absolutePath, bytes) {
+      await assertAncestors(absolutePath);
       const metadata = await this.getMetadata(absolutePath);
       if (metadata?.kind === "SYMLINK") throw new RuntimePatchError("SYMLINK_MUTATION_NOT_ALLOWED");
       await writeFile(absolutePath, bytes);
     },
     async removePatchFile(absolutePath) {
+      await assertAncestors(absolutePath);
       const metadata = await this.getMetadata(absolutePath);
       if (metadata?.kind === "SYMLINK") throw new RuntimePatchError("SYMLINK_MUTATION_NOT_ALLOWED");
       await unlink(absolutePath);
     },
     async movePatchFile(sourcePath, destinationPath) {
+      await assertAncestors(sourcePath);
+      await assertAncestors(destinationPath);
       const source = await this.getMetadata(sourcePath);
       const destination = await this.getMetadata(destinationPath);
       if (source?.kind === "SYMLINK" || destination?.kind === "SYMLINK") {
@@ -140,6 +174,7 @@ export function createLocalPatchMutationFileSystem(): PatchMutationFileSystem {
       await rename(sourcePath, destinationPath);
     },
     async makePatchDirectory(absolutePath) {
+      await assertAncestors(absolutePath);
       try {
         await mkdir(absolutePath);
       } catch (error) {
@@ -149,6 +184,7 @@ export function createLocalPatchMutationFileSystem(): PatchMutationFileSystem {
       }
     },
     async removePatchDirectoryIfEmpty(absolutePath) {
+      await assertAncestors(absolutePath);
       try {
         await rmdir(absolutePath);
       } catch (error) {

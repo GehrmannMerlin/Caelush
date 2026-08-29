@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createWorkspaceId } from "@caelush/protocol";
 import { LocalRuntime, RuntimePatchError } from "../src/index.js";
+import { createLocalPatchMutationFileSystem } from "../src/patch/committer.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -51,6 +52,12 @@ describe("mutation path boundaries", () => {
     );
     await expect(
       scope.pathResolver.resolveMutationTarget("linked-dir/new.txt"),
+    ).rejects.toThrowError(expect.objectContaining({ code: "SYMLINK_MUTATION_NOT_ALLOWED" }));
+    await expect(
+      createLocalPatchMutationFileSystem(workspace).writePatchFile(
+        path.join(workspace, "linked-dir", "new.txt"),
+        new TextEncoder().encode("unsafe"),
+      ),
     ).rejects.toThrowError(expect.objectContaining({ code: "SYMLINK_MUTATION_NOT_ALLOWED" }));
   });
 });
