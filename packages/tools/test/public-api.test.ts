@@ -13,6 +13,9 @@ describe("@caelush/tools public API", () => {
     expect(tools.DEFAULT_TOOL_REGISTRY_OPTIONS).toBeDefined();
     expect(tools.DEFAULT_TOOL_OUTPUT_POLICY).toBeDefined();
     expect(tools.boundToolModelContent).toBeDefined();
+    expect(tools.createExecCommandRegistration).toBeDefined();
+    expect(tools.createWriteStdinRegistration).toBeDefined();
+    expect(tools.createShellToolRegistrations).toBeDefined();
   });
 
   it("does not leak Ajv implementation types through declarations", async () => {

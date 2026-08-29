@@ -13,11 +13,18 @@ import { WorkspacePathResolver } from "./workspace-path.js";
 import { createLocalPatchMutationFileSystem } from "./patch/committer.js";
 import { createRuntimePatchService } from "./patch/service.js";
 import type { RuntimeWorkspaceScope } from "./workspace-scope.js";
+import { LocalProcessManager, type LocalProcessManagerOptions } from "./exec/process-manager.js";
+import { LocalRuntimeExecService } from "./exec/service.js";
+import { LocalShellResolver, type LocalShellResolverOptions } from "./exec/shell-resolver.js";
 
 export interface LocalRuntimeOptions {
   readonly filesystem?: RuntimeFileSystem;
   readonly discovery?: RuntimeFileDiscovery;
   readonly textSearch?: RuntimeTextSearch;
+  readonly processManager?: LocalProcessManager;
+  readonly processManagerOptions?: LocalProcessManagerOptions;
+  readonly shellResolver?: LocalShellResolver;
+  readonly shellResolverOptions?: LocalShellResolverOptions;
 }
 
 export class LocalRuntime implements Runtime {
@@ -25,11 +32,17 @@ export class LocalRuntime implements Runtime {
   private readonly filesystem: RuntimeFileSystem;
   private readonly discovery: RuntimeFileDiscovery;
   private readonly textSearch: RuntimeTextSearch;
+  private readonly processManager: LocalProcessManager;
+  private readonly shellResolver: LocalShellResolver;
 
   constructor(options: LocalRuntimeOptions = {}) {
     this.filesystem = options.filesystem ?? new LocalRuntimeFileSystem();
     this.discovery = options.discovery ?? new LocalRuntimeFileDiscovery();
     this.textSearch = options.textSearch ?? new LocalRipgrepRunner();
+    this.processManager =
+      options.processManager ?? new LocalProcessManager(options.processManagerOptions);
+    this.shellResolver =
+      options.shellResolver ?? new LocalShellResolver(options.shellResolverOptions);
   }
 
   supports(ref: RuntimeRef): boolean {
@@ -74,6 +87,15 @@ export class LocalRuntime implements Runtime {
         new WorkspacePathResolver(scope),
         createLocalPatchMutationFileSystem(logicalRoot),
       ),
+      exec: new LocalRuntimeExecService({
+        pathResolver: new WorkspacePathResolver(scope),
+        processManager: this.processManager,
+        shellResolver: this.shellResolver,
+      }),
     };
+  }
+
+  async dispose(): Promise<void> {
+    await this.processManager.dispose();
   }
 }

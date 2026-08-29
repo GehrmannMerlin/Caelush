@@ -1,5 +1,7 @@
 # Caelush Tool System
 
+Phase 8C adds `exec_command` and `write_stdin` as explicit registrations only. They resolve the same stable `RuntimeResolver` used by the caller and delegate to `RuntimeWorkspaceScope.exec`; they do not spawn processes themselves. `ToolDispatcher` continues to own the durable ToolInvocation/Observation lifecycle and maps `ToolExecutionUncertainError` to the existing uncertain-side-effect barrier. The default V1 catalog remains deferred to Phase 8D. See [Shell and Process Runtime](process-runtime.md) for shell, process-session, output, and phase-boundary details.
+
 Caelush Phase 7 is fixed to exactly three rounds:
 
 - Phase 7A — Tool Contracts, Registry & Schema Runtime

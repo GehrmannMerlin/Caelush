@@ -178,10 +178,12 @@ describe("package boundaries", () => {
     expect(dependencies[protocolPackageName]).toBe("workspace:*");
     expect(dependencies["@caelush/shared"]).toBe("workspace:*");
     expect(dependencies["fast-glob"]).toBe("3.3.3");
+    expect(dependencies["node-pty"]).toBe("1.1.0");
     expect(Object.keys(dependencies).sort()).toEqual([
       "@caelush/protocol",
       "@caelush/shared",
       "fast-glob",
+      "node-pty",
     ]);
 
     const sourceRoot = path.join(repositoryRoot, "packages", "runtime", "src");
@@ -212,7 +214,10 @@ describe("package boundaries", () => {
     const childProcessImports = sources
       .filter(({ contents }) => contents.includes('from "node:child_process"'))
       .map(({ relativePath }) => relativePath);
-    expect(childProcessImports).toEqual(["packages/runtime/src/search/ripgrep-runner.ts"]);
+    expect(childProcessImports).toEqual([
+      "packages/runtime/src/exec/pipe-process-adapter.ts",
+      "packages/runtime/src/search/ripgrep-runner.ts",
+    ]);
     expect(source).not.toContain("shell: true");
     expect(source).not.toMatch(/\b(?:exec|execSync)\s*\(/);
   });

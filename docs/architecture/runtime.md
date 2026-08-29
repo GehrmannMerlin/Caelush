@@ -1,5 +1,7 @@
 # Local Runtime Foundation
 
+Phase 8C extends the runtime with a workspace-bound `RuntimeExecService`. It is implemented by one long-lived `LocalProcessManager` per `LocalRuntime`, which selects a pipe adapter or a lazy `node-pty` adapter. See [Shell and Process Runtime](process-runtime.md) for the session, ownership, bounded-output, stale-generation, and Phase 8C boundary rules. This execution capability remains below Tools and above the OS process adapters; it has no Storage, Core, Events, Security, or Verification dependency.
+
 Phase 8A establishes the first concrete execution substrate for Caelush. It is deliberately below the Tool System and deliberately narrower than a general host runtime.
 
 ## Architecture

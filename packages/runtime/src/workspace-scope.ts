@@ -4,6 +4,7 @@ import type { RuntimeFileSystem } from "./filesystem/types.js";
 import type { RuntimeTextSearch } from "./search/text-search.js";
 import type { WorkspacePathResolver } from "./workspace-path.js";
 import type { RuntimePatchService } from "./patch/service.js";
+import type { RuntimeExecService } from "./exec/contracts.js";
 
 export interface RuntimeWorkspaceScope {
   readonly workspace: WorkspaceRef;
@@ -14,4 +15,5 @@ export interface RuntimeWorkspaceScope {
   readonly discovery: RuntimeFileDiscovery;
   readonly textSearch: RuntimeTextSearch;
   readonly patch: RuntimePatchService;
+  readonly exec: RuntimeExecService;
 }

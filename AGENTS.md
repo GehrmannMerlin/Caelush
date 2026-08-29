@@ -210,7 +210,13 @@ pnpm check
 
 当前 Phase 8B 已在上述 8A 只读基线之上增加唯一的 `apply_patch` verified patch engine：支持严格 bounded Add/Update/Delete/Move、全量 precommit raw-byte SHA-256/size guard、顺序 commit、best-effort rollback 与 uncertainty fail-closed；它不实现 Shell/Process/Git、权限/Approval resolution、sandbox、retry、timeout、cancellation、parallelism、Verification execution 或 `COMPLETED` transition。
 
+当前 Phase 8C 在上述 8A/8B 基线之上增加唯一的 `exec_command` 与 `write_stdin` Tool，以及 `LocalRuntime` 持有的统一 `RuntimeExecService` → `LocalProcessManager` → pipe/PTY adapter 执行路径。Process session 只存在于一个 Runtime generation 的内存中，必须绑定 owner Run；不得新增 process table、Storage migration、PID reattach、process event side channel、AgentState.activeProcesses 直接写入或新的 default catalog。Shell 必须使用固定平台解析器与显式 argv，pipe 必须是 `spawn(..., shell: false)`，workdir 必须复用 workspace-relative/realpath containment，模型不得传 arbitrary shell、env、timeout 或 sandbox 参数。
+
+Phase 8C 的 non-zero exit 和 signal exit 是正常 `isError: false` 结果；只有参数、workdir、shell/PTY、capacity、spawn-before-start、session 和 stdin operational errors 才是普通 Tool error。旧 runtime generation session、已开始但无法证明副作用边界的 process/stdio failure 必须经 `ToolExecutionUncertainError` 进入 `UNCERTAIN_SIDE_EFFECT`，不得自动重跑 command；既有 Tool Batch uncertainty barrier 负责跳过 trailing Tool。`yield_time_ms` 只是观察等待，不是 timeout、kill 或 cancellation；无 idle timeout。Runtime output 必须 bounded、incremental drain、记录 omitted bytes，并经过 streaming UTF-8/ANSI/OSC/CSI/control sanitization；这不是 Phase 9 secret redaction。
+
 Phase 8 后续必须遵守固定的 8B、8C、8D 边界；不得新增 Phase 8 轮次，也不得在 8A/8B 提前实现后续能力。
+
+本轮完成后，Phase 8C 是当前完成边界；Phase 8D 仍负责 Git、最终 Built-in Tool catalog 和统一 effect bridge。Phase 8C 不实现权限/Approval resolution、sandbox、retry、timeout policy、Run cancellation、parallelism、Verification execution、Git、process persistence、process event bridge、AgentState effect bridge 或 `COMPLETED` transition。
 
 Phase 5B context rules:
 

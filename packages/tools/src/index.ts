@@ -78,6 +78,9 @@ export type {
 export { ToolBatchInfrastructureError, ToolBatchInputError } from "./batch-errors.js";
 export { createReadOnlyFilesystemToolRegistrations } from "./builtins/read-only-filesystem-tools.js";
 export { createFileMutationToolRegistrations } from "./builtins/file-mutation-tools.js";
+export { createExecCommandRegistration, execCommandDefinition } from "./builtins/exec-command.js";
+export { createWriteStdinRegistration, writeStdinDefinition } from "./builtins/write-stdin.js";
+export { createShellToolRegistrations } from "./builtins/shell-tools.js";
 export { UNCERTAIN_SIDE_EFFECT, isUncertainToolExecution } from "./execution-disposition.js";
 export {
   createToolCompletedEvent,

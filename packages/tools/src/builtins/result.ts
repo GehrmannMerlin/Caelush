@@ -1,6 +1,8 @@
 import {
   RuntimeError,
   RuntimeInvariantError,
+  RuntimeProcessStaleSessionError,
+  RuntimeProcessUncertainError,
   type RuntimeResolver,
   type RuntimeWorkspaceScope,
 } from "@caelush/runtime";
@@ -41,6 +43,26 @@ export const READ_ONLY_OUTPUT_SCHEMA = {
   additionalProperties: false,
 };
 
+export const EXEC_OUTPUT_SCHEMA = {
+  type: "object",
+  properties: {
+    ok: { type: "boolean" },
+    error: { type: "string" },
+    status: { type: "string", enum: ["RUNNING", "EXITED"] },
+    sessionId: { type: "string" },
+    exitCode: { type: "integer" },
+    signal: { type: "string" },
+    totalOutputBytes: { type: "integer", minimum: 0 },
+    omittedBytes: { type: "integer", minimum: 0 },
+    tty: { type: "boolean" },
+    workdir: { type: "string" },
+    durationMs: { type: "integer", minimum: 0 },
+    charsAcceptedBytes: { type: "integer", minimum: 0 },
+  },
+  required: ["ok"],
+  additionalProperties: false,
+};
+
 export function errorResult(code: string, message: string): ToolExecutionResult {
   return { content: message, details: { ok: false, error: code }, isError: true };
 }
@@ -61,6 +83,11 @@ export async function withRuntimeScope(
     return await operation(await runtime.openWorkspace(request.environment.workspace));
   } catch (error) {
     if (error instanceof RuntimeInvariantError) throw error;
+    if (
+      error instanceof RuntimeProcessStaleSessionError ||
+      error instanceof RuntimeProcessUncertainError
+    )
+      throw error;
     if (error instanceof RuntimeError) return errorResult(error.code, safeRuntimeMessage(error));
     throw error;
   }

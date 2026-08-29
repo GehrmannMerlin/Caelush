@@ -87,3 +87,4 @@ export {
   RIPGREP_EXECUTABLE,
 } from "./search/ripgrep-runner.js";
 export { parseRipgrepJson } from "./search/ripgrep-parser.js";
+export * from "./exec/index.js";

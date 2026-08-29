@@ -2,9 +2,9 @@
 
 Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI、Web 和其他宿主共享同一个可观察、可取消、可验证、可扩展的 Agent Core。
 
-本轮当前阶段为 **V1 Phase 8B：Safe File Mutation & Patch Engine**；文档中保留的 Phase 8A 描述是已完成的只读基线。
+本轮当前阶段为 **V1 Phase 8C：Shell Execution & Managed Process Runtime**；Phase 8A 只读基线和 Phase 8B patch engine 均已完成。
 
-当前仓库处于 **V1 Phase 8A：Local Runtime Foundation & Filesystem Read/Search**。Phase 1 的 JSON-safe Protocol Contract、Typed AgentEvent 和 Core Run State Machine、Phase 2 的可恢复 SQLite 持久化/Durable Event Store/EventBus、Phase 3 的唯一本地 Daemon/Session/Run HTTP API/SSE Event Stream，以及 Phase 4 的 Caelush-owned LLM contracts、Provider Registry 和单次 provider-turn streaming runtime 已完成；Phase 5A 建立只读 workspace/project intelligence，Phase 5B 针对具体任务发现、排序并预算项目文件，Phase 5C 将项目事实、指令、相关文件和最近完整对话按 caller-supplied input budget 组装为 provider-independent、LLMRequest-ready 的 `LLMMessage[]`；Phase 6A 定义 deterministic Agent decision、step、tool-boundary 和 kernel-state semantics，Phase 6B 将这些合约接入 ContextBuilder 和单次 LLM provider turn，Phase 6C 再通过 RunController、Conversation Ledger、Continuation checkpoint、原子 SQLite execution commit 与 Durable Event Trace 将它们连接到 local-host recovery；Phase 7A 建立严格 Schema Runtime、不可变 Tool Registry、模型/运行时一致性守卫和 Tool Output Policy，Phase 7B 增加注入式 ToolDispatcher、Gate、durable ToolInvocation/Observation lifecycle、atomic execution persistence、idempotency 与 restart recovery，Phase 7C 增加严格顺序 Tool Batch、uncertain-side-effect recovery barrier、approval boundary 和 RunController runtime integration；Phase 8A 建立 tool-independent `@caelush/runtime`、workspace-relative path boundary、bounded UTF-8 read、deterministic file discovery、固定 `rg` search backend，以及 `read_file`、`list_directory`、`find_files`、`search_text` 四个只读 Built-in Tool。
+当前仓库已经完成 Phase 1–7 以及 Phase 8A/8B；本轮增加 tool-independent `@caelush/runtime` 的 `RuntimeExecService`、统一 pipe/PTY `LocalProcessManager`、workspace-contained Shell resolution、bounded incremental output 和 `exec_command`/`write_stdin` 两个 Built-in Tool。Phase 8C 的 process session 是 run-owned、runtime-local、non-durable memory state；它不引入 Storage、process events、permission decision、sandbox、timeout/retry/cancellation 或 Git。
 
 ## Phase 6 Status
 
@@ -22,7 +22,9 @@ Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI�
 
 - Phase 8A — Local Runtime Foundation & Filesystem Read/Search: **COMPLETED**
 - Phase 8B — Safe File Mutation & Patch Engine: **COMPLETED**
-- Phase 8 — overall: **IN PROGRESS**（8C Shell/Managed Process 与 8D Git/最终集成尚未实现）
+- Phase 8C — Shell Execution & Managed Process Runtime: **COMPLETED**
+- Phase 8D — Git Runtime, Built-in Tool Integration & Phase 8 Finalization: **PENDING**
+- Phase 8 — overall: **IN PROGRESS**（8D Git/最终集成尚未实现）
 
 Phase 7 contains exactly 7A, 7B, and 7C. Caelush now has an immutable validated Tool Registry and a single-Tool Dispatcher. A valid call is durably recorded as `REQUESTED`, gated, durably checkpointed as `RUNNING`, executed once through the resolved handler, output-validated, and atomically settled with its `ToolObservation` and lifecycle event. Exact duplicate calls are idempotent, stale `RUNNING` calls fail closed during recovery, and raw arguments/results are kept out of lifecycle events.
 
@@ -31,6 +33,8 @@ Caelush now has an injected `AgentLoop` and a durable `RunController`. The loop 
 Phase 8A adds a concrete local execution substrate below the Tool layer. Built-in filesystem paths are always workspace-relative and are checked both lexically and through realpath containment; internal symlinks are allowed, while symlink escapes fail closed. Reads are streaming/bounded, strict UTF-8, binary-aware, and line-paginated. File discovery uses bounded deterministic `fast-glob`, and text search uses a fixed `rg` adapter with `shell=false` and no model-controlled arguments. These tools are read-only and do not provide mutation, shell, process management, Git, permissions, approvals, sandboxing, retries, cancellation, or verification execution.
 
 Phase 8B adds the narrow `apply_patch` mutation surface. A strict, bounded Add/Update/Delete/Move document is fully parsed and prepared in memory; all source SHA-256/size guards and destination absence checks pass before the first mutation. Existing mutation paths cannot traverse symlinks, existing UTF-8 BOM/newline/final-newline state is preserved, and in-process commit failures attempt verified reverse rollback. This is best-effort and is not an OS-level atomic transaction, crash-atomic, exactly-once mutation, sandbox, production permission evaluator, shell runtime, or Git runtime. The read-only and mutation registrations remain explicit factories; the final default catalog belongs to Phase 8D.
+
+Phase 8C adds the shared Shell/Managed Process substrate described in [Shell and Process Runtime](docs/architecture/process-runtime.md). `exec_command` and `write_stdin` run through one stable `LocalRuntime` → `RuntimeExecService` → `LocalProcessManager` path, with explicit `spawn(..., shell: false)` pipe execution, lazy exact-pinned `node-pty` PTY execution, workspace-contained `cwd`, run ownership, stale-generation uncertainty, bounded head/tail output, incremental drain, and yield-only interaction. Shell output is terminal-sanitized but is not yet secret-redacted; process sessions are not durable and no model-facing kill Tool or process event bridge exists. The final default catalog and Phase 8D integration remain deferred.
 
 ## Phase 5 Status
 
