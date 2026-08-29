@@ -13,11 +13,7 @@ describe("isPathInsideOrEqual", () => {
   });
 
   it("normalizes Windows separators for cross-platform containment checks", () => {
-    expect(isPathInsideOrEqual("C:\\workspace\\app", "C:\\workspace\\app\\src\\a.ts")).toBe(
-      true,
-    );
-    expect(isPathInsideOrEqual("C:\\workspace\\app", "C:\\workspace\\other\\a.ts")).toBe(
-      false,
-    );
+    expect(isPathInsideOrEqual("C:\\workspace\\app", "C:\\workspace\\app\\src\\a.ts")).toBe(true);
+    expect(isPathInsideOrEqual("C:\\workspace\\app", "C:\\workspace\\other\\a.ts")).toBe(false);
   });
 });

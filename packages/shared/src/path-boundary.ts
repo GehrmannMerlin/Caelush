@@ -13,6 +13,8 @@ export function isPathInsideOrEqual(root: string, candidate: string): boolean {
   const relative = pathModule.relative(normalizedRoot, normalizedCandidate);
   return (
     relative === "" ||
-    (!pathModule.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${pathModule.sep}`))
+    (!pathModule.isAbsolute(relative) &&
+      relative !== ".." &&
+      !relative.startsWith(`..${pathModule.sep}`))
   );
 }

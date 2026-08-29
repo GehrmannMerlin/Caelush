@@ -71,10 +71,7 @@ async function executeFindFiles(request: ToolExecutionRequest, resolver: Runtime
     limit = positiveBoundedInteger(args.limit, FIND_FILES_DEFAULT_LIMIT, FIND_FILES_MAX_LIMIT);
   } catch (error) {
     const code = error instanceof RuntimeInvalidPatternError ? "INVALID_PATTERN" : "INVALID_RANGE";
-    return errorResult(
-      code,
-      `Tool operation failed: ${code}.`,
-    );
+    return errorResult(code, `Tool operation failed: ${code}.`);
   }
   const searchPath = args.path === undefined ? "." : args.path;
   if (typeof searchPath !== "string")
