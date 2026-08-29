@@ -34,12 +34,12 @@
 
 ## Architecture References
 
-| Source | Observed design | Adopted idea | Intentionally different Caelush design |
-|---|---|---|---|
-| [Codex apply_patch handler](https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/apply_patch.rs) and [runtime](https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/runtimes/apply_patch.rs) | Handler validates/coordinates while runtime applies a verified action; partial deltas are explicit. | Keep Tool handler thin and make runtime own verified patch execution and structured changes. | No Codex sandbox, permission profile, cancellation token, remote environment, or provider-specific protocol. |
-| [Codex parser](https://github.com/openai/codex/blob/main/codex-rs/apply-patch/src/parser.rs) and [patch library](https://github.com/openai/codex/blob/main/codex-rs/apply-patch/src/lib.rs) | Strict envelope, Add/Delete/Update/Move, `@@` chunks, EOF marker, parser independent from filesystem. | Use a pure parser and explicit Update chunk model including move-only/update+move. | Caelush adds byte/operation budgets, strict model-facing errors, mutation symlink policy, and all-file preflight. |
-| [OpenCode apply_patch](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/tool/apply_patch.ts) | Precomputes file changes, preserves BOM, produces per-file summaries, separates permission metadata. | Prepare all changes in memory and return bounded structured deltas. | No LSP, formatter, watcher/event side channel, `permission ask()`, or remote environment; stale content is rejected by SHA/size guards. |
-| [OpenCode core patch tool](https://github.com/anomalyco/opencode/blob/dev/packages/core/src/tool/apply-patch.ts) | Uses a separate mutation service and conditional-write concept. | Keep mutation implementation behind a narrow runtime capability. | Caelush requires rollback of the committed prefix and typed uncertain side effects. |
+| Source                                                                                                                                                                                                                          | Observed design                                                                                       | Adopted idea                                                                                 | Intentionally different Caelush design                                                                                                  |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| [Codex apply_patch handler](https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/handlers/apply_patch.rs) and [runtime](https://github.com/openai/codex/blob/main/codex-rs/core/src/tools/runtimes/apply_patch.rs) | Handler validates/coordinates while runtime applies a verified action; partial deltas are explicit.   | Keep Tool handler thin and make runtime own verified patch execution and structured changes. | No Codex sandbox, permission profile, cancellation token, remote environment, or provider-specific protocol.                            |
+| [Codex parser](https://github.com/openai/codex/blob/main/codex-rs/apply-patch/src/parser.rs) and [patch library](https://github.com/openai/codex/blob/main/codex-rs/apply-patch/src/lib.rs)                                     | Strict envelope, Add/Delete/Update/Move, `@@` chunks, EOF marker, parser independent from filesystem. | Use a pure parser and explicit Update chunk model including move-only/update+move.           | Caelush adds byte/operation budgets, strict model-facing errors, mutation symlink policy, and all-file preflight.                       |
+| [OpenCode apply_patch](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/tool/apply_patch.ts)                                                                                                                | Precomputes file changes, preserves BOM, produces per-file summaries, separates permission metadata.  | Prepare all changes in memory and return bounded structured deltas.                          | No LSP, formatter, watcher/event side channel, `permission ask()`, or remote environment; stale content is rejected by SHA/size guards. |
+| [OpenCode core patch tool](https://github.com/anomalyco/opencode/blob/dev/packages/core/src/tool/apply-patch.ts)                                                                                                                | Uses a separate mutation service and conditional-write concept.                                       | Keep mutation implementation behind a narrow runtime capability.                             | Caelush requires rollback of the committed prefix and typed uncertain side effects.                                                     |
 
 ## File Map
 
@@ -58,10 +58,12 @@
 ### Task 1: Establish patch contracts and strict parser
 
 **Files:**
+
 - Create: `packages/runtime/src/patch/types.ts`, `packages/runtime/src/patch/errors.ts`, `packages/runtime/src/patch/parser.ts`.
 - Test: `packages/runtime/test/patch-parser.test.ts`, `packages/runtime/test/patch-contracts.test.ts`.
 
 **Interfaces:**
+
 - `parsePatch(patch: string): PatchDocument` is pure and throws `RuntimePatchError` with codes such as `INVALID_PATCH`, `EMPTY_PATCH`, `PATCH_TOO_LARGE`, `TOO_MANY_FILES`, and `TOO_MANY_HUNKS`.
 - `PatchDocument` contains ordered Add/Update/Delete operations; Update contains ordered hunks and optional `moveTo`, while all paths remain untrusted workspace-relative strings until runtime resolution.
 - `PatchOperation`, `PatchHunk`, `FileVersion`, `PreparedPatch`, `PatchCommitResult`, `PatchChange`, `PatchMutationFileSystem`, and `RuntimePatchRequest` are defined once in runtime and contain no Tool, Storage, Node SDK, or provider types.
@@ -75,11 +77,13 @@
 ### Task 2: Add mutation-safe path and text preparation primitives
 
 **Files:**
+
 - Modify: `packages/runtime/src/workspace-path.ts`, `packages/runtime/src/workspace-scope.ts`, `packages/runtime/src/local-runtime.ts`, `packages/runtime/src/runtime-errors.ts`, `packages/runtime/src/index.ts`.
 - Create: `packages/runtime/src/patch/text.ts`, `packages/runtime/src/patch/planner.ts`.
 - Test: `packages/runtime/test/patch-path-safety.test.ts`, `packages/runtime/test/patch-text.test.ts`, `packages/runtime/test/patch-preparation.test.ts`.
 
 **Interfaces:**
+
 - `WorkspacePathResolver.resolveMutationTarget(relativePath, options)` permits an absent leaf but rejects absolute/traversal/NUL/oversize input, external real paths, and every symlink in the existing ancestor chain.
 - `RuntimePatchService` receives a workspace scope and a narrow `PatchMutationFileSystem`; default LocalRuntime wiring uses `LocalRuntimeFileSystem` plus private Node mutation methods, while tests can inject a fault-injecting adapter.
 - `preparePatch(document, context): Promise<PreparedPatch>` reads every source before mutation, rejects missing/non-regular/binary/invalid UTF-8/oversize input, dry-applies all hunks, preserves existing BOM/newline/final-newline, computes raw-byte SHA-256 and size, and never writes.
@@ -93,11 +97,13 @@
 ### Task 3: Implement precommit guards, commit, rollback, and uncertainty
 
 **Files:**
+
 - Create: `packages/runtime/src/patch/committer.ts`, `packages/runtime/src/patch/service.ts`.
 - Modify: `packages/runtime/src/local-runtime.ts`, `packages/runtime/src/workspace-scope.ts`, `packages/runtime/src/index.ts`.
 - Test: `packages/runtime/test/patch-commit.test.ts`, `packages/runtime/test/patch-rollback.test.ts`, `packages/runtime/test/patch-guards.test.ts`.
 
 **Interfaces:**
+
 - `RuntimePatchService.apply(request: RuntimePatchRequest): Promise<PatchCommitResult>` executes Parse → Plan/Prepare → guard-all → sequential commit → post-commit verification.
 - `PatchCommitter.commit(prepared: PreparedPatch): Promise<PatchCommitResult>` checks every source version and every destination absence immediately before mutation; it stops on first failure.
 - Safe rollback throws/returns a model-visible `PATCH_COMMIT_FAILED_ROLLED_BACK`; rollback failure or verification mismatch throws `RuntimePatchUncertainError` with sanitized details only.
@@ -111,11 +117,13 @@
 ### Task 4: Integrate LocalRuntime capability and `apply_patch` Tool
 
 **Files:**
+
 - Create: `packages/tools/src/builtins/apply-patch.ts`, `packages/tools/src/builtins/file-mutation-tools.ts`.
 - Modify: `packages/tools/src/builtins/result.ts`, `packages/tools/src/index.ts`, `packages/tools/test/public-api.test.ts`, `packages/tools/test/apply-patch.test.ts`.
 - Test: `packages/tools/test/apply-patch.test.ts`, `packages/tools/test/registry-options.test.ts`, `packages/tools/test/read-only-filesystem-tools.test.ts`.
 
 **Interfaces:**
+
 - `createFileMutationToolRegistrations(runtimeResolver = createLocalRuntimeResolver(new LocalRuntime()))` returns only the `apply_patch` registration; the final default catalog remains deferred to 8D.
 - Tool definition: name `apply_patch`, HIGH risk, required capabilities `FS_WRITE` and `FS_DELETE`, runtime `local`, input exactly `{ patch: string }`, bounded output schema, and expected error codes from the spec.
 - Handler calls `withRuntimeScope` and `scope.patch.apply({ patch })`; it performs no path parsing, Node filesystem calls, hashing, rollback, Storage access, or Run lookup. Runtime uncertainty is rethrown as a Tool-owned infrastructure uncertainty marker; normal expected patch errors become bounded `isError` results.
@@ -129,10 +137,12 @@
 ### Task 5: Preserve durable uncertainty and batch semantics
 
 **Files:**
+
 - Modify: `packages/tools/src/errors.ts`, `packages/tools/src/dispatcher.ts`, `packages/tools/src/dispatcher-errors.ts`, `packages/tools/src/index.ts`, and only the existing batch/coordinator files if tests prove a change is required.
 - Test: `packages/tools/test/dispatcher-uncertainty.test.ts`, `packages/tools/test/batch-coordinator.test.ts`, `packages/storage/test/tool-dispatcher-integration.test.ts`, `packages/core/test/agent-tool-batch.test.ts`.
 
 **Interfaces:**
+
 - `ToolExecutionUncertainError` is the Tool boundary error carrying `executionDisposition: "UNCERTAIN_SIDE_EFFECT"`; Dispatcher persists a terminal failure/observation with that durable marker before propagating infrastructure uncertainty.
 - Existing RUNNING recovery remains fail-closed: a crashed apply_patch is never automatically rerun and later batch tools are skipped.
 
@@ -145,6 +155,7 @@
 ### Task 6: End-to-end/runtime architecture coverage
 
 **Files:**
+
 - Modify: `packages/runtime/test/architecture.test.ts` if present or add `packages/runtime/test/patch-architecture.test.ts`; `tests/architecture/package-boundaries.test.ts`, `tests/architecture/workspace-shape.test.ts`, `tests/integration/tool-catalog.test.ts` only as required by the existing architecture conventions.
 - Test: Add integration coverage in `packages/storage/test/patch-tool-e2e.test.ts` or the nearest existing storage/core integration seam.
 
@@ -157,6 +168,7 @@
 ### Task 7: Documentation and changed-file formatting
 
 **Files:**
+
 - Create: `docs/architecture/patch-engine.md`.
 - Modify: `docs/architecture/runtime.md`, `docs/architecture/tool-system.md`, `README.md`, `AGENTS.md`.
 
