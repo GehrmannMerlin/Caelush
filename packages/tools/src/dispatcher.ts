@@ -1,0 +1,566 @@
+import type { AgentError, JsonObject, ToolInvocation } from "@caelush/protocol";
+import {
+  assertToolDispatchRequest,
+  DEFAULT_MAX_EXTERNAL_CALL_ID_BYTES,
+  DEFAULT_MAX_INVOCATION_ARGS_BYTES,
+  type DurableToolEventDraft,
+  type ToolDispatchRequest,
+  type ToolDispatcherOutcome,
+  type ToolExecutionCommitResult,
+  type ToolExecutionSnapshot,
+  type ToolClock,
+  type ToolEventIdFactory,
+  type ToolInvocationIdFactory,
+  type ToolObservationIdFactory,
+} from "./dispatcher-types.js";
+import {
+  ToolDispatcherBusyError,
+  ToolDispatcherInfrastructureError,
+  ToolDispatcherInvariantError,
+} from "./dispatcher-errors.js";
+import type {
+  ToolExecutionGateDecision,
+  ToolExecutionGatePort,
+  ToolCommittedEventNotifier,
+} from "./dispatcher-ports.js";
+import { ToolExecutionConflictError, type ToolExecutionStorePort } from "./execution-store.js";
+import type { ToolOutputPolicy } from "./output-policy.js";
+import { boundToolModelContent, DEFAULT_TOOL_OUTPUT_POLICY } from "./output-policy.js";
+import { canonicalJsonString, cloneJsonValue, jsonUtf8ByteLength } from "./json-canonical.js";
+import type { ResolvedTool, ToolRegistry } from "./registry.js";
+import {
+  assertToolInvocationInvariant,
+  completeToolInvocation,
+  createRequestedToolInvocation,
+  createToolObservation,
+  failToolInvocation,
+  markToolInvocationWaitingApproval,
+  startToolInvocation,
+} from "./invocation-lifecycle.js";
+import {
+  createToolCompletedEvent,
+  createToolFailedEvent,
+  createToolRequestedEvent,
+  createToolStartedEvent,
+} from "./event-factory.js";
+import {
+  ToolExecutionResultValidationError,
+  validateToolExecutionResult,
+} from "./result-validation.js";
+
+export interface ToolDispatcherOptions {
+  readonly registry: ToolRegistry;
+  readonly store: ToolExecutionStorePort;
+  readonly gate: ToolExecutionGatePort;
+  readonly notifier: ToolCommittedEventNotifier;
+  readonly clock: ToolClock;
+  readonly invocationIdFactory: ToolInvocationIdFactory;
+  readonly observationIdFactory: ToolObservationIdFactory;
+  readonly eventIdFactory: ToolEventIdFactory;
+  readonly outputPolicy?: ToolOutputPolicy;
+  readonly maxExternalCallIdBytes?: number;
+  readonly maxInvocationArgsBytes?: number;
+}
+
+const ARGUMENT_ERROR_CONTENT = "Correct the tool arguments before calling it again.";
+const DENIED_CONTENT = "Tool execution was denied by the active execution policy.";
+const INTERRUPTED_CONTENT =
+  "Tool execution was interrupted before its result was durably recorded. The operation may have partially or fully executed. Do not automatically repeat the operation.";
+const RUNTIME_CONTENT =
+  "Tool execution failed because the tool runtime encountered an internal error.";
+const OUTPUT_CONTENT = "Tool execution failed because its output violated the registered contract.";
+
+export class ToolDispatcher {
+  private readonly activeCalls = new Set<string>();
+  private readonly outputPolicy: ToolOutputPolicy;
+
+  constructor(private readonly options: ToolDispatcherOptions) {
+    this.outputPolicy = options.outputPolicy ?? DEFAULT_TOOL_OUTPUT_POLICY;
+  }
+
+  async dispatch(value: unknown): Promise<ToolDispatcherOutcome> {
+    assertToolDispatchRequest(value, {
+      maxExternalCallIdBytes:
+        this.options.maxExternalCallIdBytes ?? DEFAULT_MAX_EXTERNAL_CALL_ID_BYTES,
+    });
+    const request = {
+      ...value,
+      args: cloneJsonValue(value.args) as JsonObject,
+    } satisfies ToolDispatchRequest;
+    const key = callKey(request);
+    this.assertCallIsNotActive(key, request.runId);
+    this.activeCalls.add(key);
+    try {
+      return await this.dispatchLocked(request);
+    } finally {
+      this.activeCalls.delete(key);
+    }
+  }
+
+  async recover(invocationId: ToolInvocation["id"]): Promise<ToolDispatcherOutcome> {
+    const existing = await this.options.store.load(invocationId);
+    if (existing === null)
+      throw new ToolDispatcherInvariantError("Tool invocation does not exist.");
+    const externalCallId = existing.invocation.externalCallId;
+    if (externalCallId === undefined) {
+      throw new ToolDispatcherInvariantError("Tool invocation has no external call identity.");
+    }
+    const key = callKey({
+      runId: existing.invocation.runId,
+      stepId: existing.invocation.stepId,
+      externalCallId,
+    });
+    this.assertCallIsNotActive(key, existing.invocation.runId);
+    this.activeCalls.add(key);
+    try {
+      return await this.recoverLocked(existing);
+    } finally {
+      this.activeCalls.delete(key);
+    }
+  }
+
+  private async dispatchLocked(request: ToolDispatchRequest): Promise<ToolDispatcherOutcome> {
+    const existing = await this.options.store.findByExternalCall(
+      request.runId,
+      request.stepId,
+      request.externalCallId,
+    );
+    if (existing !== null) {
+      this.assertSameCall(request, existing);
+      if (existing.invocation.status === "RUNNING")
+        throw new ToolDispatcherBusyError(request.runId);
+      return this.recoverLocked(existing);
+    }
+    const resolvedTool = this.options.registry.resolve(request.toolName);
+    if (resolvedTool === undefined) {
+      return {
+        kind: "UNAVAILABLE_TOOL",
+        toolName: request.toolName,
+        content: `Tool "${request.toolName}" is not available.`,
+        isError: true,
+      };
+    }
+    if (
+      jsonUtf8ByteLength(canonicalJsonString(request.args)) >
+      (this.options.maxInvocationArgsBytes ?? DEFAULT_MAX_INVOCATION_ARGS_BYTES)
+    ) {
+      return this.persistArgumentFailure(
+        request,
+        resolvedTool,
+        "Tool arguments exceed their byte budget.",
+      );
+    }
+    const validation = resolvedTool.inputValidator.validate(request.args);
+    if (!validation.valid) {
+      return this.persistArgumentFailure(
+        request,
+        resolvedTool,
+        "Tool arguments failed validation.",
+        validation.issues,
+      );
+    }
+    const createdAt = this.options.clock.now();
+    const invocation = createRequestedToolInvocation({
+      id: this.options.invocationIdFactory.create(),
+      runId: request.runId,
+      stepId: request.stepId,
+      toolName: request.toolName,
+      externalCallId: request.externalCallId,
+      args: request.args,
+      riskLevel: resolvedTool.definition.riskLevel,
+      createdAt,
+    });
+    const requestedEvent = createToolRequestedEvent({
+      eventId: this.options.eventIdFactory.create(),
+      sessionId: request.sessionId,
+      timestamp: createdAt,
+      invocation,
+    });
+    const requested = await this.commitAndNotify({
+      sessionId: request.sessionId,
+      invocation,
+      expectedRevision: null,
+      events: [requestedEvent],
+    });
+    return this.applyGate(request, resolvedTool, requested.snapshot);
+  }
+
+  private async recoverLocked(snapshot: ToolExecutionSnapshot): Promise<ToolDispatcherOutcome> {
+    const resolvedTool = this.options.registry.resolve(snapshot.invocation.toolName);
+    if (resolvedTool === undefined) {
+      throw new ToolDispatcherInvariantError("The registered Tool is unavailable during recovery.");
+    }
+    assertToolInvocationInvariant(snapshot.invocation);
+    if (snapshot.invocation.status === "REQUESTED") {
+      return this.applyGate(
+        {
+          sessionId: snapshot.sessionId,
+          runId: snapshot.invocation.runId,
+          stepId: snapshot.invocation.stepId,
+          externalCallId: snapshot.invocation.externalCallId ?? "",
+          toolName: snapshot.invocation.toolName,
+          args: snapshot.invocation.args,
+        },
+        resolvedTool,
+        snapshot,
+      );
+    }
+    if (snapshot.invocation.status === "WAITING_APPROVAL") {
+      return { kind: "WAITING_APPROVAL", invocation: snapshot.invocation };
+    }
+    if (snapshot.invocation.status === "RUNNING") return this.failInterrupted(snapshot);
+    if (snapshot.invocation.status === "COMPLETED" || snapshot.invocation.status === "FAILED") {
+      if (snapshot.observation === undefined) {
+        throw new ToolDispatcherInvariantError("Terminal ToolInvocation has no observation.");
+      }
+      return { kind: "RESULT", invocation: snapshot.invocation, observation: snapshot.observation };
+    }
+    throw new ToolDispatcherInvariantError("Cancelled ToolInvocation recovery is not supported.");
+  }
+
+  private async applyGate(
+    request: ToolDispatchRequest,
+    resolvedTool: ResolvedTool,
+    snapshot: ToolExecutionSnapshot,
+  ): Promise<ToolDispatcherOutcome> {
+    let decision: ToolExecutionGateDecision;
+    try {
+      decision = await this.options.gate.decide({
+        invocation: snapshot.invocation,
+        toolName: resolvedTool.definition.name,
+        definition: resolvedTool.definition,
+      });
+    } catch (error) {
+      throw new ToolDispatcherInfrastructureError("Tool execution policy evaluation failed.", {
+        cause: error,
+      });
+    }
+    if (decision.kind === "REQUIRE_APPROVAL") {
+      const waiting = markToolInvocationWaitingApproval(snapshot.invocation);
+      const committed = await this.commitAndNotify({
+        sessionId: request.sessionId,
+        invocation: waiting,
+        expectedRevision: snapshot.revision,
+        events: [],
+      });
+      return { kind: "WAITING_APPROVAL", invocation: committed.snapshot.invocation };
+    }
+    if (decision.kind === "DENY") {
+      return this.persistFailure(
+        request.sessionId,
+        snapshot,
+        "PERMISSION_DENIED",
+        "SECURITY",
+        DENIED_CONTENT,
+        {},
+      );
+    }
+    const running = startToolInvocation(snapshot.invocation, this.options.clock.now());
+    const startedEvent = createToolStartedEvent({
+      eventId: this.options.eventIdFactory.create(),
+      sessionId: request.sessionId,
+      timestamp: running.startedAt ?? running.createdAt,
+      invocation: running,
+    });
+    const committed = await this.commitAndNotify({
+      sessionId: request.sessionId,
+      invocation: running,
+      expectedRevision: snapshot.revision,
+      events: [startedEvent],
+    });
+    return this.executeHandler(request, resolvedTool, committed.snapshot);
+  }
+
+  private async executeHandler(
+    request: ToolDispatchRequest,
+    resolvedTool: ResolvedTool,
+    snapshot: ToolExecutionSnapshot,
+  ): Promise<ToolDispatcherOutcome> {
+    let rawResult: unknown;
+    try {
+      rawResult = await resolvedTool.handler.execute({
+        runId: snapshot.invocation.runId,
+        stepId: snapshot.invocation.stepId,
+        invocationId: snapshot.invocation.id,
+        externalCallId: request.externalCallId,
+        args: snapshot.invocation.args,
+      });
+    } catch (error) {
+      await this.persistFatalFailure(
+        request.sessionId,
+        snapshot,
+        "RUNTIME_ERROR",
+        "RUNTIME",
+        RUNTIME_CONTENT,
+      );
+      throw new ToolDispatcherInfrastructureError("Tool handler execution failed.", {
+        cause: error,
+      });
+    }
+    let result;
+    try {
+      result = validateToolExecutionResult(rawResult, resolvedTool, this.outputPolicy);
+    } catch (error) {
+      if (!(error instanceof ToolExecutionResultValidationError)) {
+        throw new ToolDispatcherInfrastructureError("Tool result validation failed.", {
+          cause: error,
+        });
+      }
+      await this.persistFatalFailure(
+        request.sessionId,
+        snapshot,
+        "TOOL_OUTPUT_ERROR",
+        "TOOL",
+        OUTPUT_CONTENT,
+      );
+      throw new ToolDispatcherInfrastructureError("Tool result violated its registered contract.", {
+        cause: error,
+      });
+    }
+    const finishedAt = this.options.clock.now();
+    const terminal = result.isError
+      ? failToolInvocation(
+          snapshot.invocation,
+          {
+            code: "TOOL_EXECUTION_ERROR",
+            message: "Tool execution returned an error result.",
+            retryable: false,
+            phase: "TOOL",
+          },
+          finishedAt,
+        )
+      : completeToolInvocation(snapshot.invocation, finishedAt);
+    const observation = createToolObservation({
+      id: this.options.observationIdFactory.create(),
+      runId: terminal.runId,
+      stepId: terminal.stepId,
+      toolInvocationId: terminal.id,
+      content: result.content,
+      details: result.details,
+      isError: result.isError,
+      createdAt: finishedAt,
+    });
+    const event: DurableToolEventDraft = result.isError
+      ? createToolFailedEvent({
+          eventId: this.options.eventIdFactory.create(),
+          sessionId: request.sessionId,
+          timestamp: finishedAt,
+          invocation: terminal,
+          error: terminal.error as AgentError,
+        })
+      : createToolCompletedEvent({
+          eventId: this.options.eventIdFactory.create(),
+          sessionId: request.sessionId,
+          timestamp: finishedAt,
+          invocation: terminal,
+          observationId: observation.id,
+        });
+    const committed = await this.commitAndNotify({
+      sessionId: request.sessionId,
+      invocation: terminal,
+      expectedRevision: snapshot.revision,
+      observation,
+      events: [event],
+    });
+    if (committed.snapshot.observation === undefined) {
+      throw new ToolDispatcherInvariantError("Tool settlement committed without an observation.");
+    }
+    return {
+      kind: "RESULT",
+      invocation: committed.snapshot.invocation,
+      observation: committed.snapshot.observation,
+    };
+  }
+
+  private async persistArgumentFailure(
+    request: ToolDispatchRequest,
+    resolvedTool: ResolvedTool,
+    reason: string,
+    issues: readonly { readonly instancePath: string; readonly message: string }[] = [],
+  ): Promise<ToolDispatcherOutcome> {
+    const createdAt = this.options.clock.now();
+    const invocation = createRequestedToolInvocation({
+      id: this.options.invocationIdFactory.create(),
+      runId: request.runId,
+      stepId: request.stepId,
+      toolName: request.toolName,
+      externalCallId: request.externalCallId,
+      args: request.args,
+      riskLevel: resolvedTool.definition.riskLevel,
+      createdAt,
+    });
+    const failed = failToolInvocation(
+      invocation,
+      {
+        code: "TOOL_ARGUMENT_ERROR",
+        message: "Tool arguments failed validation.",
+        retryable: false,
+        phase: "TOOL",
+        ...(issues.length === 0
+          ? {}
+          : {
+              details: {
+                issues: issues
+                  .slice(0, 16)
+                  .map(({ instancePath, message }) => ({ instancePath, message })),
+              },
+            }),
+      },
+      createdAt,
+    );
+    const observation = createToolObservation({
+      id: this.options.observationIdFactory.create(),
+      runId: failed.runId,
+      stepId: failed.stepId,
+      toolInvocationId: failed.id,
+      content: boundToolModelContent(
+        `Invalid arguments for tool "${request.toolName}". ${ARGUMENT_ERROR_CONTENT} ${reason}`,
+        this.outputPolicy,
+      ),
+      details: {},
+      isError: true,
+      createdAt,
+    });
+    const events = [
+      createToolRequestedEvent({
+        eventId: this.options.eventIdFactory.create(),
+        sessionId: request.sessionId,
+        timestamp: createdAt,
+        invocation,
+      }),
+      createToolFailedEvent({
+        eventId: this.options.eventIdFactory.create(),
+        sessionId: request.sessionId,
+        timestamp: createdAt,
+        invocation: failed,
+        error: failed.error as AgentError,
+      }),
+    ];
+    const committed = await this.commitAndNotify({
+      sessionId: request.sessionId,
+      invocation: failed,
+      expectedRevision: null,
+      observation,
+      events,
+    });
+    if (committed.snapshot.observation === undefined) {
+      throw new ToolDispatcherInvariantError("Argument failure committed without an observation.");
+    }
+    return {
+      kind: "RESULT",
+      invocation: committed.snapshot.invocation,
+      observation: committed.snapshot.observation,
+    };
+  }
+
+  private async persistFailure(
+    sessionId: ToolDispatchRequest["sessionId"],
+    snapshot: ToolExecutionSnapshot,
+    code: AgentError["code"],
+    phase: AgentError["phase"],
+    content: string,
+    details: JsonObject,
+  ): Promise<ToolDispatcherOutcome> {
+    const finishedAt = this.options.clock.now();
+    const failed = failToolInvocation(
+      snapshot.invocation,
+      {
+        code,
+        message:
+          code === "PERMISSION_DENIED" ? content : "Tool execution returned an error result.",
+        retryable: false,
+        phase,
+      },
+      finishedAt,
+    );
+    const observation = createToolObservation({
+      id: this.options.observationIdFactory.create(),
+      runId: failed.runId,
+      stepId: failed.stepId,
+      toolInvocationId: failed.id,
+      content: boundToolModelContent(content, this.outputPolicy),
+      details,
+      isError: true,
+      createdAt: finishedAt,
+    });
+    const event = createToolFailedEvent({
+      eventId: this.options.eventIdFactory.create(),
+      sessionId,
+      timestamp: finishedAt,
+      invocation: failed,
+      error: failed.error as AgentError,
+    });
+    const committed = await this.commitAndNotify({
+      sessionId,
+      invocation: failed,
+      expectedRevision: snapshot.revision,
+      observation,
+      events: [event],
+    });
+    if (committed.snapshot.observation === undefined) {
+      throw new ToolDispatcherInvariantError("Tool failure committed without an observation.");
+    }
+    return {
+      kind: "RESULT",
+      invocation: committed.snapshot.invocation,
+      observation: committed.snapshot.observation,
+    };
+  }
+
+  private async persistFatalFailure(
+    sessionId: ToolDispatchRequest["sessionId"],
+    snapshot: ToolExecutionSnapshot,
+    code: AgentError["code"],
+    phase: AgentError["phase"],
+    content: string,
+  ): Promise<void> {
+    await this.persistFailure(sessionId, snapshot, code, phase, content, {});
+  }
+
+  private async failInterrupted(snapshot: ToolExecutionSnapshot): Promise<ToolDispatcherOutcome> {
+    return this.persistFailure(
+      snapshot.sessionId,
+      snapshot,
+      "TOOL_EXECUTION_ERROR",
+      "TOOL",
+      INTERRUPTED_CONTENT,
+      {},
+    );
+  }
+
+  private async commitAndNotify(
+    command: Parameters<ToolExecutionStorePort["commit"]>[0],
+  ): Promise<ToolExecutionCommitResult> {
+    try {
+      const result = await this.options.store.commit(command);
+      if (result.events.length > 0) this.options.notifier.notifyCommitted(result.events);
+      return result;
+    } catch (error) {
+      if (error instanceof ToolExecutionConflictError) throw error;
+      throw new ToolDispatcherInfrastructureError("Tool execution persistence failed.", {
+        cause: error,
+      });
+    }
+  }
+
+  private assertCallIsNotActive(key: string, runId: ToolDispatchRequest["runId"]): void {
+    if (this.activeCalls.has(key)) throw new ToolDispatcherBusyError(runId);
+  }
+
+  private assertSameCall(request: ToolDispatchRequest, snapshot: ToolExecutionSnapshot): void {
+    if (
+      snapshot.invocation.toolName !== request.toolName ||
+      canonicalJsonString(snapshot.invocation.args) !== canonicalJsonString(request.args)
+    ) {
+      throw new ToolExecutionConflictError(
+        "Tool call identity conflicts with existing durable data.",
+      );
+    }
+  }
+}
+
+function callKey(
+  request: Pick<ToolDispatchRequest, "runId" | "stepId" | "externalCallId">,
+): string {
+  return `${request.runId}:${request.stepId}:${request.externalCallId}`;
+}

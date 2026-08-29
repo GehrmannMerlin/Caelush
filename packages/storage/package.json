@@ -18,6 +18,7 @@
     "@caelush/events": "workspace:*",
     "@caelush/llm": "workspace:*",
     "@caelush/protocol": "workspace:*",
+    "@caelush/tools": "workspace:*",
     "drizzle-orm": "1.0.0-rc.4"
   },
   "devDependencies": {

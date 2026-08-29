@@ -134,6 +134,9 @@ importers:
       '@caelush/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@caelush/tools':
+        specifier: workspace:*
+        version: link:../tools
       drizzle-orm:
         specifier: 1.0.0-rc.4
         version: 1.0.0-rc.4(zod@4.4.3)

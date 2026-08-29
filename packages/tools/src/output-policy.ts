@@ -2,16 +2,23 @@ import { ToolRegistrationError } from "./errors.js";
 
 export interface ToolOutputPolicy {
   readonly maxModelContentBytes: number;
+  readonly maxDetailsBytes: number;
 }
 
 export const DEFAULT_TOOL_OUTPUT_POLICY: ToolOutputPolicy = Object.freeze({
   maxModelContentBytes: 64 * 1024,
+  maxDetailsBytes: 256 * 1024,
 });
 
 const truncationMarker = "\n[output truncated]";
 
 export function validateToolOutputPolicy(policy: ToolOutputPolicy): ToolOutputPolicy {
-  if (!Number.isSafeInteger(policy.maxModelContentBytes) || policy.maxModelContentBytes <= 0) {
+  if (
+    !Number.isSafeInteger(policy.maxModelContentBytes) ||
+    policy.maxModelContentBytes <= 0 ||
+    !Number.isSafeInteger(policy.maxDetailsBytes) ||
+    policy.maxDetailsBytes <= 0
+  ) {
     throw new ToolRegistrationError(
       "Tool output policy maxModelContentBytes must be a positive integer.",
       { reason: "INVALID_OUTPUT_POLICY" },

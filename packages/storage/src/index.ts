@@ -20,6 +20,14 @@ export type {
 export { SqliteRunExecutionStore } from "./run-execution-store.js";
 export type { RunExecutionStorePort } from "@caelush/core";
 export {
+  SqliteToolInvocationRepository,
+  type ToolInvocationRepository,
+} from "./repositories/tool-invocation-repository.js";
+export {
+  SqliteObservationRepository,
+  type ObservationRepository,
+} from "./repositories/observation-repository.js";
+export {
   StorageConflictError,
   StorageDecodeError,
   StorageError,

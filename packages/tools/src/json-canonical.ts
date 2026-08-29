@@ -1,6 +1,6 @@
 import type { JsonObject, JsonValue, ToolDefinition } from "@caelush/protocol";
 
-function cloneJsonValue(value: JsonValue): JsonValue {
+export function cloneJsonValue(value: JsonValue): JsonValue {
   if (Array.isArray(value)) return value.map((item) => cloneJsonValue(item));
   if (typeof value === "object" && value !== null) {
     const clone: JsonObject = Object.create(null) as JsonObject;

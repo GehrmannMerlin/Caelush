@@ -117,6 +117,63 @@ export const agentEvents = sqliteTable(
   ],
 );
 
+export const toolInvocations = sqliteTable(
+  "tool_invocations",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => agentRuns.id),
+    stepId: text("step_id")
+      .notNull()
+      .references(() => agentSteps.id),
+    externalCallId: text("external_call_id").notNull(),
+    toolName: text("tool_name").notNull(),
+    status: text("status").notNull(),
+    riskLevel: text("risk_level").notNull(),
+    revision: integer("revision").notNull(),
+    protocolVersion: integer("protocol_version").notNull(),
+    createdAtMs: integer("created_at_ms").notNull(),
+    startedAtMs: integer("started_at_ms"),
+    finishedAtMs: integer("finished_at_ms"),
+    dataJson: text("data_json").notNull(),
+  },
+  (table) => [
+    uniqueIndex("tool_invocations_run_step_external_call_unique").on(
+      table.runId,
+      table.stepId,
+      table.externalCallId,
+    ),
+    index("tool_invocations_run_id_idx").on(table.runId),
+    index("tool_invocations_step_id_idx").on(table.stepId),
+    index("tool_invocations_status_idx").on(table.status),
+  ],
+);
+
+export const agentObservations = sqliteTable(
+  "agent_observations",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => agentRuns.id),
+    stepId: text("step_id")
+      .notNull()
+      .references(() => agentSteps.id),
+    kind: text("kind").notNull(),
+    toolInvocationId: text("tool_invocation_id").references(() => toolInvocations.id),
+    protocolVersion: integer("protocol_version").notNull(),
+    isError: integer("is_error").notNull(),
+    createdAtMs: integer("created_at_ms").notNull(),
+    dataJson: text("data_json").notNull(),
+  },
+  (table) => [
+    uniqueIndex("agent_observations_tool_invocation_unique").on(table.toolInvocationId),
+    index("agent_observations_run_id_idx").on(table.runId),
+    index("agent_observations_step_id_idx").on(table.stepId),
+  ],
+);
+
 export const storageSchema = {
   agentSessions,
   agentRuns,
@@ -126,4 +183,6 @@ export const storageSchema = {
   agentRunContinuations,
   eventSequences,
   agentEvents,
+  toolInvocations,
+  agentObservations,
 };
