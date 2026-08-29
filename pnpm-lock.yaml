@@ -142,7 +142,14 @@ importers:
         specifier: 1.0.0-rc.4
         version: 1.0.0-rc.4
 
-  packages/tools: {}
+  packages/tools:
+    dependencies:
+      '@caelush/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      ajv:
+        specifier: 8.20.0
+        version: 8.20.0
 
   packages/verification: {}
 
