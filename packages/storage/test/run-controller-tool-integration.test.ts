@@ -21,6 +21,7 @@ import {
   ToolBatchCoordinator,
   ToolDispatcher,
   ToolRegistryBuilder,
+  createFileMutationToolRegistrations,
   createReadOnlyFilesystemToolRegistrations,
   createRequestedToolInvocation,
   startToolInvocation,
@@ -142,6 +143,9 @@ function createRuntime(
 function createFilesystemRuntime(storage: CaelushStorage, eventBus: EventBus) {
   const builder = new ToolRegistryBuilder();
   for (const registration of createReadOnlyFilesystemToolRegistrations()) {
+    builder.register(registration);
+  }
+  for (const registration of createFileMutationToolRegistrations()) {
     builder.register(registration);
   }
   const notifier: ToolCommittedEventNotifier = {
@@ -302,6 +306,98 @@ describe("RunController automatic Tool Batch integration", () => {
       ]);
       expect(await storage.observations.listByRun(run.id)).toHaveLength(4);
       expect(await snapshotWorkspace(workspace)).toEqual(before);
+    } finally {
+      await storage.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("runs apply_patch through AgentLoop and lets a trailing read observe the committed files", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "caelush-phase-8b-e2e-"));
+    const workspace = path.join(directory, "workspace");
+    await mkdir(path.join(workspace, "src"), { recursive: true });
+    await writeFile(path.join(workspace, "src", "math.ts"), "export const answer = 41;\n", "utf8");
+    await writeFile(path.join(workspace, "src", "old.ts"), "export const old = true;\n", "utf8");
+    await writeFile(path.join(workspace, "README.md"), "unchanged\n", "utf8");
+    const beforeReadme = await readFile(path.join(workspace, "README.md"));
+
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    const run = makeRun(workspace, "local");
+    await seedRun(storage, run);
+    const eventBus = new EventBus(storage.events);
+    const runtime = createFilesystemRuntime(storage, eventBus);
+    const observed: Array<{ tools?: unknown; messages: unknown[] }> = [];
+    const controller = createController(
+      storage,
+      eventBus,
+      [
+        turn(
+          "mutate workspace",
+          [
+            {
+              id: "call-patch",
+              name: "apply_patch",
+              input: {
+                patch: [
+                  "*** Begin Patch",
+                  "*** Update File: src/math.ts",
+                  "@@",
+                  "-export const answer = 41;",
+                  "+export const answer = 42;",
+                  "*** Add File: src/helper.ts",
+                  "+export const helper = true;",
+                  "*** Delete File: src/old.ts",
+                  "*** End Patch",
+                ].join("\n"),
+              },
+            },
+            { id: "call-read", name: "read_file", input: { path: "src/math.ts" } },
+            { id: "call-read-helper", name: "read_file", input: { path: "src/helper.ts" } },
+          ],
+          "TOOL_CALLS",
+        ),
+        turn("Final Candidate", [], "STOP"),
+      ],
+      runtime.coordinator,
+      observed,
+    );
+
+    try {
+      const result = await controller.start(run.id);
+
+      expect(result.status).toBe("AWAITING_VERIFICATION");
+      expect(observed[1]?.messages.slice(-3)).toEqual([
+        expect.objectContaining({
+          toolCallId: "call-patch",
+          content: expect.stringContaining("Patch applied."),
+          isError: false,
+        }),
+        expect.objectContaining({
+          toolCallId: "call-read",
+          content: expect.stringContaining("export const answer = 42;"),
+          isError: false,
+        }),
+        expect.objectContaining({
+          toolCallId: "call-read-helper",
+          content: expect.stringContaining("export const helper = true;"),
+          isError: false,
+        }),
+      ]);
+      expect((await storage.toolInvocations.listByRun(run.id)).map((item) => item.status)).toEqual([
+        "COMPLETED",
+        "COMPLETED",
+        "COMPLETED",
+      ]);
+      expect(await readFile(path.join(workspace, "src", "math.ts"), "utf8")).toBe(
+        "export const answer = 42;\n",
+      );
+      expect(await readFile(path.join(workspace, "src", "helper.ts"), "utf8")).toBe(
+        "export const helper = true;\n",
+      );
+      await expect(readFile(path.join(workspace, "src", "old.ts"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(await readFile(path.join(workspace, "README.md"))).toEqual(beforeReadme);
     } finally {
       await storage.close();
       await rm(directory, { recursive: true, force: true });
