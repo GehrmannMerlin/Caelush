@@ -7,7 +7,8 @@ import { errorResult, successResult, withRuntimeScope } from "./result.js";
 
 const definition: ToolDefinition = {
   name: "apply_patch",
-  description: "Safely applies a verified patch to workspace files.",
+  description:
+    "Applies a structured patch to UTF-8 text files inside the active workspace. Supports adding, updating, deleting, and moving files. Existing files change only when patch context and pre-commit file guards match.",
   inputSchema: {
     type: "object",
     properties: {
