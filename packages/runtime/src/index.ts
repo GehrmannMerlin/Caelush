@@ -29,6 +29,7 @@ export {
   MAX_WORKSPACE_PATH_BYTES,
   WorkspacePathResolver,
   type ResolvedWorkspacePath,
+  type ResolvedMutationPath,
 } from "./workspace-path.js";
 export type {
   RuntimeDirectoryEntry,
@@ -41,6 +42,12 @@ export { LocalRuntimeFileSystem } from "./filesystem/local-filesystem.js";
 export { RuntimePatchError, RuntimePatchUncertainError } from "./patch/errors.js";
 export { parsePatch } from "./patch/parser.js";
 export { PATCH_LIMITS } from "./patch/types.js";
+export {
+  applyPatchHunks,
+  decodePatchText,
+  encodeNewPatchFile,
+  encodePatchedText,
+} from "./patch/text.js";
 export type {
   FileVersion,
   PatchChange,

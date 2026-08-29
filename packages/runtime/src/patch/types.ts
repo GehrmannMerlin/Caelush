@@ -1,4 +1,5 @@
-import type { ResolvedWorkspacePath } from "../workspace-path.js";
+import type { RuntimeFileMetadata } from "../filesystem/types.js";
+import type { ResolvedMutationPath } from "../workspace-path.js";
 
 export const PATCH_LIMITS = Object.freeze({
   maxPatchBytes: 256 * 1024,
@@ -43,8 +44,8 @@ export interface FileVersion {
 
 export interface PreparedChange {
   readonly operation: PatchOperation;
-  readonly source?: ResolvedWorkspacePath;
-  readonly destination?: ResolvedWorkspacePath;
+  readonly source?: ResolvedMutationPath;
+  readonly destination?: ResolvedMutationPath;
   readonly beforeBytes?: Uint8Array;
   readonly afterBytes?: Uint8Array;
   readonly beforeVersion?: FileVersion;
@@ -81,9 +82,7 @@ export interface RuntimePatchRequest {
 
 export interface PatchMutationFileSystem {
   readFileBytes(absolutePath: string): Promise<Uint8Array>;
-  getMetadata(
-    absolutePath: string,
-  ): Promise<{ readonly kind: string; readonly sizeBytes?: number } | null>;
+  getMetadata(absolutePath: string): Promise<RuntimeFileMetadata | null>;
   writePatchFile(absolutePath: string, bytes: Uint8Array): Promise<void>;
   removePatchFile(absolutePath: string): Promise<void>;
   movePatchFile(sourcePath: string, destinationPath: string): Promise<void>;

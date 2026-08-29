@@ -12,6 +12,7 @@ import {
   RuntimePathNotFoundError,
   RuntimePathTypeError,
 } from "./runtime-errors.js";
+import { RuntimePatchError } from "./patch/errors.js";
 
 export const MAX_WORKSPACE_PATH_BYTES = 4096;
 
@@ -21,6 +22,12 @@ export interface ResolvedWorkspacePath {
   readonly relativePath: string;
   readonly kind: RuntimeFileKind;
   readonly metadata: RuntimeFileMetadata;
+}
+
+export interface ResolvedMutationPath {
+  readonly absolutePath: string;
+  readonly relativePath: string;
+  readonly metadata: RuntimeFileMetadata | null;
 }
 
 function isWindowsAbsoluteLike(value: string): boolean {
@@ -85,6 +92,42 @@ export class WorkspacePathResolver {
     const relativePath =
       path.relative(this.scope.logicalRoot, absolutePath).replaceAll(path.sep, "/") || ".";
     return { absolutePath, realPath, relativePath, kind: metadata.kind, metadata };
+  }
+
+  async resolveMutationTarget(workspaceRelativePath: string): Promise<ResolvedMutationPath> {
+    const normalized = validateRelativeInput(workspaceRelativePath);
+    const absolutePath = path.normalize(path.resolve(this.scope.logicalRoot, normalized));
+    if (!isPathInsideOrEqual(this.scope.logicalRoot, absolutePath)) {
+      throw new RuntimePatchError("PATH_OUTSIDE_WORKSPACE");
+    }
+    const relativePath =
+      path.relative(this.scope.logicalRoot, absolutePath).replaceAll(path.sep, "/") || ".";
+    const segments = relativePath === "." ? [] : relativePath.split("/");
+    let current = this.scope.logicalRoot;
+    let metadata: RuntimeFileMetadata | null = null;
+    for (const segment of segments) {
+      current = path.join(current, segment);
+      metadata = await this.scope.filesystem.getMetadata(current);
+      if (metadata === null) break;
+      if (metadata.kind === "SYMLINK") {
+        throw new RuntimePatchError("SYMLINK_MUTATION_NOT_ALLOWED");
+      }
+    }
+    let containmentPath = current;
+    while (metadata === null && containmentPath !== this.scope.logicalRoot) {
+      containmentPath = path.dirname(containmentPath);
+      metadata = await this.scope.filesystem.getMetadata(containmentPath);
+    }
+    try {
+      const realPath = path.normalize(await this.scope.filesystem.realpath(containmentPath));
+      if (!isPathInsideOrEqual(this.scope.realRoot, realPath)) {
+        throw new RuntimePatchError("PATH_OUTSIDE_WORKSPACE");
+      }
+    } catch (error) {
+      if (error instanceof RuntimePatchError) throw error;
+      throw new RuntimePatchError("PATH_NOT_FOUND");
+    }
+    return { absolutePath, relativePath, metadata: metadata?.kind === "SYMLINK" ? null : metadata };
   }
 
   assertKind(pathValue: ResolvedWorkspacePath, kind: RuntimeFileKind): void {
