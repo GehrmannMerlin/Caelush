@@ -124,4 +124,51 @@ describe("protocol AgentEvent", () => {
         .success,
     ).toBe(false);
   });
+
+  it("keeps raw tool arguments out of the user-visible tool.requested event", () => {
+    const eventSchema = getSchema("AgentEventSchema");
+    const createEventId = getFactory("createEventId");
+    const createRunId = getFactory("createRunId");
+    const createSessionId = getFactory("createSessionId");
+    const createToolInvocationId = getFactory("createToolInvocationId");
+    if (
+      eventSchema === undefined ||
+      createEventId === undefined ||
+      createRunId === undefined ||
+      createSessionId === undefined ||
+      createToolInvocationId === undefined
+    ) {
+      return;
+    }
+
+    const privateInvocation = {
+      args: { apiKey: "CAELUSH_TOOL_SECRET_42" },
+      startedAt: 1_700_000_000_001,
+      finishedAt: 1_700_000_000_002,
+    };
+    const event = {
+      eventId: createEventId(),
+      schemaVersion: 1,
+      runId: createRunId(),
+      sessionId: createSessionId(),
+      type: "tool.requested",
+      timestamp: 1_700_000_000_000,
+      visibility: "USER_VISIBLE",
+      durability: { kind: "DURABLE", version: 1, sequence: 1 },
+      payload: {
+        invocationId: createToolInvocationId(),
+        toolName: "read_file",
+        externalCallId: "external-1",
+        riskLevel: "LOW",
+      },
+    };
+
+    const parsed = eventSchema.parse(event);
+    expect(parsed).toEqual(event);
+    expect(JSON.stringify(privateInvocation)).toContain("CAELUSH_TOOL_SECRET_42");
+    expect(JSON.stringify(parsed)).not.toContain("CAELUSH_TOOL_SECRET_42");
+    expect(JSON.stringify(parsed)).not.toContain("args");
+    expect(JSON.stringify(parsed)).not.toContain("startedAt");
+    expect(JSON.stringify(parsed)).not.toContain("finishedAt");
+  });
 });

@@ -1,14 +1,22 @@
 import { z } from "zod";
 import { AgentErrorSchema } from "../error.js";
 import { ObservationIdSchema, ToolInvocationIdSchema } from "../primitives/ids.js";
-import { ToolInvocationSchema } from "../tool.js";
+import { ToolNameSchema } from "../tool.js";
+import { RiskLevelSchema } from "../policy.js";
 import { createEventSchema } from "./base.js";
 
 const outputStreamSchema = z.enum(["stdout", "stderr"]);
 
 export const ToolRequestedEventSchema = createEventSchema(
   "tool.requested",
-  z.object({ invocation: ToolInvocationSchema }).strict(),
+  z
+    .object({
+      invocationId: ToolInvocationIdSchema,
+      toolName: ToolNameSchema,
+      externalCallId: z.string().min(1).optional(),
+      riskLevel: RiskLevelSchema,
+    })
+    .strict(),
 );
 export const ToolStartedEventSchema = createEventSchema(
   "tool.started",
