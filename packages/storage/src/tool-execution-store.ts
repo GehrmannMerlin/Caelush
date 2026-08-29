@@ -124,7 +124,7 @@ function writeInvocation(
       `INSERT INTO tool_invocations
        (id, run_id, step_id, external_call_id, tool_name, status, risk_level, revision,
         protocol_version, created_at_ms, started_at_ms, finished_at_ms, data_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
         run_id = excluded.run_id, step_id = excluded.step_id,
         external_call_id = excluded.external_call_id, tool_name = excluded.tool_name,
