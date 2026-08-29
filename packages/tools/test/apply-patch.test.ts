@@ -9,7 +9,6 @@ import {
   RuntimePatchError,
   RuntimePatchUncertainError,
   type Runtime,
-  type RuntimePatchRequest,
   type RuntimeResolver,
 } from "@caelush/runtime";
 import { describe, expect, it } from "vitest";
@@ -56,7 +55,7 @@ describe("apply_patch Tool registration", () => {
       supports: () => true,
       openWorkspace: async () => ({
         patch: {
-          apply: async (_input: RuntimePatchRequest) => {
+          apply: async () => {
             throw new RuntimePatchError("INVALID_PATCH");
           },
         },

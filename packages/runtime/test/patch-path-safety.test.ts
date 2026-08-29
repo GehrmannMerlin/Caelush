@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createWorkspaceId } from "@caelush/protocol";
-import { LocalRuntime, RuntimePatchError } from "../src/index.js";
+import { LocalRuntime } from "../src/index.js";
 import { createLocalPatchMutationFileSystem } from "../src/patch/committer.js";
 
 const temporaryDirectories: string[] = [];

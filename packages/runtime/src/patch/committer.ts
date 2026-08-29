@@ -6,7 +6,6 @@ import type {
   FileVersion,
   PatchChange,
   PatchMutationFileSystem,
-  PatchOperation,
   PreparedChange,
   PreparedPatch,
   PatchCommitResult,
