@@ -4,7 +4,11 @@ import { preparePatch } from "./planner.js";
 import type { PatchCommitResult, PatchMutationFileSystem, RuntimePatchRequest } from "./types.js";
 import type { WorkspacePathResolver } from "../workspace-path.js";
 
-export class RuntimePatchService {
+export interface RuntimePatchService {
+  apply(request: RuntimePatchRequest): Promise<PatchCommitResult>;
+}
+
+class LocalRuntimePatchService implements RuntimePatchService {
   constructor(
     private readonly pathResolver: Pick<WorkspacePathResolver, "resolveMutationTarget">,
     private readonly filesystem: PatchMutationFileSystem,
@@ -18,4 +22,11 @@ export class RuntimePatchService {
     });
     return commitPatch(prepared, this.filesystem);
   }
+}
+
+export function createRuntimePatchService(
+  pathResolver: Pick<WorkspacePathResolver, "resolveMutationTarget">,
+  filesystem: PatchMutationFileSystem,
+): RuntimePatchService {
+  return new LocalRuntimePatchService(pathResolver, filesystem);
 }

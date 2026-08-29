@@ -2,6 +2,8 @@
 
 Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI、Web 和其他宿主共享同一个可观察、可取消、可验证、可扩展的 Agent Core。
 
+本轮当前阶段为 **V1 Phase 8B：Safe File Mutation & Patch Engine**；文档中保留的 Phase 8A 描述是已完成的只读基线。
+
 当前仓库处于 **V1 Phase 8A：Local Runtime Foundation & Filesystem Read/Search**。Phase 1 的 JSON-safe Protocol Contract、Typed AgentEvent 和 Core Run State Machine、Phase 2 的可恢复 SQLite 持久化/Durable Event Store/EventBus、Phase 3 的唯一本地 Daemon/Session/Run HTTP API/SSE Event Stream，以及 Phase 4 的 Caelush-owned LLM contracts、Provider Registry 和单次 provider-turn streaming runtime 已完成；Phase 5A 建立只读 workspace/project intelligence，Phase 5B 针对具体任务发现、排序并预算项目文件，Phase 5C 将项目事实、指令、相关文件和最近完整对话按 caller-supplied input budget 组装为 provider-independent、LLMRequest-ready 的 `LLMMessage[]`；Phase 6A 定义 deterministic Agent decision、step、tool-boundary 和 kernel-state semantics，Phase 6B 将这些合约接入 ContextBuilder 和单次 LLM provider turn，Phase 6C 再通过 RunController、Conversation Ledger、Continuation checkpoint、原子 SQLite execution commit 与 Durable Event Trace 将它们连接到 local-host recovery；Phase 7A 建立严格 Schema Runtime、不可变 Tool Registry、模型/运行时一致性守卫和 Tool Output Policy，Phase 7B 增加注入式 ToolDispatcher、Gate、durable ToolInvocation/Observation lifecycle、atomic execution persistence、idempotency 与 restart recovery，Phase 7C 增加严格顺序 Tool Batch、uncertain-side-effect recovery barrier、approval boundary 和 RunController runtime integration；Phase 8A 建立 tool-independent `@caelush/runtime`、workspace-relative path boundary、bounded UTF-8 read、deterministic file discovery、固定 `rg` search backend，以及 `read_file`、`list_directory`、`find_files`、`search_text` 四个只读 Built-in Tool。
 
 ## Phase 6 Status
@@ -19,12 +21,16 @@ Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI�
 ## Phase 8 Status
 
 - Phase 8A — Local Runtime Foundation & Filesystem Read/Search: **COMPLETED**
+- Phase 8B — Safe File Mutation & Patch Engine: **COMPLETED**
+- Phase 8 — overall: **IN PROGRESS**（8C Shell/Managed Process 与 8D Git/最终集成尚未实现）
 
 Phase 7 contains exactly 7A, 7B, and 7C. Caelush now has an immutable validated Tool Registry and a single-Tool Dispatcher. A valid call is durably recorded as `REQUESTED`, gated, durably checkpointed as `RUNNING`, executed once through the resolved handler, output-validated, and atomically settled with its `ToolObservation` and lifecycle event. Exact duplicate calls are idempotent, stale `RUNNING` calls fail closed during recovery, and raw arguments/results are kept out of lifecycle events.
 
 Caelush now has an injected `AgentLoop` and a durable `RunController`. The loop performs at most one provider turn per invocation; the controller checkpoints Run/State/Step before the provider, persists real conversation messages and continuation boundaries atomically, publishes only committed lifecycle events, and recovers known local-host boundaries after restart. A model Tool-call group is executed by the injected `ToolBatchCoordinator` in assistant source order through the single `ToolDispatcher`; completed Tool Results are converted and durably accepted before the next turn, while approval and uncertain-side-effect states remain explicit durable boundaries. Tools are never executed by AgentLoop, and a final candidate stops at `VERIFYING` until a future Verification boundary.
 
 Phase 8A adds a concrete local execution substrate below the Tool layer. Built-in filesystem paths are always workspace-relative and are checked both lexically and through realpath containment; internal symlinks are allowed, while symlink escapes fail closed. Reads are streaming/bounded, strict UTF-8, binary-aware, and line-paginated. File discovery uses bounded deterministic `fast-glob`, and text search uses a fixed `rg` adapter with `shell=false` and no model-controlled arguments. These tools are read-only and do not provide mutation, shell, process management, Git, permissions, approvals, sandboxing, retries, cancellation, or verification execution.
+
+Phase 8B adds the narrow `apply_patch` mutation surface. A strict, bounded Add/Update/Delete/Move document is fully parsed and prepared in memory; all source SHA-256/size guards and destination absence checks pass before the first mutation. Existing mutation paths cannot traverse symlinks, existing UTF-8 BOM/newline/final-newline state is preserved, and in-process commit failures attempt verified reverse rollback. This is best-effort and is not an OS-level atomic transaction, crash-atomic, exactly-once mutation, sandbox, production permission evaluator, shell runtime, or Git runtime. The read-only and mutation registrations remain explicit factories; the final default catalog belongs to Phase 8D.
 
 ## Phase 5 Status
 
@@ -33,6 +39,8 @@ Phase 8A adds a concrete local execution substrate below the Tool layer. Built-i
 - Phase 5C — ContextBuilder & Final Context Assembly: **COMPLETED**
 
 Caelush can build provider-independent, budgeted LLMRequest-ready message context from project facts, project instructions, relevant files, and conversation history. Phase 6C consumes that context through a resumable one-turn AgentLoop and persists only the real conversation separately from synthetic provider context. See [Run Controller](docs/architecture/run-controller.md) for the durable execution and recovery boundary.
+
+Phase 8B architecture details are documented in [Patch Engine](docs/architecture/patch-engine.md).
 
 ## 技术栈
 

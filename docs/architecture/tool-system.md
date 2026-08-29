@@ -152,8 +152,16 @@ All Phase 8A file paths are workspace-relative. A `WorkspacePathResolver` first 
 
 The four registrations are ordered `read_file`, `list_directory`, `find_files`, and `search_text`. They are intentionally provided as a registration factory rather than a final default catalog, because mutation, shell, process, and Git tools belong to later Phase 8 rounds. `riskLevel`, `requiredCapabilities`, and `runtimeRequirements` remain metadata in Phase 8A; permission and approval decisions belong to Phase 9.
 
+## Phase 8B verified mutation boundary
+
+`createFileMutationToolRegistrations()` exposes only `apply_patch`; it is intentionally separate from the Phase 8A read-only factory and from any final default catalog. Its metadata is `HIGH` risk with `FS_WRITE` and `FS_DELETE`, but those fields are not an authorization decision before Phase 9.
+
+The handler accepts exactly `{ patch: string }`, resolves the existing data-only `ToolExecutionEnvironment` through `RuntimeResolver`, and delegates to `RuntimeWorkspaceScope.patch`. It does not parse model paths, import Node filesystem APIs, calculate hashes, write files, query Storage, or implement rollback. Runtime owns the `PatchParser → PatchPlanner → PreparedPatch → PatchCommitter` pipeline and returns only bounded per-file summaries.
+
+Patch mutation rejects symlink paths and existing symlink ancestors, requires regular UTF-8 text sources, refuses existing Add/Move destinations, preserves BOM/newline/final-newline semantics, checks all source hashes and sizes before the first write, and rolls back a committed prefix when an in-process commit fails. A rollback that cannot be verified is a Tool-owned `UNCERTAIN_SIDE_EFFECT`; Batch then skips trailing calls. No automatic replay is implied by the hash guard.
+
 ## Security and Phase Boundaries
 
-`riskLevel`, `requiredCapabilities`, and `runtimeRequirements` are metadata, not authorization. Permission, capability and risk evaluation, and approval enforcement belong to Phase 9. Phase 8A is strictly read-only; filesystem mutation, Shell, Process, and Git handlers belong to later Phase 8 rounds.
+`riskLevel`, `requiredCapabilities`, and `runtimeRequirements` are metadata, not authorization. Permission, capability and risk evaluation, and approval enforcement belong to Phase 9. Phase 8A remains strictly read-only; Phase 8B adds only verified text patch mutation. Shell, Process, and Git handlers belong to Phase 8C/8D and are not implemented here. The patch engine is best-effort and not OS-level atomic, crash-atomic, exactly-once, sandboxed, or a production permission evaluator.
 
 Phase 7 does not implement a concrete permission evaluator, Approval manager or resolution endpoint, Runtime, filesystem/shell/process/git Tool, retry, timeout, cancellation, parallelism, or Verification execution. The user-visible durable `tool.requested` event contract contains only `invocationId`, `toolName`, optional `externalCallId`, and `riskLevel`; it never contains raw arguments. `ToolObservation` retains the bounded model-facing content and validated details privately. The RunController integration owns only the batch/runtime boundary; AgentLoop remains unaware of Dispatcher, Invocation, Observation, Storage, and EventBus.

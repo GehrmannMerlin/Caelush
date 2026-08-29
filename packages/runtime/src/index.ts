@@ -40,7 +40,7 @@ export type {
 } from "./filesystem/types.js";
 export { LocalRuntimeFileSystem } from "./filesystem/local-filesystem.js";
 export { RuntimePatchError, RuntimePatchUncertainError } from "./patch/errors.js";
-export { RuntimePatchService } from "./patch/service.js";
+export type { RuntimePatchService } from "./patch/service.js";
 export { parsePatch } from "./patch/parser.js";
 export { PATCH_LIMITS } from "./patch/types.js";
 export {
@@ -56,7 +56,6 @@ export type {
   PatchHunk,
   PatchLine,
   PatchLineKind,
-  PatchMutationFileSystem,
   PatchOperation,
   PatchCommitResult,
   PreparedChange,

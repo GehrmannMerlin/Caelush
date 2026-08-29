@@ -1,12 +1,8 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  RuntimePatchError,
-  RuntimePatchUncertainError,
-  type PatchMutationFileSystem,
-  type PreparedPatch,
-} from "../src/index.js";
+import { RuntimePatchError, RuntimePatchUncertainError, type PreparedPatch } from "../src/index.js";
+import type { PatchMutationFileSystem } from "../src/patch/types.js";
 import { commitPatch } from "../src/patch/committer.js";
 
 function bytes(value: string): Uint8Array {

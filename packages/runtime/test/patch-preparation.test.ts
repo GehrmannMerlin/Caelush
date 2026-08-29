@@ -3,12 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createWorkspaceId } from "@caelush/protocol";
-import {
-  LocalRuntime,
-  PATCH_LIMITS,
-  parsePatch,
-  type PatchMutationFileSystem,
-} from "../src/index.js";
+import { LocalRuntime, PATCH_LIMITS, parsePatch } from "../src/index.js";
+import type { PatchMutationFileSystem } from "../src/patch/types.js";
 import { preparePatch } from "../src/patch/planner.js";
 
 const temporaryDirectories: string[] = [];

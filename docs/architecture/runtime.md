@@ -16,10 +16,11 @@ RuntimeWorkspaceScope
     ├── WorkspacePathResolver
     ├── RuntimeFileSystem ───────► Node filesystem APIs
     ├── RuntimeFileDiscovery ────► fast-glob
-    └── RuntimeTextSearch ───────► fixed rg subprocess adapter
+    ├── RuntimeTextSearch ───────► fixed rg subprocess adapter
+    └── RuntimePatchService ────► verified patch-private mutation primitives
 ```
 
-`Runtime`, `RuntimeWorkspaceScope`, and the filesystem/search interfaces are Caelush-owned contracts. Node `Stats`, `Dirent`, `FileHandle`, `ChildProcess`, raw ripgrep parser state, and mutable buffers do not cross the public package boundary. `LocalRuntime` implements only the capabilities needed by Phase 8A: workspace opening, metadata, directory listing, bounded text reading, bounded file discovery, and fixed text search.
+`Runtime`, `RuntimeWorkspaceScope`, and the filesystem/search/patch interfaces are Caelush-owned contracts. Node `Stats`, `Dirent`, `FileHandle`, `ChildProcess`, raw ripgrep parser state, and mutable buffers do not cross the public package boundary. `LocalRuntime` implements the Phase 8A read/search capabilities plus the narrow Phase 8B `RuntimePatchService`; it does not expose generic blind write, overwrite, delete, or raw-byte APIs.
 
 The package direction is:
 
@@ -60,7 +61,7 @@ The model cannot choose the executable, arbitrary flags, shell mode, environment
 
 Operational Runtime errors are typed and converted by built-in handlers to model-recoverable `ToolExecutionResult` values with safe error codes. Host paths, stack traces, raw filesystem errors, raw stderr, and internal IDs are not model-facing. Unexpected Runtime invariants remain typed throws; the existing ToolDispatcher sanitizes and durably records those infrastructure failures.
 
-Phase 8A intentionally does not implement file mutation, patching, shell execution, a managed process manager, PTY, Git, permission evaluation, approval resolution, sandboxing, retry/backoff, run cancellation, generic timeout, or Verification execution. There are no Runtime persistence tables or migrations, no Runtime event side channel, and no final default catalog beyond the four read-only registration definitions.
+Phase 8B adds only the verified `apply_patch` path. Parsing and preparation are mutation-free; all sources and destinations are guarded before sequential commit; ordinary commit failures attempt exact reverse rollback; rollback failure or verification mismatch becomes an uncertain side effect. This is not crash-atomic, exactly-once, or a fully transactional filesystem. Shell execution, managed processes, PTY, Git, permission evaluation, approval resolution, sandboxing, retry/backoff, run cancellation, generic timeout, and Verification execution remain out of scope. There are no Runtime persistence tables or migrations, no Runtime event side channel, and no final default catalog beyond the explicit read-only and mutation registration factories.
 
 ## References
 

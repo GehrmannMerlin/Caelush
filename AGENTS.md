@@ -174,6 +174,22 @@ pnpm check
 - Phase 8A must not introduce non-atomic `file.read` event side channels. The Phase 7 durable ToolInvocation and ToolObservation lifecycle remains the execution/audit mechanism for read-only tools.
 - No filesystem mutation is allowed in Phase 8A.
 
+## Phase 8B Safe File Mutation and Patch Rules
+
+- Phase 8B is the current and only mutation round. Phase 8 remains exactly 8A, 8B, 8C, and 8D; do not create 8B-1, 8B-2, 8E, or another Phase 8 round.
+- Reuse the Phase 8A `LocalRuntime`, `RuntimeWorkspaceScope`, `WorkspacePathResolver`, and data-only `ToolExecutionEnvironment`. Do not create V2 runtime/path/environment APIs.
+- The only formal mutation Tool surface in 8B is `apply_patch` with strict JSON input `{ patch: string }`; the final default catalog remains deferred to 8D.
+- Patch execution is `Parse → Plan → Prepare → Guard all → Commit sequentially → Verify`; parsing/preparation must perform zero workspace mutation, and one hunk failure prevents every mutation.
+- Runtime owns `PatchParser`, `PatchPlanner`, `PreparedPatch`, `PatchCommitter`, and `RuntimePatchService`; Tools owns only the thin handler/registration. Runtime must never import Tools, Core, Storage, Events, Security, or Verification.
+- Do not expose generic `writeTextFile`, `overwriteFile`, `deleteAnything`, or `rawWrite` APIs. Patch-private mutation primitives may be called only by `PatchCommitter`.
+- Mutation paths are stricter than read paths: sources and existing ancestors may not be symlinks; Update/Delete/Move sources must be regular UTF-8 text files; Add/Move destinations must be absent; missing destination parents are created only after containment/symlink checks.
+- Enforce bounded patch bytes/files/hunks/target/prepared bytes and reuse the existing workspace-relative path byte budget. Never add a special invocation channel that bypasses the Dispatcher argument limit.
+- Existing source bytes, SHA-256/size version, BOM, preferred newline, and final-newline state are prepared before commit. New files use UTF-8 LF without BOM. Hunk matching is exact and unique; never apply fuzzy guesses.
+- Before the first mutation, every source must still have the prepared regular-file type, size, and raw-byte hash, and every Add/Move destination must still be absent. A stale guard produces `PATCH_STALE` or `HASH_GUARD_MISMATCH` with zero mutation.
+- Commit is deterministic and sequential. On ordinary in-process failure, stop the remaining operations, rollback the committed prefix in reverse order, remove only empty directories created by this transaction, and verify exact restoration. This is best-effort, not OS-level atomic, crash-atomic, fully transactional, or exactly-once.
+- Rollback failure or verification mismatch throws runtime-owned `RuntimePatchUncertainError`; the handler maps it to Tool-owned `ToolExecutionUncertainError`, Dispatcher durably records `UNCERTAIN_SIDE_EFFECT`, and Batch skips trailing calls. A recovered RUNNING patch is never automatically rerun.
+- Do not add file events, `AgentState.changedFiles`, Storage tables/migrations, shell/Git delegation, watcher/LSP/formatter side channels, or Phase 9 permission evaluation. Risk/capability metadata is not authorization in 8B.
+
 ## Phase 7C Tool Batch and Runtime Integration Rules
 
 - Phase 7 contains exactly 7A, 7B, and 7C; do not add Phase 7D.
@@ -192,7 +208,9 @@ pnpm check
 
 当前是 Phase 8A 完成边界。除 Phase 1 已正式定义的 AgentSession、AgentRun、AgentStep、AgentState、AgentEvent、ToolDefinition、ToolInvocation、Observation、ApprovalRequest、VerificationResult 和 Run State Machine，以及 Phase 2 的 SQLite/Drizzle Storage、Repository、Run State Snapshot、Durable Event Store、EventBus、Replay 与 Live Watch、Phase 3 的 loopback-only Daemon、Health/Session/Run HTTP API 和 Durable/Ephemeral SSE Event Stream 外，Phase 4A/4B/4C 已建立 Caelush-owned LLM contracts、Provider Registry、single-turn streaming runtime 和真实 OpenAI-shaped SSE 兼容性边界；Phase 5A/5B/5C 已完成 Project Intelligence、Relevant File Planning 与 ContextBuilder finalization；Phase 6A/6B/6C 已完成 deterministic Agent loop、Conversation Ledger、Continuation checkpoint、原子 RunExecutionStore、Durable Event Trace、RunController 与 local-host recovery；Phase 7A/7B/7C 已完成 Tool contracts、严格 Schema Runtime、不可变 ToolRegistry、Tool Output Policy、ToolDispatcher、Gate port、ToolInvocation/ToolObservation durable lifecycle、idempotency、recovery、strict source-order Tool Batch、uncertain-side-effect recovery barrier、approval boundary、LLMToolResult conversion 与 RunController runtime integration；Phase 8A 已建立 tool-independent Local Runtime、workspace-relative path resolution、bounded strict-UTF-8 filesystem read、deterministic file discovery、fixed ripgrep search，以及四个只读 Built-in Tool。Phase 8A 仍不实现文件 mutation、patch、Shell/Process/Git、权限/Approval resolution、sandbox、retry、timeout、cancellation、parallelism、Verification execution 或 `COMPLETED` transition。
 
-Phase 8 后续必须遵守固定的 8B、8C、8D 边界；不得新增 Phase 8 轮次，也不得在 8A 提前实现后续能力。
+当前 Phase 8B 已在上述 8A 只读基线之上增加唯一的 `apply_patch` verified patch engine：支持严格 bounded Add/Update/Delete/Move、全量 precommit raw-byte SHA-256/size guard、顺序 commit、best-effort rollback 与 uncertainty fail-closed；它不实现 Shell/Process/Git、权限/Approval resolution、sandbox、retry、timeout、cancellation、parallelism、Verification execution 或 `COMPLETED` transition。
+
+Phase 8 后续必须遵守固定的 8B、8C、8D 边界；不得新增 Phase 8 轮次，也不得在 8A/8B 提前实现后续能力。
 
 Phase 5B context rules:
 
