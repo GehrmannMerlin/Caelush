@@ -32,6 +32,10 @@ describe("OpenAI-compatible tool conversion", () => {
       properties: { path: { type: "string", description: "File path" } },
       required: ["path"],
     });
+    expect(generated).not.toHaveProperty("riskLevel");
+    expect(generated).not.toHaveProperty("requiredCapabilities");
+    expect(generated).not.toHaveProperty("runtimeRequirements");
+    expect(generated).not.toHaveProperty("outputSchema");
   });
 
   it("returns no tools when the request has no tool definitions", () => {

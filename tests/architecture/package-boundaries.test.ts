@@ -139,6 +139,37 @@ describe("package boundaries", () => {
     expect(productionSource).not.toContain("reasoning.delta");
   });
 
+  it("keeps the Tool Kernel below execution layers and free of host side effects", async () => {
+    const manifest = await readManifest("packages/tools/package.json");
+    const dependencies = dependencyEntries(manifest);
+    expect(dependencies[protocolPackageName]).toBe("workspace:*");
+    expect(dependencies.ajv).toBe("8.20.0");
+    expect(Object.keys(dependencies).sort()).toEqual(["@caelush/protocol", "ajv"]);
+
+    const sourceRoot = path.join(repositoryRoot, "packages", "tools", "src");
+    const files = await sourceFiles(sourceRoot);
+    const sources = await Promise.all(
+      files.map(async (filePath) => ({ filePath, contents: await readFile(filePath, "utf8") })),
+    );
+    const source = sources.map(({ contents }) => contents).join("\n");
+    expect(source).toMatch(/from\s+["']@caelush\/protocol["']/);
+    expect(source).not.toMatch(
+      /from\s+["']@caelush\/(?:core|context|storage|events|runtime|security|verification|daemon|llm)["']/,
+    );
+    expect(source).not.toMatch(/from\s+["'](?:ai|@ai-sdk\/)/);
+    expect(source).not.toMatch(/node:(?:fs|child_process|http|https|sqlite)/);
+    expect(source).not.toMatch(/\b(?:fetch|spawn|exec)\s*\(/);
+    expect(source).not.toMatch(
+      /\b(?:EventBus|Permission|ApprovalManager|ToolInvocation|ToolObservation)\b/,
+    );
+    expect(source).not.toMatch(/handler\.execute\s*\(/);
+
+    const ajvImports = sources
+      .filter(({ contents }) => /from\s+["']ajv["']/.test(contents))
+      .map(({ filePath }) => path.relative(repositoryRoot, filePath).replaceAll(path.sep, "/"));
+    expect(ajvImports).toEqual(["packages/tools/src/schema-runtime.ts"]);
+  });
+
   it("keeps Events provider-neutral and Storage below Core", async () => {
     const events = await readManifest("packages/events/package.json");
     const storage = await readManifest("packages/storage/package.json");

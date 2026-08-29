@@ -2,13 +2,21 @@
 
 Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI、Web 和其他宿主共享同一个可观察、可取消、可验证、可扩展的 Agent Core。
 
-当前仓库处于 **V1 Phase 6C：RunController, Durable Persistence & Event Trace**。Phase 1 的 JSON-safe Protocol Contract、Typed AgentEvent 和 Core Run State Machine、Phase 2 的可恢复 SQLite 持久化/Durable Event Store/EventBus、Phase 3 的唯一本地 Daemon/Session/Run HTTP API/SSE Event Stream，以及 Phase 4 的 Caelush-owned LLM contracts、Provider Registry 和单次 provider-turn streaming runtime 已完成；Phase 5A 建立只读 workspace/project intelligence，Phase 5B 针对具体任务发现、排序并预算项目文件，Phase 5C 将项目事实、指令、相关文件和最近完整对话按 caller-supplied input budget 组装为 provider-independent、LLMRequest-ready 的 `LLMMessage[]`；Phase 6A 定义 deterministic Agent decision、step、tool-boundary 和 kernel-state semantics，Phase 6B 将这些合约接入 ContextBuilder 和单次 LLM provider turn，Phase 6C 再通过 RunController、Conversation Ledger、Continuation checkpoint、原子 SQLite execution commit 与 Durable Event Trace 将它们连接到 local-host recovery。Phase 6C 仍不执行本地 Tool 或 Verification，也不直接进入 `COMPLETED`。
+当前仓库处于 **V1 Phase 7A：Tool Contracts, Registry & Schema Runtime**。Phase 1 的 JSON-safe Protocol Contract、Typed AgentEvent 和 Core Run State Machine、Phase 2 的可恢复 SQLite 持久化/Durable Event Store/EventBus、Phase 3 的唯一本地 Daemon/Session/Run HTTP API/SSE Event Stream，以及 Phase 4 的 Caelush-owned LLM contracts、Provider Registry 和单次 provider-turn streaming runtime 已完成；Phase 5A 建立只读 workspace/project intelligence，Phase 5B 针对具体任务发现、排序并预算项目文件，Phase 5C 将项目事实、指令、相关文件和最近完整对话按 caller-supplied input budget 组装为 provider-independent、LLMRequest-ready 的 `LLMMessage[]`；Phase 6A 定义 deterministic Agent decision、step、tool-boundary 和 kernel-state semantics，Phase 6B 将这些合约接入 ContextBuilder 和单次 LLM provider turn，Phase 6C 再通过 RunController、Conversation Ledger、Continuation checkpoint、原子 SQLite execution commit 与 Durable Event Trace 将它们连接到 local-host recovery；Phase 7A 现在建立严格 Schema Runtime、不可变 Tool Registry、模型/运行时一致性守卫和 Tool Output Policy，但仍不执行 Tool。
 
 ## Phase 6 Status
 
 - Phase 6A — Agent Execution Contracts & Kernel State: **COMPLETED**
 - Phase 6B — Context → LLM Resumable Decision Loop: **COMPLETED**
 - Phase 6C — RunController, Persistence & Event Trace: **COMPLETED**
+
+## Phase 7 Status
+
+- Phase 7A — Tool Contracts, Registry & Schema Runtime: **IN PROGRESS**
+- Phase 7B — Tool Dispatcher & Durable Invocation Lifecycle: **NOT STARTED**
+- Phase 7C — Tool Batch Coordination & Agent Runtime Integration: **NOT STARTED**
+
+Phase 7 contains exactly 7A, 7B, and 7C. Caelush now has an immutable validated Tool Registry: each model description, input/output schema, and future handler belongs to one registration, and the model catalog is derived from the same snapshot used for resolution. Phase 7A does not execute tools; real execution starts only in Phase 7B.
 
 Caelush now has an injected `AgentLoop` and a durable `RunController`. The loop performs at most one provider turn per invocation; the controller checkpoints Run/State/Step before the provider, persists real conversation messages and continuation boundaries atomically, publishes only committed lifecycle events, and recovers known local-host boundaries after restart. Tool results are normalized and durably accepted before the next turn; tools are never executed by Core, and a final candidate stops at `VERIFYING` until a future Verification boundary.
 
@@ -39,7 +47,7 @@ packages/
   core/         Agent Kernel 边界
   llm/          LLM Provider 边界
   context/      Workspace/project intelligence 与 ContextBuilder 边界
-  tools/        Tool System 边界
+  tools/        Tool Contracts、Schema Runtime 与 Registry 边界
   runtime/      执行 Runtime 边界
   security/     Permission / Sandbox 边界
   verification/ 完成验证边界
@@ -71,4 +79,4 @@ pnpm check
 
 ## Packages 基础说明
 
-Phase 1 在 `@caelush/protocol` 中定义 Session、Run、Step、State、Tool/Observation/Approval/Verification 和 Event Contract，在 `@caelush/core` 中提供 Run State Machine。Phase 2 在 `@caelush/storage` 中提供 Repository、Run State Snapshot、SQLite Migration 和 Durable Event Store，在 `@caelush/events` 中提供 EventBus、Replay 与 Live Watch。Phase 3 在 `@caelush/daemon` 中提供 Local HTTP Service、Session API、Run API 和 SSE Event Stream。Phase 4A 在 `@caelush/llm` 中定义 provider-neutral LLM contracts 和显式 Provider Registry；Phase 4B 增加注入式 `LLMGateway` 和 one-turn streaming runtime；Phase 5A 在 `@caelush/context` 中发现 workspace、project root、环境、项目画像和层级指令，Phase 5B 增加 task-dependent relevant file discovery、deterministic ranking、provider-independent estimation 与 file budget，Phase 5C 增加 deterministic final context assembly、conversation integrity、compaction boundary 和 caller-supplied model-input budget；Phase 6B 在 `@caelush/core` 中以 ports 方式编排 ContextBuilder、LLMRequest 与单次 provider turn，并以 normalized tool-result batch 支持恢复。详见 [Package Boundaries](docs/architecture/package-boundaries.md)、[Architecture Overview](docs/architecture/README.md)、[Protocol V1](docs/architecture/protocol-v1.md)、[Context & Project Intelligence](docs/architecture/context-and-project-intelligence.md)、[Relevant Context Discovery](docs/architecture/relevant-context-discovery.md)、[ContextBuilder](docs/architecture/context-builder.md)、[Agent Loop](docs/architecture/agent-loop.md)、[Storage & Events](docs/architecture/storage-and-events.md)、[Local Agent Service](docs/architecture/local-agent-service.md) 和 [LLM Gateway](docs/architecture/llm-gateway.md)。
+Phase 1 在 `@caelush/protocol` 中定义 Session、Run、Step、State、Tool/Observation/Approval/Verification 和 Event Contract，在 `@caelush/core` 中提供 Run State Machine。Phase 2 在 `@caelush/storage` 中提供 Repository、Run State Snapshot、SQLite Migration 和 Durable Event Store，在 `@caelush/events` 中提供 EventBus、Replay 与 Live Watch。Phase 3 在 `@caelush/daemon` 中提供 Local HTTP Service、Session API、Run API 和 SSE Event Stream。Phase 4A 在 `@caelush/llm` 中定义 provider-neutral LLM contracts 和显式 Provider Registry；Phase 4B 增加注入式 `LLMGateway` 和 one-turn streaming runtime；Phase 5A 在 `@caelush/context` 中发现 workspace、project root、环境、项目画像和层级指令，Phase 5B 增加 task-dependent relevant file discovery、deterministic ranking、provider-independent estimation 与 file budget，Phase 5C 增加 deterministic final context assembly、conversation integrity、compaction boundary 和 caller-supplied model-input budget；Phase 6B 在 `@caelush/core` 中以 ports 方式编排 ContextBuilder、LLMRequest 与单次 provider turn，并以 normalized tool-result batch 支持恢复；Phase 7A 在 `@caelush/tools` 中增加 Tool Registration、严格 Ajv Schema Runtime、immutable ToolRegistry 与 model/runtime catalog consistency。详见 [Package Boundaries](docs/architecture/package-boundaries.md)、[Architecture Overview](docs/architecture/README.md)、[Protocol V1](docs/architecture/protocol-v1.md)、[Tool System](docs/architecture/tool-system.md)、[Context & Project Intelligence](docs/architecture/context-and-project-intelligence.md)、[Relevant Context Discovery](docs/architecture/relevant-context-discovery.md)、[ContextBuilder](docs/architecture/context-builder.md)、[Agent Loop](docs/architecture/agent-loop.md)、[Storage & Events](docs/architecture/storage-and-events.md)、[Local Agent Service](docs/architecture/local-agent-service.md) 和 [LLM Gateway](docs/architecture/llm-gateway.md)。

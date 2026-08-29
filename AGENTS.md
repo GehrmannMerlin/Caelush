@@ -86,6 +86,21 @@ Phase 6 rules:
 - Context preparation failures create no AgentStep and do not increment usage. Provider/model failures after step creation settle a failed step, increment `UsageState.steps`, preserve `RUNNING`, and return a sanitized failure.
 - Input Run, State, history, and Tool definitions are caller-owned and must not be mutated. `maxSteps` is the only Phase 6B loop gate; retry, timeout, cancellation, token/cost budgets, doom-loop detection, and tool-call budgets remain later responsibilities.
 
+Phase 7 rules:
+
+- Phase 7 contains exactly 7A, 7B, and 7C; do not add additional Phase 7 rounds.
+- `ToolRegistry` is the single source of truth for active tools. The model-visible `ToolDefinition` catalog must be derived from the same registry that resolves executable handlers.
+- Never maintain separate model-tool and runtime-tool maps that can drift. A `ToolRegistration` binds one `ToolDefinition` to one `ToolHandler`; duplicate `ToolName` registration is a configuration error and must never silently overwrite another tool.
+- `ToolRegistry` is immutable after build. Tool definitions and nested JSON schemas must be copied and deeply frozen at registration boundaries so caller mutation cannot alter the active catalog.
+- Tool input and output schemas compile once at registry build time, not once per invocation. Validation must not coerce values, insert defaults, remove properties, or mutate arguments.
+- Phase 7A function-tool input and output schemas must be object-root schemas with top-level `additionalProperties: false`. External refs, async schemas, custom keywords, and external schema loading are rejected.
+- Phase 7A does not perform lossy model-facing schema compaction. Oversized schemas and catalogs fail registration/build.
+- Tool descriptions are model-facing prompt surface and must be concise. Argument-specific instructions belong in schema descriptions rather than duplicated global prompt text.
+- `riskLevel`, `requiredCapabilities`, `runtimeRequirements`, and `outputSchema` are runtime metadata and must not leak into provider-specific model tool definitions unless a future contract explicitly requires them.
+- `ToolExecutionResult.content` is model-facing text. `ToolExecutionResult.details` is structured runtime/UI data, and `ToolDefinition.outputSchema` validates `details`, not `content`.
+- Phase 7A defines Tool contracts and registry only. It does not execute tools, persist invocations/output, publish tool events, evaluate permissions, or request approvals. Real Tool execution begins only in Phase 7B.
+- Filesystem, Shell, Process, and Git handlers belong to Phase 8. Permission, risk evaluation, capability evaluation, and approval enforcement belong to Phase 9.
+
 Phase 5A context rules:
 
 - `@caelush/context` owns workspace/project discovery but does not assemble LLM prompts.
@@ -135,7 +150,7 @@ pnpm check
 
 ## V1 Phase Boundary
 
-当前是 Phase 6C 完成边界。除 Phase 1 已正式定义的 AgentSession、AgentRun、AgentStep、AgentState、AgentEvent、ToolDefinition、ToolInvocation、Observation、ApprovalRequest、VerificationResult 和 Run State Machine，以及 Phase 2 的 SQLite/Drizzle Storage、Repository、Run State Snapshot、Durable Event Store、EventBus、Replay 与 Live Watch、Phase 3 的 loopback-only Daemon、Health/Session/Run HTTP API 和 Durable/Ephemeral SSE Event Stream 外，Phase 4A 已建立 Caelush-owned LLM contracts、LLMProvider 和显式 Provider Registry，Phase 4B 已建立注入式 LLMGateway 的 single-turn streaming runtime、runtime event validation、tool-call lifecycle validation、abort/timeout/cancellation 和 result aggregation，Phase 4C-1 已建立仅位于 `@caelush/llm` Provider Adapter 内的 OpenAI-compatible AI SDK transport，Phase 4C-2 已完成真实 OpenAI-shaped SSE 兼容性矩阵、工具调用 identity/round-trip 安全、reasoning/usage/finish/error/secret 回归，以及仅 adapter-private 的歧义 identity fail-closed guard；Phase 5A/5B/5C 已完成 Project Intelligence、Relevant File Planning 与 ContextBuilder finalization；Phase 6A 已建立 deterministic Agent decision、step、tool-boundary、tool-result resume、AgentState、AgentStep 和 maxSteps contracts；Phase 6B 已完成注入式 Context → LLM resumable decision loop；Phase 6C 已完成 Conversation Ledger、Continuation checkpoint、原子 RunExecutionStore、Durable Event Trace、RunController 与 local-host recovery。Phase 6C 仍不实现 Tool 执行、Runtime、Approval resolution、Daemon model config、Ink CLI 功能、React Web 功能、重试、run-level cancellation、doom-loop detection、Verification execution 或 `COMPLETED` transition。
+当前是 Phase 7A 完成边界。除 Phase 1 已正式定义的 AgentSession、AgentRun、AgentStep、AgentState、AgentEvent、ToolDefinition、ToolInvocation、Observation、ApprovalRequest、VerificationResult 和 Run State Machine，以及 Phase 2 的 SQLite/Drizzle Storage、Repository、Run State Snapshot、Durable Event Store、EventBus、Replay 与 Live Watch、Phase 3 的 loopback-only Daemon、Health/Session/Run HTTP API 和 Durable/Ephemeral SSE Event Stream 外，Phase 4A 已建立 Caelush-owned LLM contracts、LLMProvider 和显式 Provider Registry，Phase 4B 已建立注入式 LLMGateway 的 single-turn streaming runtime、runtime event validation、tool-call lifecycle validation、abort/timeout/cancellation 和 result aggregation，Phase 4C-1 已建立仅位于 `@caelush/llm` Provider Adapter 内的 OpenAI-compatible AI SDK transport，Phase 4C-2 已完成真实 OpenAI-shaped SSE 兼容性矩阵、工具调用 identity/round-trip 安全、reasoning/usage/finish/error/secret 回归，以及仅 adapter-private 的歧义 identity fail-closed guard；Phase 5A/5B/5C 已完成 Project Intelligence、Relevant File Planning 与 ContextBuilder finalization；Phase 6A 已建立 deterministic Agent decision、step、tool-boundary、tool-result resume、AgentState、AgentStep 和 maxSteps contracts；Phase 6B 已完成注入式 Context → LLM resumable decision loop；Phase 6C 已完成 Conversation Ledger、Continuation checkpoint、原子 RunExecutionStore、Durable Event Trace、RunController 与 local-host recovery；Phase 7A 已建立 ToolHandler、ToolExecutionResult、ToolRegistration、严格 Ajv Schema Runtime、不可变 ToolRegistry、模型/运行时 catalog consistency 和 Tool Output Policy。Phase 7A 仍不执行 Tool、Runtime、Approval resolution、Daemon model config、Ink CLI 功能、React Web 功能、重试、run-level cancellation、Verification execution 或 `COMPLETED` transition。
 
 下一阶段不得扩展为 Phase 6D；后续工作必须另行定义在 Phase 6 之外。
 
