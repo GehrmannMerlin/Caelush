@@ -98,7 +98,10 @@ export function assertRunExecutionInvariant(snapshot: RunExecutionSnapshot): voi
     if (continuation !== undefined && continuation.type !== "WAITING_TOOL_RESULTS") {
       throw new RunExecutionInvariantError("RUNNING Run has an invalid continuation");
     }
-    if (continuation?.type === "WAITING_TOOL_RESULTS" && continuation.waitingApproval !== undefined) {
+    if (
+      continuation?.type === "WAITING_TOOL_RESULTS" &&
+      continuation.waitingApproval !== undefined
+    ) {
       throw new RunExecutionInvariantError("RUNNING Run cannot retain an approval pointer");
     }
   } else if (run.status === "WAITING_APPROVAL") {

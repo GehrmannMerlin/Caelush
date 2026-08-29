@@ -126,7 +126,9 @@ describe("durable Run execution state", () => {
           finishReason: "TOOL_CALLS",
           assistantMessage: {
             role: "assistant",
-            content: [{ type: "tool-call", toolCallId: "call_a", toolName: "read_file", input: {} }],
+            content: [
+              { type: "tool-call", toolCallId: "call_a", toolName: "read_file", input: {} },
+            ],
           },
         },
         toolRequests: [{ externalCallId: "call_a", toolName: "read_file", args: {} }],
@@ -138,13 +140,18 @@ describe("durable Run execution state", () => {
       },
     });
     expect(() =>
-      assertRunExecutionInvariant({ run: waitingRun, state: waitingState, continuation: checkpoint, conversation: [] }),
+      assertRunExecutionInvariant({
+        run: waitingRun,
+        state: waitingState,
+        continuation: checkpoint,
+        conversation: [],
+      }),
     ).not.toThrow();
     expect(() =>
       assertRunExecutionInvariant({
         run: waitingRun,
         state: waitingState,
-        continuation: ({
+        continuation: {
           ...checkpoint,
           receivedResults: [
             {
@@ -155,7 +162,7 @@ describe("durable Run execution state", () => {
               isError: false,
             },
           ],
-        } as unknown) as RunContinuationCheckpoint,
+        } as unknown as RunContinuationCheckpoint,
         conversation: [],
       }),
     ).toThrow();

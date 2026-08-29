@@ -1,9 +1,5 @@
 import type { LLMToolResultMessage } from "@caelush/llm/messages";
-import {
-  ToolBatchInputError,
-  type ToolBatchItem,
-  type ToolBatchOutcome,
-} from "@caelush/tools";
+import { ToolBatchInputError, type ToolBatchItem, type ToolBatchOutcome } from "@caelush/tools";
 import {
   AgentRunSchema,
   type AgentRun,
@@ -142,7 +138,10 @@ export class RunController {
       throw new RunControllerInputError("Tool Results require a RUNNING Run");
     }
     const continuation = loaded.continuation;
-    if (continuation?.type !== "WAITING_TOOL_RESULTS" || continuation.waitingApproval !== undefined) {
+    if (
+      continuation?.type !== "WAITING_TOOL_RESULTS" ||
+      continuation.waitingApproval !== undefined
+    ) {
       throw new RunControllerInputError("Run is not waiting for Tool Results");
     }
     return this.acceptToolResultsLocked(loaded, results);
@@ -157,7 +156,10 @@ export class RunController {
     }
     let normalized: readonly LLMToolResultMessage[];
     try {
-      normalized = normalizeToolResultBatch(loaded.continuation.pendingDecision.toolRequests, results);
+      normalized = normalizeToolResultBatch(
+        loaded.continuation.pendingDecision.toolRequests,
+        results,
+      );
     } catch {
       const failed = markAgentStateFailed(
         loaded.state,
@@ -273,15 +275,22 @@ export class RunController {
         }
         let messages: readonly LLMToolResultMessage[];
         try {
-          messages = toLLMToolResultMessages(continuation.pendingDecision.toolRequests, outcome.results);
+          messages = toLLMToolResultMessages(
+            continuation.pendingDecision.toolRequests,
+            outcome.results,
+          );
         } catch (error) {
-          return this.failBoundaryLocked(snapshot, {
-            code: "RUNTIME_ERROR",
-            message:
-              "Tool execution infrastructure failed before a complete Tool Result batch was available.",
-            retryable: false,
-            phase: "TOOL",
-          }, error);
+          return this.failBoundaryLocked(
+            snapshot,
+            {
+              code: "RUNTIME_ERROR",
+              message:
+                "Tool execution infrastructure failed before a complete Tool Result batch was available.",
+              retryable: false,
+              phase: "TOOL",
+            },
+            error,
+          );
         }
         snapshot = await this.persistCompleteToolResultsLocked(snapshot, messages);
         mode = "EXECUTE";
@@ -304,7 +313,10 @@ export class RunController {
     if (loaded.state === undefined) {
       throw new RunControllerInvariantError("Run is not waiting for a complete Tool Result batch");
     }
-    const normalized = normalizeToolResultBatch(loaded.continuation.pendingDecision.toolRequests, results);
+    const normalized = normalizeToolResultBatch(
+      loaded.continuation.pendingDecision.toolRequests,
+      results,
+    );
     if (
       loaded.continuation.receivedResults !== undefined &&
       !semanticEqual(loaded.continuation.receivedResults, normalized)
@@ -378,7 +390,9 @@ export class RunController {
     cause?: unknown,
   ): Promise<RunControllerResult> {
     if (loaded.state === undefined) {
-      throw new RunControllerInfrastructureError("Tool boundary failure has no AgentState", { cause });
+      throw new RunControllerInfrastructureError("Tool boundary failure has no AgentState", {
+        cause,
+      });
     }
     const failedState = markAgentStateFailed(loaded.state, error, this.dependencies.clock.now());
     const failedRun = markAgentRunFailed(loaded.run, this.dependencies.clock.now());

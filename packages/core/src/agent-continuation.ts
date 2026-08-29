@@ -8,11 +8,13 @@ export interface WaitingToolResultsContinuation {
   readonly sourceStepId: StepId;
   readonly pendingDecision: AgentToolCallsDecision;
   readonly receivedResults?: readonly LLMToolResultMessage[] | undefined;
-  readonly waitingApproval?: {
-    readonly invocationId: ToolInvocationId;
-    readonly externalCallId: string;
-    readonly toolName: ToolName;
-  } | undefined;
+  readonly waitingApproval?:
+    | {
+        readonly invocationId: ToolInvocationId;
+        readonly externalCallId: string;
+        readonly toolName: ToolName;
+      }
+    | undefined;
 }
 
 export interface AwaitingVerificationContinuation {

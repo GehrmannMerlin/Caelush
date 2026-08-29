@@ -63,4 +63,3 @@
 - `docs: complete Phase 7 tool system`
 
 Commits may be combined reasonably, but avoid one giant commit and keep every checkpoint buildable where practical.
-
