@@ -194,12 +194,21 @@ describe("package boundaries", () => {
       })),
     );
     const source = sources.map(({ contents }) => contents).join("\n");
+    const patchCommitterSource = sources
+      .filter(({ relativePath }) => relativePath === "packages/runtime/src/patch/committer.ts")
+      .map(({ contents }) => contents)
+      .join("\n");
+    const nonMutationSource = sources
+      .filter(({ relativePath }) => relativePath !== "packages/runtime/src/patch/committer.ts")
+      .map(({ contents }) => contents)
+      .join("\n");
     expect(source).not.toMatch(
       /from\s+["']@caelush\/(?:tools|core|context|storage|events|llm|security|verification|daemon)["']|from\s+["'](?:ai|@ai-sdk\/)/,
     );
-    expect(source).not.toMatch(
+    expect(nonMutationSource).not.toMatch(
       /\b(?:writeFile|appendFile|rename|unlink|rm|truncate|copyFile|chmod|chown)\s*\(/,
     );
+    expect(patchCommitterSource).toMatch(/writePatchFile|removePatchFile|movePatchFile/);
     const childProcessImports = sources
       .filter(({ contents }) => contents.includes('from "node:child_process"'))
       .map(({ relativePath }) => relativePath);

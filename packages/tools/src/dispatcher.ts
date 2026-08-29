@@ -51,6 +51,7 @@ import {
   assertToolExecutionEnvironment,
   type ToolExecutionEnvironment,
 } from "./execution-environment.js";
+import { ToolExecutionUncertainError } from "./errors.js";
 
 export interface ToolDispatcherOptions {
   readonly registry: ToolRegistry;
@@ -73,6 +74,8 @@ const INTERRUPTED_CONTENT =
 const RUNTIME_CONTENT =
   "Tool execution failed because the tool runtime encountered an internal error.";
 const OUTPUT_CONTENT = "Tool execution failed because its output violated the registered contract.";
+const UNCERTAIN_CONTENT =
+  "Tool execution side effects could not be verified safely. Do not automatically repeat the operation.";
 
 export class ToolDispatcher {
   private readonly activeCalls = new Set<string>();
@@ -318,6 +321,17 @@ export class ToolDispatcher {
         environment: request.environment,
       });
     } catch (error) {
+      if (error instanceof ToolExecutionUncertainError) {
+        return this.persistFailure(
+          request.sessionId,
+          snapshot,
+          "TOOL_EXECUTION_ERROR",
+          "RUNTIME",
+          UNCERTAIN_CONTENT,
+          {},
+          { executionDisposition: "UNCERTAIN_SIDE_EFFECT" },
+        );
+      }
       await this.persistFatalFailure(
         request.sessionId,
         snapshot,

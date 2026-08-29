@@ -14,6 +14,7 @@ import {
   ToolBatchInputError,
   ToolDispatcher,
   ToolExecutionConflictError,
+  ToolExecutionUncertainError,
   ToolRegistryBuilder,
   createRequestedToolInvocation,
   startToolInvocation,
@@ -120,6 +121,32 @@ function makeCoordinator(options: {
 }
 
 describe("ToolBatchCoordinator", () => {
+  it("returns the uncertain result and skips trailing tool calls", async () => {
+    const calls: string[] = [];
+    const { coordinator } = makeCoordinator({
+      execute: async ({ externalCallId }) => {
+        calls.push(externalCallId);
+        if (externalCallId === "B") throw new ToolExecutionUncertainError();
+        return { content: externalCallId, details: {}, isError: false };
+      },
+    });
+
+    const outcome = await coordinator.execute(
+      request([item("A", "slow_a"), item("B", "fast_b"), item("C", "slow_a")]),
+    );
+
+    expect(outcome.kind).toBe("COMPLETED");
+    if (outcome.kind !== "COMPLETED") throw new Error("expected completed batch");
+    expect(calls).toEqual(["A", "B"]);
+    expect(
+      outcome.results.map((result) => [result.externalCallId, result.kind, result.isError]),
+    ).toEqual([
+      ["A", "TOOL_RESULT", false],
+      ["B", "TOOL_RESULT", true],
+      ["C", "SKIPPED_AFTER_UNCERTAIN_EXECUTION", true],
+    ]);
+  });
+
   it("rejects empty and duplicate batches before dispatch side effects", async () => {
     let dispatches = 0;
     const { coordinator } = makeCoordinator({

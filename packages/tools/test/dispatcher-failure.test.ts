@@ -17,6 +17,7 @@ import { describe, expect, it } from "vitest";
 import {
   ToolDispatcher,
   ToolDispatcherInfrastructureError,
+  ToolExecutionUncertainError,
   ToolRegistryBuilder,
   type DurableToolAgentEvent,
   type ToolCommittedEventNotifier,
@@ -123,6 +124,23 @@ function makeDispatcher(
 }
 
 describe("ToolDispatcher persistence failures", () => {
+  it("persists an uncertain side-effect marker before propagating runtime uncertainty", async () => {
+    const store = new FailingTerminalStore();
+    store.failTerminalCommit = false;
+    const dispatcher = makeDispatcher(store, async () => {
+      throw new ToolExecutionUncertainError();
+    });
+
+    const outcome = await dispatcher.dispatch(request);
+    expect(outcome.kind).toBe("RESULT");
+    const snapshot = [...store.snapshots.values()][0];
+    expect(snapshot?.invocation.status).toBe("FAILED");
+    expect(snapshot?.invocation.error?.details?.executionDisposition).toBe("UNCERTAIN_SIDE_EFFECT");
+    expect(snapshot?.observation?.isError).toBe(true);
+    if (outcome.kind !== "RESULT") throw new Error("expected uncertain result");
+    expect(outcome.observation.content).toContain("Do not automatically repeat");
+  });
+
   it("does not invoke the handler when the RUNNING checkpoint cannot commit", async () => {
     const store = new FailingTerminalStore();
     store.failTerminalCommit = false;

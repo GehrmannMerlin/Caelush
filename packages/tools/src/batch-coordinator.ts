@@ -92,10 +92,7 @@ export class ToolBatchCoordinator implements ToolBatchCoordinatorPort {
       }
       const result = toItemResult(item, outcome);
       results.push(result);
-      uncertain =
-        mode === "recoverOrDispatch" &&
-        outcome.kind === "RESULT" &&
-        isUncertainToolExecution(outcome.invocation);
+      uncertain = outcome.kind === "RESULT" && isUncertainToolExecution(outcome.invocation);
     }
     const complete: ToolBatchCompletedOutcome = { kind: "COMPLETED", results };
     return complete;
