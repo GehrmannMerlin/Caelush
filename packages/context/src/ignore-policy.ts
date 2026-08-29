@@ -1,35 +1,11 @@
 import ignore from "ignore";
 import path from "node:path";
+import { isProjectHardExcludedDirectoryName } from "@caelush/shared";
 import { ContextIgnoreError } from "./errors.js";
 import type { ContextFileKind, ContextFileSystem } from "./filesystem.js";
 import { isWithinWorkspace } from "./workspace.js";
 
 const MAX_GITIGNORE_BYTES = 131072;
-
-const hardExcludedDirectoryNames = new Set([
-  ".git",
-  ".hg",
-  ".svn",
-  ".worktrees",
-  "node_modules",
-  ".pnpm",
-  ".yarn",
-  ".venv",
-  "venv",
-  "__pycache__",
-  "target",
-  "dist",
-  "build",
-  "coverage",
-  "out",
-  ".next",
-  ".nuxt",
-  ".turbo",
-  ".cache",
-  "vendor",
-]);
-
-const hardExcludedDirectoryPairs = new Set([".yarn/cache"]);
 
 const binaryExtensions = new Set([
   ".png",
@@ -116,15 +92,9 @@ function isBinaryName(fileName: string): boolean {
 function hasHardExcludedDirectory(relativePath: string): boolean {
   const segments = normalizeMatcherPath(relativePath).split("/").filter(Boolean);
   for (const segment of segments) {
-    if (hardExcludedDirectoryNames.has(segment.toLowerCase())) return true;
+    if (isProjectHardExcludedDirectoryName(segment)) return true;
   }
-  return segments.some((segment, index) => {
-    const previous = index === 0 ? undefined : segments[index - 1];
-    return (
-      previous !== undefined &&
-      hardExcludedDirectoryPairs.has(`${previous.toLowerCase()}/${segment.toLowerCase()}`)
-    );
-  });
+  return false;
 }
 
 function ancestorDirectories(directory: string, root: string): readonly string[] {

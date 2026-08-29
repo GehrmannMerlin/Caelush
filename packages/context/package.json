@@ -16,6 +16,7 @@
   "dependencies": {
     "@caelush/llm": "workspace:*",
     "@caelush/protocol": "workspace:*",
+    "@caelush/shared": "workspace:*",
     "ignore": "7.0.6"
   }
 }

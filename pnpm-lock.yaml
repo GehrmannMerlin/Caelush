@@ -63,6 +63,9 @@ importers:
       '@caelush/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@caelush/shared':
+        specifier: workspace:*
+        version: link:../shared
       ignore:
         specifier: 7.0.6
         version: 7.0.6

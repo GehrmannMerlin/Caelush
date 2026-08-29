@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { WorkspaceRef } from "@caelush/protocol";
+import { isPathInsideOrEqual } from "@caelush/shared";
 import { ContextBoundaryError, ContextInvalidWorkspaceError } from "./errors.js";
 import type { ContextFileSystem } from "./filesystem.js";
 
@@ -9,12 +10,6 @@ export interface WorkspaceScope {
   readonly realRoot: string;
   readonly cwd: string;
   readonly realCwd: string;
-}
-
-function isInside(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  if (relative === "" || path.isAbsolute(relative)) return true;
-  return relative.split(path.sep)[0] !== "..";
 }
 
 async function resolveRealPath(
@@ -56,12 +51,12 @@ export class WorkspaceScopeResolver {
         : path.isAbsolute(cwd)
           ? path.normalize(cwd)
           : path.resolve(logicalRoot, cwd);
-    if (!isInside(logicalRoot, logicalCwd)) {
+    if (!isPathInsideOrEqual(logicalRoot, logicalCwd)) {
       throw new ContextBoundaryError(`cwd is outside workspace: ${logicalCwd}`);
     }
 
     const realCwd = await resolveRealPath(this.filesystem, logicalCwd, "cwd");
-    if (!isInside(realRoot, realCwd)) {
+    if (!isPathInsideOrEqual(realRoot, realCwd)) {
       throw new ContextBoundaryError(`cwd resolves outside workspace: ${realCwd}`);
     }
 
@@ -70,5 +65,5 @@ export class WorkspaceScopeResolver {
 }
 
 export function isWithinWorkspace(root: string, candidate: string): boolean {
-  return isInside(root, candidate);
+  return isPathInsideOrEqual(root, candidate);
 }
