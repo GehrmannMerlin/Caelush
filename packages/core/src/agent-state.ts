@@ -93,6 +93,16 @@ export function markAgentStateVerifying(state: AgentState, now: TimestampMs): Ag
   });
 }
 
+export function markAgentStateWaitingApproval(state: AgentState, now: TimestampMs): AgentState {
+  assertBoundaryState(state, "WAITING_APPROVAL", now);
+  return AgentStateSchema.parse({
+    ...state,
+    status: "WAITING_APPROVAL",
+    currentStepId: undefined,
+    updatedAt: now,
+  });
+}
+
 export function markAgentStateMaxStepsReached(state: AgentState, now: TimestampMs): AgentState {
   assertBoundaryState(state, "MAX_STEPS_REACHED", now);
   return AgentStateSchema.parse({ ...state, status: "MAX_STEPS_REACHED", updatedAt: now });
@@ -100,7 +110,7 @@ export function markAgentStateMaxStepsReached(state: AgentState, now: TimestampM
 
 function assertBoundaryState(
   state: AgentState,
-  target: "VERIFYING" | "MAX_STEPS_REACHED",
+  target: "WAITING_APPROVAL" | "VERIFYING" | "MAX_STEPS_REACHED",
   now: TimestampMs,
 ): void {
   assertMonotonicTimestamp(state, now);

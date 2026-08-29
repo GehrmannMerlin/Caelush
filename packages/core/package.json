@@ -17,6 +17,7 @@
     "@caelush/context": "workspace:*",
     "@caelush/llm": "workspace:*",
     "@caelush/protocol": "workspace:*",
+    "@caelush/tools": "workspace:*",
     "zod": "4.4.3"
   }
 }

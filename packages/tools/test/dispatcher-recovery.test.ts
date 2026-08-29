@@ -14,6 +14,7 @@ import {
   ToolDispatcherInvariantError,
   ToolRegistryBuilder,
   createRequestedToolInvocation,
+  isUncertainToolExecution,
   markToolInvocationWaitingApproval,
   startToolInvocation,
   type ToolCommittedEventNotifier,
@@ -165,6 +166,25 @@ describe("ToolDispatcher recovery", () => {
     expect(count).toBe(0);
     expect(outcome.invocation.status).toBe("FAILED");
     expect(outcome.observation.content).toContain("may have partially or fully executed");
+    expect(outcome.invocation.error?.details).toEqual({
+      executionDisposition: "UNCERTAIN_SIDE_EFFECT",
+    });
+    expect(isUncertainToolExecution(outcome.invocation)).toBe(true);
+  });
+
+  it("uses recoverOrDispatch as an explicit restart path", async () => {
+    const store = new RecoveryStore();
+    let count = 0;
+    const dispatcher = makeDispatcher(store, async () => {
+      count += 1;
+      return { content: "hello", details: { echoed: "hello" }, isError: false };
+    });
+
+    const first = await dispatcher.recoverOrDispatch(request);
+    const recovered = await dispatcher.recoverOrDispatch(request);
+
+    expect(recovered).toEqual(first);
+    expect(count).toBe(1);
   });
 
   it("keeps a durable WAITING_APPROVAL invocation paused without invoking the handler", async () => {

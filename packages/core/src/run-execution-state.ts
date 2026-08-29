@@ -43,6 +43,17 @@ export function markAgentRunFailed(run: AgentRun, now: AgentRun["createdAt"]): A
   });
 }
 
+export function markAgentRunWaitingApproval(run: AgentRun): AgentRun {
+  if (run.currentStepId !== undefined) {
+    throw new RunExecutionInvariantError("waiting Approval Run cannot retain an active Step");
+  }
+  assertRunStatusTransition(run.status, "WAITING_APPROVAL");
+  const withoutFinalResult = { ...run };
+  delete withoutFinalResult.finalResult;
+  delete withoutFinalResult.finishedAt;
+  return AgentRunSchema.parse({ ...withoutFinalResult, status: "WAITING_APPROVAL" });
+}
+
 export function assertRunExecutionInvariant(snapshot: RunExecutionSnapshot): void {
   const { run, state, activeStep, continuation } = snapshot;
   if (run.status === "PENDING") {
@@ -87,6 +98,19 @@ export function assertRunExecutionInvariant(snapshot: RunExecutionSnapshot): voi
     if (continuation !== undefined && continuation.type !== "WAITING_TOOL_RESULTS") {
       throw new RunExecutionInvariantError("RUNNING Run has an invalid continuation");
     }
+    if (continuation?.type === "WAITING_TOOL_RESULTS" && continuation.waitingApproval !== undefined) {
+      throw new RunExecutionInvariantError("RUNNING Run cannot retain an approval pointer");
+    }
+  } else if (run.status === "WAITING_APPROVAL") {
+    if (
+      continuation?.type !== "WAITING_TOOL_RESULTS" ||
+      continuation.waitingApproval === undefined ||
+      continuation.receivedResults !== undefined
+    ) {
+      throw new RunExecutionInvariantError(
+        "WAITING_APPROVAL Run must retain a pending Tool approval boundary",
+      );
+    }
   } else if (continuation !== undefined) {
     throw new RunExecutionInvariantError(`${run.status} Run cannot retain a continuation`);
   }
@@ -96,6 +120,7 @@ export function isExecutionBoundaryStatus(status: RunStatus): boolean {
   return (
     status === "PENDING" ||
     status === "RUNNING" ||
+    status === "WAITING_APPROVAL" ||
     status === "VERIFYING" ||
     isTerminalRunStatus(status)
   );

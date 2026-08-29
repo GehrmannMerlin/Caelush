@@ -78,6 +78,10 @@ export class ToolDispatcher {
     this.outputPolicy = options.outputPolicy ?? DEFAULT_TOOL_OUTPUT_POLICY;
   }
 
+  modelDefinitions(): readonly import("@caelush/protocol").ToolDefinition[] {
+    return this.options.registry.modelDefinitions();
+  }
+
   async dispatch(value: unknown): Promise<ToolDispatcherOutcome> {
     assertToolDispatchRequest(value, {
       maxExternalCallIdBytes:
@@ -95,6 +99,21 @@ export class ToolDispatcher {
     } finally {
       this.activeCalls.delete(key);
     }
+  }
+
+  async recoverOrDispatch(value: unknown): Promise<ToolDispatcherOutcome> {
+    assertToolDispatchRequest(value, {
+      maxExternalCallIdBytes:
+        this.options.maxExternalCallIdBytes ?? DEFAULT_MAX_EXTERNAL_CALL_ID_BYTES,
+    });
+    const existing = await this.options.store.findByExternalCall(
+      value.runId,
+      value.stepId,
+      value.externalCallId,
+    );
+    if (existing === null) return this.dispatch(value);
+    this.assertSameCall(value, existing);
+    return this.recover(existing.invocation.id);
   }
 
   async recover(invocationId: ToolInvocation["id"]): Promise<ToolDispatcherOutcome> {
@@ -460,6 +479,7 @@ export class ToolDispatcher {
     phase: AgentError["phase"],
     content: string,
     details: JsonObject,
+    errorDetails: JsonObject = {},
   ): Promise<ToolDispatcherOutcome> {
     const finishedAt = this.options.clock.now();
     const failed = failToolInvocation(
@@ -470,6 +490,7 @@ export class ToolDispatcher {
           code === "PERMISSION_DENIED" ? content : "Tool execution returned an error result.",
         retryable: false,
         phase,
+        ...(Object.keys(errorDetails).length === 0 ? {} : { details: errorDetails }),
       },
       finishedAt,
     );
@@ -525,6 +546,7 @@ export class ToolDispatcher {
       "TOOL",
       INTERRUPTED_CONTENT,
       {},
+      { executionDisposition: "UNCERTAIN_SIDE_EFFECT" },
     );
   }
 

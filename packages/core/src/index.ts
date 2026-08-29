@@ -9,6 +9,7 @@ export {
   AgentLoopInputError,
   AgentModelOutputError,
   AgentToolResultBatchError,
+  ToolBatchResultConversionError,
 } from "./agent-errors.js";
 export type {
   AgentModelOutputErrorReason,
@@ -43,10 +44,12 @@ export {
 export { classifyAgentDecision } from "./agent-decision-mapper.js";
 export { summarizeAgentDecision, summarizeAgentLoopOutcome } from "./agent-summary.js";
 export { normalizeToolResultBatch } from "./agent-tool-results.js";
+export { toLLMToolResultMessages } from "./agent-tool-batch.js";
 export {
   beginAgentStepState,
   createInitialAgentState,
   markAgentStateMaxStepsReached,
+  markAgentStateWaitingApproval,
   markAgentStateVerifying,
   settleAgentStepState,
   startAgentState,
@@ -105,6 +108,7 @@ export {
   assertRunExecutionInvariant,
   isExecutionBoundaryStatus,
   markAgentRunFailed,
+  markAgentRunWaitingApproval,
   markAgentStateFailed,
 } from "./run-execution-state.js";
 export type {

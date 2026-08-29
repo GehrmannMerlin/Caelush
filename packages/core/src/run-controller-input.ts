@@ -1,5 +1,5 @@
 import type { LLMToolResultMessage } from "@caelush/llm/messages";
-import type { AgentError, AgentRun, AgentState, StepId } from "@caelush/protocol";
+import type { AgentError, AgentRun, AgentState, StepId, ToolInvocationId, ToolName } from "@caelush/protocol";
 import type { AgentToolRequest } from "./agent-decision.js";
 
 export type RunControllerResult =
@@ -11,6 +11,15 @@ export type RunControllerResult =
       readonly state: AgentState;
       readonly sourceStepId: StepId;
       readonly toolRequests: readonly AgentToolRequest[];
+    }
+  | {
+      readonly status: "WAITING_APPROVAL";
+      readonly run: AgentRun;
+      readonly state: AgentState;
+      readonly sourceStepId: StepId;
+      readonly invocationId: ToolInvocationId;
+      readonly externalCallId: string;
+      readonly toolName: ToolName;
     }
   | {
       readonly status: "AWAITING_VERIFICATION";

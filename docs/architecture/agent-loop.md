@@ -31,7 +31,8 @@ one AgentLLMClient provider turn
 classifyAgentDecision
   ├── TOOL_CALLS_REQUESTED → external Tool boundary
   │                              ↓
-  │                         caller executes tools
+  │                         RunController coordinates ToolBatch
+  │                         through an injected coordinator
   │                              ↓
   │                         normalized complete result batch
   │                              ↓
@@ -103,6 +104,12 @@ The loop has no retry, backoff, timeout policy, run-level cancellation, doom-loo
 
 `AgentLLMClient.complete()` is called exactly once per loop invocation. The client may be an injected `LLMGateway`, but Core does not know its registry, provider adapter, SDK, call lifecycle, or stream implementation. This preserves the one-provider-turn contract and leaves repeated execution policy to the next layer.
 
+## Phase 7 runtime integration
+
+Phase 7 adds the durable runtime outside the loop. `RunController` receives an injected `ToolBatchCoordinator`, obtains the model catalog from that same Dispatcher-backed Registry, and drives one ordered Tool batch after an `AgentLoop` Tool-call boundary. The loop still returns after one provider turn and remains unaware of Dispatcher, ToolInvocation, ToolObservation, Storage, and EventBus. The controller converts only identity-checked, model-facing content into `LLMToolResultMessage[]`, persists the complete batch in the Continuation, and then invokes the loop's resume method for the next single provider turn.
+
+Approval is a durable controller boundary, not a hidden loop state. A batch stops before its first approval-gated call's followers, records the waiting Invocation pointer, and returns `WAITING_APPROVAL`. Recovery uses the Dispatcher uncertainty barrier: a durable `RUNNING` Invocation produces a sanitized uncertainty result and all later calls become explicit skipped results without handler execution.
+
 ## Phase boundaries
 
-Phase 6A defines deterministic decisions, steps, tool-result normalization, state helpers, and the `maxSteps` gate. Phase 6B connects those contracts to Project Intelligence, Relevant File Planning, ContextBuilder, and one LLM turn, then stops at the external Tool or Verification boundary. Phase 6C adds the durable RunController boundary described in [Run Controller](run-controller.md): it persists execution boundaries and resumes only from known durable checkpoints. It still does not execute Tools or Verification and never claims `COMPLETED`.
+Phase 6A defines deterministic decisions, steps, tool-result normalization, state helpers, and the `maxSteps` gate. Phase 6B connects those contracts to Project Intelligence, Relevant File Planning, ContextBuilder, and one LLM turn, then stops at the external Tool or Verification boundary. Phase 6C adds the durable RunController boundary described in [Run Controller](run-controller.md); Phase 7C extends that controller with ordered Tool batches while the AgentLoop itself remains Tool-execution unaware. The controller still never verifies a candidate or claims `COMPLETED`.

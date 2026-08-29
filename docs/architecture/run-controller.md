@@ -1,6 +1,6 @@
 # Run Controller and Durable Runtime
 
-Phase 6C is the final Phase 6 round. It connects the resumable `AgentLoop` to a local SQLite execution store and a replayable EventBus. The controller owns Run lifecycle orchestration; Tool execution, Runtime, Permission, and Verification remain injected boundaries owned by later or separate packages.
+Phase 6C is the final Phase 6 round. Phase 7C extends the same controller with an injected `ToolBatchCoordinator` while preserving the existing local SQLite execution store and replayable EventBus. The controller owns Run lifecycle orchestration and batch boundaries; the AgentLoop, Tool Dispatcher, Runtime, Permission, and Verification each remain separate injected boundaries.
 
 ```text
 RunController
@@ -42,4 +42,26 @@ The conversation ledger contains only real user, assistant, and external tool-re
 
 If a process restarts with a stale `RUNNING` Step, recovery fails closed, marks that Step and Run as failed, clears the active Step, and does not resend the provider request. The known safe pre-provider boundary is resumable only when no active Step, continuation, or conversation append indicates that a provider turn was already started. This is local-host durable recovery, not distributed exactly-once execution: Phase 6C has no lease coordinator.
 
-The controller does not retry providers, persistence, Tools, or Verification; it does not cancel Runs, execute a Tool, or verify a candidate. Provider lifecycle metadata distinguishes `NOT_STARTED`, `FAILED`, and `COMPLETED`, so `llm.completed` is emitted only after a provider returned a result, including the model-output rejection path, and never for a provider exception.
+## Phase 7C Tool batch drive loop
+
+After a provider turn produces a Tool-call decision, the controller stores the pending decision in a `WAITING_TOOL_RESULTS` Continuation and passes its requests to the injected `ToolBatchCoordinator`. The coordinator preflights the entire batch and dispatches items strictly in source order through the Dispatcher. The controller never calls a handler directly and never creates a second Tool catalog.
+
+```text
+AgentLoop one turn
+        │ TOOL_CALLS_REQUESTED
+        ▼
+WAITING_TOOL_RESULTS checkpoint
+        │
+        ├─ execute/recover ordered ToolBatch
+        │       ├─ COMPLETED → identity-check → receivedResults checkpoint
+        │       └─ WAITING_APPROVAL → Run/State WAITING_APPROVAL boundary
+        │
+        └─ accepted receivedResults → AgentLoop.resumeWithToolResults()
+                                      one provider turn
+```
+
+The complete batch is durably accepted before the resumed provider call. A restart after acceptance resumes directly from `receivedResults` and does not redispatch. A restart during a batch uses `recoverOrDispatch`: terminal Invocations are reused, a stale `RUNNING` Invocation becomes an uncertainty result, and all trailing calls are explicit skipped results. The controller then resumes only with the complete ordered result batch. An approval boundary remains paused because Phase 7 has no Approval resolution endpoint.
+
+The controller returns `WAITING_APPROVAL` separately from `WAITING_TOOL_RESULTS`; the latter remains the manual caller boundary used when no coordinator is injected by legacy tests or a future host. Both statuses retain canonical Run/State invariants, and neither is a completion claim. Final candidates still stop at `VERIFYING`.
+
+The controller does not retry providers, persistence, Tools, or Verification; it does not cancel Runs or verify a candidate. It coordinates Tools only by calling the injected batch port. Provider lifecycle metadata distinguishes `NOT_STARTED`, `FAILED`, and `COMPLETED`, so `llm.completed` is emitted only after a provider returned a result, including the model-output rejection path, and never for a provider exception.

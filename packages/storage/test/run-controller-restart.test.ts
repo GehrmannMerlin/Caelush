@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import {
   AgentRunSchema,
-  ToolDefinitionSchema,
   createEventId,
   createRunId,
   createSessionId,
@@ -118,17 +117,6 @@ function createController(
       resolve: async () => ({
         baseSystemPrompt: "synthetic context is not durable conversation",
         contextLimits: { maxInputTokens: 1000 },
-        tools: [
-          ToolDefinitionSchema.parse({
-            name: "read_file",
-            description: "Read a project file",
-            inputSchema: { type: "object" },
-            outputSchema: { type: "object" },
-            riskLevel: "LOW",
-            requiredCapabilities: [],
-            runtimeRequirements: {},
-          }),
-        ],
       }),
     },
     clock: { now: () => createTimestampMs(now.value++) },

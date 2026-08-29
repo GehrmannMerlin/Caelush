@@ -214,6 +214,7 @@ describe("package boundaries", () => {
     expect(dependencies["@caelush/context"]).toBe("workspace:*");
     expect(dependencies["@caelush/llm"]).toBe("workspace:*");
     expect(dependencies["@caelush/protocol"]).toBe("workspace:*");
+    expect(dependencies["@caelush/tools"]).toBe("workspace:*");
     expect(Object.keys(dependencies)).not.toContain("ai");
     expect(Object.keys(dependencies)).not.toContain("@ai-sdk/openai-compatible");
   });

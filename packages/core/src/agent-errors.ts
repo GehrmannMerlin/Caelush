@@ -60,6 +60,13 @@ export class AgentToolResultBatchError extends Error {
   }
 }
 
+export class ToolBatchResultConversionError extends Error {
+  constructor(reason = "Tool batch result does not match the source Tool Calls.") {
+    super(reason);
+    this.name = "ToolBatchResultConversionError";
+  }
+}
+
 export class AgentKernelStateError extends Error {
   constructor(reason: string) {
     super(`Agent kernel state rejected: ${reason}.`);

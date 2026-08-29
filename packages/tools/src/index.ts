@@ -62,6 +62,19 @@ export {
 export type { ValidatedToolExecutionResult } from "./result-validation.js";
 export { ToolDispatcher } from "./dispatcher.js";
 export type { ToolDispatcherOptions } from "./dispatcher.js";
+export { ToolBatchCoordinator } from "./batch-coordinator.js";
+export type {
+  ToolBatchCoordinatorPort,
+  ToolBatchCompletedOutcome,
+  ToolBatchItem,
+  ToolBatchItemResult,
+  ToolBatchItemResultKind,
+  ToolBatchOutcome,
+  ToolBatchRequest,
+  ToolBatchWaitingApprovalOutcome,
+} from "./batch-types.js";
+export { ToolBatchInfrastructureError, ToolBatchInputError } from "./batch-errors.js";
+export { UNCERTAIN_SIDE_EFFECT, isUncertainToolExecution } from "./execution-disposition.js";
 export {
   createToolCompletedEvent,
   createToolFailedEvent,

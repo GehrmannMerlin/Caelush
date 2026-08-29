@@ -6,6 +6,7 @@ import {
   ModelRefSchema,
   RunIdSchema,
   StepIdSchema,
+  ToolInvocationIdSchema,
   ToolNameSchema,
 } from "@caelush/protocol";
 import { z } from "zod";
@@ -102,6 +103,14 @@ export const WaitingToolResultsContinuationSchema = z
     sourceStepId: StepIdSchema,
     pendingDecision: AgentToolCallsDecisionSchema,
     receivedResults: z.array(LLMToolResultMessageSchema).min(1).optional(),
+    waitingApproval: z
+      .object({
+        invocationId: ToolInvocationIdSchema,
+        externalCallId: z.string().min(1),
+        toolName: ToolNameSchema,
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

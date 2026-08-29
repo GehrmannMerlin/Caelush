@@ -1,5 +1,10 @@
 import type { LLMToolResultMessage } from "@caelush/llm/messages";
 import {
+  ToolBatchInputError,
+  type ToolBatchItem,
+  type ToolBatchOutcome,
+} from "@caelush/tools";
+import {
   AgentRunSchema,
   type AgentRun,
   type AgentError,
@@ -8,11 +13,18 @@ import {
   type RunId,
 } from "@caelush/protocol";
 import type { AgentLoopExecutionResult, AgentLoopOutcomeResult } from "./agent-loop-input.js";
-import { createInitialAgentState, settleAgentStepState, startAgentState } from "./agent-state.js";
+import {
+  createInitialAgentState,
+  markAgentStateWaitingApproval,
+  settleAgentStepState,
+  startAgentState,
+} from "./agent-state.js";
 import { failAgentStep } from "./agent-step.js";
 import { normalizeToolResultBatch } from "./agent-tool-results.js";
+import { toLLMToolResultMessages } from "./agent-tool-batch.js";
 import {
   markAgentRunFailed,
+  markAgentRunWaitingApproval,
   markAgentStateFailed,
   assertRunExecutionInvariant,
 } from "./run-execution-state.js";
@@ -81,119 +93,298 @@ export class RunController {
   }
 
   async start(runId: RunId): Promise<RunControllerResult> {
-    return this.withLock(runId, async () => {
-      const loaded = await this.load(runId);
-      if (loaded.run.status !== "PENDING") return this.resumeKnownBoundary(loaded);
-      if (loaded.state !== undefined) {
-        throw new RunControllerInputError("PENDING Run cannot already have AgentState");
-      }
-      const now = this.dependencies.clock.now();
-      const initialState = createInitialAgentState(loaded.run, now);
-      const state = startAgentState(initialState, now);
-      const run = AgentRunSchema.parse({
-        ...loaded.run,
-        status: "RUNNING",
-        startedAt: now,
-      });
-      const commit = await this.commit({
-        run,
-        state,
-        expectedStateRevision: null,
-        expectedContinuationRevision: null,
-        stepWrites: [],
-        messagesToAppend: [],
-        events: [
-          this.eventFactory.runStarted(loaded.run, this.nextEventId(), now),
-          this.eventFactory.statusChanged(
-            loaded.run,
-            "PENDING",
-            "RUNNING",
-            this.nextEventId(),
-            now,
-          ),
-        ],
-      });
-      this.notify(commit.events);
-      return this.executeLoop(commit.snapshot, false);
-    });
+    return this.withLock(runId, () => this.startLocked(runId));
   }
 
   async submitToolResults(
     runId: RunId,
     results: readonly LLMToolResultMessage[],
   ): Promise<RunControllerResult> {
-    return this.withLock(runId, async () => {
-      const loaded = await this.load(runId);
-      if (loaded.run.status !== "RUNNING" || loaded.state === undefined) {
-        throw new RunControllerInputError("Tool Results require a RUNNING Run");
-      }
-      const continuation = loaded.continuation;
-      if (continuation?.type !== "WAITING_TOOL_RESULTS") {
-        throw new RunControllerInputError("Run is not waiting for Tool Results");
-      }
-      let normalized: readonly LLMToolResultMessage[];
-      try {
-        normalized = normalizeToolResultBatch(continuation.pendingDecision.toolRequests, results);
-      } catch {
-        const failed = markAgentStateFailed(
-          loaded.state,
-          {
-            code: "TOOL_OUTPUT_ERROR",
-            message: "The supplied Tool Results were invalid.",
-            retryable: false,
-            phase: "TOOL",
-          },
-          this.dependencies.clock.now(),
-        );
-        const failedRun = markAgentRunFailed(loaded.run, this.dependencies.clock.now());
-        const commit = await this.commitFailure(loaded, failedRun, failed, undefined);
-        this.notify(commit.events);
-        return this.resultFromSnapshot(commit.snapshot);
-      }
-      if (
-        continuation.receivedResults !== undefined &&
-        !semanticEqual(continuation.receivedResults, normalized)
-      ) {
-        throw new RunControllerConflictError("A different Tool Result batch was already accepted");
-      }
-      let accepted = loaded;
-      if (continuation.receivedResults === undefined) {
-        const commit = await this.commit({
-          run: loaded.run,
-          state: loaded.state,
-          expectedStateRevision: loaded.stateRevision ?? null,
-          expectedContinuationRevision: loaded.continuationRevision ?? null,
-          stepWrites: [],
-          messagesToAppend: [],
-          continuation: {
-            operation: "SET",
-            checkpoint: { ...continuation, receivedResults: normalized },
-            updatedAt: this.dependencies.clock.now(),
-          },
-          events: [],
-        });
-        accepted = commit.snapshot;
-      }
-      return this.executeLoop(accepted, true);
-    });
+    return this.withLock(runId, () => this.submitToolResultsLocked(runId, results));
   }
 
   async recover(runId: RunId): Promise<RunControllerResult> {
-    return this.withLock(runId, async () => {
-      const loaded = await this.load(runId);
-      if (loaded.run.status === "RUNNING" && loaded.activeStep !== undefined) {
-        return this.recoverStaleStep(loaded);
-      }
-      if (
-        loaded.run.status === "RUNNING" &&
-        loaded.state !== undefined &&
-        loaded.continuation === undefined &&
-        loaded.conversation.length === 0
-      ) {
-        return this.executeLoop(loaded, false);
-      }
-      return this.resumeKnownBoundary(loaded);
+    return this.withLock(runId, () => this.recoverLocked(runId));
+  }
+
+  private async startLocked(runId: RunId): Promise<RunControllerResult> {
+    const loaded = await this.load(runId);
+    if (loaded.run.status !== "PENDING") return this.resumeKnownBoundary(loaded);
+    if (loaded.state !== undefined) {
+      throw new RunControllerInputError("PENDING Run cannot already have AgentState");
+    }
+    const now = this.dependencies.clock.now();
+    const initialState = createInitialAgentState(loaded.run, now);
+    const state = startAgentState(initialState, now);
+    const run = AgentRunSchema.parse({ ...loaded.run, status: "RUNNING", startedAt: now });
+    const commit = await this.commit({
+      run,
+      state,
+      expectedStateRevision: null,
+      expectedContinuationRevision: null,
+      stepWrites: [],
+      messagesToAppend: [],
+      events: [
+        this.eventFactory.runStarted(loaded.run, this.nextEventId(), now),
+        this.eventFactory.statusChanged(loaded.run, "PENDING", "RUNNING", this.nextEventId(), now),
+      ],
     });
+    this.notify(commit.events);
+    return this.driveToolBoundariesLocked(commit.snapshot, "EXECUTE");
+  }
+
+  private async submitToolResultsLocked(
+    runId: RunId,
+    results: readonly LLMToolResultMessage[],
+  ): Promise<RunControllerResult> {
+    const loaded = await this.load(runId);
+    if (loaded.run.status !== "RUNNING" || loaded.state === undefined) {
+      throw new RunControllerInputError("Tool Results require a RUNNING Run");
+    }
+    const continuation = loaded.continuation;
+    if (continuation?.type !== "WAITING_TOOL_RESULTS" || continuation.waitingApproval !== undefined) {
+      throw new RunControllerInputError("Run is not waiting for Tool Results");
+    }
+    return this.acceptToolResultsLocked(loaded, results);
+  }
+
+  private async acceptToolResultsLocked(
+    loaded: RunExecutionSnapshot,
+    results: readonly LLMToolResultMessage[],
+  ): Promise<RunControllerResult> {
+    if (loaded.state === undefined || loaded.continuation?.type !== "WAITING_TOOL_RESULTS") {
+      throw new RunControllerInputError("Run is not waiting for Tool Results");
+    }
+    let normalized: readonly LLMToolResultMessage[];
+    try {
+      normalized = normalizeToolResultBatch(loaded.continuation.pendingDecision.toolRequests, results);
+    } catch {
+      const failed = markAgentStateFailed(
+        loaded.state,
+        {
+          code: "TOOL_OUTPUT_ERROR",
+          message: "The supplied Tool Results were invalid.",
+          retryable: false,
+          phase: "TOOL",
+        },
+        this.dependencies.clock.now(),
+      );
+      const failedRun = markAgentRunFailed(loaded.run, this.dependencies.clock.now());
+      const commit = await this.commitFailure(loaded, failedRun, failed, undefined);
+      this.notify(commit.events);
+      return this.resultFromSnapshot(commit.snapshot);
+    }
+    if (
+      loaded.continuation.receivedResults !== undefined &&
+      !semanticEqual(loaded.continuation.receivedResults, normalized)
+    ) {
+      throw new RunControllerConflictError("A different Tool Result batch was already accepted");
+    }
+    let accepted = loaded;
+    if (loaded.continuation.receivedResults === undefined) {
+      const commit = await this.commit({
+        run: loaded.run,
+        state: loaded.state,
+        expectedStateRevision: loaded.stateRevision ?? null,
+        expectedContinuationRevision: loaded.continuationRevision ?? null,
+        stepWrites: [],
+        messagesToAppend: [],
+        continuation: {
+          operation: "SET",
+          checkpoint: { ...loaded.continuation, receivedResults: normalized },
+          updatedAt: this.dependencies.clock.now(),
+        },
+        events: [],
+      });
+      accepted = commit.snapshot;
+    }
+    return this.driveToolBoundariesLocked(accepted, "EXECUTE");
+  }
+
+  private async recoverLocked(runId: RunId): Promise<RunControllerResult> {
+    const loaded = await this.load(runId);
+    if (loaded.run.status === "RUNNING" && loaded.activeStep !== undefined) {
+      return this.recoverStaleStep(loaded);
+    }
+    if (loaded.run.status === "WAITING_APPROVAL") return this.resumeKnownBoundary(loaded);
+    if (
+      loaded.run.status === "RUNNING" &&
+      loaded.state !== undefined &&
+      (loaded.continuation?.type === "WAITING_TOOL_RESULTS" ||
+        (loaded.continuation === undefined && loaded.conversation.length === 0))
+    ) {
+      return this.driveToolBoundariesLocked(loaded, "RECOVER");
+    }
+    return this.resumeKnownBoundary(loaded);
+  }
+
+  private async driveToolBoundariesLocked(
+    initial: RunExecutionSnapshot,
+    initialMode: "EXECUTE" | "RECOVER",
+  ): Promise<RunControllerResult> {
+    let snapshot = initial;
+    let mode = initialMode;
+    while (true) {
+      if (snapshot.run.status === "WAITING_APPROVAL") return this.resultFromSnapshot(snapshot);
+      const continuation = snapshot.continuation;
+      if (continuation?.type === "WAITING_TOOL_RESULTS") {
+        if (continuation.receivedResults !== undefined) {
+          const execution = await this.executeLoop(snapshot, true);
+          if (execution.status !== "WAITING_TOOL_RESULTS") return execution;
+          snapshot = await this.load(snapshot.run.id);
+          mode = "EXECUTE";
+          continue;
+        }
+        const coordinator = this.dependencies.toolCoordinator;
+        if (coordinator === undefined) return this.resultFromSnapshot(snapshot);
+        const request = {
+          sessionId: snapshot.run.sessionId,
+          runId: snapshot.run.id,
+          stepId: continuation.sourceStepId,
+          items: continuation.pendingDecision.toolRequests.map((request): ToolBatchItem => request),
+        };
+        let outcome: ToolBatchOutcome;
+        try {
+          outcome =
+            mode === "RECOVER"
+              ? await coordinator.recover(request)
+              : await coordinator.execute(request);
+        } catch (error) {
+          const agentError =
+            error instanceof ToolBatchInputError
+              ? {
+                  code: "MODEL_ERROR" as const,
+                  message: "The model produced an invalid Tool Call batch.",
+                  retryable: false,
+                  phase: "LLM" as const,
+                }
+              : {
+                  code: "RUNTIME_ERROR" as const,
+                  message:
+                    "Tool execution infrastructure failed before a complete Tool Result batch was available.",
+                  retryable: false,
+                  phase: "TOOL" as const,
+                };
+          return this.failBoundaryLocked(snapshot, agentError);
+        }
+        if (outcome.kind === "WAITING_APPROVAL") {
+          snapshot = await this.persistWaitingApprovalLocked(snapshot, outcome);
+          return this.resultFromSnapshot(snapshot);
+        }
+        let messages: readonly LLMToolResultMessage[];
+        try {
+          messages = toLLMToolResultMessages(continuation.pendingDecision.toolRequests, outcome.results);
+        } catch (error) {
+          return this.failBoundaryLocked(snapshot, {
+            code: "RUNTIME_ERROR",
+            message:
+              "Tool execution infrastructure failed before a complete Tool Result batch was available.",
+            retryable: false,
+            phase: "TOOL",
+          }, error);
+        }
+        snapshot = await this.persistCompleteToolResultsLocked(snapshot, messages);
+        mode = "EXECUTE";
+        continue;
+      }
+      const execution = await this.executeLoop(snapshot, false);
+      if (execution.status !== "WAITING_TOOL_RESULTS") return execution;
+      snapshot = await this.load(snapshot.run.id);
+      mode = "EXECUTE";
+    }
+  }
+
+  private async persistCompleteToolResultsLocked(
+    loaded: RunExecutionSnapshot,
+    results: readonly LLMToolResultMessage[],
+  ): Promise<RunExecutionSnapshot> {
+    if (loaded.continuation?.type !== "WAITING_TOOL_RESULTS") {
+      throw new RunControllerInvariantError("Run is not waiting for a complete Tool Result batch");
+    }
+    if (loaded.state === undefined) {
+      throw new RunControllerInvariantError("Run is not waiting for a complete Tool Result batch");
+    }
+    const normalized = normalizeToolResultBatch(loaded.continuation.pendingDecision.toolRequests, results);
+    if (
+      loaded.continuation.receivedResults !== undefined &&
+      !semanticEqual(loaded.continuation.receivedResults, normalized)
+    ) {
+      throw new RunControllerConflictError("A different Tool Result batch was already accepted");
+    }
+    if (loaded.continuation.receivedResults !== undefined) return loaded;
+    const commit = await this.commit({
+      run: loaded.run,
+      state: loaded.state,
+      expectedStateRevision: loaded.stateRevision ?? null,
+      expectedContinuationRevision: loaded.continuationRevision ?? null,
+      stepWrites: [],
+      messagesToAppend: [],
+      continuation: {
+        operation: "SET",
+        checkpoint: { ...loaded.continuation, receivedResults: normalized },
+        updatedAt: this.dependencies.clock.now(),
+      },
+      events: [],
+    });
+    return commit.snapshot;
+  }
+
+  private async persistWaitingApprovalLocked(
+    loaded: RunExecutionSnapshot,
+    outcome: Extract<ToolBatchOutcome, { kind: "WAITING_APPROVAL" }>,
+  ): Promise<RunExecutionSnapshot> {
+    if (loaded.state === undefined || loaded.continuation?.type !== "WAITING_TOOL_RESULTS") {
+      throw new RunControllerInvariantError("Approval boundary requires a pending Tool batch");
+    }
+    const now = this.dependencies.clock.now();
+    const run = markAgentRunWaitingApproval(loaded.run);
+    const state = markAgentStateWaitingApproval(loaded.state, now);
+    const commit = await this.commit({
+      run,
+      state,
+      expectedStateRevision: loaded.stateRevision ?? null,
+      expectedContinuationRevision: loaded.continuationRevision ?? null,
+      stepWrites: [],
+      messagesToAppend: [],
+      continuation: {
+        operation: "SET",
+        checkpoint: {
+          ...loaded.continuation,
+          waitingApproval: {
+            invocationId: outcome.waiting.invocationId,
+            externalCallId: outcome.waiting.externalCallId,
+            toolName: outcome.waiting.toolName,
+          },
+        },
+        updatedAt: now,
+      },
+      events: [
+        this.eventFactory.statusChanged(
+          loaded.run,
+          "RUNNING",
+          "WAITING_APPROVAL",
+          this.nextEventId(),
+          now,
+        ),
+      ],
+    });
+    this.notify(commit.events);
+    return commit.snapshot;
+  }
+
+  private async failBoundaryLocked(
+    loaded: RunExecutionSnapshot,
+    error: AgentError,
+    cause?: unknown,
+  ): Promise<RunControllerResult> {
+    if (loaded.state === undefined) {
+      throw new RunControllerInfrastructureError("Tool boundary failure has no AgentState", { cause });
+    }
+    const failedState = markAgentStateFailed(loaded.state, error, this.dependencies.clock.now());
+    const failedRun = markAgentRunFailed(loaded.run, this.dependencies.clock.now());
+    const commit = await this.commitFailure(loaded, failedRun, failedState, undefined);
+    this.notify(commit.events);
+    return this.resultFromSnapshot(commit.snapshot);
   }
 
   private async executeLoop(
@@ -241,7 +432,10 @@ export class RunController {
       history: snapshot.conversation.map((entry) => entry.message),
       baseSystemPrompt: config.baseSystemPrompt,
       contextLimits: config.contextLimits,
-      ...(config.tools === undefined ? {} : { tools: config.tools }),
+      ...(this.dependencies.toolCoordinator === undefined ||
+      this.dependencies.toolCoordinator.modelDefinitions().length === 0
+        ? {}
+        : { tools: this.dependencies.toolCoordinator.modelDefinitions() }),
       ...(config.modelSettings === undefined ? {} : { modelSettings: config.modelSettings }),
       ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
       ...(config.explicitPaths === undefined ? {} : { explicitPaths: config.explicitPaths }),
@@ -529,6 +723,21 @@ export class RunController {
         state: snapshot.state!,
         sourceStepId: snapshot.continuation.sourceStepId,
         toolRequests: snapshot.continuation.pendingDecision.toolRequests,
+      };
+    }
+    if (
+      snapshot.run.status === "WAITING_APPROVAL" &&
+      snapshot.continuation?.type === "WAITING_TOOL_RESULTS" &&
+      snapshot.continuation.waitingApproval !== undefined
+    ) {
+      return {
+        status: "WAITING_APPROVAL",
+        run: snapshot.run,
+        state: snapshot.state!,
+        sourceStepId: snapshot.continuation.sourceStepId,
+        invocationId: snapshot.continuation.waitingApproval.invocationId,
+        externalCallId: snapshot.continuation.waitingApproval.externalCallId,
+        toolName: snapshot.continuation.waitingApproval.toolName,
       };
     }
     if (

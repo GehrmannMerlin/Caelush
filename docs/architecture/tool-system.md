@@ -94,12 +94,43 @@ An `ALLOW` decision must first atomically commit `RUNNING` and the durable `tool
 
 `REQUESTED` is a safe recovery point: recovery may re-enter the gate and continue. `WAITING_APPROVAL` remains paused. A durable `RUNNING` invocation after restart is an uncertain side-effect boundary and fails closed with an uncertainty Observation; recovery never reruns that handler. Terminal invocations return their durable Observation without executing again. Registry drift during recovery is a fatal invariant, not an unknown-tool model result.
 
-Every storage commit persists lifecycle data and durable events in one transaction. The Dispatcher notifies the EventBus only after the transaction commits, using the EventBus's existing `notifyCommitted` bridge. Missed notifications remain recoverable through durable replay. The Dispatcher does not mutate Run, AgentState, AgentStep, Conversation, or Continuation; Tool batches and `LLMToolResultMessage[]` conversion belong to Phase 7C.
+Every storage commit persists lifecycle data and durable events in one transaction. The Dispatcher notifies the EventBus only after the transaction commits, using the EventBus's existing `notifyCommitted` bridge. Missed notifications remain recoverable through durable replay. The Dispatcher does not mutate Run, AgentState, AgentStep, Conversation, or Continuation; batch orchestration and `LLMToolResultMessage[]` conversion belong to the controller-side Phase 7C integration.
+
+## Phase 7C batch boundary
+
+`ToolBatchCoordinator` is the only batch-level execution port. It depends on the public Dispatcher contract and keeps batch orchestration out of AgentLoop, Storage, LLM providers, and the concrete Runtime. The coordinator performs a complete preflight before the first dispatch: the batch is non-empty, IDs and Tool Names are schema-valid, external call IDs are unique and within the UTF-8 byte bound, arguments are JSON objects, and each item has exactly the allowed fields.
+
+```text
+LLM tool-call message
+        │ source order
+        ▼
+RunController
+        │ injected ToolBatchCoordinator
+        ▼
+ToolBatchCoordinator ── sequential ──► ToolDispatcher
+        │                                  │
+        │                                  ├─ ToolRegistry catalog + resolution
+        │                                  └─ durable Invocation / Observation
+        ▼
+ordered ToolBatchItemResult[]
+        │ identity-checked conversion
+        ▼
+LLMToolResultMessage[] → durable Continuation.receivedResults
+        │
+        ▼
+one AgentLoop provider turn
+```
+
+Items are dispatched strictly in assistant source order; the coordinator never uses `Promise.all`, worker pools, or implicit parallelism. A normal `isError: true` Tool result is included and execution continues. An unavailable Tool is represented as a model-facing error without creating an Invocation. A `WAITING_APPROVAL` outcome stops the batch immediately, leaves trailing items untouched, and moves the Run to an explicit `WAITING_APPROVAL` continuation boundary. Approval resolution is intentionally not implemented in Phase 7.
+
+Recovery uses `ToolDispatcher.recoverOrDispatch()` for every item. A durable terminal Invocation is reused, a safe `REQUESTED` Invocation may continue, and a durable `RUNNING` Invocation is converted into an uncertainty result carrying the fixed `UNCERTAIN_SIDE_EFFECT` disposition. The coordinator then inserts generic `SKIPPED_AFTER_UNCERTAIN_EXECUTION` results for every trailing item without dispatching them. This is a fail-closed side-effect barrier: Phase 7 never guesses whether the interrupted handler completed.
+
+The controller validates result count and `(externalCallId, toolName)` identity before converting results to provider-neutral `LLMToolResultMessage[]`; structured Tool details and internal Invocation/Observation IDs never enter that message. The complete ordered result batch is persisted in the Continuation before the next provider turn. If the process restarts after that acceptance but before the provider call, recovery resumes directly with the accepted batch and does not redispatch Tools.
+
+The model catalog is read from the same immutable registry behind the Dispatcher. There is no second `RunExecutionConfig.tools` catalog and no ToolBatch database table: Run/State/Step, Conversation, Continuation, ToolInvocation, ToolObservation, and durable events remain the existing sources of truth.
 
 ## Security and Phase Boundaries
 
 `riskLevel`, `requiredCapabilities`, and `runtimeRequirements` are metadata, not authorization. Permission, capability and risk evaluation, and approval enforcement belong to Phase 9. Filesystem, Shell, Process, and Git handlers belong to Phase 8.
 
-Phase 7B does not implement a concrete permission evaluator, Approval manager, Runtime, filesystem/shell/process/git Tool, retry, timeout, cancellation, parallelism, AgentLoop integration, RunController integration, or LLM tool-result conversion. The user-visible durable `tool.requested` event contract contains only `invocationId`, `toolName`, optional `externalCallId`, and `riskLevel`; it never contains raw arguments. `ToolObservation` retains the bounded model-facing content and validated details privately for later integration.
-
-Phase 7C will connect Dispatcher outcomes to Tool batches, `LLMToolResultMessage[]`, and `RunController.submitToolResults()`. Until then, Phase 7B is a complete single-Tool durable execution kernel and not an Agent execution loop.
+Phase 7 does not implement a concrete permission evaluator, Approval manager or resolution endpoint, Runtime, filesystem/shell/process/git Tool, retry, timeout, cancellation, parallelism, or Verification execution. The user-visible durable `tool.requested` event contract contains only `invocationId`, `toolName`, optional `externalCallId`, and `riskLevel`; it never contains raw arguments. `ToolObservation` retains the bounded model-facing content and validated details privately. The RunController integration owns only the batch/runtime boundary; AgentLoop remains unaware of Dispatcher, Invocation, Observation, Storage, and EventBus.
