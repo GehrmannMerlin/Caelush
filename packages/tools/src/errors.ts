@@ -51,3 +51,12 @@ export class ToolRegistryStateError extends ToolRegistrationError {
     this.name = "ToolRegistryStateError";
   }
 }
+
+export class ToolExecutionUncertainError extends Error {
+  readonly executionDisposition = "UNCERTAIN_SIDE_EFFECT" as const;
+
+  constructor(message = "Tool execution side effects could not be verified safely.") {
+    super(message);
+    this.name = "ToolExecutionUncertainError";
+  }
+}

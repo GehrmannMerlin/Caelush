@@ -77,6 +77,7 @@ export type {
 } from "./batch-types.js";
 export { ToolBatchInfrastructureError, ToolBatchInputError } from "./batch-errors.js";
 export { createReadOnlyFilesystemToolRegistrations } from "./builtins/read-only-filesystem-tools.js";
+export { createFileMutationToolRegistrations } from "./builtins/file-mutation-tools.js";
 export { UNCERTAIN_SIDE_EFFECT, isUncertainToolExecution } from "./execution-disposition.js";
 export {
   createToolCompletedEvent,
@@ -84,7 +85,12 @@ export {
   createToolRequestedEvent,
   createToolStartedEvent,
 } from "./event-factory.js";
-export { ToolRegistrationError, ToolRegistryStateError, ToolSchemaCompileError } from "./errors.js";
+export {
+  ToolExecutionUncertainError,
+  ToolRegistrationError,
+  ToolRegistryStateError,
+  ToolSchemaCompileError,
+} from "./errors.js";
 export type { ToolRegistrationErrorMetadata, ToolRegistrationErrorReason } from "./errors.js";
 export {
   assertToolInvocationInvariant,
