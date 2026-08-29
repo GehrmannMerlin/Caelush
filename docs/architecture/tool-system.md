@@ -11,32 +11,39 @@ There are no additional Phase 7 rounds.
 ## Architecture
 
 ```text
-Model
-  │
-  ▼
-ToolDefinition[]
-  │
-  ▼
-AgentLoop
-  │
-  ▼
-AgentToolRequest
-  │
-  ▼
-Future ToolDispatcher
-  │
-  ▼
-ToolRegistry.resolve()
-  │
- ┌┴──────────────┐
- ▼               ▼
-Definition     Handler
- │               │
-Schema           │
-Validator        │
- └──────┬────────┘
-        ▼
- Future execution
+                 ToolDispatcher
+                      │
+                      ▼
+                 ToolRegistry
+                      │
+                      ▼
+                Input Validator
+                      │
+                      ▼
+               ToolInvocation
+                      │
+              Durable REQUESTED
+                      │
+                      ▼
+               Execution Gate
+                      │
+                      ▼
+                Durable RUNNING
+                      │
+                      ▼
+                 ToolHandler
+                      │
+                      ▼
+              ToolExecutionResult
+                      │
+                      ▼
+               Output Validation
+                      │
+                      ▼
+                ToolObservation
+                      │
+                      ▼
+             Durable Settlement
 ```
 
 `@caelush/protocol` owns the JSON-safe `ToolDefinition`, `ToolName`, `ToolInvocation`, `RiskLevel`, and `Capability` contracts. `@caelush/tools` owns the registration, schema runtime, output policy, and immutable registry. A `ToolRegistration` binds one definition to one handler; the handler has no independent tool name. The registry is the single source of truth for both model-visible definitions and future runtime resolution.
@@ -47,7 +54,7 @@ Prompt Guidance, Tool Definition, and Tool Runtime are related but different:
 
 1. Prompt Guidance explains when to use tools, how tools should be selected, cross-tool preferences, and security behavior. It belongs to the Agent/System prompt layer, not the registry.
 2. Tool Definition describes the model-facing name, concise purpose/boundary description, and input JSON Schema. Argument-specific guidance belongs in schema property descriptions.
-3. Tool Runtime owns the handler and execution result. Phase 7A defines these contracts and precompiled validators but does not execute handlers.
+3. Tool Runtime owns the handler and execution result. Phase 7B's Dispatcher owns the durable single-call lifecycle but still receives the handler, gate, clock, IDs, persistence, and event notification through injected ports.
 
 This separation follows the design observed in the open-source Codex tool system. Codex keeps global tool instructions, model tool specifications, and executable tool runtimes distinct. Caelush adopts the boundary without copying Codex's host-specific tool list or execution machinery.
 
@@ -73,12 +80,26 @@ The model-facing projection contains only:
 
 `riskLevel`, `requiredCapabilities`, `runtimeRequirements`, and `outputSchema` are runtime metadata. They are not provider tool fields. `outputSchema` validates `ToolExecutionResult.details`, not `ToolExecutionResult.content`.
 
-`ToolExecutionResult.content` is model-facing text. `details` is structured runtime/UI data, and `isError` is the shared error state. `ToolOutputPolicy` provides a common UTF-8-safe model content bound with an explicit `[output truncated]` marker; details are not truncated by this policy.
+`ToolExecutionResult.content` is model-facing text. `details` is structured runtime/UI data, and `isError` is the shared error state. `ToolOutputPolicy` provides a common UTF-8-safe model content bound with an explicit `[output truncated]` marker; details have an independent byte budget and are rejected rather than lossy-truncated.
+
+## Phase 7B Durable Lifecycle
+
+`ToolDispatchRequest` is a JSON-safe boundary containing `sessionId`, `runId`, `stepId`, `externalCallId`, `toolName`, and `args`. The call identity is `(runId, stepId, externalCallId)`, and the storage layer also protects it with a revision CAS and a unique database constraint. Unknown tools return a model-recoverable unavailable result without fabricating an invocation or risk metadata.
+
+For a known and valid tool, the Dispatcher persists `REQUESTED` before evaluating the injected `ToolExecutionGate`. `DENY` atomically settles a `FAILED` invocation with `PERMISSION_DENIED`; `REQUIRE_APPROVAL` persists `WAITING_APPROVAL` and returns without creating an Approval entity or invoking a handler. Phase 7B intentionally has no approval-resolution endpoint.
+
+An `ALLOW` decision must first atomically commit `RUNNING` and the durable `tool.started` event. Only after that commit succeeds may the handler begin. This is the durable-before-side-effect boundary. The handler receives frozen invocation args. Its result is runtime-validated, cloned, and bounded before a single atomic settlement writes the terminal invocation, one ToolObservation, and `tool.completed` or sanitized `tool.failed`.
+
+`isError: true` is an expected, model-recoverable Tool failure and returns `RESULT`; it is not an infrastructure fatal error. An unexpected handler throw or output-contract violation is sanitized, durably represented as a generic failure when possible, and surfaced as `ToolDispatcherInfrastructureError`. The original exception is retained only as an internal cause.
+
+`REQUESTED` is a safe recovery point: recovery may re-enter the gate and continue. `WAITING_APPROVAL` remains paused. A durable `RUNNING` invocation after restart is an uncertain side-effect boundary and fails closed with an uncertainty Observation; recovery never reruns that handler. Terminal invocations return their durable Observation without executing again. Registry drift during recovery is a fatal invariant, not an unknown-tool model result.
+
+Every storage commit persists lifecycle data and durable events in one transaction. The Dispatcher notifies the EventBus only after the transaction commits, using the EventBus's existing `notifyCommitted` bridge. Missed notifications remain recoverable through durable replay. The Dispatcher does not mutate Run, AgentState, AgentStep, Conversation, or Continuation; Tool batches and `LLMToolResultMessage[]` conversion belong to Phase 7C.
 
 ## Security and Phase Boundaries
 
 `riskLevel`, `requiredCapabilities`, and `runtimeRequirements` are metadata, not authorization. Permission, capability and risk evaluation, and approval enforcement belong to Phase 9. Filesystem, Shell, Process, and Git handlers belong to Phase 8.
 
-Phase 7A does not execute a handler, create a `ToolInvocation` or `ToolObservation`, persist invocation/output data, publish tool lifecycle events, evaluate permissions, request approvals, load tools dynamically, use MCP, use Tool Search, or use Code Mode. The user-visible durable `tool.requested` event contract contains only `invocationId`, `toolName`, optional `externalCallId`, and `riskLevel`; it never requires raw tool arguments. Full invocation data remains a future private persistence concern.
+Phase 7B does not implement a concrete permission evaluator, Approval manager, Runtime, filesystem/shell/process/git Tool, retry, timeout, cancellation, parallelism, AgentLoop integration, RunController integration, or LLM tool-result conversion. The user-visible durable `tool.requested` event contract contains only `invocationId`, `toolName`, optional `externalCallId`, and `riskLevel`; it never contains raw arguments. `ToolObservation` retains the bounded model-facing content and validated details privately for later integration.
 
-Ordinary tool failure will become a model-visible tool result in Phase 7B rather than an automatic Run failure. Phase 7B is also the first phase that may connect registry resolution to validation gates, invocation persistence, handler execution, output validation, observations, and tool events.
+Phase 7C will connect Dispatcher outcomes to Tool batches, `LLMToolResultMessage[]`, and `RunController.submitToolResults()`. Until then, Phase 7B is a complete single-Tool durable execution kernel and not an Agent execution loop.

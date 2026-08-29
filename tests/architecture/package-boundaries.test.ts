@@ -159,10 +159,7 @@ describe("package boundaries", () => {
     expect(source).not.toMatch(/from\s+["'](?:ai|@ai-sdk\/)/);
     expect(source).not.toMatch(/node:(?:fs|child_process|http|https|sqlite)/);
     expect(source).not.toMatch(/\b(?:fetch|spawn|exec)\s*\(/);
-    expect(source).not.toMatch(
-      /\b(?:EventBus|Permission|ApprovalManager|ToolInvocation|ToolObservation)\b/,
-    );
-    expect(source).not.toMatch(/handler\.execute\s*\(/);
+    expect(source).not.toMatch(/\b(?:EventBus|Permission|ApprovalManager)\b/);
 
     const ajvImports = sources
       .filter(({ contents }) => /from\s+["']ajv["']/.test(contents))
@@ -182,6 +179,7 @@ describe("package boundaries", () => {
     expect(eventDependencies).not.toContain("@caelush/storage");
     expect(storageDependencies).toContain("@caelush/events");
     expect(storageDependencies).toContain("@caelush/protocol");
+    expect(storageDependencies).toContain("@caelush/tools");
     expect(coreDependencies).not.toContain("@caelush/storage");
   });
 
@@ -194,7 +192,7 @@ describe("package boundaries", () => {
     expect(core).not.toMatch(/from\s+["']@caelush\/storage["']/);
     expect(events).not.toMatch(/from\s+["']@caelush\/(?:core|storage)["']/);
     expect(storage).not.toMatch(
-      /from\s+["']@caelush\/(?:context|runtime|tools|security|verification|daemon|llm)["']/,
+      /from\s+["']@caelush\/(?:context|runtime|security|verification|daemon|llm)["']/,
     );
     for (const [name, source] of [
       ["Core", core],
