@@ -1,9 +1,4 @@
-import {
-  createLLMCallId,
-  createRunId,
-  createStepId,
-  ModelRefSchema,
-} from "@caelush/protocol";
+import { createLLMCallId, createRunId, createStepId, ModelRefSchema } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import {
   AgentFinalCandidateDecisionSchema,
@@ -74,19 +69,44 @@ describe("durable continuation schemas", () => {
         callId: createLLMCallId(),
         model,
         finishReason: "STOP" as const,
-        assistantMessage: { role: "assistant" as const, content: [{ type: "text" as const, text: "answer" }] },
+        assistantMessage: {
+          role: "assistant" as const,
+          content: [{ type: "text" as const, text: "answer" }],
+        },
       },
       candidateText: "answer",
     };
-    const checkpoint = { type: "AWAITING_VERIFICATION" as const, runId, sourceStepId, finalDecision: decision };
+    const checkpoint = {
+      type: "AWAITING_VERIFICATION" as const,
+      runId,
+      sourceStepId,
+      finalDecision: decision,
+    };
 
     expect(RunContinuationCheckpointSchema.parse(checkpoint)).toEqual(checkpoint);
     expect(AgentFinalCandidateDecisionSchema.parse(decision)).toEqual(decision);
   });
 
   it("rejects malformed or synthetic continuation data", () => {
-    expect(() => RunContinuationCheckpointSchema.parse({ type: "WAITING_TOOL_RESULTS", runId, sourceStepId })).toThrow();
-    expect(() => RunContinuationCheckpointSchema.parse({ type: "AWAITING_VERIFICATION", runId, sourceStepId, finalDecision: { candidateText: "answer" } })).toThrow();
-    expect(() => RunContinuationCheckpointSchema.parse({ type: "WAITING_TOOL_RESULTS", runId, sourceStepId, pendingDecision: toolDecision, systemPrompt: "secret" })).toThrow();
+    expect(() =>
+      RunContinuationCheckpointSchema.parse({ type: "WAITING_TOOL_RESULTS", runId, sourceStepId }),
+    ).toThrow();
+    expect(() =>
+      RunContinuationCheckpointSchema.parse({
+        type: "AWAITING_VERIFICATION",
+        runId,
+        sourceStepId,
+        finalDecision: { candidateText: "answer" },
+      }),
+    ).toThrow();
+    expect(() =>
+      RunContinuationCheckpointSchema.parse({
+        type: "WAITING_TOOL_RESULTS",
+        runId,
+        sourceStepId,
+        pendingDecision: toolDecision,
+        systemPrompt: "secret",
+      }),
+    ).toThrow();
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createStepId } from "@caelush/protocol";
+import { createStepId, createTimestampMs } from "@caelush/protocol";
 import { openCaelushStorage } from "../src/index.js";
 import { openCaelushDatabase } from "../src/database.js";
 import { migrateCaelushDatabase } from "../src/migrate.js";
@@ -19,32 +19,32 @@ describe("ConversationRepository", () => {
     await storage.steps.insert(makeStep(run.id, { id: stepId }));
 
     await storage.messages.append(run.id, [
-      { message: { role: "user", content: "goal" }, createdAt: 100 },
+      { message: { role: "user", content: "goal" }, createdAt: createTimestampMs(100) },
       {
         message: {
           role: "assistant",
           content: [{ type: "tool-call", toolCallId: "call_a", toolName: "read_file", input: {} }],
         },
         sourceStepId: stepId,
-        createdAt: 100,
+        createdAt: createTimestampMs(100),
       },
     ]);
     await storage.messages.append(otherRun.id, [
-      { message: { role: "user", content: "other" }, createdAt: 100 },
+      { message: { role: "user", content: "other" }, createdAt: createTimestampMs(100) },
     ]);
 
     expect(await storage.messages.listByRun(run.id)).toEqual([
       {
         runId: run.id,
         sequence: 1,
-        createdAt: 100,
+        createdAt: createTimestampMs(100),
         message: { role: "user", content: "goal" },
       },
       {
         runId: run.id,
         sequence: 2,
         sourceStepId: stepId,
-        createdAt: 100,
+        createdAt: createTimestampMs(100),
         message: {
           role: "assistant",
           content: [{ type: "tool-call", toolCallId: "call_a", toolName: "read_file", input: {} }],
@@ -64,7 +64,10 @@ describe("ConversationRepository", () => {
 
     await expect(
       storage.messages.append(run.id, [
-        { message: { role: "system", content: "synthetic" } as never, createdAt: 100 },
+        {
+          message: { role: "system", content: "synthetic" } as never,
+          createdAt: createTimestampMs(100),
+        },
       ]),
     ).rejects.toThrow();
     await storage.close();
@@ -88,7 +91,13 @@ describe("ConversationRepository", () => {
       .prepare(
         "INSERT INTO agent_runs (id, session_id, protocol_version, status, created_at_ms, data_json) VALUES (?, ?, 1, ?, ?, ?)",
       )
-      .run(corruptedRun.id, corruptedRun.sessionId, corruptedRun.status, corruptedRun.createdAt, JSON.stringify(corruptedRun));
+      .run(
+        corruptedRun.id,
+        corruptedRun.sessionId,
+        corruptedRun.status,
+        corruptedRun.createdAt,
+        JSON.stringify(corruptedRun),
+      );
     database.client
       .prepare(
         "INSERT INTO agent_messages (run_id, sequence, role, source_step_id, protocol_version, created_at_ms, data_json) VALUES (?, 1, 'system', NULL, 1, 100, ?)",

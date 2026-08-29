@@ -73,6 +73,19 @@ export const agentMessages = sqliteTable(
   ],
 );
 
+export const agentRunContinuations = sqliteTable("agent_run_continuations", {
+  runId: text("run_id")
+    .primaryKey()
+    .references(() => agentRuns.id),
+  kind: text("kind").notNull(),
+  sourceStepId: text("source_step_id")
+    .notNull()
+    .references(() => agentSteps.id),
+  revision: integer("revision").notNull(),
+  updatedAtMs: integer("updated_at_ms").notNull(),
+  dataJson: text("data_json").notNull(),
+});
+
 export const eventSequences = sqliteTable("event_sequences", {
   runId: text("run_id")
     .primaryKey()
@@ -110,6 +123,7 @@ export const storageSchema = {
   agentSteps,
   agentStateSnapshots,
   agentMessages,
+  agentRunContinuations,
   eventSequences,
   agentEvents,
 };

@@ -84,3 +84,38 @@ export type {
   AgentProviderTurnState,
 } from "./agent-loop-ports.js";
 export { AgentLoop } from "./agent-loop.js";
+export type { RunControllerResult, RunControllerToolResults } from "./run-controller-input.js";
+export {
+  RunController,
+  RunControllerBusyError,
+  RunControllerConflictError,
+  RunControllerInfrastructureError,
+  RunControllerInvariantError,
+  RunControllerInputError,
+} from "./run-controller.js";
+export type {
+  EventIdFactory,
+  RunControllerDependencies,
+  RunEventNotifier,
+  RunExecutionConfig,
+  RunExecutionConfigResolver,
+} from "./run-controller-ports.js";
+export { RunExecutionConflictError, RunExecutionInvariantError } from "./run-execution-store.js";
+export {
+  assertRunExecutionInvariant,
+  isExecutionBoundaryStatus,
+  markAgentRunFailed,
+  markAgentStateFailed,
+} from "./run-execution-state.js";
+export type {
+  DurableAgentEvent,
+  DurableEventDraft,
+  RunConversationEntry,
+  RunExecutionCommit,
+  RunExecutionCommitResult,
+  RunExecutionContinuationWrite,
+  RunExecutionMessageAppend,
+  RunExecutionSnapshot,
+  RunExecutionStepWrite,
+  RunExecutionStorePort,
+} from "./run-execution-store.js";

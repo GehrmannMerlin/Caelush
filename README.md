@@ -2,15 +2,15 @@
 
 Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI、Web 和其他宿主共享同一个可观察、可取消、可验证、可扩展的 Agent Core。
 
-当前仓库处于 **V1 Phase 6B：Context → LLM Resumable Decision Loop**。Phase 1 的 JSON-safe Protocol Contract、Typed AgentEvent 和 Core Run State Machine、Phase 2 的可恢复 SQLite 持久化/Durable Event Store/EventBus、Phase 3 的唯一本地 Daemon/Session/Run HTTP API/SSE Event Stream，以及 Phase 4 的 Caelush-owned LLM contracts、Provider Registry 和单次 provider-turn streaming runtime 已完成；Phase 5A 建立只读 workspace/project intelligence，Phase 5B 针对具体任务发现、排序并预算项目文件，Phase 5C 将项目事实、指令、相关文件和最近完整对话按 caller-supplied input budget 组装为 provider-independent、LLMRequest-ready 的 `LLMMessage[]`；Phase 6A 定义 deterministic Agent decision、step、tool-boundary 和 kernel-state semantics，Phase 6B 已将这些合约接入 ContextBuilder 和单次 LLM provider turn，并在外部 Tool/Verification 边界暂停。Phase 6B 仍不执行本地 Tool，也不接入 RunController、Storage 或 EventBus。
+当前仓库处于 **V1 Phase 6C：RunController, Durable Persistence & Event Trace**。Phase 1 的 JSON-safe Protocol Contract、Typed AgentEvent 和 Core Run State Machine、Phase 2 的可恢复 SQLite 持久化/Durable Event Store/EventBus、Phase 3 的唯一本地 Daemon/Session/Run HTTP API/SSE Event Stream，以及 Phase 4 的 Caelush-owned LLM contracts、Provider Registry 和单次 provider-turn streaming runtime 已完成；Phase 5A 建立只读 workspace/project intelligence，Phase 5B 针对具体任务发现、排序并预算项目文件，Phase 5C 将项目事实、指令、相关文件和最近完整对话按 caller-supplied input budget 组装为 provider-independent、LLMRequest-ready 的 `LLMMessage[]`；Phase 6A 定义 deterministic Agent decision、step、tool-boundary 和 kernel-state semantics，Phase 6B 将这些合约接入 ContextBuilder 和单次 LLM provider turn，Phase 6C 再通过 RunController、Conversation Ledger、Continuation checkpoint、原子 SQLite execution commit 与 Durable Event Trace 将它们连接到 local-host recovery。Phase 6C 仍不执行本地 Tool 或 Verification，也不直接进入 `COMPLETED`。
 
 ## Phase 6 Status
 
 - Phase 6A — Agent Execution Contracts & Kernel State: **COMPLETED**
 - Phase 6B — Context → LLM Resumable Decision Loop: **COMPLETED**
-- Phase 6C — RunController, Persistence & Event Trace: **NOT STARTED**
+- Phase 6C — RunController, Persistence & Event Trace: **COMPLETED**
 
-Caelush now has an injected `AgentLoop` that performs at most one provider turn per invocation. It observes project context, plans relevant files, builds a bounded current turn, calls the injected LLM client, classifies a tool request or final candidate, and returns immutable state/step/append projections. Tool results are normalized at the external boundary and resume the next turn; tools are never executed by Core, and a final candidate stops at `VERIFYING`.
+Caelush now has an injected `AgentLoop` and a durable `RunController`. The loop performs at most one provider turn per invocation; the controller checkpoints Run/State/Step before the provider, persists real conversation messages and continuation boundaries atomically, publishes only committed lifecycle events, and recovers known local-host boundaries after restart. Tool results are normalized and durably accepted before the next turn; tools are never executed by Core, and a final candidate stops at `VERIFYING` until a future Verification boundary.
 
 ## Phase 5 Status
 
@@ -18,7 +18,7 @@ Caelush now has an injected `AgentLoop` that performs at most one provider turn 
 - Phase 5B — Relevant File Discovery & Context Budget: **COMPLETED**
 - Phase 5C — ContextBuilder & Final Context Assembly: **COMPLETED**
 
-Caelush can build provider-independent, budgeted LLMRequest-ready message context from project facts, project instructions, relevant files, and conversation history. Phase 6B now consumes that context through a resumable one-turn AgentLoop; Phase 6C remains responsible for RunController orchestration, persistence, and event trace.
+Caelush can build provider-independent, budgeted LLMRequest-ready message context from project facts, project instructions, relevant files, and conversation history. Phase 6C consumes that context through a resumable one-turn AgentLoop and persists only the real conversation separately from synthetic provider context. See [Run Controller](docs/architecture/run-controller.md) for the durable execution and recovery boundary.
 
 ## 技术栈
 

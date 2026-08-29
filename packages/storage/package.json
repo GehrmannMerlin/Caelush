@@ -14,6 +14,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@caelush/core": "workspace:*",
     "@caelush/events": "workspace:*",
     "@caelush/llm": "workspace:*",
     "@caelush/protocol": "workspace:*",

@@ -74,6 +74,59 @@ function mapAppendError(error: unknown, eventId: string): never {
   throw new StorageError(`Unable to append AgentEvent ${eventId}`, { cause: error });
 }
 
+export function appendDurableEventsInTransaction(
+  client: CaelushDatabase["client"],
+  drafts: readonly DurableEventDraft[],
+): DurableAgentEvent[] {
+  return drafts.map((draft) => {
+    client
+      .prepare(
+        `INSERT INTO event_sequences (run_id, last_sequence) VALUES (?, 0)
+         ON CONFLICT(run_id) DO NOTHING`,
+      )
+      .run(draft.runId);
+    client
+      .prepare("UPDATE event_sequences SET last_sequence = last_sequence + 1 WHERE run_id = ?")
+      .run(draft.runId);
+    const sequenceRow = client
+      .prepare("SELECT last_sequence FROM event_sequences WHERE run_id = ?")
+      .get(draft.runId) as { last_sequence: number };
+    const event = AgentEventSchema.parse({
+      ...draft,
+      durability: { ...draft.durability, sequence: sequenceRow.last_sequence },
+    });
+    if (event.durability.kind !== "DURABLE") {
+      throw new StorageDecodeError("AgentEvent", draft.eventId, "agent_events");
+    }
+    const durable = event as unknown as DurableAgentEvent;
+    const dataJson = encodeProtocol(AgentEventSchema, durable, {
+      entityType: "AgentEvent",
+      entityId: durable.eventId,
+      table: "agent_events",
+    });
+    client
+      .prepare(
+        `INSERT INTO agent_events
+          (event_id, run_id, session_id, step_id, aggregate_sequence, event_type,
+           event_schema_version, visibility, timestamp_ms, data_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        durable.eventId,
+        durable.runId,
+        durable.sessionId,
+        durable.stepId ?? null,
+        durable.durability.sequence,
+        durable.type,
+        durable.schemaVersion,
+        durable.visibility,
+        durable.timestamp,
+        dataJson,
+      );
+    return durable;
+  });
+}
+
 export class SqliteDurableEventStore implements DurableEventStore {
   constructor(private readonly database: CaelushDatabase) {}
 
@@ -81,51 +134,8 @@ export class SqliteDurableEventStore implements DurableEventStore {
     const client = this.database.client;
     client.exec("BEGIN IMMEDIATE");
     try {
-      client
-        .prepare(
-          `INSERT INTO event_sequences (run_id, last_sequence) VALUES (?, 0)
-           ON CONFLICT(run_id) DO NOTHING`,
-        )
-        .run(draft.runId);
-      client
-        .prepare("UPDATE event_sequences SET last_sequence = last_sequence + 1 WHERE run_id = ?")
-        .run(draft.runId);
-      const sequenceRow = client
-        .prepare("SELECT last_sequence FROM event_sequences WHERE run_id = ?")
-        .get(draft.runId) as { last_sequence: number };
-      const event = AgentEventSchema.parse({
-        ...draft,
-        durability: { ...draft.durability, sequence: sequenceRow.last_sequence },
-      });
-      if (event.durability.kind !== "DURABLE") {
-        throw new StorageDecodeError("AgentEvent", draft.eventId, "agent_events");
-      }
-      const durable = event as unknown as DurableAgentEvent;
-      const dataJson = encodeProtocol(AgentEventSchema, durable, {
-        entityType: "AgentEvent",
-        entityId: durable.eventId,
-        table: "agent_events",
-      });
-
-      client
-        .prepare(
-          `INSERT INTO agent_events
-            (event_id, run_id, session_id, step_id, aggregate_sequence, event_type,
-             event_schema_version, visibility, timestamp_ms, data_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          durable.eventId,
-          durable.runId,
-          durable.sessionId,
-          durable.stepId ?? null,
-          durable.durability.sequence,
-          durable.type,
-          durable.schemaVersion,
-          durable.visibility,
-          durable.timestamp,
-          dataJson,
-        );
+      const [durable] = appendDurableEventsInTransaction(client, [draft]);
+      if (durable === undefined) throw new StorageError("Unable to append empty AgentEvent batch");
       client.exec("COMMIT");
       return durable;
     } catch (error) {

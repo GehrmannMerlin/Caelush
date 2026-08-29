@@ -1,7 +1,4 @@
-import {
-  LLMAssistantMessageSchema,
-  LLMToolResultMessageSchema,
-} from "@caelush/llm/messages";
+import { LLMAssistantMessageSchema, LLMToolResultMessageSchema } from "@caelush/llm/messages";
 import { FinishReasonSchema, LLMUsageSchema } from "@caelush/llm/turn";
 import {
   JsonObjectSchema,
@@ -62,7 +59,10 @@ export const AgentToolCallsDecisionSchema = z
         call.toolName !== request.toolName ||
         JSON.stringify(call.input) !== JSON.stringify(request.args)
       ) {
-        context.addIssue({ code: "custom", message: "assistant tool call identity does not match" });
+        context.addIssue({
+          code: "custom",
+          message: "assistant tool call identity does not match",
+        });
         return;
       }
     }
@@ -79,8 +79,14 @@ export const AgentFinalCandidateDecisionSchema = z
     const textParts = decision.modelTurn.assistantMessage.content.filter(
       (part): part is { type: "text"; text: string } => part.type === "text",
     );
-    if (textParts.length === 0 || textParts.map((part) => part.text).join("") !== decision.candidateText) {
-      context.addIssue({ code: "custom", message: "candidate text does not match assistant message" });
+    if (
+      textParts.length === 0 ||
+      textParts.map((part) => part.text).join("") !== decision.candidateText
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "candidate text does not match assistant message",
+      });
     }
   });
 

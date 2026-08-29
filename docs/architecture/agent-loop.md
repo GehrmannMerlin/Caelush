@@ -105,4 +105,4 @@ The loop has no retry, backoff, timeout policy, run-level cancellation, doom-loo
 
 ## Phase boundaries
 
-Phase 6A defines deterministic decisions, steps, tool-result normalization, state helpers, and the `maxSteps` gate. Phase 6B connects those contracts to Project Intelligence, Relevant File Planning, ContextBuilder, and one LLM turn, then stops at the external Tool or Verification boundary. Phase 6C will own RunController orchestration, Storage integration, durable event trace, replay/live observation, and the remaining lifecycle integration. None of those responsibilities are implemented here.
+Phase 6A defines deterministic decisions, steps, tool-result normalization, state helpers, and the `maxSteps` gate. Phase 6B connects those contracts to Project Intelligence, Relevant File Planning, ContextBuilder, and one LLM turn, then stops at the external Tool or Verification boundary. Phase 6C adds the durable RunController boundary described in [Run Controller](run-controller.md): it persists execution boundaries and resumes only from known durable checkpoints. It still does not execute Tools or Verification and never claims `COMPLETED`.

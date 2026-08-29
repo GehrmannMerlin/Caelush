@@ -44,6 +44,11 @@ function isOpenAICompatibleAdapterPath(filePath: string): boolean {
   );
 }
 
+async function packageSource(packageName: string): Promise<string> {
+  const files = await sourceFiles(path.join(repositoryRoot, "packages", packageName, "src"));
+  return (await Promise.all(files.map((filePath) => readFile(filePath, "utf8")))).join("\n");
+}
+
 describe("package boundaries", () => {
   it("prevents packages from depending on applications", async () => {
     for (const manifestPath of allWorkspaceManifestPaths().filter((entry) =>
@@ -147,6 +152,31 @@ describe("package boundaries", () => {
     expect(storageDependencies).toContain("@caelush/events");
     expect(storageDependencies).toContain("@caelush/protocol");
     expect(coreDependencies).not.toContain("@caelush/storage");
+  });
+
+  it("keeps Core, Events, and Storage within the Phase 6C execution boundaries", async () => {
+    const [core, events, storage] = await Promise.all([
+      packageSource("core"),
+      packageSource("events"),
+      packageSource("storage"),
+    ]);
+    expect(core).not.toMatch(/from\s+["']@caelush\/storage["']/);
+    expect(events).not.toMatch(/from\s+["']@caelush\/(?:core|storage)["']/);
+    expect(storage).not.toMatch(
+      /from\s+["']@caelush\/(?:context|runtime|tools|security|verification|daemon|llm)["']/,
+    );
+    for (const [name, source] of [
+      ["Core", core],
+      ["Events", events],
+      ["Storage", storage],
+    ] as const) {
+      expect(source, `${name} imports an AI SDK`).not.toMatch(/from\s+["'](?:ai|@ai-sdk\/)/);
+      expect(source, `${name} performs network or child-process execution`).not.toMatch(
+        /(?:fetch\s*\(|node:(?:http|https)|child_process)/,
+      );
+    }
+    expect(core, "Core contains explicit any").not.toMatch(/\bany\b/);
+    expect(storage, "Storage contains explicit any").not.toMatch(/\bany\b/);
   });
 
   it("keeps the Phase 6B loop above Context and narrow LLM contracts", async () => {

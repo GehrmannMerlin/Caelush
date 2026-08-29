@@ -122,6 +122,9 @@ importers:
 
   packages/storage:
     dependencies:
+      '@caelush/core':
+        specifier: workspace:*
+        version: link:../core
       '@caelush/events':
         specifier: workspace:*
         version: link:../events

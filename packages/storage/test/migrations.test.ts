@@ -37,6 +37,8 @@ describe("committed storage migrations", () => {
       expect(tables.map(({ name }) => name)).toEqual([
         "__drizzle_migrations",
         "agent_events",
+        "agent_messages",
+        "agent_run_continuations",
         "agent_runs",
         "agent_sessions",
         "agent_state_snapshots",
@@ -44,7 +46,7 @@ describe("committed storage migrations", () => {
         "event_sequences",
       ]);
       expect(sqlite.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get()).toEqual({
-        count: 1,
+        count: 2,
       });
     } finally {
       sqlite.close();

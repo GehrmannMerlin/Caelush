@@ -2,11 +2,7 @@ import { LLMMessageSchema, type LLMMessage } from "@caelush/llm/messages";
 import type { RunId, StepId, TimestampMs } from "@caelush/protocol";
 import type { CaelushDatabase } from "../database.js";
 import { decodeProtocol, encodeProtocol } from "../codec.js";
-import {
-  StorageConflictError,
-  StorageDecodeError,
-  StorageError,
-} from "../errors.js";
+import { StorageConflictError, StorageDecodeError, StorageError } from "../errors.js";
 
 interface ConversationRow {
   run_id: string;
@@ -50,7 +46,11 @@ function decodeConversationEntry(row: ConversationRow): RunConversationEntry {
     message.role !== row.role ||
     (row.source_step_id === null ? undefined : row.source_step_id) === ""
   ) {
-    throw new StorageDecodeError("RunConversationEntry", `${row.run_id}:${row.sequence}`, "agent_messages");
+    throw new StorageDecodeError(
+      "RunConversationEntry",
+      `${row.run_id}:${row.sequence}`,
+      "agent_messages",
+    );
   }
   return {
     runId: row.run_id as RunId,
@@ -65,7 +65,9 @@ function mapWriteError(error: unknown, runId: RunId): never {
   if (error instanceof StorageError) throw error;
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes("UNIQUE") || message.includes("PRIMARY KEY")) {
-    throw new StorageConflictError(`Unable to append conversation for Run ${runId}`, { cause: error });
+    throw new StorageConflictError(`Unable to append conversation for Run ${runId}`, {
+      cause: error,
+    });
   }
   throw new StorageError(`Unable to append conversation for Run ${runId}`, { cause: error });
 }
@@ -112,14 +114,20 @@ export function appendConversationMessagesInTransaction(
 }
 
 export interface ConversationRepository {
-  append(runId: RunId, entries: readonly ConversationAppendInput[]): Promise<RunConversationEntry[]>;
+  append(
+    runId: RunId,
+    entries: readonly ConversationAppendInput[],
+  ): Promise<RunConversationEntry[]>;
   listByRun(runId: RunId): Promise<RunConversationEntry[]>;
 }
 
 export class SqliteConversationRepository implements ConversationRepository {
   constructor(private readonly database: CaelushDatabase) {}
 
-  async append(runId: RunId, entries: readonly ConversationAppendInput[]): Promise<RunConversationEntry[]> {
+  async append(
+    runId: RunId,
+    entries: readonly ConversationAppendInput[],
+  ): Promise<RunConversationEntry[]> {
     const client = this.database.client;
     client.exec("BEGIN IMMEDIATE");
     try {

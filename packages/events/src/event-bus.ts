@@ -34,6 +34,10 @@ export class EventBus {
     return ephemeral;
   }
 
+  notifyCommitted(events: readonly DurableAgentEvent[]): void {
+    for (const event of events) this.notify(event);
+  }
+
   subscribe(
     runId: RunId,
     listener: EventListener,
@@ -148,7 +152,11 @@ export class EventBus {
       try {
         subscriber.listener(event);
       } catch (error) {
-        subscriber.onError?.(error, event);
+        try {
+          subscriber.onError?.(error, event);
+        } catch {
+          // Subscriber failures are observational and must not affect execution.
+        }
       }
     }
   }

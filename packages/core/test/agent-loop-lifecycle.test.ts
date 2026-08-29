@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 import { AgentLoop } from "../src/agent-loop.js";
 import { createInitialAgentState, startAgentState } from "../src/agent-state.js";
 import type { AgentLoopCommonInput } from "../src/agent-loop-input.js";
-import type { AgentLoopDependencies } from "../src/agent-loop-ports.js";
+import type { AgentLoopDependencies, AgentLoopLifecycleHooks } from "../src/agent-loop-ports.js";
 
 function makeInput(): AgentLoopCommonInput {
   const pendingRun = AgentRunSchema.parse({
@@ -42,13 +42,9 @@ function makeInput(): AgentLoopCommonInput {
 
 function dependencies(
   calls: string[],
-  beforeProviderTurn?: AgentLoopDependencies["lifecycle"] extends infer Lifecycle
-    ? Lifecycle extends { beforeProviderTurn: infer Hook }
-      ? Hook
-      : never
-    : never,
+  beforeProviderTurn?: AgentLoopLifecycleHooks["beforeProviderTurn"],
 ): AgentLoopDependencies {
-  return {
+  const baseDependencies: AgentLoopDependencies = {
     inspector: {
       inspect: async () => {
         calls.push("inspect");
@@ -82,11 +78,10 @@ function dependencies(
     },
     clock: { now: () => createTimestampMs(3) },
     stepIdFactory: { create: () => createStepId() },
-    lifecycle:
-      beforeProviderTurn === undefined
-        ? undefined
-        : { beforeProviderTurn: beforeProviderTurn as never },
   };
+  return beforeProviderTurn === undefined
+    ? baseDependencies
+    : { ...baseDependencies, lifecycle: { beforeProviderTurn } };
 }
 
 describe("AgentLoop provider lifecycle", () => {

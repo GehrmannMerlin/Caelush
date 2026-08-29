@@ -13,3 +13,14 @@ CREATE TABLE `agent_messages` (
 CREATE UNIQUE INDEX `agent_messages_run_sequence_unique` ON `agent_messages` (`run_id`,`sequence`);
 --> statement-breakpoint
 CREATE INDEX `agent_messages_run_sequence_idx` ON `agent_messages` (`run_id`,`sequence`);
+--> statement-breakpoint
+CREATE TABLE `agent_run_continuations` (
+	`run_id` text PRIMARY KEY,
+	`kind` text NOT NULL,
+	`source_step_id` text NOT NULL,
+	`revision` integer NOT NULL,
+	`updated_at_ms` integer NOT NULL,
+	`data_json` text NOT NULL,
+	CONSTRAINT `fk_agent_run_continuations_run_id_agent_runs_id_fk` FOREIGN KEY (`run_id`) REFERENCES `agent_runs`(`id`),
+	CONSTRAINT `fk_agent_run_continuations_source_step_id_agent_steps_id_fk` FOREIGN KEY (`source_step_id`) REFERENCES `agent_steps`(`id`)
+);

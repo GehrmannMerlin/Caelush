@@ -16,6 +16,12 @@ import {
   SqliteConversationRepository,
   type ConversationRepository,
 } from "./repositories/conversation-repository.js";
+import {
+  SqliteContinuationRepository,
+  type ContinuationRepository,
+} from "./repositories/continuation-repository.js";
+import { SqliteRunExecutionStore } from "./run-execution-store.js";
+import type { RunExecutionStorePort } from "@caelush/core";
 
 export interface CaelushStorage {
   readonly sessions: SessionRepository;
@@ -24,6 +30,8 @@ export interface CaelushStorage {
   readonly runStates: RunStateRepository;
   readonly events: DurableEventStore;
   readonly messages: ConversationRepository;
+  readonly continuations: ContinuationRepository;
+  readonly execution: RunExecutionStorePort;
   close(): Promise<void>;
 }
 
@@ -39,6 +47,8 @@ export async function openCaelushStorage(options: { path: string }): Promise<Cae
       runStates: new SqliteRunStateRepository(database),
       events: new SqliteDurableEventStore(database),
       messages: new SqliteConversationRepository(database),
+      continuations: new SqliteContinuationRepository(database),
+      execution: new SqliteRunExecutionStore(database),
       close: async () => database.close(),
     };
   } catch (error) {

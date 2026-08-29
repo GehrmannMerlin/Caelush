@@ -30,11 +30,15 @@ import type {
 } from "./agent-loop-input.js";
 import { mapAgentLoopError } from "./agent-error-mapper.js";
 import { prepareResumeHistory, validateAgentLoopInput } from "./agent-loop-history.js";
-import type { AgentLoopDependencies } from "./agent-loop-ports.js";
+import type { AgentLoopDependencies, AgentLoopLifecycleHooks } from "./agent-loop-ports.js";
 import { buildAgentLLMRequest } from "./agent-loop-request.js";
 
 export class AgentLoop {
   constructor(private readonly dependencies: AgentLoopDependencies) {}
+
+  withLifecycleHooks(lifecycle: AgentLoopLifecycleHooks): AgentLoop {
+    return new AgentLoop({ ...this.dependencies, lifecycle });
+  }
 
   async run(input: AgentLoopStartInput): Promise<AgentLoopExecutionResult> {
     validateAgentLoopInput(input);
@@ -198,15 +202,23 @@ export class AgentLoop {
       );
       if (decision.type === "FINAL_CANDIDATE") {
         const verifyingState = markAgentStateVerifying(settledState, finishedAt);
-        return this.outcome(decision, verifyingState, completedStep, prepared.context, [
-          ...appendPrefix,
-          decision.modelTurn.assistantMessage,
-        ], "COMPLETED");
+        return this.outcome(
+          decision,
+          verifyingState,
+          completedStep,
+          prepared.context,
+          [...appendPrefix, decision.modelTurn.assistantMessage],
+          "COMPLETED",
+        );
       }
-      return this.outcome(decision, settledState, completedStep, prepared.context, [
-        ...appendPrefix,
-        decision.modelTurn.assistantMessage,
-      ], "COMPLETED");
+      return this.outcome(
+        decision,
+        settledState,
+        completedStep,
+        prepared.context,
+        [...appendPrefix, decision.modelTurn.assistantMessage],
+        "COMPLETED",
+      );
     } catch (error) {
       const parsed = LLMTurnResultSchema.safeParse(result);
       const usage = parsed.success ? parsed.data.usage : undefined;

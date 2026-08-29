@@ -7,7 +7,7 @@ export interface WaitingToolResultsContinuation {
   readonly runId: RunId;
   readonly sourceStepId: StepId;
   readonly pendingDecision: AgentToolCallsDecision;
-  readonly receivedResults?: readonly LLMToolResultMessage[];
+  readonly receivedResults?: readonly LLMToolResultMessage[] | undefined;
 }
 
 export interface AwaitingVerificationContinuation {
@@ -18,5 +18,4 @@ export interface AwaitingVerificationContinuation {
 }
 
 export type RunContinuationCheckpoint =
-  | WaitingToolResultsContinuation
-  | AwaitingVerificationContinuation;
+  WaitingToolResultsContinuation | AwaitingVerificationContinuation;

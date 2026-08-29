@@ -122,11 +122,22 @@ pnpm format:check
 pnpm check
 ```
 
+## Phase 6C Durable Runtime Rules
+
+- Phase 6C is the final Phase 6 round; do not introduce Phase 6D.
+- `RunController` owns Run lifecycle orchestration but never executes Tools or Verification and never transitions a final candidate directly to `COMPLETED`.
+- Run, State, Step, real conversation messages, continuation checkpoints, and durable lifecycle events settle through one atomic execution commit.
+- Durable event sequence is the canonical chronology; timestamps are metadata only. Persist durable events before notifying live subscribers.
+- Durable conversation contains only user, assistant, and external tool-result messages; system prompts, project instructions, relevant-file context, and other synthetic context never enter the ledger.
+- `WAITING_TOOL_RESULTS` and `AWAITING_VERIFICATION` are durable recovery boundaries. Tool Results are normalized and durably accepted before resuming the next provider turn.
+- A stale `RUNNING` Step after restart fails closed and is never automatically resent to the provider. Recovery is local-host durable recovery, not distributed exactly-once execution.
+- Phase 6C adds no retry, Tool execution, Verification execution, run-level cancellation, or `COMPLETED` transition.
+
 ## V1 Phase Boundary
 
-当前是 Phase 6B 完成边界。除 Phase 1 已正式定义的 AgentSession、AgentRun、AgentStep、AgentState、AgentEvent、ToolDefinition、ToolInvocation、Observation、ApprovalRequest、VerificationResult 和 Run State Machine，以及 Phase 2 的 SQLite/Drizzle Storage、Repository、Run State Snapshot、Durable Event Store、EventBus、Replay 与 Live Watch、Phase 3 的 loopback-only Daemon、Health/Session/Run HTTP API 和 Durable/Ephemeral SSE Event Stream 外，Phase 4A 已建立 Caelush-owned LLM contracts、LLMProvider 和显式 Provider Registry，Phase 4B 已建立注入式 LLMGateway 的 single-turn streaming runtime、runtime event validation、tool-call lifecycle validation、abort/timeout/cancellation 和 result aggregation，Phase 4C-1 已建立仅位于 `@caelush/llm` Provider Adapter 内的 OpenAI-compatible AI SDK transport，Phase 4C-2 已完成真实 OpenAI-shaped SSE 兼容性矩阵、工具调用 identity/round-trip 安全、reasoning/usage/finish/error/secret 回归，以及仅 adapter-private 的歧义 identity fail-closed guard；Phase 5A/5B/5C 已完成 Project Intelligence、Relevant File Planning 与 ContextBuilder finalization；Phase 6A 已建立 deterministic Agent decision、step、tool-boundary、tool-result resume、AgentState、AgentStep 和 maxSteps contracts；Phase 6B 已完成注入式 Context → LLM resumable decision loop。Phase 6B 仍不实现 Tool 执行、Runtime、AgentEvent bridge、Storage integration、RunController、Approval resolution、Daemon model config、Ink CLI 功能、React Web 功能、重试、run-level cancellation、doom-loop detection、Verification execution 或 `COMPLETED` transition；这些属于 Phase 6C 或后续明确阶段。
+当前是 Phase 6C 完成边界。除 Phase 1 已正式定义的 AgentSession、AgentRun、AgentStep、AgentState、AgentEvent、ToolDefinition、ToolInvocation、Observation、ApprovalRequest、VerificationResult 和 Run State Machine，以及 Phase 2 的 SQLite/Drizzle Storage、Repository、Run State Snapshot、Durable Event Store、EventBus、Replay 与 Live Watch、Phase 3 的 loopback-only Daemon、Health/Session/Run HTTP API 和 Durable/Ephemeral SSE Event Stream 外，Phase 4A 已建立 Caelush-owned LLM contracts、LLMProvider 和显式 Provider Registry，Phase 4B 已建立注入式 LLMGateway 的 single-turn streaming runtime、runtime event validation、tool-call lifecycle validation、abort/timeout/cancellation 和 result aggregation，Phase 4C-1 已建立仅位于 `@caelush/llm` Provider Adapter 内的 OpenAI-compatible AI SDK transport，Phase 4C-2 已完成真实 OpenAI-shaped SSE 兼容性矩阵、工具调用 identity/round-trip 安全、reasoning/usage/finish/error/secret 回归，以及仅 adapter-private 的歧义 identity fail-closed guard；Phase 5A/5B/5C 已完成 Project Intelligence、Relevant File Planning 与 ContextBuilder finalization；Phase 6A 已建立 deterministic Agent decision、step、tool-boundary、tool-result resume、AgentState、AgentStep 和 maxSteps contracts；Phase 6B 已完成注入式 Context → LLM resumable decision loop；Phase 6C 已完成 Conversation Ledger、Continuation checkpoint、原子 RunExecutionStore、Durable Event Trace、RunController 与 local-host recovery。Phase 6C 仍不实现 Tool 执行、Runtime、Approval resolution、Daemon model config、Ink CLI 功能、React Web 功能、重试、run-level cancellation、doom-loop detection、Verification execution 或 `COMPLETED` transition。
 
-下一阶段为 Phase 6C；不得提前实现 RunController、Persistence/Event Trace 或其他宿主产品功能。
+下一阶段不得扩展为 Phase 6D；后续工作必须另行定义在 Phase 6 之外。
 
 Phase 5B context rules:
 

@@ -27,19 +27,20 @@ describe("Core Phase 6B architecture", () => {
             "@caelush/llm/messages",
             "@caelush/llm/request",
             "@caelush/llm/turn",
+            "@caelush/events",
           ].includes(value),
       ),
     ).toEqual([]);
     expect(source).not.toMatch(/from\s+["']@caelush\/llm["']/);
     expect(source).not.toMatch(
-      /from\s+["']@caelush\/(?:storage|events|runtime|tools|security|verification|daemon)/,
+      /from\s+["']@caelush\/(?:storage|runtime|tools|security|verification|daemon)/,
     );
   });
 
   it("contains no host execution, SDK, time, ID, or hidden-reasoning boundary leaks", async () => {
     const source = await sourceContents();
     expect(source).not.toMatch(
-      /(?:from\s+["'](?:ai|@ai-sdk\/)|fetch\s*\(|node:(?:fs|path|http|https)|child_process|EventBus|Date\.now\s*\(|randomUUID\s*\()/,
+      /(?:from\s+["'](?:ai|@ai-sdk\/)|fetch\s*\(|node:(?:fs|path|http|https)|child_process|Date\.now\s*\(|randomUUID\s*\()/,
     );
     expect(source).not.toMatch(/\bany\b/);
     expect(source).not.toMatch(

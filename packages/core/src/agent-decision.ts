@@ -7,7 +7,7 @@ export interface AgentModelTurn {
   readonly model: ModelRef;
   readonly finishReason: FinishReason;
   readonly assistantMessage: LLMAssistantMessage;
-  readonly usage?: LLMUsage;
+  readonly usage?: LLMUsage | undefined;
 }
 
 export interface AgentToolRequest {
