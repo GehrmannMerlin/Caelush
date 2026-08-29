@@ -104,19 +104,20 @@ export class WorkspacePathResolver {
       path.relative(this.scope.logicalRoot, absolutePath).replaceAll(path.sep, "/") || ".";
     const segments = relativePath === "." ? [] : relativePath.split("/");
     let current = this.scope.logicalRoot;
-    let metadata: RuntimeFileMetadata | null = null;
+    let targetMetadata: RuntimeFileMetadata | null = null;
     for (const segment of segments) {
       current = path.join(current, segment);
-      metadata = await this.scope.filesystem.getMetadata(current);
-      if (metadata === null) break;
-      if (metadata.kind === "SYMLINK") {
+      targetMetadata = await this.scope.filesystem.getMetadata(current);
+      if (targetMetadata === null) break;
+      if (targetMetadata.kind === "SYMLINK") {
         throw new RuntimePatchError("SYMLINK_MUTATION_NOT_ALLOWED");
       }
     }
     let containmentPath = current;
-    while (metadata === null && containmentPath !== this.scope.logicalRoot) {
+    let containmentMetadata = targetMetadata;
+    while (containmentMetadata === null && containmentPath !== this.scope.logicalRoot) {
       containmentPath = path.dirname(containmentPath);
-      metadata = await this.scope.filesystem.getMetadata(containmentPath);
+      containmentMetadata = await this.scope.filesystem.getMetadata(containmentPath);
     }
     try {
       const realPath = path.normalize(await this.scope.filesystem.realpath(containmentPath));
@@ -127,7 +128,7 @@ export class WorkspacePathResolver {
       if (error instanceof RuntimePatchError) throw error;
       throw new RuntimePatchError("PATH_NOT_FOUND");
     }
-    return { absolutePath, relativePath, metadata: metadata?.kind === "SYMLINK" ? null : metadata };
+    return { absolutePath, relativePath, metadata: targetMetadata };
   }
 
   assertKind(pathValue: ResolvedWorkspacePath, kind: RuntimeFileKind): void {

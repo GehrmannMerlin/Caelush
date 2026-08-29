@@ -10,12 +10,16 @@ import { RuntimeWorkspaceError } from "./runtime-errors.js";
 import { LOCAL_RUNTIME_KIND } from "./runtime-ref.js";
 import type { Runtime } from "./runtime.js";
 import { WorkspacePathResolver } from "./workspace-path.js";
+import { createLocalPatchMutationFileSystem } from "./patch/committer.js";
+import { RuntimePatchService } from "./patch/service.js";
+import type { PatchMutationFileSystem } from "./patch/types.js";
 import type { RuntimeWorkspaceScope } from "./workspace-scope.js";
 
 export interface LocalRuntimeOptions {
   readonly filesystem?: RuntimeFileSystem;
   readonly discovery?: RuntimeFileDiscovery;
   readonly textSearch?: RuntimeTextSearch;
+  readonly patchFileSystem?: PatchMutationFileSystem;
 }
 
 export class LocalRuntime implements Runtime {
@@ -23,11 +27,13 @@ export class LocalRuntime implements Runtime {
   private readonly filesystem: RuntimeFileSystem;
   private readonly discovery: RuntimeFileDiscovery;
   private readonly textSearch: RuntimeTextSearch;
+  private readonly patchFileSystem: PatchMutationFileSystem;
 
   constructor(options: LocalRuntimeOptions = {}) {
     this.filesystem = options.filesystem ?? new LocalRuntimeFileSystem();
     this.discovery = options.discovery ?? new LocalRuntimeFileDiscovery();
     this.textSearch = options.textSearch ?? new LocalRipgrepRunner();
+    this.patchFileSystem = options.patchFileSystem ?? createLocalPatchMutationFileSystem();
   }
 
   supports(ref: RuntimeRef): boolean {
@@ -68,6 +74,7 @@ export class LocalRuntime implements Runtime {
       pathResolver: new WorkspacePathResolver(scope),
       discovery: this.discovery,
       textSearch: this.textSearch,
+      patch: new RuntimePatchService(new WorkspacePathResolver(scope), this.patchFileSystem),
     };
   }
 }
