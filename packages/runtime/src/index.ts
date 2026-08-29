@@ -38,6 +38,23 @@ export type {
   RuntimeTextRead,
 } from "./filesystem/types.js";
 export { LocalRuntimeFileSystem } from "./filesystem/local-filesystem.js";
+export { RuntimePatchError, RuntimePatchUncertainError } from "./patch/errors.js";
+export { parsePatch } from "./patch/parser.js";
+export { PATCH_LIMITS } from "./patch/types.js";
+export type {
+  FileVersion,
+  PatchChange,
+  PatchDocument,
+  PatchHunk,
+  PatchLine,
+  PatchLineKind,
+  PatchMutationFileSystem,
+  PatchOperation,
+  PatchCommitResult,
+  PreparedChange,
+  PreparedPatch,
+  RuntimePatchRequest,
+} from "./patch/types.js";
 export { isBinarySample } from "./filesystem/binary-detection.js";
 export {
   DEFAULT_READ_MODEL_BYTES,
