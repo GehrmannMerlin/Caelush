@@ -6,6 +6,7 @@ import {
   createStepId,
   createToolInvocationId,
   createTimestampMs,
+  createWorkspaceId,
   type ToolInvocation,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
@@ -26,6 +27,11 @@ import {
   type ToolExecutionStorePort,
 } from "../src/index.js";
 import { ToolExecutionConflictError } from "../src/index.js";
+
+const environment = {
+  workspace: { id: createWorkspaceId(), path: "C:\\workspace" },
+  runtime: { id: "local", kind: "local" },
+} as const;
 
 class RecoveryStore implements ToolExecutionStorePort {
   readonly snapshots = new Map<string, ToolExecutionSnapshot>();
@@ -70,6 +76,7 @@ const request: ToolDispatchRequest = {
   externalCallId: "call-1",
   toolName: "echo_value",
   args: { value: "hello" },
+  environment,
 };
 
 function makeDispatcher(
@@ -143,7 +150,7 @@ describe("ToolDispatcher recovery", () => {
       return { content: "hello", details: { echoed: "hello" }, isError: false };
     });
 
-    const outcome = await dispatcher.recover(invocation.id);
+    const outcome = await dispatcher.recover(invocation.id, environment);
 
     expect(outcome.kind).toBe("RESULT");
     expect(count).toBe(1);
@@ -159,7 +166,7 @@ describe("ToolDispatcher recovery", () => {
       return { content: "unexpected", details: { echoed: "unexpected" }, isError: false };
     });
 
-    const outcome = await dispatcher.recover(invocation.id);
+    const outcome = await dispatcher.recover(invocation.id, environment);
 
     expect(outcome.kind).toBe("RESULT");
     if (outcome.kind !== "RESULT") throw new Error("expected result");
@@ -197,7 +204,7 @@ describe("ToolDispatcher recovery", () => {
       return { content: "unexpected", details: { echoed: "unexpected" }, isError: false };
     });
 
-    const outcome = await dispatcher.recover(invocation.id);
+    const outcome = await dispatcher.recover(invocation.id, environment);
 
     expect(outcome).toEqual({ kind: "WAITING_APPROVAL", invocation });
     expect(count).toBe(0);
@@ -218,7 +225,7 @@ describe("ToolDispatcher recovery", () => {
       eventIdFactory: { create: createEventId },
     });
 
-    await expect(dispatcher.recover(invocation.id)).rejects.toBeInstanceOf(
+    await expect(dispatcher.recover(invocation.id, environment)).rejects.toBeInstanceOf(
       ToolDispatcherInvariantError,
     );
   });

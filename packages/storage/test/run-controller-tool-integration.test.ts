@@ -1,4 +1,5 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -20,6 +21,7 @@ import {
   ToolBatchCoordinator,
   ToolDispatcher,
   ToolRegistryBuilder,
+  createReadOnlyFilesystemToolRegistrations,
   createRequestedToolInvocation,
   startToolInvocation,
   type ToolCommittedEventNotifier,
@@ -61,7 +63,7 @@ const definitions = [
   },
 ];
 
-function makeRun(pathname: string) {
+function makeRun(pathname: string, runtimeKind = "fixture") {
   return AgentRunSchema.parse({
     id: createRunId(),
     sessionId: createSessionId(),
@@ -69,12 +71,35 @@ function makeRun(pathname: string) {
     status: "PENDING",
     workspace: { id: createWorkspaceId(), path: pathname },
     model: { provider: "fixture", model: "fixture-model" },
-    runtime: { id: "local", kind: "fixture" },
+    runtime: { id: "local", kind: runtimeKind },
     permissionProfile: "READ_ONLY",
     approvalPolicy: "ALWAYS_ASK",
     limits: { maxSteps: 6, maxToolCalls: 8, timeoutMs: 1000 },
     createdAt: createTimestampMs(1),
   });
+}
+
+async function snapshotWorkspace(root: string): Promise<readonly unknown[]> {
+  const files: Array<{ path: string; size: number; sha256: string }> = [];
+  async function visit(directory: string): Promise<void> {
+    const entries = await readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const absolutePath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        await visit(absolutePath);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const content = await readFile(absolutePath);
+      files.push({
+        path: path.relative(root, absolutePath).replaceAll(path.sep, "/"),
+        size: content.byteLength,
+        sha256: createHash("sha256").update(content).digest("hex"),
+      });
+    }
+  }
+  await visit(root);
+  return files.sort((left, right) => left.path.localeCompare(right.path));
 }
 
 async function seedRun(storage: CaelushStorage, run: ReturnType<typeof makeRun>) {
@@ -112,6 +137,28 @@ function createRuntime(
     eventIdFactory: { create: createEventId },
   });
   return { dispatcher, coordinator: new ToolBatchCoordinator(dispatcher), registry };
+}
+
+function createFilesystemRuntime(storage: CaelushStorage, eventBus: EventBus) {
+  const builder = new ToolRegistryBuilder();
+  for (const registration of createReadOnlyFilesystemToolRegistrations()) {
+    builder.register(registration);
+  }
+  const notifier: ToolCommittedEventNotifier = {
+    notifyCommitted: (events) => eventBus.notifyCommitted(events),
+  };
+  let now = 100;
+  const dispatcher = new ToolDispatcher({
+    registry: builder.build(),
+    store: storage.toolExecution,
+    gate: { decide: async () => ({ kind: "ALLOW" as const }) },
+    notifier,
+    clock: { now: () => createTimestampMs(++now) },
+    invocationIdFactory: { create: createToolInvocationId },
+    observationIdFactory: { create: createObservationId },
+    eventIdFactory: { create: createEventId },
+  });
+  return { dispatcher, coordinator: new ToolBatchCoordinator(dispatcher) };
 }
 
 function createController(
@@ -176,6 +223,91 @@ function turn(
 }
 
 describe("RunController automatic Tool Batch integration", () => {
+  it("runs real read-only filesystem tools through AgentLoop and leaves the workspace unchanged", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "caelush-phase-8a-e2e-"));
+    const workspace = path.join(directory, "workspace");
+    await mkdir(path.join(workspace, "src"), { recursive: true });
+    await writeFile(path.join(workspace, "README.md"), "Caelush runtime\n", "utf8");
+    await writeFile(
+      path.join(workspace, "src", "agent.ts"),
+      'export const name = "AgentLoop";\n',
+      "utf8",
+    );
+    await writeFile(
+      path.join(workspace, "src", "runtime.ts"),
+      "export const runtime = true;\n",
+      "utf8",
+    );
+    await writeFile(path.join(workspace, "src", "utf8.ts"), 'export const emoji = "😀";\n', "utf8");
+    const before = await snapshotWorkspace(workspace);
+
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    const run = makeRun(workspace, "local");
+    await seedRun(storage, run);
+    const eventBus = new EventBus(storage.events);
+    const runtime = createFilesystemRuntime(storage, eventBus);
+    const observed: Array<{ tools?: unknown; messages: unknown[] }> = [];
+    const controller = createController(
+      storage,
+      eventBus,
+      [
+        turn(
+          "inspect workspace",
+          [
+            { id: "call-list", name: "list_directory", input: { path: "src" } },
+            { id: "call-find", name: "find_files", input: { pattern: "**/*.ts" } },
+            { id: "call-read", name: "read_file", input: { path: "src/agent.ts" } },
+            {
+              id: "call-search",
+              name: "search_text",
+              input: { pattern: "AgentLoop", include: "*.ts" },
+            },
+          ],
+          "TOOL_CALLS",
+        ),
+        turn("Final Candidate", [], "STOP"),
+      ],
+      runtime.coordinator,
+      observed,
+    );
+
+    try {
+      const result = await controller.start(run.id);
+
+      expect(result.status).toBe("AWAITING_VERIFICATION");
+      expect(observed[0]?.tools).toEqual(runtime.coordinator.modelDefinitions());
+      expect(observed[1]?.messages.slice(-4)).toEqual([
+        expect.objectContaining({ toolCallId: "call-list", isError: false }),
+        expect.objectContaining({
+          toolCallId: "call-find",
+          content: "src/agent.ts\nsrc/runtime.ts\nsrc/utf8.ts",
+          isError: false,
+        }),
+        expect.objectContaining({
+          toolCallId: "call-read",
+          content: expect.stringContaining("1: export const name"),
+          isError: false,
+        }),
+        expect.objectContaining({
+          toolCallId: "call-search",
+          content: expect.stringContaining("src/agent.ts:1:"),
+          isError: false,
+        }),
+      ]);
+      expect((await storage.toolInvocations.listByRun(run.id)).map((item) => item.status)).toEqual([
+        "COMPLETED",
+        "COMPLETED",
+        "COMPLETED",
+        "COMPLETED",
+      ]);
+      expect(await storage.observations.listByRun(run.id)).toHaveLength(4);
+      expect(await snapshotWorkspace(workspace)).toEqual(before);
+    } finally {
+      await storage.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("executes one complete batch, resumes the AgentLoop, and preserves source order", async () => {
     const storage = await openCaelushStorage({ path: ":memory:" });
     const run = makeRun("/repo");
@@ -553,6 +685,7 @@ describe("RunController automatic Tool Batch integration", () => {
       externalCallId: "call-A",
       toolName: "echo_value",
       args: {},
+      environment: { workspace: run.workspace, runtime: run.runtime },
     });
     expect(firstA.kind).toBe("RESULT");
     const running = startToolInvocation(

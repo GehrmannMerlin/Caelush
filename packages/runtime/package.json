@@ -12,5 +12,10 @@
   "scripts": {
     "build": "tsc --build",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@caelush/protocol": "workspace:*",
+    "@caelush/shared": "workspace:*",
+    "fast-glob": "3.3.3"
   }
 }

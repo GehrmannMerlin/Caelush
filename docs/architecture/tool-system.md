@@ -129,8 +129,31 @@ The controller validates result count and `(externalCallId, toolName)` identity 
 
 The model catalog is read from the same immutable registry behind the Dispatcher. There is no second `RunExecutionConfig.tools` catalog and no ToolBatch database table: Run/State/Step, Conversation, Continuation, ToolInvocation, ToolObservation, and durable events remain the existing sources of truth.
 
+## Phase 8A built-in Runtime boundary
+
+Phase 8A adds a one-way execution dependency:
+
+```text
+ToolHandler
+    │
+    ▼
+Runtime
+    │
+    ▼
+LocalRuntime
+    ├── RuntimeFileSystem → Node filesystem
+    ├── RuntimeFileDiscovery → fast-glob
+    └── RuntimeTextSearch → fixed rg adapter
+```
+
+`ToolRegistry`, `ToolDispatcher`, and `ToolBatchCoordinator` remain generic. They do not know `LocalRuntime` or any filesystem semantics. Only the four built-in handlers in `packages/tools/src/builtins/` resolve the data-only `ToolExecutionEnvironment` through an injected `RuntimeResolver`, open the `AgentRun.workspace`, and call the narrow Runtime capabilities. `@caelush/runtime` has no dependency on Tools, Core, Storage, Events, LLM, Context, Security, or Verification.
+
+All Phase 8A file paths are workspace-relative. A `WorkspacePathResolver` first applies lexical containment beneath the normalized workspace root and then realpath containment beneath the resolved workspace root. Existing symlink targets must remain inside the workspace; recursive discovery and search do not follow symlink directories. Model-facing paths use `/` separators and never expose host absolute paths.
+
+The four registrations are ordered `read_file`, `list_directory`, `find_files`, and `search_text`. They are intentionally provided as a registration factory rather than a final default catalog, because mutation, shell, process, and Git tools belong to later Phase 8 rounds. `riskLevel`, `requiredCapabilities`, and `runtimeRequirements` remain metadata in Phase 8A; permission and approval decisions belong to Phase 9.
+
 ## Security and Phase Boundaries
 
-`riskLevel`, `requiredCapabilities`, and `runtimeRequirements` are metadata, not authorization. Permission, capability and risk evaluation, and approval enforcement belong to Phase 9. Filesystem, Shell, Process, and Git handlers belong to Phase 8.
+`riskLevel`, `requiredCapabilities`, and `runtimeRequirements` are metadata, not authorization. Permission, capability and risk evaluation, and approval enforcement belong to Phase 9. Phase 8A is strictly read-only; filesystem mutation, Shell, Process, and Git handlers belong to later Phase 8 rounds.
 
 Phase 7 does not implement a concrete permission evaluator, Approval manager or resolution endpoint, Runtime, filesystem/shell/process/git Tool, retry, timeout, cancellation, parallelism, or Verification execution. The user-visible durable `tool.requested` event contract contains only `invocationId`, `toolName`, optional `externalCallId`, and `riskLevel`; it never contains raw arguments. `ToolObservation` retains the bounded model-facing content and validated details privately. The RunController integration owns only the batch/runtime boundary; AgentLoop remains unaware of Dispatcher, Invocation, Observation, Storage, and EventBus.

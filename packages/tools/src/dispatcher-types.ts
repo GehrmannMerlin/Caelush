@@ -17,6 +17,10 @@ import {
 } from "@caelush/protocol";
 import { ToolDispatcherInputError } from "./dispatcher-errors.js";
 import type { AgentEvent, EventDurability } from "@caelush/protocol";
+import {
+  assertToolExecutionEnvironment,
+  type ToolExecutionEnvironment,
+} from "./execution-environment.js";
 
 export const DEFAULT_MAX_EXTERNAL_CALL_ID_BYTES = 512;
 export const DEFAULT_MAX_INVOCATION_ARGS_BYTES = 256 * 1024;
@@ -28,6 +32,7 @@ export interface ToolDispatchRequest {
   readonly externalCallId: string;
   readonly toolName: ToolName;
   readonly args: JsonObject;
+  readonly environment: ToolExecutionEnvironment;
 }
 
 export function assertToolDispatchRequest(
@@ -38,7 +43,15 @@ export function assertToolDispatchRequest(
     throw new ToolDispatcherInputError("Tool dispatch request is invalid.");
   }
   const request = value as Record<string, unknown>;
-  const expectedKeys = ["sessionId", "runId", "stepId", "externalCallId", "toolName", "args"];
+  const expectedKeys = [
+    "sessionId",
+    "runId",
+    "stepId",
+    "externalCallId",
+    "toolName",
+    "args",
+    "environment",
+  ];
   if (
     Object.keys(request).length !== expectedKeys.length ||
     expectedKeys.some((key) => !Object.hasOwn(request, key)) ||
@@ -51,6 +64,7 @@ export function assertToolDispatchRequest(
   ) {
     throw new ToolDispatcherInputError("Tool dispatch request is invalid.");
   }
+  assertToolExecutionEnvironment(request.environment);
   if (request.externalCallId.length === 0) {
     throw new ToolDispatcherInputError("Tool externalCallId must be non-empty.");
   }

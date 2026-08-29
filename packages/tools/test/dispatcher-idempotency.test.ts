@@ -14,6 +14,7 @@ import {
   createStepId,
   createTimestampMs,
   createToolInvocationId,
+  createWorkspaceId,
 } from "@caelush/protocol";
 import { ToolDispatcher, ToolRegistryBuilder } from "../src/index.js";
 import type {
@@ -23,6 +24,11 @@ import type {
   ToolExecutionSnapshot,
   ToolExecutionStorePort,
 } from "../src/index.js";
+
+const environment = {
+  workspace: { id: createWorkspaceId(), path: "C:\\workspace" },
+  runtime: { id: "local", kind: "local" },
+} as const;
 
 class Store implements ToolExecutionStorePort {
   readonly snapshots = new Map<string, ToolExecutionSnapshot>();
@@ -68,6 +74,7 @@ function request(): ToolDispatchRequest {
     externalCallId: "call-1",
     toolName: "echo_value",
     args: { value: "hello" },
+    environment,
   };
 }
 

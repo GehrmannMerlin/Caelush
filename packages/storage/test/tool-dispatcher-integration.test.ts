@@ -103,6 +103,7 @@ describe("ToolDispatcher with durable storage and EventBus", () => {
         externalCallId: "call-integration-1",
         toolName: "echo_value",
         args: { value: "hello" },
+        environment: { workspace: run.workspace, runtime: run.runtime },
       };
       const dispatcher = createDispatcher(
         storage,
@@ -162,6 +163,7 @@ describe("ToolDispatcher with durable storage and EventBus", () => {
       externalCallId: "call-restart-1",
       toolName: "echo_value",
       args: { value: "restart" },
+      environment: { workspace: fixture.run.workspace, runtime: fixture.run.runtime },
     };
     let executions = 0;
     try {

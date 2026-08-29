@@ -4,6 +4,7 @@ import {
   createStepId,
   createTimestampMs,
   createToolInvocationId,
+  createWorkspaceId,
   type ToolInvocation,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
@@ -18,6 +19,11 @@ import type {
 } from "../src/index.js";
 import { assertToolDispatchRequest } from "../src/index.js";
 
+const environment = {
+  workspace: { id: createWorkspaceId(), path: "C:\\workspace" },
+  runtime: { id: "local", kind: "local" },
+} as const;
+
 describe("dispatcher public contracts", () => {
   it("keeps a dispatch request JSON-safe and independent from storage/events", () => {
     const request: ToolDispatchRequest = {
@@ -27,6 +33,7 @@ describe("dispatcher public contracts", () => {
       externalCallId: "call-1",
       toolName: "echo_value",
       args: { value: "hello" },
+      environment,
     };
 
     expect(request.args).toEqual({ value: "hello" });
@@ -106,6 +113,7 @@ describe("dispatcher public contracts", () => {
         externalCallId: "",
         toolName: "echo_value",
         args: {},
+        environment,
       }),
     ).toThrow("externalCallId");
   });

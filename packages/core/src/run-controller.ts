@@ -243,6 +243,10 @@ export class RunController {
           sessionId: snapshot.run.sessionId,
           runId: snapshot.run.id,
           stepId: continuation.sourceStepId,
+          environment: {
+            workspace: snapshot.run.workspace,
+            runtime: snapshot.run.runtime,
+          },
           items: continuation.pendingDecision.toolRequests.map((request): ToolBatchItem => request),
         };
         let outcome: ToolBatchOutcome;

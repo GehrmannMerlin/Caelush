@@ -1,5 +1,7 @@
 export type { ToolExecutionRequest, ToolHandler } from "./handler.js";
+export type { ToolExecutionEnvironment } from "./execution-environment.js";
 export type { ToolExecutionResult } from "./execution-result.js";
+export { assertToolExecutionEnvironment } from "./execution-environment.js";
 export {
   assertToolDispatchRequest,
   DEFAULT_MAX_EXTERNAL_CALL_ID_BYTES,
@@ -74,6 +76,7 @@ export type {
   ToolBatchWaitingApprovalOutcome,
 } from "./batch-types.js";
 export { ToolBatchInfrastructureError, ToolBatchInputError } from "./batch-errors.js";
+export { createReadOnlyFilesystemToolRegistrations } from "./builtins/read-only-filesystem-tools.js";
 export { UNCERTAIN_SIDE_EFFECT, isUncertainToolExecution } from "./execution-disposition.js";
 export {
   createToolCompletedEvent,

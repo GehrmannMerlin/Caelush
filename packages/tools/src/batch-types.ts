@@ -8,6 +8,7 @@ import type {
   ToolInvocationId,
   ToolName,
 } from "@caelush/protocol";
+import type { ToolExecutionEnvironment } from "./execution-environment.js";
 
 export interface ToolBatchItem {
   readonly externalCallId: string;
@@ -19,6 +20,7 @@ export interface ToolBatchRequest {
   readonly sessionId: SessionId;
   readonly runId: RunId;
   readonly stepId: StepId;
+  readonly environment: ToolExecutionEnvironment;
   readonly items: readonly ToolBatchItem[];
 }
 

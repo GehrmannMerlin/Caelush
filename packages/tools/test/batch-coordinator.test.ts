@@ -6,6 +6,7 @@ import {
   createStepId,
   createTimestampMs,
   createToolInvocationId,
+  createWorkspaceId,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import {
@@ -23,6 +24,11 @@ import {
   type ToolExecutionSnapshot,
   type ToolExecutionStorePort,
 } from "../src/index.js";
+
+const environment = {
+  workspace: { id: createWorkspaceId(), path: "C:\\workspace" },
+  runtime: { id: "local", kind: "local" },
+} as const;
 
 class Store implements ToolExecutionStorePort {
   readonly snapshots = new Map<string, ToolExecutionSnapshot>();
@@ -67,7 +73,7 @@ function item(externalCallId: string, toolName: "slow_a" | "fast_b" | "approval_
 }
 
 function request(items: ToolBatchRequest["items"]): ToolBatchRequest {
-  return { sessionId, runId, stepId, items };
+  return { sessionId, runId, stepId, environment, items };
 }
 
 function makeCoordinator(options: {
@@ -221,6 +227,7 @@ describe("ToolBatchCoordinator", () => {
       externalCallId: "A",
       toolName: "slow_a",
       args: {},
+      environment,
     });
     expect(first.kind).toBe("RESULT");
     const running = startToolInvocation(

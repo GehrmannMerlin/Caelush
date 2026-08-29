@@ -30,6 +30,7 @@ import type {
   ToolBatchCoordinatorPort,
 } from "./batch-types.js";
 import type { ToolDispatcher } from "./dispatcher.js";
+import { assertToolExecutionEnvironment } from "./execution-environment.js";
 
 const UNCERTAIN_SKIP_CONTENT =
   "This tool call was skipped because an earlier tool execution may have partially or fully completed before the runtime was interrupted. Re-evaluate the current project state before issuing dependent or repeated tool calls.";
@@ -107,10 +108,11 @@ function assertToolBatchRequest(value: unknown): ToolBatchRequest {
   }
   const request = value as Record<string, unknown>;
   if (
-    Object.keys(request).length !== 4 ||
+    Object.keys(request).length !== 5 ||
     !Object.hasOwn(request, "sessionId") ||
     !Object.hasOwn(request, "runId") ||
     !Object.hasOwn(request, "stepId") ||
+    !Object.hasOwn(request, "environment") ||
     !Object.hasOwn(request, "items") ||
     !SessionIdSchema.safeParse(request.sessionId).success ||
     !RunIdSchema.safeParse(request.runId).success ||
@@ -118,6 +120,11 @@ function assertToolBatchRequest(value: unknown): ToolBatchRequest {
     !Array.isArray(request.items) ||
     request.items.length === 0
   ) {
+    throw new ToolBatchInputError();
+  }
+  try {
+    assertToolExecutionEnvironment(request.environment);
+  } catch {
     throw new ToolBatchInputError();
   }
   const ids = new Set<string>();
@@ -156,6 +163,7 @@ function assertToolBatchRequest(value: unknown): ToolBatchRequest {
     sessionId: parsedSessionId,
     runId: parsedRunId,
     stepId: parsedStepId,
+    environment: request.environment,
     items,
   };
 }
@@ -165,6 +173,7 @@ function toDispatchRequest(request: ToolBatchRequest, item: ToolBatchItem): Tool
     sessionId: request.sessionId,
     runId: request.runId,
     stepId: request.stepId,
+    environment: request.environment,
     externalCallId: item.externalCallId,
     toolName: item.toolName,
     args: item.args,

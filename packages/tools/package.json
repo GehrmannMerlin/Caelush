@@ -14,6 +14,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@caelush/runtime": "workspace:*",
     "@caelush/protocol": "workspace:*",
     "ajv": "8.20.0"
   }

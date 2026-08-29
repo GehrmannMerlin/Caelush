@@ -6,7 +6,13 @@ import {
   createStepId,
   createTimestampMs,
   createToolInvocationId,
+  createWorkspaceId,
 } from "@caelush/protocol";
+
+const environment = {
+  workspace: { id: createWorkspaceId(), path: "C:\\workspace" },
+  runtime: { id: "local", kind: "local" },
+} as const;
 import { describe, expect, it } from "vitest";
 import {
   ToolDispatcher,
@@ -75,6 +81,7 @@ const request: ToolDispatchRequest = {
   externalCallId: "call-failure-1",
   toolName: "echo_value",
   args: { value: "hello" },
+  environment,
 };
 
 function makeDispatcher(
@@ -150,7 +157,7 @@ describe("ToolDispatcher persistence failures", () => {
     expect(executions).toBe(1);
 
     store.failTerminalCommit = false;
-    const recovered = await dispatcher.recover(running!.invocation.id);
+    const recovered = await dispatcher.recover(running!.invocation.id, environment);
 
     expect(recovered.kind).toBe("RESULT");
     if (recovered.kind !== "RESULT") throw new Error("expected a recovered result");

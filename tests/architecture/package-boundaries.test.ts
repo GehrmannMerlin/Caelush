@@ -144,7 +144,12 @@ describe("package boundaries", () => {
     const dependencies = dependencyEntries(manifest);
     expect(dependencies[protocolPackageName]).toBe("workspace:*");
     expect(dependencies.ajv).toBe("8.20.0");
-    expect(Object.keys(dependencies).sort()).toEqual(["@caelush/protocol", "ajv"]);
+    expect(dependencies["@caelush/runtime"]).toBe("workspace:*");
+    expect(Object.keys(dependencies).sort()).toEqual([
+      "@caelush/protocol",
+      "@caelush/runtime",
+      "ajv",
+    ]);
 
     const sourceRoot = path.join(repositoryRoot, "packages", "tools", "src");
     const files = await sourceFiles(sourceRoot);
@@ -154,7 +159,7 @@ describe("package boundaries", () => {
     const source = sources.map(({ contents }) => contents).join("\n");
     expect(source).toMatch(/from\s+["']@caelush\/protocol["']/);
     expect(source).not.toMatch(
-      /from\s+["']@caelush\/(?:core|context|storage|events|runtime|security|verification|daemon|llm)["']/,
+      /from\s+["']@caelush\/(?:core|context|storage|events|security|verification|daemon|llm)["']/,
     );
     expect(source).not.toMatch(/from\s+["'](?:ai|@ai-sdk\/)/);
     expect(source).not.toMatch(/node:(?:fs|child_process|http|https|sqlite)/);
@@ -165,6 +170,42 @@ describe("package boundaries", () => {
       .filter(({ contents }) => /from\s+["']ajv["']/.test(contents))
       .map(({ filePath }) => path.relative(repositoryRoot, filePath).replaceAll(path.sep, "/"));
     expect(ajvImports).toEqual(["packages/tools/src/schema-runtime.ts"]);
+  });
+
+  it("keeps Runtime below Tools and limits host process access to the fixed search adapter", async () => {
+    const manifest = await readManifest("packages/runtime/package.json");
+    const dependencies = dependencyEntries(manifest);
+    expect(dependencies[protocolPackageName]).toBe("workspace:*");
+    expect(dependencies["@caelush/shared"]).toBe("workspace:*");
+    expect(dependencies["fast-glob"]).toBe("3.3.3");
+    expect(Object.keys(dependencies).sort()).toEqual([
+      "@caelush/protocol",
+      "@caelush/shared",
+      "fast-glob",
+    ]);
+
+    const sourceRoot = path.join(repositoryRoot, "packages", "runtime", "src");
+    const files = await sourceFiles(sourceRoot);
+    const sources = await Promise.all(
+      files.map(async (filePath) => ({
+        filePath,
+        relativePath: path.relative(repositoryRoot, filePath).replaceAll(path.sep, "/"),
+        contents: await readFile(filePath, "utf8"),
+      })),
+    );
+    const source = sources.map(({ contents }) => contents).join("\n");
+    expect(source).not.toMatch(
+      /from\s+["']@caelush\/(?:tools|core|context|storage|events|llm|security|verification|daemon)["']|from\s+["'](?:ai|@ai-sdk\/)/,
+    );
+    expect(source).not.toMatch(
+      /\b(?:writeFile|appendFile|rename|unlink|rm|truncate|copyFile|chmod|chown)\s*\(/,
+    );
+    const childProcessImports = sources
+      .filter(({ contents }) => contents.includes('from "node:child_process"'))
+      .map(({ relativePath }) => relativePath);
+    expect(childProcessImports).toEqual(["packages/runtime/src/search/ripgrep-runner.ts"]);
+    expect(source).not.toContain("shell: true");
+    expect(source).not.toMatch(/\b(?:exec|execSync)\s*\(/);
   });
 
   it("keeps Events provider-neutral and Storage below Core", async () => {
@@ -224,10 +265,12 @@ describe("package boundaries", () => {
     const dependencies = dependencyEntries(context);
 
     expect(dependencies[protocolPackageName]).toBe("workspace:*");
+    expect(dependencies["@caelush/shared"]).toBe("workspace:*");
     expect(dependencies.ignore).toBe("7.0.6");
     expect(Object.keys(dependencies).sort()).toEqual([
       "@caelush/llm",
       "@caelush/protocol",
+      "@caelush/shared",
       "ignore",
     ]);
   });

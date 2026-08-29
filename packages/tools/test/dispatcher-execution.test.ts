@@ -6,6 +6,7 @@ import {
   createStepId,
   createTimestampMs,
   createToolInvocationId,
+  createWorkspaceId,
   type ToolObservation,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
@@ -23,6 +24,11 @@ import {
 } from "../src/index.js";
 import type { ToolExecutionCommit, ToolDispatchRequest } from "../src/index.js";
 
+const environment = {
+  workspace: { id: createWorkspaceId(), path: "C:\\workspace" },
+  runtime: { id: "local", kind: "local" },
+} as const;
+
 function makeRequest(): ToolDispatchRequest {
   return {
     sessionId: createSessionId(),
@@ -31,6 +37,7 @@ function makeRequest(): ToolDispatchRequest {
     externalCallId: "call-1",
     toolName: "echo_value",
     args: { value: "hello" },
+    environment,
   };
 }
 

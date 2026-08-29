@@ -156,6 +156,24 @@ pnpm check
 
 ## V1 Phase Boundary
 
+## Phase 8A Local Runtime and Filesystem Rules
+
+- Phase 8 contains exactly 8A, 8B, 8C, and 8D; never add another Phase 8 round.
+- Phase 8A is strictly read-only. File mutation, patching, shell execution, managed processes, and Git tools are forbidden in 8A.
+- Runtime is an execution substrate and must never depend on Tool System, Core, Storage, Events, LLM, Context, Security, or Verification.
+- Built-in Tool handlers may depend on Runtime. The dependency direction is tools → runtime, never runtime → tools.
+- `AgentRun.workspace` is the source of truth for the Runtime workspace, and `AgentRun.runtime` is the source of truth for Runtime selection.
+- Phase 8 built-in file paths are workspace-relative and are never resolved from `process.cwd()`.
+- Tool execution may carry only a data-only `ToolExecutionEnvironment` containing `WorkspaceRef` and `RuntimeRef`. It must never carry a Runtime object, Storage service, EventBus, permission manager, or other mutable service object.
+- Workspace paths require both lexical containment and realpath containment. Symlinks that resolve outside the workspace must fail closed.
+- Recursive file discovery must not follow symbolic links. Model-facing paths must always be workspace-relative and use forward slashes.
+- Runtime workspace containment is a correctness boundary, not Phase 9 authorization. Direct `read_file` must not implement secret-file permission policy.
+- `read_file` returns bounded valid UTF-8 text. Binary or invalid UTF-8 inputs are model-recoverable Tool errors, and large reads must be paginated and byte-bounded.
+- `find_files` has deterministic bounded results. `search_text` uses a fixed ripgrep backend with `shell=false`; models must never control the executable or arbitrary CLI arguments.
+- Ripgrep unavailability is a model-recoverable Tool error; malformed runtime output is an infrastructure error.
+- Phase 8A must not introduce non-atomic `file.read` event side channels. The Phase 7 durable ToolInvocation and ToolObservation lifecycle remains the execution/audit mechanism for read-only tools.
+- No filesystem mutation is allowed in Phase 8A.
+
 ## Phase 7C Tool Batch and Runtime Integration Rules
 
 - Phase 7 contains exactly 7A, 7B, and 7C; do not add Phase 7D.
@@ -172,9 +190,9 @@ pnpm check
 - Do not add a ToolBatch database table or migration. Existing Run/State/Step, Conversation, Continuation, ToolInvocation, ToolObservation, and Durable Event stores remain the sources of truth.
 - Phase 7C adds no Filesystem/Shell/Process/Git handlers, Runtime implementation, Retry, Timeout, Cancellation, Budget, or Verification execution. A final candidate still stops at `VERIFYING` and never directly completes a Run.
 
-当前是 Phase 7C 完成边界。除 Phase 1 已正式定义的 AgentSession、AgentRun、AgentStep、AgentState、AgentEvent、ToolDefinition、ToolInvocation、Observation、ApprovalRequest、VerificationResult 和 Run State Machine，以及 Phase 2 的 SQLite/Drizzle Storage、Repository、Run State Snapshot、Durable Event Store、EventBus、Replay 与 Live Watch、Phase 3 的 loopback-only Daemon、Health/Session/Run HTTP API 和 Durable/Ephemeral SSE Event Stream 外，Phase 4A/4B/4C 已建立 Caelush-owned LLM contracts、Provider Registry、single-turn streaming runtime 和真实 OpenAI-shaped SSE 兼容性边界；Phase 5A/5B/5C 已完成 Project Intelligence、Relevant File Planning 与 ContextBuilder finalization；Phase 6A/6B/6C 已完成 deterministic Agent loop、Conversation Ledger、Continuation checkpoint、原子 RunExecutionStore、Durable Event Trace、RunController 与 local-host recovery；Phase 7A/7B/7C 已完成 Tool contracts、严格 Schema Runtime、不可变 ToolRegistry、Tool Output Policy、ToolDispatcher、Gate port、ToolInvocation/ToolObservation durable lifecycle、idempotency、recovery、strict source-order Tool Batch、uncertain-side-effect recovery barrier、approval boundary、LLMToolResult conversion 与 RunController runtime integration。Phase 7 仍不实现 Runtime concrete execution、Approval resolution、真实 Security implementation、重试、timeout、cancellation、parallelism、Filesystem/Shell/Process/Git handlers、Verification execution 或 `COMPLETED` transition。
+当前是 Phase 8A 完成边界。除 Phase 1 已正式定义的 AgentSession、AgentRun、AgentStep、AgentState、AgentEvent、ToolDefinition、ToolInvocation、Observation、ApprovalRequest、VerificationResult 和 Run State Machine，以及 Phase 2 的 SQLite/Drizzle Storage、Repository、Run State Snapshot、Durable Event Store、EventBus、Replay 与 Live Watch、Phase 3 的 loopback-only Daemon、Health/Session/Run HTTP API 和 Durable/Ephemeral SSE Event Stream 外，Phase 4A/4B/4C 已建立 Caelush-owned LLM contracts、Provider Registry、single-turn streaming runtime 和真实 OpenAI-shaped SSE 兼容性边界；Phase 5A/5B/5C 已完成 Project Intelligence、Relevant File Planning 与 ContextBuilder finalization；Phase 6A/6B/6C 已完成 deterministic Agent loop、Conversation Ledger、Continuation checkpoint、原子 RunExecutionStore、Durable Event Trace、RunController 与 local-host recovery；Phase 7A/7B/7C 已完成 Tool contracts、严格 Schema Runtime、不可变 ToolRegistry、Tool Output Policy、ToolDispatcher、Gate port、ToolInvocation/ToolObservation durable lifecycle、idempotency、recovery、strict source-order Tool Batch、uncertain-side-effect recovery barrier、approval boundary、LLMToolResult conversion 与 RunController runtime integration；Phase 8A 已建立 tool-independent Local Runtime、workspace-relative path resolution、bounded strict-UTF-8 filesystem read、deterministic file discovery、fixed ripgrep search，以及四个只读 Built-in Tool。Phase 8A 仍不实现文件 mutation、patch、Shell/Process/Git、权限/Approval resolution、sandbox、retry、timeout、cancellation、parallelism、Verification execution 或 `COMPLETED` transition。
 
-下一阶段不得扩展为 Phase 6D；后续工作必须另行定义在 Phase 6 之外。
+Phase 8 后续必须遵守固定的 8B、8C、8D 边界；不得新增 Phase 8 轮次，也不得在 8A 提前实现后续能力。
 
 Phase 5B context rules:
 

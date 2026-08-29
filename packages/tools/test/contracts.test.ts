@@ -2,6 +2,7 @@ import {
   createRunId,
   createStepId,
   createToolInvocationId,
+  createWorkspaceId,
   type ToolDefinition,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
@@ -40,6 +41,10 @@ describe("tool runtime contracts", () => {
       invocationId: createToolInvocationId(),
       externalCallId: "external-1",
       args: { value: "hello" },
+      environment: {
+        workspace: { id: createWorkspaceId(), path: "C:/workspace" },
+        runtime: { id: "local", kind: "local" },
+      },
     };
 
     expect(request.args).toEqual({ value: "hello" });

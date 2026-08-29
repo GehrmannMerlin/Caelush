@@ -47,6 +47,10 @@ import {
   ToolExecutionResultValidationError,
   validateToolExecutionResult,
 } from "./result-validation.js";
+import {
+  assertToolExecutionEnvironment,
+  type ToolExecutionEnvironment,
+} from "./execution-environment.js";
 
 export interface ToolDispatcherOptions {
   readonly registry: ToolRegistry;
@@ -113,10 +117,14 @@ export class ToolDispatcher {
     );
     if (existing === null) return this.dispatch(value);
     this.assertSameCall(value, existing);
-    return this.recover(existing.invocation.id);
+    return this.recover(existing.invocation.id, value.environment);
   }
 
-  async recover(invocationId: ToolInvocation["id"]): Promise<ToolDispatcherOutcome> {
+  async recover(
+    invocationId: ToolInvocation["id"],
+    environment: ToolExecutionEnvironment,
+  ): Promise<ToolDispatcherOutcome> {
+    assertToolExecutionEnvironment(environment);
     const existing = await this.options.store.load(invocationId);
     if (existing === null)
       throw new ToolDispatcherInvariantError("Tool invocation does not exist.");
@@ -132,7 +140,7 @@ export class ToolDispatcher {
     this.assertCallIsNotActive(key, existing.invocation.runId);
     this.activeCalls.add(key);
     try {
-      return await this.recoverLocked(existing);
+      return await this.recoverLocked(existing, environment);
     } finally {
       this.activeCalls.delete(key);
     }
@@ -148,7 +156,7 @@ export class ToolDispatcher {
       this.assertSameCall(request, existing);
       if (existing.invocation.status === "RUNNING")
         throw new ToolDispatcherBusyError(request.runId);
-      return this.recoverLocked(existing);
+      return this.recoverLocked(existing, request.environment);
     }
     const resolvedTool = this.options.registry.resolve(request.toolName);
     if (resolvedTool === undefined) {
@@ -204,7 +212,10 @@ export class ToolDispatcher {
     return this.applyGate(request, resolvedTool, requested.snapshot);
   }
 
-  private async recoverLocked(snapshot: ToolExecutionSnapshot): Promise<ToolDispatcherOutcome> {
+  private async recoverLocked(
+    snapshot: ToolExecutionSnapshot,
+    environment: ToolExecutionEnvironment,
+  ): Promise<ToolDispatcherOutcome> {
     const resolvedTool = this.options.registry.resolve(snapshot.invocation.toolName);
     if (resolvedTool === undefined) {
       throw new ToolDispatcherInvariantError("The registered Tool is unavailable during recovery.");
@@ -219,6 +230,7 @@ export class ToolDispatcher {
           externalCallId: snapshot.invocation.externalCallId ?? "",
           toolName: snapshot.invocation.toolName,
           args: snapshot.invocation.args,
+          environment,
         },
         resolvedTool,
         snapshot,
@@ -303,6 +315,7 @@ export class ToolDispatcher {
         invocationId: snapshot.invocation.id,
         externalCallId: request.externalCallId,
         args: snapshot.invocation.args,
+        environment: request.environment,
       });
     } catch (error) {
       await this.persistFatalFailure(
