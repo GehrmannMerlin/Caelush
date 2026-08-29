@@ -12,7 +12,7 @@ Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI�
 
 ## Phase 7 Status
 
-- Phase 7A — Tool Contracts, Registry & Schema Runtime: **IN PROGRESS**
+- Phase 7A — Tool Contracts, Registry & Schema Runtime: **COMPLETED**
 - Phase 7B — Tool Dispatcher & Durable Invocation Lifecycle: **NOT STARTED**
 - Phase 7C — Tool Batch Coordination & Agent Runtime Integration: **NOT STARTED**
 
