@@ -34,6 +34,7 @@ describe("dispatcher public contracts", () => {
       toolName: "echo_value",
       args: { value: "hello" },
       environment,
+      securityContext: { permissionProfile: "FULL_ACCESS", approvalPolicy: "NEVER_ASK" },
     };
 
     expect(request.args).toEqual({ value: "hello" });
@@ -90,6 +91,7 @@ describe("dispatcher public contracts", () => {
           requiredCapabilities: [],
           runtimeRequirements: {},
         },
+        securityContext: { permissionProfile: "FULL_ACCESS", approvalPolicy: "NEVER_ASK" },
       }),
     ).toEqual({
       kind: "ALLOW",
@@ -114,6 +116,7 @@ describe("dispatcher public contracts", () => {
         toolName: "echo_value",
         args: {},
         environment,
+        securityContext: { permissionProfile: "FULL_ACCESS", approvalPolicy: "NEVER_ASK" },
       }),
     ).toThrow("externalCallId");
   });

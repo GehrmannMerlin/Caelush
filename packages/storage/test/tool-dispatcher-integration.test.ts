@@ -104,6 +104,7 @@ describe("ToolDispatcher with durable storage and EventBus", () => {
         toolName: "echo_value",
         args: { value: "hello" },
         environment: { workspace: run.workspace, runtime: run.runtime },
+        securityContext: { permissionProfile: "FULL_ACCESS", approvalPolicy: "NEVER_ASK" },
       };
       const dispatcher = createDispatcher(
         storage,
@@ -162,8 +163,9 @@ describe("ToolDispatcher with durable storage and EventBus", () => {
       stepId: fixture.step.id,
       externalCallId: "call-restart-1",
       toolName: "echo_value",
-      args: { value: "restart" },
-      environment: { workspace: fixture.run.workspace, runtime: fixture.run.runtime },
+        args: { value: "restart" },
+        environment: { workspace: fixture.run.workspace, runtime: fixture.run.runtime },
+        securityContext: { permissionProfile: "FULL_ACCESS", approvalPolicy: "NEVER_ASK" },
     };
     let executions = 0;
     try {

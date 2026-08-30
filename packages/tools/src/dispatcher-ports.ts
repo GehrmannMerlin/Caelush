@@ -1,13 +1,24 @@
 import type { ToolDefinition, ToolInvocation, ToolName } from "@caelush/protocol";
-import type { DurableToolAgentEvent, ToolDefinitionMetadata } from "./dispatcher-types.js";
+import type {
+  DurableToolAgentEvent,
+  ToolDefinitionMetadata,
+} from "./dispatcher-types.js";
+import type { ToolSecurityContext } from "./security-context.js";
 
 export type ToolExecutionGateDecision =
-  { readonly kind: "ALLOW" } | { readonly kind: "DENY" } | { readonly kind: "REQUIRE_APPROVAL" };
+  | { readonly kind: "ALLOW"; readonly reasonCode?: string; readonly safeReason?: string }
+  | { readonly kind: "DENY"; readonly reasonCode?: string; readonly safeReason?: string }
+  | {
+      readonly kind: "REQUIRE_APPROVAL";
+      readonly reasonCode?: string;
+      readonly safeReason?: string;
+    };
 
 export interface ToolExecutionGateInput {
   readonly invocation: ToolInvocation;
   readonly toolName: ToolName;
   readonly definition: ToolDefinitionMetadata | ToolDefinition;
+  readonly securityContext: ToolSecurityContext;
 }
 
 export interface ToolExecutionGatePort {

@@ -83,6 +83,7 @@ const request: ToolDispatchRequest = {
   toolName: "echo_value",
   args: { value: "hello" },
   environment,
+  securityContext: { permissionProfile: "FULL_ACCESS", approvalPolicy: "NEVER_ASK" },
 };
 
 function makeDispatcher(
@@ -175,7 +176,11 @@ describe("ToolDispatcher persistence failures", () => {
     expect(executions).toBe(1);
 
     store.failTerminalCommit = false;
-    const recovered = await dispatcher.recover(running!.invocation.id, environment);
+    const recovered = await dispatcher.recover(
+      running!.invocation.id,
+      environment,
+      request.securityContext,
+    );
 
     expect(recovered.kind).toBe("RESULT");
     if (recovered.kind !== "RESULT") throw new Error("expected a recovered result");

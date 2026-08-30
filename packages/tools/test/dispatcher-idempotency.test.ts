@@ -75,6 +75,7 @@ function request(): ToolDispatchRequest {
     toolName: "echo_value",
     args: { value: "hello" },
     environment,
+    securityContext: { permissionProfile: "FULL_ACCESS", approvalPolicy: "NEVER_ASK" },
   };
 }
 

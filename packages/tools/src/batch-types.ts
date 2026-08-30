@@ -9,6 +9,7 @@ import type {
   ToolName,
 } from "@caelush/protocol";
 import type { ToolExecutionEnvironment } from "./execution-environment.js";
+import type { ToolSecurityContext } from "./security-context.js";
 
 export interface ToolBatchItem {
   readonly externalCallId: string;
@@ -21,6 +22,7 @@ export interface ToolBatchRequest {
   readonly runId: RunId;
   readonly stepId: StepId;
   readonly environment: ToolExecutionEnvironment;
+  readonly securityContext: ToolSecurityContext;
   readonly items: readonly ToolBatchItem[];
 }
 

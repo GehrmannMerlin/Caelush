@@ -77,6 +77,7 @@ const request: ToolDispatchRequest = {
   toolName: "echo_value",
   args: { value: "hello" },
   environment,
+  securityContext: { permissionProfile: "FULL_ACCESS", approvalPolicy: "NEVER_ASK" },
 };
 
 function makeDispatcher(
@@ -150,7 +151,7 @@ describe("ToolDispatcher recovery", () => {
       return { content: "hello", details: { echoed: "hello" }, isError: false };
     });
 
-    const outcome = await dispatcher.recover(invocation.id, environment);
+    const outcome = await dispatcher.recover(invocation.id, environment, request.securityContext);
 
     expect(outcome.kind).toBe("RESULT");
     expect(count).toBe(1);
@@ -166,7 +167,7 @@ describe("ToolDispatcher recovery", () => {
       return { content: "unexpected", details: { echoed: "unexpected" }, isError: false };
     });
 
-    const outcome = await dispatcher.recover(invocation.id, environment);
+    const outcome = await dispatcher.recover(invocation.id, environment, request.securityContext);
 
     expect(outcome.kind).toBe("RESULT");
     if (outcome.kind !== "RESULT") throw new Error("expected result");
@@ -204,7 +205,7 @@ describe("ToolDispatcher recovery", () => {
       return { content: "unexpected", details: { echoed: "unexpected" }, isError: false };
     });
 
-    const outcome = await dispatcher.recover(invocation.id, environment);
+    const outcome = await dispatcher.recover(invocation.id, environment, request.securityContext);
 
     expect(outcome).toEqual({ kind: "WAITING_APPROVAL", invocation });
     expect(count).toBe(0);
@@ -225,7 +226,9 @@ describe("ToolDispatcher recovery", () => {
       eventIdFactory: { create: createEventId },
     });
 
-    await expect(dispatcher.recover(invocation.id, environment)).rejects.toBeInstanceOf(
+    await expect(
+      dispatcher.recover(invocation.id, environment, request.securityContext),
+    ).rejects.toBeInstanceOf(
       ToolDispatcherInvariantError,
     );
   });

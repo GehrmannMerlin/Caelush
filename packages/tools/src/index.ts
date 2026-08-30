@@ -1,5 +1,7 @@
 export type { ToolExecutionRequest, ToolHandler } from "./handler.js";
 export type { ToolExecutionEnvironment } from "./execution-environment.js";
+export { assertToolSecurityContext } from "./security-context.js";
+export type { ToolSecurityContext } from "./security-context.js";
 export type { ToolExecutionResult } from "./execution-result.js";
 export { assertToolExecutionEnvironment } from "./execution-environment.js";
 export {
@@ -92,6 +94,7 @@ export type {
   ToolBatchRequest,
   ToolBatchWaitingApprovalOutcome,
 } from "./batch-types.js";
+export { assertToolBatchRequest } from "./batch-coordinator.js";
 export { ToolBatchInfrastructureError, ToolBatchInputError } from "./batch-errors.js";
 export { createReadOnlyFilesystemToolRegistrations } from "./builtins/read-only-filesystem-tools.js";
 export { createFileMutationToolRegistrations } from "./builtins/file-mutation-tools.js";

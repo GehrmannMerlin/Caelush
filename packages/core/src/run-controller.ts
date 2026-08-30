@@ -1,5 +1,10 @@
 import type { LLMToolResultMessage } from "@caelush/llm/messages";
-import { ToolBatchInputError, type ToolBatchItem, type ToolBatchOutcome } from "@caelush/tools";
+import {
+  ToolBatchInputError,
+  type ToolBatchItem,
+  type ToolBatchOutcome,
+  type ToolSecurityContext,
+} from "@caelush/tools";
 import {
   AgentRunSchema,
   type AgentRun,
@@ -239,10 +244,14 @@ export class RunController {
         }
         const coordinator = this.dependencies.toolCoordinator;
         if (coordinator === undefined) return this.resultFromSnapshot(snapshot);
+        if (snapshot.state === undefined) {
+          throw new RunControllerInvariantError("Tool execution requires an AgentState.");
+        }
         const request = {
           sessionId: snapshot.run.sessionId,
           runId: snapshot.run.id,
           stepId: continuation.sourceStepId,
+          securityContext: createToolSecurityContext(snapshot.run, snapshot.state),
           environment: {
             workspace: snapshot.run.workspace,
             runtime: snapshot.run.runtime,
@@ -815,6 +824,22 @@ export class RunController {
       this.activeRuns.delete(runId);
     }
   }
+}
+
+export function createToolSecurityContext(
+  run: AgentRun,
+  state: Pick<AgentState, "permissionProfile" | "approvalPolicy">,
+): ToolSecurityContext {
+  if (
+    run.permissionProfile !== state.permissionProfile ||
+    run.approvalPolicy !== state.approvalPolicy
+  ) {
+    throw new RunControllerInvariantError("Run security policy does not match AgentState policy.");
+  }
+  return Object.freeze({
+    permissionProfile: run.permissionProfile,
+    approvalPolicy: run.approvalPolicy,
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -74,7 +74,14 @@ function item(externalCallId: string, toolName: "slow_a" | "fast_b" | "approval_
 }
 
 function request(items: ToolBatchRequest["items"]): ToolBatchRequest {
-  return { sessionId, runId, stepId, environment, items };
+  return {
+    sessionId,
+    runId,
+    stepId,
+    environment,
+    securityContext: { permissionProfile: "FULL_ACCESS", approvalPolicy: "NEVER_ASK" },
+    items,
+  };
 }
 
 function makeCoordinator(options: {
@@ -255,6 +262,7 @@ describe("ToolBatchCoordinator", () => {
       toolName: "slow_a",
       args: {},
       environment,
+      securityContext: { permissionProfile: "FULL_ACCESS", approvalPolicy: "NEVER_ASK" },
     });
     expect(first.kind).toBe("RESULT");
     const running = startToolInvocation(

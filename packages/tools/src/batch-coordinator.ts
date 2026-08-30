@@ -31,6 +31,7 @@ import type {
 } from "./batch-types.js";
 import type { ToolDispatcher } from "./dispatcher.js";
 import { assertToolExecutionEnvironment } from "./execution-environment.js";
+import { assertToolSecurityContext } from "./security-context.js";
 
 const UNCERTAIN_SKIP_CONTENT =
   "This tool call was skipped because an earlier tool execution may have partially or fully completed before the runtime was interrupted. Re-evaluate the current project state before issuing dependent or repeated tool calls.";
@@ -99,17 +100,18 @@ export class ToolBatchCoordinator implements ToolBatchCoordinatorPort {
   }
 }
 
-function assertToolBatchRequest(value: unknown): ToolBatchRequest {
+export function assertToolBatchRequest(value: unknown): ToolBatchRequest {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new ToolBatchInputError();
   }
   const request = value as Record<string, unknown>;
   if (
-    Object.keys(request).length !== 5 ||
+    Object.keys(request).length !== 6 ||
     !Object.hasOwn(request, "sessionId") ||
     !Object.hasOwn(request, "runId") ||
     !Object.hasOwn(request, "stepId") ||
     !Object.hasOwn(request, "environment") ||
+    !Object.hasOwn(request, "securityContext") ||
     !Object.hasOwn(request, "items") ||
     !SessionIdSchema.safeParse(request.sessionId).success ||
     !RunIdSchema.safeParse(request.runId).success ||
@@ -121,6 +123,7 @@ function assertToolBatchRequest(value: unknown): ToolBatchRequest {
   }
   try {
     assertToolExecutionEnvironment(request.environment);
+    assertToolSecurityContext(request.securityContext);
   } catch {
     throw new ToolBatchInputError();
   }
@@ -161,6 +164,7 @@ function assertToolBatchRequest(value: unknown): ToolBatchRequest {
     runId: parsedRunId,
     stepId: parsedStepId,
     environment: request.environment,
+    securityContext: request.securityContext,
     items,
   };
 }
@@ -171,6 +175,7 @@ function toDispatchRequest(request: ToolBatchRequest, item: ToolBatchItem): Tool
     runId: request.runId,
     stepId: request.stepId,
     environment: request.environment,
+    securityContext: request.securityContext,
     externalCallId: item.externalCallId,
     toolName: item.toolName,
     args: item.args,

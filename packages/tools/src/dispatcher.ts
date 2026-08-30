@@ -51,6 +51,7 @@ import {
   assertToolExecutionEnvironment,
   type ToolExecutionEnvironment,
 } from "./execution-environment.js";
+import { assertToolSecurityContext, type ToolSecurityContext } from "./security-context.js";
 import { ToolExecutionUncertainError } from "./errors.js";
 import { toolEffectsToEvents, type ToolEffect } from "./tool-effects.js";
 
@@ -121,14 +122,16 @@ export class ToolDispatcher {
     );
     if (existing === null) return this.dispatch(value);
     this.assertSameCall(value, existing);
-    return this.recover(existing.invocation.id, value.environment);
+    return this.recover(existing.invocation.id, value.environment, value.securityContext);
   }
 
   async recover(
     invocationId: ToolInvocation["id"],
     environment: ToolExecutionEnvironment,
+    securityContext: ToolSecurityContext,
   ): Promise<ToolDispatcherOutcome> {
     assertToolExecutionEnvironment(environment);
+    assertToolSecurityContext(securityContext);
     const existing = await this.options.store.load(invocationId);
     if (existing === null)
       throw new ToolDispatcherInvariantError("Tool invocation does not exist.");
@@ -144,7 +147,7 @@ export class ToolDispatcher {
     this.assertCallIsNotActive(key, existing.invocation.runId);
     this.activeCalls.add(key);
     try {
-      return await this.recoverLocked(existing, environment);
+      return await this.recoverLocked(existing, environment, securityContext);
     } finally {
       this.activeCalls.delete(key);
     }
@@ -160,7 +163,7 @@ export class ToolDispatcher {
       this.assertSameCall(request, existing);
       if (existing.invocation.status === "RUNNING")
         throw new ToolDispatcherBusyError(request.runId);
-      return this.recoverLocked(existing, request.environment);
+      return this.recoverLocked(existing, request.environment, request.securityContext);
     }
     const resolvedTool = this.options.registry.resolve(request.toolName);
     if (resolvedTool === undefined) {
@@ -219,6 +222,7 @@ export class ToolDispatcher {
   private async recoverLocked(
     snapshot: ToolExecutionSnapshot,
     environment: ToolExecutionEnvironment,
+    securityContext: ToolSecurityContext,
   ): Promise<ToolDispatcherOutcome> {
     const resolvedTool = this.options.registry.resolve(snapshot.invocation.toolName);
     if (resolvedTool === undefined) {
@@ -235,6 +239,7 @@ export class ToolDispatcher {
           toolName: snapshot.invocation.toolName,
           args: snapshot.invocation.args,
           environment,
+          securityContext,
         },
         resolvedTool,
         snapshot,
@@ -264,6 +269,7 @@ export class ToolDispatcher {
         invocation: snapshot.invocation,
         toolName: resolvedTool.definition.name,
         definition: resolvedTool.definition,
+        securityContext: request.securityContext,
       });
     } catch (error) {
       throw new ToolDispatcherInfrastructureError("Tool execution policy evaluation failed.", {

@@ -27,6 +27,7 @@ describe("ToolExecutionEnvironment", () => {
       toolName: "read_file",
       args: {},
       environment,
+      securityContext: { permissionProfile: "READ_ONLY", approvalPolicy: "DANGEROUS_ONLY" },
     };
 
     expect(() => assertToolDispatchRequest(request)).not.toThrow();

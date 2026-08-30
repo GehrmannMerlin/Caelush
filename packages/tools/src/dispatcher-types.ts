@@ -16,6 +16,7 @@ import {
   type ToolObservation,
 } from "@caelush/protocol";
 import { ToolDispatcherInputError } from "./dispatcher-errors.js";
+import { assertToolSecurityContext, type ToolSecurityContext } from "./security-context.js";
 import type { AgentEvent, EventDurability } from "@caelush/protocol";
 import {
   assertToolExecutionEnvironment,
@@ -34,6 +35,7 @@ export interface ToolDispatchRequest {
   readonly toolName: ToolName;
   readonly args: JsonObject;
   readonly environment: ToolExecutionEnvironment;
+  readonly securityContext: ToolSecurityContext;
 }
 
 export function assertToolDispatchRequest(
@@ -52,6 +54,7 @@ export function assertToolDispatchRequest(
     "toolName",
     "args",
     "environment",
+    "securityContext",
   ];
   if (
     Object.keys(request).length !== expectedKeys.length ||
@@ -66,6 +69,7 @@ export function assertToolDispatchRequest(
     throw new ToolDispatcherInputError("Tool dispatch request is invalid.");
   }
   assertToolExecutionEnvironment(request.environment);
+  assertToolSecurityContext(request.securityContext);
   if (request.externalCallId.length === 0) {
     throw new ToolDispatcherInputError("Tool externalCallId must be non-empty.");
   }
