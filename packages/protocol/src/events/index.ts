@@ -43,11 +43,22 @@ import {
   VerificationStartedEventSchema,
 } from "./verification.js";
 import { ApprovalRequestedEventSchema, ApprovalResolvedEventSchema } from "./approval.js";
-import { LlmCompletedEventSchema, LlmStartedEventSchema } from "./llm.js";
+import {
+  LlmCompletedEventSchema,
+  LlmFailedEventSchema,
+  LlmStartedEventSchema,
+  RetryScheduledEventSchema,
+  RetryStartedEventSchema,
+} from "./llm.js";
 import { ErrorEventSchema } from "./error.js";
 
 export { DurableEventSchema, EphemeralEventSchema, EventDurabilitySchema, EventVisibilitySchema };
 export type { DurableEvent, EphemeralEvent, EventDurability, EventVisibility } from "./base.js";
+export {
+  LlmFailedEventSchema,
+  RetryScheduledEventSchema,
+  RetryStartedEventSchema,
+} from "./llm.js";
 export { RunTimedOutEventSchema } from "./run.js";
 export type { RunTimedOutEvent } from "./run.js";
 
@@ -82,6 +93,9 @@ export const AgentEventSchema = z.discriminatedUnion("type", [
   ApprovalResolvedEventSchema,
   LlmStartedEventSchema,
   LlmCompletedEventSchema,
+  LlmFailedEventSchema,
+  RetryScheduledEventSchema,
+  RetryStartedEventSchema,
   ErrorEventSchema,
 ]);
 export type AgentEvent = z.infer<typeof AgentEventSchema>;

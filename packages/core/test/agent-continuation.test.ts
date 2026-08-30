@@ -109,4 +109,50 @@ describe("durable continuation schemas", () => {
       }),
     ).toThrow();
   });
+
+  it("validates a START retry continuation with the next attempt number", () => {
+    const checkpoint = {
+      type: "WAITING_RETRY" as const,
+      runId,
+      failedStepId: sourceStepId,
+      attempt: 2,
+      maxAttempts: 3,
+      nextAttemptAt: 2_000,
+      errorCode: "LLM_NETWORK" as const,
+      mode: "START" as const,
+    };
+    expect(RunContinuationCheckpointSchema.parse(checkpoint)).toEqual(checkpoint);
+    expect(() =>
+      RunContinuationCheckpointSchema.parse({ ...checkpoint, errorCode: "LLM_AUTHENTICATION" }),
+    ).toThrow();
+  });
+
+  it("requires the complete Tool Result context for a retry continuation", () => {
+    const checkpoint = {
+      type: "WAITING_RETRY" as const,
+      runId,
+      failedStepId: sourceStepId,
+      attempt: 2,
+      maxAttempts: 3,
+      nextAttemptAt: 2_000,
+      errorCode: "LLM_NETWORK" as const,
+      mode: "TOOL_RESULTS" as const,
+    };
+    expect(() => RunContinuationCheckpointSchema.parse(checkpoint)).toThrow();
+    expect(
+      RunContinuationCheckpointSchema.parse({
+        ...checkpoint,
+        pendingDecision: toolDecision,
+        receivedResults: [
+          {
+            role: "tool" as const,
+            toolCallId: "call_a",
+            toolName: "read_file" as const,
+            content: "source",
+            isError: false,
+          },
+        ],
+      }),
+    ).toMatchObject({ mode: "TOOL_RESULTS" });
+  });
 });

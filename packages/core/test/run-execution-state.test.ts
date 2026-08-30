@@ -178,4 +178,41 @@ describe("durable Run execution state", () => {
       }),
     ).toThrow();
   });
+
+  it("allows WAITING_RETRY only at a RUNNING no-active-Step boundary", () => {
+    const pending = run();
+    const running = { ...pending, status: "RUNNING" as const, startedAt: createTimestampMs(2) };
+    const state = startAgentState(
+      createInitialAgentState(pending, createTimestampMs(1)),
+      createTimestampMs(2),
+    );
+    const checkpoint = RunContinuationCheckpointSchema.parse({
+      type: "WAITING_RETRY",
+      runId: running.id,
+      failedStepId: createStepId(),
+      attempt: 2,
+      maxAttempts: 3,
+      nextAttemptAt: 100,
+      errorCode: "LLM_NETWORK",
+      mode: "START",
+    });
+    expect(() =>
+      assertRunExecutionInvariant({ run: running, state, continuation: checkpoint, conversation: [] }),
+    ).not.toThrow();
+    const step = createRunningAgentStep({
+      id: createStepId(),
+      runId: running.id,
+      sequence: 1,
+      startedAt: createTimestampMs(3),
+    });
+    expect(() =>
+      assertRunExecutionInvariant({
+        run: { ...running, currentStepId: step.id },
+        state: beginAgentStepState(state, step.id, createTimestampMs(3)),
+        activeStep: step,
+        continuation: checkpoint,
+        conversation: [],
+      }),
+    ).toThrow();
+  });
 });

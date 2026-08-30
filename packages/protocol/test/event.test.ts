@@ -28,6 +28,50 @@ function getFactory(name: string): (() => string) | undefined {
 }
 
 describe("protocol AgentEvent", () => {
+  it("parses strict retry scheduling and started events", () => {
+    const eventSchema = getSchema("AgentEventSchema");
+    const createEventId = getFactory("createEventId");
+    const createRunId = getFactory("createRunId");
+    const createSessionId = getFactory("createSessionId");
+    if (
+      eventSchema === undefined ||
+      createEventId === undefined ||
+      createRunId === undefined ||
+      createSessionId === undefined
+    ) {
+      return;
+    }
+    const common = {
+      eventId: createEventId(),
+      schemaVersion: 1,
+      runId: createRunId(),
+      sessionId: createSessionId(),
+      timestamp: 1_700_000_000_000,
+      visibility: "USER_VISIBLE" as const,
+      durability: { kind: "DURABLE" as const, version: 1, sequence: 1 },
+    };
+    expect(
+      eventSchema.parse({
+        ...common,
+        type: "retry.scheduled",
+        payload: {
+          attempt: 2,
+          maxAttempts: 3,
+          delayMs: 1_000,
+          nextAttemptAt: 1_700_000_001_000,
+          errorCode: "LLM_NETWORK",
+        },
+      }),
+    ).toMatchObject({ type: "retry.scheduled" });
+    expect(
+      eventSchema.parse({
+        ...common,
+        eventId: createEventId(),
+        type: "retry.started",
+        payload: { attempt: 2, maxAttempts: 3 },
+      }),
+    ).toMatchObject({ type: "retry.started" });
+  });
   it("parses a durable run.timed_out event with only deadline metadata", () => {
     const eventSchema = getSchema("AgentEventSchema");
     const createEventId = getFactory("createEventId");

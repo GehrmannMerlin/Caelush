@@ -31,5 +31,22 @@ export interface AwaitingVerificationContinuation {
   readonly finalDecision: AgentFinalCandidateDecision;
 }
 
+export type RetryErrorCode = "LLM_RATE_LIMIT" | "LLM_NETWORK" | "LLM_TIMEOUT";
+
+export interface WaitingRetryContinuation {
+  readonly type: "WAITING_RETRY";
+  readonly runId: RunId;
+  readonly failedStepId: StepId;
+  readonly attempt: number;
+  readonly maxAttempts: number;
+  readonly nextAttemptAt: import("@caelush/protocol").TimestampMs;
+  readonly errorCode: RetryErrorCode;
+  readonly mode: "START" | "TOOL_RESULTS";
+  readonly pendingDecision?: AgentToolCallsDecision;
+  readonly receivedResults?: readonly LLMToolResultMessage[];
+}
+
 export type RunContinuationCheckpoint =
-  WaitingToolResultsContinuation | AwaitingVerificationContinuation;
+  | WaitingToolResultsContinuation
+  | AwaitingVerificationContinuation
+  | WaitingRetryContinuation;

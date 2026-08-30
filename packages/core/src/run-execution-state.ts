@@ -142,8 +142,15 @@ export function assertRunExecutionInvariant(snapshot: RunExecutionSnapshot): voi
       throw new RunExecutionInvariantError("VERIFYING Run must retain a verification candidate");
     }
   } else if (run.status === "RUNNING") {
-    if (continuation !== undefined && continuation.type !== "WAITING_TOOL_RESULTS") {
+    if (
+      continuation !== undefined &&
+      continuation.type !== "WAITING_TOOL_RESULTS" &&
+      continuation.type !== "WAITING_RETRY"
+    ) {
       throw new RunExecutionInvariantError("RUNNING Run has an invalid continuation");
+    }
+    if (continuation?.type === "WAITING_RETRY" && activeStep !== undefined) {
+      throw new RunExecutionInvariantError("WAITING_RETRY Run cannot retain an active Step");
     }
     if (
       continuation?.type === "WAITING_TOOL_RESULTS" &&

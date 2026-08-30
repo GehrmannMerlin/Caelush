@@ -106,7 +106,12 @@ export type { ProcessStatus, ProcessSummary } from "./process.js";
 export { UsageStateSchema } from "./usage.js";
 export type { UsageState } from "./usage.js";
 export { AgentEventSchema, EventDurabilitySchema, EventVisibilitySchema } from "./events/index.js";
-export { RunTimedOutEventSchema } from "./events/index.js";
+export {
+  LlmFailedEventSchema,
+  RetryScheduledEventSchema,
+  RetryStartedEventSchema,
+  RunTimedOutEventSchema,
+} from "./events/index.js";
 export type { AgentEvent, EventDurability, EventVisibility } from "./events/index.js";
 export type { RunTimedOutEvent } from "./events/index.js";
 export { AgentSessionSchema } from "./session.js";

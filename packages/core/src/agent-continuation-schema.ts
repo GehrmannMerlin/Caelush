@@ -7,6 +7,7 @@ import {
   ModelRefSchema,
   RunIdSchema,
   StepIdSchema,
+  TimestampMsSchema,
   ToolInvocationIdSchema,
   ToolNameSchema,
 } from "@caelush/protocol";
@@ -125,7 +126,34 @@ export const AwaitingVerificationContinuationSchema = z
   })
   .strict();
 
+const RetryErrorCodeSchema = z.enum(["LLM_RATE_LIMIT", "LLM_NETWORK", "LLM_TIMEOUT"]);
+const RetryAttemptSchema = z.number().int().positive().safe().max(10);
+const WaitingRetryBase = {
+  type: z.literal("WAITING_RETRY"),
+  runId: RunIdSchema,
+  failedStepId: StepIdSchema,
+  attempt: RetryAttemptSchema,
+  maxAttempts: RetryAttemptSchema,
+  nextAttemptAt: TimestampMsSchema,
+  errorCode: RetryErrorCodeSchema,
+};
+
+export const WaitingRetryContinuationSchema = z.discriminatedUnion("mode", [
+  z
+    .object({ ...WaitingRetryBase, mode: z.literal("START") })
+    .strict(),
+  z
+    .object({
+      ...WaitingRetryBase,
+      mode: z.literal("TOOL_RESULTS"),
+      pendingDecision: AgentToolCallsDecisionSchema,
+      receivedResults: z.array(LLMToolResultMessageSchema).min(1),
+    })
+    .strict(),
+]);
+
 export const RunContinuationCheckpointSchema = z.discriminatedUnion("type", [
   WaitingToolResultsContinuationSchema,
   AwaitingVerificationContinuationSchema,
+  WaitingRetryContinuationSchema,
 ]);

@@ -29,6 +29,8 @@ export type {
 export type {
   AwaitingVerificationContinuation,
   RunContinuationCheckpoint,
+  RetryErrorCode,
+  WaitingRetryContinuation,
   WaitingToolResultsContinuation,
 } from "./agent-continuation.js";
 export {
@@ -39,6 +41,7 @@ export {
   AgentToolRequestSchema,
   AwaitingVerificationContinuationSchema,
   RunContinuationCheckpointSchema,
+  WaitingRetryContinuationSchema,
   WaitingToolResultsContinuationSchema,
 } from "./agent-continuation-schema.js";
 export { classifyAgentDecision } from "./agent-decision-mapper.js";
@@ -162,6 +165,16 @@ export type {
   RunExecutionStepWrite,
   RunExecutionStorePort,
 } from "./run-execution-store.js";
+export {
+  DEFAULT_MAX_RETRY_TIMER_DELAY_MS,
+  RunRetryRegistry,
+  SystemRunRetryTimer,
+} from "./run-retry-registry.js";
+export type {
+  RunRetryRegistryOptions,
+  RunRetryTimerHandle,
+  RunRetryTimerPort,
+} from "./run-retry-registry.js";
 export {
   DEFAULT_RETRY_POLICY,
   MAX_RETRY_ATTEMPTS,
