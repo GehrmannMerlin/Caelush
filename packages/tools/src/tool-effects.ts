@@ -40,7 +40,11 @@ export type ToolEffect =
       readonly signal?: string;
     }
   | { readonly type: "PROCESS_STARTED"; readonly sessionId: string }
-  | { readonly type: "PROCESS_STOPPED"; readonly sessionId: string; readonly status?: ProcessStatus };
+  | {
+      readonly type: "PROCESS_STOPPED";
+      readonly sessionId: string;
+      readonly status?: ProcessStatus;
+    };
 
 export interface ToolEffectProjectorInput {
   readonly request: ToolExecutionRequest;

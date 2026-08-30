@@ -201,7 +201,8 @@ describe("RunController failure and maxSteps boundaries", () => {
       complete: async () => finalTurn(),
       execution: (storage) => ({
         load: (runId) => storage.execution.load(runId),
-        requestCancellation: (runId, intent) => storage.execution.requestCancellation(runId, intent),
+        requestCancellation: (runId, intent) =>
+          storage.execution.requestCancellation(runId, intent),
         commit: async (command) => {
           if (command.run.status === "VERIFYING") throw new Error("final commit failed");
           return storage.execution.commit(command);

@@ -203,7 +203,8 @@ export class SqliteRunExecutionStore implements RunExecutionStorePort {
     runId: RunId,
     intent: RunCancellationIntent,
   ): Promise<RunExecutionSnapshot> {
-    if (intent.runId !== runId) throw new RunExecutionInvariantError("Cancellation Run ID mismatch");
+    if (intent.runId !== runId)
+      throw new RunExecutionInvariantError("Cancellation Run ID mismatch");
     const snapshot = await this.load(runId);
     if (snapshot === null) throw new StorageError(`AgentRun ${runId} was not found`);
     await this.cancellations.request(intent);

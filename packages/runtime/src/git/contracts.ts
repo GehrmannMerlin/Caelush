@@ -38,8 +38,16 @@ export interface GitDiffResult {
 }
 
 export interface RuntimeGitService {
-  status(input: { readonly path?: string; readonly limit?: number; readonly signal?: AbortSignal }): Promise<GitStatusResult>;
-  diff(input: { readonly scope?: GitDiffScope; readonly path?: string; readonly signal?: AbortSignal }): Promise<GitDiffResult>;
+  status(input: {
+    readonly path?: string;
+    readonly limit?: number;
+    readonly signal?: AbortSignal;
+  }): Promise<GitStatusResult>;
+  diff(input: {
+    readonly scope?: GitDiffScope;
+    readonly path?: string;
+    readonly signal?: AbortSignal;
+  }): Promise<GitDiffResult>;
 }
 
 export interface LocalGitServiceOptions {

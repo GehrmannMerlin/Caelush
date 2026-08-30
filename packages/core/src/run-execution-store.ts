@@ -85,10 +85,7 @@ export interface RunExecutionCommitResult {
 export interface RunExecutionStorePort {
   load(runId: RunId): Promise<RunExecutionSnapshot | null>;
   commit(command: RunExecutionCommit): Promise<RunExecutionCommitResult>;
-  requestCancellation(
-    runId: RunId,
-    intent: RunCancellationIntent,
-  ): Promise<RunExecutionSnapshot>;
+  requestCancellation(runId: RunId, intent: RunCancellationIntent): Promise<RunExecutionSnapshot>;
 }
 
 export class RunExecutionConflictError extends Error {

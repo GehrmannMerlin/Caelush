@@ -53,11 +53,7 @@ export interface RunControllerEventFactory {
     eventId: EventId,
     timestamp: TimestampMs,
   ): DurableEventDraft;
-  cancelled(
-    run: AgentRun,
-    eventId: EventId,
-    timestamp: TimestampMs,
-  ): DurableEventDraft;
+  cancelled(run: AgentRun, eventId: EventId, timestamp: TimestampMs): DurableEventDraft;
   maxSteps(
     run: AgentRun,
     state: AgentState,

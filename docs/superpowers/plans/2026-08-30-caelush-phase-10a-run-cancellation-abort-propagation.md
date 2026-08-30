@@ -40,12 +40,14 @@ Create/modify files only in these responsibility groups:
 ### Task 1: Capture baseline and cancellation characterization
 
 **Files:**
+
 - Create: `docs/superpowers/specs/2026-08-30-caelush-phase-10a-run-cancellation-design.md`
 - Create: `docs/superpowers/plans/2026-08-30-caelush-phase-10a-run-cancellation-abort-propagation.md`
 - Test: `packages/core/test/cancellation-characterization.test.ts`
 - Test: `packages/runtime/test/cancellation-characterization.test.ts`
 
 **Interfaces:**
+
 - Consumes: Phase 9D branch `5638fd6154e5f6a45ebe0d175738c22b701f46dc`.
 - Produces: Documented facts that `withLock` rejects a busy Run, `AgentLLMClient.complete` has no signal, Tool requests have no signal, Runtime requests have no signal, and `LocalProcessManager` already records `ownerRunId`.
 
@@ -56,21 +58,25 @@ Create/modify files only in these responsibility groups:
 ### Task 2: Add the strict Protocol cancellation intent
 
 **Files:**
+
 - Create: `packages/protocol/src/cancellation.ts`
 - Modify: `packages/protocol/src/index.ts`
 - Test: `packages/protocol/test/cancellation.test.ts`
 - Modify: `packages/protocol/test/public-api.test.ts`
 
 **Interfaces:**
+
 - Produces:
 
 ```ts
 export const RunCancellationCauseSchema = z.literal("USER_REQUESTED");
-export const RunCancellationIntentSchema = z.object({
-  runId: RunIdSchema,
-  cause: RunCancellationCauseSchema,
-  requestedAt: TimestampMsSchema,
-}).strict();
+export const RunCancellationIntentSchema = z
+  .object({
+    runId: RunIdSchema,
+    cause: RunCancellationCauseSchema,
+    requestedAt: TimestampMsSchema,
+  })
+  .strict();
 export type RunCancellationIntent = z.infer<typeof RunCancellationIntentSchema>;
 export type RunCancellationCause = z.infer<typeof RunCancellationCauseSchema>;
 ```
@@ -83,6 +89,7 @@ export type RunCancellationCause = z.infer<typeof RunCancellationCauseSchema>;
 ### Task 3: Persist first-writer-wins cancellation intent
 
 **Files:**
+
 - Create: `packages/storage/drizzle/20260830180000_run_cancellation/migration.sql`
 - Create: `packages/storage/src/cancellation-repository.ts`
 - Modify: `packages/storage/src/schema.ts`
@@ -92,6 +99,7 @@ export type RunCancellationCause = z.infer<typeof RunCancellationCauseSchema>;
 - Modify: `packages/storage/test/migrations.test.ts`
 
 **Interfaces:**
+
 - Produces:
 
 ```ts
@@ -112,6 +120,7 @@ The concrete repository writes `run_cancellation_requests(run_id PRIMARY KEY, ca
 ### Task 4: Expose intent through the execution store and add scope primitives
 
 **Files:**
+
 - Create: `packages/core/src/run-execution-scope.ts`
 - Modify: `packages/core/src/run-execution-store.ts`
 - Modify: `packages/core/src/run-controller-ports.ts`
@@ -121,6 +130,7 @@ The concrete repository writes `run_cancellation_requests(run_id PRIMARY KEY, ca
 - Test: `packages/storage/test/run-execution-store-cancellation.test.ts`
 
 **Interfaces:**
+
 - Produces:
 
 ```ts
@@ -150,6 +160,7 @@ export class RunExecutionScopeRegistry {
 ### Task 5: Add cancellation state/step helpers and approval cancellation port
 
 **Files:**
+
 - Modify: `packages/core/src/run-execution-state.ts`
 - Modify: `packages/core/src/agent-state.ts`
 - Modify: `packages/core/src/run-controller-ports.ts`
@@ -160,6 +171,7 @@ export class RunExecutionScopeRegistry {
 - Test: `packages/storage/test/approval-cancellation.test.ts`
 
 **Interfaces:**
+
 - Produces:
 
 ```ts
@@ -180,6 +192,7 @@ The helpers clear `currentStepId`; AgentState cancellation does not append a gen
 ### Task 6: Require the Run signal through AgentLoop and make cancellation a typed result
 
 **Files:**
+
 - Modify: `packages/core/src/agent-loop-input.ts`
 - Modify: `packages/core/src/agent-loop-ports.ts`
 - Modify: `packages/core/src/agent-loop.ts`
@@ -190,10 +203,13 @@ The helpers clear `currentStepId`; AgentState cancellation does not append a gen
 - Modify: existing Core AgentLoop tests through explicit test helpers
 
 **Interfaces:**
+
 - Produces:
 
 ```ts
-interface AgentLoopCommonInput { readonly signal: AbortSignal; /* existing fields */ }
+interface AgentLoopCommonInput {
+  readonly signal: AbortSignal; /* existing fields */
+}
 interface AgentLLMClient {
   complete(request: LLMRequest, options: { readonly signal: AbortSignal }): Promise<LLMTurnResult>;
 }
@@ -216,6 +232,7 @@ interface AgentLoopCancelledResult {
 ### Task 7: Propagate the signal through Tool Batch, Dispatcher, Handler, and lifecycle
 
 **Files:**
+
 - Modify: `packages/tools/src/batch-types.ts`
 - Modify: `packages/tools/src/batch-coordinator.ts`
 - Modify: `packages/tools/src/dispatcher-types.ts`
@@ -228,12 +245,19 @@ interface AgentLoopCancelledResult {
 - Test: `packages/tools/test/dispatcher-cancellation.test.ts`
 
 **Interfaces:**
+
 - Produces:
 
 ```ts
-interface ToolBatchRequest { readonly signal: AbortSignal; /* existing fields */ }
-interface ToolDispatchRequest { readonly signal: AbortSignal; /* existing fields */ }
-interface ToolExecutionRequest { readonly signal: AbortSignal; /* existing fields */ }
+interface ToolBatchRequest {
+  readonly signal: AbortSignal; /* existing fields */
+}
+interface ToolDispatchRequest {
+  readonly signal: AbortSignal; /* existing fields */
+}
+interface ToolExecutionRequest {
+  readonly signal: AbortSignal; /* existing fields */
+}
 class ToolBatchCancelledError extends Error {}
 ```
 
@@ -248,6 +272,7 @@ class ToolBatchCancelledError extends Error {}
 ### Task 8: Propagate the signal through Runtime operations and structured helpers
 
 **Files:**
+
 - Modify: `packages/runtime/src/exec/contracts.ts`
 - Modify: `packages/runtime/src/exec/service.ts`
 - Modify: `packages/runtime/src/search/text-search.ts`
@@ -260,11 +285,16 @@ class ToolBatchCancelledError extends Error {}
 - Test: `packages/runtime/test/structured-helper-cancellation.test.ts`
 
 **Interfaces:**
+
 - Produces:
 
 ```ts
-interface RuntimeExecRequest { readonly signal?: AbortSignal; /* existing fields */ }
-interface RuntimeProcessInteractionRequest { readonly signal?: AbortSignal; /* existing fields */ }
+interface RuntimeExecRequest {
+  readonly signal?: AbortSignal; /* existing fields */
+}
+interface RuntimeProcessInteractionRequest {
+  readonly signal?: AbortSignal; /* existing fields */
+}
 class RuntimeOperationCancelledError extends RuntimeError {}
 ```
 
@@ -279,6 +309,7 @@ The signal is required at the Tool/Core boundary but may remain optional in low-
 ### Task 9: Implement Run-owned LocalProcessManager cleanup for pipe, PTY, and yielded sessions
 
 **Files:**
+
 - Modify: `packages/runtime/src/exec/process-manager.ts`
 - Modify: `packages/runtime/src/exec/pipe-process-adapter.ts`
 - Modify: `packages/runtime/src/exec/pty-process-adapter.ts`
@@ -289,6 +320,7 @@ The signal is required at the Tool/Core boundary but may remain optional in low-
 - Create: `tests/fixtures/long-running-process.js`
 
 **Interfaces:**
+
 - Produces:
 
 ```ts
@@ -313,6 +345,7 @@ The method targets all nonterminal entries with exact `ownerRunId`, calls adapte
 ### Task 10: Add Core resource port, two-phase `RunController.cancel`, and terminal settlement
 
 **Files:**
+
 - Modify: `packages/core/src/run-controller-ports.ts`
 - Modify: `packages/core/src/run-controller-input.ts`
 - Modify: `packages/core/src/run-controller.ts`
@@ -322,6 +355,7 @@ The method targets all nonterminal entries with exact `ownerRunId`, calls adapte
 - Test: `packages/core/test/run-controller-races.test.ts`
 
 **Interfaces:**
+
 - Produces:
 
 ```ts
@@ -352,6 +386,7 @@ class RunController {
 ### Task 11: Integrate cancellation with all RunController Agent/Tool paths and recovery
 
 **Files:**
+
 - Modify: `packages/core/src/run-controller.ts`
 - Modify: `packages/core/src/agent-tool-batch.ts`
 - Modify: `packages/core/src/run-execution-state.ts`
@@ -360,6 +395,7 @@ class RunController {
 - Test: `packages/storage/test/run-controller-cancellation-recovery.test.ts`
 
 **Interfaces:**
+
 - Consumes: `RunExecutionScopeRegistry`, `RunOwnedResourceControllerPort`, `RunExecutionSnapshot.cancellationIntent`, typed AgentLoop/Tool cancellation results.
 - Produces: All `start`, `recover`, `submitToolResults`, and `resolveApproval` calls pass the scope signal; `recover` gives intent priority over stale Step, pending Approval, waiting Tool Results, and awaiting verification.
 
@@ -372,6 +408,7 @@ class RunController {
 ### Task 12: Patch critical section and Approval/cancel race semantics
 
 **Files:**
+
 - Modify: `packages/runtime/src/patch/service.ts`
 - Modify: `packages/runtime/src/patch/committer.ts`
 - Modify: `packages/tools/src/dispatcher.ts`
@@ -381,6 +418,7 @@ class RunController {
 - Test: `packages/core/test/approval-cancellation-race.test.ts`
 
 **Interfaces:**
+
 - Consumes: the same signal and cancellation finalizer; existing Prepare/Dry Apply/Hash Guard/Commit/Verify/Rollback stages.
 - Produces: cancellation checkpoints before commit, deferred abort through commit/rollback, and intent checks immediately before approval resume.
 
@@ -393,6 +431,7 @@ class RunController {
 ### Task 13: Add event and architecture audits
 
 **Files:**
+
 - Modify: `packages/protocol/src/events/run.ts` only if payload validation needs the existing safe cancellation event contract
 - Modify: `packages/core/src/run-controller-events.ts`
 - Modify: `packages/tools/src/event-factory.ts`
@@ -403,6 +442,7 @@ class RunController {
 - Modify: `packages/tools/test/public-api.test.ts`
 
 **Interfaces:**
+
 - Produces: safe optional `llm.cancelled`/`tool.cancelled` events only if their existing event union can validate them; mandatory `run.cancelled`, `status.changed`, `approval.resolved(CANCELLED)`, and `process.stopped(KILLED)` remain exactly-once.
 
 - [ ] **Step 1: Write failing static audits** that reject `AbortSignal` in Protocol/AgentRun/AgentState/Approval key/Tool args/events, Core concrete Runtime imports, Runtime/LLM → Core imports, direct Core `child_process`, and Dispatcher/Security bypass paths.
@@ -413,6 +453,7 @@ class RunController {
 ### Task 14: Real integration, crash recovery, and no-fake-cancellation E2E
 
 **Files:**
+
 - Create: `tests/integration/run-cancellation.integration.test.ts`
 - Create: `tests/integration/cancellation-crash-recovery.test.ts`
 - Create: `tests/e2e/run-cancellation.e2e.test.ts`
@@ -420,6 +461,7 @@ class RunController {
 - Modify: test support factories in `packages/core/test`, `packages/storage/test`, and `apps/daemon/test` only where needed for Core-only composition
 
 **Interfaces:**
+
 - Consumes: full Core/Storage/Tools/Runtime ports, a fake LLM, `LocalRuntime`, `LocalProcessManager`, SQLite reopen, and latch-based synchronization.
 - Produces: a reproducible proof for AgentLoop → RunController → ToolBatch → Dispatcher → `exec_command` → LocalRuntime → ProcessManager, plus resource-cleanup failure behavior.
 
@@ -432,6 +474,7 @@ class RunController {
 ### Task 15: Documentation, README/AGENTS rules, and final verification
 
 **Files:**
+
 - Create: `docs/architecture/cancellation.md`
 - Modify: `docs/architecture/agent-loop.md`
 - Modify: `docs/architecture/tool-system.md`
@@ -442,6 +485,7 @@ class RunController {
 - Modify: all changed source/test files as needed to satisfy formatting
 
 **Interfaces:**
+
 - Produces: documentation of ownership, durable intent, scope/lock sequence, signal fan-out, Tool/Runtime/process/Approval/Patch semantics, recovery/races/events, managed-process limitations, and explicit Phase 10A exclusions. README reports Phase 9 and 10A completion while Phase 10 remains in progress.
 
 - [ ] **Step 1: Write documentation assertions/checklist** for every required topic and forbidden overclaim (no timeout/retry/budget/hard-sandbox/arbitrary descendant guarantee).

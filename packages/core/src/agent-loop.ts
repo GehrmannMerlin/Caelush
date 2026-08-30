@@ -59,12 +59,20 @@ export class AgentLoop {
 
     let prepared: PreparedTurn;
     try {
-      prepared = await this.prepareTurn(normalizedInput, normalizedInput.history, currentUserMessage);
+      prepared = await this.prepareTurn(
+        normalizedInput,
+        normalizedInput.history,
+        currentUserMessage,
+      );
     } catch (error) {
       if (normalizedInput.signal.aborted) return this.cancelledBeforeStep(normalizedInput);
-      return this.failureBeforeStep(normalizedInput.state, mapAgentLoopError(error), [currentUserMessage]);
+      return this.failureBeforeStep(normalizedInput.state, mapAgentLoopError(error), [
+        currentUserMessage,
+      ]);
     }
-    return this.executeProviderTurn(normalizedInput, gate.nextSequence, prepared, [currentUserMessage]);
+    return this.executeProviderTurn(normalizedInput, gate.nextSequence, prepared, [
+      currentUserMessage,
+    ]);
   }
 
   async resumeWithToolResults(input: AgentLoopResumeInput): Promise<AgentLoopExecutionResult> {
@@ -81,9 +89,14 @@ export class AgentLoop {
       if (normalizedInput.signal.aborted) return this.cancelledBeforeStep(normalizedInput);
       return this.failureBeforeStep(normalizedInput.state, mapAgentLoopError(error), []);
     }
-    const history = prepareResumeHistory(normalizedInput.history, normalizedInput.pendingDecision, normalizedResults);
+    const history = prepareResumeHistory(
+      normalizedInput.history,
+      normalizedInput.pendingDecision,
+      normalizedResults,
+    );
     const gate = evaluateAgentStepGate(normalizedInput.state, normalizedInput.run.limits);
-    if (!gate.allowed) return this.maxStepsResult(normalizedInput.state, gate.outcome, normalizedResults);
+    if (!gate.allowed)
+      return this.maxStepsResult(normalizedInput.state, gate.outcome, normalizedResults);
 
     let prepared: PreparedTurn;
     try {
@@ -95,9 +108,18 @@ export class AgentLoop {
       );
     } catch (error) {
       if (normalizedInput.signal.aborted) return this.cancelledBeforeStep(normalizedInput);
-      return this.failureBeforeStep(normalizedInput.state, mapAgentLoopError(error), normalizedResults);
+      return this.failureBeforeStep(
+        normalizedInput.state,
+        mapAgentLoopError(error),
+        normalizedResults,
+      );
     }
-    return this.executeProviderTurn(normalizedInput, gate.nextSequence, prepared, normalizedResults);
+    return this.executeProviderTurn(
+      normalizedInput,
+      gate.nextSequence,
+      prepared,
+      normalizedResults,
+    );
   }
 
   private async prepareTurn(

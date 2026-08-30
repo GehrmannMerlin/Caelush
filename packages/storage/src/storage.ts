@@ -37,7 +37,10 @@ import {
   type ApprovalRepository,
 } from "./repositories/approval-repository.js";
 import type { ApprovalClock } from "./repositories/approval-repository.js";
-import { SqliteCancellationRepository, type CancellationRepository } from "./cancellation-repository.js";
+import {
+  SqliteCancellationRepository,
+  type CancellationRepository,
+} from "./cancellation-repository.js";
 
 export interface CaelushStorage {
   readonly sessions: SessionRepository;

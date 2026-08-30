@@ -49,7 +49,10 @@ class MemoryExecutionStore implements RunExecutionStorePort {
     return this.snapshot;
   }
 
-  async requestCancellation(runId: ReturnType<typeof createRunId>, intent: RunExecutionSnapshot["cancellationIntent"]) {
+  async requestCancellation(
+    runId: ReturnType<typeof createRunId>,
+    intent: RunExecutionSnapshot["cancellationIntent"],
+  ) {
     if (intent === undefined || intent.runId !== runId) throw new Error("invalid cancellation");
     this.snapshot = { ...this.snapshot, cancellationIntent: intent };
     return this.snapshot;
@@ -202,7 +205,10 @@ describe("RunController.cancel", () => {
       execution: store,
       events: { notifyCommitted: (events) => notified.push(...events) },
       configResolver: {
-        resolve: async () => ({ baseSystemPrompt: "base", contextLimits: { maxInputTokens: 1000 } }),
+        resolve: async () => ({
+          baseSystemPrompt: "base",
+          contextLimits: { maxInputTokens: 1000 },
+        }),
       },
       clock: { now: () => createTimestampMs(20) },
       eventIdFactory: { create: () => createEventId() },

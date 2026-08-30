@@ -35,7 +35,9 @@ export interface EventIdFactory {
 export interface ApprovalResolutionPort {
   getById(id: ApprovalRequestId): Promise<ApprovalRequest | null>;
   resolve(id: ApprovalRequestId, resolution: ApprovalResolution): Promise<ApprovalRequest>;
-  cancelPendingByRun?(runId: import("@caelush/protocol").RunId): Promise<readonly ApprovalRequest[]>;
+  cancelPendingByRun?(
+    runId: import("@caelush/protocol").RunId,
+  ): Promise<readonly ApprovalRequest[]>;
 }
 
 export interface RunOwnedResourceControllerPort {

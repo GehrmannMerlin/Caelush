@@ -774,7 +774,11 @@ export class RunController {
     if (current.run.status === "CANCELLED") return this.resultFromSnapshot(current);
     const cleanup = await this.cancelOwnedResources(current.run.id);
     if (!cleanup.confirmed) {
-      return { status: "CANCELLATION_PENDING", run: current.run, ...(current.state === undefined ? {} : { state: current.state }) };
+      return {
+        status: "CANCELLATION_PENDING",
+        run: current.run,
+        ...(current.state === undefined ? {} : { state: current.state }),
+      };
     }
     const now = this.dependencies.clock.now();
     let state = execution?.state ?? current.state;

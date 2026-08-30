@@ -121,7 +121,11 @@ export class LocalProcessManager {
       if (entry.signal !== "KILLED") entry.signal = signal;
       this.notify(entry);
     });
-    await this.waitForYield(entry, request.yieldTimeMs ?? DEFAULT_EXEC_YIELD_TIME_MS, request.signal);
+    await this.waitForYield(
+      entry,
+      request.yieldTimeMs ?? DEFAULT_EXEC_YIELD_TIME_MS,
+      request.signal,
+    );
     return this.resultAndMaybeRemove(entry);
   }
 
@@ -175,9 +179,11 @@ export class LocalProcessManager {
     return {
       runId: ownerRunId,
       stoppedProcessIds: active.map((entry) => entry.id),
-      confirmed: confirmed && ![...this.entries.values()].some(
-        (entry) => entry.ownerRunId === ownerRunId && !isManagedProcessTerminal(entry.state),
-      ),
+      confirmed:
+        confirmed &&
+        ![...this.entries.values()].some(
+          (entry) => entry.ownerRunId === ownerRunId && !isManagedProcessTerminal(entry.state),
+        ),
     };
   }
 
@@ -199,7 +205,11 @@ export class LocalProcessManager {
     return entry;
   }
 
-  private waitForYield(entry: ProcessEntry, yieldTimeMs: number, signal?: AbortSignal): Promise<void> {
+  private waitForYield(
+    entry: ProcessEntry,
+    yieldTimeMs: number,
+    signal?: AbortSignal,
+  ): Promise<void> {
     if (isManagedProcessTerminal(entry.state)) return Promise.resolve();
     return new Promise((resolve) => {
       let abortListener: (() => void) | undefined;

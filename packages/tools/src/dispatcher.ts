@@ -187,7 +187,12 @@ export class ToolDispatcher {
       this.assertSameCall(request, existing);
       if (existing.invocation.status === "RUNNING")
         throw new ToolDispatcherBusyError(request.runId);
-      return this.recoverLocked(existing, request.environment, request.securityContext, request.signal);
+      return this.recoverLocked(
+        existing,
+        request.environment,
+        request.securityContext,
+        request.signal,
+      );
     }
     throwIfAborted(request.signal);
     const resolvedTool = this.options.registry.resolve(request.toolName);

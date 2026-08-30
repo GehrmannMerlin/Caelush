@@ -70,9 +70,7 @@ export interface AgentLoopCancelledResult {
 }
 
 export type AgentLoopExecutionResult =
-  | AgentLoopOutcomeResult
-  | AgentLoopFailureResult
-  | AgentLoopCancelledResult;
+  AgentLoopOutcomeResult | AgentLoopFailureResult | AgentLoopCancelledResult;
 
 export type AgentLoopRequest = LLMRequest;
 export type AgentLoopTurn = LLMTurnResult;
