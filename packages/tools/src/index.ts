@@ -48,6 +48,18 @@ export {
 } from "./dispatcher-errors.js";
 export type { ToolRegistration } from "./registration.js";
 export {
+  emptyToolSecurityFacts,
+  ToolSecurityFactsProjectionError,
+} from "./security-facts.js";
+export type {
+  ToolResourceAccess,
+  ToolResourceOperation,
+  ToolSecurityFacts,
+  ToolSecurityFactsProjector,
+  ToolSecretScanInput,
+  ToolShellCommandFact,
+} from "./security-facts.js";
+export {
   applyToolEffectsToAgentState,
   effectsChangeAgentState,
   projectExecEffects,

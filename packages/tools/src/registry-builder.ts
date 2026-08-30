@@ -58,8 +58,11 @@ export class ToolRegistryBuilder {
       definition,
       handler: registration.handler,
       ...(registration.effectProjector === undefined
-        ? {}
-        : { effectProjector: registration.effectProjector }),
+          ? {}
+          : { effectProjector: registration.effectProjector }),
+        ...(registration.securityFactsProjector === undefined
+          ? {}
+          : { securityFactsProjector: registration.securityFactsProjector }),
     });
     return this;
   }
@@ -94,6 +97,9 @@ export class ToolRegistryBuilder {
         ...(registration.effectProjector === undefined
           ? {}
           : { effectProjector: registration.effectProjector }),
+        ...(registration.securityFactsProjector === undefined
+          ? {}
+          : { securityFactsProjector: registration.securityFactsProjector }),
       });
     }
 

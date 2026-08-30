@@ -2,6 +2,7 @@ import type { ToolDefinition, ToolName } from "@caelush/protocol";
 import type { ToolHandler } from "./handler.js";
 import type { CompiledToolSchema } from "./schema-runtime.js";
 import type { ToolEffectProjector } from "./tool-effects.js";
+import type { ToolSecurityFactsProjector } from "./security-facts.js";
 
 export interface ResolvedTool {
   readonly definition: ToolDefinition;
@@ -9,6 +10,7 @@ export interface ResolvedTool {
   readonly inputValidator: CompiledToolSchema;
   readonly outputValidator: CompiledToolSchema;
   readonly effectProjector?: ToolEffectProjector;
+  readonly securityFactsProjector?: ToolSecurityFactsProjector;
 }
 
 export interface ToolRegistry {
