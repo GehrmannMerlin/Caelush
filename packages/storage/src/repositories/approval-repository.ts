@@ -36,6 +36,7 @@ export interface ApprovalRepository extends ToolApprovalStorePort {
   getById(id: ApprovalRequestId): Promise<ApprovalRequest | null>;
   listPendingByRun(runId: RunId): Promise<readonly ApprovalRequest[]>;
   resolve(id: ApprovalRequestId, resolution: ApprovalResolution): Promise<ApprovalRequest>;
+  cancelPendingByRun(runId: RunId): Promise<readonly ApprovalRequest[]>;
 }
 
 interface ApprovalRow {
@@ -298,6 +299,35 @@ export class SqliteApprovalRepository implements ApprovalRepository {
     }
   }
 
+  async cancelPendingByRun(runId: RunId): Promise<readonly ApprovalRequest[]> {
+    const client = this.database.client;
+    client.exec("BEGIN IMMEDIATE");
+    try {
+      const rows = client
+        .prepare(
+          `SELECT id, run_id, tool_invocation_id, approval_key, status, scope, granted_scope,
+                  risk_level, protocol_version, created_at_ms, expires_at_ms, resolved_at_ms, data_json
+           FROM approval_requests WHERE run_id = ? AND status = 'PENDING'
+           ORDER BY created_at_ms ASC, id ASC`,
+        )
+        .all(runId) as unknown as ApprovalRow[];
+      const cancelled: ApprovalRequest[] = [];
+      const now = this.clock.now();
+      for (const row of rows) {
+        const loaded = decodeApprovalRow(row);
+        if (loaded.status === "PENDING") {
+          cancelled.push(this.resolveInTransaction(client, loaded, "CANCELLED", undefined, now));
+        }
+      }
+      client.exec("COMMIT");
+      return cancelled;
+    } catch (error) {
+      client.exec("ROLLBACK");
+      if (error instanceof StorageError) throw error;
+      throw new StorageError("Unable to cancel pending ApprovalRequests.", { cause: error });
+    }
+  }
+
   private async loadAndExpire(id: ApprovalRequestId): Promise<ApprovalRequest | null> {
     const row = selectById(this.database.client, id);
     if (row === undefined) return null;
@@ -315,7 +345,7 @@ export class SqliteApprovalRepository implements ApprovalRepository {
   private resolveInTransaction(
     client: CaelushDatabase["client"],
     current: ApprovalRequest,
-    status: "APPROVED" | "REJECTED" | "EXPIRED",
+    status: "APPROVED" | "REJECTED" | "EXPIRED" | "CANCELLED",
     grantedScope: ApprovalRequest["grantedScope"],
     resolvedAt: TimestampMs,
   ): ApprovalRequest {

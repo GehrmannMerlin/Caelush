@@ -63,7 +63,11 @@ async function executeGitStatus(request: ToolExecutionRequest, resolver: Runtime
     return errorResult("INVALID_GIT_SCOPE", "Tool operation failed: INVALID_GIT_SCOPE.");
   }
   return withRuntimeScope(request, resolver, async (scope) => {
-    const result = await scope.git.status({ ...(path === undefined ? {} : { path }), limit });
+    const result = await scope.git.status({
+      ...(path === undefined ? {} : { path }),
+      limit,
+      ...(request.signal === undefined ? {} : { signal: request.signal }),
+    });
     return successResult(
       result.clean
         ? "Working tree is clean."

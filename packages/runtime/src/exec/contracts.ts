@@ -12,6 +12,7 @@ export const MAX_PROCESS_BUFFER_BYTES = 1024 * 1024;
 export const MAX_MANAGED_PROCESSES = 32;
 
 export interface RuntimeExecRequest {
+  readonly signal?: AbortSignal;
   readonly ownerRunId: RunId;
   readonly command: string;
   readonly workdir?: string;
@@ -20,6 +21,7 @@ export interface RuntimeExecRequest {
 }
 
 export interface RuntimeProcessInteractionRequest {
+  readonly signal?: AbortSignal;
   readonly ownerRunId: RunId;
   readonly sessionId: string;
   readonly chars: string;

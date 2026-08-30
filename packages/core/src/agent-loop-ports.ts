@@ -17,7 +17,7 @@ import type {
   TimestampMs,
 } from "@caelush/protocol";
 
-export type AgentProviderTurnState = "NOT_STARTED" | "FAILED" | "COMPLETED";
+export type AgentProviderTurnState = "NOT_STARTED" | "FAILED" | "COMPLETED" | "CANCELLED";
 
 export interface AgentBeforeProviderTurn {
   readonly run: AgentRun;
@@ -43,7 +43,7 @@ export interface AgentContextBuilderPort {
 }
 
 export interface AgentLLMClient {
-  complete(request: LLMRequest): Promise<LLMTurnResult>;
+  complete(request: LLMRequest, options: { readonly signal: AbortSignal }): Promise<LLMTurnResult>;
 }
 
 export interface AgentClock {

@@ -57,6 +57,7 @@ async function executeGitDiff(request: ToolExecutionRequest, resolver: RuntimeRe
     const result = await runtimeScope.git.diff({
       ...(scope === undefined ? {} : { scope: scope as GitDiffScope }),
       ...(path === undefined ? {} : { path }),
+      ...(request.signal === undefined ? {} : { signal: request.signal }),
     });
     return successResult(result.diff || "No changes.", {
       scope: result.scope,

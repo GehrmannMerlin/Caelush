@@ -44,6 +44,11 @@ export type RunControllerResult =
       readonly error: AgentError;
     }
   | { readonly status: "MAX_STEPS_REACHED"; readonly run: AgentRun; readonly state: AgentState }
+  | {
+      readonly status: "CANCELLATION_PENDING";
+      readonly run: AgentRun;
+      readonly state?: AgentState;
+    }
   | { readonly status: "TERMINAL"; readonly run: AgentRun; readonly state?: AgentState };
 
 export type RunControllerToolResults = readonly LLMToolResultMessage[];

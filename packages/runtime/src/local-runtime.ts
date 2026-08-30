@@ -106,4 +106,12 @@ export class LocalRuntime implements Runtime {
   async dispose(): Promise<void> {
     await this.processManager.dispose();
   }
+
+  async cancelOwnedResources(ownerRunId: import("@caelush/protocol").RunId) {
+    const result = await this.processManager.cancelOwnedByRun(ownerRunId);
+    return {
+      stoppedResourceIds: result.stoppedProcessIds,
+      confirmed: result.confirmed,
+    };
+  }
 }

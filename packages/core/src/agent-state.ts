@@ -37,6 +37,19 @@ export function startAgentState(state: AgentState, now: TimestampMs): AgentState
   return AgentStateSchema.parse({ ...state, status: "RUNNING", startedAt: now, updatedAt: now });
 }
 
+export function markAgentStateCancelled(state: AgentState, now: TimestampMs): AgentState {
+  assertMonotonicTimestamp(state, now);
+  if (state.currentStepId !== undefined) {
+    throw new AgentKernelStateError("cancelled AgentState cannot retain an active Step");
+  }
+  assertRunStatusTransition(state.status, "CANCELLED");
+  return AgentStateSchema.parse({
+    ...state,
+    status: "CANCELLED",
+    updatedAt: now,
+  });
+}
+
 export function beginAgentStepState(
   state: AgentState,
   stepId: StepId,
@@ -56,6 +69,28 @@ export interface SettleAgentStepInput {
   readonly stepId: StepId;
   readonly usage?: LLMUsage;
   readonly now: TimestampMs;
+}
+
+export interface CancelAgentStepStateInput {
+  readonly stepId: StepId;
+  readonly now: TimestampMs;
+  readonly countAttempt: boolean;
+}
+
+export function cancelAgentStepState(
+  state: AgentState,
+  input: CancelAgentStepStateInput,
+): AgentState {
+  assertMonotonicTimestamp(state, input.now);
+  if (state.status !== "RUNNING" || state.currentStepId !== input.stepId) {
+    throw new AgentKernelStateError("agent step cancellation does not match the active step");
+  }
+  return AgentStateSchema.parse({
+    ...state,
+    currentStepId: undefined,
+    usage: input.countAttempt ? { ...state.usage, steps: state.usage.steps + 1 } : state.usage,
+    updatedAt: input.now,
+  });
 }
 
 export function settleAgentStepState(state: AgentState, input: SettleAgentStepInput): AgentState {

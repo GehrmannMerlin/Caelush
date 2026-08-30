@@ -49,6 +49,12 @@ class MemoryExecutionStore implements RunExecutionStorePort {
     return this.snapshot;
   }
 
+  async requestCancellation(runId: ReturnType<typeof createRunId>, intent: RunExecutionSnapshot["cancellationIntent"]) {
+    if (intent === undefined || intent.runId !== runId) throw new Error("invalid cancellation");
+    this.snapshot = { ...this.snapshot, cancellationIntent: intent };
+    return this.snapshot;
+  }
+
   async commit(command: RunExecutionCommit) {
     this.commits.push(command);
     this.stateRevision =
@@ -68,6 +74,9 @@ class MemoryExecutionStore implements RunExecutionStorePort {
         : { state: command.state, stateRevision: this.stateRevision! };
     this.snapshot = {
       run: command.run,
+      ...(this.snapshot.cancellationIntent === undefined
+        ? {}
+        : { cancellationIntent: this.snapshot.cancellationIntent }),
       ...stateProjection,
       ...(activeStep === undefined ? {} : { activeStep }),
       conversation: updatedConversation,
@@ -178,5 +187,32 @@ describe("RunController.start", () => {
     expect(
       store.commits.filter((commit) => commit.events.some((event) => event.type === "run.started")),
     ).toHaveLength(1);
+  });
+});
+
+describe("RunController.cancel", () => {
+  it("persists intent before cancelling a pending Run", async () => {
+    const run = makeRun();
+    const store = new MemoryExecutionStore(run);
+    const notified: DurableAgentEvent[] = [];
+    const controller = new RunController({
+      agentLoop: makeLoop(store, () => {
+        throw new Error("pending cancellation must not invoke the provider");
+      }),
+      execution: store,
+      events: { notifyCommitted: (events) => notified.push(...events) },
+      configResolver: {
+        resolve: async () => ({ baseSystemPrompt: "base", contextLimits: { maxInputTokens: 1000 } }),
+      },
+      clock: { now: () => createTimestampMs(20) },
+      eventIdFactory: { create: () => createEventId() },
+    });
+
+    const result = await controller.cancel(run.id);
+
+    expect(result.status).toBe("TERMINAL");
+    expect(store.snapshot.run.status).toBe("CANCELLED");
+    expect(store.snapshot.cancellationIntent?.cause).toBe("USER_REQUESTED");
+    expect(notified.map((event) => event.type)).toEqual(["status.changed", "run.cancelled"]);
   });
 });

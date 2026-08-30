@@ -133,4 +133,27 @@ describe("LocalProcessManager", () => {
     expect(manager.size).toBe(0);
     await manager.dispose();
   });
+
+  it("kills and removes every process owned by a cancelled Run", async () => {
+    const manager = new LocalProcessManager({ generationId: "generation-cancel" });
+    const controller = new AbortController();
+    const started = await manager.start({
+      ...base("setTimeout(() => {}, 10000)"),
+      signal: controller.signal,
+    });
+    expect(started.status).toBe("RUNNING");
+
+    controller.abort();
+    const result = await manager.interact({
+      ownerRunId: "run_a" as never,
+      sessionId: started.sessionId!,
+      chars: "",
+      yieldTimeMs: 250,
+      signal: controller.signal,
+    });
+
+    expect(result).toMatchObject({ status: "EXITED", signal: "KILLED" });
+    expect(manager.size).toBe(0);
+    await manager.dispose();
+  });
 });

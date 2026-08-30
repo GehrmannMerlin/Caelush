@@ -60,6 +60,10 @@ export class LocalRuntimeExecService implements RuntimeExecService {
     return this.options.processManager.interact(request);
   }
 
+  async cancelOwnedByRun(ownerRunId: RuntimeExecRequest["ownerRunId"]) {
+    return this.options.processManager.cancelOwnedByRun(ownerRunId);
+  }
+
   private async resolveWorkdir(workdir: string | undefined): Promise<string> {
     const resolved = await this.options.pathResolver.resolveExisting(workdir ?? ".");
     if (resolved.kind === "DIRECTORY") return resolved.realPath;

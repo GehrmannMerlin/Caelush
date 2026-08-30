@@ -77,6 +77,7 @@ export interface PatchCommitResult {
 }
 
 export interface RuntimePatchRequest {
+  readonly signal?: AbortSignal;
   readonly patch: string;
 }
 

@@ -21,6 +21,11 @@ describe("RunExecutionStorePort", () => {
         expect(command.stepWrites[0]?.step.id).toBe(stepId);
         return { snapshot: undefined as never, events: [] };
       },
+      requestCancellation: async (_runId, intent) => ({
+        run: undefined as never,
+        conversation: [],
+        cancellationIntent: intent,
+      }),
     };
     const result = await store.commit({
       run: undefined as never,

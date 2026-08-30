@@ -8,11 +8,7 @@ const MAX_ERROR_BYTES = 16 * 1024;
 const NULL_DEVICE = process.platform === "win32" ? "NUL" : "/dev/null";
 
 export class LocalGitRunner implements GitRunner {
-  async run(input: {
-    readonly cwd: string;
-    readonly args: readonly string[];
-    readonly maxOutputBytes?: number;
-  }): Promise<GitRunnerResult> {
+  async run(input: Parameters<GitRunner["run"]>[0]): Promise<GitRunnerResult> {
     const maxOutputBytes = input.maxOutputBytes ?? 1024 * 1024;
     return new Promise((resolve, reject) => {
       let child;
@@ -45,6 +41,8 @@ export class LocalGitRunner implements GitRunner {
 
       const stdout = boundedBytes(maxOutputBytes);
       const stderr = boundedBytes(MAX_ERROR_BYTES);
+      const onAbort = () => child.kill();
+      input.signal?.addEventListener("abort", onAbort, { once: true });
       child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
       child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
       child.once("error", (error: NodeJS.ErrnoException) => {
@@ -52,7 +50,8 @@ export class LocalGitRunner implements GitRunner {
           new RuntimeGitError(error.code === "ENOENT" ? "GIT_UNAVAILABLE" : "GIT_COMMAND_FAILED"),
         );
       });
-      child.once("close", (exitCode, signal) =>
+      child.once("close", (exitCode, signal) => {
+        input.signal?.removeEventListener("abort", onAbort);
         resolve({
           exitCode,
           ...(signal === null ? {} : { signal }),
@@ -62,8 +61,8 @@ export class LocalGitRunner implements GitRunner {
           stderrTruncated: stderr.truncated,
           stdoutOmittedBytes: stdout.omittedBytes,
           stderrOmittedBytes: stderr.omittedBytes,
-        }),
-      );
+        });
+      });
     });
   }
 }

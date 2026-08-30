@@ -14,6 +14,7 @@ import {
   type AgentState,
   type AgentStep,
   type RunId,
+  type RunCancellationIntent,
 } from "@caelush/protocol";
 import { DuplicateEventError } from "@caelush/events";
 import type { CaelushDatabase } from "./database.js";
@@ -31,6 +32,7 @@ import { SqliteRunRepository } from "./repositories/run-repository.js";
 import { SqliteRunStateRepository } from "./repositories/run-state-repository.js";
 import { SqliteStepRepository } from "./repositories/step-repository.js";
 import { writeStateSnapshot } from "./state-snapshot-writer.js";
+import { SqliteCancellationRepository } from "./cancellation-repository.js";
 
 interface StateRow {
   run_id: string;
@@ -151,6 +153,7 @@ export class SqliteRunExecutionStore implements RunExecutionStorePort {
   private readonly steps: SqliteStepRepository;
   private readonly messages: SqliteConversationRepository;
   private readonly continuations: SqliteContinuationRepository;
+  private readonly cancellations: SqliteCancellationRepository;
 
   constructor(private readonly database: CaelushDatabase) {
     this.runs = new SqliteRunRepository(database);
@@ -158,6 +161,7 @@ export class SqliteRunExecutionStore implements RunExecutionStorePort {
     this.steps = new SqliteStepRepository(database);
     this.messages = new SqliteConversationRepository(database);
     this.continuations = new SqliteContinuationRepository(database);
+    this.cancellations = new SqliteCancellationRepository(database);
   }
 
   async load(runId: RunId): Promise<RunExecutionSnapshot | null> {
@@ -175,6 +179,7 @@ export class SqliteRunExecutionStore implements RunExecutionStorePort {
         ? {}
         : { state: state as AgentState, stateRevision: stateRow.revision };
     const continuation = await this.continuations.get(runId);
+    const cancellationIntent = await this.cancellations.get(runId);
     const conversation = await this.messages.listByRun(runId);
     const loadedActiveStep =
       run.currentStepId === undefined ? undefined : await this.steps.get(run.currentStepId);
@@ -188,9 +193,23 @@ export class SqliteRunExecutionStore implements RunExecutionStorePort {
       ...(continuation === undefined || continuation === null
         ? {}
         : { continuation: continuation.checkpoint, continuationRevision: continuation.revision }),
+      ...(cancellationIntent === null ? {} : { cancellationIntent }),
     };
     assertRunExecutionInvariant(snapshot);
     return snapshot;
+  }
+
+  async requestCancellation(
+    runId: RunId,
+    intent: RunCancellationIntent,
+  ): Promise<RunExecutionSnapshot> {
+    if (intent.runId !== runId) throw new RunExecutionInvariantError("Cancellation Run ID mismatch");
+    const snapshot = await this.load(runId);
+    if (snapshot === null) throw new StorageError(`AgentRun ${runId} was not found`);
+    await this.cancellations.request(intent);
+    const latest = await this.load(runId);
+    if (latest === null) throw new StorageError(`AgentRun ${runId} disappeared after cancellation`);
+    return latest;
   }
 
   async commit(command: RunExecutionCommit): Promise<RunExecutionCommitResult> {

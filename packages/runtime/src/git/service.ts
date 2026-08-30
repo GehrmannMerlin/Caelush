@@ -41,12 +41,17 @@ export class LocalGitService implements RuntimeGitService {
   async status(input: {
     readonly path?: string;
     readonly limit?: number;
+    readonly signal?: AbortSignal;
   }): Promise<GitStatusResult> {
     const limit = input.limit ?? GIT_STATUS_DEFAULT_LIMIT;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > GIT_STATUS_MAX_LIMIT)
       throw new RuntimeGitError("INVALID_GIT_SCOPE");
     const path = this.resolvePath(input.path ?? ".");
-    const repositoryRoot = await assertGitRepository(this.runner, this.options.logicalRoot);
+    const repositoryRoot = await assertGitRepository(
+      this.runner,
+      this.options.logicalRoot,
+      input.signal,
+    );
     const result = await this.runner.run({
       cwd: this.options.logicalRoot,
       args: [
@@ -62,6 +67,7 @@ export class LocalGitService implements RuntimeGitService {
         path,
       ],
       maxOutputBytes: GIT_DIFF_CAPTURE_MAX_BYTES,
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
     });
     if (result.exitCode !== 0) throw gitCommandError(decode(result.stderr));
     if (result.stdoutTruncated) throw new RuntimeGitError("GIT_COMMAND_FAILED");
@@ -78,12 +84,13 @@ export class LocalGitService implements RuntimeGitService {
   async diff(input: {
     readonly scope?: GitDiffScope;
     readonly path?: string;
+    readonly signal?: AbortSignal;
   }): Promise<GitDiffResult> {
     const scope = input.scope ?? "ALL";
     if (scope !== "WORKTREE" && scope !== "STAGED" && scope !== "ALL")
       throw new RuntimeGitError("INVALID_GIT_SCOPE");
     const path = this.resolvePath(input.path ?? ".");
-    await assertGitRepository(this.runner, this.options.logicalRoot);
+    await assertGitRepository(this.runner, this.options.logicalRoot, input.signal);
     const scopes = scope === "ALL" ? (["WORKTREE", "STAGED"] as const) : ([scope] as const);
     const chunks: string[] = [];
     let omittedBytes = 0;
@@ -106,6 +113,7 @@ export class LocalGitService implements RuntimeGitService {
           path,
         ],
         maxOutputBytes: GIT_DIFF_CAPTURE_MAX_BYTES,
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
       });
       if (result.exitCode !== 0) throw gitCommandError(decode(result.stderr));
       if (result.stdoutTruncated) truncated = true;

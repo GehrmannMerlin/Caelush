@@ -37,7 +37,7 @@ function makeRun(maxSteps = 4) {
 
 async function setup(options: {
   maxSteps?: number;
-  complete: (count: number) => Promise<LLMTurnResult>;
+  complete: (count: number, signal: AbortSignal) => Promise<LLMTurnResult>;
   inspect?: () => Promise<never>;
   execution?: (storage: Awaited<ReturnType<typeof openCaelushStorage>>) => RunExecutionStorePort;
 }) {
@@ -67,7 +67,9 @@ async function setup(options: {
         report: {} as never,
       }),
     },
-    llmClient: { complete: async () => options.complete(++count) },
+    llmClient: {
+      complete: async (_request, { signal }) => options.complete(++count, signal),
+    },
     clock: { now: () => createTimestampMs(now++) },
     stepIdFactory: { create: () => createStepId() },
   });
@@ -110,6 +112,19 @@ function toolTurn() {
 }
 
 describe("RunController failure and maxSteps boundaries", () => {
+  it("cancels a pending Run without creating AgentState or a Step", async () => {
+    const fixture = await setup({ complete: async () => finalTurn() });
+
+    const result = await fixture.controller.cancel(fixture.run.id);
+
+    expect(result.status).toBe("TERMINAL");
+    expect((await fixture.storage.runs.get(fixture.run.id))?.status).toBe("CANCELLED");
+    expect(await fixture.storage.runStates.get(fixture.run.id)).toBeNull();
+    expect(await fixture.storage.steps.listByRun(fixture.run.id)).toEqual([]);
+    expect(fixture.providerCalls()).toBe(0);
+    await fixture.storage.close();
+  });
+
   it("settles provider failures as a failed Step and Run without llm.completed", async () => {
     const fixture = await setup({
       complete: async () => {
@@ -186,6 +201,7 @@ describe("RunController failure and maxSteps boundaries", () => {
       complete: async () => finalTurn(),
       execution: (storage) => ({
         load: (runId) => storage.execution.load(runId),
+        requestCancellation: (runId, intent) => storage.execution.requestCancellation(runId, intent),
         commit: async (command) => {
           if (command.run.status === "VERIFYING") throw new Error("final commit failed");
           return storage.execution.commit(command);
@@ -200,6 +216,41 @@ describe("RunController failure and maxSteps boundaries", () => {
     const recovered = await fixture.controller.recover(fixture.run.id);
     expect(recovered.status).toBe("FAILED");
     expect(fixture.providerCalls()).toBe(1);
+    await fixture.storage.close();
+  });
+
+  it("propagates cancellation through an in-flight provider turn and settles durably", async () => {
+    let providerStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      providerStarted = resolve;
+    });
+    const fixture = await setup({
+      complete: async (_count, signal) => {
+        providerStarted();
+        await new Promise<never>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("provider aborted")), {
+            once: true,
+          });
+        });
+        throw new Error("unreachable");
+      },
+    });
+
+    const startPromise = fixture.controller.start(fixture.run.id);
+    await started;
+    const cancelResult = await fixture.controller.cancel(fixture.run.id);
+    const startResult = await startPromise;
+
+    expect(cancelResult.status).toBe("TERMINAL");
+    expect(startResult.status).toBe("TERMINAL");
+    expect((await fixture.storage.runs.get(fixture.run.id))?.status).toBe("CANCELLED");
+    expect((await fixture.storage.runStates.get(fixture.run.id))?.status).toBe("CANCELLED");
+    expect((await fixture.storage.runStates.get(fixture.run.id))?.usage.steps).toBe(1);
+    expect((await fixture.storage.steps.listByRun(fixture.run.id))[0]?.status).toBe("CANCELLED");
+    expect(await fixture.storage.messages.listByRun(fixture.run.id)).toEqual([]);
+    expect(fixture.events.map((event) => event.type)).toEqual(
+      expect.arrayContaining(["status.changed", "run.cancelled"]),
+    );
     await fixture.storage.close();
   });
 });

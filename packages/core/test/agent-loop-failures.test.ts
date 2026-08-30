@@ -48,6 +48,7 @@ function input(): AgentLoopCommonInput {
     history: [],
     baseSystemPrompt: "base",
     contextLimits: { maxInputTokens: 1000 },
+    signal: new AbortController().signal,
   };
 }
 
@@ -77,7 +78,7 @@ function dependencies(
     llmClient: {
       complete: async (request) => {
         calls.push(JSON.stringify(request));
-        return complete(request);
+        return complete(request, { signal: new AbortController().signal });
       },
     },
     clock: { now: () => createTimestampMs(10) },

@@ -7,7 +7,9 @@ import {
   type ManagedProcessStartRequest,
   type ProcessAdapterFactory,
   type RuntimeExecResult,
+  type RuntimeProcessInteractionRequest,
 } from "./contracts.js";
+import type { RunId } from "@caelush/protocol";
 import {
   RuntimeExecError,
   RuntimeProcessStaleSessionError,
@@ -94,6 +96,7 @@ export class LocalProcessManager {
       waiters: new Set(),
     };
     this.entries.set(id, entry);
+    if (request.signal?.aborted) await this.cancelOwnedByRun(request.ownerRunId);
     adapter.onStart(() => {
       if (entry.state === "STARTING") entry.state = "RUNNING";
     });
@@ -115,19 +118,14 @@ export class LocalProcessManager {
     adapter.onExit(({ exitCode, signal }) => {
       entry.state = "EXITED";
       entry.exitCode = exitCode;
-      entry.signal = signal;
+      if (entry.signal !== "KILLED") entry.signal = signal;
       this.notify(entry);
     });
-    await this.waitForYield(entry, request.yieldTimeMs ?? DEFAULT_EXEC_YIELD_TIME_MS);
+    await this.waitForYield(entry, request.yieldTimeMs ?? DEFAULT_EXEC_YIELD_TIME_MS, request.signal);
     return this.resultAndMaybeRemove(entry);
   }
 
-  async interact(request: {
-    readonly ownerRunId: ManagedProcessStartRequest["ownerRunId"];
-    readonly sessionId: string;
-    readonly chars: string;
-    readonly yieldTimeMs: number;
-  }): Promise<RuntimeExecResult> {
+  async interact(request: RuntimeProcessInteractionRequest): Promise<RuntimeExecResult> {
     const entry = this.lookup(request.sessionId, request.ownerRunId);
     const charsAcceptedBytes = Buffer.byteLength(request.chars, "utf8");
     if (request.chars.length > 0) {
@@ -140,7 +138,7 @@ export class LocalProcessManager {
         throw new RuntimeProcessUncertainError();
       }
     }
-    await this.waitForYield(entry, request.yieldTimeMs);
+    await this.waitForYield(entry, request.yieldTimeMs, request.signal);
     return this.resultAndMaybeRemove(entry, charsAcceptedBytes);
   }
 
@@ -148,6 +146,39 @@ export class LocalProcessManager {
     const entries = [...this.entries.values()];
     this.entries.clear();
     await Promise.all(entries.map((entry) => entry.adapter.close()));
+  }
+
+  async cancelOwnedByRun(ownerRunId: RunId): Promise<{
+    readonly runId: RunId;
+    readonly stoppedProcessIds: readonly string[];
+    readonly confirmed: boolean;
+  }> {
+    const owned = [...this.entries.values()].filter((entry) => entry.ownerRunId === ownerRunId);
+    const active = owned.filter((entry) => !isManagedProcessTerminal(entry.state));
+    for (const entry of owned) {
+      if (isManagedProcessTerminal(entry.state)) this.entries.delete(entry.id);
+    }
+    let confirmed = true;
+    await Promise.all(
+      active.map(async (entry) => {
+        entry.state = "EXITED";
+        entry.signal = "KILLED";
+        this.entries.delete(entry.id);
+        this.notify(entry);
+        try {
+          await entry.adapter.close();
+        } catch {
+          confirmed = false;
+        }
+      }),
+    );
+    return {
+      runId: ownerRunId,
+      stoppedProcessIds: active.map((entry) => entry.id),
+      confirmed: confirmed && ![...this.entries.values()].some(
+        (entry) => entry.ownerRunId === ownerRunId && !isManagedProcessTerminal(entry.state),
+      ),
+    };
   }
 
   private lookup(
@@ -168,16 +199,25 @@ export class LocalProcessManager {
     return entry;
   }
 
-  private waitForYield(entry: ProcessEntry, yieldTimeMs: number): Promise<void> {
+  private waitForYield(entry: ProcessEntry, yieldTimeMs: number, signal?: AbortSignal): Promise<void> {
     if (isManagedProcessTerminal(entry.state)) return Promise.resolve();
     return new Promise((resolve) => {
+      let abortListener: (() => void) | undefined;
       const finish = () => {
         clearTimeout(timer);
+        if (abortListener !== undefined) signal?.removeEventListener("abort", abortListener);
         entry.waiters.delete(finish);
         resolve();
       };
       const timer = setTimeout(finish, yieldTimeMs);
       entry.waiters.add(finish);
+      if (signal !== undefined) {
+        abortListener = () => {
+          void this.cancelOwnedByRun(entry.ownerRunId).finally(finish);
+        };
+        signal.addEventListener("abort", abortListener, { once: true });
+        if (signal.aborted) abortListener();
+      }
     });
   }
 

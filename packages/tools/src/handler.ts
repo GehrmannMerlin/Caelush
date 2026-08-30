@@ -3,6 +3,7 @@ import type { ToolExecutionResult } from "./execution-result.js";
 import type { ToolExecutionEnvironment } from "./execution-environment.js";
 
 export interface ToolExecutionRequest {
+  readonly signal?: AbortSignal;
   readonly runId: RunId;
   readonly stepId: StepId;
   readonly invocationId: ToolInvocationId;

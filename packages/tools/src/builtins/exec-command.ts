@@ -75,6 +75,7 @@ async function executeExecCommand(request: ToolExecutionRequest, resolver: Runti
     return await withRuntimeScope(request, resolver, async (scope) => {
       const result = await scope.exec.execute({
         ownerRunId: request.runId,
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
         command: args.cmd as string,
         ...(args.workdir === undefined ? {} : { workdir: args.workdir as string }),
         tty: args.tty === true,

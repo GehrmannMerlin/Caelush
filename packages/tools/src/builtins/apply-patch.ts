@@ -72,7 +72,10 @@ async function executeApplyPatch(request: ToolExecutionRequest, resolver: Runtim
   }
   return withRuntimeScope(request, resolver, async (scope) => {
     try {
-      const result = await scope.patch.apply({ patch });
+      const result = await scope.patch.apply({
+        patch,
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
+      });
       return successResult("Patch applied.", {
         changeCount: result.changeCount,
         changes: result.changes.map((change) => ({ ...change })),

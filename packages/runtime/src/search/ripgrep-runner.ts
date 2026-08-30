@@ -45,6 +45,8 @@ export class LocalRipgrepRunner implements RuntimeTextSearch {
       }
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
+      const onAbort = () => child.kill();
+      request.signal?.addEventListener("abort", onAbort, { once: true });
       let stdoutBytes = 0;
       let stderrBytes = 0;
       let capped = false;
@@ -65,6 +67,11 @@ export class LocalRipgrepRunner implements RuntimeTextSearch {
         else reject(new RuntimeSearchError("ripgrep failed to start", { cause: error }));
       });
       child.once("close", (code: number | null) => {
+        request.signal?.removeEventListener("abort", onAbort);
+        if (request.signal?.aborted) {
+          reject(new RuntimeSearchError("ripgrep was cancelled"));
+          return;
+        }
         if (capped) {
           try {
             const parsed = parseRipgrepJson(boundedText(stdout, MAX_RG_STDOUT_BYTES).text);

@@ -10,6 +10,7 @@ import type {
 } from "@caelush/protocol";
 import type { ToolBatchCoordinatorPort } from "@caelush/tools";
 import type { DurableAgentEvent, RunExecutionStorePort } from "./run-execution-store.js";
+import type { RunExecutionScopeRegistry } from "./run-execution-scope.js";
 
 export interface RunExecutionConfig {
   readonly baseSystemPrompt: string;
@@ -34,6 +35,14 @@ export interface EventIdFactory {
 export interface ApprovalResolutionPort {
   getById(id: ApprovalRequestId): Promise<ApprovalRequest | null>;
   resolve(id: ApprovalRequestId, resolution: ApprovalResolution): Promise<ApprovalRequest>;
+  cancelPendingByRun?(runId: import("@caelush/protocol").RunId): Promise<readonly ApprovalRequest[]>;
+}
+
+export interface RunOwnedResourceControllerPort {
+  cancelOwnedResources(runId: import("@caelush/protocol").RunId): Promise<{
+    readonly stoppedResourceIds: readonly string[];
+    readonly confirmed: boolean;
+  }>;
 }
 
 export interface RunControllerDependencies {
@@ -45,4 +54,6 @@ export interface RunControllerDependencies {
   readonly clock: { now(): import("@caelush/protocol").TimestampMs };
   readonly eventIdFactory: EventIdFactory;
   readonly approvals?: ApprovalResolutionPort;
+  readonly scopes?: RunExecutionScopeRegistry;
+  readonly resources?: RunOwnedResourceControllerPort;
 }

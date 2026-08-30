@@ -29,6 +29,18 @@ export const agentRuns = sqliteTable(
   ],
 );
 
+export const runCancellationRequests = sqliteTable(
+  "run_cancellation_requests",
+  {
+    runId: text("run_id")
+      .primaryKey()
+      .references(() => agentRuns.id),
+    cause: text("cause").notNull(),
+    requestedAtMs: integer("requested_at_ms").notNull(),
+  },
+  (table) => [index("run_cancellation_requests_requested_at_idx").on(table.requestedAtMs)],
+);
+
 export const agentSteps = sqliteTable(
   "agent_steps",
   {
@@ -207,6 +219,7 @@ export const approvalRequests = sqliteTable(
 export const storageSchema = {
   agentSessions,
   agentRuns,
+  runCancellationRequests,
   agentSteps,
   agentStateSnapshots,
   agentMessages,

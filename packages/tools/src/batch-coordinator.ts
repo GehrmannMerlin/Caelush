@@ -60,6 +60,7 @@ export class ToolBatchCoordinator implements ToolBatchCoordinatorPort {
     const results: ToolBatchItemResult[] = [];
     let uncertain = false;
     for (const [index, item] of request.items.entries()) {
+      if (request.signal?.aborted) return { kind: "COMPLETED", results };
       if (uncertain) {
         results.push(skippedResult(item));
         continue;
@@ -107,7 +108,7 @@ export function assertToolBatchRequest(value: unknown): ToolBatchRequest {
   }
   const request = value as Record<string, unknown>;
   if (
-    Object.keys(request).length !== 6 ||
+    (Object.keys(request).length !== 6 && Object.keys(request).length !== 7) ||
     !Object.hasOwn(request, "sessionId") ||
     !Object.hasOwn(request, "runId") ||
     !Object.hasOwn(request, "stepId") ||
@@ -118,7 +119,8 @@ export function assertToolBatchRequest(value: unknown): ToolBatchRequest {
     !RunIdSchema.safeParse(request.runId).success ||
     !StepIdSchema.safeParse(request.stepId).success ||
     !Array.isArray(request.items) ||
-    request.items.length === 0
+    request.items.length === 0 ||
+    (Object.hasOwn(request, "signal") && !(request.signal instanceof AbortSignal))
   ) {
     throw new ToolBatchInputError();
   }
@@ -161,6 +163,7 @@ export function assertToolBatchRequest(value: unknown): ToolBatchRequest {
   const parsedRunId = RunIdSchema.parse(request.runId);
   const parsedStepId = StepIdSchema.parse(request.stepId);
   return {
+    ...(request.signal === undefined ? {} : { signal: request.signal as AbortSignal }),
     sessionId: parsedSessionId,
     runId: parsedRunId,
     stepId: parsedStepId,
@@ -172,6 +175,7 @@ export function assertToolBatchRequest(value: unknown): ToolBatchRequest {
 
 function toDispatchRequest(request: ToolBatchRequest, item: ToolBatchItem): ToolDispatchRequest {
   return {
+    ...(request.signal === undefined ? {} : { signal: request.signal }),
     sessionId: request.sessionId,
     runId: request.runId,
     stepId: request.stepId,

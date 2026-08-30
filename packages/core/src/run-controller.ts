@@ -17,22 +17,27 @@ import {
 } from "@caelush/protocol";
 import type { AgentLoopExecutionResult, AgentLoopOutcomeResult } from "./agent-loop-input.js";
 import {
+  cancelAgentStepState,
   createInitialAgentState,
+  markAgentStateCancelled,
   markAgentStateWaitingApproval,
   resumeAgentStateFromApproval,
   settleAgentStepState,
   startAgentState,
 } from "./agent-state.js";
 import { failAgentStep } from "./agent-step.js";
+import { cancelAgentStep } from "./agent-step.js";
 import { normalizeToolResultBatch } from "./agent-tool-results.js";
 import { toLLMToolResultMessages } from "./agent-tool-batch.js";
 import {
   markAgentRunFailed,
+  markAgentRunCancelled,
   markAgentRunWaitingApproval,
   resumeAgentRunFromApproval,
   markAgentStateFailed,
   assertRunExecutionInvariant,
 } from "./run-execution-state.js";
+import { RunExecutionScopeRegistry } from "./run-execution-scope.js";
 import {
   RunExecutionConflictError,
   RunExecutionInvariantError,
@@ -91,10 +96,12 @@ const STALE_STEP_ERROR = {
 
 export class RunController {
   private readonly activeRuns = new Set<RunId>();
+  private readonly scopes: RunExecutionScopeRegistry;
   private readonly eventFactory: RunControllerEventFactory;
 
   constructor(private readonly dependencies: RunControllerDependencies) {
     this.eventFactory = createRunControllerEventFactory();
+    this.scopes = dependencies.scopes ?? new RunExecutionScopeRegistry();
   }
 
   async start(runId: RunId): Promise<RunControllerResult> {
@@ -120,6 +127,31 @@ export class RunController {
     return this.withLock(runId, () => this.resolveApprovalLocked(runId, approvalId, resolution));
   }
 
+  async cancel(runId: RunId): Promise<RunControllerResult> {
+    const loaded = await this.load(runId);
+    if (loaded.run.status === "CANCELLED" || isTerminal(loaded.run.status)) {
+      return this.resultFromSnapshot(loaded);
+    }
+    const requestedAt = this.dependencies.clock.now();
+    await this.dependencies.execution.requestCancellation(runId, {
+      runId,
+      cause: "USER_REQUESTED",
+      requestedAt,
+    });
+    const scope = this.scopes.get(runId);
+    if (scope !== undefined) {
+      scope.abort();
+      await scope.settled;
+    }
+    return this.withCancellationLock(runId, () => this.cancelLocked(runId));
+  }
+
+  private async cancelLocked(runId: RunId): Promise<RunControllerResult> {
+    const loaded = await this.load(runId);
+    if (isTerminal(loaded.run.status)) return this.resultFromSnapshot(loaded);
+    return this.finalizeCancellation(loaded);
+  }
+
   private async resolveApprovalLocked(
     runId: RunId,
     approvalId: ApprovalRequestId,
@@ -131,6 +163,7 @@ export class RunController {
     }
     const parsed = ApprovalResolutionSchema.parse(resolution);
     const loaded = await this.load(runId);
+    if (loaded.cancellationIntent !== undefined) return this.finalizeCancellation(loaded);
     if (loaded.run.status !== "WAITING_APPROVAL" || loaded.state === undefined) {
       throw new RunControllerInputError("Approval resolution requires a WAITING_APPROVAL Run.");
     }
@@ -208,6 +241,7 @@ export class RunController {
 
   private async startLocked(runId: RunId): Promise<RunControllerResult> {
     const loaded = await this.load(runId);
+    if (loaded.cancellationIntent !== undefined) return this.finalizeCancellation(loaded);
     if (loaded.run.status !== "PENDING") return this.resumeKnownBoundary(loaded);
     if (loaded.state !== undefined) {
       throw new RunControllerInputError("PENDING Run cannot already have AgentState");
@@ -237,6 +271,7 @@ export class RunController {
     results: readonly LLMToolResultMessage[],
   ): Promise<RunControllerResult> {
     const loaded = await this.load(runId);
+    if (loaded.cancellationIntent !== undefined) return this.finalizeCancellation(loaded);
     if (loaded.run.status !== "RUNNING" || loaded.state === undefined) {
       throw new RunControllerInputError("Tool Results require a RUNNING Run");
     }
@@ -308,6 +343,7 @@ export class RunController {
 
   private async recoverLocked(runId: RunId): Promise<RunControllerResult> {
     const loaded = await this.load(runId);
+    if (loaded.cancellationIntent !== undefined) return this.finalizeCancellation(loaded);
     if (loaded.run.status === "RUNNING" && loaded.activeStep !== undefined) {
       return this.recoverStaleStep(loaded);
     }
@@ -343,6 +379,7 @@ export class RunController {
     let snapshot = initial;
     let mode = initialMode;
     while (true) {
+      if (snapshot.cancellationIntent !== undefined) return this.finalizeCancellation(snapshot);
       if (snapshot.run.status === "WAITING_APPROVAL") return this.resultFromSnapshot(snapshot);
       const continuation = snapshot.continuation;
       if (continuation?.type === "WAITING_TOOL_RESULTS") {
@@ -359,6 +396,7 @@ export class RunController {
           throw new RunControllerInvariantError("Tool execution requires an AgentState.");
         }
         const request = {
+          signal: this.executionSignal(snapshot.run.id),
           sessionId: snapshot.run.sessionId,
           runId: snapshot.run.id,
           stepId: continuation.sourceStepId,
@@ -376,6 +414,9 @@ export class RunController {
               ? await coordinator.recover(request)
               : await coordinator.execute(request);
         } catch (error) {
+          if (this.executionSignal(snapshot.run.id).aborted) {
+            return this.finalizeCancellation(snapshot);
+          }
           const agentError =
             error instanceof ToolBatchInputError
               ? {
@@ -397,8 +438,14 @@ export class RunController {
         // Always continue from the durable revision before writing continuation, approval,
         // or failure state.
         snapshot = await this.load(snapshot.run.id);
+        if (this.executionSignal(snapshot.run.id).aborted) {
+          return this.finalizeCancellation(snapshot);
+        }
         if (outcome.kind === "WAITING_APPROVAL") {
           snapshot = await this.persistWaitingApprovalLocked(snapshot, outcome);
+          if (this.executionSignal(snapshot.run.id).aborted) {
+            return this.finalizeCancellation(snapshot);
+          }
           return this.resultFromSnapshot(snapshot);
         }
         let messages: readonly LLMToolResultMessage[];
@@ -586,6 +633,7 @@ export class RunController {
       ...(config.explicitPaths === undefined ? {} : { explicitPaths: config.explicitPaths }),
     };
     let execution: AgentLoopExecutionResult;
+    const signal = this.executionSignal(snapshot.run.id);
     if (resume) {
       if (
         snapshot.continuation?.type !== "WAITING_TOOL_RESULTS" ||
@@ -597,11 +645,12 @@ export class RunController {
       }
       execution = await loop.resumeWithToolResults({
         ...input,
+        signal,
         pendingDecision: snapshot.continuation.pendingDecision,
         toolResults: snapshot.continuation.receivedResults,
       });
     } else {
-      execution = await loop.run(input);
+      execution = await loop.run({ ...input, signal });
     }
     if (preProviderError !== undefined) {
       throw new RunControllerInfrastructureError("Unable to durably checkpoint provider turn", {
@@ -615,6 +664,7 @@ export class RunController {
     before: RunExecutionSnapshot,
     execution: AgentLoopExecutionResult,
   ): Promise<RunControllerResult> {
+    if (execution.status === "CANCELLED") return this.finalizeCancellation(before, execution);
     const current = await this.load(before.run.id);
     if (current.state === undefined)
       throw new RunControllerInfrastructureError("Run state disappeared during settlement");
@@ -711,6 +761,70 @@ export class RunController {
       messagesToAppend,
       ...(continuation === undefined ? {} : { continuation }),
       events,
+    });
+    this.notify(commit.events);
+    return this.resultFromSnapshot(commit.snapshot);
+  }
+
+  private async finalizeCancellation(
+    before: RunExecutionSnapshot,
+    execution?: Extract<AgentLoopExecutionResult, { status: "CANCELLED" }>,
+  ): Promise<RunControllerResult> {
+    const current = await this.load(before.run.id);
+    if (current.run.status === "CANCELLED") return this.resultFromSnapshot(current);
+    const cleanup = await this.cancelOwnedResources(current.run.id);
+    if (!cleanup.confirmed) {
+      return { status: "CANCELLATION_PENDING", run: current.run, ...(current.state === undefined ? {} : { state: current.state }) };
+    }
+    const now = this.dependencies.clock.now();
+    let state = execution?.state ?? current.state;
+    let step = execution?.step;
+    if (state !== undefined && state.currentStepId !== undefined) {
+      const activeStep = current.activeStep ?? step;
+      if (activeStep === undefined || activeStep.id !== state.currentStepId) {
+        throw new RunControllerInvariantError("Cancellation cannot reconcile the active Step");
+      }
+      step = step ?? cancelAgentStep(activeStep, now);
+      state = cancelAgentStepState(state, {
+        stepId: state.currentStepId,
+        now,
+        countAttempt: true,
+      });
+    }
+    if (state !== undefined && state.status !== "CANCELLED") {
+      state = markAgentStateCancelled(state, now);
+    }
+    if (state === undefined && current.run.status !== "PENDING") {
+      throw new RunControllerInvariantError("non-PENDING cancellation has no AgentState");
+    }
+    const run = markAgentRunCancelled(
+      AgentRunSchema.parse({ ...current.run, currentStepId: undefined }),
+      now,
+    );
+    const approvals = this.dependencies.approvals;
+    if (approvals?.cancelPendingByRun !== undefined) {
+      await approvals.cancelPendingByRun(run.id);
+    }
+    const commit = await this.commit({
+      run,
+      ...(state === undefined ? {} : { state }),
+      expectedStateRevision: current.stateRevision ?? null,
+      expectedContinuationRevision: current.continuationRevision ?? null,
+      stepWrites: step === undefined ? [] : [{ operation: "UPDATE", step }],
+      messagesToAppend: [],
+      ...(current.continuation === undefined
+        ? {}
+        : { continuation: { operation: "CLEAR" as const } }),
+      events: [
+        this.eventFactory.statusChanged(
+          current.run,
+          current.run.status,
+          "CANCELLED",
+          this.nextEventId(),
+          now,
+        ),
+        this.eventFactory.cancelled(current.run, this.nextEventId(), now),
+      ],
     });
     this.notify(commit.events);
     return this.resultFromSnapshot(commit.snapshot);
@@ -934,12 +1048,44 @@ export class RunController {
 
   private async withLock<T>(runId: RunId, operation: () => Promise<T>): Promise<T> {
     if (this.activeRuns.has(runId)) throw new RunControllerBusyError(runId);
+    const scope = this.scopes.open(runId);
     this.activeRuns.add(runId);
     try {
       return await operation();
     } finally {
       this.activeRuns.delete(runId);
+      this.scopes.close(runId, scope);
     }
+  }
+
+  private async withCancellationLock<T>(runId: RunId, operation: () => Promise<T>): Promise<T> {
+    while (this.activeRuns.has(runId)) {
+      const scope = this.scopes.get(runId);
+      if (scope === undefined) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        continue;
+      }
+      await scope.settled;
+    }
+    return this.withLock(runId, operation);
+  }
+
+  private executionSignal(runId: RunId): AbortSignal {
+    const scope = this.scopes.get(runId);
+    if (scope === undefined) {
+      throw new RunControllerInvariantError("Run execution has no active cancellation scope");
+    }
+    return scope.signal;
+  }
+
+  private async cancelOwnedResources(runId: RunId): Promise<{
+    readonly stoppedResourceIds: readonly string[];
+    readonly confirmed: boolean;
+  }> {
+    if (this.dependencies.resources === undefined) {
+      return { stoppedResourceIds: [], confirmed: true };
+    }
+    return this.dependencies.resources.cancelOwnedResources(runId);
   }
 }
 
@@ -981,4 +1127,15 @@ function semanticEqual(left: unknown, right: unknown): boolean {
     );
   }
   return false;
+}
+
+function isTerminal(status: AgentRun["status"]): boolean {
+  return [
+    "COMPLETED",
+    "FAILED",
+    "CANCELLED",
+    "TIMEOUT",
+    "MAX_STEPS_REACHED",
+    "BUDGET_EXCEEDED",
+  ].includes(status);
 }

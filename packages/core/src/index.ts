@@ -47,6 +47,7 @@ export { normalizeToolResultBatch } from "./agent-tool-results.js";
 export { toLLMToolResultMessages } from "./agent-tool-batch.js";
 export {
   beginAgentStepState,
+  cancelAgentStepState,
   createInitialAgentState,
   markAgentStateMaxStepsReached,
   markAgentStateWaitingApproval,
@@ -54,8 +55,9 @@ export {
   settleAgentStepState,
   resumeAgentStateFromApproval,
   startAgentState,
+  markAgentStateCancelled,
 } from "./agent-state.js";
-export type { SettleAgentStepInput } from "./agent-state.js";
+export type { CancelAgentStepStateInput, SettleAgentStepInput } from "./agent-state.js";
 export {
   cancelAgentStep,
   completeAgentStep,
@@ -70,6 +72,7 @@ export type {
   AgentLoopCommonInput,
   AgentLoopExecutionResult,
   AgentLoopFailureResult,
+  AgentLoopCancelledResult,
   AgentLoopModelSettings,
   AgentLoopOutcomeResult,
   AgentLoopResumeInput,
@@ -104,12 +107,19 @@ export type {
   RunExecutionConfig,
   RunExecutionConfigResolver,
   ApprovalResolutionPort,
+  RunOwnedResourceControllerPort,
 } from "./run-controller-ports.js";
 export { RunExecutionConflictError, RunExecutionInvariantError } from "./run-execution-store.js";
+export {
+  RunExecutionScope,
+  RunExecutionScopeBusyError,
+  RunExecutionScopeRegistry,
+} from "./run-execution-scope.js";
 export {
   assertRunExecutionInvariant,
   isExecutionBoundaryStatus,
   markAgentRunFailed,
+  markAgentRunCancelled,
   markAgentRunWaitingApproval,
   resumeAgentRunFromApproval,
   markAgentStateFailed,

@@ -69,6 +69,7 @@ async function executeWriteStdin(request: ToolExecutionRequest, resolver: Runtim
     return await withRuntimeScope(request, resolver, async (scope) => {
       const result = await scope.exec.interact({
         ownerRunId: request.runId,
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
         sessionId: args.session_id as string,
         chars,
         yieldTimeMs,

@@ -112,4 +112,8 @@ Approval is a durable controller boundary, not a hidden loop state. A batch stop
 
 ## Phase boundaries
 
+## Phase 10A cancellation boundary
+
+The `AgentLoop` accepts a host-only `AbortSignal` and returns a typed `CANCELLED` result when cancellation wins at preparation, lifecycle, provider, or result-classification safe points. It forwards the signal to the injected LLM client, never appends partial assistant output, and never maps cancellation to a model failure. A provider attempt that actually started settles its Step once; a provider that ignores abort has its late result discarded by the post-resolution signal check. Run-level intent persistence, scope ownership, resource cleanup, and terminal Run settlement remain responsibilities of `RunController` and the execution store. See [Run Cancellation](cancellation.md).
+
 Phase 6A defines deterministic decisions, steps, tool-result normalization, state helpers, and the `maxSteps` gate. Phase 6B connects those contracts to Project Intelligence, Relevant File Planning, ContextBuilder, and one LLM turn, then stops at the external Tool or Verification boundary. Phase 6C adds the durable RunController boundary described in [Run Controller](run-controller.md); Phase 7C extends that controller with ordered Tool batches while the AgentLoop itself remains Tool-execution unaware. The controller still never verifies a candidate or claims `COMPLETED`.

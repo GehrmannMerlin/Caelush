@@ -3,11 +3,16 @@ import type { GitRunner } from "./contracts.js";
 import { RuntimeGitError } from "../runtime-errors.js";
 import { gitCommandError } from "./errors.js";
 
-export async function assertGitRepository(runner: GitRunner, cwd: string): Promise<string> {
+export async function assertGitRepository(
+  runner: GitRunner,
+  cwd: string,
+  signal?: AbortSignal,
+): Promise<string> {
   const result = await runner.run({
     cwd,
     args: ["rev-parse", "--show-toplevel"],
     maxOutputBytes: 4096,
+    ...(signal === undefined ? {} : { signal }),
   });
   const stderr = decode(result.stderr);
   if (result.exitCode !== 0) throw gitCommandError(stderr);

@@ -8,6 +8,7 @@ import type {
   RunId,
   StepId,
   TimestampMs,
+  RunCancellationIntent,
 } from "@caelush/protocol";
 import type { RunContinuationCheckpoint } from "./agent-continuation.js";
 
@@ -41,6 +42,7 @@ export interface RunExecutionSnapshot {
   readonly conversation: readonly RunConversationEntry[];
   readonly continuation?: RunContinuationCheckpoint;
   readonly continuationRevision?: number;
+  readonly cancellationIntent?: RunCancellationIntent;
 }
 
 export interface RunExecutionMessageAppend {
@@ -83,6 +85,10 @@ export interface RunExecutionCommitResult {
 export interface RunExecutionStorePort {
   load(runId: RunId): Promise<RunExecutionSnapshot | null>;
   commit(command: RunExecutionCommit): Promise<RunExecutionCommitResult>;
+  requestCancellation(
+    runId: RunId,
+    intent: RunCancellationIntent,
+  ): Promise<RunExecutionSnapshot>;
 }
 
 export class RunExecutionConflictError extends Error {

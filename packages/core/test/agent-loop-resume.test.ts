@@ -37,6 +37,7 @@ function makeInput(): AgentLoopCommonInput {
     history: [],
     baseSystemPrompt: "base",
     contextLimits: { maxInputTokens: 5000 },
+    signal: new AbortController().signal,
   };
 }
 

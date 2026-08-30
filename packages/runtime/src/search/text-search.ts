@@ -1,4 +1,5 @@
 export interface RuntimeTextSearchRequest {
+  readonly signal?: AbortSignal;
   readonly cwd: string;
   readonly pattern: string;
   readonly include?: string;

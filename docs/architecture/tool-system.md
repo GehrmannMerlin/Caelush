@@ -56,6 +56,10 @@ There are no additional Phase 7 rounds.
 
 ## Three Separate Layers
 
+## Phase 10A cancellation boundary
+
+The RunController supplies one ephemeral signal to `ToolBatchCoordinator`, `ToolDispatcher`, `ToolHandler`, and Runtime operations. The batch checks before each item and stops trailing calls; a late signal does not rewrite a Tool invocation that already durably completed. Dispatcher checks prevent new invocation/approval creation after abort, while an already-running handler receives the signal and must preserve uncertain side effects rather than claim a clean result. Cancellation is a Run control-plane concern and does not add a second Tool lifecycle or a `CANCELLING` status. See [Run Cancellation](cancellation.md).
+
 Prompt Guidance, Tool Definition, and Tool Runtime are related but different:
 
 1. Prompt Guidance explains when to use tools, how tools should be selected, cross-tool preferences, and security behavior. It belongs to the Agent/System prompt layer, not the registry.

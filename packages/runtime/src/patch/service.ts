@@ -15,13 +15,19 @@ class LocalRuntimePatchService implements RuntimePatchService {
   ) {}
 
   async apply(request: RuntimePatchRequest): Promise<PatchCommitResult> {
+    throwIfAborted(request.signal);
     const document = parsePatch(request.patch);
     const prepared = await preparePatch(document, {
       pathResolver: this.pathResolver,
       filesystem: this.filesystem,
     });
+    throwIfAborted(request.signal);
     return commitPatch(prepared, this.filesystem);
   }
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new Error("Runtime patch operation was cancelled.");
 }
 
 export function createRuntimePatchService(

@@ -2,9 +2,9 @@
 
 Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI、Web 和其他宿主共享同一个可观察、可取消、可验证、可扩展的 Agent Core。
 
-本轮当前阶段为 **V1 Phase 9D：V1 Security Integration, Logical Sandbox Boundary & Phase 9 Finalization**；Phase 8A/8B/8C/8D、Phase 9A/9B/9C/9D 已完成。本阶段把 logical/policy sandbox、child-process environment hardening、structured helper hardening、Context secret boundary 与 secure default composition 接入既有 Gate、Approval 和 Tool 结果边界。
+本轮当前阶段为 **V1 Phase 10A：Run Cancellation Control Plane & End-to-End Abort Propagation**；Phase 8A/8B/8C/8D、Phase 9A/9B/9C/9D 与 Phase 10A 已完成。本阶段把 durable cancellation intent、Run-owned AbortSignal、Tool/LLM/Runtime 取消传播、审批取消和本地进程清理接入既有 RunController 边界。
 
-当前仓库已经完成 Phase 1–7 以及 Phase 8A/8B/8C/8D；Phase 8D 增加 tool-independent 的只读 Git Runtime、`git_status`/`git_diff`、统一默认 Built-in catalog、纯 Tool Effects、AgentState 投影和原子 Tool settlement。Phase 9A 增加独立的 `@caelush/security` policy kernel、Run-derived `ToolSecurityContext` 与真实 `ToolExecutionGate`；Phase 9B 增加 durable Approval workflow、精确 grant matching、lazy expiry 与 Tool/Run recovery；Phase 9C 增加 sensitive resource/command policy、host-only facts、high-confidence secret redaction 和 sanitize-before-persist，但不实现 OS hard sandbox；Phase 10 的超时/取消/重试/预算策略仍未实现。
+当前仓库已经完成 Phase 1–7 以及 Phase 8A/8B/8C/8D；Phase 8D 增加 tool-independent 的只读 Git Runtime、`git_status`/`git_diff`、统一默认 Built-in catalog、纯 Tool Effects、AgentState 投影和原子 Tool settlement。Phase 9A 增加独立的 `@caelush/security` policy kernel、Run-derived `ToolSecurityContext` 与真实 `ToolExecutionGate`；Phase 9B 增加 durable Approval workflow、精确 grant matching、lazy expiry 与 Tool/Run recovery；Phase 9C 增加 sensitive resource/command policy、host-only facts、high-confidence secret redaction 和 sanitize-before-persist，但不实现 OS hard sandbox；Phase 10A 增加 user-requested cancellation control plane 和 end-to-end abort propagation。Phase 10B+ 的 timeout/deadline、retry/backoff、budget、Verification execution 与宿主 UI 仍未实现。
 
 ## Phase 6 Status
 
@@ -45,7 +45,7 @@ Phase 8B adds the narrow `apply_patch` mutation surface. A strict, bounded Add/U
 
 Phase 8C adds the shared Shell/Managed Process substrate described in [Shell and Process Runtime](docs/architecture/process-runtime.md). Phase 8D completes the final integration: [Git Runtime](docs/architecture/git-runtime.md) adds bounded read-only Git inspection, while [Tool Effects](docs/architecture/tool-effects.md) defines pure file/process projections and atomic durable settlement. Phase 9C adds the [Input Security Policy](docs/architecture/input-security-policy.md) and [Secret Redaction](docs/architecture/secret-redaction.md) boundaries. Phase 9D adds the [Security Threat Model](docs/architecture/security-threat-model.md), [Security Capability Matrix](docs/architecture/security-capability-matrix.md), explicit logical/policy sandbox admission, sanitized child environments, fixed-config Git/rg helpers, and secure default Tool Dispatcher composition. Shell output is terminal-sanitized and also passes the injected high-confidence secret sanitizer; process sessions remain runtime-local and are represented in AgentState only through successful effects. The default catalog is injected and immutable.
 
-Phase 9D's sandbox is logical and policy-based, not an OS sandbox: structured workspace tools retain lexical/realpath containment, while `exec_command` and `write_stdin` are explicitly `UNCONFINED_LOCAL_PROCESS` capabilities with sanitized environments and policy/approval gates. V1 does not claim syscall, network, filesystem, process, container, seccomp, job-object, or remote-runtime isolation. Phase 10 remains intentionally unimplemented.
+Phase 9D's sandbox is logical and policy-based, not an OS sandbox: structured workspace tools retain lexical/realpath containment, while `exec_command` and `write_stdin` are explicitly `UNCONFINED_LOCAL_PROCESS` capabilities with sanitized environments and policy/approval gates. Phase 10A's process cancellation is cooperative managed-process cleanup and does not claim universal descendant termination or hard isolation. V1 does not claim syscall, network, filesystem, container, seccomp, job-object, or remote-runtime isolation. Phase 10 continues beyond 10A for timeout/deadline, retry, budget, Verification, and host product integration.
 
 ## Phase 5 Status
 
@@ -56,6 +56,8 @@ Phase 9D's sandbox is logical and policy-based, not an OS sandbox: structured wo
 Caelush can build provider-independent, budgeted LLMRequest-ready message context from project facts, project instructions, relevant files, and conversation history. Phase 6C consumes that context through a resumable one-turn AgentLoop and persists only the real conversation separately from synthetic provider context. See [Run Controller](docs/architecture/run-controller.md) for the durable execution and recovery boundary.
 
 Phase 8B architecture details are documented in [Patch Engine](docs/architecture/patch-engine.md). Phase 8D details are documented in [Git Runtime](docs/architecture/git-runtime.md) and [Tool Effects](docs/architecture/tool-effects.md). Phase 9A details are documented in [Security Policy Kernel](docs/architecture/security.md); Phase 9B details are documented in [Durable Approval Workflow](docs/architecture/approval-workflow.md).
+
+Phase 10A details are documented in [Run Cancellation](docs/architecture/cancellation.md), including the durable intent, scope/lock sequence, signal fan-out, approval/process cleanup, recovery priority, race semantics, and explicit non-goals.
 
 ## 技术栈
 

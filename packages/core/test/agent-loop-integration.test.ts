@@ -114,6 +114,7 @@ function makeInput(root: string): AgentLoopCommonInput {
     history: [],
     baseSystemPrompt: "You are a careful coding agent.",
     contextLimits: { maxInputTokens: 4000, safetyMarginTokens: 0 },
+    signal: new AbortController().signal,
     cwd: root,
     tools: [
       {

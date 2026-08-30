@@ -69,6 +69,10 @@ The model cannot choose the executable, arbitrary flags, shell mode, environment
 
 ## Error model and Phase boundaries
 
+## Phase 10A cancellation boundary
+
+Runtime operations receive the Run-owned host signal through Tool handlers. `LocalProcessManager` can terminate all live entries for one exact `ownerRunId`, including yielded `exec_command` sessions, and removes them after cleanup. `search_text`, Git helpers, and process waits race their child/process operation against abort. Patch preparation can stop before mutation; once commit begins, cancellation is deferred through verified commit/rollback and observed afterward. These controls provide cooperative managed-runtime cleanup, not an OS hard sandbox or a universal descendant-process guarantee.
+
 Operational Runtime errors are typed and converted by built-in handlers to model-recoverable `ToolExecutionResult` values with safe error codes. Host paths, stack traces, raw filesystem errors, raw stderr, and internal IDs are not model-facing. Unexpected Runtime invariants remain typed throws; the existing ToolDispatcher sanitizes and durably records those infrastructure failures.
 
 Phase 8B adds the verified `apply_patch` path and Phase 8C adds managed shell/process execution. Phase 8D adds only read-only Git inspection and the host-side effect bridge; it does not add Git mutation. Parsing and preparation remain bounded and deterministic, and patch failures remain best-effort rather than crash-atomic or exactly-once. Permission evaluation, approval resolution, sandboxing, secret redaction, retry/backoff, run cancellation, generic timeout, and Verification execution remain out of scope. Runtime has no persistence tables or process reattachment; effect settlement reuses the existing Tool/Run storage boundaries.

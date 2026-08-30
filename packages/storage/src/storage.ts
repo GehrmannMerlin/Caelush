@@ -37,6 +37,7 @@ import {
   type ApprovalRepository,
 } from "./repositories/approval-repository.js";
 import type { ApprovalClock } from "./repositories/approval-repository.js";
+import { SqliteCancellationRepository, type CancellationRepository } from "./cancellation-repository.js";
 
 export interface CaelushStorage {
   readonly sessions: SessionRepository;
@@ -51,6 +52,7 @@ export interface CaelushStorage {
   readonly toolInvocations: ToolInvocationRepository;
   readonly observations: ObservationRepository;
   readonly approvals: ApprovalRepository;
+  readonly cancellations: CancellationRepository;
   close(): Promise<void>;
 }
 
@@ -78,6 +80,7 @@ export async function openCaelushStorage(options: {
         database,
         options.approvalClock === undefined ? {} : { clock: options.approvalClock },
       ),
+      cancellations: new SqliteCancellationRepository(database),
       close: async () => database.close(),
     };
   } catch (error) {

@@ -34,6 +34,7 @@ export {
   type ApprovalEventIdFactory,
   type ApprovalRepository,
 } from "./repositories/approval-repository.js";
+export { SqliteCancellationRepository, type CancellationRepository } from "./cancellation-repository.js";
 export {
   StorageConflictError,
   StorageDecodeError,

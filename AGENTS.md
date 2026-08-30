@@ -61,6 +61,16 @@ Caelush 是一个 TypeScript/Node.js 通用 Agent Kernel 项目。CLI、Web 和�
 - Do not patch `node_modules`, use `pnpm patch`, or upgrade pinned AI SDK dependencies unless a failing pinned regression and verified stable exact-version fix justify it.
 - OpenAI-compatible compatibility tests must exercise real OpenAI-shaped SSE through `LLMGateway → OpenAICompatibleLLMProvider → streamText → @ai-sdk/openai-compatible → fetch`.
 
+Phase 10A cancellation rules:
+
+- User cancellation persists one first-writer-wins `USER_REQUESTED` intent before aborting live work; intent rows are never deleted and there is no `CANCELLING` Run status.
+- `RunExecutionScope` and its `AbortController` are host-only. The signal may cross Core/LLM/Tool/Runtime execution ports, but must never enter Protocol entities, durable state, continuation data, approval keys/actions, Tool arguments, security facts, observations, or events.
+- `RunController.cancel()` is outside the normal Run execution lock: persist intent, abort the active scope, await unwinding, clean pending approvals and Run-owned resources, reload, and atomically settle `CANCELLED` only after confirmed cleanup.
+- PENDING cancellation creates no AgentState, Step, provider call, Tool invocation, or conversation message. Active provider attempts settle a cancelled Step exactly once; late provider results and partial assistant output are discarded.
+- Tool batches stop before trailing calls; Dispatcher remains the only Tool execution boundary. Preserve already durable results and `UNCERTAIN_SIDE_EFFECT`; never convert cancellation into a model/runtime failure or retry.
+- Runtime process cleanup is exact-owner, cooperative, and best effort within the managed process boundary. Do not claim a hard OS sandbox or universal process-tree termination.
+- Recovery gives durable cancellation intent priority over stale Steps, approvals, Tool continuations, and verification candidates; it never resumes Agent work for an intent-marked Run.
+
 Phase 6 rules:
 
 - Phase 6 contains exactly 6A, 6B, and 6C; do not add additional Phase 6 rounds.

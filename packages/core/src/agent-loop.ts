@@ -11,16 +11,24 @@ import { LLMTurnResultSchema, type LLMTurnResult } from "@caelush/llm/turn";
 import type { AgentState, AgentStep, TimestampMs } from "@caelush/protocol";
 import {
   beginAgentStepState,
+  cancelAgentStepState,
+  markAgentStateCancelled,
   markAgentStateMaxStepsReached,
   markAgentStateVerifying,
   settleAgentStepState,
 } from "./agent-state.js";
 import { classifyAgentDecision } from "./agent-decision-mapper.js";
-import { completeAgentStep, createRunningAgentStep, failAgentStep } from "./agent-step.js";
+import {
+  cancelAgentStep,
+  completeAgentStep,
+  createRunningAgentStep,
+  failAgentStep,
+} from "./agent-step.js";
 import { evaluateAgentStepGate } from "./agent-step-gate.js";
 import { normalizeToolResultBatch } from "./agent-tool-results.js";
 import { summarizeAgentDecision } from "./agent-summary.js";
 import type {
+  AgentLoopCancelledResult,
   AgentLoopCommonInput,
   AgentLoopExecutionResult,
   AgentLoopFailureResult,
@@ -42,64 +50,75 @@ export class AgentLoop {
 
   async run(input: AgentLoopStartInput): Promise<AgentLoopExecutionResult> {
     validateAgentLoopInput(input);
-    const currentUserMessage = { role: "user" as const, content: input.run.goal };
-    const gate = evaluateAgentStepGate(input.state, input.run.limits);
-    if (!gate.allowed) return this.maxStepsResult(input.state, gate.outcome, [currentUserMessage]);
+    const normalizedInput = input;
+    if (normalizedInput.signal.aborted) return this.cancelledBeforeStep(normalizedInput);
+    const currentUserMessage = { role: "user" as const, content: normalizedInput.run.goal };
+    const gate = evaluateAgentStepGate(normalizedInput.state, normalizedInput.run.limits);
+    if (!gate.allowed)
+      return this.maxStepsResult(normalizedInput.state, gate.outcome, [currentUserMessage]);
 
     let prepared: PreparedTurn;
     try {
-      prepared = await this.prepareTurn(input, input.history, currentUserMessage);
+      prepared = await this.prepareTurn(normalizedInput, normalizedInput.history, currentUserMessage);
     } catch (error) {
-      return this.failureBeforeStep(input.state, mapAgentLoopError(error), [currentUserMessage]);
+      if (normalizedInput.signal.aborted) return this.cancelledBeforeStep(normalizedInput);
+      return this.failureBeforeStep(normalizedInput.state, mapAgentLoopError(error), [currentUserMessage]);
     }
-    return this.executeProviderTurn(input, gate.nextSequence, prepared, [currentUserMessage]);
+    return this.executeProviderTurn(normalizedInput, gate.nextSequence, prepared, [currentUserMessage]);
   }
 
   async resumeWithToolResults(input: AgentLoopResumeInput): Promise<AgentLoopExecutionResult> {
     validateAgentLoopInput(input);
+    const normalizedInput = input;
+    if (normalizedInput.signal.aborted) return this.cancelledBeforeStep(normalizedInput);
     let normalizedResults: readonly LLMToolResultMessage[];
     try {
       normalizedResults = normalizeToolResultBatch(
-        input.pendingDecision.toolRequests,
-        input.toolResults,
+        normalizedInput.pendingDecision.toolRequests,
+        normalizedInput.toolResults,
       );
     } catch (error) {
-      return this.failureBeforeStep(input.state, mapAgentLoopError(error), []);
+      if (normalizedInput.signal.aborted) return this.cancelledBeforeStep(normalizedInput);
+      return this.failureBeforeStep(normalizedInput.state, mapAgentLoopError(error), []);
     }
-    const history = prepareResumeHistory(input.history, input.pendingDecision, normalizedResults);
-    const gate = evaluateAgentStepGate(input.state, input.run.limits);
-    if (!gate.allowed) return this.maxStepsResult(input.state, gate.outcome, normalizedResults);
+    const history = prepareResumeHistory(normalizedInput.history, normalizedInput.pendingDecision, normalizedResults);
+    const gate = evaluateAgentStepGate(normalizedInput.state, normalizedInput.run.limits);
+    if (!gate.allowed) return this.maxStepsResult(normalizedInput.state, gate.outcome, normalizedResults);
 
     let prepared: PreparedTurn;
     try {
       prepared = await this.prepareTurn(
-        input,
+        normalizedInput,
         history.historyBeforeCurrentTurn,
         undefined,
         history.currentTurnMessages,
       );
     } catch (error) {
-      return this.failureBeforeStep(input.state, mapAgentLoopError(error), normalizedResults);
+      if (normalizedInput.signal.aborted) return this.cancelledBeforeStep(normalizedInput);
+      return this.failureBeforeStep(normalizedInput.state, mapAgentLoopError(error), normalizedResults);
     }
-    return this.executeProviderTurn(input, gate.nextSequence, prepared, normalizedResults);
+    return this.executeProviderTurn(normalizedInput, gate.nextSequence, prepared, normalizedResults);
   }
 
   private async prepareTurn(
-    input: AgentLoopCommonInput,
+    input: AgentLoopCommonInput & { readonly signal: AbortSignal },
     history: readonly LLMMessage[],
     currentUserMessage: { readonly role: "user"; readonly content: string } | undefined,
     currentTurnMessages?: readonly LLMMessage[],
   ): Promise<PreparedTurn> {
+    throwIfAborted(input.signal);
     const snapshotInput =
       input.cwd === undefined
         ? { workspace: input.run.workspace }
         : { workspace: input.run.workspace, cwd: input.cwd };
     const snapshot = await this.dependencies.inspector.inspect(snapshotInput);
+    throwIfAborted(input.signal);
     const query =
       input.explicitPaths === undefined
         ? { text: input.run.goal }
         : { text: input.run.goal, explicitPaths: input.explicitPaths };
     const relevantFiles = await this.dependencies.planner.plan({ snapshot, query });
+    throwIfAborted(input.signal);
     const contextInput = this.contextInput(
       input,
       snapshot,
@@ -109,12 +128,13 @@ export class AgentLoop {
       currentTurnMessages,
     );
     const context = this.dependencies.contextBuilder.build(contextInput);
+    throwIfAborted(input.signal);
     const request = buildAgentLLMRequest(context, input.run, input.tools, input.modelSettings);
     return { context, request };
   }
 
   private contextInput(
-    input: AgentLoopCommonInput,
+    input: AgentLoopCommonInput & { readonly signal: AbortSignal },
     snapshot: ProjectIntelligenceSnapshot,
     relevantFiles: RelevantFileContextPlan,
     history: readonly LLMMessage[],
@@ -138,7 +158,7 @@ export class AgentLoop {
   }
 
   private async executeProviderTurn(
-    input: AgentLoopCommonInput,
+    input: AgentLoopCommonInput & { readonly signal: AbortSignal },
     sequence: number,
     prepared: PreparedTurn,
     appendPrefix: readonly LLMMessage[],
@@ -151,6 +171,9 @@ export class AgentLoop {
       startedAt,
     });
     const activeState = beginAgentStepState(input.state, step.id, startedAt);
+    if (input.signal.aborted) {
+      return this.cancelledAfterStep(input, activeState, step, prepared.context, false);
+    }
     try {
       await this.dependencies.lifecycle?.beforeProviderTurn({
         run: input.run,
@@ -158,7 +181,11 @@ export class AgentLoop {
         step,
         model: input.run.model,
       });
+      throwIfAborted(input.signal);
     } catch (error) {
+      if (input.signal.aborted) {
+        return this.cancelledAfterStep(input, activeState, step, prepared.context, false);
+      }
       return this.failureAfterStep(
         input,
         activeState,
@@ -173,8 +200,13 @@ export class AgentLoop {
 
     let result: LLMTurnResult;
     try {
-      result = await this.dependencies.llmClient.complete(prepared.request);
+      result = await this.dependencies.llmClient.complete(prepared.request, {
+        signal: input.signal,
+      });
     } catch (error) {
+      if (input.signal.aborted) {
+        return this.cancelledAfterStep(input, activeState, step, prepared.context, true);
+      }
       return this.failureAfterStep(
         input,
         activeState,
@@ -185,6 +217,10 @@ export class AgentLoop {
         undefined,
         "FAILED",
       );
+    }
+
+    if (input.signal.aborted) {
+      return this.cancelledAfterStep(input, activeState, step, prepared.context, true);
     }
 
     try {
@@ -278,6 +314,40 @@ export class AgentLoop {
     };
   }
 
+  private cancelledBeforeStep(input: AgentLoopCommonInput): AgentLoopCancelledResult {
+    const now = monotonicNow(input.state, this.dependencies.clock.now());
+    return {
+      status: "CANCELLED",
+      state: markAgentStateCancelled(input.state, now),
+      messagesToAppend: [],
+      providerTurnState: "NOT_STARTED",
+    };
+  }
+
+  private cancelledAfterStep(
+    _input: AgentLoopCommonInput,
+    activeState: AgentState,
+    step: AgentStep,
+    context: BuiltModelContext,
+    countAttempt: boolean,
+  ): AgentLoopCancelledResult {
+    const finishedAt = monotonicNow(activeState, this.dependencies.clock.now());
+    const cancelledStep = cancelAgentStep(step, finishedAt);
+    const clearedState = cancelAgentStepState(activeState, {
+      stepId: step.id,
+      now: finishedAt,
+      countAttempt,
+    });
+    return {
+      status: "CANCELLED",
+      state: markAgentStateCancelled(clearedState, finishedAt),
+      step: cancelledStep,
+      messagesToAppend: [],
+      contextReport: context.report,
+      providerTurnState: countAttempt ? "CANCELLED" : "NOT_STARTED",
+    };
+  }
+
   private maxStepsResult(
     state: AgentState,
     outcome: Extract<AgentLoopOutcomeResult["outcome"], { type: "MAX_STEPS_REACHED" }>,
@@ -322,4 +392,15 @@ function monotonicNow(state: AgentState, now: TimestampMs): TimestampMs {
 interface PreparedTurn {
   readonly context: BuiltModelContext;
   readonly request: LLMRequest;
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw new AgentLoopCancelledError();
+}
+
+class AgentLoopCancelledError extends Error {
+  constructor() {
+    super("Agent loop was cancelled.");
+    this.name = "AgentLoopCancelledError";
+  }
 }

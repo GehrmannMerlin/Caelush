@@ -43,6 +43,20 @@ export function markAgentRunFailed(run: AgentRun, now: AgentRun["createdAt"]): A
   });
 }
 
+export function markAgentRunCancelled(run: AgentRun, now: AgentRun["createdAt"]): AgentRun {
+  if (run.currentStepId !== undefined) {
+    throw new RunExecutionInvariantError("cancelled AgentRun cannot retain an active Step");
+  }
+  assertRunStatusTransition(run.status, "CANCELLED");
+  const withoutFinalResult = { ...run };
+  delete withoutFinalResult.finalResult;
+  return AgentRunSchema.parse({
+    ...withoutFinalResult,
+    status: "CANCELLED",
+    finishedAt: now,
+  });
+}
+
 export function markAgentRunWaitingApproval(run: AgentRun): AgentRun {
   if (run.currentStepId !== undefined) {
     throw new RunExecutionInvariantError("waiting Approval Run cannot retain an active Step");
@@ -79,6 +93,14 @@ export function assertRunExecutionInvariant(snapshot: RunExecutionSnapshot): voi
     return;
   }
   if (state === undefined) {
+    if (
+      run.status === "CANCELLED" &&
+      run.currentStepId === undefined &&
+      activeStep === undefined &&
+      continuation === undefined
+    ) {
+      return;
+    }
     throw new RunExecutionInvariantError("non-PENDING Run has no AgentState");
   }
   if (run.status !== state.status || run.id !== state.runId || run.sessionId !== state.sessionId) {

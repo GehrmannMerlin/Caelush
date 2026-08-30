@@ -30,6 +30,7 @@ export const DEFAULT_MAX_INVOCATION_ARGS_BYTES = 256 * 1024;
 export const DEFAULT_APPROVAL_TTL_MS = 15 * 60 * 1000;
 
 export interface ToolDispatchRequest {
+  readonly signal?: AbortSignal;
   readonly sessionId: SessionId;
   readonly runId: RunId;
   readonly stepId: StepId;
@@ -59,14 +60,16 @@ export function assertToolDispatchRequest(
     "securityContext",
   ];
   if (
-    Object.keys(request).length !== expectedKeys.length ||
+    (Object.keys(request).length !== expectedKeys.length &&
+      Object.keys(request).length !== expectedKeys.length + 1) ||
     expectedKeys.some((key) => !Object.hasOwn(request, key)) ||
     !SessionIdSchema.safeParse(request.sessionId).success ||
     !RunIdSchema.safeParse(request.runId).success ||
     !StepIdSchema.safeParse(request.stepId).success ||
     typeof request.externalCallId !== "string" ||
     !ToolNameSchema.safeParse(request.toolName).success ||
-    !JsonObjectSchema.safeParse(request.args).success
+    !JsonObjectSchema.safeParse(request.args).success ||
+    (Object.hasOwn(request, "signal") && !(request.signal instanceof AbortSignal))
   ) {
     throw new ToolDispatcherInputError("Tool dispatch request is invalid.");
   }

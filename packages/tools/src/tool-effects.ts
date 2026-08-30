@@ -6,6 +6,7 @@ import type {
   SessionId,
   TimestampMs,
   ToolInvocationId,
+  ProcessStatus,
 } from "@caelush/protocol";
 import type { ToolExecutionRequest } from "./handler.js";
 import type { ToolExecutionResult } from "./execution-result.js";
@@ -39,7 +40,7 @@ export type ToolEffect =
       readonly signal?: string;
     }
   | { readonly type: "PROCESS_STARTED"; readonly sessionId: string }
-  | { readonly type: "PROCESS_STOPPED"; readonly sessionId: string };
+  | { readonly type: "PROCESS_STOPPED"; readonly sessionId: string; readonly status?: ProcessStatus };
 
 export interface ToolEffectProjectorInput {
   readonly request: ToolExecutionRequest;
@@ -154,7 +155,7 @@ export function toolEffectsToEvents(
         return {
           ...base,
           type: "process.stopped" as const,
-          payload: { processId: effect.sessionId, status: "EXITED" as const },
+          payload: { processId: effect.sessionId, status: effect.status ?? ("EXITED" as const) },
         };
     }
   });
@@ -234,7 +235,13 @@ export function projectStdinEffects(input: ToolEffectProjectorInput): readonly T
     typeof sessionId !== "string"
   )
     return [];
-  return [{ type: "PROCESS_STOPPED", sessionId }];
+  return [
+    {
+      type: "PROCESS_STOPPED",
+      sessionId,
+      ...(input.result.details.signal === "KILLED" ? { status: "KILLED" as const } : {}),
+    },
+  ];
 }
 
 function terminalFields(details: Record<string, unknown>): {

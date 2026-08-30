@@ -140,13 +140,19 @@ export class ToolDispatcher {
     );
     if (existing === null) return this.dispatch(value);
     this.assertSameCall(value, existing);
-    return this.recover(existing.invocation.id, value.environment, value.securityContext);
+    return this.recover(
+      existing.invocation.id,
+      value.environment,
+      value.securityContext,
+      value.signal,
+    );
   }
 
   async recover(
     invocationId: ToolInvocation["id"],
     environment: ToolExecutionEnvironment,
     securityContext: ToolSecurityContext,
+    signal?: AbortSignal,
   ): Promise<ToolDispatcherOutcome> {
     assertToolExecutionEnvironment(environment);
     assertToolSecurityContext(securityContext);
@@ -165,7 +171,7 @@ export class ToolDispatcher {
     this.assertCallIsNotActive(key, existing.invocation.runId);
     this.activeCalls.add(key);
     try {
-      return await this.recoverLocked(existing, environment, securityContext);
+      return await this.recoverLocked(existing, environment, securityContext, signal);
     } finally {
       this.activeCalls.delete(key);
     }
@@ -181,8 +187,9 @@ export class ToolDispatcher {
       this.assertSameCall(request, existing);
       if (existing.invocation.status === "RUNNING")
         throw new ToolDispatcherBusyError(request.runId);
-      return this.recoverLocked(existing, request.environment, request.securityContext);
+      return this.recoverLocked(existing, request.environment, request.securityContext, request.signal);
     }
+    throwIfAborted(request.signal);
     const resolvedTool = this.options.registry.resolve(request.toolName);
     if (resolvedTool === undefined) {
       return {
@@ -241,6 +248,7 @@ export class ToolDispatcher {
     snapshot: ToolExecutionSnapshot,
     environment: ToolExecutionEnvironment,
     securityContext: ToolSecurityContext,
+    signal?: AbortSignal,
   ): Promise<ToolDispatcherOutcome> {
     const resolvedTool = this.options.registry.resolve(snapshot.invocation.toolName);
     if (resolvedTool === undefined) {
@@ -258,13 +266,14 @@ export class ToolDispatcher {
           args: snapshot.invocation.args,
           environment,
           securityContext,
+          ...(signal === undefined ? {} : { signal }),
         },
         resolvedTool,
         snapshot,
       );
     }
     if (snapshot.invocation.status === "WAITING_APPROVAL") {
-      return this.recoverWaitingApproval(snapshot, environment, securityContext);
+      return this.recoverWaitingApproval(snapshot, environment, securityContext, signal);
     }
     if (snapshot.invocation.status === "RUNNING") return this.failInterrupted(snapshot);
     if (snapshot.invocation.status === "COMPLETED" || snapshot.invocation.status === "FAILED") {
@@ -281,6 +290,7 @@ export class ToolDispatcher {
     resolvedTool: ResolvedTool,
     snapshot: ToolExecutionSnapshot,
   ): Promise<ToolDispatcherOutcome> {
+    throwIfAborted(request.signal);
     const securityFacts = this.projectSecurityFacts(resolvedTool, snapshot.invocation.args);
     let decision: ToolExecutionGateDecision;
     try {
@@ -312,12 +322,14 @@ export class ToolDispatcher {
         args: snapshot.invocation.args,
         securityContext: request.securityContext,
       });
+      throwIfAborted(request.signal);
       const grant = await this.options.approvalStore.findApplicableRunGrant({
         runId: snapshot.invocation.runId,
         approvalKey,
       });
       if (grant !== null) return this.startAndExecute(request, resolvedTool, snapshot);
       const waiting = markToolInvocationWaitingApproval(snapshot.invocation);
+      throwIfAborted(request.signal);
       const approval = this.createApprovalRequest(request, resolvedTool, waiting, decision);
       const approvalEvent = createApprovalRequestedEvent({
         eventId: this.options.eventIdFactory.create(),
@@ -361,6 +373,7 @@ export class ToolDispatcher {
     resolvedTool: ResolvedTool,
     snapshot: ToolExecutionSnapshot,
   ): Promise<ToolDispatcherOutcome> {
+    throwIfAborted(request.signal);
     const running = startToolInvocation(snapshot.invocation, this.options.clock.now());
     const startedEvent = createToolStartedEvent({
       eventId: this.options.eventIdFactory.create(),
@@ -416,6 +429,7 @@ export class ToolDispatcher {
     snapshot: ToolExecutionSnapshot,
     environment: ToolExecutionEnvironment,
     securityContext: ToolSecurityContext,
+    signal?: AbortSignal,
   ): Promise<ToolDispatcherOutcome> {
     const approvalStore = this.options.approvalStore;
     if (approvalStore === undefined) {
@@ -440,6 +454,7 @@ export class ToolDispatcher {
       args: snapshot.invocation.args,
       environment,
       securityContext,
+      ...(signal === undefined ? {} : { signal }),
     };
     if (approval.status !== "APPROVED") {
       return this.persistFailure(
@@ -501,6 +516,7 @@ export class ToolDispatcher {
     let rawResult: unknown;
     try {
       rawResult = await resolvedTool.handler.execute({
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
         runId: snapshot.invocation.runId,
         stepId: snapshot.invocation.stepId,
         invocationId: snapshot.invocation.id,
@@ -852,6 +868,10 @@ export class ToolDispatcher {
       );
     }
   }
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new Error("Tool execution was cancelled.");
 }
 
 function callKey(

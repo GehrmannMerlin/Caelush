@@ -1,7 +1,7 @@
 import type { RunStatus } from "@caelush/protocol";
 
 const transitions: Record<RunStatus, readonly RunStatus[]> = {
-  PENDING: ["RUNNING"],
+  PENDING: ["RUNNING", "CANCELLED"],
   RUNNING: [
     "WAITING_APPROVAL",
     "VERIFYING",

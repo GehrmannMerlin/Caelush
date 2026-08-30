@@ -21,6 +21,7 @@ export interface AgentLoopModelSettings {
 }
 
 export interface AgentLoopCommonInput {
+  readonly signal: AbortSignal;
   readonly run: AgentRun;
   readonly state: AgentState;
   readonly history: readonly LLMMessage[];
@@ -59,7 +60,19 @@ export interface AgentLoopFailureResult {
   readonly providerTurnState: AgentProviderTurnState;
 }
 
-export type AgentLoopExecutionResult = AgentLoopOutcomeResult | AgentLoopFailureResult;
+export interface AgentLoopCancelledResult {
+  readonly status: "CANCELLED";
+  readonly state: AgentState;
+  readonly step?: AgentStep;
+  readonly messagesToAppend: readonly LLMMessage[];
+  readonly contextReport?: ContextBuildReport;
+  readonly providerTurnState: "NOT_STARTED" | "CANCELLED";
+}
+
+export type AgentLoopExecutionResult =
+  | AgentLoopOutcomeResult
+  | AgentLoopFailureResult
+  | AgentLoopCancelledResult;
 
 export type AgentLoopRequest = LLMRequest;
 export type AgentLoopTurn = LLMTurnResult;

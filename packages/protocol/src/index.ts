@@ -111,6 +111,11 @@ export { AgentSessionSchema } from "./session.js";
 export type { AgentSession } from "./session.js";
 export { AgentRunSchema, RunStatusSchema } from "./run.js";
 export type { AgentRun, RunStatus } from "./run.js";
+export {
+  RunCancellationCauseSchema,
+  RunCancellationIntentSchema,
+} from "./cancellation.js";
+export type { RunCancellationCause, RunCancellationIntent } from "./cancellation.js";
 export { AgentStepSchema, StepStatusSchema } from "./step.js";
 export type { AgentStep, StepStatus } from "./step.js";
 export { PlanItemSchema, PlanStatusSchema } from "./plan.js";

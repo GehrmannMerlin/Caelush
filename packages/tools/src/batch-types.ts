@@ -18,6 +18,7 @@ export interface ToolBatchItem {
 }
 
 export interface ToolBatchRequest {
+  readonly signal?: AbortSignal;
   readonly sessionId: SessionId;
   readonly runId: RunId;
   readonly stepId: StepId;

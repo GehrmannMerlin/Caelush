@@ -114,6 +114,7 @@ async function executeSearchText(request: ToolExecutionRequest, resolver: Runtim
     let result;
     try {
       result = await scope.textSearch.search({
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
         cwd: resolved.absolutePath,
         pattern: args.pattern as string,
         ...(include === undefined ? {} : { include }),
