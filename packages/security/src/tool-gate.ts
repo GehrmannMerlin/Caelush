@@ -51,14 +51,15 @@ export class CaelushToolExecutionGate implements ToolExecutionGatePort {
     ) {
       throw new SecurityPolicyInvariantError();
     }
-    const baseDecision = evaluateSecurityPolicy({
+  const baseDecision = evaluateSecurityPolicy({
       permissionProfile: input.securityContext.permissionProfile,
       approvalPolicy: input.securityContext.approvalPolicy,
       riskLevel: definition.riskLevel,
       requiredCapabilities: definition.requiredCapabilities,
-    });
-    if (input.securityFacts === undefined) return baseDecision;
-    const assessment = evaluateInputSecurityPolicy(input.securityFacts, {
+  });
+  if (input.securityFacts === undefined) return baseDecision;
+    const facts = normalizeSecurityFacts(input.securityFacts);
+    const assessment = evaluateInputSecurityPolicy(facts, {
       permissionProfile: input.securityContext.permissionProfile,
       approvalPolicy: input.securityContext.approvalPolicy,
     });
@@ -71,9 +72,38 @@ export class CaelushToolExecutionGate implements ToolExecutionGatePort {
             safeReason: assessment.safeReason,
           } as SecurityDecision);
     const effective = combineSecurityDecisions(baseDecision, inputDecision);
-    const safeAction = createSafeAction(input.securityFacts, assessment.commandClassifications);
+    const safeAction = createSafeAction(facts, assessment.commandClassifications);
     return safeAction === undefined ? effective : { ...effective, safeAction };
   }
+}
+
+function normalizeSecurityFacts(
+  facts: NonNullable<ToolExecutionGateInput["securityFacts"]>,
+): NonNullable<ToolExecutionGateInput["securityFacts"]> {
+  const validResourceAccesses = Array.isArray(facts.resourceAccesses) && facts.resourceAccesses.every(
+    (access) =>
+      access !== null &&
+      typeof access === "object" &&
+      ["READ", "WRITE", "DELETE", "MOVE", "SEARCH", "DIFF"].includes(access.operation) &&
+      typeof access.path === "string",
+  );
+  const validSecretInputs = Array.isArray(facts.secretScanInputs) && facts.secretScanInputs.every(
+    (scan) =>
+      scan !== null &&
+      typeof scan === "object" &&
+      ["COMMAND", "STDIN", "PATCH", "GENERIC"].includes(scan.kind) &&
+      typeof scan.text === "string",
+  );
+  const shell = facts.shellCommand;
+  const validShell =
+    shell === undefined ||
+    (shell !== null &&
+      typeof shell === "object" &&
+      typeof shell.command === "string" &&
+      typeof shell.workdir === "string" &&
+      typeof shell.tty === "boolean");
+  if (validResourceAccesses && validSecretInputs && validShell) return facts;
+  return { resourceAccesses: [], secretScanInputs: [], opaqueInput: true };
 }
 
 function createSafeAction(

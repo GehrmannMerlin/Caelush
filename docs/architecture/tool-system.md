@@ -90,7 +90,7 @@ The model-facing projection contains only:
 
 For a known and valid tool, the Dispatcher persists `REQUESTED` before evaluating the injected `ToolExecutionGate`. `DENY` atomically settles a `FAILED` invocation with `PERMISSION_DENIED`; Phase 9B extends `REQUIRE_APPROVAL` to atomically persist `WAITING_APPROVAL`, one PENDING ApprovalRequest and `approval.requested`, then returns without invoking a handler. The historical Phase 7B boundary had no approval entity; the current durable workflow is documented in [Durable Approval Workflow](approval-workflow.md).
 
-An `ALLOW` decision must first atomically commit `RUNNING` and the durable `tool.started` event. Only after that commit succeeds may the handler begin. This is the durable-before-side-effect boundary. The handler receives frozen invocation args. Its result is runtime-validated, cloned, and bounded before a single atomic settlement writes the terminal invocation, one ToolObservation, and `tool.completed` or sanitized `tool.failed`.
+An `ALLOW` decision must first atomically commit `RUNNING` and the durable `tool.started` event. Only after that commit succeeds may the handler begin. This is the durable-before-side-effect boundary. The handler receives frozen invocation args. Its result is runtime-validated, passed through the injected Security sanitizer, revalidated, cloned, and bounded before a single atomic settlement writes the terminal invocation, one sanitized ToolObservation, and `tool.completed` or sanitized `tool.failed`. Sanitizer failure leaves the invocation at `RUNNING` for uncertain recovery.
 
 `isError: true` is an expected, model-recoverable Tool failure and returns `RESULT`; it is not an infrastructure fatal error. An unexpected handler throw or output-contract violation is sanitized, durably represented as a generic failure when possible, and surfaced as `ToolDispatcherInfrastructureError`. The original exception is retained only as an internal cause.
 
@@ -133,7 +133,7 @@ The model catalog is read from the same immutable registry behind the Dispatcher
 
 ## Phase 9B Durable Approval Boundary
 
-The Phase 9A Gate remains pure. The Phase 9B Dispatcher computes an exact host-internal approval key and checks only same-Run, exact-key RUN grants after the current Gate returns `REQUIRE_APPROVAL`; DENY always wins. Storage persists approvals and resolution events, while RunController owns locked resolution and continuation recovery. A pending approval can pause one batch item, and a resolved approval resumes that item before any trailing calls. See [Durable Approval Workflow](approval-workflow.md) for transaction, TTL, scope, idempotency, and crash-recovery rules.
+The Phase 9A Gate remains storage-free. The Phase 9B/9C Dispatcher computes an exact host-internal approval key and checks only same-Run, exact-key RUN grants after the current monotonic Gate returns `REQUIRE_APPROVAL`; DENY always wins. Storage persists approvals and resolution events, while RunController owns locked resolution and continuation recovery. Approval actions are fact-driven safe previews and never contain raw arguments. A pending approval can pause one batch item, and a resolved approval resumes that item before any trailing calls. See [Durable Approval Workflow](approval-workflow.md) for transaction, TTL, scope, idempotency, and crash-recovery rules.
 
 ## Phase 8A built-in Runtime boundary
 

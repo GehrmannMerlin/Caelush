@@ -18,13 +18,13 @@ Storage ApprovalRepository ── approval_requests + events
 RunController ── Run/State/Continuation boundary + Coordinator recovery
 ```
 
-The only new durable entity is `approval_requests`. Its Protocol payload is JSON-safe and contains the safe title, reason, action descriptor, risk, scope, status, and timestamps. The SQLite `approval_key` is host-internal and is not part of the Protocol entity, model messages, or user-visible event payloads.
+The only new durable entity is `approval_requests`. Its Protocol payload is JSON-safe and contains the safe title, reason, fact-driven redacted action descriptor, risk, scope, status, and timestamps. The SQLite `approval_key` is host-internal and is not part of the Protocol entity, model messages, or user-visible event payloads.
 
 ## Exact identity and grant semantics
 
 The key is SHA-256 over canonical JSON containing `toolName`, canonical Tool arguments, `riskLevel`, sorted `requiredCapabilities`, `runtimeRequirements`, `permissionProfile`, and `approvalPolicy`. Presentation text, events, Provider/model identity, and raw secrets are excluded.
 
-For every call the Dispatcher evaluates the current Gate first. `DENY` is final even if an old grant exists. `ALLOW` executes immediately. Only `REQUIRE_APPROVAL` may query a grant, and only an APPROVED `RUN` grant for the same Run and exact key applies. An `ONCE` approval is bound to its original ToolInvocation and cannot authorize a later invocation. A grant never authorizes a different argument, Tool, policy, or Run.
+For every call the Dispatcher evaluates the current Gate first. Phase 9C input-aware policy is part of that current decision, so `DENY` is final even if an old grant exists. `ALLOW` executes immediately. Only `REQUIRE_APPROVAL` may query a grant, and only an APPROVED `RUN` grant for the same Run and exact key applies. An `ONCE` approval is bound to its original ToolInvocation and cannot authorize a later invocation. A grant never authorizes a different argument, Tool, policy, or Run. Redacted preview text never participates in the exact key.
 
 ## Creation and resolution
 
@@ -42,4 +42,4 @@ The Coordinator re-enters the exact waiting Tool item. APPROVED starts that invo
 
 ## Explicit non-goals
 
-This phase does not add command/file-content policy, sensitive-file policy, redaction, sandboxing, cancellation, timeout, retry, budgets, Verification execution, CLI/Web approval UI, or a daemon route without a complete production composition root.
+Phase 9B does not add sandboxing, cancellation, timeout, retry, budgets, Verification execution, CLI/Web approval UI, or a daemon route without a complete production composition root. Phase 9C adds only the documented input-aware policy and high-confidence secret-safe projections; it does not encrypt Tool arguments at rest and does not implement Phase 9D.

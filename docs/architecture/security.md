@@ -1,6 +1,6 @@
 # Security Policy Kernel & Tool Execution Gate
 
-本文档冻结 Caelush V1 Phase 9A/9B 的安全边界。Phase 9A 只回答一个问题：一个已经注册、参数合法的 Tool Call，在当前 Run 的安全上下文中应当 `ALLOW`、`DENY`，还是 `REQUIRE_APPROVAL`。Phase 9B 将最后一种结果接入 durable Approval workflow，但不把审批状态塞回纯策略内核。
+本文档冻结 Caelush V1 Phase 9A/9B/9C 的安全边界。Phase 9A 负责 metadata policy，Phase 9B 将 `REQUIRE_APPROVAL` 接入 durable Approval workflow，Phase 9C 在不读取 Approval 状态的前提下增加 input-aware sensitive-resource/command overlay 与 secret-safe projections。
 
 ## Responsibility boundary
 
@@ -88,16 +88,22 @@ Recovery 遵守既有 lifecycle 语义：terminal invocation 只重放已持久�
 
 ## Explicit non-goals
 
-Phase 9A 不实现：
+Phase 9A 本身不实现：
 
 - Approval persistence、resolution、approve/reject endpoint 或 approval cache；
-- 基于 command/file/input 内容的 policy；
-- secret detection、redaction、credential filtering 或 output scrubber；
+- Phase 9C 之外的基于 command/file/input 内容的 policy；
+- Phase 9C 之外的 secret detection、redaction、credential filtering 或 output scrubber；
 - OS-level sandbox、container、seccomp、job object 或 process isolation；
 - timeout、cancellation、retry、budget、parallel execution 或 Verification execution；
 - Tool handler、Runtime、Storage、EventBus 或 AgentLoop 的第二份实现。
 
-这些边界不是 capability evaluator 的隐含行为；后续阶段必须新增明确 contract 和独立测试。Phase 9B 也不实现 command/file content policy、secret redaction 或 hard sandbox。
+这些边界不是 capability evaluator 的隐含行为；Phase 9C 通过独立 facts、overlay、redactor 和 sanitizer contract 实现并测试。Phase 9D 仍未实现 hard sandbox 或其他后续宿主能力。
+
+## Phase 9C input-aware boundary
+
+Dispatcher 在输入 schema 校验后生成 host-only Security Facts，Security Gate 先计算 Phase 9A base decision，再用 `DENY > REQUIRE_APPROVAL > ALLOW` 的纯 monotonic combiner 应用 sensitive-path/command/opaque/secret-bearing input overlay。当前 Gate 仍先于 Phase 9B exact RUN grant lookup。
+
+Approval action 只使用已 redacted 的 fact-driven safe preview；ToolInvocation 的 raw `args` 仍是 private durable execution identity，不进入 lifecycle events、observations 或 model-facing projections。Tool result 必须 validate → sanitize → revalidate 后才可参与 effects、observation 和 storage。Phase 9C 不加 at-rest encryption，不能声称 secrets never exist in SQLite。
 
 ## Public API and dependency direction
 

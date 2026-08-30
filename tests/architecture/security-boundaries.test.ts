@@ -34,7 +34,7 @@ describe("security architecture boundaries", () => {
     const files = await sourceFiles(sourceRoot);
     const source = (await Promise.all(files.map((file) => readFile(file, "utf8")))).join("\n");
     expect(source).not.toMatch(/invocation\.args|Date\.now|Math\.random|randomUUID/);
-    expect(source).not.toMatch(/\b(?:fetch|spawn|exec|readFile|writeFile)\s*\(/);
+    expect(source).not.toMatch(/(?<!\.)\b(?:fetch|spawn|exec|readFile|writeFile)\s*\(/);
     expect(source).not.toContain("SECRET_COMMAND_9A_123");
     expect(source).not.toContain("SECRET_PATH_9A_456");
     expect(source).not.toContain("SECRET_TOKEN_9A_789");

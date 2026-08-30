@@ -1,4 +1,4 @@
-import type { JsonObject, JsonValue } from "@caelush/protocol";
+import type { JsonObject, JsonValue, ToolName } from "@caelush/protocol";
 
 export const MAX_SECRET_SCAN_TEXT_BYTES = 64 * 1024;
 export const MAX_SECRET_JSON_DEPTH = 8;
@@ -56,8 +56,14 @@ export function redactJson(value: JsonValue | unknown): JsonValue {
   return redactJsonValue(value, 0, state);
 }
 
-export function redactToolArgumentsForPresentation(args: JsonObject): JsonObject {
-  return redactJson(args) as JsonObject;
+export function redactToolArgumentsForPresentation(args: JsonObject): JsonObject;
+export function redactToolArgumentsForPresentation(toolName: ToolName, args: JsonObject): JsonObject;
+export function redactToolArgumentsForPresentation(
+  first: ToolName | JsonObject,
+  second?: JsonObject,
+): JsonObject {
+  void (typeof first === "string" ? first : undefined);
+  return redactJson((second ?? first) as JsonObject) as JsonObject;
 }
 
 export interface SecretDetector {
