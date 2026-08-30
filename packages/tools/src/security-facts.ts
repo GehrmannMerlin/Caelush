@@ -1,4 +1,4 @@
-import type { JsonObject, ToolName } from "@caelush/protocol";
+import type { JsonObject } from "@caelush/protocol";
 
 export type ToolResourceOperation = "READ" | "WRITE" | "DELETE" | "MOVE" | "SEARCH" | "DIFF";
 
@@ -23,6 +23,7 @@ export interface ToolSecurityFacts {
   readonly shellCommand?: ToolShellCommandFact;
   readonly secretScanInputs: readonly ToolSecretScanInput[];
   readonly structuralPreview?: JsonObject;
+  readonly opaqueInput?: boolean;
 }
 
 export type ToolSecurityFactsProjector = (args: Readonly<JsonObject>) => ToolSecurityFacts;
@@ -43,5 +44,3 @@ export function assertToolSecurityFactsProjector(
 ): asserts value is ToolSecurityFactsProjector {
   if (typeof value !== "function") throw new TypeError("Tool security facts projector is invalid.");
 }
-
-export type ToolSecurityFactToolName = ToolName;

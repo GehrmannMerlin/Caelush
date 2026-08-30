@@ -20,7 +20,11 @@ function resource(operation: ToolResourceAccess["operation"], path: string): Too
 
 export function projectReadFileSecurityFacts(args: Readonly<JsonObject>): ToolSecurityFacts {
   const path = pathOf(args.path, "path");
-  return { resourceAccesses: [resource("READ", path)], secretScanInputs: [] };
+  return {
+    resourceAccesses: [resource("READ", path)],
+    secretScanInputs: [],
+    structuralPreview: { kind: "FILE_READ", path },
+  };
 }
 
 export function projectListDirectorySecurityFacts(args: Readonly<JsonObject>): ToolSecurityFacts {

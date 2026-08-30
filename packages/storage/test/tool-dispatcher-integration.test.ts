@@ -62,6 +62,7 @@ function createDispatcher(
     invocationIdFactory: { create: createToolInvocationId },
     observationIdFactory: { create: createObservationId },
     eventIdFactory: { create: createEventId },
+    resultSanitizer: { sanitize: ({ result }) => result },
   });
 }
 

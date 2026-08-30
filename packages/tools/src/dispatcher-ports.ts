@@ -5,17 +5,29 @@ import type {
   ToolInvocation,
   ToolInvocationId,
   ToolName,
+  JsonObject,
 } from "@caelush/protocol";
 import type { DurableToolAgentEvent, ToolDefinitionMetadata } from "./dispatcher-types.js";
 import type { ToolSecurityContext } from "./security-context.js";
 
 export type ToolExecutionGateDecision =
-  | { readonly kind: "ALLOW"; readonly reasonCode?: string; readonly safeReason?: string }
-  | { readonly kind: "DENY"; readonly reasonCode?: string; readonly safeReason?: string }
+  | {
+      readonly kind: "ALLOW";
+      readonly reasonCode?: string;
+      readonly safeReason?: string;
+      readonly safeAction?: JsonObject;
+    }
+  | {
+      readonly kind: "DENY";
+      readonly reasonCode?: string;
+      readonly safeReason?: string;
+      readonly safeAction?: JsonObject;
+    }
   | {
       readonly kind: "REQUIRE_APPROVAL";
       readonly reasonCode?: string;
       readonly safeReason?: string;
+      readonly safeAction?: JsonObject;
     };
 
 export interface ToolExecutionGateInput {
@@ -23,6 +35,7 @@ export interface ToolExecutionGateInput {
   readonly toolName: ToolName;
   readonly definition: ToolDefinitionMetadata | ToolDefinition;
   readonly securityContext: ToolSecurityContext;
+  readonly securityFacts?: import("./security-facts.js").ToolSecurityFacts;
 }
 
 export interface ToolExecutionGatePort {

@@ -129,6 +129,7 @@ function createDispatcher(store: MemoryStore, onExecute: () => void): ToolDispat
     invocationIdFactory: { create: createToolInvocationId },
     observationIdFactory: { create: createObservationId },
     eventIdFactory: { create: createEventId },
+    resultSanitizer: { sanitize: ({ result }) => result },
   });
 }
 
@@ -160,6 +161,7 @@ function createBatchDispatcher(store: MemoryStore, executions: string[]): ToolBa
     invocationIdFactory: { create: createToolInvocationId },
     observationIdFactory: { create: createObservationId },
     eventIdFactory: { create: createEventId },
+    resultSanitizer: { sanitize: ({ result }) => result },
   });
   return new ToolBatchCoordinator(dispatcher);
 }

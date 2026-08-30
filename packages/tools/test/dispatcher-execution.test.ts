@@ -21,6 +21,9 @@ import {
   type ToolExecutionSnapshot,
   type ToolExecutionRequest,
   type ToolExecutionResult,
+  type ToolSecurityFactsProjector,
+  type ToolSecurityFacts,
+  type ToolResultSanitizerPort,
 } from "../src/index.js";
 import type { ToolExecutionCommit, ToolDispatchRequest } from "../src/index.js";
 
@@ -111,26 +114,97 @@ function makeDispatcher(
     details: { echoed: "hello" },
     isError: false,
   }),
+  securityFactsProjector?: ToolSecurityFactsProjector,
+  factsSeen?: { value?: ToolSecurityFacts },
+  resultSanitizer?: ToolResultSanitizerPort,
 ) {
   let now = 100;
   const definition = makeDefinition();
   const builder = new ToolRegistryBuilder();
-  builder.register({ definition, handler: { execute } });
+  builder.register({ definition, handler: { execute }, securityFactsProjector });
   const registry = builder.build();
   const notifier: ToolCommittedEventNotifier = { notifyCommitted() {} };
   return new ToolDispatcher({
     registry,
     store,
-    gate: { decide: async () => decision },
+    gate: {
+      decide: async (input) => {
+        if (factsSeen !== undefined) factsSeen.value = input.securityFacts;
+        return decision;
+      },
+    },
     notifier,
     clock: { now: () => createTimestampMs(++now) },
     invocationIdFactory: { create: createToolInvocationId },
     observationIdFactory: { create: createObservationId },
     eventIdFactory: { create: createEventId },
+    resultSanitizer: resultSanitizer ?? { sanitize: ({ result }) => result },
   });
 }
 
 describe("ToolDispatcher execution", () => {
+  it("sanitizes a validated result before effects and durable observation", async () => {
+    const dispatcher = makeDispatcher(
+      new MemoryStore(),
+      { kind: "ALLOW" },
+      async () => ({ content: "raw-secret", details: { echoed: "raw-secret" }, isError: false }),
+      undefined,
+      undefined,
+      {
+        sanitize: ({ result }) => ({ ...result, content: "[REDACTED]", details: { echoed: "[REDACTED]" } }),
+      },
+    );
+
+    const outcome = await dispatcher.dispatch(makeRequest());
+
+    expect(outcome.kind).toBe("RESULT");
+    if (outcome.kind === "RESULT") {
+      expect(outcome.observation.content).toBe("[REDACTED]");
+      expect(outcome.observation.details).toEqual({ echoed: "[REDACTED]" });
+    }
+  });
+
+  it("leaves an executed invocation RUNNING when sanitization fails", async () => {
+    const store = new MemoryStore();
+    const dispatcher = makeDispatcher(
+      store,
+      { kind: "ALLOW" },
+      undefined,
+      undefined,
+      undefined,
+      { sanitize: () => { throw new Error("sanitizer failure"); } },
+    );
+
+    await expect(dispatcher.dispatch(makeRequest())).rejects.toBeInstanceOf(
+      ToolDispatcherInfrastructureError,
+    );
+    const snapshot = [...store.snapshots.values()].at(-1);
+    expect(snapshot?.invocation.status).toBe("RUNNING");
+    expect(snapshot?.observation).toBeUndefined();
+  });
+
+  it("projects host-only security facts after input validation and before the gate", async () => {
+    const store = new MemoryStore();
+    const factsSeen: { value?: ToolSecurityFacts } = {};
+    const dispatcher = makeDispatcher(
+      store,
+      { kind: "ALLOW" },
+      undefined,
+      () => ({
+        resourceAccesses: [{ operation: "READ", path: "src/app.ts" }],
+        secretScanInputs: [],
+      }),
+      factsSeen,
+    );
+
+    await dispatcher.dispatch(makeRequest());
+
+    expect(factsSeen.value).toEqual({
+      resourceAccesses: [{ operation: "READ", path: "src/app.ts" }],
+      secretScanInputs: [],
+    });
+  });
+
   it("durably checkpoints RUNNING before invoking the handler and settles success", async () => {
     const store = new MemoryStore();
     let handlerCount = 0;

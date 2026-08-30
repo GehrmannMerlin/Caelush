@@ -121,6 +121,7 @@ function makeDispatcher(
     invocationIdFactory: { create: createToolInvocationId },
     observationIdFactory: { create: createObservationId },
     eventIdFactory: { create: createEventId },
+    resultSanitizer: { sanitize: ({ result }) => result },
   });
 }
 
@@ -224,6 +225,7 @@ describe("ToolDispatcher recovery", () => {
       invocationIdFactory: { create: createToolInvocationId },
       observationIdFactory: { create: createObservationId },
       eventIdFactory: { create: createEventId },
+      resultSanitizer: { sanitize: ({ result }) => result },
     });
 
     await expect(

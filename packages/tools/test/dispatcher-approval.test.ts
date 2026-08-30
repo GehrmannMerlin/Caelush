@@ -119,13 +119,18 @@ function makeDispatcher(
     registry: builder.build(),
     store,
     gate: {
-      decide: async () => ({ kind: "REQUIRE_APPROVAL" as const, safeReason: "Review required." }),
+      decide: async () => ({
+        kind: "REQUIRE_APPROVAL" as const,
+        safeReason: "Review required.",
+        safeAction: { kind: "SHELL_COMMAND", command: "git status" },
+      }),
     },
     notifier: { notifyCommitted() {} },
     clock: { now: () => createTimestampMs(Date.now()) },
     invocationIdFactory: { create: createToolInvocationId },
     observationIdFactory: { create: createObservationId },
     eventIdFactory: { create: createEventId },
+    resultSanitizer: { sanitize: ({ result }) => result },
     approvalStore: approvals,
     approvalIdFactory: { create: createApprovalRequestId },
   });
@@ -145,6 +150,7 @@ describe("Dispatcher durable approvals", () => {
     expect(executions).toBe(0);
     expect(store.events.map(({ type }) => type)).toEqual(["tool.requested", "approval.requested"]);
     const snapshot = [...store.snapshots.values()][0]!;
+    expect(snapshot.approval?.action).toEqual({ kind: "SHELL_COMMAND", command: "git status" });
     approvals.approval = ApprovalRequestSchema.parse({
       ...snapshot.approval!,
       status: "APPROVED",

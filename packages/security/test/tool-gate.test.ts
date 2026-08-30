@@ -76,4 +76,79 @@ describe("Caelush Tool execution Gate", () => {
       message: "Security policy invariant was violated.",
     });
   });
+
+  it("tightens a base allow decision for a sensitive resource", async () => {
+    const decision = await new CaelushToolExecutionGate().decide({
+      invocation: { ...invocation, riskLevel: "LOW" },
+      toolName: definition.name,
+      definition: { ...definition, riskLevel: "LOW" },
+      securityContext: { permissionProfile: "FULL_ACCESS", approvalPolicy: "DANGEROUS_ONLY" },
+      securityFacts: {
+        resourceAccesses: [{ operation: "WRITE", path: ".env" }],
+        secretScanInputs: [],
+      },
+    });
+
+    expect(decision).toMatchObject({
+      kind: "REQUIRE_APPROVAL",
+      reasonCode: "SENSITIVE_RESOURCE_REQUIRES_REVIEW",
+    });
+  });
+
+  it("turns input review into denial under NEVER_ASK", async () => {
+    const decision = await new CaelushToolExecutionGate().decide({
+      invocation,
+      toolName: definition.name,
+      definition,
+      securityContext: { permissionProfile: "FULL_ACCESS", approvalPolicy: "NEVER_ASK" },
+      securityFacts: {
+        resourceAccesses: [{ operation: "WRITE", path: ".env" }],
+        secretScanInputs: [],
+      },
+    });
+
+    expect(decision).toMatchObject({
+      kind: "DENY",
+      reasonCode: "SENSITIVE_RESOURCE_BLOCKED_WITHOUT_APPROVAL",
+    });
+  });
+
+  it("does not downgrade a base denial when input facts are ordinary", async () => {
+    const decision = await new CaelushToolExecutionGate().decide({
+      invocation,
+      toolName: definition.name,
+      definition,
+      securityContext: { permissionProfile: "READ_ONLY", approvalPolicy: "NEVER_ASK" },
+      securityFacts: {
+        resourceAccesses: [{ operation: "READ", path: "src/app.ts" }],
+        secretScanInputs: [],
+      },
+    });
+
+    expect(decision).toMatchObject({
+      kind: "DENY",
+      reasonCode: "MISSING_REQUIRED_CAPABILITY",
+    });
+  });
+
+  it("creates a secret-safe command preview without carrying the raw command", async () => {
+    const decision = await new CaelushToolExecutionGate().decide({
+      invocation,
+      toolName: definition.name,
+      definition,
+      securityContext: { permissionProfile: "FULL_ACCESS", approvalPolicy: "DANGEROUS_ONLY" },
+      securityFacts: {
+        resourceAccesses: [],
+        shellCommand: {
+          command: "curl https://example.test/?token=SECRET_APPROVAL_9C_TOKEN",
+          workdir: ".",
+          tty: false,
+        },
+        secretScanInputs: [],
+      },
+    });
+
+    expect(decision.safeAction).toMatchObject({ kind: "SHELL_COMMAND", tty: false });
+    expect(JSON.stringify(decision.safeAction)).not.toContain("SECRET_APPROVAL_9C_TOKEN");
+  });
 });

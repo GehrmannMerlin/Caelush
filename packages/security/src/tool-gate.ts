@@ -4,6 +4,7 @@ import {
   RiskLevelSchema,
   ToolNameSchema,
   ToolInvocationSchema,
+  type JsonObject,
   type ToolDefinition,
 } from "@caelush/protocol";
 import {
@@ -15,6 +16,10 @@ import {
 } from "@caelush/tools";
 import { SecurityPolicyInvariantError } from "./errors.js";
 import { evaluateSecurityPolicy } from "./evaluator.js";
+import { combineSecurityDecisions, type SecurityDecision } from "./decision.js";
+import { evaluateInputSecurityPolicy } from "./input-policy.js";
+import { redactJson, redactText } from "./secret-redaction.js";
+import { isValidWorkspaceFactPath, normalizeWorkspaceFactPath } from "./sensitive-path.js";
 
 export class CaelushToolExecutionGate implements ToolExecutionGatePort {
   async decide(input: ToolExecutionGateInput): Promise<ToolExecutionGateDecision> {
@@ -46,13 +51,78 @@ export class CaelushToolExecutionGate implements ToolExecutionGatePort {
     ) {
       throw new SecurityPolicyInvariantError();
     }
-    return evaluateSecurityPolicy({
+    const baseDecision = evaluateSecurityPolicy({
       permissionProfile: input.securityContext.permissionProfile,
       approvalPolicy: input.securityContext.approvalPolicy,
       riskLevel: definition.riskLevel,
       requiredCapabilities: definition.requiredCapabilities,
     });
+    if (input.securityFacts === undefined) return baseDecision;
+    const assessment = evaluateInputSecurityPolicy(input.securityFacts, {
+      permissionProfile: input.securityContext.permissionProfile,
+      approvalPolicy: input.securityContext.approvalPolicy,
+    });
+    const inputDecision =
+      assessment.kind === "NO_ADDITIONAL_RESTRICTION"
+        ? undefined
+        : ({
+            kind: assessment.kind,
+            reasonCode: assessment.reasonCode,
+            safeReason: assessment.safeReason,
+          } as SecurityDecision);
+    const effective = combineSecurityDecisions(baseDecision, inputDecision);
+    const safeAction = createSafeAction(input.securityFacts, assessment.commandClassifications);
+    return safeAction === undefined ? effective : { ...effective, safeAction };
   }
+}
+
+function createSafeAction(
+  facts: ToolExecutionGateInput["securityFacts"],
+  commandClassifications: readonly string[] | undefined,
+): JsonObject | undefined {
+  if (facts === undefined) return undefined;
+  if (facts.shellCommand !== undefined) {
+    const workdir = isValidWorkspaceFactPath(facts.shellCommand.workdir)
+      ? normalizeWorkspaceFactPath(facts.shellCommand.workdir)!
+      : ".";
+    return {
+      kind: "SHELL_COMMAND",
+      command: redactText(facts.shellCommand.command),
+      workdir,
+      tty: facts.shellCommand.tty,
+      classifications: [...(commandClassifications ?? [])],
+    };
+  }
+  if (facts.structuralPreview !== undefined) {
+    return sanitizeStructuralPreview(redactJson(facts.structuralPreview) as JsonObject);
+  }
+  return {
+    kind: "TOOL_INPUT",
+    resourceAccessCount: facts.resourceAccesses.length,
+    secretScanInputCount: facts.secretScanInputs.length,
+  };
+}
+
+function sanitizeStructuralPreview(value: JsonObject): JsonObject {
+  const output: JsonObject = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (typeof child === "string" && ["path", "fromPath", "toPath", "workdir"].includes(key)) {
+      output[key] = isValidWorkspaceFactPath(child)
+        ? (normalizeWorkspaceFactPath(child) ?? "[opaque path]")
+        : "[opaque path]";
+    } else if (Array.isArray(child)) {
+      output[key] = child.map((item) =>
+        item !== null && typeof item === "object" && !Array.isArray(item)
+          ? sanitizeStructuralPreview(item as JsonObject)
+          : item,
+      );
+    } else if (child !== null && typeof child === "object" && !Array.isArray(child)) {
+      output[key] = sanitizeStructuralPreview(child as JsonObject);
+    } else {
+      output[key] = child;
+    }
+  }
+  return output;
 }
 
 function isToolDefinitionMetadata(

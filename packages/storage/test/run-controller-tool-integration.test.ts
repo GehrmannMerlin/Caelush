@@ -140,6 +140,7 @@ function createRuntime(
     invocationIdFactory: { create: createToolInvocationId },
     observationIdFactory: { create: createObservationId },
     eventIdFactory: { create: createEventId },
+    resultSanitizer: { sanitize: ({ result }) => result },
     approvalStore: storage.approvals,
     approvalIdFactory: { create: createApprovalRequestId },
   });
@@ -172,6 +173,7 @@ function createFilesystemRuntime(
     invocationIdFactory: { create: createToolInvocationId },
     observationIdFactory: { create: createObservationId },
     eventIdFactory: { create: createEventId },
+    resultSanitizer: { sanitize: ({ result }) => result },
     approvalStore: storage.approvals,
     approvalIdFactory: { create: createApprovalRequestId },
   });

@@ -65,6 +65,12 @@ import {
 import { assertToolSecurityContext, type ToolSecurityContext } from "./security-context.js";
 import { ToolExecutionUncertainError } from "./errors.js";
 import { toolEffectsToEvents, type ToolEffect } from "./tool-effects.js";
+import {
+  ToolSecurityFactsProjectionError,
+  type ToolSecurityFacts,
+} from "./security-facts.js";
+import type { ToolExecutionResult } from "./execution-result.js";
+import type { ToolResultSanitizerPort } from "./result-sanitizer.js";
 
 export interface ToolDispatcherOptions {
   readonly registry: ToolRegistry;
@@ -75,6 +81,7 @@ export interface ToolDispatcherOptions {
   readonly invocationIdFactory: ToolInvocationIdFactory;
   readonly observationIdFactory: ToolObservationIdFactory;
   readonly eventIdFactory: ToolEventIdFactory;
+  readonly resultSanitizer: ToolResultSanitizerPort;
   readonly approvalStore?: ToolApprovalStorePort;
   readonly approvalIdFactory?: ToolApprovalRequestIdFactory;
   readonly outputPolicy?: ToolOutputPolicy;
@@ -277,6 +284,7 @@ export class ToolDispatcher {
     resolvedTool: ResolvedTool,
     snapshot: ToolExecutionSnapshot,
   ): Promise<ToolDispatcherOutcome> {
+    const securityFacts = this.projectSecurityFacts(resolvedTool, snapshot.invocation.args);
     let decision: ToolExecutionGateDecision;
     try {
       decision = await this.options.gate.decide({
@@ -284,6 +292,7 @@ export class ToolDispatcher {
         toolName: resolvedTool.definition.name,
         definition: resolvedTool.definition,
         securityContext: request.securityContext,
+        ...(securityFacts === undefined ? {} : { securityFacts }),
       });
     } catch (error) {
       throw new ToolDispatcherInfrastructureError("Tool execution policy evaluation failed.", {
@@ -382,7 +391,7 @@ export class ToolDispatcher {
       riskLevel: invocation.riskLevel,
       title: "Approve Tool execution",
       reason: decision.safeReason ?? "The active policy requires review before this Tool runs.",
-      action: {
+      action: decision.safeAction ?? {
         kind: "TOOL_EXECUTION",
         toolName: resolvedTool.definition.name,
         riskLevel: resolvedTool.definition.riskLevel,
@@ -439,11 +448,13 @@ export class ToolDispatcher {
     if (resolvedTool === undefined) {
       throw new ToolDispatcherInvariantError("The registered Tool is unavailable during recovery.");
     }
+    const securityFacts = this.projectSecurityFacts(resolvedTool, snapshot.invocation.args);
     const decision = await this.options.gate.decide({
       invocation: snapshot.invocation,
       toolName: resolvedTool.definition.name,
       definition: resolvedTool.definition,
       securityContext,
+      ...(securityFacts === undefined ? {} : { securityFacts }),
     });
     if (decision.kind === "DENY") {
       return this.persistFailure(
@@ -531,6 +542,19 @@ export class ToolDispatcher {
         cause: error,
       });
     }
+    let sanitizedResult: ToolExecutionResult;
+    try {
+      sanitizedResult = this.options.resultSanitizer.sanitize({
+        toolName: resolvedTool.definition.name,
+        result,
+        invocation: snapshot.invocation,
+      });
+      result = validateToolExecutionResult(sanitizedResult, resolvedTool, this.outputPolicy);
+    } catch (error) {
+      throw new ToolDispatcherInfrastructureError("Tool result sanitization failed.", {
+        cause: error,
+      });
+    }
     const finishedAt = this.options.clock.now();
     let effects: readonly ToolEffect[];
     try {
@@ -612,6 +636,21 @@ export class ToolDispatcher {
       invocation: committed.snapshot.invocation,
       observation: committed.snapshot.observation,
     };
+  }
+
+  private projectSecurityFacts(
+    resolvedTool: ResolvedTool,
+    args: JsonObject,
+  ): ToolSecurityFacts | undefined {
+    if (resolvedTool.securityFactsProjector === undefined) return undefined;
+    try {
+      return resolvedTool.securityFactsProjector(args);
+    } catch (error) {
+      if (error instanceof ToolSecurityFactsProjectionError) {
+        return { resourceAccesses: [], secretScanInputs: [], opaqueInput: true };
+      }
+      return { resourceAccesses: [], secretScanInputs: [], opaqueInput: true };
+    }
   }
 
   private async persistArgumentFailure(

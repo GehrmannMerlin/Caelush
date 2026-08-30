@@ -3,6 +3,7 @@ export type { ToolExecutionEnvironment } from "./execution-environment.js";
 export { assertToolSecurityContext } from "./security-context.js";
 export type { ToolSecurityContext } from "./security-context.js";
 export type { ToolExecutionResult } from "./execution-result.js";
+export type { ToolResultSanitizerPort } from "./result-sanitizer.js";
 export { assertToolExecutionEnvironment } from "./execution-environment.js";
 export {
   assertToolDispatchRequest,

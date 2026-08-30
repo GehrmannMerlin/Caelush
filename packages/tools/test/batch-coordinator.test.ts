@@ -123,6 +123,7 @@ function makeCoordinator(options: {
     invocationIdFactory: { create: createToolInvocationId },
     observationIdFactory: { create: createObservationId },
     eventIdFactory: { create: createEventId },
+    resultSanitizer: { sanitize: ({ result }) => result },
   });
   return { coordinator: new ToolBatchCoordinator(dispatcher), dispatcher, store };
 }

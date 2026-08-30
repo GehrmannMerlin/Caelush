@@ -63,6 +63,7 @@ describe("read-only filesystem tools through ToolDispatcher", () => {
       invocationIdFactory: { create: createToolInvocationId },
       observationIdFactory: { create: createObservationId },
       eventIdFactory: { create: createEventId },
+      resultSanitizer: { sanitize: ({ result }) => result },
     });
 
     const environment = { workspace: run.workspace, runtime: run.runtime };
