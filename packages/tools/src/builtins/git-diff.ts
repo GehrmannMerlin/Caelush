@@ -3,6 +3,7 @@ import { type GitDiffScope, type RuntimeResolver } from "@caelush/runtime";
 import type { ToolExecutionRequest, ToolHandler } from "../handler.js";
 import type { ToolRegistration } from "../registration.js";
 import { errorResult, successResult, withRuntimeScope } from "./result.js";
+import { projectGitDiffSecurityFacts } from "./security-facts.js";
 
 const definition: ToolDefinition = {
   name: "git_diff",
@@ -39,7 +40,7 @@ export function createGitDiffRegistration(runtimeResolver: RuntimeResolver): Too
   const handler: ToolHandler = {
     execute: async (request) => executeGitDiff(request, runtimeResolver),
   };
-  return { definition, handler };
+  return { definition, handler, securityFactsProjector: projectGitDiffSecurityFacts };
 }
 
 async function executeGitDiff(request: ToolExecutionRequest, resolver: RuntimeResolver) {

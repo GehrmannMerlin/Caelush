@@ -16,6 +16,7 @@ import {
   successResult,
   withRuntimeScope,
 } from "./result.js";
+import { projectFindFilesSecurityFacts } from "./security-facts.js";
 
 const definition: ToolDefinition = {
   name: "find_files",
@@ -40,7 +41,7 @@ export function createFindFilesRegistration(runtimeResolver: RuntimeResolver): T
   const handler: ToolHandler = {
     execute: async (request) => executeFindFiles(request, runtimeResolver),
   };
-  return { definition, handler };
+  return { definition, handler, securityFactsProjector: projectFindFilesSecurityFacts };
 }
 
 function validatePattern(value: unknown): string {

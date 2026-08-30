@@ -3,6 +3,7 @@ import { RuntimeInvalidRangeError, type RuntimeResolver } from "@caelush/runtime
 import type { ToolHandler, ToolExecutionRequest } from "../handler.js";
 import type { ToolRegistration } from "../registration.js";
 import { projectReadFileEffect } from "../tool-effects.js";
+import { projectReadFileSecurityFacts } from "./security-facts.js";
 import {
   READ_FILE_DEFAULT_LIMIT,
   READ_FILE_MAX_LIMIT,
@@ -36,7 +37,12 @@ export function createReadFileRegistration(runtimeResolver: RuntimeResolver): To
   const handler: ToolHandler = {
     execute: async (request) => executeReadFile(request, runtimeResolver),
   };
-  return { definition, handler, effectProjector: projectReadFileEffect };
+  return {
+    definition,
+    handler,
+    effectProjector: projectReadFileEffect,
+    securityFactsProjector: projectReadFileSecurityFacts,
+  };
 }
 
 async function executeReadFile(request: ToolExecutionRequest, resolver: RuntimeResolver) {

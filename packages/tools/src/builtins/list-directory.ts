@@ -11,6 +11,7 @@ import {
   successResult,
   withRuntimeScope,
 } from "./result.js";
+import { projectListDirectorySecurityFacts } from "./security-facts.js";
 
 const definition: ToolDefinition = {
   name: "list_directory",
@@ -37,7 +38,7 @@ export function createListDirectoryRegistration(
   const handler: ToolHandler = {
     execute: async (request) => executeListDirectory(request, runtimeResolver),
   };
-  return { definition, handler };
+  return { definition, handler, securityFactsProjector: projectListDirectorySecurityFacts };
 }
 
 async function executeListDirectory(request: ToolExecutionRequest, resolver: RuntimeResolver) {

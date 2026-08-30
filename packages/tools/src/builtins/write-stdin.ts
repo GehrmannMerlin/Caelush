@@ -12,6 +12,7 @@ import type { ToolRegistration } from "../registration.js";
 import { projectStdinEffects } from "../tool-effects.js";
 import { boundToolModelContent, DEFAULT_TOOL_OUTPUT_POLICY } from "../output-policy.js";
 import { EXEC_OUTPUT_SCHEMA, errorResult, successResult, withRuntimeScope } from "./result.js";
+import { projectWriteStdinSecurityFacts } from "./security-facts.js";
 
 const definition: ToolDefinition = {
   name: "write_stdin",
@@ -40,7 +41,12 @@ export function createWriteStdinRegistration(runtimeResolver: RuntimeResolver): 
   const handler: ToolHandler = {
     execute: async (request) => executeWriteStdin(request, runtimeResolver),
   };
-  return { definition, handler, effectProjector: projectStdinEffects };
+  return {
+    definition,
+    handler,
+    effectProjector: projectStdinEffects,
+    securityFactsProjector: projectWriteStdinSecurityFacts,
+  };
 }
 
 async function executeWriteStdin(request: ToolExecutionRequest, resolver: RuntimeResolver) {

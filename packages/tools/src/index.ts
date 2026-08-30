@@ -123,6 +123,17 @@ export { createGitStatusRegistration, gitStatusDefinition } from "./builtins/git
 export { createGitDiffRegistration, gitDiffDefinition } from "./builtins/git-diff.js";
 export { createGitToolRegistrations } from "./builtins/git-tools.js";
 export {
+  projectApplyPatchSecurityFacts,
+  projectExecCommandSecurityFacts,
+  projectFindFilesSecurityFacts,
+  projectGitDiffSecurityFacts,
+  projectGitStatusSecurityFacts,
+  projectListDirectorySecurityFacts,
+  projectReadFileSecurityFacts,
+  projectSearchTextSecurityFacts,
+  projectWriteStdinSecurityFacts,
+} from "./builtins/security-facts.js";
+export {
   createDefaultBuiltinToolRegistrations,
   DEFAULT_BUILTIN_TOOL_ORDER,
 } from "./builtins/default-tools.js";

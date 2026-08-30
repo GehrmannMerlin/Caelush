@@ -13,6 +13,7 @@ import type { ToolRegistration } from "../registration.js";
 import { projectExecEffects } from "../tool-effects.js";
 import { boundToolModelContent, DEFAULT_TOOL_OUTPUT_POLICY } from "../output-policy.js";
 import { EXEC_OUTPUT_SCHEMA, errorResult, successResult, withRuntimeScope } from "./result.js";
+import { projectExecCommandSecurityFacts } from "./security-facts.js";
 
 const definition: ToolDefinition = {
   name: "exec_command",
@@ -43,7 +44,12 @@ export function createExecCommandRegistration(runtimeResolver: RuntimeResolver):
   const handler: ToolHandler = {
     execute: async (request) => executeExecCommand(request, runtimeResolver),
   };
-  return { definition, handler, effectProjector: projectExecEffects };
+  return {
+    definition,
+    handler,
+    effectProjector: projectExecEffects,
+    securityFactsProjector: projectExecCommandSecurityFacts,
+  };
 }
 
 async function executeExecCommand(request: ToolExecutionRequest, resolver: RuntimeResolver) {
