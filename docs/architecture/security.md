@@ -1,6 +1,6 @@
 # Security Policy Kernel & Tool Execution Gate
 
-本文档冻结 Caelush V1 Phase 9A/9B/9C 的安全边界。Phase 9A 负责 metadata policy，Phase 9B 将 `REQUIRE_APPROVAL` 接入 durable Approval workflow，Phase 9C 在不读取 Approval 状态的前提下增加 input-aware sensitive-resource/command overlay 与 secret-safe projections。
+本文档冻结 Caelush V1 Phase 9A/9B/9C/9D 的安全边界。Phase 9A 负责 metadata policy，Phase 9B 将 `REQUIRE_APPROVAL` 接入 durable Approval workflow，Phase 9C 增加 input-aware sensitive-resource/command overlay 与 secret-safe projections，Phase 9D 完成 logical/policy sandbox、Runtime child environment、structured helper 与 secure composition 集成。
 
 ## Responsibility boundary
 
@@ -48,10 +48,10 @@ ToolSecurityContext { permissionProfile, approvalPolicy }
 
 Containment 由 Tool 的 required capabilities 推导，不读取 Tool 名称，也不读取 invocation arguments：
 
-| Required capability condition                        | Containment            |
-| ---------------------------------------------------- | ---------------------- |
-| 任意 `SHELL_EXEC`、`PROCESS_START` 或 `PROCESS_KILL` | `UNCONFINED_PROCESS`   |
-| 其他 capability 组合                                 | `STRUCTURED_WORKSPACE` |
+| Required capability condition                        | Containment                |
+| ---------------------------------------------------- | -------------------------- |
+| 任意 `SHELL_EXEC`、`PROCESS_START` 或 `PROCESS_KILL` | `UNCONFINED_LOCAL_PROCESS` |
+| 其他 capability 组合                                 | `STRUCTURED_WORKSPACE`     |
 
 因此 `read_file`、`apply_patch` 和未来新增的 structured Tool 可以共享同一策略；策略内核不维护 Tool-name allowlist。
 
@@ -60,8 +60,8 @@ Containment 由 Tool 的 required capabilities 推导，不读取 Tool 名称，
 策略按以下顺序计算，结果是 deterministic、pure、没有 I/O 和 randomness：
 
 1. Required capability 不在 active profile 中时，返回 `DENY / MISSING_REQUIRED_CAPABILITY`。Approval 不能授权缺失 capability。
-2. `PROJECT_ACCESS + UNCONFINED_PROCESS + NEVER_ASK` 返回 `DENY / UNCONFINED_EXECUTION_BLOCKED_WITHOUT_APPROVAL`，因为 V1 尚无 hard sandbox。
-3. `PROJECT_ACCESS + UNCONFINED_PROCESS` 在其他 approval policy 下返回 `REQUIRE_APPROVAL / UNCONFINED_EXECUTION_REQUIRES_REVIEW`。
+2. `PROJECT_ACCESS + UNCONFINED_LOCAL_PROCESS + NEVER_ASK` 返回 `DENY / UNCONFINED_EXECUTION_BLOCKED_WITHOUT_APPROVAL`，因为 V1 尚无 hard sandbox。
+3. `PROJECT_ACCESS + UNCONFINED_LOCAL_PROCESS` 在其他 approval policy 下返回 `REQUIRE_APPROVAL / UNCONFINED_EXECUTION_REQUIRES_REVIEW`。
 4. `ALWAYS_ASK` 对 capability-authorized Tool 返回 `REQUIRE_APPROVAL`。
 5. `DANGEROUS_ONLY` 对 `LOW`/`MEDIUM` 返回 `ALLOW`，对 `HIGH`/`CRITICAL` 返回 `REQUIRE_APPROVAL`。
 6. `NEVER_ASK` 对 capability-authorized、非上述不安全 unconfined case 返回 `ALLOW`，绝不返回 `REQUIRE_APPROVAL`。
@@ -97,7 +97,7 @@ Phase 9A 本身不实现：
 - timeout、cancellation、retry、budget、parallel execution 或 Verification execution；
 - Tool handler、Runtime、Storage、EventBus 或 AgentLoop 的第二份实现。
 
-这些边界不是 capability evaluator 的隐含行为；Phase 9C 通过独立 facts、overlay、redactor 和 sanitizer contract 实现并测试。Phase 9D 仍未实现 hard sandbox 或其他后续宿主能力。
+这些边界不是 capability evaluator 的隐含行为；Phase 9C 通过独立 facts、overlay、redactor 和 sanitizer contract 实现并测试。Phase 9D 已完成 logical/policy sandbox integration，但仍未实现 OS hard sandbox 或其他后续宿主能力。`STRUCTURED_WORKSPACE` 表示 workspace/path policy admission；`UNCONFINED_LOCAL_PROCESS` 明确表示本地 shell/process 没有 syscall、network 或 OS filesystem isolation。
 
 ## Phase 9C input-aware boundary
 

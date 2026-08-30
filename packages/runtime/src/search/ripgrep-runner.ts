@@ -11,6 +11,8 @@ import type {
   RuntimeTextSearchRequest,
   RuntimeTextSearchResult,
 } from "./text-search.js";
+import process from "node:process";
+import { createStructuredHelperEnvironment } from "../exec/environment-policy.js";
 
 export const RIPGREP_EXECUTABLE = "rg";
 export const MAX_RG_STDOUT_BYTES = 1024 * 1024;
@@ -23,7 +25,7 @@ function boundedText(chunks: Buffer[], size: number): { text: string; exceeded: 
 
 export class LocalRipgrepRunner implements RuntimeTextSearch {
   async search(request: RuntimeTextSearchRequest): Promise<RuntimeTextSearchResult> {
-    const args = ["--json", "--line-number", "--color=never"];
+    const args = ["--no-config", "--json", "--line-number", "--color=never"];
     for (const exclusion of PROJECT_HARD_EXCLUDED_GLOBS) args.push("--glob", `!${exclusion}`);
     if (request.include !== undefined) args.push("--glob", request.include);
     args.push("--", request.pattern, ".");
@@ -34,6 +36,7 @@ export class LocalRipgrepRunner implements RuntimeTextSearch {
         child = spawn(RIPGREP_EXECUTABLE, args, {
           cwd: request.cwd,
           shell: false,
+          env: createStructuredHelperEnvironment(process.env, process.platform),
           stdio: ["ignore", "pipe", "pipe"],
         });
       } catch (error) {

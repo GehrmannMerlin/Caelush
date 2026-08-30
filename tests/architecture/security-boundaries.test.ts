@@ -57,12 +57,18 @@ describe("security architecture boundaries", () => {
 
     const readme = await readFile(path.join(repositoryRoot, "README.md"), "utf8");
     expect(readme).toContain("Phase 9C");
-    expect(readme).toContain("Phase 9D remains a future handoff");
+    expect(readme).toContain("Phase 9D — V1 Security Integration");
     expect(
-      await readFile(path.join(repositoryRoot, "docs", "architecture", "input-security-policy.md"), "utf8"),
+      await readFile(
+        path.join(repositoryRoot, "docs", "architecture", "input-security-policy.md"),
+        "utf8",
+      ),
     ).toContain("monotonic");
     expect(
-      await readFile(path.join(repositoryRoot, "docs", "architecture", "secret-redaction.md"), "utf8"),
+      await readFile(
+        path.join(repositoryRoot, "docs", "architecture", "secret-redaction.md"),
+        "utf8",
+      ),
     ).toContain("ToolResultSanitizerPort");
   });
 });

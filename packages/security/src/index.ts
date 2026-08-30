@@ -1,6 +1,8 @@
 export { resolveGrantedCapabilities } from "./capabilities.js";
 export { classifyExecutionContainment, requiresUnconfinedProcess } from "./containment.js";
 export type { ExecutionContainment } from "./containment.js";
+export { evaluateLogicalSandboxAdmission } from "./logical-sandbox.js";
+export type { LogicalSandboxAdmission, LogicalSandboxAdmissionInput } from "./logical-sandbox.js";
 export { evaluateSecurityPolicy, securityPolicyEvaluator } from "./evaluator.js";
 export { combineSecurityDecisions } from "./decision.js";
 export type {
@@ -41,6 +43,16 @@ export {
   MAX_SECRET_SCAN_TEXT_BYTES,
 } from "./secret-redaction.js";
 export { CaelushToolResultSanitizer, sanitizeToolResult } from "./tool-result-sanitizer.js";
+export {
+  assertDefaultBuiltinSecurityCoverage,
+  createDefaultV1ToolExecutionSecurity,
+  createV1SecureToolDispatcher,
+  V1SecurityCompositionError,
+} from "./default-composition.js";
+export type {
+  V1SecureToolDispatcherOptions,
+  V1ToolExecutionSecurity,
+} from "./default-composition.js";
 export type {
   SecretCategory,
   SecretDetectionReport,

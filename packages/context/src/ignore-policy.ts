@@ -1,6 +1,7 @@
 import ignore from "ignore";
 import path from "node:path";
 import { isProjectHardExcludedDirectoryName } from "@caelush/shared";
+import { classifySensitivePath } from "@caelush/security/sensitive-path";
 import { ContextIgnoreError } from "./errors.js";
 import type { ContextFileKind, ContextFileSystem } from "./filesystem.js";
 import { isWithinWorkspace } from "./workspace.js";
@@ -42,18 +43,6 @@ const binaryExtensions = new Set([
   ".db",
 ]);
 
-const sensitiveExactNames = new Set([
-  ".env",
-  ".env.local",
-  ".npmrc",
-  ".pypirc",
-  ".netrc",
-  "id_rsa",
-  "id_ed25519",
-]);
-
-const sensitiveExtensions = new Set([".pem", ".key", ".p12", ".pfx"]);
-
 export interface IgnorePolicyDependencies {
   readonly filesystem: ContextFileSystem;
   readonly projectRoot: string;
@@ -76,13 +65,6 @@ interface IgnoreRuleLayer {
 
 function normalizeMatcherPath(targetPath: string): string {
   return targetPath.replaceAll("\\", "/").replace(/^\/+/, "");
-}
-
-function isSensitiveName(fileName: string): boolean {
-  const normalized = fileName.toLowerCase();
-  if (sensitiveExactNames.has(normalized)) return true;
-  if (normalized.startsWith(".env.") && normalized.endsWith(".local")) return true;
-  return sensitiveExtensions.has(path.extname(normalized));
 }
 
 function isBinaryName(fileName: string): boolean {
@@ -124,7 +106,7 @@ export class IgnorePolicy {
     );
     const fileName = path.basename(targetPath);
     const hardExcluded = hasHardExcludedDirectory(relativePath);
-    const sensitive = kind === "FILE" && isSensitiveName(fileName);
+    const sensitive = kind === "FILE" && classifySensitivePath(relativePath) !== undefined;
     const binary = kind === "FILE" && isBinaryName(fileName);
     const gitignored = await this.isGitignored(targetPath, kind);
     const ignored = hardExcluded || sensitive || binary || gitignored || fileName === ".gitignore";

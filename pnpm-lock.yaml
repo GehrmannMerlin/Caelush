@@ -66,6 +66,9 @@ importers:
       '@caelush/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@caelush/security':
+        specifier: workspace:*
+        version: link:../security
       '@caelush/shared':
         specifier: workspace:*
         version: link:../shared

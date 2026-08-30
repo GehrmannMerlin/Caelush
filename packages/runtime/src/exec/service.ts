@@ -18,12 +18,14 @@ import { RuntimeExecError } from "./errors.js";
 import { LocalProcessManager } from "./process-manager.js";
 import { LocalShellResolver } from "./shell-resolver.js";
 import { RuntimePathTypeError } from "../runtime-errors.js";
+import { createAgentProcessEnvironment } from "./environment-policy.js";
 
 export interface LocalRuntimeExecServiceOptions {
   readonly pathResolver: WorkspacePathResolver;
   readonly processManager: LocalProcessManager;
   readonly shellResolver?: LocalShellResolver;
   readonly env?: NodeJS.ProcessEnv;
+  readonly platform?: NodeJS.Platform;
 }
 
 export class LocalRuntimeExecService implements RuntimeExecService {
@@ -42,7 +44,10 @@ export class LocalRuntimeExecService implements RuntimeExecService {
     return this.options.processManager.start({
       ...request,
       cwd,
-      env: executionEnvironment(this.env, request.tty),
+      env: executionEnvironment(
+        createAgentProcessEnvironment(this.env, this.options.platform ?? process.platform),
+        request.tty,
+      ),
       launch: this.shellResolver.resolve(request.command),
     });
   }

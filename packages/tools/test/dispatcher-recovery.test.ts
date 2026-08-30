@@ -12,6 +12,7 @@ import {
 import { describe, expect, it } from "vitest";
 import {
   ToolDispatcher,
+  ToolDispatcherInfrastructureError,
   ToolDispatcherInvariantError,
   ToolRegistryBuilder,
   createRequestedToolInvocation,
@@ -196,7 +197,7 @@ describe("ToolDispatcher recovery", () => {
     expect(count).toBe(1);
   });
 
-  it("keeps a durable WAITING_APPROVAL invocation paused without invoking the handler", async () => {
+  it("fails closed when a durable waiting approval has no approval infrastructure", async () => {
     const store = new RecoveryStore();
     const invocation = markToolInvocationWaitingApproval(requestedInvocation());
     store.snapshots.set(invocation.id, { sessionId: request.sessionId, invocation, revision: 2 });
@@ -206,9 +207,9 @@ describe("ToolDispatcher recovery", () => {
       return { content: "unexpected", details: { echoed: "unexpected" }, isError: false };
     });
 
-    const outcome = await dispatcher.recover(invocation.id, environment, request.securityContext);
-
-    expect(outcome).toEqual({ kind: "WAITING_APPROVAL", invocation });
+    await expect(
+      dispatcher.recover(invocation.id, environment, request.securityContext),
+    ).rejects.toBeInstanceOf(ToolDispatcherInfrastructureError);
     expect(count).toBe(0);
   });
 
@@ -230,8 +231,6 @@ describe("ToolDispatcher recovery", () => {
 
     await expect(
       dispatcher.recover(invocation.id, environment, request.securityContext),
-    ).rejects.toBeInstanceOf(
-      ToolDispatcherInvariantError,
-    );
+    ).rejects.toBeInstanceOf(ToolDispatcherInvariantError);
   });
 });

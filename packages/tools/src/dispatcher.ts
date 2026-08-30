@@ -65,10 +65,7 @@ import {
 import { assertToolSecurityContext, type ToolSecurityContext } from "./security-context.js";
 import { ToolExecutionUncertainError } from "./errors.js";
 import { toolEffectsToEvents, type ToolEffect } from "./tool-effects.js";
-import {
-  ToolSecurityFactsProjectionError,
-  type ToolSecurityFacts,
-} from "./security-facts.js";
+import { ToolSecurityFactsProjectionError, type ToolSecurityFacts } from "./security-facts.js";
 import type { ToolExecutionResult } from "./execution-result.js";
 import type { ToolResultSanitizerPort } from "./result-sanitizer.js";
 
@@ -292,6 +289,7 @@ export class ToolDispatcher {
         toolName: resolvedTool.definition.name,
         definition: resolvedTool.definition,
         securityContext: request.securityContext,
+        runtimeKind: request.environment.runtime.kind,
         ...(securityFacts === undefined ? {} : { securityFacts }),
       });
     } catch (error) {
@@ -300,44 +298,49 @@ export class ToolDispatcher {
       });
     }
     if (decision.kind === "REQUIRE_APPROVAL") {
+      if (
+        this.options.approvalStore === undefined ||
+        this.options.approvalIdFactory === undefined
+      ) {
+        throw new ToolDispatcherInfrastructureError(
+          "Durable approval infrastructure is required for approval-gated Tool execution.",
+        );
+      }
       const approvalKey = computeToolApprovalKey({
         toolName: resolvedTool.definition.name,
         definition: resolvedTool.definition,
         args: snapshot.invocation.args,
         securityContext: request.securityContext,
       });
-      if (this.options.approvalStore !== undefined) {
-        const grant = await this.options.approvalStore.findApplicableRunGrant({
-          runId: snapshot.invocation.runId,
-          approvalKey,
-        });
-        if (grant !== null) return this.startAndExecute(request, resolvedTool, snapshot);
-      }
+      const grant = await this.options.approvalStore.findApplicableRunGrant({
+        runId: snapshot.invocation.runId,
+        approvalKey,
+      });
+      if (grant !== null) return this.startAndExecute(request, resolvedTool, snapshot);
       const waiting = markToolInvocationWaitingApproval(snapshot.invocation);
       const approval = this.createApprovalRequest(request, resolvedTool, waiting, decision);
-      const approvalEvent =
-        approval === undefined
-          ? undefined
-          : createApprovalRequestedEvent({
-              eventId: this.options.eventIdFactory.create(),
-              sessionId: request.sessionId,
-              stepId: waiting.stepId,
-              timestamp: approval.createdAt,
-              approval,
-            });
+      const approvalEvent = createApprovalRequestedEvent({
+        eventId: this.options.eventIdFactory.create(),
+        sessionId: request.sessionId,
+        stepId: waiting.stepId,
+        timestamp: approval.createdAt,
+        approval,
+      });
       const committed = await this.commitAndNotify({
         sessionId: request.sessionId,
         invocation: waiting,
         expectedRevision: snapshot.revision,
-        ...(approval === undefined ? {} : { approval, approvalKey }),
-        events: approvalEvent === undefined ? [] : [approvalEvent],
+        approval,
+        approvalKey,
+        events: [approvalEvent],
       });
+      if (committed.snapshot.approval === undefined) {
+        throw new ToolDispatcherInvariantError("Approval request was not durably committed.");
+      }
       return {
         kind: "WAITING_APPROVAL",
         invocation: committed.snapshot.invocation,
-        ...(committed.snapshot.approval === undefined
-          ? {}
-          : { approvalId: committed.snapshot.approval.id }),
+        approvalId: committed.snapshot.approval.id,
       };
     }
     if (decision.kind === "DENY") {
@@ -379,9 +382,11 @@ export class ToolDispatcher {
     resolvedTool: ResolvedTool,
     invocation: ToolInvocation,
     decision: Extract<ToolExecutionGateDecision, { kind: "REQUIRE_APPROVAL" }>,
-  ): ApprovalRequest | undefined {
+  ): ApprovalRequest {
     if (this.options.approvalStore === undefined || this.options.approvalIdFactory === undefined) {
-      return undefined;
+      throw new ToolDispatcherInfrastructureError(
+        "Durable approval infrastructure is required for approval-gated Tool execution.",
+      );
     }
     const createdAt = this.options.clock.now();
     return ApprovalRequestSchema.parse({
@@ -413,8 +418,11 @@ export class ToolDispatcher {
     securityContext: ToolSecurityContext,
   ): Promise<ToolDispatcherOutcome> {
     const approvalStore = this.options.approvalStore;
-    if (approvalStore === undefined)
-      return { kind: "WAITING_APPROVAL", invocation: snapshot.invocation };
+    if (approvalStore === undefined) {
+      throw new ToolDispatcherInfrastructureError(
+        "Durable approval infrastructure is required to recover a waiting Tool.",
+      );
+    }
     const approval =
       (await approvalStore.getByInvocation(snapshot.invocation.id)) ?? snapshot.approval;
     if (approval === null || approval === undefined) {
@@ -454,6 +462,7 @@ export class ToolDispatcher {
       toolName: resolvedTool.definition.name,
       definition: resolvedTool.definition,
       securityContext,
+      runtimeKind: environment.runtime.kind,
       ...(securityFacts === undefined ? {} : { securityFacts }),
     });
     if (decision.kind === "DENY") {

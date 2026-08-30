@@ -55,4 +55,4 @@ validated request
 
 A current input-aware `DENY` therefore cannot be bypassed by a cached grant. Redacted previews are presentation data only; exact approval keys continue to use private canonical arguments and policy metadata.
 
-Phase 9C does not add wildcard permission rules, an OS sandbox, cancellation, timeout, retry, budgets, Verification, CLI, Web UI, or Phase 9D functionality.
+Phase 9C does not add wildcard permission rules, an OS sandbox, cancellation, timeout, retry, budgets, Verification, CLI, or Web UI. Phase 9D integrates this policy with logical sandbox admission and secure composition without changing its monotonic ownership.

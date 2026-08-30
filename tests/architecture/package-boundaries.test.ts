@@ -285,6 +285,7 @@ describe("package boundaries", () => {
     expect(Object.keys(dependencies).sort()).toEqual([
       "@caelush/llm",
       "@caelush/protocol",
+      "@caelush/security",
       "@caelush/shared",
       "ignore",
     ]);
@@ -301,6 +302,24 @@ describe("package boundaries", () => {
     );
     expect(imports).toContain("@caelush/llm/messages");
     expect(imports.filter((value) => value !== "@caelush/llm/messages")).toEqual([]);
+  });
+
+  it("keeps Context security reuse narrow and execution-independent", async () => {
+    const sourceRoot = path.join(repositoryRoot, "packages", "context", "src");
+    const files = await sourceFiles(sourceRoot);
+    const source = (await Promise.all(files.map((filePath) => readFile(filePath, "utf8")))).join(
+      "\n",
+    );
+    const securityImports = [
+      ...source.matchAll(/from\s+["'](@caelush\/security(?:\/[^"']*)?)["']/g),
+    ].map((match) => match[1]);
+    expect(securityImports).toHaveLength(2);
+    expect(securityImports).toEqual(
+      expect.arrayContaining(["@caelush/security/redaction", "@caelush/security/sensitive-path"]),
+    );
+    expect(source).not.toMatch(
+      /from\s+["']@caelush\/(?:security|tools|runtime|storage|events|daemon)["']/,
+    );
   });
 
   it("allows the daemon to compose protocol, storage, and events through public entries", async () => {

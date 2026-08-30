@@ -20,6 +20,15 @@ import { LocalGitRunner } from "./git-runner.js";
 import { gitCommandError } from "./errors.js";
 import { parseGitStatus } from "./status-parser.js";
 
+const GIT_CONFIG_HARDENING = [
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "diff.external=",
+  "-c",
+  "core.pager=cat",
+] as const;
+
 export class LocalGitService implements RuntimeGitService {
   private readonly runner: GitRunner;
   private readonly pathResolver: WorkspacePathResolver;
@@ -41,6 +50,7 @@ export class LocalGitService implements RuntimeGitService {
     const result = await this.runner.run({
       cwd: this.options.logicalRoot,
       args: [
+        ...GIT_CONFIG_HARDENING,
         "status",
         "--porcelain=v2",
         "-z",
@@ -83,6 +93,7 @@ export class LocalGitService implements RuntimeGitService {
       const result = await this.runner.run({
         cwd: this.options.logicalRoot,
         args: [
+          ...GIT_CONFIG_HARDENING,
           "diff",
           ...(item === "STAGED" ? ["--cached"] : []),
           "--no-ext-diff",

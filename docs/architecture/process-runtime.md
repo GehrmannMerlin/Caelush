@@ -1,5 +1,7 @@
 # Shell 与 Managed Process Runtime
 
+Phase 9D keeps shell/process execution as an explicitly `UNCONFINED_LOCAL_PROCESS` local boundary. Runtime sanitizes child environments before launch; shell resolution remains fixed by the host platform and process adapters use `shell: false` for the adapter spawn itself. This is logical/policy hardening, not OS sandboxing.
+
 Phase 8C 在现有 `LocalRuntime` 下增加统一的本地执行底座。`exec_command` 与 `write_stdin` 是薄 Tool handler；真正的执行路径是：
 
 ```text

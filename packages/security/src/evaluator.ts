@@ -31,7 +31,7 @@ export function evaluateSecurityPolicy(input: SecurityPolicyInput): SecurityDeci
   }
 
   const containment = classifyExecutionContainment(input.requiredCapabilities);
-  if (input.permissionProfile === "PROJECT_ACCESS" && containment === "UNCONFINED_PROCESS") {
+  if (input.permissionProfile === "PROJECT_ACCESS" && containment === "UNCONFINED_LOCAL_PROCESS") {
     if (input.approvalPolicy === "NEVER_ASK") {
       return {
         kind: "DENY",

@@ -51,4 +51,29 @@ describe("LocalRuntime exec service", () => {
       await rm(parent, { recursive: true, force: true });
     }
   });
+
+  it("does not inherit a host secret into an executed child process", async () => {
+    const parent = await mkdtemp(path.join(os.tmpdir(), "caelush-exec-environment-"));
+    const secretName = "CAELUSH_HOST_SECRET_9D";
+    const previous = process.env[secretName];
+    process.env[secretName] = "CAELUSH_HOST_SECRET_VALUE_9D";
+    let runtime: LocalRuntime | undefined;
+    try {
+      runtime = new LocalRuntime();
+      const scope = await runtime.openWorkspace({ id: createWorkspaceId(), path: parent });
+      const command = `node -e "process.stdout.write(process.env.${secretName} ?? '')"`;
+      const result = await scope.exec.execute({
+        ownerRunId: "run_environment" as never,
+        command,
+        tty: false,
+        yieldTimeMs: 5000,
+      });
+      expect(result.output).toBe("");
+    } finally {
+      if (previous === undefined) delete process.env[secretName];
+      else process.env[secretName] = previous;
+      await runtime?.dispose();
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
 });

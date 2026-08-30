@@ -1,5 +1,9 @@
 # Caelush Tool System
 
+## Phase 9D secure composition
+
+The documented V1 composition is `createV1SecureToolDispatcher`: it wires the real Security Gate and real Tool Result Sanitizer, requires durable approval storage and approval-ID generation, and audits Security Facts coverage for every default built-in. A `REQUIRE_APPROVAL` decision cannot create an anonymous waiting state; missing durable approval infrastructure fails closed before handler execution.
+
 Phase 8C adds `exec_command` and `write_stdin`; Phase 8D adds read-only `git_status` and `git_diff`. All built-ins resolve the same injected `RuntimeResolver` and delegate to `RuntimeWorkspaceScope`; Git handlers do not use the shell execution service. `ToolDispatcher` continues to own the durable ToolInvocation/Observation lifecycle and maps `ToolExecutionUncertainError` to the existing uncertain-side-effect barrier. The final catalog is created by `createDefaultBuiltinToolRegistrations(resolver)` in one immutable order. See [Shell and Process Runtime](process-runtime.md), [Git Runtime](git-runtime.md), and [Tool Effects](tool-effects.md).
 
 Caelush Phase 7 is fixed to exactly three rounds:

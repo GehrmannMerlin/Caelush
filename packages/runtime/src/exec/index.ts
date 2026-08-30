@@ -43,6 +43,12 @@ export type { PtyProcessAdapterOptions } from "./pty-process-adapter.js";
 export { LocalProcessManager } from "./process-manager.js";
 export type { LocalProcessManagerOptions } from "./process-manager.js";
 export {
+  createAgentProcessEnvironment,
+  createStructuredHelperEnvironment,
+  isCredentialBearingEnvironmentVariable,
+} from "./environment-policy.js";
+export type { ChildEnvironmentPlatform } from "./environment-policy.js";
+export {
   LocalRuntimeExecService,
   resolveExecYield,
   resolveInteractionYield,

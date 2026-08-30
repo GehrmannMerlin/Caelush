@@ -35,7 +35,8 @@ export function classifySensitivePath(path: string): SensitivePathCategory | und
   }
   if (AUTH_CONFIG_NAMES.has(basename)) return "AUTH_CONFIG";
   if (CREDENTIAL_NAMES.has(basename)) return "CREDENTIAL_FILE";
-  if (PRIVATE_KEY_NAMES.has(basename) || basename.endsWith(".key")) return "PRIVATE_KEY";
+  if (PRIVATE_KEY_NAMES.has(basename) || basename.endsWith(".pem") || basename.endsWith(".key"))
+    return "PRIVATE_KEY";
   if (basename.endsWith(".p12") || basename.endsWith(".pfx")) {
     return "CERTIFICATE_CONTAINER";
   }

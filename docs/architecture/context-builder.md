@@ -1,5 +1,9 @@
 # ContextBuilder
 
+## Phase 9D security boundary
+
+Context reuses only the narrow `@caelush/security/sensitive-path` and `@caelush/security/redaction` subpaths. Sensitive project files are rejected before content reads, while template files remain available. Project-derived instructions, relevant file content, and file-derived package metadata are redacted before provider messages; the current user message and Tool conversation lifecycle are not rewritten.
+
 Phase 5C completes the in-memory boundary between discovered project facts and a future model turn. The builder does not call an LLM, choose a model, execute tools, read the filesystem, publish events, or persist a snapshot.
 
 ## Data flow

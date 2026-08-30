@@ -69,6 +69,24 @@ describe("LocalGitService", () => {
     expect(() => scope.pathResolver.resolveLexical("../outside")).toThrow(RuntimeBoundaryError);
   });
 
+  it("does not honor repository helper, pager, or fsmonitor escape configuration", async () => {
+    const { repo, workspace } = await repository();
+    await runGit(repo, ["config", "diff.external", "definitely-not-a-git-helper"]);
+    await runGit(repo, ["config", "core.fsmonitor", "definitely-not-a-fsmonitor-helper"]);
+    await runGit(repo, ["config", "core.pager", "definitely-not-a-pager"]);
+    await runGit(repo, ["config", "credential.helper", "definitely-not-a-credential-helper"]);
+    await writeFile(path.join(workspace, "escape-test.txt"), "safe\n", "utf8");
+
+    const scope = await new LocalRuntime().openWorkspace({
+      id: createWorkspaceId(),
+      path: workspace,
+    });
+    await expect(scope.git.status({})).resolves.toMatchObject({ clean: false });
+    await expect(scope.git.diff({ scope: "WORKTREE" })).resolves.toMatchObject({
+      truncated: false,
+    });
+  });
+
   it("maps a missing git executable to a typed unavailable error", async () => {
     const parent = await mkdtemp(path.join(os.tmpdir(), "caelush-git-no-repo-"));
     temporaryDirectories.push(parent);

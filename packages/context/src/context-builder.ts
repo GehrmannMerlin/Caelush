@@ -12,6 +12,8 @@ import { renderSystemContext } from "./context-renderer.js";
 import type { RelevantFileContextPlan } from "./relevant-file-plan.js";
 import type { ProjectIntelligenceSnapshot } from "./snapshot.js";
 import { Utf8HeuristicTokenEstimator, type TokenEstimator } from "./token-estimator.js";
+import { redactText } from "@caelush/security/redaction";
+import type { ProjectPackage, ProjectProfile } from "./project-profile.js";
 
 export interface ContextBuildLimits {
   readonly maxInputTokens: number;
@@ -120,14 +122,17 @@ export class ContextBuilder {
     }
     const history = input.history ?? [];
     const conversation = validateAndGroupConversation(history, this.tokenEstimator);
-    const system = renderSystemContext(input.baseSystemPrompt, input.snapshot);
+    const snapshot = redactProjectDerivedSnapshot(input.snapshot);
+    const relevantFiles =
+      input.relevantFiles === undefined ? undefined : redactRelevantFiles(input.relevantFiles);
+    const system = renderSystemContext(input.baseSystemPrompt, snapshot);
     const budget = assembleContextBudget({
       system: system.message,
       ...(isContinuation ? {} : { current: input.currentUserMessage }),
       currentTurn,
       currentTurnType: isContinuation ? "TOOL_CONTINUATION" : "USER_TURN",
       groups: conversation.groups,
-      files: input.relevantFiles?.sections ?? [],
+      files: relevantFiles?.sections ?? [],
       limits,
       estimator: this.tokenEstimator,
     });
@@ -163,6 +168,61 @@ export class ContextBuilder {
     };
     return { messages: budget.messages, report };
   }
+}
+
+function redactRelevantFiles(plan: RelevantFileContextPlan): RelevantFileContextPlan {
+  return {
+    ...plan,
+    sections: plan.sections.map((section) => ({
+      ...section,
+      content: redactText(section.content),
+    })),
+  };
+}
+
+function redactProjectPackage(packageInfo: ProjectPackage): ProjectPackage {
+  return {
+    ...packageInfo,
+    ...(packageInfo.name === undefined ? {} : { name: redactText(packageInfo.name) }),
+    ...(packageInfo.packageManager === undefined
+      ? {}
+      : { packageManager: redactText(packageInfo.packageManager) }),
+    ...(packageInfo.nodeVersionRange === undefined
+      ? {}
+      : { nodeVersionRange: redactText(packageInfo.nodeVersionRange) }),
+    scripts: packageInfo.scripts.map((script) => ({
+      ...script,
+      command: redactText(script.command),
+    })),
+  };
+}
+
+function redactProjectProfile(profile: ProjectProfile): ProjectProfile {
+  return {
+    ...profile,
+    ...(profile.rootPackage === undefined
+      ? {}
+      : { rootPackage: redactProjectPackage(profile.rootPackage) }),
+    ...(profile.activePackage === undefined
+      ? {}
+      : { activePackage: redactProjectPackage(profile.activePackage) }),
+  };
+}
+
+function redactProjectDerivedSnapshot(
+  snapshot: ProjectIntelligenceSnapshot,
+): ProjectIntelligenceSnapshot {
+  return {
+    ...snapshot,
+    profile: redactProjectProfile(snapshot.profile),
+    instructions: {
+      ...snapshot.instructions,
+      entries: snapshot.instructions.entries.map((entry) => ({
+        ...entry,
+        content: redactText(entry.content),
+      })),
+    },
+  };
 }
 
 export function createDefaultContextBuilder(): ContextBuilder {

@@ -35,6 +35,7 @@ export interface ToolExecutionGateInput {
   readonly toolName: ToolName;
   readonly definition: ToolDefinitionMetadata | ToolDefinition;
   readonly securityContext: ToolSecurityContext;
+  readonly runtimeKind?: string;
   readonly securityFacts?: import("./security-facts.js").ToolSecurityFacts;
 }
 

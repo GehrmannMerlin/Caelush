@@ -20,6 +20,8 @@ import { combineSecurityDecisions, type SecurityDecision } from "./decision.js";
 import { evaluateInputSecurityPolicy } from "./input-policy.js";
 import { redactJson, redactText } from "./secret-redaction.js";
 import { isValidWorkspaceFactPath, normalizeWorkspaceFactPath } from "./sensitive-path.js";
+import { evaluateLogicalSandboxAdmission } from "./logical-sandbox.js";
+import { classifyExecutionContainment } from "./containment.js";
 
 export class CaelushToolExecutionGate implements ToolExecutionGatePort {
   async decide(input: ToolExecutionGateInput): Promise<ToolExecutionGateDecision> {
@@ -51,14 +53,33 @@ export class CaelushToolExecutionGate implements ToolExecutionGatePort {
     ) {
       throw new SecurityPolicyInvariantError();
     }
-  const baseDecision = evaluateSecurityPolicy({
+    const baseDecision = evaluateSecurityPolicy({
       permissionProfile: input.securityContext.permissionProfile,
       approvalPolicy: input.securityContext.approvalPolicy,
       riskLevel: definition.riskLevel,
       requiredCapabilities: definition.requiredCapabilities,
-  });
-  if (input.securityFacts === undefined) return baseDecision;
+    });
+    if (input.securityFacts === undefined) return baseDecision;
     const facts = normalizeSecurityFacts(input.securityFacts);
+    const admission = evaluateLogicalSandboxAdmission({
+      containment: classifyExecutionContainment(definition.requiredCapabilities),
+      runtimeKind: input.runtimeKind ?? "local",
+      runtimeRequirements: definition.runtimeRequirements,
+      requiredCapabilities: definition.requiredCapabilities,
+      securityFacts: facts ?? input.securityFacts,
+    });
+    if (admission.kind === "DENY") {
+      const safeAction = createSafeAction(facts, undefined, admission.containment);
+      return {
+        kind: "DENY",
+        ...(admission.reasonCode === undefined ? {} : { reasonCode: admission.reasonCode }),
+        safeReason: "The Tool cannot be admitted to the active logical execution boundary.",
+        ...(safeAction === undefined ? {} : { safeAction }),
+      };
+    }
+    if (facts === undefined) {
+      return { kind: "DENY", reasonCode: "SECURITY_FACTS_UNAVAILABLE" };
+    }
     const assessment = evaluateInputSecurityPolicy(facts, {
       permissionProfile: input.securityContext.permissionProfile,
       approvalPolicy: input.securityContext.approvalPolicy,
@@ -72,28 +93,36 @@ export class CaelushToolExecutionGate implements ToolExecutionGatePort {
             safeReason: assessment.safeReason,
           } as SecurityDecision);
     const effective = combineSecurityDecisions(baseDecision, inputDecision);
-    const safeAction = createSafeAction(facts, assessment.commandClassifications);
+    const safeAction = createSafeAction(
+      facts,
+      assessment.commandClassifications,
+      admission.containment,
+    );
     return safeAction === undefined ? effective : { ...effective, safeAction };
   }
 }
 
 function normalizeSecurityFacts(
   facts: NonNullable<ToolExecutionGateInput["securityFacts"]>,
-): NonNullable<ToolExecutionGateInput["securityFacts"]> {
-  const validResourceAccesses = Array.isArray(facts.resourceAccesses) && facts.resourceAccesses.every(
-    (access) =>
-      access !== null &&
-      typeof access === "object" &&
-      ["READ", "WRITE", "DELETE", "MOVE", "SEARCH", "DIFF"].includes(access.operation) &&
-      typeof access.path === "string",
-  );
-  const validSecretInputs = Array.isArray(facts.secretScanInputs) && facts.secretScanInputs.every(
-    (scan) =>
-      scan !== null &&
-      typeof scan === "object" &&
-      ["COMMAND", "STDIN", "PATCH", "GENERIC"].includes(scan.kind) &&
-      typeof scan.text === "string",
-  );
+): NonNullable<ToolExecutionGateInput["securityFacts"]> | undefined {
+  const validResourceAccesses =
+    Array.isArray(facts.resourceAccesses) &&
+    facts.resourceAccesses.every(
+      (access) =>
+        access !== null &&
+        typeof access === "object" &&
+        ["READ", "WRITE", "DELETE", "MOVE", "SEARCH", "DIFF"].includes(access.operation) &&
+        typeof access.path === "string",
+    );
+  const validSecretInputs =
+    Array.isArray(facts.secretScanInputs) &&
+    facts.secretScanInputs.every(
+      (scan) =>
+        scan !== null &&
+        typeof scan === "object" &&
+        ["COMMAND", "STDIN", "PATCH", "GENERIC"].includes(scan.kind) &&
+        typeof scan.text === "string",
+    );
   const shell = facts.shellCommand;
   const validShell =
     shell === undefined ||
@@ -103,12 +132,13 @@ function normalizeSecurityFacts(
       typeof shell.workdir === "string" &&
       typeof shell.tty === "boolean");
   if (validResourceAccesses && validSecretInputs && validShell) return facts;
-  return { resourceAccesses: [], secretScanInputs: [], opaqueInput: true };
+  return undefined;
 }
 
 function createSafeAction(
   facts: ToolExecutionGateInput["securityFacts"],
   commandClassifications: readonly string[] | undefined,
+  containment: import("./containment.js").ExecutionContainment,
 ): JsonObject | undefined {
   if (facts === undefined) return undefined;
   if (facts.shellCommand !== undefined) {
@@ -120,14 +150,19 @@ function createSafeAction(
       command: redactText(facts.shellCommand.command),
       workdir,
       tty: facts.shellCommand.tty,
+      containment,
       classifications: [...(commandClassifications ?? [])],
     };
   }
   if (facts.structuralPreview !== undefined) {
-    return sanitizeStructuralPreview(redactJson(facts.structuralPreview) as JsonObject);
+    return {
+      ...sanitizeStructuralPreview(redactJson(facts.structuralPreview) as JsonObject),
+      containment,
+    };
   }
   return {
     kind: "TOOL_INPUT",
+    containment,
     resourceAccessCount: facts.resourceAccesses.length,
     secretScanInputCount: facts.secretScanInputs.length,
   };

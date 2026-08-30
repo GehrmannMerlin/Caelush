@@ -1,5 +1,6 @@
 import {
   createEventId,
+  createApprovalRequestId,
   createObservationId,
   createRunId,
   createSessionId,
@@ -95,6 +96,7 @@ class MemoryStore implements ToolExecutionStorePort {
       invocation: command.invocation,
       revision: (existing?.revision ?? 0) + 1,
       ...(command.observation === undefined ? {} : { observation: command.observation }),
+      ...(command.approval === undefined ? {} : { approval: command.approval }),
     };
     this.snapshots.set(command.invocation.id, snapshot);
     const sequenced = command.events.map((event, index) => ({
@@ -144,6 +146,11 @@ function makeDispatcher(
     invocationIdFactory: { create: createToolInvocationId },
     observationIdFactory: { create: createObservationId },
     eventIdFactory: { create: createEventId },
+    approvalStore: {
+      getByInvocation: async (invocationId) => store.snapshots.get(invocationId)?.approval ?? null,
+      findApplicableRunGrant: async () => null,
+    },
+    approvalIdFactory: { create: createApprovalRequestId },
     resultSanitizer: resultSanitizer ?? { sanitize: ({ result }) => result },
   });
 }
@@ -157,7 +164,11 @@ describe("ToolDispatcher execution", () => {
       undefined,
       undefined,
       {
-        sanitize: ({ result }) => ({ ...result, content: "[REDACTED]", details: { echoed: "[REDACTED]" } }),
+        sanitize: ({ result }) => ({
+          ...result,
+          content: "[REDACTED]",
+          details: { echoed: "[REDACTED]" },
+        }),
       },
     );
 
@@ -172,14 +183,11 @@ describe("ToolDispatcher execution", () => {
 
   it("leaves an executed invocation RUNNING when sanitization fails", async () => {
     const store = new MemoryStore();
-    const dispatcher = makeDispatcher(
-      store,
-      { kind: "ALLOW" },
-      undefined,
-      undefined,
-      undefined,
-      { sanitize: () => { throw new Error("sanitizer failure"); } },
-    );
+    const dispatcher = makeDispatcher(store, { kind: "ALLOW" }, undefined, undefined, undefined, {
+      sanitize: () => {
+        throw new Error("sanitizer failure");
+      },
+    });
 
     await expect(dispatcher.dispatch(makeRequest())).rejects.toBeInstanceOf(
       ToolDispatcherInfrastructureError,
@@ -330,7 +338,10 @@ describe("ToolDispatcher execution", () => {
     if (outcome.kind !== "WAITING_APPROVAL") throw new Error("expected waiting approval");
     expect(outcome.invocation.status).toBe("WAITING_APPROVAL");
     expect(handlerCount).toBe(0);
-    expect(store.events.map((event) => event.type)).toEqual(["tool.requested"]);
+    expect(store.events.map((event) => event.type)).toEqual([
+      "tool.requested",
+      "approval.requested",
+    ]);
   });
 
   it("returns an ordinary handler error as a failed model result", async () => {

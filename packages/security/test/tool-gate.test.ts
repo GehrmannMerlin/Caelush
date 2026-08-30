@@ -25,7 +25,7 @@ const definition = {
   name: "apply_patch" as const,
   riskLevel: "HIGH" as const,
   requiredCapabilities: ["FS_WRITE", "FS_DELETE"] as const,
-  runtimeRequirements: {},
+  runtimeRequirements: { runtimeKinds: ["local"] },
 };
 
 describe("Caelush Tool execution Gate", () => {
@@ -150,5 +150,17 @@ describe("Caelush Tool execution Gate", () => {
 
     expect(decision.safeAction).toMatchObject({ kind: "SHELL_COMMAND", tty: false });
     expect(JSON.stringify(decision.safeAction)).not.toContain("SECRET_APPROVAL_9C_TOKEN");
+  });
+
+  it("fails closed when Security Facts are structurally malformed", async () => {
+    const decision = await new CaelushToolExecutionGate().decide({
+      invocation,
+      toolName: definition.name,
+      definition,
+      securityContext: { permissionProfile: "FULL_ACCESS", approvalPolicy: "NEVER_ASK" },
+      securityFacts: { resourceAccesses: "not-an-array", secretScanInputs: [] },
+    } as never);
+
+    expect(decision).toMatchObject({ kind: "DENY", reasonCode: "SECURITY_FACTS_UNAVAILABLE" });
   });
 });

@@ -1,5 +1,11 @@
 # Local Runtime Foundation
 
+## Phase 9D security boundary
+
+The Runtime owns child-process environment construction. Agent processes receive a platform-aware compatibility allowlist; structured Git and ripgrep helpers receive a smaller environment. Credential, injection, proxy-credential, SSH-agent, and helper-config variables are removed without mutating the caller environment. Windows variable names are matched case-insensitively.
+
+`exec_command` and `write_stdin` are local process capabilities, explicitly labeled `UNCONFINED_LOCAL_PROCESS` by Security. The label is an honesty boundary: V1 provides policy and durable approval checks plus sanitized environment, not OS syscall, network, filesystem, container, or process-identity isolation.
+
 Phase 8C extends the runtime with a workspace-bound `RuntimeExecService`. It is implemented by one long-lived `LocalProcessManager` per `LocalRuntime`, which selects a pipe adapter or a lazy `node-pty` adapter. See [Shell and Process Runtime](process-runtime.md) for the session, ownership, bounded-output, stale-generation, and Phase 8C boundary rules. This execution capability remains below Tools and above the OS process adapters; it has no Storage, Core, Events, Security, or Verification dependency.
 
 Phase 8A establishes the first concrete execution substrate for Caelush. It is deliberately below the Tool System and deliberately narrower than a general host runtime.

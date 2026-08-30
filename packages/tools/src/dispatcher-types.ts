@@ -93,7 +93,7 @@ export interface ToolResultOutcome {
 export interface WaitingApprovalOutcome {
   readonly kind: "WAITING_APPROVAL";
   readonly invocation: ToolInvocation;
-  readonly approvalId?: import("@caelush/protocol").ApprovalRequestId;
+  readonly approvalId: import("@caelush/protocol").ApprovalRequestId;
 }
 
 export interface UnavailableToolOutcome {

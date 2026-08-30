@@ -1,5 +1,6 @@
 import {
   createEventId,
+  createApprovalRequestId,
   createObservationId,
   createRunId,
   createSessionId,
@@ -28,7 +29,7 @@ import { CaelushToolExecutionGate } from "../src/index.js";
 
 const environment = {
   workspace: { id: createWorkspaceId(), path: "C:\\workspace" },
-  runtime: { id: "local", kind: "fixture" },
+  runtime: { id: "local", kind: "local" },
 } as const;
 
 class MemoryStore implements ToolExecutionStorePort {
@@ -57,6 +58,7 @@ class MemoryStore implements ToolExecutionStorePort {
       invocation: command.invocation,
       revision: (current?.revision ?? 0) + 1,
       ...(command.observation === undefined ? {} : { observation: command.observation }),
+      ...(command.approval === undefined ? {} : { approval: command.approval }),
     };
     this.snapshots.set(command.invocation.id, snapshot);
     return { snapshot, events: [] };
@@ -129,6 +131,11 @@ function createDispatcher(store: MemoryStore, onExecute: () => void): ToolDispat
     invocationIdFactory: { create: createToolInvocationId },
     observationIdFactory: { create: createObservationId },
     eventIdFactory: { create: createEventId },
+    approvalStore: {
+      getByInvocation: async (invocationId) => store.snapshots.get(invocationId)?.approval ?? null,
+      findApplicableRunGrant: async () => null,
+    },
+    approvalIdFactory: { create: createApprovalRequestId },
     resultSanitizer: { sanitize: ({ result }) => result },
   });
 }
@@ -161,6 +168,11 @@ function createBatchDispatcher(store: MemoryStore, executions: string[]): ToolBa
     invocationIdFactory: { create: createToolInvocationId },
     observationIdFactory: { create: createObservationId },
     eventIdFactory: { create: createEventId },
+    approvalStore: {
+      getByInvocation: async (invocationId) => store.snapshots.get(invocationId)?.approval ?? null,
+      findApplicableRunGrant: async () => null,
+    },
+    approvalIdFactory: { create: createApprovalRequestId },
     resultSanitizer: { sanitize: ({ result }) => result },
   });
   return new ToolBatchCoordinator(dispatcher);

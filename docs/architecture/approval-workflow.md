@@ -42,4 +42,4 @@ The Coordinator re-enters the exact waiting Tool item. APPROVED starts that invo
 
 ## Explicit non-goals
 
-Phase 9B does not add sandboxing, cancellation, timeout, retry, budgets, Verification execution, CLI/Web approval UI, or a daemon route without a complete production composition root. Phase 9C adds only the documented input-aware policy and high-confidence secret-safe projections; it does not encrypt Tool arguments at rest and does not implement Phase 9D.
+Phase 9B does not add OS sandboxing, cancellation, timeout, retry, budgets, Verification execution, CLI/Web approval UI, or a daemon route without a complete production composition root. Phase 9C adds the documented input-aware policy and high-confidence secret-safe projections; Phase 9D integrates logical/policy admission, sanitized child environments, helper hardening, and secure composition. Tool arguments are not encrypted at rest.

@@ -273,7 +273,7 @@ Phase 5 final ContextBuilder rules:
 - `ToolSecurityContext` must be derived from durable `AgentRun` policy, runtime-validated, passed through `ToolBatchRequest` and `ToolDispatchRequest`, and never come from model arguments or Tool arguments.
 - Capability denial has precedence over approval. `READ_ONLY` grants only `FS_READ`/`GIT_READ`; `PROJECT_ACCESS` grants project filesystem and process capabilities plus `GIT_READ`; `FULL_ACCESS` grants the current Protocol capability set without disabling structured Tool invariants.
 - `ALWAYS_ASK` requires approval for every capability-authorized Tool. `DANGEROUS_ONLY` allows LOW/MEDIUM and requires approval for HIGH/CRITICAL. `NEVER_ASK` never emits `REQUIRE_APPROVAL`.
-- `PROJECT_ACCESS + NEVER_ASK` denies `UNCONFINED_PROCESS` because V1 has no OS hard sandbox. `FULL_ACCESS + NEVER_ASK` may allow capability-authorized unconfined process Tools.
+- `PROJECT_ACCESS + NEVER_ASK` denies `UNCONFINED_LOCAL_PROCESS` because V1 has no OS hard sandbox. `FULL_ACCESS + NEVER_ASK` may allow capability-authorized unconfined local-process Tools.
 - Security policy evaluation is pure/deterministic and must not read arguments, perform I/O, use time/randomness, or expose commands, stdin, file contents, environment variables, credentials, absolute paths, Provider errors, or internal stack traces.
 - `@caelush/tools` defines the Gate port; `@caelush/security` implements it. Tools must not import Security. Security must not import Runtime, Core, Storage, Events, LLM, Context, Verification, or apps.
 - Security never writes Storage, publishes Events, executes handlers, resolves approvals, or mutates ToolInvocation. Dispatcher owns invocation lifecycle and persists `FAILED`/`WAITING_APPROVAL` boundaries.
@@ -297,7 +297,7 @@ Phase 5 final ContextBuilder rules:
 
 ## Phase 9C Input Security and Secret-Safe Projection Rules
 
-- Phase 9C owns input-aware sensitive-resource policy, command policy, and secret-safe public/model projections only. Phase 9D and all later host-product work remain out of scope.
+- Phase 9C owns input-aware sensitive-resource policy, command policy, and secret-safe public/model projections; Phase 9D integrates these boundaries without changing their ownership.
 - Phase 9A metadata policy remains authoritative. Phase 9C input-aware rules may only preserve or tighten a base decision; they must never downgrade `DENY` or `REQUIRE_APPROVAL` to `ALLOW`.
 - The current Security Gate evaluation always precedes Phase 9B RUN grant lookup. A cached approval must never override a current input-aware `DENY`.
 - Tool-specific input semantics are projected into host-only pure Tool Security Facts rather than hard-coded into `ToolDispatcher`. Facts may temporarily contain raw command, patch, or stdin text for analysis, but must never be persisted, emitted, or sent to the model.
@@ -308,4 +308,16 @@ Phase 5 final ContextBuilder rules:
 - The Tool result pipeline is raw validation → sanitize → sanitized revalidation → effect projection → durable observation. Sanitizer failure after a Tool may have executed leaves the durable invocation `RUNNING` and must not cause handler replay.
 - Approval previews are generated from security facts and redacted before persistence. Raw shell commands, stdin, patch bodies, full file content, absolute host paths, secret fragments, hashes, and fingerprints must not enter `ApprovalRequest.action`.
 - Redacted previews never participate in Approval identity. Exact approval keys continue to use private canonical Tool arguments. `ToolInvocation.args` remains private durable execution data; Phase 9C does not encrypt it at rest and must not claim secrets never exist in SQLite.
-- Phase 9C does not implement OS hard sandboxing, cancellation, timeout, retry, budgets, Verification, configurable wildcard permission rules, CLI UI, Web UI, or Phase 9D.
+- Phase 9C itself does not implement OS hard sandboxing, cancellation, timeout, retry, budgets, Verification, configurable wildcard permission rules, CLI UI, Web UI, or the Phase 9D integration layer.
+
+## Phase 9D V1 Security Integration and Finalization Rules
+
+- Phase 9D is complete and is the final Phase 9 round. Do not add Phase 9E or silently begin Phase 10.
+- The V1 logical sandbox is a policy/admission boundary, not an OS sandbox. Structured workspace Tools are `STRUCTURED_WORKSPACE`; `exec_command` and `write_stdin` are `UNCONFINED_LOCAL_PROCESS`.
+- `UNCONFINED_LOCAL_PROCESS` must remain an explicit limitation: V1 provides Gate/Approval checks, workspace path guards where applicable, bounded IO, and sanitized child environments, but no syscall, network, filesystem, container, seccomp, Windows Job Object, or process-identity isolation.
+- Runtime owns child-process environment policy. Child environments are allowlisted, caller-input immutable, platform-aware, case-insensitive for Windows names, and must remove credentials, proxy credentials, SSH-agent variables, injection variables, and helper configuration variables.
+- Git and ripgrep helpers must use fixed executable/argument construction, `shell: false`, sanitized minimal environments, bounded stdout/stderr, no arbitrary stdin, no interactive prompts, and hardened configuration. Git read paths must disable external diff/textconv/fsmonitor behavior where supported.
+- Context may import only `@caelush/security/sensitive-path` and `@caelush/security/redaction`; it must not import the Security root, Tools, Runtime, Storage, Events, approval code, or host services. Sensitive files are excluded before content reads; project-derived text is redacted before provider messages; the current user message is not rewritten.
+- The documented production composition must use the real Security Gate and real Result Sanitizer and must audit Security Facts coverage for every default Built-in. `REQUIRE_APPROVAL` without durable approval infrastructure fails closed and never emits an anonymous waiting state or executes a handler.
+- The current Gate/admission decision always precedes cached approval lookup. Approval resolution and recovery must re-enter the Gate and Runtime/path guards; an old grant never overrides a current `DENY`.
+- Phase 9D does not implement OS sandboxing, remote runtime, MCP, Browser, cancellation, timeout, retry, budgets, Verification execution, new execution HTTP routes, or other Phase 10 behavior.

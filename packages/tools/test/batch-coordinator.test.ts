@@ -1,5 +1,6 @@
 import {
   createEventId,
+  createApprovalRequestId,
   createObservationId,
   createRunId,
   createSessionId,
@@ -59,6 +60,7 @@ class Store implements ToolExecutionStorePort {
       invocation: command.invocation,
       revision: (current?.revision ?? 0) + 1,
       ...(command.observation === undefined ? {} : { observation: command.observation }),
+      ...(command.approval === undefined ? {} : { approval: command.approval }),
     };
     this.snapshots.set(command.invocation.id, snapshot);
     return { snapshot, events: [] };
@@ -123,6 +125,11 @@ function makeCoordinator(options: {
     invocationIdFactory: { create: createToolInvocationId },
     observationIdFactory: { create: createObservationId },
     eventIdFactory: { create: createEventId },
+    approvalStore: {
+      getByInvocation: async (invocationId) => store.snapshots.get(invocationId)?.approval ?? null,
+      findApplicableRunGrant: async () => null,
+    },
+    approvalIdFactory: { create: createApprovalRequestId },
     resultSanitizer: { sanitize: ({ result }) => result },
   });
   return { coordinator: new ToolBatchCoordinator(dispatcher), dispatcher, store };
