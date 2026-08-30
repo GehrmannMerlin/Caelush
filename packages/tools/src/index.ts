@@ -39,6 +39,23 @@ export {
   ToolDispatcherInvariantError,
 } from "./dispatcher-errors.js";
 export type { ToolRegistration } from "./registration.js";
+export {
+  applyToolEffectsToAgentState,
+  effectsChangeAgentState,
+  projectExecEffects,
+  projectPatchEffects,
+  projectReadFileEffect,
+  projectStdinEffects,
+  SAFE_SHELL_COMMAND_LABEL,
+  toolEffectsToEvents,
+  MAX_CHANGED_FILES,
+} from "./tool-effects.js";
+export type {
+  ToolEffect,
+  ToolEffectEventContext,
+  ToolEffectProjector,
+  ToolEffectProjectorInput,
+} from "./tool-effects.js";
 export { ToolRegistryBuilder } from "./registry-builder.js";
 export type { ResolvedTool, ToolRegistry } from "./registry.js";
 export { DEFAULT_TOOL_REGISTRY_OPTIONS, validateToolRegistryOptions } from "./options.js";
@@ -81,6 +98,13 @@ export { createFileMutationToolRegistrations } from "./builtins/file-mutation-to
 export { createExecCommandRegistration, execCommandDefinition } from "./builtins/exec-command.js";
 export { createWriteStdinRegistration, writeStdinDefinition } from "./builtins/write-stdin.js";
 export { createShellToolRegistrations } from "./builtins/shell-tools.js";
+export { createGitStatusRegistration, gitStatusDefinition } from "./builtins/git-status.js";
+export { createGitDiffRegistration, gitDiffDefinition } from "./builtins/git-diff.js";
+export { createGitToolRegistrations } from "./builtins/git-tools.js";
+export {
+  createDefaultBuiltinToolRegistrations,
+  DEFAULT_BUILTIN_TOOL_ORDER,
+} from "./builtins/default-tools.js";
 export { UNCERTAIN_SIDE_EFFECT, isUncertainToolExecution } from "./execution-disposition.js";
 export {
   createToolCompletedEvent,

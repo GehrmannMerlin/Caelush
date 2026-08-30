@@ -1,12 +1,14 @@
 import type { ToolDefinition, ToolName } from "@caelush/protocol";
 import type { ToolHandler } from "./handler.js";
 import type { CompiledToolSchema } from "./schema-runtime.js";
+import type { ToolEffectProjector } from "./tool-effects.js";
 
 export interface ResolvedTool {
   readonly definition: ToolDefinition;
   readonly handler: ToolHandler;
   readonly inputValidator: CompiledToolSchema;
   readonly outputValidator: CompiledToolSchema;
+  readonly effectProjector?: ToolEffectProjector;
 }
 
 export interface ToolRegistry {

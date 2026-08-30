@@ -16,6 +16,8 @@ import type { RuntimeWorkspaceScope } from "./workspace-scope.js";
 import { LocalProcessManager, type LocalProcessManagerOptions } from "./exec/process-manager.js";
 import { LocalRuntimeExecService } from "./exec/service.js";
 import { LocalShellResolver, type LocalShellResolverOptions } from "./exec/shell-resolver.js";
+import { LocalGitService } from "./git/service.js";
+import type { RuntimeGitService } from "./git/contracts.js";
 
 export interface LocalRuntimeOptions {
   readonly filesystem?: RuntimeFileSystem;
@@ -25,6 +27,7 @@ export interface LocalRuntimeOptions {
   readonly processManagerOptions?: LocalProcessManagerOptions;
   readonly shellResolver?: LocalShellResolver;
   readonly shellResolverOptions?: LocalShellResolverOptions;
+  readonly git?: RuntimeGitService;
 }
 
 export class LocalRuntime implements Runtime {
@@ -34,6 +37,7 @@ export class LocalRuntime implements Runtime {
   private readonly textSearch: RuntimeTextSearch;
   private readonly processManager: LocalProcessManager;
   private readonly shellResolver: LocalShellResolver;
+  private readonly git: RuntimeGitService | undefined;
 
   constructor(options: LocalRuntimeOptions = {}) {
     this.filesystem = options.filesystem ?? new LocalRuntimeFileSystem();
@@ -43,6 +47,7 @@ export class LocalRuntime implements Runtime {
       options.processManager ?? new LocalProcessManager(options.processManagerOptions);
     this.shellResolver =
       options.shellResolver ?? new LocalShellResolver(options.shellResolverOptions);
+    this.git = options.git;
   }
 
   supports(ref: RuntimeRef): boolean {
@@ -92,6 +97,9 @@ export class LocalRuntime implements Runtime {
         processManager: this.processManager,
         shellResolver: this.shellResolver,
       }),
+      git:
+        this.git ??
+        new LocalGitService({ logicalRoot, pathResolver: new WorkspacePathResolver(scope) }),
     };
   }
 

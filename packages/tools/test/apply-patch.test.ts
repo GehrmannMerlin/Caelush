@@ -8,6 +8,8 @@ import {
 import {
   RuntimePatchError,
   RuntimePatchUncertainError,
+  LocalRuntime,
+  createLocalRuntimeResolver,
   type Runtime,
   type RuntimeResolver,
 } from "@caelush/runtime";
@@ -33,7 +35,9 @@ function request(args: JsonObject): ToolExecutionRequest {
 
 describe("apply_patch Tool registration", () => {
   it("publishes one HIGH-risk strict mutation tool with write/delete capabilities", () => {
-    const [registration] = createFileMutationToolRegistrations();
+    const [registration] = createFileMutationToolRegistrations(
+      createLocalRuntimeResolver(new LocalRuntime()),
+    );
     expect(registration?.definition).toMatchObject({
       name: "apply_patch",
       riskLevel: "HIGH",

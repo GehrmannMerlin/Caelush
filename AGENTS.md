@@ -206,7 +206,7 @@ pnpm check
 - Do not add a ToolBatch database table or migration. Existing Run/State/Step, Conversation, Continuation, ToolInvocation, ToolObservation, and Durable Event stores remain the sources of truth.
 - Phase 7C adds no Filesystem/Shell/Process/Git handlers, Runtime implementation, Retry, Timeout, Cancellation, Budget, or Verification execution. A final candidate still stops at `VERIFYING` and never directly completes a Run.
 
-当前是 Phase 8A 完成边界。除 Phase 1 已正式定义的 AgentSession、AgentRun、AgentStep、AgentState、AgentEvent、ToolDefinition、ToolInvocation、Observation、ApprovalRequest、VerificationResult 和 Run State Machine，以及 Phase 2 的 SQLite/Drizzle Storage、Repository、Run State Snapshot、Durable Event Store、EventBus、Replay 与 Live Watch、Phase 3 的 loopback-only Daemon、Health/Session/Run HTTP API 和 Durable/Ephemeral SSE Event Stream 外，Phase 4A/4B/4C 已建立 Caelush-owned LLM contracts、Provider Registry、single-turn streaming runtime 和真实 OpenAI-shaped SSE 兼容性边界；Phase 5A/5B/5C 已完成 Project Intelligence、Relevant File Planning 与 ContextBuilder finalization；Phase 6A/6B/6C 已完成 deterministic Agent loop、Conversation Ledger、Continuation checkpoint、原子 RunExecutionStore、Durable Event Trace、RunController 与 local-host recovery；Phase 7A/7B/7C 已完成 Tool contracts、严格 Schema Runtime、不可变 ToolRegistry、Tool Output Policy、ToolDispatcher、Gate port、ToolInvocation/ToolObservation durable lifecycle、idempotency、recovery、strict source-order Tool Batch、uncertain-side-effect recovery barrier、approval boundary、LLMToolResult conversion 与 RunController runtime integration；Phase 8A 已建立 tool-independent Local Runtime、workspace-relative path resolution、bounded strict-UTF-8 filesystem read、deterministic file discovery、fixed ripgrep search，以及四个只读 Built-in Tool。Phase 8A 仍不实现文件 mutation、patch、Shell/Process/Git、权限/Approval resolution、sandbox、retry、timeout、cancellation、parallelism、Verification execution 或 `COMPLETED` transition。
+当前是 Phase 8 完成边界。除 Phase 1–7 的既有契约与运行时外，Phase 8A/8B/8C/8D 已完成 Local Runtime、filesystem read/search、verified patch、shell/process、只读 Git、统一 Built-in catalog、Tool Effects 与原子 Tool settlement。Phase 8D 仍不实现权限/Approval resolution、sandbox、secret redaction、retry、timeout、cancellation、parallelism、Verification execution 或 `COMPLETED` transition。
 
 当前 Phase 8B 已在上述 8A 只读基线之上增加唯一的 `apply_patch` verified patch engine：支持严格 bounded Add/Update/Delete/Move、全量 precommit raw-byte SHA-256/size guard、顺序 commit、best-effort rollback 与 uncertainty fail-closed；它不实现 Shell/Process/Git、权限/Approval resolution、sandbox、retry、timeout、cancellation、parallelism、Verification execution 或 `COMPLETED` transition。
 
@@ -216,7 +216,7 @@ Phase 8C 的 non-zero exit 和 signal exit 是正常 `isError: false` 结果；�
 
 Phase 8 后续必须遵守固定的 8B、8C、8D 边界；不得新增 Phase 8 轮次，也不得在 8A/8B 提前实现后续能力。
 
-本轮完成后，Phase 8C 是当前完成边界；Phase 8D 仍负责 Git、最终 Built-in Tool catalog 和统一 effect bridge。Phase 8C 不实现权限/Approval resolution、sandbox、retry、timeout policy、Run cancellation、parallelism、Verification execution、Git、process persistence、process event bridge、AgentState effect bridge 或 `COMPLETED` transition。
+本轮完成后，Phase 8D 是当前完成边界；不得继续扩展 Phase 8。Phase 8 仍不提供 process persistence、权限/Approval resolution、sandbox、secret redaction、retry、timeout policy、Run cancellation、parallelism、Verification execution 或 `COMPLETED` transition。
 
 Phase 5B context rules:
 
@@ -249,3 +249,17 @@ Phase 5 final ContextBuilder rules:
 - Relevant-file context may be further truncated to fit the final model-input budget but must preserve provenance and truncation state.
 - ContextBuilder does not know models, providers, tools, or provider context windows; the caller supplies `maxInputTokens`.
 - ContextBuilder must never call `LLMGateway` or emit `AgentEvents`.
+
+## Phase 8D Git, Effects and Finalization Rules
+
+- Phase 8D is the final Phase 8 round. Never add Phase 8E, 8D-1, 8D-2, or another Phase 8 round.
+- Dedicated Git Runtime is read-only. It must call fixed `git` directly with `spawn("git", argv, { shell: false })`, deterministic non-interactive environment, and bounded output; it must not delegate to `RuntimeExecService` or expose Git mutation APIs.
+- Git must detect repositories with `git rev-parse`, support parent repositories and linked worktrees, constrain status/diff pathspecs to the current Agent Workspace, and never expose repository roots, `.git` metadata, absolute paths, raw environment, or raw diagnostics.
+- Git model inputs are structured `path`, `limit`, and `scope` values only. Reject absolute/UNC/drive/NUL/traversal/over-budget paths and malformed machine output with typed errors.
+- `git_status` uses bounded porcelain-v2 parsing; `git_diff` disables external diff/textconv/color/binary output and reports explicit model truncation metadata. Git tools require `GIT_READ` and are `LOW` risk.
+- `ToolRegistration.effectProjector` is pure host-side projection only. Effects are produced only from successful validated results; error and uncertain outcomes never fabricate effects and projector failure leaves the invocation running for uncertain recovery.
+- Effects settle in the ToolExecutionStore transaction: invocation, observation, AgentState projection, domain events, and terminal tool event are persisted before notification. Reuse the existing AgentState snapshot table and canonical state writer; do not add a process table or migration.
+- Public shell/process projections must use the fixed safe label `shell command`. Raw shell commands and stdin remain private invocation arguments only; they must not enter AgentState, events, event title/summary, or result details.
+- `changedFiles` is a bounded latest-change projection of at most 500 entries. `activeProcesses` is updated only by successful process effects; uncertain execution never fakes a stop.
+- The default catalog must be built by `createDefaultBuiltinToolRegistrations(runtimeResolver)` from one injected resolver and the immutable order `read_file`, `list_directory`, `find_files`, `search_text`, `apply_patch`, `exec_command`, `write_stdin`, `git_status`, `git_diff`.
+- Phase 8D does not implement Phase 9 security/permission/sandbox/secret redaction, Phase 10 cancellation/timeout/retry/budget policy, or Phase 11 CLI/Web product work.

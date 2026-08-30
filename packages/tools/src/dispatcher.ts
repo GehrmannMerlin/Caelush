@@ -52,6 +52,7 @@ import {
   type ToolExecutionEnvironment,
 } from "./execution-environment.js";
 import { ToolExecutionUncertainError } from "./errors.js";
+import { toolEffectsToEvents, type ToolEffect } from "./tool-effects.js";
 
 export interface ToolDispatcherOptions {
   readonly registry: ToolRegistry;
@@ -364,6 +365,23 @@ export class ToolDispatcher {
       });
     }
     const finishedAt = this.options.clock.now();
+    let effects: readonly ToolEffect[];
+    try {
+      effects =
+        resolvedTool.effectProjector?.({
+          request: {
+            ...request,
+            invocationId: snapshot.invocation.id,
+            args: snapshot.invocation.args,
+          },
+          result,
+          now: finishedAt,
+        }) ?? [];
+    } catch (error) {
+      throw new ToolDispatcherInfrastructureError("Tool effect projection failed.", {
+        cause: error,
+      });
+    }
     const terminal = result.isError
       ? failToolInvocation(
           snapshot.invocation,
@@ -406,7 +424,18 @@ export class ToolDispatcher {
       invocation: terminal,
       expectedRevision: snapshot.revision,
       observation,
-      events: [event],
+      events: [
+        ...toolEffectsToEvents(effects, {
+          runId: terminal.runId,
+          sessionId: request.sessionId,
+          stepId: terminal.stepId,
+          timestamp: finishedAt,
+          nextEventId: () => this.options.eventIdFactory.create(),
+        }),
+        event,
+      ],
+      effects,
+      effectTimestamp: finishedAt,
     });
     if (committed.snapshot.observation === undefined) {
       throw new ToolDispatcherInvariantError("Tool settlement committed without an observation.");

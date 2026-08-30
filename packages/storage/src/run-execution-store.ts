@@ -30,6 +30,7 @@ import { SqliteContinuationRepository } from "./repositories/continuation-reposi
 import { SqliteRunRepository } from "./repositories/run-repository.js";
 import { SqliteRunStateRepository } from "./repositories/run-state-repository.js";
 import { SqliteStepRepository } from "./repositories/step-repository.js";
+import { writeStateSnapshot } from "./state-snapshot-writer.js";
 
 interface StateRow {
   run_id: string;
@@ -96,40 +97,6 @@ function writeRun(client: CaelushDatabase["client"], run: RunExecutionCommit["ru
       parsed.id,
     );
   if (result.changes === 0) throw new StorageError(`AgentRun ${parsed.id} was not found`);
-}
-
-function writeState(
-  client: CaelushDatabase["client"],
-  state: AgentState,
-  expected: number | null,
-): number {
-  const parsed = AgentStateSchema.parse(state);
-  const existing = client
-    .prepare("SELECT revision FROM agent_state_snapshots WHERE run_id = ?")
-    .get(parsed.runId) as { revision: number } | undefined;
-  expectedRevision(existing?.revision, expected, "AgentState");
-  const revision = (existing?.revision ?? 0) + 1;
-  const dataJson = encodeProtocol(AgentStateSchema, parsed, {
-    entityType: "AgentState",
-    entityId: parsed.runId,
-    table: "agent_state_snapshots",
-  });
-  if (existing) {
-    client
-      .prepare(
-        `UPDATE agent_state_snapshots SET revision = ?, updated_at_ms = ?, data_json = ?
-         WHERE run_id = ?`,
-      )
-      .run(revision, parsed.updatedAt, dataJson, parsed.runId);
-  } else {
-    client
-      .prepare(
-        `INSERT INTO agent_state_snapshots (run_id, revision, updated_at_ms, data_json)
-         VALUES (?, ?, ?, ?)`,
-      )
-      .run(parsed.runId, revision, parsed.updatedAt, dataJson);
-  }
-  return revision;
 }
 
 function writeStep(
@@ -275,7 +242,12 @@ export class SqliteRunExecutionStore implements RunExecutionStorePort {
     try {
       writeRun(client, command.run);
       if (command.state !== undefined)
-        writeState(client, command.state, command.expectedStateRevision);
+        writeStateSnapshot(
+          client,
+          command.state,
+          command.expectedStateRevision,
+          (actual, expected) => expectedRevision(actual, expected, "AgentState"),
+        );
       for (const stepWrite of command.stepWrites) {
         if (stepWrite.step.runId !== command.run.id) {
           throw new RunExecutionInvariantError("execution Step does not belong to the Run");

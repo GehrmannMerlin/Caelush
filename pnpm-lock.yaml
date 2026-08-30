@@ -160,6 +160,9 @@ importers:
         specifier: 1.0.0-rc.4
         version: 1.0.0-rc.4(zod@4.4.3)
     devDependencies:
+      '@caelush/runtime':
+        specifier: workspace:*
+        version: link:../runtime
       drizzle-kit:
         specifier: 1.0.0-rc.4
         version: 1.0.0-rc.4

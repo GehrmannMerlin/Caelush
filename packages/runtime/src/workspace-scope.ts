@@ -5,6 +5,7 @@ import type { RuntimeTextSearch } from "./search/text-search.js";
 import type { WorkspacePathResolver } from "./workspace-path.js";
 import type { RuntimePatchService } from "./patch/service.js";
 import type { RuntimeExecService } from "./exec/contracts.js";
+import type { RuntimeGitService } from "./git/contracts.js";
 
 export interface RuntimeWorkspaceScope {
   readonly workspace: WorkspaceRef;
@@ -16,4 +17,5 @@ export interface RuntimeWorkspaceScope {
   readonly textSearch: RuntimeTextSearch;
   readonly patch: RuntimePatchService;
   readonly exec: RuntimeExecService;
+  readonly git: RuntimeGitService;
 }

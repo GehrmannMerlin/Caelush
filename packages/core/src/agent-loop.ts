@@ -8,7 +8,7 @@ import {
 import type { LLMMessage, LLMToolResultMessage } from "@caelush/llm/messages";
 import type { LLMRequest } from "@caelush/llm/request";
 import { LLMTurnResultSchema, type LLMTurnResult } from "@caelush/llm/turn";
-import type { AgentState, AgentStep } from "@caelush/protocol";
+import type { AgentState, AgentStep, TimestampMs } from "@caelush/protocol";
 import {
   beginAgentStepState,
   markAgentStateMaxStepsReached,
@@ -143,7 +143,7 @@ export class AgentLoop {
     prepared: PreparedTurn,
     appendPrefix: readonly LLMMessage[],
   ): Promise<AgentLoopExecutionResult> {
-    const startedAt = this.dependencies.clock.now();
+    const startedAt = monotonicNow(input.state, this.dependencies.clock.now());
     const step = createRunningAgentStep({
       id: this.dependencies.stepIdFactory.create(),
       runId: input.run.id,
@@ -189,7 +189,7 @@ export class AgentLoop {
 
     try {
       const decision = classifyAgentDecision(result);
-      const finishedAt = this.dependencies.clock.now();
+      const finishedAt = monotonicNow(activeState, this.dependencies.clock.now());
       const completedStep = completeAgentStep(step, {
         finishedAt,
         reasoningSummary: summarizeAgentDecision(decision),
@@ -245,7 +245,7 @@ export class AgentLoop {
     usage?: import("@caelush/llm/turn").LLMUsage,
     providerTurnState: import("./agent-loop-ports.js").AgentProviderTurnState = "FAILED",
   ): AgentLoopFailureResult {
-    const finishedAt = this.dependencies.clock.now();
+    const finishedAt = monotonicNow(activeState, this.dependencies.clock.now());
     const failedStep = failAgentStep(step, finishedAt);
     const state = settleAgentStepState(
       activeState,
@@ -286,7 +286,10 @@ export class AgentLoop {
     return {
       status: "OUTCOME",
       outcome,
-      state: markAgentStateMaxStepsReached(state, this.dependencies.clock.now()),
+      state: markAgentStateMaxStepsReached(
+        state,
+        monotonicNow(state, this.dependencies.clock.now()),
+      ),
       messagesToAppend: [...messagesToAppend],
       providerTurnState: "NOT_STARTED",
     };
@@ -310,6 +313,10 @@ export class AgentLoop {
       providerTurnState,
     };
   }
+}
+
+function monotonicNow(state: AgentState, now: TimestampMs): TimestampMs {
+  return Math.max(state.updatedAt, now) as TimestampMs;
 }
 
 interface PreparedTurn {

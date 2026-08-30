@@ -31,6 +31,7 @@ import {
   type ToolExecutionResult,
 } from "@caelush/tools";
 import { describe, expect, it } from "vitest";
+import { LocalRuntime, createLocalRuntimeResolver } from "@caelush/runtime";
 import { openCaelushStorage, type CaelushStorage } from "../src/index.js";
 
 const definitions = [
@@ -141,11 +142,12 @@ function createRuntime(
 }
 
 function createFilesystemRuntime(storage: CaelushStorage, eventBus: EventBus) {
+  const runtimeResolver = createLocalRuntimeResolver(new LocalRuntime());
   const builder = new ToolRegistryBuilder();
-  for (const registration of createReadOnlyFilesystemToolRegistrations()) {
+  for (const registration of createReadOnlyFilesystemToolRegistrations(runtimeResolver)) {
     builder.register(registration);
   }
-  for (const registration of createFileMutationToolRegistrations()) {
+  for (const registration of createFileMutationToolRegistrations(runtimeResolver)) {
     builder.register(registration);
   }
   const notifier: ToolCommittedEventNotifier = {

@@ -22,6 +22,7 @@ import {
   ToolExecutionInvariantError,
 } from "@caelush/tools";
 import { openCaelushStorage } from "../src/index.js";
+import { makeState } from "./support/fixtures.js";
 
 function makeSession(): AgentSession {
   return {
@@ -104,6 +105,7 @@ async function setup(
   await storage.sessions.insert(session);
   await storage.runs.insert(run);
   await storage.steps.insert(step);
+  await storage.runStates.save(makeState(run));
   return { storage, run, step };
 }
 
@@ -260,6 +262,10 @@ describe("SqliteToolExecutionStore", () => {
           invocation: completed,
           expectedRevision: 2,
           observation,
+          effects: [
+            { type: "FILE_CHANGE", summary: { path: "rollback.ts", changeType: "CREATED" } },
+          ],
+          effectTimestamp: createTimestampMs(130),
           events: [duplicateEvent, duplicateEvent],
         }),
       ).rejects.toBeInstanceOf(ToolExecutionConflictError);
@@ -267,7 +273,72 @@ describe("SqliteToolExecutionStore", () => {
       const loaded = await storage.toolExecution.load(invocation.id);
       expect(loaded?.invocation.status).toBe("RUNNING");
       expect(loaded?.observation).toBeUndefined();
+      expect((await storage.runStates.get(run.id))?.changedFiles).toEqual([]);
       expect(await storage.events.replay(run.id)).toHaveLength(1);
+    } finally {
+      await storage.close();
+    }
+  });
+
+  it("settles effects, AgentState and domain events atomically before notification", async () => {
+    const { storage, run, step } = await setup();
+    try {
+      const invocation = requested(run, step);
+      await storage.toolExecution.commit({
+        sessionId: run.sessionId,
+        invocation,
+        expectedRevision: null,
+        events: [requestedEvent(run, step, invocation)],
+      });
+      const running = startToolInvocation(invocation, createTimestampMs(120));
+      await storage.toolExecution.commit({
+        sessionId: run.sessionId,
+        invocation: running,
+        expectedRevision: 1,
+        events: [],
+      });
+      const completed = completeToolInvocation(running, createTimestampMs(130));
+      const observation = createToolObservation({
+        id: createObservationId(),
+        runId: run.id,
+        stepId: step.id,
+        toolInvocationId: invocation.id,
+        content: "changed",
+        details: {},
+        isError: false,
+        createdAt: createTimestampMs(130),
+      });
+      const event = {
+        eventId: createEventId(),
+        schemaVersion: 1 as const,
+        type: "file.modified" as const,
+        runId: run.id,
+        sessionId: run.sessionId,
+        stepId: step.id,
+        timestamp: createTimestampMs(130),
+        visibility: "USER_VISIBLE" as const,
+        durability: { kind: "DURABLE" as const, version: 1 as const },
+        payload: { summary: { path: "src/a.ts", changeType: "MODIFIED" as const, additions: 1 } },
+      };
+      await storage.toolExecution.commit({
+        sessionId: run.sessionId,
+        invocation: completed,
+        expectedRevision: 2,
+        observation,
+        effects: [{ type: "FILE_CHANGE", summary: event.payload.summary }],
+        effectTimestamp: createTimestampMs(130),
+        events: [event],
+      });
+      expect((await storage.runStates.get(run.id))?.changedFiles).toEqual([
+        { path: "src/a.ts", changeType: "MODIFIED", additions: 1 },
+      ]);
+      expect((await storage.events.replay(run.id)).map((item) => item.type)).toEqual([
+        "tool.requested",
+        "file.modified",
+      ]);
+      expect((await storage.toolExecution.load(invocation.id))?.invocation.status).toBe(
+        "COMPLETED",
+      );
     } finally {
       await storage.close();
     }

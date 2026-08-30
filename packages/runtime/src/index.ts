@@ -15,6 +15,7 @@ export {
   RuntimeSearchUnavailableError,
   RuntimeSearchError,
   RuntimeInvariantError,
+  RuntimeGitError,
 } from "./runtime-errors.js";
 export type { RuntimeErrorCode } from "./runtime-errors.js";
 export {
@@ -30,6 +31,7 @@ export {
   WorkspacePathResolver,
   type ResolvedWorkspacePath,
   type ResolvedMutationPath,
+  type ResolvedLexicalPath,
 } from "./workspace-path.js";
 export type {
   RuntimeDirectoryEntry,
@@ -88,3 +90,4 @@ export {
 } from "./search/ripgrep-runner.js";
 export { parseRipgrepJson } from "./search/ripgrep-parser.js";
 export * from "./exec/index.js";
+export * from "./git/index.js";

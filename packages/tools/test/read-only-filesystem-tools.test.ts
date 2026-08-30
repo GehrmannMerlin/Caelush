@@ -1,9 +1,12 @@
 import { createReadOnlyFilesystemToolRegistrations, ToolRegistryBuilder } from "../src/index.js";
 import { describe, expect, it } from "vitest";
+import { LocalRuntime, createLocalRuntimeResolver } from "@caelush/runtime";
 
 describe("read-only filesystem registrations", () => {
   it("builds the four tools in the stable model order with strict schemas", () => {
-    const registrations = createReadOnlyFilesystemToolRegistrations();
+    const registrations = createReadOnlyFilesystemToolRegistrations(
+      createLocalRuntimeResolver(new LocalRuntime()),
+    );
     const registry = registrations
       .reduce((builder, registration) => builder.register(registration), new ToolRegistryBuilder())
       .build();

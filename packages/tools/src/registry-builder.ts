@@ -54,7 +54,13 @@ export class ToolRegistryBuilder {
       });
     }
     this.names.add(definition.name);
-    this.registrations.push({ definition, handler: registration.handler });
+    this.registrations.push({
+      definition,
+      handler: registration.handler,
+      ...(registration.effectProjector === undefined
+        ? {}
+        : { effectProjector: registration.effectProjector }),
+    });
     return this;
   }
 
@@ -85,6 +91,9 @@ export class ToolRegistryBuilder {
         handler: registration.handler,
         inputValidator: validators.input,
         outputValidator: validators.output,
+        ...(registration.effectProjector === undefined
+          ? {}
+          : { effectProjector: registration.effectProjector }),
       });
     }
 

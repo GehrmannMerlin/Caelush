@@ -3,6 +3,7 @@ import { RuntimePatchUncertainError, type RuntimeResolver } from "@caelush/runti
 import { ToolExecutionUncertainError } from "../errors.js";
 import type { ToolExecutionRequest, ToolHandler } from "../handler.js";
 import type { ToolRegistration } from "../registration.js";
+import { projectPatchEffects } from "../tool-effects.js";
 import { errorResult, successResult, withRuntimeScope } from "./result.js";
 
 const definition: ToolDefinition = {
@@ -55,7 +56,7 @@ export function createApplyPatchRegistration(runtimeResolver: RuntimeResolver): 
   const handler: ToolHandler = {
     execute: async (request) => executeApplyPatch(request, runtimeResolver),
   };
-  return { definition, handler };
+  return { definition, handler, effectProjector: projectPatchEffects };
 }
 
 async function executeApplyPatch(request: ToolExecutionRequest, resolver: RuntimeResolver) {

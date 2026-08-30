@@ -30,6 +30,11 @@ export interface ResolvedMutationPath {
   readonly metadata: RuntimeFileMetadata | null;
 }
 
+export interface ResolvedLexicalPath {
+  readonly absolutePath: string;
+  readonly relativePath: string;
+}
+
 function isWindowsAbsoluteLike(value: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\") || value.startsWith("//");
 }
@@ -129,6 +134,17 @@ export class WorkspacePathResolver {
       throw new RuntimePatchError("PATH_NOT_FOUND");
     }
     return { absolutePath, relativePath, metadata: targetMetadata };
+  }
+
+  resolveLexical(workspaceRelativePath: string): ResolvedLexicalPath {
+    const normalized = validateRelativeInput(workspaceRelativePath);
+    const absolutePath = path.normalize(path.resolve(this.scope.logicalRoot, normalized));
+    if (!isPathInsideOrEqual(this.scope.logicalRoot, absolutePath)) {
+      throw new RuntimeBoundaryError("path resolves outside the workspace");
+    }
+    const relativePath =
+      path.relative(this.scope.logicalRoot, absolutePath).replaceAll(path.sep, "/") || ".";
+    return { absolutePath, relativePath };
   }
 
   assertKind(pathValue: ResolvedWorkspacePath, kind: RuntimeFileKind): void {

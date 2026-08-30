@@ -10,6 +10,7 @@ import {
 import { ToolExecutionUncertainError } from "../errors.js";
 import type { ToolExecutionRequest, ToolHandler } from "../handler.js";
 import type { ToolRegistration } from "../registration.js";
+import { projectExecEffects } from "../tool-effects.js";
 import { boundToolModelContent, DEFAULT_TOOL_OUTPUT_POLICY } from "../output-policy.js";
 import { EXEC_OUTPUT_SCHEMA, errorResult, successResult, withRuntimeScope } from "./result.js";
 
@@ -42,7 +43,7 @@ export function createExecCommandRegistration(runtimeResolver: RuntimeResolver):
   const handler: ToolHandler = {
     execute: async (request) => executeExecCommand(request, runtimeResolver),
   };
-  return { definition, handler };
+  return { definition, handler, effectProjector: projectExecEffects };
 }
 
 async function executeExecCommand(request: ToolExecutionRequest, resolver: RuntimeResolver) {

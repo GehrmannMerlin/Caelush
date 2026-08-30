@@ -21,6 +21,7 @@ import {
   assertToolExecutionEnvironment,
   type ToolExecutionEnvironment,
 } from "./execution-environment.js";
+import type { ToolEffect } from "./tool-effects.js";
 
 export const DEFAULT_MAX_EXTERNAL_CALL_ID_BYTES = 512;
 export const DEFAULT_MAX_INVOCATION_ARGS_BYTES = 256 * 1024;
@@ -99,10 +100,7 @@ export interface ToolErrorResultOutcome extends ToolResultOutcome {
   readonly observation: ToolObservation & { readonly isError: true };
 }
 
-export type DurableToolEvent = Extract<
-  AgentEvent,
-  { readonly type: "tool.requested" | "tool.started" | "tool.completed" | "tool.failed" }
->;
+export type DurableToolEvent = AgentEvent;
 
 type DurableEvent = Extract<EventDurability, { readonly kind: "DURABLE" }>;
 
@@ -128,6 +126,8 @@ export interface ToolExecutionCommit {
   readonly expectedRevision: number | null;
   readonly observation?: ToolObservation;
   readonly events: readonly DurableToolEventDraft[];
+  readonly effects?: readonly ToolEffect[];
+  readonly effectTimestamp?: import("@caelush/protocol").TimestampMs;
 }
 
 export interface ToolExecutionCommitResult {

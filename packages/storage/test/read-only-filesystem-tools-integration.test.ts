@@ -18,6 +18,7 @@ import {
   type ToolCommittedEventNotifier,
   type ToolDispatcherOutcome,
 } from "@caelush/tools";
+import { LocalRuntime, createLocalRuntimeResolver } from "@caelush/runtime";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
 import { makeRun, makeSession, makeStep } from "./support/fixtures.js";
@@ -44,7 +45,9 @@ describe("read-only filesystem tools through ToolDispatcher", () => {
     await storage.steps.insert(step);
 
     const eventBus = new EventBus(storage.events);
-    const registrations = createReadOnlyFilesystemToolRegistrations();
+    const registrations = createReadOnlyFilesystemToolRegistrations(
+      createLocalRuntimeResolver(new LocalRuntime()),
+    );
     const registryBuilder = new ToolRegistryBuilder();
     for (const registration of registrations) registryBuilder.register(registration);
     const notifier: ToolCommittedEventNotifier = {
@@ -99,6 +102,7 @@ describe("read-only filesystem tools through ToolDispatcher", () => {
       expect((await storage.events.replay(run.id)).map((event) => event.type)).toEqual([
         "tool.requested",
         "tool.started",
+        "file.read",
         "tool.completed",
         "tool.requested",
         "tool.started",

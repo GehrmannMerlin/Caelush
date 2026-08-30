@@ -2,9 +2,9 @@
 
 Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI、Web 和其他宿主共享同一个可观察、可取消、可验证、可扩展的 Agent Core。
 
-本轮当前阶段为 **V1 Phase 8C：Shell Execution & Managed Process Runtime**；Phase 8A 只读基线和 Phase 8B patch engine 均已完成。
+本轮当前阶段为 **V1 Phase 8：Git Runtime, Built-in Tool Integration & Finalization**；Phase 8A/8B/8C/8D 均已完成。
 
-当前仓库已经完成 Phase 1–7 以及 Phase 8A/8B；本轮增加 tool-independent `@caelush/runtime` 的 `RuntimeExecService`、统一 pipe/PTY `LocalProcessManager`、workspace-contained Shell resolution、bounded incremental output 和 `exec_command`/`write_stdin` 两个 Built-in Tool。Phase 8C 的 process session 是 run-owned、runtime-local、non-durable memory state；它不引入 Storage、process events、permission decision、sandbox、timeout/retry/cancellation 或 Git。
+当前仓库已经完成 Phase 1–7 以及 Phase 8A/8B/8C/8D；Phase 8D 增加 tool-independent 的只读 Git Runtime、`git_status`/`git_diff`、统一默认 Built-in catalog、纯 Tool Effects、AgentState 投影和原子 Tool settlement。Git 仍不提供任何 mutation API；Phase 8 不引入 Phase 9 权限/安全能力或 Phase 10 超时/取消/重试/预算策略。
 
 ## Phase 6 Status
 
@@ -23,8 +23,8 @@ Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI�
 - Phase 8A — Local Runtime Foundation & Filesystem Read/Search: **COMPLETED**
 - Phase 8B — Safe File Mutation & Patch Engine: **COMPLETED**
 - Phase 8C — Shell Execution & Managed Process Runtime: **COMPLETED**
-- Phase 8D — Git Runtime, Built-in Tool Integration & Phase 8 Finalization: **PENDING**
-- Phase 8 — overall: **IN PROGRESS**（8D Git/最终集成尚未实现）
+- Phase 8D — Git Runtime, Built-in Tool Integration & Phase 8 Finalization: **COMPLETED**
+- Phase 8 — overall: **COMPLETED**
 
 Phase 7 contains exactly 7A, 7B, and 7C. Caelush now has an immutable validated Tool Registry and a single-Tool Dispatcher. A valid call is durably recorded as `REQUESTED`, gated, durably checkpointed as `RUNNING`, executed once through the resolved handler, output-validated, and atomically settled with its `ToolObservation` and lifecycle event. Exact duplicate calls are idempotent, stale `RUNNING` calls fail closed during recovery, and raw arguments/results are kept out of lifecycle events.
 
@@ -34,7 +34,7 @@ Phase 8A adds a concrete local execution substrate below the Tool layer. Built-i
 
 Phase 8B adds the narrow `apply_patch` mutation surface. A strict, bounded Add/Update/Delete/Move document is fully parsed and prepared in memory; all source SHA-256/size guards and destination absence checks pass before the first mutation. Existing mutation paths cannot traverse symlinks, existing UTF-8 BOM/newline/final-newline state is preserved, and in-process commit failures attempt verified reverse rollback. This is best-effort and is not an OS-level atomic transaction, crash-atomic, exactly-once mutation, sandbox, production permission evaluator, shell runtime, or Git runtime. The read-only and mutation registrations remain explicit factories; the final default catalog belongs to Phase 8D.
 
-Phase 8C adds the shared Shell/Managed Process substrate described in [Shell and Process Runtime](docs/architecture/process-runtime.md). `exec_command` and `write_stdin` run through one stable `LocalRuntime` → `RuntimeExecService` → `LocalProcessManager` path, with explicit `spawn(..., shell: false)` pipe execution, lazy exact-pinned `node-pty` PTY execution, workspace-contained `cwd`, run ownership, stale-generation uncertainty, bounded head/tail output, incremental drain, and yield-only interaction. Shell output is terminal-sanitized but is not yet secret-redacted; process sessions are not durable and no model-facing kill Tool or process event bridge exists. The final default catalog and Phase 8D integration remain deferred.
+Phase 8C adds the shared Shell/Managed Process substrate described in [Shell and Process Runtime](docs/architecture/process-runtime.md). Phase 8D completes the final integration: [Git Runtime](docs/architecture/git-runtime.md) adds bounded read-only Git inspection, while [Tool Effects](docs/architecture/tool-effects.md) defines pure file/process projections and atomic durable settlement. Shell output is terminal-sanitized but is not secret-redacted; process sessions remain runtime-local and are represented in AgentState only through successful effects. The default catalog is injected and immutable.
 
 ## Phase 5 Status
 
@@ -44,7 +44,7 @@ Phase 8C adds the shared Shell/Managed Process substrate described in [Shell and
 
 Caelush can build provider-independent, budgeted LLMRequest-ready message context from project facts, project instructions, relevant files, and conversation history. Phase 6C consumes that context through a resumable one-turn AgentLoop and persists only the real conversation separately from synthetic provider context. See [Run Controller](docs/architecture/run-controller.md) for the durable execution and recovery boundary.
 
-Phase 8B architecture details are documented in [Patch Engine](docs/architecture/patch-engine.md).
+Phase 8B architecture details are documented in [Patch Engine](docs/architecture/patch-engine.md). Phase 8D details are documented in [Git Runtime](docs/architecture/git-runtime.md) and [Tool Effects](docs/architecture/tool-effects.md).
 
 ## 技术栈
 

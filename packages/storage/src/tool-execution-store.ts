@@ -1,5 +1,6 @@
 import {
   AgentRunSchema,
+  AgentStateSchema,
   AgentStepSchema,
   ObservationSchema,
   ToolInvocationSchema,
@@ -19,6 +20,8 @@ import {
   type ToolExecutionStorePort,
   ToolExecutionConflictError,
   ToolExecutionInvariantError,
+  applyToolEffectsToAgentState,
+  effectsChangeAgentState,
 } from "@caelush/tools";
 import type { CaelushDatabase } from "./database.js";
 import { decodeProtocol, encodeProtocol } from "./codec.js";
@@ -26,6 +29,7 @@ import { appendDurableEventsInTransaction } from "./events/sqlite-durable-event-
 import { StorageError } from "./errors.js";
 import { SqliteObservationRepository } from "./repositories/observation-repository.js";
 import { SqliteToolInvocationRepository } from "./repositories/tool-invocation-repository.js";
+import { writeStateSnapshot } from "./state-snapshot-writer.js";
 
 function expectedRevision(actual: number | undefined, expected: number | null): void {
   const normalized = actual ?? null;
@@ -273,6 +277,36 @@ export class SqliteToolExecutionStore implements ToolExecutionStorePort {
       const revision = (existing?.revision ?? 0) + 1;
       writeInvocation(client, command.invocation, revision);
       if (command.observation !== undefined) writeObservation(client, command.observation);
+      if (command.effects !== undefined && effectsChangeAgentState(command.effects)) {
+        const stateRow = client
+          .prepare("SELECT revision, data_json FROM agent_state_snapshots WHERE run_id = ?")
+          .get(command.invocation.runId) as { revision: number; data_json: string } | undefined;
+        if (stateRow === undefined) {
+          throw new ToolExecutionInvariantError("Tool effects require an AgentState snapshot.");
+        }
+        const state = decodeProtocol(AgentStateSchema, stateRow.data_json, {
+          entityType: "AgentState",
+          entityId: command.invocation.runId,
+          table: "agent_state_snapshots",
+        });
+        const updated = applyToolEffectsToAgentState(
+          state,
+          command.effects,
+          Math.max(
+            state.updatedAt,
+            command.effectTimestamp ??
+              command.invocation.finishedAt ??
+              command.invocation.createdAt,
+          ) as typeof state.updatedAt,
+        );
+        writeStateSnapshot(client, updated, stateRow.revision, (actual, expected) => {
+          if (actual !== expected) {
+            throw new ToolExecutionConflictError(
+              "AgentState revision changed during Tool execution.",
+            );
+          }
+        });
+      }
       const events = appendDurableEventsInTransaction(
         client,
         command.events as unknown as readonly DurableEventDraft[],

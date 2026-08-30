@@ -273,6 +273,10 @@ export class RunController {
                 };
           return this.failBoundaryLocked(snapshot, agentError);
         }
+        // Tool settlement may have advanced AgentState in its own atomic transaction.
+        // Always continue from the durable revision before writing continuation, approval,
+        // or failure state.
+        snapshot = await this.load(snapshot.run.id);
         if (outcome.kind === "WAITING_APPROVAL") {
           snapshot = await this.persistWaitingApprovalLocked(snapshot, outcome);
           return this.resultFromSnapshot(snapshot);

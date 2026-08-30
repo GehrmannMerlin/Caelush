@@ -42,7 +42,13 @@ export type RuntimeErrorCode =
   | "PROCESS_SESSION_STALE"
   | "SPAWN_FAILED"
   | "STDIN_UNAVAILABLE"
-  | "PROCESS_UNCERTAIN";
+  | "PROCESS_UNCERTAIN"
+  | "NOT_A_GIT_REPOSITORY"
+  | "GIT_UNAVAILABLE"
+  | "INVALID_GIT_PATH"
+  | "INVALID_GIT_SCOPE"
+  | "GIT_COMMAND_FAILED"
+  | "GIT_UNSUPPORTED_PATH_ENCODING";
 
 export class RuntimeError extends Error {
   readonly code: RuntimeErrorCode;
@@ -135,5 +141,19 @@ export class RuntimeSearchError extends RuntimeError {
 export class RuntimeInvariantError extends RuntimeError {
   constructor(message: string) {
     super("RUNTIME_INVARIANT", message);
+  }
+}
+
+export type RuntimeGitErrorCode =
+  | "NOT_A_GIT_REPOSITORY"
+  | "GIT_UNAVAILABLE"
+  | "INVALID_GIT_PATH"
+  | "INVALID_GIT_SCOPE"
+  | "GIT_COMMAND_FAILED"
+  | "GIT_UNSUPPORTED_PATH_ENCODING";
+
+export class RuntimeGitError extends RuntimeError {
+  constructor(code: RuntimeGitErrorCode, message = `Git operation failed: ${code}.`) {
+    super(code, message);
   }
 }
