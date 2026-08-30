@@ -2,9 +2,9 @@
 
 Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI、Web 和其他宿主共享同一个可观察、可取消、可验证、可扩展的 Agent Core。
 
-本轮当前阶段为 **V1 Phase 9B：Durable Approval Workflow & Resolution**；Phase 8A/8B/8C/8D 与 Phase 9A 已完成，本轮把安全 Gate 的 `REQUIRE_APPROVAL` 接入 durable Approval 与精确恢复。
+本轮当前阶段为 **V1 Phase 9C：Sensitive Resource Policy, Command Policy & Secret Redaction**；Phase 8A/8B/8C/8D、Phase 9A 与 Phase 9B 已完成，本轮把输入感知策略与 secret-safe public/model projection 接入既有 Gate、Approval 和 Tool 结果边界。
 
-当前仓库已经完成 Phase 1–7 以及 Phase 8A/8B/8C/8D；Phase 8D 增加 tool-independent 的只读 Git Runtime、`git_status`/`git_diff`、统一默认 Built-in catalog、纯 Tool Effects、AgentState 投影和原子 Tool settlement。Phase 9A 增加独立的 `@caelush/security` policy kernel、Run-derived `ToolSecurityContext` 与真实 `ToolExecutionGate`；Phase 9B 增加 durable Approval workflow、精确 grant matching、lazy expiry 与 Tool/Run recovery，但不实现命令内容策略、secret redaction 或 OS hard sandbox；Phase 10 的超时/取消/重试/预算策略仍未实现。
+当前仓库已经完成 Phase 1–7 以及 Phase 8A/8B/8C/8D；Phase 8D 增加 tool-independent 的只读 Git Runtime、`git_status`/`git_diff`、统一默认 Built-in catalog、纯 Tool Effects、AgentState 投影和原子 Tool settlement。Phase 9A 增加独立的 `@caelush/security` policy kernel、Run-derived `ToolSecurityContext` 与真实 `ToolExecutionGate`；Phase 9B 增加 durable Approval workflow、精确 grant matching、lazy expiry 与 Tool/Run recovery；Phase 9C 增加 sensitive resource/command policy、host-only facts、high-confidence secret redaction 和 sanitize-before-persist，但不实现 OS hard sandbox；Phase 10 的超时/取消/重试/预算策略仍未实现。
 
 ## Phase 6 Status
 
@@ -30,8 +30,9 @@ Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI�
 
 - Phase 9A — Security Policy Kernel & Tool Execution Gate: **COMPLETED**
 - Phase 9B — Durable Approval Workflow & Resolution: **COMPLETED**
-- Phase 9A owns deterministic `ALLOW` / `DENY` / `REQUIRE_APPROVAL` policy decisions; Phase 9B owns only durable ApprovalRequest creation/resolution, exact grant matching, lazy expiry, and Tool/Run recovery.
-- Input-aware command policy, sensitive-file policy, secret redaction and OS-level hard sandboxing remain explicitly out of scope.
+- Phase 9C — Sensitive Resource Policy, Command Policy & Secret Redaction: **COMPLETED**
+- Phase 9A owns deterministic metadata decisions; Phase 9B owns durable ApprovalRequest creation/resolution, exact grant matching, lazy expiry, and Tool/Run recovery; Phase 9C adds only monotonic input-aware policy and high-confidence secret-safe projections.
+- Phase 9 overall: **IN PROGRESS** — Phase 9D remains a future handoff and is not implemented.
 
 Phase 7 contains exactly 7A, 7B, and 7C. Caelush now has an immutable validated Tool Registry and a single-Tool Dispatcher. A valid call is durably recorded as `REQUESTED`, gated, durably checkpointed as `RUNNING`, executed once through the resolved handler, output-validated, and atomically settled with its `ToolObservation` and lifecycle event. Exact duplicate calls are idempotent, stale `RUNNING` calls fail closed during recovery, and raw arguments/results are kept out of lifecycle events.
 
@@ -41,7 +42,7 @@ Phase 8A adds a concrete local execution substrate below the Tool layer. Built-i
 
 Phase 8B adds the narrow `apply_patch` mutation surface. A strict, bounded Add/Update/Delete/Move document is fully parsed and prepared in memory; all source SHA-256/size guards and destination absence checks pass before the first mutation. Existing mutation paths cannot traverse symlinks, existing UTF-8 BOM/newline/final-newline state is preserved, and in-process commit failures attempt verified reverse rollback. This is best-effort and is not an OS-level atomic transaction, crash-atomic, exactly-once mutation, sandbox, production permission evaluator, shell runtime, or Git runtime. The read-only and mutation registrations remain explicit factories; the final default catalog belongs to Phase 8D.
 
-Phase 8C adds the shared Shell/Managed Process substrate described in [Shell and Process Runtime](docs/architecture/process-runtime.md). Phase 8D completes the final integration: [Git Runtime](docs/architecture/git-runtime.md) adds bounded read-only Git inspection, while [Tool Effects](docs/architecture/tool-effects.md) defines pure file/process projections and atomic durable settlement. Shell output is terminal-sanitized but is not secret-redacted; process sessions remain runtime-local and are represented in AgentState only through successful effects. The default catalog is injected and immutable.
+Phase 8C adds the shared Shell/Managed Process substrate described in [Shell and Process Runtime](docs/architecture/process-runtime.md). Phase 8D completes the final integration: [Git Runtime](docs/architecture/git-runtime.md) adds bounded read-only Git inspection, while [Tool Effects](docs/architecture/tool-effects.md) defines pure file/process projections and atomic durable settlement. Phase 9C adds the [Input Security Policy](docs/architecture/input-security-policy.md) and [Secret Redaction](docs/architecture/secret-redaction.md) boundaries. Shell output is terminal-sanitized and now also passes the injected high-confidence secret sanitizer; process sessions remain runtime-local and are represented in AgentState only through successful effects. The default catalog is injected and immutable.
 
 ## Phase 5 Status
 

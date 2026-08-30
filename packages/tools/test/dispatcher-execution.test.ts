@@ -121,7 +121,11 @@ function makeDispatcher(
   let now = 100;
   const definition = makeDefinition();
   const builder = new ToolRegistryBuilder();
-  builder.register({ definition, handler: { execute }, securityFactsProjector });
+  builder.register({
+    definition,
+    handler: { execute },
+    ...(securityFactsProjector === undefined ? {} : { securityFactsProjector }),
+  });
   const registry = builder.build();
   const notifier: ToolCommittedEventNotifier = { notifyCommitted() {} };
   return new ToolDispatcher({
@@ -129,7 +133,9 @@ function makeDispatcher(
     store,
     gate: {
       decide: async (input) => {
-        if (factsSeen !== undefined) factsSeen.value = input.securityFacts;
+        if (factsSeen !== undefined && input.securityFacts !== undefined) {
+          factsSeen.value = input.securityFacts;
+        }
         return decision;
       },
     },

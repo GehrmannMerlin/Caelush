@@ -46,4 +46,23 @@ describe("security architecture boundaries", () => {
     const source = (await Promise.all(files.map((file) => readFile(file, "utf8")))).join("\n");
     expect(source).not.toMatch(/from\s+["']@caelush\/security["']/);
   });
+
+  it("keeps Phase 9C sanitizer injection explicit and documents the Phase 9D boundary", async () => {
+    const sourceRoot = path.join(repositoryRoot, "packages", "tools", "src");
+    const files = await sourceFiles(sourceRoot);
+    const source = (await Promise.all(files.map((file) => readFile(file, "utf8")))).join("\n");
+    expect(source).toContain("resultSanitizer");
+    expect(source).not.toContain("INSECURE_NOOP_SANITIZER");
+    expect(source).not.toContain("SECRET_APPROVAL_9C_TOKEN");
+
+    const readme = await readFile(path.join(repositoryRoot, "README.md"), "utf8");
+    expect(readme).toContain("Phase 9C");
+    expect(readme).toContain("Phase 9D remains a future handoff");
+    expect(
+      await readFile(path.join(repositoryRoot, "docs", "architecture", "input-security-policy.md"), "utf8"),
+    ).toContain("monotonic");
+    expect(
+      await readFile(path.join(repositoryRoot, "docs", "architecture", "secret-redaction.md"), "utf8"),
+    ).toContain("ToolResultSanitizerPort");
+  });
 });
