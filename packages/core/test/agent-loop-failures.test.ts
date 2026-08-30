@@ -125,6 +125,33 @@ describe("AgentLoop failures", () => {
     expect(result.state.usage.steps).toBe(1);
   });
 
+  it("exposes safe retry metadata for a transient provider failure", async () => {
+    const result = await new AgentLoop(
+      dependencies(async () => {
+        throw new LLMRateLimitError(SECRET, { retryAfterMs: 2_500 });
+      }),
+    ).run(input());
+    expect(result.status).toBe("FAILED");
+    if (result.status !== "FAILED") throw new Error("expected failure");
+    expect(result.retry).toEqual({
+      code: "LLM_RATE_LIMIT",
+      retryable: true,
+      retryAfterMs: 2_500,
+    });
+    expect(JSON.stringify(result)).not.toContain(SECRET);
+  });
+
+  it("does not expose retry metadata for an authentication failure", async () => {
+    const result = await new AgentLoop(
+      dependencies(async () => {
+        throw new LLMAuthenticationError(SECRET);
+      }),
+    ).run(input());
+    expect(result.status).toBe("FAILED");
+    if (result.status !== "FAILED") throw new Error("expected failure");
+    expect(result.retry).toBeUndefined();
+  });
+
   it("settles a schema-valid rejected model turn with known usage", async () => {
     const result = await new AgentLoop(dependencies(async () => output())).run(input());
     expect(result.status).toBe("FAILED");

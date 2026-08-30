@@ -1,5 +1,11 @@
 import { ContextBudgetExceededError, ContextError } from "@caelush/context";
-import { LLMError, LLMNetworkError, LLMRateLimitError, LLMTimeoutError } from "@caelush/llm/errors";
+import {
+  LLMError,
+  LLMNetworkError,
+  LLMRateLimitError,
+  LLMTimeoutError,
+} from "@caelush/llm/errors";
+import type { AgentRetryMetadata } from "./agent-loop-input.js";
 import type { AgentError } from "@caelush/protocol";
 import { AgentErrorSchema } from "@caelush/protocol";
 import { AgentModelOutputError, AgentToolResultBatchError } from "./agent-errors.js";
@@ -60,6 +66,22 @@ export function mapAgentLoopError(error: unknown): AgentError {
     false,
     "The agent loop encountered an internal error.",
   );
+}
+
+export function mapAgentRetryMetadata(error: unknown): AgentRetryMetadata | undefined {
+  if (!(error instanceof LLMError) || !error.retryable) return undefined;
+  if (
+    error.code !== "LLM_RATE_LIMIT" &&
+    error.code !== "LLM_NETWORK" &&
+    error.code !== "LLM_TIMEOUT"
+  ) {
+    return undefined;
+  }
+  return {
+    code: error.code,
+    retryable: error.retryable,
+    ...(error.retryAfterMs === undefined ? {} : { retryAfterMs: error.retryAfterMs }),
+  };
 }
 
 function agentError(

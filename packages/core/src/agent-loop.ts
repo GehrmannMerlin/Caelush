@@ -36,7 +36,7 @@ import type {
   AgentLoopResumeInput,
   AgentLoopStartInput,
 } from "./agent-loop-input.js";
-import { mapAgentLoopError } from "./agent-error-mapper.js";
+import { mapAgentLoopError, mapAgentRetryMetadata } from "./agent-error-mapper.js";
 import { prepareResumeHistory, validateAgentLoopInput } from "./agent-loop-history.js";
 import type { AgentLoopDependencies, AgentLoopLifecycleHooks } from "./agent-loop-ports.js";
 import { buildAgentLLMRequest } from "./agent-loop-request.js";
@@ -319,6 +319,9 @@ export class AgentLoop {
       messagesToAppend: [...appendPrefix],
       contextReport: context.report,
       providerTurnState,
+      ...(mapAgentRetryMetadata(error) === undefined
+        ? {}
+        : { retry: mapAgentRetryMetadata(error) }),
     };
   }
 

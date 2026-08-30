@@ -14,6 +14,12 @@ import type {
 import type { AgentToolCallsDecision, AgentLoopOutcome } from "./agent-decision.js";
 import type { AgentLoopDependencies, AgentProviderTurnState } from "./agent-loop-ports.js";
 
+export interface AgentRetryMetadata {
+  readonly code: "LLM_RATE_LIMIT" | "LLM_NETWORK" | "LLM_TIMEOUT";
+  readonly retryable: boolean;
+  readonly retryAfterMs?: number;
+}
+
 export interface AgentLoopModelSettings {
   readonly maxOutputTokens?: number;
   readonly temperature?: number;
@@ -58,6 +64,7 @@ export interface AgentLoopFailureResult {
   readonly messagesToAppend: readonly LLMMessage[];
   readonly contextReport?: ContextBuildReport;
   readonly providerTurnState: AgentProviderTurnState;
+  readonly retry?: AgentRetryMetadata;
 }
 
 export interface AgentLoopCancelledResult {

@@ -73,6 +73,7 @@ export type {
   AgentLoopCommonInput,
   AgentLoopExecutionResult,
   AgentLoopFailureResult,
+  AgentRetryMetadata,
   AgentLoopCancelledResult,
   AgentLoopModelSettings,
   AgentLoopOutcomeResult,

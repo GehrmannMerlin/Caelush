@@ -97,4 +97,10 @@ describe("LLM errors and provider boundary", () => {
     }
     expect(streamed).toEqual([event]);
   });
+
+  it("preserves an optional safe Retry-After hint", () => {
+    const error = new LLMRateLimitError("slow down", { retryAfterMs: 2_500 });
+    expect(error.retryAfterMs).toBe(2_500);
+    expect(error.retryable).toBe(true);
+  });
 });

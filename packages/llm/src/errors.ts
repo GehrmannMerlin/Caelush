@@ -17,6 +17,7 @@ export interface LLMErrorContext {
   readonly providerId?: string;
   readonly model?: ModelRef;
   readonly cause?: unknown;
+  readonly retryAfterMs?: number;
 }
 
 interface LLMErrorOptions extends LLMErrorContext {
@@ -32,6 +33,7 @@ export class LLMError extends Error {
   readonly providerId: string | undefined;
   readonly model: ModelRef | undefined;
   readonly retryable: boolean;
+  readonly retryAfterMs: number | undefined;
 
   constructor(code: LLMErrorCode, message: string, options: LLMErrorOptions) {
     super(message, options.cause === undefined ? undefined : { cause: options.cause });
@@ -40,6 +42,13 @@ export class LLMError extends Error {
     this.providerId = options.providerId;
     this.model = options.model;
     this.retryable = options.retryable;
+    if (
+      options.retryAfterMs !== undefined &&
+      (!Number.isSafeInteger(options.retryAfterMs) || options.retryAfterMs < 0)
+    ) {
+      throw new TypeError("LLM retryAfterMs must be an optional safe nonnegative integer.");
+    }
+    this.retryAfterMs = options.retryAfterMs;
   }
 }
 
