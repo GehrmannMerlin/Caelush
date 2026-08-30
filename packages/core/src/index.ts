@@ -161,3 +161,16 @@ export type {
   RunExecutionStepWrite,
   RunExecutionStorePort,
 } from "./run-execution-store.js";
+export {
+  DEFAULT_RETRY_POLICY,
+  MAX_RETRY_ATTEMPTS,
+  RetryController,
+  validateRetryPolicy,
+} from "./retry-controller.js";
+export type {
+  RetryDecision,
+  RetryDecisionInput,
+  RetryJitterSource,
+  RetryPolicy,
+  RetryStopReason,
+} from "./retry-controller.js";
