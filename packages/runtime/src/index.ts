@@ -44,6 +44,8 @@ export { LocalRuntimeFileSystem } from "./filesystem/local-filesystem.js";
 export { RuntimePatchError, RuntimePatchUncertainError } from "./patch/errors.js";
 export type { RuntimePatchService } from "./patch/service.js";
 export { parsePatch } from "./patch/parser.js";
+export { inspectPatchTargets } from "./patch/inspection.js";
+export type { PatchInspectionTarget } from "./patch/inspection.js";
 export { PATCH_LIMITS } from "./patch/types.js";
 export {
   applyPatchHunks,
