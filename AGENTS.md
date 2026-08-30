@@ -263,3 +263,19 @@ Phase 5 final ContextBuilder rules:
 - `changedFiles` is a bounded latest-change projection of at most 500 entries. `activeProcesses` is updated only by successful process effects; uncertain execution never fakes a stop.
 - The default catalog must be built by `createDefaultBuiltinToolRegistrations(runtimeResolver)` from one injected resolver and the immutable order `read_file`, `list_directory`, `find_files`, `search_text`, `apply_patch`, `exec_command`, `write_stdin`, `git_status`, `git_diff`.
 - Phase 8D does not implement Phase 9 security/permission/sandbox/secret redaction, Phase 10 cancellation/timeout/retry/budget policy, or Phase 11 CLI/Web product work.
+
+## Phase 9A Security Policy Kernel and Tool Gate Rules
+
+- Phase 9 contains exactly 9A, 9B, 9C and 9D; never add Phase 9E or another Phase 9 round.
+- Phase 9A owns only deterministic `ALLOW` / `DENY` / `REQUIRE_APPROVAL` decisions and the Tool execution Gate.
+- Reuse Protocol `PermissionProfile`, `ApprovalPolicy`, `Capability` and `RiskLevel`; do not create duplicate V2 enums or schemas.
+- `ToolExecutionEnvironment` answers where/with what runtime; `ToolSecurityContext` answers what the Run is allowed to do. Never put permission policy in the environment.
+- `ToolSecurityContext` must be derived from durable `AgentRun` policy, runtime-validated, passed through `ToolBatchRequest` and `ToolDispatchRequest`, and never come from model arguments or Tool arguments.
+- Capability denial has precedence over approval. `READ_ONLY` grants only `FS_READ`/`GIT_READ`; `PROJECT_ACCESS` grants project filesystem and process capabilities plus `GIT_READ`; `FULL_ACCESS` grants the current Protocol capability set without disabling structured Tool invariants.
+- `ALWAYS_ASK` requires approval for every capability-authorized Tool. `DANGEROUS_ONLY` allows LOW/MEDIUM and requires approval for HIGH/CRITICAL. `NEVER_ASK` never emits `REQUIRE_APPROVAL`.
+- `PROJECT_ACCESS + NEVER_ASK` denies `UNCONFINED_PROCESS` because V1 has no OS hard sandbox. `FULL_ACCESS + NEVER_ASK` may allow capability-authorized unconfined process Tools.
+- Security policy evaluation is pure/deterministic and must not read arguments, perform I/O, use time/randomness, or expose commands, stdin, file contents, environment variables, credentials, absolute paths, Provider errors, or internal stack traces.
+- `@caelush/tools` defines the Gate port; `@caelush/security` implements it. Tools must not import Security. Security must not import Runtime, Core, Storage, Events, LLM, Context, Verification, or apps.
+- Security never writes Storage, publishes Events, executes handlers, resolves approvals, or mutates ToolInvocation. Dispatcher owns invocation lifecycle and persists `FAILED`/`WAITING_APPROVAL` boundaries.
+- A `REQUESTED` invocation may be re-evaluated during recovery with durable Run policy. `WAITING_APPROVAL`, `RUNNING`, and terminal invocations must not be silently re-authorized or replayed.
+- Phase 9A does not implement Approval persistence/resolution, command/file content policy, secret redaction, OS hard sandboxing, timeout, cancellation, retry, budget, parallelism, or Verification execution.
