@@ -1,4 +1,9 @@
-import { createRunId, createStepId, createToolInvocationId, createTimestampMs } from "@caelush/protocol";
+import {
+  createRunId,
+  createStepId,
+  createToolInvocationId,
+  createTimestampMs,
+} from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import { CaelushToolResultSanitizer } from "../src/index.js";
 

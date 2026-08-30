@@ -19,12 +19,16 @@ describe("SensitivePathClassifier", () => {
     expect(classifySensitivePath(path)).toBe(category);
   });
 
-  it.each([".env.example", ".env.sample", ".env.template", ".env.defaults", ".env.local.example", "src/config.example.ts"])(
-    "does not classify template-like path %s as sensitive",
-    (path) => {
-      expect(classifySensitivePath(path)).toBeUndefined();
-    },
-  );
+  it.each([
+    ".env.example",
+    ".env.sample",
+    ".env.template",
+    ".env.defaults",
+    ".env.local.example",
+    "src/config.example.ts",
+  ])("does not classify template-like path %s as sensitive", (path) => {
+    expect(classifySensitivePath(path)).toBeUndefined();
+  });
 
   it.each(["C:\\workspace\\.env", "/tmp/.env", "../.env", "src/../.env"])(
     "does not treat invalid workspace path %s as a direct sensitive match",

@@ -25,7 +25,7 @@ describe("input-aware command policy", () => {
       "NETWORK_ACCESS",
       "REMOTE_MUTATION",
     ]);
-    expect(classify("printf 'rm -rf /'" )).toEqual(["NORMAL_LOCAL"]);
+    expect(classify("printf 'rm -rf /'")).toEqual(["NORMAL_LOCAL"]);
   });
 
   it("handles PowerShell and CMD destructive semantics without running them", () => {
@@ -39,7 +39,11 @@ describe("input-aware command policy", () => {
   });
 
   it("fails closed for dynamic syntax and excessive wrapper depth", () => {
-    expect(classify("eval \"git push\"")).toEqual(["OPAQUE_DYNAMIC"]);
-    expect(classify("bash -lc \"bash -lc 'bash -lc \\\"bash -lc \\\\\\\"bash -lc \\\\\\\\\\\\\\\"bash -lc \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"echo ok\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\\"\\\\\\\\\\\\\"\\\\\\\\\\\"\\\\\\\"\\\"'" )).toContain("OPAQUE_DYNAMIC");
+    expect(classify('eval "git push"')).toEqual(["OPAQUE_DYNAMIC"]);
+    expect(
+      classify(
+        'bash -lc "bash -lc \'bash -lc \\"bash -lc \\\\\\"bash -lc \\\\\\\\\\\\\\"bash -lc \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"echo ok\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\"\\\\\\\\\\\\\\"\\\\\\\\\\\\"\\\\\\\\\\"\\\\\\"\\"\'',
+      ),
+    ).toContain("OPAQUE_DYNAMIC");
   });
 });

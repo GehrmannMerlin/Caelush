@@ -19,14 +19,21 @@ describe("pure patch inspection", () => {
     expect(targets).toEqual([
       { operation: "WRITE", path: "src/created.ts" },
       { operation: "WRITE", path: "src/updated.ts" },
-      { operation: "MOVE", path: "src/source.ts", fromPath: "src/source.ts", toPath: "src/destination.ts" },
+      {
+        operation: "MOVE",
+        path: "src/source.ts",
+        fromPath: "src/source.ts",
+        toPath: "src/destination.ts",
+      },
       { operation: "DELETE", path: ".env" },
     ]);
   });
 
   it("keeps parser path safety errors fail-closed", () => {
-    expect(() => inspectPatchTargets(`*** Begin Patch
+    expect(() =>
+      inspectPatchTargets(`*** Begin Patch
 *** Delete File: ../outside.txt
-*** End Patch`)).toThrow();
+*** End Patch`),
+    ).toThrow();
   });
 });

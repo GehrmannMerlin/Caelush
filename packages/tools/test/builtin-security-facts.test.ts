@@ -21,7 +21,9 @@ describe("built-in Tool Security Facts projectors", () => {
     expect(projector("read_file")({ path: "src\\App.ts" })).toMatchObject({
       resourceAccesses: [{ operation: "READ", path: "src/App.ts" }],
     });
-    expect(projector("search_text")({ pattern: "TOKEN", path: ".", include: "*.ts" })).toMatchObject({
+    expect(
+      projector("search_text")({ pattern: "TOKEN", path: ".", include: "*.ts" }),
+    ).toMatchObject({
       resourceAccesses: [{ operation: "SEARCH", path: "." }],
       secretScanInputs: [{ kind: "GENERIC", text: "TOKEN" }],
     });
@@ -32,7 +34,11 @@ describe("built-in Tool Security Facts projectors", () => {
 
   it("does not expose stdin or patch bodies in structural previews", () => {
     const stdin = projector("write_stdin")({ session_id: "session-1", chars: "secret input" });
-    expect(stdin.structuralPreview).toEqual({ kind: "PROCESS_INPUT", sessionId: "session-1", inputBytes: 12 });
+    expect(stdin.structuralPreview).toEqual({
+      kind: "PROCESS_INPUT",
+      sessionId: "session-1",
+      inputBytes: 12,
+    });
     expect(JSON.stringify(stdin.structuralPreview)).not.toContain("secret input");
 
     const patch = projector("apply_patch")({
@@ -40,7 +46,12 @@ describe("built-in Tool Security Facts projectors", () => {
     });
     expect(patch.resourceAccesses).toEqual([{ operation: "WRITE", path: ".env" }]);
     expect(JSON.stringify(patch.structuralPreview)).not.toContain("API_KEY=secret");
-    expect(patch.secretScanInputs).toEqual([{ kind: "PATCH", text: "*** Begin Patch\n*** Add File: .env\n+API_KEY=secret\n*** End Patch" }]);
+    expect(patch.secretScanInputs).toEqual([
+      {
+        kind: "PATCH",
+        text: "*** Begin Patch\n*** Add File: .env\n+API_KEY=secret\n*** End Patch",
+      },
+    ]);
   });
 
   it("projects shell command facts without executing them", () => {

@@ -29,7 +29,11 @@ export function projectReadFileSecurityFacts(args: Readonly<JsonObject>): ToolSe
 
 export function projectListDirectorySecurityFacts(args: Readonly<JsonObject>): ToolSecurityFacts {
   const path = pathOf(args.path, "path");
-  return { resourceAccesses: [], secretScanInputs: [], structuralPreview: { kind: "DIRECTORY_LIST", path } };
+  return {
+    resourceAccesses: [],
+    secretScanInputs: [],
+    structuralPreview: { kind: "DIRECTORY_LIST", path },
+  };
 }
 
 export function projectFindFilesSecurityFacts(args: Readonly<JsonObject>): ToolSecurityFacts {
@@ -92,7 +96,12 @@ export function projectExecCommandSecurityFacts(args: Readonly<JsonObject>): Too
     resourceAccesses: [],
     shellCommand: { command: args.cmd, workdir, tty: args.tty === true },
     secretScanInputs: [{ kind: "COMMAND", text: args.cmd }],
-    structuralPreview: { kind: "SHELL_COMMAND", command: args.cmd, workdir, tty: args.tty === true },
+    structuralPreview: {
+      kind: "SHELL_COMMAND",
+      command: args.cmd,
+      workdir,
+      tty: args.tty === true,
+    },
   };
 }
 
@@ -101,7 +110,8 @@ export function projectWriteStdinSecurityFacts(args: Readonly<JsonObject>): Tool
     throw new ToolSecurityFactsProjectionError("The session_id argument is invalid.");
   }
   const chars = args.chars ?? "";
-  if (typeof chars !== "string") throw new ToolSecurityFactsProjectionError("The chars argument is invalid.");
+  if (typeof chars !== "string")
+    throw new ToolSecurityFactsProjectionError("The chars argument is invalid.");
   return {
     resourceAccesses: [],
     secretScanInputs: [{ kind: "STDIN", text: chars }],
@@ -115,7 +125,11 @@ export function projectWriteStdinSecurityFacts(args: Readonly<JsonObject>): Tool
 
 export function projectGitStatusSecurityFacts(args: Readonly<JsonObject>): ToolSecurityFacts {
   const path = args.path === undefined ? "." : pathOf(args.path, "path");
-  return { resourceAccesses: [], secretScanInputs: [], structuralPreview: { kind: "GIT_STATUS", path } };
+  return {
+    resourceAccesses: [],
+    secretScanInputs: [],
+    structuralPreview: { kind: "GIT_STATUS", path },
+  };
 }
 
 export function projectGitDiffSecurityFacts(args: Readonly<JsonObject>): ToolSecurityFacts {
@@ -123,6 +137,10 @@ export function projectGitDiffSecurityFacts(args: Readonly<JsonObject>): ToolSec
   return {
     resourceAccesses: [resource("DIFF", path)],
     secretScanInputs: [],
-    structuralPreview: { kind: "GIT_DIFF", path, ...(args.scope === undefined ? {} : { scope: args.scope }) },
+    structuralPreview: {
+      kind: "GIT_DIFF",
+      path,
+      ...(args.scope === undefined ? {} : { scope: args.scope }),
+    },
   };
 }

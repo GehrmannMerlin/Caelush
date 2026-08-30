@@ -1,8 +1,5 @@
 import type { JsonObject } from "@caelush/protocol";
-import type {
-  ToolExecutionResult,
-  ToolResultSanitizerPort,
-} from "@caelush/tools";
+import type { ToolExecutionResult, ToolResultSanitizerPort } from "@caelush/tools";
 import { redactJson, redactText } from "./secret-redaction.js";
 import { classifySensitivePath } from "./sensitive-path.js";
 
@@ -22,7 +19,8 @@ export class CaelushToolResultSanitizer implements ToolResultSanitizerPort {
       details = search.details;
     } else if (
       input.toolName === "git_diff" &&
-      (isSensitivePath(input.invocation["args"].path) || containsSensitiveDiffPath(input.result.content))
+      (isSensitivePath(input.invocation["args"].path) ||
+        containsSensitiveDiffPath(input.result.content))
     ) {
       content = "[SENSITIVE DIFF CONTENT REDACTED]";
     }
@@ -69,7 +67,9 @@ function sanitizeSearchResult(
     const prefix = `${rawMatch.path}:${line}:`;
     nextContent = nextContent
       .split(/\r?\n/)
-      .map((entry) => (entry.startsWith(prefix) ? `${prefix} [REDACTED:SENSITIVE_FILE_CONTENT]` : entry))
+      .map((entry) =>
+        entry.startsWith(prefix) ? `${prefix} [REDACTED:SENSITIVE_FILE_CONTENT]` : entry,
+      )
       .join("\n");
   }
   return { content: nextContent, details: { ...redactedDetails, matches: nextMatches } };

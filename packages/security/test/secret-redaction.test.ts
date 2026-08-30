@@ -54,9 +54,7 @@ describe("deterministic secret detection and redaction", () => {
   });
 
   it("replaces text and JSON subtrees that exceed deterministic scan bounds", () => {
-    expect(redactText("x".repeat(MAX_SECRET_SCAN_TEXT_BYTES + 1))).toBe(
-      "[REDACTED:SCAN_LIMIT]",
-    );
+    expect(redactText("x".repeat(MAX_SECRET_SCAN_TEXT_BYTES + 1))).toBe("[REDACTED:SCAN_LIMIT]");
     let deeplyNested: unknown = "secret-value";
     for (let index = 0; index <= MAX_SECRET_JSON_DEPTH; index += 1) {
       deeplyNested = { child: deeplyNested };

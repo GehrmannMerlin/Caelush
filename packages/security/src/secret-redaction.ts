@@ -31,16 +31,21 @@ interface RedactionResult {
 
 const REDACTED = "[REDACTED]";
 const SCAN_LIMIT_REDACTED = "[REDACTED:SCAN_LIMIT]";
-const SENSITIVE_KEY = /(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|token|secret|client[_-]?secret|password|passwd|credential|private[_-]?key|access[_-]?key)/i;
-const PLACEHOLDER = /^(?:your[_-]?(?:api[_-]?key|token|secret|password)|<[^>]+>|\$\{[^}]+\}|redacted|changeme|example|placeholder|xxxx)$/i;
-const PRIVATE_KEY = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g;
+const SENSITIVE_KEY =
+  /(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|token|secret|client[_-]?secret|password|passwd|credential|private[_-]?key|access[_-]?key)/i;
+const PLACEHOLDER =
+  /^(?:your[_-]?(?:api[_-]?key|token|secret|password)|<[^>]+>|\$\{[^}]+\}|redacted|changeme|example|placeholder|xxxx)$/i;
+const PRIVATE_KEY =
+  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g;
 const BEARER = /(\bAuthorization\s*:\s*Bearer\s+)([^\s,;]+)/gi;
 const BASIC = /(\bAuthorization\s*:\s*Basic\s+)([^\s,;]+)/gi;
 const QUERY = /([?&](?:token|api[_-]?key|apikey|access[_-]?token|key)=)([^&#\s]+)/gi;
 const USERINFO = /(https?:\/\/)[^\s/@:]+:[^\s/@]+@/gi;
-const PROVIDER_TOKEN = /\b(?:sk-[A-Za-z0-9][A-Za-z0-9_-]{15,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{16,}|AKIA[0-9A-Z]{16})\b/g;
+const PROVIDER_TOKEN =
+  /\b(?:sk-[A-Za-z0-9][A-Za-z0-9_-]{15,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{16,}|AKIA[0-9A-Z]{16})\b/g;
 const SECRET_SENTINEL = /\b(?:SECRET|TOKEN|PASSWORD|API_KEY)_[A-Z0-9_]{8,}\b/g;
-const ASSIGNMENT = /\b((?:[A-Za-z][A-Za-z0-9_.-]*(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|token|secret|client[_-]?secret|password|passwd|credential|private[_-]?key|access[_-]?key)|api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|token|secret|client[_-]?secret|password|passwd|credential|private[_-]?key|access[_-]?key))\s*([=:])\s*("[^"]*"|'[^']*'|[^\s,;]+)/gi;
+const ASSIGNMENT =
+  /\b((?:[A-Za-z][A-Za-z0-9_.-]*(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|token|secret|client[_-]?secret|password|passwd|credential|private[_-]?key|access[_-]?key)|api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|token|secret|client[_-]?secret|password|passwd|credential|private[_-]?key|access[_-]?key))\s*([=:])\s*("[^"]*"|'[^']*'|[^\s,;]+)/gi;
 
 export function detectSecrets(text: string): SecretDetectionReport {
   const result = redactTextInternal(text);
@@ -57,7 +62,10 @@ export function redactJson(value: JsonValue | unknown): JsonValue {
 }
 
 export function redactToolArgumentsForPresentation(args: JsonObject): JsonObject;
-export function redactToolArgumentsForPresentation(toolName: ToolName, args: JsonObject): JsonObject;
+export function redactToolArgumentsForPresentation(
+  toolName: ToolName,
+  args: JsonObject,
+): JsonObject;
 export function redactToolArgumentsForPresentation(
   first: ToolName | JsonObject,
   second?: JsonObject,
@@ -79,7 +87,8 @@ export const secretDetector: SecretDetector = { detect: detectSecrets };
 export const secretRedactor: SecretRedactor = { redactText, redactJson };
 
 function redactTextInternal(text: string): RedactionResult {
-  if (typeof text !== "string") return { value: SCAN_LIMIT_REDACTED, count: 1, categories: new Set(["SCAN_LIMIT"]) };
+  if (typeof text !== "string")
+    return { value: SCAN_LIMIT_REDACTED, count: 1, categories: new Set(["SCAN_LIMIT"]) };
   if (Buffer.byteLength(text, "utf8") > MAX_SECRET_SCAN_TEXT_BYTES) {
     return { value: SCAN_LIMIT_REDACTED, count: 1, categories: new Set(["SCAN_LIMIT"]) };
   }
@@ -97,7 +106,11 @@ function redactTextInternal(text: string): RedactionResult {
       return callback(...args.slice(0, -2));
     });
   };
-  replace(PRIVATE_KEY, "PRIVATE_KEY", () => `${"-----BEGIN PRIVATE KEY-----"}\n${REDACTED}\n-----END PRIVATE KEY-----`);
+  replace(
+    PRIVATE_KEY,
+    "PRIVATE_KEY",
+    () => `${"-----BEGIN PRIVATE KEY-----"}\n${REDACTED}\n-----END PRIVATE KEY-----`,
+  );
   replace(BEARER, "AUTHORIZATION_HEADER", (_match, prefix) => `${prefix}${REDACTED}`);
   replace(BASIC, "AUTHORIZATION_HEADER", (_match, prefix) => `${prefix}${REDACTED}`);
   replace(USERINFO, "URL_CREDENTIAL", (match, prefix) => `${prefix}${REDACTED}@`);
@@ -106,7 +119,8 @@ function redactTextInternal(text: string): RedactionResult {
   replace(SECRET_SENTINEL, "GENERIC_SECRET_ASSIGNMENT", () => REDACTED);
   value = value.replace(ASSIGNMENT, (match, key: string, separator: string, rawValue: string) => {
     const unquoted = rawValue.replace(/^['"]|['"]$/g, "");
-    if (isPlaceholder(unquoted) || unquoted === REDACTED || unquoted === SCAN_LIMIT_REDACTED) return match;
+    if (isPlaceholder(unquoted) || unquoted === REDACTED || unquoted === SCAN_LIMIT_REDACTED)
+      return match;
     count += 1;
     categories.add(categoryForKey(key));
     const quote = rawValue.startsWith('"') ? '"' : rawValue.startsWith("'") ? "'" : "";
@@ -117,7 +131,8 @@ function redactTextInternal(text: string): RedactionResult {
 
 function redactJsonValue(value: unknown, depth: number, state: { nodes: number }): JsonValue {
   state.nodes += 1;
-  if (state.nodes > MAX_SECRET_JSON_NODES || depth > MAX_SECRET_JSON_DEPTH) return SCAN_LIMIT_REDACTED;
+  if (state.nodes > MAX_SECRET_JSON_NODES || depth > MAX_SECRET_JSON_DEPTH)
+    return SCAN_LIMIT_REDACTED;
   if (value === null || typeof value === "number" || typeof value === "boolean") return value;
   if (typeof value === "string") return redactText(value);
   if (Array.isArray(value)) return value.map((item) => redactJsonValue(item, depth + 1, state));

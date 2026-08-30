@@ -1,10 +1,11 @@
 import type { ApprovalPolicy, PermissionProfile } from "@caelush/protocol";
 import type { ToolSecurityFacts } from "@caelush/tools";
+import { analyzeCommand, type CommandClassification } from "./command-policy.js";
 import {
-  analyzeCommand,
-  type CommandClassification,
-} from "./command-policy.js";
-import { classifySensitivePath, isValidWorkspaceFactPath, type SensitivePathCategory } from "./sensitive-path.js";
+  classifySensitivePath,
+  isValidWorkspaceFactPath,
+  type SensitivePathCategory,
+} from "./sensitive-path.js";
 import type { SecurityDecisionCode } from "./decision.js";
 import { detectSecrets } from "./secret-redaction.js";
 
@@ -151,12 +152,14 @@ function assessCommand(
   };
 }
 
-function commandRule(classifications: readonly CommandClassification[]): {
-  readonly reviewCode: SecurityDecisionCode;
-  readonly denyCode: SecurityDecisionCode;
-  readonly reviewReason: string;
-  readonly denyReason: string;
-} | undefined {
+function commandRule(classifications: readonly CommandClassification[]):
+  | {
+      readonly reviewCode: SecurityDecisionCode;
+      readonly denyCode: SecurityDecisionCode;
+      readonly reviewReason: string;
+      readonly denyReason: string;
+    }
+  | undefined {
   if (classifications.includes("OPAQUE_DYNAMIC")) {
     return {
       reviewCode: "OPAQUE_COMMAND_REQUIRES_REVIEW",
