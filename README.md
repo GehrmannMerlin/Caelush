@@ -28,7 +28,7 @@ Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI�
 
 ## Phase 9 Status
 
-- Phase 9A — Security Policy Kernel & Tool Execution Gate: **IN PROGRESS / CURRENT ROUND**
+- Phase 9A — Security Policy Kernel & Tool Execution Gate: **COMPLETED**
 - Phase 9A owns only deterministic `ALLOW` / `DENY` / `REQUIRE_APPROVAL` policy decisions and the Dispatcher Gate boundary.
 - Approval persistence/resolution, input-aware command policy, sensitive-file policy, secret redaction and OS-level hard sandboxing remain explicitly out of scope.
 
