@@ -141,7 +141,12 @@ const WaitingRetryBase = {
 export const WaitingRetryContinuationSchema = z.discriminatedUnion("mode", [
   z
     .object({ ...WaitingRetryBase, mode: z.literal("START") })
-    .strict(),
+    .strict()
+    .superRefine((value, context) => {
+      if (value.attempt > value.maxAttempts) {
+        context.addIssue({ code: "custom", message: "attempt cannot exceed maxAttempts" });
+      }
+    }),
   z
     .object({
       ...WaitingRetryBase,
@@ -149,7 +154,12 @@ export const WaitingRetryContinuationSchema = z.discriminatedUnion("mode", [
       pendingDecision: AgentToolCallsDecisionSchema,
       receivedResults: z.array(LLMToolResultMessageSchema).min(1),
     })
-    .strict(),
+    .strict()
+    .superRefine((value, context) => {
+      if (value.attempt > value.maxAttempts) {
+        context.addIssue({ code: "custom", message: "attempt cannot exceed maxAttempts" });
+      }
+    }),
 ]);
 
 export const RunContinuationCheckpointSchema = z.discriminatedUnion("type", [

@@ -67,7 +67,12 @@ export class RunRetryRegistry {
       handle: undefined,
     };
     this.registrations.set(runId, registration);
-    this.schedule(registration);
+    try {
+      this.schedule(registration);
+    } catch (error) {
+      this.registrations.delete(runId);
+      throw error;
+    }
   }
 
   disarm(runId: RunId): void {
@@ -83,9 +88,8 @@ export class RunRetryRegistry {
 
   private schedule(registration: Registration): void {
     const remaining = Math.max(0, registration.nextAttemptAt - this.options.clock.now());
-    registration.handle = this.timer.schedule(
-      Math.min(this.maxDelayMs, remaining),
-      () => this.wake(registration),
+    registration.handle = this.timer.schedule(Math.min(this.maxDelayMs, remaining), () =>
+      this.wake(registration),
     );
   }
 

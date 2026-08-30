@@ -30,4 +30,15 @@ Phase 10B uses the same `RunExecutionScope` and signal fan-out, but has a distin
 
 Timeout follows the same resource cleanup boundary as cancellation, but owns its own `status.changed` plus `run.timed_out` event pair and returns `TIMEOUT_PENDING` when cleanup is not yet confirmed. See [Run Deadline and Timeout](timeout.md) for timer lifecycle, idle boundary behavior, Provider timeout separation, and restart recovery.
 
-Phase 10A intentionally does not add retry/backoff, budgets, Verification execution, daemon cancellation routes, CLI/Web UI, remote/MCP/browser/computer-use runtimes, or a hard OS sandbox. Phase 10B adds only the documented Run deadline and timeout recovery behavior.
+Phase 10A intentionally did not add retry/backoff, budgets, Verification execution, daemon cancellation routes, CLI/Web UI, remote/MCP/browser/computer-use runtimes, or a hard OS sandbox. Phase 10B added only the documented Run deadline and timeout recovery behavior; Phase 10C adds provider-only bounded retry while preserving this cancellation authority.
+
+## Phase 10C retry interaction
+
+An idle `WAITING_RETRY` boundary has no live execution Scope to abort. A user
+cancellation first persists `USER_REQUESTED`, then disarms the retry registry;
+the stale timer token cannot reopen the Run. If cancellation races a retry wake,
+the controller reloads the durable intent before starting a new Provider Step,
+so cancellation wins and no Tool or Provider call is replayed. An in-flight
+Provider attempt still uses the existing Scope signal and settles its Step as
+cancelled exactly once. Retryable Provider errors are never retried after an
+abort has become the cancellation authority.

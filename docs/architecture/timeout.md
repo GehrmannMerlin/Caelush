@@ -74,4 +74,15 @@ Managed `exec_command`, yielded PTY sessions, `write_stdin` waits, ripgrep, and 
 
 ## Phase boundary
 
-Phase 10B adds only Run deadlines, timeout settlement, timer lifecycle, and restart-safe recovery. It does not add retry or backoff, budget enforcement, `maxToolCalls`/`maxTokens` enforcement, Verification execution, daemon routes, CLI/Web timeout UI, MCP, Browser, Computer Use, remote runtimes, Docker, or hard sandboxing. Phase 10C and 10D remain future phases.
+Phase 10B adds only Run deadlines, timeout settlement, timer lifecycle, and restart-safe recovery. Phase 10C adds a separate provider-only retry registry, but does not change deadline ownership: retry backoff consumes the same original deadline and never replaces it with a Provider timeout. Budget enforcement, `maxToolCalls`/`maxTokens` enforcement, Verification execution, daemon routes, CLI/Web timeout UI, MCP, Browser, Computer Use, remote runtimes, Docker, and hard sandboxing remain outside these phases. Phase 10D remains future work.
+
+## Phase 10C retry interaction
+
+When a transient Provider failure occurs during a Run, Core calculates a bounded
+retry delay. If the delay would reach the absolute deadline, Core retains a
+safe `WAITING_RETRY` boundary at the deadline but does not arm a retry timer;
+the existing deadline registry remains authoritative and settles `TIMEOUT`.
+If the Run deadline fires while a retry is waiting, it disarms the retry and
+performs normal timeout cleanup. A deadline never becomes a Provider retry and
+the Provider-local `MODEL_TIMEOUT` category remains distinct from Run-level
+`TIMEOUT`.

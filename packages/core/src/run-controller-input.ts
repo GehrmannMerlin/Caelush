@@ -9,6 +9,7 @@ import type {
   ToolName,
 } from "@caelush/protocol";
 import type { AgentToolRequest } from "./agent-decision.js";
+import type { RetryErrorCode } from "./agent-continuation.js";
 
 export type RunControllerResult =
   | { readonly status: "PENDING"; readonly run: AgentRun; readonly state?: AgentState }
@@ -29,6 +30,15 @@ export type RunControllerResult =
       readonly approvalId?: ApprovalRequestId;
       readonly externalCallId: string;
       readonly toolName: ToolName;
+    }
+  | {
+      readonly status: "WAITING_RETRY";
+      readonly run: AgentRun;
+      readonly state: AgentState;
+      readonly nextAttemptAt: AgentRun["createdAt"];
+      readonly attempt: number;
+      readonly maxAttempts: number;
+      readonly errorCode: RetryErrorCode;
     }
   | {
       readonly status: "AWAITING_VERIFICATION";

@@ -142,4 +142,3 @@ fails transiently and succeeds on retry. An `UNCERTAIN_SIDE_EFFECT` boundary
 continues to use the existing no-replay barrier. No Phase 10D budget,
 Verification, completion transition, transport retry API, or other future
 capability is introduced.
-

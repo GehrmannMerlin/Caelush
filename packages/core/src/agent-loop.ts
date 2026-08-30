@@ -311,6 +311,7 @@ export class AgentLoop {
         ? { stepId: step.id, now: finishedAt }
         : { stepId: step.id, usage, now: finishedAt },
     );
+    const retry = mapAgentRetryMetadata(error);
     return {
       status: "FAILED",
       error: mapAgentLoopError(error),
@@ -319,9 +320,7 @@ export class AgentLoop {
       messagesToAppend: [...appendPrefix],
       contextReport: context.report,
       providerTurnState,
-      ...(mapAgentRetryMetadata(error) === undefined
-        ? {}
-        : { retry: mapAgentRetryMetadata(error) }),
+      ...(retry === undefined ? {} : { retry }),
     };
   }
 

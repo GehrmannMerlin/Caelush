@@ -6,7 +6,7 @@ import {
   type RunId,
   type StepId,
 } from "@caelush/protocol";
-import type { WaitingToolResultsContinuation } from "@caelush/core";
+import type { WaitingRetryContinuation, WaitingToolResultsContinuation } from "@caelush/core";
 import { openCaelushStorage } from "../src/index.js";
 import { makeRun, makeSession, makeStep } from "./support/fixtures.js";
 
@@ -45,6 +45,34 @@ function waitingCheckpoint(runId: RunId, sourceStepId: StepId): WaitingToolResul
 }
 
 describe("ContinuationRepository", () => {
+  it("maps a WAITING_RETRY failedStepId to the legacy source-step index", async () => {
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    const session = makeSession();
+    const run = makeRun(session.id, { status: "RUNNING", startedAt: createTimestampMs(1) });
+    const step = makeStep(run.id, {
+      status: "FAILED",
+      finishedAt: createTimestampMs(2),
+    });
+    const checkpoint: WaitingRetryContinuation = {
+      type: "WAITING_RETRY",
+      runId: run.id,
+      failedStepId: step.id,
+      attempt: 2,
+      maxAttempts: 3,
+      nextAttemptAt: createTimestampMs(1_000),
+      errorCode: "LLM_NETWORK",
+      mode: "START",
+    };
+    await storage.sessions.insert(session);
+    await storage.runs.insert(run);
+    await storage.steps.insert(step);
+
+    await storage.continuations.set(run.id, checkpoint, createTimestampMs(3), null);
+
+    expect(await storage.continuations.get(run.id)).toMatchObject({ checkpoint });
+    await storage.close();
+  });
+
   it("persists, versions, reads, and clears a continuation checkpoint", async () => {
     const storage = await openCaelushStorage({ path: ":memory:" });
     const session = makeSession();

@@ -29,12 +29,14 @@
 ### Task 1: Add the pure Retry Policy and decision engine
 
 **Files:**
+
 - Create: `packages/core/src/retry-policy.ts`
 - Create: `packages/core/src/retry-controller.ts`
 - Modify: `packages/core/src/index.ts`
 - Test: `packages/core/test/retry-controller.test.ts`
 
 **Interfaces:**
+
 - Produces `RetryPolicy`, `DEFAULT_RETRY_POLICY`, `RetryJitterSource`, `RetryDecision`, `RetryStopReason`, and `RetryController.decide(input)`.
 - `decide` consumes `{ retryable, attempt, maxSteps, steps, now, deadlineAt?, retryAfterMs?, policy, jitter }` and returns either `{ kind: "RETRY", attempt, delayMs }` or `{ kind: "STOP", reason }`.
 
@@ -108,10 +110,12 @@ git commit -m "feat(core): add bounded provider retry policy"
 ### Task 2: Implement bounded backoff, jitter, and Retry-After handling
 
 **Files:**
+
 - Modify: `packages/core/src/retry-controller.ts`
 - Modify: `packages/core/test/retry-controller.test.ts`
 
 **Interfaces:**
+
 - `RetryJitterSource.next(): number` must return `0 <= x < 1`; invalid values fail closed with a Core input error.
 - Delay calculation uses retry index `attempt - 1`, clamps before overflow, applies bounded jitter, and prefers valid positive safe `retryAfterMs` before the policy maximum.
 
@@ -159,6 +163,7 @@ git commit -m "test(core): cover retry backoff and recovery math"
 ### Task 3: Expose safe provider retry metadata and optional Retry-After
 
 **Files:**
+
 - Modify: `packages/llm/src/errors.ts`
 - Modify: `packages/llm/src/index.ts`
 - Modify: `packages/core/src/agent-loop-input.ts`
@@ -167,6 +172,7 @@ git commit -m "test(core): cover retry backoff and recovery math"
 - Tests: `packages/llm/test/errors.test.ts`, `packages/core/test/agent-loop-failures.test.ts`
 
 **Interfaces:**
+
 - `LLMErrorContext` accepts optional `retryAfterMs?: number`; the constructor validates it as an optional safe nonnegative integer and does not expose raw response details.
 - `AgentLoopFailureResult` optionally carries `{ code: "LLM_RATE_LIMIT" | "LLM_NETWORK" | "LLM_TIMEOUT"; retryable: boolean; retryAfterMs?: number }` only when the caught error is an `LLMError` in the safe provider metadata path.
 
@@ -212,6 +218,7 @@ git commit -m "feat(llm): expose bounded retry metadata"
 ### Task 4: Add strict WAITING_RETRY continuation and Protocol retry events
 
 **Files:**
+
 - Modify: `packages/core/src/agent-continuation.ts`
 - Modify: `packages/core/src/agent-continuation-schema.ts`
 - Modify: `packages/core/src/run-execution-state.ts`
@@ -222,6 +229,7 @@ git commit -m "feat(llm): expose bounded retry metadata"
 - Tests: `packages/core/test/agent-continuation.test.ts`, `packages/protocol/test/event.test.ts`
 
 **Interfaces:**
+
 - `WaitingRetryContinuation` has `type`, `runId`, `failedStepId`, `attempt` (the next attempt number), `maxAttempts`, `nextAttemptAt`, `errorCode`, `mode`, and conditionally required Tool Result context.
 - `retry.scheduled` and `retry.started` are strict durable events; `retry.scheduled` payload is `{ attempt, maxAttempts, delayMs, nextAttemptAt, errorCode }`, and `retry.started` payload is `{ attempt, maxAttempts }`.
 - Add `llm.failed` with safe `{ model, error: AgentError }` payload for provider failures.
@@ -234,11 +242,15 @@ it("accepts a START retry continuation and rejects unsafe error codes", () => {
     type: "WAITING_RETRY",
     attempt: 2,
   });
-  expect(() => RunContinuationCheckpointSchema.parse({ ...startRetry, errorCode: "LLM_AUTHENTICATION" })).toThrow();
+  expect(() =>
+    RunContinuationCheckpointSchema.parse({ ...startRetry, errorCode: "LLM_AUTHENTICATION" }),
+  ).toThrow();
 });
 
 it("requires complete Tool Result context for a TOOL_RESULTS retry", () => {
-  expect(() => RunContinuationCheckpointSchema.parse({ ...startRetry, mode: "TOOL_RESULTS" })).toThrow();
+  expect(() =>
+    RunContinuationCheckpointSchema.parse({ ...startRetry, mode: "TOOL_RESULTS" }),
+  ).toThrow();
 });
 ```
 
@@ -268,12 +280,14 @@ git commit -m "feat(core): persist retry continuation and scheduling"
 ### Task 5: Add the injectable RunRetryRegistry
 
 **Files:**
+
 - Create: `packages/core/src/run-retry-registry.ts`
 - Modify: `packages/core/src/run-controller-ports.ts`
 - Modify: `packages/core/src/index.ts`
 - Tests: `packages/core/test/run-retry-registry.test.ts`
 
 **Interfaces:**
+
 - `RunRetryTimerPort.schedule(delayMs, callback)` returns `{ cancel(): void }`.
 - `RunRetryRegistry.arm(runId, nextAttemptAt, callback)`, `disarm(runId)`, `dispose()`, and `size`; one registration per Run, token-protected stale callback no-op, bounded timer chunks, injectable clock/timer, and `onError` sink.
 
@@ -321,6 +335,7 @@ git commit -m "feat(core): add durable retry wake registry"
 ### Task 6: Integrate failed-provider interception and atomic retry scheduling
 
 **Files:**
+
 - Modify: `packages/core/src/run-controller-ports.ts`
 - Modify: `packages/core/src/run-controller.ts`
 - Modify: `packages/core/src/run-controller-events.ts`
@@ -329,6 +344,7 @@ git commit -m "feat(core): add durable retry wake registry"
 - Tests: `packages/storage/test/run-controller-retry.test.ts`
 
 **Interfaces:**
+
 - `RunControllerDependencies` accepts optional `retryPolicy` and `retryRegistry`; defaults are Core-owned.
 - `RunController` adds `dispose()` and private `resumeRetryLocked()`/`scheduleRetry()` paths; no public retry endpoint.
 - `RunControllerResult` adds `WAITING_RETRY` with `run`, `state`, `nextAttemptAt`, `attempt`, `maxAttempts`, and safe `errorCode`.
@@ -376,12 +392,14 @@ git commit -m "feat(core): persist retry continuation and scheduling"
 ### Task 7: Implement retry wake, new Step semantics, and provider-turn context preservation
 
 **Files:**
+
 - Modify: `packages/core/src/run-controller.ts`
 - Modify: `packages/core/src/run-controller-events.ts`
 - Modify: `packages/core/src/run-execution-state.ts`
 - Tests: `packages/storage/test/run-controller-retry.test.ts`, `packages/storage/test/run-controller-retry-e2e.test.ts`
 
 **Interfaces:**
+
 - Wake path reloads first, rechecks terminal/cancellation/deadline/maxSteps, and calls `executeLoop(snapshot, false|true)` based on retry continuation mode.
 - `beforeProviderTurn` clears `WAITING_RETRY`, inserts the new Step, emits `retry.started` then `llm.started` in one commit.
 
@@ -429,12 +447,14 @@ git commit -m "feat(core): recover durable provider retries"
 ### Task 8: Add cancellation, deadline, maxSteps, exhaustion, and crash recovery coverage
 
 **Files:**
+
 - Modify: `packages/core/src/run-controller.ts`
 - Modify: `packages/core/src/run-controller-input.ts`
 - Modify: `packages/core/src/run-execution-state.ts`
 - Tests: `packages/storage/test/run-controller-retry.test.ts`, `packages/storage/test/run-controller-retry-recovery.test.ts`, `packages/core/test/run-execution-state.test.ts`
 
 **Interfaces:**
+
 - Recovery order is terminal → cancellation intent → expired deadline → WAITING_RETRY → stale Step/approval/tool boundary.
 - Before `nextAttemptAt`, `recover()` re-arms original remaining delay and makes zero provider calls; at/after it starts exactly one attempt.
 - Cancellation and timeout disarm retry; if backoff would reach/past deadline, settle the failed Step as RUNNING boundary and let the existing deadline authority produce TIMEOUT.
@@ -481,12 +501,14 @@ git commit -m "test(core): cover retry cancellation timeout and recovery"
 ### Task 9: Add observability, architecture guards, and LLM regression coverage
 
 **Files:**
+
 - Modify: `packages/protocol/test/event.test.ts`
 - Modify: `packages/llm/test/errors.test.ts`
 - Create or modify: `packages/core/test/architecture.test.ts`, `packages/storage/test/run-controller-retry-e2e.test.ts`
 - Modify: `packages/core/src/run-controller-events.ts`
 
 **Interfaces:**
+
 - Verify durable trace ordering `llm.started → llm.failed → retry.scheduled → retry.started → llm.started → llm.completed` where applicable.
 - Verify no raw provider error, stack, prompt, partial completion, Tool args, or secret enters retry events/errors.
 
@@ -500,7 +522,9 @@ it("discards partial provider output before retry", async () => {
 });
 
 it("does not import concrete retry/provider/runtime implementation into RetryController", () => {
-  expect(source("packages/core/src/retry-controller.ts")).not.toMatch(/from ["']@caelush\/(runtime|tools)/);
+  expect(source("packages/core/src/retry-controller.ts")).not.toMatch(
+    /from ["']@caelush\/(runtime|tools)/,
+  );
 });
 ```
 
@@ -530,6 +554,7 @@ git commit -m "test: prove provider retry never replays tools"
 ### Task 10: Document Phase 10C and update durable architecture rules
 
 **Files:**
+
 - Create: `docs/architecture/retry.md`
 - Modify: `docs/architecture/timeout.md`
 - Modify: `docs/architecture/cancellation.md`
@@ -538,6 +563,7 @@ git commit -m "test: prove provider retry never replays tools"
 - Modify: `AGENTS.md`
 
 **Interfaces:**
+
 - Documentation explains retry scope, classification, policy, backoff/jitter/Retry-After, Step and LLMCall identity, conversation integrity, continuation, registry, persist-before-arm, cancellation/deadline/maxSteps interactions, crash recovery, events, and no side-effect replay.
 
 - [ ] **Step 1: Write the documentation with the two required diagrams**
@@ -560,6 +586,7 @@ git commit -m "docs: document phase 10c retry architecture"
 ### Task 11: Run full regressions, clean verification, and final audit
 
 **Files:**
+
 - No planned source changes; only test/build artifacts may be removed through the approved Node filesystem cleanup.
 
 - [ ] **Step 1: Run the focused retry suite**
@@ -593,4 +620,3 @@ Confirm no budget/Verification/Tool retry leakage, no `RETRY` RunStatus or `RETR
 - [ ] **Step 6: Commit any final test-only corrections, then report actual status**
 
 Only commit if a verified, in-scope correction was required. Report baseline flake/format debt honestly and do not claim completion until all required evidence is fresh.
-

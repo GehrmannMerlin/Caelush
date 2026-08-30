@@ -16,10 +16,17 @@ export const LlmFailedEventSchema = createEventSchema(
   "llm.failed",
   z.object({ model: ModelRefSchema, error: AgentErrorSchema }).strict(),
 );
-const RetryEventBaseSchema = z.object({
-  attempt: z.number().int().positive().safe().max(10),
-  maxAttempts: z.number().int().positive().safe().max(10),
-});
+const RetryEventBaseSchema = z
+  .object({
+    attempt: z.number().int().positive().safe().max(10),
+    maxAttempts: z.number().int().positive().safe().max(10),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.attempt > value.maxAttempts) {
+      context.addIssue({ code: "custom", message: "attempt cannot exceed maxAttempts" });
+    }
+  });
 export const RetryScheduledEventSchema = createEventSchema(
   "retry.scheduled",
   RetryEventBaseSchema.extend({
@@ -28,10 +35,7 @@ export const RetryScheduledEventSchema = createEventSchema(
     errorCode: z.enum(["LLM_RATE_LIMIT", "LLM_NETWORK", "LLM_TIMEOUT"]),
   }).strict(),
 );
-export const RetryStartedEventSchema = createEventSchema(
-  "retry.started",
-  RetryEventBaseSchema,
-);
+export const RetryStartedEventSchema = createEventSchema("retry.started", RetryEventBaseSchema);
 
 export type LlmStartedEvent = z.infer<typeof LlmStartedEventSchema>;
 export type LlmCompletedEvent = z.infer<typeof LlmCompletedEventSchema>;

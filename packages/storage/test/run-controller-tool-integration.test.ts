@@ -15,9 +15,10 @@ import {
   createToolInvocationId,
   createWorkspaceId,
 } from "@caelush/protocol";
-import { AgentLoop, RunController, RunDeadlineRegistry } from "@caelush/core";
+import { AgentLoop, RunController, RunDeadlineRegistry, RunRetryRegistry } from "@caelush/core";
 import { EventBus } from "@caelush/events";
 import { LLMTurnResultSchema, type LLMTurnResult } from "@caelush/llm/turn";
+import { LLMNetworkError } from "@caelush/llm/errors";
 import {
   ToolBatchCoordinator,
   ToolDispatcher,
@@ -188,12 +189,13 @@ function createFilesystemRuntime(
 function createController(
   storage: CaelushStorage,
   eventBus: EventBus,
-  turns: LLMTurnResult[],
+  turns: Array<LLMTurnResult | Error>,
   coordinator?: ToolBatchCoordinator,
   observedRequests: Array<{ tools?: unknown; messages: unknown[] }> = [],
   initialNow = 10,
   deadlineRegistry?: RunDeadlineRegistry,
   fixedClock?: { value: number },
+  retryRegistry?: RunRetryRegistry,
 ) {
   let now = initialNow;
   const clock = { now: () => createTimestampMs(fixedClock?.value ?? now++) };
@@ -212,7 +214,9 @@ function createController(
     llmClient: {
       complete: async (request) => {
         observedRequests.push({ tools: request.tools, messages: request.messages });
-        return turns.shift()!;
+        const next = turns.shift();
+        if (next instanceof Error) throw next;
+        return next!;
       },
     },
     clock,
@@ -233,6 +237,7 @@ function createController(
     eventIdFactory: { create: createEventId },
     approvals: storage.approvals,
     ...(deadlineRegistry === undefined ? {} : { deadlineRegistry }),
+    ...(retryRegistry === undefined ? {} : { retryRegistry }),
   });
 }
 
@@ -252,6 +257,77 @@ function turn(
 }
 
 describe("RunController automatic Tool Batch integration", () => {
+  it("retries the Provider after Tool Results without redispatching the Tool", async () => {
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    const run = makeRun("/repo", "fixture", {
+      limits: { maxSteps: 6, maxToolCalls: 8, timeoutMs: 10_000 },
+    });
+    await seedRun(storage, run);
+    const eventBus = new EventBus(storage.events);
+    const toolCalls: string[] = [];
+    const runtime = createRuntime(storage, eventBus, async ({ externalCallId }) => {
+      toolCalls.push(externalCallId);
+      return { content: "tool-result", details: {}, isError: false };
+    });
+    const clock = { value: 10 };
+    const scheduled: Array<{
+      callback: () => void | Promise<void>;
+      cancelled: boolean;
+    }> = [];
+    const retryRegistry = new RunRetryRegistry({
+      clock: { now: () => createTimestampMs(clock.value) },
+      timer: {
+        schedule: (_delayMs, callback) => {
+          const entry = { callback, cancelled: false };
+          scheduled.push(entry);
+          return { cancel: () => (entry.cancelled = true) };
+        },
+      },
+    });
+    const controller = createController(
+      storage,
+      eventBus,
+      [
+        turn("inspect", [{ id: "call-tool", name: "echo_value", input: {} }], "TOOL_CALLS"),
+        new LLMNetworkError("provider secret"),
+        turn("recovered", [], "STOP"),
+      ],
+      runtime.coordinator,
+      [],
+      10,
+      undefined,
+      clock,
+      retryRegistry,
+    );
+
+    const waiting = await controller.start(run.id);
+
+    expect(waiting.status).toBe("WAITING_RETRY");
+    expect(toolCalls).toEqual(["call-tool"]);
+    if (waiting.status !== "WAITING_RETRY") throw new Error("expected retry boundary");
+    expect((await storage.continuations.get(run.id))?.checkpoint).toMatchObject({
+      type: "WAITING_RETRY",
+      mode: "TOOL_RESULTS",
+      attempt: 2,
+    });
+    clock.value = waiting.nextAttemptAt;
+    const timer = scheduled.at(-1);
+    if (timer === undefined) throw new Error("retry timer was not armed");
+    await timer.callback();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(toolCalls).toEqual(["call-tool"]);
+    expect((await storage.runs.get(run.id))?.status).toBe("VERIFYING");
+    expect(await storage.steps.listByRun(run.id)).toHaveLength(3);
+    expect((await storage.messages.listByRun(run.id)).map((entry) => entry.message.role)).toEqual([
+      "user",
+      "assistant",
+      "tool",
+      "assistant",
+    ]);
+    await storage.close();
+  });
+
   it("runs real read-only filesystem tools through AgentLoop and leaves the workspace unchanged", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "caelush-phase-8a-e2e-"));
     const workspace = path.join(directory, "workspace");

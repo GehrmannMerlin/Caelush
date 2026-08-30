@@ -1,4 +1,8 @@
-import { RunContinuationCheckpointSchema, type RunContinuationCheckpoint } from "@caelush/core";
+import {
+  RunContinuationCheckpointSchema,
+  RunExecutionInvariantError,
+  type RunContinuationCheckpoint,
+} from "@caelush/core";
 import type { RunId, TimestampMs } from "@caelush/protocol";
 import type { CaelushDatabase } from "../database.js";
 import { decodeProtocol, encodeProtocol } from "../codec.js";
@@ -36,10 +40,12 @@ function decodeContinuation(row: ContinuationRow): StoredContinuation {
     entityId: row.run_id,
     table: "agent_run_continuations",
   });
+  const sourceStepId =
+    checkpoint.type === "WAITING_RETRY" ? checkpoint.failedStepId : checkpoint.sourceStepId;
   if (
     checkpoint.runId !== row.run_id ||
     checkpoint.type !== row.kind ||
-    checkpoint.sourceStepId !== row.source_step_id ||
+    sourceStepId !== row.source_step_id ||
     row.revision < 1
   ) {
     throw new StorageDecodeError(
@@ -94,6 +100,17 @@ export function setContinuationInTransaction(
     entityId: runId,
     table: "agent_run_continuations",
   });
+  const sourceStepId = parsed.type === "WAITING_RETRY" ? parsed.failedStepId : parsed.sourceStepId;
+  if (parsed.type === "WAITING_RETRY") {
+    const failedStep = client
+      .prepare("SELECT run_id, status FROM agent_steps WHERE id = ?")
+      .get(parsed.failedStepId) as { run_id: string; status: string } | undefined;
+    if (failedStep?.run_id !== runId || failedStep.status !== "FAILED") {
+      throw new RunExecutionInvariantError(
+        "WAITING_RETRY must reference a failed Step belonging to the Run",
+      );
+    }
+  }
   if (existing) {
     client
       .prepare(
@@ -101,7 +118,7 @@ export function setContinuationInTransaction(
          SET kind = ?, source_step_id = ?, revision = ?, updated_at_ms = ?, data_json = ?
          WHERE run_id = ?`,
       )
-      .run(parsed.type, parsed.sourceStepId, revision, updatedAt, dataJson, runId);
+      .run(parsed.type, sourceStepId, revision, updatedAt, dataJson, runId);
   } else {
     client
       .prepare(
@@ -109,7 +126,7 @@ export function setContinuationInTransaction(
          (run_id, kind, source_step_id, revision, updated_at_ms, data_json)
          VALUES (?, ?, ?, ?, ?, ?)`,
       )
-      .run(runId, parsed.type, parsed.sourceStepId, revision, updatedAt, dataJson);
+      .run(runId, parsed.type, sourceStepId, revision, updatedAt, dataJson);
   }
   return { checkpoint: parsed, revision, updatedAt };
 }

@@ -197,7 +197,12 @@ describe("durable Run execution state", () => {
       mode: "START",
     });
     expect(() =>
-      assertRunExecutionInvariant({ run: running, state, continuation: checkpoint, conversation: [] }),
+      assertRunExecutionInvariant({
+        run: running,
+        state,
+        continuation: checkpoint,
+        conversation: [],
+      }),
     ).not.toThrow();
     const step = createRunningAgentStep({
       id: createStepId(),

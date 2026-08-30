@@ -12,6 +12,8 @@ import type { ToolBatchCoordinatorPort } from "@caelush/tools";
 import type { DurableAgentEvent, RunExecutionStorePort } from "./run-execution-store.js";
 import type { RunExecutionScopeRegistry } from "./run-execution-scope.js";
 import type { RunDeadlineRegistry } from "./run-deadline-registry.js";
+import type { RunRetryRegistry } from "./run-retry-registry.js";
+import type { RetryJitterSource, RetryPolicy } from "./retry-controller.js";
 
 export interface RunExecutionConfig {
   readonly baseSystemPrompt: string;
@@ -59,5 +61,8 @@ export interface RunControllerDependencies {
   readonly approvals?: ApprovalResolutionPort;
   readonly scopes?: RunExecutionScopeRegistry;
   readonly deadlineRegistry?: RunDeadlineRegistry;
+  readonly retryRegistry?: RunRetryRegistry;
+  readonly retryPolicy?: RetryPolicy;
+  readonly retryJitter?: RetryJitterSource;
   readonly resources?: RunOwnedResourceControllerPort;
 }

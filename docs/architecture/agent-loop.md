@@ -120,4 +120,18 @@ The `AgentLoop` accepts a host-only `AbortSignal` and returns a typed `CANCELLED
 
 The loop continues to accept the host-only signal and returns a typed `CANCELLED` result when interruption wins. It does not inspect the deadline, create timers, or choose between `CANCELLED` and `TIMEOUT`. `RunController` compares the durable absolute deadline, supplies the abort cause to the execution scope, and performs cleanup plus terminal persistence. Therefore a late Provider result cannot turn an expired Run into a future Tool request or Verification continuation. See [Run Deadline and Timeout](timeout.md).
 
+## Phase 10C provider retry boundary
+
+The loop still performs exactly one Provider turn per invocation and owns no
+sleep, timer, retry policy, or Tool execution. For a transient `LLMError`, it
+returns a sanitized retry projection containing only the safe transient code,
+retryability, and optional bounded Retry-After hint. The outer RunController
+uses that projection to settle the failed Step and persist `WAITING_RETRY`.
+
+Each wake invokes the loop again with a new Step and a new Gateway-owned
+`LLMCallId`. A retry after an open Tool turn uses the original pending decision
+and normalized results with `resumeWithToolResults()`; it does not invoke the
+Tool coordinator. Partial Provider output and retry attempts are never added to
+the durable Conversation. See [Provider Retry and Backoff](retry.md).
+
 Phase 6A defines deterministic decisions, steps, tool-result normalization, state helpers, and the `maxSteps` gate. Phase 6B connects those contracts to Project Intelligence, Relevant File Planning, ContextBuilder, and one LLM turn, then stops at the external Tool or Verification boundary. Phase 6C adds the durable RunController boundary described in [Run Controller](run-controller.md); Phase 7C extends that controller with ordered Tool batches while the AgentLoop itself remains Tool-execution unaware. The controller still never verifies a candidate or claims `COMPLETED`.

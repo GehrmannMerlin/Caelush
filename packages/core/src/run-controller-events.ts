@@ -32,6 +32,32 @@ export interface RunControllerEventFactory {
     eventId: EventId,
     timestamp: TimestampMs,
   ): DurableEventDraft;
+  llmFailed(
+    run: AgentRun,
+    step: AgentStep,
+    error: AgentError,
+    eventId: EventId,
+    timestamp: TimestampMs,
+  ): DurableEventDraft;
+  retryScheduled(
+    run: AgentRun,
+    step: AgentStep,
+    attempt: number,
+    maxAttempts: number,
+    delayMs: number,
+    nextAttemptAt: TimestampMs,
+    errorCode: "LLM_RATE_LIMIT" | "LLM_NETWORK" | "LLM_TIMEOUT",
+    eventId: EventId,
+    timestamp: TimestampMs,
+  ): DurableEventDraft;
+  retryStarted(
+    run: AgentRun,
+    step: AgentStep,
+    attempt: number,
+    maxAttempts: number,
+    eventId: EventId,
+    timestamp: TimestampMs,
+  ): DurableEventDraft;
   reasoning(
     run: AgentRun,
     state: AgentState,
@@ -103,6 +129,31 @@ export function createRunControllerEventFactory(): RunControllerEventFactory {
       ...base(run, eventId, timestamp, step.id),
       type: "llm.completed",
       payload: { model: run.model, usage: state.usage },
+    }),
+    llmFailed: (run, step, error, eventId, timestamp) => ({
+      ...base(run, eventId, timestamp, step.id),
+      type: "llm.failed",
+      payload: { model: run.model, error },
+    }),
+    retryScheduled: (
+      run,
+      step,
+      attempt,
+      maxAttempts,
+      delayMs,
+      nextAttemptAt,
+      errorCode,
+      eventId,
+      timestamp,
+    ) => ({
+      ...base(run, eventId, timestamp, step.id),
+      type: "retry.scheduled",
+      payload: { attempt, maxAttempts, delayMs, nextAttemptAt, errorCode },
+    }),
+    retryStarted: (run, step, attempt, maxAttempts, eventId, timestamp) => ({
+      ...base(run, eventId, timestamp, step.id),
+      type: "retry.started",
+      payload: { attempt, maxAttempts },
     }),
     reasoning: (run, _state, step, summary, eventId, timestamp) => ({
       ...base(run, eventId, timestamp, step.id),

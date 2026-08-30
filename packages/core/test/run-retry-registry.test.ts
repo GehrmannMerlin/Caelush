@@ -33,8 +33,12 @@ describe("RunRetryRegistry", () => {
     });
     const runId = createRunId();
     const fired: string[] = [];
-    registry.arm(runId, createTimestampMs(5_000), () => fired.push("old"));
-    registry.arm(runId, createTimestampMs(8_000), () => fired.push("new"));
+    registry.arm(runId, createTimestampMs(5_000), () => {
+      fired.push("old");
+    });
+    registry.arm(runId, createTimestampMs(8_000), () => {
+      fired.push("new");
+    });
     expect(registry.size).toBe(1);
     await timer.fire(0);
     expect(fired).toEqual([]);
@@ -70,5 +74,22 @@ describe("RunRetryRegistry", () => {
     registry.dispose();
     expect(registry.size).toBe(0);
     expect(timer.scheduled.filter((task) => !task.cancelled)).toHaveLength(0);
+  });
+
+  it("does not retain a registration when the timer port rejects arming", () => {
+    const runId = createRunId();
+    const registry = new RunRetryRegistry({
+      clock: { now: () => createTimestampMs(0) },
+      timer: {
+        schedule: () => {
+          throw new Error("timer unavailable");
+        },
+      },
+    });
+
+    expect(() => registry.arm(runId, createTimestampMs(1), () => undefined)).toThrow(
+      "timer unavailable",
+    );
+    expect(registry.size).toBe(0);
   });
 });

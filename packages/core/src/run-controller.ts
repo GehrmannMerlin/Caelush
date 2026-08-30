@@ -8,6 +8,7 @@ import {
 import {
   AgentRunSchema,
   ApprovalResolutionSchema,
+  createTimestampMs,
   type ApprovalRequestId,
   type AgentRun,
   type AgentError,
@@ -21,6 +22,7 @@ import {
   createInitialAgentState,
   markAgentStateCancelled,
   markAgentStateWaitingApproval,
+  markAgentStateMaxStepsReached,
   resumeAgentStateFromApproval,
   settleAgentStepState,
   startAgentState,
@@ -49,6 +51,8 @@ import {
   type RunExecutionCommit,
   type RunExecutionSnapshot,
 } from "./run-execution-store.js";
+import { RetryController } from "./retry-controller.js";
+import { RunRetryRegistry } from "./run-retry-registry.js";
 import type { DurableAgentEvent, DurableEventDraft } from "./run-execution-store.js";
 import type { RunControllerResult } from "./run-controller-input.js";
 import {
@@ -103,6 +107,8 @@ export class RunController {
   private readonly activeRuns = new Set<RunId>();
   private readonly scopes: RunExecutionScopeRegistry;
   private readonly deadlineRegistry: RunDeadlineRegistry;
+  private readonly retryRegistry: RunRetryRegistry;
+  private readonly retryController: RetryController;
   private readonly eventFactory: RunControllerEventFactory;
 
   constructor(private readonly dependencies: RunControllerDependencies) {
@@ -110,6 +116,17 @@ export class RunController {
     this.scopes = dependencies.scopes ?? new RunExecutionScopeRegistry();
     this.deadlineRegistry =
       dependencies.deadlineRegistry ?? new RunDeadlineRegistry({ clock: dependencies.clock });
+    this.retryRegistry =
+      dependencies.retryRegistry ?? new RunRetryRegistry({ clock: dependencies.clock });
+    this.retryController = new RetryController({
+      ...(dependencies.retryPolicy === undefined ? {} : { policy: dependencies.retryPolicy }),
+      ...(dependencies.retryJitter === undefined ? {} : { jitter: dependencies.retryJitter }),
+    });
+  }
+
+  dispose(): void {
+    this.deadlineRegistry.dispose();
+    this.retryRegistry.dispose();
   }
 
   async start(runId: RunId): Promise<RunControllerResult> {
@@ -361,6 +378,9 @@ export class RunController {
     const loaded = await this.load(runId);
     if (loaded.cancellationIntent !== undefined) return this.finalizeCancellation(loaded);
     if (this.isExpired(loaded)) return this.finalizeTimeout(loaded);
+    if (loaded.run.status === "RUNNING" && loaded.continuation?.type === "WAITING_RETRY") {
+      return this.resumeRetryLocked(loaded);
+    }
     if (loaded.run.status === "RUNNING" && loaded.activeStep !== undefined) {
       return this.recoverStaleStep(loaded);
     }
@@ -387,6 +407,63 @@ export class RunController {
       return this.driveToolBoundariesLocked(loaded, "RECOVER");
     }
     return this.resumeKnownBoundary(loaded);
+  }
+
+  private async resumeRetryLocked(loaded: RunExecutionSnapshot): Promise<RunControllerResult> {
+    if (loaded.continuation?.type !== "WAITING_RETRY") {
+      return this.resultFromSnapshot(loaded);
+    }
+    if (loaded.cancellationIntent !== undefined) return this.finalizeCancellation(loaded);
+    if (this.isExpired(loaded)) return this.finalizeTimeout(loaded);
+    if (loaded.state === undefined) {
+      throw new RunControllerInvariantError("Retry boundary requires an AgentState");
+    }
+    const now = this.dependencies.clock.now();
+    if (now < loaded.continuation.nextAttemptAt) {
+      this.scheduleRetry(loaded.run.id, loaded.continuation.nextAttemptAt);
+      return this.resultFromSnapshot(loaded);
+    }
+    if (loaded.state.usage.steps >= loaded.run.limits.maxSteps) {
+      const state = markAgentStateMaxStepsReached(loaded.state, now);
+      const run = AgentRunSchema.parse({
+        ...loaded.run,
+        status: "MAX_STEPS_REACHED",
+        finishedAt: now,
+      });
+      const commit = await this.commit({
+        run,
+        state,
+        expectedStateRevision: loaded.stateRevision ?? null,
+        expectedContinuationRevision: loaded.continuationRevision ?? null,
+        stepWrites: [],
+        messagesToAppend: [],
+        continuation: { operation: "CLEAR" },
+        events: [
+          this.eventFactory.maxSteps(
+            loaded.run,
+            state,
+            {
+              type: "MAX_STEPS_REACHED",
+              stepsCompleted: state.usage.steps,
+              maxSteps: loaded.run.limits.maxSteps,
+            },
+            this.nextEventId(),
+            now,
+          ),
+          this.eventFactory.statusChanged(
+            loaded.run,
+            "RUNNING",
+            "MAX_STEPS_REACHED",
+            this.nextEventId(),
+            now,
+          ),
+        ],
+      });
+      this.notify(commit.events);
+      return this.resultFromSnapshot(commit.snapshot);
+    }
+    this.retryRegistry.disarm(loaded.run.id);
+    return this.executeLoop(loaded, loaded.continuation.mode === "TOOL_RESULTS");
   }
 
   private async driveToolBoundariesLocked(
@@ -613,6 +690,8 @@ export class RunController {
         const activeRun = AgentRunSchema.parse({ ...run, currentStepId: step.id });
         const activeState = { ...state, currentStepId: step.id };
         try {
+          const retry =
+            current.continuation?.type === "WAITING_RETRY" ? current.continuation : undefined;
           const commit = await this.commit({
             run: activeRun,
             state: activeState,
@@ -620,7 +699,20 @@ export class RunController {
             expectedContinuationRevision: current.continuationRevision ?? null,
             stepWrites: [{ operation: "INSERT", step }],
             messagesToAppend: [],
+            ...(retry === undefined ? {} : { continuation: { operation: "CLEAR" as const } }),
             events: [
+              ...(retry === undefined
+                ? []
+                : [
+                    this.eventFactory.retryStarted(
+                      run,
+                      step,
+                      retry.attempt,
+                      retry.maxAttempts,
+                      this.nextEventId(),
+                      this.dependencies.clock.now(),
+                    ),
+                  ]),
               this.eventFactory.llmStarted(
                 run,
                 step,
@@ -653,19 +745,35 @@ export class RunController {
     let execution: AgentLoopExecutionResult;
     const signal = this.executionSignal(snapshot.run.id);
     if (resume) {
-      if (
-        snapshot.continuation?.type !== "WAITING_TOOL_RESULTS" ||
-        snapshot.continuation.receivedResults === undefined
-      ) {
+      const retryContinuation =
+        snapshot.continuation?.type === "WAITING_RETRY" &&
+        snapshot.continuation.mode === "TOOL_RESULTS"
+          ? snapshot.continuation
+          : undefined;
+      const toolContinuation =
+        snapshot.continuation?.type === "WAITING_TOOL_RESULTS" &&
+        snapshot.continuation.receivedResults !== undefined
+          ? snapshot.continuation
+          : undefined;
+      if (retryContinuation === undefined && toolContinuation === undefined) {
         throw new RunControllerInputError(
           "accepted Tool Results are missing from the continuation",
         );
       }
+      const retryInput =
+        retryContinuation === undefined
+          ? {
+              pendingDecision: toolContinuation!.pendingDecision,
+              toolResults: toolContinuation!.receivedResults!,
+            }
+          : {
+              pendingDecision: retryContinuation.pendingDecision,
+              toolResults: retryContinuation.receivedResults,
+            };
       execution = await loop.resumeWithToolResults({
         ...input,
         signal,
-        pendingDecision: snapshot.continuation.pendingDecision,
-        toolResults: snapshot.continuation.receivedResults,
+        ...retryInput,
       });
     } else {
       execution = await loop.run({ ...input, signal });
@@ -699,11 +807,24 @@ export class RunController {
     let continuation: RunExecutionCommit["continuation"];
     let events: DurableEventDraft[];
     if (execution.status === "FAILED") {
+      const retrySettlement = await this.settleProviderFailure(current, before, execution, now);
+      if (retrySettlement !== undefined) return retrySettlement;
       state = markAgentStateFailed(state, execution.error, now);
       const settledRun = AgentRunSchema.parse({ ...current.run, currentStepId: undefined });
       run = markAgentRunFailed(settledRun, now);
       continuation = current.continuation === undefined ? undefined : { operation: "CLEAR" };
       events = this.failureEvents(current.run, run, execution.error, execution.step, now);
+      if (execution.providerTurnState === "FAILED" && execution.step !== undefined) {
+        events.unshift(
+          this.eventFactory.llmFailed(
+            current.run,
+            execution.step,
+            execution.error,
+            this.nextEventId(),
+            now,
+          ),
+        );
+      }
       if (execution.providerTurnState === "COMPLETED" && execution.step !== undefined) {
         events.unshift(
           this.eventFactory.llmCompleted(
@@ -791,11 +912,187 @@ export class RunController {
     return this.resultFromSnapshot(commit.snapshot);
   }
 
+  private async settleProviderFailure(
+    current: RunExecutionSnapshot,
+    before: RunExecutionSnapshot,
+    execution: Extract<AgentLoopExecutionResult, { status: "FAILED" }>,
+    now: AgentRun["createdAt"],
+  ): Promise<RunControllerResult | undefined> {
+    if (execution.providerTurnState !== "FAILED" || execution.retry === undefined) return undefined;
+    if (execution.step === undefined) {
+      throw new RunControllerInvariantError("Provider failure has no failed Step");
+    }
+    const deadline = deriveRunDeadline(current.run);
+    const attempt = before.continuation?.type === "WAITING_RETRY" ? before.continuation.attempt : 1;
+    const decision = this.retryController.decide({
+      retryable: execution.retry.retryable,
+      attempt,
+      steps: execution.state.usage.steps,
+      maxSteps: current.run.limits.maxSteps,
+      now,
+      ...(deadline === undefined ? {} : { deadlineAt: deadline.deadlineAt }),
+      ...(execution.retry.retryAfterMs === undefined
+        ? {}
+        : { retryAfterMs: execution.retry.retryAfterMs }),
+    });
+    const previous = before.continuation;
+    const retryContext =
+      previous?.type === "WAITING_TOOL_RESULTS" && previous.receivedResults !== undefined
+        ? {
+            mode: "TOOL_RESULTS" as const,
+            pendingDecision: previous.pendingDecision,
+            receivedResults: previous.receivedResults,
+          }
+        : previous?.type === "WAITING_RETRY" && previous.mode === "TOOL_RESULTS"
+          ? {
+              mode: "TOOL_RESULTS" as const,
+              pendingDecision: previous.pendingDecision,
+              receivedResults: previous.receivedResults,
+            }
+          : { mode: "START" as const };
+    if (decision.kind === "STOP" && decision.reason === "ATTEMPTS_EXHAUSTED") return undefined;
+    if (decision.kind === "STOP" && decision.reason === "NOT_RETRYABLE") return undefined;
+
+    if (decision.kind === "STOP" && decision.reason === "MAX_STEPS_REACHED") {
+      const state = markAgentStateMaxStepsReached(execution.state, now);
+      const run = AgentRunSchema.parse({
+        ...current.run,
+        status: "MAX_STEPS_REACHED",
+        currentStepId: undefined,
+        finishedAt: now,
+      });
+      const commit = await this.commit({
+        run,
+        state,
+        expectedStateRevision: current.stateRevision ?? null,
+        expectedContinuationRevision: current.continuationRevision ?? null,
+        stepWrites: [{ operation: "UPDATE", step: execution.step }],
+        messagesToAppend: [],
+        ...(current.continuation === undefined ? {} : { continuation: { operation: "CLEAR" } }),
+        events: [
+          this.eventFactory.llmFailed(
+            current.run,
+            execution.step,
+            execution.error,
+            this.nextEventId(),
+            now,
+          ),
+          this.eventFactory.maxSteps(
+            current.run,
+            state,
+            {
+              type: "MAX_STEPS_REACHED",
+              stepsCompleted: state.usage.steps,
+              maxSteps: current.run.limits.maxSteps,
+            },
+            this.nextEventId(),
+            now,
+          ),
+          this.eventFactory.statusChanged(
+            current.run,
+            "RUNNING",
+            "MAX_STEPS_REACHED",
+            this.nextEventId(),
+            now,
+          ),
+        ],
+      });
+      this.notify(commit.events);
+      return this.resultFromSnapshot(commit.snapshot);
+    }
+
+    if (decision.kind === "STOP" && decision.reason === "DEADLINE_EXCEEDED") {
+      if (deadline === undefined) {
+        throw new RunControllerInvariantError(
+          "A deadline-exceeded retry decision has no Run deadline",
+        );
+      }
+      const run = AgentRunSchema.parse({ ...current.run, currentStepId: undefined });
+      const checkpoint = {
+        type: "WAITING_RETRY" as const,
+        runId: run.id,
+        failedStepId: execution.step.id,
+        attempt: attempt + 1,
+        maxAttempts: this.retryController.maxAttempts,
+        nextAttemptAt: deadline.deadlineAt,
+        errorCode: execution.retry.code,
+        ...retryContext,
+      };
+      const commit = await this.commit({
+        run,
+        state: execution.state,
+        expectedStateRevision: current.stateRevision ?? null,
+        expectedContinuationRevision: current.continuationRevision ?? null,
+        stepWrites: [{ operation: "UPDATE", step: execution.step }],
+        messagesToAppend: [],
+        continuation: { operation: "SET", checkpoint, updatedAt: now },
+        events: [
+          this.eventFactory.llmFailed(
+            current.run,
+            execution.step,
+            execution.error,
+            this.nextEventId(),
+            now,
+          ),
+        ],
+      });
+      this.notify(commit.events);
+      return this.resultFromSnapshot(commit.snapshot);
+    }
+
+    if (decision.kind !== "RETRY") return undefined;
+    const nextAttemptAt = addTimestamp(now, decision.delayMs);
+    const run = AgentRunSchema.parse({ ...current.run, currentStepId: undefined });
+    const checkpoint = {
+      type: "WAITING_RETRY" as const,
+      runId: run.id,
+      failedStepId: execution.step.id,
+      attempt: decision.attempt,
+      maxAttempts: this.retryController.maxAttempts,
+      nextAttemptAt,
+      errorCode: execution.retry.code,
+      ...retryContext,
+    };
+    const commit = await this.commit({
+      run,
+      state: execution.state,
+      expectedStateRevision: current.stateRevision ?? null,
+      expectedContinuationRevision: current.continuationRevision ?? null,
+      stepWrites: [{ operation: "UPDATE", step: execution.step }],
+      messagesToAppend: [],
+      continuation: { operation: "SET", checkpoint, updatedAt: now },
+      events: [
+        this.eventFactory.llmFailed(
+          current.run,
+          execution.step,
+          execution.error,
+          this.nextEventId(),
+          now,
+        ),
+        this.eventFactory.retryScheduled(
+          current.run,
+          execution.step,
+          decision.attempt,
+          this.retryController.maxAttempts,
+          decision.delayMs,
+          nextAttemptAt,
+          execution.retry.code,
+          this.nextEventId(),
+          now,
+        ),
+      ],
+    });
+    this.notify(commit.events);
+    this.scheduleRetry(run.id, nextAttemptAt, deadline?.deadlineAt);
+    return this.resultFromSnapshot(commit.snapshot);
+  }
+
   private async finalizeCancellation(
     before: RunExecutionSnapshot,
     execution?: Extract<AgentLoopExecutionResult, { status: "CANCELLED" }>,
   ): Promise<RunControllerResult> {
     const current = await this.load(before.run.id);
+    this.retryRegistry.disarm(current.run.id);
     if (current.run.status === "CANCELLED") return this.resultFromSnapshot(current);
     const cleanup = await this.cancelOwnedResources(current.run.id);
     if (!cleanup.confirmed) {
@@ -876,6 +1173,7 @@ export class RunController {
     execution?: Extract<AgentLoopExecutionResult, { status: "CANCELLED" }>,
   ): Promise<RunControllerResult> {
     const current = await this.load(before.run.id);
+    this.retryRegistry.disarm(current.run.id);
     const authority = this.resolveAuthority(current, false);
     if (authority === "TERMINAL") return this.resultFromSnapshot(current);
     if (authority === "CANCELLED") return this.finalizeCancellation(current, execution);
@@ -1076,6 +1374,7 @@ export class RunController {
       throw error;
     }
     this.reconcileDeadline(snapshot);
+    this.reconcileRetry(snapshot);
     return snapshot;
   }
 
@@ -1126,6 +1425,17 @@ export class RunController {
           : { approvalId: snapshot.continuation.waitingApproval.approvalId }),
         externalCallId: snapshot.continuation.waitingApproval.externalCallId,
         toolName: snapshot.continuation.waitingApproval.toolName,
+      };
+    }
+    if (snapshot.run.status === "RUNNING" && snapshot.continuation?.type === "WAITING_RETRY") {
+      return {
+        status: "WAITING_RETRY",
+        run: snapshot.run,
+        state: snapshot.state!,
+        nextAttemptAt: snapshot.continuation.nextAttemptAt,
+        attempt: snapshot.continuation.attempt,
+        maxAttempts: snapshot.continuation.maxAttempts,
+        errorCode: snapshot.continuation.errorCode,
       };
     }
     if (
@@ -1235,6 +1545,52 @@ export class RunController {
     });
   }
 
+  private reconcileRetry(snapshot: RunExecutionSnapshot): void {
+    if (snapshot.run.status !== "RUNNING" || snapshot.continuation?.type !== "WAITING_RETRY") {
+      this.retryRegistry.disarm(snapshot.run.id);
+      return;
+    }
+    const deadline = deriveRunDeadline(snapshot.run);
+    if (deadline !== undefined && snapshot.continuation.nextAttemptAt >= deadline.deadlineAt) {
+      this.retryRegistry.disarm(snapshot.run.id);
+      return;
+    }
+    this.scheduleRetry(snapshot.run.id, snapshot.continuation.nextAttemptAt, deadline?.deadlineAt);
+  }
+
+  private scheduleRetry(
+    runId: RunId,
+    nextAttemptAt: AgentRun["createdAt"],
+    deadlineAt?: AgentRun["createdAt"],
+  ): void {
+    if (deadlineAt !== undefined && nextAttemptAt >= deadlineAt) {
+      this.retryRegistry.disarm(runId);
+      return;
+    }
+    try {
+      this.retryRegistry.arm(runId, nextAttemptAt, () => this.handleRetry(runId));
+    } catch {
+      // The durable WAITING_RETRY checkpoint remains recoverable if arming fails.
+    }
+  }
+
+  private async handleRetry(runId: RunId): Promise<void> {
+    if (this.activeRuns.has(runId)) {
+      const loaded = await this.load(runId);
+      if (loaded.continuation?.type === "WAITING_RETRY") {
+        this.scheduleRetry(runId, loaded.continuation.nextAttemptAt);
+      }
+      return;
+    }
+    await this.withLock(runId, async () => {
+      const loaded = await this.load(runId);
+      if (loaded.run.status !== "RUNNING" || loaded.continuation?.type !== "WAITING_RETRY") {
+        return;
+      }
+      await this.resumeRetryLocked(loaded);
+    });
+  }
+
   private async handleDeadline(runId: RunId): Promise<RunControllerResult | undefined> {
     const loaded = await this.load(runId);
     if (isTerminal(loaded.run.status) || loaded.run.status === "PENDING") {
@@ -1317,4 +1673,11 @@ function isTerminal(status: AgentRun["status"]): boolean {
     "MAX_STEPS_REACHED",
     "BUDGET_EXCEEDED",
   ].includes(status);
+}
+
+function addTimestamp(now: AgentRun["createdAt"], delayMs: number): AgentRun["createdAt"] {
+  if (delayMs > Number.MAX_SAFE_INTEGER - now) {
+    throw new RunControllerInvariantError("Retry timestamp exceeded the safe integer range");
+  }
+  return createTimestampMs(now + delayMs);
 }
