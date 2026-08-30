@@ -1,9 +1,4 @@
-import type {
-  ApprovalPolicy,
-  Capability,
-  PermissionProfile,
-  RiskLevel,
-} from "@caelush/protocol";
+import type { ApprovalPolicy, Capability, PermissionProfile, RiskLevel } from "@caelush/protocol";
 
 export type SecurityDecisionCode =
   | "ALLOWED_BY_POLICY"
@@ -22,8 +17,7 @@ export type SecurityDecision =
   | {
       readonly kind: "DENY";
       readonly reasonCode:
-        | "MISSING_REQUIRED_CAPABILITY"
-        | "UNCONFINED_EXECUTION_BLOCKED_WITHOUT_APPROVAL";
+        "MISSING_REQUIRED_CAPABILITY" | "UNCONFINED_EXECUTION_BLOCKED_WITHOUT_APPROVAL";
       readonly safeReason: string;
     }
   | {

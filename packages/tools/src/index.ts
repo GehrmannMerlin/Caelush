@@ -14,6 +14,7 @@ export type {
   DurableToolEvent,
   DurableToolEventDraft,
   ToolDispatchRequest,
+  ToolDefinitionMetadata,
   ToolDispatcherOutcome,
   ToolErrorResultOutcome,
   ToolExecutionCommit,

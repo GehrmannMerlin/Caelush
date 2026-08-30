@@ -1,8 +1,4 @@
-import {
-  CapabilitySchema,
-  type Capability,
-  type PermissionProfile,
-} from "@caelush/protocol";
+import { CapabilitySchema, type Capability, type PermissionProfile } from "@caelush/protocol";
 
 const READ_ONLY_CAPABILITIES = ["FS_READ", "GIT_READ"] as const satisfies readonly Capability[];
 const PROJECT_ACCESS_CAPABILITIES = [

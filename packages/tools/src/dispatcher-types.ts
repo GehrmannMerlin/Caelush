@@ -157,10 +157,12 @@ export interface ToolEventIdFactory {
 
 export type ToolLifecycleError = AgentError;
 
-export type ToolDefinitionMetadata = Pick<
-  ToolDefinition,
-  "name" | "riskLevel" | "requiredCapabilities" | "runtimeRequirements"
->;
+export type ToolDefinitionMetadata = {
+  readonly name: ToolDefinition["name"];
+  readonly riskLevel: ToolDefinition["riskLevel"];
+  readonly requiredCapabilities: readonly ToolDefinition["requiredCapabilities"][number][];
+  readonly runtimeRequirements: ToolDefinition["runtimeRequirements"];
+};
 
 export type ToolIdentity = Pick<
   ToolDispatchRequest,

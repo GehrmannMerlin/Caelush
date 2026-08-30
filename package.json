@@ -16,6 +16,7 @@
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm format:check"
   },
   "devDependencies": {
+    "@caelush/security": "workspace:*",
     "@eslint/js": "10.0.1",
     "@types/node": "24.13.3",
     "eslint": "10.9.1",

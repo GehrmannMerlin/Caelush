@@ -7,11 +7,7 @@ import {
 import { classifyExecutionContainment } from "./containment.js";
 import { resolveGrantedCapabilities } from "./capabilities.js";
 import { SecurityPolicyInputError } from "./errors.js";
-import type {
-  SecurityDecision,
-  SecurityPolicyEvaluator,
-  SecurityPolicyInput,
-} from "./decision.js";
+import type { SecurityDecision, SecurityPolicyEvaluator, SecurityPolicyInput } from "./decision.js";
 
 const ALLOW_REASON = "The Tool is allowed by the active execution policy.";
 const MISSING_CAPABILITY_REASON =
@@ -35,10 +31,7 @@ export function evaluateSecurityPolicy(input: SecurityPolicyInput): SecurityDeci
   }
 
   const containment = classifyExecutionContainment(input.requiredCapabilities);
-  if (
-    input.permissionProfile === "PROJECT_ACCESS" &&
-    containment === "UNCONFINED_PROCESS"
-  ) {
+  if (input.permissionProfile === "PROJECT_ACCESS" && containment === "UNCONFINED_PROCESS") {
     if (input.approvalPolicy === "NEVER_ASK") {
       return {
         kind: "DENY",
