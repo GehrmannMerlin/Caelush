@@ -50,6 +50,21 @@ export function markAgentStateCancelled(state: AgentState, now: TimestampMs): Ag
   });
 }
 
+export function markAgentStateTimedOut(state: AgentState, now: TimestampMs): AgentState {
+  assertMonotonicTimestamp(state, now);
+  if (state.currentStepId !== undefined) {
+    throw new AgentKernelStateError("timed out AgentState cannot retain an active Step");
+  }
+  assertRunStatusTransition(state.status, "TIMEOUT");
+  return AgentStateSchema.parse({
+    ...state,
+    status: "TIMEOUT",
+    currentStepId: undefined,
+    activeProcesses: [],
+    updatedAt: now,
+  });
+}
+
 export function beginAgentStepState(
   state: AgentState,
   stepId: StepId,

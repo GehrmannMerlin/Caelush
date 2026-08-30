@@ -10,6 +10,7 @@ import {
   RunCompletedEventSchema,
   RunFailedEventSchema,
   RunStartedEventSchema,
+  RunTimedOutEventSchema,
   StatusChangedEventSchema,
 } from "./run.js";
 import { PlanUpdatedEventSchema, ReasoningSummaryEventSchema } from "./reasoning.js";
@@ -47,9 +48,12 @@ import { ErrorEventSchema } from "./error.js";
 
 export { DurableEventSchema, EphemeralEventSchema, EventDurabilitySchema, EventVisibilitySchema };
 export type { DurableEvent, EphemeralEvent, EventDurability, EventVisibility } from "./base.js";
+export { RunTimedOutEventSchema } from "./run.js";
+export type { RunTimedOutEvent } from "./run.js";
 
 export const AgentEventSchema = z.discriminatedUnion("type", [
   RunStartedEventSchema,
+  RunTimedOutEventSchema,
   RunCompletedEventSchema,
   RunFailedEventSchema,
   RunCancelledEventSchema,

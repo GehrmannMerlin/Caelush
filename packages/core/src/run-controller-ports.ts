@@ -11,6 +11,7 @@ import type {
 import type { ToolBatchCoordinatorPort } from "@caelush/tools";
 import type { DurableAgentEvent, RunExecutionStorePort } from "./run-execution-store.js";
 import type { RunExecutionScopeRegistry } from "./run-execution-scope.js";
+import type { RunDeadlineRegistry } from "./run-deadline-registry.js";
 
 export interface RunExecutionConfig {
   readonly baseSystemPrompt: string;
@@ -57,5 +58,6 @@ export interface RunControllerDependencies {
   readonly eventIdFactory: EventIdFactory;
   readonly approvals?: ApprovalResolutionPort;
   readonly scopes?: RunExecutionScopeRegistry;
+  readonly deadlineRegistry?: RunDeadlineRegistry;
   readonly resources?: RunOwnedResourceControllerPort;
 }

@@ -15,7 +15,7 @@ import {
   createToolInvocationId,
   createWorkspaceId,
 } from "@caelush/protocol";
-import { AgentLoop, RunController } from "@caelush/core";
+import { AgentLoop, RunController, RunDeadlineRegistry } from "@caelush/core";
 import { EventBus } from "@caelush/events";
 import { LLMTurnResultSchema, type LLMTurnResult } from "@caelush/llm/turn";
 import {
@@ -68,7 +68,11 @@ const definitions = [
   },
 ];
 
-function makeRun(pathname: string, runtimeKind = "fixture") {
+function makeRun(
+  pathname: string,
+  runtimeKind = "fixture",
+  overrides: Partial<ReturnType<typeof AgentRunSchema.parse>> = {},
+) {
   return AgentRunSchema.parse({
     id: createRunId(),
     sessionId: createSessionId(),
@@ -81,6 +85,7 @@ function makeRun(pathname: string, runtimeKind = "fixture") {
     approvalPolicy: "ALWAYS_ASK",
     limits: { maxSteps: 6, maxToolCalls: 8, timeoutMs: 1000 },
     createdAt: createTimestampMs(1),
+    ...overrides,
   });
 }
 
@@ -187,8 +192,11 @@ function createController(
   coordinator?: ToolBatchCoordinator,
   observedRequests: Array<{ tools?: unknown; messages: unknown[] }> = [],
   initialNow = 10,
+  deadlineRegistry?: RunDeadlineRegistry,
+  fixedClock?: { value: number },
 ) {
   let now = initialNow;
+  const clock = { now: () => createTimestampMs(fixedClock?.value ?? now++) };
   const loop = new AgentLoop({
     inspector: { inspect: async () => ({}) as never },
     planner: { plan: async () => ({}) as never },
@@ -207,7 +215,7 @@ function createController(
         return turns.shift()!;
       },
     },
-    clock: { now: () => createTimestampMs(now++) },
+    clock,
     stepIdFactory: { create: () => createStepId() },
   });
   return new RunController({
@@ -221,9 +229,10 @@ function createController(
       }),
     },
     ...(coordinator === undefined ? {} : { toolCoordinator: coordinator }),
-    clock: { now: () => createTimestampMs(now++) },
+    clock,
     eventIdFactory: { create: createEventId },
     approvals: storage.approvals,
+    ...(deadlineRegistry === undefined ? {} : { deadlineRegistry }),
   });
 }
 
@@ -614,6 +623,72 @@ describe("RunController automatic Tool Batch integration", () => {
     expect((await controller.recover(run.id)).status).toBe("WAITING_APPROVAL");
     expect(calls).toEqual(["call-A"]);
     await storage.close();
+  });
+
+  it("times out an idle approval boundary without a follow-up API call", async () => {
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    const clock = { value: 10 };
+    const scheduled: Array<{
+      callback: () => void | Promise<void>;
+      cancelled: boolean;
+    }> = [];
+    const deadlineRegistry = new RunDeadlineRegistry({
+      clock: { now: () => createTimestampMs(clock.value) },
+      timer: {
+        schedule: (_delay, callback) => {
+          const task = { callback, cancelled: false };
+          scheduled.push(task);
+          return { cancel: () => (task.cancelled = true) };
+        },
+      },
+    });
+    const run = makeRun("/repo", "fixture", {
+      limits: { maxSteps: 6, maxToolCalls: 8, timeoutMs: 100 },
+    });
+    await seedRun(storage, run);
+    const eventBus = new EventBus(storage.events);
+    const calls: string[] = [];
+    const runtime = createRuntime(
+      storage,
+      eventBus,
+      async ({ externalCallId }) => {
+        calls.push(externalCallId);
+        return { content: externalCallId, details: {}, isError: false };
+      },
+      (toolName) => (toolName === "approval_value" ? "REQUIRE_APPROVAL" : "ALLOW"),
+    );
+    const controller = createController(
+      storage,
+      eventBus,
+      [turn("inspect", [{ id: "call-approval", name: "approval_value", input: {} }], "TOOL_CALLS")],
+      runtime.coordinator,
+      [],
+      10,
+      deadlineRegistry,
+      clock,
+    );
+
+    try {
+      const waiting = await controller.start(run.id);
+      expect(waiting.status).toBe("WAITING_APPROVAL");
+      if (waiting.status !== "WAITING_APPROVAL") {
+        throw new Error("expected approval boundary");
+      }
+      expect(scheduled.filter((task) => !task.cancelled)).toHaveLength(1);
+      clock.value = 110;
+      await scheduled.find((task) => !task.cancelled)!.callback();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect((await storage.runs.get(run.id))?.status).toBe("TIMEOUT");
+      expect((await storage.approvals.getById(waiting.approvalId!))?.status).toBe("CANCELLED");
+      expect(calls).toEqual([]);
+      expect(
+        (await storage.events.replay(run.id)).filter((event) => event.type === "run.timed_out"),
+      ).toHaveLength(1);
+    } finally {
+      await storage.close();
+    }
   });
 
   it("resolves a durable approval and resumes the exact Tool boundary plus trailing calls", async () => {

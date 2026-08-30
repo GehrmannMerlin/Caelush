@@ -71,6 +71,20 @@ Phase 10A cancellation rules:
 - Runtime process cleanup is exact-owner, cooperative, and best effort within the managed process boundary. Do not claim a hard OS sandbox or universal process-tree termination.
 - Recovery gives durable cancellation intent priority over stale Steps, approvals, Tool continuations, and verification candidates; it never resumes Agent work for an intent-marked Run.
 
+Phase 10B deadline and timeout rules:
+
+- Phase 10 contains exactly 10A, 10B, 10C, and 10D; this round implements only 10B. Do not add 10B-1, 10B-2, 10E, or another Phase 10 round.
+- A started Run deadline is exactly `startedAt + limits.timeoutMs`; never use `createdAt`, refresh `startedAt`, or replace the original deadline with `now + timeoutMs`. PENDING Runs have no active deadline.
+- `timeoutMs` must be a positive safe integer and deadline arithmetic must reject unsafe overflow/precision loss. `now >= deadlineAt` is expired; equality is not active.
+- Run deadline timeout and Provider-local timeout are separate authorities. Provider timeout remains `MODEL_TIMEOUT`; Run deadline aborts the Run-owned scope and settles `TIMEOUT`. Never pass remaining Run time as a replacement Provider timeout.
+- Deadline scheduling is Core-owned and ephemeral. Keep one registration per non-terminal started Run, use injectable clock/timer ports, recheck after wake, rearm premature wakes, chunk long delays, and disarm PENDING/terminal Runs. Dispose timers during lifecycle shutdown.
+- `DEADLINE_EXCEEDED` is a Core-only in-memory `RunExecutionAbortCause`; it must never enter Protocol, SQLite, cancellation intent, continuation, approval, Tool, observation, or event payloads. The first in-memory abort cause wins; durable user cancellation remains the settlement priority.
+- Timeout must abort the live scope before taking the normal termination lock, then require confirmed cleanup of Run-owned resources and pending approvals. An unconfirmed cleanup returns `TIMEOUT_PENDING` and remains recoverable; it is not a new RunStatus.
+- Successful timeout settles the canonical Run/State/Step/Continuation atomically: active Step becomes `CANCELLED` with usage counted once, AgentState and AgentRun become `TIMEOUT`, current Step and continuation are cleared, and exactly one `status.changed` plus one `run.timed_out` are emitted. It never emits `run.failed`.
+- Run deadline includes context, Provider, Tool, Runtime/process work, approval wait, external Tool Result wait, and VERIFYING. Approval TTL is a separate clock: Run timeout cancels pending approvals, while approval TTL produces `EXPIRED`.
+- `recover()` on an expired Run performs zero Provider/Tool calls and never resumes it. An unexpired recovered boundary rearms the remaining original deadline. Late Provider/Tool/approval results cannot reopen a terminal Run.
+- Phase 10B does not implement retry/backoff, `WAITING_RETRY`, budgets, maxToolCalls/maxTokens/maxCost enforcement, BudgetManager, VerificationRunner, completed transition, daemon timeout routes, CLI/Web timeout UI, MCP, Browser, Computer Use, remote/Docker runtime, or hard sandbox.
+
 Phase 6 rules:
 
 - Phase 6 contains exactly 6A, 6B, and 6C; do not add additional Phase 6 rounds.

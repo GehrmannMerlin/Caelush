@@ -54,6 +54,12 @@ export interface RunControllerEventFactory {
     timestamp: TimestampMs,
   ): DurableEventDraft;
   cancelled(run: AgentRun, eventId: EventId, timestamp: TimestampMs): DurableEventDraft;
+  timedOut(
+    run: AgentRun,
+    deadlineAt: TimestampMs,
+    eventId: EventId,
+    timestamp: TimestampMs,
+  ): DurableEventDraft;
   maxSteps(
     run: AgentRun,
     state: AgentState,
@@ -117,6 +123,11 @@ export function createRunControllerEventFactory(): RunControllerEventFactory {
       ...base(run, eventId, timestamp),
       type: "run.cancelled",
       payload: { reason: "USER_REQUESTED" },
+    }),
+    timedOut: (run, deadlineAt, eventId, timestamp) => ({
+      ...base(run, eventId, timestamp),
+      type: "run.timed_out",
+      payload: { deadlineAt },
     }),
     maxSteps: (run, _state, outcome, eventId, timestamp) => ({
       ...base(run, eventId, timestamp),

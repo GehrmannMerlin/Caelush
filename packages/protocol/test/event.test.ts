@@ -28,6 +28,33 @@ function getFactory(name: string): (() => string) | undefined {
 }
 
 describe("protocol AgentEvent", () => {
+  it("parses a durable run.timed_out event with only deadline metadata", () => {
+    const eventSchema = getSchema("AgentEventSchema");
+    const createEventId = getFactory("createEventId");
+    const createRunId = getFactory("createRunId");
+    const createSessionId = getFactory("createSessionId");
+    if (
+      eventSchema === undefined ||
+      createEventId === undefined ||
+      createRunId === undefined ||
+      createSessionId === undefined
+    ) {
+      return;
+    }
+    expect(
+      eventSchema.safeParse({
+        eventId: createEventId(),
+        schemaVersion: 1,
+        runId: createRunId(),
+        sessionId: createSessionId(),
+        type: "run.timed_out",
+        timestamp: 1_700_000_000_000,
+        visibility: "USER_VISIBLE",
+        durability: { kind: "DURABLE", version: 1, sequence: 1 },
+        payload: { deadlineAt: 1_700_000_000_100 },
+      }).success,
+    ).toBe(true);
+  });
   it("parses a durable lifecycle event with a positive authoritative sequence", () => {
     const eventSchema = getSchema("AgentEventSchema");
     const createEventId = getFactory("createEventId");

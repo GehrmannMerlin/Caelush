@@ -1,4 +1,5 @@
 import type { RunId } from "@caelush/protocol";
+import type { RunExecutionAbortCause } from "./run-termination-authority.js";
 
 export class RunExecutionScopeBusyError extends Error {
   constructor(runId: RunId) {
@@ -11,6 +12,7 @@ export class RunExecutionScope {
   readonly signal: AbortSignal;
   readonly settled: Promise<void>;
   private readonly controller = new AbortController();
+  private cause: RunExecutionAbortCause | undefined;
   private settleScope!: () => void;
   private isSettled = false;
 
@@ -21,8 +23,14 @@ export class RunExecutionScope {
     });
   }
 
-  abort(): void {
-    if (!this.signal.aborted) this.controller.abort();
+  abort(cause: RunExecutionAbortCause): void {
+    if (this.signal.aborted) return;
+    this.cause = cause;
+    this.controller.abort(cause);
+  }
+
+  get abortCause(): RunExecutionAbortCause | undefined {
+    return this.cause;
   }
 
   settle(): void {
@@ -46,10 +54,10 @@ export class RunExecutionScopeRegistry {
     return this.scopes.get(runId);
   }
 
-  abort(runId: RunId): boolean {
+  abort(runId: RunId, cause: RunExecutionAbortCause): boolean {
     const scope = this.scopes.get(runId);
     if (scope === undefined) return false;
-    scope.abort();
+    scope.abort(cause);
     return true;
   }
 

@@ -50,6 +50,7 @@ export {
   cancelAgentStepState,
   createInitialAgentState,
   markAgentStateMaxStepsReached,
+  markAgentStateTimedOut,
   markAgentStateWaitingApproval,
   markAgentStateVerifying,
   settleAgentStepState,
@@ -111,6 +112,29 @@ export type {
 } from "./run-controller-ports.js";
 export { RunExecutionConflictError, RunExecutionInvariantError } from "./run-execution-store.js";
 export {
+  deriveRunDeadline,
+  isRunDeadlineExceeded,
+  remainingRunTimeMs,
+  RunDeadlineInvariantError,
+} from "./run-deadline.js";
+export type { RunDeadline } from "./run-deadline.js";
+export {
+  DEFAULT_MAX_TIMER_DELAY_MS,
+  RunDeadlineRegistry,
+  SystemRunDeadlineTimer,
+} from "./run-deadline-registry.js";
+export type {
+  RunDeadlineRegistryOptions,
+  RunDeadlineTimerHandle,
+  RunDeadlineTimerPort,
+} from "./run-deadline-registry.js";
+export { resolveRunTerminationAuthority } from "./run-termination-authority.js";
+export type {
+  ResolveRunTerminationAuthorityInput,
+  RunExecutionAbortCause,
+  RunTerminationAuthority,
+} from "./run-termination-authority.js";
+export {
   RunExecutionScope,
   RunExecutionScopeBusyError,
   RunExecutionScopeRegistry,
@@ -119,6 +143,7 @@ export {
   assertRunExecutionInvariant,
   isExecutionBoundaryStatus,
   markAgentRunFailed,
+  markAgentRunTimedOut,
   markAgentRunCancelled,
   markAgentRunWaitingApproval,
   resumeAgentRunFromApproval,

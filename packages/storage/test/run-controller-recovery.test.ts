@@ -135,6 +135,74 @@ describe("RunController recovery", () => {
     await storage.close();
   });
 
+  it("recovers an expired waiting boundary as TIMEOUT without calling the provider", async () => {
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    const pending = run();
+    const currentRun = AgentRunSchema.parse({
+      ...pending,
+      status: "RUNNING" as const,
+      limits: { ...pending.limits, timeoutMs: 10 },
+      startedAt: createTimestampMs(2),
+    });
+    const state = makeState(currentRun, {
+      status: "RUNNING",
+      startedAt: createTimestampMs(2),
+      updatedAt: createTimestampMs(10),
+    });
+    const step = makeStep(currentRun.id, {
+      id: createStepId(),
+      status: "COMPLETED",
+      finishedAt: createTimestampMs(10),
+    });
+    await insertParents(storage, currentRun);
+    await storage.steps.insert(step);
+    await storage.runStates.save(state);
+    await storage.continuations.set(
+      currentRun.id,
+      {
+        type: "WAITING_TOOL_RESULTS",
+        runId: currentRun.id,
+        sourceStepId: step.id,
+        pendingDecision: {
+          type: "TOOL_CALLS_REQUESTED",
+          modelTurn: {
+            callId: createLLMCallId(),
+            model: currentRun.model,
+            finishReason: "TOOL_CALLS",
+            assistantMessage: {
+              role: "assistant",
+              content: [
+                {
+                  type: "tool-call",
+                  toolCallId: "call_expired",
+                  toolName: "read_file",
+                  input: { path: "a" },
+                },
+              ],
+            },
+          },
+          toolRequests: [
+            { externalCallId: "call_expired", toolName: "read_file", args: { path: "a" } },
+          ],
+        },
+      },
+      createTimestampMs(10),
+      null,
+    );
+    const calls = { count: 0 };
+    const result = await controller(storage, calls).recover(currentRun.id);
+    expect(result.status).toBe("TERMINAL");
+    expect(result.run.status).toBe("TIMEOUT");
+    expect(calls.count).toBe(0);
+    expect((await storage.continuations.get(currentRun.id))?.checkpoint).toBeUndefined();
+    expect(
+      (await storage.events.replay(currentRun.id)).filter(
+        (event) => event.type === "run.timed_out",
+      ),
+    ).toHaveLength(1);
+    await storage.close();
+  });
+
   it("recovers a waiting Tool boundary without a provider call", async () => {
     const storage = await openCaelushStorage({ path: ":memory:" });
     const pending = run();

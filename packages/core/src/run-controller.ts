@@ -32,12 +32,17 @@ import { toLLMToolResultMessages } from "./agent-tool-batch.js";
 import {
   markAgentRunFailed,
   markAgentRunCancelled,
+  markAgentRunTimedOut,
   markAgentRunWaitingApproval,
   resumeAgentRunFromApproval,
   markAgentStateFailed,
   assertRunExecutionInvariant,
 } from "./run-execution-state.js";
+import { markAgentStateTimedOut } from "./agent-state.js";
 import { RunExecutionScopeRegistry } from "./run-execution-scope.js";
+import { RunDeadlineRegistry } from "./run-deadline-registry.js";
+import { deriveRunDeadline, isRunDeadlineExceeded } from "./run-deadline.js";
+import { resolveRunTerminationAuthority } from "./run-termination-authority.js";
 import {
   RunExecutionConflictError,
   RunExecutionInvariantError,
@@ -97,11 +102,14 @@ const STALE_STEP_ERROR = {
 export class RunController {
   private readonly activeRuns = new Set<RunId>();
   private readonly scopes: RunExecutionScopeRegistry;
+  private readonly deadlineRegistry: RunDeadlineRegistry;
   private readonly eventFactory: RunControllerEventFactory;
 
   constructor(private readonly dependencies: RunControllerDependencies) {
     this.eventFactory = createRunControllerEventFactory();
     this.scopes = dependencies.scopes ?? new RunExecutionScopeRegistry();
+    this.deadlineRegistry =
+      dependencies.deadlineRegistry ?? new RunDeadlineRegistry({ clock: dependencies.clock });
   }
 
   async start(runId: RunId): Promise<RunControllerResult> {
@@ -140,10 +148,10 @@ export class RunController {
     });
     const scope = this.scopes.get(runId);
     if (scope !== undefined) {
-      scope.abort();
+      scope.abort("USER_REQUESTED");
       await scope.settled;
     }
-    return this.withCancellationLock(runId, () => this.cancelLocked(runId));
+    return this.withTerminationLock(runId, () => this.cancelLocked(runId));
   }
 
   private async cancelLocked(runId: RunId): Promise<RunControllerResult> {
@@ -163,7 +171,9 @@ export class RunController {
     }
     const parsed = ApprovalResolutionSchema.parse(resolution);
     const loaded = await this.load(runId);
+    if (isTerminal(loaded.run.status)) return this.resultFromSnapshot(loaded);
     if (loaded.cancellationIntent !== undefined) return this.finalizeCancellation(loaded);
+    if (this.isExpired(loaded)) return this.finalizeTimeout(loaded);
     if (loaded.run.status !== "WAITING_APPROVAL" || loaded.state === undefined) {
       throw new RunControllerInputError("Approval resolution requires a WAITING_APPROVAL Run.");
     }
@@ -241,8 +251,12 @@ export class RunController {
 
   private async startLocked(runId: RunId): Promise<RunControllerResult> {
     const loaded = await this.load(runId);
+    if (isTerminal(loaded.run.status)) return this.resultFromSnapshot(loaded);
     if (loaded.cancellationIntent !== undefined) return this.finalizeCancellation(loaded);
-    if (loaded.run.status !== "PENDING") return this.resumeKnownBoundary(loaded);
+    if (loaded.run.status !== "PENDING") {
+      if (this.isExpired(loaded)) return this.finalizeTimeout(loaded);
+      return this.resumeKnownBoundary(loaded);
+    }
     if (loaded.state !== undefined) {
       throw new RunControllerInputError("PENDING Run cannot already have AgentState");
     }
@@ -263,6 +277,7 @@ export class RunController {
       ],
     });
     this.notify(commit.events);
+    if (this.isExpired(commit.snapshot)) return this.finalizeTimeout(commit.snapshot);
     return this.driveToolBoundariesLocked(commit.snapshot, "EXECUTE");
   }
 
@@ -272,6 +287,7 @@ export class RunController {
   ): Promise<RunControllerResult> {
     const loaded = await this.load(runId);
     if (loaded.cancellationIntent !== undefined) return this.finalizeCancellation(loaded);
+    if (this.isExpired(loaded)) return this.finalizeTimeout(loaded);
     if (loaded.run.status !== "RUNNING" || loaded.state === undefined) {
       throw new RunControllerInputError("Tool Results require a RUNNING Run");
     }
@@ -344,6 +360,7 @@ export class RunController {
   private async recoverLocked(runId: RunId): Promise<RunControllerResult> {
     const loaded = await this.load(runId);
     if (loaded.cancellationIntent !== undefined) return this.finalizeCancellation(loaded);
+    if (this.isExpired(loaded)) return this.finalizeTimeout(loaded);
     if (loaded.run.status === "RUNNING" && loaded.activeStep !== undefined) {
       return this.recoverStaleStep(loaded);
     }
@@ -380,6 +397,7 @@ export class RunController {
     let mode = initialMode;
     while (true) {
       if (snapshot.cancellationIntent !== undefined) return this.finalizeCancellation(snapshot);
+      if (this.isExpired(snapshot)) return this.finalizeTimeout(snapshot);
       if (snapshot.run.status === "WAITING_APPROVAL") return this.resultFromSnapshot(snapshot);
       const continuation = snapshot.continuation;
       if (continuation?.type === "WAITING_TOOL_RESULTS") {
@@ -415,7 +433,7 @@ export class RunController {
               : await coordinator.execute(request);
         } catch (error) {
           if (this.executionSignal(snapshot.run.id).aborted) {
-            return this.finalizeCancellation(snapshot);
+            return this.finalizeAbortedExecution(snapshot);
           }
           const agentError =
             error instanceof ToolBatchInputError
@@ -439,12 +457,12 @@ export class RunController {
         // or failure state.
         snapshot = await this.load(snapshot.run.id);
         if (this.executionSignal(snapshot.run.id).aborted) {
-          return this.finalizeCancellation(snapshot);
+          return this.finalizeAbortedExecution(snapshot);
         }
         if (outcome.kind === "WAITING_APPROVAL") {
           snapshot = await this.persistWaitingApprovalLocked(snapshot, outcome);
           if (this.executionSignal(snapshot.run.id).aborted) {
-            return this.finalizeCancellation(snapshot);
+            return this.finalizeAbortedExecution(snapshot);
           }
           return this.resultFromSnapshot(snapshot);
         }
@@ -664,8 +682,15 @@ export class RunController {
     before: RunExecutionSnapshot,
     execution: AgentLoopExecutionResult,
   ): Promise<RunControllerResult> {
-    if (execution.status === "CANCELLED") return this.finalizeCancellation(before, execution);
+    if (execution.status === "CANCELLED") return this.finalizeAbortedExecution(before, execution);
     const current = await this.load(before.run.id);
+    const authority = this.resolveAuthority(current, false);
+    if (authority === "CANCELLED") return this.finalizeCancellation(current);
+    if (authority === "TIMEOUT") return this.finalizeTimeout(current);
+    if (authority === "TERMINAL") return this.resultFromSnapshot(current);
+    if (authority === "UNEXPECTED_ABORT") {
+      throw new RunControllerInvariantError("Run execution aborted without a known authority");
+    }
     if (current.state === undefined)
       throw new RunControllerInfrastructureError("Run state disappeared during settlement");
     const now = this.dependencies.clock.now();
@@ -834,6 +859,102 @@ export class RunController {
     return this.resultFromSnapshot(commit.snapshot);
   }
 
+  private async finalizeAbortedExecution(
+    before: RunExecutionSnapshot,
+    execution?: Extract<AgentLoopExecutionResult, { status: "CANCELLED" }>,
+  ): Promise<RunControllerResult> {
+    const current = await this.load(before.run.id);
+    const authority = this.resolveAuthority(current, true);
+    if (authority === "CANCELLED") return this.finalizeCancellation(current, execution);
+    if (authority === "TIMEOUT") return this.finalizeTimeout(current, execution);
+    if (authority === "TERMINAL") return this.resultFromSnapshot(current);
+    throw new RunControllerInvariantError("Run execution aborted without a known authority");
+  }
+
+  private async finalizeTimeout(
+    before: RunExecutionSnapshot,
+    execution?: Extract<AgentLoopExecutionResult, { status: "CANCELLED" }>,
+  ): Promise<RunControllerResult> {
+    const current = await this.load(before.run.id);
+    const authority = this.resolveAuthority(current, false);
+    if (authority === "TERMINAL") return this.resultFromSnapshot(current);
+    if (authority === "CANCELLED") return this.finalizeCancellation(current, execution);
+    if (authority !== "TIMEOUT") {
+      throw new RunControllerInvariantError("Timeout finalization requires an expired Run");
+    }
+    const cleanup = await this.cancelOwnedResources(current.run.id);
+    if (!cleanup.confirmed) {
+      return {
+        status: "TIMEOUT_PENDING",
+        run: current.run,
+        ...(current.state === undefined ? {} : { state: current.state }),
+      };
+    }
+    const latest = await this.load(current.run.id);
+    if (isTerminal(latest.run.status)) return this.resultFromSnapshot(latest);
+    if (latest.cancellationIntent !== undefined)
+      return this.finalizeCancellation(latest, execution);
+    if (!this.isExpired(latest)) return this.resultFromSnapshot(latest);
+
+    const now = this.dependencies.clock.now();
+    let state = latest.state ?? execution?.state;
+    let step = execution?.step;
+    if (state !== undefined && state.currentStepId !== undefined) {
+      const activeStep = latest.activeStep ?? step;
+      if (activeStep === undefined || activeStep.id !== state.currentStepId) {
+        throw new RunControllerInvariantError("Timeout cannot reconcile the active Step");
+      }
+      step = step ?? cancelAgentStep(activeStep, now);
+      state = cancelAgentStepState(state, {
+        stepId: state.currentStepId,
+        now,
+        countAttempt: true,
+      });
+    }
+    if (state !== undefined && state.status !== "TIMEOUT") {
+      state = markAgentStateTimedOut(state, now);
+    }
+    if (state === undefined) {
+      throw new RunControllerInvariantError("non-PENDING timeout has no AgentState");
+    }
+    const deadline = deriveRunDeadline(latest.run);
+    if (deadline === undefined) {
+      throw new RunControllerInvariantError("timed out Run has no durable start timestamp");
+    }
+    const run = markAgentRunTimedOut(
+      AgentRunSchema.parse({ ...latest.run, currentStepId: undefined }),
+      now,
+    );
+    const approvals = this.dependencies.approvals;
+    if (approvals?.cancelPendingByRun !== undefined) {
+      await approvals.cancelPendingByRun(run.id);
+    }
+    const commit = await this.commit({
+      run,
+      state,
+      expectedStateRevision: latest.stateRevision ?? null,
+      expectedContinuationRevision: latest.continuationRevision ?? null,
+      stepWrites: step === undefined ? [] : [{ operation: "UPDATE", step }],
+      messagesToAppend: [],
+      ...(latest.continuation === undefined
+        ? {}
+        : { continuation: { operation: "CLEAR" as const } }),
+      events: [
+        this.eventFactory.statusChanged(
+          latest.run,
+          latest.run.status,
+          "TIMEOUT",
+          this.nextEventId(),
+          now,
+        ),
+        this.eventFactory.timedOut(latest.run, deadline.deadlineAt, this.nextEventId(), now),
+      ],
+    });
+    this.deadlineRegistry.disarm(run.id);
+    this.notify(commit.events);
+    return this.resultFromSnapshot(commit.snapshot);
+  }
+
   private async commitFailure(
     current: RunExecutionSnapshot,
     run: AgentRun,
@@ -954,6 +1075,7 @@ export class RunController {
       }
       throw error;
     }
+    this.reconcileDeadline(snapshot);
     return snapshot;
   }
 
@@ -1062,7 +1184,7 @@ export class RunController {
     }
   }
 
-  private async withCancellationLock<T>(runId: RunId, operation: () => Promise<T>): Promise<T> {
+  private async withTerminationLock<T>(runId: RunId, operation: () => Promise<T>): Promise<T> {
     while (this.activeRuns.has(runId)) {
       const scope = this.scopes.get(runId);
       if (scope === undefined) {
@@ -1072,6 +1194,59 @@ export class RunController {
       await scope.settled;
     }
     return this.withLock(runId, operation);
+  }
+
+  private resolveAuthority(
+    snapshot: RunExecutionSnapshot,
+    aborted: boolean,
+  ): ReturnType<typeof resolveRunTerminationAuthority> {
+    const scope = this.scopes.get(snapshot.run.id);
+    return resolveRunTerminationAuthority({
+      run: snapshot.run,
+      ...(snapshot.cancellationIntent === undefined
+        ? {}
+        : { cancellationIntent: snapshot.cancellationIntent }),
+      now: this.dependencies.clock.now(),
+      aborted,
+      ...(scope?.abortCause === undefined ? {} : { abortCause: scope.abortCause }),
+    });
+  }
+
+  private isExpired(snapshot: RunExecutionSnapshot): boolean {
+    const deadline = deriveRunDeadline(snapshot.run);
+    return deadline !== undefined && isRunDeadlineExceeded(deadline, this.dependencies.clock.now());
+  }
+
+  private reconcileDeadline(snapshot: RunExecutionSnapshot): void {
+    if (snapshot.run.status === "PENDING" || isTerminal(snapshot.run.status)) {
+      this.deadlineRegistry.disarm(snapshot.run.id);
+      return;
+    }
+    const deadline = deriveRunDeadline(snapshot.run);
+    if (deadline === undefined) {
+      throw new RunControllerInvariantError("started non-terminal Run has no deadline");
+    }
+    if (isRunDeadlineExceeded(deadline, this.dependencies.clock.now())) {
+      this.deadlineRegistry.disarm(snapshot.run.id);
+      return;
+    }
+    this.deadlineRegistry.arm(snapshot.run.id, deadline.deadlineAt, async () => {
+      await this.handleDeadline(snapshot.run.id);
+    });
+  }
+
+  private async handleDeadline(runId: RunId): Promise<RunControllerResult | undefined> {
+    const loaded = await this.load(runId);
+    if (isTerminal(loaded.run.status) || loaded.run.status === "PENDING") {
+      return this.resultFromSnapshot(loaded);
+    }
+    if (!this.isExpired(loaded)) return this.resultFromSnapshot(loaded);
+    const scope = this.scopes.get(runId);
+    if (scope !== undefined) {
+      scope.abort("DEADLINE_EXCEEDED");
+      await scope.settled;
+    }
+    return this.withTerminationLock(runId, () => this.finalizeTimeout(loaded));
   }
 
   private executionSignal(runId: RunId): AbortSignal {

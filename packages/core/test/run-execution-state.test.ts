@@ -16,6 +16,7 @@ import { createRunningAgentStep, beginAgentStepState } from "../src/index.js";
 import {
   assertRunExecutionInvariant,
   markAgentRunFailed,
+  markAgentRunTimedOut,
   markAgentRunWaitingApproval,
   markAgentStateFailed,
 } from "../src/run-execution-state.js";
@@ -39,6 +40,16 @@ function run() {
 }
 
 describe("durable Run execution state", () => {
+  it("marks a Run timed out with a durable settlement timestamp", () => {
+    const pending = run();
+    const running = { ...pending, status: "RUNNING" as const, startedAt: createTimestampMs(2) };
+
+    expect(markAgentRunTimedOut(running, createTimestampMs(9))).toMatchObject({
+      status: "TIMEOUT",
+      finishedAt: 9,
+    });
+    expect(markAgentRunTimedOut(running, createTimestampMs(9))).not.toHaveProperty("currentStepId");
+  });
   it("marks a running Run and State failed with one sanitized error", () => {
     const pending = run();
     const running = { ...pending, status: "RUNNING" as const, startedAt: createTimestampMs(2) };

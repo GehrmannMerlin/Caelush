@@ -57,6 +57,20 @@ export function markAgentRunCancelled(run: AgentRun, now: AgentRun["createdAt"])
   });
 }
 
+export function markAgentRunTimedOut(run: AgentRun, now: AgentRun["createdAt"]): AgentRun {
+  if (run.currentStepId !== undefined) {
+    throw new RunExecutionInvariantError("timed out AgentRun cannot retain an active Step");
+  }
+  assertRunStatusTransition(run.status, "TIMEOUT");
+  const withoutFinalResult = { ...run };
+  delete withoutFinalResult.finalResult;
+  return AgentRunSchema.parse({
+    ...withoutFinalResult,
+    status: "TIMEOUT",
+    finishedAt: now,
+  });
+}
+
 export function markAgentRunWaitingApproval(run: AgentRun): AgentRun {
   if (run.currentStepId !== undefined) {
     throw new RunExecutionInvariantError("waiting Approval Run cannot retain an active Step");

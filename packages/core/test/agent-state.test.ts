@@ -3,6 +3,7 @@ import {
   beginAgentStepState,
   createInitialAgentState,
   markAgentStateMaxStepsReached,
+  markAgentStateTimedOut,
   markAgentStateVerifying,
   settleAgentStepState,
   startAgentState,
@@ -42,6 +43,14 @@ function startedState(steps = 0): AgentState {
 }
 
 describe("Agent state kernel", () => {
+  it("marks a state timed out without adding an ordinary error", () => {
+    const state = startedState();
+    expect(markAgentStateTimedOut(state, createTimestampMs(120))).toMatchObject({
+      status: "TIMEOUT",
+      currentStepId: undefined,
+      errors: [],
+    });
+  });
   it("creates the compact initial projection from a pending run", () => {
     const source = run();
     expect(createInitialAgentState(source, createTimestampMs(200))).toEqual({

@@ -24,4 +24,10 @@ The same signal is passed through the Core/LLM/Tool/Runtime host contracts. Tool
 
 Pending approvals transition to `CANCELLED` in their existing transaction and emit the existing `approval.resolved` event. Already resolved approvals are untouched. A successful cancellation emits exactly one `status.changed` transition and one `run.cancelled` event; it clears continuation state and appends no synthetic conversation message. Recovery gives durable cancellation priority over stale Steps, approvals, Tool continuations, and verification candidates, and never resumes Agent work for an intent-marked Run.
 
-Phase 10A intentionally does not add timeout/deadline policy, retry/backoff, budgets, Verification execution, daemon cancellation routes, CLI/Web UI, remote/MCP/browser/computer-use runtimes, or a hard OS sandbox.
+## Phase 10B deadline interaction
+
+Phase 10B uses the same `RunExecutionScope` and signal fan-out, but has a distinct authority. A user cancellation is durable `USER_REQUESTED` intent and settles as `CANCELLED`; a deadline is an ephemeral `DEADLINE_EXCEEDED` abort cause derived from `startedAt + timeoutMs` and settles as `TIMEOUT`. The cause is Core-only and is never written to the durable cancellation contract. The first in-memory cause wins, while the durable cancellation intent remains the priority when both are observed during settlement.
+
+Timeout follows the same resource cleanup boundary as cancellation, but owns its own `status.changed` plus `run.timed_out` event pair and returns `TIMEOUT_PENDING` when cleanup is not yet confirmed. See [Run Deadline and Timeout](timeout.md) for timer lifecycle, idle boundary behavior, Provider timeout separation, and restart recovery.
+
+Phase 10A intentionally does not add retry/backoff, budgets, Verification execution, daemon cancellation routes, CLI/Web UI, remote/MCP/browser/computer-use runtimes, or a hard OS sandbox. Phase 10B adds only the documented Run deadline and timeout recovery behavior.

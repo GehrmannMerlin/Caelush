@@ -10,7 +10,12 @@ import {
 } from "@caelush/protocol";
 import { LLMTurnResultSchema, type LLMTurnResult } from "@caelush/llm/turn";
 import type { LLMToolResultMessage } from "@caelush/llm/messages";
-import { AgentLoop, RunController, RunControllerConflictError } from "@caelush/core";
+import {
+  AgentLoop,
+  RunController,
+  RunControllerConflictError,
+  RunDeadlineRegistry,
+} from "@caelush/core";
 import { EventBus } from "@caelush/events";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
@@ -47,6 +52,85 @@ function turn(
 }
 
 describe("RunController durable boundaries", () => {
+  it("times out an idle external Tool Result boundary and rejects late results", async () => {
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    const run = AgentRunSchema.parse({
+      ...makeRun(),
+      limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 100 },
+    });
+    await storage.sessions.insert({
+      id: run.sessionId,
+      createdAt: 1,
+      updatedAt: 1,
+      metadata: {},
+    } as never);
+    await storage.runs.insert(run);
+    const eventBus = new EventBus(storage.events);
+    const callbacks: Array<{ callback: () => void | Promise<void>; cancelled: boolean }> = [];
+    const clock = { value: 10 };
+    const deadlineRegistry = new RunDeadlineRegistry({
+      clock: { now: () => createTimestampMs(clock.value) },
+      timer: {
+        schedule: (_delay, callback) => {
+          const task = { callback, cancelled: false };
+          callbacks.push(task);
+          return { cancel: () => (task.cancelled = true) };
+        },
+      },
+    });
+    const controller = new RunController({
+      agentLoop: new AgentLoop({
+        inspector: { inspect: async () => ({}) as never },
+        planner: { plan: async () => ({}) as never },
+        contextBuilder: {
+          build: (input) => ({
+            messages:
+              input.mode === "TOOL_CONTINUATION"
+                ? input.currentTurnMessages
+                : [input.currentUserMessage],
+            report: {} as never,
+          }),
+        },
+        llmClient: {
+          complete: async () =>
+            turn("need result", [{ id: "call_a", name: "read_file", input: {} }], "TOOL_CALLS"),
+        },
+        clock: { now: () => createTimestampMs(clock.value) },
+        stepIdFactory: { create: createStepId },
+      }),
+      execution: storage.execution,
+      events: eventBus,
+      configResolver: {
+        resolve: async () => ({
+          baseSystemPrompt: "synthetic",
+          contextLimits: { maxInputTokens: 1000 },
+        }),
+      },
+      clock: { now: () => createTimestampMs(clock.value) },
+      eventIdFactory: { create: createEventId },
+      deadlineRegistry,
+    });
+
+    const waiting = await controller.start(run.id);
+    expect(waiting.status).toBe("WAITING_TOOL_RESULTS");
+    clock.value = 110;
+    await callbacks.find((task) => !task.cancelled)!.callback();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect((await storage.runs.get(run.id))?.status).toBe("TIMEOUT");
+    const late = await controller.submitToolResults(run.id, [
+      {
+        role: "tool",
+        toolCallId: "call_a",
+        toolName: "read_file",
+        content: "late",
+        isError: false,
+      },
+    ]);
+    expect(late.status).toBe("TERMINAL");
+    await storage.close();
+  });
+
   it("persists a tool boundary, accepts results before resume, and persists VERIFYING candidate", async () => {
     const storage = await openCaelushStorage({ path: ":memory:" });
     const run = makeRun();

@@ -12,8 +12,9 @@ describe("RunExecutionScopeRegistry", () => {
     expect(scope.signal.aborted).toBe(false);
     expect(() => registry.open(runId)).toThrow();
 
-    expect(registry.abort(runId)).toBe(true);
+    expect(registry.abort(runId, "USER_REQUESTED")).toBe(true);
     expect(scope.signal.aborted).toBe(true);
+    expect(scope.abortCause).toBe("USER_REQUESTED");
     scope.settle();
     await expect(scope.settled).resolves.toBeUndefined();
 

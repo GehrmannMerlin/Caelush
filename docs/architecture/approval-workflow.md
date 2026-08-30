@@ -40,6 +40,10 @@ Pending approvals have a default 15-minute TTL and an injected clock. There is n
 
 When a Run cancellation intent is present, the RunController cancels only still-pending approvals in the same durable approval boundary. Those requests become `CANCELLED` and emit the existing `approval.resolved` event; an already resolved approval is not rewritten. Approval resolution checks the Run intent before resuming the Tool continuation, so cancellation never resumes the LLM turn or trailing Tool calls. See [Run Cancellation](cancellation.md).
 
+## Run deadline interaction
+
+Approval TTL and Run deadline are separate clocks and separate authorities. Approval TTL lazily moves a stale PENDING request to `EXPIRED` and emits `approval.resolved`; it never extends `startedAt + limits.timeoutMs`. When the Run deadline wins while approval is pending, the Controller cancels the pending request, clears the Run continuation, and settles the Run as `TIMEOUT` with `run.timed_out`. An already resolved approval is not rewritten. After timeout, a late approval resolution is terminally rejected and cannot resume the Tool or LLM turn. See [Run Deadline and Timeout](timeout.md).
+
 The RunController resolution method is locked per Run. It validates Run status, continuation approval pointer, Approval ownership, and ToolInvocation ownership; transitions Run and AgentState back to RUNNING through the canonical state machine; clears only the approval pointer; and invokes Coordinator recovery. It does not call the LLM.
 
 The Coordinator re-enters the exact waiting Tool item. APPROVED starts that invocation once; REJECTED, EXPIRED, and CANCELLED produce a non-retryable `APPROVAL_REJECTED` Security-phase Tool Observation; then trailing calls continue in source order. Completed prefix calls are reused, and the pending LLM turn is resumed only after the complete result batch is durably accepted. A durable RUNNING invocation remains the existing uncertain-side-effect boundary and is never automatically rerun.
