@@ -29,10 +29,12 @@ import {
   type ToolExecutionCommit,
   type ToolExecutionRequest,
   type ToolExecutionResult,
+  type ToolExecutionGatePort,
 } from "@caelush/tools";
 import { describe, expect, it } from "vitest";
 import { LocalRuntime, createLocalRuntimeResolver } from "@caelush/runtime";
 import { openCaelushStorage, type CaelushStorage } from "../src/index.js";
+import { CaelushToolExecutionGate } from "@caelush/security";
 
 const definitions = [
   {
@@ -141,7 +143,11 @@ function createRuntime(
   return { dispatcher, coordinator: new ToolBatchCoordinator(dispatcher), registry };
 }
 
-function createFilesystemRuntime(storage: CaelushStorage, eventBus: EventBus) {
+function createFilesystemRuntime(
+  storage: CaelushStorage,
+  eventBus: EventBus,
+  gate: ToolExecutionGatePort = { decide: async () => ({ kind: "ALLOW" as const }) },
+) {
   const runtimeResolver = createLocalRuntimeResolver(new LocalRuntime());
   const builder = new ToolRegistryBuilder();
   for (const registration of createReadOnlyFilesystemToolRegistrations(runtimeResolver)) {
@@ -157,7 +163,7 @@ function createFilesystemRuntime(storage: CaelushStorage, eventBus: EventBus) {
   const dispatcher = new ToolDispatcher({
     registry: builder.build(),
     store: storage.toolExecution,
-    gate: { decide: async () => ({ kind: "ALLOW" as const }) },
+    gate,
     notifier,
     clock: { now: () => createTimestampMs(++now) },
     invocationIdFactory: { create: createToolInvocationId },
@@ -400,6 +406,62 @@ describe("RunController automatic Tool Batch integration", () => {
         code: "ENOENT",
       });
       expect(await readFile(path.join(workspace, "README.md"))).toEqual(beforeReadme);
+    } finally {
+      await storage.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("derives policy from AgentRun and stops a dangerous patch at approval", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "caelush-phase-9a-approval-e2e-"));
+    const workspace = path.join(directory, "workspace");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(path.join(workspace, "README.md"), "unchanged\n", "utf8");
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    const run = AgentRunSchema.parse({
+      ...makeRun(workspace, "local"),
+      permissionProfile: "PROJECT_ACCESS",
+      approvalPolicy: "DANGEROUS_ONLY",
+    });
+    await seedRun(storage, run);
+    const eventBus = new EventBus(storage.events);
+    const runtime = createFilesystemRuntime(storage, eventBus, new CaelushToolExecutionGate());
+    const controller = createController(
+      storage,
+      eventBus,
+      [
+        turn(
+          "mutate workspace",
+          [
+            {
+              id: "call-patch",
+              name: "apply_patch",
+              input: {
+                patch: [
+                  "*** Begin Patch",
+                  "*** Update File: README.md",
+                  "@@",
+                  "-unchanged",
+                  "+changed",
+                  "*** End Patch",
+                ].join("\n"),
+              },
+            },
+          ],
+          "TOOL_CALLS",
+        ),
+      ],
+      runtime.coordinator,
+    );
+
+    try {
+      const result = await controller.start(run.id);
+      expect(result.status).toBe("WAITING_APPROVAL");
+      expect(await readFile(path.join(workspace, "README.md"), "utf8")).toBe("unchanged\n");
+      expect(await storage.toolInvocations.listByRun(run.id)).toMatchObject([
+        { status: "WAITING_APPROVAL", toolName: "apply_patch" },
+      ]);
+      expect((await storage.runs.get(run.id))?.status).toBe("WAITING_APPROVAL");
     } finally {
       await storage.close();
       await rm(directory, { recursive: true, force: true });
@@ -784,6 +846,7 @@ describe("RunController automatic Tool Batch integration", () => {
       toolName: "echo_value",
       args: {},
       environment: { workspace: run.workspace, runtime: run.runtime },
+      securityContext: { permissionProfile: "READ_ONLY", approvalPolicy: "DANGEROUS_ONLY" },
     });
     expect(firstA.kind).toBe("RESULT");
     const running = startToolInvocation(

@@ -6,7 +6,15 @@ describe("granted capability resolver", () => {
     ["READ_ONLY", ["FS_READ", "GIT_READ"]],
     [
       "PROJECT_ACCESS",
-      ["FS_READ", "FS_WRITE", "FS_DELETE", "SHELL_EXEC", "PROCESS_START", "PROCESS_KILL", "GIT_READ"],
+      [
+        "FS_READ",
+        "FS_WRITE",
+        "FS_DELETE",
+        "SHELL_EXEC",
+        "PROCESS_START",
+        "PROCESS_KILL",
+        "GIT_READ",
+      ],
     ],
     [
       "FULL_ACCESS",

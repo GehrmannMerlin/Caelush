@@ -58,4 +58,22 @@ describe("Caelush Tool execution Gate", () => {
       }),
     ).rejects.not.toThrow("SECRET_");
   });
+
+  it("fails closed for malformed Gate input without exposing implementation errors", async () => {
+    await expect(new CaelushToolExecutionGate().decide(null as never)).rejects.toMatchObject({
+      name: "SecurityPolicyInvariantError",
+      message: "Security policy invariant was violated.",
+    });
+    await expect(
+      new CaelushToolExecutionGate().decide({
+        invocation,
+        toolName: definition.name,
+        definition: { ...definition, runtimeRequirements: "bad" },
+        securityContext: { permissionProfile: "PROJECT_ACCESS", approvalPolicy: "NEVER_ASK" },
+      } as never),
+    ).rejects.toMatchObject({
+      name: "SecurityPolicyInvariantError",
+      message: "Security policy invariant was violated.",
+    });
+  });
 });

@@ -75,6 +75,10 @@ describe("read-only filesystem tools through ToolDispatcher", () => {
         toolName,
         args,
         environment,
+        securityContext: {
+          permissionProfile: run.permissionProfile,
+          approvalPolicy: run.approvalPolicy,
+        },
       });
       expect(outcome.kind).toBe("RESULT");
       return outcome as Extract<ToolDispatcherOutcome, { kind: "RESULT" }>;
