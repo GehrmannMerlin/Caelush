@@ -2,9 +2,9 @@
 
 Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI、Web 和其他宿主共享同一个可观察、可取消、可验证、可扩展的 Agent Core。
 
-本轮当前阶段为 **V1 Phase 9A：Security Policy Kernel & Tool Execution Gate**；Phase 8A/8B/8C/8D 已完成，Phase 9A 正在建立安全策略决策与 Tool 执行 Gate。
+本轮当前阶段为 **V1 Phase 9B：Durable Approval Workflow & Resolution**；Phase 8A/8B/8C/8D 与 Phase 9A 已完成，本轮把安全 Gate 的 `REQUIRE_APPROVAL` 接入 durable Approval 与精确恢复。
 
-当前仓库已经完成 Phase 1–7 以及 Phase 8A/8B/8C/8D；Phase 8D 增加 tool-independent 的只读 Git Runtime、`git_status`/`git_diff`、统一默认 Built-in catalog、纯 Tool Effects、AgentState 投影和原子 Tool settlement。Phase 9A 增加独立的 `@caelush/security` policy kernel、Run-derived `ToolSecurityContext` 与真实 `ToolExecutionGate`，但不实现 Approval workflow、命令内容策略、secret redaction 或 OS hard sandbox；Phase 10 的超时/取消/重试/预算策略仍未实现。
+当前仓库已经完成 Phase 1–7 以及 Phase 8A/8B/8C/8D；Phase 8D 增加 tool-independent 的只读 Git Runtime、`git_status`/`git_diff`、统一默认 Built-in catalog、纯 Tool Effects、AgentState 投影和原子 Tool settlement。Phase 9A 增加独立的 `@caelush/security` policy kernel、Run-derived `ToolSecurityContext` 与真实 `ToolExecutionGate`；Phase 9B 增加 durable Approval workflow、精确 grant matching、lazy expiry 与 Tool/Run recovery，但不实现命令内容策略、secret redaction 或 OS hard sandbox；Phase 10 的超时/取消/重试/预算策略仍未实现。
 
 ## Phase 6 Status
 
@@ -29,8 +29,9 @@ Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI�
 ## Phase 9 Status
 
 - Phase 9A — Security Policy Kernel & Tool Execution Gate: **COMPLETED**
-- Phase 9A owns only deterministic `ALLOW` / `DENY` / `REQUIRE_APPROVAL` policy decisions and the Dispatcher Gate boundary.
-- Approval persistence/resolution, input-aware command policy, sensitive-file policy, secret redaction and OS-level hard sandboxing remain explicitly out of scope.
+- Phase 9B — Durable Approval Workflow & Resolution: **COMPLETED**
+- Phase 9A owns deterministic `ALLOW` / `DENY` / `REQUIRE_APPROVAL` policy decisions; Phase 9B owns only durable ApprovalRequest creation/resolution, exact grant matching, lazy expiry, and Tool/Run recovery.
+- Input-aware command policy, sensitive-file policy, secret redaction and OS-level hard sandboxing remain explicitly out of scope.
 
 Phase 7 contains exactly 7A, 7B, and 7C. Caelush now has an immutable validated Tool Registry and a single-Tool Dispatcher. A valid call is durably recorded as `REQUESTED`, gated, durably checkpointed as `RUNNING`, executed once through the resolved handler, output-validated, and atomically settled with its `ToolObservation` and lifecycle event. Exact duplicate calls are idempotent, stale `RUNNING` calls fail closed during recovery, and raw arguments/results are kept out of lifecycle events.
 
@@ -50,7 +51,7 @@ Phase 8C adds the shared Shell/Managed Process substrate described in [Shell and
 
 Caelush can build provider-independent, budgeted LLMRequest-ready message context from project facts, project instructions, relevant files, and conversation history. Phase 6C consumes that context through a resumable one-turn AgentLoop and persists only the real conversation separately from synthetic provider context. See [Run Controller](docs/architecture/run-controller.md) for the durable execution and recovery boundary.
 
-Phase 8B architecture details are documented in [Patch Engine](docs/architecture/patch-engine.md). Phase 8D details are documented in [Git Runtime](docs/architecture/git-runtime.md) and [Tool Effects](docs/architecture/tool-effects.md). Phase 9A details are documented in [Security Policy Kernel](docs/architecture/security.md).
+Phase 8B architecture details are documented in [Patch Engine](docs/architecture/patch-engine.md). Phase 8D details are documented in [Git Runtime](docs/architecture/git-runtime.md) and [Tool Effects](docs/architecture/tool-effects.md). Phase 9A details are documented in [Security Policy Kernel](docs/architecture/security.md); Phase 9B details are documented in [Durable Approval Workflow](docs/architecture/approval-workflow.md).
 
 ## 技术栈
 

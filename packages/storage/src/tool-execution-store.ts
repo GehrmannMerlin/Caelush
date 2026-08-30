@@ -30,6 +30,10 @@ import { StorageError } from "./errors.js";
 import { SqliteObservationRepository } from "./repositories/observation-repository.js";
 import { SqliteToolInvocationRepository } from "./repositories/tool-invocation-repository.js";
 import { writeStateSnapshot } from "./state-snapshot-writer.js";
+import {
+  SqliteApprovalRepository,
+  writeApprovalInTransaction,
+} from "./repositories/approval-repository.js";
 
 function expectedRevision(actual: number | undefined, expected: number | null): void {
   const normalized = actual ?? null;
@@ -198,10 +202,12 @@ function validateEvents(
 export class SqliteToolExecutionStore implements ToolExecutionStorePort {
   private readonly invocations: SqliteToolInvocationRepository;
   private readonly observations: SqliteObservationRepository;
+  private readonly approvals: SqliteApprovalRepository;
 
   constructor(private readonly database: CaelushDatabase) {
     this.invocations = new SqliteToolInvocationRepository(database);
     this.observations = new SqliteObservationRepository(database);
+    this.approvals = new SqliteApprovalRepository(database);
   }
 
   async load(
@@ -210,6 +216,7 @@ export class SqliteToolExecutionStore implements ToolExecutionStorePort {
     const invocation = await this.invocations.get(invocationId);
     if (invocation === null) return null;
     const observation = await this.observations.findByToolInvocation(invocationId);
+    const approval = await this.approvals.getByInvocation(invocationId);
     assertToolInvocationInvariant(invocation);
     if (
       invocation.status === "REQUESTED" ||
@@ -237,6 +244,7 @@ export class SqliteToolExecutionStore implements ToolExecutionStorePort {
       invocation,
       revision: row.revision,
       ...(observation === null ? {} : { observation }),
+      ...(approval === null ? {} : { approval }),
     };
   }
 
@@ -253,6 +261,19 @@ export class SqliteToolExecutionStore implements ToolExecutionStorePort {
     assertToolInvocationInvariant(command.invocation);
     if (command.observation !== undefined) {
       assertToolObservationInvariant(command.observation, command.invocation);
+    }
+    if (command.approval !== undefined && command.approvalKey === undefined) {
+      throw new ToolExecutionInvariantError("Approval creation requires an internal approval key.");
+    }
+    if (
+      command.approval !== undefined &&
+      (command.approval.toolInvocationId !== command.invocation.id ||
+        command.approval.runId !== command.invocation.runId ||
+        command.approval.status !== "PENDING")
+    ) {
+      throw new ToolExecutionInvariantError(
+        "Approval creation does not match the waiting ToolInvocation.",
+      );
     }
     validateEvents(
       command.events,
@@ -276,6 +297,9 @@ export class SqliteToolExecutionStore implements ToolExecutionStorePort {
       expectedRevision(existing?.revision, command.expectedRevision);
       const revision = (existing?.revision ?? 0) + 1;
       writeInvocation(client, command.invocation, revision);
+      if (command.approval !== undefined) {
+        writeApprovalInTransaction(client, command.approval, command.approvalKey!);
+      }
       if (command.observation !== undefined) writeObservation(client, command.observation);
       if (command.effects !== undefined && effectsChangeAgentState(command.effects)) {
         const stateRow = client

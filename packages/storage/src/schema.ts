@@ -174,6 +174,36 @@ export const agentObservations = sqliteTable(
   ],
 );
 
+export const approvalRequests = sqliteTable(
+  "approval_requests",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => agentRuns.id),
+    toolInvocationId: text("tool_invocation_id")
+      .notNull()
+      .unique()
+      .references(() => toolInvocations.id),
+    approvalKey: text("approval_key").notNull(),
+    status: text("status").notNull(),
+    scope: text("scope").notNull(),
+    grantedScope: text("granted_scope"),
+    riskLevel: text("risk_level").notNull(),
+    protocolVersion: integer("protocol_version").notNull(),
+    createdAtMs: integer("created_at_ms").notNull(),
+    expiresAtMs: integer("expires_at_ms"),
+    resolvedAtMs: integer("resolved_at_ms"),
+    dataJson: text("data_json").notNull(),
+  },
+  (table) => [
+    index("approval_requests_run_id_idx").on(table.runId),
+    index("approval_requests_status_idx").on(table.status),
+    index("approval_requests_run_status_idx").on(table.runId, table.status),
+    index("approval_requests_run_key_idx").on(table.runId, table.approvalKey),
+  ],
+);
+
 export const storageSchema = {
   agentSessions,
   agentRuns,
@@ -185,4 +215,5 @@ export const storageSchema = {
   agentEvents,
   toolInvocations,
   agentObservations,
+  approvalRequests,
 };

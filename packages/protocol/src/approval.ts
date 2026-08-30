@@ -32,7 +32,46 @@ export const ApprovalRequestSchema = z
     createdAt: TimestampMsSchema,
     resolvedAt: TimestampMsSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((approval, context) => {
+    if (approval.expiresAt !== undefined && approval.expiresAt <= approval.createdAt) {
+      context.addIssue({ code: "custom", path: ["expiresAt"], message: "must be after createdAt" });
+    }
+    if (approval.resolvedAt !== undefined && approval.resolvedAt < approval.createdAt) {
+      context.addIssue({
+        code: "custom",
+        path: ["resolvedAt"],
+        message: "must be at or after createdAt",
+      });
+    }
+    if (approval.status === "PENDING") {
+      if (approval.grantedScope !== undefined || approval.resolvedAt !== undefined) {
+        context.addIssue({ code: "custom", message: "pending approval cannot be resolved" });
+      }
+      return;
+    }
+    if (approval.status === "APPROVED") {
+      if (approval.grantedScope === undefined || approval.resolvedAt === undefined) {
+        context.addIssue({
+          code: "custom",
+          message: "approved approval requires resolution fields",
+        });
+      }
+      return;
+    }
+    if (approval.grantedScope !== undefined || approval.resolvedAt === undefined) {
+      context.addIssue({
+        code: "custom",
+        message: "non-approved approval has invalid resolution fields",
+      });
+    }
+  });
 export type ApprovalRequest = z.infer<typeof ApprovalRequestSchema>;
+
+export const ApprovalResolutionSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("APPROVE"), scope: ApprovalScopeSchema }).strict(),
+  z.object({ action: z.literal("REJECT") }).strict(),
+]);
+export type ApprovalResolution = z.infer<typeof ApprovalResolutionSchema>;
 
 export { ApprovalPolicySchema };

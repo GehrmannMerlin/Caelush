@@ -52,6 +52,7 @@ export {
   markAgentStateWaitingApproval,
   markAgentStateVerifying,
   settleAgentStepState,
+  resumeAgentStateFromApproval,
   startAgentState,
 } from "./agent-state.js";
 export type { SettleAgentStepInput } from "./agent-state.js";
@@ -102,6 +103,7 @@ export type {
   RunEventNotifier,
   RunExecutionConfig,
   RunExecutionConfigResolver,
+  ApprovalResolutionPort,
 } from "./run-controller-ports.js";
 export { RunExecutionConflictError, RunExecutionInvariantError } from "./run-execution-store.js";
 export {
@@ -109,6 +111,7 @@ export {
   isExecutionBoundaryStatus,
   markAgentRunFailed,
   markAgentRunWaitingApproval,
+  resumeAgentRunFromApproval,
   markAgentStateFailed,
 } from "./run-execution-state.js";
 export type {

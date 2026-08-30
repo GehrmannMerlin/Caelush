@@ -1,6 +1,6 @@
 # Security Policy Kernel & Tool Execution Gate
 
-本文档冻结 Caelush V1 Phase 9A 的安全边界。Phase 9A 只回答一个问题：一个已经注册、参数合法的 Tool Call，在当前 Run 的安全上下文中应当 `ALLOW`、`DENY`，还是 `REQUIRE_APPROVAL`。
+本文档冻结 Caelush V1 Phase 9A/9B 的安全边界。Phase 9A 只回答一个问题：一个已经注册、参数合法的 Tool Call，在当前 Run 的安全上下文中应当 `ALLOW`、`DENY`，还是 `REQUIRE_APPROVAL`。Phase 9B 将最后一种结果接入 durable Approval workflow，但不把审批状态塞回纯策略内核。
 
 ## Responsibility boundary
 
@@ -70,15 +70,15 @@ Decision 只包含稳定的 `kind`、`reasonCode` 和固定 safe reason。不得
 
 ## Gate and lifecycle ownership
 
-`CaelushToolExecutionGate` 只验证 Gate input、Tool identity、risk/capability metadata 和 `ToolSecurityContext`，然后调用 evaluator。它不修改 Invocation，也不创建 ApprovalRequest。
+`CaelushToolExecutionGate` 只验证 Gate input、Tool identity、risk/capability metadata 和 `ToolSecurityContext`，然后调用 evaluator。它不修改 Invocation，也不创建 ApprovalRequest。Dispatcher 在 Gate 返回 `REQUIRE_APPROVAL` 后才使用注入的 approval port。
 
 `ToolDispatcher` 仍然拥有唯一的 `ToolInvocation` lifecycle：
 
 - `ALLOW`：Dispatcher durable-commit `RUNNING`，执行 handler，完成 observation/settlement。
 - `DENY`：Dispatcher durable-commit sanitized `FAILED` / `PERMISSION_DENIED`，handler 调用次数为零。
-- `REQUIRE_APPROVAL`：Dispatcher durable-commit `WAITING_APPROVAL`，handler 调用次数为零，并停止当前 batch 的 trailing calls。
+- `REQUIRE_APPROVAL`：Dispatcher 计算 exact approval key；若没有同 Run、同 key 的已批准 RUN grant，则在同一 durable Tool transaction 中提交 `WAITING_APPROVAL`、PENDING ApprovalRequest 和 `approval.requested`，handler 调用次数为零，并停止当前 batch 的 trailing calls。
 
-Phase 9A 复用现有 `ToolInvocation → WAITING_APPROVAL` 和 `Run → WAITING_APPROVAL` boundary，不新增 Approval repository、resolution endpoint、approval events、ONCE resolution 或 approval cache。
+Phase 9B 的 `ApprovalRepository` 负责 `approval_requests`、15 分钟默认 TTL 的 lazy expiry、`approval.resolved` 以及严格的 APPROVE/REJECT transaction。RUN grant 只在同一 Run 和 exact key 下复用；ONCE grant 只绑定原始 ToolInvocation。RunController 的 `resolveApproval` 在锁内清除 approval pointer 后调用 Coordinator recovery，不重放 LLM turn。
 
 ## Run authority and recovery
 
@@ -97,7 +97,7 @@ Phase 9A 不实现：
 - timeout、cancellation、retry、budget、parallel execution 或 Verification execution；
 - Tool handler、Runtime、Storage、EventBus 或 AgentLoop 的第二份实现。
 
-这些边界不是 capability evaluator 的隐含行为；后续阶段必须新增明确 contract 和独立测试。
+这些边界不是 capability evaluator 的隐含行为；后续阶段必须新增明确 contract 和独立测试。Phase 9B 也不实现 command/file content policy、secret redaction 或 hard sandbox。
 
 ## Public API and dependency direction
 

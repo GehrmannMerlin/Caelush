@@ -2,6 +2,7 @@ import type { LLMToolResultMessage } from "@caelush/llm/messages";
 import type {
   AgentError,
   AgentRun,
+  ApprovalRequestId,
   AgentState,
   StepId,
   ToolInvocationId,
@@ -25,6 +26,7 @@ export type RunControllerResult =
       readonly state: AgentState;
       readonly sourceStepId: StepId;
       readonly invocationId: ToolInvocationId;
+      readonly approvalId?: ApprovalRequestId;
       readonly externalCallId: string;
       readonly toolName: ToolName;
     }

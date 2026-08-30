@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   AgentRunSchema,
+  createApprovalRequestId,
   createEventId,
   createLLMCallId,
   createObservationId,
@@ -121,7 +122,7 @@ function createRuntime(
   eventBus: EventBus,
   execute: (request: ToolExecutionRequest) => Promise<ToolExecutionResult>,
   gate: (toolName: string) => "ALLOW" | "REQUIRE_APPROVAL" = () => "ALLOW",
-  initialNow = 100,
+  initialNow = Date.now(),
 ) {
   const builder = new ToolRegistryBuilder();
   for (const definition of definitions) builder.register({ definition, handler: { execute } });
@@ -139,6 +140,8 @@ function createRuntime(
     invocationIdFactory: { create: createToolInvocationId },
     observationIdFactory: { create: createObservationId },
     eventIdFactory: { create: createEventId },
+    approvalStore: storage.approvals,
+    approvalIdFactory: { create: createApprovalRequestId },
   });
   return { dispatcher, coordinator: new ToolBatchCoordinator(dispatcher), registry };
 }
@@ -159,7 +162,7 @@ function createFilesystemRuntime(
   const notifier: ToolCommittedEventNotifier = {
     notifyCommitted: (events) => eventBus.notifyCommitted(events),
   };
-  let now = 100;
+  let now = Date.now();
   const dispatcher = new ToolDispatcher({
     registry: builder.build(),
     store: storage.toolExecution,
@@ -169,6 +172,8 @@ function createFilesystemRuntime(
     invocationIdFactory: { create: createToolInvocationId },
     observationIdFactory: { create: createObservationId },
     eventIdFactory: { create: createEventId },
+    approvalStore: storage.approvals,
+    approvalIdFactory: { create: createApprovalRequestId },
   });
   return { dispatcher, coordinator: new ToolBatchCoordinator(dispatcher) };
 }
@@ -216,6 +221,7 @@ function createController(
     ...(coordinator === undefined ? {} : { toolCoordinator: coordinator }),
     clock: { now: () => createTimestampMs(now++) },
     eventIdFactory: { create: createEventId },
+    approvals: storage.approvals,
   });
 }
 
@@ -608,6 +614,79 @@ describe("RunController automatic Tool Batch integration", () => {
     await storage.close();
   });
 
+  it("resolves a durable approval and resumes the exact Tool boundary plus trailing calls", async () => {
+    const baseNow = Date.now();
+    const storage = await openCaelushStorage({
+      path: ":memory:",
+      approvalClock: { now: () => createTimestampMs(baseNow + 500) },
+    });
+    const run = makeRun("/repo");
+    await seedRun(storage, run);
+    const eventBus = new EventBus(storage.events);
+    const calls: string[] = [];
+    const runtime = createRuntime(
+      storage,
+      eventBus,
+      async ({ externalCallId }) => {
+        calls.push(externalCallId);
+        return { content: externalCallId, details: {}, isError: false };
+      },
+      (toolName) => (toolName === "approval_value" ? "REQUIRE_APPROVAL" : "ALLOW"),
+      baseNow,
+    );
+    const observed: Array<{ tools?: unknown; messages: unknown[] }> = [];
+    const controller = createController(
+      storage,
+      eventBus,
+      [
+        turn(
+          "inspect",
+          [
+            { id: "call-A", name: "echo_value", input: {} },
+            { id: "call-B", name: "approval_value", input: {} },
+            { id: "call-C", name: "echo_value", input: {} },
+          ],
+          "TOOL_CALLS",
+        ),
+        turn("final after approval", [], "STOP"),
+      ],
+      runtime.coordinator,
+      observed,
+      baseNow + 1_000,
+    );
+
+    const waiting = await controller.start(run.id);
+    expect(waiting.status).toBe("WAITING_APPROVAL");
+    if (waiting.status !== "WAITING_APPROVAL") throw new Error("expected approval boundary");
+    expect(waiting.approvalId).toBeDefined();
+    const checkpoint = await storage.continuations.get(run.id);
+    if (checkpoint?.checkpoint.type !== "WAITING_TOOL_RESULTS")
+      throw new Error("expected checkpoint");
+    expect(checkpoint.checkpoint.waitingApproval?.approvalId).toBe(waiting.approvalId);
+    expect(calls).toEqual(["call-A"]);
+    const resolved = await controller.resolveApproval(run.id, waiting.approvalId!, {
+      action: "APPROVE",
+      scope: "ONCE",
+    });
+    expect(resolved.status).toBe("AWAITING_VERIFICATION");
+    expect(calls).toEqual(["call-A", "call-B", "call-C"]);
+    expect(observed).toHaveLength(2);
+    expect(observed[1]?.messages.slice(-3)).toEqual([
+      expect.objectContaining({ toolCallId: "call-A" }),
+      expect.objectContaining({ toolCallId: "call-B" }),
+      expect.objectContaining({ toolCallId: "call-C" }),
+    ]);
+    expect((await storage.toolInvocations.listByRun(run.id)).map(({ status }) => status)).toEqual([
+      "COMPLETED",
+      "COMPLETED",
+      "COMPLETED",
+    ]);
+    expect((await storage.events.replay(run.id)).map(({ type }) => type)).toContain(
+      "approval.resolved",
+    );
+    await storage.close();
+  });
+
   it("drives multiple provider Tool turns without recursive controller calls", async () => {
     const storage = await openCaelushStorage({ path: ":memory:" });
     const run = makeRun("/repo");
@@ -819,10 +898,16 @@ describe("RunController automatic Tool Batch integration", () => {
     await seedRun(firstStorage, run);
     const firstBus = new EventBus(firstStorage.events);
     let firstCalls = 0;
-    const firstRuntime = createRuntime(firstStorage, firstBus, async () => {
-      firstCalls += 1;
-      return { content: "A", details: {}, isError: false };
-    });
+    const firstRuntime = createRuntime(
+      firstStorage,
+      firstBus,
+      async () => {
+        firstCalls += 1;
+        return { content: "A", details: {}, isError: false };
+      },
+      () => "ALLOW",
+      100,
+    );
     const firstController = createController(firstStorage, firstBus, [
       turn(
         "inspect",

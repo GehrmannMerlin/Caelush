@@ -1,5 +1,9 @@
 import type {
   AgentError,
+  ApprovalRequest,
+  ApprovalRequestId,
+  ApprovalScope,
+  ApprovalStatus,
   EventId,
   ObservationId,
   SessionId,
@@ -73,5 +77,54 @@ export function createToolFailedEvent(
     ...baseEvent(input),
     type: "tool.failed",
     payload: { invocationId: input.invocation.id, error: input.error },
+  };
+}
+
+export function createApprovalRequestedEvent(input: {
+  readonly eventId: EventId;
+  readonly sessionId: SessionId;
+  readonly timestamp: TimestampMs;
+  readonly approval: ApprovalRequest;
+  readonly stepId: import("@caelush/protocol").StepId;
+}): DraftOf<"approval.requested"> {
+  return {
+    eventId: input.eventId,
+    schemaVersion: 1,
+    type: "approval.requested",
+    runId: input.approval.runId,
+    sessionId: input.sessionId,
+    stepId: input.stepId,
+    timestamp: input.timestamp,
+    visibility: "USER_VISIBLE",
+    durability: { kind: "DURABLE", version: 1 },
+    payload: { approval: input.approval },
+  };
+}
+
+export function createApprovalResolvedEvent(input: {
+  readonly eventId: EventId;
+  readonly sessionId: SessionId;
+  readonly stepId: import("@caelush/protocol").StepId;
+  readonly timestamp: TimestampMs;
+  readonly approvalId: ApprovalRequestId;
+  readonly runId: import("@caelush/protocol").RunId;
+  readonly status: ApprovalStatus;
+  readonly grantedScope?: ApprovalScope;
+}): DraftOf<"approval.resolved"> {
+  return {
+    eventId: input.eventId,
+    schemaVersion: 1,
+    type: "approval.resolved",
+    runId: input.runId,
+    sessionId: input.sessionId,
+    stepId: input.stepId,
+    timestamp: input.timestamp,
+    visibility: "USER_VISIBLE",
+    durability: { kind: "DURABLE", version: 1 },
+    payload: {
+      approvalId: input.approvalId,
+      status: input.status,
+      ...(input.grantedScope === undefined ? {} : { grantedScope: input.grantedScope }),
+    },
   };
 }

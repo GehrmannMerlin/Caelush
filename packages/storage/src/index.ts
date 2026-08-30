@@ -28,6 +28,13 @@ export {
   type ObservationRepository,
 } from "./repositories/observation-repository.js";
 export {
+  DEFAULT_APPROVAL_TTL_MS,
+  SqliteApprovalRepository,
+  type ApprovalClock,
+  type ApprovalEventIdFactory,
+  type ApprovalRepository,
+} from "./repositories/approval-repository.js";
+export {
   StorageConflictError,
   StorageDecodeError,
   StorageError,

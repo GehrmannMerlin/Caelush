@@ -5,6 +5,7 @@ import {
   StepIdSchema,
   ToolNameSchema,
   type AgentError,
+  type ApprovalRequest,
   type JsonObject,
   type RunId,
   type SessionId,
@@ -26,6 +27,7 @@ import type { ToolEffect } from "./tool-effects.js";
 
 export const DEFAULT_MAX_EXTERNAL_CALL_ID_BYTES = 512;
 export const DEFAULT_MAX_INVOCATION_ARGS_BYTES = 256 * 1024;
+export const DEFAULT_APPROVAL_TTL_MS = 15 * 60 * 1000;
 
 export interface ToolDispatchRequest {
   readonly sessionId: SessionId;
@@ -91,6 +93,7 @@ export interface ToolResultOutcome {
 export interface WaitingApprovalOutcome {
   readonly kind: "WAITING_APPROVAL";
   readonly invocation: ToolInvocation;
+  readonly approvalId?: import("@caelush/protocol").ApprovalRequestId;
 }
 
 export interface UnavailableToolOutcome {
@@ -122,6 +125,7 @@ export interface ToolExecutionSnapshot {
   readonly invocation: ToolInvocation;
   readonly revision: number;
   readonly observation?: ToolObservation;
+  readonly approval?: ApprovalRequest;
 }
 
 export interface ToolExecutionCommit {
@@ -132,6 +136,8 @@ export interface ToolExecutionCommit {
   readonly events: readonly DurableToolEventDraft[];
   readonly effects?: readonly ToolEffect[];
   readonly effectTimestamp?: import("@caelush/protocol").TimestampMs;
+  readonly approval?: ApprovalRequest;
+  readonly approvalKey?: string;
 }
 
 export interface ToolExecutionCommitResult {
@@ -149,6 +155,10 @@ export interface ToolInvocationIdFactory {
 
 export interface ToolObservationIdFactory {
   create(): import("@caelush/protocol").ObservationId;
+}
+
+export interface ToolApprovalRequestIdFactory {
+  create(): import("@caelush/protocol").ApprovalRequestId;
 }
 
 export interface ToolEventIdFactory {

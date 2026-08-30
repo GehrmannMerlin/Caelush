@@ -8,6 +8,7 @@ export {
   assertToolDispatchRequest,
   DEFAULT_MAX_EXTERNAL_CALL_ID_BYTES,
   DEFAULT_MAX_INVOCATION_ARGS_BYTES,
+  DEFAULT_APPROVAL_TTL_MS,
 } from "./dispatcher-types.js";
 export type {
   DurableToolAgentEvent,
@@ -24,6 +25,7 @@ export type {
   ToolEventIdFactory,
   ToolInvocationIdFactory,
   ToolObservationIdFactory,
+  ToolApprovalRequestIdFactory,
   ToolResultOutcome,
   WaitingApprovalOutcome,
 } from "./dispatcher-types.js";
@@ -32,8 +34,11 @@ export type {
   ToolExecutionGateInput,
   ToolExecutionGatePort,
   ToolCommittedEventNotifier,
+  ToolApprovalStorePort,
 } from "./dispatcher-ports.js";
 export type { ToolExecutionStorePort } from "./execution-store.js";
+export { computeToolApprovalKey } from "./approval-key.js";
+export type { ToolApprovalKeyInput } from "./approval-key.js";
 export { ToolExecutionConflictError, ToolExecutionInvariantError } from "./execution-store.js";
 export {
   ToolDispatcherBusyError,
@@ -111,6 +116,8 @@ export {
 } from "./builtins/default-tools.js";
 export { UNCERTAIN_SIDE_EFFECT, isUncertainToolExecution } from "./execution-disposition.js";
 export {
+  createApprovalRequestedEvent,
+  createApprovalResolvedEvent,
   createToolCompletedEvent,
   createToolFailedEvent,
   createToolRequestedEvent,

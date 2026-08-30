@@ -2,6 +2,7 @@ import { LLMAssistantMessageSchema, LLMToolResultMessageSchema } from "@caelush/
 import { FinishReasonSchema, LLMUsageSchema } from "@caelush/llm/turn";
 import {
   JsonObjectSchema,
+  ApprovalRequestIdSchema,
   LLMCallIdSchema,
   ModelRefSchema,
   RunIdSchema,
@@ -106,6 +107,7 @@ export const WaitingToolResultsContinuationSchema = z
     waitingApproval: z
       .object({
         invocationId: ToolInvocationIdSchema,
+        approvalId: ApprovalRequestIdSchema.optional(),
         externalCallId: z.string().min(1),
         toolName: ToolNameSchema,
       })

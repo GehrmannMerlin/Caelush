@@ -50,6 +50,7 @@ export interface ToolBatchWaitingApprovalOutcome {
   readonly waiting: {
     readonly index: number;
     readonly invocationId: ToolInvocationId;
+    readonly approvalId?: import("@caelush/protocol").ApprovalRequestId;
     readonly externalCallId: string;
     readonly toolName: ToolName;
   };

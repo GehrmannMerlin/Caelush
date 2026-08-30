@@ -1,8 +1,12 @@
-import type { ToolDefinition, ToolInvocation, ToolName } from "@caelush/protocol";
 import type {
-  DurableToolAgentEvent,
-  ToolDefinitionMetadata,
-} from "./dispatcher-types.js";
+  ApprovalRequest,
+  RunId,
+  ToolDefinition,
+  ToolInvocation,
+  ToolInvocationId,
+  ToolName,
+} from "@caelush/protocol";
+import type { DurableToolAgentEvent, ToolDefinitionMetadata } from "./dispatcher-types.js";
 import type { ToolSecurityContext } from "./security-context.js";
 
 export type ToolExecutionGateDecision =
@@ -27,4 +31,13 @@ export interface ToolExecutionGatePort {
 
 export interface ToolCommittedEventNotifier {
   notifyCommitted(events: readonly DurableToolAgentEvent[]): void;
+}
+
+export interface ToolApprovalStorePort {
+  getByInvocation(toolInvocationId: ToolInvocationId): Promise<ApprovalRequest | null>;
+  getApprovalKeyByInvocation?(toolInvocationId: ToolInvocationId): Promise<string | null>;
+  findApplicableRunGrant(input: {
+    readonly runId: RunId;
+    readonly approvalKey: string;
+  }): Promise<ApprovalRequest | null>;
 }

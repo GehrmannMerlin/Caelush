@@ -7,6 +7,8 @@ import {
 } from "@caelush/tools";
 import {
   AgentRunSchema,
+  ApprovalResolutionSchema,
+  type ApprovalRequestId,
   type AgentRun,
   type AgentError,
   type AgentState,
@@ -17,6 +19,7 @@ import type { AgentLoopExecutionResult, AgentLoopOutcomeResult } from "./agent-l
 import {
   createInitialAgentState,
   markAgentStateWaitingApproval,
+  resumeAgentStateFromApproval,
   settleAgentStepState,
   startAgentState,
 } from "./agent-state.js";
@@ -26,6 +29,7 @@ import { toLLMToolResultMessages } from "./agent-tool-batch.js";
 import {
   markAgentRunFailed,
   markAgentRunWaitingApproval,
+  resumeAgentRunFromApproval,
   markAgentStateFailed,
   assertRunExecutionInvariant,
 } from "./run-execution-state.js";
@@ -106,6 +110,100 @@ export class RunController {
 
   async recover(runId: RunId): Promise<RunControllerResult> {
     return this.withLock(runId, () => this.recoverLocked(runId));
+  }
+
+  async resolveApproval(
+    runId: RunId,
+    approvalId: ApprovalRequestId,
+    resolution: unknown,
+  ): Promise<RunControllerResult> {
+    return this.withLock(runId, () => this.resolveApprovalLocked(runId, approvalId, resolution));
+  }
+
+  private async resolveApprovalLocked(
+    runId: RunId,
+    approvalId: ApprovalRequestId,
+    resolution: unknown,
+  ): Promise<RunControllerResult> {
+    const approvals = this.dependencies.approvals;
+    if (approvals === undefined) {
+      throw new RunControllerInfrastructureError("Approval resolution is not configured.");
+    }
+    const parsed = ApprovalResolutionSchema.parse(resolution);
+    const loaded = await this.load(runId);
+    if (loaded.run.status !== "WAITING_APPROVAL" || loaded.state === undefined) {
+      throw new RunControllerInputError("Approval resolution requires a WAITING_APPROVAL Run.");
+    }
+    if (
+      loaded.continuation?.type !== "WAITING_TOOL_RESULTS" ||
+      loaded.continuation.waitingApproval === undefined ||
+      loaded.continuation.waitingApproval.approvalId !== approvalId
+    ) {
+      throw new RunControllerInputError("Approval does not match the Run approval boundary.");
+    }
+    const approval = await approvals.getById(approvalId);
+    if (
+      approval === null ||
+      approval.runId !== runId ||
+      approval.toolInvocationId !== loaded.continuation.waitingApproval.invocationId
+    ) {
+      throw new RunControllerInputError("Approval does not belong to the Run Tool invocation.");
+    }
+    if (parsed.action === "APPROVE" && approval.scope === "ONCE" && parsed.scope === "RUN") {
+      throw new RunControllerInputError("Approval resolution scope exceeds the request scope.");
+    }
+    const resolved = await approvals.resolve(approvalId, parsed);
+    return this.resumeResolvedApprovalLocked(loaded, resolved);
+  }
+
+  private async resumeResolvedApprovalLocked(
+    loaded: RunExecutionSnapshot,
+    resolved: import("@caelush/protocol").ApprovalRequest,
+  ): Promise<RunControllerResult> {
+    if (loaded.state === undefined || loaded.continuation?.type !== "WAITING_TOOL_RESULTS") {
+      throw new RunControllerInvariantError(
+        "Approval resume requires a pending Tool continuation.",
+      );
+    }
+    const continuationWithoutApproval = {
+      type: loaded.continuation.type,
+      runId: loaded.continuation.runId,
+      sourceStepId: loaded.continuation.sourceStepId,
+      pendingDecision: loaded.continuation.pendingDecision,
+      ...(loaded.continuation.receivedResults === undefined
+        ? {}
+        : { receivedResults: loaded.continuation.receivedResults }),
+    };
+    const now = this.dependencies.clock.now();
+    const run = resumeAgentRunFromApproval(loaded.run);
+    const state = resumeAgentStateFromApproval(loaded.state, now);
+    const commit = await this.commit({
+      run,
+      state,
+      expectedStateRevision: loaded.stateRevision ?? null,
+      expectedContinuationRevision: loaded.continuationRevision ?? null,
+      stepWrites: [],
+      messagesToAppend: [],
+      continuation: {
+        operation: "SET",
+        checkpoint: continuationWithoutApproval,
+        updatedAt: now,
+      },
+      events: [
+        this.eventFactory.statusChanged(
+          loaded.run,
+          "WAITING_APPROVAL",
+          "RUNNING",
+          this.nextEventId(),
+          now,
+        ),
+      ],
+    });
+    this.notify(commit.events);
+    if (resolved.status === "PENDING") {
+      throw new RunControllerInvariantError("Approval resolution left a pending ApprovalRequest.");
+    }
+    return this.driveToolBoundariesLocked(commit.snapshot, "RECOVER");
   }
 
   private async startLocked(runId: RunId): Promise<RunControllerResult> {
@@ -213,7 +311,20 @@ export class RunController {
     if (loaded.run.status === "RUNNING" && loaded.activeStep !== undefined) {
       return this.recoverStaleStep(loaded);
     }
-    if (loaded.run.status === "WAITING_APPROVAL") return this.resumeKnownBoundary(loaded);
+    if (loaded.run.status === "WAITING_APPROVAL") {
+      const approvalId =
+        loaded.continuation?.type === "WAITING_TOOL_RESULTS"
+          ? loaded.continuation.waitingApproval?.approvalId
+          : undefined;
+      const approvals = this.dependencies.approvals;
+      if (approvalId !== undefined && approvals !== undefined) {
+        const approval = await approvals.getById(approvalId);
+        if (approval !== null && approval.status !== "PENDING") {
+          return this.resumeResolvedApprovalLocked(loaded, approval);
+        }
+      }
+      return this.resumeKnownBoundary(loaded);
+    }
     if (
       loaded.run.status === "RUNNING" &&
       loaded.state !== undefined &&
@@ -381,6 +492,9 @@ export class RunController {
           ...loaded.continuation,
           waitingApproval: {
             invocationId: outcome.waiting.invocationId,
+            ...(outcome.waiting.approvalId === undefined
+              ? {}
+              : { approvalId: outcome.waiting.approvalId }),
             externalCallId: outcome.waiting.externalCallId,
             toolName: outcome.waiting.toolName,
           },
@@ -767,6 +881,9 @@ export class RunController {
         state: snapshot.state!,
         sourceStepId: snapshot.continuation.sourceStepId,
         invocationId: snapshot.continuation.waitingApproval.invocationId,
+        ...(snapshot.continuation.waitingApproval.approvalId === undefined
+          ? {}
+          : { approvalId: snapshot.continuation.waitingApproval.approvalId }),
         externalCallId: snapshot.continuation.waitingApproval.externalCallId,
         toolName: snapshot.continuation.waitingApproval.toolName,
       };

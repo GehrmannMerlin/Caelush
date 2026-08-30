@@ -88,7 +88,7 @@ The model-facing projection contains only:
 
 `ToolDispatchRequest` is a JSON-safe boundary containing `sessionId`, `runId`, `stepId`, `externalCallId`, `toolName`, and `args`. The call identity is `(runId, stepId, externalCallId)`, and the storage layer also protects it with a revision CAS and a unique database constraint. Unknown tools return a model-recoverable unavailable result without fabricating an invocation or risk metadata.
 
-For a known and valid tool, the Dispatcher persists `REQUESTED` before evaluating the injected `ToolExecutionGate`. `DENY` atomically settles a `FAILED` invocation with `PERMISSION_DENIED`; `REQUIRE_APPROVAL` persists `WAITING_APPROVAL` and returns without creating an Approval entity or invoking a handler. Phase 7B intentionally has no approval-resolution endpoint.
+For a known and valid tool, the Dispatcher persists `REQUESTED` before evaluating the injected `ToolExecutionGate`. `DENY` atomically settles a `FAILED` invocation with `PERMISSION_DENIED`; Phase 9B extends `REQUIRE_APPROVAL` to atomically persist `WAITING_APPROVAL`, one PENDING ApprovalRequest and `approval.requested`, then returns without invoking a handler. The historical Phase 7B boundary had no approval entity; the current durable workflow is documented in [Durable Approval Workflow](approval-workflow.md).
 
 An `ALLOW` decision must first atomically commit `RUNNING` and the durable `tool.started` event. Only after that commit succeeds may the handler begin. This is the durable-before-side-effect boundary. The handler receives frozen invocation args. Its result is runtime-validated, cloned, and bounded before a single atomic settlement writes the terminal invocation, one ToolObservation, and `tool.completed` or sanitized `tool.failed`.
 
@@ -123,13 +123,17 @@ LLMToolResultMessage[] → durable Continuation.receivedResults
 one AgentLoop provider turn
 ```
 
-Items are dispatched strictly in assistant source order; the coordinator never uses `Promise.all`, worker pools, or implicit parallelism. A normal `isError: true` Tool result is included and execution continues. An unavailable Tool is represented as a model-facing error without creating an Invocation. A `WAITING_APPROVAL` outcome stops the batch immediately, leaves trailing items untouched, and moves the Run to an explicit `WAITING_APPROVAL` continuation boundary. Approval resolution is intentionally not implemented in Phase 7.
+Items are dispatched strictly in assistant source order; the coordinator never uses `Promise.all`, worker pools, or implicit parallelism. A normal `isError: true` Tool result is included and execution continues. An unavailable Tool is represented as a model-facing error without creating an Invocation. A `WAITING_APPROVAL` outcome stops the batch immediately, leaves trailing items untouched, and moves the Run to an explicit `WAITING_APPROVAL` continuation boundary. Phase 9B resolution resumes that same boundary through RunController and Coordinator recovery.
 
 Recovery uses `ToolDispatcher.recoverOrDispatch()` for every item. A durable terminal Invocation is reused, a safe `REQUESTED` Invocation may continue, and a durable `RUNNING` Invocation is converted into an uncertainty result carrying the fixed `UNCERTAIN_SIDE_EFFECT` disposition. The coordinator then inserts generic `SKIPPED_AFTER_UNCERTAIN_EXECUTION` results for every trailing item without dispatching them. This is a fail-closed side-effect barrier: Phase 7 never guesses whether the interrupted handler completed.
 
 The controller validates result count and `(externalCallId, toolName)` identity before converting results to provider-neutral `LLMToolResultMessage[]`; structured Tool details and internal Invocation/Observation IDs never enter that message. The complete ordered result batch is persisted in the Continuation before the next provider turn. If the process restarts after that acceptance but before the provider call, recovery resumes directly with the accepted batch and does not redispatch Tools.
 
 The model catalog is read from the same immutable registry behind the Dispatcher. There is no second `RunExecutionConfig.tools` catalog and no ToolBatch database table: Run/State/Step, Conversation, Continuation, ToolInvocation, ToolObservation, and durable events remain the existing sources of truth.
+
+## Phase 9B Durable Approval Boundary
+
+The Phase 9A Gate remains pure. The Phase 9B Dispatcher computes an exact host-internal approval key and checks only same-Run, exact-key RUN grants after the current Gate returns `REQUIRE_APPROVAL`; DENY always wins. Storage persists approvals and resolution events, while RunController owns locked resolution and continuation recovery. A pending approval can pause one batch item, and a resolved approval resumes that item before any trailing calls. See [Durable Approval Workflow](approval-workflow.md) for transaction, TTL, scope, idempotency, and crash-recovery rules.
 
 ## Phase 8A built-in Runtime boundary
 

@@ -85,6 +85,7 @@ export class ToolBatchCoordinator implements ToolBatchCoordinatorPort {
           waiting: {
             index,
             invocationId: outcome.invocation.id,
+            ...(outcome.approvalId === undefined ? {} : { approvalId: outcome.approvalId }),
             externalCallId: item.externalCallId,
             toolName: item.toolName,
           },

@@ -66,9 +66,10 @@ describe("ToolInvocation lifecycle", () => {
     assertToolInvocationInvariant(failed);
   });
 
-  it("rejects transitions out of terminal states and unsupported approval resume", () => {
+  it("rejects transitions out of terminal states and supports approval resume", () => {
     expect(() => assertToolInvocationTransition("COMPLETED", "RUNNING")).toThrow();
-    expect(() => assertToolInvocationTransition("WAITING_APPROVAL", "RUNNING")).toThrow();
+    expect(() => assertToolInvocationTransition("WAITING_APPROVAL", "REQUESTED")).toThrow();
+    expect(() => assertToolInvocationTransition("WAITING_APPROVAL", "RUNNING")).not.toThrow();
     expect(() => assertToolInvocationTransition("REQUESTED", "COMPLETED")).toThrow();
   });
 

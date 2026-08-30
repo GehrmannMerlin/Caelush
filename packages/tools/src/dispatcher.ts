@@ -1,8 +1,15 @@
-import type { AgentError, JsonObject, ToolInvocation } from "@caelush/protocol";
+import {
+  ApprovalRequestSchema,
+  type AgentError,
+  type ApprovalRequest,
+  type JsonObject,
+  type ToolInvocation,
+} from "@caelush/protocol";
 import {
   assertToolDispatchRequest,
   DEFAULT_MAX_EXTERNAL_CALL_ID_BYTES,
   DEFAULT_MAX_INVOCATION_ARGS_BYTES,
+  DEFAULT_APPROVAL_TTL_MS,
   type DurableToolEventDraft,
   type ToolDispatchRequest,
   type ToolDispatcherOutcome,
@@ -12,6 +19,7 @@ import {
   type ToolEventIdFactory,
   type ToolInvocationIdFactory,
   type ToolObservationIdFactory,
+  type ToolApprovalRequestIdFactory,
 } from "./dispatcher-types.js";
 import {
   ToolDispatcherBusyError,
@@ -22,11 +30,13 @@ import type {
   ToolExecutionGateDecision,
   ToolExecutionGatePort,
   ToolCommittedEventNotifier,
+  ToolApprovalStorePort,
 } from "./dispatcher-ports.js";
 import { ToolExecutionConflictError, type ToolExecutionStorePort } from "./execution-store.js";
 import type { ToolOutputPolicy } from "./output-policy.js";
 import { boundToolModelContent, DEFAULT_TOOL_OUTPUT_POLICY } from "./output-policy.js";
 import { canonicalJsonString, cloneJsonValue, jsonUtf8ByteLength } from "./json-canonical.js";
+import { computeToolApprovalKey } from "./approval-key.js";
 import type { ResolvedTool, ToolRegistry } from "./registry.js";
 import {
   assertToolInvocationInvariant,
@@ -42,6 +52,7 @@ import {
   createToolFailedEvent,
   createToolRequestedEvent,
   createToolStartedEvent,
+  createApprovalRequestedEvent,
 } from "./event-factory.js";
 import {
   ToolExecutionResultValidationError,
@@ -64,6 +75,8 @@ export interface ToolDispatcherOptions {
   readonly invocationIdFactory: ToolInvocationIdFactory;
   readonly observationIdFactory: ToolObservationIdFactory;
   readonly eventIdFactory: ToolEventIdFactory;
+  readonly approvalStore?: ToolApprovalStorePort;
+  readonly approvalIdFactory?: ToolApprovalRequestIdFactory;
   readonly outputPolicy?: ToolOutputPolicy;
   readonly maxExternalCallIdBytes?: number;
   readonly maxInvocationArgsBytes?: number;
@@ -78,6 +91,7 @@ const RUNTIME_CONTENT =
 const OUTPUT_CONTENT = "Tool execution failed because its output violated the registered contract.";
 const UNCERTAIN_CONTENT =
   "Tool execution side effects could not be verified safely. Do not automatically repeat the operation.";
+const APPROVAL_REJECTED_CONTENT = "Tool execution was not approved by the user.";
 
 export class ToolDispatcher {
   private readonly activeCalls = new Set<string>();
@@ -246,7 +260,7 @@ export class ToolDispatcher {
       );
     }
     if (snapshot.invocation.status === "WAITING_APPROVAL") {
-      return { kind: "WAITING_APPROVAL", invocation: snapshot.invocation };
+      return this.recoverWaitingApproval(snapshot, environment, securityContext);
     }
     if (snapshot.invocation.status === "RUNNING") return this.failInterrupted(snapshot);
     if (snapshot.invocation.status === "COMPLETED" || snapshot.invocation.status === "FAILED") {
@@ -277,14 +291,45 @@ export class ToolDispatcher {
       });
     }
     if (decision.kind === "REQUIRE_APPROVAL") {
+      const approvalKey = computeToolApprovalKey({
+        toolName: resolvedTool.definition.name,
+        definition: resolvedTool.definition,
+        args: snapshot.invocation.args,
+        securityContext: request.securityContext,
+      });
+      if (this.options.approvalStore !== undefined) {
+        const grant = await this.options.approvalStore.findApplicableRunGrant({
+          runId: snapshot.invocation.runId,
+          approvalKey,
+        });
+        if (grant !== null) return this.startAndExecute(request, resolvedTool, snapshot);
+      }
       const waiting = markToolInvocationWaitingApproval(snapshot.invocation);
+      const approval = this.createApprovalRequest(request, resolvedTool, waiting, decision);
+      const approvalEvent =
+        approval === undefined
+          ? undefined
+          : createApprovalRequestedEvent({
+              eventId: this.options.eventIdFactory.create(),
+              sessionId: request.sessionId,
+              stepId: waiting.stepId,
+              timestamp: approval.createdAt,
+              approval,
+            });
       const committed = await this.commitAndNotify({
         sessionId: request.sessionId,
         invocation: waiting,
         expectedRevision: snapshot.revision,
-        events: [],
+        ...(approval === undefined ? {} : { approval, approvalKey }),
+        events: approvalEvent === undefined ? [] : [approvalEvent],
       });
-      return { kind: "WAITING_APPROVAL", invocation: committed.snapshot.invocation };
+      return {
+        kind: "WAITING_APPROVAL",
+        invocation: committed.snapshot.invocation,
+        ...(committed.snapshot.approval === undefined
+          ? {}
+          : { approvalId: committed.snapshot.approval.id }),
+      };
     }
     if (decision.kind === "DENY") {
       return this.persistFailure(
@@ -296,6 +341,14 @@ export class ToolDispatcher {
         {},
       );
     }
+    return this.startAndExecute(request, resolvedTool, snapshot);
+  }
+
+  private async startAndExecute(
+    request: ToolDispatchRequest,
+    resolvedTool: ResolvedTool,
+    snapshot: ToolExecutionSnapshot,
+  ): Promise<ToolDispatcherOutcome> {
     const running = startToolInvocation(snapshot.invocation, this.options.clock.now());
     const startedEvent = createToolStartedEvent({
       eventId: this.options.eventIdFactory.create(),
@@ -310,6 +363,114 @@ export class ToolDispatcher {
       events: [startedEvent],
     });
     return this.executeHandler(request, resolvedTool, committed.snapshot);
+  }
+
+  private createApprovalRequest(
+    request: ToolDispatchRequest,
+    resolvedTool: ResolvedTool,
+    invocation: ToolInvocation,
+    decision: Extract<ToolExecutionGateDecision, { kind: "REQUIRE_APPROVAL" }>,
+  ): ApprovalRequest | undefined {
+    if (this.options.approvalStore === undefined || this.options.approvalIdFactory === undefined) {
+      return undefined;
+    }
+    const createdAt = this.options.clock.now();
+    return ApprovalRequestSchema.parse({
+      id: this.options.approvalIdFactory.create(),
+      runId: invocation.runId,
+      toolInvocationId: invocation.id,
+      riskLevel: invocation.riskLevel,
+      title: "Approve Tool execution",
+      reason: decision.safeReason ?? "The active policy requires review before this Tool runs.",
+      action: {
+        kind: "TOOL_EXECUTION",
+        toolName: resolvedTool.definition.name,
+        riskLevel: resolvedTool.definition.riskLevel,
+        requiredCapabilities: [...resolvedTool.definition.requiredCapabilities].sort(),
+        runtimeRequirements: resolvedTool.definition.runtimeRequirements,
+        permissionProfile: request.securityContext.permissionProfile,
+        approvalPolicy: request.securityContext.approvalPolicy,
+      },
+      status: "PENDING",
+      scope: "RUN",
+      expiresAt: (createdAt + DEFAULT_APPROVAL_TTL_MS) as typeof createdAt,
+      createdAt,
+    });
+  }
+
+  private async recoverWaitingApproval(
+    snapshot: ToolExecutionSnapshot,
+    environment: ToolExecutionEnvironment,
+    securityContext: ToolSecurityContext,
+  ): Promise<ToolDispatcherOutcome> {
+    const approvalStore = this.options.approvalStore;
+    if (approvalStore === undefined)
+      return { kind: "WAITING_APPROVAL", invocation: snapshot.invocation };
+    const approval =
+      (await approvalStore.getByInvocation(snapshot.invocation.id)) ?? snapshot.approval;
+    if (approval === null || approval === undefined) {
+      throw new ToolDispatcherInvariantError("Waiting ToolInvocation has no ApprovalRequest.");
+    }
+    if (approval.status === "PENDING") {
+      return { kind: "WAITING_APPROVAL", invocation: snapshot.invocation, approvalId: approval.id };
+    }
+    const request: ToolDispatchRequest = {
+      sessionId: snapshot.sessionId,
+      runId: snapshot.invocation.runId,
+      stepId: snapshot.invocation.stepId,
+      externalCallId: snapshot.invocation.externalCallId ?? "",
+      toolName: snapshot.invocation.toolName,
+      args: snapshot.invocation.args,
+      environment,
+      securityContext,
+    };
+    if (approval.status !== "APPROVED") {
+      return this.persistFailure(
+        request.sessionId,
+        snapshot,
+        "APPROVAL_REJECTED",
+        "SECURITY",
+        APPROVAL_REJECTED_CONTENT,
+        {},
+        { approvalStatus: approval.status },
+      );
+    }
+    const resolvedTool = this.options.registry.resolve(snapshot.invocation.toolName);
+    if (resolvedTool === undefined) {
+      throw new ToolDispatcherInvariantError("The registered Tool is unavailable during recovery.");
+    }
+    const decision = await this.options.gate.decide({
+      invocation: snapshot.invocation,
+      toolName: resolvedTool.definition.name,
+      definition: resolvedTool.definition,
+      securityContext,
+    });
+    if (decision.kind === "DENY") {
+      return this.persistFailure(
+        request.sessionId,
+        snapshot,
+        "PERMISSION_DENIED",
+        "SECURITY",
+        DENIED_CONTENT,
+        {},
+      );
+    }
+    if (decision.kind === "REQUIRE_APPROVAL") {
+      const approvalKey = computeToolApprovalKey({
+        toolName: resolvedTool.definition.name,
+        definition: resolvedTool.definition,
+        args: snapshot.invocation.args,
+        securityContext,
+      });
+      const storedKey = await approvalStore.getApprovalKeyByInvocation?.(snapshot.invocation.id);
+      if (storedKey !== undefined && storedKey !== approvalKey) {
+        throw new ToolDispatcherInvariantError("Approval identity does not match the Tool call.");
+      }
+      if (approval.grantedScope === undefined) {
+        throw new ToolDispatcherInvariantError("Approved ApprovalRequest has no granted scope.");
+      }
+    }
+    return this.startAndExecute(request, resolvedTool, snapshot);
   }
 
   private async executeHandler(
@@ -549,7 +710,9 @@ export class ToolDispatcher {
       {
         code,
         message:
-          code === "PERMISSION_DENIED" ? content : "Tool execution returned an error result.",
+          code === "PERMISSION_DENIED" || code === "APPROVAL_REJECTED"
+            ? content
+            : "Tool execution returned an error result.",
         retryable: false,
         phase,
         ...(Object.keys(errorDetails).length === 0 ? {} : { details: errorDetails }),

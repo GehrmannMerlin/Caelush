@@ -32,6 +32,11 @@ import {
   SqliteObservationRepository,
   type ObservationRepository,
 } from "./repositories/observation-repository.js";
+import {
+  SqliteApprovalRepository,
+  type ApprovalRepository,
+} from "./repositories/approval-repository.js";
+import type { ApprovalClock } from "./repositories/approval-repository.js";
 
 export interface CaelushStorage {
   readonly sessions: SessionRepository;
@@ -45,10 +50,14 @@ export interface CaelushStorage {
   readonly toolExecution: ToolExecutionStorePort;
   readonly toolInvocations: ToolInvocationRepository;
   readonly observations: ObservationRepository;
+  readonly approvals: ApprovalRepository;
   close(): Promise<void>;
 }
 
-export async function openCaelushStorage(options: { path: string }): Promise<CaelushStorage> {
+export async function openCaelushStorage(options: {
+  path: string;
+  approvalClock?: ApprovalClock;
+}): Promise<CaelushStorage> {
   const database = await openCaelushDatabase(options);
 
   try {
@@ -65,6 +74,10 @@ export async function openCaelushStorage(options: { path: string }): Promise<Cae
       toolExecution: new SqliteToolExecutionStore(database),
       toolInvocations: new SqliteToolInvocationRepository(database),
       observations: new SqliteObservationRepository(database),
+      approvals: new SqliteApprovalRepository(
+        database,
+        options.approvalClock === undefined ? {} : { clock: options.approvalClock },
+      ),
       close: async () => database.close(),
     };
   } catch (error) {

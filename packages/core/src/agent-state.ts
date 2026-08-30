@@ -103,6 +103,15 @@ export function markAgentStateWaitingApproval(state: AgentState, now: TimestampM
   });
 }
 
+export function resumeAgentStateFromApproval(state: AgentState, now: TimestampMs): AgentState {
+  assertMonotonicTimestamp(state, now);
+  if (state.status !== "WAITING_APPROVAL") {
+    throw new AgentKernelStateError("state cannot resume from approval unless it is waiting");
+  }
+  assertRunStatusTransition(state.status, "RUNNING");
+  return AgentStateSchema.parse({ ...state, status: "RUNNING", updatedAt: now });
+}
+
 export function markAgentStateMaxStepsReached(state: AgentState, now: TimestampMs): AgentState {
   assertBoundaryState(state, "MAX_STEPS_REACHED", now);
   return AgentStateSchema.parse({ ...state, status: "MAX_STEPS_REACHED", updatedAt: now });

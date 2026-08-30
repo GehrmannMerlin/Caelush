@@ -1,5 +1,11 @@
 import type { LLMToolResultMessage } from "@caelush/llm/messages";
-import type { RunId, StepId, ToolInvocationId, ToolName } from "@caelush/protocol";
+import type {
+  ApprovalRequestId,
+  RunId,
+  StepId,
+  ToolInvocationId,
+  ToolName,
+} from "@caelush/protocol";
 import type { AgentFinalCandidateDecision, AgentToolCallsDecision } from "./agent-decision.js";
 
 export interface WaitingToolResultsContinuation {
@@ -11,6 +17,7 @@ export interface WaitingToolResultsContinuation {
   readonly waitingApproval?:
     | {
         readonly invocationId: ToolInvocationId;
+        readonly approvalId?: ApprovalRequestId | undefined;
         readonly externalCallId: string;
         readonly toolName: ToolName;
       }

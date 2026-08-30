@@ -26,7 +26,7 @@ export interface CreateRequestedToolInvocationInput {
 
 const allowedTransitions: Readonly<Record<string, readonly string[]>> = {
   REQUESTED: ["WAITING_APPROVAL", "RUNNING", "FAILED"],
-  WAITING_APPROVAL: [],
+  WAITING_APPROVAL: ["RUNNING", "FAILED"],
   RUNNING: ["COMPLETED", "FAILED"],
   COMPLETED: [],
   FAILED: [],

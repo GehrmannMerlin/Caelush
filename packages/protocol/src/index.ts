@@ -75,8 +75,18 @@ export type {
   ToolObservation,
   VerificationObservation,
 } from "./observation.js";
-export { ApprovalRequestSchema, ApprovalScopeSchema, ApprovalStatusSchema } from "./approval.js";
-export type { ApprovalRequest, ApprovalScope, ApprovalStatus } from "./approval.js";
+export {
+  ApprovalRequestSchema,
+  ApprovalResolutionSchema,
+  ApprovalScopeSchema,
+  ApprovalStatusSchema,
+} from "./approval.js";
+export type {
+  ApprovalRequest,
+  ApprovalResolution,
+  ApprovalScope,
+  ApprovalStatus,
+} from "./approval.js";
 export {
   VerificationResultSchema,
   VerificationResultStatusSchema,

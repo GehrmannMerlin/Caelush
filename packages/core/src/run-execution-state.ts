@@ -54,6 +54,17 @@ export function markAgentRunWaitingApproval(run: AgentRun): AgentRun {
   return AgentRunSchema.parse({ ...withoutFinalResult, status: "WAITING_APPROVAL" });
 }
 
+export function resumeAgentRunFromApproval(run: AgentRun): AgentRun {
+  if (run.currentStepId !== undefined) {
+    throw new RunExecutionInvariantError("approval-resumed Run cannot retain an active Step");
+  }
+  assertRunStatusTransition(run.status, "RUNNING");
+  const withoutFinalResult = { ...run };
+  delete withoutFinalResult.finalResult;
+  delete withoutFinalResult.finishedAt;
+  return AgentRunSchema.parse({ ...withoutFinalResult, status: "RUNNING" });
+}
+
 export function assertRunExecutionInvariant(snapshot: RunExecutionSnapshot): void {
   const { run, state, activeStep, continuation } = snapshot;
   if (run.status === "PENDING") {
