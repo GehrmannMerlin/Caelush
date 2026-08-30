@@ -80,7 +80,7 @@ function analyzeSegment(
   }
   const executable = basename(tokens[0] ?? "");
   if (isShellWrapper(executable, tokens, platform)) {
-    const body = wrapperBody(tokens, executable, platform);
+    const body = wrapperBody(tokens, platform);
     const nextDepth = depth + 1;
     if (nextDepth > MAX_COMMAND_WRAPPER_DEPTH || body === undefined) {
       classifications.add("OPAQUE_DYNAMIC");
@@ -106,7 +106,7 @@ function analyzeSegment(
   if (platform === "POWERSHELL" && command === "start-process" && hasOption(tokens, "-verb", "runas")) {
     classifications.add("PRIVILEGE_ESCALATION");
   }
-  if (isSystemDestructive(command, tokens, platform)) classifications.add("SYSTEM_DESTRUCTIVE");
+  if (isSystemDestructive(command, tokens)) classifications.add("SYSTEM_DESTRUCTIVE");
   else if (isDestructive(command, tokens, platform)) classifications.add("DESTRUCTIVE_LOCAL");
 
   if (command === "git") classifyGit(tokens, classifications);
@@ -186,8 +186,7 @@ function isShellWrapper(executable: string, tokens: readonly string[], platform:
   return platform === "CMD" && ["cmd", "cmd.exe"].includes(name) && tokens.some((token) => token.toLowerCase() === "/c");
 }
 
-function wrapperBody(tokens: readonly string[], executable: string, platform: CommandPlatform): string | undefined {
-  const name = executable.toLowerCase();
+function wrapperBody(tokens: readonly string[], platform: CommandPlatform): string | undefined {
   const flags = platform === "POSIX_SH" ? ["-c", "-lc"] : platform === "POWERSHELL" ? ["-command", "-c"] : ["/c"];
   const index = tokens.findIndex((token) => flags.includes(platform === "POWERSHELL" ? token.toLowerCase() : token.toLowerCase()));
   return index >= 0 && tokens[index + 1] !== undefined ? tokens[index + 1] : undefined;
@@ -235,7 +234,7 @@ function isRemoteMutation(command: string, tokens: readonly string[]): boolean {
   return command === "docker" && tokens[1]?.toLowerCase() === "push";
 }
 
-function isSystemDestructive(command: string, tokens: readonly string[], platform: CommandPlatform): boolean {
+function isSystemDestructive(command: string, tokens: readonly string[]): boolean {
   if (["shutdown", "reboot", "poweroff", "halt", "mkfs"].includes(command)) return true;
   if (command === "diskpart" && tokens.some((token) => token.toLowerCase() === "clean")) return true;
   if (command === "dd" && tokens.some((token) => /^of=\/dev\//i.test(token))) return true;

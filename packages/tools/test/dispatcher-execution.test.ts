@@ -205,6 +205,27 @@ describe("ToolDispatcher execution", () => {
     });
   });
 
+  it("turns a security facts projector failure into opaque input for the gate", async () => {
+    const factsSeen: { value?: ToolSecurityFacts } = {};
+    const dispatcher = makeDispatcher(
+      new MemoryStore(),
+      { kind: "DENY" },
+      undefined,
+      () => {
+        throw new Error("cannot interpret input");
+      },
+      factsSeen,
+    );
+
+    await dispatcher.dispatch(makeRequest());
+
+    expect(factsSeen.value).toEqual({
+      resourceAccesses: [],
+      secretScanInputs: [],
+      opaqueInput: true,
+    });
+  });
+
   it("durably checkpoints RUNNING before invoking the handler and settles success", async () => {
     const store = new MemoryStore();
     let handlerCount = 0;
