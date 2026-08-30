@@ -40,10 +40,12 @@
 ### Task 1: Baseline and Phase 9B characterization
 
 **Files:**
+
 - Read: `packages/security/test/*.test.ts`, `packages/tools/test/dispatcher-*.test.ts`, `packages/storage/test/approval-repository.test.ts`, `packages/storage/test/run-controller-*.test.ts`.
 - Modify: none unless a characterization test exposes a genuine 9B regression.
 
 **Interfaces:**
+
 - Consumes: existing `CaelushToolExecutionGate`, `ToolDispatcher`, `ToolApprovalStorePort`, and storage recovery contracts.
 - Produces: recorded baseline output and a focused regression command list for every later task.
 
@@ -55,10 +57,12 @@
 ### Task 2: Tool Security Facts contracts and host-only registry plumbing
 
 **Files:**
+
 - Create: `packages/tools/src/security-facts.ts`, `packages/tools/test/security-facts-contracts.test.ts`.
 - Modify: `packages/tools/src/registration.ts`, `packages/tools/src/registry.ts`, `packages/tools/src/registry-builder.ts`, `packages/tools/src/index.ts`, `packages/tools/test/registry-builder.test.ts`, `packages/tools/test/registry.test.ts`, `tests/architecture/security-boundaries.test.ts`.
 
 **Interfaces:**
+
 - Produces `ToolResourceOperation = "READ" | "WRITE" | "DELETE" | "MOVE" | "SEARCH" | "DIFF"`, `ToolResourceAccess { operation, path }`, `ToolShellCommandFact { command, workdir, tty }`, `ToolSecretScanInput { kind: "COMMAND" | "STDIN" | "PATCH" | "GENERIC"; text }`, `ToolSecurityFacts { resourceAccesses, shellCommand?, secretScanInputs, structuralPreview? }`, and `ToolSecurityFactsProjector = (args: Readonly<JsonObject>) => ToolSecurityFacts`.
 - Extends `ToolRegistration` and internal `ResolvedTool` with optional `securityFactsProjector`; `modelDefinitions()` continues exposing exactly name/description/inputSchema and no projector/facts.
 - `ToolSecurityFactsProjector` receives only validated args, is pure/deterministic/no-I/O, and throws a host-only projection error that the Dispatcher maps to conservative input handling.
@@ -72,10 +76,12 @@
 ### Task 3: Narrow pure Runtime patch inspection
 
 **Files:**
+
 - Create: `packages/runtime/src/patch/inspection.ts`, `packages/runtime/test/patch-inspection.test.ts`.
 - Modify: `packages/runtime/src/index.ts`, `packages/tools/package.json` only if the existing workspace dependency is insufficient.
 
 **Interfaces:**
+
 - Produces `inspectPatchTargets(patch: string): readonly { operation: "WRITE" | "DELETE" | "MOVE"; path: string; fromPath?: string; toPath?: string }[]`, implemented by `parsePatch` and existing `PatchOperation` values. It must not duplicate patch grammar and must preserve parser errors/limits.
 
 - [ ] **Step 1: Write tests first.** Cover ADD→WRITE, UPDATE→WRITE, DELETE→DELETE, UPDATE with `moveTo`→MOVE with source/destination, all relative paths, and malformed/absolute/escaping patches retaining the existing parser error.
@@ -87,10 +93,12 @@
 ### Task 4: Built-in Tool Security Facts projectors
 
 **Files:**
+
 - Create: `packages/tools/src/builtins/security-facts.ts`, `packages/tools/test/builtin-security-facts.test.ts`.
 - Modify: `packages/tools/src/builtins/read-file.ts`, `list-directory.ts`, `find-files.ts`, `search-text.ts`, `apply-patch.ts`, `exec-command.ts`, `write-stdin.ts`, `git-status.ts`, `git-diff.ts`, and `packages/tools/src/index.ts`.
 
 **Interfaces:**
+
 - Produces pure projector functions for each built-in. Paths normalize separators but remain workspace-relative facts. `read_file` emits READ path; `apply_patch` uses Runtime inspection and emits WRITE/DELETE/MOVE targets plus PATCH scan input without previewing body; `exec_command` emits shell command/workdir/tty and COMMAND scan input; `write_stdin` emits sessionId/inputBytes structural preview and STDIN scan input only; `search_text` emits SEARCH path/include and pattern scan input; `git_diff` emits DIFF explicit path or `.` broad scope; list/find/status emit metadata-only facts without content-read claims.
 - Projector failures are represented as `OPAQUE_INPUT` by the security boundary, not ignored.
 
@@ -103,10 +111,12 @@
 ### Task 5: Sensitive path classifier and resource overlay
 
 **Files:**
+
 - Create: `packages/security/src/sensitive-path.ts`, `packages/security/src/input-policy.ts`, `packages/security/test/sensitive-path.test.ts`, `packages/security/test/input-policy.test.ts`.
 - Modify: `packages/security/src/decision.ts`, `packages/security/src/index.ts`, and later `tool-gate.ts`.
 
 **Interfaces:**
+
 - Produces `SensitivePathCategory = "ENVIRONMENT_FILE" | "CREDENTIAL_FILE" | "PRIVATE_KEY" | "AUTH_CONFIG" | "CLOUD_CREDENTIAL_FILE" | "CERTIFICATE_CONTAINER"`, `classifySensitivePath(path: string): SensitivePathCategory | undefined`, and `evaluateInputSecurityPolicy(facts, context)`.
 - Matching normalizes `\\` to `/`, rejects absolute/`..` facts conservatively, matches known filenames case-insensitively, recognizes `.env`/`.env.*`, credential/auth/cloud/private-key/certificate patterns, and excludes `.env.example`, `.env.sample`, `.env.template`, `.env.defaults`, and obvious `.env.*.example|sample|template|defaults` variants.
 - Direct sensitive accesses require approval or become DENY under `NEVER_ASK`; explicit sensitive mutation is treated the same. Safe reasons/codes contain category/classification only, never paths that reveal host locations, raw args, content, or secret values.
@@ -120,10 +130,12 @@
 ### Task 6: Command tokenizer, wrapper parser, and platform-aware analyzer
 
 **Files:**
+
 - Create: `packages/security/src/command-policy.ts`, `packages/security/test/command-policy.test.ts`.
 - Modify: `packages/security/src/index.ts`.
 
 **Interfaces:**
+
 - Produces `CommandPlatform = "POSIX_SH" | "POWERSHELL" | "CMD"`, `CommandClassification = "NORMAL_LOCAL" | "LOCAL_REPO_MUTATION" | "DESTRUCTIVE_LOCAL" | "NETWORK_ACCESS" | "REMOTE_MUTATION" | "PRIVILEGE_ESCALATION" | "SYSTEM_DESTRUCTIVE" | "OPAQUE_DYNAMIC"`, `CommandPolicyAnalysis { classifications, wrapperDepth, preview }`, and `analyzeCommand({ command, platform, workdir, tty })`.
 - Tokenization handles quoting, escapes, `&&`, `||`, `;`, `|`, and segments without executing. Wrappers recurse through `sh/bash/zsh -c|-lc`, `env`, `sudo`, `powershell/pwsh -Command`, and `cmd /c`; depth limit is 8, depth 9 or ambiguous/dynamic/eval/encoded command is `OPAQUE_DYNAMIC`.
 - Analyzer has no process/filesystem/network/storage/EventBus access and never classifies via one raw substring check. It recognizes read-only Git, repo mutation, destructive local, high-confidence system destructive, network, remote mutation, and privilege escalation; multiple signals are retained and preview is bounded to 2 KiB with an explicit truncation marker.
@@ -138,10 +150,12 @@
 ### Task 7: Monotonic decision combination and Gate integration
 
 **Files:**
+
 - Modify: `packages/security/src/decision.ts`, `packages/security/src/evaluator.ts`, `packages/security/src/input-policy.ts`, `packages/security/src/tool-gate.ts`, `packages/security/src/index.ts`, `packages/tools/src/dispatcher-ports.ts`, `packages/tools/src/dispatcher.ts`.
 - Test: `packages/security/test/decision-matrix.test.ts`, `packages/security/test/tool-gate.test.ts`, `packages/security/test/dispatcher-integration.test.ts`, `packages/tools/test/dispatcher-approval.test.ts`.
 
 **Interfaces:**
+
 - Extends `ToolExecutionGateInput` with optional host-only `securityFacts` and `ToolExecutionGateDecision` with optional redacted `safeAction?: JsonObject`.
 - `combineSecurityDecisions(base, overlay)` is pure and obeys DENY > REQUIRE_APPROVAL > ALLOW; input review under `NEVER_ASK` is DENY. `SYSTEM_DESTRUCTIVE` always returns DENY regardless of profile/policy.
 - Gate flow is validated invocation/definition/context → base `evaluateSecurityPolicy` → projector facts → input assessment → monotonic combination. Projector failure becomes opaque review or DENY under `NEVER_ASK`; no handler runs before this completes.
@@ -157,10 +171,12 @@
 ### Task 8: Deterministic SecretDetector and text redaction
 
 **Files:**
+
 - Create: `packages/security/src/secrets.ts`, `packages/security/test/secrets.test.ts`.
 - Modify: `packages/security/src/index.ts`.
 
 **Interfaces:**
+
 - Produces `SecretCategory`, `SecretMatchReport { redactionCount, categories }`, `SecretDetector`, `SecretRedactor`, `redactText(text): { text, report }`, and constants `MAX_SECRET_SCAN_TEXT_BYTES`, `MAX_SECRET_JSON_DEPTH`, `MAX_SECRET_JSON_NODES`.
 - Detects high-confidence private-key blocks, Authorization Bearer/Basic bodies, URL userinfo, credential query parameters, provider token shapes, and case-insensitive generic assignments for api_key/apikey/token/access_token/refresh_token/secret/client_secret/password/passwd/credential/private_key/access_key. It uses no entropy-only rule, random/time/I/O/network/LLM, exposes no match/offset/hash/fingerprint, and replaces full secret bodies with `[REDACTED]` or `[REDACTED:CATEGORY]` without partial fragments.
 - Placeholder heuristics exempt obvious `YOUR_API_KEY`, `<token>`, `${TOKEN}`, `REDACTED`, `changeme`, `example`, `placeholder`, `xxxx`, while structurally valid provider tokens remain redacted. Oversized text returns a bounded scan-limit replacement and no raw tail. Redaction is deterministic and idempotent.
@@ -174,10 +190,12 @@
 ### Task 9: JSON redaction and safe argument/preview presentation
 
 **Files:**
+
 - Modify: `packages/security/src/secrets.ts`, `packages/security/src/input-policy.ts`, `packages/security/src/tool-gate.ts`, `packages/security/src/index.ts`.
 - Create: `packages/security/test/json-redaction.test.ts`, `packages/security/test/approval-preview.test.ts`.
 
 **Interfaces:**
+
 - Produces `redactJson(value: JsonValue): JsonValue`, `redactToolArgumentsForPresentation(toolName, args): JsonObject`, and bounded preview builders for FILE_READ, PATCH, SHELL_COMMAND, PROCESS_INPUT, SEARCH, and GIT_DIFF. Sensitive object keys replace entire values; strings recurse through text redaction; numbers/booleans/null remain; arrays/nested objects recurse; depth/node limits replace unscanned subtrees with `[REDACTED:SCAN_LIMIT]`.
 - `safeAction` is generated only from facts, is JSON-safe and redacted, never includes patch body, stdin chars, raw command, full file content, host absolute paths, secret hashes/fingerprints, or secret fragments. `write_stdin` shows only `sessionId` and `inputBytes`; command preview includes redacted command/workdir/tty/classifications and explicit truncation.
 - Redacted preview never participates in `computeToolApprovalKey`; raw canonical args remain the identity input.
@@ -191,10 +209,12 @@
 ### Task 10: ToolResultSanitizer port and Security implementation
 
 **Files:**
+
 - Create: `packages/tools/src/result-sanitizer.ts`, `packages/security/src/result-sanitizer.ts`, `packages/security/test/result-sanitizer.test.ts`.
 - Modify: `packages/tools/src/index.ts`, `packages/security/src/index.ts`.
 
 **Interfaces:**
+
 - `ToolResultSanitizerPort.sanitize({ toolName, result, invocation }): ToolExecutionResult` is defined in Tools; implementation is `SecurityToolResultSanitizer` in Security.
 - Sanitization applies general text/JSON redaction. `read_file` redacts text and sensitive assignment details; `search_text` redacts each match text and replaces sensitive-file match bodies with `[REDACTED:SENSITIVE_FILE_CONTENT]` while retaining relative path/line; `git_diff` redacts added/removed/context lines and sensitive-path hunks as `[SENSITIVE DIFF CONTENT REDACTED]`; shell/stdin output redacts merged content; metadata-only outputs preserve filenames.
 - Sanitizer is deterministic, pure, schema-neutral, and never a production no-op. It must preserve output shape or fail with a bounded infrastructure error; no raw result is returned after the port boundary.
@@ -208,10 +228,12 @@
 ### Task 11: Dispatcher sanitize-before-persist and uncertainty semantics
 
 **Files:**
+
 - Modify: `packages/tools/src/dispatcher.ts`, `packages/tools/src/dispatcher-types.ts`, `packages/tools/src/dispatcher-ports.ts`, `packages/tools/src/result-validation.ts`, `packages/tools/src/registry.ts`, `packages/tools/src/registry-builder.ts`.
 - Test: `packages/tools/test/dispatcher-execution.test.ts`, `dispatcher-failure.test.ts`, `dispatcher-recovery.test.ts`, `packages/security/test/dispatcher-integration.test.ts`.
 
 **Interfaces:**
+
 - `ToolDispatcherOptions.resultSanitizer` is required for production composition. Existing test-only helpers may use an explicit pass-through sanitizer; no `INSECURE_NOOP_SANITIZER` may appear in production source.
 - Execution pipeline becomes handler → raw result in memory → raw schema/size validation → sanitizer → sanitized schema/size revalidation → effect projection → sanitized observation/events → commit. The effect projector receives only the sanitized result.
 - If sanitizer/revalidation fails after handler execution, do not invoke handler again; keep durable invocation RUNNING by not committing terminal data, and let recovery produce `UNCERTAIN_SIDE_EFFECT` exactly as existing Phase 8D behavior.
@@ -226,10 +248,12 @@
 ### Task 12: 9B-safe Approval action integration and event privacy
 
 **Files:**
+
 - Modify: `packages/tools/src/dispatcher.ts`, `packages/tools/src/event-factory.ts`, `packages/tools/src/tool-effects.ts`, `packages/security/src/tool-gate.ts`, `packages/protocol` only if an additive schema-compatible field is proven necessary.
 - Test: `packages/tools/test/dispatcher-approval.test.ts`, `packages/tools/test/event-factory.test.ts`, `packages/tools/test/tool-effects.test.ts`, `packages/security/test/approval-preview.test.ts`, `tests/architecture/security-boundaries.test.ts`.
 
 **Interfaces:**
+
 - New ApprovalRequest `action` uses the Gate-provided redacted safe action and stable classifications/reason, never raw args, command secrets, stdin, patch body, full file content, or absolute host paths. Existing old 9B actions remain loadable/resolvable/recoverable.
 - Tool/approval events remain structural-safe: no raw args/command/stdin/patch body; shell/process effects keep the existing safe label `shell command`; file effects contain summaries/paths only.
 - `approval.requested` serializes the same safe ApprovalRequest persisted by the ToolExecutionStore; `approval.resolved`, ToolObservation, and LLM-facing result projections contain no detected secrets.
@@ -243,10 +267,12 @@
 ### Task 13: Secret sentinel end-to-end coverage
 
 **Files:**
+
 - Create: `packages/security/test/secret-sentinel-e2e.test.ts` or extend the existing storage/tool integration fixture without introducing a duplicate persistence model.
 - Modify: `packages/storage/test/read-only-filesystem-tools-integration.test.ts`, relevant Tool/Storage integration factories, and model continuation test fixtures only as needed.
 
 **Interfaces:**
+
 - Covers `.env` approval then read, search across normal and sensitive files, Git diff with sensitive and source changes, exec output, stdin output, storage reopen, durable events, ToolObservation, continuation/next-turn model messages, and public error surfaces.
 
 - [ ] **Step 1: Write the sentinel tests first.** Use fake fixture values for `CAELUSH_SECRET_9C_ENV`, `_COMMAND`, `_OUTPUT`, `_PATCH`, `_STDIN`, and provider-shaped fake credentials; exclude private `ToolInvocation.args` from the zero-leak scan intentionally.
@@ -258,10 +284,12 @@
 ### Task 14: Architecture audits and documentation
 
 **Files:**
+
 - Create: `docs/architecture/input-security-policy.md`, `docs/architecture/secret-redaction.md`.
 - Modify: `docs/architecture/security.md`, `docs/architecture/approval-workflow.md`, `docs/architecture/tool-system.md`, `README.md`, `AGENTS.md`, `tests/architecture/security-boundaries.test.ts`, `tests/architecture/package-boundaries.test.ts`.
 
 **Interfaces:**
+
 - Documentation records Tool Security Facts, sensitive path matrix, parser/platform/wrapper limits, command classifications/matrix, monotonic overlay, NEVER_ASK, SYSTEM_DESTRUCTIVE, gate-before-grant, SecretDetector/Redactor, JSON/scan bounds/placeholders, sanitizer pipeline, event/approval/model privacy, private args boundary, uncertainty semantics, no at-rest encryption claim, and Phase 9D boundary.
 - Architecture tests enforce `security → protocol/tools port/types` only; no Security→Runtime/Core/Storage/Events/LLM, no Runtime→Security, no Tools→Security, no Dispatcher command/path/secret rules, no evaluator I/O, no analyzer process execution, and no production no-op sanitizer.
 - README marks 9A/9B/9C complete and Phase 9 in progress, describing only input-aware policy and high-confidence redaction without claiming complete DLP, encryption, sandboxing, or production-complete security.
@@ -275,6 +303,7 @@
 ### Task 15: Full focused matrix and clean-build verification
 
 **Files:**
+
 - Modify only tests/implementation files identified by failing focused tests; do not run broad format rewrites.
 
 - [ ] **Step 1: Run the complete focused matrix serially.** Run tests for sensitive paths, `.env` exceptions, resource policy, facts/projectors, patch inspection, tokenizer/platform/wrappers/depth/classifications, monotonic decisions, NEVER_ASK, base 9A and RUN grant precedence, detector/redactor/JSON/idempotency/limits, previews, sanitizer ordering/failure, all read/search/diff/shell/stdin outputs, sentinel events/model, Phase 9B recovery, Phase 8 Runtime, architecture, and public APIs.
@@ -287,6 +316,7 @@
 ### Task 16: Final audit, commit history, push, and SHA gate
 
 **Files:**
+
 - Read: all changed files, `git diff`, `git status --short`, commit history, remote branch ref.
 - Modify: none after final verification except a targeted correction that repeats the affected TDD and verification gates.
 
