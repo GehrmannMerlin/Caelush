@@ -65,3 +65,13 @@ export type {
   CommandPolicyAnalysis,
   CommandPolicyInput,
 } from "./command-policy.js";
+export {
+  assessVerificationCommand,
+  verificationCommandSecurityPort,
+} from "./verification-admission.js";
+export type {
+  VerificationCommandSecurityAssessmentInput,
+  VerificationCommandSecurityInput,
+  VerificationCommandSecurityPort,
+  VerificationSecurityDecision,
+} from "./verification-admission.js";
