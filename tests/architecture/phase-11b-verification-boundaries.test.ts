@@ -59,10 +59,16 @@ describe("Phase 11B verification boundaries", () => {
 
   it("documents the 11B host-action and non-completion boundary", async () => {
     const [verification, runtime, security, context, readme, agents] = await Promise.all([
-      readFile(path.join(repositoryRoot, "docs", "architecture", "verification-execution.md"), "utf8"),
+      readFile(
+        path.join(repositoryRoot, "docs", "architecture", "verification-execution.md"),
+        "utf8",
+      ),
       readFile(path.join(repositoryRoot, "docs", "architecture", "runtime.md"), "utf8"),
       readFile(path.join(repositoryRoot, "docs", "architecture", "security.md"), "utf8"),
-      readFile(path.join(repositoryRoot, "docs", "architecture", "context-and-project-intelligence.md"), "utf8"),
+      readFile(
+        path.join(repositoryRoot, "docs", "architecture", "context-and-project-intelligence.md"),
+        "utf8",
+      ),
       readFile(path.join(repositoryRoot, "README.md"), "utf8"),
       readFile(path.join(repositoryRoot, "AGENTS.md"), "utf8"),
     ]);

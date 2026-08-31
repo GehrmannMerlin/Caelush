@@ -34,9 +34,7 @@ describe("Core Phase 6B architecture", () => {
       ),
     ).toEqual([]);
     expect(source).not.toMatch(/from\s+["']@caelush\/llm["']/);
-    expect(source).not.toMatch(
-      /from\s+["']@caelush\/(?:storage|runtime|security|daemon)/,
-    );
+    expect(source).not.toMatch(/from\s+["']@caelush\/(?:storage|runtime|security|daemon)/);
   });
 
   it("contains no host execution, SDK, time, ID, or hidden-reasoning boundary leaks", async () => {
