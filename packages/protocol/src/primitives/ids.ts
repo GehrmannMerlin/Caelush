@@ -72,6 +72,27 @@ export function createVerificationResultId(): VerificationResultId {
   return VerificationResultIdSchema.parse(`ver_${v7()}`);
 }
 
+const verificationPlanId = createPrefixedIdSchema<"vplan_", "VerificationPlanId">("vplan_");
+export const VerificationPlanIdSchema = verificationPlanId;
+export type VerificationPlanId = z.infer<typeof VerificationPlanIdSchema>;
+export function createVerificationPlanId(): VerificationPlanId {
+  return VerificationPlanIdSchema.parse(`vplan_${v7()}`);
+}
+
+const verificationCheckId = createPrefixedIdSchema<"vchk_", "VerificationCheckId">("vchk_");
+export const VerificationCheckIdSchema = verificationCheckId;
+export type VerificationCheckId = z.infer<typeof VerificationCheckIdSchema>;
+export function createVerificationCheckId(): VerificationCheckId {
+  return VerificationCheckIdSchema.parse(`vchk_${v7()}`);
+}
+
+const verificationEvidenceId = createPrefixedIdSchema<"vevd_", "VerificationEvidenceId">("vevd_");
+export const VerificationEvidenceIdSchema = verificationEvidenceId;
+export type VerificationEvidenceId = z.infer<typeof VerificationEvidenceIdSchema>;
+export function createVerificationEvidenceId(): VerificationEvidenceId {
+  return VerificationEvidenceIdSchema.parse(`vevd_${v7()}`);
+}
+
 const planItemId = createPrefixedIdSchema<"plan_", "PlanItemId">("plan_");
 export const PlanItemIdSchema = planItemId;
 export type PlanItemId = z.infer<typeof PlanItemIdSchema>;

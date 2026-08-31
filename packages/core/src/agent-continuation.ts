@@ -5,6 +5,7 @@ import type {
   StepId,
   ToolInvocationId,
   ToolName,
+  VerificationPlanId,
 } from "@caelush/protocol";
 import type { AgentFinalCandidateDecision, AgentToolCallsDecision } from "./agent-decision.js";
 
@@ -28,6 +29,7 @@ export interface AwaitingVerificationContinuation {
   readonly type: "AWAITING_VERIFICATION";
   readonly runId: RunId;
   readonly sourceStepId: StepId;
+  readonly verificationPlanId: VerificationPlanId;
   readonly finalDecision: AgentFinalCandidateDecision;
 }
 

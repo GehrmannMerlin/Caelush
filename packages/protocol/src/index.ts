@@ -8,6 +8,9 @@ export {
   SessionIdSchema,
   StepIdSchema,
   ToolInvocationIdSchema,
+  VerificationCheckIdSchema,
+  VerificationEvidenceIdSchema,
+  VerificationPlanIdSchema,
   VerificationResultIdSchema,
   WorkspaceIdSchema,
   createApprovalRequestId,
@@ -19,6 +22,9 @@ export {
   createSessionId,
   createStepId,
   createToolInvocationId,
+  createVerificationCheckId,
+  createVerificationEvidenceId,
+  createVerificationPlanId,
   createVerificationResultId,
   createWorkspaceId,
 } from "./primitives/ids.js";
@@ -32,6 +38,9 @@ export type {
   SessionId,
   StepId,
   ToolInvocationId,
+  VerificationCheckId,
+  VerificationEvidenceId,
+  VerificationPlanId,
   VerificationResultId,
   WorkspaceId,
 } from "./primitives/ids.js";
@@ -91,11 +100,43 @@ export {
   VerificationResultSchema,
   VerificationResultStatusSchema,
   VerificationStateSchema,
+  VerificationCheckKindSchema,
+  VerificationCheckSourceSchema,
+  VerificationCheckRequirementSchema,
+  VerificationCheckStageSchema,
+  VerificationCheckStatusSchema,
+  VerificationCheckSkipReasonSchema,
+  VerificationEvidenceKindSchema,
+  VerificationProjectCheckPurposeSchema,
+  VerificationCheckSpecSchema,
+  VerificationCheckSchema,
+  VerificationPlanSchema,
+  VerificationCheckDraftSchema,
+  VerificationPlanDraftSchema,
+  VerificationEvidenceSchema,
+  VerificationProjectFactsSchema,
+  VerificationPlanningInputSchema,
 } from "./verification.js";
 export type {
   VerificationResult,
   VerificationResultStatus,
   VerificationState,
+  VerificationCheckKind,
+  VerificationCheckSource,
+  VerificationCheckRequirement,
+  VerificationCheckStage,
+  VerificationCheckStatus,
+  VerificationCheckSkipReason,
+  VerificationEvidenceKind,
+  VerificationProjectCheckPurpose,
+  VerificationCheckSpec,
+  VerificationCheck,
+  VerificationPlan,
+  VerificationCheckDraft,
+  VerificationPlanDraft,
+  VerificationEvidence,
+  VerificationProjectFacts,
+  VerificationPlanningInput,
 } from "./verification.js";
 export { AgentStateSchema } from "./state.js";
 export type { AgentState } from "./state.js";
@@ -111,9 +152,11 @@ export {
   RetryScheduledEventSchema,
   RetryStartedEventSchema,
   RunTimedOutEventSchema,
+  VerificationPlannedEventSchema,
 } from "./events/index.js";
 export type { AgentEvent, EventDurability, EventVisibility } from "./events/index.js";
 export type { RunTimedOutEvent } from "./events/index.js";
+export type { VerificationPlannedEvent } from "./events/verification.js";
 export { AgentSessionSchema } from "./session.js";
 export type { AgentSession } from "./session.js";
 export { AgentRunSchema, RunStatusSchema } from "./run.js";

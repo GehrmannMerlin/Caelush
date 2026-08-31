@@ -1,4 +1,10 @@
-import { createLLMCallId, createRunId, createStepId, ModelRefSchema } from "@caelush/protocol";
+import {
+  createLLMCallId,
+  createRunId,
+  createStepId,
+  createVerificationPlanId,
+  ModelRefSchema,
+} from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import {
   AgentFinalCandidateDecisionSchema,
@@ -80,6 +86,7 @@ describe("durable continuation schemas", () => {
       type: "AWAITING_VERIFICATION" as const,
       runId,
       sourceStepId,
+      verificationPlanId: createVerificationPlanId(),
       finalDecision: decision,
     };
 
@@ -96,6 +103,7 @@ describe("durable continuation schemas", () => {
         type: "AWAITING_VERIFICATION",
         runId,
         sourceStepId,
+        verificationPlanId: createVerificationPlanId(),
         finalDecision: { candidateText: "answer" },
       }),
     ).toThrow();

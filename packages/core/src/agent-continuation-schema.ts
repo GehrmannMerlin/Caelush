@@ -10,6 +10,7 @@ import {
   TimestampMsSchema,
   ToolInvocationIdSchema,
   ToolNameSchema,
+  VerificationPlanIdSchema,
 } from "@caelush/protocol";
 import { z } from "zod";
 
@@ -122,6 +123,7 @@ export const AwaitingVerificationContinuationSchema = z
     type: z.literal("AWAITING_VERIFICATION"),
     runId: RunIdSchema,
     sourceStepId: StepIdSchema,
+    verificationPlanId: VerificationPlanIdSchema,
     finalDecision: AgentFinalCandidateDecisionSchema,
   })
   .strict();
