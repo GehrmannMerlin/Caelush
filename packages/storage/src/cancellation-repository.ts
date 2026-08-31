@@ -55,11 +55,19 @@ export class SqliteCancellationRepository implements CancellationRepository {
         client.exec("COMMIT");
         return existing;
       }
-      const run = client
-        .prepare("SELECT status FROM agent_runs WHERE id = ?")
-        .get(parsed.runId) as { status: string } | undefined;
+      const run = client.prepare("SELECT status FROM agent_runs WHERE id = ?").get(parsed.runId) as
+        { status: string } | undefined;
       if (run === undefined) throw new StorageError(`AgentRun ${parsed.runId} was not found`);
-      if (["COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "MAX_STEPS_REACHED", "BUDGET_EXCEEDED"].includes(run.status)) {
+      if (
+        [
+          "COMPLETED",
+          "FAILED",
+          "CANCELLED",
+          "TIMEOUT",
+          "MAX_STEPS_REACHED",
+          "BUDGET_EXCEEDED",
+        ].includes(run.status)
+      ) {
         throw new StorageConflictError("terminal Run cannot accept a cancellation intent");
       }
       client
