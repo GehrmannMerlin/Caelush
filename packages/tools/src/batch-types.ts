@@ -57,7 +57,24 @@ export interface ToolBatchWaitingApprovalOutcome {
   };
 }
 
-export type ToolBatchOutcome = ToolBatchCompletedOutcome | ToolBatchWaitingApprovalOutcome;
+export interface ToolBatchBudgetExceededOutcome {
+  readonly kind: "BUDGET_EXCEEDED";
+  readonly completedResults: readonly ToolBatchItemResult[];
+  readonly blocked: {
+    readonly index: number;
+    readonly invocationId?: ToolInvocationId;
+    readonly externalCallId: string;
+    readonly toolName: ToolName;
+    readonly dimension: "TOOL_CALLS";
+    readonly accounted: number;
+    readonly limit: number;
+  };
+}
+
+export type ToolBatchOutcome =
+  | ToolBatchCompletedOutcome
+  | ToolBatchWaitingApprovalOutcome
+  | ToolBatchBudgetExceededOutcome;
 
 export interface ToolBatchCoordinatorPort {
   modelDefinitions(): readonly ToolDefinition[];

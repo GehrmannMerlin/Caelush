@@ -71,6 +71,20 @@ export function markAgentRunTimedOut(run: AgentRun, now: AgentRun["createdAt"]):
   });
 }
 
+export function markAgentRunBudgetExceeded(run: AgentRun, now: AgentRun["createdAt"]): AgentRun {
+  if (run.currentStepId !== undefined) {
+    throw new RunExecutionInvariantError("budget-exceeded AgentRun cannot retain an active Step");
+  }
+  assertRunStatusTransition(run.status, "BUDGET_EXCEEDED");
+  const withoutFinalResult = { ...run };
+  delete withoutFinalResult.finalResult;
+  return AgentRunSchema.parse({
+    ...withoutFinalResult,
+    status: "BUDGET_EXCEEDED",
+    finishedAt: now,
+  });
+}
+
 export function markAgentRunWaitingApproval(run: AgentRun): AgentRun {
   if (run.currentStepId !== undefined) {
     throw new RunExecutionInvariantError("waiting Approval Run cannot retain an active Step");

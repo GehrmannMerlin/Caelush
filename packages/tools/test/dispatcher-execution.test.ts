@@ -25,6 +25,7 @@ import {
   type ToolSecurityFactsProjector,
   type ToolSecurityFacts,
   type ToolResultSanitizerPort,
+  type ToolBudgetAdmissionPort,
 } from "../src/index.js";
 import type { ToolExecutionCommit, ToolDispatchRequest } from "../src/index.js";
 
@@ -119,6 +120,7 @@ function makeDispatcher(
   securityFactsProjector?: ToolSecurityFactsProjector,
   factsSeen?: { value?: ToolSecurityFacts },
   resultSanitizer?: ToolResultSanitizerPort,
+  budget?: ToolBudgetAdmissionPort,
 ) {
   let now = 100;
   const definition = makeDefinition();
@@ -152,10 +154,65 @@ function makeDispatcher(
     },
     approvalIdFactory: { create: createApprovalRequestId },
     resultSanitizer: resultSanitizer ?? { sanitize: ({ result }) => result },
+    ...(budget === undefined ? {} : { budget }),
   });
 }
 
 describe("ToolDispatcher execution", () => {
+  it("blocks before the handler when Tool budget admission fails", async () => {
+    let executions = 0;
+    const budget: ToolBudgetAdmissionPort = {
+      admit: async () => ({ kind: "EXCEEDED", dimension: "TOOL_CALLS", accounted: 1, limit: 1 }),
+    };
+    const dispatcher = makeDispatcher(
+      new MemoryStore(),
+      { kind: "ALLOW" },
+      async () => {
+        executions += 1;
+        return { content: "unexpected", details: { echoed: "unexpected" }, isError: false };
+      },
+      undefined,
+      undefined,
+      undefined,
+      budget,
+    );
+
+    const outcome = await dispatcher.dispatch(makeRequest());
+
+    expect(outcome.kind).toBe("BUDGET_EXCEEDED");
+    expect(executions).toBe(0);
+  });
+
+  it("accounts a Tool exactly when its handler is allowed to start", async () => {
+    let handlerStarted = false;
+    let budgetStarted = false;
+    const budget: ToolBudgetAdmissionPort = {
+      admit: async () => ({ kind: "ALLOWED" }),
+      start: async ({ invocationId }) => {
+        expect(invocationId).toBeTruthy();
+        budgetStarted = true;
+      },
+    };
+    const dispatcher = makeDispatcher(
+      new MemoryStore(),
+      { kind: "ALLOW" },
+      async () => {
+        expect(budgetStarted).toBe(true);
+        handlerStarted = true;
+        return { content: "hello", details: { echoed: "hello" }, isError: false };
+      },
+      undefined,
+      undefined,
+      undefined,
+      budget,
+    );
+
+    await dispatcher.dispatch(makeRequest());
+
+    expect(budgetStarted).toBe(true);
+    expect(handlerStarted).toBe(true);
+  });
+
   it("sanitizes a validated result before effects and durable observation", async () => {
     const dispatcher = makeDispatcher(
       new MemoryStore(),

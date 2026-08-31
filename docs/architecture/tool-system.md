@@ -179,3 +179,12 @@ Patch mutation rejects symlink paths and existing symlink ancestors, requires re
 `riskLevel`, `requiredCapabilities`, and `runtimeRequirements` are metadata, not authorization. Permission, capability and risk evaluation, and approval enforcement belong to Phase 9. Phase 8A remains strictly read-only; Phase 8B adds verified text patch mutation; Phase 8C adds shell/process; Phase 8D adds read-only Git, effects, and final catalog integration. The patch engine is best-effort and not OS-level atomic, crash-atomic, exactly-once, sandboxed, or a production permission evaluator.
 
 Phase 7 does not implement a concrete permission evaluator, Approval manager or resolution endpoint, Runtime, filesystem/shell/process/git Tool, retry, timeout, cancellation, parallelism, or Verification execution. The user-visible durable `tool.requested` event contract contains only `invocationId`, `toolName`, optional `externalCallId`, and `riskLevel`; it never contains raw arguments. `ToolObservation` retains the bounded model-facing content and validated details privately. The RunController integration owns only the batch/runtime boundary; AgentLoop remains unaware of Dispatcher, Invocation, Observation, Storage, and EventBus.
+
+## Phase 10D budget boundary
+
+Tool admission remains behind the Dispatcher. Security denial, schema failure,
+unavailable Tools, approval waiting/rejection, and handlers that never start
+consume zero Tool calls. The Coordinator may preflight the complete executable
+segment; the segment is refused before any handler when its durable Tool-call
+reservation cannot fit. A handler-start checkpoint accounts one call exactly,
+and terminal settlement or uncertain recovery never replays the handler.

@@ -23,6 +23,7 @@ import {
   markAgentStateCancelled,
   markAgentStateWaitingApproval,
   markAgentStateMaxStepsReached,
+  markAgentStateBudgetExceeded,
   resumeAgentStateFromApproval,
   settleAgentStepState,
   startAgentState,
@@ -35,6 +36,7 @@ import {
   markAgentRunFailed,
   markAgentRunCancelled,
   markAgentRunTimedOut,
+  markAgentRunBudgetExceeded,
   markAgentRunWaitingApproval,
   resumeAgentRunFromApproval,
   markAgentStateFailed,
@@ -60,6 +62,8 @@ import {
   type RunControllerEventFactory,
 } from "./run-controller-events.js";
 import type { RunControllerDependencies } from "./run-controller-ports.js";
+import { AgentBudgetAdmissionError } from "./agent-errors.js";
+import type { AgentBudgetBlock } from "./agent-errors.js";
 
 export class RunControllerInputError extends Error {
   constructor(message: string) {
@@ -543,6 +547,14 @@ export class RunController {
           }
           return this.resultFromSnapshot(snapshot);
         }
+        if (outcome.kind === "BUDGET_EXCEEDED") {
+          return this.finalizeBudgetExceeded(snapshot, {
+            kind: "EXCEEDED",
+            dimension: outcome.blocked.dimension,
+            accounted: outcome.blocked.accounted,
+            limit: outcome.blocked.limit,
+          });
+        }
         let messages: readonly LLMToolResultMessage[];
         try {
           messages = toLLMToolResultMessages(
@@ -683,6 +695,16 @@ export class RunController {
     const config = await this.dependencies.configResolver.resolve(snapshot.run);
     let preProviderError: unknown;
     const loop = this.dependencies.agentLoop.withLifecycleHooks({
+      beforeProviderAdmission: async ({ run, step, request }) => {
+        if (this.dependencies.budget === undefined) return request;
+        const admission = await this.dependencies.budget.admitLLM({
+          run,
+          step,
+          request,
+        });
+        if (admission.kind === "ALLOWED") return admission.request;
+        throw new AgentBudgetAdmissionError(admission);
+      },
       beforeProviderTurn: async ({ run, state, step }) => {
         const current = await this.load(run.id);
         if (current.state === undefined)
@@ -799,11 +821,21 @@ export class RunController {
     if (authority === "UNEXPECTED_ABORT") {
       throw new RunControllerInvariantError("Run execution aborted without a known authority");
     }
+    if (execution.status === "FAILED" && execution.budget?.kind === "EXCEEDED") {
+      return this.finalizeBudgetExceeded(current, execution.budget);
+    }
+    const budgetSettlement = await this.settleBudgetAttempt(current, execution);
+    if (budgetSettlement !== undefined) {
+      return this.finalizeBudgetExceeded(current, budgetSettlement);
+    }
     if (current.state === undefined)
       throw new RunControllerInfrastructureError("Run state disappeared during settlement");
     const now = this.dependencies.clock.now();
     let run: AgentRun;
     let state: AgentState = execution.state;
+    if (this.dependencies.budget?.reconcileState !== undefined) {
+      state = await this.dependencies.budget.reconcileState(state);
+    }
     let continuation: RunExecutionCommit["continuation"];
     let events: DurableEventDraft[];
     if (execution.status === "FAILED") {
@@ -1253,6 +1285,110 @@ export class RunController {
     return this.resultFromSnapshot(commit.snapshot);
   }
 
+  private async settleBudgetAttempt(
+    current: RunExecutionSnapshot,
+    execution: AgentLoopExecutionResult,
+  ): Promise<Extract<AgentBudgetBlock, { kind: "EXCEEDED" }> | undefined> {
+    const budget = this.dependencies.budget;
+    const step = execution.step;
+    if (budget === undefined || step === undefined) return undefined;
+    if (execution.status === "CANCELLED") {
+      await budget.markLLMConservative?.({
+        runId: current.run.id,
+        stepId: step.id,
+        settledAt: this.dependencies.clock.now(),
+      });
+      return undefined;
+    }
+    const usage =
+      execution.status === "FAILED"
+        ? execution.usage
+        : execution.outcome.type === "MAX_STEPS_REACHED"
+          ? undefined
+          : execution.outcome.modelTurn.usage;
+    const result = await budget.settleLLM({
+      runId: current.run.id,
+      stepId: step.id,
+      ...(usage === undefined ? {} : { usage }),
+      settledAt: this.dependencies.clock.now(),
+    });
+    return result?.kind === "EXCEEDED" ? result : undefined;
+  }
+
+  private async finalizeBudgetExceeded(
+    before: RunExecutionSnapshot,
+    block: Extract<AgentBudgetBlock, { kind: "EXCEEDED" }>,
+  ): Promise<RunControllerResult> {
+    const current = await this.load(before.run.id);
+    const authority = this.resolveAuthority(current, false);
+    if (authority === "CANCELLED") return this.finalizeCancellation(current);
+    if (authority === "TIMEOUT") return this.finalizeTimeout(current);
+    if (authority === "TERMINAL") return this.resultFromSnapshot(current);
+    this.retryRegistry.disarm(current.run.id);
+    this.deadlineRegistry.disarm(current.run.id);
+    const cleanup = await this.cancelOwnedResources(current.run.id);
+    if (!cleanup.confirmed) {
+      return {
+        status: "BUDGET_EXCEEDED_PENDING",
+        run: current.run,
+        ...(current.state === undefined ? {} : { state: current.state }),
+      };
+    }
+    const latest = await this.load(current.run.id);
+    if (latest.cancellationIntent !== undefined) return this.finalizeCancellation(latest);
+    if (isTerminal(latest.run.status)) return this.resultFromSnapshot(latest);
+    const now = this.dependencies.clock.now();
+    let state = latest.state;
+    let step = latest.activeStep;
+    if (state !== undefined && state.currentStepId !== undefined) {
+      if (step === undefined || step.id !== state.currentStepId) {
+        throw new RunControllerInvariantError(
+          "Budget finalization cannot reconcile the active Step",
+        );
+      }
+      step = cancelAgentStep(step, now);
+      state = cancelAgentStepState(state, {
+        stepId: state.currentStepId,
+        now,
+        countAttempt: true,
+      });
+    }
+    if (state === undefined) {
+      throw new RunControllerInvariantError("non-PENDING budget finalization has no AgentState");
+    }
+    if (state.status !== "BUDGET_EXCEEDED") {
+      state = markAgentStateBudgetExceeded(state, now);
+    }
+    const run = markAgentRunBudgetExceeded(
+      AgentRunSchema.parse({ ...latest.run, currentStepId: undefined }),
+      now,
+    );
+    await this.dependencies.approvals?.cancelPendingByRun?.(run.id);
+    const commit = await this.commit({
+      run,
+      state,
+      expectedStateRevision: latest.stateRevision ?? null,
+      expectedContinuationRevision: latest.continuationRevision ?? null,
+      stepWrites: step === undefined ? [] : [{ operation: "UPDATE", step }],
+      messagesToAppend: [],
+      ...(latest.continuation === undefined
+        ? {}
+        : { continuation: { operation: "CLEAR" as const } }),
+      events: [
+        this.eventFactory.budgetExceeded(latest.run, block, this.nextEventId(), now),
+        this.eventFactory.statusChanged(
+          latest.run,
+          latest.run.status,
+          "BUDGET_EXCEEDED",
+          this.nextEventId(),
+          now,
+        ),
+      ],
+    });
+    this.notify(commit.events);
+    return this.resultFromSnapshot(commit.snapshot);
+  }
+
   private async commitFailure(
     current: RunExecutionSnapshot,
     run: AgentRun,
@@ -1372,6 +1508,12 @@ export class RunController {
         throw new RunControllerInvariantError(error.message, { cause: error });
       }
       throw error;
+    }
+    if (snapshot.state !== undefined && this.dependencies.budget?.reconcileState !== undefined) {
+      snapshot = {
+        ...snapshot,
+        state: await this.dependencies.budget.reconcileState(snapshot.state),
+      };
     }
     this.reconcileDeadline(snapshot);
     this.reconcileRetry(snapshot);

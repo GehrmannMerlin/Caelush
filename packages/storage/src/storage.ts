@@ -41,6 +41,8 @@ import {
   SqliteCancellationRepository,
   type CancellationRepository,
 } from "./cancellation-repository.js";
+import { SqliteBudgetLedgerRepository } from "./budget-ledger-repository.js";
+import { SqliteRunBudgetPort, type SqliteRunBudgetPortOptions } from "./run-budget-port.js";
 
 export interface CaelushStorage {
   readonly sessions: SessionRepository;
@@ -56,12 +58,15 @@ export interface CaelushStorage {
   readonly observations: ObservationRepository;
   readonly approvals: ApprovalRepository;
   readonly cancellations: CancellationRepository;
+  readonly budgetLedger: SqliteBudgetLedgerRepository;
+  readonly budget: SqliteRunBudgetPort;
   close(): Promise<void>;
 }
 
 export async function openCaelushStorage(options: {
   path: string;
   approvalClock?: ApprovalClock;
+  budget?: SqliteRunBudgetPortOptions;
 }): Promise<CaelushStorage> {
   const database = await openCaelushDatabase(options);
 
@@ -84,6 +89,8 @@ export async function openCaelushStorage(options: {
         options.approvalClock === undefined ? {} : { clock: options.approvalClock },
       ),
       cancellations: new SqliteCancellationRepository(database),
+      budgetLedger: new SqliteBudgetLedgerRepository(database),
+      budget: new SqliteRunBudgetPort(database, options.budget),
       close: async () => database.close(),
     };
   } catch (error) {

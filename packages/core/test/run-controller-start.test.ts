@@ -19,6 +19,7 @@ import type {
   RunExecutionStorePort,
 } from "../src/run-execution-store.js";
 import type { RunEventNotifier, RunExecutionConfigResolver } from "../src/run-controller-ports.js";
+import type { RunBudgetPort } from "../src/budget-ports.js";
 
 function makeRun(overrides: Partial<ReturnType<typeof AgentRunSchema.parse>> = {}) {
   return AgentRunSchema.parse({
@@ -338,6 +339,52 @@ describe("RunController.start", () => {
     expect(
       store.commits.filter((commit) => commit.events.some((event) => event.type === "run.started")),
     ).toHaveLength(1);
+  });
+
+  it("finalizes a budget admission failure without creating a Step or failing the Run", async () => {
+    const run = makeRun({
+      limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 1000, maxTokens: 1 },
+    });
+    const store = new MemoryExecutionStore(run);
+    let providerCalls = 0;
+    const budget: RunBudgetPort = {
+      admitLLM: async () => ({
+        kind: "EXCEEDED",
+        dimension: "TOKENS",
+        accounted: 1,
+        limit: 1,
+      }),
+      settleLLM: async () => undefined,
+    };
+    const controller = new RunController({
+      agentLoop: makeLoop(store, () => {
+        providerCalls += 1;
+      }),
+      execution: store,
+      events: { notifyCommitted: () => undefined },
+      configResolver: {
+        resolve: async () => ({
+          baseSystemPrompt: "base",
+          contextLimits: { maxInputTokens: 1000 },
+        }),
+      },
+      clock: { now: () => createTimestampMs(10) },
+      eventIdFactory: { create: () => createEventId() },
+      budget,
+    });
+
+    const result = await controller.start(run.id);
+
+    expect(result.status).toBe("TERMINAL");
+    expect(result.run.status).toBe("BUDGET_EXCEEDED");
+    expect(store.snapshot.state?.status).toBe("BUDGET_EXCEEDED");
+    expect(store.snapshot.state?.currentStepId).toBeUndefined();
+    expect(store.commits.flatMap((commit) => commit.stepWrites)).toHaveLength(0);
+    expect(providerCalls).toBe(0);
+    expect(store.commits.at(-1)?.events.map((event) => event.type)).toEqual([
+      "budget.exceeded",
+      "status.changed",
+    ]);
   });
 });
 

@@ -25,6 +25,7 @@ import {
   type ToolExecutionResult,
   type ToolExecutionSnapshot,
   type ToolExecutionStorePort,
+  type ToolBudgetAdmissionPort,
 } from "../src/index.js";
 
 const environment = {
@@ -89,6 +90,7 @@ function request(items: ToolBatchRequest["items"]): ToolBatchRequest {
 function makeCoordinator(options: {
   gate?: (toolName: string) => "ALLOW" | "REQUIRE_APPROVAL";
   execute: (request: ToolExecutionRequest) => Promise<ToolExecutionResult>;
+  budget?: ToolBudgetAdmissionPort;
 }) {
   const store = new Store();
   const builder = new ToolRegistryBuilder();
@@ -131,6 +133,7 @@ function makeCoordinator(options: {
     },
     approvalIdFactory: { create: createApprovalRequestId },
     resultSanitizer: { sanitize: ({ result }) => result },
+    ...(options.budget === undefined ? {} : { budget: options.budget }),
   });
   return { coordinator: new ToolBatchCoordinator(dispatcher), dispatcher, store };
 }
@@ -160,6 +163,31 @@ describe("ToolBatchCoordinator", () => {
       ["B", "TOOL_RESULT", true],
       ["C", "SKIPPED_AFTER_UNCERTAIN_EXECUTION", true],
     ]);
+  });
+
+  it("preflights the executable segment before starting any handler", async () => {
+    let executions = 0;
+    const budget: ToolBudgetAdmissionPort = {
+      admit: async () => ({ kind: "ALLOWED" }),
+      admitBatch: async ({ requested }) =>
+        requested > 1
+          ? { kind: "EXCEEDED", dimension: "TOOL_CALLS", accounted: 1, limit: 1 }
+          : { kind: "ALLOWED" },
+    };
+    const { coordinator } = makeCoordinator({
+      budget,
+      execute: async () => {
+        executions += 1;
+        return { content: "unexpected", details: {}, isError: false };
+      },
+    });
+
+    const outcome = await coordinator.execute(
+      request([item("A", "slow_a"), item("B", "fast_b")]),
+    );
+
+    expect(outcome.kind).toBe("BUDGET_EXCEEDED");
+    expect(executions).toBe(0);
   });
 
   it("rejects empty and duplicate batches before dispatch side effects", async () => {

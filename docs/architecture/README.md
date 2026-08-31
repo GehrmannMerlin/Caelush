@@ -40,3 +40,5 @@ protocol（稳定底层 Contract）
 实际 package 的职责、允许依赖和禁止依赖见 [package-boundaries.md](package-boundaries.md)；Phase 2 的数据与消费语义见 [storage-and-events.md](storage-and-events.md)。
 
 Phase 1 的协议细节见 [protocol-v1.md](protocol-v1.md)。
+
+Phase 10 的生命周期治理已封存为 10A cancellation、10B deadline/timeout、10C bounded retry/backoff 和 10D budget enforcement。预算账本与保守 usage accounting 见 [budget.md](budget.md)，统一优先级、清理和终止边界见 [execution-governance.md](execution-governance.md)。

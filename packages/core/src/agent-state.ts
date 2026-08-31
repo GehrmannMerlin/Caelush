@@ -65,6 +65,15 @@ export function markAgentStateTimedOut(state: AgentState, now: TimestampMs): Age
   });
 }
 
+export function markAgentStateBudgetExceeded(state: AgentState, now: TimestampMs): AgentState {
+  assertMonotonicTimestamp(state, now);
+  if (state.currentStepId !== undefined) {
+    throw new AgentKernelStateError("budget-exceeded AgentState cannot retain an active Step");
+  }
+  assertRunStatusTransition(state.status, "BUDGET_EXCEEDED");
+  return AgentStateSchema.parse({ ...state, status: "BUDGET_EXCEEDED", updatedAt: now });
+}
+
 export function beginAgentStepState(
   state: AgentState,
   stepId: StepId,

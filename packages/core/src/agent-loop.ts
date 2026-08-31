@@ -17,6 +17,7 @@ import {
   markAgentStateVerifying,
   settleAgentStepState,
 } from "./agent-state.js";
+import { AgentBudgetAdmissionError } from "./agent-errors.js";
 import { classifyAgentDecision } from "./agent-decision-mapper.js";
 import {
   cancelAgentStep,
@@ -196,6 +197,32 @@ export class AgentLoop {
     if (input.signal.aborted) {
       return this.cancelledAfterStep(input, activeState, step, prepared.context, false);
     }
+    let request = prepared.request;
+    try {
+      const admitted = await this.dependencies.lifecycle?.beforeProviderAdmission?.({
+        run: input.run,
+        state: input.state,
+        step,
+        model: input.run.model,
+        request,
+      });
+      if (admitted !== undefined) request = admitted;
+      throwIfAborted(input.signal);
+    } catch (error) {
+      if (input.signal.aborted) {
+        return this.cancelledBeforeStep(input);
+      }
+      const failure = this.failureBeforeStep(
+        input.state,
+        mapAgentLoopError(error),
+        appendPrefix,
+        prepared.context.report,
+      );
+      if (error instanceof AgentBudgetAdmissionError) {
+        return { ...failure, budget: error.block };
+      }
+      return failure;
+    }
     try {
       await this.dependencies.lifecycle?.beforeProviderTurn({
         run: input.run,
@@ -222,7 +249,7 @@ export class AgentLoop {
 
     let result: LLMTurnResult;
     try {
-      result = await this.dependencies.llmClient.complete(prepared.request, {
+      result = await this.dependencies.llmClient.complete(request, {
         signal: input.signal,
       });
     } catch (error) {
@@ -321,6 +348,7 @@ export class AgentLoop {
       contextReport: context.report,
       providerTurnState,
       ...(retry === undefined ? {} : { retry }),
+      ...(usage === undefined ? {} : { usage }),
     };
   }
 
@@ -328,12 +356,14 @@ export class AgentLoop {
     state: AgentState,
     error: ReturnType<typeof mapAgentLoopError>,
     messagesToAppend: readonly LLMMessage[],
+    contextReport?: import("@caelush/context").ContextBuildReport,
   ): AgentLoopFailureResult {
     return {
       status: "FAILED",
       error,
       state,
       messagesToAppend: [...messagesToAppend],
+      ...(contextReport === undefined ? {} : { contextReport }),
       providerTurnState: "NOT_STARTED",
     };
   }

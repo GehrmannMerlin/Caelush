@@ -84,3 +84,11 @@ Phase 8B adds the verified `apply_patch` path and Phase 8C adds managed shell/pr
 ## References
 
 The separation between a Tool handler and its execution substrate follows the Runtime/handler layering observed in OpenAI Codex. The bounded, paginated, binary-aware, ripgrep-backed read/search behavior follows the practical safeguards observed in OpenCode's `read`, `glob`, and `grep` tools. Caelush intentionally does not copy their host-specific permission, attachment, instruction-loading, or process orchestration features into Phase 8A.
+
+## Phase 10D budget boundary
+
+Runtime does not own budget policy, pricing, retry, or timeout. The Dispatcher
+and RunController reserve and settle Tool/LLM usage outside the Runtime; the
+Runtime only reports bounded execution results and exact uncertainty. Budget
+cleanup uses the existing Run-owned resource controller and does not claim hard
+OS sandboxing or universal process-tree termination.

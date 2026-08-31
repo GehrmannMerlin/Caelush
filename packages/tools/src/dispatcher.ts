@@ -31,6 +31,7 @@ import type {
   ToolExecutionGatePort,
   ToolCommittedEventNotifier,
   ToolApprovalStorePort,
+  ToolBudgetAdmissionPort,
 } from "./dispatcher-ports.js";
 import { ToolExecutionConflictError, type ToolExecutionStorePort } from "./execution-store.js";
 import type { ToolOutputPolicy } from "./output-policy.js";
@@ -69,6 +70,11 @@ import { ToolSecurityFactsProjectionError, type ToolSecurityFacts } from "./secu
 import type { ToolExecutionResult } from "./execution-result.js";
 import type { ToolResultSanitizerPort } from "./result-sanitizer.js";
 
+export interface ToolBudgetBatchPreflight {
+  readonly runId: ToolDispatchRequest["runId"];
+  readonly requests: readonly ToolDispatchRequest[];
+}
+
 export interface ToolDispatcherOptions {
   readonly registry: ToolRegistry;
   readonly store: ToolExecutionStorePort;
@@ -81,6 +87,7 @@ export interface ToolDispatcherOptions {
   readonly resultSanitizer: ToolResultSanitizerPort;
   readonly approvalStore?: ToolApprovalStorePort;
   readonly approvalIdFactory?: ToolApprovalRequestIdFactory;
+  readonly budget?: ToolBudgetAdmissionPort;
   readonly outputPolicy?: ToolOutputPolicy;
   readonly maxExternalCallIdBytes?: number;
   readonly maxInvocationArgsBytes?: number;
@@ -107,6 +114,27 @@ export class ToolDispatcher {
 
   modelDefinitions(): readonly import("@caelush/protocol").ToolDefinition[] {
     return this.options.registry.modelDefinitions();
+  }
+
+  async preflightBudget(
+    input: ToolBudgetBatchPreflight,
+  ): Promise<import("./dispatcher-ports.js").ToolBudgetAdmission | undefined> {
+    if (this.options.budget?.admitBatch === undefined) return undefined;
+    const executable = input.requests.filter((request) => {
+      const resolved = this.options.registry.resolve(request.toolName);
+      if (resolved === undefined) return false;
+      if (
+        jsonUtf8ByteLength(canonicalJsonString(request.args)) >
+        (this.options.maxInvocationArgsBytes ?? DEFAULT_MAX_INVOCATION_ARGS_BYTES)
+      ) {
+        return false;
+      }
+      return resolved.inputValidator.validate(request.args).valid;
+    });
+    return this.options.budget.admitBatch({
+      runId: input.runId,
+      requested: executable.length,
+    });
   }
 
   async dispatch(value: unknown): Promise<ToolDispatcherOutcome> {
@@ -379,6 +407,33 @@ export class ToolDispatcher {
     snapshot: ToolExecutionSnapshot,
   ): Promise<ToolDispatcherOutcome> {
     throwIfAborted(request.signal);
+    if (this.options.budget !== undefined) {
+      const admission = await this.options.budget.admit({
+        runId: request.runId,
+        requested: 1,
+        invocationId: snapshot.invocation.id,
+      });
+      if (admission.kind === "EXCEEDED") {
+        const failed = await this.persistFailure(
+          request.sessionId,
+          snapshot,
+          "BUDGET_EXCEEDED",
+          "INTERNAL",
+          "Tool execution budget is exhausted.",
+          {},
+        );
+        if (failed.kind !== "RESULT") {
+          throw new ToolDispatcherInvariantError("Budget failure did not produce a Tool result.");
+        }
+        return {
+          kind: "BUDGET_EXCEEDED",
+          invocation: failed.invocation,
+          dimension: admission.dimension,
+          accounted: admission.accounted,
+          limit: admission.limit,
+        };
+      }
+    }
     const running = startToolInvocation(snapshot.invocation, this.options.clock.now());
     const startedEvent = createToolStartedEvent({
       eventId: this.options.eventIdFactory.create(),
@@ -391,6 +446,18 @@ export class ToolDispatcher {
       invocation: running,
       expectedRevision: snapshot.revision,
       events: [startedEvent],
+      ...(this.options.budget === undefined
+        ? {}
+        : {
+            budgetStart: {
+              ownerId: snapshot.invocation.id,
+              startedAt: running.startedAt ?? running.createdAt,
+            },
+          }),
+    });
+    await this.options.budget?.start?.({
+      runId: request.runId,
+      invocationId: snapshot.invocation.id,
     });
     return this.executeHandler(request, resolvedTool, committed.snapshot);
   }
@@ -661,6 +728,10 @@ export class ToolDispatcher {
     if (committed.snapshot.observation === undefined) {
       throw new ToolDispatcherInvariantError("Tool settlement committed without an observation.");
     }
+    await this.options.budget?.settle?.({
+      runId: request.runId,
+      invocationId: snapshot.invocation.id,
+    });
     return {
       kind: "RESULT",
       invocation: committed.snapshot.invocation,

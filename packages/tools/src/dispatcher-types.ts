@@ -85,7 +85,15 @@ export function assertToolDispatchRequest(
 }
 
 export type ToolDispatcherOutcome =
-  ToolResultOutcome | WaitingApprovalOutcome | UnavailableToolOutcome;
+  ToolResultOutcome | WaitingApprovalOutcome | UnavailableToolOutcome | BudgetExceededOutcome;
+
+export interface BudgetExceededOutcome {
+  readonly kind: "BUDGET_EXCEEDED";
+  readonly invocation?: ToolInvocation;
+  readonly dimension: "TOOL_CALLS";
+  readonly accounted: number;
+  readonly limit: number;
+}
 
 export interface ToolResultOutcome {
   readonly kind: "RESULT";
@@ -141,6 +149,11 @@ export interface ToolExecutionCommit {
   readonly effectTimestamp?: import("@caelush/protocol").TimestampMs;
   readonly approval?: ApprovalRequest;
   readonly approvalKey?: string;
+  /** Data-only hint allowing Storage to move the matching budget entry in the same transaction. */
+  readonly budgetStart?: {
+    readonly ownerId: ToolInvocationId;
+    readonly startedAt: import("@caelush/protocol").TimestampMs;
+  };
 }
 
 export interface ToolExecutionCommitResult {

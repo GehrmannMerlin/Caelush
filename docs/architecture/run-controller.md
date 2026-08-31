@@ -65,3 +65,18 @@ The complete batch is durably accepted before the resumed provider call. A resta
 The controller returns `WAITING_APPROVAL` separately from `WAITING_TOOL_RESULTS`; the latter remains the manual caller boundary used when no coordinator is injected by legacy tests or a future host. Both statuses retain canonical Run/State invariants, and neither is a completion claim. Final candidates still stop at `VERIFYING`.
 
 The controller does not retry providers, persistence, Tools, or Verification; it does not cancel Runs or verify a candidate. It coordinates Tools only by calling the injected batch port. Provider lifecycle metadata distinguishes `NOT_STARTED`, `FAILED`, and `COMPLETED`, so `llm.completed` is emitted only after a provider returned a result, including the model-output rejection path, and never for a provider exception.
+
+## Phase 10D budget governance
+
+Before a Provider call, the controller asks the injected budget port to estimate
+and reserve the complete request. A denied admission creates no durable Step;
+missing estimator or pricing fails closed as `BUDGET_ENFORCEMENT_UNAVAILABLE`.
+Tool budget admission remains in the Dispatcher/Coordinator boundary, where a
+whole executable segment can be rejected before its first handler.
+
+After an attempt, usage is settled in the durable budget ledger before retry or
+downstream work is considered. Missing usage is conservative. Budget exhaustion
+has lower priority than cancellation and deadline but higher priority than
+retry, and its finalizer clears continuation, cancels approvals, cleans owned
+resources, and emits only the sanitized budget/status event pair. A final
+candidate remains `VERIFYING`.

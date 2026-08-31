@@ -81,4 +81,25 @@ export class AgentLoopInputError extends Error {
   }
 }
 
+export type AgentBudgetBlock =
+  | {
+      readonly kind: "EXCEEDED";
+      readonly dimension: "TOOL_CALLS" | "TOKENS" | "COST";
+      readonly accounted: number;
+      readonly limit: number;
+      readonly limitMicros?: number;
+      readonly accountedMicros?: number;
+    }
+  | { readonly kind: "UNAVAILABLE"; readonly reason: "PRICING" | "TOKEN_ESTIMATE" };
+
+export class AgentBudgetAdmissionError extends Error {
+  readonly block: AgentBudgetBlock;
+
+  constructor(block: AgentBudgetBlock) {
+    super(`Agent budget admission rejected: ${block.kind}.`);
+    this.name = "AgentBudgetAdmissionError";
+    this.block = block;
+  }
+}
+
 export type AgentStepUsage = Pick<LLMUsage, "inputTokens" | "outputTokens">;

@@ -46,11 +46,12 @@ describe("committed storage migrations", () => {
         "agent_steps",
         "approval_requests",
         "event_sequences",
+        "run_budget_entries",
         "run_cancellation_requests",
         "tool_invocations",
       ]);
       expect(sqlite.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get()).toEqual({
-        count: 5,
+        count: 6,
       });
     } finally {
       sqlite.close();

@@ -184,6 +184,24 @@ function writeObservation(client: CaelushDatabase["client"], observation: ToolOb
     );
 }
 
+function startBudgetInTransaction(
+  client: CaelushDatabase["client"],
+  runId: string,
+  ownerId: string,
+  startedAt: number,
+): void {
+  const result = client
+    .prepare(
+      `UPDATE run_budget_entries
+       SET state = 'IN_FLIGHT', started_at_ms = ?
+       WHERE run_id = ? AND kind = 'TOOL_INVOCATION' AND owner_id = ? AND state = 'RESERVED'`,
+    )
+    .run(startedAt, runId, ownerId);
+  if (result.changes !== 1) {
+    throw new ToolExecutionInvariantError("Tool budget reservation is missing or already started.");
+  }
+}
+
 function validateEvents(
   events: readonly DurableToolEventDraft[],
   runId: string,
@@ -297,6 +315,17 @@ export class SqliteToolExecutionStore implements ToolExecutionStorePort {
       expectedRevision(existing?.revision, command.expectedRevision);
       const revision = (existing?.revision ?? 0) + 1;
       writeInvocation(client, command.invocation, revision);
+      if (command.budgetStart !== undefined) {
+        if (command.budgetStart.ownerId !== command.invocation.id) {
+          throw new ToolExecutionInvariantError("Tool budget owner does not match the invocation.");
+        }
+        startBudgetInTransaction(
+          client,
+          command.invocation.runId,
+          command.budgetStart.ownerId,
+          command.budgetStart.startedAt,
+        );
+      }
       if (command.approval !== undefined) {
         writeApprovalInTransaction(client, command.approval, command.approvalKey!);
       }

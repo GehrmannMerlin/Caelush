@@ -3,9 +3,28 @@ import { LLMError, LLMNetworkError, LLMRateLimitError, LLMTimeoutError } from "@
 import type { AgentRetryMetadata } from "./agent-loop-input.js";
 import type { AgentError } from "@caelush/protocol";
 import { AgentErrorSchema } from "@caelush/protocol";
-import { AgentModelOutputError, AgentToolResultBatchError } from "./agent-errors.js";
+import {
+  AgentBudgetAdmissionError,
+  AgentModelOutputError,
+  AgentToolResultBatchError,
+} from "./agent-errors.js";
 
 export function mapAgentLoopError(error: unknown): AgentError {
+  if (error instanceof AgentBudgetAdmissionError) {
+    return error.block.kind === "UNAVAILABLE"
+      ? agentError(
+          "BUDGET_ENFORCEMENT_UNAVAILABLE",
+          "LLM",
+          false,
+          "Budget enforcement is unavailable for this model turn.",
+        )
+      : agentError(
+          "BUDGET_EXCEEDED",
+          "LLM",
+          false,
+          "The configured Run budget would be exceeded.",
+        );
+  }
   if (error instanceof AgentToolResultBatchError) {
     return agentError("TOOL_OUTPUT_ERROR", "TOOL", false, "The tool result batch was invalid.");
   }

@@ -1,5 +1,18 @@
 export { openCaelushStorage } from "./storage.js";
 export type { CaelushStorage } from "./storage.js";
+export {
+  BudgetLedgerInvariantError,
+  SqliteBudgetLedgerRepository,
+} from "./budget-ledger-repository.js";
+export type {
+  BudgetEntryKind,
+  BudgetEntryState,
+  BudgetLedgerEntry,
+  BudgetLedgerSnapshot,
+  NewBudgetLedgerEntry,
+} from "./budget-ledger-repository.js";
+export { SqliteRunBudgetPort } from "./run-budget-port.js";
+export type { SqliteRunBudgetPortOptions } from "./run-budget-port.js";
 export { decodeProtocol, encodeProtocol } from "./codec.js";
 export type { ProtocolCodecContext, ProtocolSchema } from "./codec.js";
 export type { SessionListOptions, SessionRepository } from "./repositories/session-repository.js";

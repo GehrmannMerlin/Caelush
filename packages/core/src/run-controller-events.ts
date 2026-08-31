@@ -9,6 +9,7 @@ import type {
 import type { AgentLoopOutcomeResult } from "./agent-loop-input.js";
 import type { DurableEventDraft } from "./run-execution-store.js";
 import { summarizeAgentLoopOutcome } from "./agent-summary.js";
+import type { AgentBudgetBlock } from "./agent-errors.js";
 
 export interface RunControllerEventFactory {
   runStarted(run: AgentRun, eventId: EventId, timestamp: TimestampMs): DurableEventDraft;
@@ -90,6 +91,12 @@ export interface RunControllerEventFactory {
     run: AgentRun,
     state: AgentState,
     outcome: Extract<AgentLoopOutcomeResult["outcome"], { type: "MAX_STEPS_REACHED" }>,
+    eventId: EventId,
+    timestamp: TimestampMs,
+  ): DurableEventDraft;
+  budgetExceeded(
+    run: AgentRun,
+    block: Extract<AgentBudgetBlock, { kind: "EXCEEDED" }>,
     eventId: EventId,
     timestamp: TimestampMs,
   ): DurableEventDraft;
@@ -184,6 +191,22 @@ export function createRunControllerEventFactory(): RunControllerEventFactory {
       ...base(run, eventId, timestamp),
       type: "reasoning.summary",
       payload: { summary: summarizeAgentLoopOutcome(outcome) },
+    }),
+    budgetExceeded: (run, block, eventId, timestamp) => ({
+      ...base(run, eventId, timestamp),
+      type: "budget.exceeded",
+      payload:
+        block.dimension === "COST"
+          ? {
+              dimension: "COST" as const,
+              limitMicros: block.limitMicros ?? block.limit,
+              accountedMicros: block.accountedMicros ?? block.accounted,
+            }
+          : {
+              dimension: block.dimension,
+              limit: block.limit,
+              accounted: block.accounted,
+            },
     }),
   };
 }

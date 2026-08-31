@@ -28,6 +28,7 @@ export type {
   ToolObservationIdFactory,
   ToolApprovalRequestIdFactory,
   ToolResultOutcome,
+  BudgetExceededOutcome,
   WaitingApprovalOutcome,
 } from "./dispatcher-types.js";
 export type {
@@ -36,6 +37,8 @@ export type {
   ToolExecutionGatePort,
   ToolCommittedEventNotifier,
   ToolApprovalStorePort,
+  ToolBudgetAdmission,
+  ToolBudgetAdmissionPort,
 } from "./dispatcher-ports.js";
 export type { ToolExecutionStorePort } from "./execution-store.js";
 export { computeToolApprovalKey } from "./approval-key.js";
@@ -105,6 +108,7 @@ export type { ToolDispatcherOptions } from "./dispatcher.js";
 export { ToolBatchCoordinator } from "./batch-coordinator.js";
 export type {
   ToolBatchCoordinatorPort,
+  ToolBatchBudgetExceededOutcome,
   ToolBatchCompletedOutcome,
   ToolBatchItem,
   ToolBatchItemResult,

@@ -55,3 +55,33 @@ export interface ToolApprovalStorePort {
     readonly approvalKey: string;
   }): Promise<ApprovalRequest | null>;
 }
+
+export type ToolBudgetAdmission =
+  | { readonly kind: "ALLOWED" }
+  | {
+      readonly kind: "EXCEEDED";
+      readonly dimension: "TOOL_CALLS";
+      readonly accounted: number;
+      readonly limit: number;
+    };
+
+/** Structural boundary; the concrete ledger adapter remains outside Tools. */
+export interface ToolBudgetAdmissionPort {
+  admit(input: {
+    readonly runId: RunId;
+    readonly requested: number;
+    readonly invocationId?: ToolInvocationId;
+  }): Promise<ToolBudgetAdmission>;
+  /**
+   * Optional whole-segment admission. The caller must provide only calls that
+   * have already passed the adapter's non-execution preflight. Returning an
+   * exceeded result prevents the dispatcher from creating any invocation or
+   * starting any handler in that segment.
+   */
+  admitBatch?(input: {
+    readonly runId: RunId;
+    readonly requested: number;
+  }): Promise<ToolBudgetAdmission>;
+  start?(input: { readonly runId: RunId; readonly invocationId: ToolInvocationId }): Promise<void>;
+  settle?(input: { readonly runId: RunId; readonly invocationId: ToolInvocationId }): Promise<void>;
+}

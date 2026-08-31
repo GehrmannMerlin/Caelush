@@ -155,4 +155,8 @@ reopen a terminal Run.
 Phase 10C adds no Tool retry policy, Tool retry endpoint, budgets, token/cost
 enforcement, Verification execution, `COMPLETED` transition, remote runtime,
 MCP, browser/computer use, hard sandbox, or host-specific retry UI. Phase 10D
-budget work and final Verification remain future work.
+budget work and final Verification remain separate from retry. Phase 10D adds
+budget admission after maxSteps and before a retry/provider/tool effect;
+budget exhaustion therefore stops retry and finalizes through the shared
+governance boundary. Phase 10 is sealed after 10D and Verification remains a
+separate, non-implemented completion boundary.

@@ -100,7 +100,7 @@ Final text is a `FINAL_CANDIDATE`, not a completion claim. The successful final 
 
 ## Error and policy ownership
 
-The loop has no retry, backoff, timeout policy, run-level cancellation, doom-loop detector, token/cost budget, or tool-call budget. It owns only the structural `maxSteps` gate. Provider and Context failures are mapped to fixed, sanitized public Agent errors; raw prompts, tool arguments, provider payloads, credentials, hidden reasoning, and secrets are excluded.
+The loop has no retry, backoff, timeout policy, run-level cancellation, or tool execution. It owns only the structural `maxSteps` gate. Phase 10D adds an injected pre-Provider admission hook so the controller can reserve budget and clamp output before a Step is persisted; the loop still does not know SQLite, pricing, or a concrete budget manager. Provider and Context failures are mapped to fixed, sanitized public Agent errors; raw prompts, tool arguments, provider payloads, credentials, hidden reasoning, and secrets are excluded.
 
 `AgentLLMClient.complete()` is called exactly once per loop invocation. The client may be an injected `LLMGateway`, but Core does not know its registry, provider adapter, SDK, call lifecycle, or stream implementation. This preserves the one-provider-turn contract and leaves repeated execution policy to the next layer.
 
@@ -133,5 +133,14 @@ Each wake invokes the loop again with a new Step and a new Gateway-owned
 and normalized results with `resumeWithToolResults()`; it does not invoke the
 Tool coordinator. Partial Provider output and retry attempts are never added to
 the durable Conversation. See [Provider Retry and Backoff](retry.md).
+
+## Phase 10D budget boundary
+
+The controller's admission hook estimates the complete provider request and
+performs durable reservation before the Provider call. The loop receives a
+clamped request only when admission succeeds; a blocked admission returns
+without creating a durable Step. Usage settlement is conservative when the
+Provider does not return safe usage, and budget finalization never turns a
+final candidate directly into `COMPLETED`.
 
 Phase 6A defines deterministic decisions, steps, tool-result normalization, state helpers, and the `maxSteps` gate. Phase 6B connects those contracts to Project Intelligence, Relevant File Planning, ContextBuilder, and one LLM turn, then stops at the external Tool or Verification boundary. Phase 6C adds the durable RunController boundary described in [Run Controller](run-controller.md); Phase 7C extends that controller with ordered Tool batches while the AgentLoop itself remains Tool-execution unaware. The controller still never verifies a candidate or claims `COMPLETED`.

@@ -6,6 +6,7 @@ export {
 } from "./run-state-machine.js";
 export {
   AgentKernelStateError,
+  AgentBudgetAdmissionError,
   AgentLoopInputError,
   AgentModelOutputError,
   AgentToolResultBatchError,
@@ -16,6 +17,7 @@ export type {
   AgentToolResultBatchErrorReason,
   AgentModelOutputMetadata,
   AgentToolResultBatchErrorMetadata,
+  AgentBudgetBlock,
 } from "./agent-errors.js";
 export type {
   AgentDecision,
@@ -54,6 +56,7 @@ export {
   createInitialAgentState,
   markAgentStateMaxStepsReached,
   markAgentStateTimedOut,
+  markAgentStateBudgetExceeded,
   markAgentStateWaitingApproval,
   markAgentStateVerifying,
   settleAgentStepState,
@@ -92,6 +95,7 @@ export type {
   AgentClock,
   AgentStepIdFactory,
   AgentBeforeProviderTurn,
+  AgentBeforeProviderAdmission,
   AgentLoopLifecycleHooks,
   AgentProviderTurnState,
 } from "./agent-loop-ports.js";
@@ -148,11 +152,13 @@ export {
   isExecutionBoundaryStatus,
   markAgentRunFailed,
   markAgentRunTimedOut,
+  markAgentRunBudgetExceeded,
   markAgentRunCancelled,
   markAgentRunWaitingApproval,
   resumeAgentRunFromApproval,
   markAgentStateFailed,
 } from "./run-execution-state.js";
+export type { RunBudgetPort, RunBudgetSettlement, RunLLMBudgetAdmission } from "./budget-ports.js";
 export type {
   DurableAgentEvent,
   DurableEventDraft,
@@ -188,3 +194,20 @@ export type {
   RetryPolicy,
   RetryStopReason,
 } from "./retry-controller.js";
+export {
+  BudgetManager,
+  type LLMBudgetAdmission,
+  type LLMBudgetAdmissionInput,
+  type ModelPricingSnapshot,
+  type RunBudgetSnapshot,
+  type ToolBudgetAdmission,
+  type ToolBudgetAdmissionInput,
+} from "./budget-manager.js";
+export { addCostMicros, costMicrosForTokens, usdToCostMicros } from "./cost-micros.js";
+export type { CostMicros } from "./cost-micros.js";
+export { normalizeLLMUsageForBudget } from "./llm-usage-normalizer.js";
+export type { NormalizedLLMUsage } from "./llm-usage-normalizer.js";
+export { RequestTokenEstimator, createDefaultLLMTokenEstimator } from "./llm-token-estimator.js";
+export type { LLMTokenEstimator } from "./llm-token-estimator.js";
+export { StaticPricingResolver } from "./pricing.js";
+export type { PricingResolver } from "./pricing.js";

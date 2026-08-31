@@ -64,6 +64,11 @@ export type RunControllerResult =
       readonly run: AgentRun;
       readonly state?: AgentState;
     }
+  | {
+      readonly status: "BUDGET_EXCEEDED_PENDING";
+      readonly run: AgentRun;
+      readonly state?: AgentState;
+    }
   | { readonly status: "TERMINAL"; readonly run: AgentRun; readonly state?: AgentState };
 
 export type RunControllerToolResults = readonly LLMToolResultMessage[];

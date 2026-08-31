@@ -30,6 +30,7 @@
 ### Task 1: Baseline, characterization, and audit artifacts
 
 **Files:**
+
 - Create/Modify: `docs/superpowers/plans/2026-08-30-caelush-phase-10d-budget-enforcement-governance-finalization.md`
 - Create: `docs/superpowers/specs/2026-08-30-caelush-phase-10d-budget-governance-design.md`
 - Create: `docs/superpowers/characterization/2026-08-30-caelush-phase-10d-accounting-characterization.md`
@@ -41,6 +42,7 @@
 ### Task 2: Harden RunLimits and protocol error/event contracts
 
 **Files:**
+
 - Modify: `packages/protocol/src/limits.ts`, `packages/protocol/src/error.ts`, `packages/protocol/src/events/*`, `packages/protocol/src/index.ts`
 - Create/Modify: `packages/protocol/test/limits.test.ts`, `packages/protocol/test/event.test.ts`, `packages/protocol/test/public-api.test.ts`
 
@@ -52,6 +54,7 @@
 ### Task 3: Pure budget arithmetic and reservation domain
 
 **Files:**
+
 - Create: `packages/core/src/budget-types.ts`, `packages/core/src/budget-manager.ts`, `packages/core/src/cost-micros.ts`, `packages/core/src/llm-usage-normalizer.ts`
 - Modify: `packages/core/src/index.ts`
 - Create: `packages/core/test/budget-manager.test.ts`, `packages/core/test/cost-micros.test.ts`, `packages/core/test/llm-usage-normalizer.test.ts`
@@ -64,6 +67,7 @@
 ### Task 4: Durable budget ledger migration and repository
 
 **Files:**
+
 - Modify: `packages/storage/src/schema.ts`, `packages/storage/src/migrate.ts`, `packages/storage/src/storage.ts`, `packages/storage/src/index.ts`
 - Create: `packages/storage/src/budget-ledger-repository.ts`
 - Create/Modify: `packages/storage/test/migrations.test.ts`, `packages/storage/test/budget-ledger-repository.test.ts`
@@ -76,6 +80,7 @@
 ### Task 5: Core budget ports and projection reconciliation
 
 **Files:**
+
 - Create: `packages/core/src/budget-ports.ts`, `packages/core/src/budget-reconciliation.ts`
 - Modify: `packages/core/src/run-execution-store.ts`, `packages/core/src/run-controller-ports.ts`, `packages/core/src/agent-state.ts`, `packages/core/src/index.ts`
 - Create/Modify: `packages/core/test/budget-reconciliation.test.ts`, `packages/core/test/run-execution-store-contract.test.ts`
@@ -88,6 +93,7 @@
 ### Task 6: Tool budget admission and durable start accounting
 
 **Files:**
+
 - Modify: `packages/tools/src/dispatcher-ports.ts`, `packages/tools/src/dispatcher-types.ts`, `packages/tools/src/dispatcher.ts`, `packages/tools/src/batch-coordinator.ts`, `packages/tools/src/batch-types.ts`, `packages/tools/src/index.ts`
 - Modify: `packages/storage/src/tool-execution-store.ts`
 - Create/Modify: `packages/tools/test/dispatcher-execution.test.ts`, `packages/tools/test/batch-coordinator.test.ts`, `packages/storage/test/tool-execution-store.test.ts`
@@ -101,6 +107,7 @@
 ### Task 7: Tool recovery and usage projection integration
 
 **Files:**
+
 - Modify: `packages/tools/src/dispatcher.ts`, `packages/storage/src/tool-execution-store.ts`, `packages/core/src/run-controller.ts`
 - Create/Modify: `packages/tools/test/dispatcher-recovery.test.ts`, `packages/storage/test/recovery.test.ts`, `packages/storage/test/run-controller-tool-integration.test.ts`
 
@@ -112,6 +119,7 @@
 ### Task 8: Token estimator and provider usage settlement
 
 **Files:**
+
 - Modify: `packages/context/src/index.ts` only if a public estimator path is needed; otherwise reuse existing `token-estimator.ts`
 - Create: `packages/core/src/llm-token-estimator.ts`, `packages/core/src/llm-budget-admission.ts`
 - Modify: `packages/core/src/agent-loop-ports.ts`, `packages/core/src/run-controller.ts`, `packages/core/src/agent-state.ts`, `packages/core/src/index.ts`
@@ -125,6 +133,7 @@
 ### Task 9: Pricing resolver and cost budget enforcement
 
 **Files:**
+
 - Create: `packages/core/src/pricing.ts`, `packages/core/src/cost-budget-admission.ts`
 - Modify: `packages/core/src/run-controller-ports.ts`, `packages/core/src/run-controller.ts`, `packages/storage/src/budget-ledger-repository.ts`, `packages/core/src/index.ts`
 - Create/Modify: `packages/core/test/pricing.test.ts`, `packages/core/test/cost-budget-admission.test.ts`, `packages/storage/test/budget-ledger-repository.test.ts`
@@ -137,6 +146,7 @@
 ### Task 10: Provider retry integration with budget authority
 
 **Files:**
+
 - Modify: `packages/core/src/run-controller.ts`, `packages/core/src/retry-controller.ts`, `packages/core/src/run-retry-registry.ts`, `packages/core/src/run-controller-input.ts`
 - Create/Modify: `packages/core/test/retry-controller.test.ts`, `packages/core/test/run-controller-retry.test.ts`, `packages/storage/test/run-controller-recovery.test.ts`
 
@@ -148,6 +158,7 @@
 ### Task 11: Budget terminal finalizer and cleanup boundary
 
 **Files:**
+
 - Modify: `packages/core/src/run-controller.ts`, `packages/core/src/run-controller-input.ts`, `packages/core/src/run-execution-state.ts`, `packages/core/src/run-termination-authority.ts`, `packages/core/src/index.ts`
 - Modify: `packages/protocol/src/events/run.ts`, `packages/protocol/src/events/index.ts`
 - Create/Modify: `packages/core/test/run-controller-budget.test.ts`, `packages/core/test/run-termination-authority.test.ts`, `packages/storage/test/run-controller-boundaries.test.ts`
@@ -161,6 +172,7 @@
 ### Task 12: Ledger recovery, crash E2Es, and projection reconciliation
 
 **Files:**
+
 - Modify: `packages/core/src/run-controller.ts`, `packages/storage/src/budget-ledger-repository.ts`, `packages/storage/src/storage.ts`
 - Create/Modify: `packages/core/test/budget-crash-e2e.test.ts`, `packages/storage/test/recovery.test.ts`, `packages/storage/test/run-controller-restart.test.ts`
 
@@ -172,6 +184,7 @@
 ### Task 13: Documentation and Phase 10 final seal
 
 **Files:**
+
 - Create: `docs/architecture/budget.md`, `docs/architecture/execution-governance.md`
 - Modify: `docs/architecture/cancellation.md`, `docs/architecture/timeout.md`, `docs/architecture/retry.md`, `docs/architecture/agent-loop.md`, `docs/architecture/tool-system.md`, `docs/architecture/runtime.md`, `README.md`, `AGENTS.md`
 
@@ -183,6 +196,7 @@
 ### Task 14: Full verification and delivery
 
 **Files:**
+
 - No source changes expected; inspect all changed files and generated artifacts.
 
 - [ ] Run changed-file Prettier check and verify zero warnings for all Phase 10D files.

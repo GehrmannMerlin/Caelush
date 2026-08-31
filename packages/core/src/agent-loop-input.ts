@@ -12,6 +12,7 @@ import type {
   ToolDefinition,
 } from "@caelush/protocol";
 import type { AgentToolCallsDecision, AgentLoopOutcome } from "./agent-decision.js";
+import type { AgentBudgetBlock } from "./agent-errors.js";
 import type { AgentLoopDependencies, AgentProviderTurnState } from "./agent-loop-ports.js";
 
 export interface AgentRetryMetadata {
@@ -65,6 +66,8 @@ export interface AgentLoopFailureResult {
   readonly contextReport?: ContextBuildReport;
   readonly providerTurnState: AgentProviderTurnState;
   readonly retry?: AgentRetryMetadata;
+  readonly budget?: AgentBudgetBlock;
+  readonly usage?: import("@caelush/llm/turn").LLMUsage;
 }
 
 export interface AgentLoopCancelledResult {

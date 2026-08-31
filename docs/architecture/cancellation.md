@@ -42,3 +42,11 @@ so cancellation wins and no Tool or Provider call is replayed. An in-flight
 Provider attempt still uses the existing Scope signal and settles its Step as
 cancelled exactly once. Retryable Provider errors are never retried after an
 abort has become the cancellation authority.
+
+## Phase 10D budget interaction
+
+Budget exhaustion is evaluated only after cancellation and deadline authority.
+The budget finalizer disarms retry/deadline timers, cancels pending approvals,
+cleans Run-owned resources, and returns `BUDGET_EXCEEDED_PENDING` until cleanup
+is confirmed. A durable cancellation intent observed during that process still
+settles as `CANCELLED`; budget never reopens or supersedes a terminal Run.

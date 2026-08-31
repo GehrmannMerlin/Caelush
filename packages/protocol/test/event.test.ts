@@ -28,6 +28,48 @@ function getFactory(name: string): (() => string) | undefined {
 }
 
 describe("protocol AgentEvent", () => {
+  it("parses a sanitized budget.exceeded event for each budget dimension", () => {
+    const eventSchema = getSchema("AgentEventSchema");
+    const createEventId = getFactory("createEventId");
+    const createRunId = getFactory("createRunId");
+    const createSessionId = getFactory("createSessionId");
+    if (
+      eventSchema === undefined ||
+      createEventId === undefined ||
+      createRunId === undefined ||
+      createSessionId === undefined
+    ) {
+      return;
+    }
+    const common = {
+      eventId: createEventId(),
+      schemaVersion: 1,
+      runId: createRunId(),
+      sessionId: createSessionId(),
+      timestamp: 1_700_000_000_000,
+      visibility: "USER_VISIBLE",
+      durability: { kind: "DURABLE", version: 1, sequence: 1 },
+      type: "budget.exceeded",
+    };
+    expect(
+      eventSchema.parse({ ...common, payload: { dimension: "TOOL_CALLS", limit: 10, accounted: 10 } }),
+    ).toMatchObject({ type: "budget.exceeded", payload: { dimension: "TOOL_CALLS" } });
+    expect(
+      eventSchema.parse({
+        ...common,
+        eventId: createEventId(),
+        payload: { dimension: "TOKENS", limit: 100, accounted: 100 },
+      }),
+    ).toMatchObject({ payload: { dimension: "TOKENS" } });
+    expect(
+      eventSchema.parse({
+        ...common,
+        eventId: createEventId(),
+        payload: { dimension: "COST", limitMicros: 2_500_000, accountedMicros: 2_500_000 },
+      }),
+    ).toMatchObject({ payload: { dimension: "COST" } });
+  });
+
   it("parses strict retry scheduling and started events", () => {
     const eventSchema = getSchema("AgentEventSchema");
     const createEventId = getFactory("createEventId");

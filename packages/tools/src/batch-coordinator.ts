@@ -22,6 +22,7 @@ import { ToolExecutionConflictError } from "./execution-store.js";
 import { ToolBatchInputError, ToolBatchInfrastructureError } from "./batch-errors.js";
 import type {
   ToolBatchCompletedOutcome,
+  ToolBatchBudgetExceededOutcome,
   ToolBatchItem,
   ToolBatchItemResult,
   ToolBatchOutcome,
@@ -57,6 +58,28 @@ export class ToolBatchCoordinator implements ToolBatchCoordinatorPort {
     request: ToolBatchRequest,
     mode: "dispatch" | "recoverOrDispatch",
   ): Promise<ToolBatchOutcome> {
+    if (mode === "dispatch") {
+      const admission = await this.dispatcher.preflightBudget(
+        {
+          runId: request.runId,
+          requests: request.items.map((item) => toDispatchRequest(request, item)),
+        },
+      );
+      if (admission?.kind === "EXCEEDED") {
+        return {
+          kind: "BUDGET_EXCEEDED",
+          completedResults: [],
+          blocked: {
+            index: 0,
+            externalCallId: request.items[0]!.externalCallId,
+            toolName: request.items[0]!.toolName,
+            dimension: admission.dimension,
+            accounted: admission.accounted,
+            limit: admission.limit,
+          },
+        };
+      }
+    }
     const results: ToolBatchItemResult[] = [];
     let uncertain = false;
     for (const [index, item] of request.items.entries()) {
@@ -92,6 +115,22 @@ export class ToolBatchCoordinator implements ToolBatchCoordinatorPort {
           },
         };
         return waiting;
+      }
+      if (outcome.kind === "BUDGET_EXCEEDED") {
+        const budgetExceeded: ToolBatchBudgetExceededOutcome = {
+          kind: "BUDGET_EXCEEDED",
+          completedResults: results,
+          blocked: {
+            index,
+            ...(outcome.invocation === undefined ? {} : { invocationId: outcome.invocation.id }),
+            externalCallId: item.externalCallId,
+            toolName: item.toolName,
+            dimension: outcome.dimension,
+            accounted: outcome.accounted,
+            limit: outcome.limit,
+          },
+        };
+        return budgetExceeded;
       }
       const result = toItemResult(item, outcome);
       results.push(result);
@@ -189,7 +228,10 @@ function toDispatchRequest(request: ToolBatchRequest, item: ToolBatchItem): Tool
 
 function toItemResult(
   item: ToolBatchItem,
-  outcome: Exclude<ToolDispatcherOutcome, { kind: "WAITING_APPROVAL" }>,
+  outcome: Exclude<
+    ToolDispatcherOutcome,
+    { kind: "WAITING_APPROVAL" | "BUDGET_EXCEEDED" }
+  >,
 ): ToolBatchItemResult {
   if (outcome.kind === "UNAVAILABLE_TOOL") {
     return {

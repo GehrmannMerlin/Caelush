@@ -41,6 +41,39 @@ export const runCancellationRequests = sqliteTable(
   (table) => [index("run_cancellation_requests_requested_at_idx").on(table.requestedAtMs)],
 );
 
+export const runBudgetEntries = sqliteTable(
+  "run_budget_entries",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => agentRuns.id),
+    kind: text("kind").notNull(),
+    ownerId: text("owner_id").notNull(),
+    state: text("state").notNull(),
+    reservedToolCalls: integer("reserved_tool_calls").notNull(),
+    reservedInputTokens: integer("reserved_input_tokens").notNull(),
+    reservedOutputTokens: integer("reserved_output_tokens").notNull(),
+    actualInputTokens: integer("actual_input_tokens"),
+    actualOutputTokens: integer("actual_output_tokens"),
+    reservedCostMicros: integer("reserved_cost_micros").notNull(),
+    actualCostMicros: integer("actual_cost_micros"),
+    modelProvider: text("model_provider"),
+    modelId: text("model_id"),
+    pricingSnapshotId: text("pricing_snapshot_id"),
+    inputRateMicrosPerMillion: integer("input_rate_micros_per_million"),
+    outputRateMicrosPerMillion: integer("output_rate_micros_per_million"),
+    createdAtMs: integer("created_at_ms").notNull(),
+    startedAtMs: integer("started_at_ms"),
+    settledAtMs: integer("settled_at_ms"),
+  },
+  (table) => [
+    uniqueIndex("run_budget_entries_owner_unique").on(table.runId, table.kind, table.ownerId),
+    index("run_budget_entries_run_id_idx").on(table.runId),
+    index("run_budget_entries_state_idx").on(table.state),
+  ],
+);
+
 export const agentSteps = sqliteTable(
   "agent_steps",
   {
@@ -220,6 +253,7 @@ export const storageSchema = {
   agentSessions,
   agentRuns,
   runCancellationRequests,
+  runBudgetEntries,
   agentSteps,
   agentStateSnapshots,
   agentMessages,

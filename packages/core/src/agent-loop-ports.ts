@@ -26,7 +26,16 @@ export interface AgentBeforeProviderTurn {
   readonly model: ModelRef;
 }
 
+export interface AgentBeforeProviderAdmission {
+  readonly run: AgentRun;
+  readonly state: AgentState;
+  readonly step: AgentStep;
+  readonly model: ModelRef;
+  readonly request: LLMRequest;
+}
+
 export interface AgentLoopLifecycleHooks {
+  beforeProviderAdmission?(input: AgentBeforeProviderAdmission): Promise<LLMRequest | void>;
   beforeProviderTurn(input: AgentBeforeProviderTurn): Promise<void>;
 }
 

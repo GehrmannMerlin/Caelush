@@ -51,9 +51,12 @@ import {
   RetryStartedEventSchema,
 } from "./llm.js";
 import { ErrorEventSchema } from "./error.js";
+import { BudgetExceededEventSchema } from "./budget.js";
 
 export { DurableEventSchema, EphemeralEventSchema, EventDurabilitySchema, EventVisibilitySchema };
 export type { DurableEvent, EphemeralEvent, EventDurability, EventVisibility } from "./base.js";
+export { BudgetExceededEventSchema } from "./budget.js";
+export type { BudgetExceededEvent } from "./budget.js";
 export { LlmFailedEventSchema, RetryScheduledEventSchema, RetryStartedEventSchema } from "./llm.js";
 export { RunTimedOutEventSchema } from "./run.js";
 export type { RunTimedOutEvent } from "./run.js";
@@ -93,5 +96,6 @@ export const AgentEventSchema = z.discriminatedUnion("type", [
   RetryScheduledEventSchema,
   RetryStartedEventSchema,
   ErrorEventSchema,
+  BudgetExceededEventSchema,
 ]);
 export type AgentEvent = z.infer<typeof AgentEventSchema>;
