@@ -23,3 +23,10 @@ export type {
   VerificationDiscoveryReason,
   VerificationEvidenceSanitizer,
 } from "./contracts.js";
+export { ProjectCheckResolverRegistry } from "./resolver.js";
+export { nodeProjectCheckResolver } from "./node-resolver.js";
+export type {
+  ProjectCheckResolver,
+  VerificationProjectPackage,
+  VerificationProjectProfile,
+} from "./resolver.js";
