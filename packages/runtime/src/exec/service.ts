@@ -6,10 +6,14 @@ import {
   DEFAULT_EXEC_WRITE_YIELD_TIME_MS,
   DEFAULT_EXEC_YIELD_TIME_MS,
   MAX_EXEC_COMMAND_BYTES,
+  MAX_EXEC_ARG_BYTES,
+  MAX_EXEC_ARG_COUNT,
+  MAX_EXEC_ARGV_BYTES,
   MAX_EXEC_STDIN_BYTES,
   MAX_EXEC_YIELD_TIME_MS,
   MIN_EXEC_YIELD_TIME_MS,
   type RuntimeExecRequest,
+  type RuntimeArgvExecRequest,
   type RuntimeExecResult,
   type RuntimeExecService,
   type RuntimeProcessInteractionRequest,
@@ -52,6 +56,25 @@ export class LocalRuntimeExecService implements RuntimeExecService {
     });
   }
 
+  async executeArgv(request: RuntimeArgvExecRequest): Promise<RuntimeExecResult> {
+    validateArgv(request.executable, request.args);
+    const cwd = await this.resolveWorkdir(request.workdir);
+    validateYield(request.yieldTimeMs);
+    return this.options.processManager.start({
+      ownerRunId: request.ownerRunId,
+      ...(request.signal === undefined ? {} : { signal: request.signal }),
+      command: request.executable,
+      tty: false,
+      yieldTimeMs: request.yieldTimeMs,
+      cwd,
+      env: executionEnvironment(
+        createAgentProcessEnvironment(this.env, this.options.platform ?? process.platform),
+        false,
+      ),
+      launch: { executable: request.executable, args: [...request.args] },
+    });
+  }
+
   async interact(request: RuntimeProcessInteractionRequest): Promise<RuntimeExecResult> {
     if (Buffer.byteLength(request.chars, "utf8") > MAX_EXEC_STDIN_BYTES) {
       throw new RuntimeExecError("INVALID_STDIN");
@@ -81,6 +104,26 @@ export class LocalRuntimeExecService implements RuntimeExecService {
 export function validateCommand(command: string): void {
   if (command.trim().length === 0 || Buffer.byteLength(command, "utf8") > MAX_EXEC_COMMAND_BYTES) {
     throw new RuntimeExecError("INVALID_COMMAND");
+  }
+}
+
+export function validateArgv(executable: string, args: readonly string[]): void {
+  if (
+    executable.length === 0 ||
+    executable.includes("\u0000") ||
+    Buffer.byteLength(executable, "utf8") > MAX_EXEC_ARG_BYTES ||
+    args.length > MAX_EXEC_ARG_COUNT ||
+    args.some(
+      (arg) =>
+        arg.length === 0 ||
+        arg.includes("\u0000") ||
+        Buffer.byteLength(arg, "utf8") > MAX_EXEC_ARG_BYTES,
+    ) ||
+    Buffer.byteLength(executable, "utf8") +
+      args.reduce((total, arg) => total + Buffer.byteLength(arg, "utf8") + 1, 0) >
+      MAX_EXEC_ARGV_BYTES
+  ) {
+    throw new RuntimeExecError("INVALID_ARGV");
   }
 }
 

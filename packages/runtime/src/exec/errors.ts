@@ -2,6 +2,7 @@ import { RuntimeError } from "../runtime-errors.js";
 
 export type RuntimeExecErrorCode =
   | "INVALID_COMMAND"
+  | "INVALID_ARGV"
   | "INVALID_YIELD_TIME"
   | "INVALID_STDIN"
   | "PROCESS_LIMIT_REACHED"

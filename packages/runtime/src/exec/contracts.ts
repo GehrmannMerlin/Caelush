@@ -1,6 +1,9 @@
 import type { RunId } from "@caelush/protocol";
 
 export const MAX_EXEC_COMMAND_BYTES = 64 * 1024;
+export const MAX_EXEC_ARG_COUNT = 128;
+export const MAX_EXEC_ARG_BYTES = 16 * 1024;
+export const MAX_EXEC_ARGV_BYTES = 64 * 1024;
 export const MAX_EXEC_STDIN_BYTES = 64 * 1024;
 export const MAX_EXEC_MODEL_OUTPUT_BYTES = 48 * 1024;
 export const MIN_EXEC_YIELD_TIME_MS = 250;
@@ -17,6 +20,15 @@ export interface RuntimeExecRequest {
   readonly command: string;
   readonly workdir?: string;
   readonly tty: boolean;
+  readonly yieldTimeMs: number;
+}
+
+export interface RuntimeArgvExecRequest {
+  readonly signal?: AbortSignal;
+  readonly ownerRunId: RunId;
+  readonly executable: string;
+  readonly args: readonly string[];
+  readonly workdir?: string;
   readonly yieldTimeMs: number;
 }
 
@@ -85,5 +97,6 @@ export interface ManagedProcessStartRequest extends RuntimeExecRequest {
 
 export interface RuntimeExecService {
   execute(request: RuntimeExecRequest): Promise<RuntimeExecResult>;
+  executeArgv(request: RuntimeArgvExecRequest): Promise<RuntimeExecResult>;
   interact(request: RuntimeProcessInteractionRequest): Promise<RuntimeExecResult>;
 }
