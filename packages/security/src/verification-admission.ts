@@ -1,4 +1,5 @@
 import type { ApprovalPolicy, PermissionProfile } from "@caelush/protocol";
+import { redactText } from "./secret-redaction.js";
 import {
   combineSecurityDecisions,
   type SecurityDecision,
@@ -91,6 +92,24 @@ export function assessVerificationCommand(
 
 export const verificationCommandSecurityPort: VerificationCommandSecurityPort = {
   assess: assessVerificationCommand,
+};
+
+export const verificationEvidenceSanitizer = {
+  redactText,
+  boundText(value: string, maxBytes: number) {
+    const sourceBytes = Buffer.byteLength(value, "utf8");
+    if (sourceBytes <= maxBytes) return { text: value, omittedBytes: 0, truncated: false };
+    let text = "";
+    for (const character of value) {
+      if (Buffer.byteLength(text + character, "utf8") > maxBytes) break;
+      text += character;
+    }
+    return {
+      text,
+      omittedBytes: sourceBytes - Buffer.byteLength(text, "utf8"),
+      truncated: true,
+    };
+  },
 };
 
 function fromSecurityDecision(decision: SecurityDecision): VerificationSecurityDecision {

@@ -6,7 +6,7 @@ The Runtime owns child-process environment construction. Agent processes receive
 
 `exec_command` and `write_stdin` are local process capabilities, explicitly labeled `UNCONFINED_LOCAL_PROCESS` by Security. The label is an honesty boundary: V1 provides policy and durable approval checks plus sanitized environment, not OS syscall, network, filesystem, container, or process-identity isolation.
 
-Phase 8C extends the runtime with a workspace-bound `RuntimeExecService`. It is implemented by one long-lived `LocalProcessManager` per `LocalRuntime`, which selects a pipe adapter or a lazy `node-pty` adapter. See [Shell and Process Runtime](process-runtime.md) for the session, ownership, bounded-output, stale-generation, and Phase 8C boundary rules. This execution capability remains below Tools and above the OS process adapters; it has no Storage, Core, Events, Security, or Verification dependency.
+Phase 8C extends the runtime with a workspace-bound `RuntimeExecService`. It is implemented by one long-lived `LocalProcessManager` per `LocalRuntime`, which selects a pipe adapter or a lazy `node-pty` adapter. Phase 11B adds a typed `executeArgv()` entry on that same service for host verification; it reuses workspace containment, bounded output, owner Run identity, and the existing AbortSignal path. See [Shell and Process Runtime](process-runtime.md) and [Verification Execution](verification-execution.md). This execution capability remains below Tools and above the OS process adapters; it has no Storage, Core, Events, Security, or Verification dependency.
 
 Phase 8A establishes the first concrete execution substrate for Caelush. It is deliberately below the Tool System and deliberately narrower than a general host runtime.
 
@@ -79,7 +79,7 @@ Run deadline expiry uses the same signal and owned-resource controller. The Cont
 
 Operational Runtime errors are typed and converted by built-in handlers to model-recoverable `ToolExecutionResult` values with safe error codes. Host paths, stack traces, raw filesystem errors, raw stderr, and internal IDs are not model-facing. Unexpected Runtime invariants remain typed throws; the existing ToolDispatcher sanitizes and durably records those infrastructure failures.
 
-Phase 8B adds the verified `apply_patch` path and Phase 8C adds managed shell/process execution. Phase 8D adds only read-only Git inspection and the host-side effect bridge; it does not add Git mutation. Parsing and preparation remain bounded and deterministic, and patch failures remain best-effort rather than crash-atomic or exactly-once. Permission evaluation, approval resolution, sandboxing, secret redaction, retry/backoff, run cancellation, generic timeout, and Verification execution remain out of scope. Runtime has no persistence tables or process reattachment; effect settlement reuses the existing Tool/Run storage boundaries.
+Phase 8B adds the verified `apply_patch` path and Phase 8C adds managed shell/process execution. Phase 8D adds only read-only Git inspection and the host-side effect bridge; it does not add Git mutation. Parsing and preparation remain bounded and deterministic, and patch failures remain best-effort rather than crash-atomic or exactly-once. Runtime has no persistence tables or process reattachment; effect settlement reuses the existing Tool/Run storage boundaries. Phase 11B may call the typed argv entry as an injected host action, but Runtime still owns no verification policy, evidence, Storage, or completion authority.
 
 ## References
 

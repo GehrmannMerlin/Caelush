@@ -7,7 +7,7 @@ import {
 import {
   VerificationCheckKindSchema,
   VerificationCheckStageSchema,
-  VerificationCheckStatusSchema,
+  VerificationCheckTerminalStatusSchema,
   VerificationProjectCheckPurposeSchema,
   VerificationResultSchema,
 } from "../verification.js";
@@ -61,7 +61,7 @@ export const VerificationCheckCompletedEventSchema = createEventSchema(
     .object({
       planId: VerificationPlanIdSchema,
       checkId: VerificationCheckIdSchema,
-      status: VerificationCheckStatusSchema,
+      status: VerificationCheckTerminalStatusSchema,
       evidenceIds: z.array(z.string().min(1)).max(64),
       durationMs: z.number().int().nonnegative().refine(Number.isSafeInteger).optional(),
     })

@@ -24,6 +24,9 @@ export function createDiscoveryEvidence(
     ...(input.scriptName === undefined ? {} : { scriptName: input.scriptName }),
     ...(input.candidateHash === undefined ? {} : { candidateHash: input.candidateHash }),
     ...(input.reason === undefined ? {} : { reason: input.reason }),
+    ...(input.available === false && input.reason !== undefined
+      ? { unavailableReason: input.reason }
+      : {}),
     ...(input.securityReasonCode === undefined
       ? {}
       : { securityReasonCode: input.securityReasonCode }),

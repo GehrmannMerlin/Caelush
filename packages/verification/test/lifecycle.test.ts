@@ -1,14 +1,15 @@
 import {
   createVerificationCheckId,
   createVerificationPlanId,
+  createTimestampMs,
   type VerificationCheck,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import { assertVerificationCheckTransition } from "../src/index.js";
 
 function check(status: VerificationCheck["status"]): VerificationCheck {
-  const startedAt = 1_700_000_000_100;
-  const finishedAt = 1_700_000_000_200;
+  const startedAt = createTimestampMs(1_700_000_000_100);
+  const finishedAt = createTimestampMs(1_700_000_000_200);
   return {
     id: createVerificationCheckId(),
     planId: createVerificationPlanId(),
@@ -17,7 +18,7 @@ function check(status: VerificationCheck["status"]): VerificationCheck {
     requirement: "IF_AVAILABLE",
     spec: { kind: "PROJECT", purpose: "LINT", source: "SYSTEM" },
     status,
-    createdAt: 1_700_000_000_000,
+    createdAt: createTimestampMs(1_700_000_000_000),
     ...(status === "RUNNING" || status === "PASSED" || status === "FAILED" || status === "CANCELLED"
       ? { startedAt }
       : {}),
@@ -38,18 +39,22 @@ function changeStatus(
     skipReason: _skipReason,
     ...identity
   } = previous;
+  void _status;
+  void _startedAt;
+  void _finishedAt;
+  void _skipReason;
   return {
     ...identity,
     status,
     ...(status === "RUNNING" || status === "PASSED" || status === "FAILED" || status === "CANCELLED"
-      ? { startedAt: 1_700_000_000_100 }
+      ? { startedAt: createTimestampMs(1_700_000_000_100) }
       : {}),
     ...(status === "PASSED" ||
     status === "FAILED" ||
     status === "CANCELLED" ||
     status === "SKIPPED" ||
     status === "ERROR"
-      ? { finishedAt: 1_700_000_000_200 }
+      ? { finishedAt: createTimestampMs(1_700_000_000_200) }
       : {}),
     ...(status === "SKIPPED" ? { skipReason: "NOT_AVAILABLE" as const } : {}),
   };

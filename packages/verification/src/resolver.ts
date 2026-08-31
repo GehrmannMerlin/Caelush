@@ -1,5 +1,5 @@
 import type { VerificationCheck } from "@caelush/protocol";
-import type { ProjectCheckResolution, VerificationDiscoveryReason } from "./contracts.js";
+import type { ProjectCheckResolution } from "./contracts.js";
 import { javaProjectCheckResolver } from "./java-resolver.js";
 import { nodeProjectCheckResolver } from "./node-resolver.js";
 import { rustProjectCheckResolver } from "./rust-resolver.js";

@@ -29,12 +29,13 @@ describe("Core Phase 6B architecture", () => {
             "@caelush/llm/turn",
             "@caelush/events",
             "@caelush/tools",
+            "@caelush/verification",
           ].includes(value),
       ),
     ).toEqual([]);
     expect(source).not.toMatch(/from\s+["']@caelush\/llm["']/);
     expect(source).not.toMatch(
-      /from\s+["']@caelush\/(?:storage|runtime|security|verification|daemon)/,
+      /from\s+["']@caelush\/(?:storage|runtime|security|daemon)/,
     );
   });
 
@@ -59,7 +60,7 @@ describe("Core Phase 6B architecture", () => {
     expect(declaration).toContain("@caelush/llm/messages");
     expect(declaration).toContain("@caelush/llm/turn");
     expect(declaration).not.toMatch(
-      /from\s+["'](?:@caelush\/llm["']|@caelush\/(?:storage|events|runtime|security|verification|daemon)|ai|@ai-sdk\/)/,
+      /from\s+["'](?:@caelush\/llm["']|@caelush\/(?:storage|events|runtime|security|daemon)|ai|@ai-sdk\/)/,
     );
   });
 });

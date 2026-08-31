@@ -120,7 +120,13 @@ export type {
   VerificationPlannerPort,
   VerificationPlanIdFactory,
   VerificationCheckIdFactory,
+  VerificationRunnerPort,
+  ProjectProfileProviderPort,
 } from "./run-controller-ports.js";
+export {
+  createProjectProfileProvider,
+  toVerificationProjectProfile,
+} from "./verification-profile-provider.js";
 export { RunExecutionConflictError, RunExecutionInvariantError } from "./run-execution-store.js";
 export {
   deriveRunDeadline,

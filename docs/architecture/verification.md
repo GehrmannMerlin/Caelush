@@ -2,9 +2,9 @@
 
 ## Phase 11 boundary
 
-Phase 11 is fixed to exactly four rounds: 11A planning foundation, 11B verification execution, 11C evidence/review integration, and 11D completion authority. This document describes only 11A. No 11A-1, 11A-2, 11E, or implicit execution round exists.
+Phase 11 is fixed to exactly four rounds: 11A planning foundation, 11B verification execution, 11C evidence/review integration, and 11D completion authority. This document describes the shared 11A contract and the 11B execution boundary. No 11A-1, 11A-2, 11E, or implicit execution round exists.
 
-Phase 11A creates the durable intent for future verification. A model response remains a `FINAL_CANDIDATE`; it enters `VERIFYING` only after a valid `VerificationPlan` and its `VerificationCheck` rows are durably committed. Phase 11A does not run lint, typecheck, tests, builds, Git inspection, workspace checks, task acceptance, or an LLM reviewer. It also does not transition `VERIFYING` to `COMPLETED`.
+Phase 11A creates the durable intent for verification. Phase 11B executes only deterministic `PROJECT` checks for `LINT`, `TYPECHECK`, `TEST`, and `BUILD`; it does not execute Git, workspace, task, or LLM-review checks and does not transition `VERIFYING` to `COMPLETED`.
 
 ## Contract ownership
 
@@ -41,7 +41,7 @@ The planner returns a draft. Core owns plan/check ID factories and the durable c
 
 `evaluateVerification` is a pure projection over a validated plan and evidence. It returns only `INCOMPLETE`, `FAILED`, `ERROR`, or `PASSED`, with bounded ID lists and advisory warnings. Zero checks are incomplete. Required or available blocking checks that are pending, running, cancelled, or missing evidence are incomplete. Blocking failures and errors are preserved as distinct outcomes. An `IF_AVAILABLE` check may be skipped only with matching discovery evidence that says the capability is unavailable. Advisory failures produce warnings and do not block a pass.
 
-This evaluator is not connected to `COMPLETED` in 11A. Completion authority, evidence execution, command selection, result collection, and review policy remain future Verification rounds.
+This evaluator is not connected to `COMPLETED` in 11B. Completion authority, review policy, and the remaining WORKSPACE/GIT/TASK execution remain future Verification rounds.
 
 ## Durable boundary
 
@@ -55,4 +55,4 @@ Creating the same `(run, source Step)` plan with the same hash is idempotent. A 
 
 Recovery loads the existing continuation and plan. It performs zero Planner, Provider, Tool, Runtime, or Verification calls. It validates the plan/check relationship and hash already recorded in durable data, then returns the existing `AWAITING_VERIFICATION` boundary. Missing, malformed, mismatched, or corrupt plan data fails closed; recovery never regenerates a different plan from current workspace state.
 
-Cancellation, deadline/timeout, retry, budget, Security, Runtime, Tool Dispatcher, AgentLoop, and EventBus ownership remains unchanged. Phase 11A adds no cancellation cause, timeout cause, approval action, Runtime object, or execution status to Protocol data.
+Cancellation, deadline/timeout, retry, budget, Security, Runtime, Tool Dispatcher, AgentLoop, and EventBus ownership remains unchanged. Phase 11B consumes the existing Run-owned signal and deadline authority but adds no verification timeout, budget, approval workflow, Runtime object, ToolInvocation, or completion status to Protocol data. See [Verification Execution](verification-execution.md).

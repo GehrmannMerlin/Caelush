@@ -22,7 +22,10 @@ function hasTrustworthyUnavailableEvidence(
       return false;
     }
     const details = item.details as Record<string, unknown>;
-    return details.available === false && details.reason === check.skipReason;
+    return (
+      details.available === false &&
+      (details.reason === check.skipReason || typeof details.unavailableReason === "string")
+    );
   });
 }
 

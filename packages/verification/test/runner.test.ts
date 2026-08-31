@@ -6,17 +6,18 @@ import {
   createVerificationCheckId,
   createVerificationEvidenceId,
   createVerificationPlanId,
-  type VerificationCheck,
-  type VerificationEvidence,
   type VerificationPlan,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import {
-  DefaultVerificationPlanner,
   ProjectCheckResolverRegistry,
   VerificationRunner,
-  createVerificationCandidate,
   type VerificationCommandExecutionPort,
+  type VerificationExecutionStorePort,
+  type VerificationSettlementCommit,
+  type VerificationStartCommit,
+  type VerificationSettlementCommitResult,
+  type VerificationStartCommitResult,
   type VerificationProjectProfile,
   type VerificationRuntimeExecResult,
 } from "../src/index.js";
@@ -100,10 +101,8 @@ function execution(
 function input(
   plan: VerificationPlan,
   executionPort: VerificationCommandExecutionPort,
-  store: {
+  store: VerificationExecutionStorePort & {
     calls: string[];
-    startCheck: (value: any) => Promise<any>;
-    settleCheck: (value: any) => Promise<any>;
   },
   overrides: Record<string, unknown> = {},
 ) {
@@ -129,16 +128,15 @@ function store() {
   const calls: string[] = [];
   const value = {
     calls,
-    async startCheck(commit: { check: VerificationCheck }) {
+    async startCheck(commit: VerificationStartCommit): Promise<VerificationStartCommitResult> {
       calls.push(`start:${commit.check.id}`);
-      return { check: commit.check };
+      return { check: commit.check, events: [] };
     },
-    async settleCheck(commit: {
-      check: VerificationCheck;
-      evidence: readonly VerificationEvidence[];
-    }) {
+    async settleCheck(
+      commit: VerificationSettlementCommit,
+    ): Promise<VerificationSettlementCommitResult> {
       calls.push(`settle:${commit.check.status}`);
-      return { check: commit.check };
+      return { check: commit.check, events: [] };
     },
   };
   return value;
@@ -155,15 +153,9 @@ describe("storage-free verification runner", () => {
       totalOutputBytes: 7,
       omittedBytes: 0,
     });
-    process.port = process.port;
     const calls: string[] = process.calls;
-    const originalExecute = process.port.executeArgv;
-    process.port.executeArgv = async (request) => {
-      calls.push("runtime");
-      return originalExecute(request);
-    };
     const executionPort: VerificationCommandExecutionPort = {
-      executeArgv: async (request) => {
+      executeArgv: async () => {
         calls.push("runtime");
         return {
           status: "RUNNING",
@@ -173,11 +165,11 @@ describe("storage-free verification runner", () => {
           omittedBytes: 0,
         };
       },
-      interact: async (request) => {
-        calls.push(`poll:${request.chars}`);
+      interact: async ({ chars, sessionId }) => {
+        calls.push(`poll:${chars}`);
         return {
           status: "EXITED",
-          sessionId: request.sessionId,
+          sessionId,
           output: "ok",
           stdout: "ok",
           totalOutputBytes: 2,

@@ -19,6 +19,16 @@ import type { RunDeadlineRegistry } from "./run-deadline-registry.js";
 import type { RunRetryRegistry } from "./run-retry-registry.js";
 import type { RetryJitterSource, RetryPolicy } from "./retry-controller.js";
 import type { RunBudgetPort } from "./budget-ports.js";
+import type {
+  VerificationCommandExecutionPort,
+  VerificationCommandSecurityPort,
+  VerificationEvidenceSanitizer,
+  VerificationProjectProfile,
+  VerificationRunnerInput,
+  VerificationRunnerResult,
+  ProjectCheckResolverRegistry,
+  VerificationExecutionStorePort,
+} from "@caelush/verification";
 
 export interface RunExecutionConfig {
   readonly baseSystemPrompt: string;
@@ -51,6 +61,14 @@ export interface VerificationPlanIdFactory {
 
 export interface VerificationCheckIdFactory {
   create(): VerificationCheckId;
+}
+
+export interface VerificationRunnerPort {
+  run(input: VerificationRunnerInput): Promise<VerificationRunnerResult>;
+}
+
+export interface ProjectProfileProviderPort {
+  getFreshProfile(run: AgentRun, config: RunExecutionConfig): Promise<VerificationProjectProfile>;
 }
 
 export interface ApprovalResolutionPort {
@@ -87,4 +105,12 @@ export interface RunControllerDependencies {
   readonly verificationPlanner?: VerificationPlannerPort;
   readonly verificationPlanIdFactory?: VerificationPlanIdFactory;
   readonly verificationCheckIdFactory?: VerificationCheckIdFactory;
+  readonly verificationRunner?: VerificationRunnerPort;
+  readonly projectProfileProvider?: ProjectProfileProviderPort;
+  readonly verificationExecution?: VerificationCommandExecutionPort;
+  readonly verificationExecutionStore?: VerificationExecutionStorePort;
+  readonly verificationSecurity?: VerificationCommandSecurityPort;
+  readonly verificationEvidenceSanitizer?: VerificationEvidenceSanitizer;
+  readonly verificationEvidenceIdFactory?: () => import("@caelush/protocol").VerificationEvidenceId;
+  readonly verificationResolverRegistry?: ProjectCheckResolverRegistry;
 }

@@ -3,7 +3,6 @@ import {
   VerificationEvidenceSchema,
   VerificationPlanSchema,
   createEventId,
-  type AgentEvent,
   type EventId,
   type VerificationCheck,
   type VerificationEvidence,

@@ -90,6 +90,9 @@ importers:
       '@caelush/tools':
         specifier: workspace:*
         version: link:../tools
+      '@caelush/verification':
+        specifier: workspace:*
+        version: link:../verification
       zod:
         specifier: 4.4.3
         version: 4.4.3

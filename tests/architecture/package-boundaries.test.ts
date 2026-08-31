@@ -247,9 +247,7 @@ describe("package boundaries", () => {
     ]);
     expect(core).not.toMatch(/from\s+["']@caelush\/storage["']/);
     expect(events).not.toMatch(/from\s+["']@caelush\/(?:core|storage)["']/);
-    expect(storage).not.toMatch(
-      /from\s+["']@caelush\/(?:context|runtime|security|verification|daemon|llm)["']/,
-    );
+    expect(storage).not.toMatch(/from\s+["']@caelush\/(?:context|runtime|security|daemon|llm)["']/);
     for (const [name, source] of [
       ["Core", core],
       ["Events", events],

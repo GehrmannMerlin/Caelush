@@ -43,4 +43,4 @@ Phase 1 的协议细节见 [protocol-v1.md](protocol-v1.md)。
 
 Phase 10 的生命周期治理已封存为 10A cancellation、10B deadline/timeout、10C bounded retry/backoff 和 10D budget enforcement。预算账本与保守 usage accounting 见 [budget.md](budget.md)，统一优先级、清理和终止边界见 [execution-governance.md](execution-governance.md)。
 
-Phase 11A adds the intent-only Verification planning foundation: immutable plan/check contracts, bounded evidence, deterministic planning/hash/evaluation, and an atomic Final Candidate → `VERIFYING` persistence boundary. It does not execute checks or authorize completion. See [verification.md](verification.md).
+Phase 11A adds the intent-only Verification planning foundation; Phase 11B adds deterministic PROJECT check execution through fresh Phase 5 facts, Phase 9 admission, the shared typed-argv Runtime path, bounded evidence, and atomic check lifecycle events. Neither round authorizes completion. See [verification.md](verification.md) and [verification-execution.md](verification-execution.md).

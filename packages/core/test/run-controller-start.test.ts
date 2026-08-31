@@ -451,3 +451,106 @@ describe("RunController.cancel", () => {
     expect(notified.map((event) => event.type)).toEqual(["status.changed", "run.cancelled"]);
   });
 });
+
+describe("RunController project verification driving", () => {
+  it("drives project checks only after the Final Candidate transaction commits", async () => {
+    const run = makeRun({ permissionProfile: "FULL_ACCESS", approvalPolicy: "DANGEROUS_ONLY" });
+    const store = new MemoryExecutionStore(run);
+    let runnerCalls = 0;
+    let profileCalls = 0;
+    let runtimeCalls = 0;
+    const controller = new RunController({
+      agentLoop: makeLoop(store, () => undefined),
+      execution: store,
+      events: { notifyCommitted: () => undefined },
+      configResolver: {
+        resolve: async () => ({
+          baseSystemPrompt: "base",
+          contextLimits: { maxInputTokens: 1000 },
+        }),
+      },
+      clock: { now: () => createTimestampMs(10) },
+      eventIdFactory: { create: () => createEventId() },
+      verificationPlanner: {
+        plan: ({ runId, sourceStepId }) => ({
+          runId,
+          sourceStepId,
+          plannerVersion: "phase-11a.v1",
+          planHash: "a".repeat(64),
+          checks: [
+            {
+              ordinal: 0,
+              stage: "FAST_STATIC",
+              requirement: "IF_AVAILABLE",
+              spec: { kind: "PROJECT", purpose: "TEST", source: "SYSTEM" },
+            },
+          ],
+        }),
+      },
+      verificationRunner: {
+        run: async (input) => {
+          runnerCalls += 1;
+          expect(store.snapshot.run.status).toBe("VERIFYING");
+          expect(input.plan.checks[0]?.status).toBe("PENDING");
+          return {
+            outcome: "PROJECT_CHECKS_PASSED",
+            executedCount: 1,
+            passedCount: 1,
+            failedCount: 0,
+            errorCount: 0,
+            skippedCount: 0,
+          };
+        },
+      },
+      projectProfileProvider: {
+        getFreshProfile: async () => {
+          profileCalls += 1;
+          return {
+            ecosystems: ["NODE"],
+            packageManager: { name: "pnpm" },
+            tooling: [],
+            isMonorepo: false,
+          };
+        },
+      },
+      verificationExecution: {
+        executeArgv: async () => {
+          runtimeCalls += 1;
+          throw new Error("fake runner should not call runtime");
+        },
+        interact: async () => {
+          throw new Error("fake runner should not call runtime");
+        },
+      },
+      verificationExecutionStore: {
+        startCheck: async (input) => ({ check: input.check, events: [] }),
+        settleCheck: async (input) => ({ check: input.check, events: [] }),
+      },
+      verificationSecurity: { assess: () => ({ kind: "ALLOW", safeReason: "allowed" }) },
+      verificationEvidenceSanitizer: {
+        redactText: (value) => value,
+        boundText: (value) => ({ text: value, omittedBytes: 0, truncated: false }),
+      },
+    });
+
+    const result = await controller.start(run.id);
+    expect(result.status).toBe("AWAITING_VERIFICATION");
+    expect(runnerCalls).toBe(1);
+    expect(profileCalls).toBe(1);
+    expect(runtimeCalls).toBe(0);
+    expect(store.snapshot.run.status).toBe("VERIFYING");
+
+    const plan = store.snapshot.verificationPlan!;
+    store.snapshot = {
+      ...store.snapshot,
+      verificationPlan: {
+        ...plan,
+        checks: [{ ...plan.checks[0]!, status: "RUNNING", startedAt: createTimestampMs(11) }],
+      },
+    };
+    await expect(controller.recover(run.id)).resolves.toMatchObject({
+      status: "AWAITING_VERIFICATION",
+    });
+    expect(runnerCalls).toBe(1);
+  });
+});

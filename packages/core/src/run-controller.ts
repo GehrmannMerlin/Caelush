@@ -10,6 +10,7 @@ import {
   ApprovalResolutionSchema,
   VerificationPlanSchema,
   createVerificationCheckId,
+  createVerificationEvidenceId,
   createVerificationPlanId,
   createTimestampMs,
   type ApprovalRequestId,
@@ -68,6 +69,7 @@ import {
 import type { RunControllerDependencies } from "./run-controller-ports.js";
 import { AgentBudgetAdmissionError } from "./agent-errors.js";
 import type { AgentBudgetBlock } from "./agent-errors.js";
+import { ProjectCheckResolverRegistry, type VerificationRunnerInput } from "@caelush/verification";
 
 export class RunControllerInputError extends Error {
   constructor(message: string) {
@@ -413,6 +415,9 @@ export class RunController {
         (loaded.continuation === undefined && loaded.conversation.length === 0))
     ) {
       return this.driveToolBoundariesLocked(loaded, "RECOVER");
+    }
+    if (loaded.run.status === "VERIFYING") {
+      return this.driveProjectVerificationLocked(loaded);
     }
     return this.resumeKnownBoundary(loaded);
   }
@@ -961,6 +966,9 @@ export class RunController {
       events,
     });
     this.notify(commit.events);
+    if (verificationPlan !== undefined) {
+      return this.driveProjectVerificationLocked(commit.snapshot);
+    }
     return this.resultFromSnapshot(commit.snapshot);
   }
 
@@ -1675,6 +1683,59 @@ export class RunController {
 
   private resumeKnownBoundary(snapshot: RunExecutionSnapshot): RunControllerResult {
     return this.resultFromSnapshot(snapshot);
+  }
+
+  private async driveProjectVerificationLocked(
+    snapshot: RunExecutionSnapshot,
+  ): Promise<RunControllerResult> {
+    const runner = this.dependencies.verificationRunner;
+    const profileProvider = this.dependencies.projectProfileProvider;
+    const execution = this.dependencies.verificationExecution;
+    const executionStore = this.dependencies.verificationExecutionStore;
+    const security = this.dependencies.verificationSecurity;
+    const sanitizer = this.dependencies.verificationEvidenceSanitizer;
+    const plan = snapshot.verificationPlan;
+    if (
+      runner === undefined ||
+      profileProvider === undefined ||
+      execution === undefined ||
+      executionStore === undefined ||
+      security === undefined ||
+      sanitizer === undefined ||
+      plan === undefined
+    ) {
+      return this.resultFromSnapshot(snapshot);
+    }
+    if (plan.checks.some((check) => check.status === "RUNNING")) {
+      return this.resultFromSnapshot(snapshot);
+    }
+    const config = await this.dependencies.configResolver.resolve(snapshot.run);
+    const profile = await profileProvider.getFreshProfile(snapshot.run, config);
+    const runnerInput: VerificationRunnerInput = {
+      runId: snapshot.run.id,
+      sessionId: snapshot.run.sessionId,
+      plan,
+      profile,
+      permissionProfile: snapshot.run.permissionProfile,
+      approvalPolicy: snapshot.run.approvalPolicy,
+      signal: this.executionSignal(snapshot.run.id),
+      now: () => this.dependencies.clock.now(),
+      resolverRegistry:
+        this.dependencies.verificationResolverRegistry ?? new ProjectCheckResolverRegistry(),
+      security,
+      execution,
+      store: executionStore,
+      evidenceIdFactory:
+        this.dependencies.verificationEvidenceIdFactory ?? createVerificationEvidenceId,
+      evidenceSanitizer: sanitizer,
+      onCommittedEvents: (events) => this.notify(events as readonly DurableAgentEvent[]),
+    };
+    await runner.run(runnerInput);
+    const current = await this.load(snapshot.run.id);
+    const authority = this.resolveAuthority(current, false);
+    if (authority === "CANCELLED") return this.finalizeCancellation(current);
+    if (authority === "TIMEOUT") return this.finalizeTimeout(current);
+    return this.resultFromSnapshot(current);
   }
 
   private nextEventId() {

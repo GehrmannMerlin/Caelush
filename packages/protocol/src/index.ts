@@ -105,10 +105,10 @@ export {
   VerificationCheckRequirementSchema,
   VerificationCheckStageSchema,
   VerificationCheckStatusSchema,
+  VerificationCheckTerminalStatusSchema,
   VerificationCheckSkipReasonSchema,
   VerificationEvidenceKindSchema,
   VerificationProjectCheckPurposeSchema,
-  MAX_VERIFICATION_EVIDENCE_DETAILS_BYTES,
   VerificationCheckSpecSchema,
   VerificationCheckSchema,
   VerificationPlanSchema,
@@ -118,6 +118,7 @@ export {
   VerificationProjectFactsSchema,
   VerificationPlanningInputSchema,
 } from "./verification.js";
+export { MAX_VERIFICATION_EVIDENCE_DETAILS_BYTES } from "./limits.js";
 export type {
   VerificationResult,
   VerificationResultStatus,
@@ -127,6 +128,7 @@ export type {
   VerificationCheckRequirement,
   VerificationCheckStage,
   VerificationCheckStatus,
+  VerificationCheckTerminalStatus,
   VerificationCheckSkipReason,
   VerificationEvidenceKind,
   VerificationProjectCheckPurpose,

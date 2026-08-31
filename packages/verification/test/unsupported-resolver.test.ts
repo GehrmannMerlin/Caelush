@@ -1,6 +1,7 @@
 import {
   createVerificationCheckId,
   createVerificationPlanId,
+  createTimestampMs,
   type VerificationCheck,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
@@ -14,7 +15,7 @@ const check: VerificationCheck = {
   requirement: "IF_AVAILABLE",
   spec: { kind: "PROJECT", purpose: "TEST", source: "SYSTEM" },
   status: "PENDING",
-  createdAt: 1_700_000_000_000,
+  createdAt: createTimestampMs(1_700_000_000_000),
 };
 
 const profile = (ecosystem: string): VerificationProjectProfile => ({

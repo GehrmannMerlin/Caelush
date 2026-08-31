@@ -67,6 +67,7 @@ export type {
 } from "./command-policy.js";
 export {
   assessVerificationCommand,
+  verificationEvidenceSanitizer,
   verificationCommandSecurityPort,
 } from "./verification-admission.js";
 export type {

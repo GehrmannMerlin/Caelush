@@ -25,7 +25,7 @@ export class VerificationRunner {
     let blockingCheckId: VerificationCheck["id"] | undefined;
 
     const projectChecks = [...input.plan.checks]
-      .filter((check) => check.spec.kind === "PROJECT")
+      .filter((check) => check.spec.kind === "PROJECT" && check.status === "PENDING")
       .sort((left, right) => left.ordinal - right.ordinal);
 
     for (const check of projectChecks) {
@@ -35,12 +35,13 @@ export class VerificationRunner {
       const resolution = input.resolverRegistry.resolve(check, input.profile);
       if (resolution.kind === "UNAVAILABLE") {
         const terminal = unavailableCheck(check, input, resolution);
-        await input.store.settleCheck({
+        const settled = await input.store.settleCheck({
           runId: input.runId,
           sessionId: input.sessionId,
           check: terminal.check,
           evidence: [terminal.evidence],
         });
+        input.onCommittedEvents?.(settled.events);
         if (terminal.check.status === "SKIPPED") counters.skippedCount += 1;
         else {
           counters.errorCount += 1;
@@ -82,13 +83,14 @@ export class VerificationRunner {
               ? "VERIFICATION_REVIEW_REQUIRED"
               : "VERIFICATION_DENIED",
         });
-        const terminal = terminalError(check, input, evidence);
-        await input.store.settleCheck({
+        const terminal = terminalError(check, input);
+        const settled = await input.store.settleCheck({
           runId: input.runId,
           sessionId: input.sessionId,
           check: terminal,
           evidence: [evidence],
         });
+        input.onCommittedEvents?.(settled.events);
         counters.errorCount += 1;
         if (check.requirement !== "ADVISORY") {
           blockingCheckId = check.id;
@@ -116,12 +118,13 @@ export class VerificationRunner {
       });
       const startedAt = timestamp(input);
       const runningCheck = { ...check, status: "RUNNING" as const, startedAt };
-      await input.store.startCheck({
+      const started = await input.store.startCheck({
         runId: input.runId,
         sessionId: input.sessionId,
         check: runningCheck,
         discoveryEvidence,
       });
+      input.onCommittedEvents?.(started.events);
       counters.executedCount += 1;
 
       let execution: VerificationRuntimeExecResult;
@@ -165,12 +168,13 @@ export class VerificationRunner {
           status: aborted ? ("CANCELLED" as const) : ("ERROR" as const),
           finishedAt: timestamp(input),
         };
-        await input.store.settleCheck({
+        const settled = await input.store.settleCheck({
           runId: input.runId,
           sessionId: input.sessionId,
           check: terminal,
           evidence: [evidence],
         });
+        input.onCommittedEvents?.(settled.events);
         if (aborted) return { outcome: "CANCELLED", ...counters };
         counters.errorCount += 1;
         if (check.requirement !== "ADVISORY") {
@@ -204,12 +208,13 @@ export class VerificationRunner {
         status: passed ? ("PASSED" as const) : ("FAILED" as const),
         finishedAt: timestamp(input),
       };
-      await input.store.settleCheck({
+      const settled = await input.store.settleCheck({
         runId: input.runId,
         sessionId: input.sessionId,
         check: terminal,
         evidence: [evidence],
       });
+      input.onCommittedEvents?.(settled.events);
       if (passed) counters.passedCount += 1;
       else {
         counters.failedCount += 1;
@@ -269,7 +274,6 @@ function unavailableCheck(
 function terminalError(
   check: VerificationCheck,
   input: VerificationRunnerInput,
-  _evidence: VerificationEvidence,
 ): VerificationCheck {
   return { ...check, status: "ERROR", finishedAt: timestamp(input) };
 }

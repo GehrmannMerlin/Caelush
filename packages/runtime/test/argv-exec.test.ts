@@ -1,9 +1,9 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createWorkspaceId } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
-import { LocalRuntime, RuntimeExecError, RuntimeBoundaryError } from "../src/index.js";
+import { LocalRuntime, RuntimeBoundaryError } from "../src/index.js";
 
 describe("LocalRuntime typed argv execution", () => {
   it("executes an explicit argv without shell composition", async () => {

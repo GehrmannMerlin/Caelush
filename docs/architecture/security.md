@@ -4,7 +4,7 @@
 
 ## Responsibility boundary
 
-`@caelush/security` 是纯 policy subsystem。它复用 `@caelush/protocol` 的 `PermissionProfile`、`ApprovalPolicy`、`Capability` 和 `RiskLevel`，消费 `@caelush/tools` 定义的 `ToolExecutionGatePort`，但不执行 Tool、不访问文件系统、不访问网络、不写 Storage、不发布 Event，也不依赖 Core、Runtime、LLM 或宿主 App。
+`@caelush/security` 是纯 policy subsystem。它复用 `@caelush/protocol` 的 `PermissionProfile`、`ApprovalPolicy`、`Capability` 和 `RiskLevel`，消费 `@caelush/tools` 定义的 `ToolExecutionGatePort`，并为 Phase 11B 暴露一个结构化 verification command admission/sanitizer adapter；它不执行 Tool 或命令、不访问文件系统、不访问网络、不写 Storage、不发布 Event，也不依赖 Core、Runtime、LLM、Context、Verification 或宿主 App。
 
 ```text
 durable AgentRun policy
@@ -121,3 +121,5 @@ Security 的公共入口从 `packages/security/src/index.ts` 导出：
 ```
 
 `@caelush/tools` 不依赖 `@caelush/security`，避免工具 Kernel 和安全策略形成反向耦合。Architecture tests 会持续检查 Security source 中不存在 Runtime、Core、Storage、Events、LLM、Context、Verification、App 或 I/O imports。
+
+Phase 11B 的 verification command adapter 复用同一 capability/command/input-policy 语义：候选命令与 Node 生命周期脚本 body 以 host-only structural input 进入评估；`DENY` 或 `REQUIRE_APPROVAL` 均 fail closed 为不执行的 verification `ERROR`，不创建新的 ApprovalRequest。其 evidence sanitizer 先做既有高置信度 redaction，再按 UTF-8 byte limit 截断；这不是 OS sandbox，也不是新的 permission system。

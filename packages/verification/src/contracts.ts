@@ -217,6 +217,7 @@ export interface VerificationRunnerInput {
   readonly evidenceIdFactory: () => VerificationEvidence["id"];
   readonly pollYieldTimeMs?: number;
   readonly evidenceSanitizer: VerificationEvidenceSanitizer;
+  readonly onCommittedEvents?: (events: readonly VerificationCommittedEvent[]) => void;
 }
 
 export interface VerificationRunnerResult {

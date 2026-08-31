@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_VERIFICATION_EVIDENCE_DETAILS_BYTES } from "./limits.js";
 import { FileChangeSummarySchema } from "./file.js";
 import { JsonObjectSchema, JsonValueSchema, type JsonValue } from "./primitives/json.js";
 import {
@@ -40,6 +41,15 @@ export const VerificationCheckStatusSchema = z.enum([
   "CANCELLED",
 ]);
 export type VerificationCheckStatus = z.infer<typeof VerificationCheckStatusSchema>;
+
+export const VerificationCheckTerminalStatusSchema = z.enum([
+  "PASSED",
+  "FAILED",
+  "SKIPPED",
+  "ERROR",
+  "CANCELLED",
+]);
+export type VerificationCheckTerminalStatus = z.infer<typeof VerificationCheckTerminalStatusSchema>;
 
 export const VerificationCheckSkipReasonSchema = z.enum(["NOT_AVAILABLE", "NOT_APPLICABLE"]);
 export type VerificationCheckSkipReason = z.infer<typeof VerificationCheckSkipReasonSchema>;
@@ -215,8 +225,6 @@ function isPlainJsonValue(value: unknown): value is JsonValue {
     Object.values(value).every(isPlainJsonValue)
   );
 }
-
-export const MAX_VERIFICATION_EVIDENCE_DETAILS_BYTES = 32 * 1024;
 
 const VerificationEvidenceDetailsSchema = JsonValueSchema.refine(isPlainJsonValue, {
   message: "Evidence details must be JSON-safe plain data",
