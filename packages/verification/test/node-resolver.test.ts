@@ -114,7 +114,7 @@ describe("Node project verification resolver", () => {
         rootPackage: { relativePath: ".", scripts: [{ name: "lint:fix", command: "eslint" }] },
       }),
     );
-    expect(fuzzy).toEqual({ kind: "UNAVAILABLE", reason: "MISSING_SCRIPT" });
+    expect(fuzzy).toEqual({ kind: "UNAVAILABLE", reason: "SCRIPT_NOT_DEFINED" });
   });
 
   it("returns bounded unavailable reasons and never invents installer commands", () => {
@@ -122,13 +122,13 @@ describe("Node project verification resolver", () => {
       check("TEST"),
       profile({ packageManager: { name: "UNKNOWN" } }),
     );
-    expect(unknown).toEqual({ kind: "UNAVAILABLE", reason: "UNKNOWN_PACKAGE_MANAGER" });
+    expect(unknown).toEqual({ kind: "UNAVAILABLE", reason: "PACKAGE_MANAGER_UNKNOWN" });
 
     const missing = nodeProjectCheckResolver.resolve(
       check("BUILD"),
       profile({ rootPackage: { relativePath: ".", scripts: [] } }),
     );
-    expect(missing).toEqual({ kind: "UNAVAILABLE", reason: "MISSING_SCRIPT" });
+    expect(missing).toEqual({ kind: "UNAVAILABLE", reason: "SCRIPT_NOT_DEFINED" });
 
     const candidate = nodeProjectCheckResolver.resolve(check("TEST"), profile());
     expect(JSON.stringify(candidate)).not.toMatch(/npx|pnpx|dlx|bunx|install|fetch|sync/i);

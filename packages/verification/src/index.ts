@@ -25,6 +25,8 @@ export type {
 } from "./contracts.js";
 export { ProjectCheckResolverRegistry } from "./resolver.js";
 export { nodeProjectCheckResolver } from "./node-resolver.js";
+export { rustProjectCheckResolver } from "./rust-resolver.js";
+export { javaProjectCheckResolver } from "./java-resolver.js";
 export type {
   ProjectCheckResolver,
   VerificationProjectPackage,

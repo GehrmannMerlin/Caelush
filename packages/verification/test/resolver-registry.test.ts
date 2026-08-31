@@ -28,7 +28,7 @@ describe("project check resolver registry", () => {
   it("dispatches supported project ecosystems and conservatively rejects unsupported ones", () => {
     expect(new ProjectCheckResolverRegistry().resolve(check, profile)).toEqual({
       kind: "UNAVAILABLE",
-      reason: "UNSUPPORTED_ECOSYSTEM",
+      reason: "ECOSYSTEM_UNSUPPORTED",
     });
   });
 
@@ -38,6 +38,6 @@ describe("project check resolver registry", () => {
         { ...check, spec: { kind: "TASK", purpose: "ACCEPTANCE", source: "SYSTEM" } },
         { ...profile, ecosystems: ["NODE"] },
       ),
-    ).toEqual({ kind: "UNAVAILABLE", reason: "UNSUPPORTED_ECOSYSTEM" });
+    ).toEqual({ kind: "UNAVAILABLE", reason: "ECOSYSTEM_UNSUPPORTED" });
   });
 });

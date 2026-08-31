@@ -7,12 +7,12 @@ import type {
 } from "@caelush/protocol";
 
 export type VerificationDiscoveryReason =
-  | "NOT_AVAILABLE"
-  | "UNKNOWN_PACKAGE_MANAGER"
-  | "AMBIGUOUS_PACKAGE_MANAGER"
-  | "MISSING_SCRIPT"
-  | "UNSUPPORTED_ECOSYSTEM"
-  | "INVALID_PROJECT_PROFILE";
+  | "SCRIPT_NOT_DEFINED"
+  | "PACKAGE_MANAGER_UNKNOWN"
+  | "PACKAGE_MANAGER_AMBIGUOUS"
+  | "ECOSYSTEM_UNSUPPORTED"
+  | "TOOLING_UNAVAILABLE"
+  | "PROJECT_PROFILE_INSUFFICIENT";
 
 export interface VerificationCommandSecurityInput {
   readonly kind: "SCRIPT" | "COMMAND";

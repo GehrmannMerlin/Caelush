@@ -1,6 +1,8 @@
 import type { VerificationCheck } from "@caelush/protocol";
 import type { ProjectCheckResolution, VerificationDiscoveryReason } from "./contracts.js";
+import { javaProjectCheckResolver } from "./java-resolver.js";
 import { nodeProjectCheckResolver } from "./node-resolver.js";
+import { rustProjectCheckResolver } from "./rust-resolver.js";
 
 export interface VerificationProjectPackage {
   readonly relativePath: string;
@@ -24,19 +26,25 @@ export interface ProjectCheckResolver {
 export class ProjectCheckResolverRegistry {
   private readonly resolvers: readonly ProjectCheckResolver[];
 
-  constructor(resolvers: readonly ProjectCheckResolver[] = [nodeProjectCheckResolver]) {
+  constructor(
+    resolvers: readonly ProjectCheckResolver[] = [
+      nodeProjectCheckResolver,
+      rustProjectCheckResolver,
+      javaProjectCheckResolver,
+    ],
+  ) {
     this.resolvers = [...resolvers];
   }
 
   resolve(check: VerificationCheck, profile: VerificationProjectProfile): ProjectCheckResolution {
     if (check.spec.kind !== "PROJECT")
-      return { kind: "UNAVAILABLE", reason: "UNSUPPORTED_ECOSYSTEM" };
+      return { kind: "UNAVAILABLE", reason: "ECOSYSTEM_UNSUPPORTED" };
 
     const resolver = this.resolvers.find(
       (candidate) =>
         candidate.ecosystem === undefined || profile.ecosystems.includes(candidate.ecosystem),
     );
-    if (resolver === undefined) return { kind: "UNAVAILABLE", reason: "UNSUPPORTED_ECOSYSTEM" };
+    if (resolver === undefined) return { kind: "UNAVAILABLE", reason: "ECOSYSTEM_UNSUPPORTED" };
     return resolver.resolve(check, profile);
   }
 }

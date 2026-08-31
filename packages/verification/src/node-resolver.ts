@@ -28,11 +28,11 @@ function packageJsonPath(relativePath: string): string {
 
 function packageManagerReason(
   name: string,
-): "UNKNOWN_PACKAGE_MANAGER" | "AMBIGUOUS_PACKAGE_MANAGER" {
+): "PACKAGE_MANAGER_UNKNOWN" | "PACKAGE_MANAGER_AMBIGUOUS" {
   const normalized = name.trim().toUpperCase();
   return normalized === "AMBIGUOUS" || normalized.includes("|") || normalized.includes(",")
-    ? "AMBIGUOUS_PACKAGE_MANAGER"
-    : "UNKNOWN_PACKAGE_MANAGER";
+    ? "PACKAGE_MANAGER_AMBIGUOUS"
+    : "PACKAGE_MANAGER_UNKNOWN";
 }
 
 function findScript(
@@ -67,7 +67,7 @@ export const nodeProjectCheckResolver: ProjectCheckResolver & { readonly ecosyst
 
   resolve(check: VerificationCheck, profile: VerificationProjectProfile): ProjectCheckResolution {
     if (check.spec.kind !== "PROJECT" || !profile.ecosystems.includes("NODE")) {
-      return { kind: "UNAVAILABLE", reason: "UNSUPPORTED_ECOSYSTEM" };
+      return { kind: "UNAVAILABLE", reason: "ECOSYSTEM_UNSUPPORTED" };
     }
 
     const manager = profile.packageManager.name.toLowerCase();
@@ -83,7 +83,7 @@ export const nodeProjectCheckResolver: ProjectCheckResolver & { readonly ecosyst
         findScript(profile.rootPackage, [alias]) ?? findScript(profile.activePackage, [alias]);
       if (selected !== undefined) break;
     }
-    if (selected === undefined) return { kind: "UNAVAILABLE", reason: "MISSING_SCRIPT" };
+    if (selected === undefined) return { kind: "UNAVAILABLE", reason: "SCRIPT_NOT_DEFINED" };
 
     const workdir = normalizeRelativePath(selected.packageInfo.relativePath);
     return {
