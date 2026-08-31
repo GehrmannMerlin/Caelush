@@ -130,6 +130,38 @@ describe("SqliteToolExecutionStore", () => {
     }
   });
 
+  it("moves a Tool budget reservation to IN_FLIGHT in the start transaction", async () => {
+    const { storage, run, step } = await setup();
+    try {
+      const invocation = requested(run, step);
+      const admission = await storage.budget.admit({
+        runId: run.id,
+        requested: 1,
+        invocationId: invocation.id,
+      });
+      expect(admission.kind).toBe("ALLOWED");
+      const running = startToolInvocation(invocation, createTimestampMs(111));
+      await storage.toolExecution.commit({
+        sessionId: run.sessionId,
+        invocation: running,
+        expectedRevision: null,
+        budgetStart: { ownerId: invocation.id, startedAt: createTimestampMs(111) },
+        events: [
+          {
+            ...requestedEvent(run, step, invocation),
+            type: "tool.started",
+            payload: { invocationId: running.id },
+          },
+        ],
+      });
+      expect((await storage.budgetLedger.get(run.id, "TOOL_INVOCATION", invocation.id))?.state).toBe(
+        "IN_FLIGHT",
+      );
+    } finally {
+      await storage.close();
+    }
+  });
+
   it("rejects a first commit unless Run is running and source Step is completed", async () => {
     const { storage, run, step } = await setup("COMPLETED");
     try {
