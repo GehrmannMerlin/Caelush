@@ -25,15 +25,15 @@ The plan schema rejects unknown fields, mismatched check ownership, duplicate lo
 
 The default ordered matrix is:
 
-| Order | Intent | Requirement | Stage | Inclusion |
-| ---: | --- | --- | --- | --- |
-| 0 | project lint | `IF_AVAILABLE` | `FAST_STATIC` | code project or unknown |
-| 1 | project typecheck | `IF_AVAILABLE` | `FAST_STATIC` | code project or unknown |
-| 2 | project test | `IF_AVAILABLE` | `BEHAVIORAL` | code project or unknown |
-| 3 | project build | `IF_AVAILABLE` | `BROAD` | code project or unknown |
-| next | workspace changeset sanity | `REQUIRED` | `CHANGE_REVIEW` | changed files are non-empty |
-| next | Git changeset review | `REQUIRED` / `IF_AVAILABLE` | `CHANGE_REVIEW` | Git true / unknown; omitted when known non-Git |
-| last | task acceptance | `REQUIRED` | `ACCEPTANCE` | always |
+| Order | Intent                     | Requirement                 | Stage           | Inclusion                                      |
+| ----: | -------------------------- | --------------------------- | --------------- | ---------------------------------------------- |
+|     0 | project lint               | `IF_AVAILABLE`              | `FAST_STATIC`   | code project or unknown                        |
+|     1 | project typecheck          | `IF_AVAILABLE`              | `FAST_STATIC`   | code project or unknown                        |
+|     2 | project test               | `IF_AVAILABLE`              | `BEHAVIORAL`    | code project or unknown                        |
+|     3 | project build              | `IF_AVAILABLE`              | `BROAD`         | code project or unknown                        |
+|  next | workspace changeset sanity | `REQUIRED`                  | `CHANGE_REVIEW` | changed files are non-empty                    |
+|  next | Git changeset review       | `REQUIRED` / `IF_AVAILABLE` | `CHANGE_REVIEW` | Git true / unknown; omitted when known non-Git |
+|  last | task acceptance            | `REQUIRED`                  | `ACCEPTANCE`    | always                                         |
 
 The planner returns a draft. Core owns plan/check ID factories and the durable creation timestamp. The canonical hash excludes random plan/check IDs and timestamps and includes the source Step, planner version, and ordered intent/stage/requirement data. This makes retries and restarts compare intent rather than incidental identity.
 

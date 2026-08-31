@@ -30,6 +30,7 @@
 ### Task 1: Freeze protocol identifiers and Verification contracts
 
 **Files:**
+
 - Modify: `packages/protocol/src/primitives/ids.ts`
 - Modify: `packages/protocol/src/verification.ts`
 - Modify: `packages/protocol/src/index.ts`
@@ -38,6 +39,7 @@
 - Modify: `packages/protocol/test/observation.test.ts` only where legacy compatibility assertions need the new IDs
 
 **Interfaces:**
+
 - Produces `VerificationPlanIdSchema/createVerificationPlanId`, `VerificationCheckIdSchema/createVerificationCheckId`, and `VerificationEvidenceIdSchema/createVerificationEvidenceId` with distinct `vplan_`, `vchk_`, and `vevd_` UUIDv7 prefixes.
 - Produces strict `VerificationPlanSchema`, `VerificationCheckSchema`, `VerificationCheckSpecSchema`, `VerificationEvidenceSchema`, `VerificationPlanningInputSchema`, and their inferred public types.
 - Preserves the existing legacy `VerificationResultSchema` and `VerificationStateSchema` until adjacent Phase 1 observation/state contracts are migrated in a later round.
@@ -64,6 +66,7 @@ Run: `git add packages/protocol/src packages/protocol/test && git commit -m "fea
 ### Task 2: Add the planned event and continuation pointer
 
 **Files:**
+
 - Modify: `packages/protocol/src/events/verification.ts`
 - Modify: `packages/protocol/src/events/index.ts`
 - Modify: `packages/protocol/src/index.ts`
@@ -74,6 +77,7 @@ Run: `git add packages/protocol/src packages/protocol/test && git commit -m "fea
 - Modify: `packages/core/test/agent-continuation.test.ts`
 
 **Interfaces:**
+
 - Produces strict durable `VerificationPlannedEventSchema` with payload `{ verificationPlanId, sourceStepId, checkCount, plannerVersion, requiredCount?, ifAvailableCount?, advisoryCount? }` and no goal/candidate/command/secret fields.
 - Extends `AwaitingVerificationContinuation` and its schema with required `verificationPlanId: VerificationPlanId`.
 - Removes `verification.started`/`verification.completed` from the new Phase 11A event path while retaining legacy non-Phase-11 Protocol types only if existing public tests require them; `AgentEventSchema` includes exactly the new planned event for Phase 11A.
@@ -100,6 +104,7 @@ Run: `git add packages/protocol/src packages/protocol/test packages/core/src pac
 ### Task 3: Implement canonical hashing and the deterministic planner
 
 **Files:**
+
 - Create: `packages/verification/src/contracts.ts` if the public types need a focused package-local barrel
 - Create: `packages/verification/src/plan-hash.ts`
 - Create: `packages/verification/src/planner.ts`
@@ -109,6 +114,7 @@ Run: `git add packages/protocol/src packages/protocol/test packages/core/src pac
 - Modify: `packages/verification/package.json` only if a declared dependency is required; keep Protocol as the only runtime dependency
 
 **Interfaces:**
+
 - Produces `canonicalVerificationPlanContent(draft): string` and `hashVerificationPlan(draft): string` with lowercase SHA-256; canonical content excludes plan ID, check IDs, timestamps, goal text, and command strings.
 - Produces `VerificationPlanner`/`DefaultVerificationPlanner` with `plan(input: VerificationPlanningInput): VerificationPlanDraft`.
 - Produces a draft with ordered, deduplicated, zero-based intent checks, bounded planner version, and stable `planHash`; it does not materialize durable IDs or timestamps.
@@ -143,11 +149,13 @@ Run: `git add packages/verification && git commit -m "feat(verification): add de
 ### Task 4: Implement pure Verification evaluation
 
 **Files:**
+
 - Create: `packages/verification/src/evaluator.ts`
 - Modify: `packages/verification/src/index.ts`
 - Create: `packages/verification/test/evaluator.test.ts`
 
 **Interfaces:**
+
 - Produces `evaluateVerification(input: { checks: readonly VerificationCheck[]; evidence: readonly VerificationEvidence[] }): VerificationEvaluation`.
 - Returns only `INCOMPLETE|PASSED|FAILED|ERROR`, bounded public reasons, and advisory warnings; it never transitions a Run or calls a planner/runner.
 
@@ -167,6 +175,7 @@ Run: `git add packages/verification && git commit -m "feat(verification): add pu
 ### Task 5: Add durable SQLite plan/check/evidence repositories
 
 **Files:**
+
 - Modify: `packages/storage/src/schema.ts`
 - Create: `packages/storage/drizzle/20260831170000_verification_foundation/migration.sql`
 - Create: `packages/storage/src/repositories/verification-repository.ts`
@@ -175,6 +184,7 @@ Run: `git add packages/verification && git commit -m "feat(verification): add pu
 - Create: `packages/storage/test/verification-repository.test.ts`
 
 **Interfaces:**
+
 - Produces `VerificationRepository` methods `createPlan`, `getPlanById`, `getPlanBySourceStep`, `listChecks`, `getCheck`, and `listEvidence`.
 - `createPlan` accepts a validated immutable `VerificationPlan` plus its ordered checks and returns the existing matching plan for an identical `(runId, sourceStepId, planHash)` or throws a sanitized conflict for a different hash.
 - The repository never exposes `DatabaseSync`, Drizzle clients, row types, `runCheck`, plan replacement, or `appendCheck`/`updatePlan` mutation APIs.
@@ -197,6 +207,7 @@ Run: `git add packages/storage && git commit -m "feat(storage): persist verifica
 ### Task 6: Extend the atomic Run execution commit
 
 **Files:**
+
 - Modify: `packages/core/src/run-execution-store.ts`
 - Modify: `packages/core/src/index.ts`
 - Modify: `packages/storage/src/run-execution-store.ts`
@@ -205,6 +216,7 @@ Run: `git add packages/storage && git commit -m "feat(storage): persist verifica
 - Modify: `packages/core/test/run-execution-store-contract.test.ts`
 
 **Interfaces:**
+
 - Adds `RunExecutionVerificationPlanCreate` containing the full plan and ordered checks to `RunExecutionCommit.verificationPlanCreate`.
 - Extends `RunExecutionSnapshot` with no mutable AgentState plan copy; Verification plan lookup remains behind Storage's repository.
 - Adds internal transaction helpers to write the plan/check rows and validate plan/run/source-step ownership before event append.
@@ -226,6 +238,7 @@ Run: `git add packages/core/src packages/core/test packages/storage/src packages
 ### Task 7: Integrate planner port and Final Candidate settlement in Core
 
 **Files:**
+
 - Modify: `packages/core/src/run-controller-ports.ts`
 - Modify: `packages/core/src/run-controller-input.ts`
 - Modify: `packages/core/src/run-controller.ts`
@@ -236,6 +249,7 @@ Run: `git add packages/core/src packages/core/test packages/storage/src packages
 - Modify: all Core/Storage controller fixtures that construct a Final Candidate boundary
 
 **Interfaces:**
+
 - Adds structural `VerificationPlannerPort.plan(input: VerificationPlanningInput): VerificationPlanDraft | Promise<VerificationPlanDraft>` to Core ports.
 - Adds injected `VerificationPlanIdFactory` and `VerificationCheckIdFactory` ports for materializing durable IDs without embedding a concrete Verification package in Core.
 - Extends `RunControllerResult` `AWAITING_VERIFICATION` with `verificationPlanId` and compact check counts.
@@ -259,6 +273,7 @@ Run: `git add packages/core packages/storage/test && git commit -m "feat(core): 
 ### Task 8: Add planned-boundary recovery and corruption fail-closed behavior
 
 **Files:**
+
 - Modify: `packages/core/src/run-controller.ts`
 - Modify: `packages/core/src/run-execution-state.ts`
 - Modify: `packages/storage/src/run-execution-store.ts`
@@ -267,6 +282,7 @@ Run: `git add packages/core packages/storage/test && git commit -m "feat(core): 
 - Modify: `packages/storage/test/recovery.test.ts`
 
 **Interfaces:**
+
 - Recovery of `VERIFYING/AWAITING_VERIFICATION` loads the referenced existing plan and returns the same result without Planner, LLM, Tool, Runtime, or event calls.
 - Missing plan, plan/run mismatch, and plan/source-step mismatch fail closed as sanitized invariant/storage errors.
 
@@ -282,6 +298,7 @@ Run: `git add packages/core packages/storage/src packages/storage/test && git co
 ### Task 9: Add architecture guards and Phase 10 regression coverage
 
 **Files:**
+
 - Modify: `tests/architecture/package-boundaries.test.ts`
 - Create: `tests/architecture/verification-boundaries.test.ts`
 - Create: `packages/verification/test/architecture.test.ts`
@@ -289,6 +306,7 @@ Run: `git add packages/core packages/storage/src packages/storage/test && git co
 - Modify: `packages/storage/test/run-controller-failure.test.ts` and adjacent Phase 10 tests only where plan creation races need explicit assertions
 
 **Interfaces:**
+
 - Static guards prove Verification has no imports/dependencies on Core, Runtime, Tools, Storage, Security, LLM, apps, `node:child_process`, `node-pty`, Git CLI, or concrete execution helpers; Core has no concrete Verification package import; AgentLoop has no Verification knowledge.
 - Regression tests prove planning does not create ToolInvocations, budget entries, Provider calls, retry boundaries, Approval requests, Runtime calls, or new terminal statuses.
 
@@ -303,6 +321,7 @@ Run: `git add tests/architecture packages/verification/test packages/core/test p
 ### Task 10: Update architecture documentation, README, and AGENTS rules
 
 **Files:**
+
 - Create: `docs/architecture/verification.md`
 - Modify: `docs/architecture/agent-loop.md`
 - Modify: `docs/architecture/execution-governance.md`
@@ -311,6 +330,7 @@ Run: `git add tests/architecture packages/verification/test packages/core/test p
 - Modify: `AGENTS.md`
 
 **Interfaces:**
+
 - Documentation states that Final Candidate is not completion, plans contain intents not commands, evidence is plan-scoped, and Phase 11A does not execute verification or transition to `COMPLETED`.
 - Architecture diagrams show `AgentLoop → Final Candidate → RunController → VerificationPlanner → VerificationPlan → Durable Store → VERIFYING`, Candidate ≠ Authority, and the four frozen Phase 11 rounds.
 
@@ -325,6 +345,7 @@ Run: `git add docs/architecture README.md AGENTS.md && git commit -m "docs: docu
 ### Task 11: Focused test matrix and plan self-review
 
 **Files:**
+
 - Modify focused tests under `packages/protocol/test`, `packages/verification/test`, `packages/storage/test`, and `packages/core/test` only to close requirements found during review.
 - Modify: `docs/superpowers/plans/2026-08-31-caelush-phase-11a-verification-domain-planning-foundation.md` if implementation discoveries require exact signature corrections.
 
@@ -341,6 +362,7 @@ Expected: PASS with explicit coverage for the contract, planner, evaluator, migr
 ### Task 12: Clean build, full regression, format, and final Git gates
 
 **Files:**
+
 - No source changes expected; inspect only generated artifacts and final diff.
 
 - [ ] **Step 1: Remove only validated generated `apps/*/dist`, `packages/*/dist`, and `*.tsbuildinfo` with explicit Node filesystem operations; never use `git clean`.
