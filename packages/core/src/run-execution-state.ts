@@ -152,7 +152,14 @@ export function assertRunExecutionInvariant(snapshot: RunExecutionSnapshot): voi
     throw new RunExecutionInvariantError("terminal Run cannot retain an active Step");
   }
   if (run.status === "VERIFYING") {
-    if (continuation?.type !== "AWAITING_VERIFICATION" || run.finalResult !== undefined) {
+    if (
+      continuation?.type !== "AWAITING_VERIFICATION" ||
+      run.finalResult !== undefined ||
+      snapshot.verificationPlan === undefined ||
+      snapshot.verificationPlan.id !== continuation.verificationPlanId ||
+      snapshot.verificationPlan.runId !== run.id ||
+      snapshot.verificationPlan.sourceStepId !== continuation.sourceStepId
+    ) {
       throw new RunExecutionInvariantError("VERIFYING Run must retain a verification candidate");
     }
   } else if (run.status === "RUNNING") {

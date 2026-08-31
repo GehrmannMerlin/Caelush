@@ -117,6 +117,9 @@ export type {
   RunExecutionConfigResolver,
   ApprovalResolutionPort,
   RunOwnedResourceControllerPort,
+  VerificationPlannerPort,
+  VerificationPlanIdFactory,
+  VerificationCheckIdFactory,
 } from "./run-controller-ports.js";
 export { RunExecutionConflictError, RunExecutionInvariantError } from "./run-execution-store.js";
 export {

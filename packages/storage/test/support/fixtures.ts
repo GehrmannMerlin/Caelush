@@ -5,7 +5,13 @@ import {
   createTimestampMs,
   createWorkspaceId,
 } from "@caelush/protocol";
-import type { AgentRun, AgentSession, AgentState, AgentStep } from "@caelush/protocol";
+import type {
+  AgentRun,
+  AgentSession,
+  AgentState,
+  AgentStep,
+  VerificationPlanDraft,
+} from "@caelush/protocol";
 
 export function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
   return {
@@ -69,3 +75,23 @@ export function makeState(run: AgentRun, overrides: Partial<AgentState> = {}): A
     ...overrides,
   };
 }
+
+export const verificationPlanner = {
+  plan: ({
+    runId,
+    sourceStepId,
+  }: Pick<VerificationPlanDraft, "runId" | "sourceStepId">): VerificationPlanDraft => ({
+    runId,
+    sourceStepId,
+    plannerVersion: "phase-11a.v1",
+    planHash: "a".repeat(64),
+    checks: [
+      {
+        ordinal: 0,
+        stage: "ACCEPTANCE",
+        requirement: "REQUIRED",
+        spec: { kind: "TASK", purpose: "ACCEPTANCE", source: "SYSTEM" },
+      },
+    ],
+  }),
+};

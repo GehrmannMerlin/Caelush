@@ -24,6 +24,8 @@ Session、Run、Step 和 Run State Snapshot 以 Protocol schema 作为 source of
 
 Run State Snapshot 使用单行 revision：首次保存为 revision 1，后续保存递增 revision。它不是 Event Sourcing projection，也不从 Event Store 推导第二套状态模型。
 
+Phase 11A adds `verification_plans`, `verification_checks`, and `verification_evidence` through one committed migration. Their Protocol JSON is the source of truth; indexed scalar columns are checked against decoded entities. The Run execution commit writes the final Run/State/Step, real conversation messages, `AWAITING_VERIFICATION` continuation, plan/check rows, and `verification.planned` before commit. The live EventBus is notified only after commit. Same-hash plan creation is idempotent; a different hash for the same Run/source Step is a conflict.
+
 ## Durable events
 
 Durable event append 在一个 `BEGIN IMMEDIATE` 事务内完成：为 run 初始化 sequence row，原子递增该 run 的 counter，读取新 sequence，校验并插入完整 event JSON，最后提交。sequence 不是通过 `MAX(sequence) + 1` 计算，因此并发 append 不会产生重复 sequence；任何冲突都会回滚 counter 和 event row。

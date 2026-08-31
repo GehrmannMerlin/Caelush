@@ -36,6 +36,7 @@ import {
 import { describe, expect, it } from "vitest";
 import { LocalRuntime, createLocalRuntimeResolver } from "@caelush/runtime";
 import { openCaelushStorage, type CaelushStorage } from "../src/index.js";
+import { verificationPlanner } from "./support/fixtures.js";
 import { CaelushToolExecutionGate } from "@caelush/security";
 
 const definitions = [
@@ -235,6 +236,7 @@ function createController(
     ...(coordinator === undefined ? {} : { toolCoordinator: coordinator }),
     clock,
     eventIdFactory: { create: createEventId },
+    verificationPlanner,
     approvals: storage.approvals,
     ...(deadlineRegistry === undefined ? {} : { deadlineRegistry }),
     ...(retryRegistry === undefined ? {} : { retryRegistry }),

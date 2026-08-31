@@ -7,6 +7,10 @@ import type {
   ApprovalRequestId,
   ApprovalResolution,
   EventId,
+  VerificationCheckId,
+  VerificationPlan,
+  VerificationPlanDraft,
+  VerificationProjectFacts,
 } from "@caelush/protocol";
 import type { ToolBatchCoordinatorPort } from "@caelush/tools";
 import type { DurableAgentEvent, RunExecutionStorePort } from "./run-execution-store.js";
@@ -22,6 +26,7 @@ export interface RunExecutionConfig {
   readonly modelSettings?: AgentLoopModelSettings;
   readonly cwd?: string;
   readonly explicitPaths?: readonly string[];
+  readonly projectFacts?: VerificationProjectFacts;
 }
 
 export interface RunExecutionConfigResolver {
@@ -34,6 +39,18 @@ export interface RunEventNotifier {
 
 export interface EventIdFactory {
   create(): EventId;
+}
+
+export interface VerificationPlannerPort {
+  plan(input: import("@caelush/protocol").VerificationPlanningInput): VerificationPlanDraft;
+}
+
+export interface VerificationPlanIdFactory {
+  create(): VerificationPlan["id"];
+}
+
+export interface VerificationCheckIdFactory {
+  create(): VerificationCheckId;
 }
 
 export interface ApprovalResolutionPort {
@@ -67,4 +84,7 @@ export interface RunControllerDependencies {
   readonly retryJitter?: RetryJitterSource;
   readonly resources?: RunOwnedResourceControllerPort;
   readonly budget?: RunBudgetPort;
+  readonly verificationPlanner?: VerificationPlannerPort;
+  readonly verificationPlanIdFactory?: VerificationPlanIdFactory;
+  readonly verificationCheckIdFactory?: VerificationCheckIdFactory;
 }

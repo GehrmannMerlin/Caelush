@@ -2,7 +2,7 @@
 
 Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI、Web 和其他宿主共享同一个可观察、可取消、可验证、可扩展的 Agent Core。
 
-本轮当前阶段为 **V1 Phase 10D：Budget Enforcement, Durable Usage Accounting & Phase 10 Finalization**；Phase 8A/8B/8C/8D、Phase 9A/9B/9C/9D、Phase 10A、Phase 10B、Phase 10C 与 Phase 10D 已完成，Phase 10 overall 已封存。本阶段在既有取消、deadline 和 bounded retry 边界上增加 Tool-call、LLM-token、估算成本的 Reserve → Execute → Settle 治理、durable usage ledger、保守崩溃恢复和预算终止清理；最终候选仍停留在 `VERIFYING`。
+本轮当前阶段为 **V1 Phase 11A：Verification Domain, Planning & Evidence Contract**；Phase 8A/8B/8C/8D、Phase 9A/9B/9C/9D、Phase 10A、Phase 10B、Phase 10C 与 Phase 10D 已完成，Phase 10 overall 已封存。本阶段在既有生命周期边界上增加 intent-only Verification Plan/Check/Evidence 合约、确定性 planner/hash/evaluator 与 Final Candidate → `VERIFYING` 的原子持久化；本轮不执行任何检查、不运行 LLM reviewer，也不授权 `COMPLETED`。
 
 当前仓库已经完成 Phase 1–7 以及 Phase 8A/8B/8C/8D；Phase 8D 增加 tool-independent 的只读 Git Runtime、`git_status`/`git_diff`、统一默认 Built-in catalog、纯 Tool Effects、AgentState 投影和原子 Tool settlement。Phase 9A 增加独立的 `@caelush/security` policy kernel、Run-derived `ToolSecurityContext` 与真实 `ToolExecutionGate`；Phase 9B 增加 durable Approval workflow、精确 grant matching、lazy expiry 与 Tool/Run recovery；Phase 9C 增加 sensitive resource/command policy、host-only facts、high-confidence secret redaction 和 sanitize-before-persist，但不实现 OS hard sandbox；Phase 10A 增加 user-requested cancellation control plane 和 end-to-end abort propagation；Phase 10B 增加 Run deadline 与 Provider local timeout 的分层、超时 abort/cleanup 以及恢复安全边界；Phase 10C 增加仅 Provider 瞬态失败的 bounded retry/backoff、持久化等待边界、事件审计与崩溃恢复；Phase 10D 增加 durable budget ledger、Tool/LLM admission、保守 usage accounting、预算优先级和终止清理。Phase 10D 不实现 Verification execution、公共 budget UI/API 或 `COMPLETED` transition。
 
@@ -43,6 +43,14 @@ Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI�
 - Phase 10D — Budget Enforcement, Durable Usage Accounting & Finalization: **COMPLETED**
 - Phase 10 — overall: **COMPLETED**
 
+## Phase 11 Status
+
+- Phase 11A — Verification Domain, Planning & Evidence Contract: **IN PROGRESS**
+- Phase 11B — Verification Execution: **NOT STARTED**
+- Phase 11C — Evidence & Review Integration: **NOT STARTED**
+- Phase 11D — Completion Authority & Finalization: **NOT STARTED**
+- Phase 11 — overall: **IN PROGRESS**
+
 Phase 7 contains exactly 7A, 7B, and 7C. Caelush now has an immutable validated Tool Registry and a single-Tool Dispatcher. A valid call is durably recorded as `REQUESTED`, gated, durably checkpointed as `RUNNING`, executed once through the resolved handler, output-validated, and atomically settled with its `ToolObservation` and lifecycle event. Exact duplicate calls are idempotent, stale `RUNNING` calls fail closed during recovery, and raw arguments/results are kept out of lifecycle events.
 
 Caelush now has an injected `AgentLoop` and a durable `RunController`. The loop performs at most one provider turn per invocation; the controller checkpoints Run/State/Step before the provider, persists real conversation messages and continuation boundaries atomically, publishes only committed lifecycle events, and recovers known local-host boundaries after restart. A model Tool-call group is executed by the injected `ToolBatchCoordinator` in assistant source order through the single `ToolDispatcher`; completed Tool Results are converted and durably accepted before the next turn, while approval and uncertain-side-effect states remain explicit durable boundaries. Tools are never executed by AgentLoop, and a final candidate stops at `VERIFYING` until a future Verification boundary.
@@ -53,7 +61,7 @@ Phase 8B adds the narrow `apply_patch` mutation surface. A strict, bounded Add/U
 
 Phase 8C adds the shared Shell/Managed Process substrate described in [Shell and Process Runtime](docs/architecture/process-runtime.md). Phase 8D completes the final integration: [Git Runtime](docs/architecture/git-runtime.md) adds bounded read-only Git inspection, while [Tool Effects](docs/architecture/tool-effects.md) defines pure file/process projections and atomic durable settlement. Phase 9C adds the [Input Security Policy](docs/architecture/input-security-policy.md) and [Secret Redaction](docs/architecture/secret-redaction.md) boundaries. Phase 9D adds the [Security Threat Model](docs/architecture/security-threat-model.md), [Security Capability Matrix](docs/architecture/security-capability-matrix.md), explicit logical/policy sandbox admission, sanitized child environments, fixed-config Git/rg helpers, and secure default Tool Dispatcher composition. Shell output is terminal-sanitized and also passes the injected high-confidence secret sanitizer; process sessions remain runtime-local and are represented in AgentState only through successful effects. The default catalog is injected and immutable.
 
-Phase 9D's sandbox is logical and policy-based, not an OS sandbox: structured workspace tools retain lexical/realpath containment, while `exec_command` and `write_stdin` are explicitly `UNCONFINED_LOCAL_PROCESS` capabilities with sanitized environments and policy/approval gates. Phase 10A's process cancellation, Phase 10B's timeout cleanup, Phase 10C's provider retry waiting, and Phase 10D's budget cleanup are cooperative lifecycle controls and do not claim universal descendant termination or hard isolation. V1 does not claim syscall, network, filesystem, container, seccomp, job-object, or remote-runtime isolation. Phase 10 is sealed after 10D; budget accounting is not billing, and Verification execution remains outside this round.
+Phase 9D's sandbox is logical and policy-based, not an OS sandbox: structured workspace tools retain lexical/realpath containment, while `exec_command` and `write_stdin` are explicitly `UNCONFINED_LOCAL_PROCESS` capabilities with sanitized environments and policy/approval gates. Phase 10A's process cancellation, Phase 10B's timeout cleanup, Phase 10C's provider retry waiting, and Phase 10D's budget cleanup are cooperative lifecycle controls and do not claim universal descendant termination or hard isolation. V1 does not claim syscall, network, filesystem, container, seccomp, job-object, or remote-runtime isolation. Phase 10 is sealed after 10D; budget accounting is not billing. Phase 11A creates verification intent only: checks are not executed in this round and a final candidate remains at `VERIFYING`.
 
 ## Phase 5 Status
 
@@ -72,6 +80,8 @@ Phase 10B details are documented in [Run Deadline and Timeout](docs/architecture
 Phase 10C details are documented in [Provider Retry and Backoff](docs/architecture/retry.md), including transient classification, bounded backoff/jitter, durable `WAITING_RETRY`, event ordering, new Step/LLM call identity, timer recovery, cancellation/deadline priority, and the no-Tool-replay boundary.
 
 Phase 10D details are documented in [Budget Architecture](docs/architecture/budget.md) and [Execution Governance](docs/architecture/execution-governance.md), including the durable ledger lifecycle, request admission, conservative missing usage, pricing snapshots, Tool batch preflight, authority priority, cleanup, and the explicit Phase 10 final boundary.
+
+Phase 11A details are documented in [Verification Architecture](docs/architecture/verification.md), including the immutable Protocol contract, deterministic plan matrix and hash, pure evaluator, three-table SQLite durability, atomic Final Candidate boundary, `verification.planned` event, and no-replan recovery rule. Checks are intentionally not executed in Phase 11A.
 
 ## 技术栈
 

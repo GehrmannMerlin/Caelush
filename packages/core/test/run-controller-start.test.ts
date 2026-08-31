@@ -7,6 +7,7 @@ import {
   createStepId,
   createTimestampMs,
   createWorkspaceId,
+  type VerificationPlanDraft,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import { AgentLoop } from "../src/agent-loop.js";
@@ -89,6 +90,11 @@ class MemoryExecutionStore implements RunExecutionStorePort {
       ...(command.continuation?.operation === "SET"
         ? { continuation: command.continuation.checkpoint, continuationRevision: 1 }
         : {}),
+      ...(command.verificationPlan === undefined
+        ? this.snapshot.verificationPlan === undefined
+          ? {}
+          : { verificationPlan: this.snapshot.verificationPlan }
+        : { verificationPlan: command.verificationPlan }),
     };
     const events: DurableAgentEvent[] = command.events.map((draft) => ({
       ...draft,
@@ -97,6 +103,29 @@ class MemoryExecutionStore implements RunExecutionStorePort {
     return { snapshot: this.snapshot, events };
   }
 }
+
+const verificationPlanner = {
+  plan: ({
+    runId,
+    sourceStepId,
+  }: {
+    runId: ReturnType<typeof createRunId>;
+    sourceStepId: ReturnType<typeof createStepId>;
+  }): VerificationPlanDraft => ({
+    runId,
+    sourceStepId,
+    plannerVersion: "phase-11a.v1",
+    planHash: "a".repeat(64),
+    checks: [
+      {
+        ordinal: 0,
+        stage: "ACCEPTANCE",
+        requirement: "REQUIRED",
+        spec: { kind: "TASK", purpose: "ACCEPTANCE", source: "SYSTEM" },
+      },
+    ],
+  }),
+};
 
 function makeLoop(
   store: MemoryExecutionStore,
@@ -302,6 +331,7 @@ describe("RunController.start", () => {
       configResolver: resolver,
       clock: { now: () => createTimestampMs(10) },
       eventIdFactory: { create: () => createEventId() },
+      verificationPlanner,
     });
 
     const result = await controller.start(run.id);
@@ -312,6 +342,9 @@ describe("RunController.start", () => {
       "run.started",
       "status.changed",
     ]);
+    expect(store.commits.at(-1)?.events.map((event) => event.type)).toContain(
+      "verification.planned",
+    );
     expect(notified.filter((event) => event.type === "run.started")).toHaveLength(1);
     expect(providerCalls).toBe(1);
   });
@@ -331,6 +364,7 @@ describe("RunController.start", () => {
       },
       clock: { now: () => createTimestampMs(10) },
       eventIdFactory: { create: () => createEventId() },
+      verificationPlanner,
     });
 
     await controller.start(run.id);

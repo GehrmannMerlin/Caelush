@@ -192,7 +192,11 @@ importers:
         specifier: 8.20.0
         version: 8.20.0
 
-  packages/verification: {}
+  packages/verification:
+    dependencies:
+      '@caelush/protocol':
+        specifier: workspace:*
+        version: link:../protocol
 
 packages:
 

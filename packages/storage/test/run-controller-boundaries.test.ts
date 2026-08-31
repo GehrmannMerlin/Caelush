@@ -19,6 +19,7 @@ import {
 import { EventBus } from "@caelush/events";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
+import { verificationPlanner } from "./support/fixtures.js";
 
 function makeRun() {
   return AgentRunSchema.parse({
@@ -108,6 +109,7 @@ describe("RunController durable boundaries", () => {
       },
       clock: { now: () => createTimestampMs(clock.value) },
       eventIdFactory: { create: createEventId },
+      verificationPlanner,
       deadlineRegistry,
     });
 
@@ -177,6 +179,7 @@ describe("RunController durable boundaries", () => {
       },
       clock: { now: () => createTimestampMs(now++) },
       eventIdFactory: { create: () => createEventId() },
+      verificationPlanner,
     });
 
     const waiting = await controller.start(run.id);
@@ -209,6 +212,16 @@ describe("RunController durable boundaries", () => {
     ]);
     expect((await storage.continuations.get(run.id))?.checkpoint.type).toBe(
       "AWAITING_VERIFICATION",
+    );
+    const storedPlan = await storage.verification.getPlanForRun(
+      run.id,
+      (final as Extract<typeof final, { status: "AWAITING_VERIFICATION" }>).sourceStepId,
+    );
+    expect(storedPlan?.id).toBe(
+      (final as Extract<typeof final, { status: "AWAITING_VERIFICATION" }>).verificationPlanId,
+    );
+    expect(events.map((event) => (event as { type: string }).type)).toContain(
+      "verification.planned",
     );
     expect((await storage.runs.get(run.id))?.finalResult).toBeUndefined();
     expect(events.map((event) => (event as { type: string }).type)).not.toContain("run.completed");
@@ -269,6 +282,7 @@ describe("RunController durable boundaries", () => {
       },
       clock: { now: () => createTimestampMs(now++) },
       eventIdFactory: { create: () => createEventId() },
+      verificationPlanner,
     });
     await controller.start(run.id);
     const stored = await storage.continuations.get(run.id);

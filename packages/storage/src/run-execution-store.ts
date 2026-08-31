@@ -33,6 +33,10 @@ import { SqliteRunStateRepository } from "./repositories/run-state-repository.js
 import { SqliteStepRepository } from "./repositories/step-repository.js";
 import { writeStateSnapshot } from "./state-snapshot-writer.js";
 import { SqliteCancellationRepository } from "./cancellation-repository.js";
+import {
+  loadVerificationPlanInTransaction,
+  writeVerificationPlanInTransaction,
+} from "./repositories/verification-repository.js";
 
 interface StateRow {
   run_id: string;
@@ -183,6 +187,15 @@ export class SqliteRunExecutionStore implements RunExecutionStorePort {
     const conversation = await this.messages.listByRun(runId);
     const loadedActiveStep =
       run.currentStepId === undefined ? undefined : await this.steps.get(run.currentStepId);
+    const loadedVerificationPlan =
+      run.status === "VERIFYING" && run.currentStepId === undefined
+        ? await this.loadVerificationPlan(
+            run.id,
+            continuation?.checkpoint.type === "AWAITING_VERIFICATION"
+              ? continuation.checkpoint.verificationPlanId
+              : undefined,
+          )
+        : null;
     const snapshot: RunExecutionSnapshot = {
       run,
       ...stateProjection,
@@ -194,6 +207,7 @@ export class SqliteRunExecutionStore implements RunExecutionStorePort {
         ? {}
         : { continuation: continuation.checkpoint, continuationRevision: continuation.revision }),
       ...(cancellationIntent === null ? {} : { cancellationIntent }),
+      ...(loadedVerificationPlan === null ? {} : { verificationPlan: loadedVerificationPlan }),
     };
     assertRunExecutionInvariant(snapshot);
     return snapshot;
@@ -232,6 +246,8 @@ export class SqliteRunExecutionStore implements RunExecutionStorePort {
                   continuation: before.continuation,
                   continuationRevision: before.continuationRevision,
                 };
+    const candidateVerificationPlan =
+      command.verificationPlan === undefined ? before.verificationPlan : command.verificationPlan;
     const candidateStep = command.stepWrites.find((write) => write.step.status === "RUNNING")?.step;
     assertRunExecutionInvariant({
       run: command.run,
@@ -256,6 +272,9 @@ export class SqliteRunExecutionStore implements RunExecutionStorePort {
         })),
       ],
       ...candidateContinuation,
+      ...(candidateVerificationPlan === undefined
+        ? {}
+        : { verificationPlan: candidateVerificationPlan }),
     });
     const client = this.database.client;
     client.exec("BEGIN IMMEDIATE");
@@ -293,6 +312,9 @@ export class SqliteRunExecutionStore implements RunExecutionStorePort {
           command.expectedContinuationRevision,
         );
       }
+      if (command.verificationPlan !== undefined) {
+        writeVerificationPlanInTransaction(client, command.verificationPlan);
+      }
       const events = appendDurableEventsInTransaction(client, command.events);
       client.exec("COMMIT");
       const snapshot = await this.load(command.run.id);
@@ -300,8 +322,28 @@ export class SqliteRunExecutionStore implements RunExecutionStorePort {
         throw new StorageError(`Run ${command.run.id} disappeared after commit`);
       return { snapshot, events };
     } catch (error) {
-      client.exec("ROLLBACK");
+      try {
+        client.exec("ROLLBACK");
+      } catch {
+        throw new StorageError("Run execution commit failed after the transaction ended", {
+          cause: error,
+        });
+      }
       mapExecutionError(error);
     }
+  }
+
+  private async loadVerificationPlan(
+    runId: RunId,
+    planId: import("@caelush/protocol").VerificationPlanId | undefined,
+  ) {
+    if (planId === undefined) {
+      throw new RunExecutionInvariantError("VERIFYING Run has no VerificationPlan pointer");
+    }
+    const plan = loadVerificationPlanInTransaction(this.database.client, planId);
+    if (plan === null || plan.runId !== runId) {
+      throw new RunExecutionInvariantError("VERIFYING Run has no matching VerificationPlan");
+    }
+    return plan;
   }
 }

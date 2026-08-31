@@ -38,9 +38,11 @@ classifyAgentDecision
   │                              ↓
   │                         resumeWithToolResults()
   │
-  └── FINAL_CANDIDATE → VERIFYING boundary
+  └── FINAL_CANDIDATE → RunController creates intent-only VerificationPlan
                          ↓
-                   Phase 6C / future Verification
+                   VERIFYING / AWAITING_VERIFICATION boundary
+                         ↓
+                   future Verification execution and completion authority
 ```
 
 The loop owns orchestration and immutable returned projections: updated `AgentState`, one `AgentStep`, a `ContextBuildReport` when context preparation started, an `AgentLoopOutcome` or sanitized failure, and messages that the caller may append to durable history. It does not own persistence, event publication, or a second copy of the Run state machine.
@@ -97,6 +99,8 @@ The append ledger is explicit:
 | Synthetic relevant-file context   | never appended                                   |
 
 Final text is a `FINAL_CANDIDATE`, not a completion claim. The successful final boundary moves state to `VERIFYING`; Phase 6B never enters `COMPLETED` and never executes Verification.
+
+Phase 11A keeps this ownership split explicit: the AgentLoop returns the final candidate, while RunController injects a deterministic Verification Planner and atomically persists the resulting plan/checks with the `AWAITING_VERIFICATION` continuation. The AgentLoop still does not execute checks, discover commands, or decide completion. See [Verification Architecture](verification.md).
 
 ## Error and policy ownership
 

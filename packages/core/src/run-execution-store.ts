@@ -9,6 +9,7 @@ import type {
   StepId,
   TimestampMs,
   RunCancellationIntent,
+  VerificationPlan,
 } from "@caelush/protocol";
 import type { RunContinuationCheckpoint } from "./agent-continuation.js";
 
@@ -43,6 +44,7 @@ export interface RunExecutionSnapshot {
   readonly continuation?: RunContinuationCheckpoint;
   readonly continuationRevision?: number;
   readonly cancellationIntent?: RunCancellationIntent;
+  readonly verificationPlan?: VerificationPlan;
 }
 
 export interface RunExecutionMessageAppend {
@@ -74,6 +76,7 @@ export interface RunExecutionCommit {
   readonly stepWrites: readonly RunExecutionStepWrite[];
   readonly messagesToAppend: readonly RunExecutionMessageAppend[];
   readonly continuation?: RunExecutionContinuationWrite;
+  readonly verificationPlan?: VerificationPlan;
   readonly events: readonly DurableEventDraft[];
 }
 

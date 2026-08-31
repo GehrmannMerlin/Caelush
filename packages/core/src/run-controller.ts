@@ -8,6 +8,9 @@ import {
 import {
   AgentRunSchema,
   ApprovalResolutionSchema,
+  VerificationPlanSchema,
+  createVerificationCheckId,
+  createVerificationPlanId,
   createTimestampMs,
   type ApprovalRequestId,
   type AgentRun,
@@ -15,6 +18,7 @@ import {
   type AgentState,
   type AgentStep,
   type RunId,
+  type VerificationPlan,
 } from "@caelush/protocol";
 import type { AgentLoopExecutionResult, AgentLoopOutcomeResult } from "./agent-loop-input.js";
 import {
@@ -805,12 +809,13 @@ export class RunController {
         cause: preProviderError,
       });
     }
-    return this.settle(snapshot, execution);
+    return this.settle(snapshot, execution, config.projectFacts);
   }
 
   private async settle(
     before: RunExecutionSnapshot,
     execution: AgentLoopExecutionResult,
+    projectFacts?: import("@caelush/protocol").VerificationProjectFacts,
   ): Promise<RunControllerResult> {
     if (execution.status === "CANCELLED") return this.finalizeAbortedExecution(before, execution);
     const current = await this.load(before.run.id);
@@ -838,6 +843,7 @@ export class RunController {
     }
     let continuation: RunExecutionCommit["continuation"];
     let events: DurableEventDraft[];
+    let verificationPlan: VerificationPlan | undefined;
     if (execution.status === "FAILED") {
       const retrySettlement = await this.settleProviderFailure(current, before, execution, now);
       if (retrySettlement !== undefined) return retrySettlement;
@@ -895,6 +901,12 @@ export class RunController {
       };
       events = this.successEvents(current.run, state, execution.step!, execution, now);
     } else {
+      verificationPlan = this.createVerificationPlan(
+        current.run,
+        execution.step!,
+        state.changedFiles,
+        projectFacts,
+      );
       run = AgentRunSchema.parse({ ...current.run, status: "VERIFYING", currentStepId: undefined });
       continuation = {
         operation: "SET",
@@ -902,6 +914,7 @@ export class RunController {
           type: "AWAITING_VERIFICATION",
           runId: run.id,
           sourceStepId: execution.step!.id,
+          verificationPlanId: verificationPlan.id,
           finalDecision: execution.outcome,
         },
         updatedAt: now,
@@ -912,6 +925,12 @@ export class RunController {
           current.run,
           "RUNNING",
           "VERIFYING",
+          this.nextEventId(),
+          now,
+        ),
+        this.eventFactory.verificationPlanned(
+          current.run,
+          verificationPlan,
           this.nextEventId(),
           now,
         ),
@@ -938,6 +957,7 @@ export class RunController {
         execution.step === undefined ? [] : [{ operation: "UPDATE", step: execution.step }],
       messagesToAppend,
       ...(continuation === undefined ? {} : { continuation }),
+      ...(verificationPlan === undefined ? {} : { verificationPlan }),
       events,
     });
     this.notify(commit.events);
@@ -1589,6 +1609,7 @@ export class RunController {
         run: snapshot.run,
         state: snapshot.state!,
         sourceStepId: snapshot.continuation.sourceStepId,
+        verificationPlanId: snapshot.continuation.verificationPlanId,
         candidateText: snapshot.continuation.finalDecision.candidateText,
       };
     }
@@ -1610,6 +1631,46 @@ export class RunController {
       run: snapshot.run,
       ...(snapshot.state === undefined ? {} : { state: snapshot.state }),
     };
+  }
+
+  private createVerificationPlan(
+    run: AgentRun,
+    sourceStep: AgentStep,
+    changedFiles: AgentState["changedFiles"],
+    projectFacts?: import("@caelush/protocol").VerificationProjectFacts,
+  ): VerificationPlan {
+    const planner = this.dependencies.verificationPlanner;
+    if (planner === undefined) {
+      throw new RunControllerInfrastructureError("Verification planner is not configured.");
+    }
+    const draft = planner.plan({
+      runId: run.id,
+      sourceStepId: sourceStep.id,
+      goal: run.goal,
+      workspace: run.workspace,
+      changedFiles,
+      ...(projectFacts === undefined ? {} : { projectFacts }),
+    });
+    const planId =
+      this.dependencies.verificationPlanIdFactory?.create() ?? createVerificationPlanId();
+    const checkIdFactory = this.dependencies.verificationCheckIdFactory ?? {
+      create: () => createVerificationCheckId(),
+    };
+    return VerificationPlanSchema.parse({
+      id: planId,
+      runId: run.id,
+      sourceStepId: sourceStep.id,
+      plannerVersion: draft.plannerVersion,
+      planHash: draft.planHash,
+      checks: draft.checks.map((check) => ({
+        ...check,
+        id: checkIdFactory.create(),
+        planId,
+        status: "PENDING",
+        createdAt: this.dependencies.clock.now(),
+      })),
+      createdAt: this.dependencies.clock.now(),
+    });
   }
 
   private resumeKnownBoundary(snapshot: RunExecutionSnapshot): RunControllerResult {

@@ -13,7 +13,7 @@ import { EventBus } from "@caelush/events";
 import { LLMTurnResultSchema } from "@caelush/llm/turn";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
-import { makeState, makeStep } from "./support/fixtures.js";
+import { makeState, makeStep, verificationPlanner } from "./support/fixtures.js";
 
 function run() {
   return AgentRunSchema.parse({
@@ -77,6 +77,7 @@ function controller(
     },
     clock: { now: () => createTimestampMs(now++) },
     eventIdFactory: { create: () => createEventId() },
+    verificationPlanner,
   });
 }
 

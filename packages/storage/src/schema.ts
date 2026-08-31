@@ -249,6 +249,71 @@ export const approvalRequests = sqliteTable(
   ],
 );
 
+export const verificationPlans = sqliteTable(
+  "verification_plans",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => agentRuns.id),
+    sourceStepId: text("source_step_id")
+      .notNull()
+      .references(() => agentSteps.id),
+    plannerVersion: text("planner_version").notNull(),
+    planHash: text("plan_hash").notNull(),
+    createdAtMs: integer("created_at_ms").notNull(),
+    dataJson: text("data_json").notNull(),
+  },
+  (table) => [
+    uniqueIndex("verification_plans_run_source_unique").on(table.runId, table.sourceStepId),
+    index("verification_plans_run_id_idx").on(table.runId),
+  ],
+);
+
+export const verificationChecks = sqliteTable(
+  "verification_checks",
+  {
+    id: text("id").primaryKey(),
+    planId: text("plan_id")
+      .notNull()
+      .references(() => verificationPlans.id),
+    ordinal: integer("ordinal").notNull(),
+    stage: text("stage").notNull(),
+    requirement: text("requirement").notNull(),
+    status: text("status").notNull(),
+    createdAtMs: integer("created_at_ms").notNull(),
+    startedAtMs: integer("started_at_ms"),
+    finishedAtMs: integer("finished_at_ms"),
+    skipReason: text("skip_reason"),
+    dataJson: text("data_json").notNull(),
+  },
+  (table) => [
+    uniqueIndex("verification_checks_plan_ordinal_unique").on(table.planId, table.ordinal),
+    index("verification_checks_plan_id_idx").on(table.planId),
+    index("verification_checks_status_idx").on(table.status),
+  ],
+);
+
+export const verificationEvidence = sqliteTable(
+  "verification_evidence",
+  {
+    id: text("id").primaryKey(),
+    planId: text("plan_id")
+      .notNull()
+      .references(() => verificationPlans.id),
+    checkId: text("check_id")
+      .notNull()
+      .references(() => verificationChecks.id),
+    kind: text("kind").notNull(),
+    capturedAtMs: integer("captured_at_ms").notNull(),
+    dataJson: text("data_json").notNull(),
+  },
+  (table) => [
+    index("verification_evidence_plan_id_idx").on(table.planId),
+    index("verification_evidence_check_id_idx").on(table.checkId),
+  ],
+);
+
 export const storageSchema = {
   agentSessions,
   agentRuns,
@@ -263,4 +328,7 @@ export const storageSchema = {
   toolInvocations,
   agentObservations,
   approvalRequests,
+  verificationPlans,
+  verificationChecks,
+  verificationEvidence,
 };

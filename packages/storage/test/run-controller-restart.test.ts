@@ -23,6 +23,7 @@ import {
 import { EventBus } from "@caelush/events";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
+import { verificationPlanner } from "./support/fixtures.js";
 
 const capabilities: LLMCapabilities = {
   textStreaming: "SUPPORTED",
@@ -121,6 +122,7 @@ function createController(
     },
     clock: { now: () => createTimestampMs(now.value++) },
     eventIdFactory: { create: () => createEventId() },
+    verificationPlanner,
   });
 }
 
@@ -198,12 +200,14 @@ describe("RunController file-backed restart recovery", () => {
     if (recoveredFinal.status !== "AWAITING_VERIFICATION")
       throw new Error("expected verification result");
     expect(recoveredFinal.candidateText).toBe("updated parser");
+    expect(recoveredFinal.verificationPlanId).toBeDefined();
     expect(provider.callCount).toBe(2);
     const events = await thirdStorage.events.replay(run.id, { limit: 100 });
     expect(events.map((event) => event.durability.sequence)).toEqual(
       Array.from({ length: events.length }, (_, index) => index + 1),
     );
     expect(events.map((event) => event.type)).not.toContain("run.completed");
+    expect(events.map((event) => event.type)).toContain("verification.planned");
     await thirdStorage.close();
     await rm(directory, { recursive: true, force: true });
   });

@@ -7,6 +7,7 @@ import type {
   StepId,
   ToolInvocationId,
   ToolName,
+  VerificationPlanId,
 } from "@caelush/protocol";
 import type { AgentToolRequest } from "./agent-decision.js";
 import type { RetryErrorCode } from "./agent-continuation.js";
@@ -45,6 +46,7 @@ export type RunControllerResult =
       readonly run: AgentRun;
       readonly state: AgentState;
       readonly sourceStepId: StepId;
+      readonly verificationPlanId: VerificationPlanId;
       readonly candidateText: string;
     }
   | {

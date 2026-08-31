@@ -32,6 +32,8 @@ Core Run State Machine
 
 `Observation` 是执行结果的 Contract，按 `tool`、`verification`、`system` 区分来源。`ApprovalRequest` 描述等待授权的动作，`VerificationResult` 描述完成条件检查的结果；它们不能被一个含糊的通用字符串替代。
 
+Phase 11A adds immutable `VerificationPlan`/`VerificationCheck`/`VerificationEvidence` contracts alongside the legacy execution-result types. The new planning contract is intent-only and command-free; a final candidate carries a plan pointer into the durable `VERIFYING` boundary, while actual check execution and completion authority remain future Phase 11 rounds.
+
 ## Events and durability
 
 `AgentEvent` 是按 `type` 判别的 Typed Union。事件 envelope 包含 `eventId`、`runId`、`timestamp`、`visibility`、`durability` 和类型化 `payload`。

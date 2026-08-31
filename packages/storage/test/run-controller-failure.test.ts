@@ -20,6 +20,7 @@ import {
 import { EventBus } from "@caelush/events";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
+import { verificationPlanner } from "./support/fixtures.js";
 
 function makeRun(maxSteps = 4) {
   return AgentRunSchema.parse({
@@ -92,6 +93,7 @@ async function setup(options: {
     },
     clock: { now: () => createTimestampMs(clockState.value++) },
     eventIdFactory: { create: () => createEventId() },
+    verificationPlanner,
     ...(options.retryRegistry === undefined && options.retryTimer === undefined
       ? {}
       : {
@@ -188,6 +190,7 @@ describe("RunController failure and maxSteps boundaries", () => {
       "llm.completed",
       "reasoning.summary",
       "status.changed",
+      "verification.planned",
     ]);
     await fixture.storage.close();
   });

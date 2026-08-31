@@ -12,4 +12,6 @@ All durable changes are committed before live notification. Event sequence is th
 
 Provider adapters perform one Provider turn and never retry or execute Tools. The Gateway owns LLM call identity. Tool execution remains behind the Dispatcher and its immutable Registry. Runtime remains a replaceable execution substrate. A final model response is a verification candidate, not a completed Run.
 
+Phase 11A adds an intent-only Verification boundary. A final candidate can enter `VERIFYING` only in the same atomic execution commit as its immutable VerificationPlan, ordered Checks, `AWAITING_VERIFICATION` continuation, and `verification.planned` event. The planner and evaluator are pure; no check executes in this round, and no path reaches `COMPLETED`. Recovery loads the existing plan and never replans it. See [Verification Architecture](verification.md).
+
 Phase 10 is now sealed at 10A cancellation, 10B deadline/timeout, 10C bounded retry/backoff, and 10D budget enforcement and durable usage accounting. No additional Phase 10 round or later implementation is introduced here.

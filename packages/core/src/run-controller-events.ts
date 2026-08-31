@@ -5,6 +5,7 @@ import type {
   AgentStep,
   EventId,
   TimestampMs,
+  VerificationPlan,
 } from "@caelush/protocol";
 import type { AgentLoopOutcomeResult } from "./agent-loop-input.js";
 import type { DurableEventDraft } from "./run-execution-store.js";
@@ -97,6 +98,12 @@ export interface RunControllerEventFactory {
   budgetExceeded(
     run: AgentRun,
     block: Extract<AgentBudgetBlock, { kind: "EXCEEDED" }>,
+    eventId: EventId,
+    timestamp: TimestampMs,
+  ): DurableEventDraft;
+  verificationPlanned(
+    run: AgentRun,
+    plan: VerificationPlan,
     eventId: EventId,
     timestamp: TimestampMs,
   ): DurableEventDraft;
@@ -207,6 +214,21 @@ export function createRunControllerEventFactory(): RunControllerEventFactory {
               limit: block.limit,
               accounted: block.accounted,
             },
+    }),
+    verificationPlanned: (run, plan, eventId, timestamp) => ({
+      ...base(run, eventId, timestamp, plan.sourceStepId),
+      type: "verification.planned",
+      payload: {
+        planId: plan.id,
+        sourceStepId: plan.sourceStepId,
+        checkCount: plan.checks.length,
+        plannerVersion: plan.plannerVersion,
+        counts: {
+          required: plan.checks.filter((check) => check.requirement === "REQUIRED").length,
+          ifAvailable: plan.checks.filter((check) => check.requirement === "IF_AVAILABLE").length,
+          advisory: plan.checks.filter((check) => check.requirement === "ADVISORY").length,
+        },
+      },
     }),
   };
 }
