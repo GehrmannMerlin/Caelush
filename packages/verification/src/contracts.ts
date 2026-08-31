@@ -1,5 +1,6 @@
 import type {
   ApprovalPolicy,
+  AgentEvent,
   PermissionProfile,
   RunId,
   SessionId,
@@ -153,15 +154,35 @@ export interface VerificationSettlementCommit {
 
 export interface VerificationStartCommitResult {
   readonly check: VerificationCheck;
+  readonly events: readonly VerificationCommittedEvent[];
 }
 
 export interface VerificationSettlementCommitResult {
   readonly check: VerificationCheck;
+  readonly events: readonly VerificationCommittedEvent[];
 }
+
+export type VerificationCommittedEvent = Extract<
+  AgentEvent,
+  { type: "verification.check.started" | "verification.check.completed" }
+> & {
+  readonly durability: { readonly kind: "DURABLE"; readonly version: 1; readonly sequence: number };
+};
 
 export interface VerificationExecutionStorePort {
   startCheck(input: VerificationStartCommit): Promise<VerificationStartCommitResult>;
   settleCheck(input: VerificationSettlementCommit): Promise<VerificationSettlementCommitResult>;
+}
+
+export interface VerificationExecutionSnapshot {
+  readonly plan: VerificationPlan;
+  readonly evidence: readonly VerificationEvidence[];
+}
+
+export interface VerificationExecutionRecoveryStorePort extends VerificationExecutionStorePort {
+  getPlanExecutionSnapshot(
+    planId: VerificationPlan["id"],
+  ): Promise<VerificationExecutionSnapshot | null>;
 }
 
 export interface VerificationCommandSecurityPort {

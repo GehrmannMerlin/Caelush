@@ -17,6 +17,12 @@ export {
   SqliteVerificationRepository,
   type VerificationRepository,
 } from "./repositories/verification-repository.js";
+export { SqliteVerificationExecutionStore } from "./verification-execution-store.js";
+export type { SqliteVerificationExecutionStoreOptions } from "./verification-execution-store.js";
+export type {
+  VerificationExecutionRecoveryStorePort,
+  VerificationExecutionSnapshot,
+} from "@caelush/verification";
 export { decodeProtocol, encodeProtocol } from "./codec.js";
 export type { ProtocolCodecContext, ProtocolSchema } from "./codec.js";
 export type { SessionListOptions, SessionRepository } from "./repositories/session-repository.js";

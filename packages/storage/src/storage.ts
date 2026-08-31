@@ -47,6 +47,8 @@ import {
   SqliteVerificationRepository,
   type VerificationRepository,
 } from "./repositories/verification-repository.js";
+import { SqliteVerificationExecutionStore } from "./verification-execution-store.js";
+import type { VerificationExecutionRecoveryStorePort } from "@caelush/verification";
 
 export interface CaelushStorage {
   readonly sessions: SessionRepository;
@@ -65,6 +67,7 @@ export interface CaelushStorage {
   readonly budgetLedger: SqliteBudgetLedgerRepository;
   readonly budget: SqliteRunBudgetPort;
   readonly verification: VerificationRepository;
+  readonly verificationExecution: VerificationExecutionRecoveryStorePort;
   close(): Promise<void>;
 }
 
@@ -97,6 +100,7 @@ export async function openCaelushStorage(options: {
       budgetLedger: new SqliteBudgetLedgerRepository(database),
       budget: new SqliteRunBudgetPort(database, options.budget),
       verification: new SqliteVerificationRepository(database),
+      verificationExecution: new SqliteVerificationExecutionStore(database),
       close: async () => database.close(),
     };
   } catch (error) {

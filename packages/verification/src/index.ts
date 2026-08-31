@@ -25,6 +25,8 @@ export type {
   VerificationCommandSecurityPort,
   VerificationCommandExecutionPort,
   VerificationExecutionStorePort,
+  VerificationExecutionRecoveryStorePort,
+  VerificationExecutionSnapshot,
   VerificationRunnerInput,
   VerificationRunnerResult,
   VerificationRuntimeArgvRequest,
@@ -34,6 +36,7 @@ export type {
   VerificationStartCommitResult,
   VerificationSettlementCommit,
   VerificationSettlementCommitResult,
+  VerificationCommittedEvent,
 } from "./contracts.js";
 export { ProjectCheckResolverRegistry } from "./resolver.js";
 export { nodeProjectCheckResolver } from "./node-resolver.js";
