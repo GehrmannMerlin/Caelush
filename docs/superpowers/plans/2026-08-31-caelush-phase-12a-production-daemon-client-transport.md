@@ -67,13 +67,13 @@
 ## Task 4 — Implement `RunExecutionSupervisor` (TDD)
 
 1. Add red unit tests with a fake RunController and RunRepository for:
-   * immediate nonblocking scheduling;
-   * one active entry per Run ID;
-   * terminal no-op;
-   * PENDING recover conflict;
-   * background rejection capture;
-   * token-safe `finally` cleanup;
-   * direct cancellation and drain/dispose.
+   - immediate nonblocking scheduling;
+   - one active entry per Run ID;
+   - terminal no-op;
+   - PENDING recover conflict;
+   - background rejection capture;
+   - token-safe `finally` cleanup;
+   - direct cancellation and drain/dispose.
 2. Implement the supervisor with an opaque task token per scheduled operation.
 3. Keep supervisor outcomes as daemon-internal dispositions; do not expose
    `RunControllerResult` directly.
@@ -139,11 +139,11 @@
    authority and that late results cannot reopen a terminal Run.
 3. Add architecture tests for daemon composition and client boundaries.
 4. Add/update:
-   * `docs/architecture/daemon-production-composition.md`
-   * `docs/architecture/client-transport.md`
-   * daemon/security architecture docs
-   * README usage and lifecycle documentation
-   * AGENTS Phase 12A completion boundary and non-goals.
+   - `docs/architecture/daemon-production-composition.md`
+   - `docs/architecture/client-transport.md`
+   - daemon/security architecture docs
+   - README usage and lifecycle documentation
+   - AGENTS Phase 12A completion boundary and non-goals.
 5. Include official research links and explicitly record what was not copied.
 
 ## Task 10 — Verification, audit, and delivery
@@ -155,11 +155,10 @@
 4. Run `git diff --check`, inspect `git diff`, inspect `git status --short`, and verify
    no credentials/secrets or forbidden Phase 12B+ code entered the diff.
 5. Use coherent commits, at minimum:
-   * `docs: specify phase 12a daemon and client transport`
-   * `feat(protocol): add phase 12a transport contracts`
-   * `feat(daemon): compose production execution surface`
-   * `feat(client): add typed http and sse transport`
-   * `docs: document phase 12a daemon and client boundaries`
+   - `docs: specify phase 12a daemon and client transport`
+   - `feat(protocol): add phase 12a transport contracts`
+   - `feat(daemon): compose production execution surface`
+   - `feat(client): add typed http and sse transport`
+   - `docs: document phase 12a daemon and client boundaries`
 6. Push the branch normally to `origin` and record the final commit SHA. Never force
    push or modify the sealed Phase 11D branch.
-

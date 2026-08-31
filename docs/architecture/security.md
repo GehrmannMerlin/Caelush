@@ -123,3 +123,20 @@ Security 的公共入口从 `packages/security/src/index.ts` 导出：
 `@caelush/tools` 不依赖 `@caelush/security`，避免工具 Kernel 和安全策略形成反向耦合。Architecture tests 会持续检查 Security source 中不存在 Runtime、Core、Storage、Events、LLM、Context、Verification、App 或 I/O imports。
 
 Phase 11B 的 verification command adapter 复用同一 capability/command/input-policy 语义：候选命令与 Node 生命周期脚本 body 以 host-only structural input 进入评估；`DENY` 或 `REQUIRE_APPROVAL` 均 fail closed 为不执行的 verification `ERROR`，不创建新的 ApprovalRequest。其 evidence sanitizer 先做既有高置信度 redaction，再按 UTF-8 byte limit 截断；这不是 OS sandbox，也不是新的 permission system。
+
+## Phase 12A daemon/client security boundary
+
+Phase 12A keeps the security authority on the daemon and Core side. The shared
+`@caelush/client` can select only a public `{ provider, model }` identity; it cannot
+select an arbitrary provider `baseUrl`, send credentials, or override
+Permission/Approval/Budget/Verification decisions. The daemon canonicalizes model
+selection against startup-only server configuration, projects endpoint-bearing
+internal models back to endpoint-free public entities, and maps unknown providers or
+models to a bounded safe error.
+
+Provider IDs and a public default model may appear in `/api/v1/info`; provider
+endpoints, API keys, headers, raw SDK errors, prompts, Tool arguments, and secret
+fragments do not. The daemon remains loopback-only and does not add permissive CORS
+or network authentication in this round. `@caelush/client` validates API envelopes,
+Protocol compatibility, and every `AgentEvent` SSE payload, but it is not a policy
+engine and cannot authorize an action locally.

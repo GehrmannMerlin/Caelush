@@ -255,8 +255,12 @@ export interface VerificationGitDiff {
 }
 
 export interface VerificationGitPort {
-  status(input: { readonly signal?: AbortSignal }): Promise<VerificationGitStatus>;
+  status(input: {
+    readonly workspace?: WorkspaceRef;
+    readonly signal?: AbortSignal;
+  }): Promise<VerificationGitStatus>;
   diff(input: {
+    readonly workspace?: WorkspaceRef;
     readonly path: string;
     readonly scope?: "WORKTREE" | "STAGED" | "ALL";
     readonly signal?: AbortSignal;

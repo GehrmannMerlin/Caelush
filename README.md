@@ -2,7 +2,7 @@
 
 Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI、Web 和其他宿主共享同一个可观察、可取消、可验证、可扩展的 Agent Core。
 
-本轮当前阶段为 **V1 Phase 11D：Completion Authority & Verification Recovery**；Phase 8A/8B/8C/8D、Phase 9A、Phase 9B、Phase 9C、Phase 9D、Phase 10A、Phase 10B、Phase 10C 与 Phase 10D 已完成，Phase 10 overall 已封存。本阶段在 11C 的验证与 bounded repair 基线上增加 Core-owned Completion Authority、candidate/workspace/Git freshness、evidence digest、Completion Seal、严格 `VerifiedRunFinalResult`、原子完成/失败 settlement 以及恢复和 late-write guards。Phase 11D 是 Phase 11 的最终轮次；不新增 11E 或 Phase 12。
+本轮当前阶段为 **V1 Phase 12A：Production Daemon Execution Surface & Shared Client Transport**；Phase 8A/8B/8C/8D、Phase 9A/9B/9C/9D、Phase 10A/10B/10C/10D 与 Phase 11A/11B/11C/11D 已完成。Phase 12A 将已完成的 Agent Kernel 通过生产级 Local Agent Service 暴露为 typed HTTP control APIs、durable SSE replay 和共享的 browser-compatible `@caelush/client`；它不实现 Ink TUI、Web UI 或新的 AgentLoop。Phase 12A 是本轮完成边界，Phase 12B–12E 尚未开始。
 
 当前仓库已经完成 Phase 1–7 以及 Phase 8A/8B/8C/8D；Phase 8D 增加 tool-independent 的只读 Git Runtime、`git_status`/`git_diff`、统一默认 Built-in catalog、纯 Tool Effects、AgentState 投影和原子 Tool settlement。Phase 9A 增加独立的 `@caelush/security` policy kernel、Run-derived `ToolSecurityContext` 与真实 `ToolExecutionGate`；Phase 9B 增加 durable Approval workflow、精确 grant matching、lazy expiry 与 Tool/Run recovery；Phase 9C 增加 sensitive resource/command policy、host-only facts、high-confidence secret redaction 和 sanitize-before-persist，但不实现 OS hard sandbox；Phase 10A 增加 user-requested cancellation control plane 和 end-to-end abort propagation；Phase 10B 增加 Run deadline 与 Provider local timeout 的分层、超时 abort/cleanup 以及恢复安全边界；Phase 10C 增加仅 Provider 瞬态失败的 bounded retry/backoff、持久化等待边界、事件审计与崩溃恢复；Phase 10D 增加 durable budget ledger、Tool/LLM admission、保守 usage accounting、预算优先级和终止清理。Phase 10D 不实现 Verification execution、公共 budget UI/API 或 `COMPLETED` transition。
 
@@ -51,6 +51,15 @@ Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI�
 - Phase 11D — Completion Authority & Finalization: **COMPLETED**
 - Phase 11 — overall: **COMPLETED**
 
+## Phase 12 Status
+
+- Phase 12A — Production Daemon Execution Surface & Shared Client Transport: **COMPLETED**
+- Phase 12B — Ink Interactive CLI: **NOT STARTED**
+- Phase 12C — Web Client: **NOT STARTED**
+- Phase 12D — Client Reconnect and Host Experience: **NOT STARTED**
+- Phase 12E — Later host integrations: **NOT STARTED**
+- Phase 12 — overall: **IN PROGRESS**
+
 Phase 7 contains exactly 7A, 7B, and 7C. Caelush now has an immutable validated Tool Registry and a single-Tool Dispatcher. A valid call is durably recorded as `REQUESTED`, gated, durably checkpointed as `RUNNING`, executed once through the resolved handler, output-validated, and atomically settled with its `ToolObservation` and lifecycle event. Exact duplicate calls are idempotent, stale `RUNNING` calls fail closed during recovery, and raw arguments/results are kept out of lifecycle events.
 
 Caelush now has an injected `AgentLoop` and a durable `RunController`. The loop performs at most one provider turn per invocation; the controller checkpoints Run/State/Step before the provider, persists real conversation messages and continuation boundaries atomically, publishes only committed lifecycle events, and recovers known local-host boundaries after restart. A model Tool-call group is executed by the injected `ToolBatchCoordinator` in assistant source order through the single `ToolDispatcher`; completed Tool Results are converted and durably accepted before the next turn, while approval and uncertain-side-effect states remain explicit durable boundaries. Tools are never executed by AgentLoop, and a final candidate stops at `VERIFYING` until a future Verification boundary.
@@ -61,7 +70,7 @@ Phase 8B adds the narrow `apply_patch` mutation surface. A strict, bounded Add/U
 
 Phase 8C adds the shared Shell/Managed Process substrate described in [Shell and Process Runtime](docs/architecture/process-runtime.md). Phase 8D completes the final integration: [Git Runtime](docs/architecture/git-runtime.md) adds bounded read-only Git inspection, while [Tool Effects](docs/architecture/tool-effects.md) defines pure file/process projections and atomic durable settlement. Phase 9C adds the [Input Security Policy](docs/architecture/input-security-policy.md) and [Secret Redaction](docs/architecture/secret-redaction.md) boundaries. Phase 9D adds the [Security Threat Model](docs/architecture/security-threat-model.md), [Security Capability Matrix](docs/architecture/security-capability-matrix.md), explicit logical/policy sandbox admission, sanitized child environments, fixed-config Git/rg helpers, and secure default Tool Dispatcher composition. Shell output is terminal-sanitized and also passes the injected high-confidence secret sanitizer; process sessions remain runtime-local and are represented in AgentState only through successful effects. The default catalog is injected and immutable.
 
-Phase 9D's sandbox is logical and policy-based, not an OS sandbox: structured workspace tools retain lexical/realpath containment, while `exec_command` and `write_stdin` are explicitly `UNCONFINED_LOCAL_PROCESS` capabilities with sanitized environments and policy/approval gates. Phase 10A's process cancellation, Phase 10B's timeout cleanup, Phase 10C's provider retry waiting, and Phase 10D's budget cleanup are cooperative lifecycle controls and do not claim universal descendant termination or hard isolation. V1 does not claim syscall, network, filesystem, container, seccomp, job-object, or remote-runtime isolation. Phase 10 is sealed after 10D; budget accounting is not billing. Phase 11B executes only resolved PROJECT checks through the shared Runtime/ProcessManager path, records bounded evidence, and leaves the Run at `VERIFYING` until future 11C/11D authority.
+Phase 9D's sandbox is logical and policy-based, not an OS sandbox: structured workspace tools retain lexical/realpath containment, while `exec_command` and `write_stdin` are explicitly `UNCONFINED_LOCAL_PROCESS` capabilities with sanitized environments and policy/approval gates. Phase 10A's process cancellation, Phase 10B's timeout cleanup, Phase 10C's provider retry waiting, and Phase 10D's budget cleanup are cooperative lifecycle controls and do not claim universal descendant termination or hard isolation. V1 does not claim syscall, network, filesystem, container, seccomp, job-object, or remote-runtime isolation. Phase 10 is sealed after 10D; budget accounting is not billing. Phase 11D now supplies the guarded Completion Authority and finalization boundary. Phase 12A exposes that shared Kernel through the production daemon; see [Production Daemon Composition](docs/architecture/daemon-production-composition.md) and [Shared Client Transport](docs/architecture/client-transport.md).
 
 ## Phase 5 Status
 
@@ -88,7 +97,7 @@ Phase 11A/11B/11C/11D details are documented in [Verification Architecture](docs
 - TypeScript、ESM、Node.js 24 LTS
 - pnpm 11 workspace monorepo
 - Vitest、ESLint flat config、Prettier
-- 当前 Protocol 使用 Zod 4，ID 使用 UUIDv7；Storage 使用 Node 原生 `node:sqlite`、Drizzle ORM/Kit RC；Daemon 使用 Fastify 5、`@fastify/sse` 和 `fastify-type-provider-zod`；React/Vite、Ink、AI SDK、Pino、node-pty 等仍留待后续阶段
+- 当前 Protocol 使用 Zod 4，ID 使用 UUIDv7；Storage 使用 Node 原生 `node:sqlite`、Drizzle ORM/Kit RC；Daemon 使用 Fastify 5、`@fastify/sse` 和 `fastify-type-provider-zod`；`@caelush/client` 使用标准 Web Fetch/Streams API；React/Vite、Ink、Pino 等宿主体验仍留待后续阶段，AI SDK 与 node-pty 仅位于既有服务端适配边界
 
 ## Repository 结构
 
@@ -110,6 +119,7 @@ packages/
   storage/      持久化边界
   observability/日志与 Trace 边界
   shared/       少量真正跨模块的无业务工具
+  client/       browser-compatible HTTP/SSE transport 边界
 docs/           架构与工程文档
 tests/          架构守卫测试
 ```
@@ -132,6 +142,37 @@ pnpm check
 
 `pnpm check` 是本地统一质量门，依次执行 lint、typecheck、test、build 和 format check。
 
+## Phase 12A Local Agent Service
+
+Caelush now exposes its completed Agent Kernel through a production local daemon
+control plane with typed HTTP control APIs, durable SSE event replay, and a shared
+browser-compatible client transport. The daemon is loopback-only by default and
+owns the single Core/Runtime/Tool/Provider/Verification composition for its process.
+
+```bash
+pnpm --filter @caelush/daemon build
+pnpm --filter @caelush/daemon start
+```
+
+Provider configuration is supplied at daemon startup through
+`CAELUSH_PROVIDER_ID`, `CAELUSH_PROVIDER_BASE_URL`, optional
+`CAELUSH_PROVIDER_API_KEY` and `CAELUSH_PROVIDER_ALLOWED_MODELS`; an optional
+public default uses `CAELUSH_DEFAULT_PROVIDER` and `CAELUSH_DEFAULT_MODEL`.
+Clients send only `{ provider, model }` and never send provider endpoints or
+credentials. With no provider configured the daemon remains inspectable, while a
+Run that selects a provider cannot execute until that provider is configured.
+
+The lifecycle is explicit: create a Session, create a `PENDING` Run, call
+`POST /api/v1/runs/:runId/start`, and observe durable progress through
+`GET /api/v1/runs/:runId/events` or `@caelush/client.watchRunEvents()`. Start,
+recover, and approval resolution return promptly with an action disposition;
+`cancel` enters Core's durable cancellation path. Run creation never implicitly
+starts execution, and the client does not retry or automatically reconnect.
+
+The interactive Ink CLI is not implemented yet. Phase 12A is **COMPLETED**;
+Phase 12B (Ink), 12C (Web), 12D (client reconnect/host experience), and 12E
+(later host integrations) are **NOT STARTED**.
+
 ## Packages 基础说明
 
-Phase 1 在 `@caelush/protocol` 中定义 Session、Run、Step、State、Tool/Observation/Approval/Verification 和 Event Contract，在 `@caelush/core` 中提供 Run State Machine。Phase 2 在 `@caelush/storage` 中提供 Repository、Run State Snapshot、SQLite Migration 和 Durable Event Store，在 `@caelush/events` 中提供 EventBus、Replay 与 Live Watch。Phase 3 在 `@caelush/daemon` 中提供 Local HTTP Service、Session API、Run API 和 SSE Event Stream。Phase 4A 在 `@caelush/llm` 中定义 provider-neutral LLM contracts 和显式 Provider Registry；Phase 4B 增加注入式 `LLMGateway` 和 one-turn streaming runtime；Phase 5A 在 `@caelush/context` 中发现 workspace、project root、环境、项目画像和层级指令，Phase 5B 增加 task-dependent relevant file discovery、deterministic ranking、provider-independent estimation 与 file budget，Phase 5C 增加 deterministic final context assembly、conversation integrity、compaction boundary 和 caller-supplied model-input budget；Phase 6B 在 `@caelush/core` 中以 ports 方式编排 ContextBuilder、LLMRequest 与单次 provider turn，并以 normalized tool-result batch 支持恢复；Phase 7A 在 `@caelush/tools` 中增加 Tool Registration、严格 Ajv Schema Runtime、immutable ToolRegistry 与 model/runtime catalog consistency，Phase 7B 增加 ToolDispatcher、Gate、durable invocation/observation lifecycle、atomic SQLite settlement、idempotency 与 recovery；Phase 8A 在 `@caelush/runtime` 中增加本地只读 Runtime 与四个 bounded filesystem/search Tool。详见 [Package Boundaries](docs/architecture/package-boundaries.md)、[Architecture Overview](docs/architecture/README.md)、[Protocol V1](docs/architecture/protocol-v1.md)、[Tool System](docs/architecture/tool-system.md)、[Runtime](docs/architecture/runtime.md)、[Context & Project Intelligence](docs/architecture/context-and-project-intelligence.md)、[Relevant Context Discovery](docs/architecture/relevant-context-discovery.md)、[ContextBuilder](docs/architecture/context-builder.md)、[Agent Loop](docs/architecture/agent-loop.md)、[Storage & Events](docs/architecture/storage-and-events.md)、[Local Agent Service](docs/architecture/local-agent-service.md) 和 [LLM Gateway](docs/architecture/llm-gateway.md)。
+Phase 1 在 `@caelush/protocol` 中定义 Session、Run、Step、State、Tool/Observation/Approval/Verification 和 Event Contract，在 `@caelush/core` 中提供 Run State Machine。Phase 2 在 `@caelush/storage` 中提供 Repository、Run State Snapshot、SQLite Migration 和 Durable Event Store，在 `@caelush/events` 中提供 EventBus、Replay 与 Live Watch。Phase 3 在 `@caelush/daemon` 中提供 Local HTTP Service、Session API、Run API 和 SSE Event Stream。Phase 4A 在 `@caelush/llm` 中定义 provider-neutral LLM contracts 和显式 Provider Registry；Phase 4B 增加注入式 `LLMGateway` 和 one-turn streaming runtime；Phase 5A 在 `@caelush/context` 中发现 workspace、project root、环境、项目画像和层级指令，Phase 5B 增加 task-dependent relevant file discovery、deterministic ranking、provider-independent estimation 与 file budget，Phase 5C 增加 deterministic final context assembly、conversation integrity、compaction boundary 和 caller-supplied model-input budget；Phase 6B 在 `@caelush/core` 中以 ports 方式编排 ContextBuilder、LLMRequest 与单次 provider turn，并以 normalized tool-result batch 支持恢复；Phase 7A 在 `@caelush/tools` 中增加 Tool Registration、严格 Ajv Schema Runtime、immutable ToolRegistry 与 model/runtime catalog consistency，Phase 7B 增加 ToolDispatcher、Gate、durable invocation/observation lifecycle、atomic SQLite settlement、idempotency 与 recovery；Phase 8A 在 `@caelush/runtime` 中增加本地只读 Runtime 与四个 bounded filesystem/search Tool；Phase 12A 在 `@caelush/daemon` 中完成生产 Composition Root、Run control routes、provider credential boundary 与 loopback-only Local Agent Service，并在 `@caelush/client` 中提供 typed HTTP/SSE transport。详见 [Package Boundaries](docs/architecture/package-boundaries.md)、[Architecture Overview](docs/architecture/README.md)、[Protocol V1](docs/architecture/protocol-v1.md)、[Tool System](docs/architecture/tool-system.md)、[Runtime](docs/architecture/runtime.md)、[Context & Project Intelligence](docs/architecture/context-and-project-intelligence.md)、[Relevant Context Discovery](docs/architecture/relevant-context-discovery.md)、[ContextBuilder](docs/architecture/context-builder.md)、[Agent Loop](docs/architecture/agent-loop.md)、[Storage & Events](docs/architecture/storage-and-events.md)、[Local Agent Service](docs/architecture/local-agent-service.md)、[Production Daemon Composition](docs/architecture/daemon-production-composition.md)、[Shared Client Transport](docs/architecture/client-transport.md) 和 [LLM Gateway](docs/architecture/llm-gateway.md)。

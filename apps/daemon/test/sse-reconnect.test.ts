@@ -119,8 +119,11 @@ describe("SSE reconnect", () => {
       ["-1", undefined],
       ["1.5", undefined],
       ["NaN", undefined],
+      ["9007199254740993", undefined],
+      ["999999999999999999999999999999", undefined],
       [undefined, -1],
       [undefined, 1.5],
+      [undefined, Number.MAX_SAFE_INTEGER + 1],
       ["1", "2"],
     ] as const) {
       expect(() => resolveEventCursor(lastEventId, afterSequence)).toThrow();
@@ -173,7 +176,14 @@ describe("SSE reconnect", () => {
     expect(frameId(queryFrame.frame)).toBe("2");
     await queryReader.cancel();
 
-    for (const cursor of ["abc", "-1", "1.5", "NaN"]) {
+    for (const cursor of [
+      "abc",
+      "-1",
+      "1.5",
+      "NaN",
+      "9007199254740993",
+      "999999999999999999999999999999",
+    ]) {
       const response = await fetch(
         `${url}/api/v1/runs/${run.id}/events?afterSequence=${encodeURIComponent(cursor)}`,
         { headers: { accept: "text/event-stream" } },

@@ -3,26 +3,33 @@ import {
   createRunId,
   type AgentRun,
   type CreateRunRequest,
+  type ModelRef,
   type RunId,
   type RunListQuery,
   type SessionId,
 } from "@caelush/protocol";
 import { StorageNotFoundError, type RunRepository, type SessionRepository } from "@caelush/storage";
+import type { DaemonModelCanonicalizer } from "../providers/model-canonicalizer.js";
 
 export interface RunServiceOptions {
   readonly sessions: SessionRepository;
   readonly runs: RunRepository;
   readonly now?: () => number;
   readonly createId?: typeof createRunId;
+  readonly modelCanonicalizer?: DaemonModelCanonicalizer;
 }
 
 export class RunService {
   private readonly now: () => number;
   private readonly createId: typeof createRunId;
+  private readonly modelCanonicalizer: DaemonModelCanonicalizer;
 
   constructor(private readonly options: RunServiceOptions) {
     this.now = options.now ?? Date.now;
     this.createId = options.createId ?? createRunId;
+    this.modelCanonicalizer = options.modelCanonicalizer ?? {
+      canonicalize: (selection): ModelRef => ({ ...selection }),
+    };
   }
 
   async createRun(sessionId: SessionId, input: CreateRunRequest): Promise<AgentRun> {
@@ -31,6 +38,7 @@ export class RunService {
       id: this.createId(),
       sessionId,
       ...input,
+      model: this.modelCanonicalizer.canonicalize(input.model),
       status: "PENDING",
       createdAt: this.now(),
     });

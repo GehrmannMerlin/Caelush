@@ -15,13 +15,21 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
+    "@caelush/context": "workspace:*",
+    "@caelush/core": "workspace:*",
     "@caelush/events": "workspace:*",
+    "@caelush/llm": "workspace:*",
     "@caelush/protocol": "workspace:*",
     "@caelush/runtime": "workspace:*",
+    "@caelush/security": "workspace:*",
     "@caelush/storage": "workspace:*",
+    "@caelush/tools": "workspace:*",
     "@caelush/verification": "workspace:*",
     "@fastify/sse": "0.6.0",
     "fastify": "5.12.1",
     "fastify-type-provider-zod": "7.0.0"
+  },
+  "devDependencies": {
+    "@caelush/client": "workspace:*"
   }
 }

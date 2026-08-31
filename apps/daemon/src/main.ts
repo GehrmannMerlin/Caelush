@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { startDaemon, type DaemonHandle } from "./daemon.js";
+import { readProviderConfiguration } from "./config.js";
 
 export function getDefaultDatabasePath(): string {
   return join(homedir(), ".caelush", "caelush.db");
@@ -14,7 +15,7 @@ export async function main(): Promise<void> {
 
   let daemon: DaemonHandle;
   try {
-    daemon = await startDaemon({ databasePath });
+    daemon = await startDaemon({ databasePath, ...readProviderConfiguration(process.env) });
   } catch (error) {
     console.error("Unable to start Caelush daemon.", error);
     process.exitCode = 1;

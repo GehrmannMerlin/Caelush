@@ -1,5 +1,5 @@
 import {
-  AgentSessionSchema,
+  ClientAgentSessionSchema,
   CreateSessionRequestSchema,
   SessionListQuerySchema,
   SessionListResponseSchema,
@@ -8,14 +8,15 @@ import {
 } from "@caelush/protocol";
 import type { FastifyInstance } from "fastify";
 import { SessionService } from "../services/session-service.js";
+import { toClientAgentSession } from "../services/public-projection.js";
 
 export function registerSessionRoutes(app: FastifyInstance, service: SessionService): void {
   app.post(
     "/api/v1/sessions",
-    { schema: { body: CreateSessionRequestSchema, response: { 201: AgentSessionSchema } } },
+    { schema: { body: CreateSessionRequestSchema, response: { 201: ClientAgentSessionSchema } } },
     async (request, reply) => {
       const session = await service.createSession(request.body as CreateSessionRequest);
-      return reply.code(201).send(session);
+      return reply.code(201).send(toClientAgentSession(session));
     },
   );
 
@@ -26,16 +27,16 @@ export function registerSessionRoutes(app: FastifyInstance, service: SessionServ
     },
     async (request) => {
       const query = request.query as SessionListQuery;
-      return { items: await service.listSessions(query.limit) };
+      return { items: (await service.listSessions(query.limit)).map(toClientAgentSession) };
     },
   );
 
   app.get(
     "/api/v1/sessions/:sessionId",
-    { schema: { response: { 200: AgentSessionSchema } } },
+    { schema: { response: { 200: ClientAgentSessionSchema } } },
     async (request) => {
       const { sessionId } = request.params as { sessionId: string };
-      return service.getSession(sessionId as never);
+      return toClientAgentSession(await service.getSession(sessionId as never));
     },
   );
 }

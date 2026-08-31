@@ -35,15 +35,15 @@ is also no shared typed client for CLI or future Web surfaces.
 
 Phase 12A closes that gap while preserving the existing architecture:
 
-* the daemon is the only local composition root;
-* `RunController` remains the canonical run lifecycle authority;
-* `EventBus.watch()` remains the only replay/live event source;
-* Tools still execute only through Dispatcher and Batch Coordinator;
-* the Local Runtime remains a replaceable execution substrate;
-* providers receive only gateway-owned calls and credentials stay at the runtime
+- the daemon is the only local composition root;
+- `RunController` remains the canonical run lifecycle authority;
+- `EventBus.watch()` remains the only replay/live event source;
+- Tools still execute only through Dispatcher and Batch Coordinator;
+- the Local Runtime remains a replaceable execution substrate;
+- providers receive only gateway-owned calls and credentials stay at the runtime
   boundary;
-* the public API exposes provider/model selection, never provider endpoint details;
-* the client validates all public responses and parses SSE incrementally without
+- the public API exposes provider/model selection, never provider endpoint details;
+- the client validates all public responses and parses SSE incrementally without
   introducing a Node-only dependency.
 
 ## Existing architecture characterization
@@ -64,13 +64,13 @@ option is currently unused.
 
 `packages/core/src/run-controller.ts` already owns:
 
-* canonical start/recover/approval/cancel orchestration;
-* the normal per-run execution lock;
-* the Phase 10A cancellation intent and abort ordering;
-* Phase 10B deadline and timeout settlement;
-* durable Run/State/Step/Conversation/Continuation/event commits;
-* Tool batch and Verification boundaries;
-* terminal status authority, including `VERIFYING` and completion verification.
+- canonical start/recover/approval/cancel orchestration;
+- the normal per-run execution lock;
+- the Phase 10A cancellation intent and abort ordering;
+- Phase 10B deadline and timeout settlement;
+- durable Run/State/Step/Conversation/Continuation/event commits;
+- Tool batch and Verification boundaries;
+- terminal status authority, including `VERIFYING` and completion verification.
 
 The daemon must call these methods and must not mutate Run status or storage rows to
 simulate execution.
@@ -117,12 +117,12 @@ Research was performed against official primary sources on 2026-08-31. These sou
 were used for implementation patterns, not as a reason to copy another product's
 protocol.
 
-| Source | Observed pattern | Adopted in Caelush | Rejected or constrained |
-| --- | --- | --- | --- |
-| [OpenAI Codex app-server client README](https://github.com/openai/codex/blob/main/codex-rs/app-server-client/README.md) | A shared client centralizes bootstrap, typed transport, caller identity, and graceful shutdown; callers should not duplicate request plumbing. | `@caelush/client` owns typed HTTP, response validation, SSE parsing, abort handling, and compatibility checks. | Codex's in-process typed channels and JSON-RPC envelope are not copied because Caelush's V1 boundary is HTTP + SSE and must remain usable by browser-like clients. |
-| [OpenAI Codex app-server turn-start tests](https://github.com/openai/codex/blob/main/codex-rs/app-server/tests/suite/v2/turn_start.rs) | A start request returns an immediate acknowledgement while richer lifecycle notifications continue asynchronously; active-turn behavior is tested separately from request acknowledgement. | `POST .../start` returns 202 and a disposition; background execution is observed through durable Run state and SSE. | Codex-specific thread/turn/item method names and notifications are not imported into the Caelush protocol. |
-| [OpenAI Codex app-server thread-resume tests](https://github.com/openai/codex/blob/main/codex-rs/app-server/tests/suite/v2/thread_resume.rs) | Resume is an explicit lifecycle operation and must reconcile persisted history/metadata before a later turn. | `POST .../recover` calls `RunController.recover()` and never invents a second recovery state machine. | File-rollout and Codex-specific thread metadata are outside the Caelush V1 contract. |
-| [Anthropic Claude Code CLI reference](https://code.claude.com/docs/en/cli-usage) | Public CLI surfaces distinguish continue/resume, background execution, model selection, permission mode, and structured streaming output. | Daemon actions distinguish start/recover/cancel/approval; model selection is public data and permissions remain server-enforced. | CLI flags, Claude session IDs, and product-specific permission names are not part of Caelush's protocol. |
+| Source                                                                                                                                       | Observed pattern                                                                                                                                                                           | Adopted in Caelush                                                                                                               | Rejected or constrained                                                                                                                                            |
+| -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [OpenAI Codex app-server client README](https://github.com/openai/codex/blob/main/codex-rs/app-server-client/README.md)                      | A shared client centralizes bootstrap, typed transport, caller identity, and graceful shutdown; callers should not duplicate request plumbing.                                             | `@caelush/client` owns typed HTTP, response validation, SSE parsing, abort handling, and compatibility checks.                   | Codex's in-process typed channels and JSON-RPC envelope are not copied because Caelush's V1 boundary is HTTP + SSE and must remain usable by browser-like clients. |
+| [OpenAI Codex app-server turn-start tests](https://github.com/openai/codex/blob/main/codex-rs/app-server/tests/suite/v2/turn_start.rs)       | A start request returns an immediate acknowledgement while richer lifecycle notifications continue asynchronously; active-turn behavior is tested separately from request acknowledgement. | `POST .../start` returns 202 and a disposition; background execution is observed through durable Run state and SSE.              | Codex-specific thread/turn/item method names and notifications are not imported into the Caelush protocol.                                                         |
+| [OpenAI Codex app-server thread-resume tests](https://github.com/openai/codex/blob/main/codex-rs/app-server/tests/suite/v2/thread_resume.rs) | Resume is an explicit lifecycle operation and must reconcile persisted history/metadata before a later turn.                                                                               | `POST .../recover` calls `RunController.recover()` and never invents a second recovery state machine.                            | File-rollout and Codex-specific thread metadata are outside the Caelush V1 contract.                                                                               |
+| [Anthropic Claude Code CLI reference](https://code.claude.com/docs/en/cli-usage)                                                             | Public CLI surfaces distinguish continue/resume, background execution, model selection, permission mode, and structured streaming output.                                                  | Daemon actions distinguish start/recover/cancel/approval; model selection is public data and permissions remain server-enforced. | CLI flags, Claude session IDs, and product-specific permission names are not part of Caelush's protocol.                                                           |
 
 The references support the separation of daemon lifecycle authority from client
 presentation and transport. They do not establish compatibility with Codex or Claude
@@ -175,15 +175,15 @@ fetch can occur.
 
 `RunExecutionSupervisor` is a small daemon-owned adapter around `RunController`:
 
-* it tracks at most one background task per Run ID;
-* it preflights current durable Run status before scheduling;
-* it registers ownership before launching the promise;
-* it invokes `RunController.start()` or `RunController.recover()` without awaiting it
+- it tracks at most one background task per Run ID;
+- it preflights current durable Run status before scheduling;
+- it registers ownership before launching the promise;
+- it invokes `RunController.start()` or `RunController.recover()` without awaiting it
   in the HTTP handler;
-* it catches and logs background rejection using safe metadata;
-* it removes the entry only if the map still contains the same task token;
-* it exposes drain/dispose for lifecycle shutdown;
-* it never writes Run status and never bypasses Core locks.
+- it catches and logs background rejection using safe metadata;
+- it removes the entry only if the map still contains the same task token;
+- it exposes drain/dispose for lifecycle shutdown;
+- it never writes Run status and never bypasses Core locks.
 
 Start returns `SCHEDULED`, `ALREADY_ACTIVE`, or a terminal no-op disposition. Recover
 rejects PENDING with 409, returns a terminal no-op for terminal Runs, and otherwise
@@ -199,12 +199,12 @@ repository's same-resolution idempotency and conflict behavior is preserved.
 
 The existing CRUD and event paths remain intact. Add:
 
-* `GET /api/v1/info`
-* `POST /api/v1/runs/:runId/start`
-* `POST /api/v1/runs/:runId/recover`
-* `POST /api/v1/runs/:runId/cancel`
-* `GET /api/v1/runs/:runId/approvals`
-* `POST /api/v1/runs/:runId/approvals/:approvalId/resolve`
+- `GET /api/v1/info`
+- `POST /api/v1/runs/:runId/start`
+- `POST /api/v1/runs/:runId/recover`
+- `POST /api/v1/runs/:runId/cancel`
+- `GET /api/v1/runs/:runId/approvals`
+- `POST /api/v1/runs/:runId/approvals/:approvalId/resolve`
 
 All action response bodies use strict Protocol schemas. Internal
 `RunControllerResult` values are mapped to safe public dispositions and never
@@ -272,21 +272,21 @@ repository.
 
 Implementation follows red → green → refactor:
 
-* Protocol tests first cover strict public model selection, public projections,
+- Protocol tests first cover strict public model selection, public projections,
   `DaemonInfo`, action dispositions, approval list/resolve, and API errors.
-* Supervisor tests cover immediate nonblocking start, per-run deduplication, terminal
+- Supervisor tests cover immediate nonblocking start, per-run deduplication, terminal
   no-op, PENDING recover conflict, background rejection cleanup, token-safe cleanup,
   direct cancel, and drain.
-* Daemon route tests cover all action status codes, unknown IDs, loopback/origin
+- Daemon route tests cover all action status codes, unknown IDs, loopback/origin
   rejection, no provider fetch on client `baseUrl`, canonical model projection, and
   `/info` secret absence.
-* Client tests cover every JSON method, error mapping, compatibility rejection,
+- Client tests cover every JSON method, error mapping, compatibility rejection,
   chunk-split UTF-8/SSE parsing, comments/multiline data, durable/ephemeral identity,
   run identity, abort, and no reconnect.
-* Integration tests compose the real daemon with injected/fake provider transport and
+- Integration tests compose the real daemon with injected/fake provider transport and
   verify the request → background Kernel → durable status/event → client observation
   path without reimplementing Core transitions in the daemon.
-* Architecture tests enforce package dependencies and the no-Node/no-runtime-import
+- Architecture tests enforce package dependencies and the no-Node/no-runtime-import
   boundary for `@caelush/client`.
 
 The full repository verification remains `pnpm check`. Because the repository already
@@ -303,15 +303,14 @@ a new database table or event side channel for the supervisor or client.
 
 ## Self-review checklist
 
-* Does the daemon own composition? Yes; app/CLI/Web receive ports and do not create an
+- Does the daemon own composition? Yes; app/CLI/Web receive ports and do not create an
   AgentLoop.
-* Does Core remain the status authority? Yes; action routes call RunController only.
-* Is provider credential access server-only? Yes; only startup composition creates
+- Does Core remain the status authority? Yes; action routes call RunController only.
+- Is provider credential access server-only? Yes; only startup composition creates
   provider adapters and public schemas omit endpoints.
-* Is event replay authoritative? Yes; the route consumes EventBus.watch() and the
+- Is event replay authoritative? Yes; the route consumes EventBus.watch() and the
   client validates durable identities.
-* Is shutdown storage-safe? Yes; supervisor/SSE consumers are stopped before Storage.
-* Is the client transport-only? Yes; it imports Protocol only and uses Web APIs.
-* Are future phases avoided? Yes; this design ends at the Phase 12A daemon/client
+- Is shutdown storage-safe? Yes; supervisor/SSE consumers are stopped before Storage.
+- Is the client transport-only? Yes; it imports Protocol only and uses Web APIs.
+- Are future phases avoided? Yes; this design ends at the Phase 12A daemon/client
   boundary.
-

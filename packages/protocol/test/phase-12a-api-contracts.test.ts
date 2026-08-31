@@ -115,6 +115,9 @@ describe("Phase 12A public Protocol contracts", () => {
       run: { ...baseRun, model: { provider: "openai", model: "gpt-5.4" } },
     });
     expect(response.action).toBe("START");
+    expect(RunActionResponseSchema.safeParse({ ...response, action: "UNKNOWN" }).success).toBe(
+      false,
+    );
     expect(RunActionResponseSchema.safeParse({ ...response, disposition: "UNKNOWN" }).success).toBe(
       false,
     );

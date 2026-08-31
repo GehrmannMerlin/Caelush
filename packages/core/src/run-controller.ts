@@ -80,6 +80,7 @@ import {
   VerificationStageRunner,
   buildTaskReviewBundle,
   compileVerificationRepairContext,
+  createDiscoveryEvidence,
   createGitEvidence,
   createTaskAcceptanceEvidence,
   createVerificationRepairPolicy,
@@ -1927,22 +1928,22 @@ export class RunController {
         },
         GIT: {
           preflight: async (check) => {
-            cachedGitStatus = await git.status({ signal });
-            if (cachedGitStatus.available || check.requirement === "REQUIRED") return undefined;
-            const skipped = reviewGitChangeset({
-              changedFiles,
-              requirement: check.requirement,
-              status: cachedGitStatus,
-              diffs: [],
+            cachedGitStatus = await git.status({
+              workspace: snapshot.run.workspace,
+              signal,
             });
-            const evidence = createGitEvidence({
+            if (cachedGitStatus.available || check.requirement === "REQUIRED") return undefined;
+            const evidence = createDiscoveryEvidence({
               id: (
                 this.dependencies.verificationEvidenceIdFactory ?? createVerificationEvidenceId
               )(),
               planId: plan.id,
               checkId: check.id,
               capturedAt: this.dependencies.clock.now(),
-              result: skipped,
+              resolver: "runtime-git",
+              ecosystem: "git",
+              available: false,
+              reason: "TOOLING_UNAVAILABLE",
             });
             return {
               status: "SKIPPED" as const,
@@ -1951,7 +1952,12 @@ export class RunController {
             };
           },
           execute: async (check) => {
-            const status = cachedGitStatus ?? (cachedGitStatus = await git.status({ signal }));
+            const status =
+              cachedGitStatus ??
+              (cachedGitStatus = await git.status({
+                workspace: snapshot.run.workspace,
+                signal,
+              }));
             const diffs = [];
             for (const changedFile of changedFiles.slice(0, 128)) {
               if (
@@ -1960,7 +1966,14 @@ export class RunController {
                 )
               )
                 continue;
-              diffs.push(await git.diff({ path: changedFile.path, scope: "ALL", signal }));
+              diffs.push(
+                await git.diff({
+                  workspace: snapshot.run.workspace,
+                  path: changedFile.path,
+                  scope: "ALL",
+                  signal,
+                }),
+              );
             }
             const result = reviewGitChangeset({
               changedFiles,
@@ -2136,6 +2149,7 @@ export class RunController {
           (item) => item.checkId === gitCheck.id && item.kind === "GIT",
         );
         const status = await this.dependencies.verificationGit.status({
+          workspace: snapshot.run.workspace,
           signal: this.executionSignal(snapshot.run.id),
         });
         const diffs = [];
@@ -2148,6 +2162,7 @@ export class RunController {
             continue;
           diffs.push(
             await this.dependencies.verificationGit.diff({
+              workspace: snapshot.run.workspace,
               path: changedFile.path,
               scope: "ALL",
               signal: this.executionSignal(snapshot.run.id),

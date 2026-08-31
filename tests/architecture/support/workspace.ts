@@ -20,6 +20,7 @@ export const packageNames = [
   "storage",
   "observability",
   "shared",
+  "client",
 ] as const;
 
 export const appNames = ["daemon", "cli", "web"] as const;

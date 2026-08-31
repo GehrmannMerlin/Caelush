@@ -242,7 +242,7 @@ Phase 8 后续必须遵守固定的 8B、8C、8D 边界；不得新增 Phase 8 �
 
 ## Phase 11D Completion Authority and Finalization Rules
 
-- Phase 11 is fixed to exactly 11A, 11B, 11C, and 11D. Phase 11D is the final round; do not add 11E or Phase 12.
+- Phase 11 is fixed to exactly 11A, 11B, 11C, and 11D. Phase 11D is complete and is the final Phase 11 round; do not add 11E.
 - Completion Authority belongs only to Core/RunController. VerificationRunner, TaskReviewer, AgentLoop, LLM providers, Tools, and Runtime may produce evidence but never transition a Run to COMPLETED.
 - `Verification PASS` is necessary but not sufficient. New plans bind the final candidate with a required UTF-8 SHA-256 `candidateHash`; legacy plans may decode without it but cannot complete.
 - Workspace freshness reuses the existing Phase 8 `WorkspacePathResolver` and streams raw bytes for bounded `{kind, sizeBytes, sha256}` fingerprints. No second resolver, content in evidence, silent truncation, symlink escape, or unverifiable freshness is allowed.
@@ -390,7 +390,7 @@ Phase 5 final ContextBuilder rules:
 
 ## Phase 11 Verification Domain and Execution Rules
 
-- Phase 11 contains exactly 11A, 11B, 11C, and 11D. The current completed boundary is 11B. Do not add 11A-1, 11A-2, 11B-1, 11E, or another Verification round.
+- Phase 11 contains exactly 11A, 11B, 11C, and 11D. The current completed boundary is 11D. Do not add 11A-1, 11A-2, 11B-1, 11E, or another Verification round.
 - Phase 11A planning creates intent-only `VerificationPlan`/`VerificationCheck`/`VerificationEvidence` contracts and a durable Final Candidate → `VERIFYING` boundary. The 11A planning sub-boundary does not execute checks or transition `VERIFYING` to `COMPLETED`; Phase 11B execution rules are below.
 - `@caelush/protocol` owns `VerificationPlanId`, `VerificationCheckId`, and `VerificationEvidenceId` with the existing UUIDv7 ID convention. Protocol values remain JSON-safe and provider/runtime/storage/UI free; no command, Runtime object, service object, credential, raw hidden reasoning, or raw candidate text enters these contracts.
 - `VerificationPlan` binds exactly one Run and one final-candidate source Step to an immutable planner version, canonical SHA-256 plan hash, ordered checks, and creation timestamp. Hash input excludes random plan/check IDs and timestamps and includes the source Step, planner version, and ordered intent/stage/requirement data.
@@ -414,3 +414,22 @@ Phase 11B rules:
 - Command evidence is redacted before bounded snippets are persisted. Protocol evidence details are JSON-safe and capped at 32 KiB serialized UTF-8; raw stdout/stderr, exception text, command lines, credentials, and full scripts must not enter public errors or event payloads.
 - PROJECT checks execute in ordinal order with fail-fast for blocking failures/errors. Unavailable `IF_AVAILABLE`/`ADVISORY` checks become `SKIPPED` with bounded discovery evidence; security rejection and runtime infrastructure errors become `ERROR`; non-zero/signal exits are normal failed checks.
 - Recovery must never replay a durable `RUNNING` verification check because its process side-effect boundary is uncertain. A clean `PENDING` boundary may continue only the next project check. Existing Run cancellation and deadline authorities win, and late verification results cannot reopen a terminal Run.
+
+## Phase 12A Production Daemon and Shared Client Rules
+
+- Phase 12 contains exactly 12A, 12B, 12C, 12D and 12E. The current round is 12A; do not implement 12B/12C/12D/12E capabilities in this round.
+- Phase 12A owns the production daemon execution surface and shared client transport. It does not implement the Ink TUI, React/Web UI, timeline UI, approval prompts, resume pickers, CLI packaging, or host presentation behavior.
+- CLI and Web are clients of the Caelush Local Agent Service and must not import `RunController`, `AgentLoop`, Runtime, Storage, Security or Tool internals. The production daemon composition root is the only application layer responsible for wiring concrete Agent Kernel dependencies.
+- The daemon owns one process-scoped `Storage`/`EventBus` lifecycle, one Runtime/RuntimeResolver, one Tool Registry/Dispatcher/Coordinator, one Provider Registry/Gateway, one AgentLoop, one RunController and one `RunExecutionSupervisor`. Routes remain thin dependency-injected adapters.
+- Run creation and Run execution remain separate operations. Creating a Run must not implicitly start it, create AgentState, call a Provider, execute a Tool, or publish `run.started`.
+- Long-running `RunController` operations must not keep an HTTP control request open for the entire Agent lifecycle. Accepted start/recover/approval continuation is driven server-side and progress is observed through the committed AgentEvent SSE stream.
+- `RunExecutionSupervisor` is process-local coordination only. It may deduplicate one active driver per Run and capture background failures, but durable SQLite state and Core's canonical Run State Machine remain authoritative. It must never execute Tools or Verification itself.
+- Cancellation retains Phase 10A priority and must not wait behind the normal background Run driver. Recovery calls `RunController.recover()` and never resets non-terminal durable state to `PENDING`.
+- Approval resolution uses the existing durable Approval workflow through `RunController.resolveApproval()`; HTTP routes must not directly mutate Approval storage or create a second approval state machine.
+- Public HTTP contracts live in `@caelush/protocol` and use strict schemas. Internal `RunControllerResult` and provider/runtime/storage types must never be serialized directly as public responses.
+- The shared `@caelush/client` package may depend only on Protocol and standard browser-compatible Web APIs. Its production code must not import Node built-ins, Core, Runtime, Storage, Security, Tools, Context, Verification, LLM, Fastify or EventBus.
+- `@caelush/client` validates JSON responses, bounded API error envelopes, `/api/v1/info` compatibility, and every `AgentEvent` SSE payload. Durable SSE IDs must match durable event sequence; ephemeral events never carry an ID.
+- Phase 12A provides explicit `afterSequence`/`Last-Event-ID` replay primitives but no automatic SSE reconnect, retry, deduplication cache, or host UI policy.
+- Provider credentials and provider endpoints are daemon-side startup configuration. Clients select only `{ provider, model }`; client-provided `ModelRef.baseUrl`, headers, credentials and arbitrary provider options must be rejected before provider transport.
+- The daemon remains loopback-only in V1 and must not add permissive CORS or trust forwarded headers. Permission, Security, Approval, Budget and Verification authority remain server-side and cannot be overridden by client transport.
+- Phase 12A must not introduce duplicate Provider fetch/SSE parsing, duplicate Runtime process/filesystem/Git execution, React/Ink UI, WebSocket, Web Search, MCP, Browser, Computer Use, remote/Docker Runtime, provider CRUD, auth, or a new database/event side channel.

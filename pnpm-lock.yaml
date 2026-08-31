@@ -37,18 +37,33 @@ importers:
 
   apps/daemon:
     dependencies:
+      '@caelush/context':
+        specifier: workspace:*
+        version: link:../../packages/context
+      '@caelush/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@caelush/events':
         specifier: workspace:*
         version: link:../../packages/events
+      '@caelush/llm':
+        specifier: workspace:*
+        version: link:../../packages/llm
       '@caelush/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
       '@caelush/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+      '@caelush/security':
+        specifier: workspace:*
+        version: link:../../packages/security
       '@caelush/storage':
         specifier: workspace:*
         version: link:../../packages/storage
+      '@caelush/tools':
+        specifier: workspace:*
+        version: link:../../packages/tools
       '@caelush/verification':
         specifier: workspace:*
         version: link:../../packages/verification
@@ -61,8 +76,18 @@ importers:
       fastify-type-provider-zod:
         specifier: 7.0.0
         version: 7.0.0(@fastify/swagger@9.8.1)(fastify@5.12.1)(openapi-types@12.1.3)(zod@4.4.3)
+    devDependencies:
+      '@caelush/client':
+        specifier: workspace:*
+        version: link:../../packages/client
 
   apps/web: {}
+
+  packages/client:
+    dependencies:
+      '@caelush/protocol':
+        specifier: workspace:*
+        version: link:../protocol
 
   packages/context:
     dependencies:

@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { ApprovalPolicySchema, PermissionProfileSchema } from "../policy.js";
 import { RunLimitsSchema } from "../limits.js";
-import { ModelRefSchema } from "../model.js";
 import { RunStatusSchema } from "../run.js";
 import { RuntimeRefSchema } from "../runtime.js";
 import { WorkspaceRefSchema } from "../workspace.js";

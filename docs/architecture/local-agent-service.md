@@ -109,7 +109,11 @@ listen
 
 关闭顺序是：停止接受新请求、关闭 streaming consumers、等待 HTTP 请求、关闭 Fastify、关闭 Storage。`close()` 幂等；SIGINT/SIGTERM 只由 `main.ts` 处理，library code 不调用 `process.exit()`。
 
-本阶段故意没有 Cancellation 或 Approval resolution endpoint。取消必须有真实的 RunController/RunExecutionContext/AbortController 中止语义；Approval 必须有 ApprovalManager 和可恢复的 resolution 语义。在这些能力冻结前返回一个看似成功但不会影响 Agent 的 endpoint 会建立虚假 API contract，因此被刻意延后。
+Phase 12A 已将真实的 RunController cancellation 和 durable Approval resolution
+暴露为 daemon control routes。`POST /start`、`/recover` 和 Approval resolution
+只接受动作并在后台驱动 Core；`POST /cancel` 直接进入 Phase 10A 的高优先级
+取消路径。HTTP 不等待整个 Agent 生命周期，进度和最终结果必须通过
+`EventBus.watch()` 驱动的 SSE 与 Run 查询观察。
 
 ## Package boundaries
 
@@ -125,4 +129,10 @@ Daemon 只能通过各 package 的 public `src/index.ts` 进入 Protocol、Stora
 
 ## Current boundary
 
-Phase 3 之后 Caelush 拥有工程地基、Protocol、Run State Machine、SQLite persistence、EventBus、Local Agent Service、HTTP API 和 SSE Event Stream，但仍不会真正执行 Agent Task。下一阶段是 Phase 4 LLM Gateway；本阶段不实现 Phase 4。
+Phase 12A 之后，Production daemon 已是 Caelush Local Agent Service：它组合
+共享 AgentLoop/RunController、Provider Gateway、Tool Dispatcher、Local Runtime、
+Approval/Budget/Verification 和单一 Storage/EventBus 生命周期，并提供 typed
+HTTP control APIs 与 durable SSE replay。Session/Run creation 仍不会隐式执行
+Run；CLI/Web 通过 `@caelush/client` 作为后续 host 接入。当前未实现 Ink/React
+TUI、Web UI、自动 SSE reconnect、remote runtime、MCP、Browser、Computer Use
+或新的 Core/Provider/Tool state machine。

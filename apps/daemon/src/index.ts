@@ -1,9 +1,42 @@
 export { buildDaemonApp } from "./app.js";
 export type { DaemonDependencies } from "./app.js";
-export { DEFAULT_DAEMON_CONFIG, createDaemonConfig } from "./config.js";
-export type { DaemonConfig } from "./config.js";
+export {
+  DEFAULT_DAEMON_CONFIG,
+  assertLoopbackDaemonHost,
+  createDaemonConfig,
+  readProviderConfiguration,
+} from "./config.js";
+export type { DaemonConfig, DaemonProviderStartupConfiguration } from "./config.js";
 export { startDaemon } from "./daemon.js";
 export type { DaemonHandle, DaemonOptions } from "./daemon.js";
+export { composeDaemon } from "./daemon-composition.js";
+export type {
+  DaemonClock,
+  DaemonComposition,
+  DaemonCompositionOptions,
+} from "./daemon-composition.js";
+export {
+  ConfiguredModelCanonicalizer,
+  DaemonModelConfigurationError,
+  toClientModelSelection,
+} from "./providers/model-canonicalizer.js";
+export type {
+  DaemonModelCanonicalizer,
+  DaemonModelProviderConfig,
+} from "./providers/model-canonicalizer.js";
+export {
+  RunExecutionSupervisor,
+  RunExecutionSupervisorBusyError,
+  RunExecutionSupervisorConflictError,
+  RunExecutionSupervisorInfrastructureError,
+} from "./execution/run-execution-supervisor.js";
+export type {
+  RunExecutionController,
+  RunExecutionSupervisorDisposition,
+  RunExecutionSupervisorLogger,
+  RunExecutionSupervisorOptions,
+  RunExecutionSupervisorResult,
+} from "./execution/run-execution-supervisor.js";
 export {
   createRuntimeGitVerificationPort,
   createRuntimeWorkspaceVerificationPort,

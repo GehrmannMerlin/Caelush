@@ -6,7 +6,19 @@ import {
   StorageNotFoundError,
 } from "@caelush/storage";
 import type { ApiErrorCode, ApiErrorResponse } from "@caelush/protocol";
+import {
+  RunControllerBusyError,
+  RunControllerConflictError,
+  RunControllerInfrastructureError,
+  RunControllerInputError,
+} from "@caelush/core";
 import { LocalRequestRejectedError } from "./local-request-guard.js";
+import {
+  RunExecutionSupervisorBusyError,
+  RunExecutionSupervisorConflictError,
+  RunExecutionSupervisorInfrastructureError,
+} from "../execution/run-execution-supervisor.js";
+import { DaemonModelConfigurationError } from "../providers/model-canonicalizer.js";
 
 export class InvalidEventCursorError extends Error {
   constructor() {
@@ -72,6 +84,32 @@ function mapError(error: unknown): MappedError {
       statusCode: 409,
       code: "CONFLICT",
       message: "The request conflicts with stored data.",
+    };
+  }
+  if (error instanceof DaemonModelConfigurationError) {
+    return {
+      statusCode: 409,
+      code: "MODEL_PROVIDER_UNAVAILABLE",
+      message: "The requested model provider or model is unavailable.",
+    };
+  }
+  if (
+    error instanceof RunControllerBusyError ||
+    error instanceof RunControllerConflictError ||
+    error instanceof RunControllerInputError ||
+    error instanceof RunExecutionSupervisorBusyError ||
+    error instanceof RunExecutionSupervisorConflictError
+  ) {
+    return { statusCode: 409, code: "CONFLICT", message: "The request conflicts with Run state." };
+  }
+  if (
+    error instanceof RunControllerInfrastructureError ||
+    error instanceof RunExecutionSupervisorInfrastructureError
+  ) {
+    return {
+      statusCode: 500,
+      code: "INTERNAL_ERROR",
+      message: "Run execution could not be started.",
     };
   }
   if (error instanceof StorageDecodeError || error instanceof StorageError) {

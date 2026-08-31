@@ -17,10 +17,13 @@ async function* mapEvents(events: AsyncIterable<AgentEvent>) {
 function parseCursor(value: unknown): number | undefined {
   if (value === undefined) return undefined;
   if (typeof value === "number") {
-    if (Number.isInteger(value) && value >= 0) return value;
+    if (Number.isSafeInteger(value) && value >= 0) return value;
     throw new InvalidEventCursorError();
   }
-  if (typeof value === "string" && /^\d+$/.test(value)) return Number(value);
+  if (typeof value === "string" && /^\d+$/.test(value)) {
+    const parsed = Number(value);
+    if (Number.isSafeInteger(parsed)) return parsed;
+  }
   throw new InvalidEventCursorError();
 }
 

@@ -1,5 +1,5 @@
 import {
-  AgentRunSchema,
+  ClientAgentRunSchema,
   CreateRunRequestSchema,
   RunListQuerySchema,
   RunListResponseSchema,
@@ -8,15 +8,16 @@ import {
 } from "@caelush/protocol";
 import type { FastifyInstance } from "fastify";
 import { RunService } from "../services/run-service.js";
+import { toClientAgentRun } from "../services/public-projection.js";
 
 export function registerRunRoutes(app: FastifyInstance, service: RunService): void {
   app.post(
     "/api/v1/sessions/:sessionId/runs",
-    { schema: { body: CreateRunRequestSchema, response: { 201: AgentRunSchema } } },
+    { schema: { body: CreateRunRequestSchema, response: { 201: ClientAgentRunSchema } } },
     async (request, reply) => {
       const { sessionId } = request.params as { sessionId: string };
       const run = await service.createRun(sessionId as never, request.body as CreateRunRequest);
-      return reply.code(201).send(run);
+      return reply.code(201).send(toClientAgentRun(run));
     },
   );
 
@@ -26,17 +27,19 @@ export function registerRunRoutes(app: FastifyInstance, service: RunService): vo
     async (request) => {
       const { sessionId } = request.params as { sessionId: string };
       return {
-        items: await service.listRuns(sessionId as never, request.query as RunListQuery),
+        items: (await service.listRuns(sessionId as never, request.query as RunListQuery)).map(
+          toClientAgentRun,
+        ),
       };
     },
   );
 
   app.get(
     "/api/v1/runs/:runId",
-    { schema: { response: { 200: AgentRunSchema } } },
+    { schema: { response: { 200: ClientAgentRunSchema } } },
     async (request) => {
       const { runId } = request.params as { runId: string };
-      return service.getRun(runId as never);
+      return toClientAgentRun(await service.getRun(runId as never));
     },
   );
 }
