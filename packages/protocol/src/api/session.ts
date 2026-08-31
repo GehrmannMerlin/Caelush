@@ -1,14 +1,14 @@
 import { z } from "zod";
-import { ModelRefSchema } from "../model.js";
 import { JsonObjectSchema } from "../primitives/json.js";
-import { AgentSessionSchema } from "../session.js";
 import { WorkspaceRefSchema } from "../workspace.js";
+import { ClientModelSelectionSchema } from "./model-selection.js";
+import { ClientAgentSessionSchema } from "./public-entities.js";
 
 export const CreateSessionRequestSchema = z
   .object({
     title: z.string().min(1).optional(),
     defaultWorkspace: WorkspaceRefSchema.optional(),
-    defaultModel: ModelRefSchema.optional(),
+    defaultModel: ClientModelSelectionSchema.optional(),
     metadata: JsonObjectSchema.optional(),
   })
   .strict();
@@ -23,7 +23,7 @@ export type SessionListQuery = z.infer<typeof SessionListQuerySchema>;
 
 export const SessionListResponseSchema = z
   .object({
-    items: z.array(AgentSessionSchema),
+    items: z.array(ClientAgentSessionSchema),
   })
   .strict();
 export type SessionListResponse = z.infer<typeof SessionListResponseSchema>;

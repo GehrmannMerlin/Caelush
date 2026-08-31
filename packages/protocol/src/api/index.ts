@@ -1,5 +1,27 @@
 export { ApiErrorCodeSchema, ApiErrorResponseSchema, ApiErrorSchema } from "./common.js";
 export type { ApiError, ApiErrorCode, ApiErrorResponse } from "./common.js";
+export { ClientModelSelectionSchema } from "./model-selection.js";
+export type { ClientModelSelection } from "./model-selection.js";
+export { ClientAgentRunSchema, ClientAgentSessionSchema } from "./public-entities.js";
+export type { ClientAgentRun, ClientAgentSession } from "./public-entities.js";
+export { DaemonInfoSchema } from "./daemon-info.js";
+export type { DaemonCapabilities, DaemonInfo } from "./daemon-info.js";
+export {
+  RunActionDispositionSchema,
+  RunActionSchema,
+  RunActionResponseSchema,
+} from "./run-actions.js";
+export type { RunAction, RunActionDisposition, RunActionResponse } from "./run-actions.js";
+export {
+  ApprovalListQuerySchema,
+  ApprovalListResponseSchema,
+  ApprovalResolutionRequestSchema,
+} from "./approval.js";
+export type {
+  ApprovalListQuery,
+  ApprovalListResponse,
+  ApprovalResolutionRequest,
+} from "./approval.js";
 export { HealthResponseSchema } from "./health.js";
 export type { HealthResponse } from "./health.js";
 export {

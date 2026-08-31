@@ -6,6 +6,7 @@ export const ApiErrorCodeSchema = z.enum([
   "INVALID_EVENT_CURSOR",
   "NOT_FOUND",
   "CONFLICT",
+  "MODEL_PROVIDER_UNAVAILABLE",
   "STORAGE_ERROR",
   "INTERNAL_ERROR",
 ]);
