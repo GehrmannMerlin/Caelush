@@ -22,11 +22,24 @@ export type {
   VerificationDiscoveryEvidenceInput,
   VerificationDiscoveryReason,
   VerificationEvidenceSanitizer,
+  VerificationCommandSecurityPort,
+  VerificationCommandExecutionPort,
+  VerificationExecutionStorePort,
+  VerificationRunnerInput,
+  VerificationRunnerResult,
+  VerificationRuntimeArgvRequest,
+  VerificationRuntimeExecResult,
+  VerificationRuntimeProcessInteractionRequest,
+  VerificationStartCommit,
+  VerificationStartCommitResult,
+  VerificationSettlementCommit,
+  VerificationSettlementCommitResult,
 } from "./contracts.js";
 export { ProjectCheckResolverRegistry } from "./resolver.js";
 export { nodeProjectCheckResolver } from "./node-resolver.js";
 export { rustProjectCheckResolver } from "./rust-resolver.js";
 export { javaProjectCheckResolver } from "./java-resolver.js";
+export { VerificationRunner } from "./runner.js";
 export type {
   ProjectCheckResolver,
   VerificationProjectPackage,

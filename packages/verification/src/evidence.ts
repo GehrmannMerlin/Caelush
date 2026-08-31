@@ -24,6 +24,9 @@ export function createDiscoveryEvidence(
     ...(input.scriptName === undefined ? {} : { scriptName: input.scriptName }),
     ...(input.candidateHash === undefined ? {} : { candidateHash: input.candidateHash }),
     ...(input.reason === undefined ? {} : { reason: input.reason }),
+    ...(input.securityReasonCode === undefined
+      ? {}
+      : { securityReasonCode: input.securityReasonCode }),
   };
   return VerificationEvidenceSchema.parse({
     id: input.id,
@@ -72,6 +75,7 @@ export function createCommandEvidence(
     totalOutputBytes: input.totalOutputBytes,
     omittedBytes: input.omittedBytes + (stdout?.omittedBytes ?? 0) + (stderr?.omittedBytes ?? 0),
     truncated: (stdout?.truncated ?? false) || (stderr?.truncated ?? false),
+    ...(input.errorCode === undefined ? {} : { errorCode: input.errorCode }),
     ...(stdout === undefined ? {} : { stdout: stdout.text }),
     ...(stderr === undefined ? {} : { stderr: stderr.text }),
   };
