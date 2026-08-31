@@ -112,19 +112,39 @@ export const VerificationCheckSchema = z
   })
   .strict()
   .superRefine((check, context) => {
-    if (check.status === "SKIPPED" && check.skipReason === undefined) {
-      context.addIssue({
-        code: "custom",
-        path: ["skipReason"],
-        message: "Skipped checks need a reason",
-      });
+    const issue = (path: (string | number)[], message: string) =>
+      context.addIssue({ code: "custom", path, message });
+
+    if (check.status === "PENDING") {
+      if (check.startedAt !== undefined)
+        issue(["startedAt"], "Pending checks cannot have startedAt");
+      if (check.finishedAt !== undefined)
+        issue(["finishedAt"], "Pending checks cannot have finishedAt");
+    } else if (check.status === "RUNNING") {
+      if (check.startedAt === undefined) issue(["startedAt"], "Running checks need startedAt");
+      if (check.finishedAt !== undefined)
+        issue(["finishedAt"], "Running checks cannot have finishedAt");
+    } else if (check.status === "SKIPPED") {
+      if (check.startedAt !== undefined)
+        issue(["startedAt"], "Skipped checks cannot have startedAt");
+      if (check.finishedAt === undefined) issue(["finishedAt"], "Skipped checks need finishedAt");
+      if (check.skipReason === undefined) issue(["skipReason"], "Skipped checks need a reason");
+    } else {
+      if (check.finishedAt === undefined) issue(["finishedAt"], "Terminal checks need finishedAt");
+      if (check.status !== "ERROR" && check.startedAt === undefined) {
+        issue(["startedAt"], "Executed terminal checks need startedAt");
+      }
     }
+
     if (check.status !== "SKIPPED" && check.skipReason !== undefined) {
-      context.addIssue({
-        code: "custom",
-        path: ["skipReason"],
-        message: "Only skipped checks have a skip reason",
-      });
+      issue(["skipReason"], "Only skipped checks have a skip reason");
+    }
+    if (
+      check.startedAt !== undefined &&
+      check.finishedAt !== undefined &&
+      check.finishedAt < check.startedAt
+    ) {
+      issue(["finishedAt"], "finishedAt cannot precede startedAt");
     }
   });
 export type VerificationCheck = z.infer<typeof VerificationCheckSchema>;
@@ -196,9 +216,20 @@ function isPlainJsonValue(value: unknown): value is JsonValue {
   );
 }
 
+export const MAX_VERIFICATION_EVIDENCE_DETAILS_BYTES = 32 * 1024;
+
 const VerificationEvidenceDetailsSchema = JsonValueSchema.refine(isPlainJsonValue, {
   message: "Evidence details must be JSON-safe plain data",
-});
+}).refine(
+  (value) => {
+    const serialized = JSON.stringify(value);
+    return (
+      serialized !== undefined &&
+      new TextEncoder().encode(serialized).byteLength <= MAX_VERIFICATION_EVIDENCE_DETAILS_BYTES
+    );
+  },
+  { message: "Evidence details exceed the serialized UTF-8 byte limit" },
+);
 
 export const VerificationEvidenceSchema = z
   .object({

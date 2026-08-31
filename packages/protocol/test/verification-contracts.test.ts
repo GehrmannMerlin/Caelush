@@ -154,6 +154,61 @@ describe("Phase 11A Verification contracts", () => {
     expect(evidenceSchema.safeParse({ ...evidence, details: new Error("secret") }).success).toBe(
       false,
     );
+    expect(
+      evidenceSchema.safeParse({
+        ...evidence,
+        details: { text: "汉".repeat(11_000) },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("enforces check timestamp invariants for every lifecycle status", () => {
+    const checkSchema = schema("VerificationCheckSchema");
+    const planId = (api.createVerificationPlanId as () => string)();
+    const base = {
+      id: (api.createVerificationCheckId as () => string)(),
+      planId,
+      ordinal: 0,
+      stage: "FAST_STATIC",
+      requirement: "IF_AVAILABLE",
+      spec: { kind: "PROJECT", purpose: "LINT", source: "SYSTEM" },
+      createdAt: 1_700_000_000_000,
+    };
+    const startedAt = 1_700_000_000_100;
+    const finishedAt = 1_700_000_000_200;
+
+    expect(checkSchema.safeParse({ ...base, status: "PENDING" }).success).toBe(true);
+    expect(checkSchema.safeParse({ ...base, status: "RUNNING", startedAt }).success).toBe(true);
+    expect(
+      checkSchema.safeParse({ ...base, status: "PASSED", startedAt, finishedAt }).success,
+    ).toBe(true);
+    expect(
+      checkSchema.safeParse({ ...base, status: "FAILED", startedAt, finishedAt }).success,
+    ).toBe(true);
+    expect(
+      checkSchema.safeParse({
+        ...base,
+        status: "SKIPPED",
+        finishedAt,
+        skipReason: "NOT_AVAILABLE",
+      }).success,
+    ).toBe(true);
+    expect(checkSchema.safeParse({ ...base, status: "ERROR", finishedAt }).success).toBe(true);
+    expect(checkSchema.safeParse({ ...base, status: "ERROR", startedAt, finishedAt }).success).toBe(
+      true,
+    );
+    expect(
+      checkSchema.safeParse({ ...base, status: "CANCELLED", startedAt, finishedAt }).success,
+    ).toBe(true);
+
+    expect(checkSchema.safeParse({ ...base, status: "PENDING", startedAt }).success).toBe(false);
+    expect(checkSchema.safeParse({ ...base, status: "RUNNING", finishedAt }).success).toBe(false);
+    expect(checkSchema.safeParse({ ...base, status: "PASSED", finishedAt }).success).toBe(false);
+    expect(
+      checkSchema.safeParse({ ...base, status: "SKIPPED", startedAt, finishedAt }).success,
+    ).toBe(false);
+    expect(checkSchema.safeParse({ ...base, status: "SKIPPED", finishedAt }).success).toBe(false);
+    expect(checkSchema.safeParse({ ...base, status: "ERROR" }).success).toBe(false);
   });
 
   it("validates planning facts without accepting service objects", () => {

@@ -1,6 +1,16 @@
 import { z } from "zod";
-import { VerificationPlanIdSchema, StepIdSchema } from "../primitives/ids.js";
-import { VerificationResultSchema } from "../verification.js";
+import {
+  VerificationCheckIdSchema,
+  VerificationPlanIdSchema,
+  StepIdSchema,
+} from "../primitives/ids.js";
+import {
+  VerificationCheckKindSchema,
+  VerificationCheckStageSchema,
+  VerificationCheckStatusSchema,
+  VerificationProjectCheckPurposeSchema,
+  VerificationResultSchema,
+} from "../verification.js";
 import { createEventSchema } from "./base.js";
 
 export const VerificationStartedEventSchema = createEventSchema(
@@ -31,6 +41,35 @@ export const VerificationPlannedEventSchema = createEventSchema(
     .strict(),
 );
 
+export const VerificationCheckStartedEventSchema = createEventSchema(
+  "verification.check.started",
+  z
+    .object({
+      planId: VerificationPlanIdSchema,
+      checkId: VerificationCheckIdSchema,
+      ordinal: z.number().int().min(0).max(31),
+      kind: VerificationCheckKindSchema,
+      purpose: VerificationProjectCheckPurposeSchema,
+      stage: VerificationCheckStageSchema,
+    })
+    .strict(),
+);
+
+export const VerificationCheckCompletedEventSchema = createEventSchema(
+  "verification.check.completed",
+  z
+    .object({
+      planId: VerificationPlanIdSchema,
+      checkId: VerificationCheckIdSchema,
+      status: VerificationCheckStatusSchema,
+      evidenceIds: z.array(z.string().min(1)).max(64),
+      durationMs: z.number().int().nonnegative().refine(Number.isSafeInteger).optional(),
+    })
+    .strict(),
+);
+
 export type VerificationStartedEvent = z.infer<typeof VerificationStartedEventSchema>;
 export type VerificationCompletedEvent = z.infer<typeof VerificationCompletedEventSchema>;
 export type VerificationPlannedEvent = z.infer<typeof VerificationPlannedEventSchema>;
+export type VerificationCheckStartedEvent = z.infer<typeof VerificationCheckStartedEventSchema>;
+export type VerificationCheckCompletedEvent = z.infer<typeof VerificationCheckCompletedEventSchema>;

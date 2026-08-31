@@ -40,6 +40,8 @@ import {
 } from "./process.js";
 import {
   VerificationCompletedEventSchema,
+  VerificationCheckCompletedEventSchema,
+  VerificationCheckStartedEventSchema,
   VerificationPlannedEventSchema,
   VerificationStartedEventSchema,
 } from "./verification.js";
@@ -62,6 +64,10 @@ export { LlmFailedEventSchema, RetryScheduledEventSchema, RetryStartedEventSchem
 export { RunTimedOutEventSchema } from "./run.js";
 export type { RunTimedOutEvent } from "./run.js";
 export { VerificationPlannedEventSchema } from "./verification.js";
+export {
+  VerificationCheckCompletedEventSchema,
+  VerificationCheckStartedEventSchema,
+} from "./verification.js";
 
 export const AgentEventSchema = z.discriminatedUnion("type", [
   RunStartedEventSchema,
@@ -90,6 +96,8 @@ export const AgentEventSchema = z.discriminatedUnion("type", [
   ProcessStoppedEventSchema,
   VerificationStartedEventSchema,
   VerificationCompletedEventSchema,
+  VerificationCheckStartedEventSchema,
+  VerificationCheckCompletedEventSchema,
   VerificationPlannedEventSchema,
   ApprovalRequestedEventSchema,
   ApprovalResolvedEventSchema,

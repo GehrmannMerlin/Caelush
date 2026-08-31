@@ -5,6 +5,7 @@ import {
   createSessionId,
   createStepId,
   createVerificationPlanId,
+  createVerificationCheckId,
 } from "../src/index.js";
 import { describe, expect, it } from "vitest";
 
@@ -38,6 +39,59 @@ describe("Phase 11A verification planned event", () => {
       AgentEventSchema.safeParse({
         ...event,
         payload: { ...event.payload, counts: { ...event.payload.counts, commands: ["pnpm test"] } },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts bounded check start and completion events", () => {
+    const common = {
+      eventId: createEventId(),
+      schemaVersion: 1 as const,
+      runId: createRunId(),
+      sessionId: createSessionId(),
+      timestamp: 1_700_000_000_000,
+      visibility: "USER_VISIBLE" as const,
+      durability: { kind: "DURABLE" as const, version: 1 as const, sequence: 2 },
+    };
+    const planId = createVerificationPlanId();
+    const checkId = createVerificationCheckId();
+    const started = {
+      ...common,
+      type: "verification.check.started" as const,
+      payload: {
+        planId,
+        checkId,
+        ordinal: 0,
+        kind: "PROJECT" as const,
+        purpose: "LINT" as const,
+        stage: "FAST_STATIC" as const,
+      },
+    };
+    const completed = {
+      ...common,
+      eventId: createEventId(),
+      type: "verification.check.completed" as const,
+      payload: {
+        planId,
+        checkId,
+        status: "PASSED" as const,
+        evidenceIds: ["vevd_0190f2e9-9f5d-7f7a-8cf3-0f0b4a0c15d0"],
+        durationMs: 125,
+      },
+    };
+
+    expect(AgentEventSchema.parse(started)).toEqual(started);
+    expect(AgentEventSchema.parse(completed)).toEqual(completed);
+    expect(
+      AgentEventSchema.safeParse({
+        ...started,
+        payload: { ...started.payload, command: "pnpm test" },
+      }).success,
+    ).toBe(false);
+    expect(
+      AgentEventSchema.safeParse({
+        ...completed,
+        payload: { ...completed.payload, stdout: "secret" },
       }).success,
     ).toBe(false);
   });

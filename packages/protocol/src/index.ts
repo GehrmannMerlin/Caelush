@@ -108,6 +108,7 @@ export {
   VerificationCheckSkipReasonSchema,
   VerificationEvidenceKindSchema,
   VerificationProjectCheckPurposeSchema,
+  MAX_VERIFICATION_EVIDENCE_DETAILS_BYTES,
   VerificationCheckSpecSchema,
   VerificationCheckSchema,
   VerificationPlanSchema,
@@ -138,6 +139,10 @@ export type {
   VerificationProjectFacts,
   VerificationPlanningInput,
 } from "./verification.js";
+export type {
+  VerificationCheckCompletedEvent,
+  VerificationCheckStartedEvent,
+} from "./events/verification.js";
 export { AgentStateSchema } from "./state.js";
 export type { AgentState } from "./state.js";
 export { FileChangeSummarySchema, FileChangeTypeSchema } from "./file.js";
