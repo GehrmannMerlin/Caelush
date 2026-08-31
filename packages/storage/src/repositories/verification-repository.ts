@@ -57,6 +57,7 @@ export interface VerificationRepository {
   getPlan(id: VerificationPlanId): Promise<VerificationPlan | null>;
   getPlanForRun(runId: RunId, sourceStepId: StepId): Promise<VerificationPlan | null>;
   listPlans(runId: RunId): Promise<readonly VerificationPlan[]>;
+  getLatestPlan(runId: RunId): Promise<VerificationPlan | null>;
   countPlans(runId: RunId): Promise<number>;
   listChecks(planId: VerificationPlanId): Promise<readonly VerificationCheck[]>;
   addEvidence(evidence: VerificationEvidence): Promise<VerificationEvidence>;
@@ -307,6 +308,16 @@ export class SqliteVerificationRepository implements VerificationRepository {
       )
       .all(runId) as unknown as VerificationPlanRow[];
     return rows.map((row) => loadPlanInTransaction(this.database.client, row.id)!);
+  }
+
+  async getLatestPlan(runId: RunId): Promise<VerificationPlan | null> {
+    const row = this.database.client
+      .prepare(
+        `SELECT id, run_id, source_step_id, planner_version, plan_hash, created_at_ms, data_json
+         FROM verification_plans WHERE run_id = ? ORDER BY created_at_ms DESC, id DESC LIMIT 1`,
+      )
+      .get(runId) as VerificationPlanRow | undefined;
+    return row === undefined ? null : loadPlanInTransaction(this.database.client, row.id);
   }
 
   async countPlans(runId: RunId): Promise<number> {

@@ -152,6 +152,20 @@ export function markAgentStateVerifying(state: AgentState, now: TimestampMs): Ag
   });
 }
 
+export function markAgentStateCompleted(state: AgentState, now: TimestampMs): AgentState {
+  assertMonotonicTimestamp(state, now);
+  if (state.status !== "VERIFYING" || state.currentStepId !== undefined) {
+    throw new AgentKernelStateError("state cannot complete outside the verification boundary");
+  }
+  assertRunStatusTransition(state.status, "COMPLETED");
+  return AgentStateSchema.parse({
+    ...state,
+    status: "COMPLETED",
+    verification: "PASSED",
+    updatedAt: now,
+  });
+}
+
 export function markAgentStateWaitingApproval(state: AgentState, now: TimestampMs): AgentState {
   assertBoundaryState(state, "WAITING_APPROVAL", now);
   return AgentStateSchema.parse({

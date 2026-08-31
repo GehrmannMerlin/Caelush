@@ -1,8 +1,14 @@
-export type RuntimeFileKind = "FILE" | "DIRECTORY" | "SYMLINK" | "OTHER";
+export type RuntimeFileKind = "FILE" | "DIRECTORY" | "SYMLINK" | "OTHER" | "MISSING";
 
 export interface RuntimeFileMetadata {
   readonly kind: RuntimeFileKind;
   readonly sizeBytes?: number;
+}
+
+export interface RuntimeFileFingerprint {
+  readonly kind: RuntimeFileKind;
+  readonly sizeBytes?: number;
+  readonly sha256?: string;
 }
 
 export interface RuntimeDirectoryEntry {
@@ -21,6 +27,7 @@ export interface RuntimeTextRead {
 
 export interface RuntimeFileSystem {
   getMetadata(absolutePath: string): Promise<RuntimeFileMetadata | null>;
+  fingerprint(absolutePath: string): Promise<RuntimeFileFingerprint>;
   realpath(absolutePath: string): Promise<string>;
   readDirectory(absolutePath: string): Promise<readonly RuntimeDirectoryEntry[]>;
   readTextFile(

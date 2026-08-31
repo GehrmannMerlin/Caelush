@@ -4,7 +4,7 @@ import {
   type RunId,
 } from "@caelush/protocol";
 import type { CaelushDatabase } from "./database.js";
-import { StorageDecodeError, StorageError } from "./errors.js";
+import { StorageConflictError, StorageDecodeError, StorageError } from "./errors.js";
 
 export interface CancellationRepository {
   get(runId: RunId): Promise<RunCancellationIntent | null>;
@@ -55,6 +55,13 @@ export class SqliteCancellationRepository implements CancellationRepository {
         client.exec("COMMIT");
         return existing;
       }
+      const run = client
+        .prepare("SELECT status FROM agent_runs WHERE id = ?")
+        .get(parsed.runId) as { status: string } | undefined;
+      if (run === undefined) throw new StorageError(`AgentRun ${parsed.runId} was not found`);
+      if (["COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "MAX_STEPS_REACHED", "BUDGET_EXCEEDED"].includes(run.status)) {
+        throw new StorageConflictError("terminal Run cannot accept a cancellation intent");
+      }
       client
         .prepare(
           "INSERT INTO run_cancellation_requests (run_id, cause, requested_at_ms) VALUES (?, ?, ?)",
@@ -67,7 +74,7 @@ export class SqliteCancellationRepository implements CancellationRepository {
       return inserted;
     } catch (error) {
       client.exec("ROLLBACK");
-      if (error instanceof StorageError) throw error;
+      if (error instanceof StorageError || error instanceof StorageConflictError) throw error;
       throw new StorageError("Unable to persist Run cancellation intent.", { cause: error });
     }
   }

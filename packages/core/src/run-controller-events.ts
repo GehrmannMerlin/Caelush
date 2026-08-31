@@ -7,6 +7,7 @@ import type {
   TimestampMs,
   VerificationPlan,
   VerificationCheckId,
+  VerifiedRunFinalResult,
 } from "@caelush/protocol";
 import type { AgentLoopOutcomeResult } from "./agent-loop-input.js";
 import type { DurableEventDraft } from "./run-execution-store.js";
@@ -121,6 +122,22 @@ export interface RunControllerEventFactory {
     planId: VerificationPlan["id"],
     attemptedRepairs: number,
     maxAutoRepairs: number,
+    eventId: EventId,
+    timestamp: TimestampMs,
+  ): DurableEventDraft;
+  verificationFinalized(
+    run: AgentRun,
+    plan: VerificationPlan,
+    outcome: "PASSED" | "FAILED" | "ERROR",
+    failedCheckIds: readonly VerificationCheckId[],
+    errorCheckIds: readonly VerificationCheckId[],
+    sealHash: string | undefined,
+    eventId: EventId,
+    timestamp: TimestampMs,
+  ): DurableEventDraft;
+  completed(
+    run: AgentRun,
+    result: VerifiedRunFinalResult,
     eventId: EventId,
     timestamp: TimestampMs,
   ): DurableEventDraft;
@@ -270,6 +287,31 @@ export function createRunControllerEventFactory(): RunControllerEventFactory {
       ...base(run, eventId, timestamp),
       type: "verification.repair.limit_reached",
       payload: { planId, attemptedRepairs, maxAutoRepairs },
+    }),
+    verificationFinalized: (
+      run,
+      plan,
+      outcome,
+      failedCheckIds,
+      errorCheckIds,
+      sealHash,
+      eventId,
+      timestamp,
+    ) => ({
+      ...base(run, eventId, timestamp, plan.sourceStepId),
+      type: "verification.finalized",
+      payload: {
+        planId: plan.id,
+        outcome,
+        ...(sealHash === undefined ? {} : { sealHash }),
+        failedCheckIds: [...failedCheckIds],
+        errorCheckIds: [...errorCheckIds],
+      },
+    }),
+    completed: (run, result, eventId, timestamp) => ({
+      ...base(run, eventId, timestamp),
+      type: "run.completed",
+      payload: { result },
     }),
   };
 }

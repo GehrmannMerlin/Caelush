@@ -208,6 +208,13 @@ export type WorkspacePathObservationKind =
 export interface WorkspacePathObservation {
   readonly path: string;
   readonly kind: WorkspacePathObservationKind;
+  readonly fingerprint?: WorkspaceContentFingerprint;
+}
+
+export interface WorkspaceContentFingerprint {
+  readonly kind: "FILE" | "MISSING" | "SYMLINK" | "DIRECTORY" | "OTHER";
+  readonly sizeBytes?: number;
+  readonly sha256?: string;
 }
 
 export interface WorkspaceInspectionFacts {

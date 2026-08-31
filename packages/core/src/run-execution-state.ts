@@ -2,6 +2,7 @@ import {
   AgentErrorSchema,
   AgentRunSchema,
   AgentStateSchema,
+  VerifiedRunFinalResultSchema,
   type AgentError,
   type AgentRun,
   type AgentState,
@@ -85,6 +86,26 @@ export function markAgentRunBudgetExceeded(run: AgentRun, now: AgentRun["created
   });
 }
 
+export function markAgentRunCompleted(
+  run: AgentRun,
+  finalResult: AgentRun["finalResult"],
+  now: AgentRun["createdAt"],
+): AgentRun {
+  if (run.currentStepId !== undefined) {
+    throw new RunExecutionInvariantError("completed AgentRun cannot retain an active Step");
+  }
+  if (run.status !== "VERIFYING") {
+    throw new RunExecutionInvariantError("only VERIFYING AgentRuns can complete");
+  }
+  assertRunStatusTransition(run.status, "COMPLETED");
+  return AgentRunSchema.parse({
+    ...run,
+    status: "COMPLETED",
+    finishedAt: now,
+    finalResult: VerifiedRunFinalResultSchema.parse(finalResult),
+  });
+}
+
 export function markAgentRunWaitingApproval(run: AgentRun): AgentRun {
   if (run.currentStepId !== undefined) {
     throw new RunExecutionInvariantError("waiting Approval Run cannot retain an active Step");
@@ -163,6 +184,20 @@ export function assertRunExecutionInvariant(snapshot: RunExecutionSnapshot): voi
   }
   if (isTerminalRunStatus(run.status) && run.currentStepId !== undefined) {
     throw new RunExecutionInvariantError("terminal Run cannot retain an active Step");
+  }
+  if (run.status === "COMPLETED") {
+    if (run.finishedAt === undefined || run.finalResult === undefined) {
+      throw new RunExecutionInvariantError("COMPLETED Run needs finishedAt and finalResult");
+    }
+    VerifiedRunFinalResultSchema.parse(run.finalResult);
+    if (state.status !== "COMPLETED" || state.verification !== "PASSED") {
+      throw new RunExecutionInvariantError("COMPLETED Run needs a passed AgentState");
+    }
+    if (continuation !== undefined) {
+      throw new RunExecutionInvariantError("COMPLETED Run cannot retain a continuation");
+    }
+  } else if (run.finalResult !== undefined) {
+    throw new RunExecutionInvariantError("only COMPLETED Run may retain finalResult");
   }
   if (run.status === "VERIFYING") {
     if (

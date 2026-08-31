@@ -37,6 +37,7 @@ export type {
   RuntimeDirectoryEntry,
   RuntimeFileKind,
   RuntimeFileMetadata,
+  RuntimeFileFingerprint,
   RuntimeFileSystem,
   RuntimeTextRead,
 } from "./filesystem/types.js";

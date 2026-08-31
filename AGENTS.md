@@ -240,6 +240,22 @@ Phase 8C 的 non-zero exit 和 signal exit 是正常 `isError: false` 结果；�
 
 Phase 8 后续必须遵守固定的 8B、8C、8D 边界；不得新增 Phase 8 轮次，也不得在 8A/8B 提前实现后续能力。
 
+## Phase 11D Completion Authority and Finalization Rules
+
+- Phase 11 is fixed to exactly 11A, 11B, 11C, and 11D. Phase 11D is the final round; do not add 11E or Phase 12.
+- Completion Authority belongs only to Core/RunController. VerificationRunner, TaskReviewer, AgentLoop, LLM providers, Tools, and Runtime may produce evidence but never transition a Run to COMPLETED.
+- `Verification PASS` is necessary but not sufficient. New plans bind the final candidate with a required UTF-8 SHA-256 `candidateHash`; legacy plans may decode without it but cannot complete.
+- Workspace freshness reuses the existing Phase 8 `WorkspacePathResolver` and streams raw bytes for bounded `{kind, sizeBytes, sha256}` fingerprints. No second resolver, content in evidence, silent truncation, symlink escape, or unverifiable freshness is allowed.
+- Git freshness reuses RuntimeGitService status/diff and compares unmerged paths, attribution, per-path diff hashes, truncation, and review completeness. Untracked bytes are covered by the workspace hash.
+- Evidence digest and Completion Seal are deterministic SHA-256 integrity digests. A seal is not a cryptographic signature and must bind Run, plan, source Step, plan hash, candidate hash, evidence digest, workspace freshness, and optional Git freshness.
+- `VerifiedRunFinalResult` is strict, bounded, and contains only the exact candidate text plus verification identity/digests/counts. It must not contain stdout, stderr, diffs, raw evidence, secrets, prompts, hidden reasoning, or host paths.
+- COMPLETED requires Run and AgentState COMPLETED, finishedAt, a valid verified final result, passed verification, no current Step, and no continuation. Other terminal statuses have no verified final result; VERIFYING has no final result.
+- Run, State, final result, continuation clear, and lifecycle events settle atomically. Success event order is `verification.finalized`, `status.changed`, `run.completed`; failure order is `verification.finalized`, `error`, `status.changed`, `run.failed`. Publish only after commit.
+- Completion and failure commits guard current status, cancellation intent, continuation/source Step, exact plan/latest plan identity, candidate hash, state/continuation revisions, and current state. The first durable cancellation or terminal authority wins; late writes cannot reopen a terminal Run.
+- Terminal verification errors and repair exhaustion settle FAILED with `VERIFICATION_FAILED`; do not emit repeated repair-limit events or leave an unrecoverable VERIFYING loop.
+- Recovery performs terminal/cancellation/deadline/budget checks first. It never resumes an intent-marked or expired Run. A stale RUNNING PROJECT/WORKSPACE/GIT/TASK check is settled once as bounded `VERIFICATION_INTERRUPTED` ERROR evidence and never replayed.
+- A passing verification must perform a final workspace/Git freshness recheck immediately before completion. Any stale, incomplete, truncated, missing, symlink, or late result fails closed.
+
 本轮完成后，Phase 8D 是当前完成边界；不得继续扩展 Phase 8。Phase 8 仍不提供 process persistence、权限/Approval resolution、sandbox、secret redaction、retry、timeout policy、Run cancellation、parallelism、Verification execution 或 `COMPLETED` transition。
 
 Phase 5B context rules:

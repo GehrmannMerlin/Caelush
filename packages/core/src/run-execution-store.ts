@@ -10,6 +10,7 @@ import type {
   TimestampMs,
   RunCancellationIntent,
   VerificationPlan,
+  VerifiedRunFinalResult,
 } from "@caelush/protocol";
 import type { RunContinuationCheckpoint } from "./agent-continuation.js";
 
@@ -85,10 +86,23 @@ export interface RunExecutionCommitResult {
   readonly events: readonly DurableAgentEvent[];
 }
 
+export interface RunVerifiedCompletionCommit {
+  readonly run: AgentRun;
+  readonly state: AgentState;
+  readonly finalResult: VerifiedRunFinalResult;
+  readonly verificationPlan: VerificationPlan;
+  readonly expectedStateRevision: number | null;
+  readonly expectedContinuationRevision: number | null;
+  readonly events: readonly DurableEventDraft[];
+}
+
 export interface RunExecutionStorePort {
   load(runId: RunId): Promise<RunExecutionSnapshot | null>;
   commit(command: RunExecutionCommit): Promise<RunExecutionCommitResult>;
   requestCancellation(runId: RunId, intent: RunCancellationIntent): Promise<RunExecutionSnapshot>;
+  commitVerifiedCompletion?(
+    command: RunVerifiedCompletionCommit,
+  ): Promise<RunExecutionCommitResult>;
 }
 
 export class RunExecutionConflictError extends Error {

@@ -5,10 +5,12 @@ import {
   createStepId,
   createTimestampMs,
   createWorkspaceId,
+  createVerificationPlanId,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import {
   createInitialAgentState,
+  markAgentStateCompleted,
   markAgentStateWaitingApproval,
   startAgentState,
 } from "../src/agent-state.js";
@@ -19,6 +21,7 @@ import {
   markAgentRunTimedOut,
   markAgentRunWaitingApproval,
   markAgentStateFailed,
+  markAgentRunCompleted,
 } from "../src/run-execution-state.js";
 import { RunContinuationCheckpointSchema } from "../src/agent-continuation-schema.js";
 import type { RunContinuationCheckpoint } from "../src/agent-continuation.js";
@@ -112,6 +115,43 @@ describe("durable Run execution state", () => {
     expect(markAgentStateWaitingApproval(state, createTimestampMs(3)).status).toBe(
       "WAITING_APPROVAL",
     );
+  });
+
+  it("requires a verified final result for the COMPLETED boundary", () => {
+    const pending = run();
+    const running = { ...pending, status: "VERIFYING" as const, startedAt: createTimestampMs(2) };
+    const state = {
+      ...startAgentState(
+        createInitialAgentState(pending, createTimestampMs(1)),
+        createTimestampMs(2),
+      ),
+      status: "VERIFYING" as const,
+    };
+    const finalResult = {
+      type: "VERIFIED_COMPLETION" as const,
+      text: "done",
+      verification: {
+        planId: createVerificationPlanId(),
+        sourceStepId: createStepId(),
+        planHash: "a".repeat(64),
+        candidateHash: "b".repeat(64),
+        evidenceDigest: "c".repeat(64),
+        freshnessHash: "d".repeat(64),
+        sealHash: "e".repeat(64),
+        checks: { total: 0, passed: 0, skipped: 0, advisoryWarnings: 0 },
+      },
+    };
+    const completedRun = markAgentRunCompleted(running, finalResult, createTimestampMs(3));
+    const completedState = markAgentStateCompleted(state, createTimestampMs(3));
+    expect(completedRun).toMatchObject({ status: "COMPLETED", finishedAt: 3 });
+    expect(completedState).toMatchObject({ status: "COMPLETED", verification: "PASSED" });
+    expect(() =>
+      assertRunExecutionInvariant({
+        run: { ...completedRun, finalResult: undefined },
+        state: completedState,
+        conversation: [],
+      }),
+    ).toThrow();
   });
 
   it("requires an approval pointer and forbids accepted results at the approval boundary", () => {

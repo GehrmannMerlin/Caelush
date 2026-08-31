@@ -96,7 +96,24 @@ export const VerificationRepairLimitReachedEventSchema = createEventSchema(
     .strict(),
 );
 
+export const VerificationFinalizedEventSchema = createEventSchema(
+  "verification.finalized",
+  z
+    .object({
+      planId: VerificationPlanIdSchema,
+      outcome: z.enum(["PASSED", "FAILED", "ERROR"]),
+      sealHash: z
+        .string()
+        .regex(/^[0-9a-f]{64}$/)
+        .optional(),
+      failedCheckIds: z.array(VerificationCheckIdSchema).max(32),
+      errorCheckIds: z.array(VerificationCheckIdSchema).max(32),
+    })
+    .strict(),
+);
+
 export type VerificationRepairStartedEvent = z.infer<typeof VerificationRepairStartedEventSchema>;
 export type VerificationRepairLimitReachedEvent = z.infer<
   typeof VerificationRepairLimitReachedEventSchema
 >;
+export type VerificationFinalizedEvent = z.infer<typeof VerificationFinalizedEventSchema>;

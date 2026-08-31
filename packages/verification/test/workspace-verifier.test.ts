@@ -100,4 +100,45 @@ describe("workspace verification", () => {
     expect(JSON.stringify(evidence)).not.toContain("contents");
     expect(evidence.details).toMatchObject({ checkedFileCount: 4, inspectionComplete: true });
   });
+
+  it("records a freshness hash over raw-byte fingerprints and detects newline changes", () => {
+    const first = verifyWorkspaceInspection({
+      changedFiles: [{ path: "src/a.ts", changeType: "MODIFIED" }],
+      facts: {
+        inspectionComplete: true,
+        paths: [
+          {
+            path: "src/a.ts",
+            kind: "FILE",
+            fingerprint: { kind: "FILE", sizeBytes: 4, sha256: "a".repeat(64) },
+          },
+        ],
+      },
+    });
+    const second = verifyWorkspaceInspection({
+      changedFiles: [{ path: "src/a.ts", changeType: "MODIFIED" }],
+      facts: {
+        inspectionComplete: true,
+        paths: [
+          {
+            path: "src/a.ts",
+            kind: "FILE",
+            fingerprint: { kind: "FILE", sizeBytes: 5, sha256: "b".repeat(64) },
+          },
+        ],
+      },
+    });
+    expect(first.workspaceFreshnessHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(second.workspaceFreshnessHash).not.toBe(first.workspaceFreshnessHash);
+    const evidence = createWorkspaceEvidence({
+      id: createVerificationEvidenceId(),
+      planId: createVerificationPlanId(),
+      checkId: createVerificationCheckId(),
+      capturedAt: 1_700_000_000_000 as never,
+      result: first,
+    });
+    expect(evidence.details).toMatchObject({
+      workspaceFreshnessHash: first.workspaceFreshnessHash,
+    });
+  });
 });

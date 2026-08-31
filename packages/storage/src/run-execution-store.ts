@@ -6,11 +6,13 @@ import {
   type RunExecutionCommitResult,
   type RunExecutionSnapshot,
   type RunExecutionStorePort,
+  type RunVerifiedCompletionCommit,
 } from "@caelush/core";
 import {
   AgentRunSchema,
   AgentStateSchema,
   AgentStepSchema,
+  VerifiedRunFinalResultSchema,
   type AgentState,
   type AgentStep,
   type RunId,
@@ -328,6 +330,73 @@ export class SqliteRunExecutionStore implements RunExecutionStorePort {
         throw new StorageError("Run execution commit failed after the transaction ended", {
           cause: error,
         });
+      }
+      mapExecutionError(error);
+    }
+  }
+
+  async commitVerifiedCompletion(
+    command: RunVerifiedCompletionCommit,
+  ): Promise<RunExecutionCommitResult> {
+    const parsedResult = VerifiedRunFinalResultSchema.parse(command.finalResult);
+    const parsedRun = AgentRunSchema.parse({ ...command.run, finalResult: parsedResult });
+    if (parsedRun.status !== "COMPLETED" || command.state.status !== "COMPLETED") {
+      throw new RunExecutionInvariantError(
+        "verified completion must settle Run and State to COMPLETED",
+      );
+    }
+    const client = this.database.client;
+    client.exec("BEGIN IMMEDIATE");
+    try {
+      const current = await this.load(parsedRun.id);
+      if (current === null) throw new StorageError(`AgentRun ${parsedRun.id} was not found`);
+      if (
+        current.run.status !== "VERIFYING" ||
+        current.continuation?.type !== "AWAITING_VERIFICATION" ||
+        current.cancellationIntent !== undefined ||
+        current.state === undefined ||
+        current.verificationPlan === undefined ||
+        current.verificationPlan.id !== command.verificationPlan.id ||
+        current.verificationPlan.planHash !== command.verificationPlan.planHash ||
+        current.verificationPlan.sourceStepId !== command.verificationPlan.sourceStepId ||
+        JSON.stringify(current.verificationPlan) !== JSON.stringify(command.verificationPlan)
+      ) {
+        throw new RunExecutionConflictError("verified completion boundary is stale");
+      }
+      expectedRevision(current.stateRevision, command.expectedStateRevision, "AgentState");
+      expectedRevision(
+        current.continuationRevision,
+        command.expectedContinuationRevision,
+        "Continuation",
+      );
+      if (parsedRun.currentStepId !== undefined || command.state.currentStepId !== undefined) {
+        throw new RunExecutionInvariantError("verified completion cannot retain an active Step");
+      }
+      assertRunExecutionInvariant({
+        run: parsedRun,
+        state: command.state,
+        stateRevision: (current.stateRevision ?? 0) + 1,
+        conversation: current.conversation,
+        verificationPlan: current.verificationPlan,
+      });
+      writeRun(client, parsedRun);
+      writeStateSnapshot(client, command.state, command.expectedStateRevision, (actual, expected) =>
+        expectedRevision(actual, expected, "AgentState"),
+      );
+      clearContinuationInTransaction(client, parsedRun.id, command.expectedContinuationRevision);
+      if (command.events.some((event) => event.runId !== parsedRun.id)) {
+        throw new RunExecutionInvariantError("completion Event does not belong to the Run");
+      }
+      const events = appendDurableEventsInTransaction(client, command.events);
+      client.exec("COMMIT");
+      const snapshot = await this.load(parsedRun.id);
+      if (snapshot === null) throw new StorageError("Run disappeared after completion");
+      return { snapshot, events };
+    } catch (error) {
+      try {
+        client.exec("ROLLBACK");
+      } catch (rollbackError) {
+        throw new StorageError("verified completion rollback failed", { cause: rollbackError });
       }
       mapExecutionError(error);
     }

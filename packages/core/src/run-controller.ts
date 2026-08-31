@@ -33,6 +33,7 @@ import {
   resumeAgentStateFromApproval,
   settleAgentStepState,
   resumeAgentStateFromVerificationRepair,
+  markAgentStateCompleted,
   startAgentState,
 } from "./agent-state.js";
 import { failAgentStep } from "./agent-step.js";
@@ -48,6 +49,7 @@ import {
   resumeAgentRunFromVerificationRepair,
   resumeAgentRunFromApproval,
   markAgentStateFailed,
+  markAgentRunCompleted,
   assertRunExecutionInvariant,
 } from "./run-execution-state.js";
 import { markAgentStateTimedOut } from "./agent-state.js";
@@ -86,8 +88,18 @@ import {
   repairCycleForPlanCount,
   reviewGitChangeset,
   verifyWorkspaceInspection,
+  computeVerificationCandidateTextHash,
+  computeVerificationEvidenceDigest,
+  createVerificationCompletionSeal,
+  computeWorkspaceFreshnessHash,
   type VerificationRunnerInput,
 } from "@caelush/verification";
+import {
+  createVerifiedRunFinalResult,
+  evaluateCompletionAuthority,
+  type CompletionFreshness,
+  type CompletionGitFreshness,
+} from "./completion-authority.js";
 import type { VerificationEvidence, VerificationCheck } from "@caelush/protocol";
 
 export class RunControllerInputError extends Error {
@@ -972,6 +984,7 @@ export class RunController {
         execution.step!,
         state.changedFiles,
         projectFacts,
+        execution.outcome.candidateText,
       );
       run = AgentRunSchema.parse({ ...current.run, status: "VERIFYING", currentStepId: undefined });
       continuation = {
@@ -1707,6 +1720,7 @@ export class RunController {
     sourceStep: AgentStep,
     changedFiles: AgentState["changedFiles"],
     projectFacts?: import("@caelush/protocol").VerificationProjectFacts,
+    candidateText?: string,
   ): VerificationPlan {
     const planner = this.dependencies.verificationPlanner;
     if (planner === undefined) {
@@ -1731,6 +1745,9 @@ export class RunController {
       sourceStepId: sourceStep.id,
       plannerVersion: draft.plannerVersion,
       planHash: draft.planHash,
+      ...(candidateText === undefined
+        ? {}
+        : { candidateHash: computeVerificationCandidateTextHash(candidateText) }),
       checks: draft.checks.map((check) => ({
         ...check,
         id: checkIdFactory.create(),
@@ -1772,7 +1789,12 @@ export class RunController {
       return this.resultFromSnapshot(snapshot);
     }
     if (plan.checks.some((check) => check.status === "RUNNING")) {
-      return this.resultFromSnapshot(snapshot);
+      await this.settleStaleVerificationChecksLocked(snapshot, plan);
+      const recovered = await this.load(snapshot.run.id);
+      const authority = this.resolveAuthority(recovered, false);
+      if (authority === "CANCELLED") return this.finalizeCancellation(recovered);
+      if (authority === "TIMEOUT") return this.finalizeTimeout(recovered);
+      return this.driveChangeVerificationLocked(recovered);
     }
     if (pendingProjectChecks) {
       const config = await this.dependencies.configResolver.resolve(snapshot.run);
@@ -1820,7 +1842,9 @@ export class RunController {
     if (currentEvaluation.status === "FAILED") {
       return this.maybeStartVerificationRepairLocked(snapshot, currentEvaluation);
     }
-    if (currentEvaluation.status === "ERROR") return this.resultFromSnapshot(snapshot);
+    if (currentEvaluation.status === "ERROR") {
+      return this.failVerificationLocked(snapshot, currentEvaluation);
+    }
     const blockingBeforeChange = plan.checks.some(
       (check) =>
         check.status === "FAILED" || check.status === "ERROR" || check.status === "RUNNING",
@@ -1830,7 +1854,12 @@ export class RunController {
     const pendingChangeChecks = plan.checks.some(
       (check) => check.spec.kind !== "PROJECT" && check.status === "PENDING",
     );
-    if (!pendingChangeChecks) return this.resultFromSnapshot(snapshot);
+    if (!pendingChangeChecks) {
+      if (currentEvaluation.status === "PASSED") {
+        return this.finalizePassedVerificationLocked(snapshot, currentEvaluation);
+      }
+      return this.resultFromSnapshot(snapshot);
+    }
 
     const store = this.dependencies.verificationExecutionStore ?? recovery;
     const workspace = this.dependencies.verificationWorkspace;
@@ -2010,8 +2039,286 @@ export class RunController {
     if (execution === null)
       throw new RunControllerInfrastructureError("Verification evidence disappeared.");
     const evaluation = evaluateVerification(execution.plan, execution.evidence);
+    if (evaluation.status === "PASSED") {
+      return this.finalizePassedVerificationLocked(current, evaluation);
+    }
+    if (evaluation.status === "ERROR") {
+      return this.failVerificationLocked(current, evaluation);
+    }
     if (evaluation.status !== "FAILED") return this.resultFromSnapshot(current);
     return this.maybeStartVerificationRepairLocked(current, evaluation);
+  }
+
+  private async settleStaleVerificationChecksLocked(
+    snapshot: RunExecutionSnapshot,
+    plan: VerificationPlan,
+  ): Promise<void> {
+    const recovery = this.verificationRecoveryStore();
+    if (recovery === undefined) return;
+    for (const check of plan.checks.filter((item) => item.status === "RUNNING")) {
+      const settled = {
+        ...check,
+        status: "ERROR" as const,
+        finishedAt: this.dependencies.clock.now(),
+      };
+      const evidence = VerificationEvidenceSchema.parse({
+        id: (this.dependencies.verificationEvidenceIdFactory ?? createVerificationEvidenceId)(),
+        planId: plan.id,
+        checkId: check.id,
+        kind: check.spec.kind === "PROJECT" ? "COMMAND" : check.spec.kind,
+        summary: "Verification was interrupted before recovery and was not replayed.",
+        details: { errorCode: "VERIFICATION_INTERRUPTED" },
+        capturedAt: this.dependencies.clock.now(),
+      });
+      const committed = await recovery.settleCheck({
+        runId: snapshot.run.id,
+        sessionId: snapshot.run.sessionId,
+        check: settled,
+        evidence: [evidence],
+      });
+      this.notify(committed.events as readonly DurableAgentEvent[]);
+    }
+  }
+
+  private async finalizePassedVerificationLocked(
+    snapshot: RunExecutionSnapshot,
+    evaluation: ReturnType<typeof evaluateVerification>,
+  ): Promise<RunControllerResult> {
+    const plan = snapshot.verificationPlan;
+    const continuation = snapshot.continuation;
+    const recovery = this.verificationRecoveryStore();
+    if (
+      plan === undefined ||
+      snapshot.state === undefined ||
+      continuation?.type !== "AWAITING_VERIFICATION" ||
+      recovery === undefined
+    )
+      return this.resultFromSnapshot(snapshot);
+    const execution = await recovery.getPlanExecutionSnapshot(plan.id);
+    if (execution === null)
+      throw new RunControllerInfrastructureError("Verification evidence disappeared.");
+
+    let workspaceFreshness: CompletionFreshness = "UNPROVABLE";
+    const workspaceCheck = plan.checks.find((check) => check.spec.kind === "WORKSPACE");
+    if (workspaceCheck === undefined) {
+      workspaceFreshness = "FRESH";
+    } else if (this.dependencies.verificationWorkspace !== undefined) {
+      const prior = execution.evidence.find(
+        (item) => item.checkId === workspaceCheck.id && item.kind === "WORKSPACE",
+      );
+      const details = objectDetails(prior?.details);
+      const expectedHash = stringValue(details?.workspaceFreshnessHash);
+      const currentFacts = await this.dependencies.verificationWorkspace.inspect({
+        workspace: snapshot.run.workspace,
+        changedFiles: snapshot.state.changedFiles,
+        signal: this.executionSignal(snapshot.run.id),
+      });
+      const current = verifyWorkspaceInspection({
+        changedFiles: snapshot.state.changedFiles,
+        facts: currentFacts,
+      });
+      workspaceFreshness =
+        current.status === "PASSED" &&
+        expectedHash !== undefined &&
+        current.workspaceFreshnessHash === expectedHash
+          ? "FRESH"
+          : expectedHash === undefined || current.workspaceFreshnessHash === undefined
+            ? "UNPROVABLE"
+            : "STALE";
+    }
+
+    let gitFreshness: CompletionGitFreshness = "SKIPPED";
+    const gitCheck = plan.checks.find((check) => check.spec.kind === "GIT");
+    if (gitCheck !== undefined && gitCheck.status !== "SKIPPED") {
+      gitFreshness = "UNPROVABLE";
+      if (this.dependencies.verificationGit !== undefined) {
+        const prior = execution.evidence.find(
+          (item) => item.checkId === gitCheck.id && item.kind === "GIT",
+        );
+        const status = await this.dependencies.verificationGit.status({
+          signal: this.executionSignal(snapshot.run.id),
+        });
+        const diffs = [];
+        for (const changedFile of snapshot.state.changedFiles.slice(0, 128)) {
+          if (
+            status.entries?.some(
+              (entry) => entry.path === changedFile.path && entry.kind === "UNTRACKED",
+            )
+          )
+            continue;
+          diffs.push(
+            await this.dependencies.verificationGit.diff({
+              path: changedFile.path,
+              scope: "ALL",
+              signal: this.executionSignal(snapshot.run.id),
+            }),
+          );
+        }
+        const current = reviewGitChangeset({
+          changedFiles: snapshot.state.changedFiles,
+          requirement: gitCheck.requirement,
+          status,
+          diffs,
+        });
+        const priorDetails = objectDetails(prior?.details);
+        const currentComparable = {
+          attributedPaths: current.attributedPaths,
+          unattributedDirtyPaths: current.unattributedDirtyPaths,
+          unmergedPaths: current.unmergedPaths,
+          diffHashes: current.diffHashes,
+          noNetDiffPaths: current.noNetDiffPaths,
+          truncated: current.truncated,
+          reviewComplete: current.reviewComplete,
+        };
+        const priorComparable = {
+          attributedPaths: arrayValue(priorDetails?.attributedPaths),
+          unattributedDirtyPaths: arrayValue(priorDetails?.unattributedDirtyPaths),
+          unmergedPaths: arrayValue(priorDetails?.unmergedPaths),
+          diffHashes: objectValue(priorDetails?.diffHashes),
+          noNetDiffPaths: arrayValue(priorDetails?.noNetDiffPaths),
+          truncated: priorDetails?.truncated,
+          reviewComplete: priorDetails?.reviewComplete,
+        };
+        gitFreshness =
+          current.status === "PASSED" &&
+          JSON.stringify(currentComparable) === JSON.stringify(priorComparable)
+            ? "FRESH"
+            : "STALE";
+      }
+    }
+
+    const candidateHash = computeVerificationCandidateTextHash(
+      continuation.finalDecision.candidateText,
+    );
+    const authority = evaluateCompletionAuthority({
+      run: snapshot.run,
+      plan,
+      continuation,
+      verificationStatus: evaluation.status,
+      candidateHash,
+      workspaceFreshness,
+      gitFreshness,
+      cancellationRequested: snapshot.cancellationIntent !== undefined,
+    });
+    if (authority.kind !== "COMPLETE") return this.resultFromSnapshot(snapshot);
+    if (plan.candidateHash === undefined || workspaceFreshness !== "FRESH")
+      return this.resultFromSnapshot(snapshot);
+    const workspaceEvidence = execution.evidence.find(
+      (item) => item.kind === "WORKSPACE" && item.checkId === workspaceCheck?.id,
+    );
+    const workspaceDetails = objectDetails(workspaceEvidence?.details);
+    const workspaceHash =
+      stringValue(workspaceDetails?.workspaceFreshnessHash) ??
+      (workspaceCheck === undefined ? computeWorkspaceFreshnessHash([]) : undefined);
+    if (workspaceHash === undefined) return this.resultFromSnapshot(snapshot);
+    const evidenceDigest = computeVerificationEvidenceDigest(plan, execution.evidence);
+    const seal = createVerificationCompletionSeal({
+      runId: snapshot.run.id,
+      planId: plan.id,
+      sourceStepId: plan.sourceStepId,
+      planHash: plan.planHash,
+      candidateHash,
+      evidenceDigest,
+      workspaceFreshnessHash: workspaceHash,
+    });
+    const finalResult = createVerifiedRunFinalResult({
+      run: snapshot.run,
+      plan,
+      continuation,
+      candidateHash,
+      seal,
+      counts: {
+        total: plan.checks.length,
+        passed: plan.checks.filter((check) => check.status === "PASSED").length,
+        skipped: plan.checks.filter((check) => check.status === "SKIPPED").length,
+        advisoryWarnings: evaluation.warnings.length,
+      },
+    });
+    const executionStore = this.dependencies.execution;
+    if (executionStore.commitVerifiedCompletion === undefined)
+      return this.resultFromSnapshot(snapshot);
+    const now = this.dependencies.clock.now();
+    const completedRun = markAgentRunCompleted(snapshot.run, finalResult, now);
+    const completedState = markAgentStateCompleted(snapshot.state, now);
+    const events = [
+      this.eventFactory.verificationFinalized(
+        snapshot.run,
+        plan,
+        "PASSED",
+        [],
+        [],
+        seal.sealHash,
+        this.nextEventId(),
+        now,
+      ),
+      this.eventFactory.statusChanged(
+        snapshot.run,
+        "VERIFYING",
+        "COMPLETED",
+        this.nextEventId(),
+        now,
+      ),
+      this.eventFactory.completed(snapshot.run, finalResult, this.nextEventId(), now),
+    ];
+    const commit = await executionStore.commitVerifiedCompletion({
+      run: completedRun,
+      state: completedState,
+      finalResult,
+      verificationPlan: plan,
+      expectedStateRevision: snapshot.stateRevision ?? null,
+      expectedContinuationRevision: snapshot.continuationRevision ?? null,
+      events,
+    });
+    this.notify(commit.events);
+    return this.resultFromSnapshot(commit.snapshot);
+  }
+
+  private async failVerificationLocked(
+    snapshot: RunExecutionSnapshot,
+    evaluation: ReturnType<typeof evaluateVerification>,
+  ): Promise<RunControllerResult> {
+    if (snapshot.state === undefined || snapshot.verificationPlan === undefined) {
+      return this.resultFromSnapshot(snapshot);
+    }
+    const now = this.dependencies.clock.now();
+    const error: AgentError = {
+      code: "VERIFICATION_FAILED",
+      message: "Verification did not establish a trustworthy completion boundary.",
+      retryable: false,
+      phase: "VERIFICATION",
+    };
+    const failedRun = markAgentRunFailed(
+      AgentRunSchema.parse({ ...snapshot.run, currentStepId: undefined }),
+      now,
+    );
+    const failedState = markAgentStateFailed(snapshot.state, error, now);
+    const events = [
+      this.eventFactory.verificationFinalized(
+        snapshot.run,
+        snapshot.verificationPlan,
+        evaluation.status === "ERROR" ? "ERROR" : "FAILED",
+        evaluation.failedCheckIds,
+        evaluation.errorCheckIds,
+        undefined,
+        this.nextEventId(),
+        now,
+      ),
+      this.eventFactory.error(snapshot.run, error, undefined, this.nextEventId(), now),
+      this.eventFactory.statusChanged(snapshot.run, "VERIFYING", "FAILED", this.nextEventId(), now),
+      this.eventFactory.failed(snapshot.run, error, this.nextEventId(), now),
+    ];
+    const commit = await this.commit({
+      run: failedRun,
+      state: failedState,
+      expectedStateRevision: snapshot.stateRevision ?? null,
+      expectedContinuationRevision: snapshot.continuationRevision ?? null,
+      stepWrites: [],
+      messagesToAppend: [],
+      continuation: { operation: "CLEAR" },
+      events,
+    });
+    this.notify(commit.events);
+    return this.resultFromSnapshot(commit.snapshot);
   }
 
   private genericTaskEvidence(
@@ -2047,27 +2354,7 @@ export class RunController {
     const repairCycle = repairCycleForPlanCount(count);
     const policy = this.dependencies.verificationRepairPolicy ?? createVerificationRepairPolicy();
     if (!policy.canRepair({ ...evaluation, repairCycle })) {
-      const now = this.dependencies.clock.now();
-      const commit = await this.commit({
-        run: snapshot.run,
-        state: snapshot.state,
-        expectedStateRevision: snapshot.stateRevision ?? null,
-        expectedContinuationRevision: snapshot.continuationRevision ?? null,
-        stepWrites: [],
-        messagesToAppend: [],
-        events: [
-          this.eventFactory.verificationRepairLimitReached(
-            snapshot.run,
-            plan.id,
-            repairCycle,
-            policy.maxAutoRepairs,
-            this.nextEventId(),
-            now,
-          ),
-        ],
-      });
-      this.notify(commit.events);
-      return this.resultFromSnapshot(commit.snapshot);
+      return this.failVerificationLocked(snapshot, evaluation);
     }
     const evidence = (await recovery?.getPlanExecutionSnapshot(plan.id))?.evidence ?? [];
     const now = this.dependencies.clock.now();
@@ -2313,6 +2600,22 @@ function semanticEqual(left: unknown, right: unknown): boolean {
     );
   }
   return false;
+}
+
+function objectDetails(value: unknown): Record<string, unknown> | undefined {
+  return isRecord(value) ? value : undefined;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function arrayValue(value: unknown): readonly unknown[] | undefined {
+  return Array.isArray(value) ? value : undefined;
+}
+
+function objectValue(value: unknown): Record<string, unknown> | undefined {
+  return isRecord(value) ? value : undefined;
 }
 
 function isTerminal(status: AgentRun["status"]): boolean {

@@ -1,8 +1,14 @@
 import { createHash } from "node:crypto";
-import type { FileChangeSummary, VerificationEvidence, VerificationPlan } from "@caelush/protocol";
+import type {
+  FileChangeSummary,
+  JsonObject,
+  VerificationEvidence,
+  VerificationPlan,
+} from "@caelush/protocol";
 import type {
   WorkspaceInspectionFacts,
   WorkspacePathObservation,
+  WorkspaceContentFingerprint,
   WorkspaceVerificationPort,
 } from "./contracts.js";
 
@@ -18,9 +24,23 @@ export interface WorkspaceInspectionResult {
   readonly symlinkPaths: readonly string[];
   readonly inspectionComplete: boolean;
   readonly inspectionHash: string;
+  readonly contentFingerprints: Readonly<Record<string, WorkspaceContentFingerprint>>;
+  readonly workspaceFreshnessHash?: string;
 }
 
 export const MAX_WORKSPACE_REVIEW_PATHS = 4096;
+export const MAX_WORKSPACE_FINGERPRINT_BYTES = 48 * 1024;
+
+export function computeWorkspaceFreshnessHash(
+  entries: readonly { readonly path: string; readonly fingerprint: WorkspaceContentFingerprint }[],
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([...entries].sort((left, right) => left.path.localeCompare(right.path))),
+      "utf8",
+    )
+    .digest("hex");
+}
 
 export function verifyWorkspaceInspection(input: {
   readonly changedFiles: readonly FileChangeSummary[];
@@ -38,6 +58,7 @@ export function verifyWorkspaceInspection(input: {
   const missingPaths: string[] = [];
   const unexpectedKinds: string[] = [];
   const symlinkPaths: string[] = [];
+  const contentFingerprints: Record<string, WorkspaceContentFingerprint> = {};
   let failed = false;
   let error =
     !input.facts.inspectionComplete ||
@@ -52,6 +73,9 @@ export function verifyWorkspaceInspection(input: {
     ) {
       error = true;
       continue;
+    }
+    if (observation.fingerprint !== undefined) {
+      contentFingerprints[changedFile.path] = observation.fingerprint;
     }
     if (changedFile.changeType === "DELETED") {
       if (observation.kind !== "MISSING") {
@@ -88,7 +112,35 @@ export function verifyWorkspaceInspection(input: {
   const inspectionHash = createHash("sha256")
     .update(JSON.stringify({ changedFiles, observations, result: resultWithoutHash }), "utf8")
     .digest("hex");
-  return { ...resultWithoutHash, inspectionHash };
+  const fingerprintBytes = Buffer.byteLength(JSON.stringify(contentFingerprints), "utf8");
+  const freshnessComplete =
+    input.facts.inspectionComplete &&
+    !duplicate &&
+    changedFiles.every((changedFile) => {
+      const fingerprint = contentFingerprints[changedFile.path];
+      if (fingerprint === undefined) return false;
+      if (changedFile.changeType === "DELETED") return fingerprint.kind === "MISSING";
+      return (
+        fingerprint.kind === "FILE" &&
+        fingerprint.sha256 !== undefined &&
+        fingerprint.sizeBytes !== undefined
+      );
+    });
+  const workspaceFreshnessHash =
+    freshnessComplete && fingerprintBytes <= MAX_WORKSPACE_FINGERPRINT_BYTES
+      ? computeWorkspaceFreshnessHash(
+          changedFiles.map((file) => ({
+            path: file.path,
+            fingerprint: contentFingerprints[file.path]!,
+          })),
+        )
+      : undefined;
+  return {
+    ...resultWithoutHash,
+    inspectionHash,
+    contentFingerprints,
+    ...(workspaceFreshnessHash === undefined ? {} : { workspaceFreshnessHash }),
+  };
 }
 
 export function createWorkspaceEvidence(input: {
@@ -98,25 +150,37 @@ export function createWorkspaceEvidence(input: {
   readonly capturedAt: VerificationEvidence["capturedAt"];
   readonly result: WorkspaceInspectionResult;
 }): VerificationEvidence {
+  const details: JsonObject = {
+    checkedFileCount: input.result.checkedFileCount,
+    createdCount: input.result.createdCount,
+    modifiedCount: input.result.modifiedCount,
+    movedCount: input.result.movedCount,
+    deletedCount: input.result.deletedCount,
+    missingPaths: [...input.result.missingPaths],
+    unexpectedKinds: [...input.result.unexpectedKinds],
+    symlinkPaths: [...input.result.symlinkPaths],
+    inspectionComplete: input.result.inspectionComplete,
+    inspectionHash: input.result.inspectionHash,
+    ...(input.result.workspaceFreshnessHash === undefined
+      ? {}
+      : {
+          workspaceFreshnessHash: input.result.workspaceFreshnessHash,
+          contentFingerprints: Object.fromEntries(
+            Object.entries(input.result.contentFingerprints).map(([path, fingerprint]) => [
+              path,
+              { ...fingerprint },
+            ]),
+          ),
+        }),
+    status: input.result.status,
+  };
   return {
     id: input.id,
     planId: input.planId,
     checkId: input.checkId,
     kind: "WORKSPACE",
     summary: `Workspace change sanity ${input.result.status.toLowerCase()}`,
-    details: {
-      checkedFileCount: input.result.checkedFileCount,
-      createdCount: input.result.createdCount,
-      modifiedCount: input.result.modifiedCount,
-      movedCount: input.result.movedCount,
-      deletedCount: input.result.deletedCount,
-      missingPaths: [...input.result.missingPaths],
-      unexpectedKinds: [...input.result.unexpectedKinds],
-      symlinkPaths: [...input.result.symlinkPaths],
-      inspectionComplete: input.result.inspectionComplete,
-      inspectionHash: input.result.inspectionHash,
-      status: input.result.status,
-    },
+    details,
     capturedAt: input.capturedAt,
   };
 }

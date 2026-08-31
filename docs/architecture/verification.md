@@ -41,7 +41,7 @@ The planner returns a draft. Core owns plan/check ID factories and the durable c
 
 `evaluateVerification` is a pure projection over a validated plan and evidence. It returns only `INCOMPLETE`, `FAILED`, `ERROR`, or `PASSED`, with bounded ID lists and advisory warnings. Zero checks are incomplete. Required or available blocking checks that are pending, running, cancelled, or missing evidence are incomplete. Blocking failures and errors are preserved as distinct outcomes. An `IF_AVAILABLE` check may be skipped only with matching discovery evidence that says the capability is unavailable. Advisory failures produce warnings and do not block a pass.
 
-This evaluator is not connected to `COMPLETED` in 11C. A fully passing plan remains `VERIFYING`; only blocking FAILED checks can enter the bounded repair handoff described in [Verification Repair](verification-repair.md).
+This evaluator is connected to `COMPLETED` only through the Core Completion Authority in 11D. A fully passing plan still requires candidate identity, fresh workspace/Git state, a deterministic evidence digest, and an atomic guarded commit. See [Verification Completion](verification-completion.md) and [Verification Recovery](verification-recovery.md).
 
 ## Durable boundary
 

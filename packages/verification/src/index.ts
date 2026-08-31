@@ -9,6 +9,12 @@ export type { VerificationEvaluation, VerificationEvaluationStatus } from "./eva
 export { assertVerificationCheckTransition } from "./lifecycle.js";
 export { computeVerificationCandidateHash, createVerificationCandidate } from "./candidate.js";
 export {
+  computeVerificationCandidateTextHash,
+  computeVerificationEvidenceDigest,
+  createVerificationCompletionSeal,
+} from "./completion-integrity.js";
+export type { VerificationCompletionSealInput } from "./completion-integrity.js";
+export {
   createCommandEvidence,
   createDiscoveryEvidence,
   MAX_VERIFICATION_OUTPUT_SNIPPET_BYTES,
@@ -38,6 +44,7 @@ export type {
   VerificationSettlementCommitResult,
   VerificationCommittedEvent,
   WorkspaceInspectionFacts,
+  WorkspaceContentFingerprint,
   WorkspacePathObservation,
   WorkspacePathObservationKind,
   WorkspaceVerificationPort,
@@ -55,6 +62,8 @@ export {
   createWorkspaceEvidence,
   verifyWorkspaceInspection,
   MAX_WORKSPACE_REVIEW_PATHS,
+  MAX_WORKSPACE_FINGERPRINT_BYTES,
+  computeWorkspaceFreshnessHash,
 } from "./workspace-verifier.js";
 export type { WorkspaceInspectionResult } from "./workspace-verifier.js";
 export {

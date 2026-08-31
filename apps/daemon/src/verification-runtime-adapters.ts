@@ -13,7 +13,8 @@ import type {
 } from "@caelush/verification";
 
 export function createRuntimeWorkspaceVerificationPort(
-  scope: Pick<RuntimeWorkspaceScope, "pathResolver">,
+  scope: Pick<RuntimeWorkspaceScope, "pathResolver"> &
+    Partial<Pick<RuntimeWorkspaceScope, "filesystem">>,
 ): WorkspaceVerificationPort {
   return {
     async inspect(input) {
@@ -22,7 +23,15 @@ export function createRuntimeWorkspaceVerificationPort(
         if (input.signal?.aborted) throw new Error("workspace inspection aborted");
         try {
           const resolved = await scope.pathResolver.resolveExisting(changedFile.path);
-          paths.set(changedFile.path, { path: changedFile.path, kind: resolved.kind });
+          const fingerprint =
+            scope.filesystem === undefined
+              ? undefined
+              : await scope.filesystem.fingerprint(resolved.absolutePath);
+          paths.set(changedFile.path, {
+            path: changedFile.path,
+            kind: resolved.kind,
+            ...(fingerprint === undefined ? {} : { fingerprint }),
+          });
         } catch (error) {
           if (error instanceof RuntimePathNotFoundError) {
             paths.set(changedFile.path, { path: changedFile.path, kind: "MISSING" });

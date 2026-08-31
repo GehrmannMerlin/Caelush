@@ -106,6 +106,56 @@ describe("Phase 11A Verification contracts", () => {
     expect(planSchema.parse(plan)).toEqual(plan);
   });
 
+  it("accepts a candidate-bound plan while preserving legacy plans without the field", () => {
+    const planSchema = schema("VerificationPlanSchema");
+    const plan = {
+      id: createVerificationPlanId(),
+      runId: createRunId(),
+      sourceStepId: createStepId(),
+      plannerVersion: "phase-11d.v1",
+      planHash: "a".repeat(64),
+      candidateHash: "b".repeat(64),
+      checks: [],
+      createdAt: 1_700_000_000_000,
+    };
+
+    expect(planSchema.parse(plan)).toEqual(plan);
+    const legacyPlan: Record<string, unknown> = { ...plan };
+    delete legacyPlan.candidateHash;
+    expect(planSchema.parse(legacyPlan)).toEqual(legacyPlan);
+  });
+
+  it("exports a strict bounded verified completion result contract", () => {
+    const resultSchema = schema("VerifiedRunFinalResultSchema");
+    const result = {
+      type: "VERIFIED_COMPLETION",
+      text: "The task is complete.",
+      verification: {
+        planId: createVerificationPlanId(),
+        sourceStepId: createStepId(),
+        planHash: "a".repeat(64),
+        candidateHash: "b".repeat(64),
+        evidenceDigest: "c".repeat(64),
+        freshnessHash: "d".repeat(64),
+        sealHash: "e".repeat(64),
+        checks: { total: 4, passed: 4, skipped: 0, advisoryWarnings: 0 },
+      },
+    };
+
+    expect(resultSchema.parse(result)).toEqual(result);
+    expect(resultSchema.safeParse({ ...result, stdout: "secret" }).success).toBe(false);
+    expect(resultSchema.safeParse({ ...result, text: "" }).success).toBe(false);
+    expect(
+      resultSchema.safeParse({
+        ...result,
+        verification: {
+          ...result.verification,
+          checks: { total: 4, passed: 5, skipped: 0, advisoryWarnings: 0 },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
   it("rejects unknown fields and invalid plan/check bounds", () => {
     const planSchema = schema("VerificationPlanSchema");
     const planId = (api.createVerificationPlanId as () => string)();

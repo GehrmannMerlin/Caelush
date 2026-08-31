@@ -2,7 +2,7 @@
 
 Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI、Web 和其他宿主共享同一个可观察、可取消、可验证、可扩展的 Agent Core。
 
-本轮当前阶段为 **V1 Phase 11C：Change, Task Acceptance & Bounded Repair**；Phase 8A/8B/8C/8D、Phase 9A、Phase 9B、Phase 9C、Phase 9D、Phase 10A、Phase 10B、Phase 10C 与 Phase 10D 已完成，Phase 10 overall 已封存。本阶段在 11B 的 PROJECT 执行基线上增加 bounded metadata-only WORKSPACE/GIT review、独立 no-tools TASK reviewer、共享 `VERIFICATION_LLM` 预算核算以及最多三次（硬上限十次）的 repair handoff；通过检查或达到修复上限都仍停留在 `VERIFYING`，不授权 `COMPLETED`。
+本轮当前阶段为 **V1 Phase 11D：Completion Authority & Verification Recovery**；Phase 8A/8B/8C/8D、Phase 9A、Phase 9B、Phase 9C、Phase 9D、Phase 10A、Phase 10B、Phase 10C 与 Phase 10D 已完成，Phase 10 overall 已封存。本阶段在 11C 的验证与 bounded repair 基线上增加 Core-owned Completion Authority、candidate/workspace/Git freshness、evidence digest、Completion Seal、严格 `VerifiedRunFinalResult`、原子完成/失败 settlement 以及恢复和 late-write guards。Phase 11D 是 Phase 11 的最终轮次；不新增 11E 或 Phase 12。
 
 当前仓库已经完成 Phase 1–7 以及 Phase 8A/8B/8C/8D；Phase 8D 增加 tool-independent 的只读 Git Runtime、`git_status`/`git_diff`、统一默认 Built-in catalog、纯 Tool Effects、AgentState 投影和原子 Tool settlement。Phase 9A 增加独立的 `@caelush/security` policy kernel、Run-derived `ToolSecurityContext` 与真实 `ToolExecutionGate`；Phase 9B 增加 durable Approval workflow、精确 grant matching、lazy expiry 与 Tool/Run recovery；Phase 9C 增加 sensitive resource/command policy、host-only facts、high-confidence secret redaction 和 sanitize-before-persist，但不实现 OS hard sandbox；Phase 10A 增加 user-requested cancellation control plane 和 end-to-end abort propagation；Phase 10B 增加 Run deadline 与 Provider local timeout 的分层、超时 abort/cleanup 以及恢复安全边界；Phase 10C 增加仅 Provider 瞬态失败的 bounded retry/backoff、持久化等待边界、事件审计与崩溃恢复；Phase 10D 增加 durable budget ledger、Tool/LLM admission、保守 usage accounting、预算优先级和终止清理。Phase 10D 不实现 Verification execution、公共 budget UI/API 或 `COMPLETED` transition。
 
@@ -48,8 +48,8 @@ Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI�
 - Phase 11A — Verification Domain, Planning & Evidence Contract: **COMPLETED**
 - Phase 11B — Verification Execution: **COMPLETED**
 - Phase 11C — Evidence & Review Integration: **COMPLETED**
-- Phase 11D — Completion Authority & Finalization: **NOT STARTED**
-- Phase 11 — overall: **IN PROGRESS**
+- Phase 11D — Completion Authority & Finalization: **COMPLETED**
+- Phase 11 — overall: **COMPLETED**
 
 Phase 7 contains exactly 7A, 7B, and 7C. Caelush now has an immutable validated Tool Registry and a single-Tool Dispatcher. A valid call is durably recorded as `REQUESTED`, gated, durably checkpointed as `RUNNING`, executed once through the resolved handler, output-validated, and atomically settled with its `ToolObservation` and lifecycle event. Exact duplicate calls are idempotent, stale `RUNNING` calls fail closed during recovery, and raw arguments/results are kept out of lifecycle events.
 
@@ -81,7 +81,7 @@ Phase 10C details are documented in [Provider Retry and Backoff](docs/architectu
 
 Phase 10D details are documented in [Budget Architecture](docs/architecture/budget.md) and [Execution Governance](docs/architecture/execution-governance.md), including the durable ledger lifecycle, request admission, conservative missing usage, pricing snapshots, Tool batch preflight, authority priority, cleanup, and the explicit Phase 10 final boundary.
 
-Phase 11A/11B/11C details are documented in [Verification Architecture](docs/architecture/verification.md), [Verification Execution](docs/architecture/verification-execution.md), [Change Review](docs/architecture/verification-change-review.md), [Task Acceptance Review](docs/architecture/task-acceptance-review.md), and [Verification Repair](docs/architecture/verification-repair.md). Phase 11C remains below completion authority: passing and repair-limit boundaries both remain `VERIFYING`.
+Phase 11A/11B/11C/11D details are documented in [Verification Architecture](docs/architecture/verification.md), [Verification Execution](docs/architecture/verification-execution.md), [Change Review](docs/architecture/verification-change-review.md), [Task Acceptance Review](docs/architecture/task-acceptance-review.md), [Verification Repair](docs/architecture/verification-repair.md), [Verification Completion](docs/architecture/verification-completion.md), and [Verification Recovery](docs/architecture/verification-recovery.md). Core/RunController alone may complete a Run, and only after the final guarded freshness recheck.
 
 ## 技术栈
 

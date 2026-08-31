@@ -177,6 +177,10 @@ export const VerificationPlanSchema = z
     sourceStepId: StepIdSchema,
     plannerVersion: z.string().min(1).max(128),
     planHash: z.string().regex(/^[0-9a-f]{64}$/),
+    candidateHash: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .optional(),
     checks: z.array(VerificationCheckSchema).max(32),
     createdAt: TimestampMsSchema,
   })
@@ -203,6 +207,64 @@ export const VerificationPlanSchema = z
     }
   });
 export type VerificationPlan = z.infer<typeof VerificationPlanSchema>;
+
+const VerificationDigestSchema = z.string().regex(/^[0-9a-f]{64}$/);
+
+const VerificationCheckCountsSchema = z
+  .object({
+    total: z.number().int().nonnegative().max(32).refine(Number.isSafeInteger),
+    passed: z.number().int().nonnegative().max(32).refine(Number.isSafeInteger),
+    skipped: z.number().int().nonnegative().max(32).refine(Number.isSafeInteger),
+    advisoryWarnings: z.number().int().nonnegative().max(32).refine(Number.isSafeInteger),
+  })
+  .strict()
+  .superRefine((counts, context) => {
+    if (counts.passed + counts.skipped > counts.total) {
+      context.addIssue({ code: "custom", message: "verified counts exceed total checks" });
+    }
+  });
+
+export const VerificationCompletionSealSchema = z
+  .object({
+    runId: RunIdSchema,
+    planId: VerificationPlanIdSchema,
+    sourceStepId: StepIdSchema,
+    planHash: VerificationDigestSchema,
+    candidateHash: VerificationDigestSchema,
+    evidenceDigest: VerificationDigestSchema,
+    workspaceFreshnessHash: VerificationDigestSchema,
+    gitFreshnessHash: VerificationDigestSchema.optional(),
+    sealHash: VerificationDigestSchema,
+  })
+  .strict();
+export type VerificationCompletionSeal = z.infer<typeof VerificationCompletionSealSchema>;
+
+export const VerifiedRunFinalResultSchema = z
+  .object({
+    type: z.literal("VERIFIED_COMPLETION"),
+    text: z
+      .string()
+      .min(1)
+      .max(32_768)
+      .refine(
+        (value) => new TextEncoder().encode(value).byteLength <= 32 * 1024,
+        "verified final text exceeds its byte limit",
+      ),
+    verification: z
+      .object({
+        planId: VerificationPlanIdSchema,
+        sourceStepId: StepIdSchema,
+        planHash: VerificationDigestSchema,
+        candidateHash: VerificationDigestSchema,
+        evidenceDigest: VerificationDigestSchema,
+        freshnessHash: VerificationDigestSchema,
+        sealHash: VerificationDigestSchema,
+        checks: VerificationCheckCountsSchema,
+      })
+      .strict(),
+  })
+  .strict();
+export type VerifiedRunFinalResult = z.infer<typeof VerifiedRunFinalResultSchema>;
 
 export const VerificationCheckDraftSchema = z
   .object({

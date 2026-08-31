@@ -118,6 +118,8 @@ export {
   VerificationEvidenceSchema,
   VerificationProjectFactsSchema,
   VerificationPlanningInputSchema,
+  VerificationCompletionSealSchema,
+  VerifiedRunFinalResultSchema,
 } from "./verification.js";
 export { MAX_VERIFICATION_EVIDENCE_DETAILS_BYTES } from "./limits.js";
 export type {
@@ -142,6 +144,8 @@ export type {
   VerificationEvidence,
   VerificationProjectFacts,
   VerificationPlanningInput,
+  VerificationCompletionSeal,
+  VerifiedRunFinalResult,
 } from "./verification.js";
 export type {
   VerificationCheckCompletedEvent,
@@ -166,6 +170,7 @@ export {
   VerificationPlannedEventSchema,
   VerificationRepairStartedEventSchema,
   VerificationRepairLimitReachedEventSchema,
+  VerificationFinalizedEventSchema,
 } from "./events/index.js";
 export type { AgentEvent, EventDurability, EventVisibility } from "./events/index.js";
 export type { RunTimedOutEvent } from "./events/index.js";

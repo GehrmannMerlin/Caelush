@@ -61,6 +61,7 @@ export {
   markAgentStateBudgetExceeded,
   markAgentStateWaitingApproval,
   markAgentStateVerifying,
+  markAgentStateCompleted,
   resumeAgentStateFromVerificationRepair,
   settleAgentStepState,
   resumeAgentStateFromApproval,
@@ -168,12 +169,23 @@ export {
   markAgentRunTimedOut,
   markAgentRunBudgetExceeded,
   markAgentRunCancelled,
+  markAgentRunCompleted,
   markAgentRunWaitingApproval,
   resumeAgentRunFromApproval,
   resumeAgentRunFromVerificationRepair,
   markAgentStateFailed,
 } from "./run-execution-state.js";
 export type { RunBudgetPort, RunBudgetSettlement, RunLLMBudgetAdmission } from "./budget-ports.js";
+export {
+  evaluateCompletionAuthority,
+  createVerifiedRunFinalResult,
+} from "./completion-authority.js";
+export type {
+  CompletionAuthorityInput,
+  CompletionAuthorityDecision,
+  CompletionFreshness,
+  CompletionGitFreshness,
+} from "./completion-authority.js";
 export type {
   DurableAgentEvent,
   DurableEventDraft,
@@ -184,6 +196,7 @@ export type {
   RunExecutionMessageAppend,
   RunExecutionSnapshot,
   RunExecutionStepWrite,
+  RunVerifiedCompletionCommit,
   RunExecutionStorePort,
 } from "./run-execution-store.js";
 export {

@@ -43,7 +43,10 @@ export class SqliteVerificationExecutionStore implements VerificationExecutionRe
     const client = this.database.client;
     client.exec("BEGIN IMMEDIATE");
     try {
+      assertVerificationBoundary(client, input.runId, input.sessionId);
       const plan = requirePlan(client, input.check.planId);
+      if (plan.runId !== input.runId)
+        throw new StorageConflictError("verification Run identity mismatch");
       const current = requireCheck(plan, input.check.id);
       if (current.status === "RUNNING" && sameCheck(current, input.check)) {
         client.exec("COMMIT");
@@ -78,7 +81,10 @@ export class SqliteVerificationExecutionStore implements VerificationExecutionRe
     const client = this.database.client;
     client.exec("BEGIN IMMEDIATE");
     try {
+      assertVerificationBoundary(client, input.runId, input.sessionId);
       const plan = requirePlan(client, input.check.planId);
+      if (plan.runId !== input.runId)
+        throw new StorageConflictError("verification Run identity mismatch");
       const current = requireCheck(plan, input.check.id);
       if (isTerminal(current.status) && sameCheck(current, input.check)) {
         client.exec("COMMIT");
@@ -133,6 +139,36 @@ export class SqliteVerificationExecutionStore implements VerificationExecutionRe
       .prepare("SELECT COUNT(*) AS count FROM verification_plans WHERE run_id = ?")
       .get(runId) as { count: number };
     return row.count;
+  }
+}
+
+function assertVerificationBoundary(
+  client: CaelushDatabase["client"],
+  runId: VerificationStartCommit["runId"],
+  sessionId: VerificationStartCommit["sessionId"],
+): void {
+  const run = client
+    .prepare("SELECT status, session_id FROM agent_runs WHERE id = ?")
+    .get(runId) as { status: string; session_id: string } | undefined;
+  const continuation = client
+    .prepare("SELECT kind FROM agent_run_continuations WHERE run_id = ?")
+    .get(runId) as { kind: string } | undefined;
+  if (
+    run === undefined ||
+    run.session_id !== sessionId ||
+    [
+      "COMPLETED",
+      "FAILED",
+      "CANCELLED",
+      "TIMEOUT",
+      "MAX_STEPS_REACHED",
+      "BUDGET_EXCEEDED",
+    ].includes(run.status) ||
+    (run.status === "VERIFYING" &&
+      continuation !== undefined &&
+      continuation.kind !== "AWAITING_VERIFICATION")
+  ) {
+    throw new StorageConflictError("verification write arrived after its Run boundary closed");
   }
 }
 

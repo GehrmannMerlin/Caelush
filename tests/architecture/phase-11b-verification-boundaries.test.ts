@@ -79,7 +79,7 @@ describe("Phase 11B verification boundaries", () => {
     expect(security).toContain("verification command adapter");
     expect(context).toContain("ProjectInspector.inspect()");
     expect(readme).toContain("Phase 11B — Verification Execution: **COMPLETED**");
-    expect(readme).toContain("Phase 11D — Completion Authority & Finalization: **NOT STARTED**");
+    expect(readme).toContain("Phase 11D — Completion Authority & Finalization: **COMPLETED**");
     expect(agents).toContain("Phase 11B rules:");
   });
 });

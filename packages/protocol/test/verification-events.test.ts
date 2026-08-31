@@ -75,6 +75,34 @@ describe("Phase 11A verification planned event", () => {
     ).toBe(false);
   });
 
+  it("accepts a bounded verification finalized event without raw evidence", () => {
+    const event = {
+      eventId: createEventId(),
+      schemaVersion: 1 as const,
+      runId: createRunId(),
+      sessionId: createSessionId(),
+      timestamp: 1_700_000_000_000,
+      visibility: "USER_VISIBLE" as const,
+      durability: { kind: "DURABLE" as const, version: 1 as const, sequence: 3 },
+      type: "verification.finalized" as const,
+      payload: {
+        planId: createVerificationPlanId(),
+        outcome: "PASSED" as const,
+        sealHash: "a".repeat(64),
+        failedCheckIds: [],
+        errorCheckIds: [],
+      },
+    };
+
+    expect(AgentEventSchema.parse(event)).toEqual(event);
+    expect(
+      AgentEventSchema.safeParse({
+        ...event,
+        payload: { ...event.payload, evidence: { stdout: "secret" } },
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts bounded check start and completion events", () => {
     const common = {
       eventId: createEventId(),
