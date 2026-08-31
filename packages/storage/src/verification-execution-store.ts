@@ -127,6 +127,13 @@ export class SqliteVerificationExecutionStore implements VerificationExecutionRe
     );
     return { plan, evidence };
   }
+
+  async countPlans(runId: VerificationPlan["runId"]): Promise<number> {
+    const row = this.database.client
+      .prepare("SELECT COUNT(*) AS count FROM verification_plans WHERE run_id = ?")
+      .get(runId) as { count: number };
+    return row.count;
+  }
 }
 
 function requirePlan(
@@ -223,8 +230,6 @@ function persistCheckAndEvidence(
 }
 
 function startEvent(eventId: EventId, input: VerificationStartCommit): DurableEventDraft {
-  if (input.check.spec.kind !== "PROJECT")
-    throw new StorageConflictError("Only project checks can execute in Phase 11B.");
   return {
     eventId,
     schemaVersion: 1,

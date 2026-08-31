@@ -88,12 +88,48 @@ describe("SqliteRunBudgetPort", () => {
     });
     expect(result).toEqual({ kind: "UNAVAILABLE", reason: "TOKEN_ESTIMATE" });
   });
+
+  it("accounts a verification reviewer through the same ledger without creating a Step", async () => {
+    const database = await openCaelushDatabase({ path: ":memory:" });
+    databases.push(database);
+    await migrateCaelushDatabase(database);
+    const session = makeSession();
+    const run = makeRun(session.id, {
+      status: "VERIFYING",
+      limits: { maxSteps: 10, maxToolCalls: 10, timeoutMs: 1000, maxTokens: 100 },
+    });
+    await new SqliteSessionRepository(database).insert(session);
+    await new SqliteRunRepository(database).insert(run);
+    const budget = new SqliteRunBudgetPort(database, {
+      tokenEstimator: { estimate: () => 8 },
+      clock: { now: () => createTimestampMs(101) },
+    });
+    const request = { model: run.model, messages: [{ role: "user" as const, content: "review" }] };
+    const admitted = await budget.admitVerificationLLM({ run, ownerId: "verify:task", request });
+    expect(admitted.kind).toBe("ALLOWED");
+    expect((await budgetLedger(database, run.id, "VERIFICATION_LLM", "verify:task"))?.state).toBe(
+      "IN_FLIGHT",
+    );
+    await budget.settleVerificationLLM({
+      runId: run.id,
+      ownerId: "verify:task",
+      usage: { inputTokens: 8, outputTokens: 4, totalTokens: 12 },
+      settledAt: createTimestampMs(102),
+    });
+    const projected = await budget.reconcileState(makeState(run));
+    expect(projected.usage).toMatchObject({
+      inputTokens: 8,
+      outputTokens: 4,
+      steps: 0,
+      toolCalls: 0,
+    });
+  });
 });
 
 async function budgetLedger(
   database: Awaited<ReturnType<typeof openCaelushDatabase>>,
   runId: ReturnType<typeof makeRun>["id"],
-  kind: "LLM_ATTEMPT" | "TOOL_INVOCATION",
+  kind: "LLM_ATTEMPT" | "VERIFICATION_LLM" | "TOOL_INVOCATION",
   ownerId: string,
 ) {
   return new (await import("../src/budget-ledger-repository.js")).SqliteBudgetLedgerRepository(

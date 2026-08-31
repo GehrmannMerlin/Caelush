@@ -40,6 +40,19 @@ function plan(): VerificationPlan {
   };
 }
 
+function changePlan(): VerificationPlan {
+  const value = plan();
+  return {
+    ...value,
+    checks: [
+      {
+        ...value.checks[0]!,
+        spec: { kind: "WORKSPACE", purpose: "CHANGESET_SANITY", source: "SYSTEM" },
+      },
+    ],
+  };
+}
+
 function discovery(planValue: VerificationPlan) {
   return {
     id: createVerificationEvidenceId(),
@@ -138,5 +151,34 @@ describe("atomic verification execution persistence", () => {
 
   it("uses the shared durable event sequence and never exposes a raw command in events", async () => {
     expect(createEventId()).toMatch(/^evt_/);
+  });
+
+  it("persists non-project change checks through the same execution store", async () => {
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    stores.push(storage);
+    const value = changePlan();
+    const session = makeSession({ id: createSessionId() });
+    const run = makeRun(session.id, { id: value.runId, status: "VERIFYING" });
+    await storage.sessions.insert(session);
+    await storage.runs.insert(run);
+    await storage.steps.insert(makeStep(run.id, { id: value.sourceStepId, status: "COMPLETED" }));
+    await storage.runStates.save(makeState(run));
+    await storage.verification.createPlan(value);
+
+    const started = await storage.verificationExecution.startCheck({
+      runId: value.runId,
+      sessionId: session.id,
+      check: { ...value.checks[0]!, status: "RUNNING", startedAt: createTimestampMs(111) },
+      discoveryEvidence: {
+        ...discovery(value),
+        kind: "DISCOVERY",
+        summary: "Workspace inspection prepared",
+        details: { kind: "WORKSPACE", purpose: "CHANGESET_SANITY" },
+      },
+    });
+
+    expect(started.events[0]?.type).toBe("verification.check.started");
+    expect(started.events[0]?.payload).toMatchObject({ kind: "WORKSPACE" });
+    expect(await storage.verificationExecution.countPlans?.(value.runId)).toBe(1);
   });
 });

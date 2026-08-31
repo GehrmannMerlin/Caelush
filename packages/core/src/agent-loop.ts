@@ -170,6 +170,9 @@ export class AgentLoop {
       relevantFiles,
       history,
       limits: input.contextLimits,
+      ...(input.verificationRepairContext === undefined
+        ? {}
+        : { verificationRepairContext: input.verificationRepairContext }),
     };
     if (currentTurnMessages !== undefined) {
       return { ...common, mode: "TOOL_CONTINUATION", currentTurnMessages };

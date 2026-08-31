@@ -1,4 +1,9 @@
-import { createRunId, createStepId, createWorkspaceId } from "../src/index.js";
+import {
+  createRunId,
+  createStepId,
+  createVerificationPlanId,
+  createWorkspaceId,
+} from "../src/index.js";
 import * as protocol from "../src/index.js";
 import { describe, expect, it } from "vitest";
 
@@ -17,6 +22,24 @@ function schema(name: string): {
 }
 
 describe("Phase 11A Verification contracts", () => {
+  it("accepts change-review purposes in the check contract", () => {
+    const planId = createVerificationPlanId();
+    const check = {
+      id: api.createVerificationCheckId as () => string,
+      planId,
+      ordinal: 0,
+      stage: "CHANGE_REVIEW",
+      requirement: "REQUIRED",
+      spec: { kind: "WORKSPACE", purpose: "CHANGESET_SANITY", source: "SYSTEM" },
+      status: "PENDING",
+      createdAt: 1_700_000_000_000,
+    };
+    const parsed = schema("VerificationCheckSchema").parse({
+      ...check,
+      id: check.id(),
+    }) as { spec: { purpose: string } };
+    expect(parsed.spec.purpose).toBe("CHANGESET_SANITY");
+  });
   it("exports strict UUIDv7 identifiers for plans, checks, and evidence", () => {
     const contracts = [
       ["VerificationPlanIdSchema", "createVerificationPlanId", "vplan_"],

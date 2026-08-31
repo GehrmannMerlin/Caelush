@@ -5,6 +5,8 @@ import type {
   StepId,
   ToolInvocationId,
   ToolName,
+  VerificationCheckId,
+  VerificationEvidenceId,
   VerificationPlanId,
 } from "@caelush/protocol";
 import type { AgentFinalCandidateDecision, AgentToolCallsDecision } from "./agent-decision.js";
@@ -33,6 +35,16 @@ export interface AwaitingVerificationContinuation {
   readonly finalDecision: AgentFinalCandidateDecision;
 }
 
+export interface WaitingVerificationRepairContinuation {
+  readonly type: "WAITING_VERIFICATION_REPAIR";
+  readonly runId: RunId;
+  readonly failedPlanId: VerificationPlanId;
+  readonly sourceStepId: StepId;
+  readonly failedCheckIds: readonly VerificationCheckId[];
+  readonly evidenceIds: readonly VerificationEvidenceId[];
+  readonly repairCycle: number;
+}
+
 export type RetryErrorCode = "LLM_RATE_LIMIT" | "LLM_NETWORK" | "LLM_TIMEOUT";
 
 interface WaitingRetryContinuationBase {
@@ -58,4 +70,7 @@ export type WaitingRetryContinuation =
     });
 
 export type RunContinuationCheckpoint =
-  WaitingToolResultsContinuation | AwaitingVerificationContinuation | WaitingRetryContinuation;
+  | WaitingToolResultsContinuation
+  | AwaitingVerificationContinuation
+  | WaitingVerificationRepairContinuation
+  | WaitingRetryContinuation;

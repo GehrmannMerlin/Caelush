@@ -4,7 +4,7 @@
 
 Phase 11 is fixed to exactly four rounds: 11A planning foundation, 11B verification execution, 11C evidence/review integration, and 11D completion authority. This document describes the shared 11A contract and the 11B execution boundary. No 11A-1, 11A-2, 11E, or implicit execution round exists.
 
-Phase 11A creates the durable intent for verification. Phase 11B executes only deterministic `PROJECT` checks for `LINT`, `TYPECHECK`, `TEST`, and `BUILD`; it does not execute Git, workspace, task, or LLM-review checks and does not transition `VERIFYING` to `COMPLETED`.
+Phase 11A creates the durable intent for verification. Phase 11B executes deterministic `PROJECT` checks for `LINT`, `TYPECHECK`, `TEST`, and `BUILD`. Phase 11C adds bounded metadata-only Workspace/Git checks and an independent no-tools Task reviewer, plus a bounded repair handoff; it still does not transition `VERIFYING` to `COMPLETED`.
 
 ## Contract ownership
 
@@ -41,7 +41,7 @@ The planner returns a draft. Core owns plan/check ID factories and the durable c
 
 `evaluateVerification` is a pure projection over a validated plan and evidence. It returns only `INCOMPLETE`, `FAILED`, `ERROR`, or `PASSED`, with bounded ID lists and advisory warnings. Zero checks are incomplete. Required or available blocking checks that are pending, running, cancelled, or missing evidence are incomplete. Blocking failures and errors are preserved as distinct outcomes. An `IF_AVAILABLE` check may be skipped only with matching discovery evidence that says the capability is unavailable. Advisory failures produce warnings and do not block a pass.
 
-This evaluator is not connected to `COMPLETED` in 11B. Completion authority, review policy, and the remaining WORKSPACE/GIT/TASK execution remain future Verification rounds.
+This evaluator is not connected to `COMPLETED` in 11C. A fully passing plan remains `VERIFYING`; only blocking FAILED checks can enter the bounded repair handoff described in [Verification Repair](verification-repair.md).
 
 ## Durable boundary
 

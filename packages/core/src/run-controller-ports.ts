@@ -19,6 +19,7 @@ import type { RunDeadlineRegistry } from "./run-deadline-registry.js";
 import type { RunRetryRegistry } from "./run-retry-registry.js";
 import type { RetryJitterSource, RetryPolicy } from "./retry-controller.js";
 import type { RunBudgetPort } from "./budget-ports.js";
+import type { LLMTurnResult } from "@caelush/llm/turn";
 import type {
   VerificationCommandExecutionPort,
   VerificationCommandSecurityPort,
@@ -28,6 +29,12 @@ import type {
   VerificationRunnerResult,
   ProjectCheckResolverRegistry,
   VerificationExecutionStorePort,
+  VerificationExecutionRecoveryStorePort,
+  VerificationGitPort,
+  WorkspaceVerificationPort,
+  VerificationRepairPolicy,
+  TaskAcceptanceReview,
+  TaskReviewBundle,
 } from "@caelush/verification";
 
 export interface RunExecutionConfig {
@@ -71,6 +78,29 @@ export interface ProjectProfileProviderPort {
   getFreshProfile(run: AgentRun, config: RunExecutionConfig): Promise<VerificationProjectProfile>;
 }
 
+export interface VerificationLLMClient {
+  complete(
+    request: import("@caelush/llm/request").LLMRequest,
+    options: { readonly signal: AbortSignal },
+  ): Promise<LLMTurnResult>;
+}
+
+export interface VerificationTaskReviewerPort {
+  review(input: {
+    readonly run: AgentRun;
+    readonly candidateText: string;
+    readonly bundle: TaskReviewBundle;
+    readonly signal: AbortSignal;
+  }): Promise<{
+    readonly status: "PASSED" | "FAILED" | "ERROR";
+    readonly review?: TaskAcceptanceReview;
+    readonly reviewInputHash: string;
+    readonly usage?: import("@caelush/llm/turn").LLMUsage;
+    readonly budget?: import("./agent-errors.js").AgentBudgetBlock;
+    readonly errorCode?: string;
+  }>;
+}
+
 export interface ApprovalResolutionPort {
   getById(id: ApprovalRequestId): Promise<ApprovalRequest | null>;
   resolve(id: ApprovalRequestId, resolution: ApprovalResolution): Promise<ApprovalRequest>;
@@ -109,8 +139,15 @@ export interface RunControllerDependencies {
   readonly projectProfileProvider?: ProjectProfileProviderPort;
   readonly verificationExecution?: VerificationCommandExecutionPort;
   readonly verificationExecutionStore?: VerificationExecutionStorePort;
+  readonly verificationExecutionRecovery?: VerificationExecutionRecoveryStorePort;
+  readonly verificationWorkspace?: WorkspaceVerificationPort;
+  readonly verificationGit?: VerificationGitPort;
   readonly verificationSecurity?: VerificationCommandSecurityPort;
   readonly verificationEvidenceSanitizer?: VerificationEvidenceSanitizer;
   readonly verificationEvidenceIdFactory?: () => import("@caelush/protocol").VerificationEvidenceId;
   readonly verificationResolverRegistry?: ProjectCheckResolverRegistry;
+  readonly verificationReviewer?: VerificationTaskReviewerPort;
+  readonly verificationLLMClient?: VerificationLLMClient;
+  readonly verificationRepairPolicy?: VerificationRepairPolicy;
+  readonly verificationPlanCount?: (runId: import("@caelush/protocol").RunId) => Promise<number>;
 }

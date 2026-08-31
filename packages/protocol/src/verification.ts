@@ -66,6 +66,17 @@ export type VerificationEvidenceKind = z.infer<typeof VerificationEvidenceKindSc
 export const VerificationProjectCheckPurposeSchema = z.enum(["LINT", "TYPECHECK", "TEST", "BUILD"]);
 export type VerificationProjectCheckPurpose = z.infer<typeof VerificationProjectCheckPurposeSchema>;
 
+export const VerificationCheckPurposeSchema = z.enum([
+  "LINT",
+  "TYPECHECK",
+  "TEST",
+  "BUILD",
+  "CHANGESET_SANITY",
+  "CHANGESET_REVIEW",
+  "ACCEPTANCE",
+]);
+export type VerificationCheckPurpose = z.infer<typeof VerificationCheckPurposeSchema>;
+
 const VerificationProjectCheckSpecSchema = z
   .object({
     kind: z.literal("PROJECT"),

@@ -120,6 +120,23 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
     readonly step: AgentStep;
     readonly request: LLMRequest;
   }): Promise<import("@caelush/core").RunLLMBudgetAdmission> {
+    return this.admitLLMForOwner({ ...input, ownerId: input.step.id, kind: "LLM_ATTEMPT" });
+  }
+
+  async admitVerificationLLM(input: {
+    readonly run: AgentRun;
+    readonly ownerId: string;
+    readonly request: LLMRequest;
+  }): Promise<import("@caelush/core").RunLLMBudgetAdmission> {
+    return this.admitLLMForOwner({ ...input, kind: "VERIFICATION_LLM" });
+  }
+
+  private async admitLLMForOwner(input: {
+    readonly run: AgentRun;
+    readonly ownerId: string;
+    readonly request: LLMRequest;
+    readonly kind: "LLM_ATTEMPT" | "VERIFICATION_LLM";
+  }): Promise<import("@caelush/core").RunLLMBudgetAdmission> {
     const estimatedInputTokens = this.tokenEstimator.estimate(input.request);
     if (estimatedInputTokens === undefined) {
       if (input.run.limits.maxTokens !== undefined || input.run.limits.maxCost !== undefined) {
@@ -139,10 +156,10 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
     if (decision.kind === "EXCEEDED" || decision.kind === "UNAVAILABLE") return decision;
     const createdAt = this.clock.now();
     await this.ledger.reserve({
-      id: `llm:${input.step.id}`,
+      id: `${input.kind.toLowerCase()}:${input.ownerId}`,
       runId: input.run.id,
-      kind: "LLM_ATTEMPT",
-      ownerId: input.step.id,
+      kind: input.kind,
+      ownerId: input.ownerId,
       reservedInputTokens: decision.reservedInputTokens,
       reservedOutputTokens: decision.reservedOutputTokens,
       reservedCostMicros: decision.reservedCostMicros,
@@ -151,7 +168,7 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
       ...(decision.pricing === undefined ? {} : pricingColumns(decision.pricing)),
       createdAt,
     });
-    await this.ledger.markInFlight(input.run.id, "LLM_ATTEMPT", input.step.id, createdAt);
+    await this.ledger.markInFlight(input.run.id, input.kind, input.ownerId, createdAt);
     const request =
       decision.effectiveMaxOutputTokens === undefined
         ? input.request
@@ -165,7 +182,26 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
     readonly usage?: LLMUsage;
     readonly settledAt: TimestampMs;
   }): Promise<import("@caelush/core").RunBudgetSettlement | void> {
-    const entry = await this.ledger.get(input.runId, "LLM_ATTEMPT", input.stepId);
+    return this.settleLLMForOwner({ ...input, ownerId: input.stepId, kind: "LLM_ATTEMPT" });
+  }
+
+  async settleVerificationLLM(input: {
+    readonly runId: RunId;
+    readonly ownerId: string;
+    readonly usage?: LLMUsage;
+    readonly settledAt: TimestampMs;
+  }): Promise<import("@caelush/core").RunBudgetSettlement | void> {
+    return this.settleLLMForOwner({ ...input, kind: "VERIFICATION_LLM" });
+  }
+
+  private async settleLLMForOwner(input: {
+    readonly runId: RunId;
+    readonly ownerId: string;
+    readonly usage?: LLMUsage;
+    readonly settledAt: TimestampMs;
+    readonly kind: "LLM_ATTEMPT" | "VERIFICATION_LLM";
+  }): Promise<import("@caelush/core").RunBudgetSettlement | void> {
+    const entry = await this.ledger.get(input.runId, input.kind, input.ownerId);
     if (entry === null || entry.state === "SETTLED" || entry.state === "CONSERVATIVE") {
       return this.checkPostSettlementBudget(input.runId);
     }
@@ -177,7 +213,7 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
       normalized.inputTokens === undefined ||
       normalized.outputTokens === undefined
     ) {
-      await this.ledger.markConservative(input.runId, "LLM_ATTEMPT", input.stepId, input.settledAt);
+      await this.ledger.markConservative(input.runId, input.kind, input.ownerId, input.settledAt);
       return this.checkPostSettlementBudget(input.runId);
     }
     const actualCostMicros =
@@ -186,7 +222,7 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
         ? 0
         : costMicrosForTokens(normalized.inputTokens, entry.inputRateMicrosPerMillion) +
           costMicrosForTokens(normalized.outputTokens, entry.outputRateMicrosPerMillion);
-    await this.ledger.settle(input.runId, "LLM_ATTEMPT", input.stepId, {
+    await this.ledger.settle(input.runId, input.kind, input.ownerId, {
       actualInputTokens: normalized.inputTokens,
       actualOutputTokens: normalized.outputTokens,
       actualCostMicros,
@@ -200,9 +236,30 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
     readonly stepId: StepId;
     readonly settledAt: TimestampMs;
   }): Promise<void> {
-    const entry = await this.ledger.get(input.runId, "LLM_ATTEMPT", input.stepId);
+    await this.markLLMConservativeForOwner({
+      ...input,
+      ownerId: input.stepId,
+      kind: "LLM_ATTEMPT",
+    });
+  }
+
+  async markVerificationLLMConservative(input: {
+    readonly runId: RunId;
+    readonly ownerId: string;
+    readonly settledAt: TimestampMs;
+  }): Promise<void> {
+    await this.markLLMConservativeForOwner({ ...input, kind: "VERIFICATION_LLM" });
+  }
+
+  private async markLLMConservativeForOwner(input: {
+    readonly runId: RunId;
+    readonly ownerId: string;
+    readonly settledAt: TimestampMs;
+    readonly kind: "LLM_ATTEMPT" | "VERIFICATION_LLM";
+  }): Promise<void> {
+    const entry = await this.ledger.get(input.runId, input.kind, input.ownerId);
     if (entry?.state === "IN_FLIGHT") {
-      await this.ledger.markConservative(input.runId, "LLM_ATTEMPT", input.stepId, input.settledAt);
+      await this.ledger.markConservative(input.runId, input.kind, input.ownerId, input.settledAt);
     }
   }
 

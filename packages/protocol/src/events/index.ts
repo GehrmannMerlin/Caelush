@@ -42,6 +42,8 @@ import {
   VerificationCompletedEventSchema,
   VerificationCheckCompletedEventSchema,
   VerificationCheckStartedEventSchema,
+  VerificationRepairLimitReachedEventSchema,
+  VerificationRepairStartedEventSchema,
   VerificationPlannedEventSchema,
   VerificationStartedEventSchema,
 } from "./verification.js";
@@ -67,6 +69,8 @@ export { VerificationPlannedEventSchema } from "./verification.js";
 export {
   VerificationCheckCompletedEventSchema,
   VerificationCheckStartedEventSchema,
+  VerificationRepairLimitReachedEventSchema,
+  VerificationRepairStartedEventSchema,
 } from "./verification.js";
 
 export const AgentEventSchema = z.discriminatedUnion("type", [
@@ -99,6 +103,8 @@ export const AgentEventSchema = z.discriminatedUnion("type", [
   VerificationCheckStartedEventSchema,
   VerificationCheckCompletedEventSchema,
   VerificationPlannedEventSchema,
+  VerificationRepairStartedEventSchema,
+  VerificationRepairLimitReachedEventSchema,
   ApprovalRequestedEventSchema,
   ApprovalResolvedEventSchema,
   LlmStartedEventSchema,

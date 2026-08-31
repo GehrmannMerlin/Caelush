@@ -30,6 +30,7 @@ export type {
 } from "./agent-decision.js";
 export type {
   AwaitingVerificationContinuation,
+  WaitingVerificationRepairContinuation,
   RunContinuationCheckpoint,
   RetryErrorCode,
   WaitingRetryContinuation,
@@ -45,6 +46,7 @@ export {
   RunContinuationCheckpointSchema,
   WaitingRetryContinuationSchema,
   WaitingToolResultsContinuationSchema,
+  WaitingVerificationRepairContinuationSchema,
 } from "./agent-continuation-schema.js";
 export { classifyAgentDecision } from "./agent-decision-mapper.js";
 export { summarizeAgentDecision, summarizeAgentLoopOutcome } from "./agent-summary.js";
@@ -59,6 +61,7 @@ export {
   markAgentStateBudgetExceeded,
   markAgentStateWaitingApproval,
   markAgentStateVerifying,
+  resumeAgentStateFromVerificationRepair,
   settleAgentStepState,
   resumeAgentStateFromApproval,
   startAgentState,
@@ -123,6 +126,8 @@ export type {
   VerificationRunnerPort,
   ProjectProfileProviderPort,
 } from "./run-controller-ports.js";
+export { TaskAcceptanceReviewer } from "./task-acceptance-reviewer.js";
+export type { TaskAcceptanceReviewerDependencies } from "./task-acceptance-reviewer.js";
 export {
   createProjectProfileProvider,
   toVerificationProjectProfile,
@@ -165,6 +170,7 @@ export {
   markAgentRunCancelled,
   markAgentRunWaitingApproval,
   resumeAgentRunFromApproval,
+  resumeAgentRunFromVerificationRepair,
   markAgentStateFailed,
 } from "./run-execution-state.js";
 export type { RunBudgetPort, RunBudgetSettlement, RunLLMBudgetAdmission } from "./budget-ports.js";

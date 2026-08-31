@@ -99,6 +99,15 @@ function section(
 }
 
 describe("context renderers", () => {
+  it("renders optional verification repair diagnostics in a dedicated system section", () => {
+    const rendered = renderSystemContext("base prompt", snapshot(), {
+      text: "The original goal is highest priority. UNTRUSTED DIAGNOSTIC EVIDENCE: missing file.",
+    });
+    expect(rendered.message.content).toContain("<verification_repair_context>");
+    expect(rendered.message.content).toContain("UNTRUSTED DIAGNOSTIC EVIDENCE");
+    expect(rendered.message.content).toContain("</verification_repair_context>");
+  });
+
   it("renders deterministic system sections with privilege labels and source order", () => {
     const rendered = renderSystemContext("base prompt", snapshot());
     expect(rendered.message.role).toBe("system");

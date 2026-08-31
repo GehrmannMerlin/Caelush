@@ -9,6 +9,8 @@ import type {
   VerificationPlan,
   VerificationProjectCheckPurpose,
   VerificationCheckStage,
+  WorkspaceRef,
+  FileChangeSummary,
 } from "@caelush/protocol";
 import type { VerificationProjectProfile } from "./resolver.js";
 
@@ -180,6 +182,7 @@ export interface VerificationExecutionSnapshot {
 }
 
 export interface VerificationExecutionRecoveryStorePort extends VerificationExecutionStorePort {
+  countPlans?(runId: RunId): Promise<number>;
   getPlanExecutionSnapshot(
     planId: VerificationPlan["id"],
   ): Promise<VerificationExecutionSnapshot | null>;
@@ -197,6 +200,104 @@ export interface VerificationCommandSecurityPort {
     | { readonly kind: "ALLOW"; readonly safeReason: string }
     | { readonly kind: "REVIEW_REQUIRED"; readonly reasonCode: string; readonly safeReason: string }
     | { readonly kind: "DENY"; readonly reasonCode: string; readonly safeReason: string };
+}
+
+export type WorkspacePathObservationKind =
+  "FILE" | "DIRECTORY" | "SYMLINK" | "OTHER" | "MISSING" | "OUTSIDE" | "ERROR";
+
+export interface WorkspacePathObservation {
+  readonly path: string;
+  readonly kind: WorkspacePathObservationKind;
+}
+
+export interface WorkspaceInspectionFacts {
+  readonly inspectionComplete: boolean;
+  readonly paths: readonly WorkspacePathObservation[];
+}
+
+export interface WorkspaceVerificationPort {
+  inspect(input: {
+    readonly workspace: WorkspaceRef;
+    readonly changedFiles: readonly FileChangeSummary[];
+    readonly signal?: AbortSignal;
+  }): Promise<WorkspaceInspectionFacts>;
+}
+
+export interface VerificationGitStatusEntry {
+  readonly path: string;
+  readonly indexStatus: string;
+  readonly worktreeStatus: string;
+  readonly kind: "TRACKED" | "UNTRACKED" | "UNMERGED";
+}
+
+export interface VerificationGitStatus {
+  readonly available: boolean;
+  readonly branch?: string;
+  readonly detached?: boolean;
+  readonly ahead?: number;
+  readonly behind?: number;
+  readonly clean?: boolean;
+  readonly entries?: readonly VerificationGitStatusEntry[];
+  readonly truncated?: boolean;
+}
+
+export interface VerificationGitDiff {
+  readonly path: string;
+  readonly diff: string;
+  readonly truncated: boolean;
+}
+
+export interface VerificationGitPort {
+  status(input: { readonly signal?: AbortSignal }): Promise<VerificationGitStatus>;
+  diff(input: {
+    readonly path: string;
+    readonly scope?: "WORKTREE" | "STAGED" | "ALL";
+    readonly signal?: AbortSignal;
+  }): Promise<VerificationGitDiff>;
+}
+
+export interface VerificationCheckExecutionResult {
+  readonly status: "PASSED" | "FAILED" | "ERROR" | "SKIPPED";
+  readonly evidence: readonly VerificationEvidence[];
+  readonly skipReason?: "NOT_AVAILABLE" | "NOT_APPLICABLE";
+}
+
+export interface VerificationCheckExecutor {
+  preflight?(
+    check: VerificationCheck,
+    input: { readonly signal?: AbortSignal },
+  ): Promise<VerificationCheckExecutionResult | undefined>;
+  execute(
+    check: VerificationCheck,
+    input: { readonly signal?: AbortSignal },
+  ): Promise<VerificationCheckExecutionResult>;
+}
+
+export interface VerificationStageRunnerInput {
+  readonly runId: RunId;
+  readonly sessionId: SessionId;
+  readonly plan: VerificationPlan;
+  readonly store: VerificationExecutionStorePort;
+  readonly executors: Partial<Record<VerificationCheck["spec"]["kind"], VerificationCheckExecutor>>;
+  readonly discoveryEvidence: (
+    check: VerificationCheck,
+    capturedAt: number,
+  ) => VerificationEvidence;
+  readonly now: () => number;
+  readonly signal?: AbortSignal;
+  readonly onCommittedEvents?: (events: readonly VerificationCommittedEvent[]) => void;
+}
+
+export interface VerificationStageRunnerResult {
+  readonly outcome: "PASSED" | "BLOCKED" | "CANCELLED";
+  readonly executedCount: number;
+  readonly passedCount: number;
+  readonly failedCount: number;
+  readonly errorCount: number;
+  readonly skippedCount: number;
+  readonly failedCheckIds: readonly VerificationCheck["id"][];
+  readonly errorCheckIds: readonly VerificationCheck["id"][];
+  readonly blockingCheckId?: VerificationCheck["id"];
 }
 
 export interface VerificationRunnerInput {

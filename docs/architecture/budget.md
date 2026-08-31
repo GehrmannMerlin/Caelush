@@ -28,4 +28,6 @@ Successful finalization emits exactly one sanitized `budget.exceeded` and one `s
 
 ## Scope
 
+Phase 11C reuses this same ledger for independent Task acceptance reviewer calls with kind `VERIFICATION_LLM`. Those calls reserve and settle input/output token and cost capacity but do not create AgentSteps or ToolInvocations; an in-flight reviewer is recovered conservatively and is never replayed.
+
 Phase 10D does not add public budget routes or UI, live billing, Verification execution, `COMPLETED` transition, MCP, Browser, Computer Use, remote/Docker execution, hard sandboxing, or a new Phase 10 round.

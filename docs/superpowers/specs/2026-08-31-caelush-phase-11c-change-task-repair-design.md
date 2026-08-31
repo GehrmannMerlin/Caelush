@@ -1,6 +1,6 @@
 # Caelush Phase 11C Change, Task Acceptance, and Bounded Repair Design
 
-**Status:** Approved by the Phase 11C task document and implemented in the dedicated Phase 11C worktree.
+**Status:** Approved and implemented in the dedicated Phase 11C worktree.
 
 **Scope:** Phase 11C only. This design does not implement completion authority, `VERIFYING → COMPLETED`, `run.completed`, `finalResult`, full verification crash reconciliation, UI/API work, Browser, MCP, remote runtimes, or hard sandboxing.
 
@@ -147,4 +147,3 @@ Architecture tests assert:
 ## External research synthesis
 
 The official Aider materials emphasize repository mapping, diff-based edits, and automatic lint/test repair loops, while its lint/test documentation treats command output and non-zero results as feedback for a bounded repair cycle. SWE-agent's official repository exposes an explicit environment/repository boundary for controlled interaction. Caelush adopts the useful separation—environment capability, bounded evidence, test feedback, and repair—but keeps the stronger Phase 11C rules: immutable durable plans, independent task review, no reviewer tools, no automatic Git mutation, explicit untrusted-evidence prompts, and shared governance.
-

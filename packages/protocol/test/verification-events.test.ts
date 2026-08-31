@@ -10,6 +10,38 @@ import {
 import { describe, expect, it } from "vitest";
 
 describe("Phase 11A verification planned event", () => {
+  it("accepts repair lifecycle events with bounded references", () => {
+    const common = {
+      eventId: createEventId(),
+      schemaVersion: 1 as const,
+      runId: createRunId(),
+      sessionId: createSessionId(),
+      timestamp: 1_700_000_000_000,
+      visibility: "USER_VISIBLE" as const,
+      durability: { kind: "DURABLE" as const, version: 1 as const, sequence: 1 },
+    };
+    const event = {
+      ...common,
+      type: "verification.repair.started" as const,
+      payload: {
+        failedPlanId: createVerificationPlanId(),
+        failedCheckIds: [createVerificationCheckId()],
+        repairCycle: 1,
+      },
+    };
+    expect(AgentEventSchema.parse(event)).toEqual(event);
+    expect(
+      AgentEventSchema.safeParse({
+        ...event,
+        type: "verification.repair.limit_reached",
+        payload: {
+          planId: createVerificationPlanId(),
+          attemptedRepairs: 3,
+          maxAutoRepairs: 3,
+        },
+      }).success,
+    ).toBe(true);
+  });
   it("accepts only the bounded durable planning summary", () => {
     const event = {
       eventId: createEventId(),

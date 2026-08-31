@@ -94,6 +94,7 @@ export type {
   ToolContinuationContextBuildInput,
   UserTurnContextBuildInput,
 } from "./context-builder.js";
+export type { VerificationRepairContextInput } from "./context-renderer.js";
 export type {
   ContextBuildLimitsReport,
   ContextBuildReport,

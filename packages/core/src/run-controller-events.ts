@@ -6,6 +6,7 @@ import type {
   EventId,
   TimestampMs,
   VerificationPlan,
+  VerificationCheckId,
 } from "@caelush/protocol";
 import type { AgentLoopOutcomeResult } from "./agent-loop-input.js";
 import type { DurableEventDraft } from "./run-execution-store.js";
@@ -104,6 +105,22 @@ export interface RunControllerEventFactory {
   verificationPlanned(
     run: AgentRun,
     plan: VerificationPlan,
+    eventId: EventId,
+    timestamp: TimestampMs,
+  ): DurableEventDraft;
+  verificationRepairStarted(
+    run: AgentRun,
+    failedPlanId: VerificationPlan["id"],
+    failedCheckIds: readonly VerificationCheckId[],
+    repairCycle: number,
+    eventId: EventId,
+    timestamp: TimestampMs,
+  ): DurableEventDraft;
+  verificationRepairLimitReached(
+    run: AgentRun,
+    planId: VerificationPlan["id"],
+    attemptedRepairs: number,
+    maxAutoRepairs: number,
     eventId: EventId,
     timestamp: TimestampMs,
   ): DurableEventDraft;
@@ -229,6 +246,30 @@ export function createRunControllerEventFactory(): RunControllerEventFactory {
           advisory: plan.checks.filter((check) => check.requirement === "ADVISORY").length,
         },
       },
+    }),
+    verificationRepairStarted: (
+      run,
+      failedPlanId,
+      failedCheckIds,
+      repairCycle,
+      eventId,
+      timestamp,
+    ) => ({
+      ...base(run, eventId, timestamp),
+      type: "verification.repair.started",
+      payload: { failedPlanId, failedCheckIds: [...failedCheckIds], repairCycle },
+    }),
+    verificationRepairLimitReached: (
+      run,
+      planId,
+      attemptedRepairs,
+      maxAutoRepairs,
+      eventId,
+      timestamp,
+    ) => ({
+      ...base(run, eventId, timestamp),
+      type: "verification.repair.limit_reached",
+      payload: { planId, attemptedRepairs, maxAutoRepairs },
     }),
   };
 }

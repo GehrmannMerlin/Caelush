@@ -160,3 +160,7 @@ budget admission after maxSteps and before a retry/provider/tool effect;
 budget exhaustion therefore stops retry and finalizes through the shared
 governance boundary. Phase 10 is sealed after 10D and Verification remains a
 separate, non-implemented completion boundary.
+
+## Phase 11C reviewer boundary
+
+Task acceptance reviewer calls are verification work, not solver Provider attempts. They do not reuse `WAITING_RETRY`, do not create AgentSteps, and do not retry malformed/provider-failed reviewer responses. A reviewer error is a non-repairable verification error; only a blocking verification `FAILED` result can enter the separate bounded repair handoff.

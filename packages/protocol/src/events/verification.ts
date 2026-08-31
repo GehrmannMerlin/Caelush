@@ -6,9 +6,9 @@ import {
 } from "../primitives/ids.js";
 import {
   VerificationCheckKindSchema,
+  VerificationCheckPurposeSchema,
   VerificationCheckStageSchema,
   VerificationCheckTerminalStatusSchema,
-  VerificationProjectCheckPurposeSchema,
   VerificationResultSchema,
 } from "../verification.js";
 import { createEventSchema } from "./base.js";
@@ -49,7 +49,7 @@ export const VerificationCheckStartedEventSchema = createEventSchema(
       checkId: VerificationCheckIdSchema,
       ordinal: z.number().int().min(0).max(31),
       kind: VerificationCheckKindSchema,
-      purpose: VerificationProjectCheckPurposeSchema,
+      purpose: VerificationCheckPurposeSchema,
       stage: VerificationCheckStageSchema,
     })
     .strict(),
@@ -73,3 +73,30 @@ export type VerificationCompletedEvent = z.infer<typeof VerificationCompletedEve
 export type VerificationPlannedEvent = z.infer<typeof VerificationPlannedEventSchema>;
 export type VerificationCheckStartedEvent = z.infer<typeof VerificationCheckStartedEventSchema>;
 export type VerificationCheckCompletedEvent = z.infer<typeof VerificationCheckCompletedEventSchema>;
+
+export const VerificationRepairStartedEventSchema = createEventSchema(
+  "verification.repair.started",
+  z
+    .object({
+      failedPlanId: VerificationPlanIdSchema,
+      failedCheckIds: z.array(VerificationCheckIdSchema).min(1).max(32),
+      repairCycle: z.number().int().nonnegative().max(10),
+    })
+    .strict(),
+);
+
+export const VerificationRepairLimitReachedEventSchema = createEventSchema(
+  "verification.repair.limit_reached",
+  z
+    .object({
+      planId: VerificationPlanIdSchema,
+      attemptedRepairs: z.number().int().nonnegative().max(10),
+      maxAutoRepairs: z.number().int().nonnegative().max(10),
+    })
+    .strict(),
+);
+
+export type VerificationRepairStartedEvent = z.infer<typeof VerificationRepairStartedEventSchema>;
+export type VerificationRepairLimitReachedEvent = z.infer<
+  typeof VerificationRepairLimitReachedEventSchema
+>;

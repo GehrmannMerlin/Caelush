@@ -43,9 +43,15 @@ importers:
       '@caelush/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@caelush/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
       '@caelush/storage':
         specifier: workspace:*
         version: link:../../packages/storage
+      '@caelush/verification':
+        specifier: workspace:*
+        version: link:../../packages/verification
       '@fastify/sse':
         specifier: 0.6.0
         version: 0.6.0(fastify@5.12.1)
@@ -203,6 +209,9 @@ importers:
       '@caelush/protocol':
         specifier: workspace:*
         version: link:../protocol
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
 
 packages:
 

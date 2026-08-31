@@ -10,6 +10,8 @@ import {
   TimestampMsSchema,
   ToolInvocationIdSchema,
   ToolNameSchema,
+  VerificationCheckIdSchema,
+  VerificationEvidenceIdSchema,
   VerificationPlanIdSchema,
 } from "@caelush/protocol";
 import { z } from "zod";
@@ -128,6 +130,18 @@ export const AwaitingVerificationContinuationSchema = z
   })
   .strict();
 
+export const WaitingVerificationRepairContinuationSchema = z
+  .object({
+    type: z.literal("WAITING_VERIFICATION_REPAIR"),
+    runId: RunIdSchema,
+    failedPlanId: VerificationPlanIdSchema,
+    sourceStepId: StepIdSchema,
+    failedCheckIds: z.array(VerificationCheckIdSchema).min(1).max(32),
+    evidenceIds: z.array(VerificationEvidenceIdSchema).max(64),
+    repairCycle: z.number().int().nonnegative().safe().max(10),
+  })
+  .strict();
+
 const RetryErrorCodeSchema = z.enum(["LLM_RATE_LIMIT", "LLM_NETWORK", "LLM_TIMEOUT"]);
 const RetryAttemptSchema = z.number().int().positive().safe().max(10);
 const WaitingRetryBase = {
@@ -167,5 +181,6 @@ export const WaitingRetryContinuationSchema = z.discriminatedUnion("mode", [
 export const RunContinuationCheckpointSchema = z.discriminatedUnion("type", [
   WaitingToolResultsContinuationSchema,
   AwaitingVerificationContinuationSchema,
+  WaitingVerificationRepairContinuationSchema,
   WaitingRetryContinuationSchema,
 ]);

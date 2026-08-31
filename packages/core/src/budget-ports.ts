@@ -33,6 +33,22 @@ export interface RunBudgetPort {
     readonly usage?: LLMUsage;
     readonly settledAt: TimestampMs;
   }): Promise<RunBudgetSettlement | void>;
+  admitVerificationLLM?(input: {
+    readonly run: AgentRun;
+    readonly ownerId: string;
+    readonly request: LLMRequest;
+  }): Promise<RunLLMBudgetAdmission>;
+  settleVerificationLLM?(input: {
+    readonly runId: RunId;
+    readonly ownerId: string;
+    readonly usage?: LLMUsage;
+    readonly settledAt: TimestampMs;
+  }): Promise<RunBudgetSettlement | void>;
+  markVerificationLLMConservative?(input: {
+    readonly runId: RunId;
+    readonly ownerId: string;
+    readonly settledAt: TimestampMs;
+  }): Promise<void>;
   markLLMConservative?(input: {
     readonly runId: RunId;
     readonly stepId: StepId;

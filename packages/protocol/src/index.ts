@@ -109,6 +109,7 @@ export {
   VerificationCheckSkipReasonSchema,
   VerificationEvidenceKindSchema,
   VerificationProjectCheckPurposeSchema,
+  VerificationCheckPurposeSchema,
   VerificationCheckSpecSchema,
   VerificationCheckSchema,
   VerificationPlanSchema,
@@ -132,6 +133,7 @@ export type {
   VerificationCheckSkipReason,
   VerificationEvidenceKind,
   VerificationProjectCheckPurpose,
+  VerificationCheckPurpose,
   VerificationCheckSpec,
   VerificationCheck,
   VerificationPlan,
@@ -144,6 +146,8 @@ export type {
 export type {
   VerificationCheckCompletedEvent,
   VerificationCheckStartedEvent,
+  VerificationRepairStartedEvent,
+  VerificationRepairLimitReachedEvent,
 } from "./events/verification.js";
 export { AgentStateSchema } from "./state.js";
 export type { AgentState } from "./state.js";
@@ -160,6 +164,8 @@ export {
   RetryStartedEventSchema,
   RunTimedOutEventSchema,
   VerificationPlannedEventSchema,
+  VerificationRepairStartedEventSchema,
+  VerificationRepairLimitReachedEventSchema,
 } from "./events/index.js";
 export type { AgentEvent, EventDurability, EventVisibility } from "./events/index.js";
 export type { RunTimedOutEvent } from "./events/index.js";

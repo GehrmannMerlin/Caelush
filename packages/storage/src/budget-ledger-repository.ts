@@ -2,7 +2,7 @@ import type { RunId, TimestampMs } from "@caelush/protocol";
 import type { CaelushDatabase } from "./database.js";
 import { StorageConflictError, StorageError } from "./errors.js";
 
-export type BudgetEntryKind = "LLM_ATTEMPT" | "TOOL_INVOCATION";
+export type BudgetEntryKind = "LLM_ATTEMPT" | "VERIFICATION_LLM" | "TOOL_INVOCATION";
 export type BudgetEntryState = "RESERVED" | "IN_FLIGHT" | "SETTLED" | "CONSERVATIVE" | "RELEASED";
 
 export interface BudgetLedgerEntry {
@@ -312,7 +312,7 @@ function decode(row: BudgetRow): BudgetLedgerEntry {
 }
 
 function isKind(value: string): value is BudgetEntryKind {
-  return value === "LLM_ATTEMPT" || value === "TOOL_INVOCATION";
+  return value === "LLM_ATTEMPT" || value === "VERIFICATION_LLM" || value === "TOOL_INVOCATION";
 }
 function isState(value: string): value is BudgetEntryState {
   return ["RESERVED", "IN_FLIGHT", "SETTLED", "CONSERVATIVE", "RELEASED"].includes(value);

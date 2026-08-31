@@ -17,7 +17,9 @@
   "dependencies": {
     "@caelush/events": "workspace:*",
     "@caelush/protocol": "workspace:*",
+    "@caelush/runtime": "workspace:*",
     "@caelush/storage": "workspace:*",
+    "@caelush/verification": "workspace:*",
     "@fastify/sse": "0.6.0",
     "fastify": "5.12.1",
     "fastify-type-provider-zod": "7.0.0"

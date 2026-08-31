@@ -47,6 +47,19 @@ const toolDecision = {
 };
 
 describe("durable continuation schemas", () => {
+  it("accepts a verification repair continuation without a RunStatus", () => {
+    expect(
+      RunContinuationCheckpointSchema.parse({
+        type: "WAITING_VERIFICATION_REPAIR",
+        runId,
+        failedPlanId: createVerificationPlanId(),
+        sourceStepId,
+        failedCheckIds: ["vchk_019a0000-0000-7000-8000-000000000000"],
+        evidenceIds: ["vevd_019a0000-0000-7000-8000-000000000000"],
+        repairCycle: 1,
+      }),
+    ).toMatchObject({ type: "WAITING_VERIFICATION_REPAIR", repairCycle: 1 });
+  });
   it("validates a waiting-tool-results checkpoint and its accepted result batch", () => {
     const checkpoint = {
       type: "WAITING_TOOL_RESULTS" as const,

@@ -107,6 +107,19 @@ export function resumeAgentRunFromApproval(run: AgentRun): AgentRun {
   return AgentRunSchema.parse({ ...withoutFinalResult, status: "RUNNING" });
 }
 
+export function resumeAgentRunFromVerificationRepair(run: AgentRun): AgentRun {
+  if (run.currentStepId !== undefined) {
+    throw new RunExecutionInvariantError(
+      "verification-repair-resumed Run cannot retain an active Step",
+    );
+  }
+  assertRunStatusTransition(run.status, "RUNNING");
+  const withoutFinalResult = { ...run };
+  delete withoutFinalResult.finalResult;
+  delete withoutFinalResult.finishedAt;
+  return AgentRunSchema.parse({ ...withoutFinalResult, status: "RUNNING" });
+}
+
 export function assertRunExecutionInvariant(snapshot: RunExecutionSnapshot): void {
   const { run, state, activeStep, continuation } = snapshot;
   if (run.status === "PENDING") {
@@ -166,12 +179,18 @@ export function assertRunExecutionInvariant(snapshot: RunExecutionSnapshot): voi
     if (
       continuation !== undefined &&
       continuation.type !== "WAITING_TOOL_RESULTS" &&
-      continuation.type !== "WAITING_RETRY"
+      continuation.type !== "WAITING_RETRY" &&
+      continuation.type !== "WAITING_VERIFICATION_REPAIR"
     ) {
       throw new RunExecutionInvariantError("RUNNING Run has an invalid continuation");
     }
     if (continuation?.type === "WAITING_RETRY" && activeStep !== undefined) {
       throw new RunExecutionInvariantError("WAITING_RETRY Run cannot retain an active Step");
+    }
+    if (continuation?.type === "WAITING_VERIFICATION_REPAIR" && activeStep !== undefined) {
+      throw new RunExecutionInvariantError(
+        "WAITING_VERIFICATION_REPAIR Run cannot retain an active Step",
+      );
     }
     if (
       continuation?.type === "WAITING_TOOL_RESULTS" &&

@@ -171,6 +171,23 @@ export function resumeAgentStateFromApproval(state: AgentState, now: TimestampMs
   return AgentStateSchema.parse({ ...state, status: "RUNNING", updatedAt: now });
 }
 
+export function resumeAgentStateFromVerificationRepair(
+  state: AgentState,
+  now: TimestampMs,
+): AgentState {
+  assertMonotonicTimestamp(state, now);
+  if (state.status !== "VERIFYING" || state.currentStepId !== undefined) {
+    throw new AgentKernelStateError("state cannot resume verification repair from this boundary");
+  }
+  assertRunStatusTransition(state.status, "RUNNING");
+  return AgentStateSchema.parse({
+    ...state,
+    status: "RUNNING",
+    currentStepId: undefined,
+    updatedAt: now,
+  });
+}
+
 export function markAgentStateMaxStepsReached(state: AgentState, now: TimestampMs): AgentState {
   assertBoundaryState(state, "MAX_STEPS_REACHED", now);
   return AgentStateSchema.parse({ ...state, status: "MAX_STEPS_REACHED", updatedAt: now });

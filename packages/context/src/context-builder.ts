@@ -8,7 +8,7 @@ import type { ContextBuildReport } from "./context-build-report.js";
 import { assembleContextBudget } from "./context-budget.js";
 import { validateAndGroupConversation } from "./conversation-history.js";
 import { ContextBuildError, ContextConversationError } from "./errors.js";
-import { renderSystemContext } from "./context-renderer.js";
+import { renderSystemContext, type VerificationRepairContextInput } from "./context-renderer.js";
 import type { RelevantFileContextPlan } from "./relevant-file-plan.js";
 import type { ProjectIntelligenceSnapshot } from "./snapshot.js";
 import { Utf8HeuristicTokenEstimator, type TokenEstimator } from "./token-estimator.js";
@@ -29,6 +29,7 @@ export interface ContextBuildCommonInput {
   readonly relevantFiles?: RelevantFileContextPlan;
   readonly history?: readonly LLMMessage[];
   readonly limits: ContextBuildLimits;
+  readonly verificationRepairContext?: VerificationRepairContextInput;
 }
 
 export interface UserTurnContextBuildInput extends ContextBuildCommonInput {
@@ -125,7 +126,11 @@ export class ContextBuilder {
     const snapshot = redactProjectDerivedSnapshot(input.snapshot);
     const relevantFiles =
       input.relevantFiles === undefined ? undefined : redactRelevantFiles(input.relevantFiles);
-    const system = renderSystemContext(input.baseSystemPrompt, snapshot);
+    const system = renderSystemContext(
+      input.baseSystemPrompt,
+      snapshot,
+      input.verificationRepairContext,
+    );
     const budget = assembleContextBudget({
       system: system.message,
       ...(isContinuation ? {} : { current: input.currentUserMessage }),

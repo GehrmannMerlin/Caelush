@@ -1,4 +1,8 @@
-import type { ContextBuildLimits, ContextBuildReport } from "@caelush/context";
+import type {
+  ContextBuildLimits,
+  ContextBuildReport,
+  VerificationRepairContextInput,
+} from "@caelush/context";
 import type { LLMMessage, LLMToolResultMessage } from "@caelush/llm/messages";
 import type { LLMToolChoice, LLMRequest } from "@caelush/llm/request";
 import type { LLMTurnResult } from "@caelush/llm/turn";
@@ -38,6 +42,7 @@ export interface AgentLoopCommonInput {
   readonly modelSettings?: AgentLoopModelSettings;
   readonly cwd?: string;
   readonly explicitPaths?: readonly string[];
+  readonly verificationRepairContext?: VerificationRepairContextInput;
 }
 
 export type AgentLoopStartInput = AgentLoopCommonInput;

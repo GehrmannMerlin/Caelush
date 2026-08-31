@@ -1,0 +1,7 @@
+# Phase 11C Bounded Verification Repair
+
+Only a blocking `FAILED` check can request automatic repair. `ERROR`, unavailable infrastructure, cancellation, deadline, max-step exhaustion, budget blocks, and stale running checks do not trigger a repair. The default limit is three cycles, clamped to a hard maximum of ten; cycle zero is the initial Final Candidate plan. The durable plan count, rather than an in-memory counter, identifies a cycle.
+
+When repair is eligible, Core atomically changes `VERIFYING` to `RUNNING`, changes the state projection with no active Step, stores a `WAITING_VERIFICATION_REPAIR` continuation containing only old plan/check/evidence references, and appends `verification.repair.started` plus `status.changed`. The next normal AgentLoop turn rebuilds a bounded diagnostic section from those references and injects it through ContextBuilder. It is not a synthetic user/tool message and is never added to durable conversation history. Evidence and reviewer suggestions remain untrusted diagnostics; the original goal remains authoritative and unrelated pre-existing failures are out of scope.
+
+The repaired Final Candidate receives a new plan, source Step identity, check IDs, hash, and fresh evidence. Old plans and evidence remain immutable. At the limit, Core emits `verification.repair.limit_reached` and leaves the Run at `VERIFYING`; Phase 11C never emits `run.completed`, writes `finalResult`, or implements completion authority. A stale in-flight reviewer is recovered conservatively and is never replayed automatically.
