@@ -863,6 +863,10 @@ export class CliConversationController {
           return;
         }
       }
+      this.handleStreamFailure(
+        active,
+        new Error("Agent event stream ended before Run settlement."),
+      );
     } catch (error) {
       this.handleStreamFailure(active, error);
     }
