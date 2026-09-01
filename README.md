@@ -180,9 +180,10 @@ dynamic, Tool/File correlation is identity-based, and command/result
 presentation reuses Security redaction and terminal sanitization. The CLI never
 renders hidden chain-of-thought or raw unsanitized Tool arguments.
 
-Phase 12A, Phase 12B, and Phase 12C are **COMPLETED**; Phase 12D (interactive
-approval/cancellation/session recovery) and Phase 12E (production hardening,
-packaging, and later host work) are **NOT STARTED**.
+Phase 12D adds typed interactive Approval, cancellation, Session resume, active
+Run recovery and bounded SSE reconnect. Phase 12A, Phase 12B, Phase 12C and
+Phase 12D are **COMPLETED**; Phase 12E (production hardening, packaging, and
+later host work) is **NOT STARTED**.
 
 ## Packages 基础说明
 
