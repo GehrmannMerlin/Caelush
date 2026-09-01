@@ -157,6 +157,13 @@ function makeClient(overrides: Partial<CliDaemonClient> = {}): CliDaemonClient {
     },
     startRun: async () => actionResponse(run),
     getRun: async () => run,
+    listSessions: async () => ({ items: [session] }),
+    getSession: async () => session,
+    listRuns: async () => ({ items: [] }),
+    recoverRun: async () => actionResponse(run),
+    cancelRun: async () => actionResponse(run),
+    listPendingApprovals: async () => ({ items: [] }),
+    resolveApproval: async () => actionResponse(run),
     ...overrides,
   };
 }

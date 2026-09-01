@@ -257,7 +257,7 @@ describe("CaelushClient", () => {
     for (const client of clients) {
       let opens = 0;
       const iterator = client.watchRunEvents(createRunId(), { onOpen: () => (opens += 1) });
-      await expect(iterator.next()).rejects.toBeInstanceOf(Error);
+      await expect(iterator[Symbol.asyncIterator]().next()).rejects.toBeInstanceOf(Error);
       expect(opens).toBe(0);
     }
 
@@ -272,7 +272,7 @@ describe("CaelushClient", () => {
       aborted.watchRunEvents(createRunId(), {
         signal: abortController.signal,
         onOpen: () => (opens += 1),
-      }).next(),
+      })[Symbol.asyncIterator]().next(),
     ).resolves.toMatchObject({ done: true });
     expect(opens).toBe(0);
   });

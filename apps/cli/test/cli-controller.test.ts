@@ -10,6 +10,8 @@ import {
   type DaemonInfo,
   type DefaultRunConfiguration,
   type HealthResponse,
+  type RunListResponse,
+  type SessionListResponse,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import { CaelushClientProtocolError } from "@caelush/client";
@@ -26,6 +28,57 @@ const defaultRunConfiguration: DefaultRunConfiguration = {
 };
 
 describe("CliConversationController", () => {
+  it("uses --continue to select a current-workspace Session without creating one", async () => {
+    const workspace = { id: createWorkspaceId(), path: "C:\\workspace\\project" };
+    const session = { ...makeSession(), defaultWorkspace: workspace };
+    const client = makeClient({
+      listSessions: async (): Promise<SessionListResponse> => ({ items: [session] }),
+      listRuns: async (): Promise<RunListResponse> => ({ items: [] }),
+    });
+    const controller = new CliConversationController({
+      client,
+      workspacePath: workspace.path,
+      launchIntent: { kind: "CONTINUE" },
+    });
+
+    await controller.bootstrap();
+
+    expect(controller.getState().session).toEqual(session);
+    expect(controller.getState().workspace).toEqual(workspace);
+    expect(controller.getState().composerEnabled).toBe(true);
+    expect(controller.getState().controlMode).toBe("NONE");
+    controller.dispose();
+  });
+
+  it("resumes the exact WorkspaceRef and uses current daemon defaults for a new Run", async () => {
+    const workspace = { id: createWorkspaceId(), path: "C:\\workspace\\project" };
+    const session = { ...makeSession(), defaultWorkspace: workspace };
+    let createRunInput: Parameters<CliDaemonClient["createRun"]>[1] | undefined;
+    const client = makeClient({
+      getSession: async () => session,
+      listRuns: async (): Promise<RunListResponse> => ({ items: [] }),
+      createRun: async (_sessionId, input) => {
+        createRunInput = input;
+        return makeRun(input.goal);
+      },
+    });
+    const controller = new CliConversationController({
+      client,
+      workspacePath: workspace.path,
+      launchIntent: { kind: "RESUME_EXACT", sessionId: session.id },
+    });
+
+    await controller.bootstrap();
+    await controller.submitPrompt("new turn");
+
+    expect(createRunInput).toMatchObject({
+      workspace,
+      model: session.defaultModel ?? makeInfo().defaultModel,
+      ...defaultRunConfiguration,
+    });
+    controller.dispose();
+  });
+
   it("bootstraps health, compatibility, and one Session for the current workspace", async () => {
     const calls: string[] = [];
     const session = makeSession();
@@ -62,6 +115,13 @@ describe("CliConversationController", () => {
       getRun: async () => {
         throw new Error("not used");
       },
+      listSessions: async () => ({ items: [] }),
+      getSession: async () => session,
+      listRuns: async () => ({ items: [] }),
+      recoverRun: async () => actionResponse(makeRun("recovery")),
+      cancelRun: async () => actionResponse(makeRun("cancel")),
+      listPendingApprovals: async () => ({ items: [] }),
+      resolveApproval: async () => actionResponse(makeRun("approval")),
     };
     const controller = new CliConversationController({
       client,
@@ -198,6 +258,13 @@ export function makeClient(overrides: Partial<CliDaemonClient> = {}): CliDaemonC
     },
     startRun: async () => actionResponse(run),
     getRun: async () => run,
+    listSessions: async () => ({ items: [session] }),
+    getSession: async () => session,
+    listRuns: async () => ({ items: [] }),
+    recoverRun: async () => actionResponse(run),
+    cancelRun: async () => actionResponse(run),
+    listPendingApprovals: async () => ({ items: [] }),
+    resolveApproval: async () => actionResponse(run),
     ...overrides,
   };
 }

@@ -45,6 +45,21 @@ describe("CLI process lifecycle", () => {
       getRun: async (): Promise<ClientAgentRun> => {
         throw new Error("must not get a Run");
       },
+      listSessions: async () => ({ items: [] }),
+      getSession: async (): Promise<never> => {
+        throw new Error("must not get a Session");
+      },
+      listRuns: async () => ({ items: [] }),
+      recoverRun: async (): Promise<never> => {
+        throw new Error("must not recover a Run");
+      },
+      cancelRun: async (): Promise<never> => {
+        throw new Error("must not cancel a Run");
+      },
+      listPendingApprovals: async () => ({ items: [] }),
+      resolveApproval: async (): Promise<never> => {
+        throw new Error("must not resolve an Approval");
+      },
     };
 
     let unmountCalls = 0;

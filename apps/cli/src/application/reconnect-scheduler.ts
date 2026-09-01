@@ -64,7 +64,7 @@ export class CliReconnectScheduler {
     }
 
     const attempt = this.attempt + 1;
-    const delay = CLI_RECONNECT_DELAYS_MS[attempt - 1];
+    const delay = CLI_RECONNECT_DELAYS_MS[attempt - 1]!;
     this.attempt = attempt;
     this.phase = "WAITING";
     this.pendingTimer = this.options.timer.schedule(delay, () => {
