@@ -162,3 +162,21 @@ transport. It does not introduce Ink/React UI, a conversation composer, approval
 prompts, resume pickers, timeline/diff renderers, Web UI, WebSocket, MCP, Browser or
 Computer Use, remote/Docker Runtime, auth, CORS, automatic client reconnect, or a
 new Core/Tool/Runtime/Provider state machine. Those remain later Phase 12 work.
+
+## Phase 12B Session history composition
+
+The daemon still owns the only production composition root. Its execution config
+resolver wraps the existing resolver with `SessionConversationContextProvider`.
+For each fresh, retry, recovery, or verification-repair boundary it derives a
+bounded `historyPrefix` from prior verified Runs in the same Session and exact
+workspace. Selection uses `finishedAt <= currentRun.createdAt`, deterministic
+`createdAt ASC`/Run ID ordering, and `MAX_SESSION_HISTORY_RUNS = 100`. The prefix
+is synthetic ContextBuilder input and is never persisted as a new Run
+Conversation.
+
+`DaemonInfo` now publishes a strict public `defaultRunConfiguration` for the local
+runtime, `PROJECT_ACCESS`, `DANGEROUS_ONLY`, and the bounded V1 Run limits. It
+contains no endpoint, credentials, or Storage identity. A CLI host consumes the
+typed `@caelush/client` surface and this public default verbatim; it does not gain
+access to the daemon's Core, Storage, Runtime, Tool, Security, or Verification
+objects.

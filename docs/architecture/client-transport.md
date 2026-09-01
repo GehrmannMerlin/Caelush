@@ -110,3 +110,18 @@ No Ink or React rendering, keyboard handling, Ctrl+C UX, approval prompt, resume
 picker, timeline/diff renderer, CLI packaging, Web UI, WebSocket, CORS, Web Search,
 MCP, Browser, Computer Use, provider CRUD, auth, automatic reconnect, or client-side
 policy override is part of `@caelush/client`.
+
+## Phase 12B host consumption
+
+Phase 12B consumes this existing typed transport from `apps/cli`; it adds no
+second HTTP layer, direct daemon `fetch`, URL construction, or SSE parser in the
+CLI. The CLI calls `getHealth()`/`getInfo()`, creates one Session, creates one Run
+per prompt, watches the durable/live stream before starting the Run, and fetches
+the canonical Run once after a terminal event. The controller owns only view state
+and local stream disposal; the daemon remains the authority for status, verified
+final results, and durable history.
+
+The CLI does not automatically reconnect, resume, cancel, resolve Approval, or
+infer a terminal state from a missing stream. A stream failure remains a safe
+transport activity and the active Run lock remains in place until a future host
+experience provides an explicit recovery policy.

@@ -3,7 +3,8 @@
   "compilerOptions": {
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "types": ["node"],
+    "types": ["node", "react"],
+    "jsx": "react-jsx",
     "rootDir": "src",
     "outDir": "dist"
   },
