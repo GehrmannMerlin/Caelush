@@ -33,6 +33,7 @@ export interface CliApprovalOption {
 export interface CliApprovalView {
   readonly id: ApprovalRequestId;
   readonly runId: RunId;
+  readonly createdAt: number;
   readonly title: string;
   readonly reason: string;
   readonly riskLevel: RiskLevel;
@@ -114,6 +115,7 @@ export function createApprovalView(approval: ApprovalRequest): CliApprovalView {
   return {
     id: approval.id,
     runId: approval.runId,
+    createdAt: approval.createdAt,
     title: boundedString(approval.title, MAX_APPROVAL_TEXT_BYTES) ?? "Approval required",
     reason: boundedString(approval.reason, MAX_APPROVAL_TEXT_BYTES) ?? "Approval is required.",
     riskLevel: approval.riskLevel,

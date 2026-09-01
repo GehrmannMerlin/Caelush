@@ -109,6 +109,8 @@ export class CliConversationController {
   private submissionInFlight = false;
   private pendingStartInFlight = false;
   private streamGeneration = 0;
+  private controlGeneration = 0;
+  private readonly approvalInFlight = new Set<ApprovalRequestId>();
   private historySequence = 0;
   private disposed = false;
 
@@ -290,10 +292,54 @@ export class CliConversationController {
   }
 
   async resolveApproval(
-    _approvalId: ApprovalRequestId,
-    _resolution: ApprovalResolutionRequest,
+    approvalId: ApprovalRequestId,
+    resolution: ApprovalResolutionRequest,
   ): Promise<boolean> {
-    return false;
+    const active = this.activeRun;
+    const currentApproval = this.state.approvalState?.requests.find(
+      (request) => request.id === approvalId,
+    );
+    if (
+      active === undefined ||
+      currentApproval === undefined ||
+      currentApproval.runId !== active.runId ||
+      this.approvalInFlight.has(approvalId)
+    ) {
+      return false;
+    }
+    const generation = ++this.controlGeneration;
+    this.approvalInFlight.add(approvalId);
+    this.setApprovalSubmitting(approvalId, true);
+    try {
+      const pending = (await this.options.client.listPendingApprovals(active.runId)).items.find(
+        (request) => request.id === approvalId && request.status === "PENDING",
+      );
+      if (generation !== this.controlGeneration || this.activeRun !== active) return false;
+      if (pending === undefined) {
+        await this.reconcileApprovals(active.runId, generation);
+        return false;
+      }
+      const response = await this.options.client.resolveApproval(
+        active.runId,
+        approvalId,
+        resolution,
+      );
+      if (generation !== this.controlGeneration || this.activeRun !== active) return false;
+      this.updateActiveRun(response.run);
+      this.removeApproval(approvalId);
+      return true;
+    } catch (error) {
+      if (generation === this.controlGeneration && this.activeRun === active) {
+        this.publish({ ...this.state, controlError: toSafeCliError(error) });
+        await this.reconcileApprovals(active.runId, generation);
+      }
+      return false;
+    } finally {
+      this.approvalInFlight.delete(approvalId);
+      if (this.activeRun === active && generation === this.controlGeneration) {
+        this.setApprovalSubmitting(approvalId, false);
+      }
+    }
   }
 
   async cancelActiveRun(): Promise<boolean> {
@@ -431,6 +477,100 @@ export class CliConversationController {
     this.attachActiveRun(run, true);
   }
 
+  private addApproval(approval: Parameters<typeof createApprovalView>[0]): void {
+    if (this.state.controlMode === "CANCELLING" || this.state.activeRun?.runId !== approval.runId) {
+      return;
+    }
+    const existing = this.state.approvalState?.requests ?? [];
+    const requests = [
+      ...existing.filter((request) => request.id !== approval.id),
+      createApprovalView(approval),
+    ].sort((left, right) =>
+      left.createdAt !== right.createdAt
+        ? left.createdAt - right.createdAt
+        : left.id < right.id
+          ? -1
+          : left.id > right.id
+            ? 1
+            : 0,
+    );
+    this.publish({
+      ...this.state,
+      controlMode: "APPROVAL",
+      approvalState: {
+        requests,
+        selectedRequestIndex: Math.min(
+          this.state.approvalState?.selectedRequestIndex ?? 0,
+          Math.max(requests.length - 1, 0),
+        ),
+        submitting: false,
+      },
+      composerEnabled: false,
+      activity: "Approval required",
+    });
+  }
+
+  private removeApproval(approvalId: ApprovalRequestId): void {
+    const approvalState = this.state.approvalState;
+    if (approvalState === undefined) return;
+    const requests = approvalState.requests.filter((request) => request.id !== approvalId);
+    if (requests.length === 0) {
+      const { approvalState: _approvalState, ...withoutApproval } = this.state;
+      this.publish({ ...withoutApproval, controlMode: "NONE" });
+      return;
+    }
+    this.publish({
+      ...this.state,
+      approvalState: {
+        requests,
+        selectedRequestIndex: Math.min(approvalState.selectedRequestIndex, requests.length - 1),
+        submitting: false,
+      },
+    });
+  }
+
+  private setApprovalSubmitting(approvalId: ApprovalRequestId, submitting: boolean): void {
+    const approvalState = this.state.approvalState;
+    if (approvalState === undefined) return;
+    if (!approvalState.requests.some((request) => request.id === approvalId)) return;
+    this.publish({ ...this.state, approvalState: { ...approvalState, submitting } });
+  }
+
+  private async reconcileApprovals(runId: RunId, generation: number): Promise<void> {
+    try {
+      const [run, approvals] = await Promise.all([
+        this.options.client.getRun(runId),
+        this.options.client.listPendingApprovals(runId),
+      ]);
+      if (generation !== this.controlGeneration || this.activeRun?.runId !== runId) return;
+      this.updateActiveRun(run);
+      if (approvals.items.length === 0) {
+        const { approvalState: _approvalState, ...withoutApproval } = this.state;
+        this.publish({ ...withoutApproval, controlMode: "NONE" });
+        return;
+      }
+      this.publish({
+        ...this.state,
+        controlMode: "APPROVAL",
+        approvalState: {
+          requests: approvals.items.slice().sort((left, right) =>
+            left.createdAt !== right.createdAt
+              ? left.createdAt - right.createdAt
+              : left.id < right.id
+                ? -1
+                : left.id > right.id
+                  ? 1
+                  : 0,
+          ).map(createApprovalView),
+          selectedRequestIndex: 0,
+          submitting: false,
+        },
+      });
+    } catch {
+      // The original safe control error remains visible; reconciliation is best effort.
+    }
+  }
+
   private attachActiveRun(run: ClientAgentRun, recoverOnOpen: boolean): ActiveRun {
     this.activeRun?.streamAbortController.abort();
     const active: ActiveRun = {
@@ -538,7 +678,10 @@ export class CliConversationController {
         if (this.activeRun !== active || active.generation !== this.streamGeneration) return;
         const projected = projectAgentEvent(this.state, event);
         this.publish(projected.state);
+        if (event.type === "approval.requested") this.addApproval(event.payload.approval);
+        if (event.type === "approval.resolved") this.removeApproval(event.payload.approvalId);
         if (projected.terminal) {
+          this.controlGeneration += 1;
           if (active.terminalSettlement === undefined) {
             active.terminalSettlement = this.settleTerminal(active);
           }
