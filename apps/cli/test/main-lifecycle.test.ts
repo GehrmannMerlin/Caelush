@@ -5,6 +5,21 @@ import { type CliDaemonClient } from "../src/application/cli-controller.js";
 import { main } from "../src/main.js";
 
 describe("CLI process lifecycle", () => {
+  it("returns a safe argument failure before constructing the Client application", async () => {
+    const messages: string[] = [];
+
+    await expect(
+      main({
+        argv: ["--continue", "--resume"],
+        writeMessage: (message) => messages.push(message),
+        renderApplication: () => {
+          throw new Error("must not render invalid arguments");
+        },
+      }),
+    ).resolves.toBe(1);
+    expect(messages).toEqual(["Invalid Caelush command-line arguments.\n"]);
+  });
+
   it("returns a safe failure code and creates no Session after bootstrap failure", async () => {
     let sessionCalls = 0;
     const client: CliDaemonClient = {
@@ -35,6 +50,7 @@ describe("CLI process lifecycle", () => {
     let unmountCalls = 0;
     await expect(
       main({
+        argv: [],
         client,
         workspacePath: "C:\\workspace\\project",
         renderApplication: () => ({

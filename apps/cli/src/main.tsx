@@ -1,11 +1,15 @@
 import { render } from "ink";
 import { createDaemonClient } from "./bootstrap/daemon-client.js";
+import { CliArgsError, parseCliArgs, type LaunchIntent } from "./bootstrap/cli-args.js";
 import { CliConversationController, type CliDaemonClient } from "./application/cli-controller.js";
 import { App } from "./components/App.js";
 
 export interface CliMainOptions {
   readonly client?: CliDaemonClient;
   readonly workspacePath?: string;
+  readonly argv?: readonly string[];
+  readonly writeMessage?: (message: string) => void;
+  readonly launchIntent?: LaunchIntent;
   readonly renderApplication?: (controller: CliConversationController) => CliApplication;
 }
 
@@ -15,9 +19,20 @@ export interface CliApplication {
 }
 
 export async function main(options: CliMainOptions = {}): Promise<number> {
+  let launchIntent: LaunchIntent;
+  try {
+    launchIntent = options.launchIntent ?? parseCliArgs(options.argv ?? process.argv.slice(2));
+  } catch (error) {
+    if (error instanceof CliArgsError) {
+      (options.writeMessage ?? defaultWriteMessage)(`${error.message}\n`);
+      return 1;
+    }
+    throw error;
+  }
   const controller = new CliConversationController({
     client: options.client ?? createDaemonClient(),
     workspacePath: options.workspacePath ?? process.cwd(),
+    launchIntent,
   });
   const application =
     options.renderApplication?.(controller) ??
@@ -31,4 +46,8 @@ export async function main(options: CliMainOptions = {}): Promise<number> {
   await application.waitUntilExit();
   controller.dispose();
   return 0;
+}
+
+function defaultWriteMessage(message: string): void {
+  console.error(message.trim());
 }
