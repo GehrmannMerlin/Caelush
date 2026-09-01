@@ -1,5 +1,5 @@
 import type { LLMMessage } from "@caelush/llm/messages";
-import { VerifiedRunFinalResultSchema, type AgentRun, type SessionId } from "@caelush/protocol";
+import { VerifiedRunFinalResultSchema, type AgentRun } from "@caelush/protocol";
 import type { RunRepository } from "@caelush/storage";
 
 export const MAX_SESSION_HISTORY_RUNS = 100;
