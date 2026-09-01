@@ -145,6 +145,12 @@ describe("daemon production composition E2E", () => {
     await expect(client.getInfo()).resolves.toMatchObject({
       configuredProviders: ["fixture"],
       defaultModel: { provider: "fixture", model: "fixture-model" },
+      defaultRunConfiguration: {
+        runtime: { id: "local", kind: "local" },
+        permissionProfile: "PROJECT_ACCESS",
+        approvalPolicy: "DANGEROUS_ONLY",
+        limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 10_000 },
+      },
     });
     const session = await client.createSession({
       defaultWorkspace: { id: createWorkspaceId(), path: workspacePath },

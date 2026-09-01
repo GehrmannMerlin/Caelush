@@ -53,6 +53,7 @@ import {
   assertRunExecutionInvariant,
 } from "./run-execution-state.js";
 import { markAgentStateTimedOut } from "./agent-state.js";
+import { buildRunExecutionHistory } from "./run-controller-history.js";
 import { RunExecutionScopeRegistry } from "./run-execution-scope.js";
 import { RunDeadlineRegistry } from "./run-deadline-registry.js";
 import { deriveRunDeadline, isRunDeadlineExceeded } from "./run-deadline.js";
@@ -835,7 +836,11 @@ export class RunController {
     const input = {
       run: snapshot.run,
       state: snapshot.state,
-      history: snapshot.conversation.map((entry) => entry.message),
+      history: buildRunExecutionHistory({
+        ...(config.historyPrefix === undefined ? {} : { historyPrefix: config.historyPrefix }),
+        durableConversation: snapshot.conversation.map((entry) => entry.message),
+        mode: resume ? "RESUME_WITH_TOOL_RESULTS" : "RUN",
+      }),
       baseSystemPrompt: config.baseSystemPrompt,
       contextLimits: config.contextLimits,
       ...(this.dependencies.toolCoordinator === undefined ||

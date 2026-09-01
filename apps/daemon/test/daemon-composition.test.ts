@@ -72,6 +72,12 @@ describe("daemon production composition", () => {
       runtimeKinds: ["local"],
       configuredProviders: ["openai-compatible"],
       defaultModel: { provider: "openai-compatible", model: "fixture-model" },
+      defaultRunConfiguration: {
+        runtime: { id: "local", kind: "local" },
+        permissionProfile: "PROJECT_ACCESS",
+        approvalPolicy: "DANGEROUS_ONLY",
+        limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 10_000 },
+      },
     });
     expect(JSON.stringify(composition.info)).not.toContain("secret-that-must-not-be-public");
     expect(() =>

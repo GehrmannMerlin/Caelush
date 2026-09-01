@@ -4,8 +4,8 @@ export { ClientModelSelectionSchema } from "./model-selection.js";
 export type { ClientModelSelection } from "./model-selection.js";
 export { ClientAgentRunSchema, ClientAgentSessionSchema } from "./public-entities.js";
 export type { ClientAgentRun, ClientAgentSession } from "./public-entities.js";
-export { DaemonInfoSchema } from "./daemon-info.js";
-export type { DaemonCapabilities, DaemonInfo } from "./daemon-info.js";
+export { DaemonInfoSchema, DefaultRunConfigurationSchema } from "./daemon-info.js";
+export type { DaemonCapabilities, DaemonInfo, DefaultRunConfiguration } from "./daemon-info.js";
 export {
   RunActionDispositionSchema,
   RunActionSchema,

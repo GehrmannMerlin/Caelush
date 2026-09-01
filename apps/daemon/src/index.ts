@@ -41,3 +41,8 @@ export {
   createRuntimeGitVerificationPort,
   createRuntimeWorkspaceVerificationPort,
 } from "./verification-runtime-adapters.js";
+export {
+  MAX_SESSION_HISTORY_RUNS,
+  SessionConversationContextProvider,
+} from "./services/session-conversation-context.js";
+export type { SessionConversationContextProviderOptions } from "./services/session-conversation-context.js";

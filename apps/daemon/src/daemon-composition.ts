@@ -33,6 +33,7 @@ import {
   createVerificationPlanId,
   type ClientModelSelection,
   type DaemonInfo,
+  type DefaultRunConfiguration,
   type TimestampMs,
 } from "@caelush/protocol";
 import {
@@ -73,6 +74,7 @@ import {
   RunExecutionSupervisor,
   type RunExecutionSupervisorLogger,
 } from "./execution/run-execution-supervisor.js";
+import { SessionConversationContextProvider } from "./services/session-conversation-context.js";
 
 const DEFAULT_BASE_SYSTEM_PROMPT =
   "You are Caelush, a careful workspace agent. Inspect the project, make only requested changes, and report what you verified.";
@@ -84,6 +86,13 @@ const DEFAULT_CONTEXT_LIMITS = Object.freeze({
   maxRelevantFileTokens: 12_000,
   minRelevantFileTokens: 128,
 });
+
+const DEFAULT_RUN_CONFIGURATION = Object.freeze({
+  runtime: Object.freeze({ id: "local", kind: "local" }),
+  permissionProfile: "PROJECT_ACCESS",
+  approvalPolicy: "DANGEROUS_ONLY",
+  limits: Object.freeze({ maxSteps: 8, maxToolCalls: 8, timeoutMs: 10_000 }),
+}) satisfies DefaultRunConfiguration;
 
 export interface DaemonClock {
   now(): TimestampMs;
@@ -176,14 +185,21 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
   const scopes = new RunExecutionScopeRegistry();
   const deadlineRegistry = new RunDeadlineRegistry({ clock });
   const retryRegistry = new RunRetryRegistry({ clock });
-  const executionConfigResolver =
-    options.configResolver ??
-    ({
-      resolve: async () => ({
-        baseSystemPrompt: DEFAULT_BASE_SYSTEM_PROMPT,
-        contextLimits: DEFAULT_CONTEXT_LIMITS,
-      }),
-    } satisfies RunExecutionConfigResolver);
+  const defaultResolver = {
+    resolve: async () => ({
+      baseSystemPrompt: DEFAULT_BASE_SYSTEM_PROMPT,
+      contextLimits: DEFAULT_CONTEXT_LIMITS,
+    }),
+  } satisfies RunExecutionConfigResolver;
+  const baseResolver: RunExecutionConfigResolver = options.configResolver ?? defaultResolver;
+  const historyContext = new SessionConversationContextProvider({ runs: options.storage.runs });
+  const executionConfigResolver = {
+    resolve: async (run) => {
+      const config = await baseResolver.resolve(run);
+      if (config.historyPrefix !== undefined) return config;
+      return { ...config, historyPrefix: await historyContext.getHistoryPrefix(run) };
+    },
+  } satisfies RunExecutionConfigResolver;
   const verificationExecution = createRunBoundVerificationExecution(runtime, options.storage.runs);
   const verificationWorkspace = createRunBoundVerificationWorkspace(runtime);
   const verificationGit = createRunBoundVerificationGit(runtime);
@@ -241,6 +257,7 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     runtimeKinds: ["local"],
     configuredProviders: providerRegistry.listProviderIds(),
     ...(options.defaultModel === undefined ? {} : { defaultModel: options.defaultModel }),
+    defaultRunConfiguration: DEFAULT_RUN_CONFIGURATION,
   });
 
   let disposed = false;

@@ -101,6 +101,12 @@ describe("Phase 12A public Protocol contracts", () => {
       runtimeKinds: ["local"],
       configuredProviders: ["openai"],
       defaultModel: { provider: "openai", model: "gpt-5.4" },
+      defaultRunConfiguration: {
+        runtime: { id: "local", kind: "local" },
+        permissionProfile: "PROJECT_ACCESS",
+        approvalPolicy: "DANGEROUS_ONLY",
+        limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 10_000 },
+      },
     });
     expect(info.runtimeKinds).toEqual(["local"]);
     expect(DaemonInfoSchema.safeParse({ ...info, apiKey: "secret" }).success).toBe(false);

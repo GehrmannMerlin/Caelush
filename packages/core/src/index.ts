@@ -127,6 +127,7 @@ export type {
   VerificationRunnerPort,
   ProjectProfileProviderPort,
 } from "./run-controller-ports.js";
+export { buildRunExecutionHistory } from "./run-controller-history.js";
 export { TaskAcceptanceReviewer } from "./task-acceptance-reviewer.js";
 export type { TaskAcceptanceReviewerDependencies } from "./task-acceptance-reviewer.js";
 export {

@@ -1,5 +1,18 @@
 import { z } from "zod";
+import { ApprovalPolicySchema, PermissionProfileSchema } from "../policy.js";
+import { RunLimitsSchema } from "../limits.js";
+import { RuntimeRefSchema } from "../runtime.js";
 import { ClientModelSelectionSchema } from "./model-selection.js";
+
+export const DefaultRunConfigurationSchema = z
+  .object({
+    runtime: RuntimeRefSchema,
+    permissionProfile: PermissionProfileSchema,
+    approvalPolicy: ApprovalPolicySchema,
+    limits: RunLimitsSchema,
+  })
+  .strict();
+export type DefaultRunConfiguration = z.infer<typeof DefaultRunConfigurationSchema>;
 
 const DaemonCapabilitiesSchema = z
   .object({
@@ -20,6 +33,7 @@ export const DaemonInfoSchema = z
     runtimeKinds: z.tuple([z.literal("local")]),
     configuredProviders: z.array(z.string().min(1)),
     defaultModel: ClientModelSelectionSchema.optional(),
+    defaultRunConfiguration: DefaultRunConfigurationSchema,
   })
   .strict();
 export type DaemonInfo = z.infer<typeof DaemonInfoSchema>;
