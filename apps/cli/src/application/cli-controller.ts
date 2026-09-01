@@ -31,6 +31,7 @@ import {
 } from "./cli-state.js";
 import { toSafeCliError } from "../bootstrap/safe-errors.js";
 import { createInitialCliTimelineState } from "./timeline-model.js";
+import { createApprovalView } from "./cli-control.js";
 import {
   hydrateSessionTranscript,
   listMatchingSessionCandidates,
@@ -92,6 +93,9 @@ export interface CliConversationControllerOptions {
 interface ActiveRun {
   readonly runId: RunId;
   readonly streamAbortController: AbortController;
+  readonly generation: number;
+  readonly recoverOnOpen: boolean;
+  recoveryAdmitted: boolean;
   terminalSettlement?: Promise<void>;
 }
 
@@ -103,6 +107,8 @@ export class CliConversationController {
   private bootstrapPromise: Promise<void> | undefined;
   private activeRun: ActiveRun | undefined;
   private submissionInFlight = false;
+  private pendingStartInFlight = false;
+  private streamGeneration = 0;
   private historySequence = 0;
   private disposed = false;
 
@@ -170,19 +176,11 @@ export class CliConversationController {
       activity: "Preparing",
     });
 
-    const active: ActiveRun = {
-      runId: run.id,
-      streamAbortController: new AbortController(),
-    };
-    this.activeRun = active;
+    const active = this.attachActiveRun(run, false);
     try {
-      const stream = this.options.client.watchRunEvents(run.id, {
-        afterSequence: this.state.timeline.lastDurableSequence,
-        signal: active.streamAbortController.signal,
-      });
-      void this.consumeRunEvents(active, stream);
       await Promise.resolve();
-      await this.options.client.startRun(run.id);
+      const response = await this.options.client.startRun(run.id);
+      if (this.activeRun === active) this.updateActiveRun(response.run);
     } catch (error) {
       if (this.activeRun === active && !active.streamAbortController.signal.aborted) {
         this.publish({
@@ -241,12 +239,54 @@ export class CliConversationController {
     }
   }
 
-  async selectRecoveryRun(_index: number): Promise<boolean> {
-    return false;
+  async selectRecoveryRun(index: number): Promise<boolean> {
+    if (this.state.controlMode !== "RUN_RECOVERY_PICKER") return false;
+    const run = this.state.recoveryCandidates[index];
+    if (run === undefined) return false;
+    this.publish({
+      ...this.state,
+      recoveryCandidates: [],
+      controlMode: run.status === "PENDING" ? "PENDING_RUN_CONFIRMATION" : "NONE",
+      ...(run.status === "PENDING" ? { pendingRunId: run.id } : {}),
+      activeRun: { runId: run.id, status: run.status },
+      composerEnabled: false,
+      activity: runStatusLabel(run.status) as CliActivity,
+    });
+    await this.prepareActiveRun(run);
+    return true;
   }
 
-  async confirmPendingRun(_start: boolean): Promise<boolean> {
-    return false;
+  async confirmPendingRun(start: boolean): Promise<boolean> {
+    if (
+      !start ||
+      this.state.controlMode !== "PENDING_RUN_CONFIRMATION" ||
+      this.state.pendingRunId === undefined ||
+      this.pendingStartInFlight
+    ) {
+      return false;
+    }
+    const runId = this.state.pendingRunId;
+    this.pendingStartInFlight = true;
+    try {
+      const response = await this.options.client.startRun(runId);
+      if (this.state.activeRun?.runId !== runId) return false;
+      const { pendingRunId: _pendingRunId, ...stateWithoutPendingRun } = this.state;
+      const nextState: CliViewState = {
+        ...stateWithoutPendingRun,
+        controlMode: "NONE",
+        activeRun: { runId, status: response.run.status },
+        activity: "Preparing",
+        composerEnabled: false,
+      };
+      this.publish(nextState);
+      this.attachActiveRun(response.run, true);
+      return true;
+    } catch (error) {
+      this.publish({ ...this.state, controlError: toSafeCliError(error) });
+      return false;
+    } finally {
+      this.pendingStartInFlight = false;
+    }
   }
 
   async resolveApproval(
@@ -327,7 +367,10 @@ export class CliConversationController {
     this.workspace = workspaceResult.workspace;
 
     const activeRuns = nonTerminalRuns(runs);
-    const displayHistory = hydrateSessionTranscript(runs, activeRuns.length === 1 ? activeRuns[0]?.id : undefined);
+    const displayHistory = hydrateSessionTranscript(
+      runs,
+      activeRuns.length === 1 ? activeRuns[0]?.id : undefined,
+    );
     const next: CliViewState = {
       ...this.state,
       bootstrap: "READY",
@@ -347,10 +390,122 @@ export class CliConversationController {
         activeRuns.length === 0
           ? "Ready"
           : (runStatusLabel(activeRuns[0]!.status) as CliActivity),
-      ...(activeRuns.length === 1 ? { activeRun: { runId: activeRuns[0]!.id, status: activeRuns[0]!.status } } : {}),
+      ...(activeRuns.length === 1
+        ? { activeRun: { runId: activeRuns[0]!.id, status: activeRuns[0]!.status } }
+        : {}),
       ...(activeRuns[0]?.status === "PENDING" ? { pendingRunId: activeRuns[0].id } : {}),
     };
     this.publish(next);
+    const activeRun = activeRuns.length === 1 ? activeRuns[0] : undefined;
+    if (activeRun !== undefined) await this.prepareActiveRun(activeRun);
+  }
+
+  private async prepareActiveRun(run: ClientAgentRun): Promise<void> {
+    if (run.status === "PENDING") return;
+    if (run.status === "WAITING_APPROVAL") {
+      const approvals = (await this.options.client.listPendingApprovals(run.id)).items;
+      const requests = approvals
+        .slice()
+        .sort((left, right) =>
+          left.createdAt !== right.createdAt
+            ? left.createdAt - right.createdAt
+            : left.id < right.id
+              ? -1
+              : left.id > right.id
+                ? 1
+                : 0,
+        )
+        .map(createApprovalView);
+      if (requests.length > 0) {
+        this.publish({
+          ...this.state,
+          controlMode: "APPROVAL",
+          approvalState: { requests, selectedRequestIndex: 0, submitting: false },
+          composerEnabled: false,
+          activity: "Approval required",
+        });
+      }
+      this.attachActiveRun(run, requests.length === 0);
+      return;
+    }
+    this.attachActiveRun(run, true);
+  }
+
+  private attachActiveRun(run: ClientAgentRun, recoverOnOpen: boolean): ActiveRun {
+    this.activeRun?.streamAbortController.abort();
+    const active: ActiveRun = {
+      runId: run.id,
+      streamAbortController: new AbortController(),
+      generation: ++this.streamGeneration,
+      recoverOnOpen,
+      recoveryAdmitted: false,
+    };
+    this.activeRun = active;
+    this.publish({
+      ...this.state,
+      timeline: createInitialCliTimelineState(run.id),
+      activeRun: { runId: run.id, status: run.status },
+      composerEnabled: false,
+    });
+    try {
+      const stream = this.options.client.watchRunEvents(run.id, {
+        afterSequence: 0,
+        signal: active.streamAbortController.signal,
+        onOpen: () => this.handleStreamOpen(active),
+      });
+      void this.consumeRunEvents(active, stream);
+    } catch (error) {
+      this.handleStreamFailure(active, error);
+    }
+    return active;
+  }
+
+  private handleStreamOpen(active: ActiveRun): void {
+    if (this.activeRun !== active || this.disposed) return;
+    const nextState = { ...this.state, transportState: "CONNECTED" as const };
+    delete nextState.transportError;
+    this.publish(nextState);
+    if (!active.recoverOnOpen || active.recoveryAdmitted) return;
+    active.recoveryAdmitted = true;
+    void this.admitRecovery(active);
+  }
+
+  private async admitRecovery(active: ActiveRun): Promise<void> {
+    try {
+      const response = await this.options.client.recoverRun(active.runId);
+      if (this.activeRun !== active || this.disposed) return;
+      this.updateActiveRun(response.run);
+    } catch (error) {
+      if (this.activeRun !== active || this.disposed) return;
+      this.publish({ ...this.state, controlError: toSafeCliError(error) });
+    }
+  }
+
+  private updateActiveRun(run: ClientAgentRun): void {
+    if (this.activeRun?.runId !== run.id) return;
+    this.publish({
+      ...this.state,
+      activeRun: { runId: run.id, status: run.status },
+      activity:
+        this.state.transportError === undefined
+          ? (runStatusLabel(run.status) as CliActivity)
+          : this.state.activity,
+    });
+  }
+
+  private handleStreamFailure(active: ActiveRun, error: unknown): void {
+    if (
+      this.activeRun !== active ||
+      this.disposed ||
+      active.streamAbortController.signal.aborted
+    ) {
+      return;
+    }
+    this.publish({
+      ...this.state,
+      activity: "Transport error",
+      transportError: toSafeCliError(error),
+    });
   }
 
   private publishFatal(error: unknown): void {
@@ -380,7 +535,7 @@ export class CliConversationController {
   ): Promise<void> {
     try {
       for await (const event of stream) {
-        if (this.activeRun !== active) return;
+        if (this.activeRun !== active || active.generation !== this.streamGeneration) return;
         const projected = projectAgentEvent(this.state, event);
         this.publish(projected.state);
         if (projected.terminal) {
@@ -392,17 +547,7 @@ export class CliConversationController {
         }
       }
     } catch (error) {
-      if (
-        this.activeRun === active &&
-        !active.streamAbortController.signal.aborted &&
-        !this.disposed
-      ) {
-        this.publish({
-          ...this.state,
-          activity: "Transport error",
-          fatalError: toSafeCliError(error),
-        });
-      }
+      this.handleStreamFailure(active, error);
     }
   }
 
