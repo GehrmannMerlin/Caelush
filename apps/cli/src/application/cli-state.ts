@@ -1,10 +1,17 @@
 import type {
+  ClientAgentRun,
   ClientAgentSession,
   DaemonInfo,
   RunId,
   RunStatus,
   WorkspaceRef,
 } from "@caelush/protocol";
+import type {
+  CliApprovalState,
+  CliControlMode,
+  CliTransportState,
+} from "./cli-control.js";
+import type { SessionCandidate } from "./session-resume.js";
 import {
   createInitialCliTimelineState,
   type CliTimelineEntry,
@@ -55,14 +62,23 @@ export interface CliActiveRun {
 
 export interface CliViewState {
   readonly bootstrap: CliBootstrapState;
+  readonly transportState: CliTransportState;
+  readonly controlMode: CliControlMode;
   readonly workspace?: WorkspaceRef;
   readonly daemonInfo?: DaemonInfo;
   readonly session?: ClientAgentSession;
+  readonly sessionCandidates: readonly SessionCandidate[];
+  readonly recoveryCandidates: readonly ClientAgentRun[];
+  readonly approvalState?: CliApprovalState;
+  readonly pendingRunId?: RunId;
   readonly displayHistory: readonly CliDisplayHistoryEntry[];
   readonly timeline: CliTimelineState;
   readonly activeRun?: CliActiveRun;
   readonly composerEnabled: boolean;
   readonly activity: CliActivity;
+  readonly notice?: string;
+  readonly controlError?: string;
+  readonly transportError?: string;
   readonly fatalError?: string;
 }
 
@@ -71,6 +87,10 @@ export type CliStateListener = (state: CliViewState) => void;
 export function createInitialCliState(): CliViewState {
   return {
     bootstrap: "STARTING",
+    transportState: "CONNECTED",
+    controlMode: "NONE",
+    sessionCandidates: [],
+    recoveryCandidates: [],
     displayHistory: [],
     timeline: createInitialCliTimelineState(),
     composerEnabled: false,

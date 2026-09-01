@@ -17,8 +17,12 @@ import { App } from "../src/components/App.js";
 const runId = createRunId();
 const baseState: CliViewState = {
   bootstrap: "READY",
+  transportState: "CONNECTED",
+  controlMode: "NONE",
   workspace: { id: createWorkspaceId(), path: "C:\\workspace\\project" },
   session: { id: createSessionId(), createdAt: 1, updatedAt: 1, metadata: {} },
+  sessionCandidates: [],
+  recoveryCandidates: [],
   daemonInfo: {
     apiVersion: "v1",
     protocolVersion: 1,

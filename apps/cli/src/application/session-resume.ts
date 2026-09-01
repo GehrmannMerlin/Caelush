@@ -164,9 +164,17 @@ export function hydrateSessionTranscript(
 }
 
 export function nonTerminalRuns(runs: readonly ClientAgentRun[]): readonly ClientAgentRun[] {
-  return runs.filter((run) =>
-    (["PENDING", "RUNNING", "WAITING_APPROVAL", "VERIFYING"] as const).includes(run.status),
-  );
+  return runs.filter((run) => {
+    switch (run.status) {
+      case "PENDING":
+      case "RUNNING":
+      case "WAITING_APPROVAL":
+      case "VERIFYING":
+        return true;
+      default:
+        return false;
+    }
+  });
 }
 
 export function otherWorkspaceError(): string {

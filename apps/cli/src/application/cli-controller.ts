@@ -14,6 +14,7 @@ import type {
 } from "@caelush/protocol";
 import { createWorkspaceId, VerifiedRunFinalResultSchema } from "@caelush/protocol";
 import type { WatchRunEventsOptions } from "@caelush/client";
+import type { LaunchIntent } from "../bootstrap/cli-args.js";
 import { projectAgentEvent } from "./event-projector.js";
 import { createInitialCliState, type CliStateListener, type CliViewState } from "./cli-state.js";
 import { toSafeCliError } from "../bootstrap/safe-errors.js";
@@ -41,6 +42,7 @@ export interface CliDaemonClient {
 export interface CliConversationControllerOptions {
   readonly client: CliDaemonClient;
   readonly workspacePath: string;
+  readonly launchIntent?: LaunchIntent;
 }
 
 interface ActiveRun {
