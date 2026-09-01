@@ -45,6 +45,7 @@ export interface CaelushClientOptions {
 export interface WatchRunEventsOptions {
   readonly afterSequence?: number;
   readonly signal?: AbortSignal;
+  readonly onOpen?: () => void;
 }
 
 export interface CaelushClientRequestOptions {
@@ -271,6 +272,8 @@ export class CaelushClient {
     }
     const reader = response.body.getReader();
     try {
+      if (options.signal?.aborted) return;
+      options.onOpen?.();
       yield* parseSseReader(reader, runId, options.signal);
     } catch (error) {
       if (options.signal?.aborted) return;

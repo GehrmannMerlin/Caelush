@@ -215,6 +215,68 @@ describe("CaelushClient", () => {
     expect(cancelled).toBe(true);
   });
 
+  it("calls onOpen once after a successful response and reader creation", async () => {
+    let opens = 0;
+    const client = new CaelushClient({
+      baseUrl: "http://daemon.test",
+      fetch: async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.close();
+            },
+          }),
+          { status: 200 },
+        ),
+    });
+
+    for await (const _event of client.watchRunEvents(createRunId(), { onOpen: () => (opens += 1) })) {
+      void _event;
+    }
+    expect(opens).toBe(1);
+  });
+
+  it("does not call onOpen for HTTP, fetch, body, or pre-open abort failures", async () => {
+    const clients = [
+      new CaelushClient({
+        baseUrl: "http://daemon.test",
+        fetch: async () => new Response("unavailable", { status: 503 }),
+      }),
+      new CaelushClient({
+        baseUrl: "http://daemon.test",
+        fetch: async () => {
+          throw new Error("fetch failed");
+        },
+      }),
+      new CaelushClient({
+        baseUrl: "http://daemon.test",
+        fetch: async () => new Response(null, { status: 200 }),
+      }),
+    ];
+
+    for (const client of clients) {
+      let opens = 0;
+      const iterator = client.watchRunEvents(createRunId(), { onOpen: () => (opens += 1) });
+      await expect(iterator.next()).rejects.toBeInstanceOf(Error);
+      expect(opens).toBe(0);
+    }
+
+    const abortController = new AbortController();
+    abortController.abort();
+    let opens = 0;
+    const aborted = new CaelushClient({
+      baseUrl: "http://daemon.test",
+      fetch: async () => new Response(new ReadableStream<Uint8Array>(), { status: 200 }),
+    });
+    await expect(
+      aborted.watchRunEvents(createRunId(), {
+        signal: abortController.signal,
+        onOpen: () => (opens += 1),
+      }).next(),
+    ).resolves.toMatchObject({ done: true });
+    expect(opens).toBe(0);
+  });
+
   it("does not create an unhandled rejection when reader cancellation fails", async () => {
     const controller = new AbortController();
     const client = new CaelushClient({
