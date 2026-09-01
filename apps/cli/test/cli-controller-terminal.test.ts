@@ -82,6 +82,39 @@ describe("CLI terminal lifecycle", () => {
     );
   });
 
+  it("returns to the recovery picker when another Run remains active in the Session", async () => {
+    const run = makeRun("finish one");
+    const completed = makeRun("finish one", {
+      id: run.id,
+      status: "COMPLETED",
+      finishedAt: 3,
+      finalResult: verifiedFinalResult("verified answer"),
+    });
+    const remaining = makeRun("keep the other one", { status: "RUNNING" });
+    const client = makeClient({
+      createRun: async () => run,
+      watchRunEvents: async function* () {
+        yield terminalEvent(run, "run.completed", { result: { hidden: "ignored" } });
+      },
+      getRun: async () => completed,
+      listRuns: async () => ({ items: [completed, remaining] }),
+    });
+    const controller = new CliConversationController({
+      client,
+      workspacePath: "C:\\workspace\\project",
+    });
+    await controller.bootstrap();
+
+    await controller.submitPrompt("finish one");
+    await waitFor(() => controller.getState().controlMode === "RUN_RECOVERY_PICKER");
+
+    expect(controller.getState().recoveryCandidates.map((candidate) => candidate.id)).toEqual([
+      remaining.id,
+    ]);
+    expect(controller.getState().composerEnabled).toBe(false);
+    controller.dispose();
+  });
+
   it("keeps the active Run locked on SSE failure and never calls cancellation", async () => {
     const run = makeRun("observe this");
     let cancelCalls = 0;

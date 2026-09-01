@@ -898,6 +898,35 @@ export class CliConversationController {
                 : `Run ended with status ${run.status}.`,
             runId: run.id,
           };
+
+    let remainingRuns: readonly ClientAgentRun[];
+    try {
+      remainingRuns = nonTerminalRuns(
+        (await this.options.client.listRuns(run.sessionId, { limit: 100 })).items,
+      );
+    } catch (error) {
+      if (this.activeRun !== active || this.disposed) return;
+      active.streamAbortController.abort();
+      this.activeRun = undefined;
+      const nextState = { ...this.state };
+      delete nextState.activeRun;
+      delete nextState.approvalState;
+      delete nextState.pendingRunId;
+      delete nextState.fatalError;
+      delete nextState.controlError;
+      this.publish({
+        ...nextState,
+        controlMode: "NONE",
+        displayHistory: [...this.state.displayHistory, transcriptEntry],
+        composerEnabled: false,
+        activity: "Transport error",
+        transportError: "The Session could not be refreshed after Run settlement.",
+        controlError: toSafeCliError(error),
+      });
+      return;
+    }
+    if (this.activeRun !== active || this.disposed) return;
+
     active.streamAbortController.abort();
     this.activeRun = undefined;
     const nextState = { ...this.state };
@@ -909,10 +938,15 @@ export class CliConversationController {
     delete nextState.transportError;
     this.publish({
       ...nextState,
-      controlMode: "NONE",
+      controlMode: remainingRuns.length > 0 ? "RUN_RECOVERY_PICKER" : "NONE",
+      recoveryCandidates: remainingRuns,
+      recoverySelectionIndex: 0,
       displayHistory: [...this.state.displayHistory, transcriptEntry],
-      composerEnabled: true,
-      activity: runStatusLabel(run.status) as CliActivity,
+      composerEnabled: remainingRuns.length === 0,
+      activity:
+        remainingRuns.length > 0
+          ? (runStatusLabel(remainingRuns[0]!.status) as CliActivity)
+          : (runStatusLabel(run.status) as CliActivity),
     });
   }
 
