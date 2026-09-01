@@ -1,5 +1,7 @@
 import type { AgentEvent, RunStatus } from "@caelush/protocol";
 import type { CliActivity, CliViewState } from "./cli-state.js";
+import type { CliTimelineEntry } from "./timeline-model.js";
+import { flushTimelineForTerminal, reduceTimelineEvent } from "./timeline-reducer.js";
 
 export interface CliEventProjection {
   readonly state: CliViewState;
@@ -13,10 +15,20 @@ export function projectAgentEvent(state: CliViewState, event: AgentEvent): CliEv
   }
 
   const lifecycle = lifecycleForEvent(event);
-  if (lifecycle === undefined) return { state, terminal: false };
+  const reducedTimeline = reduceTimelineEvent(state.timeline, event);
+  const terminalStatus =
+    lifecycle === undefined || !lifecycle.terminal ? undefined : asTerminalStatus(lifecycle.status);
+  const timeline =
+    terminalStatus === undefined
+      ? reducedTimeline
+      : flushTimelineForTerminal(reducedTimeline, terminalStatus);
+  const nextStateWithTimeline = appendSettledTimeline(state, timeline);
+  if (lifecycle === undefined) {
+    return { state: nextStateWithTimeline, terminal: false };
+  }
 
   const nextState: CliViewState = {
-    ...state,
+    ...nextStateWithTimeline,
     activeRun: { runId: event.runId, status: lifecycle.status },
     activity: activityForStatus(lifecycle.status, lifecycle.activity),
   };
@@ -24,6 +36,29 @@ export function projectAgentEvent(state: CliViewState, event: AgentEvent): CliEv
     return { state: nextState, terminal: true, terminalStatus: lifecycle.status };
   }
   return { state: nextState, terminal: false };
+}
+
+function appendSettledTimeline(
+  state: CliViewState,
+  timeline: CliViewState["timeline"],
+): CliViewState {
+  const known = new Set(state.displayHistory.filter(isTimelineEntry).map((entry) => entry.id));
+  const additions = timeline.settled.filter((entry) => !known.has(entry.id));
+  return {
+    ...state,
+    timeline,
+    ...(additions.length === 0 ? {} : { displayHistory: [...state.displayHistory, ...additions] }),
+  };
+}
+
+function isTimelineEntry(entry: CliViewState["displayHistory"][number]): entry is CliTimelineEntry {
+  return entry.kind !== "USER" && entry.kind !== "ASSISTANT" && entry.kind !== "RUN_TERMINAL";
+}
+
+function asTerminalStatus(
+  status: RunStatus,
+): Parameters<typeof flushTimelineForTerminal>[1] | undefined {
+  return isTerminal(status) ? status : undefined;
 }
 
 interface EventLifecycle {
@@ -93,7 +128,7 @@ function activityForStatus(status: RunStatus, explicit?: CliActivity): CliActivi
   }
 }
 
-function isTerminal(status: RunStatus): boolean {
+function isTerminal(status: RunStatus): status is Parameters<typeof flushTimelineForTerminal>[1] {
   return [
     "COMPLETED",
     "FAILED",

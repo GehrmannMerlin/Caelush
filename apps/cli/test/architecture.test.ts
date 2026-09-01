@@ -13,7 +13,7 @@ describe("CLI architecture boundary", () => {
       /@caelush\/(core|storage|runtime|security|tools|context|verification|llm)/,
     );
     expect(source).not.toMatch(/node:fs|spawn\s*\(|\bfetch\s*\(/);
-    expect(source).not.toMatch(/toolCallId|invocationId|stdout|stderr|hidden reasoning/);
+    expect(source).not.toMatch(/toolCallId|hidden reasoning/);
   });
 
   it("has architecture records for the Session and CLI lifecycle", async () => {

@@ -1,9 +1,17 @@
-import { createRunId, createSessionId, createWorkspaceId } from "@caelush/protocol";
+import {
+  createPlanItemId,
+  createRunId,
+  createSessionId,
+  createVerificationCheckId,
+  createVerificationPlanId,
+  createWorkspaceId,
+} from "@caelush/protocol";
 import { render } from "ink-testing-library";
 import React from "react";
 import { describe, expect, it } from "vitest";
 import type { CliConversationController } from "../src/application/cli-controller.js";
 import type { CliViewState } from "../src/application/cli-state.js";
+import { createInitialCliTimelineState } from "../src/application/timeline-model.js";
 import { App } from "../src/components/App.js";
 
 const runId = createRunId();
@@ -32,10 +40,11 @@ const baseState: CliViewState = {
       limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 10_000 },
     },
   },
-  transcript: [
+  displayHistory: [
     { id: "user-1", kind: "USER", text: "你好 😀", runId },
     { id: "assistant-1", kind: "ASSISTANT", text: "已完成检查。", runId },
   ],
+  timeline: createInitialCliTimelineState(runId),
   composerEnabled: true,
   activity: "Ready",
 };
@@ -58,7 +67,8 @@ describe("Ink CLI shell", () => {
   it("renders a safe fatal state without enabling the composer", () => {
     const controller = fakeController({
       bootstrap: "BOOTSTRAP_ERROR",
-      transcript: [],
+      displayHistory: [],
+      timeline: baseState.timeline,
       composerEnabled: false,
       activity: "Terminal error",
       fatalError: "Caelush Local Agent Service is not reachable.",
@@ -67,6 +77,64 @@ describe("Ink CLI shell", () => {
 
     expect(rendered.lastFrame()).toContain("Caelush Local Agent Service is not reachable.");
     expect(rendered.lastFrame()).not.toContain("Press Enter");
+    rendered.unmount();
+  });
+
+  it("renders active plan, tool, process, and verification domains dynamically", () => {
+    const planId = createVerificationPlanId();
+    const activeState: CliViewState = {
+      ...baseState,
+      composerEnabled: false,
+      timeline: {
+        ...baseState.timeline,
+        currentPlan: [
+          { id: createPlanItemId(), title: "Inspect workspace", status: "IN_PROGRESS" },
+        ],
+        activeTools: [
+          {
+            id: "tool-1",
+            kind: "TOOL",
+            title: "Run command",
+            text: "Command: pnpm test",
+            status: "RUNNING",
+          },
+        ],
+        activeProcesses: [
+          {
+            id: "process-1",
+            kind: "PROCESS",
+            title: "Process",
+            text: "pnpm test · running",
+            status: "RUNNING",
+          },
+        ],
+        verification: [
+          {
+            planId,
+            checkCount: 1,
+            passed: 0,
+            failed: 0,
+            errors: 0,
+            skipped: 0,
+            finalized: false,
+            checks: [
+              {
+                checkId: createVerificationCheckId(),
+                status: "RUNNING",
+                title: "TASK · ACCEPTANCE",
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const rendered = render(<App controller={fakeController(activeState)} />);
+
+    expect(rendered.lastFrame()).toContain("Live activity");
+    expect(rendered.lastFrame()).toContain("Inspect workspace");
+    expect(rendered.lastFrame()).toContain("Run command");
+    expect(rendered.lastFrame()).toContain("Processes");
+    expect(rendered.lastFrame()).toContain("Verification");
     rendered.unmount();
   });
 });

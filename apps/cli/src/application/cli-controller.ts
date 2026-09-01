@@ -17,6 +17,7 @@ import type { WatchRunEventsOptions } from "@caelush/client";
 import { projectAgentEvent } from "./event-projector.js";
 import { createInitialCliState, type CliStateListener, type CliViewState } from "./cli-state.js";
 import { toSafeCliError } from "../bootstrap/safe-errors.js";
+import { createInitialCliTimelineState } from "./timeline-model.js";
 
 export const MAX_CLI_PROMPT_BYTES = 32 * 1024;
 
@@ -55,7 +56,7 @@ export class CliConversationController {
   private bootstrapPromise: Promise<void> | undefined;
   private activeRun: ActiveRun | undefined;
   private submissionInFlight = false;
-  private transcriptSequence = 0;
+  private historySequence = 0;
   private disposed = false;
 
   constructor(private readonly options: CliConversationControllerOptions) {
@@ -86,7 +87,10 @@ export class CliConversationController {
     this.submissionInFlight = true;
     this.publish({
       ...this.state,
-      transcript: [...this.state.transcript, { id: optimisticId, kind: "USER", text: goal }],
+      displayHistory: [
+        ...this.state.displayHistory,
+        { id: optimisticId, kind: "USER", text: goal },
+      ],
       composerEnabled: false,
       activity: "Preparing",
     });
@@ -108,9 +112,10 @@ export class CliConversationController {
     this.submissionInFlight = false;
     this.publish({
       ...this.state,
-      transcript: this.state.transcript.map((entry) =>
+      displayHistory: this.state.displayHistory.map((entry) =>
         entry.id === optimisticId ? { ...entry, runId: run.id } : entry,
       ),
+      timeline: createInitialCliTimelineState(run.id),
       activeRun: { runId: run.id, status: run.status },
       composerEnabled: false,
       activity: "Preparing",
@@ -123,7 +128,7 @@ export class CliConversationController {
     this.activeRun = active;
     try {
       const stream = this.options.client.watchRunEvents(run.id, {
-        afterSequence: 0,
+        afterSequence: this.state.timeline.lastDurableSequence,
         signal: active.streamAbortController.signal,
       });
       void this.consumeRunEvents(active, stream);
@@ -263,7 +268,7 @@ export class CliConversationController {
     delete nextState.fatalError;
     this.publish({
       ...nextState,
-      transcript: [...this.state.transcript, transcriptEntry],
+      displayHistory: [...this.state.displayHistory, transcriptEntry],
       composerEnabled: true,
       activity: run.status === "COMPLETED" && finalResult.success ? "Ready" : "Terminal error",
     });
@@ -272,7 +277,7 @@ export class CliConversationController {
   private removeOptimisticEntry(id: string, safeError: string): void {
     this.publish({
       ...this.state,
-      transcript: this.state.transcript.filter((entry) => entry.id !== id),
+      displayHistory: this.state.displayHistory.filter((entry) => entry.id !== id),
       composerEnabled: this.state.bootstrap === "READY",
       activity: "Terminal error",
       fatalError: safeError,
@@ -280,8 +285,8 @@ export class CliConversationController {
   }
 
   private nextTranscriptId(prefix: string): string {
-    this.transcriptSequence += 1;
-    return `${prefix}-${this.transcriptSequence}`;
+    this.historySequence += 1;
+    return `${prefix}-${this.historySequence}`;
   }
 
   private publish(state: CliViewState): void {

@@ -5,7 +5,12 @@ describe("CLI application state", () => {
   it("starts in a non-interactive bootstrap state", () => {
     expect(createInitialCliState()).toEqual({
       bootstrap: "STARTING",
-      transcript: [],
+      displayHistory: [],
+      timeline: expect.objectContaining({
+        settled: [],
+        activeTools: [],
+        activeProcesses: [],
+      }),
       composerEnabled: false,
       activity: "Starting",
     });

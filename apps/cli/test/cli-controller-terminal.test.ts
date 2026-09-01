@@ -46,7 +46,7 @@ describe("CLI terminal lifecycle", () => {
     await waitFor(() => controller.getState().activeRun === undefined);
 
     expect(getRunCalls).toBe(1);
-    expect(controller.getState().transcript.at(-1)).toMatchObject({
+    expect(controller.getState().displayHistory.at(-1)).toMatchObject({
       kind: "ASSISTANT",
       text: "verified answer",
     });
@@ -73,11 +73,11 @@ describe("CLI terminal lifecycle", () => {
     await controller.submitPrompt("fail this");
     await waitFor(() => controller.getState().activeRun === undefined);
 
-    expect(controller.getState().transcript.at(-1)).toMatchObject({
+    expect(controller.getState().displayHistory.at(-1)).toMatchObject({
       kind: "RUN_TERMINAL",
       text: "Run ended with status FAILED.",
     });
-    expect(controller.getState().transcript.some((entry) => entry.kind === "ASSISTANT")).toBe(
+    expect(controller.getState().displayHistory.some((entry) => entry.kind === "ASSISTANT")).toBe(
       false,
     );
   });

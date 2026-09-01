@@ -14,13 +14,16 @@ import {
   type ToolExecutionStorePort,
   type ToolRegistry,
   type ToolResultSanitizerPort,
+  type ToolPresentationPort,
 } from "@caelush/tools";
 import { CaelushToolExecutionGate } from "./tool-gate.js";
+import { CaelushToolPresentation, type TerminalOutputSanitizer } from "./presentation.js";
 import { CaelushToolResultSanitizer } from "./tool-result-sanitizer.js";
 
 export interface V1ToolExecutionSecurity {
   readonly gate: ToolExecutionGatePort;
   readonly resultSanitizer: ToolResultSanitizerPort;
+  readonly presentation: ToolPresentationPort;
 }
 
 export class V1SecurityCompositionError extends Error {
@@ -30,29 +33,36 @@ export class V1SecurityCompositionError extends Error {
   }
 }
 
-export function createDefaultV1ToolExecutionSecurity(): V1ToolExecutionSecurity {
+export function createDefaultV1ToolExecutionSecurity(options: {
+  readonly terminalOutputSanitizer: TerminalOutputSanitizer;
+}): V1ToolExecutionSecurity {
   return Object.freeze({
     gate: new CaelushToolExecutionGate(),
+    presentation: new CaelushToolPresentation(options),
     resultSanitizer: new CaelushToolResultSanitizer(),
   });
 }
 
 export interface V1SecureToolDispatcherOptions extends Omit<
   ToolDispatcherOptions,
-  "gate" | "resultSanitizer" | "approvalStore" | "approvalIdFactory"
+  "gate" | "resultSanitizer" | "presentation" | "approvalStore" | "approvalIdFactory"
 > {
   readonly approvalStore: ToolApprovalStorePort;
   readonly approvalIdFactory: ToolApprovalRequestIdFactory;
+  readonly terminalOutputSanitizer: TerminalOutputSanitizer;
 }
 
 export function createV1SecureToolDispatcher(
   options: V1SecureToolDispatcherOptions,
 ): ToolDispatcher {
   assertDefaultBuiltinSecurityCoverage(options.registry);
-  const security = createDefaultV1ToolExecutionSecurity();
+  const security = createDefaultV1ToolExecutionSecurity({
+    terminalOutputSanitizer: options.terminalOutputSanitizer,
+  });
   return new ToolDispatcher({
     ...options,
     gate: security.gate,
+    presentation: security.presentation,
     resultSanitizer: security.resultSanitizer,
   });
 }

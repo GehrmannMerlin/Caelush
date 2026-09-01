@@ -51,10 +51,12 @@ import {
 import {
   createToolCompletedEvent,
   createToolFailedEvent,
+  createToolOutputEvent,
   createToolRequestedEvent,
   createToolStartedEvent,
   createApprovalRequestedEvent,
 } from "./event-factory.js";
+import type { ToolPresentationPort } from "./presentation.js";
 import {
   ToolExecutionResultValidationError,
   validateToolExecutionResult,
@@ -85,6 +87,8 @@ export interface ToolDispatcherOptions {
   readonly observationIdFactory: ToolObservationIdFactory;
   readonly eventIdFactory: ToolEventIdFactory;
   readonly resultSanitizer: ToolResultSanitizerPort;
+  /** Optional safe, presentation-only projection. It must never participate in execution. */
+  readonly presentation?: ToolPresentationPort;
   readonly approvalStore?: ToolApprovalStorePort;
   readonly approvalIdFactory?: ToolApprovalRequestIdFactory;
   readonly budget?: ToolBudgetAdmissionPort;
@@ -267,6 +271,7 @@ export class ToolDispatcher {
       sessionId: request.sessionId,
       timestamp: createdAt,
       invocation,
+      presentation: this.options.presentation,
     });
     const requested = await this.commitAndNotify({
       sessionId: request.sessionId,
@@ -440,6 +445,7 @@ export class ToolDispatcher {
       sessionId: request.sessionId,
       timestamp: running.startedAt ?? running.createdAt,
       invocation: running,
+      presentation: this.options.presentation,
     });
     const committed = await this.commitAndNotify({
       sessionId: request.sessionId,
@@ -699,6 +705,8 @@ export class ToolDispatcher {
           timestamp: finishedAt,
           invocation: terminal,
           error: terminal.error as AgentError,
+          presentation: this.options.presentation,
+          result,
         })
       : createToolCompletedEvent({
           eventId: this.options.eventIdFactory.create(),
@@ -706,7 +714,17 @@ export class ToolDispatcher {
           timestamp: finishedAt,
           invocation: terminal,
           observationId: observation.id,
+          presentation: this.options.presentation,
+          result,
         });
+    const outputEvent = createToolOutputEvent({
+      eventId: this.options.eventIdFactory.create(),
+      sessionId: request.sessionId,
+      timestamp: finishedAt,
+      invocation: terminal,
+      presentation: this.options.presentation,
+      result,
+    });
     const committed = await this.commitAndNotify({
       sessionId: request.sessionId,
       invocation: terminal,
@@ -719,7 +737,10 @@ export class ToolDispatcher {
           stepId: terminal.stepId,
           timestamp: finishedAt,
           nextEventId: () => this.options.eventIdFactory.create(),
+          invocation: terminal,
+          presentation: this.options.presentation,
         }),
+        ...(outputEvent === undefined ? [] : [outputEvent]),
         event,
       ],
       effects,
@@ -809,6 +830,7 @@ export class ToolDispatcher {
         sessionId: request.sessionId,
         timestamp: createdAt,
         invocation,
+        presentation: this.options.presentation,
       }),
       createToolFailedEvent({
         eventId: this.options.eventIdFactory.create(),
@@ -816,6 +838,7 @@ export class ToolDispatcher {
         timestamp: createdAt,
         invocation: failed,
         error: failed.error as AgentError,
+        presentation: this.options.presentation,
       }),
     ];
     const committed = await this.commitAndNotify({
@@ -875,6 +898,12 @@ export class ToolDispatcher {
       timestamp: finishedAt,
       invocation: failed,
       error: failed.error as AgentError,
+      presentation: this.options.presentation,
+      result: {
+        content,
+        details,
+        isError: true,
+      },
     });
     const committed = await this.commitAndNotify({
       sessionId,

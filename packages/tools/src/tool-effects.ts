@@ -11,6 +11,7 @@ import type {
 import type { ToolExecutionRequest } from "./handler.js";
 import type { ToolExecutionResult } from "./execution-result.js";
 import type { DurableToolEventDraft } from "./dispatcher-types.js";
+import type { ToolPresentationPort } from "./presentation.js";
 
 export const SAFE_SHELL_COMMAND_LABEL = "shell command";
 export const MAX_CHANGED_FILES = 500;
@@ -92,6 +93,18 @@ export interface ToolEffectEventContext {
   readonly stepId: import("@caelush/protocol").StepId;
   readonly timestamp: TimestampMs;
   readonly nextEventId: () => EventId;
+  readonly invocation?: import("@caelush/protocol").ToolInvocation;
+  readonly presentation?: ToolPresentationPort | undefined;
+}
+
+function safeShellCommandLabel(context: ToolEffectEventContext): string {
+  if (context.presentation === undefined || context.invocation === undefined)
+    return SAFE_SHELL_COMMAND_LABEL;
+  try {
+    return context.presentation.presentShellCommand({ invocation: context.invocation });
+  } catch {
+    return SAFE_SHELL_COMMAND_LABEL;
+  }
 }
 
 export function toolEffectsToEvents(
@@ -131,7 +144,7 @@ export function toolEffectsToEvents(
         return {
           ...base,
           type: "shell.started" as const,
-          payload: { invocationId: effect.invocationId, command: SAFE_SHELL_COMMAND_LABEL },
+          payload: { invocationId: effect.invocationId, command: safeShellCommandLabel(context) },
         };
       case "SHELL_COMPLETED":
         return {
@@ -150,7 +163,7 @@ export function toolEffectsToEvents(
           payload: {
             process: {
               id: effect.sessionId,
-              command: SAFE_SHELL_COMMAND_LABEL,
+              command: safeShellCommandLabel(context),
               status: "RUNNING" as const,
             },
           },

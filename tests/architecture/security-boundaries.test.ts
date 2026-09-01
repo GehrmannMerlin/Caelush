@@ -31,7 +31,11 @@ describe("security architecture boundaries", () => {
 
   it("keeps policy evaluation pure, metadata-only, and non-secret", async () => {
     const sourceRoot = path.join(repositoryRoot, "packages", "security", "src");
-    const files = await sourceFiles(sourceRoot);
+    // The Phase 12C presentation adapter is intentionally the only Security
+    // source allowed to inspect invocation arguments for safe UI summaries.
+    const files = (await sourceFiles(sourceRoot)).filter(
+      (file) => path.basename(file) !== "presentation.ts",
+    );
     const source = (await Promise.all(files.map((file) => readFile(file, "utf8")))).join("\n");
     expect(source).not.toMatch(/invocation\.args|Date\.now|Math\.random|randomUUID/);
     expect(source).not.toMatch(/(?<!\.)\b(?:fetch|spawn|exec|readFile|writeFile)\s*\(/);

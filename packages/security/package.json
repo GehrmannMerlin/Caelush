@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@caelush/protocol": "workspace:*",
+    "@caelush/runtime": "workspace:*",
     "@caelush/tools": "workspace:*"
   }
 }

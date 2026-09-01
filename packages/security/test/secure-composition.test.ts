@@ -10,10 +10,15 @@ import {
   type ToolRegistry,
 } from "@caelush/tools";
 
+const identityTerminalSanitizer = (value: string): string => value;
+
 describe("default V1 security composition", () => {
   it("returns the real gate and sanitizer", () => {
-    const security = createDefaultV1ToolExecutionSecurity();
+    const security = createDefaultV1ToolExecutionSecurity({
+      terminalOutputSanitizer: identityTerminalSanitizer,
+    });
     expect(security.gate.constructor.name).toBe("CaelushToolExecutionGate");
+    expect(security.presentation.constructor.name).toBe("CaelushToolPresentation");
     expect(security.resultSanitizer.constructor.name).toBe("CaelushToolResultSanitizer");
   });
 

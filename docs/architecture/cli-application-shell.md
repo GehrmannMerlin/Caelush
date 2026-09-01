@@ -39,9 +39,14 @@ start action, and the CLI never treats a `202` action response as completion.
 
 ## View state and safety
 
-`CliViewState` exposes only bootstrap state, public Session/Run identity, settled
-transcript entries, a finite activity label, composer availability, and a safe
-fatal message. The transcript allowlist is:
+`CliViewState` exposes only bootstrap state, public Session/Run identity, one
+ordered `displayHistory`, a bounded `CliTimelineState`, a finite activity label,
+composer availability, and a safe fatal message. `displayHistory` is the single
+public scrollback for user messages, settled timeline entries, verified
+assistant text, and terminal notices. Active tools, plans, verification checks,
+approvals, retries, and processes remain in the dynamic timeline projection.
+
+The history allowlist is:
 
 ```text
 USER          submitted prompt
@@ -52,9 +57,11 @@ RUN_TERMINAL   bounded status notice for a non-completed Run
 Every valid `AgentEvent` is accepted by the projector. Lifecycle events update
 `Preparing`, `Working`, `Retrying`, `Verifying`, and `Approval required` labels;
 Tool, file, process, reasoning, provider, and verification detail payloads are
-not copied into the transcript. Events whose `runId` is not the active Run are
-ignored. Completion is settled from `getRun()` and `VerifiedRunFinalResultSchema`,
-never from natural-language output or an event payload.
+projected into bounded, safe timeline view models; raw events and raw Tool
+arguments are never stored in the view state. Events whose `runId` is not the
+active Run are ignored. Completion is settled from `getRun()` and
+`VerifiedRunFinalResultSchema`, never from natural-language output or an event
+payload.
 
 An unreachable daemon and protocol/configuration mismatch render one sanitized
 fatal message and exit with code 1. A stream failure is a transport activity, not
@@ -63,7 +70,9 @@ automatic reconnect. `dispose()` aborts only the local SSE reader. If the user
 exits while a Run is active, the process exits locally and reports that the active
 Run continues in the local daemon.
 
-There is no automatic reconnect in Phase 12B.
+There is no automatic reconnect in Phase 12B or 12C. Phase 12C only consumes
+the existing typed `AgentEvent` watch; it does not add reconnect, cancellation
+UX, approval resolution, or session resume.
 
 ## Ink rendering
 
@@ -72,19 +81,25 @@ The React/Ink tree keeps settled and dynamic surfaces separate:
 ```text
 <App>
   <Header />
-  <Static items={transcript}>…</Static>
+  <Static items={displayHistory}>…</Static>
+  <ActiveTimeline />
   <ActivityStatus />
   <Composer />
 </App>
 ```
 
-`<Static>` is the append-only transcript region. Header, activity, and the
-controlled `ink-text-input` composer are dynamic. The composer supports normal
+`<Static>` is the append-only history region. Settled Tool/File/Process/
+Verification activity is appended there once; active work is rendered by
+`ActiveTimeline`, `CurrentPlan`, `VerificationActivity`, and
+`ActiveProcesses`. Header, activity, and the controlled `ink-text-input`
+composer are dynamic. The composer supports normal
 Unicode/Chinese/emoji, cursor editing, paste, and Enter submission; whitespace
 only input is ignored and pasted newlines remain ordinary bounded input rather
 than creating a second editor. Long project paths are bounded for display and
 plain text is used without a Markdown or syntax-rendering layer.
 
-Phase 12B intentionally does not add a timeline, detailed Tool cards, approval
-interaction, cancellation controls, reconnect/resume UX, daemon auto-start,
-model picker, Web UI, or packaging.
+Phase 12C adds the read-only Agent timeline described in
+[CLI Agent Timeline](cli-agent-timeline.md). The timeline is a projection of
+daemon events, not a second execution state machine. Phase 12B/12C still do not
+add approval interaction, cancellation controls, reconnect/resume UX, daemon
+auto-start, model picker, Web UI, or packaging.

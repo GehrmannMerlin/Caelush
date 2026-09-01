@@ -3,6 +3,11 @@ export type { ToolExecutionEnvironment } from "./execution-environment.js";
 export { assertToolSecurityContext } from "./security-context.js";
 export type { ToolSecurityContext } from "./security-context.js";
 export type { ToolExecutionResult } from "./execution-result.js";
+export type {
+  ToolInvocationPresentation,
+  ToolPresentationPort,
+  ToolResultPresentation,
+} from "./presentation.js";
 export type { ToolResultSanitizerPort } from "./result-sanitizer.js";
 export { assertToolExecutionEnvironment } from "./execution-environment.js";
 export {
@@ -51,10 +56,7 @@ export {
   ToolDispatcherInvariantError,
 } from "./dispatcher-errors.js";
 export type { ToolRegistration } from "./registration.js";
-export {
-  emptyToolSecurityFacts,
-  ToolSecurityFactsProjectionError,
-} from "./security-facts.js";
+export { emptyToolSecurityFacts, ToolSecurityFactsProjectionError } from "./security-facts.js";
 export type {
   ToolResourceAccess,
   ToolResourceOperation,
@@ -148,6 +150,7 @@ export {
   createApprovalResolvedEvent,
   createToolCompletedEvent,
   createToolFailedEvent,
+  createToolOutputEvent,
   createToolRequestedEvent,
   createToolStartedEvent,
 } from "./event-factory.js";

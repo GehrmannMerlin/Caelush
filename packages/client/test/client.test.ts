@@ -214,4 +214,25 @@ describe("CaelushClient", () => {
     await expect(next).resolves.toMatchObject({ done: true });
     expect(cancelled).toBe(true);
   });
+
+  it("does not create an unhandled rejection when reader cancellation fails", async () => {
+    const controller = new AbortController();
+    const client = new CaelushClient({
+      baseUrl: "http://daemon.test",
+      fetch: async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            cancel() {
+              return Promise.reject(new Error("reader cancellation failed"));
+            },
+          }),
+          { status: 200 },
+        ),
+    });
+    const stream = client.watchRunEvents(createRunId(), { signal: controller.signal });
+    const iterator = stream[Symbol.asyncIterator]();
+    const next = iterator.next();
+    controller.abort();
+    await expect(next).resolves.toMatchObject({ done: true });
+  });
 });

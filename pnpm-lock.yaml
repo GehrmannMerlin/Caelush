@@ -203,6 +203,9 @@ importers:
       '@caelush/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@caelush/runtime':
+        specifier: workspace:*
+        version: link:../runtime
       '@caelush/tools':
         specifier: workspace:*
         version: link:../tools

@@ -91,7 +91,7 @@ Core/Tools/Storage/Verification 的 production `src` 中确认；测试 fixture�
 | `retry.started`                     | 有     | 有         | Core retry controller                | durable / user       | stepId；更新同一 retry entry，不重复                                     |
 | `tool.requested`                    | 有     | 有         | Tools Dispatcher                     | durable / user       | invocationId 精确关联；只显示 label/risk/safe summary                    |
 | `tool.started`                      | 有     | 有         | Tools Dispatcher                     | durable / user       | invocationId 精确更新 REQUESTED→RUNNING                                  |
-| `tool.output`                       | 有     | 无         | schema only                          | —                    | 不伪造实时 chunk；若 12C 在结算点补发，必须是安全 bounded preview        |
+| `tool.output`                       | 有     | 有         | Tools Dispatcher settlement bridge   | durable / user       | 结算点最多一条安全 bounded preview；不是实时 chunk side channel          |
 | `tool.completed`                    | 有     | 有         | Tools Dispatcher                     | durable / user       | invocationId；同一 entry settled                                         |
 | `tool.failed`                       | 有     | 有         | Tools Dispatcher                     | durable / user       | invocationId；同一 entry failed，错误只取 code/phase/message             |
 | `file.read`                         | 有     | 有         | Tools effect bridge                  | durable / user       | stepId + path；只显示 workspace-relative path                            |
@@ -119,8 +119,10 @@ Core/Tools/Storage/Verification 的 production `src` 中确认；测试 fixture�
 | `budget.exceeded`                   | 有     | 有         | Core budget boundary                 | durable / user       | runId；只显示 dimension/limit/accounted                                  |
 
 矩阵中最重要的负结论是：Protocol schema、Durable Event Store、SSE mapper 和 UI 都不
-能把不存在的 producer 变出来。12C 只能消费真正产生的 event；对于缺失的 output/plan
-producer 使用安全的结算摘要或保持不可见，并在文档中标为后续能力。
+能把不存在的 producer 变出来。12C 对 `tool.output` 只增加了安全的结算摘要 bridge；
+对于仍缺失的 `plan.updated`、`shell.output`、`process.output` 和 legacy verification
+producer，不伪造实时事件，使用已有 terminal/check/finalized 事实或保持不可见，并在
+文档中标为后续能力。
 
 ## 3. 目标架构
 
@@ -185,6 +187,8 @@ invocation/result/shell command 的安全 presentation DTO。它不依赖 `packa
 `packages/security` 实现该 port，并复用已有 `redactText`、`redactJson`、
 `redactToolArgumentsForPresentation`、`classifySensitivePath`、
 `CaelushToolResultSanitizer` 和 runtime 的 terminal sanitizer；不引入第二套 secret detector。
+Security 不直接依赖 Runtime；Daemon Composition Root 以纯函数端口注入既有 Runtime
+terminal sanitizer。
 
 Dispatcher 在构造和 event factory 中调用该 port；presentation 失败时捕获并返回
 generic label/summary，绝不能阻止 Tool 执行、改变 invocation settlement 或把 exception

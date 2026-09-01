@@ -1,11 +1,12 @@
 import { Box, useApp, useInput } from "ink";
 import { useCallback, useSyncExternalStore } from "react";
 import type { CliConversationController } from "../application/cli-controller.js";
+import { ActiveTimeline } from "./ActiveTimeline.js";
 import { ActivityStatus } from "./ActivityStatus.js";
 import { Composer } from "./Composer.js";
 import { FatalError } from "./FatalError.js";
 import { Header } from "./Header.js";
-import { Transcript } from "./Transcript.js";
+import { History } from "./History.js";
 
 export interface AppProps {
   readonly controller: CliConversationController;
@@ -38,7 +39,8 @@ export function App({ controller, writeMessage = defaultWriteMessage }: AppProps
   return (
     <Box flexDirection="column" paddingX={1}>
       <Header state={state} />
-      <Transcript entries={state.transcript} />
+      <History entries={state.displayHistory} />
+      <ActiveTimeline timeline={state.timeline} />
       <ActivityStatus activity={state.activity} />
       {state.fatalError === undefined ? (
         <Composer

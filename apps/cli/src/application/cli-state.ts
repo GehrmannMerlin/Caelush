@@ -5,6 +5,11 @@ import type {
   RunStatus,
   WorkspaceRef,
 } from "@caelush/protocol";
+import {
+  createInitialCliTimelineState,
+  type CliTimelineEntry,
+  type CliTimelineState,
+} from "./timeline-model.js";
 
 export type CliBootstrapState =
   | "STARTING"
@@ -41,6 +46,8 @@ export interface CliTranscriptEntry {
   readonly runId?: RunId;
 }
 
+export type CliDisplayHistoryEntry = CliTranscriptEntry | CliTimelineEntry;
+
 export interface CliActiveRun {
   readonly runId: RunId;
   readonly status: RunStatus;
@@ -51,7 +58,8 @@ export interface CliViewState {
   readonly workspace?: WorkspaceRef;
   readonly daemonInfo?: DaemonInfo;
   readonly session?: ClientAgentSession;
-  readonly transcript: readonly CliTranscriptEntry[];
+  readonly displayHistory: readonly CliDisplayHistoryEntry[];
+  readonly timeline: CliTimelineState;
   readonly activeRun?: CliActiveRun;
   readonly composerEnabled: boolean;
   readonly activity: CliActivity;
@@ -63,7 +71,8 @@ export type CliStateListener = (state: CliViewState) => void;
 export function createInitialCliState(): CliViewState {
   return {
     bootstrap: "STARTING",
-    transcript: [],
+    displayHistory: [],
+    timeline: createInitialCliTimelineState(),
     composerEnabled: false,
     activity: "Starting",
   };

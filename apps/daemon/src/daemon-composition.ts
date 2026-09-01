@@ -39,6 +39,7 @@ import {
 import {
   LocalRuntime,
   createLocalRuntimeResolver,
+  sanitizeTerminalOutput,
   type RuntimeWorkspaceScope,
 } from "@caelush/runtime";
 import {
@@ -180,6 +181,7 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     approvalStore: options.storage.approvals,
     approvalIdFactory: { create: createApprovalRequestId },
     budget: options.storage.budget,
+    terminalOutputSanitizer: sanitizeTerminalOutput,
   });
   const toolCoordinator = new ToolBatchCoordinator(dispatcher);
   const scopes = new RunExecutionScopeRegistry();

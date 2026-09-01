@@ -31,7 +31,7 @@ describe("CLI AgentEvent projection", () => {
 
     expect(result.state.activeRun).toEqual({ runId, status: "VERIFYING" });
     expect(result.state.activity).toBe("Verifying");
-    expect(result.state.transcript).toEqual([]);
+    expect(result.state.displayHistory).toEqual([]);
     expect(result.terminal).toBe(false);
   });
 
@@ -47,7 +47,7 @@ describe("CLI AgentEvent projection", () => {
 
     expect(result.terminal).toBe(true);
     expect(result.terminalStatus).toBe("COMPLETED");
-    expect(result.state.transcript).toEqual([]);
+    expect(result.state.displayHistory).toEqual([]);
     expect(JSON.stringify(result.state)).not.toContain("provider output");
   });
 
@@ -64,7 +64,7 @@ describe("CLI AgentEvent projection", () => {
     });
     const mismatched = { ...event, runId: otherRunId };
 
-    expect(projectAgentEvent(state, event).state).toEqual(state);
+    expect(projectAgentEvent(state, event).state.timeline.settled[0]?.text).toBe("secret output");
     expect(projectAgentEvent(state, mismatched).state).toEqual(state);
   });
 });

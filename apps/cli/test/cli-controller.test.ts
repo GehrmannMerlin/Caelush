@@ -116,7 +116,7 @@ describe("CliConversationController", () => {
     await expect(second).resolves.toBe(false);
 
     expect(calls).toEqual(["createRun", "watch", "startRun"]);
-    expect(controller.getState().transcript).toEqual([
+    expect(controller.getState().displayHistory).toEqual([
       { id: "user-1", kind: "USER", text: "the first prompt", runId: run.id },
     ]);
     expect(controller.getState().composerEnabled).toBe(false);
@@ -133,7 +133,7 @@ describe("CliConversationController", () => {
 
     await expect(controller.submitPrompt("  ")).resolves.toBe(false);
     await expect(controller.submitPrompt("😀".repeat(300_000))).resolves.toBe(false);
-    expect(controller.getState().transcript).toEqual([]);
+    expect(controller.getState().displayHistory).toEqual([]);
   });
 
   it("fails safely before Session creation when the daemon is unreachable", async () => {

@@ -44,6 +44,11 @@ export {
 } from "./secret-redaction.js";
 export { CaelushToolResultSanitizer, sanitizeToolResult } from "./tool-result-sanitizer.js";
 export {
+  CaelushToolPresentation,
+  type CaelushToolPresentationOptions,
+  type TerminalOutputSanitizer,
+} from "./presentation.js";
+export {
   assertDefaultBuiltinSecurityCoverage,
   createDefaultV1ToolExecutionSecurity,
   createV1SecureToolDispatcher,
