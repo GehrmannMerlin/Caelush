@@ -95,7 +95,10 @@ The reducer is pure, serializable and deterministic. Exact replay of an event
 identity is ignored. A durable sequence conflict fails closed with a generic
 timeline error. An event from another Run, or a `DEBUG`/`SYSTEM` event, does
 not enter the user timeline. The controller passes its current durable cursor
-to the existing client watch and performs no automatic reconnect in 12C.
+to the existing client watch and performs no automatic reconnect as part of the
+Phase 12C reducer. Phase 12D wraps the same reducer with a host-level bounded
+reconnect scheduler; it never changes the timeline's event identity, cursor,
+or projection authority.
 
 At a terminal event, active Tools are frozen as presentation-only interrupted
 entries, unresolved approvals/retries/checks are marked as interrupted, and
@@ -110,9 +113,11 @@ activity history. The reducer never mutates durable Tool or Run state.
 settled messages and timeline entries. `ActiveTimeline` owns the dynamic area
 and delegates domain rendering to `CurrentPlan`, `VerificationActivity` and
 `ActiveProcesses`; active Tool summaries, approvals and retries remain there
-until they settle. Empty sections render nothing. The UI stays inline and
-does not add an alternate screen, pager, full-screen interaction, approval
-button, cancellation UX or non-interactive output mode.
+until they settle. Empty sections render nothing. The UI stays inline and does
+not add an alternate screen, pager, full-screen interaction, or non-interactive
+output mode. Phase 12D adds a separate controller-routed Approval dialog and
+cancellation/reconnect controls; those controls operate on typed client actions
+and do not make the timeline an execution state machine.
 
 The components accept only CLI plain view models. They do not read AgentEvent,
 call Core, or import Runtime, Storage, Security, Tools, Verification or LLM.

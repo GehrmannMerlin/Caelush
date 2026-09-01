@@ -14,7 +14,9 @@ describe("CLI application state", () => {
       transportState: "CONNECTED",
       controlMode: "NONE",
       sessionCandidates: [],
+      sessionSelectionIndex: 0,
       recoveryCandidates: [],
+      recoverySelectionIndex: 0,
       composerEnabled: false,
       activity: "Starting",
     });

@@ -13,6 +13,8 @@ import type { CliConversationController } from "../src/application/cli-controlle
 import type { CliViewState } from "../src/application/cli-state.js";
 import { createInitialCliTimelineState } from "../src/application/timeline-model.js";
 import { App } from "../src/components/App.js";
+import { RunRecoveryPicker } from "../src/components/RunRecoveryPicker.js";
+import { SessionPicker } from "../src/components/SessionPicker.js";
 
 const runId = createRunId();
 const baseState: CliViewState = {
@@ -22,7 +24,9 @@ const baseState: CliViewState = {
   workspace: { id: createWorkspaceId(), path: "C:\\workspace\\project" },
   session: { id: createSessionId(), createdAt: 1, updatedAt: 1, metadata: {} },
   sessionCandidates: [],
+  sessionSelectionIndex: 0,
   recoveryCandidates: [],
+  recoverySelectionIndex: 0,
   daemonInfo: {
     apiVersion: "v1",
     protocolVersion: 1,
@@ -141,7 +145,48 @@ describe("Ink CLI shell", () => {
     expect(rendered.lastFrame()).toContain("Verification");
     rendered.unmount();
   });
+
+  it("renders bounded Session and Run recovery picker rows", () => {
+    const session = {
+      id: createSessionId(),
+      createdAt: 1,
+      updatedAt: 1,
+      metadata: { title: "Project session" },
+    };
+    const sessionRendered = render(
+      <SessionPicker candidates={[{ session, lastActivityAt: 2 }]} selectedIndex={0} />,
+    );
+    expect(sessionRendered.lastFrame()).toContain("Project session");
+    expect(sessionRendered.lastFrame()).toContain(session.id.slice(-8));
+    sessionRendered.unmount();
+
+    const runRendered = render(
+      <RunRecoveryPicker
+        candidates={[{ ...baseRunForPicker(), goal: "Inspect the current project" }]}
+        selectedIndex={0}
+      />,
+    );
+    expect(runRendered.lastFrame()).toContain("RUNNING");
+    expect(runRendered.lastFrame()).toContain("Inspect the current project");
+    runRendered.unmount();
+  });
 });
+
+function baseRunForPicker() {
+  return {
+    id: runId,
+    sessionId: createSessionId(),
+    goal: "Run",
+    status: "RUNNING" as const,
+    workspace: { id: createWorkspaceId(), path: "C:\\workspace\\project" },
+    runtime: { id: "local", kind: "local" as const },
+    permissionProfile: "PROJECT_ACCESS" as const,
+    approvalPolicy: "DANGEROUS_ONLY" as const,
+    limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 10_000 },
+    model: { provider: "fixture", model: "fixture-model" },
+    createdAt: 1,
+  };
+}
 
 function fakeController(state: CliViewState): CliConversationController {
   return {

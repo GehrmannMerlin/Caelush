@@ -60,7 +60,11 @@ describe("CLI reconnect scheduler", () => {
 
 class FakeTimer implements CliTimer {
   readonly delays: number[] = [];
-  private callbacks: Array<{ readonly delay: number; readonly callback: () => void; cancelled: boolean }> = [];
+  private callbacks: Array<{
+    readonly delay: number;
+    readonly callback: () => void;
+    cancelled: boolean;
+  }> = [];
 
   get pendingCount(): number {
     return this.callbacks.filter((item) => !item.cancelled).length;

@@ -129,12 +129,17 @@ it("reuses the exact stored WorkspaceRef and fails on another path", () => {
   const session = makeSession({ defaultWorkspace: workspace });
   expect(resolveSessionWorkspace(session, [], "C:\\workspace\\project")).toEqual({ workspace });
   expect(resolveSessionWorkspace(session, [], "C:\\other")).toEqual({
-    error: "This Session belongs to another workspace. Start Caelush from that workspace to resume it.",
+    error:
+      "This Session belongs to another workspace. Start Caelush from that workspace to resume it.",
   });
 });
 
 it("hydrates only public chronological transcript and includes an active goal once", () => {
-  const runs = [completedVerifiedRun("second", "answer 2", 2), failedRun("first", 1), activeRun("active", 3)];
+  const runs = [
+    completedVerifiedRun("second", "answer 2", 2),
+    failedRun("first", 1),
+    activeRun("active", 3),
+  ];
   expect(hydrateSessionTranscript(runs, runs[2]!.id)).toMatchObject([
     { kind: "USER", text: "first" },
     { kind: "RUN_TERMINAL" },
@@ -251,11 +256,23 @@ it("calls onOpen once after a successful response and reader creation", async ()
   const client = new CaelushClient({
     baseUrl: "http://daemon.test",
     fetch: async () =>
-      new Response(new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } }), {
-        status: 200,
-      }),
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.close();
+          },
+        }),
+        {
+          status: 200,
+        },
+      ),
   });
-  for await (const _event of client.watchRunEvents(createRunId(), { onOpen: () => { opens += 1; } })) {}
+  for await (const _event of client.watchRunEvents(createRunId(), {
+    onOpen: () => {
+      opens += 1;
+    },
+  })) {
+  }
   expect(opens).toBe(1);
 });
 
@@ -266,7 +283,11 @@ it("does not call onOpen for HTTP, fetch, body, or pre-open abort failures", asy
     clientReturning(new Response(null, { status: 200 })),
   ]) {
     let opens = 0;
-    const iterator = client.watchRunEvents(createRunId(), { onOpen: () => { opens += 1; } });
+    const iterator = client.watchRunEvents(createRunId(), {
+      onOpen: () => {
+        opens += 1;
+      },
+    });
     await expect(iterator.next()).rejects.toBeInstanceOf(Error);
     expect(opens).toBe(0);
   }
@@ -274,7 +295,16 @@ it("does not call onOpen for HTTP, fetch, body, or pre-open abort failures", asy
   abortController.abort();
   let opens = 0;
   const aborted = clientReturning(new Response(new ReadableStream<Uint8Array>(), { status: 200 }));
-  await expect(aborted.watchRunEvents(createRunId(), { signal: abortController.signal, onOpen: () => { opens += 1; } }).next()).resolves.toMatchObject({ done: true });
+  await expect(
+    aborted
+      .watchRunEvents(createRunId(), {
+        signal: abortController.signal,
+        onOpen: () => {
+          opens += 1;
+        },
+      })
+      .next(),
+  ).resolves.toMatchObject({ done: true });
   expect(opens).toBe(0);
 });
 
@@ -283,7 +313,12 @@ function clientReturning(response: Response): CaelushClient {
 }
 
 function clientThrowing(error: Error): CaelushClient {
-  return new CaelushClient({ baseUrl: "http://daemon.test", fetch: async () => { throw error; } });
+  return new CaelushClient({
+    baseUrl: "http://daemon.test",
+    fetch: async () => {
+      throw error;
+    },
+  });
 }
 ```
 
@@ -391,8 +426,15 @@ git commit -m "feat(cli): add bounded SSE reconnect scheduler"
 
 ```ts
 it("uses --continue to select the latest current-workspace Session without creating one", async () => {
-  const client = makeClient({ listSessions: async () => ({ items: [sessionWithWorkspace()] }), listRuns: async () => ({ items: [completedRun()] }) });
-  const controller = new CliConversationController({ client, workspacePath: "C:\\workspace\\project", launchIntent: { kind: "CONTINUE" } });
+  const client = makeClient({
+    listSessions: async () => ({ items: [sessionWithWorkspace()] }),
+    listRuns: async () => ({ items: [completedRun()] }),
+  });
+  const controller = new CliConversationController({
+    client,
+    workspacePath: "C:\\workspace\\project",
+    launchIntent: { kind: "CONTINUE" },
+  });
   await controller.bootstrap();
   expect(client.createSession).not.toHaveBeenCalled();
   expect(controller.getState().session?.id).toBeDefined();
@@ -401,8 +443,15 @@ it("uses --continue to select the latest current-workspace Session without creat
 it("resumes the exact WorkspaceRef identity and applies current daemon security defaults to a new Run", async () => {
   const workspace = { id: createWorkspaceId(), path: "C:\\workspace\\project" };
   const session = sessionWithWorkspace(workspace);
-  const client = makeClient({ getSession: async () => session, listRuns: async () => ({ items: [] }) });
-  const controller = new CliConversationController({ client, workspacePath: workspace.path, launchIntent: { kind: "RESUME_EXACT", sessionId: session.id } });
+  const client = makeClient({
+    getSession: async () => session,
+    listRuns: async () => ({ items: [] }),
+  });
+  const controller = new CliConversationController({
+    client,
+    workspacePath: workspace.path,
+    launchIntent: { kind: "RESUME_EXACT", sessionId: session.id },
+  });
   await controller.bootstrap();
   await controller.submitPrompt("new turn");
   expect(client.createRun).toHaveBeenCalledWith(session.id, expect.objectContaining({ workspace }));
@@ -471,8 +520,14 @@ it("checks pending approvals before recovering a WAITING_APPROVAL Run", async ()
   const run = makeRun({ status: "WAITING_APPROVAL" });
   const calls: string[] = [];
   const controller = await bootResumedController(run, {
-    listPendingApprovals: async () => { calls.push("approvals"); return { items: [makeApproval() ] }; },
-    recoverRun: async () => { calls.push("recover"); return actionResponse(run, "RECOVER"); },
+    listPendingApprovals: async () => {
+      calls.push("approvals");
+      return { items: [makeApproval()] };
+    },
+    recoverRun: async () => {
+      calls.push("recover");
+      return actionResponse(run, "RECOVER");
+    },
   });
   expect(calls).toEqual(["approvals"]);
   expect(controller.getState().controlMode).toBe("APPROVAL");

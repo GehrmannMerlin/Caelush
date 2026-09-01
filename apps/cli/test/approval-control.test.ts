@@ -64,7 +64,9 @@ describe("CLI Approval control", () => {
     const controller = await boot(client);
     pending = false;
 
-    await expect(controller.resolveApproval(approval.id, { action: "REJECT" })).resolves.toBe(false);
+    await expect(controller.resolveApproval(approval.id, { action: "REJECT" })).resolves.toBe(
+      false,
+    );
     expect(resolveApproval).not.toHaveBeenCalled();
     expect(controller.getState().controlMode).not.toBe("APPROVAL");
     controller.dispose();

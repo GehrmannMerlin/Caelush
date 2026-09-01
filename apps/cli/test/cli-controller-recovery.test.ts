@@ -23,7 +23,9 @@ describe("CLI active Run recovery", () => {
   it("starts a recovered PENDING Run only after explicit confirmation", async () => {
     const pending = makeRun({ status: "PENDING" });
     const started = makeRun({ id: pending.id, status: "RUNNING" });
-    const startRun = vi.fn(async (): Promise<RunActionResponse> => actionResponse(started, "START"));
+    const startRun = vi.fn(async (): Promise<RunActionResponse> =>
+      actionResponse(started, "START"),
+    );
     const client = makeClient({
       listRuns: async (): Promise<RunListResponse> => ({ items: [pending] }),
       startRun,
@@ -193,7 +195,10 @@ function makeApproval(runId: ClientAgentRun["id"]) {
   });
 }
 
-function actionResponse(run: ClientAgentRun, action: RunActionResponse["action"]): RunActionResponse {
+function actionResponse(
+  run: ClientAgentRun,
+  action: RunActionResponse["action"],
+): RunActionResponse {
   return {
     runId: run.id,
     action,

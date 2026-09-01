@@ -17,6 +17,7 @@ import type {
   SessionListQuery,
   SessionListResponse,
   SessionId,
+  RunStatus,
   WorkspaceRef,
 } from "@caelush/protocol";
 import { createWorkspaceId, VerifiedRunFinalResultSchema } from "@caelush/protocol";
@@ -31,7 +32,8 @@ import {
 } from "./cli-state.js";
 import { toSafeCliError } from "../bootstrap/safe-errors.js";
 import { createInitialCliTimelineState } from "./timeline-model.js";
-import { createApprovalView } from "./cli-control.js";
+import { canCancelRunStatus, createApprovalView, isTerminalRunStatus } from "./cli-control.js";
+import { CliReconnectScheduler, type CliTimer } from "./reconnect-scheduler.js";
 import {
   hydrateSessionTranscript,
   listMatchingSessionCandidates,
@@ -41,6 +43,13 @@ import {
 import { runStatusLabel } from "./timeline-model.js";
 
 export const MAX_CLI_PROMPT_BYTES = 32 * 1024;
+
+const systemCliTimer: CliTimer = {
+  schedule(delayMs, callback) {
+    const timeout = setTimeout(callback, delayMs);
+    return { cancel: () => clearTimeout(timeout) };
+  },
+};
 
 export interface CliDaemonClient {
   getHealth(options?: { readonly signal?: AbortSignal }): Promise<HealthResponse>;
@@ -88,6 +97,7 @@ export interface CliConversationControllerOptions {
   readonly client: CliDaemonClient;
   readonly workspacePath: string;
   readonly launchIntent?: LaunchIntent;
+  readonly timer?: CliTimer;
 }
 
 interface ActiveRun {
@@ -95,6 +105,7 @@ interface ActiveRun {
   readonly streamAbortController: AbortController;
   readonly generation: number;
   readonly recoverOnOpen: boolean;
+  readonly reconnectAttempt?: number;
   recoveryAdmitted: boolean;
   terminalSettlement?: Promise<void>;
 }
@@ -110,12 +121,19 @@ export class CliConversationController {
   private pendingStartInFlight = false;
   private streamGeneration = 0;
   private controlGeneration = 0;
+  private cancelPromise: Promise<boolean> | undefined;
   private readonly approvalInFlight = new Set<ApprovalRequestId>();
+  private readonly reconnectScheduler: CliReconnectScheduler;
   private historySequence = 0;
   private disposed = false;
 
   constructor(private readonly options: CliConversationControllerOptions) {
     this.currentWorkspacePath = resolve(options.workspacePath);
+    this.reconnectScheduler = new CliReconnectScheduler({
+      timer: options.timer ?? systemCliTimer,
+      onAttempt: (attempt) => this.retryActiveStream(attempt),
+      onExhausted: () => this.markTransportDisconnected(),
+    });
   }
 
   getState(): CliViewState {
@@ -198,6 +216,9 @@ export class CliConversationController {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.streamGeneration += 1;
+    this.controlGeneration += 1;
+    this.reconnectScheduler.dispose();
     this.activeRun?.streamAbortController.abort();
     this.listeners.clear();
   }
@@ -258,6 +279,56 @@ export class CliConversationController {
     return true;
   }
 
+  moveSessionSelection(delta: -1 | 1): void {
+    if (this.state.controlMode !== "SESSION_PICKER") return;
+    this.publish({
+      ...this.state,
+      sessionSelectionIndex: boundedIndex(
+        this.state.sessionSelectionIndex + delta,
+        this.state.sessionCandidates.length,
+      ),
+    });
+  }
+
+  moveRecoverySelection(delta: -1 | 1): void {
+    if (this.state.controlMode !== "RUN_RECOVERY_PICKER") return;
+    this.publish({
+      ...this.state,
+      recoverySelectionIndex: boundedIndex(
+        this.state.recoverySelectionIndex + delta,
+        this.state.recoveryCandidates.length,
+      ),
+    });
+  }
+
+  moveApprovalSelection(delta: -1 | 1): void {
+    const approvalState = this.state.approvalState;
+    if (
+      this.state.controlMode !== "APPROVAL" ||
+      approvalState === undefined ||
+      approvalState.submitting
+    ) {
+      return;
+    }
+    const request = approvalState.requests[approvalState.selectedRequestIndex];
+    if (request === undefined) return;
+    const selectedIndex = boundedIndex(request.selectedIndex + delta, request.options.length);
+    const requests = approvalState.requests.map((item, index) =>
+      index === approvalState.selectedRequestIndex ? { ...item, selectedIndex } : item,
+    );
+    this.publish({ ...this.state, approvalState: { ...approvalState, requests } });
+  }
+
+  closeApproval(): void {
+    if (this.state.controlMode !== "APPROVAL") return;
+    this.publish({ ...this.state, controlMode: "NONE" });
+  }
+
+  closePendingRunConfirmation(): void {
+    if (this.state.controlMode !== "PENDING_RUN_CONFIRMATION") return;
+    this.publish({ ...this.state, controlMode: "NONE" });
+  }
+
   async confirmPendingRun(start: boolean): Promise<boolean> {
     if (
       !start ||
@@ -272,7 +343,8 @@ export class CliConversationController {
     try {
       const response = await this.options.client.startRun(runId);
       if (this.state.activeRun?.runId !== runId) return false;
-      const { pendingRunId: _pendingRunId, ...stateWithoutPendingRun } = this.state;
+      const stateWithoutPendingRun = { ...this.state };
+      delete stateWithoutPendingRun.pendingRunId;
       const nextState: CliViewState = {
         ...stateWithoutPendingRun,
         controlMode: "NONE",
@@ -343,16 +415,53 @@ export class CliConversationController {
   }
 
   async cancelActiveRun(): Promise<boolean> {
-    return false;
+    if (this.cancelPromise !== undefined) return this.cancelPromise;
+    const active = this.activeRun;
+    const status = this.state.activeRun?.status;
+    if (active === undefined || status === undefined || !canCancelRunStatus(status)) return false;
+
+    const generation = ++this.controlGeneration;
+    this.reconnectScheduler.succeeded();
+    this.publish({
+      ...this.state,
+      controlMode: "CANCELLING",
+      composerEnabled: false,
+      activity: "Cancelling",
+    });
+    const promise = this.performCancel(active, generation);
+    this.cancelPromise = promise;
+    try {
+      return await promise;
+    } finally {
+      if (this.cancelPromise === promise) this.cancelPromise = undefined;
+    }
   }
 
   detachActiveRun(): void {
-    this.activeRun?.streamAbortController.abort();
+    const active = this.activeRun;
+    if (active === undefined) return;
+    this.streamGeneration += 1;
+    this.controlGeneration += 1;
+    active.streamAbortController.abort();
     this.activeRun = undefined;
+    const withoutActiveRun = { ...this.state };
+    delete withoutActiveRun.activeRun;
+    this.publish({
+      ...withoutActiveRun,
+      controlMode: "NONE",
+      composerEnabled: false,
+      notice: "The active Run continues in the local daemon.",
+    });
   }
 
   reconnectActiveRun(): void {
-    // Stream reconnect is implemented by the transport recovery phase.
+    if (this.activeRun === undefined || this.state.transportState !== "DISCONNECTED") return;
+    this.publish({
+      ...this.state,
+      transportState: "RECONNECTING",
+      transportError: "Reconnecting to the local Agent service.",
+    });
+    this.reconnectScheduler.manualRetry();
   }
 
   private async bootstrapLaunch(info: DaemonInfo): Promise<void> {
@@ -380,7 +489,9 @@ export class CliConversationController {
           bootstrap: "READY",
           controlMode: "SESSION_PICKER",
           sessionCandidates: candidates,
+          sessionSelectionIndex: 0,
           recoveryCandidates: [],
+          recoverySelectionIndex: 0,
           composerEnabled: false,
           activity: "Ready",
         });
@@ -424,7 +535,9 @@ export class CliConversationController {
       session,
       displayHistory,
       sessionCandidates: [],
+      sessionSelectionIndex: 0,
       recoveryCandidates: activeRuns.length > 1 ? activeRuns : [],
+      recoverySelectionIndex: 0,
       composerEnabled: activeRuns.length === 0,
       controlMode:
         activeRuns.length > 1
@@ -433,9 +546,7 @@ export class CliConversationController {
             ? "PENDING_RUN_CONFIRMATION"
             : "NONE",
       activity:
-        activeRuns.length === 0
-          ? "Ready"
-          : (runStatusLabel(activeRuns[0]!.status) as CliActivity),
+        activeRuns.length === 0 ? "Ready" : (runStatusLabel(activeRuns[0]!.status) as CliActivity),
       ...(activeRuns.length === 1
         ? { activeRun: { runId: activeRuns[0]!.id, status: activeRuns[0]!.status } }
         : {}),
@@ -515,7 +626,8 @@ export class CliConversationController {
     if (approvalState === undefined) return;
     const requests = approvalState.requests.filter((request) => request.id !== approvalId);
     if (requests.length === 0) {
-      const { approvalState: _approvalState, ...withoutApproval } = this.state;
+      const withoutApproval = { ...this.state };
+      delete withoutApproval.approvalState;
       this.publish({ ...withoutApproval, controlMode: "NONE" });
       return;
     }
@@ -545,7 +657,8 @@ export class CliConversationController {
       if (generation !== this.controlGeneration || this.activeRun?.runId !== runId) return;
       this.updateActiveRun(run);
       if (approvals.items.length === 0) {
-        const { approvalState: _approvalState, ...withoutApproval } = this.state;
+        const withoutApproval = { ...this.state };
+        delete withoutApproval.approvalState;
         this.publish({ ...withoutApproval, controlMode: "NONE" });
         return;
       }
@@ -553,15 +666,18 @@ export class CliConversationController {
         ...this.state,
         controlMode: "APPROVAL",
         approvalState: {
-          requests: approvals.items.slice().sort((left, right) =>
-            left.createdAt !== right.createdAt
-              ? left.createdAt - right.createdAt
-              : left.id < right.id
-                ? -1
-                : left.id > right.id
-                  ? 1
-                  : 0,
-          ).map(createApprovalView),
+          requests: approvals.items
+            .slice()
+            .sort((left, right) =>
+              left.createdAt !== right.createdAt
+                ? left.createdAt - right.createdAt
+                : left.id < right.id
+                  ? -1
+                  : left.id > right.id
+                    ? 1
+                    : 0,
+            )
+            .map(createApprovalView),
           selectedRequestIndex: 0,
           submitting: false,
         },
@@ -571,25 +687,31 @@ export class CliConversationController {
     }
   }
 
-  private attachActiveRun(run: ClientAgentRun, recoverOnOpen: boolean): ActiveRun {
+  private attachActiveRun(
+    run: Pick<ClientAgentRun, "id" | "status">,
+    recoverOnOpen: boolean,
+    resetTimeline = true,
+    reconnectAttempt?: number,
+  ): ActiveRun {
     this.activeRun?.streamAbortController.abort();
     const active: ActiveRun = {
       runId: run.id,
       streamAbortController: new AbortController(),
       generation: ++this.streamGeneration,
       recoverOnOpen,
+      ...(reconnectAttempt === undefined ? {} : { reconnectAttempt }),
       recoveryAdmitted: false,
     };
     this.activeRun = active;
     this.publish({
       ...this.state,
-      timeline: createInitialCliTimelineState(run.id),
+      ...(resetTimeline ? { timeline: createInitialCliTimelineState(run.id) } : {}),
       activeRun: { runId: run.id, status: run.status },
       composerEnabled: false,
     });
     try {
       const stream = this.options.client.watchRunEvents(run.id, {
-        afterSequence: 0,
+        afterSequence: resetTimeline ? 0 : this.state.timeline.lastDurableSequence,
         signal: active.streamAbortController.signal,
         onOpen: () => this.handleStreamOpen(active),
       });
@@ -602,8 +724,13 @@ export class CliConversationController {
 
   private handleStreamOpen(active: ActiveRun): void {
     if (this.activeRun !== active || this.disposed) return;
-    const nextState = { ...this.state, transportState: "CONNECTED" as const };
-    delete nextState.transportError;
+    this.reconnectScheduler.succeeded();
+    const withoutTransportError = { ...this.state };
+    delete withoutTransportError.transportError;
+    const nextState = {
+      ...withoutTransportError,
+      transportState: "CONNECTED" as const,
+    };
     this.publish(nextState);
     if (!active.recoverOnOpen || active.recoveryAdmitted) return;
     active.recoveryAdmitted = true;
@@ -621,6 +748,36 @@ export class CliConversationController {
     }
   }
 
+  private async performCancel(active: ActiveRun, generation: number): Promise<boolean> {
+    try {
+      const response = await this.options.client.cancelRun(active.runId);
+      if (generation !== this.controlGeneration || this.activeRun !== active) return false;
+      if (isTerminalRunStatus(response.run.status)) {
+        if (active.terminalSettlement === undefined) {
+          active.terminalSettlement = this.settleCanonicalRun(active, response.run);
+        }
+        await active.terminalSettlement;
+        return true;
+      }
+      this.updateActiveRun(response.run);
+      this.publish({
+        ...this.state,
+        controlMode: this.state.approvalState === undefined ? "NONE" : "APPROVAL",
+        activity: runStatusLabel(response.run.status) as CliActivity,
+      });
+      return response.disposition !== "SETTLED";
+    } catch {
+      if (generation !== this.controlGeneration || this.activeRun !== active) return false;
+      this.publish({
+        ...this.state,
+        controlMode: this.state.approvalState === undefined ? "NONE" : "APPROVAL",
+        activity: runStatusLabel(activeStatus(this.state, active.runId)) as CliActivity,
+        controlError: "Cancellation could not be confirmed. The Run may still be active.",
+      });
+      return false;
+    }
+  }
+
   private updateActiveRun(run: ClientAgentRun): void {
     if (this.activeRun?.runId !== run.id) return;
     this.publish({
@@ -634,17 +791,34 @@ export class CliConversationController {
   }
 
   private handleStreamFailure(active: ActiveRun, error: unknown): void {
-    if (
-      this.activeRun !== active ||
-      this.disposed ||
-      active.streamAbortController.signal.aborted
-    ) {
+    if (this.activeRun !== active || this.disposed || active.streamAbortController.signal.aborted) {
       return;
     }
     this.publish({
       ...this.state,
+      transportState: "RECONNECTING",
       activity: "Transport error",
       transportError: toSafeCliError(error),
+    });
+    if (active.reconnectAttempt === undefined) this.reconnectScheduler.start();
+    else this.reconnectScheduler.failed();
+  }
+
+  private retryActiveStream(attempt: number): void {
+    if (this.activeRun === undefined || this.disposed) return;
+    const run = this.state.activeRun;
+    if (run === undefined) return;
+    this.attachActiveRun({ id: run.runId, status: run.status }, true, false, attempt);
+  }
+
+  private markTransportDisconnected(): void {
+    if (this.disposed || this.activeRun === undefined) return;
+    this.publish({
+      ...this.state,
+      transportState: "DISCONNECTED",
+      activity: "Transport error",
+      transportError:
+        "Connection to the local Agent service was lost. The Run may still be active. Press R to reconnect.",
     });
   }
 
@@ -696,6 +870,10 @@ export class CliConversationController {
 
   private async settleTerminal(active: ActiveRun): Promise<void> {
     const run = await this.options.client.getRun(active.runId);
+    await this.settleCanonicalRun(active, run);
+  }
+
+  private async settleCanonicalRun(active: ActiveRun, run: ClientAgentRun): Promise<void> {
     if (this.activeRun !== active || this.disposed) return;
 
     const finalResult = VerifiedRunFinalResultSchema.safeParse(run.finalResult);
@@ -720,12 +898,17 @@ export class CliConversationController {
     this.activeRun = undefined;
     const nextState = { ...this.state };
     delete nextState.activeRun;
+    delete nextState.approvalState;
+    delete nextState.pendingRunId;
     delete nextState.fatalError;
+    delete nextState.controlError;
+    delete nextState.transportError;
     this.publish({
       ...nextState,
+      controlMode: "NONE",
       displayHistory: [...this.state.displayHistory, transcriptEntry],
       composerEnabled: true,
-      activity: run.status === "COMPLETED" && finalResult.success ? "Ready" : "Terminal error",
+      activity: runStatusLabel(run.status) as CliActivity,
     });
   }
 
@@ -763,4 +946,13 @@ class CliResumeError extends Error {
     super(message);
     this.name = "CliResumeError";
   }
+}
+
+function activeStatus(state: CliViewState, runId: RunId): RunStatus {
+  return state.activeRun?.runId === runId ? state.activeRun.status : "RUNNING";
+}
+
+function boundedIndex(index: number, length: number): number {
+  if (length <= 0) return 0;
+  return Math.max(0, Math.min(index, length - 1));
 }

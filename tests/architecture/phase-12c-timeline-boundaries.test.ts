@@ -10,7 +10,8 @@ describe("Phase 12C timeline boundaries", () => {
     expect(source).toMatch(/@caelush\/client/);
     expect(source).toMatch(/@caelush\/protocol/);
     expect(source).not.toMatch(/@caelush\/(core|storage|runtime|security|tools|verification|llm)/);
-    expect(source).not.toMatch(/setTimeout|setInterval|fetch\s*\(|node:fs|toolCallId/);
+    // Phase 12D adds an injected reconnect scheduler and one system timer adapter.
+    expect(source).not.toMatch(/fetch\s*\(|node:fs|toolCallId/);
     expect(source.match(/<Static\b/g)).toHaveLength(1);
   });
 

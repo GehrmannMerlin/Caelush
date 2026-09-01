@@ -65,10 +65,11 @@ payload.
 
 An unreachable daemon and protocol/configuration mismatch render one sanitized
 fatal message and exit with code 1. A stream failure is a transport activity, not
-a durable `FAILED` transition; the CLI does not call `cancelRun()` and has no
-automatic reconnect. `dispose()` aborts only the local SSE reader. If the user
-exits while a Run is active, the process exits locally and reports that the active
-Run continues in the local daemon.
+a durable `FAILED` transition. Phase 12D adds a bounded controller-owned
+reconnect policy, explicit `R` retry, and typed cancellation; `dispose()` and
+`Ctrl+D` still abort only the local SSE reader. If the user detaches while a Run
+is active, the process exits locally and reports that the active Run continues
+in the local daemon.
 
 There is no automatic reconnect in Phase 12B or 12C. Phase 12C only consumes
 the existing typed `AgentEvent` watch; it does not add reconnect, cancellation
@@ -100,6 +101,8 @@ plain text is used without a Markdown or syntax-rendering layer.
 
 Phase 12C adds the read-only Agent timeline described in
 [CLI Agent Timeline](cli-agent-timeline.md). The timeline is a projection of
-daemon events, not a second execution state machine. Phase 12B/12C still do not
-add approval interaction, cancellation controls, reconnect/resume UX, daemon
-auto-start, model picker, Web UI, or packaging.
+daemon events, not a second execution state machine. Phase 12B/12C do not own
+approval interaction, cancellation controls, or reconnect/resume UX. Phase 12D
+adds those thin host controls without moving authority into Ink. Daemon
+auto-start, model picker, Web UI, packaging and the Phase 12E production-
+hardening boundary remain deferred.

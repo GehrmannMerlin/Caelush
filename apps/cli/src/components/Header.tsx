@@ -13,6 +13,8 @@ export function Header({ state }: { readonly state: CliViewState }) {
       </Text>
       <Text>Project: {project}</Text>
       <Text>Model: {modelText}</Text>
+      <Text>Transport: {state.transportState}</Text>
+      {state.controlMode === "NONE" ? null : <Text>Control: {state.controlMode}</Text>}
     </Box>
   );
 }

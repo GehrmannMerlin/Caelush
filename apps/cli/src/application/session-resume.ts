@@ -40,12 +40,7 @@ export function deriveSessionActivity(
   session: ClientAgentSession,
   latestRun: ClientAgentRun | undefined,
 ): number {
-  return (
-    latestRun?.finishedAt ??
-    latestRun?.startedAt ??
-    latestRun?.createdAt ??
-    session.updatedAt
-  );
+  return latestRun?.finishedAt ?? latestRun?.startedAt ?? latestRun?.createdAt ?? session.updatedAt;
 }
 
 export function sortSessionCandidates(

@@ -70,8 +70,11 @@ client additionally checks:
 Heartbeat comments are ignored. Ephemeral events do not move the durable cursor.
 The last durable sequence is therefore available from the yielded event identity
 (`event.durability.sequence`), and the caller can explicitly pass that sequence to
-a new watch request after reconnecting. The client currently has no automatic
-reconnect policy, backoff, deduplication cache, or UI timeline.
+a new watch request after reconnecting. The client intentionally still has no
+automatic reconnect policy, backoff, deduplication cache, or UI timeline. Phase
+12D places the bounded reconnect policy in the CLI controller around this
+transport; the shared client remains an explicit-cursor, provider-independent
+HTTP/SSE adapter.
 
 The daemon remains the authoritative source: its SSE implementation consumes
 `EventBus.watch()`, uses exclusive durable replay, and joins replay to the live
@@ -121,7 +124,9 @@ the canonical Run once after a terminal event. The controller owns only view sta
 and local stream disposal; the daemon remains the authority for status, verified
 final results, and durable history.
 
-The CLI does not automatically reconnect, resume, cancel, resolve Approval, or
-infer a terminal state from a missing stream. A stream failure remains a safe
-transport activity and the active Run lock remains in place until a future host
-experience provides an explicit recovery policy.
+The Phase 12B/12C CLI did not automatically reconnect, resume, cancel, or
+resolve Approval. Phase 12D adds those policies in `apps/cli`, while this
+package still only validates transport and forwards typed actions. A stream
+failure remains a safe transport activity and the active Run lock remains in
+place until the CLI controller explicitly recovers, cancels, detaches, or
+observes canonical terminal state.

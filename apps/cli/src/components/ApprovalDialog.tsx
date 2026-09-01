@@ -10,11 +10,7 @@ export interface ApprovalDialogProps {
   readonly onClose: () => void;
 }
 
-export function ApprovalDialog({
-  approval,
-  selectedIndex,
-  submitting,
-}: ApprovalDialogProps) {
+export function ApprovalDialog({ approval, selectedIndex, submitting }: ApprovalDialogProps) {
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1}>
       <Text color="yellow">{approval.title}</Text>

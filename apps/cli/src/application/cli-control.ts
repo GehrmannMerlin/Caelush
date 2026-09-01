@@ -79,9 +79,7 @@ export type CliInputAction =
   | { readonly kind: "NONE" };
 
 export function approvalOptions(scope: ApprovalScope): readonly CliApprovalOption[] {
-  const options: CliApprovalOption[] = [
-    { kind: "APPROVE_ONCE", label: "Approve once" },
-  ];
+  const options: CliApprovalOption[] = [{ kind: "APPROVE_ONCE", label: "Approve once" }];
   if (scope === "RUN") {
     options.push({ kind: "APPROVE_RUN", label: "Approve this action for this Run" });
   }
@@ -152,9 +150,24 @@ export function routeCliInput(
   }
 
   if (state.controlMode === "APPROVAL") {
+    if (
+      key.ctrl &&
+      input.toLowerCase() === "c" &&
+      state.activeRun !== undefined &&
+      canCancelRunStatus(state.activeRun.status)
+    ) {
+      return { kind: "CANCEL" };
+    }
+    if (key.ctrl && input.toLowerCase() === "d" && state.activeRun !== undefined) {
+      return { kind: "DETACH" };
+    }
     if (key.escape) return { kind: "APPROVAL_CLOSE" };
     if (state.approvalState?.submitting) return { kind: "NONE" };
-    if (key.return && state.approvalState?.requests.length !== 0) {
+    if (
+      key.return &&
+      state.approvalState !== undefined &&
+      state.approvalState.requests.length > 0
+    ) {
       return { kind: "APPROVAL_SUBMIT" };
     }
     if (key.upArrow) return { kind: "APPROVAL_MOVE", delta: -1 };
@@ -184,7 +197,11 @@ export function routeCliInput(
     if (key.ctrl && input.toLowerCase() === "d") return { kind: "DETACH" };
   }
 
-  if (state.activeRun === undefined && key.ctrl && (input === "c" || input === "d")) {
+  if (
+    state.activeRun === undefined &&
+    key.ctrl &&
+    (input.toLowerCase() === "c" || input.toLowerCase() === "d")
+  ) {
     return { kind: "EXIT" };
   }
   if (state.composerEnabled) return { kind: "COMPOSER" };

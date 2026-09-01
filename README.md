@@ -2,7 +2,7 @@
 
 Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI、Web 和其他宿主共享同一个可观察、可取消、可验证、可扩展的 Agent Core。
 
-本轮当前阶段为 **V1 Phase 12C：Live Agent Timeline & Process Visualization**；Phase 8A/8B/8C/8D、Phase 9A/9B/9C/9D、Phase 10A/10B/10C/10D 与 Phase 11A/11B/11C/11D 已完成。Phase 12A 将已完成的 Agent Kernel 通过生产级 Local Agent Service 暴露为 typed HTTP control APIs、durable SSE replay 和共享的 browser-compatible `@caelush/client`；Phase 12B 在其上增加一个真正的 Ink CLI host，以及由 daemon 派生的 verified Session history；Phase 12C 继续将真实 AgentEvent 投影为 bounded 的 live Agent Timeline 与 Process visualization。Phase 12C 是当前完成边界，Phase 12D–12E 尚未开始。
+本轮当前阶段为 **V1 Phase 12D：Interactive Approval, Cancellation & Session Recovery**；Phase 8A/8B/8C/8D、Phase 9A/9B/9C/9D、Phase 10A/10B/10C/10D 与 Phase 11A/11B/11C/11D 已完成。Phase 12A 将已完成的 Agent Kernel 通过生产级 Local Agent Service 暴露为 typed HTTP control APIs、durable SSE replay 和共享的 browser-compatible `@caelush/client`；Phase 12B 在其上增加一个真正的 Ink CLI host，以及由 daemon 派生的 verified Session history；Phase 12C 继续将真实 AgentEvent 投影为 bounded 的 live Agent Timeline 与 Process visualization；Phase 12D 增加 typed interactive control intents、Approval resolution、Run cancellation、Session resume、active Run recovery 和 bounded SSE reconnect。Phase 12D 是当前完成边界，Phase 12E 尚未开始。
 
 当前仓库已经完成 Phase 1–7 以及 Phase 8A/8B/8C/8D；Phase 8D 增加 tool-independent 的只读 Git Runtime、`git_status`/`git_diff`、统一默认 Built-in catalog、纯 Tool Effects、AgentState 投影和原子 Tool settlement。Phase 9A 增加独立的 `@caelush/security` policy kernel、Run-derived `ToolSecurityContext` 与真实 `ToolExecutionGate`；Phase 9B 增加 durable Approval workflow、精确 grant matching、lazy expiry 与 Tool/Run recovery；Phase 9C 增加 sensitive resource/command policy、host-only facts、high-confidence secret redaction 和 sanitize-before-persist，但不实现 OS hard sandbox；Phase 10A 增加 user-requested cancellation control plane 和 end-to-end abort propagation；Phase 10B 增加 Run deadline 与 Provider local timeout 的分层、超时 abort/cleanup 以及恢复安全边界；Phase 10C 增加仅 Provider 瞬态失败的 bounded retry/backoff、持久化等待边界、事件审计与崩溃恢复；Phase 10D 增加 durable budget ledger、Tool/LLM admission、保守 usage accounting、预算优先级和终止清理。Phase 10D 不实现 Verification execution、公共 budget UI/API 或 `COMPLETED` transition。
 
@@ -56,9 +56,11 @@ Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI�
 - Phase 12A — Production Daemon Execution Surface & Shared Client Transport: **COMPLETED**
 - Phase 12B — CLI Application Shell & Durable Conversation Lifecycle: **COMPLETED**
 - Phase 12C — Live Agent Timeline & Process Visualization: **COMPLETED**
-- Phase 12D — Interactive Approval, Cancellation & Session Recovery: **NOT STARTED**
+- Phase 12D — Interactive Approval, Cancellation & Session Recovery: **COMPLETED**
 - Phase 12E — Production Hardening, Packaging & CLI E2E: **NOT STARTED**
 - Phase 12 — overall: **IN PROGRESS**
+
+Phase 12D details are documented in [CLI Interactive Control](docs/architecture/cli-interactive-control.md), [CLI Session Resume and Active Run Recovery](docs/architecture/cli-session-recovery.md), and [CLI Transport and SSE Recovery](docs/architecture/cli-transport-recovery.md). The CLI remains a thin client: Approval, cancellation, Run recovery, workspace identity, durable replay and terminal authority stay in the daemon/Core boundary. `Ctrl+C` sends one typed cancellation action for an active Run; `Ctrl+D` detaches only the local host. Resume matching is exact and workspace-bound, and reconnect uses the existing durable cursor with a bounded deterministic scheduler. Phase 12E remains explicitly deferred.
 
 Phase 7 contains exactly 7A, 7B, and 7C. Caelush now has an immutable validated Tool Registry and a single-Tool Dispatcher. A valid call is durably recorded as `REQUESTED`, gated, durably checkpointed as `RUNNING`, executed once through the resolved handler, output-validated, and atomically settled with its `ToolObservation` and lifecycle event. Exact duplicate calls are idempotent, stale `RUNNING` calls fail closed during recovery, and raw arguments/results are kept out of lifecycle events.
 

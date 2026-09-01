@@ -6,11 +6,7 @@ import type {
   RunStatus,
   WorkspaceRef,
 } from "@caelush/protocol";
-import type {
-  CliApprovalState,
-  CliControlMode,
-  CliTransportState,
-} from "./cli-control.js";
+import type { CliApprovalState, CliControlMode, CliTransportState } from "./cli-control.js";
 import type { SessionCandidate } from "./session-resume.js";
 import {
   createInitialCliTimelineState,
@@ -37,6 +33,7 @@ export type CliActivity =
   | "Retrying"
   | "Verifying"
   | "Approval required"
+  | "Cancelling"
   | "Transport error"
   | "Completed"
   | "Failed"
@@ -68,7 +65,9 @@ export interface CliViewState {
   readonly daemonInfo?: DaemonInfo;
   readonly session?: ClientAgentSession;
   readonly sessionCandidates: readonly SessionCandidate[];
+  readonly sessionSelectionIndex: number;
   readonly recoveryCandidates: readonly ClientAgentRun[];
+  readonly recoverySelectionIndex: number;
   readonly approvalState?: CliApprovalState;
   readonly pendingRunId?: RunId;
   readonly displayHistory: readonly CliDisplayHistoryEntry[];
@@ -90,7 +89,9 @@ export function createInitialCliState(): CliViewState {
     transportState: "CONNECTED",
     controlMode: "NONE",
     sessionCandidates: [],
+    sessionSelectionIndex: 0,
     recoveryCandidates: [],
+    recoverySelectionIndex: 0,
     displayHistory: [],
     timeline: createInitialCliTimelineState(),
     composerEnabled: false,

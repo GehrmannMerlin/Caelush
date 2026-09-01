@@ -48,7 +48,8 @@ describe("Session resume policies", () => {
 
     expect(resolveSessionWorkspace(session, [], home.path)).toEqual({ workspace: home });
     expect(resolveSessionWorkspace(session, [], other.path)).toEqual({
-      error: "This Session belongs to another workspace. Start Caelush from that workspace to resume it.",
+      error:
+        "This Session belongs to another workspace. Start Caelush from that workspace to resume it.",
     });
     expect(normalizeWorkspacePath("C:/workspace/project")).toBe(
       normalizeWorkspacePath("C:\\workspace\\project"),
@@ -91,8 +92,9 @@ describe("Session resume policies", () => {
       { kind: "ASSISTANT", text: "answer 2" },
       { kind: "USER", text: "active" },
     ]);
-    expect(hydrateSessionTranscript([active], active.id).filter((entry) => entry.kind === "USER"))
-      .toHaveLength(1);
+    expect(
+      hydrateSessionTranscript([active], active.id).filter((entry) => entry.kind === "USER"),
+    ).toHaveLength(1);
     expect(JSON.stringify(hydrateSessionTranscript([active], active.id))).not.toContain(
       "workspace",
     );

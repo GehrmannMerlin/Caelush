@@ -44,6 +44,10 @@ export class CliReconnectScheduler {
   }
 
   failed(): void {
+    if (this.phase === "IDLE") {
+      this.scheduleNext();
+      return;
+    }
     if (this.phase !== "ATTEMPTING") return;
     this.scheduleNext();
   }

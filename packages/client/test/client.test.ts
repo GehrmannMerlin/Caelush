@@ -230,7 +230,9 @@ describe("CaelushClient", () => {
         ),
     });
 
-    for await (const _event of client.watchRunEvents(createRunId(), { onOpen: () => (opens += 1) })) {
+    for await (const _event of client.watchRunEvents(createRunId(), {
+      onOpen: () => (opens += 1),
+    })) {
       void _event;
     }
     expect(opens).toBe(1);
