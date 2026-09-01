@@ -5,12 +5,25 @@
   "type": "module",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
     }
   },
   "scripts": {
-    "build": "tsc --build",
+    "build": "vite build",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@caelush/client": "workspace:*",
+    "@caelush/protocol": "workspace:*",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.3",
+    "typescript": "6.0.3",
+    "vite": "8.2.2"
   }
 }

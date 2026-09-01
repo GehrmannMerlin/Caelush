@@ -20,6 +20,7 @@ import { RunService } from "./services/run-service.js";
 import { registerEventStreamRoute } from "./routes/events.js";
 import { registerExecutionRoutes, type DaemonExecutionSurface } from "./routes/execution.js";
 import { registerInfoRoute } from "./routes/info.js";
+import { registerWebStaticHost, type WebStaticHostOptions } from "./web/static-host.js";
 
 export interface DaemonDependencies {
   readonly sessions: SessionRepository;
@@ -31,6 +32,7 @@ export interface DaemonDependencies {
   readonly info?: DaemonInfo;
   readonly modelCanonicalizer?: DaemonModelCanonicalizer;
   readonly logger?: boolean;
+  readonly web?: WebStaticHostOptions;
 }
 
 export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstance {
@@ -62,6 +64,7 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
     }),
   );
   if (dependencies.execution !== undefined) registerExecutionRoutes(app, dependencies.execution);
+  if (dependencies.web !== undefined) registerWebStaticHost(app, dependencies.web);
   app.after(() => {
     registerEventStreamRoute(app, {
       runs: dependencies.runs,

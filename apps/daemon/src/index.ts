@@ -13,6 +13,13 @@ export { daemonEntryPath } from "./entry.js";
 export { resolveProductPaths } from "./product-paths.js";
 export type { ProductPathEnvironment, ProductPathOptions, ProductPaths } from "./product-paths.js";
 export { DAEMON_VERSION } from "./version.js";
+export { registerWebStaticHost } from "./web/static-host.js";
+export type { WebStaticHostOptions } from "./web/static-host.js";
+export {
+  createStableWorkspaceId,
+  createWorkspaceRef,
+  normalizeWorkspaceIdentityPath,
+} from "./web/workspace-launch-context.js";
 export { checkNodePtyLoadability, inspectMigrationAssets } from "./diagnostics.js";
 export type { MigrationAssetInspection, NodePtyLoadability } from "./diagnostics.js";
 export { composeDaemon } from "./daemon-composition.js";

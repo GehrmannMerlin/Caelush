@@ -6,6 +6,7 @@ import { buildDaemonApp } from "./app.js";
 import { assertLoopbackDaemonHost, createDaemonConfig, type DaemonConfig } from "./config.js";
 import { composeDaemon, type DaemonComposition } from "./daemon-composition.js";
 import type { DaemonModelProviderConfig } from "./providers/model-canonicalizer.js";
+import type { WebStaticHostOptions } from "./web/static-host.js";
 
 export interface DaemonOptions {
   readonly databasePath: string;
@@ -16,6 +17,7 @@ export interface DaemonOptions {
   readonly providers?: readonly DaemonModelProviderConfig[];
   readonly defaultModel?: ClientModelSelection;
   readonly providerOverrides?: readonly LLMProvider[];
+  readonly web?: WebStaticHostOptions;
 }
 
 export interface DaemonHandle {
@@ -68,6 +70,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       info: composition.info,
       modelCanonicalizer: composition.modelCanonicalizer,
       ...(options.logger === undefined ? {} : { logger: options.logger }),
+      ...(options.web === undefined ? {} : { web: options.web }),
     });
   } catch (error) {
     await composition.dispose().catch(() => undefined);

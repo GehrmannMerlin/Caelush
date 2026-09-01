@@ -22,6 +22,7 @@
 ### Task 1: Record the host model and package boundaries
 
 **Files:**
+
 - Create: `apps/web/index.html`, `apps/web/src/*`, `apps/web/vite.config.ts`, `apps/web/package.json` changes.
 - Create: host model and bootstrap tests under `apps/web/test/`.
 
@@ -33,6 +34,7 @@
 ### Task 2: Add the daemon static Web host
 
 **Files:**
+
 - Create: `apps/daemon/src/web/static-host.ts` and workspace launch-context helper.
 - Modify: `apps/daemon/src/app.ts`, `apps/daemon/src/daemon.ts`, `apps/daemon/src/main.ts`, public daemon exports.
 - Create: `apps/daemon/test/web-static-host.test.ts` and workspace identity tests.
@@ -45,6 +47,7 @@
 ### Task 3: Integrate the existing launcher without duplicating the daemon
 
 **Files:**
+
 - Modify: `apps/launcher/src/main.ts`, `apps/launcher/src/daemon-discovery.ts` only if required for Web host startup.
 - Create: launcher Web host tests.
 - Modify: `scripts/build-release.mjs` only to carry compiled Web assets into the existing artifact.

@@ -86,6 +86,7 @@ export async function buildRelease(options = {}) {
       ]);
     }
     await flattenInjectedDeployment(deployDirectory);
+    await copyWebAssets(repositoryRoot, deployDirectory);
     const workspaceVersions = await readWorkspaceVersions(repositoryRoot);
     await rewritePackageManifests(deployDirectory, workspaceVersions);
     await removePnpmBuildMetadata(deployDirectory);
@@ -127,6 +128,17 @@ export async function buildRelease(options = {}) {
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
   }
+}
+
+export async function copyWebAssets(repositoryRoot, deployDirectory) {
+  const source = join(repositoryRoot, "apps", "web", "dist");
+  const destination = join(deployDirectory, "web");
+  try {
+    await stat(join(source, "index.html"));
+  } catch {
+    throw new Error("Production Web assets are unavailable. Run the Web build first.");
+  }
+  await cp(source, destination, { recursive: true, dereference: true });
 }
 
 async function readWorkspaceVersions(repositoryRoot) {

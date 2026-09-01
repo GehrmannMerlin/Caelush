@@ -26,3 +26,5 @@ export type {
   SpawnedDaemon,
 } from "./daemon-discovery.js";
 export { hasInteractiveTerminal, INTERACTIVE_TTY_ERROR } from "./tty.js";
+export { resolveWebBuildRoot, runWebHost } from "./web.js";
+export type { WebHostOptions } from "./web.js";

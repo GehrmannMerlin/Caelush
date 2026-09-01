@@ -7,6 +7,7 @@ import { HELP_TEXT } from "./help.js";
 import { nodeVersionInRange } from "./platform.js";
 import { hasInteractiveTerminal, INTERACTIVE_TTY_ERROR } from "./tty.js";
 import { PRODUCT_VERSION } from "./version.js";
+import { runWebHost } from "./web.js";
 
 export interface LauncherIo {
   readonly argv?: readonly string[];
@@ -53,6 +54,22 @@ export async function main(options: LauncherIo = {}): Promise<ProductExitCode> {
     });
     writeStdout(formatDoctorReport(result));
     return result.exitCode;
+  }
+  if (argv[0] === "web") {
+    if (argv.length !== 1) {
+      writeStderr("Invalid Caelush command-line arguments.\n");
+      return EXIT_CODES.USAGE;
+    }
+    if (!nodeVersionInRange(options.nodeVersion ?? process.versions.node)) {
+      writeStderr("Caelush requires Node.js 24.x.\n");
+      return EXIT_CODES.BOOTSTRAP_FAILURE;
+    }
+    return runWebHost({
+      ...(options.environment === undefined ? {} : { environment: options.environment }),
+      ...(options.workspacePath === undefined ? {} : { workspacePath: options.workspacePath }),
+      writeStdout,
+      writeStderr,
+    });
   }
   if (!nodeVersionInRange(options.nodeVersion ?? process.versions.node)) {
     writeStderr("Caelush requires Node.js 24.x.\n");
