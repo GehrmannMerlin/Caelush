@@ -1,8 +1,4 @@
-import {
-  createRunId,
-  createSessionId,
-  createWorkspaceId,
-} from "@caelush/protocol";
+import { createRunId, createSessionId, createWorkspaceId } from "@caelush/protocol";
 import { render } from "ink-testing-library";
 import React from "react";
 import { describe, expect, it } from "vitest";
