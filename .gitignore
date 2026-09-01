@@ -4,6 +4,7 @@ coverage/
 .vite/
 .turbo/
 .worktrees/
+release-artifacts/
 *.tsbuildinfo
 .env
 .env.*

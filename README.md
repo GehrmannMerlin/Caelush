@@ -2,7 +2,7 @@
 
 Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI、Web 和其他宿主共享同一个可观察、可取消、可验证、可扩展的 Agent Core。
 
-本轮当前阶段为 **V1 Phase 12D：Interactive Approval, Cancellation & Session Recovery**；Phase 8A/8B/8C/8D、Phase 9A/9B/9C/9D、Phase 10A/10B/10C/10D 与 Phase 11A/11B/11C/11D 已完成。Phase 12A 将已完成的 Agent Kernel 通过生产级 Local Agent Service 暴露为 typed HTTP control APIs、durable SSE replay 和共享的 browser-compatible `@caelush/client`；Phase 12B 在其上增加一个真正的 Ink CLI host，以及由 daemon 派生的 verified Session history；Phase 12C 继续将真实 AgentEvent 投影为 bounded 的 live Agent Timeline 与 Process visualization；Phase 12D 增加 typed interactive control intents、Approval resolution、Run cancellation、Session resume、active Run recovery 和 bounded SSE reconnect。Phase 12D 是当前完成边界，Phase 12E 尚未开始。
+本轮完成边界为 **V1 Phase 12E：Production Hardening, Product Launcher, Packaging & Final CLI E2E**；Phase 8A/8B/8C/8D、Phase 9A/9B/9C/9D、Phase 10A/10B/10C/10D 与 Phase 11A/11B/11C/11D 已完成。Phase 12A 将已完成的 Agent Kernel 通过生产级 Local Agent Service 暴露为 typed HTTP control APIs、durable SSE replay 和共享的 browser-compatible `@caelush/client`；Phase 12B 在其上增加一个真正的 Ink CLI host，以及由 daemon 派生的 verified Session history；Phase 12C 继续将真实 AgentEvent 投影为 bounded 的 live Agent Timeline 与 Process visualization；Phase 12D 增加 typed interactive control intents、Approval resolution、Run cancellation、Session resume、active Run recovery 和 bounded SSE reconnect；Phase 12E 增加 `caelush` Product Launcher、daemon auto-start、doctor、非交互 print host、Node 24 portable bundle、平台 installer 与 artifact-only CLI E2E。Phase 12E 是当前完成边界，Phase 12 已整体完成。
 
 当前仓库已经完成 Phase 1–7 以及 Phase 8A/8B/8C/8D；Phase 8D 增加 tool-independent 的只读 Git Runtime、`git_status`/`git_diff`、统一默认 Built-in catalog、纯 Tool Effects、AgentState 投影和原子 Tool settlement。Phase 9A 增加独立的 `@caelush/security` policy kernel、Run-derived `ToolSecurityContext` 与真实 `ToolExecutionGate`；Phase 9B 增加 durable Approval workflow、精确 grant matching、lazy expiry 与 Tool/Run recovery；Phase 9C 增加 sensitive resource/command policy、host-only facts、high-confidence secret redaction 和 sanitize-before-persist，但不实现 OS hard sandbox；Phase 10A 增加 user-requested cancellation control plane 和 end-to-end abort propagation；Phase 10B 增加 Run deadline 与 Provider local timeout 的分层、超时 abort/cleanup 以及恢复安全边界；Phase 10C 增加仅 Provider 瞬态失败的 bounded retry/backoff、持久化等待边界、事件审计与崩溃恢复；Phase 10D 增加 durable budget ledger、Tool/LLM admission、保守 usage accounting、预算优先级和终止清理。Phase 10D 不实现 Verification execution、公共 budget UI/API 或 `COMPLETED` transition。
 
@@ -57,10 +57,10 @@ Caelush 是一个面向通用 Agent 的本地 Kernel 项目，目标是让 CLI�
 - Phase 12B — CLI Application Shell & Durable Conversation Lifecycle: **COMPLETED**
 - Phase 12C — Live Agent Timeline & Process Visualization: **COMPLETED**
 - Phase 12D — Interactive Approval, Cancellation & Session Recovery: **COMPLETED**
-- Phase 12E — Production Hardening, Packaging & CLI E2E: **NOT STARTED**
-- Phase 12 — overall: **IN PROGRESS**
+- Phase 12E — Production Hardening, Product Launcher, Packaging & CLI E2E: **COMPLETED**
+- Phase 12 — overall: **COMPLETED**
 
-Phase 12D details are documented in [CLI Interactive Control](docs/architecture/cli-interactive-control.md), [CLI Session Resume and Active Run Recovery](docs/architecture/cli-session-recovery.md), and [CLI Transport and SSE Recovery](docs/architecture/cli-transport-recovery.md). The CLI remains a thin client: Approval, cancellation, Run recovery, workspace identity, durable replay and terminal authority stay in the daemon/Core boundary. `Ctrl+C` sends one typed cancellation action for an active Run; `Ctrl+D` detaches only the local host. Resume matching is exact and workspace-bound, and reconnect uses the existing durable cursor with a bounded deterministic scheduler. Phase 12E remains explicitly deferred.
+Phase 12D details are documented in [CLI Interactive Control](docs/architecture/cli-interactive-control.md), [CLI Session Resume and Active Run Recovery](docs/architecture/cli-session-recovery.md), and [CLI Transport and SSE Recovery](docs/architecture/cli-transport-recovery.md). Phase 12E details are documented in [Product Launcher](docs/architecture/product-launcher.md), [Daemon Auto-start](docs/architecture/daemon-auto-start.md), [Non-interactive CLI](docs/architecture/cli-noninteractive.md), and [CLI Distribution](docs/architecture/cli-distribution.md). The CLI remains a thin client: Approval, cancellation, Run recovery, workspace identity, durable replay and terminal authority stay in the daemon/Core boundary. `Ctrl+C` sends one typed cancellation action for an active Run; `Ctrl+D` detaches only the local host. Resume matching is exact and workspace-bound, and reconnect uses the existing durable cursor with a bounded deterministic scheduler.
 
 Phase 7 contains exactly 7A, 7B, and 7C. Caelush now has an immutable validated Tool Registry and a single-Tool Dispatcher. A valid call is durably recorded as `REQUESTED`, gated, durably checkpointed as `RUNNING`, executed once through the resolved handler, output-validated, and atomically settled with its `ToolObservation` and lifecycle event. Exact duplicate calls are idempotent, stale `RUNNING` calls fail closed during recovery, and raw arguments/results are kept out of lifecycle events.
 
@@ -181,9 +181,70 @@ presentation reuses Security redaction and terminal sanitization. The CLI never
 renders hidden chain-of-thought or raw unsanitized Tool arguments.
 
 Phase 12D adds typed interactive Approval, cancellation, Session resume, active
-Run recovery and bounded SSE reconnect. Phase 12A, Phase 12B, Phase 12C and
-Phase 12D are **COMPLETED**; Phase 12E (production hardening, packaging, and
-later host work) is **NOT STARTED**.
+Run recovery and bounded SSE reconnect. Phase 12E adds the production launcher,
+safe daemon discovery/auto-start, doctor, non-interactive print host, platform
+portable bundles, installers and artifact-only CLI E2E. Phase 12A, Phase 12B,
+Phase 12C, Phase 12D and Phase 12E are **COMPLETED**; Phase 12 is **COMPLETED**.
+
+## V1 Product Launcher 与安装
+
+V1 的生产入口是 `caelush`。它保持 CLI 与 daemon 为两个独立 OS process：launcher 先探测本机兼容 daemon；默认地址没有可复用 daemon 时，launcher 使用原子 startup lease 安全启动 detached Local Agent Service，并等待 health/info 通过后再启动 CLI。CLI 退出或 `Ctrl+D` 不会停止 daemon。设置 `CAELUSH_DAEMON_URL` 后进入 externally managed mode，只连接该地址，不创建本地 lock、log 或 child process。
+
+V1 要求 Node.js 24.x，支持 Windows x64、Linux x64、macOS arm64 和 macOS x64。安装的是按平台构建的 portable artifact，而不是单文件 native executable；`node-pty` 原生模块和 Drizzle migration assets 都会随包提供。当前不使用 Node SEA、pkg、nexe 或 Bun compile。
+
+开发者可以从当前 worktree 构建并验证发行包：
+
+```bash
+pnpm build:release
+pnpm test:release
+```
+
+包外运行会检查 `--version`、`--help`、`doctor`、daemon auto-start、fresh SQLite migration、fake HTTP provider、Tool/Verification、并发 launcher、stream-json、secret-safe 输出、`node-pty` 和 packaged Runtime。生成文件位于 `release-artifacts/`，包含 `manifest.json`、`manifest.sha256` 与 `checksums.sha256`。
+
+POSIX 本地安装：
+
+```bash
+sh scripts/install.sh release-artifacts/caelush-v0.1.0-linux-x64.tgz
+caelush --version
+```
+
+Windows PowerShell 本地安装：
+
+```powershell
+& .\scripts\install.ps1 .\release-artifacts\caelush-v0.1.0-windows-x64.tgz
+caelush --version
+```
+
+安装器只安装用户目录中的版本化 bundle 和用户级 command shim，不实现自动更新、npm/package registry 发布、Homebrew/WinGet 发布，也不修改 System PATH。
+
+## Product Quickstart
+
+配置 daemon 侧 Provider 环境后，普通用户只需运行：
+
+```bash
+caelush
+```
+
+常用静态命令与诊断：
+
+```bash
+caelush --help
+caelush --version
+caelush doctor
+```
+
+脚本与 CI 使用非交互 print host，不会启动 Ink：
+
+```bash
+caelush -p "Explain this project"
+echo "Run tests and summarize" | caelush -p
+caelush -p "Check project" --output-format json
+caelush -p "Stream progress" --output-format stream-json
+```
+
+`text` 模式的 stdout 只保留经过 Verification 的最终回答；`json` 输出一个 public-safe JSON document；`stream-json` 输出 USER_VISIBLE AgentEvents 与一个最终 result record。诊断写入 stderr。print 模式不会自动批准 durable ApprovalRequest；遇到 Approval 返回稳定退出码 `5`，`Ctrl+C` 使用已有 cancellation path 并返回 `130`。
+
+Provider 仍由 daemon 启动环境配置，例如 `CAELUSH_PROVIDER_ID`、`CAELUSH_PROVIDER_BASE_URL`、可选 `CAELUSH_PROVIDER_API_KEY`、`CAELUSH_PROVIDER_ALLOWED_MODELS`、`CAELUSH_DEFAULT_PROVIDER` 和 `CAELUSH_DEFAULT_MODEL`。Provider secret 不会进入 launcher lock、manifest、doctor、stdout、stderr 或 daemon startup log。
 
 ## Packages 基础说明
 

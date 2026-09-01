@@ -98,6 +98,7 @@ export interface CliConversationControllerOptions {
   readonly workspacePath: string;
   readonly launchIntent?: LaunchIntent;
   readonly timer?: CliTimer;
+  readonly onUserVisibleEvent?: (event: AgentEvent) => void;
 }
 
 interface ActiveRun {
@@ -850,6 +851,7 @@ export class CliConversationController {
     try {
       for await (const event of stream) {
         if (this.activeRun !== active || active.generation !== this.streamGeneration) return;
+        if (event.visibility === "USER_VISIBLE") this.options.onUserVisibleEvent?.(event);
         const projected = projectAgentEvent(this.state, event);
         this.publish(projected.state);
         if (event.type === "approval.requested") this.addApproval(event.payload.approval);

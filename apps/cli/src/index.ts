@@ -4,8 +4,27 @@ import { main } from "./main.js";
 
 export { main } from "./main.js";
 export { CliArgsError, parseCliArgs } from "./bootstrap/cli-args.js";
-export type { LaunchIntent } from "./bootstrap/cli-args.js";
+export type {
+  CliCommand,
+  LaunchIntent,
+  PrintIntent,
+  PrintOutputFormat,
+} from "./bootstrap/cli-args.js";
 export { CliConversationController } from "./application/cli-controller.js";
+export {
+  MAX_PRINT_INPUT_BYTES,
+  PrintInputError,
+  readPrintPrompt,
+  runPrintHost,
+  serializePrintResult,
+  shouldEmitPrintEvent,
+} from "./application/print-host.js";
+export type {
+  PrintHostOptions,
+  PrintHostResult,
+  PrintInput,
+  PrintResult,
+} from "./application/print-host.js";
 export { createDaemonClient, resolveDaemonUrl } from "./bootstrap/daemon-client.js";
 
 const entryPath = process.argv[1];

@@ -1,0 +1,30 @@
+{
+  "name": "@caelush/launcher",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "caelush": "bin/caelush"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "package.json"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@caelush/cli": "workspace:*",
+    "@caelush/client": "workspace:*",
+    "@caelush/daemon": "workspace:*",
+    "@caelush/protocol": "workspace:*"
+  }
+}

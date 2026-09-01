@@ -33,10 +33,17 @@ async function* createStream(
   const model = upstreamProvider.chatModel(request.model.model);
   const tools = toAISDKTools(request.tools);
   const toolChoice = toAISDKToolChoice(request.toolChoice);
+  const systemMessages = request.messages.filter((message) => message.role === "system");
+  const messages = toAISDKMessages(request.messages.filter((message) => message.role !== "system"));
+  const instructions =
+    systemMessages.length === 0
+      ? undefined
+      : systemMessages.map((message) => message.content).join("\n\n");
   try {
     const result = streamText({
       model,
-      messages: toAISDKMessages(request.messages),
+      messages,
+      ...(instructions === undefined ? {} : { instructions }),
       ...(tools === undefined ? {} : { tools }),
       ...(toolChoice === undefined ? {} : { toolChoice }),
       ...(request.temperature === undefined ? {} : { temperature: request.temperature }),

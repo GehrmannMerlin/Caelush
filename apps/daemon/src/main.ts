@@ -1,12 +1,12 @@
 import { mkdir } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { startDaemon, type DaemonHandle } from "./daemon.js";
 import { readProviderConfiguration } from "./config.js";
+import { resolveProductPaths } from "./product-paths.js";
 
-export function getDefaultDatabasePath(): string {
-  return join(homedir(), ".caelush", "caelush.db");
+export function getDefaultDatabasePath(environment: NodeJS.ProcessEnv = process.env): string {
+  return resolveProductPaths({ environment }).databasePath;
 }
 
 export async function main(): Promise<void> {

@@ -104,6 +104,21 @@ importers:
         specifier: workspace:*
         version: link:../../packages/client
 
+  apps/launcher:
+    dependencies:
+      '@caelush/cli':
+        specifier: workspace:*
+        version: link:../cli
+      '@caelush/client':
+        specifier: workspace:*
+        version: link:../../packages/client
+      '@caelush/daemon':
+        specifier: workspace:*
+        version: link:../daemon
+      '@caelush/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+
   apps/web: {}
 
   packages/client:

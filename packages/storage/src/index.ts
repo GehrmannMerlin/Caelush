@@ -1,5 +1,6 @@
 export { openCaelushStorage } from "./storage.js";
 export type { CaelushStorage } from "./storage.js";
+export { getCaelushMigrationsFolder, migrateCaelushDatabase } from "./migrate.js";
 export {
   BudgetLedgerInvariantError,
   SqliteBudgetLedgerRepository,

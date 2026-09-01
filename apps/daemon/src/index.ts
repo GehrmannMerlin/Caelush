@@ -9,6 +9,12 @@ export {
 export type { DaemonConfig, DaemonProviderStartupConfiguration } from "./config.js";
 export { startDaemon } from "./daemon.js";
 export type { DaemonHandle, DaemonOptions } from "./daemon.js";
+export { daemonEntryPath } from "./entry.js";
+export { resolveProductPaths } from "./product-paths.js";
+export type { ProductPathEnvironment, ProductPathOptions, ProductPaths } from "./product-paths.js";
+export { DAEMON_VERSION } from "./version.js";
+export { checkNodePtyLoadability, inspectMigrationAssets } from "./diagnostics.js";
+export type { MigrationAssetInspection, NodePtyLoadability } from "./diagnostics.js";
 export { composeDaemon } from "./daemon-composition.js";
 export type {
   DaemonClock,

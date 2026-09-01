@@ -95,6 +95,47 @@ describe("OpenAI-compatible stream adapter", () => {
     expect(plainRequest.method).toBe("POST");
   });
 
+  it("passes Caelush system context through the adapter without AI SDK prompt rejection", async () => {
+    const requests: Request[] = [];
+    const gateway = createGateway(async (input, init) => {
+      requests.push(new Request(input, init));
+      return createSSEResponse([
+        {
+          id: "chatcmpl-system-1",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "demo-model",
+          choices: [
+            { index: 0, delta: { role: "assistant", content: "Ready" }, finish_reason: null },
+          ],
+        },
+        {
+          id: "chatcmpl-system-1",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: "demo-model",
+          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+        },
+      ]);
+    });
+
+    const result = await gateway.complete({
+      model,
+      messages: [
+        { role: "system", content: "Follow the workspace policy." },
+        { role: "user", content: "Continue." },
+      ],
+    });
+
+    expect(result.text).toBe("Ready");
+    const request = requests[0];
+    if (request === undefined) throw new Error("The test fetch did not receive a request.");
+    expect(((await request.json()) as { messages: unknown[] }).messages[0]).toEqual({
+      role: "system",
+      content: "Follow the workspace policy.",
+    });
+  });
+
   it("normalizes one streamed tool call without executing it", async () => {
     const requests: Request[] = [];
     const gateway = createGateway(async (input, init) => {

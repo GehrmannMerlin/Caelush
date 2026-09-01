@@ -76,6 +76,7 @@ import {
   type RunExecutionSupervisorLogger,
 } from "./execution/run-execution-supervisor.js";
 import { SessionConversationContextProvider } from "./services/session-conversation-context.js";
+import { DAEMON_VERSION } from "./version.js";
 
 const DEFAULT_BASE_SYSTEM_PROMPT =
   "You are Caelush, a careful workspace agent. Inspect the project, make only requested changes, and report what you verified.";
@@ -248,7 +249,7 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
   const info = DaemonInfoSchema.parse({
     apiVersion: "v1",
     protocolVersion: 1,
-    daemonVersion: "0.1.0",
+    daemonVersion: DAEMON_VERSION,
     capabilities: {
       runExecution: true,
       runRecovery: true,

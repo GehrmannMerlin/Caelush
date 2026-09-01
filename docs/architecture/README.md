@@ -25,7 +25,7 @@ Storage / Events / Trace
 SQLite durability, event stream and observability consumers
 ```
 
-当前已完成 Phase 0 的仓库基础、Phase 1 的 Protocol Contract/Core State Machine、Phase 2 的 `@caelush/storage` SQLite durability 和 `@caelush/events` EventBus，以及 Phase 12A 的生产 Daemon execution surface 与共享 `@caelush/client` transport。Storage 通过 Repository 与 Durable Event Store 提供恢复所需的持久化；Events 只定义 Event Store port 和消费语义，具体 SQLite 实现仍由 Storage 持有。CLI/Web 仍是后续的 client host，不在本阶段复制 Agent 执行逻辑。
+当前已完成 Phase 0 的仓库基础、Phase 1 的 Protocol Contract/Core State Machine、Phase 2 的 `@caelush/storage` SQLite durability 和 `@caelush/events` EventBus，以及 Phase 12A–12E 的生产 Daemon、共享 Client、CLI 交互控制、会话恢复、产品 Launcher、Node.js 24 portable packaging 与 artifact-only CLI E2E。Storage 通过 Repository 与 Durable Event Store 提供恢复所需的持久化；Events 只定义 Event Store port 和消费语义，具体 SQLite 实现仍由 Storage 持有。CLI/Web 仍是后续的 client host，不在本阶段复制 Agent 执行逻辑。
 
 依赖方向遵循：
 
@@ -48,7 +48,13 @@ Phase 11A adds the intent-only Verification planning foundation; Phase 11B adds 
 Phase 11D is complete and owns guarded Completion Authority and finalization. Phase
 12A adds the production daemon composition, asynchronous start/recover/cancel and
 Approval control routes, `/api/v1/info`, loopback-only provider configuration, and
-the browser-compatible typed HTTP/SSE client. See
-[daemon-production-composition.md](daemon-production-composition.md) and
-[client-transport.md](client-transport.md). Phase 12A does not implement the Ink
-TUI or Web presentation layer.
+the browser-compatible typed HTTP/SSE client. Phase 12E adds the product Launcher,
+bounded daemon discovery/lease lifecycle, strict non-interactive Print Host,
+portable release artifacts and artifact-only E2E. See
+[daemon-production-composition.md](daemon-production-composition.md),
+[client-transport.md](client-transport.md),
+[product-launcher.md](product-launcher.md),
+[daemon-auto-start.md](daemon-auto-start.md),
+[cli-noninteractive.md](cli-noninteractive.md), and
+[cli-distribution.md](cli-distribution.md). Phase 12E does not implement the Ink
+TUI or Web presentation layer; the next stage is Phase 13 — Production Web.

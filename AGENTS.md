@@ -417,7 +417,7 @@ Phase 11B rules:
 
 ## Phase 12A Production Daemon and Shared Client Rules
 
-- Phase 12 contains exactly 12A, 12B, 12C, 12D and 12E. The current round is 12A; do not implement 12B/12C/12D/12E capabilities in this round.
+- Phase 12 contains exactly 12A, 12B, 12C, 12D and 12E. Phase 12A is completed; the rules below describe its permanent boundaries.
 - Phase 12A owns the production daemon execution surface and shared client transport. It does not implement the Ink TUI, React/Web UI, timeline UI, approval prompts, resume pickers, CLI packaging, or host presentation behavior.
 - CLI and Web are clients of the Caelush Local Agent Service and must not import `RunController`, `AgentLoop`, Runtime, Storage, Security or Tool internals. The production daemon composition root is the only application layer responsible for wiring concrete Agent Kernel dependencies.
 - The daemon owns one process-scoped `Storage`/`EventBus` lifecycle, one Runtime/RuntimeResolver, one Tool Registry/Dispatcher/Coordinator, one Provider Registry/Gateway, one AgentLoop, one RunController and one `RunExecutionSupervisor`. Routes remain thin dependency-injected adapters.
@@ -436,7 +436,7 @@ Phase 11B rules:
 
 ## Phase 12B CLI Application Shell and Durable Conversation Rules
 
-- Phase 12 contains exactly 12A, 12B, 12C, 12D and 12E. Phase 12B is the current completed boundary; do not add a Phase 12 sub-round or implement later host capabilities in this round.
+- Phase 12 contains exactly 12A, 12B, 12C, 12D and 12E. Phase 12B is completed; the rules below describe its permanent boundaries.
 - The CLI is a thin Ink/React client. It may import only public `@caelush/client`, `@caelush/protocol`, React/Ink, Node path/url utilities, and application-local modules; it must not import Core, Storage, Runtime, Security, Tools, Context, Verification or LLM, and it must not create an AgentLoop or call daemon HTTP directly.
 - One CLI process creates one durable AgentSession. Every submitted prompt creates a distinct Run; Run creation does not start execution. The CLI starts the typed event watch before `startRun()` and keeps one active Run lock until one canonical terminal `getRun()` settlement.
 - `DaemonInfo.defaultRunConfiguration` is strict public JSON-safe data. The CLI requires a public default model and this configuration, uses the runtime/policy/limits verbatim, and creates no Session when either default is missing.
@@ -465,7 +465,7 @@ Phase 11B rules:
 
 ## Phase 12D Interactive Approval, Cancellation, Session Resume and Transport Recovery Rules
 
-- Phase 12 contains exactly 12A, 12B, 12C, 12D and 12E. Phase 12D is the current round; do not add 12D-1, 12D-2, 12F or implement Phase 12E production hardening, packaging, or non-interactive CLI behavior.
+- Phase 12 contains exactly 12A, 12B, 12C, 12D and 12E. Phase 12D is completed; the rules below describe its permanent boundaries. Phase 12E owns the final product hardening, packaging, and non-interactive CLI behavior.
 - The CLI remains a thin Ink/client host. It may send typed control intents only through public `@caelush/client` APIs; daemon/Core/RunController/Security/Approval/Cancellation/Recovery remain authoritative. CLI components never call the client directly, create a second state machine, or invent a Protocol `RunStatus`.
 - `CliTransportState` (`CONNECTED`, `RECONNECTING`, `DISCONNECTED`) and `CliControlMode` (`NONE`, `APPROVAL`, `CANCELLING`, `SESSION_PICKER`, `RUN_RECOVERY_PICKER`, `PENDING_RUN_CONFIRMATION`) are ephemeral host view state, not durable Run status.
 - One input router owns precedence: Session Picker, Approval, pending confirmation, disconnected controls, active Run controls, then Composer. `Esc` closes only the current local dialog/picker. With no active Run, `Ctrl+C`/`Ctrl+D` exit; with an active Run, `Ctrl+C` cancels and `Ctrl+D` detaches.
@@ -479,3 +479,22 @@ Phase 11B rules:
 - Every stream attach/reconnect/resume has a generation; stale stream events, `onOpen`, errors and terminal callbacks are ignored. Cold attach watches with `afterSequence: 0`; reconnect watches strictly after the last durable sequence. Ephemeral events never advance the cursor or carry an SSE ID.
 - `watchRunEvents(..., { onOpen })` invokes `onOpen` once only after a valid HTTP response/body and reader exist. The CLI reconnect scheduler uses injected timers and fixed delays `250, 500, 1000, 2000, 4000, 5000` ms, then enters `DISCONNECTED`; `R` is the only manual retry. No React timer, jitter, unbounded retry, or HTTP action retry is allowed.
 - All terminal paths use one exactly-once canonical settlement guard and validate `VerifiedRunFinalResult`; completion is never inferred from model text or event names. Transport failure is not Run failure, and reconnect/cancel/approval cannot reopen a terminal Run.
+
+## Phase 12E Production Hardening, Product Launcher, Packaging and Final CLI E2E Rules
+
+- Phase 12 contains exactly 12A, 12B, 12C, 12D and 12E. Phase 12E is the final Phase 12 round; do not add 12E-1, 12F, Phase 13 implementation, or another CLI/product round.
+- Phase 12E owns product startup, non-interactive hosting, distribution and final CLI hardening; it does not own Agent execution semantics. The production `caelush` command must preserve the CLI/daemon process boundary.
+- The Product Launcher may coordinate and spawn the daemon, but it must never import or execute the Agent Kernel directly. Its direct dependencies are limited to public CLI/client/protocol contracts and daemon entry/path/diagnostic subpaths.
+- The interactive CLI remains a thin HTTP/SSE client. A custom `CAELUSH_DAEMON_URL` is externally managed and must never cause local daemon auto-start, local startup-lock creation, local log creation, or local lifecycle management.
+- The default local launcher must probe health then info, reuse an already healthy compatible daemon, and require exact local `daemonVersion` equality with the launcher product version. An incompatible or unknown port owner is a bounded fail-safe; never kill an unknown process merely because `127.0.0.1:43120` is occupied.
+- Daemon startup coordination may use one atomic filesystem lease with a bounded TTL, but TCP bind remains the final singleton authority. A healthy compatible race winner must cause other launchers to converge without an uncaught `EADDRINUSE`. CLI exit must not implicitly stop a detached daemon.
+- Detached startup uses the current `process.execPath`, `detached: true`, bounded health/info convergence, `child.unref()`, and the centralized product log path. Startup logs are bounded/rotated and provider secrets, authorization values, prompts, tool arguments, and raw exception data must not enter locks, manifests, doctor output, diagnostics, or logs.
+- Product paths and the authoritative product version source must be centralized. V1 uses Node.js 24 and platform-native artifacts; it does not use Node SEA, pkg, nexe, Bun compile, or another single-file runtime. `node-pty` must be built and verified on the target platform, and Drizzle migration assets are required runtime assets in every runnable artifact.
+- Interactive Ink mode requires a TTY and must fail cleanly before rendering when stdin/stdout cannot support raw input. Non-interactive print mode must not instantiate Ink; `TERM=dumb`, `NO_COLOR`, narrow terminals, and resize behavior must not change the daemon/Core authority.
+- Print mode supports `-p`, strict bounded UTF-8 argument/stdin input, `-c`/`--continue`, exact `-r`/`--resume <SESSION_ID>`, and `text`, `json`, and `stream-json` output. Resume picker plus print is rejected, argument plus non-empty stdin is rejected, and missing prompt on a TTY must not wait for stdin.
+- Text print mode reserves stdout for the verified final result. JSON and stream-json reserve stdout for machine-readable public-safe output; diagnostics belong on stderr. Only `USER_VISIBLE` events may be emitted. Hidden CoT, system prompts, provider payloads, raw Tool arguments, credentials, and internal causes never enter print output.
+- Print mode never auto-approves a durable ApprovalRequest. `WAITING_APPROVAL` remains durable/resumable and returns the stable approval-required exit code. Print-mode `Ctrl+C` reuses Phase 10 cancellation and returns the stable cancellation code only after canonical cancellation settlement.
+- Product exit codes are stable host contracts and must not be scattered magic numbers. Static `--help`/`--version` do not contact a daemon; `doctor` is read-only and never auto-starts a daemon or reveals secrets.
+- Production artifacts must run outside the source repository without pnpm, workspace symlinks, `NODE_PATH`, or the pnpm store at runtime. Artifact smoke tests must use the packaged artifact itself, fresh external workspace/home state, and a fake HTTP provider; they must not use repository `dist` files or real credentials.
+- Release manifests and SHA-256 checksum files provide integrity evidence but must not claim publisher signing unless cryptographic signing exists. Installers are user-level, idempotent, platform-matched, and do not implement background updates, package-registry publishing, release channels, or system PATH mutation.
+- Phase 12E does not implement Web UI, Web Search, MCP, Browser, Computer Use, Sub-Agent/Multi-Agent, background updater, package-manager publishing, or a new execution state machine. See `docs/architecture/product-launcher.md`, `daemon-auto-start.md`, `cli-noninteractive.md`, and `cli-distribution.md`.
