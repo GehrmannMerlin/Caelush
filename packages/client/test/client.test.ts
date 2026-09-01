@@ -129,6 +129,12 @@ describe("CaelushClient", () => {
       },
       runtimeKinds: ["local"],
       configuredProviders: [],
+      defaultRunConfiguration: {
+        runtime: { id: "local", kind: "local" },
+        permissionProfile: "PROJECT_ACCESS",
+        approvalPolicy: "DANGEROUS_ONLY",
+        limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 10_000 },
+      },
     };
     const client = new CaelushClient({
       baseUrl: "http://daemon.test/root",

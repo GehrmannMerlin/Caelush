@@ -43,6 +43,12 @@ const info: DaemonInfo = {
   runtimeKinds: ["local"],
   configuredProviders: ["test"],
   defaultModel: { provider: "test", model: "test-model" },
+  defaultRunConfiguration: {
+    runtime: { id: "local", kind: "local" },
+    permissionProfile: "PROJECT_ACCESS",
+    approvalPolicy: "DANGEROUS_ONLY",
+    limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 10_000 },
+  },
 };
 
 const approval: ApprovalRequest = {
