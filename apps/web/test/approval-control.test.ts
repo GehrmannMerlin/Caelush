@@ -7,7 +7,9 @@ import {
   createApprovalRequestId,
   createRunId,
   createSessionId,
+  createStepId,
   createToolInvocationId,
+  createVerificationPlanId,
   createWorkspaceId,
   type AgentEvent,
   type ApprovalRequest,
@@ -138,6 +140,101 @@ describe("WebSessionManager approval controls", () => {
     expect(manager.getSnapshot().approvalState?.submitting.includes(approval.id)).toBe(false);
     manager.dispose();
   });
+
+  it("reserves an approval before asynchronous preflight so concurrent resolves submit once", async () => {
+    const session = makeSession();
+    const run = makeRun({ sessionId: session.id, status: "RUNNING" });
+    const approval = makeApproval(run.id, 10);
+    const client = makeClient({ session, run, pendingApprovals: [approval] });
+    let releasePreflight!: () => void;
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+    await openActiveSession(manager, session);
+    client.listPendingApprovals.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releasePreflight = () => resolve({ items: [approval] });
+        }),
+    );
+
+    const first = manager.resolveApproval(approval.id, { action: "REJECT" });
+    await waitFor(() => releasePreflight !== undefined);
+    const second = manager.resolveApproval(approval.id, { action: "REJECT" });
+    releasePreflight();
+    await expect(Promise.all([first, second])).resolves.toEqual([true, false]);
+    expect(client.resolveApproval).toHaveBeenCalledTimes(1);
+    manager.dispose();
+  });
+
+  it.each(["preflight", "mutation"] as const)(
+    "clears a stale approval when %s reconciliation cannot list pending approvals",
+    async (failure) => {
+      const session = makeSession();
+      const run = makeRun({ sessionId: session.id, status: "RUNNING" });
+      const approval = makeApproval(run.id, 10);
+      const client = makeClient({ session, run, pendingApprovals: [approval] });
+      const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+      await openActiveSession(manager, session);
+      if (failure === "preflight")
+        client.listPendingApprovals.mockRejectedValueOnce(new Error("offline"));
+      else {
+        client.resolveApproval.mockRejectedValueOnce(new Error("conflict"));
+        client.listPendingApprovals.mockResolvedValueOnce({ items: [approval] });
+      }
+      client.listPendingApprovals.mockRejectedValueOnce(new Error("offline"));
+
+      await expect(manager.resolveApproval(approval.id, { action: "REJECT" })).resolves.toBe(false);
+      expect(manager.getSnapshot().approvalState?.requests).toEqual([]);
+      expect(client.getRun).toHaveBeenCalledWith(run.id);
+      manager.dispose();
+    },
+  );
+
+  it("does not carry approval controls into a different run, session, or draft", async () => {
+    const first = makeSession();
+    const second = makeSession();
+    const firstRun = makeRun({ sessionId: first.id, status: "RUNNING" });
+    const secondRun = makeRun({ sessionId: second.id, status: "RUNNING" });
+    const approval = makeApproval(firstRun.id, 10);
+    const client = makeClient({ session: first, run: firstRun, pendingApprovals: [approval] });
+    client.listSessions.mockResolvedValue({ items: [first, second] });
+    client.listRuns.mockResolvedValue({ items: [] });
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+    await openActiveSession(manager, first);
+    await manager.refreshApprovals(firstRun.id);
+    expect(manager.getSnapshot().approvalState?.requests).toHaveLength(1);
+    client.listPendingApprovals.mockResolvedValueOnce({ items: [] });
+    await manager.refreshApprovals(secondRun.id);
+    expect(manager.getSnapshot().approvalState?.requests).toHaveLength(0);
+    await expect(manager.selectSession(second.id)).resolves.toBe(true);
+    expect(manager.getSnapshot()).toMatchObject({ approvalState: undefined, controlMode: "NONE" });
+    manager.beginDraft();
+    expect(manager.getSnapshot()).toMatchObject({ approvalState: undefined, controlMode: "NONE" });
+    manager.dispose();
+  });
+
+  it("settles a terminal reconciliation without leaving it active", async () => {
+    const session = makeSession();
+    const run = makeRun({ sessionId: session.id, status: "RUNNING" });
+    const terminal = makeCompletedRun(run);
+    const approval = makeApproval(run.id, 10);
+    const client = makeClient({ session, run, pendingApprovals: [approval] });
+    client.getRun.mockResolvedValue(terminal);
+    client.listRuns.mockResolvedValue({ items: [terminal] });
+    client.resolveApproval.mockRejectedValueOnce(new Error("conflict"));
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+    await openActiveSession(manager, session);
+
+    await expect(manager.resolveApproval(approval.id, { action: "REJECT" })).resolves.toBe(false);
+    expect(manager.getSnapshot()).toMatchObject({
+      activeRuns: [],
+      activeRun: undefined,
+      composerEnabled: true,
+    });
+    expect(manager.getSnapshot().history).toContainEqual(
+      expect.objectContaining({ runId: terminal.id, kind: "ASSISTANT" }),
+    );
+    manager.dispose();
+  });
 });
 
 async function openActiveSession(
@@ -223,6 +320,27 @@ function makeRun(input: Partial<ClientAgentRun>): ClientAgentRun {
     limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 10_000 },
     createdAt: 1,
     ...input,
+  });
+}
+function makeCompletedRun(run: ClientAgentRun): ClientAgentRun {
+  return makeRun({
+    ...run,
+    status: "COMPLETED",
+    finishedAt: 3,
+    finalResult: {
+      type: "VERIFIED_COMPLETION",
+      text: "verified answer",
+      verification: {
+        planId: createVerificationPlanId(),
+        sourceStepId: createStepId(),
+        planHash: "a".repeat(64),
+        candidateHash: "b".repeat(64),
+        evidenceDigest: "c".repeat(64),
+        freshnessHash: "d".repeat(64),
+        sealHash: "e".repeat(64),
+        checks: { total: 1, passed: 1, skipped: 0, advisoryWarnings: 0 },
+      },
+    },
   });
 }
 function makeApproval(runId: ClientAgentRun["id"], createdAt: number): ApprovalRequest {

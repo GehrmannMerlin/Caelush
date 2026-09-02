@@ -100,11 +100,15 @@ export interface WebSessionSnapshot {
 
 export type WebSessionListener = (snapshot: WebSessionSnapshot) => void;
 type WebSessionSnapshotPatch = Partial<
-  Omit<WebSessionSnapshot, "selectedSession" | "selectedSessionId" | "activeRun" | "error">
+  Omit<
+    WebSessionSnapshot,
+    "selectedSession" | "selectedSessionId" | "activeRun" | "approvalState" | "error"
+  >
 > & {
   readonly selectedSession?: ClientAgentSession | undefined;
   readonly selectedSessionId?: SessionId | undefined;
   readonly activeRun?: ClientAgentRun | undefined;
+  readonly approvalState?: WebApprovalState | undefined;
   readonly error?: WebSessionError | undefined;
 };
 
@@ -118,6 +122,7 @@ export class WebSessionManager {
   private readonly listeners = new Set<WebSessionListener>();
   private snapshot: WebSessionSnapshot = initialSnapshot();
   private activeLifecycle: ActiveLifecycle | undefined;
+  private readonly resolvingApprovals = new Set<ApprovalRequestId>();
   private disposed = false;
 
   constructor(
@@ -174,6 +179,8 @@ export class WebSessionManager {
       isDraft: true,
       composerEnabled: true,
       submission: "IDLE",
+      approvalState: undefined,
+      controlMode: "NONE",
       error: undefined,
     });
   }
@@ -183,6 +190,7 @@ export class WebSessionManager {
     const candidate = this.snapshot.candidates.find((item) => item.session.id === sessionId);
     if (candidate === undefined) return false;
 
+    this.clearApprovals();
     this.publish({ status: "LOADING", error: undefined });
     try {
       const runs = (await this.options.client.listRuns(sessionId, { limit: 100 })).items;
@@ -337,26 +345,29 @@ export class WebSessionManager {
     if (
       approval === undefined ||
       approvalState === undefined ||
-      approvalState.submitting.includes(approvalId)
+      approvalState.submitting.includes(approvalId) ||
+      this.resolvingApprovals.has(approvalId)
     ) {
       return false;
     }
 
+    this.resolvingApprovals.add(approvalId);
+    this.publishSubmitting(approvalId, true);
     try {
       const pending = await this.options.client.listPendingApprovals(approval.runId);
       if (this.disposed) return false;
       this.publishApprovals(approval.runId, pending.items);
       if (!pending.items.some((item) => item.id === approvalId && item.status === "PENDING")) {
-        await this.reconcileApprovals(approval.runId);
+        await this.reconcileApprovals(approval.runId, approvalId);
         return false;
       }
-      this.publishSubmitting(approvalId, true);
       await this.options.client.resolveApproval(approval.runId, approvalId, resolution);
       return true;
     } catch {
-      await this.reconcileApprovals(approval.runId);
+      await this.reconcileApprovals(approval.runId, approvalId);
       return false;
     } finally {
+      this.resolvingApprovals.delete(approvalId);
       if (!this.disposed) this.publishSubmitting(approvalId, false);
     }
   }
@@ -373,6 +384,7 @@ export class WebSessionManager {
     runs: readonly ClientAgentRun[],
   ): Promise<boolean> {
     const activeRuns = nonTerminalRuns(runs);
+    this.clearApprovals();
     this.publish({
       status: "READY",
       selectedSession: session,
@@ -469,6 +481,8 @@ export class WebSessionManager {
             : this.snapshot.timeline,
         composerEnabled: activeRuns.length === 0,
         submission: "IDLE",
+        approvalState: undefined,
+        controlMode: "NONE",
         error: activeRuns.length > 1 ? sessionError("MULTIPLE_ACTIVE_RUNS") : undefined,
       });
     } catch {
@@ -521,31 +535,61 @@ export class WebSessionManager {
     }
   }
 
-  private async reconcileApprovals(runId: RunId): Promise<void> {
+  private async reconcileApprovals(
+    runId: RunId,
+    affectedApprovalId: ApprovalRequestId,
+  ): Promise<void> {
     const [run, approvals] = await Promise.allSettled([
       this.options.client.getRun(runId),
       this.options.client.listPendingApprovals(runId),
     ]);
     if (this.disposed) return;
+    if (run.status === "fulfilled" && isTerminalRunStatus(run.value.status)) {
+      await this.publishTerminalReconciliation(run.value);
+      return;
+    }
     if (run.status === "fulfilled" && this.snapshot.activeRun?.id === runId) {
       this.publishActiveRun(run.value, this.snapshot.submission);
     }
     if (approvals.status === "fulfilled") this.publishApprovals(runId, approvals.value.items);
+    else this.removeApproval(affectedApprovalId);
+  }
+
+  private async publishTerminalReconciliation(run: ClientAgentRun): Promise<void> {
+    let runs = this.snapshot.runs.map((item) => (item.id === run.id ? run : item));
+    try {
+      runs = (await this.options.client.listRuns(run.sessionId, { limit: 100 })).items;
+    } catch {
+      // The terminal Run is still authoritative; preserve known session history if list refresh fails.
+    }
+    this.cancelActiveLifecycle();
+    this.publish({
+      candidates: this.snapshot.selectedSession
+        ? this.upsertCandidate(this.snapshot.selectedSession, latestRun(runs))
+        : this.snapshot.candidates,
+      runs,
+      history: hydrateSessionTranscript(runs),
+      activeRuns: [],
+      activeRun: undefined,
+      composerEnabled: true,
+      submission: "IDLE",
+      approvalState: undefined,
+      controlMode: "NONE",
+    });
   }
 
   private publishApprovals(
     runId: RunId,
     approvals: readonly import("@caelush/protocol").ApprovalRequest[],
   ): void {
-    const otherRuns =
-      this.snapshot.approvalState?.requests.filter((item) => item.runId !== runId) ?? [];
-    const requests = [
-      ...otherRuns,
-      ...approvals.filter((item) => item.status === "PENDING").map(createApprovalView),
-    ].sort(
-      (left, right) =>
-        left.createdAt - right.createdAt || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
-    );
+    const requests = approvals
+      .filter((item) => item.status === "PENDING")
+      .map(createApprovalView)
+      .sort(
+        (left, right) =>
+          left.createdAt - right.createdAt ||
+          (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
+      );
     const submitting = (this.snapshot.approvalState?.submitting ?? []).filter((id) =>
       requests.some((request) => request.id === id),
     );
@@ -561,6 +605,20 @@ export class WebSessionManager {
         ? [...current.submitting, approvalId]
         : current.submitting.filter((item) => item !== approvalId),
     );
+  }
+
+  private removeApproval(approvalId: ApprovalRequestId): void {
+    const current = this.snapshot.approvalState;
+    if (current === undefined) return;
+    this.publishApprovalState(
+      current.requests.filter((item) => item.id !== approvalId),
+      current.submitting.filter((item) => item !== approvalId),
+    );
+  }
+
+  private clearApprovals(): void {
+    this.resolvingApprovals.clear();
+    this.publish({ approvalState: undefined, controlMode: "NONE" });
   }
 
   private publishApprovalState(
