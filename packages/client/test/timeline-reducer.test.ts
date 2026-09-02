@@ -21,6 +21,105 @@ const invocationId = createToolInvocationId();
 const observationId = createObservationId();
 
 describe("shared Timeline reducer", () => {
+  it("counts completed verification outcomes and replaces a check without double-counting", () => {
+    const planId = createVerificationPlanId();
+    let state = createInitialTimelineState(runId, { limits: { maxActiveEntries: 1 } });
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.planned", 1, { planId, checkCount: 3 }),
+    );
+    for (const [sequence, status] of [
+      [2, "PASSED"],
+      [3, "FAILED"],
+      [4, "ERROR"],
+    ] as const) {
+      state = reduceTimelineEvent(
+        state,
+        eventOf("verification.check.completed", sequence, {
+          planId,
+          checkId: createVerificationCheckId(),
+          status,
+          evidenceIds: [],
+        }),
+      );
+    }
+    expect(state.verification[0]).toMatchObject({ passed: 1, failed: 1, errors: 1 });
+    const checkId = createVerificationCheckId();
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.check.completed", 5, {
+        planId,
+        checkId,
+        status: "PASSED",
+        evidenceIds: [],
+      }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.check.completed", 6, {
+        planId,
+        checkId,
+        status: "ERROR",
+        evidenceIds: [],
+      }),
+    );
+    expect(state.verification[0]).toMatchObject({ passed: 1, failed: 1, errors: 2 });
+  });
+
+  it("bounds and sanitizes public strings across projection domains", () => {
+    const bad = "\u001b[31m" + "x".repeat(200) + "\u001b[0m";
+    let state = createInitialTimelineState(runId, { limits: { maxTextBytes: 32 } });
+    state = reduceTimelineEvent(
+      state,
+      eventOf(
+        "tool.requested",
+        1,
+        { invocationId, toolName: "read_file", riskLevel: "LOW" },
+        { title: bad, summary: bad },
+      ),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("plan.updated", 2, {
+        plan: [{ id: "plan-item", title: bad, status: "IN_PROGRESS" }],
+      }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("approval.requested", 3, {
+        approval: {
+          id: createApprovalRequestId(),
+          runId,
+          toolInvocationId: invocationId,
+          riskLevel: "CRITICAL",
+          title: bad,
+          reason: bad,
+          action: { toolName: "read_file" },
+          status: "PENDING",
+          scope: bad,
+          createdAt: 1,
+        },
+      }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("retry.scheduled", 4, { attempt: 1, maxAttempts: 2, delayMs: 1, errorCode: bad }),
+    );
+    for (const value of [
+      ...state.activeTools,
+      ...state.activeApprovals,
+      ...state.currentPlan,
+      ...state.retries,
+    ]) {
+      for (const field of ["title", "text", "detail", "reason", "scope"] as const) {
+        const text = (value as Record<string, unknown>)[field];
+        if (typeof text === "string") {
+          expect(text).not.toContain("\u001b");
+          expect(new TextEncoder().encode(text).byteLength).toBeLessThanOrEqual(32);
+        }
+      }
+    }
+  });
   it("retains safe legacy CLI verification fields", () => {
     const planId = createVerificationPlanId();
     const checkId = createVerificationCheckId();

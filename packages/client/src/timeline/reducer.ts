@@ -339,7 +339,7 @@ function reduceRegisteredEvent(state: TimelineState, event: AgentEvent): Timelin
         currentPlan: event.payload.plan.slice(0, state.limits.maxActiveEntries).map((item) => ({
           id: item.id,
           kind: "SYSTEM",
-          title: item.title,
+          title: bound(item.title, state),
           text: item.status,
           status: "PENDING",
         })),
@@ -417,7 +417,19 @@ function upsertActive(
   field: "activeTools" | "activeLlm" | "activeApprovals" | "activeProcesses",
   entry: TimelineEntry,
 ): TimelineState {
-  return { ...state, [field]: upsert(state[field], entry, state.limits.maxActiveEntries) };
+  return {
+    ...state,
+    [field]: upsert(state[field], sanitizeEntry(entry, state), state.limits.maxActiveEntries),
+  };
+}
+function sanitizeEntry(entry: TimelineEntry, state: TimelineState): TimelineEntry {
+  return {
+    ...entry,
+    ...(entry.title === undefined ? {} : { title: bound(entry.title, state) }),
+    ...(entry.text === undefined ? {} : { text: bound(entry.text, state) }),
+    ...(entry.detail === undefined ? {} : { detail: bound(entry.detail, state) }),
+    ...(entry.scope === undefined ? {} : { scope: bound(entry.scope, state) }),
+  };
 }
 function updateActive(
   state: TimelineState,
@@ -468,14 +480,35 @@ function upsertRetry(
     text: `Retry ${event.payload.attempt}`,
     started: status === "RUNNING",
     status,
-    ...("errorCode" in event.payload ? { reason: event.payload.errorCode } : {}),
+    ...("errorCode" in event.payload ? { reason: bound(event.payload.errorCode, state) } : {}),
   };
-  return { ...state, retries: upsert(state.retries, retry, state.limits.maxActiveEntries) };
-}
-function upsertVerification(state: TimelineState, group: TimelineVerificationGroup): TimelineState {
   return {
     ...state,
-    verification: upsert(state.verification, group, state.limits.maxActiveEntries),
+    retries: upsert(
+      state.retries,
+      {
+        ...retry,
+        text: bound(retry.text, state),
+        ...(retry.reason === undefined ? {} : { reason: bound(retry.reason, state) }),
+      },
+      state.limits.maxActiveEntries,
+    ),
+  };
+}
+function upsertVerification(state: TimelineState, group: TimelineVerificationGroup): TimelineState {
+  const safe = {
+    ...group,
+    label: bound(group.label, state),
+    checks: group.checks.map((check) => ({
+      ...check,
+      label: bound(check.label, state),
+      title: bound(check.title, state),
+      ...(check.detail === undefined ? {} : { detail: bound(check.detail, state) }),
+    })),
+  };
+  return {
+    ...state,
+    verification: upsert(state.verification, safe, state.limits.maxActiveEntries),
   };
 }
 function updateVerificationCheck(
@@ -515,10 +548,29 @@ function updateVerificationCheck(
     status,
     ...(durationMs === undefined ? {} : { detail: `${durationMs}ms` }),
   };
+  const old =
+    existing?.status === "PASSED"
+      ? { passed: -1 }
+      : existing?.status === "FAILED"
+        ? { failed: -1 }
+        : existing?.status === "ERROR"
+          ? { errors: -1 }
+          : {};
+  const add =
+    status === "PASSED"
+      ? { passed: 1 }
+      : status === "FAILED"
+        ? { failed: 1 }
+        : status === "ERROR"
+          ? { errors: 1 }
+          : {};
   return upsertVerification(state, {
     ...group,
     status: "RUNNING",
     checks: upsert(group.checks, check, state.limits.maxActiveEntries),
+    passed: group.passed + (add.passed ?? 0) + (old.passed ?? 0),
+    failed: group.failed + (add.failed ?? 0) + (old.failed ?? 0),
+    errors: group.errors + (add.errors ?? 0) + (old.errors ?? 0),
   });
 }
 function appendSettled(state: TimelineState, entry: TimelineEntry): TimelineState {
