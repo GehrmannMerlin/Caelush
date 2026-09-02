@@ -173,7 +173,9 @@ describe("shared Timeline reducer", () => {
   it("fails closed when finalized plan metadata has also been evicted", () => {
     const planA = createVerificationPlanId();
     const planB = createVerificationPlanId();
-    let state = createInitialTimelineState(runId, { limits: { maxSeenEvents: 1 } });
+    let state = createInitialTimelineState(runId, {
+      limits: { maxSeenEvents: 1, maxActiveEntries: 1 },
+    });
     state = reduceTimelineEvent(
       state,
       eventOf("verification.planned", 1, { planId: planA, checkCount: 3 }),
