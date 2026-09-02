@@ -61,6 +61,16 @@ Tool entries retain the safe `toolName` in addition to their display title so ho
 
 All text sanitation and UTF-8 byte bounding is implemented without Node globals. `TextEncoder` is used for byte measurement, and truncation iterates Unicode code points so multibyte characters, emoji, and surrogate pairs are not split.
 
+### Verification Integrity Rule (Task 3 review follow-up)
+
+Verification boundedness is an evidence policy, not a capacity heuristic. `maxSeenEvents` and `maxActiveEntries` may decide when entries are evicted, but they must never directly decide whether a Verification Plan is trusted.
+
+- `verification.finalized(planId)` may produce a normal finalized Timeline entry only when the target Plan aggregate is provable from retained trusted state. The proof must identify a real retained total source and, whenever outcome evidence is needed, a complete set of unique retained terminal outcomes for that Plan.
+- When bounded eviction removes outcome or plan metadata, the projection records plan-aware provenance in bounded `verificationOutcomeIntegrity`: known `affectedPlanIds` and an `unknownAffected` flag when the provenance index itself cannot retain every affected identity. It never stores evidence payloads, result arrays, or credentials.
+- If the target Plan is known affected, or if `unknownAffected` is true and the target cannot be independently proven from its retained metadata plus complete unique outcomes, finalization fails closed and appends no `FINALIZED` Timeline entry. It must not guess counts or fabricate `total: 0`.
+- Overflow belonging only to another Plan does not invalidate a target Plan that remains independently provable. Unknown provenance is therefore not a global poison bit: it requires target-specific proof at finalization.
+- Missing visible groups or missing retained plan metadata are handled by the same evidence rule. A missing source is a fail-closed condition, not permission to use a capacity value as a proxy for trust.
+
 ## CLI integration
 
 The CLI keeps its current application-facing module names but re-exports shared symbols through aliases such as `CliTimelineState` and `createInitialCliTimelineState`. `event-projector.ts` continues to own CLI Run lifecycle projection and calls the shared reducer/terminal flush. Ink components remain CLI-only. Existing reconnect, recovery, approval-control, and terminal behavior are outside the shared Web projection and remain owned by the CLI controller.
@@ -108,4 +118,3 @@ Focused checks run before the repository-wide regression. The final validation i
 - **Duplicate a Web reducer:** rejected because CLI and Web semantics would drift and fixes would need to be applied twice.
 - **Add a Timeline-specific Protocol contract:** rejected because existing `AgentEvent` already contains the required safe public data and a second wire model would expand the stable contract unnecessarily.
 - **Make React associate Tool/File/Verification state locally:** rejected because it would violate Core/daemon authority and create a second Run state model.
-
