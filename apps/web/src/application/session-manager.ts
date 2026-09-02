@@ -382,6 +382,7 @@ export class WebSessionManager {
       if (this.activeLifecycle !== active || this.disposed) return;
       this.cancelActiveLifecycle();
       const activeRuns = nonTerminalRuns(runs);
+      const activeRun = activeRuns.length === 1 ? activeRuns[0] : undefined;
       this.publish({
         candidates: this.snapshot.selectedSession
           ? this.upsertCandidate(this.snapshot.selectedSession, latestRun(runs))
@@ -390,7 +391,11 @@ export class WebSessionManager {
         runs,
         history: hydrateSessionTranscript(runs),
         activeRuns,
-        activeRun: activeRuns.length === 1 ? activeRuns[0] : undefined,
+        activeRun,
+        timeline:
+          activeRun !== undefined && activeRun.id !== run.id
+            ? createInitialTimelineState(activeRun.id)
+            : this.snapshot.timeline,
         composerEnabled: activeRuns.length === 0,
         submission: "IDLE",
         error: activeRuns.length > 1 ? sessionError("MULTIPLE_ACTIVE_RUNS") : undefined,

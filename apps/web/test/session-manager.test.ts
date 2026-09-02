@@ -226,6 +226,45 @@ describe("WebSessionManager", () => {
     manager.dispose();
   });
 
+  it("resets Timeline when terminal settlement selects a different active Run", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const terminalRun = makeRun({ sessionId: session.id, goal: "first task" });
+    const otherRun = makeRun({ sessionId: session.id, goal: "second task", status: "RUNNING" });
+    const completedRun = makeCompletedRun(terminalRun);
+    const client = makeClient({
+      createSessionResult: session,
+      createRunResult: terminalRun,
+      watchEvents: [
+        reasoningEvent(terminalRun, "Finishing the first task."),
+        lifecycleEvent("run.completed", terminalRun),
+      ],
+    });
+    client.getRun.mockResolvedValue(completedRun);
+    client.listRuns.mockResolvedValue({ items: [completedRun, otherRun] });
+    client.startRun.mockResolvedValue(
+      actionResponse(makeRun({ ...terminalRun, status: "RUNNING" }), terminalRun.id),
+    );
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+
+    manager.beginDraft();
+    await expect(manager.submitPrompt("first task")).resolves.toBe(true);
+    await waitFor(() => manager.getSnapshot().submission === "IDLE");
+
+    expect(manager.getSnapshot().activeRun?.id).toBe(otherRun.id);
+    expect(manager.getSnapshot().timeline).toMatchObject({
+      runId: otherRun.id,
+      settled: [],
+      activeTools: [],
+      activeLlm: [],
+      activeProcesses: [],
+      activeApprovals: [],
+      retries: [],
+      verification: [],
+      currentPlan: [],
+    });
+    manager.dispose();
+  });
+
   it("exposes only the shared safe Timeline error for conflicting durable event order", async () => {
     const session = makeSession({ defaultWorkspace: workspace });
     const pendingRun = makeRun({ sessionId: session.id });
