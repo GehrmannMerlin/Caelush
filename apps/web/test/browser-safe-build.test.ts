@@ -22,7 +22,7 @@ const nodeOnlyMarkerPatterns = [
   /(?:^|[^\w$.])(?:new\s+)?Buffer\s*(?:\(|\?|\.|\[)/,
   /(?:^|[^\w$.])globalThis(?:\?\.)?\.Buffer\b/,
   new RegExp(String.raw`(?:^|[^\w$.])process${processApiAccess}`),
-  new RegExp(String.raw`(?:^|[^\w$.])globalThis(?:\?\.)?\.process${processApiAccess}`),
+  new RegExp(String.raw`(?:^|[^\w$.])globalThis(?:\.|\?\.)process${processApiAccess}`),
   /(?:from|import)\s*\(?["']node:/,
   /\brequire\s*\(\s*["']node:/,
 ];
@@ -38,6 +38,8 @@ describe("Web production build", () => {
       ...processApis.map((api) => `process["${api}"]`),
       ...processApis.map((api) => `globalThis.process.${api}`),
       ...processApis.map((api) => `globalThis.process?.["${api}"]`),
+      ...processApis.map((api) => `globalThis?.process.${api}`),
+      ...processApis.map((api) => `globalThis?.process?.["${api}"]`),
       'import "node:fs"',
       'import("node:fs")',
       'from "node:fs"',
