@@ -246,6 +246,21 @@ caelush -p "Stream progress" --output-format stream-json
 
 Provider 仍由 daemon 启动环境配置，例如 `CAELUSH_PROVIDER_ID`、`CAELUSH_PROVIDER_BASE_URL`、可选 `CAELUSH_PROVIDER_API_KEY`、`CAELUSH_PROVIDER_ALLOWED_MODELS`、`CAELUSH_DEFAULT_PROVIDER` 和 `CAELUSH_DEFAULT_MODEL`。Provider secret 不会进入 launcher lock、manifest、doctor、stdout、stderr 或 daemon startup log。
 
+Windows PowerShell 中可以先在当前终端配置这些变量，再启动 CLI；其中 `CAELUSH_DEFAULT_PROVIDER` 必须与 `CAELUSH_PROVIDER_ID` 一致：
+
+```powershell
+$env:CAELUSH_PROVIDER_ID = "openai-compatible"
+$env:CAELUSH_PROVIDER_BASE_URL = "https://your-provider.example/v1"
+$env:CAELUSH_PROVIDER_API_KEY = "<your-api-key>"
+$env:CAELUSH_DEFAULT_PROVIDER = "openai-compatible"
+$env:CAELUSH_DEFAULT_MODEL = "<your-model-name>"
+
+caelush doctor
+caelush
+```
+
+Provider 配置只在 daemon 启动时读取。修改变量后，如果 `caelush doctor` 仍显示运行中的 daemon 没有 default model，需要先关闭旧 daemon，再从同一个已配置变量的 PowerShell 重新运行 `caelush`；launcher 会复用健康 daemon，不会强制终止它。
+
 ## Packages 基础说明
 
 Phase 1 在 `@caelush/protocol` 中定义 Session、Run、Step、State、Tool/Observation/Approval/Verification 和 Event Contract，在 `@caelush/core` 中提供 Run State Machine。Phase 2 在 `@caelush/storage` 中提供 Repository、Run State Snapshot、SQLite Migration 和 Durable Event Store，在 `@caelush/events` 中提供 EventBus、Replay 与 Live Watch。Phase 3 在 `@caelush/daemon` 中提供 Local HTTP Service、Session API、Run API 和 SSE Event Stream。Phase 4A 在 `@caelush/llm` 中定义 provider-neutral LLM contracts 和显式 Provider Registry；Phase 4B 增加注入式 `LLMGateway` 和 one-turn streaming runtime；Phase 5A 在 `@caelush/context` 中发现 workspace、project root、环境、项目画像和层级指令，Phase 5B 增加 task-dependent relevant file discovery、deterministic ranking、provider-independent estimation 与 file budget，Phase 5C 增加 deterministic final context assembly、conversation integrity、compaction boundary 和 caller-supplied model-input budget；Phase 6B 在 `@caelush/core` 中以 ports 方式编排 ContextBuilder、LLMRequest 与单次 provider turn，并以 normalized tool-result batch 支持恢复；Phase 7A 在 `@caelush/tools` 中增加 Tool Registration、严格 Ajv Schema Runtime、immutable ToolRegistry 与 model/runtime catalog consistency，Phase 7B 增加 ToolDispatcher、Gate、durable invocation/observation lifecycle、atomic SQLite settlement、idempotency 与 recovery；Phase 8A 在 `@caelush/runtime` 中增加本地只读 Runtime 与四个 bounded filesystem/search Tool；Phase 12A 在 `@caelush/daemon` 中完成生产 Composition Root、Run control routes、provider credential boundary 与 loopback-only Local Agent Service，并在 `@caelush/client` 中提供 typed HTTP/SSE transport。详见 [Package Boundaries](docs/architecture/package-boundaries.md)、[Architecture Overview](docs/architecture/README.md)、[Protocol V1](docs/architecture/protocol-v1.md)、[Tool System](docs/architecture/tool-system.md)、[Runtime](docs/architecture/runtime.md)、[Context & Project Intelligence](docs/architecture/context-and-project-intelligence.md)、[Relevant Context Discovery](docs/architecture/relevant-context-discovery.md)、[ContextBuilder](docs/architecture/context-builder.md)、[Agent Loop](docs/architecture/agent-loop.md)、[Storage & Events](docs/architecture/storage-and-events.md)、[Local Agent Service](docs/architecture/local-agent-service.md)、[Production Daemon Composition](docs/architecture/daemon-production-composition.md)、[Shared Client Transport](docs/architecture/client-transport.md) 和 [LLM Gateway](docs/architecture/llm-gateway.md)。
