@@ -154,6 +154,7 @@ function renderSessionApp(input: {
           title,
           activeRun: snapshot.activeRun,
           history: snapshot.history,
+          timeline: snapshot.timeline,
           composer: createElement(PromptComposer, {
             disabled: !snapshot.composerEnabled,
             submission: snapshot.submission,

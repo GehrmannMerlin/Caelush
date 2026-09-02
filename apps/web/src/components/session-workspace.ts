@@ -1,12 +1,14 @@
 import { createElement, type ReactElement } from "react";
 import type { ClientAgentRun } from "@caelush/protocol";
-import type { SessionHistoryEntry } from "@caelush/client";
+import type { SessionHistoryEntry, TimelineState } from "@caelush/client";
 import { runStatusClass, runStatusLabel } from "./run-status.js";
+import { Timeline } from "./timeline.js";
 
 export interface SessionWorkspaceProps {
   readonly title: string;
   readonly activeRun?: ClientAgentRun | undefined;
   readonly history: readonly SessionHistoryEntry[];
+  readonly timeline: TimelineState;
   readonly composer: ReactElement;
 }
 
@@ -52,6 +54,7 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
             ),
           ),
     ),
+    createElement(Timeline, { timeline: props.timeline }),
     props.composer,
   );
 }

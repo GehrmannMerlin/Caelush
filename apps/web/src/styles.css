@@ -518,6 +518,185 @@ textarea:disabled {
   margin: 0;
 }
 
+.timeline {
+  margin: 0 0 24px;
+  padding: 18px 20px;
+  border: 1px solid #d9e7df;
+  border-radius: 14px;
+  background: #fbfdfc;
+}
+
+.timeline:focus-visible {
+  outline: 3px solid rgb(90 170 136 / 48%);
+  outline-offset: 3px;
+}
+
+.timeline-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.timeline-kicker,
+.timeline-entry-status,
+.timeline-verification-status,
+.timeline-check-status,
+.timeline-check-duration {
+  color: #6d877d;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.timeline-kicker {
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.timeline h2,
+.timeline h3 {
+  margin: 0;
+  color: #1e4438;
+}
+
+.timeline h2 {
+  font-size: 1rem;
+}
+
+.timeline h3 {
+  font-size: 0.86rem;
+}
+
+.timeline-empty {
+  margin: 0;
+  color: #789087;
+  font-size: 0.86rem;
+}
+
+.timeline-list,
+.timeline-check-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.timeline-list--active {
+  margin-bottom: 12px;
+}
+
+.timeline-entry,
+.timeline-check {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.timeline-entry-mark,
+.timeline-check-mark {
+  flex: 0 0 auto;
+  color: #2baf78;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.timeline-entry--failed .timeline-entry-mark,
+.timeline-entry--cancelled .timeline-entry-mark,
+.timeline-entry--interrupted .timeline-entry-mark,
+.timeline-entry--error .timeline-entry-mark,
+.timeline-check--failed .timeline-check-mark,
+.timeline-check--error .timeline-check-mark {
+  color: #b1544f;
+}
+
+.timeline-entry-content {
+  min-width: 0;
+}
+
+.timeline-entry-title,
+.timeline-entry-text,
+.timeline-entry-status,
+.timeline-verification-status {
+  margin: 0;
+}
+
+.timeline-entry-title {
+  color: #24483c;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.timeline-entry-text {
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+  color: #527067;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.timeline-entry-status {
+  margin-top: 3px;
+}
+
+.timeline-verification {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #e0ebe5;
+}
+
+.timeline-verification-group {
+  display: grid;
+  gap: 8px;
+}
+
+.timeline-check {
+  flex-wrap: wrap;
+  padding-left: 2px;
+}
+
+.timeline-check-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #315a4d;
+  font-size: 0.82rem;
+}
+
+.timeline-check-status,
+.timeline-check-duration {
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .timeline-list--active .timeline-entry-mark {
+    animation: timeline-activity-pulse 1.5s ease-in-out infinite;
+  }
+}
+
+@keyframes timeline-activity-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .timeline *,
+  .timeline *::before,
+  .timeline *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 .prompt-composer {
   padding-top: 18px;
   border-top: 1px solid #dce7e2;
@@ -609,5 +788,20 @@ textarea:disabled {
 
   .session-workspace {
     min-height: auto;
+  }
+
+  .timeline {
+    padding: 16px;
+  }
+
+  .timeline-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .timeline-check-status,
+  .timeline-check-duration {
+    margin-left: 20px;
   }
 }

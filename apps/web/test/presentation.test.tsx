@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createSessionId, createWorkspaceId, type WorkspaceRef } from "@caelush/protocol";
 import { SessionSidebar, sessionDisplayTitle } from "../src/components/session-sidebar.js";
 import { PromptComposer, shouldSubmitPrompt } from "../src/components/prompt-composer.js";
-import type { SessionCandidate } from "@caelush/client";
+import { createInitialTimelineState, type SessionCandidate } from "@caelush/client";
+import { SessionWorkspace } from "../src/components/session-workspace.js";
 
 const workspace: WorkspaceRef = {
   id: createWorkspaceId(),
@@ -78,5 +79,19 @@ describe("Web presentation", () => {
     expect(html).toContain("运行");
     expect(html).not.toContain("附件");
     expect(html).not.toContain("@引用");
+  });
+
+  it("places the projected timeline after history and before the composer", () => {
+    const html = renderToStaticMarkup(
+      <SessionWorkspace
+        title="认证修复"
+        history={[{ id: "history-1", kind: "USER", text: "修复登录" }]}
+        timeline={createInitialTimelineState()}
+        composer={<div>COMPOSER_MARKER</div>}
+      />,
+    );
+
+    expect(html.indexOf("修复登录")).toBeLessThan(html.indexOf("执行过程"));
+    expect(html.indexOf("执行过程")).toBeLessThan(html.indexOf("COMPOSER_MARKER"));
   });
 });
