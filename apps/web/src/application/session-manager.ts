@@ -465,7 +465,10 @@ export class WebSessionManager {
       return !this.disposed && this.snapshot.activeRun?.id === run.id;
     } catch {
       if (!this.disposed && this.snapshot.activeRun?.id === run.id) {
-        this.publish({ controlMode: this.controlModeForApprovals(), error: sessionError("RUN_CANCEL_FAILED") });
+        this.publish({
+          controlMode: this.controlModeForApprovals(),
+          error: sessionError("RUN_CANCEL_FAILED"),
+        });
       }
       return false;
     }
@@ -544,7 +547,7 @@ export class WebSessionManager {
             ? createInitialTimelineState(activeRun.id)
             : activeRuns.length > 1
               ? createInitialTimelineState()
-            : this.snapshot.timeline,
+              : this.snapshot.timeline,
         composerEnabled: activeRuns.length === 0,
         submission: "IDLE",
         approvalState: undefined,
@@ -632,6 +635,7 @@ export class WebSessionManager {
     } catch {
       // The terminal Run is still authoritative; preserve known session history if list refresh fails.
     }
+    runs = upsertConfirmedTerminalRun(runs, run);
     if (this.disposed || !this.isCurrentApprovalContext(context)) return;
     if (this.activeLifecycle?.run.id === run.id) this.cancelActiveLifecycle();
     const activeRuns = nonTerminalRuns(runs);
@@ -650,7 +654,7 @@ export class WebSessionManager {
           ? createInitialTimelineState(activeRun.id)
           : activeRuns.length > 1
             ? createInitialTimelineState()
-          : this.snapshot.timeline,
+            : this.snapshot.timeline,
       composerEnabled: activeRuns.length === 0,
       submission: "IDLE",
       approvalState: undefined,
@@ -821,6 +825,20 @@ function latestRun(runs: readonly ClientAgentRun[]): ClientAgentRun | undefined 
     if (left.createdAt !== right.createdAt) return right.createdAt - left.createdAt;
     return left.id < right.id ? 1 : left.id > right.id ? -1 : 0;
   })[0];
+}
+
+function upsertConfirmedTerminalRun(
+  runs: readonly ClientAgentRun[],
+  confirmedRun: ClientAgentRun,
+): ClientAgentRun[] {
+  let replaced = false;
+  const reconciled = runs.flatMap((run) => {
+    if (run.id !== confirmedRun.id) return [run];
+    if (replaced) return [];
+    replaced = true;
+    return [confirmedRun];
+  });
+  return replaced ? reconciled : [...reconciled, confirmedRun];
 }
 
 function freezeApprovalView(view: ApprovalView): ApprovalView {

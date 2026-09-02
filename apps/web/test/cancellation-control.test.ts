@@ -86,6 +86,32 @@ describe("WebSessionManager cancellation controls", () => {
     manager.dispose();
   });
 
+  it.each([
+    ["returns an older same-id run", (run: ClientAgentRun) => [run]],
+    ["omits the run", () => []],
+  ] as const)(
+    "retains the daemon-confirmed terminal run when listRuns %s",
+    async (_caseName, staleRuns) => {
+      const session = makeSession();
+      const run = makeRun({ sessionId: session.id, status: "RUNNING" });
+      const cancelled = makeRun({ ...run, status: "CANCELLED", finishedAt: 2 });
+      const client = makeClient(session, run);
+      const manager = await openActiveSession(client, session);
+      client.cancelRun.mockResolvedValue(actionResponse(cancelled));
+      client.listRuns.mockResolvedValue({ items: staleRuns(run) });
+
+      await expect(manager.cancelRun()).resolves.toBe(true);
+
+      expect(manager.getSnapshot()).toMatchObject({
+        activeRun: undefined,
+        activeRuns: [],
+        runs: [cancelled],
+        controlMode: "NONE",
+      });
+      manager.dispose();
+    },
+  );
+
   it("returns to coherent nonterminal controls when cancellation is not terminal", async () => {
     const session = makeSession();
     const run = makeRun({ sessionId: session.id, status: "RUNNING" });
@@ -144,8 +170,13 @@ describe("WebSessionManager cancellation controls", () => {
     client.cancelRun.mockResolvedValue(actionResponse(cancelled));
     client.listRuns.mockResolvedValue({ items: [cancelled] });
 
-    const approvalRequest = manager.resolveApproval(approval.id, { action: "APPROVE", scope: "ONCE" });
-    await waitFor(() => manager.getSnapshot().approvalState?.submitting.includes(approval.id) === true);
+    const approvalRequest = manager.resolveApproval(approval.id, {
+      action: "APPROVE",
+      scope: "ONCE",
+    });
+    await waitFor(
+      () => manager.getSnapshot().approvalState?.submitting.includes(approval.id) === true,
+    );
     await expect(manager.cancelRun()).resolves.toBe(true);
     resolveApproval();
     await expect(approvalRequest).resolves.toBe(false);
@@ -158,9 +189,63 @@ describe("WebSessionManager cancellation controls", () => {
     manager.dispose();
   });
 
+  it("retains CANCELLING during a live approval refresh before terminal cancellation settles", async () => {
+    const session = makeSession();
+    const run = makeRun({ sessionId: session.id, status: "WAITING_APPROVAL" });
+    const approval = makeApproval(run.id);
+    const cancelled = makeRun({ ...run, status: "CANCELLED", finishedAt: 2 });
+    const client = makeClient(session, run);
+    let releaseCancellation!: (response: RunActionResponse) => void;
+    client.cancelRun.mockImplementation(
+      () =>
+        new Promise<RunActionResponse>((resolve) => {
+          releaseCancellation = resolve;
+        }),
+    );
+    const manager = await openActiveSession(client, session);
+    client.listPendingApprovals.mockResolvedValue({ items: [approval] });
+    client.listRuns.mockResolvedValue({ items: [cancelled] });
+
+    const cancellation = manager.cancelRun();
+    await manager.refreshApprovals(run.id);
+
+    expect(manager.getSnapshot()).toMatchObject({
+      controlMode: "CANCELLING",
+      approvalState: { requests: [expect.objectContaining({ id: approval.id })] },
+    });
+    releaseCancellation(actionResponse(cancelled));
+    await expect(cancellation).resolves.toBe(true);
+    expect(manager.getSnapshot()).toMatchObject({
+      activeRun: undefined,
+      approvalState: undefined,
+      controlMode: "NONE",
+    });
+    manager.dispose();
+  });
+
   it("refuses cancellation from non-cancellable statuses", async () => {
     const session = makeSession();
     const run = makeRun({ sessionId: session.id, status: "PENDING" });
+    const client = makeClient(session, run);
+    const manager = await openActiveSession(client, session);
+
+    await expect(manager.cancelRun()).resolves.toBe(false);
+
+    expect(client.cancelRun).not.toHaveBeenCalled();
+    expect(manager.getSnapshot().controlMode).toBe("NONE");
+    manager.dispose();
+  });
+
+  it.each([
+    "COMPLETED",
+    "FAILED",
+    "CANCELLED",
+    "TIMEOUT",
+    "MAX_STEPS_REACHED",
+    "BUDGET_EXCEEDED",
+  ] as const)("does not call the daemon for terminal %s runs", async (status) => {
+    const session = makeSession();
+    const run = makeRun({ sessionId: session.id, status, finishedAt: 2 });
     const client = makeClient(session, run);
     const manager = await openActiveSession(client, session);
 
@@ -216,35 +301,72 @@ function actionResponse(run: ClientAgentRun): RunActionResponse {
 
 function makeInfo(): DaemonInfo {
   return DaemonInfoSchema.parse({
-    apiVersion: "v1", protocolVersion: 1, daemonVersion: "0.1.0",
-    capabilities: { runExecution: true, runRecovery: true, cancellation: true, approvals: true, sseReplay: true },
-    runtimeKinds: ["local"], configuredProviders: ["fixture"],
+    apiVersion: "v1",
+    protocolVersion: 1,
+    daemonVersion: "0.1.0",
+    capabilities: {
+      runExecution: true,
+      runRecovery: true,
+      cancellation: true,
+      approvals: true,
+      sseReplay: true,
+    },
+    runtimeKinds: ["local"],
+    configuredProviders: ["fixture"],
     defaultModel: { provider: "fixture", model: "fixture" },
     defaultRunConfiguration: {
-      runtime: { id: "local", kind: "local" }, permissionProfile: "PROJECT_ACCESS", approvalPolicy: "DANGEROUS_ONLY",
+      runtime: { id: "local", kind: "local" },
+      permissionProfile: "PROJECT_ACCESS",
+      approvalPolicy: "DANGEROUS_ONLY",
       limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 10_000 },
     },
   });
 }
 
 function makeSession(): ClientAgentSession {
-  return ClientAgentSessionSchema.parse({ id: createSessionId(), createdAt: 1, updatedAt: 1, metadata: {}, defaultWorkspace: workspace, defaultModel: { provider: "fixture", model: "fixture" } });
+  return ClientAgentSessionSchema.parse({
+    id: createSessionId(),
+    createdAt: 1,
+    updatedAt: 1,
+    metadata: {},
+    defaultWorkspace: workspace,
+    defaultModel: { provider: "fixture", model: "fixture" },
+  });
 }
 
 function makeRun(overrides: Partial<ClientAgentRun>): ClientAgentRun {
   return ClientAgentRunSchema.parse({
-    id: createRunId(), sessionId: createSessionId(), goal: "task", status: "PENDING", workspace,
-    model: { provider: "fixture", model: "fixture" }, runtime: { id: "local", kind: "local" },
-    permissionProfile: "PROJECT_ACCESS", approvalPolicy: "DANGEROUS_ONLY",
-    limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 10_000 }, createdAt: 1, ...overrides,
+    id: createRunId(),
+    sessionId: createSessionId(),
+    goal: "task",
+    status: "PENDING",
+    workspace,
+    model: { provider: "fixture", model: "fixture" },
+    runtime: { id: "local", kind: "local" },
+    permissionProfile: "PROJECT_ACCESS",
+    approvalPolicy: "DANGEROUS_ONLY",
+    limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 10_000 },
+    createdAt: 1,
+    ...overrides,
   });
 }
 
 function makeApproval(runId: ClientAgentRun["id"]): ApprovalRequest {
   return ApprovalRequestSchema.parse({
-    id: createApprovalRequestId(), runId, toolInvocationId: createToolInvocationId(), status: "PENDING",
-    title: "Approve write", reason: "This changes the workspace.", riskLevel: "HIGH", scope: "ONCE",
-    action: { toolName: "apply_patch", summary: "Write a file", requiredCapabilities: ["filesystem.write"] }, createdAt: 1,
+    id: createApprovalRequestId(),
+    runId,
+    toolInvocationId: createToolInvocationId(),
+    status: "PENDING",
+    title: "Approve write",
+    reason: "This changes the workspace.",
+    riskLevel: "HIGH",
+    scope: "ONCE",
+    action: {
+      toolName: "apply_patch",
+      summary: "Write a file",
+      requiredCapabilities: ["filesystem.write"],
+    },
+    createdAt: 1,
   });
 }
 
