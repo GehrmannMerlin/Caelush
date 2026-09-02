@@ -66,6 +66,45 @@ describe("shared Timeline reducer", () => {
     expect(state.verification[0]).toMatchObject({ passed: 1, failed: 1, errors: 2 });
   });
 
+  it("keeps verification replacement accounting after a visible check is evicted", () => {
+    const planId = createVerificationPlanId();
+    const checkA = createVerificationCheckId();
+    const checkB = createVerificationCheckId();
+    let state = createInitialTimelineState(runId, { limits: { maxActiveEntries: 1 } });
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.planned", 1, { planId, checkCount: 2 }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.check.completed", 2, {
+        planId,
+        checkId: checkA,
+        status: "PASSED",
+        evidenceIds: [],
+      }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.check.completed", 3, {
+        planId,
+        checkId: checkB,
+        status: "PASSED",
+        evidenceIds: [],
+      }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.check.completed", 4, {
+        planId,
+        checkId: checkA,
+        status: "ERROR",
+        evidenceIds: [],
+      }),
+    );
+    expect(state.verification[0]).toMatchObject({ passed: 1, failed: 0, errors: 1 });
+  });
+
   it("bounds and sanitizes public strings across projection domains", () => {
     const bad = "\u001b[31m" + "x".repeat(200) + "\u001b[0m";
     let state = createInitialTimelineState(runId, { limits: { maxTextBytes: 32 } });

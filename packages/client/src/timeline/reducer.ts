@@ -548,12 +548,15 @@ function updateVerificationCheck(
     status,
     ...(durationMs === undefined ? {} : { detail: `${durationMs}ms` }),
   };
+  const priorOutcome = state.verificationOutcomes.find(
+    (item) => item.planId === event.payload.planId && item.checkId === event.payload.checkId,
+  );
   const old =
-    existing?.status === "PASSED"
+    priorOutcome?.status === "PASSED"
       ? { passed: -1 }
-      : existing?.status === "FAILED"
+      : priorOutcome?.status === "FAILED"
         ? { failed: -1 }
-        : existing?.status === "ERROR"
+        : priorOutcome?.status === "ERROR"
           ? { errors: -1 }
           : {};
   const add =
@@ -564,14 +567,30 @@ function updateVerificationCheck(
         : status === "ERROR"
           ? { errors: 1 }
           : {};
-  return upsertVerification(state, {
-    ...group,
-    status: "RUNNING",
-    checks: upsert(group.checks, check, state.limits.maxActiveEntries),
-    passed: group.passed + (add.passed ?? 0) + (old.passed ?? 0),
-    failed: group.failed + (add.failed ?? 0) + (old.failed ?? 0),
-    errors: group.errors + (add.errors ?? 0) + (old.errors ?? 0),
-  });
+  const verificationOutcomes =
+    status === "PASSED" || status === "FAILED" || status === "ERROR"
+      ? upsert(
+          state.verificationOutcomes,
+          {
+            id: `${event.payload.planId}:${event.payload.checkId}`,
+            planId: event.payload.planId,
+            checkId: event.payload.checkId,
+            status,
+          },
+          state.limits.maxSeenEvents,
+        )
+      : state.verificationOutcomes;
+  return {
+    ...upsertVerification(state, {
+      ...group,
+      status: "RUNNING",
+      checks: upsert(group.checks, check, state.limits.maxActiveEntries),
+      passed: group.passed + (add.passed ?? 0) + (old.passed ?? 0),
+      failed: group.failed + (add.failed ?? 0) + (old.failed ?? 0),
+      errors: group.errors + (add.errors ?? 0) + (old.errors ?? 0),
+    }),
+    verificationOutcomes,
+  };
 }
 function appendSettled(state: TimelineState, entry: TimelineEntry): TimelineState {
   let settled = [
