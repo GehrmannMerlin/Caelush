@@ -110,6 +110,30 @@ describe("doctor", () => {
     expect(output).not.toContain("SECRET_SENTINEL");
   });
 
+  it("reports when a reachable daemon is healthy but has no default model", async () => {
+    const result = await runDoctor(
+      options({
+        environment: {},
+        probeClient: {
+          getHealth: vi.fn(async () => health),
+          getInfo: vi.fn(
+            async () =>
+              ({
+                ...info,
+                configuredProviders: [],
+                defaultModel: undefined,
+              }) as unknown as DaemonInfo,
+          ),
+        },
+      }),
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(formatDoctorReport(result)).toContain(
+      "[WARN] Default model: not configured in the running daemon; set CAELUSH_DEFAULT_PROVIDER and CAELUSH_DEFAULT_MODEL, then restart the daemon.",
+    );
+  });
+
   it("reports an invalid daemon URL without throwing or starting anything", async () => {
     const result = await runDoctor(
       options({

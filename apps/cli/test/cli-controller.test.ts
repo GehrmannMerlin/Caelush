@@ -239,8 +239,29 @@ describe("CliConversationController", () => {
     expect(sessionCalls).toBe(0);
     expect(controller.getState()).toMatchObject({
       bootstrap: "BOOTSTRAP_ERROR",
-      fatalError: "Daemon is missing a default model or Run configuration.",
+      fatalError:
+        "Daemon is missing a default model. Set CAELUSH_DEFAULT_PROVIDER and CAELUSH_DEFAULT_MODEL, then restart the daemon.",
     });
+  });
+
+  it("explains provider setup when the daemon has no configured providers", async () => {
+    const controller = new CliConversationController({
+      client: makeClient({
+        getInfo: async () =>
+          ({
+            ...makeInfo(),
+            configuredProviders: [],
+            defaultModel: undefined,
+          }) as unknown as DaemonInfo,
+      }),
+      workspacePath: "C:\\workspace\\project",
+    });
+
+    await controller.bootstrap();
+
+    expect(controller.getState().fatalError).toBe(
+      "Daemon is missing a default model. Configure CAELUSH_PROVIDER_ID and CAELUSH_PROVIDER_BASE_URL (and CAELUSH_PROVIDER_API_KEY when required), then set CAELUSH_DEFAULT_PROVIDER and CAELUSH_DEFAULT_MODEL and restart the daemon.",
+    );
   });
 });
 

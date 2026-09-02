@@ -236,7 +236,7 @@ export class CliConversationController {
       });
       const info = await this.options.client.getInfo();
       if (info.defaultModel === undefined || info.defaultRunConfiguration === undefined) {
-        throw new CliConfigurationError();
+        throw new CliConfigurationError(info);
       }
       this.publish({
         ...this.state,
@@ -975,8 +975,22 @@ export class CliConversationController {
 }
 
 class CliConfigurationError extends Error {
-  constructor() {
-    super("Daemon is missing a default model or Run configuration.");
+  constructor(info: DaemonInfo) {
+    const missing: string[] = [];
+    if (info.defaultModel === undefined) missing.push("a default model");
+    if (info.defaultRunConfiguration === undefined) missing.push("a default Run configuration");
+
+    const missingText =
+      missing.length === 1
+        ? missing[0]
+        : `${missing.slice(0, -1).join(", ")}, and ${missing[missing.length - 1]}`;
+    const guidance =
+      info.defaultModel === undefined
+        ? info.configuredProviders.length === 0
+          ? "Configure CAELUSH_PROVIDER_ID and CAELUSH_PROVIDER_BASE_URL (and CAELUSH_PROVIDER_API_KEY when required), then set CAELUSH_DEFAULT_PROVIDER and CAELUSH_DEFAULT_MODEL and restart the daemon."
+          : "Set CAELUSH_DEFAULT_PROVIDER and CAELUSH_DEFAULT_MODEL, then restart the daemon."
+        : "Restart the daemon with a valid default Run configuration.";
+    super(`Daemon is missing ${missingText}. ${guidance}`);
     this.name = "CliConfigurationError";
   }
 }

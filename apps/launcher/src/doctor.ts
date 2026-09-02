@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { CaelushClient } from "@caelush/client";
 import { checkNodePtyLoadability, inspectMigrationAssets } from "@caelush/daemon/diagnostics";
 import { resolveProductPaths, type ProductPaths } from "@caelush/daemon/paths";
+import type { DaemonInfo } from "@caelush/protocol";
 import type { DaemonProbeClient } from "./daemon-discovery.js";
 import { DEFAULT_DAEMON_URL } from "./daemon-discovery.js";
 import { EXIT_CODES } from "./exit-codes.js";
@@ -43,6 +44,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
   const platform = options.platform ?? process.platform;
   const arch = options.arch ?? process.arch;
   const checks: DoctorCheck[] = [];
+  let daemonInfo: DaemonInfo | undefined;
   checks.push({ name: "Caelush version", status: "PASS", detail: PRODUCT_VERSION });
   checks.push({
     name: "Node version",
@@ -82,6 +84,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
     if (probeClient === undefined) throw new Error("daemon client unavailable");
     const health = await probeClient.getHealth();
     const info = await probeClient.getInfo();
+    daemonInfo = info;
     const compatible =
       health.apiVersion === "v1" &&
       health.protocolVersion === 1 &&
@@ -146,15 +149,38 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
   const providerId = environment.CAELUSH_PROVIDER_ID;
   const defaultProvider = environment.CAELUSH_DEFAULT_PROVIDER;
   const defaultModel = environment.CAELUSH_DEFAULT_MODEL;
+  const providerIds =
+    daemonInfo === undefined
+      ? providerId === undefined
+        ? []
+        : [providerId]
+      : daemonInfo.configuredProviders;
   checks.push({
     name: "Provider configured",
-    status: providerId !== undefined ? "PASS" : "WARN",
-    detail: providerId === undefined ? "no" : "yes",
+    status: providerIds.length > 0 ? "PASS" : "WARN",
+    detail: providerIds.length > 0 ? "yes" : "no",
   });
-  if (providerId !== undefined)
-    checks.push({ name: "Provider ID", status: "PASS", detail: providerId });
-  if (defaultProvider !== undefined && defaultModel !== undefined) {
+  if (providerIds.length > 0)
+    checks.push({ name: "Provider ID", status: "PASS", detail: providerIds.join(", ") });
+
+  if (daemonInfo?.defaultModel !== undefined) {
+    checks.push({ name: "Default model", status: "PASS", detail: daemonInfo.defaultModel.model });
+  } else if (daemonInfo !== undefined) {
+    checks.push({
+      name: "Default model",
+      status: "WARN",
+      detail:
+        "not configured in the running daemon; set CAELUSH_DEFAULT_PROVIDER and CAELUSH_DEFAULT_MODEL, then restart the daemon.",
+    });
+  } else if (defaultProvider !== undefined && defaultModel !== undefined) {
     checks.push({ name: "Default model", status: "PASS", detail: defaultModel });
+  } else {
+    checks.push({
+      name: "Default model",
+      status: "WARN",
+      detail:
+        "not configured; set CAELUSH_DEFAULT_PROVIDER and CAELUSH_DEFAULT_MODEL before starting the daemon.",
+    });
   }
 
   return {
