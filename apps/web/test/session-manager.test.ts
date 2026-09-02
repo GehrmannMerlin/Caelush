@@ -132,6 +132,163 @@ describe("WebSessionManager", () => {
     manager.dispose();
   });
 
+  it("keeps empty Timeline state for bootstrap, draft, and a selected completed Session", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const completedRun = makeCompletedRun(makeRun({ sessionId: session.id }));
+    const client = makeClient({
+      sessions: [session],
+      latestRuns: new Map([[session.id, [completedRun]]]),
+    });
+    client.listRuns.mockResolvedValue({ items: [completedRun] });
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+
+    expect(manager.getSnapshot().timeline).toMatchObject({
+      settled: [],
+      activeTools: [],
+      activeLlm: [],
+      activeProcesses: [],
+      activeApprovals: [],
+    });
+    manager.beginDraft();
+    expect(manager.getSnapshot().timeline.settled).toEqual([]);
+    await manager.loadSessions();
+    await expect(manager.selectSession(session.id)).resolves.toBe(true);
+    expect(manager.getSnapshot().timeline).toMatchObject({ settled: [] });
+    manager.dispose();
+  });
+
+  it("creates an empty Timeline scoped to a newly created Run", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const pendingRun = makeRun({ sessionId: session.id });
+    const client = makeClient({ createSessionResult: session, createRunResult: pendingRun });
+    client.watchRunEvents.mockImplementation(async function* (_runId, options) {
+      options?.onOpen?.();
+      yield* [] as AgentEvent[];
+      await new Promise<void>(() => undefined);
+    });
+    client.startRun.mockResolvedValue(
+      actionResponse(makeRun({ ...pendingRun, status: "RUNNING" }), pendingRun.id),
+    );
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+
+    manager.beginDraft();
+    await expect(manager.submitPrompt("start fresh timeline")).resolves.toBe(true);
+
+    expect(manager.getSnapshot().timeline).toMatchObject({
+      runId: pendingRun.id,
+      settled: [],
+      activeTools: [],
+      activeLlm: [],
+      activeProcesses: [],
+      activeApprovals: [],
+    });
+    expect(client.watchRunEvents).toHaveBeenCalledTimes(1);
+    manager.dispose();
+  });
+
+  it("projects activity from the single Run stream without refreshing authority, then flushes it on terminal settlement", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const pendingRun = makeRun({ sessionId: session.id, goal: "inspect timeline" });
+    const runningRun = makeRun({ ...pendingRun, status: "RUNNING" });
+    const completedRun = makeCompletedRun(pendingRun);
+    const client = makeClient({
+      createSessionResult: session,
+      createRunResult: pendingRun,
+      watchEvents: [
+        reasoningEvent(pendingRun, "Inspecting the workspace."),
+        lifecycleEvent("run.completed", pendingRun),
+      ],
+    });
+    client.getRun.mockResolvedValue(completedRun);
+    client.listRuns.mockResolvedValue({ items: [completedRun] });
+    client.startRun.mockResolvedValue(actionResponse(runningRun, pendingRun.id));
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+
+    manager.beginDraft();
+    await expect(manager.submitPrompt("inspect timeline")).resolves.toBe(true);
+    await waitFor(() => manager.getSnapshot().submission === "IDLE");
+
+    const snapshot = manager.getSnapshot();
+    expect(client.watchRunEvents).toHaveBeenCalledTimes(1);
+    expect(client.getRun).toHaveBeenCalledTimes(1);
+    expect(snapshot.timeline.runId).toBe(pendingRun.id);
+    expect(snapshot.timeline.settled).toContainEqual(
+      expect.objectContaining({ kind: "REASONING", text: "Inspecting the workspace." }),
+    );
+    expect(snapshot.timeline).toMatchObject({
+      activeLlm: [],
+      activeTools: [],
+      activeProcesses: [],
+      activeApprovals: [],
+      retries: [],
+      verification: [],
+    });
+    manager.dispose();
+  });
+
+  it("exposes only the shared safe Timeline error for conflicting durable event order", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const pendingRun = makeRun({ sessionId: session.id });
+    const client = makeClient({
+      createSessionResult: session,
+      createRunResult: pendingRun,
+      watchEvents: [
+        durableReasoningEvent(
+          pendingRun,
+          "evt_00000000-0000-7000-8000-000000000010",
+          1,
+          "First safe summary.",
+        ),
+        durableReasoningEvent(
+          pendingRun,
+          "evt_00000000-0000-7000-8000-000000000011",
+          1,
+          "raw secret-like detail must not be exposed",
+        ),
+      ],
+    });
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+
+    manager.beginDraft();
+    await expect(manager.submitPrompt("conflict")).resolves.toBe(true);
+    await waitFor(() => manager.getSnapshot().timeline.error !== undefined);
+
+    expect(manager.getSnapshot().timeline.error).toBe(
+      "Timeline event order could not be verified.",
+    );
+    expect(manager.getSnapshot().timeline.settled).toHaveLength(1);
+    expect(manager.getSnapshot().timeline.settled[0]).toMatchObject({
+      kind: "REASONING",
+      text: "First safe summary.",
+    });
+    expect(client.getRun).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
+  it("ignores a stale lifecycle event so it cannot update the new active Run", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const activeRun = makeRun({ sessionId: session.id, status: "PENDING" });
+    const staleRun = makeRun({ sessionId: session.id, status: "RUNNING" });
+    const client = makeClient({ createSessionResult: session, createRunResult: activeRun });
+    let staleEventDelivered = false;
+    client.watchRunEvents.mockImplementation(async function* (_runId, options) {
+      options?.onOpen?.();
+      yield lifecycleEvent("status.changed", staleRun);
+      staleEventDelivered = true;
+      await new Promise<void>(() => undefined);
+    });
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+
+    manager.beginDraft();
+    await expect(manager.submitPrompt("new run")).resolves.toBe(true);
+    await waitFor(() => staleEventDelivered);
+
+    expect(client.getRun).not.toHaveBeenCalled();
+    expect(manager.getSnapshot().activeRun?.id).toBe(activeRun.id);
+    expect(manager.getSnapshot().timeline).toMatchObject({ runId: activeRun.id, settled: [] });
+    manager.dispose();
+  });
+
   it("keeps prior Run-level history when submitting the next Run in one Session", async () => {
     const session = makeSession({ defaultWorkspace: workspace });
     const previousRun = makeCompletedRun(makeRun({ sessionId: session.id, goal: "previous task" }));
@@ -453,6 +610,33 @@ function lifecycleEvent(type: string, run: ClientAgentRun): AgentEvent {
     visibility: "USER_VISIBLE",
     durability: { kind: "EPHEMERAL" },
     payload: {},
+  } as AgentEvent;
+}
+
+function reasoningEvent(run: ClientAgentRun, summary: string): AgentEvent {
+  return {
+    type: "reasoning.summary",
+    eventId: "evt_00000000-0000-7000-8000-000000000002",
+    schemaVersion: 1,
+    runId: run.id,
+    sessionId: run.sessionId,
+    timestamp: 1,
+    visibility: "USER_VISIBLE",
+    durability: { kind: "EPHEMERAL" },
+    payload: { summary },
+  } as AgentEvent;
+}
+
+function durableReasoningEvent(
+  run: ClientAgentRun,
+  eventId: string,
+  sequence: number,
+  summary: string,
+): AgentEvent {
+  return {
+    ...reasoningEvent(run, summary),
+    eventId,
+    durability: { kind: "DURABLE", sequence },
   } as AgentEvent;
 }
 

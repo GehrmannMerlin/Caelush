@@ -8,6 +8,7 @@ import {
   type ReactElement,
 } from "react";
 import type { SessionId } from "@caelush/protocol";
+import { createInitialTimelineState } from "@caelush/client";
 import {
   bootstrapWebHost,
   createInitialWebHostState,
@@ -29,6 +30,7 @@ const EMPTY_SESSION_SNAPSHOT: WebSessionSnapshot = {
   runs: [],
   history: [],
   activeRuns: [],
+  timeline: createInitialTimelineState(),
   isDraft: false,
   composerEnabled: false,
   submission: "IDLE",

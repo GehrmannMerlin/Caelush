@@ -1,14 +1,18 @@
-import type { WatchRunEventsOptions } from "@caelush/client";
 import {
+  createInitialTimelineState,
   deriveSessionActivity,
+  flushTimelineForTerminal,
   hydrateSessionTranscript,
   listMatchingSessionCandidates,
   nonTerminalRuns,
+  reduceTimelineEvent,
   resolveSessionWorkspace,
   sortSessionCandidates,
   type SessionCandidate,
   type SessionCandidateClient,
   type SessionHistoryEntry,
+  type TimelineState,
+  type WatchRunEventsOptions,
 } from "@caelush/client";
 import type {
   AgentEvent,
@@ -64,6 +68,7 @@ export interface WebSessionSnapshot {
   readonly history: readonly SessionHistoryEntry[];
   readonly activeRuns: readonly ClientAgentRun[];
   readonly activeRun?: ClientAgentRun;
+  readonly timeline: TimelineState;
   readonly isDraft: boolean;
   readonly composerEnabled: boolean;
   readonly submission: WebSubmissionState;
@@ -142,6 +147,7 @@ export class WebSessionManager {
       history: [],
       activeRuns: [],
       activeRun: undefined,
+      timeline: createInitialTimelineState(),
       isDraft: true,
       composerEnabled: true,
       submission: "IDLE",
@@ -171,6 +177,7 @@ export class WebSessionManager {
           history: hydrateSessionTranscript(runs),
           activeRuns: [],
           activeRun: undefined,
+          timeline: createInitialTimelineState(),
           isDraft: false,
           composerEnabled: false,
           error: sessionError("SESSION_SELECTION_FAILED"),
@@ -187,6 +194,7 @@ export class WebSessionManager {
         history: [],
         activeRuns: [],
         activeRun: undefined,
+        timeline: createInitialTimelineState(),
         isDraft: false,
         composerEnabled: false,
         error: sessionError("SESSION_SELECTION_FAILED"),
@@ -243,6 +251,7 @@ export class WebSessionManager {
         history: hydrateSessionTranscript(runs, run.id),
         activeRuns: [run],
         activeRun: run,
+        timeline: createInitialTimelineState(run.id),
         isDraft: false,
         composerEnabled: false,
         submission: "RUN_CREATED",
@@ -308,6 +317,7 @@ export class WebSessionManager {
       ),
       activeRuns,
       activeRun: activeRuns.length === 1 ? activeRuns[0] : undefined,
+      timeline: createInitialTimelineState(activeRuns.length === 1 ? activeRuns[0]?.id : undefined),
       isDraft: false,
       composerEnabled: activeRuns.length === 0,
       submission: "IDLE",
@@ -332,6 +342,9 @@ export class WebSessionManager {
         signal: active.controller.signal,
       })) {
         if (this.activeLifecycle !== active || this.disposed) return;
+        if (event.runId !== active.run.id) continue;
+        const timeline = reduceTimelineEvent(this.snapshot.timeline, event);
+        this.publish({ timeline });
         if (!isLifecycleEvent(event)) continue;
         let refreshed: ClientAgentRun;
         try {
@@ -342,7 +355,10 @@ export class WebSessionManager {
           return;
         }
         if (this.activeLifecycle !== active || this.disposed) return;
-        this.publishActiveRun(refreshed, "ACTIVE");
+        const terminalTimeline = isTerminalRunStatus(refreshed.status)
+          ? flushTimelineForTerminal(this.snapshot.timeline, refreshed.status)
+          : this.snapshot.timeline;
+        this.publishActiveRun(refreshed, "ACTIVE", terminalTimeline);
         if (isTerminalRunStatus(refreshed.status)) {
           await this.settleLifecycle(active, refreshed);
           return;
@@ -385,7 +401,11 @@ export class WebSessionManager {
     }
   }
 
-  private publishActiveRun(run: ClientAgentRun, submission: WebSubmissionState): void {
+  private publishActiveRun(
+    run: ClientAgentRun,
+    submission: WebSubmissionState,
+    timeline: TimelineState = this.snapshot.timeline,
+  ): void {
     const activeRuns = this.snapshot.activeRuns.map((item) => (item.id === run.id ? run : item));
     const lifecycle = this.activeLifecycle;
     this.publish({
@@ -395,6 +415,7 @@ export class WebSessionManager {
       activeRuns: activeRuns.length === 0 ? [run] : activeRuns,
       activeRun: run,
       runs: this.snapshot.runs.map((item) => (item.id === run.id ? run : item)),
+      timeline,
       submission,
       composerEnabled: false,
       error:
@@ -442,6 +463,7 @@ function initialSnapshot(): WebSessionSnapshot {
     runs: [],
     history: [],
     activeRuns: [],
+    timeline: createInitialTimelineState(),
     isDraft: false,
     composerEnabled: false,
     submission: "IDLE",
@@ -460,7 +482,9 @@ function isLifecycleEvent(event: AgentEvent): boolean {
   );
 }
 
-function isTerminalRunStatus(status: RunStatus): boolean {
+function isTerminalRunStatus(
+  status: RunStatus,
+): status is Parameters<typeof flushTimelineForTerminal>[1] {
   return (
     status === "COMPLETED" ||
     status === "FAILED" ||
