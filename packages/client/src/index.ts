@@ -24,6 +24,7 @@ export {
   sortSessionCandidates,
 } from "./session-projection.js";
 export * from "./timeline/index.js";
+export * from "./control/index.js";
 export type {
   SessionCandidate,
   SessionCandidateClient,

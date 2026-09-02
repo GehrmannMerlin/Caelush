@@ -1,17 +1,22 @@
-import type {
-  ApprovalRequest,
-  ApprovalRequestId,
-  ApprovalResolution,
-  ApprovalScope,
-  RiskLevel,
-  RunId,
-  RunStatus,
-} from "@caelush/protocol";
+import {
+  approvalOptions as sharedApprovalOptions,
+  approvalResolutionForOption as sharedApprovalResolutionForOption,
+  canCancelRunStatus,
+  createApprovalView as createSharedApprovalView,
+  isTerminalRunStatus,
+  type ApprovalOption,
+  type ApprovalOptionKind,
+  type ApprovalView,
+} from "@caelush/client";
+import type { ApprovalRequest } from "@caelush/protocol";
 import type { CliViewState } from "./cli-state.js";
 
-const MAX_APPROVAL_TEXT_BYTES = 2 * 1024;
-const MAX_APPROVAL_SUMMARY_BYTES = 512;
-const MAX_APPROVAL_CAPABILITIES = 16;
+export {
+  sharedApprovalOptions as approvalOptions,
+  sharedApprovalResolutionForOption as approvalResolutionForOption,
+  canCancelRunStatus,
+  isTerminalRunStatus,
+};
 
 export type CliTransportState = "CONNECTED" | "RECONNECTING" | "DISCONNECTED";
 
@@ -23,27 +28,11 @@ export type CliControlMode =
   | "RUN_RECOVERY_PICKER"
   | "PENDING_RUN_CONFIRMATION";
 
-export type CliApprovalOptionKind = "APPROVE_ONCE" | "APPROVE_RUN" | "REJECT";
-
-export interface CliApprovalOption {
-  readonly kind: CliApprovalOptionKind;
-  readonly label: string;
-}
-
-export interface CliApprovalView {
-  readonly id: ApprovalRequestId;
-  readonly runId: RunId;
-  readonly createdAt: number;
-  readonly title: string;
-  readonly reason: string;
-  readonly riskLevel: RiskLevel;
-  readonly scope: ApprovalScope;
-  readonly toolName?: string;
-  readonly requiredCapabilities: readonly string[];
-  readonly summary?: string;
-  readonly options: readonly CliApprovalOption[];
+export type CliApprovalOptionKind = ApprovalOptionKind;
+export type CliApprovalOption = ApprovalOption;
+export type CliApprovalView = ApprovalView & {
   readonly selectedIndex: number;
-}
+};
 
 export interface CliApprovalState {
   readonly requests: readonly CliApprovalView[];
@@ -78,51 +67,11 @@ export type CliInputAction =
   | { readonly kind: "COMPOSER" }
   | { readonly kind: "NONE" };
 
-export function approvalOptions(scope: ApprovalScope): readonly CliApprovalOption[] {
-  const options: CliApprovalOption[] = [{ kind: "APPROVE_ONCE", label: "Approve once" }];
-  if (scope === "RUN") {
-    options.push({ kind: "APPROVE_RUN", label: "Approve this action for this Run" });
-  }
-  options.push({ kind: "REJECT", label: "Reject" });
-  return options;
-}
-
-export function approvalResolutionForOption(kind: CliApprovalOptionKind): ApprovalResolution {
-  switch (kind) {
-    case "APPROVE_ONCE":
-      return { action: "APPROVE", scope: "ONCE" };
-    case "APPROVE_RUN":
-      return { action: "APPROVE", scope: "RUN" };
-    case "REJECT":
-      return { action: "REJECT" };
-  }
-}
-
 export function createApprovalView(approval: ApprovalRequest): CliApprovalView {
-  const options = approvalOptions(approval.scope);
-  const action = approval.action;
-  const toolName = boundedString(action.toolName, MAX_APPROVAL_SUMMARY_BYTES);
-  const summary = boundedString(action.summary, MAX_APPROVAL_SUMMARY_BYTES);
-  const requiredCapabilities = Array.isArray(action.requiredCapabilities)
-    ? action.requiredCapabilities
-        .filter((value): value is string => typeof value === "string")
-        .slice(0, MAX_APPROVAL_CAPABILITIES)
-        .map((value) => boundedString(value, MAX_APPROVAL_SUMMARY_BYTES))
-        .filter((value): value is string => value !== undefined)
-    : [];
+  const view = createSharedApprovalView(approval);
   return {
-    id: approval.id,
-    runId: approval.runId,
-    createdAt: approval.createdAt,
-    title: boundedString(approval.title, MAX_APPROVAL_TEXT_BYTES) ?? "Approval required",
-    reason: boundedString(approval.reason, MAX_APPROVAL_TEXT_BYTES) ?? "Approval is required.",
-    riskLevel: approval.riskLevel,
-    scope: approval.scope,
-    ...(toolName === undefined ? {} : { toolName }),
-    requiredCapabilities,
-    ...(summary === undefined ? {} : { summary }),
-    options,
-    selectedIndex: options.findIndex((option) => option.kind === "REJECT"),
+    ...view,
+    selectedIndex: view.options.findIndex((option) => option.kind === "REJECT"),
   };
 }
 
@@ -206,26 +155,4 @@ export function routeCliInput(
   }
   if (state.composerEnabled) return { kind: "COMPOSER" };
   return { kind: "NONE" };
-}
-
-export function isTerminalRunStatus(status: RunStatus): boolean {
-  return (
-    status === "COMPLETED" ||
-    status === "FAILED" ||
-    status === "CANCELLED" ||
-    status === "TIMEOUT" ||
-    status === "MAX_STEPS_REACHED" ||
-    status === "BUDGET_EXCEEDED"
-  );
-}
-
-export function canCancelRunStatus(status: RunStatus): boolean {
-  return status === "RUNNING" || status === "WAITING_APPROVAL" || status === "VERIFYING";
-}
-
-function boundedString(value: unknown, maxBytes: number): string | undefined {
-  if (typeof value !== "string" || value.length === 0) return undefined;
-  const encoded = new TextEncoder().encode(value);
-  if (encoded.byteLength <= maxBytes) return value;
-  return new TextDecoder().decode(encoded.slice(0, maxBytes)).replace(/\uFFFD$/u, "");
 }
