@@ -34,6 +34,8 @@ const EMPTY_SESSION_SNAPSHOT: WebSessionSnapshot = {
   isDraft: false,
   composerEnabled: false,
   submission: "IDLE",
+  transportState: "CONNECTED",
+  controlMode: "NONE",
 };
 
 export function WebHostApp(props: {

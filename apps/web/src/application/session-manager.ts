@@ -1,4 +1,5 @@
 import {
+  createApprovalView,
   createInitialTimelineState,
   deriveSessionActivity,
   flushTimelineForTerminal,
@@ -9,6 +10,7 @@ import {
   resolveSessionWorkspace,
   sortSessionCandidates,
   type SessionCandidate,
+  type ApprovalView,
   type SessionCandidateClient,
   type SessionHistoryEntry,
   type TimelineState,
@@ -16,6 +18,8 @@ import {
 } from "@caelush/client";
 import type {
   AgentEvent,
+  ApprovalRequestId,
+  ApprovalResolution,
   ClientAgentRun,
   ClientAgentSession,
   CreateRunRequest,
@@ -34,12 +38,28 @@ export interface WebSessionClient extends SessionCandidateClient, WebHostClient 
   createSession(input: CreateSessionRequest): Promise<ClientAgentSession>;
   createRun(sessionId: SessionId, input: CreateRunRequest): Promise<ClientAgentRun>;
   getRun(runId: RunId): Promise<ClientAgentRun>;
+  listPendingApprovals(
+    runId: RunId,
+  ): Promise<{ readonly items: readonly import("@caelush/protocol").ApprovalRequest[] }>;
+  resolveApproval(
+    runId: RunId,
+    approvalId: ApprovalRequestId,
+    resolution: ApprovalResolution,
+  ): Promise<RunActionResponse>;
   startRun(runId: RunId): Promise<RunActionResponse>;
   watchRunEvents(runId: RunId, options?: WatchRunEventsOptions): AsyncIterable<AgentEvent>;
 }
 
 export type WebSessionLoadState = "IDLE" | "LOADING" | "READY" | "ERROR";
 export type WebSubmissionState = "IDLE" | "SUBMITTING" | "RUN_CREATED" | "STARTING" | "ACTIVE";
+export type WebTransportState = "CONNECTED" | "RECONNECTING" | "DISCONNECTED";
+export type WebControlMode =
+  "NONE" | "APPROVAL" | "CANCELLING" | "RECOVERY_PICKER" | "PENDING_RUN_CONFIRMATION";
+
+export interface WebApprovalState {
+  readonly requests: readonly ApprovalView[];
+  readonly submitting: readonly ApprovalRequestId[];
+}
 
 export type WebSessionErrorCode =
   | "SESSION_LOAD_FAILED"
@@ -72,6 +92,9 @@ export interface WebSessionSnapshot {
   readonly isDraft: boolean;
   readonly composerEnabled: boolean;
   readonly submission: WebSubmissionState;
+  readonly transportState: WebTransportState;
+  readonly controlMode: WebControlMode;
+  readonly approvalState?: WebApprovalState;
   readonly error?: WebSessionError;
 }
 
@@ -294,6 +317,50 @@ export class WebSessionManager {
     }
   }
 
+  async refreshApprovals(runId: RunId): Promise<void> {
+    if (this.disposed) return;
+    try {
+      const response = await this.options.client.listPendingApprovals(runId);
+      if (!this.disposed) this.publishApprovals(runId, response.items);
+    } catch {
+      // Approval controls are presentation-only; retain the last safe projection.
+    }
+  }
+
+  async resolveApproval(
+    approvalId: ApprovalRequestId,
+    resolution: ApprovalResolution,
+  ): Promise<boolean> {
+    if (this.disposed) return false;
+    const approvalState = this.snapshot.approvalState;
+    const approval = approvalState?.requests.find((item) => item.id === approvalId);
+    if (
+      approval === undefined ||
+      approvalState === undefined ||
+      approvalState.submitting.includes(approvalId)
+    ) {
+      return false;
+    }
+
+    try {
+      const pending = await this.options.client.listPendingApprovals(approval.runId);
+      if (this.disposed) return false;
+      this.publishApprovals(approval.runId, pending.items);
+      if (!pending.items.some((item) => item.id === approvalId && item.status === "PENDING")) {
+        await this.reconcileApprovals(approval.runId);
+        return false;
+      }
+      this.publishSubmitting(approvalId, true);
+      await this.options.client.resolveApproval(approval.runId, approvalId, resolution);
+      return true;
+    } catch {
+      await this.reconcileApprovals(approval.runId);
+      return false;
+    } finally {
+      if (!this.disposed) this.publishSubmitting(approvalId, false);
+    }
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -323,6 +390,9 @@ export class WebSessionManager {
       submission: "IDLE",
       error: activeRuns.length > 1 ? sessionError("MULTIPLE_ACTIVE_RUNS") : undefined,
     });
+    if (activeRuns.length === 1 && activeRuns[0] !== undefined) {
+      await this.refreshApprovals(activeRuns[0].id);
+    }
     return true;
   }
 
@@ -345,6 +415,7 @@ export class WebSessionManager {
         if (event.runId !== active.run.id) continue;
         const timeline = reduceTimelineEvent(this.snapshot.timeline, event);
         this.publish({ timeline });
+        this.projectApprovalEvent(event);
         if (!isLifecycleEvent(event)) continue;
         let refreshed: ClientAgentRun;
         try {
@@ -430,6 +501,88 @@ export class WebSessionManager {
     });
   }
 
+  private projectApprovalEvent(event: AgentEvent): void {
+    if (event.type === "approval.requested") {
+      const current = this.snapshot.approvalState?.requests ?? [];
+      const otherRequests = current.filter((item) => item.id !== event.payload.approval.id);
+      this.publishApprovalState(
+        [...otherRequests, createApprovalView(event.payload.approval)],
+        this.snapshot.approvalState?.submitting ?? [],
+      );
+      return;
+    }
+    if (event.type === "approval.resolved") {
+      const current = this.snapshot.approvalState;
+      if (current === undefined) return;
+      this.publishApprovalState(
+        current.requests.filter((item) => item.id !== event.payload.approvalId),
+        current.submitting.filter((item) => item !== event.payload.approvalId),
+      );
+    }
+  }
+
+  private async reconcileApprovals(runId: RunId): Promise<void> {
+    const [run, approvals] = await Promise.allSettled([
+      this.options.client.getRun(runId),
+      this.options.client.listPendingApprovals(runId),
+    ]);
+    if (this.disposed) return;
+    if (run.status === "fulfilled" && this.snapshot.activeRun?.id === runId) {
+      this.publishActiveRun(run.value, this.snapshot.submission);
+    }
+    if (approvals.status === "fulfilled") this.publishApprovals(runId, approvals.value.items);
+  }
+
+  private publishApprovals(
+    runId: RunId,
+    approvals: readonly import("@caelush/protocol").ApprovalRequest[],
+  ): void {
+    const otherRuns =
+      this.snapshot.approvalState?.requests.filter((item) => item.runId !== runId) ?? [];
+    const requests = [
+      ...otherRuns,
+      ...approvals.filter((item) => item.status === "PENDING").map(createApprovalView),
+    ].sort(
+      (left, right) =>
+        left.createdAt - right.createdAt || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
+    );
+    const submitting = (this.snapshot.approvalState?.submitting ?? []).filter((id) =>
+      requests.some((request) => request.id === id),
+    );
+    this.publishApprovalState(requests, submitting);
+  }
+
+  private publishSubmitting(approvalId: ApprovalRequestId, submitting: boolean): void {
+    const current = this.snapshot.approvalState;
+    if (current === undefined) return;
+    this.publishApprovalState(
+      current.requests,
+      submitting
+        ? [...current.submitting, approvalId]
+        : current.submitting.filter((item) => item !== approvalId),
+    );
+  }
+
+  private publishApprovalState(
+    requests: readonly ApprovalView[],
+    submitting: readonly ApprovalRequestId[],
+  ): void {
+    const nextRequests = Object.freeze(
+      [...requests]
+        .sort(
+          (left, right) =>
+            left.createdAt - right.createdAt ||
+            (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
+        )
+        .map(freezeApprovalView),
+    );
+    const nextSubmitting = Object.freeze([...new Set(submitting)]);
+    this.publish({
+      approvalState: Object.freeze({ requests: nextRequests, submitting: nextSubmitting }),
+      controlMode: nextRequests.length > 0 ? "APPROVAL" : "NONE",
+    });
+  }
+
   private cancelActiveLifecycle(): void {
     this.activeLifecycle?.controller.abort();
     this.activeLifecycle = undefined;
@@ -472,6 +625,8 @@ function initialSnapshot(): WebSessionSnapshot {
     isDraft: false,
     composerEnabled: false,
     submission: "IDLE",
+    transportState: "CONNECTED",
+    controlMode: "NONE",
   };
 }
 
@@ -505,6 +660,14 @@ function latestRun(runs: readonly ClientAgentRun[]): ClientAgentRun | undefined 
     if (left.createdAt !== right.createdAt) return right.createdAt - left.createdAt;
     return left.id < right.id ? 1 : left.id > right.id ? -1 : 0;
   })[0];
+}
+
+function freezeApprovalView(view: ApprovalView): ApprovalView {
+  return Object.freeze({
+    ...view,
+    requiredCapabilities: Object.freeze([...view.requiredCapabilities]),
+    options: Object.freeze(view.options.map((option) => Object.freeze({ ...option }))),
+  });
 }
 
 function promptError(error: PromptError): WebSessionError {
