@@ -35,6 +35,12 @@ describe("CLI control state", () => {
     });
     expect(approvalResolutionForOption("REJECT")).toEqual({ action: "REJECT" });
     expect(approvalOptions("ONCE").map((item) => item.kind)).toEqual(["APPROVE_ONCE", "REJECT"]);
+    expect(approvalOptions("ONCE").map((item) => item.label)).toEqual(["Approve once", "Reject"]);
+    expect(approvalOptions("RUN").map((item) => item.label)).toEqual([
+      "Approve once",
+      "Approve this action for this Run",
+      "Reject",
+    ]);
   });
 
   it("projects only allowlisted public action fields", () => {

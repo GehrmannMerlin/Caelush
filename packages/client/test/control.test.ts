@@ -42,10 +42,16 @@ describe("shared interactive control", () => {
       "APPROVE_ONCE",
       "REJECT",
     ]);
+    expect(approvalOptions("ONCE").map((item) => item.label)).toEqual(["Approve once", "Reject"]);
     expect(approvalOptions("RUN").map((item) => item.kind)).toEqual([
       "APPROVE_ONCE",
       "APPROVE_RUN",
       "REJECT",
+    ]);
+    expect(approvalOptions("RUN").map((item) => item.label)).toEqual([
+      "Approve once",
+      "Approve this action for this Run",
+      "Reject",
     ]);
     expect(approvalResolutionForOption("APPROVE_ONCE")).toEqual({
       action: "APPROVE",
@@ -56,6 +62,43 @@ describe("shared interactive control", () => {
       scope: "RUN",
     });
     expect(approvalResolutionForOption("REJECT")).toEqual({ action: "REJECT" });
+  });
+
+  it("bounds multibyte approval text and capabilities without trailing replacement characters", () => {
+    const overlongTitle = "标".repeat(1_000);
+    const overlongSummary = "要".repeat(300);
+    const overlongCapabilities = Array.from(
+      { length: 17 },
+      (_, index) => `${index}-能力-${"读".repeat(300)}`,
+    );
+    const view = createApprovalView(
+      makeApproval({
+        title: overlongTitle,
+        action: {
+          toolName: "read_file",
+          summary: overlongSummary,
+          requiredCapabilities: overlongCapabilities,
+          command: "SECRET_COMMAND",
+          credentials: { token: "SECRET_TOKEN" },
+          environment: { API_KEY: "SECRET_KEY" },
+          argv: ["SECRET_ARG"],
+        },
+      }),
+    );
+
+    expect(utf8ByteLength(view.title)).toBeLessThanOrEqual(2_048);
+    expect(utf8ByteLength(view.summary ?? "")).toBeLessThanOrEqual(512);
+    expect(view.requiredCapabilities).toHaveLength(16);
+    for (const capability of view.requiredCapabilities) {
+      expect(utf8ByteLength(capability)).toBeLessThanOrEqual(512);
+      expect(capability.endsWith("\uFFFD")).toBe(false);
+    }
+    expect(view.title.endsWith("\uFFFD")).toBe(false);
+    expect((view.summary ?? "").endsWith("\uFFFD")).toBe(false);
+    expect(JSON.stringify(view)).not.toContain("SECRET");
+    expect(JSON.stringify(view)).not.toContain("credentials");
+    expect(JSON.stringify(view)).not.toContain("environment");
+    expect(JSON.stringify(view)).not.toContain("argv");
   });
 
   it("identifies exactly cancellable and terminal run statuses", () => {
@@ -105,6 +148,11 @@ describe("shared interactive control", () => {
     timer.runAll();
     expect(attempts).toEqual([1, 1, 2, 3, 4, 5, 6, 99]);
   });
+
+  it("exports an immutable exact reconnect schedule", () => {
+    expect(RECONNECT_DELAYS_MS).toEqual([250, 500, 1000, 2000, 4000, 5000]);
+    expect(Object.isFrozen(RECONNECT_DELAYS_MS)).toBe(true);
+  });
 });
 
 function makeApproval(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest {
@@ -125,6 +173,10 @@ function makeApproval(overrides: Partial<ApprovalRequest> = {}): ApprovalRequest
     createdAt: 1,
     ...overrides,
   });
+}
+
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
 }
 
 class FakeTimer implements Timer {

@@ -1,4 +1,4 @@
-export const RECONNECT_DELAYS_MS = [250, 500, 1000, 2000, 4000, 5000] as const;
+export const RECONNECT_DELAYS_MS = Object.freeze([250, 500, 1000, 2000, 4000, 5000] as const);
 
 export interface TimerHandle {
   cancel(): void;
