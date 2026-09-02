@@ -647,9 +647,36 @@ describe("shared Timeline reducer", () => {
     expect(state.settled[0]).toMatchObject({
       kind: "TOOL",
       toolName: "read_file",
+      filePath: "src/auth.ts",
       status: "COMPLETED",
     });
     expect(JSON.stringify(state)).not.toContain("args");
+  });
+
+  it("retains projected Tool output for CLI consumers", () => {
+    let state = reduceTimelineEvent(
+      createInitialTimelineState(runId),
+      eventOf("tool.requested", 1, {
+        invocationId,
+        toolName: "read_file",
+        riskLevel: "LOW",
+      }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("tool.output", 2, {
+        invocationId,
+        stream: "stdout",
+        chunk: "CLI_VISIBLE_TOOL_OUTPUT",
+      }),
+    );
+
+    expect(state.activeTools[0]).toMatchObject({ detail: "CLI_VISIBLE_TOOL_OUTPUT" });
+    state = reduceTimelineEvent(
+      state,
+      eventOf("tool.completed", 3, { invocationId, observationId }),
+    );
+    expect(state.settled[0]).toMatchObject({ text: "CLI_VISIBLE_TOOL_OUTPUT" });
   });
 
   it("projects verification progress and final outcome from payload labels", () => {

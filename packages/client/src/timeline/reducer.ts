@@ -15,6 +15,7 @@ import {
   formatToolLabel,
   sanitizeTerminalText,
   truncateTimelineText,
+  workspaceRelativePath,
 } from "./presentation.js";
 
 const ORDER_ERROR = "Timeline event order could not be verified.";
@@ -183,13 +184,23 @@ function reduceRegisteredEvent(state: TimelineState, event: AgentEvent): Timelin
           : `Command exited with code ${event.payload.exitCode}.`,
       );
     case "file.read":
-      return reduceFile(state, event, formatFileRead(event.payload.path));
+      return reduceFile(state, event, formatFileRead(event.payload.path), event.payload.path);
     case "file.created":
     case "file.modified":
     case "file.deleted":
-      return reduceFile(state, event, formatFileChange(event.payload.summary));
+      return reduceFile(
+        state,
+        event,
+        formatFileChange(event.payload.summary),
+        event.payload.summary.path,
+      );
     case "file.moved":
-      return reduceFile(state, event, formatFileMove(event.payload.fromPath, event.payload.toPath));
+      return reduceFile(
+        state,
+        event,
+        formatFileMove(event.payload.fromPath, event.payload.toPath),
+        event.payload.toPath,
+      );
     case "process.started":
       return upsertActive(state, "activeProcesses", {
         id: `process:${event.payload.process.id}`,
@@ -426,12 +437,19 @@ function llmId(
 ): string {
   return `llm:${event.stepId ?? "run"}:${event.payload.model.provider}:${event.payload.model.model}`;
 }
-function reduceFile(state: TimelineState, event: AgentEvent, text: string): TimelineState {
+function reduceFile(
+  state: TimelineState,
+  event: AgentEvent,
+  text: string,
+  filePath: string,
+): TimelineState {
   const candidates = state.activeTools.filter((entry) => entry.stepId === event.stepId);
+  const safePath = workspaceRelativePath(filePath);
   if (candidates.length === 1)
     return updateActive(state, "activeTools", candidates[0]!.id, (entry) => ({
       ...entry,
       detail: bound(text, state),
+      ...(safePath === undefined ? {} : { filePath: safePath }),
     }));
   return appendSettled(state, {
     id: event.eventId,

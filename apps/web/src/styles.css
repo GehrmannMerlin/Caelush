@@ -619,6 +619,7 @@ textarea:disabled {
 
 .timeline-entry-title,
 .timeline-entry-text,
+.timeline-entry-path,
 .timeline-entry-status,
 .timeline-verification-status {
   margin: 0;
@@ -638,6 +639,30 @@ textarea:disabled {
   font-size: 0.8rem;
   line-height: 1.45;
   white-space: pre-wrap;
+}
+
+.timeline-entry-path {
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+  color: #527067;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.timeline-public-ids {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 8px;
+  margin-top: 4px;
+}
+
+.timeline-public-id {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  color: #708980;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.7rem;
 }
 
 .timeline-entry-status {

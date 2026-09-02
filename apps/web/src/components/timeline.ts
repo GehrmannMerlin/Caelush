@@ -17,6 +17,7 @@ const WEB_TOOL_LABELS: Readonly<Record<string, string>> = Object.freeze({
   git_status: "检查 Git 状态",
   git_diff: "查看 Git 变更",
 });
+const MAX_PUBLIC_ID_LENGTH = 128;
 
 export interface TimelineProps {
   readonly timeline: TimelineState;
@@ -74,6 +75,7 @@ export function Timeline(props: TimelineProps): ReactElement {
                 " · ",
                 statusLabel(group.status),
               ),
+              renderPublicId("计划 ID", group.planId),
               group.checks.length === 0
                 ? null
                 : createElement(
@@ -104,9 +106,14 @@ function renderEntry(entry: TimelineEntry, phase: "active" | "settled"): ReactEl
       "div",
       { className: "timeline-entry-content" },
       createElement("p", { className: "timeline-entry-title" }, entryLabel(entry)),
-      entry.text === undefined
-        ? null
-        : createElement("p", { className: "timeline-entry-text" }, entry.text),
+      renderEntryPublicIds(entry),
+      entry.kind === "TOOL"
+        ? entry.filePath === undefined
+          ? null
+          : createElement("p", { className: "timeline-entry-path" }, entry.filePath)
+        : entry.text === undefined
+          ? null
+          : createElement("p", { className: "timeline-entry-text" }, entry.text),
       createElement("p", { className: "timeline-entry-status" }, statusLabel(entry.status)),
     ),
   );
@@ -122,6 +129,7 @@ function renderVerificationCheck(check: TimelineVerificationCheck): ReactElement
       checkMark(check.status),
     ),
     createElement("span", { className: "timeline-check-label" }, check.label),
+    renderPublicId("检查 ID", check.checkId),
     createElement("span", { className: "timeline-check-status" }, statusLabel(check.status)),
     check.detail === undefined
       ? null
@@ -133,6 +141,30 @@ function entryLabel(entry: TimelineEntry): string {
   if (entry.toolName !== undefined) return WEB_TOOL_LABELS[entry.toolName] ?? entry.toolName;
   if (entry.kind === "REASONING") return "推理摘要";
   return entry.title ?? entry.kind;
+}
+
+function renderEntryPublicIds(entry: TimelineEntry): ReactElement | null {
+  const ids = [
+    renderPublicId("调用 ID", entry.invocationId),
+    renderPublicId("进程 ID", entry.processId),
+    renderPublicId("计划 ID", entry.planId),
+  ].filter((id): id is ReactElement => id !== null);
+  return ids.length === 0 ? null : createElement("div", { className: "timeline-public-ids" }, ids);
+}
+
+function renderPublicId(label: string, value: string | undefined): ReactElement | null {
+  if (value === undefined) return null;
+  return createElement(
+    "span",
+    { className: "timeline-public-id", key: `${label}:${value}` },
+    `${label}: ${boundedPublicId(value)}`,
+  );
+}
+
+function boundedPublicId(value: string): string {
+  return value.length <= MAX_PUBLIC_ID_LENGTH
+    ? value
+    : `${value.slice(0, MAX_PUBLIC_ID_LENGTH - 1)}…`;
 }
 
 function checkMark(status: TimelineEntryStatus): string {

@@ -34,6 +34,127 @@ describe("Timeline", () => {
     expect(html).not.toContain("Terminal");
     expect(html).not.toContain("stdout");
   });
+
+  it("never renders raw Tool text or detail after a tool output event", () => {
+    const runId = createRunId();
+    const sessionId = createSessionId();
+    const stepId = createStepId();
+    const invocationId = "tool-output-sentinel";
+    const event = (type: AgentEvent["type"], sequence: number, payload: unknown): AgentEvent =>
+      ({
+        eventId: createEventId(),
+        schemaVersion: 1,
+        type,
+        runId,
+        sessionId,
+        stepId,
+        timestamp: sequence,
+        visibility: "USER_VISIBLE",
+        durability: { kind: "DURABLE", version: 1, sequence },
+        payload,
+      }) as AgentEvent;
+    let timeline = createInitialTimelineState(runId);
+    timeline = reduceTimelineEvent(
+      timeline,
+      event("tool.requested", 1, { invocationId, toolName: "read_file", riskLevel: "LOW" }),
+    );
+    timeline = reduceTimelineEvent(
+      timeline,
+      event("tool.output", 2, {
+        invocationId,
+        stream: "stdout",
+        chunk: "SECRET_TOOL_OUTPUT_SENTINEL",
+      }),
+    );
+    timeline = reduceTimelineEvent(
+      timeline,
+      event("tool.completed", 3, { invocationId, observationId: createObservationId() }),
+    );
+
+    const html = renderToStaticMarkup(<Timeline timeline={timeline} />);
+
+    expect(html).toContain("读取文件");
+    expect(html).toContain("已完成");
+    expect(html).not.toContain("SECRET_TOOL_OUTPUT_SENTINEL");
+    expect(html).not.toContain("stdout");
+  });
+
+  it("renders bounded public projection IDs without evidence IDs or event payloads", () => {
+    const runId = createRunId();
+    const sessionId = createSessionId();
+    const stepId = createStepId();
+    const invocationId = "invocation-sentinel";
+    const processId = "process-sentinel";
+    const planId = "plan-sentinel";
+    const checkId = "check-sentinel";
+    const evidenceId = "evidence-sentinel";
+    const event = (type: AgentEvent["type"], sequence: number, payload: unknown): AgentEvent =>
+      ({
+        eventId: createEventId(),
+        schemaVersion: 1,
+        type,
+        runId,
+        sessionId,
+        stepId,
+        timestamp: sequence,
+        visibility: "USER_VISIBLE",
+        durability: { kind: "DURABLE", version: 1, sequence },
+        payload,
+      }) as AgentEvent;
+    let timeline = createInitialTimelineState(runId);
+    timeline = reduceTimelineEvent(
+      timeline,
+      event("tool.requested", 1, { invocationId, toolName: "unknown_tool", riskLevel: "LOW" }),
+    );
+    timeline = reduceTimelineEvent(
+      timeline,
+      event("process.started", 2, {
+        process: { id: processId, command: "safe command", status: "RUNNING" },
+      }),
+    );
+    timeline = reduceTimelineEvent(
+      timeline,
+      event("verification.planned", 3, {
+        planId,
+        sourceStepId: stepId,
+        checkCount: 1,
+        plannerVersion: "v1",
+        counts: { required: 1, ifAvailable: 0, advisory: 0 },
+      }),
+    );
+    timeline = reduceTimelineEvent(
+      timeline,
+      event("verification.check.started", 4, {
+        planId,
+        checkId,
+        ordinal: 0,
+        kind: "COMMAND",
+        purpose: "REGRESSION",
+        stage: "POST_CHANGE",
+      }),
+    );
+    timeline = reduceTimelineEvent(
+      timeline,
+      event("verification.check.completed", 5, {
+        planId,
+        checkId,
+        status: "PASSED",
+        evidenceIds: [evidenceId],
+        durationMs: 12,
+      }),
+    );
+
+    const html = renderToStaticMarkup(<Timeline timeline={timeline} />);
+
+    expect(html).toContain("unknown_tool");
+    expect(html).toContain(invocationId);
+    expect(html).toContain(processId);
+    expect(html).toContain(planId);
+    expect(html).toContain(checkId);
+    expect(html).not.toContain(evidenceId);
+    expect(html).not.toContain("evidenceIds");
+    expect(html).not.toContain('"payload"');
+  });
 });
 
 function timelineFromVisibleEvents(): TimelineState {
