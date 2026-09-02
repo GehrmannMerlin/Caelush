@@ -69,6 +69,9 @@ export function flushTimelineForTerminal(
     });
   return {
     ...next,
+    settled: next.settled.map((entry) =>
+      entry.status === "RUNNING" ? { ...entry, status: "INTERRUPTED" } : entry,
+    ),
     activeTools: [],
     activeLlm: [],
     activeApprovals: [],
@@ -203,6 +206,8 @@ function reduceRegisteredEvent(state: TimelineState, event: AgentEvent): Timelin
         label: "Verification",
         status: "PENDING",
         checks: [],
+        checkCount: event.payload.checkCount,
+        plannedCounts: { ...event.payload.counts },
       });
     case "verification.check.started":
       return updateVerificationCheck(state, event, "RUNNING");
@@ -235,7 +240,8 @@ function reduceRegisteredEvent(state: TimelineState, event: AgentEvent): Timelin
         text: "Repair limit reached.",
         status: "FAILED",
       });
-    case "verification.finalized":
+    case "verification.finalized": {
+      const group = state.verification.find((item) => item.id === event.payload.planId);
       return appendSettled(
         {
           ...state,
@@ -248,8 +254,14 @@ function reduceRegisteredEvent(state: TimelineState, event: AgentEvent): Timelin
           text: `Verification ${event.payload.outcome.toLowerCase()}.`,
           status: "FINALIZED",
           planId: event.payload.planId,
+          counts: {
+            total: group?.checkCount ?? 0,
+            failed: event.payload.failedCheckIds.length,
+            error: event.payload.errorCheckIds.length,
+          },
         },
       );
+    }
     case "verification.started":
       return upsertVerification(state, {
         id: event.eventId,
@@ -458,12 +470,13 @@ function updateVerificationCheck(
     status: "RUNNING" as const,
     checks: [],
   };
+  const existing = group.checks.find((item) => item.id === event.payload.checkId);
   const check: TimelineVerificationCheck = {
     id: event.payload.checkId,
     label:
       event.type === "verification.check.started"
-        ? `${event.payload.kind} · ${event.payload.purpose}`
-        : "Check",
+        ? `${event.payload.kind} · ${event.payload.purpose} · ${event.payload.stage}`
+        : (existing?.label ?? "Check"),
     status,
     ...(durationMs === undefined ? {} : { detail: `${durationMs}ms` }),
   };
@@ -480,18 +493,17 @@ function appendSettled(state: TimelineState, entry: TimelineEntry): TimelineStat
   ];
   let omittedActivity = state.omittedActivity;
   if (settled.length > state.limits.maxSettledEntries) {
-    settled = settled.slice(-(state.limits.maxSettledEntries - 1));
-    if (!omittedActivity)
-      settled = [
-        {
-          id: "timeline:omitted",
-          kind: "SYSTEM",
-          title: "Timeline",
-          text: OMITTED_MARKER,
-          status: "SKIPPED",
-        },
-        ...settled,
-      ];
+    const room = state.limits.maxSettledEntries - 1;
+    settled = [
+      {
+        id: "timeline:omitted",
+        kind: "SYSTEM",
+        title: "Timeline",
+        text: OMITTED_MARKER,
+        status: "SKIPPED",
+      },
+      ...(room === 0 ? [] : settled.slice(-room)),
+    ];
     omittedActivity = true;
   }
   return { ...state, settled, omittedActivity };

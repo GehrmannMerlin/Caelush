@@ -52,6 +52,11 @@ export interface TimelineEntry {
     steps: number;
     toolCalls: number;
   }>;
+  readonly counts?: Readonly<{
+    total: number;
+    failed: number;
+    error: number;
+  }>;
 }
 
 export interface TimelineVerificationCheck {
@@ -65,6 +70,12 @@ export interface TimelineVerificationGroup {
   readonly label: string;
   readonly status: TimelineEntryStatus;
   readonly checks: readonly TimelineVerificationCheck[];
+  readonly plannedCounts?: Readonly<{
+    required: number;
+    ifAvailable: number;
+    advisory: number;
+  }>;
+  readonly checkCount?: number;
 }
 export interface TimelineRetry {
   readonly id: string;

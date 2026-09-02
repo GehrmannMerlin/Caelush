@@ -135,6 +135,62 @@ describe("shared Timeline reducer", () => {
     expect(JSON.stringify(state)).not.toContain("evidenceIds");
   });
 
+  it("retains safe verification counts and check labels without source arrays", () => {
+    let state = createInitialTimelineState(runId);
+    const planId = createVerificationPlanId();
+    const checkId = createVerificationCheckId();
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.planned", 1, {
+        planId,
+        sourceStepId: stepId,
+        checkCount: 3,
+        plannerVersion: "test-planner",
+        counts: { required: 1, ifAvailable: 1, advisory: 1 },
+      }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.check.started", 2, {
+        planId,
+        checkId,
+        ordinal: 0,
+        kind: "TASK",
+        purpose: "ACCEPTANCE",
+        stage: "ACCEPTANCE",
+      }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.check.completed", 3, {
+        planId,
+        checkId,
+        status: "PASSED",
+        evidenceIds: ["forbidden-evidence-id"],
+        durationMs: 12,
+      }),
+    );
+    expect(state.verification[0]).toMatchObject({
+      plannedCounts: { required: 1, ifAvailable: 1, advisory: 1 },
+      checks: [{ label: "TASK · ACCEPTANCE · ACCEPTANCE", detail: "12ms" }],
+    });
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.finalized", 4, {
+        planId,
+        outcome: "FAILED",
+        failedCheckIds: ["forbidden-failed-check-id"],
+        errorCheckIds: ["forbidden-error-check-id"],
+      }),
+    );
+    expect(state.settled.at(-1)).toMatchObject({ counts: { total: 3, failed: 1, error: 1 } });
+    expect(JSON.stringify(state)).not.toContain("forbidden-evidence-id");
+    expect(JSON.stringify(state)).not.toContain("forbidden-failed-check-id");
+    expect(JSON.stringify(state)).not.toContain("forbidden-error-check-id");
+    expect(state.settled.at(-1)).not.toHaveProperty("failedCheckIds");
+    expect(state.settled.at(-1)).not.toHaveProperty("errorCheckIds");
+  });
+
   it("settles LLM activity with public model identity and aggregate usage", () => {
     let state = reduceTimelineEvent(
       createInitialTimelineState(runId),
@@ -340,6 +396,34 @@ describe("shared Timeline reducer", () => {
     expect(flushed.activeApprovals).toEqual([]);
     expect(flushed.retries).toEqual([]);
     expect(flushed.verification).toEqual([]);
+  });
+
+  it("interrupts settled verification repair activity on terminal flush", () => {
+    let state = reduceTimelineEvent(
+      createInitialTimelineState(runId),
+      eventOf("verification.repair.started", 1, {
+        failedPlanId: createVerificationPlanId(),
+        failedCheckIds: [createVerificationCheckId()],
+        repairCycle: 1,
+      }),
+    );
+    state = flushTimelineForTerminal(state, "FAILED");
+    expect(state.settled).toEqual([
+      expect.objectContaining({ kind: "VERIFICATION", status: "INTERRUPTED" }),
+    ]);
+    expect(state.settled.some((entry) => entry.status === "RUNNING")).toBe(false);
+  });
+
+  it("keeps the omission marker within maxSettledEntries of one", () => {
+    let state = createInitialTimelineState(runId, { limits: { maxSettledEntries: 1 } });
+    for (let sequence = 1; sequence <= 3; sequence += 1) {
+      state = reduceTimelineEvent(
+        state,
+        eventOf("reasoning.summary", sequence, { summary: `event-${sequence}` }),
+      );
+      expect(state.settled.length).toBeLessThanOrEqual(1);
+    }
+    expect(state.settled[0]).toMatchObject({ id: "timeline:omitted", status: "SKIPPED" });
   });
 });
 
