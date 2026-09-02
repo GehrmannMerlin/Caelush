@@ -23,6 +23,7 @@ export {
   SESSION_ENRICH_CONCURRENCY,
   sortSessionCandidates,
 } from "./session-projection.js";
+export * from "./timeline/index.js";
 export type {
   SessionCandidate,
   SessionCandidateClient,
