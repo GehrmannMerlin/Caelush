@@ -9,9 +9,24 @@ export type TimelineEntryKind =
   | "LLM"
   | "VERIFICATION"
   | "RETRY"
+  | "FILE"
+  | "SHELL"
+  | "REASONING"
   | "SYSTEM";
 export type TimelineEntryStatus =
-  "ACTIVE" | "COMPLETED" | "FAILED" | "CANCELLED" | "PENDING" | "SKIPPED";
+  | "ACTIVE"
+  | "REQUESTED"
+  | "RUNNING"
+  | "COMPLETED"
+  | "FAILED"
+  | "CANCELLED"
+  | "PENDING"
+  | "SKIPPED"
+  | "INTERRUPTED"
+  | "RESOLVED"
+  | "FINALIZED"
+  | "PASSED"
+  | "ERROR";
 
 export interface TimelineEntry {
   readonly id: string;
@@ -25,6 +40,18 @@ export interface TimelineEntry {
   readonly sequence?: number;
   readonly toolName?: string;
   readonly filePath?: string;
+  readonly invocationId?: string;
+  readonly processId?: string;
+  readonly planId?: string;
+  readonly stepId?: string;
+  readonly riskLevel?: string;
+  readonly scope?: string;
+  readonly usage?: Readonly<{
+    inputTokens: number;
+    outputTokens: number;
+    steps: number;
+    toolCalls: number;
+  }>;
 }
 
 export interface TimelineVerificationCheck {
@@ -44,6 +71,10 @@ export interface TimelineRetry {
   readonly attempt: number;
   readonly reason?: string;
   readonly status: TimelineEntryStatus;
+}
+export interface TimelineSeenEvent {
+  readonly eventId: string;
+  readonly sequence?: number;
 }
 
 export interface TimelineLimits {
@@ -65,9 +96,11 @@ export interface TimelineState {
   readonly activeLlm: readonly TimelineEntry[];
   readonly verification: readonly TimelineVerificationGroup[];
   readonly retries: readonly TimelineRetry[];
+  readonly currentPlan: readonly TimelineEntry[];
   readonly lastDurableSequence: number;
-  readonly seenEvents: readonly string[];
+  readonly seenEvents: readonly TimelineSeenEvent[];
   readonly omittedActivity: boolean;
+  readonly error?: string;
 }
 
 export const DEFAULT_TIMELINE_LIMITS: TimelineLimits = Object.freeze({
@@ -102,6 +135,7 @@ export function createInitialTimelineState(
     activeLlm: [],
     verification: [],
     retries: [],
+    currentPlan: [],
     lastDurableSequence: 0,
     seenEvents: [],
     omittedActivity: false,
