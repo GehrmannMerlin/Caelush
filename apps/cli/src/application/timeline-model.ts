@@ -3,8 +3,7 @@ import {
   createInitialTimelineState,
   resolveTimelineLimits,
 } from "@caelush/client";
-export { runStatusLabel, formatRunTerminal } from "@caelush/client";
-import type { ProcessStatus } from "@caelush/protocol";
+export { processStatusLabel, runStatusLabel, formatRunTerminal } from "@caelush/client";
 import type {
   TimelineEntry,
   TimelineEntryKind,
@@ -48,10 +47,4 @@ export function createInitialCliTimelineState(
 }
 export function resolveCliTimelineLimits(options: CliTimelineOptions = {}) {
   return resolveTimelineLimits({ limits: { ...options.limits, ...options } });
-}
-
-export function processStatusLabel(status: ProcessStatus): string {
-  return status === "RUNNING"
-    ? "Process remains active in daemon."
-    : `Process ${status.toLowerCase()}.`;
 }

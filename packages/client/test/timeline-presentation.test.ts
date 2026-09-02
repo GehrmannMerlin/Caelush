@@ -3,6 +3,8 @@ import {
   formatFileChange,
   formatRunTerminal,
   formatToolLabel,
+  processStatusLabel,
+  runStatusLabel,
   sanitizeTerminalText,
   truncateTimelineText,
   workspaceRelativePath,
@@ -12,10 +14,17 @@ describe("shared Timeline presentation", () => {
   it("preserves established CLI labels and file summaries", () => {
     expect(formatToolLabel("read_file")).toBe("Read file");
     expect(formatToolLabel("exec_command")).toBe("Run command");
+    expect(runStatusLabel("PENDING")).toBe("Preparing");
+    expect(runStatusLabel("RUNNING")).toBe("Working");
+    expect(runStatusLabel("WAITING_APPROVAL")).toBe("Approval required");
+    expect(runStatusLabel("VERIFYING")).toBe("Verifying");
+    expect(runStatusLabel("CANCELLED")).toBe("Cancelled");
+    expect(processStatusLabel("RUNNING")).toBe("running");
+    expect(processStatusLabel("EXITED")).toBe("exited");
     expect(
       formatFileChange({ path: "src/a.ts", changeType: "MODIFIED", additions: 2, deletions: 1 }),
     ).toBe("M src/a.ts (+2, -1)");
-    expect(formatRunTerminal("FAILED")).toBe("Run ended with status failed.");
+    expect(formatRunTerminal("FAILED")).toBe("Run ended with status Failed.");
   });
 
   it("keeps the marker within the UTF-8 byte bound and preserves the tail", () => {

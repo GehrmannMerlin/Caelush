@@ -102,15 +102,31 @@ export function formatFileMove(source: string, destination: string): string {
 }
 export function runStatusLabel(status: string): string {
   const labels: Record<string, string> = {
-    COMPLETED: "completed",
-    FAILED: "failed",
-    CANCELLED: "cancelled",
-    TIMEOUT: "timeout",
-    MAX_STEPS_REACHED: "max steps reached",
-    BUDGET_EXCEEDED: "budget exceeded",
+    PENDING: "Preparing",
+    RUNNING: "Working",
+    WAITING_APPROVAL: "Approval required",
+    VERIFYING: "Verifying",
+    COMPLETED: "Completed",
+    FAILED: "Failed",
+    CANCELLED: "Cancelled",
+    TIMEOUT: "Timed out",
+    MAX_STEPS_REACHED: "Max steps reached",
+    BUDGET_EXCEEDED: "Budget exceeded",
   };
   return labels[status] ?? status.toLowerCase();
 }
+
+export function processStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    STARTING: "starting",
+    RUNNING: "running",
+    EXITED: "exited",
+    FAILED: "failed",
+    KILLED: "killed",
+  };
+  return labels[status] ?? status.toLowerCase();
+}
+
 export function formatRunTerminal(status: string): string {
   return `Run ended with status ${runStatusLabel(status)}.`;
 }
