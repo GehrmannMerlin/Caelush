@@ -82,6 +82,7 @@ describe("shared interactive control", () => {
           credentials: { token: "SECRET_TOKEN" },
           environment: { API_KEY: "SECRET_KEY" },
           argv: ["SECRET_ARG"],
+          args: { command: "ARGS_RAW_COMMAND_SENTINEL", secret: "ARGS_SECRET_SENTINEL" },
         },
       }),
     );
@@ -99,6 +100,8 @@ describe("shared interactive control", () => {
     expect(JSON.stringify(view)).not.toContain("credentials");
     expect(JSON.stringify(view)).not.toContain("environment");
     expect(JSON.stringify(view)).not.toContain("argv");
+    expect(JSON.stringify(view)).not.toContain("ARGS_RAW_COMMAND_SENTINEL");
+    expect("args" in view).toBe(false);
   });
 
   it("identifies exactly cancellable and terminal run statuses", () => {
