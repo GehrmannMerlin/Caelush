@@ -21,6 +21,27 @@ const invocationId = createToolInvocationId();
 const observationId = createObservationId();
 
 describe("shared Timeline reducer", () => {
+  it("retains safe legacy CLI verification fields", () => {
+    const planId = createVerificationPlanId();
+    const checkId = createVerificationCheckId();
+    let state = createInitialTimelineState(runId);
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.planned", 1, { planId, checkCount: 1 }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.check.started", 2, { planId, checkId, ordinal: 0, purpose: "Check" }),
+    );
+    expect(state.verification[0]).toMatchObject({
+      planId,
+      checkCount: 1,
+      passed: 0,
+      failed: 0,
+      errors: 0,
+    });
+    expect(state.verification[0]?.checks[0]).toMatchObject({ checkId, title: "Check" });
+  });
   it("accepts visible events and ignores other Runs and visibility", () => {
     const initial = createInitialTimelineState(runId);
     const visible = eventOf("reasoning.summary", 1, { summary: "检查认证代码" });

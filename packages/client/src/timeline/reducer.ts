@@ -48,7 +48,10 @@ export function flushTimelineForTerminal(
     next = appendSettled(next, {
       ...entry,
       status: "INTERRUPTED",
-      text: `${entry.title ?? entry.kind} · Interrupted by ${status}.`,
+      text:
+        entry.kind === "PROCESS"
+          ? "Process remains active in daemon."
+          : `${entry.title ?? entry.kind} · Interrupted by Run termination`,
     });
   }
   for (const retry of state.retries)
@@ -134,7 +137,8 @@ function reduceRegisteredEvent(state: TimelineState, event: AgentEvent): Timelin
         "activeTools",
         `tool:${event.payload.invocationId}`,
         "COMPLETED",
-        "Tool completed",
+        state.activeTools.find((entry) => entry.id === `tool:${event.payload.invocationId}`)
+          ?.detail ?? "Tool completed",
       );
     case "tool.failed":
       return settleActive(
@@ -145,6 +149,19 @@ function reduceRegisteredEvent(state: TimelineState, event: AgentEvent): Timelin
         safeError(event.payload.error),
       );
     case "tool.output":
+      return state.activeTools.some((entry) => entry.id === `tool:${event.payload.invocationId}`)
+        ? updateActive(state, "activeTools", `tool:${event.payload.invocationId}`, (entry) => ({
+            ...entry,
+            detail: bound(event.payload.chunk, state),
+          }))
+        : appendSettled(state, {
+            id: event.eventId,
+            kind: "TOOL",
+            title: "Tool output",
+            text: bound(event.payload.chunk, state),
+            status: "COMPLETED",
+            invocationId: event.payload.invocationId,
+          });
     case "shell.output":
     case "process.output":
       return state;
@@ -169,11 +186,7 @@ function reduceRegisteredEvent(state: TimelineState, event: AgentEvent): Timelin
     case "file.created":
     case "file.modified":
     case "file.deleted":
-      return reduceFile(
-        state,
-        event,
-        formatFileChange(event.payload.summary.path, event.payload.summary.changeType),
-      );
+      return reduceFile(state, event, formatFileChange(event.payload.summary));
     case "file.moved":
       return reduceFile(state, event, formatFileMove(event.payload.fromPath, event.payload.toPath));
     case "process.started":
@@ -203,10 +216,14 @@ function reduceRegisteredEvent(state: TimelineState, event: AgentEvent): Timelin
     case "verification.planned":
       return upsertVerification(state, {
         id: event.payload.planId,
+        planId: event.payload.planId,
         label: "Verification",
         status: "PENDING",
         checks: [],
         checkCount: event.payload.checkCount,
+        passed: 0,
+        failed: 0,
+        errors: 0,
         plannedCounts: { ...event.payload.counts },
       });
     case "verification.check.started":
@@ -265,9 +282,13 @@ function reduceRegisteredEvent(state: TimelineState, event: AgentEvent): Timelin
     case "verification.started":
       return upsertVerification(state, {
         id: event.eventId,
+        planId: event.eventId,
         label: "Verification",
         status: "RUNNING",
         checks: [],
+        passed: 0,
+        failed: 0,
+        errors: 0,
       });
     case "verification.completed":
       return appendSettled(state, {
@@ -444,6 +465,8 @@ function upsertRetry(
   const retry: TimelineRetry = {
     id,
     attempt: event.payload.attempt,
+    text: `Retry ${event.payload.attempt}`,
+    started: status === "RUNNING",
     status,
     ...("errorCode" in event.payload ? { reason: event.payload.errorCode } : {}),
   };
@@ -466,13 +489,25 @@ function updateVerificationCheck(
 ): TimelineState {
   const group = state.verification.find((item) => item.id === event.payload.planId) ?? {
     id: event.payload.planId,
+    planId: event.payload.planId,
     label: "Verification",
     status: "RUNNING" as const,
     checks: [],
+    passed: 0,
+    failed: 0,
+    errors: 0,
   };
   const existing = group.checks.find((item) => item.id === event.payload.checkId);
   const check: TimelineVerificationCheck = {
     id: event.payload.checkId,
+    checkId: event.payload.checkId,
+    title:
+      event.type === "verification.check.started"
+        ? `${event.payload.kind ?? ""} · ${event.payload.purpose ?? "Check"} · ${event.payload.stage ?? ""}`.replace(
+            /^ · | · $/g,
+            "",
+          )
+        : (existing?.title ?? "Check"),
     label:
       event.type === "verification.check.started"
         ? `${event.payload.kind} · ${event.payload.purpose} · ${event.payload.stage}`

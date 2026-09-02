@@ -11,6 +11,11 @@ import {
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import {
+  createInitialTimelineState,
+  reduceTimelineEvent as reduceSharedTimelineEvent,
+} from "@caelush/client";
+import { createInitialCliTimelineState as createInitialCliTimelineStateFromModel } from "../src/application/timeline-model.js";
+import {
   createInitialCliTimelineState,
   flushTimelineForTerminal,
   reduceTimelineEvent,
@@ -23,6 +28,13 @@ const invocationId = "tinv_00000000-0000-7000-8000-000000000000" as const;
 const processId = "process-1";
 
 describe("CLI timeline reducer", () => {
+  it("resolves CLI Timeline through the shared implementation", () => {
+    expect(createInitialCliTimelineStateFromModel(runId)).toEqual(
+      createInitialTimelineState(runId),
+    );
+    expect(reduceTimelineEvent).toBe(reduceSharedTimelineEvent);
+  });
+
   it("aggregates a Tool lifecycle into one settled entry by invocationId", () => {
     let state = createInitialCliTimelineState(runId);
     state = reduceTimelineEvent(

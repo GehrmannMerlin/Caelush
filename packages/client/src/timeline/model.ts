@@ -30,6 +30,7 @@ export type TimelineEntryStatus =
 
 export interface TimelineEntry {
   readonly id: string;
+  readonly runId?: RunId;
   readonly kind: TimelineEntryKind;
   readonly status: TimelineEntryStatus;
   readonly title?: string;
@@ -61,15 +62,21 @@ export interface TimelineEntry {
 
 export interface TimelineVerificationCheck {
   readonly id: string;
+  readonly checkId: string;
   readonly label: string;
+  readonly title: string;
   readonly status: TimelineEntryStatus;
   readonly detail?: string;
 }
 export interface TimelineVerificationGroup {
   readonly id: string;
+  readonly planId: string;
   readonly label: string;
   readonly status: TimelineEntryStatus;
   readonly checks: readonly TimelineVerificationCheck[];
+  readonly passed: number;
+  readonly failed: number;
+  readonly errors: number;
   readonly plannedCounts?: Readonly<{
     required: number;
     ifAvailable: number;
@@ -80,6 +87,8 @@ export interface TimelineVerificationGroup {
 export interface TimelineRetry {
   readonly id: string;
   readonly attempt: number;
+  readonly text: string;
+  readonly started: boolean;
   readonly reason?: string;
   readonly status: TimelineEntryStatus;
 }

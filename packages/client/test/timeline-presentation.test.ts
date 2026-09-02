@@ -1,11 +1,29 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatFileChange,
+  formatRunTerminal,
+  formatToolLabel,
   sanitizeTerminalText,
   truncateTimelineText,
   workspaceRelativePath,
 } from "../src/timeline/presentation.js";
 
 describe("shared Timeline presentation", () => {
+  it("preserves established CLI labels and file summaries", () => {
+    expect(formatToolLabel("read_file")).toBe("Read file");
+    expect(formatToolLabel("exec_command")).toBe("Run command");
+    expect(
+      formatFileChange({ path: "src/a.ts", changeType: "MODIFIED", additions: 2, deletions: 1 }),
+    ).toBe("M src/a.ts (+2, -1)");
+    expect(formatRunTerminal("FAILED")).toBe("Run ended with status failed.");
+  });
+
+  it("keeps the marker within the UTF-8 byte bound and preserves the tail", () => {
+    const value = truncateTimelineText("head-".repeat(20) + "TAIL", 40);
+    expect(new TextEncoder().encode(value).byteLength).toBeLessThanOrEqual(40);
+    expect(value).toContain("TAIL");
+    expect(value).not.toContain("�");
+  });
   it("bounds Unicode text by UTF-8 bytes without splitting emoji", () => {
     const value = truncateTimelineText("头头头-keep-head-😀😀😀-keep-tail-尾尾尾", 40);
     expect(new TextEncoder().encode(value).byteLength).toBeLessThanOrEqual(40);
