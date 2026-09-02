@@ -5,18 +5,20 @@ export function truncateTimelineText(value: string, maxBytes: number): string {
   if (maxBytes <= 0) return "";
   if (encoder.encode(value).byteLength <= maxBytes) return value;
   const markerBytes = encoder.encode(TRUNCATION_MARKER).byteLength;
-  if (maxBytes <= markerBytes)
-    return new TextDecoder().decode(encoder.encode(TRUNCATION_MARKER).slice(0, maxBytes));
+  const prefix = (budget: number): string => {
+    let result = "";
+    let used = 0;
+    for (const point of value) {
+      const bytes = encoder.encode(point).byteLength;
+      if (used + bytes > budget) break;
+      result += point;
+      used += bytes;
+    }
+    return result;
+  };
+  if (maxBytes < markerBytes) return prefix(maxBytes);
   const budget = maxBytes - markerBytes;
-  let head = "";
-  let used = 0;
-  for (const point of value) {
-    const bytes = encoder.encode(point).byteLength;
-    if (used + bytes > budget) break;
-    head += point;
-    used += bytes;
-  }
-  return head + TRUNCATION_MARKER;
+  return prefix(budget) + TRUNCATION_MARKER;
 }
 
 export function sanitizeTerminalText(value: string): string {

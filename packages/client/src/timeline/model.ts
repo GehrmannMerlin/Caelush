@@ -77,7 +77,15 @@ export const DEFAULT_TIMELINE_LIMITS: TimelineLimits = Object.freeze({
   maxSeenEvents: 1024,
 });
 export function resolveTimelineLimits(options: TimelineOptions = {}): TimelineLimits {
-  return Object.freeze({ ...DEFAULT_TIMELINE_LIMITS, ...options.limits });
+  const supplied = options.limits ?? {};
+  const valid = (value: number | undefined, fallback: number): number =>
+    value !== undefined && Number.isSafeInteger(value) && value > 0 ? value : fallback;
+  return Object.freeze({
+    maxTextBytes: valid(supplied.maxTextBytes, DEFAULT_TIMELINE_LIMITS.maxTextBytes),
+    maxSettledEntries: valid(supplied.maxSettledEntries, DEFAULT_TIMELINE_LIMITS.maxSettledEntries),
+    maxActiveEntries: valid(supplied.maxActiveEntries, DEFAULT_TIMELINE_LIMITS.maxActiveEntries),
+    maxSeenEvents: valid(supplied.maxSeenEvents, DEFAULT_TIMELINE_LIMITS.maxSeenEvents),
+  });
 }
 export function createInitialTimelineState(
   runId?: RunId,
