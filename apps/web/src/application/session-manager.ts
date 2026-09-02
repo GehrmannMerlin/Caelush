@@ -1,9 +1,11 @@
 import {
   createApprovalView,
+  canCancelRunStatus,
   createInitialTimelineState,
   deriveSessionActivity,
   flushTimelineForTerminal,
   hydrateSessionTranscript,
+  isTerminalRunStatus,
   listMatchingSessionCandidates,
   nonTerminalRuns,
   reduceTimelineEvent,
@@ -47,6 +49,7 @@ export interface WebSessionClient extends SessionCandidateClient, WebHostClient 
     resolution: ApprovalResolution,
   ): Promise<RunActionResponse>;
   startRun(runId: RunId): Promise<RunActionResponse>;
+  cancelRun(runId: RunId): Promise<RunActionResponse>;
   watchRunEvents(runId: RunId, options?: WatchRunEventsOptions): AsyncIterable<AgentEvent>;
 }
 
@@ -68,6 +71,7 @@ export type WebSessionErrorCode =
   | "SESSION_CREATE_FAILED"
   | "RUN_CREATE_FAILED"
   | "RUN_START_FAILED"
+  | "RUN_CANCEL_FAILED"
   | "RUN_STREAM_FAILED"
   | "RUN_REFRESH_FAILED"
   | "DEFAULT_MODEL_UNAVAILABLE"
@@ -130,6 +134,7 @@ export class WebSessionManager {
   private activeLifecycle: ActiveLifecycle | undefined;
   private readonly resolvingApprovals = new Set<ApprovalRequestId>();
   private approvalContextGeneration = 0;
+  private cancelPromise: Promise<boolean> | undefined;
   private disposed = false;
 
   constructor(
@@ -388,6 +393,23 @@ export class WebSessionManager {
     }
   }
 
+  cancelRun(): Promise<boolean> {
+    if (this.cancelPromise !== undefined) return this.cancelPromise;
+    const run = this.snapshot.activeRun;
+    if (this.disposed || run === undefined || !canCancelRunStatus(run.status)) {
+      return Promise.resolve(false);
+    }
+
+    const context = this.captureApprovalContext(run.id);
+    this.publish({ controlMode: "CANCELLING", error: undefined });
+    const promise = this.requestCancellation(run, context);
+    this.cancelPromise = promise;
+    void promise.then(() => {
+      if (this.cancelPromise === promise) this.cancelPromise = undefined;
+    });
+    return promise;
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -426,6 +448,29 @@ export class WebSessionManager {
     return true;
   }
 
+  private async requestCancellation(
+    run: ClientAgentRun,
+    context: ApprovalContext,
+  ): Promise<boolean> {
+    try {
+      const response = await this.options.client.cancelRun(run.id);
+      if (this.disposed || this.snapshot.activeRun?.id !== run.id) return false;
+      if (isTerminalRunStatus(response.run.status)) {
+        await this.publishTerminalReconciliation(response.run, context);
+        return !this.disposed;
+      }
+      this.publishActiveRun(response.run, this.snapshot.submission);
+      this.restoreControlMode();
+      await this.refreshApprovals(run.id);
+      return !this.disposed && this.snapshot.activeRun?.id === run.id;
+    } catch {
+      if (!this.disposed && this.snapshot.activeRun?.id === run.id) {
+        this.publish({ controlMode: this.controlModeForApprovals(), error: sessionError("RUN_CANCEL_FAILED") });
+      }
+      return false;
+    }
+  }
+
   private attachLifecycle(run: ClientAgentRun): ActiveLifecycle {
     const active: ActiveLifecycle = {
       run,
@@ -456,7 +501,7 @@ export class WebSessionManager {
           return;
         }
         if (this.activeLifecycle !== active || this.disposed) return;
-        const terminalTimeline = isTerminalRunStatus(refreshed.status)
+        const terminalTimeline = isTimelineTerminalRunStatus(refreshed.status)
           ? flushTimelineForTerminal(this.snapshot.timeline, refreshed.status)
           : this.snapshot.timeline;
         this.publishActiveRun(refreshed, "ACTIVE", terminalTimeline);
@@ -689,8 +734,21 @@ export class WebSessionManager {
     const nextSubmitting = Object.freeze([...new Set(submitting)]);
     this.publish({
       approvalState: Object.freeze({ requests: nextRequests, submitting: nextSubmitting }),
-      controlMode: nextRequests.length > 0 ? "APPROVAL" : "NONE",
+      controlMode:
+        this.snapshot.controlMode === "CANCELLING"
+          ? "CANCELLING"
+          : nextRequests.length > 0
+            ? "APPROVAL"
+            : "NONE",
     });
+  }
+
+  private restoreControlMode(): void {
+    this.publish({ controlMode: this.controlModeForApprovals() });
+  }
+
+  private controlModeForApprovals(): WebControlMode {
+    return (this.snapshot.approvalState?.requests.length ?? 0) > 0 ? "APPROVAL" : "NONE";
   }
 
   private cancelActiveLifecycle(): void {
@@ -740,6 +798,12 @@ function initialSnapshot(): WebSessionSnapshot {
   };
 }
 
+function isTimelineTerminalRunStatus(
+  status: RunStatus,
+): status is Parameters<typeof flushTimelineForTerminal>[1] {
+  return isTerminalRunStatus(status);
+}
+
 function isLifecycleEvent(event: AgentEvent): boolean {
   return (
     event.type === "run.started" ||
@@ -749,19 +813,6 @@ function isLifecycleEvent(event: AgentEvent): boolean {
     event.type === "run.cancelled" ||
     event.type === "run.timed_out" ||
     event.type === "budget.exceeded"
-  );
-}
-
-function isTerminalRunStatus(
-  status: RunStatus,
-): status is Parameters<typeof flushTimelineForTerminal>[1] {
-  return (
-    status === "COMPLETED" ||
-    status === "FAILED" ||
-    status === "CANCELLED" ||
-    status === "TIMEOUT" ||
-    status === "MAX_STEPS_REACHED" ||
-    status === "BUDGET_EXCEEDED"
   );
 }
 
@@ -792,6 +843,7 @@ function sessionError(code: WebSessionErrorCode): WebSessionError {
     SESSION_CREATE_FAILED: "无法创建会话。",
     RUN_CREATE_FAILED: "无法创建任务。",
     RUN_START_FAILED: "无法启动任务。",
+    RUN_CANCEL_FAILED: "无法确认取消请求。任务可能仍在后台运行。",
     RUN_STREAM_FAILED: "任务执行连接中断。",
     RUN_REFRESH_FAILED: "无法刷新任务状态。",
     DEFAULT_MODEL_UNAVAILABLE: "当前 daemon 未配置默认模型，无法开始任务。",
