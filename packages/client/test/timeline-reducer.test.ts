@@ -105,7 +105,7 @@ describe("shared Timeline reducer", () => {
     expect(state.verification[0]).toMatchObject({ passed: 1, failed: 0, errors: 1 });
   });
 
-  it("fails closed when an evicted outcome identity reappears", () => {
+  it("records an affected plan when an evicted outcome identity reappears", () => {
     const planId = createVerificationPlanId();
     const checkA = createVerificationCheckId();
     const checkB = createVerificationCheckId();
@@ -143,7 +143,10 @@ describe("shared Timeline reducer", () => {
         evidenceIds: [],
       }),
     );
-    expect(state.error).toBe("Verification outcome history could not be verified.");
+    expect(state.error).toBeUndefined();
+    expect(state).toMatchObject({
+      verificationOutcomeIntegrity: { affectedPlanIds: [planId], unknownAffected: false },
+    });
   });
 
   it("preserves planned total when a verification plan is evicted", () => {
@@ -199,6 +202,305 @@ describe("shared Timeline reducer", () => {
     ).toBe(false);
   });
 
+  it("finalizes retained metadata after an unrelated visible group evicts the target at limit one", () => {
+    const planA = createVerificationPlanId();
+    const planB = createVerificationPlanId();
+    const checkB = createVerificationCheckId();
+    let state = createInitialTimelineState(runId, {
+      limits: { maxSeenEvents: 1, maxActiveEntries: 1 },
+    });
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.planned", 1, { planId: planA, checkCount: 3 }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.check.started", 2, {
+        planId: planB,
+        checkId: checkB,
+        ordinal: 0,
+        kind: "TASK",
+        purpose: "ACCEPTANCE",
+        stage: "ACCEPTANCE",
+      }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.finalized", 3, {
+        planId: planA,
+        outcome: "PASSED",
+        failedCheckIds: [],
+        errorCheckIds: [],
+      }),
+    );
+
+    expect(state.error).toBeUndefined();
+    expect(state.settled.at(-1)).toMatchObject({
+      planId: planA,
+      status: "FINALIZED",
+      counts: { total: 3, failed: 0, error: 0 },
+    });
+  });
+
+  it("records evicted plan metadata as affected and rejects its finalization", () => {
+    const planA = createVerificationPlanId();
+    const planB = createVerificationPlanId();
+    let state = createInitialTimelineState(runId, {
+      limits: { maxSeenEvents: 1, maxActiveEntries: 1 },
+    });
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.planned", 1, { planId: planA, checkCount: 3 }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.planned", 2, { planId: planB, checkCount: 1 }),
+    );
+    expect(state).toMatchObject({
+      verificationOutcomeIntegrity: { affectedPlanIds: [planA], unknownAffected: false },
+    });
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.finalized", 3, {
+        planId: planA,
+        outcome: "PASSED",
+        failedCheckIds: [],
+        errorCheckIds: [],
+      }),
+    );
+
+    expect(state.error).toBe("Verification plan history could not be verified.");
+    expect(
+      state.settled.some((entry) => entry.planId === planA && entry.status === "FINALIZED"),
+    ).toBe(false);
+  });
+
+  it("allows an independently provable plan after a historical plan outcome is evicted", () => {
+    const planA = createVerificationPlanId();
+    const planB = createVerificationPlanId();
+    let state = createInitialTimelineState(runId, {
+      limits: { maxSeenEvents: 2, maxActiveEntries: 1 },
+    });
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.planned", 1, { planId: planA, checkCount: 1 }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.check.completed", 2, {
+        planId: planA,
+        checkId: createVerificationCheckId(),
+        status: "PASSED",
+        evidenceIds: [],
+      }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.planned", 3, { planId: planB, checkCount: 2 }),
+    );
+    for (const sequence of [4, 5]) {
+      state = reduceTimelineEvent(
+        state,
+        eventOf("verification.check.completed", sequence, {
+          planId: planB,
+          checkId: createVerificationCheckId(),
+          status: "PASSED",
+          evidenceIds: [],
+        }),
+      );
+    }
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.finalized", 6, {
+        planId: planB,
+        outcome: "PASSED",
+        failedCheckIds: [],
+        errorCheckIds: [],
+      }),
+    );
+
+    expect(state.error).toBeUndefined();
+    expect(state.settled.at(-1)).toMatchObject({
+      planId: planB,
+      status: "FINALIZED",
+      counts: { total: 2, failed: 0, error: 0 },
+    });
+  });
+
+  it("rejects an affected target whose retained outcomes are incomplete", () => {
+    const planA = createVerificationPlanId();
+    const planB = createVerificationPlanId();
+    let state = createInitialTimelineState(runId, {
+      limits: { maxSeenEvents: 1, maxActiveEntries: 1 },
+    });
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.planned", 1, { planId: planA, checkCount: 2 }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.check.completed", 2, {
+        planId: planA,
+        checkId: createVerificationCheckId(),
+        status: "PASSED",
+        evidenceIds: [],
+      }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.check.completed", 3, {
+        planId: planB,
+        checkId: createVerificationCheckId(),
+        status: "PASSED",
+        evidenceIds: [],
+      }),
+    );
+    expect(state.error).toBeUndefined();
+    expect(state).toMatchObject({
+      verificationOutcomeIntegrity: { affectedPlanIds: [planA], unknownAffected: false },
+    });
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.finalized", 4, {
+        planId: planA,
+        outcome: "PASSED",
+        failedCheckIds: [],
+        errorCheckIds: [],
+      }),
+    );
+
+    expect(state.error).toBe("Verification plan history could not be verified.");
+    expect(
+      state.settled.some((entry) => entry.planId === planA && entry.status === "FINALIZED"),
+    ).toBe(false);
+  });
+
+  it("allows complete retained target evidence after historical provenance becomes unknown", () => {
+    const planA = createVerificationPlanId();
+    const planB = createVerificationPlanId();
+    const planC = createVerificationPlanId();
+    let state = createInitialTimelineState(runId, {
+      limits: { maxSeenEvents: 1, maxActiveEntries: 1 },
+    });
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.planned", 1, { planId: planA, checkCount: 1 }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.planned", 2, { planId: planC, checkCount: 1 }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.check.completed", 3, {
+        planId: planA,
+        checkId: createVerificationCheckId(),
+        status: "PASSED",
+        evidenceIds: [],
+      }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.planned", 4, { planId: planB, checkCount: 1 }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.check.completed", 5, {
+        planId: planB,
+        checkId: createVerificationCheckId(),
+        status: "PASSED",
+        evidenceIds: [],
+      }),
+    );
+    expect(state).toMatchObject({
+      verificationOutcomeIntegrity: { unknownAffected: true },
+    });
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.finalized", 6, {
+        planId: planB,
+        outcome: "PASSED",
+        failedCheckIds: [],
+        errorCheckIds: [],
+      }),
+    );
+
+    expect(state.error).toBeUndefined();
+    expect(state.settled.at(-1)).toMatchObject({
+      planId: planB,
+      status: "FINALIZED",
+      counts: { total: 1, failed: 0, error: 0 },
+    });
+  });
+
+  it("requires complete target evidence when integrity provenance has overflowed", () => {
+    const planA = createVerificationPlanId();
+    const planB = createVerificationPlanId();
+    const planC = createVerificationPlanId();
+    const planD = createVerificationPlanId();
+    let state = createInitialTimelineState(runId, {
+      limits: { maxSeenEvents: 1, maxActiveEntries: 1 },
+    });
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.planned", 1, { planId: planA, checkCount: 1 }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.planned", 2, { planId: planC, checkCount: 1 }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.check.completed", 3, {
+        planId: planA,
+        checkId: createVerificationCheckId(),
+        status: "PASSED",
+        evidenceIds: [],
+      }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.planned", 4, { planId: planB, checkCount: 1 }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.check.completed", 5, {
+        planId: planB,
+        checkId: createVerificationCheckId(),
+        status: "PASSED",
+        evidenceIds: [],
+      }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.finalized", 6, {
+        planId: planB,
+        outcome: "PASSED",
+        failedCheckIds: [],
+        errorCheckIds: [],
+      }),
+    );
+    expect(state.settled.at(-1)).toMatchObject({ planId: planB, status: "FINALIZED" });
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.planned", 7, { planId: planD, checkCount: 2 }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.finalized", 8, {
+        planId: planD,
+        outcome: "PASSED",
+        failedCheckIds: [],
+        errorCheckIds: [],
+      }),
+    );
+
+    expect(state.error).toBe("Verification plan history could not be verified.");
+    expect(
+      state.settled.some((entry) => entry.planId === planD && entry.status === "FINALIZED"),
+    ).toBe(false);
+  });
+
   it("bounds and sanitizes public strings across projection domains", () => {
     const bad = "\u001b[31m" + "x".repeat(200) + "\u001b[0m";
     let state = createInitialTimelineState(runId, { limits: { maxTextBytes: 32 } });
@@ -245,7 +547,18 @@ describe("shared Timeline reducer", () => {
       ...state.retries,
     ]) {
       for (const field of ["title", "text", "detail", "reason", "scope"] as const) {
-        const text = (value as Record<string, unknown>)[field];
+        const text =
+          field === "title" && "title" in value
+            ? value.title
+            : field === "text" && "text" in value
+              ? value.text
+              : field === "detail" && "detail" in value
+                ? value.detail
+                : field === "reason" && "reason" in value
+                  ? value.reason
+                  : field === "scope" && "scope" in value
+                    ? value.scope
+                    : undefined;
         if (typeof text === "string") {
           expect(text).not.toContain("\u001b");
           expect(new TextEncoder().encode(text).byteLength).toBeLessThanOrEqual(32);

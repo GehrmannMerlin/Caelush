@@ -6,6 +6,7 @@ import type {
   TimelineState,
   TimelineVerificationCheck,
   TimelineVerificationGroup,
+  TimelineVerificationOutcome,
 } from "./model.js";
 import {
   formatFileChange,
@@ -214,8 +215,9 @@ function reduceRegisteredEvent(state: TimelineState, event: AgentEvent): Timelin
     case "retry.started":
       return upsertRetry(state, event, "RUNNING");
     case "verification.planned":
-      return {
-        ...upsertVerification(state, {
+      return withVerificationPlan(
+        state,
+        {
           id: event.payload.planId,
           planId: event.payload.planId,
           label: "Verification",
@@ -226,17 +228,9 @@ function reduceRegisteredEvent(state: TimelineState, event: AgentEvent): Timelin
           failed: 0,
           errors: 0,
           plannedCounts: { ...event.payload.counts },
-        }),
-        verificationPlans: upsert(
-          state.verificationPlans,
-          {
-            id: event.payload.planId,
-            planId: event.payload.planId,
-            checkCount: event.payload.checkCount,
-          },
-          state.limits.maxSeenEvents,
-        ),
-      };
+        },
+        event.payload.checkCount,
+      );
     case "verification.check.started":
       return updateVerificationCheck(state, event, "RUNNING");
     case "verification.check.completed":
@@ -273,7 +267,26 @@ function reduceRegisteredEvent(state: TimelineState, event: AgentEvent): Timelin
       const retainedPlan = state.verificationPlans.find(
         (item) => item.planId === event.payload.planId,
       );
-      if (group === undefined && (retainedPlan === undefined || state.limits.maxSeenEvents <= 1)) {
+      const requiresTargetProof =
+        state.verificationOutcomeIntegrity.unknownAffected ||
+        state.verificationOutcomeIntegrity.affectedPlanIds.includes(event.payload.planId);
+      const provenOutcomes =
+        retainedPlan === undefined ? undefined : completeRetainedOutcomes(state, retainedPlan);
+      const total = requiresTargetProof
+        ? retainedPlan?.checkCount
+        : (group?.checkCount ?? retainedPlan?.checkCount);
+      const failed = requiresTargetProof
+        ? provenOutcomes?.filter((item) => item.status === "FAILED").length
+        : event.payload.failedCheckIds.length;
+      const error = requiresTargetProof
+        ? provenOutcomes?.filter((item) => item.status === "ERROR").length
+        : event.payload.errorCheckIds.length;
+      if (
+        total === undefined ||
+        failed === undefined ||
+        error === undefined ||
+        !isSafeVerificationAggregate(total, failed, error)
+      ) {
         return { ...state, error: "Verification plan history could not be verified." };
       }
       return appendSettled(
@@ -289,9 +302,9 @@ function reduceRegisteredEvent(state: TimelineState, event: AgentEvent): Timelin
           status: "FINALIZED",
           planId: event.payload.planId,
           counts: {
-            total: group?.checkCount ?? retainedPlan?.checkCount ?? group!.checkCount!,
-            failed: event.payload.failedCheckIds.length,
-            error: event.payload.errorCheckIds.length,
+            total,
+            failed,
+            error,
           },
         },
       );
@@ -568,17 +581,6 @@ function updateVerificationCheck(
   const priorOutcome = state.verificationOutcomes.find(
     (item) => item.planId === event.payload.planId && item.checkId === event.payload.checkId,
   );
-  if (
-    (status === "PASSED" || status === "FAILED" || status === "ERROR") &&
-    priorOutcome === undefined &&
-    state.verificationOutcomes.length >= state.limits.maxSeenEvents
-  ) {
-    return {
-      ...state,
-      verificationOutcomeOverflow: true,
-      error: "Verification outcome history could not be verified.",
-    };
-  }
   const old =
     priorOutcome?.status === "PASSED"
       ? { passed: -1 }
@@ -595,9 +597,9 @@ function updateVerificationCheck(
         : status === "ERROR"
           ? { errors: 1 }
           : {};
-  const verificationOutcomes =
+  const outcomeUpdate =
     status === "PASSED" || status === "FAILED" || status === "ERROR"
-      ? upsert(
+      ? upsertWithEviction(
           state.verificationOutcomes,
           {
             id: `${event.payload.planId}:${event.payload.checkId}`,
@@ -607,8 +609,8 @@ function updateVerificationCheck(
           },
           state.limits.maxSeenEvents,
         )
-      : state.verificationOutcomes;
-  return {
+      : undefined;
+  let next: TimelineState = {
     ...upsertVerification(state, {
       ...group,
       status: "RUNNING",
@@ -617,8 +619,66 @@ function updateVerificationCheck(
       failed: group.failed + (add.failed ?? 0) + (old.failed ?? 0),
       errors: group.errors + (add.errors ?? 0) + (old.errors ?? 0),
     }),
-    verificationOutcomes,
+    ...(outcomeUpdate === undefined ? {} : { verificationOutcomes: outcomeUpdate.items }),
   };
+  if (outcomeUpdate?.evicted !== undefined)
+    next = markVerificationPlanAffected(next, outcomeUpdate.evicted.planId);
+  return next;
+}
+function withVerificationPlan(
+  state: TimelineState,
+  group: TimelineVerificationGroup,
+  checkCount: number,
+): TimelineState {
+  const update = upsertWithEviction(
+    state.verificationPlans,
+    { id: group.planId, planId: group.planId, checkCount },
+    state.limits.maxSeenEvents,
+  );
+  let next: TimelineState = {
+    ...upsertVerification(state, group),
+    verificationPlans: update.items,
+  };
+  if (update.evicted !== undefined)
+    next = markVerificationPlanAffected(next, update.evicted.planId);
+  return next;
+}
+function markVerificationPlanAffected(state: TimelineState, planId: string): TimelineState {
+  const integrity = state.verificationOutcomeIntegrity;
+  if (integrity.unknownAffected || integrity.affectedPlanIds.includes(planId)) return state;
+  if (integrity.affectedPlanIds.length >= state.limits.maxSeenEvents)
+    return {
+      ...state,
+      verificationOutcomeIntegrity: { ...integrity, unknownAffected: true },
+    };
+  return {
+    ...state,
+    verificationOutcomeIntegrity: {
+      ...integrity,
+      affectedPlanIds: [...integrity.affectedPlanIds, planId],
+    },
+  };
+}
+function completeRetainedOutcomes(
+  state: TimelineState,
+  plan: { readonly planId: string; readonly checkCount: number },
+): readonly TimelineVerificationOutcome[] | undefined {
+  const outcomes = state.verificationOutcomes.filter((item) => item.planId === plan.planId);
+  return outcomes.length === plan.checkCount &&
+    new Set(outcomes.map((item) => item.checkId)).size === outcomes.length
+    ? outcomes
+    : undefined;
+}
+function isSafeVerificationAggregate(total: number, failed: number, error: number): boolean {
+  return (
+    Number.isSafeInteger(total) &&
+    total >= 0 &&
+    Number.isSafeInteger(failed) &&
+    failed >= 0 &&
+    Number.isSafeInteger(error) &&
+    error >= 0 &&
+    failed + error <= total
+  );
 }
 function appendSettled(state: TimelineState, entry: TimelineEntry): TimelineState {
   let settled = [
@@ -652,6 +712,23 @@ function upsert<T extends { readonly id: string }>(
   const copy = [...items];
   copy[index] = value;
   return copy;
+}
+function upsertWithEviction<T extends { readonly id: string }>(
+  items: readonly T[],
+  value: T,
+  limit: number,
+): { readonly items: readonly T[]; readonly evicted?: T } {
+  const index = items.findIndex((item) => item.id === value.id);
+  if (index >= 0) {
+    const copy = [...items];
+    copy[index] = value;
+    return { items: copy };
+  }
+  if (items.length < limit) return { items: [...items, value] };
+  const evicted = items[0];
+  return evicted === undefined
+    ? { items: [...items, value].slice(-limit) }
+    : { items: [...items.slice(1), value], evicted };
 }
 function bound(value: string, state: TimelineState): string {
   return truncateTimelineText(sanitizeTerminalText(value), state.limits.maxTextBytes);
