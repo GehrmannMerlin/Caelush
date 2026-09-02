@@ -168,6 +168,33 @@ describe("shared Timeline reducer", () => {
     expect(state.settled.at(-1)?.counts?.total).toBe(3);
   });
 
+  it("fails closed when finalized plan metadata has also been evicted", () => {
+    const planA = createVerificationPlanId();
+    const planB = createVerificationPlanId();
+    let state = createInitialTimelineState(runId, { limits: { maxSeenEvents: 1 } });
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.planned", 1, { planId: planA, checkCount: 3 }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.planned", 2, { planId: planB, checkCount: 1 }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.finalized", 3, {
+        planId: planA,
+        outcome: "PASSED",
+        failedCheckIds: [],
+        errorCheckIds: [],
+      }),
+    );
+    expect(state.error).toBe("Verification plan history could not be verified.");
+    expect(
+      state.settled.some((entry) => entry.planId === planA && entry.status === "FINALIZED"),
+    ).toBe(false);
+  });
+
   it("bounds and sanitizes public strings across projection domains", () => {
     const bad = "\u001b[31m" + "x".repeat(200) + "\u001b[0m";
     let state = createInitialTimelineState(runId, { limits: { maxTextBytes: 32 } });

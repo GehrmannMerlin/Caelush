@@ -270,6 +270,12 @@ function reduceRegisteredEvent(state: TimelineState, event: AgentEvent): Timelin
       });
     case "verification.finalized": {
       const group = state.verification.find((item) => item.id === event.payload.planId);
+      const retainedPlan = state.verificationPlans.find(
+        (item) => item.planId === event.payload.planId,
+      );
+      if (group === undefined && (retainedPlan === undefined || state.limits.maxSeenEvents <= 1)) {
+        return { ...state, error: "Verification plan history could not be verified." };
+      }
       return appendSettled(
         {
           ...state,
@@ -283,11 +289,7 @@ function reduceRegisteredEvent(state: TimelineState, event: AgentEvent): Timelin
           status: "FINALIZED",
           planId: event.payload.planId,
           counts: {
-            total:
-              group?.checkCount ??
-              state.verificationPlans.find((item) => item.planId === event.payload.planId)
-                ?.checkCount ??
-              0,
+            total: group?.checkCount ?? retainedPlan?.checkCount ?? group!.checkCount!,
             failed: event.payload.failedCheckIds.length,
             error: event.payload.errorCheckIds.length,
           },
@@ -571,7 +573,11 @@ function updateVerificationCheck(
     priorOutcome === undefined &&
     state.verificationOutcomes.length >= state.limits.maxSeenEvents
   ) {
-    return { ...state, error: "Verification outcome history could not be verified." };
+    return {
+      ...state,
+      verificationOutcomeOverflow: true,
+      error: "Verification outcome history could not be verified.",
+    };
   }
   const old =
     priorOutcome?.status === "PASSED"
