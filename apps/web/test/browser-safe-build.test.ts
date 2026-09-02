@@ -6,13 +6,50 @@ import { describe, expect, it } from "vitest";
 const execFile = promisify(execFileCallback);
 const workspacePath = process.cwd();
 const productionOutput = new URL("../dist/", import.meta.url);
-const nodeOnlyMarkers = [
-  /(?:^|[^\w$.])Buffer(?:\.|\[)/,
-  /(?:^|[^\w$.])process\.(?:env|versions|platform|cwd|stdin|stdout|stderr|exit|argv)\b/,
+const processApis = [
+  "env",
+  "versions",
+  "platform",
+  "cwd",
+  "stdin",
+  "stdout",
+  "stderr",
+  "exit",
+  "argv",
+] as const;
+const processApiAccess = String.raw`(?:\.\s*(?:${processApis.join("|")})\b|\?\.\s*(?:${processApis.join("|")})\b|\[\s*["'](?:${processApis.join("|")})["']\s*\]|\?\.\s*\[\s*["'](?:${processApis.join("|")})["']\s*\])`;
+const nodeOnlyMarkerPatterns = [
+  /(?:^|[^\w$.])(?:new\s+)?Buffer\s*(?:\(|\?|\.|\[)/,
+  /(?:^|[^\w$.])globalThis(?:\?\.)?\.Buffer\b/,
+  new RegExp(String.raw`(?:^|[^\w$.])process${processApiAccess}`),
+  new RegExp(String.raw`(?:^|[^\w$.])globalThis(?:\?\.)?\.process${processApiAccess}`),
   /(?:from|import)\s*\(?["']node:/,
+  /\brequire\s*\(\s*["']node:/,
 ];
 
 describe("Web production build", () => {
+  it("detects executable Node-only forms without treating process event names as APIs", () => {
+    const executableForms = [
+      "new Buffer(8)",
+      "Buffer(input)",
+      "globalThis.Buffer.from(input)",
+      ...processApis.map((api) => `process.${api}`),
+      ...processApis.map((api) => `process?.${api}`),
+      ...processApis.map((api) => `process["${api}"]`),
+      ...processApis.map((api) => `globalThis.process.${api}`),
+      ...processApis.map((api) => `globalThis.process?.["${api}"]`),
+      'import "node:fs"',
+      'import("node:fs")',
+      'from "node:fs"',
+      'require("node:fs")',
+    ];
+
+    for (const source of executableForms) {
+      expect(hasNodeOnlyMarker(source), source).toBe(true);
+    }
+    expect(hasNodeOnlyMarker("process.started")).toBe(false);
+  });
+
   it("contains no Node-only dependency markers", async () => {
     await execFile(
       process.platform === "win32" ? "cmd.exe" : "pnpm",
@@ -24,9 +61,13 @@ describe("Web production build", () => {
 
     const assets = await filesIn(productionOutput);
     const output = await Promise.all(assets.map((asset) => readFile(asset, "utf8")));
-    for (const marker of nodeOnlyMarkers) expect(output.join("\n")).not.toMatch(marker);
+    expect(hasNodeOnlyMarker(output.join("\n"))).toBe(false);
   }, 20_000);
 });
+
+function hasNodeOnlyMarker(source: string): boolean {
+  return nodeOnlyMarkerPatterns.some((marker) => marker.test(source));
+}
 
 async function filesIn(directory: URL): Promise<readonly URL[]> {
   const entries = await readdir(directory, { withFileTypes: true });
