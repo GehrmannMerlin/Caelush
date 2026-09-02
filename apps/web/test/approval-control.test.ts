@@ -212,6 +212,62 @@ describe("WebSessionManager approval controls", () => {
     manager.dispose();
   });
 
+  it("ignores a delayed approval refresh after the manager crosses into a draft", async () => {
+    const session = makeSession();
+    const run = makeRun({ sessionId: session.id, status: "RUNNING" });
+    const approval = makeApproval(run.id, 10);
+    const client = makeClient({ session, run });
+    let releaseRefresh!: () => void;
+    client.listPendingApprovals.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseRefresh = () => resolve({ items: [approval] });
+        }),
+    );
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+
+    const refresh = manager.refreshApprovals(run.id);
+    await waitFor(() => releaseRefresh !== undefined);
+    manager.beginDraft();
+    releaseRefresh();
+    await refresh;
+
+    expect(manager.getSnapshot()).toMatchObject({
+      isDraft: true,
+      approvalState: undefined,
+      controlMode: "NONE",
+    });
+    manager.dispose();
+  });
+
+  it("keeps an in-flight approval reservation across a draft context boundary", async () => {
+    const session = makeSession();
+    const run = makeRun({ sessionId: session.id, status: "RUNNING" });
+    const approval = makeApproval(run.id, 10);
+    const client = makeClient({ session, run, pendingApprovals: [approval] });
+    let releasePreflight!: () => void;
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+    await manager.refreshApprovals(run.id);
+    client.listPendingApprovals.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releasePreflight = () => resolve({ items: [approval] });
+        }),
+    );
+
+    const first = manager.resolveApproval(approval.id, { action: "REJECT" });
+    await waitFor(() => releasePreflight !== undefined);
+    manager.beginDraft();
+    await manager.refreshApprovals(run.id);
+
+    await expect(manager.resolveApproval(approval.id, { action: "REJECT" })).resolves.toBe(false);
+    releasePreflight();
+    await expect(first).resolves.toBe(false);
+    expect(client.resolveApproval).not.toHaveBeenCalled();
+    expect(manager.getSnapshot().approvalState?.requests.map((item) => item.id)).toEqual([approval.id]);
+    manager.dispose();
+  });
+
   it("settles a terminal reconciliation without leaving it active", async () => {
     const session = makeSession();
     const run = makeRun({ sessionId: session.id, status: "RUNNING" });
@@ -233,6 +289,32 @@ describe("WebSessionManager approval controls", () => {
     expect(manager.getSnapshot().history).toContainEqual(
       expect.objectContaining({ runId: terminal.id, kind: "ASSISTANT" }),
     );
+    manager.dispose();
+  });
+
+  it("reconciles a terminal approval run from the refreshed session run list", async () => {
+    const session = makeSession();
+    const run = makeRun({ sessionId: session.id, status: "RUNNING" });
+    const sibling = makeRun({ sessionId: session.id, status: "RUNNING", createdAt: 2 });
+    const terminal = makeCompletedRun(run);
+    const approval = makeApproval(run.id, 10);
+    const client = makeClient({ session, run, pendingApprovals: [approval] });
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+    await openActiveSession(manager, session);
+    client.getRun.mockResolvedValue(terminal);
+    client.listRuns.mockResolvedValue({ items: [terminal, sibling] });
+    client.resolveApproval.mockRejectedValueOnce(new Error("conflict"));
+
+    await expect(manager.resolveApproval(approval.id, { action: "REJECT" })).resolves.toBe(false);
+
+    expect(manager.getSnapshot()).toMatchObject({
+      activeRuns: [sibling],
+      activeRun: sibling,
+      composerEnabled: false,
+      error: undefined,
+      approvalState: undefined,
+      controlMode: "NONE",
+    });
     manager.dispose();
   });
 });
