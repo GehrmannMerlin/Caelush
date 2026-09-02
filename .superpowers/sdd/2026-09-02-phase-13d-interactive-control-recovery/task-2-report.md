@@ -239,3 +239,70 @@ Observed: exit `0`; all workspace build and typecheck tasks completed.
 
 - The mandated Web package test-script command remains unavailable because `@caelush/web` has no `test` script. The direct `pnpm --filter @caelush/web exec vitest run ...` command remains the equivalent focused runner and was used for red/green evidence.
 - Repository-wide `pnpm check` continues to be outside this scoped fix because it reports pre-existing generated `release-artifacts` browser-global lint failures. Focused Web tests, `pnpm typecheck`, and `git diff --check` were run for this fix.
+
+## Fix round 3 — terminal approval authority and ambiguous timeline reconciliation
+
+### Changed files
+
+- `apps/web/src/application/session-manager.ts`
+  - Normal lifecycle settlement now clears Approval controls through `clearApprovals()`, advancing the context generation before `activeRun` is cleared.
+  - Approval async continuations now require the captured Run to remain the exact current `activeRun`; an absent active Run no longer authorizes a stale refresh, resolve, or reconciliation publication.
+  - Both normal settlement and terminal approval reconciliation create an unbound initial timeline when the refreshed session has multiple active sibling Runs, while retaining those siblings and the canonical `MULTIPLE_ACTIVE_RUNS` error.
+- `apps/web/test/approval-control.test.ts`
+  - Added a delayed refresh regression that crosses a normal event-stream terminal settlement and proves the stale response cannot restore Approval controls.
+  - Added multiple-active terminal reconciliation coverage for sibling preservation, unbound timeline identity, and `MULTIPLE_ACTIVE_RUNS`.
+  - Updated the inactive-run projection case to enforce the exact-current-authority contract.
+
+### Red / green evidence
+
+Red command:
+
+```text
+pnpm --filter @caelush/web exec vitest run --no-cache test/approval-control.test.ts test/session-manager.test.ts
+```
+
+Observed before the implementation:
+
+```text
+Test Files  1 failed | 1 passed (2)
+Tests  2 failed | 29 passed (31)
+```
+
+The intended failures showed a delayed approval refresh republishing after normal terminal settlement and a terminal source Run ID retained in the timeline with two active siblings.
+
+Green command:
+
+```text
+pnpm --filter @caelush/web exec vitest run --no-cache test/approval-control.test.ts test/session-manager.test.ts
+```
+
+Observed:
+
+```text
+Test Files  2 passed (2)
+Tests  30 passed (30)
+```
+
+Typecheck command:
+
+```text
+pnpm typecheck
+```
+
+Observed: exit `0`; all workspace build and typecheck tasks completed.
+
+### Self-review
+
+- Context invalidation occurs before the settlement snapshot removes `activeRun`, so a captured context cannot use the former permissive no-active-run case.
+- The new exact-authority comparison protects delayed refresh, resolve preflight/result, and reconciliation because they all use `isCurrentApprovalContext()` after awaits.
+- Multi-active reconciliation does not cancel an unrelated lifecycle (only a lifecycle owned by the terminal source Run is cancelled), retains every refreshed sibling, and intentionally exposes no selected active timeline.
+- The change preserves approval ID-based resolution, synchronous reservation, rejected-list fail-closed behavior, shared bounded approval projection, and raw-data exclusion.
+
+### Commit
+
+- `e598c0329bd49beac69803b89cb0e42752bf1712` — `fix(web): guard terminal approval authority`
+
+### Concerns
+
+- The Web package still has no `test` script, so the direct `pnpm --filter @caelush/web exec vitest run ...` command remains the focused test runner.
+- `pnpm check` was run and exited `1` before typecheck/tests because `eslint .` reports 247 pre-existing errors in generated `release-artifacts/caelush-v0.1.0-windows-x64/web/assets/` bundles (for example undefined browser globals such as `document`, `window`, and `fetch`). The scoped Web tests and `pnpm typecheck` pass.
