@@ -189,26 +189,23 @@ describe("WebSessionManager approval controls", () => {
     },
   );
 
-  it("does not carry approval controls into a different run, session, or draft", async () => {
-    const first = makeSession();
-    const second = makeSession();
-    const firstRun = makeRun({ sessionId: first.id, status: "RUNNING" });
-    const secondRun = makeRun({ sessionId: second.id, status: "RUNNING" });
-    const approval = makeApproval(firstRun.id, 10);
-    const client = makeClient({ session: first, run: firstRun, pendingApprovals: [approval] });
-    client.listSessions.mockResolvedValue({ items: [first, second] });
+  it("requires the exact active run authority before projecting approvals", async () => {
+    const session = makeSession();
+    const run = makeRun({ sessionId: session.id, status: "RUNNING" });
+    const approval = makeApproval(run.id, 10);
+    const client = makeClient({ session, run, pendingApprovals: [approval] });
     client.listRuns.mockResolvedValue({ items: [] });
     const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
-    await openActiveSession(manager, first);
-    await manager.refreshApprovals(firstRun.id);
-    expect(manager.getSnapshot().approvalState?.requests).toHaveLength(1);
-    client.listPendingApprovals.mockResolvedValueOnce({ items: [] });
-    await manager.refreshApprovals(secondRun.id);
-    expect(manager.getSnapshot().approvalState?.requests).toHaveLength(0);
-    await expect(manager.selectSession(second.id)).resolves.toBe(true);
-    expect(manager.getSnapshot()).toMatchObject({ approvalState: undefined, controlMode: "NONE" });
-    manager.beginDraft();
-    expect(manager.getSnapshot()).toMatchObject({ approvalState: undefined, controlMode: "NONE" });
+
+    await openActiveSession(manager, session);
+    await manager.refreshApprovals(run.id);
+
+    expect(manager.getSnapshot()).toMatchObject({
+      activeRun: undefined,
+      approvalState: undefined,
+      controlMode: "NONE",
+    });
+    expect(client.listPendingApprovals).toHaveBeenCalledWith(run.id);
     manager.dispose();
   });
 
@@ -240,31 +237,50 @@ describe("WebSessionManager approval controls", () => {
     manager.dispose();
   });
 
-  it("keeps an in-flight approval reservation across a draft context boundary", async () => {
+  it("does not republish a delayed approval refresh after normal terminal settlement", async () => {
     const session = makeSession();
     const run = makeRun({ sessionId: session.id, status: "RUNNING" });
+    const terminal = makeCompletedRun(run);
     const approval = makeApproval(run.id, 10);
-    const client = makeClient({ session, run, pendingApprovals: [approval] });
-    let releasePreflight!: () => void;
+    const client = makeClient({ session, run });
+    let releaseTerminal!: () => void;
+    let releaseRefresh!: () => void;
+    client.listRuns.mockResolvedValueOnce({ items: [] }).mockResolvedValue({ items: [terminal] });
+    client.createRun.mockResolvedValue(run);
+    client.startRun.mockResolvedValue({ disposition: "SCHEDULED", run });
+    client.getRun.mockResolvedValue(terminal);
+    client.watchRunEvents.mockImplementation(async function* () {
+      await new Promise<void>((resolve) => {
+        releaseTerminal = resolve;
+      });
+      yield lifecycleEvent(run, "run.completed");
+    });
     const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
-    await manager.refreshApprovals(run.id);
+
+    await manager.loadSessions();
+    await expect(manager.selectSession(session.id)).resolves.toBe(true);
+    await expect(manager.submitPrompt("terminal approval task")).resolves.toBe(true);
+    await waitFor(() => releaseTerminal !== undefined);
     client.listPendingApprovals.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
-          releasePreflight = () => resolve({ items: [approval] });
+          releaseRefresh = () => resolve({ items: [approval] });
         }),
     );
+    const refresh = manager.refreshApprovals(run.id);
+    await waitFor(() => releaseRefresh !== undefined);
 
-    const first = manager.resolveApproval(approval.id, { action: "REJECT" });
-    await waitFor(() => releasePreflight !== undefined);
-    manager.beginDraft();
-    await manager.refreshApprovals(run.id);
+    releaseTerminal();
+    await waitFor(() => manager.getSnapshot().activeRun === undefined);
+    releaseRefresh();
+    await refresh;
 
-    await expect(manager.resolveApproval(approval.id, { action: "REJECT" })).resolves.toBe(false);
-    releasePreflight();
-    await expect(first).resolves.toBe(false);
-    expect(client.resolveApproval).not.toHaveBeenCalled();
-    expect(manager.getSnapshot().approvalState?.requests.map((item) => item.id)).toEqual([approval.id]);
+    expect(manager.getSnapshot()).toMatchObject({
+      activeRuns: [],
+      activeRun: undefined,
+      approvalState: undefined,
+      controlMode: "NONE",
+    });
     manager.dispose();
   });
 
@@ -315,6 +331,34 @@ describe("WebSessionManager approval controls", () => {
       approvalState: undefined,
       controlMode: "NONE",
     });
+    manager.dispose();
+  });
+
+  it("uses an unbound timeline for a terminal reconciliation with multiple active siblings", async () => {
+    const session = makeSession();
+    const run = makeRun({ sessionId: session.id, status: "RUNNING" });
+    const firstSibling = makeRun({ sessionId: session.id, status: "RUNNING", createdAt: 2 });
+    const secondSibling = makeRun({ sessionId: session.id, status: "RUNNING", createdAt: 3 });
+    const terminal = makeCompletedRun(run);
+    const approval = makeApproval(run.id, 10);
+    const client = makeClient({ session, run, pendingApprovals: [approval] });
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+    await openActiveSession(manager, session);
+    client.getRun.mockResolvedValue(terminal);
+    client.listRuns.mockResolvedValue({ items: [terminal, firstSibling, secondSibling] });
+    client.resolveApproval.mockRejectedValueOnce(new Error("conflict"));
+
+    await expect(manager.resolveApproval(approval.id, { action: "REJECT" })).resolves.toBe(false);
+
+    expect(manager.getSnapshot()).toMatchObject({
+      activeRuns: [firstSibling, secondSibling],
+      activeRun: undefined,
+      composerEnabled: false,
+      error: { code: "MULTIPLE_ACTIVE_RUNS" },
+      approvalState: undefined,
+      controlMode: "NONE",
+    });
+    expect(manager.getSnapshot().timeline.runId).toBeUndefined();
     manager.dispose();
   });
 });
@@ -467,6 +511,22 @@ function approvalResolved(run: ClientAgentRun, approval: ApprovalRequest): Agent
     visibility: "USER_VISIBLE",
     durability: { kind: "DURABLE", sequence: 2 },
     payload: { approvalId: approval.id, status: "APPROVED", scope: "ONCE" },
+  } as AgentEvent;
+}
+function lifecycleEvent(
+  run: ClientAgentRun,
+  type: Extract<AgentEvent["type"], "run.completed">,
+): AgentEvent {
+  return {
+    type,
+    eventId: "evt_00000000-0000-7000-8000-000000000003",
+    schemaVersion: 1,
+    runId: run.id,
+    sessionId: run.sessionId,
+    timestamp: 3,
+    visibility: "USER_VISIBLE",
+    durability: { kind: "DURABLE", sequence: 3 },
+    payload: { runId: run.id },
   } as AgentEvent;
 }
 async function waitFor(predicate: () => boolean): Promise<void> {

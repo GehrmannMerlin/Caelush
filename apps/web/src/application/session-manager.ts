@@ -482,6 +482,7 @@ export class WebSessionManager {
       const runs = (await this.options.client.listRuns(run.sessionId, { limit: 100 })).items;
       if (this.activeLifecycle !== active || this.disposed) return;
       this.cancelActiveLifecycle();
+      this.clearApprovals();
       const activeRuns = nonTerminalRuns(runs);
       const activeRun = activeRuns.length === 1 ? activeRuns[0] : undefined;
       this.publish({
@@ -496,6 +497,8 @@ export class WebSessionManager {
         timeline:
           activeRun !== undefined && activeRun.id !== run.id
             ? createInitialTimelineState(activeRun.id)
+            : activeRuns.length > 1
+              ? createInitialTimelineState()
             : this.snapshot.timeline,
         composerEnabled: activeRuns.length === 0,
         submission: "IDLE",
@@ -600,6 +603,8 @@ export class WebSessionManager {
       timeline:
         activeRun !== undefined && activeRun.id !== run.id
           ? createInitialTimelineState(activeRun.id)
+          : activeRuns.length > 1
+            ? createInitialTimelineState()
           : this.snapshot.timeline,
       composerEnabled: activeRuns.length === 0,
       submission: "IDLE",
@@ -664,7 +669,7 @@ export class WebSessionManager {
     return (
       this.approvalContextGeneration === context.generation &&
       this.snapshot.selectedSessionId === context.sessionId &&
-      (this.snapshot.activeRun === undefined || this.snapshot.activeRun.id === context.runId)
+      this.snapshot.activeRun?.id === context.runId
     );
   }
 
