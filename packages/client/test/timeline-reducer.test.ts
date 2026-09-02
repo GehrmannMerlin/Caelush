@@ -109,7 +109,9 @@ describe("shared Timeline reducer", () => {
     const planId = createVerificationPlanId();
     const checkA = createVerificationCheckId();
     const checkB = createVerificationCheckId();
-    let state = createInitialTimelineState(runId, { limits: { maxSeenEvents: 1 } });
+    let state = createInitialTimelineState(runId, {
+      limits: { maxSeenEvents: 1, maxActiveEntries: 1 },
+    });
     state = reduceTimelineEvent(
       state,
       eventOf("verification.planned", 1, { planId, checkCount: 2 }),
