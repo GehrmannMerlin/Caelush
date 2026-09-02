@@ -8,6 +8,7 @@ import type {
 } from "@caelush/protocol";
 import type { CliApprovalState, CliControlMode, CliTransportState } from "./cli-control.js";
 import type { SessionCandidate } from "./session-resume.js";
+import type { SessionHistoryEntry } from "@caelush/client";
 import {
   createInitialCliTimelineState,
   type CliTimelineEntry,
@@ -43,12 +44,7 @@ export type CliActivity =
   | "Budget exceeded"
   | "Terminal error";
 
-export interface CliTranscriptEntry {
-  readonly id: string;
-  readonly kind: "USER" | "ASSISTANT" | "RUN_TERMINAL";
-  readonly text: string;
-  readonly runId?: RunId;
-}
+export type CliTranscriptEntry = SessionHistoryEntry;
 
 export type CliDisplayHistoryEntry = CliTranscriptEntry | CliTimelineEntry;
 

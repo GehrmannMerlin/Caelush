@@ -1,13 +1,41 @@
-import { createElement, useEffect, useState, type ReactElement } from "react";
+import {
+  createElement,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+  type ReactElement,
+} from "react";
+import type { SessionId } from "@caelush/protocol";
 import {
   bootstrapWebHost,
   createInitialWebHostState,
-  type WebHostClient,
   type WebHostState,
 } from "./host/bootstrap.js";
+import {
+  WebSessionManager,
+  type WebSessionClient,
+  type WebSessionSnapshot,
+} from "./application/session-manager.js";
+import { derivePromptTitle } from "./application/prompt.js";
+import { PromptComposer } from "./components/prompt-composer.js";
+import { SessionSidebar, sessionDisplayTitle } from "./components/session-sidebar.js";
+import { SessionWorkspace } from "./components/session-workspace.js";
+
+const EMPTY_SESSION_SNAPSHOT: WebSessionSnapshot = {
+  status: "IDLE",
+  candidates: [],
+  runs: [],
+  history: [],
+  activeRuns: [],
+  isDraft: false,
+  composerEnabled: false,
+  submission: "IDLE",
+};
 
 export function WebHostApp(props: {
-  readonly client: WebHostClient;
+  readonly client: WebSessionClient;
   readonly launchContext: unknown;
 }): ReactElement {
   const [state, setState] = useState<WebHostState>(createInitialWebHostState);
@@ -25,6 +53,118 @@ export function WebHostApp(props: {
     };
   }, [props.client, props.launchContext]);
 
+  const sessionManager = useMemo(() => {
+    if (state.bootstrap !== "READY" || state.info === undefined || state.workspace === undefined) {
+      return undefined;
+    }
+    return new WebSessionManager({
+      client: props.client,
+      info: state.info,
+      workspace: state.workspace,
+    });
+  }, [props.client, state.bootstrap, state.info, state.workspace]);
+
+  useEffect(() => {
+    if (sessionManager === undefined) return;
+    void sessionManager.loadSessions();
+    return () => sessionManager.dispose();
+  }, [sessionManager]);
+
+  const subscribe = useCallback(
+    (listener: () => void) => sessionManager?.subscribe(() => listener()) ?? (() => undefined),
+    [sessionManager],
+  );
+  const getSnapshot = useCallback(
+    () => sessionManager?.getSnapshot() ?? EMPTY_SESSION_SNAPSHOT,
+    [sessionManager],
+  );
+  const sessionSnapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+
+  if (state.bootstrap !== "READY" || sessionManager === undefined) {
+    return renderHostBootstrap(state);
+  }
+  return renderSessionApp({ manager: sessionManager, snapshot: sessionSnapshot, host: state });
+}
+
+function renderSessionApp(input: {
+  readonly manager: WebSessionManager;
+  readonly snapshot: WebSessionSnapshot;
+  readonly host: WebHostState;
+}): ReactElement {
+  const { manager, snapshot, host } = input;
+  const selectedCandidate = snapshot.candidates.find(
+    (candidate) => candidate.session.id === snapshot.selectedSessionId,
+  );
+  const title = snapshot.isDraft
+    ? "新会话"
+    : selectedCandidate !== undefined
+      ? sessionDisplayTitle(selectedCandidate)
+      : snapshot.selectedSession?.title !== undefined
+        ? derivePromptTitle(snapshot.selectedSession.title)
+        : "选择一个会话";
+  const canInteract = snapshot.status === "READY" && snapshot.activeRuns.length === 0;
+  const onNewSession = () => manager.beginDraft();
+  const onSelectSession = (sessionId: SessionId) => {
+    void manager.selectSession(sessionId);
+  };
+  const onSubmit = (prompt: string) => manager.submitPrompt(prompt);
+
+  return createElement(
+    "main",
+    { className: "web-app-shell" },
+    createElement(
+      "header",
+      { className: "web-topbar" },
+      createElement(
+        "div",
+        { className: "brand-lockup" },
+        createElement("span", { className: "brand-symbol", "aria-hidden": "true" }, "C"),
+        createElement("span", { className: "brand-name" }, "Caelush"),
+      ),
+      createElement(
+        "div",
+        { className: "connection-summary", role: "status" },
+        createElement("span", { className: "connection-dot", "aria-hidden": "true" }),
+        "已连接",
+      ),
+    ),
+    createElement(
+      "div",
+      { className: "workspace-frame" },
+      createElement(SessionSidebar, {
+        candidates: snapshot.candidates,
+        selectedSessionId: snapshot.selectedSessionId,
+        isDraft: snapshot.isDraft,
+        canInteract,
+        onNewSession,
+        onSelectSession,
+      }),
+      createElement(
+        "div",
+        { className: "workspace-column" },
+        createElement(
+          "div",
+          { className: "workspace-context" },
+          createElement("span", null, "工作区"),
+          createElement("code", null, host.workspace?.path ?? ""),
+        ),
+        createElement(SessionWorkspace, {
+          title,
+          activeRun: snapshot.activeRun,
+          history: snapshot.history,
+          composer: createElement(PromptComposer, {
+            disabled: !snapshot.composerEnabled,
+            submission: snapshot.submission,
+            error: snapshot.error,
+            onSubmit,
+          }),
+        }),
+      ),
+    ),
+  );
+}
+
+function renderHostBootstrap(state: WebHostState): ReactElement {
   return createElement(
     "main",
     { className: "host-shell" },

@@ -94,7 +94,7 @@ export class CaelushClient {
 
   constructor(options: CaelushClientOptions) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl);
-    this.fetcher = options.fetch ?? fetch;
+    this.fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.headers = new Headers(options.headers);
   }
 

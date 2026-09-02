@@ -43,6 +43,29 @@ function makeEvent(
 }
 
 describe("CaelushClient", () => {
+  it("binds the ambient browser fetch before invoking it", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = function (this: typeof globalThis) {
+      expect(this).toBe(globalThis);
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            service: "caelush-daemon",
+            status: "ready",
+            apiVersion: "v1",
+            protocolVersion: 1,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    } as typeof fetch;
+    try {
+      await new CaelushClient({ baseUrl: "http://daemon.test" }).getHealth();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("uses typed HTTP methods and validates the response contract", async () => {
     const session = makeSession();
     const requests: Request[] = [];
@@ -270,12 +293,11 @@ describe("CaelushClient", () => {
       baseUrl: "http://daemon.test",
       fetch: async () => new Response(new ReadableStream<Uint8Array>(), { status: 200 }),
     });
-    await expect(
-      aborted.watchRunEvents(createRunId(), {
-        signal: abortController.signal,
-        onOpen: () => (opens += 1),
-      })[Symbol.asyncIterator]().next(),
-    ).resolves.toMatchObject({ done: true });
+    const events = aborted.watchRunEvents(createRunId(), {
+      signal: abortController.signal,
+      onOpen: () => (opens += 1),
+    });
+    await expect(events[Symbol.asyncIterator]().next()).resolves.toMatchObject({ done: true });
     expect(opens).toBe(0);
   });
 
