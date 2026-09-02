@@ -102,6 +102,11 @@ export interface TimelineVerificationOutcome {
   readonly checkId: string;
   readonly status: "PASSED" | "FAILED" | "ERROR";
 }
+export interface TimelineVerificationPlan {
+  readonly id: string;
+  readonly planId: string;
+  readonly checkCount: number;
+}
 
 export interface TimelineLimits {
   readonly maxTextBytes: number;
@@ -126,6 +131,8 @@ export interface TimelineState {
   readonly lastDurableSequence: number;
   readonly seenEvents: readonly TimelineSeenEvent[];
   readonly verificationOutcomes: readonly TimelineVerificationOutcome[];
+  readonly verificationPlans: readonly TimelineVerificationPlan[];
+  readonly verificationOutcomeOverflow: boolean;
   readonly omittedActivity: boolean;
   readonly error?: string;
 }
@@ -166,6 +173,8 @@ export function createInitialTimelineState(
     lastDurableSequence: 0,
     seenEvents: [],
     verificationOutcomes: [],
+    verificationPlans: [],
+    verificationOutcomeOverflow: false,
     omittedActivity: false,
   };
 }

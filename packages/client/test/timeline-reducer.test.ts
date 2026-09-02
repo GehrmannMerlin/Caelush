@@ -105,6 +105,69 @@ describe("shared Timeline reducer", () => {
     expect(state.verification[0]).toMatchObject({ passed: 1, failed: 0, errors: 1 });
   });
 
+  it("fails closed when an evicted outcome identity reappears", () => {
+    const planId = createVerificationPlanId();
+    const checkA = createVerificationCheckId();
+    const checkB = createVerificationCheckId();
+    let state = createInitialTimelineState(runId, { limits: { maxSeenEvents: 1 } });
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.planned", 1, { planId, checkCount: 2 }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.check.completed", 2, {
+        planId,
+        checkId: checkA,
+        status: "PASSED",
+        evidenceIds: [],
+      }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.check.completed", 3, {
+        planId,
+        checkId: checkB,
+        status: "PASSED",
+        evidenceIds: [],
+      }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.check.completed", 4, {
+        planId,
+        checkId: checkA,
+        status: "ERROR",
+        evidenceIds: [],
+      }),
+    );
+    expect(state.error).toBe("Verification outcome history could not be verified.");
+  });
+
+  it("preserves planned total when a verification plan is evicted", () => {
+    const planA = createVerificationPlanId();
+    const planB = createVerificationPlanId();
+    let state = createInitialTimelineState(runId, { limits: { maxActiveEntries: 1 } });
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.planned", 1, { planId: planA, checkCount: 3 }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.planned", 2, { planId: planB, checkCount: 1 }),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("verification.finalized", 3, {
+        planId: planA,
+        outcome: "PASSED",
+        failedCheckIds: [],
+        errorCheckIds: [],
+      }),
+    );
+    expect(state.settled.at(-1)?.counts?.total).toBe(3);
+  });
+
   it("bounds and sanitizes public strings across projection domains", () => {
     const bad = "\u001b[31m" + "x".repeat(200) + "\u001b[0m";
     let state = createInitialTimelineState(runId, { limits: { maxTextBytes: 32 } });

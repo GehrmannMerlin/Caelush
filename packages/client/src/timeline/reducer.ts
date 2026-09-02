@@ -214,18 +214,29 @@ function reduceRegisteredEvent(state: TimelineState, event: AgentEvent): Timelin
     case "retry.started":
       return upsertRetry(state, event, "RUNNING");
     case "verification.planned":
-      return upsertVerification(state, {
-        id: event.payload.planId,
-        planId: event.payload.planId,
-        label: "Verification",
-        status: "PENDING",
-        checks: [],
-        checkCount: event.payload.checkCount,
-        passed: 0,
-        failed: 0,
-        errors: 0,
-        plannedCounts: { ...event.payload.counts },
-      });
+      return {
+        ...upsertVerification(state, {
+          id: event.payload.planId,
+          planId: event.payload.planId,
+          label: "Verification",
+          status: "PENDING",
+          checks: [],
+          checkCount: event.payload.checkCount,
+          passed: 0,
+          failed: 0,
+          errors: 0,
+          plannedCounts: { ...event.payload.counts },
+        }),
+        verificationPlans: upsert(
+          state.verificationPlans,
+          {
+            id: event.payload.planId,
+            planId: event.payload.planId,
+            checkCount: event.payload.checkCount,
+          },
+          state.limits.maxSeenEvents,
+        ),
+      };
     case "verification.check.started":
       return updateVerificationCheck(state, event, "RUNNING");
     case "verification.check.completed":
@@ -272,7 +283,11 @@ function reduceRegisteredEvent(state: TimelineState, event: AgentEvent): Timelin
           status: "FINALIZED",
           planId: event.payload.planId,
           counts: {
-            total: group?.checkCount ?? 0,
+            total:
+              group?.checkCount ??
+              state.verificationPlans.find((item) => item.planId === event.payload.planId)
+                ?.checkCount ??
+              0,
             failed: event.payload.failedCheckIds.length,
             error: event.payload.errorCheckIds.length,
           },
@@ -551,6 +566,13 @@ function updateVerificationCheck(
   const priorOutcome = state.verificationOutcomes.find(
     (item) => item.planId === event.payload.planId && item.checkId === event.payload.checkId,
   );
+  if (
+    (status === "PASSED" || status === "FAILED" || status === "ERROR") &&
+    priorOutcome === undefined &&
+    state.verificationOutcomes.length >= state.limits.maxSeenEvents
+  ) {
+    return { ...state, error: "Verification outcome history could not be verified." };
+  }
   const old =
     priorOutcome?.status === "PASSED"
       ? { passed: -1 }
