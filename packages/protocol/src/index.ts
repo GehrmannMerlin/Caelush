@@ -58,7 +58,20 @@ export {
 } from "./policy.js";
 export type { ApprovalPolicy, Capability, PermissionProfile, RiskLevel } from "./policy.js";
 export { RunLimitsSchema } from "./limits.js";
+export { isSafePositiveMicroUsd } from "./limits.js";
 export type { RunLimits } from "./limits.js";
+export {
+  RunResourcePolicySchema,
+  applyEnterpriseHardLimits,
+  compatibilityLimitsForResourcePolicy,
+  createLegacyRunResourcePolicy,
+  normalizeCreateRunResourcePolicy,
+} from "./resource-policy.js";
+export type {
+  CreateRunResourcePolicyInput,
+  EnterpriseResourceHardLimits,
+  RunResourcePolicy,
+} from "./resource-policy.js";
 export { ModelRefSchema } from "./model.js";
 export type { ModelRef } from "./model.js";
 export { RuntimeRefSchema } from "./runtime.js";

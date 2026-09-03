@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ApprovalPolicySchema, PermissionProfileSchema } from "../policy.js";
 import { RunLimitsSchema } from "../limits.js";
+import { RunResourcePolicySchema } from "../resource-policy.js";
 import { RuntimeRefSchema } from "../runtime.js";
 import { ClientModelSelectionSchema } from "./model-selection.js";
 
@@ -9,9 +10,14 @@ export const DefaultRunConfigurationSchema = z
     runtime: RuntimeRefSchema,
     permissionProfile: PermissionProfileSchema,
     approvalPolicy: ApprovalPolicySchema,
-    limits: RunLimitsSchema,
+    limits: RunLimitsSchema.optional(),
+    resourcePolicy: RunResourcePolicySchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (value) => (value.limits === undefined) !== (value.resourcePolicy === undefined),
+    "exactly one of limits or resourcePolicy is required",
+  );
 export type DefaultRunConfiguration = z.infer<typeof DefaultRunConfigurationSchema>;
 
 const DaemonCapabilitiesSchema = z

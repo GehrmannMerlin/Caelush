@@ -1,6 +1,8 @@
 import {
   AgentRunSchema,
+  compatibilityLimitsForResourcePolicy,
   createRunId,
+  normalizeCreateRunResourcePolicy,
   type AgentRun,
   type CreateRunRequest,
   type ModelRef,
@@ -34,10 +36,13 @@ export class RunService {
 
   async createRun(sessionId: SessionId, input: CreateRunRequest): Promise<AgentRun> {
     await this.requireSession(sessionId);
+    const resourcePolicy = normalizeCreateRunResourcePolicy(input);
     const run = AgentRunSchema.parse({
       id: this.createId(),
       sessionId,
       ...input,
+      limits: input.limits ?? compatibilityLimitsForResourcePolicy(resourcePolicy),
+      resourcePolicy,
       model: this.modelCanonicalizer.canonicalize(input.model),
       status: "PENDING",
       createdAt: this.now(),

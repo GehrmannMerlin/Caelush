@@ -24,7 +24,7 @@ export type RunLimits = z.infer<typeof RunLimitsSchema>;
 
 export const MAX_VERIFICATION_EVIDENCE_DETAILS_BYTES = 32 * 1024;
 
-function isSafePositiveMicroUsd(value: number): boolean {
+export function isSafePositiveMicroUsd(value: number): boolean {
   try {
     const text = value.toString().toLowerCase();
     const [coefficient, exponentText] = text.split("e");

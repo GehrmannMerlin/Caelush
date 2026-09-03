@@ -6,6 +6,7 @@ import { RuntimeRefSchema } from "../runtime.js";
 import { WorkspaceRefSchema } from "../workspace.js";
 import { ClientAgentRunSchema } from "./public-entities.js";
 import { ClientModelSelectionSchema } from "./model-selection.js";
+import { RunResourcePolicySchema } from "../resource-policy.js";
 
 export const CreateRunRequestSchema = z
   .object({
@@ -15,9 +16,14 @@ export const CreateRunRequestSchema = z
     runtime: RuntimeRefSchema,
     permissionProfile: PermissionProfileSchema,
     approvalPolicy: ApprovalPolicySchema,
-    limits: RunLimitsSchema,
+    limits: RunLimitsSchema.optional(),
+    resourcePolicy: RunResourcePolicySchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (value) => (value.limits === undefined) !== (value.resourcePolicy === undefined),
+    "exactly one of limits or resourcePolicy is required",
+  );
 export type CreateRunRequest = z.infer<typeof CreateRunRequestSchema>;
 
 export const RunListQuerySchema = z

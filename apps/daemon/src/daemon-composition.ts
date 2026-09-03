@@ -89,11 +89,25 @@ const DEFAULT_CONTEXT_LIMITS = Object.freeze({
   minRelevantFileTokens: 128,
 });
 
-const DEFAULT_RUN_CONFIGURATION = Object.freeze({
+export const DEFAULT_ADAPTIVE_RESOURCE_POLICY = Object.freeze({
+  mode: "ADAPTIVE",
+  operationalLease: Object.freeze({ maxAgentTurns: 24, maxToolOperations: 64 }),
+  batch: Object.freeze({ maxToolCallsPerTurn: 16 }),
+  progress: Object.freeze({
+    windowTurns: 8,
+    identicalCallNudgeThreshold: 3,
+    noProgressTurnsBeforeReplan: 4,
+    replansBeforePause: 2,
+  }),
+  hardLimits: Object.freeze({}),
+  inactivity: Object.freeze({}),
+});
+
+export const DEFAULT_RUN_CONFIGURATION = Object.freeze({
   runtime: Object.freeze({ id: "local", kind: "local" }),
   permissionProfile: "PROJECT_ACCESS",
   approvalPolicy: "DANGEROUS_ONLY",
-  limits: Object.freeze({ maxSteps: 8, maxToolCalls: 8, timeoutMs: 10_000 }),
+  resourcePolicy: DEFAULT_ADAPTIVE_RESOURCE_POLICY,
 }) satisfies DefaultRunConfiguration;
 
 export interface DaemonClock {

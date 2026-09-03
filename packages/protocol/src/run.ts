@@ -5,6 +5,7 @@ import { JsonValueSchema } from "./primitives/json.js";
 import { RunIdSchema, SessionIdSchema, StepIdSchema } from "./primitives/ids.js";
 import { TimestampMsSchema } from "./primitives/time.js";
 import { RunLimitsSchema } from "./limits.js";
+import { RunResourcePolicySchema } from "./resource-policy.js";
 import { RuntimeRefSchema } from "./runtime.js";
 import { WorkspaceRefSchema } from "./workspace.js";
 
@@ -34,6 +35,7 @@ export const AgentRunSchema = z
     permissionProfile: PermissionProfileSchema,
     approvalPolicy: ApprovalPolicySchema,
     limits: RunLimitsSchema,
+    resourcePolicy: RunResourcePolicySchema.optional(),
     currentStepId: StepIdSchema.optional(),
     createdAt: TimestampMsSchema,
     startedAt: TimestampMsSchema.optional(),

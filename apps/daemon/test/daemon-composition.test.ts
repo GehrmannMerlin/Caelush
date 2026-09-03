@@ -76,7 +76,19 @@ describe("daemon production composition", () => {
         runtime: { id: "local", kind: "local" },
         permissionProfile: "PROJECT_ACCESS",
         approvalPolicy: "DANGEROUS_ONLY",
-        limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 10_000 },
+        resourcePolicy: {
+          mode: "ADAPTIVE",
+          operationalLease: { maxAgentTurns: 24, maxToolOperations: 64 },
+          batch: { maxToolCallsPerTurn: 16 },
+          progress: {
+            windowTurns: 8,
+            identicalCallNudgeThreshold: 3,
+            noProgressTurnsBeforeReplan: 4,
+            replansBeforePause: 2,
+          },
+          hardLimits: {},
+          inactivity: {},
+        },
       },
     });
     expect(JSON.stringify(composition.info)).not.toContain("secret-that-must-not-be-public");
