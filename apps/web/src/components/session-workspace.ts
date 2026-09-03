@@ -1,8 +1,13 @@
 import { createElement, type ReactElement } from "react";
 import type { ClientAgentRun } from "@caelush/protocol";
-import type { SessionHistoryEntry, TimelineState } from "@caelush/client";
+import { canCancelRunStatus, type SessionHistoryEntry, type TimelineState } from "@caelush/client";
+import type { ApprovalResolution, RunId } from "@caelush/protocol";
+import type { ApprovalView } from "@caelush/client";
+import type { WebControlMode } from "../application/session-manager.js";
 import { runStatusClass, runStatusLabel } from "./run-status.js";
 import { Timeline } from "./timeline.js";
+import { ApprovalCard } from "./approval-card.js";
+import { RecoveryPanel, type RecoveryRunView } from "./recovery-panel.js";
 
 export interface SessionWorkspaceProps {
   readonly title: string;
@@ -10,6 +15,15 @@ export interface SessionWorkspaceProps {
   readonly history: readonly SessionHistoryEntry[];
   readonly timeline: TimelineState;
   readonly composer: ReactElement;
+  readonly controlMode?: WebControlMode | undefined;
+  readonly approvals?: readonly ApprovalView[] | undefined;
+  readonly recoveryRuns?: readonly RecoveryRunView[] | undefined;
+  readonly onCancel?: (() => Promise<boolean> | void) | undefined;
+  readonly onResolveApproval?:
+    | ((approvalId: ApprovalView["id"], resolution: ApprovalResolution) => Promise<boolean> | void)
+    | undefined;
+  readonly onSelectRecoveryRun?: ((runId: RunId) => Promise<boolean> | void) | undefined;
+  readonly onConfirmPendingRun?: ((runId: RunId) => Promise<boolean> | void) | undefined;
 }
 
 export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
@@ -32,7 +46,30 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
             createElement("span", { className: "status-pulse", "aria-hidden": "true" }),
             createElement("span", null, runStatusLabel(props.activeRun.status)),
           ),
+      props.activeRun !== undefined && props.controlMode === "CANCELLING"
+        ? createElement("span", { className: "cancel-status", role: "status" }, "正在取消")
+        : props.activeRun !== undefined &&
+            props.onCancel !== undefined &&
+            canShowCancel(props.activeRun.status)
+          ? createElement("button", { type: "button", onClick: props.onCancel }, "取消")
+          : null,
     ),
+    props.approvals?.map((approval) =>
+      createElement(ApprovalCard, {
+        key: approval.id,
+        approval,
+        onResolve: props.onResolveApproval ?? (() => undefined),
+      }),
+    ),
+    (props.controlMode === "RECOVERY_PICKER" || props.controlMode === "PENDING_RUN_CONFIRMATION") &&
+      props.recoveryRuns !== undefined
+      ? createElement(RecoveryPanel, {
+          mode: props.controlMode,
+          runs: props.recoveryRuns,
+          onSelectRun: props.onSelectRecoveryRun ?? (() => undefined),
+          onConfirmPending: props.onConfirmPendingRun ?? (() => undefined),
+        })
+      : null,
     createElement(
       "div",
       { className: "conversation-history", "aria-live": "polite" },
@@ -57,6 +94,10 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
     createElement(Timeline, { timeline: props.timeline }),
     props.composer,
   );
+}
+
+function canShowCancel(status: Parameters<typeof canCancelRunStatus>[0]): boolean {
+  return canCancelRunStatus(status);
 }
 
 function historyAuthor(kind: SessionHistoryEntry["kind"]): string {

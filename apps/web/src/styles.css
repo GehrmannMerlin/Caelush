@@ -250,6 +250,104 @@ h1 {
   font-weight: 650;
 }
 
+.reconnect-banner,
+.approval-actions,
+.approval-details,
+.recovery-run {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.reconnect-banner button,
+.approval-action,
+.recovery-run button {
+  padding: 7px 10px;
+  border: 1px solid #bcd6ca;
+  border-radius: 8px;
+  background: #fff;
+  color: #25634e;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.approval-card,
+.recovery-panel {
+  display: grid;
+  gap: 12px;
+  margin: 20px 0;
+  padding: 18px 20px;
+  border: 1px solid #d9e7df;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.approval-card h2,
+.recovery-panel h2 {
+  margin: 0;
+  color: #1e4438;
+  font-size: 1rem;
+}
+
+.approval-kicker {
+  margin: 0;
+  color: #9a6b28;
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+
+.approval-details {
+  flex-wrap: wrap;
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.approval-details dt {
+  color: #6d877d;
+  font-weight: 700;
+}
+
+.approval-details dd {
+  margin: 0 16px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.approval-capabilities,
+.recovery-run-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.approval-capabilities li,
+.recovery-run {
+  overflow-wrap: anywhere;
+  color: #315a4d;
+  font-size: 0.82rem;
+}
+
+.recovery-run {
+  flex-wrap: wrap;
+  justify-content: space-between;
+  padding: 9px 0;
+  border-bottom: 1px solid #e0ebe5;
+}
+
+.recovery-run strong {
+  min-width: 12rem;
+  flex: 1;
+}
+
+.recovery-run time,
+.recovery-run code {
+  color: #6d877d;
+  font-size: 0.75rem;
+}
+
 .connection-dot,
 .status-pulse {
   width: 8px;

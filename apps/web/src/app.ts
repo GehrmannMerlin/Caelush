@@ -24,6 +24,7 @@ import { PromptComposer } from "./components/prompt-composer.js";
 import { SessionSidebar, sessionDisplayTitle } from "./components/session-sidebar.js";
 import { SessionWorkspace } from "./components/session-workspace.js";
 import { SessionSelectionStore } from "./application/session-persistence.js";
+import { ReconnectBanner } from "./components/reconnect-banner.js";
 
 const sessionSelectionStore = new SessionSelectionStore();
 
@@ -111,6 +112,11 @@ function renderSessionApp(input: {
         ? derivePromptTitle(snapshot.selectedSession.title)
         : "选择一个会话";
   const canInteract = snapshot.status === "READY" && snapshot.activeRuns.length === 0;
+  const composerDisabled =
+    !snapshot.composerEnabled ||
+    snapshot.controlMode === "CANCELLING" ||
+    snapshot.controlMode === "RECOVERY_PICKER" ||
+    snapshot.controlMode === "PENDING_RUN_CONFIRMATION";
   const onNewSession = () => manager.beginDraft();
   const onSelectSession = (sessionId: SessionId) => {
     void manager.selectSession(sessionId);
@@ -133,14 +139,11 @@ function renderSessionApp(input: {
         "div",
         { className: "connection-summary", role: "status" },
         createElement("span", { className: "connection-dot", "aria-hidden": "true" }),
-        connectionLabel(snapshot.transportState, snapshot.transportAttempt),
-        snapshot.transportState !== "DISCONNECTED"
-          ? null
-          : createElement(
-              "button",
-              { type: "button", onClick: () => manager.reconnectActiveRun() },
-              "重新连接",
-            ),
+        createElement(ReconnectBanner, {
+          state: snapshot.transportState,
+          attempt: snapshot.transportAttempt,
+          onReconnect: () => manager.reconnectActiveRun(),
+        }),
       ),
     ),
     createElement(
@@ -166,27 +169,31 @@ function renderSessionApp(input: {
         createElement(SessionWorkspace, {
           title,
           activeRun: snapshot.activeRun,
+          controlMode: snapshot.controlMode,
+          approvals: snapshot.approvalState?.requests,
+          recoveryRuns: snapshot.activeRuns.map((run) => ({
+            id: run.id,
+            goal: run.goal,
+            status: run.status,
+            createdAt: run.createdAt,
+          })),
           history: snapshot.history,
           timeline: snapshot.timeline,
           composer: createElement(PromptComposer, {
-            disabled: !snapshot.composerEnabled,
+            disabled: composerDisabled,
             submission: snapshot.submission,
             error: snapshot.error,
             onSubmit,
           }),
+          onCancel: () => manager.cancelRun(),
+          onResolveApproval: (approvalId, resolution) =>
+            manager.resolveApproval(approvalId, resolution),
+          onSelectRecoveryRun: (runId) => manager.selectRecoveryRun(runId),
+          onConfirmPendingRun: (runId) => manager.confirmPendingRun(runId),
         }),
       ),
     ),
   );
-}
-
-function connectionLabel(
-  state: WebSessionSnapshot["transportState"],
-  attempt: number | undefined,
-): string {
-  if (state === "CONNECTED") return "已连接";
-  if (state === "DISCONNECTED") return "连接已断开";
-  return attempt === undefined ? "正在重新连接" : `正在重新连接（第 ${attempt} 次）`;
 }
 
 function renderHostBootstrap(state: WebHostState): ReactElement {
