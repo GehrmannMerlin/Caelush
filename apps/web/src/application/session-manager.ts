@@ -40,6 +40,7 @@ import type {
 } from "@caelush/protocol";
 import { derivePromptTitle, validatePrompt, type PromptError } from "./prompt.js";
 import type { WebHostClient } from "../host/bootstrap.js";
+import { SessionSelectionStore } from "./session-persistence.js";
 
 export interface WebSessionClient extends SessionCandidateClient, WebHostClient {
   createSession(input: CreateSessionRequest): Promise<ClientAgentSession>;
@@ -160,6 +161,7 @@ export class WebSessionManager {
       readonly workspace: WorkspaceRef;
       readonly info: DaemonInfo;
       readonly timer?: Timer;
+      readonly selectionStore?: SessionSelectionStore;
     },
   ) {}
 
@@ -180,7 +182,13 @@ export class WebSessionManager {
         this.options.client,
         this.options.workspace.path,
       );
-      const selectedId = this.snapshot.selectedSessionId;
+      const selectionStore = this.options.selectionStore;
+      selectionStore?.setCandidates(
+        this.options.workspace.path,
+        candidates.map((candidate) => candidate.session.id),
+      );
+      const selectedId =
+        selectionStore?.read(this.options.workspace.path) ?? this.snapshot.selectedSessionId;
       this.publish({ status: "READY", candidates, error: undefined });
       if (selectedId !== undefined && candidates.some((item) => item.session.id === selectedId)) {
         await this.selectSession(selectedId);
@@ -246,6 +254,7 @@ export class WebSessionManager {
         });
         return false;
       }
+      this.options.selectionStore?.write(this.options.workspace.path, sessionId);
       return this.applySelectedSession(candidate.session, runs);
     } catch {
       this.publish({
@@ -327,10 +336,7 @@ export class WebSessionManager {
         return false;
       }
       this.publish({ submission: "STARTING", error: undefined });
-      const response = await this.options.client.startRun(run.id);
-      if (this.activeLifecycle !== active) return false;
-      this.publishActiveRun(response.run, "ACTIVE");
-      return true;
+      return this.confirmPendingRun(run.id);
     } catch {
       if (
         this.activeLifecycle !== undefined &&
@@ -441,6 +447,60 @@ export class WebSessionManager {
     active.scheduler.manualRetry();
   }
 
+  async prepareRecoveryRun(run: ClientAgentRun): Promise<boolean> {
+    if (this.disposed || !nonTerminalRuns([run]).some((item) => item.id === run.id)) return false;
+    if (this.snapshot.activeRun?.id !== run.id) return false;
+    if (run.status === "PENDING") {
+      this.publish({ controlMode: "PENDING_RUN_CONFIRMATION", composerEnabled: false });
+      return true;
+    }
+    const approvals = await (
+      this.options.client.listPendingApprovals?.(run.id) ?? Promise.resolve({ items: [] })
+    ).catch(() => ({ items: [] }));
+    this.publishApprovals(run.id, approvals.items);
+    const hasPendingApproval = approvals.items.some((item) => item.status === "PENDING");
+    if (run.status === "WAITING_APPROVAL" && hasPendingApproval) {
+      if (this.activeLifecycle === undefined || this.activeLifecycle.run.id !== run.id) {
+        this.attachLifecycle(run, false);
+      }
+      return true;
+    }
+    if (this.activeLifecycle === undefined || this.activeLifecycle.run.id !== run.id) {
+      this.attachLifecycle(run, true);
+    }
+    return true;
+  }
+
+  async selectRecoveryRun(runId: RunId): Promise<boolean> {
+    const run = this.snapshot.activeRuns.find((item) => item.id === runId);
+    if (run === undefined) return false;
+    const session = this.snapshot.selectedSession;
+    if (session === undefined || session.id !== run.sessionId) return false;
+    this.clearApprovals();
+    this.publish({ activeRun: run, controlMode: "NONE", error: undefined, composerEnabled: false });
+    return this.prepareRecoveryRun(run);
+  }
+
+  async confirmPendingRun(runId: RunId): Promise<boolean> {
+    const run = this.snapshot.activeRun;
+    if (this.disposed || run?.id !== runId || run.status !== "PENDING") return false;
+    let active = this.activeLifecycle;
+    if (active === undefined || active.run.id !== runId) active = this.attachLifecycle(run, false);
+    try {
+      this.publish({ submission: "STARTING", controlMode: "NONE", error: undefined });
+      const response = await this.options.client.startRun(runId);
+      if (this.activeLifecycle !== active) return false;
+      this.publishActiveRun(response.run, "ACTIVE");
+      return true;
+    } catch {
+      this.publish({
+        error: sessionError("RUN_START_FAILED"),
+        controlMode: "PENDING_RUN_CONFIRMATION",
+      });
+      return false;
+    }
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -473,8 +533,9 @@ export class WebSessionManager {
       controlMode: "NONE",
       error: activeRuns.length > 1 ? sessionError("MULTIPLE_ACTIVE_RUNS") : undefined,
     });
+    if (activeRuns.length > 1) this.publish({ controlMode: "RECOVERY_PICKER" });
     if (activeRuns.length === 1 && activeRuns[0] !== undefined) {
-      await this.refreshApprovals(activeRuns[0].id);
+      await this.prepareRecoveryRun(activeRuns[0]);
     }
     return true;
   }
@@ -505,7 +566,7 @@ export class WebSessionManager {
     }
   }
 
-  private attachLifecycle(run: ClientAgentRun): ActiveLifecycle {
+  private attachLifecycle(run: ClientAgentRun, recoverOnOpen = false): ActiveLifecycle {
     const active: ActiveLifecycle = {
       run,
       controller: new AbortController(),
@@ -518,7 +579,7 @@ export class WebSessionManager {
       }),
     };
     this.activeLifecycle = active;
-    this.attachStream(active, false);
+    this.attachStream(active, recoverOnOpen);
     return active;
   }
 

@@ -23,6 +23,9 @@ import { derivePromptTitle } from "./application/prompt.js";
 import { PromptComposer } from "./components/prompt-composer.js";
 import { SessionSidebar, sessionDisplayTitle } from "./components/session-sidebar.js";
 import { SessionWorkspace } from "./components/session-workspace.js";
+import { SessionSelectionStore } from "./application/session-persistence.js";
+
+const sessionSelectionStore = new SessionSelectionStore();
 
 const EMPTY_SESSION_SNAPSHOT: WebSessionSnapshot = {
   status: "IDLE",
@@ -65,6 +68,7 @@ export function WebHostApp(props: {
       client: props.client,
       info: state.info,
       workspace: state.workspace,
+      selectionStore: sessionSelectionStore,
     });
   }, [props.client, state.bootstrap, state.info, state.workspace]);
 
