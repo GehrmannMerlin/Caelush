@@ -35,6 +35,39 @@ describe("Timeline", () => {
     expect(html).not.toContain("stdout");
   });
 
+  it("renders bounded public Tool details without exposing raw output", () => {
+    const timeline = createInitialTimelineState();
+    const html = renderToStaticMarkup(
+      <Timeline
+        timeline={{
+          ...timeline,
+          settled: [
+            {
+              id: "patch-tool",
+              kind: "TOOL",
+              status: "COMPLETED",
+              toolName: "apply_patch",
+              detail: "M src/app.ts (+2, -1)",
+              filePath: "src/app.ts",
+            },
+            {
+              id: "shell-tool",
+              kind: "TOOL",
+              status: "COMPLETED",
+              toolName: "exec_command",
+              text: "Command exited with code 0.",
+              detail: "raw stdout sentinel",
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(html).toContain("M src/app.ts (+2, -1)");
+    expect(html).toContain("Command exited with code 0.");
+    expect(html).not.toContain("raw stdout sentinel");
+  });
+
   it("never renders raw Tool text or detail after a tool output event", () => {
     const runId = createRunId();
     const sessionId = createSessionId();

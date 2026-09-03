@@ -20,7 +20,8 @@ const postJson = async (path, payload) => {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error("HTTP " + response.status + " from " + path);
+  if (!response.ok)
+    throw new Error("HTTP " + response.status + " from " + path + ": " + (await response.text()));
   return response.json();
 };
 
@@ -83,6 +84,29 @@ try {
   await page.locator("button.cancel-button").click();
   await waitVisible(page.locator('.session-status-icon[aria-label="已取消"]').last());
 
+  const reconnectSession = await postJson("/api/v1/sessions", {
+    title: "reconnect browser task",
+    defaultWorkspace: workspace,
+    defaultModel: { provider: "browser-fixture", model: "browser-fixture-model" },
+    metadata: {},
+  });
+  const reconnectRun = await postJson("/api/v1/sessions/" + reconnectSession.id + "/runs", {
+    goal: "reconnect browser task",
+    workspace,
+    model: { provider: "browser-fixture", model: "browser-fixture-model" },
+    runtime: { id: "local", kind: "local" },
+    permissionProfile: "PROJECT_ACCESS",
+    approvalPolicy: "DANGEROUS_ONLY",
+    limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 120_000 },
+  });
+  await postJson("/api/v1/runs/" + reconnectRun.id + "/start", {});
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.locator(".session-list-title").filter({ hasText: "reconnect browser task" }).click();
+  await waitVisible(page.locator("button.cancel-button"));
+  await waitVisible(page.locator(".timeline-entry-title").filter({ hasText: "Model" }));
+  await page.locator("button.cancel-button").click();
+  await waitVisible(page.locator('.session-status-icon[aria-label="已取消"]').last());
+
   const session = await postJson("/api/v1/sessions", {
     title: "pending browser task",
     defaultWorkspace: workspace,
@@ -96,7 +120,7 @@ try {
     runtime: { id: "local", kind: "local" },
     permissionProfile: "PROJECT_ACCESS",
     approvalPolicy: "DANGEROUS_ONLY",
-    limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 10_000 },
+    limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 120_000 },
   });
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.locator(".session-list-title").filter({ hasText: "pending browser task" }).click();

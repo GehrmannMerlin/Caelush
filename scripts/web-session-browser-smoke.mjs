@@ -42,7 +42,12 @@ const provider = {
     ) {
       return patchFixtureTool(request, context);
     }
-    if (!isReview && promptText.includes("cancel browser task") && !hasToolResult) {
+    if (
+      !isReview &&
+      (promptText.includes("cancel browser task") ||
+        promptText.includes("reconnect browser task")) &&
+      !hasToolResult
+    ) {
       return waitingFixture(request, context);
     }
     const text = isReview
@@ -121,7 +126,7 @@ try {
   daemon = await startDaemon({
     databasePath: join(directory, "caelush.db"),
     port: 0,
-    sseHeartbeatIntervalMs: 0,
+    sseHeartbeatIntervalMs: 250,
     providerOverrides: [provider],
     defaultModel: { provider: "browser-fixture", model: "browser-fixture-model" },
     web: { buildRoot: resolve(process.cwd(), "apps", "web", "dist"), workspace },

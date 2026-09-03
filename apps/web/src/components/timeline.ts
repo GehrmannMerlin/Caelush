@@ -191,9 +191,33 @@ function renderEntry(entry: TimelineEntry, phase: "active" | "settled"): ReactEl
         : entry.text === undefined
           ? null
           : createElement("p", { className: "timeline-entry-text" }, entry.text),
+      renderSafeToolDetail(entry),
       createElement("p", { className: "timeline-entry-status" }, statusLabel(entry.status)),
     ),
   );
+}
+
+function renderSafeToolDetail(entry: TimelineEntry): ReactElement | null {
+  const detail = safeToolDetail(entry);
+  return detail === undefined
+    ? null
+    : createElement("p", { className: "timeline-entry-detail" }, detail);
+}
+
+function safeToolDetail(entry: TimelineEntry): string | undefined {
+  if (entry.toolName === "apply_patch" && entry.detail !== undefined) {
+    const match = /^([AMDR]) ([^\s]+)(?: \(\+\d+, -\d+\))?$/u.exec(entry.detail);
+    if (match !== null) return entry.detail;
+  }
+  if (
+    entry.toolName === "exec_command" &&
+    entry.text !== undefined &&
+    (/^Command exited with code \d+\.$/u.test(entry.text) ||
+      /^Command completed by signal [\w-]+\.$/u.test(entry.text))
+  ) {
+    return entry.text;
+  }
+  return undefined;
 }
 
 function renderVerificationCheck(check: TimelineVerificationCheck): ReactElement {
