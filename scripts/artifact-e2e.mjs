@@ -140,7 +140,10 @@ try {
     cwd: workspaceDirectory,
     env: environment,
   });
-  assert(single.exitCode === 0, `single-command artifact E2E failed: ${single.stderr}`);
+  assert(
+    single.exitCode === 0,
+    `single-command artifact E2E failed: stdout=${single.stdout}; stderr=${single.stderr}`,
+  );
   assert(single.stdout.trim() === "PACKAGE_OK", "single-command output was not exact");
   const reusedDaemonCount = await countArtifactDaemons(bundleDirectory);
   assert(reusedDaemonCount === initialDaemonCount + 1, "single-command did not start one daemon");
