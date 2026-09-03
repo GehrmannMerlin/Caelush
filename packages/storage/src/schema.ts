@@ -74,6 +74,31 @@ export const runBudgetEntries = sqliteTable(
   ],
 );
 
+export const runResourceStates = sqliteTable(
+  "run_resource_states",
+  {
+    runId: text("run_id")
+      .primaryKey()
+      .references(() => agentRuns.id),
+    policyVersion: text("policy_version").notNull(),
+    mode: text("mode").notNull(),
+    leaseEpoch: integer("lease_epoch").notNull(),
+    leaseStartAgentTurns: integer("lease_start_agent_turns").notNull(),
+    leaseStartToolCalls: integer("lease_start_tool_calls").notNull(),
+    agentTurnsConsumed: integer("agent_turns_consumed").notNull(),
+    toolOperationsConsumed: integer("tool_operations_consumed").notNull(),
+    lastProgressAtMs: integer("last_progress_at_ms"),
+    consecutiveNoProgressTurns: integer("consecutive_no_progress_turns").notNull(),
+    replanCount: integer("replan_count").notNull(),
+    resourceGuardState: text("resource_guard_state").notNull(),
+    revision: integer("revision").notNull(),
+    recentFingerprintsJson: text("recent_fingerprints_json").notNull(),
+    createdAtMs: integer("created_at_ms").notNull(),
+    updatedAtMs: integer("updated_at_ms").notNull(),
+  },
+  (table) => [index("run_resource_states_guard_state_idx").on(table.resourceGuardState)],
+);
+
 export const agentSteps = sqliteTable(
   "agent_steps",
   {
@@ -319,6 +344,7 @@ export const storageSchema = {
   agentRuns,
   runCancellationRequests,
   runBudgetEntries,
+  runResourceStates,
   agentSteps,
   agentStateSnapshots,
   agentMessages,

@@ -15,6 +15,15 @@ export type {
 export { SqliteRunBudgetPort } from "./run-budget-port.js";
 export type { SqliteRunBudgetPortOptions } from "./run-budget-port.js";
 export {
+  ResourceGovernanceStateSchema,
+  ResourceGovernanceConflictError,
+  SqliteResourceGovernanceRepository,
+} from "./resource-governance-repository.js";
+export type {
+  ResourceGovernanceRepository,
+  ResourceGovernanceState,
+} from "./resource-governance-repository.js";
+export {
   SqliteVerificationRepository,
   type VerificationRepository,
 } from "./repositories/verification-repository.js";

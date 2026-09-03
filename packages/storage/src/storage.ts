@@ -43,6 +43,7 @@ import {
 } from "./cancellation-repository.js";
 import { SqliteBudgetLedgerRepository } from "./budget-ledger-repository.js";
 import { SqliteRunBudgetPort, type SqliteRunBudgetPortOptions } from "./run-budget-port.js";
+import { SqliteResourceGovernanceRepository } from "./resource-governance-repository.js";
 import {
   SqliteVerificationRepository,
   type VerificationRepository,
@@ -66,6 +67,7 @@ export interface CaelushStorage {
   readonly cancellations: CancellationRepository;
   readonly budgetLedger: SqliteBudgetLedgerRepository;
   readonly budget: SqliteRunBudgetPort;
+  readonly resourceGovernance: SqliteResourceGovernanceRepository;
   readonly verification: VerificationRepository;
   readonly verificationExecution: VerificationExecutionRecoveryStorePort;
   close(): Promise<void>;
@@ -99,6 +101,7 @@ export async function openCaelushStorage(options: {
       cancellations: new SqliteCancellationRepository(database),
       budgetLedger: new SqliteBudgetLedgerRepository(database),
       budget: new SqliteRunBudgetPort(database, options.budget),
+      resourceGovernance: new SqliteResourceGovernanceRepository(database),
       verification: new SqliteVerificationRepository(database),
       verificationExecution: new SqliteVerificationExecutionStore(database),
       close: async () => database.close(),
