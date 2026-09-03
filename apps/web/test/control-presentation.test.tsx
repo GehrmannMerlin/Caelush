@@ -1,12 +1,23 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import type { ApprovalView } from "@caelush/client";
+import { approvalResolutionForOption, type ApprovalView } from "@caelush/client";
 import { ApprovalCard } from "../src/components/approval-card.js";
 import { ReconnectBanner } from "../src/components/reconnect-banner.js";
 import { RecoveryPanel } from "../src/components/recovery-panel.js";
 import { PromptComposer } from "../src/components/prompt-composer.js";
 import { SessionWorkspace } from "../src/components/session-workspace.js";
 import { createInitialTimelineState } from "@caelush/client";
+
+vi.mock("@caelush/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@caelush/client")>()),
+  approvalResolutionForOption: vi.fn((kind) =>
+    kind === "APPROVE_RUN"
+      ? { action: "APPROVE", scope: "ONCE" }
+      : kind === "APPROVE_ONCE"
+        ? { action: "APPROVE", scope: "RUN" }
+        : { action: "REJECT" },
+  ),
+}));
 
 const approval: ApprovalView = {
   id: "approval-1",
@@ -58,6 +69,20 @@ describe("Web control presentation", () => {
     expect(onceHtml).toContain("拒绝");
     expect(onceHtml).toContain("仅本次允许");
     expect(onceHtml).not.toContain("本次运行内允许");
+  });
+
+  it("uses the shared resolution helper result when an approval option is clicked", () => {
+    const onResolve = vi.fn(() => true);
+    const element = ApprovalCard({ approval, onResolve });
+    const buttons = findElements(element, "button");
+
+    buttons[1]?.props.onClick();
+
+    expect(approvalResolutionForOption).toHaveBeenCalledWith("APPROVE_ONCE");
+    expect(onResolve).toHaveBeenCalledWith(approval.id, {
+      action: "APPROVE",
+      scope: "RUN",
+    });
   });
 
   it("shows exactly one cancel control for cancellable statuses and presents cancelling", () => {
@@ -144,3 +169,13 @@ describe("Web control presentation", () => {
     expect(pending).not.toContain("diff");
   });
 });
+
+function findElements(element: unknown, type: string): Array<{ props: Record<string, any> }> {
+  if (!element || typeof element !== "object") return [];
+  const candidate = element as { type?: unknown; props?: Record<string, any> };
+  const found = candidate.type === type && candidate.props ? [{ props: candidate.props }] : [];
+  const children = candidate.props?.children;
+  return found.concat(
+    (Array.isArray(children) ? children : [children]).flatMap((child) => findElements(child, type)),
+  );
+}

@@ -98,3 +98,12 @@ Additional checks:
 ## Review and delivery status
 
 Task 7's allowed changes are limited to the new Web integration test and this report. The branch is intentionally left unpushed and unmerged for the main-thread independent whole-branch review and final seal, as requested.
+
+## Whole-branch review follow-up
+
+- Review baseline: `4f7fe10` (`feat(web): add interactive run control and recovery`)
+- Important finding: `apps/web/src/components/approval-card.ts` duplicated the client-layer option-to-resolution mapping instead of using the public canonical helper.
+- Fix: `ApprovalCard` now imports and calls `approvalResolutionForOption()` from `@caelush/client`; the Web-local `resolutionFor()` implementation was removed. The safe `ApprovalView` projection, scope-gated options, and existing UI remain unchanged.
+- Regression coverage: `apps/web/test/control-presentation.test.tsx` now exercises an approval button callback with a mocked shared-helper result, proving the callback uses the shared helper output. Focused result: `1` file, `5` tests passed.
+- Follow-up verification: changed-file Prettier check passed, `pnpm typecheck` passed, and `git diff --check` passed. The requested Web control test command passed the focused presentation file; the broader approval/cancellation control files retained the three previously documented fixture failures.
+- Delivery: fix committed separately; no push, merge, or master update performed.

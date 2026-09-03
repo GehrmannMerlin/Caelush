@@ -1,6 +1,10 @@
 import { createElement, type ReactElement } from "react";
 import type { ApprovalResolution } from "@caelush/protocol";
-import type { ApprovalOptionKind, ApprovalView } from "@caelush/client";
+import {
+  approvalResolutionForOption,
+  type ApprovalOptionKind,
+  type ApprovalView,
+} from "@caelush/client";
 
 export interface ApprovalCardProps {
   readonly approval: ApprovalView;
@@ -18,7 +22,7 @@ export function ApprovalCard({ approval, onResolve }: ApprovalCardProps): ReactE
           {
             type: "button",
             className: `approval-action approval-action--${kind.toLowerCase()}`,
-            onClick: () => void onResolve(approval.id, resolutionFor(kind)),
+            onClick: () => void onResolve(approval.id, approvalResolutionForOption(kind)),
           },
           label,
         )
@@ -57,10 +61,4 @@ export function ApprovalCard({ approval, onResolve }: ApprovalCardProps): ReactE
       button("APPROVE_RUN", "本次运行内允许"),
     ),
   );
-}
-
-function resolutionFor(kind: ApprovalOptionKind): ApprovalResolution {
-  return kind === "REJECT"
-    ? { action: "REJECT" }
-    : { action: "APPROVE", scope: kind === "APPROVE_RUN" ? "RUN" : "ONCE" };
 }
