@@ -1,4 +1,4 @@
-import { createTimestampMs } from "@caelush/protocol";
+import { createTimestampMs, type RunResourcePolicy } from "@caelush/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { openCaelushDatabase } from "../src/database.js";
 import { migrateCaelushDatabase } from "../src/migrate.js";
@@ -9,11 +9,48 @@ import { makeRun, makeSession, makeStep, makeState } from "./support/fixtures.js
 
 const databases: Array<{ close(): void }> = [];
 
+const adaptivePolicy: RunResourcePolicy = {
+  mode: "ADAPTIVE",
+  operationalLease: { maxAgentTurns: 24, maxToolOperations: 64 },
+  batch: { maxToolCallsPerTurn: 16 },
+  progress: {
+    windowTurns: 8,
+    identicalCallNudgeThreshold: 3,
+    noProgressTurnsBeforeReplan: 4,
+    replansBeforePause: 2,
+  },
+  hardLimits: {},
+  inactivity: {},
+};
+
 afterEach(() => {
   for (const database of databases.splice(0)) database.close();
 });
 
 describe("SqliteRunBudgetPort", () => {
+  it("does not apply the legacy lifetime Tool ceiling to an Adaptive Run", async () => {
+    const database = await openCaelushDatabase({ path: ":memory:" });
+    databases.push(database);
+    await migrateCaelushDatabase(database);
+    const session = makeSession();
+    const run = makeRun(session.id, {
+      status: "RUNNING",
+      startedAt: createTimestampMs(100),
+      limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 10_000 },
+      resourcePolicy: adaptivePolicy,
+    });
+    await new SqliteSessionRepository(database).insert(session);
+    await new SqliteRunRepository(database).insert(run);
+    const budget = new SqliteRunBudgetPort(database);
+
+    for (const invocationId of ["invocation-a", "invocation-b", "invocation-c", "invocation-d"]) {
+      await budget.admit({ runId: run.id, requested: 1, invocationId });
+    }
+    await expect(budget.admit({ runId: run.id, requested: 5 })).resolves.toEqual({
+      kind: "ALLOWED",
+    });
+  });
+
   it("reserves, settles, and projects a provider attempt through the ledger", async () => {
     const database = await openCaelushDatabase({ path: ":memory:" });
     databases.push(database);

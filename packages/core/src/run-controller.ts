@@ -76,6 +76,7 @@ import type { RunControllerDependencies } from "./run-controller-ports.js";
 import { TaskAcceptanceReviewer } from "./task-acceptance-reviewer.js";
 import { AgentBudgetAdmissionError } from "./agent-errors.js";
 import type { AgentBudgetBlock } from "./agent-errors.js";
+import { ResourceGovernor } from "./resource-governor.js";
 import {
   ProjectCheckResolverRegistry,
   VerificationStageRunner,
@@ -554,6 +555,30 @@ export class RunController {
           },
           items: continuation.pendingDecision.toolRequests.map((request): ToolBatchItem => request),
         };
+        const resourceDecision = this.resourceToolBatchDecision(snapshot, request.items.length);
+        if (resourceDecision?.kind === "REPLAN") {
+          const syntheticResults = ResourceGovernor.replanResults(
+            request.items.map((item) => ({
+              externalCallId: item.externalCallId,
+              toolName: item.toolName,
+            })),
+          );
+          const messages = toLLMToolResultMessages(
+            continuation.pendingDecision.toolRequests,
+            syntheticResults,
+          );
+          snapshot = await this.persistCompleteToolResultsLocked(snapshot, messages);
+          mode = "EXECUTE";
+          continue;
+        }
+        if (resourceDecision?.kind === "HARD_STOP") {
+          return this.finalizeBudgetExceeded(snapshot, {
+            kind: "EXCEEDED",
+            dimension: resourceDecision.dimension,
+            accounted: resourceDecision.accounted,
+            limit: resourceDecision.limit,
+          });
+        }
         let outcome: ToolBatchOutcome;
         try {
           outcome =
@@ -631,6 +656,18 @@ export class RunController {
       snapshot = await this.load(snapshot.run.id);
       mode = "EXECUTE";
     }
+  }
+
+  private resourceToolBatchDecision(snapshot: RunExecutionSnapshot, requestedToolCalls: number) {
+    const policy = snapshot.run.resourcePolicy;
+    if (policy === undefined || snapshot.state === undefined) return undefined;
+    return new ResourceGovernor(policy).evaluateToolBatch({
+      agentTurnsConsumed: snapshot.state.usage.steps,
+      toolOperationsConsumed: snapshot.state.usage.toolCalls,
+      requestedToolCalls,
+      progressLevel: "HEALTHY",
+      replanCount: 0,
+    });
   }
 
   private async persistCompleteToolResultsLocked(

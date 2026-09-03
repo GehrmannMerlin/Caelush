@@ -107,6 +107,7 @@ export { AgentLoop } from "./agent-loop.js";
 export { fingerprintToolRequest, fingerprintToolResult } from "./resource-fingerprint.js";
 export { ProgressLedger } from "./progress-ledger.js";
 export { ResourceLoopDetector } from "./resource-loop-detector.js";
+export { ResourceGovernor } from "./resource-governor.js";
 export type {
   ProgressLedgerRecordInput,
   ProgressLedgerSnapshot,
@@ -118,6 +119,10 @@ export type {
   ResourceLoopEvaluationInput,
   ResourceLoopLevel,
 } from "./resource-loop-detector.js";
+export type {
+  ResourceDecision,
+  ResourceToolBatchEvaluationInput,
+} from "./resource-governor.js";
 export type { RunControllerResult, RunControllerToolResults } from "./run-controller-input.js";
 export {
   RunController,

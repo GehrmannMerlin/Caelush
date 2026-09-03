@@ -1,4 +1,4 @@
-import type { RunLimits } from "@caelush/protocol";
+import type { RunLimits, RunResourcePolicy } from "@caelush/protocol";
 import {
   addCostMicros,
   costMicrosForTokens,
@@ -24,6 +24,7 @@ export interface ModelPricingSnapshot {
 
 export interface ToolBudgetAdmissionInput {
   readonly limits: RunLimits;
+  readonly policy?: RunResourcePolicy;
   readonly snapshot: RunBudgetSnapshot;
   readonly requested: number;
 }
@@ -70,12 +71,16 @@ export class BudgetManager {
       input.snapshot.toolCallsReserved,
       "Tool call accounting",
     );
-    if (accounted > input.limits.maxToolCalls - input.requested) {
+    const limit =
+      input.policy?.mode === "ADAPTIVE"
+        ? input.policy.hardLimits.maxToolCalls
+        : input.limits.maxToolCalls;
+    if (limit !== undefined && accounted > limit - input.requested) {
       return {
         kind: "EXCEEDED",
         dimension: "TOOL_CALLS",
         accounted,
-        limit: input.limits.maxToolCalls,
+        limit,
       };
     }
     return { kind: "ALLOWED", reservedToolCalls: input.requested };

@@ -17,6 +17,20 @@ const accountedSnapshot: RunBudgetSnapshot = {
   costMicrosReserved: 0,
 };
 
+const adaptivePolicy = {
+  mode: "ADAPTIVE" as const,
+  operationalLease: { maxAgentTurns: 24, maxToolOperations: 64 },
+  batch: { maxToolCallsPerTurn: 16 },
+  progress: {
+    windowTurns: 8,
+    identicalCallNudgeThreshold: 3,
+    noProgressTurnsBeforeReplan: 4,
+    replansBeforePause: 2,
+  },
+  hardLimits: {},
+  inactivity: {},
+};
+
 describe("resource governance baseline", () => {
   it("reproduces the current lifetime Tool-call rejection for the workspace-scan batch", () => {
     const result = new BudgetManager().admitToolCalls({
@@ -38,6 +52,7 @@ describe("resource governance baseline", () => {
       limits: legacyLimits,
       snapshot: accountedSnapshot,
       requested: 5,
+      policy: adaptivePolicy,
     });
 
     expect(result.kind).not.toBe("EXCEEDED");
