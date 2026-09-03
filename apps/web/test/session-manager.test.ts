@@ -448,7 +448,7 @@ describe("WebSessionManager", () => {
     manager.dispose();
   });
 
-  it("maps stream and refresh failures to safe errors", async () => {
+  it("keeps a lost stream in the reconnect lifecycle without exposing its raw error", async () => {
     const session = makeSession({ defaultWorkspace: workspace });
     const pendingRun = makeRun({ sessionId: session.id });
     const client = makeClient({
@@ -468,12 +468,9 @@ describe("WebSessionManager", () => {
     await manager.selectSession(session.id);
 
     await expect(manager.submitPrompt("stream task")).resolves.toBe(true);
-    await waitFor(() => manager.getSnapshot().error?.code === "RUN_STREAM_FAILED");
+    await waitFor(() => manager.getSnapshot().transportState === "RECONNECTING");
 
-    expect(manager.getSnapshot().error).toEqual({
-      code: "RUN_STREAM_FAILED",
-      message: "任务执行连接中断。",
-    });
+    expect(manager.getSnapshot().error).toBeUndefined();
     manager.dispose();
   });
 

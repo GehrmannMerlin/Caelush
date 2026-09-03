@@ -1,5 +1,8 @@
 import {
   createApprovalView,
+  CaelushClientHttpError,
+  CaelushClientProtocolError,
+  CaelushProtocolCompatibilityError,
   canCancelRunStatus,
   createInitialTimelineState,
   deriveSessionActivity,
@@ -9,6 +12,7 @@ import {
   listMatchingSessionCandidates,
   nonTerminalRuns,
   reduceTimelineEvent,
+  ReconnectScheduler,
   resolveSessionWorkspace,
   sortSessionCandidates,
   type SessionCandidate,
@@ -16,6 +20,7 @@ import {
   type SessionCandidateClient,
   type SessionHistoryEntry,
   type TimelineState,
+  type Timer,
   type WatchRunEventsOptions,
 } from "@caelush/client";
 import type {
@@ -49,6 +54,7 @@ export interface WebSessionClient extends SessionCandidateClient, WebHostClient 
     resolution: ApprovalResolution,
   ): Promise<RunActionResponse>;
   startRun(runId: RunId): Promise<RunActionResponse>;
+  recoverRun(runId: RunId): Promise<RunActionResponse>;
   cancelRun(runId: RunId): Promise<RunActionResponse>;
   watchRunEvents(runId: RunId, options?: WatchRunEventsOptions): AsyncIterable<AgentEvent>;
 }
@@ -73,6 +79,7 @@ export type WebSessionErrorCode =
   | "RUN_START_FAILED"
   | "RUN_CANCEL_FAILED"
   | "RUN_STREAM_FAILED"
+  | "RUN_RECONNECT_EXHAUSTED"
   | "RUN_REFRESH_FAILED"
   | "DEFAULT_MODEL_UNAVAILABLE"
   | "PROMPT_REQUIRED"
@@ -97,6 +104,7 @@ export interface WebSessionSnapshot {
   readonly composerEnabled: boolean;
   readonly submission: WebSubmissionState;
   readonly transportState: WebTransportState;
+  readonly transportAttempt?: number;
   readonly controlMode: WebControlMode;
   readonly approvalState?: WebApprovalState;
   readonly error?: WebSessionError;
@@ -106,7 +114,12 @@ export type WebSessionListener = (snapshot: WebSessionSnapshot) => void;
 type WebSessionSnapshotPatch = Partial<
   Omit<
     WebSessionSnapshot,
-    "selectedSession" | "selectedSessionId" | "activeRun" | "approvalState" | "error"
+    | "selectedSession"
+    | "selectedSessionId"
+    | "activeRun"
+    | "approvalState"
+    | "error"
+    | "transportAttempt"
   >
 > & {
   readonly selectedSession?: ClientAgentSession | undefined;
@@ -114,11 +127,15 @@ type WebSessionSnapshotPatch = Partial<
   readonly activeRun?: ClientAgentRun | undefined;
   readonly approvalState?: WebApprovalState | undefined;
   readonly error?: WebSessionError | undefined;
+  readonly transportAttempt?: number | undefined;
 };
 
 interface ActiveLifecycle {
   readonly run: ClientAgentRun;
-  readonly controller: AbortController;
+  controller: AbortController;
+  streamGeneration: number;
+  recoveryAdmitted: boolean;
+  readonly scheduler: ReconnectScheduler;
   failure?: "RUN_STREAM_FAILED" | "RUN_REFRESH_FAILED";
 }
 
@@ -142,6 +159,7 @@ export class WebSessionManager {
       readonly client: WebSessionClient;
       readonly workspace: WorkspaceRef;
       readonly info: DaemonInfo;
+      readonly timer?: Timer;
     },
   ) {}
 
@@ -410,6 +428,19 @@ export class WebSessionManager {
     return promise;
   }
 
+  reconnectActiveRun(): void {
+    const active = this.activeLifecycle;
+    if (this.disposed || active === undefined || this.snapshot.transportState !== "DISCONNECTED") {
+      return;
+    }
+    this.publish({
+      transportState: "RECONNECTING",
+      transportAttempt: 1,
+      error: undefined,
+    });
+    active.scheduler.manualRetry();
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -478,32 +509,59 @@ export class WebSessionManager {
     const active: ActiveLifecycle = {
       run,
       controller: new AbortController(),
+      streamGeneration: 0,
+      recoveryAdmitted: false,
+      scheduler: new ReconnectScheduler({
+        timer: this.options.timer ?? systemWebTimer,
+        onAttempt: (attempt) => this.retryActiveStream(active, attempt),
+        onExhausted: () => this.markTransportDisconnected(active),
+      }),
     };
     this.activeLifecycle = active;
-    void this.consumeLifecycle(active);
+    this.attachStream(active, false);
     return active;
   }
 
-  private async consumeLifecycle(active: ActiveLifecycle): Promise<void> {
+  private attachStream(active: ActiveLifecycle, recoverOnOpen: boolean): void {
+    active.controller.abort();
+    active.controller = new AbortController();
+    const generation = active.streamGeneration + 1;
+    active.streamGeneration = generation;
+    active.recoveryAdmitted = false;
+    void this.consumeLifecycle(active, generation, recoverOnOpen);
+  }
+
+  private async consumeLifecycle(
+    active: ActiveLifecycle,
+    generation: number,
+    recoverOnOpen: boolean,
+  ): Promise<void> {
     try {
       for await (const event of this.options.client.watchRunEvents(active.run.id, {
+        afterSequence: generation === 1 ? 0 : this.snapshot.timeline.lastDurableSequence,
         signal: active.controller.signal,
+        onOpen: () => this.handleStreamOpen(active, generation, recoverOnOpen),
       })) {
-        if (this.activeLifecycle !== active || this.disposed) return;
+        if (!this.isCurrentStream(active, generation)) return;
         if (event.runId !== active.run.id) continue;
         const timeline = reduceTimelineEvent(this.snapshot.timeline, event);
         this.publish({ timeline });
+        if (timeline.error !== undefined) {
+          this.handleTerminalStreamError(active, generation);
+          return;
+        }
         this.projectApprovalEvent(event);
         if (!isLifecycleEvent(event)) continue;
         let refreshed: ClientAgentRun;
         try {
           refreshed = await this.options.client.getRun(active.run.id);
         } catch {
+          if (!this.isCurrentStream(active, generation)) return;
           active.failure = "RUN_REFRESH_FAILED";
           this.publish({ error: sessionError("RUN_REFRESH_FAILED") });
           return;
         }
-        if (this.activeLifecycle !== active || this.disposed) return;
+        if (!this.isCurrentStream(active, generation)) return;
         const terminalTimeline = isTimelineTerminalRunStatus(refreshed.status)
           ? flushTimelineForTerminal(this.snapshot.timeline, refreshed.status)
           : this.snapshot.timeline;
@@ -513,16 +571,80 @@ export class WebSessionManager {
           return;
         }
       }
-      active.failure = "RUN_STREAM_FAILED";
-      if (this.activeLifecycle === active && !this.disposed) {
-        this.publish({ error: sessionError("RUN_STREAM_FAILED") });
-      }
-    } catch {
-      active.failure = "RUN_STREAM_FAILED";
-      if (this.activeLifecycle === active && !this.disposed) {
-        this.publish({ error: sessionError("RUN_STREAM_FAILED") });
-      }
+      this.handleStreamFailure(active, generation, undefined);
+    } catch (error) {
+      this.handleStreamFailure(active, generation, error);
     }
+  }
+
+  private handleStreamOpen(
+    active: ActiveLifecycle,
+    generation: number,
+    recoverOnOpen: boolean,
+  ): void {
+    if (!this.isCurrentStream(active, generation)) return;
+    active.scheduler.succeeded();
+    this.publish({ transportState: "CONNECTED", transportAttempt: undefined, error: undefined });
+    if (!recoverOnOpen || active.recoveryAdmitted) return;
+    active.recoveryAdmitted = true;
+    void this.admitRecovery(active, generation);
+  }
+
+  private async admitRecovery(active: ActiveLifecycle, generation: number): Promise<void> {
+    try {
+      const response = await this.options.client.recoverRun(active.run.id);
+      if (!this.isCurrentStream(active, generation)) return;
+      this.publishActiveRun(response.run, this.snapshot.submission);
+    } catch {
+      if (!this.isCurrentStream(active, generation)) return;
+      this.publish({ error: sessionError("RUN_REFRESH_FAILED") });
+    }
+  }
+
+  private handleStreamFailure(active: ActiveLifecycle, generation: number, error: unknown): void {
+    if (!this.isCurrentStream(active, generation) || active.controller.signal.aborted) return;
+    if (isTerminalStreamError(error)) {
+      this.handleTerminalStreamError(active, generation);
+      return;
+    }
+    this.publish({
+      transportState: "RECONNECTING",
+      transportAttempt: 1,
+      error: undefined,
+    });
+    active.scheduler.failed();
+  }
+
+  private handleTerminalStreamError(active: ActiveLifecycle, generation: number): void {
+    if (!this.isCurrentStream(active, generation)) return;
+    active.failure = "RUN_STREAM_FAILED";
+    this.publish({
+      transportState: "DISCONNECTED",
+      transportAttempt: undefined,
+      error: sessionError("RUN_STREAM_FAILED"),
+    });
+  }
+
+  private retryActiveStream(active: ActiveLifecycle, attempt: number): void {
+    if (this.activeLifecycle !== active || this.disposed) return;
+    this.publish({ transportState: "RECONNECTING", transportAttempt: attempt, error: undefined });
+    this.attachStream(active, true);
+  }
+
+  private markTransportDisconnected(active: ActiveLifecycle): void {
+    if (this.activeLifecycle !== active || this.disposed) return;
+    active.failure = "RUN_STREAM_FAILED";
+    this.publish({
+      transportState: "DISCONNECTED",
+      transportAttempt: undefined,
+      error: sessionError("RUN_RECONNECT_EXHAUSTED"),
+    });
+  }
+
+  private isCurrentStream(active: ActiveLifecycle, generation: number): boolean {
+    return (
+      this.activeLifecycle === active && active.streamGeneration === generation && !this.disposed
+    );
   }
 
   private async settleLifecycle(active: ActiveLifecycle, run: ClientAgentRun): Promise<void> {
@@ -756,6 +878,7 @@ export class WebSessionManager {
   }
 
   private cancelActiveLifecycle(): void {
+    this.activeLifecycle?.scheduler.dispose();
     this.activeLifecycle?.controller.abort();
     this.activeLifecycle = undefined;
   }
@@ -800,6 +923,21 @@ function initialSnapshot(): WebSessionSnapshot {
     transportState: "CONNECTED",
     controlMode: "NONE",
   };
+}
+
+const systemWebTimer: Timer = {
+  schedule(delayMs, callback) {
+    const timeout = setTimeout(callback, delayMs);
+    return { cancel: () => clearTimeout(timeout) };
+  },
+};
+
+function isTerminalStreamError(error: unknown): boolean {
+  return (
+    error instanceof CaelushClientHttpError ||
+    error instanceof CaelushClientProtocolError ||
+    error instanceof CaelushProtocolCompatibilityError
+  );
 }
 
 function isTimelineTerminalRunStatus(
@@ -863,6 +1001,7 @@ function sessionError(code: WebSessionErrorCode): WebSessionError {
     RUN_START_FAILED: "无法启动任务。",
     RUN_CANCEL_FAILED: "无法确认取消请求。任务可能仍在后台运行。",
     RUN_STREAM_FAILED: "任务执行连接中断。",
+    RUN_RECONNECT_EXHAUSTED: "任务执行连接已断开。请手动重新连接。",
     RUN_REFRESH_FAILED: "无法刷新任务状态。",
     DEFAULT_MODEL_UNAVAILABLE: "当前 daemon 未配置默认模型，无法开始任务。",
     PROMPT_REQUIRED: "请输入任务内容。",

@@ -129,7 +129,14 @@ function renderSessionApp(input: {
         "div",
         { className: "connection-summary", role: "status" },
         createElement("span", { className: "connection-dot", "aria-hidden": "true" }),
-        "已连接",
+        connectionLabel(snapshot.transportState, snapshot.transportAttempt),
+        snapshot.transportState !== "DISCONNECTED"
+          ? null
+          : createElement(
+              "button",
+              { type: "button", onClick: () => manager.reconnectActiveRun() },
+              "重新连接",
+            ),
       ),
     ),
     createElement(
@@ -167,6 +174,15 @@ function renderSessionApp(input: {
       ),
     ),
   );
+}
+
+function connectionLabel(
+  state: WebSessionSnapshot["transportState"],
+  attempt: number | undefined,
+): string {
+  if (state === "CONNECTED") return "已连接";
+  if (state === "DISCONNECTED") return "连接已断开";
+  return attempt === undefined ? "正在重新连接" : `正在重新连接（第 ${attempt} 次）`;
 }
 
 function renderHostBootstrap(state: WebHostState): ReactElement {
