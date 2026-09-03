@@ -2,15 +2,17 @@ import { createElement, type ReactElement } from "react";
 import type { SessionCandidate } from "@caelush/client";
 import type { SessionId } from "@caelush/protocol";
 import { derivePromptTitle } from "../application/prompt.js";
-import { runStatusClass, runStatusLabel } from "./run-status.js";
+import { runStatusClass, runStatusGlyph, runStatusLabel } from "./run-status.js";
 
 export interface SessionSidebarProps {
   readonly candidates: readonly SessionCandidate[];
   readonly selectedSessionId?: SessionId | undefined;
   readonly isDraft: boolean;
   readonly canInteract: boolean;
+  readonly isOpen?: boolean;
   readonly onNewSession: () => void;
   readonly onSelectSession: (sessionId: SessionId) => void;
+  readonly onClose?: () => void;
 }
 
 export function sessionDisplayTitle(candidate: SessionCandidate): string {
@@ -30,19 +32,44 @@ export function SessionSidebar(props: SessionSidebarProps): ReactElement {
             disabled: true,
             "aria-current": "page",
           },
+          createElement(
+            "span",
+            {
+              className: `session-status-icon ${runStatusClass("PENDING")}`,
+              role: "img",
+              "aria-label": runStatusLabel("PENDING"),
+              title: runStatusLabel("PENDING"),
+            },
+            runStatusGlyph("PENDING"),
+          ),
           createElement("span", { className: "session-list-title" }, "新会话"),
-          createElement("span", { className: "session-list-meta" }, "尚未开始"),
         ),
       )
     : null;
 
   return createElement(
     "aside",
-    { className: "session-sidebar", "aria-label": "会话列表" },
+    {
+      id: "caelush-session-sidebar",
+      className: `session-sidebar${props.isOpen === false ? " session-sidebar--closed" : ""}`,
+      "aria-label": "会话列表",
+    },
     createElement(
       "div",
       { className: "session-sidebar-heading" },
       createElement("h2", null, "会话"),
+      props.onClose === undefined
+        ? null
+        : createElement(
+            "button",
+            {
+              type: "button",
+              className: "sidebar-close-button",
+              onClick: props.onClose,
+              "aria-label": "关闭会话栏",
+            },
+            "×",
+          ),
       createElement(
         "button",
         {
@@ -62,6 +89,7 @@ export function SessionSidebar(props: SessionSidebarProps): ReactElement {
       props.candidates.map((candidate) => {
         const selected = candidate.session.id === props.selectedSessionId;
         const latestRun = candidate.latestRun;
+        const status = latestRun?.status ?? "PENDING";
         return createElement(
           "li",
           { className: "session-list-item", key: candidate.session.id },
@@ -76,17 +104,18 @@ export function SessionSidebar(props: SessionSidebarProps): ReactElement {
             },
             createElement(
               "span",
-              { className: "session-list-title" },
-              sessionDisplayTitle(candidate),
+              {
+                className: `session-status-icon ${runStatusClass(status)}`,
+                role: "img",
+                "aria-label": runStatusLabel(status),
+                title: runStatusLabel(status),
+              },
+              runStatusGlyph(status),
             ),
             createElement(
               "span",
-              {
-                className: latestRun
-                  ? `session-list-meta ${runStatusClass(latestRun.status)}`
-                  : "session-list-meta",
-              },
-              latestRun === undefined ? "未运行" : runStatusLabel(latestRun.status),
+              { className: "session-list-title" },
+              sessionDisplayTitle(candidate),
             ),
           ),
         );

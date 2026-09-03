@@ -25,6 +25,7 @@ describe("WebSessionManager durable recovery", () => {
     const client = makeClient(run);
     let open!: () => void;
     client.watchRunEvents.mockImplementation(async function* (_runId, options) {
+      yield* [] as AgentEvent[];
       open = () => options?.onOpen?.();
       await new Promise<void>(() => undefined);
     });
@@ -93,6 +94,7 @@ describe("WebSessionManager durable recovery", () => {
     waitingClient.listPendingApprovals.mockRejectedValueOnce(new Error("offline"));
     let open!: () => void;
     waitingClient.watchRunEvents.mockImplementation(async function* (_runId, options) {
+      yield* [] as AgentEvent[];
       open = () => options?.onOpen?.();
       await new Promise<void>(() => undefined);
     });
@@ -136,6 +138,7 @@ describe("WebSessionManager durable recovery", () => {
       ],
     });
     waitingClient.watchRunEvents.mockImplementation(async function* (_runId, options) {
+      yield* [] as AgentEvent[];
       opens.push(() => options?.onOpen?.());
       if (opens.length === 1) throw new Error("offline");
       await new Promise<void>(() => undefined);
@@ -173,6 +176,7 @@ describe("WebSessionManager durable recovery", () => {
     const waitingClient = makeClient(waiting);
     let open!: () => void;
     waitingClient.watchRunEvents.mockImplementation(async function* (_runId, options) {
+      yield* [] as AgentEvent[];
       open = () => options?.onOpen?.();
       await new Promise<void>(() => undefined);
     });
@@ -203,6 +207,7 @@ describe("WebSessionManager durable recovery", () => {
       .mockRejectedValueOnce(new Error("offline"))
       .mockResolvedValue({ items: [] });
     waitingClient.watchRunEvents.mockImplementation(async function* (_runId, options) {
+      yield* [] as AgentEvent[];
       opens.push(() => options?.onOpen?.());
       await new Promise<void>(() => undefined);
     });
@@ -236,6 +241,7 @@ describe("WebSessionManager durable recovery", () => {
       .mockRejectedValueOnce(new Error("offline"))
       .mockResolvedValue({ items: [] });
     waitingClient.watchRunEvents.mockImplementation(async function* (_runId, options) {
+      yield* [] as AgentEvent[];
       opens.push(() => options?.onOpen?.());
       if (opens.length === 1) throw new Error("offline");
       await new Promise<void>(() => undefined);

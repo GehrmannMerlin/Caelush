@@ -46,13 +46,6 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
             createElement("span", { className: "status-pulse", "aria-hidden": "true" }),
             createElement("span", null, runStatusLabel(props.activeRun.status)),
           ),
-      props.activeRun !== undefined && props.controlMode === "CANCELLING"
-        ? createElement("span", { className: "cancel-status", role: "status" }, "正在取消")
-        : props.activeRun !== undefined &&
-            props.onCancel !== undefined &&
-            canShowCancel(props.activeRun.status)
-          ? createElement("button", { type: "button", onClick: props.onCancel }, "取消")
-          : null,
     ),
     props.approvals?.map((approval) =>
       createElement(ApprovalCard, {
@@ -92,6 +85,30 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
           ),
     ),
     createElement(Timeline, { timeline: props.timeline }),
+    props.activeRun !== undefined && props.onCancel !== undefined
+      ? createElement(
+          "div",
+          { className: "run-action-tray", role: "status" },
+          createElement(
+            "span",
+            { className: "run-action-label" },
+            props.controlMode === "CANCELLING" ? "正在取消任务……" : "Caelush 正在执行任务……",
+          ),
+          props.controlMode === "CANCELLING"
+            ? createElement(
+                "button",
+                { type: "button", className: "cancel-button", disabled: true },
+                "正在取消",
+              )
+            : canShowCancel(props.activeRun.status)
+              ? createElement(
+                  "button",
+                  { type: "button", className: "cancel-button", onClick: props.onCancel },
+                  "取消任务",
+                )
+              : null,
+        )
+      : null,
     props.composer,
   );
 }

@@ -5,6 +5,7 @@ coverage/
 .turbo/
 .worktrees/
 release-artifacts/
+test-results/
 *.tsbuildinfo
 .env
 .env.*

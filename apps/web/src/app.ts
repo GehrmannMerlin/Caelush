@@ -47,6 +47,7 @@ export function WebHostApp(props: {
   readonly launchContext: unknown;
 }): ReactElement {
   const [state, setState] = useState<WebHostState>(createInitialWebHostState);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -92,13 +93,23 @@ export function WebHostApp(props: {
   if (state.bootstrap !== "READY" || sessionManager === undefined) {
     return renderHostBootstrap(state);
   }
-  return renderSessionApp({ manager: sessionManager, snapshot: sessionSnapshot, host: state });
+  return renderSessionApp({
+    manager: sessionManager,
+    snapshot: sessionSnapshot,
+    host: state,
+    sidebarOpen,
+    onToggleSidebar: () => setSidebarOpen((open) => !open),
+    onCloseSidebar: () => setSidebarOpen(false),
+  });
 }
 
 function renderSessionApp(input: {
   readonly manager: WebSessionManager;
   readonly snapshot: WebSessionSnapshot;
   readonly host: WebHostState;
+  readonly sidebarOpen: boolean;
+  readonly onToggleSidebar: () => void;
+  readonly onCloseSidebar: () => void;
 }): ReactElement {
   const { manager, snapshot, host } = input;
   const selectedCandidate = snapshot.candidates.find(
@@ -130,6 +141,18 @@ function renderSessionApp(input: {
       "header",
       { className: "web-topbar" },
       createElement(
+        "button",
+        {
+          type: "button",
+          className: "sidebar-toggle-button",
+          onClick: input.onToggleSidebar,
+          "aria-controls": "caelush-session-sidebar",
+          "aria-expanded": input.sidebarOpen,
+          "aria-label": input.sidebarOpen ? "关闭会话栏" : "打开会话栏",
+        },
+        "≡",
+      ),
+      createElement(
         "div",
         { className: "brand-lockup" },
         createElement("span", { className: "brand-symbol", "aria-hidden": "true" }, "C"),
@@ -137,15 +160,28 @@ function renderSessionApp(input: {
       ),
       createElement(
         "div",
-        { className: "connection-summary", role: "status" },
+        { className: "topbar-workspace" },
+        createElement("span", { className: "topbar-workspace-label" }, "工作区"),
+        createElement("code", null, host.workspace?.path ?? ""),
+      ),
+      createElement(
+        "div",
+        {
+          className: `connection-summary connection-summary--${snapshot.transportState.toLowerCase()}`,
+          role: "status",
+        },
         createElement("span", { className: "connection-dot", "aria-hidden": "true" }),
-        createElement(ReconnectBanner, {
-          state: snapshot.transportState,
-          attempt: snapshot.transportAttempt,
-          onReconnect: () => manager.reconnectActiveRun(),
-        }),
+        createElement("span", null, connectionLabel(snapshot.transportState)),
       ),
     ),
+    input.sidebarOpen
+      ? createElement("button", {
+          type: "button",
+          className: "sidebar-backdrop",
+          onClick: input.onCloseSidebar,
+          "aria-label": "关闭会话栏",
+        })
+      : null,
     createElement(
       "div",
       { className: "workspace-frame" },
@@ -154,17 +190,30 @@ function renderSessionApp(input: {
         selectedSessionId: snapshot.selectedSessionId,
         isDraft: snapshot.isDraft,
         canInteract,
-        onNewSession,
-        onSelectSession,
+        isOpen: input.sidebarOpen,
+        onNewSession: () => {
+          onNewSession();
+          input.onCloseSidebar();
+        },
+        onSelectSession: (sessionId) => {
+          onSelectSession(sessionId);
+          input.onCloseSidebar();
+        },
+        onClose: input.onCloseSidebar,
       }),
       createElement(
         "div",
         { className: "workspace-column" },
         createElement(
           "div",
-          { className: "workspace-context" },
-          createElement("span", null, "工作区"),
-          createElement("code", null, host.workspace?.path ?? ""),
+          { className: "workspace-notices" },
+          snapshot.transportState === "CONNECTED"
+            ? null
+            : createElement(ReconnectBanner, {
+                state: snapshot.transportState,
+                attempt: snapshot.transportAttempt,
+                onReconnect: () => manager.reconnectActiveRun(),
+              }),
         ),
         createElement(SessionWorkspace, {
           title,
@@ -194,6 +243,17 @@ function renderSessionApp(input: {
       ),
     ),
   );
+}
+
+function connectionLabel(state: WebSessionSnapshot["transportState"]): string {
+  switch (state) {
+    case "CONNECTED":
+      return "已连接";
+    case "RECONNECTING":
+      return "重连中";
+    case "DISCONNECTED":
+      return "已断开";
+  }
 }
 
 function renderHostBootstrap(state: WebHostState): ReactElement {

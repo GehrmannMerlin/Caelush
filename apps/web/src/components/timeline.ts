@@ -1,10 +1,11 @@
-import { createElement, type ReactElement } from "react";
+import { createElement, useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import type {
   TimelineEntry,
   TimelineEntryStatus,
   TimelineState,
   TimelineVerificationCheck,
 } from "@caelush/client";
+import { isNearTimelineBottom, timelineActivityDelta } from "./timeline-scroll.js";
 
 const WEB_TOOL_LABELS: Readonly<Record<string, string>> = Object.freeze({
   read_file: "读取文件",
@@ -31,61 +32,137 @@ export function Timeline(props: TimelineProps): ReactElement {
     ...props.timeline.activeApprovals,
   ];
   const settled = props.timeline.settled.filter((entry) => entry.title !== "Tool output");
+  const activityCount =
+    active.length +
+    settled.length +
+    props.timeline.verification.reduce((count, group) => count + group.checks.length, 0);
+  const regionRef = useRef<HTMLDivElement>(null);
+  const seenActivityCount = useRef(activityCount);
+  const [following, setFollowing] = useState(true);
+  const [newActivityCount, setNewActivityCount] = useState(0);
+
+  const alignToLatest = useCallback(() => {
+    const region = regionRef.current;
+    if (region === null) return;
+    region.scrollTo({ top: region.scrollHeight, behavior: "smooth" });
+  }, []);
+
+  useEffect(() => {
+    const delta = timelineActivityDelta(following, seenActivityCount.current, activityCount);
+    seenActivityCount.current = activityCount;
+    if (following) {
+      setNewActivityCount(0);
+      if (delta > 0) alignToLatest();
+    } else if (delta > 0) {
+      setNewActivityCount((current) => Math.min(99, current + delta));
+    }
+  }, [activityCount, alignToLatest, following]);
+
+  const handleScroll = useCallback(() => {
+    const region = regionRef.current;
+    if (region === null) return;
+    const nextFollowing = isNearTimelineBottom({
+      scrollTop: region.scrollTop,
+      clientHeight: region.clientHeight,
+      scrollHeight: region.scrollHeight,
+    });
+    setFollowing((current) => {
+      if (current === nextFollowing) return current;
+      if (nextFollowing) {
+        seenActivityCount.current = activityCount;
+        setNewActivityCount(0);
+      }
+      return nextFollowing;
+    });
+  }, [activityCount]);
+
+  const jumpToLatest = useCallback(() => {
+    seenActivityCount.current = activityCount;
+    setFollowing(true);
+    setNewActivityCount(0);
+    alignToLatest();
+  }, [activityCount, alignToLatest]);
 
   return createElement(
     "section",
-    { className: "timeline", "aria-labelledby": "timeline-title", tabIndex: 0 },
+    { className: "timeline", "aria-labelledby": "timeline-title" },
     createElement(
       "header",
       { className: "timeline-header" },
       createElement("p", { className: "timeline-kicker" }, "任务活动"),
       createElement("h2", { id: "timeline-title" }, "执行过程"),
     ),
-    active.length === 0 && settled.length === 0 && props.timeline.verification.length === 0
-      ? createElement("p", { className: "timeline-empty" }, "等待任务活动。")
-      : null,
-    active.length === 0
-      ? null
-      : createElement(
-          "ol",
-          { className: "timeline-list timeline-list--active", "aria-label": "进行中的活动" },
-          active.map((entry) => renderEntry(entry, "active")),
-        ),
-    settled.length === 0
-      ? null
-      : createElement(
-          "ol",
-          { className: "timeline-list", "aria-label": "已完成的活动" },
-          settled.map((entry) => renderEntry(entry, "settled")),
-        ),
-    props.timeline.verification.length === 0
-      ? null
-      : createElement(
-          "section",
-          { className: "timeline-verification", "aria-label": "验证" },
-          createElement("h3", null, "验证"),
-          props.timeline.verification.map((group) =>
-            createElement(
-              "section",
-              { className: "timeline-verification-group", key: group.id },
-              createElement(
-                "p",
-                { className: "timeline-verification-status" },
-                group.label,
-                " · ",
-                statusLabel(group.status),
-              ),
-              renderPublicId("计划 ID", group.planId),
-              group.checks.length === 0
-                ? null
-                : createElement(
-                    "ol",
-                    { className: "timeline-check-list" },
-                    group.checks.map(renderVerificationCheck),
-                  ),
+    createElement(
+      "div",
+      { className: "timeline-feed" },
+      createElement(
+        "div",
+        {
+          className: "timeline-scroll-region",
+          ref: regionRef,
+          onScroll: handleScroll,
+          tabIndex: 0,
+          "aria-label": "任务活动流",
+        },
+        active.length === 0 && settled.length === 0 && props.timeline.verification.length === 0
+          ? createElement("p", { className: "timeline-empty" }, "等待任务活动。")
+          : null,
+        active.length === 0
+          ? null
+          : createElement(
+              "ol",
+              { className: "timeline-list timeline-list--active", "aria-label": "进行中的活动" },
+              active.map((entry) => renderEntry(entry, "active")),
             ),
+        settled.length === 0
+          ? null
+          : createElement(
+              "ol",
+              { className: "timeline-list", "aria-label": "已完成的活动" },
+              settled.map((entry) => renderEntry(entry, "settled")),
+            ),
+        props.timeline.verification.length === 0
+          ? null
+          : createElement(
+              "section",
+              { className: "timeline-verification", "aria-label": "验证" },
+              createElement("h3", null, "验证"),
+              props.timeline.verification.map((group) =>
+                createElement(
+                  "section",
+                  { className: "timeline-verification-group", key: group.id },
+                  createElement(
+                    "p",
+                    { className: "timeline-verification-status" },
+                    group.label,
+                    " · ",
+                    statusLabel(group.status),
+                  ),
+                  renderPublicId("计划 ID", group.planId),
+                  group.checks.length === 0
+                    ? null
+                    : createElement(
+                        "ol",
+                        { className: "timeline-check-list" },
+                        group.checks.map(renderVerificationCheck),
+                      ),
+                ),
+              ),
+            ),
+      ),
+      newActivityCount === 0
+        ? null
+        : createElement(
+            "button",
+            {
+              type: "button",
+              className: "timeline-new-activity",
+              onClick: jumpToLatest,
+              "aria-label": "跳转到最新活动",
+            },
+            `${newActivityCount} 条新活动 · 跳转到最新`,
           ),
-        ),
+    ),
   );
 }
 

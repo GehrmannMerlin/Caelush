@@ -90,6 +90,7 @@ describe("WebSessionManager live run reconnection", () => {
     const lateRecovery = deferred<{ disposition: "SCHEDULED"; run: ClientAgentRun }>();
     let streamCount = 0;
     client.watchRunEvents.mockImplementation(async function* (_runId, options) {
+      yield* [] as AgentEvent[];
       streamCount += 1;
       options?.onOpen?.();
       if (streamCount === 3) {
@@ -121,6 +122,7 @@ describe("WebSessionManager live run reconnection", () => {
     const client = makeClient(run);
     let connectionCount = 0;
     client.watchRunEvents.mockImplementation(async function* (_runId, options) {
+      yield* [] as AgentEvent[];
       if (connectionCount++ === 0) options?.onOpen?.();
       throw new Error("lost");
     });

@@ -25,12 +25,13 @@ const workspace: WorkspaceRef = { id: createWorkspaceId(), path: "/workspace" };
 describe("WebSessionManager approval controls", () => {
   it("projects requested approvals from the event stream and removes resolved approvals", async () => {
     const session = makeSession();
-    const run = makeRun({ sessionId: session.id, status: "RUNNING" });
+    const run = makeRun({ sessionId: session.id, status: "PENDING" });
+    const startedRun = makeRun({ ...run, status: "RUNNING", startedAt: 2 });
     const approval = makeApproval(run.id, 20);
     const client = makeClient({ session, run });
     client.listRuns.mockResolvedValue({ items: [] });
     client.createRun.mockResolvedValue(run);
-    client.startRun.mockResolvedValue({ disposition: "SCHEDULED", run });
+    client.startRun.mockResolvedValue({ disposition: "SCHEDULED", run: startedRun });
     let continueStream!: () => void;
     client.watchRunEvents.mockImplementation(async function* () {
       yield approvalRequested(run, approval);
@@ -239,7 +240,8 @@ describe("WebSessionManager approval controls", () => {
 
   it("does not republish a delayed approval refresh after normal terminal settlement", async () => {
     const session = makeSession();
-    const run = makeRun({ sessionId: session.id, status: "RUNNING" });
+    const run = makeRun({ sessionId: session.id, status: "PENDING" });
+    const startedRun = makeRun({ ...run, status: "RUNNING", startedAt: 2 });
     const terminal = makeCompletedRun(run);
     const approval = makeApproval(run.id, 10);
     const client = makeClient({ session, run });
@@ -247,7 +249,7 @@ describe("WebSessionManager approval controls", () => {
     let releaseRefresh!: () => void;
     client.listRuns.mockResolvedValueOnce({ items: [] }).mockResolvedValue({ items: [terminal] });
     client.createRun.mockResolvedValue(run);
-    client.startRun.mockResolvedValue({ disposition: "SCHEDULED", run });
+    client.startRun.mockResolvedValue({ disposition: "SCHEDULED", run: startedRun });
     client.getRun.mockResolvedValue(terminal);
     client.watchRunEvents.mockImplementation(async function* () {
       await new Promise<void>((resolve) => {

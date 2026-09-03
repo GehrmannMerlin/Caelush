@@ -343,10 +343,10 @@ async function scanNodeModules(directory, registerPackage) {
   }
 }
 
-async function resolvePackageSource(packagePath) {
+export async function resolvePackageSource(packagePath) {
   try {
-    const details = await lstat(packagePath);
-    return details.isSymbolicLink() ? await realpathSafe(packagePath) : packagePath;
+    await lstat(packagePath);
+    return await realpathSafe(packagePath);
   } catch {
     return undefined;
   }

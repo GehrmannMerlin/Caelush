@@ -1,6 +1,7 @@
 import { createElement, type ReactElement } from "react";
 import type { RunId, RunStatus } from "@caelush/protocol";
 import type { WebControlMode } from "../application/session-manager.js";
+import { runStatusClass, runStatusGlyph, runStatusLabel } from "./run-status.js";
 
 export interface RecoveryRunView {
   readonly id: RunId;
@@ -29,20 +30,24 @@ export function RecoveryPanel(props: RecoveryPanelProps): ReactElement {
         createElement(
           "li",
           { key: run.id, className: "recovery-run" },
-          createElement("strong", null, boundedGoal(run.goal)),
-          createElement("span", null, run.status),
           createElement(
-            "time",
-            { dateTime: new Date(run.createdAt).toISOString() },
-            new Date(run.createdAt).toLocaleString("zh-CN"),
+            "span",
+            {
+              className: `session-status-icon ${runStatusClass(run.status)}`,
+              role: "img",
+              "aria-label": runStatusLabel(run.status),
+              title: runStatusLabel(run.status),
+            },
+            runStatusGlyph(run.status),
           ),
-          createElement("code", null, run.id),
+          createElement("strong", null, boundedGoal(run.goal)),
           createElement(
             "button",
             {
               type: "button",
               onClick: () =>
                 void (pending ? props.onConfirmPending(run.id) : props.onSelectRun(run.id)),
+              "aria-label": `${pending ? "确认启动" : "恢复此任务"}：${boundedGoal(run.goal)}`,
             },
             pending ? "确认启动" : "恢复此任务",
           ),

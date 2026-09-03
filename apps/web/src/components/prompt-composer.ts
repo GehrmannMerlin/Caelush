@@ -18,8 +18,9 @@ export interface PromptComposerProps {
 export function shouldSubmitPrompt(event: {
   readonly key: string;
   readonly shiftKey: boolean;
+  readonly isComposing?: boolean;
 }): boolean {
-  return event.key === "Enter" && !event.shiftKey;
+  return event.key === "Enter" && !event.shiftKey && event.isComposing !== true;
 }
 
 export function PromptComposer(props: PromptComposerProps): ReactElement {

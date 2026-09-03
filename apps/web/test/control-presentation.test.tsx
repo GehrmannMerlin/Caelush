@@ -117,18 +117,23 @@ describe("Web control presentation", () => {
       />,
     );
     expect(cancellingHtml).toContain("正在取消");
-    expect((cancellingHtml.match(/取消/g) ?? []).length).toBe(1);
+    expect((cancellingHtml.match(/class="cancel-button/g) ?? []).length).toBe(1);
+    expect(cancellingHtml).toContain("disabled");
   });
 
   it("renders technical reconnect states and one manual retry", () => {
-    expect(renderToStaticMarkup(<ReconnectBanner state="CONNECTED" />)).toContain("CONNECTED");
+    expect(renderToStaticMarkup(<ReconnectBanner state="CONNECTED" />)).toBe("");
     expect(renderToStaticMarkup(<ReconnectBanner state="RECONNECTING" attempt={3} />)).toContain(
       "第 3 / 6 次",
+    );
+    expect(renderToStaticMarkup(<ReconnectBanner state="RECONNECTING" />)).toContain(
+      "正在重新连接本地 Agent 服务",
     );
     const disconnected = renderToStaticMarkup(
       <ReconnectBanner state="DISCONNECTED" onReconnect={vi.fn()} />,
     );
-    expect(disconnected).toContain("DISCONNECTED");
+    expect(disconnected).toContain("连接已断开");
+    expect(disconnected).toContain("任务可能仍在后台运行");
     expect((disconnected.match(/重新连接/g) ?? []).length).toBe(1);
   });
 
@@ -148,8 +153,9 @@ describe("Web control presentation", () => {
     expect(html).toContain("选择要恢复的任务");
     expect(html).not.toContain(oversizedGoal);
     expect(html).toContain("gggg");
-    expect(html).toContain("RUNNING");
-    expect(html).toContain("run-a");
+    expect(html).toContain('aria-label="运行中"');
+    expect(html).not.toContain("RUNNING");
+    expect(html).not.toContain("run-a");
 
     const pending = renderToStaticMarkup(
       <RecoveryPanel

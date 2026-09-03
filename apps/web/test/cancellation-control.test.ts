@@ -232,7 +232,7 @@ describe("WebSessionManager cancellation controls", () => {
     await expect(manager.cancelRun()).resolves.toBe(false);
 
     expect(client.cancelRun).not.toHaveBeenCalled();
-    expect(manager.getSnapshot().controlMode).toBe("NONE");
+    expect(manager.getSnapshot().controlMode).toBe("PENDING_RUN_CONFIRMATION");
     manager.dispose();
   });
 

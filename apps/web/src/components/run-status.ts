@@ -19,3 +19,19 @@ export function runStatusLabel(status: RunStatus): string {
 export function runStatusClass(status: RunStatus): string {
   return `run-status--${status.toLowerCase()}`;
 }
+
+export function runStatusGlyph(status: RunStatus): string {
+  const glyphs: Record<RunStatus, string> = {
+    PENDING: "○",
+    RUNNING: "●",
+    WAITING_APPROVAL: "!",
+    VERIFYING: "◌",
+    COMPLETED: "✓",
+    FAILED: "×",
+    CANCELLED: "⊘",
+    TIMEOUT: "⌁",
+    MAX_STEPS_REACHED: "≡",
+    BUDGET_EXCEEDED: "!",
+  };
+  return glyphs[status];
+}
