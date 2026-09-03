@@ -477,8 +477,12 @@ export class WebSessionManager {
     this.publishApprovals(run.id, approvals.items);
     const hasPendingApproval = approvals.items.some((item) => item.status === "PENDING");
     if (run.status === "WAITING_APPROVAL" && hasPendingApproval) {
-      if (this.activeLifecycle === undefined || this.activeLifecycle.run.id !== run.id) {
-        this.attachLifecycle(run, false);
+      const active = this.activeLifecycle;
+      if (active !== undefined && active.run.id === run.id) {
+        active.recoveryRevoked = true;
+      } else {
+        const attached = this.attachLifecycle(run, false);
+        attached.recoveryRevoked = true;
       }
       return true;
     }

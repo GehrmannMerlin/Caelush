@@ -114,6 +114,60 @@ describe("WebSessionManager durable recovery", () => {
     waitingManager.dispose();
   });
 
+  it("revokes delayed recovery and its reconnect generations when a pending approval appears", async () => {
+    const waiting = makeRun({ status: "WAITING_APPROVAL" });
+    const timer = new FakeTimer();
+    const waitingClient = makeClient(waiting);
+    const opens: (() => void)[] = [];
+    waitingClient.listPendingApprovals.mockResolvedValueOnce({ items: [] }).mockResolvedValueOnce({
+      items: [
+        {
+          id: "apr_00000000-0000-7000-8000-000000000001",
+          runId: waiting.id,
+          toolInvocationId: "inv_00000000-0000-7000-8000-000000000001",
+          riskLevel: "HIGH",
+          title: "Approve",
+          reason: "Needed",
+          action: { toolName: "tool", summary: "do" },
+          status: "PENDING",
+          scope: "ONCE",
+          createdAt: 1,
+        } as never,
+      ],
+    });
+    waitingClient.watchRunEvents.mockImplementation(async function* (_runId, options) {
+      opens.push(() => options?.onOpen?.());
+      if (opens.length === 1) throw new Error("offline");
+      await new Promise<void>(() => undefined);
+    });
+    const waitingManager = new WebSessionManager({
+      client: waitingClient,
+      workspace,
+      info: makeInfo(),
+      timer,
+    });
+
+    await waitingManager.loadSessions();
+    await waitingManager.selectSession(waiting.sessionId);
+    await waitFor(() => opens.length === 1);
+    await waitFor(() => timer.delays.length === 1);
+
+    await expect(waitingManager.prepareRecoveryRun(waiting)).resolves.toBe(true);
+    expect(waitingManager.getSnapshot().controlMode).toBe("APPROVAL");
+
+    opens[0]?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(waitingClient.recoverRun).not.toHaveBeenCalled();
+
+    timer.fireNext();
+    await waitFor(() => opens.length === 2);
+    opens[1]?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(waitingClient.recoverRun).not.toHaveBeenCalled();
+    expect(waitingManager.getSnapshot().controlMode).toBe("APPROVAL");
+    waitingManager.dispose();
+  });
+
   it("revokes an earlier empty-approval recovery admission when a later query fails", async () => {
     const waiting = makeRun({ status: "WAITING_APPROVAL" });
     const waitingClient = makeClient(waiting);

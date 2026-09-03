@@ -1,4 +1,4 @@
-import { SessionIdSchema, type SessionId } from "@caelush/protocol";
+import { SessionIdSchema, type SessionId, type WorkspaceId } from "@caelush/protocol";
 
 export interface SessionSelectionStorage {
   getItem(key: string): string | null;
@@ -13,13 +13,13 @@ export class SessionSelectionStore {
 
   constructor(private readonly storage: StorageLike = browserStorage()) {}
 
-  setCandidates(workspaceId: string, sessionIds: readonly SessionId[]): void {
+  setCandidates(workspaceId: WorkspaceId, sessionIds: readonly SessionId[]): void {
     this.candidates.set(workspaceId, new Set(sessionIds));
     const selected = this.read(workspaceId);
     if (selected === undefined) this.clear(workspaceId);
   }
 
-  read(workspaceId: string): SessionId | undefined {
+  read(workspaceId: WorkspaceId): SessionId | undefined {
     const raw = get(this.storage, key(workspaceId));
     if (raw === null) return undefined;
     let value: unknown;
@@ -37,7 +37,7 @@ export class SessionSelectionStore {
     return parsed.data;
   }
 
-  write(workspaceId: string, sessionId: SessionId): void {
+  write(workspaceId: WorkspaceId, sessionId: SessionId): void {
     const parsed = SessionIdSchema.safeParse(sessionId);
     if (!parsed.success || !this.candidates.get(workspaceId)?.has(parsed.data)) {
       this.clear(workspaceId);
@@ -46,12 +46,12 @@ export class SessionSelectionStore {
     set(this.storage, key(workspaceId), JSON.stringify(parsed.data));
   }
 
-  clear(workspaceId: string): void {
+  clear(workspaceId: WorkspaceId): void {
     remove(this.storage, key(workspaceId));
   }
 }
 
-function key(workspaceId: string): string {
+function key(workspaceId: WorkspaceId): string {
   return `caelush:selected-session:${workspaceId}`;
 }
 

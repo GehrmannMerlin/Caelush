@@ -195,3 +195,46 @@ All matched files use Prettier code style!
 
 No Protocol, Core, Security, Runtime, Verification, Daemon, or Storage files
 were changed, and Task 6/7 were not started.
+
+## Final Important fix: revoke recovery on confirmed pending approval
+
+The final review identified one remaining fail-open timing path: an existing
+`recoverOnOpen` lifecycle could be waiting for its stream `onOpen` while a later
+successful approval query discovered a real `PENDING` approval. The old branch
+returned without revoking that lifecycle, allowing the delayed `onOpen` to call
+`recoverRun`.
+
+The Web-only fix marks the existing same-Run lifecycle `recoveryRevoked` as soon
+as a real pending approval is confirmed. If no lifecycle exists, it attaches a
+non-recovery lifecycle and marks that lifecycle revoked. The revocation remains
+in force across the old generation and subsequent reconnect generations, while
+the durable approval projection remains visible as `APPROVAL`. Existing Task 4
+abort-before-replace, generation guards, replay cursors, and reconnect behavior
+are unchanged. `SessionSelectionStore` scope parameters now use Protocol's
+`WorkspaceId` type.
+
+Added regression coverage in `apps/web/test/recovery.test.ts` for:
+
+- an existing recovery-enabled generation that has not opened yet;
+- a later successful query returning a real pending approval;
+- delayed opening of the old generation and opening of a reconnect generation;
+- preserving the approval waiting state and making zero recovery calls.
+
+### Final fix TDD and verification
+
+RED:
+
+```text
+pnpm exec vitest run apps/web/test/recovery.test.ts -t "revokes delayed recovery and its reconnect generations"
+Test Files  1 failed (1)
+Tests       1 failed | 8 skipped (9)
+Failure: recoverRun was called once by the stale delayed onOpen path.
+```
+
+GREEN:
+
+```text
+pnpm exec vitest run apps/web/test/recovery.test.ts -t "revokes delayed recovery and its reconnect generations"
+Test Files  1 passed (1)
+Tests       1 passed | 8 skipped (9)
+```
