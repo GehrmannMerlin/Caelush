@@ -86,6 +86,79 @@ describe("WebSessionManager durable recovery", () => {
     waitingManager.dispose();
   });
 
+  it("fails closed when a WAITING_APPROVAL approval query fails", async () => {
+    const waiting = makeRun({ status: "WAITING_APPROVAL" });
+    const waitingClient = makeClient(waiting);
+    waitingClient.listPendingApprovals.mockRejectedValueOnce(new Error("offline"));
+    let open!: () => void;
+    waitingClient.watchRunEvents.mockImplementation(async function* (_runId, options) {
+      open = () => options?.onOpen?.();
+      await new Promise<void>(() => undefined);
+    });
+    const waitingManager = new WebSessionManager({
+      client: waitingClient,
+      workspace,
+      info: makeInfo(),
+    });
+
+    await waitingManager.loadSessions();
+    await waitingManager.selectSession(waiting.sessionId);
+    expect(waitingManager.getSnapshot()).toMatchObject({
+      error: { code: "RUN_REFRESH_FAILED" },
+    });
+    await waitFor(() => typeof open === "function");
+    open();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(waitingClient.recoverRun).not.toHaveBeenCalled();
+    waitingManager.dispose();
+  });
+
+  it("persists selection by WorkspaceId across path changes and isolates same-path workspaces", async () => {
+    const sessionId = createSessionId();
+    const workspaceA: WorkspaceRef = { id: createWorkspaceId(), path: "D:/workspace" };
+    const workspaceB: WorkspaceRef = { id: createWorkspaceId(), path: "D:/workspace" };
+    const changedPath: WorkspaceRef = { id: workspaceA.id, path: "D:/workspace-alias" };
+    const store = new SessionSelectionStore(new Map());
+    const sessionA = makeSession(sessionId, workspaceA);
+    const sessionChangedPath = makeSession(sessionId, changedPath);
+
+    const clientA = makeClient(makeRun({ sessionId, workspace: workspaceA }), sessionA);
+    const managerA = new WebSessionManager({
+      client: clientA,
+      workspace: workspaceA,
+      info: makeInfo(),
+      selectionStore: store,
+    });
+    await managerA.loadSessions();
+    await managerA.selectSession(sessionId);
+    managerA.dispose();
+
+    const clientB = makeClient(makeRun({ sessionId, workspace: workspaceB }), sessionA);
+    const managerB = new WebSessionManager({
+      client: clientB,
+      workspace: workspaceB,
+      info: makeInfo(),
+      selectionStore: store,
+    });
+    await managerB.loadSessions();
+    expect(managerB.getSnapshot().selectedSessionId).toBeUndefined();
+    managerB.dispose();
+
+    const clientChangedPath = makeClient(
+      makeRun({ sessionId, workspace: changedPath }),
+      sessionChangedPath,
+    );
+    const managerChangedPath = new WebSessionManager({
+      client: clientChangedPath,
+      workspace: changedPath,
+      info: makeInfo(),
+      selectionStore: store,
+    });
+    await managerChangedPath.loadSessions();
+    expect(managerChangedPath.getSnapshot().selectedSessionId).toBe(sessionId);
+    managerChangedPath.dispose();
+  });
+
   it("reloads the selected Session and rebuilds Timeline from the durable stream", async () => {
     const run = makeRun({ status: "RUNNING" });
     const store = new SessionSelectionStore(new Map());
@@ -129,9 +202,10 @@ const workspace: WorkspaceRef = { id: createWorkspaceId(), path: "D:/workspace" 
 
 function makeClient(
   run: ClientAgentRun,
+  session = makeSession(run.sessionId),
 ): WebSessionClient & Record<string, ReturnType<typeof vi.fn>> {
   return {
-    listSessions: vi.fn(async () => ({ items: [makeSession(run.sessionId)] })),
+    listSessions: vi.fn(async () => ({ items: [session] })),
     listRuns: vi.fn(async () => ({ items: [run] })),
     getSession: vi.fn(async (session) => session),
     createSession: vi.fn(),
@@ -146,13 +220,16 @@ function makeClient(
   } as unknown as WebSessionClient & Record<string, ReturnType<typeof vi.fn>>;
 }
 
-function makeSession(id: ClientAgentRun["sessionId"]): ClientAgentSession {
+function makeSession(
+  id: ClientAgentRun["sessionId"],
+  defaultWorkspace: WorkspaceRef = workspace,
+): ClientAgentSession {
   return ClientAgentSessionSchema.parse({
     id,
     createdAt: 1,
     updatedAt: 1,
     metadata: {},
-    defaultWorkspace: workspace,
+    defaultWorkspace,
   });
 }
 

@@ -184,11 +184,11 @@ export class WebSessionManager {
       );
       const selectionStore = this.options.selectionStore;
       selectionStore?.setCandidates(
-        this.options.workspace.path,
+        this.options.workspace.id,
         candidates.map((candidate) => candidate.session.id),
       );
       const selectedId =
-        selectionStore?.read(this.options.workspace.path) ?? this.snapshot.selectedSessionId;
+        selectionStore?.read(this.options.workspace.id) ?? this.snapshot.selectedSessionId;
       this.publish({ status: "READY", candidates, error: undefined });
       if (selectedId !== undefined && candidates.some((item) => item.session.id === selectedId)) {
         await this.selectSession(selectedId);
@@ -254,7 +254,7 @@ export class WebSessionManager {
         });
         return false;
       }
-      this.options.selectionStore?.write(this.options.workspace.path, sessionId);
+      this.options.selectionStore?.write(this.options.workspace.id, sessionId);
       return this.applySelectedSession(candidate.session, runs);
     } catch {
       this.publish({
@@ -454,9 +454,19 @@ export class WebSessionManager {
       this.publish({ controlMode: "PENDING_RUN_CONFIRMATION", composerEnabled: false });
       return true;
     }
-    const approvals = await (
-      this.options.client.listPendingApprovals?.(run.id) ?? Promise.resolve({ items: [] })
-    ).catch(() => ({ items: [] }));
+    let approvals: Awaited<ReturnType<WebSessionClient["listPendingApprovals"]>>;
+    try {
+      if (this.options.client.listPendingApprovals === undefined) {
+        throw new Error("approval query unavailable");
+      }
+      approvals = await this.options.client.listPendingApprovals(run.id);
+    } catch {
+      this.publish({ error: sessionError("RUN_REFRESH_FAILED") });
+      if (this.activeLifecycle === undefined || this.activeLifecycle.run.id !== run.id) {
+        this.attachLifecycle(run, false);
+      }
+      return true;
+    }
     this.publishApprovals(run.id, approvals.items);
     const hasPendingApproval = approvals.items.some((item) => item.status === "PENDING");
     if (run.status === "WAITING_APPROVAL" && hasPendingApproval) {

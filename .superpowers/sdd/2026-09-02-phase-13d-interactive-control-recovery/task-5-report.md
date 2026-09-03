@@ -63,3 +63,30 @@ The initial Red run was observed before implementation: the new persistence modu
 ## Deferred / blockers
 
 No blockers found within Task 5. Approval UI, cancellation UI, reconnect/recovery presentation, real daemon restart integration, final release verification, and all Phase 13E work remain outside this task.
+
+## Task 5 follow-up fix from independent review
+
+Fix baseline: `54a9139`.
+
+- `WAITING_APPROVAL` recovery now distinguishes a successful empty durable approval list from an approval-query failure or unavailable query. Query failure publishes the existing `RUN_REFRESH_FAILED` error boundary, attaches the lifecycle without recovery admission, and therefore never calls `recoverRun` from stream `onOpen`.
+- Web selection persistence now scopes `setCandidates`, `read`, and `write` with `WorkspaceRef.id` (`WorkspaceId`). `WorkspaceRef.path` remains limited to workspace/session matching and discovery. This keeps selections isolated for different workspace identities sharing a path and stable when one identity's path representation changes.
+- Added regression coverage for approval-query failure and both workspace-identity cases in `apps/web/test/recovery.test.ts` and `apps/web/test/session-persistence.test.ts`.
+
+The fix remains limited to Task 5 Web application behavior and tests/reporting. No Protocol, Core, Security, Runtime, Verification, Daemon, or Storage files were changed, and Task 6/7 were not started.
+
+### Follow-up verification
+
+```text
+pnpm exec vitest run apps/web/test/recovery.test.ts apps/web/test/session-persistence.test.ts apps/web/test/reconnect.test.ts apps/web/test/session-manager.test.ts
+Test Files  4 passed (4)
+Tests       27 passed (27)
+
+pnpm typecheck
+exit 0
+
+git diff --check
+exit 0
+
+pnpm exec prettier --check apps/web/src/application/session-manager.ts apps/web/test/recovery.test.ts apps/web/test/session-persistence.test.ts .superpowers/sdd/2026-09-02-phase-13d-interactive-control-recovery/task-5-report.md
+All matched files use Prettier code style!
+```
