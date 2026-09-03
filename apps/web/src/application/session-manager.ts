@@ -136,6 +136,7 @@ interface ActiveLifecycle {
   controller: AbortController;
   streamGeneration: number;
   recoveryAdmitted: boolean;
+  recoveryRevoked: boolean;
   readonly scheduler: ReconnectScheduler;
   failure?: "RUN_STREAM_FAILED" | "RUN_REFRESH_FAILED";
 }
@@ -462,7 +463,10 @@ export class WebSessionManager {
       approvals = await this.options.client.listPendingApprovals(run.id);
     } catch {
       this.publish({ error: sessionError("RUN_REFRESH_FAILED") });
-      if (this.activeLifecycle === undefined || this.activeLifecycle.run.id !== run.id) {
+      const active = this.activeLifecycle;
+      if (active !== undefined && active.run.id === run.id) {
+        active.recoveryRevoked = true;
+      } else {
         this.attachLifecycle(run, false);
       }
       return true;
@@ -475,7 +479,10 @@ export class WebSessionManager {
       }
       return true;
     }
-    if (this.activeLifecycle === undefined || this.activeLifecycle.run.id !== run.id) {
+    const active = this.activeLifecycle;
+    if (active !== undefined && active.run.id === run.id) {
+      active.recoveryRevoked = false;
+    } else {
       this.attachLifecycle(run, true);
     }
     return true;
@@ -582,6 +589,7 @@ export class WebSessionManager {
       controller: new AbortController(),
       streamGeneration: 0,
       recoveryAdmitted: false,
+      recoveryRevoked: false,
       scheduler: new ReconnectScheduler({
         timer: this.options.timer ?? systemWebTimer,
         onAttempt: (attempt) => this.retryActiveStream(active, attempt),
@@ -656,7 +664,7 @@ export class WebSessionManager {
     if (!this.isCurrentStream(active, generation)) return;
     active.scheduler.succeeded();
     this.publish({ transportState: "CONNECTED", transportAttempt: undefined, error: undefined });
-    if (!recoverOnOpen || active.recoveryAdmitted) return;
+    if (!recoverOnOpen || active.recoveryAdmitted || active.recoveryRevoked) return;
     active.recoveryAdmitted = true;
     void this.admitRecovery(active, generation);
   }

@@ -90,3 +90,43 @@ exit 0
 pnpm exec prettier --check apps/web/src/application/session-manager.ts apps/web/test/recovery.test.ts apps/web/test/session-persistence.test.ts .superpowers/sdd/2026-09-02-phase-13d-interactive-control-recovery/task-5-report.md
 All matched files use Prettier code style!
 ```
+
+### Round 2 Important fix verification
+
+The review reproduction is now covered by `apps/web/test/recovery.test.ts`: after a
+`WAITING_APPROVAL` Run first returns a successful empty approval list and attaches a
+`recoverOnOpen` stream, a second `prepareRecoveryRun` approval query failure revokes
+that lifecycle's recovery admission before the delayed `onOpen`. The delayed open
+therefore remains at the safe waiting boundary and does not call `recoverRun`.
+
+The minimal implementation keeps the existing stream/lifecycle generation and
+reconnect/replay behavior. It adds only an internal `recoveryRevoked` lifecycle flag;
+approval-query failure sets it for the same active Run, and `onOpen` checks it before
+admission. A later successful query can explicitly restore admission. The existing
+`RUN_REFRESH_FAILED` error boundary remains published on query failure.
+
+TDD evidence:
+
+- RED: the new test failed before the fix because `recoverRun` was called once by
+  the stale `recoverOnOpen` closure.
+- GREEN: the isolated regression passed after the fix.
+
+Fresh final verification from HEAD plus this fix:
+
+```text
+pnpm exec vitest run apps/web/test/recovery.test.ts apps/web/test/session-persistence.test.ts apps/web/test/reconnect.test.ts apps/web/test/session-manager.test.ts
+Test Files  4 passed (4)
+Tests       28 passed (28)
+
+pnpm typecheck
+exit 0
+
+git diff --check
+exit 0
+
+pnpm exec prettier --check apps/web/src/application/session-manager.ts apps/web/test/recovery.test.ts .superpowers/sdd/2026-09-02-phase-13d-interactive-control-recovery/task-5-report.md
+All matched files use Prettier code style!
+```
+
+No Protocol, Core, Security, Runtime, Verification, Daemon, or Storage files were
+changed, and Task 6/7 were not started.

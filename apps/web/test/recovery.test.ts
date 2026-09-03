@@ -113,6 +113,33 @@ describe("WebSessionManager durable recovery", () => {
     waitingManager.dispose();
   });
 
+  it("revokes an earlier empty-approval recovery admission when a later query fails", async () => {
+    const waiting = makeRun({ status: "WAITING_APPROVAL" });
+    const waitingClient = makeClient(waiting);
+    let open!: () => void;
+    waitingClient.watchRunEvents.mockImplementation(async function* (_runId, options) {
+      open = () => options?.onOpen?.();
+      await new Promise<void>(() => undefined);
+    });
+    const waitingManager = new WebSessionManager({
+      client: waitingClient,
+      workspace,
+      info: makeInfo(),
+    });
+
+    await waitingManager.loadSessions();
+    await waitingManager.selectSession(waiting.sessionId);
+    await waitFor(() => typeof open === "function");
+
+    waitingClient.listPendingApprovals.mockRejectedValueOnce(new Error("offline"));
+    await expect(waitingManager.prepareRecoveryRun(waiting)).resolves.toBe(true);
+
+    open();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(waitingClient.recoverRun).not.toHaveBeenCalled();
+    waitingManager.dispose();
+  });
+
   it("persists selection by WorkspaceId across path changes and isolates same-path workspaces", async () => {
     const sessionId = createSessionId();
     const workspaceA: WorkspaceRef = { id: createWorkspaceId(), path: "D:/workspace" };
