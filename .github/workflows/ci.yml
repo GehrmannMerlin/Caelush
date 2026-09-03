@@ -23,6 +23,12 @@ jobs:
       - name: Install dependencies
         run: corepack pnpm@11.21.0 install --frozen-lockfile
 
+      - name: Install Chromium for browser E2E
+        run: corepack pnpm@11.21.0 exec playwright install --with-deps chromium
+
+      - name: Run production browser E2E
+        run: corepack pnpm@11.21.0 test:web:e2e
+
       - name: Run quality gate
         run: corepack pnpm@11.21.0 run check
 
