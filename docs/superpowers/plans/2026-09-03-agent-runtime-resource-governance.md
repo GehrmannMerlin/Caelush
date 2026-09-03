@@ -510,4 +510,3 @@
   ```
 
   Require final local master, remote master, and task remote SHA equality; `master` only; the main worktree only; and a clean status. Never use `git branch -D`.
-
