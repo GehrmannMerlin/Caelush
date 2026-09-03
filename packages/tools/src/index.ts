@@ -108,6 +108,11 @@ export type { ValidatedToolExecutionResult } from "./result-validation.js";
 export { ToolDispatcher } from "./dispatcher.js";
 export type { ToolDispatcherOptions } from "./dispatcher.js";
 export { ToolBatchCoordinator } from "./batch-coordinator.js";
+export {
+  canonicalJsonString,
+  canonicalizeJsonValue,
+  jsonUtf8ByteLength,
+} from "./json-canonical.js";
 export type {
   ToolBatchCoordinatorPort,
   ToolBatchBudgetExceededOutcome,

@@ -104,6 +104,20 @@ export type {
   AgentProviderTurnState,
 } from "./agent-loop-ports.js";
 export { AgentLoop } from "./agent-loop.js";
+export { fingerprintToolRequest, fingerprintToolResult } from "./resource-fingerprint.js";
+export { ProgressLedger } from "./progress-ledger.js";
+export { ResourceLoopDetector } from "./resource-loop-detector.js";
+export type {
+  ProgressLedgerRecordInput,
+  ProgressLedgerSnapshot,
+  ProgressObservation,
+  ProgressSignal,
+} from "./progress-ledger.js";
+export type {
+  ResourceLoopDetectorPolicy,
+  ResourceLoopEvaluationInput,
+  ResourceLoopLevel,
+} from "./resource-loop-detector.js";
 export type { RunControllerResult, RunControllerToolResults } from "./run-controller-input.js";
 export {
   RunController,
