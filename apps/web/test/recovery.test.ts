@@ -14,6 +14,7 @@ import {
   createSessionId,
   createWorkspaceId,
 } from "@caelush/protocol";
+import type { Timer, TimerHandle } from "@caelush/client";
 import type { WebSessionClient } from "../src/application/session-manager.js";
 import { WebSessionManager } from "../src/application/session-manager.js";
 import { SessionSelectionStore } from "../src/application/session-persistence.js";
@@ -137,6 +138,76 @@ describe("WebSessionManager durable recovery", () => {
     open();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(waitingClient.recoverRun).not.toHaveBeenCalled();
+    waitingManager.dispose();
+  });
+
+  it("rebinds a non-recovery stream when a later empty approval query succeeds", async () => {
+    const waiting = makeRun({ status: "WAITING_APPROVAL" });
+    const waitingClient = makeClient(waiting);
+    const opens: (() => void)[] = [];
+    waitingClient.listPendingApprovals
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValue({ items: [] });
+    waitingClient.watchRunEvents.mockImplementation(async function* (_runId, options) {
+      opens.push(() => options?.onOpen?.());
+      await new Promise<void>(() => undefined);
+    });
+    const waitingManager = new WebSessionManager({
+      client: waitingClient,
+      workspace,
+      info: makeInfo(),
+    });
+
+    await waitingManager.loadSessions();
+    await waitingManager.selectSession(waiting.sessionId);
+    await waitFor(() => opens.length === 1);
+    opens[0]?.();
+    await waitingManager.prepareRecoveryRun(waiting);
+
+    expect(waitingClient.recoverRun).not.toHaveBeenCalled();
+    expect(waitingClient.watchRunEvents).toHaveBeenCalledTimes(2);
+    await waitFor(() => opens.length === 2);
+    opens[1]?.();
+    await waitFor(() => waitingClient.recoverRun.mock.calls.length === 1);
+    expect(waitingClient.recoverRun).toHaveBeenCalledWith(waiting.id);
+    waitingManager.dispose();
+  });
+
+  it("rebinds after a revoked reconnect generation opens and a later query succeeds", async () => {
+    const waiting = makeRun({ status: "WAITING_APPROVAL" });
+    const timer = new FakeTimer();
+    const waitingClient = makeClient(waiting);
+    const opens: (() => void)[] = [];
+    waitingClient.listPendingApprovals
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValue({ items: [] });
+    waitingClient.watchRunEvents.mockImplementation(async function* (_runId, options) {
+      opens.push(() => options?.onOpen?.());
+      if (opens.length === 1) throw new Error("offline");
+      await new Promise<void>(() => undefined);
+    });
+    const waitingManager = new WebSessionManager({
+      client: waitingClient,
+      workspace,
+      info: makeInfo(),
+      timer,
+    });
+
+    await waitingManager.loadSessions();
+    await waitingManager.selectSession(waiting.sessionId);
+    await waitFor(() => opens.length === 1);
+    await waitFor(() => timer.delays.length === 1);
+    timer.fireNext();
+    await waitFor(() => opens.length === 2);
+    opens[1]?.();
+    await waitingManager.prepareRecoveryRun(waiting);
+
+    expect(waitingClient.recoverRun).toHaveBeenCalledTimes(0);
+    expect(waitingClient.watchRunEvents).toHaveBeenCalledTimes(3);
+    await waitFor(() => opens.length === 3);
+    opens[2]?.();
+    await waitFor(() => waitingClient.recoverRun.mock.calls.length === 1);
+    expect(waitingClient.recoverRun).toHaveBeenCalledWith(waiting.id);
     waitingManager.dispose();
   });
 
@@ -319,4 +390,19 @@ async function waitFor(predicate: () => boolean): Promise<void> {
   for (let i = 0; i < 100 && !predicate(); i += 1)
     await new Promise((resolve) => setTimeout(resolve, 0));
   expect(predicate()).toBe(true);
+}
+
+class FakeTimer implements Timer {
+  readonly delays: number[] = [];
+  private readonly callbacks: (() => void)[] = [];
+
+  schedule(delayMs: number, callback: () => void): TimerHandle {
+    this.delays.push(delayMs);
+    this.callbacks.push(callback);
+    return { cancel: () => undefined };
+  }
+
+  fireNext(): void {
+    this.callbacks.shift()?.();
+  }
 }

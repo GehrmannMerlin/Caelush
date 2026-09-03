@@ -137,6 +137,8 @@ interface ActiveLifecycle {
   streamGeneration: number;
   recoveryAdmitted: boolean;
   recoveryRevoked: boolean;
+  recoveryOnOpen: boolean;
+  streamOpenGeneration?: number;
   readonly scheduler: ReconnectScheduler;
   failure?: "RUN_STREAM_FAILED" | "RUN_REFRESH_FAILED";
 }
@@ -467,7 +469,8 @@ export class WebSessionManager {
       if (active !== undefined && active.run.id === run.id) {
         active.recoveryRevoked = true;
       } else {
-        this.attachLifecycle(run, false);
+        const attached = this.attachLifecycle(run, false);
+        attached.recoveryRevoked = true;
       }
       return true;
     }
@@ -482,6 +485,12 @@ export class WebSessionManager {
     const active = this.activeLifecycle;
     if (active !== undefined && active.run.id === run.id) {
       active.recoveryRevoked = false;
+      if (
+        !active.recoveryOnOpen ||
+        (active.streamOpenGeneration === active.streamGeneration && !active.recoveryAdmitted)
+      ) {
+        this.attachStream(active, true);
+      }
     } else {
       this.attachLifecycle(run, true);
     }
@@ -590,6 +599,7 @@ export class WebSessionManager {
       streamGeneration: 0,
       recoveryAdmitted: false,
       recoveryRevoked: false,
+      recoveryOnOpen: recoverOnOpen,
       scheduler: new ReconnectScheduler({
         timer: this.options.timer ?? systemWebTimer,
         onAttempt: (attempt) => this.retryActiveStream(active, attempt),
@@ -607,6 +617,7 @@ export class WebSessionManager {
     const generation = active.streamGeneration + 1;
     active.streamGeneration = generation;
     active.recoveryAdmitted = false;
+    active.recoveryOnOpen = recoverOnOpen;
     void this.consumeLifecycle(active, generation, recoverOnOpen);
   }
 
@@ -663,6 +674,7 @@ export class WebSessionManager {
   ): void {
     if (!this.isCurrentStream(active, generation)) return;
     active.scheduler.succeeded();
+    active.streamOpenGeneration = generation;
     this.publish({ transportState: "CONNECTED", transportAttempt: undefined, error: undefined });
     if (!recoverOnOpen || active.recoveryAdmitted || active.recoveryRevoked) return;
     active.recoveryAdmitted = true;

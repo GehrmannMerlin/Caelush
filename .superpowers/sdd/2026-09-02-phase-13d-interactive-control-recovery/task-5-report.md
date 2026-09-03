@@ -130,3 +130,68 @@ All matched files use Prettier code style!
 
 No Protocol, Core, Security, Runtime, Verification, Daemon, or Storage files were
 changed, and Task 6/7 were not started.
+
+## Round 3 Important fix
+
+The Round 3 review found that a successful empty approval query only cleared
+`recoveryRevoked`; it could not change the already-captured `recoverOnOpen` value
+of a stream generation, so recovery could remain permanently unadmitted. The
+minimal Web-only fix records the current generation's recovery binding and open
+generation. A successful empty durable approval query now uses the existing
+abort-before-replace path with `attachStream(active, true)` when the current
+generation was non-recovery or has already opened without admission. Otherwise
+it only clears the revocation, allowing the pending generation's own `onOpen` to
+admit exactly once. Initial approval-query failure also marks the newly attached
+lifecycle revoked, so a later reconnect cannot bypass the fail-closed boundary.
+
+Added regression coverage for:
+
+- failure → non-recovery stream open → successful empty durable list → one
+  replacement generation and one recovery admission;
+- failure/revocation → reconnect generation open → successful empty durable list
+  → one replacement generation and one recovery admission.
+
+The existing Task 4 scheduler, abort-before-replace, generation guard, and
+replay cursor paths remain unchanged.
+
+### Round 3 TDD and verification
+
+RED focused run before the implementation:
+
+```text
+pnpm exec vitest run apps/web/test/recovery.test.ts -t "rebinds"
+Test Files  1 failed (1)
+Tests       2 failed | 6 skipped (8)
+```
+
+GREEN focused run after the implementation:
+
+```text
+pnpm exec vitest run apps/web/test/recovery.test.ts -t "rebinds"
+Test Files  1 passed (1)
+Tests       2 passed | 6 skipped (8)
+```
+
+The complete Task 4/5 focused suite then passed with 30 tests:
+
+```text
+pnpm exec vitest run apps/web/test/recovery.test.ts apps/web/test/session-persistence.test.ts apps/web/test/reconnect.test.ts apps/web/test/session-manager.test.ts
+Test Files  4 passed (4)
+Tests       30 passed (30)
+```
+
+Final checks for this round:
+
+```text
+pnpm typecheck
+exit 0
+
+git diff --check
+exit 0
+
+pnpm exec prettier --check apps/web/src/application/session-manager.ts apps/web/test/recovery.test.ts .superpowers/sdd/2026-09-02-phase-13d-interactive-control-recovery/task-5-report.md
+All matched files use Prettier code style!
+```
+
+No Protocol, Core, Security, Runtime, Verification, Daemon, or Storage files
+were changed, and Task 6/7 were not started.
