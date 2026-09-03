@@ -79,6 +79,7 @@ function makeSurface(): DaemonExecutionSurface {
       start: vi.fn(async () => result("START")),
       recover: vi.fn(async () => result("RECOVER")),
       cancel: vi.fn(async () => result("CANCEL", "SETTLED")),
+      continueResourceGuard: vi.fn(async () => result("CONTINUE_RESOURCE")),
       resolveApproval: vi.fn(async () => result("RESOLVE_APPROVAL")),
     },
     approvals: {
@@ -167,6 +168,19 @@ describe("daemon execution routes", () => {
       action: "APPROVE",
       scope: "ONCE",
     });
+  });
+
+  it("routes Continue for a Resource Guard without accepting a request body", async () => {
+    const surface = makeSurface();
+    app = makeApp(surface);
+    const response = await app.inject({
+      method: "POST",
+      url: `/api/v1/runs/${currentRun.id}/continue-resource`,
+      headers: { host: "127.0.0.1" },
+    });
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({ action: "CONTINUE_RESOURCE" });
+    expect(surface.supervisor.continueResourceGuard).toHaveBeenCalledWith(currentRun.id);
   });
 
   it("rejects an invalid approval body before calling the supervisor", async () => {
