@@ -57,6 +57,7 @@ export interface WebSessionClient extends SessionCandidateClient, WebHostClient 
   startRun(runId: RunId): Promise<RunActionResponse>;
   recoverRun(runId: RunId): Promise<RunActionResponse>;
   cancelRun(runId: RunId): Promise<RunActionResponse>;
+  continueResourceGuard(runId: RunId): Promise<RunActionResponse>;
   watchRunEvents(runId: RunId, options?: WatchRunEventsOptions): AsyncIterable<AgentEvent>;
 }
 
@@ -64,7 +65,12 @@ export type WebSessionLoadState = "IDLE" | "LOADING" | "READY" | "ERROR";
 export type WebSubmissionState = "IDLE" | "SUBMITTING" | "RUN_CREATED" | "STARTING" | "ACTIVE";
 export type WebTransportState = "CONNECTED" | "RECONNECTING" | "DISCONNECTED";
 export type WebControlMode =
-  "NONE" | "APPROVAL" | "CANCELLING" | "RECOVERY_PICKER" | "PENDING_RUN_CONFIRMATION";
+  | "NONE"
+  | "APPROVAL"
+  | "RESOURCE_GUARD"
+  | "CANCELLING"
+  | "RECOVERY_PICKER"
+  | "PENDING_RUN_CONFIRMATION";
 
 export interface WebApprovalState {
   readonly requests: readonly ApprovalView[];
@@ -437,6 +443,19 @@ export class WebSessionManager {
     return promise;
   }
 
+  async continueResourceGuard(): Promise<boolean> {
+    const run = this.snapshot.activeRun;
+    if (this.disposed || run === undefined || run.status !== "WAITING_RESOURCE") return false;
+    try {
+      const response = await this.options.client.continueResourceGuard(run.id);
+      this.publishActiveRun(response.run, "ACTIVE");
+      return true;
+    } catch {
+      this.publish({ controlMode: "RESOURCE_GUARD", error: sessionError("RUN_REFRESH_FAILED") });
+      return false;
+    }
+  }
+
   reconnectActiveRun(): void {
     const active = this.activeLifecycle;
     if (this.disposed || active === undefined || this.snapshot.transportState !== "DISCONNECTED") {
@@ -455,6 +474,15 @@ export class WebSessionManager {
     if (this.snapshot.activeRun?.id !== run.id) return false;
     if (run.status === "PENDING") {
       this.publish({ controlMode: "PENDING_RUN_CONFIRMATION", composerEnabled: false });
+      return true;
+    }
+    if (run.status === "WAITING_RESOURCE") {
+      this.publish({
+        controlMode: "RESOURCE_GUARD",
+        composerEnabled: false,
+        error: undefined,
+      });
+      this.attachLifecycle(run, false);
       return true;
     }
     let approvals: Awaited<ReturnType<WebSessionClient["listPendingApprovals"]>>;
@@ -559,8 +587,11 @@ export class WebSessionManager {
       isDraft: false,
       composerEnabled: activeRuns.length === 0,
       submission: "IDLE",
+      controlMode:
+        activeRuns.length === 1 && activeRuns[0]?.status === "WAITING_RESOURCE"
+          ? "RESOURCE_GUARD"
+          : "NONE",
       approvalState: undefined,
-      controlMode: "NONE",
       error: activeRuns.length > 1 ? sessionError("MULTIPLE_ACTIVE_RUNS") : undefined,
     });
     if (activeRuns.length > 1) this.publish({ controlMode: "RECOVERY_PICKER" });
@@ -794,6 +825,12 @@ export class WebSessionManager {
       timeline,
       submission,
       composerEnabled: false,
+      controlMode:
+        run.status === "WAITING_RESOURCE"
+          ? "RESOURCE_GUARD"
+          : run.status === "RUNNING" && this.snapshot.controlMode === "RESOURCE_GUARD"
+            ? "NONE"
+            : this.snapshot.controlMode,
       error:
         lifecycle?.run.id === run.id && lifecycle.failure !== undefined
           ? sessionError(lifecycle.failure)

@@ -117,6 +117,28 @@ export function markAgentRunWaitingApproval(run: AgentRun): AgentRun {
   return AgentRunSchema.parse({ ...withoutFinalResult, status: "WAITING_APPROVAL" });
 }
 
+export function markAgentRunWaitingResource(run: AgentRun): AgentRun {
+  if (run.currentStepId !== undefined) {
+    throw new RunExecutionInvariantError("resource-waiting Run cannot retain an active Step");
+  }
+  assertRunStatusTransition(run.status, "WAITING_RESOURCE");
+  const withoutFinalResult = { ...run };
+  delete withoutFinalResult.finalResult;
+  delete withoutFinalResult.finishedAt;
+  return AgentRunSchema.parse({ ...withoutFinalResult, status: "WAITING_RESOURCE" });
+}
+
+export function resumeAgentRunFromResource(run: AgentRun): AgentRun {
+  if (run.currentStepId !== undefined) {
+    throw new RunExecutionInvariantError("resource-resumed Run cannot retain an active Step");
+  }
+  assertRunStatusTransition(run.status, "RUNNING");
+  const withoutFinalResult = { ...run };
+  delete withoutFinalResult.finalResult;
+  delete withoutFinalResult.finishedAt;
+  return AgentRunSchema.parse({ ...withoutFinalResult, status: "RUNNING" });
+}
+
 export function resumeAgentRunFromApproval(run: AgentRun): AgentRun {
   if (run.currentStepId !== undefined) {
     throw new RunExecutionInvariantError("approval-resumed Run cannot retain an active Step");
@@ -214,6 +236,7 @@ export function assertRunExecutionInvariant(snapshot: RunExecutionSnapshot): voi
     if (
       continuation !== undefined &&
       continuation.type !== "WAITING_TOOL_RESULTS" &&
+      continuation.type !== "WAITING_RESOURCE" &&
       continuation.type !== "WAITING_RETRY" &&
       continuation.type !== "WAITING_VERIFICATION_REPAIR"
     ) {
@@ -243,6 +266,12 @@ export function assertRunExecutionInvariant(snapshot: RunExecutionSnapshot): voi
         "WAITING_APPROVAL Run must retain a pending Tool approval boundary",
       );
     }
+  } else if (run.status === "WAITING_RESOURCE") {
+    if (continuation?.type !== "WAITING_RESOURCE") {
+      throw new RunExecutionInvariantError(
+        "WAITING_RESOURCE Run must retain a resource guard continuation",
+      );
+    }
   } else if (continuation !== undefined) {
     throw new RunExecutionInvariantError(`${run.status} Run cannot retain a continuation`);
   }
@@ -253,6 +282,7 @@ export function isExecutionBoundaryStatus(status: RunStatus): boolean {
     status === "PENDING" ||
     status === "RUNNING" ||
     status === "WAITING_APPROVAL" ||
+    status === "WAITING_RESOURCE" ||
     status === "VERIFYING" ||
     isTerminalRunStatus(status)
   );

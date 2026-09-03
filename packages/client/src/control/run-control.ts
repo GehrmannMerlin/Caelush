@@ -12,5 +12,14 @@ export function isTerminalRunStatus(status: RunStatus): boolean {
 }
 
 export function canCancelRunStatus(status: RunStatus): boolean {
-  return status === "RUNNING" || status === "WAITING_APPROVAL" || status === "VERIFYING";
+  return (
+    status === "RUNNING" ||
+    status === "WAITING_APPROVAL" ||
+    status === "WAITING_RESOURCE" ||
+    status === "VERIFYING"
+  );
+}
+
+export function canContinueResourceGuard(status: RunStatus): boolean {
+  return status === "WAITING_RESOURCE";
 }

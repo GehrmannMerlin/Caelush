@@ -33,6 +33,15 @@ export type RunControllerResult =
       readonly toolName: ToolName;
     }
   | {
+      readonly status: "WAITING_RESOURCE";
+      readonly run: AgentRun;
+      readonly state: AgentState;
+      readonly sourceStepId: StepId;
+      readonly requestedToolCalls: number;
+      readonly reason: "NO_PROGRESS";
+      readonly replanCount: number;
+    }
+  | {
       readonly status: "WAITING_RETRY";
       readonly run: AgentRun;
       readonly state: AgentState;

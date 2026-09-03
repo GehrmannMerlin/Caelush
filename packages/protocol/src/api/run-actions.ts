@@ -2,7 +2,13 @@ import { z } from "zod";
 import { RunIdSchema } from "../primitives/ids.js";
 import { ClientAgentRunSchema } from "./public-entities.js";
 
-export const RunActionSchema = z.enum(["START", "RECOVER", "CANCEL", "RESOLVE_APPROVAL"]);
+export const RunActionSchema = z.enum([
+  "START",
+  "RECOVER",
+  "CANCEL",
+  "RESOLVE_APPROVAL",
+  "CONTINUE_RESOURCE",
+]);
 export type RunAction = z.infer<typeof RunActionSchema>;
 
 export const RunActionDispositionSchema = z.enum([

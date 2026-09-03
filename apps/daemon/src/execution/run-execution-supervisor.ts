@@ -17,6 +17,7 @@ export interface RunExecutionController {
     resolution: ApprovalResolution,
   ): Promise<unknown>;
   cancel(runId: RunId): Promise<unknown>;
+  continueResourceGuard(runId: RunId): Promise<unknown>;
 }
 
 export interface RunApprovalReader {
@@ -37,11 +38,11 @@ export interface RunExecutionSupervisorOptions {
 export type RunExecutionSupervisorDisposition =
   "SCHEDULED" | "ALREADY_ACTIVE" | "NOOP_TERMINAL" | "SETTLED";
 
-type BackgroundOperation = "START" | "RECOVER" | "RESOLVE_APPROVAL";
+type BackgroundOperation = "START" | "RECOVER" | "RESOLVE_APPROVAL" | "CONTINUE_RESOURCE";
 
 export interface RunExecutionSupervisorResult {
   readonly runId: RunId;
-  readonly action: "START" | "RECOVER" | "CANCEL" | "RESOLVE_APPROVAL";
+  readonly action: "START" | "RECOVER" | "CANCEL" | "RESOLVE_APPROVAL" | "CONTINUE_RESOURCE";
   readonly disposition: RunExecutionSupervisorDisposition;
   readonly run: AgentRun;
 }
@@ -134,6 +135,21 @@ export class RunExecutionSupervisor {
     await this.options.controller.cancel(runId);
     const settled = await this.requireRun(runId);
     return { runId, action: "CANCEL", disposition: "SETTLED", run: settled };
+  }
+
+  async continueResourceGuard(runId: RunId): Promise<RunExecutionSupervisorResult> {
+    const run = await this.requireRun(runId);
+    if (isTerminalRunStatus(run.status)) return this.noop(run, "CONTINUE_RESOURCE");
+    if (this.active.has(runId)) return this.activeResult(run, "CONTINUE_RESOURCE");
+    if (run.status !== "WAITING_RESOURCE") {
+      throw new RunExecutionSupervisorConflictError(
+        "Resource continuation requires a Run waiting for a resource decision.",
+      );
+    }
+    this.schedule(runId, "CONTINUE_RESOURCE", () =>
+      this.options.controller.continueResourceGuard(runId),
+    );
+    return this.scheduled(run, "CONTINUE_RESOURCE");
   }
 
   activeRunIds(): readonly RunId[] {

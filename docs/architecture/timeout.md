@@ -1,6 +1,6 @@
 # Run Deadline and Timeout Architecture
 
-Phase 10B gives every started, non-terminal Run one durable absolute deadline. The deadline is owned by the outer Run lifecycle and reuses the Phase 10A abort spine; it is not a timer that merely changes a database status after work has finished.
+Phase 10B gives every started, non-terminal legacy Run, and every Adaptive Run with an explicit hard wall-clock cap, one absolute deadline. An Adaptive Run without that hard cap has no implicit lifetime deadline: its operational lease and progress guard remain the governing resource boundaries. The deadline is owned by the outer Run lifecycle and reuses the Phase 10A abort spine; it is not a timer that merely changes a database status after work has finished.
 
 ## Contract and authority
 
@@ -8,7 +8,8 @@ Phase 10B gives every started, non-terminal Run one durable absolute deadline. T
 PENDING
   │ start persists startedAt
   ▼
-RUNNING ── startedAt + limits.timeoutMs ──► deadlineAt
+RUNNING ── legacy: startedAt + limits.timeoutMs ──► deadlineAt
+       └─ Adaptive: startedAt + hardLimits.maxWallClockMs (only when set)
                                                │
                                                ▼
                                   RunExecutionScope.abort(DEADLINE_EXCEEDED)
@@ -22,7 +23,7 @@ RUNNING ── startedAt + limits.timeoutMs ──► deadlineAt
                                              TIMEOUT
 ```
 
-The sole formula is `deadlineAt = startedAt + timeoutMs`. `createdAt` is not used. A PENDING Run has no active deadline and cannot time out before its first durable `PENDING → RUNNING` transition. Once written, `startedAt` never refreshes on a Step, Tool, Approval, external Tool Result, Verification boundary, `recover()`, or `resolveApproval()`.
+The formula is `deadlineAt = startedAt + timeoutMs`, where legacy `timeoutMs` comes from `limits.timeoutMs` and Adaptive `timeoutMs` comes only from `hardLimits.maxWallClockMs`. `createdAt` is not used. A PENDING Run has no active deadline and cannot time out before its first durable `PENDING → RUNNING` transition. Once written, `startedAt` never refreshes on a Step, Tool, Approval, external Tool Result, Verification boundary, `recover()`, or `resolveApproval()`.
 
 `timeoutMs` is a positive safe integer. Deadline derivation rejects unsafe or overflowing arithmetic, and the exact boundary is `now < deadlineAt` active and `now >= deadlineAt` expired. Remaining time is calculated from the original deadline; it is never converted into a new timeout.
 
@@ -42,7 +43,7 @@ The Controller never passes the Run's remaining time as a replacement Provider t
 
 `RunDeadlineRegistry` is an injectable, Core-owned ephemeral registry. It keeps at most one active timer registration per Run, uses the injected clock, rearms after a premature wake-up, and disarms terminal and PENDING Runs. Long delays are chunked below the platform timer limit. A callback rechecks the durable snapshot and the current clock before aborting anything, so stale callbacks cannot time out a newly terminal Run. Registry disposal cancels every owned timer.
 
-The registry is not durable state. On process restart, `recover(runId)` derives the same original deadline from the persisted Run. An expired Run performs no Provider or Tool call and is finalized as TIMEOUT. An unexpired Run resumes its existing durable boundary and rearms the remaining portion of the original deadline. This makes recovery safe without pretending that an in-memory timer survived a crash.
+The registry is not durable state. On process restart, `recover(runId)` derives the same original deadline from the persisted Run. An expired Run performs no Provider or Tool call and is finalized as TIMEOUT. An unexpired Run resumes its existing durable boundary and rearms the remaining portion of the original deadline. An Adaptive Run without `hardLimits.maxWallClockMs` is disarmed and recovered through its Resource Guard boundary. This makes recovery safe without pretending that an in-memory timer survived a crash.
 
 ## Two-phase timeout settlement
 

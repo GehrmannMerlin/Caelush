@@ -216,6 +216,17 @@ export class CaelushClient {
     return this.runAction(`/api/v1/runs/${encodeURIComponent(runId)}/cancel`, "POST", options);
   }
 
+  async continueResourceGuard(
+    runId: RunId,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<RunActionResponse> {
+    return this.runAction(
+      `/api/v1/runs/${encodeURIComponent(runId)}/continue-resource`,
+      "POST",
+      options,
+    );
+  }
+
   async listPendingApprovals(
     runId: RunId,
     options: CaelushClientRequestOptions = {},

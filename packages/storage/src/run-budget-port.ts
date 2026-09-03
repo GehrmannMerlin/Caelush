@@ -53,8 +53,10 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
     readonly invocationId?: string;
   }): Promise<ToolBudgetAdmission> {
     const snapshot = await this.ledger.snapshot(input.runId);
+    const run = await this.loadRun(input.runId);
     const result = this.manager.admitToolCalls({
-      limits: await this.loadLimits(input.runId),
+      limits: run.limits,
+      ...(run.resourcePolicy === undefined ? {} : { policy: run.resourcePolicy }),
       snapshot,
       requested: input.requested,
     });
@@ -77,8 +79,10 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
     readonly requested: number;
   }): Promise<ToolBudgetAdmission> {
     const snapshot = await this.ledger.snapshot(input.runId);
+    const run = await this.loadRun(input.runId);
     const result = this.manager.admitToolCalls({
-      limits: await this.loadLimits(input.runId),
+      limits: run.limits,
+      ...(run.resourcePolicy === undefined ? {} : { policy: run.resourcePolicy }),
       snapshot,
       requested: input.requested,
     });
@@ -283,7 +287,7 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
     });
   }
 
-  private async loadLimits(runId: RunId): Promise<AgentRun["limits"]> {
+  private async loadRun(runId: RunId): Promise<AgentRun> {
     const row = this.database.client
       .prepare("SELECT data_json FROM agent_runs WHERE id = ?")
       .get(runId) as { data_json: string } | undefined;
@@ -292,7 +296,11 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
       entityType: "AgentRun",
       entityId: runId,
       table: "agent_runs",
-    }).limits;
+    });
+  }
+
+  private async loadLimits(runId: RunId): Promise<AgentRun["limits"]> {
+    return (await this.loadRun(runId)).limits;
   }
 
   private async checkPostSettlementBudget(

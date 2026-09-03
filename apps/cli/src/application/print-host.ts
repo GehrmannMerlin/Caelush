@@ -226,7 +226,10 @@ async function waitForRun(
     };
     const inspect = (state: ReturnType<CliConversationController["getState"]>): void => {
       const active = state.activeRun;
-      if (active?.runId === runId && active.status === "WAITING_APPROVAL") {
+      if (
+        active?.runId === runId &&
+        (active.status === "WAITING_APPROVAL" || active.status === "WAITING_RESOURCE")
+      ) {
         void client.getRun(runId).then(finish, reject);
         return;
       }
@@ -265,6 +268,18 @@ function toPrintResult(
       errorCode: "APPROVAL_REQUIRED",
       requiresApproval: true,
       exitReason: "Run is waiting for approval.",
+    };
+  }
+  if (run.status === "WAITING_RESOURCE") {
+    return {
+      version,
+      sessionId: run.sessionId,
+      runId: run.id,
+      status: run.status,
+      success: false,
+      errorCode: "RESOURCE_GUARD",
+      exitReason:
+        "Run is waiting for a resource decision. Continue it from the interactive client.",
     };
   }
   return {

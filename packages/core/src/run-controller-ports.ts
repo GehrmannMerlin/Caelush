@@ -20,6 +20,7 @@ import type { RunDeadlineRegistry } from "./run-deadline-registry.js";
 import type { RunRetryRegistry } from "./run-retry-registry.js";
 import type { RetryJitterSource, RetryPolicy } from "./retry-controller.js";
 import type { RunBudgetPort } from "./budget-ports.js";
+import type { ResourceGovernancePort } from "./resource-governance-port.js";
 import type { LLMTurnResult } from "@caelush/llm/turn";
 import type {
   VerificationCommandExecutionPort,
@@ -134,6 +135,7 @@ export interface RunControllerDependencies {
   readonly retryJitter?: RetryJitterSource;
   readonly resources?: RunOwnedResourceControllerPort;
   readonly budget?: RunBudgetPort;
+  readonly resourceGovernance?: ResourceGovernancePort;
   readonly verificationPlanner?: VerificationPlannerPort;
   readonly verificationPlanIdFactory?: VerificationPlanIdFactory;
   readonly verificationCheckIdFactory?: VerificationCheckIdFactory;

@@ -235,6 +235,7 @@ function renderSessionApp(input: {
             onSubmit,
           }),
           onCancel: () => manager.cancelRun(),
+          onContinueResource: () => manager.continueResourceGuard(),
           onResolveApproval: (approvalId, resolution) =>
             manager.resolveApproval(approvalId, resolution),
           onSelectRecoveryRun: (runId) => manager.selectRecoveryRun(runId),

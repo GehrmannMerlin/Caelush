@@ -81,6 +81,10 @@ export interface CliDaemonClient {
   ): Promise<RunListResponse>;
   recoverRun(runId: RunId, options?: { readonly signal?: AbortSignal }): Promise<RunActionResponse>;
   cancelRun(runId: RunId, options?: { readonly signal?: AbortSignal }): Promise<RunActionResponse>;
+  continueResourceGuard(
+    runId: RunId,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<RunActionResponse>;
   listPendingApprovals(
     runId: RunId,
     options?: { readonly signal?: AbortSignal },
@@ -123,6 +127,7 @@ export class CliConversationController {
   private streamGeneration = 0;
   private controlGeneration = 0;
   private cancelPromise: Promise<boolean> | undefined;
+  private resourceContinuePromise: Promise<boolean> | undefined;
   private readonly approvalInFlight = new Set<ApprovalRequestId>();
   private readonly reconnectScheduler: CliReconnectScheduler;
   private historySequence = 0;
@@ -438,6 +443,48 @@ export class CliConversationController {
     }
   }
 
+  async continueResourceGuard(): Promise<boolean> {
+    if (this.resourceContinuePromise !== undefined) return this.resourceContinuePromise;
+    const active = this.activeRun;
+    if (
+      active === undefined ||
+      this.state.activeRun?.status !== "WAITING_RESOURCE" ||
+      this.disposed
+    ) {
+      return false;
+    }
+    const generation = ++this.controlGeneration;
+    this.publish({
+      ...this.state,
+      controlMode: "NONE",
+      activity: "Preparing",
+      composerEnabled: false,
+    });
+    const promise = this.options.client
+      .continueResourceGuard(active.runId)
+      .then((response) => {
+        if (generation !== this.controlGeneration || this.activeRun !== active) return false;
+        this.updateActiveRun(response.run);
+        return true;
+      })
+      .catch((error: unknown) => {
+        if (generation !== this.controlGeneration || this.activeRun !== active) return false;
+        this.publish({
+          ...this.state,
+          controlMode: "RESOURCE_GUARD",
+          activity: "Waiting for resource decision",
+          controlError: toSafeCliError(error),
+        });
+        return false;
+      });
+    this.resourceContinuePromise = promise;
+    try {
+      return await promise;
+    } finally {
+      if (this.resourceContinuePromise === promise) this.resourceContinuePromise = undefined;
+    }
+  }
+
   detachActiveRun(): void {
     const active = this.activeRun;
     if (active === undefined) return;
@@ -545,7 +592,9 @@ export class CliConversationController {
           ? "RUN_RECOVERY_PICKER"
           : activeRuns[0]?.status === "PENDING"
             ? "PENDING_RUN_CONFIRMATION"
-            : "NONE",
+            : activeRuns[0]?.status === "WAITING_RESOURCE"
+              ? "RESOURCE_GUARD"
+              : "NONE",
       activity:
         activeRuns.length === 0 ? "Ready" : (runStatusLabel(activeRuns[0]!.status) as CliActivity),
       ...(activeRuns.length === 1
@@ -584,6 +633,16 @@ export class CliConversationController {
         });
       }
       this.attachActiveRun(run, requests.length === 0);
+      return;
+    }
+    if (run.status === "WAITING_RESOURCE") {
+      this.publish({
+        ...this.state,
+        controlMode: "RESOURCE_GUARD",
+        composerEnabled: false,
+        activity: "Waiting for resource decision",
+      });
+      this.attachActiveRun(run, false);
       return;
     }
     this.attachActiveRun(run, true);

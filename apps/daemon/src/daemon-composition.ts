@@ -234,6 +234,7 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     retryRegistry,
     resources: { cancelOwnedResources: (runId) => runtime.cancelOwnedResources(runId) },
     budget: options.storage.budget,
+    resourceGovernance: options.storage.resourceGovernance,
     verificationPlanner: new DefaultVerificationPlanner(),
     verificationPlanIdFactory: { create: createVerificationPlanId },
     verificationCheckIdFactory: { create: createVerificationCheckId },

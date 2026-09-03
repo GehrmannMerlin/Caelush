@@ -31,6 +31,11 @@ export function projectAgentEvent(state: CliViewState, event: AgentEvent): CliEv
     ...nextStateWithTimeline,
     activeRun: { runId: event.runId, status: lifecycle.status },
     activity: activityForStatus(lifecycle.status, lifecycle.activity),
+    ...(lifecycle.status === "WAITING_RESOURCE"
+      ? { controlMode: "RESOURCE_GUARD" as const, composerEnabled: false }
+      : lifecycle.status === "RUNNING" && state.controlMode === "RESOURCE_GUARD"
+        ? { controlMode: "NONE" as const }
+        : {}),
   };
   if (lifecycle.terminal) {
     return { state: nextState, terminal: true, terminalStatus: lifecycle.status };
@@ -95,6 +100,12 @@ function lifecycleForEvent(event: AgentEvent): EventLifecycle | undefined {
       return { status: "VERIFYING", activity: "Verifying", terminal: false };
     case "approval.requested":
       return { status: "WAITING_APPROVAL", activity: "Approval required", terminal: false };
+    case "resource.guard":
+      return {
+        status: "WAITING_RESOURCE",
+        activity: "Waiting for resource decision",
+        terminal: false,
+      };
     case "llm.started":
       return { status: "RUNNING", activity: "Working", terminal: false };
     default:
@@ -111,6 +122,8 @@ function activityForStatus(status: RunStatus, explicit?: CliActivity): CliActivi
       return "Working";
     case "WAITING_APPROVAL":
       return "Approval required";
+    case "WAITING_RESOURCE":
+      return "Waiting for resource decision";
     case "VERIFYING":
       return "Verifying";
     case "COMPLETED":

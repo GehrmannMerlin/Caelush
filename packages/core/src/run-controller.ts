@@ -28,9 +28,11 @@ import {
   createInitialAgentState,
   markAgentStateCancelled,
   markAgentStateWaitingApproval,
+  markAgentStateWaitingResource,
   markAgentStateMaxStepsReached,
   markAgentStateBudgetExceeded,
   resumeAgentStateFromApproval,
+  resumeAgentStateFromResource,
   settleAgentStepState,
   resumeAgentStateFromVerificationRepair,
   markAgentStateCompleted,
@@ -46,8 +48,10 @@ import {
   markAgentRunTimedOut,
   markAgentRunBudgetExceeded,
   markAgentRunWaitingApproval,
+  markAgentRunWaitingResource,
   resumeAgentRunFromVerificationRepair,
   resumeAgentRunFromApproval,
+  resumeAgentRunFromResource,
   markAgentStateFailed,
   markAgentRunCompleted,
   assertRunExecutionInvariant,
@@ -77,6 +81,7 @@ import { TaskAcceptanceReviewer } from "./task-acceptance-reviewer.js";
 import { AgentBudgetAdmissionError } from "./agent-errors.js";
 import type { AgentBudgetBlock } from "./agent-errors.js";
 import { ResourceGovernor } from "./resource-governor.js";
+import { fingerprintToolBatch, fingerprintToolResultBatch } from "./resource-fingerprint.js";
 import {
   ProjectCheckResolverRegistry,
   VerificationStageRunner,
@@ -196,6 +201,10 @@ export class RunController {
     return this.withLock(runId, () => this.resolveApprovalLocked(runId, approvalId, resolution));
   }
 
+  async continueResourceGuard(runId: RunId): Promise<RunControllerResult> {
+    return this.withLock(runId, () => this.continueResourceGuardLocked(runId));
+  }
+
   async cancel(runId: RunId): Promise<RunControllerResult> {
     const loaded = await this.load(runId);
     if (loaded.run.status === "CANCELLED" || isTerminal(loaded.run.status)) {
@@ -258,6 +267,50 @@ export class RunController {
     }
     const resolved = await approvals.resolve(approvalId, parsed);
     return this.resumeResolvedApprovalLocked(loaded, resolved);
+  }
+
+  private async continueResourceGuardLocked(runId: RunId): Promise<RunControllerResult> {
+    const loaded = await this.load(runId);
+    if (loaded.cancellationIntent !== undefined) return this.finalizeCancellation(loaded);
+    if (this.isExpired(loaded)) return this.finalizeTimeout(loaded);
+    if (
+      loaded.run.status !== "WAITING_RESOURCE" ||
+      loaded.state === undefined ||
+      loaded.continuation?.type !== "WAITING_RESOURCE"
+    ) {
+      throw new RunControllerInputError(
+        "Resource continuation requires a Run waiting for a resource decision.",
+      );
+    }
+    const now = this.dependencies.clock.now();
+    const run = resumeAgentRunFromResource(loaded.run);
+    const state = resumeAgentStateFromResource(loaded.state, now);
+    const checkpoint = {
+      type: "WAITING_TOOL_RESULTS" as const,
+      runId: loaded.continuation.runId,
+      sourceStepId: loaded.continuation.sourceStepId,
+      pendingDecision: loaded.continuation.pendingDecision,
+    };
+    const commit = await this.commit({
+      run,
+      state,
+      expectedStateRevision: loaded.stateRevision ?? null,
+      expectedContinuationRevision: loaded.continuationRevision ?? null,
+      stepWrites: [],
+      messagesToAppend: [],
+      continuation: { operation: "SET", checkpoint, updatedAt: now },
+      events: [
+        this.eventFactory.statusChanged(
+          loaded.run,
+          "WAITING_RESOURCE",
+          "RUNNING",
+          this.nextEventId(),
+          now,
+        ),
+      ],
+    });
+    this.notify(commit.events);
+    return this.driveToolBoundariesLocked(commit.snapshot, "RECOVER");
   }
 
   private async resumeResolvedApprovalLocked(
@@ -338,6 +391,13 @@ export class RunController {
       ],
     });
     this.notify(commit.events);
+    if (run.resourcePolicy !== undefined && this.dependencies.resourceGovernance !== undefined) {
+      await this.dependencies.resourceGovernance.createOrGet(run.id, {
+        policyVersion: "adaptive-resource-governance.v1",
+        mode: run.resourcePolicy.mode,
+        now,
+      });
+    }
     if (this.isExpired(commit.snapshot)) return this.finalizeTimeout(commit.snapshot);
     return this.driveToolBoundariesLocked(commit.snapshot, "EXECUTE");
   }
@@ -442,6 +502,9 @@ export class RunController {
       }
       return this.resumeKnownBoundary(loaded);
     }
+    if (loaded.run.status === "WAITING_RESOURCE") {
+      return this.resumeKnownBoundary(loaded);
+    }
     if (
       loaded.run.status === "RUNNING" &&
       loaded.state !== undefined &&
@@ -528,7 +591,8 @@ export class RunController {
     while (true) {
       if (snapshot.cancellationIntent !== undefined) return this.finalizeCancellation(snapshot);
       if (this.isExpired(snapshot)) return this.finalizeTimeout(snapshot);
-      if (snapshot.run.status === "WAITING_APPROVAL") return this.resultFromSnapshot(snapshot);
+      if (snapshot.run.status === "WAITING_APPROVAL" || snapshot.run.status === "WAITING_RESOURCE")
+        return this.resultFromSnapshot(snapshot);
       const continuation = snapshot.continuation;
       if (continuation?.type === "WAITING_TOOL_RESULTS") {
         if (continuation.receivedResults !== undefined) {
@@ -555,8 +619,12 @@ export class RunController {
           },
           items: continuation.pendingDecision.toolRequests.map((request): ToolBatchItem => request),
         };
-        const resourceDecision = this.resourceToolBatchDecision(snapshot, request.items.length);
+        const resourceDecision = await this.resourceToolBatchDecision(
+          snapshot,
+          request.items.length,
+        );
         if (resourceDecision?.kind === "REPLAN") {
+          await this.recordResourceReplan(snapshot);
           const syntheticResults = ResourceGovernor.replanResults(
             request.items.map((item) => ({
               externalCallId: item.externalCallId,
@@ -578,6 +646,14 @@ export class RunController {
             accounted: resourceDecision.accounted,
             limit: resourceDecision.limit,
           });
+        }
+        if (resourceDecision?.kind === "WAIT_FOR_RESOURCE_DECISION") {
+          snapshot = await this.persistWaitingResourceLocked(
+            snapshot,
+            continuation,
+            request.items.length,
+          );
+          return this.resultFromSnapshot(snapshot);
         }
         let outcome: ToolBatchOutcome;
         try {
@@ -648,6 +724,7 @@ export class RunController {
           );
         }
         snapshot = await this.persistCompleteToolResultsLocked(snapshot, messages);
+        await this.recordResourceObservation(snapshot, continuation, messages);
         mode = "EXECUTE";
         continue;
       }
@@ -658,16 +735,112 @@ export class RunController {
     }
   }
 
-  private resourceToolBatchDecision(snapshot: RunExecutionSnapshot, requestedToolCalls: number) {
+  private async resourceToolBatchDecision(
+    snapshot: RunExecutionSnapshot,
+    requestedToolCalls: number,
+  ) {
     const policy = snapshot.run.resourcePolicy;
     if (policy === undefined || snapshot.state === undefined) return undefined;
-    return new ResourceGovernor(policy).evaluateToolBatch({
+    const resourceState =
+      this.dependencies.resourceGovernance === undefined
+        ? undefined
+        : await this.dependencies.resourceGovernance.createOrGet(snapshot.run.id, {
+            policyVersion: "adaptive-resource-governance.v1",
+            mode: policy.mode,
+            now: this.dependencies.clock.now(),
+          });
+    const noProgress = resourceState?.consecutiveNoProgressTurns ?? 0;
+    const progressLevel =
+      noProgress >= policy.progress.noProgressTurnsBeforeReplan
+        ? "FORCED_REPLAN"
+        : noProgress >= policy.progress.identicalCallNudgeThreshold
+          ? "NUDGE"
+          : "HEALTHY";
+    const decision = new ResourceGovernor(policy).evaluateToolBatch({
       agentTurnsConsumed: snapshot.state.usage.steps,
-      toolOperationsConsumed: snapshot.state.usage.toolCalls,
+      toolOperationsConsumed:
+        resourceState?.toolOperationsConsumed ?? snapshot.state.usage.toolCalls,
       requestedToolCalls,
-      progressLevel: "HEALTHY",
-      replanCount: 0,
+      progressLevel,
+      replanCount: resourceState?.replanCount ?? 0,
+      ...(resourceState === undefined ? {} : { currentLeaseEpoch: resourceState.leaseEpoch }),
     });
+    if (decision.kind === "RENEW_AND_ALLOW" && resourceState !== undefined) {
+      await this.updateResourceState(resourceState, {
+        ...resourceState,
+        leaseEpoch: decision.nextLeaseEpoch,
+        leaseStartAgentTurns: snapshot.state.usage.steps,
+        leaseStartToolCalls: resourceState.toolOperationsConsumed,
+        resourceGuardState: "NONE",
+        revision: resourceState.revision + 1,
+        updatedAt: this.dependencies.clock.now(),
+      });
+    }
+    return decision;
+  }
+
+  private async recordResourceReplan(snapshot: RunExecutionSnapshot): Promise<void> {
+    const repository = this.dependencies.resourceGovernance;
+    if (repository === undefined || snapshot.run.resourcePolicy === undefined) return;
+    const current = await repository.createOrGet(snapshot.run.id, {
+      policyVersion: "adaptive-resource-governance.v1",
+      mode: snapshot.run.resourcePolicy.mode,
+      now: this.dependencies.clock.now(),
+    });
+    await this.updateResourceState(current, {
+      ...current,
+      replanCount: current.replanCount + 1,
+      resourceGuardState: "REPLAN_REQUIRED",
+      revision: current.revision + 1,
+      updatedAt: this.dependencies.clock.now(),
+    });
+  }
+
+  private async recordResourceObservation(
+    snapshot: RunExecutionSnapshot,
+    continuation: Extract<
+      import("./agent-continuation.js").RunContinuationCheckpoint,
+      { type: "WAITING_TOOL_RESULTS" }
+    >,
+    results: readonly LLMToolResultMessage[],
+  ): Promise<void> {
+    const repository = this.dependencies.resourceGovernance;
+    if (repository === undefined || snapshot.run.resourcePolicy === undefined) return;
+    const current = await repository.createOrGet(snapshot.run.id, {
+      policyVersion: "adaptive-resource-governance.v1",
+      mode: snapshot.run.resourcePolicy.mode,
+      now: this.dependencies.clock.now(),
+    });
+    const requestFingerprint = fingerprintToolBatch(continuation.pendingDecision.toolRequests);
+    const resultFingerprint = fingerprintToolResultBatch(results);
+    const previous = current.recentFingerprints.at(-1);
+    const exactRepeat =
+      previous?.request === requestFingerprint && previous.result === resultFingerprint;
+    const now = this.dependencies.clock.now();
+    const recentFingerprints = [
+      ...current.recentFingerprints,
+      { request: requestFingerprint, result: resultFingerprint },
+    ].slice(-64);
+    await this.updateResourceState(current, {
+      ...current,
+      agentTurnsConsumed: snapshot.state?.usage.steps ?? current.agentTurnsConsumed,
+      toolOperationsConsumed: snapshot.state?.usage.toolCalls ?? current.toolOperationsConsumed,
+      ...(exactRepeat ? {} : { lastProgressAt: now }),
+      consecutiveNoProgressTurns: exactRepeat ? current.consecutiveNoProgressTurns + 1 : 0,
+      resourceGuardState: exactRepeat ? "NUDGE" : "NONE",
+      recentFingerprints,
+      revision: current.revision + 1,
+      updatedAt: now,
+    });
+  }
+
+  private async updateResourceState(
+    current: import("./resource-governance-port.js").ResourceGovernanceState,
+    next: import("./resource-governance-port.js").ResourceGovernanceState,
+  ): Promise<void> {
+    const repository = this.dependencies.resourceGovernance;
+    if (repository === undefined) return;
+    await repository.compareAndSwap(current.runId, current.revision, next);
   }
 
   private async persistCompleteToolResultsLocked(
@@ -745,6 +918,64 @@ export class RunController {
           loaded.run,
           "RUNNING",
           "WAITING_APPROVAL",
+          this.nextEventId(),
+          now,
+        ),
+      ],
+    });
+    this.notify(commit.events);
+    return commit.snapshot;
+  }
+
+  private async persistWaitingResourceLocked(
+    loaded: RunExecutionSnapshot,
+    continuation: Extract<
+      import("./agent-continuation.js").RunContinuationCheckpoint,
+      {
+        type: "WAITING_TOOL_RESULTS";
+      }
+    >,
+    requestedToolCalls: number,
+  ): Promise<RunExecutionSnapshot> {
+    if (loaded.state === undefined) {
+      throw new RunControllerInvariantError("Resource guard requires an AgentState");
+    }
+    const now = this.dependencies.clock.now();
+    const resourceState =
+      this.dependencies.resourceGovernance === undefined
+        ? undefined
+        : await this.dependencies.resourceGovernance.get(loaded.run.id);
+    const replanCount = resourceState?.replanCount ?? 1;
+    const run = markAgentRunWaitingResource(loaded.run);
+    const state = markAgentStateWaitingResource(loaded.state, now);
+    const checkpoint = {
+      type: "WAITING_RESOURCE" as const,
+      runId: continuation.runId,
+      sourceStepId: continuation.sourceStepId,
+      pendingDecision: continuation.pendingDecision,
+      reason: "NO_PROGRESS" as const,
+      replanCount,
+    };
+    const commit = await this.commit({
+      run,
+      state,
+      expectedStateRevision: loaded.stateRevision ?? null,
+      expectedContinuationRevision: loaded.continuationRevision ?? null,
+      stepWrites: [],
+      messagesToAppend: [],
+      continuation: { operation: "SET", checkpoint, updatedAt: now },
+      events: [
+        this.eventFactory.statusChanged(
+          loaded.run,
+          "RUNNING",
+          "WAITING_RESOURCE",
+          this.nextEventId(),
+          now,
+        ),
+        this.eventFactory.resourceGuard(
+          loaded.run,
+          replanCount,
+          requestedToolCalls,
           this.nextEventId(),
           now,
         ),
@@ -1714,6 +1945,20 @@ export class RunController {
         toolName: snapshot.continuation.waitingApproval.toolName,
       };
     }
+    if (
+      snapshot.run.status === "WAITING_RESOURCE" &&
+      snapshot.continuation?.type === "WAITING_RESOURCE"
+    ) {
+      return {
+        status: "WAITING_RESOURCE",
+        run: snapshot.run,
+        state: snapshot.state!,
+        sourceStepId: snapshot.continuation.sourceStepId,
+        requestedToolCalls: snapshot.continuation.pendingDecision.toolRequests.length,
+        reason: snapshot.continuation.reason,
+        replanCount: snapshot.continuation.replanCount,
+      };
+    }
     if (snapshot.run.status === "RUNNING" && snapshot.continuation?.type === "WAITING_RETRY") {
       return {
         status: "WAITING_RETRY",
@@ -2529,7 +2774,8 @@ export class RunController {
     }
     const deadline = deriveRunDeadline(snapshot.run);
     if (deadline === undefined) {
-      throw new RunControllerInvariantError("started non-terminal Run has no deadline");
+      this.deadlineRegistry.disarm(snapshot.run.id);
+      return;
     }
     if (isRunDeadlineExceeded(deadline, this.dependencies.clock.now())) {
       this.deadlineRegistry.disarm(snapshot.run.id);

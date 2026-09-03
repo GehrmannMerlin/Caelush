@@ -18,7 +18,7 @@ export interface DaemonExecutionSurface {
   readonly runs: Pick<RunRepository, "get">;
   readonly supervisor: Pick<
     RunExecutionSupervisor,
-    "start" | "recover" | "cancel" | "resolveApproval"
+    "start" | "recover" | "cancel" | "resolveApproval" | "continueResourceGuard"
   >;
   readonly approvals: {
     listPendingByRun(runId: RunId): Promise<readonly import("@caelush/protocol").ApprovalRequest[]>;
@@ -66,6 +66,18 @@ export function registerExecutionRoutes(
       return reply
         .code(200)
         .send(toActionResponse(await surface.supervisor.cancel(runId as RunId)));
+    },
+  );
+
+  app.post(
+    "/api/v1/runs/:runId/continue-resource",
+    { schema: { response: { 200: RunActionResponseSchema, 202: RunActionResponseSchema } } },
+    async (request, reply) => {
+      const { runId } = request.params as { runId: string };
+      const result = toActionResponse(
+        await surface.supervisor.continueResourceGuard(runId as RunId),
+      );
+      return reply.code(result.disposition === "NOOP_TERMINAL" ? 200 : 202).send(result);
     },
   );
 

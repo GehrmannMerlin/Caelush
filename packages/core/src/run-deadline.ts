@@ -16,7 +16,11 @@ export class RunDeadlineInvariantError extends Error {
 export function deriveRunDeadline(run: AgentRun): RunDeadline | undefined {
   if (run.startedAt === undefined) return undefined;
   const { startedAt } = run;
-  const { timeoutMs } = run.limits;
+  const timeoutMs =
+    run.resourcePolicy?.mode === "ADAPTIVE"
+      ? run.resourcePolicy.hardLimits.maxWallClockMs
+      : run.limits.timeoutMs;
+  if (timeoutMs === undefined) return undefined;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
     throw new RunDeadlineInvariantError("Run timeoutMs must be a safe positive integer.");
   }

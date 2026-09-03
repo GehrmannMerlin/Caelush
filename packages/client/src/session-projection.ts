@@ -175,6 +175,7 @@ export function nonTerminalRuns(runs: readonly ClientAgentRun[]): readonly Clien
       case "PENDING":
       case "RUNNING":
       case "WAITING_APPROVAL":
+      case "WAITING_RESOURCE":
       case "VERIFYING":
         return true;
       default:

@@ -4,6 +4,7 @@ const transitions: Record<RunStatus, readonly RunStatus[]> = {
   PENDING: ["RUNNING", "CANCELLED"],
   RUNNING: [
     "WAITING_APPROVAL",
+    "WAITING_RESOURCE",
     "VERIFYING",
     "FAILED",
     "CANCELLED",
@@ -12,6 +13,7 @@ const transitions: Record<RunStatus, readonly RunStatus[]> = {
     "BUDGET_EXCEEDED",
   ],
   WAITING_APPROVAL: ["RUNNING", "FAILED", "CANCELLED", "TIMEOUT"],
+  WAITING_RESOURCE: ["RUNNING", "FAILED", "CANCELLED", "TIMEOUT"],
   VERIFYING: ["COMPLETED", "RUNNING", "FAILED", "CANCELLED", "TIMEOUT", "BUDGET_EXCEEDED"],
   COMPLETED: [],
   FAILED: [],

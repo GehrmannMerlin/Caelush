@@ -176,6 +176,27 @@ export function markAgentStateWaitingApproval(state: AgentState, now: TimestampM
   });
 }
 
+export function markAgentStateWaitingResource(state: AgentState, now: TimestampMs): AgentState {
+  assertBoundaryState(state, "WAITING_RESOURCE", now);
+  return AgentStateSchema.parse({
+    ...state,
+    status: "WAITING_RESOURCE",
+    currentStepId: undefined,
+    updatedAt: now,
+  });
+}
+
+export function resumeAgentStateFromResource(state: AgentState, now: TimestampMs): AgentState {
+  assertMonotonicTimestamp(state, now);
+  if (state.status !== "WAITING_RESOURCE") {
+    throw new AgentKernelStateError(
+      "state cannot resume from a resource guard unless it is waiting",
+    );
+  }
+  assertRunStatusTransition(state.status, "RUNNING");
+  return AgentStateSchema.parse({ ...state, status: "RUNNING", updatedAt: now });
+}
+
 export function resumeAgentStateFromApproval(state: AgentState, now: TimestampMs): AgentState {
   assertMonotonicTimestamp(state, now);
   if (state.status !== "WAITING_APPROVAL") {
@@ -209,7 +230,7 @@ export function markAgentStateMaxStepsReached(state: AgentState, now: TimestampM
 
 function assertBoundaryState(
   state: AgentState,
-  target: "WAITING_APPROVAL" | "VERIFYING" | "MAX_STEPS_REACHED",
+  target: "WAITING_APPROVAL" | "WAITING_RESOURCE" | "VERIFYING" | "MAX_STEPS_REACHED",
   now: TimestampMs,
 ): void {
   assertMonotonicTimestamp(state, now);

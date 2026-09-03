@@ -103,6 +103,13 @@ export interface RunControllerEventFactory {
     eventId: EventId,
     timestamp: TimestampMs,
   ): DurableEventDraft;
+  resourceGuard(
+    run: AgentRun,
+    replanCount: number,
+    requestedToolCalls: number,
+    eventId: EventId,
+    timestamp: TimestampMs,
+  ): DurableEventDraft;
   verificationPlanned(
     run: AgentRun,
     plan: VerificationPlan,
@@ -248,6 +255,11 @@ export function createRunControllerEventFactory(): RunControllerEventFactory {
               limit: block.limit,
               accounted: block.accounted,
             },
+    }),
+    resourceGuard: (run, replanCount, requestedToolCalls, eventId, timestamp) => ({
+      ...base(run, eventId, timestamp),
+      type: "resource.guard",
+      payload: { reason: "NO_PROGRESS", replanCount, requestedToolCalls },
     }),
     verificationPlanned: (run, plan, eventId, timestamp) => ({
       ...base(run, eventId, timestamp, plan.sourceStepId),

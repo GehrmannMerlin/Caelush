@@ -142,6 +142,17 @@ export const WaitingVerificationRepairContinuationSchema = z
   })
   .strict();
 
+export const WaitingResourceContinuationSchema = z
+  .object({
+    type: z.literal("WAITING_RESOURCE"),
+    runId: RunIdSchema,
+    sourceStepId: StepIdSchema,
+    pendingDecision: AgentToolCallsDecisionSchema,
+    reason: z.literal("NO_PROGRESS"),
+    replanCount: z.number().int().nonnegative().safe().max(100),
+  })
+  .strict();
+
 const RetryErrorCodeSchema = z.enum(["LLM_RATE_LIMIT", "LLM_NETWORK", "LLM_TIMEOUT"]);
 const RetryAttemptSchema = z.number().int().positive().safe().max(10);
 const WaitingRetryBase = {
@@ -182,5 +193,6 @@ export const RunContinuationCheckpointSchema = z.discriminatedUnion("type", [
   WaitingToolResultsContinuationSchema,
   AwaitingVerificationContinuationSchema,
   WaitingVerificationRepairContinuationSchema,
+  WaitingResourceContinuationSchema,
   WaitingRetryContinuationSchema,
 ]);

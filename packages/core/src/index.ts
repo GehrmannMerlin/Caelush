@@ -31,6 +31,7 @@ export type {
 export type {
   AwaitingVerificationContinuation,
   WaitingVerificationRepairContinuation,
+  WaitingResourceContinuation,
   RunContinuationCheckpoint,
   RetryErrorCode,
   WaitingRetryContinuation,
@@ -47,6 +48,7 @@ export {
   WaitingRetryContinuationSchema,
   WaitingToolResultsContinuationSchema,
   WaitingVerificationRepairContinuationSchema,
+  WaitingResourceContinuationSchema,
 } from "./agent-continuation-schema.js";
 export { classifyAgentDecision } from "./agent-decision-mapper.js";
 export { summarizeAgentDecision, summarizeAgentLoopOutcome } from "./agent-summary.js";
@@ -60,11 +62,13 @@ export {
   markAgentStateTimedOut,
   markAgentStateBudgetExceeded,
   markAgentStateWaitingApproval,
+  markAgentStateWaitingResource,
   markAgentStateVerifying,
   markAgentStateCompleted,
   resumeAgentStateFromVerificationRepair,
   settleAgentStepState,
   resumeAgentStateFromApproval,
+  resumeAgentStateFromResource,
   startAgentState,
   markAgentStateCancelled,
 } from "./agent-state.js";
@@ -104,7 +108,12 @@ export type {
   AgentProviderTurnState,
 } from "./agent-loop-ports.js";
 export { AgentLoop } from "./agent-loop.js";
-export { fingerprintToolRequest, fingerprintToolResult } from "./resource-fingerprint.js";
+export {
+  fingerprintToolBatch,
+  fingerprintToolRequest,
+  fingerprintToolResult,
+  fingerprintToolResultBatch,
+} from "./resource-fingerprint.js";
 export { ProgressLedger } from "./progress-ledger.js";
 export { ResourceLoopDetector } from "./resource-loop-detector.js";
 export { ResourceGovernor } from "./resource-governor.js";
@@ -119,10 +128,11 @@ export type {
   ResourceLoopEvaluationInput,
   ResourceLoopLevel,
 } from "./resource-loop-detector.js";
+export type { ResourceDecision, ResourceToolBatchEvaluationInput } from "./resource-governor.js";
 export type {
-  ResourceDecision,
-  ResourceToolBatchEvaluationInput,
-} from "./resource-governor.js";
+  ResourceGovernancePort,
+  ResourceGovernanceState,
+} from "./resource-governance-port.js";
 export type { RunControllerResult, RunControllerToolResults } from "./run-controller-input.js";
 export {
   RunController,
@@ -191,7 +201,9 @@ export {
   markAgentRunCancelled,
   markAgentRunCompleted,
   markAgentRunWaitingApproval,
+  markAgentRunWaitingResource,
   resumeAgentRunFromApproval,
+  resumeAgentRunFromResource,
   resumeAgentRunFromVerificationRepair,
   markAgentStateFailed,
 } from "./run-execution-state.js";

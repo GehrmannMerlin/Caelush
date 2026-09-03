@@ -128,4 +128,68 @@ describe("ContextBuilder", () => {
     expect(first.messages).toHaveLength(2);
     expect(first.messages.every((message) => message.role !== "tool")).toBe(true);
   });
+
+  it("projects repeated Tool history into the bounded context without changing durable input", () => {
+    const history = Array.from({ length: 12 }, (_, index): LLMMessage[] => [
+      { role: "user", content: `inspect ${index}` },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: `call-${index}`,
+            toolName: "read_file",
+            input: { path: "src/repeated.ts" },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: `call-${index}`,
+        toolName: "read_file",
+        content: "same bounded observation",
+        isError: false,
+      },
+    ]).flat();
+    const currentTurn: LLMMessage[] = [
+      { role: "user", content: "continue inspection" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "current-call",
+            toolName: "read_file",
+            input: { path: "src/current.ts" },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        toolCallId: "current-call",
+        toolName: "read_file",
+        content: "current observation",
+        isError: false,
+      },
+    ];
+    const originalHistory = structuredClone(history);
+    const built = new ContextBuilder().build({
+      baseSystemPrompt: "bounded",
+      snapshot: snapshot(),
+      history,
+      mode: "TOOL_CONTINUATION",
+      currentTurnMessages: currentTurn,
+      limits: {
+        ...limits,
+        maxInputTokens: 900,
+        maxConversationTokens: 250,
+        maxRelevantFileTokens: 100,
+      },
+    });
+
+    expect(history).toEqual(originalHistory);
+    expect(built.messages.at(-1)).toEqual(currentTurn.at(-1));
+    expect(built.report.conversation.droppedTurns).toBeGreaterThan(0);
+    expect(built.report.estimatedInputTokens).toBeLessThanOrEqual(900);
+  });
 });

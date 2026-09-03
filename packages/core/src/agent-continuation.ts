@@ -45,6 +45,15 @@ export interface WaitingVerificationRepairContinuation {
   readonly repairCycle: number;
 }
 
+export interface WaitingResourceContinuation {
+  readonly type: "WAITING_RESOURCE";
+  readonly runId: RunId;
+  readonly sourceStepId: StepId;
+  readonly pendingDecision: AgentToolCallsDecision;
+  readonly reason: "NO_PROGRESS";
+  readonly replanCount: number;
+}
+
 export type RetryErrorCode = "LLM_RATE_LIMIT" | "LLM_NETWORK" | "LLM_TIMEOUT";
 
 interface WaitingRetryContinuationBase {
@@ -73,4 +82,5 @@ export type RunContinuationCheckpoint =
   | WaitingToolResultsContinuation
   | AwaitingVerificationContinuation
   | WaitingVerificationRepairContinuation
+  | WaitingResourceContinuation
   | WaitingRetryContinuation;

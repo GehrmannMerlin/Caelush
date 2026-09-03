@@ -19,6 +19,7 @@ export interface SessionWorkspaceProps {
   readonly approvals?: readonly ApprovalView[] | undefined;
   readonly recoveryRuns?: readonly RecoveryRunView[] | undefined;
   readonly onCancel?: (() => Promise<boolean> | void) | undefined;
+  readonly onContinueResource?: (() => Promise<boolean> | void) | undefined;
   readonly onResolveApproval?:
     | ((approvalId: ApprovalView["id"], resolution: ApprovalResolution) => Promise<boolean> | void)
     | undefined;
@@ -85,14 +86,19 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
           ),
     ),
     createElement(Timeline, { timeline: props.timeline }),
-    props.activeRun !== undefined && props.onCancel !== undefined
+    props.activeRun !== undefined &&
+      (props.onCancel !== undefined || props.onContinueResource !== undefined)
       ? createElement(
           "div",
           { className: "run-action-tray", role: "status" },
           createElement(
             "span",
             { className: "run-action-label" },
-            props.controlMode === "CANCELLING" ? "正在取消任务……" : "Caelush 正在执行任务……",
+            props.controlMode === "CANCELLING"
+              ? "正在取消任务……"
+              : props.controlMode === "RESOURCE_GUARD"
+                ? "任务需要资源决策"
+                : "Caelush 正在执行任务……",
           ),
           props.controlMode === "CANCELLING"
             ? createElement(
@@ -100,13 +106,30 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
                 { type: "button", className: "cancel-button", disabled: true },
                 "正在取消",
               )
-            : canShowCancel(props.activeRun.status)
+            : props.controlMode === "RESOURCE_GUARD"
               ? createElement(
-                  "button",
-                  { type: "button", className: "cancel-button", onClick: props.onCancel },
-                  "取消任务",
+                  "div",
+                  { className: "resource-guard-card", role: "alert" },
+                  createElement("span", null, "检测到重复或低进展路径。"),
+                  props.onContinueResource === undefined
+                    ? null
+                    : createElement(
+                        "button",
+                        {
+                          type: "button",
+                          className: "continue-button",
+                          onClick: props.onContinueResource,
+                        },
+                        "继续任务",
+                      ),
                 )
-              : null,
+              : canShowCancel(props.activeRun.status)
+                ? createElement(
+                    "button",
+                    { type: "button", className: "cancel-button", onClick: props.onCancel },
+                    "取消任务",
+                  )
+                : null,
         )
       : null,
     props.composer,
