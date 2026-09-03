@@ -107,3 +107,16 @@ Task 7's allowed changes are limited to the new Web integration test and this re
 - Regression coverage: `apps/web/test/control-presentation.test.tsx` now exercises an approval button callback with a mocked shared-helper result, proving the callback uses the shared helper output. Focused result: `1` file, `5` tests passed.
 - Follow-up verification: changed-file Prettier check passed, `pnpm typecheck` passed, and `git diff --check` passed. The requested Web control test command passed the focused presentation file; the broader approval/cancellation control files retained the three previously documented fixture failures.
 - Delivery: fix committed separately; no push, merge, or master update performed.
+
+## Main-thread final revalidation before delivery seal
+
+The final command sequence was re-run on target `80a908d` after the whole-branch fix:
+
+- `pnpm lint`: failed with existing `require-yield` findings in `apps/web/test/reconnect.test.ts` and `apps/web/test/recovery.test.ts`, plus generated `release-artifacts` bundle lint noise; the run reported 265 problems. No new production-file lint error was observed.
+- `pnpm typecheck`: passed.
+- `pnpm test`: failed with 3 existing Web fixture failures (`approval-control.test.ts` twice and `cancellation-control.test.ts` once); 1309 passed and 5 skipped. The failures match the previously documented fixture expectations and are not introduced by Task 7's test/report or the canonical mapping follow-up.
+- `pnpm build`: passed.
+- `pnpm build:release`: workspace build and deploy dependency setup completed, but release packaging produced no further output within the bounded window; the process was explicitly terminated and is recorded as incomplete, not passed.
+- `pnpm test:release`: passed with `artifact-e2e passed: 0.1.0`.
+
+The focused final control suite also passed 87 of 90 tests; its same three pre-existing Web fixture failures are listed above. `git diff --check` and the final changed-file Prettier checks passed. Delivery sealing remained for the main thread after this report update.
