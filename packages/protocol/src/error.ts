@@ -19,6 +19,7 @@ export const AgentErrorCodeSchema = z.enum([
   "CANCELLED",
   "TIMEOUT",
   "BUDGET_EXCEEDED",
+  "CONTEXT_EXHAUSTED",
   "BUDGET_ENFORCEMENT_UNAVAILABLE",
   "INTERNAL_ERROR",
 ]);

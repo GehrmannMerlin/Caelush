@@ -244,6 +244,73 @@ export const agentObservations = sqliteTable(
   ],
 );
 
+export const contextCheckpoints = sqliteTable(
+  "context_checkpoints",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => agentRuns.id),
+    previousCheckpointId: text("previous_checkpoint_id"),
+    sourceSequenceFrom: integer("source_sequence_from").notNull(),
+    sourceSequenceTo: integer("source_sequence_to").notNull(),
+    tokensBefore: integer("tokens_before").notNull(),
+    tokensAfter: integer("tokens_after").notNull(),
+    summaryVersion: integer("summary_version").notNull(),
+    modelRefJson: text("model_ref_json"),
+    createdAtMs: integer("created_at_ms").notNull(),
+    dataJson: text("data_json").notNull(),
+    readFileRefsJson: text("read_file_refs_json").notNull(),
+    changedFileRefsJson: text("changed_file_refs_json").notNull(),
+  },
+  (table) => [
+    index("context_checkpoints_run_sequence_idx").on(table.runId, table.sourceSequenceTo),
+  ],
+);
+
+export const contextArtifacts = sqliteTable(
+  "context_artifacts",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => agentRuns.id),
+    kind: text("kind").notNull(),
+    sourceRef: text("source_ref").notNull(),
+    contentHash: text("content_hash").notNull(),
+    byteLength: integer("byte_length").notNull(),
+    mimeType: text("mime_type").notNull(),
+    sensitivity: text("sensitivity").notNull(),
+    createdSequence: integer("created_sequence").notNull(),
+    createdAtMs: integer("created_at_ms").notNull(),
+    content: text("content").notNull(),
+  },
+  (table) => [index("context_artifacts_run_id_idx").on(table.runId)],
+);
+
+export const memoryRecords = sqliteTable(
+  "memory_records",
+  {
+    id: text("id").primaryKey(),
+    scope: text("scope").notNull(),
+    projectId: text("project_id"),
+    topic: text("topic").notNull(),
+    fact: text("fact").notNull(),
+    status: text("status").notNull(),
+    confidence: integer("confidence").notNull(),
+    evidenceRefsJson: text("evidence_refs_json").notNull(),
+    sourceRunIdsJson: text("source_run_ids_json").notNull(),
+    createdAtMs: integer("created_at_ms").notNull(),
+    updatedAtMs: integer("updated_at_ms").notNull(),
+    lastConfirmedAtMs: integer("last_confirmed_at_ms").notNull(),
+    supersedes: text("supersedes"),
+    supersededBy: text("superseded_by"),
+    sensitivity: text("sensitivity").notNull(),
+    schemaVersion: integer("schema_version").notNull(),
+  },
+  (table) => [index("memory_records_scope_project_idx").on(table.scope, table.projectId)],
+);
+
 export const approvalRequests = sqliteTable(
   "approval_requests",
   {

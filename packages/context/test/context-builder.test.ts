@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { ContextBuilder, createDefaultContextBuilder } from "../src/context-builder.js";
 import type { RelevantFileContextPlan } from "../src/relevant-file-plan.js";
 import type { ProjectIntelligenceSnapshot } from "../src/snapshot.js";
+import { createModelContextProfile } from "../src/model-context-profile.js";
 
 function snapshot(): ProjectIntelligenceSnapshot {
   const root = "/repo";
@@ -86,6 +87,27 @@ const limits = {
 };
 
 describe("ContextBuilder", () => {
+  it("uses a supplied model profile instead of treating maxInputTokens as universal capacity", () => {
+    const built = new ContextBuilder().build({
+      baseSystemPrompt: "base",
+      snapshot: snapshot(),
+      currentUserMessage: { role: "user", content: "hello" },
+      limits: { maxInputTokens: 32_000 },
+      modelContextProfile: createModelContextProfile({
+        providerId: "fixture",
+        modelId: "tiny",
+        contextWindowTokens: 16_000,
+        maxOutputTokens: 4096,
+        recommendedOutputReserveTokens: 2048,
+        supportsPromptCaching: false,
+        supportsUsageReporting: true,
+        profileSource: "CONFIGURATION",
+      }),
+    });
+
+    expect(built.report.limits.maxInputTokens).toBe(13_440);
+  });
+
   it("assembles system, selected structured history, file reference, and exact current user", () => {
     const history: readonly LLMMessage[] = [
       { role: "user", content: "inspect" },
@@ -108,6 +130,8 @@ describe("ContextBuilder", () => {
     expect(built.report.system.instructionCount).toBe(0);
     expect(built.report.snapshotDiagnosticCount).toBe(0);
     expect(built.report.relevantFiles.selectedFiles).toBe(1);
+    expect(built.report.trace?.estimatedInputTokens).toBe(built.report.estimatedInputTokens);
+    expect(built.report.trace?.loadedFileCount).toBe(1);
     expect(built.report.estimatedInputTokens + limits.safetyMarginTokens).toBeLessThanOrEqual(
       limits.maxInputTokens,
     );

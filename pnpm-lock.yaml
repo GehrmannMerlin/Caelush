@@ -219,6 +219,8 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
 
+  packages/memory: {}
+
   packages/observability: {}
 
   packages/protocol:
@@ -270,6 +272,9 @@ importers:
       '@caelush/llm':
         specifier: workspace:*
         version: link:../llm
+      '@caelush/memory':
+        specifier: workspace:*
+        version: link:../memory
       '@caelush/protocol':
         specifier: workspace:*
         version: link:../protocol

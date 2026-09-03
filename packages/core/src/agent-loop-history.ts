@@ -139,10 +139,13 @@ export function prepareResumeHistory(
       break;
     }
   }
-  const splitIndex = currentStart < 0 ? 0 : currentStart;
-  const historyBeforeCurrentTurn = history.slice(0, splitIndex);
+  const historyBeforeCurrentTurn =
+    currentStart < 0
+      ? history.slice(0, pendingIndex)
+      : [...history.slice(0, currentStart), ...history.slice(currentStart + 1, pendingIndex)];
   const currentTurnMessages = [
-    ...history.slice(splitIndex, pendingIndex + 1),
+    ...(currentStart < 0 ? [] : [history[currentStart]!]),
+    history[pendingIndex]!,
     ...normalizedResults,
   ];
   if (currentTurnMessages.at(-1)?.role !== "tool") {

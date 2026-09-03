@@ -78,3 +78,4 @@ export {
   StorageMigrationError,
   StorageNotFoundError,
 } from "./errors.js";
+export { SqliteMemoryRepository } from "./memory-repository.js";

@@ -17,6 +17,26 @@ afterEach(async () => {
 });
 
 describe("committed storage migrations", () => {
+  it("adds context checkpoints, artifacts, and memory without dropping existing tables", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "caelush-storage-context-migration-"));
+    temporaryDirectories.push(directory);
+    const databasePath = path.join(directory, "caelush.db");
+    const first = await openCaelushStorage({ path: databasePath });
+    await first.close();
+
+    const sqlite = new DatabaseSync(databasePath);
+    try {
+      const tables = sqlite
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .all() as Array<{ name: string }>;
+      expect(tables.map(({ name }) => name)).toEqual(
+        expect.arrayContaining(["context_checkpoints", "context_artifacts", "memory_records"]),
+      );
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("creates every table on a fresh file and safely reruns the migration", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "caelush-storage-"));
     temporaryDirectories.push(directory);
@@ -45,7 +65,10 @@ describe("committed storage migrations", () => {
         "agent_state_snapshots",
         "agent_steps",
         "approval_requests",
+        "context_artifacts",
+        "context_checkpoints",
         "event_sequences",
+        "memory_records",
         "run_budget_entries",
         "run_cancellation_requests",
         "run_resource_states",
@@ -55,7 +78,7 @@ describe("committed storage migrations", () => {
         "verification_plans",
       ]);
       expect(sqlite.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get()).toEqual({
-        count: 8,
+        count: 9,
       });
     } finally {
       sqlite.close();

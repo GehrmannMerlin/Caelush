@@ -1,4 +1,4 @@
-import { ContextBudgetExceededError, ContextError } from "@caelush/context";
+import { ContextBudgetExceededError, ContextError, ContextExhaustedError } from "@caelush/context";
 import { LLMError, LLMNetworkError, LLMRateLimitError, LLMTimeoutError } from "@caelush/llm/errors";
 import type { AgentRetryMetadata } from "./agent-loop-input.js";
 import type { AgentError } from "@caelush/protocol";
@@ -18,12 +18,7 @@ export function mapAgentLoopError(error: unknown): AgentError {
           false,
           "Budget enforcement is unavailable for this model turn.",
         )
-      : agentError(
-          "BUDGET_EXCEEDED",
-          "LLM",
-          false,
-          "The configured Run budget would be exceeded.",
-        );
+      : agentError("BUDGET_EXCEEDED", "LLM", false, "The configured Run budget would be exceeded.");
   }
   if (error instanceof AgentToolResultBatchError) {
     return agentError("TOOL_OUTPUT_ERROR", "TOOL", false, "The tool result batch was invalid.");
@@ -37,6 +32,14 @@ export function mapAgentLoopError(error: unknown): AgentError {
       "RUNTIME",
       false,
       "The model context exceeds the configured input budget.",
+    );
+  }
+  if (error instanceof ContextExhaustedError) {
+    return agentError(
+      "CONTEXT_EXHAUSTED",
+      "RUNTIME",
+      false,
+      "The model context could not be recovered after compaction.",
     );
   }
   if (error instanceof ContextError) {

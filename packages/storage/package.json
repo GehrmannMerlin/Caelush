@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@caelush/core": "workspace:*",
+    "@caelush/memory": "workspace:*",
     "@caelush/events": "workspace:*",
     "@caelush/llm": "workspace:*",
     "@caelush/protocol": "workspace:*",

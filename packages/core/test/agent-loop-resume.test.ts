@@ -67,7 +67,7 @@ function tool(id: string, name: string, content: string) {
 }
 
 describe("AgentLoop.resumeWithToolResults", () => {
-  it("carries the complete open user turn across two tool cycles", async () => {
+  it("keeps the goal and current protocol unit bounded across two tool cycles", async () => {
     const initial = makeInput();
     const contexts: unknown[] = [];
     const turns = [
@@ -150,9 +150,6 @@ describe("AgentLoop.resumeWithToolResults", () => {
     >;
     expect(lastContext.currentTurnMessages.map((message) => message.role)).toEqual([
       "user",
-      "assistant",
-      "tool",
-      "tool",
       "assistant",
       "tool",
     ]);

@@ -1,4 +1,5 @@
 import type { ContextBudgetBreakdown } from "./errors.js";
+import type { ContextBuildTrace } from "./context-build-trace.js";
 
 export interface ContextBuildLimitsReport {
   readonly maxInputTokens: number;
@@ -55,4 +56,5 @@ export interface ContextBuildReport {
   readonly relevantFiles: ContextRelevantFilesReport;
   readonly system: ContextSystemReport;
   readonly mandatoryBreakdown?: ContextBudgetBreakdown;
+  readonly trace?: ContextBuildTrace;
 }

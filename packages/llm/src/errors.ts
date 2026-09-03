@@ -9,6 +9,7 @@ export type LLMErrorCode =
   | "LLM_RATE_LIMIT"
   | "LLM_NETWORK"
   | "LLM_TIMEOUT"
+  | "LLM_CONTEXT_OVERFLOW"
   | "LLM_ABORTED"
   | "LLM_INVALID_RESPONSE"
   | "LLM_PROVIDER_ERROR";
@@ -109,6 +110,16 @@ export class LLMNetworkError extends LLMError {
 export class LLMTimeoutError extends LLMError {
   constructor(message = "LLM provider request timed out.", context: LLMErrorContext = {}) {
     super("LLM_TIMEOUT", message, withRetryability(context, true));
+  }
+}
+
+export class LLMContextOverflowError extends LLMError {
+  constructor(context: LLMErrorContext = {}) {
+    super(
+      "LLM_CONTEXT_OVERFLOW",
+      "LLM provider rejected the request because the context window was exceeded.",
+      withRetryability(context, false),
+    );
   }
 }
 

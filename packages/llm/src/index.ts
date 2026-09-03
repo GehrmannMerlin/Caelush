@@ -30,6 +30,7 @@ export {
   LLMAbortedError,
   LLMAuthenticationError,
   LLMCapabilityUnsupportedError,
+  LLMContextOverflowError,
   LLMError,
   LLMInvalidResponseError,
   LLMInvalidRequestError,

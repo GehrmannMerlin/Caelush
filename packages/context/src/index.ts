@@ -113,3 +113,90 @@ export type {
   SelectedConversation,
   ValidatedConversation,
 } from "./conversation-history.js";
+export { createModelContextProfile, resolveModelContextProfile } from "./model-context-profile.js";
+export type {
+  ModelContextProfile,
+  ModelContextProfileInput,
+  ModelContextProfileResolutionInput,
+  ModelContextProfileSource,
+} from "./model-context-profile.js";
+export {
+  createContextPolicy,
+  shouldEmergencyCompact,
+  shouldProactivelyCompact,
+} from "./context-policy.js";
+export type { ContextPolicy, ContextPolicyOptions } from "./context-policy.js";
+export { createContextItem } from "./context-item.js";
+export type {
+  ContextCacheStability,
+  ContextItem,
+  ContextItemType,
+  ContextPriorityClass,
+  ContextRetention,
+  ContextSensitivity,
+} from "./context-item.js";
+export {
+  buildExecutionUnits,
+  createExecutionUnit,
+  isCompactionCandidate,
+  selectSafeExecutionUnits,
+} from "./execution-unit.js";
+export type {
+  ExecutionUnit,
+  ExecutionUnitBuildOptions,
+  ExecutionUnitStatus,
+} from "./execution-unit.js";
+export { buildModelContextProjection } from "./model-context-projection.js";
+export type {
+  ModelContextProjection,
+  ModelContextProjectionInput,
+} from "./model-context-projection.js";
+export { createInMemoryArtifactStore, projectToolObservation } from "./observation-projector.js";
+export { createDeterministicMinimalCheckpoint, createStructuredCheckpoint } from "./checkpoint.js";
+export type {
+  CheckpointSourceRange,
+  StructuredCheckpoint,
+  StructuredCheckpointInput,
+  MinimalCheckpointInput,
+} from "./checkpoint.js";
+export { ContextPressureController } from "./compaction.js";
+export type {
+  ContextCompactionInput,
+  ContextCompactionModel,
+  ContextCompactionModelInput,
+  ContextCompactionResult,
+  ContextPressureControllerOptions,
+} from "./compaction.js";
+export { ContextRehydrator } from "./context-rehydrator.js";
+export type {
+  ContextAuthoritySnapshot,
+  ContextRehydrationInput,
+  RehydratedContextState,
+} from "./context-rehydrator.js";
+export {
+  ContextExhaustedError,
+  ContextOverflowError,
+  isContextOverflowError,
+  recoverProviderContextOverflow,
+} from "./context-overflow.js";
+export {
+  applyWorldStateDelta,
+  createWorldStateProjection,
+  diffWorldState,
+  isGeneratedTreePath,
+} from "./world-state.js";
+export type { WorldStateDelta, WorldStateInput, WorldStateProjection } from "./world-state.js";
+export { createContextBuildTrace } from "./context-build-trace.js";
+export type { ContextBuildTrace, ContextBuildTraceInput } from "./context-build-trace.js";
+export type {
+  ContextOverflowRecoveryInput,
+  ContextOverflowRecoveryResult,
+} from "./context-overflow.js";
+export type {
+  Artifact,
+  ArtifactPutInput,
+  ArtifactSensitivity,
+  ArtifactStore,
+  ModelObservation,
+  ProjectToolObservationInput,
+} from "./observation-projector.js";

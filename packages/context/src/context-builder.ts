@@ -14,6 +14,9 @@ import type { ProjectIntelligenceSnapshot } from "./snapshot.js";
 import { Utf8HeuristicTokenEstimator, type TokenEstimator } from "./token-estimator.js";
 import { redactText } from "@caelush/security/redaction";
 import type { ProjectPackage, ProjectProfile } from "./project-profile.js";
+import { createContextPolicy, type ContextPolicy } from "./context-policy.js";
+import type { ModelContextProfile } from "./model-context-profile.js";
+import { createContextBuildTrace } from "./context-build-trace.js";
 
 export interface ContextBuildLimits {
   readonly maxInputTokens: number;
@@ -30,6 +33,8 @@ export interface ContextBuildCommonInput {
   readonly history?: readonly LLMMessage[];
   readonly limits: ContextBuildLimits;
   readonly verificationRepairContext?: VerificationRepairContextInput;
+  readonly modelContextProfile?: ModelContextProfile;
+  readonly contextPolicy?: ContextPolicy;
 }
 
 export interface UserTurnContextBuildInput extends ContextBuildCommonInput {
@@ -102,7 +107,22 @@ export class ContextBuilder {
   }
 
   build(input: ContextBuildInput): BuiltModelContext {
-    const limits = validateContextBuildLimits(input.limits);
+    const policy =
+      input.contextPolicy ??
+      (input.modelContextProfile === undefined
+        ? undefined
+        : createContextPolicy(input.modelContextProfile));
+    const limits = validateContextBuildLimits(
+      policy === undefined
+        ? input.limits
+        : {
+            ...input.limits,
+            maxInputTokens: policy.effectiveInputLimit,
+            safetyMarginTokens: policy.safetyReserveTokens,
+            maxConversationTokens: policy.conversationCapTokens,
+            maxRelevantFileTokens: policy.relevantFileCapTokens,
+          },
+    );
     const isContinuation = input.mode === "TOOL_CONTINUATION";
     const currentTurn = isContinuation ? input.currentTurnMessages : [input.currentUserMessage];
     if (currentTurn.length === 0) throw new ContextBuildError("current turn must not be empty");
@@ -146,6 +166,28 @@ export class ContextBuilder {
         throw new ContextBuildError("context builder produced an invalid message");
       }
     }
+    const effectiveInputLimit = policy?.effectiveInputLimit ?? limits.maxInputTokens;
+    const trace = createContextBuildTrace({
+      contextWindow: policy?.contextWindowTokens ?? limits.maxInputTokens,
+      effectiveInputLimit,
+      estimatedInputTokens: budget.estimatedInputTokens,
+      systemTokens: budget.systemTokens,
+      goalTokens: budget.currentUserTokens,
+      checkpointTokens: 0,
+      recentTailTokens: budget.currentTurnTokens,
+      projectTokens: budget.systemTokens,
+      fileTokens: budget.relevantFiles.estimatedTokensUsed,
+      observationTokens: currentTurn
+        .filter((message) => message.role === "tool")
+        .reduce((total, message) => total + this.tokenEstimator.estimateText(message.content), 0),
+      memoryTokens: 0,
+      droppedItems: budget.conversation.droppedMessages + budget.relevantFiles.droppedFiles,
+      truncatedItems: budget.relevantFiles.furtherTruncatedFiles,
+      pressureRatio: budget.estimatedInputTokens / effectiveInputLimit,
+      compactionCount: 0,
+      loadedFileCount: budget.relevantFiles.selectedFiles,
+      observationCount: currentTurn.filter((message) => message.role === "tool").length,
+    });
     const report: ContextBuildReport = {
       limits,
       estimatedInputTokens: budget.estimatedInputTokens,
@@ -170,6 +212,7 @@ export class ContextBuilder {
           ? {}
           : { activePackage: input.snapshot.profile.activePackage.relativePath }),
       },
+      trace,
     };
     return { messages: budget.messages, report };
   }
