@@ -28,7 +28,7 @@ export interface LLMWireDiagnostic {
 
 export interface LLMWireDiagnosticOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
-  readonly sink?: (event: LLMWireDiagnosticEvent) => void;
+  readonly writer?: (event: LLMWireDiagnosticEvent) => void;
 }
 
 function summarizeRequest(request: LLMRequest, callId: string): LLMWireDiagnosticRequest {
@@ -47,10 +47,10 @@ export function createSafeLLMWireDiagnostic(
 ): LLMWireDiagnostic | undefined {
   const env = options.env ?? (typeof process === "undefined" ? {} : process.env);
   if (env.CAELUSH_DEBUG_MODEL_WIRE !== "1") return undefined;
-  const sink = options.sink ?? (() => undefined);
+  const writer = options.writer ?? (() => undefined);
   return Object.freeze({
     record(event: LLMWireDiagnosticEvent): void {
-      sink(
+      writer(
         Object.freeze({
           ...event,
           messageRoles: "messageRoles" in event ? Object.freeze([...event.messageRoles]) : undefined,

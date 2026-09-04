@@ -28,11 +28,11 @@ describe("safe model wire diagnostics", () => {
   it("is opt-in and records only roles, names, and timing-safe metadata", () => {
     const events: unknown[] = [];
     expect(
-      createSafeLLMWireDiagnostic({ env: {}, sink: (event) => events.push(event) }),
+      createSafeLLMWireDiagnostic({ env: {}, writer: (event) => events.push(event) }),
     ).toBeUndefined();
     const diagnostic = createSafeLLMWireDiagnostic({
       env: { CAELUSH_DEBUG_MODEL_WIRE: "1" },
-      sink: (event) => events.push(event),
+      writer: (event) => events.push(event),
     });
     expect(diagnostic).toBeDefined();
     diagnostic?.record(summarizeLLMWireRequest(request, "call-1"));

@@ -145,7 +145,7 @@ export interface DaemonCompositionOptions {
   readonly clock?: DaemonClock;
   readonly logger?: RunExecutionSupervisorLogger;
   readonly configResolver?: RunExecutionConfigResolver;
-  readonly wireDiagnosticSink?: (event: import("@caelush/llm").LLMWireDiagnosticEvent) => void;
+  readonly wireDiagnosticWriter?: (event: import("@caelush/llm").LLMWireDiagnosticEvent) => void;
 }
 
 export interface DaemonComposition {
@@ -192,7 +192,7 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
   }
   for (const provider of options.providerOverrides ?? []) providerRegistry.register(provider);
   const wireDiagnostic = createSafeLLMWireDiagnostic(
-    options.wireDiagnosticSink === undefined ? {} : { sink: options.wireDiagnosticSink },
+    options.wireDiagnosticWriter === undefined ? {} : { writer: options.wireDiagnosticWriter },
   );
   const gateway = new LLMGateway({
     providers: providerRegistry,
