@@ -5,6 +5,8 @@ import { assembleContextBudget } from "../src/context-budget.js";
 import type { ConversationTurnGroup } from "../src/conversation-history.js";
 import type { RelevantFileContextSection } from "../src/relevant-file-plan.js";
 import type { ContextBuildLimits } from "../src/context-builder.js";
+import { createContextPolicy } from "../src/context-policy.js";
+import { createModelContextProfile } from "../src/model-context-profile.js";
 
 const estimator = { estimateText: (text: string) => text.length };
 const limits = (maxInputTokens: number, overrides: Partial<ContextBuildLimits> = {}) => ({
@@ -36,6 +38,41 @@ const file = (content: string, relativePath = "src/file.ts"): RelevantFileContex
 });
 
 describe("final context budget", () => {
+  it("rejects invalid policy ratios and unsafe caps instead of creating an unusable budget", () => {
+    const profile = createModelContextProfile({
+      providerId: "fixture",
+      modelId: "policy",
+      contextWindowTokens: 16_000,
+      maxOutputTokens: 2_048,
+      recommendedOutputReserveTokens: 2_048,
+      supportsPromptCaching: false,
+      supportsUsageReporting: false,
+    });
+
+    expect(() => createContextPolicy(profile, { targetRecentTailRatio: 1 })).toThrow(RangeError);
+    expect(() =>
+      createContextPolicy(profile, { maxObservationBatchTokensCap: Number.MAX_SAFE_INTEGER + 1 }),
+    ).toThrow(RangeError);
+  });
+
+  it("subtracts output and safety reserves once on the policy path", () => {
+    const profile = createModelContextProfile({
+      providerId: "fixture",
+      modelId: "arithmetic",
+      contextWindowTokens: 16_000,
+      maxOutputTokens: 2_048,
+      recommendedOutputReserveTokens: 2_048,
+      supportsPromptCaching: false,
+      supportsUsageReporting: false,
+    });
+    const policy = createContextPolicy(profile, { safetyReserveTokens: 512 });
+
+    expect(policy.effectiveInputLimit).toBe(13_440);
+    expect(
+      policy.effectiveInputLimit + policy.outputReserveTokens + policy.safetyReserveTokens,
+    ).toBe(profile.contextWindowTokens);
+  });
+
   it("fails closed when mandatory rendered messages plus safety exceed the budget", () => {
     expect(() =>
       assembleContextBudget({

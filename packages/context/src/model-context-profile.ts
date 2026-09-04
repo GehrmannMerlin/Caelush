@@ -139,6 +139,8 @@ export function resolveModelContextProfile(
   if (configured !== undefined) return cloneProfile(configured, "CONFIGURATION");
   const known = findProfile(input.knownProfiles, input.providerId, input.modelId);
   if (known !== undefined) return cloneProfile(known, "KNOWN_METADATA");
+  const override = findProfile(input.overrides, input.providerId, input.modelId);
+  if (override !== undefined) return cloneProfile(override, "OVERRIDE");
   if (input.legacyLimits !== undefined) {
     requirePositiveSafeInteger("legacyLimits.maxInputTokens", input.legacyLimits.maxInputTokens);
     const outputReserveTokens = input.legacyLimits.outputReserveTokens ?? 0;
@@ -158,8 +160,6 @@ export function resolveModelContextProfile(
       profileSource: "LEGACY_LIMITS",
     });
   }
-  const override = findProfile(input.overrides, input.providerId, input.modelId);
-  if (override !== undefined) return cloneProfile(override, "OVERRIDE");
   const fallback = input.fallback ?? DEFAULT_FALLBACK;
   return createModelContextProfile({
     providerId: input.providerId,

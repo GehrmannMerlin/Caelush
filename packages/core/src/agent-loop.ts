@@ -7,6 +7,7 @@ import {
   ContextExhaustedError,
   type ProjectIntelligenceSnapshot,
   type RelevantFileContextPlan,
+  type ContextAuthoritySnapshot,
 } from "@caelush/context";
 import type { LLMMessage, LLMToolResultMessage } from "@caelush/llm/messages";
 import type { LLMRequest } from "@caelush/llm/request";
@@ -180,6 +181,7 @@ export class AgentLoop {
       projectId: input.run.workspace.id,
       context: contextInput,
       signal: input.signal,
+      authorities: contextAuthorities(input.state),
       ...(forceRecovery ? { forceRecovery: true } : {}),
     });
     throwIfAborted(input.signal);
@@ -493,6 +495,16 @@ export class AgentLoop {
       providerTurnState,
     };
   }
+}
+
+function contextAuthorities(state: AgentState): ContextAuthoritySnapshot {
+  return {
+    goal: state.goal,
+    changedFiles: state.changedFiles.map((file) => `${file.changeType}: ${file.path}`),
+    activeProcesses: state.activeProcesses.map((process) => `${process.id}: ${process.status}`),
+    recentErrors: state.errors.slice(-8).map((error) => error.code),
+    verificationState: state.verification,
+  };
 }
 
 function monotonicNow(state: AgentState, now: TimestampMs): TimestampMs {

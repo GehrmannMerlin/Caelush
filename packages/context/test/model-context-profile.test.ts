@@ -59,4 +59,27 @@ describe("ModelContextProfile", () => {
     expect(resolved).not.toBe(configured);
     expect(catalog).toEqual([configured]);
   });
+
+  it("uses an explicit runtime override before legacy limits", () => {
+    const override = createModelContextProfile({
+      providerId: "fixture",
+      modelId: "fixture-runtime",
+      contextWindowTokens: 128_000,
+      maxOutputTokens: 8192,
+      recommendedOutputReserveTokens: 8192,
+      supportsPromptCaching: false,
+      supportsUsageReporting: true,
+      profileSource: "OVERRIDE",
+    });
+
+    const resolved = resolveModelContextProfile({
+      providerId: "fixture",
+      modelId: "fixture-runtime",
+      overrides: [override],
+      legacyLimits: { maxInputTokens: 16_000 },
+    });
+
+    expect(resolved.contextWindowTokens).toBe(128_000);
+    expect(resolved.profileSource).toBe("OVERRIDE");
+  });
 });

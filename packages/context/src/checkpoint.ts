@@ -1,6 +1,7 @@
 export interface CheckpointSourceRange {
   readonly from: number;
   readonly to: number;
+  readonly kind?: "DURABLE_MESSAGE_SEQUENCE" | "LOCAL_HISTORY_INDEX";
 }
 
 export interface StructuredCheckpointInput {
@@ -78,7 +79,10 @@ export function createStructuredCheckpoint(input: StructuredCheckpointInput): St
     resourceGovernance: input.resourceGovernance,
     criticalReferences: boundedList("criticalReferences", input.criticalReferences),
     nextIntent: input.nextIntent,
-    sourceRange: Object.freeze({ ...input.sourceRange }),
+    sourceRange: Object.freeze({
+      ...input.sourceRange,
+      kind: input.sourceRange.kind ?? "LOCAL_HISTORY_INDEX",
+    }),
   });
 }
 

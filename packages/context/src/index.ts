@@ -164,13 +164,14 @@ export type {
   StructuredCheckpointInput,
   MinimalCheckpointInput,
 } from "./checkpoint.js";
-export { ContextPressureController } from "./compaction.js";
+export { ContextPressureController, ContextPressureStateMachine } from "./compaction.js";
 export type {
   ContextCompactionInput,
   ContextCompactionModel,
   ContextCompactionModelInput,
   ContextCompactionResult,
   ContextPressureControllerOptions,
+  ContextPressureState,
 } from "./compaction.js";
 export { ContextRehydrator } from "./context-rehydrator.js";
 export type {
@@ -227,6 +228,7 @@ export type {
 export { createContextUsageProjection } from "./context-usage-projection.js";
 export type {
   ContextUsageBreakdown,
+  ContextUsageBreakdownInput,
   ContextUsagePressureState,
   ContextUsageProjection,
   ContextUsageProjectionInput,

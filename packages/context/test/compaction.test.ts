@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createModelContextProfile } from "../src/model-context-profile.js";
 import { createContextPolicy } from "../src/context-policy.js";
 import { createExecutionUnit, type ExecutionUnit } from "../src/execution-unit.js";
-import { ContextPressureController } from "../src/compaction.js";
+import { ContextPressureController, ContextPressureStateMachine } from "../src/compaction.js";
 
 const policy = createContextPolicy(
   createModelContextProfile({
@@ -62,4 +62,29 @@ describe("ContextPressureController", () => {
     expect(controller.postCompactionTargetTokens).toBeLessThan(policy.proactiveCompactionTokens);
     expect(controller.shouldCompact(controller.postCompactionTargetTokens)).toBe(false);
   });
+
+  it("keeps the post-compaction target below the proactive trigger", () => {
+    const controller = new ContextPressureController({ policy });
+
+    expect(controller.postCompactionTargetRatio).toBe(0.5);
+    expect(controller.shouldCompact(controller.postCompactionTargetTokens)).toBe(false);
+    expect(controller.shouldCompact(policy.proactiveCompactionTokens)).toBe(true);
+  });
+
+  it("transitions through recovery and uses hysteresis after a successful rebuild", () => {
+    const machine = new ContextPressureStateMachine(policy);
+    expect(machine.state).toBe("NORMAL");
+    machine.observe(policy.proactiveCompactionTokens);
+    expect(machine.state).toBe("PROACTIVE");
+    machine.markRecovering();
+    expect(machine.state).toBe("RECOVERING_OVERFLOW");
+    machine.markRecovered(controllerTarget(policy));
+    expect(machine.state).toBe("NORMAL");
+    machine.markExhausted();
+    expect(machine.state).toBe("EXHAUSTED");
+  });
 });
+
+function controllerTarget(input: typeof policy): number {
+  return Math.floor(input.effectiveInputLimit * input.postCompactionTargetRatio);
+}

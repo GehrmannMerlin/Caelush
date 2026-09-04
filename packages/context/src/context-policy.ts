@@ -5,6 +5,7 @@ export interface ContextPolicyOptions {
   readonly safetyReserveTokens?: number;
   readonly proactiveCompactionRatio?: number;
   readonly emergencyCompactionRatio?: number;
+  readonly postCompactionTargetRatio?: number;
   readonly targetRecentTailTokensCap?: number;
   readonly targetRecentTailRatio?: number;
   readonly minRecentTailTokensCap?: number;
@@ -25,6 +26,7 @@ export interface ContextPolicy {
   readonly effectiveInputLimit: number;
   readonly proactiveCompactionRatio: number;
   readonly emergencyCompactionRatio: number;
+  readonly postCompactionTargetRatio: number;
   readonly proactiveCompactionTokens: number;
   readonly emergencyCompactionTokens: number;
   readonly targetRecentTailTokens: number;
@@ -59,6 +61,10 @@ function ratio(name: string, value: number): void {
   }
 }
 
+function optionalCap(name: string, value: number | undefined, minimum = 0): void {
+  if (value !== undefined) safeInteger(name, value, minimum);
+}
+
 export function createContextPolicy(
   profile: ModelContextProfile,
   options: ContextPolicyOptions = {},
@@ -67,39 +73,51 @@ export function createContextPolicy(
   const safetyReserveTokens = options.safetyReserveTokens ?? DEFAULT_SAFETY_RESERVE;
   safeInteger("outputReserveTokens", outputReserveTokens, 0);
   safeInteger("safetyReserveTokens", safetyReserveTokens, 0);
-  if (outputReserveTokens + safetyReserveTokens >= profile.contextWindowTokens) {
+  const reservedTokens = outputReserveTokens + safetyReserveTokens;
+  if (!Number.isSafeInteger(reservedTokens) || reservedTokens >= profile.contextWindowTokens) {
     throw new RangeError("outputReserveTokens and safetyReserveTokens leave no input budget");
   }
   const proactiveCompactionRatio = options.proactiveCompactionRatio ?? 0.75;
   const emergencyCompactionRatio = options.emergencyCompactionRatio ?? 0.9;
+  const postCompactionTargetRatio = options.postCompactionTargetRatio ?? 0.5;
   ratio("proactiveCompactionRatio", proactiveCompactionRatio);
   ratio("emergencyCompactionRatio", emergencyCompactionRatio);
+  ratio("postCompactionTargetRatio", postCompactionTargetRatio);
   if (proactiveCompactionRatio >= emergencyCompactionRatio) {
     throw new RangeError(
       "pressure ratios require proactiveCompactionRatio < emergencyCompactionRatio",
     );
   }
+  const targetRecentTailRatio = options.targetRecentTailRatio ?? DEFAULT_TARGET_TAIL_RATIO;
+  const minRecentTailRatio = options.minRecentTailRatio ?? DEFAULT_MIN_TAIL_RATIO;
+  const maxSingleObservationRatio = options.maxSingleObservationRatio ?? DEFAULT_OBSERVATION_RATIO;
+  const maxObservationBatchRatio =
+    options.maxObservationBatchRatio ?? DEFAULT_OBSERVATION_BATCH_RATIO;
+  ratio("targetRecentTailRatio", targetRecentTailRatio);
+  ratio("minRecentTailRatio", minRecentTailRatio);
+  ratio("maxSingleObservationRatio", maxSingleObservationRatio);
+  ratio("maxObservationBatchRatio", maxObservationBatchRatio);
+  optionalCap("targetRecentTailTokensCap", options.targetRecentTailTokensCap);
+  optionalCap("minRecentTailTokensCap", options.minRecentTailTokensCap);
+  optionalCap("maxSingleObservationTokensCap", options.maxSingleObservationTokensCap, 1);
+  optionalCap("maxObservationBatchTokensCap", options.maxObservationBatchTokensCap, 1);
   const effectiveInputLimit =
     profile.contextWindowTokens - outputReserveTokens - safetyReserveTokens;
   const targetRecentTailTokens = Math.min(
     options.targetRecentTailTokensCap ?? DEFAULT_TARGET_TAIL_CAP,
-    Math.floor(effectiveInputLimit * (options.targetRecentTailRatio ?? DEFAULT_TARGET_TAIL_RATIO)),
+    Math.floor(effectiveInputLimit * targetRecentTailRatio),
   );
   const minRecentTailTokens = Math.min(
     options.minRecentTailTokensCap ?? DEFAULT_MIN_TAIL_CAP,
-    Math.floor(effectiveInputLimit * (options.minRecentTailRatio ?? DEFAULT_MIN_TAIL_RATIO)),
+    Math.floor(effectiveInputLimit * minRecentTailRatio),
   );
   const maxSingleObservationTokens = Math.min(
     options.maxSingleObservationTokensCap ?? DEFAULT_OBSERVATION_CAP,
-    Math.floor(
-      effectiveInputLimit * (options.maxSingleObservationRatio ?? DEFAULT_OBSERVATION_RATIO),
-    ),
+    Math.floor(effectiveInputLimit * maxSingleObservationRatio),
   );
   const maxObservationBatchTokens = Math.min(
     options.maxObservationBatchTokensCap ?? DEFAULT_OBSERVATION_BATCH_CAP,
-    Math.floor(
-      effectiveInputLimit * (options.maxObservationBatchRatio ?? DEFAULT_OBSERVATION_BATCH_RATIO),
-    ),
+    Math.floor(effectiveInputLimit * maxObservationBatchRatio),
   );
   if (
     minRecentTailTokens > targetRecentTailTokens ||
@@ -122,6 +140,7 @@ export function createContextPolicy(
     effectiveInputLimit,
     proactiveCompactionRatio,
     emergencyCompactionRatio,
+    postCompactionTargetRatio,
     proactiveCompactionTokens: Math.floor(effectiveInputLimit * proactiveCompactionRatio),
     emergencyCompactionTokens: Math.floor(effectiveInputLimit * emergencyCompactionRatio),
     targetRecentTailTokens,

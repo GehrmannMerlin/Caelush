@@ -20,8 +20,12 @@ import {
   type ModelContextProfile,
 } from "./model-context-profile.js";
 import { buildExecutionUnits, isCompactionCandidate } from "./execution-unit.js";
-import { ContextPressureController } from "./compaction.js";
-import { ContextRehydrator } from "./context-rehydrator.js";
+import {
+  ContextPressureController,
+  ContextPressureStateMachine,
+  type ContextPressureState,
+} from "./compaction.js";
+import { ContextRehydrator, type ContextAuthoritySnapshot } from "./context-rehydrator.js";
 import { estimateLLMMessage } from "./conversation-history.js";
 import { projectToolObservationBatch } from "./observation-projector.js";
 import { Utf8HeuristicTokenEstimator } from "./token-estimator.js";
@@ -34,6 +38,7 @@ export interface ContextRuntimePrepareInput {
   readonly context: ContextBuildInput;
   readonly signal: AbortSignal;
   readonly forceRecovery?: boolean;
+  readonly authorities?: ContextAuthoritySnapshot;
 }
 
 export interface ContextRuntimePrepareResult extends BuiltModelContext {
@@ -89,6 +94,7 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
   private readonly builder: Pick<ContextBuilder, "build">;
   private readonly usageByRun = new Map<string, ContextUsageProjection>();
   private readonly policyByRun = new Map<string, ContextPolicy>();
+  private readonly pressureByRun = new Map<string, ContextPressureStateMachine>();
 
   constructor(private readonly options: ContextRuntimeCoordinatorOptions = {}) {
     this.builder = options.builder ?? createDefaultContextBuilder();
@@ -139,13 +145,18 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
     });
     const policy = createContextPolicy(profile, this.options.policyOptions);
     this.policyByRun.set(input.runId, policy);
+    const pressureState =
+      this.pressureByRun.get(input.runId) ?? new ContextPressureStateMachine(policy);
+    this.pressureByRun.set(input.runId, pressureState);
+    if (input.forceRecovery) pressureState.markRecovering();
     const goal =
-      input.context.mode === "TOOL_CONTINUATION"
+      input.authorities?.goal ??
+      (input.context.mode === "TOOL_CONTINUATION"
         ? input.context.currentTurnMessages
             .filter((message) => message.role === "user")
             .map((message) => message.content)
             .join(" ") || input.context.baseSystemPrompt
-        : input.context.currentUserMessage.content;
+        : input.context.currentUserMessage.content);
     const memoryItems =
       this.options.memoryLoader === undefined
         ? []
@@ -165,45 +176,69 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
     };
     let workingInput = buildInput;
     let context: BuiltModelContext;
+    let preCompactionTokens: number | undefined;
     let compactedCheckpoint = checkpoint;
     let compactionCount = 0;
+    const recoveryStages: string[] = [];
     if (input.forceRecovery && hasCompressibleHistory(workingInput)) {
-      const compacted = await this.compact(input.runId, workingInput, profile, checkpoint, policy);
+      recoveryStages.push("COMPACT_CLOSED_UNITS");
+      const compacted = await this.compact(
+        input.runId,
+        workingInput,
+        profile,
+        checkpoint,
+        policy,
+        undefined,
+        input.authorities,
+      );
       compactedCheckpoint = compacted.checkpoint;
       compactionCount = 1;
       workingInput = this.tightenOpenTurn(compacted.input, policy, "EMERGENCY");
     }
     try {
       context = this.builder.build(workingInput);
+      preCompactionTokens = context.report.estimatedInputTokens;
+      const initialMeasuredTokens = measuredContextTokens(context);
+      if (initialMeasuredTokens !== undefined) pressureState.observe(initialMeasuredTokens);
       if (
         context.report.trace !== undefined &&
         (context.report.trace.pressureRatio >= policy.proactiveCompactionRatio ||
           context.report.conversation.requiresCompaction) &&
         hasCompressibleHistory(workingInput)
       ) {
+        recoveryStages.push("PROACTIVE_COMPACTION");
         const compacted = await this.compact(
           input.runId,
           workingInput,
           profile,
           checkpoint,
           policy,
+          context.report.estimatedInputTokens,
+          input.authorities,
         );
         compactionCount = 1;
         workingInput = compacted.input;
         context = this.builder.build(compacted.input);
+        const compactedMeasuredTokens = measuredContextTokens(context);
+        if (compactedMeasuredTokens !== undefined)
+          pressureState.markRecovered(compactedMeasuredTokens);
         compactedCheckpoint = await this.updateCheckpointTokensAfter(compacted.checkpoint, context);
       }
     } catch (error) {
       if (!(error instanceof ContextBudgetExceededError)) throw error;
+      recoveryStages.push("REPROJECT_OPEN_OBSERVATIONS_TIGHT");
       workingInput = this.tightenOpenTurn(buildInput, policy, "TIGHT");
       try {
         context = this.builder.build(workingInput);
+        const tightMeasuredTokens = measuredContextTokens(context);
+        if (tightMeasuredTokens !== undefined) pressureState.observe(tightMeasuredTokens);
       } catch (tightError) {
         if (
           !(tightError instanceof ContextBudgetExceededError) ||
           !hasCompressibleHistory(buildInput)
         ) {
-          await this.recordFailedUsage(input, profile, policy, workingInput);
+          await this.recordFailedUsage(input, profile, policy, workingInput, recoveryStages);
+          pressureState.markExhausted();
           throw new ContextExhaustedError();
         }
         const compacted = await this.compact(
@@ -212,21 +247,36 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
           profile,
           checkpoint,
           policy,
+          preCompactionTokens ?? this.estimateFullInput(buildInput),
+          input.authorities,
         );
+        recoveryStages.push("COMPACT_CLOSED_UNITS");
         compactionCount = 1;
         workingInput = compacted.input;
         try {
           context = this.builder.build(workingInput);
+          const recoveredMeasuredTokens = measuredContextTokens(context);
+          if (recoveredMeasuredTokens !== undefined)
+            pressureState.markRecovered(recoveredMeasuredTokens);
         } catch {
+          recoveryStages.push("REPROJECT_OPEN_OBSERVATIONS_EMERGENCY");
           workingInput = this.tightenOpenTurn(workingInput, policy, "EMERGENCY");
           try {
             context = this.builder.build(workingInput);
+            const emergencyMeasuredTokens = measuredContextTokens(context);
+            if (emergencyMeasuredTokens !== undefined)
+              pressureState.markRecovered(emergencyMeasuredTokens);
           } catch {
+            recoveryStages.push("REPROJECT_OPEN_OBSERVATIONS_MINIMAL");
             workingInput = this.tightenOpenTurn(workingInput, policy, "MINIMAL");
             try {
               context = this.builder.build(workingInput);
+              const minimalMeasuredTokens = measuredContextTokens(context);
+              if (minimalMeasuredTokens !== undefined)
+                pressureState.markRecovered(minimalMeasuredTokens);
             } catch {
-              await this.recordFailedUsage(input, profile, policy, workingInput);
+              await this.recordFailedUsage(input, profile, policy, workingInput, recoveryStages);
+              pressureState.markExhausted();
               throw new ContextExhaustedError();
             }
           }
@@ -244,7 +294,7 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
         report: withCompactionMetadata(context.report, compactionCount, compactedCheckpoint),
       };
     }
-    await this.recordUsage(input, profile, policy, context.report, compactionCount);
+    await this.recordUsage(input, profile, policy, context.report, compactionCount, recoveryStages);
     return {
       ...context,
       profile,
@@ -260,6 +310,7 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
     policy: ContextPolicy,
     report: ContextBuildReport,
     compactionCount: number,
+    recoveryStages: readonly string[] = [],
   ): Promise<void> {
     const trace = report.trace;
     if (trace === undefined) return;
@@ -271,6 +322,7 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
       modelId: profile.modelId,
       profileSource: profile.profileSource,
       contextWindowTokens: trace.contextWindow,
+      rawContextWindowTokens: profile.contextWindowTokens,
       effectiveInputLimitTokens: policy.effectiveInputLimit,
       estimatedInputTokens: trace.estimatedInputTokens,
       pressureState:
@@ -293,8 +345,16 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
         files: trace.fileTokens,
         toolObservations: trace.observationTokens,
         memory: trace.memoryTokens,
+        systemTokens: trace.systemTokens,
+        goalTokens: trace.goalTokens,
+        currentUserTokens: report.currentUserTokens ?? trace.goalTokens,
+        relevantFileTokens: trace.fileTokens,
+        currentTurnTokens: report.currentTurn?.estimatedTokens ?? trace.recentTailTokens,
+        mandatoryTokens: report.mandatoryTokens ?? trace.systemTokens + trace.goalTokens,
       },
       updatedAt: now,
+      lastBuildAt: now,
+      lastRecoveryStages: recoveryStages,
     });
     this.usageByRun.set(input.runId, usage);
     await this.options.usageRepository?.upsert(usage);
@@ -306,6 +366,8 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
     profile: ModelContextProfile,
     previousCheckpoint: ContextCheckpointRecord | undefined,
     policy: ContextPolicy,
+    preCompactionTokens?: number,
+    authorities: ContextAuthoritySnapshot = {},
   ): Promise<{ readonly input: ContextBuildInput; readonly checkpoint: ContextCheckpointRecord }> {
     if (
       this.options.checkpointRepository === undefined ||
@@ -327,10 +389,9 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
       estimateText: estimator.estimateText.bind(estimator),
     });
     const eligible = units.filter((unit) => isCompactionCandidate(unit));
-    const tokensBefore = history.reduce(
-      (total, message) => total + estimateLLMMessage(message, estimator),
-      0,
-    );
+    const tokensBefore =
+      preCompactionTokens ??
+      history.reduce((total, message) => total + estimateLLMMessage(message, estimator), 0);
     const maxCompactionTokens = Math.max(0, tokensBefore - policy.targetRecentTailTokens);
     const oldestCandidates = [];
     let selectedTokens = 0;
@@ -352,10 +413,14 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
               .map((message) => message.content)
               .join(" ")
           : input.currentUserMessage.content,
-      changedFiles: [],
-      recentErrors: [],
-      verificationState: "PENDING",
-      sourceRange: { from: 0, to: Math.max(0, history.length - 1) },
+      changedFiles: authorities.changedFiles ?? [],
+      recentErrors: authorities.recentErrors ?? [],
+      verificationState: authorities.verificationState ?? "UNKNOWN",
+      sourceRange: {
+        from: 0,
+        to: Math.max(0, history.length - 1),
+        kind: "LOCAL_HISTORY_INDEX",
+      },
     });
     const selectedUnits = pressureResult.selectedUnits;
     const legacyHistoryCut =
@@ -368,17 +433,19 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
       (_message, index) => !selectedRanges.some(([from, to]) => index >= from && index <= to),
     );
     const goal =
-      input.mode === "TOOL_CONTINUATION"
+      authorities.goal ??
+      (input.mode === "TOOL_CONTINUATION"
         ? input.currentTurnMessages
             .filter((message) => message.role === "user")
             .map((message) => message.content)
             .join(" ")
-        : input.currentUserMessage.content;
+        : input.currentUserMessage.content);
     const sourceRange = legacyHistoryCut
-      ? { from: 0, to: history.length }
+      ? { from: 0, to: Math.max(0, history.length - 1), kind: "LOCAL_HISTORY_INDEX" as const }
       : {
           from: selectedUnits[0]!.sourceSequenceFrom,
           to: selectedUnits.at(-1)!.sourceSequenceTo,
+          kind: "LOCAL_HISTORY_INDEX" as const,
         };
     const structuredCheckpoint: StructuredCheckpoint = createStructuredCheckpoint({
       goal,
@@ -388,21 +455,34 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
       blocked: [],
       importantDiscoveries: [],
       keyDecisions: [],
-      changedFiles: [],
+      changedFiles: authorities.changedFiles ?? [],
       readFiles: [],
-      recentErrors: [],
-      verificationState: "PENDING",
-      activeProcesses: [],
-      pendingApprovals: [],
-      resourceGovernance: "UNCHANGED",
+      recentErrors: authorities.recentErrors ?? [],
+      verificationState: authorities.verificationState ?? "UNKNOWN",
+      activeProcesses: authorities.activeProcesses ?? [],
+      pendingApprovals: authorities.pendingApprovals ?? [],
+      resourceGovernance: authorities.resourceGovernance ?? "UNKNOWN",
       criticalReferences: [],
       nextIntent: "continue from the retained recent execution tail",
       sourceRange,
     });
     const sourceSequenceFrom = legacyHistoryCut ? 0 : selectedUnits[0]!.sourceSequenceFrom;
     const sourceSequenceTo = legacyHistoryCut
-      ? history.length
+      ? Math.max(0, history.length - 1)
       : selectedUnits.at(-1)!.sourceSequenceTo;
+    const compactedInput: ContextBuildInput = {
+      ...input,
+      history: retainedHistory,
+      checkpoint: structuredCheckpoint,
+    };
+    let provisionalInput = compactedInput;
+    let provisionalContext: BuiltModelContext;
+    try {
+      provisionalContext = this.builder.build(provisionalInput);
+    } catch {
+      provisionalInput = this.tightenOpenTurn(compactedInput, policy, "EMERGENCY");
+      provisionalContext = this.builder.build(provisionalInput);
+    }
     const checkpoint = await this.options.checkpointRepository.create({
       checkpointId:
         this.options.checkpointIdFactory?.create() ?? `checkpoint:${runId}:${history.length}`,
@@ -413,24 +493,31 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
       sourceSequenceFrom,
       sourceSequenceTo,
       tokensBefore,
-      tokensAfter: 0,
+      tokensAfter: provisionalContext.report.estimatedInputTokens,
       structuredCheckpoint,
       modelRef: { providerId: profile.providerId, modelId: profile.modelId },
       createdAt: this.options.clock?.now() ?? Date.now(),
     });
     const rehydrated = await new ContextRehydrator().rehydrate({
       checkpoint: checkpoint.structuredCheckpoint,
-      authorities: { goal, verificationState: "PENDING" },
+      authorities: {
+        ...authorities,
+        goal,
+        verificationState: authorities.verificationState ?? "UNKNOWN",
+      },
     });
     const rehydratedCheckpoint = rehydrated.checkpoint ?? checkpoint.structuredCheckpoint;
     return {
       checkpoint,
       input: {
-        ...input,
-        history: retainedHistory,
+        ...provisionalInput,
         checkpoint: rehydratedCheckpoint,
       },
     };
+  }
+
+  getContextPressureState(runId: string): ContextPressureState | undefined {
+    return this.pressureByRun.get(runId)?.state;
   }
 
   private tightenOpenTurn(
@@ -479,11 +566,48 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
     return { ...checkpoint, tokensAfter };
   }
 
+  private estimateFullInput(input: ContextBuildInput): number {
+    try {
+      const {
+        modelContextProfile: _profile,
+        contextPolicy: _policy,
+        ...inputWithoutPolicy
+      } = input;
+      void _profile;
+      void _policy;
+      const measured = this.builder.build({
+        ...inputWithoutPolicy,
+        limits: {
+          ...input.limits,
+          maxInputTokens: Number.MAX_SAFE_INTEGER,
+          safetyMarginTokens: 0,
+          maxConversationTokens: Number.MAX_SAFE_INTEGER,
+          maxRelevantFileTokens: Number.MAX_SAFE_INTEGER,
+          minRelevantFileTokens: 1,
+        },
+      });
+      return measured.report.estimatedInputTokens;
+    } catch {
+      const estimator = new Utf8HeuristicTokenEstimator();
+      const currentTurn =
+        input.mode === "TOOL_CONTINUATION" ? input.currentTurnMessages : [input.currentUserMessage];
+      return (
+        estimator.estimateText(input.baseSystemPrompt) +
+        (input.history ?? []).reduce(
+          (total, message) => total + estimateLLMMessage(message, estimator),
+          0,
+        ) +
+        currentTurn.reduce((total, message) => total + estimateLLMMessage(message, estimator), 0)
+      );
+    }
+  }
+
   private async recordFailedUsage(
     input: ContextRuntimePrepareInput,
     profile: ModelContextProfile,
     policy: ContextPolicy,
     attempted: ContextBuildInput,
+    recoveryStages: readonly string[] = [],
   ): Promise<void> {
     const estimator = new Utf8HeuristicTokenEstimator();
     const currentTurn =
@@ -501,6 +625,7 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
       modelId: profile.modelId,
       profileSource: profile.profileSource,
       contextWindowTokens: profile.contextWindowTokens,
+      rawContextWindowTokens: profile.contextWindowTokens,
       effectiveInputLimitTokens: policy.effectiveInputLimit,
       estimatedInputTokens,
       pressureState: "EMERGENCY",
@@ -521,8 +646,27 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
           .filter((message) => message.role === "tool")
           .reduce((total, message) => total + estimator.estimateText(message.content), 0),
         memory: 0,
+        systemTokens: estimator.estimateText(attempted.baseSystemPrompt),
+        goalTokens:
+          attempted.mode === "USER_TURN"
+            ? estimator.estimateText(attempted.currentUserMessage.content)
+            : 0,
+        currentUserTokens:
+          attempted.mode === "USER_TURN"
+            ? estimateLLMMessage(attempted.currentUserMessage, estimator)
+            : 0,
+        relevantFileTokens: 0,
+        currentTurnTokens: currentTurn.reduce(
+          (total, message) => total + estimateLLMMessage(message, estimator),
+          0,
+        ),
+        mandatoryTokens:
+          estimator.estimateText(attempted.baseSystemPrompt) +
+          currentTurn.reduce((total, message) => total + estimateLLMMessage(message, estimator), 0),
       },
       updatedAt: now,
+      lastBuildAt: now,
+      lastRecoveryStages: recoveryStages,
       lastBuildStatus: "CONTEXT_EXHAUSTED",
     });
     this.usageByRun.set(input.runId, usage);
@@ -532,6 +676,10 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
 
 function hasCompressibleHistory(input: ContextBuildInput): boolean {
   return (input.history?.length ?? 0) > 0;
+}
+
+function measuredContextTokens(context: BuiltModelContext): number | undefined {
+  return context.report.trace?.estimatedInputTokens ?? context.report.estimatedInputTokens;
 }
 
 function withCompactionMetadata(

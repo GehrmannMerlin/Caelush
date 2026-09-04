@@ -7,6 +7,47 @@ import {
 } from "./checkpoint.js";
 import { selectSafeExecutionUnits, type ExecutionUnit } from "./execution-unit.js";
 
+export type ContextPressureState =
+  "NORMAL" | "PROACTIVE" | "EMERGENCY" | "RECOVERING_OVERFLOW" | "EXHAUSTED";
+
+export class ContextPressureStateMachine {
+  private currentState: ContextPressureState = "NORMAL";
+
+  constructor(private readonly policy: ContextPolicy) {}
+
+  get state(): ContextPressureState {
+    return this.currentState;
+  }
+
+  observe(estimatedInputTokens: number): ContextPressureState {
+    if (!Number.isSafeInteger(estimatedInputTokens) || estimatedInputTokens < 0) {
+      throw new RangeError("estimatedInputTokens must be a non-negative safe integer");
+    }
+    const ratio = estimatedInputTokens / this.policy.effectiveInputLimit;
+    if (ratio >= this.policy.emergencyCompactionRatio) this.currentState = "EMERGENCY";
+    else if (ratio >= this.policy.proactiveCompactionRatio) this.currentState = "PROACTIVE";
+    else if (this.currentState !== "RECOVERING_OVERFLOW" && this.currentState !== "EXHAUSTED") {
+      this.currentState = "NORMAL";
+    }
+    return this.currentState;
+  }
+
+  markRecovering(): void {
+    this.currentState = "RECOVERING_OVERFLOW";
+  }
+
+  markRecovered(estimatedInputTokens: number): void {
+    this.observe(estimatedInputTokens);
+    if (estimatedInputTokens < this.policy.proactiveCompactionTokens) {
+      this.currentState = "NORMAL";
+    }
+  }
+
+  markExhausted(): void {
+    this.currentState = "EXHAUSTED";
+  }
+}
+
 export interface ContextCompactionModelInput {
   readonly goal: string;
   readonly units: readonly ExecutionUnit[];
@@ -45,11 +86,15 @@ export interface ContextPressureControllerOptions {
 
 export class ContextPressureController {
   private compactionCount = 0;
+  readonly postCompactionTargetRatio: number;
   readonly postCompactionTargetTokens: number;
   private readonly maxCompactionRetries: number;
 
   constructor(private readonly options: ContextPressureControllerOptions) {
-    this.postCompactionTargetTokens = Math.floor(options.policy.proactiveCompactionTokens * 0.8);
+    this.postCompactionTargetRatio = options.policy.postCompactionTargetRatio;
+    this.postCompactionTargetTokens = Math.floor(
+      options.policy.effectiveInputLimit * this.postCompactionTargetRatio,
+    );
     this.maxCompactionRetries = options.maxCompactionRetries ?? 1;
   }
 

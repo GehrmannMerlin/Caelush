@@ -94,7 +94,7 @@ function boundObservation(
   if (estimator.estimateText(content) <= maxTokens) return { text: content, truncated: false };
   const marker = estimator.estimateText(OMITTED) <= maxTokens ? OMITTED : "[omitted]";
   const available = Math.max(0, maxTokens - estimator.estimateText(marker));
-  if (toolName === "exec_command" || toolName === "write_stdin") {
+  if (toolName === "read_file" || toolName === "exec_command" || toolName === "write_stdin") {
     const characters = [...content];
     const half = Math.floor(available / 2);
     const head = boundedPrefix(content, half, estimator);

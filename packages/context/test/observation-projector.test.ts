@@ -51,4 +51,20 @@ describe("ModelObservation projection", () => {
     expect(observation.truncated).toBe(true);
     expect(observation.summary).not.toContain("entry-99");
   });
+
+  it("preserves a bounded tail for a large read_file projection", () => {
+    const content = "HEAD-LINE\n" + "middle\n".repeat(200) + "TAIL-LINE";
+    const observation = projectToolObservation({
+      sourceToolInvocationId: "tool-read",
+      toolName: "read_file",
+      content,
+      maxObservationTokens: 80,
+      estimator,
+    });
+
+    expect(observation.truncated).toBe(true);
+    expect(observation.summary).toContain("HEAD-LINE");
+    expect(observation.summary).toContain("TAIL-LINE");
+    expect(estimator.estimateText(observation.summary)).toBeLessThanOrEqual(80);
+  });
 });

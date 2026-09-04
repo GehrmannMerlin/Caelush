@@ -11,6 +11,12 @@ const ContextUsageBreakdownSchema = z
     files: z.number().int().nonnegative(),
     toolObservations: z.number().int().nonnegative(),
     memory: z.number().int().nonnegative(),
+    systemTokens: z.number().int().nonnegative().optional(),
+    goalTokens: z.number().int().nonnegative().optional(),
+    currentUserTokens: z.number().int().nonnegative().optional(),
+    relevantFileTokens: z.number().int().nonnegative().optional(),
+    currentTurnTokens: z.number().int().nonnegative().optional(),
+    mandatoryTokens: z.number().int().nonnegative().optional(),
   })
   .strict();
 
@@ -30,6 +36,7 @@ export const ContextUsageProjectionSchema = z
     modelId: z.string().min(1),
     profileSource: ContextProfileSourceSchema.optional(),
     contextWindowTokens: z.number().int().nonnegative(),
+    rawContextWindowTokens: z.number().int().nonnegative().optional(),
     effectiveInputLimitTokens: z.number().int().positive(),
     estimatedInputTokens: z.number().int().nonnegative(),
     usedRatio: z.number().min(0).max(1),
@@ -37,6 +44,8 @@ export const ContextUsageProjectionSchema = z
     pressureState: ContextUsagePressureStateSchema,
     compactionCount: z.number().int().nonnegative(),
     lastCompactionAt: TimestampMsSchema.optional(),
+    lastBuildAt: TimestampMsSchema.optional(),
+    lastRecoveryStages: z.array(z.string().min(1)).max(32).optional(),
     breakdown: ContextUsageBreakdownSchema,
     updatedAt: TimestampMsSchema,
     lastBuildStatus: z.enum(["SUCCESS", "FAILED", "CONTEXT_EXHAUSTED"]).optional(),

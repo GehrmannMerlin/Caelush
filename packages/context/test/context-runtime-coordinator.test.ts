@@ -156,11 +156,11 @@ describe("ContextRuntimeCoordinator", () => {
     });
 
     expect(persisted).toHaveLength(1);
-    expect(builds).toHaveLength(2);
+    expect(builds).toHaveLength(3);
     expect(builds[1]?.history).toEqual([]);
     expect(
       (persisted[0] as { readonly structuredCheckpoint: { readonly sourceRange: unknown } })
         .structuredCheckpoint.sourceRange,
-    ).toEqual({ from: 0, to: 3 });
+    ).toEqual({ from: 0, to: 2, kind: "LOCAL_HISTORY_INDEX" });
   });
 });

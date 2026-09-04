@@ -3,6 +3,7 @@ import type { StructuredCheckpoint } from "./checkpoint.js";
 export interface ContextAuthoritySnapshot {
   readonly goal?: string;
   readonly changedFiles?: readonly string[];
+  readonly recentErrors?: readonly string[];
   readonly pendingApprovals?: readonly string[];
   readonly activeProcesses?: readonly string[];
   readonly verificationState?: string;
