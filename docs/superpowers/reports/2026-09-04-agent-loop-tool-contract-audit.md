@@ -3,6 +3,7 @@
 审计日期：2026-09-04
 分支：`codex/v1-agent-loop-tool-contract-audit`
 范围：Agent Loop、OpenAI-compatible Native Tool Calling、Tool Registry/Dispatcher、模型指导、Git/工作区语义、Web 决策摘要与安全诊断。
+首个远端交付检查：`LOCAL_TASK_SHA=REMOTE_TASK_SHA=0190dcb2c8d6258644fd21e5960a49c47fc020f1`
 明确不在本轮范围：Verification 重构、Phase 14、MCP、RAG、Skill、Sub-agent。
 
 ## A. Executive Verdict
