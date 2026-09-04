@@ -121,8 +121,8 @@ PASS (after this document was created).
 
 ## 8. Commit
 
-Commit created after verification:
+Final reviewed Task 1 commit (the earlier `7629369b3fa690091582df2b0dfca07b2ddbc38c` was superseded by the provenance correction):
 
 ```text
-7629369b3fa690091582df2b0dfca07b2ddbc38c
+e0825046f944f043cc59251b5f01807370289704
 ```
