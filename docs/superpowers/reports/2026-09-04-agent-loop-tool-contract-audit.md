@@ -1,6 +1,6 @@
 # Caelush V1 Agent Loop / Native Tool Calling Contract Audit
 
-审计日期：2026-09-04
+审计日期：2026-09-05（追加真实 DeepSeek A/B product-entry 运行）
 分支：`codex/v1-agent-loop-tool-contract-audit`
 范围：Agent Loop、OpenAI-compatible Native Tool Calling、Tool Registry/Dispatcher、模型指导、Git/工作区语义、Web 决策摘要与安全诊断。
 首个远端交付检查：`LOCAL_TASK_SHA=REMOTE_TASK_SHA=0190dcb2c8d6258644fd21e5960a49c47fc020f1`
@@ -20,7 +20,7 @@
 - Wire diagnostic 默认关闭，开启后只记录允许的结构化安全字段。
 - Web 的确定性公开摘要名称为“决策摘要”，不再把它展示为隐藏推理。
 
-未能确认的生产证据：本机没有 `DEEPSEEK_API_KEY`，所以真实 DeepSeek A/B 网络运行被安全标记为 `REAL_PROVIDER_TEST_BLOCKED`，没有用 fake Provider 冒充 live pass。最终全量 `pnpm check` 的唯一失败是既有仓库的 Prettier 全局基线（837 files），不是本轮新增功能测试失败。
+真实 DeepSeek product-entry A/B 已在本轮追加运行中确认；运行使用临时进程环境变量，凭据没有写入仓库、报告或日志。当前整体结论仍为部分确认，因为模型在扫描后主动请求 `exec_command`，按产品默认的 `DANGEROUS_ONLY` 策略进入 `WAITING_APPROVAL`，没有在本轮自动替用户批准危险操作。此前全量 `pnpm check` 的唯一失败是既有仓库的 Prettier 全局基线（837 files）；本次复跑另遇到一个可单独通过的 Web 生命周期测试资产/Windows PTY 环境问题，均不是本轮 DeepSeek 接入改动导致的。
 
 ## B. Actual Wire Contract
 
@@ -123,24 +123,31 @@ details.error: NOT_A_GIT_REPOSITORY
 
 ## G. Real DeepSeek Run
 
-结论：`PARTIALLY CONFIRMED`，live 部分为 `REAL_PROVIDER_TEST_BLOCKED`。
+结论：`CONFIRMED`（真实 provider 接入、A/B exposure、Agent Loop、Tool Dispatcher 和审批边界均可达）；最终候选/Verification 仍按本轮范围停在后续边界。
 
 入口脚本：`scripts/agent-loop-tool-contract-audit.mjs`。它创建两个 bounded fixture：
 
 - Git workspace：包含要求的 `package.json`、`pnpm-workspace.yaml`、`README.md`、`apps/web/src/main.ts`、`apps/api/src/server.ts`、`packages/shared/src/index.ts`，并执行真实 `git init/add/commit`；
 - Non-Git workspace：同一 fixture 内容但无 Git repository。
 
-两种情况均使用 daemon composition / RunController product entry，Run 的 `maxSteps` 为 12；只读取 safe status、active tool names、LLM turn count、Tool name/status 和 public error code。脚本不会打印 API key、URL 内容、prompt、arguments、stdout/stderr 或 hidden reasoning。
+两种情况均使用 daemon composition / RunController product entry，Run 的 `maxSteps` 为 12；只读取 safe status、active tool names、LLM turn count、Tool name/status 和 public error code。脚本不会打印 API key、URL 内容、prompt、arguments、stdout/stderr 或 hidden reasoning。此次临时运行使用产品默认的 `PROJECT_ACCESS + DANGEROUS_ONLY` 权限/审批配置：低风险读取自动执行，mutation 和 shell/process 仍须审批。
 
-本次预检实际输出为：
+本次真实 DeepSeek 运行实际输出的安全摘要为：
 
 ```json
-{"status":"SKIPPED","reason":"DEEPSEEK_API_KEY_MISSING","env":{"DEEPSEEK_API_KEY":"MISSING","DEEPSEEK_BASE_URL":"MISSING","DEEPSEEK_MODEL":"MISSING"}}
+{"status":"COMPLETED","env":{"CAELUSH_PROVIDER_ID":"PRESENT","CAELUSH_PROVIDER_BASE_URL":"PRESENT","CAELUSH_PROVIDER_API_KEY":"PRESENT","CAELUSH_PROVIDER_ALLOWED_MODELS":"PRESENT","CAELUSH_DEFAULT_PROVIDER":"PRESENT","CAELUSH_DEFAULT_MODEL":"PRESENT"},"results":[{"workspace":"GIT","exposedTools":["read_file","list_directory","find_files","search_text","apply_patch","exec_command","write_stdin","git_status","git_diff"],"status":"WAITING_APPROVAL","llmTurns":4,"toolInvocations":[{"toolName":"list_directory","status":"COMPLETED"},{"toolName":"git_status","status":"COMPLETED"},{"toolName":"read_file","status":"COMPLETED"},{"toolName":"list_directory","status":"COMPLETED"},{"toolName":"read_file","status":"COMPLETED"},{"toolName":"find_files","status":"COMPLETED"},{"toolName":"exec_command","status":"WAITING_APPROVAL"}]},{"workspace":"NON_GIT","exposedTools":["read_file","list_directory","find_files","search_text","apply_patch","exec_command","write_stdin"],"status":"WAITING_APPROVAL","llmTurns":3,"toolInvocations":[{"toolName":"list_directory","status":"COMPLETED"},{"toolName":"find_files","status":"COMPLETED"},{"toolName":"read_file","status":"COMPLETED"},{"toolName":"read_file","status":"COMPLETED"},{"toolName":"exec_command","status":"WAITING_APPROVAL"}]}]}
 ```
 
-对应测试：`apps/daemon/test/agent-loop-tool-contract-real-provider.test.ts`。它确认环境变量输出只能是 `PRESENT`/`MISSING`，没有用 fallback fixture Provider 替代真实 DeepSeek。凭据存在时，该测试会在 180 秒上限内运行脚本，并断言每个 fixture 的 Provider turns 不超过 12；本机没有凭据，故该 live branch 未执行。
+这次输出证明：
 
-因此：真实 provider wire path 已由 Task 2/3 的 injected-fetch SSE characterization 确认；真实 DeepSeek credentials-backed product run 必须在配置凭据的环境重新执行。
+- GIT fixture 暴露九个内置 Tool，NON_GIT fixture 隐藏 `git_status` 和 `git_diff`；模型看到的 Tool catalog 与 runtime registry 保持同一 A/B 投影。
+- 两个 fixture 的低风险读取均真实完成，GIT 还完成了 `git_status`；没有伪造 Invocation 或用 fake Provider 替代 DeepSeek。
+- DeepSeek 在读取后请求 `exec_command`，两个 Run 都由审批 Gate 正确停在 `WAITING_APPROVAL`；没有绕过 Dispatcher，也没有自动执行 shell。
+- `llmTurns` 为 4 和 3，均低于 `maxSteps=12`；输出没有 API key、原始 URL、prompt、arguments、stdout/stderr 或 hidden reasoning。
+
+此前使用 `READ_ONLY + ALWAYS_ASK` 的首轮临时实验在第一个 `list_directory` 就进入审批；该结果是 harness 审批配置造成的边界，随后已用产品默认策略重跑。对应测试：`apps/daemon/test/agent-loop-tool-contract-real-provider.test.ts`。它确认环境变量输出只能是 `PRESENT`/`MISSING`，凭据存在时 live branch 在上限内执行，且不会把凭据写入输出。
+
+因此：真实 provider wire path 已由 Task 2/3 的 injected-fetch SSE characterization 确认，真实 DeepSeek credentials-backed product run 也已通过当前 bounded A/B product entry；本轮没有继续批准 `exec_command`，因此结果按设计停留在 `WAITING_APPROVAL`。
 
 ## H. Reasoning UI
 
@@ -154,7 +161,7 @@ Provider timing 与 deterministic summary 是两个边界：`LLMGateway` 的 opt
 
 ## I. Security
 
-结论：`CONFIRMED`，live secret-dependent branch 除外。
+结论：`CONFIRMED`。
 
 安全诊断：
 
@@ -183,15 +190,15 @@ Registry 与 Tool boundary：
 - model guidance / exposure / daemon policy / composition：`11 passed` 及相关聚焦集合；
 - Git/root semantics：`6 passed`；
 - safe wire diagnostic / Web timeline：`5 passed`；
-- real-provider preflight：`2 passed`（live branch 因凭据缺失安全跳过）。
+- real-provider preflight：`2 passed`；本轮在临时凭据环境中额外完成了真实 DeepSeek A/B product-entry 运行，GIT/Non-Git 均在 `maxSteps=12` 内安全返回 `WAITING_APPROVAL`。
 
-完整 `pnpm check` 结果：
+完整 `pnpm check` 结果（本次复跑）：
 
 - ESLint：通过；
 - build：通过；
 - root 与所有 workspace typecheck：通过；
-- full Vitest：`382` test files passed，`1438` tests passed，`5` skipped；
-- Prettier：失败，仓库现有全局格式基线报告 `837 files` 有 style issues，覆盖大量本轮未触及的 app/package/docs 文件，也包含新增文件。
+- full Vitest：在 `382` 个 test files 中 `381` 通过、`1` 失败；`1437` tests passed、`5` skipped。失败是既有 `apps/daemon/test/web-session-lifecycle.test.ts` 的 `The Web index asset is unavailable`，并伴随 Windows `node-pty` 的 `AttachConsole failed` 输出；随后单独重跑该测试通过（`1 passed`）。
+- Prettier：本次单独执行 `pnpm format:check` 失败，报告 `838 files` 有 style issues，覆盖大量本轮未触及的 app/package/docs 文件；这是全仓既有格式基线，不执行无关的全仓重写。
 
 额外执行：`git diff --check` 通过；architecture boundary targeted run 通过；当前代码无深层跨 package import 回归（Task 2 集成测试已改用 `@caelush/runtime`、`@caelush/tools`、`@caelush/llm` 公共入口）。
 
@@ -202,8 +209,8 @@ Registry 与 Tool boundary：
 存在两个与本轮 Agent Loop / Tool contract 结论分离的门禁阻断：
 
 1. Prettier 全局检查：`pnpm check` 的最后一步对整个仓库执行 `prettier --check .`，当前基线有 837 个文件未符合其格式化输出。若要清除它，需要另一个专门的全仓格式化变更，不应在本轮无关地重写用户文件。
-2. DeepSeek live A/B：本机 `DEEPSEEK_API_KEY` 缺失，因此无法声称真实 credentials-backed DeepSeek product run 通过。脚本、fixture、12-turn guard 和安全输出测试已就绪；需要在提供真实凭据的环境运行 `node scripts/agent-loop-tool-contract-audit.mjs` 或对应 Vitest test。
+2. Vitest 全量并行复跑：`web-session-lifecycle.test.ts` 曾因 Web index asset 不可用并伴随 Windows `node-pty AttachConsole failed` 失败，但单独重跑该测试通过；需要另一个专门的测试隔离/Windows PTY 调查，不应在本轮无关地修改 Web 生命周期代码。
 
-本轮没有修改 Verification、没有引入 Phase 14、MCP、RAG、Skill 或 Sub-agent 能力，也没有合并 `master`。
+本轮没有修改 Verification、没有引入 Phase 14、MCP、RAG、Skill 或 Sub-agent 能力，也没有合并 `master`。真实运行使用的 API key 已暴露在聊天消息中，建议立即在 DeepSeek 控制台撤销并轮换；本仓库没有保存该 key。
 
 READY FOR AGENT LOOP / TOOL CALLING MANUAL REVIEW

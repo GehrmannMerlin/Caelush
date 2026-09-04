@@ -6,11 +6,18 @@ import { promisify } from "node:util";
 
 const runCommand = promisify(execFile);
 const runtimeProcess = globalThis.process;
-const apiKey = runtimeProcess.env.DEEPSEEK_API_KEY;
-const configuredBaseUrl = runtimeProcess.env.DEEPSEEK_BASE_URL;
-const configuredModel = runtimeProcess.env.DEEPSEEK_MODEL;
-const baseUrl = configuredBaseUrl ?? "https://api.deepseek.com/v1";
-const modelId = configuredModel ?? "deepseek-chat";
+const providerId = runtimeProcess.env.CAELUSH_PROVIDER_ID ?? "deepseek";
+const apiKey = runtimeProcess.env.CAELUSH_PROVIDER_API_KEY ?? runtimeProcess.env.DEEPSEEK_API_KEY;
+const configuredBaseUrl =
+  runtimeProcess.env.CAELUSH_PROVIDER_BASE_URL ?? runtimeProcess.env.DEEPSEEK_BASE_URL;
+const configuredModel =
+  runtimeProcess.env.CAELUSH_DEFAULT_MODEL ?? runtimeProcess.env.DEEPSEEK_MODEL;
+const allowedModels = (runtimeProcess.env.CAELUSH_PROVIDER_ALLOWED_MODELS ?? "")
+  .split(",")
+  .map((value) => value.trim())
+  .filter((value) => value.length > 0);
+const baseUrl = configuredBaseUrl ?? "https://api.deepseek.com";
+const modelId = configuredModel ?? allowedModels[0] ?? "deepseek-chat";
 
 function safeError(error) {
   return error && typeof error === "object" && "code" in error && typeof error.code === "string"
@@ -36,9 +43,9 @@ async function createWorkspace(isGit) {
 
 async function runCase({ isGit }) {
   const [{ AgentRunSchema, createRunId, createSessionId, createTimestampMs, createWorkspaceId }, { EventBus }, { openCaelushStorage }, { composeDaemon }] = await Promise.all([
-    import("@caelush/protocol"),
-    import("@caelush/events"),
-    import("@caelush/storage"),
+    import("../packages/protocol/dist/index.js"),
+    import("../packages/events/dist/index.js"),
+    import("../packages/storage/dist/index.js"),
     import("../apps/daemon/dist/daemon-composition.js"),
   ]);
   const fixture = await createWorkspace(isGit);
@@ -47,8 +54,8 @@ async function runCase({ isGit }) {
   const composition = composeDaemon({
     storage,
     eventBus,
-    providers: [{ provider: "deepseek", baseUrl, apiKey, allowedModels: [modelId] }],
-    defaultModel: { provider: "deepseek", model: modelId },
+    providers: [{ provider: providerId, baseUrl, apiKey, allowedModels: allowedModels.length > 0 ? allowedModels : [modelId] }],
+    defaultModel: { provider: providerId, model: modelId },
     toolExposure: { git: isGit ? "AVAILABLE" : "UNAVAILABLE" },
   });
   const run = AgentRunSchema.parse({
@@ -57,10 +64,10 @@ async function runCase({ isGit }) {
     goal: "Inspect this workspace read-only. Use evidence from the available native tools and stop within twelve model turns.",
     status: "PENDING",
     workspace: { id: createWorkspaceId(), path: fixture.workspace },
-    model: { provider: "deepseek", model: modelId },
+    model: { provider: providerId, model: modelId },
     runtime: { id: "local", kind: "local" },
-    permissionProfile: "READ_ONLY",
-    approvalPolicy: "ALWAYS_ASK",
+    permissionProfile: "PROJECT_ACCESS",
+    approvalPolicy: "DANGEROUS_ONLY",
     limits: { maxSteps: 12, maxToolCalls: 24, timeoutMs: 120_000 },
     createdAt: createTimestampMs(Date.now()),
   });
@@ -97,15 +104,15 @@ async function runCase({ isGit }) {
 if (apiKey === undefined || apiKey.length === 0) {
   globalThis.console.log(JSON.stringify({
     status: "SKIPPED",
-    reason: "DEEPSEEK_API_KEY_MISSING",
-    env: { DEEPSEEK_API_KEY: "MISSING", DEEPSEEK_BASE_URL: configuredBaseUrl === undefined ? "MISSING" : "PRESENT", DEEPSEEK_MODEL: configuredModel === undefined ? "MISSING" : "PRESENT" },
+    reason: "CAELUSH_PROVIDER_API_KEY_MISSING",
+    env: { CAELUSH_PROVIDER_ID: runtimeProcess.env.CAELUSH_PROVIDER_ID === undefined ? "MISSING" : "PRESENT", CAELUSH_PROVIDER_BASE_URL: configuredBaseUrl === undefined ? "MISSING" : "PRESENT", CAELUSH_PROVIDER_API_KEY: apiKey === undefined ? "MISSING" : "PRESENT", CAELUSH_PROVIDER_ALLOWED_MODELS: allowedModels.length === 0 ? "MISSING" : "PRESENT", CAELUSH_DEFAULT_PROVIDER: runtimeProcess.env.CAELUSH_DEFAULT_PROVIDER === undefined ? "MISSING" : "PRESENT", CAELUSH_DEFAULT_MODEL: configuredModel === undefined ? "MISSING" : "PRESENT" },
   }));
 } else {
   const results = [];
   for (const isGit of [true, false]) results.push(await runCase({ isGit }));
   globalThis.console.log(JSON.stringify({
     status: "COMPLETED",
-    env: { DEEPSEEK_API_KEY: "PRESENT", DEEPSEEK_BASE_URL: configuredBaseUrl === undefined ? "MISSING" : "PRESENT", DEEPSEEK_MODEL: configuredModel === undefined ? "MISSING" : "PRESENT" },
+    env: { CAELUSH_PROVIDER_ID: runtimeProcess.env.CAELUSH_PROVIDER_ID === undefined ? "MISSING" : "PRESENT", CAELUSH_PROVIDER_BASE_URL: configuredBaseUrl === undefined ? "MISSING" : "PRESENT", CAELUSH_PROVIDER_API_KEY: "PRESENT", CAELUSH_PROVIDER_ALLOWED_MODELS: allowedModels.length === 0 ? "MISSING" : "PRESENT", CAELUSH_DEFAULT_PROVIDER: runtimeProcess.env.CAELUSH_DEFAULT_PROVIDER === undefined ? "MISSING" : "PRESENT", CAELUSH_DEFAULT_MODEL: configuredModel === undefined ? "MISSING" : "PRESENT" },
     results,
   }));
 }
