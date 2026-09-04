@@ -19,7 +19,10 @@
     "test:release": "node scripts/test-release.mjs"
   },
   "devDependencies": {
+    "@caelush/llm": "workspace:*",
+    "@caelush/runtime": "workspace:*",
     "@caelush/security": "workspace:*",
+    "@caelush/tools": "workspace:*",
     "@eslint/js": "10.0.1",
     "@playwright/test": "1.62.1",
     "@types/node": "24.13.3",

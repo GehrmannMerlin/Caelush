@@ -8,9 +8,18 @@ importers:
 
   .:
     devDependencies:
+      '@caelush/llm':
+        specifier: workspace:*
+        version: link:packages/llm
+      '@caelush/runtime':
+        specifier: workspace:*
+        version: link:packages/runtime
       '@caelush/security':
         specifier: workspace:*
         version: link:packages/security
+      '@caelush/tools':
+        specifier: workspace:*
+        version: link:packages/tools
       '@eslint/js':
         specifier: 10.0.1
         version: 10.0.1(eslint@10.9.1(jiti@2.7.0))
