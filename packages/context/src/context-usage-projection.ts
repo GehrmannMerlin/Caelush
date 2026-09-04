@@ -14,6 +14,7 @@ export interface ContextUsageProjectionInput {
   readonly runId: string;
   readonly providerId: string;
   readonly modelId: string;
+  readonly profileSource?: import("./model-context-profile.js").ModelContextProfileSource;
   readonly contextWindowTokens: number;
   readonly effectiveInputLimitTokens: number;
   readonly estimatedInputTokens: number;
@@ -22,9 +23,15 @@ export interface ContextUsageProjectionInput {
   readonly lastCompactionAt?: number;
   readonly breakdown: ContextUsageBreakdown;
   readonly updatedAt: number;
+  readonly lastBuildStatus?: "SUCCESS" | "FAILED" | "CONTEXT_EXHAUSTED";
 }
 
-export interface ContextUsageProjection extends ContextUsageProjectionInput {
+export interface ContextUsageProjection extends Omit<
+  ContextUsageProjectionInput,
+  "profileSource" | "lastBuildStatus"
+> {
+  readonly profileSource: import("./model-context-profile.js").ModelContextProfileSource;
+  readonly lastBuildStatus: "SUCCESS" | "FAILED" | "CONTEXT_EXHAUSTED";
   readonly usedRatio: number;
   readonly remainingTokens: number;
 }
@@ -49,19 +56,17 @@ export function createContextUsageProjection(
   if (input.effectiveInputLimitTokens === 0) {
     throw new RangeError("effectiveInputLimitTokens must be positive");
   }
-  const estimatedInputTokens = Math.min(
-    input.estimatedInputTokens,
-    input.effectiveInputLimitTokens,
-  );
   const usedRatio = Math.max(
     0,
-    Math.min(1, estimatedInputTokens / input.effectiveInputLimitTokens),
+    Math.min(1, input.estimatedInputTokens / input.effectiveInputLimitTokens),
   );
   return Object.freeze({
     ...input,
-    estimatedInputTokens,
+    profileSource: input.profileSource ?? "FALLBACK",
+    lastBuildStatus: input.lastBuildStatus ?? "SUCCESS",
+    estimatedInputTokens: input.estimatedInputTokens,
     usedRatio,
-    remainingTokens: input.effectiveInputLimitTokens - estimatedInputTokens,
+    remainingTokens: Math.max(0, input.effectiveInputLimitTokens - input.estimatedInputTokens),
     breakdown: Object.freeze({ ...input.breakdown }),
   });
 }

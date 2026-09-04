@@ -1,5 +1,6 @@
 import type { AgentLoopModelSettings } from "./agent-loop-input.js";
 import type { AgentLoop } from "./agent-loop.js";
+import type { ContextRuntimeCoordinatorPort } from "@caelush/context";
 import type { LLMMessage } from "@caelush/llm/messages";
 import type { ContextBuildLimits } from "@caelush/context";
 import type {
@@ -125,6 +126,7 @@ export interface RunControllerDependencies {
   readonly events: RunEventNotifier;
   readonly configResolver: RunExecutionConfigResolver;
   readonly toolCoordinator?: ToolBatchCoordinatorPort;
+  readonly contextRuntime?: Pick<ContextRuntimeCoordinatorPort, "getContextPolicy">;
   readonly clock: { now(): import("@caelush/protocol").TimestampMs };
   readonly eventIdFactory: EventIdFactory;
   readonly approvals?: ApprovalResolutionPort;

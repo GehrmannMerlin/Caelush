@@ -288,6 +288,25 @@ export const contextArtifacts = sqliteTable(
   (table) => [index("context_artifacts_run_id_idx").on(table.runId)],
 );
 
+export const contextRuntimeStates = sqliteTable("context_runtime_states", {
+  runId: text("run_id")
+    .primaryKey()
+    .references(() => agentRuns.id),
+  providerId: text("provider_id").notNull(),
+  modelId: text("model_id").notNull(),
+  profileSource: text("profile_source").notNull(),
+  contextWindowTokens: integer("context_window_tokens").notNull(),
+  effectiveInputLimitTokens: integer("effective_input_limit_tokens").notNull(),
+  estimatedInputTokens: integer("estimated_input_tokens").notNull(),
+  remainingTokens: integer("remaining_tokens").notNull(),
+  pressureState: text("pressure_state").notNull(),
+  compactionCount: integer("compaction_count").notNull(),
+  lastCompactionAtMs: integer("last_compaction_at_ms"),
+  breakdownJson: text("breakdown_json").notNull(),
+  lastBuildStatus: text("last_build_status").notNull(),
+  updatedAtMs: integer("updated_at_ms").notNull(),
+});
+
 export const memoryRecords = sqliteTable(
   "memory_records",
   {
@@ -424,4 +443,5 @@ export const storageSchema = {
   verificationPlans,
   verificationChecks,
   verificationEvidence,
+  contextRuntimeStates,
 };

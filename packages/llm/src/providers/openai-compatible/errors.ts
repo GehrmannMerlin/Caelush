@@ -1,6 +1,7 @@
 import { APICallError, InvalidResponseDataError, JSONParseError, TypeValidationError } from "ai";
 import {
   LLMAuthenticationError,
+  LLMContextOverflowError,
   LLMError,
   LLMInvalidResponseError,
   LLMNetworkError,
@@ -17,6 +18,9 @@ export function normalizeOpenAICompatibleError(
 
   if (APICallError.isInstance(error)) {
     const statusCode = error.statusCode;
+    if (hasContextOverflowCode(error)) {
+      return new LLMContextOverflowError(providerContext(request));
+    }
     if (statusCode === 401 || statusCode === 403) {
       return new LLMAuthenticationError(undefined, providerContext(request));
     }
@@ -41,6 +45,25 @@ export function normalizeOpenAICompatibleError(
     return new LLMNetworkError(undefined, providerContext(request));
   }
   return new LLMProviderError(undefined, providerContext(request));
+}
+
+function hasContextOverflowCode(error: unknown): boolean {
+  const candidate = error as { readonly responseBody?: unknown; readonly data?: unknown };
+  const values = [candidate.responseBody, candidate.data];
+  return values.some((value) => {
+    if (typeof value === "string") {
+      return /context_length_exceeded|context.{0,24}(length|window).{0,24}(exceed|limit)/i.test(
+        value,
+      );
+    }
+    if (value === null || typeof value !== "object") return false;
+    const record = value as { readonly code?: unknown; readonly error?: unknown };
+    if (record.code === "context_length_exceeded" || record.code === "LLM_CONTEXT_OVERFLOW") {
+      return true;
+    }
+    if (record.error !== undefined) return hasContextOverflowCode(record.error);
+    return false;
+  });
 }
 
 function providerContext(request: LLMProviderRequest) {

@@ -51,6 +51,7 @@ export interface ContextCheckpointRecord {
 
 export interface ContextCheckpointRepository {
   create(input: ContextCheckpointCreateInput): Promise<ContextCheckpointRecord>;
+  updateTokensAfter(checkpointId: string, tokensAfter: number): Promise<void>;
   getLatestByRun(runId: string): Promise<ContextCheckpointRecord | undefined>;
   getById(checkpointId: string): Promise<ContextCheckpointRecord | undefined>;
   listByRun(runId: string): Promise<readonly ContextCheckpointRecord[]>;
@@ -154,6 +155,16 @@ export class SqliteContextCheckpointRepository implements ContextCheckpointRepos
       .prepare(`${SELECT} WHERE run_id = ? ORDER BY source_sequence_to DESC, id DESC LIMIT 1`)
       .get(runId) as CheckpointRow | undefined;
     return row === undefined ? undefined : decode(row);
+  }
+
+  async updateTokensAfter(checkpointId: string, tokensAfter: number): Promise<void> {
+    if (!Number.isSafeInteger(tokensAfter) || tokensAfter < 0) {
+      throw new StorageError("Context checkpoint token estimate is invalid.");
+    }
+    const result = this.database.client
+      .prepare("UPDATE context_checkpoints SET tokens_after = ? WHERE id = ?")
+      .run(tokensAfter, checkpointId);
+    if (result.changes === 0) throw new StorageError("Context checkpoint is unavailable.");
   }
 
   async getById(checkpointId: string): Promise<ContextCheckpointRecord | undefined> {

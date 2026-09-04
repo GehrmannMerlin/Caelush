@@ -17,6 +17,8 @@ export function ContextInspector(props: { readonly usage: ContextUsageProjection
       { className: "context-inspector-grid" },
       createElement("dt", null, "模型"),
       createElement("dd", null, `${props.usage.providerId} / ${props.usage.modelId}`),
+      createElement("dt", null, "Profile Source"),
+      createElement("dd", null, props.usage.profileSource ?? "UNKNOWN"),
       createElement("dt", null, "容量"),
       createElement("dd", null, `${props.usage.effectiveInputLimitTokens.toLocaleString()} tokens`),
       createElement("dt", null, "剩余"),

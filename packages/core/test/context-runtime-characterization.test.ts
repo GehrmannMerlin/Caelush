@@ -1,6 +1,12 @@
 import type { LLMAssistantMessage, LLMMessage, LLMToolResultMessage } from "@caelush/llm/messages";
 import { describe, expect, it } from "vitest";
-import { ContextBuilder, ContextBudgetExceededError } from "@caelush/context";
+import {
+  ContextBuilder,
+  ContextBudgetExceededError,
+  ContextRuntimeCoordinator,
+  createContextPolicy,
+  createModelContextProfile,
+} from "@caelush/context";
 import { createWorkspaceId } from "@caelush/protocol";
 import { prepareResumeHistory } from "../src/agent-loop-history.js";
 
@@ -81,6 +87,77 @@ function pendingDecision(index: number) {
 }
 
 describe("Context Runtime baseline characterization", () => {
+  it("reproduces the real coordinator failure when an open tool turn exceeds the fallback budget", async () => {
+    const history: LLMMessage[] = [{ role: "user", content: "inspect the workspace" }];
+    history.push(assistantFor(1));
+    const currentTurn = prepareResumeHistory(history, pendingDecision(1), [
+      resultFor(1, "build output ".repeat(6000)),
+    ]).currentTurnMessages;
+    const coordinator = new ContextRuntimeCoordinator();
+
+    const result = await coordinator.prepareModelContext({
+      runId: "run-characterization",
+      providerId: "fixture",
+      modelId: "fixture-model",
+      context: {
+        baseSystemPrompt: system.content,
+        snapshot: snapshot(),
+        history: [],
+        currentTurnMessages: currentTurn,
+        mode: "TOOL_CONTINUATION",
+        limits: { maxInputTokens: 100_000 },
+      },
+      signal: new AbortController().signal,
+    });
+    expect(result.report.trace?.estimatedInputTokens).toBeLessThanOrEqual(
+      result.policy.effectiveInputLimit,
+    );
+  });
+
+  it("characterizes the current safety reserve double subtraction", () => {
+    const profile = createModelContextProfile({
+      providerId: "fixture",
+      modelId: "fixture-model",
+      contextWindowTokens: 16_000,
+      maxOutputTokens: 2048,
+      recommendedOutputReserveTokens: 2048,
+      supportsPromptCaching: false,
+      supportsUsageReporting: false,
+    });
+    const policy = createContextPolicy(profile, { safetyReserveTokens: 512 });
+    expect(policy.effectiveInputLimit).toBe(13_440);
+    const built = new ContextBuilder({ tokenEstimator: estimator }).build({
+      baseSystemPrompt: "system ".repeat(1000),
+      snapshot: snapshot(),
+      currentUserMessage: { role: "user", content: "goal ".repeat(1000) },
+      limits: { maxInputTokens: 13_440 },
+      modelContextProfile: profile,
+      contextPolicy: policy,
+    });
+    expect(built.report.limits).toMatchObject({
+      maxInputTokens: 13_440,
+      safetyMarginTokens: 0,
+    });
+  });
+
+  it("shows the coordinator has no production profile and uses the 16K fallback", async () => {
+    const result = await new ContextRuntimeCoordinator().prepareModelContext({
+      runId: "run-profile-characterization",
+      providerId: "fixture",
+      modelId: "fixture-model",
+      context: {
+        baseSystemPrompt: system.content,
+        snapshot: snapshot(),
+        currentUserMessage: { role: "user", content: "inspect" },
+        limits: { maxInputTokens: 32_000 },
+      },
+      signal: new AbortController().signal,
+    });
+
+    expect(result.profile.profileSource).toBe("LEGACY_LIMITS");
+    expect(result.policy.effectiveInputLimit).toBe(32_000);
+  });
+
   it("bounds the current mandatory unit across 32 execution cycles from one user goal", () => {
     const history: LLMMessage[] = [{ role: "user", content: "inspect the workspace" }];
     const trace: Array<{ turn: number; messageCount: number; estimatedTokens: number }> = [];

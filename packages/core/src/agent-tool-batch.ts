@@ -2,32 +2,59 @@ import { LLMToolResultMessageSchema, type LLMToolResultMessage } from "@caelush/
 import type { AgentToolRequest } from "./agent-decision.js";
 import type { ToolBatchItemResult } from "@caelush/tools";
 import { ToolBatchResultConversionError } from "./agent-errors.js";
-import { projectToolObservation, Utf8HeuristicTokenEstimator } from "@caelush/context";
+import {
+  projectToolObservationBatch,
+  Utf8HeuristicTokenEstimator,
+  type ContextPolicy,
+} from "@caelush/context";
 
-const MAX_MODEL_OBSERVATION_TOKENS = 8192;
 const modelObservationEstimator = new Utf8HeuristicTokenEstimator();
+
+export type AgentToolObservationPolicy = Pick<
+  ContextPolicy,
+  "maxSingleObservationTokens" | "maxObservationBatchTokens"
+>;
+
+const LEGACY_EFFECTIVE_INPUT_LIMIT = 32_000;
+
+function defaultObservationPolicy(): AgentToolObservationPolicy {
+  return {
+    maxSingleObservationTokens: Math.max(1, Math.floor(LEGACY_EFFECTIVE_INPUT_LIMIT * 0.1)),
+    maxObservationBatchTokens: Math.max(1, Math.floor(LEGACY_EFFECTIVE_INPUT_LIMIT * 0.22)),
+  };
+}
 
 export function toLLMToolResultMessages(
   requests: readonly AgentToolRequest[],
   results: readonly ToolBatchItemResult[],
+  policy: AgentToolObservationPolicy = defaultObservationPolicy(),
 ): readonly LLMToolResultMessage[] {
   if (requests.length !== results.length) throw new ToolBatchResultConversionError();
+  const projected = projectToolObservationBatch({
+    observations: requests.map((request, index) => {
+      const result = results[index];
+      if (
+        result === undefined ||
+        result.externalCallId !== request.externalCallId ||
+        result.toolName !== request.toolName
+      ) {
+        throw new ToolBatchResultConversionError();
+      }
+      return {
+        sourceToolInvocationId: result.invocationId ?? result.externalCallId,
+        toolName: result.toolName,
+        content: result.content,
+      };
+    }),
+    maxSingleObservationTokens: policy.maxSingleObservationTokens,
+    maxObservationBatchTokens: policy.maxObservationBatchTokens,
+    estimator: modelObservationEstimator,
+  });
   return requests.map((request, index) => {
     const result = results[index];
-    if (
-      result === undefined ||
-      result.externalCallId !== request.externalCallId ||
-      result.toolName !== request.toolName
-    ) {
+    const observation = projected[index];
+    if (result === undefined || observation === undefined)
       throw new ToolBatchResultConversionError();
-    }
-    const observation = projectToolObservation({
-      sourceToolInvocationId: result.invocationId ?? result.externalCallId,
-      toolName: result.toolName,
-      content: result.content,
-      maxObservationTokens: MAX_MODEL_OBSERVATION_TOKENS,
-      estimator: modelObservationEstimator,
-    });
     const message = {
       role: "tool" as const,
       toolCallId: result.externalCallId,

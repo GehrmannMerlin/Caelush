@@ -122,7 +122,10 @@ export class ContextBuilder {
         : {
             ...input.limits,
             maxInputTokens: policy.effectiveInputLimit,
-            safetyMarginTokens: policy.safetyReserveTokens,
+            // The policy has already subtracted output and safety reserves from the
+            // raw provider window. The legacy builder field must not subtract safety
+            // a second time on this path.
+            safetyMarginTokens: 0,
             maxConversationTokens: policy.conversationCapTokens,
             maxRelevantFileTokens: policy.relevantFileCapTokens,
           },

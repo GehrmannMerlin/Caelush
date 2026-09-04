@@ -1,5 +1,14 @@
 import type { ClientModelSelection, ModelRef } from "@caelush/protocol";
 
+export interface DaemonModelProfileConfig {
+  readonly contextWindowTokens: number;
+  readonly maxOutputTokens: number;
+  readonly recommendedOutputReserveTokens: number;
+  readonly supportsPromptCaching?: boolean;
+  readonly supportsUsageReporting?: boolean;
+  readonly toolOutputSoftLimitTokens?: number;
+}
+
 export interface DaemonModelProviderConfig {
   readonly provider: string;
   readonly baseUrl: string;
@@ -7,6 +16,7 @@ export interface DaemonModelProviderConfig {
   readonly headers?: Readonly<Record<string, string>>;
   readonly queryParams?: Readonly<Record<string, string>>;
   readonly allowedModels?: readonly string[];
+  readonly modelProfiles?: Readonly<Record<string, DaemonModelProfileConfig>>;
   readonly fetch?: typeof fetch;
 }
 

@@ -3,10 +3,13 @@ import {
   createRunId,
   createSessionId,
   createStepId,
+  createLLMCallId,
   createTimestampMs,
   createWorkspaceId,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
+import { LLMContextOverflowError } from "@caelush/llm/errors";
+import { LLMTurnResultSchema } from "@caelush/llm/turn";
 import { createInitialAgentState, startAgentState } from "../src/agent-state.js";
 import { AgentLoop } from "../src/agent-loop.js";
 import type { AgentLoopCommonInput } from "../src/agent-loop-input.js";
@@ -65,5 +68,47 @@ describe("AgentLoop production context runtime contract", () => {
     await new AgentLoop(dependencies).run(input());
 
     expect(calls).toEqual(["inspect", "plan", "context-runtime", "llm"]);
+  });
+
+  it("rebuilds context and request exactly once after provider context overflow", async () => {
+    let providerCalls = 0;
+    let contextCalls = 0;
+    const dependencies: AgentLoopDependencies = {
+      inspector: { inspect: async () => ({}) as never },
+      planner: { plan: async () => ({}) as never },
+      contextBuilder: { build: () => ({ messages: [], report: {} as never }) },
+      contextRuntime: {
+        prepareModelContext: async (request) => {
+          contextCalls += 1;
+          return {
+            messages: [{ role: "user", content: request.forceRecovery ? "recovered" : "initial" }],
+            report: {} as never,
+          };
+        },
+      },
+      llmClient: {
+        complete: async (request) => {
+          providerCalls += 1;
+          if (providerCalls === 1) throw new LLMContextOverflowError();
+          expect(request.messages.at(-1)).toEqual({ role: "user", content: "recovered" });
+          return LLMTurnResultSchema.parse({
+            callId: createLLMCallId(),
+            providerId: "fixture",
+            model: { provider: "fixture", model: "fixture-model" },
+            text: "done",
+            toolCalls: [],
+            finishReason: "STOP",
+          });
+        },
+      },
+      clock: { now: () => createTimestampMs(1) },
+      stepIdFactory: { create: () => createStepId() },
+    };
+
+    const result = await new AgentLoop(dependencies).run(input());
+
+    expect(result.status).toBe("OUTCOME");
+    expect(providerCalls).toBe(2);
+    expect(contextCalls).toBe(2);
   });
 });

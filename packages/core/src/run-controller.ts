@@ -634,6 +634,7 @@ export class RunController {
           const messages = toLLMToolResultMessages(
             continuation.pendingDecision.toolRequests,
             syntheticResults,
+            this.dependencies.contextRuntime?.getContextPolicy?.(snapshot.run.id),
           );
           snapshot = await this.persistCompleteToolResultsLocked(snapshot, messages);
           mode = "EXECUTE";
@@ -709,6 +710,7 @@ export class RunController {
           messages = toLLMToolResultMessages(
             continuation.pendingDecision.toolRequests,
             outcome.results,
+            this.dependencies.contextRuntime?.getContextPolicy?.(snapshot.run.id),
           );
         } catch (error) {
           return this.failBoundaryLocked(

@@ -11,6 +11,8 @@ export interface ContextPolicyOptions {
   readonly minRecentTailRatio?: number;
   readonly maxSingleObservationTokensCap?: number;
   readonly maxSingleObservationRatio?: number;
+  readonly maxObservationBatchTokensCap?: number;
+  readonly maxObservationBatchRatio?: number;
   readonly maxConversationTokens?: number;
   readonly maxRelevantFileTokens?: number;
   readonly maxMemoryContextTokens?: number;
@@ -28,6 +30,7 @@ export interface ContextPolicy {
   readonly targetRecentTailTokens: number;
   readonly minRecentTailTokens: number;
   readonly maxSingleObservationTokens: number;
+  readonly maxObservationBatchTokens: number;
   readonly conversationCapTokens: number;
   readonly relevantFileCapTokens: number;
   readonly maxMemoryContextTokens: number;
@@ -41,6 +44,8 @@ const DEFAULT_MIN_TAIL_CAP = 8000;
 const DEFAULT_MIN_TAIL_RATIO = 0.15;
 const DEFAULT_OBSERVATION_CAP = 8192;
 const DEFAULT_OBSERVATION_RATIO = 0.1;
+const DEFAULT_OBSERVATION_BATCH_CAP = 16_384;
+const DEFAULT_OBSERVATION_BATCH_RATIO = 0.22;
 
 function safeInteger(name: string, value: number, minimum = 0): void {
   if (!Number.isSafeInteger(value) || value < minimum) {
@@ -90,7 +95,17 @@ export function createContextPolicy(
       effectiveInputLimit * (options.maxSingleObservationRatio ?? DEFAULT_OBSERVATION_RATIO),
     ),
   );
-  if (minRecentTailTokens > targetRecentTailTokens || maxSingleObservationTokens < 1) {
+  const maxObservationBatchTokens = Math.min(
+    options.maxObservationBatchTokensCap ?? DEFAULT_OBSERVATION_BATCH_CAP,
+    Math.floor(
+      effectiveInputLimit * (options.maxObservationBatchRatio ?? DEFAULT_OBSERVATION_BATCH_RATIO),
+    ),
+  );
+  if (
+    minRecentTailTokens > targetRecentTailTokens ||
+    maxSingleObservationTokens < 1 ||
+    maxObservationBatchTokens < 1
+  ) {
     throw new RangeError("context policy cannot allocate a bounded tail and observation budget");
   }
   const conversationCapTokens = options.maxConversationTokens ?? 12_000;
@@ -112,6 +127,7 @@ export function createContextPolicy(
     targetRecentTailTokens,
     minRecentTailTokens,
     maxSingleObservationTokens,
+    maxObservationBatchTokens,
     conversationCapTokens,
     relevantFileCapTokens,
     maxMemoryContextTokens,

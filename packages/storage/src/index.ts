@@ -94,3 +94,8 @@ export {
   type ContextArtifactRepository,
 } from "./context-artifact-repository.js";
 export { SqliteMemoryExtractionJobRepository } from "./memory-extraction-job-repository.js";
+export {
+  SqliteContextRuntimeStateRepository,
+  type ContextRuntimeState,
+  type ContextRuntimeStateRepository,
+} from "./context-runtime-state-repository.js";

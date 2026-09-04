@@ -152,7 +152,11 @@ export type {
   ModelContextProjection,
   ModelContextProjectionInput,
 } from "./model-context-projection.js";
-export { createInMemoryArtifactStore, projectToolObservation } from "./observation-projector.js";
+export {
+  createInMemoryArtifactStore,
+  projectToolObservation,
+  projectToolObservationBatch,
+} from "./observation-projector.js";
 export { createDeterministicMinimalCheckpoint, createStructuredCheckpoint } from "./checkpoint.js";
 export type {
   CheckpointSourceRange,
@@ -199,6 +203,7 @@ export type {
   ArtifactSensitivity,
   ArtifactStore,
   ModelObservation,
+  ProjectToolObservationBatchInput,
   ProjectToolObservationInput,
 } from "./observation-projector.js";
 export type {

@@ -1,5 +1,6 @@
 import type { ClientModelSelection } from "@caelush/protocol";
 import type { DaemonModelProviderConfig } from "./providers/model-canonicalizer.js";
+import { z } from "zod";
 
 export interface DaemonConfig {
   readonly host: string;
@@ -35,6 +36,7 @@ export function readProviderConfiguration(
   const provider = env.CAELUSH_PROVIDER_ID;
   const baseUrl = env.CAELUSH_PROVIDER_BASE_URL;
   const apiKey = env.CAELUSH_PROVIDER_API_KEY;
+  const modelProfiles = parseModelProfiles(env.CAELUSH_PROVIDER_MODEL_PROFILES);
   const hasProviderConfiguration =
     provider !== undefined || baseUrl !== undefined || apiKey !== undefined;
   if (hasProviderConfiguration && (provider === undefined || baseUrl === undefined)) {
@@ -49,6 +51,7 @@ export function readProviderConfiguration(
       baseUrl,
       ...(apiKey === undefined ? {} : { apiKey }),
       ...(allowedModels.length === 0 ? {} : { allowedModels }),
+      ...(modelProfiles === undefined ? {} : { modelProfiles }),
     });
   }
 
@@ -64,6 +67,56 @@ export function readProviderConfiguration(
       ? {}
       : { defaultModel: { provider: defaultProvider, model: defaultModel } }),
   };
+}
+
+const ModelProfileSchema = z
+  .object({
+    contextWindowTokens: z.number().int().positive().safe(),
+    maxOutputTokens: z.number().int().positive().safe(),
+    recommendedOutputReserveTokens: z.number().int().nonnegative().safe(),
+    supportsPromptCaching: z.boolean().optional(),
+    supportsUsageReporting: z.boolean().optional(),
+    toolOutputSoftLimitTokens: z.number().int().positive().safe().optional(),
+  })
+  .strict();
+
+const ModelProfilesSchema = z.record(z.string().min(1), ModelProfileSchema);
+
+function parseModelProfiles(
+  value: string | undefined,
+):
+  | Readonly<Record<string, import("./providers/model-canonicalizer.js").DaemonModelProfileConfig>>
+  | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(value);
+  } catch {
+    throw new Error("CAELUSH_PROVIDER_MODEL_PROFILES must contain valid JSON.");
+  }
+  const parsed = ModelProfilesSchema.safeParse(parsedJson);
+  if (!parsed.success) throw new Error("CAELUSH_PROVIDER_MODEL_PROFILES is invalid.");
+  const result: Record<
+    string,
+    import("./providers/model-canonicalizer.js").DaemonModelProfileConfig
+  > = {};
+  for (const [modelId, profile] of Object.entries(parsed.data)) {
+    result[modelId] = {
+      contextWindowTokens: profile.contextWindowTokens,
+      maxOutputTokens: profile.maxOutputTokens,
+      recommendedOutputReserveTokens: profile.recommendedOutputReserveTokens,
+      ...(profile.supportsPromptCaching === undefined
+        ? {}
+        : { supportsPromptCaching: profile.supportsPromptCaching }),
+      ...(profile.supportsUsageReporting === undefined
+        ? {}
+        : { supportsUsageReporting: profile.supportsUsageReporting }),
+      ...(profile.toolOutputSoftLimitTokens === undefined
+        ? {}
+        : { toolOutputSoftLimitTokens: profile.toolOutputSoftLimitTokens }),
+    };
+  }
+  return result;
 }
 
 function splitEnvironmentList(value: string | undefined): string[] {

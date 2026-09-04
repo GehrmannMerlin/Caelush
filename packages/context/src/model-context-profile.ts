@@ -1,5 +1,5 @@
 export type ModelContextProfileSource =
-  "CONFIGURATION" | "KNOWN_METADATA" | "OVERRIDE" | "FALLBACK";
+  "CONFIGURATION" | "KNOWN_METADATA" | "LEGACY_LIMITS" | "OVERRIDE" | "FALLBACK";
 
 export interface ModelContextProfile {
   readonly providerId: string;
@@ -28,6 +28,11 @@ export interface ModelContextProfileResolutionInput {
   readonly configuredProfiles?: readonly ModelContextProfile[];
   readonly knownProfiles?: readonly ModelContextProfile[];
   readonly overrides?: readonly ModelContextProfile[];
+  readonly legacyLimits?: Readonly<{
+    readonly maxInputTokens: number;
+    readonly outputReserveTokens?: number;
+    readonly safetyReserveTokens?: number;
+  }>;
   readonly fallback?: Readonly<{
     readonly contextWindowTokens: number;
     readonly maxOutputTokens: number;
@@ -47,6 +52,8 @@ interface FallbackProfileConfig {
   readonly toolOutputSoftLimitTokens?: number;
 }
 
+const DEFAULT_LEGACY_SAFETY_RESERVE = 512;
+
 const DEFAULT_FALLBACK: FallbackProfileConfig = {
   contextWindowTokens: 16_000,
   maxOutputTokens: 4096,
@@ -65,15 +72,23 @@ function requirePositiveSafeInteger(name: string, value: number): void {
   }
 }
 
+function requireNonNegativeSafeInteger(name: string, value: number): void {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new RangeError(`${name} must be a non-negative safe integer`);
+  }
+}
+
 export function createModelContextProfile(input: ModelContextProfileInput): ModelContextProfile {
   requireText("providerId", input.providerId);
   requireText("modelId", input.modelId);
   requirePositiveSafeInteger("contextWindowTokens", input.contextWindowTokens);
   requirePositiveSafeInteger("maxOutputTokens", input.maxOutputTokens);
-  requirePositiveSafeInteger(
-    "recommendedOutputReserveTokens",
-    input.recommendedOutputReserveTokens,
-  );
+  if (
+    !Number.isSafeInteger(input.recommendedOutputReserveTokens) ||
+    input.recommendedOutputReserveTokens < 0
+  ) {
+    throw new RangeError("recommendedOutputReserveTokens must be a non-negative safe integer");
+  }
   if (input.recommendedOutputReserveTokens >= input.contextWindowTokens) {
     throw new RangeError("recommendedOutputReserveTokens must be less than contextWindowTokens");
   }
@@ -124,6 +139,25 @@ export function resolveModelContextProfile(
   if (configured !== undefined) return cloneProfile(configured, "CONFIGURATION");
   const known = findProfile(input.knownProfiles, input.providerId, input.modelId);
   if (known !== undefined) return cloneProfile(known, "KNOWN_METADATA");
+  if (input.legacyLimits !== undefined) {
+    requirePositiveSafeInteger("legacyLimits.maxInputTokens", input.legacyLimits.maxInputTokens);
+    const outputReserveTokens = input.legacyLimits.outputReserveTokens ?? 0;
+    const safetyReserveTokens =
+      input.legacyLimits.safetyReserveTokens ?? DEFAULT_LEGACY_SAFETY_RESERVE;
+    requireNonNegativeSafeInteger("legacyLimits.outputReserveTokens", outputReserveTokens);
+    requireNonNegativeSafeInteger("legacyLimits.safetyReserveTokens", safetyReserveTokens);
+    return createModelContextProfile({
+      providerId: input.providerId,
+      modelId: input.modelId,
+      contextWindowTokens:
+        input.legacyLimits.maxInputTokens + outputReserveTokens + safetyReserveTokens,
+      maxOutputTokens: Math.max(1, outputReserveTokens),
+      recommendedOutputReserveTokens: outputReserveTokens,
+      supportsPromptCaching: false,
+      supportsUsageReporting: false,
+      profileSource: "LEGACY_LIMITS",
+    });
+  }
   const override = findProfile(input.overrides, input.providerId, input.modelId);
   if (override !== undefined) return cloneProfile(override, "OVERRIDE");
   const fallback = input.fallback ?? DEFAULT_FALLBACK;

@@ -15,6 +15,7 @@ import {
   createDefaultContextBuilder,
   createLocalProjectInspector,
   createLocalRelevantFilePlanner,
+  createModelContextProfile,
   Utf8HeuristicTokenEstimator,
 } from "@caelush/context";
 import { MemoryRetriever, type MemoryRecord } from "@caelush/memory";
@@ -185,8 +186,27 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
   const inspector = createLocalProjectInspector();
   const memoryRetriever = new MemoryRetriever(options.storage.memory);
   const memoryEstimator = new Utf8HeuristicTokenEstimator();
+  const configuredProfiles = providers.flatMap((config) =>
+    Object.entries(config.modelProfiles ?? {}).map(([modelId, profile]) =>
+      createModelContextProfile({
+        providerId: config.provider,
+        modelId,
+        contextWindowTokens: profile.contextWindowTokens,
+        maxOutputTokens: profile.maxOutputTokens,
+        recommendedOutputReserveTokens: profile.recommendedOutputReserveTokens,
+        supportsPromptCaching: profile.supportsPromptCaching ?? false,
+        supportsUsageReporting: profile.supportsUsageReporting ?? false,
+        ...(profile.toolOutputSoftLimitTokens === undefined
+          ? {}
+          : { toolOutputSoftLimitTokens: profile.toolOutputSoftLimitTokens }),
+        profileSource: "CONFIGURATION",
+      }),
+    ),
+  );
   const contextRuntime = new ContextRuntimeCoordinator({
+    configuredProfiles,
     checkpointRepository: options.storage.contextCheckpoints,
+    usageRepository: options.storage.contextRuntimeStates,
     clock,
     checkpointIdFactory: { create: () => createEventId() },
     memoryLoader: async ({ projectId, goal, maxTokens }) => {
@@ -251,6 +271,7 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
   const verificationGit = createRunBoundVerificationGit(runtime);
   const controller = new RunController({
     agentLoop,
+    contextRuntime,
     execution: options.storage.execution,
     events: options.eventBus,
     configResolver: executionConfigResolver,
@@ -332,31 +353,9 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
       getContextUsage: async (runId) => {
         const current = contextRuntime.getContextUsage(runId);
         if (current !== undefined) return current;
-        const checkpoint = await options.storage.contextCheckpoints.getLatestByRun(runId as never);
-        const run = await options.storage.runs.get(runId as never);
-        if (checkpoint === undefined || run === null) return undefined;
-        const recoveredInputLimit = 32_000;
-        return createContextUsageProjection({
-          runId,
-          providerId: run.model.provider,
-          modelId: run.model.model,
-          contextWindowTokens: recoveredInputLimit,
-          effectiveInputLimitTokens: recoveredInputLimit,
-          estimatedInputTokens: checkpoint.tokensAfter,
-          pressureState: "NORMAL",
-          compactionCount: 1,
-          lastCompactionAt: checkpoint.createdAt,
-          breakdown: {
-            pinned: 0,
-            checkpoint: checkpoint.tokensAfter,
-            recentTail: 0,
-            project: 0,
-            files: 0,
-            toolObservations: 0,
-            memory: 0,
-          },
-          updatedAt: checkpoint.createdAt,
-        });
+        const persisted = await options.storage.contextRuntimeStates.getByRun(runId);
+        if (persisted !== undefined) return createContextUsageProjection(persisted);
+        return undefined;
       },
     },
     controller,

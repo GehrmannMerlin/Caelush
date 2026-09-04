@@ -3,6 +3,8 @@ import {
   type BuiltModelContext,
   type ContextBuildInput,
   createContextRuntimeBuilderAdapter,
+  recoverProviderContextOverflow,
+  ContextExhaustedError,
   type ProjectIntelligenceSnapshot,
   type RelevantFileContextPlan,
 } from "@caelush/context";
@@ -72,9 +74,16 @@ export class AgentLoop {
         currentUserMessage,
       ]);
     }
-    return this.executeProviderTurn(normalizedInput, gate.nextSequence, prepared, [
-      currentUserMessage,
-    ]);
+    return this.executeProviderTurn(
+      normalizedInput,
+      gate.nextSequence,
+      prepared,
+      [currentUserMessage],
+      {
+        history: normalizedInput.history,
+        currentUserMessage,
+      },
+    );
   }
 
   async resumeWithToolResults(input: AgentLoopResumeInput): Promise<AgentLoopExecutionResult> {
@@ -121,6 +130,10 @@ export class AgentLoop {
       gate.nextSequence,
       prepared,
       normalizedResults,
+      {
+        history: history.historyBeforeCurrentTurn,
+        currentTurnMessages: history.currentTurnMessages,
+      },
     );
   }
 
@@ -129,6 +142,7 @@ export class AgentLoop {
     history: readonly LLMMessage[],
     currentUserMessage: { readonly role: "user"; readonly content: string } | undefined,
     currentTurnMessages?: readonly LLMMessage[],
+    forceRecovery = false,
   ): Promise<PreparedTurn> {
     throwIfAborted(input.signal);
     const snapshotInput =
@@ -166,6 +180,7 @@ export class AgentLoop {
       projectId: input.run.workspace.id,
       context: contextInput,
       signal: input.signal,
+      ...(forceRecovery ? { forceRecovery: true } : {}),
     });
     throwIfAborted(input.signal);
     const request = buildAgentLLMRequest(context, input.run, input.tools, input.modelSettings);
@@ -204,6 +219,11 @@ export class AgentLoop {
     sequence: number,
     prepared: PreparedTurn,
     appendPrefix: readonly LLMMessage[],
+    recovery: {
+      readonly history: readonly LLMMessage[];
+      readonly currentUserMessage?: LLMMessage;
+      readonly currentTurnMessages?: readonly LLMMessage[];
+    },
   ): Promise<AgentLoopExecutionResult> {
     const startedAt = monotonicNow(input.state, this.dependencies.clock.now());
     const step = createRunningAgentStep({
@@ -268,9 +288,26 @@ export class AgentLoop {
 
     let result: LLMTurnResult;
     try {
-      result = await this.dependencies.llmClient.complete(request, {
-        signal: input.signal,
+      let recoveredPrepared: PreparedTurn | undefined;
+      const recovered = await recoverProviderContextOverflow({
+        execute: () =>
+          this.dependencies.llmClient.complete(recoveredPrepared?.request ?? request, {
+            signal: input.signal,
+          }),
+        forceCompact: async () => {
+          if (this.dependencies.contextRuntime === undefined) throw new ContextExhaustedError();
+          recoveredPrepared = await this.prepareTurn(
+            input,
+            recovery.history,
+            recovery.currentUserMessage as
+              { readonly role: "user"; readonly content: string } | undefined,
+            recovery.currentTurnMessages,
+            true,
+          );
+        },
+        rehydrate: async () => undefined,
       });
+      result = recovered.value;
     } catch (error) {
       if (input.signal.aborted) {
         return this.cancelledAfterStep(input, activeState, step, prepared.context, true);

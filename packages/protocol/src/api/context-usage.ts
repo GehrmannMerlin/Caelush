@@ -15,12 +15,20 @@ const ContextUsageBreakdownSchema = z
   .strict();
 
 export const ContextUsagePressureStateSchema = z.enum(["NORMAL", "PROACTIVE", "EMERGENCY"]);
+const ContextProfileSourceSchema = z.enum([
+  "CONFIGURATION",
+  "KNOWN_METADATA",
+  "LEGACY_LIMITS",
+  "OVERRIDE",
+  "FALLBACK",
+]);
 
 export const ContextUsageProjectionSchema = z
   .object({
     runId: RunIdSchema,
     providerId: z.string().min(1),
     modelId: z.string().min(1),
+    profileSource: ContextProfileSourceSchema.optional(),
     contextWindowTokens: z.number().int().nonnegative(),
     effectiveInputLimitTokens: z.number().int().positive(),
     estimatedInputTokens: z.number().int().nonnegative(),
@@ -31,6 +39,7 @@ export const ContextUsageProjectionSchema = z
     lastCompactionAt: TimestampMsSchema.optional(),
     breakdown: ContextUsageBreakdownSchema,
     updatedAt: TimestampMsSchema,
+    lastBuildStatus: z.enum(["SUCCESS", "FAILED", "CONTEXT_EXHAUSTED"]).optional(),
   })
   .strict();
 

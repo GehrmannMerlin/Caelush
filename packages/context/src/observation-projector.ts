@@ -57,6 +57,16 @@ export interface ProjectToolObservationInput {
   readonly estimator: TokenEstimator;
 }
 
+export interface ProjectToolObservationBatchInput {
+  readonly observations: readonly Omit<
+    ProjectToolObservationInput,
+    "maxObservationTokens" | "estimator"
+  >[];
+  readonly maxSingleObservationTokens: number;
+  readonly maxObservationBatchTokens: number;
+  readonly estimator: TokenEstimator;
+}
+
 const OMITTED = "\n[output omitted; see artifact]";
 
 function boundedPrefix(content: string, maxTokens: number, estimator: TokenEstimator): string {
@@ -132,6 +142,52 @@ export function projectToolObservation(input: ProjectToolObservationInput): Mode
     ...(input.rawArtifactRef === undefined ? {} : { rawArtifactRef: input.rawArtifactRef }),
     tokenEstimate: input.estimator.estimateText(bounded.text),
     observationHash,
+  });
+}
+
+/**
+ * Projects a complete tool batch in stable source order. Raw results remain owned by
+ * the durable Tool plane; this function only allocates a bounded model-facing view.
+ */
+export function projectToolObservationBatch(
+  input: ProjectToolObservationBatchInput,
+): readonly ModelObservation[] {
+  if (
+    !Number.isSafeInteger(input.maxSingleObservationTokens) ||
+    input.maxSingleObservationTokens < 1 ||
+    !Number.isSafeInteger(input.maxObservationBatchTokens) ||
+    input.maxObservationBatchTokens < 1
+  ) {
+    throw new RangeError("Observation policy limits must be positive safe integers");
+  }
+  if (input.observations.length === 0) return [];
+  if (input.maxObservationBatchTokens < input.observations.length) {
+    throw new RangeError("Observation batch budget cannot preserve every Tool Result");
+  }
+  const weights = input.observations.map((observation) =>
+    Math.max(1, input.estimator.estimateText(observation.content)),
+  );
+  const totalWeight = weights.reduce((total, weight) => total + weight, 0);
+  let remainingTokens = input.maxObservationBatchTokens;
+  let remainingWeight = totalWeight;
+  return input.observations.map((observation, index) => {
+    const weight = weights[index] ?? 1;
+    const proportional = Math.floor((remainingTokens * weight) / remainingWeight);
+    const allocation = Math.max(
+      1,
+      Math.min(
+        input.maxSingleObservationTokens,
+        proportional,
+        remainingTokens - Math.max(0, input.observations.length - index - 1),
+      ),
+    );
+    remainingTokens = Math.max(0, remainingTokens - allocation);
+    remainingWeight = Math.max(1, remainingWeight - weight);
+    return projectToolObservation({
+      ...observation,
+      maxObservationTokens: allocation,
+      estimator: input.estimator,
+    });
   });
 }
 
