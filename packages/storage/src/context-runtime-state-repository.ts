@@ -8,12 +8,14 @@ export type ContextRuntimeState = {
   readonly profileSource:
     "CONFIGURATION" | "KNOWN_METADATA" | "LEGACY_LIMITS" | "OVERRIDE" | "FALLBACK";
   readonly contextWindowTokens: number;
+  readonly rawContextWindowTokens: number;
   readonly effectiveInputLimitTokens: number;
   readonly estimatedInputTokens: number;
   readonly remainingTokens: number;
   readonly pressureState: "NORMAL" | "PROACTIVE" | "EMERGENCY";
   readonly compactionCount: number;
   readonly lastCompactionAt?: number;
+  readonly lastBuildAt: number;
   readonly breakdown: {
     readonly pinned: number;
     readonly checkpoint: number;
@@ -22,7 +24,14 @@ export type ContextRuntimeState = {
     readonly files: number;
     readonly toolObservations: number;
     readonly memory: number;
+    readonly systemTokens: number;
+    readonly goalTokens: number;
+    readonly currentUserTokens: number;
+    readonly relevantFileTokens: number;
+    readonly currentTurnTokens: number;
+    readonly mandatoryTokens: number;
   };
+  readonly lastRecoveryStages: readonly string[];
   readonly lastBuildStatus: "SUCCESS" | "FAILED" | "CONTEXT_EXHAUSTED";
   readonly updatedAt: number;
 };
@@ -41,6 +50,10 @@ function decode(row: Record<string, unknown>): ContextRuntimeState {
     modelId: String(row.model_id),
     profileSource: String(row.profile_source) as ContextRuntimeState["profileSource"],
     contextWindowTokens: Number(row.context_window_tokens),
+    rawContextWindowTokens:
+      row.raw_context_window_tokens === undefined || row.raw_context_window_tokens === null
+        ? Number(row.context_window_tokens)
+        : Number(row.raw_context_window_tokens),
     effectiveInputLimitTokens: Number(row.effective_input_limit_tokens),
     estimatedInputTokens: Number(row.estimated_input_tokens),
     remainingTokens: Number(row.remaining_tokens),
@@ -49,9 +62,37 @@ function decode(row: Record<string, unknown>): ContextRuntimeState {
     ...(row.last_compaction_at_ms === null
       ? {}
       : { lastCompactionAt: Number(row.last_compaction_at_ms) }),
-    breakdown: JSON.parse(String(row.breakdown_json)) as ContextRuntimeBreakdown,
+    lastBuildAt:
+      row.last_build_at_ms === undefined || row.last_build_at_ms === null
+        ? Number(row.updated_at_ms)
+        : Number(row.last_build_at_ms),
+    breakdown: normalizeBreakdown(
+      JSON.parse(String(row.breakdown_json)) as Record<string, unknown>,
+    ),
+    lastRecoveryStages:
+      row.last_recovery_stages_json === undefined || row.last_recovery_stages_json === null
+        ? []
+        : (JSON.parse(String(row.last_recovery_stages_json)) as string[]),
     lastBuildStatus: String(row.last_build_status) as ContextRuntimeState["lastBuildStatus"],
     updatedAt: Number(row.updated_at_ms),
+  };
+}
+
+function normalizeBreakdown(value: Record<string, unknown>): ContextRuntimeBreakdown {
+  return {
+    pinned: Number(value.pinned ?? 0),
+    checkpoint: Number(value.checkpoint ?? 0),
+    recentTail: Number(value.recentTail ?? value.currentTurnTokens ?? 0),
+    project: Number(value.project ?? value.systemTokens ?? 0),
+    files: Number(value.files ?? value.relevantFileTokens ?? 0),
+    toolObservations: Number(value.toolObservations ?? 0),
+    memory: Number(value.memory ?? 0),
+    systemTokens: Number(value.systemTokens ?? value.project ?? 0),
+    goalTokens: Number(value.goalTokens ?? 0),
+    currentUserTokens: Number(value.currentUserTokens ?? 0),
+    relevantFileTokens: Number(value.relevantFileTokens ?? value.files ?? 0),
+    currentTurnTokens: Number(value.currentTurnTokens ?? value.recentTail ?? 0),
+    mandatoryTokens: Number(value.mandatoryTokens ?? 0),
   };
 }
 
@@ -64,18 +105,22 @@ export class SqliteContextRuntimeStateRepository implements ContextRuntimeStateR
         .prepare(
           `INSERT INTO context_runtime_states
           (run_id, provider_id, model_id, profile_source, context_window_tokens,
+           raw_context_window_tokens,
            effective_input_limit_tokens, estimated_input_tokens, remaining_tokens,
            pressure_state, compaction_count, last_compaction_at_ms, breakdown_json,
-           last_build_status, updated_at_ms)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           last_build_status, last_build_at_ms, last_recovery_stages_json, updated_at_ms)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(run_id) DO UPDATE SET
            provider_id=excluded.provider_id, model_id=excluded.model_id,
            profile_source=excluded.profile_source, context_window_tokens=excluded.context_window_tokens,
+           raw_context_window_tokens=excluded.raw_context_window_tokens,
            effective_input_limit_tokens=excluded.effective_input_limit_tokens,
            estimated_input_tokens=excluded.estimated_input_tokens, remaining_tokens=excluded.remaining_tokens,
            pressure_state=excluded.pressure_state, compaction_count=excluded.compaction_count,
            last_compaction_at_ms=excluded.last_compaction_at_ms, breakdown_json=excluded.breakdown_json,
-           last_build_status=excluded.last_build_status, updated_at_ms=excluded.updated_at_ms`,
+           last_build_status=excluded.last_build_status, last_build_at_ms=excluded.last_build_at_ms,
+           last_recovery_stages_json=excluded.last_recovery_stages_json,
+           updated_at_ms=excluded.updated_at_ms`,
         )
         .run(
           state.runId,
@@ -83,6 +128,7 @@ export class SqliteContextRuntimeStateRepository implements ContextRuntimeStateR
           state.modelId,
           state.profileSource,
           state.contextWindowTokens,
+          state.rawContextWindowTokens,
           state.effectiveInputLimitTokens,
           state.estimatedInputTokens,
           state.remainingTokens,
@@ -91,6 +137,8 @@ export class SqliteContextRuntimeStateRepository implements ContextRuntimeStateR
           state.lastCompactionAt ?? null,
           JSON.stringify(state.breakdown),
           state.lastBuildStatus,
+          state.lastBuildAt,
+          JSON.stringify(state.lastRecoveryStages),
           state.updatedAt,
         );
     } catch (error) {

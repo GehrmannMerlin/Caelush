@@ -80,7 +80,7 @@ describe("committed storage migrations", () => {
         "verification_plans",
       ]);
       expect(sqlite.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get()).toEqual({
-        count: 11,
+        count: 12,
       });
     } finally {
       sqlite.close();

@@ -296,6 +296,7 @@ export const contextRuntimeStates = sqliteTable("context_runtime_states", {
   modelId: text("model_id").notNull(),
   profileSource: text("profile_source").notNull(),
   contextWindowTokens: integer("context_window_tokens").notNull(),
+  rawContextWindowTokens: integer("raw_context_window_tokens").notNull(),
   effectiveInputLimitTokens: integer("effective_input_limit_tokens").notNull(),
   estimatedInputTokens: integer("estimated_input_tokens").notNull(),
   remainingTokens: integer("remaining_tokens").notNull(),
@@ -304,6 +305,8 @@ export const contextRuntimeStates = sqliteTable("context_runtime_states", {
   lastCompactionAtMs: integer("last_compaction_at_ms"),
   breakdownJson: text("breakdown_json").notNull(),
   lastBuildStatus: text("last_build_status").notNull(),
+  lastBuildAtMs: integer("last_build_at_ms").notNull(),
+  lastRecoveryStagesJson: text("last_recovery_stages_json").notNull(),
   updatedAtMs: integer("updated_at_ms").notNull(),
 });
 
