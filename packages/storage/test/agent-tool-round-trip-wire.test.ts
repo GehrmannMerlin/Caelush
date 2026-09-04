@@ -1,4 +1,4 @@
-import { createEventId, createObservationId, createRunId, createSessionId, createStepId, createTimestampMs, createToolInvocationId, createWorkspaceId, AgentRunSchema } from "@caelush/protocol";
+import { createApprovalRequestId, createEventId, createObservationId, createRunId, createSessionId, createStepId, createTimestampMs, createToolInvocationId, createWorkspaceId, AgentRunSchema } from "@caelush/protocol";
 import { AgentLoop, RunController } from "@caelush/core";
 import { EventBus } from "@caelush/events";
 import { createOpenAICompatibleLLMProvider, LLMGateway, LLMProviderRegistry } from "@caelush/llm";
@@ -158,7 +158,7 @@ describe("real provider Tool Call round trip", () => {
       eventIdFactory: { create: createEventId },
       resultSanitizer: { sanitize: ({ result }) => result },
       approvalStore: storage.approvals,
-      approvalIdFactory: { create: createRunId },
+      approvalIdFactory: { create: createApprovalRequestId },
     });
     const coordinator = new ToolBatchCoordinator(dispatcher);
     const loop = new AgentLoop({
