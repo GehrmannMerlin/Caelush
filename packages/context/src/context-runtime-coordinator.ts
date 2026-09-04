@@ -88,6 +88,11 @@ export interface ContextRuntimeCoordinatorOptions {
   readonly usageRepository?: {
     upsert(state: ContextUsageProjection): Promise<void>;
   };
+  /** Loads complete durable Tool output by opaque artifact reference for recovery projection. */
+  readonly rawObservationLoader?: (input: {
+    readonly runId: string;
+    readonly artifactRef: string;
+  }) => Promise<string | undefined>;
 }
 
 export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort {
@@ -180,20 +185,32 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
     let compactedCheckpoint = checkpoint;
     let compactionCount = 0;
     const recoveryStages: string[] = [];
-    if (input.forceRecovery && hasCompressibleHistory(workingInput)) {
-      recoveryStages.push("COMPACT_CLOSED_UNITS");
-      const compacted = await this.compact(
-        input.runId,
-        workingInput,
-        profile,
-        checkpoint,
-        policy,
-        undefined,
-        input.authorities,
-      );
-      compactedCheckpoint = compacted.checkpoint;
-      compactionCount = 1;
-      workingInput = this.tightenOpenTurn(compacted.input, policy, "EMERGENCY");
+    if (input.forceRecovery) {
+      if (hasCompressibleHistory(workingInput)) {
+        recoveryStages.push("COMPACT_CLOSED_UNITS");
+        const compacted = await this.compact(
+          input.runId,
+          workingInput,
+          profile,
+          checkpoint,
+          policy,
+          this.estimateFullInput(workingInput),
+          input.authorities,
+        );
+        compactedCheckpoint = compacted.checkpoint;
+        compactionCount = 1;
+        workingInput =
+          input.context.mode === "TOOL_CONTINUATION"
+            ? await this.tightenOpenTurn(input.runId, compacted.input, policy, "EMERGENCY")
+            : compacted.input;
+      } else if (input.context.mode === "TOOL_CONTINUATION") {
+        recoveryStages.push("REPROJECT_OPEN_OBSERVATIONS_EMERGENCY");
+        workingInput = await this.tightenOpenTurn(input.runId, workingInput, policy, "EMERGENCY");
+      } else {
+        await this.recordFailedUsage(input, profile, policy, workingInput, ["OVERFLOW_EXHAUSTED"]);
+        pressureState.markExhausted();
+        throw new ContextExhaustedError();
+      }
     }
     try {
       context = this.builder.build(workingInput);
@@ -227,7 +244,7 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
     } catch (error) {
       if (!(error instanceof ContextBudgetExceededError)) throw error;
       recoveryStages.push("REPROJECT_OPEN_OBSERVATIONS_TIGHT");
-      workingInput = this.tightenOpenTurn(buildInput, policy, "TIGHT");
+      workingInput = await this.tightenOpenTurn(input.runId, buildInput, policy, "TIGHT");
       try {
         context = this.builder.build(workingInput);
         const tightMeasuredTokens = measuredContextTokens(context);
@@ -260,7 +277,7 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
             pressureState.markRecovered(recoveredMeasuredTokens);
         } catch {
           recoveryStages.push("REPROJECT_OPEN_OBSERVATIONS_EMERGENCY");
-          workingInput = this.tightenOpenTurn(workingInput, policy, "EMERGENCY");
+          workingInput = await this.tightenOpenTurn(input.runId, workingInput, policy, "EMERGENCY");
           try {
             context = this.builder.build(workingInput);
             const emergencyMeasuredTokens = measuredContextTokens(context);
@@ -268,7 +285,7 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
               pressureState.markRecovered(emergencyMeasuredTokens);
           } catch {
             recoveryStages.push("REPROJECT_OPEN_OBSERVATIONS_MINIMAL");
-            workingInput = this.tightenOpenTurn(workingInput, policy, "MINIMAL");
+            workingInput = await this.tightenOpenTurn(input.runId, workingInput, policy, "MINIMAL");
             try {
               context = this.builder.build(workingInput);
               const minimalMeasuredTokens = measuredContextTokens(context);
@@ -286,7 +303,7 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
     }
     if (input.signal.aborted) throw new ContextRuntimeCancelledError();
     if (compactionCount > 0) {
-      if (compactedCheckpoint !== undefined && compactedCheckpoint.tokensAfter === 0) {
+      if (compactedCheckpoint !== undefined) {
         compactedCheckpoint = await this.updateCheckpointTokensAfter(compactedCheckpoint, context);
       }
       context = {
@@ -387,6 +404,9 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
       runId,
       createdAt: this.options.clock?.now() ?? Date.now(),
       estimateText: estimator.estimateText.bind(estimator),
+      ...(input.historySourceSequences === undefined
+        ? {}
+        : { sourceSequences: input.historySourceSequences }),
     });
     const eligible = units.filter((unit) => isCompactionCandidate(unit));
     const tokensBefore =
@@ -400,8 +420,16 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
       oldestCandidates.push(unit);
       selectedTokens += unit.tokenEstimate;
     }
-    if (oldestCandidates.length === 0 && eligible.length > 1) oldestCandidates.push(eligible[0]!);
+    if (oldestCandidates.length === 0 && eligible.length > 0) oldestCandidates.push(eligible[0]!);
     const pressure = new ContextPressureController({ policy });
+    const selectedSourceRange = {
+      from: oldestCandidates[0]!.sourceSequenceFrom,
+      to: oldestCandidates.at(-1)!.sourceSequenceTo,
+      kind:
+        input.historySourceSequences === undefined
+          ? ("LOCAL_HISTORY_INDEX" as const)
+          : ("DURABLE_MESSAGE_SEQUENCE" as const),
+    };
     const pressureResult = await pressure.compact({
       runId,
       estimatedInputTokens: tokensBefore,
@@ -416,19 +444,17 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
       changedFiles: authorities.changedFiles ?? [],
       recentErrors: authorities.recentErrors ?? [],
       verificationState: authorities.verificationState ?? "UNKNOWN",
-      sourceRange: {
-        from: 0,
-        to: Math.max(0, history.length - 1),
-        kind: "LOCAL_HISTORY_INDEX",
-      },
+      sourceRange: selectedSourceRange,
     });
     const selectedUnits = pressureResult.selectedUnits;
-    const legacyHistoryCut =
-      selectedUnits.length === 0 && eligible.length === 0 && history.length > 0;
-    if (selectedUnits.length === 0 && !legacyHistoryCut) throw new ContextExhaustedError();
-    const selectedRanges = legacyHistoryCut
-      ? ([[0, history.length - 1]] as const)
-      : selectedUnits.map((unit) => [unit.sourceSequenceFrom, unit.sourceSequenceTo] as const);
+    if (selectedUnits.length === 0) throw new ContextExhaustedError();
+    const selectedRanges = selectedUnits.map(
+      (unit) =>
+        [
+          unit.historyIndexFrom ?? unit.sourceSequenceFrom,
+          unit.historyIndexTo ?? unit.sourceSequenceTo,
+        ] as const,
+    );
     const retainedHistory = history.filter(
       (_message, index) => !selectedRanges.some(([from, to]) => index >= from && index <= to),
     );
@@ -440,13 +466,14 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
             .map((message) => message.content)
             .join(" ")
         : input.currentUserMessage.content);
-    const sourceRange = legacyHistoryCut
-      ? { from: 0, to: Math.max(0, history.length - 1), kind: "LOCAL_HISTORY_INDEX" as const }
-      : {
-          from: selectedUnits[0]!.sourceSequenceFrom,
-          to: selectedUnits.at(-1)!.sourceSequenceTo,
-          kind: "LOCAL_HISTORY_INDEX" as const,
-        };
+    const sourceRange = {
+      from: selectedUnits[0]!.sourceSequenceFrom,
+      to: selectedUnits.at(-1)!.sourceSequenceTo,
+      kind:
+        input.historySourceSequences === undefined
+          ? ("LOCAL_HISTORY_INDEX" as const)
+          : ("DURABLE_MESSAGE_SEQUENCE" as const),
+    };
     const structuredCheckpoint: StructuredCheckpoint = createStructuredCheckpoint({
       goal,
       constraints: [],
@@ -466,10 +493,8 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
       nextIntent: "continue from the retained recent execution tail",
       sourceRange,
     });
-    const sourceSequenceFrom = legacyHistoryCut ? 0 : selectedUnits[0]!.sourceSequenceFrom;
-    const sourceSequenceTo = legacyHistoryCut
-      ? Math.max(0, history.length - 1)
-      : selectedUnits.at(-1)!.sourceSequenceTo;
+    const sourceSequenceFrom = selectedUnits[0]!.sourceSequenceFrom;
+    const sourceSequenceTo = selectedUnits.at(-1)!.sourceSequenceTo;
     const compactedInput: ContextBuildInput = {
       ...input,
       history: retainedHistory,
@@ -480,7 +505,7 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
     try {
       provisionalContext = this.builder.build(provisionalInput);
     } catch {
-      provisionalInput = this.tightenOpenTurn(compactedInput, policy, "EMERGENCY");
+      provisionalInput = await this.tightenOpenTurn(runId, compactedInput, policy, "EMERGENCY");
       provisionalContext = this.builder.build(provisionalInput);
     }
     const checkpoint = await this.options.checkpointRepository.create({
@@ -520,20 +545,43 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
     return this.pressureByRun.get(runId)?.state;
   }
 
-  private tightenOpenTurn(
+  private async tightenOpenTurn(
+    runId: string,
     input: ContextBuildInput,
     policy: ContextPolicy,
     level: "TIGHT" | "EMERGENCY" | "MINIMAL",
-  ): ContextBuildInput {
+  ): Promise<ContextBuildInput> {
     if (input.mode !== "TOOL_CONTINUATION") return input;
     const multiplier = level === "TIGHT" ? 0.5 : level === "EMERGENCY" ? 0.25 : 0.08;
+    const rawContents = await Promise.all(
+      input.currentTurnMessages
+        .filter((message) => message.role === "tool")
+        .map(async (message) => {
+          if (message.rawArtifactRef !== undefined) {
+            if (this.options.rawObservationLoader === undefined) {
+              throw new ContextExhaustedError();
+            }
+            const raw = await this.options.rawObservationLoader({
+              runId,
+              artifactRef: message.rawArtifactRef,
+            });
+            if (raw === undefined) throw new ContextExhaustedError();
+            return raw;
+          }
+          return message.content;
+        }),
+    );
+    let rawIndex = 0;
     const projected = projectToolObservationBatch({
       observations: input.currentTurnMessages
         .filter((message) => message.role === "tool")
         .map((message) => ({
           sourceToolInvocationId: message.toolCallId,
           toolName: message.toolName,
-          content: message.content,
+          content: rawContents[rawIndex++] ?? message.content,
+          ...(message.rawArtifactRef === undefined
+            ? {}
+            : { rawArtifactRef: message.rawArtifactRef }),
         })),
       maxSingleObservationTokens: Math.max(
         1,
@@ -675,7 +723,13 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
 }
 
 function hasCompressibleHistory(input: ContextBuildInput): boolean {
-  return (input.history?.length ?? 0) > 0;
+  if (input.history === undefined || input.history.length === 0) return false;
+  const estimator = new Utf8HeuristicTokenEstimator();
+  return buildExecutionUnits(input.history, {
+    runId: "context-runtime",
+    createdAt: 0,
+    estimateText: estimator.estimateText.bind(estimator),
+  }).some(isCompactionCandidate);
 }
 
 function measuredContextTokens(context: BuiltModelContext): number | undefined {

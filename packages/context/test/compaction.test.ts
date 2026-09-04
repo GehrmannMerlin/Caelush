@@ -83,6 +83,16 @@ describe("ContextPressureController", () => {
     machine.markExhausted();
     expect(machine.state).toBe("EXHAUSTED");
   });
+
+  it("keeps pressure proactive until the independent recovery threshold", () => {
+    const machine = new ContextPressureStateMachine(policy);
+    machine.observe(policy.proactiveCompactionTokens);
+    expect(machine.state).toBe("PROACTIVE");
+    machine.observe(Math.floor(policy.effectiveInputLimit * 0.6));
+    expect(machine.state).toBe("PROACTIVE");
+    machine.observe(Math.floor(policy.effectiveInputLimit * 0.5));
+    expect(machine.state).toBe("NORMAL");
+  });
 });
 
 function controllerTarget(input: typeof policy): number {

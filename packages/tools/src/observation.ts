@@ -16,6 +16,7 @@ export interface CreateToolObservationInput {
   readonly runId: RunId;
   readonly stepId: StepId;
   readonly toolInvocationId: ToolInvocationId;
+  readonly rawArtifactRef?: string;
   readonly content: string;
   readonly details?: JsonObject;
   readonly isError: boolean;
@@ -29,6 +30,7 @@ export function createToolObservation(input: CreateToolObservationInput): ToolOb
     stepId: input.stepId,
     kind: "TOOL",
     toolInvocationId: input.toolInvocationId,
+    ...(input.rawArtifactRef === undefined ? {} : { rawArtifactRef: input.rawArtifactRef }),
     content: input.content,
     ...(input.details === undefined
       ? {}

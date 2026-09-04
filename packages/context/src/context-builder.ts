@@ -33,6 +33,8 @@ export interface ContextBuildCommonInput {
   readonly snapshot: ProjectIntelligenceSnapshot;
   readonly relevantFiles?: RelevantFileContextPlan;
   readonly history?: readonly LLMMessage[];
+  /** Durable agent_messages.sequence values aligned with history when available. */
+  readonly historySourceSequences?: readonly number[];
   readonly limits: ContextBuildLimits;
   readonly verificationRepairContext?: VerificationRepairContextInput;
   readonly modelContextProfile?: ModelContextProfile;

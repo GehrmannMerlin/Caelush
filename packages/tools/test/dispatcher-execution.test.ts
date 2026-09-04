@@ -121,6 +121,19 @@ function makeDispatcher(
   factsSeen?: { value?: ToolSecurityFacts },
   resultSanitizer?: ToolResultSanitizerPort,
   budget?: ToolBudgetAdmissionPort,
+  rawOutputStore?: {
+    createOrGet(input: {
+      readonly artifactId?: string;
+      readonly runId: string;
+      readonly kind: string;
+      readonly sourceRef: string;
+      readonly content: string;
+      readonly mimeType: string;
+      readonly sensitivity: "PUBLIC" | "INTERNAL" | "SENSITIVE";
+      readonly createdSequence: number;
+      readonly createdAt: number;
+    }): Promise<{ readonly artifactId: string }>;
+  },
 ) {
   let now = 100;
   const definition = makeDefinition();
@@ -155,6 +168,7 @@ function makeDispatcher(
     approvalIdFactory: { create: createApprovalRequestId },
     resultSanitizer: resultSanitizer ?? { sanitize: ({ result }) => result },
     ...(budget === undefined ? {} : { budget }),
+    ...(rawOutputStore === undefined ? {} : { rawOutputStore }),
   });
 }
 
@@ -235,6 +249,39 @@ describe("ToolDispatcher execution", () => {
     if (outcome.kind === "RESULT") {
       expect(outcome.observation.content).toBe("[REDACTED]");
       expect(outcome.observation.details).toEqual({ echoed: "[REDACTED]" });
+    }
+  });
+
+  it("persists complete raw output before storing the bounded observation", async () => {
+    const artifacts: string[] = [];
+    const rawOutputStore = {
+      createOrGet: async (input: { content: string; artifactId?: string }) => {
+        artifacts.push(input.content);
+        return { artifactId: input.artifactId ?? "artifact:test" };
+      },
+    };
+    const dispatcher = makeDispatcher(
+      new MemoryStore(),
+      { kind: "ALLOW" },
+      async () => ({
+        content: "raw-" + "x".repeat(100_000),
+        details: { echoed: "hello" },
+        isError: false,
+      }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      rawOutputStore,
+    );
+
+    const outcome = await dispatcher.dispatch(makeRequest());
+
+    expect(outcome.kind).toBe("RESULT");
+    expect(artifacts[0]).toHaveLength(100_004);
+    if (outcome.kind === "RESULT") {
+      expect(outcome.observation.rawArtifactRef).toBeTruthy();
+      expect(outcome.observation.content.length).toBeLessThan(100_004);
     }
   });
 

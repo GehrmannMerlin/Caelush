@@ -38,6 +38,7 @@ export interface ToolBatchItemResult {
   readonly isError: boolean;
   readonly invocationId?: ToolInvocationId;
   readonly observationId?: ObservationId;
+  readonly rawArtifactRef?: string;
 }
 
 export interface ToolBatchCompletedOutcome {
@@ -72,9 +73,7 @@ export interface ToolBatchBudgetExceededOutcome {
 }
 
 export type ToolBatchOutcome =
-  | ToolBatchCompletedOutcome
-  | ToolBatchWaitingApprovalOutcome
-  | ToolBatchBudgetExceededOutcome;
+  ToolBatchCompletedOutcome | ToolBatchWaitingApprovalOutcome | ToolBatchBudgetExceededOutcome;
 
 export interface ToolBatchCoordinatorPort {
   modelDefinitions(): readonly ToolDefinition[];

@@ -59,12 +59,10 @@ export class ToolBatchCoordinator implements ToolBatchCoordinatorPort {
     mode: "dispatch" | "recoverOrDispatch",
   ): Promise<ToolBatchOutcome> {
     if (mode === "dispatch") {
-      const admission = await this.dispatcher.preflightBudget(
-        {
-          runId: request.runId,
-          requests: request.items.map((item) => toDispatchRequest(request, item)),
-        },
-      );
+      const admission = await this.dispatcher.preflightBudget({
+        runId: request.runId,
+        requests: request.items.map((item) => toDispatchRequest(request, item)),
+      });
       if (admission?.kind === "EXCEEDED") {
         return {
           kind: "BUDGET_EXCEEDED",
@@ -228,10 +226,7 @@ function toDispatchRequest(request: ToolBatchRequest, item: ToolBatchItem): Tool
 
 function toItemResult(
   item: ToolBatchItem,
-  outcome: Exclude<
-    ToolDispatcherOutcome,
-    { kind: "WAITING_APPROVAL" | "BUDGET_EXCEEDED" }
-  >,
+  outcome: Exclude<ToolDispatcherOutcome, { kind: "WAITING_APPROVAL" | "BUDGET_EXCEEDED" }>,
 ): ToolBatchItemResult {
   if (outcome.kind === "UNAVAILABLE_TOOL") {
     return {
@@ -251,6 +246,9 @@ function toItemResult(
     isError: result.observation.isError,
     invocationId: result.invocation.id,
     observationId: result.observation.id,
+    ...(result.observation.rawArtifactRef === undefined
+      ? {}
+      : { rawArtifactRef: result.observation.rawArtifactRef }),
   };
 }
 

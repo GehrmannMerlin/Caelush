@@ -54,6 +54,8 @@ export const LLMToolResultMessageSchema = z
     toolName: ToolNameSchema,
     content: z.string(),
     isError: z.boolean(),
+    /** Opaque durable pointer used by Context Runtime recovery; provider adapters omit it. */
+    rawArtifactRef: z.string().min(1).optional(),
   })
   .strict();
 export type LLMToolResultMessage = z.infer<typeof LLMToolResultMessageSchema>;

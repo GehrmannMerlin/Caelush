@@ -93,6 +93,20 @@ export interface ToolDispatcherOptions {
   readonly approvalIdFactory?: ToolApprovalRequestIdFactory;
   readonly budget?: ToolBudgetAdmissionPort;
   readonly outputPolicy?: ToolOutputPolicy;
+  /** Durable store for the complete pre-projection Tool output. */
+  readonly rawOutputStore?: {
+    createOrGet(input: {
+      readonly artifactId?: string;
+      readonly runId: string;
+      readonly kind: string;
+      readonly sourceRef: string;
+      readonly content: string;
+      readonly mimeType: string;
+      readonly sensitivity: "PUBLIC" | "INTERNAL" | "SENSITIVE";
+      readonly createdSequence: number;
+      readonly createdAt: number;
+    }): Promise<{ readonly artifactId: string }>;
+  };
   readonly maxExternalCallIdBytes?: number;
   readonly maxInvocationArgsBytes?: number;
 }
@@ -645,6 +659,22 @@ export class ToolDispatcher {
         cause: error,
       });
     }
+    const rawArtifactRef =
+      this.options.rawOutputStore === undefined
+        ? undefined
+        : (
+            await this.options.rawOutputStore.createOrGet({
+              artifactId: `tool-output:${snapshot.invocation.id}`,
+              runId: snapshot.invocation.runId,
+              kind: "TOOL_OUTPUT",
+              sourceRef: snapshot.invocation.id,
+              content: (rawResult as { readonly content: string }).content,
+              mimeType: "text/plain; charset=utf-8",
+              sensitivity: "INTERNAL",
+              createdSequence: 0,
+              createdAt: this.options.clock.now(),
+            })
+          ).artifactId;
     let sanitizedResult: ToolExecutionResult;
     try {
       sanitizedResult = this.options.resultSanitizer.sanitize({
@@ -696,6 +726,7 @@ export class ToolDispatcher {
       content: result.content,
       details: result.details,
       isError: result.isError,
+      ...(rawArtifactRef === undefined ? {} : { rawArtifactRef }),
       createdAt: finishedAt,
     });
     const event: DurableToolEventDraft = result.isError

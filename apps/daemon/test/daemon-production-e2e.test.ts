@@ -12,6 +12,7 @@ import {
 } from "@caelush/llm";
 import { afterEach, describe, expect, it } from "vitest";
 import { CaelushClient } from "@caelush/client";
+import { openCaelushStorage } from "@caelush/storage";
 import { startDaemon } from "../src/index.js";
 
 let directory: string | undefined;
@@ -130,7 +131,11 @@ describe("daemon production composition E2E", () => {
     const workspacePath = await mkdtemp(join(tmpdir(), "caelush-production-e2e-"));
     directory = workspacePath;
     await mkdir(join(workspacePath, "src"));
-    await writeFile(join(workspacePath, "src", "message.txt"), "before\n", "utf8");
+    const payload = Array.from(
+      { length: 300 },
+      (_, index) => `${index}-` + "payload-".repeat(300),
+    ).join("\n");
+    await writeFile(join(workspacePath, "src", "message.txt"), `before\n${payload}`, "utf8");
     const provider = new FixtureProvider();
     const handle = await startDaemon({
       databasePath: join(workspacePath, "caelush.db"),
@@ -208,7 +213,9 @@ describe("daemon production composition E2E", () => {
     }
     expect(settled.status).toBe("COMPLETED");
     await liveEvents;
-    expect(await readFile(join(workspacePath, "src", "message.txt"), "utf8")).toBe("after\n");
+    expect(await readFile(join(workspacePath, "src", "message.txt"), "utf8")).toBe(
+      `after\n${payload}`,
+    );
     expect(provider.calls).toBe(4);
     expect(events.map((event) => event.type)).toEqual(
       expect.arrayContaining([
@@ -226,6 +233,16 @@ describe("daemon production composition E2E", () => {
       ]),
     );
     expect(settled.finalResult).toMatchObject({ type: "VERIFIED_COMPLETION" });
+    const usage = await client.getRunContextUsage(run.id);
+    expect(usage).not.toBeNull();
+    expect(usage).toMatchObject({
+      rawContextWindowTokens: expect.any(Number),
+      effectiveInputLimitTokens: expect.any(Number),
+      estimatedInputTokens: expect.any(Number),
+      lastBuildAt: expect.any(Number),
+      lastRecoveryStages: expect.any(Array),
+      lastBuildStatus: "SUCCESS",
+    });
 
     const durableEvents = events.filter(
       (event): event is Extract<AgentEvent, { durability: { kind: "DURABLE" } }> =>
@@ -250,6 +267,36 @@ describe("daemon production composition E2E", () => {
         .filter((event) => event.durability.sequence > middle)
         .map((event) => (event.durability.kind === "DURABLE" ? event.durability.sequence : -1)),
     );
+
+    await daemon.close();
+    daemon = undefined;
+    const persistedStorage = await openCaelushStorage({
+      path: join(workspacePath, "caelush.db"),
+    });
+    try {
+      const invocation = (await persistedStorage.toolInvocations.listByRun(run.id)).find(
+        (item) => item.toolName === "read_file",
+      );
+      expect(invocation).toBeDefined();
+      const observation =
+        invocation === undefined
+          ? undefined
+          : await persistedStorage.observations.findByToolInvocation(invocation.id);
+      expect(observation?.rawArtifactRef).toBeTruthy();
+      const artifact =
+        observation?.rawArtifactRef === undefined
+          ? undefined
+          : await persistedStorage.contextArtifacts.readInternal(observation.rawArtifactRef);
+      expect(artifact?.content).toContain("2: 0-payload-");
+      expect(artifact?.content.length).toBeGreaterThan(10_000);
+      const modelToolMessage = (await persistedStorage.messages.listByRun(run.id)).find(
+        (entry) => entry.message.role === "tool",
+      );
+      if (modelToolMessage?.message.role !== "tool") throw new Error("model tool message missing");
+      expect(modelToolMessage.message.content.length).toBeLessThan(artifact?.content.length ?? 0);
+    } finally {
+      await persistedStorage.close();
+    }
   }, 20_000);
 });
 

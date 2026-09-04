@@ -11,6 +11,7 @@ import type { AgentLoopCommonInput } from "./agent-loop-input.js";
 
 export interface ResumeHistoryParts {
   readonly historyBeforeCurrentTurn: readonly LLMMessage[];
+  readonly historyBeforeCurrentTurnSourceSequences?: readonly number[];
   readonly currentTurnMessages: readonly LLMMessage[];
 }
 
@@ -44,6 +45,19 @@ export function validateAgentLoopInput(input: AgentLoopCommonInput): void {
   }
   if (input.run.currentStepId !== undefined || input.state.currentStepId !== undefined) {
     throw new AgentLoopInputError("run and state cannot contain an active step");
+  }
+  if (
+    input.historySourceSequences !== undefined &&
+    input.historySourceSequences.length !== input.history.length
+  ) {
+    throw new AgentLoopInputError("history source sequences must align with history");
+  }
+  if (
+    input.historySourceSequences?.some(
+      (sequence) => !Number.isSafeInteger(sequence) || sequence < 1,
+    )
+  ) {
+    throw new AgentLoopInputError("history source sequences must be positive safe integers");
   }
 }
 
@@ -129,6 +143,7 @@ export function prepareResumeHistory(
   history: readonly LLMMessage[],
   pendingDecision: AgentToolCallsDecision,
   normalizedResults: readonly LLMToolResultMessage[],
+  historySourceSequences?: readonly number[],
 ): ResumeHistoryParts {
   assertPendingAssistant(history, pendingDecision, normalizedResults);
   const pendingIndex = history.length - 1;
@@ -143,6 +158,15 @@ export function prepareResumeHistory(
     currentStart < 0
       ? history.slice(0, pendingIndex)
       : [...history.slice(0, currentStart), ...history.slice(currentStart + 1, pendingIndex)];
+  const historyBeforeCurrentTurnSourceSequences =
+    historySourceSequences === undefined
+      ? undefined
+      : currentStart < 0
+        ? historySourceSequences.slice(0, pendingIndex)
+        : [
+            ...historySourceSequences.slice(0, currentStart),
+            ...historySourceSequences.slice(currentStart + 1, pendingIndex),
+          ];
   const currentTurnMessages = [
     ...(currentStart < 0 ? [] : [history[currentStart]!]),
     history[pendingIndex]!,
@@ -156,5 +180,11 @@ export function prepareResumeHistory(
   }
   assertCompleteHistory(historyBeforeCurrentTurn, "previous history is incomplete");
   assertCompleteHistory(currentTurnMessages, "current open turn is invalid");
-  return { historyBeforeCurrentTurn, currentTurnMessages };
+  return {
+    historyBeforeCurrentTurn,
+    ...(historyBeforeCurrentTurnSourceSequences === undefined
+      ? {}
+      : { historyBeforeCurrentTurnSourceSequences }),
+    currentTurnMessages,
+  };
 }

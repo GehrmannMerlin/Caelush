@@ -137,12 +137,94 @@ describe("ContextRuntimeCoordinator", () => {
       },
     });
 
-    const history = Array.from({ length: 3 }, (_, index) => ({
-      role: "user" as const,
-      content: `old turn ${index}`,
-    }));
+    const history = [
+      { role: "user" as const, content: "old goal" },
+      {
+        role: "assistant" as const,
+        content: [
+          {
+            type: "tool-call" as const,
+            toolCallId: "tool-1",
+            toolName: "read_file" as const,
+            input: { path: "fixture.txt" },
+          },
+        ],
+      },
+      {
+        role: "tool" as const,
+        toolCallId: "tool-1",
+        toolName: "read_file" as const,
+        content: "old result",
+        isError: false,
+      },
+    ];
     await coordinator.prepareModelContext({
       runId: "run-1",
+      providerId: "fixture",
+      modelId: "fixture-model",
+      context: {
+        baseSystemPrompt: "base",
+        snapshot: {} as never,
+        limits: { maxInputTokens: 1000 },
+        history,
+        historySourceSequences: [101, 102, 103],
+        currentUserMessage: { role: "user", content: "continue work" },
+      },
+      signal: new AbortController().signal,
+    });
+
+    expect(persisted).toHaveLength(1);
+    expect(builds).toHaveLength(3);
+    expect(builds[1]?.history).toEqual([history[0]]);
+    expect(
+      (persisted[0] as { readonly structuredCheckpoint: { readonly sourceRange: unknown } })
+        .structuredCheckpoint.sourceRange,
+    ).toEqual({ from: 102, to: 103, kind: "DURABLE_MESSAGE_SEQUENCE" });
+  });
+
+  it("does not delete ordinary history when no closed execution unit exists", async () => {
+    const builds: ContextBuildInput[] = [];
+    const coordinator = new ContextRuntimeCoordinator({
+      builder: {
+        build: (input) => {
+          builds.push(input);
+          return {
+            messages: [],
+            report: {
+              trace: {
+                contextWindow: 100,
+                effectiveInputLimit: 80,
+                estimatedInputTokens: 75,
+                systemTokens: 5,
+                goalTokens: 2,
+                checkpointTokens: 0,
+                recentTailTokens: 10,
+                projectTokens: 5,
+                fileTokens: 0,
+                observationTokens: 0,
+                memoryTokens: 0,
+                droppedItems: 0,
+                truncatedItems: 0,
+                pressureRatio: 0.95,
+                compactionCount: 0,
+                loadedFileCount: 0,
+                observationCount: 0,
+              },
+            },
+          } as never;
+        },
+      },
+      checkpointRepository: {
+        getLatestByRun: async () => undefined,
+        create: async () => {
+          throw new Error("ordinary history must not be compacted");
+        },
+      },
+    });
+
+    const history = [{ role: "user" as const, content: "ordinary previous turn" }];
+    await coordinator.prepareModelContext({
+      runId: "run-ordinary",
       providerId: "fixture",
       modelId: "fixture-model",
       context: {
@@ -155,12 +237,7 @@ describe("ContextRuntimeCoordinator", () => {
       signal: new AbortController().signal,
     });
 
-    expect(persisted).toHaveLength(1);
-    expect(builds).toHaveLength(3);
-    expect(builds[1]?.history).toEqual([]);
-    expect(
-      (persisted[0] as { readonly structuredCheckpoint: { readonly sourceRange: unknown } })
-        .structuredCheckpoint.sourceRange,
-    ).toEqual({ from: 0, to: 2, kind: "LOCAL_HISTORY_INDEX" });
+    expect(builds).toHaveLength(1);
+    expect(builds[0]?.history).toEqual(history);
   });
 });

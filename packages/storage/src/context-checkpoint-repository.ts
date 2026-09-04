@@ -1,5 +1,5 @@
 import type { CaelushDatabase } from "./database.js";
-import { StorageError } from "./errors.js";
+import { StorageDecodeError, StorageError } from "./errors.js";
 
 export interface StoredStructuredCheckpoint {
   readonly version: 1;
@@ -19,7 +19,11 @@ export interface StoredStructuredCheckpoint {
   readonly resourceGovernance: string;
   readonly criticalReferences: readonly string[];
   readonly nextIntent: string;
-  readonly sourceRange: { readonly from: number; readonly to: number };
+  readonly sourceRange: {
+    readonly from: number;
+    readonly to: number;
+    readonly kind?: "DURABLE_MESSAGE_SEQUENCE" | "LOCAL_HISTORY_INDEX";
+  };
 }
 
 export interface ContextCheckpointCreateInput {
@@ -72,33 +76,166 @@ interface CheckpointRow {
 }
 
 function decode(row: CheckpointRow): ContextCheckpointRecord {
-  if (row.summary_version !== 1 || row.model_ref_json === null) {
-    throw new StorageError("Context checkpoint schema is invalid.");
+  try {
+    if (row.summary_version !== 1 || row.model_ref_json === null) {
+      throw new Error("checkpoint schema version or model reference is invalid");
+    }
+    requireSafeNonNegative("source_sequence_from", row.source_sequence_from);
+    requireSafeNonNegative("source_sequence_to", row.source_sequence_to);
+    requireSafeNonNegative("tokens_before", row.tokens_before);
+    requireSafeNonNegative("tokens_after", row.tokens_after);
+    requireSafeNonNegative("created_at_ms", row.created_at_ms);
+    if (row.source_sequence_from > row.source_sequence_to) {
+      throw new Error("checkpoint source sequence range is invalid");
+    }
+    const modelRef = parseModelRef(JSON.parse(row.model_ref_json));
+    const structured = parseStructuredCheckpoint(JSON.parse(row.data_json));
+    if (
+      structured.sourceRange.from > structured.sourceRange.to ||
+      structured.sourceRange.from < 0 ||
+      structured.sourceRange.to < 0
+    ) {
+      throw new Error("checkpoint structured source range is invalid");
+    }
+    return Object.freeze({
+      checkpointId: row.id,
+      runId: row.run_id,
+      schemaVersion: 1,
+      ...(row.previous_checkpoint_id === null
+        ? {}
+        : { previousCheckpointId: row.previous_checkpoint_id }),
+      sourceSequenceFrom: row.source_sequence_from,
+      sourceSequenceTo: row.source_sequence_to,
+      structuredCheckpoint: Object.freeze({
+        ...structured,
+        sourceRange: Object.freeze({
+          ...structured.sourceRange,
+          kind: structured.sourceRange.kind ?? "LOCAL_HISTORY_INDEX",
+        }),
+      }),
+      tokensBefore: row.tokens_before,
+      tokensAfter: row.tokens_after,
+      modelRef: Object.freeze({ providerId: modelRef.providerId, modelId: modelRef.modelId }),
+      createdAt: row.created_at_ms,
+    });
+  } catch (error) {
+    if (error instanceof StorageDecodeError) throw error;
+    throw new StorageDecodeError("ContextCheckpoint", row.id, "context_checkpoints", {
+      cause: error,
+    });
   }
-  const modelRef = JSON.parse(row.model_ref_json) as {
-    providerId?: unknown;
-    modelId?: unknown;
+}
+
+function requireSafeNonNegative(name: string, value: unknown): asserts value is number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new Error(`${name} is invalid`);
+  }
+}
+
+function parseModelRef(value: unknown): { readonly providerId: string; readonly modelId: string } {
+  const record = recordValue(value);
+  const providerId = requiredText(record.providerId, "modelRef.providerId", 1_000, 1);
+  const modelId = requiredText(record.modelId, "modelRef.modelId", 1_000, 1);
+  if (!hasExactKeys(record, ["providerId", "modelId"])) throw new Error("modelRef is invalid");
+  return { providerId, modelId };
+}
+
+function parseStructuredCheckpoint(value: unknown): StoredStructuredCheckpoint {
+  const record = recordValue(value);
+  const expectedKeys = [
+    "version",
+    "goal",
+    "constraints",
+    "completedWork",
+    "inProgress",
+    "blocked",
+    "importantDiscoveries",
+    "keyDecisions",
+    "changedFiles",
+    "readFiles",
+    "recentErrors",
+    "verificationState",
+    "activeProcesses",
+    "pendingApprovals",
+    "resourceGovernance",
+    "criticalReferences",
+    "nextIntent",
+    "sourceRange",
+  ] as const;
+  if (!hasExactKeys(record, expectedKeys) || record.version !== 1) {
+    throw new Error("structured checkpoint is invalid");
+  }
+  return {
+    version: 1,
+    goal: requiredText(record.goal, "goal", 100_000, 1),
+    constraints: stringList(record.constraints, "constraints"),
+    completedWork: stringList(record.completedWork, "completedWork"),
+    inProgress: stringList(record.inProgress, "inProgress"),
+    blocked: stringList(record.blocked, "blocked"),
+    importantDiscoveries: stringList(record.importantDiscoveries, "importantDiscoveries"),
+    keyDecisions: stringList(record.keyDecisions, "keyDecisions"),
+    changedFiles: stringList(record.changedFiles, "changedFiles"),
+    readFiles: stringList(record.readFiles, "readFiles"),
+    recentErrors: stringList(record.recentErrors, "recentErrors"),
+    verificationState: requiredText(record.verificationState, "verificationState", 100_000),
+    activeProcesses: stringList(record.activeProcesses, "activeProcesses"),
+    pendingApprovals: stringList(record.pendingApprovals, "pendingApprovals"),
+    resourceGovernance: requiredText(record.resourceGovernance, "resourceGovernance", 100_000),
+    criticalReferences: stringList(record.criticalReferences, "criticalReferences"),
+    nextIntent: requiredText(record.nextIntent, "nextIntent", 100_000),
+    sourceRange: parseSourceRange(record.sourceRange),
   };
-  if (typeof modelRef.providerId !== "string" || typeof modelRef.modelId !== "string") {
-    throw new StorageError("Context checkpoint model reference is invalid.");
+}
+
+function parseSourceRange(value: unknown): StoredStructuredCheckpoint["sourceRange"] {
+  const record = recordValue(value);
+  if (!hasExactKeys(record, ["from", "to", ...(Object.hasOwn(record, "kind") ? ["kind"] : [])])) {
+    throw new Error("sourceRange is invalid");
   }
-  return Object.freeze({
-    checkpointId: row.id,
-    runId: row.run_id,
-    schemaVersion: 1,
-    ...(row.previous_checkpoint_id === null
-      ? {}
-      : { previousCheckpointId: row.previous_checkpoint_id }),
-    sourceSequenceFrom: row.source_sequence_from,
-    sourceSequenceTo: row.source_sequence_to,
-    structuredCheckpoint: JSON.parse(
-      row.data_json,
-    ) as ContextCheckpointRecord["structuredCheckpoint"],
-    tokensBefore: row.tokens_before,
-    tokensAfter: row.tokens_after,
-    modelRef: Object.freeze({ providerId: modelRef.providerId, modelId: modelRef.modelId }),
-    createdAt: row.created_at_ms,
-  });
+  requireSafeNonNegative("sourceRange.from", record.from);
+  requireSafeNonNegative("sourceRange.to", record.to);
+  if (record.from > record.to) throw new Error("sourceRange is invalid");
+  if (
+    record.kind !== undefined &&
+    record.kind !== "DURABLE_MESSAGE_SEQUENCE" &&
+    record.kind !== "LOCAL_HISTORY_INDEX"
+  ) {
+    throw new Error("sourceRange.kind is invalid");
+  }
+  return {
+    from: record.from,
+    to: record.to,
+    ...(record.kind === undefined ? {} : { kind: record.kind }),
+  };
+}
+
+function stringList(value: unknown, name: string): readonly string[] {
+  if (!Array.isArray(value) || value.length > 128) throw new Error(`${name} is invalid`);
+  return value.map((item) => requiredText(item, name, 4_096));
+}
+
+function requiredText(value: unknown, name: string, maxBytes: number, minLength = 0): string {
+  if (
+    typeof value !== "string" ||
+    value.length < minLength ||
+    Buffer.byteLength(value, "utf8") > maxBytes
+  ) {
+    throw new Error(`${name} is invalid`);
+  }
+  return value;
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("value must be an object");
+  }
+  return value as Record<string, unknown>;
+}
+
+function hasExactKeys(record: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(record).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 }
 
 const SELECT = `SELECT id, run_id, previous_checkpoint_id, source_sequence_from,
@@ -116,7 +253,35 @@ export class SqliteContextCheckpointRepository implements ContextCheckpointRepos
       )
       .get(input.runId, input.sourceSequenceFrom, input.sourceSequenceTo) as
       CheckpointRow | undefined;
-    if (existing !== undefined) return decode(existing);
+    if (existing !== undefined) {
+      try {
+        this.database.client
+          .prepare(
+            `UPDATE context_checkpoints
+             SET previous_checkpoint_id = ?, tokens_before = ?, tokens_after = ?,
+                 model_ref_json = ?, created_at_ms = ?, data_json = ?,
+                 read_file_refs_json = ?, changed_file_refs_json = ?
+             WHERE id = ?`,
+          )
+          .run(
+            input.previousCheckpointId ?? null,
+            input.tokensBefore,
+            input.tokensAfter,
+            JSON.stringify(input.modelRef),
+            input.createdAt,
+            JSON.stringify(input.structuredCheckpoint),
+            JSON.stringify(input.structuredCheckpoint.readFiles),
+            JSON.stringify(input.structuredCheckpoint.changedFiles),
+            existing.id,
+          );
+      } catch (error) {
+        throw new StorageError("Unable to refresh context checkpoint authority.", { cause: error });
+      }
+      const refreshed = this.database.client.prepare(`${SELECT} WHERE id = ?`).get(existing.id) as
+        CheckpointRow | undefined;
+      if (refreshed === undefined) throw new StorageError("Context checkpoint is unavailable.");
+      return decode(refreshed);
+    }
     try {
       this.database.client
         .prepare(

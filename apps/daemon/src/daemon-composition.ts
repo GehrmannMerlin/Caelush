@@ -219,6 +219,10 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
       });
       return projectMemoryRecords(records, maxTokens, memoryEstimator);
     },
+    rawObservationLoader: async ({ runId, artifactRef }) => {
+      const artifact = await options.storage.contextArtifacts.readInternal(artifactRef);
+      return artifact?.runId === runId ? artifact.content : undefined;
+    },
   });
   const agentLoop = new AgentLoop({
     inspector,
@@ -245,6 +249,7 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     approvalStore: options.storage.approvals,
     approvalIdFactory: { create: createApprovalRequestId },
     budget: options.storage.budget,
+    rawOutputStore: options.storage.contextArtifacts,
     terminalOutputSanitizer: sanitizeTerminalOutput,
   });
   const toolCoordinator = new ToolBatchCoordinator(dispatcher);

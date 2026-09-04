@@ -24,6 +24,7 @@ export const ToolObservationSchema = z
     ...observationBase,
     kind: z.literal("TOOL"),
     toolInvocationId: ToolInvocationIdSchema,
+    rawArtifactRef: z.string().min(1).optional(),
   })
   .strict();
 export type ToolObservation = z.infer<typeof ToolObservationSchema>;

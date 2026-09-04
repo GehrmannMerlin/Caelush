@@ -44,6 +44,7 @@ export function toLLMToolResultMessages(
         sourceToolInvocationId: result.invocationId ?? result.externalCallId,
         toolName: result.toolName,
         content: result.content,
+        ...(result.rawArtifactRef === undefined ? {} : { rawArtifactRef: result.rawArtifactRef }),
       };
     }),
     maxSingleObservationTokens: policy.maxSingleObservationTokens,
@@ -61,6 +62,7 @@ export function toLLMToolResultMessages(
       toolName: result.toolName,
       content: observation.summary,
       isError: result.isError,
+      ...(result.rawArtifactRef === undefined ? {} : { rawArtifactRef: result.rawArtifactRef }),
     };
     return LLMToolResultMessageSchema.parse(message);
   });

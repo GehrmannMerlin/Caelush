@@ -9,6 +9,9 @@ export interface ExecutionUnit {
   readonly runId: string;
   readonly sourceSequenceFrom: number;
   readonly sourceSequenceTo: number;
+  /** Local history positions used only to remove the selected messages. */
+  readonly historyIndexFrom?: number;
+  readonly historyIndexTo?: number;
   readonly status: ExecutionUnitStatus;
   readonly assistantMessageRef: string;
   readonly toolInvocationIds: readonly string[];
@@ -22,6 +25,7 @@ export interface ExecutionUnitBuildOptions {
   readonly runId: string;
   readonly createdAt: number;
   readonly estimateText: TokenEstimator["estimateText"];
+  readonly sourceSequences?: readonly number[];
 }
 
 export function createExecutionUnit(input: ExecutionUnit): ExecutionUnit {
@@ -56,6 +60,14 @@ export function buildExecutionUnits(
   messages: readonly LLMMessage[],
   options: ExecutionUnitBuildOptions,
 ): readonly ExecutionUnit[] {
+  if (options.sourceSequences !== undefined && options.sourceSequences.length !== messages.length) {
+    throw new RangeError("ExecutionUnit source sequences must align with messages");
+  }
+  if (
+    options.sourceSequences?.some((sequence) => !Number.isSafeInteger(sequence) || sequence < 1)
+  ) {
+    throw new RangeError("ExecutionUnit source sequences must be positive safe integers");
+  }
   const units: ExecutionUnit[] = [];
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
@@ -75,12 +87,16 @@ export function buildExecutionUnits(
     }
     const closed = resultIds.length === callIds.length;
     const sourceMessages = messages.slice(index, end + 1);
+    const sourceSequenceFrom = options.sourceSequences?.[index] ?? index;
+    const sourceSequenceTo = options.sourceSequences?.[end] ?? end;
     units.push(
       createExecutionUnit({
         id: `${options.runId}:execution:${index}`,
         runId: options.runId,
-        sourceSequenceFrom: index,
-        sourceSequenceTo: end,
+        sourceSequenceFrom,
+        sourceSequenceTo,
+        historyIndexFrom: index,
+        historyIndexTo: end,
         status: closed ? "CLOSED" : "OPEN",
         assistantMessageRef: `${options.runId}:message:${index}`,
         toolInvocationIds: callIds,

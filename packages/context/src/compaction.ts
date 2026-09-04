@@ -12,8 +12,13 @@ export type ContextPressureState =
 
 export class ContextPressureStateMachine {
   private currentState: ContextPressureState = "NORMAL";
+  private readonly postCompactionTargetTokens: number;
 
-  constructor(private readonly policy: ContextPolicy) {}
+  constructor(private readonly policy: ContextPolicy) {
+    this.postCompactionTargetTokens = Math.floor(
+      policy.effectiveInputLimit * policy.postCompactionTargetRatio,
+    );
+  }
 
   get state(): ContextPressureState {
     return this.currentState;
@@ -25,8 +30,13 @@ export class ContextPressureStateMachine {
     }
     const ratio = estimatedInputTokens / this.policy.effectiveInputLimit;
     if (ratio >= this.policy.emergencyCompactionRatio) this.currentState = "EMERGENCY";
-    else if (ratio >= this.policy.proactiveCompactionRatio) this.currentState = "PROACTIVE";
-    else if (this.currentState !== "RECOVERING_OVERFLOW" && this.currentState !== "EXHAUSTED") {
+    else if (
+      ratio >= this.policy.proactiveCompactionRatio ||
+      ((this.currentState === "PROACTIVE" || this.currentState === "EMERGENCY") &&
+        estimatedInputTokens > this.postCompactionTargetTokens)
+    ) {
+      this.currentState = "PROACTIVE";
+    } else if (this.currentState !== "RECOVERING_OVERFLOW" && this.currentState !== "EXHAUSTED") {
       this.currentState = "NORMAL";
     }
     return this.currentState;
@@ -38,7 +48,7 @@ export class ContextPressureStateMachine {
 
   markRecovered(estimatedInputTokens: number): void {
     this.observe(estimatedInputTokens);
-    if (estimatedInputTokens < this.policy.proactiveCompactionTokens) {
+    if (estimatedInputTokens <= this.postCompactionTargetTokens) {
       this.currentState = "NORMAL";
     }
   }

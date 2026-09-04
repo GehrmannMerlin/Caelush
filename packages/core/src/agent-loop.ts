@@ -68,6 +68,8 @@ export class AgentLoop {
         normalizedInput,
         normalizedInput.history,
         currentUserMessage,
+        undefined,
+        normalizedInput.historySourceSequences,
       );
     } catch (error) {
       if (normalizedInput.signal.aborted) return this.cancelledBeforeStep(normalizedInput);
@@ -82,6 +84,9 @@ export class AgentLoop {
       [currentUserMessage],
       {
         history: normalizedInput.history,
+        ...(normalizedInput.historySourceSequences === undefined
+          ? {}
+          : { historySourceSequences: normalizedInput.historySourceSequences }),
         currentUserMessage,
       },
     );
@@ -105,6 +110,7 @@ export class AgentLoop {
       normalizedInput.history,
       normalizedInput.pendingDecision,
       normalizedResults,
+      normalizedInput.historySourceSequences,
     );
     const gate = evaluateAgentStepGate(normalizedInput.state, normalizedInput.run.limits);
     if (!gate.allowed)
@@ -117,6 +123,7 @@ export class AgentLoop {
         history.historyBeforeCurrentTurn,
         undefined,
         history.currentTurnMessages,
+        history.historyBeforeCurrentTurnSourceSequences,
       );
     } catch (error) {
       if (normalizedInput.signal.aborted) return this.cancelledBeforeStep(normalizedInput);
@@ -133,6 +140,9 @@ export class AgentLoop {
       normalizedResults,
       {
         history: history.historyBeforeCurrentTurn,
+        ...(history.historyBeforeCurrentTurnSourceSequences === undefined
+          ? {}
+          : { historySourceSequences: history.historyBeforeCurrentTurnSourceSequences }),
         currentTurnMessages: history.currentTurnMessages,
       },
     );
@@ -143,6 +153,7 @@ export class AgentLoop {
     history: readonly LLMMessage[],
     currentUserMessage: { readonly role: "user"; readonly content: string } | undefined,
     currentTurnMessages?: readonly LLMMessage[],
+    historySourceSequences?: readonly number[],
     forceRecovery = false,
   ): Promise<PreparedTurn> {
     throwIfAborted(input.signal);
@@ -165,6 +176,7 @@ export class AgentLoop {
       history,
       currentUserMessage,
       currentTurnMessages,
+      historySourceSequences,
     );
     const contextRuntime =
       this.dependencies.contextRuntime ??
@@ -196,12 +208,14 @@ export class AgentLoop {
     history: readonly LLMMessage[],
     currentUserMessage: { readonly role: "user"; readonly content: string } | undefined,
     currentTurnMessages: readonly LLMMessage[] | undefined,
+    historySourceSequences: readonly number[] | undefined,
   ): ContextBuildInput {
     const common = {
       baseSystemPrompt: input.baseSystemPrompt,
       snapshot,
       relevantFiles,
       history,
+      ...(historySourceSequences === undefined ? {} : { historySourceSequences }),
       limits: input.contextLimits,
       ...(input.verificationRepairContext === undefined
         ? {}
@@ -223,6 +237,7 @@ export class AgentLoop {
     appendPrefix: readonly LLMMessage[],
     recovery: {
       readonly history: readonly LLMMessage[];
+      readonly historySourceSequences?: readonly number[];
       readonly currentUserMessage?: LLMMessage;
       readonly currentTurnMessages?: readonly LLMMessage[];
     },
@@ -304,6 +319,7 @@ export class AgentLoop {
             recovery.currentUserMessage as
               { readonly role: "user"; readonly content: string } | undefined,
             recovery.currentTurnMessages,
+            recovery.historySourceSequences,
             true,
           );
         },

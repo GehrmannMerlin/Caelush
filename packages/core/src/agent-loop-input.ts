@@ -36,6 +36,8 @@ export interface AgentLoopCommonInput {
   readonly run: AgentRun;
   readonly state: AgentState;
   readonly history: readonly LLMMessage[];
+  /** Durable conversation sequence values aligned with history when available. */
+  readonly historySourceSequences?: readonly number[];
   readonly baseSystemPrompt: string;
   readonly contextLimits: ContextBuildLimits;
   readonly tools?: readonly ToolDefinition[];

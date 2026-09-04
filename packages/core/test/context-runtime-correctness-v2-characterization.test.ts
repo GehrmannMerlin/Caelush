@@ -117,14 +117,17 @@ describe("Context Runtime V2 baseline characterization", () => {
     expect(created[0]!.tokensBefore).toBe(builder.reports[0]!.estimatedInputTokens);
     expect(created[0]!.tokensAfter).toBeGreaterThan(0);
     expect(builder.reports.at(-1)!.conversation.selectedMessages).toBeGreaterThan(0);
-    expect(builder.reports.at(-1)!.conversation.selectedMessages).toBeLessThan(
-      history.length,
-    );
+    expect(builder.reports.at(-1)!.conversation.selectedMessages).toBeLessThan(history.length);
   });
 
   it("recovers an oversized open tool turn by reprojection without dropping identity", async () => {
+    let loadedArtifactRef: string | undefined;
     const coordinator = new ContextRuntimeCoordinator({
       builder: new ContextBuilder({ tokenEstimator: new Utf8HeuristicTokenEstimator() }),
+      rawObservationLoader: async ({ artifactRef }) => {
+        loadedArtifactRef = artifactRef;
+        return "raw-head-" + "x".repeat(24_000) + "-raw-tail";
+      },
     });
     const currentTurn: LLMMessage[] = [
       { role: "user", content: "scan the workspace" },
@@ -151,6 +154,7 @@ describe("Context Runtime V2 baseline characterization", () => {
         toolName: "read_file",
         content: "A".repeat(12_000),
         isError: false,
+        rawArtifactRef: "artifact:call-a",
       },
       {
         role: "tool",
@@ -183,5 +187,11 @@ describe("Context Runtime V2 baseline characterization", () => {
         .map((message) => message.toolCallId),
     ).toEqual(["call-a", "call-b"]);
     expect(result.report.estimatedInputTokens).toBeLessThanOrEqual(5_000);
+    expect(loadedArtifactRef).toBe("artifact:call-a");
+    expect(
+      result.messages.some(
+        (message) => message.role === "tool" && message.content.includes("raw-head-"),
+      ),
+    ).toBe(true);
   });
 });
