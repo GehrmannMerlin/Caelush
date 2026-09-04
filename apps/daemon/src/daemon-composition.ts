@@ -59,8 +59,10 @@ import {
 } from "@caelush/verification";
 import {
   createDefaultBuiltinToolRegistrations,
+  filterToolRegistryForEnvironment,
   ToolBatchCoordinator,
   ToolRegistryBuilder,
+  type ToolExposureEnvironment,
 } from "@caelush/tools";
 import {
   createV1SecureToolDispatcher,
@@ -84,8 +86,18 @@ import {
 import { SessionConversationContextProvider } from "./services/session-conversation-context.js";
 import { DAEMON_VERSION } from "./version.js";
 
-const DEFAULT_BASE_SYSTEM_PROMPT =
-  "You are Caelush, a careful workspace agent. Inspect the project, make only requested changes, and report what you verified.";
+export const DEFAULT_CORE_AGENT_POLICY = [
+  "You are Caelush, a careful workspace agent.",
+  "Use the active workspace as the only path root; use '.' when referring to its root.",
+  "Inspect relevant files and gather evidence before making claims or changes.",
+  "Use the native tool that matches the task; do not use mutation tools for read-only work.",
+  "Treat Tool errors as observations: correct recoverable inputs, avoid repeating an unchanged failure, and do not call an inapplicable tool.",
+  "After a mutation, inspect the resulting files and relevant diff before claiming success.",
+  "Stop when the requested evidence is sufficient; report blockers and uncertainty plainly.",
+  "Do not reveal hidden chain-of-thought or invent evidence.",
+].join(" ");
+
+export const DEFAULT_BASE_SYSTEM_PROMPT = DEFAULT_CORE_AGENT_POLICY;
 
 const DEFAULT_CONTEXT_LIMITS = Object.freeze({
   maxInputTokens: 32_000,
@@ -126,6 +138,8 @@ export interface DaemonCompositionOptions {
   readonly providers?: readonly DaemonModelProviderConfig[];
   readonly defaultModel?: ClientModelSelection;
   readonly providerOverrides?: readonly LLMProvider[];
+  /** Capability discovered for the selected workspace; unknown hides Git tools. */
+  readonly toolExposure?: ToolExposureEnvironment;
   readonly runtime?: LocalRuntime;
   readonly clock?: DaemonClock;
   readonly logger?: RunExecutionSupervisorLogger;
@@ -237,7 +251,10 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
   for (const registration of createDefaultBuiltinToolRegistrations(runtimeResolver)) {
     builtToolRegistry.register(registration);
   }
-  const activeToolRegistry = builtToolRegistry.build();
+  const activeToolRegistry = filterToolRegistryForEnvironment(
+    builtToolRegistry.build(),
+    options.toolExposure ?? { git: "AVAILABLE" },
+  );
   const dispatcher = createV1SecureToolDispatcher({
     registry: activeToolRegistry,
     store: options.storage.toolExecution,
@@ -251,6 +268,7 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     budget: options.storage.budget,
     rawOutputStore: options.storage.contextArtifacts,
     terminalOutputSanitizer: sanitizeTerminalOutput,
+    securityToolNames: activeToolRegistry.names(),
   });
   const toolCoordinator = new ToolBatchCoordinator(dispatcher);
   const scopes = new RunExecutionScopeRegistry();

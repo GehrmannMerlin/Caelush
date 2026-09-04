@@ -10,6 +10,7 @@ import { validateToolDefinitionSemantics } from "./schema-policy.js";
 import { ToolSchemaRuntime } from "./schema-runtime.js";
 import type { ToolRegistration } from "./registration.js";
 import { createToolRegistry, type ResolvedTool, type ToolRegistry } from "./registry.js";
+import { normalizeToolModelGuidance } from "./model-guidance.js";
 
 function invalidRegistration(): never {
   throw new ToolRegistrationError("Tool registration is invalid.", {
@@ -54,6 +55,17 @@ export class ToolRegistryBuilder {
       });
     }
     this.names.add(definition.name);
+    let modelGuidance: ToolRegistration["modelGuidance"];
+    if (registration.modelGuidance !== undefined) {
+      try {
+        modelGuidance = normalizeToolModelGuidance(registration.modelGuidance, definition.name);
+      } catch {
+        throw new ToolRegistrationError("Tool model guidance is invalid.", {
+          reason: "INVALID_MODEL_GUIDANCE",
+          toolName: definition.name,
+        });
+      }
+    }
     this.registrations.push({
       definition,
       handler: registration.handler,
@@ -63,6 +75,7 @@ export class ToolRegistryBuilder {
         ...(registration.securityFactsProjector === undefined
           ? {}
           : { securityFactsProjector: registration.securityFactsProjector }),
+      ...(modelGuidance === undefined ? {} : { modelGuidance }),
     });
     return this;
   }
@@ -100,6 +113,9 @@ export class ToolRegistryBuilder {
         ...(registration.securityFactsProjector === undefined
           ? {}
           : { securityFactsProjector: registration.securityFactsProjector }),
+        ...(registration.modelGuidance === undefined
+          ? {}
+          : { modelGuidance: registration.modelGuidance }),
       });
     }
 

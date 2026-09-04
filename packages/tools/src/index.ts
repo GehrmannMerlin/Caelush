@@ -56,6 +56,12 @@ export {
   ToolDispatcherInvariantError,
 } from "./dispatcher-errors.js";
 export type { ToolRegistration } from "./registration.js";
+export {
+  cloneToolModelGuidance,
+  createBuiltinToolModelGuidance,
+  normalizeToolModelGuidance,
+} from "./model-guidance.js";
+export type { ToolModelGuidance } from "./model-guidance.js";
 export { emptyToolSecurityFacts, ToolSecurityFactsProjectionError } from "./security-facts.js";
 export type {
   ToolResourceAccess,
@@ -84,6 +90,8 @@ export type {
 } from "./tool-effects.js";
 export { ToolRegistryBuilder } from "./registry-builder.js";
 export type { ResolvedTool, ToolRegistry } from "./registry.js";
+export { filterToolRegistryForEnvironment } from "./tool-exposure.js";
+export type { GitToolAvailability, ToolExposureEnvironment } from "./tool-exposure.js";
 export { DEFAULT_TOOL_REGISTRY_OPTIONS, validateToolRegistryOptions } from "./options.js";
 export type { ToolRegistryOptions } from "./options.js";
 export { ToolSchemaRuntime } from "./schema-runtime.js";

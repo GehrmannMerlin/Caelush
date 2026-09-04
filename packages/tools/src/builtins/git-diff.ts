@@ -4,6 +4,7 @@ import type { ToolExecutionRequest, ToolHandler } from "../handler.js";
 import type { ToolRegistration } from "../registration.js";
 import { errorResult, successResult, withRuntimeScope } from "./result.js";
 import { projectGitDiffSecurityFacts } from "./security-facts.js";
+import { createBuiltinToolModelGuidance } from "../model-guidance.js";
 
 const definition: ToolDefinition = {
   name: "git_diff",
@@ -40,7 +41,12 @@ export function createGitDiffRegistration(runtimeResolver: RuntimeResolver): Too
   const handler: ToolHandler = {
     execute: async (request) => executeGitDiff(request, runtimeResolver),
   };
-  return { definition, handler, securityFactsProjector: projectGitDiffSecurityFacts };
+  return {
+    definition,
+    handler,
+    securityFactsProjector: projectGitDiffSecurityFacts,
+    modelGuidance: createBuiltinToolModelGuidance("git_diff"),
+  };
 }
 
 async function executeGitDiff(request: ToolExecutionRequest, resolver: RuntimeResolver) {

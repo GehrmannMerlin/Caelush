@@ -58,6 +58,9 @@ describe("daemon production composition", () => {
       "git_status",
       "git_diff",
     ]);
+    expect(composition.toolRegistry.modelGuidance().map((entry) => entry.toolName)).toEqual(
+      composition.toolRegistry.modelDefinitions().map((tool) => tool.name),
+    );
     expect(composition.providerRegistry.listProviderIds()).toEqual(["openai-compatible"]);
     expect(composition.info).toEqual({
       apiVersion: "v1",
@@ -99,5 +102,32 @@ describe("daemon production composition", () => {
         model: "fixture-model",
       }),
     ).toThrow("model provider is unavailable");
+  });
+
+  it("filters Git tools from the model and dispatcher registry for a non-Git workspace", async () => {
+    directory = await mkdtemp(join(tmpdir(), "caelush-composition-non-git-"));
+    storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
+    const eventBus = new EventBus(storage.events);
+    composition = composeDaemon({
+      storage,
+      eventBus,
+      toolExposure: { git: "UNAVAILABLE" },
+    });
+
+    expect(composition.toolRegistry.names()).toEqual([
+      "read_file",
+      "list_directory",
+      "find_files",
+      "search_text",
+      "apply_patch",
+      "exec_command",
+      "write_stdin",
+    ]);
+    expect(composition.toolCoordinator.modelDefinitions().map((tool) => tool.name)).toEqual(
+      composition.toolRegistry.names(),
+    );
+    expect(composition.toolRegistry.modelGuidance().map((entry) => entry.toolName)).toEqual(
+      composition.toolRegistry.names(),
+    );
   });
 });

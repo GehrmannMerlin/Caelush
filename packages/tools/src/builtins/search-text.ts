@@ -18,6 +18,7 @@ import {
   withRuntimeScope,
 } from "./result.js";
 import { projectSearchTextSecurityFacts } from "./security-facts.js";
+import { createBuiltinToolModelGuidance } from "../model-guidance.js";
 
 const definition: ToolDefinition = {
   name: "search_text",
@@ -49,7 +50,12 @@ export function createSearchTextRegistration(runtimeResolver: RuntimeResolver): 
   const handler: ToolHandler = {
     execute: async (request) => executeSearchText(request, runtimeResolver),
   };
-  return { definition, handler, securityFactsProjector: projectSearchTextSecurityFacts };
+  return {
+    definition,
+    handler,
+    securityFactsProjector: projectSearchTextSecurityFacts,
+    modelGuidance: createBuiltinToolModelGuidance("search_text"),
+  };
 }
 
 function boundedMatchText(text: string): string {

@@ -16,7 +16,8 @@ export type ToolRegistrationErrorReason =
   | "TOOL_LIMIT_EXCEEDED"
   | "BUILDER_FINALIZED"
   | "INVALID_REGISTRY_OPTION"
-  | "INVALID_OUTPUT_POLICY";
+  | "INVALID_OUTPUT_POLICY"
+  | "INVALID_MODEL_GUIDANCE";
 
 export interface ToolRegistrationErrorMetadata {
   readonly toolName?: ToolName;

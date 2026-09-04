@@ -13,6 +13,7 @@ import { projectStdinEffects } from "../tool-effects.js";
 import { boundToolModelContent, DEFAULT_TOOL_OUTPUT_POLICY } from "../output-policy.js";
 import { EXEC_OUTPUT_SCHEMA, errorResult, successResult, withRuntimeScope } from "./result.js";
 import { projectWriteStdinSecurityFacts } from "./security-facts.js";
+import { createBuiltinToolModelGuidance } from "../model-guidance.js";
 
 const definition: ToolDefinition = {
   name: "write_stdin",
@@ -46,6 +47,7 @@ export function createWriteStdinRegistration(runtimeResolver: RuntimeResolver): 
     handler,
     effectProjector: projectStdinEffects,
     securityFactsProjector: projectWriteStdinSecurityFacts,
+    modelGuidance: createBuiltinToolModelGuidance("write_stdin"),
   };
 }
 

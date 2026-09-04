@@ -52,4 +52,34 @@ describe("Git built-in tools", () => {
       await rm(parent, { recursive: true, force: true });
     }
   });
+
+  it("returns a model-recoverable NOT_A_GIT_REPOSITORY result outside Git", async () => {
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "caelush-git-tools-no-repo-"));
+    try {
+      const resolver = createLocalRuntimeResolver(new LocalRuntime());
+      const environment = {
+        workspace: { id: createWorkspaceId(), path: workspace },
+        runtime: { id: "local", kind: "local" },
+      } as const;
+      const request = (args: JsonObject) => ({
+        runId: createRunId(),
+        stepId: createStepId(),
+        invocationId: createToolInvocationId(),
+        externalCallId: "call",
+        args,
+        environment,
+      });
+      const registrations = createGitToolRegistrations(resolver);
+      await expect(registrations[0]!.handler.execute(request({}))).resolves.toMatchObject({
+        isError: true,
+        details: { ok: false, error: "NOT_A_GIT_REPOSITORY" },
+      });
+      await expect(registrations[1]!.handler.execute(request({}))).resolves.toMatchObject({
+        isError: true,
+        details: { ok: false, error: "NOT_A_GIT_REPOSITORY" },
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
 });

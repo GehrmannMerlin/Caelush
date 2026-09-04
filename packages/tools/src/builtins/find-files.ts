@@ -17,6 +17,7 @@ import {
   withRuntimeScope,
 } from "./result.js";
 import { projectFindFilesSecurityFacts } from "./security-facts.js";
+import { createBuiltinToolModelGuidance } from "../model-guidance.js";
 
 const definition: ToolDefinition = {
   name: "find_files",
@@ -41,7 +42,12 @@ export function createFindFilesRegistration(runtimeResolver: RuntimeResolver): T
   const handler: ToolHandler = {
     execute: async (request) => executeFindFiles(request, runtimeResolver),
   };
-  return { definition, handler, securityFactsProjector: projectFindFilesSecurityFacts };
+  return {
+    definition,
+    handler,
+    securityFactsProjector: projectFindFilesSecurityFacts,
+    modelGuidance: createBuiltinToolModelGuidance("find_files"),
+  };
 }
 
 function validatePattern(value: unknown): string {

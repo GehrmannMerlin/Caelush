@@ -4,6 +4,7 @@ import type { ToolHandler, ToolExecutionRequest } from "../handler.js";
 import type { ToolRegistration } from "../registration.js";
 import { projectReadFileEffect } from "../tool-effects.js";
 import { projectReadFileSecurityFacts } from "./security-facts.js";
+import { createBuiltinToolModelGuidance } from "../model-guidance.js";
 import {
   READ_FILE_DEFAULT_LIMIT,
   READ_FILE_MAX_LIMIT,
@@ -42,6 +43,7 @@ export function createReadFileRegistration(runtimeResolver: RuntimeResolver): To
     handler,
     effectProjector: projectReadFileEffect,
     securityFactsProjector: projectReadFileSecurityFacts,
+    modelGuidance: createBuiltinToolModelGuidance("read_file"),
   };
 }
 

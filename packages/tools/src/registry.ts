@@ -3,6 +3,7 @@ import type { ToolHandler } from "./handler.js";
 import type { CompiledToolSchema } from "./schema-runtime.js";
 import type { ToolEffectProjector } from "./tool-effects.js";
 import type { ToolSecurityFactsProjector } from "./security-facts.js";
+import type { ToolModelGuidance } from "./model-guidance.js";
 
 export interface ResolvedTool {
   readonly definition: ToolDefinition;
@@ -11,6 +12,7 @@ export interface ResolvedTool {
   readonly outputValidator: CompiledToolSchema;
   readonly effectProjector?: ToolEffectProjector;
   readonly securityFactsProjector?: ToolSecurityFactsProjector;
+  readonly modelGuidance?: ToolModelGuidance;
 }
 
 export interface ToolRegistry {
@@ -18,6 +20,7 @@ export interface ToolRegistry {
   has(name: ToolName): boolean;
   resolve(name: ToolName): ResolvedTool | undefined;
   modelDefinitions(): readonly ToolDefinition[];
+  modelGuidance(): readonly ToolModelGuidance[];
   names(): readonly ToolName[];
 }
 
@@ -25,19 +28,23 @@ class ImmutableToolRegistry implements ToolRegistry {
   private readonly byName: ReadonlyMap<ToolName, ResolvedTool>;
   private readonly orderedNames: readonly ToolName[];
   private readonly orderedDefinitions: readonly ToolDefinition[];
+  private readonly orderedGuidance: readonly ToolModelGuidance[];
 
   constructor(resolvedTools: readonly ResolvedTool[]) {
     const byName = new Map<ToolName, ResolvedTool>();
     const orderedNames: ToolName[] = [];
     const orderedDefinitions: ToolDefinition[] = [];
+    const orderedGuidance: ToolModelGuidance[] = [];
     for (const resolved of resolvedTools) {
       byName.set(resolved.definition.name, Object.freeze(resolved));
       orderedNames.push(resolved.definition.name);
       orderedDefinitions.push(resolved.definition);
+      if (resolved.modelGuidance !== undefined) orderedGuidance.push(resolved.modelGuidance);
     }
     this.byName = byName;
     this.orderedNames = Object.freeze(orderedNames);
     this.orderedDefinitions = Object.freeze(orderedDefinitions);
+    this.orderedGuidance = Object.freeze(orderedGuidance);
   }
 
   get size(): number {
@@ -58,6 +65,10 @@ class ImmutableToolRegistry implements ToolRegistry {
 
   names(): readonly ToolName[] {
     return this.orderedNames;
+  }
+
+  modelGuidance(): readonly ToolModelGuidance[] {
+    return this.orderedGuidance;
   }
 }
 

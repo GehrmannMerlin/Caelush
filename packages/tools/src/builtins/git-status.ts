@@ -8,6 +8,7 @@ import type { ToolExecutionRequest, ToolHandler } from "../handler.js";
 import type { ToolRegistration } from "../registration.js";
 import { errorResult, positiveBoundedInteger, successResult, withRuntimeScope } from "./result.js";
 import { projectGitStatusSecurityFacts } from "./security-facts.js";
+import { createBuiltinToolModelGuidance } from "../model-guidance.js";
 
 const definition: ToolDefinition = {
   name: "git_status",
@@ -45,7 +46,12 @@ export function createGitStatusRegistration(runtimeResolver: RuntimeResolver): T
   const handler: ToolHandler = {
     execute: async (request) => executeGitStatus(request, runtimeResolver),
   };
-  return { definition, handler, securityFactsProjector: projectGitStatusSecurityFacts };
+  return {
+    definition,
+    handler,
+    securityFactsProjector: projectGitStatusSecurityFacts,
+    modelGuidance: createBuiltinToolModelGuidance("git_status"),
+  };
 }
 
 async function executeGitStatus(request: ToolExecutionRequest, resolver: RuntimeResolver) {

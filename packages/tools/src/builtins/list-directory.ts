@@ -12,6 +12,7 @@ import {
   withRuntimeScope,
 } from "./result.js";
 import { projectListDirectorySecurityFacts } from "./security-facts.js";
+import { createBuiltinToolModelGuidance } from "../model-guidance.js";
 
 const definition: ToolDefinition = {
   name: "list_directory",
@@ -19,7 +20,11 @@ const definition: ToolDefinition = {
   inputSchema: {
     type: "object",
     properties: {
-      path: { type: "string", minLength: 1, description: "Workspace-relative directory path." },
+      path: {
+        type: "string",
+        minLength: 1,
+        description: "Workspace-relative directory path; use '.' for the workspace root.",
+      },
       offset: { type: "integer", minimum: 1, description: "1-indexed first entry to return." },
       limit: { type: "integer", minimum: 1, description: "Maximum number of returned entries." },
     },
@@ -38,7 +43,12 @@ export function createListDirectoryRegistration(
   const handler: ToolHandler = {
     execute: async (request) => executeListDirectory(request, runtimeResolver),
   };
-  return { definition, handler, securityFactsProjector: projectListDirectorySecurityFacts };
+  return {
+    definition,
+    handler,
+    securityFactsProjector: projectListDirectorySecurityFacts,
+    modelGuidance: createBuiltinToolModelGuidance("list_directory"),
+  };
 }
 
 async function executeListDirectory(request: ToolExecutionRequest, resolver: RuntimeResolver) {

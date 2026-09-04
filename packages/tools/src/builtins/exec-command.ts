@@ -14,6 +14,7 @@ import { projectExecEffects } from "../tool-effects.js";
 import { boundToolModelContent, DEFAULT_TOOL_OUTPUT_POLICY } from "../output-policy.js";
 import { EXEC_OUTPUT_SCHEMA, errorResult, successResult, withRuntimeScope } from "./result.js";
 import { projectExecCommandSecurityFacts } from "./security-facts.js";
+import { createBuiltinToolModelGuidance } from "../model-guidance.js";
 
 const definition: ToolDefinition = {
   name: "exec_command",
@@ -49,6 +50,7 @@ export function createExecCommandRegistration(runtimeResolver: RuntimeResolver):
     handler,
     effectProjector: projectExecEffects,
     securityFactsProjector: projectExecCommandSecurityFacts,
+    modelGuidance: createBuiltinToolModelGuidance("exec_command"),
   };
 }
 

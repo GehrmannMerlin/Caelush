@@ -1,4 +1,4 @@
-import type { ToolDefinition } from "@caelush/protocol";
+import type { ToolDefinition, ToolName } from "@caelush/protocol";
 import {
   DEFAULT_BUILTIN_TOOL_ORDER,
   ToolDispatcher,
@@ -50,12 +50,13 @@ export interface V1SecureToolDispatcherOptions extends Omit<
   readonly approvalStore: ToolApprovalStorePort;
   readonly approvalIdFactory: ToolApprovalRequestIdFactory;
   readonly terminalOutputSanitizer: TerminalOutputSanitizer;
+  readonly securityToolNames?: readonly ToolName[];
 }
 
 export function createV1SecureToolDispatcher(
   options: V1SecureToolDispatcherOptions,
 ): ToolDispatcher {
-  assertDefaultBuiltinSecurityCoverage(options.registry);
+  assertDefaultBuiltinSecurityCoverage(options.registry, options.securityToolNames);
   const security = createDefaultV1ToolExecutionSecurity({
     terminalOutputSanitizer: options.terminalOutputSanitizer,
   });
@@ -67,8 +68,11 @@ export function createV1SecureToolDispatcher(
   });
 }
 
-export function assertDefaultBuiltinSecurityCoverage(registry: ToolRegistry): void {
-  const missing = DEFAULT_BUILTIN_TOOL_ORDER.filter((name) => {
+export function assertDefaultBuiltinSecurityCoverage(
+  registry: ToolRegistry,
+  expectedToolNames: readonly ToolName[] = DEFAULT_BUILTIN_TOOL_ORDER,
+): void {
+  const missing = expectedToolNames.filter((name) => {
     const resolved = registry.resolve(name);
     return (
       resolved === undefined ||

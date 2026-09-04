@@ -6,6 +6,7 @@ import type { ToolRegistration } from "../registration.js";
 import { projectPatchEffects } from "../tool-effects.js";
 import { projectApplyPatchSecurityFacts } from "./security-facts.js";
 import { errorResult, successResult, withRuntimeScope } from "./result.js";
+import { createBuiltinToolModelGuidance } from "../model-guidance.js";
 
 const definition: ToolDefinition = {
   name: "apply_patch",
@@ -62,6 +63,7 @@ export function createApplyPatchRegistration(runtimeResolver: RuntimeResolver): 
     handler,
     effectProjector: projectPatchEffects,
     securityFactsProjector: projectApplyPatchSecurityFacts,
+    modelGuidance: createBuiltinToolModelGuidance("apply_patch"),
   };
 }
 
