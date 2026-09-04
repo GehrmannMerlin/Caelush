@@ -240,7 +240,7 @@ function renderVerificationCheck(check: TimelineVerificationCheck): ReactElement
 
 function entryLabel(entry: TimelineEntry): string {
   if (entry.toolName !== undefined) return WEB_TOOL_LABELS[entry.toolName] ?? entry.toolName;
-  if (entry.kind === "REASONING") return "推理摘要";
+  if (entry.kind === "REASONING") return "决策摘要";
   return entry.title ?? entry.kind;
 }
 

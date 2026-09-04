@@ -23,7 +23,7 @@ describe("Timeline", () => {
     const html = renderToStaticMarkup(<Timeline timeline={timelineFromVisibleEvents()} />);
 
     expect(html).toContain("执行过程");
-    expect(html).toContain("推理摘要");
+    expect(html).toContain("决策摘要");
     expect(html).toContain("读取文件");
     expect(html).toContain("src/auth.ts");
     expect(html).toContain("验证");

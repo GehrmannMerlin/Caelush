@@ -54,3 +54,14 @@ export { LLMGateway } from "./gateway.js";
 export type { LLMGatewayDependencies, LLMStream, LLMStreamOptions } from "./gateway.js";
 export { createOpenAICompatibleLLMProvider } from "./providers/openai-compatible/index.js";
 export type { OpenAICompatibleLLMProviderOptions } from "./providers/openai-compatible/index.js";
+export {
+  createSafeLLMWireDiagnostic,
+  summarizeLLMWireRequest,
+} from "./wire-diagnostic.js";
+export type {
+  LLMWireDiagnostic,
+  LLMWireDiagnosticEvent,
+  LLMWireDiagnosticOptions,
+  LLMWireDiagnosticRequest,
+  LLMWireDiagnosticResponse,
+} from "./wire-diagnostic.js";

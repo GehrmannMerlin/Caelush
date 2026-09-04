@@ -23,6 +23,7 @@ import {
   LLMGateway,
   LLMProviderRegistry,
   ProviderIdSchema,
+  createSafeLLMWireDiagnostic,
   createOpenAICompatibleLLMProvider,
   type LLMProvider,
 } from "@caelush/llm";
@@ -144,6 +145,7 @@ export interface DaemonCompositionOptions {
   readonly clock?: DaemonClock;
   readonly logger?: RunExecutionSupervisorLogger;
   readonly configResolver?: RunExecutionConfigResolver;
+  readonly wireDiagnosticSink?: (event: import("@caelush/llm").LLMWireDiagnosticEvent) => void;
 }
 
 export interface DaemonComposition {
@@ -189,7 +191,13 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     );
   }
   for (const provider of options.providerOverrides ?? []) providerRegistry.register(provider);
-  const gateway = new LLMGateway({ providers: providerRegistry });
+  const wireDiagnostic = createSafeLLMWireDiagnostic(
+    options.wireDiagnosticSink === undefined ? {} : { sink: options.wireDiagnosticSink },
+  );
+  const gateway = new LLMGateway({
+    providers: providerRegistry,
+    ...(wireDiagnostic === undefined ? {} : { wireDiagnostic }),
+  });
   const llmClient = {
     complete: (
       request: Parameters<LLMGateway["complete"]>[0],

@@ -21,6 +21,8 @@ import type { LLMCallId } from "@caelush/protocol";
 import { LLMStreamEventSchema } from "./events.js";
 import { createStreamValidator } from "./stream-validator.js";
 import { createAbortScope } from "./abort.js";
+import type { LLMWireDiagnostic } from "./wire-diagnostic.js";
+import { summarizeLLMWireRequest } from "./wire-diagnostic.js";
 
 export interface LLMStreamOptions {
   readonly signal?: AbortSignal;
@@ -34,15 +36,21 @@ export interface LLMStream {
 
 export interface LLMGatewayDependencies {
   readonly providers: LLMProviderRegistry;
+  readonly wireDiagnostic?: LLMWireDiagnostic;
+  readonly clock?: { now(): number };
 }
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 
 export class LLMGateway {
   private readonly providers: LLMProviderRegistry;
+  private readonly wireDiagnostic: LLMWireDiagnostic | undefined;
+  private readonly now: () => number;
 
   constructor(dependencies: LLMGatewayDependencies) {
     this.providers = dependencies.providers;
+    this.wireDiagnostic = dependencies.wireDiagnostic;
+    this.now = dependencies.clock?.now ?? Date.now;
   }
 
   stream(request: LLMProviderRequest, options: LLMStreamOptions = {}): LLMStream {
@@ -61,6 +69,7 @@ export class LLMGateway {
     validateLLMRequestSemantics(normalizedRequest, capabilities);
     validateTimeoutMs(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     const callId = createLLMCallId();
+    this.wireDiagnostic?.record(summarizeLLMWireRequest(normalizedRequest, callId));
 
     return {
       callId,
@@ -147,6 +156,7 @@ export class LLMGateway {
   }
 
   async complete(request: LLMProviderRequest, options?: LLMStreamOptions): Promise<LLMTurnResult> {
+    const startedAt = this.now();
     const stream = this.stream(request, options);
     let text = "";
     const toolCalls: LLMToolCall[] = [];
@@ -192,6 +202,16 @@ export class LLMGateway {
       finishReason,
       ...(usage === undefined ? {} : { usage }),
     };
-    return LLMTurnResultSchema.parse(result);
+    const parsedResult = LLMTurnResultSchema.parse(result);
+    this.wireDiagnostic?.record({
+      phase: "RESPONSE",
+      callId: stream.callId,
+      providerId: request.model.provider,
+      model: request.model.model,
+      finishReason,
+      toolNames: parsedResult.toolCalls.map((tool) => tool.name),
+      durationMs: Math.max(0, this.now() - startedAt),
+    });
+    return parsedResult;
   }
 }
