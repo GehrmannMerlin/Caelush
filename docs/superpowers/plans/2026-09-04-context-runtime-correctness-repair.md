@@ -1,6 +1,6 @@
 # Implementation Plan: Context Runtime Correctness Repair
 
-Branch: `codex/v1-context-runtime-correctness-repair`  
+Branch: `codex/v1-context-runtime-correctness-repair`
 Baseline: `3be40eaf6d012216b30b29cfc38b43b8be5d7762`
 
 1. Characterize the real coordinator/AgentLoop continuation failure and record root-cause evidence.

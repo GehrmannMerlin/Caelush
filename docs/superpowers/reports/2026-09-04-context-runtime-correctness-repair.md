@@ -1,8 +1,8 @@
 # Caelush V1.00 — Context Runtime Correctness Repair Report
 
-日期：2026-09-04  
-任务分支：`codex/v1-context-runtime-correctness-repair`  
-基线：`3be40eaf6d012216b30b29cfc38b43b8be5d7762`  
+日期：2026-09-04
+任务分支：`codex/v1-context-runtime-correctness-repair`
+基线：`3be40eaf6d012216b30b29cfc38b43b8be5d7762`
 状态：`READY FOR USER MANUAL CONTEXT ACCEPTANCE`
 
 ## 1. 范围与边界

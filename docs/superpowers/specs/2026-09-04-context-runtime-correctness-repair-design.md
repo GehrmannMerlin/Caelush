@@ -1,7 +1,7 @@
 # Caelush V1.00 Context Runtime Correctness Repair Design
 
-Status: `USER-APPROVED DESIGN`  
-Date: 2026-09-04  
+Status: `USER-APPROVED DESIGN`
+Date: 2026-09-04
 Scope: Context Runtime correctness repair only; no new Phase or UI redesign.
 
 ## Objectives

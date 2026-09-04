@@ -1,8 +1,8 @@
 # Caelush Context Runtime Correctness Baseline
 
-Status: `CHARACTERIZATION COMPLETE`  
-Date: 2026-09-04  
-Baseline: `3be40eaf6d012216b30b29cfc38b43b8be5d7762`  
+Status: `CHARACTERIZATION COMPLETE`
+Date: 2026-09-04
+Baseline: `3be40eaf6d012216b30b29cfc38b43b8be5d7762`
 Task branch: `codex/v1-context-runtime-correctness-repair`
 
 This document records the production-path evidence gathered before changing production logic. The
