@@ -154,4 +154,8 @@ export interface RunControllerDependencies {
   readonly verificationLLMClient?: VerificationLLMClient;
   readonly verificationRepairPolicy?: VerificationRepairPolicy;
   readonly verificationPlanCount?: (runId: import("@caelush/protocol").RunId) => Promise<number>;
+  readonly onVerifiedCompletion?: (input: {
+    readonly run: AgentRun;
+    readonly finalResult: unknown;
+  }) => Promise<void> | void;
 }

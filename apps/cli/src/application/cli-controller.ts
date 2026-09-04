@@ -19,6 +19,7 @@ import type {
   SessionId,
   RunStatus,
   WorkspaceRef,
+  ContextUsageProjection,
 } from "@caelush/protocol";
 import { createWorkspaceId, VerifiedRunFinalResultSchema } from "@caelush/protocol";
 import type { WatchRunEventsOptions } from "@caelush/client";
@@ -85,6 +86,10 @@ export interface CliDaemonClient {
     runId: RunId,
     options?: { readonly signal?: AbortSignal },
   ): Promise<RunActionResponse>;
+  getRunContextUsage?(
+    runId: RunId,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<ContextUsageProjection | null>;
   listPendingApprovals(
     runId: RunId,
     options?: { readonly signal?: AbortSignal },
@@ -158,6 +163,10 @@ export class CliConversationController {
 
   async submitPrompt(prompt: string): Promise<boolean> {
     const goal = prompt.trim();
+    if (goal === "/context") {
+      await this.showContextUsage();
+      return false;
+    }
     if (!this.canSubmit(goal)) return false;
 
     const session = this.state.session!;
@@ -903,6 +912,24 @@ export class CliConversationController {
     return goal.length > 0 && new TextEncoder().encode(goal).byteLength <= MAX_CLI_PROMPT_BYTES;
   }
 
+  private async showContextUsage(): Promise<void> {
+    const runId = this.activeRun?.runId;
+    const getContextUsage = this.options.client.getRunContextUsage;
+    if (runId === undefined || getContextUsage === undefined) {
+      this.publish({ ...this.state, notice: "Context usage is unavailable for this Run." });
+      return;
+    }
+    try {
+      const usage = await getContextUsage.call(this.options.client, runId);
+      this.publish({
+        ...this.state,
+        notice: usage === null ? "Context usage is not available yet." : formatContextUsage(usage),
+      });
+    } catch {
+      this.publish({ ...this.state, notice: "Context usage could not be loaded." });
+    }
+  }
+
   private async consumeRunEvents(
     active: ActiveRun,
     stream: AsyncIterable<AgentEvent>,
@@ -1031,6 +1058,15 @@ export class CliConversationController {
     this.state = state;
     for (const listener of this.listeners) listener(state);
   }
+}
+
+function formatContextUsage(usage: ContextUsageProjection): string {
+  return [
+    `Context: ${Math.round(usage.usedRatio * 100)}% used`,
+    `Model ${usage.providerId}/${usage.modelId}`,
+    `Capacity ${usage.effectiveInputLimitTokens} · Remaining ${usage.remainingTokens}`,
+    `Pressure ${usage.pressureState} · Compactions ${usage.compactionCount}`,
+  ].join(" · ");
 }
 
 class CliConfigurationError extends Error {

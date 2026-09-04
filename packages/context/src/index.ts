@@ -95,6 +95,7 @@ export type {
   UserTurnContextBuildInput,
 } from "./context-builder.js";
 export type { VerificationRepairContextInput } from "./context-renderer.js";
+export type { RenderSystemContextOptions } from "./context-renderer.js";
 export type {
   ContextBuildLimitsReport,
   ContextBuildReport,
@@ -200,3 +201,28 @@ export type {
   ModelObservation,
   ProjectToolObservationInput,
 } from "./observation-projector.js";
+export type {
+  ContextArtifactCreateInput,
+  ContextArtifactRepository,
+  ContextCheckpointCreateInput,
+  ContextCheckpointRecord,
+  ContextCheckpointRepository,
+} from "./context-persistence.js";
+export {
+  ContextRuntimeCancelledError,
+  ContextRuntimeCoordinator,
+  createContextRuntimeBuilderAdapter,
+} from "./context-runtime-coordinator.js";
+export type {
+  ContextRuntimeCoordinatorOptions,
+  ContextRuntimeCoordinatorPort,
+  ContextRuntimePrepareInput,
+  ContextRuntimePrepareResult,
+} from "./context-runtime-coordinator.js";
+export { createContextUsageProjection } from "./context-usage-projection.js";
+export type {
+  ContextUsageBreakdown,
+  ContextUsagePressureState,
+  ContextUsageProjection,
+  ContextUsageProjectionInput,
+} from "./context-usage-projection.js";

@@ -7,11 +7,14 @@ import {
   type ReactElement,
 } from "react";
 import type { WebSessionError, WebSubmissionState } from "../application/session-manager.js";
+import type { ContextUsageProjection } from "@caelush/protocol";
+import { ContextUsageRing } from "./context-usage-ring.js";
 
 export interface PromptComposerProps {
   readonly disabled: boolean;
   readonly submission: WebSubmissionState;
   readonly error?: WebSessionError | undefined;
+  readonly contextUsage?: ContextUsageProjection | null;
   readonly onSubmit: (prompt: string) => Promise<boolean>;
 }
 
@@ -56,6 +59,7 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
     createElement(
       "div",
       { className: "prompt-composer-footer" },
+      createElement(ContextUsageRing, { usage: props.contextUsage ?? null }),
       createElement("span", { className: "prompt-hint" }, "Enter 发送 · Shift + Enter 换行"),
       createElement(
         "button",

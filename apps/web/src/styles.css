@@ -850,6 +850,128 @@ textarea:disabled {
   padding-top: 9px;
 }
 
+.context-usage-control {
+  position: relative;
+  display: inline-flex;
+  width: 28px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 28px;
+}
+
+.context-usage-ring-button {
+  display: inline-flex;
+  width: 28px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #8aa1bd;
+  cursor: pointer;
+}
+
+.context-usage-ring-button:hover,
+.context-usage-ring-button:focus-visible {
+  background: #f3f7fc;
+  outline: 2px solid #b8cfee;
+  outline-offset: 1px;
+}
+
+.context-usage-ring {
+  width: 14px;
+  height: 14px;
+  overflow: visible;
+  transform: rotate(-90deg);
+}
+
+.context-usage-ring-track,
+.context-usage-ring-progress {
+  fill: none;
+  stroke-width: 2;
+}
+
+.context-usage-ring-track {
+  stroke: #eef4fe;
+}
+
+.context-usage-ring-progress {
+  stroke: #deeadf;
+  stroke-linecap: round;
+  transition:
+    stroke-dashoffset 180ms ease,
+    stroke 180ms ease;
+}
+
+.context-usage-ring-progress--PROACTIVE {
+  stroke: #b4cdea;
+}
+
+.context-usage-ring-progress--EMERGENCY {
+  stroke: #8eafd9;
+}
+
+.context-inspector {
+  position: absolute;
+  z-index: 5;
+  right: 0;
+  bottom: 36px;
+  width: min(260px, calc(100vw - 32px));
+  padding: 12px 14px;
+  border: 1px solid #dce7f5;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 10px 26px rgb(70 96 126 / 14%);
+  color: #31445c;
+  font-size: 0.74rem;
+}
+
+.context-inspector-heading,
+.context-inspector-grid {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.context-inspector-heading {
+  padding-bottom: 8px;
+  border-bottom: 1px solid #edf2f8;
+}
+
+.context-inspector-heading span,
+.context-inspector-grid dd {
+  color: #71839a;
+}
+
+.context-inspector-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  margin: 10px 0 0;
+  gap: 6px 12px;
+}
+
+.context-inspector-grid dt,
+.context-inspector-grid dd {
+  margin: 0;
+}
+
+.context-inspector-grid dd {
+  min-width: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .context-usage-ring-progress {
+    transition: none;
+  }
+}
+
 .prompt-hint {
   line-height: 1.4;
 }

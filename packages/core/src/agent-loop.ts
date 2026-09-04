@@ -2,6 +2,7 @@ import {
   ContextBuildError,
   type BuiltModelContext,
   type ContextBuildInput,
+  createContextRuntimeBuilderAdapter,
   type ProjectIntelligenceSnapshot,
   type RelevantFileContextPlan,
 } from "@caelush/context";
@@ -150,7 +151,22 @@ export class AgentLoop {
       currentUserMessage,
       currentTurnMessages,
     );
-    const context = this.dependencies.contextBuilder.build(contextInput);
+    const contextRuntime =
+      this.dependencies.contextRuntime ??
+      (this.dependencies.contextBuilder === undefined
+        ? undefined
+        : createContextRuntimeBuilderAdapter(this.dependencies.contextBuilder));
+    if (contextRuntime === undefined) {
+      throw new ContextBuildError("context runtime is not configured");
+    }
+    const context = await contextRuntime.prepareModelContext({
+      runId: input.run.id,
+      providerId: input.run.model.provider,
+      modelId: input.run.model.model,
+      projectId: input.run.workspace.id,
+      context: contextInput,
+      signal: input.signal,
+    });
     throwIfAborted(input.signal);
     const request = buildAgentLLMRequest(context, input.run, input.tools, input.modelSettings);
     return { context, request };

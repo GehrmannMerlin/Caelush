@@ -3,6 +3,7 @@ import {
   ApprovalListResponseSchema,
   ApprovalResolutionRequestSchema,
   RunActionResponseSchema,
+  ContextUsageResponseSchema,
   type ApprovalResolutionRequest,
   type RunId,
 } from "@caelush/protocol";
@@ -22,6 +23,11 @@ export interface DaemonExecutionSurface {
   >;
   readonly approvals: {
     listPendingByRun(runId: RunId): Promise<readonly import("@caelush/protocol").ApprovalRequest[]>;
+  };
+  readonly contextUsage?: {
+    getContextUsage(
+      runId: RunId,
+    ): Promise<import("@caelush/context").ContextUsageProjection | undefined>;
   };
 }
 
@@ -95,6 +101,18 @@ export function registerExecutionRoutes(
         throw new StorageNotFoundError("AgentRun", runId);
       }
       return { items: await surface.approvals.listPendingByRun(runId as RunId) };
+    },
+  );
+
+  app.get(
+    "/api/v1/runs/:runId/context-usage",
+    { schema: { response: { 200: ContextUsageResponseSchema } } },
+    async (request) => {
+      const { runId } = request.params as { runId: string };
+      if ((await surface.runs.get(runId as RunId)) === null) {
+        throw new StorageNotFoundError("AgentRun", runId);
+      }
+      return (await surface.contextUsage?.getContextUsage(runId as RunId)) ?? null;
     },
   );
 

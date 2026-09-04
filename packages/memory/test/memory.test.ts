@@ -52,4 +52,34 @@ describe("scoped durable memory", () => {
     expect(found.map((item) => item.fact)).toEqual(["uses bun"]);
     expect((await store.get(pnpm.id))?.status).toBe("SUPERSEDED");
   });
+
+  it("respects the retrieval token budget", async () => {
+    const store = new InMemoryMemoryStore({ now: () => 1 });
+    await store.save({
+      scope: "PROJECT",
+      projectId: "project-1",
+      topic: "package manager",
+      fact: "uses pnpm for the workspace",
+      confidence: 0.9,
+      evidenceRefs: ["run-1"],
+      sensitivity: "PUBLIC",
+    });
+    await store.save({
+      scope: "PROJECT",
+      projectId: "project-1",
+      topic: "package manager",
+      fact: "uses npm for compatibility",
+      confidence: 0.8,
+      evidenceRefs: ["run-2"],
+      sensitivity: "PUBLIC",
+    });
+    const found = await new MemoryRetriever(store).retrieve({
+      scope: "PROJECT",
+      projectId: "project-1",
+      goal: "package manager",
+      maxItems: 10,
+      maxTokens: 12,
+    });
+    expect(found).toHaveLength(1);
+  });
 });

@@ -221,6 +221,9 @@ export {
   RunListResponseSchema,
   SessionListQuerySchema,
   SessionListResponseSchema,
+  ContextUsagePressureStateSchema,
+  ContextUsageProjectionSchema,
+  ContextUsageResponseSchema,
 } from "./api/index.js";
 export type {
   ApiError,
@@ -246,4 +249,6 @@ export type {
   RunListResponse,
   SessionListQuery,
   SessionListResponse,
+  ContextUsageProjection,
+  ContextUsageResponse,
 } from "./api/index.js";

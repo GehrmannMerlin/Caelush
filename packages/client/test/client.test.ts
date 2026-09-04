@@ -66,6 +66,40 @@ describe("CaelushClient", () => {
     }
   });
 
+  it("loads the safe Context Usage projection from the daemon", async () => {
+    const runId = createRunId();
+    const client = new CaelushClient({
+      baseUrl: "http://daemon.test",
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            runId,
+            providerId: "fixture",
+            modelId: "small",
+            contextWindowTokens: 1000,
+            effectiveInputLimitTokens: 800,
+            estimatedInputTokens: 200,
+            usedRatio: 0.25,
+            remainingTokens: 600,
+            pressureState: "NORMAL",
+            compactionCount: 0,
+            breakdown: {
+              pinned: 0,
+              checkpoint: 0,
+              recentTail: 100,
+              project: 50,
+              files: 50,
+              toolObservations: 0,
+              memory: 0,
+            },
+            updatedAt: 1,
+          }),
+          { status: 200 },
+        ),
+    });
+    await expect(client.getRunContextUsage(runId)).resolves.toMatchObject({ usedRatio: 0.25 });
+  });
+
   it("uses typed HTTP methods and validates the response contract", async () => {
     const session = makeSession();
     const requests: Request[] = [];

@@ -159,6 +159,25 @@ export class MemoryRetriever {
         (left, right) =>
           right.score - left.score || right.record.confidence - left.record.confidence,
       );
-    return records.slice(0, Math.max(0, input.maxItems)).map((entry) => entry.record);
+    const selected: MemoryRecord[] = [];
+    let usedTokens = 0;
+    for (const entry of records.slice(0, Math.max(0, input.maxItems))) {
+      const estimatedTokens = Math.max(
+        1,
+        Math.ceil(`${entry.record.topic}: ${entry.record.fact}`.length / 4),
+      );
+      if (input.maxTokens !== undefined && usedTokens + estimatedTokens > input.maxTokens) continue;
+      selected.push(entry.record);
+      usedTokens += estimatedTokens;
+    }
+    return selected;
   }
 }
+
+export {
+  createMemoryExtractionJob,
+  type MemoryExtractionJob,
+  type MemoryExtractionJobCreateInput,
+  type MemoryExtractionJobStatus,
+  type MemoryExtractionJobStore,
+} from "./extraction-job.js";

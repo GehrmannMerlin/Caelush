@@ -9,10 +9,15 @@ import {
 } from "@caelush/core";
 import { EventBus } from "@caelush/events";
 import {
+  ContextRuntimeCoordinator,
+  createContextItem,
+  createContextUsageProjection,
   createDefaultContextBuilder,
   createLocalProjectInspector,
   createLocalRelevantFilePlanner,
+  Utf8HeuristicTokenEstimator,
 } from "@caelush/context";
+import { MemoryRetriever, type MemoryRecord } from "@caelush/memory";
 import {
   LLMGateway,
   LLMProviderRegistry,
@@ -135,6 +140,12 @@ export interface DaemonComposition {
   readonly gateway: LLMGateway;
   readonly toolRegistry: ReturnType<ToolRegistryBuilder["build"]>;
   readonly toolCoordinator: ToolBatchCoordinator;
+  readonly contextRuntime: ContextRuntimeCoordinator;
+  readonly contextUsage: {
+    getContextUsage(
+      runId: string,
+    ): Promise<import("@caelush/context").ContextUsageProjection | undefined>;
+  };
   readonly controller: RunController;
   readonly supervisor: RunExecutionSupervisor;
   readonly approvals: Pick<CaelushStorage["approvals"], "listPendingByRun">;
@@ -172,10 +183,28 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
   };
 
   const inspector = createLocalProjectInspector();
+  const memoryRetriever = new MemoryRetriever(options.storage.memory);
+  const memoryEstimator = new Utf8HeuristicTokenEstimator();
+  const contextRuntime = new ContextRuntimeCoordinator({
+    checkpointRepository: options.storage.contextCheckpoints,
+    clock,
+    checkpointIdFactory: { create: () => createEventId() },
+    memoryLoader: async ({ projectId, goal, maxTokens }) => {
+      const records = await memoryRetriever.retrieve({
+        scope: "PROJECT",
+        ...(projectId === undefined ? {} : { projectId }),
+        goal,
+        maxItems: 32,
+        maxTokens,
+      });
+      return projectMemoryRecords(records, maxTokens, memoryEstimator);
+    },
+  });
   const agentLoop = new AgentLoop({
     inspector,
     planner: createLocalRelevantFilePlanner(),
     contextBuilder: createDefaultContextBuilder(),
+    contextRuntime,
     llmClient,
     clock,
     stepIdFactory: { create: createStepId },
@@ -253,6 +282,16 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     verificationRepairPolicy: createVerificationRepairPolicy(),
     verificationPlanCount: (runId) =>
       options.storage.verificationExecution.countPlans?.(runId) ?? Promise.resolve(0),
+    onVerifiedCompletion: ({ run }) => {
+      void options.storage.memoryExtractionJobs
+        .createOrGet({
+          id: createEventId(),
+          sourceRunId: run.id,
+          projectId: run.workspace.id,
+          createdAt: clock.now(),
+        })
+        .catch(() => undefined);
+    },
   });
   const supervisor = new RunExecutionSupervisor({
     runs: options.storage.runs,
@@ -288,6 +327,38 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     gateway,
     toolRegistry: activeToolRegistry,
     toolCoordinator,
+    contextRuntime,
+    contextUsage: {
+      getContextUsage: async (runId) => {
+        const current = contextRuntime.getContextUsage(runId);
+        if (current !== undefined) return current;
+        const checkpoint = await options.storage.contextCheckpoints.getLatestByRun(runId as never);
+        const run = await options.storage.runs.get(runId as never);
+        if (checkpoint === undefined || run === null) return undefined;
+        const recoveredInputLimit = 32_000;
+        return createContextUsageProjection({
+          runId,
+          providerId: run.model.provider,
+          modelId: run.model.model,
+          contextWindowTokens: recoveredInputLimit,
+          effectiveInputLimitTokens: recoveredInputLimit,
+          estimatedInputTokens: checkpoint.tokensAfter,
+          pressureState: "NORMAL",
+          compactionCount: 1,
+          lastCompactionAt: checkpoint.createdAt,
+          breakdown: {
+            pinned: 0,
+            checkpoint: checkpoint.tokensAfter,
+            recentTail: 0,
+            project: 0,
+            files: 0,
+            toolObservations: 0,
+            memory: 0,
+          },
+          updatedAt: checkpoint.createdAt,
+        });
+      },
+    },
     controller,
     supervisor,
     approvals: options.storage.approvals,
@@ -304,6 +375,41 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
       await runtime.dispose();
     },
   };
+}
+
+function projectMemoryRecords(
+  records: readonly MemoryRecord[],
+  maxTokens: number,
+  estimator: Utf8HeuristicTokenEstimator,
+): readonly import("@caelush/context").ContextItem[] {
+  const items: import("@caelush/context").ContextItem[] = [];
+  let usedTokens = 0;
+  for (const record of records) {
+    if (record.sensitivity === "SENSITIVE") continue;
+    const content = `${record.topic}: ${record.fact}`;
+    const tokenEstimate = estimator.estimateText(content);
+    if (usedTokens + tokenEstimate > maxTokens) continue;
+    items.push(
+      createContextItem({
+        id: record.id,
+        type: "MEMORY",
+        sourceRef: record.id,
+        scope: "PROJECT",
+        retention: "RETRIEVABLE",
+        priorityClass: "NORMAL",
+        tokenEstimate,
+        cacheStability: "STABLE",
+        freshness: "CURRENT",
+        sensitivity: record.sensitivity,
+        whyLoaded: "project goal match",
+        createdSequence: 0,
+        updatedSequence: 0,
+        content,
+      }),
+    );
+    usedTokens += tokenEstimate;
+  }
+  return items;
 }
 
 function createRunBoundVerificationExecution(

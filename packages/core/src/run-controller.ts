@@ -2572,6 +2572,11 @@ export class RunController {
       events,
     });
     this.notify(commit.events);
+    void Promise.resolve()
+      .then(() =>
+        this.dependencies.onVerifiedCompletion?.({ run: commit.snapshot.run, finalResult }),
+      )
+      .catch(() => undefined);
     return this.resultFromSnapshot(commit.snapshot);
   }
 

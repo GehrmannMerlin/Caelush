@@ -56,9 +56,9 @@ describe("Web production build", () => {
     await execFile(
       process.platform === "win32" ? "cmd.exe" : "pnpm",
       process.platform === "win32"
-        ? ["/d", "/s", "/c", "pnpm --filter @caelush/web build"]
+        ? ["/d", "/s", "/c", "..\\..\\node_modules\\.bin\\vite.cmd build"]
         : ["--filter", "@caelush/web", "build"],
-      { cwd: workspacePath },
+      { cwd: process.platform === "win32" ? new URL("../", import.meta.url) : workspacePath },
     );
 
     const assets = await filesIn(productionOutput);

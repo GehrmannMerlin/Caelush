@@ -5,6 +5,7 @@ import {
   ApiErrorResponseSchema,
   ClientAgentRunSchema,
   ClientAgentSessionSchema,
+  ContextUsageResponseSchema,
   CreateRunRequestSchema,
   CreateSessionRequestSchema,
   DaemonInfoSchema,
@@ -20,6 +21,7 @@ import {
   type ApprovalResolutionRequest,
   type ClientAgentRun,
   type ClientAgentSession,
+  type ContextUsageResponse,
   type CreateRunRequest,
   type CreateSessionRequest,
   type DaemonInfo,
@@ -190,6 +192,19 @@ export class CaelushClient {
       `/api/v1/runs/${encodeURIComponent(runId)}`,
       { method: "GET" },
       ClientAgentRunSchema,
+      [200],
+      options,
+    );
+  }
+
+  async getRunContextUsage(
+    runId: RunId,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<ContextUsageResponse> {
+    return this.request(
+      `/api/v1/runs/${encodeURIComponent(runId)}/context-usage`,
+      { method: "GET" },
+      ContextUsageResponseSchema,
       [200],
       options,
     );

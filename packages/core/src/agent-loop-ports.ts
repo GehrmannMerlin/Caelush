@@ -5,6 +5,7 @@ import type {
   ProjectIntelligenceSnapshot,
   RelevantFileContextPlan,
   RelevantFilePlannerInput,
+  ContextRuntimeCoordinatorPort,
 } from "@caelush/context";
 import type { LLMRequest } from "@caelush/llm/request";
 import type { LLMTurnResult } from "@caelush/llm/turn";
@@ -51,6 +52,8 @@ export interface AgentContextBuilderPort {
   build(input: ContextBuildInput): BuiltModelContext;
 }
 
+export type AgentContextRuntimePort = ContextRuntimeCoordinatorPort;
+
 export interface AgentLLMClient {
   complete(request: LLMRequest, options: { readonly signal: AbortSignal }): Promise<LLMTurnResult>;
 }
@@ -67,6 +70,7 @@ export interface AgentLoopDependencies {
   readonly inspector: AgentProjectInspectorPort;
   readonly planner: AgentRelevantFilePlannerPort;
   readonly contextBuilder: AgentContextBuilderPort;
+  readonly contextRuntime?: AgentContextRuntimePort;
   readonly llmClient: AgentLLMClient;
   readonly clock: AgentClock;
   readonly stepIdFactory: AgentStepIdFactory;

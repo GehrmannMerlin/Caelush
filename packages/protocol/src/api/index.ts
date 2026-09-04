@@ -34,3 +34,9 @@ export { CreateRunRequestSchema, RunListQuerySchema, RunListResponseSchema } fro
 export type { CreateRunRequest, RunListQuery, RunListResponse } from "./run.js";
 export { EventStreamQuerySchema } from "./event-stream.js";
 export type { EventStreamQuery } from "./event-stream.js";
+export {
+  ContextUsagePressureStateSchema,
+  ContextUsageProjectionSchema,
+  ContextUsageResponseSchema,
+} from "./context-usage.js";
+export type { ContextUsageProjection, ContextUsageResponse } from "./context-usage.js";

@@ -42,6 +42,7 @@ describe("daemon production composition", () => {
     expect(composition.eventBus).toBe(eventBus);
     expect(composition.runs).toBe(storage.runs);
     expect(composition.approvals).toBe(storage.approvals);
+    expect(composition.contextRuntime).toBeDefined();
     expect(composition.runtimeResolver.resolve({ id: "local", kind: "local" })).toBe(
       composition.runtime,
     );

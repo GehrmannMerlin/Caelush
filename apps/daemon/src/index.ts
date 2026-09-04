@@ -23,6 +23,8 @@ export {
 export { checkNodePtyLoadability, inspectMigrationAssets } from "./diagnostics.js";
 export type { MigrationAssetInspection, NodePtyLoadability } from "./diagnostics.js";
 export { composeDaemon } from "./daemon-composition.js";
+export { MemoryExtractionWorker } from "./memory/memory-extraction-worker.js";
+export type { MemoryExtractionWorkerOptions } from "./memory/memory-extraction-worker.js";
 export type {
   DaemonClock,
   DaemonComposition,

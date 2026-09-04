@@ -38,6 +38,7 @@
     "@caelush/core": "workspace:*",
     "@caelush/events": "workspace:*",
     "@caelush/llm": "workspace:*",
+    "@caelush/memory": "workspace:*",
     "@caelush/protocol": "workspace:*",
     "@caelush/runtime": "workspace:*",
     "@caelush/security": "workspace:*",

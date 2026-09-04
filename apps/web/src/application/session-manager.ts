@@ -37,6 +37,7 @@ import type {
   RunStatus,
   SessionId,
   WorkspaceRef,
+  ContextUsageProjection,
 } from "@caelush/protocol";
 import { derivePromptTitle, validatePrompt, type PromptError } from "./prompt.js";
 import type { WebHostClient } from "../host/bootstrap.js";
@@ -58,6 +59,7 @@ export interface WebSessionClient extends SessionCandidateClient, WebHostClient 
   recoverRun(runId: RunId): Promise<RunActionResponse>;
   cancelRun(runId: RunId): Promise<RunActionResponse>;
   continueResourceGuard(runId: RunId): Promise<RunActionResponse>;
+  getRunContextUsage?(runId: RunId): Promise<ContextUsageProjection | null>;
   watchRunEvents(runId: RunId, options?: WatchRunEventsOptions): AsyncIterable<AgentEvent>;
 }
 
@@ -107,6 +109,7 @@ export interface WebSessionSnapshot {
   readonly activeRuns: readonly ClientAgentRun[];
   readonly activeRun?: ClientAgentRun;
   readonly timeline: TimelineState;
+  readonly contextUsage?: ContextUsageProjection | null;
   readonly isDraft: boolean;
   readonly composerEnabled: boolean;
   readonly submission: WebSubmissionState;
@@ -257,6 +260,7 @@ export class WebSessionManager {
           activeRuns: [],
           activeRun: undefined,
           timeline: createInitialTimelineState(),
+          contextUsage: null,
           isDraft: false,
           composerEnabled: false,
           error: sessionError("SESSION_SELECTION_FAILED"),
@@ -275,6 +279,7 @@ export class WebSessionManager {
         activeRuns: [],
         activeRun: undefined,
         timeline: createInitialTimelineState(),
+        contextUsage: null,
         isDraft: false,
         composerEnabled: false,
         error: sessionError("SESSION_SELECTION_FAILED"),
@@ -332,6 +337,7 @@ export class WebSessionManager {
         activeRuns: [run],
         activeRun: run,
         timeline: createInitialTimelineState(run.id),
+        contextUsage: null,
         isDraft: false,
         composerEnabled: false,
         submission: "RUN_CREATED",
@@ -584,6 +590,7 @@ export class WebSessionManager {
       activeRuns,
       activeRun: activeRuns.length === 1 ? activeRuns[0] : undefined,
       timeline: createInitialTimelineState(activeRuns.length === 1 ? activeRuns[0]?.id : undefined),
+      contextUsage: null,
       isDraft: false,
       composerEnabled: activeRuns.length === 0,
       submission: "IDLE",
@@ -597,6 +604,7 @@ export class WebSessionManager {
     if (activeRuns.length > 1) this.publish({ controlMode: "RECOVERY_PICKER" });
     if (activeRuns.length === 1 && activeRuns[0] !== undefined) {
       await this.prepareRecoveryRun(activeRuns[0]);
+      await this.refreshContextUsage(activeRuns[0].id);
     }
     return true;
   }
@@ -836,6 +844,19 @@ export class WebSessionManager {
           ? sessionError(lifecycle.failure)
           : undefined,
     });
+    void this.refreshContextUsage(run.id);
+  }
+
+  private async refreshContextUsage(runId: RunId): Promise<void> {
+    const getContextUsage = this.options.client.getRunContextUsage;
+    if (getContextUsage === undefined || this.disposed) return;
+    try {
+      const usage = await getContextUsage.call(this.options.client, runId);
+      if (this.disposed || this.snapshot.activeRun?.id !== runId) return;
+      this.publish({ contextUsage: usage ?? null });
+    } catch {
+      // Context diagnostics are optional UI and never change Run control state.
+    }
   }
 
   private projectApprovalEvent(event: AgentEvent): void {
@@ -1049,6 +1070,7 @@ function initialSnapshot(): WebSessionSnapshot {
     history: [],
     activeRuns: [],
     timeline: createInitialTimelineState(),
+    contextUsage: null,
     isDraft: false,
     composerEnabled: false,
     submission: "IDLE",

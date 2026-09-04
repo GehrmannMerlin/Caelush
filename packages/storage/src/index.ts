@@ -79,3 +79,18 @@ export {
   StorageNotFoundError,
 } from "./errors.js";
 export { SqliteMemoryRepository } from "./memory-repository.js";
+export {
+  SqliteContextCheckpointRepository,
+  type ContextCheckpointCreateInput,
+  type ContextCheckpointRecord,
+  type ContextCheckpointRepository,
+  type StoredStructuredCheckpoint,
+} from "./context-checkpoint-repository.js";
+export {
+  SqliteContextArtifactRepository,
+  type Artifact,
+  type ArtifactSensitivity,
+  type ContextArtifactCreateInput,
+  type ContextArtifactRepository,
+} from "./context-artifact-repository.js";
+export { SqliteMemoryExtractionJobRepository } from "./memory-extraction-job-repository.js";

@@ -17,6 +17,8 @@ import type { ProjectPackage, ProjectProfile } from "./project-profile.js";
 import { createContextPolicy, type ContextPolicy } from "./context-policy.js";
 import type { ModelContextProfile } from "./model-context-profile.js";
 import { createContextBuildTrace } from "./context-build-trace.js";
+import type { ContextItem } from "./context-item.js";
+import type { StructuredCheckpoint } from "./checkpoint.js";
 
 export interface ContextBuildLimits {
   readonly maxInputTokens: number;
@@ -35,6 +37,8 @@ export interface ContextBuildCommonInput {
   readonly verificationRepairContext?: VerificationRepairContextInput;
   readonly modelContextProfile?: ModelContextProfile;
   readonly contextPolicy?: ContextPolicy;
+  readonly checkpoint?: StructuredCheckpoint;
+  readonly memoryItems?: readonly ContextItem[];
 }
 
 export interface UserTurnContextBuildInput extends ContextBuildCommonInput {
@@ -150,6 +154,10 @@ export class ContextBuilder {
       input.baseSystemPrompt,
       snapshot,
       input.verificationRepairContext,
+      {
+        ...(input.checkpoint === undefined ? {} : { checkpoint: input.checkpoint }),
+        ...(input.memoryItems === undefined ? {} : { memoryItems: input.memoryItems }),
+      },
     );
     const budget = assembleContextBudget({
       system: system.message,
@@ -173,14 +181,20 @@ export class ContextBuilder {
       estimatedInputTokens: budget.estimatedInputTokens,
       systemTokens: budget.systemTokens,
       goalTokens: budget.currentUserTokens,
-      checkpointTokens: 0,
+      checkpointTokens:
+        input.checkpoint === undefined
+          ? 0
+          : this.tokenEstimator.estimateText(JSON.stringify(input.checkpoint)),
       recentTailTokens: budget.currentTurnTokens,
       projectTokens: budget.systemTokens,
       fileTokens: budget.relevantFiles.estimatedTokensUsed,
       observationTokens: currentTurn
         .filter((message) => message.role === "tool")
         .reduce((total, message) => total + this.tokenEstimator.estimateText(message.content), 0),
-      memoryTokens: 0,
+      memoryTokens: (input.memoryItems ?? []).reduce(
+        (total, item) => total + (item.content === undefined ? 0 : item.tokenEstimate),
+        0,
+      ),
       droppedItems: budget.conversation.droppedMessages + budget.relevantFiles.droppedFiles,
       truncatedItems: budget.relevantFiles.furtherTruncatedFiles,
       pressureRatio: budget.estimatedInputTokens / effectiveInputLimit,

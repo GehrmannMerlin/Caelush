@@ -52,6 +52,16 @@ import { SqliteVerificationExecutionStore } from "./verification-execution-store
 import type { VerificationExecutionRecoveryStorePort } from "@caelush/verification";
 import { SqliteMemoryRepository } from "./memory-repository.js";
 import type { MemoryStore } from "@caelush/memory";
+import {
+  SqliteContextArtifactRepository,
+  type ContextArtifactRepository,
+} from "./context-artifact-repository.js";
+import {
+  SqliteContextCheckpointRepository,
+  type ContextCheckpointRepository,
+} from "./context-checkpoint-repository.js";
+import { SqliteMemoryExtractionJobRepository } from "./memory-extraction-job-repository.js";
+import type { MemoryExtractionJobStore } from "@caelush/memory";
 
 export interface CaelushStorage {
   readonly sessions: SessionRepository;
@@ -73,6 +83,9 @@ export interface CaelushStorage {
   readonly verification: VerificationRepository;
   readonly verificationExecution: VerificationExecutionRecoveryStorePort;
   readonly memory: MemoryStore;
+  readonly memoryExtractionJobs: MemoryExtractionJobStore;
+  readonly contextCheckpoints: ContextCheckpointRepository;
+  readonly contextArtifacts: ContextArtifactRepository;
   close(): Promise<void>;
 }
 
@@ -108,6 +121,9 @@ export async function openCaelushStorage(options: {
       verification: new SqliteVerificationRepository(database),
       verificationExecution: new SqliteVerificationExecutionStore(database),
       memory: new SqliteMemoryRepository(database),
+      memoryExtractionJobs: new SqliteMemoryExtractionJobRepository(database),
+      contextCheckpoints: new SqliteContextCheckpointRepository(database),
+      contextArtifacts: new SqliteContextArtifactRepository(database),
       close: async () => database.close(),
     };
   } catch (error) {

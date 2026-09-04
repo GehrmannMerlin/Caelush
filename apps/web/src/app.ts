@@ -232,6 +232,7 @@ function renderSessionApp(input: {
             disabled: composerDisabled,
             submission: snapshot.submission,
             error: snapshot.error,
+            contextUsage: snapshot.contextUsage ?? null,
             onSubmit,
           }),
           onCancel: () => manager.cancelRun(),
