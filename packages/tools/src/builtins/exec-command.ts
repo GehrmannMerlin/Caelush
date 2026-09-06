@@ -2,6 +2,7 @@ import type { ToolDefinition } from "@caelush/protocol";
 import {
   RuntimeProcessStaleSessionError,
   RuntimeProcessUncertainError,
+  DEFAULT_EXEC_YIELD_TIME_MS,
   MAX_EXEC_MODEL_OUTPUT_BYTES,
   resolveExecYield,
   type RuntimeExecResult,
@@ -18,8 +19,7 @@ import { createBuiltinToolModelGuidance } from "../model-guidance.js";
 
 const definition: ToolDefinition = {
   name: "exec_command",
-  description:
-    "Executes a local shell command in a workspace-relative directory and returns bounded output. A still-running command can be continued with write_stdin.",
+  description: "Run command.",
   inputSchema: {
     type: "object",
     properties: {
@@ -27,10 +27,22 @@ const definition: ToolDefinition = {
       workdir: {
         type: "string",
         minLength: 1,
-        description: "Workspace-relative working directory.",
+        default: ".",
+        description: "Workspace-relative working directory; defaults to the workspace root '.'.",
       },
-      tty: { type: "boolean", description: "Use a terminal-backed process." },
-      yield_time_ms: { type: "integer", minimum: 250, maximum: 30000 },
+      tty: {
+        type: "boolean",
+        default: false,
+        description: "Use a terminal-backed process; defaults to false.",
+      },
+      yield_time_ms: {
+        type: "integer",
+        minimum: 250,
+        maximum: 30000,
+        default: DEFAULT_EXEC_YIELD_TIME_MS,
+        description:
+          "yield_time_ms is observation wait in milliseconds, not a timeout; defaults to 10000.",
+      },
     },
     required: ["cmd"],
     additionalProperties: false,

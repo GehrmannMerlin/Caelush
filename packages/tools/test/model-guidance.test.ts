@@ -16,7 +16,9 @@ const definition: ToolDefinition = {
   runtimeRequirements: {},
 };
 
-const handler: ToolHandler = { execute: async () => ({ content: "ok", details: {}, isError: false }) };
+const handler: ToolHandler = {
+  execute: async () => ({ content: "ok", details: {}, isError: false }),
+};
 
 describe("Tool model guidance", () => {
   it("is separate from runtime metadata and immutable at the registry boundary", () => {
@@ -26,6 +28,8 @@ describe("Tool model guidance", () => {
       whenToUse: "When evidence is needed.",
       whenNotToUse: "Never outside the workspace.",
       argumentNotes: "Use a relative path.",
+      sideEffects: "Read-only; does not mutate workspace state.",
+      safety: "Reject paths outside the workspace.",
       resultHandling: "Use the observed result.",
     };
     const registry = new ToolRegistryBuilder()
@@ -38,6 +42,17 @@ describe("Tool model guidance", () => {
     expect(Object.isFrozen(guidance)).toBe(true);
     expect(Object.isFrozen(guidance[0])).toBe(true);
     expect(registry.modelDefinitions()[0]).not.toHaveProperty("purpose");
+    expect(registry.modelDefinitions()[0]?.description).toContain("When: When evidence is needed.");
+    expect(registry.modelDefinitions()[0]?.description).toContain(
+      "Safety: Reject paths outside the workspace.",
+    );
+  });
+
+  it("provides explicit side-effect and safety guidance for every builtin Tool", () => {
+    const guidance = createBuiltinToolModelGuidance("exec_command");
+
+    expect(guidance.sideEffects).toContain("process");
+    expect(guidance.safety).toContain("approval");
   });
 
   it("derives all nine builtin guidance entries in the active tool order", () => {

@@ -11,6 +11,7 @@ import { normalizeAISDKUsage } from "./usage.js";
 import type { OpenAICompatibleProvider } from "@ai-sdk/openai-compatible";
 import { normalizeOpenAICompatibleError } from "./errors.js";
 import { assertRawToolCallIdentity, createRawToolCallState } from "./raw-chunk.js";
+import { parseOpenAICompatibleToolInput } from "./tool-call-parser.js";
 
 interface ToolLifecycle {
   readonly name: string;
@@ -125,10 +126,11 @@ function* normalizeStreamPart(
       return;
     }
     case "tool-call": {
+      const input = parseOpenAICompatibleToolInput(part.input);
       const parsedCall = LLMToolCallSchema.safeParse({
         id: part.toolCallId,
         name: part.toolName,
-        input: part.input,
+        input,
       });
       if (!parsedCall.success) {
         throw invalidResponse(

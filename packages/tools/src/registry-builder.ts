@@ -10,7 +10,7 @@ import { validateToolDefinitionSemantics } from "./schema-policy.js";
 import { ToolSchemaRuntime } from "./schema-runtime.js";
 import type { ToolRegistration } from "./registration.js";
 import { createToolRegistry, type ResolvedTool, type ToolRegistry } from "./registry.js";
-import { normalizeToolModelGuidance } from "./model-guidance.js";
+import { appendToolModelGuidance, normalizeToolModelGuidance } from "./model-guidance.js";
 
 function invalidRegistration(): never {
   throw new ToolRegistrationError("Tool registration is invalid.", {
@@ -42,11 +42,11 @@ export class ToolRegistryBuilder {
     if (!parsed.success || typeof registration.handler?.execute !== "function") {
       invalidRegistration();
     }
-    const definition = cloneToolDefinition(parsed.data);
-    if (this.names.has(definition.name)) {
-      throw new ToolRegistrationError(`Tool "${definition.name}" is already registered.`, {
+    const parsedDefinition = parsed.data;
+    if (this.names.has(parsedDefinition.name)) {
+      throw new ToolRegistrationError(`Tool "${parsedDefinition.name}" is already registered.`, {
         reason: "DUPLICATE_TOOL_NAME",
-        toolName: definition.name,
+        toolName: parsedDefinition.name,
       });
     }
     if (this.registrations.length >= this.options.maxTools) {
@@ -54,27 +54,36 @@ export class ToolRegistryBuilder {
         reason: "TOOL_LIMIT_EXCEEDED",
       });
     }
-    this.names.add(definition.name);
     let modelGuidance: ToolRegistration["modelGuidance"];
     if (registration.modelGuidance !== undefined) {
       try {
-        modelGuidance = normalizeToolModelGuidance(registration.modelGuidance, definition.name);
+        modelGuidance = normalizeToolModelGuidance(
+          registration.modelGuidance,
+          parsedDefinition.name,
+        );
       } catch {
         throw new ToolRegistrationError("Tool model guidance is invalid.", {
           reason: "INVALID_MODEL_GUIDANCE",
-          toolName: definition.name,
+          toolName: parsedDefinition.name,
         });
       }
     }
+    const definition = cloneToolDefinition({
+      ...parsedDefinition,
+      ...(modelGuidance === undefined
+        ? {}
+        : { description: appendToolModelGuidance(parsedDefinition.description, modelGuidance) }),
+    });
+    this.names.add(definition.name);
     this.registrations.push({
       definition,
       handler: registration.handler,
       ...(registration.effectProjector === undefined
-          ? {}
-          : { effectProjector: registration.effectProjector }),
-        ...(registration.securityFactsProjector === undefined
-          ? {}
-          : { securityFactsProjector: registration.securityFactsProjector }),
+        ? {}
+        : { effectProjector: registration.effectProjector }),
+      ...(registration.securityFactsProjector === undefined
+        ? {}
+        : { securityFactsProjector: registration.securityFactsProjector }),
       ...(modelGuidance === undefined ? {} : { modelGuidance }),
     });
     return this;

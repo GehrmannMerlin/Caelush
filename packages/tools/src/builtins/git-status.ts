@@ -12,12 +12,18 @@ import { createBuiltinToolModelGuidance } from "../model-guidance.js";
 
 const definition: ToolDefinition = {
   name: "git_status",
-  description: "Reads bounded Git status for the active workspace without changing the repository.",
+  description: "Git.",
   inputSchema: {
     type: "object",
     properties: {
       path: { type: "string", minLength: 1, description: "Workspace-relative pathspec." },
-      limit: { type: "integer", minimum: 1, maximum: GIT_STATUS_MAX_LIMIT },
+      limit: {
+        type: "integer",
+        minimum: 1,
+        maximum: GIT_STATUS_MAX_LIMIT,
+        default: GIT_STATUS_DEFAULT_LIMIT,
+        description: `Maximum number of status entries; defaults to ${GIT_STATUS_DEFAULT_LIMIT}.`,
+      },
     },
     additionalProperties: false,
   },

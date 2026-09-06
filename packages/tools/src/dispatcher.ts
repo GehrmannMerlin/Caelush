@@ -71,6 +71,9 @@ import { toolEffectsToEvents, type ToolEffect } from "./tool-effects.js";
 import { ToolSecurityFactsProjectionError, type ToolSecurityFacts } from "./security-facts.js";
 import type { ToolExecutionResult } from "./execution-result.js";
 import type { ToolResultSanitizerPort } from "./result-sanitizer.js";
+import { ToolPreflight, type ToolPreflightResult } from "./preflight.js";
+import { ToolFailureMemory } from "./tool-failure-memory.js";
+import type { ToolCallingDebugEvent, ToolCallingDebugPort } from "./debug.js";
 
 export interface ToolBudgetBatchPreflight {
   readonly runId: ToolDispatchRequest["runId"];
@@ -92,6 +95,8 @@ export interface ToolDispatcherOptions {
   readonly approvalStore?: ToolApprovalStorePort;
   readonly approvalIdFactory?: ToolApprovalRequestIdFactory;
   readonly budget?: ToolBudgetAdmissionPort;
+  readonly debug?: ToolCallingDebugPort;
+  readonly failureMemory?: ToolFailureMemory;
   readonly outputPolicy?: ToolOutputPolicy;
   /** Durable store for the complete pre-projection Tool output. */
   readonly rawOutputStore?: {
@@ -121,13 +126,21 @@ const OUTPUT_CONTENT = "Tool execution failed because its output violated the re
 const UNCERTAIN_CONTENT =
   "Tool execution side effects could not be verified safely. Do not automatically repeat the operation.";
 const APPROVAL_REJECTED_CONTENT = "Tool execution was not approved by the user.";
+const FAILURE_MEMORY_CONTENT =
+  "This Tool call was blocked because the same Tool input recently failed. Change the arguments or choose another Tool.";
 
 export class ToolDispatcher {
   private readonly activeCalls = new Set<string>();
   private readonly outputPolicy: ToolOutputPolicy;
+  private readonly preflight: ToolPreflight;
+  private readonly failureMemory: ToolFailureMemory;
 
   constructor(private readonly options: ToolDispatcherOptions) {
     this.outputPolicy = options.outputPolicy ?? DEFAULT_TOOL_OUTPUT_POLICY;
+    this.preflight = new ToolPreflight(options.registry, {
+      maxInvocationArgsBytes: options.maxInvocationArgsBytes ?? DEFAULT_MAX_INVOCATION_ARGS_BYTES,
+    });
+    this.failureMemory = options.failureMemory ?? new ToolFailureMemory();
   }
 
   modelDefinitions(): readonly import("@caelush/protocol").ToolDefinition[] {
@@ -139,15 +152,7 @@ export class ToolDispatcher {
   ): Promise<import("./dispatcher-ports.js").ToolBudgetAdmission | undefined> {
     if (this.options.budget?.admitBatch === undefined) return undefined;
     const executable = input.requests.filter((request) => {
-      const resolved = this.options.registry.resolve(request.toolName);
-      if (resolved === undefined) return false;
-      if (
-        jsonUtf8ByteLength(canonicalJsonString(request.args)) >
-        (this.options.maxInvocationArgsBytes ?? DEFAULT_MAX_INVOCATION_ARGS_BYTES)
-      ) {
-        return false;
-      }
-      return resolved.inputValidator.validate(request.args).valid;
+      return this.preflight.prepare(request.toolName, request.args).kind === "READY";
     });
     return this.options.budget.admitBatch({
       runId: input.runId,
@@ -160,15 +165,18 @@ export class ToolDispatcher {
       maxExternalCallIdBytes:
         this.options.maxExternalCallIdBytes ?? DEFAULT_MAX_EXTERNAL_CALL_ID_BYTES,
     });
+    const preflight = this.preflight.prepare(value.toolName, value.args);
+    this.emitPreflightDebug(value.toolName, value.args, preflight);
     const request = {
       ...value,
-      args: cloneJsonValue(value.args) as JsonObject,
+      args:
+        preflight.kind === "READY" ? preflight.args : (cloneJsonValue(value.args) as JsonObject),
     } satisfies ToolDispatchRequest;
     const key = callKey(request);
     this.assertCallIsNotActive(key, request.runId);
     this.activeCalls.add(key);
     try {
-      return await this.dispatchLocked(request);
+      return await this.dispatchLocked(request, preflight);
     } finally {
       this.activeCalls.delete(key);
     }
@@ -179,13 +187,18 @@ export class ToolDispatcher {
       maxExternalCallIdBytes:
         this.options.maxExternalCallIdBytes ?? DEFAULT_MAX_EXTERNAL_CALL_ID_BYTES,
     });
+    const preflight = this.preflight.prepare(value.toolName, value.args);
+    this.emitPreflightDebug(value.toolName, value.args, preflight);
     const existing = await this.options.store.findByExternalCall(
       value.runId,
       value.stepId,
       value.externalCallId,
     );
     if (existing === null) return this.dispatch(value);
-    this.assertSameCall(value, existing);
+    this.assertSameCall(
+      preflight.kind === "READY" ? { ...value, args: preflight.args } : value,
+      existing,
+    );
     return this.recover(
       existing.invocation.id,
       value.environment,
@@ -223,7 +236,10 @@ export class ToolDispatcher {
     }
   }
 
-  private async dispatchLocked(request: ToolDispatchRequest): Promise<ToolDispatcherOutcome> {
+  private async dispatchLocked(
+    request: ToolDispatchRequest,
+    preflight: ToolPreflightResult,
+  ): Promise<ToolDispatcherOutcome> {
     const existing = await this.options.store.findByExternalCall(
       request.runId,
       request.stepId,
@@ -250,24 +266,32 @@ export class ToolDispatcher {
         isError: true,
       };
     }
-    if (
-      jsonUtf8ByteLength(canonicalJsonString(request.args)) >
-      (this.options.maxInvocationArgsBytes ?? DEFAULT_MAX_INVOCATION_ARGS_BYTES)
-    ) {
+    if (preflight.kind === "INVALID_ARGUMENTS") {
       return this.persistArgumentFailure(
         request,
         resolvedTool,
-        "Tool arguments exceed their byte budget.",
+        preflight.error.message,
+        preflight.error.issues,
       );
     }
-    const validation = resolvedTool.inputValidator.validate(request.args);
-    if (!validation.valid) {
-      return this.persistArgumentFailure(
-        request,
-        resolvedTool,
-        "Tool arguments failed validation.",
-        validation.issues,
-      );
+    if (
+      this.failureMemory.has({
+        runId: request.runId,
+        toolName: request.toolName,
+        args: request.args,
+        failureCode: "TOOL_EXECUTION_ERROR",
+        now: this.options.clock.now(),
+      })
+    ) {
+      this.emitToolDebug({
+        phase: "PREFLIGHT",
+        toolName: request.toolName,
+        args: request.args,
+        validation: "PASS",
+        normalization: "UNCHANGED",
+        preflight: "FAILURE_MEMORY_BLOCKED",
+      });
+      return this.persistFailureMemoryBlock(request, resolvedTool);
     }
     const createdAt = this.options.clock.now();
     const invocation = createRequestedToolInvocation({
@@ -359,6 +383,15 @@ export class ToolDispatcher {
         cause: error,
       });
     }
+    this.emitToolDebug({
+      phase: "GATE",
+      toolName: resolvedTool.definition.name,
+      args: snapshot.invocation.args,
+      validation: "PASS",
+      normalization: "UNCHANGED",
+      preflight: "READY",
+      gate: decision.kind,
+    });
     if (decision.kind === "REQUIRE_APPROVAL") {
       if (
         this.options.approvalStore === undefined ||
@@ -474,6 +507,15 @@ export class ToolDispatcher {
               startedAt: running.startedAt ?? running.createdAt,
             },
           }),
+    });
+    this.emitToolDebug({
+      phase: "EXECUTION",
+      toolName: resolvedTool.definition.name,
+      args: running.args,
+      validation: "PASS",
+      normalization: "UNCHANGED",
+      preflight: "READY",
+      execution: "STARTED",
     });
     await this.options.budget?.start?.({
       runId: request.runId,
@@ -780,6 +822,24 @@ export class ToolDispatcher {
     if (committed.snapshot.observation === undefined) {
       throw new ToolDispatcherInvariantError("Tool settlement committed without an observation.");
     }
+    if (result.isError) {
+      this.failureMemory.record({
+        runId: request.runId,
+        toolName: resolvedTool.definition.name,
+        args: snapshot.invocation.args,
+        failureCode: "TOOL_EXECUTION_ERROR",
+        now: finishedAt,
+      });
+    }
+    this.emitToolDebug({
+      phase: "EXECUTION",
+      toolName: resolvedTool.definition.name,
+      args: snapshot.invocation.args,
+      validation: "PASS",
+      normalization: "UNCHANGED",
+      preflight: "READY",
+      execution: result.isError ? "MODEL_ERROR" : "COMPLETED",
+    });
     await this.options.budget?.settle?.({
       runId: request.runId,
       invocationId: snapshot.invocation.id,
@@ -803,6 +863,55 @@ export class ToolDispatcher {
         return { resourceAccesses: [], secretScanInputs: [], opaqueInput: true };
       }
       return { resourceAccesses: [], secretScanInputs: [], opaqueInput: true };
+    }
+  }
+
+  private emitPreflightDebug(
+    toolName: ToolDispatchRequest["toolName"],
+    rawArgs: JsonObject,
+    preflight: ToolPreflightResult,
+  ): void {
+    this.emitToolDebug({
+      phase: "PREFLIGHT",
+      toolName,
+      args: rawArgs,
+      validation: preflight.kind === "READY" ? "PASS" : "FAIL",
+      normalization:
+        preflight.kind !== "READY"
+          ? "NOT_APPLIED"
+          : canonicalJsonString(rawArgs) === canonicalJsonString(preflight.args)
+            ? "UNCHANGED"
+            : "SAFE_NUMERIC_CONVERSION",
+      preflight: preflight.kind,
+    });
+  }
+
+  private emitToolDebug(input: {
+    readonly phase: ToolCallingDebugEvent["phase"];
+    readonly toolName: ToolCallingDebugEvent["toolName"];
+    readonly args: JsonObject;
+    readonly validation: ToolCallingDebugEvent["validation"];
+    readonly normalization: ToolCallingDebugEvent["normalization"];
+    readonly preflight: ToolCallingDebugEvent["preflight"];
+    readonly gate?: ToolCallingDebugEvent["gate"];
+    readonly execution?: ToolCallingDebugEvent["execution"];
+  }): void {
+    if (this.options.debug === undefined) return;
+    const event: ToolCallingDebugEvent = Object.freeze({
+      phase: input.phase,
+      toolName: input.toolName,
+      argumentKeys: Object.freeze(Object.keys(input.args).sort()),
+      argumentBytes: jsonUtf8ByteLength(canonicalJsonString(input.args)),
+      validation: input.validation,
+      normalization: input.normalization,
+      preflight: input.preflight,
+      ...(input.gate === undefined ? {} : { gate: input.gate }),
+      ...(input.execution === undefined ? {} : { execution: input.execution }),
+    });
+    try {
+      this.options.debug.emit(event);
+    } catch {
+      // Diagnostics are strictly best effort and must never alter execution semantics.
     }
   }
 
@@ -848,7 +957,7 @@ export class ToolDispatcher {
       stepId: failed.stepId,
       toolInvocationId: failed.id,
       content: boundToolModelContent(
-        `Invalid arguments for tool "${request.toolName}". ${ARGUMENT_ERROR_CONTENT} ${reason}`,
+        formatArgumentFailureContent(request.toolName, reason),
         this.outputPolicy,
       ),
       details: {},
@@ -887,6 +996,45 @@ export class ToolDispatcher {
       invocation: committed.snapshot.invocation,
       observation: committed.snapshot.observation,
     };
+  }
+
+  private async persistFailureMemoryBlock(
+    request: ToolDispatchRequest,
+    resolvedTool: ResolvedTool,
+  ): Promise<ToolDispatcherOutcome> {
+    const createdAt = this.options.clock.now();
+    const invocation = createRequestedToolInvocation({
+      id: this.options.invocationIdFactory.create(),
+      runId: request.runId,
+      stepId: request.stepId,
+      toolName: request.toolName,
+      externalCallId: request.externalCallId,
+      args: request.args,
+      riskLevel: resolvedTool.definition.riskLevel,
+      createdAt,
+    });
+    const requestedEvent = createToolRequestedEvent({
+      eventId: this.options.eventIdFactory.create(),
+      sessionId: request.sessionId,
+      timestamp: createdAt,
+      invocation,
+      presentation: this.options.presentation,
+    });
+    const requested = await this.commitAndNotify({
+      sessionId: request.sessionId,
+      invocation,
+      expectedRevision: null,
+      events: [requestedEvent],
+    });
+    return this.persistFailure(
+      request.sessionId,
+      requested.snapshot,
+      "TOOL_EXECUTION_ERROR",
+      "TOOL",
+      FAILURE_MEMORY_CONTENT,
+      {},
+      { blockedBy: "TOOL_FAILURE_MEMORY" },
+    );
   }
 
   private async persistFailure(
@@ -1014,4 +1162,11 @@ function callKey(
   request: Pick<ToolDispatchRequest, "runId" | "stepId" | "externalCallId">,
 ): string {
   return `${request.runId}:${request.stepId}:${request.externalCallId}`;
+}
+
+function formatArgumentFailureContent(toolName: string, reason: string): string {
+  if (reason.startsWith(`Tool ${toolName} failed validation:`)) {
+    return `${reason} ${ARGUMENT_ERROR_CONTENT}`;
+  }
+  return `Invalid arguments for tool "${toolName}". ${ARGUMENT_ERROR_CONTENT} ${reason}`;
 }

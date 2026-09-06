@@ -21,13 +21,24 @@ import { createBuiltinToolModelGuidance } from "../model-guidance.js";
 
 const definition: ToolDefinition = {
   name: "find_files",
-  description: "Finds files by a workspace-relative glob pattern.",
+  description: "Find workspace files.",
   inputSchema: {
     type: "object",
     properties: {
       pattern: { type: "string", minLength: 1, description: "Glob pattern for file discovery." },
-      path: { type: "string", minLength: 1, description: "Workspace-relative search directory." },
-      limit: { type: "integer", minimum: 1, description: "Maximum number of returned files." },
+      path: {
+        type: "string",
+        minLength: 1,
+        default: ".",
+        description: "Workspace-relative search directory; defaults to the workspace root '.'.",
+      },
+      limit: {
+        type: "integer",
+        minimum: 1,
+        maximum: FIND_FILES_MAX_LIMIT,
+        default: FIND_FILES_DEFAULT_LIMIT,
+        description: `Maximum number of returned files; defaults to ${FIND_FILES_DEFAULT_LIMIT}.`,
+      },
     },
     required: ["pattern"],
     additionalProperties: false,

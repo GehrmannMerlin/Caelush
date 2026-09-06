@@ -26,6 +26,8 @@ import {
   type ToolSecurityFacts,
   type ToolResultSanitizerPort,
   type ToolBudgetAdmissionPort,
+  ToolFailureMemory,
+  type ToolCallingDebugPort,
 } from "../src/index.js";
 import type { ToolExecutionCommit, ToolDispatchRequest } from "../src/index.js";
 
@@ -53,13 +55,19 @@ function makeDefinition() {
     description: "Echo a value.",
     inputSchema: {
       type: "object",
-      properties: { value: { type: "string" } },
+      properties: {
+        value: { type: "string" },
+        yield_time_ms: { type: "integer", minimum: 250, maximum: 30000 },
+      },
       required: ["value"],
       additionalProperties: false,
     },
     outputSchema: {
       type: "object",
-      properties: { echoed: { type: "string" } },
+      properties: {
+        echoed: { type: "string" },
+        error: { type: "string" },
+      },
       required: ["echoed"],
       additionalProperties: false,
     },
@@ -134,6 +142,8 @@ function makeDispatcher(
       readonly createdAt: number;
     }): Promise<{ readonly artifactId: string }>;
   },
+  failureMemory?: ToolFailureMemory,
+  debug?: ToolCallingDebugPort,
 ) {
   let now = 100;
   const definition = makeDefinition();
@@ -169,6 +179,8 @@ function makeDispatcher(
     resultSanitizer: resultSanitizer ?? { sanitize: ({ result }) => result },
     ...(budget === undefined ? {} : { budget }),
     ...(rawOutputStore === undefined ? {} : { rawOutputStore }),
+    ...(failureMemory === undefined ? {} : { failureMemory }),
+    ...(debug === undefined ? {} : { debug }),
   });
 }
 
@@ -452,7 +464,7 @@ describe("ToolDispatcher execution", () => {
     const store = new MemoryStore();
     const dispatcher = makeDispatcher(store, { kind: "ALLOW" }, async () => ({
       content: "Requested value was not found.",
-      details: { echoed: "not-found" },
+      details: { echoed: "not-found", error: "COMMAND_FAILED" },
       isError: true,
     }));
 
@@ -464,6 +476,85 @@ describe("ToolDispatcher execution", () => {
     expect(outcome.invocation.error?.code).toBe("TOOL_EXECUTION_ERROR");
     expect(outcome.observation.isError).toBe(true);
     expect(outcome.observation.content).toBe("Requested value was not found.");
+  });
+
+  it("blocks an identical retry after a model-recoverable Tool failure", async () => {
+    const store = new MemoryStore();
+    const failureMemory = new ToolFailureMemory({ ttlMs: 10_000 });
+    let handlerCount = 0;
+    const dispatcher = makeDispatcher(
+      store,
+      { kind: "ALLOW" },
+      async () => {
+        handlerCount += 1;
+        return {
+          content: "Requested value was not found.",
+          details: { echoed: "not-found", error: "COMMAND_FAILED" },
+          isError: true,
+        };
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      failureMemory,
+    );
+    const request = makeRequest();
+
+    const first = await dispatcher.dispatch(request);
+    const second = await dispatcher.dispatch({ ...request, externalCallId: "call-2" });
+
+    expect(first.kind).toBe("RESULT");
+    expect(second.kind).toBe("RESULT");
+    if (second.kind !== "RESULT") throw new Error("expected result");
+    expect(handlerCount).toBe(1);
+    expect(second.observation.isError).toBe(true);
+    expect(second.observation.content).toContain("blocked");
+    expect(second.observation.content).not.toContain("npm test");
+    expect(store.events.map((event) => event.type)).toEqual([
+      "tool.requested",
+      "tool.started",
+      "tool.failed",
+      "tool.requested",
+      "tool.failed",
+    ]);
+  });
+
+  it("emits safe Tool-calling debug events without argument values", async () => {
+    const store = new MemoryStore();
+    const debugEvents: unknown[] = [];
+    const debug: ToolCallingDebugPort = {
+      emit: (event) => debugEvents.push(event),
+    };
+    const dispatcher = makeDispatcher(
+      store,
+      { kind: "ALLOW" },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      debug,
+    );
+
+    await dispatcher.dispatch({
+      ...makeRequest(),
+      args: { value: "CAELUSH_DEBUG_SECRET_91" },
+    });
+
+    expect(debugEvents).toHaveLength(4);
+    expect(JSON.stringify(debugEvents)).not.toContain("CAELUSH_DEBUG_SECRET_91");
+    expect(debugEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ phase: "PREFLIGHT", validation: "PASS" }),
+        expect.objectContaining({ phase: "GATE", gate: "ALLOW" }),
+        expect.objectContaining({ phase: "EXECUTION", execution: "STARTED" }),
+        expect.objectContaining({ phase: "EXECUTION", execution: "COMPLETED" }),
+      ]),
+    );
   });
 
   it("persists invalid input as a failed invocation without calling the handler", async () => {
@@ -482,6 +573,26 @@ describe("ToolDispatcher execution", () => {
     expect(outcome.invocation.status).toBe("FAILED");
     expect(outcome.invocation.error?.code).toBe("TOOL_ARGUMENT_ERROR");
     expect(store.events.map((event) => event.type)).toEqual(["tool.requested", "tool.failed"]);
+  });
+
+  it("normalizes safe numeric strings before the handler and durable invocation", async () => {
+    const store = new MemoryStore();
+    let handlerArgs: ToolExecutionRequest["args"] | undefined;
+    const dispatcher = makeDispatcher(store, { kind: "ALLOW" }, async (request) => {
+      handlerArgs = request.args;
+      return { content: "hello", details: { echoed: "hello" }, isError: false };
+    });
+
+    const outcome = await dispatcher.dispatch({
+      ...makeRequest(),
+      args: { value: "hello", yield_time_ms: "3000" },
+    });
+
+    expect(outcome.kind).toBe("RESULT");
+    if (outcome.kind !== "RESULT") throw new Error("expected result");
+    expect(handlerArgs).toEqual({ value: "hello", yield_time_ms: 3000 });
+    expect(outcome.invocation.args).toEqual({ value: "hello", yield_time_ms: 3000 });
+    expect(outcome.invocation.status).toBe("COMPLETED");
   });
 
   it("sanitizes an unexpected handler throw, settles it, and throws infrastructure failure", async () => {

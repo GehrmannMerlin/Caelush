@@ -3,6 +3,8 @@ export type { ToolExecutionEnvironment } from "./execution-environment.js";
 export { assertToolSecurityContext } from "./security-context.js";
 export type { ToolSecurityContext } from "./security-context.js";
 export type { ToolExecutionResult } from "./execution-result.js";
+export { ToolValidationError, validateToolArguments } from "./argument-validation.js";
+export type { NormalizedArguments } from "./argument-validation.js";
 export type {
   ToolInvocationPresentation,
   ToolPresentationPort,
@@ -115,6 +117,15 @@ export {
 export type { ValidatedToolExecutionResult } from "./result-validation.js";
 export { ToolDispatcher } from "./dispatcher.js";
 export type { ToolDispatcherOptions } from "./dispatcher.js";
+export { ToolPreflight } from "./preflight.js";
+export type { ToolPreflightOptions, ToolPreflightResult } from "./preflight.js";
+export { ToolFailureMemory } from "./tool-failure-memory.js";
+export type {
+  ToolFailureMemoryEntry,
+  ToolFailureMemoryInput,
+  ToolFailureMemoryOptions,
+} from "./tool-failure-memory.js";
+export type { ToolCallingDebugEvent, ToolCallingDebugPort } from "./debug.js";
 export { ToolBatchCoordinator } from "./batch-coordinator.js";
 export {
   canonicalJsonString,

@@ -16,7 +16,7 @@ import { createBuiltinToolModelGuidance } from "../model-guidance.js";
 
 const definition: ToolDefinition = {
   name: "list_directory",
-  description: "Lists immediate children of a workspace-relative directory (non-recursive).",
+  description: "List dir.",
   inputSchema: {
     type: "object",
     properties: {
@@ -25,8 +25,19 @@ const definition: ToolDefinition = {
         minLength: 1,
         description: "Workspace-relative directory path; use '.' for the workspace root.",
       },
-      offset: { type: "integer", minimum: 1, description: "1-indexed first entry to return." },
-      limit: { type: "integer", minimum: 1, description: "Maximum number of returned entries." },
+      offset: {
+        type: "integer",
+        minimum: 1,
+        default: 1,
+        description: "1-indexed first entry to return; defaults to 1.",
+      },
+      limit: {
+        type: "integer",
+        minimum: 1,
+        maximum: LIST_DIRECTORY_MAX_LIMIT,
+        default: LIST_DIRECTORY_DEFAULT_LIMIT,
+        description: `Maximum number of returned entries; defaults to ${LIST_DIRECTORY_DEFAULT_LIMIT}.`,
+      },
     },
     required: ["path"],
     additionalProperties: false,

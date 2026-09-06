@@ -10,8 +10,7 @@ import { createBuiltinToolModelGuidance } from "../model-guidance.js";
 
 const definition: ToolDefinition = {
   name: "apply_patch",
-  description:
-    "Applies a structured patch to UTF-8 text files inside the active workspace. Supports adding, updating, deleting, and moving files. Existing files change only when patch context and pre-commit file guards match.",
+  description: "Apply workspace patch.",
   inputSchema: {
     type: "object",
     properties: {

@@ -6,6 +6,8 @@ export interface ToolModelGuidance {
   readonly whenToUse: string;
   readonly whenNotToUse: string;
   readonly argumentNotes: string;
+  readonly sideEffects: string;
+  readonly safety: string;
   readonly resultHandling: string;
 }
 
@@ -13,67 +15,85 @@ const MAX_GUIDANCE_FIELD_BYTES = 2048;
 
 const GUIDANCE_BY_TOOL: Readonly<Record<string, Omit<ToolModelGuidance, "toolName">>> = {
   read_file: {
-    purpose: "Read bounded UTF-8 text from one workspace file.",
-    whenToUse: "Use when the exact file contents or line range is needed as evidence.",
-    whenNotToUse: "Do not use for directories, binary files, or paths outside the workspace.",
-    argumentNotes: "Use a workspace-relative path; paginate with offset and limit when needed.",
-    resultHandling: "Treat returned lines and truncation metadata as observations; do not invent omitted text.",
+    purpose: "Read bounded UTF-8 text.",
+    whenToUse: "Known text file contents.",
+    whenNotToUse: "Dirs/binary/outside paths.",
+    argumentNotes: "Relative path; paginate.",
+    sideEffects: "Read-only.",
+    safety: "Workspace/UTF-8/size limits.",
+    resultHandling: "Lines + truncation.",
   },
   list_directory: {
-    purpose: "List immediate children of one workspace directory.",
-    whenToUse: "Use to establish directory structure before selecting files or tools.",
-    whenNotToUse: "Do not use for recursive discovery or file contents.",
-    argumentNotes: "Use path '.' for the workspace root and paginate large directories.",
-    resultHandling: "Use names and kinds as observed; follow up with read_file or find_files when necessary.",
+    purpose: "List directory children.",
+    whenToUse: "Directory structure.",
+    whenNotToUse: "Recursive discovery or contents.",
+    argumentNotes: "Relative path; '.' is root.",
+    sideEffects: "Read-only.",
+    safety: "Workspace containment applies.",
+    resultHandling: "Names/kinds; read as needed.",
   },
   find_files: {
-    purpose: "Find workspace files using a bounded glob pattern.",
-    whenToUse: "Use when the target file path is unknown or recursive discovery is needed.",
-    whenNotToUse: "Do not use to inspect file contents or to search outside the workspace.",
-    argumentNotes: "Use a workspace-relative search path and a narrow glob pattern.",
-    resultHandling: "Respect truncation and continue with narrower searches when results are incomplete.",
+    purpose: "Find files by glob.",
+    whenToUse: "Unknown paths or recursion.",
+    whenNotToUse: "Contents or outside workspace.",
+    argumentNotes: "Relative path; narrow pattern.",
+    sideEffects: "Read-only.",
+    safety: "Symlinks stay inside boundary.",
+    resultHandling: "Check truncation.",
   },
   search_text: {
-    purpose: "Search UTF-8 workspace text with a bounded regular expression.",
-    whenToUse: "Use to locate symbols, references, or exact text before editing or reporting.",
-    whenNotToUse: "Do not treat a search result as complete when it is truncated.",
-    argumentNotes: "Use a narrow pattern and optional include glob; paths are workspace-relative.",
-    resultHandling: "Cite observed path and line matches; read the relevant file before making a change claim.",
+    purpose: "Search workspace text.",
+    whenToUse: "Symbols or exact text.",
+    whenNotToUse: "Listing or broad scans.",
+    argumentNotes: "Narrow regex; relative path.",
+    sideEffects: "Read-only search.",
+    safety: "Bad patterns are recoverable.",
+    resultHandling: "Matches/truncation.",
   },
   apply_patch: {
-    purpose: "Apply a verified bounded patch to workspace text files.",
-    whenToUse: "Use only when a requested mutation is supported by inspected context.",
-    whenNotToUse: "Do not use for exploratory reads, unrelated cleanup, or guessed context.",
-    argumentNotes: "Send one complete patch document with exact context and workspace-relative paths.",
-    resultHandling: "Confirm the patch result and re-read affected files before claiming success.",
+    purpose: "Apply verified patch.",
+    whenToUse: "Requested inspected changes.",
+    whenNotToUse: "Reads/guesses.",
+    argumentNotes: "One exact patch document.",
+    sideEffects: "Mutates files after guards.",
+    safety: "Gate/approval may apply.",
+    resultHandling: "Re-read files/diff.",
   },
   exec_command: {
-    purpose: "Run a bounded local command in the workspace.",
-    whenToUse: "Use for an explicit project check or operation that cannot be done with a native tool.",
-    whenNotToUse: "Do not use arbitrary commands when a native filesystem or Git tool is sufficient.",
-    argumentNotes: "Use explicit command text and a workspace-relative workdir; never request arbitrary environment or timeout settings.",
-    resultHandling: "Inspect exit status and bounded output; a non-zero exit is evidence of failure, not a reason to hide it.",
+    purpose: "Run command.",
+    whenToUse: "Tests/builds/installs/services.",
+    whenNotToUse: "Read/list/search.",
+    argumentNotes: "cmd and relative workdir.",
+    sideEffects: "process/state/network.",
+    safety: "Gate/approval for risk.",
+    resultHandling: "Output + exit status.",
   },
   write_stdin: {
-    purpose: "Send input to or poll a managed local process session.",
-    whenToUse: "Use only with a session_id returned by exec_command in the same run.",
-    whenNotToUse: "Do not guess session IDs or use it as a substitute for starting a command.",
-    argumentNotes: "Preserve the opaque session_id and send only the required characters or an empty poll.",
-    resultHandling: "Use status, exit code, and bounded output to decide whether the process is complete.",
+    purpose: "Write or poll process.",
+    whenToUse: "Continue an exec session.",
+    whenNotToUse: "Start commands or guess sessions.",
+    argumentNotes: "Owned session_id; chars or poll.",
+    sideEffects: "May write stdin.",
+    safety: "Same-Run session ownership.",
+    resultHandling: "Status + exit.",
   },
   git_status: {
-    purpose: "Read bounded Git working-tree status.",
-    whenToUse: "Use to establish repository state before or after a requested change.",
-    whenNotToUse: "Do not use as proof that a non-Git workspace is clean.",
-    argumentNotes: "Omit path for the workspace root or use a workspace-relative pathspec.",
-    resultHandling: "Treat clean, branch, and entries as observations; report a non-Git error explicitly.",
+    purpose: "Read Git status.",
+    whenToUse: "Repo state before/after changes.",
+    whenNotToUse: "Non-Git clean claims or mutations.",
+    argumentNotes: "Relative pathspec; omit for root.",
+    sideEffects: "Read-only.",
+    safety: "Runtime determines Git availability.",
+    resultHandling: "Clean/branch/entries.",
   },
   git_diff: {
-    purpose: "Read a bounded, read-only Git diff.",
-    whenToUse: "Use to inspect the actual change set before reporting or verifying a mutation.",
-    whenNotToUse: "Do not use to apply changes or to infer content when the diff is truncated.",
-    argumentNotes: "Choose WORKTREE, STAGED, or ALL and optionally provide a workspace-relative pathspec.",
-    resultHandling: "Review the diff and truncation metadata; pair it with file reads for exact evidence.",
+    purpose: "Read bounded Git diff.",
+    whenToUse: "Review changes before reporting.",
+    whenNotToUse: "Apply changes or trust truncation.",
+    argumentNotes: "Scope WORKTREE/STAGED/ALL; path?",
+    sideEffects: "Read-only.",
+    safety: "Review truncation.",
+    resultHandling: "Pair diff with exact file reads.",
   },
 };
 
@@ -91,6 +111,19 @@ export function cloneToolModelGuidance(guidance: ToolModelGuidance): ToolModelGu
   return freezeGuidance({ ...guidance });
 }
 
+export function appendToolModelGuidance(description: string, guidance: ToolModelGuidance): string {
+  return [
+    description,
+    `Purpose: ${guidance.purpose}`,
+    `When: ${guidance.whenToUse}`,
+    `When not: ${guidance.whenNotToUse}`,
+    `Args: ${guidance.argumentNotes}`,
+    `Side effects: ${guidance.sideEffects}`,
+    `Safety: ${guidance.safety}`,
+    `Results: ${guidance.resultHandling}`,
+  ].join(" ");
+}
+
 export function normalizeToolModelGuidance(
   guidance: ToolModelGuidance,
   expectedToolName: ToolName,
@@ -106,6 +139,8 @@ export function normalizeToolModelGuidance(
     "whenToUse",
     "whenNotToUse",
     "argumentNotes",
+    "sideEffects",
+    "safety",
     "resultHandling",
   ] as const) {
     const value = guidance[field];

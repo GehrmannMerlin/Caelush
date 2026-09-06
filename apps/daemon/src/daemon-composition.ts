@@ -63,6 +63,7 @@ import {
   filterToolRegistryForEnvironment,
   ToolBatchCoordinator,
   ToolRegistryBuilder,
+  type ToolCallingDebugEvent,
   type ToolExposureEnvironment,
 } from "@caelush/tools";
 import {
@@ -92,6 +93,8 @@ export const DEFAULT_CORE_AGENT_POLICY = [
   "Use the active workspace as the only path root; use '.' when referring to its root.",
   "Inspect relevant files and gather evidence before making claims or changes.",
   "Use the native tool that matches the task; do not use mutation tools for read-only work.",
+  "Tool selection: use list_directory for immediate children, find_files for unknown paths, search_text for content search, read_file for known text files, git_status and git_diff for Git evidence, apply_patch for requested file changes, exec_command for tests/build/install/service commands, and write_stdin only for a session returned by exec_command.",
+  "Do not use exec_command to read files, list directories, or search code when a native Tool is sufficient.",
   "Treat Tool errors as observations: correct recoverable inputs, avoid repeating an unchanged failure, and do not call an inapplicable tool.",
   "After a mutation, inspect the resulting files and relevant diff before claiming success.",
   "Stop when the requested evidence is sufficient; report blockers and uncertainty plainly.",
@@ -146,6 +149,8 @@ export interface DaemonCompositionOptions {
   readonly logger?: RunExecutionSupervisorLogger;
   readonly configResolver?: RunExecutionConfigResolver;
   readonly wireDiagnosticWriter?: (event: import("@caelush/llm").LLMWireDiagnosticEvent) => void;
+  /** Safe Tool-calling diagnostics; the writer receives no raw arguments or output. */
+  readonly toolCallingDebugWriter?: (event: ToolCallingDebugEvent) => void;
 }
 
 export interface DaemonComposition {
@@ -277,6 +282,9 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     rawOutputStore: options.storage.contextArtifacts,
     terminalOutputSanitizer: sanitizeTerminalOutput,
     securityToolNames: activeToolRegistry.names(),
+    ...(options.toolCallingDebugWriter === undefined
+      ? {}
+      : { debug: { emit: options.toolCallingDebugWriter } }),
   });
   const toolCoordinator = new ToolBatchCoordinator(dispatcher);
   const scopes = new RunExecutionScopeRegistry();

@@ -2,6 +2,7 @@ import { EventBus } from "@caelush/events";
 import type { LLMProvider } from "@caelush/llm";
 import type { ClientModelSelection } from "@caelush/protocol";
 import { openCaelushStorage } from "@caelush/storage";
+import type { ToolCallingDebugEvent } from "@caelush/tools";
 import { buildDaemonApp } from "./app.js";
 import { assertLoopbackDaemonHost, createDaemonConfig, type DaemonConfig } from "./config.js";
 import { composeDaemon, type DaemonComposition } from "./daemon-composition.js";
@@ -52,6 +53,9 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         ? {}
         : { providerOverrides: options.providerOverrides }),
       ...(options.logger === true ? { logger: safeSupervisorLogger } : {}),
+      ...(process.env.CAELUSH_DEBUG_TOOL_CALLING === "1"
+        ? { toolCallingDebugWriter: writeToolCallingDebugEvent }
+        : {}),
     });
   } catch (error) {
     await storage.close().catch(() => undefined);
@@ -109,6 +113,10 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       return closePromise;
     },
   };
+}
+
+function writeToolCallingDebugEvent(event: ToolCallingDebugEvent): void {
+  console.error("[caelush:tool-calling]", JSON.stringify(event));
 }
 
 const safeSupervisorLogger = {

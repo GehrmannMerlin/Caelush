@@ -22,7 +22,7 @@ import { createBuiltinToolModelGuidance } from "../model-guidance.js";
 
 const definition: ToolDefinition = {
   name: "search_text",
-  description: "Searches workspace text with a ripgrep-compatible regular expression.",
+  description: "Search workspace text.",
   inputSchema: {
     type: "object",
     properties: {
@@ -31,9 +31,20 @@ const definition: ToolDefinition = {
         minLength: 1,
         description: "Ripgrep-compatible regular expression.",
       },
-      path: { type: "string", minLength: 1, description: "Workspace-relative search directory." },
+      path: {
+        type: "string",
+        minLength: 1,
+        default: ".",
+        description: "Workspace-relative search directory; defaults to the workspace root '.'.",
+      },
       include: { type: "string", minLength: 1, description: "Optional file glob to include." },
-      limit: { type: "integer", minimum: 1, description: "Maximum number of returned matches." },
+      limit: {
+        type: "integer",
+        minimum: 1,
+        maximum: SEARCH_TEXT_MAX_LIMIT,
+        default: SEARCH_TEXT_DEFAULT_LIMIT,
+        description: `Maximum number of returned matches; defaults to ${SEARCH_TEXT_DEFAULT_LIMIT}.`,
+      },
     },
     required: ["pattern"],
     additionalProperties: false,

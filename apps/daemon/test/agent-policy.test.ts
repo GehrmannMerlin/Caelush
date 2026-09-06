@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_BASE_SYSTEM_PROMPT, DEFAULT_CORE_AGENT_POLICY } from "../src/daemon-composition.js";
+import {
+  DEFAULT_BASE_SYSTEM_PROMPT,
+  DEFAULT_CORE_AGENT_POLICY,
+} from "../src/daemon-composition.js";
 
 describe("default Core Agent Policy", () => {
   it("covers safe workspace navigation, evidence, tool errors, and stopping semantics", () => {
@@ -12,6 +15,9 @@ describe("default Core Agent Policy", () => {
       "avoid repeating",
       "inapplicable tool",
       "mutation tools for read-only",
+      "list_directory for immediate children",
+      "exec_command for tests",
+      "write_stdin only for a session",
       "Stop when",
       "blockers",
       "chain-of-thought",

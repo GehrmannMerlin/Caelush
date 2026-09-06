@@ -133,6 +133,115 @@ describe("OpenAI-compatible compatibility matrix", () => {
     });
   });
 
+  it("repairs a trailing comma in a complete OpenAI-compatible tool argument", async () => {
+    const gateway = createGateway(async () =>
+      sseResponse([
+        openAIChunk({
+          id: "chatcmpl-trailing-comma",
+          model: model.model,
+          delta: {
+            role: "assistant",
+            tool_calls: [
+              toolCallDelta({
+                index: 0,
+                id: "call-trailing-comma",
+                name: "read_file",
+                arguments: '{"path":"README.md",}',
+              }),
+            ],
+          },
+        }),
+        finishChunk({
+          id: "chatcmpl-trailing-comma",
+          model: model.model,
+          finishReason: "tool_calls",
+        }),
+      ]),
+    );
+
+    await expect(
+      gateway.complete({
+        model,
+        messages: [{ role: "user", content: "Read README.md." }],
+        tools: [readFileTool],
+      }),
+    ).resolves.toMatchObject({
+      toolCalls: [{ id: "call-trailing-comma", name: "read_file", input: { path: "README.md" } }],
+    });
+  });
+
+  it("does not remove a comma-like sequence inside a JSON string", async () => {
+    const gateway = createGateway(async () =>
+      sseResponse([
+        openAIChunk({
+          id: "chatcmpl-comma-in-string",
+          model: model.model,
+          delta: {
+            role: "assistant",
+            tool_calls: [
+              toolCallDelta({
+                index: 0,
+                id: "call-comma-in-string",
+                name: "read_file",
+                arguments: '{"path":"comma,}"}',
+              }),
+            ],
+          },
+        }),
+        finishChunk({
+          id: "chatcmpl-comma-in-string",
+          model: model.model,
+          finishReason: "tool_calls",
+        }),
+      ]),
+    );
+
+    await expect(
+      gateway.complete({
+        model,
+        messages: [{ role: "user", content: "Read the comma path." }],
+        tools: [readFileTool],
+      }),
+    ).resolves.toMatchObject({
+      toolCalls: [{ id: "call-comma-in-string", name: "read_file", input: { path: "comma,}" } }],
+    });
+  });
+
+  it("does not guess unquoted object keys during tool argument repair", async () => {
+    const gateway = createGateway(async () =>
+      sseResponse([
+        openAIChunk({
+          id: "chatcmpl-unquoted-key",
+          model: model.model,
+          delta: {
+            role: "assistant",
+            tool_calls: [
+              toolCallDelta({
+                index: 0,
+                id: "call-unquoted-key",
+                name: "read_file",
+                arguments: '{path:"README.md",}',
+              }),
+            ],
+          },
+        }),
+        finishChunk({
+          id: "chatcmpl-unquoted-key",
+          model: model.model,
+          finishReason: "tool_calls",
+        }),
+      ]),
+    );
+
+    await expect(
+      gateway.complete({
+        model,
+        messages: [{ role: "user", content: "Read README.md." }],
+        tools: [readFileTool],
+      }),
+    ).rejects.toMatchObject({ code: "LLM_INVALID_RESPONSE" });
+  });
+
   it("does not complete a parsable tool argument prefix", async () => {
     const gateway = createGateway(async () =>
       sseResponse([

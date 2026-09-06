@@ -2,6 +2,7 @@ import type { ToolDefinition } from "@caelush/protocol";
 import {
   RuntimeProcessStaleSessionError,
   RuntimeProcessUncertainError,
+  DEFAULT_EXEC_YIELD_TIME_MS,
   MAX_EXEC_MODEL_OUTPUT_BYTES,
   resolveInteractionYield,
   type RuntimeResolver,
@@ -17,17 +18,24 @@ import { createBuiltinToolModelGuidance } from "../model-guidance.js";
 
 const definition: ToolDefinition = {
   name: "write_stdin",
-  description:
-    "Writes characters to a managed local process session, or polls new output when chars is empty.",
+  description: "Poll process.",
   inputSchema: {
     type: "object",
     properties: {
       session_id: { type: "string", minLength: 1, description: "Opaque process session ID." },
       chars: {
         type: "string",
+        default: "",
         description: "Characters to write; omit or use empty text to poll.",
       },
-      yield_time_ms: { type: "integer", minimum: 250, maximum: 30000 },
+      yield_time_ms: {
+        type: "integer",
+        minimum: 250,
+        maximum: 30000,
+        default: DEFAULT_EXEC_YIELD_TIME_MS,
+        description:
+          "yield_time_ms is observation wait in milliseconds, not a timeout; defaults to 10000.",
+      },
     },
     required: ["session_id"],
     additionalProperties: false,

@@ -8,11 +8,16 @@ import { createBuiltinToolModelGuidance } from "../model-guidance.js";
 
 const definition: ToolDefinition = {
   name: "git_diff",
-  description: "Reads a bounded, read-only Git diff for the active workspace.",
+  description: "Git.",
   inputSchema: {
     type: "object",
     properties: {
-      scope: { type: "string", enum: ["WORKTREE", "STAGED", "ALL"] },
+      scope: {
+        type: "string",
+        enum: ["WORKTREE", "STAGED", "ALL"],
+        default: "ALL",
+        description: "Diff scope; defaults to ALL.",
+      },
       path: { type: "string", minLength: 1, description: "Workspace-relative pathspec." },
     },
     additionalProperties: false,

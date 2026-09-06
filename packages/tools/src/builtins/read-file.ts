@@ -17,13 +17,24 @@ import {
 
 const definition: ToolDefinition = {
   name: "read_file",
-  description: "Reads a UTF-8 text file inside the active workspace. Paths are workspace-relative.",
+  description: "Read workspace text.",
   inputSchema: {
     type: "object",
     properties: {
       path: { type: "string", minLength: 1, description: "Workspace-relative file path." },
-      offset: { type: "integer", minimum: 1, description: "1-indexed first line to return." },
-      limit: { type: "integer", minimum: 1, description: "Maximum number of returned lines." },
+      offset: {
+        type: "integer",
+        minimum: 1,
+        default: 1,
+        description: "1-indexed first line to return; defaults to 1.",
+      },
+      limit: {
+        type: "integer",
+        minimum: 1,
+        maximum: READ_FILE_MAX_LIMIT,
+        default: READ_FILE_DEFAULT_LIMIT,
+        description: `Maximum number of returned lines; defaults to ${READ_FILE_DEFAULT_LIMIT}.`,
+      },
     },
     required: ["path"],
     additionalProperties: false,
