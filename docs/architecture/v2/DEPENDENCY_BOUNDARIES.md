@@ -9,6 +9,22 @@ The machine-readable source of truth is
 `pnpm check:architecture`. The frozen list of pre-existing violations is
 `scripts/architecture/legacy-import-baseline.json`.
 
+Current state:
+
+```text
+rule set version        2   (Phase 1A shipped version 1; Phase 1B expanded it)
+active rules          274   derived from the allowlist, never hand-listed
+baseline entries       33   target -> legacy migration debt frozen at the
+                            Phase 1A commit 2e0befea64e303374c59dfd873188b95b0f484d4
+new violations          0
+```
+
+Phase 1B added the two guardrails this document describes but Phase 1A did not
+enforce: the compatibility direction lock (`target -> legacy` is forbidden, only
+`legacy -> target` is allowed) and the public export-surface boundary. See
+`PUBLIC_API_AND_MIGRATION_POLICY.md`, `PHASE_1B_PUBLIC_BOUNDARY_INVENTORY.md`,
+and `PHASE_1B_DEPENDENCY_AND_MIGRATION_REPORT.md`.
+
 ---
 
 ## 1. Core packages
@@ -120,33 +136,93 @@ Deep specifiers never widen a boundary. `@caelush/agent`,
 `@caelush/agent/context`, and `@caelush/agent/tools/foo` all normalize to the
 `@caelush/agent` package identity before a rule is evaluated.
 
+### 4.1 The compatibility direction lock (Phase 1B)
+
+Every cell above describes a **target -> target** or **host -> target** edge.
+Phase 1B adds the rule that protects the migration itself:
+
+```text
+@caelush/<target>  ->  @caelush/<legacy>     ❌ FORBIDDEN, permanently
+@caelush/<legacy>  ->  @caelush/<target>     ✅ allowed compatibility direction
+```
+
+The legacy packages are `llm`, `core`, `context`, `tools`, `security`,
+`verification`, `memory`, `events`, `shared`, and `observability`. A target
+package may never depend on one of them, in source or in a manifest. The formal
+rule is 70 forbidden target -> legacy edges, each enforced twice.
+
+A package may also never depend on an app. Phase 1A forbade four specific
+`-> daemon` edges; Phase 1B generalises that to 28 forbidden target -> host edges
+covering `daemon`, `cli`, `web`, and `launcher`, so the rule survives a package
+being added.
+
+The reason this is a separate rule rather than an extension of the matrix above:
+the matrix says which final package may use which final package. This rule says
+a package that has not been migrated yet cannot become a permanent second home
+for a responsibility that is supposed to move. It is what stops
+`new package -> legacy implementation` from looking like a finished migration.
+
+### 4.2 The public export surface (Phase 1B)
+
+A package may be consumed only through the subpaths its `package.json` `exports`
+map declares. Two shapes are forbidden in every project, whatever its identity:
+
+```text
+@caelush/<pkg>/src/...              ❌ PACKAGE_MUST_NOT_BE_IMPORTED_THROUGH_SRC
+@caelush/<pkg>/<undeclared>         ❌ PACKAGE_SUBPATH_MUST_BE_DECLARED_IN_EXPORTS
+../../<other-project>/src/...       ❌ PACKAGE_MUST_NOT_IMPORT_ANOTHER_PROJECT_BY_RELATIVE_PATH
+```
+
+The rule is `exports`-driven, not subpath-driven: `@caelush/llm/messages` is legal
+because `@caelush/llm` publishes `"./messages"`, and it stops being legal the day
+that entry is removed. The real source scope currently has zero such violations.
+
 ## 5. Legacy Dependency Baseline
 
-Phase 1A must install the guardrail without rewriting the running system. The
-repository therefore ships a checked-in baseline:
+Phase 1A installs the guardrail without rewriting the running system, so the
+repository ships a checked-in baseline:
 
 ```text
 scripts/architecture/legacy-import-baseline.json
 ```
 
 The baseline records every dependency edge that already violates an Architecture
-V2 rule at the moment the guardrail became active. Each entry records:
+V2 rule at the moment the rule set became active. Each entry records:
 
 ```text
-kind              source-import | package-manifest
+kind              source-import | package-manifest | private-import |
+                  cross-workspace-relative-import
+edgeClass         why the edge is illegal, e.g. target-to-legacy,
+                  target-graph, package-manifest, private-import
 sourcePackage     the violating project identity, e.g. agent
 sourcePath        the file that contains the edge (source file or package.json)
 targetPackage     the illegally referenced project identity
 rule              the violated rule id, e.g. AGENT_MUST_NOT_DEPEND_ON_RUNTIME
 specifier         the normalized dependency, e.g. @caelush/runtime
 dependencyField   the manifest section, for package-manifest entries only
+subpath           the undeclared subpath, for private-import entries only
 ```
 
 The baseline is deterministic, sorted, human-readable, and stored as one entry
 per line so review diffs stay meaningful. Line numbers, columns, occurrence
 counts, and deep subpaths are deliberately excluded from the match key: ordinary
 editing, adding a second import, or switching to a subpath must not churn the
-file.
+file. A private import additionally matches on its exact specifier, because two
+different undeclared subpaths in one file are two distinct findings.
+
+The baseline also carries auditable provenance:
+
+```text
+schemaVersion             baseline document shape
+ruleSetVersion            which rule set produced it
+baselineSourceCommit      the commit whose tree the admitted set was proven on
+generatedByRuleExpansion  whether the audited expansion produced it
+generationHistory         the rule set version transitions recorded so far
+entryCount                number of entries
+countsByRule              entries grouped by violated rule
+countsBySourcePackage     entries grouped by violating project
+entries                   the frozen violations
+```
 
 ## 6. Ratchet
 
@@ -159,20 +235,21 @@ exactly these cases:
 | A violation that is **not** listed in the baseline | `FAIL` — `NEW_VIOLATION`            |
 | A baseline entry with **no** matching violation    | `FAIL` — `STALE_BASELINE_ENTRY`     |
 | A duplicated baseline entry                        | `FAIL` — duplicate baseline entries |
+| A baseline from a different rule set version       | `FAIL` — rule set version mismatch  |
 
 The consequence is that the baseline can only shrink:
 
 ```text
-Phase 1A        current violations == frozen baseline
-AI migration    baseline shrinks
-Agent migration baseline shrinks further
+Phase 1A  rule set 1   baseline 0    (no rule covered target -> legacy yet)
+Phase 1B  rule set 2   baseline 33   (coverage expanded; the debt is frozen)
+AI migration           baseline shrinks
+Agent migration        baseline shrinks further
 coding-agent migration baseline shrinks further
-cleanup         baseline reaches zero
+cleanup                baseline reaches zero
 ```
 
 `pnpm check:architecture` passes when there is **no new violation and no stale
-baseline entry**. It does not require the number of legacy violations to be
-zero.
+baseline entry**. It does not require the number of legacy violations to be zero.
 
 The baseline may only be regenerated explicitly:
 
@@ -181,10 +258,35 @@ node scripts/architecture/check-boundaries.mjs --write-baseline
 ```
 
 This command is never part of `pnpm check`, never runs automatically, and is
-refused in CI whenever the regenerated baseline would add entries that are not
-already in the checked-in baseline. Deleting a violation during a migration phase
+refused whenever the write would add entries — including in CI, which refuses any
+growing write regardless of flags. Deleting a violation during a migration phase
 means explicitly regenerating the baseline, reviewing the removal diff, and
 committing it. A new violation can never be hidden by "just regenerating".
+
+### 6.1 Audited rule-set expansion
+
+A rule set can legitimately gain coverage, which discovers violations that were
+always there. That case has one sanctioned path:
+
+```bash
+node scripts/architecture/check-boundaries.mjs --write-baseline \
+  --accept-rule-expansion --baseline-source-commit <sha>
+```
+
+It requires all of:
+
+```text
+an explicit --accept-rule-expansion opt-in
+HEAD exactly equal to --baseline-source-commit
+every scanned path committed (a dirty tree cannot prove an edge pre-existed)
+```
+
+so the admitted set is provably that commit's own debt, and nothing that landed
+afterwards can enter. Phase 1B used it exactly once, to move from rule set 1 to
+rule set 2 and admit the 33 target-to-legacy edges that already existed at the
+Phase 1A commit. If the pin is not the Phase 1A final commit, the tool prints a
+WARNING that the admitted set may include later debt and that a reviewer must
+confirm every added entry.
 
 The stricter, optional mode is:
 

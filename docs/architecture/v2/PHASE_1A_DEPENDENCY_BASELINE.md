@@ -1,5 +1,15 @@
 # Phase 1A — Current Dependency Baseline
 
+> **Superseded in scope by Phase 1B.** This report is accurate for Architecture V2
+> rule set version 1, which covered target -> target and host -> target edges
+> only. Phase 1B expanded the rule set to version 2 and added the compatibility
+> direction lock (target -> legacy) and the public export-surface boundary, which
+> raised the baseline from 0 to 33 pre-existing target -> legacy violations. The
+> Phase 1A numbers below were not wrong; the Phase 1A rule set simply had no rule
+> that could observe that edge class. See
+> `PHASE_1B_DEPENDENCY_AND_MIGRATION_REPORT.md` §2 and §5 for the expansion audit,
+> and `DEPENDENCY_BOUNDARIES.md` for the current state.
+
 Architecture V2 Phase 1A. This report is the **real** scanned dependency state of
 the repository at the moment the Architecture V2 guardrail was installed. No
 number in this document is estimated; every value comes from
