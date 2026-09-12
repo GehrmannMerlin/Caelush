@@ -13,7 +13,9 @@
     "test": "vitest run",
     "lint": "eslint .",
     "format:check": "prettier --check .",
-    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm format:check",
+    "check:architecture": "node scripts/architecture/check-boundaries.mjs",
+    "check:architecture:verify": "node scripts/architecture/check-boundaries.mjs --verify-baseline",
+    "check": "pnpm check:architecture && pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm format:check",
     "test:web:e2e": "pnpm build && node scripts/web-session-browser-smoke.mjs",
     "build:release": "node scripts/build-release.mjs",
     "test:release": "node scripts/test-release.mjs"

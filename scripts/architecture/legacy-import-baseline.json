@@ -1,0 +1,14 @@
+{
+  "$schema": "./legacy-import-baseline.schema.md",
+  "schemaVersion": 1,
+  "generator": "scripts/architecture/check-boundaries.mjs",
+  "generatedFromHead": "1988487af82da03de46b9e24448977a936cb2ea5",
+  "generatedAt": "2026-09-06T15:13:29+08:00",
+  "matchingSemantics": "An entry matches when kind, sourcePackage, sourcePath, targetPackage, rule and dependencyField are identical. Lines, columns, occurrence counts and deep subpaths are excluded so ordinary edits do not churn this file.",
+  "normalization": "Specifiers are normalized to the owning package: @caelush/agent, @caelush/agent/context and @caelush/agent/tools/foo all normalize to @caelush/agent.",
+  "ratchet": "This file may only shrink. A violation that is not listed here fails the check as NEW_VIOLATION. A listed entry with no matching violation fails the check as STALE_BASELINE_ENTRY.",
+  "entryCount": 0,
+  "countsByRule": {},
+  "countsBySourcePackage": {},
+  "entries": []
+}
