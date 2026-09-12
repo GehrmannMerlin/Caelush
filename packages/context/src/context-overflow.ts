@@ -16,13 +16,28 @@ export class ContextExhaustedError extends Error {
   }
 }
 
+/**
+ * The provider-context-overflow signal, in every spelling the runtime may produce.
+ *
+ * `CONTEXT_OVERFLOW` and `LLM_CONTEXT_OVERFLOW` are the legacy Context/LLM spellings.
+ * `AI_CONTEXT_OVERFLOW` is the Architecture V2 AI-core spelling, and since Phase 2C the
+ * agent model turn is executed by the AI core, so it is the one a real provider
+ * overflow now arrives as. All three describe the same condition, and exactly one
+ * recovery is allowed in `recoverProviderContextOverflow`.
+ */
+const CONTEXT_OVERFLOW_CODES = [
+  "CONTEXT_OVERFLOW",
+  "LLM_CONTEXT_OVERFLOW",
+  "AI_CONTEXT_OVERFLOW",
+] as const;
+
 export function isContextOverflowError(error: unknown): boolean {
   return (
     error instanceof ContextOverflowError ||
     (typeof error === "object" &&
       error !== null &&
       "code" in error &&
-      (["CONTEXT_OVERFLOW", "LLM_CONTEXT_OVERFLOW"] as readonly unknown[]).includes(
+      (CONTEXT_OVERFLOW_CODES as readonly unknown[]).includes(
         (error as { readonly code?: unknown }).code,
       ))
   );

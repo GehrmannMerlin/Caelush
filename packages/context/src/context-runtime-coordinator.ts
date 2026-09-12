@@ -147,14 +147,13 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
       this.options.fallbackProfile?.recommendedOutputReserveTokens ??
       2_048;
 
-    const toolOutputSoftLimitTokens =
-      this.options.configuredProfiles
-        ?.find(
-          (profile) =>
-            profile.providerId === descriptor.ref.provider &&
-            profile.modelId === descriptor.ref.model,
-        )
-        ?.toolOutputSoftLimitTokens?.valueOf();
+    const toolOutputSoftLimitTokens = this.options.configuredProfiles
+      ?.find(
+        (profile) =>
+          profile.providerId === descriptor.ref.provider &&
+          profile.modelId === descriptor.ref.model,
+      )
+      ?.toolOutputSoftLimitTokens?.valueOf();
 
     return projectModelContextProfile({
       descriptor,
@@ -186,7 +185,8 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
     // The descriptor, when the caller supplies one, owns every intrinsic model
     // field. `resolveModelContextProfile` remains available for compatibility
     // callers and for tests, but it is no longer consulted on the migrated path.
-    const configuredProfile = input.model === undefined ? undefined : this.#compatibilityProfile(input);
+    const configuredProfile =
+      input.model === undefined ? undefined : this.#compatibilityProfile(input);
     const profile =
       configuredProfile ??
       resolveModelContextProfile({
