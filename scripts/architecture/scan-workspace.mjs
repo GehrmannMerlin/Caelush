@@ -58,6 +58,18 @@ const GENERATED_PATH_SEGMENTS = ["dist", "build", "coverage", "generated", ".cac
  * }} SourceImport
  *
  * @typedef {{
+ *   specifier: string,
+ *   line: number,
+ *   column: number,
+ *   importKinds: SourceImportKind[],
+ * }} SpecifierRecord
+ *
+ * @typedef {{
+ *   subpath: string,
+ *   target: unknown,
+ * }} ExportDeclaration
+ *
+ * @typedef {{
  *   identity: string,
  *   name: string,
  *   directory: string,
@@ -66,6 +78,7 @@ const GENERATED_PATH_SEGMENTS = ["dist", "build", "coverage", "generated", ".cac
  *   manifestPath: string,
  *   manifestRelativePath: string,
  *   manifestDependencies: { field: string, name: string, version: unknown }[],
+ *   exportDeclarations: ExportDeclaration[],
  * }} WorkspaceProject
  *
  * @typedef {{
@@ -77,6 +90,7 @@ const GENERATED_PATH_SEGMENTS = ["dist", "build", "coverage", "generated", ".cac
  *   sourcePath: string,
  *   occurrenceCount: number,
  *   importKinds: SourceImportKind[],
+ *   specifiers: SpecifierRecord[],
  *   line: number,
  *   column: number,
  * }} EdgeViolation
@@ -92,6 +106,31 @@ const GENERATED_PATH_SEGMENTS = ["dist", "build", "coverage", "generated", ".cac
  *   line: number,
  *   column: number,
  * }} ManifestViolation
+ *
+ * @typedef {{
+ *   ruleKind: "private-import",
+ *   rule: string,
+ *   sourcePackage: string,
+ *   sourcePath: string,
+ *   specifier: string,
+ *   targetPackage: string,
+ *   subpath: string,
+ *   reason: string,
+ *   line: number,
+ *   column: number,
+ * }} PrivateImportViolation
+ *
+ * @typedef {{
+ *   ruleKind: "cross-workspace-relative-import",
+ *   rule: string,
+ *   sourcePackage: string,
+ *   sourcePath: string,
+ *   specifier: string,
+ *   targetPackage: string,
+ *   resolvedProject: string,
+ *   line: number,
+ *   column: number,
+ * }} CrossWorkspaceRelativeViolation
  */
 
 const IMPORT_KIND_ORDER = /** @type {SourceImportKind[]} */ ([
@@ -340,6 +379,16 @@ async function discoverProjects(root, relativeDirectory) {
       }
     }
 
+    /** @type {ExportDeclaration[]} */
+    const exportDeclarations = [];
+    if (manifest.exports && typeof manifest.exports === "object") {
+      for (const [subpath, target] of Object.entries(manifest.exports)) {
+        exportDeclarations.push({ subpath, target });
+      }
+    } else if (typeof manifest.main === "string" || typeof manifest.module === "string") {
+      exportDeclarations.push({ subpath: ".", target: manifest.main ?? manifest.module });
+    }
+
     projects.push({
       identity: name.startsWith(CAELUSH_SCOPE) ? name.slice(CAELUSH_SCOPE.length) : name,
       name,
@@ -349,6 +398,7 @@ async function discoverProjects(root, relativeDirectory) {
       manifestPath,
       manifestRelativePath: `${relativeDirectory}/${entry.name}/package.json`,
       manifestDependencies,
+      exportDeclarations,
     });
   }
 
@@ -414,8 +464,97 @@ function sourceEdgeKey(sourcePath, targetPackage) {
  *   sourceFileCount: number,
  *   sourceImportCount: number,
  *   unknownCaelushSpecifiers: { sourcePath: string, specifier: string, line: number, column: number }[],
+ *   privateImports: PrivateImportViolation[],
+ *   crossWorkspaceRelativeImports: CrossWorkspaceRelativeViolation[],
  * }} SourceScopeScan
  */
+
+/**
+ * Split a Caelush specifier into its owning package and its subpath.
+ * `@caelush/llm/messages` becomes `{ packageName: "@caelush/llm", subpath: "./messages" }`.
+ *
+ * @param {string} specifier
+ * @returns {{ packageName: string, subpath: string } | undefined}
+ */
+export function splitCaelushSpecifier(specifier) {
+  const packageName = normalizeCaelushSpecifier(specifier);
+  if (packageName === undefined) {
+    return undefined;
+  }
+  const remainder = specifier.slice(packageName.length);
+  if (remainder === "") {
+    return { packageName, subpath: "." };
+  }
+  return { packageName, subpath: `.${remainder}` };
+}
+
+/**
+ * Does an exports map declare this subpath?
+ *
+ * A subpath is public when the exports map has an exact key for it, or when a
+ * wildcard key such as `./features/*` matches it. A `.` entry never makes a
+ * subpath public.
+ *
+ * @param {ExportDeclaration[]} exportDeclarations
+ * @param {string} subpath
+ * @returns {boolean}
+ */
+export function exportsDeclareSubpath(exportDeclarations, subpath) {
+  for (const declaration of exportDeclarations) {
+    if (declaration.subpath === subpath) {
+      return true;
+    }
+    if (declaration.subpath.includes("*")) {
+      const [prefix, suffix = ""] = declaration.subpath.split("*");
+      if (
+        subpath.startsWith(prefix) &&
+        subpath.endsWith(suffix) &&
+        subpath.length > prefix.length
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Which workspace project, if any, owns an absolute path? The longest matching
+ * project directory wins, so a nested project is preferred over its parent.
+ *
+ * @param {WorkspaceProject[]} projects
+ * @param {string} absolutePath
+ * @returns {WorkspaceProject | undefined}
+ */
+function projectOwningPath(projects, absolutePath) {
+  let match;
+  for (const project of projects) {
+    const prefix = `${project.directory}${path.sep}`;
+    if (absolutePath === project.directory || absolutePath.startsWith(prefix)) {
+      if (match === undefined || project.directory.length > match.directory.length) {
+        match = project;
+      }
+    }
+  }
+  return match;
+}
+
+/**
+ * Resolve a relative specifier to an absolute path. Extensionless specifiers are
+ * resolved the way NodeNext ESM resolves the emitted module, so the check works
+ * against source that still imports `./foo.js` for a `foo.ts` file.
+ *
+ * @param {string} fromAbsoluteFile
+ * @param {string} specifier
+ * @returns {string}
+ */
+export function resolveRelativeSpecifier(fromAbsoluteFile, specifier) {
+  const resolved = path.resolve(path.dirname(fromAbsoluteFile), specifier);
+  if (path.extname(resolved) === ".js") {
+    return resolved.slice(0, -3);
+  }
+  return resolved;
+}
 
 /**
  * Scan one scope root (`src` or `test`) across every workspace project.
@@ -427,10 +566,14 @@ function sourceEdgeKey(sourcePath, targetPackage) {
  * @returns {Promise<SourceScopeScan>}
  */
 async function scanSourceScope(root, projects, projectByIdentity, scopeRoot) {
-  /** @type {Map<string, EdgeViolation & { importKindSet: Set<SourceImportKind> }>} */
+  /** @type {Map<string, EdgeViolation & { importKindSet: Set<SourceImportKind>, specifierIndex: Map<string, SpecifierRecord> }>} */
   const sourceEdges = new Map();
   /** @type {{ sourcePath: string, specifier: string, line: number, column: number }[]} */
   const unknownCaelushSpecifiers = [];
+  /** @type {PrivateImportViolation[]} */
+  const privateImports = [];
+  /** @type {CrossWorkspaceRelativeViolation[]} */
+  const crossWorkspaceRelativeImports = [];
 
   let sourceFileCount = 0;
   let sourceImportCount = 0;
@@ -445,12 +588,32 @@ async function scanSourceScope(root, projects, projectByIdentity, scopeRoot) {
       sourceImportCount += imports.length;
 
       for (const entry of imports) {
-        const normalized = normalizeCaelushSpecifier(entry.specifier);
-        if (normalized === undefined) {
+        if (entry.specifier.startsWith(".")) {
+          const resolved = resolveRelativeSpecifier(source.path, entry.specifier);
+          const owner = projectOwningPath(projects, resolved);
+          if (owner !== undefined && owner.identity !== project.identity) {
+            crossWorkspaceRelativeImports.push({
+              ruleKind: "cross-workspace-relative-import",
+              rule: "PACKAGE_MUST_NOT_IMPORT_ANOTHER_PROJECT_BY_RELATIVE_PATH",
+              sourcePackage: project.identity,
+              sourcePath: relativeSourcePath,
+              specifier: entry.specifier,
+              targetPackage: owner.identity,
+              resolvedProject: owner.relativeDirectory,
+              line: entry.line,
+              column: entry.column,
+            });
+          }
           continue;
         }
-        const targetPackage = normalized.slice(CAELUSH_SCOPE.length);
-        if (!projectByIdentity.has(targetPackage)) {
+
+        const split = splitCaelushSpecifier(entry.specifier);
+        if (split === undefined) {
+          continue;
+        }
+        const targetPackage = split.packageName.slice(CAELUSH_SCOPE.length);
+        const target = projectByIdentity.get(targetPackage);
+        if (target === undefined) {
           unknownCaelushSpecifiers.push({
             sourcePath: relativeSourcePath,
             specifier: entry.specifier,
@@ -463,11 +626,45 @@ async function scanSourceScope(root, projects, projectByIdentity, scopeRoot) {
           continue;
         }
 
+        if (
+          split.subpath !== "." &&
+          !exportsDeclareSubpath(target.exportDeclarations, split.subpath)
+        ) {
+          const entersSourceTree = split.subpath.startsWith("./src/") || split.subpath === "./src";
+          privateImports.push({
+            ruleKind: "private-import",
+            rule: entersSourceTree
+              ? "PACKAGE_MUST_NOT_BE_IMPORTED_THROUGH_SRC"
+              : "PACKAGE_SUBPATH_MUST_BE_DECLARED_IN_EXPORTS",
+            sourcePackage: project.identity,
+            sourcePath: relativeSourcePath,
+            specifier: entry.specifier,
+            targetPackage,
+            subpath: split.subpath,
+            reason: entersSourceTree
+              ? `@caelush/${targetPackage} does not publicly export a src path`
+              : `@caelush/${targetPackage} does not declare "${split.subpath}" in its package.json exports map`,
+            line: entry.line,
+            column: entry.column,
+          });
+        }
+
         const key = sourceEdgeKey(relativeSourcePath, targetPackage);
         const existing = sourceEdges.get(key);
         if (existing) {
           existing.occurrenceCount += 1;
           existing.importKindSet.add(entry.kind);
+          const record = existing.specifierIndex.get(entry.specifier);
+          if (record === undefined) {
+            existing.specifierIndex.set(entry.specifier, {
+              specifier: entry.specifier,
+              line: entry.line,
+              column: entry.column,
+              importKinds: [entry.kind],
+            });
+          } else if (!record.importKinds.includes(entry.kind)) {
+            record.importKinds.push(entry.kind);
+          }
           continue;
         }
 
@@ -476,10 +673,22 @@ async function scanSourceScope(root, projects, projectByIdentity, scopeRoot) {
           sourcePackage: project.identity,
           targetPackage,
           specifier: entry.specifier,
-          normalizedSpecifier: normalized,
+          normalizedSpecifier: split.packageName,
           sourcePath: relativeSourcePath,
           occurrenceCount: 1,
           importKinds: [],
+          specifiers: [],
+          specifierIndex: new Map([
+            [
+              entry.specifier,
+              {
+                specifier: entry.specifier,
+                line: entry.line,
+                column: entry.column,
+                importKinds: [entry.kind],
+              },
+            ],
+          ]),
           importKindSet: new Set([entry.kind]),
           line: entry.line,
           column: entry.column,
@@ -490,10 +699,16 @@ async function scanSourceScope(root, projects, projectByIdentity, scopeRoot) {
 
   const orderedSourceEdges = [...sourceEdges.values()]
     .map((edge) => {
-      const { importKindSet, ...rest } = edge;
+      const { importKindSet, specifierIndex, ...rest } = edge;
       return {
         ...rest,
         importKinds: IMPORT_KIND_ORDER.filter((kind) => importKindSet.has(kind)),
+        specifiers: [...specifierIndex.values()]
+          .map((record) => ({
+            ...record,
+            importKinds: IMPORT_KIND_ORDER.filter((kind) => record.importKinds.includes(kind)),
+          }))
+          .sort((left, right) => left.line - right.line || left.column - right.column),
       };
     })
     .sort(compareSourceEdges);
@@ -508,7 +723,22 @@ async function scanSourceScope(root, projects, projectByIdentity, scopeRoot) {
         left.line - right.line ||
         left.column - right.column,
     ),
+    privateImports: privateImports.sort(compareLocatedRecords),
+    crossWorkspaceRelativeImports: crossWorkspaceRelativeImports.sort(compareLocatedRecords),
   };
+}
+
+/**
+ * @param {{ sourcePath: string, line: number, column: number, specifier: string }} left
+ * @param {{ sourcePath: string, line: number, column: number, specifier: string }} right
+ */
+function compareLocatedRecords(left, right) {
+  return (
+    left.sourcePath.localeCompare(right.sourcePath) ||
+    left.line - right.line ||
+    left.column - right.column ||
+    left.specifier.localeCompare(right.specifier)
+  );
 }
 
 /**
@@ -529,9 +759,13 @@ async function scanSourceScope(root, projects, projectByIdentity, scopeRoot) {
  *   sourceFileCount: number,
  *   sourceImportCount: number,
  *   unknownCaelushSpecifiers: { sourcePath: string, specifier: string, line: number, column: number }[],
+ *   privateImports: PrivateImportViolation[],
+ *   crossWorkspaceRelativeImports: CrossWorkspaceRelativeViolation[],
  *   testSourceEdges: EdgeViolation[],
  *   testSourceFileCount: number,
  *   testSourceImportCount: number,
+ *   testPrivateImports: PrivateImportViolation[],
+ *   testCrossWorkspaceRelativeImports: CrossWorkspaceRelativeViolation[],
  * }>}
  */
 export async function scanWorkspace(root, options = {}) {
@@ -580,9 +814,13 @@ export async function scanWorkspace(root, options = {}) {
     sourceFileCount: sourceScope.sourceFileCount,
     sourceImportCount: sourceScope.sourceImportCount,
     unknownCaelushSpecifiers: sourceScope.unknownCaelushSpecifiers,
+    privateImports: sourceScope.privateImports,
+    crossWorkspaceRelativeImports: sourceScope.crossWorkspaceRelativeImports,
     testSourceEdges: testScope.sourceEdges,
     testSourceFileCount: testScope.sourceFileCount,
     testSourceImportCount: testScope.sourceImportCount,
+    testPrivateImports: testScope.privateImports,
+    testCrossWorkspaceRelativeImports: testScope.crossWorkspaceRelativeImports,
   };
 }
 
