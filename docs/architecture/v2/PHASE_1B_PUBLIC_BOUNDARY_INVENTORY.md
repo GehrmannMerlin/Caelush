@@ -354,12 +354,15 @@ rule is edited by hand.
 
 The Phase 1B specification states `agent -> ai -> protocol`, `runtime ->
 protocol`, `coding-agent -> ... -> protocol`, `storage -> protocol`, and `client
--> protocol`, but lists `protocol` itself as `-> none`. Reading `protocol` as a
-member of each allowlist would repeat one fact seven times and invite the exact
-drift Phase 1B removes. Phase 1B therefore models `protocol` as a universal
-contract in `V2_UNIVERSAL_TARGETS`: every target may depend on it, and nothing
-depends on the targets from it. This is a presentation of the same rule, not a
-different rule.
+-> protocol`, but lists `protocol` itself as `-> none`.
+
+Phase 1B read that as licence to factor `protocol` into a `V2_UNIVERSAL_TARGETS`
+list granting every target an implicit dependency on it, reasoning that
+repetition invites drift. **That was wrong, and Phase 1C reverted it.** The
+frozen graph means exactly what it says: `@caelush/ai` is an independent AI root
+package and may depend on nothing, so `ai -> protocol` is forbidden. Phase 1C
+removes `V2_UNIVERSAL_TARGETS` and states `protocol` explicitly in each allowlist
+that contains it. Repetition is the price of having no implicit grant.
 
 ### 5.3 `target -> host`
 

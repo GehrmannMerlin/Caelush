@@ -25,6 +25,7 @@ const CHECKER_MODULE = "../../../scripts/architecture/check-boundaries.mjs";
 const SCANNER_MODULE = "../../../scripts/architecture/scan-workspace.mjs";
 const RULES_MODULE = "../../../scripts/architecture/v2-rules.mjs";
 const MIGRATION_MAP_MODULE = "../../../scripts/architecture/v2-migration-map.mjs";
+const READINESS_MODULE = "../../../scripts/architecture/check-migration-readiness.mjs";
 
 export type SourceImportKind = "static-import" | "export-from" | "dynamic-import" | "require-call";
 
@@ -259,11 +260,60 @@ type MigrationMapImplementation = {
   deletedLegacyPackages(): string[];
 };
 
+export type ReadinessCondition = {
+  id: string;
+  title: string;
+  ok: boolean;
+  detail: string;
+  findings: string[];
+};
+
+export type ReadinessResult = {
+  ready: boolean;
+  exitCode: number;
+  output: string;
+  conditions: ReadinessCondition[];
+  summary: Record<string, unknown> & {
+    targetPackages: number;
+    targetPackagesPresent: number;
+    legacyPackages: number;
+    legacyPackagesMapped: number;
+    baselineEntries: number;
+    baselineClasses: Record<string, number>;
+    baselineSourcePackages: Record<string, number>;
+    baselineDestinations: Record<string, number>;
+    privateImports: number;
+    crossWorkspaceRelativeImports: number;
+    testScopeCrossWorkspaceRelativeImports: number;
+    testScopePrivateImports: number;
+    failedConditions: string[];
+    ready: boolean;
+    newViolations?: number;
+  };
+};
+
+type ReadinessImplementation = {
+  MIGRATION_DEBT_CLASSES: string[];
+  NON_MIGRATION_DEBT_CLASSES: string[];
+  MIGRATION_DEBT_ENTRY_KINDS: string[];
+  V2_SKELETON_PACKAGES: string[];
+  REQUIRED_ROOT_SCRIPTS: string[];
+  ARCHITECTURE_ENTRY_POINTS: string[];
+  checkStaticContract(): string[];
+  runMigrationReadinessCheck(options?: {
+    root?: string;
+    baselinePath?: string;
+    head?: string;
+    runCommandChecks?: boolean;
+  }): Promise<ReadinessResult>;
+};
+
 /* eslint-disable @typescript-eslint/no-explicit-any -- one cast per checker module, isolated to this facade */
 const checkerImplementation: any = await import(CHECKER_MODULE);
 const scannerImplementation: any = await import(SCANNER_MODULE);
 const rulesImplementation: any = await import(RULES_MODULE);
 const migrationMapImplementation: any = await import(MIGRATION_MAP_MODULE);
+const readinessImplementation: any = await import(READINESS_MODULE);
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
 export const scanner = scannerImplementation as ScannerImplementation;
@@ -273,3 +323,5 @@ export const rules = rulesImplementation as RulesImplementation;
 export const boundaries = checkerImplementation as CheckerImplementation;
 
 export const migrationMap = migrationMapImplementation as MigrationMapImplementation;
+
+export const readiness = readinessImplementation as ReadinessImplementation;

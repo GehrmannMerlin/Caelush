@@ -82,9 +82,12 @@ package to `V2_TARGET_PACKAGES` automatically forbids every direction that is no
 explicitly allowed, so `client -> ai`, `runtime -> ai`, and `storage ->
 coding-agent` cannot be forgotten the way a hand-written forbidden list can.
 
-`@caelush/protocol` is treated as a universal contract: every target may depend
-on it, and `V2_UNIVERSAL_TARGETS` states that once instead of repeating it in
-seven allowlists.
+`protocol` appears explicitly in the allowlist of every package that may depend on
+it, and appears in none of the others. There is no universal grant: `@caelush/ai`
+is an independent AI root package, so `ai -> protocol` is forbidden like any other
+disallowed direction. An earlier version factored `protocol` into a shared
+"universal targets" list, which silently made `ai -> protocol` legal; Phase 1C
+removed it. Repetition is the price of having no implicit grant.
 
 ## 3. Private source import
 

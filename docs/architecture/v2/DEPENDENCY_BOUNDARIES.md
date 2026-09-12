@@ -13,7 +13,7 @@ Current state:
 
 ```text
 rule set version        2   (Phase 1A shipped version 1; Phase 1B expanded it)
-active rules          274   derived from the allowlist, never hand-listed
+active rules          276   derived from the allowlist, never hand-listed
 baseline entries       33   target -> legacy migration debt frozen at the
                             Phase 1A commit 2e0befea64e303374c59dfd873188b95b0f484d4
 new violations          0

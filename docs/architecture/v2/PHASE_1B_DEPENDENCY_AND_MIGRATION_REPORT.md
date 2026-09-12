@@ -31,9 +31,9 @@ Phase 1B expansion rules              194
 The forbidden target graph is **derived**, not hand-listed:
 
 ```text
-V2_ALLOWED_DEPENDENCIES + V2_UNIVERSAL_TARGETS
+V2_ALLOWED_DEPENDENCIES
         ↓ deriveForbiddenTargetEdges()
-   31 forbidden target edges
+   31 forbidden target edges      (32 after the Phase 1C allowlist fix)
 
 V2_TARGET_PACKAGES x V2_LEGACY_PACKAGES
         ↓ deriveForbiddenTargetToLegacyEdges()

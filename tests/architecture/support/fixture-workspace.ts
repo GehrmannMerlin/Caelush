@@ -45,6 +45,12 @@ export type FixtureProjectSpec = {
    * `"."` entry; pass `null` to emit no `exports` field at all.
    */
   exports?: Record<string, unknown> | null;
+  /**
+   * Override the manifest package name. The default derives `@caelush/<dir>` from
+   * the project directory, so an override is how a test creates a project whose
+   * declared name and directory disagree.
+   */
+  manifestName?: string;
 };
 
 export type FixtureWorkspace = {
@@ -52,6 +58,18 @@ export type FixtureWorkspace = {
   projectPath: (relativePath: string) => string;
   git: FixtureGit;
   cleanup: () => Promise<void>;
+};
+
+/**
+ * Repository-level files a readiness test needs: the migration readiness gate
+ * checks the root package.json scripts, the CI workflow, and a baseline file, none
+ * of which belong to a workspace project.
+ */
+export type FixtureRootFiles = {
+  packageJson?: Record<string, unknown>;
+  workflow?: string;
+  baseline?: unknown;
+  extra?: Record<string, string>;
 };
 
 /**
@@ -71,18 +89,45 @@ export type FixtureGit = {
  * without depending on the real repository contents.
  *
  * @param specs project directory relative to the workspace root, e.g. `packages/agent`
+ * @param rootFiles repository-level files the readiness gate inspects
  */
 export async function createFixtureWorkspace(
   specs: Record<string, FixtureProjectSpec>,
+  rootFiles: FixtureRootFiles = {},
 ): Promise<FixtureWorkspace> {
   const root = await mkdtemp(path.join(tmpdir(), "caelush-architecture-fixture-"));
+
+  if (rootFiles.packageJson) {
+    await writeFile(
+      path.join(root, "package.json"),
+      `${JSON.stringify(rootFiles.packageJson, null, 2)}\n`,
+      "utf8",
+    );
+  }
+  if (rootFiles.baseline !== undefined) {
+    await writeFile(
+      path.join(root, "legacy-import-baseline.json"),
+      `${JSON.stringify(rootFiles.baseline, null, 2)}\n`,
+      "utf8",
+    );
+  }
+  if (rootFiles.workflow !== undefined) {
+    const workflowPath = path.join(root, ".github", "workflows", "ci.yml");
+    await mkdir(path.dirname(workflowPath), { recursive: true });
+    await writeFile(workflowPath, rootFiles.workflow, "utf8");
+  }
+  for (const [relativePath, contents] of Object.entries(rootFiles.extra ?? {})) {
+    const absolute = path.join(root, ...relativePath.split("/"));
+    await mkdir(path.dirname(absolute), { recursive: true });
+    await writeFile(absolute, contents, "utf8");
+  }
 
   for (const [projectDirectory, spec] of Object.entries(specs)) {
     const absoluteProject = path.join(root, ...projectDirectory.split("/"));
     await mkdir(absoluteProject, { recursive: true });
 
     const manifest: Record<string, unknown> = {
-      name: `@caelush/${projectDirectory.split("/")[1]}`,
+      name: spec.manifestName ?? `@caelush/${projectDirectory.split("/")[1]}`,
       version: "0.1.0",
       private: true,
       type: "module",
@@ -171,6 +216,78 @@ async function runGit(cwd: string, args: string[]): Promise<string> {
     },
   });
   return stdout;
+}
+
+/** Root scripts the migration readiness gate requires. */
+export const READINESS_ROOT_SCRIPTS = {
+  "check:architecture": "node scripts/architecture/check-boundaries.mjs",
+  "check:architecture:verify": "node scripts/architecture/check-boundaries.mjs --verify-baseline",
+  "check:architecture:readiness": "node scripts/architecture/check-migration-readiness.mjs",
+  "check:architecture:ci":
+    "pnpm check:architecture && pnpm check:architecture:verify && pnpm check:architecture:readiness",
+};
+
+/** A CI workflow that satisfies the readiness gate's wiring expectations. */
+export const READINESS_WORKFLOW = [
+  "name: CI",
+  "on:",
+  "  push:",
+  "jobs:",
+  "  architecture:",
+  "    runs-on: ubuntu-latest",
+  "    steps:",
+  "      - run: pnpm check:architecture:ci",
+  "",
+].join("\n");
+
+/** An empty but structurally valid baseline document. */
+export function readinessBaseline(
+  entries: unknown[] = [],
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    schemaVersion: 1,
+    ruleSetVersion: 2,
+    baselineSourceCommit: "0000000000000000000000000000000000000000",
+    generatedByRuleExpansion: false,
+    entryCount: entries.length,
+    countsByRule: {},
+    countsBySourcePackage: {},
+    entries,
+    ...overrides,
+  };
+}
+
+/**
+ * Paths the migration readiness gate expects to exist in a checkout. A fixture is
+ * not a checkout, so it creates stand-ins for them: the gate's purpose is to
+ * confirm the real entry points are present and runnable, and the real-repository
+ * test covers the runnable half.
+ */
+export const READINESS_ENTRY_POINT_PATHS = [
+  "scripts/architecture/v2-rules.mjs",
+  "scripts/architecture/v2-migration-map.mjs",
+  "scripts/architecture/scan-workspace.mjs",
+  "scripts/architecture/check-boundaries.mjs",
+  "scripts/architecture/check-migration-readiness.mjs",
+];
+
+/** Repository-level files that make a fixture pass every readiness wiring check. */
+export function readinessRootFiles(baselineEntries: unknown[] = []): FixtureRootFiles {
+  const baseline = readinessBaseline(baselineEntries);
+  return {
+    packageJson: { name: "fixture", private: true, scripts: { ...READINESS_ROOT_SCRIPTS } },
+    workflow: READINESS_WORKFLOW,
+    baseline,
+    extra: {
+      ...Object.fromEntries(
+        READINESS_ENTRY_POINT_PATHS.map((entryPoint) => [entryPoint, "// fixture stand-in\n"]),
+      ),
+      // The gate also checks that the canonical baseline path exists, which is a
+      // different location from the one a test may point --baseline at.
+      "scripts/architecture/legacy-import-baseline.json": `${JSON.stringify(baseline, null, 2)}\n`,
+    },
+  };
 }
 
 /**

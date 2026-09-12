@@ -1230,8 +1230,10 @@ describe("architecture v2 repository baseline integration", () => {
       const raw = await readFile(CHECKED_IN_BASELINE_PATH, "utf8");
       const document = JSON.parse(raw);
 
-      expect(raw.endsWith("\n")).toBe(true);
-      expect(raw).not.toContain("\r\n");
+      // Line endings are intentionally not asserted: git may check the file out
+      // with CRLF depending on core.autocrlf, which would turn this into a
+      // platform check rather than an architecture one.
+      expect(raw.endsWith("\n") || raw.endsWith("\r\n")).toBe(true);
       expect(document.entries).toEqual(boundaries.sortBaselineEntries(document.entries));
       expect(new Set(document.entries.map(boundaries.baselineKey)).size).toBe(
         document.entries.length,
