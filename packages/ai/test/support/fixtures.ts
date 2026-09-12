@@ -1,3 +1,4 @@
+import type { JsonObject } from "../../src/json/json-value.js";
 import type { ModelCacheProfile } from "../../src/models/model-cache-profile.js";
 import type { ModelCapabilities } from "../../src/models/model-capabilities.js";
 import type { ModelDescriptor } from "../../src/models/model-descriptor.js";
@@ -40,6 +41,7 @@ export interface ModelDescriptorOverrides {
   readonly reasoning?: ModelReasoningProfile;
   readonly cache?: ModelCacheProfile;
   readonly source?: ModelDescriptorSource;
+  readonly adapterMetadata?: JsonObject;
 }
 
 /** Build a valid model descriptor for tests, defaulting to an all-supported model. */
@@ -52,5 +54,8 @@ export function modelDescriptor(overrides: ModelDescriptorOverrides = {}): Model
     source: overrides.source ?? "CONFIGURATION",
     ...(overrides.reasoning === undefined ? {} : { reasoning: overrides.reasoning }),
     ...(overrides.cache === undefined ? {} : { cache: overrides.cache }),
+    ...(overrides.adapterMetadata === undefined
+      ? {}
+      : { adapterMetadata: overrides.adapterMetadata }),
   };
 }

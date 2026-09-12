@@ -87,7 +87,9 @@ describe("AIGateway runtime forwarding", () => {
     expect(start.payload.providerId).toBe("test");
     expect(start.payload.model).toEqual({ provider: "test", model: "model-a" });
     expect(start.payload.resolution.api).toBe("test-api");
-    expect(start.payload.resolution.maxOutputTokens).toBe(MODEL.limits.maxOutputTokens);
+    // No output ceiling was requested, so none is invented: the model limit is a
+    // validation ceiling, not an implicit cap.
+    expect(start.payload.resolution.maxOutputTokens).toBeUndefined();
     expect(start.payload.resolution.reasoning).toEqual({
       mode: "NOT_REQUESTED",
       policy: "PREFER_BUDGET",

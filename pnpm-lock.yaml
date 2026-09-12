@@ -175,6 +175,12 @@ importers:
 
   packages/ai:
     dependencies:
+      '@ai-sdk/openai-compatible':
+        specifier: 3.0.39
+        version: 3.0.39(zod@4.4.3)
+      ai:
+        specifier: 7.0.83
+        version: 7.0.83(zod@4.4.3)
       uuid:
         specifier: 14.0.2
         version: 14.0.2
@@ -234,15 +240,12 @@ importers:
 
   packages/llm:
     dependencies:
-      '@ai-sdk/openai-compatible':
-        specifier: 3.0.39
-        version: 3.0.39(zod@4.4.3)
+      '@caelush/ai':
+        specifier: workspace:*
+        version: link:../ai
       '@caelush/protocol':
         specifier: workspace:*
         version: link:../protocol
-      ai:
-        specifier: 7.0.83
-        version: 7.0.83(zod@4.4.3)
       zod:
         specifier: 4.4.3
         version: 4.4.3

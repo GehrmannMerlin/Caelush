@@ -803,17 +803,19 @@ describe("architecture v2 public boundary guard", () => {
   );
 
   it(
-    "keeps the migrated AI core on exactly the surface Phase 2A earned",
+    "keeps the migrated AI core on exactly the surface the migration earned",
     async () => {
-      // Phase 2A migrates the AI Model Invocation core, so `ai` is no longer a
-      // surface-locked skeleton. The exact list is asserted so the public surface
-      // can never widen by accident.
+      // Phase 2A migrated the AI Model Invocation core and Phase 2B added the
+      // OpenAI-compatible adapter subpath. `ai` is no longer a surface-locked
+      // skeleton, and the exact list is asserted so its public surface can never
+      // widen by accident.
       const scan = await scanner.scanWorkspace(repositoryRoot);
       const project = scan.projects.find((entry) => entry.identity === "ai");
       expect(project).toBeDefined();
       expect(project?.exportDeclarations.map((declaration) => declaration.subpath).sort()).toEqual([
         ".",
         "./adapters",
+        "./adapters/openai-compatible",
         "./errors",
         "./messages",
         "./models",

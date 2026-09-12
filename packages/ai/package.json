@@ -35,6 +35,10 @@
     "./adapters": {
       "types": "./dist/adapters/index.d.ts",
       "import": "./dist/adapters/index.js"
+    },
+    "./adapters/openai-compatible": {
+      "types": "./dist/adapters/openai-compatible/index.d.ts",
+      "import": "./dist/adapters/openai-compatible/index.js"
     }
   },
   "scripts": {
@@ -42,6 +46,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@ai-sdk/openai-compatible": "3.0.39",
+    "ai": "7.0.83",
     "uuid": "14.0.2"
   }
 }

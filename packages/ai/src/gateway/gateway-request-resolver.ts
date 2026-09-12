@@ -150,10 +150,14 @@ export function createGatewayRequestResolver(
         ...(request.settings?.cache === undefined ? {} : { request: request.settings.cache }),
       });
 
-      // Step 11 — the effective output ceiling. The model limit is the ceiling
-      // when the caller names none, so an adapter never has to know the limit.
-      const maxOutputTokens =
-        request.settings?.maxOutputTokens ?? descriptor.limits.maxOutputTokens;
+      // Step 11 — the output ceiling the caller asked for.
+      //
+      // The model limit is a *validation* ceiling, checked by
+      // `validateAIModelRequestAgainstModel`, and never an implicit cap. Inventing
+      // `max_tokens` from the model limit would silently truncate a caller (or a
+      // compatibility facade) that never asked for one, so an absent request stays
+      // absent and the provider default applies.
+      const maxOutputTokens = request.settings?.maxOutputTokens;
 
       // Step 12 — validate the timeout before creating any scope.
       const timeoutMs = validateTimeout(
@@ -166,7 +170,7 @@ export function createGatewayRequestResolver(
         api: descriptor.api,
         reasoning,
         cache,
-        maxOutputTokens,
+        ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
       };
 
       // The abort scope covers credential resolution as well as the provider turn:
@@ -323,7 +327,7 @@ function freezeResolvedRequest(
   request: AIModelRequest,
   reasoning: AIInvocationResolution["reasoning"],
   cache: AIInvocationResolution["cache"],
-  maxOutputTokens: number,
+  maxOutputTokens: number | undefined,
 ): ResolvedAIModelRequest {
   return Object.freeze({
     model: descriptor,
@@ -331,7 +335,7 @@ function freezeResolvedRequest(
     ...(request.tools === undefined ? {} : { tools: Object.freeze([...request.tools]) }),
     ...(request.toolChoice === undefined ? {} : { toolChoice: request.toolChoice }),
     settings: Object.freeze({
-      maxOutputTokens,
+      ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
       ...(request.settings?.temperature === undefined
         ? {}
         : { temperature: request.settings.temperature }),

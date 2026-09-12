@@ -65,6 +65,27 @@ export function fixedModelSource(
   };
 }
 
+/**
+ * An enumerable model source describing exactly one model.
+ *
+ * `createAISubsystem` validates the known model set at startup, and a source must be
+ * enumerable to contribute to it.
+ */
+export function singleModelSource(
+  descriptor: ModelDescriptor,
+  id = "single",
+): EnumerableModelDescriptorSourcePort {
+  return {
+    id,
+    priority: 0,
+    resolve: (ref: ModelRef) =>
+      ref.provider === descriptor.ref.provider && ref.model === descriptor.ref.model
+        ? descriptor
+        : undefined,
+    list: () => [descriptor],
+  };
+}
+
 /** A provider binding with a working fake credential resolver. */
 export function testProviderBinding(overrides: Partial<AIProviderBinding> = {}): AIProviderBinding {
   return {
