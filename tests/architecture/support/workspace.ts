@@ -7,9 +7,18 @@ export const repositoryRoot = path.resolve(
   "../../..",
 );
 
+/**
+ * Legacy Architecture V1 package identities plus the Architecture V2 target
+ * packages that exist as source-of-truth destinations. `ai`, `agent`, and
+ * `coding-agent` were added by Architecture V2 Phase 1A as empty skeletons; the
+ * legacy packages stay listed until their own migration phase renames or
+ * deletes them.
+ */
 export const packageNames = [
   "protocol",
+  "ai",
   "core",
+  "agent",
   "llm",
   "context",
   "tools",
@@ -17,13 +26,15 @@ export const packageNames = [
   "security",
   "verification",
   "events",
+  "memory",
   "storage",
   "observability",
   "shared",
   "client",
+  "coding-agent",
 ] as const;
 
-export const appNames = ["daemon", "cli", "web"] as const;
+export const appNames = ["daemon", "cli", "web", "launcher"] as const;
 
 export type WorkspaceManifest = {
   name?: unknown;

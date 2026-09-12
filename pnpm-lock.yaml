@@ -168,11 +168,17 @@ importers:
         specifier: 8.2.2
         version: 8.2.2(@types/node@24.13.3)(jiti@2.7.0)(yaml@2.9.0)
 
+  packages/agent: {}
+
+  packages/ai: {}
+
   packages/client:
     dependencies:
       '@caelush/protocol':
         specifier: workspace:*
         version: link:../protocol
+
+  packages/coding-agent: {}
 
   packages/context:
     dependencies:
