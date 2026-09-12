@@ -76,16 +76,17 @@ describe("SqliteRunBudgetPort", () => {
       clock: { now: () => createTimestampMs(101) },
     });
     const step = makeStep(run.id);
-    const request = {
-      model: run.model,
-      messages: [{ role: "user" as const, content: "hello" }],
-      maxOutputTokens: 20,
+    // The budget port is AI-agnostic: Core computes the estimate from the request it
+    // owns and hands the durable layer plain numbers.
+    const admission = {
+      estimatedInputTokens: 8,
+      configuredMaxOutputTokens: 20,
     };
 
-    const admitted = await budget.admitLLM({ run, step, request });
+    const admitted = await budget.admitLLM({ run, step, admission });
     expect(admitted.kind).toBe("ALLOWED");
     if (admitted.kind !== "ALLOWED") throw new Error("expected admission");
-    expect(admitted.request.maxOutputTokens).toBe(12);
+    expect(admitted.effectiveMaxOutputTokens).toBe(12);
     expect((await budgetLedger(database, run.id, "LLM_ATTEMPT", step.id))?.state).toBe("IN_FLIGHT");
 
     await budget.settleLLM({
@@ -121,7 +122,8 @@ describe("SqliteRunBudgetPort", () => {
     const result = await budget.admitLLM({
       run,
       step: makeStep(run.id),
-      request: { model: run.model, messages: [{ role: "user", content: "hello" }] },
+      // A constrained Run with no safe estimate must fail closed, not guess.
+      admission: { configuredMaxOutputTokens: 20 },
     });
     expect(result).toEqual({ kind: "UNAVAILABLE", reason: "TOKEN_ESTIMATE" });
   });
@@ -141,8 +143,11 @@ describe("SqliteRunBudgetPort", () => {
       tokenEstimator: { estimate: () => 8 },
       clock: { now: () => createTimestampMs(101) },
     });
-    const request = { model: run.model, messages: [{ role: "user" as const, content: "review" }] };
-    const admitted = await budget.admitVerificationLLM({ run, ownerId: "verify:task", request });
+    const admitted = await budget.admitVerificationLLM({
+      run,
+      ownerId: "verify:task",
+      admission: { estimatedInputTokens: 8, configuredMaxOutputTokens: 1_024 },
+    });
     expect(admitted.kind).toBe("ALLOWED");
     expect((await budgetLedger(database, run.id, "VERIFICATION_LLM", "verify:task"))?.state).toBe(
       "IN_FLIGHT",

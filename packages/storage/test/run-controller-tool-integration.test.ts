@@ -15,10 +15,15 @@ import {
   createToolInvocationId,
   createWorkspaceId,
 } from "@caelush/protocol";
-import { AgentLoop, RunController, RunDeadlineRegistry, RunRetryRegistry } from "@caelush/core";
+import {
+  AgentLoop,
+  RunController,
+  RunDeadlineRegistry,
+  RunRetryRegistry,
+  type AIModelTurnResult,
+} from "@caelush/core";
 import { EventBus } from "@caelush/events";
-import { LLMTurnResultSchema, type LLMTurnResult } from "@caelush/llm/turn";
-import { LLMNetworkError } from "@caelush/llm/errors";
+
 import {
   ToolBatchCoordinator,
   ToolDispatcher,
@@ -38,6 +43,12 @@ import { LocalRuntime, createLocalRuntimeResolver } from "@caelush/runtime";
 import { openCaelushStorage, type CaelushStorage } from "../src/index.js";
 import { verificationPlanner } from "./support/fixtures.js";
 import { CaelushToolExecutionGate } from "@caelush/security";
+import {
+  fakeModelTurnExecutor,
+  modelTurnResult,
+  testModelCatalog,
+  aiError,
+} from "./support/model-turns.js";
 
 const definitions = [
   {
@@ -187,12 +198,34 @@ function createFilesystemRuntime(
   return { dispatcher, coordinator: new ToolBatchCoordinator(dispatcher) };
 }
 
+/**
+ * The model-facing projection of a Tool catalog.
+ *
+ * Phase 2C routes the request through the AI core, and the AI core accepts only
+ * `{name, description, inputSchema}`. `outputSchema`, `riskLevel`,
+ * `requiredCapabilities` and `runtimeRequirements` are runtime metadata and must never
+ * reach a provider request, so the expectation is built by projecting them away.
+ */
+function modelFacing(
+  definitions: readonly {
+    readonly name: string;
+    readonly description: string;
+    readonly inputSchema: unknown;
+  }[],
+) {
+  return definitions.map(({ name, description, inputSchema }) => ({
+    name,
+    description,
+    inputSchema,
+  }));
+}
+
 function createController(
   storage: CaelushStorage,
   eventBus: EventBus,
-  turns: Array<LLMTurnResult | Error>,
+  turns: Array<AIModelTurnResult | Error>,
   coordinator?: ToolBatchCoordinator,
-  observedRequests: Array<{ tools?: unknown; messages: unknown[] }> = [],
+  observedRequests: Array<{ tools?: unknown; messages: readonly unknown[] }> = [],
   initialNow = 10,
   deadlineRegistry?: RunDeadlineRegistry,
   fixedClock?: { value: number },
@@ -212,14 +245,13 @@ function createController(
         report: {} as never,
       }),
     },
-    llmClient: {
-      complete: async (request) => {
-        observedRequests.push({ tools: request.tools, messages: request.messages });
-        const next = turns.shift();
-        if (next instanceof Error) throw next;
-        return next!;
-      },
-    },
+    models: testModelCatalog(),
+    modelTurns: fakeModelTurnExecutor(async (request) => {
+      observedRequests.push({ tools: request.tools, messages: request.messages });
+      const next = turns.shift();
+      if (next instanceof Error) throw next;
+      return next!;
+    }),
     clock,
     stepIdFactory: { create: () => createStepId() },
   });
@@ -245,10 +277,10 @@ function createController(
 
 function turn(
   text: string,
-  toolCalls: LLMTurnResult["toolCalls"],
-  finishReason: LLMTurnResult["finishReason"],
-): LLMTurnResult {
-  return LLMTurnResultSchema.parse({
+  toolCalls: AIModelTurnResult["toolCalls"],
+  finishReason: AIModelTurnResult["finishReason"],
+): AIModelTurnResult {
+  return modelTurnResult({
     callId: createLLMCallId(),
     providerId: "fixture",
     model: { provider: "fixture", model: "fixture-model" },
@@ -291,7 +323,7 @@ describe("RunController automatic Tool Batch integration", () => {
       eventBus,
       [
         turn("inspect", [{ id: "call-tool", name: "echo_value", input: {} }], "TOOL_CALLS"),
-        new LLMNetworkError("provider secret"),
+        aiError("AI_NETWORK", { message: "provider secret" }),
         turn("recovered", [], "STOP"),
       ],
       runtime.coordinator,
@@ -382,7 +414,7 @@ describe("RunController automatic Tool Batch integration", () => {
       const result = await controller.start(run.id);
 
       expect(result.status).toBe("AWAITING_VERIFICATION");
-      expect(observed[0]?.tools).toEqual(runtime.coordinator.modelDefinitions());
+      expect(observed[0]?.tools).toEqual(modelFacing(runtime.coordinator.modelDefinitions()));
       expect(observed[1]?.messages.slice(-4)).toEqual([
         expect.objectContaining({ toolCallId: "call-list", isError: false }),
         expect.objectContaining({
@@ -609,7 +641,7 @@ describe("RunController automatic Tool Batch integration", () => {
     expect(order).toEqual(["start:call-A", "finish:call-A", "start:call-B", "finish:call-B"]);
     expect(maxActive).toBe(1);
     expect(observed).toHaveLength(2);
-    expect(observed[0]?.tools).toEqual(runtime.coordinator.modelDefinitions());
+    expect(observed[0]?.tools).toEqual(modelFacing(runtime.coordinator.modelDefinitions()));
     expect(observed[1]?.messages.slice(-2)).toEqual([
       {
         role: "tool",

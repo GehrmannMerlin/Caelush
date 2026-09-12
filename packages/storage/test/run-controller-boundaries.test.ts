@@ -8,18 +8,19 @@ import {
   createTimestampMs,
   createWorkspaceId,
 } from "@caelush/protocol";
-import { LLMTurnResultSchema, type LLMTurnResult } from "@caelush/llm/turn";
 import type { LLMToolResultMessage } from "@caelush/llm/messages";
 import {
   AgentLoop,
   RunController,
   RunControllerConflictError,
   RunDeadlineRegistry,
+  type AIModelTurnResult,
 } from "@caelush/core";
 import { EventBus } from "@caelush/events";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
 import { verificationPlanner } from "./support/fixtures.js";
+import { fakeModelTurnExecutor, modelTurnResult, testModelCatalog } from "./support/model-turns.js";
 
 function makeRun() {
   return AgentRunSchema.parse({
@@ -39,10 +40,10 @@ function makeRun() {
 
 function turn(
   text: string,
-  toolCalls: LLMTurnResult["toolCalls"],
-  finishReason: LLMTurnResult["finishReason"],
-): LLMTurnResult {
-  return LLMTurnResultSchema.parse({
+  toolCalls: AIModelTurnResult["toolCalls"],
+  finishReason: AIModelTurnResult["finishReason"],
+): AIModelTurnResult {
+  return modelTurnResult({
     callId: createLLMCallId(),
     providerId: "fixture",
     model: { provider: "fixture", model: "fixture-model" },
@@ -92,10 +93,10 @@ describe("RunController durable boundaries", () => {
             report: {} as never,
           }),
         },
-        llmClient: {
-          complete: async () =>
-            turn("need result", [{ id: "call_a", name: "read_file", input: {} }], "TOOL_CALLS"),
-        },
+        models: testModelCatalog(),
+        modelTurns: fakeModelTurnExecutor(async () =>
+          turn("need result", [{ id: "call_a", name: "read_file", input: {} }], "TOOL_CALLS"),
+        ),
         clock: { now: () => createTimestampMs(clock.value) },
         stepIdFactory: { create: createStepId },
       }),
@@ -163,7 +164,8 @@ describe("RunController durable boundaries", () => {
           report: {} as never,
         }),
       },
-      llmClient: { complete: async () => results.shift()! },
+      models: testModelCatalog(),
+      modelTurns: fakeModelTurnExecutor(async () => results.shift()!),
       clock: { now: () => createTimestampMs(now++) },
       stepIdFactory: { create: () => createStepId() },
     });
@@ -263,12 +265,11 @@ describe("RunController durable boundaries", () => {
             report: {} as never,
           }),
         },
-        llmClient: {
-          complete: async () => {
-            calls += 1;
-            return turns.shift()!;
-          },
-        },
+        models: testModelCatalog(),
+        modelTurns: fakeModelTurnExecutor(async () => {
+          calls += 1;
+          return turns.shift()!;
+        }),
         clock: { now: () => createTimestampMs(now++) },
         stepIdFactory: { create: () => createStepId() },
       }),

@@ -11,63 +11,34 @@ import {
   createWorkspaceId,
 } from "@caelush/protocol";
 import { AgentLoop, RunController, type RunControllerResult } from "@caelush/core";
-import {
-  LLMGateway,
-  LLMProviderRegistry,
-  type LLMCapabilities,
-  type LLMProvider,
-  type LLMProviderCallContext,
-  type LLMProviderRequest,
-  type LLMStreamEvent,
-} from "@caelush/llm";
 import { EventBus } from "@caelush/events";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
 import { verificationPlanner } from "./support/fixtures.js";
+import {
+  fakeModelTurnExecutor,
+  modelTurnResult,
+  testModelCatalog,
+  type FakeModelTurnExecutor,
+} from "./support/model-turns.js";
 
-const capabilities: LLMCapabilities = {
-  textStreaming: "SUPPORTED",
-  toolCalling: "SUPPORTED",
-  parallelToolCalls: "SUPPORTED",
-  structuredOutput: "UNKNOWN",
-  vision: "UNKNOWN",
-  reasoningSummary: "UNKNOWN",
-};
-
-class RestartProvider implements LLMProvider {
-  readonly id = "fixture" as const;
-  callCount = 0;
-
-  supportsModel(model: { provider: string }): boolean {
-    return model.provider === this.id;
-  }
-
-  getCapabilities(): LLMCapabilities {
-    return capabilities;
-  }
-
-  async *stream(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-  ): AsyncIterable<LLMStreamEvent> {
-    this.callCount += 1;
-    yield {
-      type: "stream.start",
-      payload: { callId: context.callId, providerId: this.id, model: request.model },
-    };
-    if (this.callCount === 1) {
-      yield { type: "text.delta", payload: { text: "inspect" } };
-      yield { type: "tool_call.start", payload: { toolCallId: "call_a", toolName: "read_file" } };
-      yield {
-        type: "tool_call.completed",
-        payload: { id: "call_a", name: "read_file", input: { path: "parser.ts" } },
-      };
-      yield { type: "stream.finish", payload: { finishReason: "TOOL_CALLS" } };
-      return;
-    }
-    yield { type: "text.delta", payload: { text: "updated parser" } };
-    yield { type: "stream.finish", payload: { finishReason: "STOP" } };
-  }
+/**
+ * A scripted model turn authority.
+ *
+ * Phase 2C removed the LLM provider seam from Core, so "how many provider turns
+ * happened" is now observed on the `ModelTurnExecutor` itself: one `execute()` call is
+ * exactly one Agent Step attempt and exactly one gateway stream.
+ */
+function restartModelTurns(): FakeModelTurnExecutor {
+  return fakeModelTurnExecutor((_request, _signal, callIndex) =>
+    callIndex === 0
+      ? modelTurnResult({
+          text: "inspect",
+          toolCalls: [{ id: "call_a", name: "read_file", input: { path: "parser.ts" } }],
+          finishReason: "TOOL_CALLS",
+        })
+      : modelTurnResult({ text: "updated parser", finishReason: "STOP" }),
+  );
 }
 
 function makeRun(workspacePath: string) {
@@ -88,12 +59,9 @@ function makeRun(workspacePath: string) {
 
 function createController(
   storage: Awaited<ReturnType<typeof openCaelushStorage>>,
-  provider: RestartProvider,
+  modelTurns: FakeModelTurnExecutor,
   now: { value: number },
 ): RunController {
-  const registry = new LLMProviderRegistry();
-  registry.register(provider);
-  const gateway = new LLMGateway({ providers: registry });
   const loop = new AgentLoop({
     inspector: { inspect: async () => ({}) as never },
     planner: { plan: async () => ({}) as never },
@@ -106,7 +74,8 @@ function createController(
         report: {} as never,
       }),
     },
-    llmClient: { complete: (request) => gateway.complete(request) },
+    models: testModelCatalog(),
+    modelTurns,
     clock: { now: () => createTimestampMs(now.value++) },
     stepIdFactory: { create: () => createStepId() },
   });
@@ -152,16 +121,16 @@ describe("RunController file-backed restart recovery", () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "caelush-phase-6c-"));
     await mkdir(path.join(directory, "project"));
     const run = makeRun(path.join(directory, "project"));
-    const provider = new RestartProvider();
+    const modelTurns = restartModelTurns();
     const now = { value: 10 };
     const firstStorage = await openRunDatabase(directory, run);
-    const firstController = createController(firstStorage, provider, now);
+    const firstController = createController(firstStorage, modelTurns, now);
 
     const waiting = assertWaiting(await firstController.start(run.id));
     expect(waiting.toolRequests).toEqual([
       { externalCallId: "call_a", toolName: "read_file", args: { path: "parser.ts" } },
     ]);
-    expect(provider.callCount).toBe(1);
+    expect(modelTurns.callCount()).toBe(1);
     expect(
       (await firstStorage.messages.listByRun(run.id)).map((entry) => entry.message.role),
     ).toEqual(["user", "assistant"]);
@@ -171,10 +140,11 @@ describe("RunController file-backed restart recovery", () => {
     const secondStorage = await openCaelushStorage({
       path: path.join(directory, "caelush.sqlite"),
     });
-    const secondController = createController(secondStorage, provider, now);
+    const secondController = createController(secondStorage, modelTurns, now);
     const recoveredWaiting = assertWaiting(await secondController.recover(run.id));
     expect(recoveredWaiting.toolRequests).toEqual(waiting.toolRequests);
-    expect(provider.callCount).toBe(1);
+    // Recovery performs zero provider turns: a stale RUNNING step is never resent.
+    expect(modelTurns.callCount()).toBe(1);
 
     const final = await secondController.submitToolResults(run.id, [
       {
@@ -186,7 +156,7 @@ describe("RunController file-backed restart recovery", () => {
       },
     ]);
     expect(final.status).toBe("AWAITING_VERIFICATION");
-    expect(provider.callCount).toBe(2);
+    expect(modelTurns.callCount()).toBe(2);
     expect((await secondStorage.runs.get(run.id))?.finalResult).toBeUndefined();
     expect(
       (await secondStorage.messages.listByRun(run.id)).map((entry) => entry.message.role),
@@ -194,14 +164,14 @@ describe("RunController file-backed restart recovery", () => {
     await secondStorage.close();
 
     const thirdStorage = await openCaelushStorage({ path: path.join(directory, "caelush.sqlite") });
-    const thirdController = createController(thirdStorage, provider, now);
+    const thirdController = createController(thirdStorage, modelTurns, now);
     const recoveredFinal = await thirdController.recover(run.id);
     expect(recoveredFinal.status).toBe("AWAITING_VERIFICATION");
     if (recoveredFinal.status !== "AWAITING_VERIFICATION")
       throw new Error("expected verification result");
     expect(recoveredFinal.candidateText).toBe("updated parser");
     expect(recoveredFinal.verificationPlanId).toBeDefined();
-    expect(provider.callCount).toBe(2);
+    expect(modelTurns.callCount()).toBe(2);
     const events = await thirdStorage.events.replay(run.id, { limit: 100 });
     expect(events.map((event) => event.durability.sequence)).toEqual(
       Array.from({ length: events.length }, (_, index) => index + 1),

@@ -8,19 +8,25 @@ import {
   createTimestampMs,
   createWorkspaceId,
 } from "@caelush/protocol";
-import { LLMTurnResultSchema, type LLMTurnResult } from "@caelush/llm/turn";
-import { LLMNetworkError } from "@caelush/llm/errors";
+
 import {
   AgentLoop,
   RunController,
   RunControllerInfrastructureError,
   RunRetryRegistry,
   type RunExecutionStorePort,
+  type AIModelTurnResult,
 } from "@caelush/core";
 import { EventBus } from "@caelush/events";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
 import { verificationPlanner } from "./support/fixtures.js";
+import {
+  fakeModelTurnExecutor,
+  modelTurnResult,
+  testModelCatalog,
+  aiError,
+} from "./support/model-turns.js";
 
 function makeRun(maxSteps = 4) {
   return AgentRunSchema.parse({
@@ -40,7 +46,7 @@ function makeRun(maxSteps = 4) {
 
 async function setup(options: {
   maxSteps?: number;
-  complete: (count: number, signal: AbortSignal) => Promise<LLMTurnResult>;
+  complete: (count: number, signal: AbortSignal) => Promise<AIModelTurnResult>;
   inspect?: () => Promise<never>;
   execution?: (storage: Awaited<ReturnType<typeof openCaelushStorage>>) => RunExecutionStorePort;
   retryRegistry?: RunRetryRegistry;
@@ -75,9 +81,10 @@ async function setup(options: {
         report: {} as never,
       }),
     },
-    llmClient: {
-      complete: async (_request, { signal }) => options.complete(++count, signal),
-    },
+    models: testModelCatalog(),
+    modelTurns: fakeModelTurnExecutor(async (_request, signal) =>
+      options.complete(++count, signal),
+    ),
     clock: { now: () => createTimestampMs(clockState.value++) },
     stepIdFactory: { create: () => createStepId() },
   });
@@ -118,7 +125,7 @@ async function setup(options: {
 }
 
 function finalTurn(text = "answer") {
-  return LLMTurnResultSchema.parse({
+  return modelTurnResult({
     callId: createLLMCallId(),
     providerId: "fixture",
     model: { provider: "fixture", model: "fixture-model" },
@@ -129,7 +136,7 @@ function finalTurn(text = "answer") {
 }
 
 function toolTurn() {
-  return LLMTurnResultSchema.parse({
+  return modelTurnResult({
     callId: createLLMCallId(),
     providerId: "fixture",
     model: { provider: "fixture", model: "fixture-model" },
@@ -154,7 +161,7 @@ describe("RunController failure and maxSteps boundaries", () => {
     };
     const fixture = await setup({
       complete: async (count) => {
-        if (count === 1) throw new LLMNetworkError("provider secret");
+        if (count === 1) throw aiError("AI_NETWORK", { message: "provider secret" });
         return finalTurn("recovered");
       },
       retryTimer: timer,
@@ -199,7 +206,7 @@ describe("RunController failure and maxSteps boundaries", () => {
     const timer = { schedule: () => ({ cancel: () => undefined }) };
     const fixture = await setup({
       complete: async () => {
-        throw new LLMNetworkError("provider secret");
+        throw aiError("AI_NETWORK", { message: "provider secret" });
       },
       retryRegistry: new RunRetryRegistry({
         clock: { now: () => createTimestampMs(10) },
@@ -228,7 +235,7 @@ describe("RunController failure and maxSteps boundaries", () => {
     }> = [];
     const fixture = await setup({
       complete: async () => {
-        throw new LLMNetworkError("provider secret");
+        throw aiError("AI_NETWORK", { message: "provider secret" });
       },
       retryTimer: {
         schedule: (_delayMs, callback) => {
@@ -256,7 +263,7 @@ describe("RunController failure and maxSteps boundaries", () => {
   it("exhausts bounded provider attempts without appending partial output", async () => {
     const fixture = await setup({
       complete: async () => {
-        throw new LLMNetworkError("provider secret");
+        throw aiError("AI_NETWORK", { message: "provider secret" });
       },
       retryTimer: {
         schedule: (_delayMs, callback) => ({ cancel: () => undefined, callback }),
@@ -320,7 +327,7 @@ describe("RunController failure and maxSteps boundaries", () => {
   });
 
   it("emits llm.completed when the provider returned a rejected model output", async () => {
-    const rejected = LLMTurnResultSchema.parse({
+    const rejected = modelTurnResult({
       ...finalTurn("partial"),
       finishReason: "LENGTH",
       toolCalls: [{ id: "call_a", name: "read_file", input: {} }],

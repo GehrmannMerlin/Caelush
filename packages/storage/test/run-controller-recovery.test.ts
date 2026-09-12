@@ -10,10 +10,10 @@ import {
 } from "@caelush/protocol";
 import { AgentLoop, RunController } from "@caelush/core";
 import { EventBus } from "@caelush/events";
-import { LLMTurnResultSchema } from "@caelush/llm/turn";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
 import { makeState, makeStep, verificationPlanner } from "./support/fixtures.js";
+import { fakeModelTurnExecutor, modelTurnResult, testModelCatalog } from "./support/model-turns.js";
 
 function run() {
   return AgentRunSchema.parse({
@@ -49,19 +49,18 @@ function controller(
         report: {} as never,
       }),
     },
-    llmClient: {
-      complete: async () => {
-        calls.count += 1;
-        return LLMTurnResultSchema.parse({
-          callId: createLLMCallId(),
-          providerId: "fixture",
-          model: { provider: "fixture", model: "fixture-model" },
-          text: output,
-          toolCalls: [],
-          finishReason: "STOP",
-        });
-      },
-    },
+    models: testModelCatalog(),
+    modelTurns: fakeModelTurnExecutor(async () => {
+      calls.count += 1;
+      return modelTurnResult({
+        callId: createLLMCallId(),
+        providerId: "fixture",
+        model: { provider: "fixture", model: "fixture-model" },
+        text: output,
+        toolCalls: [],
+        finishReason: "STOP",
+      });
+    }),
     clock: { now: () => createTimestampMs(now++) },
     stepIdFactory: { create: () => createStepId() },
   });
