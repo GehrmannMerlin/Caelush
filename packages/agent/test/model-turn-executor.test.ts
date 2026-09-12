@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { createModelTurnExecutor } from "../src/model-turn-executor.js";
-import type { AIGateway, AIModelRequest, AIModelTurnResult, AIStream, AIStreamEvent } from "@caelush/ai";
+import type {
+  AIGateway,
+  AIModelRequest,
+  AIModelTurnResult,
+  AIStream,
+  AIStreamEvent,
+} from "@caelush/ai";
 
 const CALL_ID = "llm_0195f3a0-0000-7000-8000-000000000000" as never;
 
@@ -39,7 +45,10 @@ function gateway(script: readonly AIStreamEvent[]): {
   let calls = 0;
 
   const stub: AIGateway = {
-    stream(request: AIModelRequest, options?: { readonly signal?: AbortSignal }): Promise<AIStream> {
+    stream(
+      request: AIModelRequest,
+      options?: { readonly signal?: AbortSignal },
+    ): Promise<AIStream> {
       calls += 1;
       requests.push(request);
       if (options?.signal !== undefined) signals.push(options.signal);
@@ -55,11 +64,20 @@ function gateway(script: readonly AIStreamEvent[]): {
     },
   };
 
-  return { gateway: stub, callCount: () => calls, requests: () => requests, signals: () => signals };
+  return {
+    gateway: stub,
+    callCount: () => calls,
+    requests: () => requests,
+    signals: () => signals,
+  };
 }
 
 function textTurn(text: string): readonly AIStreamEvent[] {
-  return [start(), { type: "text.delta", payload: { text } }, { type: "stream.finish", payload: { finishReason: "STOP" } }];
+  return [
+    start(),
+    { type: "text.delta", payload: { text } },
+    { type: "stream.finish", payload: { finishReason: "STOP" } },
+  ];
 }
 
 describe("ModelTurnExecutor", () => {
@@ -212,7 +230,8 @@ describe("ModelTurnExecutor", () => {
 
   it("propagates a preflight rejection from the gateway", async () => {
     const stub: AIGateway = {
-      stream: () => Promise.reject(Object.assign(new Error("bad"), { code: "AI_PROVIDER_NOT_FOUND" })),
+      stream: () =>
+        Promise.reject(Object.assign(new Error("bad"), { code: "AI_PROVIDER_NOT_FOUND" })),
       complete: () => Promise.reject(new Error("unused")),
     };
     const executor = createModelTurnExecutor({ gateway: stub });
@@ -239,5 +258,21 @@ describe("ModelTurnExecutor", () => {
     await executor.execute({ request: REQUEST, signal: new AbortController().signal });
 
     expect(fake.requests()[0]).toBe(REQUEST);
+  });
+
+  it("never retries: one execute is at most one gateway stream", async () => {
+    const fake = gateway([
+      start(),
+      { type: "stream.error", payload: { error: { code: "AI_NETWORK" } } } as never,
+    ]);
+    const executor = createModelTurnExecutor({ gateway: fake.gateway });
+
+    await expect(
+      executor.execute({ request: REQUEST, signal: new AbortController().signal }),
+    ).rejects.toBeDefined();
+
+    // Retry policy belongs to the durable Run layer, so a failed turn must not be
+    // silently re-sent by the executor.
+    expect(fake.callCount()).toBe(1);
   });
 });
