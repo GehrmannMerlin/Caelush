@@ -15,7 +15,7 @@ const protocolPackageName = "@caelush/protocol";
 const internalPackagePattern = /^@caelush\//;
 const deepSourceImportPattern = /\.\.\/(?:\.\.\/)+packages\/[^\s"'`]+\/src\//;
 const forbiddenLlmSdkImportPattern = /\bfrom\s+["'](?:ai|@ai-sdk\/)/;
-const explicitAnyPattern = /\bany\b/;
+const explicitAnyPattern = /(?::\s*any\b|<any>|\bas\s+any\b|\bany\[\]|Array<any>)/;
 const openAICompatibleAdapterRoot = path.join(
   repositoryRoot,
   "packages",
@@ -86,13 +86,16 @@ describe("package boundaries", () => {
     ).toBe(false);
   });
 
-  it("keeps the LLM package below the provider boundary and above Protocol only", async () => {
+  it("keeps the LLM package as a compatibility facade above the AI core only", async () => {
     const manifest = await readManifest("packages/llm/package.json");
     const dependencies = dependencyEntries(manifest);
     expect(dependencies[protocolPackageName]).toBe("workspace:*");
     expect(dependencies.zod).toBe("4.4.3");
-    expect(dependencies.ai).toBe("7.0.83");
-    expect(dependencies["@ai-sdk/openai-compatible"]).toBe("3.0.39");
+    // Phase 2B moved the OpenAI-compatible runtime into `@caelush/ai`, so the legacy
+    // package now depends on the AI core and owns no provider SDK at all.
+    expect(dependencies["@caelush/ai"]).toBe("workspace:*");
+    expect(dependencies.ai).toBeUndefined();
+    expect(dependencies["@ai-sdk/openai-compatible"]).toBeUndefined();
     expect(
       Object.keys(dependencies).some((dependency) =>
         ["@ai-sdk/core", "@ai-sdk/openai", "openai", "anthropic"].includes(dependency),
@@ -105,7 +108,7 @@ describe("package boundaries", () => {
     );
   });
 
-  it("keeps AI SDK imports inside the OpenAI-compatible adapter and explicit any out of production source", async () => {
+  it("keeps provider SDK imports out of the legacy package and explicit any out of production source", async () => {
     const llmSourcePaths = await sourceFiles(path.join(repositoryRoot, "packages", "llm", "src"));
     const llmSourceContents = await Promise.all(
       llmSourcePaths.map(async (filePath) => ({

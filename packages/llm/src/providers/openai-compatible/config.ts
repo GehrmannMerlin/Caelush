@@ -1,9 +1,11 @@
-import type { LLMCapabilities } from "../../capabilities.js";
-import { LLMCapabilitiesSchema } from "../../capabilities.js";
+import { assertProviderEndpoint } from "@caelush/ai";
 import { LLMProviderError } from "../../errors.js";
 import { ProviderIdSchema } from "../../provider.js";
+import type { LLMCapabilities } from "../../capabilities.js";
+import { LLMCapabilitiesSchema } from "../../capabilities.js";
 import type { ProviderId } from "../../provider.js";
 
+/** The options an existing consumer already passes to this factory. */
 export interface OpenAICompatibleLLMProviderOptions {
   readonly id: ProviderId;
   readonly baseURL: string;
@@ -15,6 +17,7 @@ export interface OpenAICompatibleLLMProviderOptions {
   readonly fetch?: typeof fetch;
 }
 
+/** The validated, defensively copied options the facade works from. */
 export interface NormalizedOpenAICompatibleLLMProviderOptions {
   readonly id: ProviderId;
   readonly baseURL: string;
@@ -35,6 +38,14 @@ const defaultCapabilities: LLMCapabilities = {
   reasoningSummary: "UNKNOWN",
 };
 
+/**
+ * Validate and copy the legacy provider options.
+ *
+ * The endpoint is checked by importing the AI core's own `assertProviderEndpoint`,
+ * so this package keeps no second URL-validation implementation. An AI configuration
+ * failure is projected onto the legacy `LLMProviderError`, because the legacy
+ * contract reports a bad provider configuration as a provider failure.
+ */
 export function normalizeOpenAICompatibleOptions(
   options: OpenAICompatibleLLMProviderOptions,
 ): NormalizedOpenAICompatibleLLMProviderOptions {
@@ -43,14 +54,10 @@ export function normalizeOpenAICompatibleOptions(
     throw new LLMProviderError("Invalid OpenAI-compatible provider id.");
   }
 
-  let baseURL: URL;
   try {
-    baseURL = new URL(options.baseURL);
+    assertProviderEndpoint(options.baseURL, "OpenAI-compatible provider baseURL");
   } catch (error) {
     throw new LLMProviderError("Invalid OpenAI-compatible provider base URL.", { cause: error });
-  }
-  if (baseURL.protocol !== "http:" && baseURL.protocol !== "https:") {
-    throw new LLMProviderError("OpenAI-compatible provider base URL must use HTTP or HTTPS.");
   }
 
   const capabilities = LLMCapabilitiesSchema.parse({

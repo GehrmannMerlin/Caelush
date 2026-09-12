@@ -1,7 +1,7 @@
 import type { ToolDefinition } from "../../packages/protocol/src/index.js";
 import { describe, expect, it } from "vitest";
 import { LLMRequestSchema } from "../../packages/llm/src/request.js";
-import { toAISDKTools } from "../../packages/llm/src/providers/openai-compatible/tools.js";
+import { toAIToolSpec } from "../../packages/llm/src/compatibility/request-projection.js";
 import type { ToolHandler } from "../../packages/tools/src/handler.js";
 import { ToolRegistryBuilder } from "../../packages/tools/src/registry-builder.js";
 
@@ -26,7 +26,7 @@ const definition: ToolDefinition = {
 };
 
 describe("ToolRegistry model catalog integration", () => {
-  it("feeds the registry catalog into LLMRequest and strips runtime metadata for providers", () => {
+  it("feeds the registry catalog into LLMRequest and strips runtime metadata at the AI boundary", () => {
     const handler: ToolHandler = {
       async execute() {
         return { content: "unused", details: { echoed: "unused" }, isError: false };
@@ -35,19 +35,33 @@ describe("ToolRegistry model catalog integration", () => {
     const registry = new ToolRegistryBuilder().register({ definition, handler }).build();
     const modelDefinitions = registry.modelDefinitions();
 
-    expect(
-      LLMRequestSchema.parse({
-        model: { provider: "local", model: "test-model" },
-        messages: [{ role: "user", content: "echo hello" }],
-        tools: modelDefinitions,
-      }).tools,
-    ).toEqual(modelDefinitions);
+    const parsed = LLMRequestSchema.parse({
+      model: { provider: "local", model: "test-model" },
+      messages: [{ role: "user", content: "echo hello" }],
+      tools: modelDefinitions,
+    });
+    expect(parsed.tools).toEqual(modelDefinitions);
 
-    const projected = toAISDKTools(modelDefinitions)?.echo_value;
-    expect(projected).toMatchObject({ description: definition.description });
-    expect(projected).not.toHaveProperty("riskLevel");
-    expect(projected).not.toHaveProperty("requiredCapabilities");
-    expect(projected).not.toHaveProperty("runtimeRequirements");
-    expect(projected).not.toHaveProperty("outputSchema");
+    // The provider-facing projection is the legacy boundary's job since Phase 2B;
+    // the SDK translation itself lives in `@caelush/ai` and is covered there.
+    const projected = parsed.tools?.map(toAIToolSpec);
+    expect(projected).toHaveLength(1);
+    expect(projected?.[0]).toEqual({
+      name: definition.name,
+      description: definition.description,
+      inputSchema: definition.inputSchema,
+    });
+
+    const serialized = JSON.stringify(projected);
+    for (const forbidden of [
+      "riskLevel",
+      "CRITICAL",
+      "requiredCapabilities",
+      "FS_READ",
+      "runtimeRequirements",
+      "outputSchema",
+    ]) {
+      expect(serialized).not.toContain(forbidden);
+    }
   });
 });

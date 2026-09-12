@@ -1,16 +1,25 @@
 import { describe, expect, it } from "vitest";
 import type { LLMMessage } from "../src/index.js";
-import { toAISDKMessages } from "../src/providers/openai-compatible/messages.js";
+import { toAIMessage } from "../src/compatibility/request-projection.js";
+import { toAIModelRef } from "../src/compatibility/legacy-json.js";
 
-describe("OpenAI-compatible message conversion", () => {
-  it("converts system, empty system, and user messages", () => {
+/**
+ * The SDK-facing message translation moved to
+ * `@caelush/ai/adapters/openai-compatible`, where it is covered by
+ * `packages/ai/test/adapters/openai-compatible/message-translator.test.ts`.
+ *
+ * What remains a legacy responsibility — and what this file now locks — is the
+ * projection from the legacy message contract onto the frozen AI message contract.
+ */
+describe("OpenAI-compatible legacy message projection", () => {
+  it("projects system, empty system, and user messages", () => {
     const messages: LLMMessage[] = [
       { role: "system", content: "You are precise." },
       { role: "system", content: "" },
       { role: "user", content: "Hello" },
     ];
 
-    expect(toAISDKMessages(messages)).toEqual([
+    expect(messages.map(toAIMessage)).toEqual([
       { role: "system", content: "You are precise." },
       { role: "system", content: "" },
       { role: "user", content: "Hello" },
@@ -19,74 +28,37 @@ describe("OpenAI-compatible message conversion", () => {
 
   it("preserves assistant text part order", () => {
     expect(
-      toAISDKMessages([
-        {
-          role: "assistant",
-          content: [
-            { type: "text", text: "first" },
-            { type: "text", text: " second" },
-          ],
-        },
-      ]),
-    ).toEqual([
-      {
+      toAIMessage({
         role: "assistant",
         content: [
           { type: "text", text: "first" },
           { type: "text", text: " second" },
         ],
-      },
-    ]);
+      }),
+    ).toEqual({
+      role: "assistant",
+      content: [
+        { type: "text", text: "first" },
+        { type: "text", text: " second" },
+      ],
+    });
   });
 
-  it("converts an assistant tool-only message without synthetic text", () => {
+  it("projects an assistant tool-only message without synthetic text", () => {
     expect(
-      toAISDKMessages([
-        {
-          role: "assistant",
-          content: [{ type: "tool-call", toolCallId: "call-1", toolName: "read_file", input: {} }],
-        },
-      ]),
-    ).toEqual([
-      {
+      toAIMessage({
         role: "assistant",
         content: [{ type: "tool-call", toolCallId: "call-1", toolName: "read_file", input: {} }],
-      },
-    ]);
+      }),
+    ).toEqual({
+      role: "assistant",
+      content: [{ type: "tool-call", toolCallId: "call-1", toolName: "read_file", input: {} }],
+    });
   });
 
-  it("converts assistant text plus a tool call and both tool result states", () => {
+  it("projects assistant text plus a tool call and both tool result states", () => {
     expect(
-      toAISDKMessages([
-        {
-          role: "assistant",
-          content: [
-            { type: "text", text: "I will inspect it." },
-            {
-              type: "tool-call",
-              toolCallId: "call-1",
-              toolName: "read_file",
-              input: { path: "README.md" },
-            },
-          ],
-        },
-        {
-          role: "tool",
-          toolCallId: "call-1",
-          toolName: "read_file",
-          content: "file contents",
-          isError: false,
-        },
-        {
-          role: "tool",
-          toolCallId: "call-2",
-          toolName: "read_file",
-          content: "permission denied",
-          isError: true,
-        },
-      ]),
-    ).toEqual([
-      {
+      toAIMessage({
         role: "assistant",
         content: [
           { type: "text", text: "I will inspect it." },
@@ -97,33 +69,54 @@ describe("OpenAI-compatible message conversion", () => {
             input: { path: "README.md" },
           },
         ],
-      },
-      {
+      }),
+    ).toEqual({
+      role: "assistant",
+      content: [
+        { type: "text", text: "I will inspect it." },
+        {
+          type: "tool-call",
+          toolCallId: "call-1",
+          toolName: "read_file",
+          input: { path: "README.md" },
+        },
+      ],
+    });
+
+    expect(
+      toAIMessage({
         role: "tool",
-        content: [
-          {
-            type: "tool-result",
-            toolCallId: "call-1",
-            toolName: "read_file",
-            output: { type: "text", value: "file contents" },
-          },
-        ],
-      },
-      {
+        toolCallId: "call-1",
+        toolName: "read_file",
+        content: "file contents",
+        isError: false,
+      }),
+    ).toEqual({
+      role: "tool",
+      toolCallId: "call-1",
+      toolName: "read_file",
+      content: "file contents",
+      isError: false,
+    });
+
+    expect(
+      toAIMessage({
         role: "tool",
-        content: [
-          {
-            type: "tool-result",
-            toolCallId: "call-2",
-            toolName: "read_file",
-            output: { type: "error-text", value: "permission denied" },
-          },
-        ],
-      },
-    ]);
+        toolCallId: "call-2",
+        toolName: "read_file",
+        content: "permission denied",
+        isError: true,
+      }),
+    ).toEqual({
+      role: "tool",
+      toolCallId: "call-2",
+      toolName: "read_file",
+      content: "permission denied",
+      isError: true,
+    });
   });
 
-  it("preserves a complete multi-turn model history", () => {
+  it("preserves a complete multi-turn model history in order", () => {
     const history: LLMMessage[] = [
       { role: "user", content: "Read the file." },
       {
@@ -142,8 +135,41 @@ describe("OpenAI-compatible message conversion", () => {
       { role: "assistant", content: [{ type: "text", text: "The file says contents." }] },
     ];
 
-    expect(toAISDKMessages(history)).toHaveLength(4);
-    expect(toAISDKMessages(history)[1]).toMatchObject({ role: "assistant" });
-    expect(toAISDKMessages(history)[2]).toMatchObject({ role: "tool" });
+    const projected = history.map(toAIMessage);
+    expect(projected).toHaveLength(4);
+    expect(projected.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "tool",
+      "assistant",
+    ]);
+  });
+
+  it("drops the durable artifact pointer, which is not provider input", () => {
+    const projected = toAIMessage({
+      role: "tool",
+      toolCallId: "call-1",
+      toolName: "read_file",
+      content: "contents",
+      isError: false,
+      rawArtifactRef: "artifact-1",
+    });
+
+    expect(projected).not.toHaveProperty("rawArtifactRef");
+    expect(JSON.stringify(projected)).not.toContain("artifact-1");
+  });
+
+  it("projects the model reference without inventing a baseUrl", () => {
+    expect(toAIModelRef({ provider: "compat-fixture", model: "m" })).toEqual({
+      provider: "compat-fixture",
+      model: "m",
+    });
+    expect(
+      toAIModelRef({ provider: "compat-fixture", model: "m", baseUrl: "http://legacy.example" }),
+    ).toEqual({
+      provider: "compat-fixture",
+      model: "m",
+      baseUrl: "http://legacy.example",
+    });
   });
 });
