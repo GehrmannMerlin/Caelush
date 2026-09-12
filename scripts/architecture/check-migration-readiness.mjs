@@ -49,6 +49,27 @@ export const DEFAULT_BASELINE_PATH = path.join(SCRIPT_DIRECTORY, "legacy-import-
 /** Packages Phase 1A created as empty skeletons that must stay dependency-free. */
 export const V2_SKELETON_PACKAGES = ["ai", "agent", "coding-agent"];
 
+/**
+ * Skeletons that have started real migration and therefore may publish the public
+ * surface their implementation earned.
+ *
+ * The `v2-skeleton-boundary` condition exists so a package cannot claim a public
+ * surface it has not built yet. Once a migration unit lands a real implementation,
+ * that premise is satisfied and the surface restriction has to lift, or migration
+ * could never publish anything.
+ *
+ * Phase 2A (AI Model Invocation V2 core) migrates `ai`, so `ai` leaves the locked
+ * set. The dependency-free guarantee below still applies to every skeleton,
+ * migrated or not: `ai` may publish surfaces, but it may never declare a legacy
+ * dependency.
+ */
+export const V2_MIGRATED_SKELETON_PACKAGES = ["ai"];
+
+/** Skeletons whose public surface must still be exactly `"."` because code has not migrated. */
+export const V2_SURFACE_LOCKED_SKELETON_PACKAGES = V2_SKELETON_PACKAGES.filter(
+  (identity) => !V2_MIGRATED_SKELETON_PACKAGES.includes(identity),
+);
+
 /** The only baseline debt class that is legitimate migration debt. */
 export const MIGRATION_DEBT_CLASSES = ["target-to-legacy", "package-manifest"];
 
@@ -410,11 +431,13 @@ export async function runMigrationReadinessCheck(options = {}) {
       if (subpaths.length === 0) {
         findings.push(`@caelush/${skeleton} declares no exports entry point`);
       }
-      for (const subpath of subpaths) {
-        if (subpath !== ".") {
-          findings.push(
-            `@caelush/${skeleton} publishes "${subpath}" before any code migrated; keep the surface at "."`,
-          );
+      if (V2_SURFACE_LOCKED_SKELETON_PACKAGES.includes(skeleton)) {
+        for (const subpath of subpaths) {
+          if (subpath !== ".") {
+            findings.push(
+              `@caelush/${skeleton} publishes "${subpath}" before any code migrated; keep the surface at "."`,
+            );
+          }
         }
       }
       for (const dependency of project.manifestDependencies) {

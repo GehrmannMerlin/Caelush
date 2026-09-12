@@ -8,6 +8,9 @@ importers:
 
   .:
     devDependencies:
+      '@caelush/ai':
+        specifier: workspace:*
+        version: link:packages/ai
       '@caelush/llm':
         specifier: workspace:*
         version: link:packages/llm
@@ -170,7 +173,11 @@ importers:
 
   packages/agent: {}
 
-  packages/ai: {}
+  packages/ai:
+    dependencies:
+      uuid:
+        specifier: 14.0.2
+        version: 14.0.2
 
   packages/client:
     dependencies:

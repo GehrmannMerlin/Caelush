@@ -60,9 +60,12 @@ export type LocatedViolation = BaselineEntry & {
 
 export type ExportDeclaration = { subpath: string; target: unknown };
 
+export type ManifestDependency = { field: string; name: string; version: unknown };
+
 export type ScanProject = {
   identity: string;
   relativeDirectory: string;
+  manifestDependencies: ManifestDependency[];
   exportDeclarations: ExportDeclaration[];
 };
 
@@ -297,6 +300,8 @@ type ReadinessImplementation = {
   NON_MIGRATION_DEBT_CLASSES: string[];
   MIGRATION_DEBT_ENTRY_KINDS: string[];
   V2_SKELETON_PACKAGES: string[];
+  V2_MIGRATED_SKELETON_PACKAGES: string[];
+  V2_SURFACE_LOCKED_SKELETON_PACKAGES: string[];
   REQUIRED_ROOT_SCRIPTS: string[];
   ARCHITECTURE_ENTRY_POINTS: string[];
   checkStaticContract(): string[];

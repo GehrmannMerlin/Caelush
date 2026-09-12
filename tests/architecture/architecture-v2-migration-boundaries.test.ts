@@ -788,16 +788,54 @@ describe("architecture v2 public boundary guard", () => {
   );
 
   it(
-    "keeps the three Architecture V2 skeletons on a root-only export surface",
+    "keeps the unmigrated Architecture V2 skeletons on a root-only export surface",
     async () => {
       const scan = await scanner.scanWorkspace(repositoryRoot);
-      for (const identity of ["ai", "agent", "coding-agent"]) {
+      for (const identity of ["agent", "coding-agent"]) {
         const project = scan.projects.find((entry) => entry.identity === identity);
         expect(project, identity).toBeDefined();
         expect(project?.exportDeclarations.map((declaration) => declaration.subpath)).toEqual([
           ".",
         ]);
       }
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "keeps the migrated AI core on exactly the surface Phase 2A earned",
+    async () => {
+      // Phase 2A migrates the AI Model Invocation core, so `ai` is no longer a
+      // surface-locked skeleton. The exact list is asserted so the public surface
+      // can never widen by accident.
+      const scan = await scanner.scanWorkspace(repositoryRoot);
+      const project = scan.projects.find((entry) => entry.identity === "ai");
+      expect(project).toBeDefined();
+      expect(project?.exportDeclarations.map((declaration) => declaration.subpath).sort()).toEqual([
+        ".",
+        "./adapters",
+        "./errors",
+        "./messages",
+        "./models",
+        "./providers",
+        "./request",
+        "./stream",
+      ]);
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "keeps the migrated AI core free of every Caelush dependency",
+    async () => {
+      const scan = await scanner.scanWorkspace(repositoryRoot);
+      const project = scan.projects.find((entry) => entry.identity === "ai");
+      expect(project).toBeDefined();
+      expect(
+        (project?.manifestDependencies ?? [])
+          .map((dependency) => dependency.name)
+          .filter((name) => name.startsWith("@caelush/")),
+      ).toEqual([]);
     },
     GIT_TEST_TIMEOUT_MS,
   );

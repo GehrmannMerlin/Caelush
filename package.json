@@ -23,6 +23,7 @@
     "test:release": "node scripts/test-release.mjs"
   },
   "devDependencies": {
+    "@caelush/ai": "workspace:*",
     "@caelush/llm": "workspace:*",
     "@caelush/runtime": "workspace:*",
     "@caelush/security": "workspace:*",

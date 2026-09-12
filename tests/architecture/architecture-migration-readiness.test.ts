@@ -388,6 +388,46 @@ describe("architecture v2 migration readiness gate", () => {
   );
 
   it(
+    "allows a migrated skeleton to publish the surface its implementation earned",
+    async () => {
+      // Phase 2A migrates `ai`, so its surface restriction lifts. The dependency
+      // guarantee below still applies.
+      const workspace = await fixture(
+        v2WorkspaceSpec({
+          "packages/ai": {
+            source: { "index.ts": "export {};\n" },
+            exports: { ".": { import: "./dist/index.js" }, "./models": { import: "./dist/m.js" } },
+          },
+        }),
+      );
+
+      const result = await readinessOf(workspace.root);
+      expect(findingsFor(result, "v2-skeleton-boundary").join(" ")).not.toContain('"./models"');
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "still forbids a legacy dependency from the migrated AI skeleton",
+    async () => {
+      const workspace = await fixture(
+        v2WorkspaceSpec({
+          "packages/ai": {
+            source: { "index.ts": "export {};\n" },
+            exports: { ".": { import: "./dist/index.js" }, "./models": { import: "./dist/m.js" } },
+            dependencies: { "@caelush/llm": "workspace:*" },
+          },
+        }),
+      );
+
+      const result = await readinessOf(workspace.root);
+      expect(result.ready).toBe(false);
+      expect(findingsFor(result, "v2-skeleton-boundary").join(" ")).toContain("@caelush/llm");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  it(
     "fails on a new violation that is not in the baseline",
     async () => {
       const workspace = await fixture(
@@ -662,6 +702,9 @@ describe("architecture v2 readiness packaging", () => {
       "cross-workspace-relative-import",
     ]);
     expect(readiness.V2_SKELETON_PACKAGES).toEqual(["ai", "agent", "coding-agent"]);
+    // Phase 2A migrates the AI core, so exactly one skeleton may publish surfaces.
+    expect(readiness.V2_MIGRATED_SKELETON_PACKAGES).toEqual(["ai"]);
+    expect(readiness.V2_SURFACE_LOCKED_SKELETON_PACKAGES).toEqual(["agent", "coding-agent"]);
   });
 
   it("requires every architecture root script and entry point", () => {
