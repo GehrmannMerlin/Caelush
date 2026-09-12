@@ -22,7 +22,7 @@ import type { RunRetryRegistry } from "./run-retry-registry.js";
 import type { RetryJitterSource, RetryPolicy } from "./retry-controller.js";
 import type { RunBudgetPort } from "./budget-ports.js";
 import type { ResourceGovernancePort } from "./resource-governance-port.js";
-import type { AIModelTurnResult, ModelUsage } from "@caelush/ai";
+import type { ModelUsage } from "@caelush/ai";
 import type {
   VerificationCommandExecutionPort,
   VerificationCommandSecurityPort,

@@ -159,7 +159,8 @@ function asAIError(error: unknown): AIError | undefined {
   if (typeof error !== "object" || error === null) return undefined;
   const candidate = error as { readonly code?: unknown; readonly retryable?: unknown };
   if (typeof candidate.retryable !== "boolean") return undefined;
-  if (typeof candidate.code !== "string" || !ALL_AI_CODES.includes(candidate.code)) return undefined;
+  if (typeof candidate.code !== "string" || !ALL_AI_CODES.includes(candidate.code))
+    return undefined;
   return candidate as AIError;
 }
 

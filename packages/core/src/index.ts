@@ -206,7 +206,12 @@ export {
   resumeAgentRunFromVerificationRepair,
   markAgentStateFailed,
 } from "./run-execution-state.js";
-export type { RunBudgetPort, RunBudgetSettlement, RunLLMBudgetAdmission } from "./budget-ports.js";
+export type {
+  RunBudgetPort,
+  RunBudgetSettlement,
+  RunLLMBudgetAdmission,
+  RunLLMBudgetAdmissionInput,
+} from "./budget-ports.js";
 export {
   evaluateCompletionAuthority,
   createVerifiedRunFinalResult,

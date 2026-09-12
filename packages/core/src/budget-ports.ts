@@ -18,7 +18,7 @@ import type { AgentBudgetBlock } from "./agent-errors.js";
  * dependency graph forbids, and it keeps the estimator — which does need the request
  * shape — on the Core side where the request lives.
  */
-export interface LLMBudgetAdmissionInput {
+export interface RunLLMBudgetAdmissionInput {
   readonly estimatedInputTokens?: number;
   readonly configuredMaxOutputTokens?: number;
 }
@@ -44,7 +44,7 @@ export interface RunBudgetPort {
   admitLLM(input: {
     readonly run: AgentRun;
     readonly step: AgentStep;
-    readonly admission: LLMBudgetAdmissionInput;
+    readonly admission: RunLLMBudgetAdmissionInput;
   }): Promise<RunLLMBudgetAdmission>;
   settleLLM(input: {
     readonly runId: RunId;
@@ -55,7 +55,7 @@ export interface RunBudgetPort {
   admitVerificationLLM?(input: {
     readonly run: AgentRun;
     readonly ownerId: string;
-    readonly admission: LLMBudgetAdmissionInput;
+    readonly admission: RunLLMBudgetAdmissionInput;
   }): Promise<RunLLMBudgetAdmission>;
   settleVerificationLLM?(input: {
     readonly runId: RunId;

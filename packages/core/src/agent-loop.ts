@@ -10,7 +10,7 @@ import {
   type ContextAuthoritySnapshot,
 } from "@caelush/context";
 import type { LLMMessage, LLMToolResultMessage } from "@caelush/llm/messages";
-import type { AIModelRequest, AIModelTurnResult, ModelDescriptor, ModelUsage } from "@caelush/ai";
+import type { AIModelRequest, AIModelTurnResult, ModelUsage } from "@caelush/ai";
 import type { AgentState, AgentStep, TimestampMs } from "@caelush/protocol";
 import {
   beginAgentStepState,
