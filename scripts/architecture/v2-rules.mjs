@@ -9,9 +9,7 @@
  * ----------
  * The rules are **derived**, never hand-listed:
  *
- *   V2_ALLOWED_DEPENDENCIES   one allowlist per target package
- *              +
- *   V2_UNIVERSAL_TARGETS      packages every target may depend on
+ *   V2_ALLOWED_DEPENDENCIES   one explicit allowlist per target package
  *              +
  *   V2_LEGACY_PACKAGES        packages with no permanent Architecture V2 home
  *              ↓
@@ -68,31 +66,33 @@ export const PHASE_1A_FINAL_COMMIT = "2e0befea64e303374c59dfd873188b95b0f484d4";
 /**
  * Allowed direction of the Architecture V2 target graph.
  *
- * This is an **allowlist**. It states what a target package may depend on in the
- * final architecture; it never obliges a package to declare a dependency it does
- * not use. `Dependency follows real code` remains the rule.
+ * This is the **single frozen allowlist**. It states exactly what each target
+ * package may depend on in the final architecture; it never obliges a package to
+ * declare a dependency it does not use. `Dependency follows real code` remains
+ * the rule.
  *
- * `protocol` is absent as a value because it is a universal contract every
- * target may depend on; see `V2_UNIVERSAL_TARGETS`.
+ * Every edge is written out explicitly, including `protocol`. An earlier version
+ * of this module factored `protocol` into a separate "universal targets" list,
+ * which silently granted `ai -> protocol` — a real drift, because
+ * `@caelush/ai` is an independent AI root package and must depend on nothing.
+ * Repetition is the price of having no implicit grant, and the derivation below
+ * still guarantees no forbidden edge can be forgotten.
  */
 export const V2_ALLOWED_DEPENDENCIES = /** @type {Record<string, readonly string[]>} */ ({
   ai: [],
-  protocol: [],
-  agent: ["ai"],
-  runtime: [],
-  "coding-agent": ["ai", "agent", "runtime"],
-  storage: ["agent"],
-  client: [],
-});
 
-/**
- * Targets that every Architecture V2 target package may depend on.
- *
- * `protocol` is the cross-process contract layer. It is the bottom of the graph,
- * so depending on it never violates a direction. Listing it in every allowlist
- * would duplicate one fact seven times and invite drift, so it lives here.
- */
-export const V2_UNIVERSAL_TARGETS = ["protocol"];
+  protocol: [],
+
+  agent: ["ai", "protocol"],
+
+  runtime: ["protocol"],
+
+  "coding-agent": ["ai", "protocol", "agent", "runtime"],
+
+  storage: ["agent", "protocol"],
+
+  client: ["protocol"],
+});
 
 /** Architecture V2 packages that must exist once migration completes. */
 export const V2_TARGET_PACKAGES = [
@@ -144,7 +144,6 @@ export const V2_KNOWN_PACKAGE_IDENTITIES = [
 const TARGET_SET = new Set(V2_TARGET_PACKAGES);
 const HOST_SET = new Set(V2_HOST_APPS);
 const LEGACY_SET = new Set(V2_LEGACY_PACKAGES);
-const UNIVERSAL_SET = new Set(V2_UNIVERSAL_TARGETS);
 
 /**
  * @param {string} identity
@@ -195,9 +194,6 @@ export function isHostApp(identity) {
 export function isAllowedTargetEdge(from, to) {
   if (!TARGET_SET.has(from) || !TARGET_SET.has(to) || from === to) {
     return false;
-  }
-  if (UNIVERSAL_SET.has(to)) {
-    return true;
   }
   return (V2_ALLOWED_DEPENDENCIES[from] ?? []).includes(to);
 }

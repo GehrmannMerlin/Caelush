@@ -192,7 +192,6 @@ type RulesImplementation = {
   PHASE_1A_FINAL_COMMIT: string;
   DEPENDENCY_RULES: DependencyRule[];
   V2_ALLOWED_DEPENDENCIES: Record<string, readonly string[]>;
-  V2_UNIVERSAL_TARGETS: string[];
   V2_TARGET_PACKAGES: string[];
   V2_HOST_APPS: string[];
   V2_LEGACY_PACKAGES: string[];

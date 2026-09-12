@@ -123,27 +123,41 @@ describe("architecture v2 target allowlist derivation", () => {
     }
   });
 
-  it("treats protocol as a universal contract rather than per-package allowlist data", () => {
-    expect(rules.V2_UNIVERSAL_TARGETS).toEqual(["protocol"]);
-    for (const target of rules.V2_TARGET_PACKAGES) {
-      if (target === "protocol") continue;
-      expect(rules.isAllowedTargetEdge(target, "protocol"), `${target}->protocol`).toBe(true);
-      expect(rules.findRule("source-import", target, "protocol")).toBeUndefined();
-    }
-    expect(rules.isAllowedTargetEdge("protocol", "ai")).toBe(false);
-    expect(rules.isAllowedTargetEdge("protocol", "protocol")).toBe(false);
-  });
-
   it("declares the frozen allowed graph exactly as the specification states", () => {
     expect(rules.V2_ALLOWED_DEPENDENCIES).toEqual({
       ai: [],
       protocol: [],
-      agent: ["ai"],
-      runtime: [],
-      "coding-agent": ["ai", "agent", "runtime"],
-      storage: ["agent"],
-      client: [],
+      agent: ["ai", "protocol"],
+      runtime: ["protocol"],
+      "coding-agent": ["ai", "protocol", "agent", "runtime"],
+      storage: ["agent", "protocol"],
+      client: ["protocol"],
     });
+  });
+
+  it("grants no target an implicit dependency on protocol", () => {
+    // Phase 1B factored protocol into a "universal targets" list, which silently
+    // made ai -> protocol legal. @caelush/ai is an independent AI root package,
+    // so the grant is gone and protocol is listed explicitly per package.
+    expect("V2_UNIVERSAL_TARGETS" in rules).toBe(false);
+
+    for (const target of rules.V2_TARGET_PACKAGES) {
+      const allowlist = rules.V2_ALLOWED_DEPENDENCIES[target] ?? [];
+      const dependsOnProtocol = rules.isAllowedTargetEdge(target, "protocol");
+      expect(dependsOnProtocol, `${target}->protocol`).toBe(allowlist.includes("protocol"));
+    }
+
+    // Exactly the frozen five may depend on protocol; ai and protocol may not.
+    const protocolConsumers = rules.V2_TARGET_PACKAGES.filter((target) =>
+      rules.isAllowedTargetEdge(target, "protocol"),
+    );
+    expect([...protocolConsumers].sort()).toEqual([
+      "agent",
+      "client",
+      "coding-agent",
+      "runtime",
+      "storage",
+    ]);
   });
 
   it("keeps the allowlist and the machine rules consistent for every pair", () => {
@@ -167,6 +181,7 @@ describe("architecture v2 target allowlist derivation", () => {
       ["storage", "runtime"],
       ["protocol", "ai"],
       ["protocol", "agent"],
+      ["ai", "protocol"],
     ] as const;
 
     for (const [from, to] of cases) {
@@ -179,6 +194,136 @@ describe("architecture v2 target allowlist derivation", () => {
       );
     }
   });
+
+  it(
+    "fails ai importing protocol, agent or runtime, and passes the frozen protocol consumers",
+    async () => {
+      const illegal = await fixture(
+        v2WorkspaceSpec({
+          "packages/ai": {
+            source: {
+              "index.ts": [
+                'import "@caelush/protocol";',
+                'import "@caelush/agent";',
+                'import "@caelush/runtime";',
+                "export {};",
+              ].join("\n"),
+            },
+          },
+        }),
+      );
+
+      const aiEvaluated = boundaries.evaluateScan(await scanner.scanWorkspace(illegal.root));
+      expect(rulesOf(aiEvaluated)).toEqual([
+        "AI_MUST_NOT_DEPEND_ON_AGENT",
+        "AI_MUST_NOT_DEPEND_ON_PROTOCOL",
+        "AI_MUST_NOT_DEPEND_ON_RUNTIME",
+      ]);
+      for (const violation of aiEvaluated.violations) {
+        expect(violation.edgeClass).toBe("target-graph");
+      }
+
+      // The same workspace also declares ai -> protocol in its manifest, which is
+      // the package-level half of the same drift.
+      const manifestIllegal = await fixture(
+        v2WorkspaceSpec({
+          "packages/ai": {
+            source: { "index.ts": "export {};\n" },
+            dependencies: { "@caelush/protocol": "workspace:*" },
+          },
+        }),
+      );
+
+      const manifestEvaluated = boundaries.evaluateScan(
+        await scanner.scanWorkspace(manifestIllegal.root),
+      );
+      expect(rulesOf(manifestEvaluated)).toEqual(["AI_MUST_NOT_DECLARE_DEPENDENCY_ON_PROTOCOL"]);
+
+      // Every frozen protocol consumer stays legal, in both layers.
+      const legal = await fixture(
+        v2WorkspaceSpec({
+          "packages/agent": {
+            source: {
+              "index.ts": 'import "@caelush/ai";\nimport "@caelush/protocol";\nexport {};\n',
+            },
+            dependencies: { "@caelush/ai": "workspace:*", "@caelush/protocol": "workspace:*" },
+          },
+          "packages/runtime": {
+            source: { "index.ts": 'import "@caelush/protocol";\nexport {};\n' },
+            dependencies: { "@caelush/protocol": "workspace:*" },
+          },
+          "packages/coding-agent": {
+            source: {
+              "index.ts": [
+                'import "@caelush/ai";',
+                'import "@caelush/protocol";',
+                'import "@caelush/agent";',
+                'import "@caelush/runtime";',
+                "export {};",
+              ].join("\n"),
+            },
+            dependencies: {
+              "@caelush/ai": "workspace:*",
+              "@caelush/protocol": "workspace:*",
+              "@caelush/agent": "workspace:*",
+              "@caelush/runtime": "workspace:*",
+            },
+          },
+          "packages/storage": {
+            source: {
+              "index.ts": 'import "@caelush/agent";\nimport "@caelush/protocol";\nexport {};\n',
+            },
+            dependencies: { "@caelush/agent": "workspace:*", "@caelush/protocol": "workspace:*" },
+          },
+          "packages/client": {
+            source: { "index.ts": 'import "@caelush/protocol";\nexport {};\n' },
+            dependencies: { "@caelush/protocol": "workspace:*" },
+          },
+        }),
+      );
+
+      expect(boundaries.evaluateScan(await scanner.scanWorkspace(legal.root)).violations).toEqual(
+        [],
+      );
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "fails every protocol subpath, source and manifest, because protocol must depend on nothing",
+    async () => {
+      const workspace = await fixture(
+        v2WorkspaceSpec({
+          "packages/protocol": {
+            source: {
+              "index.ts": [
+                'import "@caelush/ai";',
+                'import "@caelush/agent";',
+                'import "@caelush/runtime";',
+                'import "@caelush/storage";',
+                'import "@caelush/coding-agent";',
+                'import "@caelush/client";',
+                "export {};",
+              ].join("\n"),
+            },
+            dependencies: { "@caelush/ai": "workspace:*" },
+          },
+        }),
+      );
+
+      const evaluated = boundaries.evaluateScan(await scanner.scanWorkspace(workspace.root));
+      expect(rulesOf(evaluated)).toEqual([
+        "PROTOCOL_MUST_NOT_DECLARE_DEPENDENCY_ON_AI",
+        "PROTOCOL_MUST_NOT_DEPEND_ON_AGENT",
+        "PROTOCOL_MUST_NOT_DEPEND_ON_AI",
+        "PROTOCOL_MUST_NOT_DEPEND_ON_CLIENT",
+        "PROTOCOL_MUST_NOT_DEPEND_ON_CODING_AGENT",
+        "PROTOCOL_MUST_NOT_DEPEND_ON_RUNTIME",
+        "PROTOCOL_MUST_NOT_DEPEND_ON_STORAGE",
+      ]);
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
 
   it("keeps every rule id unique and reports the derived counts", () => {
     expect(new Set(rules.RULE_IDS).size).toBe(rules.RULE_IDS.length);
