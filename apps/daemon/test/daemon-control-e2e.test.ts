@@ -1,30 +1,24 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createWorkspaceId, type AgentEvent, type ModelRef } from "@caelush/protocol";
+import { createWorkspaceId, type AgentEvent } from "@caelush/protocol";
 import {
-  LLMAbortedError,
-  LLMNetworkError,
-  type LLMCapabilities,
-  type LLMProvider,
-  type LLMProviderCallContext,
-  type LLMProviderRequest,
-  type LLMStreamEvent,
-  type ProviderId,
-} from "@caelush/llm";
+  createAIError,
+  type AIAdapterEvent,
+  type ApiAdapter,
+  type ApiAdapterStreamInput,
+} from "@caelush/ai";
 import { openCaelushStorage } from "@caelush/storage";
 import { CaelushClient } from "@caelush/client";
 import { afterEach, describe, expect, it } from "vitest";
 import { startDaemon } from "../src/index.js";
-
-const capabilities: LLMCapabilities = {
-  textStreaming: "SUPPORTED",
-  toolCalling: "SUPPORTED",
-  parallelToolCalls: "SUPPORTED",
-  structuredOutput: "SUPPORTED",
-  vision: "UNSUPPORTED",
-  reasoningSummary: "UNSUPPORTED",
-};
+import {
+  FIXTURE_API,
+  FIXTURE_MODEL,
+  FIXTURE_PROVIDER,
+  fixtureBinding,
+  fixtureModelSource,
+} from "./support/ai-fixture.js";
 
 let directory: string | undefined;
 let daemon: { close(): Promise<void>; url: string } | undefined;
@@ -36,46 +30,38 @@ afterEach(async () => {
   daemon = undefined;
 });
 
-class ApprovalProvider implements LLMProvider {
-  readonly id = "approval-fixture" as ProviderId;
+/**
+ * Phase 2C: a daemon fixture adapter is a *dialect*, not a vendor.
+ *
+ * Every class below therefore registers the shared `FIXTURE_API` id and implements the
+ * AI core's `ApiAdapter` seam. There is no `supportsModel` and no capability
+ * declaration any more: model metadata is the model catalog's authority, and the
+ * gateway owns the `stream.start` / `stream.finish` envelope, so an adapter emits only
+ * dialect events.
+ */
+class ApprovalProvider implements ApiAdapter {
+  readonly id = FIXTURE_API;
   calls = 0;
   patchCalls = 0;
 
-  supportsModel(model: ModelRef): boolean {
-    return model.provider === this.id && model.model === "approval-model";
-  }
-
-  getCapabilities(): LLMCapabilities {
-    return capabilities;
-  }
-
-  stream(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-  ): AsyncIterable<LLMStreamEvent> {
+  stream(input: ApiAdapterStreamInput): AsyncGenerator<AIAdapterEvent> {
     this.calls += 1;
-    const isReview = request.messages.some(
+    const isReview = input.request.messages.some(
       (message) => message.role === "system" && message.content.includes("Review the supplied"),
     );
     if (isReview) {
       return this.text(
-        request,
-        context,
         JSON.stringify({ verdict: "PASS", summary: "The approved task is acceptable." }),
       );
     }
     if (this.calls === 1) {
       this.patchCalls += 1;
-      return this.toolCall(request, context);
+      return this.toolCall();
     }
-    return this.text(request, context, "The approved change is complete.");
+    return this.text("The approved change is complete.");
   }
 
-  private async *toolCall(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-  ): AsyncIterable<LLMStreamEvent> {
-    yield streamStart(this.id, request, context);
+  private async *toolCall(): AsyncGenerator<AIAdapterEvent> {
     yield {
       type: "tool_call.start",
       payload: { toolCallId: "approval_patch", toolName: "apply_patch" },
@@ -90,51 +76,32 @@ class ApprovalProvider implements LLMProvider {
         },
       },
     };
-    yield { type: "stream.finish", payload: { finishReason: "TOOL_CALLS" } };
+    yield { type: "adapter.finish", payload: { finishReason: "TOOL_CALLS" } };
   }
 
-  private async *text(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-    text: string,
-  ): AsyncIterable<LLMStreamEvent> {
-    yield streamStart(this.id, request, context);
+  private async *text(text: string): AsyncGenerator<AIAdapterEvent> {
     yield { type: "text.delta", payload: { text } };
-    yield { type: "stream.finish", payload: { finishReason: "STOP" } };
+    yield { type: "adapter.finish", payload: { finishReason: "STOP" } };
   }
 }
 
-class BlockingProvider implements LLMProvider {
-  readonly id = "cancel-fixture" as ProviderId;
+class BlockingProvider implements ApiAdapter {
+  readonly id = FIXTURE_API;
   readonly entered = deferred<void>();
   readonly aborted = deferred<void>();
 
-  supportsModel(model: ModelRef): boolean {
-    return model.provider === this.id && model.model === "cancel-model";
+  stream(input: ApiAdapterStreamInput): AsyncGenerator<AIAdapterEvent> {
+    return this.block(input);
   }
 
-  getCapabilities(): LLMCapabilities {
-    return capabilities;
-  }
-
-  stream(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-  ): AsyncIterable<LLMStreamEvent> {
-    return this.block(request, context);
-  }
-
-  private async *block(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-  ): AsyncIterable<LLMStreamEvent> {
+  private async *block(input: ApiAdapterStreamInput): AsyncGenerator<AIAdapterEvent> {
     this.entered.resolve();
     await new Promise<void>((resolve) => {
-      if (context.signal.aborted) {
+      if (input.signal.aborted) {
         resolve();
         return;
       }
-      context.signal.addEventListener(
+      input.signal.addEventListener(
         "abort",
         () => {
           this.aborted.resolve();
@@ -143,56 +110,45 @@ class BlockingProvider implements LLMProvider {
         { once: true },
       );
     });
-    if (context.signal.aborted) throw new LLMAbortedError();
-    yield streamStart(this.id, request, context);
+    // The adapter receives the gateway-owned signal unchanged. An aborted turn has no
+    // dialect event to report — the gateway owns `stream.start` and `stream.error` — so
+    // the abort surfaces as the AI core's own abort code and nothing is yielded.
+    if (input.signal.aborted) throw createAIError("AI_ABORTED");
+    yield* [] as readonly AIAdapterEvent[];
   }
 }
 
-class RetryProvider implements LLMProvider {
-  readonly id = "retry-fixture" as ProviderId;
+class RetryProvider implements ApiAdapter {
+  readonly id = FIXTURE_API;
   readonly firstFailed = deferred<void>();
   calls = 0;
 
   constructor(private readonly failFirst: boolean) {}
 
-  supportsModel(model: ModelRef): boolean {
-    return model.provider === this.id && model.model === "retry-model";
-  }
-
-  getCapabilities(): LLMCapabilities {
-    return capabilities;
-  }
-
-  stream(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-  ): AsyncIterable<LLMStreamEvent> {
+  stream(input: ApiAdapterStreamInput): AsyncGenerator<AIAdapterEvent> {
     this.calls += 1;
     if (this.failFirst && this.calls === 1) return this.failNetwork();
     if (
-      request.messages.some(
+      input.request.messages.some(
         (message) => message.role === "system" && message.content.includes("Review the supplied"),
       )
     ) {
-      return this.text(request, context, JSON.stringify({ verdict: "PASS", summary: "Accepted." }));
+      return this.text(JSON.stringify({ verdict: "PASS", summary: "Accepted." }));
     }
-    return this.text(request, context);
+    return this.text();
   }
 
-  private async *failNetwork(): AsyncIterable<LLMStreamEvent> {
+  private async *failNetwork(): AsyncGenerator<AIAdapterEvent> {
     this.firstFailed.resolve();
     yield* [];
-    throw new LLMNetworkError(undefined, { retryAfterMs: 2_500 });
+    // The transient provider failure is now an AI core code; only `AI_RATE_LIMIT`,
+    // `AI_NETWORK` and `AI_TIMEOUT` carry retry metadata into the durable layer.
+    throw createAIError("AI_NETWORK", undefined, { retryAfterMs: 2_500 });
   }
 
-  private async *text(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-    text = "Recovered and completed.",
-  ): AsyncIterable<LLMStreamEvent> {
-    yield streamStart(this.id, request, context);
+  private async *text(text = "Recovered and completed."): AsyncGenerator<AIAdapterEvent> {
     yield { type: "text.delta", payload: { text } };
-    yield { type: "stream.finish", payload: { finishReason: "STOP" } };
+    yield { type: "adapter.finish", payload: { finishReason: "STOP" } };
   }
 }
 
@@ -200,20 +156,9 @@ describe("production daemon control-plane E2E", () => {
   it("waits for approval, resolves through HTTP, resumes the exact Tool, and completes", async () => {
     const workspacePath = await makeWorkspace("caelush-approval-e2e-", "before\n");
     const provider = new ApprovalProvider();
-    daemon = await startFixtureDaemon(
-      workspacePath,
-      "approval-fixture",
-      "approval-model",
-      provider,
-    );
+    daemon = await startFixtureDaemon(workspacePath, provider);
     const client = new CaelushClient({ baseUrl: daemon.url });
-    const { session, run } = await createFixtureRun(
-      client,
-      workspacePath,
-      "approval-fixture",
-      "approval-model",
-      "DANGEROUS_ONLY",
-    );
+    const { session, run } = await createFixtureRun(client, workspacePath, "DANGEROUS_ONLY");
 
     expect((await client.startRun(run.id)).disposition).toBe("SCHEDULED");
     const waiting = await waitForRun(client, run.id, "WAITING_APPROVAL");
@@ -254,9 +199,9 @@ describe("production daemon control-plane E2E", () => {
     const workspacePath = await makeWorkspace("caelush-cancel-e2e-", "unchanged\n");
     const provider = new BlockingProvider();
     const databasePath = join(workspacePath, "caelush.db");
-    daemon = await startFixtureDaemon(workspacePath, "cancel-fixture", "cancel-model", provider);
+    daemon = await startFixtureDaemon(workspacePath, provider);
     const client = new CaelushClient({ baseUrl: daemon.url });
-    const { run } = await createFixtureRun(client, workspacePath, "cancel-fixture", "cancel-model");
+    const { run } = await createFixtureRun(client, workspacePath);
 
     expect((await client.startRun(run.id)).disposition).toBe("SCHEDULED");
     await provider.entered.promise;
@@ -287,9 +232,9 @@ describe("production daemon control-plane E2E", () => {
     const workspacePath = await makeWorkspace("caelush-shutdown-e2e-", "unchanged\n");
     const databasePath = join(workspacePath, "caelush.db");
     const provider = new BlockingProvider();
-    daemon = await startFixtureDaemon(workspacePath, "cancel-fixture", "cancel-model", provider);
+    daemon = await startFixtureDaemon(workspacePath, provider);
     const client = new CaelushClient({ baseUrl: daemon.url });
-    const { run } = await createFixtureRun(client, workspacePath, "cancel-fixture", "cancel-model");
+    const { run } = await createFixtureRun(client, workspacePath);
 
     await client.startRun(run.id);
     await provider.entered.promise;
@@ -309,14 +254,9 @@ describe("production daemon control-plane E2E", () => {
     const workspacePath = await makeWorkspace("caelush-recover-e2e-", "unchanged\n");
     const databasePath = join(workspacePath, "caelush.db");
     const firstProvider = new RetryProvider(true);
-    daemon = await startFixtureDaemon(workspacePath, "retry-fixture", "retry-model", firstProvider);
+    daemon = await startFixtureDaemon(workspacePath, firstProvider);
     const firstClient = new CaelushClient({ baseUrl: daemon.url });
-    const { session, run } = await createFixtureRun(
-      firstClient,
-      workspacePath,
-      "retry-fixture",
-      "retry-model",
-    );
+    const { session, run } = await createFixtureRun(firstClient, workspacePath);
     expect((await firstClient.startRun(run.id)).disposition).toBe("SCHEDULED");
     await firstProvider.firstFailed.promise;
     await waitForRetryBoundary(databasePath, run.id);
@@ -326,12 +266,7 @@ describe("production daemon control-plane E2E", () => {
     daemon = undefined;
 
     const secondProvider = new RetryProvider(false);
-    daemon = await startFixtureDaemon(
-      workspacePath,
-      "retry-fixture",
-      "retry-model",
-      secondProvider,
-    );
+    daemon = await startFixtureDaemon(workspacePath, secondProvider);
     const secondClient = new CaelushClient({ baseUrl: daemon.url });
     const recovered = await secondClient.recoverRun(run.id);
     expect(recovered.run.id).toBe(run.id);
@@ -351,17 +286,6 @@ describe("production daemon control-plane E2E", () => {
   }, 20_000);
 });
 
-function streamStart(
-  providerId: ProviderId,
-  request: LLMProviderRequest,
-  context: LLMProviderCallContext,
-): LLMStreamEvent {
-  return {
-    type: "stream.start",
-    payload: { callId: context.callId, providerId, model: request.model },
-  };
-}
-
 async function makeWorkspace(prefix: string, contents: string): Promise<string> {
   const workspacePath = await mkdtemp(join(tmpdir(), prefix));
   directory = workspacePath;
@@ -372,16 +296,16 @@ async function makeWorkspace(prefix: string, contents: string): Promise<string> 
 
 async function startFixtureDaemon(
   workspacePath: string,
-  provider: string,
-  model: string,
-  fixture: LLMProvider,
+  fixture: ApiAdapter,
 ): Promise<{ close(): Promise<void>; url: string }> {
   return startDaemon({
     databasePath: join(workspacePath, "caelush.db"),
     port: 0,
     sseHeartbeatIntervalMs: 0,
-    providerOverrides: [fixture],
-    defaultModel: { provider, model },
+    providerBindings: [fixtureBinding()],
+    modelSources: [fixtureModelSource()],
+    adapterOverrides: [fixture],
+    defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
     logger: false,
   });
 }
@@ -389,18 +313,16 @@ async function startFixtureDaemon(
 async function createFixtureRun(
   client: CaelushClient,
   workspacePath: string,
-  provider: string,
-  model: string,
   approvalPolicy: "ALWAYS_ASK" | "DANGEROUS_ONLY" | "NEVER_ASK" = "NEVER_ASK",
 ) {
   const session = await client.createSession({
     defaultWorkspace: { id: createWorkspaceId(), path: workspacePath },
-    defaultModel: { provider, model },
+    defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
   });
   const run = await client.createRun(session.id, {
     goal: "complete the fixture task",
     workspace: { id: createWorkspaceId(), path: workspacePath },
-    model: { provider, model },
+    model: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
     runtime: { id: "local", kind: "local" },
     permissionProfile: "PROJECT_ACCESS",
     approvalPolicy,

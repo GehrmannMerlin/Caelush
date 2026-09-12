@@ -1,20 +1,19 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createWorkspaceId, type ModelRef } from "@caelush/protocol";
+import { createWorkspaceId } from "@caelush/protocol";
 import {
-  LLMContextOverflowError,
-  type LLMCapabilities,
-  type LLMProvider,
-  type LLMProviderCallContext,
-  type LLMProviderRequest,
-  type LLMStreamEvent,
-  type ProviderId,
-} from "@caelush/llm";
+  createAIError,
+  type AIAdapterEvent,
+  type ApiAdapter,
+  type ApiAdapterStreamInput,
+  type ResolvedAIModelRequest,
+} from "@caelush/ai";
 import { CaelushClient } from "@caelush/client";
 import { openCaelushStorage } from "@caelush/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { startDaemon } from "../src/index.js";
+import { FIXTURE_API, fixtureBinding, fixtureModelSource } from "./support/ai-fixture.js";
 
 let directory: string | undefined;
 let daemon: { close(): Promise<void>; url: string } | undefined;
@@ -26,77 +25,42 @@ afterEach(async () => {
   directory = undefined;
 });
 
-const capabilities: LLMCapabilities = {
-  textStreaming: "SUPPORTED",
-  toolCalling: "SUPPORTED",
-  parallelToolCalls: "SUPPORTED",
-  structuredOutput: "SUPPORTED",
-  vision: "UNSUPPORTED",
-  reasoningSummary: "UNSUPPORTED",
-};
-
-class OverflowRecoveryProvider implements LLMProvider {
-  readonly id = "fixture" as ProviderId;
-  readonly requests: LLMProviderRequest[] = [];
+class OverflowRecoveryProvider implements ApiAdapter {
+  readonly id = FIXTURE_API;
+  readonly requests: ResolvedAIModelRequest[] = [];
   calls = 0;
 
-  supportsModel(model: ModelRef): boolean {
-    return model.provider === this.id && model.model === "fixture-model";
-  }
-
-  getCapabilities(): LLMCapabilities {
-    return capabilities;
-  }
-
-  stream(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-  ): AsyncIterable<LLMStreamEvent> {
+  stream(input: ApiAdapterStreamInput): AsyncGenerator<AIAdapterEvent> {
     this.calls += 1;
-    this.requests.push(request);
+    this.requests.push(input.request);
     if (
-      request.messages.some(
+      input.request.messages.some(
         (message) => message.role === "system" && message.content.includes("Review the supplied"),
       )
     ) {
       return this.textEvents(
-        request,
-        context,
         JSON.stringify({ verdict: "PASS", summary: "The candidate is acceptable." }),
       );
     }
-    if (this.calls === 1) return this.toolCall(request, context);
-    if (this.calls === 2) throw new LLMContextOverflowError();
-    return this.textEvents(request, context, "done");
+    if (this.calls === 1) return this.toolCall();
+    // Phase 2C: the provider overflow signal is the AI core's own code now; the agent
+    // loop recognises `AI_CONTEXT_OVERFLOW` and still allows exactly one recovery.
+    if (this.calls === 2) throw createAIError("AI_CONTEXT_OVERFLOW");
+    return this.textEvents("done");
   }
 
-  private async *toolCall(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-  ): AsyncIterable<LLMStreamEvent> {
-    yield {
-      type: "stream.start",
-      payload: { callId: context.callId, providerId: this.id, model: request.model },
-    };
+  private async *toolCall(): AsyncGenerator<AIAdapterEvent> {
     yield { type: "tool_call.start", payload: { toolCallId: "read_call", toolName: "read_file" } };
     yield {
       type: "tool_call.completed",
       payload: { id: "read_call", name: "read_file", input: { path: "large.txt" } },
     };
-    yield { type: "stream.finish", payload: { finishReason: "TOOL_CALLS" } };
+    yield { type: "adapter.finish", payload: { finishReason: "TOOL_CALLS" } };
   }
 
-  private async *textEvents(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-    text: string,
-  ): AsyncIterable<LLMStreamEvent> {
-    yield {
-      type: "stream.start",
-      payload: { callId: context.callId, providerId: this.id, model: request.model },
-    };
+  private async *textEvents(text: string): AsyncGenerator<AIAdapterEvent> {
     yield { type: "text.delta", payload: { text } };
-    yield { type: "stream.finish", payload: { finishReason: "STOP" } };
+    yield { type: "adapter.finish", payload: { finishReason: "STOP" } };
   }
 }
 
@@ -113,7 +77,9 @@ describe("Context Runtime production recovery E2E", () => {
       databasePath: join(directory, "caelush.db"),
       port: 0,
       sseHeartbeatIntervalMs: 0,
-      providerOverrides: [provider],
+      providerBindings: [fixtureBinding()],
+      modelSources: [fixtureModelSource()],
+      adapterOverrides: [provider],
       defaultModel: { provider: "fixture", model: "fixture-model" },
     });
     const client = new CaelushClient({ baseUrl: daemon.url });
@@ -152,8 +118,17 @@ describe("Context Runtime production recovery E2E", () => {
     const recoveredToolMessage = recoveredRequest?.messages.find(
       (message) => message.role === "tool",
     );
-    expect(firstToolMessage?.rawArtifactRef).toBeTruthy();
-    expect(recoveredToolMessage?.rawArtifactRef).toBe(firstToolMessage?.rawArtifactRef);
+    expect(firstToolMessage).toBeDefined();
+    expect(recoveredToolMessage).toBeDefined();
+    // Phase 2C: the model-facing AI tool-result message carries exactly
+    // `{role, toolCallId, toolName, content, isError}`. `rawArtifactRef` is a durable
+    // recovery pointer and is deliberately dropped by the core's AI projection, so the
+    // recovered turn must be shown to reproject the *same* tool result through its
+    // identity rather than through a pointer the model never sees. The pointer itself
+    // is asserted on the durable observation below.
+    expect(firstToolMessage?.toolCallId).toBe("read_call");
+    expect(recoveredToolMessage?.toolCallId).toBe(firstToolMessage?.toolCallId);
+    expect(recoveredToolMessage?.toolName).toBe(firstToolMessage?.toolName);
     expect(firstToolMessage?.content).toContain("[output omitted; see artifact]");
     expect(recoveredToolMessage?.content).toContain("0-payload-");
     expect(recoveredToolMessage?.content.length).toBeLessThan(

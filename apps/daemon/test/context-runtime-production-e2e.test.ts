@@ -1,18 +1,12 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createWorkspaceId, type ModelRef } from "@caelush/protocol";
-import type {
-  LLMCapabilities,
-  LLMProvider,
-  LLMProviderCallContext,
-  LLMProviderRequest,
-  LLMStreamEvent,
-  ProviderId,
-} from "@caelush/llm";
+import { createWorkspaceId } from "@caelush/protocol";
+import type { AIAdapterEvent, ApiAdapter, ApiAdapterStreamInput } from "@caelush/ai";
 import { CaelushClient } from "@caelush/client";
 import { afterEach, describe, expect, it } from "vitest";
 import { startDaemon } from "../src/index.js";
+import { FIXTURE_API, fixtureBinding, fixtureModelSource } from "./support/ai-fixture.js";
 
 let directory: string | undefined;
 let daemon: { close(): Promise<void>; url: string } | undefined;
@@ -24,53 +18,25 @@ afterEach(async () => {
   directory = undefined;
 });
 
-class ContextFixtureProvider implements LLMProvider {
-  readonly id = "fixture" as ProviderId;
+class ContextFixtureProvider implements ApiAdapter {
+  readonly id = FIXTURE_API;
   calls = 0;
 
-  supportsModel(model: ModelRef): boolean {
-    return model.provider === this.id && model.model === "fixture-model";
-  }
-
-  getCapabilities(): LLMCapabilities {
-    return {
-      textStreaming: "SUPPORTED",
-      toolCalling: "SUPPORTED",
-      parallelToolCalls: "SUPPORTED",
-      structuredOutput: "SUPPORTED",
-      vision: "UNSUPPORTED",
-      reasoningSummary: "UNSUPPORTED",
-    };
-  }
-
-  stream(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-  ): AsyncIterable<LLMStreamEvent> {
+  stream(input: ApiAdapterStreamInput): AsyncGenerator<AIAdapterEvent> {
     this.calls += 1;
-    const review = request.messages.some(
+    const review = input.request.messages.some(
       (message) => message.role === "system" && message.content.includes("Review the supplied"),
     );
     return this.events(
-      request,
-      context,
       review
         ? JSON.stringify({ verdict: "PASS", summary: "The candidate is acceptable." })
         : "done",
     );
   }
 
-  private async *events(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-    text: string,
-  ): AsyncIterable<LLMStreamEvent> {
-    yield {
-      type: "stream.start",
-      payload: { callId: context.callId, providerId: this.id, model: request.model },
-    };
+  private async *events(text: string): AsyncGenerator<AIAdapterEvent> {
     yield { type: "text.delta", payload: { text } };
-    yield { type: "stream.finish", payload: { finishReason: "STOP" } };
+    yield { type: "adapter.finish", payload: { finishReason: "STOP" } };
   }
 }
 
@@ -82,7 +48,9 @@ describe("Context Runtime production E2E", () => {
       databasePath: join(directory, "caelush.db"),
       port: 0,
       sseHeartbeatIntervalMs: 0,
-      providerOverrides: [provider],
+      providerBindings: [fixtureBinding()],
+      modelSources: [fixtureModelSource()],
+      adapterOverrides: [provider],
       defaultModel: { provider: "fixture", model: "fixture-model" },
     });
     const client = new CaelushClient({ baseUrl: daemon.url });

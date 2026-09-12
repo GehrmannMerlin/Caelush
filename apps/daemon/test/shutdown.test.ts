@@ -33,7 +33,22 @@ async function jsonRequest<T extends Record<string, unknown> = Record<string, un
 describe("daemon lifecycle", () => {
   it("starts on an ephemeral port and closes idempotently with active SSE", async () => {
     const databasePath = await makeDatabasePath("shutdown");
-    const handle = await startDaemon({ databasePath, port: 0, sseHeartbeatIntervalMs: 0 });
+    // Phase 2C: the daemon composes the AI model authority, so a Run may only name a
+    // model the provider registry and the model catalog can resolve. The Run below is
+    // never started; this configuration exists so its creation stays a 201 and the
+    // test keeps exercising a real, active SSE subscription.
+    const handle = await startDaemon({
+      databasePath,
+      port: 0,
+      sseHeartbeatIntervalMs: 0,
+      providers: [
+        {
+          provider: "test",
+          baseUrl: "http://test.invalid/v1",
+          allowedModels: ["test-model"],
+        },
+      ],
+    });
     handles.push(handle);
     const health = await fetch(`${handle.url}/api/v1/health`);
     expect(health.status).toBe(200);

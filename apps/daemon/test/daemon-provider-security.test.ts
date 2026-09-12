@@ -101,18 +101,35 @@ describe("daemon provider and public model boundary", () => {
     });
     expect(String((unknownProvider as Error).message)).not.toContain("provider-secret");
 
-    const unknownModel = await client
-      .createRun(session.id, {
-        ...baseRun,
-        model: { provider: "configured", model: "not-allowed" },
-      })
-      .catch((error: unknown) => error);
-    expect(unknownModel).toBeInstanceOf(CaelushClientHttpError);
-    expect(unknownModel).toMatchObject({
-      status: 409,
-      code: "MODEL_PROVIDER_UNAVAILABLE",
+    // Phase 2C: the provider model allowlist is enforced by the AI gateway preflight
+    // (step 5), not by daemon model canonicalization, so a model outside
+    // `allowedModels` is accepted at Run creation and rejected when the Run's first
+    // model turn is prepared. The security boundary is unchanged: every rejection
+    // still happens before any provider transport, and no credential can appear on a
+    // public surface.
+    const unknownModelRun = await client.createRun(session.id, {
+      ...baseRun,
+      model: { provider: "configured", model: "not-allowed" },
     });
+    expect(unknownModelRun.status).toBe("PENDING");
+    await client.startRun(unknownModelRun.id);
+    const unknownModel = await waitForRunStatus(client, unknownModelRun.id, "FAILED");
     expect(JSON.stringify(unknownModel)).not.toContain("provider-secret");
+    expect(JSON.stringify(unknownModel)).not.toContain("provider.example");
     expect(providerFetch).not.toHaveBeenCalled();
   });
 });
+
+async function waitForRunStatus(
+  client: CaelushClient,
+  runId: Parameters<CaelushClient["getRun"]>[0],
+  status: string,
+) {
+  let run = await client.getRun(runId);
+  for (let attempt = 0; attempt < 200 && run.status !== status; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    run = await client.getRun(runId);
+  }
+  expect(run.status).toBe(status);
+  return run;
+}

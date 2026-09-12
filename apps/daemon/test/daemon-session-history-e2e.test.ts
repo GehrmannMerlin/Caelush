@@ -1,28 +1,24 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createWorkspaceId, type ModelRef } from "@caelush/protocol";
-import {
-  type LLMCapabilities,
-  type LLMProvider,
-  type LLMProviderCallContext,
-  type LLMProviderRequest,
-  type LLMStreamEvent,
-  type ProviderId,
-} from "@caelush/llm";
+import { createWorkspaceId } from "@caelush/protocol";
+import type {
+  AIAdapterEvent,
+  ApiAdapter,
+  ApiAdapterStreamInput,
+  ResolvedAIModelRequest,
+} from "@caelush/ai";
 import { CaelushClient } from "@caelush/client";
 import { openCaelushStorage } from "@caelush/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { startDaemon } from "../src/index.js";
-
-const capabilities: LLMCapabilities = {
-  textStreaming: "SUPPORTED",
-  toolCalling: "SUPPORTED",
-  parallelToolCalls: "SUPPORTED",
-  structuredOutput: "SUPPORTED",
-  vision: "UNSUPPORTED",
-  reasoningSummary: "UNSUPPORTED",
-};
+import {
+  FIXTURE_API,
+  FIXTURE_MODEL,
+  FIXTURE_PROVIDER,
+  fixtureBinding,
+  fixtureModelSource,
+} from "./support/ai-fixture.js";
 
 let directory: string | undefined;
 let daemon: { close(): Promise<void>; url: string } | undefined;
@@ -34,49 +30,26 @@ afterEach(async () => {
   daemon = undefined;
 });
 
-class TwoTurnProvider implements LLMProvider {
-  readonly id = "history-fixture" as ProviderId;
-  readonly normalRequests: LLMProviderRequest[] = [];
+class TwoTurnProvider implements ApiAdapter {
+  readonly id = FIXTURE_API;
+  readonly normalRequests: ResolvedAIModelRequest[] = [];
 
-  supportsModel(model: ModelRef): boolean {
-    return model.provider === this.id && model.model === "history-model";
-  }
-
-  getCapabilities(): LLMCapabilities {
-    return capabilities;
-  }
-
-  stream(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-  ): AsyncIterable<LLMStreamEvent> {
+  stream(input: ApiAdapterStreamInput): AsyncGenerator<AIAdapterEvent> {
     if (
-      request.messages.some(
+      input.request.messages.some(
         (message) => message.role === "system" && message.content.includes("Review the supplied"),
       )
     ) {
-      return this.text(request, context, JSON.stringify({ verdict: "PASS", summary: "Accepted." }));
+      return this.text(JSON.stringify({ verdict: "PASS", summary: "Accepted." }));
     }
-    this.normalRequests.push(request);
+    this.normalRequests.push(input.request);
     const turn = this.normalRequests.length;
-    return this.text(
-      request,
-      context,
-      turn === 1 ? "first verified answer" : "second verified answer",
-    );
+    return this.text(turn === 1 ? "first verified answer" : "second verified answer");
   }
 
-  private async *text(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-    value: string,
-  ): AsyncIterable<LLMStreamEvent> {
-    yield {
-      type: "stream.start",
-      payload: { callId: context.callId, providerId: this.id, model: request.model },
-    };
+  private async *text(value: string): AsyncGenerator<AIAdapterEvent> {
     yield { type: "text.delta", payload: { text: value } };
-    yield { type: "stream.finish", payload: { finishReason: "STOP" } };
+    yield { type: "adapter.finish", payload: { finishReason: "STOP" } };
   }
 }
 
@@ -88,14 +61,16 @@ describe("daemon Session conversation history E2E", () => {
       databasePath: join(directory, "caelush.db"),
       port: 0,
       sseHeartbeatIntervalMs: 0,
-      providerOverrides: [provider],
-      defaultModel: { provider: "history-fixture", model: "history-model" },
+      providerBindings: [fixtureBinding()],
+      modelSources: [fixtureModelSource()],
+      adapterOverrides: [provider],
+      defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
     });
     const client = new CaelushClient({ baseUrl: daemon.url });
     const workspace = { id: createWorkspaceId(), path: directory };
     const session = await client.createSession({
       defaultWorkspace: workspace,
-      defaultModel: { provider: "history-fixture", model: "history-model" },
+      defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
     });
 
     const first = await createRun(client, session.id, workspace, "first goal");
@@ -144,7 +119,7 @@ async function createRun(
   return client.createRun(sessionId, {
     goal,
     workspace,
-    model: { provider: "history-fixture", model: "history-model" },
+    model: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
     runtime: { id: "local", kind: "local" },
     permissionProfile: "PROJECT_ACCESS",
     approvalPolicy: "DANGEROUS_ONLY",

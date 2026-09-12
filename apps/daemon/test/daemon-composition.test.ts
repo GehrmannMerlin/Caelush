@@ -61,7 +61,16 @@ describe("daemon production composition", () => {
     expect(composition.toolRegistry.modelGuidance().map((entry) => entry.toolName)).toEqual(
       composition.toolRegistry.modelDefinitions().map((tool) => tool.name),
     );
-    expect(composition.providerRegistry.listProviderIds()).toEqual(["openai-compatible"]);
+    // Phase 2C: provider authority is the AI subsystem registry, not a legacy registry.
+    expect(composition.ai.providers.list().map((provider) => provider.id)).toEqual([
+      "openai-compatible",
+    ]);
+    // The legacy environment value states no per-model profile, so the catalog holds
+    // no enumerable descriptor set; a fallback source describes whatever ref it is
+    // asked about and therefore cannot enumerate.
+    expect(
+      composition.ai.models.has({ provider: "openai-compatible", model: "fixture-model" }),
+    ).toBe(true);
     expect(composition.info).toEqual({
       apiVersion: "v1",
       protocolVersion: 1,

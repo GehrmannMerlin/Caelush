@@ -7,7 +7,11 @@ const script = "scripts/agent-loop-tool-contract-audit.mjs";
 
 describe("real DeepSeek Agent Loop product-entry audit", () => {
   it("reports a safe blocked status when live credentials are absent", async () => {
-    if (process.env.CAELUSH_PROVIDER_API_KEY !== undefined && process.env.CAELUSH_PROVIDER_API_KEY.length > 0) return;
+    if (
+      process.env.CAELUSH_PROVIDER_API_KEY !== undefined &&
+      process.env.CAELUSH_PROVIDER_API_KEY.length > 0
+    )
+      return;
     const result = await run(process.execPath, [script], { cwd: process.cwd() });
     const parsed = JSON.parse(result.stdout) as {
       status: string;
@@ -16,12 +20,20 @@ describe("real DeepSeek Agent Loop product-entry audit", () => {
     };
     expect(parsed.status).toBe("SKIPPED");
     expect(parsed.reason).toBe("CAELUSH_PROVIDER_API_KEY_MISSING");
-    expect(Object.values(parsed.env ?? {}).every((value) => ["PRESENT", "MISSING"].includes(value))).toBe(true);
-    expect(result.stdout).not.toContain(process.env.CAELUSH_PROVIDER_API_KEY ?? "__missing-secret-sentinel__");
+    expect(
+      Object.values(parsed.env ?? {}).every((value) => ["PRESENT", "MISSING"].includes(value)),
+    ).toBe(true);
+    expect(result.stdout).not.toContain(
+      process.env.CAELUSH_PROVIDER_API_KEY ?? "__missing-secret-sentinel__",
+    );
   });
 
   it("keeps the live path bounded and safe when credentials are configured", async () => {
-    if (process.env.CAELUSH_PROVIDER_API_KEY === undefined || process.env.CAELUSH_PROVIDER_API_KEY.length === 0) return;
+    if (
+      process.env.CAELUSH_PROVIDER_API_KEY === undefined ||
+      process.env.CAELUSH_PROVIDER_API_KEY.length === 0
+    )
+      return;
     const result = await run(process.execPath, [script], { cwd: process.cwd() });
     expect(result.stderr).toBe("");
     expect(result.stdout).not.toContain(process.env.CAELUSH_PROVIDER_API_KEY);

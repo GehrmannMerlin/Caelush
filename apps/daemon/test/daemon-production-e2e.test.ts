@@ -1,19 +1,13 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createWorkspaceId, type AgentEvent, type ModelRef } from "@caelush/protocol";
-import {
-  type LLMCapabilities,
-  type LLMProvider,
-  type LLMProviderCallContext,
-  type LLMProviderRequest,
-  type LLMStreamEvent,
-  type ProviderId,
-} from "@caelush/llm";
+import { createWorkspaceId, type AgentEvent } from "@caelush/protocol";
+import type { AIAdapterEvent, ApiAdapter, ApiAdapterStreamInput } from "@caelush/ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { CaelushClient } from "@caelush/client";
 import { openCaelushStorage } from "@caelush/storage";
 import { startDaemon } from "../src/index.js";
+import { FIXTURE_API, fixtureBinding, fixtureModelSource } from "./support/ai-fixture.js";
 
 let directory: string | undefined;
 let daemon: { close(): Promise<void>; url: string } | undefined;
@@ -25,75 +19,39 @@ afterEach(async () => {
   daemon = undefined;
 });
 
-const capabilities: LLMCapabilities = {
-  textStreaming: "SUPPORTED",
-  toolCalling: "SUPPORTED",
-  parallelToolCalls: "SUPPORTED",
-  structuredOutput: "SUPPORTED",
-  vision: "UNSUPPORTED",
-  reasoningSummary: "UNSUPPORTED",
-};
-
-class FixtureProvider implements LLMProvider {
-  readonly id = "fixture" as ProviderId;
+class FixtureProvider implements ApiAdapter {
+  readonly id = FIXTURE_API;
   readonly entered = deferred<void>();
   readonly release = deferred<void>();
   calls = 0;
 
-  supportsModel(model: ModelRef): boolean {
-    return model.provider === this.id && model.model === "fixture-model";
-  }
-
-  getCapabilities(): LLMCapabilities {
-    return capabilities;
-  }
-
-  stream(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-  ): AsyncIterable<LLMStreamEvent> {
+  stream(input: ApiAdapterStreamInput): AsyncGenerator<AIAdapterEvent> {
     this.calls += 1;
-    const isReview = request.messages.some(
+    const isReview = input.request.messages.some(
       (message) => message.role === "system" && message.content.includes("Review the supplied"),
     );
     if (isReview) {
       return this.events(
-        request,
-        context,
         JSON.stringify({ verdict: "PASS", summary: "The task candidate is acceptable." }),
       );
     }
-    if (this.calls === 1) return this.firstToolCall(request, context);
-    if (this.calls === 2) return this.secondToolCall(request, context);
-    return this.events(request, context, "The requested task is complete.");
+    if (this.calls === 1) return this.firstToolCall();
+    if (this.calls === 2) return this.secondToolCall();
+    return this.events("The requested task is complete.");
   }
 
-  private async *firstToolCall(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-  ): AsyncIterable<LLMStreamEvent> {
+  private async *firstToolCall(): AsyncGenerator<AIAdapterEvent> {
     this.entered.resolve();
     await this.release.promise;
-    yield {
-      type: "stream.start",
-      payload: { callId: context.callId, providerId: this.id, model: request.model },
-    };
     yield { type: "tool_call.start", payload: { toolCallId: "read_call", toolName: "read_file" } };
     yield {
       type: "tool_call.completed",
       payload: { id: "read_call", name: "read_file", input: { path: "src/message.txt" } },
     };
-    yield { type: "stream.finish", payload: { finishReason: "TOOL_CALLS" } };
+    yield { type: "adapter.finish", payload: { finishReason: "TOOL_CALLS" } };
   }
 
-  private async *secondToolCall(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-  ): AsyncIterable<LLMStreamEvent> {
-    yield {
-      type: "stream.start",
-      payload: { callId: context.callId, providerId: this.id, model: request.model },
-    };
+  private async *secondToolCall(): AsyncGenerator<AIAdapterEvent> {
     yield {
       type: "tool_call.start",
       payload: { toolCallId: "patch_call", toolName: "apply_patch" },
@@ -109,20 +67,12 @@ class FixtureProvider implements LLMProvider {
         },
       },
     };
-    yield { type: "stream.finish", payload: { finishReason: "TOOL_CALLS" } };
+    yield { type: "adapter.finish", payload: { finishReason: "TOOL_CALLS" } };
   }
 
-  private async *events(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-    text: string,
-  ): AsyncIterable<LLMStreamEvent> {
-    yield {
-      type: "stream.start",
-      payload: { callId: context.callId, providerId: this.id, model: request.model },
-    };
+  private async *events(text: string): AsyncGenerator<AIAdapterEvent> {
     yield { type: "text.delta", payload: { text } };
-    yield { type: "stream.finish", payload: { finishReason: "STOP" } };
+    yield { type: "adapter.finish", payload: { finishReason: "STOP" } };
   }
 }
 
@@ -141,7 +91,9 @@ describe("daemon production composition E2E", () => {
       databasePath: join(workspacePath, "caelush.db"),
       port: 0,
       sseHeartbeatIntervalMs: 0,
-      providerOverrides: [provider],
+      providerBindings: [fixtureBinding()],
+      modelSources: [fixtureModelSource()],
+      adapterOverrides: [provider],
       defaultModel: { provider: "fixture", model: "fixture-model" },
     });
     daemon = handle;
