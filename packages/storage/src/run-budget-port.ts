@@ -16,7 +16,7 @@ import {
   type LLMTokenEstimator,
   type ModelPricingSnapshot,
   type PricingResolver,
-  type LLMBudgetAdmissionInput,
+  type RunLLMBudgetAdmissionInput,
   type ModelUsage as BudgetModelUsage,
   type RunBudgetPort,
 } from "@caelush/core";
@@ -122,7 +122,7 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
   async admitLLM(input: {
     readonly run: AgentRun;
     readonly step: AgentStep;
-    readonly admission: LLMBudgetAdmissionInput;
+    readonly admission: RunLLMBudgetAdmissionInput;
   }): Promise<import("@caelush/core").RunLLMBudgetAdmission> {
     return this.admitLLMForOwner({ ...input, ownerId: input.step.id, kind: "LLM_ATTEMPT" });
   }
@@ -130,7 +130,7 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
   async admitVerificationLLM(input: {
     readonly run: AgentRun;
     readonly ownerId: string;
-    readonly admission: LLMBudgetAdmissionInput;
+    readonly admission: RunLLMBudgetAdmissionInput;
   }): Promise<import("@caelush/core").RunLLMBudgetAdmission> {
     return this.admitLLMForOwner({ ...input, kind: "VERIFICATION_LLM" });
   }
@@ -138,7 +138,7 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
   private async admitLLMForOwner(input: {
     readonly run: AgentRun;
     readonly ownerId: string;
-    readonly admission: LLMBudgetAdmissionInput;
+    readonly admission: RunLLMBudgetAdmissionInput;
     readonly kind: "LLM_ATTEMPT" | "VERIFICATION_LLM";
   }): Promise<import("@caelush/core").RunLLMBudgetAdmission> {
     const estimatedInputTokens = input.admission.estimatedInputTokens;
