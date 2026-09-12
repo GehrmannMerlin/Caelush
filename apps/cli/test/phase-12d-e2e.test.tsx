@@ -2,15 +2,13 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CaelushClient } from "@caelush/client";
-import { createWorkspaceId, type ModelRef } from "@caelush/protocol";
-import type {
-  LLMCapabilities,
-  LLMProvider,
-  LLMProviderCallContext,
-  LLMProviderRequest,
-  LLMStreamEvent,
-  ProviderId,
-} from "@caelush/llm";
+import {
+  createAIError,
+  type AIAdapterEvent,
+  type ApiAdapter,
+  type ApiAdapterStreamInput,
+  type ResolvedAIModelRequest,
+} from "@caelush/ai";
 import { render } from "ink-testing-library";
 import React from "react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -18,15 +16,13 @@ import { startDaemon } from "../../daemon/src/index.js";
 import { CliConversationController } from "../src/application/cli-controller.js";
 import type { CliTimer, CliTimerHandle } from "../src/application/reconnect-scheduler.js";
 import { App } from "../src/components/App.js";
-
-const capabilities: LLMCapabilities = {
-  textStreaming: "SUPPORTED",
-  toolCalling: "SUPPORTED",
-  parallelToolCalls: "SUPPORTED",
-  structuredOutput: "SUPPORTED",
-  vision: "UNSUPPORTED",
-  reasoningSummary: "UNSUPPORTED",
-};
+import {
+  FIXTURE_API,
+  FIXTURE_MODEL,
+  FIXTURE_PROVIDER,
+  fixtureBinding,
+  fixtureModelSource,
+} from "./support/ai-fixture.js";
 
 let directory: string | undefined;
 let daemon: { close(): Promise<void>; url: string } | undefined;
@@ -41,43 +37,35 @@ afterEach(async () => {
   directory = undefined;
 });
 
-class InteractiveApprovalProvider implements LLMProvider {
-  readonly id = "phase-12d-approval" as ProviderId;
+/**
+ * Phase 2C: every fixture adapter below speaks one dialect — `FIXTURE_API` — and the
+ * vendor identity lives in the provider binding instead. `supportsModel` and
+ * `getCapabilities` are gone because model metadata is the catalog's authority, and the
+ * gateway owns the `stream.start` / `stream.finish` envelope, so an adapter emits only
+ * dialect events.
+ */
+class InteractiveApprovalProvider implements ApiAdapter {
+  readonly id = FIXTURE_API;
   calls = 0;
   patchCalls = 0;
 
   constructor(private readonly applyPatchOnFirstCall = true) {}
 
-  supportsModel(model: ModelRef): boolean {
-    return model.provider === this.id && model.model === "approval-model";
-  }
-
-  getCapabilities(): LLMCapabilities {
-    return capabilities;
-  }
-
-  stream(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-  ): AsyncIterable<LLMStreamEvent> {
+  stream(input: ApiAdapterStreamInput): AsyncGenerator<AIAdapterEvent> {
     this.calls += 1;
     if (
-      request.messages.some(
+      input.request.messages.some(
         (message) => message.role === "system" && message.content.includes("Review the supplied"),
       )
     ) {
-      return this.text(request, context, JSON.stringify({ verdict: "PASS", summary: "passed" }));
+      return textEvents(JSON.stringify({ verdict: "PASS", summary: "passed" }));
     }
-    if (this.calls === 1 && this.applyPatchOnFirstCall) return this.applyPatch(request, context);
-    return this.text(request, context, "The approved change is complete.");
+    if (this.calls === 1 && this.applyPatchOnFirstCall) return this.applyPatch();
+    return textEvents("The approved change is complete.");
   }
 
-  private async *applyPatch(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-  ): AsyncIterable<LLMStreamEvent> {
+  private async *applyPatch(): AsyncGenerator<AIAdapterEvent> {
     this.patchCalls += 1;
-    yield streamStart(this.id, request, context);
     yield {
       type: "tool_call.start",
       payload: { toolCallId: "phase-12d-call", toolName: "apply_patch" },
@@ -93,79 +81,43 @@ class InteractiveApprovalProvider implements LLMProvider {
         },
       },
     };
-    yield { type: "stream.finish", payload: { finishReason: "TOOL_CALLS" } };
-  }
-
-  private async *text(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-    text: string,
-  ): AsyncIterable<LLMStreamEvent> {
-    yield streamStart(this.id, request, context);
-    yield { type: "text.delta", payload: { text } };
-    yield { type: "stream.finish", payload: { finishReason: "STOP" } };
+    yield { type: "adapter.finish", payload: { finishReason: "TOOL_CALLS" } };
   }
 }
 
-class TextCompletionProvider implements LLMProvider {
-  readonly id = "phase-12d-reconnect" as ProviderId;
+class TextCompletionProvider implements ApiAdapter {
+  readonly id = FIXTURE_API;
   calls = 0;
 
-  supportsModel(model: ModelRef): boolean {
-    return model.provider === this.id && model.model === "reconnect-model";
-  }
-
-  getCapabilities(): LLMCapabilities {
-    return capabilities;
-  }
-
-  stream(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-  ): AsyncIterable<LLMStreamEvent> {
+  stream(input: ApiAdapterStreamInput): AsyncGenerator<AIAdapterEvent> {
     this.calls += 1;
-    const text = request.messages.some(
+    const text = input.request.messages.some(
       (message) => message.role === "system" && message.content.includes("Review the supplied"),
     )
       ? JSON.stringify({ verdict: "PASS", summary: "passed" })
       : "The reconnectable task is complete.";
-    return textEvents(request, context, text);
+    return textEvents(text);
   }
 }
 
-class ContinuityProvider implements LLMProvider {
-  readonly id = "phase-12d-continuity" as ProviderId;
-  readonly normalRequests: LLMProviderRequest[] = [];
+class ContinuityProvider implements ApiAdapter {
+  readonly id = FIXTURE_API;
+  readonly normalRequests: ResolvedAIModelRequest[] = [];
 
-  supportsModel(model: ModelRef): boolean {
-    return model.provider === this.id && model.model === "continuity-model";
-  }
-
-  getCapabilities(): LLMCapabilities {
-    return capabilities;
-  }
-
-  stream(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-  ): AsyncIterable<LLMStreamEvent> {
-    const isReview = request.messages.some(
+  stream(input: ApiAdapterStreamInput): AsyncGenerator<AIAdapterEvent> {
+    const isReview = input.request.messages.some(
       (message) => message.role === "system" && message.content.includes("Review the supplied"),
     );
-    if (isReview) {
-      return textEvents(request, context, JSON.stringify({ verdict: "PASS", summary: "passed" }));
-    }
+    if (isReview) return textEvents(JSON.stringify({ verdict: "PASS", summary: "passed" }));
 
-    this.normalRequests.push(request);
-    const hasMarker = request.messages.some((message) =>
+    this.normalRequests.push(input.request);
+    const hasMarker = input.request.messages.some((message) =>
       (typeof message.content === "string"
         ? message.content
         : message.content.map((part) => (part.type === "text" ? part.text : "")).join("")
       ).includes("ORANGE-731"),
     );
     return textEvents(
-      request,
-      context,
       this.normalRequests.length === 1
         ? "I will remember ORANGE-731."
         : hasMarker
@@ -175,32 +127,31 @@ class ContinuityProvider implements LLMProvider {
   }
 }
 
-class BlockingProvider implements LLMProvider {
-  readonly id = "phase-12d-cancel" as ProviderId;
+class BlockingProvider implements ApiAdapter {
+  readonly id = FIXTURE_API;
   entered!: () => void;
   private enteredPromise = new Promise<void>((resolve) => {
     this.entered = resolve;
   });
 
-  supportsModel(model: ModelRef): boolean {
-    return model.provider === this.id && model.model === "cancel-model";
+  stream(input: ApiAdapterStreamInput): AsyncGenerator<AIAdapterEvent> {
+    return this.block(input);
   }
 
-  getCapabilities(): LLMCapabilities {
-    return capabilities;
-  }
-
-  async *stream(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-  ): AsyncIterable<LLMStreamEvent> {
-    yield streamStart(this.id, request, context);
+  private async *block(input: ApiAdapterStreamInput): AsyncGenerator<AIAdapterEvent> {
     this.entered();
-    await new Promise<void>((resolve) =>
-      context.signal.addEventListener("abort", () => resolve(), { once: true }),
-    );
-    yield { type: "text.delta", payload: { text: "late output must be discarded" } };
-    yield { type: "stream.finish", payload: { finishReason: "STOP" } };
+    await new Promise<void>((resolve) => {
+      if (input.signal.aborted) {
+        resolve();
+        return;
+      }
+      input.signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+    // The adapter receives the gateway-owned signal unchanged. An aborted turn has no
+    // dialect event to report — the gateway owns the envelope and the abort cause — so
+    // the cancelled turn raises the AI core's own abort code and yields nothing: the
+    // late output below must never reach the durable turn.
+    throw createAIError("AI_ABORTED");
   }
 
   waitUntilEntered(): Promise<void> {
@@ -216,8 +167,10 @@ describe("real Phase 12D daemon and CLI E2E", () => {
       databasePath: join(workspacePath, "caelush.db"),
       port: 0,
       sseHeartbeatIntervalMs: 0,
-      providerOverrides: [provider],
-      defaultModel: { provider: provider.id, model: "approval-model" },
+      providerBindings: [fixtureBinding()],
+      modelSources: [fixtureModelSource()],
+      adapterOverrides: [provider],
+      defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
       logger: false,
     });
     const client = new CaelushClient({ baseUrl: daemon.url });
@@ -255,8 +208,10 @@ describe("real Phase 12D daemon and CLI E2E", () => {
       databasePath: join(workspacePath, "caelush.db"),
       port: 0,
       sseHeartbeatIntervalMs: 0,
-      providerOverrides: [provider],
-      defaultModel: { provider: provider.id, model: "approval-model" },
+      providerBindings: [fixtureBinding()],
+      modelSources: [fixtureModelSource()],
+      adapterOverrides: [provider],
+      defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
       logger: false,
     });
     const client = new CaelushClient({ baseUrl: daemon.url });
@@ -284,8 +239,10 @@ describe("real Phase 12D daemon and CLI E2E", () => {
       databasePath: join(workspacePath, "caelush.db"),
       port: 0,
       sseHeartbeatIntervalMs: 0,
-      providerOverrides: [provider],
-      defaultModel: { provider: provider.id, model: "reconnect-model" },
+      providerBindings: [fixtureBinding()],
+      modelSources: [fixtureModelSource()],
+      adapterOverrides: [provider],
+      defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
       logger: false,
     });
     const timer = new ImmediateReconnectTimer();
@@ -340,8 +297,10 @@ describe("real Phase 12D daemon and CLI E2E", () => {
       databasePath,
       port: 0,
       sseHeartbeatIntervalMs: 0,
-      providerOverrides: [firstProvider],
-      defaultModel: { provider: firstProvider.id, model: "approval-model" },
+      providerBindings: [fixtureBinding()],
+      modelSources: [fixtureModelSource()],
+      adapterOverrides: [firstProvider],
+      defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
       logger: false,
     });
     const firstClient = new CaelushClient({ baseUrl: daemon.url });
@@ -365,8 +324,10 @@ describe("real Phase 12D daemon and CLI E2E", () => {
       databasePath,
       port: 0,
       sseHeartbeatIntervalMs: 0,
-      providerOverrides: [secondProvider],
-      defaultModel: { provider: secondProvider.id, model: "approval-model" },
+      providerBindings: [fixtureBinding()],
+      modelSources: [fixtureModelSource()],
+      adapterOverrides: [secondProvider],
+      defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
       logger: false,
     });
     const calls: Array<{ readonly method: string; readonly url: string }> = [];
@@ -416,8 +377,10 @@ describe("real Phase 12D daemon and CLI E2E", () => {
       databasePath: join(workspacePath, "caelush.db"),
       port: 0,
       sseHeartbeatIntervalMs: 0,
-      providerOverrides: [provider],
-      defaultModel: { provider: provider.id, model: "continuity-model" },
+      providerBindings: [fixtureBinding()],
+      modelSources: [fixtureModelSource()],
+      adapterOverrides: [provider],
+      defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
       logger: false,
     });
     const client = new CaelushClient({ baseUrl: daemon.url });
@@ -469,8 +432,10 @@ describe("real Phase 12D daemon and CLI E2E", () => {
       databasePath: join(workspacePath, "caelush.db"),
       port: 0,
       sseHeartbeatIntervalMs: 0,
-      providerOverrides: [provider],
-      defaultModel: { provider: provider.id, model: "cancel-model" },
+      providerBindings: [fixtureBinding()],
+      modelSources: [fixtureModelSource()],
+      adapterOverrides: [provider],
+      defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
       logger: false,
     });
     const client = new CaelushClient({ baseUrl: daemon.url });
@@ -497,25 +462,9 @@ async function makeWorkspace(prefix: string): Promise<string> {
   return workspacePath;
 }
 
-function streamStart(
-  providerId: ProviderId,
-  request: LLMProviderRequest,
-  context: LLMProviderCallContext,
-): LLMStreamEvent {
-  return {
-    type: "stream.start",
-    payload: { callId: context.callId, providerId, model: request.model },
-  };
-}
-
-async function* textEvents(
-  request: LLMProviderRequest,
-  context: LLMProviderCallContext,
-  text: string,
-): AsyncIterable<LLMStreamEvent> {
-  yield streamStart(request.model.provider as ProviderId, request, context);
+async function* textEvents(text: string): AsyncGenerator<AIAdapterEvent> {
   yield { type: "text.delta", payload: { text } };
-  yield { type: "stream.finish", payload: { finishReason: "STOP" } };
+  yield { type: "adapter.finish", payload: { finishReason: "STOP" } };
 }
 
 function truncateSseResponse(response: Response): Response {

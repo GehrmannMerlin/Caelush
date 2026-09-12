@@ -2,27 +2,18 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CaelushClient } from "@caelush/client";
-import { createWorkspaceId, type ModelRef } from "@caelush/protocol";
-import type {
-  LLMCapabilities,
-  LLMProvider,
-  LLMProviderCallContext,
-  LLMProviderRequest,
-  LLMStreamEvent,
-  ProviderId,
-} from "@caelush/llm";
+import type { AIAdapterEvent, ApiAdapter, ApiAdapterStreamInput } from "@caelush/ai";
+import { createWorkspaceId } from "@caelush/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { startDaemon } from "../../daemon/src/index.js";
 import { WebSessionManager } from "../src/application/session-manager.js";
-
-const capabilities: LLMCapabilities = {
-  textStreaming: "SUPPORTED",
-  toolCalling: "SUPPORTED",
-  parallelToolCalls: "SUPPORTED",
-  structuredOutput: "SUPPORTED",
-  vision: "UNSUPPORTED",
-  reasoningSummary: "UNSUPPORTED",
-};
+import {
+  FIXTURE_API,
+  FIXTURE_MODEL,
+  FIXTURE_PROVIDER,
+  fixtureBinding,
+  fixtureModelSource,
+} from "./support/ai-fixture.js";
 
 let directory: string | undefined;
 let daemon: { close(): Promise<void>; url: string } | undefined;
@@ -45,8 +36,10 @@ describe("Phase 13D real Web control integration", () => {
       databasePath: join(workspacePath, "caelush.db"),
       port: 0,
       sseHeartbeatIntervalMs: 0,
-      providerOverrides: [provider],
-      defaultModel: { provider: "phase-13d-approval", model: "fixture" },
+      providerBindings: [fixtureBinding()],
+      modelSources: [fixtureModelSource()],
+      adapterOverrides: [provider],
+      defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
       logger: false,
     });
     const client = new CaelushClient({ baseUrl: daemon.url });
@@ -84,8 +77,10 @@ describe("Phase 13D real Web control integration", () => {
       databasePath: join(workspacePath, "caelush.db"),
       port: 0,
       sseHeartbeatIntervalMs: 0,
-      providerOverrides: [provider],
-      defaultModel: { provider: "phase-13d-approval", model: "fixture" },
+      providerBindings: [fixtureBinding()],
+      modelSources: [fixtureModelSource()],
+      adapterOverrides: [provider],
+      defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
       logger: false,
     });
     const client = new CaelushClient({ baseUrl: daemon.url });
@@ -106,46 +101,36 @@ describe("Phase 13D real Web control integration", () => {
   }, 20_000);
 });
 
-class ApprovalProvider implements LLMProvider {
-  readonly id = "phase-13d-approval" as ProviderId;
+/**
+ * Phase 2C: a fixture adapter is a *dialect*, not a vendor.
+ *
+ * The class registers the shared `FIXTURE_API` id and implements the AI core's
+ * `ApiAdapter` seam. There is no `supportsModel` and no capability declaration any more:
+ * model metadata is the model catalog's authority, and the gateway owns the
+ * `stream.start` / `stream.finish` envelope, so an adapter emits only dialect events.
+ */
+class ApprovalProvider implements ApiAdapter {
+  readonly id = FIXTURE_API;
   calls = 0;
   toolCalls = 0;
 
-  supportsModel(model: ModelRef): boolean {
-    return model.provider === this.id && model.model === "fixture";
-  }
-
-  getCapabilities(): LLMCapabilities {
-    return capabilities;
-  }
-
-  stream(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-  ): AsyncIterable<LLMStreamEvent> {
+  stream(input: ApiAdapterStreamInput): AsyncGenerator<AIAdapterEvent> {
     this.calls += 1;
     if (
-      request.messages.some(
+      input.request.messages.some(
         (message) => message.role === "system" && message.content.includes("Review the supplied"),
       )
     ) {
-      return this.text(request, context, JSON.stringify({ verdict: "PASS", summary: "approved" }));
+      return this.text(JSON.stringify({ verdict: "PASS", summary: "approved" }));
     }
     if (this.calls === 1) {
       this.toolCalls += 1;
-      return this.tool(request, context);
+      return this.tool();
     }
-    return this.text(request, context, "finished");
+    return this.text("finished");
   }
 
-  private async *tool(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-  ): AsyncIterable<LLMStreamEvent> {
-    yield {
-      type: "stream.start",
-      payload: { callId: context.callId, providerId: this.id, model: request.model },
-    };
+  private async *tool(): AsyncGenerator<AIAdapterEvent> {
     yield {
       type: "tool_call.start",
       payload: { toolCallId: "patch-once", toolName: "apply_patch" },
@@ -160,20 +145,12 @@ class ApprovalProvider implements LLMProvider {
         },
       },
     };
-    yield { type: "stream.finish", payload: { finishReason: "TOOL_CALLS" } };
+    yield { type: "adapter.finish", payload: { finishReason: "TOOL_CALLS" } };
   }
 
-  private async *text(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-    value: string,
-  ): AsyncIterable<LLMStreamEvent> {
-    yield {
-      type: "stream.start",
-      payload: { callId: context.callId, providerId: this.id, model: request.model },
-    };
+  private async *text(value: string): AsyncGenerator<AIAdapterEvent> {
     yield { type: "text.delta", payload: { text: value } };
-    yield { type: "stream.finish", payload: { finishReason: "STOP" } };
+    yield { type: "adapter.finish", payload: { finishReason: "STOP" } };
   }
 }
 

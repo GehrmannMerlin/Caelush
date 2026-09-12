@@ -2,30 +2,20 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CaelushClient } from "@caelush/client";
-import { createWorkspaceId, type ModelRef } from "@caelush/protocol";
-import type {
-  LLMCapabilities,
-  LLMProvider,
-  LLMProviderCallContext,
-  LLMProviderRequest,
-  LLMStreamEvent,
-  ProviderId,
-} from "@caelush/llm";
+import type { AIAdapterEvent, ApiAdapter, ApiAdapterStreamInput } from "@caelush/ai";
 import { render } from "ink-testing-library";
 import React from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { startDaemon } from "../../daemon/src/index.js";
 import { CliConversationController } from "../src/application/cli-controller.js";
 import { App } from "../src/components/App.js";
-
-const capabilities: LLMCapabilities = {
-  textStreaming: "SUPPORTED",
-  toolCalling: "SUPPORTED",
-  parallelToolCalls: "SUPPORTED",
-  structuredOutput: "SUPPORTED",
-  vision: "UNSUPPORTED",
-  reasoningSummary: "UNSUPPORTED",
-};
+import {
+  FIXTURE_API,
+  FIXTURE_MODEL,
+  FIXTURE_PROVIDER,
+  fixtureBinding,
+  fixtureModelSource,
+} from "./support/ai-fixture.js";
 
 let directory: string | undefined;
 let daemon: { close(): Promise<void>; url: string } | undefined;
@@ -40,89 +30,58 @@ afterEach(async () => {
   directory = undefined;
 });
 
-class TimelineProvider implements LLMProvider {
-  readonly id = "timeline-fixture" as ProviderId;
+/**
+ * Phase 2C: a fixture adapter is a *dialect*, not a vendor.
+ *
+ * Each class below registers the shared `FIXTURE_API` id and implements the AI core's
+ * `ApiAdapter` seam. There is no `supportsModel` and no capability declaration any more:
+ * model metadata is the model catalog's authority, and the gateway owns the
+ * `stream.start` / `stream.finish` envelope, so an adapter emits only dialect events.
+ */
+class TimelineProvider implements ApiAdapter {
+  readonly id = FIXTURE_API;
   readonly entered = deferred<void>();
   readonly release = deferred<void>();
   calls = 0;
 
-  supportsModel(model: ModelRef): boolean {
-    return model.provider === this.id && model.model === "timeline-model";
-  }
-
-  getCapabilities(): LLMCapabilities {
-    return capabilities;
-  }
-
-  stream(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-  ): AsyncIterable<LLMStreamEvent> {
+  stream(input: ApiAdapterStreamInput): AsyncGenerator<AIAdapterEvent> {
     this.calls += 1;
     if (
-      request.messages.some(
+      input.request.messages.some(
         (message) => message.role === "system" && message.content.includes("Review the supplied"),
       )
     ) {
-      return this.text(
-        request,
-        context,
-        JSON.stringify({ verdict: "PASS", summary: "The task is acceptable." }),
-      );
+      return this.text(JSON.stringify({ verdict: "PASS", summary: "The task is acceptable." }));
     }
-    if (this.calls === 1) return this.readFileCall(request, context);
-    return this.text(request, context, "The verified workspace report is complete.");
+    if (this.calls === 1) return this.readFileCall();
+    return this.text("The verified workspace report is complete.");
   }
 
-  private async *readFileCall(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-  ): AsyncIterable<LLMStreamEvent> {
+  private async *readFileCall(): AsyncGenerator<AIAdapterEvent> {
     this.entered.resolve();
     await this.release.promise;
-    yield streamStart(this.id, request, context);
     yield { type: "tool_call.start", payload: { toolCallId: "read-call", toolName: "read_file" } };
     yield {
       type: "tool_call.completed",
       payload: { id: "read-call", name: "read_file", input: { path: "src/message.txt" } },
     };
-    yield { type: "stream.finish", payload: { finishReason: "TOOL_CALLS" } };
+    yield { type: "adapter.finish", payload: { finishReason: "TOOL_CALLS" } };
   }
 
-  private async *text(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-    value: string,
-  ): AsyncIterable<LLMStreamEvent> {
-    yield streamStart(this.id, request, context);
+  private async *text(value: string): AsyncGenerator<AIAdapterEvent> {
     yield { type: "text.delta", payload: { text: value } };
-    yield { type: "stream.finish", payload: { finishReason: "STOP" } };
+    yield { type: "adapter.finish", payload: { finishReason: "STOP" } };
   }
 }
 
-class ApprovalTimelineProvider implements LLMProvider {
-  readonly id = "approval-timeline-fixture" as ProviderId;
+class ApprovalTimelineProvider implements ApiAdapter {
+  readonly id = FIXTURE_API;
 
-  supportsModel(model: ModelRef): boolean {
-    return model.provider === this.id && model.model === "approval-timeline-model";
+  stream(): AsyncGenerator<AIAdapterEvent> {
+    return this.toolCall();
   }
 
-  getCapabilities(): LLMCapabilities {
-    return capabilities;
-  }
-
-  stream(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-  ): AsyncIterable<LLMStreamEvent> {
-    return this.toolCall(request, context);
-  }
-
-  private async *toolCall(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-  ): AsyncIterable<LLMStreamEvent> {
-    yield streamStart(this.id, request, context);
+  private async *toolCall(): AsyncGenerator<AIAdapterEvent> {
     yield {
       type: "tool_call.start",
       payload: { toolCallId: "approval-call", toolName: "apply_patch" },
@@ -137,7 +96,7 @@ class ApprovalTimelineProvider implements LLMProvider {
         },
       },
     };
-    yield { type: "stream.finish", payload: { finishReason: "TOOL_CALLS" } };
+    yield { type: "adapter.finish", payload: { finishReason: "TOOL_CALLS" } };
   }
 }
 
@@ -149,8 +108,10 @@ describe("real daemon to CLI timeline E2E", () => {
       databasePath: join(workspacePath, "caelush.db"),
       port: 0,
       sseHeartbeatIntervalMs: 0,
-      providerOverrides: [provider],
-      defaultModel: { provider: "timeline-fixture", model: "timeline-model" },
+      providerBindings: [fixtureBinding()],
+      modelSources: [fixtureModelSource()],
+      adapterOverrides: [provider],
+      defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
       logger: false,
     });
     const client = new CaelushClient({ baseUrl: daemon.url });
@@ -182,11 +143,10 @@ describe("real daemon to CLI timeline E2E", () => {
       databasePath: join(workspacePath, "caelush.db"),
       port: 0,
       sseHeartbeatIntervalMs: 0,
-      providerOverrides: [provider],
-      defaultModel: {
-        provider: "approval-timeline-fixture",
-        model: "approval-timeline-model",
-      },
+      providerBindings: [fixtureBinding()],
+      modelSources: [fixtureModelSource()],
+      adapterOverrides: [provider],
+      defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
       logger: false,
     });
     const client = new CaelushClient({ baseUrl: daemon.url });
@@ -212,17 +172,6 @@ async function makeWorkspace(prefix: string, contents: string): Promise<string> 
   await writeFile(join(workspacePath, "src", "message.txt"), contents, "utf8");
   await writeFile(join(workspacePath, "README.md"), "before\n", "utf8");
   return workspacePath;
-}
-
-function streamStart(
-  providerId: ProviderId,
-  request: LLMProviderRequest,
-  context: LLMProviderCallContext,
-): LLMStreamEvent {
-  return {
-    type: "stream.start",
-    payload: { callId: context.callId, providerId, model: request.model },
-  };
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {
