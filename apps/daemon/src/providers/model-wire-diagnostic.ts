@@ -36,7 +36,6 @@ export interface ModelWireDiagnostic {
 
 export interface ModelWireDiagnosticOptions {
   readonly writer?: (event: ModelWireDiagnosticEvent) => void;
-  readonly clock?: { now(): number };
 }
 
 /**
@@ -58,7 +57,6 @@ export function createSafeModelWireDiagnostic(
 export function createModelWireDiagnostic(
   options: ModelWireDiagnosticOptions = {},
 ): ModelWireDiagnostic {
-  const clock = options.clock ?? { now: () => Date.now() };
   const writer =
     options.writer ??
     ((event: ModelWireDiagnosticEvent): void => {

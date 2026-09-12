@@ -26,8 +26,20 @@ import {
   toModelDescriptorSources,
 } from "./providers/legacy-ai-configuration.js";
 import { CatalogModelCanonicalizer } from "./providers/model-canonicalizer.js";
+import {
+  createModelWireDiagnostic,
+  createSafeModelWireDiagnostic,
+  type ModelWireDiagnostic,
+  type ModelWireDiagnosticEvent,
+} from "./providers/model-wire-diagnostic.js";
 import { createModelTurnExecutor } from "@caelush/agent";
-import type { AISubsystem, ModelDescriptorSourcePort } from "@caelush/ai";
+import type {
+  AISubsystem,
+  AIGateway,
+  AIModelRequest,
+  AIStream,
+  ModelDescriptorSourcePort,
+} from "@caelush/ai";
 import {
   DaemonInfoSchema,
   createApprovalRequestId,
@@ -151,7 +163,9 @@ export interface DaemonCompositionOptions {
   readonly clock?: DaemonClock;
   readonly logger?: RunExecutionSupervisorLogger;
   readonly configResolver?: RunExecutionConfigResolver;
-  readonly wireDiagnosticWriter?: (event: import("./providers/model-wire-diagnostic.js").ModelWireDiagnosticEvent) => void;
+  readonly wireDiagnosticWriter?: (
+    event: import("./providers/model-wire-diagnostic.js").ModelWireDiagnosticEvent,
+  ) => void;
   /** Safe Tool-calling diagnostics; the writer receives no raw arguments or output. */
   readonly toolCallingDebugWriter?: (event: ToolCallingDebugEvent) => void;
 }
@@ -190,7 +204,15 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     providers: [...providers.map(toAIProviderBinding), ...(options.providerBindings ?? [])],
     adapters: [...createDaemonApiAdapters(), ...(options.adapterOverrides ?? [])],
   });
-  const modelTurns = createModelTurnExecutor({ gateway: ai.gateway });
+  // The diagnostic is a transparent decorator over the frozen gateway: the AI core
+  // contract gains no debug callback, and nothing here can observe an endpoint, a
+  // credential, a header, a prompt or a tool argument.
+  const wireDiagnostic =
+    options.wireDiagnosticWriter === undefined
+      ? createSafeModelWireDiagnostic()
+      : createModelWireDiagnostic({ writer: options.wireDiagnosticWriter });
+  const gateway = createDiagnosedGateway(ai.gateway, wireDiagnostic);
+  const modelTurns = createModelTurnExecutor({ gateway });
 
   const inspector = createLocalProjectInspector();
   const memoryRetriever = new MemoryRetriever(options.storage.memory);
@@ -483,4 +505,79 @@ function createRunBoundVerificationGit(runtime: LocalRuntime): VerificationGitPo
       return createRuntimeGitVerificationPort(scope).diff(input);
     },
   };
+}
+
+/**
+ * Observe the frozen gateway without changing it.
+ *
+ * The decorator records only safe structural facts — identity, message roles, tool
+ * names and the finish reason — and it is a pure pass-through: the events, their order
+ * and the call id are the gateway's, and no error path is altered. A diagnostic write
+ * can never fail an invocation.
+ */
+function createDiagnosedGateway(
+  gateway: AIGateway,
+  diagnostic: ModelWireDiagnostic | undefined,
+): AIGateway {
+  if (diagnostic === undefined) return gateway;
+
+  return {
+    async stream(request: AIModelRequest, options): Promise<AIStream> {
+      const startedAt = Date.now();
+      const stream = await gateway.stream(request, options);
+      diagnostic.record({
+        phase: "REQUEST",
+        callId: stream.callId,
+        providerId: request.model.provider,
+        model: request.model.model,
+        messageRoles: request.messages.map((message) => message.role),
+        toolNames: (request.tools ?? []).map((tool) => tool.name),
+        modelSettings: safeModelSettings(request),
+      });
+      return {
+        callId: stream.callId,
+        events: observeEvents(stream.events, stream.callId, request, startedAt, diagnostic),
+      };
+    },
+    complete(request: AIModelRequest, options) {
+      return gateway.complete(request, options);
+    },
+  };
+}
+
+async function* observeEvents(
+  events: AsyncIterable<import("@caelush/ai").AIStreamEvent>,
+  callId: string,
+  request: AIModelRequest,
+  startedAt: number,
+  diagnostic: ModelWireDiagnostic,
+): AsyncIterable<import("@caelush/ai").AIStreamEvent> {
+  const toolNames: string[] = [];
+  for await (const event of events) {
+    if (event.type === "tool_call.completed") toolNames.push(event.payload.name);
+    if (event.type === "stream.finish") {
+      diagnostic.record({
+        phase: "RESPONSE",
+        callId,
+        providerId: request.model.provider,
+        model: request.model.model,
+        finishReason: event.payload.finishReason,
+        toolNames,
+        durationMs: Date.now() - startedAt,
+      });
+    }
+    yield event;
+  }
+}
+
+/** Numbers only. A settings object can never carry a credential. */
+function safeModelSettings(request: AIModelRequest): Record<string, string | number> {
+  const settings: Record<string, string | number> = {};
+  if (request.settings?.maxOutputTokens !== undefined) {
+    settings["maxOutputTokens"] = request.settings.maxOutputTokens;
+  }
+  if (request.settings?.temperature !== undefined)
+    settings["temperature"] = request.settings.temperature;
+  if (request.toolChoice !== undefined) settings["toolChoice"] = request.toolChoice.type;
+  return settings;
 }

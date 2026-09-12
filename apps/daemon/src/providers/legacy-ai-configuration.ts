@@ -103,10 +103,8 @@ function descriptorFor(
   provider: string,
   model: string,
   profile: DaemonModelProviderConfig["modelProfiles"] extends
-    | Readonly<Record<string, infer T>>
-    | undefined
-    ? T
-    | undefined
+    Readonly<Record<string, infer T>> | undefined
+    ? T | undefined
     : never,
 ): ModelDescriptor {
   const contextWindowTokens = profile?.contextWindowTokens ?? LEGACY_FALLBACK_CONTEXT_WINDOW_TOKENS;
