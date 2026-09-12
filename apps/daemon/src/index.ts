@@ -31,7 +31,7 @@ export type {
   DaemonCompositionOptions,
 } from "./daemon-composition.js";
 export {
-  ConfiguredModelCanonicalizer,
+  CatalogModelCanonicalizer,
   DaemonModelConfigurationError,
   toClientModelSelection,
 } from "./providers/model-canonicalizer.js";

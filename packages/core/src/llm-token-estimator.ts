@@ -1,8 +1,8 @@
 import { Utf8HeuristicTokenEstimator, type TokenEstimator } from "@caelush/context";
-import type { LLMRequest } from "@caelush/llm/request";
+import type { AIModelRequest } from "@caelush/ai";
 
 export interface LLMTokenEstimator {
-  estimate(request: LLMRequest): number | undefined;
+  estimate(request: AIModelRequest): number | undefined;
 }
 
 /**
@@ -12,7 +12,7 @@ export interface LLMTokenEstimator {
 export class RequestTokenEstimator implements LLMTokenEstimator {
   constructor(private readonly textEstimator: TokenEstimator) {}
 
-  estimate(request: LLMRequest): number | undefined {
+  estimate(request: AIModelRequest): number | undefined {
     try {
       const value = this.textEstimator.estimateText(JSON.stringify(request));
       return Number.isSafeInteger(value) && value >= 0 ? value : undefined;

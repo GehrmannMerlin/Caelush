@@ -1,3 +1,4 @@
+import type { ModelCatalog, ProviderRegistry } from "@caelush/ai";
 import type { ClientModelSelection, ModelRef } from "@caelush/protocol";
 
 export interface DaemonModelProfileConfig {
@@ -31,23 +32,34 @@ export class DaemonModelConfigurationError extends Error {
   }
 }
 
-export class ConfiguredModelCanonicalizer implements DaemonModelCanonicalizer {
-  private readonly providers: ReadonlyMap<string, DaemonModelProviderConfig>;
-
-  constructor(configs: readonly DaemonModelProviderConfig[] = []) {
-    this.providers = new Map(configs.map((config) => [config.provider, { ...config }]));
-  }
+/**
+ * Model canonicalization backed by the AI subsystem's own catalogs.
+ *
+ * The canonical form of a client selection is exactly `provider + model`: identity is
+ * what the model catalog and provider registry agree on, and the provider binding
+ * owns the endpoint.
+ *
+ * The replaced `ConfiguredModelCanonicalizer` copied `provider.baseUrl` into
+ * `ModelRef.baseUrl`, which competed with the provider registry for endpoint
+ * authority. Nothing here writes an endpoint into a model reference.
+ */
+export class CatalogModelCanonicalizer implements DaemonModelCanonicalizer {
+  constructor(
+    private readonly models: ModelCatalog,
+    private readonly providers: ProviderRegistry,
+  ) {}
 
   canonicalize(selection: ClientModelSelection): ModelRef {
-    const provider = this.providers.get(selection.provider);
-    if (this.providers.size > 0 && provider === undefined) {
+    if (!this.providers.has(selection.provider)) {
       throw new DaemonModelConfigurationError("The requested model provider is unavailable.");
     }
-    if (provider === undefined) return { ...selection };
-    if (provider.allowedModels !== undefined && !provider.allowedModels.includes(selection.model)) {
+    const ref: ModelRef = { provider: selection.provider, model: selection.model };
+    try {
+      this.models.resolve({ provider: ref.provider, model: ref.model });
+    } catch {
       throw new DaemonModelConfigurationError("The requested model is unavailable.");
     }
-    return { ...selection, baseUrl: provider.baseUrl };
+    return ref;
   }
 }
 

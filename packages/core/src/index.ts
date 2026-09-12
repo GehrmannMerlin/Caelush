@@ -96,7 +96,6 @@ export type {
 } from "./agent-loop-input.js";
 export type {
   AgentContextBuilderPort,
-  AgentLLMClient,
   AgentLoopDependencies,
   AgentProjectInspectorPort,
   AgentRelevantFilePlannerPort,
@@ -271,3 +270,12 @@ export { RequestTokenEstimator, createDefaultLLMTokenEstimator } from "./llm-tok
 export type { LLMTokenEstimator } from "./llm-token-estimator.js";
 export { StaticPricingResolver } from "./pricing.js";
 export type { PricingResolver } from "./pricing.js";
+
+/**
+ * Re-exported frozen AI model-invocation types.
+ *
+ * A legacy consumer that may not depend on `@caelush/ai` directly — `@caelush/storage``n * is the current example — names them through Core instead. Core depends on the AI
+ * core in the sanctioned legacy-to-target direction, and these are re-exports, not
+ * declarations: the AI package remains their single owner.
+ */
+export type { AIModelRequest, AIModelTurnResult, ModelUsage } from "@caelush/ai";

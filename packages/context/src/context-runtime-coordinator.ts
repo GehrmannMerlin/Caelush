@@ -16,7 +16,9 @@ import {
 import { createStructuredCheckpoint, type StructuredCheckpoint } from "./checkpoint.js";
 import {
   createModelContextProfile,
+  projectModelContextProfile,
   resolveModelContextProfile,
+  type ModelDescriptorProjectionInput,
   type ModelContextProfile,
 } from "./model-context-profile.js";
 import { buildExecutionUnits, isCompactionCandidate } from "./execution-unit.js";
@@ -34,6 +36,15 @@ export interface ContextRuntimePrepareInput {
   readonly runId: string;
   readonly providerId: string;
   readonly modelId: string;
+  /**
+   * The model's technical metadata authority.
+   *
+   * When present, Context derives its intrinsic model limits from this descriptor
+   * instead of resolving them independently, so the context runtime and the model
+   * gateway can never disagree about a context window or an output ceiling. The
+   * descriptor comes from the same immutable catalog generation the gateway uses.
+   */
+  readonly model?: ModelDescriptorProjectionInput;
   readonly projectId?: string;
   readonly context: ContextBuildInput;
   readonly signal: AbortSignal;
@@ -109,6 +120,49 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
     return this.usageByRun.get(runId);
   }
 
+  /**
+   * Build the compatibility profile from the caller's model descriptor.
+   *
+   * The descriptor supplies every intrinsic model field. The two policy fields come
+   * from configuration: the explicit policy option when set, otherwise the
+   * configured/fallback profile's own reserve, which is Context policy metadata and
+   * never a model descriptor field.
+   */
+  #compatibilityProfile(input: ContextRuntimePrepareInput): ModelContextProfile | undefined {
+    const descriptor = input.model;
+    if (descriptor === undefined) return undefined;
+
+    const policySource =
+      this.options.policyOptions?.outputReserveTokens ??
+      this.options.configuredProfiles?.find(
+        (profile) =>
+          profile.providerId === descriptor.ref.provider &&
+          profile.modelId === descriptor.ref.model,
+      )?.recommendedOutputReserveTokens ??
+      this.options.overrides?.find(
+        (profile) =>
+          profile.providerId === descriptor.ref.provider &&
+          profile.modelId === descriptor.ref.model,
+      )?.recommendedOutputReserveTokens ??
+      this.options.fallbackProfile?.recommendedOutputReserveTokens ??
+      2_048;
+
+    const toolOutputSoftLimitTokens =
+      this.options.configuredProfiles
+        ?.find(
+          (profile) =>
+            profile.providerId === descriptor.ref.provider &&
+            profile.modelId === descriptor.ref.model,
+        )
+        ?.toolOutputSoftLimitTokens?.valueOf();
+
+    return projectModelContextProfile({
+      descriptor,
+      recommendedOutputReserveTokens: policySource,
+      ...(toolOutputSoftLimitTokens === undefined ? {} : { toolOutputSoftLimitTokens }),
+    });
+  }
+
   getContextPolicy(
     runId: string,
   ): Pick<ContextPolicy, "maxSingleObservationTokens" | "maxObservationBatchTokens"> | undefined {
@@ -129,25 +183,31 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
         ? undefined
         : await this.options.checkpointRepository.getLatestByRun(input.runId);
     if (input.signal.aborted) throw new ContextRuntimeCancelledError();
-    const profile = resolveModelContextProfile({
-      providerId: input.providerId,
-      modelId: input.modelId,
-      ...(input.context.modelContextProfile === undefined
-        ? this.options.configuredProfiles === undefined
+    // The descriptor, when the caller supplies one, owns every intrinsic model
+    // field. `resolveModelContextProfile` remains available for compatibility
+    // callers and for tests, but it is no longer consulted on the migrated path.
+    const configuredProfile = input.model === undefined ? undefined : this.#compatibilityProfile(input);
+    const profile =
+      configuredProfile ??
+      resolveModelContextProfile({
+        providerId: input.providerId,
+        modelId: input.modelId,
+        ...(input.context.modelContextProfile === undefined
+          ? this.options.configuredProfiles === undefined
+            ? {}
+            : { configuredProfiles: this.options.configuredProfiles }
+          : { configuredProfiles: [input.context.modelContextProfile] }),
+        ...(this.options.knownProfiles === undefined
           ? {}
-          : { configuredProfiles: this.options.configuredProfiles }
-        : { configuredProfiles: [input.context.modelContextProfile] }),
-      ...(this.options.knownProfiles === undefined
-        ? {}
-        : { knownProfiles: this.options.knownProfiles }),
-      ...(this.options.overrides === undefined ? {} : { overrides: this.options.overrides }),
-      legacyLimits: {
-        maxInputTokens: input.context.limits.maxInputTokens,
-      },
-      ...(this.options.fallbackProfile === undefined
-        ? {}
-        : { fallback: this.options.fallbackProfile }),
-    });
+          : { knownProfiles: this.options.knownProfiles }),
+        ...(this.options.overrides === undefined ? {} : { overrides: this.options.overrides }),
+        legacyLimits: {
+          maxInputTokens: input.context.limits.maxInputTokens,
+        },
+        ...(this.options.fallbackProfile === undefined
+          ? {}
+          : { fallback: this.options.fallbackProfile }),
+      });
     const policy = createContextPolicy(profile, this.options.policyOptions);
     this.policyByRun.set(input.runId, policy);
     const pressureState =

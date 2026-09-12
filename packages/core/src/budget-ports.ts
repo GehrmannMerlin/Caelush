@@ -1,5 +1,4 @@
-import type { LLMRequest } from "@caelush/llm/request";
-import type { LLMUsage } from "@caelush/llm/turn";
+import type { ModelUsage } from "@caelush/ai";
 import type {
   AgentRun,
   AgentState,
@@ -10,10 +9,30 @@ import type {
 } from "@caelush/protocol";
 import type { AgentBudgetBlock } from "./agent-errors.js";
 
+/**
+ * The AI-agnostic admission input the budget boundary consumes.
+ *
+ * The durable budget implementation must not need the model invocation contract: it
+ * reserves tokens and settles usage, so plain numbers are the whole interface. That
+ * keeps `@caelush/storage` free of any dependency on the AI core, which the frozen
+ * dependency graph forbids, and it keeps the estimator — which does need the request
+ * shape — on the Core side where the request lives.
+ */
+export interface LLMBudgetAdmissionInput {
+  readonly estimatedInputTokens?: number;
+  readonly configuredMaxOutputTokens?: number;
+}
+
 export type RunLLMBudgetAdmission =
   | {
       readonly kind: "ALLOWED";
-      readonly request: LLMRequest;
+      /**
+       * The output ceiling the budget actually admitted.
+       *
+       * Absent when the reservation did not change the caller's ceiling. The caller
+       * applies it to its own request, so the port never handles a request object.
+       */
+      readonly effectiveMaxOutputTokens?: number;
     }
   | AgentBudgetBlock;
 
@@ -25,23 +44,23 @@ export interface RunBudgetPort {
   admitLLM(input: {
     readonly run: AgentRun;
     readonly step: AgentStep;
-    readonly request: LLMRequest;
+    readonly admission: LLMBudgetAdmissionInput;
   }): Promise<RunLLMBudgetAdmission>;
   settleLLM(input: {
     readonly runId: RunId;
     readonly stepId: StepId;
-    readonly usage?: LLMUsage;
+    readonly usage?: ModelUsage;
     readonly settledAt: TimestampMs;
   }): Promise<RunBudgetSettlement | void>;
   admitVerificationLLM?(input: {
     readonly run: AgentRun;
     readonly ownerId: string;
-    readonly request: LLMRequest;
+    readonly admission: LLMBudgetAdmissionInput;
   }): Promise<RunLLMBudgetAdmission>;
   settleVerificationLLM?(input: {
     readonly runId: RunId;
     readonly ownerId: string;
-    readonly usage?: LLMUsage;
+    readonly usage?: ModelUsage;
     readonly settledAt: TimestampMs;
   }): Promise<RunBudgetSettlement | void>;
   markVerificationLLMConservative?(input: {

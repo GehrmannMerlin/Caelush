@@ -1,4 +1,4 @@
-import type { LLMUsage } from "@caelush/llm/turn";
+import type { ModelUsage } from "@caelush/ai";
 import type { AgentRun, AgentState, StepId, TimestampMs } from "@caelush/protocol";
 import { AgentStateSchema } from "@caelush/protocol";
 import { assertRunStatusTransition } from "./run-state-machine.js";
@@ -91,7 +91,7 @@ export function beginAgentStepState(
 
 export interface SettleAgentStepInput {
   readonly stepId: StepId;
-  readonly usage?: LLMUsage;
+  readonly usage?: ModelUsage;
   readonly now: TimestampMs;
 }
 

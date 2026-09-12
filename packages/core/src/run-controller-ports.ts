@@ -22,7 +22,7 @@ import type { RunRetryRegistry } from "./run-retry-registry.js";
 import type { RetryJitterSource, RetryPolicy } from "./retry-controller.js";
 import type { RunBudgetPort } from "./budget-ports.js";
 import type { ResourceGovernancePort } from "./resource-governance-port.js";
-import type { LLMTurnResult } from "@caelush/llm/turn";
+import type { AIModelTurnResult, ModelUsage } from "@caelush/ai";
 import type {
   VerificationCommandExecutionPort,
   VerificationCommandSecurityPort,
@@ -82,12 +82,12 @@ export interface ProjectProfileProviderPort {
   getFreshProfile(run: AgentRun, config: RunExecutionConfig): Promise<VerificationProjectProfile>;
 }
 
-export interface VerificationLLMClient {
-  complete(
-    request: import("@caelush/llm/request").LLMRequest,
-    options: { readonly signal: AbortSignal },
-  ): Promise<LLMTurnResult>;
-}
+/**
+ * The verification reviewer executes through the same model turn authority as a
+ * normal agent turn: one AI subsystem, one gateway, no second provider registry
+ * generation.
+ */
+export type VerificationLLMClient = import("@caelush/agent").ModelTurnExecutor;
 
 export interface VerificationTaskReviewerPort {
   review(input: {
@@ -99,7 +99,7 @@ export interface VerificationTaskReviewerPort {
     readonly status: "PASSED" | "FAILED" | "ERROR";
     readonly review?: TaskAcceptanceReview;
     readonly reviewInputHash: string;
-    readonly usage?: import("@caelush/llm/turn").LLMUsage;
+    readonly usage?: ModelUsage;
     readonly budget?: import("./agent-errors.js").AgentBudgetBlock;
     readonly errorCode?: string;
   }>;
@@ -137,6 +137,8 @@ export interface RunControllerDependencies {
   readonly retryJitter?: RetryJitterSource;
   readonly resources?: RunOwnedResourceControllerPort;
   readonly budget?: RunBudgetPort;
+  /** Core-side request estimator. The durable budget port receives plain numbers. */
+  readonly tokenEstimator?: import("./llm-token-estimator.js").LLMTokenEstimator;
   readonly resourceGovernance?: ResourceGovernancePort;
   readonly verificationPlanner?: VerificationPlannerPort;
   readonly verificationPlanIdFactory?: VerificationPlanIdFactory;
@@ -153,7 +155,7 @@ export interface RunControllerDependencies {
   readonly verificationEvidenceIdFactory?: () => import("@caelush/protocol").VerificationEvidenceId;
   readonly verificationResolverRegistry?: ProjectCheckResolverRegistry;
   readonly verificationReviewer?: VerificationTaskReviewerPort;
-  readonly verificationLLMClient?: VerificationLLMClient;
+  readonly verificationModelTurns?: VerificationLLMClient;
   readonly verificationRepairPolicy?: VerificationRepairPolicy;
   readonly verificationPlanCount?: (runId: import("@caelush/protocol").RunId) => Promise<number>;
   readonly onVerifiedCompletion?: (input: {

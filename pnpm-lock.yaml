@@ -75,6 +75,12 @@ importers:
 
   apps/daemon:
     dependencies:
+      '@caelush/agent':
+        specifier: workspace:*
+        version: link:../../packages/agent
+      '@caelush/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@caelush/context':
         specifier: workspace:*
         version: link:../../packages/context
@@ -84,9 +90,6 @@ importers:
       '@caelush/events':
         specifier: workspace:*
         version: link:../../packages/events
-      '@caelush/llm':
-        specifier: workspace:*
-        version: link:../../packages/llm
       '@caelush/memory':
         specifier: workspace:*
         version: link:../../packages/memory
@@ -217,6 +220,12 @@ importers:
 
   packages/core:
     dependencies:
+      '@caelush/agent':
+        specifier: workspace:*
+        version: link:../agent
+      '@caelush/ai':
+        specifier: workspace:*
+        version: link:../ai
       '@caelush/context':
         specifier: workspace:*
         version: link:../context

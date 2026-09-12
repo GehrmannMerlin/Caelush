@@ -1,13 +1,13 @@
 import type { LLMAssistantMessage } from "@caelush/llm/messages";
-import type { FinishReason, LLMUsage } from "@caelush/llm/turn";
+import type { AIFinishReason, ModelUsage } from "@caelush/ai";
 import type { JsonObject, LLMCallId, ModelRef, ToolName } from "@caelush/protocol";
 
 export interface AgentModelTurn {
   readonly callId: LLMCallId;
   readonly model: ModelRef;
-  readonly finishReason: FinishReason;
+  readonly finishReason: AIFinishReason;
   readonly assistantMessage: LLMAssistantMessage;
-  readonly usage?: LLMUsage | undefined;
+  readonly usage?: ModelUsage | undefined;
 }
 
 export interface AgentToolRequest {

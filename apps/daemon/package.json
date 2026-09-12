@@ -37,7 +37,6 @@
     "@caelush/context": "workspace:*",
     "@caelush/core": "workspace:*",
     "@caelush/events": "workspace:*",
-    "@caelush/llm": "workspace:*",
     "@caelush/memory": "workspace:*",
     "@caelush/protocol": "workspace:*",
     "@caelush/runtime": "workspace:*",
@@ -48,7 +47,9 @@
     "@fastify/sse": "0.6.0",
     "fastify": "5.12.1",
     "fastify-type-provider-zod": "7.0.0",
-    "zod": "4.4.3"
+    "zod": "4.4.3",
+    "@caelush/ai": "workspace:*",
+    "@caelush/agent": "workspace:*"
   },
   "devDependencies": {
     "@caelush/client": "workspace:*"

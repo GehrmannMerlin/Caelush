@@ -1,6 +1,19 @@
 export type ModelContextProfileSource =
   "CONFIGURATION" | "KNOWN_METADATA" | "LEGACY_LIMITS" | "OVERRIDE" | "FALLBACK";
 
+/**
+ * COMPATIBILITY PROJECTION — not model metadata authority.
+ *
+ * Since Phase 2C the model's technical metadata authority is the AI core's
+ * `ModelDescriptor`: `contextWindowTokens`, `maxOutputTokens`, `supportsPromptCaching`
+ * and `supportsUsageReporting` all originate there and are projected here by
+ * `projectModelContextProfile` for the Context runtime's existing consumers.
+ *
+ * The two fields that are *not* model intrinsics — `recommendedOutputReserveTokens`
+ * and `toolOutputSoftLimitTokens` — are Context policy. They are combined into this
+ * compatibility view but never originate from a model descriptor, and nothing may
+ * read them back as if they described the model.
+ */
 export interface ModelContextProfile {
   readonly providerId: string;
   readonly modelId: string;
@@ -11,6 +24,48 @@ export interface ModelContextProfile {
   readonly supportsUsageReporting: boolean;
   readonly toolOutputSoftLimitTokens?: number;
   readonly profileSource: ModelContextProfileSource;
+}
+
+/** The subset of an AI model descriptor this projection consumes. */
+export interface ModelDescriptorProjectionInput {
+  readonly ref: { readonly provider: string; readonly model: string };
+  readonly limits: { readonly contextWindowTokens: number; readonly maxOutputTokens: number };
+  readonly capabilities: {
+    readonly promptCaching: "SUPPORTED" | "UNSUPPORTED" | "UNKNOWN";
+    readonly usageReporting: "SUPPORTED" | "UNSUPPORTED" | "UNKNOWN";
+  };
+  readonly source: string;
+}
+
+/**
+ * Project the AI core's model descriptor plus Context policy metadata onto the
+ * legacy compatibility profile.
+ *
+ * The intrinsic fields come from the descriptor and cannot be overridden here. The
+ * policy fields come from the caller's policy configuration, so a descriptor can
+ * never smuggle an output reserve or a tool-output limit into Context policy.
+ */
+export function projectModelContextProfile(input: {
+  readonly descriptor: ModelDescriptorProjectionInput;
+  readonly recommendedOutputReserveTokens: number;
+  readonly toolOutputSoftLimitTokens?: number;
+}): ModelContextProfile {
+  const { descriptor } = input;
+  return {
+    providerId: descriptor.ref.provider,
+    modelId: descriptor.ref.model,
+    contextWindowTokens: descriptor.limits.contextWindowTokens,
+    maxOutputTokens: descriptor.limits.maxOutputTokens,
+    recommendedOutputReserveTokens: input.recommendedOutputReserveTokens,
+    // Only an explicit SUPPORTED is a true capability. UNKNOWN must never be
+    // promoted to a guarantee the descriptor did not make.
+    supportsPromptCaching: descriptor.capabilities.promptCaching === "SUPPORTED",
+    supportsUsageReporting: descriptor.capabilities.usageReporting === "SUPPORTED",
+    ...(input.toolOutputSoftLimitTokens === undefined
+      ? {}
+      : { toolOutputSoftLimitTokens: input.toolOutputSoftLimitTokens }),
+    profileSource: descriptor.source === "FALLBACK" ? "FALLBACK" : "CONFIGURATION",
+  };
 }
 
 export interface ModelContextProfileInput extends Omit<

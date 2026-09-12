@@ -1,5 +1,5 @@
 import { EventBus } from "@caelush/events";
-import type { LLMProvider } from "@caelush/llm";
+import type { AIProviderBinding, ApiAdapter, ModelDescriptorSourcePort } from "@caelush/ai";
 import type { ClientModelSelection } from "@caelush/protocol";
 import { openCaelushStorage } from "@caelush/storage";
 import type { ToolCallingDebugEvent } from "@caelush/tools";
@@ -17,7 +17,9 @@ export interface DaemonOptions {
   readonly logger?: boolean;
   readonly providers?: readonly DaemonModelProviderConfig[];
   readonly defaultModel?: ClientModelSelection;
-  readonly providerOverrides?: readonly LLMProvider[];
+  readonly providerBindings?: readonly AIProviderBinding[];
+  readonly modelSources?: readonly ModelDescriptorSourcePort[];
+  readonly adapterOverrides?: readonly ApiAdapter[];
   readonly web?: WebStaticHostOptions;
 }
 
@@ -49,9 +51,13 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       eventBus,
       ...(options.providers === undefined ? {} : { providers: options.providers }),
       ...(options.defaultModel === undefined ? {} : { defaultModel: options.defaultModel }),
-      ...(options.providerOverrides === undefined
+      ...(options.providerBindings === undefined
         ? {}
-        : { providerOverrides: options.providerOverrides }),
+        : { providerBindings: options.providerBindings }),
+      ...(options.modelSources === undefined ? {} : { modelSources: options.modelSources }),
+      ...(options.adapterOverrides === undefined
+        ? {}
+        : { adapterOverrides: options.adapterOverrides }),
       ...(options.logger === true ? { logger: safeSupervisorLogger } : {}),
       ...(process.env.CAELUSH_DEBUG_TOOL_CALLING === "1"
         ? { toolCallingDebugWriter: writeToolCallingDebugEvent }

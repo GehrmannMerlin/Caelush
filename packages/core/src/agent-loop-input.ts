@@ -4,8 +4,7 @@ import type {
   VerificationRepairContextInput,
 } from "@caelush/context";
 import type { LLMMessage, LLMToolResultMessage } from "@caelush/llm/messages";
-import type { LLMToolChoice, LLMRequest } from "@caelush/llm/request";
-import type { LLMTurnResult } from "@caelush/llm/turn";
+import type { AIModelRequest, AIModelTurnResult, AIToolChoice, ModelUsage } from "@caelush/ai";
 import type {
   AgentError,
   AgentRun,
@@ -20,7 +19,7 @@ import type { AgentBudgetBlock } from "./agent-errors.js";
 import type { AgentLoopDependencies, AgentProviderTurnState } from "./agent-loop-ports.js";
 
 export interface AgentRetryMetadata {
-  readonly code: "LLM_RATE_LIMIT" | "LLM_NETWORK" | "LLM_TIMEOUT";
+  readonly code: "AI_RATE_LIMIT" | "AI_NETWORK" | "AI_TIMEOUT";
   readonly retryable: boolean;
   readonly retryAfterMs?: number;
 }
@@ -28,7 +27,7 @@ export interface AgentRetryMetadata {
 export interface AgentLoopModelSettings {
   readonly maxOutputTokens?: number;
   readonly temperature?: number;
-  readonly toolChoice?: LLMToolChoice;
+  readonly toolChoice?: AIToolChoice;
 }
 
 export interface AgentLoopCommonInput {
@@ -74,7 +73,7 @@ export interface AgentLoopFailureResult {
   readonly providerTurnState: AgentProviderTurnState;
   readonly retry?: AgentRetryMetadata;
   readonly budget?: AgentBudgetBlock;
-  readonly usage?: import("@caelush/llm/turn").LLMUsage;
+  readonly usage?: ModelUsage;
 }
 
 export interface AgentLoopCancelledResult {
@@ -89,8 +88,8 @@ export interface AgentLoopCancelledResult {
 export type AgentLoopExecutionResult =
   AgentLoopOutcomeResult | AgentLoopFailureResult | AgentLoopCancelledResult;
 
-export type AgentLoopRequest = LLMRequest;
-export type AgentLoopTurn = LLMTurnResult;
+export type AgentLoopRequest = AIModelRequest;
+export type AgentLoopTurn = AIModelTurnResult;
 export type AgentLoopTimestamp = TimestampMs;
 export type AgentLoopStepId = StepId;
 

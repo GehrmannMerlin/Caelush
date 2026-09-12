@@ -19,14 +19,15 @@ import {
   Utf8HeuristicTokenEstimator,
 } from "@caelush/context";
 import { MemoryRetriever, type MemoryRecord } from "@caelush/memory";
+import { createAISubsystem } from "@caelush/ai";
 import {
-  LLMGateway,
-  LLMProviderRegistry,
-  ProviderIdSchema,
-  createSafeLLMWireDiagnostic,
-  createOpenAICompatibleLLMProvider,
-  type LLMProvider,
-} from "@caelush/llm";
+  createDaemonApiAdapters,
+  toAIProviderBinding,
+  toModelDescriptorSources,
+} from "./providers/legacy-ai-configuration.js";
+import { CatalogModelCanonicalizer } from "./providers/model-canonicalizer.js";
+import { createModelTurnExecutor } from "@caelush/agent";
+import type { AISubsystem, ModelDescriptorSourcePort } from "@caelush/ai";
 import {
   DaemonInfoSchema,
   createApprovalRequestId,
@@ -77,7 +78,6 @@ import {
   createRuntimeWorkspaceVerificationPort,
 } from "./verification-runtime-adapters.js";
 import {
-  ConfiguredModelCanonicalizer,
   type DaemonModelCanonicalizer,
   type DaemonModelProviderConfig,
 } from "./providers/model-canonicalizer.js";
@@ -141,14 +141,17 @@ export interface DaemonCompositionOptions {
   readonly eventBus: EventBus;
   readonly providers?: readonly DaemonModelProviderConfig[];
   readonly defaultModel?: ClientModelSelection;
-  readonly providerOverrides?: readonly LLMProvider[];
+  /** AI-native composition seams for tests and hosts. */
+  readonly providerBindings?: readonly import("@caelush/ai").AIProviderBinding[];
+  readonly modelSources?: readonly ModelDescriptorSourcePort[];
+  readonly adapterOverrides?: readonly import("@caelush/ai").ApiAdapter[];
   /** Capability discovered for the selected workspace; unknown hides Git tools. */
   readonly toolExposure?: ToolExposureEnvironment;
   readonly runtime?: LocalRuntime;
   readonly clock?: DaemonClock;
   readonly logger?: RunExecutionSupervisorLogger;
   readonly configResolver?: RunExecutionConfigResolver;
-  readonly wireDiagnosticWriter?: (event: import("@caelush/llm").LLMWireDiagnosticEvent) => void;
+  readonly wireDiagnosticWriter?: (event: import("./providers/model-wire-diagnostic.js").ModelWireDiagnosticEvent) => void;
   /** Safe Tool-calling diagnostics; the writer receives no raw arguments or output. */
   readonly toolCallingDebugWriter?: (event: ToolCallingDebugEvent) => void;
 }
@@ -158,8 +161,9 @@ export interface DaemonComposition {
   readonly runs: Pick<CaelushStorage["runs"], "get">;
   readonly runtime: LocalRuntime;
   readonly runtimeResolver: ReturnType<typeof createLocalRuntimeResolver>;
-  readonly providerRegistry: LLMProviderRegistry;
-  readonly gateway: LLMGateway;
+  /** The V2 AI subsystem: the single model invocation authority. */
+  readonly ai: AISubsystem;
+  readonly modelTurns: ReturnType<typeof createModelTurnExecutor>;
   readonly toolRegistry: ReturnType<ToolRegistryBuilder["build"]>;
   readonly toolCoordinator: ToolBatchCoordinator;
   readonly contextRuntime: ContextRuntimeCoordinator;
@@ -181,34 +185,12 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
   const clock = options.clock ?? { now: () => createTimestampMs(Date.now()) };
   const runtime = options.runtime ?? new LocalRuntime();
   const runtimeResolver = createLocalRuntimeResolver(runtime);
-  const providerRegistry = new LLMProviderRegistry();
-  for (const config of providers) {
-    providerRegistry.register(
-      createOpenAICompatibleLLMProvider({
-        id: ProviderIdSchema.parse(config.provider),
-        baseURL: config.baseUrl,
-        ...(config.apiKey === undefined ? {} : { apiKey: config.apiKey }),
-        ...(config.headers === undefined ? {} : { headers: config.headers }),
-        ...(config.queryParams === undefined ? {} : { queryParams: config.queryParams }),
-        ...(config.allowedModels === undefined ? {} : { allowedModels: config.allowedModels }),
-        ...(config.fetch === undefined ? {} : { fetch: config.fetch }),
-      }),
-    );
-  }
-  for (const provider of options.providerOverrides ?? []) providerRegistry.register(provider);
-  const wireDiagnostic = createSafeLLMWireDiagnostic(
-    options.wireDiagnosticWriter === undefined ? {} : { writer: options.wireDiagnosticWriter },
-  );
-  const gateway = new LLMGateway({
-    providers: providerRegistry,
-    ...(wireDiagnostic === undefined ? {} : { wireDiagnostic }),
+  const ai = createAISubsystem({
+    modelSources: [...providers.flatMap(toModelDescriptorSources), ...(options.modelSources ?? [])],
+    providers: [...providers.map(toAIProviderBinding), ...(options.providerBindings ?? [])],
+    adapters: [...createDaemonApiAdapters(), ...(options.adapterOverrides ?? [])],
   });
-  const llmClient = {
-    complete: (
-      request: Parameters<LLMGateway["complete"]>[0],
-      callOptions: { signal: AbortSignal },
-    ) => gateway.complete(request, callOptions),
-  };
+  const modelTurns = createModelTurnExecutor({ gateway: ai.gateway });
 
   const inspector = createLocalProjectInspector();
   const memoryRetriever = new MemoryRetriever(options.storage.memory);
@@ -256,7 +238,8 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     planner: createLocalRelevantFilePlanner(),
     contextBuilder: createDefaultContextBuilder(),
     contextRuntime,
-    llmClient,
+    models: ai.models,
+    modelTurns,
     clock,
     stepIdFactory: { create: createStepId },
   });
@@ -338,7 +321,7 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     verificationEvidenceSanitizer,
     verificationEvidenceIdFactory: createVerificationEvidenceId,
     verificationResolverRegistry: new ProjectCheckResolverRegistry(),
-    verificationLLMClient: llmClient,
+    verificationModelTurns: modelTurns,
     verificationRepairPolicy: createVerificationRepairPolicy(),
     verificationPlanCount: (runId) =>
       options.storage.verificationExecution.countPlans?.(runId) ?? Promise.resolve(0),
@@ -359,7 +342,7 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     approvals: options.storage.approvals,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
   });
-  const modelCanonicalizer = new ConfiguredModelCanonicalizer(providers);
+  const modelCanonicalizer = new CatalogModelCanonicalizer(ai.models, ai.providers);
   const info = DaemonInfoSchema.parse({
     apiVersion: "v1",
     protocolVersion: 1,
@@ -372,7 +355,7 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
       sseReplay: true,
     },
     runtimeKinds: ["local"],
-    configuredProviders: providerRegistry.listProviderIds(),
+    configuredProviders: ai.providers.list().map((provider) => provider.id),
     ...(options.defaultModel === undefined ? {} : { defaultModel: options.defaultModel }),
     defaultRunConfiguration: DEFAULT_RUN_CONFIGURATION,
   });
@@ -383,8 +366,8 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     runs: options.storage.runs,
     runtime,
     runtimeResolver,
-    providerRegistry,
-    gateway,
+    ai,
+    modelTurns,
     toolRegistry: activeToolRegistry,
     toolCoordinator,
     contextRuntime,

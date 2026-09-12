@@ -1,4 +1,4 @@
-import type { FinishReason, LLMUsage } from "@caelush/llm/turn";
+import type { AIFinishReason, ModelUsage } from "@caelush/ai";
 import type { LLMCallId, ModelRef, ToolName } from "@caelush/protocol";
 
 export type AgentModelOutputErrorReason =
@@ -8,13 +8,22 @@ export type AgentModelOutputErrorReason =
   | "CONTENT_FILTERED"
   | "EMPTY_RESPONSE"
   | "MISSING_TOOL_CALLS"
-  | "DUPLICATE_TOOL_CALL_ID";
+  | "DUPLICATE_TOOL_CALL_ID"
+  /**
+   * The provider reported a finish reason the AI core could not interpret, so the
+   * turn became `AIFinishReason.OTHER`.
+   *
+   * `OTHER` is never evidence that the model finished its answer: an unrecognised
+   * provider reason could mean anything, including a truncated or aborted stream. It
+   * is rejected rather than treated as a normal stop.
+   */
+  | "UNKNOWN_FINISH_REASON";
 
 export interface AgentModelOutputMetadata {
   readonly callId?: LLMCallId;
   readonly providerId?: string;
   readonly model?: ModelRef;
-  readonly finishReason?: FinishReason;
+  readonly finishReason?: AIFinishReason;
   readonly toolCallCount?: number;
 }
 
@@ -102,4 +111,4 @@ export class AgentBudgetAdmissionError extends Error {
   }
 }
 
-export type AgentStepUsage = Pick<LLMUsage, "inputTokens" | "outputTokens">;
+export type AgentStepUsage = Pick<ModelUsage, "inputTokens" | "outputTokens">;

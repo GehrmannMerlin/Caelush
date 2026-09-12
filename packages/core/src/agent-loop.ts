@@ -10,8 +10,7 @@ import {
   type ContextAuthoritySnapshot,
 } from "@caelush/context";
 import type { LLMMessage, LLMToolResultMessage } from "@caelush/llm/messages";
-import type { LLMRequest } from "@caelush/llm/request";
-import { LLMTurnResultSchema, type LLMTurnResult } from "@caelush/llm/turn";
+import type { AIModelRequest, AIModelTurnResult, ModelDescriptor, ModelUsage } from "@caelush/ai";
 import type { AgentState, AgentStep, TimestampMs } from "@caelush/protocol";
 import {
   beginAgentStepState,
@@ -44,7 +43,8 @@ import type {
 import { mapAgentLoopError, mapAgentRetryMetadata } from "./agent-error-mapper.js";
 import { prepareResumeHistory, validateAgentLoopInput } from "./agent-loop-history.js";
 import type { AgentLoopDependencies, AgentLoopLifecycleHooks } from "./agent-loop-ports.js";
-import { buildAgentLLMRequest } from "./agent-loop-request.js";
+import { buildAgentAIModelRequest } from "./agent-loop-request.js";
+import { toAIModelRef } from "./ai-invocation-projection.js";
 
 export class AgentLoop {
   constructor(private readonly dependencies: AgentLoopDependencies) {}
@@ -178,6 +178,10 @@ export class AgentLoop {
       currentTurnMessages,
       historySourceSequences,
     );
+    // Resolve the model once per turn. The same immutable catalog generation backs
+    // the context runtime's technical limits and the model request, so the two can
+    // never disagree about a context window or an output ceiling.
+    const descriptor = this.dependencies.models.resolve(toAIModelRef(input.run.model));
     const contextRuntime =
       this.dependencies.contextRuntime ??
       (this.dependencies.contextBuilder === undefined
@@ -190,6 +194,7 @@ export class AgentLoop {
       runId: input.run.id,
       providerId: input.run.model.provider,
       modelId: input.run.model.model,
+      model: descriptor,
       projectId: input.run.workspace.id,
       context: contextInput,
       signal: input.signal,
@@ -197,7 +202,16 @@ export class AgentLoop {
       ...(forceRecovery ? { forceRecovery: true } : {}),
     });
     throwIfAborted(input.signal);
-    const request = buildAgentLLMRequest(context, input.run, input.tools, input.modelSettings);
+    // The descriptor is resolved once per turn from the same immutable catalog the
+    // gateway uses, and it backs both the context preparation above and the model
+    // request below.
+    const request = buildAgentAIModelRequest(
+      context,
+      input.run,
+      input.tools,
+      input.modelSettings,
+      descriptor,
+    );
     return { context, request };
   }
 
@@ -303,12 +317,13 @@ export class AgentLoop {
       );
     }
 
-    let result: LLMTurnResult;
+    let result: AIModelTurnResult;
     try {
       let recoveredPrepared: PreparedTurn | undefined;
-      const recovered = await recoverProviderContextOverflow({
+      const recovered = await recoverProviderContextOverflow<AIModelTurnResult>({
         execute: () =>
-          this.dependencies.llmClient.complete(recoveredPrepared?.request ?? request, {
+          this.dependencies.modelTurns.execute({
+            request: recoveredPrepared?.request ?? request,
             signal: input.signal,
           }),
         forceCompact: async () => {
@@ -379,8 +394,7 @@ export class AgentLoop {
         "COMPLETED",
       );
     } catch (error) {
-      const parsed = LLMTurnResultSchema.safeParse(result);
-      const usage = parsed.success ? parsed.data.usage : undefined;
+      const usage = result.usage;
       return this.failureAfterStep(
         input,
         activeState,
@@ -401,7 +415,7 @@ export class AgentLoop {
     context: BuiltModelContext,
     appendPrefix: readonly LLMMessage[],
     error: unknown,
-    usage?: import("@caelush/llm/turn").LLMUsage,
+    usage?: ModelUsage,
     providerTurnState: import("./agent-loop-ports.js").AgentProviderTurnState = "FAILED",
   ): AgentLoopFailureResult {
     const finishedAt = monotonicNow(activeState, this.dependencies.clock.now());
@@ -529,7 +543,7 @@ function monotonicNow(state: AgentState, now: TimestampMs): TimestampMs {
 
 interface PreparedTurn {
   readonly context: BuiltModelContext;
-  readonly request: LLMRequest;
+  readonly request: AIModelRequest;
 }
 
 function throwIfAborted(signal: AbortSignal): void {

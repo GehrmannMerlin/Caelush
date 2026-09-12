@@ -1,4 +1,4 @@
-import type { LLMUsage } from "@caelush/llm/turn";
+import type { ModelUsage } from "@caelush/ai";
 
 export interface NormalizedLLMUsage {
   readonly inputTokens?: number;
@@ -9,7 +9,7 @@ export interface NormalizedLLMUsage {
 }
 
 export function normalizeLLMUsageForBudget(
-  usage: LLMUsage | undefined,
+  usage: ModelUsage | undefined,
   reservation: { readonly reservedTotalTokens?: number } = {},
 ): NormalizedLLMUsage {
   if (usage === undefined) return { confidence: "UNKNOWN" };

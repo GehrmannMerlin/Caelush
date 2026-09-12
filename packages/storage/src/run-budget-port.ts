@@ -16,10 +16,10 @@ import {
   type LLMTokenEstimator,
   type ModelPricingSnapshot,
   type PricingResolver,
+  type LLMBudgetAdmissionInput,
+  type ModelUsage as BudgetModelUsage,
   type RunBudgetPort,
 } from "@caelush/core";
-import type { LLMRequest } from "@caelush/llm/request";
-import type { LLMUsage } from "@caelush/llm/turn";
 import type { ToolBudgetAdmission, ToolBudgetAdmissionPort } from "@caelush/tools";
 import { SqliteBudgetLedgerRepository } from "./budget-ledger-repository.js";
 import type { CaelushDatabase } from "./database.js";
@@ -122,7 +122,7 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
   async admitLLM(input: {
     readonly run: AgentRun;
     readonly step: AgentStep;
-    readonly request: LLMRequest;
+    readonly admission: LLMBudgetAdmissionInput;
   }): Promise<import("@caelush/core").RunLLMBudgetAdmission> {
     return this.admitLLMForOwner({ ...input, ownerId: input.step.id, kind: "LLM_ATTEMPT" });
   }
@@ -130,7 +130,7 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
   async admitVerificationLLM(input: {
     readonly run: AgentRun;
     readonly ownerId: string;
-    readonly request: LLMRequest;
+    readonly admission: LLMBudgetAdmissionInput;
   }): Promise<import("@caelush/core").RunLLMBudgetAdmission> {
     return this.admitLLMForOwner({ ...input, kind: "VERIFICATION_LLM" });
   }
@@ -138,10 +138,10 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
   private async admitLLMForOwner(input: {
     readonly run: AgentRun;
     readonly ownerId: string;
-    readonly request: LLMRequest;
+    readonly admission: LLMBudgetAdmissionInput;
     readonly kind: "LLM_ATTEMPT" | "VERIFICATION_LLM";
   }): Promise<import("@caelush/core").RunLLMBudgetAdmission> {
-    const estimatedInputTokens = this.tokenEstimator.estimate(input.request);
+    const estimatedInputTokens = input.admission.estimatedInputTokens;
     if (estimatedInputTokens === undefined) {
       if (input.run.limits.maxTokens !== undefined || input.run.limits.maxCost !== undefined) {
         return { kind: "UNAVAILABLE", reason: "TOKEN_ESTIMATE" };
@@ -152,9 +152,9 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
       limits: input.run.limits,
       snapshot: await this.ledger.snapshot(input.run.id),
       estimatedInputTokens: estimatedInputTokens ?? 0,
-      ...(input.request.maxOutputTokens === undefined
+      ...(input.admission.configuredMaxOutputTokens === undefined
         ? {}
-        : { configuredMaxOutputTokens: input.request.maxOutputTokens }),
+        : { configuredMaxOutputTokens: input.admission.configuredMaxOutputTokens }),
       ...(pricing === undefined ? {} : { pricing }),
     });
     if (decision.kind === "EXCEEDED" || decision.kind === "UNAVAILABLE") return decision;
@@ -173,17 +173,20 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
       createdAt,
     });
     await this.ledger.markInFlight(input.run.id, input.kind, input.ownerId, createdAt);
-    const request =
-      decision.effectiveMaxOutputTokens === undefined
-        ? input.request
-        : { ...input.request, maxOutputTokens: decision.effectiveMaxOutputTokens };
-    return { kind: "ALLOWED", request };
+    // The durable port returns the admitted ceiling as a number; the caller applies
+    // it to its own request, so this package never handles a model request object.
+    return {
+      kind: "ALLOWED",
+      ...(decision.effectiveMaxOutputTokens === undefined
+        ? {}
+        : { effectiveMaxOutputTokens: decision.effectiveMaxOutputTokens }),
+    };
   }
 
   async settleLLM(input: {
     readonly runId: RunId;
     readonly stepId: StepId;
-    readonly usage?: LLMUsage;
+    readonly usage?: BudgetModelUsage;
     readonly settledAt: TimestampMs;
   }): Promise<import("@caelush/core").RunBudgetSettlement | void> {
     return this.settleLLMForOwner({ ...input, ownerId: input.stepId, kind: "LLM_ATTEMPT" });
@@ -192,7 +195,7 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
   async settleVerificationLLM(input: {
     readonly runId: RunId;
     readonly ownerId: string;
-    readonly usage?: LLMUsage;
+    readonly usage?: BudgetModelUsage;
     readonly settledAt: TimestampMs;
   }): Promise<import("@caelush/core").RunBudgetSettlement | void> {
     return this.settleLLMForOwner({ ...input, kind: "VERIFICATION_LLM" });
@@ -201,7 +204,7 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
   private async settleLLMForOwner(input: {
     readonly runId: RunId;
     readonly ownerId: string;
-    readonly usage?: LLMUsage;
+    readonly usage?: BudgetModelUsage;
     readonly settledAt: TimestampMs;
     readonly kind: "LLM_ATTEMPT" | "VERIFICATION_LLM";
   }): Promise<import("@caelush/core").RunBudgetSettlement | void> {

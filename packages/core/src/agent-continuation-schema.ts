@@ -1,5 +1,22 @@
 import { LLMAssistantMessageSchema, LLMToolResultMessageSchema } from "@caelush/llm/messages";
 import { FinishReasonSchema, LLMUsageSchema } from "@caelush/llm/turn";
+import type { ModelUsage } from "@caelush/ai";
+
+/**
+ * The durable usage shape.
+ *
+ * The stored JSON is unchanged: the legacy schema still decides what is valid. The
+ * transform only drops explicitly-undefined members so the decoded value satisfies
+ * the frozen `ModelUsage` contract, which distinguishes an absent counter from a
+ * present-but-undefined one.
+ */
+const DurableModelUsageSchema = LLMUsageSchema.transform((usage): ModelUsage => {
+  const normalized: Record<string, number> = {};
+  for (const [key, value] of Object.entries(usage)) {
+    if (value !== undefined) normalized[key] = value as number;
+  }
+  return normalized as ModelUsage;
+});
 import {
   JsonObjectSchema,
   ApprovalRequestIdSchema,
@@ -22,7 +39,7 @@ export const AgentModelTurnSchema = z
     model: ModelRefSchema,
     finishReason: FinishReasonSchema,
     assistantMessage: LLMAssistantMessageSchema,
-    usage: LLMUsageSchema.optional(),
+    usage: DurableModelUsageSchema.optional(),
   })
   .strict();
 

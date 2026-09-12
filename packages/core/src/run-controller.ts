@@ -81,6 +81,7 @@ import {
 } from "./run-controller-events.js";
 import type { RunControllerDependencies } from "./run-controller-ports.js";
 import { TaskAcceptanceReviewer } from "./task-acceptance-reviewer.js";
+import { toDurableRetryCode } from "./ai-invocation-projection.js";
 import { AgentBudgetAdmissionError } from "./agent-errors.js";
 import type { AgentBudgetBlock } from "./agent-errors.js";
 import { ResourceGovernor } from "./resource-governor.js";
@@ -1047,13 +1048,25 @@ export class RunController {
     const loop = this.dependencies.agentLoop.withLifecycleHooks({
       beforeProviderAdmission: async ({ run, step, request }) => {
         if (this.dependencies.budget === undefined) return request;
+        // The estimator runs here, where the AI request lives, so the durable budget
+        // port only ever receives plain numbers.
+        const estimatedInputTokens = this.dependencies.tokenEstimator?.estimate(request);
         const admission = await this.dependencies.budget.admitLLM({
           run,
           step,
-          request,
+          admission: {
+            ...(estimatedInputTokens === undefined ? {} : { estimatedInputTokens }),
+            ...(request.settings?.maxOutputTokens === undefined
+              ? {}
+              : { configuredMaxOutputTokens: request.settings.maxOutputTokens }),
+          },
         });
-        if (admission.kind === "ALLOWED") return admission.request;
-        throw new AgentBudgetAdmissionError(admission);
+        if (admission.kind !== "ALLOWED") throw new AgentBudgetAdmissionError(admission);
+        if (admission.effectiveMaxOutputTokens === undefined) return request;
+        return {
+          ...request,
+          settings: { ...request.settings, maxOutputTokens: admission.effectiveMaxOutputTokens },
+        };
       },
       beforeProviderTurn: async ({ run, state, step }) => {
         const current = await this.load(run.id);
@@ -1436,7 +1449,7 @@ export class RunController {
         attempt: attempt + 1,
         maxAttempts: this.retryController.maxAttempts,
         nextAttemptAt: deadline.deadlineAt,
-        errorCode: execution.retry.code,
+        errorCode: toDurableRetryCode(execution.retry.code),
         ...retryContext,
       };
       const commit = await this.commit({
@@ -1471,7 +1484,7 @@ export class RunController {
       attempt: decision.attempt,
       maxAttempts: this.retryController.maxAttempts,
       nextAttemptAt,
-      errorCode: execution.retry.code,
+      errorCode: toDurableRetryCode(execution.retry.code),
       ...retryContext,
     };
     const commit = await this.commit({
@@ -1497,7 +1510,7 @@ export class RunController {
           this.retryController.maxAttempts,
           decision.delayMs,
           nextAttemptAt,
-          execution.retry.code,
+          toDurableRetryCode(execution.retry.code),
           this.nextEventId(),
           now,
         ),
@@ -2167,12 +2180,15 @@ export class RunController {
     const git = this.dependencies.verificationGit;
     const reviewer =
       this.dependencies.verificationReviewer ??
-      (this.dependencies.verificationLLMClient !== undefined &&
+      (this.dependencies.verificationModelTurns !== undefined &&
       this.dependencies.budget !== undefined
         ? new TaskAcceptanceReviewer({
-            llmClient: this.dependencies.verificationLLMClient,
+            modelTurns: this.dependencies.verificationModelTurns,
             budget: this.dependencies.budget,
             clock: this.dependencies.clock,
+            ...(this.dependencies.tokenEstimator === undefined
+              ? {}
+              : { tokenEstimator: this.dependencies.tokenEstimator }),
           })
         : undefined);
     if (

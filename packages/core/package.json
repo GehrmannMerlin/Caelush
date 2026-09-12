@@ -19,6 +19,8 @@
     "@caelush/protocol": "workspace:*",
     "@caelush/tools": "workspace:*",
     "@caelush/verification": "workspace:*",
-    "zod": "4.4.3"
+    "zod": "4.4.3",
+    "@caelush/agent": "workspace:*",
+    "@caelush/ai": "workspace:*"
   }
 }
