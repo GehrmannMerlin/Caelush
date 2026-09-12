@@ -53,10 +53,14 @@ describe("Web production build", () => {
   });
 
   it("contains no Node-only dependency markers", async () => {
+    // `vite` is a devDependency of this app, so its shim lives in the app's own
+    // `node_modules/.bin`. Resolving it from the workspace root only worked in a
+    // long-lived checkout where a stale root shim happened to survive; a fresh
+    // `pnpm install --frozen-lockfile` puts it here and nowhere else.
     await execFile(
       process.platform === "win32" ? "cmd.exe" : "pnpm",
       process.platform === "win32"
-        ? ["/d", "/s", "/c", "..\\..\\node_modules\\.bin\\vite.cmd build"]
+        ? ["/d", "/s", "/c", "node_modules\\.bin\\vite.cmd build"]
         : ["--filter", "@caelush/web", "build"],
       { cwd: process.platform === "win32" ? new URL("../", import.meta.url) : workspacePath },
     );
