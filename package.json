@@ -15,6 +15,8 @@
     "format:check": "prettier --check .",
     "check:architecture": "node scripts/architecture/check-boundaries.mjs",
     "check:architecture:verify": "node scripts/architecture/check-boundaries.mjs --verify-baseline",
+    "check:architecture:readiness": "node scripts/architecture/check-migration-readiness.mjs",
+    "check:architecture:ci": "pnpm check:architecture && pnpm check:architecture:verify && pnpm check:architecture:readiness",
     "check": "pnpm check:architecture && pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm format:check",
     "test:web:e2e": "pnpm build && node scripts/web-session-browser-smoke.mjs",
     "build:release": "node scripts/build-release.mjs",
