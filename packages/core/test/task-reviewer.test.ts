@@ -12,8 +12,8 @@ import {
 import { describe, expect, it } from "vitest";
 import { TaskAcceptanceReviewer } from "../src/index.js";
 import type { RunBudgetPort } from "../src/budget-ports.js";
-import type { VerificationLLMClient } from "../src/run-controller-ports.js";
 import { buildTaskReviewBundle } from "@caelush/verification";
+import { fakeModelTurnExecutor } from "./support/fake-model-turn-executor.js";
 
 function fixture() {
   const run = AgentRunSchema.parse({
@@ -66,7 +66,7 @@ function budget() {
       input: Parameters<NonNullable<RunBudgetPort["admitVerificationLLM"]>>[0],
     ) {
       calls.push(`admit:${input.ownerId}`);
-      return { kind: "ALLOWED" as const, request: input.request };
+      return { kind: "ALLOWED" as const };
     },
     async settleVerificationLLM(
       input: Parameters<NonNullable<RunBudgetPort["settleVerificationLLM"]>>[0],
@@ -97,14 +97,11 @@ describe("TaskAcceptanceReviewer", () => {
   it("uses the current model with no tools and settles shared reviewer budget", async () => {
     const { run, bundle } = fixture();
     const calls: unknown[] = [];
-    const llm: VerificationLLMClient = {
-      async complete(request) {
+    const reviewer = new TaskAcceptanceReviewer({
+      modelTurns: fakeModelTurnExecutor(async (request) => {
         calls.push(request);
         return turn('{"verdict":"PASS","summary":"The evidence supports the goal."}');
-      },
-    };
-    const reviewer = new TaskAcceptanceReviewer({
-      llmClient: llm,
+      }),
       budget: budget(),
       clock: { now: () => createTimestampMs(50) },
     });
@@ -118,14 +115,18 @@ describe("TaskAcceptanceReviewer", () => {
     expect(result.status).toBe("PASSED");
     expect(result.reviewInputHash).toBe(bundle.reviewInputHash);
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatchObject({ model: run.model, toolChoice: { type: "NONE" } });
+    // The reviewer is not an agent turn: it asks the same gateway for a tool-free turn.
+    expect(calls[0]).toMatchObject({
+      model: { provider: "fixture", model: "reviewer" },
+      toolChoice: { type: "NONE" },
+    });
   });
 
   it("fails closed for tool calls and malformed reviewer output", async () => {
     const { run, bundle } = fixture();
     const make = (response: ReturnType<typeof turn>) =>
       new TaskAcceptanceReviewer({
-        llmClient: { complete: async () => response },
+        modelTurns: fakeModelTurnExecutor(async () => response),
         budget: budget(),
         clock: { now: () => createTimestampMs(50) },
       });

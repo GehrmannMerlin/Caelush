@@ -8,8 +8,12 @@ import {
   createWorkspaceId,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
-import { LLMContextOverflowError } from "@caelush/llm/errors";
-import { LLMTurnResultSchema } from "@caelush/llm/turn";
+import {
+  aiError,
+  fakeModelTurnExecutor,
+  modelTurnResult,
+  testModelCatalog,
+} from "./support/fake-model-turn-executor.js";
 import { createInitialAgentState, startAgentState } from "../src/agent-state.js";
 import { AgentLoop } from "../src/agent-loop.js";
 import type { AgentLoopCommonInput } from "../src/agent-loop-input.js";
@@ -55,12 +59,11 @@ describe("AgentLoop production context runtime contract", () => {
           return { messages: [{ role: "user", content: "projected" }], report: {} as never };
         },
       },
-      llmClient: {
-        complete: async () => {
-          calls.push("llm");
-          return {} as never;
-        },
-      },
+      models: testModelCatalog(),
+      modelTurns: fakeModelTurnExecutor(async () => {
+        calls.push("llm");
+        return {} as never;
+      }),
       clock: { now: () => createTimestampMs(1) },
       stepIdFactory: { create: () => createStepId() },
     };
@@ -86,21 +89,20 @@ describe("AgentLoop production context runtime contract", () => {
           };
         },
       },
-      llmClient: {
-        complete: async (request) => {
-          providerCalls += 1;
-          if (providerCalls === 1) throw new LLMContextOverflowError();
-          expect(request.messages.at(-1)).toEqual({ role: "user", content: "recovered" });
-          return LLMTurnResultSchema.parse({
-            callId: createLLMCallId(),
-            providerId: "fixture",
-            model: { provider: "fixture", model: "fixture-model" },
-            text: "done",
-            toolCalls: [],
-            finishReason: "STOP",
-          });
-        },
-      },
+      models: testModelCatalog(),
+      modelTurns: fakeModelTurnExecutor(async (request) => {
+        providerCalls += 1;
+        if (providerCalls === 1) throw aiError("AI_CONTEXT_OVERFLOW");
+        expect(request.messages.at(-1)).toEqual({ role: "user", content: "recovered" });
+        return modelTurnResult({
+          callId: createLLMCallId(),
+          providerId: "fixture",
+          model: { provider: "fixture", model: "fixture-model" },
+          text: "done",
+          toolCalls: [],
+          finishReason: "STOP",
+        });
+      }),
       clock: { now: () => createTimestampMs(1) },
       stepIdFactory: { create: () => createStepId() },
     };

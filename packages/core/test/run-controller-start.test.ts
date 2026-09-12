@@ -21,6 +21,7 @@ import type {
 } from "../src/run-execution-store.js";
 import type { RunEventNotifier, RunExecutionConfigResolver } from "../src/run-controller-ports.js";
 import type { RunBudgetPort } from "../src/budget-ports.js";
+import { fakeModelTurnExecutor, testModelCatalog } from "./support/fake-model-turn-executor.js";
 
 function makeRun(overrides: Partial<ReturnType<typeof AgentRunSchema.parse>> = {}) {
   return AgentRunSchema.parse({
@@ -144,25 +145,24 @@ function makeLoop(
         report: {} as never,
       }),
     },
-    llmClient: {
-      complete: async (_request, { signal }) => {
-        const current = store.snapshot;
-        expect(current.run.currentStepId).toBeDefined();
-        expect(current.state?.currentStepId).toBe(current.run.currentStepId);
-        expect(current.activeStep?.status).toBe("RUNNING");
-        expect(store.commits.at(-1)?.events[0]?.type).toBe("llm.started");
-        providerFirstLine();
-        if (providerWait !== undefined) await providerWait(signal);
-        return {
-          callId: createLLMCallId(),
-          providerId: "fixture",
-          model: { provider: "fixture", model: "fixture-model" },
-          text: "candidate",
-          toolCalls: [],
-          finishReason: "STOP" as const,
-        };
-      },
-    },
+    models: testModelCatalog(),
+    modelTurns: fakeModelTurnExecutor(async (_request, signal) => {
+      const current = store.snapshot;
+      expect(current.run.currentStepId).toBeDefined();
+      expect(current.state?.currentStepId).toBe(current.run.currentStepId);
+      expect(current.activeStep?.status).toBe("RUNNING");
+      expect(store.commits.at(-1)?.events[0]?.type).toBe("llm.started");
+      providerFirstLine();
+      if (providerWait !== undefined) await providerWait(signal);
+      return {
+        callId: createLLMCallId(),
+        providerId: "fixture",
+        model: { provider: "fixture", model: "fixture-model" },
+        text: "candidate",
+        toolCalls: [],
+        finishReason: "STOP" as const,
+      };
+    }),
     clock: { now: () => createTimestampMs(10) },
     stepIdFactory: { create: () => createStepId() },
   });

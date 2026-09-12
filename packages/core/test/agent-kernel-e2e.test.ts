@@ -7,9 +7,8 @@ import {
   createTimestampMs,
   createWorkspaceId,
 } from "@caelush/protocol";
-import { LLMTurnResultSchema } from "@caelush/llm/turn";
 import type { JsonObject } from "@caelush/protocol";
-import type { LLMTurnResult } from "@caelush/llm/turn";
+import type { AIModelTurnResult } from "@caelush/ai";
 import { describe, expect, it } from "vitest";
 import {
   beginAgentStepState,
@@ -25,6 +24,7 @@ import {
   startAgentState,
   summarizeAgentDecision,
 } from "../src/index.js";
+import { modelTurnResult } from "./support/fake-model-turn-executor.js";
 
 function makeRun(maxSteps = 3) {
   return AgentRunSchema.parse({
@@ -46,8 +46,8 @@ function turn(
   text: string,
   toolCalls: Array<{ id: string; name: string; input: JsonObject }>,
   finishReason: "STOP" | "TOOL_CALLS" | "LENGTH",
-): LLMTurnResult {
-  return LLMTurnResultSchema.parse({
+): AIModelTurnResult {
+  return modelTurnResult({
     callId: createLLMCallId(),
     providerId: "fixture",
     model: { provider: "fixture", model: "fixture-model" },

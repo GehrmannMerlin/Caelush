@@ -12,6 +12,7 @@ import { createInitialAgentState, startAgentState } from "../src/agent-state.js"
 import { AgentLoop } from "../src/agent-loop.js";
 import type { AgentLoopCommonInput, AgentLoopResumeInput } from "../src/agent-loop-input.js";
 import type { AgentLoopDependencies } from "../src/agent-loop-ports.js";
+import { fakeModelTurnExecutor, testModelCatalog } from "./support/fake-model-turn-executor.js";
 
 function input(): AgentLoopCommonInput {
   const pendingRun = AgentRunSchema.parse({
@@ -49,7 +50,10 @@ function noCalls(): AgentLoopDependencies {
     inspector: { inspect: fail },
     planner: { plan: fail },
     contextBuilder: { build: fail as never },
-    llmClient: { complete: fail },
+    models: testModelCatalog(),
+    modelTurns: fakeModelTurnExecutor(() => {
+      throw fail;
+    }),
     clock: { now: () => createTimestampMs(10) },
     stepIdFactory: { create: () => createStepId() },
   };

@@ -14,8 +14,13 @@ import {
   ContextRuntimeCoordinator,
   Utf8HeuristicTokenEstimator,
 } from "@caelush/context";
-import { LLMContextOverflowError } from "@caelush/llm/errors";
-import { LLMTurnResultSchema } from "@caelush/llm/turn";
+import {
+  aiError,
+  fakeModelTurnExecutor,
+  modelTurnResult,
+  testModelCatalog,
+} from "./support/fake-model-turn-executor.js";
+import type { AIModelRequest } from "@caelush/ai";
 import { AgentLoop } from "../src/agent-loop.js";
 import { createInitialAgentState, startAgentState } from "../src/agent-state.js";
 
@@ -155,28 +160,27 @@ describe("Context Runtime production integration", () => {
         create: async (input) => ({ ...input, schemaVersion: 1 }),
       },
     });
-    const requests: Array<readonly LLMMessage[]> = [];
+    const requests: AIModelRequest["messages"][] = [];
     let calls = 0;
     const loop = new AgentLoop({
       inspector: { inspect: async () => snapshot() },
       planner: { plan: async () => undefined as never },
       contextBuilder: { build: () => ({ messages: [], report: {} as never }) },
       contextRuntime: coordinator,
-      llmClient: {
-        complete: async (request) => {
-          requests.push(request.messages);
-          calls += 1;
-          if (calls === 1) throw new LLMContextOverflowError();
-          return LLMTurnResultSchema.parse({
-            callId: createLLMCallId(),
-            providerId: "fixture",
-            model: { provider: "fixture", model: "fixture-model" },
-            text: "done",
-            toolCalls: [],
-            finishReason: "STOP",
-          });
-        },
-      },
+      models: testModelCatalog(),
+      modelTurns: fakeModelTurnExecutor(async (request) => {
+        requests.push(request.messages);
+        calls += 1;
+        if (calls === 1) throw aiError("AI_CONTEXT_OVERFLOW");
+        return modelTurnResult({
+          callId: createLLMCallId(),
+          providerId: "fixture",
+          model: { provider: "fixture", model: "fixture-model" },
+          text: "done",
+          toolCalls: [],
+          finishReason: "STOP",
+        });
+      }),
       clock: { now: () => createTimestampMs(3) },
       stepIdFactory: { create: () => createStepId() },
     });

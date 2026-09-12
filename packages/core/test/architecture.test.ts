@@ -11,40 +11,56 @@ async function sourceContents(): Promise<string> {
   ).join("\n");
 }
 
+/**
+ * The Architecture V2 Phase 2C Core boundary.
+ *
+ * Core used to reach a model through the legacy LLM abstraction. After the cutover it
+ * executes a model turn through `ModelTurnExecutor` (the `@caelush/agent` port) over an
+ * `AIModelRequest` / `AIModelTurnResult` (`@caelush/ai`). The legacy package is allowed
+ * to remain only for the frozen message contracts, which Message System V2 will retire
+ * in a later phase.
+ */
+const ALLOWED_CORE_EDGES = [
+  "@caelush/agent",
+  "@caelush/ai",
+  "@caelush/context",
+  "@caelush/protocol",
+  "@caelush/llm/messages",
+  "@caelush/llm/turn",
+  "@caelush/tools",
+  "@caelush/verification",
+];
+
 describe("Core Phase 6B architecture", () => {
   it("keeps Core imports inside the approved narrow contract edges", async () => {
     const source = await sourceContents();
     const imports = [...source.matchAll(/from\s+["'](@caelush\/[^"']+)["']/g)].map(
       (match) => match[1] ?? "",
     );
-    expect(
-      imports.filter(
-        (value) =>
-          ![
-            "@caelush/context",
-            "@caelush/protocol",
-            "@caelush/llm/errors",
-            "@caelush/llm/messages",
-            "@caelush/llm/request",
-            "@caelush/llm/turn",
-            "@caelush/events",
-            "@caelush/tools",
-            "@caelush/verification",
-          ].includes(value),
-      ),
-    ).toEqual([]);
+    expect(imports.filter((value) => !ALLOWED_CORE_EDGES.includes(value))).toEqual([]);
     expect(source).not.toMatch(/from\s+["']@caelush\/llm["']/);
-    expect(source).not.toMatch(/from\s+["']@caelush\/(?:storage|runtime|security|daemon)/);
+    expect(source).not.toMatch(/from\s+["']@caelush\/llm\/(?:errors|request|providers)/);
+    expect(source).not.toMatch(/from\s+["']@caelush\/(?:storage|runtime|security|daemon|events)/);
   });
 
-  it("contains no host execution, SDK, time, ID, or hidden-reasoning boundary leaks", async () => {
+  it("contains no legacy model authority, host execution, SDK, time, ID, or hidden-reasoning leaks", async () => {
     const source = await sourceContents();
     expect(source).not.toMatch(
       /(?:from\s+["'](?:ai|@ai-sdk\/)|fetch\s*\(|node:(?:fs|path|http|https)|child_process|Date\.now\s*\(|randomUUID\s*\()/,
     );
-    expect(source).not.toMatch(/\bany\b/);
+    // A real `any` annotation, not the English word inside a comment.
+    expect(source).not.toMatch(/(?::\s*any\b|<any>|\bas\s+any\b|\bany\[\]|Array<any>)/);
     expect(source).not.toMatch(
       /(?:chain_of_thought|raw_reasoning|thinking_content|reasoning\.delta)/,
+    );
+
+    // The legacy model invocation authority must not be reachable from Core at all.
+    expect(source).not.toMatch(
+      /\b(?:LLMGateway|LLMProviderRegistry|createOpenAICompatibleLLMProvider|LLMProvider|LLMStreamEvent|LLMCapabilities)\b/,
+    );
+    // No Core port may carry a legacy model request or turn result as a type.
+    expect(source).not.toMatch(
+      /import[^;]*\b(?:LLMRequest|LLMTurnResult)\b[^;]*from\s+["']@caelush\/llm/,
     );
   });
 
@@ -55,8 +71,10 @@ describe("Core Phase 6B architecture", () => {
       ),
     );
     const declaration = declarations.join("\n");
+    // The frozen message contracts are still owned by the legacy package.
     expect(declaration).toContain("@caelush/llm/messages");
-    expect(declaration).toContain("@caelush/llm/turn");
+    // Model execution metadata is re-exported from the AI core, not re-declared.
+    expect(declaration).toContain("@caelush/ai");
     expect(declaration).not.toMatch(
       /from\s+["'](?:@caelush\/llm["']|@caelush\/(?:storage|events|runtime|security|daemon)|ai|@ai-sdk\/)/,
     );

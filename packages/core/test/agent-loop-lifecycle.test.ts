@@ -7,12 +7,16 @@ import {
   createTimestampMs,
   createWorkspaceId,
 } from "@caelush/protocol";
-import { LLMTurnResultSchema } from "@caelush/llm/turn";
 import { describe, expect, it } from "vitest";
 import { AgentLoop } from "../src/agent-loop.js";
 import { createInitialAgentState, startAgentState } from "../src/agent-state.js";
 import type { AgentLoopCommonInput } from "../src/agent-loop-input.js";
 import type { AgentLoopDependencies, AgentLoopLifecycleHooks } from "../src/agent-loop-ports.js";
+import {
+  fakeModelTurnExecutor,
+  testModelCatalog,
+  modelTurnResult,
+} from "./support/fake-model-turn-executor.js";
 
 function makeInput(): AgentLoopCommonInput {
   const pendingRun = AgentRunSchema.parse({
@@ -64,19 +68,18 @@ function dependencies(
         return { messages: [{ role: "user", content: "context" }], report: {} as never };
       },
     },
-    llmClient: {
-      complete: async () => {
-        calls.push("provider");
-        return LLMTurnResultSchema.parse({
-          callId: createLLMCallId(),
-          providerId: "fixture",
-          model: { provider: "fixture", model: "fixture-model" },
-          text: "answer",
-          toolCalls: [],
-          finishReason: "STOP",
-        });
-      },
-    },
+    models: testModelCatalog(),
+    modelTurns: fakeModelTurnExecutor(async () => {
+      calls.push("provider");
+      return modelTurnResult({
+        callId: createLLMCallId(),
+        providerId: "fixture",
+        model: { provider: "fixture", model: "fixture-model" },
+        text: "answer",
+        toolCalls: [],
+        finishReason: "STOP",
+      });
+    }),
     clock: { now: () => createTimestampMs(3) },
     stepIdFactory: { create: () => createStepId() },
   };

@@ -7,18 +7,24 @@ import {
 import type { AgentDecision, AgentModelTurn, AgentLoopOutcome } from "../src/index.js";
 import { describe, expect, it } from "vitest";
 import { createLLMCallId } from "@caelush/protocol";
-import type { LLMTurnResult } from "@caelush/llm/turn";
+import type { AIModelTurnResult } from "@caelush/ai";
 
 const model = { provider: "fixture", model: "fixture-model" };
 
-function makeTurnResult(overrides: Partial<LLMTurnResult> = {}): LLMTurnResult {
+function makeTurnResult(overrides: Partial<AIModelTurnResult> = {}): AIModelTurnResult {
   return {
-    callId: createLLMCallId(),
+    // The AI call id and the Protocol call id are two brands of the same string.
+    callId: createLLMCallId() as unknown as AIModelTurnResult["callId"],
     providerId: "fixture",
     model,
     text: "candidate",
     toolCalls: [],
     finishReason: "STOP",
+    resolution: {
+      api: "test-api",
+      reasoning: { mode: "NOT_REQUESTED", policy: "PREFER_BUDGET" },
+      cache: { requested: "NONE", effective: "NONE", mode: "EXACT" },
+    },
     ...overrides,
   };
 }
@@ -66,17 +72,29 @@ describe("Agent decision contracts", () => {
     ]);
   });
 
-  it.each([
-    ["STOP", "FINAL_CANDIDATE"],
-    ["OTHER", "FINAL_CANDIDATE"],
-  ] as const)("classifies nonblank %s text as %s", (finishReason, expectedType) => {
+  it("classifies nonblank STOP text as FINAL_CANDIDATE", () => {
     const decision = classifyAgentDecision(
-      makeTurnResult({ finishReason, text: "  hello\nworld  " }),
+      makeTurnResult({ finishReason: "STOP", text: "  hello\nworld  " }),
     );
-    expect(decision.type).toBe(expectedType);
+    expect(decision.type).toBe("FINAL_CANDIDATE");
     if (decision.type === "FINAL_CANDIDATE") {
       expect(decision.candidateText).toBe("  hello\nworld  ");
     }
+  });
+
+  it("rejects an unrecognised provider finish reason instead of treating it as a stop", () => {
+    // `OTHER` means the AI core could not interpret the provider reason. It is never
+    // evidence that the model finished, so it fails closed rather than becoming a
+    // final candidate.
+    let captured: unknown;
+    try {
+      classifyAgentDecision(makeTurnResult({ finishReason: "OTHER", text: "  hello\nworld  " }));
+    } catch (error) {
+      captured = error;
+    }
+    expect(captured).toBeInstanceOf(AgentModelOutputError);
+    expect((captured as AgentModelOutputError).reason).toBe("UNKNOWN_FINISH_REASON");
+    expect((captured as AgentModelOutputError).metadata.finishReason).toBe("OTHER");
   });
 
   it.each(["LENGTH", "CONTENT_FILTER"] as const)(

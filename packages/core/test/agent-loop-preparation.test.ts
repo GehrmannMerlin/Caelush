@@ -11,6 +11,7 @@ import { createInitialAgentState, startAgentState } from "../src/agent-state.js"
 import { AgentLoop } from "../src/agent-loop.js";
 import type { AgentLoopDependencies } from "../src/agent-loop-ports.js";
 import type { AgentLoopCommonInput } from "../src/agent-loop-input.js";
+import { fakeModelTurnExecutor, testModelCatalog } from "./support/fake-model-turn-executor.js";
 
 function input(maxSteps = 3, completedSteps = 0): AgentLoopCommonInput {
   const pendingRun = AgentRunSchema.parse({
@@ -61,12 +62,11 @@ function dependencies(calls: string[]): AgentLoopDependencies {
         return { messages: [{ role: "user", content: "context" }], report: {} as never };
       },
     },
-    llmClient: {
-      complete: async () => {
-        calls.push("llm");
-        return {} as never;
-      },
-    },
+    models: testModelCatalog(),
+    modelTurns: fakeModelTurnExecutor(async () => {
+      calls.push("llm");
+      return {} as never;
+    }),
     clock: { now: () => 1 as never },
     stepIdFactory: { create: () => createStepId() },
   };

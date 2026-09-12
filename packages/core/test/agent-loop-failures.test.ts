@@ -8,20 +8,17 @@ import {
   createWorkspaceId,
 } from "@caelush/protocol";
 import { ContextBudgetExceededError, ContextError } from "@caelush/context";
-import {
-  LLMAuthenticationError,
-  LLMInvalidResponseError,
-  LLMNetworkError,
-  LLMProviderError,
-  LLMRateLimitError,
-  LLMTimeoutError,
-} from "@caelush/llm/errors";
-import { LLMTurnResultSchema, type LLMTurnResult } from "@caelush/llm/turn";
 import { describe, expect, it } from "vitest";
 import { createInitialAgentState, startAgentState } from "../src/agent-state.js";
 import { AgentLoop } from "../src/agent-loop.js";
 import type { AgentLoopCommonInput, AgentLoopResumeInput } from "../src/agent-loop-input.js";
 import type { AgentLoopDependencies } from "../src/agent-loop-ports.js";
+import type { ModelTurnScript, PartialTurnResult } from "./support/fake-model-turn-executor.js";
+import {
+  aiError,
+  fakeModelTurnExecutor,
+  testModelCatalog,
+} from "./support/fake-model-turn-executor.js";
 
 const SECRET = "CAELUSH_LOOP_SECRET_DO_NOT_LEAK_42";
 
@@ -52,10 +49,7 @@ function input(): AgentLoopCommonInput {
   };
 }
 
-function dependencies(
-  complete: AgentLoopDependencies["llmClient"]["complete"],
-  calls: string[] = [],
-): AgentLoopDependencies {
+function dependencies(script: ModelTurnScript, calls: string[] = []): AgentLoopDependencies {
   return {
     inspector: {
       inspect: async () => {
@@ -75,19 +69,18 @@ function dependencies(
         return { messages: [{ role: "user", content: "context" }], report: {} as never };
       },
     },
-    llmClient: {
-      complete: async (request) => {
-        calls.push(JSON.stringify(request));
-        return complete(request, { signal: new AbortController().signal });
-      },
-    },
+    models: testModelCatalog(),
+    modelTurns: fakeModelTurnExecutor(async (request, signal, callIndex) => {
+      calls.push(JSON.stringify(request));
+      return script(request, signal, callIndex);
+    }),
     clock: { now: () => createTimestampMs(10) },
     stepIdFactory: { create: () => createStepId() },
   };
 }
 
-function output(): LLMTurnResult {
-  return LLMTurnResultSchema.parse({
+function output(): PartialTurnResult {
+  return {
     callId: createLLMCallId(),
     providerId: "fixture",
     model: { provider: "fixture", model: "fixture-model" },
@@ -95,17 +88,17 @@ function output(): LLMTurnResult {
     toolCalls: [{ id: "call_a", name: "read_file", input: {} }],
     finishReason: "LENGTH",
     usage: { inputTokens: 10, outputTokens: 5 },
-  });
+  };
 }
 
 describe("AgentLoop failures", () => {
   it.each([
-    [new LLMNetworkError(SECRET), "NETWORK_ERROR"],
-    [new LLMRateLimitError(SECRET), "RATE_LIMIT"],
-    [new LLMTimeoutError(SECRET), "MODEL_TIMEOUT"],
-    [new LLMAuthenticationError(SECRET), "MODEL_ERROR"],
-    [new LLMInvalidResponseError(SECRET), "MODEL_ERROR"],
-    [new LLMProviderError(SECRET), "MODEL_ERROR"],
+    [aiError("AI_NETWORK", { message: SECRET }), "NETWORK_ERROR"],
+    [aiError("AI_RATE_LIMIT", { message: SECRET }), "RATE_LIMIT"],
+    [aiError("AI_TIMEOUT", { message: SECRET }), "MODEL_TIMEOUT"],
+    [aiError("AI_AUTHENTICATION", { message: SECRET }), "MODEL_ERROR"],
+    [aiError("AI_INVALID_RESPONSE", { message: SECRET }), "MODEL_ERROR"],
+    [aiError("AI_PROVIDER_ERROR", { message: SECRET }), "MODEL_ERROR"],
   ])("maps %s without retrying or leaking details", async (error, code) => {
     let calls = 0;
     const result = await new AgentLoop(
@@ -128,13 +121,13 @@ describe("AgentLoop failures", () => {
   it("exposes safe retry metadata for a transient provider failure", async () => {
     const result = await new AgentLoop(
       dependencies(async () => {
-        throw new LLMRateLimitError(SECRET, { retryAfterMs: 2_500 });
+        throw aiError("AI_RATE_LIMIT", { message: SECRET, retryAfterMs: 2_500 });
       }),
     ).run(input());
     expect(result.status).toBe("FAILED");
     if (result.status !== "FAILED") throw new Error("expected failure");
     expect(result.retry).toEqual({
-      code: "LLM_RATE_LIMIT",
+      code: "AI_RATE_LIMIT",
       retryable: true,
       retryAfterMs: 2_500,
     });
@@ -144,7 +137,7 @@ describe("AgentLoop failures", () => {
   it("does not expose retry metadata for an authentication failure", async () => {
     const result = await new AgentLoop(
       dependencies(async () => {
-        throw new LLMAuthenticationError(SECRET);
+        throw aiError("AI_AUTHENTICATION", { message: SECRET });
       }),
     ).run(input());
     expect(result.status).toBe("FAILED");

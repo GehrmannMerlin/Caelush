@@ -9,67 +9,57 @@ import {
   createTimestampMs,
   createWorkspaceId,
 } from "@caelush/protocol";
-import {
-  LLMGateway,
-  LLMProviderRegistry,
-  type LLMCapabilities,
-  type LLMProvider,
-  type LLMProviderCallContext,
-  type LLMProviderRequest,
-  type LLMStreamEvent,
-} from "@caelush/llm";
 import { describe, expect, it } from "vitest";
 import {
   ContextBuilder,
   createLocalProjectInspector,
   createLocalRelevantFilePlanner,
 } from "@caelush/context";
+import { createModelTurnExecutor } from "@caelush/agent";
+import type { ApiAdapterStreamInput } from "@caelush/ai";
 import { createInitialAgentState, startAgentState } from "../src/agent-state.js";
 import { AgentLoop } from "../src/agent-loop.js";
 import type { AgentLoopCommonInput } from "../src/agent-loop-input.js";
 import type { AgentLoopDependencies } from "../src/agent-loop-ports.js";
+import {
+  FIXTURE_MODEL,
+  FIXTURE_PROVIDER,
+  createTestAiSubsystem,
+} from "./support/test-ai-subsystem.js";
 
-const model = { provider: "fixture", model: "fixture-model" };
-const capabilities: LLMCapabilities = {
-  textStreaming: "SUPPORTED",
-  toolCalling: "SUPPORTED",
-  parallelToolCalls: "SUPPORTED",
-  structuredOutput: "UNKNOWN",
-  vision: "UNKNOWN",
-  reasoningSummary: "UNKNOWN",
-};
+const model = { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL };
 
-class IntegrationProvider implements LLMProvider {
-  readonly id = "fixture" as const;
-  readonly observedRequests: LLMProviderRequest[] = [];
-  toolExecutionCount = 0;
-
-  supportsModel(candidate: typeof model): boolean {
-    return candidate.provider === this.id;
-  }
-
-  getCapabilities(): LLMCapabilities {
-    return capabilities;
-  }
-
-  async *stream(
-    request: LLMProviderRequest,
-    context: LLMProviderCallContext,
-  ): AsyncIterable<LLMStreamEvent> {
-    this.observedRequests.push(request);
-    yield { type: "stream.start", payload: { callId: context.callId, providerId: this.id, model } };
-    if (this.observedRequests.length === 1) {
-      yield { type: "tool_call.start", payload: { toolCallId: "call_a", toolName: "read_file" } };
-      yield {
-        type: "tool_call.completed",
-        payload: { id: "call_a", name: "read_file", input: { path: "src/parser.ts" } },
-      };
-      yield { type: "stream.finish", payload: { finishReason: "TOOL_CALLS" } };
-      return;
-    }
-    yield { type: "text.delta", payload: { text: "parser fixed" } };
-    yield { type: "stream.finish", payload: { finishReason: "STOP" } };
-  }
+/**
+ * The production composition, end to end.
+ *
+ * Phase 2C deleted every Core seam that could reach a model directly, so this suite
+ * exercises the *real* chain:
+ *
+ * ```text
+ * AgentLoop → ModelTurnExecutor → AIGateway.stream() → ApiAdapter → Context
+ * ```
+ *
+ * Only the wire dialect is scripted. The gateway, model catalog, provider registry,
+ * stream validator and turn assembler are the production implementations, which is
+ * what makes this an integration test rather than a unit test with stubs.
+ */
+function dependencies(script: Parameters<typeof createTestAiSubsystem>[0]["script"]): {
+  dependencies: AgentLoopDependencies;
+  adapterCalls: readonly ApiAdapterStreamInput[];
+} {
+  const { ai, adapterCalls } = createTestAiSubsystem({ script });
+  return {
+    dependencies: {
+      inspector: createLocalProjectInspector(),
+      planner: createLocalRelevantFilePlanner(),
+      contextBuilder: new ContextBuilder(),
+      models: ai.models,
+      modelTurns: createModelTurnExecutor({ gateway: ai.gateway }),
+      clock: { now: () => createTimestampMs(10) },
+      stepIdFactory: { create: () => createStepId() },
+    },
+    adapterCalls,
+  };
 }
 
 async function makeFixture(): Promise<string> {
@@ -130,27 +120,31 @@ function makeInput(root: string): AgentLoopCommonInput {
   };
 }
 
-function dependencies(root: string, provider: IntegrationProvider): AgentLoopDependencies {
-  const registry = new LLMProviderRegistry();
-  registry.register(provider);
-  const gateway = new LLMGateway({ providers: registry });
-  return {
-    inspector: createLocalProjectInspector(),
-    planner: createLocalRelevantFilePlanner(),
-    contextBuilder: new ContextBuilder(),
-    llmClient: gateway,
-    clock: { now: () => createTimestampMs(10) },
-    stepIdFactory: { create: () => createStepId() },
-  };
-}
-
-describe("real Context → Gateway resumable loop", () => {
+describe("real Context → AIGateway resumable loop", () => {
   it("re-observes the fixture after the external tool boundary", async () => {
     const root = await makeFixture();
     try {
-      const provider = new IntegrationProvider();
+      // Turn one asks for a tool; turn two answers. One adapter call per turn proves
+      // the loop never retried or double-invoked the transport.
+      const { dependencies: deps, adapterCalls } = dependencies((input, turnIndex) => {
+        if (turnIndex === 0) {
+          return [
+            { type: "tool_call.start", payload: { toolCallId: "call_a", toolName: "read_file" } },
+            {
+              type: "tool_call.completed",
+              payload: { id: "call_a", name: "read_file", input: { path: "src/parser.ts" } },
+            },
+            { type: "adapter.finish", payload: { finishReason: "TOOL_CALLS" } },
+          ];
+        }
+        return [
+          { type: "text.delta", payload: { text: "parser fixed" } },
+          { type: "adapter.finish", payload: { finishReason: "STOP" } },
+        ];
+      });
+
       const initial = makeInput(root);
-      const loop = new AgentLoop(dependencies(root, provider));
+      const loop = new AgentLoop(deps);
       const first = await loop.run(initial);
       expect(first.status).toBe("OUTCOME");
       if (first.status !== "OUTCOME" || first.outcome.type !== "TOOL_CALLS_REQUESTED") {
@@ -159,6 +153,10 @@ describe("real Context → Gateway resumable loop", () => {
       expect(first.state.status).toBe("RUNNING");
       expect(first.state.usage.steps).toBe(1);
       expect(first.messagesToAppend.map((message) => message.role)).toEqual(["user", "assistant"]);
+      expect(adapterCalls).toHaveLength(1);
+      // The model turn resolved through the catalog, not through a request field.
+      expect(adapterCalls[0]?.model.ref).toEqual(model);
+      expect(adapterCalls[0]?.request.model.ref).toEqual(model);
 
       const updated = `export function parse(value: string): boolean { return value.trim() !== ''; }\n${"// updated parser\n".repeat(30)}`;
       await writeFile(path.join(root, "src", "parser.ts"), updated, "utf8");
@@ -177,26 +175,28 @@ describe("real Context → Gateway resumable loop", () => {
           },
         ],
       });
+
       expect(resumed.status).toBe("OUTCOME");
       if (resumed.status !== "OUTCOME") throw new Error("expected final outcome");
       expect(resumed.outcome.type).toBe("FINAL_CANDIDATE");
       expect(resumed.state.status).toBe("VERIFYING");
       expect(resumed.state.usage.steps).toBe(2);
-      expect(provider.observedRequests).toHaveLength(2);
-      expect(provider.toolExecutionCount).toBe(0);
+      expect(adapterCalls).toHaveLength(2);
       expect(resumed.messagesToAppend.map((message) => message.role)).toEqual([
         "tool",
         "assistant",
       ]);
+      const secondTurn = adapterCalls[1]?.request;
+      expect(secondTurn?.messages.some((message) => message.role === "tool")).toBe(true);
       expect(
-        provider.observedRequests[1]?.messages.some((message) => message.role === "tool"),
-      ).toBe(true);
-      expect(
-        provider.observedRequests[1]?.messages.some(
+        secondTurn?.messages.some(
           (message) => message.role === "user" && message.content.includes("updated parser"),
         ),
       ).toBe(true);
       expect(resumed.state.status).not.toBe("COMPLETED");
+
+      // Exactly one transport attempt per Agent Step: no hidden provider retry.
+      expect(adapterCalls).toHaveLength(resumed.state.usage.steps);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

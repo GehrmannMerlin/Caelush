@@ -7,12 +7,17 @@ import {
   createTimestampMs,
   createWorkspaceId,
 } from "@caelush/protocol";
-import { LLMTurnResultSchema, type LLMTurnResult } from "@caelush/llm/turn";
 import { describe, expect, it } from "vitest";
 import { createInitialAgentState, startAgentState } from "../src/agent-state.js";
 import { AgentLoop } from "../src/agent-loop.js";
 import type { AgentLoopCommonInput, AgentLoopResumeInput } from "../src/agent-loop-input.js";
 import type { AgentLoopDependencies } from "../src/agent-loop-ports.js";
+import {
+  fakeModelTurnExecutor,
+  modelTurnResult,
+  testModelCatalog,
+} from "./support/fake-model-turn-executor.js";
+import type { AIModelTurnResult } from "@caelush/ai";
 
 function makeInput(): AgentLoopCommonInput {
   const pendingRun = AgentRunSchema.parse({
@@ -43,10 +48,10 @@ function makeInput(): AgentLoopCommonInput {
 
 function turn(
   text: string,
-  toolCalls: LLMTurnResult["toolCalls"],
-  finishReason: LLMTurnResult["finishReason"],
-): LLMTurnResult {
-  return LLMTurnResultSchema.parse({
+  toolCalls: AIModelTurnResult["toolCalls"],
+  finishReason: AIModelTurnResult["finishReason"],
+): AIModelTurnResult {
+  return modelTurnResult({
     callId: createLLMCallId(),
     providerId: "fixture",
     model: { provider: "fixture", model: "fixture-model" },
@@ -97,7 +102,8 @@ describe("AgentLoop.resumeWithToolResults", () => {
           };
         },
       },
-      llmClient: { complete: async () => turns.shift()! },
+      models: testModelCatalog(),
+      modelTurns: fakeModelTurnExecutor(async () => turns.shift()!),
       clock: { now: () => 10 as never },
       stepIdFactory: { create: () => createStepId() },
     };
