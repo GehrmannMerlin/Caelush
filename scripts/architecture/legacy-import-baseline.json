@@ -2,7 +2,7 @@
   "$schema": "./legacy-import-baseline.schema.md",
   "schemaVersion": 1,
   "ruleSetVersion": 2,
-  "baselineSourceCommit": "04617093749f14a4f36412ae0c2182d801d02f18",
+  "baselineSourceCommit": "2e0befea64e303374c59dfd873188b95b0f484d4",
   "generatedByRuleExpansion": true,
   "generator": "scripts/architecture/check-boundaries.mjs",
   "generatedAt": "2026-09-12T23:43:40+08:00",
