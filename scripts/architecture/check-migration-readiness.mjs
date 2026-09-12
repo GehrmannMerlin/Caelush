@@ -58,12 +58,15 @@ export const V2_SKELETON_PACKAGES = ["ai", "agent", "coding-agent"];
  * that premise is satisfied and the surface restriction has to lift, or migration
  * could never publish anything.
  *
- * Phase 2A (AI Model Invocation V2 core) migrates `ai`, so `ai` leaves the locked
- * set. The dependency-free guarantee below still applies to every skeleton,
- * migrated or not: `ai` may publish surfaces, but it may never declare a legacy
- * dependency.
+ * Phase 2A (AI Model Invocation V2 core) migrates `ai`, and Phase 2C activates the
+ * first real `agent` implementation (the model turn executor), so both leave the
+ * locked set. The dependency-free guarantee below still applies to every skeleton,
+ * migrated or not: a migrated skeleton may publish surfaces, but it may never
+ * declare a dependency on a package Architecture V2 is deleting.
+ *
+ * `coding-agent` has no implementation yet and stays surface-locked.
  */
-export const V2_MIGRATED_SKELETON_PACKAGES = ["ai"];
+export const V2_MIGRATED_SKELETON_PACKAGES = ["ai", "agent"];
 
 /** Skeletons whose public surface must still be exactly `"."` because code has not migrated. */
 export const V2_SURFACE_LOCKED_SKELETON_PACKAGES = V2_SKELETON_PACKAGES.filter(

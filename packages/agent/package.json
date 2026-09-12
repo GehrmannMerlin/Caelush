@@ -12,5 +12,8 @@
   "scripts": {
     "build": "tsc --build",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@caelush/ai": "workspace:*"
   }
 }

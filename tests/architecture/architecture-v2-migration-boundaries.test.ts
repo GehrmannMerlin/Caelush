@@ -791,13 +791,43 @@ describe("architecture v2 public boundary guard", () => {
     "keeps the unmigrated Architecture V2 skeletons on a root-only export surface",
     async () => {
       const scan = await scanner.scanWorkspace(repositoryRoot);
-      for (const identity of ["agent", "coding-agent"]) {
+      for (const identity of ["coding-agent"]) {
         const project = scan.projects.find((entry) => entry.identity === identity);
         expect(project, identity).toBeDefined();
         expect(project?.exportDeclarations.map((declaration) => declaration.subpath)).toEqual([
           ".",
         ]);
       }
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "keeps the activated agent package on exactly the surface Phase 2C earned",
+    async () => {
+      // Phase 2C activates the model turn executor, so `agent` is no longer a
+      // surface-locked skeleton. Phase 2C deliberately publishes no subpath: the
+      // first real implementation is reachable from the root only, and no guessed
+      // Context/Tool/Session surface is declared ahead of its implementation.
+      const scan = await scanner.scanWorkspace(repositoryRoot);
+      const project = scan.projects.find((entry) => entry.identity === "agent");
+      expect(project).toBeDefined();
+      expect(project?.exportDeclarations.map((declaration) => declaration.subpath)).toEqual(["."]);
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "keeps the activated agent package free of every legacy dependency",
+    async () => {
+      const scan = await scanner.scanWorkspace(repositoryRoot);
+      const project = scan.projects.find((entry) => entry.identity === "agent");
+      expect(project).toBeDefined();
+      expect(
+        (project?.manifestDependencies ?? [])
+          .map((dependency) => dependency.name)
+          .filter((name) => name.startsWith("@caelush/")),
+      ).toEqual(["@caelush/ai"]);
     },
     GIT_TEST_TIMEOUT_MS,
   );

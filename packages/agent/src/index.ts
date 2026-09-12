@@ -8,14 +8,19 @@
  *   - Session Conversation Domain, Agent Events
  *   - Recovery, Retry, Budget, Resource Governance
  *
- * This package must never know about a Coding Agent, concrete Runtime
- * operations, SQLite, the Daemon, a Client, Git, `read_file`, `exec_command`,
- * `apply_patch`, Node/Java project scanning, or the local filesystem. Those
- * boundaries are enforced by `pnpm check:architecture`.
+ * This package must never know about a Coding Agent, concrete Runtime operations,
+ * SQLite, the Daemon, a Client, Git, `read_file`, `exec_command`, `apply_patch`,
+ * Node/Java project scanning, or the local filesystem. Those boundaries are
+ * enforced by `pnpm check:architecture`.
  *
- * Phase 1A creates the package identity and the build/dependency boundary only.
- * No `@caelush/core`, `context`, `tools`, `security`, `memory`, or `events` code
- * has been moved here, and no guessed public API is declared. The real agent
- * kernel migrates in a later phase.
+ * Phase 2C activates the first real implementation: the model turn executor. The
+ * rest of the agent kernel migrates in later phases, and no guessed public API is
+ * declared ahead of its implementation.
  */
-export {};
+export { createModelTurnExecutor } from "./model-turn-executor.js";
+export type {
+  ModelTurnExecutionInput,
+  ModelTurnExecutor,
+  ModelTurnExecutorDependencies,
+  ModelTurnStreamSink,
+} from "./model-turn-executor.js";

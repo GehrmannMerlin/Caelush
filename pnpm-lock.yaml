@@ -171,7 +171,11 @@ importers:
         specifier: 8.2.2
         version: 8.2.2(@types/node@24.13.3)(jiti@2.7.0)(yaml@2.9.0)
 
-  packages/agent: {}
+  packages/agent:
+    dependencies:
+      '@caelush/ai':
+        specifier: workspace:*
+        version: link:../ai
 
   packages/ai:
     dependencies:

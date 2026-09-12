@@ -371,9 +371,11 @@ describe("architecture v2 migration readiness gate", () => {
   it(
     "fails when a V2 skeleton publishes a subpath before code migrates",
     async () => {
+      // `coding-agent` is the only skeleton with no implementation yet, so it is the
+      // one that must still be surface-locked.
       const workspace = await fixture(
         v2WorkspaceSpec({
-          "packages/agent": {
+          "packages/coding-agent": {
             source: { "index.ts": "export {};\n" },
             exports: { ".": { import: "./dist/index.js" }, "./tools": { import: "./dist/t.js" } },
           },
@@ -383,6 +385,43 @@ describe("architecture v2 migration readiness gate", () => {
       const result = await readinessOf(workspace.root);
       expect(result.ready).toBe(false);
       expect(findingsFor(result, "v2-skeleton-boundary").join(" ")).toContain('"./tools"');
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "allows the activated agent skeleton to publish the surface its implementation earned",
+    async () => {
+      const workspace = await fixture(
+        v2WorkspaceSpec({
+          "packages/agent": {
+            source: { "index.ts": "export {};\n" },
+            exports: { ".": { import: "./dist/index.js" }, "./model": { import: "./dist/m.js" } },
+          },
+        }),
+      );
+
+      const result = await readinessOf(workspace.root);
+      expect(findingsFor(result, "v2-skeleton-boundary").join(" ")).not.toContain('"./model"');
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "still forbids a legacy dependency from the activated agent skeleton",
+    async () => {
+      const workspace = await fixture(
+        v2WorkspaceSpec({
+          "packages/agent": {
+            source: { "index.ts": "export {};\n" },
+            dependencies: { "@caelush/core": "workspace:*" },
+          },
+        }),
+      );
+
+      const result = await readinessOf(workspace.root);
+      expect(result.ready).toBe(false);
+      expect(findingsFor(result, "v2-skeleton-boundary").join(" ")).toContain("@caelush/core");
     },
     GIT_TEST_TIMEOUT_MS,
   );
@@ -703,8 +742,10 @@ describe("architecture v2 readiness packaging", () => {
     ]);
     expect(readiness.V2_SKELETON_PACKAGES).toEqual(["ai", "agent", "coding-agent"]);
     // Phase 2A migrates the AI core, so exactly one skeleton may publish surfaces.
-    expect(readiness.V2_MIGRATED_SKELETON_PACKAGES).toEqual(["ai"]);
-    expect(readiness.V2_SURFACE_LOCKED_SKELETON_PACKAGES).toEqual(["agent", "coding-agent"]);
+    // Phase 2C activates the first real `agent` implementation, so exactly two
+    // skeletons may publish surfaces and `coding-agent` stays locked.
+    expect(readiness.V2_MIGRATED_SKELETON_PACKAGES).toEqual(["ai", "agent"]);
+    expect(readiness.V2_SURFACE_LOCKED_SKELETON_PACKAGES).toEqual(["coding-agent"]);
   });
 
   it("requires every architecture root script and entry point", () => {
