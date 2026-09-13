@@ -48,12 +48,14 @@ export class ToolBatchResultConversionError extends Error {
   }
 }
 
-export class AgentKernelStateError extends Error {
-  constructor(reason: string) {
-    super(`Agent kernel state rejected: ${reason}.`);
-    this.name = "AgentKernelStateError";
-  }
-}
+/**
+ * The kernel state rejection, in the Run Layer's own vocabulary.
+ *
+ * Phase 3C moved the canonical durable Step lifecycle into `@caelush/agent`, so the error the
+ * kernel throws is the kernel's. This is an alias rather than a second class: `instanceof` has to
+ * agree with the throw, and two classes meaning the same thing would quietly stop agreeing.
+ */
+export { AgentStepStateError as AgentKernelStateError } from "@caelush/agent";
 
 export class AgentLoopInputError extends Error {
   constructor(reason: string) {

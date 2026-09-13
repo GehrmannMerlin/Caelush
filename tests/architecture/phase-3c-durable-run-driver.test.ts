@@ -270,6 +270,39 @@ describe("Phase 3C Run Layer ownership", () => {
     for (const fn of ["beginAgentStepState", "settleAgentStepState", "cancelAgentStepState"]) {
       expect(state, fn).toContain(`export function ${fn}`);
     }
+
+    // Core keeps only the names the Run Layer already imports. A second implementation would be a
+    // second Step authority, free to disagree with the one the kernel commits against.
+    for (const [file, fns] of [
+      [
+        "packages/core/src/agent-step.ts",
+        [
+          "createRunningAgentStep",
+          "completeAgentStep",
+          "failAgentStep",
+          "cancelAgentStep",
+          "nextAgentStepSequence",
+        ],
+      ],
+      [
+        "packages/core/src/agent-state.ts",
+        ["beginAgentStepState", "settleAgentStepState", "cancelAgentStepState"],
+      ],
+    ] as const) {
+      const core = executable(file);
+      expect(core, file).toContain('from "@caelush/agent"');
+      for (const fn of fns) {
+        // Re-exported, never re-declared.
+        expect(core, `${file}: ${fn}`).not.toContain(`export function ${fn}`);
+        expect(core, `${file}: ${fn}`).toContain(fn);
+      }
+    }
+
+    // The kernel error is the one the kernel throws: an alias, not a second class, so
+    // `instanceof` cannot disagree with the throw.
+    const errors = executable("packages/core/src/agent-errors.ts");
+    expect(errors).toContain("AgentStepStateError as AgentKernelStateError");
+    expect(errors).not.toMatch(/class AgentKernelStateError/);
   });
 
   it("keeps Core projecting onto the canonical snapshot instead of inventing one", () => {
