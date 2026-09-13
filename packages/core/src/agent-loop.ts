@@ -1,24 +1,28 @@
-import {
-  ContextBuildError,
-  ContextExhaustedError,
-  type ContextBuildReport,
-} from "@caelush/context";
 import type { AIErrorCode, AIToolResultMessage, ModelUsage } from "@caelush/ai";
 import type {
-  AgentBudgetBlock,
+  AgentBudgetBlock as FrozenAgentBudgetBlock,
   AgentDecision,
   AgentExecutionIdentity,
-  AgentLoopAdvanceFailed,
+  AgentLoopAdvanceInput,
   AgentLoopAdvanceResult,
+  AgentLoop as FrozenAgentLoop,
+  AgentLoopFailedResult,
+  AgentRetryMetadata as FrozenAgentRetryMetadata,
   AgentTurnInput,
   AgentTurnRef,
+  ContextBuildReport,
   ContextEnginePort,
+  ContextPrepareInput,
+  PreparedModelContext,
   ModelRequestAdmissionPort,
+  ModelTurnBoundaryPort,
+  ModelTurnExecutionErrorCode,
   ModelTurnExecutor,
 } from "@caelush/agent";
-import { createAgentLoop, toAIModelSettings } from "@caelush/agent";
+import { createAgentDecisionClassifier, createAgentLoop, toAIModelSettings } from "@caelush/agent";
 import { toModelTurnExecutionError } from "./legacy-model-turn-executor.js";
 import type {
+  AgentError,
   AgentRun,
   AgentState,
   AgentStep,
@@ -53,7 +57,7 @@ import type {
   AgentLoopStartInput,
 } from "./agent-loop-input.js";
 import { AgentBudgetAdmissionError } from "./agent-errors.js";
-import { isAIAbortError, mapAgentLoopError, mapAgentRetryMetadata } from "./agent-error-mapper.js";
+import { isAIAbortError, mapAgentLoopError } from "./agent-error-mapper.js";
 import { prepareResumeHistory, validateAgentLoopInput } from "./agent-loop-history.js";
 import type {
   AgentLoopDependencies,
@@ -198,22 +202,26 @@ export class AgentLoop {
     this.dependencies.resolveTurnIdentity?.(input.run);
     const turn: AgentTurnRef = { stepId: step.id, sequence };
 
+    // The composition for this turn, plus the Core-private record of what the ports this
+    // facade owns actually did. The frozen result deliberately reports none of it: the caller
+    // that composes the ports is the only party that knows where a Reason failed.
+    const { loop, outcome } = this.reason(input, step, activeState);
+
     let result: AgentLoopAdvanceResult;
     try {
-      const advanceInput = {
-        identity,
-        turn,
-        input: turnInput,
-        history: history.map(toAIMessage),
-        model: this.dependencies.models.resolve(input.run.model),
-        tools: input.tools?.map(toAIToolSpec) ?? [],
-        signal: input.signal,
-      };
       const settings =
         input.modelSettings === undefined ? undefined : toAIModelSettings(input.modelSettings);
-      result = await this.reason(input, step, activeState).advance(
-        settings === undefined ? advanceInput : { ...advanceInput, settings },
-      );
+      const advanceInput: AgentLoopAdvanceInput = {
+        identity,
+        turn,
+        history: history.map(toAIMessage),
+        input: turnInput,
+        model: this.dependencies.models.resolve(input.run.model),
+        tools: input.tools?.map(toAIToolSpec) ?? [],
+        ...(settings === undefined ? {} : { modelSettings: settings }),
+        signal: input.signal,
+      };
+      result = await loop.advance(advanceInput);
     } catch (error) {
       // A throw that escapes `advance()` is an infrastructure failure, not a model outcome.
       if (input.signal.aborted) return this.cancelledAfterStep(activeState, step, undefined, false);
@@ -222,23 +230,26 @@ export class AgentLoop {
         step,
         undefined,
         appendPrefix,
-        error,
+        mapAgentLoopError(error),
+        undefined,
         undefined,
         "NOT_STARTED",
       );
     }
 
-    switch (result.status) {
+    switch (result.kind) {
       case "CANCELLED":
-        return this.cancelledAfterStep(activeState, step, undefined, true);
+        return this.cancelledAfterStep(activeState, step, result.context?.report, true);
       case "FAILED":
-        return this.failureFromAdvance(input, activeState, step, result, appendPrefix);
-      case "COMPLETED": {
+        return this.failureFromAdvance(input, activeState, step, result, appendPrefix, outcome);
+      case "TOOL_REQUESTS":
+      case "FINAL_CANDIDATE": {
+        const decision = result.decision;
         const finishedAt = monotonicNow(activeState, this.dependencies.clock.now());
-        const usage = result.decision.modelTurn.usage;
+        const usage = result.modelTurn.usage;
         const completedStep = completeAgentStep(step, {
           finishedAt,
-          reasoningSummary: summarizeAgentDecision(result.decision),
+          reasoningSummary: summarizeAgentDecision(decision),
         });
         const settledState = settleAgentStepState(
           activeState,
@@ -247,12 +258,12 @@ export class AgentLoop {
             : { stepId: step.id, usage, now: finishedAt },
         );
         const decidedState =
-          result.decision.type === "FINAL_CANDIDATE"
+          decision.type === "FINAL_CANDIDATE"
             ? markAgentStateVerifying(settledState, finishedAt)
             : settledState;
-        return this.outcome(result.decision, decidedState, completedStep, result.contextReport, [
+        return this.outcome(decision, decidedState, completedStep, result.context.report, [
           ...appendPrefix,
-          projectAssistantMessage(result.decision.modelTurn),
+          projectAssistantMessage(result.modelTurn),
         ]);
       }
     }
@@ -261,42 +272,58 @@ export class AgentLoop {
   /**
    * Assemble the frozen loop for one turn.
    *
-   * The legacy Context System and the legacy provider-turn hook are both configured per turn —
-   * base prompt, limits, cwd, explicit paths, and the Step the hook commits — so the adapters
+   * The legacy Context System and the legacy provider-turn hooks are both configured per turn —
+   * base prompt, limits, cwd, explicit paths, and the Step the hooks commit — so the adapters
    * are built here rather than once per loop. This method is the only place the Core boundary
    * learns that a legacy context implementation and a legacy lifecycle hook exist.
+   *
+   * It is also where Core keeps the record the frozen result deliberately does not carry: which
+   * port failed, whether the provider was contacted, and how it answered. Every value is read
+   * from a port *this* facade owns, so nothing has to be smuggled through an `@caelush/agent`
+   * contract to be observable here.
    */
-  private reason(input: AgentLoopCommonInput, step: AgentStep, state: AgentState) {
+  private reason(
+    input: AgentLoopCommonInput,
+    step: AgentStep,
+    state: AgentState,
+  ): { readonly loop: FrozenAgentLoop; readonly outcome: CoreTurnOutcome } {
     const legacy = this.dependencies.modelTurns;
     const lifecycle = this.dependencies.lifecycle;
+    const outcome: CoreTurnOutcome = { providerTurnState: "NOT_STARTED" };
+
     const modelTurnExecutor: ModelTurnExecutor = {
       execute: async (execution) => {
         if (execution.signal.aborted) return { kind: "CANCELLED" as const };
-        // The admission hook may have restated the request with a clamped output ceiling.
-        const request = admittedRequests.get(execution.request) ?? execution.request;
         try {
-          return {
-            kind: "COMPLETED" as const,
-            result: await legacy.execute({ request, signal: execution.signal }),
-          };
+          const result = await legacy.execute({
+            request: execution.request,
+            signal: execution.signal,
+          });
+          // The provider answered. Whether the classifier accepts the answer is a separate
+          // question, and the frozen result reports that distinction itself.
+          outcome.providerTurnState = "COMPLETED";
+          return { kind: "COMPLETED" as const, result };
         } catch (error) {
           // A cancellation is not a provider failure: it must stay distinguishable all the way
           // up to the Run termination authority.
           if (isAIAbortError(error) || execution.signal.aborted) {
+            outcome.providerTurnState = "CANCELLED";
             return { kind: "CANCELLED" as const };
           }
+          outcome.providerTurnState = "FAILED";
+          outcome.providerError = error;
           return { kind: "FAILED" as const, error: toModelTurnExecutionError(error) };
         }
       },
     };
 
-    // The restated request is keyed by the request the admission port saw, so the executor can
-    // apply it without the frozen admission contract growing a mutable-request field.
-    const admittedRequests = new Map<unknown, import("@caelush/ai").AIModelRequest>();
-
     // Budget admission is a Run Layer authority, and it is the *first* thing after the context
     // is prepared: a refused turn must cost no provider call and must not create a durable Step,
     // which is exactly why the frozen loop runs admission before the durable boundary.
+    //
+    // The admitted request travels back through the frozen `ALLOWED.request`, which is what the
+    // loop actually executes — no side table keyed by request identity is needed any more, and
+    // a restatement cannot be lost by an object that failed to compare equal.
     const modelAdmission: ModelRequestAdmissionPort = {
       admit: async ({ request }) => {
         try {
@@ -307,14 +334,15 @@ export class AgentLoop {
             model: input.run.model,
             request,
           });
-          // The legacy hook may restate the request with a clamped output ceiling. The frozen
-          // port cannot restate it, so the executor applies the restatement instead.
-          if (admitted !== undefined) admittedRequests.set(request, admitted);
-          return { kind: "ALLOWED" };
+          return { kind: "ALLOWED", request: admitted ?? request };
         } catch (error) {
           if (error instanceof AgentBudgetAdmissionError) {
+            // The durable block keeps its own accounting: the frozen vocabulary names the
+            // dimension, while the Run Layer settles with the numbers.
+            outcome.admissionBlock = error.block;
             return { kind: "BLOCKED", reason: "BUDGET", block: toFrozenBudgetBlock(error.block) };
           }
+          outcome.admissionError = error;
           throw error;
         }
       },
@@ -325,31 +353,78 @@ export class AgentLoop {
       this.dependencies.modelAdmission ??
       (lifecycle?.beforeProviderAdmission === undefined ? undefined : modelAdmission);
 
-    const modelTurnBoundary =
+    const modelTurnBoundary: ModelTurnBoundaryPort | undefined =
       this.dependencies.modelTurnBoundary ??
       (lifecycle?.beforeProviderTurn === undefined
         ? undefined
         : {
-            beforeExecute: async (boundary: {
-              readonly request: import("@caelush/ai").AIModelRequest;
-              readonly model: import("@caelush/ai").ModelDescriptor;
-            }) => {
-              await lifecycle.beforeProviderTurn?.({
-                run: withCurrentStep(input.run, step.id),
-                state: withCurrentStep(state, step.id),
-                step,
-                model: input.run.model,
-              });
-              void boundary;
+            beforeExecute: async () => {
+              try {
+                await lifecycle.beforeProviderTurn?.({
+                  run: withCurrentStep(input.run, step.id),
+                  state: withCurrentStep(state, step.id),
+                  step,
+                  model: input.run.model,
+                });
+                outcome.boundaryCommitted = true;
+              } catch (error) {
+                outcome.boundaryError = error;
+                throw error;
+              }
             },
           });
 
-    return createAgentLoop({
-      contextEngine: this.contextEngine(input),
-      modelTurnExecutor,
-      ...(resolvedAdmission === undefined ? {} : { modelAdmission: resolvedAdmission }),
-      ...(modelTurnBoundary === undefined ? {} : { modelTurnBoundary }),
-    });
+    return {
+      loop: createAgentLoop({
+        contextEngine: this.captureContextErrors(this.contextEngine(input), outcome),
+        modelTurnExecutor: this.bindStreamSink(modelTurnExecutor),
+        // The composition root owns the classifier. The loop has no default, so there is no
+        // second decision authority it could fall back to.
+        decisionClassifier: createAgentDecisionClassifier(),
+        ...(resolvedAdmission === undefined ? {} : { modelAdmission: resolvedAdmission }),
+        ...(modelTurnBoundary === undefined ? {} : { modelTurnBoundary }),
+      }),
+      outcome,
+    };
+  }
+
+  /**
+   * Record the Context Engine's own failure, without letting it cross the frozen boundary.
+   *
+   * The kernel reports only that preparation failed. The value itself may quote a path, a
+   * document or a prompt, so it is kept here — in the facade that owns the engine — and used to
+   * classify the durable failure with the Context vocabulary the Run Layer settles.
+   */
+  private captureContextErrors(
+    engine: ContextEnginePort,
+    outcome: CoreTurnOutcome,
+  ): ContextEnginePort {
+    return {
+      prepare: async (prepareInput: ContextPrepareInput): Promise<PreparedModelContext> => {
+        try {
+          return await engine.prepare(prepareInput);
+        } catch (error) {
+          outcome.contextError = error;
+          throw error;
+        }
+      },
+    };
+  }
+
+  /**
+   * Bind the transient stream sink to the executor, which is where the frozen contract puts it.
+   *
+   * `AgentLoop.advance()` has no `streamSink` input: presentation is a `ModelTurnExecutor`
+   * concern, and the composition root binds it by decorating the executor it hands to the loop.
+   * That is exactly what this does, so live deltas keep flowing for a host that configured a
+   * sink while the frozen Reason contract stays free of presentation state.
+   */
+  private bindStreamSink(executor: ModelTurnExecutor): ModelTurnExecutor {
+    const sink = this.dependencies.streamSink;
+    if (sink === undefined) return executor;
+    return {
+      execute: (execution) => executor.execute({ ...execution, streamSink: sink }),
+    };
   }
 
   /**
@@ -384,42 +459,42 @@ export class AgentLoop {
     input: AgentLoopCommonInput,
     activeState: AgentState,
     step: AgentStep,
-    result: AgentLoopAdvanceFailed,
+    result: AgentLoopFailedResult,
     appendPrefix: readonly import("@caelush/llm/messages").LLMMessage[],
+    outcome: CoreTurnOutcome,
   ): AgentLoopFailureResult {
-    // A failure before the durable boundary means no provider attempt happened, so no Step is
-    // settled and the step budget is untouched.
-    if (result.stage !== "MODEL") {
-      // A budget refusal is a typed value now. The legacy hook reports it as a thrown
-      // `AgentBudgetAdmissionError`, whose block is already the durable legacy shape; the frozen
-      // kernel reports its own frozen block, which is projected here. Either way the durable
-      // settlement is the same, and the classification comes from the block itself rather than
-      // from a message.
-      const legacyBlock =
-        readLegacyBudgetBlock(result.error.cause) ??
-        (result.budgetBlock === undefined ? undefined : toLegacyBudgetBlock(result.budgetBlock));
+    // A failure before the provider was contacted means no provider attempt happened, so no Step
+    // is settled and the step budget is untouched. Whether the provider was contacted is a fact
+    // this facade observed, not a field the frozen result has to state.
+    if (!readProviderAttempted(outcome)) {
+      const legacyBlock = outcome.admissionBlock;
       const failure = this.failureBeforeStep(
         input.state,
         mapAgentLoopError(
           legacyBlock === undefined
-            ? advanceError(result)
+            ? (outcome.contextError ??
+                outcome.admissionError ??
+                outcome.boundaryError ??
+                frozenFailure(result.error))
             : new AgentBudgetAdmissionError(legacyBlock),
         ),
         appendPrefix,
-        asContextReport(result.contextReport),
+        result.context?.report,
       );
       return legacyBlock === undefined ? failure : { ...failure, budget: legacyBlock };
     }
     return this.failureAfterStep(
       activeState,
       step,
-      asContextReport(result.contextReport),
+      result.context?.report,
       appendPrefix,
-      advanceError(result),
+      // The kernel already projected its own closed failure vocabulary onto the durable
+      // `AgentError`, so the post-provider path reuses that one mapping instead of deriving a
+      // second one. A settled turn the classifier refused is reported as such by the result.
+      result.error,
+      result.retry === undefined ? undefined : toDurableRetryMetadata(result.retry),
       result.usage,
-      // A settled provider turn that the classifier refused is a failed *turn*, not a failed
-      // provider attempt, and the durable record keeps that distinction.
-      result.providerTurnState ?? "FAILED",
+      outcome.providerTurnState,
     );
   }
 
@@ -428,7 +503,8 @@ export class AgentLoop {
     step: AgentStep,
     contextReport: ContextBuildReport | undefined,
     appendPrefix: readonly import("@caelush/llm/messages").LLMMessage[],
-    error: unknown,
+    error: AgentError,
+    retry: import("./agent-loop-input.js").AgentRetryMetadata | undefined,
     usage: ModelUsage | undefined,
     providerTurnState: AgentProviderTurnState,
   ): AgentLoopFailureResult {
@@ -440,10 +516,9 @@ export class AgentLoop {
         ? { stepId: step.id, now: finishedAt }
         : { stepId: step.id, usage, now: finishedAt },
     );
-    const retry = mapAgentRetryMetadata(error);
     return {
       status: "FAILED",
-      error: mapAgentLoopError(error),
+      error,
       state,
       step: failedStep,
       messagesToAppend: [...appendPrefix],
@@ -456,7 +531,7 @@ export class AgentLoop {
 
   private failureBeforeStep(
     state: AgentState,
-    error: ReturnType<typeof mapAgentLoopError>,
+    error: AgentError,
     messagesToAppend: readonly import("@caelush/llm/messages").LLMMessage[],
     contextReport?: ContextBuildReport,
   ): AgentLoopFailureResult {
@@ -524,16 +599,15 @@ export class AgentLoop {
     outcome: AgentDecision,
     state: AgentState,
     step: AgentStep,
-    contextReport: Readonly<Record<string, unknown>> | undefined,
+    contextReport: ContextBuildReport | undefined,
     messagesToAppend: readonly import("@caelush/llm/messages").LLMMessage[],
   ): AgentLoopOutcomeResult {
-    const report = asContextReport(contextReport);
     return {
       status: "OUTCOME",
       outcome,
       state,
       step,
-      ...(report === undefined ? {} : { contextReport: report }),
+      ...(contextReport === undefined ? {} : { contextReport }),
       messagesToAppend: [...messagesToAppend],
       providerTurnState: "COMPLETED",
     };
@@ -541,6 +615,109 @@ export class AgentLoop {
 }
 
 /* ------------------------------------------------------------------ helpers */
+
+/**
+ * The Core-private record of what the ports this facade owns actually did for one turn.
+ *
+ * Every field is observed by Core itself — the Context Engine decorator, the admission port, the
+ * durable boundary and the model turn executor are all composed here — which is why the frozen
+ * `advance()` result needs to carry none of it. `providerAttempted` is derived from whether the
+ * executor was entered, so it is exact rather than inferred from an error code.
+ */
+interface CoreTurnOutcome {
+  /** The Context Engine's own thrown value. It never crosses the frozen boundary. */
+  contextError?: unknown;
+  /** The durable budget block a legacy admission hook refused with, accounting included. */
+  admissionBlock?: import("./agent-errors.js").AgentBudgetBlock;
+  admissionError?: unknown;
+  boundaryError?: unknown;
+  /** True once the durable pre-provider commit resolved. */
+  boundaryCommitted?: boolean;
+  providerTurnState: AgentProviderTurnState;
+  /** The thrown value of the last provider failure, kept Core-side only. */
+  providerError?: unknown;
+}
+
+function readProviderAttempted(outcome: CoreTurnOutcome): boolean {
+  return outcome.providerTurnState !== "NOT_STARTED";
+}
+
+/**
+ * Rebuild the durable-visible failure of a Reason that never reached the provider.
+ *
+ * A caller-injected admission or boundary port can reject with a value this facade never saw, and
+ * the frozen kernel reports only that the port failed. Reconstructing an AI-shaped failure keeps
+ * the single Core classification authority — `mapAgentLoopError` — as the only place a durable
+ * error code is decided.
+ */
+function frozenFailure(error: AgentError): Error {
+  const failure = new Error(error.message) as Error & { code: string; retryable: boolean };
+  failure.name = "AIError";
+  failure.code = toAIErrorCode(error.code);
+  failure.retryable = error.retryable;
+  return failure;
+}
+
+/** Map a canonical durable code back onto the AI code the Core classifier reads. */
+function toAIErrorCode(code: AgentError["code"]): AIErrorCode {
+  switch (code) {
+    case "RATE_LIMIT":
+      return "AI_RATE_LIMIT";
+    case "NETWORK_ERROR":
+      return "AI_NETWORK";
+    case "MODEL_TIMEOUT":
+      return "AI_TIMEOUT";
+    case "CONTEXT_EXHAUSTED":
+      return "AI_CONTEXT_OVERFLOW";
+    case "CANCELLED":
+      return "AI_ABORTED";
+    default:
+      return "AI_PROVIDER_ERROR";
+  }
+}
+
+/** Map the kernel's frozen failure code onto the AI code the Core classifier reads. */
+function toAIErrorCodeFromTurn(code: ModelTurnExecutionErrorCode): AIErrorCode {
+  switch (code) {
+    case "AUTHENTICATION":
+      return "AI_AUTHENTICATION";
+    case "RATE_LIMIT":
+      return "AI_RATE_LIMIT";
+    case "NETWORK":
+      return "AI_NETWORK";
+    case "TIMEOUT":
+      return "AI_TIMEOUT";
+    case "CONTEXT_OVERFLOW":
+      return "AI_CONTEXT_OVERFLOW";
+    case "INVALID_RESPONSE":
+      return "AI_INVALID_RESPONSE";
+    case "UNSUPPORTED_MODEL":
+      return "AI_MODEL_UNSUPPORTED";
+    case "UNSUPPORTED_CAPABILITY":
+      return "AI_CAPABILITY_UNSUPPORTED";
+    default:
+      return "AI_PROVIDER_ERROR";
+  }
+}
+
+/**
+ * Project the frozen retry hint onto the durable retry metadata.
+ *
+ * The durable artifact keeps the legacy `LLM_*` spelling through `toDurableRetryCode`, so this
+ * mapping restores the AI spelling the Run Layer stores. Only the three transient codes can reach
+ * here, because the kernel emits retry metadata for `retryable` errors only.
+ */
+function toDurableRetryMetadata(
+  retry: FrozenAgentRetryMetadata,
+): import("./agent-loop-input.js").AgentRetryMetadata | undefined {
+  const code = toAIErrorCodeFromTurn(retry.code);
+  if (code !== "AI_RATE_LIMIT" && code !== "AI_NETWORK" && code !== "AI_TIMEOUT") return undefined;
+  return {
+    code,
+    retryable: retry.retryable,
+    ...(retry.retryAfterMs === undefined ? {} : { retryAfterMs: retry.retryAfterMs }),
+  };
+}
 
 /** The frozen identity of the Run a turn belongs to. */
 function turnIdentity(run: AgentRun): AgentExecutionIdentity {
@@ -581,93 +758,6 @@ function withCurrentStep<T extends AgentRun | AgentState>(value: T, stepId: Step
   return { ...value, currentStepId: stepId };
 }
 
-function asContextReport(
-  report: Readonly<Record<string, unknown>> | undefined,
-): ContextBuildReport | undefined {
-  return report as unknown as ContextBuildReport | undefined;
-}
-
-/**
- * The failure a frozen advance result carries, reconstructed for the legacy error mapper.
- *
- * The frozen kernel reports a closed failure vocabulary. The legacy mapper reads AI error codes
- * and Context error classes, so this is where the two vocabularies meet — and it is the only
- * place, which is what keeps the general kernel free of both.
- *
- * The original failure travels as `cause` precisely so this reconstruction can prefer it: a
- * Context failure must stay a Context failure, and re-deriving a `ContextBudgetExceededError`
- * from a generic code would lose the classification the Run Layer settles.
- */
-function advanceError(result: AgentLoopAdvanceFailed): unknown {
-  if (result.stage === "CONTEXT" && result.error.cause !== undefined) return result.error.cause;
-  const { code, message, retryable, retryAfterMs } = result.error;
-  switch (code) {
-    case "AUTHENTICATION":
-      return aiFailure("AI_AUTHENTICATION", message, retryable, retryAfterMs);
-    case "RATE_LIMIT":
-      return aiFailure("AI_RATE_LIMIT", message, retryable, retryAfterMs);
-    case "NETWORK":
-      return aiFailure("AI_NETWORK", message, retryable, retryAfterMs);
-    case "TIMEOUT":
-      return aiFailure("AI_TIMEOUT", message, retryable, retryAfterMs);
-    case "CONTEXT_OVERFLOW":
-      return message.includes("exhausted")
-        ? new ContextExhaustedError()
-        : new ContextBuildError(message);
-    case "UNSUPPORTED_MODEL":
-      return aiFailure("AI_MODEL_UNSUPPORTED", message, retryable, retryAfterMs);
-    case "UNSUPPORTED_CAPABILITY":
-      return aiFailure("AI_CAPABILITY_UNSUPPORTED", message, retryable, retryAfterMs);
-    case "INVALID_RESPONSE":
-      return aiFailure("AI_INVALID_RESPONSE", message, retryable, retryAfterMs);
-    default:
-      return aiFailure("AI_PROVIDER_ERROR", message, retryable, retryAfterMs);
-  }
-}
-
-/**
- * Rebuild an AI-shaped failure so the legacy mapper classifies it.
- *
- * The mapper reads the fault structurally and never trusts `instanceof`, which is exactly why
- * a structural reconstruction is safe here and a cast would not be.
- */
-function aiFailure(
-  code: AIErrorCode,
-  message: string,
-  retryable: boolean,
-  retryAfterMs: number | undefined,
-): Error {
-  const failure = new Error(message) as Error & {
-    code: string;
-    retryable: boolean;
-    retryAfterMs?: number;
-  };
-  failure.name = "AIError";
-  failure.code = code;
-  failure.retryable = retryable;
-  if (retryAfterMs !== undefined) failure.retryAfterMs = retryAfterMs;
-  return failure;
-}
-
-/**
- * Read the durable budget block a legacy admission hook refused with.
- *
- * The read is structural for the same reason the error mapper's is: the block is validated by
- * shape, not by class identity, so a second module instance cannot make the classification
- * silently disagree.
- */
-function readLegacyBudgetBlock(
-  cause: unknown,
-): import("./agent-errors.js").AgentBudgetBlock | undefined {
-  if (typeof cause !== "object" || cause === null) return undefined;
-  const block = (cause as { readonly block?: unknown }).block;
-  if (typeof block !== "object" || block === null) return undefined;
-  const kind = (block as { readonly kind?: unknown }).kind;
-  return kind === "EXCEEDED" || kind === "UNAVAILABLE"
-    ? (block as import("./agent-errors.js").AgentBudgetBlock)
-    : undefined;
-}
-
 /**
  * Project the durable legacy budget block onto the frozen one.
  *
@@ -678,7 +768,7 @@ function readLegacyBudgetBlock(
  */
 function toFrozenBudgetBlock(
   block: import("./agent-errors.js").AgentBudgetBlock,
-): AgentBudgetBlock {
+): FrozenAgentBudgetBlock {
   if (block.kind === "UNAVAILABLE") {
     return { kind: "UNAVAILABLE", reason: block.reason };
   }
@@ -687,23 +777,6 @@ function toFrozenBudgetBlock(
     dimension: block.dimension,
     accounted: block.accounted,
     limit: block.limit,
-    ...(block.limitMicros === undefined ? {} : { limitMicros: block.limitMicros }),
-    ...(block.accountedMicros === undefined ? {} : { accountedMicros: block.accountedMicros }),
-  };
-}
-
-/** Project the frozen budget refusal onto the durable legacy block the Run Layer settles. */
-function toLegacyBudgetBlock(
-  block: AgentBudgetBlock,
-): import("./agent-errors.js").AgentBudgetBlock {
-  if (block.kind === "UNAVAILABLE") {
-    return { kind: "UNAVAILABLE", reason: block.reason ?? "TOKEN_ESTIMATE" };
-  }
-  return {
-    kind: "EXCEEDED",
-    dimension: block.dimension ?? "TOKENS",
-    accounted: block.accounted ?? 0,
-    limit: block.limit ?? 0,
     ...(block.limitMicros === undefined ? {} : { limitMicros: block.limitMicros }),
     ...(block.accountedMicros === undefined ? {} : { accountedMicros: block.accountedMicros }),
   };

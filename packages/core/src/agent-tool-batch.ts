@@ -17,7 +17,15 @@ export type AgentToolObservationPolicy = Pick<
 
 const LEGACY_EFFECTIVE_INPUT_LIMIT = 32_000;
 
-function defaultObservationPolicy(): AgentToolObservationPolicy {
+/**
+ * The compatibility observation policy of a host that configured no Context policy.
+ *
+ * It is the legacy Core's own long-standing default — the same ratios the Context runtime's
+ * policy factory derives from a real effective input limit — and it is exported so the two
+ * Core boundaries that need it (Tool result projection and the Context compatibility adapter)
+ * cannot drift into two different defaults.
+ */
+export function defaultObservationPolicy(): AgentToolObservationPolicy {
   return {
     maxSingleObservationTokens: Math.max(1, Math.floor(LEGACY_EFFECTIVE_INPUT_LIMIT * 0.1)),
     maxObservationBatchTokens: Math.max(1, Math.floor(LEGACY_EFFECTIVE_INPUT_LIMIT * 0.22)),

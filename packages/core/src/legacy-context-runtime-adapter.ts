@@ -1,17 +1,23 @@
 import type {
   BuiltModelContext,
   ContextBuildInput,
+  ContextUsageProjection,
   ProjectIntelligenceSnapshot,
   RelevantFileContextPlan,
 } from "@caelush/context";
+import { ContextExhaustedError } from "@caelush/context";
 import type { ModelCatalog, ModelDescriptor } from "@caelush/ai";
 import type {
   AgentTurnInput,
+  ContextBuildContribution,
+  ContextBuildReport,
   ContextEnginePort,
   ContextPrepareInput,
+  ContextPrepareMode,
+  ContextPressure,
   ContextProvider,
-  ObservationPolicySnapshot,
   PreparedModelContext,
+  ToolObservationPolicySnapshot,
 } from "@caelush/agent";
 import type { LLMMessage, LLMUserMessage } from "@caelush/llm/messages";
 import type { AgentRun, WorkspaceRef } from "@caelush/protocol";
@@ -21,6 +27,7 @@ import type {
   AgentProjectInspectorPort,
   AgentRelevantFilePlannerPort,
 } from "./agent-loop-ports.js";
+import { defaultObservationPolicy } from "./agent-tool-batch.js";
 import { toAIMessage, toLegacyMessage, toProtocolJsonObject } from "./ai-invocation-projection.js";
 
 /**
@@ -89,6 +96,15 @@ export function createLegacyContextRuntimeAdapter(
       const descriptor = dependencies.models.resolve(input.model.ref);
       const runtime = resolveRuntime(dependencies);
 
+      // A forced recovery is a promise about the *answer*, not about the attempt. The legacy
+      // builder re-renders the same input, so it cannot produce a smaller context; answering a
+      // forced recovery with it would spend a second provider call on the request the provider
+      // just rejected. Refusing here is what the frozen boundary requires, and it is why the
+      // prepared context carries no `recovered` flag any more.
+      if (input.mode === "FORCED_RECOVERY" && dependencies.contextRuntime === undefined) {
+        throw new ContextExhaustedError();
+      }
+
       const built = await runtime.prepareModelContext({
         runId: input.identity.runId,
         providerId: input.model.ref.provider,
@@ -101,12 +117,7 @@ export function createLegacyContextRuntimeAdapter(
         ...(input.mode === "FORCED_RECOVERY" ? { forceRecovery: true } : {}),
       });
 
-      return toPreparedModelContext(built, runtime, input.identity.runId, input.mode, {
-        // A host that configured a real runtime gets the runtime's own recovery path. The
-        // builder fallback re-renders the same input, so it cannot produce a smaller context
-        // and the loop must not spend a second provider call on it.
-        canRecover: dependencies.contextRuntime !== undefined,
-      });
+      return toPreparedModelContext(built, runtime, input.identity.runId, input.mode);
     },
   };
 }
@@ -262,34 +273,196 @@ function currentUserMessage(input: AgentTurnInput): LLMUserMessage {
 /**
  * Project the legacy built context onto the frozen prepared context.
  *
+ * Two projections happen here and nowhere else:
+ *
+ * ```text
+ * the legacy build report  →  the frozen typed ContextBuildReport
+ * the runtime's policy     →  the frozen ToolObservationPolicySnapshot
+ * ```
+ *
  * The observation policy is lifted out of the runtime and travels with the prepared context,
  * so the Run Layer can snapshot it durably at a Tool boundary instead of re-deriving it after
- * a restart.
+ * a restart. Everything the legacy report carries beyond the frozen shape — instruction
+ * counts, project root, diagnostics, build trace — stays inside this adapter: a general agent
+ * contract has no field for it, and inventing one would leak project semantics into the kernel.
  */
 function toPreparedModelContext(
   built: BuiltModelContext,
   runtime: AgentContextRuntimePort,
   runId: string,
-  mode: import("@caelush/agent").ContextPrepareMode,
-  capability: { readonly canRecover: boolean },
+  mode: ContextPrepareMode,
 ): PreparedModelContext {
+  const usage = runtime.getContextUsage?.(runId);
   const policy = runtime.getContextPolicy?.(runId);
   return {
     messages: built.messages.map(toAIMessage),
-    report: built.report as unknown as Readonly<Record<string, unknown>>,
-    ...(policy === undefined ? {} : { observationPolicy: toObservationPolicy(policy) }),
-    ...(mode === "FORCED_RECOVERY" ? { recovered: capability.canRecover } : {}),
+    report: toContextBuildReport(built, usage, mode),
+    observationPolicy: toObservationPolicy(policy),
   };
 }
 
-function toObservationPolicy(policy: {
+/**
+ * A defensive view of the legacy build report.
+ *
+ * The legacy report belongs to `@caelush/context`, and this adapter is the compatibility boundary
+ * that reads it. A host may supply a builder whose report does not carry every section, so the
+ * read is total: the frozen report is always well formed, and the adapter never turns a
+ * compatibility producer's missing section into a failure.
+ */
+interface LegacyReportView {
+  readonly estimatedInputTokens?: number;
+  readonly remainingTokens?: number;
+  readonly systemTokens?: number;
+  readonly limits?: { readonly maxInputTokens?: number };
+  readonly currentTurn?: { readonly messageCount?: number; readonly estimatedTokens?: number };
+  readonly conversation?: {
+    readonly selectedMessages?: number;
+    readonly droppedMessages?: number;
+    readonly droppedTurns?: number;
+    readonly estimatedTokensUsed?: number;
+    readonly requiresCompaction?: boolean;
+  };
+  readonly relevantFiles?: {
+    readonly providedFiles?: number;
+    readonly selectedFiles?: number;
+    readonly droppedFiles?: number;
+    readonly furtherTruncatedFiles?: number;
+    readonly estimatedTokensUsed?: number;
+  };
+  readonly system?: { readonly instructionCount?: number };
+}
+
+function legacyReport(built: BuiltModelContext): LegacyReportView {
+  return (built.report ?? {}) as LegacyReportView;
+}
+
+/**
+ * Project the legacy report onto the frozen typed one.
+ *
+ * The legacy runtime's own usage projection is authoritative when it exists: it is the only
+ * source that knows the *effective* input limit after reserves, the pressure state and how
+ * many compactions really ran. The builder fallback derives the same fields from the report
+ * it produced, so a host without the runtime keeps a truthful report instead of a fabricated
+ * one.
+ */
+function toContextBuildReport(
+  built: BuiltModelContext,
+  usage: ContextUsageProjection | undefined,
+  mode: ContextPrepareMode,
+): ContextBuildReport {
+  const report = legacyReport(built);
+  return {
+    estimatedInputTokens: usage?.estimatedInputTokens ?? report.estimatedInputTokens ?? 0,
+    effectiveInputLimitTokens:
+      usage?.effectiveInputLimitTokens ?? report.limits?.maxInputTokens ?? 0,
+    remainingTokens: usage?.remainingTokens ?? report.remainingTokens ?? 0,
+    pressure: usage?.pressureState ?? derivePressure(built, mode),
+    compactionCount: usage?.compactionCount ?? deriveCompactionCount(built, mode),
+    contributions: toContributions(built),
+  };
+}
+
+/**
+ * Classify the pressure a build ran under, for a host without a usage projection.
+ *
+ * A forced recovery is an emergency by definition: the provider already rejected the window.
+ * Otherwise the builder's own record of what it had to drop is the signal — it compacts
+ * proactively when the conversation needs it or when optional context had to be reduced.
+ */
+function derivePressure(built: BuiltModelContext, mode: ContextPrepareMode): ContextPressure {
+  if (mode === "FORCED_RECOVERY") return "EMERGENCY";
+  const report = legacyReport(built);
+  const reduced =
+    report.conversation?.requiresCompaction === true ||
+    (report.conversation?.droppedMessages ?? 0) > 0 ||
+    (report.relevantFiles?.droppedFiles ?? 0) > 0 ||
+    (report.relevantFiles?.furtherTruncatedFiles ?? 0) > 0;
+  return reduced ? "PROACTIVE" : "NORMAL";
+}
+
+/**
+ * How many reductions this build performed, for a host without a usage projection.
+ *
+ * The legacy builder truncates rather than summarizing, so a dropped conversation tail and a
+ * truncated file set each count as one reduction. A real runtime reports its own, larger
+ * number, which is the one that reaches this contract when it exists.
+ */
+function deriveCompactionCount(built: BuiltModelContext, mode: ContextPrepareMode): number {
+  const report = legacyReport(built);
+  const conversation = (report.conversation?.droppedTurns ?? 0) > 0 ? 1 : 0;
+  const files = (report.relevantFiles?.furtherTruncatedFiles ?? 0) > 0 ? 1 : 0;
+  const forced = mode === "FORCED_RECOVERY" ? 1 : 0;
+  return conversation + files + forced;
+}
+
+/**
+ * Project the legacy report's sections onto the frozen contribution list.
+ *
+ * The contributor labels are this adapter's own stable identifiers, never project facts: the
+ * kernel receives an opaque `providerId` and a count, and never learns what a contributor is.
+ * Order is fixed so two builds of the same context produce the same report.
+ */
+function toContributions(built: BuiltModelContext): readonly ContextBuildContribution[] {
+  const report = legacyReport(built);
+  const contributions: ContextBuildContribution[] = [
+    {
+      providerId: "system",
+      tokenEstimate: report.systemTokens ?? 0,
+      itemCount: report.system?.instructionCount ?? 0,
+      droppedItems: 0,
+      truncatedItems: 0,
+    },
+    {
+      providerId: "conversation",
+      tokenEstimate: report.conversation?.estimatedTokensUsed ?? 0,
+      itemCount: report.conversation?.selectedMessages ?? 0,
+      droppedItems: report.conversation?.droppedMessages ?? 0,
+      truncatedItems: 0,
+    },
+    {
+      providerId: "current-turn",
+      tokenEstimate: report.currentTurn?.estimatedTokens ?? 0,
+      itemCount: report.currentTurn?.messageCount ?? 0,
+      droppedItems: 0,
+      truncatedItems: 0,
+    },
+  ];
+  if ((report.relevantFiles?.providedFiles ?? 0) > 0) {
+    contributions.push({
+      providerId: "relevant-files",
+      tokenEstimate: report.relevantFiles?.estimatedTokensUsed ?? 0,
+      itemCount: report.relevantFiles?.selectedFiles ?? 0,
+      droppedItems: report.relevantFiles?.droppedFiles ?? 0,
+      truncatedItems: report.relevantFiles?.furtherTruncatedFiles ?? 0,
+    });
+  }
+  return contributions;
+}
+
+/**
+ * Project the runtime's observation policy onto the frozen snapshot.
+ *
+ * The frozen contract names exactly the two numbers the legacy policy already owns, so this is
+ * a field-for-field conversion rather than a translation. A host that configured no runtime
+ * policy falls back to the legacy Core's own documented default — the same one its Tool result
+ * projection already uses — so the two boundaries cannot disagree about how much of a Tool
+ * result a model may see.
+ */
+function toObservationPolicy(
+  policy:
+    | { readonly maxSingleObservationTokens: number; readonly maxObservationBatchTokens: number }
+    | undefined,
+): ToolObservationPolicySnapshot {
+  return toFrozenObservationPolicy(policy ?? defaultObservationPolicy());
+}
+
+function toFrozenObservationPolicy(policy: {
   readonly maxSingleObservationTokens: number;
   readonly maxObservationBatchTokens: number;
-}): ObservationPolicySnapshot {
+}): ToolObservationPolicySnapshot {
   return {
-    id: "context-runtime-observation-policy",
-    maxOutputBytes: policy.maxSingleObservationTokens,
-    includeDetails: policy.maxObservationBatchTokens > 0,
+    maxSingleObservationTokens: policy.maxSingleObservationTokens,
+    maxObservationBatchTokens: policy.maxObservationBatchTokens,
   };
 }
 

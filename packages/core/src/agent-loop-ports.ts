@@ -1,6 +1,7 @@
 import type {
   BuiltModelContext,
   ContextBuildInput,
+  ContextUsageProjection,
   ProjectInspectorInput,
   ProjectIntelligenceSnapshot,
   RelevantFileContextPlan,
@@ -13,6 +14,7 @@ import type {
   ContextEnginePort,
   ModelRequestAdmissionPort,
   ModelTurnBoundaryPort,
+  ModelTurnStreamSink,
 } from "@caelush/agent";
 import type { LegacyModelTurnExecutor } from "./legacy-model-turn-executor.js";
 import type { AgentLoopCommonInput } from "./agent-loop-input.js";
@@ -26,12 +28,15 @@ import type {
 } from "@caelush/protocol";
 
 /**
- * How far a provider turn got, re-exported from the frozen kernel.
+ * How far a provider turn got.
  *
- * Phase 3B moved the vocabulary to `@caelush/agent`, because the loop is what observes whether
- * a provider turn settled. Core keeps the name for its existing consumers.
+ * This is a Core observation, not a frozen kernel contract. The frozen `advance()` result
+ * reports a decision, a failure or a cancellation, and deliberately says nothing about the
+ * provider attempt behind it: the caller composes the `ModelTurnExecutor` and therefore is
+ * the only party that knows whether the provider was contacted and how it answered. `stage`
+ * and `providerTurnState` live here for exactly that reason.
  */
-export type { AgentProviderTurnState } from "@caelush/agent";
+export type AgentProviderTurnState = "NOT_STARTED" | "COMPLETED" | "FAILED" | "CANCELLED";
 
 export interface AgentBeforeProviderTurn {
   readonly run: AgentRun;
@@ -65,7 +70,18 @@ export interface AgentContextBuilderPort {
   build(input: ContextBuildInput): BuiltModelContext;
 }
 
-export type AgentContextRuntimePort = ContextRuntimeCoordinatorPort;
+/**
+ * The legacy Context runtime seam.
+ *
+ * `getContextUsage` is optional and stays Core-private: it is the legacy runtime's own
+ * account of the context it just built — the effective input limit, the pressure state and
+ * the compaction count — which the compatibility adapter projects into the frozen
+ * `ContextBuildReport`. It is deliberately not part of any `@caelush/agent` contract, and a
+ * host that supplies only a builder simply does not have it.
+ */
+export type AgentContextRuntimePort = ContextRuntimeCoordinatorPort & {
+  getContextUsage?(runId: string): ContextUsageProjection | undefined;
+};
 
 export interface AgentClock {
   now(): TimestampMs;
@@ -157,5 +173,15 @@ export interface AgentLoopDependencies {
    * any consumed continuation and `llm.started`.
    */
   readonly modelTurnBoundary?: ModelTurnBoundaryPort;
+  /**
+   * The transient presentation sink for one Run.
+   *
+   * Streaming is not an input of the frozen `AgentLoop.advance()`: the frozen contract has no
+   * `streamSink` field, and the composition root binds live deltas by decorating the executor
+   * it hands to the loop. This is that binding — the facade forwards the sink into every
+   * `ModelTurnExecutionInput` it builds, so presentation stays a `ModelTurnExecutor` concern
+   * and `advance()` receives no presentation input at all.
+   */
+  readonly streamSink?: ModelTurnStreamSink;
   readonly lifecycle?: AgentLoopLifecycleHooks;
 }

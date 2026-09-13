@@ -1,10 +1,7 @@
-import type {
-  ContextBuildLimits,
-  ContextBuildReport,
-  VerificationRepairContextInput,
-} from "@caelush/context";
+import type { ContextBuildLimits, VerificationRepairContextInput } from "@caelush/context";
 import type { LLMMessage, LLMToolResultMessage } from "@caelush/llm/messages";
 import type { AIModelRequest, AIModelTurnResult, AIToolChoice, ModelUsage } from "@caelush/ai";
+import type { ContextBuildReport } from "@caelush/agent";
 import type {
   AgentError,
   AgentRun,
@@ -59,6 +56,7 @@ export interface AgentLoopOutcomeResult {
   readonly state: AgentState;
   readonly step?: AgentStep;
   readonly messagesToAppend: readonly LLMMessage[];
+  /** The frozen context receipt's report, carried through untouched. */
   readonly contextReport?: ContextBuildReport;
   readonly providerTurnState: AgentProviderTurnState;
 }
