@@ -242,24 +242,33 @@ describe("Phase 2C package edges", () => {
         .map((part) => part.trim())
         .filter(Boolean),
     );
-    // Phase 3A froze the V2 kernel contracts, Phase 3B implemented `advance()`, Phase 3C added
-    // the durable Run execution decision, and the Phase 3A contract remediation restored the
-    // frozen shapes. The list is asserted exactly so it can never widen by accident, and each
-    // name here is a frozen contract of Architecture V2 Phase 3.
+    // Phase 3A froze the V2 kernel contracts, Phase 3B implemented `advance()` and the context
+    // boundary, Phase 3C added the durable Run execution decision, and the 3A/3B contract
+    // remediations restored the frozen shapes. The list is asserted exactly so it can never widen
+    // by accident, and each name here is a frozen contract of Architecture V2 Phase 3.
     expect(exported.sort()).toEqual(
       [
         "AGENT_DECISION_TYPES",
         "AGENT_LOOP_ADVANCE_RESULT_KINDS",
         "AGENT_TRANSIENT_STREAM_EVENT_TYPES",
+        "AGENT_TURN_INPUT_ERROR_REASONS",
         "AgentModelOutputError",
+        // The general turn-input and conversation validation domain. It lives in the kernel
+        // because the checks are protocol statements about AIMessage and AgentTurnInput, and a
+        // host that reimplemented them would be a second authority over the same batch.
+        "AgentTurnInputError",
         "MODEL_TURN_EXECUTION_ERROR_CODES",
         "RETRYABLE_MODEL_TURN_ERROR_CODES",
         "RUN_EXECUTION_DIRECTIVE_KINDS",
+        "agentTurnInputErrorMessage",
         // `ALLOWED_MODEL_ADMISSION` was a frozen constant while ALLOWED carried only `kind`.
         // The frozen decision carries the approved request, so a shared constant cannot express
         // it: the factory replaces the constant at the same single-authority position.
         "allowedModelAdmission",
+        "assertAgentTurnInput",
         "assertAgentTurnRef",
+        "assertConversationProtocolIntegrity",
+        "assertPendingAssistantHistory",
         "classifyAgentDecision",
         "createAgentDecisionClassifier",
         "createAgentLoop",
@@ -272,9 +281,11 @@ describe("Phase 2C package edges", () => {
         "isTerminalExecutionStatus",
         "nextRunExecutionDirective",
         "planRunTransition",
+        "semanticEqual",
         "toAIModelSettings",
         "toAgentError",
         "toAgentErrorCode",
+        "toAgentTurnInputError",
         "toBudgetAgentError",
         "toModelTurnExecutionError",
         "toModelTurnExecutionErrorCode",

@@ -286,3 +286,143 @@ describe("Phase 3B context boundary", () => {
     }
   });
 });
+
+/**
+ * Phase 3B frozen boundary remediation guards.
+ *
+ * The compile-time file `packages/agent/test/contracts/phase-3b-frozen-boundaries.test.ts` is the
+ * contract-level guarantee: it restates the frozen boundary shapes and fails `pnpm typecheck` on
+ * an added, renamed or dropped field. These guards are the structural half — they keep the
+ * canonical implementation in the kernel, keep the provenance the Run Layer's to own, and fail
+ * loudly if the exactness file is deleted or narrowed.
+ */
+describe("Phase 3B frozen boundary remediation", () => {
+  it("keeps the boundary exactness file present and complete", () => {
+    const exactness = read("packages/agent/test/contracts/phase-3b-frozen-boundaries.test.ts");
+    for (const contract of ["ContextPrepareInput", "ContextProviderInput", "ContextProvider"]) {
+      expect(exactness, contract).toContain(contract);
+    }
+    expect(exactness).toContain("Expect<Equal<");
+    // The negative control: the removed field must be asserted absent, not merely unmentioned.
+    expect(exactness).toContain("ProviderInputHasNoHistory");
+  });
+
+  it("keeps ContextProviderInput to the five frozen fields", () => {
+    const port = read("packages/agent/src/loop/context/context-engine-port.ts");
+    const input = port.slice(
+      port.indexOf("export interface ContextProviderInput"),
+      port.indexOf("export interface ContextProviderInput") === -1
+        ? undefined
+        : port.indexOf("/**", port.indexOf("export interface ContextProviderInput")),
+    );
+    const fields = [...input.matchAll(/^\s+readonly (\w+)[?]?:/gm)].map((match) => match[1] ?? "");
+    // A provider may read the resolved model. It never receives the conversation: handing it the
+    // whole durable history would let every provider become a second conversation assembler.
+    expect(fields.sort()).toEqual(["identity", "input", "model", "signal", "turn"]);
+    expect(fields).not.toContain("history");
+  });
+
+  it("resolves no model inside the legacy Context adapter", () => {
+    const adapter = executable("packages/core/src/legacy-context-runtime-adapter.ts");
+    // `ContextPrepareInput.model` is the single descriptor authority for a context build.
+    expect(adapter).not.toMatch(/ModelCatalog/);
+    expect(adapter).not.toMatch(/models\.resolve\(/);
+    expect(adapter).toContain("const descriptor = input.model;");
+  });
+
+  it("declares no provider option the legacy adapter cannot consume", () => {
+    const adapter = executable("packages/core/src/legacy-context-runtime-adapter.ts");
+    // The frozen seam exists and is conformance-tested. The legacy assembler has no injection
+    // point that could take a ContextItem without changing prompt order or the token budget, so
+    // declaring support it ignores would be a misleading API.
+    expect(adapter).not.toMatch(/providers\?:/);
+    expect(adapter).not.toMatch(/ContextProvider\b/);
+  });
+
+  it("owns general turn validation in the kernel, not in Core", () => {
+    const canonical = read("packages/agent/src/loop/history/conversation-history.ts");
+    for (const exported of [
+      "assertAgentTurnInput",
+      "assertPendingAssistantHistory",
+      "assertConversationProtocolIntegrity",
+      "AgentTurnInputError",
+    ]) {
+      expect(canonical, exported).toContain(exported);
+    }
+    // The kernel's validator may not reach for a host context implementation.
+    for (const forbidden of [
+      "@caelush/context",
+      "@caelush/tools",
+      "@caelush/runtime",
+      "@caelush/core",
+    ]) {
+      expect(canonical).not.toContain(`"${forbidden}"`);
+    }
+
+    const core = executable("packages/core/src/agent-loop-history.ts");
+    // Core delegates the general checks and keeps only the Run/Coding projection invariants.
+    expect(core).toContain("assertPendingAssistantHistory");
+    expect(core).toContain("assertConversationProtocolIntegrity");
+    expect(core).toContain('from "@caelush/agent"');
+    // The legacy Context conversation grouping is no longer a second implementation here.
+    expect(core).not.toContain("@caelush/context");
+    expect(core).not.toMatch(/validateAndGroupConversation/);
+    // And the Run/Coding invariants stay where they belong.
+    for (const retained of ["run and state must both be RUNNING", "history source sequences"]) {
+      expect(core, retained).toContain(retained);
+    }
+  });
+
+  it("invokes turn validation before the Context Engine", () => {
+    const loop = executable("packages/agent/src/loop/agent-loop.ts");
+    const validation = loop.indexOf("assertAgentTurnInput(input.input)");
+    const context = loop.indexOf("prepare(dependencies.contextEngine");
+    expect(validation).toBeGreaterThan(-1);
+    expect(context).toBeGreaterThan(-1);
+    // An invalid batch must cost no context build, no admission decision, no commit, no call.
+    expect(validation).toBeLessThan(context);
+  });
+
+  it("never casts a model call identity into a Step identity", () => {
+    const violations: string[] = [];
+    for (const directory of ["packages/core/src", "packages/agent/src"]) {
+      for (const file of sourceFiles(join(root, directory))) {
+        const relativePath = relative(root, file).replaceAll("\\", "/");
+        const source = executable(relativePath);
+        // The call identity is an `llm_…` value and a Step identity is an `stp_…` one; a cast
+        // between them is a fabricated Step, however it is spelled.
+        if (/callId[^\n;]*\bas\s+StepId/.test(source)) violations.push(relativePath);
+        if (/callId\s+as\s+never\s+as\s+StepId/.test(source)) violations.push(relativePath);
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  it("threads the durable Tool request Step through the Run Layer", () => {
+    const facade = executable("packages/core/src/agent-loop.ts");
+    // The Step comes from the caller, never from the decision or the attempt.
+    expect(facade).toContain("sourceStepId: input.sourceStepId");
+    expect(facade).not.toMatch(/sourceStepId:\s*input\.pendingDecision/);
+
+    const controller = executable("packages/core/src/run-controller.ts");
+    expect(controller).toContain("sourceStepId,");
+    // A legacy checkpoint without provenance is either determined or refused, never guessed.
+    expect(controller).toContain("recoverToolRequestSourceStep");
+    expect(controller).toContain("cannot be recovered without guessing");
+
+    const continuation = executable("packages/core/src/agent-continuation.ts");
+    expect(continuation).toContain("readonly sourceStepId?: StepId | undefined;");
+  });
+
+  it("routes verification repair through the frozen continuation", () => {
+    const controller = executable("packages/core/src/run-controller.ts");
+    expect(controller).toContain("continueRun({");
+    expect(controller).toContain('reason: "VERIFICATION_REPAIR"');
+    // The repair boundary no longer fabricates a user turn.
+    expect(controller).toContain('"START" | "TOOL_RESULTS" | "VERIFICATION_REPAIR"');
+
+    const facade = executable("packages/core/src/agent-loop.ts");
+    expect(facade).toContain('kind: "CONTINUATION"');
+    expect(facade).toContain("reason: input.reason");
+  });
+});
