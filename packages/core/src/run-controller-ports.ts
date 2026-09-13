@@ -86,8 +86,13 @@ export interface ProjectProfileProviderPort {
  * The verification reviewer executes through the same model turn authority as a
  * normal agent turn: one AI subsystem, one gateway, no second provider registry
  * generation.
+ *
+ * Phase 3A aligned the agent executor with the frozen union result, so this seam names
+ * the transitional throwing facade over it rather than the frozen port itself. The
+ * reviewer's review is a host action rather than an AgentStep, so it has no durable turn
+ * of its own.
  */
-export type VerificationLLMClient = import("@caelush/agent").ModelTurnExecutor;
+export type VerificationLLMClient = import("./legacy-model-turn-executor.js").LegacyModelTurnExecutor;
 
 export interface VerificationTaskReviewerPort {
   review(input: {
@@ -156,6 +161,14 @@ export interface RunControllerDependencies {
   readonly verificationResolverRegistry?: ProjectCheckResolverRegistry;
   readonly verificationReviewer?: VerificationTaskReviewerPort;
   readonly verificationModelTurns?: VerificationLLMClient;
+  /**
+   * Publishes the Run identity a verification model turn executes for.
+   *
+   * A verification review has no AgentStep of its own, so it borrows the identity of the
+   * Run it is reviewing. Phase 3A made identity an explicit input of the frozen model turn
+   * executor, so the host publishes it here rather than letting a facade invent one.
+   */
+  readonly verificationTurnIdentity?: () => import("@caelush/agent").AgentExecutionIdentity;
   readonly verificationRepairPolicy?: VerificationRepairPolicy;
   readonly verificationPlanCount?: (runId: import("@caelush/protocol").RunId) => Promise<number>;
   readonly onVerifiedCompletion?: (input: {

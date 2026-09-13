@@ -8,7 +8,8 @@ import type {
   ContextRuntimeCoordinatorPort,
 } from "@caelush/context";
 import type { AIModelRequest, ModelCatalog } from "@caelush/ai";
-import type { ModelTurnExecutor } from "@caelush/agent";
+import type { AgentExecutionIdentity } from "@caelush/agent";
+import type { LegacyModelTurnExecutor } from "./legacy-model-turn-executor.js";
 import type {
   AgentRun,
   AgentState,
@@ -62,6 +63,19 @@ export interface AgentStepIdFactory {
   create(): StepId;
 }
 
+/**
+ * Publishes the Run identity a model turn executes for.
+ *
+ * Phase 3A made `AgentExecutionIdentity` an explicit input of the frozen model turn
+ * executor, because the durable model turn boundary commits against a Run and a Session.
+ * The Run Layer owns that identity and hands it to the loop, which never invents one. This
+ * port disappears with the loop itself: `AgentLoop.advance()` receives the identity in its
+ * input.
+ */
+export interface AgentTurnIdentityResolverPort {
+  (run: Pick<AgentRun, "id" | "sessionId" | "goal">): AgentExecutionIdentity;
+}
+
 export interface AgentLoopDependencies {
   readonly inspector: AgentProjectInspectorPort;
   readonly planner: AgentRelevantFilePlannerPort;
@@ -78,11 +92,22 @@ export interface AgentLoopDependencies {
   /**
    * The model execution authority.
    *
-   * The loop never sees a gateway, a provider registry or a model provider: it hands
-   * one `AIModelRequest` to the executor and receives one `AIModelTurnResult`.
+   * The loop never sees a gateway, a provider registry or a model provider: it hands one
+   * `AIModelRequest` to the executor and receives one `AIModelTurnResult`.
+   *
+   * Phase 3A aligned the agent executor with the frozen union result, so this seam is the
+   * transitional throwing facade over it. It becomes the frozen port itself when the Core
+   * loop is replaced in Phase 3B.
    */
-  readonly modelTurns: ModelTurnExecutor;
+  readonly modelTurns: LegacyModelTurnExecutor;
   readonly clock: AgentClock;
   readonly stepIdFactory: AgentStepIdFactory;
+  /**
+   * Publishes the identity a model turn executes for, before the turn is dispatched.
+   *
+   * Optional so a test can drive the loop without Run identity plumbing, and it must be
+   * supplied in production because the frozen boundary port commits against it.
+   */
+  readonly resolveTurnIdentity?: AgentTurnIdentityResolverPort;
   readonly lifecycle?: AgentLoopLifecycleHooks;
 }

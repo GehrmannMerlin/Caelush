@@ -71,8 +71,11 @@ describe("Core Phase 6B architecture", () => {
       ),
     );
     const declaration = declarations.join("\n");
-    // The frozen message contracts are still owned by the legacy package.
-    expect(declaration).toContain("@caelush/llm/messages");
+    // Phase 3A moved the decision contract into the Agent kernel, so these three
+    // declarations re-export from `@caelush/agent` rather than re-declaring anything. The
+    // legacy message contract stays owned by the legacy package and is still reachable
+    // through Core's durable projections.
+    expect(declaration).toContain("@caelush/agent");
     // Model execution metadata is re-exported from the AI core, not re-declared.
     expect(declaration).toContain("@caelush/ai");
     expect(declaration).not.toMatch(

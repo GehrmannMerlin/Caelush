@@ -1,39 +1,36 @@
-import type { LLMAssistantMessage } from "@caelush/llm/messages";
-import type { AIFinishReason, ModelUsage } from "@caelush/ai";
-import type { JsonObject, LLMCallId, ModelRef, ToolName } from "@caelush/protocol";
+/**
+ * The legacy Core decision facade.
+ *
+ * Phase 3A moved every agent decision contract into `@caelush/agent`, where it is written
+ * in `@caelush/ai` and `@caelush/protocol` types. This module is a compatibility re-export
+ * so existing Core call sites keep their import path while the migration continues. It
+ * declares nothing of its own except the Run Layer outcome below, which is not an agent
+ * decision at all.
+ *
+ * The general Agent Kernel deliberately owns no shape for structural step exhaustion: the
+ * `maxSteps` gate is a Run Layer gate, and the agent loop must not know what `maxSteps` is.
+ */
+export type {
+  AgentDecision,
+  AgentFinalCandidateDecision,
+  AgentModelTurn,
+  AgentToolCallsDecision,
+  AgentToolRequest,
+} from "@caelush/agent";
 
-export interface AgentModelTurn {
-  readonly callId: LLMCallId;
-  readonly model: ModelRef;
-  readonly finishReason: AIFinishReason;
-  readonly assistantMessage: LLMAssistantMessage;
-  readonly usage?: ModelUsage | undefined;
-}
-
-export interface AgentToolRequest {
-  readonly externalCallId: string;
-  readonly toolName: ToolName;
-  readonly args: JsonObject;
-}
-
-export interface AgentToolCallsDecision {
-  readonly type: "TOOL_CALLS_REQUESTED";
-  readonly modelTurn: AgentModelTurn;
-  readonly toolRequests: readonly AgentToolRequest[];
-}
-
-export interface AgentFinalCandidateDecision {
-  readonly type: "FINAL_CANDIDATE";
-  readonly modelTurn: AgentModelTurn;
-  readonly candidateText: string;
-}
-
-export type AgentDecision = AgentToolCallsDecision | AgentFinalCandidateDecision;
-
+/** A Run that stopped because the structural step budget ran out. */
 export interface AgentMaxStepsReachedOutcome {
   readonly type: "MAX_STEPS_REACHED";
   readonly stepsCompleted: number;
   readonly maxSteps: number;
 }
 
-export type AgentLoopOutcome = AgentDecision | AgentMaxStepsReachedOutcome;
+/**
+ * What one AgentLoop call produced, in the Run Layer's vocabulary.
+ *
+ * `MAX_STEPS_REACHED` is a Run Layer outcome rather than a model decision: the model did
+ * not decide to stop, the loop gate did.
+ */
+export type AgentLoopOutcome =
+  | import("@caelush/agent").AgentDecision
+  | AgentMaxStepsReachedOutcome;

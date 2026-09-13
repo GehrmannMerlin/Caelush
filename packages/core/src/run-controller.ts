@@ -2186,6 +2186,9 @@ export class RunController {
             modelTurns: this.dependencies.verificationModelTurns,
             budget: this.dependencies.budget,
             clock: this.dependencies.clock,
+            ...(this.dependencies.verificationTurnIdentity === undefined
+              ? {}
+              : { resolveTurnIdentity: this.dependencies.verificationTurnIdentity }),
             ...(this.dependencies.tokenEstimator === undefined
               ? {}
               : { tokenEstimator: this.dependencies.tokenEstimator }),

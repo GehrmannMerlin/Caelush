@@ -23,6 +23,7 @@ import type { AgentLoopDependencies } from "../src/agent-loop-ports.js";
 import {
   aiError,
   fakeModelTurnExecutor,
+  legacyModelTurns,
   testModelCatalog,
 } from "./support/fake-model-turn-executor.js";
 import {
@@ -119,7 +120,7 @@ describe("Agent model authority", () => {
       });
 
       const result = await new AgentLoop(
-        dependencies(createModelTurnExecutor({ gateway: ai.gateway })),
+        dependencies(legacyModelTurns(createModelTurnExecutor({ gateway: ai.gateway }))),
       ).run(makeInput(root, { baseUrl: ATTACKER_ENDPOINT }));
 
       expect(result.status).toBe("OUTCOME");
@@ -146,7 +147,7 @@ describe("Agent model authority", () => {
       });
 
       let compactions = 0;
-      const real = createModelTurnExecutor({ gateway: ai.gateway });
+      const real = legacyModelTurns(createModelTurnExecutor({ gateway: ai.gateway }));
       const base = dependencies(real);
       const loopDependencies: AgentLoopDependencies = {
         ...base,
@@ -194,7 +195,7 @@ describe("Agent model authority", () => {
       });
 
       let attempt = 0;
-      const real = createModelTurnExecutor({ gateway: ai.gateway });
+      const real = legacyModelTurns(createModelTurnExecutor({ gateway: ai.gateway }));
       const modelTurns = fakeModelTurnExecutor(async (request, signal) => {
         attempt += 1;
         if (attempt === 1) throw aiError("AI_CONTEXT_OVERFLOW");
@@ -243,7 +244,7 @@ describe("Agent model authority", () => {
       });
 
       const pending = new AgentLoop(
-        dependencies(createModelTurnExecutor({ gateway: ai.gateway })),
+        dependencies(legacyModelTurns(createModelTurnExecutor({ gateway: ai.gateway }))),
       ).run({ ...makeInput(root), signal: controller.signal });
       // Abort only once the adapter is actually on the wire, so this proves the signal
       // is propagated mid-flight rather than short-circuiting preflight.
@@ -272,7 +273,7 @@ describe("Agent model authority", () => {
       });
 
       const result = await new AgentLoop(
-        dependencies(createModelTurnExecutor({ gateway: ai.gateway })),
+        dependencies(legacyModelTurns(createModelTurnExecutor({ gateway: ai.gateway }))),
       ).run(makeInput(root));
 
       expect(result.status).toBe("FAILED");

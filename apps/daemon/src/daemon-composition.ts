@@ -4,7 +4,9 @@ import {
   RunDeadlineRegistry,
   RunExecutionScopeRegistry,
   RunRetryRegistry,
+  createLegacyModelTurnExecutor,
   createProjectProfileProvider,
+  type LegacyModelTurnExecutor,
   type RunExecutionConfigResolver,
 } from "@caelush/core";
 import { EventBus } from "@caelush/events";
@@ -33,6 +35,7 @@ import {
   type ModelWireDiagnosticEvent,
 } from "./providers/model-wire-diagnostic.js";
 import { createModelTurnExecutor } from "@caelush/agent";
+import type { AgentExecutionIdentity } from "@caelush/agent";
 import type {
   AISubsystem,
   AIGateway,
@@ -51,6 +54,7 @@ import {
   createVerificationCheckId,
   createVerificationEvidenceId,
   createVerificationPlanId,
+  type AgentRun,
   type ClientModelSelection,
   type DaemonInfo,
   type DefaultRunConfiguration,
@@ -148,6 +152,16 @@ export interface DaemonClock {
   now(): TimestampMs;
 }
 
+/**
+ * The Run identity a model turn executes for.
+ *
+ * Phase 3A made identity an explicit input of the frozen `ModelTurnExecutor`, because the
+ * durable model turn boundary commits against a Run and a Session. The daemon owns the
+ * current Run context and publishes it here, so a legacy turn always carries a real Run
+ * rather than a synthesized one.
+ */
+export type DaemonTurnIdentity = AgentExecutionIdentity;
+
 export interface DaemonCompositionOptions {
   readonly storage: CaelushStorage;
   readonly eventBus: EventBus;
@@ -177,7 +191,16 @@ export interface DaemonComposition {
   readonly runtimeResolver: ReturnType<typeof createLocalRuntimeResolver>;
   /** The V2 AI subsystem: the single model invocation authority. */
   readonly ai: AISubsystem;
-  readonly modelTurns: ReturnType<typeof createModelTurnExecutor>;
+  /** The frozen V2 model turn executor. One gateway invocation per `execute()`. */
+  readonly modelTurnExecutor: ReturnType<typeof createModelTurnExecutor>;
+  /**
+   * The legacy throw-based facade over `modelTurnExecutor`.
+   *
+   * Existing Core consumers — the resumable `AgentLoop` and the verification
+   * `TaskAcceptanceReviewer` — were written against the previous throw-based semantics. The
+   * facade is host-only and disappears when the agent loop migration completes.
+   */
+  readonly modelTurns: LegacyModelTurnExecutor;
   readonly toolRegistry: ReturnType<ToolRegistryBuilder["build"]>;
   readonly toolCoordinator: ToolBatchCoordinator;
   readonly contextRuntime: ContextRuntimeCoordinator;
@@ -188,6 +211,17 @@ export interface DaemonComposition {
   };
   readonly controller: RunController;
   readonly supervisor: RunExecutionSupervisor;
+  /**
+   * Publish the Run identity the next model turn executes for.
+   *
+   * The frozen model turn executor requires an explicit identity, because the durable model
+   * turn boundary commits against a Run and a Session. The daemon owns the Run context and
+   * publishes it here; a caller that drives a model turn directly — a diagnostic, a test —
+   * must publish the identity first.
+   */
+  readonly resolveTurnIdentity: (
+    run: Pick<AgentRun, "id" | "sessionId" | "goal">,
+  ) => DaemonTurnIdentity;
   readonly approvals: Pick<CaelushStorage["approvals"], "listPendingByRun">;
   readonly modelCanonicalizer: DaemonModelCanonicalizer;
   readonly info: DaemonInfo;
@@ -212,7 +246,35 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
       ? createSafeModelWireDiagnostic()
       : createModelWireDiagnostic({ writer: options.wireDiagnosticWriter });
   const gateway = createDiagnosedGateway(ai.gateway, wireDiagnostic);
-  const modelTurns = createModelTurnExecutor({ gateway });
+  const modelTurnExecutor = createModelTurnExecutor({ gateway });
+  // The Run identity a legacy model turn executes for. The Core RunController sets it
+  // before it drives the loop and before it reviews a candidate, so the frozen boundary
+  // port always commits against a real Run. This is a host-only compatibility seam: the
+  // agent package keeps no throwing public interface, and the Core loop is replaced by the
+  // frozen `AgentLoop.advance()` in the next phase.
+  const activeTurn: { identity: DaemonTurnIdentity | undefined } = { identity: undefined };
+  const modelTurns = createLegacyModelTurnExecutor({
+    executor: modelTurnExecutor,
+    identity: () => {
+      const identity = activeTurn.identity;
+      if (identity === undefined) {
+        throw new Error("No active Run identity for the legacy model turn executor.");
+      }
+      return identity;
+    },
+    createStepId,
+  });
+  const resolveTurnIdentity = (
+    run: Pick<AgentRun, "id" | "sessionId" | "goal">,
+  ): DaemonTurnIdentity => {
+    const identity: DaemonTurnIdentity = {
+      runId: run.id,
+      sessionId: run.sessionId,
+      goal: run.goal,
+    };
+    activeTurn.identity = identity;
+    return identity;
+  };
 
   const inspector = createLocalProjectInspector();
   const memoryRetriever = new MemoryRetriever(options.storage.memory);
@@ -264,6 +326,7 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     modelTurns,
     clock,
     stepIdFactory: { create: createStepId },
+    resolveTurnIdentity,
   });
   const builtToolRegistry = new ToolRegistryBuilder();
   for (const registration of createDefaultBuiltinToolRegistrations(runtimeResolver)) {
@@ -344,6 +407,13 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     verificationEvidenceIdFactory: createVerificationEvidenceId,
     verificationResolverRegistry: new ProjectCheckResolverRegistry(),
     verificationModelTurns: modelTurns,
+    verificationTurnIdentity: () => {
+      const identity = activeTurn.identity;
+      if (identity === undefined) {
+        throw new Error("No active Run identity for the verification model turn.");
+      }
+      return identity;
+    },
     verificationRepairPolicy: createVerificationRepairPolicy(),
     verificationPlanCount: (runId) =>
       options.storage.verificationExecution.countPlans?.(runId) ?? Promise.resolve(0),
@@ -389,6 +459,7 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     runtime,
     runtimeResolver,
     ai,
+    modelTurnExecutor,
     modelTurns,
     toolRegistry: activeToolRegistry,
     toolCoordinator,
@@ -404,6 +475,7 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     },
     controller,
     supervisor,
+    resolveTurnIdentity,
     approvals: options.storage.approvals,
     modelCanonicalizer,
     info,

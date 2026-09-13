@@ -11,7 +11,7 @@ import {
   createWorkspaceId,
 } from "@caelush/protocol";
 import type { VerificationPlanDraft } from "@caelush/protocol";
-import { AgentLoop, RunController } from "@caelush/core";
+import { AgentLoop, RunController, createLegacyModelTurnExecutor } from "@caelush/core";
 import { createModelTurnExecutor } from "@caelush/agent";
 import { createAISubsystem } from "@caelush/ai";
 import type { AIProviderBinding, ApiAdapter, ModelDescriptorSourcePort } from "@caelush/ai";
@@ -258,7 +258,18 @@ describe("real provider Tool Call round trip", () => {
         }),
       },
       models: ai.models,
-      modelTurns: createModelTurnExecutor({ gateway: ai.gateway }),
+      // The frozen model turn executor requires an explicit Run identity and turn
+      // reference, so the loop drives it through the transitional legacy facade — the same
+      // composition the production daemon uses.
+      modelTurns: createLegacyModelTurnExecutor({
+        executor: createModelTurnExecutor({ gateway: ai.gateway }),
+        identity: () => ({
+          runId: run.id,
+          sessionId: run.sessionId,
+          goal: run.goal,
+        }),
+        createStepId,
+      }),
       clock: { now: () => createTimestampMs(Date.now()) },
       stepIdFactory: { create: () => createStepId() },
     });

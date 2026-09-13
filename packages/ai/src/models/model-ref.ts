@@ -16,8 +16,13 @@ export interface ModelRef {
    * MUST NOT participate in identity, routing or endpoint authority. The
    * provider connection owns the endpoint; two refs that differ only by
    * `baseUrl` are the same model.
+   *
+   * The `| undefined` is deliberate and mirrors the Protocol wire type exactly. The agent
+   * kernel carries one model reference between the AI contract, the Protocol contract and
+   * durable storage, and a one-optional-member shape difference would make those three
+   * nominally incompatible for no semantic reason.
    */
-  readonly baseUrl?: string;
+  readonly baseUrl?: string | undefined;
 }
 
 /**

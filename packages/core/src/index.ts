@@ -107,6 +107,18 @@ export type {
   AgentProviderTurnState,
 } from "./agent-loop-ports.js";
 export { AgentLoop } from "./agent-loop.js";
+/**
+ * The transitional throwing facade over the frozen `ModelTurnExecutor`.
+ *
+ * Exported because a host composition root — the daemon is the current one — must build the
+ * legacy throwing port the still-legacy Core loop consumes. It is deleted when the Core
+ * loop is replaced in the next phase.
+ */
+export { createLegacyModelTurnExecutor } from "./legacy-model-turn-executor.js";
+export type {
+  LegacyModelTurnExecutor,
+  LegacyModelTurnExecutorDependencies,
+} from "./legacy-model-turn-executor.js";
 export {
   fingerprintToolBatch,
   fingerprintToolRequest,

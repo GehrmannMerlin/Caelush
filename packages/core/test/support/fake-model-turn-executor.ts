@@ -10,15 +10,28 @@ import type {
   ModelUsage,
 } from "@caelush/ai";
 import type { ModelDescriptorSourcePort } from "@caelush/ai";
-import type { ModelTurnExecutor, ModelTurnExecutionInput } from "@caelush/agent";
+import { createAIError } from "@caelush/ai";
+import type { AgentExecutionIdentity, ModelTurnExecutor } from "@caelush/agent";
+import { createLegacyModelTurnExecutor } from "@caelush/core";
+import type { LegacyModelTurnExecutor } from "@caelush/core";
+import type { RunId, SessionId, StepId } from "@caelush/protocol";
+
+/** The legacy throwing port Core's AgentLoop consumes. */
+type ModelTurnExecutionInput = Parameters<LegacyModelTurnExecutor["execute"]>[0];
 
 /**
  * Core test support for the post-2C model seams.
  *
- * It fakes only `ModelTurnExecutor` and `ModelCatalog` — the contracts Core now
- * depends on. It deliberately does not fake a provider, an SDK, a gateway or an
- * adapter: a test that needs those is an integration test and must use the real
- * implementation over a controlled transport.
+ * It fakes only the model turn port and `ModelCatalog` — the contracts Core now depends on.
+ * It deliberately does not fake a provider, an SDK, a gateway or an adapter: a test that
+ * needs those is an integration test and must use the real implementation over a controlled
+ * transport.
+ *
+ * Phase 3A aligned the agent executor with the frozen union result and put the legacy
+ * throwing facade at the Core boundary, so this fake reproduces the facade's *observable*
+ * behaviour: a script throws an AI failure, and the loop sees a thrown AI failure. That is
+ * what keeps the existing failure-mapping assertions meaningful rather than merely
+ * compiling.
  */
 
 /** The subset of a turn result a test usually cares about. */
@@ -55,20 +68,13 @@ export function modelTurnResult(partial: PartialTurnResult = {}): AIModelTurnRes
   };
 }
 
-/** Build an AI failure with the frozen shape. It is a real `Error`, like the production one. */
+/** Build an AI failure with the frozen shape. This is the real `AIError`. */
 export function aiError(code: AIErrorCode, extra: Partial<AIError> = {}): AIError {
-  const retryable = code === "AI_RATE_LIMIT" || code === "AI_NETWORK" || code === "AI_TIMEOUT";
-  const error = new Error(extra.message ?? `test ${code}`) as AIError & {
-    code: AIErrorCode;
-    retryable: boolean;
-    retryAfterMs?: number;
-  };
-  error.name = "AIError";
-  error.code = code;
-  error.retryable = retryable;
-  if (extra.retryAfterMs !== undefined) error.retryAfterMs = extra.retryAfterMs;
-  return error;
+  return createAIError(code, extra.message ?? `test ${code}`, {
+    ...(extra.retryAfterMs === undefined ? {} : { retryAfterMs: extra.retryAfterMs }),
+  });
 }
+
 /** The executor's script: what one call returns, or throws. */
 export type ModelTurnScript = (
   request: AIModelRequest,
@@ -76,17 +82,18 @@ export type ModelTurnScript = (
   callIndex: number,
 ) => Promise<PartialTurnResult> | PartialTurnResult;
 
-export interface FakeModelTurnExecutor extends ModelTurnExecutor {
+export interface FakeModelTurnExecutor extends LegacyModelTurnExecutor {
   readonly requests: readonly AIModelRequest[];
   readonly signals: readonly AbortSignal[];
   callCount(): number;
 }
 
 /**
- * A scripted `ModelTurnExecutor`.
+ * A scripted legacy model turn executor.
  *
- * It records every request and signal, so a test can assert what the AgentLoop
- * actually built and prove that no hidden retry happened.
+ * It records every request and signal, so a test can assert what the AgentLoop actually
+ * built and prove that no hidden retry happened. A throwing script is reported the way the
+ * production facade reports a failed frozen execution: the AI code survives the round trip.
  */
 export function fakeModelTurnExecutor(script: ModelTurnScript): FakeModelTurnExecutor {
   const requests: AIModelRequest[] = [];
@@ -100,36 +107,50 @@ export function fakeModelTurnExecutor(script: ModelTurnScript): FakeModelTurnExe
       const callIndex = requests.length;
       requests.push(input.request);
       signals.push(input.signal);
-      return modelTurnResult(await script(input.request, input.signal, callIndex));
+      try {
+        return modelTurnResult(await script(input.request, input.signal, callIndex));
+      } catch (error) {
+        throw toLegacyError(error);
+      }
     },
   };
 }
 
-/** An executor that always returns the same turn. */
-export function fixedModelTurnExecutor(partial: PartialTurnResult = {}): FakeModelTurnExecutor {
-  return fakeModelTurnExecutor(() => partial);
+/** Turn any thrown value into the mapped AI failure the facade would throw. */
+function toLegacyError(error: unknown): AIError {
+  if (error instanceof Error && typeof (error as AIError).code === "string") {
+    return error as AIError;
+  }
+  return createAIError("AI_PROVIDER_ERROR", "The model turn failed.", { cause: error });
 }
 
-/** An executor that always throws the same AI failure. */
-export function failingModelTurnExecutor(error: AIError): FakeModelTurnExecutor {
-  return fakeModelTurnExecutor(() => {
-    throw error;
+/**
+ * A Run identity for a test that does not care which Run it is.
+ *
+ * The frozen model turn executor requires an identity because the durable model turn
+ * boundary commits against a Run and a Session.
+ */
+export function testTurnIdentity(): AgentExecutionIdentity {
+  return {
+    runId: "run_0195f3a0-0000-7000-8000-000000000000" as RunId,
+    sessionId: "ses_0195f3a0-0000-7000-8000-000000000000" as SessionId,
+    goal: "test run",
+  };
+}
+
+/**
+ * Drive the real frozen executor through the transitional legacy facade.
+ *
+ * The production daemon does exactly this, so an end-to-end test that wires the real
+ * gateway into the Core loop must adapt the same way rather than reaching for a second
+ * executor implementation.
+ */
+export function legacyModelTurns(executor: ModelTurnExecutor): LegacyModelTurnExecutor {
+  return createLegacyModelTurnExecutor({
+    executor,
+    identity: testTurnIdentity,
+    createStepId: () => "stp_0195f3a0-0000-7000-8000-000000000000" as StepId,
   });
-}
-
-/** An executor that replays a sequence, then repeats the last entry. */
-export function sequencedModelTurnExecutor(
-  sequence: readonly (PartialTurnResult | AIError)[],
-): FakeModelTurnExecutor {
-  return fakeModelTurnExecutor((_request, _signal, callIndex) => {
-    const step = sequence[Math.min(callIndex, sequence.length - 1)]!;
-    if (isAIError(step)) throw step;
-    return step;
-  });
-}
-
-function isAIError(value: PartialTurnResult | AIError): value is AIError {
-  return typeof (value as AIError).code === "string";
 }
 
 /**

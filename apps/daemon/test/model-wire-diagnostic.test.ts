@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { EventBus } from "@caelush/events";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import type { AIAdapterEvent, ApiAdapter, ApiAdapterStreamInput } from "@caelush/ai";
+import { createRunId, createSessionId } from "@caelush/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { composeDaemon, type DaemonComposition } from "../src/daemon-composition.js";
 import type { ModelWireDiagnosticEvent } from "../src/providers/model-wire-diagnostic.js";
@@ -82,6 +83,15 @@ describe("daemon model wire diagnostic", () => {
       wireDiagnosticWriter: (event) => recorded.push(event),
     });
 
+    // The frozen model turn executor carries an explicit Run identity, because the durable
+    // model turn boundary commits against a Run and a Session. The daemon publishes it for
+    // the Run it is about to drive.
+    composition.resolveTurnIdentity({
+      id: createRunId(),
+      sessionId: createSessionId(),
+      goal: "diagnose the model wire",
+    });
+
     await composition.modelTurns.execute({
       request: {
         model: { provider: "fixture", model: "fixture-model" },
@@ -147,6 +157,12 @@ describe("daemon model wire diagnostic", () => {
         modelSources: [fixtureModelSource()],
         providerBindings: [fixtureBinding()],
         adapterOverrides: [new RecordingAdapter()],
+      });
+
+      composition.resolveTurnIdentity({
+        id: createRunId(),
+        sessionId: createSessionId(),
+        goal: "diagnose the model wire",
       });
 
       await composition.modelTurns.execute({

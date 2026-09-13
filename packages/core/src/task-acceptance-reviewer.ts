@@ -1,5 +1,5 @@
 import type { AIModelRequest, AIModelTurnResult, ModelUsage } from "@caelush/ai";
-import type { ModelTurnExecutor } from "@caelush/agent";
+import type { LegacyModelTurnExecutor } from "./legacy-model-turn-executor.js";
 import {
   buildTaskReviewPrompt,
   parseTaskAcceptanceReview,
@@ -13,9 +13,11 @@ import type { VerificationTaskReviewerPort } from "./run-controller-ports.js";
 import { toAIModelRef } from "./ai-invocation-projection.js";
 
 export interface TaskAcceptanceReviewerDependencies {
-  readonly modelTurns: ModelTurnExecutor;
+  readonly modelTurns: LegacyModelTurnExecutor;
   readonly budget: RunBudgetPort;
   readonly clock: { now(): import("@caelush/protocol").TimestampMs };
+  /** Publishes the Run identity this review's model turn executes for. */
+  readonly resolveTurnIdentity?: () => import("@caelush/agent").AgentExecutionIdentity;
   /** Core-side request estimator: the durable budget port receives plain numbers. */
   readonly tokenEstimator?: import("./llm-token-estimator.js").LLMTokenEstimator;
 }
@@ -37,6 +39,10 @@ export class TaskAcceptanceReviewer implements VerificationTaskReviewerPort {
     readonly budget?: AgentBudgetBlock;
     readonly errorCode?: string;
   }> {
+    // The frozen model turn executor needs the Run identity its durable boundary commits
+    // against. A review is a host action rather than an AgentStep, so it borrows the
+    // identity of the Run it is reviewing.
+    this.dependencies.resolveTurnIdentity?.();
     const request: AIModelRequest = {
       model: toAIModelRef(input.run.model),
       messages: [

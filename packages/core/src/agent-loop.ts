@@ -44,7 +44,7 @@ import { mapAgentLoopError, mapAgentRetryMetadata } from "./agent-error-mapper.j
 import { prepareResumeHistory, validateAgentLoopInput } from "./agent-loop-history.js";
 import type { AgentLoopDependencies, AgentLoopLifecycleHooks } from "./agent-loop-ports.js";
 import { buildAgentAIModelRequest } from "./agent-loop-request.js";
-import { toAIModelRef } from "./ai-invocation-projection.js";
+import { toAIModelRef, toLegacyMessage } from "./ai-invocation-projection.js";
 
 export class AgentLoop {
   constructor(private readonly dependencies: AgentLoopDependencies) {}
@@ -267,6 +267,9 @@ export class AgentLoop {
     if (input.signal.aborted) {
       return this.cancelledAfterStep(input, activeState, step, prepared.context, false);
     }
+    // Publish the Run identity the frozen model turn boundary will commit against. It is
+    // set before any provider work so a boundary implementation always has it.
+    this.dependencies.resolveTurnIdentity?.(input.run);
     let request = prepared.request;
     try {
       const admitted = await this.dependencies.lifecycle?.beforeProviderAdmission?.({
@@ -381,7 +384,7 @@ export class AgentLoop {
           verifyingState,
           completedStep,
           prepared.context,
-          [...appendPrefix, decision.modelTurn.assistantMessage],
+          [...appendPrefix, toLegacyMessage(decision.modelTurn.assistantMessage)],
           "COMPLETED",
         );
       }
@@ -390,7 +393,7 @@ export class AgentLoop {
         settledState,
         completedStep,
         prepared.context,
-        [...appendPrefix, decision.modelTurn.assistantMessage],
+        [...appendPrefix, toLegacyMessage(decision.modelTurn.assistantMessage)],
         "COMPLETED",
       );
     } catch (error) {

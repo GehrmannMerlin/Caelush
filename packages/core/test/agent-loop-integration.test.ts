@@ -21,6 +21,7 @@ import { createInitialAgentState, startAgentState } from "../src/agent-state.js"
 import { AgentLoop } from "../src/agent-loop.js";
 import type { AgentLoopCommonInput } from "../src/agent-loop-input.js";
 import type { AgentLoopDependencies } from "../src/agent-loop-ports.js";
+import { legacyModelTurns } from "./support/fake-model-turn-executor.js";
 import {
   FIXTURE_MODEL,
   FIXTURE_PROVIDER,
@@ -54,7 +55,7 @@ function dependencies(script: Parameters<typeof createTestAiSubsystem>[0]["scrip
       planner: createLocalRelevantFilePlanner(),
       contextBuilder: new ContextBuilder(),
       models: ai.models,
-      modelTurns: createModelTurnExecutor({ gateway: ai.gateway }),
+      modelTurns: legacyModelTurns(createModelTurnExecutor({ gateway: ai.gateway })),
       clock: { now: () => createTimestampMs(10) },
       stepIdFactory: { create: () => createStepId() },
     },

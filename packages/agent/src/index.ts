@@ -10,17 +10,111 @@
  *
  * This package must never know about a Coding Agent, concrete Runtime operations,
  * SQLite, the Daemon, a Client, Git, `read_file`, `exec_command`, `apply_patch`,
- * Node/Java project scanning, or the local filesystem. Those boundaries are
- * enforced by `pnpm check:architecture`.
+ * Node/Java project scanning, or the local filesystem. Those boundaries are enforced by
+ * `pnpm check:architecture`.
  *
- * Phase 2C activates the first real implementation: the model turn executor. The
- * rest of the agent kernel migrates in later phases, and no guessed public API is
- * declared ahead of its implementation.
+ * The only workspace packages this kernel may depend on are `@caelush/ai` and
+ * `@caelush/protocol`; it has no legacy edge in either direction. The public surface is
+ * root-only: no cross-package re-export and no wildcard, so a consumer imports from
+ * `@caelush/agent` and never from a deep path.
+ *
+ * Phase 3A freezes the V2 kernel contracts: execution identity, turn reference, turn
+ * input, decision, `AgentLoop.advance()`, the model request builder, the model admission
+ * and durable model turn boundary ports, the transient agent stream, and the frozen
+ * `ModelTurnExecutor` union result. Later phases implement them.
  */
-export { createModelTurnExecutor } from "./model-turn-executor.js";
+
+/* The agent loop contract. */
+export type { AgentLoop } from "./loop/agent-loop.js";
+
+/* Kernel types: identity, turn reference, turn input, prepared context, decisions. */
+export { assertAgentTurnRef, createAgentTurnRef } from "./loop/types.js";
 export type {
+  AgentContinuationReason,
+  AgentDecision,
+  AgentExecutionIdentity,
+  AgentFinalCandidateDecision,
+  AgentLoopAdvanceCancelled,
+  AgentLoopAdvanceCompleted,
+  AgentLoopAdvanceFailed,
+  AgentLoopAdvanceInput,
+  AgentLoopAdvanceResult,
+  AgentModelTurn,
+  AgentToolCallsDecision,
+  AgentToolRequest,
+  AgentToolResultMessage,
+  AgentTurnInput,
+  AgentTurnRef,
+  AIUserInputMessage,
+  ContextCheckpointRef,
+  ContextItem,
+  ContextItemPriorityClass,
+  ObservationPolicySnapshot,
+  PreparedModelContext,
+} from "./loop/types.js";
+
+/* Decision classification. */
+export {
+  classifyAgentDecision,
+  createAgentDecisionClassifier,
+} from "./loop/decision/decision-classifier.js";
+export type { AgentDecisionClassifier } from "./loop/decision/decision-classifier.js";
+export { AGENT_DECISION_TYPES } from "./loop/decision/decision.js";
+export { AgentModelOutputError } from "./loop/decision/decision-error.js";
+export type {
+  AgentModelOutputErrorReason,
+  AgentModelOutputMetadata,
+} from "./loop/decision/decision-error.js";
+
+/* Model request building. */
+export { createModelRequestBuilder } from "./loop/turn/model-request-builder.js";
+export type {
+  ModelRequestBuilder,
+  ModelRequestBuilderInput,
+} from "./loop/turn/model-request-builder.js";
+
+/* The frozen model turn executor. */
+export { createModelTurnExecutor } from "./loop/turn/model-turn-executor.js";
+export type {
+  ModelTurnExecutionCancelled,
+  ModelTurnExecutionCompleted,
+  ModelTurnExecutionFailed,
   ModelTurnExecutionInput,
+  ModelTurnExecutionResult,
   ModelTurnExecutor,
   ModelTurnExecutorDependencies,
+} from "./loop/turn/model-turn-executor.js";
+
+/* The turn failure contract. */
+export {
+  isRetryableModelTurnErrorCode,
+  MODEL_TURN_EXECUTION_ERROR_CODES,
+  RETRYABLE_MODEL_TURN_ERROR_CODES,
+} from "./loop/turn/model-turn-error.js";
+export type {
+  ModelTurnExecutionError,
+  ModelTurnExecutionErrorCode,
+} from "./loop/turn/model-turn-error.js";
+
+/* The ports the Run Layer and the host implement. */
+export { ALLOWED_MODEL_ADMISSION } from "./loop/ports/model-request-admission.js";
+export type {
+  AgentBudgetBlock,
+  AgentModelAdmissionDecision,
+  ModelRequestAdmissionInput,
+  ModelRequestAdmissionPort,
+} from "./loop/ports/model-request-admission.js";
+export type {
+  ModelTurnBoundaryInput,
+  ModelTurnBoundaryPort,
+} from "./loop/ports/model-turn-boundary.js";
+
+/* The transient agent stream. */
+export { AGENT_TRANSIENT_STREAM_EVENT_TYPES } from "./loop/events/transient-stream-event.js";
+export type {
+  AgentTransientStreamEvent,
+  AgentTransientTextDelta,
+  AgentTransientThinkingDelta,
+  AgentTransientToolCallDelta,
   ModelTurnStreamSink,
-} from "./model-turn-executor.js";
+} from "./loop/events/transient-stream-event.js";
