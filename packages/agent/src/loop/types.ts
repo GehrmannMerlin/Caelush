@@ -3,6 +3,7 @@ import type { RunId, SessionId, StepId } from "@caelush/protocol";
 
 import type { AgentDecision, AgentToolCallsDecision } from "./decision/decision.js";
 import type { ModelTurnStreamSink } from "./events/transient-stream-event.js";
+import type { AgentBudgetBlock } from "./ports/model-request-admission.js";
 import type { ModelTurnExecutionError } from "./turn/model-turn-error.js";
 
 /**
@@ -176,6 +177,16 @@ export interface PreparedModelContext {
   readonly checkpoint?: ContextCheckpointRef;
   /** A stable digest of the prepared context, for recovery comparisons. */
   readonly contextFingerprint?: string;
+  /**
+   * Whether a `FORCED_RECOVERY` preparation actually made the context fit.
+   *
+   * The loop may only spend a second provider attempt on a context that will really differ:
+   * if the engine cannot compact, resending the same rejected context would spend an identical
+   * provider call for an identical rejection. An engine sets this to `true` when it produced a
+   * smaller context; anything else — `false` or absent — means the loop must fail closed as
+   * context exhaustion without a second attempt.
+   */
+  readonly recovered?: boolean;
 }
 
 /** A durable context checkpoint reference. Opaque to the loop. */
@@ -245,14 +256,57 @@ export interface AgentLoopAdvanceCompleted {
    * messages only; the durable legacy projection belongs to the Core boundary.
    */
   readonly messagesToAppend: readonly AIMessage[];
+  /** The prepared context's opaque diagnostics, carried through untouched. */
+  readonly contextReport?: Readonly<Record<string, unknown>>;
 }
+
+/**
+ * Which stage of one Reason failed.
+ *
+ * This exists so the Run Layer can settle the right Step lifecycle without re-deriving where
+ * the failure happened from the error code. `CONTEXT` and `ADMISSION` failed *before* the
+ * durable boundary, so no Step was ever attempted; `BOUNDARY` failed at the durable commit, so
+ * the provider was never contacted; `MODEL` failed after the boundary, so a Step really was
+ * attempted and must be settled.
+ */
+export type AgentLoopFailureStage = "CONTEXT" | "ADMISSION" | "BOUNDARY" | "MODEL";
+
+/**
+ * How far the provider turn got.
+ *
+ * A settled provider turn that the classifier then refuses is *not* a failed provider attempt:
+ * the provider answered, the answer was unusable. The Run Layer records that distinction
+ * durably, so the loop reports it rather than letting a host infer it from an error code.
+ */
+export type AgentProviderTurnState = "NOT_STARTED" | "COMPLETED" | "FAILED";
 
 /** The loop could not complete the turn. */
 export interface AgentLoopAdvanceFailed {
   readonly status: "FAILED";
+  readonly stage: AgentLoopFailureStage;
   readonly error: ModelTurnExecutionError;
+  /** How far the provider turn got, when the failure reached it at all. */
+  readonly providerTurnState?: AgentProviderTurnState;
+  /** The prepared context's opaque diagnostics, when preparation got that far. */
+  readonly contextReport?: Readonly<Record<string, unknown>>;
   /** The messages the caller may still append, if the turn got far enough to produce any. */
   readonly messagesToAppend: readonly AIMessage[];
+  /**
+   * The settled usage, when the turn got far enough to report one.
+   *
+   * A model turn that settled and *then* failed classification still spent its tokens, and the
+   * Run Layer counts settled attempts. The loop therefore reports the usage it received even
+   * though it produced no decision, so the accounting is not silently lost.
+   */
+  readonly usage?: import("@caelush/ai").ModelUsage | undefined;
+  /**
+   * A durable budget refusal, when the failure came from admission.
+   *
+   * This is a *value*, not an exception: a Run that has spent its budget is a Run behaving
+   * correctly. The general kernel states the refusal in its own frozen vocabulary so the Run
+   * Layer can settle `BUDGET_EXCEEDED` without the kernel importing a Run Layer error type.
+   */
+  readonly budgetBlock?: AgentBudgetBlock;
 }
 
 /** The turn was cancelled. Cancellation is not a failure. */

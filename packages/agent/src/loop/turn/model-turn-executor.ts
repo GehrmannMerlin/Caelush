@@ -6,7 +6,10 @@ import type { AgentTransientStreamEvent } from "../events/transient-stream-event
 import type { ModelTurnStreamSink } from "../events/transient-stream-event.js";
 import type { AgentExecutionIdentity, AgentTurnRef } from "../types.js";
 import type { ModelTurnExecutionError, ModelTurnExecutionErrorCode } from "./model-turn-error.js";
-import { isRetryableModelTurnErrorCode } from "./model-turn-error.js";
+import {
+  isRetryableModelTurnErrorCode,
+  toModelTurnExecutionErrorCode,
+} from "./model-turn-error.js";
 
 /**
  * The frozen model turn executor.
@@ -190,48 +193,10 @@ export function toModelTurnExecutionError(error: unknown): ModelTurnExecutionErr
 }
 
 /**
- * The frozen AI-error-code to model-turn-error-code mapping.
- *
- * It is exhaustive over `AIErrorCode`, so a new AI error code cannot be added without
- * this mapping being revisited.
+ * The frozen AI-error-code to model-turn-error-code mapping now lives with the failure
+ * contract, so the Core compatibility boundary reuses exactly one mapping.
  */
-export function toModelTurnExecutionErrorCode(code: AIError["code"]): ModelTurnExecutionErrorCode {
-  switch (code) {
-    case "AI_AUTHENTICATION":
-      return "AUTHENTICATION";
-    case "AI_RATE_LIMIT":
-      return "RATE_LIMIT";
-    case "AI_NETWORK":
-      return "NETWORK";
-    case "AI_TIMEOUT":
-      return "TIMEOUT";
-    case "AI_CONTEXT_OVERFLOW":
-      return "CONTEXT_OVERFLOW";
-    case "AI_MODEL_UNSUPPORTED":
-    case "AI_MODEL_METADATA_INCOMPLETE":
-      return "UNSUPPORTED_MODEL";
-    case "AI_CAPABILITY_UNSUPPORTED":
-      return "UNSUPPORTED_CAPABILITY";
-    case "AI_INVALID_RESPONSE":
-    case "AI_INVALID_REQUEST":
-      return "INVALID_RESPONSE";
-    case "AI_ABORTED":
-      // Reaching here without the cancellation path above would be a mapping bug; the
-      // code is accepted so the mapping stays exhaustive, and the failure is reported as
-      // a provider error rather than silently dropped.
-      return "PROVIDER_ERROR";
-    case "AI_PROVIDER_ERROR":
-    case "AI_PROVIDER_NOT_FOUND":
-    case "AI_ADAPTER_NOT_FOUND":
-      return "PROVIDER_ERROR";
-    default:
-      return assertNeverCode(code);
-  }
-}
-
-function assertNeverCode(code: never): never {
-  throw new TypeError(`Unmapped AI error code: ${String(code)}`);
-}
+export { toModelTurnExecutionErrorCode };
 
 function failure(code: ModelTurnExecutionErrorCode, message: string): ModelTurnExecutionError {
   return { code, message, retryable: isRetryableModelTurnErrorCode(code) };

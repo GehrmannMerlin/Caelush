@@ -10,6 +10,8 @@
  * one at runtime.
  */
 
+import type { AIError } from "@caelush/ai";
+
 /**
  * Why a model turn failed.
  *
@@ -93,9 +95,73 @@ export interface ModelTurnExecutionError {
   readonly retryable: boolean;
   /** A bounded provider hint in milliseconds, when one was reported safely. */
   readonly retryAfterMs?: number;
+  /**
+   * Which stage of the turn failed, when the executor did not fail at the provider itself.
+   *
+   * An executor may be composed with an admission step or a durable boundary of its own, in
+   * which case it reports the stage it failed at rather than a context-free provider failure.
+   * Absent means the model turn itself failed.
+   */
+  readonly stage?: "ADMISSION" | "BOUNDARY" | "MODEL";
+  /**
+   * The original failure, for a host boundary that must classify it again.
+   *
+   * It is a local debugging and classification channel only. It is never serialized, never
+   * becomes a durable field, and never contributes to `message`: a throw may carry a provider
+   * body, a prompt or a credential, and none of that may cross a public boundary. The Core
+   * compatibility facade uses it to re-derive the legacy error classification its own mapper
+   * already implements.
+   */
+  readonly cause?: unknown;
 }
 
 /** True when the code describes a transient provider condition. */
 export function isRetryableModelTurnErrorCode(code: ModelTurnExecutionErrorCode): boolean {
   return (RETRYABLE_MODEL_TURN_ERROR_CODES as readonly string[]).includes(code);
+}
+
+/**
+ * Map a frozen AI error code onto the frozen model-turn failure code.
+ *
+ * It is exhaustive over `AIErrorCode`, so a new AI error code cannot be added without this
+ * mapping being revisited. It lives with the failure contract rather than inside the executor
+ * because the Core compatibility boundary needs the same mapping when it reconstructs a frozen
+ * failure from a legacy throw.
+ */
+export function toModelTurnExecutionErrorCode(code: AIError["code"]): ModelTurnExecutionErrorCode {
+  switch (code) {
+    case "AI_AUTHENTICATION":
+      return "AUTHENTICATION";
+    case "AI_RATE_LIMIT":
+      return "RATE_LIMIT";
+    case "AI_NETWORK":
+      return "NETWORK";
+    case "AI_TIMEOUT":
+      return "TIMEOUT";
+    case "AI_CONTEXT_OVERFLOW":
+      return "CONTEXT_OVERFLOW";
+    case "AI_MODEL_UNSUPPORTED":
+    case "AI_MODEL_METADATA_INCOMPLETE":
+      return "UNSUPPORTED_MODEL";
+    case "AI_CAPABILITY_UNSUPPORTED":
+      return "UNSUPPORTED_CAPABILITY";
+    case "AI_INVALID_RESPONSE":
+    case "AI_INVALID_REQUEST":
+      return "INVALID_RESPONSE";
+    case "AI_ABORTED":
+      // Reaching here without the cancellation path would be a mapping bug. The code is
+      // accepted so the mapping stays exhaustive, and the outcome is a provider failure
+      // rather than a silently dropped turn.
+      return "PROVIDER_ERROR";
+    case "AI_PROVIDER_ERROR":
+    case "AI_PROVIDER_NOT_FOUND":
+    case "AI_ADAPTER_NOT_FOUND":
+      return "PROVIDER_ERROR";
+    default:
+      return assertUnmappedCode(code);
+  }
+}
+
+function assertUnmappedCode(code: never): never {
+  throw new TypeError(`Unmapped AI error code: ${String(code)}`);
 }

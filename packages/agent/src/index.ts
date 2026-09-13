@@ -24,8 +24,19 @@
  * `ModelTurnExecutor` union result. Later phases implement them.
  */
 
-/* The agent loop contract. */
-export type { AgentLoop } from "./loop/agent-loop.js";
+/* The agent loop. Phase 3B implements the frozen `advance()`. */
+export { createAgentLoop } from "./loop/agent-loop.js";
+export type { AgentLoop, AgentLoopDependencies } from "./loop/agent-loop.js";
+
+/* The context boundary. */
+export { toAIModelSettings } from "./loop/context/context-engine-port.js";
+export type {
+  ContextEnginePort,
+  ContextPrepareInput,
+  ContextPrepareMode,
+  ContextProvider,
+  ContextProviderInput,
+} from "./loop/context/context-engine-port.js";
 
 /* Kernel types: identity, turn reference, turn input, prepared context, decisions. */
 export { assertAgentTurnRef, createAgentTurnRef } from "./loop/types.js";
@@ -39,7 +50,9 @@ export type {
   AgentLoopAdvanceFailed,
   AgentLoopAdvanceInput,
   AgentLoopAdvanceResult,
+  AgentLoopFailureStage,
   AgentModelTurn,
+  AgentProviderTurnState,
   AgentToolCallsDecision,
   AgentToolRequest,
   AgentToolResultMessage,
@@ -86,6 +99,10 @@ export type {
 } from "./loop/turn/model-turn-executor.js";
 
 /* The turn failure contract. */
+export {
+  toModelTurnExecutionError,
+  toModelTurnExecutionErrorCode,
+} from "./loop/turn/model-turn-executor.js";
 export {
   isRetryableModelTurnErrorCode,
   MODEL_TURN_EXECUTION_ERROR_CODES,
