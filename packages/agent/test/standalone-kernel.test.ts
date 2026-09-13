@@ -1,17 +1,19 @@
 import { describe, expect, it } from "vitest";
 import type { AIGateway, AIStream, AIStreamEvent, AIModelTurnResult } from "@caelush/ai";
 import {
+  createAgentDecisionClassifier,
   createAgentLoop,
   createAgentTurnRef,
   createModelTurnExecutor,
   type AgentDecision,
   type AgentExecutionIdentity,
   type AgentLoopAdvanceInput,
+  type ContextBuildReport,
   type ContextEnginePort,
   type ContextPrepareInput,
   type ModelTurnExecutor,
   type PreparedModelContext,
-  type ModelTurnStreamSink,
+  type ToolObservationPolicySnapshot,
 } from "@caelush/agent";
 import { createRunId, createSessionId, createStepId, type StepId } from "@caelush/protocol";
 
@@ -108,6 +110,23 @@ function scriptedGateway(): { readonly gateway: AIGateway; calls(): number } {
   };
 }
 
+/** The frozen context answer a kernel-only engine can always produce. */
+const REPORT: ContextBuildReport = {
+  estimatedInputTokens: 12,
+  effectiveInputLimitTokens: 900,
+  remainingTokens: 888,
+  pressure: "NORMAL",
+  compactionCount: 0,
+  contributions: [
+    { providerId: "turn", tokenEstimate: 12, itemCount: 1, droppedItems: 0, truncatedItems: 0 },
+  ],
+};
+
+const POLICY: ToolObservationPolicySnapshot = {
+  maxSingleObservationTokens: 90,
+  maxObservationBatchTokens: 198,
+};
+
 /** A Context Engine with no knowledge of anything but the turn it is asked about. */
 function fakeContextEngine(): {
   readonly engine: ContextEnginePort;
@@ -130,10 +149,7 @@ function fakeContextEngine(): {
                   ...input.input.results,
                 ]
               : [...input.history, ...(input.input.messages ?? [])];
-        return Promise.resolve({
-          messages,
-          report: { mode: input.mode, items: messages.length },
-        });
+        return Promise.resolve({ messages, report: REPORT, observationPolicy: POLICY });
       },
     },
     inputs: () => inputs,
@@ -150,6 +166,7 @@ describe("General Agent Kernel, standalone", () => {
     const loop = createAgentLoop({
       contextEngine: context.engine,
       modelTurnExecutor,
+      decisionClassifier: createAgentDecisionClassifier(),
     });
 
     const base = {
@@ -194,8 +211,8 @@ describe("General Agent Kernel, standalone", () => {
       input: { kind: "USER_INPUT", messages: [{ role: "user", content: "say hello" }] },
     } satisfies AgentLoopAdvanceInput);
 
-    expect(first.status).toBe("COMPLETED");
-    if (first.status !== "COMPLETED") throw new Error("expected a decision");
+    expect(first.kind).toBe("TOOL_REQUESTS");
+    if (first.kind !== "TOOL_REQUESTS") throw new Error("expected a decision");
     const requested: AgentDecision = first.decision;
     expect(requested.type).toBe("TOOL_CALLS_REQUESTED");
     if (requested.type !== "TOOL_CALLS_REQUESTED") throw new Error("expected tool requests");
@@ -228,8 +245,8 @@ describe("General Agent Kernel, standalone", () => {
       },
     } satisfies AgentLoopAdvanceInput);
 
-    expect(second.status).toBe("COMPLETED");
-    if (second.status !== "COMPLETED") throw new Error("expected a decision");
+    expect(second.kind).toBe("FINAL_CANDIDATE");
+    if (second.kind !== "FINAL_CANDIDATE") throw new Error("expected a decision");
     expect(second.decision.type).toBe("FINAL_CANDIDATE");
     if (second.decision.type !== "FINAL_CANDIDATE") throw new Error("expected a candidate");
     expect(second.decision.candidateText).toBe("the tool said echo:hello");
@@ -241,17 +258,36 @@ describe("General Agent Kernel, standalone", () => {
     expect(JSON.stringify(second.decision)).not.toContain("COMPLETED");
   });
 
-  it("streams transient deltas to the host without making them durable", async () => {
+  it("streams correlated transient deltas to the host without making them durable", async () => {
     const gateway = scriptedGateway();
-    const seen: string[] = [];
+    const seen: { readonly type: string; readonly correlation: unknown }[] = [];
+    const turn = createAgentTurnRef(createStepId(), 1);
+
+    // The sink is bound where the frozen contract puts it: the composition decorates the
+    // `ModelTurnExecutor`. `AgentLoop.advance()` has no presentation input at all.
+    const executor = createModelTurnExecutor({ gateway: gateway.gateway });
     const loop = createAgentLoop({
       contextEngine: fakeContextEngine().engine,
-      modelTurnExecutor: createModelTurnExecutor({ gateway: gateway.gateway }),
+      modelTurnExecutor: {
+        execute: (execution) =>
+          executor.execute({
+            ...execution,
+            streamSink: {
+              publish(event): void {
+                seen.push({
+                  type: event.type,
+                  correlation: { runId: event.runId, stepId: event.stepId },
+                });
+              },
+            },
+          }),
+      },
+      decisionClassifier: createAgentDecisionClassifier(),
     });
 
     const result = await loop.advance({
       identity: IDENTITY,
-      turn: createAgentTurnRef(createStepId(), 1),
+      turn,
       input: { kind: "USER_INPUT", messages: [{ role: "user", content: "say hello" }] },
       history: [],
       model: {
@@ -273,15 +309,87 @@ describe("General Agent Kernel, standalone", () => {
       },
       tools: [],
       signal: new AbortController().signal,
-      streamSink: {
-        publish(event): void {
-          seen.push(event.type);
-        },
-      } satisfies ModelTurnStreamSink,
     });
 
-    expect(result.status).toBe("COMPLETED");
+    expect(result.kind).toBe("TOOL_REQUESTS");
     // Only transient deltas reached the host: no envelope, no usage, no tool lifecycle.
-    expect(seen).toEqual(["text.delta"]);
+    expect(seen).toEqual([
+      { type: "text.delta", correlation: { runId: IDENTITY.runId, stepId: turn.stepId } },
+    ]);
+  });
+
+  it("correlates every delta of every concurrent turn without crossing streams", async () => {
+    const gateway = scriptedGateway();
+    const seen: { readonly runId: string; readonly stepId: string; readonly type: string }[] = [];
+    const executor = createModelTurnExecutor({ gateway: gateway.gateway });
+    const loop = createAgentLoop({
+      contextEngine: fakeContextEngine().engine,
+      modelTurnExecutor: executor,
+      decisionClassifier: createAgentDecisionClassifier(),
+    });
+
+    const model = {
+      ref: { provider: "test", model: "model-a" },
+      api: "test-api",
+      limits: { contextWindowTokens: 1_000, maxOutputTokens: 100 },
+      capabilities: {
+        streaming: "SUPPORTED",
+        toolCalling: "SUPPORTED",
+        parallelToolCalls: "UNKNOWN",
+        structuredOutput: "UNKNOWN",
+        vision: "UNKNOWN",
+        reasoning: "UNKNOWN",
+        reasoningSummary: "UNKNOWN",
+        promptCaching: "UNKNOWN",
+        usageReporting: "UNKNOWN",
+      },
+      source: "CONFIGURATION",
+    } as const;
+
+    // Two Runs, two Steps, one shared presentation channel. Each delta must carry the identity
+    // of the turn that produced it, because the host is the only party that knows the mapping.
+    const runs = [
+      { identity: IDENTITY, turn: createAgentTurnRef(createStepId(), 1) },
+      {
+        identity: { ...IDENTITY, runId: createRunId() } satisfies AgentExecutionIdentity,
+        turn: createAgentTurnRef(createStepId(), 2),
+      },
+    ];
+
+    for (const entry of runs) {
+      await createAgentLoop({
+        contextEngine: fakeContextEngine().engine,
+        modelTurnExecutor: {
+          execute: (execution) =>
+            executor.execute({
+              ...execution,
+              streamSink: {
+                publish(event): void {
+                  seen.push({
+                    runId: event.runId,
+                    stepId: event.stepId,
+                    type: event.type,
+                  });
+                },
+              },
+            }),
+        },
+        decisionClassifier: createAgentDecisionClassifier(),
+      }).advance({
+        identity: entry.identity,
+        turn: entry.turn,
+        input: { kind: "USER_INPUT", messages: [{ role: "user", content: "say hello" }] },
+        history: [],
+        model,
+        tools: [],
+        signal: new AbortController().signal,
+      });
+    }
+
+    expect(seen).toEqual([
+      { runId: runs[0]!.identity.runId, stepId: runs[0]!.turn.stepId, type: "text.delta" },
+      { runId: runs[1]!.identity.runId, stepId: runs[1]!.turn.stepId, type: "text.delta" },
+    ]);
+    void loop;
   });
 });

@@ -263,6 +263,180 @@ describe("Phase 3A frozen kernel surface", () => {
   });
 });
 
+/**
+ * Phase 3A frozen contract remediation guards.
+ *
+ * The contract-level guarantee is the compile-time exactness file: it restates every frozen shape
+ * and fails `pnpm typecheck` when a property is added, renamed, made optional or dropped. These
+ * guards are the structural half — they keep the *source of truth* in the file the freeze names,
+ * and they fail loudly if the exactness file is deleted or narrowed.
+ */
+describe("Phase 3A frozen contract remediation", () => {
+  it("keeps the compile-time exactness file present and complete", () => {
+    const exactness = read("packages/agent/test/contracts/phase-3a-frozen-contracts.test.ts");
+    // Every frozen contract of the phase must be asserted by name.
+    for (const contract of [
+      "AgentExecutionIdentity",
+      "AgentTurnRef",
+      "AgentTurnInput",
+      "AgentLoopAdvanceInput",
+      "AgentLoopAdvanceResult",
+      "AgentLoopContextReceipt",
+      "PreparedModelContext",
+      "ToolObservationPolicySnapshot",
+      "ContextBuildReport",
+      "ModelRequestAdmissionInput",
+      "ModelRequestAdmissionDecision",
+      "ModelTurnBoundaryInput",
+      "ModelTurnExecutionInput",
+      "ModelTurnExecutionResult",
+      "ModelTurnExecutionError",
+      "AgentTransientStreamEvent",
+      "AgentLoopDependencies",
+    ]) {
+      expect(exactness, contract).toContain(contract);
+    }
+    // A source-text containment check would agree with the drift by construction; the file must
+    // assert structural equality of whole shapes instead.
+    expect(exactness).toContain("Expect<Equal<");
+    expect(exactness).toContain("type Keys<T> = keyof T;");
+  });
+
+  it("keeps the frozen advance input free of settings and streamSink", () => {
+    const types = read("packages/agent/src/loop/types.ts");
+    const executable = types
+      .replaceAll(/\/\*[\s\S]*?\*\//g, "")
+      .replaceAll(/(^|[^:])\/\/.*$/gm, "$1");
+
+    // `modelSettings` is the frozen field name; `settings` is not an allowed rename.
+    expect(executable).toContain("readonly modelSettings?: AIModelSettings;");
+    expect(executable).not.toMatch(/\breadonly settings\?:/);
+    // Streaming belongs to the executor the composition root binds, never to the loop input.
+    expect(executable).not.toMatch(/\breadonly streamSink\?:/);
+  });
+
+  it("keeps the advance result a four-discriminant union with no COMPLETED status", () => {
+    const types = read("packages/agent/src/loop/types.ts");
+    const executable = types
+      .replaceAll(/\/\*[\s\S]*?\*\//g, "")
+      .replaceAll(/(^|[^:])\/\/.*$/gm, "$1");
+
+    for (const kind of ['"TOOL_REQUESTS"', '"FINAL_CANDIDATE"', '"FAILED"', '"CANCELLED"']) {
+      expect(executable, kind).toContain(kind);
+    }
+    expect(executable).toContain(
+      "export type AgentLoopAdvanceResult =\n  | AgentLoopToolRequestsResult\n  | AgentLoopFinalCandidateResult\n  | AgentLoopFailedResult\n  | AgentLoopCancelledResult;",
+    );
+    // The drift this remediation removed: a `status`-tagged result and a COMPLETED-the-Reason
+    // variant that the Run Layer could mistake for completion authority.
+    expect(executable).not.toContain("AgentLoopAdvanceCompleted");
+    expect(executable).not.toContain("AgentLoopAdvanceFailed");
+    expect(executable).not.toContain('readonly status: "COMPLETED"');
+    expect(executable).not.toMatch(/\breadonly status: "FAILED"/);
+    expect(executable).not.toMatch(/\breadonly status: "CANCELLED"/);
+  });
+
+  it("keeps the context receipt typed and the prepared context free of recovered", () => {
+    const types = read("packages/agent/src/loop/types.ts");
+    const executable = types
+      .replaceAll(/\/\*[\s\S]*?\*\//g, "")
+      .replaceAll(/(^|[^:])\/\/.*$/gm, "$1");
+
+    expect(executable).toContain("export interface AgentLoopContextReceipt {");
+    expect(executable).toContain('readonly recovery: "NONE" | "FORCED_CONTEXT_RECOVERY";');
+    // A forced recovery is recorded in the receipt, not on the engine's answer.
+    expect(executable).not.toMatch(/\breadonly recovered\?:/);
+    // The report is a typed contract, never an opaque bag.
+    expect(executable).toContain("export interface ContextBuildReport {");
+    expect(executable).not.toContain("Readonly<Record<string, unknown>>");
+    // The observation snapshot is exactly two numbers.
+    expect(executable).toContain("export interface ToolObservationPolicySnapshot {");
+    // The previous shape — a policy id, a byte budget and an include-details switch — is gone.
+    expect(executable).not.toContain("export interface ObservationPolicySnapshot {");
+    expect(executable).not.toMatch(/\breadonly maxOutputBytes\?:/);
+    expect(executable).not.toMatch(/\breadonly includeDetails\?:/);
+  });
+
+  it("keeps the model turn failure free of stage and raw cause", () => {
+    const failure = read("packages/agent/src/loop/turn/model-turn-error.ts");
+    const executable = failure
+      .replaceAll(/\/\*[\s\S]*?\*\//g, "")
+      .replaceAll(/(^|[^:])\/\/.*$/gm, "$1");
+
+    expect(executable).toContain("readonly code: ModelTurnExecutionErrorCode;");
+    expect(executable).toContain("readonly message: string;");
+    expect(executable).toContain("readonly retryable: boolean;");
+    expect(executable).toContain("readonly retryAfterMs?: number;");
+    // `stage` and `cause` were the drift: where a Reason failed is the caller's observation, and a
+    // raw provider throw is never an `@caelush/agent` public field.
+    expect(executable).not.toMatch(/\breadonly stage\?:/);
+    expect(executable).not.toMatch(/\breadonly cause\?:/);
+  });
+
+  it("keeps the durable boundary free of the request and the full descriptor", () => {
+    const boundary = read("packages/agent/src/loop/ports/model-turn-boundary.ts");
+    const executable = boundary
+      .replaceAll(/\/\*[\s\S]*?\*\//g, "")
+      .replaceAll(/(^|[^:])\/\/.*$/gm, "$1");
+
+    expect(executable).toContain('readonly model: ModelDescriptor["ref"];');
+    expect(executable).not.toMatch(/\breadonly request:/);
+    expect(executable).not.toMatch(/\breadonly model: ModelDescriptor;/);
+  });
+
+  it("keeps the admission decision carrying the approved request", () => {
+    const admission = read("packages/agent/src/loop/ports/model-request-admission.ts");
+    const executable = admission
+      .replaceAll(/\/\*[\s\S]*?\*\//g, "")
+      .replaceAll(/(^|[^:])\/\/.*$/gm, "$1");
+
+    expect(executable).toContain("export type ModelRequestAdmissionDecision =");
+    expect(executable).toContain("readonly request: AIModelRequest;");
+    // The frozen input names the identity, the turn and the request — no second model authority
+    // and no cancellation signal.
+    expect(executable).not.toMatch(/\breadonly model: ModelDescriptor;/);
+    expect(executable).not.toMatch(/\breadonly signal: AbortSignal;/);
+    expect(executable).not.toContain("AgentModelAdmissionDecision");
+  });
+
+  it("keeps every transient delta correlated and the envelope unforwardable", () => {
+    const events = read("packages/agent/src/loop/events/transient-stream-event.ts");
+    const executable = events
+      .replaceAll(/\/\*[\s\S]*?\*\//g, "")
+      .replaceAll(/(^|[^:])\/\/.*$/gm, "$1");
+
+    // Each of the three deltas carries the correlation a multiplexed host needs.
+    expect(executable.match(/readonly runId: RunId;/g)).toHaveLength(3);
+    expect(executable.match(/readonly stepId: StepId;/g)).toHaveLength(3);
+    for (const forbidden of [
+      "stream.start",
+      "stream.finish",
+      "stream.error",
+      '"usage"',
+      "tool_call.start",
+      "tool_call.completed",
+    ]) {
+      expect(executable, forbidden).not.toContain(forbidden);
+    }
+  });
+
+  it("keeps the loop dependencies frozen: required classifier, no request builder", () => {
+    const loop = read("packages/agent/src/loop/agent-loop.ts");
+    const executable = loop
+      .replaceAll(/\/\*[\s\S]*?\*\//g, "")
+      .replaceAll(/(^|[^:])\/\/.*$/gm, "$1");
+
+    expect(executable).toContain("readonly decisionClassifier: AgentDecisionClassifier;");
+    expect(executable).not.toMatch(/\breadonly decisionClassifier\?:/);
+    expect(executable).not.toMatch(/\breadonly modelRequestBuilder\?:/);
+    // The classifier has no loop-supplied default: the composition root owns it.
+    expect(executable).not.toContain("dependencies.decisionClassifier ??");
+    // The loop performs no retry, no sleep and no backoff of its own.
+    expect(executable).not.toMatch(/\bsetTimeout|\bsetInterval|\bsleep\b/);
+    expect(executable).not.toMatch(/\bwhile\s*\(/);
+  });
+});
+
 describe("Phase 3A Core compatibility boundary", () => {
   it("keeps the decision classifier in exactly one implementation", () => {
     // The Core facade must re-export the agent classifier rather than reimplement it: a

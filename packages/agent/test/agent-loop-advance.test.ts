@@ -1,18 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { createAgentLoop, createAgentTurnRef, ALLOWED_MODEL_ADMISSION } from "../src/index.js";
+import {
+  allowedModelAdmission,
+  createAgentDecisionClassifier,
+  createAgentLoop,
+  createAgentTurnRef,
+} from "../src/index.js";
 import type {
   AgentDecision,
   AgentExecutionIdentity,
   AgentLoopAdvanceInput,
   AgentLoopAdvanceResult,
-  AgentModelAdmissionDecision,
-  AgentTurnInput,
+  AgentLoopContextReceipt,
+  ContextBuildReport,
   ContextEnginePort,
   ContextPrepareInput,
+  ModelRequestAdmissionDecision,
+  ModelRequestAdmissionInput,
+  ModelTurnBoundaryInput,
   ModelTurnBoundaryPort,
   ModelTurnExecutionResult,
   ModelTurnExecutor,
   PreparedModelContext,
+  ToolObservationPolicySnapshot,
 } from "../src/index.js";
 import type { AIModelTurnResult, ModelDescriptor } from "@caelush/ai";
 import { createRunId, createSessionId, createStepId, type StepId } from "@caelush/protocol";
@@ -57,6 +66,38 @@ const RESOLUTION = {
   cache: { requested: "NONE", effective: "NONE", mode: "EXACT" },
 } as const;
 
+const REPORT: ContextBuildReport = {
+  estimatedInputTokens: 10,
+  effectiveInputLimitTokens: 100,
+  remainingTokens: 90,
+  pressure: "NORMAL",
+  compactionCount: 0,
+  contributions: [
+    {
+      providerId: "test",
+      tokenEstimate: 10,
+      itemCount: 1,
+      droppedItems: 0,
+      truncatedItems: 0,
+    },
+  ],
+};
+
+const POLICY: ToolObservationPolicySnapshot = {
+  maxSingleObservationTokens: 100,
+  maxObservationBatchTokens: 200,
+};
+
+/** The frozen context answer every hand-written engine returns unless a test says otherwise. */
+function prepared(partial: Partial<PreparedModelContext> = {}): PreparedModelContext {
+  return {
+    messages: [{ role: "user", content: "prepared" }],
+    report: REPORT,
+    observationPolicy: POLICY,
+    ...partial,
+  };
+}
+
 function turnResult(partial: Partial<AIModelTurnResult> = {}): AIModelTurnResult {
   return {
     callId: "llm_0195f3a0-0000-7000-8000-000000000000" as AIModelTurnResult["callId"],
@@ -70,7 +111,7 @@ function turnResult(partial: Partial<AIModelTurnResult> = {}): AIModelTurnResult
   };
 }
 
-function userTurn(content = "hello"): AgentTurnInput {
+function userTurn(content = "hello"): AgentLoopAdvanceInput["input"] {
   return { kind: "USER_INPUT", messages: [{ role: "user", content }] };
 }
 
@@ -95,12 +136,7 @@ function contextEngine(options: {
         inputs.push(input);
         if (options.fail !== undefined) throw options.fail(input);
         if (options.onPrepare !== undefined) return options.onPrepare(input);
-        return (
-          options.context ?? {
-            messages: [{ role: "user", content: "prepared" }],
-            report: { prepared: true },
-          }
-        );
+        return options.context ?? prepared();
       },
     },
     modes: () => modes,
@@ -145,7 +181,9 @@ function advanceInput(overrides: Partial<AgentLoopAdvanceInput> = {}): AgentLoop
 function loopWith(options: {
   readonly context?: ReturnType<typeof contextEngine>;
   readonly turns?: ReturnType<typeof modelTurns>;
-  readonly admission?: { admit: () => Promise<AgentModelAdmissionDecision> };
+  readonly admission?: {
+    admit: (input: ModelRequestAdmissionInput) => Promise<ModelRequestAdmissionDecision>;
+  };
   readonly boundary?: ModelTurnBoundaryPort;
 }) {
   return createAgentLoop({
@@ -153,6 +191,7 @@ function loopWith(options: {
     modelTurnExecutor: (
       options.turns ?? modelTurns([{ kind: "COMPLETED", result: turnResult({ text: "answer" }) }])
     ).executor,
+    decisionClassifier: createAgentDecisionClassifier(),
     ...(options.admission === undefined
       ? {}
       : { modelAdmission: { admit: options.admission.admit } as never }),
@@ -161,14 +200,14 @@ function loopWith(options: {
 }
 
 function decisionOf(result: AgentLoopAdvanceResult): AgentDecision {
-  if (result.status !== "COMPLETED") {
-    throw new Error(`expected COMPLETED, received ${result.status}`);
+  if (result.kind !== "TOOL_REQUESTS" && result.kind !== "FINAL_CANDIDATE") {
+    throw new Error(`expected a decision, received ${result.kind}`);
   }
   return result.decision;
 }
 
 describe("AgentLoop.advance() one Reason", () => {
-  it("turns a user input with tool calls into TOOL_CALLS_REQUESTED", async () => {
+  it("turns a user input with tool calls into TOOL_REQUESTS", async () => {
     const turns = modelTurns([
       {
         kind: "COMPLETED",
@@ -181,18 +220,21 @@ describe("AgentLoop.advance() one Reason", () => {
 
     const result = await loopWith({ turns }).advance(advanceInput());
 
-    const decision = decisionOf(result);
-    expect(decision.type).toBe("TOOL_CALLS_REQUESTED");
+    expect(result.kind).toBe("TOOL_REQUESTS");
+    expect(decisionOf(result).type).toBe("TOOL_CALLS_REQUESTED");
     // The loop never executes a tool: it reports the request and stops.
     expect(turns.callCount()).toBe(1);
-    if (result.status !== "COMPLETED") throw new Error("expected completion");
+    if (result.kind !== "TOOL_REQUESTS") throw new Error("expected tool requests");
     expect(result.messagesToAppend.map((message) => message.role)).toEqual(["user", "assistant"]);
-    expect(result.contextReport).toEqual({ prepared: true });
+    expect(result.context).toEqual({ report: REPORT, observationPolicy: POLICY, recovery: "NONE" });
+    expect(result.turn).toEqual(TURN);
+    expect(result.modelTurn.finishReason).toBe("TOOL_CALLS");
   });
 
   it("turns a plain answer into FINAL_CANDIDATE, never into completion", async () => {
     const result = await loopWith({}).advance(advanceInput());
 
+    expect(result.kind).toBe("FINAL_CANDIDATE");
     const decision = decisionOf(result);
     expect(decision.type).toBe("FINAL_CANDIDATE");
     // The only expression of "the model finished" the kernel owns is a candidate.
@@ -250,7 +292,7 @@ describe("AgentLoop.advance() one Reason", () => {
     );
 
     expect(decisionOf(result).type).toBe("TOOL_CALLS_REQUESTED");
-    if (result.status !== "COMPLETED") throw new Error("expected completion");
+    if (result.kind !== "TOOL_REQUESTS") throw new Error("expected tool requests");
     expect(result.messagesToAppend.map((message) => message.role)).toEqual(["tool", "assistant"]);
   });
 
@@ -310,7 +352,7 @@ describe("AgentLoop.advance() one Reason", () => {
     );
 
     expect(decisionOf(result).type).toBe("FINAL_CANDIDATE");
-    if (result.status !== "COMPLETED") throw new Error("expected completion");
+    if (result.kind !== "FINAL_CANDIDATE") throw new Error("expected final candidate");
     expect(result.messagesToAppend.map((message) => message.role)).toEqual(["user", "assistant"]);
   });
 
@@ -319,13 +361,13 @@ describe("AgentLoop.advance() one Reason", () => {
       advanceInput({ input: { kind: "CONTINUATION", reason: "STEERING" } }),
     );
 
-    expect(result.status).toBe("COMPLETED");
+    expect(result.kind).toBe("FINAL_CANDIDATE");
   });
 });
 
-describe("AgentLoop.advance() failure stages", () => {
+describe("AgentLoop.advance() failure classification", () => {
   it.each([["LENGTH"], ["CONTENT_FILTER"], ["OTHER"]])(
-    "fails a %s turn as MODEL without a decision",
+    "fails a %s turn without a decision, keeping the settled turn",
     async (finishReason) => {
       const turns = modelTurns([
         {
@@ -336,37 +378,57 @@ describe("AgentLoop.advance() failure stages", () => {
 
       const result = await loopWith({ turns }).advance(advanceInput());
 
-      expect(result.status).toBe("FAILED");
-      if (result.status !== "FAILED") throw new Error("expected failure");
-      expect(result.stage).toBe("MODEL");
-      // The provider answered, so the turn is a completed provider attempt that produced no
-      // usable decision.
-      expect(result.providerTurnState).toBe("COMPLETED");
+      expect(result.kind).toBe("FAILED");
+      if (result.kind !== "FAILED") throw new Error("expected failure");
+      expect(result.error.code).toBe("MODEL_ERROR");
+      expect(result.error.retryable).toBe(false);
+      // The provider answered, so the settled turn travels with the failure.
+      expect(result.modelTurn?.finishReason).toBe(finishReason);
+      expect(result.turn).toEqual(TURN);
     },
   );
 
-  it("fails a provider error as MODEL with a failed provider turn", async () => {
+  it("projects a provider failure onto the canonical error with retry metadata", async () => {
     const turns = modelTurns([
-      { kind: "FAILED", error: { code: "NETWORK", message: "unreachable", retryable: true } },
+      {
+        kind: "FAILED",
+        error: { code: "NETWORK", message: "unreachable", retryable: true, retryAfterMs: 1_500 },
+      },
     ]);
 
     const result = await loopWith({ turns }).advance(advanceInput());
 
     expect(result).toMatchObject({
-      status: "FAILED",
-      stage: "MODEL",
-      error: { code: "NETWORK", retryable: true },
-      providerTurnState: "FAILED",
+      kind: "FAILED",
+      error: { code: "NETWORK_ERROR", retryable: true, phase: "LLM" },
+      retry: { code: "NETWORK", retryable: true, retryAfterMs: 1_500 },
     });
+    if (result.kind !== "FAILED") throw new Error("expected failure");
+    expect(result.modelTurn).toBeUndefined();
   });
 
-  it("fails a context preparation error as CONTEXT with no provider call", async () => {
+  it("carries no retry metadata for a deterministic provider failure", async () => {
+    const turns = modelTurns([
+      { kind: "FAILED", error: { code: "AUTHENTICATION", message: "denied", retryable: false } },
+    ]);
+
+    const result = await loopWith({ turns }).advance(advanceInput());
+
+    expect(result.kind).toBe("FAILED");
+    if (result.kind !== "FAILED") throw new Error("expected failure");
+    expect(result.error.code).toBe("MODEL_ERROR");
+    expect(result.retry).toBeUndefined();
+  });
+
+  it("fails a context preparation error with no provider call", async () => {
     const turns = modelTurns([{ kind: "COMPLETED", result: turnResult({ text: "never" }) }]);
     const context = contextEngine({ fail: () => new Error("inspection failed") });
 
     const result = await loopWith({ context, turns }).advance(advanceInput());
 
-    expect(result).toMatchObject({ status: "FAILED", stage: "CONTEXT" });
+    expect(result).toMatchObject({ kind: "FAILED", error: { code: "MODEL_ERROR" } });
+    // Nothing was prepared, so the failure carries no context receipt at all.
+    expect((result as { context?: unknown }).context).toBeUndefined();
     expect(turns.callCount()).toBe(0);
   });
 
@@ -392,18 +454,33 @@ describe("AgentLoop.advance() failure stages", () => {
       },
     }).advance(advanceInput());
 
-    expect(result.status).toBe("FAILED");
-    if (result.status !== "FAILED") throw new Error("expected failure");
-    expect(result.stage).toBe("ADMISSION");
-    expect(result.budgetBlock).toEqual({
-      kind: "EXCEEDED",
-      dimension: "TOKENS",
-      accounted: 5,
-      limit: 5,
-    });
+    expect(result.kind).toBe("FAILED");
+    if (result.kind !== "FAILED") throw new Error("expected failure");
+    expect(result.error.code).toBe("BUDGET_EXCEEDED");
     // A refused turn reaches neither the durable boundary nor the provider.
     expect(boundaryCalls).toBe(0);
     expect(turns.callCount()).toBe(0);
+  });
+
+  it("fails closed as unavailable when budget enforcement cannot be established", async () => {
+    const turns = modelTurns([{ kind: "COMPLETED", result: turnResult({ text: "never" }) }]);
+
+    const result = await loopWith({
+      turns,
+      admission: {
+        admit: () =>
+          Promise.resolve({
+            kind: "BLOCKED" as const,
+            reason: "BUDGET" as const,
+            block: { kind: "UNAVAILABLE", reason: "PRICING" } as never,
+          }),
+      },
+    }).advance(advanceInput());
+
+    expect(result.kind).toBe("FAILED");
+    if (result.kind !== "FAILED") throw new Error("expected failure");
+    // An unavailable budget is not an exceeded one.
+    expect(result.error.code).toBe("BUDGET_ENFORCEMENT_UNAVAILABLE");
   });
 
   it("performs no provider call when the durable boundary fails", async () => {
@@ -414,7 +491,7 @@ describe("AgentLoop.advance() failure stages", () => {
       boundary: { beforeExecute: () => Promise.reject(new Error("commit failed")) },
     }).advance(advanceInput());
 
-    expect(result).toMatchObject({ status: "FAILED", stage: "BOUNDARY" });
+    expect(result).toMatchObject({ kind: "FAILED", error: { code: "MODEL_ERROR" } });
     expect(turns.callCount()).toBe(0);
   });
 
@@ -432,7 +509,7 @@ describe("AgentLoop.advance() failure stages", () => {
       },
     }).advance(advanceInput());
 
-    expect(result.status).toBe("COMPLETED");
+    expect(result.kind).toBe("FINAL_CANDIDATE");
     expect(boundaryCalls).toBe(1);
     expect(turns.callCount()).toBe(1);
   });
@@ -455,13 +532,13 @@ describe("AgentLoop.advance() failure stages", () => {
       context: contextEngine({
         onPrepare: () => {
           order.push("context");
-          return { messages: [{ role: "user", content: "prepared" }] };
+          return prepared();
         },
       }),
       admission: {
-        admit: () => {
+        admit: (input) => {
           order.push("admission");
-          return Promise.resolve(ALLOWED_MODEL_ADMISSION);
+          return Promise.resolve(allowedModelAdmission(input.request));
         },
       },
       boundary: {
@@ -473,6 +550,57 @@ describe("AgentLoop.advance() failure stages", () => {
     }).advance(advanceInput());
 
     expect(order).toEqual(["context", "admission", "boundary", "model"]);
+  });
+});
+
+describe("AgentLoop.advance() admission and boundary inputs", () => {
+  it("executes the request admission approved, not the one it was given", async () => {
+    const turns = modelTurns([{ kind: "COMPLETED", result: turnResult({ text: "answer" }) }]);
+    const adjusted = { ...turns, executor: turns.executor };
+
+    const result = await loopWith({
+      turns,
+      admission: {
+        admit: (input) => {
+          // Admission restates the request — a clamped output ceiling, for instance. The frozen
+          // contract carries the restatement back through `ALLOWED.request`.
+          return Promise.resolve({
+            kind: "ALLOWED" as const,
+            request: { ...input.request, settings: { maxOutputTokens: 7 } },
+          });
+        },
+      },
+    }).advance(advanceInput());
+
+    expect(result.kind).toBe("FINAL_CANDIDATE");
+    expect(adjusted.callCount()).toBe(1);
+    // The provider call uses the admitted request, not the original.
+    expect(turns.requests()).toHaveLength(1);
+    expect((turns.requests()[0] as { settings?: { maxOutputTokens?: number } }).settings).toEqual({
+      maxOutputTokens: 7,
+    });
+  });
+
+  it("gives the durable boundary the model ref and never the request", async () => {
+    const seen: ModelTurnBoundaryInput[] = [];
+    const turns = modelTurns([{ kind: "COMPLETED", result: turnResult({ text: "answer" }) }]);
+
+    const result = await loopWith({
+      turns,
+      boundary: {
+        beforeExecute: (input) => {
+          seen.push(input);
+          return Promise.resolve();
+        },
+      },
+    }).advance(advanceInput());
+
+    expect(result.kind).toBe("FINAL_CANDIDATE");
+    expect(seen).toHaveLength(1);
+    // The model identity is not the full descriptor, and the request is not part of the contract.
+    expect(seen[0]?.model).toEqual(MODEL.ref);
+    expect(Object.keys(seen[0] ?? {}).sort()).toEqual(["identity", "model", "turn"]);
+    expect(seen[0]).not.toHaveProperty("request");
   });
 });
 
@@ -492,56 +620,69 @@ describe("AgentLoop.advance() context overflow recovery", () => {
     const context = contextEngine({
       onPrepare: (input) => {
         modes.push(input.mode);
-        return {
-          messages: [{ role: "user", content: "prepared" }],
-          ...(input.mode === "FORCED_RECOVERY" ? { recovered: true } : {}),
-        };
+        return prepared();
       },
     });
 
     const result = await loopWith({ context, turns }).advance(advanceInput());
 
-    expect(result.status).toBe("COMPLETED");
+    expect(result.kind).toBe("FINAL_CANDIDATE");
     expect(modes).toEqual(["NORMAL", "FORCED_RECOVERY"]);
     // Two provider attempts, never a third.
     expect(turns.callCount()).toBe(2);
     // The recovery resends a request rebuilt from the recovered context, not the rejected one.
     expect(turns.requests()).toHaveLength(2);
     expect(turns.requests()[0]).not.toBe(turns.requests()[1]);
+    // The receipt records that the context this Reason ran on was a forced recovery.
+    if (result.kind !== "FINAL_CANDIDATE") throw new Error("expected final candidate");
+    expect(result.context.recovery).toBe("FORCED_CONTEXT_RECOVERY");
+  });
+
+  it("records NONE for a turn that never needed recovery", async () => {
+    const result = await loopWith({}).advance(advanceInput());
+
+    if (result.kind !== "FINAL_CANDIDATE") throw new Error("expected final candidate");
+    const receipt: AgentLoopContextReceipt = result.context;
+    expect(receipt.recovery).toBe("NONE");
+    expect(receipt.report).toEqual(REPORT);
+    expect(receipt.observationPolicy).toEqual(POLICY);
   });
 
   it("fails as exhausted after a second overflow, with no third attempt", async () => {
     const turns = modelTurns([
       { kind: "FAILED", error: { code: "CONTEXT_OVERFLOW", message: "too big", retryable: false } },
     ]);
+    const context = contextEngine({ onPrepare: () => prepared() });
+
+    const result = await loopWith({ context, turns }).advance(advanceInput());
+
+    expect(result.kind).toBe("FAILED");
+    if (result.kind !== "FAILED") throw new Error("expected failure");
+    expect(result.error.code).toBe("CONTEXT_EXHAUSTED");
+    expect(result.context?.recovery).toBe("FORCED_CONTEXT_RECOVERY");
+    expect(turns.callCount()).toBe(2);
+  });
+
+  it("does not spend a second attempt when the engine rejects the forced recovery", async () => {
+    const turns = modelTurns([
+      { kind: "FAILED", error: { code: "CONTEXT_OVERFLOW", message: "too big", retryable: false } },
+    ]);
+    // The engine reports that it cannot compact by rejecting the forced preparation, which is the
+    // only honest answer: a context that does not fit must never be returned as "recovered".
     const context = contextEngine({
-      onPrepare: (input) => ({
-        messages: [{ role: "user", content: "prepared" }],
-        ...(input.mode === "FORCED_RECOVERY" ? { recovered: true } : {}),
-      }),
+      onPrepare: (input) => {
+        if (input.mode === "FORCED_RECOVERY") {
+          throw Object.assign(new Error("cannot compact"), { name: "ContextExhaustedError" });
+        }
+        return prepared();
+      },
     });
 
     const result = await loopWith({ context, turns }).advance(advanceInput());
 
-    expect(result.status).toBe("FAILED");
-    if (result.status !== "FAILED") throw new Error("expected failure");
-    expect(result.error.code).toBe("CONTEXT_OVERFLOW");
-    expect(result.error.message).toContain("exhausted");
-    expect(turns.callCount()).toBe(2);
-  });
-
-  it("does not spend a second attempt when the engine cannot recover", async () => {
-    const turns = modelTurns([
-      { kind: "FAILED", error: { code: "CONTEXT_OVERFLOW", message: "too big", retryable: false } },
-    ]);
-    // No `recovered` flag: the engine re-rendered the same context and cannot make it fit.
-    const context = contextEngine({});
-
-    const result = await loopWith({ context, turns }).advance(advanceInput());
-
-    expect(result.status).toBe("FAILED");
-    if (result.status !== "FAILED") throw new Error("expected failure");
-    expect(result.error.message).toContain("exhausted");
+    expect(result.kind).toBe("FAILED");
+    if (result.kind !== "FAILED") throw new Error("expected failure");
+    expect(result.error.code).toBe("CONTEXT_EXHAUSTED");
     // One provider attempt only: resending the same context would be an identical call.
     expect(turns.callCount()).toBe(1);
   });
@@ -555,7 +696,7 @@ describe("AgentLoop.advance() cancellation", () => {
 
     const result = await loopWith({ turns }).advance(advanceInput({ signal: controller.signal }));
 
-    expect(result).toEqual({ status: "CANCELLED" });
+    expect(result).toEqual({ kind: "CANCELLED", turn: TURN, messagesToAppend: [] });
     expect(turns.callCount()).toBe(0);
   });
 
@@ -564,7 +705,8 @@ describe("AgentLoop.advance() cancellation", () => {
 
     const result = await loopWith({ turns }).advance(advanceInput());
 
-    expect(result).toEqual({ status: "CANCELLED" });
+    expect(result.kind).toBe("CANCELLED");
+    expect(result).toMatchObject({ turn: TURN, messagesToAppend: [] });
   });
 
   it("returns CANCELLED when the context engine fails on an aborted signal", async () => {
@@ -578,7 +720,7 @@ describe("AgentLoop.advance() cancellation", () => {
 
     const result = await loopWith({ context }).advance(advanceInput({ signal: controller.signal }));
 
-    expect(result).toEqual({ status: "CANCELLED" });
+    expect(result).toEqual({ kind: "CANCELLED", turn: TURN, messagesToAppend: [] });
   });
 });
 
@@ -622,5 +764,18 @@ describe("AgentLoop.advance() context boundary", () => {
     expect(context.inputs()[0]?.history).toBe(history);
     expect(context.inputs()[0]?.turn.sequence).toBe(7);
     expect(context.inputs()[0]?.identity).toBe(IDENTITY);
+  });
+
+  it("carries modelSettings under its frozen name and no stream sink", async () => {
+    const context = contextEngine({});
+    const turns = modelTurns([{ kind: "COMPLETED", result: turnResult({ text: "answer" }) }]);
+
+    await loopWith({ context, turns }).advance(
+      advanceInput({ modelSettings: { maxOutputTokens: 42 } }),
+    );
+
+    expect((turns.requests()[0] as { settings?: unknown }).settings).toEqual({
+      maxOutputTokens: 42,
+    });
   });
 });

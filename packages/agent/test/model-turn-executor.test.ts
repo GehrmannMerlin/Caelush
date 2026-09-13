@@ -238,8 +238,8 @@ describe("ModelTurnExecutor transient stream", () => {
     const result = completed(await executor.execute(input({ streamSink: collected.sink })));
 
     expect(collected.events()).toEqual([
-      { type: "text.delta", text: "a" },
-      { type: "text.delta", text: "b" },
+      { type: "text.delta", runId: IDENTITY.runId, stepId: TURN.stepId, text: "a" },
+      { type: "text.delta", runId: IDENTITY.runId, stepId: TURN.stepId, text: "b" },
     ]);
     expect(result.text).toBe("ab");
   });
@@ -257,8 +257,8 @@ describe("ModelTurnExecutor transient stream", () => {
     const result = completed(await executor.execute(input({ streamSink: collected.sink })));
 
     expect(collected.events()).toEqual([
-      { type: "thinking.delta", text: "thinking" },
-      { type: "text.delta", text: "answer" },
+      { type: "thinking.delta", runId: IDENTITY.runId, stepId: TURN.stepId, text: "thinking" },
+      { type: "text.delta", runId: IDENTITY.runId, stepId: TURN.stepId, text: "answer" },
     ]);
     // A reasoning summary is display-only: it is never durable assistant content.
     expect(result.text).toBe("answer");
@@ -283,8 +283,20 @@ describe("ModelTurnExecutor transient stream", () => {
     await executor.execute(input({ streamSink: collected.sink }));
 
     expect(collected.events()).toEqual([
-      { type: "tool_call.delta", toolCallId: "c1", delta: '{"path"' },
-      { type: "tool_call.delta", toolCallId: "c1", delta: ':"a.ts"}' },
+      {
+        type: "tool_call.delta",
+        runId: IDENTITY.runId,
+        stepId: TURN.stepId,
+        toolCallId: "c1",
+        delta: '{"path"',
+      },
+      {
+        type: "tool_call.delta",
+        runId: IDENTITY.runId,
+        stepId: TURN.stepId,
+        toolCallId: "c1",
+        delta: ':"a.ts"}',
+      },
     ]);
   });
 
@@ -307,7 +319,9 @@ describe("ModelTurnExecutor transient stream", () => {
 
     // stream.start, usage, tool_call.start, tool_call.completed and stream.finish are
     // envelope, accounting and durable-lifecycle events. Only the transient deltas cross.
-    expect(collected.events()).toEqual([{ type: "text.delta", text: "x" }]);
+    expect(collected.events()).toEqual([
+      { type: "text.delta", runId: IDENTITY.runId, stepId: TURN.stepId, text: "x" },
+    ]);
   });
 
   it("isolates a synchronous and an asynchronous sink failure from the result", async () => {
@@ -499,28 +513,12 @@ describe("ModelTurnBoundaryPort contract", () => {
     const executor = createModelTurnExecutor({ gateway: fake.gateway });
 
     // The boundary is the first thing a loop calls, and a rejection ends the turn before
-    // the executor is ever reached.
+    // the executor is ever reached. The frozen input names the model *identity* and nothing
+    // else: no request, no full descriptor.
     await boundary.beforeExecute({
       identity: IDENTITY,
       turn: TURN,
-      request: REQUEST,
-      model: {
-        ref: REQUEST.model,
-        api: "test-api",
-        limits: { contextWindowTokens: 1_000, maxOutputTokens: 100 },
-        capabilities: {
-          streaming: "SUPPORTED",
-          toolCalling: "UNKNOWN",
-          parallelToolCalls: "UNKNOWN",
-          structuredOutput: "UNKNOWN",
-          vision: "UNKNOWN",
-          reasoning: "UNKNOWN",
-          reasoningSummary: "UNKNOWN",
-          promptCaching: "UNKNOWN",
-          usageReporting: "UNKNOWN",
-        },
-        source: "CONFIGURATION",
-      },
+      model: REQUEST.model,
     });
     const result = await executor.execute(input());
     return { gatewayCalls: fake.callCount(), result };
