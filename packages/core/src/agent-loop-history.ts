@@ -1,13 +1,44 @@
 import {
   LLMMessageSchema,
-  type LLMAssistantMessage,
   type LLMMessage,
   type LLMToolResultMessage,
 } from "@caelush/llm/messages";
-import { validateAndGroupConversation, type ContextConversationError } from "@caelush/context";
-import type { AgentToolCallsDecision, AgentToolRequest } from "./agent-decision.js";
+import {
+  AgentTurnInputError,
+  assertConversationProtocolIntegrity,
+  assertPendingAssistantHistory,
+} from "@caelush/agent";
+import type { AgentToolCallsDecision } from "./agent-decision.js";
 import { AgentLoopInputError } from "./agent-errors.js";
 import type { AgentLoopCommonInput } from "./agent-loop-input.js";
+import { toAIMessage } from "./ai-invocation-projection.js";
+
+/**
+ * The durable-history compatibility boundary.
+ *
+ * This file is deliberately thin, and what is left in it is deliberate too. It contains only
+ * the parts of history validation that are about *this* host:
+ *
+ * ```text
+ * Run and AgentState agreement        a Core/Run projection invariant
+ * historySourceSequences alignment    a durable agent_messages concern
+ * splitting the open turn out         how this host phrases a tool continuation
+ * ```
+ *
+ * Everything that is a general statement about `AIMessage`, `AgentTurnInput` and
+ * `AgentDecision` delegates to `@caelush/agent`:
+ *
+ * ```text
+ * pending-assistant consistency       assertPendingAssistantHistory
+ * tool request/result consistency     the agent turn-input validator
+ * duplicate tool result detection     assertPendingAssistantHistory
+ * conversation turn protocol          assertConversationProtocolIntegrity
+ * ```
+ *
+ * That delegation is the point. A second comparison algorithm here would be a second authority
+ * free to disagree with the kernel about the same batch, and the kernel is the component that
+ * refuses an invalid one before it spends a provider call.
+ */
 
 export interface ResumeHistoryParts {
   readonly historyBeforeCurrentTurn: readonly LLMMessage[];
@@ -15,6 +46,13 @@ export interface ResumeHistoryParts {
   readonly currentTurnMessages: readonly LLMMessage[];
 }
 
+/**
+ * Assert the Run/Coding projection invariants of one loop input.
+ *
+ * These are compatibility facts — the two projections must describe the same Run, and an
+ * executing Run must not carry an active step into a new Reason. None of them is a general
+ * statement about an agent turn, so none of them moves into the kernel.
+ */
 export function validateAgentLoopInput(input: AgentLoopCommonInput): void {
   if (input.run.status !== "RUNNING" || input.state.status !== "RUNNING") {
     throw new AgentLoopInputError("run and state must both be RUNNING");
@@ -61,82 +99,26 @@ export function validateAgentLoopInput(input: AgentLoopCommonInput): void {
   }
 }
 
-function assistantToolCalls(message: LLMAssistantMessage): readonly AgentToolRequest[] {
-  return message.content.flatMap((part) =>
-    part.type === "tool-call"
-      ? [{ externalCallId: part.toolCallId, toolName: part.toolName, args: part.input }]
-      : [],
-  );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function semanticEqual(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) return true;
-  if (Array.isArray(left) && Array.isArray(right)) {
-    return (
-      left.length === right.length &&
-      left.every((value, index) => semanticEqual(value, right[index]))
-    );
-  }
-  if (isRecord(left) && isRecord(right)) {
-    const leftKeys = Object.keys(left).sort();
-    const rightKeys = Object.keys(right).sort();
-    return (
-      leftKeys.length === rightKeys.length &&
-      leftKeys.every(
-        (key, index) => key === rightKeys[index] && semanticEqual(left[key], right[key]),
-      )
-    );
-  }
-  return false;
-}
-
-function assertPendingAssistant(
-  history: readonly LLMMessage[],
-  pendingDecision: AgentToolCallsDecision,
-  results: readonly LLMToolResultMessage[],
-): LLMAssistantMessage {
-  const tail = history.at(-1);
-  if (tail === undefined || tail.role !== "assistant") {
-    throw new AgentLoopInputError("resume history must end with the pending assistant");
-  }
-  const parsedTail = LLMMessageSchema.safeParse(tail);
-  if (!parsedTail.success || parsedTail.data.role !== "assistant") {
-    throw new AgentLoopInputError("resume history has an invalid pending assistant");
-  }
-  const actualCalls = assistantToolCalls(parsedTail.data);
-  const expectedCalls = pendingDecision.toolRequests;
-  if (actualCalls.length !== expectedCalls.length) {
-    throw new AgentLoopInputError("pending assistant tool-call count does not match");
-  }
-  for (const [index, actual] of actualCalls.entries()) {
-    const expected = expectedCalls[index];
-    if (
-      expected === undefined ||
-      actual.externalCallId !== expected.externalCallId ||
-      actual.toolName !== expected.toolName ||
-      !semanticEqual(actual.args, expected.args)
-    ) {
-      throw new AgentLoopInputError("pending assistant tool-call identity does not match");
-    }
-  }
-  const resultIds = new Set(results.map((result) => result.toolCallId));
-  if (history.some((message) => message.role === "tool" && resultIds.has(message.toolCallId))) {
-    throw new AgentLoopInputError("resume history already contains a supplied tool result");
-  }
-  return parsedTail.data;
-}
-
-function assertCompleteHistory(messages: readonly LLMMessage[], reason: string): void {
+/**
+ * Run one general kernel assertion against a durable legacy history.
+ *
+ * The legacy ledger is projected onto the frozen `AIMessage` view first, so the kernel is asked
+ * about the same conversation the model will be shown. Its rejection is translated into this
+ * host's own input error, which is what the Run Layer already settles.
+ */
+function assertGeneral(assertion: () => void, fallback: string): void {
   try {
-    validateAndGroupConversation(messages, { estimateText: (text) => text.length });
+    assertion();
   } catch (error) {
-    const detail = error as ContextConversationError;
-    throw new AgentLoopInputError(`${reason}: ${detail.message}`);
+    if (error instanceof AgentTurnInputError) throw new AgentLoopInputError(error.message);
+    throw new AgentLoopInputError(fallback);
   }
+}
+
+/** Assert the history up to, but excluding, the pending assistant message. */
+function assertCompleteHistory(messages: readonly LLMMessage[], reason: string): void {
+  const projected = messages.map(toAIMessage);
+  assertGeneral(() => assertConversationProtocolIntegrity(projected), reason);
 }
 
 export function prepareResumeHistory(
@@ -145,7 +127,22 @@ export function prepareResumeHistory(
   normalizedResults: readonly LLMToolResultMessage[],
   historySourceSequences?: readonly number[],
 ): ResumeHistoryParts {
-  assertPendingAssistant(history, pendingDecision, normalizedResults);
+  // The general kernel owns the pending-assistant and already-consumed-result checks: the same
+  // questions are asked of a hand-written turn input in a standalone kernel test, so there is
+  // exactly one implementation of them.
+  assertGeneral(
+    () =>
+      assertPendingAssistantHistory(
+        history.map(toAIMessage),
+        pendingDecision,
+        normalizedResults.map(toAIMessage) as never,
+      ),
+    "resume history does not match the pending decision",
+  );
+  if (!LLMMessageSchema.safeParse(history.at(-1)).success) {
+    throw new AgentLoopInputError("resume history has an invalid pending assistant");
+  }
+
   const pendingIndex = history.length - 1;
   let currentStart = -1;
   for (let index = pendingIndex - 1; index >= 0; index -= 1) {

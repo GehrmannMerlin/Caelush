@@ -1,5 +1,6 @@
 import type { AgentError, AgentErrorCode } from "@caelush/protocol";
 
+import type { AgentTurnInputError } from "../history/conversation-history.js";
 import type { AgentBudgetBlock } from "../ports/model-request-admission.js";
 import type { ModelTurnExecutionError, ModelTurnExecutionErrorCode } from "./model-turn-error.js";
 
@@ -63,6 +64,25 @@ export function toBudgetAgentError(block: AgentBudgetBlock): AgentError {
         retryable: false,
         phase: "LLM",
       };
+}
+
+/**
+ * Project a general turn-input rejection onto the canonical durable failure.
+ *
+ * An invalid Tool result batch is a Tool-phase problem, not a model failure: the caller's
+ * ledger and the model's view diverged before any provider work began. It is therefore
+ * reported with the same durable code a rejected Tool result batch already has, and it is
+ * never retryable — retrying an invalid batch would send the same invalid batch again.
+ *
+ * The reason and index stay in the kernel error domain; only the fixed safe summary crosses.
+ */
+export function toAgentTurnInputError(error: AgentTurnInputError): AgentError {
+  return {
+    code: "TOOL_OUTPUT_ERROR",
+    message: error.message,
+    retryable: false,
+    phase: "TOOL",
+  };
 }
 
 /** Map one frozen model-turn code onto the canonical Protocol failure code. */

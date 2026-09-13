@@ -132,4 +132,97 @@ describe("AgentLoop input and resume history", () => {
       ]),
     ).toThrow(AgentLoopInputError);
   });
+
+  /**
+   * The general kernel owns these checks, and Core delegates to it. What matters here is that the
+   * delegation is not decorative: a mismatch the kernel refuses must be refused through this
+   * facade too, with the host's own error type so the Run Layer settles it as before.
+   */
+  it("delegates pending-assistant consistency to the general validator", () => {
+    const differentCall = {
+      ...assistant,
+      content: [
+        {
+          type: "tool-call" as const,
+          toolCallId: "call_z",
+          toolName: "read_file" as const,
+          input: { path: "src/parser.ts" },
+        },
+      ],
+    };
+    const differentName = {
+      ...assistant,
+      content: [
+        {
+          type: "tool-call" as const,
+          toolCallId: "call_a",
+          toolName: "search_text" as never,
+          input: { path: "src/parser.ts" },
+        },
+      ],
+    };
+    const differentArgs = {
+      ...assistant,
+      content: [
+        {
+          type: "tool-call" as const,
+          toolCallId: "call_a",
+          toolName: "read_file" as const,
+          input: { path: "other.ts" },
+        },
+      ],
+    };
+    const differentOrder = {
+      ...assistant,
+      content: [{ type: "text" as const, text: "no tools" }],
+    };
+    for (const tail of [differentCall, differentName, differentArgs, differentOrder]) {
+      expect(() =>
+        prepareResumeHistory([{ role: "user", content: "fix" }, tail as never], pendingDecision, [
+          result,
+        ]),
+      ).toThrow(AgentLoopInputError);
+    }
+  });
+
+  it("rejects a result the durable ledger already recorded", () => {
+    expect(() =>
+      prepareResumeHistory(
+        [
+          { role: "user", content: "fix" },
+          assistant,
+          result,
+          { role: "user", content: "fix again" },
+          assistant,
+        ],
+        pendingDecision,
+        [{ ...result }],
+      ),
+    ).toThrow(AgentLoopInputError);
+  });
+
+  it("rejects a history that is not a sequence of complete turns", () => {
+    // An assistant that announced a tool call the ledger never answered.
+    expect(() =>
+      prepareResumeHistory(
+        [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "tool-call",
+                toolCallId: "call_orphan",
+                toolName: "read_file" as never,
+                input: {},
+              },
+            ],
+          },
+          { role: "user", content: "fix" },
+          assistant,
+        ],
+        pendingDecision,
+        [result],
+      ),
+    ).toThrow(AgentLoopInputError);
+  });
 });

@@ -688,6 +688,127 @@ describe("AgentLoop.advance() context overflow recovery", () => {
   });
 });
 
+describe("AgentLoop.advance() tool result validation", () => {
+  const pending = {
+    type: "TOOL_CALLS_REQUESTED" as const,
+    modelTurn: {
+      callId: "llm_0195f3a0-0000-7000-8000-000000000000",
+      model: MODEL.ref,
+      finishReason: "TOOL_CALLS" as const,
+      assistantMessage: {
+        role: "assistant" as const,
+        content: [
+          {
+            type: "tool-call" as const,
+            toolCallId: "call_a",
+            toolName: "read_file",
+            input: { path: "a.ts" },
+          },
+          {
+            type: "tool-call" as const,
+            toolCallId: "call_b",
+            toolName: "read_file",
+            input: { path: "b.ts" },
+          },
+        ],
+      },
+    },
+    toolRequests: [
+      { externalCallId: "call_a", toolName: "read_file", args: { path: "a.ts" } },
+      { externalCallId: "call_b", toolName: "read_file", args: { path: "b.ts" } },
+    ],
+  };
+
+  function result(toolCallId: string, toolName = "read_file") {
+    return {
+      role: "tool" as const,
+      toolCallId,
+      toolName,
+      content: `data:${toolCallId}`,
+      isError: false,
+    };
+  }
+
+  function toolTurn(results: readonly ReturnType<typeof result>[]): AgentLoopAdvanceInput["input"] {
+    return {
+      kind: "TOOL_RESULTS",
+      sourceStepId: TURN.stepId,
+      pendingDecision: pending,
+      results,
+    };
+  }
+
+  /**
+   * Every invalid batch must fail before the loop does any work at all.
+   *
+   * The four counters are the point: an invalid turn is a protocol statement about the caller's
+   * own bookkeeping, so it must cost no context build, no admission decision, no durable commit
+   * and no provider call.
+   */
+  async function expectRefusedBeforeWork(input: AgentLoopAdvanceInput["input"]): Promise<void> {
+    const context = contextEngine({});
+    const turns = modelTurns([{ kind: "COMPLETED", result: turnResult({ text: "never" }) }]);
+    let boundaryCalls = 0;
+
+    const outcome = await loopWith({
+      context,
+      turns,
+      boundary: {
+        beforeExecute: () => {
+          boundaryCalls += 1;
+          return Promise.resolve();
+        },
+      },
+    }).advance(advanceInput({ input }));
+
+    expect(outcome.kind).toBe("FAILED");
+    if (outcome.kind !== "FAILED") throw new Error("expected failure");
+    expect(outcome.error.code).toBe("TOOL_OUTPUT_ERROR");
+    expect(outcome.messagesToAppend).toEqual([]);
+    expect(context.inputs()).toHaveLength(0);
+    expect(boundaryCalls).toBe(0);
+    expect(turns.callCount()).toBe(0);
+  }
+
+  it("refuses a wrong result count before any port is called", async () => {
+    await expectRefusedBeforeWork(toolTurn([result("call_a")]));
+  });
+
+  it("refuses a wrong tool call id before any port is called", async () => {
+    await expectRefusedBeforeWork(toolTurn([result("call_b"), result("call_a")]));
+  });
+
+  it("refuses a wrong tool name before any port is called", async () => {
+    await expectRefusedBeforeWork(toolTurn([result("call_a", "search_text"), result("call_b")]));
+  });
+
+  it("refuses a reordered batch and a duplicate result id", async () => {
+    await expectRefusedBeforeWork(toolTurn([result("call_b"), result("call_a")]));
+    await expectRefusedBeforeWork(toolTurn([result("call_a"), result("call_a")]));
+  });
+
+  it("refuses an extra result beyond the requested calls", async () => {
+    await expectRefusedBeforeWork(
+      toolTurn([result("call_a"), result("call_b"), result("call_extra")]),
+    );
+  });
+
+  it("accepts a complete batch and reasons from it in request order", async () => {
+    const context = contextEngine({});
+    const turns = modelTurns([{ kind: "COMPLETED", result: turnResult({ text: "done" }) }]);
+
+    const outcome = await loopWith({ context, turns }).advance(
+      advanceInput({ input: toolTurn([result("call_a"), result("call_b")]) }),
+    );
+
+    expect(outcome.kind).toBe("FINAL_CANDIDATE");
+    // The context engine saw the turn exactly once, and the batch reached it in request order.
+    expect(context.inputs()).toHaveLength(1);
+    expect(context.inputs()[0]?.input).toMatchObject({ kind: "TOOL_RESULTS" });
+    expect(turns.callCount()).toBe(1);
+  });
+});
+
 describe("AgentLoop.advance() cancellation", () => {
   it("returns CANCELLED with no work when the signal is already aborted", async () => {
     const turns = modelTurns([{ kind: "COMPLETED", result: turnResult({ text: "never" }) }]);

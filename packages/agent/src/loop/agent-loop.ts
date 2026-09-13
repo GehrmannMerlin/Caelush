@@ -3,12 +3,17 @@ import type { AIMessage } from "@caelush/ai";
 import type { ContextEnginePort, ContextPrepareMode } from "./context/context-engine-port.js";
 import type { AgentDecisionClassifier } from "./decision/decision-classifier.js";
 import { toAgentModelTurn } from "./decision/decision.js";
+import { AgentTurnInputError, assertAgentTurnInput } from "./history/conversation-history.js";
 import type {
   ModelRequestAdmissionDecision,
   ModelRequestAdmissionPort,
 } from "./ports/model-request-admission.js";
 import type { ModelTurnBoundaryPort } from "./ports/model-turn-boundary.js";
-import { toAgentError, toBudgetAgentError } from "./turn/agent-error-projection.js";
+import {
+  toAgentError,
+  toAgentTurnInputError,
+  toBudgetAgentError,
+} from "./turn/agent-error-projection.js";
 import {
   createModelRequestBuilder,
   type ModelRequestBuilder,
@@ -97,6 +102,23 @@ export function createAgentLoop(dependencies: AgentLoopDependencies): AgentLoop 
   return {
     async advance(input: AgentLoopAdvanceInput): Promise<AgentLoopAdvanceResult> {
       const appended = appendedByInput(input.input);
+
+      // General turn-input integrity is checked before any port is touched, so an invalid Tool
+      // result batch costs no context build, no admission decision, no durable commit and no
+      // provider call. The batch is positional by contract: one that does not answer the
+      // requested calls in order is refused rather than silently repaired, because repairing it
+      // would let a caller believe it had answered calls it had not.
+      try {
+        assertAgentTurnInput(input.input);
+      } catch (error) {
+        if (!(error instanceof AgentTurnInputError)) throw error;
+        return {
+          kind: "FAILED",
+          turn: input.turn,
+          error: toAgentTurnInputError(error),
+          messagesToAppend: [],
+        };
+      }
 
       if (input.signal.aborted) return cancelled(input.turn);
 

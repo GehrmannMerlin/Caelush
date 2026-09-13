@@ -258,6 +258,77 @@ describe("General Agent Kernel, standalone", () => {
     expect(JSON.stringify(second.decision)).not.toContain("COMPLETED");
   });
 
+  it("refuses a Tool result batch whose identity does not answer the request", async () => {
+    const gateway = scriptedGateway();
+    const context = fakeContextEngine();
+    const loop = createAgentLoop({
+      contextEngine: context.engine,
+      modelTurnExecutor: createModelTurnExecutor({ gateway: gateway.gateway }),
+      decisionClassifier: createAgentDecisionClassifier(),
+    });
+
+    const model = {
+      ref: { provider: "test", model: "model-a" },
+      api: "test-api",
+      limits: { contextWindowTokens: 1_000, maxOutputTokens: 100 },
+      capabilities: {
+        streaming: "SUPPORTED",
+        toolCalling: "SUPPORTED",
+        parallelToolCalls: "UNKNOWN",
+        structuredOutput: "UNKNOWN",
+        vision: "UNKNOWN",
+        reasoning: "UNKNOWN",
+        reasoningSummary: "UNKNOWN",
+        promptCaching: "UNKNOWN",
+        usageReporting: "UNKNOWN",
+      },
+      source: "CONFIGURATION",
+    } as const;
+
+    const first = await loop.advance({
+      identity: IDENTITY,
+      turn: createAgentTurnRef(createStepId(), 1),
+      input: { kind: "USER_INPUT", messages: [{ role: "user", content: "say hello" }] },
+      history: [],
+      model,
+      tools: [],
+      signal: new AbortController().signal,
+    });
+    if (first.kind !== "TOOL_REQUESTS") throw new Error("expected tool requests");
+
+    const refused = await loop.advance({
+      identity: IDENTITY,
+      turn: createAgentTurnRef(createStepId(), 2),
+      history: first.messagesToAppend,
+      input: {
+        kind: "TOOL_RESULTS",
+        sourceStepId: "stp_0195f3a0-0000-7000-8000-000000000000" as StepId,
+        pendingDecision: first.decision,
+        // The Tool is real, the identity is not: this result answers a call nobody made.
+        results: [
+          {
+            role: "tool",
+            toolCallId: "call_someone_else",
+            toolName: "echo",
+            content: "echo:hello",
+            isError: false,
+          },
+        ],
+      },
+      model,
+      tools: [],
+      signal: new AbortController().signal,
+    });
+
+    expect(refused.kind).toBe("FAILED");
+    if (refused.kind !== "FAILED") throw new Error("expected failure");
+    expect(refused.error.code).toBe("TOOL_OUTPUT_ERROR");
+    expect(refused.messagesToAppend).toEqual([]);
+    // The model was never asked to reason from an invalid batch.
+    expect(gateway.calls()).toBe(1);
+    expect(context.inputs()).toHaveLength(1);
+  });
+
   it("streams correlated transient deltas to the host without making them durable", async () => {
     const gateway = scriptedGateway();
     const seen: { readonly type: string; readonly correlation: unknown }[] = [];
