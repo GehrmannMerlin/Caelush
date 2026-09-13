@@ -1,5 +1,13 @@
 import type { LLMToolResultMessage } from "@caelush/llm/messages";
 import {
+  createRunExecutionCoordinator,
+  createRunTransitionPlanner,
+  type FinalizeDirective,
+  type ReturnTerminalDirective,
+  type RunExecutionCoordinator,
+  type RunTransitionPlanner,
+} from "@caelush/agent";
+import {
   ToolBatchInputError,
   type ToolBatchItem,
   type ToolBatchOutcome,
@@ -65,6 +73,12 @@ import { RunExecutionScopeRegistry } from "./run-execution-scope.js";
 import { RunDeadlineRegistry } from "./run-deadline-registry.js";
 import { deriveRunDeadline, isRunDeadlineExceeded } from "./run-deadline.js";
 import { resolveRunTerminationAuthority } from "./run-termination-authority.js";
+import {
+  toDirectiveAction,
+  toLegacyBudgetBlock,
+  toProtocolErrorCode,
+  toRunExecutionFacts,
+} from "./run-execution-facts.js";
 import {
   RunExecutionConflictError,
   RunExecutionInvariantError,
@@ -163,6 +177,16 @@ export class RunController {
   private readonly retryRegistry: RunRetryRegistry;
   private readonly retryController: RetryController;
   private readonly eventFactory: RunControllerEventFactory;
+  /**
+   * The durable Run execution coordinator.
+   *
+   * Phase 3C made "what does durable execution do next" a pure, deterministic decision that is
+   * separate from "who makes it durable". The coordinator plans; this controller is still the only
+   * object that commits a lifecycle transition.
+   */
+  private readonly coordinator: RunExecutionCoordinator;
+  /** The frozen effect-to-commit planner. It is pure: it describes a transition, it never writes. */
+  private readonly transitionPlanner: RunTransitionPlanner;
 
   constructor(private readonly dependencies: RunControllerDependencies) {
     this.eventFactory = createRunControllerEventFactory();
@@ -171,6 +195,8 @@ export class RunController {
       dependencies.deadlineRegistry ?? new RunDeadlineRegistry({ clock: dependencies.clock });
     this.retryRegistry =
       dependencies.retryRegistry ?? new RunRetryRegistry({ clock: dependencies.clock });
+    this.coordinator = dependencies.coordinator ?? createRunExecutionCoordinator();
+    this.transitionPlanner = dependencies.transitionPlanner ?? createRunTransitionPlanner();
     this.retryController = new RetryController({
       ...(dependencies.retryPolicy === undefined ? {} : { policy: dependencies.retryPolicy }),
       ...(dependencies.retryJitter === undefined ? {} : { jitter: dependencies.retryJitter }),
@@ -484,6 +510,10 @@ export class RunController {
 
   private async recoverLocked(runId: RunId): Promise<RunControllerResult> {
     const loaded = await this.load(runId);
+    // The coordinator owns the governance priority — terminal, cancellation, deadline, exception,
+    // step budget, boundary — so the ordering cannot drift between call sites.
+    const coordinated = this.coordinatedBoundary(loaded);
+    if (coordinated !== undefined) return coordinated;
     if (loaded.cancellationIntent !== undefined) return this.finalizeCancellation(loaded);
     if (this.isExpired(loaded)) return this.finalizeTimeout(loaded);
     if (loaded.run.status === "RUNNING" && loaded.continuation?.type === "WAITING_RETRY") {
@@ -2881,6 +2911,157 @@ export class RunController {
       await scope.settled;
     }
     return this.withTerminationLock(runId, () => this.finalizeTimeout(loaded));
+  }
+
+  /**
+   * The coordinated durable boundary for a recovering Run.
+   *
+   * It answers only the decisions whose priority the coordinator owns, and it returns `undefined`
+   * for everything else so the status-specific recovery logic stays in one place:
+   *
+   * ```text
+   * FINALIZE  cancellation, deadline, step budget, and the two abort causes
+   * SUSPEND   an approval or resource boundary that only an external resolution can move
+   * RETURN_TERMINAL  an already settled Run, or a stale Step that must not be resent
+   * ```
+   *
+   * `ADVANCE_AGENT`, `EXECUTE_TOOL_BATCH` and `EVALUATE_COMPLETION` are deliberately not answered
+   * here. Each needs the same preconditions the status-specific paths already enforce — a
+   * coordinator-level Tool batch must not run when Tool execution is composed out — and routing
+   * them here would duplicate those checks rather than centralise them.
+   */
+  private coordinatedBoundary(
+    snapshot: RunExecutionSnapshot,
+  ): Promise<RunControllerResult> | RunControllerResult | undefined {
+    const now = this.dependencies.clock.now();
+    const scope = this.scopes.get(snapshot.run.id);
+    const directive = this.coordinator.next(
+      toRunExecutionFacts({
+        snapshot,
+        now,
+        toolBatchAvailable: this.dependencies.toolCoordinator !== undefined,
+        completionAvailable: true,
+        // "A scope exists" is not "the Run was aborted": a scope is open for every active
+        // execution. Only a fired abort has a cause to route.
+        aborted: scope?.signal.aborted === true,
+        ...(scope?.abortCause === undefined ? {} : { abortCause: scope.abortCause }),
+        deadlineExceeded: this.isExpired(snapshot),
+      }),
+      now,
+    );
+
+    switch (toDirectiveAction(directive).action) {
+      case "FINALIZE": {
+        const finalization = (directive as FinalizeDirective).finalization;
+        switch (finalization.reason) {
+          case "CANCELLED":
+            return this.finalizeCancellation(snapshot);
+          case "TIMEOUT":
+            return this.finalizeTimeout(snapshot);
+          case "BUDGET_EXCEEDED": {
+            const block = toLegacyBudgetBlock(finalization.block);
+            if (block.kind !== "EXCEEDED") {
+              // `UNAVAILABLE` is not a budget that was spent: it is a fail-closed configuration
+              // outcome, and reporting it as an exceeded budget would claim a limit was applied.
+              // It is left to the status-specific path, which settles enforcement failures.
+              return undefined;
+            }
+            return this.finalizeBudgetExceeded(snapshot, block);
+          }
+          case "MAX_STEPS_REACHED":
+            return this.finalizeMaxSteps(snapshot, finalization);
+          case "FAILED":
+            if (snapshot.state === undefined) {
+              throw new RunControllerInvariantError(
+                "A failure finalization requires an AgentState",
+              );
+            }
+            return this.commitFailure(
+              snapshot,
+              markAgentRunFailed(snapshot.run, now),
+              markAgentStateFailed(
+                snapshot.state,
+                {
+                  code: toProtocolErrorCode(finalization.error.code),
+                  message: finalization.error.message,
+                  retryable: finalization.error.retryable,
+                  phase: "INTERNAL",
+                },
+                now,
+              ),
+              undefined,
+            ).then((commit) => {
+              this.notify(commit.events);
+              return this.resultFromSnapshot(commit.snapshot);
+            });
+        }
+        return undefined;
+      }
+      case "SUSPEND":
+        // Both suspensions are already durable when recovery observes them: the RunController
+        // committed them at the boundary. Recovery therefore has nothing to write.
+        return this.resultFromSnapshot(snapshot);
+      case "RETURN_TERMINAL": {
+        const terminal = directive as ReturnTerminalDirective;
+        if (terminal.reason === "ALREADY_TERMINAL") return this.resultFromSnapshot(snapshot);
+        // Every other terminal reason is a boundary the status-specific recovery path already
+        // knows how to settle, or a composition gap it reports. Answering it here would either
+        // duplicate that logic or hide the gap.
+        return undefined;
+      }
+      default:
+        return undefined;
+    }
+  }
+
+  private async finalizeMaxSteps(
+    snapshot: RunExecutionSnapshot,
+    finalization: Extract<
+      import("@caelush/agent").RunExecutionFinalization,
+      { reason: "MAX_STEPS_REACHED" }
+    >,
+  ): Promise<RunControllerResult> {
+    if (snapshot.state === undefined) {
+      throw new RunControllerInvariantError("The step budget requires an AgentState");
+    }
+    const now = this.dependencies.clock.now();
+    const state = markAgentStateMaxStepsReached(snapshot.state, now);
+    const run = AgentRunSchema.parse({
+      ...snapshot.run,
+      status: "MAX_STEPS_REACHED",
+      finishedAt: now,
+    });
+    const commit = await this.commit({
+      run,
+      state,
+      expectedStateRevision: snapshot.stateRevision ?? null,
+      expectedContinuationRevision: snapshot.continuationRevision ?? null,
+      stepWrites: [],
+      messagesToAppend: [],
+      continuation: { operation: "CLEAR" },
+      events: [
+        this.eventFactory.maxSteps(
+          snapshot.run,
+          state,
+          {
+            type: "MAX_STEPS_REACHED",
+            stepsCompleted: finalization.stepsCompleted,
+            maxSteps: finalization.maxSteps,
+          },
+          this.nextEventId(),
+          now,
+        ),
+        this.eventFactory.statusChanged(
+          snapshot.run,
+          snapshot.run.status,
+          "MAX_STEPS_REACHED",
+          this.nextEventId(),
+          now,
+        ),
+      ],
+    });
+    this.notify(commit.events);
+    return this.resultFromSnapshot(commit.snapshot);
   }
 
   private executionSignal(runId: RunId): AbortSignal {

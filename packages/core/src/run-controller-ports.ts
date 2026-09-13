@@ -170,6 +170,16 @@ export interface RunControllerDependencies {
    * executor, so the host publishes it here rather than letting a facade invent one.
    */
   readonly verificationTurnIdentity?: () => import("@caelush/agent").AgentExecutionIdentity;
+  /**
+   * The durable Run execution coordinator.
+   *
+   * Phase 3C made "what does durable execution do next" a pure, injectable decision, so a host can
+   * supply its own policy — and so the default one is testable as a table rather than through a
+   * live Run. The RunController remains the only object that commits a lifecycle transition.
+   */
+  readonly coordinator?: import("@caelush/agent").RunExecutionCoordinator;
+  /** The frozen effect-to-commit planner. Injectable for the same reason. */
+  readonly transitionPlanner?: import("@caelush/agent").RunTransitionPlanner;
   readonly verificationRepairPolicy?: VerificationRepairPolicy;
   readonly verificationPlanCount?: (runId: import("@caelush/protocol").RunId) => Promise<number>;
   readonly onVerifiedCompletion?: (input: {
