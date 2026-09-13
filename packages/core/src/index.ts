@@ -119,6 +119,14 @@ export type {
   LegacyModelTurnExecutor,
   LegacyModelTurnExecutorDependencies,
 } from "./legacy-model-turn-executor.js";
+/**
+ * The transitional legacy Context Engine behind the frozen context boundary.
+ *
+ * Exported because a host composition root must build the frozen `ContextEnginePort` over the
+ * current Context System. It is deleted when Context Engineering V2 owns real context assembly.
+ */
+export { createLegacyContextRuntimeAdapter } from "./legacy-context-runtime-adapter.js";
+export type { LegacyContextRuntimeAdapterDependencies } from "./legacy-context-runtime-adapter.js";
 export {
   fingerprintToolBatch,
   fingerprintToolRequest,

@@ -8,8 +8,14 @@ import type {
   ContextRuntimeCoordinatorPort,
 } from "@caelush/context";
 import type { AIModelRequest, ModelCatalog } from "@caelush/ai";
-import type { AgentExecutionIdentity } from "@caelush/agent";
+import type {
+  AgentExecutionIdentity,
+  ContextEnginePort,
+  ModelRequestAdmissionPort,
+  ModelTurnBoundaryPort,
+} from "@caelush/agent";
 import type { LegacyModelTurnExecutor } from "./legacy-model-turn-executor.js";
+import type { AgentLoopCommonInput } from "./agent-loop-input.js";
 import type {
   AgentRun,
   AgentState,
@@ -19,7 +25,13 @@ import type {
   TimestampMs,
 } from "@caelush/protocol";
 
-export type AgentProviderTurnState = "NOT_STARTED" | "FAILED" | "COMPLETED" | "CANCELLED";
+/**
+ * How far a provider turn got, re-exported from the frozen kernel.
+ *
+ * Phase 3B moved the vocabulary to `@caelush/agent`, because the loop is what observes whether
+ * a provider turn settled. Core keeps the name for its existing consumers.
+ */
+export type { AgentProviderTurnState } from "@caelush/agent";
 
 export interface AgentBeforeProviderTurn {
   readonly run: AgentRun;
@@ -76,11 +88,32 @@ export interface AgentTurnIdentityResolverPort {
   (run: Pick<AgentRun, "id" | "sessionId" | "goal">): AgentExecutionIdentity;
 }
 
+/**
+ * Builds the frozen Context Engine for one turn.
+ *
+ * The frozen boundary has no `baseSystemPrompt`, `contextLimits`, `cwd` or `explicitPaths`:
+ * those are legacy Context configuration, and a general kernel must not carry them. The Core
+ * facade therefore assembles the legacy adapter per turn, from the turn's own input, and hands
+ * the port down.
+ */
+export interface AgentContextEngineFactoryPort {
+  (input: AgentLoopCommonInput): ContextEnginePort;
+}
+
 export interface AgentLoopDependencies {
   readonly inspector: AgentProjectInspectorPort;
   readonly planner: AgentRelevantFilePlannerPort;
   readonly contextBuilder: AgentContextBuilderPort;
   readonly contextRuntime?: AgentContextRuntimePort;
+  /**
+   * The frozen Context Engine seam.
+   *
+   * Phase 3B routes every Reason through `@caelush/agent`'s `AgentLoop.advance()`, which
+   * requires a `ContextEnginePort`. The factory is where the Core boundary builds the legacy
+   * adapter from the turn's own configuration, so the general loop never sees a base prompt, a
+   * context limit or a working directory.
+   */
+  readonly createContextEngine?: AgentContextEngineFactoryPort;
   /**
    * The model metadata authority.
    *
@@ -96,8 +129,8 @@ export interface AgentLoopDependencies {
    * `AIModelRequest` to the executor and receives one `AIModelTurnResult`.
    *
    * Phase 3A aligned the agent executor with the frozen union result, so this seam is the
-   * transitional throwing facade over it. It becomes the frozen port itself when the Core
-   * loop is replaced in Phase 3B.
+   * transitional throw-based facade over it. Phase 3B drives it from inside the frozen
+   * `AgentLoop.advance()`, which resolves a union; the facade unwraps that union here.
    */
   readonly modelTurns: LegacyModelTurnExecutor;
   readonly clock: AgentClock;
@@ -109,5 +142,20 @@ export interface AgentLoopDependencies {
    * supplied in production because the frozen boundary port commits against it.
    */
   readonly resolveTurnIdentity?: AgentTurnIdentityResolverPort;
+  /**
+   * The frozen model admission port.
+   *
+   * A refusal is a typed decision now, not an exception, so a blocked turn never reaches the
+   * boundary or the provider and the Run Layer settles it from the reported budget block.
+   */
+  readonly modelAdmission?: ModelRequestAdmissionPort;
+  /**
+   * The frozen durable model turn boundary.
+   *
+   * When omitted, the facade derives it from `lifecycle.beforeProviderTurn`, which the
+   * RunController implements as the atomic commit of the running Step, its `currentStepId`,
+   * any consumed continuation and `llm.started`.
+   */
+  readonly modelTurnBoundary?: ModelTurnBoundaryPort;
   readonly lifecycle?: AgentLoopLifecycleHooks;
 }

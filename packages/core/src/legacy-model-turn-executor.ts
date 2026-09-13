@@ -1,19 +1,21 @@
 import { AIError, createAIError } from "@caelush/ai";
 import type { AIErrorCode, AIModelRequest, AIModelTurnResult } from "@caelush/ai";
+import { isRetryableModelTurnErrorCode, toModelTurnExecutionErrorCode } from "@caelush/agent";
 import type {
   AgentExecutionIdentity,
   AgentTurnRef,
+  ModelTurnExecutionError,
   ModelTurnExecutionInput,
   ModelTurnExecutor,
 } from "@caelush/agent";
 import type { StepId } from "@caelush/protocol";
 
 /**
- * TRANSITIONAL — the legacy throwing facade over the frozen `ModelTurnExecutor`.
+ * TRANSITIONAL — the legacy throw-based facade over the frozen `ModelTurnExecutor`.
  *
  * Phase 3A aligned the agent executor with the frozen contract: one model turn now
  * resolves a `ModelTurnExecutionResult` union instead of throwing. The Core consumers that
- * were written against the previous throwing semantics — the legacy `AgentLoop` and the
+ * were written against the previous throw-based semantics — the legacy `AgentLoop` and the
  * verification `TaskAcceptanceReviewer` — keep working through this adapter:
  *
  * ```text
@@ -22,11 +24,43 @@ import type { StepId } from "@caelush/protocol";
  * CANCELLED → a thrown cancellation signal (AIError AI_ABORTED)
  * ```
  *
- * The `@caelush/agent` package keeps no throwing public interface: this shape exists only
+ * The `@caelush/agent` package keeps no throw-based public interface: this shape exists only
  * at the legacy host boundary and is deleted when the Core loop is replaced in Phase 3B.
  */
 
-/** The legacy throwing model turn contract. */
+/**
+ * Map a thrown failure onto the frozen model-turn error shape.
+ *
+ * The frozen executor classifies its own failures. This export exists because the Core
+ * compatibility loop drives the frozen `AgentLoop.advance()` over the legacy throw-based
+ * executor, so a throw has to be translated into the union the loop expects. The thrown
+ * message never crosses: a legacy throw may quote a provider body, a prompt or a credential.
+ */
+export function toModelTurnExecutionError(error: unknown): ModelTurnExecutionError {
+  const code = readAIErrorCode(error);
+  const mapped = code === undefined ? "PROVIDER_ERROR" : toModelTurnExecutionErrorCode(code);
+  const retryAfterMs = readRetryAfterMs(error);
+  return {
+    code: mapped,
+    message: "The model turn failed.",
+    retryable: isRetryableModelTurnErrorCode(mapped),
+    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+  };
+}
+
+function readAIErrorCode(error: unknown): AIErrorCode | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const candidate = (error as { readonly code?: unknown }).code;
+  return typeof candidate === "string" ? (candidate as AIErrorCode) : undefined;
+}
+
+function readRetryAfterMs(error: unknown): number | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const candidate = (error as { readonly retryAfterMs?: unknown }).retryAfterMs;
+  return typeof candidate === "number" ? candidate : undefined;
+}
+
+/** The legacy throw-based model turn contract. */
 export interface LegacyModelTurnExecutor {
   execute(input: {
     readonly request: AIModelRequest;

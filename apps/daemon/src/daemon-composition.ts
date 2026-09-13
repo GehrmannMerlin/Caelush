@@ -4,6 +4,7 @@ import {
   RunDeadlineRegistry,
   RunExecutionScopeRegistry,
   RunRetryRegistry,
+  createLegacyContextRuntimeAdapter,
   createLegacyModelTurnExecutor,
   createProjectProfileProvider,
   type LegacyModelTurnExecutor,
@@ -317,11 +318,29 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
       return artifact?.runId === runId ? artifact.content : undefined;
     },
   });
+  const planner = createLocalRelevantFilePlanner();
+  const contextBuilder = createDefaultContextBuilder();
   const agentLoop = new AgentLoop({
     inspector,
-    planner: createLocalRelevantFilePlanner(),
-    contextBuilder: createDefaultContextBuilder(),
+    planner,
+    contextBuilder,
     contextRuntime,
+    // The frozen Context Engine seam. The legacy Context System is configured per turn — base
+    // prompt, limits, cwd, explicit paths — so the host builds its adapter from the turn's own
+    // input, and the general loop never sees any of it.
+    createContextEngine: (input) =>
+      createLegacyContextRuntimeAdapter({
+        inspector,
+        planner,
+        contextBuilder,
+        contextRuntime,
+        models: ai.models,
+        baseSystemPrompt: input.baseSystemPrompt,
+        contextLimits: input.contextLimits,
+        workspace: input.run.workspace,
+        ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
+        ...(input.explicitPaths === undefined ? {} : { explicitPaths: input.explicitPaths }),
+      }),
     models: ai.models,
     modelTurns,
     clock,
