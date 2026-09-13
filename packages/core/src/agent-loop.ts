@@ -289,6 +289,7 @@ export class AgentLoop {
   ): { readonly loop: FrozenAgentLoop; readonly outcome: CoreTurnOutcome } {
     const legacy = this.dependencies.modelTurns;
     const lifecycle = this.dependencies.lifecycle;
+    const presentation = this.dependencies.streamSink;
     const outcome: CoreTurnOutcome = { providerTurnState: "NOT_STARTED" };
 
     const modelTurnExecutor: ModelTurnExecutor = {
@@ -298,6 +299,11 @@ export class AgentLoop {
           const result = await legacy.execute({
             request: execution.request,
             signal: execution.signal,
+            // The frozen `advance()` has no presentation input, so the sink is bound here: the
+            // composition decorates the `ModelTurnExecutor`, and this facade is that decoration
+            // for the Core path. It lands on the frozen `ModelTurnExecutionInput`, which is the
+            // only contract that may carry live deltas.
+            ...(presentation === undefined ? {} : { streamSink: presentation }),
           });
           // The provider answered. Whether the classifier accepts the answer is a separate
           // question, and the frozen result reports that distinction itself.
@@ -377,7 +383,7 @@ export class AgentLoop {
     return {
       loop: createAgentLoop({
         contextEngine: this.captureContextErrors(this.contextEngine(input), outcome),
-        modelTurnExecutor: this.bindStreamSink(modelTurnExecutor),
+        modelTurnExecutor,
         // The composition root owns the classifier. The loop has no default, so there is no
         // second decision authority it could fall back to.
         decisionClassifier: createAgentDecisionClassifier(),
@@ -408,22 +414,6 @@ export class AgentLoop {
           throw error;
         }
       },
-    };
-  }
-
-  /**
-   * Bind the transient stream sink to the executor, which is where the frozen contract puts it.
-   *
-   * `AgentLoop.advance()` has no `streamSink` input: presentation is a `ModelTurnExecutor`
-   * concern, and the composition root binds it by decorating the executor it hands to the loop.
-   * That is exactly what this does, so live deltas keep flowing for a host that configured a
-   * sink while the frozen Reason contract stays free of presentation state.
-   */
-  private bindStreamSink(executor: ModelTurnExecutor): ModelTurnExecutor {
-    const sink = this.dependencies.streamSink;
-    if (sink === undefined) return executor;
-    return {
-      execute: (execution) => executor.execute({ ...execution, streamSink: sink }),
     };
   }
 

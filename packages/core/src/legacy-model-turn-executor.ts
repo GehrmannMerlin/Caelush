@@ -7,6 +7,7 @@ import type {
   ModelTurnExecutionError,
   ModelTurnExecutionInput,
   ModelTurnExecutor,
+  ModelTurnStreamSink,
 } from "@caelush/agent";
 import type { StepId } from "@caelush/protocol";
 
@@ -65,6 +66,15 @@ export interface LegacyModelTurnExecutor {
   execute(input: {
     readonly request: AIModelRequest;
     readonly signal: AbortSignal;
+    /**
+     * The transient presentation sink for this turn, when the host configured one.
+     *
+     * The frozen `AgentLoop.advance()` has no `streamSink` input: live deltas belong to the
+     * `ModelTurnExecutor`, and the composition binds them by decorating the executor. This facade
+     * is the decoration point for the Core path — it forwards the sink into the frozen
+     * `ModelTurnExecutionInput`, which is the only place that may project provider deltas.
+     */
+    readonly streamSink?: ModelTurnStreamSink;
   }): Promise<AIModelTurnResult>;
 }
 
@@ -101,6 +111,7 @@ export function createLegacyModelTurnExecutor(
     async execute(input: {
       readonly request: AIModelRequest;
       readonly signal: AbortSignal;
+      readonly streamSink?: ModelTurnStreamSink;
     }): Promise<AIModelTurnResult> {
       sequence += 1;
       const turn: AgentTurnRef = {
@@ -113,6 +124,7 @@ export function createLegacyModelTurnExecutor(
         turn,
         request: input.request,
         signal: input.signal,
+        ...(input.streamSink === undefined ? {} : { streamSink: input.streamSink }),
       };
       const result = await dependencies.executor.execute(execution);
 
