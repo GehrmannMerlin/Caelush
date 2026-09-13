@@ -1,4 +1,8 @@
 import {
+  createAnthropicMessagesApiAdapter,
+  ANTHROPIC_MESSAGES_API_ID,
+} from "@caelush/ai/adapters/anthropic-messages";
+import {
   createOpenAICompatibleApiAdapter,
   OPENAI_COMPATIBLE_API_ID,
 } from "@caelush/ai/adapters/openai-compatible";
@@ -135,7 +139,22 @@ function descriptorFor(
   };
 }
 
-/** The single OpenAI-compatible adapter every legacy provider shares. */
+/**
+ * Every native API dialect the daemon can speak.
+ *
+ * Two adapters, not two providers: a dialect names a wire protocol, and a provider
+ * binding selects one through `AIProviderBinding.defaultApi` while a model selects
+ * one through `ModelDescriptor.api`. The legacy environment configuration keeps
+ * using `ai = openai-compatible-chat`, so registering the second dialect changes no
+ * existing deployment; a host opts in through the programmatic `providerBindings` and
+ * `modelSources` seams.
+ */
 export function createDaemonApiAdapters() {
-  return [createOpenAICompatibleApiAdapter()] as const;
+  return [createOpenAICompatibleApiAdapter(), createAnthropicMessagesApiAdapter()] as const;
 }
+
+/** The dialect ids this composition registers, for diagnostics and tests. */
+export const DAEMON_API_DIALECT_IDS = [
+  OPENAI_COMPATIBLE_API_ID,
+  ANTHROPIC_MESSAGES_API_ID,
+] as const;
