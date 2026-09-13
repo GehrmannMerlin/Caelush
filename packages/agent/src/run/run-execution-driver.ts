@@ -1,15 +1,11 @@
-import type { AIUserMessage } from "@caelush/ai";
+import type { AIMessage, AIModelSettings, AIToolSpec, ModelDescriptor } from "@caelush/ai";
 
-import type { AgentDecision } from "../loop/decision/decision.js";
-import type {
-  RunExecutionBudgetBlock,
-  RunExecutionDirective,
-  RunExecutionError,
-  RunExecutionMode,
-} from "./directive.js";
-import type { RunExecutionFailureStage } from "./effect-result.js";
-import type { RunExecutionFacts } from "./snapshot.js";
-import type { RunExecutionEffectResult, RunExecutionToolTurnResult } from "./effect-result.js";
+import type { AgentLoop } from "../loop/agent-loop.js";
+import type { AgentExecutionIdentity, AgentTurnRef } from "../loop/types.js";
+import type { RunExecutionDirective } from "./directive.js";
+import type { RunExecutionEffectResult } from "./effect-result.js";
+import type { CompletionGate } from "./ports/completion-gate.js";
+import type { ToolTurnCoordinator } from "./ports/tool-turn.js";
 
 /**
  * The durable Run execution driver.
@@ -22,105 +18,136 @@ import type { RunExecutionEffectResult, RunExecutionToolTurnResult } from "./eff
  * narrow in three directions:
  *
  * ```text
- * it writes no Run status        only the RunController commits a lifecycle transition
- * it owns no retry policy        it reports retryable metadata; the Run Layer decides
- * it never loops a Run           it executes one effect per call and returns
+ * it writes no Run status       only the RunController commits a lifecycle transition
+ * it owns no retry policy       it reports what happened; the Run Layer decides what it means
+ * it never loops a Run          it executes one effect per call and returns
  * ```
  *
  * What each directive means for the driver:
  *
  * ```text
- * ADVANCE_AGENT       one model turn through the frozen AgentLoop.advance()
- * EXECUTE_TOOL_BATCH  one Tool boundary; the Tool Layer owns execution, not this port
- * EVALUATE_COMPLETION one Completion Gate evaluation of an existing candidate
+ * ADVANCE_AGENT        one model turn through the frozen AgentLoop.advance()
+ * EXECUTE_TOOL_BATCH   one Tool batch turn through the Tool turn coordinator
+ * EVALUATE_COMPLETION  one completion evaluation of an existing candidate
  * SUSPEND / FINALIZE / RETURN_TERMINAL
- *                     nothing to execute: the RunController owns what happens next
+ *                      nothing to execute: the RunController owns what happens next
  * ```
+ *
+ * `EXECUTE_TOOL_BATCH` and `EVALUATE_COMPLETION` are generic here and driven entirely by their
+ * ports. Their production adapters are Phase 3D and Phase 3E work; this phase wires
+ * `ADVANCE_AGENT` for real.
  */
-export interface RunExecutionDriver {
-  execute(input: RunExecutionDriverInput): Promise<RunExecutionEffectResult>;
+export interface RunExecutionDriverDependencies {
+  readonly agentLoop: AgentLoop;
+  readonly toolTurns: ToolTurnCoordinator;
+  readonly completionGate: CompletionGate;
 }
 
-/** The context one effect is executed in. */
-export interface RunExecutionDriverInput {
-  /** The directive the coordinator produced, verbatim. */
-  readonly directive: RunExecutionDirective;
-  readonly facts: RunExecutionFacts;
+export interface RunExecutionDriver {
+  execute(
+    directive: RunExecutionDirective,
+    context: RunExecutionEffectContext,
+  ): Promise<RunExecutionEffectResult>;
+}
+
+/**
+ * The context one effect is executed in.
+ *
+ * It is everything a general Reason needs and nothing a host knows: an identity, the allocated
+ * turn, the history it reasons from, the resolved model, the Tool catalog, the model settings and
+ * the caller's cancellation signal.
+ *
+ * Deliberately absent: a workspace, a Runtime, a Git state, a project inspector, a verification
+ * plan or a coding Tool registry. A driver that could see those would be a coding agent wearing a
+ * general Run Layer's name, and the Agent Loop it drives would inherit the same knowledge through
+ * the context it was handed.
+ */
+export interface RunExecutionEffectContext {
+  readonly identity: AgentExecutionIdentity;
+  /**
+   * The durable turn this effect runs as.
+   *
+   * The Run Layer allocated the Step before the effect began, so the driver forwards a real
+   * `AgentTurnRef` rather than inventing one. A durable boundary commits against it.
+   */
+  readonly turn: AgentTurnRef;
+  readonly history: readonly AIMessage[];
+  readonly model: ModelDescriptor;
+  readonly tools: readonly AIToolSpec[];
+  readonly modelSettings?: AIModelSettings | undefined;
   /**
    * The caller's cancellation signal.
    *
    * The driver never creates an abort scope, never owns a timeout and never reads a deadline: it
-   * forwards this signal, and Run cancellation stays a Run Layer authority.
+   * forwards this signal unchanged, and Run cancellation stays a Run Layer authority.
    */
   readonly signal: AbortSignal;
 }
 
-/* --------------------------------------------------------- step lifecycle */
-
-/**
- * The durable Step lifecycle seam.
- *
- * Phase 3C extracts Step creation and settlement out of the AgentLoop and behind this port, so
- * the port's owner can be the Run Layer. One model turn is one durable AgentStep.
- *
- * Every method is idempotent for the same turn: a Run that restarts must be able to settle the
- * same Step again without creating a second one.
- */
-export interface AgentStepLifecyclePort {
-  /** Begin the durable Step for this turn. It must commit before any provider I/O. */
-  begin(input: AgentStepBeginInput): Promise<AgentStepHandle>;
-  /** Settle the Step as completed. */
-  complete(input: AgentStepHandle): Promise<void>;
-  /** Settle the Step as failed. A provider attempt really was made. */
-  fail(input: AgentStepHandle): Promise<void>;
-  /** Settle the Step as cancelled. Cancellation is not a failure. */
-  cancel(input: AgentStepHandle): Promise<void>;
+/** Create the frozen driver over its three ports. */
+export function createRunExecutionDriver(
+  dependencies: RunExecutionDriverDependencies,
+): RunExecutionDriver {
+  return {
+    async execute(
+      directive: RunExecutionDirective,
+      context: RunExecutionEffectContext,
+    ): Promise<RunExecutionEffectResult> {
+      switch (directive.kind) {
+        case "ADVANCE_AGENT": {
+          // The directive already carries the turn input; the driver supplies the execution
+          // context. Nothing is re-derived from the Run, so the Reason the coordinator decided on
+          // is the Reason that runs.
+          const result = await dependencies.agentLoop.advance({
+            identity: context.identity,
+            turn: context.turn,
+            history: context.history,
+            input: directive.input,
+            model: context.model,
+            tools: context.tools,
+            ...(context.modelSettings === undefined
+              ? {}
+              : { modelSettings: context.modelSettings }),
+            signal: context.signal,
+          });
+          return { kind: "AGENT", result };
+        }
+        case "EXECUTE_TOOL_BATCH": {
+          const result = await dependencies.toolTurns.execute({
+            mode: directive.mode,
+            sourceStepId: directive.sourceStepId,
+            pendingDecision: directive.pendingDecision,
+            ...(directive.observationPolicy === undefined
+              ? {}
+              : { observationPolicy: directive.observationPolicy }),
+            signal: context.signal,
+          });
+          return { kind: "TOOLS", result };
+        }
+        case "EVALUATE_COMPLETION": {
+          const result = await dependencies.completionGate.evaluate({
+            mode: directive.mode,
+            sourceStepId: directive.sourceStepId,
+            candidate: directive.candidate,
+            signal: context.signal,
+          });
+          return { kind: "COMPLETION", result };
+        }
+        case "SUSPEND":
+        case "FINALIZE":
+        case "RETURN_TERMINAL":
+          // Nothing to execute. The RunController owns what happens next, and inventing an effect
+          // here would hand it a state change nobody decided on.
+          return { kind: "NONE" };
+        default:
+          return assertUnhandledDirective(directive);
+      }
+    },
+  };
 }
 
-/** The identity a durable Step needs. */
-export interface AgentStepBeginInput {
-  readonly runId: string;
-  readonly mode: RunExecutionMode;
-  /** The caller's cancellation signal, so the commit itself is abortable. */
-  readonly signal: AbortSignal;
+function assertUnhandledDirective(directive: never): never {
+  throw new TypeError(
+    `Unhandled Run execution directive: ${String((directive as { kind?: unknown }).kind)}.`,
+  );
 }
-
-/** One durable Step attempt, named by the port rather than by the loop. */
-export interface AgentStepHandle {
-  readonly stepId: string;
-  readonly sequence: number;
-}
-
-/* ---------------------------------------------------------------- inputs */
-
-/** One agent turn's frozen input, as the driver hands it to the loop. */
-export interface RunExecutionAgentTurnInput {
-  readonly decision?: AgentDecision;
-  readonly messages?: readonly AIUserMessage[];
-}
-
-/** What a Tool batch boundary is asked to do. */
-export interface RunExecutionToolBatchInput {
-  readonly mode: "EXECUTE" | "RECOVER";
-  readonly signal: AbortSignal;
-  readonly toolRequests: readonly {
-    readonly externalCallId: string;
-    readonly toolName: string;
-  }[];
-}
-
-/** The Tool boundary port. Phase 3D owns its real wiring. */
-export interface RunExecutionToolBoundaryPort {
-  execute(input: RunExecutionToolBatchInput): Promise<RunExecutionToolTurnResult>;
-}
-
-/* ------------------------------------------------------------- re-exports */
-
-export type {
-  RunExecutionBudgetBlock,
-  RunExecutionEffectResult,
-  RunExecutionError,
-  RunExecutionFailureStage,
-  RunExecutionMode,
-  RunExecutionToolTurnResult,
-};

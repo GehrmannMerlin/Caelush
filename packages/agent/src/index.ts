@@ -157,55 +157,112 @@ export type {
 /* The durable Run execution contract: directive, coordinator, driver, planner. */
 export {
   createRunExecutionCoordinator,
-  isTerminalExecutionStatus,
   nextRunExecutionDirective,
 } from "./run/run-execution-coordinator.js";
-export type { RunExecutionCoordinator, RunExecutionFacts } from "./run/snapshot.js";
+export type { RunExecutionCoordinator } from "./run/run-execution-coordinator.js";
+export {
+  RUN_EXECUTION_ADVANCE_REASONS,
+  RUN_EXECUTION_DIRECTIVE_KINDS,
+  RUN_EXECUTION_FINALIZE_REASONS,
+  RUN_EXECUTION_STATUSES,
+  RUN_EXECUTION_SUSPEND_BOUNDARIES,
+  isTerminalExecutionStatus,
+} from "./run/directive.js";
 export type {
   AdvanceAgentDirective,
   EvaluateCompletionDirective,
   ExecuteToolBatchDirective,
   FinalizeDirective,
   ReturnTerminalDirective,
-  RunExecutionBudgetBlock,
-  RunExecutionContinuationKind,
+  RunExecutionAdvanceReason,
   RunExecutionDirective,
-  RunExecutionError,
-  RunExecutionErrorCode,
-  RunExecutionFinalization,
+  RunExecutionFinalizeReason,
   RunExecutionMode,
   RunExecutionStatus,
-  RunExecutionTerminalReason,
-  RunExecutionWaitReason,
+  RunExecutionSuspendBoundary,
   SuspendDirective,
 } from "./run/directive.js";
-export { RUN_EXECUTION_DIRECTIVE_KINDS } from "./run/directive.js";
-export { createRunTransitionPlanner, planRunTransition } from "./run/run-transition-planner.js";
 export type {
-  RunStepSettlement,
-  RunTransitionDraft,
   RunTransitionPlanInput,
   RunTransitionPlanner,
 } from "./run/run-transition-planner.js";
+export { createRunExecutionDriver } from "./run/run-execution-driver.js";
 export type {
-  AgentStepBeginInput,
-  AgentStepHandle,
-  AgentStepLifecyclePort,
-  RunExecutionAgentTurnInput,
   RunExecutionDriver,
-  RunExecutionDriverInput,
-  RunExecutionToolBatchInput,
-  RunExecutionToolBoundaryPort,
+  RunExecutionDriverDependencies,
+  RunExecutionEffectContext,
 } from "./run/run-execution-driver.js";
+export { RUN_EXECUTION_EFFECT_KINDS } from "./run/effect-result.js";
+export type { RunExecutionEffectResult } from "./run/effect-result.js";
+
+/* The canonical Run execution store port. */
+export {
+  RunExecutionConflictError,
+  RunExecutionInvariantError,
+} from "./run/ports/run-execution-store.js";
 export type {
-  RunExecutionAgentEffect,
-  RunExecutionCompletionEffect,
-  RunExecutionEffectResult,
-  RunExecutionFailureStage,
-  RunExecutionNoneEffect,
-  RunExecutionToolTurnResult,
-  RunExecutionToolsEffect,
-} from "./run/effect-result.js";
+  DurableAgentEvent,
+  DurableEventDraft,
+  RunConversationEntry,
+  RunExecutionCommit,
+  RunExecutionCommitResult,
+  RunExecutionContinuationWrite,
+  RunExecutionMessageAppend,
+  RunExecutionSnapshot,
+  RunExecutionStepWrite,
+  RunExecutionStorePort,
+} from "./run/ports/run-execution-store.js";
+
+/* The durable Run continuation domain. */
+export { RUN_CONTINUATION_TYPES, RUNNING_CONTINUATION_TYPES, isRunningContinuation } from "./run/continuation/continuation.js";
+export type {
+  AwaitingVerificationContinuation,
+  RetryErrorCode,
+  RunContinuationCheckpoint,
+  WaitingResourceContinuation,
+  WaitingRetryContinuation,
+  WaitingToolResultsContinuation,
+  WaitingVerificationRepairContinuation,
+} from "./run/continuation/continuation.js";
+
+/* The Tool turn and completion gate contracts. Contract only: 3D and 3E implement them. */
+export { TOOL_TURN_RESULT_KINDS } from "./run/ports/tool-turn.js";
+export type {
+  AgentToolResult,
+  ToolTurnCoordinator,
+  ToolTurnRequest,
+  ToolTurnResult,
+  WaitingApprovalBoundary,
+} from "./run/ports/tool-turn.js";
+export { COMPLETION_GATE_OUTCOMES } from "./run/ports/completion-gate.js";
+export type {
+  CompletionGate,
+  CompletionGateDecision,
+  CompletionGateRequest,
+} from "./run/ports/completion-gate.js";
+
+/* The canonical durable Step lifecycle and its AgentState projection. */
+export { AgentStepStateError } from "./run/turn/step-lifecycle.js";
+export {
+  cancelAgentStep,
+  completeAgentStep,
+  createRunningAgentStep,
+  failAgentStep,
+  nextAgentStepSequence,
+} from "./run/turn/step-lifecycle.js";
+export type {
+  CompleteAgentStepInput,
+  CreateRunningAgentStepInput,
+} from "./run/turn/step-lifecycle.js";
+export {
+  beginAgentStepState,
+  cancelAgentStepState,
+  settleAgentStepState,
+} from "./run/turn/step-state.js";
+export type {
+  CancelAgentStepStateInput,
+  SettleAgentStepInput,
+} from "./run/turn/step-state.js";
 
 /* The transient agent stream. */
 export { AGENT_TRANSIENT_STREAM_EVENT_TYPES } from "./loop/events/transient-stream-event.js";

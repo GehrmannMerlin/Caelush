@@ -1,16 +1,21 @@
+import type { StepId, TimestampMs } from "@caelush/protocol";
+
+import type { AgentTurnInput } from "../loop/types.js";
 import type {
   AdvanceAgentDirective,
   EvaluateCompletionDirective,
   ExecuteToolBatchDirective,
   FinalizeDirective,
-  ReturnTerminalDirective,
+  RunExecutionAdvanceReason,
   RunExecutionDirective,
-  RunExecutionFinalization,
-  RunExecutionTerminalReason,
+  RunExecutionFinalizeReason,
+  RunExecutionMode,
+  RunExecutionSuspendBoundary,
   SuspendDirective,
 } from "./directive.js";
-import type { RunExecutionCoordinator, RunExecutionFacts } from "./snapshot.js";
-import type { RunExecutionStatus } from "./directive.js";
+import { isTerminalExecutionStatus } from "./directive.js";
+import type { RunExecutionSnapshot } from "./ports/run-execution-store.js";
+import { RunExecutionInvariantError } from "./ports/run-execution-store.js";
 
 /**
  * The durable Run execution coordinator.
@@ -19,197 +24,232 @@ import type { RunExecutionStatus } from "./directive.js";
  * RunExecutionDirective = what durable execution does next
  * ```
  *
- * It is **pure and deterministic**: the same facts and the same `now` always produce the same
+ * It is **pure and deterministic**: the same snapshot and the same `now` always produce the same
  * directive. It reads no clock, generates no identifier, performs no I/O, touches no store and
- * mints no state. That is what makes every routing rule in the Run Layer testable as a table
- * instead of as an integration test.
+ * mints no state — which is what makes every routing rule testable as a table.
  *
  * Governance priority is fixed, highest first:
  *
  * ```text
- * 1  already terminal            the Run is settled; nothing may reopen it
- * 2  durable cancellation intent the first writer wins, over every continuation
- * 3  Run deadline                the original deadline, never an extended one
- * 4  unexpected abort            fatal rather than routable
- * 5  structural step budget      maxSteps, which the AgentLoop must not know about
- * 6  durable boundaries          approval, resource, retry timing, accepted results
- * 7  normal execution            advance, tool batch, completion evaluation
+ * 1  already terminal             the Run is settled; nothing may reopen it
+ * 2  durable cancellation intent  the first writer wins, over every continuation
+ * 3  Run deadline                 the original deadline, never an extended one
+ * 4  structural step budget       maxSteps, which the AgentLoop must not know about
+ * 5  durable boundaries           approval, resource, retry timing, accepted results
+ * 6  normal execution             advance, Tool batch, completion evaluation
  * ```
  *
- * The ordering is the whole point. A Run that has spent its step budget must not start another
- * turn, a cancelled Run must not resume a retry, and an expired Run must not be given a fresh
- * attempt — each of those is a real recovery bug that a single misordered branch would create.
+ * The ordering is the point. A Run that has spent its step budget must not start another turn, a
+ * cancelled Run must not resume a retry, and an expired Run must not be given a fresh attempt —
+ * each of those is a real recovery bug that one misordered branch would create.
+ *
+ * A state the coordinator cannot route is **not** guessed at. It throws: an active Step it should
+ * never have been shown, a status it has no rule for, a continuation it cannot interpret.
+ * Reporting one as a terminal result would hide a lifecycle violation inside a successful answer.
  */
+export interface RunExecutionCoordinator {
+  next(snapshot: RunExecutionSnapshot, now: TimestampMs): RunExecutionDirective;
+}
+
+/** Create the frozen coordinator. */
 export function createRunExecutionCoordinator(): RunExecutionCoordinator {
   return {
-    next(facts: RunExecutionFacts, now: number): RunExecutionDirective {
-      return nextRunExecutionDirective(facts, now);
+    next(snapshot: RunExecutionSnapshot, now: TimestampMs): RunExecutionDirective {
+      return nextRunExecutionDirective(snapshot, now);
     },
   };
 }
 
 /** The coordination decision, as a pure function so it can be tested directly. */
 export function nextRunExecutionDirective(
-  facts: RunExecutionFacts,
-  now: number,
+  snapshot: RunExecutionSnapshot,
+  now: TimestampMs,
 ): RunExecutionDirective {
+  const { run, state } = snapshot;
+
   /* 1. A settled Run is settled. */
-  if (isTerminalExecutionStatus(facts.status)) {
-    return terminal(facts.status, "ALREADY_TERMINAL");
-  }
+  if (isTerminalExecutionStatus(run.status)) return { kind: "RETURN_TERMINAL" };
 
   /* 2. Durable cancellation intent outranks every continuation. */
-  if (facts.cancellationRequested === true) {
-    return finalize({ reason: "CANCELLED" });
-  }
+  if (snapshot.cancellationIntent !== undefined) return finalize("CANCELLED");
 
   /* 3. The original Run deadline. */
-  if (facts.deadlineExceeded === true) {
-    return finalize({ reason: "TIMEOUT" });
-  }
+  if (deadlineExceeded(snapshot, now)) return finalize("TIMEOUT");
 
-  /* 4. An abort with no cause is not routable; an abort with the user cause is a cancellation. */
-  if (facts.aborted === true) {
-    if (facts.abortCause === "USER_REQUESTED") return finalize({ reason: "CANCELLED" });
-    if (facts.abortCause === "DEADLINE_EXCEEDED") return finalize({ reason: "TIMEOUT" });
-    return terminal(facts.status, "UNEXPECTED_ABORT");
+  /* 4. An active Step is a boundary the caller must settle before routing. */
+  if (snapshot.activeStep !== undefined) {
+    throw new RunExecutionInvariantError(
+      "A Run with an active Step cannot be routed: the Step must be settled first.",
+    );
   }
 
   /* 5. Structural step budget. The AgentLoop has no idea this exists. */
-  const budget = maxStepsFinalization(facts);
-  if (budget !== undefined) return finalize(budget);
-
-  /* 6. A durable boundary that only an external resolution can move. */
-  if (facts.status === "WAITING_APPROVAL") {
-    return suspend("APPROVAL");
-  }
-  if (facts.status === "WAITING_RESOURCE") {
-    return suspend("RESOURCE");
-  }
-  if (facts.status === "PENDING") {
-    return advance("START");
-  }
-  if (facts.status === "VERIFYING") {
-    return facts.completionAvailable === false
-      ? terminal("VERIFYING", "UNAVAILABLE_VERIFICATION")
-      : evaluateCompletion("RECOVER");
-  }
-  if (facts.status !== "RUNNING") {
-    // A status the coordinator does not route is reported, never guessed at.
-    return terminal(facts.status, "UNAVAILABLE_BOUNDARY");
+  if (state !== undefined && state.usage.steps >= run.limits.maxSteps) {
+    return finalize("MAX_STEPS_REACHED");
   }
 
-  /* 7. Normal RUNNING execution. */
-  if (facts.activeStep === true) {
-    // A stale RUNNING Step is a durable uncertain boundary. It is never resent to a provider,
-    // and it is not a routing decision this coordinator may make on its own.
-    return terminal("RUNNING", "MISSING_CONTINUATION");
-  }
-
-  switch (facts.continuation) {
-    case "WAITING_RETRY": {
-      const due = retryDue(facts, now);
-      if (due === undefined) return suspend("RETRY_NOT_DUE");
-      return advance(due);
-    }
-    case "WAITING_VERIFICATION_REPAIR":
-      return advance("REPAIR");
-    case "WAITING_TOOL_RESULTS": {
-      if (facts.toolResultsAccepted === true) return advance("TOOLS");
-      if (facts.awaitingApproval === true) return suspend("APPROVAL");
-      if (facts.toolBatchAvailable === false) {
-        return terminal("RUNNING", "TOOL_COORDINATOR_UNAVAILABLE");
-      }
-      return executeToolBatch("EXECUTE");
-    }
+  /* 6. Durable boundaries, then normal execution. */
+  switch (run.status) {
+    case "PENDING":
+      return advance("EXECUTE", "INITIAL", initialTurn(snapshot));
+    case "WAITING_APPROVAL":
+      return suspend("APPROVAL");
     case "WAITING_RESOURCE":
       return suspend("RESOURCE");
-    case "AWAITING_VERIFICATION":
-      return facts.completionAvailable === false
-        ? terminal("RUNNING", "UNAVAILABLE_VERIFICATION")
-        : evaluateCompletion("EVALUATE");
-    case undefined:
-      return advance("START");
+    case "VERIFYING":
+      return evaluateCompletion("RECOVER", snapshot);
+    case "RUNNING":
+      return routeRunning(snapshot, now);
     default:
-      return terminal("RUNNING", "MISSING_CONTINUATION");
+      throw new RunExecutionInvariantError(`Run status "${run.status}" has no execution rule.`);
   }
 }
 
-/* ------------------------------------------------------------------ helpers */
+/* --------------------------------------------------------------- RUNNING */
 
-/** Is this status settled? */
-export function isTerminalExecutionStatus(status: RunExecutionStatus): boolean {
-  return (
-    status === "COMPLETED" ||
-    status === "FAILED" ||
-    status === "CANCELLED" ||
-    status === "TIMEOUT" ||
-    status === "MAX_STEPS_REACHED" ||
-    status === "BUDGET_EXCEEDED"
-  );
+function routeRunning(snapshot: RunExecutionSnapshot, now: TimestampMs): RunExecutionDirective {
+  const continuation = snapshot.continuation;
+  if (continuation === undefined) {
+    // Nothing durable is open. A Run with no conversation at all is starting its first Reason; a
+    // Run that already has one has finished a turn without leaving a boundary, which is a
+    // lifecycle violation rather than something to route around.
+    return snapshot.conversation.length === 0
+      ? advance("EXECUTE", "INITIAL", initialTurn(snapshot))
+      : throwUnroutable("A RUNNING Run with no continuation cannot be routed.");
+  }
+
+  switch (continuation.type) {
+    case "WAITING_TOOL_RESULTS":
+      if (continuation.waitingApproval !== undefined) return suspend("APPROVAL");
+      if (continuation.receivedResults !== undefined) {
+        return advance("RECOVER", "TOOL_RESULTS", {
+          kind: "TOOL_RESULTS",
+          sourceStepId: continuation.sourceStepId,
+          pendingDecision: continuation.pendingDecision,
+          results: continuation.receivedResults,
+        });
+      }
+      return toolBatch("EXECUTE", {
+        sourceStepId: continuation.sourceStepId,
+        pendingDecision: continuation.pendingDecision,
+        ...(continuation.observationPolicy === undefined
+          ? {}
+          : { observationPolicy: continuation.observationPolicy }),
+      });
+    case "WAITING_VERIFICATION_REPAIR":
+      return advance("RECOVER", "COMPLETION_REPAIR", {
+        kind: "CONTINUATION",
+        reason: "VERIFICATION_REPAIR",
+      });
+    case "WAITING_RESOURCE":
+      return suspend("RESOURCE");
+    case "WAITING_RETRY":
+      if (now < continuation.nextAttemptAt) return suspend("RETRY", continuation.nextAttemptAt);
+      if (continuation.mode === "TOOL_RESULTS") {
+        // The RunController resolves a legacy checkpoint from the durable ledger before routing.
+        // Reaching here without one means it could not, and fabricating a Step identity is not an
+        // acceptable answer.
+        const sourceStepId: StepId | undefined = continuation.sourceStepId;
+        if (sourceStepId === undefined) {
+          throw new RunExecutionInvariantError(
+            "A retry Tool resume has no recorded request Step and cannot be routed.",
+          );
+        }
+        return advance("RECOVER", "RETRY", {
+          kind: "TOOL_RESULTS",
+          sourceStepId,
+          pendingDecision: continuation.pendingDecision,
+          results: continuation.receivedResults,
+        });
+      }
+      return advance("RECOVER", "RETRY", initialTurn(snapshot));
+    case "AWAITING_VERIFICATION":
+      // A verification boundary held by a RUNNING Run is a lifecycle violation: the Run should be
+      // VERIFYING. Routing it would let a Run hold a candidate and keep reasoning at once.
+      return throwUnroutable("A RUNNING Run cannot hold an AWAITING_VERIFICATION boundary.");
+    default:
+      return throwUnroutable("Run continuation has no execution rule.");
+  }
 }
 
-function advance(mode: AdvanceAgentDirective["mode"]): AdvanceAgentDirective {
-  return { kind: "ADVANCE_AGENT", mode };
+/**
+ * The turn a fresh — or freshly retried — Reason starts from.
+ *
+ * `AgentRun.goal` is the durable statement the Run was created with, and the Run Layer is what
+ * projects it into the first user message. The Agent Loop never does this: it receives an explicit
+ * `USER_INPUT` and must not derive one from `identity.goal`, which is exactly why the projection
+ * belongs here, in the Run Layer.
+ */
+function initialTurn(snapshot: RunExecutionSnapshot): AgentTurnInput {
+  return { kind: "USER_INPUT", messages: [{ role: "user", content: snapshot.run.goal }] };
 }
 
-function executeToolBatch(mode: ExecuteToolBatchDirective["mode"]): ExecuteToolBatchDirective {
-  return { kind: "EXECUTE_TOOL_BATCH", mode };
+/* ----------------------------------------------------------- derivations */
+
+/**
+ * Whether the Run's original deadline has passed.
+ *
+ * A PENDING Run has no active deadline. The deadline is `startedAt + limits.timeoutMs` — never
+ * `createdAt`, and never a refreshed `now`.
+ */
+function deadlineExceeded(snapshot: RunExecutionSnapshot, now: TimestampMs): boolean {
+  const startedAt = snapshot.state?.startedAt ?? snapshot.run.startedAt;
+  if (startedAt === undefined) return false;
+  const deadlineAt = startedAt + snapshot.run.limits.timeoutMs;
+  if (!Number.isSafeInteger(deadlineAt)) {
+    throw new RunExecutionInvariantError("Run deadline exceeded the safe integer range.");
+  }
+  return now >= deadlineAt;
+}
+
+/* -------------------------------------------------------------- builders */
+
+function advance(
+  mode: RunExecutionMode,
+  reason: RunExecutionAdvanceReason,
+  input: AgentTurnInput,
+): AdvanceAgentDirective {
+  return { kind: "ADVANCE_AGENT", mode, reason, input };
+}
+
+function toolBatch(
+  mode: RunExecutionMode,
+  payload: Pick<
+    ExecuteToolBatchDirective,
+    "sourceStepId" | "pendingDecision" | "observationPolicy"
+  >,
+): ExecuteToolBatchDirective {
+  return { kind: "EXECUTE_TOOL_BATCH", mode, ...payload };
+}
+
+function suspend(boundary: RunExecutionSuspendBoundary, resumeAt?: TimestampMs): SuspendDirective {
+  return resumeAt === undefined
+    ? { kind: "SUSPEND", boundary }
+    : { kind: "SUSPEND", boundary, resumeAt };
+}
+
+function finalize(reason: RunExecutionFinalizeReason): FinalizeDirective {
+  return { kind: "FINALIZE", reason };
 }
 
 function evaluateCompletion(
-  mode: EvaluateCompletionDirective["mode"],
+  mode: RunExecutionMode,
+  snapshot: RunExecutionSnapshot,
 ): EvaluateCompletionDirective {
-  return { kind: "EVALUATE_COMPLETION", mode };
+  const continuation = snapshot.continuation;
+  if (continuation?.type !== "AWAITING_VERIFICATION") {
+    throw new RunExecutionInvariantError(
+      "A VERIFYING Run must hold an AWAITING_VERIFICATION boundary.",
+    );
+  }
+  return {
+    kind: "EVALUATE_COMPLETION",
+    mode,
+    sourceStepId: continuation.sourceStepId,
+    candidate: continuation.finalDecision,
+  };
 }
 
-function suspend(reason: SuspendDirective["reason"]): SuspendDirective {
-  return { kind: "SUSPEND", reason };
-}
-
-function finalize(finalization: RunExecutionFinalization): FinalizeDirective {
-  return { kind: "FINALIZE", finalization };
-}
-
-function terminal(
-  status: ReturnTerminalDirective["status"],
-  reason?: RunExecutionTerminalReason,
-): ReturnTerminalDirective {
-  return reason === undefined
-    ? { kind: "RETURN_TERMINAL", status }
-    : { kind: "RETURN_TERMINAL", status, reason };
-}
-
-/**
- * The structural step-budget decision.
- *
- * The budget counts settled attempts, so the gate is "has the Run already spent its allowance",
- * not "is this the last one": a Run at the limit must be settled rather than given one more
- * turn. Nothing here knows what a model is.
- */
-function maxStepsFinalization(facts: RunExecutionFacts): RunExecutionFinalization | undefined {
-  const maxSteps = facts.maxSteps;
-  const stepsCompleted = facts.stepsCompleted;
-  if (maxSteps === undefined || stepsCompleted === undefined) return undefined;
-  if (!Number.isSafeInteger(maxSteps) || maxSteps < 1) return undefined;
-  if (!Number.isSafeInteger(stepsCompleted) || stepsCompleted < 0) return undefined;
-  if (stepsCompleted < maxSteps) return undefined;
-  return { reason: "MAX_STEPS_REACHED", stepsCompleted, maxSteps };
-}
-
-/**
- * Which execution mode a due retry resumes with.
- *
- * A retry that failed while a Tool turn was open must resume *with* the accepted results, and a
- * retry that failed before any Tool existed must start a fresh turn. Getting this backwards
- * would either duplicate a batch or drop one.
- */
-function retryDue(
-  facts: RunExecutionFacts,
-  now: number,
-): AdvanceAgentDirective["mode"] | undefined {
-  const nextAttemptAt = facts.retryNextAttemptAt;
-  if (nextAttemptAt === undefined) return undefined;
-  if (now < nextAttemptAt) return undefined;
-  return facts.retryResumesToolResults === true ? "TOOLS" : "START";
+function throwUnroutable(message: string): never {
+  throw new RunExecutionInvariantError(message);
 }

@@ -1,222 +1,195 @@
 import type {
-  AdvanceAgentDirective,
-  EvaluateCompletionDirective,
-  ExecuteToolBatchDirective,
-  FinalizeDirective,
-  ReturnTerminalDirective,
-  RunExecutionContinuationKind,
-  RunExecutionDirective,
-  RunExecutionFacts,
-  RunExecutionStatus,
+  RunContinuationCheckpoint as AgentContinuationCheckpoint,
+  RunConversationEntry,
+  RunExecutionSnapshot as AgentExecutionSnapshot,
 } from "@caelush/agent";
 import type { AgentRun, RunStatus } from "@caelush/protocol";
+import type { LLMToolResultMessage } from "@caelush/llm/messages";
 import type { RunContinuationCheckpoint } from "./agent-continuation.js";
 import type { RunExecutionSnapshot } from "./run-execution-store.js";
+import { toAIMessage } from "./ai-invocation-projection.js";
 
 /**
- * The transition from a durable snapshot to the coordinator's routing facts.
+ * The Run Layer's projection onto the canonical durable snapshot.
  *
- * Phase 3C split one decision into two inputs:
+ * The coordinator is frozen at `next(snapshot, now)`, so this is the only place the Run Layer's
+ * own record meets the agent-owned contract. Two projections happen here and nowhere else:
  *
  * ```text
- * RunExecutionSnapshot   the durable row: AgentRun, AgentState, continuation payload, revisions
- * RunExecutionFacts      the routing discriminants, and nothing else
+ * legacy durable LLMMessage   →  AIMessage
+ * the Run Layer continuation  →  the canonical Run continuation
  * ```
  *
- * This projection is the only place the two meet. Keeping it here — rather than letting the
- * coordinator see a snapshot — is what makes the decision testable without a database, and what
- * stops a timestamp, a token counter or a message array from quietly becoming a routing input.
+ * Both are compatibility projections, not a Message System migration: the stored bytes do not
+ * change, and the field semantics — role, text, tool-call identity, tool name, arguments, tool
+ * result identity and error flag, in order — are carried across unchanged.
  */
 
-/** Every Run status the frozen coordinator routes on. */
-const EXECUTION_STATUSES: readonly RunExecutionStatus[] = [
-  "PENDING",
-  "RUNNING",
-  "WAITING_APPROVAL",
-  "WAITING_RESOURCE",
-  "VERIFYING",
-  "COMPLETED",
-  "FAILED",
-  "CANCELLED",
-  "TIMEOUT",
-  "MAX_STEPS_REACHED",
-  "BUDGET_EXCEEDED",
-];
-
-/**
- * Project a durable Run status onto the frozen execution status.
- *
- * The two vocabularies are the same closed set today, and the projection asserts that instead of
- * casting it: a status the coordinator cannot route must fail loudly at the boundary rather than
- * become `undefined` and be treated as a boundary to guess at.
- */
-export function toExecutionStatus(status: RunStatus): RunExecutionStatus {
-  const match = EXECUTION_STATUSES.find((candidate) => candidate === status);
+/** Project a durable Run status onto the frozen execution status. */
+export function toExecutionStatus(status: RunStatus): import("@caelush/agent").RunExecutionStatus {
+  // The two vocabularies are the same closed set, and the cast is asserted below rather than
+  // assumed: a status the coordinator cannot route must fail loudly here instead of becoming
+  // `undefined` and being read as "this Run has no boundary".
+  const statuses: readonly import("@caelush/agent").RunExecutionStatus[] = [
+    "PENDING",
+    "RUNNING",
+    "WAITING_APPROVAL",
+    "WAITING_RESOURCE",
+    "VERIFYING",
+    "COMPLETED",
+    "FAILED",
+    "CANCELLED",
+    "TIMEOUT",
+    "MAX_STEPS_REACHED",
+    "BUDGET_EXCEEDED",
+  ];
+  const match = statuses.find((candidate) => candidate === status);
   if (match === undefined) {
     throw new Error(`Run status "${status}" is not a frozen execution status.`);
   }
   return match;
 }
 
-/** Every continuation the frozen coordinator routes on. */
-const EXECUTION_CONTINUATIONS: readonly RunExecutionContinuationKind[] = [
-  "WAITING_TOOL_RESULTS",
-  "WAITING_RETRY",
-  "WAITING_VERIFICATION_REPAIR",
-  "WAITING_RESOURCE",
-  "AWAITING_VERIFICATION",
-];
-
 /**
- * Project a durable continuation onto its frozen discriminant.
+ * Project one durable continuation onto the canonical domain.
  *
- * A continuation type with no frozen discriminant would be a routing gap, so it fails loudly here
- * rather than becoming `undefined` and being read as "this Run has no boundary".
+ * The discriminants are already the durable spellings, so this is a field-for-field projection
+ * plus the message projection. A continuation type with no canonical counterpart would be a
+ * routing gap, so it fails loudly rather than being dropped.
  */
-export function toContinuationKind(
-  continuation: RunContinuationCheckpoint | undefined,
-): RunExecutionContinuationKind | undefined {
-  if (continuation === undefined) return undefined;
-  const kind = EXECUTION_CONTINUATIONS.find((candidate) => candidate === continuation.type);
-  if (kind === undefined) {
-    throw new Error(`Run continuation "${continuation.type}" is not routable.`);
-  }
-  return kind;
-}
-
-/**
- * Everything the coordinator is allowed to know about one durable Run.
- *
- * The optional fields are omitted rather than set to `undefined`, because the coordinator
- * distinguishes "this composition has no Tool batch authority" from "the Tool batch is idle".
- */
-export function toRunExecutionFacts(input: {
-  readonly snapshot: RunExecutionSnapshot;
-  readonly now: number;
-  readonly toolBatchAvailable: boolean;
-  readonly completionAvailable: boolean;
-  readonly aborted: boolean;
-  readonly abortCause?: "USER_REQUESTED" | "DEADLINE_EXCEEDED";
-  readonly deadlineExceeded: boolean;
-}): RunExecutionFacts {
-  const { snapshot } = input;
-  const continuation = snapshot.continuation;
-  const kind = toContinuationKind(continuation);
-  return {
-    runId: snapshot.run.id,
-    status: toExecutionStatus(snapshot.run.status),
-    ...(kind === undefined ? {} : { continuation: kind }),
-    ...(continuation?.type === "WAITING_TOOL_RESULTS" && continuation.waitingApproval !== undefined
-      ? { awaitingApproval: true }
-      : {}),
-    ...(continuation?.type === "WAITING_TOOL_RESULTS" && continuation.receivedResults !== undefined
-      ? { toolResultsAccepted: true }
-      : {}),
-    ...(snapshot.activeStep === undefined ? {} : { activeStep: true }),
-    ...(snapshot.state === undefined ? {} : { stepsCompleted: snapshot.state.usage.steps }),
-    maxSteps: snapshot.run.limits.maxSteps,
-    ...(snapshot.cancellationIntent === undefined ? {} : { cancellationRequested: true }),
-    ...(input.aborted ? { aborted: true } : {}),
-    ...(input.abortCause === undefined ? {} : { abortCause: input.abortCause }),
-    ...(input.deadlineExceeded ? { deadlineExceeded: true } : {}),
-    ...(continuation?.type === "WAITING_RETRY"
-      ? {
-          retryNextAttemptAt: continuation.nextAttemptAt,
-          retryResumesToolResults: continuation.mode === "TOOL_RESULTS",
-        }
-      : {}),
-    toolBatchAvailable: input.toolBatchAvailable,
-    completionAvailable: input.completionAvailable,
-  };
-}
-
-/* ------------------------------------------------------- directive handling */
-
-/**
- * Project the frozen Run failure code onto the durable Protocol error code.
- *
- * The frozen vocabulary is the smaller one: it names the failure classes the Run Layer actually
- * settles on, while the Protocol set is the durable contract that already exists. The mapping is
- * explicit so a new frozen code cannot silently become `INTERNAL_ERROR`.
- */
-export function toProtocolErrorCode(
-  code: import("@caelush/agent").RunExecutionErrorCode,
-): import("@caelush/protocol").AgentErrorCode {
-  switch (code) {
-    case "MODEL_ERROR":
-      return "MODEL_ERROR";
-    case "TOOL_OUTPUT_ERROR":
-      return "TOOL_OUTPUT_ERROR";
-    case "RUNTIME_ERROR":
-      return "RUNTIME_ERROR";
-    case "PERMISSION_DENIED":
-      return "PERMISSION_DENIED";
-    case "APPROVAL_REJECTED":
-      return "APPROVAL_REJECTED";
-    case "VERIFICATION_FAILED":
-      return "VERIFICATION_FAILED";
-    case "CONTEXT_EXHAUSTED":
-      return "CONTEXT_EXHAUSTED";
-    case "BUDGET_ENFORCEMENT_UNAVAILABLE":
-      return "BUDGET_ENFORCEMENT_UNAVAILABLE";
-    case "INTERNAL_ERROR":
-      return "INTERNAL_ERROR";
+export function toAgentContinuation(
+  continuation: RunContinuationCheckpoint,
+): AgentContinuationCheckpoint {
+  switch (continuation.type) {
+    case "WAITING_TOOL_RESULTS":
+      return {
+        type: "WAITING_TOOL_RESULTS",
+        runId: continuation.runId,
+        sourceStepId: continuation.sourceStepId,
+        pendingDecision: continuation.pendingDecision,
+        ...(continuation.receivedResults === undefined
+          ? {}
+          : { receivedResults: toAgentToolResults(continuation.receivedResults) }),
+        ...(continuation.waitingApproval === undefined
+          ? {}
+          : { waitingApproval: continuation.waitingApproval }),
+      };
+    case "AWAITING_VERIFICATION":
+      return {
+        type: "AWAITING_VERIFICATION",
+        runId: continuation.runId,
+        sourceStepId: continuation.sourceStepId,
+        verificationPlanId: continuation.verificationPlanId,
+        finalDecision: continuation.finalDecision,
+      };
+    case "WAITING_VERIFICATION_REPAIR":
+      return {
+        type: "WAITING_VERIFICATION_REPAIR",
+        runId: continuation.runId,
+        failedPlanId: continuation.failedPlanId,
+        sourceStepId: continuation.sourceStepId,
+        failedCheckIds: continuation.failedCheckIds,
+        evidenceIds: continuation.evidenceIds,
+        repairCycle: continuation.repairCycle,
+      };
+    case "WAITING_RESOURCE":
+      return {
+        type: "WAITING_RESOURCE",
+        runId: continuation.runId,
+        sourceStepId: continuation.sourceStepId,
+        pendingDecision: continuation.pendingDecision,
+        reason: continuation.reason,
+        replanCount: continuation.replanCount,
+      };
+    case "WAITING_RETRY":
+      return continuation.mode === "START"
+        ? {
+            type: "WAITING_RETRY",
+            runId: continuation.runId,
+            failedStepId: continuation.failedStepId,
+            attempt: continuation.attempt,
+            maxAttempts: continuation.maxAttempts,
+            nextAttemptAt: continuation.nextAttemptAt,
+            errorCode: continuation.errorCode,
+            mode: "START",
+          }
+        : {
+            type: "WAITING_RETRY",
+            runId: continuation.runId,
+            failedStepId: continuation.failedStepId,
+            attempt: continuation.attempt,
+            maxAttempts: continuation.maxAttempts,
+            nextAttemptAt: continuation.nextAttemptAt,
+            errorCode: continuation.errorCode,
+            mode: "TOOL_RESULTS",
+            pendingDecision: continuation.pendingDecision,
+            receivedResults: toAgentToolResults(continuation.receivedResults),
+            ...(continuation.sourceStepId === undefined
+              ? {}
+              : { sourceStepId: continuation.sourceStepId }),
+          };
+    default:
+      throw new Error("Run continuation has no canonical projection.");
   }
 }
 
-/** Project the frozen budget block onto the durable one the Run Layer settles with. */
-export function toLegacyBudgetBlock(
-  block: import("@caelush/agent").RunExecutionBudgetBlock,
-): import("./agent-errors.js").AgentBudgetBlock {
-  if (block.kind === "UNAVAILABLE") {
-    return { kind: "UNAVAILABLE", reason: block.reason ?? "TOKEN_ESTIMATE" };
-  }
-  return {
-    kind: "EXCEEDED",
-    dimension: block.dimension ?? "TOKENS",
-    accounted: block.accounted ?? 0,
-    limit: block.limit ?? 0,
-    ...(block.limitMicros === undefined ? {} : { limitMicros: block.limitMicros }),
-    ...(block.accountedMicros === undefined ? {} : { accountedMicros: block.accountedMicros }),
-  };
-}
-
 /**
- * The five directive kinds a Run execution can act on.
+ * Project durable Tool results onto the frozen AI tool-result contract.
  *
- * `RETURN_TERMINAL` is answered with a *reason* rather than an action, so the Run Layer can tell a
- * normal settled Run from a state it must not guess at. `UNAVAILABLE_BOUNDARY` and the other
- * "unavailable" reasons are lifecycle violations, not results: a Run that cannot be routed is a
- * composition error, and reporting it as a successful boundary would hide it.
+ * The legacy record may carry a raw-artifact reference for full-output recovery. That reference is
+ * a Tool Layer detail and is deliberately not part of the model-facing contract; everything the
+ * model sees — identity, tool name, content and the error flag — crosses unchanged and in order.
  */
-export type RunExecutionDirectiveAction =
-  | { readonly action: "ADVANCE_AGENT"; readonly directive: AdvanceAgentDirective }
-  | { readonly action: "EXECUTE_TOOL_BATCH"; readonly directive: ExecuteToolBatchDirective }
-  | { readonly action: "EVALUATE_COMPLETION"; readonly directive: EvaluateCompletionDirective }
-  | {
-      readonly action: "SUSPEND";
-      readonly directive: Extract<RunExecutionDirective, { kind: "SUSPEND" }>;
+function toAgentToolResults(
+  results: readonly LLMToolResultMessage[],
+): readonly import("@caelush/ai").AIToolResultMessage[] {
+  return results.map((result) => {
+    const projected = toAIMessage(result);
+    if (projected.role !== "tool") {
+      throw new Error("A durable tool result must project onto an AI tool result message.");
     }
-  | { readonly action: "FINALIZE"; readonly directive: FinalizeDirective }
-  | { readonly action: "RETURN_TERMINAL"; readonly directive: ReturnTerminalDirective };
+    return projected;
+  });
+}
 
-/** Classify one directive for the Run Layer. */
-export function toDirectiveAction(directive: RunExecutionDirective): RunExecutionDirectiveAction {
-  switch (directive.kind) {
-    case "ADVANCE_AGENT":
-      return { action: "ADVANCE_AGENT", directive };
-    case "EXECUTE_TOOL_BATCH":
-      return { action: "EXECUTE_TOOL_BATCH", directive };
-    case "EVALUATE_COMPLETION":
-      return { action: "EVALUATE_COMPLETION", directive };
-    case "SUSPEND":
-      return { action: "SUSPEND", directive };
-    case "FINALIZE":
-      return { action: "FINALIZE", directive };
-    case "RETURN_TERMINAL":
-      return { action: "RETURN_TERMINAL", directive };
-  }
+/** Project a durable conversation entry onto the frozen AI message contract. */
+function toAgentConversation(
+  conversation: RunExecutionSnapshot["conversation"],
+): readonly RunConversationEntry[] {
+  return conversation.map((entry) => ({
+    runId: entry.runId,
+    sequence: entry.sequence,
+    ...(entry.sourceStepId === undefined ? {} : { sourceStepId: entry.sourceStepId }),
+    createdAt: entry.createdAt,
+    message: toAIMessage(entry.message),
+  }));
+}
+
+/**
+ * Project the Run Layer's durable record onto the canonical execution snapshot.
+ *
+ * The Run Layer keeps its own richer record — the verification plan is a coding-verification
+ * concern, and a legacy message encoding is what the storage adapter persists — so this projection
+ * takes exactly what the general Run domain is entitled to see.
+ */
+export function toAgentExecutionSnapshot(snapshot: RunExecutionSnapshot): AgentExecutionSnapshot {
+  return {
+    run: snapshot.run,
+    ...(snapshot.state === undefined ? {} : { state: snapshot.state }),
+    ...(snapshot.stateRevision === undefined ? {} : { stateRevision: snapshot.stateRevision }),
+    ...(snapshot.activeStep === undefined ? {} : { activeStep: snapshot.activeStep }),
+    conversation: toAgentConversation(snapshot.conversation),
+    ...(snapshot.continuation === undefined
+      ? {}
+      : { continuation: toAgentContinuation(snapshot.continuation) }),
+    ...(snapshot.continuationRevision === undefined
+      ? {}
+      : { continuationRevision: snapshot.continuationRevision }),
+    ...(snapshot.cancellationIntent === undefined
+      ? {}
+      : { cancellationIntent: snapshot.cancellationIntent }),
+  };
 }
 
 /** Re-exported so the Run Layer names the same statuses the coordinator routes on. */
-export type { AgentRun, RunExecutionStatus };
+export type { AgentRun };

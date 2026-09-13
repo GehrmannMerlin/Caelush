@@ -1,94 +1,48 @@
-import type { AIUserMessage } from "@caelush/ai";
-
-import type { AgentDecision } from "../loop/decision/decision.js";
-import type { AgentLoopAdvanceResult, AgentTurnInput } from "../loop/types.js";
-import type { RunExecutionBudgetBlock, RunExecutionError, RunExecutionMode } from "./directive.js";
-
-/**
- * Which stage of one executed effect failed.
- *
- * This is a Run-Layer observation, not a frozen kernel field. The kernel reports *that* a
- * Reason failed; the caller that owns the ports the loop called in order is the only party
- * that knows where it failed, so the stage is declared here and never on an
- * `@caelush/agent` contract.
- *
- * ```text
- * CONTEXT   preparation failed; the durable boundary was never reached
- * ADMISSION a budget authority refused the turn; the boundary was never reached
- * BOUNDARY  the durable commit failed; the provider was never contacted
- * MODEL     the provider turn was attempted, or answered unusably
- * ```
- */
-export type RunExecutionFailureStage = "CONTEXT" | "ADMISSION" | "BOUNDARY" | "MODEL";
+import type { AgentLoopAdvanceResult } from "../loop/types.js";
+import type { CompletionGateDecision } from "./ports/completion-gate.js";
+import type { ToolTurnResult } from "./ports/tool-turn.js";
 
 /**
  * What one executed effect produced.
  *
  * ```text
- * AGENT       a model turn settled into a decision, or failed with a typed stage
- * TOOLS       a Tool batch boundary settled into a typed Tool turn result
- * COMPLETION  a Completion Gate evaluated a final candidate
+ * AGENT       the frozen AgentLoop's own result, unchanged
+ * TOOLS       one Tool batch turn
+ * COMPLETION  one completion gate decision
  * NONE        the effect produced no state change
  * ```
  *
- * The union is deliberately narrow. A driver may not report a Run status, a Step settlement or a
- * durable commit: those are the RunController's, and a driver that could report them would be a
- * second lifecycle authority.
+ * Each variant wraps the canonical type of the subsystem that produced it. There is deliberately
+ * no second vocabulary here: an `AGENT` effect *is* an `AgentLoopAdvanceResult`, so a Run Layer
+ * that wanted to re-describe a decision would have to do it explicitly rather than having a
+ * parallel type to drift into.
+ *
+ * A driver may not report a Run status, a Step settlement or a durable commit. Those belong to
+ * the RunController, and a driver that could report them would be a second lifecycle authority.
  */
 export type RunExecutionEffectResult =
-  | RunExecutionAgentEffect
-  | RunExecutionToolsEffect
-  | RunExecutionCompletionEffect
-  | RunExecutionNoneEffect;
+  | {
+      readonly kind: "AGENT";
+      readonly result: AgentLoopAdvanceResult;
+    }
+  | {
+      readonly kind: "TOOLS";
+      readonly result: ToolTurnResult;
+    }
+  | {
+      readonly kind: "COMPLETION";
+      readonly result: CompletionGateDecision;
+    }
+  | {
+      readonly kind: "NONE";
+    };
 
-/** A model turn effect. */
-export interface RunExecutionAgentEffect {
-  readonly kind: "AGENT";
-  readonly mode: RunExecutionMode;
-  readonly outcome:
-    | { readonly status: "DECIDED"; readonly decision: AgentDecision }
-    | {
-        readonly status: "FAILED";
-        readonly stage: RunExecutionFailureStage;
-        readonly error: RunExecutionError;
-        readonly retryable: boolean;
-        readonly retryAfterMs?: number;
-        readonly budgetBlock?: RunExecutionBudgetBlock;
-      }
-    | { readonly status: "CANCELLED" };
-}
+/** Every effect discriminant, in canonical order. */
+export const RUN_EXECUTION_EFFECT_KINDS = [
+  "AGENT",
+  "TOOLS",
+  "COMPLETION",
+  "NONE",
+] as const satisfies readonly RunExecutionEffectResult["kind"][];
 
-/** The Tool turn results a batch boundary can settle into. */
-export type RunExecutionToolTurnResult =
-  | { readonly kind: "COMPLETED" }
-  | { readonly kind: "WAITING_APPROVAL" }
-  | { readonly kind: "BUDGET_EXCEEDED"; readonly block: RunExecutionBudgetBlock }
-  | { readonly kind: "RESOURCE_WAIT" }
-  | { readonly kind: "REPLAN" };
-
-/** A Tool batch effect. */
-export interface RunExecutionToolsEffect {
-  readonly kind: "TOOLS";
-  readonly result: RunExecutionToolTurnResult;
-}
-
-/** A completion evaluation effect. */
-export interface RunExecutionCompletionEffect {
-  readonly kind: "COMPLETION";
-  readonly decision:
-    | { readonly outcome: "ACCEPT" }
-    | { readonly outcome: "REPAIR"; readonly repairRef: string; readonly cycle: number }
-    | { readonly outcome: "REJECT"; readonly reason: string }
-    | { readonly outcome: "ERROR"; readonly error: RunExecutionError };
-}
-
-/** An effect that changed nothing. */
-export interface RunExecutionNoneEffect {
-  readonly kind: "NONE";
-  readonly reason: string;
-}
-
-/** The messages a caller may append durably after an agent effect. */
-export type RunExecutionAppendMessages = readonly AIUserMessage[];
-
-export type { AgentLoopAdvanceResult, AgentTurnInput };
+export type { AgentLoopAdvanceResult, CompletionGateDecision, ToolTurnResult };

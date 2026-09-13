@@ -1,390 +1,431 @@
+import {
+  AgentRunSchema,
+  AgentStateSchema,
+  createRunId,
+  createSessionId,
+  createStepId,
+  createTimestampMs,
+  createWorkspaceId,
+  type AgentRun,
+  type AgentState,
+  type StepId,
+} from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import {
   createRunExecutionCoordinator,
-  isTerminalExecutionStatus,
   nextRunExecutionDirective,
-  RUN_EXECUTION_DIRECTIVE_KINDS,
+} from "../src/run/run-execution-coordinator.js";
+import { isTerminalExecutionStatus } from "../src/run/directive.js";
+import type {
+  RunContinuationCheckpoint,
+  RunExecutionDirective,
+  RunExecutionSnapshot,
 } from "../src/index.js";
-import type { RunExecutionDirective, RunExecutionFacts, RunExecutionStatus } from "../src/index.js";
 
 /**
- * The frozen coordinator, as a table.
+ * The frozen coordinator matrix.
  *
- * These tests are the 3C-18 matrix: every durable state the Run Layer can be in, and the single
- * directive it must produce. They need no database, no clock and no provider, because the
- * decision is pure — which is exactly the property this file exists to prove.
+ * `next(snapshot, now)` is pure, so every routing rule is asserted as a table row: a status plus a
+ * durable boundary plus `now` produces exactly one directive, and the governance priority decides
+ * which one when several could apply.
  */
 
-const NOW = 1_000;
+const AT = createTimestampMs(1_000);
+const NOW = createTimestampMs(1_100);
+const RUN_ID = createRunId();
+const SESSION_ID = createSessionId();
 
-function facts(overrides: Partial<RunExecutionFacts> = {}): RunExecutionFacts {
-  return { runId: "run_1", status: "RUNNING", ...overrides };
+const TOOL_STEP: StepId = createStepId();
+
+const MODEL_TURN = {
+  callId: "llm_0195f3a0-0000-7000-8000-000000000000",
+  model: { provider: "fixture", model: "fixture-model" },
+  finishReason: "TOOL_CALLS" as const,
+  assistantMessage: {
+    role: "assistant" as const,
+    content: [
+      {
+        type: "tool-call" as const,
+        toolCallId: "call_a",
+        toolName: "read_file",
+        input: { path: "a.ts" },
+      },
+    ],
+  },
+};
+
+const PENDING_DECISION = {
+  type: "TOOL_CALLS_REQUESTED" as const,
+  modelTurn: MODEL_TURN,
+  toolRequests: [{ externalCallId: "call_a", toolName: "read_file", args: { path: "a.ts" } }],
+};
+
+const INITIAL_INPUT = {
+  kind: "USER_INPUT" as const,
+  messages: [{ role: "user" as const, content: "inspect the project" }],
+};
+
+const toolResults = [
+  {
+    role: "tool" as const,
+    toolCallId: "call_a",
+    toolName: "read_file",
+    content: "source",
+    isError: false,
+  },
+];
+
+function makeRun(overrides: Partial<AgentRun> = {}): AgentRun {
+  return AgentRunSchema.parse({
+    id: RUN_ID,
+    sessionId: SESSION_ID,
+    goal: "inspect the project",
+    status: "RUNNING",
+    workspace: { id: createWorkspaceId(), path: "/repo" },
+    model: { provider: "fixture", model: "fixture-model" },
+    runtime: { id: "local", kind: "fixture" },
+    permissionProfile: "READ_ONLY",
+    approvalPolicy: "ALWAYS_ASK",
+    limits: { maxSteps: 6, maxToolCalls: 8, timeoutMs: 10_000 },
+    createdAt: AT,
+    startedAt: AT,
+    ...overrides,
+  });
 }
 
-function next(overrides: Partial<RunExecutionFacts>, now = NOW): RunExecutionDirective {
-  return nextRunExecutionDirective(facts(overrides), now);
+function makeState(run: AgentRun): AgentState {
+  return AgentStateSchema.parse({
+    runId: run.id,
+    sessionId: run.sessionId,
+    goal: run.goal,
+    status:
+      run.status === "PENDING" ? "PENDING" : run.status === "RUNNING" ? "RUNNING" : run.status,
+    workspace: run.workspace,
+    runtime: run.runtime,
+    permissionProfile: run.permissionProfile,
+    approvalPolicy: run.approvalPolicy,
+    plan: [],
+    recentObservations: [],
+    changedFiles: [],
+    activeProcesses: [],
+    errors: [],
+    verification: "NOT_RUN",
+    usage: { steps: 1, toolCalls: 1, inputTokens: 0, outputTokens: 0 },
+    updatedAt: AT,
+    startedAt: AT,
+  });
 }
 
-describe("RunExecutionCoordinator decision table", () => {
-  it.each<[string, Partial<RunExecutionFacts>, RunExecutionDirective]>([
-    /* --- initial ------------------------------------------------------------ */
-    ["INITIAL", { status: "PENDING" }, { kind: "ADVANCE_AGENT", mode: "START" }],
-    [
-      "RUNNING with no continuation",
-      { status: "RUNNING" },
-      { kind: "ADVANCE_AGENT", mode: "START" },
-    ],
+function snapshot(overrides: Partial<RunExecutionSnapshot> = {}): RunExecutionSnapshot {
+  const run = overrides.run ?? makeRun();
+  return {
+    run,
+    state: overrides.state ?? makeState(run),
+    conversation: [],
+    ...overrides,
+  };
+}
 
-    /* --- tool waiting ------------------------------------------------------- */
-    [
-      "TOOL waiting with no results",
-      { continuation: "WAITING_TOOL_RESULTS", toolBatchAvailable: true },
-      { kind: "EXECUTE_TOOL_BATCH", mode: "EXECUTE" },
-    ],
-    [
-      "TOOL waiting with results",
-      { continuation: "WAITING_TOOL_RESULTS", toolResultsAccepted: true },
-      { kind: "ADVANCE_AGENT", mode: "TOOLS" },
-    ],
-    [
-      "TOOL waiting at an approval pointer",
-      { continuation: "WAITING_TOOL_RESULTS", awaitingApproval: true },
-      { kind: "SUSPEND", reason: "APPROVAL" },
-    ],
-    [
-      "TOOL waiting without a coordinator",
-      { continuation: "WAITING_TOOL_RESULTS", toolBatchAvailable: false },
-      { kind: "RETURN_TERMINAL", status: "RUNNING", reason: "TOOL_COORDINATOR_UNAVAILABLE" },
-    ],
+const TOOL_REQUEST_CONTINUATION: RunContinuationCheckpoint = {
+  type: "WAITING_TOOL_RESULTS",
+  runId: RUN_ID,
+  sourceStepId: TOOL_STEP,
+  pendingDecision: PENDING_DECISION,
+};
 
-    /* --- retry -------------------------------------------------------------- */
-    [
-      "RETRY not due",
-      { continuation: "WAITING_RETRY", retryNextAttemptAt: NOW + 1 },
-      { kind: "SUSPEND", reason: "RETRY_NOT_DUE" },
-    ],
-    [
-      "RETRY due, start",
-      { continuation: "WAITING_RETRY", retryNextAttemptAt: NOW, retryResumesToolResults: false },
-      { kind: "ADVANCE_AGENT", mode: "START" },
-    ],
-    [
-      "RETRY due, tool result",
-      { continuation: "WAITING_RETRY", retryNextAttemptAt: NOW, retryResumesToolResults: true },
-      { kind: "ADVANCE_AGENT", mode: "TOOLS" },
-    ],
-    [
-      "RETRY due at exactly now",
-      { continuation: "WAITING_RETRY", retryNextAttemptAt: NOW },
-      { kind: "ADVANCE_AGENT", mode: "START" },
-    ],
-
-    /* --- approval and resource ---------------------------------------------- */
-    [
-      "APPROVAL",
-      { status: "WAITING_APPROVAL", continuation: "WAITING_TOOL_RESULTS" },
-      { kind: "SUSPEND", reason: "APPROVAL" },
-    ],
-    [
-      "RESOURCE",
-      { status: "WAITING_RESOURCE", continuation: "WAITING_RESOURCE" },
-      { kind: "SUSPEND", reason: "RESOURCE" },
-    ],
-    [
-      "RESOURCE continuation without the status",
-      { continuation: "WAITING_RESOURCE" },
-      { kind: "SUSPEND", reason: "RESOURCE" },
-    ],
-
-    /* --- verification ------------------------------------------------------- */
-    [
-      "VERIFYING",
-      { status: "VERIFYING", continuation: "AWAITING_VERIFICATION", completionAvailable: true },
-      { kind: "EVALUATE_COMPLETION", mode: "RECOVER" },
-    ],
-    [
-      "VERIFICATION REPAIR",
-      { continuation: "WAITING_VERIFICATION_REPAIR" },
-      { kind: "ADVANCE_AGENT", mode: "REPAIR" },
-    ],
-    [
-      "VERIFYING without a completion gate",
-      { status: "VERIFYING", completionAvailable: false },
-      { kind: "RETURN_TERMINAL", status: "VERIFYING", reason: "UNAVAILABLE_VERIFICATION" },
-    ],
-
-    /* --- terminal ----------------------------------------------------------- */
-    [
-      "Terminal COMPLETED",
-      { status: "COMPLETED", stepsCompleted: 3 },
-      { kind: "RETURN_TERMINAL", status: "COMPLETED", reason: "ALREADY_TERMINAL" },
-    ],
-    [
-      "Terminal FAILED",
-      { status: "FAILED" },
-      { kind: "RETURN_TERMINAL", status: "FAILED", reason: "ALREADY_TERMINAL" },
-    ],
-    [
-      "Terminal BUDGET_EXCEEDED",
-      { status: "BUDGET_EXCEEDED" },
-      { kind: "RETURN_TERMINAL", status: "BUDGET_EXCEEDED", reason: "ALREADY_TERMINAL" },
-    ],
-  ])("%s", (_label, overrides, expected) => {
-    expect(next(overrides)).toEqual(expected);
-  });
-});
-
-describe("RunExecutionCoordinator governance priority", () => {
-  it("settles a cancelled Run before any continuation it holds", () => {
-    expect(
-      next({
-        cancellationRequested: true,
-        continuation: "WAITING_TOOL_RESULTS",
-        toolResultsAccepted: true,
-      }),
-    ).toEqual({ kind: "FINALIZE", finalization: { reason: "CANCELLED" } });
-  });
-
-  it("settles a cancelled Run even when a retry is due", () => {
-    expect(
-      next({
-        cancellationRequested: true,
-        continuation: "WAITING_RETRY",
-        retryNextAttemptAt: 0,
-      }),
-    ).toEqual({ kind: "FINALIZE", finalization: { reason: "CANCELLED" } });
-  });
-
-  it("settles an expired Run before a due retry", () => {
-    expect(
-      next({ deadlineExceeded: true, continuation: "WAITING_RETRY", retryNextAttemptAt: 0 }),
-    ).toEqual({ kind: "FINALIZE", finalization: { reason: "TIMEOUT" } });
-  });
-
-  it("settles an expired Run even when results were already accepted", () => {
-    expect(
-      next({
-        deadlineExceeded: true,
-        continuation: "WAITING_TOOL_RESULTS",
-        toolResultsAccepted: true,
-      }),
-    ).toEqual({ kind: "FINALIZE", finalization: { reason: "TIMEOUT" } });
-  });
-
-  it("reports an unexpected abort instead of routing it", () => {
-    expect(next({ aborted: true })).toEqual({
-      kind: "RETURN_TERMINAL",
-      status: "RUNNING",
-      reason: "UNEXPECTED_ABORT",
-    });
-  });
-
-  it("treats a user abort as a cancellation", () => {
-    expect(next({ aborted: true, abortCause: "USER_REQUESTED" })).toEqual({
-      kind: "FINALIZE",
-      finalization: { reason: "CANCELLED" },
-    });
-  });
-
-  it("treats a deadline abort as a timeout", () => {
-    expect(next({ aborted: true, abortCause: "DEADLINE_EXCEEDED" })).toEqual({
-      kind: "FINALIZE",
-      finalization: { reason: "TIMEOUT" },
-    });
-  });
-
-  it("never lets a stale active Step become a provider call", () => {
-    expect(next({ activeStep: true })).toEqual({
-      kind: "RETURN_TERMINAL",
-      status: "RUNNING",
-      reason: "MISSING_CONTINUATION",
-    });
-  });
-
-  it("reports a boundary it cannot satisfy instead of inventing a transition", () => {
-    expect(next({ status: "WAITING_RESOURCE" })).toEqual({
-      kind: "SUSPEND",
-      reason: "RESOURCE",
-    });
-    // Any status the coordinator does not know is reported, never guessed.
-    expect(next({ status: "RUNNING", continuation: "AWAITING_VERIFICATION" })).toEqual({
+/** Every routing case, as one table. */
+const MATRIX: readonly (readonly [string, RunExecutionSnapshot, RunExecutionDirective])[] = [
+  [
+    "PENDING Run starts its first Reason",
+    snapshot({ run: makeRun({ status: "PENDING", startedAt: undefined }) }),
+    { kind: "ADVANCE_AGENT", mode: "EXECUTE", reason: "INITIAL", input: INITIAL_INPUT },
+  ],
+  [
+    "RUNNING with no continuation and no conversation",
+    snapshot(),
+    { kind: "ADVANCE_AGENT", mode: "EXECUTE", reason: "INITIAL", input: INITIAL_INPUT },
+  ],
+  [
+    "Tool results not yet accepted run the batch, carrying the observation policy",
+    snapshot({
+      continuation: {
+        ...TOOL_REQUEST_CONTINUATION,
+        observationPolicy: { maxSingleObservationTokens: 10, maxObservationBatchTokens: 20 },
+      },
+    }),
+    {
+      kind: "EXECUTE_TOOL_BATCH",
+      mode: "EXECUTE",
+      sourceStepId: TOOL_STEP,
+      pendingDecision: PENDING_DECISION,
+      observationPolicy: { maxSingleObservationTokens: 10, maxObservationBatchTokens: 20 },
+    },
+  ],
+  [
+    "Tool results accepted resume the Reason with them",
+    snapshot({
+      continuation: { ...TOOL_REQUEST_CONTINUATION, receivedResults: toolResults },
+    }),
+    {
+      kind: "ADVANCE_AGENT",
+      mode: "RECOVER",
+      reason: "TOOL_RESULTS",
+      input: {
+        kind: "TOOL_RESULTS",
+        sourceStepId: TOOL_STEP,
+        pendingDecision: PENDING_DECISION,
+        results: toolResults,
+      },
+    },
+  ],
+  [
+    "a retry that is not due suspends with its resume time",
+    snapshot({
+      continuation: {
+        type: "WAITING_RETRY",
+        runId: RUN_ID,
+        failedStepId: TOOL_STEP,
+        attempt: 2,
+        maxAttempts: 3,
+        nextAttemptAt: createTimestampMs(9_999),
+        errorCode: "LLM_NETWORK",
+        mode: "START",
+      },
+    }),
+    { kind: "SUSPEND", boundary: "RETRY", resumeAt: createTimestampMs(9_999) },
+  ],
+  [
+    "a due START retry advances a fresh Reason",
+    snapshot({
+      continuation: {
+        type: "WAITING_RETRY",
+        runId: RUN_ID,
+        failedStepId: TOOL_STEP,
+        attempt: 2,
+        maxAttempts: 3,
+        nextAttemptAt: createTimestampMs(1_050),
+        errorCode: "LLM_NETWORK",
+        mode: "START",
+      },
+    }),
+    { kind: "ADVANCE_AGENT", mode: "RECOVER", reason: "RETRY", input: INITIAL_INPUT },
+  ],
+  [
+    "a due TOOL_RESULTS retry resumes with the request Step and the batch",
+    snapshot({
+      continuation: {
+        type: "WAITING_RETRY",
+        runId: RUN_ID,
+        failedStepId: createStepId(),
+        attempt: 2,
+        maxAttempts: 3,
+        nextAttemptAt: createTimestampMs(1_050),
+        errorCode: "LLM_NETWORK",
+        mode: "TOOL_RESULTS",
+        pendingDecision: PENDING_DECISION,
+        receivedResults: toolResults,
+        sourceStepId: TOOL_STEP,
+      },
+    }),
+    {
+      kind: "ADVANCE_AGENT",
+      mode: "RECOVER",
+      reason: "RETRY",
+      input: {
+        kind: "TOOL_RESULTS",
+        sourceStepId: TOOL_STEP,
+        pendingDecision: PENDING_DECISION,
+        results: toolResults,
+      },
+    },
+  ],
+  [
+    "a waiting approval Run suspends",
+    snapshot({ run: makeRun({ status: "WAITING_APPROVAL" }) }),
+    { kind: "SUSPEND", boundary: "APPROVAL" },
+  ],
+  [
+    "a waiting resource Run suspends",
+    snapshot({ run: makeRun({ status: "WAITING_RESOURCE" }) }),
+    { kind: "SUSPEND", boundary: "RESOURCE" },
+  ],
+  [
+    "a waiting Tool boundary holding an approval pointer suspends",
+    snapshot({
+      continuation: {
+        ...TOOL_REQUEST_CONTINUATION,
+        waitingApproval: {
+          invocationId: "tiv_0195f3a0-0000-7000-8000-000000000001" as never,
+          externalCallId: "call_a",
+          toolName: "read_file",
+        },
+      },
+    }),
+    { kind: "SUSPEND", boundary: "APPROVAL" },
+  ],
+  [
+    "a VERIFYING Run evaluates its candidate",
+    snapshot({
+      run: makeRun({ status: "VERIFYING" }),
+      continuation: {
+        type: "AWAITING_VERIFICATION",
+        runId: RUN_ID,
+        sourceStepId: TOOL_STEP,
+        verificationPlanId: "vplan_0195f3a0-0000-7000-8000-000000000001" as never,
+        finalDecision: {
+          type: "FINAL_CANDIDATE",
+          modelTurn: MODEL_TURN,
+          candidateText: "done",
+        },
+      },
+    }),
+    {
       kind: "EVALUATE_COMPLETION",
-      mode: "EVALUATE",
-    });
-  });
-});
-
-describe("RunExecutionCoordinator maxSteps", () => {
-  it("settles MAX_STEPS_REACHED when the budget is spent", () => {
-    expect(next({ stepsCompleted: 3, maxSteps: 3 })).toEqual({
-      kind: "FINALIZE",
-      finalization: { reason: "MAX_STEPS_REACHED", stepsCompleted: 3, maxSteps: 3 },
-    });
-  });
-
-  it("settles the budget before a due retry could start another turn", () => {
-    expect(
-      next({
-        continuation: "WAITING_RETRY",
-        retryNextAttemptAt: 0,
-        stepsCompleted: 4,
-        maxSteps: 4,
-      }),
-    ).toEqual({
-      kind: "FINALIZE",
-      finalization: { reason: "MAX_STEPS_REACHED", stepsCompleted: 4, maxSteps: 4 },
-    });
-  });
-
-  it("settles the budget before an accepted Tool result resumes the loop", () => {
-    expect(
-      next({
-        continuation: "WAITING_TOOL_RESULTS",
-        toolResultsAccepted: true,
-        stepsCompleted: 2,
-        maxSteps: 2,
-      }),
-    ).toEqual({
-      kind: "FINALIZE",
-      finalization: { reason: "MAX_STEPS_REACHED", stepsCompleted: 2, maxSteps: 2 },
-    });
-  });
-
-  it("settles the budget before a verification repair epoch", () => {
-    expect(
-      next({
-        continuation: "WAITING_VERIFICATION_REPAIR",
-        stepsCompleted: 9,
-        maxSteps: 9,
-      }),
-    ).toEqual({
-      kind: "FINALIZE",
-      finalization: { reason: "MAX_STEPS_REACHED", stepsCompleted: 9, maxSteps: 9 },
-    });
-  });
-
-  it("leaves one remaining step to run", () => {
-    expect(next({ stepsCompleted: 2, maxSteps: 3 })).toEqual({
+      mode: "RECOVER",
+      sourceStepId: TOOL_STEP,
+      candidate: { type: "FINAL_CANDIDATE", modelTurn: MODEL_TURN, candidateText: "done" },
+    },
+  ],
+  [
+    "a verification repair continues the same Run",
+    snapshot({
+      continuation: {
+        type: "WAITING_VERIFICATION_REPAIR",
+        runId: RUN_ID,
+        failedPlanId: "vplan_0195f3a0-0000-7000-8000-000000000001" as never,
+        sourceStepId: TOOL_STEP,
+        failedCheckIds: [],
+        evidenceIds: [],
+        repairCycle: 1,
+      },
+    }),
+    {
       kind: "ADVANCE_AGENT",
-      mode: "START",
+      mode: "RECOVER",
+      reason: "COMPLETION_REPAIR",
+      input: { kind: "CONTINUATION", reason: "VERIFICATION_REPAIR" },
+    },
+  ],
+  [
+    "durable cancellation intent finalizes as CANCELLED",
+    snapshot({ cancellationIntent: { runId: RUN_ID, cause: "USER_REQUESTED", requestedAt: AT } }),
+    { kind: "FINALIZE", reason: "CANCELLED" },
+  ],
+  [
+    "an expired Run finalizes as TIMEOUT",
+    snapshot({ run: makeRun({ limits: { maxSteps: 6, maxToolCalls: 8, timeoutMs: 50 } }) }),
+    { kind: "FINALIZE", reason: "TIMEOUT" },
+  ],
+  [
+    "a spent step budget finalizes before another turn",
+    snapshot({ run: makeRun({ limits: { maxSteps: 1, maxToolCalls: 8, timeoutMs: 10_000 } }) }),
+    { kind: "FINALIZE", reason: "MAX_STEPS_REACHED" },
+  ],
+];
+
+describe("RunExecutionCoordinator.next(snapshot, now)", () => {
+  it.each(MATRIX)("%s", (_name, input, expected) => {
+    expect(nextRunExecutionDirective(input, NOW)).toEqual(expected);
+  });
+
+  it.each([
+    ["COMPLETED"],
+    ["FAILED"],
+    ["CANCELLED"],
+    ["TIMEOUT"],
+    ["MAX_STEPS_REACHED"],
+    ["BUDGET_EXCEEDED"],
+  ] as const)("returns terminal for a %s Run", (status) => {
+    const run = makeRun({ status });
+    expect(nextRunExecutionDirective(snapshot({ run }), NOW)).toEqual({
+      kind: "RETURN_TERMINAL",
+    });
+    expect(isTerminalExecutionStatus(status)).toBe(true);
+  });
+
+  it("gives cancellation priority over the deadline and the step budget", () => {
+    const input = snapshot({
+      run: makeRun({ limits: { maxSteps: 1, maxToolCalls: 8, timeoutMs: 1 } }),
+      cancellationIntent: { runId: RUN_ID, cause: "USER_REQUESTED", requestedAt: AT },
+    });
+    expect(nextRunExecutionDirective(input, NOW)).toEqual({
+      kind: "FINALIZE",
+      reason: "CANCELLED",
     });
   });
 
-  it("ignores an unusable budget rather than guessing", () => {
-    expect(next({ stepsCompleted: 5, maxSteps: 0 })).toEqual({
-      kind: "ADVANCE_AGENT",
-      mode: "START",
+  it("gives the deadline priority over the step budget", () => {
+    const input = snapshot({
+      run: makeRun({ limits: { maxSteps: 1, maxToolCalls: 8, timeoutMs: 1 } }),
     });
-    expect(next({ stepsCompleted: 5, maxSteps: Number.NaN })).toEqual({
-      kind: "ADVANCE_AGENT",
-      mode: "START",
+    expect(nextRunExecutionDirective(input, NOW)).toEqual({
+      kind: "FINALIZE",
+      reason: "TIMEOUT",
     });
   });
-});
 
-describe("RunExecutionCoordinator determinism", () => {
-  it("returns the same directive for the same facts and the same now", () => {
-    const snapshot = facts({
-      continuation: "WAITING_TOOL_RESULTS",
-      toolResultsAccepted: true,
-      stepsCompleted: 1,
-      maxSteps: 4,
+  it("gives the step budget priority over an open durable boundary", () => {
+    const input = snapshot({
+      run: makeRun({ limits: { maxSteps: 1, maxToolCalls: 8, timeoutMs: 10_000 } }),
+      continuation: TOOL_REQUEST_CONTINUATION,
     });
-
-    const first = nextRunExecutionDirective(snapshot, NOW);
-    const second = nextRunExecutionDirective(snapshot, NOW);
-    const third = nextRunExecutionDirective({ ...snapshot }, NOW);
-
-    expect(first).toEqual(second);
-    expect(first).toEqual(third);
+    expect(nextRunExecutionDirective(input, NOW)).toEqual({
+      kind: "FINALIZE",
+      reason: "MAX_STEPS_REACHED",
+    });
   });
 
-  it("is deterministic across every table row", () => {
-    const statuses: readonly RunExecutionStatus[] = [
-      "PENDING",
-      "RUNNING",
-      "WAITING_APPROVAL",
-      "WAITING_RESOURCE",
-      "VERIFYING",
-      "COMPLETED",
-      "FAILED",
-      "CANCELLED",
-      "TIMEOUT",
-      "MAX_STEPS_REACHED",
-      "BUDGET_EXCEEDED",
-    ];
-    const continuations = [
-      undefined,
-      "WAITING_TOOL_RESULTS",
-      "WAITING_RETRY",
-      "WAITING_VERIFICATION_REPAIR",
-      "WAITING_RESOURCE",
-      "AWAITING_VERIFICATION",
-    ] as const;
+  it("refuses to route a Run with an active Step", () => {
+    const run = makeRun();
+    const input = snapshot({
+      run,
+      activeStep: { id: TOOL_STEP, runId: run.id, sequence: 1, status: "RUNNING", startedAt: AT },
+    });
+    expect(() => nextRunExecutionDirective(input, NOW)).toThrow(/active Step/);
+  });
 
-    for (const status of statuses) {
-      for (const continuation of continuations) {
-        for (const accepted of [undefined, true, false]) {
-          const snapshot = facts({
-            status,
-            ...(continuation === undefined ? {} : { continuation }),
-            ...(accepted === undefined ? {} : { toolResultsAccepted: accepted }),
-            stepsCompleted: 1,
-            maxSteps: 4,
-            retryNextAttemptAt: NOW,
-          });
-          const a = nextRunExecutionDirective(snapshot, NOW);
-          const b = nextRunExecutionDirective({ ...snapshot }, NOW);
-          expect(a).toEqual(b);
-          // Every answer is one of the frozen discriminants.
-          expect(RUN_EXECUTION_DIRECTIVE_KINDS).toContain(a.kind);
-        }
-      }
+  it("refuses to route a RUNNING Run with a conversation but no continuation", () => {
+    const input = snapshot({
+      conversation: [
+        {
+          runId: RUN_ID,
+          sequence: 1,
+          createdAt: AT,
+          message: { role: "user", content: "earlier" },
+        },
+      ],
+    });
+    expect(() => nextRunExecutionDirective(input, NOW)).toThrow(/no continuation/);
+  });
+
+  it("refuses to route a legacy retry Tool resume with no recorded request Step", () => {
+    const input = snapshot({
+      continuation: {
+        type: "WAITING_RETRY",
+        runId: RUN_ID,
+        failedStepId: TOOL_STEP,
+        attempt: 2,
+        maxAttempts: 3,
+        nextAttemptAt: createTimestampMs(1_050),
+        errorCode: "LLM_NETWORK",
+        mode: "TOOL_RESULTS",
+        pendingDecision: PENDING_DECISION,
+        receivedResults: toolResults,
+      } as RunContinuationCheckpoint,
+    });
+    expect(() => nextRunExecutionDirective(input, NOW)).toThrow(/no recorded request Step/);
+  });
+
+  it("is deterministic over the whole matrix", () => {
+    for (const [, input, expected] of MATRIX) {
+      const first = nextRunExecutionDirective(input, NOW);
+      expect(first).toEqual(nextRunExecutionDirective(input, NOW));
+      expect(first).toEqual(expected);
     }
   });
 
-  it("does not change a SUSPEND into a resume as time passes", () => {
-    const pending = facts({ continuation: "WAITING_RETRY", retryNextAttemptAt: NOW + 100 });
-    expect(nextRunExecutionDirective(pending, NOW)).toEqual({
-      kind: "SUSPEND",
-      reason: "RETRY_NOT_DUE",
-    });
-    expect(nextRunExecutionDirective(pending, NOW + 99)).toEqual({
-      kind: "SUSPEND",
-      reason: "RETRY_NOT_DUE",
-    });
-    // Only reaching the deadline changes the answer, and it never shortens it.
-    expect(nextRunExecutionDirective(pending, NOW + 100)).toEqual({
-      kind: "ADVANCE_AGENT",
-      mode: "START",
-    });
-  });
-
-  it("exposes the terminal status set it routes on", () => {
-    for (const status of [
-      "COMPLETED",
-      "FAILED",
-      "CANCELLED",
-      "TIMEOUT",
-      "MAX_STEPS_REACHED",
-      "BUDGET_EXCEEDED",
-    ] as const) {
-      expect(isTerminalExecutionStatus(status)).toBe(true);
-    }
-    for (const status of [
-      "PENDING",
-      "RUNNING",
-      "WAITING_APPROVAL",
-      "WAITING_RESOURCE",
-      "VERIFYING",
-    ] as const) {
-      expect(isTerminalExecutionStatus(status)).toBe(false);
-    }
-  });
-
-  it("is reachable through the frozen interface", () => {
+  it("is exposed through the frozen factory", () => {
     const coordinator = createRunExecutionCoordinator();
-    const snapshot = facts({ status: "PENDING" });
-    expect(coordinator.next(snapshot, NOW)).toEqual(nextRunExecutionDirective(snapshot, NOW));
+    expect(coordinator.next(snapshot(), NOW)).toEqual(nextRunExecutionDirective(snapshot(), NOW));
   });
 });

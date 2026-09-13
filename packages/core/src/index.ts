@@ -106,7 +106,7 @@ export type {
   AgentLoopLifecycleHooks,
   AgentProviderTurnState,
 } from "./agent-loop-ports.js";
-export { AgentLoop } from "./agent-loop.js";/**
+export { AgentLoop } from "./agent-loop.js"; /**
  * The transitional throwing facade over the frozen `ModelTurnExecutor`.
  *
  * Exported because a host composition root — the daemon is the current one — must build the
@@ -127,21 +127,18 @@ export type {
 export { createLegacyContextRuntimeAdapter } from "./legacy-context-runtime-adapter.js";
 export type { LegacyContextRuntimeAdapterDependencies } from "./legacy-context-runtime-adapter.js";
 /**
- * The durable Run execution facts and directive projection.
+ * The durable Run execution projection.
  *
- * The decision itself — the `RunExecutionCoordinator`, its directive union and the transition
- * planner — belongs to `@caelush/agent`. These two helpers are the Core boundary that turns a
- * durable snapshot into routing facts and classifies a directive for the Run Layer.
+ * The decision itself — the `RunExecutionCoordinator`, its frozen directive union, the
+ * `RunExecutionDriver` and the transition planner — belongs to `@caelush/agent`. This is the Core
+ * boundary that projects a durable snapshot onto the canonical execution snapshot, converting the
+ * legacy durable message encoding and the Run Layer continuation domain on the way.
  */
 export {
-  toContinuationKind,
-  toDirectiveAction,
+  toAgentContinuation,
+  toAgentExecutionSnapshot,
   toExecutionStatus,
-  toLegacyBudgetBlock,
-  toProtocolErrorCode,
-  toRunExecutionFacts,
 } from "./run-execution-facts.js";
-export type { RunExecutionDirectiveAction } from "./run-execution-facts.js";
 export {
   fingerprintToolBatch,
   fingerprintToolRequest,
