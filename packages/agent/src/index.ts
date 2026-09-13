@@ -126,6 +126,58 @@ export type {
   ModelTurnBoundaryPort,
 } from "./loop/ports/model-turn-boundary.js";
 
+/* The durable Run execution contract: directive, coordinator, driver, planner. */
+export {
+  createRunExecutionCoordinator,
+  isTerminalExecutionStatus,
+  nextRunExecutionDirective,
+} from "./run/run-execution-coordinator.js";
+export type { RunExecutionCoordinator, RunExecutionFacts } from "./run/snapshot.js";
+export type {
+  AdvanceAgentDirective,
+  EvaluateCompletionDirective,
+  ExecuteToolBatchDirective,
+  FinalizeDirective,
+  ReturnTerminalDirective,
+  RunExecutionBudgetBlock,
+  RunExecutionContinuationKind,
+  RunExecutionDirective,
+  RunExecutionError,
+  RunExecutionErrorCode,
+  RunExecutionFinalization,
+  RunExecutionMode,
+  RunExecutionStatus,
+  RunExecutionTerminalReason,
+  RunExecutionWaitReason,
+  SuspendDirective,
+} from "./run/directive.js";
+export { RUN_EXECUTION_DIRECTIVE_KINDS } from "./run/directive.js";
+export { createRunTransitionPlanner, planRunTransition } from "./run/run-transition-planner.js";
+export type {
+  RunStepSettlement,
+  RunTransitionDraft,
+  RunTransitionPlanInput,
+  RunTransitionPlanner,
+} from "./run/run-transition-planner.js";
+export type {
+  AgentStepBeginInput,
+  AgentStepHandle,
+  AgentStepLifecyclePort,
+  RunExecutionAgentTurnInput,
+  RunExecutionDriver,
+  RunExecutionDriverInput,
+  RunExecutionToolBatchInput,
+  RunExecutionToolBoundaryPort,
+} from "./run/run-execution-driver.js";
+export type {
+  RunExecutionAgentEffect,
+  RunExecutionCompletionEffect,
+  RunExecutionEffectResult,
+  RunExecutionNoneEffect,
+  RunExecutionToolTurnResult,
+  RunExecutionToolsEffect,
+} from "./run/effect-result.js";
+
 /* The transient agent stream. */
 export { AGENT_TRANSIENT_STREAM_EVENT_TYPES } from "./loop/events/transient-stream-event.js";
 export type {
