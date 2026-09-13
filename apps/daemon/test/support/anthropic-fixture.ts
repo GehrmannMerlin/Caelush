@@ -85,7 +85,9 @@ interface NativeEvent {
 
 function sse(events: readonly NativeEvent[]): Response {
   return new Response(
-    events.map((entry) => `event: ${entry.event}\ndata: ${JSON.stringify(entry.data)}\n\n`).join(""),
+    events
+      .map((entry) => `event: ${entry.event}\ndata: ${JSON.stringify(entry.data)}\n\n`)
+      .join(""),
     { status: 200, headers: { "content-type": "text/event-stream" } },
   );
 }
@@ -214,9 +216,7 @@ function createTransport(script: AnthropicWireScript): typeof globalThis.fetch {
   return async (input, init) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const headers: Record<string, string> = {};
-    for (const [name, value] of Object.entries(
-      (init?.headers ?? {}) as Record<string, string>,
-    )) {
+    for (const [name, value] of Object.entries((init?.headers ?? {}) as Record<string, string>)) {
       headers[name.toLowerCase()] = value;
     }
     const bodyText = typeof init?.body === "string" ? init.body : "";

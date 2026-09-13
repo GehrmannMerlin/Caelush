@@ -112,10 +112,7 @@ async function runToCompletion(
 
 describe("daemon native Anthropic Messages composition", () => {
   it("registers both native dialects in the production composition", () => {
-    expect([...DAEMON_API_DIALECT_IDS]).toEqual([
-      "openai-compatible-chat",
-      "anthropic-messages",
-    ]);
+    expect([...DAEMON_API_DIALECT_IDS]).toEqual(["openai-compatible-chat", "anthropic-messages"]);
   });
 
   it("runs an Agent turn to a verified completion over the native Messages dialect", async () => {
@@ -249,8 +246,7 @@ describe("daemon native Anthropic Messages composition", () => {
     await runToCompletion(client, workspacePath, "read src/message.txt");
 
     const tools = script.requests[0]?.body["tools"] as
-      | readonly Record<string, unknown>[]
-      | undefined;
+      readonly Record<string, unknown>[] | undefined;
     expect(tools).toBeDefined();
     expect(tools?.length).toBeGreaterThan(0);
 
@@ -315,7 +311,9 @@ describe("daemon native Anthropic Messages composition", () => {
           object: "chat.completion.chunk",
           created: 1,
           model: "openai-fixture-model",
-          choices: [{ index: 0, delta: { role: "assistant", content }, finish_reason: finishReason }],
+          choices: [
+            { index: 0, delta: { role: "assistant", content }, finish_reason: finishReason },
+          ],
         })}\n\n`;
       return Promise.resolve(
         new Response(`${chunk(text, null)}${chunk("", "stop")}data: [DONE]\n\n`, {
@@ -348,7 +346,10 @@ describe("daemon native Anthropic Messages composition", () => {
     const client = new CaelushClient({ baseUrl: handle.url });
 
     await expect(client.getInfo()).resolves.toMatchObject({
-      configuredProviders: expect.arrayContaining([ANTHROPIC_FIXTURE_PROVIDER, OPENAI_FIXTURE_PROVIDER]),
+      configuredProviders: expect.arrayContaining([
+        ANTHROPIC_FIXTURE_PROVIDER,
+        OPENAI_FIXTURE_PROVIDER,
+      ]),
     });
 
     // Selecting the Anthropic model must reach only the Anthropic transport.
