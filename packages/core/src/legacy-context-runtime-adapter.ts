@@ -6,7 +6,7 @@ import type {
   RelevantFileContextPlan,
 } from "@caelush/context";
 import { ContextExhaustedError } from "@caelush/context";
-import type { ModelCatalog, ModelDescriptor } from "@caelush/ai";
+import type { ModelDescriptor } from "@caelush/ai";
 import type {
   AgentTurnInput,
   ContextBuildContribution,
@@ -15,7 +15,6 @@ import type {
   ContextPrepareInput,
   ContextPrepareMode,
   ContextPressure,
-  ContextProvider,
   PreparedModelContext,
   ToolObservationPolicySnapshot,
 } from "@caelush/agent";
@@ -62,14 +61,6 @@ export interface LegacyContextRuntimeAdapterDependencies {
   readonly planner?: AgentRelevantFilePlannerPort;
   readonly contextBuilder: AgentContextBuilderPort;
   readonly contextRuntime?: AgentContextRuntimePort;
-  /**
-   * The model metadata authority.
-   *
-   * The legacy context runtime sizes its budget from a `ModelDescriptor`. The loop resolves
-   * the run's `ModelRef` through this catalog and hands the descriptor down, so the same
-   * immutable descriptor generation backs both the context budget and the model request.
-   */
-  readonly models: ModelCatalog;
   readonly baseSystemPrompt: string;
   readonly contextLimits: import("@caelush/context").ContextBuildLimits;
   /** The run's workspace, needed only for the legacy project inspection input. */
@@ -81,11 +72,23 @@ export interface LegacyContextRuntimeAdapterDependencies {
   readonly verificationRepairContext?: () => Promise<
     import("@caelush/context").VerificationRepairContextInput | undefined
   >;
-  /** Extra providers. Phase 3B freezes the seam; the legacy runtime remains the assembler. */
-  readonly providers?: readonly ContextProvider[];
 }
 
-/** Create the legacy Context Engine over the current Context System. */
+/**
+ * Create the legacy Context Engine over the current Context System.
+ *
+ * There is deliberately no `ModelCatalog` here. `ContextPrepareInput.model` is the descriptor
+ * this turn was resolved against, and it is the *only* model authority a context build has:
+ * re-resolving the same `ModelRef` through a catalog inside the adapter would mean two lookups
+ * of one identity, free to disagree if the catalog ever changed between them. The descriptor
+ * arrives resolved, and this adapter uses it as given.
+ *
+ * There is deliberately no `providers` option either. The frozen `ContextProvider` seam exists
+ * and is conformance-tested, but the legacy Context system assembles system context, conversation
+ * and relevant files itself and has no injection point that could consume a `ContextItem` without
+ * changing prompt order or the token budget. Declaring support that production ignores would be a
+ * misleading API, so the option is absent until Context Engineering V2 owns a real pipeline.
+ */
 export function createLegacyContextRuntimeAdapter(
   dependencies: LegacyContextRuntimeAdapterDependencies,
 ): ContextEnginePort {
@@ -93,7 +96,8 @@ export function createLegacyContextRuntimeAdapter(
     async prepare(input: ContextPrepareInput): Promise<PreparedModelContext> {
       const history = input.history.map(toLegacyMessage);
       const legacyInput = await buildLegacyContextInput(dependencies, input, history);
-      const descriptor = dependencies.models.resolve(input.model.ref);
+      // The single descriptor authority for this build. Never re-resolved.
+      const descriptor = input.model;
       const runtime = resolveRuntime(dependencies);
 
       // A forced recovery is a promise about the *answer*, not about the attempt. The legacy
@@ -107,8 +111,8 @@ export function createLegacyContextRuntimeAdapter(
 
       const built = await runtime.prepareModelContext({
         runId: input.identity.runId,
-        providerId: input.model.ref.provider,
-        modelId: input.model.ref.model,
+        providerId: descriptor.ref.provider,
+        modelId: descriptor.ref.model,
         projectId: dependencies.workspace.id,
         model: descriptor,
         context: legacyInput,
@@ -172,7 +176,10 @@ async function buildLegacyContextInput(
   if (currentTurnMessages !== undefined) {
     return { ...common, mode: "TOOL_CONTINUATION", currentTurnMessages };
   }
-  return { ...common, currentUserMessage: currentUserMessage(input.input) };
+  return {
+    ...common,
+    currentUserMessage: currentUserMessage(input.input, input.identity.goal),
+  };
 }
 
 async function inspect(
@@ -258,7 +265,19 @@ function toLegacyAssistantContent(message: import("@caelush/ai").AIAssistantMess
   return { role: "assistant", content };
 }
 
-function currentUserMessage(input: AgentTurnInput): LLMUserMessage {
+/**
+ * The legacy `currentUserMessage` of a turn the frozen input does not phrase as one.
+ *
+ * A `CONTINUATION` is a Reason that carries no new user message: the Run continues from where
+ * it was, and the frozen contract deliberately expresses that as a reason rather than as text.
+ * The legacy builder still requires a current user message, so the compatibility boundary maps
+ * the continuation onto the Run's own goal — which is exactly the prompt the previous loop
+ * produced — instead of widening the frozen interface with a message the caller never sent.
+ *
+ * A continuation that *does* carry messages uses its last one, so a future steering or repair
+ * message stays authoritative over the goal.
+ */
+function currentUserMessage(input: AgentTurnInput, goal: string): LLMUserMessage {
   if (input.kind === "USER_INPUT") {
     const last = input.messages.at(-1);
     if (last !== undefined) return { role: "user", content: last.content };
@@ -266,6 +285,7 @@ function currentUserMessage(input: AgentTurnInput): LLMUserMessage {
   if (input.kind === "CONTINUATION") {
     const last = input.messages?.at(-1);
     if (last !== undefined) return { role: "user", content: last.content };
+    return { role: "user", content: goal };
   }
   throw new Error("a user turn requires at least one user message");
 }
