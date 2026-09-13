@@ -100,10 +100,13 @@ describe("Phase 2C Core model authority", () => {
     // Message System V2 is out of scope for Phase 2C, so `@caelush/llm/messages` stays
     // legal for the frozen message schemas — but only in the files that actually own
     // history, continuations or conversations. A new file must be a deliberate decision.
+    //
+    // Phase 3A moved the decision contract into `@caelush/agent`, so `agent-decision.ts` no
+    // longer imports the legacy message type, and it was removed from the list rather than
+    // left as a stale entry.
     const allowlist = [
       "packages/core/src/agent-continuation-schema.ts",
       "packages/core/src/agent-continuation.ts",
-      "packages/core/src/agent-decision.ts",
       "packages/core/src/agent-loop-history.ts",
       "packages/core/src/agent-loop-input.ts",
       "packages/core/src/agent-loop.ts",
@@ -126,11 +129,15 @@ describe("Phase 2C Core model authority", () => {
     expect(actual).toEqual([...allowlist].sort());
   });
 
-  it("names the model execution seam through the AI contract and the agent port", async () => {
+  it("names the model execution seam through the AI contract and the agent facade", async () => {
     const ports = await read("packages/core/src/agent-loop-ports.ts");
     expect(ports).toContain('from "@caelush/ai"');
-    expect(ports).toContain('from "@caelush/agent"');
-    expect(ports).toMatch(/readonly modelTurns:\s*ModelTurnExecutor/);
+    // Phase 3A aligned the agent executor with the frozen union result, so the Core loop
+    // now consumes the transitional throw-based facade over it rather than the frozen port
+    // itself. The agent package keeps no throw-based public interface.
+    expect(ports).toMatch(/readonly modelTurns:\s*LegacyModelTurnExecutor/);
+    const facade = await read("packages/core/src/legacy-model-turn-executor.ts");
+    expect(facade).toContain('from "@caelush/agent"');
     expect(ports).toMatch(/readonly models:\s*ModelCatalog/);
     expect(ports).not.toMatch(/\bllmClient\b/);
   });
@@ -204,21 +211,27 @@ describe("Phase 2C package edges", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("keeps the Agent port package free of every legacy package", async () => {
+  it("keeps the Agent kernel package on its two target dependencies only", async () => {
     const files = await scan("packages/agent/src");
     const offenders: string[] = [];
     for (const { file, source } of files) {
       for (const specifier of caelushSpecifiers(source)) {
-        if (specifier !== "@caelush/ai") offenders.push(`${file}: ${specifier}`);
+        // Phase 3A widened the frozen kernel contract to `@caelush/protocol` as well:
+        // identity is Protocol `RunId`/`SessionId`/`StepId` and durable tool identity is the
+        // Protocol `ToolName` and `JsonObject`. Both are target packages, and every legacy
+        // package stays forbidden.
+        if (specifier !== "@caelush/ai" && specifier !== "@caelush/protocol") {
+          offenders.push(`${file}: ${specifier}`);
+        }
       }
     }
     expect(offenders).toEqual([]);
   });
 
-  it("keeps the Agent port surface root-only and tiny", async () => {
+  it("keeps the Agent kernel surface root-only, cross-package-free and deliberate", async () => {
     const entry = await read("packages/agent/src/index.ts");
-    // No cross-package re-export and no wildcard: the public surface is exactly the
-    // factory plus the four contracts that describe it.
+    // No cross-package re-export and no wildcard: a consumer imports from `@caelush/agent`
+    // and never from a deep path.
     expect(caelushSpecifiers(entry)).toEqual([]);
     expect(entry).not.toMatch(/export \* from/);
     const exported = [...entry.matchAll(/export \{([^}]*)\}/g)].flatMap((match) =>
@@ -227,6 +240,25 @@ describe("Phase 2C package edges", () => {
         .map((part) => part.trim())
         .filter(Boolean),
     );
-    expect(exported).toEqual(["createModelTurnExecutor"]);
+    // Phase 3A froze the V2 kernel contracts, so the surface grew from the single model turn
+    // factory to the full contract set. The list is asserted exactly so it can never widen by
+    // accident, and each name here is a frozen contract of Architecture V2 Phase 3.
+    expect(exported.sort()).toEqual(
+      [
+        "AGENT_DECISION_TYPES",
+        "AGENT_TRANSIENT_STREAM_EVENT_TYPES",
+        "ALLOWED_MODEL_ADMISSION",
+        "AgentModelOutputError",
+        "MODEL_TURN_EXECUTION_ERROR_CODES",
+        "RETRYABLE_MODEL_TURN_ERROR_CODES",
+        "assertAgentTurnRef",
+        "classifyAgentDecision",
+        "createAgentDecisionClassifier",
+        "createAgentTurnRef",
+        "createModelRequestBuilder",
+        "createModelTurnExecutor",
+        "isRetryableModelTurnErrorCode",
+      ].sort(),
+    );
   });
 });

@@ -92,7 +92,8 @@ export interface ProjectProfileProviderPort {
  * reviewer's review is a host action rather than an AgentStep, so it has no durable turn
  * of its own.
  */
-export type VerificationLLMClient = import("./legacy-model-turn-executor.js").LegacyModelTurnExecutor;
+export type VerificationLLMClient =
+  import("./legacy-model-turn-executor.js").LegacyModelTurnExecutor;
 
 export interface VerificationTaskReviewerPort {
   review(input: {

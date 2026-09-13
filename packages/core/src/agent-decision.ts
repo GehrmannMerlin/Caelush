@@ -31,6 +31,4 @@ export interface AgentMaxStepsReachedOutcome {
  * `MAX_STEPS_REACHED` is a Run Layer outcome rather than a model decision: the model did
  * not decide to stop, the loop gate did.
  */
-export type AgentLoopOutcome =
-  | import("@caelush/agent").AgentDecision
-  | AgentMaxStepsReachedOutcome;
+export type AgentLoopOutcome = import("@caelush/agent").AgentDecision | AgentMaxStepsReachedOutcome;

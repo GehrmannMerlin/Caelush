@@ -818,16 +818,20 @@ describe("architecture v2 public boundary guard", () => {
   );
 
   it(
-    "keeps the activated agent package free of every legacy dependency",
+    "keeps the activated agent package on the two target packages the kernel contract names",
     async () => {
       const scan = await scanner.scanWorkspace(repositoryRoot);
       const project = scan.projects.find((entry) => entry.identity === "agent");
       expect(project).toBeDefined();
+      // Phase 3A frozen the agent kernel contracts in `@caelush/ai` and `@caelush/protocol`
+      // types — `AgentExecutionIdentity` carries Protocol `RunId`/`SessionId`/`StepId`, and
+      // `AgentToolRequest` carries the Protocol durable `ToolName` and `JsonObject`. The
+      // general kernel still depends on no legacy package in either direction.
       expect(
         (project?.manifestDependencies ?? [])
           .map((dependency) => dependency.name)
           .filter((name) => name.startsWith("@caelush/")),
-      ).toEqual(["@caelush/ai"]);
+      ).toEqual(["@caelush/ai", "@caelush/protocol"]);
     },
     GIT_TEST_TIMEOUT_MS,
   );

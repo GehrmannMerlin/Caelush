@@ -49,8 +49,7 @@ export interface TestAIErrorOptions {
  */
 
 /** The input of one turn, named through the Core port. */
-export type ModelTurnExecutionInput =
-  Parameters<AgentLoopDependencies["modelTurns"]["execute"]>[0];
+export type ModelTurnExecutionInput = Parameters<AgentLoopDependencies["modelTurns"]["execute"]>[0];
 
 /** The executor port Core expects. */
 export type ModelTurnExecutor = AgentLoopDependencies["modelTurns"];
