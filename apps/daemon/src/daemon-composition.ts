@@ -327,14 +327,14 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     contextRuntime,
     // The frozen Context Engine seam. The legacy Context System is configured per turn — base
     // prompt, limits, cwd, explicit paths — so the host builds its adapter from the turn's own
-    // input, and the general loop never sees any of it.
+    // input, and the general loop never sees any of it. The adapter takes no model catalog: the
+    // descriptor the loop resolved is the one context build authority for the turn.
     createContextEngine: (input) =>
       createLegacyContextRuntimeAdapter({
         inspector,
         planner,
         contextBuilder,
         contextRuntime,
-        models: ai.models,
         baseSystemPrompt: input.baseSystemPrompt,
         contextLimits: input.contextLimits,
         workspace: input.run.workspace,

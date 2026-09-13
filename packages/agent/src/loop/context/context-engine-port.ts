@@ -92,16 +92,34 @@ export interface ContextProvider {
 /**
  * What a provider is told.
  *
- * It receives the same identity, turn, input and signal the engine did, so a provider can
- * decide relevance without reaching for a Run, a workspace or a filesystem. It never receives
- * a model authority: a provider that sized its own content to a model would be a second
- * budget authority next to the engine.
+ * It receives the identity, the turn, what this Reason is about, the resolved model and the
+ * signal — and nothing else.
+ *
+ * ```text
+ * history   absent on purpose
+ * ```
+ *
+ * The conversation is itself a context source. Handing a provider the whole durable
+ * conversation would let every provider become a second conversation assembler, and the
+ * consequences are all failures the engine cannot repair afterwards: duplicated history,
+ * disagreement about order, providers trimming independently, and several budget authorities
+ * competing over the same window. Selecting and ordering the conversation belongs to the
+ * ContextEngine, which is the one component that can do it against a single budget.
+ *
+ * The model is authority *for reading*, never for re-resolution: a provider may consult
+ * `model` to judge capabilities and adapt its content, but it must not resolve a model again,
+ * change the model, change the provider, or change the API dialect. The descriptor it receives
+ * is the one this turn was resolved against.
  */
 export interface ContextProviderInput {
   readonly identity: AgentExecutionIdentity;
+
   readonly turn: AgentTurnRef;
+
   readonly input: AgentTurnInput;
-  readonly history: readonly AIMessage[];
+
+  readonly model: ModelDescriptor;
+
   readonly signal: AbortSignal;
 }
 

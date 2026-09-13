@@ -41,6 +41,18 @@ export type {
   ContextProviderInput,
 } from "./loop/context/context-engine-port.js";
 
+/* General conversation and turn-input integrity. */
+export {
+  AGENT_TURN_INPUT_ERROR_REASONS,
+  AgentTurnInputError,
+  agentTurnInputErrorMessage,
+  assertAgentTurnInput,
+  assertConversationProtocolIntegrity,
+  assertPendingAssistantHistory,
+  semanticEqual,
+} from "./loop/history/conversation-history.js";
+export type { AgentTurnInputErrorReason } from "./loop/history/conversation-history.js";
+
 /* Kernel types: identity, turn reference, turn input, prepared context, decisions. */
 export {
   AGENT_LOOP_ADVANCE_RESULT_KINDS,
@@ -125,6 +137,7 @@ export type {
 export {
   toAgentError,
   toAgentErrorCode,
+  toAgentTurnInputError,
   toBudgetAgentError,
 } from "./loop/turn/agent-error-projection.js";
 
