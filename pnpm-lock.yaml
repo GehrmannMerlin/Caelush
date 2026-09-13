@@ -179,6 +179,9 @@ importers:
       '@caelush/ai':
         specifier: workspace:*
         version: link:../ai
+      '@caelush/protocol':
+        specifier: workspace:*
+        version: link:../protocol
 
   packages/ai:
     dependencies:
