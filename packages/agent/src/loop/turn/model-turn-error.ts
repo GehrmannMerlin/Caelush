@@ -85,9 +85,17 @@ export const RETRYABLE_MODEL_TURN_ERROR_CODES = [
 /**
  * A sanitized model turn failure.
  *
- * It carries no cause, no stack and no provider payload. `message` must already be a
- * safe summary: a provider body, a prompt, a tool argument or a credential must never
+ * It carries no stage, no cause, no stack and no provider payload. `message` must already
+ * be a safe summary: a provider body, a prompt, a tool argument or a credential must never
  * reach this boundary.
+ *
+ * ```text
+ * raw cause   never a public field: a host that must re-classify the original throw keeps
+ *             it in its own private channel, not in an @caelush/agent contract
+ * stage       never a public field either: where a turn failed is decided by the caller
+ *             that owns the ports the loop called in order, and the loop reports it
+ *             through its own result shape
+ * ```
  */
 export interface ModelTurnExecutionError {
   readonly code: ModelTurnExecutionErrorCode;
@@ -95,24 +103,6 @@ export interface ModelTurnExecutionError {
   readonly retryable: boolean;
   /** A bounded provider hint in milliseconds, when one was reported safely. */
   readonly retryAfterMs?: number;
-  /**
-   * Which stage of the turn failed, when the executor did not fail at the provider itself.
-   *
-   * An executor may be composed with an admission step or a durable boundary of its own, in
-   * which case it reports the stage it failed at rather than a context-free provider failure.
-   * Absent means the model turn itself failed.
-   */
-  readonly stage?: "ADMISSION" | "BOUNDARY" | "MODEL";
-  /**
-   * The original failure, for a host boundary that must classify it again.
-   *
-   * It is a local debugging and classification channel only. It is never serialized, never
-   * becomes a durable field, and never contributes to `message`: a throw may carry a provider
-   * body, a prompt or a credential, and none of that may cross a public boundary. The Core
-   * compatibility facade uses it to re-derive the legacy error classification its own mapper
-   * already implements.
-   */
-  readonly cause?: unknown;
 }
 
 /** True when the code describes a transient provider condition. */

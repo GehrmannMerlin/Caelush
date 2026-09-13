@@ -1,10 +1,20 @@
-import type { AIMessage, AIModelSettings, AIToolSpec, ModelDescriptor } from "@caelush/ai";
-import type { RunId, SessionId, StepId } from "@caelush/protocol";
+import type {
+  AIMessage,
+  AIModelSettings,
+  AIToolResultMessage,
+  AIToolSpec,
+  AIUserMessage,
+  ModelDescriptor,
+  ModelUsage,
+} from "@caelush/ai";
+import type { AgentError, RunId, SessionId, StepId } from "@caelush/protocol";
 
-import type { AgentDecision, AgentToolCallsDecision } from "./decision/decision.js";
-import type { ModelTurnStreamSink } from "./events/transient-stream-event.js";
-import type { AgentBudgetBlock } from "./ports/model-request-admission.js";
-import type { ModelTurnExecutionError } from "./turn/model-turn-error.js";
+import type {
+  AgentFinalCandidateDecision,
+  AgentModelTurn,
+  AgentToolCallsDecision,
+} from "./decision/decision.js";
+import type { ModelTurnExecutionErrorCode } from "./turn/model-turn-error.js";
 
 /**
  * The frozen Agent Kernel contracts of Architecture V2.
@@ -101,25 +111,19 @@ export function createAgentTurnRef(stepId: StepId, sequence: number): AgentTurnR
 export type AgentTurnInput =
   | {
       readonly kind: "USER_INPUT";
-      readonly messages: readonly AIUserInputMessage[];
+      readonly messages: readonly AIUserMessage[];
     }
   | {
       readonly kind: "TOOL_RESULTS";
       readonly sourceStepId: StepId;
       readonly pendingDecision: AgentToolCallsDecision;
-      readonly results: readonly AgentToolResultMessage[];
+      readonly results: readonly AIToolResultMessage[];
     }
   | {
       readonly kind: "CONTINUATION";
-      readonly reason: AgentContinuationReason;
-      readonly messages?: readonly AIUserInputMessage[];
+      readonly reason: "VERIFICATION_REPAIR" | "STEERING";
+      readonly messages?: readonly AIUserMessage[];
     };
-
-/** A user turn message, as carried by the AI message contract. */
-export type AIUserInputMessage = Extract<AIMessage, { readonly role: "user" }>;
-
-/** A tool result message, as carried by the AI message contract. */
-export type AgentToolResultMessage = Extract<AIMessage, { readonly role: "tool" }>;
 
 /**
  * Why the loop is being continued without new user input.
@@ -161,37 +165,46 @@ export interface ContextItem {
 }
 
 /**
- * The Context Engine's answer for one turn.
+ * How much pressure the prepared context is under.
  *
- * This is what the Model Request Builder consumes and the Model Turn Boundary commits
- * against. `report` is opaque host-facing diagnostics — the loop treats it as data and
- * never reads a field out of it, which is what keeps a coding context implementation
- * from leaking project, Git or workspace semantics into the general loop.
+ * A structural classification the Context Engine owns, not a compaction policy the loop
+ * may act on: the kernel reports the pressure it was handed and never decides to compact.
  */
-export interface PreparedModelContext {
-  readonly messages: readonly AIMessage[];
-  readonly report?: Readonly<Record<string, unknown>>;
-  /** The observation policy this turn was prepared under, when the host supplied one. */
-  readonly observationPolicy?: ObservationPolicySnapshot;
-  /** A durable checkpoint reference, when the Context Engine produced one. */
-  readonly checkpoint?: ContextCheckpointRef;
-  /** A stable digest of the prepared context, for recovery comparisons. */
-  readonly contextFingerprint?: string;
-  /**
-   * Whether a `FORCED_RECOVERY` preparation actually made the context fit.
-   *
-   * The loop may only spend a second provider attempt on a context that will really differ:
-   * if the engine cannot compact, resending the same rejected context would spend an identical
-   * provider call for an identical rejection. An engine sets this to `true` when it produced a
-   * smaller context; anything else — `false` or absent — means the loop must fail closed as
-   * context exhaustion without a second attempt.
-   */
-  readonly recovered?: boolean;
+export type ContextPressure = "NORMAL" | "PROACTIVE" | "EMERGENCY";
+
+/**
+ * What one context contributor put into the model input.
+ *
+ * `providerId` is the Context Engine's own stable contributor label. The kernel carries
+ * it opaquely: it never learns what a contributor is, only how much it contributed.
+ */
+export interface ContextBuildContribution {
+  readonly providerId: string;
+  readonly tokenEstimate: number;
+  readonly itemCount: number;
+  readonly droppedItems: number;
+  readonly truncatedItems: number;
 }
 
-/** A durable context checkpoint reference. Opaque to the loop. */
-export interface ContextCheckpointRef {
-  readonly id: string;
+/**
+ * The Context Engine's build report, as the general kernel sees it.
+ *
+ * This is a typed contract, not an opaque bag: the fields below are the whole report,
+ * and a host that needs project, workspace or provider diagnostics keeps them inside its
+ * own Context Engine implementation rather than smuggling them through here.
+ */
+export interface ContextBuildReport {
+  readonly estimatedInputTokens: number;
+
+  readonly effectiveInputLimitTokens: number;
+
+  readonly remainingTokens: number;
+
+  readonly pressure: ContextPressure;
+
+  readonly compactionCount: number;
+
+  readonly contributions: readonly ContextBuildContribution[];
 }
 
 /**
@@ -202,10 +215,54 @@ export interface ContextCheckpointRef {
  * was in force when the turn was prepared, not under whatever a restarted process
  * happens to default to.
  */
-export interface ObservationPolicySnapshot {
+export interface ToolObservationPolicySnapshot {
+  readonly maxSingleObservationTokens: number;
+
+  readonly maxObservationBatchTokens: number;
+}
+
+/** A durable context checkpoint reference. Opaque to the loop. */
+export interface ContextCheckpointRef {
   readonly id: string;
-  readonly maxOutputBytes?: number;
-  readonly includeDetails?: boolean;
+}
+
+/**
+ * The Context Engine's answer for one turn.
+ *
+ * This is what the Model Request Builder consumes and the Model Turn Boundary commits
+ * against. Every field is typed: the report states the budget the context was built
+ * under, and the observation policy travels with it so a durable Tool boundary can
+ * snapshot the policy that was in force.
+ */
+export interface PreparedModelContext {
+  readonly messages: readonly AIMessage[];
+
+  readonly report: ContextBuildReport;
+
+  readonly observationPolicy: ToolObservationPolicySnapshot;
+
+  /** A durable checkpoint reference, when the Context Engine produced one. */
+  readonly checkpoint?: ContextCheckpointRef;
+
+  /** A stable digest of the prepared context, for recovery comparisons. */
+  readonly contextFingerprint?: string;
+}
+
+/**
+ * What the context cost this Reason, carried by every result that prepared one.
+ *
+ * `recovery` is where a forced re-preparation is recorded — not on the prepared context
+ * itself. A Context Engine that cannot compact a rejected context must reject the
+ * `FORCED_RECOVERY` preparation instead of answering with a context that does not fit,
+ * because the loop may only spend a second provider attempt on a context that really
+ * differs from the one that overflowed.
+ */
+export interface AgentLoopContextReceipt {
+  readonly report: ContextBuildReport;
+
+  readonly observationPolicy: ToolObservationPolicySnapshot;
+
+  readonly recovery: "NONE" | "FORCED_CONTEXT_RECOVERY";
 }
 
 /* -------------------------------------------------------------- decisions */
@@ -230,88 +287,124 @@ export type {
  * One call performs exactly one Reason. The loop has no `while`, so it cannot execute a
  * tool, and it holds no Run status, Step lifecycle, clock or identifier factory: step
  * identity arrives in `turn` and cancellation arrives in `signal`.
+ *
+ * Deliberately absent: `settings` (the field is `modelSettings`, and a rename is not a
+ * compatible change) and `streamSink`. Live deltas are a `ModelTurnExecutor` concern:
+ * the composition root binds a sink by decorating the executor, so presentation never
+ * becomes an input of the general loop.
  */
 export interface AgentLoopAdvanceInput {
   readonly identity: AgentExecutionIdentity;
+
   readonly turn: AgentTurnRef;
-  readonly input: AgentTurnInput;
+
   readonly history: readonly AIMessage[];
+
+  readonly input: AgentTurnInput;
+
   readonly model: ModelDescriptor;
+
   readonly tools: readonly AIToolSpec[];
-  readonly settings?: AIModelSettings;
+
+  readonly modelSettings?: AIModelSettings;
+
   readonly signal: AbortSignal;
-  readonly streamSink?: ModelTurnStreamSink;
 }
 
-/** The loop finished one Reason and produced a decision. */
-export interface AgentLoopAdvanceCompleted {
-  readonly status: "COMPLETED";
-  readonly decision: AgentDecision;
-  /**
-   * Only the messages this Reason adds, in order.
-   *
-   * `USER_INPUT` contributes the user delta plus the assistant message, `TOOL_RESULTS`
-   * contributes the results plus the assistant message, and `CONTINUATION` contributes
-   * the supplied continuation messages plus the assistant message. The loop returns AI
-   * messages only; the durable legacy projection belongs to the Core boundary.
-   */
+/* ------------------------------------------------------------- retry metadata */
+
+/**
+ * A transient provider condition, in the frozen kernel vocabulary.
+ *
+ * It reports what the provider already said and decides nothing: the Agent Loop never
+ * sleeps, retries or backs off, and the Run Retry Layer owns the durable decision.
+ */
+export interface AgentRetryMetadata {
+  readonly code: ModelTurnExecutionErrorCode;
+
+  readonly retryable: boolean;
+
+  readonly retryAfterMs?: number;
+}
+
+/* -------------------------------------------------------------- advance result */
+
+/** What every successful Reason carries, whatever it decided. */
+export interface AgentLoopSuccessBase {
+  readonly turn: AgentTurnRef;
+
+  readonly modelTurn: AgentModelTurn;
+
   readonly messagesToAppend: readonly AIMessage[];
-  /** The prepared context's opaque diagnostics, carried through untouched. */
-  readonly contextReport?: Readonly<Record<string, unknown>>;
+
+  readonly context: AgentLoopContextReceipt;
+}
+
+/** The model asked for tools, and the Reason stops at the Tool boundary. */
+export interface AgentLoopToolRequestsResult extends AgentLoopSuccessBase {
+  readonly kind: "TOOL_REQUESTS";
+
+  readonly decision: AgentToolCallsDecision;
 }
 
 /**
- * Which stage of one Reason failed.
+ * The model produced an answer that may become completion.
  *
- * This exists so the Run Layer can settle the right Step lifecycle without re-deriving where
- * the failure happened from the error code. `CONTEXT` and `ADMISSION` failed *before* the
- * durable boundary, so no Step was ever attempted; `BOUNDARY` failed at the durable commit, so
- * the provider was never contacted; `MODEL` failed after the boundary, so a Step really was
- * attempted and must be settled.
+ * A final candidate is only a candidate: the Run Layer moves it toward verification. No
+ * shape here can express "the Run completed", which is what keeps completion authority
+ * outside the kernel.
  */
-export type AgentLoopFailureStage = "CONTEXT" | "ADMISSION" | "BOUNDARY" | "MODEL";
+export interface AgentLoopFinalCandidateResult extends AgentLoopSuccessBase {
+  readonly kind: "FINAL_CANDIDATE";
 
-/**
- * How far the provider turn got.
- *
- * A settled provider turn that the classifier then refuses is *not* a failed provider attempt:
- * the provider answered, the answer was unusable. The Run Layer records that distinction
- * durably, so the loop reports it rather than letting a host infer it from an error code.
- */
-export type AgentProviderTurnState = "NOT_STARTED" | "COMPLETED" | "FAILED";
-
-/** The loop could not complete the turn. */
-export interface AgentLoopAdvanceFailed {
-  readonly status: "FAILED";
-  readonly stage: AgentLoopFailureStage;
-  readonly error: ModelTurnExecutionError;
-  /** How far the provider turn got, when the failure reached it at all. */
-  readonly providerTurnState?: AgentProviderTurnState;
-  /** The prepared context's opaque diagnostics, when preparation got that far. */
-  readonly contextReport?: Readonly<Record<string, unknown>>;
-  /** The messages the caller may still append, if the turn got far enough to produce any. */
-  readonly messagesToAppend: readonly AIMessage[];
-  /**
-   * The settled usage, when the turn got far enough to report one.
-   *
-   * A model turn that settled and *then* failed classification still spent its tokens, and the
-   * Run Layer counts settled attempts. The loop therefore reports the usage it received even
-   * though it produced no decision, so the accounting is not silently lost.
-   */
-  readonly usage?: import("@caelush/ai").ModelUsage | undefined;
-  /**
-   * A durable budget refusal, when the failure came from admission.
-   *
-   * This is a *value*, not an exception: a Run that has spent its budget is a Run behaving
-   * correctly. The general kernel states the refusal in its own frozen vocabulary so the Run
-   * Layer can settle `BUDGET_EXCEEDED` without the kernel importing a Run Layer error type.
-   */
-  readonly budgetBlock?: AgentBudgetBlock;
+  readonly decision: AgentFinalCandidateDecision;
 }
 
-/** The turn was cancelled. Cancellation is not a failure. */
-export interface AgentLoopAdvanceCancelled {
-  readonly status: "CANCELLED";
+/**
+ * The Reason failed.
+ *
+ * `error` is the canonical Protocol `AgentError`, produced by exactly one deterministic
+ * projection from the model-turn failure vocabulary. The two are deliberately distinct
+ * concepts: a failed *model turn* is an input of this result, not the result itself.
+ *
+ * The failure's *stage* is not a public field. Where a Reason failed is something the
+ * caller already knows, because the caller owns the ports the loop called in order.
+ */
+export interface AgentLoopFailedResult {
+  readonly kind: "FAILED";
+
+  readonly turn: AgentTurnRef;
+
+  /** The settled turn, when the provider answered and the answer was unusable. */
+  readonly modelTurn?: AgentModelTurn;
+
+  readonly error: AgentError;
+
+  readonly retry?: AgentRetryMetadata;
+
+  readonly usage?: ModelUsage;
+
+  readonly messagesToAppend: readonly AIMessage[];
+
+  /** Absent when the Reason failed before any context was prepared. */
+  readonly context?: AgentLoopContextReceipt;
+}
+
+/**
+ * The turn was cancelled. Cancellation is not a failure.
+ *
+ * A cancelled Reason contributes no appendable message: partial assistant output is
+ * discarded, and the caller's own input is not this Reason's output.
+ */
+export interface AgentLoopCancelledResult {
+  readonly kind: "CANCELLED";
+
+  readonly turn: AgentTurnRef;
+
+  readonly messagesToAppend: readonly AIMessage[];
+
+  /** Absent when the turn was cancelled before any context was prepared. */
+  readonly context?: AgentLoopContextReceipt;
 }
 
 /**
@@ -321,7 +414,18 @@ export interface AgentLoopAdvanceCancelled {
  * decision, and what that decision means for a Run is the Run Layer's to decide.
  */
 export type AgentLoopAdvanceResult =
-  AgentLoopAdvanceCompleted | AgentLoopAdvanceFailed | AgentLoopAdvanceCancelled;
+  | AgentLoopToolRequestsResult
+  | AgentLoopFinalCandidateResult
+  | AgentLoopFailedResult
+  | AgentLoopCancelledResult;
+
+/** Every frozen advance-result discriminator, in canonical order. */
+export const AGENT_LOOP_ADVANCE_RESULT_KINDS = [
+  "TOOL_REQUESTS",
+  "FINAL_CANDIDATE",
+  "FAILED",
+  "CANCELLED",
+] as const satisfies readonly AgentLoopAdvanceResult["kind"][];
 
 /* ---------------------------------------------------------------- helpers */
 

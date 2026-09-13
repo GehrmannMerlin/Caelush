@@ -1,10 +1,25 @@
+import type { AIUserMessage } from "@caelush/ai";
+
 import type { AgentDecision } from "../loop/decision/decision.js";
-import type {
-  AgentLoopFailureStage,
-  AgentLoopAdvanceResult,
-  AIUserInputMessage,
-} from "../loop/types.js";
+import type { AgentLoopAdvanceResult, AgentTurnInput } from "../loop/types.js";
 import type { RunExecutionBudgetBlock, RunExecutionError, RunExecutionMode } from "./directive.js";
+
+/**
+ * Which stage of one executed effect failed.
+ *
+ * This is a Run-Layer observation, not a frozen kernel field. The kernel reports *that* a
+ * Reason failed; the caller that owns the ports the loop called in order is the only party
+ * that knows where it failed, so the stage is declared here and never on an
+ * `@caelush/agent` contract.
+ *
+ * ```text
+ * CONTEXT   preparation failed; the durable boundary was never reached
+ * ADMISSION a budget authority refused the turn; the boundary was never reached
+ * BOUNDARY  the durable commit failed; the provider was never contacted
+ * MODEL     the provider turn was attempted, or answered unusably
+ * ```
+ */
+export type RunExecutionFailureStage = "CONTEXT" | "ADMISSION" | "BOUNDARY" | "MODEL";
 
 /**
  * What one executed effect produced.
@@ -34,7 +49,7 @@ export interface RunExecutionAgentEffect {
     | { readonly status: "DECIDED"; readonly decision: AgentDecision }
     | {
         readonly status: "FAILED";
-        readonly stage: AgentLoopFailureStage;
+        readonly stage: RunExecutionFailureStage;
         readonly error: RunExecutionError;
         readonly retryable: boolean;
         readonly retryAfterMs?: number;
@@ -74,6 +89,6 @@ export interface RunExecutionNoneEffect {
 }
 
 /** The messages a caller may append durably after an agent effect. */
-export type RunExecutionAppendMessages = readonly AIUserInputMessage[];
+export type RunExecutionAppendMessages = readonly AIUserMessage[];
 
-export type { AgentLoopAdvanceResult };
+export type { AgentLoopAdvanceResult, AgentTurnInput };

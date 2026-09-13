@@ -1,4 +1,4 @@
-import type { AIModelRequest, ModelDescriptor } from "@caelush/ai";
+import type { AIModelRequest } from "@caelush/ai";
 
 import type { AgentExecutionIdentity, AgentTurnRef } from "../types.js";
 
@@ -9,8 +9,8 @@ import type { AgentExecutionIdentity, AgentTurnRef } from "../types.js";
  * be attempted at all?** It is a typed decision, not an exception:
  *
  * ```text
- * ALLOWED              the turn may proceed
- * BLOCKED(BUDGET)      a durable budget authority refused it
+ * ALLOWED(request)      the turn may proceed, with the request admission approved
+ * BLOCKED(BUDGET)       a durable budget authority refused it
  * ```
  *
  * A budget refusal is a normal, expected outcome — a Run that has spent its budget is a
@@ -18,10 +18,26 @@ import type { AgentExecutionIdentity, AgentTurnRef } from "../types.js";
  * caller to catch an exception to discover a business decision, so the frozen port
  * returns a decision instead. `AgentBudgetAdmissionError` remains only as a legacy
  * compatibility shape inside the Core boundary and is never the target API here.
+ *
+ * `ALLOWED` carries the request admission approved, and the Agent Loop executes *that*
+ * request. The returned request is the same provider-independent `AIModelRequest` the port
+ * was given, adjusted under the existing request validation: admission is a budget
+ * authority, not a second model authority, so it may not swap the `ModelRef`, bypass the
+ * resolved `ModelDescriptor`, or inject a provider-native field.
  */
-export type AgentModelAdmissionDecision =
-  | { readonly kind: "ALLOWED" }
-  | { readonly kind: "BLOCKED"; readonly reason: "BUDGET"; readonly block: AgentBudgetBlock };
+export type ModelRequestAdmissionDecision =
+  | {
+      readonly kind: "ALLOWED";
+
+      readonly request: AIModelRequest;
+    }
+  | {
+      readonly kind: "BLOCKED";
+
+      readonly reason: "BUDGET";
+
+      readonly block: AgentBudgetBlock;
+    };
 
 /**
  * A durable budget refusal, in the frozen durable vocabulary.
@@ -44,11 +60,10 @@ export interface AgentBudgetBlock {
 /** What admission is asked about. */
 export interface ModelRequestAdmissionInput {
   readonly identity: AgentExecutionIdentity;
+
   readonly turn: AgentTurnRef;
+
   readonly request: AIModelRequest;
-  /** The model authority the request was resolved against. */
-  readonly model: ModelDescriptor;
-  readonly signal: AbortSignal;
 }
 
 /**
@@ -56,13 +71,22 @@ export interface ModelRequestAdmissionInput {
  *
  * It must run after the request is fully prepared — a budget estimate needs the context,
  * the messages, the tool definitions and the tool results — and before the durable model
- * turn boundary. An implementation performs no provider I/O and owns no retry.
+ * turn boundary. An implementation performs no provider I/O, owns no retry, and receives
+ * no model authority or cancellation signal: a budget decision is a pure function of the
+ * request and the durable Run accounting.
  */
 export interface ModelRequestAdmissionPort {
-  admit(input: ModelRequestAdmissionInput): Promise<AgentModelAdmissionDecision>;
+  admit(input: ModelRequestAdmissionInput): Promise<ModelRequestAdmissionDecision>;
 }
 
-/** The single frozen admission outcome for "this turn may proceed". */
-export const ALLOWED_MODEL_ADMISSION: AgentModelAdmissionDecision = Object.freeze({
-  kind: "ALLOWED",
-});
+/**
+ * The frozen admission outcome for "this turn may proceed unchanged".
+ *
+ * A constant cannot express this outcome any more: `ALLOWED` carries the request, and a
+ * shared frozen object cannot name a request it has never seen. The factory is the
+ * replacement for the old constant, and it keeps the single-allocation convenience for the
+ * common case where admission approves the request it was given.
+ */
+export function allowedModelAdmission(request: AIModelRequest): ModelRequestAdmissionDecision {
+  return Object.freeze({ kind: "ALLOWED", request });
+}

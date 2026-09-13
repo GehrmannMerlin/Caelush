@@ -1,3 +1,5 @@
+import type { RunId, StepId } from "@caelush/protocol";
+
 /**
  * The transient agent stream contract.
  *
@@ -16,6 +18,10 @@
  * them here would have a second, unversioned copy of the turn lifecycle next to the
  * frozen result.
  *
+ * Every delta is correlated. A host multiplexes many Runs and Steps onto one
+ * presentation channel, so `runId` and `stepId` are structural fields rather than
+ * metadata a consumer has to infer from call order.
+ *
  * Transient means exactly that: nothing in this union is durable assistant content.
  * A reasoning summary in particular must never become assistant text or history.
  */
@@ -23,6 +29,11 @@
 /** Assistant text produced while the turn is still running. */
 export interface AgentTransientTextDelta {
   readonly type: "text.delta";
+
+  readonly runId: RunId;
+
+  readonly stepId: StepId;
+
   readonly text: string;
 }
 
@@ -34,6 +45,11 @@ export interface AgentTransientTextDelta {
  */
 export interface AgentTransientThinkingDelta {
   readonly type: "thinking.delta";
+
+  readonly runId: RunId;
+
+  readonly stepId: StepId;
+
   readonly text: string;
 }
 
@@ -45,7 +61,13 @@ export interface AgentTransientThinkingDelta {
  */
 export interface AgentTransientToolCallDelta {
   readonly type: "tool_call.delta";
+
+  readonly runId: RunId;
+
+  readonly stepId: StepId;
+
   readonly toolCallId: string;
+
   readonly delta: string;
 }
 
@@ -66,6 +88,10 @@ export const AGENT_TRANSIENT_STREAM_EVENT_TYPES = [
  * `publish` may be synchronous or asynchronous, and it is presentation-only: a sink
  * that throws can never corrupt the model turn, which is why the executor isolates it
  * from the frozen result. The sink owns its own delivery guarantees.
+ *
+ * A sink is bound to a `ModelTurnExecutor`, never to the Agent Loop's public input: the
+ * composition root decorates the executor, so presentation is not part of the frozen
+ * Reason contract.
  */
 export interface ModelTurnStreamSink {
   publish(event: AgentTransientStreamEvent): void | Promise<void>;

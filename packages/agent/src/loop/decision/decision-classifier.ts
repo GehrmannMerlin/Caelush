@@ -1,21 +1,8 @@
 import { isAIFinishReason } from "@caelush/ai";
-import type {
-  AIAssistantContent,
-  AIAssistantMessage,
-  AIModelTurnResult,
-  AIToolCall,
-} from "@caelush/ai";
-import type {
-  JsonObject as ProtocolJsonObject,
-  JsonValue as ProtocolJsonValue,
-} from "@caelush/protocol";
+import type { AIModelTurnResult, AIToolCall } from "@caelush/ai";
 
-import type {
-  AgentDecision,
-  AgentModelTurn,
-  AgentToolCallsDecision,
-  AgentToolRequest,
-} from "./decision.js";
+import type { AgentDecision, AgentModelTurn, AgentToolCallsDecision } from "./decision.js";
+import { toAgentModelTurn, toAgentToolRequest, toAssistantMessage } from "./decision.js";
 import { AgentModelOutputError } from "./decision-error.js";
 import type { AgentModelOutputMetadata } from "./decision-error.js";
 
@@ -104,19 +91,14 @@ export function classifyAgentDecision(result: AIModelTurnResult): AgentDecision 
     throw new AgentModelOutputError("EMPTY_RESPONSE", metadata);
   }
 
-  const modelTurn: AgentModelTurn = {
-    callId: result.callId,
-    model: result.model,
-    finishReason: result.finishReason,
-    assistantMessage,
-    ...(result.usage === undefined ? {} : { usage: result.usage }),
-  };
+  // The finish reason was validated above, so the shared projection is total here.
+  const modelTurn = toAgentModelTurn(result) as AgentModelTurn;
 
   if (result.toolCalls.length > 0) {
     return {
       type: "TOOL_CALLS_REQUESTED",
       modelTurn,
-      toolRequests: result.toolCalls.map(toToolRequest),
+      toolRequests: result.toolCalls.map(toAgentToolRequest),
     } satisfies AgentToolCallsDecision;
   }
   if (result.finishReason === "TOOL_CALLS") {
@@ -126,67 +108,6 @@ export function classifyAgentDecision(result: AIModelTurnResult): AgentDecision 
     throw new AgentModelOutputError("EMPTY_RESPONSE", metadata);
   }
   return { type: "FINAL_CANDIDATE", modelTurn, candidateText: result.text };
-}
-
-/**
- * Project the settled turn onto the durable-shaped assistant message.
- *
- * Only the two frozen AI assistant content parts exist, so this projection cannot
- * invent one. Tool-call order is the announcement order the assembler already
- * normalized, which keeps a replayed turn byte-identical.
- */
-function toAssistantMessage(result: AIModelTurnResult): AIAssistantMessage {
-  const content: AIAssistantContent[] = [];
-  if (result.text.length > 0) {
-    content.push({ type: "text", text: result.text });
-  }
-  for (const toolCall of result.toolCalls) {
-    content.push({
-      type: "tool-call",
-      toolCallId: toolCall.id,
-      toolName: toolCall.name,
-      input: toolCall.input,
-    });
-  }
-  return { role: "assistant", content };
-}
-
-function toToolRequest(toolCall: AIToolCall): AgentToolRequest {
-  return {
-    externalCallId: toolCall.id,
-    toolName: toolCall.name,
-    args: toProtocolJsonObject(toolCall.input),
-  };
-}
-
-/**
- * Project an AI-local JSON object onto the Protocol JSON value model.
- *
- * The two packages own their own JSON types — `@caelush/ai` cannot depend on
- * `@caelush/protocol` — and they are structurally identical but nominally unrelated. A
- * completed tool call's arguments are durable, so they are copied rather than shared with
- * the adapter that produced them, field by field, never cast. The AI JSON contract admits
- * only JSON-safe values, so the fallback is unreachable for a value that came from an AI
- * turn result.
- */
-function toProtocolJsonObject(value: { readonly [key: string]: unknown }): ProtocolJsonObject {
-  const projected: Record<string, ProtocolJsonValue> = {};
-  for (const [key, member] of Object.entries(value)) {
-    projected[key] = toProtocolJsonValue(member);
-  }
-  return projected;
-}
-
-function toProtocolJsonValue(value: unknown): ProtocolJsonValue {
-  if (value === null) return null;
-  if (typeof value === "number" || typeof value === "string" || typeof value === "boolean") {
-    return value;
-  }
-  if (Array.isArray(value)) return (value as readonly unknown[]).map(toProtocolJsonValue);
-  if (typeof value === "object") {
-    return toProtocolJsonObject(value as { readonly [key: string]: unknown });
-  }
-  throw new TypeError("AI tool call input contained a value that is not JSON-safe.");
 }
 
 function assertUniqueToolCallIds(

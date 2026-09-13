@@ -1,4 +1,12 @@
-import type { AIAssistantMessage, AIFinishReason, ModelUsage } from "@caelush/ai";
+import { isAIFinishReason } from "@caelush/ai";
+import type {
+  AIAssistantContent,
+  AIAssistantMessage,
+  AIFinishReason,
+  AIModelTurnResult,
+  AIToolCall,
+  ModelUsage,
+} from "@caelush/ai";
 import type { JsonObject, ToolName } from "@caelush/protocol";
 
 /**
@@ -90,3 +98,89 @@ export const AGENT_DECISION_TYPES = [
   "TOOL_CALLS_REQUESTED",
   "FINAL_CANDIDATE",
 ] as const satisfies readonly AgentDecision["type"][];
+
+/* ----------------------------------------------------------- turn projection */
+
+/**
+ * Project one settled AI turn onto the frozen agent model turn.
+ *
+ * This is the only projection from a settled provider turn to `AgentModelTurn`, so a
+ * turn that fails classification can still be reported as the settled turn it was —
+ * without a second, subtly different reconstruction living next to the classifier's.
+ *
+ * `undefined` means the turn did not come from the frozen AI contract: an unrecognised
+ * finish reason cannot become an `AgentModelTurn`, because the frozen contract names the
+ * finish-reason vocabulary and must never carry a foreign value.
+ */
+export function toAgentModelTurn(result: AIModelTurnResult): AgentModelTurn | undefined {
+  if (!isAIFinishReason(result.finishReason)) return undefined;
+  return {
+    callId: result.callId,
+    model: result.model,
+    finishReason: result.finishReason,
+    assistantMessage: toAssistantMessage(result),
+    ...(result.usage === undefined ? {} : { usage: result.usage }),
+  };
+}
+
+/**
+ * Project the settled turn onto the durable-shaped assistant message.
+ *
+ * Only the two frozen AI assistant content parts exist, so this projection cannot
+ * invent one. Tool-call order is the announcement order the assembler already
+ * normalized, which keeps a replayed turn byte-identical.
+ */
+export function toAssistantMessage(result: AIModelTurnResult): AIAssistantMessage {
+  const content: AIAssistantContent[] = [];
+  if (result.text.length > 0) {
+    content.push({ type: "text", text: result.text });
+  }
+  for (const toolCall of result.toolCalls) {
+    content.push({
+      type: "tool-call",
+      toolCallId: toolCall.id,
+      toolName: toolCall.name,
+      input: toolCall.input,
+    });
+  }
+  return { role: "assistant", content };
+}
+
+/** One tool call, projected onto the frozen request shape. Not exported by the package root. */
+export function toAgentToolRequest(toolCall: AIToolCall): AgentToolRequest {
+  return {
+    externalCallId: toolCall.id,
+    toolName: toolCall.name,
+    args: toProtocolJsonObject(toolCall.input),
+  };
+}
+
+/**
+ * Project an AI-local JSON object onto the Protocol JSON value model.
+ *
+ * The two packages own their own JSON types — `@caelush/ai` cannot depend on
+ * `@caelush/protocol` — and they are structurally identical but nominally unrelated. A
+ * completed tool call's arguments are durable, so they are copied rather than shared with
+ * the adapter that produced them, field by field, never cast. The AI JSON contract admits
+ * only JSON-safe values, so the fallback is unreachable for a value that came from an AI
+ * turn result.
+ */
+function toProtocolJsonObject(value: { readonly [key: string]: unknown }): JsonObject {
+  const projected: Record<string, import("@caelush/protocol").JsonValue> = {};
+  for (const [key, member] of Object.entries(value)) {
+    projected[key] = toProtocolJsonValue(member);
+  }
+  return projected;
+}
+
+function toProtocolJsonValue(value: unknown): import("@caelush/protocol").JsonValue {
+  if (value === null) return null;
+  if (typeof value === "number" || typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  if (Array.isArray(value)) return (value as readonly unknown[]).map(toProtocolJsonValue);
+  if (typeof value === "object") {
+    return toProtocolJsonObject(value as { readonly [key: string]: unknown });
+  }
+  throw new TypeError("AI tool call input contained a value that is not JSON-safe.");
+}

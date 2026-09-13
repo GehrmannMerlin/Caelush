@@ -1,4 +1,4 @@
-import type { AIModelRequest, ModelDescriptor } from "@caelush/ai";
+import type { ModelDescriptor } from "@caelush/ai";
 
 import type { AgentExecutionIdentity, AgentTurnRef } from "../types.js";
 
@@ -34,11 +34,18 @@ export interface ModelTurnBoundaryPort {
   beforeExecute(input: ModelTurnBoundaryInput): Promise<void>;
 }
 
-/** What the durable boundary is asked to commit before one model turn. */
+/**
+ * What the durable boundary is asked to commit before one model turn.
+ *
+ * It receives the resolved model *identity* and nothing more. The concrete request is not
+ * part of this contract: a durable commit records which model the Step will run against,
+ * never the prompt, the message bodies or the tool catalog, and handing the request to a
+ * persistence boundary would make every one of those a candidate for durable storage.
+ */
 export interface ModelTurnBoundaryInput {
   readonly identity: AgentExecutionIdentity;
+
   readonly turn: AgentTurnRef;
-  readonly request: AIModelRequest;
-  /** The resolved model authority the turn will execute against. */
-  readonly model: ModelDescriptor;
+
+  readonly model: ModelDescriptor["ref"];
 }

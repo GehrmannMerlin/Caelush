@@ -21,7 +21,10 @@
  * Phase 3A freezes the V2 kernel contracts: execution identity, turn reference, turn
  * input, decision, `AgentLoop.advance()`, the model request builder, the model admission
  * and durable model turn boundary ports, the transient agent stream, and the frozen
- * `ModelTurnExecutor` union result. Later phases implement them.
+ * `ModelTurnExecutor` union result. Later phases implement them. Phase 3A contract
+ * remediation restored those shapes after 3B/3C drift: `modelSettings` (never `settings`),
+ * no `streamSink` on the loop input, the four-discriminant advance result, the typed
+ * context receipt, and the stage-free, cause-free model turn failure.
  */
 
 /* The agent loop. Phase 3B implements the frozen `advance()`. */
@@ -39,31 +42,38 @@ export type {
 } from "./loop/context/context-engine-port.js";
 
 /* Kernel types: identity, turn reference, turn input, prepared context, decisions. */
-export { assertAgentTurnRef, createAgentTurnRef } from "./loop/types.js";
+export {
+  AGENT_LOOP_ADVANCE_RESULT_KINDS,
+  assertAgentTurnRef,
+  createAgentTurnRef,
+} from "./loop/types.js";
 export type {
   AgentContinuationReason,
   AgentDecision,
   AgentExecutionIdentity,
   AgentFinalCandidateDecision,
-  AgentLoopAdvanceCancelled,
-  AgentLoopAdvanceCompleted,
-  AgentLoopAdvanceFailed,
   AgentLoopAdvanceInput,
   AgentLoopAdvanceResult,
-  AgentLoopFailureStage,
+  AgentLoopCancelledResult,
+  AgentLoopContextReceipt,
+  AgentLoopFailedResult,
+  AgentLoopFinalCandidateResult,
+  AgentLoopSuccessBase,
+  AgentLoopToolRequestsResult,
   AgentModelTurn,
-  AgentProviderTurnState,
+  AgentRetryMetadata,
   AgentToolCallsDecision,
   AgentToolRequest,
-  AgentToolResultMessage,
   AgentTurnInput,
   AgentTurnRef,
-  AIUserInputMessage,
+  ContextBuildContribution,
+  ContextBuildReport,
   ContextCheckpointRef,
   ContextItem,
   ContextItemPriorityClass,
-  ObservationPolicySnapshot,
+  ContextPressure,
   PreparedModelContext,
+  ToolObservationPolicySnapshot,
 } from "./loop/types.js";
 
 /* Decision classification. */
@@ -98,7 +108,7 @@ export type {
   ModelTurnExecutorDependencies,
 } from "./loop/turn/model-turn-executor.js";
 
-/* The turn failure contract. */
+/* The turn failure contract and its single deterministic durable projection. */
 export {
   toModelTurnExecutionError,
   toModelTurnExecutionErrorCode,
@@ -112,12 +122,17 @@ export type {
   ModelTurnExecutionError,
   ModelTurnExecutionErrorCode,
 } from "./loop/turn/model-turn-error.js";
+export {
+  toAgentError,
+  toAgentErrorCode,
+  toBudgetAgentError,
+} from "./loop/turn/agent-error-projection.js";
 
 /* The ports the Run Layer and the host implement. */
-export { ALLOWED_MODEL_ADMISSION } from "./loop/ports/model-request-admission.js";
+export { allowedModelAdmission } from "./loop/ports/model-request-admission.js";
 export type {
   AgentBudgetBlock,
-  AgentModelAdmissionDecision,
+  ModelRequestAdmissionDecision,
   ModelRequestAdmissionInput,
   ModelRequestAdmissionPort,
 } from "./loop/ports/model-request-admission.js";
@@ -173,6 +188,7 @@ export type {
   RunExecutionAgentEffect,
   RunExecutionCompletionEffect,
   RunExecutionEffectResult,
+  RunExecutionFailureStage,
   RunExecutionNoneEffect,
   RunExecutionToolTurnResult,
   RunExecutionToolsEffect,

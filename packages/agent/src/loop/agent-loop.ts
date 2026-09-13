@@ -1,16 +1,14 @@
 import type { AIMessage } from "@caelush/ai";
 
 import type { ContextEnginePort, ContextPrepareMode } from "./context/context-engine-port.js";
-import {
-  createAgentDecisionClassifier,
-  type AgentDecisionClassifier,
-} from "./decision/decision-classifier.js";
+import type { AgentDecisionClassifier } from "./decision/decision-classifier.js";
+import { toAgentModelTurn } from "./decision/decision.js";
 import type {
-  AgentModelAdmissionDecision,
-  AgentBudgetBlock,
+  ModelRequestAdmissionDecision,
   ModelRequestAdmissionPort,
 } from "./ports/model-request-admission.js";
 import type { ModelTurnBoundaryPort } from "./ports/model-turn-boundary.js";
+import { toAgentError, toBudgetAgentError } from "./turn/agent-error-projection.js";
 import {
   createModelRequestBuilder,
   type ModelRequestBuilder,
@@ -20,7 +18,7 @@ import type { ModelTurnExecutor } from "./turn/model-turn-executor.js";
 import type {
   AgentLoopAdvanceInput,
   AgentLoopAdvanceResult,
-  AgentLoopFailureStage,
+  AgentLoopContextReceipt,
   AgentTurnInput,
   PreparedModelContext,
 } from "./types.js";
@@ -61,8 +59,14 @@ export interface AgentLoop {
  *
  * The shape is the whole dependency surface, and every entry is a port the Run Layer or the
  * host owns. There is deliberately no project inspector, relevant-file planner, context
- * builder, clock, step-id factory or lifecycle hook: a general kernel has no coding-agent
- * knowledge and no self-managed lifecycle.
+ * builder, clock, step-id factory, request builder or lifecycle hook: a general kernel has no
+ * coding-agent knowledge, no self-managed lifecycle, and no configurable request policy that
+ * could become a second decision authority.
+ *
+ * `decisionClassifier` is required. A defaulted classifier would let a composition root omit
+ * the one component that turns a settled turn into a decision, and the loop would silently
+ * supply its own authority; the composition root calls `createAgentDecisionClassifier()`
+ * instead.
  *
  * `modelTurnBoundary` is optional only so a unit test can drive the loop without a durable
  * store. In production it is required: the invariant it carries — *durable commit before
@@ -71,33 +75,37 @@ export interface AgentLoop {
  */
 export interface AgentLoopDependencies {
   readonly contextEngine: ContextEnginePort;
+
   readonly modelTurnExecutor: ModelTurnExecutor;
-  /** Defaults to the frozen classifier. Injected so a host can prove an alternate decision. */
-  readonly decisionClassifier?: AgentDecisionClassifier;
+
+  readonly decisionClassifier: AgentDecisionClassifier;
+
   /** Absent means no admission authority is configured and the turn is admitted. */
   readonly modelAdmission?: ModelRequestAdmissionPort;
+
   /** Absent means no durable boundary is configured and no commit precedes the model. */
   readonly modelTurnBoundary?: ModelTurnBoundaryPort;
-  /** Defaults to the frozen builder. Injected so a host can swap in its own request policy. */
-  readonly modelRequestBuilder?: ModelRequestBuilder;
 }
 
 /** Create the frozen AgentLoop over explicit ports. */
 export function createAgentLoop(dependencies: AgentLoopDependencies): AgentLoop {
-  const classifier = dependencies.decisionClassifier ?? createAgentDecisionClassifier();
-  const requestBuilder = dependencies.modelRequestBuilder ?? createModelRequestBuilder();
+  const classifier = dependencies.decisionClassifier;
+  // The request builder is an implementation detail, not a port: a host that could swap it
+  // could build a request the admission and boundary ports never saw.
+  const requestBuilder = createModelRequestBuilder();
 
   return {
     async advance(input: AgentLoopAdvanceInput): Promise<AgentLoopAdvanceResult> {
       const appended = appendedByInput(input.input);
 
-      if (input.signal.aborted) return { status: "CANCELLED" };
+      if (input.signal.aborted) return cancelled(input.turn);
 
       /* 1. Context. A failed preparation costs no durable Step and no provider call. */
       const first = await prepare(dependencies.contextEngine, input, "NORMAL");
-      if (first.kind === "CANCELLED") return { status: "CANCELLED" };
-      if (first.kind === "FAILED") return failed("CONTEXT", first.error, appended);
+      if (first.kind === "CANCELLED") return cancelled(input.turn);
+      if (first.kind === "FAILED") return failed(input.turn, first.error, appended);
       let context = first.context;
+      let recovery: AgentLoopContextReceipt["recovery"] = "NONE";
 
       // The request is built from the prepared context only, and it is rebuilt for the
       // recovery attempt below so a retried turn can never resend the context it overflowed.
@@ -105,28 +113,30 @@ export function createAgentLoop(dependencies: AgentLoopDependencies): AgentLoop 
 
       /* 2. Admission. A refusal must not reach the boundary or the provider. */
       if (dependencies.modelAdmission !== undefined) {
-        let decision: AgentModelAdmissionDecision;
+        let decision: ModelRequestAdmissionDecision;
         try {
           decision = await dependencies.modelAdmission.admit({
             identity: input.identity,
             turn: input.turn,
             request,
-            model: input.model,
-            signal: input.signal,
           });
-        } catch (error) {
-          return failed("ADMISSION", toInternalFailure(error), appended);
+        } catch {
+          return failed(input.turn, toInternalFailure(), appended, receipt(context, recovery));
         }
-        if (input.signal.aborted) return { status: "CANCELLED" };
+        if (input.signal.aborted) return cancelled(input.turn, receipt(context, recovery));
         if (decision.kind === "BLOCKED") {
           return {
-            status: "FAILED",
-            stage: "ADMISSION",
-            error: budgetFailure(decision.block),
-            messagesToAppend: appended,
-            budgetBlock: decision.block,
+            kind: "FAILED",
+            turn: input.turn,
+            error: toBudgetAgentError(decision.block),
+            messagesToAppend: [...appended],
+            context: receipt(context, recovery),
           };
         }
+        // The admitted request is the one that executes. Admission may restate it — a clamped
+        // output ceiling, for instance — and ignoring the restatement would spend the provider
+        // call on a request the budget authority never approved.
+        request = decision.request;
       }
 
       /* 3. The durable boundary. Only a successful commit may open provider I/O. */
@@ -135,13 +145,12 @@ export function createAgentLoop(dependencies: AgentLoopDependencies): AgentLoop 
           await dependencies.modelTurnBoundary.beforeExecute({
             identity: input.identity,
             turn: input.turn,
-            request,
-            model: input.model,
+            model: input.model.ref,
           });
-        } catch (error) {
-          return failed("BOUNDARY", toInternalFailure(error), appended);
+        } catch {
+          return failed(input.turn, toInternalFailure(), appended, receipt(context, recovery));
         }
-        if (input.signal.aborted) return { status: "CANCELLED" };
+        if (input.signal.aborted) return cancelled(input.turn, receipt(context, recovery));
       }
 
       /* 4. The model turn. At most two provider attempts, and only for overflow. */
@@ -154,45 +163,63 @@ export function createAgentLoop(dependencies: AgentLoopDependencies): AgentLoop 
       ) {
         // Exactly one forced recovery. A context that overflows twice is exhausted rather
         // than unlucky, and a third identical attempt would only spend another provider call.
+        // The engine must reject a `FORCED_RECOVERY` preparation it cannot satisfy: a context
+        // that does not actually fit must never be answered with, because the loop would then
+        // spend a second provider call on the very context that was just rejected.
         const recovered = await prepare(dependencies.contextEngine, input, "FORCED_RECOVERY");
-        if (recovered.kind === "CANCELLED") return { status: "CANCELLED" };
-        if (recovered.kind === "FAILED") return failed("CONTEXT", recovered.error, appended);
-        context = recovered.context;
-        // Recovery is only real if the engine says it produced a context that fits. An engine
-        // that cannot compact must not cost a second, identical provider call.
-        if (context.recovered !== true) {
-          return failed("MODEL", contextExhaustedFailure(), appended, context);
+        if (recovered.kind === "CANCELLED")
+          return cancelled(input.turn, receipt(context, recovery));
+        if (recovered.kind === "FAILED") {
+          return failed(input.turn, recovered.error, appended, receipt(context, recovery));
         }
+        context = recovered.context;
+        recovery = "FORCED_CONTEXT_RECOVERY";
         request = buildRequest(requestBuilder, input, context);
         execution = await executeTurn(dependencies.modelTurnExecutor, input, request);
       }
 
-      if (execution.kind === "CANCELLED") return { status: "CANCELLED" };
+      const contextReceipt = receipt(context, recovery);
+      if (execution.kind === "CANCELLED") return cancelled(input.turn, contextReceipt);
       if (execution.kind === "FAILED") {
         // A second overflow is context exhaustion, not a provider failure: retrying it at the
         // Run layer would repeat the same rejected request.
         const error =
           execution.error.code === "CONTEXT_OVERFLOW" ? contextExhaustedFailure() : execution.error;
-        // An executor that owns an admission or boundary step of its own reports that stage, so
-        // the Run Layer settles the right lifecycle instead of seeing a generic model failure.
-        return failed(execution.error.stage ?? "MODEL", error, appended, context, "FAILED");
+        return {
+          kind: "FAILED",
+          turn: input.turn,
+          error: toAgentError(error),
+          messagesToAppend: [...appended],
+          context: contextReceipt,
+          ...retryMetadata(error),
+        };
       }
 
       /* 5. Classification. A rejected turn is a failure, never a decision. */
       try {
         const decision = classifier.classify(execution.result);
-        return {
-          status: "COMPLETED",
-          decision,
+        const base = {
+          turn: input.turn,
+          modelTurn: decision.modelTurn,
           messagesToAppend: [...appended, decision.modelTurn.assistantMessage],
-          ...contextReport(context),
+          context: contextReceipt,
         };
-      } catch (error) {
-        // The provider turn *did* complete: the model answered and the answer was unusable. The
-        // Run Layer records that distinction, and reporting it as a failed provider attempt
-        // would lose it.
+        return decision.type === "TOOL_CALLS_REQUESTED"
+          ? { kind: "TOOL_REQUESTS", ...base, decision }
+          : { kind: "FINAL_CANDIDATE", ...base, decision };
+      } catch {
+        // The provider turn *did* complete: the model answered and the answer was unusable.
+        // Reporting it as a failed provider attempt would lose that distinction, which is why
+        // the settled turn travels with the failure.
+        const modelTurn = toAgentModelTurn(execution.result);
+        const failure = toInternalFailure();
         return {
-          ...failed("MODEL", toInternalFailure(error), appended, context, "COMPLETED"),
+          kind: "FAILED",
+          turn: input.turn,
+          ...(modelTurn === undefined ? {} : { modelTurn }),
+          error: toAgentError(failure),
+          messagesToAppend: [...appended],
+          context: contextReceipt,
           ...(execution.result.usage === undefined ? {} : { usage: execution.result.usage }),
         };
       }
@@ -211,7 +238,7 @@ function buildRequest(
     context,
     model: input.model,
     tools: input.tools,
-    ...(input.settings === undefined ? {} : { settings: input.settings }),
+    ...(input.modelSettings === undefined ? {} : { settings: input.modelSettings }),
   });
 }
 
@@ -220,12 +247,13 @@ function executeTurn(
   input: AgentLoopAdvanceInput,
   request: ReturnType<ModelRequestBuilder["build"]>,
 ): ReturnType<ModelTurnExecutor["execute"]> {
+  // No stream sink crosses here. Live deltas belong to the executor the composition root
+  // binds, so `advance()` needs no presentation input at all.
   return executor.execute({
     identity: input.identity,
     turn: input.turn,
     request,
     signal: input.signal,
-    ...(input.streamSink === undefined ? {} : { streamSink: input.streamSink }),
   });
 }
 
@@ -274,26 +302,63 @@ function appendedByInput(input: AgentTurnInput): readonly AIMessage[] {
 }
 
 function failed(
-  stage: AgentLoopFailureStage,
+  turn: AgentLoopAdvanceInput["turn"],
   error: ModelTurnExecutionError,
   messagesToAppend: readonly AIMessage[],
-  context?: PreparedModelContext,
-  providerTurnState?: import("./types.js").AgentProviderTurnState,
+  context?: AgentLoopContextReceipt,
 ): AgentLoopAdvanceResult {
   return {
-    status: "FAILED",
-    stage,
-    error,
+    kind: "FAILED",
+    turn,
+    error: toAgentError(error),
     messagesToAppend: [...messagesToAppend],
-    ...(context === undefined ? {} : contextReport(context)),
-    ...(providerTurnState === undefined ? {} : { providerTurnState }),
+    ...(context === undefined ? {} : { context }),
   };
 }
 
-function contextReport(context: PreparedModelContext): {
-  readonly contextReport?: Readonly<Record<string, unknown>>;
+/**
+ * The cancelled result.
+ *
+ * `messagesToAppend` is deliberately empty: partial assistant output is discarded on
+ * cancellation, and a turn's own input is the caller's ledger rather than this Reason's
+ * output appending it here would double-count it.
+ */
+function cancelled(
+  turn: AgentLoopAdvanceInput["turn"],
+  context?: AgentLoopContextReceipt,
+): AgentLoopAdvanceResult {
+  return {
+    kind: "CANCELLED",
+    turn,
+    messagesToAppend: [],
+    ...(context === undefined ? {} : { context }),
+  };
+}
+
+/** The receipt of the context this Reason actually ran on. */
+function receipt(
+  context: PreparedModelContext,
+  recovery: AgentLoopContextReceipt["recovery"],
+): AgentLoopContextReceipt {
+  return {
+    report: context.report,
+    observationPolicy: context.observationPolicy,
+    recovery,
+  };
+}
+
+/** The retry hint a transient provider condition carries, and nothing more. */
+function retryMetadata(error: ModelTurnExecutionError): {
+  readonly retry?: import("./types.js").AgentRetryMetadata;
 } {
-  return context.report === undefined ? {} : { contextReport: context.report };
+  if (!error.retryable) return {};
+  return {
+    retry: {
+      code: error.code,
+      retryable: true,
+      ...(error.retryAfterMs === undefined ? {} : { retryAfterMs: error.retryAfterMs }),
+    },
+  };
 }
 
 /**
@@ -304,8 +369,10 @@ function contextReport(context: PreparedModelContext): {
  * the window — an unreachable project, a broken renderer — is something the loop cannot
  * classify, so it fails closed rather than inventing a recovery.
  *
- * The engine's own message is never reused: it may quote a path, a document or a prompt. The
- * message here is always a fixed, safe summary.
+ * The engine's own value is never carried: it may quote a path, a document or a prompt. The
+ * loop reports only that preparation failed, and the caller that owns the Context Engine —
+ * which is the caller that can classify its own implementation's errors — keeps the original
+ * value in its own channel.
  */
 function toContextFailure(error: unknown): ModelTurnExecutionError {
   return isContextOverflow(error)
@@ -313,13 +380,11 @@ function toContextFailure(error: unknown): ModelTurnExecutionError {
         code: "CONTEXT_OVERFLOW",
         message: "The prepared model context exceeds the model context window.",
         retryable: false,
-        cause: error,
       }
     : {
         code: "PROVIDER_ERROR",
         message: "The model context could not be prepared.",
         retryable: false,
-        cause: error,
       };
 }
 
@@ -329,19 +394,22 @@ function toContextFailure(error: unknown): ModelTurnExecutionError {
  * A structural read keeps the loop working with either a Context Engine that owns an overflow
  * error class or a host adapter that re-tags the condition, and it avoids a dependency from
  * the general kernel onto any particular context implementation.
+ *
+ * An exhausted window and an over-budget one are the same condition for this loop: both mean the
+ * context does not fit, and both are recovered the same way — or not at all.
  */
 function isContextOverflow(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
   const candidate = error as { readonly code?: unknown; readonly name?: unknown };
   if (
     typeof candidate.code === "string" &&
-    /CONTEXT_OVERFLOW|CONTEXT_BUDGET/i.test(candidate.code)
+    /CONTEXT_OVERFLOW|CONTEXT_BUDGET|CONTEXT_EXHAUSTED/i.test(candidate.code)
   ) {
     return true;
   }
   return (
     typeof candidate.name === "string" &&
-    /ContextBudgetExceeded|ContextOverflow/.test(candidate.name)
+    /ContextBudgetExceeded|ContextOverflow|ContextExhausted/.test(candidate.name)
   );
 }
 
@@ -355,38 +423,16 @@ function contextExhaustedFailure(): ModelTurnExecutionError {
 }
 
 /**
- * A durable budget refusal, in the frozen failure vocabulary.
- *
- * `UNAVAILABLE` is not `EXCEEDED`. Failing to establish enforcement at all is a fail-closed
- * configuration outcome, and reporting it as an exceeded budget would tell the Run Layer that
- * a limit was spent when none was ever applied.
- */
-function budgetFailure(block: AgentBudgetBlock): ModelTurnExecutionError {
-  return block.kind === "UNAVAILABLE"
-    ? {
-        code: "PROVIDER_ERROR",
-        message: "Budget enforcement is unavailable for this model turn.",
-        retryable: false,
-      }
-    : {
-        code: "PROVIDER_ERROR",
-        message: "The configured Run budget would be exceeded.",
-        retryable: false,
-      };
-}
-
-/**
  * An unexpected throw from a port, in the frozen failure vocabulary.
  *
  * The throw's own text never crosses: a port may have surfaced a provider body, a prompt or a
- * credential. Only the fact that the port failed is reported. The original value is kept as
- * `cause` so a host boundary can classify it again without the kernel learning what it was.
+ * credential. Only the fact that the port failed is reported, and the original value stays in
+ * the caller's own channel — it is never a field of an `@caelush/agent` contract.
  */
-function toInternalFailure(error: unknown): ModelTurnExecutionError {
+function toInternalFailure(): ModelTurnExecutionError {
   return {
     code: "PROVIDER_ERROR",
     message: "The model turn failed.",
     retryable: false,
-    cause: error,
   };
 }

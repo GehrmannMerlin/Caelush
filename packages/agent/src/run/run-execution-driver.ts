@@ -1,11 +1,13 @@
+import type { AIUserMessage } from "@caelush/ai";
+
 import type { AgentDecision } from "../loop/decision/decision.js";
-import type { AgentLoopFailureStage, AIUserInputMessage } from "../loop/types.js";
 import type {
   RunExecutionBudgetBlock,
   RunExecutionDirective,
   RunExecutionError,
   RunExecutionMode,
 } from "./directive.js";
+import type { RunExecutionFailureStage } from "./effect-result.js";
 import type { RunExecutionFacts } from "./snapshot.js";
 import type { RunExecutionEffectResult, RunExecutionToolTurnResult } from "./effect-result.js";
 
@@ -94,7 +96,7 @@ export interface AgentStepHandle {
 /** One agent turn's frozen input, as the driver hands it to the loop. */
 export interface RunExecutionAgentTurnInput {
   readonly decision?: AgentDecision;
-  readonly messages?: readonly AIUserInputMessage[];
+  readonly messages?: readonly AIUserMessage[];
 }
 
 /** What a Tool batch boundary is asked to do. */
@@ -118,7 +120,7 @@ export type {
   RunExecutionBudgetBlock,
   RunExecutionEffectResult,
   RunExecutionError,
+  RunExecutionFailureStage,
   RunExecutionMode,
   RunExecutionToolTurnResult,
 };
-export type { AgentLoopFailureStage };

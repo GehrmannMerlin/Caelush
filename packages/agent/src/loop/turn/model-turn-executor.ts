@@ -101,7 +101,7 @@ export function createModelTurnExecutor(
         const assembler = createAIModelTurnAssembler();
 
         for await (const event of stream.events) {
-          publishTransient(input.streamSink, event);
+          publishTransient(input, event);
           assembler.accept(event);
         }
 
@@ -127,9 +127,10 @@ export function createModelTurnExecutor(
  * A sink failure is isolated. Presentation can never fail a model turn, and it can never
  * change the frozen result the durable layer will persist.
  */
-function publishTransient(sink: ModelTurnStreamSink | undefined, event: AIStreamEvent): void {
+function publishTransient(input: ModelTurnExecutionInput, event: AIStreamEvent): void {
+  const sink = input.streamSink;
   if (sink === undefined) return;
-  const transient = toTransientEvent(event);
+  const transient = toTransientEvent(input, event);
   if (transient === undefined) return;
   try {
     const published = sink.publish(transient);
@@ -143,15 +144,27 @@ function publishTransient(sink: ModelTurnStreamSink | undefined, event: AIStream
   }
 }
 
-function toTransientEvent(event: AIStreamEvent): AgentTransientStreamEvent | undefined {
+/**
+ * Project one gateway delta onto the correlated transient contract.
+ *
+ * The correlation identity is projected from the turn being executed, never read out of
+ * the provider stream: `runId` and `stepId` are the kernel's own handles, and a provider
+ * event that claimed one would be a second, unverifiable identity authority.
+ */
+function toTransientEvent(
+  input: ModelTurnExecutionInput,
+  event: AIStreamEvent,
+): AgentTransientStreamEvent | undefined {
+  const correlation = { runId: input.identity.runId, stepId: input.turn.stepId } as const;
   switch (event.type) {
     case "text.delta":
-      return { type: "text.delta", text: event.payload.text };
+      return { type: "text.delta", ...correlation, text: event.payload.text };
     case "reasoning.summary.delta":
-      return { type: "thinking.delta", text: event.payload.text };
+      return { type: "thinking.delta", ...correlation, text: event.payload.text };
     case "tool_call.delta":
       return {
         type: "tool_call.delta",
+        ...correlation,
         toolCallId: event.payload.toolCallId,
         delta: event.payload.delta,
       };

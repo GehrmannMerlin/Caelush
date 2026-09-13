@@ -46,6 +46,13 @@ export interface ContextEnginePort {
  * `FORCED_RECOVERY` is bounded by the loop to one extra provider attempt per turn. If that
  * attempt overflows too, the turn fails with `CONTEXT_EXHAUSTED`: a context that cannot be
  * recovered twice is not going to be recovered by a third identical try.
+ *
+ * An engine that cannot actually compact must **reject** a `FORCED_RECOVERY` preparation —
+ * with its own context-exhaustion error — rather than resolve with a context that does not
+ * fit. It must never report "recovered" through a field of its answer: the loop has no such
+ * field to read, and answering with the same oversized context would spend a second provider
+ * call on the very request that was just rejected. Whether a forced recovery happened is
+ * recorded by the loop, in `AgentLoopContextReceipt.recovery`.
  */
 export type ContextPrepareMode = "NORMAL" | "FORCED_RECOVERY";
 
