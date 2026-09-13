@@ -57,9 +57,10 @@ function agentKernelFiles(): string[] {
   );
 }
 
-/** The frozen kernel directories of Phase 3A. */
+/** The frozen kernel directories of Phase 3A, plus the Phase 3B context boundary. */
 const KERNEL_DIRECTORIES = [
   "packages/agent/src/loop",
+  "packages/agent/src/loop/context",
   "packages/agent/src/loop/decision",
   "packages/agent/src/loop/turn",
   "packages/agent/src/loop/ports",
@@ -142,14 +143,23 @@ describe("Phase 3A agent kernel dependency boundaries", () => {
     expect(source).not.toMatch(/\b(?:workspace|cwd|permissionProfile|approvalPolicy)\b/);
   });
 
-  it("keeps the AgentLoop contract free of a lifecycle implementation", () => {
+  it("keeps the AgentLoop free of a lifecycle implementation", () => {
     const loop = read("packages/agent/src/loop/agent-loop.ts");
-    // Phase 3A freezes the contract only: the entry point exists, and there is no
-    // implementation of it yet.
+    // One Reason through a fixed sequence: Phase 3B implemented `advance()` as a straight line
+    // with exactly one bounded context-overflow recovery, and no loop of its own.
     expect(loop).toContain(
       "advance(input: AgentLoopAdvanceInput): Promise<AgentLoopAdvanceResult>",
     );
-    expect(loop).not.toMatch(/\b(?:async\s+advance|while\s*\(|for\s*\()/);
+    const executable = loop
+      .replaceAll(/\/\*[\s\S]*?\*\//g, "")
+      .replaceAll(/(^|[^:])\/\/.*$/gm, "$1");
+    // No iteration, no sleeping, no retry loop.
+    expect(executable).not.toMatch(/\bwhile\s*\(/);
+    expect(executable).not.toMatch(/\bfor\s*\(/);
+    expect(executable).not.toMatch(/\bsetTimeout|\bsetInterval|\bsleep\b/);
+    // Tool execution, Run status and the max-step gate are all absent by construction.
+    expect(executable).not.toMatch(/\b(?:dispatch|executeTool|ToolDispatcher|markAgentRun)\b/);
+    expect(executable).not.toMatch(/\bmaxSteps\b/);
   });
 });
 

@@ -102,8 +102,9 @@ describe("Phase 2C Core model authority", () => {
     // history, continuations or conversations. A new file must be a deliberate decision.
     //
     // Phase 3A moved the decision contract into `@caelush/agent`, so `agent-decision.ts` no
-    // longer imports the legacy message type, and it was removed from the list rather than
-    // left as a stale entry.
+    // longer imports the legacy message type, and it was removed from the list rather than left
+    // as a stale entry. Phase 3B added the Core compatibility context boundary, which projects
+    // between the frozen AI messages and the still-legacy durable conversation.
     const allowlist = [
       "packages/core/src/agent-continuation-schema.ts",
       "packages/core/src/agent-continuation.ts",
@@ -113,6 +114,7 @@ describe("Phase 2C Core model authority", () => {
       "packages/core/src/agent-tool-batch.ts",
       "packages/core/src/agent-tool-results.ts",
       "packages/core/src/ai-invocation-projection.ts",
+      "packages/core/src/legacy-context-runtime-adapter.ts",
       "packages/core/src/run-controller-history.ts",
       "packages/core/src/run-controller-input.ts",
       "packages/core/src/run-controller-ports.ts",
@@ -240,9 +242,10 @@ describe("Phase 2C package edges", () => {
         .map((part) => part.trim())
         .filter(Boolean),
     );
-    // Phase 3A froze the V2 kernel contracts, so the surface grew from the single model turn
-    // factory to the full contract set. The list is asserted exactly so it can never widen by
-    // accident, and each name here is a frozen contract of Architecture V2 Phase 3.
+    // Phase 3A froze the V2 kernel contracts and Phase 3B implemented `advance()`, so the surface
+    // grew from the single model turn factory to the frozen contract set. The list is asserted
+    // exactly so it can never widen by accident, and each name here is a frozen contract of
+    // Architecture V2 Phase 3.
     expect(exported.sort()).toEqual(
       [
         "AGENT_DECISION_TYPES",
@@ -254,10 +257,14 @@ describe("Phase 2C package edges", () => {
         "assertAgentTurnRef",
         "classifyAgentDecision",
         "createAgentDecisionClassifier",
+        "createAgentLoop",
         "createAgentTurnRef",
         "createModelRequestBuilder",
         "createModelTurnExecutor",
         "isRetryableModelTurnErrorCode",
+        "toAIModelSettings",
+        "toModelTurnExecutionError",
+        "toModelTurnExecutionErrorCode",
       ].sort(),
     );
   });
