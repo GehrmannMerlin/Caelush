@@ -39,6 +39,10 @@
     "./adapters/openai-compatible": {
       "types": "./dist/adapters/openai-compatible/index.d.ts",
       "import": "./dist/adapters/openai-compatible/index.js"
+    },
+    "./adapters/anthropic-messages": {
+      "types": "./dist/adapters/anthropic-messages/index.d.ts",
+      "import": "./dist/adapters/anthropic-messages/index.js"
     }
   },
   "scripts": {
