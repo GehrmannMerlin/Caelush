@@ -86,19 +86,22 @@ describe("package boundaries", () => {
     ).toBe(false);
   });
 
-  it("keeps the LLM package as a compatibility facade above the AI core only", async () => {
+  it("keeps the LLM package as a durable-compatibility facade with no invocation authority", async () => {
     const manifest = await readManifest("packages/llm/package.json");
     const dependencies = dependencyEntries(manifest);
     expect(dependencies[protocolPackageName]).toBe("workspace:*");
     expect(dependencies.zod).toBe("4.4.3");
-    // Phase 2B moved the OpenAI-compatible runtime into `@caelush/ai`, so the legacy
-    // package now depends on the AI core and owns no provider SDK at all.
-    expect(dependencies["@caelush/ai"]).toBe("workspace:*");
+    // Phase 2D retired the legacy model-invocation surface, so the package no longer
+    // depends on the AI core at all: `@caelush/ai` owns model invocation exclusively,
+    // and this package keeps only the durable conversation and turn schemas.
+    expect(dependencies["@caelush/ai"]).toBeUndefined();
     expect(dependencies.ai).toBeUndefined();
     expect(dependencies["@ai-sdk/openai-compatible"]).toBeUndefined();
     expect(
       Object.keys(dependencies).some((dependency) =>
-        ["@ai-sdk/core", "@ai-sdk/openai", "openai", "anthropic"].includes(dependency),
+        ["@ai-sdk/core", "@ai-sdk/openai", "openai", "anthropic", "@anthropic-ai/sdk"].includes(
+          dependency,
+        ),
       ),
     ).toBe(false);
 

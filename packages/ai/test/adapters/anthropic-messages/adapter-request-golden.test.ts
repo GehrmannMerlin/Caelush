@@ -11,7 +11,6 @@ import type { AIToolSpec } from "../../../src/tools/tool-spec.js";
 import type { ModelDescriptor } from "../../../src/models/model-descriptor.js";
 import type { ProviderCredentials } from "../../../src/providers/credentials.js";
 
-const ENDPOINT = "https://api.anthropic.com";
 const API_ID = ANTHROPIC_MESSAGES_API_ID;
 
 const READ_FILE: AIToolSpec = {
@@ -254,10 +253,7 @@ describe("Anthropic Messages request golden: messages", () => {
     // batch order, and they merge into the single native user message a parallel
     // batch requires.
     expect(messages).toHaveLength(3);
-    expect(messages[2]?.content.map((block) => block.tool_use_id)).toEqual([
-      "toolu_b",
-      "toolu_a",
-    ]);
+    expect(messages[2]?.content.map((block) => block.tool_use_id)).toEqual(["toolu_b", "toolu_a"]);
   });
 });
 
@@ -267,7 +263,13 @@ describe("Anthropic Messages request golden: tool protocol validation", () => {
       request({
         messages: [
           { role: "user", content: "hello" },
-          { role: "tool", toolCallId: "toolu_x", toolName: "read_file", content: "x", isError: false },
+          {
+            role: "tool",
+            toolCallId: "toolu_x",
+            toolName: "read_file",
+            content: "x",
+            isError: false,
+          },
         ],
       }),
     );
@@ -307,8 +309,20 @@ describe("Anthropic Messages request golden: tool protocol validation", () => {
               { type: "tool-call", toolCallId: "toolu_a", toolName: "read_file", input: {} },
             ],
           },
-          { role: "tool", toolCallId: "toolu_a", toolName: "read_file", content: "1", isError: false },
-          { role: "tool", toolCallId: "toolu_a", toolName: "read_file", content: "2", isError: false },
+          {
+            role: "tool",
+            toolCallId: "toolu_a",
+            toolName: "read_file",
+            content: "1",
+            isError: false,
+          },
+          {
+            role: "tool",
+            toolCallId: "toolu_a",
+            toolName: "read_file",
+            content: "2",
+            isError: false,
+          },
         ],
       }),
     );
@@ -408,7 +422,7 @@ describe("Anthropic Messages request golden: tools and tool choice", () => {
     const turn = await captureTurn(
       request({
         tools: [READ_FILE],
-        toolChoice: { type: choiceType } as AIModelRequest["toolChoice"],
+        toolChoice: { type: choiceType },
       }),
     );
 
@@ -630,10 +644,6 @@ describe("Anthropic Messages request golden: headers and authentication", () => 
 });
 
 describe("Anthropic Messages request golden: cache", () => {
-  const CACHE_PROFILE = {
-    cache: { supportedRetentions: ["NONE", "SHORT", "LONG"] as const },
-  };
-
   function cacheDescriptor(): ModelDescriptor {
     return modelDescriptor({
       ref: { provider: "anthropic-fixture", model: "fixture-model" },
@@ -643,19 +653,17 @@ describe("Anthropic Messages request golden: cache", () => {
   }
 
   it("sends no cache control for retention NONE", async () => {
-    const turn = await captureTurn(
-      request({ settings: { cache: { retention: "NONE" } } }),
-      { descriptor: cacheDescriptor() },
-    );
+    const turn = await captureTurn(request({ settings: { cache: { retention: "NONE" } } }), {
+      descriptor: cacheDescriptor(),
+    });
 
     expect(JSON.stringify(turn.body)).not.toContain("cache_control");
   });
 
   it("maps SHORT onto an ephemeral 5m marker", async () => {
-    const turn = await captureTurn(
-      request({ settings: { cache: { retention: "SHORT" } } }),
-      { descriptor: cacheDescriptor() },
-    );
+    const turn = await captureTurn(request({ settings: { cache: { retention: "SHORT" } } }), {
+      descriptor: cacheDescriptor(),
+    });
 
     const messages = turn.body["messages"] as readonly {
       readonly content: readonly Record<string, unknown>[];
@@ -664,10 +672,9 @@ describe("Anthropic Messages request golden: cache", () => {
   });
 
   it("maps LONG onto an ephemeral 1h marker", async () => {
-    const turn = await captureTurn(
-      request({ settings: { cache: { retention: "LONG" } } }),
-      { descriptor: cacheDescriptor() },
-    );
+    const turn = await captureTurn(request({ settings: { cache: { retention: "LONG" } } }), {
+      descriptor: cacheDescriptor(),
+    });
 
     const messages = turn.body["messages"] as readonly {
       readonly content: readonly Record<string, unknown>[];
@@ -710,13 +717,14 @@ describe("Anthropic Messages request golden: cache", () => {
 
   it("does not change prompt content when caching is requested", async () => {
     const withoutCache = await captureTurn(request(), { descriptor: cacheDescriptor() });
-    const withCache = await captureTurn(
-      request({ settings: { cache: { retention: "SHORT" } } }),
-      { descriptor: cacheDescriptor() },
-    );
+    const withCache = await captureTurn(request({ settings: { cache: { retention: "SHORT" } } }), {
+      descriptor: cacheDescriptor(),
+    });
 
     const strip = (body: Record<string, unknown>): string =>
-      JSON.stringify(body).replaceAll('"cache_control":{"type":"ephemeral"},', "").replaceAll(',"cache_control":{"type":"ephemeral"}', "");
+      JSON.stringify(body)
+        .replaceAll('"cache_control":{"type":"ephemeral"},', "")
+        .replaceAll(',"cache_control":{"type":"ephemeral"}', "");
 
     expect(strip(withCache.body)).toBe(strip(withoutCache.body));
   });
@@ -727,16 +735,18 @@ describe("Anthropic Messages request golden: reasoning", () => {
     return modelDescriptor({
       ref: { provider: "anthropic-fixture", model: "fixture-model" },
       api: API_ID,
-      reasoning: { supportedLevels: ["OFF", "LOW", "MEDIUM", "HIGH"], supportsSummary: "SUPPORTED" },
+      reasoning: {
+        supportedLevels: ["OFF", "LOW", "MEDIUM", "HIGH"],
+        supportsSummary: "SUPPORTED",
+      },
       adapterMetadata: THINKING_METADATA,
     });
   }
 
   it("translates a text-only reasoning level into native thinking and effort", async () => {
-    const turn = await captureTurn(
-      request({ settings: { reasoning: { level: "HIGH" } } }),
-      { descriptor: thinkingDescriptor() },
-    );
+    const turn = await captureTurn(request({ settings: { reasoning: { level: "HIGH" } } }), {
+      descriptor: thinkingDescriptor(),
+    });
 
     expect(turn.body["thinking"]).toEqual({
       type: "enabled",
@@ -761,20 +771,17 @@ describe("Anthropic Messages request golden: reasoning", () => {
   });
 
   it("fails closed when the metadata maps no native budget for the level", async () => {
-    const turn = await captureTurn(
-      request({ settings: { reasoning: { level: "XHIGH" } } }),
-      {
-        descriptor: modelDescriptor({
-          ref: { provider: "anthropic-fixture", model: "fixture-model" },
-          api: API_ID,
-          reasoning: {
-            supportedLevels: ["OFF", "LOW", "HIGH", "XHIGH"],
-            supportsSummary: "SUPPORTED",
-          },
-          adapterMetadata: THINKING_METADATA,
-        }),
-      },
-    );
+    const turn = await captureTurn(request({ settings: { reasoning: { level: "XHIGH" } } }), {
+      descriptor: modelDescriptor({
+        ref: { provider: "anthropic-fixture", model: "fixture-model" },
+        api: API_ID,
+        reasoning: {
+          supportedLevels: ["OFF", "LOW", "HIGH", "XHIGH"],
+          supportsSummary: "SUPPORTED",
+        },
+        adapterMetadata: THINKING_METADATA,
+      }),
+    });
 
     expectFailClosed(turn, "AI_CAPABILITY_UNSUPPORTED");
   });
@@ -783,7 +790,10 @@ describe("Anthropic Messages request golden: reasoning", () => {
     // A descriptor whose model id mentions no vendor at all still gets native
     // thinking, and a vendor-looking id without metadata does not.
     const withMetadata = await captureTurn(
-      request({ model: { provider: "anthropic-fixture", model: "opaque-1" }, settings: { reasoning: { level: "LOW" } } }),
+      request({
+        model: { provider: "anthropic-fixture", model: "opaque-1" },
+        settings: { reasoning: { level: "LOW" } },
+      }),
       {
         descriptor: modelDescriptor({
           ref: { provider: "anthropic-fixture", model: "opaque-1" },

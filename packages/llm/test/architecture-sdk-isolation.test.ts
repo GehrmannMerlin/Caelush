@@ -51,11 +51,10 @@ describe("provider SDK architecture isolation", () => {
     expect(violations).toEqual([]);
   });
 
-  it("keeps the legacy package free of the deleted translator files", () => {
-    const legacyAdapterRoot = join(root, "packages/llm/src/providers/openai-compatible");
-    const remaining = readdirSync(legacyAdapterRoot).sort();
-
-    expect(remaining).toEqual(["config.ts", "index.ts", "provider.ts"]);
+  it("keeps the retired legacy adapter facade out of the package", () => {
+    // Phase 2D deleted `packages/llm/src/providers/openai-compatible` entirely, so the
+    // whole directory must be gone rather than merely emptied.
+    expect(existsSync(join(root, "packages/llm/src/providers"))).toBe(false);
   });
 
   it("keeps AI SDK types out of the legacy public declaration", () => {

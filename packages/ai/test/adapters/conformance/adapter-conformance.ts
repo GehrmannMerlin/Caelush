@@ -16,8 +16,6 @@ import type {
 } from "../../support/http-capturing-transport.js";
 import type { ModelDescriptor } from "../../../src/models/model-descriptor.js";
 import type { EnumerableModelDescriptorSourcePort } from "../../../src/models/model-descriptor-source-port.js";
-import type { ReasoningLevel } from "../../../src/reasoning/reasoning-level.js";
-import type { CacheRetention } from "../../../src/cache/cache-retention.js";
 
 const FINISH_CASES: readonly FinishReasonInput[] = [
   "STOP",
@@ -26,7 +24,7 @@ const FINISH_CASES: readonly FinishReasonInput[] = [
   "CONTENT_FILTER",
 ];
 
-interface ModelOverrides extends ConformanceModelOverrides {}
+type ModelOverrides = ConformanceModelOverrides;
 
 /**
  * Run the reusable adapter conformance suite for one dialect.

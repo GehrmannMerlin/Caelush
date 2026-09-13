@@ -64,41 +64,111 @@ try {
     packagedFetchProbe.exitCode === 0,
     `packaged process could not reach fake provider: ${packagedFetchProbe.stderr}`,
   );
-  const llmModule = pathToFileURL(
-    join(bundleDirectory, "node_modules", "@caelush", "llm", "dist", "index.js"),
+  const aiModule = pathToFileURL(
+    join(bundleDirectory, "node_modules", "@caelush", "ai", "dist", "index.js"),
+  ).href;
+  const openAIAdapterModule = pathToFileURL(
+    join(
+      bundleDirectory,
+      "node_modules",
+      "@caelush",
+      "ai",
+      "dist",
+      "adapters",
+      "openai-compatible",
+      "index.js",
+    ),
+  ).href;
+  const anthropicAdapterModule = pathToFileURL(
+    join(
+      bundleDirectory,
+      "node_modules",
+      "@caelush",
+      "ai",
+      "dist",
+      "adapters",
+      "anthropic-messages",
+      "index.js",
+    ),
   ).href;
   const toolsModule = pathToFileURL(
     join(bundleDirectory, "node_modules", "@caelush", "tools", "dist", "index.js"),
   ).href;
+  // The packaged child probe composes the real AI core in a fresh process and speaks
+  // both native dialects through one gateway.
+  const packagedAiProbeSource = `const ai = await import(${JSON.stringify(aiModule)}); const openai = await import(${JSON.stringify(openAIAdapterModule)}); const anthropic = await import(${JSON.stringify(anthropicAdapterModule)}); const tools = await import(${JSON.stringify(toolsModule)}); const base = process.env.CAELUSH_PROVIDER_BASE_URL; const definitions = tools.createDefaultBuiltinToolRegistrations({ resolve: async () => { throw new Error("not used"); } }).map((item) => item.definition); const model = (provider, id, api) => ({ ref: { provider, model: id }, api, limits: { contextWindowTokens: 32000, maxOutputTokens: 4096 }, capabilities: { streaming: "SUPPORTED", toolCalling: "SUPPORTED", parallelToolCalls: "SUPPORTED", structuredOutput: "UNKNOWN", vision: "UNKNOWN", reasoning: "UNKNOWN", reasoningSummary: "UNKNOWN", promptCaching: "UNKNOWN", usageReporting: "SUPPORTED" }, source: "CONFIGURATION" }); const descriptors = [model("openai-compatible", "fixture-model", openai.OPENAI_COMPATIBLE_API_ID), model("anthropic-compatible", "fixture-model", anthropic.ANTHROPIC_MESSAGES_API_ID)]; const source = { id: "artifact-probe", priority: 0, resolve: (ref) => descriptors.find((item) => item.ref.provider === ref.provider && item.ref.model === ref.model), list: () => descriptors }; const subsystem = ai.createAISubsystem({ modelSources: [source], providers: [{ id: "openai-compatible", endpoint: base, defaultApi: openai.OPENAI_COMPATIBLE_API_ID, allowUnknownModels: false, credentials: { resolve: async () => ({ apiKey: process.env.CAELUSH_PROVIDER_API_KEY }) } }, { id: "anthropic-compatible", endpoint: base.replace(/\\/v1$/, ""), defaultApi: anthropic.ANTHROPIC_MESSAGES_API_ID, allowUnknownModels: false, credentials: { resolve: async () => ({ apiKey: process.env.CAELUSH_PROVIDER_API_KEY }) } }], adapters: [openai.createOpenAICompatibleApiAdapter(), anthropic.createAnthropicMessagesApiAdapter()] }); const openAIResult = await subsystem.gateway.complete({ model: { provider: "openai-compatible", model: "fixture-model" }, messages: [{ role: "user", content: "packaged child probe" }], tools: definitions, toolChoice: { type: "AUTO" } }); if (openAIResult.text !== "artifact smoke complete") process.exit(1); const anthropicResult = await subsystem.gateway.complete({ model: { provider: "anthropic-compatible", model: "fixture-model" }, messages: [{ role: "user", content: "packaged child probe" }] }); if (anthropicResult.text !== "artifact anthropic complete") process.exit(1); if (anthropicResult.resolution.api !== anthropic.ANTHROPIC_MESSAGES_API_ID) process.exit(1);`;
   const packagedAdapterProbe = await run(
     process.execPath,
-    [
-      "--input-type=module",
-      "-e",
-      `const llm = await import(${JSON.stringify(llmModule)}); const tools = await import(${JSON.stringify(toolsModule)}); const registry = new llm.LLMProviderRegistry(); registry.register(llm.createOpenAICompatibleLLMProvider({ id: "openai-compatible", baseURL: process.env.CAELUSH_PROVIDER_BASE_URL, apiKey: process.env.CAELUSH_PROVIDER_API_KEY })); const definitions = tools.createDefaultBuiltinToolRegistrations({ resolve: async () => { throw new Error("not used"); } }).map((item) => item.definition); const result = await new llm.LLMGateway({ providers: registry }).complete({ model: { provider: "openai-compatible", model: "fixture-model" }, messages: [{ role: "user", content: "packaged child probe" }], tools: definitions, toolChoice: { type: "AUTO" } }); if (result.text !== "artifact smoke complete") process.exit(1);`,
-    ],
-    { cwd: bundleDirectory, env: environment },
+    ["--input-type=module", "-e", packagedAiProbeSource],
+    {
+      cwd: bundleDirectory,
+      env: environment,
+    },
   );
   assert(
     packagedAdapterProbe.exitCode === 0,
-    `packaged OpenAI-compatible child probe failed: ${packagedAdapterProbe.stderr}`,
+    `packaged AI dialect child probe failed: ${packagedAdapterProbe.stderr}`,
   );
-  const llm = await import(llmModule);
-  const llmProviders = new llm.LLMProviderRegistry();
-  llmProviders.register(
-    llm.createOpenAICompatibleLLMProvider({
-      id: "openai-compatible",
-      baseURL: provider.url,
-      apiKey: secret,
-    }),
+  // The in-process probe runs the same composition against the same fake provider, so
+  // a bundle that only works in a child process cannot pass unnoticed.
+  const { createAISubsystem } = await import(aiModule);
+  const { createOpenAICompatibleApiAdapter, OPENAI_COMPATIBLE_API_ID } = await import(
+    openAIAdapterModule
   );
-  const directResult = await new llm.LLMGateway({ providers: llmProviders }).complete({
+  const { createAnthropicMessagesApiAdapter, ANTHROPIC_MESSAGES_API_ID } = await import(
+    anthropicAdapterModule
+  );
+  const providerRoot = provider.url.replace(/\/v1$/, "");
+  const probeDescriptors = [
+    probeDescriptor("openai-compatible", "fixture-model", OPENAI_COMPATIBLE_API_ID),
+    probeDescriptor("anthropic-compatible", "fixture-model", ANTHROPIC_MESSAGES_API_ID),
+  ];
+  const ai = createAISubsystem({
+    modelSources: [
+      {
+        id: "artifact-probe",
+        priority: 0,
+        resolve: (ref) =>
+          probeDescriptors.find(
+            (item) => item.ref.provider === ref.provider && item.ref.model === ref.model,
+          ),
+        list: () => probeDescriptors,
+      },
+    ],
+    providers: [
+      {
+        id: "openai-compatible",
+        endpoint: provider.url,
+        defaultApi: OPENAI_COMPATIBLE_API_ID,
+        allowUnknownModels: false,
+        credentials: { resolve: async () => ({ apiKey: secret }) },
+      },
+      {
+        id: "anthropic-compatible",
+        endpoint: providerRoot,
+        defaultApi: ANTHROPIC_MESSAGES_API_ID,
+        allowUnknownModels: false,
+        credentials: { resolve: async () => ({ apiKey: secret }) },
+      },
+    ],
+    adapters: [createOpenAICompatibleApiAdapter(), createAnthropicMessagesApiAdapter()],
+  });
+  const directResult = await ai.gateway.complete({
     model: { provider: "openai-compatible", model: "fixture-model" },
     messages: [{ role: "user", content: "direct provider probe" }],
   });
   assert(
     directResult.text === "artifact smoke complete",
     "packaged OpenAI-compatible adapter probe failed",
+  );
+  const directAnthropicResult = await ai.gateway.complete({
+    model: { provider: "anthropic-compatible", model: "fixture-model" },
+    messages: [{ role: "user", content: "direct provider probe" }],
+  });
+  assert(
+    directAnthropicResult.text === "artifact anthropic complete" &&
+      directAnthropicResult.resolution.api === ANTHROPIC_MESSAGES_API_ID,
+    "packaged Anthropic Messages adapter probe failed",
   );
   provider.requests.length = 0;
 
@@ -362,13 +432,28 @@ async function startFakeProvider() {
   const server = createServer(async (request, response) => {
     const requestRecord = { method: request.method, url: request.url };
     requests.push(requestRecord);
-    if (request.method !== "POST" || request.url !== "/v1/chat/completions") {
+    const isOpenAIRoute = request.method === "POST" && request.url === "/v1/chat/completions";
+    const isAnthropicRoute = request.method === "POST" && request.url === "/v1/messages";
+    if (!isOpenAIRoute && !isAnthropicRoute) {
       response.writeHead(404).end();
       return;
     }
     const body = await readRequestBody(request);
     const payload = JSON.parse(body);
     Object.assign(requestRecord, payload);
+    // The packaged bundle must speak both native API dialects through one gateway, so
+    // this provider answers the OpenAI-compatible route and the native Anthropic
+    // Messages route from the same script.
+    if (isAnthropicRoute) {
+      const systemText = Array.isArray(payload.system)
+        ? payload.system.map((block) => block?.text ?? "").join("\n")
+        : "";
+      const answer = systemText.includes("Review the supplied")
+        ? JSON.stringify({ verdict: "PASS", summary: "artifact smoke verified" })
+        : "artifact anthropic complete";
+      writeAnthropicSse(response, answer);
+      return;
+    }
     const messages = Array.isArray(payload.messages) ? payload.messages : [];
     const review = messages.some((message) => contains(message?.content, "Review the supplied"));
     const toolUsed = messages.some((message) => message?.role === "tool");
@@ -507,6 +592,27 @@ async function startIncompatiblePortOwner() {
   };
 }
 
+/** The minimal safe model descriptor the artifact probe composes with. */
+function probeDescriptor(provider, model, api) {
+  return {
+    ref: { provider, model },
+    api,
+    limits: { contextWindowTokens: 32_000, maxOutputTokens: 4_096 },
+    capabilities: {
+      streaming: "SUPPORTED",
+      toolCalling: "SUPPORTED",
+      parallelToolCalls: "SUPPORTED",
+      structuredOutput: "UNKNOWN",
+      vision: "UNKNOWN",
+      reasoning: "UNKNOWN",
+      reasoningSummary: "UNKNOWN",
+      promptCaching: "UNKNOWN",
+      usageReporting: "SUPPORTED",
+    },
+    source: "CONFIGURATION",
+  };
+}
+
 function readRequestBody(request) {
   return new Promise((resolvePromise, reject) => {
     const chunks = [];
@@ -520,6 +626,57 @@ function writeSse(response, chunks) {
   response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
   for (const chunk of chunks) response.write(`data: ${JSON.stringify(chunk)}\n\n`);
   response.end("data: [DONE]\n\n");
+}
+
+/**
+ * One complete native Anthropic Messages text turn.
+ *
+ * This is the packaged proof that a second, structurally different native dialect
+ * works through the same `@caelush/ai` gateway: the probe never touches the legacy
+ * `@caelush/llm` invocation surface, which Phase 2D retired.
+ */
+function writeAnthropicSse(response, text) {
+  response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
+  const events = [
+    {
+      event: "message_start",
+      data: {
+        type: "message_start",
+        message: {
+          id: "msg_artifact_probe",
+          type: "message",
+          role: "assistant",
+          model: "fixture-model",
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 4, output_tokens: 0 },
+        },
+      },
+    },
+    {
+      event: "content_block_start",
+      data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    },
+    {
+      event: "content_block_delta",
+      data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
+    },
+    { event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+    {
+      event: "message_delta",
+      data: {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn", stop_sequence: null },
+        usage: { output_tokens: 3 },
+      },
+    },
+    { event: "message_stop", data: { type: "message_stop" } },
+  ];
+  for (const entry of events) {
+    response.write(`event: ${entry.event}\ndata: ${JSON.stringify(entry.data)}\n\n`);
+  }
+  response.end();
 }
 
 function textChunk(text) {

@@ -202,7 +202,8 @@ const OPENAI_CONFORMANCE: AdapterConformanceOptions = {
     // This dialect expresses a level only for MINIMAL..HIGH, and does so through the
     // SDK's own `reasoningEffort` provider option.
     assertNative: (request) => {
-      expect(request.body["reasoning_effort"]).toBe("high");
+      const body = JSON.parse(request.bodyText) as Record<string, unknown>;
+      expect(body["reasoning_effort"]).toBe("high");
     },
   },
   cache: {

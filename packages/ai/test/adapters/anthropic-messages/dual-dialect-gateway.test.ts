@@ -3,7 +3,6 @@ import { createAISubsystem } from "../../../src/create-ai-subsystem.js";
 import { createAnthropicMessagesApiAdapter } from "../../../src/adapters/anthropic-messages/index.js";
 import { createOpenAICompatibleApiAdapter } from "../../../src/adapters/openai-compatible/index.js";
 import { modelDescriptor } from "../../support/fixtures.js";
-import { capturingTransport } from "../../support/http-capturing-transport.js";
 import {
   capturingTransport as anthropicTransport,
   textTurnEvents,
@@ -129,9 +128,13 @@ function openAITransportCapture(): NeutralTransport {
   return openAITransport(() => openAITurn("openai answer"));
 }
 
-function sseResponseFor(events: readonly { event: string; data: Record<string, unknown> }[]): Response {
+function sseResponseFor(
+  events: readonly { event: string; data: Record<string, unknown> }[],
+): Response {
   return new Response(
-    events.map((entry) => `event: ${entry.event}\ndata: ${JSON.stringify(entry.data)}\n\n`).join(""),
+    events
+      .map((entry) => `event: ${entry.event}\ndata: ${JSON.stringify(entry.data)}\n\n`)
+      .join(""),
     { status: 200, headers: { "content-type": "text/event-stream" } },
   );
 }
@@ -217,12 +220,14 @@ describe("one gateway serving two native API dialects", () => {
       messages: [{ role: "user", content: "hello" }],
     });
 
-    const openAIBody = JSON.parse(
-      openAITransport.requests[0]?.bodyText ?? "{}",
-    ) as Record<string, unknown>;
-    const anthropicBody = JSON.parse(
-      anthropic.requests[0]?.bodyText ?? "{}",
-    ) as Record<string, unknown>;
+    const openAIBody = JSON.parse(openAITransport.requests[0]?.bodyText ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    const anthropicBody = JSON.parse(anthropic.requests[0]?.bodyText ?? "{}") as Record<
+      string,
+      unknown
+    >;
 
     // The two dialects share nothing on the wire except the fact that they are JSON.
     expect(openAIBody["messages"]).toEqual([{ role: "user", content: "hello" }]);
@@ -255,10 +260,12 @@ describe("one gateway serving two native API dialects", () => {
 
     // `createAISubsystem` is the whole composition surface: two adapters, two
     // providers, one catalog, one gateway.
-    expect(ai.providers.list().map((provider) => provider.defaultApi).sort()).toEqual([
-      ANTHROPIC_API,
-      OPENAI_API,
-    ]);
+    expect(
+      ai.providers
+        .list()
+        .map((provider) => provider.defaultApi)
+        .sort(),
+    ).toEqual([ANTHROPIC_API, OPENAI_API]);
   });
 });
 

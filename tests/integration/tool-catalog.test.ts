@@ -1,9 +1,18 @@
-import type { ToolDefinition } from "../../packages/protocol/src/index.js";
 import { describe, expect, it } from "vitest";
-import { LLMRequestSchema } from "../../packages/llm/src/request.js";
-import { toAIToolSpec } from "../../packages/llm/src/compatibility/request-projection.js";
+import { validateAIModelRequest } from "../../packages/ai/src/request/request-validator.js";
+import { toAIToolSpec } from "../../packages/core/src/ai-invocation-projection.js";
+import { modelDescriptor } from "../../packages/ai/test/support/fixtures.js";
+import type { ToolDefinition } from "../../packages/protocol/src/index.js";
 import type { ToolHandler } from "../../packages/tools/src/handler.js";
 import { ToolRegistryBuilder } from "../../packages/tools/src/registry-builder.js";
+
+/**
+ * The ToolRegistry catalog at the AI model-invocation boundary.
+ *
+ * Phase 2D cut this test over from the retired `@caelush/llm` request schema to the
+ * frozen `@caelush/ai` contract, so it now asserts against the surface production
+ * actually uses.
+ */
 
 const definition: ToolDefinition = {
   name: "echo_value",
@@ -25,34 +34,42 @@ const definition: ToolDefinition = {
   runtimeRequirements: { runtime: "local" },
 };
 
+const MODEL = modelDescriptor({
+  ref: { provider: "local", model: "test-model" },
+  api: "test-api",
+});
+
 describe("ToolRegistry model catalog integration", () => {
-  it("feeds the registry catalog into LLMRequest and strips runtime metadata at the AI boundary", () => {
+  it("feeds the registry catalog into an AI model request and strips runtime metadata", () => {
     const handler: ToolHandler = {
       async execute() {
         return { content: "unused", details: { echoed: "unused" }, isError: false };
       },
     };
     const registry = new ToolRegistryBuilder().register({ definition, handler }).build();
-    const modelDefinitions = registry.modelDefinitions();
+    const specs = registry.modelDefinitions().map(toAIToolSpec);
 
-    const parsed = LLMRequestSchema.parse({
+    // The request is validated against the resolved descriptor, exactly as the agent
+    // path validates it before any provider call.
+    const request = {
       model: { provider: "local", model: "test-model" },
-      messages: [{ role: "user", content: "echo hello" }],
-      tools: modelDefinitions,
-    });
-    expect(parsed.tools).toEqual(modelDefinitions);
+      messages: [{ role: "user" as const, content: "echo hello" }],
+      tools: specs,
+      toolChoice: { type: "AUTO" as const },
+    };
+    validateAIModelRequest(request, MODEL);
 
-    // The provider-facing projection is the legacy boundary's job since Phase 2B;
-    // the SDK translation itself lives in `@caelush/ai` and is covered there.
-    const projected = parsed.tools?.map(toAIToolSpec);
-    expect(projected).toHaveLength(1);
-    expect(projected?.[0]).toEqual({
+    expect(request.tools).toEqual(specs);
+    expect(specs).toHaveLength(1);
+    expect(specs[0]).toEqual({
       name: definition.name,
       description: definition.description,
       inputSchema: definition.inputSchema,
     });
 
-    const serialized = JSON.stringify(projected);
+    // Runtime metadata is not part of `AIToolSpec` at all, so it has no way to reach a
+    // provider request.
+    const serialized = JSON.stringify(specs);
     for (const forbidden of [
       "riskLevel",
       "CRITICAL",
@@ -60,8 +77,9 @@ describe("ToolRegistry model catalog integration", () => {
       "FS_READ",
       "runtimeRequirements",
       "outputSchema",
+      "handler",
     ]) {
-      expect(serialized).not.toContain(forbidden);
+      expect(serialized, forbidden).not.toContain(forbidden);
     }
   });
 });

@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { createAISubsystem } from "@caelush/ai";
+import { createOpenAICompatibleApiAdapter } from "@caelush/ai/adapters/openai-compatible";
+import { toAIToolSpec } from "../../packages/core/src/ai-invocation-projection.js";
 import { LocalRuntime, createLocalRuntimeResolver } from "@caelush/runtime";
 import {
   createDefaultBuiltinToolRegistrations,
@@ -6,15 +9,22 @@ import {
   ToolRegistryBuilder,
 } from "@caelush/tools";
 import { assertSafeWireRequestBody, normalizeWireRequest } from "./support/wire-trace.js";
-import {
-  createOpenAICompatibleLLMProvider,
-  LLMGateway,
-  LLMProviderRegistry,
-  type LLMRequest,
-} from "@caelush/llm";
 import { finishChunk, openAIChunk, sseResponse } from "./support/openai-compatible-sse.js";
+import type { AIModelRequest, ApiAdapter, ModelDescriptorSourcePort } from "@caelush/ai";
+
+/**
+ * The final OpenAI-compatible wire contract.
+ *
+ * Phase 2D cut this test over from the retired `@caelush/llm` gateway to the frozen AI
+ * core, so it now drives the same production chain the daemon does:
+ *
+ * ```text
+ * AIGateway.complete() → createOpenAICompatibleApiAdapter() → fetch
+ * ```
+ */
 
 const model = { provider: "deepseek", model: "fixture-model" } as const;
+const API_ID = "openai-compatible-chat";
 
 function canonicalToolDefinitions() {
   const runtime = new LocalRuntime();
@@ -24,7 +34,7 @@ function canonicalToolDefinitions() {
   return { definitions: builder.build().modelDefinitions(), runtime };
 }
 
-function requestWithCanonicalTools(): LLMRequest {
+function requestWithCanonicalTools(): AIModelRequest {
   const { definitions } = canonicalToolDefinitions();
   return {
     model,
@@ -32,34 +42,77 @@ function requestWithCanonicalTools(): LLMRequest {
       { role: "system", content: "You are a safe coding agent." },
       { role: "user", content: "Inspect the workspace." },
     ],
-    tools: [...definitions],
+    tools: definitions.map(toAIToolSpec),
     toolChoice: { type: "AUTO" },
+  };
+}
+
+/** The fixture model metadata authority, expressed on the frozen AI contract. */
+function descriptorSource(): ModelDescriptorSourcePort & {
+  list(): readonly import("@caelush/ai").ModelDescriptor[];
+} {
+  const descriptor = {
+    ref: { provider: model.provider, model: model.model },
+    api: API_ID,
+    limits: { contextWindowTokens: 64_000, maxOutputTokens: 4_096 },
+    capabilities: {
+      streaming: "SUPPORTED" as const,
+      toolCalling: "SUPPORTED" as const,
+      parallelToolCalls: "SUPPORTED" as const,
+      structuredOutput: "UNKNOWN" as const,
+      vision: "UNKNOWN" as const,
+      reasoning: "UNKNOWN" as const,
+      reasoningSummary: "UNKNOWN" as const,
+      promptCaching: "UNKNOWN" as const,
+      usageReporting: "UNKNOWN" as const,
+    },
+    source: "CONFIGURATION" as const,
+  };
+
+  return {
+    id: "wire-contract-fixture",
+    priority: 0,
+    resolve: (ref) =>
+      ref.provider === model.provider && ref.model === model.model ? descriptor : undefined,
+    list: () => [descriptor],
   };
 }
 
 describe("OpenAI-compatible wire tool contract", () => {
   it("captures the canonical model-facing tools from the final adapter request safely", async () => {
     const bodies: unknown[] = [];
-    const provider = createOpenAICompatibleLLMProvider({
-      id: "deepseek",
-      baseURL: "https://provider.invalid/v1",
-      apiKey: "do-not-store-this-value",
-      fetch: async (_input, init) => {
-        bodies.push(JSON.parse(String(init?.body)) as unknown);
-        return sseResponse([
-          openAIChunk({
-            id: "chatcmpl-wire-contract",
-            model: model.model,
-            delta: { role: "assistant", content: "ok" },
-          }),
-          finishChunk({ id: "chatcmpl-wire-contract", model: model.model, finishReason: "stop" }),
-        ]);
-      },
+    const ai = createAISubsystem({
+      modelSources: [descriptorSource()],
+      providers: [
+        {
+          id: model.provider,
+          endpoint: "https://provider.invalid/v1",
+          defaultApi: API_ID,
+          allowUnknownModels: false,
+          credentials: { resolve: async () => ({ apiKey: "do-not-store-this-value" }) },
+          transport: {
+            fetch: (async (_input: unknown, init?: RequestInit) => {
+              bodies.push(JSON.parse(String(init?.body)) as unknown);
+              return sseResponse([
+                openAIChunk({
+                  id: "chatcmpl-wire-contract",
+                  model: model.model,
+                  delta: { role: "assistant", content: "ok" },
+                }),
+                finishChunk({
+                  id: "chatcmpl-wire-contract",
+                  model: model.model,
+                  finishReason: "stop",
+                }),
+              ]);
+            }) as unknown as typeof globalThis.fetch,
+          },
+        },
+      ],
+      adapters: [createOpenAICompatibleApiAdapter() as ApiAdapter],
     });
-    const providers = new LLMProviderRegistry();
-    providers.register(provider);
 
-    await new LLMGateway({ providers }).complete(requestWithCanonicalTools(), {
+    await ai.gateway.complete(requestWithCanonicalTools(), {
       signal: new AbortController().signal,
     });
 

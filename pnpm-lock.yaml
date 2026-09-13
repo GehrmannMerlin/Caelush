@@ -253,9 +253,6 @@ importers:
 
   packages/llm:
     dependencies:
-      '@caelush/ai':
-        specifier: workspace:*
-        version: link:../ai
       '@caelush/protocol':
         specifier: workspace:*
         version: link:../protocol

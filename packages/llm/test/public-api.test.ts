@@ -1,8 +1,15 @@
 import * as llm from "@caelush/llm";
-import type { LLMStreamEvent } from "@caelush/llm";
 import { describe, expect, it } from "vitest";
 
 const api = llm as Record<string, unknown>;
+
+/**
+ * The surviving public surface of `@caelush/llm`.
+ *
+ * Phase 2D retired the model-invocation surface, so this list is now exactly the
+ * durable conversation compatibility the package still owns. Anything from the
+ * retired list reappearing here is a re-introduced invocation authority.
+ */
 const requiredRuntimeExports = [
   "LLMAssistantContentSchema",
   "LLMAssistantMessageSchema",
@@ -10,64 +17,39 @@ const requiredRuntimeExports = [
   "LLMSystemMessageSchema",
   "LLMToolResultMessageSchema",
   "LLMUserMessageSchema",
+  "LLMUsageSchema",
+  "FinishReasonSchema",
+  "LLMToolCallSchema",
+] as const;
+
+/** Symbols that must never come back through this package. */
+const retiredInvocationExports = [
   "LLMRequestSchema",
   "LLMToolChoiceSchema",
   "CapabilitySupportSchema",
   "LLMCapabilitiesSchema",
-  "LLMUsageSchema",
-  "FinishReasonSchema",
-  "LLMToolCallSchema",
   "LLMTurnResultSchema",
   "LLMStreamEventSchema",
   "LLMError",
   "LLMProviderNotFoundError",
-  "LLMModelUnsupportedError",
-  "LLMCapabilityUnsupportedError",
-  "LLMAuthenticationError",
-  "LLMRateLimitError",
-  "LLMNetworkError",
-  "LLMTimeoutError",
-  "LLMAbortedError",
   "LLMInvalidResponseError",
-  "LLMInvalidRequestError",
-  "LLMProviderError",
   "ProviderIdSchema",
   "LLMProviderRegistry",
   "LLMGateway",
+  "createOpenAICompatibleLLMProvider",
+  "createSafeLLMWireDiagnostic",
 ] as const;
 
-function eventSummary(event: LLMStreamEvent): string {
-  switch (event.type) {
-    case "stream.start":
-      return event.payload.providerId;
-    case "text.delta":
-      return event.payload.text;
-    case "tool_call.start":
-      return event.payload.toolName;
-    case "tool_call.delta":
-      return event.payload.delta;
-    case "tool_call.completed":
-      return event.payload.name;
-    case "usage":
-      return String(event.payload.totalTokens ?? "unknown");
-    case "stream.finish":
-      return event.payload.finishReason;
-  }
-}
-
 describe("LLM public API", () => {
-  it("exports contracts and runtime classes from the package root", () => {
+  it("exports only the durable compatibility symbols from the package root", () => {
     for (const exportName of requiredRuntimeExports) {
       expect(api[exportName], exportName).toBeDefined();
     }
-    expect(api.FakeLLMProvider).toBeUndefined();
   });
 
-  it("keeps stream event narrowing available to package consumers", () => {
-    const event = {
-      type: "text.delta",
-      payload: { text: "hello" },
-    } satisfies LLMStreamEvent;
-    expect(eventSummary(event)).toBe("hello");
+  it("no longer exports any model-invocation symbol", () => {
+    for (const exportName of retiredInvocationExports) {
+      expect(api[exportName], exportName).toBeUndefined();
+    }
   });
 });

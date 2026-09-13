@@ -1,8 +1,10 @@
 import { createAISubsystem } from "../../../../src/create-ai-subsystem.js";
 import { createAnthropicMessagesApiAdapter } from "../../../../src/adapters/anthropic-messages/index.js";
 import { modelDescriptor } from "../../../support/fixtures.js";
+import { singleModelSource } from "../../../support/gateway-fixtures.js";
 import {
   capturingTransport,
+  textTurnEvents,
   type CapturedRequest,
   type CapturingTransport,
 } from "../../../support/anthropic-messages-transport.js";
@@ -112,17 +114,7 @@ export async function captureTurn(
     options.transport ?? capturingTransport(() => sseBodyResponse(textTurnEvents("ok")));
 
   const ai = createAISubsystem({
-    modelSources: [
-      {
-        id: "anthropic-golden",
-        priority: 0,
-        resolve: (ref) =>
-          ref.provider === descriptor.ref.provider && ref.model === descriptor.ref.model
-            ? descriptor
-            : undefined,
-        list: () => [descriptor],
-      },
-    ],
+    modelSources: [singleModelSource(descriptor)],
     providers: [
       {
         id: descriptor.ref.provider,
@@ -188,9 +180,13 @@ function emptyRequest(): CapturedRequest {
   };
 }
 
-function sseBodyResponse(events: readonly { event: string; data: Record<string, unknown> }[]): Response {
+function sseBodyResponse(
+  events: readonly { event: string; data: Record<string, unknown> }[],
+): Response {
   return new Response(
-    events.map((entry) => `event: ${entry.event}\ndata: ${JSON.stringify(entry.data)}\n\n`).join(""),
+    events
+      .map((entry) => `event: ${entry.event}\ndata: ${JSON.stringify(entry.data)}\n\n`)
+      .join(""),
     { status: 200, headers: { "content-type": "text/event-stream" } },
   );
 }

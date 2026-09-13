@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { LLMRequestSchema } from "@caelush/llm";
+import { LLMMessageSchema } from "@caelush/llm/messages";
 import { createWorkspaceId } from "@caelush/protocol";
 import { afterEach, expect, it } from "vitest";
 import {
@@ -18,7 +18,7 @@ afterEach(async () => {
   );
 });
 
-it("builds real inspected and planned project context to an LLMRequest-ready message array", async () => {
+it("builds real inspected and planned project context to a model-ready message array", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "caelush-context-builder-e2e-"));
   directories.push(root);
   await mkdir(path.join(root, "packages", "app", "src"), { recursive: true });
@@ -79,11 +79,12 @@ it("builds real inspected and planned project context to an LLMRequest-ready mes
     },
     limits: { maxInputTokens: 3000, safetyMarginTokens: 100 },
   });
-  const request = LLMRequestSchema.parse({
-    model: { provider: "fixture", model: "fixture-model" },
-    messages: built.messages,
-  });
-  expect(request.messages.at(-1)).toEqual({
+  // Context owns no model invocation, so the built array is validated against the
+  // message contract it actually produces rather than a request envelope it does not
+  // build. Phase 2D retired the legacy request schema with the rest of the legacy
+  // model-invocation surface.
+  const messages = built.messages.map((message) => LLMMessageSchema.parse(message));
+  expect(messages.at(-1)).toEqual({
     role: "user",
     content: "Fix parser behavior without breaking the tests.",
   });

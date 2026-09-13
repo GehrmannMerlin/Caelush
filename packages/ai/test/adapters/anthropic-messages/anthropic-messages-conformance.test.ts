@@ -3,7 +3,6 @@ import { createAISubsystem } from "../../../src/create-ai-subsystem.js";
 import { modelDescriptor } from "../../support/fixtures.js";
 import {
   capturingTransport,
-  errorEvent,
   failingTransport,
   hangingTransport,
   inputJsonDelta,
@@ -11,7 +10,6 @@ import {
   messageStart,
   messageStop,
   blockStop,
-  ping,
   rawSseResponse,
   sseResponse,
   textBlockStart,
@@ -112,8 +110,7 @@ const ANTHROPIC_CONFORMANCE: AdapterConformanceOptions = {
   },
 
   textTurn: (text) => capturingTransport(() => sseResponse(textEvents(text))),
-  toolTurn: () =>
-    capturingTransport(() => sseResponse(toolTurnEvents("call-a", "read_file"))),
+  toolTurn: () => capturingTransport(() => sseResponse(toolTurnEvents("call-a", "read_file"))),
   parallelToolTurn: () => capturingTransport(() => sseResponse(parallelToolEvents())),
   usageTurn: () => capturingTransport(() => sseResponse(usageEvents())),
 
@@ -202,7 +199,9 @@ const ANTHROPIC_CONFORMANCE: AdapterConformanceOptions = {
     expressible: true,
     assertNative: (request) => {
       const body = JSON.parse(request.bodyText) as Record<string, unknown>;
-      expect(JSON.stringify(body["messages"])).toContain('"cache_control":{"type":"ephemeral","ttl":"1h"}');
+      expect(JSON.stringify(body["messages"])).toContain(
+        '"cache_control":{"type":"ephemeral","ttl":"1h"}',
+      );
     },
   },
 
