@@ -1,9 +1,23 @@
 /**
  * OpenAI-shaped SSE fixtures and a capturing transport for adapter tests.
  *
+ * The generic capture harness lives in `http-capturing-transport.ts` and knows
+ * nothing about any dialect. This file is the OpenAI-compatible layer on top of it:
+ * it adds the wire chunk builders and the parsed-JSON `body` view that the
+ * OpenAI-compatible golden tests assert on.
+ *
  * Everything here is a controlled local transport: no test in this package may
  * reach a real provider endpoint or use a real credential.
  */
+
+import {
+  capturingTransport as capturingHttpTransport,
+  hangingTransport as hangingHttpTransport,
+} from "./http-capturing-transport.js";
+import type {
+  CapturedHttpRequest,
+  CapturingTransport as HttpCapturingTransport,
+} from "./http-capturing-transport.js";
 
 interface OpenAIChunkInput {
   readonly id: string;
@@ -90,48 +104,35 @@ export function sseResponse(chunks: readonly Record<string, unknown>[]): Respons
   });
 }
 
-/** A captured provider request. */
-export interface CapturedRequest {
-  readonly url: string;
-  readonly method: string;
-  readonly headers: Record<string, string>;
+/**
+ * A captured provider request with the OpenAI-compatible body already parsed.
+ *
+ * The dialect-neutral base carries the body as text; this dialect's tests read it as
+ * JSON, so the parsed view is attached here rather than in the shared harness.
+ */
+export interface CapturedRequest extends CapturedHttpRequest {
   readonly body: Record<string, unknown>;
-  readonly signalAborted: () => boolean;
 }
 
-/** A recording transport: it answers with a scripted response and records requests. */
-export interface CapturingTransport {
-  readonly fetch: typeof globalThis.fetch;
-  readonly requests: readonly CapturedRequest[];
-  callCount(): number;
+/** A recording transport that records OpenAI-compatible requests. */
+export type CapturingTransport = HttpCapturingTransport<CapturedRequest>;
+
+/** Parse a captured body once, for every request this transport records. */
+function decorate(request: CapturedHttpRequest): CapturedRequest {
+  return {
+    ...request,
+    body:
+      request.bodyText.length === 0
+        ? {}
+        : (JSON.parse(request.bodyText) as Record<string, unknown>),
+  };
 }
 
 /** Build a transport that answers every request with the same scripted response. */
 export function capturingTransport(
   respond: (request: CapturedRequest) => Response | Promise<Response>,
 ): CapturingTransport {
-  const requests: CapturedRequest[] = [];
-
-  const fetchImpl: typeof globalThis.fetch = async (input, init) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    const headers: Record<string, string> = {};
-    for (const [name, value] of Object.entries((init?.headers ?? {}) as Record<string, string>)) {
-      headers[name.toLowerCase()] = value;
-    }
-
-    const rawBody = typeof init?.body === "string" ? init.body : "";
-    const request: CapturedRequest = {
-      url,
-      method: init?.method ?? "GET",
-      headers,
-      body: rawBody.length === 0 ? {} : (JSON.parse(rawBody) as Record<string, unknown>),
-      signalAborted: () => init?.signal?.aborted === true,
-    };
-    requests.push(request);
-    return respond(request);
-  };
-
-  return { fetch: fetchImpl, requests, callCount: () => requests.length };
+  return capturingHttpTransport<CapturedRequest>(respond, decorate);
 }
 
 /** A transport that always fails with an HTTP status and optional body. */
@@ -149,33 +150,7 @@ export function failingTransport(
   );
 }
 
-/**
- * A transport whose response body never completes.
- *
- * Resolves only when the request signal aborts, so an aborted invocation is
- * observable as a transport-level cancellation rather than a parse failure.
- */
+/** A transport whose response body never completes until the request is aborted. */
 export function hangingTransport(): CapturingTransport & { readonly observedAbort: () => boolean } {
-  let aborted = false;
-
-  const transport = capturingTransport((request) => {
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        const signal = request.signalAborted;
-        const poll = setInterval(() => {
-          if (signal()) {
-            aborted = true;
-            clearInterval(poll);
-            controller.error(new Error("transport aborted"));
-          }
-        }, 5);
-      },
-    });
-    return new Response(stream, {
-      status: 200,
-      headers: { "content-type": "text/event-stream" },
-    });
-  });
-
-  return { ...transport, observedAbort: () => aborted };
+  return hangingHttpTransport<CapturedRequest>(decorate);
 }

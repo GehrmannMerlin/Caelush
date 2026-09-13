@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { createAISubsystem } from "../../../src/create-ai-subsystem.js";
 import { modelDescriptor } from "../../support/fixtures.js";
-import type { AdapterConformanceOptions, ConformanceRun, FinishReasonInput } from "./types.js";
+import type {
+  AdapterConformanceOptions,
+  ConformanceRun,
+  FinishReasonInput,
+  ConformanceModelOverrides,
+} from "./types.js";
 import type { AIModelRequest } from "../../../src/request/model-request.js";
 import type { AISubsystem } from "../../../src/create-ai-subsystem.js";
 import type { AIStreamEvent } from "../../../src/stream/events.js";
-import type { CapturingTransport } from "../../support/openai-compatible-transport.js";
+import type {
+  CapturedHttpRequest,
+  CapturingTransport,
+} from "../../support/http-capturing-transport.js";
 import type { ModelDescriptor } from "../../../src/models/model-descriptor.js";
 import type { EnumerableModelDescriptorSourcePort } from "../../../src/models/model-descriptor-source-port.js";
 import type { ReasoningLevel } from "../../../src/reasoning/reasoning-level.js";
@@ -18,10 +26,7 @@ const FINISH_CASES: readonly FinishReasonInput[] = [
   "CONTENT_FILTER",
 ];
 
-interface ModelOverrides {
-  readonly reasoningLevels?: readonly ReasoningLevel[];
-  readonly cacheRetentions?: readonly CacheRetention[];
-}
+interface ModelOverrides extends ConformanceModelOverrides {}
 
 /**
  * Run the reusable adapter conformance suite for one dialect.
@@ -41,6 +46,12 @@ export function runAdapterConformance(options: AdapterConformanceOptions): void 
     modelDescriptor({
       ref: { provider: providerId, model: "fixture-model" },
       api: apiId,
+      // A dialect may declare what its models can do through the model descriptor's
+      // own `adapterMetadata` contract. That is per-model data, not suite logic, so
+      // the suite only asks the dialect for it instead of knowing what it means.
+      ...(options.modelMetadata === undefined
+        ? {}
+        : { adapterMetadata: options.modelMetadata(overrides) }),
       ...(overrides.reasoningLevels === undefined
         ? {}
         : {
@@ -111,14 +122,23 @@ export function runAdapterConformance(options: AdapterConformanceOptions): void 
     };
   }
 
-  /** The captured provider request body, or a loud failure when none was sent. */
+  /**
+   * The captured provider request body, parsed as JSON.
+   *
+   * Both dialects in this repository send a JSON request body; a dialect that did
+   * not would supply its own `assertNative` hook instead of relying on this helper.
+   */
   function body(run_: ConformanceRun, index = 0): Record<string, unknown> {
     const request = run_.requests[index];
     if (request === undefined) throw new Error("no provider request was captured");
-    return request.body;
+    const parsed: unknown = JSON.parse(request.bodyText);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      throw new Error("captured provider request body is not a JSON object");
+    }
+    return parsed as Record<string, unknown>;
   }
 
-  function request_(run_: ConformanceRun, index = 0) {
+  function request_(run_: ConformanceRun, index = 0): CapturedHttpRequest {
     const request = run_.requests[index];
     if (request === undefined) throw new Error("no provider request was captured");
     return request;
@@ -129,7 +149,7 @@ export function runAdapterConformance(options: AdapterConformanceOptions): void 
       it("starts, streams text and finishes in order", async () => {
         const result = await run(options.textTurn("conformance"));
 
-        expect(result.eventTypes).toEqual(["stream.start", "text.delta", "stream.finish"]);
+        expect(result.eventTypes).toEqual([...options.eventOrder.text]);
         expect(result.transportAttempts).toBe(1);
       });
 
@@ -160,14 +180,7 @@ export function runAdapterConformance(options: AdapterConformanceOptions): void 
       it("forwards a complete tool call lifecycle", async () => {
         const result = await run(options.toolTurn());
 
-        expect(result.eventTypes).toEqual([
-          "stream.start",
-          "tool_call.start",
-          "tool_call.delta",
-          "tool_call.delta",
-          "tool_call.completed",
-          "stream.finish",
-        ]);
+        expect(result.eventTypes).toEqual([...options.eventOrder.toolLifecycle]);
 
         const completed = result.events.find((event) => event.type === "tool_call.completed");
         expect(completed?.payload).toMatchObject({
@@ -203,7 +216,8 @@ export function runAdapterConformance(options: AdapterConformanceOptions): void 
       it.each(FINISH_CASES)("maps the %s finish reason", async (reason) => {
         const result = await run(options.finishReason(reason));
 
-        expect(result.eventTypes).toEqual(["stream.start", "stream.finish"]);
+        expect(result.eventTypes.at(0)).toBe("stream.start");
+        expect(result.eventTypes.at(-1)).toBe("stream.finish");
         expect(result.events.at(-1)?.payload).toMatchObject({ finishReason: reason });
       });
 
@@ -361,10 +375,17 @@ export function runAdapterConformance(options: AdapterConformanceOptions): void 
         expect(serializedOf(await run(options.networkFailure()))).not.toContain(secret);
       });
 
-      it("still sends the credential to the transport", async () => {
+      it("still sends the credential to the transport, in this dialect's native form", async () => {
+        const result = await run(options.textTurn("x"));
+        const { header, value } = options.credentialAssertion;
+
+        expect(request_(result).headers[header]).toBe(value);
+      });
+
+      it("sends the credential only to the transport, never into the request body", async () => {
         const result = await run(options.textTurn("x"));
 
-        expect(request_(result).headers["authorization"]).toBe(`Bearer ${secret}`);
+        expect(JSON.stringify(body(result))).not.toContain(secret);
       });
     });
 

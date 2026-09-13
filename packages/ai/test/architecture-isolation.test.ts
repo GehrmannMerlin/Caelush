@@ -272,6 +272,7 @@ describe("AI public declaration isolation", () => {
     expect(Object.keys(manifest.exports).sort()).toEqual([
       ".",
       "./adapters",
+      "./adapters/anthropic-messages",
       "./adapters/openai-compatible",
       "./errors",
       "./messages",

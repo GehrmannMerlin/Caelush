@@ -101,6 +101,21 @@ const OPENAI_CONFORMANCE: AdapterConformanceOptions = {
   adapters: [createOpenAICompatibleApiAdapter()],
   credentials: CREDENTIALS,
   secret: SECRET,
+  // The dialect's native mechanism: the SDK sends the API key as a bearer token.
+  credentialAssertion: { header: "authorization", value: `Bearer ${SECRET}` },
+  // This dialect reports usage once, in its final chunk, and streams a tool input as
+  // two argument fragments.
+  eventOrder: {
+    text: ["stream.start", "text.delta", "stream.finish"],
+    toolLifecycle: [
+      "stream.start",
+      "tool_call.start",
+      "tool_call.delta",
+      "tool_call.delta",
+      "tool_call.completed",
+      "stream.finish",
+    ],
+  },
 
   textTurn: (text) => capturingTransport(() => sseResponse(textChunks(text))),
   toolTurn: () => capturingTransport(() => sseResponse(toolChunks())),
