@@ -242,10 +242,9 @@ describe("Phase 2C package edges", () => {
         .map((part) => part.trim())
         .filter(Boolean),
     );
-    // Phase 3A froze the V2 kernel contracts and Phase 3B implemented `advance()`, so the surface
-    // grew from the single model turn factory to the frozen contract set. The list is asserted
-    // exactly so it can never widen by accident, and each name here is a frozen contract of
-    // Architecture V2 Phase 3.
+    // Phase 3A froze the V2 kernel contracts, Phase 3B implemented `advance()`, and Phase 3C added
+    // the durable Run execution decision. The list is asserted exactly so it can never widen by
+    // accident, and each name here is a frozen contract of Architecture V2 Phase 3.
     expect(exported.sort()).toEqual(
       [
         "AGENT_DECISION_TYPES",
@@ -254,6 +253,7 @@ describe("Phase 2C package edges", () => {
         "AgentModelOutputError",
         "MODEL_TURN_EXECUTION_ERROR_CODES",
         "RETRYABLE_MODEL_TURN_ERROR_CODES",
+        "RUN_EXECUTION_DIRECTIVE_KINDS",
         "assertAgentTurnRef",
         "classifyAgentDecision",
         "createAgentDecisionClassifier",
@@ -261,7 +261,12 @@ describe("Phase 2C package edges", () => {
         "createAgentTurnRef",
         "createModelRequestBuilder",
         "createModelTurnExecutor",
+        "createRunExecutionCoordinator",
+        "createRunTransitionPlanner",
         "isRetryableModelTurnErrorCode",
+        "isTerminalExecutionStatus",
+        "nextRunExecutionDirective",
+        "planRunTransition",
         "toAIModelSettings",
         "toModelTurnExecutionError",
         "toModelTurnExecutionErrorCode",

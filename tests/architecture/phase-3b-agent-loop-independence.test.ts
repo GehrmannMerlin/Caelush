@@ -48,7 +48,21 @@ function moduleSpecifiers(source: string): string[] {
 }
 
 function agentLoopFiles(): string[] {
-  return sourceFiles(join(root, "packages", "agent", "src")).map((path) =>
+  return sourceFiles(join(root, "packages", "agent", "src", "loop")).map((path) =>
+    relative(root, path).replaceAll("\\", "/"),
+  );
+}
+
+/**
+ * The frozen Reason Kernel's own files.
+ *
+ * The lifecycle assertions below are scoped to `loop/`: Phase 3C added the Run execution decision
+ * under `run/`, which legitimately names Run states, and a loop-scoped guard is what keeps the
+ * property meaningful — the kernel is what must not own a lifecycle, not the package that also
+ * contains the Run Layer's routing vocabulary.
+ */
+function kernelFiles(): string[] {
+  return sourceFiles(join(root, "packages", "agent", "src", "loop")).map((path) =>
     relative(root, path).replaceAll("\\", "/"),
   );
 }
@@ -117,7 +131,7 @@ describe("Phase 3B general loop independence", () => {
 
   it("creates no Step and holds no AgentState", () => {
     const violations: string[] = [];
-    for (const file of agentLoopFiles()) {
+    for (const file of kernelFiles()) {
       const source = executable(file);
       if (
         /\b(?:createRunningAgentStep|beginAgentStepState|settleAgentStepState|AgentStepSchema)\b/.test(
@@ -135,7 +149,7 @@ describe("Phase 3B general loop independence", () => {
 
   it("writes no Run status and performs no verification", () => {
     const violations: string[] = [];
-    for (const file of agentLoopFiles()) {
+    for (const file of kernelFiles()) {
       const source = executable(file);
       if (
         /\b(?:RunStatus|RunController|RunStateMachine|markAgentRun|status\.changed)\b/.test(source)
@@ -155,7 +169,7 @@ describe("Phase 3B general loop independence", () => {
 
   it("executes no Tool and approves nothing", () => {
     const violations: string[] = [];
-    for (const file of agentLoopFiles()) {
+    for (const file of kernelFiles()) {
       const source = executable(file);
       if (
         /\b(?:ToolDispatcher|ToolRegistry|ToolBatchCoordinator|ToolBatchOutcome|handler)\b/.test(
