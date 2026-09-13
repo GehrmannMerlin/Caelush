@@ -18,6 +18,9 @@ describe("AgentLoop contracts", () => {
       ...common,
       pendingDecision: {} as AgentLoopResumeInput["pendingDecision"],
       toolResults: [],
+      // The durable Step that requested the tools — supplied by the Run Layer, never derived
+      // from the model turn's call identity.
+      sourceStepId: "stp_contracts" as never,
     };
     const models = testModelCatalog();
     const modelTurns = fakeModelTurnExecutor(async () => ({}) as never);

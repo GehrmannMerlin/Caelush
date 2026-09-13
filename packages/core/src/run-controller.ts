@@ -28,6 +28,7 @@ import {
   type AgentState,
   type AgentStep,
   type RunId,
+  type StepId,
   type VerificationPlan,
 } from "@caelush/protocol";
 import type { AgentLoopExecutionResult, AgentLoopOutcomeResult } from "./agent-loop-input.js";
@@ -554,7 +555,7 @@ export class RunController {
       loaded.run.status === "RUNNING" &&
       loaded.continuation?.type === "WAITING_VERIFICATION_REPAIR"
     ) {
-      return this.executeLoop(loaded, false);
+      return this.executeLoop(loaded, "VERIFICATION_REPAIR");
     }
     return this.resumeKnownBoundary(loaded);
   }
@@ -613,7 +614,10 @@ export class RunController {
       return this.resultFromSnapshot(commit.snapshot);
     }
     this.retryRegistry.disarm(loaded.run.id);
-    return this.executeLoop(loaded, loaded.continuation.mode === "TOOL_RESULTS");
+    return this.executeLoop(
+      loaded,
+      loaded.continuation.mode === "TOOL_RESULTS" ? "TOOL_RESULTS" : "START",
+    );
   }
 
   private async driveToolBoundariesLocked(
@@ -630,7 +634,7 @@ export class RunController {
       const continuation = snapshot.continuation;
       if (continuation?.type === "WAITING_TOOL_RESULTS") {
         if (continuation.receivedResults !== undefined) {
-          const execution = await this.executeLoop(snapshot, true);
+          const execution = await this.executeLoop(snapshot, "TOOL_RESULTS");
           if (execution.status !== "WAITING_TOOL_RESULTS") return execution;
           snapshot = await this.load(snapshot.run.id);
           mode = "EXECUTE";
@@ -764,7 +768,7 @@ export class RunController {
         mode = "EXECUTE";
         continue;
       }
-      const execution = await this.executeLoop(snapshot, false);
+      const execution = await this.executeLoop(snapshot, "START");
       if (execution.status !== "WAITING_TOOL_RESULTS") return execution;
       snapshot = await this.load(snapshot.run.id);
       mode = "EXECUTE";
@@ -1038,10 +1042,20 @@ export class RunController {
     return this.resultFromSnapshot(commit.snapshot);
   }
 
+  /**
+   * One loop epoch.
+   *
+   * ```text
+   * START                a fresh user Reason for this Run
+   * TOOL_RESULTS         resume from accepted Tool results
+   * VERIFICATION_REPAIR  continue the same Run after verification rejected its candidate
+   * ```
+   */
   private async executeLoop(
     snapshot: RunExecutionSnapshot,
-    resume: boolean,
+    epoch: "START" | "TOOL_RESULTS" | "VERIFICATION_REPAIR",
   ): Promise<RunControllerResult> {
+    const resume = epoch === "TOOL_RESULTS";
     if (snapshot.state === undefined)
       throw new RunControllerInputError("Run execution has no AgentState");
     const config = await this.dependencies.configResolver.resolve(snapshot.run);
@@ -1178,7 +1192,7 @@ export class RunController {
     };
     let execution: AgentLoopExecutionResult;
     const signal = this.executionSignal(snapshot.run.id);
-    if (resume) {
+    if (epoch === "TOOL_RESULTS") {
       const retryContinuation =
         snapshot.continuation?.type === "WAITING_RETRY" &&
         snapshot.continuation.mode === "TOOL_RESULTS"
@@ -1194,20 +1208,24 @@ export class RunController {
           "accepted Tool Results are missing from the continuation",
         );
       }
-      const retryInput =
-        retryContinuation === undefined
-          ? {
-              pendingDecision: toolContinuation!.pendingDecision,
-              toolResults: toolContinuation!.receivedResults!,
-            }
-          : {
-              pendingDecision: retryContinuation.pendingDecision,
-              toolResults: retryContinuation.receivedResults,
-            };
+      // The Step that requested these Tools. It is never `failedStepId` (the attempt that
+      // failed) and never a model call identity, and it is never re-derived from either.
+      const sourceStepId =
+        toolContinuation?.sourceStepId ??
+        retryContinuation?.sourceStepId ??
+        recoverToolRequestSourceStep(snapshot, retryContinuation?.pendingDecision);
       execution = await loop.resumeWithToolResults({
         ...input,
         signal,
-        ...retryInput,
+        sourceStepId,
+        pendingDecision: (toolContinuation ?? retryContinuation)!.pendingDecision,
+        toolResults: (toolContinuation ?? retryContinuation)!.receivedResults!,
+      });
+    } else if (epoch === "VERIFICATION_REPAIR") {
+      execution = await loop.continueRun({
+        ...input,
+        signal,
+        reason: "VERIFICATION_REPAIR",
       });
     } else {
       execution = await loop.run({ ...input, signal });
@@ -1406,12 +1424,19 @@ export class RunController {
             mode: "TOOL_RESULTS" as const,
             pendingDecision: previous.pendingDecision,
             receivedResults: previous.receivedResults,
+            // The first retry of a Tool resume: the original tool request's Step is right here,
+            // so it is captured on the way in and can never be confused with `failedStepId`.
+            sourceStepId: previous.sourceStepId,
           }
         : previous?.type === "WAITING_RETRY" && previous.mode === "TOOL_RESULTS"
           ? {
               mode: "TOOL_RESULTS" as const,
               pendingDecision: previous.pendingDecision,
               receivedResults: previous.receivedResults,
+              // A later retry carries the provenance forward unchanged.
+              ...(previous.sourceStepId === undefined
+                ? {}
+                : { sourceStepId: previous.sourceStepId }),
             }
           : { mode: "START" as const };
     if (decision.kind === "STOP" && decision.reason === "ATTEMPTS_EXHAUSTED") return undefined;
@@ -3101,6 +3126,42 @@ export function createToolSecurityContext(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The durable Step that requested the Tools a legacy retry checkpoint is resuming with.
+ *
+ * A checkpoint written before the retry continuation carried `sourceStepId` has no recorded
+ * provenance, and the Run Layer refuses to invent one: `failedStepId` names the attempt that
+ * failed and a model call identity is not a Step at all, so either would be a fabricated
+ * recovery. What the durable ledger *does* still hold is the assistant message that announced
+ * the calls — and `agent_messages.source_step_id` records the Step that produced it. Matching
+ * the persisted pending decision against that message is therefore a deterministic recovery
+ * from data this Run already wrote, not a guess.
+ *
+ * If the message is absent, or carries no Step, recovery is impossible and the caller fails
+ * closed rather than opening a Tool resume against a Step it cannot name.
+ */
+function recoverToolRequestSourceStep(
+  snapshot: RunExecutionSnapshot,
+  pendingDecision: import("./agent-decision.js").AgentToolCallsDecision | undefined,
+): StepId {
+  if (pendingDecision !== undefined) {
+    const expected = pendingDecision.modelTurn.assistantMessage;
+    const matched = snapshot.conversation.find(
+      (entry) =>
+        entry.sourceStepId !== undefined &&
+        entry.message.role === "assistant" &&
+        // The durable record and the persisted decision are two projections of the same turn,
+        // so they are compared structurally: key order is not part of a tool call's identity
+        // and the two sides carry nominally different JSON types.
+        semanticEqual(entry.message.content, expected.content),
+    );
+    if (matched?.sourceStepId !== undefined) return matched.sourceStepId;
+  }
+  throw new RunControllerInvariantError(
+    "A retry Tool resume has no durable source Step and cannot be recovered without guessing.",
+  );
 }
 
 function semanticEqual(left: unknown, right: unknown): boolean {

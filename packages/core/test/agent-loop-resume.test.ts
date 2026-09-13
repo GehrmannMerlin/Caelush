@@ -114,12 +114,14 @@ describe("AgentLoop.resumeWithToolResults", () => {
       throw new Error("expected first tool decision");
     }
 
+    const firstSourceStepId = "stp_0195f3a0-0000-7000-8000-0000000000a1" as never;
     const firstResume: AgentLoopResumeInput = {
       ...initial,
       state: first.state,
       history: first.messagesToAppend,
       pendingDecision: first.outcome,
       toolResults: [tool("call_b", "read_file", "B"), tool("call_a", "read_file", "A")],
+      sourceStepId: firstSourceStepId,
     };
     const second = await loop.resumeWithToolResults(firstResume);
     expect(second.status).toBe("OUTCOME");
@@ -142,6 +144,8 @@ describe("AgentLoop.resumeWithToolResults", () => {
       history: [...first.messagesToAppend, ...second.messagesToAppend],
       pendingDecision: second.outcome,
       toolResults: [tool("call_c", "read_file", "C")],
+      // Deliberately a different Step from the first resume's provenance.
+      sourceStepId: "stp_0195f3a0-0000-7000-8000-0000000000a2" as never,
     };
     const final = await loop.resumeWithToolResults(secondResume);
     expect(final.status).toBe("OUTCOME");

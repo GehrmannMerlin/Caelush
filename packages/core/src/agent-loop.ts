@@ -50,6 +50,7 @@ import { summarizeAgentDecision } from "./agent-summary.js";
 import type {
   AgentLoopCancelledResult,
   AgentLoopCommonInput,
+  AgentLoopContinuationInput,
   AgentLoopExecutionResult,
   AgentLoopFailureResult,
   AgentLoopOutcomeResult,
@@ -109,6 +110,37 @@ export class AgentLoop {
     );
   }
 
+  /**
+   * Continue the same Run without a new user message.
+   *
+   * A verification repair is a continuation, not a new user request: the Run, the Session and
+   * the durable conversation all stay as they are, and only the Run Layer's repair context
+   * changes what the next Reason is shown. Expressing it as a `USER_INPUT` would re-append the
+   * Run's goal as if the user had typed it again, which is both a duplicate durable message and
+   * a false statement about who produced it.
+   */
+  async continueRun(input: AgentLoopContinuationInput): Promise<AgentLoopExecutionResult> {
+    validateAgentLoopInput(input);
+    if (input.signal.aborted) return this.cancelledBeforeStep(input);
+
+    const gate = evaluateAgentStepGate(input.state, input.run.limits);
+    if (!gate.allowed) return this.maxStepsResult(input.state, gate.outcome, []);
+
+    return this.advanceTurn(
+      input,
+      gate.nextSequence,
+      {
+        kind: "CONTINUATION",
+        reason: input.reason,
+        ...(input.messages === undefined ? {} : { messages: input.messages }),
+      },
+      input.history,
+      // A continuation contributes no caller-visible message of its own: the previous Reasons'
+      // messages are already durable, so re-appending anything here would duplicate the ledger.
+      input.messages ?? [],
+    );
+  }
+
   async resumeWithToolResults(input: AgentLoopResumeInput): Promise<AgentLoopExecutionResult> {
     validateAgentLoopInput(input);
     if (input.signal.aborted) return this.cancelledBeforeStep(input);
@@ -147,7 +179,10 @@ export class AgentLoop {
       gate.nextSequence,
       {
         kind: "TOOL_RESULTS",
-        sourceStepId: input.pendingDecision.modelTurn.callId as StepId,
+        // The durable Step that requested these tools, supplied by the Run Layer. It is never
+        // the model turn's call identity and never this attempt's own Step: the frozen field
+        // names the AgentStep a recovery must re-open, not the provider call that asked.
+        sourceStepId: input.sourceStepId,
         pendingDecision: input.pendingDecision,
         results: normalizedResults.map(toAIMessage) as unknown as readonly AIToolResultMessage[],
       },
@@ -420,15 +455,20 @@ export class AgentLoop {
   /**
    * Build the Context Engine for one turn.
    *
-   * The frozen boundary carries no base prompt, no context limits, no cwd and no explicit
-   * paths: those are legacy Context configuration and a general kernel must not know them. The
-   * facade therefore assembles the legacy adapter from the turn's own input, on every turn,
-   * and the injected `createContextEngine` is only an override for a host that composes its own
-   * engine.
+   * The frozen boundary carries no base prompt, no context limits, no cwd, no explicit paths and
+   * no verification-repair text: those are legacy Context configuration and a general kernel
+   * must not know them. The facade therefore assembles the legacy adapter from the turn's own
+   * input, on every turn, and the injected `createContextEngine` is only an override for a host
+   * that composes its own engine.
+   *
+   * The repair context is handed over as the *supplier* the adapter asks at the moment it builds
+   * a `CONTINUATION`. Passing it as data would mean the facade had to know which turn kinds use
+   * it; the adapter already does, and only it does.
    */
   private contextEngine(input: AgentLoopCommonInput): ContextEnginePort {
     const override = this.dependencies.createContextEngine?.(input);
     if (override !== undefined) return override;
+    const repairContext = input.verificationRepairContext;
     return createLegacyContextRuntimeAdapter({
       inspector: this.dependencies.inspector,
       planner: this.dependencies.planner,
@@ -436,12 +476,14 @@ export class AgentLoop {
       ...(this.dependencies.contextRuntime === undefined
         ? {}
         : { contextRuntime: this.dependencies.contextRuntime }),
-      models: this.dependencies.models,
       baseSystemPrompt: input.baseSystemPrompt,
       contextLimits: input.contextLimits,
       workspace: input.run.workspace,
       ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
       ...(input.explicitPaths === undefined ? {} : { explicitPaths: input.explicitPaths }),
+      ...(repairContext === undefined
+        ? {}
+        : { verificationRepairContext: () => Promise.resolve(repairContext) }),
     });
   }
 

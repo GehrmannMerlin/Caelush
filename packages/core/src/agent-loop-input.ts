@@ -1,6 +1,12 @@
 import type { ContextBuildLimits, VerificationRepairContextInput } from "@caelush/context";
 import type { LLMMessage, LLMToolResultMessage } from "@caelush/llm/messages";
-import type { AIModelRequest, AIModelTurnResult, AIToolChoice, ModelUsage } from "@caelush/ai";
+import type {
+  AIModelRequest,
+  AIModelTurnResult,
+  AIToolChoice,
+  AIUserMessage,
+  ModelUsage,
+} from "@caelush/ai";
 import type { ContextBuildReport } from "@caelush/agent";
 import type {
   AgentError,
@@ -45,9 +51,30 @@ export interface AgentLoopCommonInput {
 
 export type AgentLoopStartInput = AgentLoopCommonInput;
 
+/**
+ * A continuation of the same Run without new user input.
+ *
+ * The Run continues from where it was — the previous Reasons' durable messages stay as they
+ * are — so the frozen loop receives a `CONTINUATION` rather than a fabricated user message.
+ * `VERIFICATION_REPAIR` is the wired reason; `STEERING` is contract-only.
+ */
+export interface AgentLoopContinuationInput extends AgentLoopCommonInput {
+  readonly reason: "VERIFICATION_REPAIR" | "STEERING";
+  readonly messages?: readonly AIUserMessage[];
+}
+
 export interface AgentLoopResumeInput extends AgentLoopCommonInput {
   readonly pendingDecision: AgentToolCallsDecision;
   readonly toolResults: readonly LLMToolResultMessage[];
+  /**
+   * The durable Step that produced `pendingDecision`.
+   *
+   * It is the `sourceStepId` of the continuation the Run Layer is resuming from — the step that
+   * requested the tools — never the Step of the resume attempt itself and never the model
+   * turn's call identity. The Run Layer owns Step identity, so it supplies this; the loop would
+   * have nothing truthful to derive it from.
+   */
+  readonly sourceStepId: StepId;
 }
 
 export interface AgentLoopOutcomeResult {

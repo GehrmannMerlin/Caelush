@@ -197,6 +197,10 @@ export const WaitingRetryContinuationSchema = z.discriminatedUnion("mode", [
       mode: z.literal("TOOL_RESULTS"),
       pendingDecision: AgentToolCallsDecisionSchema,
       receivedResults: z.array(LLMToolResultMessageSchema).min(1),
+      // Backward-compatible JSON evolution: the field is optional so a checkpoint written
+      // before it existed still decodes. Recovery treats a missing value as "not determined"
+      // and refuses to resume rather than inventing one, and every new write persists it.
+      sourceStepId: StepIdSchema.optional(),
     })
     .strict()
     .superRefine((value, context) => {

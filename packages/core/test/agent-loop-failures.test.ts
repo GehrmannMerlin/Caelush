@@ -215,6 +215,7 @@ describe("AgentLoop failures", () => {
         toolRequests: [{ externalCallId: "call_a", toolName: "read_file", args: {} }],
       },
       toolResults: [],
+      sourceStepId: "stp_failures" as never,
     };
     const invalidBatch = await new AgentLoop(
       dependencies(async () => output(), calls),

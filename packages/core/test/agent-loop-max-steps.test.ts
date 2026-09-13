@@ -110,6 +110,7 @@ describe("AgentLoop maxSteps and append semantics", () => {
       history: [{ role: "user", content: "goal" }, assistant],
       pendingDecision,
       toolResults: [{ ...result }],
+      sourceStepId: "stp_max_steps" as never,
     };
     const loop = new AgentLoop(noCalls());
     const execution = await loop.resumeWithToolResults(resume);

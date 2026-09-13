@@ -71,11 +71,26 @@ export type WaitingRetryContinuation =
       readonly mode: "START";
       readonly pendingDecision?: never;
       readonly receivedResults?: never;
+      readonly sourceStepId?: undefined;
     })
   | (WaitingRetryContinuationBase & {
       readonly mode: "TOOL_RESULTS";
       readonly pendingDecision: AgentToolCallsDecision;
       readonly receivedResults: readonly LLMToolResultMessage[];
+      /**
+       * The durable Step that requested the tools this retry is resuming with.
+       *
+       * `failedStepId` names the attempt that failed; it is a different Step. Only the tool
+       * request's own Step is the resume provenance, and it must survive an arbitrary number of
+       * retry attempts — so it is persisted here on the first retry and carried forward by every
+       * later one.
+       *
+       * Optional because the field arrived after the shape did: a durable checkpoint written by
+       * an earlier build does not contain it, and the decoder distinguishes "absent" from
+       * "present but undefined". Recovery either determines it from the durable conversation or
+       * fails closed; it never guesses.
+       */
+      readonly sourceStepId?: StepId | undefined;
     });
 
 export type RunContinuationCheckpoint =

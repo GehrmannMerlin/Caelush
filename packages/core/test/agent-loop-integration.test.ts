@@ -175,6 +175,8 @@ describe("real Context → AIGateway resumable loop", () => {
             isError: false,
           },
         ],
+        // The Step the first Reason ran on, not this resume attempt's own Step.
+        sourceStepId: first.step!.id,
       });
 
       expect(resumed.status).toBe("OUTCOME");
