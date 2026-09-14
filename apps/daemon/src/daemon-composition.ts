@@ -398,7 +398,8 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
   const controller = new RunController({
     agentLoop,
     contextRuntime,
-    execution: options.storage.execution,
+    executionStore: options.storage.execution,
+    verificationStore: options.storage.execution,
     events: options.eventBus,
     configResolver: executionConfigResolver,
     toolCoordinator,

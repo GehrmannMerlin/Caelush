@@ -72,11 +72,12 @@ import { RunDeadlineRegistry } from "./run-deadline-registry.js";
 import { deriveRunDeadline, isRunDeadlineExceeded } from "./run-deadline.js";
 import { resolveRunTerminationAuthority } from "./run-termination-authority.js";
 import { toAgentExecutionSnapshot } from "./run-execution-facts.js";
+import { toLegacyMessage } from "./ai-invocation-projection.js";
 import {
   RunExecutionConflictError,
   RunExecutionInvariantError,
-  type RunExecutionCommit,
-  type RunExecutionSnapshot,
+  type RunExecutionCommitView as RunExecutionCommit,
+  type RunExecutionSnapshotView as RunExecutionSnapshot,
 } from "./run-execution-store.js";
 import { RetryController } from "./retry-controller.js";
 import { RunRetryRegistry } from "./run-retry-registry.js";
@@ -235,7 +236,7 @@ export class RunController {
       return this.resultFromSnapshot(loaded);
     }
     const requestedAt = this.dependencies.clock.now();
-    await this.dependencies.execution.requestCancellation(runId, {
+    await this.dependencies.executionStore.requestCancellation(runId, {
       runId,
       cause: "USER_REQUESTED",
       requestedAt,
@@ -1157,14 +1158,20 @@ export class RunController {
       },
     });
     const durableConversation = snapshot.conversation;
+    // The canonical conversation is projected onto the legacy durable encoding the Run Layer's
+    // history builder still speaks; the direction is one-way and happens only here.
+    const legacyConversation = durableConversation.map((entry) => ({
+      ...entry,
+      message: toLegacyMessage(entry.message),
+    }));
     const history = buildRunExecutionHistory({
       ...(config.historyPrefix === undefined ? {} : { historyPrefix: config.historyPrefix }),
-      durableConversation: durableConversation.map((entry) => entry.message),
+      durableConversation: legacyConversation.map((entry) => entry.message),
       mode: resume ? "RESUME_WITH_TOOL_RESULTS" : "RUN",
     });
     const historySourceSequences = buildRunExecutionHistorySourceSequences({
       ...(config.historyPrefix === undefined ? {} : { historyPrefix: config.historyPrefix }),
-      durableConversation,
+      durableConversation: legacyConversation,
       mode: resume ? "RESUME_WITH_TOOL_RESULTS" : "RUN",
     });
     const input = {
@@ -1943,7 +1950,7 @@ export class RunController {
   private async load(runId: RunId): Promise<RunExecutionSnapshot> {
     let snapshot: RunExecutionSnapshot | null;
     try {
-      snapshot = await this.dependencies.execution.load(runId);
+      snapshot = await this.dependencies.executionStore.load(runId);
     } catch (error) {
       if (error instanceof RunExecutionInvariantError) {
         throw new RunControllerInvariantError(error.message, { cause: error });
@@ -1972,7 +1979,7 @@ export class RunController {
 
   private async commit(command: RunExecutionCommit) {
     try {
-      return await this.dependencies.execution.commit(command);
+      return await this.dependencies.executionStore.commit(command);
     } catch (error) {
       if (
         error instanceof RunControllerInfrastructureError ||
@@ -2616,9 +2623,8 @@ export class RunController {
         advisoryWarnings: evaluation.warnings.length,
       },
     });
-    const executionStore = this.dependencies.execution;
-    if (executionStore.commitVerifiedCompletion === undefined)
-      return this.resultFromSnapshot(snapshot);
+    const verificationStore = this.dependencies.verificationStore;
+    if (verificationStore === undefined) return this.resultFromSnapshot(snapshot);
     const now = this.dependencies.clock.now();
     const completedRun = markAgentRunCompleted(snapshot.run, finalResult, now);
     const completedState = markAgentStateCompleted(snapshot.state, now);
@@ -2642,7 +2648,7 @@ export class RunController {
       ),
       this.eventFactory.completed(snapshot.run, finalResult, this.nextEventId(), now),
     ];
-    const commit = await executionStore.commitVerifiedCompletion({
+    const commit = await verificationStore.commitVerifiedCompletion({
       run: completedRun,
       state: completedState,
       finalResult,

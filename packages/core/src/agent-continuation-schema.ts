@@ -118,6 +118,20 @@ export const AgentDecisionSchema = z.discriminatedUnion("type", [
   AgentFinalCandidateDecisionSchema,
 ]);
 
+/**
+ * The durable Tool observation policy snapshot.
+ *
+ * The canonical contract owns the type; this owns the *bytes*. The field is optional on every
+ * variant that carries it, so a checkpoint written before the field existed still decodes — the
+ * same forward-compatible JSON evolution `sourceStepId` already uses, and not a migration.
+ */
+const ToolObservationPolicySnapshotSchema = z
+  .object({
+    maxSingleObservationTokens: z.number().int().positive().safe(),
+    maxObservationBatchTokens: z.number().int().positive().safe(),
+  })
+  .strict();
+
 export const WaitingToolResultsContinuationSchema = z
   .object({
     type: z.literal("WAITING_TOOL_RESULTS"),
@@ -125,6 +139,7 @@ export const WaitingToolResultsContinuationSchema = z
     sourceStepId: StepIdSchema,
     pendingDecision: AgentToolCallsDecisionSchema,
     receivedResults: z.array(LLMToolResultMessageSchema).min(1).optional(),
+    observationPolicy: ToolObservationPolicySnapshotSchema.optional(),
     waitingApproval: z
       .object({
         invocationId: ToolInvocationIdSchema,
@@ -197,6 +212,7 @@ export const WaitingRetryContinuationSchema = z.discriminatedUnion("mode", [
       mode: z.literal("TOOL_RESULTS"),
       pendingDecision: AgentToolCallsDecisionSchema,
       receivedResults: z.array(LLMToolResultMessageSchema).min(1),
+      observationPolicy: ToolObservationPolicySnapshotSchema.optional(),
       // Backward-compatible JSON evolution: the field is optional so a checkpoint written
       // before it existed still decodes. Recovery treats a missing value as "not determined"
       // and refuses to resume rather than inventing one, and every new write persists it.

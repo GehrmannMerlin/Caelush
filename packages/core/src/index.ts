@@ -134,11 +134,7 @@ export type { LegacyContextRuntimeAdapterDependencies } from "./legacy-context-r
  * boundary that projects a durable snapshot onto the canonical execution snapshot, converting the
  * legacy durable message encoding and the Run Layer continuation domain on the way.
  */
-export {
-  toAgentContinuation,
-  toAgentExecutionSnapshot,
-  toExecutionStatus,
-} from "./run-execution-facts.js";
+export { toAgentExecutionSnapshot, toExecutionStatus } from "./run-execution-facts.js";
 export {
   fingerprintToolBatch,
   fingerprintToolRequest,
@@ -260,13 +256,32 @@ export type {
   RunConversationEntry,
   RunExecutionCommit,
   RunExecutionCommitResult,
+  RunExecutionCommitView,
   RunExecutionContinuationWrite,
   RunExecutionMessageAppend,
   RunExecutionSnapshot,
+  RunExecutionSnapshotView,
   RunExecutionStepWrite,
+  RunExecutionStore,
   RunVerifiedCompletionCommit,
   RunExecutionStorePort,
+  VerificationRunExecutionStoreExtension,
 } from "./run-execution-store.js";
+export {
+  toAgentAIMessage,
+  toAgentAssistantMessage,
+  toAgentToolResultMessage,
+  toAgentUserMessage,
+  toLegacyAssistantMessage,
+  toLegacyDurableMessage,
+  toLegacyToolResultMessage,
+  toLegacyUserMessage,
+} from "./run-message-compatibility.js";
+export {
+  parseDurableContinuation,
+  toAgentContinuation,
+  toDurableContinuation,
+} from "./run-continuation-compatibility.js";
 export {
   DEFAULT_MAX_RETRY_TIMER_DELAY_MS,
   RunRetryRegistry,

@@ -182,10 +182,7 @@ export type {
   RunExecutionSuspendBoundary,
   SuspendDirective,
 } from "./run/directive.js";
-export type {
-  RunTransitionPlanInput,
-  RunTransitionPlanner,
-} from "./run/run-transition-planner.js";
+export type { RunTransitionPlanInput, RunTransitionPlanner } from "./run/run-transition-planner.js";
 export { createRunExecutionDriver } from "./run/run-execution-driver.js";
 export type {
   RunExecutionDriver,
@@ -213,8 +210,18 @@ export type {
   RunExecutionStorePort,
 } from "./run/ports/run-execution-store.js";
 
+/* The general durable Run execution invariant. */
+export {
+  assertRunExecutionInvariant,
+  isTerminalRunStatus,
+} from "./run/state/run-execution-invariant.js";
+
 /* The durable Run continuation domain. */
-export { RUN_CONTINUATION_TYPES, RUNNING_CONTINUATION_TYPES, isRunningContinuation } from "./run/continuation/continuation.js";
+export {
+  RUN_CONTINUATION_TYPES,
+  RUNNING_CONTINUATION_TYPES,
+  isRunningContinuation,
+} from "./run/continuation/continuation.js";
 export type {
   AwaitingVerificationContinuation,
   RetryErrorCode,
@@ -259,10 +266,7 @@ export {
   cancelAgentStepState,
   settleAgentStepState,
 } from "./run/turn/step-state.js";
-export type {
-  CancelAgentStepStateInput,
-  SettleAgentStepInput,
-} from "./run/turn/step-state.js";
+export type { CancelAgentStepStateInput, SettleAgentStepInput } from "./run/turn/step-state.js";
 
 /* The transient agent stream. */
 export { AGENT_TRANSIENT_STREAM_EVENT_TYPES } from "./loop/events/transient-stream-event.js";

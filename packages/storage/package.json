@@ -18,6 +18,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@caelush/agent": "workspace:*",
     "@caelush/core": "workspace:*",
     "@caelush/memory": "workspace:*",
     "@caelush/events": "workspace:*",

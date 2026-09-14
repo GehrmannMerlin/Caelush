@@ -1,12 +1,17 @@
 import {
-  assertRunExecutionInvariant,
   RunExecutionConflictError,
   RunExecutionInvariantError,
-  type RunExecutionCommit,
   type RunExecutionCommitResult,
-  type RunExecutionSnapshot,
   type RunExecutionStorePort,
+} from "@caelush/agent";
+import {
+  assertRunExecutionInvariant,
+  toAgentAIMessage,
+  toLegacyDurableMessage,
+  type RunExecutionCommitView,
+  type RunExecutionSnapshotView,
   type RunVerifiedCompletionCommit,
+  type VerificationRunExecutionStoreExtension,
 } from "@caelush/core";
 import {
   AgentRunSchema,
@@ -17,6 +22,8 @@ import {
   type AgentStep,
   type RunId,
   type RunCancellationIntent,
+  type VerificationPlan,
+  type VerificationPlanId,
 } from "@caelush/protocol";
 import { DuplicateEventError } from "@caelush/events";
 import type { CaelushDatabase } from "./database.js";
@@ -83,7 +90,7 @@ function mapExecutionError(error: unknown): never {
   throw new StorageError("Unable to commit Run execution", { cause: error });
 }
 
-function writeRun(client: CaelushDatabase["client"], run: RunExecutionCommit["run"]): void {
+function writeRun(client: CaelushDatabase["client"], run: RunExecutionCommitView["run"]): void {
   const parsed = AgentRunSchema.parse(run);
   const result = client
     .prepare(
@@ -153,7 +160,9 @@ function writeStep(
   if (result.changes === 0) throw new StorageError(`AgentStep ${parsed.id} was not found`);
 }
 
-export class SqliteRunExecutionStore implements RunExecutionStorePort {
+export class SqliteRunExecutionStore
+  implements RunExecutionStorePort, VerificationRunExecutionStoreExtension
+{
   private readonly runs: SqliteRunRepository;
   private readonly states: SqliteRunStateRepository;
   private readonly steps: SqliteStepRepository;
@@ -170,7 +179,7 @@ export class SqliteRunExecutionStore implements RunExecutionStorePort {
     this.cancellations = new SqliteCancellationRepository(database);
   }
 
-  async load(runId: RunId): Promise<RunExecutionSnapshot | null> {
+  async load(runId: RunId): Promise<RunExecutionSnapshotView | null> {
     const run = await this.runs.get(runId);
     if (run === null) return null;
     const stateRow = this.database.client
@@ -186,7 +195,12 @@ export class SqliteRunExecutionStore implements RunExecutionStorePort {
         : { state: state as AgentState, stateRevision: stateRow.revision };
     const continuation = await this.continuations.get(runId);
     const cancellationIntent = await this.cancellations.get(runId);
-    const conversation = await this.messages.listByRun(runId);
+    // The stored bytes stay the legacy encoding; the snapshot the Run Layer reads is canonical.
+    const storedConversation = await this.messages.listByRun(runId);
+    const conversation = storedConversation.map((entry) => ({
+      ...entry,
+      message: toAgentAIMessage(entry.message),
+    }));
     const loadedActiveStep =
       run.currentStepId === undefined ? undefined : await this.steps.get(run.currentStepId);
     const loadedVerificationPlan =
@@ -198,7 +212,7 @@ export class SqliteRunExecutionStore implements RunExecutionStorePort {
               : undefined,
           )
         : null;
-    const snapshot: RunExecutionSnapshot = {
+    const snapshot: RunExecutionSnapshotView = {
       run,
       ...stateProjection,
       ...(loadedActiveStep === undefined || loadedActiveStep === null
@@ -218,7 +232,7 @@ export class SqliteRunExecutionStore implements RunExecutionStorePort {
   async requestCancellation(
     runId: RunId,
     intent: RunCancellationIntent,
-  ): Promise<RunExecutionSnapshot> {
+  ): Promise<RunExecutionSnapshotView> {
     if (intent.runId !== runId)
       throw new RunExecutionInvariantError("Cancellation Run ID mismatch");
     const snapshot = await this.load(runId);
@@ -229,7 +243,7 @@ export class SqliteRunExecutionStore implements RunExecutionStorePort {
     return latest;
   }
 
-  async commit(command: RunExecutionCommit): Promise<RunExecutionCommitResult> {
+  async commit(command: RunExecutionCommitView): Promise<RunExecutionCommitResult> {
     const before = await this.load(command.run.id);
     if (before === null) throw new StorageError(`AgentRun ${command.run.id} was not found`);
     const candidateContinuation =
@@ -298,7 +312,14 @@ export class SqliteRunExecutionStore implements RunExecutionStorePort {
       if (command.events.some((event) => event.runId !== command.run.id)) {
         throw new RunExecutionInvariantError("execution Event does not belong to the Run");
       }
-      appendConversationMessagesInTransaction(client, command.run.id, command.messagesToAppend);
+      appendConversationMessagesInTransaction(
+        client,
+        command.run.id,
+        command.messagesToAppend.map((entry) => ({
+          ...entry,
+          message: toLegacyDurableMessage(entry.message),
+        })),
+      );
       if (command.continuation?.operation === "SET") {
         setContinuationInTransaction(
           client,
@@ -402,15 +423,23 @@ export class SqliteRunExecutionStore implements RunExecutionStorePort {
     }
   }
 
-  private async loadVerificationPlan(
+  /**
+   * The coding-verification half of the store.
+   *
+   * It is a separate contract because it answers a question only a coding Run asks. Phase 3E
+   * replaces it when completion authority is extracted; until then the same class implements it,
+   * and a general Run store never has to.
+   */
+  async loadVerificationPlan(
     runId: RunId,
-    planId: import("@caelush/protocol").VerificationPlanId | undefined,
-  ) {
+    planId: VerificationPlanId | undefined,
+  ): Promise<VerificationPlan | null> {
     if (planId === undefined) {
       throw new RunExecutionInvariantError("VERIFYING Run has no VerificationPlan pointer");
     }
     const plan = loadVerificationPlanInTransaction(this.database.client, planId);
-    if (plan === null || plan.runId !== runId) {
+    if (plan === null) return null;
+    if (plan.runId !== runId) {
       throw new RunExecutionInvariantError("VERIFYING Run has no matching VerificationPlan");
     }
     return plan;

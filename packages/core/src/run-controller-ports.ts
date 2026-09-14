@@ -15,7 +15,11 @@ import type {
   VerificationProjectFacts,
 } from "@caelush/protocol";
 import type { ToolBatchCoordinatorPort } from "@caelush/tools";
-import type { DurableAgentEvent, RunExecutionStorePort } from "./run-execution-store.js";
+import type {
+  DurableAgentEvent,
+  RunExecutionStore,
+  VerificationRunExecutionStoreExtension,
+} from "./run-execution-store.js";
 import type { RunExecutionScopeRegistry } from "./run-execution-scope.js";
 import type { RunDeadlineRegistry } from "./run-deadline-registry.js";
 import type { RunRetryRegistry } from "./run-retry-registry.js";
@@ -128,7 +132,20 @@ export interface RunOwnedResourceControllerPort {
 
 export interface RunControllerDependencies {
   readonly agentLoop: AgentLoop;
-  readonly execution: RunExecutionStorePort;
+  /**
+   * The canonical Run execution store.
+   *
+   * It is the agent-owned port plus this layer's compatibility view over the coding-verification
+   * plan; the General Run surface it exposes is exactly the agent contract.
+   */
+  readonly executionStore: RunExecutionStore;
+  /**
+   * The transitional coding-verification extension of the same store.
+   *
+   * Kept separate so a general Run store never has to answer a verification question. Phase 3E
+   * replaces it when completion authority is extracted.
+   */
+  readonly verificationStore?: VerificationRunExecutionStoreExtension;
   readonly events: RunEventNotifier;
   readonly configResolver: RunExecutionConfigResolver;
   readonly toolCoordinator?: ToolBatchCoordinatorPort;

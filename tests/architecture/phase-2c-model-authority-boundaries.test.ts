@@ -119,10 +119,12 @@ describe("Phase 2C Core model authority", () => {
       "packages/core/src/run-controller-input.ts",
       "packages/core/src/run-controller-ports.ts",
       "packages/core/src/run-controller.ts",
-      "packages/core/src/run-execution-store.ts",
-      // Phase 3C made the Run execution snapshot agent-owned, so this file is now the one place
-      // the legacy durable encoding is projected onto the frozen AI message contract.
-      "packages/core/src/run-execution-facts.ts",
+      // Phase 3C made the Run execution snapshot agent-owned. The legacy durable encoding is
+      // projected in exactly one reviewed codec, and nowhere else in the Run Layer:
+      // `run-message-compatibility.ts` for messages, `run-continuation-compatibility.ts` for
+      // the continuations that carry them. Storage implements the port and calls the codec
+      // rather than naming the AI contract itself.
+      "packages/core/src/run-message-compatibility.ts",
     ];
 
     const files = await scan("packages/core/src");
@@ -285,6 +287,9 @@ describe("Phase 2C package edges", () => {
         "assertAgentTurnRef",
         "assertConversationProtocolIntegrity",
         "assertPendingAssistantHistory",
+        // Phase 3C froze one declaration of the Run execution invariant, in the kernel: a host
+        // that re-declared it would be a second authority over what a Run execution is.
+        "assertRunExecutionInvariant",
         "beginAgentStepState",
         "cancelAgentStep",
         "cancelAgentStepState",
@@ -302,6 +307,9 @@ describe("Phase 2C package edges", () => {
         "isRetryableModelTurnErrorCode",
         "isRunningContinuation",
         "isTerminalExecutionStatus",
+        // The terminal-Run predicate moves with the invariant it belongs to, so a host cannot
+        // disagree with the kernel about which statuses end a Run.
+        "isTerminalRunStatus",
         "nextAgentStepSequence",
         "nextRunExecutionDirective",
         "semanticEqual",

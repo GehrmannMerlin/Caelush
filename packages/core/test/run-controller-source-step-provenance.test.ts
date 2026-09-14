@@ -195,7 +195,7 @@ function controllerFor(
 ): RunController {
   return new RunController({
     agentLoop: spy.loop,
-    execution: store,
+    executionStore: store,
     events: { notifyCommitted: () => undefined },
     configResolver: {
       resolve: async () => ({ baseSystemPrompt: "base", contextLimits: { maxInputTokens: 1000 } }),

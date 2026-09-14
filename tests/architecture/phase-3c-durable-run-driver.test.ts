@@ -309,11 +309,26 @@ describe("Phase 3C Run Layer ownership", () => {
     const facts = read("packages/core/src/run-execution-facts.ts");
     expect(facts).toContain("toAgentExecutionSnapshot");
     expect(facts).toContain("toExecutionStatus");
-    // The legacy durable encoding is projected here and nowhere else in the Run Layer.
-    expect(facts).toContain("toAIMessage");
     // A status the coordinator cannot route must fail loudly rather than widen.
     expect(facts).toContain("is not a frozen execution status");
     expect(facts).not.toContain("RunExecutionFacts");
+  });
+
+  it("keeps the legacy durable encoding in one reviewed codec", () => {
+    // The message projection is a representation boundary, not a second domain: it is
+    // encode/decode only, and it is the single place the persisted encoding is named.
+    const messages = read("packages/core/src/run-message-compatibility.ts");
+    expect(messages).toContain("export function toLegacyDurableMessage");
+    expect(messages).toContain("export function toAgentAIMessage");
+    // It must decide nothing: no Run status, no retry, no Tool outcome.
+    expect(messages).not.toMatch(/AgentRunSchema|AgentStateSchema|RunStatus/);
+
+    const continuations = read("packages/core/src/run-continuation-compatibility.ts");
+    expect(continuations).toContain("export function toDurableContinuation");
+    expect(continuations).toContain("export function toAgentContinuation");
+
+    // Storage never learns the AI contract; it implements the port and calls the codec.
+    expect(read("packages/storage/src/run-execution-store.ts")).not.toContain("@caelush/ai");
   });
 
   it("routes through the coordinator and hands the planner a commit", () => {

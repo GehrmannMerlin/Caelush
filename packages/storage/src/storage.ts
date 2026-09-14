@@ -21,7 +21,6 @@ import {
   type ContinuationRepository,
 } from "./repositories/continuation-repository.js";
 import { SqliteRunExecutionStore } from "./run-execution-store.js";
-import type { RunExecutionStorePort } from "@caelush/core";
 import { SqliteToolExecutionStore } from "./tool-execution-store.js";
 import type { ToolExecutionStorePort } from "@caelush/tools";
 import {
@@ -75,7 +74,7 @@ export interface CaelushStorage {
   readonly events: DurableEventStore;
   readonly messages: ConversationRepository;
   readonly continuations: ContinuationRepository;
-  readonly execution: RunExecutionStorePort;
+  readonly execution: SqliteRunExecutionStore;
   readonly toolExecution: ToolExecutionStorePort;
   readonly toolInvocations: ToolInvocationRepository;
   readonly observations: ObservationRepository;

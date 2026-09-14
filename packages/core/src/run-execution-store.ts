@@ -1,91 +1,94 @@
-import type { LLMMessage } from "@caelush/llm/messages";
+import type {
+  DurableEventDraft,
+  RunExecutionCommit,
+  RunExecutionCommitResult,
+  RunExecutionSnapshot,
+  RunExecutionStorePort,
+} from "@caelush/agent";
 import type {
   AgentRun,
   AgentState,
-  AgentStep,
-  AgentEvent,
-  EventDurability,
   RunId,
-  StepId,
-  TimestampMs,
-  RunCancellationIntent,
-  VerificationPlan,
   VerifiedRunFinalResult,
+  VerificationPlan,
+  VerificationPlanId,
 } from "@caelush/protocol";
-import type { RunContinuationCheckpoint } from "./agent-continuation.js";
 
-type DurableEvent = Extract<EventDurability, { kind: "DURABLE" }>;
+/**
+ * The Run Layer's compatibility view over the canonical Run execution store.
+ *
+ * ```text
+ * General Run execution store   @caelush/agent      — the contract, and only the contract
+ * Verification compatibility    @caelush/core       — this file
+ * Storage implementation        @caelush/storage    — implements both
+ * ```
+ *
+ * The general symbols below are *re-exports*. There is deliberately no second declaration of
+ * `RunExecutionStorePort`, `RunExecutionSnapshot`, `RunExecutionCommit` or the two error classes:
+ * two declarations would mean two identities, and `instanceof` would silently stop agreeing with
+ * the throw.
+ *
+ * What is genuinely Core-owned is the coding-verification concern, which the general Run port
+ * must not carry:
+ *
+ * ```text
+ * VerificationPlan            a coding-verification artefact, not a Run execution fact
+ * VerifiedRunFinalResult      the completion authority's result
+ * commitVerifiedCompletion    the completion transaction
+ * ```
+ *
+ * This split is transitional and closes in Phase 3E, when completion authority moves.
+ */
 
-export type DurableEventDraft = AgentEvent extends infer Event
-  ? Event extends { type: string }
-    ? Omit<Event, "durability"> & { durability: Omit<DurableEvent, "sequence"> }
-    : never
-  : never;
+export { RunExecutionConflictError, RunExecutionInvariantError } from "@caelush/agent";
+export type {
+  DurableAgentEvent,
+  DurableEventDraft,
+  RunConversationEntry,
+  RunExecutionCommit,
+  RunExecutionCommitResult,
+  RunExecutionContinuationWrite,
+  RunExecutionMessageAppend,
+  RunExecutionSnapshot,
+  RunExecutionStepWrite,
+  RunExecutionStorePort,
+} from "@caelush/agent";
 
-export type DurableAgentEvent = AgentEvent extends infer Event
-  ? Event extends { type: string }
-    ? Omit<Event, "durability"> & { durability: DurableEvent }
-    : never
-  : never;
+/**
+ * The general snapshot plus the verification plan the Run Layer's coding path reads.
+ *
+ * The plan is *not* part of the canonical snapshot: the compatibility layer assembles it from the
+ * general snapshot and the verification extension, so a general Run never carries a coding
+ * artefact while a coding Run still sees what it needs.
+ */
+export type RunExecutionSnapshotView = RunExecutionSnapshot & {
+  readonly verificationPlan?: VerificationPlan | undefined;
+};
 
-export interface RunConversationEntry {
-  readonly runId: RunId;
-  readonly sequence: number;
-  readonly sourceStepId?: StepId;
-  readonly createdAt: TimestampMs;
-  readonly message: LLMMessage;
+/** The general commit plus the plan a final candidate's boundary writes atomically. */
+export type RunExecutionCommitView = RunExecutionCommit & {
+  readonly verificationPlan?: VerificationPlan | undefined;
+};
+
+/**
+ * The store contract the Run Layer uses.
+ *
+ * It extends the canonical agent port with the compatibility view, so the General Run surface
+ * stays exactly the agent's while the coding path keeps working. A store implementation satisfies
+ * both by implementing this interface.
+ */
+export interface RunExecutionStore extends RunExecutionStorePort {
+  load(runId: RunId): Promise<RunExecutionSnapshotView | null>;
+  commit(command: RunExecutionCommitView): Promise<RunExecutionCommitResult>;
 }
 
-export interface RunExecutionSnapshot {
-  readonly run: AgentRun;
-  readonly state?: AgentState;
-  readonly stateRevision?: number;
-  readonly activeStep?: AgentStep;
-  readonly conversation: readonly RunConversationEntry[];
-  readonly continuation?: RunContinuationCheckpoint;
-  readonly continuationRevision?: number;
-  readonly cancellationIntent?: RunCancellationIntent;
-  readonly verificationPlan?: VerificationPlan;
-}
-
-export interface RunExecutionMessageAppend {
-  readonly createdAt: TimestampMs;
-  readonly sourceStepId?: StepId;
-  readonly message: LLMMessage;
-}
-
-export interface RunExecutionStepWrite {
-  readonly operation: "INSERT" | "UPDATE";
-  readonly step: AgentStep;
-}
-
-export type RunExecutionContinuationWrite =
-  | {
-      readonly operation: "SET";
-      readonly checkpoint: RunContinuationCheckpoint;
-      readonly updatedAt: TimestampMs;
-    }
-  | {
-      readonly operation: "CLEAR";
-    };
-
-export interface RunExecutionCommit {
-  readonly run: AgentRun;
-  readonly state?: AgentState;
-  readonly expectedStateRevision: number | null;
-  readonly expectedContinuationRevision: number | null;
-  readonly stepWrites: readonly RunExecutionStepWrite[];
-  readonly messagesToAppend: readonly RunExecutionMessageAppend[];
-  readonly continuation?: RunExecutionContinuationWrite;
-  readonly verificationPlan?: VerificationPlan;
-  readonly events: readonly DurableEventDraft[];
-}
-
-export interface RunExecutionCommitResult {
-  readonly snapshot: RunExecutionSnapshot;
-  readonly events: readonly DurableAgentEvent[];
-}
-
+/**
+ * The verification-specific durable completion.
+ *
+ * Reused from the existing semantics rather than redesigned: the Run, the AgentState, the final
+ * result, the plan and the events settle in one transaction, and the command must name the plan
+ * the Run is actually verifying.
+ */
 export interface RunVerifiedCompletionCommit {
   readonly run: AgentRun;
   readonly state: AgentState;
@@ -96,25 +99,15 @@ export interface RunVerifiedCompletionCommit {
   readonly events: readonly DurableEventDraft[];
 }
 
-export interface RunExecutionStorePort {
-  load(runId: RunId): Promise<RunExecutionSnapshot | null>;
-  commit(command: RunExecutionCommit): Promise<RunExecutionCommitResult>;
-  requestCancellation(runId: RunId, intent: RunCancellationIntent): Promise<RunExecutionSnapshot>;
-  commitVerifiedCompletion?(
-    command: RunVerifiedCompletionCommit,
-  ): Promise<RunExecutionCommitResult>;
-}
-
-export class RunExecutionConflictError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = "RunExecutionConflictError";
-  }
-}
-
-export class RunExecutionInvariantError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "RunExecutionInvariantError";
-  }
+/**
+ * The transitional coding-verification extension of the Run execution store.
+ *
+ * It exists so a general Run store never has to answer a verification question. Phase 3E replaces
+ * it when completion authority is extracted.
+ */
+export interface VerificationRunExecutionStoreExtension {
+  /** The plan a `VERIFYING` Run is bound to, or `null` when there is none. */
+  loadVerificationPlan(runId: RunId, planId: VerificationPlanId): Promise<VerificationPlan | null>;
+  /** Settle a verified completion. */
+  commitVerifiedCompletion(command: RunVerifiedCompletionCommit): Promise<RunExecutionCommitResult>;
 }

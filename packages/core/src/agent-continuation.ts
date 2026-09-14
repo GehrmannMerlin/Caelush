@@ -1,4 +1,5 @@
 import type { LLMToolResultMessage } from "@caelush/llm/messages";
+import type { ToolObservationPolicySnapshot } from "@caelush/agent";
 import type {
   ApprovalRequestId,
   RunId,
@@ -17,6 +18,13 @@ export interface WaitingToolResultsContinuation {
   readonly sourceStepId: StepId;
   readonly pendingDecision: AgentToolCallsDecision;
   readonly receivedResults?: readonly LLMToolResultMessage[] | undefined;
+  /**
+   * The Tool observation policy the requesting turn was prepared under.
+   *
+   * The canonical type is Agent-owned; this is the durable spelling of it. Optional on purpose:
+   * a checkpoint written before the field existed still decodes, and every new write persists it.
+   */
+  readonly observationPolicy?: ToolObservationPolicySnapshot | undefined;
   readonly waitingApproval?:
     | {
         readonly invocationId: ToolInvocationId;
@@ -91,6 +99,8 @@ export type WaitingRetryContinuation =
        * fails closed; it never guesses.
        */
       readonly sourceStepId?: StepId | undefined;
+      /** The Tool observation policy the retry resumes its Tool projection under. */
+      readonly observationPolicy?: ToolObservationPolicySnapshot | undefined;
     });
 
 export type RunContinuationCheckpoint =

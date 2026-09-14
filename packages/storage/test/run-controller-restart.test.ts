@@ -81,7 +81,8 @@ function createController(
   });
   return new RunController({
     agentLoop: loop,
-    execution: storage.execution,
+    executionStore: storage.execution,
+      verificationStore: storage.execution,
     events: new EventBus(storage.events),
     configResolver: {
       resolve: async () => ({

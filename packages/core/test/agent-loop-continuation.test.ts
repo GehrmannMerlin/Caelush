@@ -328,7 +328,7 @@ describe("RunController verification repair route", () => {
 
     const controller = new RunController({
       agentLoop: loop,
-      execution: store,
+      executionStore: store,
       events: { notifyCommitted: () => undefined },
       configResolver: {
         resolve: async () => ({

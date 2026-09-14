@@ -275,7 +275,8 @@ describe("real provider Tool Call round trip", () => {
     });
     const controller = new RunController({
       agentLoop: loop,
-      execution: storage.execution,
+      executionStore: storage.execution,
+      verificationStore: storage.execution,
       events: eventBus,
       configResolver: {
         resolve: async () => ({

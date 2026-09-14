@@ -14,7 +14,8 @@ import {
   RunController,
   RunControllerInfrastructureError,
   RunRetryRegistry,
-  type RunExecutionStorePort,
+  type RunExecutionStore,
+  type VerificationRunExecutionStoreExtension,
   type AIModelTurnResult,
 } from "@caelush/core";
 import { EventBus } from "@caelush/events";
@@ -48,7 +49,9 @@ async function setup(options: {
   maxSteps?: number;
   complete: (count: number, signal: AbortSignal) => Promise<AIModelTurnResult>;
   inspect?: () => Promise<never>;
-  execution?: (storage: Awaited<ReturnType<typeof openCaelushStorage>>) => RunExecutionStorePort;
+  execution?: (
+    storage: Awaited<ReturnType<typeof openCaelushStorage>>,
+  ) => RunExecutionStore & VerificationRunExecutionStoreExtension;
   retryRegistry?: RunRetryRegistry;
   retryTimer?: {
     schedule(delayMs: number, callback: () => void | Promise<void>): { cancel(): void };
@@ -90,7 +93,8 @@ async function setup(options: {
   });
   const controller = new RunController({
     agentLoop: loop,
-    execution: options.execution?.(storage) ?? storage.execution,
+    executionStore: options.execution?.(storage) ?? storage.execution,
+    verificationStore: options.execution?.(storage) ?? storage.execution,
     events: eventBus,
     configResolver: {
       resolve: async () => ({
@@ -386,6 +390,9 @@ describe("RunController failure and maxSteps boundaries", () => {
           if (command.run.status === "VERIFYING") throw new Error("final commit failed");
           return storage.execution.commit(command);
         },
+        loadVerificationPlan: (runId, planId) =>
+          storage.execution.loadVerificationPlan(runId, planId),
+        commitVerifiedCompletion: (command) => storage.execution.commitVerifiedCompletion(command),
       }),
     });
     await expect(fixture.controller.start(fixture.run.id)).rejects.toBeInstanceOf(

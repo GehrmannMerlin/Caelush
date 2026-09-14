@@ -100,7 +100,8 @@ describe("RunController durable boundaries", () => {
         clock: { now: () => createTimestampMs(clock.value) },
         stepIdFactory: { create: createStepId },
       }),
-      execution: storage.execution,
+      executionStore: storage.execution,
+      verificationStore: storage.execution,
       events: eventBus,
       configResolver: {
         resolve: async () => ({
@@ -171,7 +172,8 @@ describe("RunController durable boundaries", () => {
     });
     const controller = new RunController({
       agentLoop: loop,
-      execution: storage.execution,
+      executionStore: storage.execution,
+      verificationStore: storage.execution,
       events: eventBus,
       configResolver: {
         resolve: async () => ({
@@ -273,7 +275,8 @@ describe("RunController durable boundaries", () => {
         clock: { now: () => createTimestampMs(now++) },
         stepIdFactory: { create: () => createStepId() },
       }),
-      execution: storage.execution,
+      executionStore: storage.execution,
+      verificationStore: storage.execution,
       events: eventBus,
       configResolver: {
         resolve: async () => ({

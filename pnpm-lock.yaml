@@ -307,6 +307,9 @@ importers:
 
   packages/storage:
     dependencies:
+      '@caelush/agent':
+        specifier: workspace:*
+        version: link:../agent
       '@caelush/core':
         specifier: workspace:*
         version: link:../core

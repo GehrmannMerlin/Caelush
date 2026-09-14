@@ -15,9 +15,9 @@ import { RunController } from "../src/run-controller.js";
 import { RunDeadlineRegistry } from "../src/run-deadline-registry.js";
 import type {
   DurableAgentEvent,
-  RunExecutionCommit,
-  RunExecutionSnapshot,
-  RunExecutionStorePort,
+  RunExecutionCommitView as RunExecutionCommit,
+  RunExecutionSnapshotView as RunExecutionSnapshot,
+  RunExecutionStore,
 } from "../src/run-execution-store.js";
 import type { RunEventNotifier, RunExecutionConfigResolver } from "../src/run-controller-ports.js";
 import type { RunBudgetPort } from "../src/budget-ports.js";
@@ -40,7 +40,7 @@ function makeRun(overrides: Partial<ReturnType<typeof AgentRunSchema.parse>> = {
   });
 }
 
-class MemoryExecutionStore implements RunExecutionStorePort {
+class MemoryExecutionStore implements RunExecutionStore {
   snapshot: RunExecutionSnapshot;
   stateRevision: number | undefined;
   commits: RunExecutionCommit[] = [];
@@ -192,7 +192,7 @@ describe("RunController.start", () => {
           });
         },
       ),
-      execution: store,
+      executionStore: store,
       events: { notifyCommitted: () => undefined },
       configResolver: {
         resolve: async () => ({
@@ -238,7 +238,7 @@ describe("RunController.start", () => {
       agentLoop: makeLoop(store, () => {
         providerCalls += 1;
       }),
-      execution: store,
+      executionStore: store,
       events: { notifyCommitted: () => undefined },
       configResolver: {
         resolve: async () => ({
@@ -276,7 +276,7 @@ describe("RunController.start", () => {
       agentLoop: makeLoop(store, () => {
         throw new Error("timeout cleanup must precede provider execution");
       }),
-      execution: store,
+      executionStore: store,
       events: { notifyCommitted: () => undefined },
       configResolver: {
         resolve: async () => ({
@@ -326,7 +326,7 @@ describe("RunController.start", () => {
       agentLoop: makeLoop(store, () => {
         providerCalls += 1;
       }),
-      execution: store,
+      executionStore: store,
       events: notifier,
       configResolver: resolver,
       clock: { now: () => createTimestampMs(10) },
@@ -354,7 +354,7 @@ describe("RunController.start", () => {
     const store = new MemoryExecutionStore(run);
     const controller = new RunController({
       agentLoop: makeLoop(store, () => undefined),
-      execution: store,
+      executionStore: store,
       events: { notifyCommitted: () => undefined },
       configResolver: {
         resolve: async () => ({
@@ -394,7 +394,7 @@ describe("RunController.start", () => {
       agentLoop: makeLoop(store, () => {
         providerCalls += 1;
       }),
-      execution: store,
+      executionStore: store,
       events: { notifyCommitted: () => undefined },
       configResolver: {
         resolve: async () => ({
@@ -431,7 +431,7 @@ describe("RunController.cancel", () => {
       agentLoop: makeLoop(store, () => {
         throw new Error("pending cancellation must not invoke the provider");
       }),
-      execution: store,
+      executionStore: store,
       events: { notifyCommitted: (events) => notified.push(...events) },
       configResolver: {
         resolve: async () => ({
@@ -461,7 +461,7 @@ describe("RunController project verification driving", () => {
     let runtimeCalls = 0;
     const controller = new RunController({
       agentLoop: makeLoop(store, () => undefined),
-      execution: store,
+      executionStore: store,
       events: { notifyCommitted: () => undefined },
       configResolver: {
         resolve: async () => ({
