@@ -1,59 +1,20 @@
-import type { RunStatus } from "@caelush/protocol";
-
-const transitions: Record<RunStatus, readonly RunStatus[]> = {
-  PENDING: ["RUNNING", "CANCELLED"],
-  RUNNING: [
-    "WAITING_APPROVAL",
-    "WAITING_RESOURCE",
-    "VERIFYING",
-    "FAILED",
-    "CANCELLED",
-    "TIMEOUT",
-    "MAX_STEPS_REACHED",
-    "BUDGET_EXCEEDED",
-  ],
-  WAITING_APPROVAL: ["RUNNING", "FAILED", "CANCELLED", "TIMEOUT"],
-  WAITING_RESOURCE: ["RUNNING", "FAILED", "CANCELLED", "TIMEOUT"],
-  VERIFYING: ["COMPLETED", "RUNNING", "FAILED", "CANCELLED", "TIMEOUT", "BUDGET_EXCEEDED"],
-  COMPLETED: [],
-  FAILED: [],
-  CANCELLED: [],
-  TIMEOUT: [],
-  MAX_STEPS_REACHED: [],
-  BUDGET_EXCEEDED: [],
-};
-
-const terminalStatuses: readonly RunStatus[] = [
-  "COMPLETED",
-  "FAILED",
-  "CANCELLED",
-  "TIMEOUT",
-  "MAX_STEPS_REACHED",
-  "BUDGET_EXCEEDED",
-];
-
-export function canTransitionRunStatus(from: RunStatus, to: RunStatus): boolean {
-  return transitions[from].includes(to);
-}
-
-export function isTerminalRunStatus(status: RunStatus): boolean {
-  return terminalStatuses.includes(status);
-}
-
-export class InvalidRunStatusTransitionError extends Error {
-  readonly from: RunStatus;
-  readonly to: RunStatus;
-
-  constructor(from: RunStatus, to: RunStatus) {
-    super(`Invalid run status transition: ${from} -> ${to}`);
-    this.name = "InvalidRunStatusTransitionError";
-    this.from = from;
-    this.to = to;
-  }
-}
-
-export function assertRunStatusTransition(from: RunStatus, to: RunStatus): void {
-  if (!canTransitionRunStatus(from, to)) {
-    throw new InvalidRunStatusTransitionError(from, to);
-  }
-}
+/**
+ * The legacy Core Run state machine facade.
+ *
+ * Phase 3C moved the canonical Run state machine into `@caelush/agent`'s Run Layer, because a Run
+ * status transition is a statement about the *Run* rather than about this host. This module is a
+ * compatibility re-export so existing Core call sites keep their import path while the migration
+ * continues.
+ *
+ * It declares nothing of its own. There is deliberately no second `RUN_STATUS_TRANSITIONS` and no
+ * second error class: two declarations would mean two identities, and a `catch` that matched one
+ * would silently miss the other.
+ */
+export {
+  assertRunStatusTransition,
+  canTransitionRunStatus,
+  InvalidRunStatusTransitionError,
+  isTerminalRunStatus,
+  RUN_STATUSES,
+  RUN_STATUS_TRANSITIONS,
+} from "@caelush/agent";

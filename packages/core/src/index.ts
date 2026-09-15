@@ -234,6 +234,13 @@ export {
   resumeAgentRunFromVerificationRepair,
   markAgentStateFailed,
 } from "./run-execution-state.js";
+export { createRunCommitEventMaterializer } from "./run-commit-event-materializer.js";
+export type {
+  RunCommitEventMaterializer,
+  RunCommitEventMaterializerDependencies,
+  RunCommitEventMaterializerInput,
+  RunOwnershipContext,
+} from "./run-commit-event-materializer.js";
 export type {
   RunBudgetPort,
   RunBudgetSettlement,

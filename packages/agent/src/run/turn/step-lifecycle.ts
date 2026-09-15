@@ -39,10 +39,17 @@ export function createRunningAgentStep(input: CreateRunningAgentStepInput): Agen
 
 export interface CompleteAgentStepInput {
   readonly finishedAt: TimestampMs;
-  readonly reasoningSummary: string;
+  /**
+   * The durable, model-facing summary of what the attempt decided.
+   *
+   * Optional because the Protocol field is optional and not every producer has one: the frozen
+   * `AgentLoopAdvanceResult` reports a decision, not prose, so a Run Layer planning from it must be
+   * able to settle the Step without inventing a sentence the model never said.
+   */
+  readonly reasoningSummary?: string | undefined;
 }
 
-/** Settle the Step as completed, with the durable summary its attempt produced. */
+/** Settle the Step as completed, with the durable summary its attempt produced, when it has one. */
 export function completeAgentStep(step: AgentStep, input: CompleteAgentStepInput): AgentStep {
   assertRunningStep(step);
   assertFinishedAt(step, input.finishedAt);
@@ -50,7 +57,7 @@ export function completeAgentStep(step: AgentStep, input: CompleteAgentStepInput
     ...step,
     status: "COMPLETED",
     finishedAt: input.finishedAt,
-    reasoningSummary: input.reasoningSummary,
+    ...(input.reasoningSummary === undefined ? {} : { reasoningSummary: input.reasoningSummary }),
   });
 }
 

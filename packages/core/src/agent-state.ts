@@ -1,8 +1,52 @@
 import type { AgentRun, AgentState, TimestampMs } from "@caelush/protocol";
 import { AgentStateSchema } from "@caelush/protocol";
-import { assertRunStatusTransition } from "./run-state-machine.js";
 import { AgentKernelStateError } from "./agent-errors.js";
+import { assertRunStatusTransition } from "./run-state-machine.js";
+import { assertMonotonicAgentStateTimestamp } from "@caelush/agent";
 
+/**
+ * The AgentState facade.
+ *
+ * ```text
+ * general       @caelush/agent   the transitions any Run Layer performs on an AgentState
+ * creation      this file        how *this* host opens a Run's first state
+ * verification  this file        the boundary a completion decision is asked at
+ * ```
+ *
+ * Phase 3C moved every general AgentState transition into the kernel, because an AgentState status
+ * change is a statement about the *Run*. The re-exports below are a compatibility surface, not a
+ * second implementation: there is exactly one `markAgentStateTimedOut` and one `completeAgentState`,
+ * and Core names them the way its existing call sites already do.
+ *
+ * What stays here is genuinely this host's: the shape of a Run's first state, how a Run is started,
+ * and the one resume that is phrased in terms of a completion decision.
+ */
+
+export {
+  completeAgentState as markAgentStateCompleted,
+  markAgentStateBudgetExceeded,
+  markAgentStateCancelled,
+  markAgentStateFailed,
+  markAgentStateMaxStepsReached,
+  markAgentStateTimedOut,
+  markAgentStateVerifying,
+  markAgentStateWaitingApproval,
+  markAgentStateWaitingResource,
+  resumeAgentStateFromApproval,
+  resumeAgentStateFromResource,
+} from "@caelush/agent";
+
+/**
+ * The AgentState projection of the active durable Step, re-exported from the kernel.
+ *
+ * Phase 3C moved the canonical implementation into `@caelush/agent`'s Run Layer. The functions
+ * stayed exported from here because the Run Layer already imports them by name; a re-export is a
+ * compatibility surface, not a second implementation.
+ */
+export { beginAgentStepState, cancelAgentStepState, settleAgentStepState } from "@caelush/agent";
+export type { CancelAgentStepStateInput, SettleAgentStepInput } from "@caelush/agent";
+
+/** The initial AgentState of a PENDING Run. */
 export function createInitialAgentState(run: AgentRun, now: TimestampMs): AgentState {
   if (run.status !== "PENDING") {
     throw new AgentKernelStateError("initial state requires a PENDING run");
@@ -30,130 +74,24 @@ export function createInitialAgentState(run: AgentRun, now: TimestampMs): AgentS
   });
 }
 
+/** The AgentState of a Run that started executing. */
 export function startAgentState(state: AgentState, now: TimestampMs): AgentState {
-  assertMonotonicTimestamp(state, now);
+  assertMonotonicAgentStateTimestamp(state, now);
   assertRunStatusTransition(state.status, "RUNNING");
   return AgentStateSchema.parse({ ...state, status: "RUNNING", startedAt: now, updatedAt: now });
 }
 
-export function markAgentStateCancelled(state: AgentState, now: TimestampMs): AgentState {
-  assertMonotonicTimestamp(state, now);
-  if (state.currentStepId !== undefined) {
-    throw new AgentKernelStateError("cancelled AgentState cannot retain an active Step");
-  }
-  assertRunStatusTransition(state.status, "CANCELLED");
-  return AgentStateSchema.parse({
-    ...state,
-    status: "CANCELLED",
-    updatedAt: now,
-  });
-}
-
-export function markAgentStateTimedOut(state: AgentState, now: TimestampMs): AgentState {
-  assertMonotonicTimestamp(state, now);
-  if (state.currentStepId !== undefined) {
-    throw new AgentKernelStateError("timed out AgentState cannot retain an active Step");
-  }
-  assertRunStatusTransition(state.status, "TIMEOUT");
-  return AgentStateSchema.parse({
-    ...state,
-    status: "TIMEOUT",
-    currentStepId: undefined,
-    activeProcesses: [],
-    updatedAt: now,
-  });
-}
-
-export function markAgentStateBudgetExceeded(state: AgentState, now: TimestampMs): AgentState {
-  assertMonotonicTimestamp(state, now);
-  if (state.currentStepId !== undefined) {
-    throw new AgentKernelStateError("budget-exceeded AgentState cannot retain an active Step");
-  }
-  assertRunStatusTransition(state.status, "BUDGET_EXCEEDED");
-  return AgentStateSchema.parse({ ...state, status: "BUDGET_EXCEEDED", updatedAt: now });
-}
-
-/* ------------------------------------------------------------ step lifecycle */
-
 /**
- * The AgentState projection of the active durable Step, re-exported from the kernel.
+ * The AgentState that resumed after its completion decision asked for a repair.
  *
- * Phase 3C moved the canonical implementation into `@caelush/agent`'s Run Layer. The functions
- * stayed exported from here because the Run Layer already imports them by name; a re-export is a
- * compatibility surface, not a second implementation. Everything below this marker is a *Run
- * status* transition, which is this host's own concern and stays here.
+ * Phrased in terms of the decision that caused it, which is why it stays with the layer that makes
+ * that decision rather than moving into the kernel with the other resumes.
  */
-export { beginAgentStepState, cancelAgentStepState, settleAgentStepState } from "@caelush/agent";
-export type { CancelAgentStepStateInput, SettleAgentStepInput } from "@caelush/agent";
-export function markAgentStateVerifying(state: AgentState, now: TimestampMs): AgentState {
-  assertBoundaryState(state, "VERIFYING", now);
-  return AgentStateSchema.parse({
-    ...state,
-    status: "VERIFYING",
-    verification: "NOT_RUN",
-    updatedAt: now,
-  });
-}
-
-export function markAgentStateCompleted(state: AgentState, now: TimestampMs): AgentState {
-  assertMonotonicTimestamp(state, now);
-  if (state.status !== "VERIFYING" || state.currentStepId !== undefined) {
-    throw new AgentKernelStateError("state cannot complete outside the verification boundary");
-  }
-  assertRunStatusTransition(state.status, "COMPLETED");
-  return AgentStateSchema.parse({
-    ...state,
-    status: "COMPLETED",
-    verification: "PASSED",
-    updatedAt: now,
-  });
-}
-
-export function markAgentStateWaitingApproval(state: AgentState, now: TimestampMs): AgentState {
-  assertBoundaryState(state, "WAITING_APPROVAL", now);
-  return AgentStateSchema.parse({
-    ...state,
-    status: "WAITING_APPROVAL",
-    currentStepId: undefined,
-    updatedAt: now,
-  });
-}
-
-export function markAgentStateWaitingResource(state: AgentState, now: TimestampMs): AgentState {
-  assertBoundaryState(state, "WAITING_RESOURCE", now);
-  return AgentStateSchema.parse({
-    ...state,
-    status: "WAITING_RESOURCE",
-    currentStepId: undefined,
-    updatedAt: now,
-  });
-}
-
-export function resumeAgentStateFromResource(state: AgentState, now: TimestampMs): AgentState {
-  assertMonotonicTimestamp(state, now);
-  if (state.status !== "WAITING_RESOURCE") {
-    throw new AgentKernelStateError(
-      "state cannot resume from a resource guard unless it is waiting",
-    );
-  }
-  assertRunStatusTransition(state.status, "RUNNING");
-  return AgentStateSchema.parse({ ...state, status: "RUNNING", updatedAt: now });
-}
-
-export function resumeAgentStateFromApproval(state: AgentState, now: TimestampMs): AgentState {
-  assertMonotonicTimestamp(state, now);
-  if (state.status !== "WAITING_APPROVAL") {
-    throw new AgentKernelStateError("state cannot resume from approval unless it is waiting");
-  }
-  assertRunStatusTransition(state.status, "RUNNING");
-  return AgentStateSchema.parse({ ...state, status: "RUNNING", updatedAt: now });
-}
-
 export function resumeAgentStateFromVerificationRepair(
   state: AgentState,
   now: TimestampMs,
 ): AgentState {
-  assertMonotonicTimestamp(state, now);
+  assertMonotonicAgentStateTimestamp(state, now);
   if (state.status !== "VERIFYING" || state.currentStepId !== undefined) {
     throw new AgentKernelStateError("state cannot resume verification repair from this boundary");
   }
@@ -164,30 +102,4 @@ export function resumeAgentStateFromVerificationRepair(
     currentStepId: undefined,
     updatedAt: now,
   });
-}
-
-export function markAgentStateMaxStepsReached(state: AgentState, now: TimestampMs): AgentState {
-  assertBoundaryState(state, "MAX_STEPS_REACHED", now);
-  return AgentStateSchema.parse({ ...state, status: "MAX_STEPS_REACHED", updatedAt: now });
-}
-
-function assertBoundaryState(
-  state: AgentState,
-  target: "WAITING_APPROVAL" | "WAITING_RESOURCE" | "VERIFYING" | "MAX_STEPS_REACHED",
-  now: TimestampMs,
-): void {
-  assertMonotonicTimestamp(state, now);
-  if (state.status !== "RUNNING") {
-    throw new AgentKernelStateError(`state cannot transition to ${target}`);
-  }
-  if (state.currentStepId !== undefined) {
-    throw new AgentKernelStateError(`state cannot transition to ${target} with an active step`);
-  }
-  assertRunStatusTransition(state.status, target);
-}
-
-function assertMonotonicTimestamp(state: AgentState, now: TimestampMs): void {
-  if (now < state.updatedAt) {
-    throw new AgentKernelStateError("state timestamp moved backwards");
-  }
 }

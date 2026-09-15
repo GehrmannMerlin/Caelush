@@ -221,7 +221,44 @@ export {
   isTerminalRunStatus,
 } from "./run/state/run-execution-invariant.js";
 
-/* C4-B-PLACEHOLDER */
+/* The canonical Run state machine. Core re-exports it; nothing redeclares it. */
+export {
+  assertRunStatusTransition,
+  assertRunStatusTransitionsAreTotal,
+  canTransitionRunStatus,
+  InvalidRunStatusTransitionError,
+  RUN_STATUSES,
+  RUN_STATUS_TRANSITIONS,
+} from "./run/state/run-state-machine.js";
+
+/* The general Run and AgentState transitions. Coding-verification helpers stay in Core. */
+export {
+  assertMonotonicAgentStateTimestamp,
+  cancelAgentRun,
+  completeAgentRunWithFinalResult,
+  completeAgentState,
+  failAgentRun,
+  markAgentRunBudgetExceeded,
+  markAgentRunMaxStepsReached,
+  markAgentRunWaitingApproval,
+  markAgentRunWaitingResource,
+  markAgentStateBudgetExceeded,
+  markAgentStateCancelled,
+  markAgentStateFailed,
+  markAgentStateMaxStepsReached,
+  markAgentStateTimedOut,
+  markAgentStateVerifying,
+  markAgentStateWaitingApproval,
+  markAgentStateWaitingResource,
+  resumeAgentRunFromApproval,
+  resumeAgentRunFromCompletionRepair,
+  resumeAgentRunFromResource,
+  resumeAgentStateFromApproval,
+  resumeAgentStateFromResource,
+  timeOutAgentRun,
+} from "./run/state/run-transition-state.js";
+
+/* C4-D-PLACEHOLDER */
 
 /* The durable Run continuation domain. */
 export {
