@@ -7,17 +7,15 @@ import {
   type AdvanceAgentDirective,
   type AgentLoopAdvanceResult,
   type AgentLoopFailedResult,
+  type ExecuteToolBatchDirective,
   type ModelRequestAdmissionPort,
   type RunExecutionCoordinator,
   type RunExecutionEffectResult,
+  type RunExecutionMode,
   type RunTransitionPlanner,
+  type ToolTurnResult,
 } from "@caelush/agent";
-import {
-  ToolBatchInputError,
-  type ToolBatchItem,
-  type ToolBatchOutcome,
-  type ToolSecurityContext,
-} from "@caelush/tools";
+import { ToolBatchInputError, type ToolBatchCoordinatorPort } from "@caelush/tools";
 import {
   AgentRunSchema,
   ApprovalResolutionSchema,
@@ -55,7 +53,7 @@ import {
 } from "./agent-state.js";
 import { cancelAgentStep, completeAgentStep, failAgentStep } from "./agent-step.js";
 import { normalizeToolResultBatch } from "./agent-tool-results.js";
-import { toLLMToolResultMessages } from "./agent-tool-batch.js";
+import { defaultObservationPolicy } from "./agent-tool-batch.js";
 import {
   markAgentRunFailed,
   markAgentRunCancelled,
@@ -91,9 +89,27 @@ import {
 import { classifyAgentEffectSettlement } from "./run-agent-effect-settlement.js";
 import type { AgentProviderTurnState } from "./agent-loop-ports.js";
 import {
+  MISROUTED_TOOL_TURN_COORDINATOR,
   DEFERRED_COMPLETION_GATE,
-  DEFERRED_TOOL_TURN_COORDINATOR,
 } from "./run-agent-deferred-ports.js";
+import {
+  createRunToolTurnDriverFactory,
+  recordRunToolTurnProgress,
+  recordRunToolTurnReplan,
+  type ResolvedRunToolTurn,
+  type RunToolTurnContext,
+  type RunToolTurnDriverDependencies,
+} from "./run-tool-turn-coordinator.js";
+import { classifyToolEffectSettlement } from "./run-tool-effect-settlement.js";
+import type { RunToolTurnObservation } from "./run-tool-turn-observation.js";
+import { createToolSecurityContext } from "./tool-security-context.js";
+import {
+  RunControllerBusyError,
+  RunControllerConflictError,
+  RunControllerInfrastructureError,
+  RunControllerInputError,
+  RunControllerInvariantError,
+} from "./run-controller-errors.js";
 import { allocateRunAgentStep, createRunAgentLoop } from "./run-agent-execution.js";
 import { projectRunAgentHistory } from "./run-agent-history.js";
 import { summarizeAgentDecision } from "./agent-summary.js";
@@ -115,8 +131,6 @@ import type { RunControllerDependencies } from "./run-controller-ports.js";
 import { TaskAcceptanceReviewer } from "./task-acceptance-reviewer.js";
 import { toDurableRetryCode } from "./ai-invocation-projection.js";
 import type { AgentBudgetBlock } from "./agent-errors.js";
-import { ResourceGovernor } from "./resource-governor.js";
-import { fingerprintToolBatch, fingerprintToolResultBatch } from "./resource-fingerprint.js";
 import {
   ProjectCheckResolverRegistry,
   VerificationStageRunner,
@@ -145,47 +159,95 @@ import {
 } from "./completion-authority.js";
 import type { VerificationEvidence, VerificationCheck } from "@caelush/protocol";
 
-export class RunControllerInputError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "RunControllerInputError";
-  }
+export {
+  RunControllerBusyError,
+  RunControllerConflictError,
+  RunControllerInfrastructureError,
+  RunControllerInputError,
+  RunControllerInvariantError,
+};
+
+/**
+ * The single-Tool-turn guard the Agent driver is constructed with.
+ *
+ * The frozen `RunExecutionDriver` requires all three collaborators, and the Agent path of this
+ * controller drives exactly one directive kind. Reaching this port means a Tool directive was
+ * routed into an Agent turn — which would be a second Tool execution authority — so it refuses
+ * loudly instead of approximating work nobody performed.
+ */
+const MISROUTED_AGENT_LOOP: import("@caelush/agent").AgentLoop = {
+  async advance(): Promise<never> {
+    throw new RunControllerInvariantError(
+      "An AgentLoop was driven for a Tool directive; the Run Layer owns Tool execution.",
+    );
+  },
+};
+
+/**
+ * The model descriptor one Tool turn's effect context carries.
+ *
+ * The frozen effect context is a general Reason's context and requires a resolved model, but a Tool
+ * effect resolves no model and the driver reads none of it. Supplying the Run's own `ModelRef` with
+ * a minimal, truthful limit pair keeps the value *about* this Run rather than fabricated, and the
+ * non-zero limits keep it a legal descriptor.
+ */
+function unresolvedToolTurnModel(ref: AgentRun["model"]): import("@caelush/ai").ModelDescriptor {
+  return {
+    ref,
+    api: "caelush.none",
+    limits: { contextWindowTokens: 1, maxOutputTokens: 1 },
+    capabilities: {
+      streaming: "UNKNOWN",
+      toolCalling: "UNKNOWN",
+      parallelToolCalls: "UNKNOWN",
+      structuredOutput: "UNKNOWN",
+      vision: "UNKNOWN",
+      reasoning: "UNKNOWN",
+      reasoningSummary: "UNKNOWN",
+      promptCaching: "UNKNOWN",
+      usageReporting: "UNKNOWN",
+    },
+    source: "FALLBACK",
+  };
 }
 
-export class RunControllerBusyError extends Error {
-  constructor(runId: RunId) {
-    super(`Run ${runId} is already being executed`);
-    this.name = "RunControllerBusyError";
-  }
-}
-
-export class RunControllerConflictError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "RunControllerConflictError";
-  }
-}
-
-export class RunControllerInfrastructureError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = "RunControllerInfrastructureError";
-  }
-}
-
-export class RunControllerInvariantError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = "RunControllerInvariantError";
-  }
-}
-
+/**
+ * How a stale in-flight Step is explained.
+ *
+ * A `RUNNING` Step that a restart interrupted has no known outcome: the provider may or may not
+ * have answered. It is settled once as an internal error rather than resent, because resending it
+ * would be a second provider turn for one durable attempt.
+ */
 const STALE_STEP_ERROR = {
   code: "INTERNAL_ERROR" as const,
   message: "An in-flight agent step was interrupted before durable settlement.",
   retryable: false,
   phase: "RUNTIME" as const,
 };
+
+/** What one driven Tool directive produced. Exactly one arm is set. */
+type ToolBatchDirectiveExecution =
+  | { readonly result: ToolTurnResult; readonly observation: RunToolTurnObservation }
+  | { readonly aborted: RunControllerResult }
+  | { readonly failed: RunControllerResult };
+
+/**
+ * Whether a driven Tool directive produced a frozen result to settle.
+ *
+ * The three arms are told apart by an explicit guard rather than by reading an optional field: the
+ * execution either has a frozen result, or the termination authority already settled it, or it
+ * already failed — and there is no fourth state to guess at.
+ */
+function isToolTurnResult(
+  execution: ToolBatchDirectiveExecution,
+): execution is Extract<ToolBatchDirectiveExecution, { readonly result: ToolTurnResult }> {
+  return "result" in execution;
+}
+
+/** How one Tool effect settles. */
+type ToolEffectSettlement =
+  | { readonly kind: "SNAPSHOT"; readonly snapshot: RunExecutionSnapshot }
+  | { readonly kind: "RESULT"; readonly result: RunControllerResult };
 
 export class RunController {
   private readonly activeRuns = new Set<RunId>();
@@ -759,139 +821,44 @@ export class RunController {
 
       if (directive.kind === "EXECUTE_TOOL_BATCH") {
         // The coordinator has decided a Tool batch is next; whether this Run Layer can run one is a
-        // Phase 3D composition question, and a Run whose host composed Tool execution out simply
-        // waits on its durable boundary.
-        const coordinator = this.dependencies.toolCoordinator;
-        if (coordinator === undefined) return this.resultFromSnapshot(snapshot);
-        const continuation = snapshot.continuation;
-        if (continuation?.type !== "WAITING_TOOL_RESULTS") {
-          throw new RunControllerInvariantError(
-            "A Tool batch directive requires an open WAITING_TOOL_RESULTS continuation.",
-          );
+        // composition question, and a Run whose host composed Tool execution out simply waits on
+        // its durable boundary.
+        const turnDriver = this.toolTurnDriver(snapshot, mode);
+        if (turnDriver === undefined) return this.resultFromSnapshot(snapshot);
+
+        // ```text
+        // RunExecutionDriver.execute(EXECUTE_TOOL_BATCH)
+        //        ↓
+        // the real, run-scoped ToolTurnCoordinator
+        //        ↓
+        // the existing durable Tool System
+        // ```
+        //
+        // The Tool effect is executed by the *same* frozen driver that executes a model turn. The
+        // directive is the coordinator's own decision, carried in verbatim; nothing here re-decides
+        // which batch is next, and nothing here talks to the Tool Layer directly.
+        const execution = await this.executeToolBatchDirective(snapshot, directive, turnDriver);
+        if (!isToolTurnResult(execution)) {
+          return "aborted" in execution ? execution.aborted : execution.failed;
         }
-        if (snapshot.state === undefined) {
-          throw new RunControllerInvariantError("Tool execution requires an AgentState.");
-        }
-        const request = {
-          signal: this.executionSignal(snapshot.run.id),
-          sessionId: snapshot.run.sessionId,
-          runId: snapshot.run.id,
-          stepId: directive.sourceStepId,
-          securityContext: createToolSecurityContext(snapshot.run, snapshot.state),
-          environment: {
-            workspace: snapshot.run.workspace,
-            runtime: snapshot.run.runtime,
-          },
-          items: continuation.pendingDecision.toolRequests.map((request): ToolBatchItem => request),
-        };
-        const resourceDecision = await this.resourceToolBatchDecision(
-          snapshot,
-          request.items.length,
-        );
-        if (resourceDecision?.kind === "REPLAN") {
-          await this.recordResourceReplan(snapshot);
-          const syntheticResults = ResourceGovernor.replanResults(
-            request.items.map((item) => ({
-              externalCallId: item.externalCallId,
-              toolName: item.toolName,
-            })),
-          );
-          const messages = toLLMToolResultMessages(
-            continuation.pendingDecision.toolRequests,
-            syntheticResults,
-            this.dependencies.contextRuntime?.getContextPolicy?.(snapshot.run.id),
-          );
-          snapshot = await this.persistCompleteToolResultsLocked(snapshot, messages);
-          mode = "EXECUTE";
-          continue;
-        }
-        if (resourceDecision?.kind === "HARD_STOP") {
-          return this.finalizeBudgetExceeded(snapshot, {
-            kind: "EXCEEDED",
-            dimension: resourceDecision.dimension,
-            accounted: resourceDecision.accounted,
-            limit: resourceDecision.limit,
-          });
-        }
-        if (resourceDecision?.kind === "WAIT_FOR_RESOURCE_DECISION") {
-          snapshot = await this.persistWaitingResourceLocked(
-            snapshot,
-            continuation,
-            request.items.length,
-          );
-          return this.resultFromSnapshot(snapshot);
-        }
-        let outcome: ToolBatchOutcome;
-        try {
-          outcome =
-            mode === "RECOVER"
-              ? await coordinator.recover(request)
-              : await coordinator.execute(request);
-        } catch (error) {
-          if (this.executionSignal(snapshot.run.id).aborted) {
-            return this.finalizeAbortedExecution(snapshot);
-          }
-          const agentError =
-            error instanceof ToolBatchInputError
-              ? {
-                  code: "MODEL_ERROR" as const,
-                  message: "The model produced an invalid Tool Call batch.",
-                  retryable: false,
-                  phase: "LLM" as const,
-                }
-              : {
-                  code: "RUNTIME_ERROR" as const,
-                  message:
-                    "Tool execution infrastructure failed before a complete Tool Result batch was available.",
-                  retryable: false,
-                  phase: "TOOL" as const,
-                };
-          return this.failBoundaryLocked(snapshot, agentError);
-        }
-        // Tool settlement may have advanced AgentState in its own atomic transaction.
-        // Always continue from the durable revision before writing continuation, approval,
-        // or failure state.
+
+        // Tool settlement may have advanced AgentState in its own atomic transaction: a validated
+        // Tool effect (`changedFiles`, `activeProcesses`) is projected into the durable AgentState
+        // snapshot inside the Tool store's commit, which bumps its revision. Always continue from
+        // the durable revision before planning a continuation, an approval boundary or a failure.
         snapshot = await this.load(snapshot.run.id);
         if (this.executionSignal(snapshot.run.id).aborted) {
           return this.finalizeAbortedExecution(snapshot);
         }
-        if (outcome.kind === "WAITING_APPROVAL") {
-          snapshot = await this.persistWaitingApprovalLocked(snapshot, outcome);
-          if (this.executionSignal(snapshot.run.id).aborted) {
-            return this.finalizeAbortedExecution(snapshot);
-          }
-          return this.resultFromSnapshot(snapshot);
-        }
-        if (outcome.kind === "BUDGET_EXCEEDED") {
-          return this.finalizeBudgetExceeded(snapshot, {
-            kind: "EXCEEDED",
-            dimension: outcome.blocked.dimension,
-            accounted: outcome.blocked.accounted,
-            limit: outcome.blocked.limit,
-          });
-        }
-        let messages: readonly LLMToolResultMessage[];
-        try {
-          messages = toLLMToolResultMessages(
-            continuation.pendingDecision.toolRequests,
-            outcome.results,
-            this.dependencies.contextRuntime?.getContextPolicy?.(snapshot.run.id),
-          );
-        } catch (error) {
-          return this.failBoundaryLocked(
-            snapshot,
-            {
-              code: "RUNTIME_ERROR",
-              message:
-                "Tool execution infrastructure failed before a complete Tool Result batch was available.",
-              retryable: false,
-              phase: "TOOL",
-            },
-            error,
-          );
-        }
-        snapshot = await this.persistCompleteToolResultsLocked(snapshot, messages);
-        await this.recordResourceObservation(snapshot, continuation, messages);
+
+        const settled = await this.settleToolEffect(snapshot, directive, {
+          result: execution.result,
+          observation: execution.observation,
+        });
+        if (settled.kind === "RESULT") return settled.result;
+        snapshot = settled.snapshot;
+        // An accepted — or synthetic — result set is durable, so the next batch the model's own
+        // turn requests is a fresh execution of it rather than a settlement of this one.
         mode = "EXECUTE";
         continue;
       }
@@ -926,217 +893,332 @@ export class RunController {
     }
   }
 
-  private async resourceToolBatchDecision(
+  /**
+   * The run-scoped Tool turn driver for one directive.
+   *
+   * ```text
+   * durable snapshot        the facts the coordinator decided from
+   * + entry mode            whether this batch may already have run
+   * ↓
+   * RunToolTurnDriver       a real frozen ToolTurnCoordinator over the durable Tool System
+   * ```
+   *
+   * A host that composed Tool execution out returns `undefined` and the Run waits on its durable
+   * boundary. Otherwise the adapter captures the host facts the frozen request deliberately does
+   * not carry — workspace, Runtime, security context, resource policy — so the general Agent
+   * contract never has to.
+   *
+   * The entry mode is threaded in, never derived. A durable `RUNNING` invocation must be recovered
+   * and never re-dispatched, and only this layer knows whether the batch it is driving is fresh.
+   */
+  private toolTurnDriver(
     snapshot: RunExecutionSnapshot,
-    requestedToolCalls: number,
-  ) {
-    const policy = snapshot.run.resourcePolicy;
-    if (policy === undefined || snapshot.state === undefined) return undefined;
-    const resourceState =
-      this.dependencies.resourceGovernance === undefined
-        ? undefined
-        : await this.dependencies.resourceGovernance.createOrGet(snapshot.run.id, {
-            policyVersion: "adaptive-resource-governance.v1",
-            mode: policy.mode,
-            now: this.dependencies.clock.now(),
-          });
-    const noProgress = resourceState?.consecutiveNoProgressTurns ?? 0;
-    const progressLevel =
-      noProgress >= policy.progress.noProgressTurnsBeforeReplan
-        ? "FORCED_REPLAN"
-        : noProgress >= policy.progress.identicalCallNudgeThreshold
-          ? "NUDGE"
-          : "HEALTHY";
-    const decision = new ResourceGovernor(policy).evaluateToolBatch({
-      agentTurnsConsumed: snapshot.state.usage.steps,
-      toolOperationsConsumed:
-        resourceState?.toolOperationsConsumed ?? snapshot.state.usage.toolCalls,
-      requestedToolCalls,
-      progressLevel,
-      replanCount: resourceState?.replanCount ?? 0,
-      ...(resourceState === undefined ? {} : { currentLeaseEpoch: resourceState.leaseEpoch }),
-    });
-    if (decision.kind === "RENEW_AND_ALLOW" && resourceState !== undefined) {
-      await this.updateResourceState(resourceState, {
-        ...resourceState,
-        leaseEpoch: decision.nextLeaseEpoch,
-        leaseStartAgentTurns: snapshot.state.usage.steps,
-        leaseStartToolCalls: resourceState.toolOperationsConsumed,
-        resourceGuardState: "NONE",
-        revision: resourceState.revision + 1,
-        updatedAt: this.dependencies.clock.now(),
-      });
-    }
-    return decision;
-  }
-
-  private async recordResourceReplan(snapshot: RunExecutionSnapshot): Promise<void> {
-    const repository = this.dependencies.resourceGovernance;
-    if (repository === undefined || snapshot.run.resourcePolicy === undefined) return;
-    const current = await repository.createOrGet(snapshot.run.id, {
-      policyVersion: "adaptive-resource-governance.v1",
-      mode: snapshot.run.resourcePolicy.mode,
-      now: this.dependencies.clock.now(),
-    });
-    await this.updateResourceState(current, {
-      ...current,
-      replanCount: current.replanCount + 1,
-      resourceGuardState: "REPLAN_REQUIRED",
-      revision: current.revision + 1,
-      updatedAt: this.dependencies.clock.now(),
-    });
-  }
-
-  private async recordResourceObservation(
-    snapshot: RunExecutionSnapshot,
-    continuation: Extract<
-      import("./agent-continuation.js").RunContinuationCheckpoint,
-      { type: "WAITING_TOOL_RESULTS" }
-    >,
-    results: readonly LLMToolResultMessage[],
-  ): Promise<void> {
-    const repository = this.dependencies.resourceGovernance;
-    if (repository === undefined || snapshot.run.resourcePolicy === undefined) return;
-    const current = await repository.createOrGet(snapshot.run.id, {
-      policyVersion: "adaptive-resource-governance.v1",
-      mode: snapshot.run.resourcePolicy.mode,
-      now: this.dependencies.clock.now(),
-    });
-    const requestFingerprint = fingerprintToolBatch(continuation.pendingDecision.toolRequests);
-    const resultFingerprint = fingerprintToolResultBatch(results);
-    const previous = current.recentFingerprints.at(-1);
-    const exactRepeat =
-      previous?.request === requestFingerprint && previous.result === resultFingerprint;
-    const now = this.dependencies.clock.now();
-    const recentFingerprints = [
-      ...current.recentFingerprints,
-      { request: requestFingerprint, result: resultFingerprint },
-    ].slice(-64);
-    await this.updateResourceState(current, {
-      ...current,
-      agentTurnsConsumed: snapshot.state?.usage.steps ?? current.agentTurnsConsumed,
-      toolOperationsConsumed: snapshot.state?.usage.toolCalls ?? current.toolOperationsConsumed,
-      ...(exactRepeat ? {} : { lastProgressAt: now }),
-      consecutiveNoProgressTurns: exactRepeat ? current.consecutiveNoProgressTurns + 1 : 0,
-      resourceGuardState: exactRepeat ? "NUDGE" : "NONE",
-      recentFingerprints,
-      revision: current.revision + 1,
-      updatedAt: now,
-    });
-  }
-
-  private async updateResourceState(
-    current: import("./resource-governance-port.js").ResourceGovernanceState,
-    next: import("./resource-governance-port.js").ResourceGovernanceState,
-  ): Promise<void> {
-    const repository = this.dependencies.resourceGovernance;
-    if (repository === undefined) return;
-    await repository.compareAndSwap(current.runId, current.revision, next);
-  }
-
-  private async persistCompleteToolResultsLocked(
-    loaded: RunExecutionSnapshot,
-    results: readonly LLMToolResultMessage[],
-  ): Promise<RunExecutionSnapshot> {
-    if (loaded.continuation?.type !== "WAITING_TOOL_RESULTS") {
-      throw new RunControllerInvariantError("Run is not waiting for a complete Tool Result batch");
-    }
-    if (loaded.state === undefined) {
-      throw new RunControllerInvariantError("Run is not waiting for a complete Tool Result batch");
-    }
-    const normalized = normalizeToolResultBatch(
-      loaded.continuation.pendingDecision.toolRequests,
-      results,
+    requestedMode: RunExecutionMode,
+  ): ReturnType<ReturnType<typeof createRunToolTurnDriverFactory>> | undefined {
+    const batches = this.dependencies.toolCoordinator;
+    if (batches === undefined) return undefined;
+    return createRunToolTurnDriverFactory(this.toolTurnDependencies(batches, snapshot.run.id))(
+      snapshot,
+      requestedMode,
     );
-    if (
-      loaded.continuation.receivedResults !== undefined &&
-      !semanticEqual(loaded.continuation.receivedResults, normalized)
-    ) {
-      throw new RunControllerConflictError("A different Tool Result batch was already accepted");
-    }
-    if (loaded.continuation.receivedResults !== undefined) return loaded;
-    const commit = await this.commit({
-      run: loaded.run,
-      state: loaded.state,
-      expectedStateRevision: loaded.stateRevision ?? null,
-      expectedContinuationRevision: loaded.continuationRevision ?? null,
-      stepWrites: [],
-      messagesToAppend: [],
-      continuation: {
-        operation: "SET",
-        checkpoint: { ...loaded.continuation, receivedResults: normalized },
-        updatedAt: this.dependencies.clock.now(),
-      },
-      events: [],
-    });
-    return commit.snapshot;
   }
 
-  private async persistWaitingApprovalLocked(
-    loaded: RunExecutionSnapshot,
-    outcome: Extract<ToolBatchOutcome, { kind: "WAITING_APPROVAL" }>,
-  ): Promise<RunExecutionSnapshot> {
-    if (loaded.state === undefined || loaded.continuation?.type !== "WAITING_TOOL_RESULTS") {
-      throw new RunControllerInvariantError("Approval boundary requires a pending Tool batch");
-    }
-    const now = this.dependencies.clock.now();
-    const run = markAgentRunWaitingApproval(loaded.run);
-    const state = markAgentStateWaitingApproval(loaded.state, now);
-    const commit = await this.commit({
-      run,
-      state,
-      expectedStateRevision: loaded.stateRevision ?? null,
-      expectedContinuationRevision: loaded.continuationRevision ?? null,
-      stepWrites: [],
-      messagesToAppend: [],
-      continuation: {
-        operation: "SET",
-        checkpoint: {
-          ...loaded.continuation,
-          waitingApproval: {
-            invocationId: outcome.waiting.invocationId,
-            ...(outcome.waiting.approvalId === undefined
-              ? {}
-              : { approvalId: outcome.waiting.approvalId }),
-            externalCallId: outcome.waiting.externalCallId,
-            toolName: outcome.waiting.toolName,
-          },
+  /**
+   * The host facts the Tool turn adapter is assembled from.
+   *
+   * The RunController names a `ToolBatchCoordinatorPort` and a resource ledger — nothing narrower.
+   * It does not know a `ToolBatchItem`, a security context, an execution environment or a
+   * `ResourceGovernor`: those belong to the adapter, which is the only object that translates the
+   * frozen Tool turn contract into the legacy Tool batch request.
+   */
+  private toolTurnDependencies(
+    batches: ToolBatchCoordinatorPort,
+    runId: RunId,
+  ): RunToolTurnDriverDependencies {
+    const contextRuntime = this.dependencies.contextRuntime;
+    return {
+      batches,
+      ...(this.dependencies.resourceGovernance === undefined
+        ? {}
+        : { resourceGovernance: this.dependencies.resourceGovernance }),
+      clock: this.dependencies.clock,
+      // The Run's live cancellation signal, read when the batch runs. The adapter never creates an
+      // abort scope, never owns a timeout and never reads a deadline: it forwards this unchanged.
+      signal: () => this.executionSignal(runId),
+      ...(contextRuntime?.getContextPolicy === undefined
+        ? {}
+        : { hostObservationPolicy: () => contextRuntime.getContextPolicy?.(runId) }),
+    };
+  }
+
+  /**
+   * Drive one `EXECUTE_TOOL_BATCH` directive through the frozen Run execution driver.
+   *
+   * ```text
+   * createRunExecutionDriver({ agentLoop, toolTurns: <run-scoped adapter>, completionGate })
+   *        ↓
+   * driver.execute(directive, context)
+   *        ↓
+   * the real ToolTurnCoordinator
+   *        ↓
+   * the existing durable Tool System
+   * ```
+   *
+   * The driver's `toolTurns` port is the run-scoped adapter resolved from *the snapshot the
+   * coordinator decided from*, so the batch that runs is the batch that was decided and its
+   * captured facts are the Run's own. A Tool infrastructure exception is never turned into a
+   * model-facing Tool result: it settles as a sanitized Run failure, and an abort is left for the
+   * termination authority.
+   */
+  private async executeToolBatchDirective(
+    snapshot: RunExecutionSnapshot,
+    directive: ExecuteToolBatchDirective,
+    turnDriver: ResolvedRunToolTurn,
+  ): Promise<ToolBatchDirectiveExecution> {
+    const driver = createRunExecutionDriver({
+      // A Tool turn never advances the model, so this port is never reached. It refuses rather
+      // than looping a Run nobody asked for.
+      agentLoop: MISROUTED_AGENT_LOOP,
+      toolTurns: turnDriver.coordinator,
+      completionGate: DEFERRED_COMPLETION_GATE,
+    });
+    try {
+      const effect = await driver.execute(directive, {
+        identity: {
+          runId: snapshot.run.id,
+          sessionId: snapshot.run.sessionId,
+          goal: snapshot.run.goal,
         },
-        updatedAt: now,
-      },
-      events: [
-        this.eventFactory.statusChanged(
-          loaded.run,
-          "RUNNING",
-          "WAITING_APPROVAL",
-          this.nextEventId(),
-          now,
-        ),
-      ],
-    });
-    this.notify(commit.events);
-    return commit.snapshot;
+        // The frozen effect context describes *the effect being executed*, and a Tool effect has no
+        // model turn of its own. The Step is the one that **requested** the batch — the same Step
+        // the Tool Layer records its invocations against — and the history, model and catalog are
+        // supplied minimally because the driver reads none of them for a Tool directive.
+        turn: { stepId: directive.sourceStepId, sequence: 0 },
+        history: [],
+        model: unresolvedToolTurnModel(snapshot.run.model),
+        tools: [],
+        signal: this.executionSignal(snapshot.run.id),
+      });
+      if (effect.kind !== "TOOLS") {
+        throw new RunControllerInvariantError(
+          `The Tool driver produced a ${effect.kind} effect for an EXECUTE_TOOL_BATCH directive.`,
+        );
+      }
+      return { result: effect.result, observation: turnDriver.observation };
+    } catch (error) {
+      // An aborted execution has no settlement of its own: the cancellation and deadline
+      // authorities own what happens to the Run, and this layer only reports it upward.
+      if (this.executionSignal(snapshot.run.id).aborted) {
+        return { aborted: await this.finalizeAbortedExecution(snapshot) };
+      }
+      // The adapter's own identity refusal is a lifecycle violation, not a Tool failure: a request
+      // that does not match the Run's durable batch means the wrong batch was about to run, and
+      // settling that as a Tool error would hide it behind a model-facing message.
+      if (error instanceof RunControllerInvariantError) throw error;
+      const agentError =
+        error instanceof ToolBatchInputError
+          ? {
+              code: "MODEL_ERROR" as const,
+              message: "The model produced an invalid Tool Call batch.",
+              retryable: false,
+              phase: "LLM" as const,
+            }
+          : {
+              code: "RUNTIME_ERROR" as const,
+              message:
+                "Tool execution infrastructure failed before a complete Tool Result batch was available.",
+              retryable: false,
+              phase: "TOOL" as const,
+            };
+      // A Tool infrastructure exception is never turned into a model-facing Tool result: it is a
+      // sanitized terminal failure for the Run, and the internal exception text stays out of it.
+      return { failed: await this.failBoundaryLocked(snapshot, agentError, error) };
+    }
   }
 
-  private async persistWaitingResourceLocked(
-    loaded: RunExecutionSnapshot,
-    continuation: Extract<
-      import("./agent-continuation.js").RunContinuationCheckpoint,
-      {
-        type: "WAITING_TOOL_RESULTS";
+  /**
+   * Settle one executed Tool effect through exactly one typed authority.
+   *
+   * ```text
+   * classifyToolEffectSettlement()
+   *        ↓
+   * CANONICAL_TOOL_EFFECT     PLAN -> MATERIALIZE -> COMMIT -> NOTIFY
+   * RESOURCE_COMPATIBILITY    the durable WAITING_RESOURCE checkpoint
+   * BUDGET_AUTHORITY          the existing budget termination settlement
+   * ```
+   *
+   * The route is chosen by typed discriminant only and there is no generic fallback: a planner
+   * error propagates instead of being caught and re-settled by a second authority.
+   */
+  private async settleToolEffect(
+    snapshot: RunExecutionSnapshot,
+    directive: ExecuteToolBatchDirective,
+    execution: Extract<ToolBatchDirectiveExecution, { result: ToolTurnResult }>,
+  ): Promise<ToolEffectSettlement> {
+    const current = await this.load(snapshot.run.id);
+    const authority = this.resolveAuthority(current, false);
+    if (authority === "CANCELLED") {
+      return { kind: "RESULT", result: await this.finalizeCancellation(current) };
+    }
+    if (authority === "TIMEOUT") {
+      return { kind: "RESULT", result: await this.finalizeTimeout(current) };
+    }
+    if (authority === "TERMINAL") {
+      return { kind: "RESULT", result: this.resultFromSnapshot(current) };
+    }
+    if (authority === "UNEXPECTED_ABORT") {
+      return { kind: "RESULT", result: await this.finalizeAbortedExecution(current) };
+    }
+
+    const route = classifyToolEffectSettlement({
+      result: execution.result,
+      observation: execution.observation,
+    });
+    switch (route.route) {
+      case "BUDGET_AUTHORITY":
+        return {
+          kind: "RESULT",
+          result: await this.finalizeBudgetExceeded(current, route.block),
+        };
+      case "RESOURCE_COMPATIBILITY": {
+        const resource = await this.settleWaitingResource(current, directive, route.replanCount);
+        return { kind: "SNAPSHOT", snapshot: resource };
       }
-    >,
-    requestedToolCalls: number,
+      case "CANONICAL_TOOL_EFFECT": {
+        const canonical = await this.settleCanonicalToolEffect(
+          current,
+          directive,
+          route.result,
+          execution.observation,
+        );
+        return { kind: "SNAPSHOT", snapshot: canonical };
+      }
+    }
+  }
+
+  /**
+   * Settle a Tool effect the frozen planner can express.
+   *
+   * ```text
+   * PLAN -> MATERIALIZE -> COMMIT -> NOTIFY -> post-commit resource observation
+   * ```
+   *
+   * The order is the contract, and the last step is ordered as carefully as the rest: resource
+   * progress accounts for work the Run *accepted*, so it is recorded only after the continuation
+   * is durable. A settlement whose commit lost its compare-and-swap leaves the progress ledger
+   * where it was, and the durable Tool invocations remain the recovery authority — the next
+   * recovery reads them instead of replaying a handler.
+   *
+   * A `REPLAN` is the one route that also advances the durable replan count, and it does so after
+   * its synthetic results are durable for the same reason.
+   */
+  private async settleCanonicalToolEffect(
+    current: RunExecutionSnapshot,
+    directive: ExecuteToolBatchDirective,
+    result: Exclude<ToolTurnResult, { kind: "RESOURCE_WAIT" | "BUDGET_EXCEEDED" }>,
+    observation: RunToolTurnObservation,
+  ): Promise<RunExecutionSnapshot> {
+    const now = this.dependencies.clock.now();
+    const snapshot = toAgentExecutionSnapshot(current);
+    const effect: RunExecutionEffectResult = { kind: "TOOLS", result };
+
+    const planned = this.transitionPlanner.plan({ snapshot, directive, effect, now });
+    const materialized = this.eventMaterializer.materialize({
+      snapshot: current,
+      directive,
+      effect,
+      plannedCommit: planned,
+      now,
+      // A Tool turn performs no provider turn: the Tool Layer's own lifecycle is what it reports,
+      // and a provider state here would be a claim about a model call this effect never made.
+      providerTurnState: "NOT_STARTED",
+      ownership: { eventIds: this.dependencies.eventIdFactory },
+    });
+
+    const committed = await this.commit(materialized);
+    this.notify(committed.events);
+    await this.recordToolTurnProgress(committed.snapshot, result, observation);
+    return committed.snapshot;
+  }
+
+  /**
+   * The post-commit resource progress of one settled Tool batch.
+   *
+   * It runs for the two routes whose results the Run accepted — `COMPLETED` and `REPLAN` — and for
+   * nothing else. An approval boundary accepted no complete batch, and a budget settlement is
+   * terminal: recording progress for either would account for work the Run never took.
+   *
+   * The context is rebuilt from the durable continuation the settlement just committed, which is
+   * the same record the execution was built from, so the progress fingerprint and the observation
+   * policy cannot disagree with the batch that actually ran.
+   */
+  private async recordToolTurnProgress(
+    settled: RunExecutionSnapshot,
+    result: Exclude<ToolTurnResult, { kind: "RESOURCE_WAIT" | "BUDGET_EXCEEDED" }>,
+    observation: RunToolTurnObservation,
+  ): Promise<void> {
+    const batches = this.dependencies.toolCoordinator;
+    const continuation = settled.continuation;
+    const state = settled.state;
+    if (
+      batches === undefined ||
+      continuation?.type !== "WAITING_TOOL_RESULTS" ||
+      state === undefined
+    ) {
+      return;
+    }
+    const dependencies = this.toolTurnDependencies(batches, settled.run.id);
+    const contextRuntime = this.dependencies.contextRuntime;
+    const context: RunToolTurnContext = {
+      run: settled.run,
+      state,
+      continuation,
+      pendingDecision: continuation.pendingDecision,
+      observationPolicy:
+        continuation.observationPolicy ??
+        contextRuntime?.getContextPolicy?.(settled.run.id) ??
+        defaultObservationPolicy(),
+      effectiveMode: observation.effectiveMode,
+      environment: { workspace: settled.run.workspace, runtime: settled.run.runtime },
+      securityContext: createToolSecurityContext(settled.run, state),
+    };
+    const results =
+      result.kind === "COMPLETED"
+        ? result.results
+        : result.kind === "REPLAN"
+          ? result.syntheticResults
+          : [];
+    // A REPLAN writes no Tool invocation at all, so the ledger entry is the only durable trace of
+    // the decision — and it is what a later `WAITING_RESOURCE` reports as `replanCount`.
+    if (result.kind === "REPLAN") await recordRunToolTurnReplan({ dependencies, context });
+    if (results.length === 0) return;
+    await recordRunToolTurnProgress({ dependencies, context, state, results });
+  }
+
+  /**
+   * The durable `WAITING_RESOURCE` boundary.
+   *
+   * The frozen planner refuses this transition on purpose: the checkpoint has always persisted a
+   * `replanCount` and the frozen `RESOURCE_WAIT` result carries a reason and nothing else. The
+   * count therefore comes from the Core-private observation — the number the admission decision
+   * actually read from the resource ledger — and from nowhere else. It is never re-derived,
+   * counted again or defaulted.
+   */
+  private async settleWaitingResource(
+    loaded: RunExecutionSnapshot,
+    directive: ExecuteToolBatchDirective,
+    replanCount: number,
   ): Promise<RunExecutionSnapshot> {
     if (loaded.state === undefined) {
       throw new RunControllerInvariantError("Resource guard requires an AgentState");
     }
+    const continuation = loaded.continuation;
+    if (continuation?.type !== "WAITING_TOOL_RESULTS") {
+      throw new RunControllerInvariantError(
+        "A resource boundary requires an open WAITING_TOOL_RESULTS continuation.",
+      );
+    }
     const now = this.dependencies.clock.now();
-    const resourceState =
-      this.dependencies.resourceGovernance === undefined
-        ? undefined
-        : await this.dependencies.resourceGovernance.get(loaded.run.id);
-    const replanCount = resourceState?.replanCount ?? 1;
     const run = markAgentRunWaitingResource(loaded.run);
     const state = markAgentStateWaitingResource(loaded.state, now);
     const checkpoint = {
@@ -1166,7 +1248,7 @@ export class RunController {
         this.eventFactory.resourceGuard(
           loaded.run,
           replanCount,
-          requestedToolCalls,
+          directive.pendingDecision.toolRequests.length,
           this.nextEventId(),
           now,
         ),
@@ -1285,10 +1367,13 @@ export class RunController {
     );
     const driver = createRunExecutionDriver({
       agentLoop: loop,
-      // Phase 3D and Phase 3E own the real Tool and completion adapters. The production Agent path
-      // never hands those directives to the driver, and each placeholder throws rather than
-      // approximating work nobody performed.
-      toolTurns: DEFERRED_TOOL_TURN_COORDINATOR,
+      // The Agent path never hands the driver a Tool directive — the Run Layer's Tool turn owns
+      // that — but the driver's contract requires the port. A misrouted Tool directive is refused
+      // here rather than executed a second time through an Agent turn.
+      toolTurns: MISROUTED_TOOL_TURN_COORDINATOR,
+      // Phase 3E owns the real completion adapter. The production Agent path never hands it an
+      // `EVALUATE_COMPLETION` directive, and the placeholder throws rather than approximating work
+      // nobody performed.
       completionGate: DEFERRED_COMPLETION_GATE,
     });
 
@@ -1752,7 +1837,10 @@ export class RunController {
       snapshot: current,
       directive,
       effect,
-      plannedCommit: this.agentTurnProvenance(planned, result),
+      plannedCommit: this.agentTurnProvenance(
+        this.observationPolicyProvenance(planned, result),
+        result,
+      ),
       now,
       providerTurnState: observation.providerTurnState,
       ownership: { eventIds: this.dependencies.eventIdFactory },
@@ -1761,6 +1849,50 @@ export class RunController {
     const committed = await this.commit(materialized);
     this.notify(committed.events);
     return this.resultFromSnapshot(committed.snapshot);
+  }
+
+  /**
+   * Snapshot the observation policy a Tool-requesting turn was prepared under.
+   *
+   * ```text
+   * TRANSITIONAL — Core-only settlement sidecar
+   * ```
+   *
+   * The frozen planner plans the durable `WAITING_TOOL_RESULTS` checkpoint from the directive it
+   * was given, and the frozen directive carries the *requesting* Run's policy rather than the one
+   * the Context Engine actually prepared the turn under. Those are the same value whenever a turn
+   * is prepared and settled in one process — and they are exactly what can differ across a
+   * restart, which is the case the durable field exists for.
+   *
+   * So the one authoritative source is applied here, narrowly, to the checkpoint the planner
+   * already wrote: the `observationPolicy` that travelled with this turn's `PreparedModelContext`.
+   * It may set that field and nothing else — no transition, no Step, no message and no event is
+   * touched — and a non-Tool-requesting effect, or a checkpoint that already carries a policy, is
+   * returned unchanged.
+   *
+   * A later Tool projection therefore uses the policy that was in force when the model asked for
+   * the batch, not whatever the restarted process happens to default to.
+   */
+  private observationPolicyProvenance(
+    commit: RunExecutionCommit,
+    result: AgentLoopAdvanceResult,
+  ): RunExecutionCommit {
+    if (result.kind !== "TOOL_REQUESTS") return commit;
+    if (commit.continuation?.operation !== "SET") return commit;
+    const checkpoint = commit.continuation.checkpoint;
+    if (checkpoint.type !== "WAITING_TOOL_RESULTS") return commit;
+    if (checkpoint.observationPolicy !== undefined) return commit;
+    return {
+      ...commit,
+      continuation: {
+        operation: "SET",
+        checkpoint: {
+          ...checkpoint,
+          observationPolicy: result.context.observationPolicy,
+        },
+        updatedAt: commit.continuation.updatedAt,
+      },
+    };
   }
 
   /**
@@ -3717,22 +3849,6 @@ export class RunController {
     }
     return this.dependencies.resources.cancelOwnedResources(runId);
   }
-}
-
-export function createToolSecurityContext(
-  run: AgentRun,
-  state: Pick<AgentState, "permissionProfile" | "approvalPolicy">,
-): ToolSecurityContext {
-  if (
-    run.permissionProfile !== state.permissionProfile ||
-    run.approvalPolicy !== state.approvalPolicy
-  ) {
-    throw new RunControllerInvariantError("Run security policy does not match AgentState policy.");
-  }
-  return Object.freeze({
-    permissionProfile: run.permissionProfile,
-    approvalPolicy: run.approvalPolicy,
-  });
 }
 
 /** The retry provenance a new checkpoint carries forward. */

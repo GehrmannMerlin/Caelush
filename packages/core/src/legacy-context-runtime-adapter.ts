@@ -68,6 +68,29 @@ export interface LegacyContextRuntimeAdapterDependencies {
   /** The optional workspace-relative working directory for this session. */
   readonly cwd?: string;
   readonly explicitPaths?: readonly string[];
+  /**
+   * Where the raw output pointer of each Tool result is resolved from.
+   *
+   * ```text
+   * frozen AgentTurnInput.TOOL_RESULTS   bounded summaries and no artifact pointer
+   *        ↓
+   * this resolver                        the durable Tool execution ledger
+   *        ↓
+   * legacy Context-only Tool message     carries `rawArtifactRef` again
+   * ```
+   *
+   * A forced recovery re-projects Tool output under a tighter policy, and it needs the *raw* output
+   * to do it. The frozen turn input deliberately carries only the model-facing projection, so the
+   * pointer is resolved here — at the compatibility boundary that needs it — rather than added to a
+   * general Agent contract that has no artifact store.
+   *
+   * Absent, or resolving to `undefined`, the legacy message falls back to the bounded `content` it
+   * already carries. That is the honest behaviour for an externally submitted Tool result, which
+   * has no durable Tool invocation behind it at all.
+   */
+  readonly rawObservationRefs?: import("./run-tool-observation-recovery.js").ToolRawObservationRefResolver;
+  /** The run's identity, needed only to resolve a raw observation pointer. */
+  readonly runId?: import("@caelush/protocol").RunId;
   /** Supplies the verification-repair context for a repair continuation. */
   readonly verificationRepairContext?: () => Promise<
     import("@caelush/context").VerificationRepairContextInput | undefined
@@ -95,8 +118,7 @@ export function createLegacyContextRuntimeAdapter(
   return {
     async prepare(input: ContextPrepareInput): Promise<PreparedModelContext> {
       const history = input.history.map(toLegacyMessage);
-      const legacyInput = await buildLegacyContextInput(dependencies, input, history);
-      // The single descriptor authority for this build. Never re-resolved.
+      const legacyInput = await buildLegacyContextInput(dependencies, input, history); // The single descriptor authority for this build. Never re-resolved.
       const descriptor = input.model;
       const runtime = resolveRuntime(dependencies);
 
@@ -172,7 +194,7 @@ async function buildLegacyContextInput(
     ...(await repairContext(dependencies, input)),
   };
 
-  const currentTurnMessages = currentTurn(input.input, history);
+  const currentTurnMessages = await currentTurn(dependencies, input, history);
   if (currentTurnMessages !== undefined) {
     return { ...common, mode: "TOOL_CONTINUATION", currentTurnMessages };
   }
@@ -232,22 +254,74 @@ async function repairContext(
  * `TOOL_CONTINUATION` shape is reconstructed from the frozen turn input rather than from a
  * second copy of the conversation. That keeps the frozen boundary free of a
  * `currentTurnMessages` field.
+ *
+ * Each Tool result's raw output pointer is resolved from the durable Tool execution ledger, because
+ * the frozen `AIToolResultMessage` deliberately has no field for it. The pointer is what a forced
+ * recovery needs in order to re-project the *unbounded* output under a tighter policy; without it
+ * the legacy runtime can only tighten the bounded summary it was already given. A call the ledger
+ * does not know — an externally submitted Tool result — resolves to no pointer, and the bounded
+ * content carries the message exactly as before.
  */
-function currentTurn(
-  input: AgentTurnInput,
+async function currentTurn(
+  dependencies: LegacyContextRuntimeAdapterDependencies,
+  input: ContextPrepareInput,
   history: readonly LLMMessage[],
-): readonly LLMMessage[] | undefined {
-  if (input.kind !== "TOOL_RESULTS") return undefined;
-  const pending = toLegacyAssistantContent(input.pendingDecision.modelTurn.assistantMessage);
+): Promise<readonly LLMMessage[] | undefined> {
+  const turn = input.input;
+  if (turn.kind !== "TOOL_RESULTS") return undefined;
+  const pending = toLegacyAssistantContent(turn.pendingDecision.modelTurn.assistantMessage);
   // The open user turn is the last user message before this turn; it must stay inside the
   // continuation so the tool results are never orphaned from the request that produced them.
   // The frozen boundary carries it as the history's last user message in this phase.
   const currentUser = [...history].reverse().find((message) => message.role === "user");
-  return [
-    ...(currentUser === undefined ? [] : [currentUser]),
-    pending,
-    ...input.results.map(toLegacyMessage),
-  ];
+  const results = await Promise.all(
+    turn.results.map(async (result) =>
+      toLegacyToolResultMessage(
+        result,
+        await resolveRawObservationRef(
+          dependencies,
+          input.identity.runId,
+          turn.sourceStepId,
+          result,
+        ),
+      ),
+    ),
+  );
+  return [...(currentUser === undefined ? [] : [currentUser]), pending, ...results];
+}
+
+async function resolveRawObservationRef(
+  dependencies: LegacyContextRuntimeAdapterDependencies,
+  runId: import("@caelush/protocol").RunId,
+  sourceStepId: import("@caelush/protocol").StepId,
+  result: import("@caelush/ai").AIToolResultMessage,
+): Promise<string | undefined> {
+  if (dependencies.rawObservationRefs === undefined) return undefined;
+  return dependencies.rawObservationRefs.resolve({
+    runId,
+    sourceStepId,
+    externalCallId: result.toolCallId,
+  });
+}
+
+/**
+ * Project one frozen Tool result onto the legacy encoding, restoring its raw-output pointer.
+ *
+ * The four canonical fields are carried unchanged; `rawArtifactRef` is added only when the ledger
+ * resolved one, so the legacy message never claims an artifact that does not exist.
+ */
+function toLegacyToolResultMessage(
+  result: import("@caelush/ai").AIToolResultMessage,
+  rawArtifactRef: string | undefined,
+): LLMMessage {
+  return {
+    role: "tool",
+    toolCallId: result.toolCallId,
+    toolName: result.toolName,
+    content: result.content,
+    isError: result.isError,
+    ...(rawArtifactRef === undefined ? {} : { rawArtifactRef }),
+  };
 }
 
 /** Project one AI assistant message onto the durable legacy assistant message. */

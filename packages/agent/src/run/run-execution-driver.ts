@@ -33,9 +33,9 @@ import type { ToolTurnCoordinator } from "./ports/tool-turn.js";
  *                      nothing to execute: the RunController owns what happens next
  * ```
  *
- * `EXECUTE_TOOL_BATCH` and `EVALUATE_COMPLETION` are generic here and driven entirely by their
- * ports. Their production adapters are Phase 3D and Phase 3E work; this phase wires
- * `ADVANCE_AGENT` for real.
+ * `ADVANCE_AGENT` and `EXECUTE_TOOL_BATCH` are driven for real: Phase 3C wired the Agent path and
+ * Phase 3D wired the Tool path through a run-scoped `ToolTurnCoordinator`. `EVALUATE_COMPLETION`
+ * remains generic and driven entirely by its port; its production adapter is Phase 3E work.
  */
 export interface RunExecutionDriverDependencies {
   readonly agentLoop: AgentLoop;

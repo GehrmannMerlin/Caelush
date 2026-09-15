@@ -440,23 +440,27 @@ describe("Phase 3C Run Layer ownership", () => {
     expect(retry).toContain("steps: settledState.usage.steps");
   });
 
-  it("keeps the deferred Tool and completion ports fail-closed and never called in production", () => {
+  it("keeps the Tool driver real and the completion port fail-closed in production", () => {
+    // Phase 3D replaced the Tool placeholder with a real run-scoped adapter; Phase 3E's completion
+    // adapter still does not exist, so the two ports are no longer the same kind of thing and are
+    // no longer named as if they were.
     const deferred = executable("packages/core/src/run-agent-deferred-ports.ts");
-    expect(deferred).toContain("export const DEFERRED_TOOL_TURN_COORDINATOR");
+    expect(deferred).toContain("export const MISROUTED_TOOL_TURN_COORDINATOR");
     expect(deferred).toContain("export const DEFERRED_COMPLETION_GATE");
-    // Neither placeholder returns: each throws, naming the phase that owns the real adapter.
-    expect(deferred).toContain("belongs to Phase 3D");
+    expect(deferred).not.toContain("DEFERRED_TOOL_TURN_COORDINATOR");
     expect(deferred).toContain("belongs to Phase 3E");
     expect(deferred).toMatch(/async execute\(\): Promise<never>/);
     expect(deferred).toMatch(/async evaluate\(\): Promise<never>/);
 
-    // The production composition binds exactly those placeholders and no real implementation.
+    // The production Agent composition binds the misroute guard, never a Tool execution path: a
+    // Tool directive arriving at an Agent driver is refused rather than driven twice.
     const controller = executable("packages/core/src/run-controller.ts");
-    expect(controller).toContain("toolTurns: DEFERRED_TOOL_TURN_COORDINATOR");
+    expect(controller).toContain("toolTurns: MISROUTED_TOOL_TURN_COORDINATOR");
     expect(controller).toContain("completionGate: DEFERRED_COMPLETION_GATE");
-    // Phase 3D's Tool boundary is still the Core compatibility path, not the driver port.
-    expect(controller).toContain("this.dependencies.toolCoordinator");
-    expect(controller).toContain("coordinator.recover(request)");
+    // And the Tool batch itself is driven through the frozen driver over the real adapter — not
+    // through a direct call to the Tool Layer from the Agent path.
+    expect(controller).toContain("createRunToolTurnDriverFactory(");
+    expect(controller).toContain("toolTurns: turnDriver.coordinator");
   });
 
   it("normalizes legacy retry provenance durably instead of special-casing the runtime", () => {
@@ -668,11 +672,14 @@ describe("Phase 3C Run Layer ownership", () => {
 
   it("keeps the tool, completion and verification authorities where they were", () => {
     const controller = executable("packages/core/src/run-controller.ts");
-    // Phase 3D: the Tool boundary is still the Core compatibility path.
-    expect(controller).toContain("private async driveToolBoundariesLocked(");
-    expect(controller).toContain("private async persistCompleteToolResultsLocked(");
-    expect(controller).toContain("private async persistWaitingApprovalLocked(");
-    expect(controller).toContain("private async persistWaitingResourceLocked(");
+    // Phase 3D moved the Tool boundary into the frozen driver: the Run Layer's Tool turn is a real
+    // adapter, the controller only resolves it and settles what it returns, and every inline Tool
+    // decision the pre-3D loop held is gone from the production branch.
+    expect(controller).toContain("private toolTurnDriver(");
+    expect(controller).toContain("private async executeToolBatchDirective(");
+    expect(controller).toContain("private async settleToolEffect(");
+    expect(controller).toContain("private async settleCanonicalToolEffect(");
+    expect(controller).toContain("private async settleWaitingResource(");
     // Phase 3E: no production completion gate exists anywhere in the workspace. The port is
     // declared once, the frozen driver depends on it, the kernel's index re-exports it, and the
     // production Agent composition binds the explicit fail-closed placeholder — nothing else may
@@ -697,9 +704,7 @@ describe("Phase 3C Run Layer ownership", () => {
     // adapter rather than approximating one.
     const deferred = read("packages/core/src/run-agent-deferred-ports.ts");
     expect(deferred).toContain("DEFERRED_COMPLETION_GATE");
-    expect(deferred).toContain("DEFERRED_TOOL_TURN_COORDINATOR");
     expect(deferred).toContain("belongs to Phase 3E");
-    expect(deferred).toContain("belongs to Phase 3D");
     expect(deferred).not.toMatch(/async evaluate\([^)]*\)\s*\{\s*return/);
   });
 

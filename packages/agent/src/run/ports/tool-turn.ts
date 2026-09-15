@@ -12,12 +12,12 @@ import type { RunExecutionMode } from "../directive.js";
  * ToolTurnCoordinator = execute exactly one Tool batch turn
  * ```
  *
- * This is a *contract only* in Phase 3C. The frozen `RunExecutionEffectResult` wraps a
- * `ToolTurnResult`, so the result shape has to be exact — but the real Tool System migration (the
- * dispatcher, the registry, approval execution, resource execution, observation projection and
- * the uncertainty boundary) belongs to Phase 3D, and nothing here moves any of it.
+ * Phase 3C froze this contract and Phase 3D built its production implementation: a run-scoped
+ * adapter in Core that captures the host facts this general contract deliberately does not carry
+ * — workspace, Runtime, security context, resource policy — and drives the existing durable Tool
+ * System behind them.
  *
- * What the contract does own is the vocabulary a *general* Run Layer needs:
+ * What the contract owns is the vocabulary a *general* Run Layer needs:
  *
  * ```text
  * COMPLETED        the batch settled with a complete, ordered result set
@@ -101,7 +101,14 @@ export interface ToolTurnRequest {
   readonly signal: AbortSignal;
 }
 
-/** Execute exactly one Tool batch turn. Phase 3D owns its production implementation. */
+/**
+ * Execute exactly one Tool batch turn.
+ *
+ * Its production implementation is the run-scoped Core adapter, which reinforces
+ * `ToolTurnRequest.mode` with the caller's own entry mode: whether a batch may already have run is
+ * a host fact, and a durable `RUNNING` invocation must be recovered rather than re-dispatched. That
+ * reinforcement stays Core-private — it does not widen this contract.
+ */
 export interface ToolTurnCoordinator {
   execute(request: ToolTurnRequest): Promise<ToolTurnResult>;
 }

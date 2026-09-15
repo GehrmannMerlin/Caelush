@@ -1,3 +1,4 @@
+import type { AgentToolResult } from "@caelush/agent";
 import { LLMToolResultMessageSchema, type LLMToolResultMessage } from "@caelush/llm/messages";
 import type { AgentToolRequest } from "./agent-decision.js";
 import type { ToolBatchItemResult } from "@caelush/tools";
@@ -32,10 +33,57 @@ export function defaultObservationPolicy(): AgentToolObservationPolicy {
   };
 }
 
+/**
+ * Project one Tool batch onto the frozen model-facing Tool results.
+ *
+ * ```text
+ * ToolBatchItemResult  raw output, invocation id, observation id, artifact pointer
+ *        ↓
+ * observation projection (the one truncation policy the workspace owns)
+ *        ↓
+ * AgentToolResult      externalCallId, toolName, summary content, isError
+ * ```
+ *
+ * This is the *only* place a raw Tool result becomes model-facing. The Tool Layer's unbounded
+ * output, its invocation identity, its observation record and its durable artifact pointer stop
+ * here: `AgentToolResult` is a frozen general-Agent contract and has no field for any of them.
+ *
+ * Results are projected in the order they were reported, which the caller has already established
+ * is assistant source order, and the policy is applied to the batch as a whole so two identical
+ * batches project identically.
+ */
+export function toAgentToolResults(
+  requests: readonly AgentToolRequest[],
+  results: readonly ToolBatchItemResult[],
+  policy: AgentToolObservationPolicy = defaultObservationPolicy(),
+): readonly AgentToolResult[] {
+  return projectToolResultBatch(requests, results, policy).map((projected) => ({
+    externalCallId: projected.toolCallId,
+    toolName: projected.toolName,
+    content: projected.content,
+    isError: projected.isError,
+  }));
+}
+
 export function toLLMToolResultMessages(
   requests: readonly AgentToolRequest[],
   results: readonly ToolBatchItemResult[],
   policy: AgentToolObservationPolicy = defaultObservationPolicy(),
+): readonly LLMToolResultMessage[] {
+  return projectToolResultBatch(requests, results, policy);
+}
+
+/**
+ * The one observation projection a Tool batch is rendered through.
+ *
+ * Both the durable legacy message encoding and the frozen model-facing result are derived from
+ * this single projection, so a workspace can never end up with two different truncations of one
+ * Tool output — one stored and one shown.
+ */
+function projectToolResultBatch(
+  requests: readonly AgentToolRequest[],
+  results: readonly ToolBatchItemResult[],
+  policy: AgentToolObservationPolicy,
 ): readonly LLMToolResultMessage[] {
   if (requests.length !== results.length) throw new ToolBatchResultConversionError();
   const projected = projectToolObservationBatch({

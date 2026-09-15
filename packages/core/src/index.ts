@@ -191,6 +191,49 @@ export {
   RunControllerInvariantError,
   RunControllerInputError,
 } from "./run-controller.js";
+/**
+ * The Run Layer's Tool turn boundary.
+ *
+ * ```text
+ * frozen ToolTurnRequest  →  the run-scoped adapter  →  the existing durable Tool System
+ * ```
+ *
+ * A host supplies the legacy batch coordinator and the resource ledger; the adapter captures the
+ * Run-scoped facts the frozen general contract deliberately does not carry. It is exported because
+ * a test host that drives a Tool batch through the Run Layer composes the same boundary the
+ * production daemon does.
+ */
+export { createRunToolTurnDriverFactory } from "./run-tool-turn-coordinator.js";
+export type {
+  ResolvedRunToolTurn,
+  RunToolTurnContext,
+  RunToolTurnDriver,
+  RunToolTurnDriverDependencies,
+} from "./run-tool-turn-coordinator.js";
+/** The Core-private record of what one Tool turn did, which the frozen result cannot carry. */
+export type {
+  RunToolRawObservation,
+  RunToolResourceDecision,
+  RunToolTurnObservation,
+  RunToolUnderlyingOutcome,
+} from "./run-tool-turn-observation.js";
+/** The typed Tool effect settlement router: one executed Tool turn, exactly one authority. */
+export { classifyToolEffectSettlement } from "./run-tool-effect-settlement.js";
+export type {
+  ToolEffectSettlementInput,
+  ToolEffectSettlementRoute,
+} from "./run-tool-effect-settlement.js";
+/** The one projection of a Run's durable security policy onto the Tool Layer. */
+export { createToolSecurityContext } from "./tool-security-context.js";
+/**
+ * Where a Tool result's raw output pointer is resolved from.
+ *
+ * The Tool execution ledger is the provenance authority for an unbounded Tool output; the legacy
+ * Context adapter resolves each Tool result through this port when a forced recovery needs the raw
+ * text again. It is exported because the composition root is what owns the ledger.
+ */
+export { createToolExecutionLedgerRawObservationResolver } from "./run-tool-observation-recovery.js";
+export type { ToolRawObservationRefResolver } from "./run-tool-observation-recovery.js";
 export type {
   EventIdFactory,
   RunControllerDependencies,

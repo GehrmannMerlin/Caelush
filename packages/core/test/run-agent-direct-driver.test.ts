@@ -131,7 +131,15 @@ class MemoryExecutionStore implements RunExecutionStore {
     this.snapshot = {
       run: command.run,
       conversation,
-      ...(command.state === undefined ? {} : { state: command.state }),
+      // An absent `state` means "this transition leaves it alone", which is what the canonical
+      // commit contract says and what the production store does. A continuation-only transition —
+      // which is exactly what accepting a Tool batch is — therefore keeps the AgentState it was
+      // already holding instead of dropping it.
+      ...(command.state === undefined
+        ? this.snapshot.state === undefined
+          ? {}
+          : { state: this.snapshot.state }
+        : { state: command.state }),
       ...(this.stateRevision === undefined ? {} : { stateRevision: this.stateRevision }),
       ...(activeStep === undefined ? {} : { activeStep }),
       ...(nextContinuation === undefined ? {} : { continuation: nextContinuation }),

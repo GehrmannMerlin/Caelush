@@ -5,31 +5,48 @@ import {
 } from "@caelush/agent";
 
 /**
- * The deferred Run execution driver ports.
+ * The deferred and misrouted Run execution driver ports.
  *
  * ```text
- * ADVANCE_AGENT        real, this phase
- * EXECUTE_TOOL_BATCH   Phase 3D
+ * ADVANCE_AGENT        real, Phase 3C
+ * EXECUTE_TOOL_BATCH   real, Phase 3D — the run-scoped adapter in run-tool-turn-coordinator.ts
  * EVALUATE_COMPLETION  Phase 3E
  * ```
  *
- * The frozen `RunExecutionDriver` requires all three collaborators, and Phase 3C wires only the
- * Agent one for real. These are the two **explicit fail-closed placeholders** the driver is
- * constructed with: reaching either of them is a routing bug, not a missing feature, because the
- * production Run Layer still performs Tool batches and completion evaluation through their
- * existing Phase 3D / Phase 3E compatibility authorities and never hands those directives to the
- * driver.
+ * The frozen `RunExecutionDriver` requires all three collaborators. Phase 3C wired only the Agent
+ * one for real and left two explicit fail-closed placeholders; Phase 3D replaced the Tool one with
+ * a real adapter, so what remains here is:
  *
- * A placeholder that silently did nothing — or that approximated Tool execution or completion —
- * would be far worse than a throw: it would let a Run Layer believe work had happened. So each
- * throws, names the phase that owns it, and is proven to have been called zero times in the
- * production end-to-end tests.
+ * ```text
+ * MISROUTED_TOOL_TURN_COORDINATOR  a Tool directive reaching an *Agent* driver
+ * DEFERRED_COMPLETION_GATE         the Phase 3E completion adapter, which does not exist yet
+ * ```
+ *
+ * They are different failures and are named differently. The completion gate is a **deferred**
+ * port: nobody has implemented it, the production Run Layer evaluates completion through its
+ * existing verification compatibility authority, and reaching the placeholder is a routing bug
+ * that Phase 3E closes. The Tool coordinator here is a **misroute** guard: the real Tool adapter
+ * exists and is what the Run Layer drives, so a Tool directive arriving at an Agent driver means
+ * the wrong effect path was taken — and executing Tools from there would be a second Tool
+ * execution authority.
+ *
+ * Neither returns a value. A placeholder that silently did nothing — or that approximated Tool
+ * execution or completion — would be far worse than a throw: it would let a Run Layer believe work
+ * had happened. Both are proven to be called zero times in the production end-to-end tests.
  */
 
-/** The `EXECUTE_TOOL_BATCH` placeholder. Phase 3D owns the real Tool driver adapter. */
-export const DEFERRED_TOOL_TURN_COORDINATOR: ToolTurnCoordinator = {
+/**
+ * The refusal an *Agent* driver answers a Tool directive with.
+ *
+ * The Agent path never receives an `EXECUTE_TOOL_BATCH` directive: the Run Layer's own Tool turn
+ * drives those, through the real run-scoped adapter. This port exists only because the frozen
+ * driver contract requires one, and it fails closed rather than becoming a second execution path.
+ */
+export const MISROUTED_TOOL_TURN_COORDINATOR: ToolTurnCoordinator = {
   async execute(): Promise<never> {
-    throw new RunExecutionInvariantError("Tool RunExecutionDriver adapter belongs to Phase 3D.");
+    throw new RunExecutionInvariantError(
+      "A Tool directive reached the Agent driver; the Run Layer owns Tool execution.",
+    );
   },
 };
 

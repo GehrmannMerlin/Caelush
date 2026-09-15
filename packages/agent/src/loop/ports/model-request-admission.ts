@@ -42,20 +42,28 @@ export type ModelRequestAdmissionDecision =
 /**
  * A durable budget refusal, in the frozen durable vocabulary.
  *
- * `EXCEEDED` names the dimension that ran out so the Run Layer can settle
- * `BUDGET_EXCEEDED` with the same accounting it already keeps. `UNAVAILABLE` is the
- * fail-closed case: enforcement could not be established at all, which is deliberately
- * *not* the same outcome as spending a budget and must never be reported as one.
+ * It is a **discriminated union**, not one shape with optional members, and that is
+ * deliberate. An `EXCEEDED` refusal is an accounting: it names the dimension that ran out,
+ * what was accounted and what the limit was, and those three numbers are what the Run Layer
+ * persists when it settles `BUDGET_EXCEEDED`. A shape that made them optional would let a
+ * consumer read `undefined` for a Run's own accounting and substitute a default — which is
+ * exactly the second accounting authority the frozen contract exists to prevent.
+ *
+ * `UNAVAILABLE` is the fail-closed case: enforcement could not be established at all, which is
+ * deliberately *not* the same outcome as spending a budget and must never be reported as one.
+ * It carries a reason instead of numbers, so the two arms cannot be confused for each other.
  */
-export interface AgentBudgetBlock {
-  readonly kind: "EXCEEDED" | "UNAVAILABLE";
-  readonly dimension?: "TOOL_CALLS" | "TOKENS" | "COST";
-  readonly accounted?: number;
-  readonly limit?: number;
-  readonly limitMicros?: number;
-  readonly accountedMicros?: number;
-  readonly reason?: "PRICING" | "TOKEN_ESTIMATE";
-}
+export type AgentBudgetBlock =
+  | {
+      readonly kind: "EXCEEDED";
+      /** Which budget ran out. A Tool batch can only exhaust `TOOL_CALLS`. */
+      readonly dimension: "TOOL_CALLS" | "TOKENS" | "COST";
+      readonly accounted: number;
+      readonly limit: number;
+      readonly limitMicros?: number;
+      readonly accountedMicros?: number;
+    }
+  | { readonly kind: "UNAVAILABLE"; readonly reason: "PRICING" | "TOKEN_ESTIMATE" };
 
 /** What admission is asked about. */
 export interface ModelRequestAdmissionInput {

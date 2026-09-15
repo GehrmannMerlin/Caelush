@@ -7,7 +7,7 @@ import {
   type AgentState,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
-import { createToolSecurityContext } from "../src/run-controller.js";
+import { createToolSecurityContext } from "../src/tool-security-context.js";
 
 const run = AgentRunSchema.parse({
   id: createRunId(),

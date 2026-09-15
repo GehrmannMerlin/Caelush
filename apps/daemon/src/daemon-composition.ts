@@ -7,6 +7,7 @@ import {
   createLegacyModelTurnExecutor,
   createProjectProfileProvider,
   createRunAgentExecutionContext,
+  createToolExecutionLedgerRawObservationResolver,
   toAIMessage,
   type LegacyModelTurnExecutor,
   type RunAgentExecutionContextFactory,
@@ -353,6 +354,18 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
       : { debug: { emit: options.toolCallingDebugWriter } }),
   });
   const toolCoordinator = new ToolBatchCoordinator(dispatcher);
+  /**
+   * Where a Tool result's raw output is resolved from, for the legacy Context adapter.
+   *
+   * A forced Context recovery re-projects the unbounded Tool output under a tighter policy, and the
+   * frozen `AIToolResultMessage` deliberately has no field for the artifact pointer that finds it.
+   * The Tool execution ledger already holds it, keyed by the same `(run, step, externalCallId)`
+   * identity the invocation was executed under, so this is a lookup over durable data rather than a
+   * second store — and it is what makes the recovery survive a restart.
+   */
+  const rawObservationRefs = createToolExecutionLedgerRawObservationResolver({
+    store: options.storage.toolExecution,
+  });
   const scopes = new RunExecutionScopeRegistry();
   const deadlineRegistry = new RunDeadlineRegistry({ clock });
   const retryRegistry = new RunRetryRegistry({ clock });
@@ -405,6 +418,8 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
             baseSystemPrompt: input.baseSystemPrompt,
             contextLimits: input.contextLimits,
             workspace: input.run.workspace,
+            runId: input.run.id,
+            rawObservationRefs,
             ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
             ...(input.explicitPaths === undefined ? {} : { explicitPaths: input.explicitPaths }),
             ...(input.verificationRepairContext === undefined
