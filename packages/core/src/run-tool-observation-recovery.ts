@@ -1,4 +1,5 @@
 import type { RunId, StepId } from "@caelush/protocol";
+import type { ToolExecutionStorePort } from "@caelush/tools";
 
 /**
  * Where a Tool's raw output pointer is resolved from, durably.
@@ -46,13 +47,13 @@ export interface ToolRawObservationRefResolver {
  * it needs no migration, no second table and no copy of the pointer in the Run's own rows.
  */
 export function createToolExecutionLedgerRawObservationResolver(dependencies: {
-  readonly store: {
-    findByExternalCall(
-      runId: RunId,
-      stepId: StepId,
-      externalCallId: string,
-    ): Promise<{ readonly observation?: { readonly rawArtifactRef?: string } | undefined } | null>;
-  };
+  /**
+   * The durable Tool execution ledger.
+   *
+   * It is the Tool Layer's own store port — not a Core-private copy of its shape — so the lookup
+   * cannot drift from the rows it reads.
+   */
+  readonly store: Pick<ToolExecutionStorePort, "findByExternalCall">;
 }): ToolRawObservationRefResolver {
   return {
     async resolve({ runId, sourceStepId, externalCallId }): Promise<string | undefined> {

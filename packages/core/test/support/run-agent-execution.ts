@@ -57,6 +57,14 @@ export interface FakeFrozenModelTurnExecutor extends ModelTurnExecutor {
   readonly requests: readonly AIModelRequest[];
   readonly signals: readonly AbortSignal[];
   callCount(): number;
+  /**
+   * Replace the script for the calls that have not happened yet.
+   *
+   * A test that parks a Run on a durable boundary and then drives the *recovery* needs a different
+   * answer for the resume turn than for the turn that opened the boundary. The recorded request list
+   * is deliberately preserved: how many provider turns really happened is the fact under test.
+   */
+  resetScript(script: FrozenModelTurnScript): void;
 }
 
 /**
@@ -71,18 +79,22 @@ export function fakeFrozenModelTurnExecutor(
 ): FakeFrozenModelTurnExecutor {
   const requests: AIModelRequest[] = [];
   const signals: AbortSignal[] = [];
-
-  return {
+  const executor = {
     requests,
     signals,
     callCount: () => requests.length,
-    async execute(input): Promise<ModelTurnExecutionResult> {
+    resetScript(next: FrozenModelTurnScript): void {
+      state.script = next;
+    },
+    async execute(
+      input: Parameters<ModelTurnExecutor["execute"]>[0],
+    ): Promise<ModelTurnExecutionResult> {
       const callIndex = requests.length;
       requests.push(input.request);
       signals.push(input.signal);
       if (input.signal.aborted) return { kind: "CANCELLED" };
       try {
-        const answer = await script(input.request, input.signal, callIndex);
+        const answer = await state.script(input.request, input.signal, callIndex);
         if (isFrozenResult(answer)) return answer;
         return { kind: "COMPLETED", result: modelTurnResult(answer) };
       } catch (error) {
@@ -91,6 +103,8 @@ export function fakeFrozenModelTurnExecutor(
       }
     },
   };
+  const state = { script };
+  return executor;
 }
 
 function isFrozenResult(value: unknown): value is ModelTurnExecutionResult {
