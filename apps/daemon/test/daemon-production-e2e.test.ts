@@ -184,6 +184,24 @@ describe("daemon production composition E2E", () => {
         "run.completed",
       ]),
     );
+    // Phase 3D: the production composition drives Tool batches through the frozen
+    // `RunExecutionDriver` over the real run-scoped adapter. Nothing here is a placeholder — the
+    // placeholder throws, so the Run would have failed before it could complete — and nothing is
+    // dispatched twice: each announced Tool call settles exactly one durable invocation.
+    const toolEvents = events.filter(
+      (event) => event.type === "tool.requested" || event.type === "tool.completed",
+    );
+    expect(toolEvents.map((event) => event.type)).toEqual([
+      "tool.requested",
+      "tool.completed",
+      "tool.requested",
+      "tool.completed",
+    ]);
+    expect(
+      toolEvents.map((event) =>
+        event.type === "tool.requested" ? (event.payload as { toolName?: string }).toolName : "",
+      ),
+    ).toEqual(["read_file", "", "apply_patch", ""]);
     expect(settled.finalResult).toMatchObject({ type: "VERIFIED_COMPLETION" });
     const usage = await client.getRunContextUsage(run.id);
     expect(usage).not.toBeNull();
