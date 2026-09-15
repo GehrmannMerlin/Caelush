@@ -183,6 +183,11 @@ export type {
   SuspendDirective,
 } from "./run/directive.js";
 export type { RunTransitionPlanInput, RunTransitionPlanner } from "./run/run-transition-planner.js";
+export {
+  createRunTransitionPlanner,
+  DefaultRunTransitionPlanner,
+  planRunTransition,
+} from "./run/default-run-transition-planner.js";
 export { createRunExecutionDriver } from "./run/run-execution-driver.js";
 export type {
   RunExecutionDriver,
@@ -216,6 +221,8 @@ export {
   isTerminalRunStatus,
 } from "./run/state/run-execution-invariant.js";
 
+/* C4-B-PLACEHOLDER */
+
 /* The durable Run continuation domain. */
 export {
   RUN_CONTINUATION_TYPES,
@@ -241,11 +248,13 @@ export type {
   ToolTurnResult,
   WaitingApprovalBoundary,
 } from "./run/ports/tool-turn.js";
-export { COMPLETION_GATE_OUTCOMES } from "./run/ports/completion-gate.js";
+export { COMPLETION_GATE_KINDS } from "./run/ports/completion-gate.js";
 export type {
+  AgentCompletionResult,
   CompletionGate,
   CompletionGateDecision,
-  CompletionGateRequest,
+  CompletionGateInput,
+  CompletionRepairRequest,
 } from "./run/ports/completion-gate.js";
 
 /* The canonical durable Step lifecycle and its AgentState projection. */

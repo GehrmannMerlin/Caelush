@@ -1,5 +1,6 @@
-import type { AgentError, StepId } from "@caelush/protocol";
+import type { AgentError, JsonObject, StepId } from "@caelush/protocol";
 
+import type { AgentExecutionIdentity } from "../../loop/types.js";
 import type { AgentFinalCandidateDecision } from "../../loop/decision/decision.js";
 import type { RunExecutionMode } from "../directive.js";
 
@@ -19,45 +20,118 @@ import type { RunExecutionMode } from "../directive.js";
  * gate, workspace and Git freshness, the completion seal — belong to Phase 3E, and nothing here
  * implements or approximates them.
  *
- * The four outcomes are closed and each means something different to the Run Layer:
+ * The four decisions are closed, discriminated by `kind`, and each means something different to
+ * the Run Layer:
  *
  * ```text
- * ACCEPT   the candidate may become the Run result; the gate produced its evidence
+ * ACCEPT   the candidate may become the Run result; the gate carries the result it accepted
  * REPAIR   the same Run should try again with a new candidate
- * REJECT   the candidate is refused, and the Run fails with a verification error
- * ERROR    the gate could not decide; the Run stays recoverable rather than guessing
+ * REJECT   the candidate is refused, and the Run fails with this error
+ * ERROR    the gate could not decide; `retryable` says whether a fresh attempt may help
  * ```
  */
-export type CompletionGateDecision =
-  | { readonly outcome: "ACCEPT" }
-  | { readonly outcome: "REPAIR"; readonly repairRef: string; readonly cycle: number }
-  | { readonly outcome: "REJECT"; readonly reason: string }
-  | { readonly outcome: "ERROR"; readonly error: AgentError };
 
-/** Every completion outcome, in canonical order. */
-export const COMPLETION_GATE_OUTCOMES = [
+/**
+ * The result a gate accepted, in the general completion vocabulary.
+ *
+ * `JsonObject` because the durable `AgentRun.finalResult` is a Protocol JSON value: the general
+ * Run Layer must be able to persist whatever a general gate accepted without knowing what a
+ * coding gate would have put there. `type` is the discriminated spelling a host may project on,
+ * and `text` is the answer itself.
+ *
+ * Deliberately **not** `VerifiedRunFinalResult`: that is a coding-verification artefact carrying
+ * evidence and a seal, and a general Run must be able to complete without one.
+ */
+export type AgentCompletionResult = JsonObject & {
+  readonly type: string;
+
+  readonly text: string;
+};
+
+/**
+ * What a gate wants a Run to do differently on its next attempt.
+ *
+ * Described in the host's own terms rather than a coding subsystem's: `repairRef` names the
+ * decision the host should act on, `cycle` bounds it, and `metadata` is where a host puts whatever
+ * else its own repair policy needs. The kernel does not interpret any of it.
+ */
+export interface CompletionRepairRequest {
+  readonly repairRef: string;
+
+  readonly cycle: number;
+
+  readonly reason: string;
+
+  readonly metadata?: JsonObject;
+}
+
+/** What one completion evaluation decided. */
+export type CompletionGateDecision =
+  | {
+      readonly kind: "ACCEPT";
+
+      readonly finalResult: AgentCompletionResult;
+    }
+  | {
+      readonly kind: "REPAIR";
+
+      readonly repair: CompletionRepairRequest;
+    }
+  | {
+      readonly kind: "REJECT";
+
+      readonly error: AgentError;
+    }
+  | {
+      readonly kind: "ERROR";
+
+      readonly error: AgentError;
+
+      readonly retryable: boolean;
+    };
+
+/** Every completion decision discriminant, in canonical order. */
+export const COMPLETION_GATE_KINDS = [
   "ACCEPT",
   "REPAIR",
   "REJECT",
   "ERROR",
-] as const satisfies readonly CompletionGateDecision["outcome"][];
+] as const satisfies readonly CompletionGateDecision["kind"][];
 
 /**
  * What one completion evaluation is asked about.
  *
  * Self-contained for the same reason the Tool request is: the candidate was already produced and
  * named, so the gate receives it rather than re-reading a Run to find it.
+ *
+ * `identity` is carried because a completion decision is about a *Run*, not only about a string of
+ * text: a gate that produces durable evidence has to name the Run and session it belongs to, and a
+ * gate that read them from somewhere else would be a second identity authority.
  */
-export interface CompletionGateRequest {
+export interface CompletionGateInput {
+  readonly identity: AgentExecutionIdentity;
+
+  readonly sourceStepId: StepId;
+
+  readonly candidate: AgentFinalCandidateDecision;
+
   /** `EXECUTE` evaluates a fresh candidate; `RECOVER` re-evaluates one a restart found. */
   readonly mode: RunExecutionMode;
-  readonly sourceStepId: StepId;
-  readonly candidate: AgentFinalCandidateDecision;
+
   /** The caller's cancellation signal, forwarded unchanged. */
   readonly signal: AbortSignal;
 }
 
-/** Evaluate one final candidate. Phase 3E owns its production implementation. */
+/**
+ * Evaluate one final candidate.
+ *
+ * `id` names the gate the Run Layer configured, so a decision can be attributed to the policy that
+ * produced it without the decision itself carrying presentation data.
+ *
+ * Phase 3E owns its production implementation.
+ */
 export interface CompletionGate {
-  evaluate(request: CompletionGateRequest): Promise<CompletionGateDecision>;
+  readonly id: string;
+
+  evaluate(input: CompletionGateInput): Promise<CompletionGateDecision>;
 }

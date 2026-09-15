@@ -126,6 +126,10 @@ export function createRunExecutionDriver(
         }
         case "EVALUATE_COMPLETION": {
           const result = await dependencies.completionGate.evaluate({
+            // The identity comes from the execution context, which is the only place the Run the
+            // effect runs for is known. A gate that produced durable evidence without it would
+            // have to invent one.
+            identity: context.identity,
             mode: directive.mode,
             sourceStepId: directive.sourceStepId,
             candidate: directive.candidate,

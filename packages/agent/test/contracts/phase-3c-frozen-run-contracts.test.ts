@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type {
+  AgentCompletionResult,
   AgentLoopAdvanceResult,
   AgentTurnInput,
   CompletionGate,
   CompletionGateDecision,
+  CompletionRepairRequest,
   EvaluateCompletionDirective,
   ExecuteToolBatchDirective,
   AdvanceAgentDirective,
@@ -46,6 +48,14 @@ type Equal<A, B> =
 
 type Expect<T extends true> = T;
 type Keys<T> = keyof T;
+/**
+ * Every key any variant of a union declares.
+ *
+ * `keyof (A | B)` is the *intersection* of the variants' keys, so a union-wide key assertion built
+ * on `Keys` alone is vacuous: it can never see a member that only some variants carry, which is
+ * exactly the drift these assertions exist to catch. This distributes first.
+ */
+type VariantKeys<T> = T extends unknown ? keyof T : never;
 
 /* ------------------------------------------------------- frozen restatements */
 
@@ -115,10 +125,48 @@ type FrozenToolTurnResult =
     };
 
 type FrozenCompletionGateDecision =
-  | { readonly outcome: "ACCEPT" }
-  | { readonly outcome: "REPAIR"; readonly repairRef: string; readonly cycle: number }
-  | { readonly outcome: "REJECT"; readonly reason: string }
-  | { readonly outcome: "ERROR"; readonly error: import("@caelush/protocol").AgentError };
+  | {
+      readonly kind: "ACCEPT";
+      readonly finalResult: AgentCompletionResult;
+    }
+  | {
+      readonly kind: "REPAIR";
+      readonly repair: CompletionRepairRequest;
+    }
+  | {
+      readonly kind: "REJECT";
+      readonly error: import("@caelush/protocol").AgentError;
+    }
+  | {
+      readonly kind: "ERROR";
+      readonly error: import("@caelush/protocol").AgentError;
+      readonly retryable: boolean;
+    };
+
+type FrozenAgentCompletionResult = import("@caelush/protocol").JsonObject & {
+  readonly type: string;
+  readonly text: string;
+};
+
+interface FrozenCompletionRepairRequest {
+  readonly repairRef: string;
+  readonly cycle: number;
+  readonly reason: string;
+  readonly metadata?: import("@caelush/protocol").JsonObject;
+}
+
+interface FrozenCompletionGateInput {
+  readonly identity: import("@caelush/agent").AgentExecutionIdentity;
+  readonly sourceStepId: StepId;
+  readonly candidate: import("@caelush/agent").AgentFinalCandidateDecision;
+  readonly mode: FrozenRunExecutionMode;
+  readonly signal: AbortSignal;
+}
+
+interface FrozenCompletionGate {
+  readonly id: string;
+  evaluate(input: FrozenCompletionGateInput): Promise<CompletionGateDecision>;
+}
 
 interface FrozenRunExecutionDriverDependencies {
   readonly agentLoop: AgentLoop;
@@ -258,19 +306,68 @@ type ToolTurnKinds = Expect<
     "COMPLETED" | "WAITING_APPROVAL" | "BUDGET_EXCEEDED" | "RESOURCE_WAIT" | "REPLAN"
   >
 >;
+/* The completion gate contract: four `kind`-discriminated decisions, no `outcome`, no drift. */
 type CompletionDecisionExact = Expect<Equal<CompletionGateDecision, FrozenCompletionGateDecision>>;
-type CompletionOutcomes = Expect<
-  Equal<CompletionGateDecision["outcome"], "ACCEPT" | "REPAIR" | "REJECT" | "ERROR">
+type CompletionDecisionKinds = Expect<
+  Equal<CompletionGateDecision["kind"], "ACCEPT" | "REPAIR" | "REJECT" | "ERROR">
 >;
-type CompletionGateExact = Expect<
+/** `outcome` was the drift. A restatement that reintroduces it must fail to compile. */
+type CompletionDecisionHasNoOutcome = Expect<
+  Equal<Extract<VariantKeys<CompletionGateDecision>, "outcome">, never>
+>;
+type CompletionDecisionHasNoTopLevelRepairRef = Expect<
+  Equal<Extract<VariantKeys<CompletionGateDecision>, "repairRef" | "cycle" | "reason">, never>
+>;
+type CompletionAcceptKeys = Expect<
+  Equal<Keys<Extract<CompletionGateDecision, { kind: "ACCEPT" }>>, "kind" | "finalResult">
+>;
+type CompletionRepairKeys = Expect<
+  Equal<Keys<Extract<CompletionGateDecision, { kind: "REPAIR" }>>, "kind" | "repair">
+>;
+type CompletionRejectKeys = Expect<
+  Equal<Keys<Extract<CompletionGateDecision, { kind: "REJECT" }>>, "kind" | "error">
+>;
+type CompletionErrorKeys = Expect<
+  Equal<Keys<Extract<CompletionGateDecision, { kind: "ERROR" }>>, "kind" | "error" | "retryable">
+>;
+type CompletionAcceptIsNotVerifiedResult = Expect<
   Equal<
-    CompletionGate,
-    {
-      evaluate(
-        request: import("@caelush/agent").CompletionGateRequest,
-      ): Promise<CompletionGateDecision>;
-    }
+    Extract<CompletionGateDecision, { kind: "ACCEPT" }>["finalResult"],
+    import("@caelush/agent").AgentCompletionResult
   >
+>;
+type CompletionResultExact = Expect<
+  Equal<import("@caelush/agent").AgentCompletionResult, FrozenAgentCompletionResult>
+>;
+type CompletionRepairRequestExact = Expect<
+  Equal<import("@caelush/agent").CompletionRepairRequest, FrozenCompletionRepairRequest>
+>;
+type CompletionRepairRequestKeys = Expect<
+  Equal<
+    Keys<import("@caelush/agent").CompletionRepairRequest>,
+    "repairRef" | "cycle" | "reason" | "metadata"
+  >
+>;
+type CompletionGateInputExact = Expect<
+  Equal<import("@caelush/agent").CompletionGateInput, FrozenCompletionGateInput>
+>;
+type CompletionGateInputKeys = Expect<
+  Equal<
+    Keys<import("@caelush/agent").CompletionGateInput>,
+    "identity" | "sourceStepId" | "candidate" | "mode" | "signal"
+  >
+>;
+type CompletionGateExact = Expect<Equal<CompletionGate, FrozenCompletionGate>>;
+type CompletionGateKeys = Expect<Equal<Keys<CompletionGate>, "id" | "evaluate">>;
+type CompletionGateKindsConstant = Expect<
+  Equal<
+    (typeof import("@caelush/agent").COMPLETION_GATE_KINDS)[number],
+    "ACCEPT" | "REPAIR" | "REJECT" | "ERROR"
+  >
+>;
+/** The drifted request type is gone, not aliased. */
+type CompletionRequestNameIsRetired = Expect<
+  Equal<Extract<keyof typeof import("@caelush/agent"), "CompletionGateRequest">, never>
 >;
 type ToolTurnCoordinatorExact = Expect<
   Equal<
@@ -417,6 +514,10 @@ export const FROZEN_RUN_CONTRACT_MARKERS = [
   "RunExecutionEffectResult",
   "ToolTurnResult",
   "CompletionGateDecision",
+  "AgentCompletionResult",
+  "CompletionRepairRequest",
+  "CompletionGateInput",
+  "CompletionGate",
   "RunExecutionDriverDependencies",
   "RunExecutionDriver",
   "RunTransitionPlanInput",
@@ -462,8 +563,23 @@ export type PHASE_3C_ASSERTIONS = [
   ToolTurnExact,
   ToolTurnKinds,
   CompletionDecisionExact,
-  CompletionOutcomes,
+  CompletionDecisionKinds,
+  CompletionDecisionHasNoOutcome,
+  CompletionDecisionHasNoTopLevelRepairRef,
+  CompletionAcceptKeys,
+  CompletionRepairKeys,
+  CompletionRejectKeys,
+  CompletionErrorKeys,
+  CompletionAcceptIsNotVerifiedResult,
+  CompletionResultExact,
+  CompletionRepairRequestExact,
+  CompletionRepairRequestKeys,
+  CompletionGateInputExact,
+  CompletionGateInputKeys,
   CompletionGateExact,
+  CompletionGateKeys,
+  CompletionGateKindsConstant,
+  CompletionRequestNameIsRetired,
   ToolTurnCoordinatorExact,
   DriverDependenciesExact,
   DriverDependenciesKeys,
