@@ -79,6 +79,12 @@ import { resolveRunTerminationAuthority } from "./run-termination-authority.js";
 import { toAgentExecutionSnapshot } from "./run-execution-facts.js";
 import { toLegacyMessage } from "./ai-invocation-projection.js";
 import {
+  createAgentModelTurnBoundary,
+  createAgentTurnObservation,
+  requiresBoundaryRepair,
+  type PendingAgentTurn,
+} from "./run-model-turn-boundary.js";
+import {
   createRunCommitEventMaterializer,
   type RunCommitEventMaterializer,
 } from "./run-commit-event-materializer.js";
@@ -1116,6 +1122,23 @@ export class RunController {
       verificationRepairContext = { text: repairContext.text };
     }
     let preProviderError: unknown;
+    // The Core-private record of what the durable boundary, the Context Engine and the provider
+    // actually did for this turn. It is what lets a boundary commit failure be surfaced as an
+    // infrastructure failure instead of being settled as a model outcome (§36–§38).
+    const turnObservation = createAgentTurnObservation();
+    let pendingTurn: PendingAgentTurn | undefined;
+    const boundary = createAgentModelTurnBoundary({
+      observation: turnObservation,
+      pendingTurn: () => {
+        if (pendingTurn === undefined) {
+          throw new RunControllerInvariantError(
+            "Model turn boundary was entered before the Run Layer opened a turn.",
+          );
+        }
+        return pendingTurn;
+      },
+      openTurn: (turn) => this.openAgentTurn(turn),
+    });
     const loop = this.dependencies.agentLoop.withLifecycleHooks({
       beforeProviderAdmission: async ({ run, step, request }) => {
         if (this.dependencies.budget === undefined) return request;
@@ -1132,7 +1155,12 @@ export class RunController {
               : { configuredMaxOutputTokens: request.settings.maxOutputTokens }),
           },
         });
-        if (admission.kind !== "ALLOWED") throw new AgentBudgetAdmissionError(admission);
+        if (admission.kind !== "ALLOWED") {
+          // The exact durable block, accounting included: the Run Layer settles with these numbers
+          // and must not have to reconstruct them from the frozen error.
+          turnObservation.admissionBlock = admission;
+          throw new AgentBudgetAdmissionError(admission);
+        }
         if (admission.effectiveMaxOutputTokens === undefined) return request;
         return {
           ...request,
@@ -1140,50 +1168,21 @@ export class RunController {
         };
       },
       beforeProviderTurn: async ({ run, state, step }) => {
-        const current = await this.load(run.id);
-        if (current.state === undefined)
-          throw new RunControllerInfrastructureError("Run state disappeared before provider turn");
-        const activeRun = AgentRunSchema.parse({ ...run, currentStepId: step.id });
-        const activeState = { ...state, currentStepId: step.id };
+        // The Run Layer prepared this turn; the boundary validates the frozen input against it,
+        // enforces idempotence, and commits through the RunController-owned callback. Nothing is
+        // committed here directly: the boundary holds no store.
+        pendingTurn = {
+          identity: { runId: run.id, sessionId: run.sessionId, goal: run.goal },
+          run,
+          state,
+          step,
+        };
         try {
-          const retry =
-            current.continuation?.type === "WAITING_RETRY" ? current.continuation : undefined;
-          const repair =
-            current.continuation?.type === "WAITING_VERIFICATION_REPAIR"
-              ? current.continuation
-              : undefined;
-          const commit = await this.commit({
-            run: activeRun,
-            state: activeState,
-            expectedStateRevision: current.stateRevision ?? null,
-            expectedContinuationRevision: current.continuationRevision ?? null,
-            stepWrites: [{ operation: "INSERT", step }],
-            messagesToAppend: [],
-            ...(retry === undefined && repair === undefined
-              ? {}
-              : { continuation: { operation: "CLEAR" as const } }),
-            events: [
-              ...(retry === undefined
-                ? []
-                : [
-                    this.eventFactory.retryStarted(
-                      run,
-                      step,
-                      retry.attempt,
-                      retry.maxAttempts,
-                      this.nextEventId(),
-                      this.dependencies.clock.now(),
-                    ),
-                  ]),
-              this.eventFactory.llmStarted(
-                run,
-                step,
-                this.nextEventId(),
-                this.dependencies.clock.now(),
-              ),
-            ],
+          await boundary.beforeExecute({
+            identity: pendingTurn.identity,
+            turn: { stepId: step.id, sequence: step.sequence },
+            model: run.model,
           });
-          this.notify(commit.events);
         } catch (error) {
           preProviderError = error;
           throw error;
@@ -1263,12 +1262,99 @@ export class RunController {
     } else {
       execution = await loop.run({ ...input, signal });
     }
-    if (preProviderError !== undefined) {
-      throw new RunControllerInfrastructureError("Unable to durably checkpoint provider turn", {
-        cause: preProviderError,
+    if (preProviderError !== undefined || requiresBoundaryRepair(turnObservation)) {
+      // The durable open-Step commit did not succeed. No provider call was allowed, no Agent effect
+      // exists, and settling this as a model failure would durably record an answer the model never
+      // gave. The Run stays recoverable and the caller repairs or retries.
+      throw new RunControllerInfrastructureError("Unable to durably open the model turn", {
+        cause: turnObservation.boundaryError ?? preProviderError,
       });
     }
     return this.settle(snapshot, execution, advancement, config.projectFacts);
+  }
+
+  /**
+   * The RunController-owned durable open-Step commit.
+   *
+   * ```text
+   * this is the only place a model turn's Step becomes durable
+   * and it happens before any provider I/O
+   * ```
+   *
+   * The boundary calls it; it is not the boundary's own commit. That is what keeps a single
+   * lifecycle committer: a boundary object that held a store would be a second authority able to
+   * write a Run status, and nothing would record which of the two actually did.
+   *
+   * It is idempotent for the turn it was asked to open, and it fails closed for any other durable
+   * state: overwriting a different active Step would lose an attempt the ledger already recorded.
+   */
+  private async openAgentTurn(pending: PendingAgentTurn): Promise<void> {
+    const current = await this.load(pending.identity.runId);
+    if (current.state === undefined) {
+      throw new RunControllerInfrastructureError("Run state disappeared before provider turn");
+    }
+
+    const active = current.activeStep;
+    const alreadyOpen =
+      active !== undefined &&
+      active.id === pending.step.id &&
+      active.sequence === pending.step.sequence &&
+      active.status === "RUNNING" &&
+      current.run.currentStepId === pending.step.id &&
+      current.state.currentStepId === pending.step.id;
+    // An exact replay of a turn this ledger already opened. Resolving without committing is the
+    // whole point: a second commit would insert a second Step and publish a second `llm.started`.
+    if (alreadyOpen) return;
+
+    if (current.run.currentStepId !== undefined || active !== undefined) {
+      throw new RunExecutionInvariantError(
+        "A model turn cannot open while a different Step is already active.",
+      );
+    }
+
+    const activeRun = AgentRunSchema.parse({ ...pending.run, currentStepId: pending.step.id });
+    const activeState = { ...pending.state, currentStepId: pending.step.id };
+    const retry = current.continuation?.type === "WAITING_RETRY" ? current.continuation : undefined;
+    const repair =
+      current.continuation?.type === "WAITING_VERIFICATION_REPAIR"
+        ? current.continuation
+        : undefined;
+
+    const commit = await this.commit({
+      run: activeRun,
+      state: activeState,
+      expectedStateRevision: current.stateRevision ?? null,
+      expectedContinuationRevision: current.continuationRevision ?? null,
+      stepWrites: [{ operation: "INSERT", step: pending.step }],
+      messagesToAppend: [],
+      // A retry or a repair boundary is consumed by opening the turn, so it is cleared in the same
+      // atomic transition. A `TOOL_RESULTS` continuation is deliberately *not* cleared: it is the
+      // durable provenance the effect settlement still needs (§28).
+      ...(retry === undefined && repair === undefined
+        ? {}
+        : { continuation: { operation: "CLEAR" as const } }),
+      events: [
+        ...(retry === undefined
+          ? []
+          : [
+              this.eventFactory.retryStarted(
+                pending.run,
+                pending.step,
+                retry.attempt,
+                retry.maxAttempts,
+                this.nextEventId(),
+                this.dependencies.clock.now(),
+              ),
+            ]),
+        this.eventFactory.llmStarted(
+          pending.run,
+          pending.step,
+          this.nextEventId(),
+          this.dependencies.clock.now(),
+        ),
+      ],
+    });
+    this.notify(commit.events);
   }
 
   /**
