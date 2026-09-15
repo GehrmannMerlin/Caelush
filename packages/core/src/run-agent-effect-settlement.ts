@@ -1,5 +1,6 @@
 import type { AdvanceAgentDirective, AgentLoopAdvanceResult } from "@caelush/agent";
-import type { AgentLoopExecutionResult } from "./agent-loop-input.js";
+
+import type { AgentTurnObservation } from "./run-model-turn-boundary.js";
 
 /**
  * The production Agent effect settlement router.
@@ -18,8 +19,12 @@ import type { AgentLoopExecutionResult } from "./agent-loop-input.js";
  * RETRY_COMPATIBILITY           the legacy Run Retry Policy bridge
  * TERMINATION_AUTHORITY         cancellation and death, which own their own atomic cleanup
  * BUDGET_AUTHORITY              a durable budget refusal, which owns its own accounting
- * COMPATIBILITY                 every outcome with no frozen result behind it
  * ```
+ *
+ * It consumes the **frozen** `AgentLoopAdvanceResult` directly. Phase 3C checkpoint 6 replaced the
+ * legacy `AgentLoopExecutionResult` this router used to classify, so there is no compatibility
+ * projection in the production Agent path any more: the object `advance()` returned is the object
+ * the planner plans from.
  *
  * **Classification is by typed discriminant only.** No branch of this file reads an error message,
  * a status string or a provider code: a router that guessed from text would be a second authority
@@ -42,86 +47,60 @@ export type AgentEffectSettlementRoute =
   | { readonly route: "VERIFICATION_COMPATIBILITY" }
   | { readonly route: "RETRY_COMPATIBILITY" }
   | { readonly route: "TERMINATION_AUTHORITY" }
-  | { readonly route: "BUDGET_AUTHORITY" }
-  | { readonly route: "COMPATIBILITY" };
+  | { readonly route: "BUDGET_AUTHORITY" };
 
 export interface AgentEffectSettlementInput {
-  readonly execution: AgentLoopExecutionResult;
+  /** The exact frozen result `AgentLoop.advance()` returned. */
+  readonly result: AgentLoopAdvanceResult;
   /**
-   * The directive the coordinator produced for this effect, when it produced one.
+   * The directive the coordinator produced for this effect.
    *
-   * Absent means the durable state this effect ran against has no routable advance decision — the
-   * epoch-specific compatibility path reached a state the coordinator would not have routed. It is
-   * never a reason to guess a directive: the effect is settled by the compatibility authority.
+   * It is never optional in the production path: a Driver effect is only ever executed because the
+   * coordinator decided on it, so a canonical Agent effect always has one. It stays a parameter
+   * because the router must not be able to invent one, and because a `FINAL_CANDIDATE` is settled by
+   * the verification bridge *instead of* the planner.
    */
-  readonly directive: AdvanceAgentDirective | undefined;
+  readonly directive: AdvanceAgentDirective;
+  /**
+   * The Core-private record of what the boundary, the Context Engine and the provider did.
+   *
+   * Two facts the frozen result deliberately does not carry are read from here, and from nowhere
+   * else: whether a provider turn actually ran, and whether the admission authority refused the
+   * turn with a durable block.
+   */
+  readonly observation: AgentTurnObservation;
 }
 
 /** Classify one executed Agent effect onto exactly one settlement authority. */
 export function classifyAgentEffectSettlement(
   input: AgentEffectSettlementInput,
 ): AgentEffectSettlementRoute {
-  const { execution, directive } = input;
+  const { result, directive, observation } = input;
+
+  // A refusal by the budget authority owns its own accounting and its own terminal settlement. The
+  // exact block the admission port returned is the authority — the frozen error is a projection of
+  // it, and re-deriving the numbers from the projection would lose them.
+  if (observation.admissionBlock !== undefined) return { route: "BUDGET_AUTHORITY" };
 
   // Cancellation is the termination authority's, whatever the kernel reported. Agent-level
-  // cancellation means a Reason stopped; it does not mean the Run is cancelled.
-  if (execution.status === "CANCELLED") return { route: "TERMINATION_AUTHORITY" };
+  // cancellation means a Reason stopped; it does not mean the Run is cancelled, and the Run
+  // Termination Authority decides what it means for the Run.
+  if (result.kind === "CANCELLED") return { route: "TERMINATION_AUTHORITY" };
 
-  // A durable budget refusal owns its own accounting and its own terminal settlement.
-  if (execution.status === "FAILED" && execution.budget?.kind === "EXCEEDED") {
-    return { route: "BUDGET_AUTHORITY" };
-  }
-
-  const canonical = execution.canonical;
-  // No frozen result behind this outcome: the facade produced it on its own — a failure before the
-  // provider was contacted, the `maxSteps` gate, an admission block. Nothing to plan from.
-  if (canonical === undefined) return { route: "COMPATIBILITY" };
-
-  if (canonical.kind === "FINAL_CANDIDATE") {
+  if (result.kind === "FINAL_CANDIDATE") {
     // Completion authority is Phase 3E. Until then the legacy verification bridge owns it, and the
     // planner's own FINAL_CANDIDATE branch stays fail-closed rather than being used as a fallback.
     return { route: "VERIFICATION_COMPATIBILITY" };
   }
 
-  if (canonical.kind === "FAILED" && execution.status === "FAILED") {
+  if (result.kind === "FAILED" && result.retry?.retryable === true) {
     // A retry needs an attempt number and a next attempt time the planner does not have. The Run
     // Retry Policy owns that decision; the planner must not invent a schedule.
-    return execution.retry?.retryable === true
-      ? { route: "RETRY_COMPATIBILITY" }
-      : canonicalRoute(directive, canonical);
+    return { route: "RETRY_COMPATIBILITY" };
   }
 
-  return canonicalRoute(directive, canonical);
-}
-
-function canonicalRoute(
-  directive: AdvanceAgentDirective | undefined,
-  result: AgentLoopAdvanceResult,
-): AgentEffectSettlementRoute {
-  return directive === undefined
-    ? { route: "COMPATIBILITY" }
-    : { route: "CANONICAL_AGENT_EFFECT", directive, result };
-}
-
-/**
- * Assert the compatibility execution epoch agrees with the coordinator's decision.
- *
- * `epoch` survives as a Core execution detail: it selects which legacy loop entry point runs. It is
- * *not* the planner's authority — the directive is — and this check is what keeps the two from
- * silently disagreeing. A disagreement is a routing bug, so it fails loudly rather than settling
- * the effect under whichever of the two happened to be consulted first.
- */
-export function assertExecutionEpochMatchesDirective(
-  epoch: "START" | "TOOL_RESULTS" | "VERIFICATION_REPAIR",
-  directive: AdvanceAgentDirective,
-): void {
-  const expected: Record<typeof epoch, readonly AdvanceAgentDirective["reason"][]> = {
-    START: ["INITIAL", "RETRY"],
-    TOOL_RESULTS: ["TOOL_RESULTS", "RETRY"],
-    VERIFICATION_REPAIR: ["COMPLETION_REPAIR"],
-  };
-  if (expected[epoch].includes(directive.reason)) return;
-  throw new Error(
-    `Run execution epoch ${epoch} disagrees with the coordinator's ${directive.reason} decision.`,
-  );
+  // Everything else the frozen contract can express — TOOL_REQUESTS and a non-retryable FAILED —
+  // is a transition the pure planner plans. A cancellation is deliberately *not* among them: it is
+  // the termination authority's, and the planner must not become a second cancellation authority.
+  return { route: "CANONICAL_AGENT_EFFECT", directive, result };
 }

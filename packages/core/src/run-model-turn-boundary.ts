@@ -1,7 +1,7 @@
 import type { ModelTurnExecutor } from "@caelush/agent";
 import { RunExecutionInvariantError } from "@caelush/agent";
 import type { ModelTurnBoundaryInput, ModelTurnBoundaryPort } from "@caelush/agent";
-import type { AgentRun, AgentState, AgentStep } from "@caelush/protocol";
+import type { ModelRef, StepId } from "@caelush/protocol";
 
 import type { AgentBudgetBlock } from "./agent-errors.js";
 import type { AgentProviderTurnState } from "./agent-loop-ports.js";
@@ -36,18 +36,43 @@ import type { AgentProviderTurnState } from "./agent-loop-ports.js";
  * observation the Run Layer reads before it decides anything. The frozen result is not modified.
  */
 
-/** The Run-Layer facts one Agent turn is opened with. */
+/**
+ * The Run-Layer facts one Agent turn is opened with.
+ *
+ * ```text
+ * the Step                  allocated in memory by the Run Layer; not durable yet
+ * the model                 the descriptor this turn was resolved against
+ * the advance reason        why durable execution is entering this turn
+ * expected revisions        the effect-start CAS the first open must compare against
+ * ```
+ *
+ * The Revision fields are the durable revisions the coordinator's own decision was made from. They
+ * are what stops a boundary from opening a turn against a snapshot that moved after the decision
+ * was taken: the first open compares against *those*, and only an exact durable replay of the same
+ * turn may resolve without committing.
+ *
+ * Stale mutable copies of the Run and the AgentState are deliberately absent. The boundary commits
+ * the *current* durable snapshot projected through `beginAgentStepState(...)`, so a pre-provider
+ * copy of either can never become the committed state.
+ */
 export interface PendingAgentTurn {
   readonly identity: ModelTurnBoundaryInput["identity"];
-  readonly run: AgentRun;
-  readonly state: AgentState;
+  readonly model: ModelRef;
   /**
    * The Step this turn will be durably opened as.
    *
    * Allocated by the Run Layer, never by the boundary: the layer that persists a Step is the layer
    * that names it, and a boundary that minted one would be a second Step identity authority.
    */
-  readonly step: AgentStep;
+  readonly step: import("@caelush/protocol").AgentStep;
+  /** Why this turn is being advanced. The continuation rules are keyed on it. */
+  readonly advanceReason: import("@caelush/agent").RunExecutionAdvanceReason;
+  /** The `AgentState` revision the coordinator's decision was made from. */
+  readonly expectedStateRevision: number | null;
+  /** The continuation revision the coordinator's decision was made from. */
+  readonly expectedContinuationRevision: number | null;
+  /** The durable Step that requested the Tools a `TOOL_RESULTS` turn answers, when there is one. */
+  readonly sourceStepId?: StepId | undefined;
 }
 
 /** What actually happened around one durable boundary and one provider turn. */
@@ -154,8 +179,8 @@ function assertBoundaryMatchesPendingTurn(
     );
   }
   if (
-    input.model.provider !== pending.run.model.provider ||
-    input.model.model !== pending.run.model.model
+    input.model.provider !== pending.model.provider ||
+    input.model.model !== pending.model.model
   ) {
     throw new RunExecutionInvariantError(
       "Model turn boundary model does not match the model the Run is bound to.",
