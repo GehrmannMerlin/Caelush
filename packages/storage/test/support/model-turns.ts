@@ -174,7 +174,7 @@ function toLegacyError(error: unknown): TestAIError {
   return aiError("AI_PROVIDER_ERROR", { message: "The model turn failed." });
 }
 
-function isTestAIError(value: unknown): value is TestAIError {
+export function isTestAIError(value: unknown): value is TestAIError {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as { readonly code?: unknown; readonly retryable?: unknown };
   return typeof candidate.code === "string" && typeof candidate.retryable === "boolean";

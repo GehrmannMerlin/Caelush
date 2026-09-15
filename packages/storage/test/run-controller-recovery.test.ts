@@ -8,12 +8,15 @@ import {
   createTimestampMs,
   createWorkspaceId,
 } from "@caelush/protocol";
-import { AgentLoop, RunController } from "@caelush/core";
+import { RunController } from "@caelush/core";
 import { EventBus } from "@caelush/events";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
 import { makeState, makeStep, verificationPlanner } from "./support/fixtures.js";
-import { fakeModelTurnExecutor, modelTurnResult, testModelCatalog } from "./support/model-turns.js";
+import {
+  fakeFrozenModelTurnExecutor,
+  testRunAgentExecution,
+} from "./support/run-agent-execution.js";
 
 function run() {
   return AgentRunSchema.parse({
@@ -37,37 +40,23 @@ function controller(
   output = "recovered",
 ) {
   let now = 20;
-  const loop = new AgentLoop({
-    inspector: { inspect: async () => ({}) as never },
-    planner: { plan: async () => ({}) as never },
-    contextBuilder: {
-      build: (input) => ({
-        messages:
-          input.mode === "TOOL_CONTINUATION"
-            ? input.currentTurnMessages
-            : [input.currentUserMessage],
-        report: {} as never,
-      }),
-    },
-    models: testModelCatalog(),
-    modelTurns: fakeModelTurnExecutor(async () => {
-      calls.count += 1;
-      return modelTurnResult({
-        callId: createLLMCallId(),
-        providerId: "fixture",
-        model: { provider: "fixture", model: "fixture-model" },
-        text: output,
-        toolCalls: [],
-        finishReason: "STOP",
-      });
-    }),
-    clock: { now: () => createTimestampMs(now++) },
-    stepIdFactory: { create: () => createStepId() },
-  });
   return new RunController({
-    agentLoop: loop,
+    agentExecution: testRunAgentExecution({
+      executor: fakeFrozenModelTurnExecutor(async () => {
+        calls.count += 1;
+        return {
+          callId: createLLMCallId(),
+          providerId: "fixture",
+          model: { provider: "fixture", model: "fixture-model" },
+          text: output,
+          toolCalls: [],
+          finishReason: "STOP",
+        };
+      }),
+      createStepId: () => createStepId(),
+    }).factory,
     executionStore: storage.execution,
-      verificationStore: storage.execution,
+    verificationStore: storage.execution,
     events: new EventBus(storage.events),
     configResolver: {
       resolve: async () => ({

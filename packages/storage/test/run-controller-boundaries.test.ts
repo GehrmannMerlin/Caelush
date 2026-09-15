@@ -1,7 +1,6 @@
 import {
   AgentRunSchema,
   createEventId,
-  createLLMCallId,
   createRunId,
   createSessionId,
   createStepId,
@@ -10,7 +9,6 @@ import {
 } from "@caelush/protocol";
 import type { LLMToolResultMessage } from "@caelush/llm/messages";
 import {
-  AgentLoop,
   RunController,
   RunControllerConflictError,
   RunDeadlineRegistry,
@@ -20,7 +18,11 @@ import { EventBus } from "@caelush/events";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
 import { verificationPlanner } from "./support/fixtures.js";
-import { fakeModelTurnExecutor, modelTurnResult, testModelCatalog } from "./support/model-turns.js";
+import type { PartialTurnResult } from "./support/model-turns.js";
+import {
+  fakeFrozenModelTurnExecutor,
+  testRunAgentExecution,
+} from "./support/run-agent-execution.js";
 
 function makeRun() {
   return AgentRunSchema.parse({
@@ -38,19 +40,19 @@ function makeRun() {
   });
 }
 
+/**
+ * One provider turn, as the frozen executor scripts it.
+ *
+ * Returning a partial result is the frozen contract: `fakeFrozenModelTurnExecutor` completes it
+ * through the same `modelTurnResult(...)` the legacy throwing fake used, so the turn the Run Layer
+ * observes is unchanged.
+ */
 function turn(
   text: string,
   toolCalls: AIModelTurnResult["toolCalls"],
   finishReason: AIModelTurnResult["finishReason"],
-): AIModelTurnResult {
-  return modelTurnResult({
-    callId: createLLMCallId(),
-    providerId: "fixture",
-    model: { provider: "fixture", model: "fixture-model" },
-    text,
-    toolCalls,
-    finishReason,
-  });
+): PartialTurnResult {
+  return { text, toolCalls, finishReason };
 }
 
 describe("RunController durable boundaries", () => {
@@ -81,25 +83,12 @@ describe("RunController durable boundaries", () => {
       },
     });
     const controller = new RunController({
-      agentLoop: new AgentLoop({
-        inspector: { inspect: async () => ({}) as never },
-        planner: { plan: async () => ({}) as never },
-        contextBuilder: {
-          build: (input) => ({
-            messages:
-              input.mode === "TOOL_CONTINUATION"
-                ? input.currentTurnMessages
-                : [input.currentUserMessage],
-            report: {} as never,
-          }),
-        },
-        models: testModelCatalog(),
-        modelTurns: fakeModelTurnExecutor(async () =>
+      agentExecution: testRunAgentExecution({
+        executor: fakeFrozenModelTurnExecutor(async () =>
           turn("need result", [{ id: "call_a", name: "read_file", input: {} }], "TOOL_CALLS"),
         ),
-        clock: { now: () => createTimestampMs(clock.value) },
-        stepIdFactory: { create: createStepId },
-      }),
+        createStepId,
+      }).factory,
       executionStore: storage.execution,
       verificationStore: storage.execution,
       events: eventBus,
@@ -153,25 +142,12 @@ describe("RunController durable boundaries", () => {
       turn("fixed", [], "STOP"),
     ];
     let now = 10;
-    const loop = new AgentLoop({
-      inspector: { inspect: async () => ({}) as never },
-      planner: { plan: async () => ({}) as never },
-      contextBuilder: {
-        build: (input) => ({
-          messages:
-            input.mode === "TOOL_CONTINUATION"
-              ? input.currentTurnMessages
-              : [input.currentUserMessage],
-          report: {} as never,
-        }),
-      },
-      models: testModelCatalog(),
-      modelTurns: fakeModelTurnExecutor(async () => results.shift()!),
-      clock: { now: () => createTimestampMs(now++) },
-      stepIdFactory: { create: () => createStepId() },
-    });
+    const agentExecution = testRunAgentExecution({
+      executor: fakeFrozenModelTurnExecutor(async () => results.shift()!),
+      createStepId: () => createStepId(),
+    }).factory;
     const controller = new RunController({
-      agentLoop: loop,
+      agentExecution,
       executionStore: storage.execution,
       verificationStore: storage.execution,
       events: eventBus,
@@ -255,26 +231,13 @@ describe("RunController durable boundaries", () => {
     let now = 10;
     let calls = 0;
     const controller = new RunController({
-      agentLoop: new AgentLoop({
-        inspector: { inspect: async () => ({}) as never },
-        planner: { plan: async () => ({}) as never },
-        contextBuilder: {
-          build: (input) => ({
-            messages:
-              input.mode === "TOOL_CONTINUATION"
-                ? input.currentTurnMessages
-                : [input.currentUserMessage],
-            report: {} as never,
-          }),
-        },
-        models: testModelCatalog(),
-        modelTurns: fakeModelTurnExecutor(async () => {
+      agentExecution: testRunAgentExecution({
+        executor: fakeFrozenModelTurnExecutor(async () => {
           calls += 1;
           return turns.shift()!;
         }),
-        clock: { now: () => createTimestampMs(now++) },
-        stepIdFactory: { create: () => createStepId() },
-      }),
+        createStepId: () => createStepId(),
+      }).factory,
       executionStore: storage.execution,
       verificationStore: storage.execution,
       events: eventBus,

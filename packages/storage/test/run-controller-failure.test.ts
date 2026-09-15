@@ -10,24 +10,22 @@ import {
 } from "@caelush/protocol";
 
 import {
-  AgentLoop,
   RunController,
   RunControllerInfrastructureError,
   RunRetryRegistry,
   type RunExecutionStore,
   type VerificationRunExecutionStoreExtension,
-  type AIModelTurnResult,
 } from "@caelush/core";
 import { EventBus } from "@caelush/events";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
 import { verificationPlanner } from "./support/fixtures.js";
+import { aiError, type PartialTurnResult } from "./support/model-turns.js";
 import {
-  fakeModelTurnExecutor,
-  modelTurnResult,
-  testModelCatalog,
-  aiError,
-} from "./support/model-turns.js";
+  fakeContextEngine,
+  fakeFrozenModelTurnExecutor,
+  testRunAgentExecution,
+} from "./support/run-agent-execution.js";
 
 function makeRun(maxSteps = 4) {
   return AgentRunSchema.parse({
@@ -47,8 +45,8 @@ function makeRun(maxSteps = 4) {
 
 async function setup(options: {
   maxSteps?: number;
-  complete: (count: number, signal: AbortSignal) => Promise<AIModelTurnResult>;
-  inspect?: () => Promise<never>;
+  complete: (count: number, signal: AbortSignal) => Promise<PartialTurnResult>;
+  contextFailure?: unknown;
   execution?: (
     storage: Awaited<ReturnType<typeof openCaelushStorage>>,
   ) => RunExecutionStore & VerificationRunExecutionStoreExtension;
@@ -72,27 +70,18 @@ async function setup(options: {
   eventBus.subscribe(run.id, (event) => events.push({ type: event.type }));
   const clockState = options.clockState ?? { value: 10 };
   let count = 0;
-  const loop = new AgentLoop({
-    inspector: { inspect: options.inspect ?? (async () => ({}) as never) },
-    planner: { plan: async () => ({}) as never },
-    contextBuilder: {
-      build: (input) => ({
-        messages:
-          input.mode === "TOOL_CONTINUATION"
-            ? input.currentTurnMessages
-            : [input.currentUserMessage],
-        report: {} as never,
-      }),
-    },
-    models: testModelCatalog(),
-    modelTurns: fakeModelTurnExecutor(async (_request, signal) =>
-      options.complete(++count, signal),
-    ),
-    clock: { now: () => createTimestampMs(clockState.value++) },
-    stepIdFactory: { create: () => createStepId() },
-  });
+  // The legacy facade's `inspector.inspect` is the Context Engine's `prepare` on the direct path:
+  // the engine is the one boundary that can refuse a turn before any Step becomes durable.
+  const contextEngine = fakeContextEngine();
+  if (options.contextFailure !== undefined) contextEngine.prepareFailure = options.contextFailure;
   const controller = new RunController({
-    agentLoop: loop,
+    agentExecution: testRunAgentExecution({
+      executor: fakeFrozenModelTurnExecutor(async (_request, signal) =>
+        options.complete(++count, signal),
+      ),
+      contextEngine,
+      createStepId: () => createStepId(),
+    }).factory,
     executionStore: options.execution?.(storage) ?? storage.execution,
     verificationStore: options.execution?.(storage) ?? storage.execution,
     events: eventBus,
@@ -128,26 +117,26 @@ async function setup(options: {
   };
 }
 
-function finalTurn(text = "answer") {
-  return modelTurnResult({
+function finalTurn(text = "answer"): PartialTurnResult {
+  return {
     callId: createLLMCallId(),
     providerId: "fixture",
     model: { provider: "fixture", model: "fixture-model" },
     text,
     toolCalls: [],
     finishReason: "STOP",
-  });
+  };
 }
 
-function toolTurn() {
-  return modelTurnResult({
+function toolTurn(): PartialTurnResult {
+  return {
     callId: createLLMCallId(),
     providerId: "fixture",
     model: { provider: "fixture", model: "fixture-model" },
     text: "inspect",
     toolCalls: [{ id: "call_a", name: "read_file", input: { path: "parser.ts" } }],
     finishReason: "TOOL_CALLS",
-  });
+  };
 }
 
 describe("RunController failure and maxSteps boundaries", () => {
@@ -331,11 +320,11 @@ describe("RunController failure and maxSteps boundaries", () => {
   });
 
   it("emits llm.completed when the provider returned a rejected model output", async () => {
-    const rejected = modelTurnResult({
+    const rejected: PartialTurnResult = {
       ...finalTurn("partial"),
       finishReason: "LENGTH",
       toolCalls: [{ id: "call_a", name: "read_file", input: {} }],
-    });
+    };
     const fixture = await setup({ complete: async () => rejected });
     await fixture.controller.start(fixture.run.id);
     expect(fixture.events.map((event) => event.type)).toContain("llm.completed");
@@ -346,9 +335,7 @@ describe("RunController failure and maxSteps boundaries", () => {
   it("fails context preparation without creating a Step or LLM events", async () => {
     const fixture = await setup({
       complete: async () => finalTurn(),
-      inspect: async () => {
-        throw new Error("context secret");
-      },
+      contextFailure: new Error("context secret"),
     });
     await fixture.controller.start(fixture.run.id);
     expect(await fixture.storage.steps.listByRun(fixture.run.id)).toEqual([]);
@@ -358,7 +345,12 @@ describe("RunController failure and maxSteps boundaries", () => {
   });
 
   it("does not fail a Run for expected maxSteps control flow", async () => {
-    const fixture = await setup({ maxSteps: 1, complete: async () => toolTurn() });
+    // The step budget is a governance decision the coordinator takes *before* a durable boundary
+    // (packages/agent: "gives the step budget priority over an open durable boundary"), so a Run
+    // whose budget covers exactly one more turn reaches its Tool boundary on that turn and is
+    // finalized by the budget when the batch it accepts is answered. Two Steps are therefore what a
+    // Run needs in order to accept external Tool Results and still settle on the budget.
+    const fixture = await setup({ maxSteps: 2, complete: async () => toolTurn() });
     const waiting = await fixture.controller.start(fixture.run.id);
     expect(waiting.status).toBe("WAITING_TOOL_RESULTS");
     const result = await fixture.controller.submitToolResults(fixture.run.id, [
@@ -371,11 +363,13 @@ describe("RunController failure and maxSteps boundaries", () => {
       },
     ]);
     expect(result.status).toBe("MAX_STEPS_REACHED");
-    expect(fixture.providerCalls()).toBe(1);
+    // The second turn ran inside the budget; the batch *it* requested is never dispatched, because
+    // the budget is already spent by the time the boundary is reached.
+    expect(fixture.providerCalls()).toBe(2);
     expect(fixture.events.map((event) => event.type)).not.toContain("run.failed");
     expect(
       (await fixture.storage.messages.listByRun(fixture.run.id)).map((entry) => entry.message.role),
-    ).toEqual(["user", "assistant", "tool"]);
+    ).toEqual(["user", "assistant", "tool", "assistant"]);
     await fixture.storage.close();
   });
 

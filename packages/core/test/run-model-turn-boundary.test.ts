@@ -1,7 +1,6 @@
 import { RunExecutionInvariantError } from "@caelush/agent";
 import {
   AgentRunSchema,
-  AgentStateSchema,
   AgentStepSchema,
   createRunId,
   createSessionId,
@@ -9,7 +8,6 @@ import {
   createTimestampMs,
   createWorkspaceId,
   type AgentRun,
-  type AgentState,
   type AgentStep,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
@@ -54,26 +52,6 @@ const RUN: AgentRun = AgentRunSchema.parse({
   startedAt: AT,
 });
 
-const STATE: AgentState = AgentStateSchema.parse({
-  runId: RUN_ID,
-  sessionId: SESSION_ID,
-  goal: RUN.goal,
-  status: "RUNNING",
-  workspace: RUN.workspace,
-  runtime: RUN.runtime,
-  permissionProfile: RUN.permissionProfile,
-  approvalPolicy: RUN.approvalPolicy,
-  plan: [],
-  recentObservations: [],
-  changedFiles: [],
-  activeProcesses: [],
-  errors: [],
-  verification: "NOT_RUN",
-  usage: { steps: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0 },
-  updatedAt: AT,
-  startedAt: AT,
-});
-
 function step(overrides: Partial<AgentStep> = {}): AgentStep {
   return AgentStepSchema.parse({
     id: createStepId(),
@@ -104,7 +82,7 @@ function inputFor(pending: PendingAgentTurn) {
   return {
     identity: pending.identity,
     turn: { stepId: pending.step.id, sequence: pending.step.sequence },
-    model: pending.run.model,
+    model: pending.model,
   };
 }
 
@@ -112,9 +90,11 @@ describe("durable model turn boundary", () => {
   it("commits the open exactly once", async () => {
     const pending: PendingAgentTurn = {
       identity: { runId: RUN_ID, sessionId: SESSION_ID, goal: RUN.goal },
-      run: RUN,
-      state: STATE,
+      model: RUN.model,
       step: step(),
+      advanceReason: "INITIAL",
+      expectedStateRevision: null,
+      expectedContinuationRevision: null,
     };
     const opens: PendingAgentTurn[] = [];
     const { boundary, observation } = boundaryFor(pending, opens);
@@ -132,9 +112,11 @@ describe("durable model turn boundary", () => {
   it("is idempotent for the same turn", async () => {
     const pending: PendingAgentTurn = {
       identity: { runId: RUN_ID, sessionId: SESSION_ID, goal: RUN.goal },
-      run: RUN,
-      state: STATE,
+      model: RUN.model,
       step: step(),
+      advanceReason: "INITIAL",
+      expectedStateRevision: null,
+      expectedContinuationRevision: null,
     };
     const opens: PendingAgentTurn[] = [];
     const { boundary } = boundaryFor(pending, opens);
@@ -149,9 +131,11 @@ describe("durable model turn boundary", () => {
   it("fails closed rather than opening a Step the Run Layer did not allocate", async () => {
     const pending: PendingAgentTurn = {
       identity: { runId: RUN_ID, sessionId: SESSION_ID, goal: RUN.goal },
-      run: RUN,
-      state: STATE,
+      model: RUN.model,
       step: step({ sequence: 1 }),
+      advanceReason: "INITIAL",
+      expectedStateRevision: null,
+      expectedContinuationRevision: null,
     };
     const opens: PendingAgentTurn[] = [];
     const { boundary, observation } = boundaryFor(pending, opens);
@@ -169,9 +153,11 @@ describe("durable model turn boundary", () => {
   it("fails closed for another Run and for another model", async () => {
     const pending: PendingAgentTurn = {
       identity: { runId: RUN_ID, sessionId: SESSION_ID, goal: RUN.goal },
-      run: RUN,
-      state: STATE,
+      model: RUN.model,
       step: step(),
+      advanceReason: "INITIAL",
+      expectedStateRevision: null,
+      expectedContinuationRevision: null,
     };
     const opens: PendingAgentTurn[] = [];
     const { boundary } = boundaryFor(pending, opens);
@@ -196,9 +182,11 @@ describe("durable model turn boundary", () => {
   it("records a rejected commit and never reports it as committed", async () => {
     const pending: PendingAgentTurn = {
       identity: { runId: RUN_ID, sessionId: SESSION_ID, goal: RUN.goal },
-      run: RUN,
-      state: STATE,
+      model: RUN.model,
       step: step(),
+      advanceReason: "INITIAL",
+      expectedStateRevision: null,
+      expectedContinuationRevision: null,
     };
     const observation = createAgentTurnObservation();
     const conflict = new Error("revision conflict");

@@ -10,17 +10,17 @@ import {
   createTimestampMs,
   createWorkspaceId,
 } from "@caelush/protocol";
-import { AgentLoop, RunController, type RunControllerResult } from "@caelush/core";
+import { RunController, type RunControllerResult } from "@caelush/core";
 import { EventBus } from "@caelush/events";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
 import { verificationPlanner } from "./support/fixtures.js";
+import { modelTurnResult } from "./support/model-turns.js";
 import {
-  fakeModelTurnExecutor,
-  modelTurnResult,
-  testModelCatalog,
-  type FakeModelTurnExecutor,
-} from "./support/model-turns.js";
+  fakeFrozenModelTurnExecutor,
+  testRunAgentExecution,
+  type FakeFrozenModelTurnExecutor,
+} from "./support/run-agent-execution.js";
 
 /**
  * A scripted model turn authority.
@@ -28,9 +28,12 @@ import {
  * Phase 2C removed the LLM provider seam from Core, so "how many provider turns
  * happened" is now observed on the `ModelTurnExecutor` itself: one `execute()` call is
  * exactly one Agent Step attempt and exactly one gateway stream.
+ *
+ * Phase 3C checkpoint 6 retired the legacy facade, so the script answers the frozen union
+ * directly and the Run Layer composes the loop itself.
  */
-function restartModelTurns(): FakeModelTurnExecutor {
-  return fakeModelTurnExecutor((_request, _signal, callIndex) =>
+function restartModelTurns(): FakeFrozenModelTurnExecutor {
+  return fakeFrozenModelTurnExecutor((_request, _signal, callIndex) =>
     callIndex === 0
       ? modelTurnResult({
           text: "inspect",
@@ -59,30 +62,20 @@ function makeRun(workspacePath: string) {
 
 function createController(
   storage: Awaited<ReturnType<typeof openCaelushStorage>>,
-  modelTurns: FakeModelTurnExecutor,
+  modelTurns: FakeFrozenModelTurnExecutor,
   now: { value: number },
 ): RunController {
-  const loop = new AgentLoop({
-    inspector: { inspect: async () => ({}) as never },
-    planner: { plan: async () => ({}) as never },
-    contextBuilder: {
-      build: (input) => ({
-        messages:
-          input.mode === "TOOL_CONTINUATION"
-            ? input.currentTurnMessages
-            : [input.currentUserMessage],
-        report: {} as never,
-      }),
-    },
-    models: testModelCatalog(),
-    modelTurns,
-    clock: { now: () => createTimestampMs(now.value++) },
-    stepIdFactory: { create: () => createStepId() },
+  // The Run Layer composes the frozen AgentLoop itself: the test hands it the collaborator ports
+  // a host would — the model catalog, the frozen turn executor, the Step identity factory and the
+  // Context Engine. There is no facade, so no test-visible loop lifecycle can decide a Step.
+  const execution = testRunAgentExecution({
+    executor: modelTurns,
+    createStepId: () => createStepId(),
   });
   return new RunController({
-    agentLoop: loop,
+    agentExecution: execution.factory,
     executionStore: storage.execution,
-      verificationStore: storage.execution,
+    verificationStore: storage.execution,
     events: new EventBus(storage.events),
     configResolver: {
       resolve: async () => ({

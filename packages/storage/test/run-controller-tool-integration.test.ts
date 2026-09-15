@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { AIToolSpec } from "@caelush/ai";
 import {
   AgentRunSchema,
   createApprovalRequestId,
@@ -14,9 +15,9 @@ import {
   createTimestampMs,
   createToolInvocationId,
   createWorkspaceId,
+  type ToolDefinition,
 } from "@caelush/protocol";
 import {
-  AgentLoop,
   RunController,
   RunDeadlineRegistry,
   RunRetryRegistry,
@@ -43,12 +44,11 @@ import { LocalRuntime, createLocalRuntimeResolver } from "@caelush/runtime";
 import { openCaelushStorage, type CaelushStorage } from "../src/index.js";
 import { verificationPlanner } from "./support/fixtures.js";
 import { CaelushToolExecutionGate } from "@caelush/security";
+import { aiError, modelTurnResult } from "./support/model-turns.js";
 import {
-  fakeModelTurnExecutor,
-  modelTurnResult,
-  testModelCatalog,
-  aiError,
-} from "./support/model-turns.js";
+  fakeFrozenModelTurnExecutor,
+  testRunAgentExecution,
+} from "./support/run-agent-execution.js";
 
 const definitions = [
   {
@@ -205,14 +205,12 @@ function createFilesystemRuntime(
  * `{name, description, inputSchema}`. `outputSchema`, `riskLevel`,
  * `requiredCapabilities` and `runtimeRequirements` are runtime metadata and must never
  * reach a provider request, so the expectation is built by projecting them away.
+ *
+ * Under Phase 3C checkpoint 6 the projection is also what the Run Layer hands the provider:
+ * `RunAgentExecutionContext.tools` is this exact data-only catalog, and the Tool Layer resolves
+ * execution from the same immutable registry.
  */
-function modelFacing(
-  definitions: readonly {
-    readonly name: string;
-    readonly description: string;
-    readonly inputSchema: unknown;
-  }[],
-) {
+function modelFacing(definitions: readonly ToolDefinition[]): readonly AIToolSpec[] {
   return definitions.map(({ name, description, inputSchema }) => ({
     name,
     description,
@@ -233,32 +231,22 @@ function createController(
 ) {
   let now = initialNow;
   const clock = { now: () => createTimestampMs(fixedClock?.value ?? now++) };
-  const loop = new AgentLoop({
-    inspector: { inspect: async () => ({}) as never },
-    planner: { plan: async () => ({}) as never },
-    contextBuilder: {
-      build: (input) => ({
-        messages:
-          input.mode === "TOOL_CONTINUATION"
-            ? input.currentTurnMessages
-            : [input.currentUserMessage],
-        report: {} as never,
-      }),
-    },
-    models: testModelCatalog(),
-    modelTurns: fakeModelTurnExecutor(async (request) => {
+  const agentExecution = testRunAgentExecution({
+    executor: fakeFrozenModelTurnExecutor(async (request) => {
       observedRequests.push({ tools: request.tools, messages: request.messages });
       const next = turns.shift();
       if (next instanceof Error) throw next;
       return next!;
     }),
-    clock,
-    stepIdFactory: { create: () => createStepId() },
+    // The model-visible catalog comes from the same coordinator that resolves execution, exactly
+    // as the production composition root derives it from the active Tool registry.
+    ...(coordinator === undefined ? {} : { tools: modelFacing(coordinator.modelDefinitions()) }),
+    createStepId: () => createStepId(),
   });
   return new RunController({
-    agentLoop: loop,
+    agentExecution: agentExecution.factory,
     executionStore: storage.execution,
-      verificationStore: storage.execution,
+    verificationStore: storage.execution,
     events: eventBus,
     configResolver: {
       resolve: async () => ({
@@ -363,7 +351,7 @@ describe("RunController automatic Tool Batch integration", () => {
     await storage.close();
   });
 
-  it("runs real read-only filesystem tools through AgentLoop and leaves the workspace unchanged", async () => {
+  it("runs real read-only filesystem tools through the Run Layer and leaves the workspace unchanged", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "caelush-phase-8a-e2e-"));
     const workspace = path.join(directory, "workspace");
     await mkdir(path.join(workspace, "src"), { recursive: true });
@@ -496,6 +484,13 @@ describe("RunController automatic Tool Batch integration", () => {
       ],
       runtime.coordinator,
       observed,
+      // A patch is the one Tool in this suite whose effect projection moves the durable
+      // `AgentState`, and the Tool Layer stamps that projection from the Tool dispatcher clock. The
+      // Run Layer now settles against that durable state, so the two clocks have to share one epoch
+      // — in the production composition they are literally the same clock object. Starting the Run
+      // Layer a minute ahead of the Tool Layer's wall clock keeps every Run Layer timestamp later
+      // than every Tool timestamp no matter how often either clock is read.
+      Date.now() + 60_000,
     );
 
     try {

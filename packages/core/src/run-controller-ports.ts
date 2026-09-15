@@ -1,5 +1,4 @@
 import type { AgentLoopModelSettings } from "./agent-loop-input.js";
-import type { AgentLoop } from "./agent-loop.js";
 import type { ContextRuntimeCoordinatorPort } from "@caelush/context";
 import type { LLMMessage } from "@caelush/llm/messages";
 import type { ContextBuildLimits } from "@caelush/context";
@@ -131,7 +130,17 @@ export interface RunOwnedResourceControllerPort {
 }
 
 export interface RunControllerDependencies {
-  readonly agentLoop: AgentLoop;
+  /**
+   * The Run Layer's direct Agent execution dependencies.
+   *
+   * Phase 3C checkpoint 6 retired the legacy Core `AgentLoop` from the production composition. The
+   * RunController composes the frozen `AgentLoop` itself — `createAgentLoop(...)` over a
+   * `ContextEnginePort`, the host's `ModelTurnExecutor`, the decision classifier and the two
+   * Run-Layer-owned turn ports — and drives it through `createRunExecutionDriver(...)`. A host that
+   * supplied a facade here could decide a Step sequence or a Reason entry point that the Run Layer
+   * is the authority for.
+   */
+  readonly agentExecution: import("./run-agent-execution.js").RunAgentExecutionContextFactory;
   /**
    * The canonical Run execution store.
    *
@@ -180,13 +189,16 @@ export interface RunControllerDependencies {
   readonly verificationReviewer?: VerificationTaskReviewerPort;
   readonly verificationModelTurns?: VerificationLLMClient;
   /**
-   * Publishes the Run identity a verification model turn executes for.
+   * Projects the Run identity a verification model turn executes for.
    *
-   * A verification review has no AgentStep of its own, so it borrows the identity of the
-   * Run it is reviewing. Phase 3A made identity an explicit input of the frozen model turn
-   * executor, so the host publishes it here rather than letting a facade invent one.
+   * A verification review has no AgentStep of its own, so it borrows the identity of the Run it is
+   * reviewing. Phase 3A made identity an explicit input of the frozen model turn executor, so the
+   * host projects it from the Run being reviewed rather than letting a facade invent one — and
+   * ordinary Agent execution no longer publishes a global "active turn" for this to read.
    */
-  readonly verificationTurnIdentity?: () => import("@caelush/agent").AgentExecutionIdentity;
+  readonly verificationTurnIdentity?: (
+    run: AgentRun,
+  ) => import("@caelush/agent").AgentExecutionIdentity;
   /**
    * The durable Run execution coordinator.
    *

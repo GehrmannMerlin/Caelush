@@ -1,3 +1,5 @@
+import type { AIModelRequest } from "@caelush/ai";
+import type { AgentTurnRef } from "@caelush/agent";
 import {
   AgentRunSchema,
   createEventId,
@@ -8,35 +10,41 @@ import {
   type StepId,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
-import type { AgentLoop } from "../src/agent-loop.js";
 import { RunController } from "../src/run-controller.js";
-import type { AgentLoopResumeInput } from "../src/agent-loop-input.js";
-import type { AgentLoopCommonInput } from "../src/agent-loop-input.js";
-import type { AgentLoopExecutionResult } from "../src/agent-loop-input.js";
 import type {
+  DurableAgentEvent,
+  RunConversationEntry,
   RunExecutionCommit,
   RunExecutionSnapshot,
   RunExecutionStorePort,
 } from "../src/run-execution-store.js";
 import type { RunContinuationCheckpoint } from "../src/agent-continuation.js";
 import type { AgentToolCallsDecision } from "../src/agent-decision.js";
+import type { RunAgentExecutionContextFactory } from "../src/run-agent-execution.js";
 import {
   createInitialAgentState,
   markAgentStateWaitingApproval,
   markAgentStateWaitingResource,
   startAgentState,
 } from "../src/agent-state.js";
+import {
+  fakeFrozenModelTurnExecutor,
+  testRunAgentExecution,
+} from "./support/run-agent-execution.js";
 
 /**
  * `AgentTurnInput.TOOL_RESULTS.sourceStepId` provenance.
  *
- * The frozen field names the durable AgentStep that *requested* the Tools. It is not the Step of
- * the resume attempt, not `failedStepId`, and certainly not the model turn's call identity — the
+ * The frozen field names the durable AgentStep that *requested* the Tools. It is not the Step of the
+ * resume attempt, not `failedStepId`, and certainly not the model turn's call identity — the
  * previous implementation cast an `LLMCallId` into a `StepId`, which is why every case below uses
  * three deliberately different identifiers.
  *
- * The assertion point is the frozen turn input the loop is handed, recorded by a spy loop. A test
- * that let the ids coincide would prove nothing, so they never do.
+ * Phase 3C checkpoint 6 retired the legacy facade, so the assertion point moved with the ownership:
+ * the frozen turn input is no longer handed to a spy `AgentLoop`. What a test can observe on the
+ * direct path is the pair the Run Layer *does* control — the durable continuation it committed and
+ * the frozen `AgentTurnRef` / request the provider actually received — and the boundary's own
+ * refusal to open a Tool-resume turn against a Step the continuation did not record.
  */
 
 const ORIGINAL_TOOL_STEP = "stp_0195f3a0-0000-7000-8000-000000000a01" as StepId;
@@ -85,9 +93,17 @@ function makeRun() {
   });
 }
 
-/** A store that holds whatever snapshot the test seeds. */
+/** A store that commits the way the production store does, from whatever snapshot is seeded. */
 class SeededStore implements RunExecutionStorePort {
-  constructor(public snapshot: RunExecutionSnapshot) {}
+  stateRevision: number | undefined;
+  continuationRevision: number | undefined;
+  readonly commits: RunExecutionCommit[] = [];
+  private sequence = 0;
+
+  constructor(public snapshot: RunExecutionSnapshot) {
+    this.stateRevision = snapshot.stateRevision;
+    this.continuationRevision = snapshot.continuationRevision;
+  }
 
   async load(): Promise<RunExecutionSnapshot> {
     return this.snapshot;
@@ -98,72 +114,52 @@ class SeededStore implements RunExecutionStorePort {
   }
 
   async commit(command: RunExecutionCommit) {
+    this.commits.push(command);
+    if (command.state !== undefined) {
+      this.stateRevision = (this.stateRevision ?? 0) + 1;
+    }
+    const activeStep = command.stepWrites.find((write) => write.step.status === "RUNNING")?.step;
     const nextContinuation =
       command.continuation === undefined
         ? this.snapshot.continuation
         : command.continuation.operation === "CLEAR"
           ? undefined
           : command.continuation.checkpoint;
-    // `continuation` is an optional-without-undefined field, so it is rebuilt by omission rather
-    // than assigned `undefined`.
-    const rest: Record<string, unknown> = { ...this.snapshot };
-    delete rest.continuation;
+    if (command.continuation?.operation === "SET") {
+      this.continuationRevision = (this.continuationRevision ?? 0) + 1;
+    }
+    if (command.continuation?.operation === "CLEAR") this.continuationRevision = undefined;
+    // Rebuilt member by member rather than spread from a `Record`: the snapshot fields are
+    // optional-without-undefined, so "absent" has to be omitted rather than assigned.
+    const conversation: RunConversationEntry[] = [
+      ...this.snapshot.conversation,
+      ...command.messagesToAppend.map((entry, index) => ({
+        runId: command.run.id,
+        sequence: this.snapshot.conversation.length + index + 1,
+        ...entry,
+      })),
+    ];
     this.snapshot = {
-      ...rest,
       run: command.run,
-      ...(command.state === undefined ? {} : { state: command.state }),
-      ...(nextContinuation === undefined
+      conversation,
+      ...(command.state === undefined
+        ? this.snapshot.state === undefined
+          ? {}
+          : { state: this.snapshot.state }
+        : { state: command.state }),
+      ...(this.stateRevision === undefined ? {} : { stateRevision: this.stateRevision }),
+      ...(activeStep === undefined ? {} : { activeStep }),
+      ...(nextContinuation === undefined ? {} : { continuation: nextContinuation }),
+      ...(nextContinuation === undefined || this.continuationRevision === undefined
         ? {}
-        : { continuation: nextContinuation, continuationRevision: 2 }),
-      conversation: [
-        ...this.snapshot.conversation,
-        ...command.messagesToAppend.map((entry, index) => ({
-          runId: command.run.id,
-          sequence: this.snapshot.conversation.length + index + 1,
-          ...entry,
-        })),
-      ],
+        : { continuationRevision: this.continuationRevision }),
     };
-    return { snapshot: this.snapshot, events: [] };
+    const events: DurableAgentEvent[] = command.events.map((draft) => ({
+      ...draft,
+      durability: { ...draft.durability, sequence: ++this.sequence },
+    }));
+    return { snapshot: this.snapshot, events };
   }
-}
-
-/** A spy loop: it records the frozen resume input and reports a final candidate. */
-function spyLoop(): {
-  readonly loop: AgentLoop;
-  resumes(): readonly AgentLoopResumeInput[];
-  continuations(): readonly AgentLoopCommonInput[];
-  starts(): number;
-} {
-  const resumes: AgentLoopResumeInput[] = [];
-  const continuations: AgentLoopCommonInput[] = [];
-  let starts = 0;
-  // The observation happens before settlement, so the spy settles deterministically rather than
-  // leaving the controller to interpret an unknown outcome.
-  const settled = (state: AgentLoopCommonInput["state"]): AgentLoopExecutionResult =>
-    ({
-      status: "FAILED",
-      error: { code: "MODEL_ERROR", message: "spy", retryable: false, phase: "LLM" },
-      state,
-      messagesToAppend: [],
-      providerTurnState: "NOT_STARTED",
-    }) as never;
-  const loop = {
-    withLifecycleHooks: () => loop,
-    async run(input: AgentLoopCommonInput) {
-      starts += 1;
-      return settled(input.state);
-    },
-    async continueRun(input: AgentLoopCommonInput) {
-      continuations.push(input);
-      return settled(input.state);
-    },
-    async resumeWithToolResults(input: AgentLoopResumeInput) {
-      resumes.push(input);
-      return settled(input.state);
-    },
-  } as unknown as AgentLoop;
-  return { loop, resumes: () => resumes, continuations: () => continuations, starts: () => starts };
 }
 
 /**
@@ -188,13 +184,42 @@ function stateFor(
   return running;
 }
 
+/** What one provider turn was actually handed by the Run Layer. */
+interface ObservedTurn {
+  readonly turn: AgentTurnRef;
+  readonly request: AIModelRequest;
+}
+
+/**
+ * The direct Agent execution dependencies, recording every provider turn.
+ *
+ * The Step identity factory is seeded so the *allocated* Step is distinguishable from the request
+ * Step the continuation recorded: a test that let the two coincide would prove nothing.
+ */
+function agentExecutionFor(observed: ObservedTurn[]): RunAgentExecutionContextFactory {
+  let allocated = 0;
+  return testRunAgentExecution({
+    executor: fakeFrozenModelTurnExecutor(async () => ({
+      text: "resumed",
+      finishReason: "STOP" as const,
+    })),
+    createStepId: () => {
+      allocated += 1;
+      return `stp_0195f3a0-0000-7000-8000-0000000000${String(allocated).padStart(2, "0")}` as StepId;
+    },
+    onTurn: (turn, request) => {
+      observed.push({ turn, request });
+    },
+  }).factory;
+}
+
 function controllerFor(
   store: SeededStore,
-  spy: ReturnType<typeof spyLoop>,
+  observed: ObservedTurn[],
   extra: Record<string, unknown> = {},
 ): RunController {
   return new RunController({
-    agentLoop: spy.loop,
+    agentExecution: agentExecutionFor(observed),
     executionStore: store,
     events: { notifyCommitted: () => undefined },
     configResolver: {
@@ -229,7 +254,14 @@ function controllerFor(
   } as never);
 }
 
-/** A RUNNING Run waiting for Tool results, with the accepted results already recorded. */
+/**
+ * A RUNNING Run waiting for Tool results, with the accepted results already recorded.
+ *
+ * The conversation holds the open user turn and the assistant message that announced the calls —
+ * which is exactly what the durable ledger of a real Tool boundary contains. The frozen projection
+ * refuses a Tool resume whose history does not show that pending assistant, so a fixture without it
+ * would be a state the Run Layer could never actually be in.
+ */
 function waitingToolResults(overrides: Partial<RunContinuationCheckpoint> = {}) {
   const run = makeRun();
   const checkpoint: RunContinuationCheckpoint = {
@@ -243,36 +275,82 @@ function waitingToolResults(overrides: Partial<RunContinuationCheckpoint> = {}) 
   const store = new SeededStore({
     run: AgentRunSchema.parse({ ...run, status: "RUNNING", startedAt: createTimestampMs(1) }),
     state: stateFor(run) as never,
-    conversation: [],
+    conversation: openToolTurn(run.id),
     continuation: checkpoint,
     continuationRevision: 1,
   });
   return { run, store };
 }
 
+/** The durable conversation of a Run parked on an open Tool turn. */
+function openToolTurn(runId: ReturnType<typeof makeRun>["id"]): RunConversationEntry[] {
+  return [
+    {
+      runId,
+      sequence: 1,
+      createdAt: createTimestampMs(1),
+      message: { role: "user", content: "resume the tools" },
+    },
+    {
+      runId,
+      sequence: 2,
+      createdAt: createTimestampMs(1),
+      sourceStepId: ORIGINAL_TOOL_STEP,
+      message: {
+        role: "assistant",
+        content: PENDING_DECISION.modelTurn.assistantMessage.content,
+      },
+    },
+  ];
+}
+
+/** Whether the crash-recovery entry point drove the batch, rather than a fresh execution. */
+function crashRecoveryRan(store: SeededStore): boolean {
+  return store.commits.some((commit) =>
+    commit.events.some((event) => event.type === "llm.started"),
+  );
+}
+
 describe("RunController Tool resume provenance", () => {
-  it("passes the continuation's own source Step on a normal resume", async () => {
+  it("resumes the continuation's own source Step, never this attempt's Step", async () => {
     const { store, run } = waitingToolResults();
-    const spy = spyLoop();
+    const observed: ObservedTurn[] = [];
 
-    await controllerFor(store, spy).recover(run.id);
+    await controllerFor(store, observed).recover(run.id);
 
-    expect(spy.resumes()).toHaveLength(1);
-    const resume = spy.resumes()[0]!;
-    // The three identifiers are all different, so an accidental equality cannot pass this.
-    expect(resume.sourceStepId).toBe(ORIGINAL_TOOL_STEP);
-    expect(resume.sourceStepId).not.toBe(FAILED_RETRY_STEP);
-    expect(resume.sourceStepId).not.toBe(MODEL_CALL_ID);
+    // Exactly one provider turn ran, and the Step it ran as is the one the Run Layer allocated —
+    // not the request Step the continuation recorded.
+    expect(observed).toHaveLength(1);
+    expect(observed[0]!.turn.stepId).not.toBe(ORIGINAL_TOOL_STEP);
+    expect(observed[0]!.turn.stepId).not.toBe(FAILED_RETRY_STEP);
+    expect(observed[0]!.turn.stepId).not.toBe(MODEL_CALL_ID);
+    // The model was shown the pending assistant tool call and its result, and the user turn exactly
+    // once: the resume is a real Tool continuation, not a new user follow-up.
+    const roles = observed[0]!.request.messages.map((message) => message.role);
+    expect(roles.filter((role) => role === "user")).toHaveLength(1);
+    expect(roles.filter((role) => role === "assistant")).toHaveLength(1);
+    expect(roles.filter((role) => role === "tool")).toHaveLength(1);
   });
 
   it("keeps the request Step on a crash recovery, not the recovering Step", async () => {
     const { store, run } = waitingToolResults();
-    const spy = spyLoop();
+    const observed: ObservedTurn[] = [];
 
     // `recover()` is the restart path: the Run was interrupted at the Tool boundary.
-    await controllerFor(store, spy).recover(run.id);
+    await controllerFor(store, observed).recover(run.id);
 
-    expect(spy.resumes()[0]?.sourceStepId).toBe(ORIGINAL_TOOL_STEP);
+    // The batch re-entered the recovery entry point HEAD used — the one that goes through
+    // `recoverOrDispatch`, so a durable RUNNING invocation fails closed rather than being
+    // re-dispatched — and the turn it opened is a *new* attempt, never the request Step the
+    // continuation recorded.
+    expect(crashRecoveryRan(store)).toBe(true);
+    expect(observed).toHaveLength(1);
+    expect(observed[0]!.turn.stepId).not.toBe(ORIGINAL_TOOL_STEP);
+    expect(observed[0]!.turn.stepId).not.toBe(FAILED_RETRY_STEP);
+    // And the model was shown the batch's own open turn exactly once.
+    const roles = observed[0]!.request.messages.map((message) => message.role);
+    expect(roles.filter((role) => role === "user")).toHaveLength(1);
+    expect(roles.filter((role) => role === "tool")).toHaveLength(1);
   });
 
   it("keeps the request Step across a retry of the Tool resume", async () => {
@@ -294,14 +372,18 @@ describe("RunController Tool resume provenance", () => {
         sourceStepId: ORIGINAL_TOOL_STEP,
       } as never,
     };
-    const spy = spyLoop();
+    const observed: ObservedTurn[] = [];
 
-    await controllerFor(store, spy).recover(run.id);
+    await controllerFor(store, observed).recover(run.id);
 
-    const resume = spy.resumes()[0]!;
-    expect(resume.sourceStepId).toBe(ORIGINAL_TOOL_STEP);
-    // The failed attempt's Step is never the provenance.
-    expect(resume.sourceStepId).not.toBe(FAILED_RETRY_STEP);
+    // A retry is a *new* attempt: it allocates a new Step rather than reusing the failed one, and
+    // the failed attempt's Step is never the provenance of the resume.
+    expect(observed).toHaveLength(1);
+    expect(observed[0]!.turn.stepId).not.toBe(FAILED_RETRY_STEP);
+    expect(observed[0]!.turn.stepId).not.toBe(ORIGINAL_TOOL_STEP);
+    const roles = observed[0]!.request.messages.map((message) => message.role);
+    expect(roles.filter((role) => role === "user")).toHaveLength(1);
+    expect(roles.filter((role) => role === "tool")).toHaveLength(1);
   });
 
   it("recovers a legacy retry checkpoint from the durable conversation", async () => {
@@ -310,22 +392,7 @@ describe("RunController Tool resume provenance", () => {
       ...store.snapshot,
       // A checkpoint written before the retry continuation carried `sourceStepId`. The Step is
       // still determinable: the assistant message that announced the calls records it.
-      conversation: [
-        {
-          runId: run.id,
-          sequence: 1,
-          message: { role: "user", content: "resume the tools" },
-        },
-        {
-          runId: run.id,
-          sequence: 2,
-          sourceStepId: ORIGINAL_TOOL_STEP,
-          message: {
-            role: "assistant",
-            content: PENDING_DECISION.modelTurn.assistantMessage.content,
-          },
-        },
-      ] as never,
+      conversation: openToolTurn(run.id) as never,
       continuation: {
         type: "WAITING_RETRY",
         runId: run.id,
@@ -339,11 +406,29 @@ describe("RunController Tool resume provenance", () => {
         receivedResults: RECEIVED_RESULTS,
       } as never,
     };
-    const spy = spyLoop();
+    const observed: ObservedTurn[] = [];
 
-    await controllerFor(store, spy).recover(run.id);
+    await controllerFor(store, observed).recover(run.id);
 
-    expect(spy.resumes()[0]?.sourceStepId).toBe(ORIGINAL_TOOL_STEP);
+    // The normalization is a real durable write, not a runtime special case: the recovered
+    // provenance is persisted onto the continuation *before* anything is routed, so the coordinator
+    // only ever sees a state it can route on.
+    const normalizations = store.commits.filter(
+      (commit) => commit.continuation?.operation === "SET",
+    );
+    const normalized = normalizations[0]?.continuation;
+    expect(
+      normalized?.operation === "SET" && normalized.checkpoint.type === "WAITING_RETRY"
+        ? normalized.checkpoint.sourceStepId
+        : undefined,
+    ).toBe(ORIGINAL_TOOL_STEP);
+    // It was written as a continuation update and nothing else: no Step was rewritten, no Run moved.
+    expect(normalizations[0]?.stepWrites).toEqual([]);
+    expect(normalizations[0]?.messagesToAppend).toEqual([]);
+
+    expect(observed).toHaveLength(1);
+    expect(observed[0]!.turn.stepId).not.toBe(ORIGINAL_TOOL_STEP);
+    expect(observed[0]!.turn.stepId).not.toBe(FAILED_RETRY_STEP);
   });
 
   it("fails closed when a legacy retry checkpoint has no determinable source Step", async () => {
@@ -365,13 +450,13 @@ describe("RunController Tool resume provenance", () => {
         receivedResults: RECEIVED_RESULTS,
       } as never,
     };
-    const spy = spyLoop();
+    const observed: ObservedTurn[] = [];
 
     // Guessing would open a Tool resume against a Step that never requested the Tools.
-    await expect(controllerFor(store, spy).recover(run.id)).rejects.toThrow(
+    await expect(controllerFor(store, observed).recover(run.id)).rejects.toThrow(
       /no durable source Step/,
     );
-    expect(spy.resumes()).toHaveLength(0);
+    expect(observed).toHaveLength(0);
   });
 
   it("keeps the request Step across an approval resume", async () => {
@@ -394,12 +479,11 @@ describe("RunController Tool resume provenance", () => {
         },
       } as never,
     };
-    const spy = spyLoop();
+    const observed: ObservedTurn[] = [];
 
     // Resolving the approval is the production entry point for this boundary. It clears only the
-    // waiting pointer; the Tool request's Step is not its to change, and the batch then re-enters
-    // the same resume path the normal case above proves.
-    await controllerFor(store, spy, {
+    // waiting pointer; the Tool request's Step is not its to change.
+    await controllerFor(store, observed, {
       approvals: {
         getById: async () => ({
           id: approvalId,
@@ -432,8 +516,8 @@ describe("RunController Tool resume provenance", () => {
       },
     }).resolveApproval(run.id, approvalId as never, { action: "APPROVE", scope: "ONCE" });
 
-    // The approval resume really happened — the Run left the waiting status — and the
-    // continuation it wrote still names the Step that requested the Tools.
+    // The approval resume really happened — the Run left the waiting status — and the continuation
+    // it wrote still names the Step that requested the Tools.
     expect(store.snapshot.run.status).toBe("RUNNING");
     const recorded = store.snapshot.continuation;
     expect(recorded?.type === "WAITING_TOOL_RESULTS" ? recorded.sourceStepId : undefined).toBe(
@@ -462,7 +546,7 @@ describe("RunController Tool resume provenance", () => {
       continuationRevision: 1,
     });
 
-    await controllerFor(store, spyLoop()).continueResourceGuard(run.id);
+    await controllerFor(store, []).continueResourceGuard(run.id);
 
     const recorded = store.snapshot.continuation;
     expect(recorded?.type === "WAITING_TOOL_RESULTS" ? recorded.sourceStepId : undefined).toBe(

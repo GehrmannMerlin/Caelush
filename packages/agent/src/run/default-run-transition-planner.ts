@@ -215,13 +215,22 @@ function planAgent(
   result: AgentLoopAdvanceResult,
   now: TimestampMs,
 ): RunExecutionCommit {
+  // The settle timestamp never moves the durable state backwards.
+  //
+  // `AgentState.updatedAt` is monotonic by contract, and another subsystem may have advanced it
+  // after this effect started — a Tool effect projection stamps its own settlement from its own
+  // clock. Clamping here is the same rule `beginAgentStepState` already applies when a turn opens,
+  // so a Run Layer whose clock is behind the ledger settles the attempt instead of failing on a
+  // timestamp that only ever moved forwards.
+  const settledAt = Math.max(snapshot.state?.updatedAt ?? now, now) as TimestampMs;
+
   switch (result.kind) {
     case "TOOL_REQUESTS":
-      return planToolRequests(snapshot, result, now);
+      return planToolRequests(snapshot, result, settledAt);
     case "FAILED":
-      return planAgentFailed(snapshot, result, now);
+      return planAgentFailed(snapshot, result, settledAt);
     case "CANCELLED":
-      return planAgentCancelled(snapshot, result, now);
+      return planAgentCancelled(snapshot, result, settledAt);
     case "FINAL_CANDIDATE":
       throw compatibilityRequired(
         "AGENT FINAL_CANDIDATE",

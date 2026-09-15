@@ -1,11 +1,14 @@
 import type { LLMToolResultMessage } from "@caelush/llm/messages";
 import {
+  createAgentDecisionClassifier,
   createRunExecutionCoordinator,
+  createRunExecutionDriver,
   createRunTransitionPlanner,
   type AdvanceAgentDirective,
   type AgentLoopAdvanceResult,
+  type AgentLoopFailedResult,
+  type ModelRequestAdmissionPort,
   type RunExecutionCoordinator,
-  type RunExecutionDirective,
   type RunExecutionEffectResult,
   type RunTransitionPlanner,
 } from "@caelush/agent";
@@ -33,8 +36,8 @@ import {
   type StepId,
   type VerificationPlan,
 } from "@caelush/protocol";
-import type { AgentLoopExecutionResult, AgentLoopOutcomeResult } from "./agent-loop-input.js";
 import {
+  beginAgentStepState,
   cancelAgentStepState,
   createInitialAgentState,
   markAgentStateCancelled,
@@ -42,6 +45,7 @@ import {
   markAgentStateWaitingResource,
   markAgentStateMaxStepsReached,
   markAgentStateBudgetExceeded,
+  markAgentStateVerifying,
   resumeAgentStateFromApproval,
   resumeAgentStateFromResource,
   settleAgentStepState,
@@ -49,8 +53,7 @@ import {
   markAgentStateCompleted,
   startAgentState,
 } from "./agent-state.js";
-import { failAgentStep } from "./agent-step.js";
-import { cancelAgentStep } from "./agent-step.js";
+import { cancelAgentStep, completeAgentStep, failAgentStep } from "./agent-step.js";
 import { normalizeToolResultBatch } from "./agent-tool-results.js";
 import { toLLMToolResultMessages } from "./agent-tool-batch.js";
 import {
@@ -68,30 +71,31 @@ import {
   assertRunExecutionInvariant,
 } from "./run-execution-state.js";
 import { markAgentStateTimedOut } from "./agent-state.js";
-import {
-  buildRunExecutionHistory,
-  buildRunExecutionHistorySourceSequences,
-} from "./run-controller-history.js";
 import { RunExecutionScopeRegistry } from "./run-execution-scope.js";
 import { RunDeadlineRegistry } from "./run-deadline-registry.js";
 import { deriveRunDeadline, isRunDeadlineExceeded } from "./run-deadline.js";
 import { resolveRunTerminationAuthority } from "./run-termination-authority.js";
 import { toAgentExecutionSnapshot } from "./run-execution-facts.js";
-import { toLegacyMessage } from "./ai-invocation-projection.js";
 import {
   createAgentModelTurnBoundary,
   createAgentTurnObservation,
+  createObservingModelTurnExecutor,
   requiresBoundaryRepair,
+  type AgentTurnObservation,
   type PendingAgentTurn,
 } from "./run-model-turn-boundary.js";
 import {
   createRunCommitEventMaterializer,
   type RunCommitEventMaterializer,
 } from "./run-commit-event-materializer.js";
+import { classifyAgentEffectSettlement } from "./run-agent-effect-settlement.js";
+import type { AgentProviderTurnState } from "./agent-loop-ports.js";
 import {
-  assertExecutionEpochMatchesDirective,
-  classifyAgentEffectSettlement,
-} from "./run-agent-effect-settlement.js";
+  DEFERRED_COMPLETION_GATE,
+  DEFERRED_TOOL_TURN_COORDINATOR,
+} from "./run-agent-deferred-ports.js";
+import { allocateRunAgentStep, createRunAgentLoop } from "./run-agent-execution.js";
+import { projectRunAgentHistory } from "./run-agent-history.js";
 import { summarizeAgentDecision } from "./agent-summary.js";
 import {
   RunExecutionConflictError,
@@ -110,7 +114,6 @@ import {
 import type { RunControllerDependencies } from "./run-controller-ports.js";
 import { TaskAcceptanceReviewer } from "./task-acceptance-reviewer.js";
 import { toDurableRetryCode } from "./ai-invocation-projection.js";
-import { AgentBudgetAdmissionError } from "./agent-errors.js";
 import type { AgentBudgetBlock } from "./agent-errors.js";
 import { ResourceGovernor } from "./resource-governor.js";
 import { fingerprintToolBatch, fingerprintToolResultBatch } from "./resource-fingerprint.js";
@@ -459,7 +462,7 @@ export class RunController {
       });
     }
     if (this.isExpired(commit.snapshot)) return this.finalizeTimeout(commit.snapshot);
-    return this.driveToolBoundariesLocked(commit.snapshot, "EXECUTE");
+    return this.driveToolBoundariesLocked(commit.snapshot, "RECOVER");
   }
 
   private async submitToolResultsLocked(
@@ -540,53 +543,108 @@ export class RunController {
 
   private async recoverLocked(runId: RunId): Promise<RunControllerResult> {
     const loaded = await this.load(runId);
+    // Legacy retry provenance is normalized *durably* before anything is routed, so the coordinator
+    // only ever sees a state it can decide on and no runtime special case is needed for it.
+    const normalized = await this.normalizeLegacyRetryProvenance(loaded);
     // The coordinator owns the governance priority — terminal, cancellation, deadline, exception,
     // step budget, boundary — so the ordering cannot drift between call sites.
-    const coordinated = this.coordinatedBoundary(loaded);
+    const coordinated = this.coordinatedBoundary(normalized);
     if (coordinated !== undefined) return coordinated;
-    if (loaded.cancellationIntent !== undefined) return this.finalizeCancellation(loaded);
-    if (this.isExpired(loaded)) return this.finalizeTimeout(loaded);
-    if (loaded.run.status === "RUNNING" && loaded.continuation?.type === "WAITING_RETRY") {
-      return this.resumeRetryLocked(loaded);
+    if (normalized.cancellationIntent !== undefined) return this.finalizeCancellation(normalized);
+    if (this.isExpired(normalized)) return this.finalizeTimeout(normalized);
+    if (normalized.run.status === "RUNNING" && normalized.continuation?.type === "WAITING_RETRY") {
+      return this.resumeRetryLocked(normalized);
     }
-    if (loaded.run.status === "RUNNING" && loaded.activeStep !== undefined) {
-      return this.recoverStaleStep(loaded);
+    if (normalized.run.status === "RUNNING" && normalized.activeStep !== undefined) {
+      return this.recoverStaleStep(normalized);
     }
-    if (loaded.run.status === "WAITING_APPROVAL") {
+    if (normalized.run.status === "WAITING_APPROVAL") {
       const approvalId =
-        loaded.continuation?.type === "WAITING_TOOL_RESULTS"
-          ? loaded.continuation.waitingApproval?.approvalId
+        normalized.continuation?.type === "WAITING_TOOL_RESULTS"
+          ? normalized.continuation.waitingApproval?.approvalId
           : undefined;
       const approvals = this.dependencies.approvals;
       if (approvalId !== undefined && approvals !== undefined) {
         const approval = await approvals.getById(approvalId);
         if (approval !== null && approval.status !== "PENDING") {
-          return this.resumeResolvedApprovalLocked(loaded, approval);
+          return this.resumeResolvedApprovalLocked(normalized, approval);
         }
       }
-      return this.resumeKnownBoundary(loaded);
+      return this.resumeKnownBoundary(normalized);
     }
-    if (loaded.run.status === "WAITING_RESOURCE") {
-      return this.resumeKnownBoundary(loaded);
-    }
-    if (
-      loaded.run.status === "RUNNING" &&
-      loaded.state !== undefined &&
-      (loaded.continuation?.type === "WAITING_TOOL_RESULTS" ||
-        (loaded.continuation === undefined && loaded.conversation.length === 0))
-    ) {
-      return this.driveToolBoundariesLocked(loaded, "RECOVER");
-    }
-    if (loaded.run.status === "VERIFYING") {
-      return this.driveProjectVerificationLocked(loaded);
+    if (normalized.run.status === "WAITING_RESOURCE") {
+      return this.resumeKnownBoundary(normalized);
     }
     if (
-      loaded.run.status === "RUNNING" &&
-      loaded.continuation?.type === "WAITING_VERIFICATION_REPAIR"
+      normalized.run.status === "RUNNING" &&
+      normalized.state !== undefined &&
+      (normalized.continuation?.type === "WAITING_TOOL_RESULTS" ||
+        (normalized.continuation === undefined && normalized.conversation.length === 0))
     ) {
-      return this.executeLoop(loaded, "VERIFICATION_REPAIR");
+      return this.driveToolBoundariesLocked(normalized, "RECOVER");
     }
-    return this.resumeKnownBoundary(loaded);
+    if (normalized.run.status === "VERIFYING") {
+      return this.driveProjectVerificationLocked(normalized);
+    }
+    if (
+      normalized.run.status === "RUNNING" &&
+      normalized.continuation?.type === "WAITING_VERIFICATION_REPAIR"
+    ) {
+      return this.driveToolBoundariesLocked(normalized, "RECOVER");
+    }
+    return this.resumeKnownBoundary(normalized);
+  }
+
+  /**
+   * Normalize a legacy retry checkpoint's missing Tool provenance, durably.
+   *
+   * ```text
+   * load the WAITING_RETRY checkpoint
+   *        ↓
+   * recover sourceStepId from the durable ledger
+   *        ↓
+   * atomic continuation update
+   *        ↓
+   * reload
+   * ```
+   *
+   * A checkpoint written before the retry continuation carried `sourceStepId` has no recorded
+   * provenance, and the coordinator refuses to route it — correctly, because fabricating a Step
+   * identity would open a Tool resume against a Step the Run never wrote. The recovery is a real
+   * durable write from data this Run already holds, so after it the coordinator sees an ordinary
+   * normalized state and needs no special case of its own.
+   *
+   * When the ledger cannot determine the Step, this fails closed. Guessing from `failedStepId`, the
+   * latest Step, a model call id or a Tool call id is never acceptable: none of them is the Step
+   * that requested the batch.
+   */
+  private async normalizeLegacyRetryProvenance(
+    snapshot: RunExecutionSnapshot,
+  ): Promise<RunExecutionSnapshot> {
+    const continuation = snapshot.continuation;
+    if (
+      continuation?.type !== "WAITING_RETRY" ||
+      continuation.mode !== "TOOL_RESULTS" ||
+      continuation.sourceStepId !== undefined
+    ) {
+      return snapshot;
+    }
+    const sourceStepId = recoverToolRequestSourceStep(snapshot, continuation.pendingDecision);
+    const commit = await this.commit({
+      run: snapshot.run,
+      ...(snapshot.state === undefined ? {} : { state: snapshot.state }),
+      expectedStateRevision: snapshot.stateRevision ?? null,
+      expectedContinuationRevision: snapshot.continuationRevision ?? null,
+      stepWrites: [],
+      messagesToAppend: [],
+      continuation: {
+        operation: "SET",
+        checkpoint: { ...continuation, sourceStepId },
+        updatedAt: this.dependencies.clock.now(),
+      },
+      events: [],
+    });
+    return commit.snapshot;
   }
 
   private async resumeRetryLocked(loaded: RunExecutionSnapshot): Promise<RunControllerResult> {
@@ -643,34 +701,74 @@ export class RunController {
       return this.resultFromSnapshot(commit.snapshot);
     }
     this.retryRegistry.disarm(loaded.run.id);
-    return this.executeLoop(
-      loaded,
-      loaded.continuation.mode === "TOOL_RESULTS" ? "TOOL_RESULTS" : "START",
-    );
+    // The retry resume runs through the same production loop as every other action: the coordinator
+    // decides `ADVANCE_AGENT(RETRY)` from the normalized durable state, and the Run Layer allocates a
+    // *new* Step for the new attempt. The failed Step is never reopened.
+    return this.driveToolBoundariesLocked(loaded, "RECOVER");
   }
 
+  /**
+   * The production Run execution loop.
+   *
+   * ```text
+   * Coordinator.next()          the only routing authority
+   *        ↓
+   * ADVANCE_AGENT               → Run Layer Step allocation → RunExecutionDriver
+   * EXECUTE_TOOL_BATCH          → the existing Phase 3D Tool compatibility boundary
+   * anything else               → the boundary is already durable
+   * ```
+   *
+   * The coordinator is asked *before* each action, from the durable snapshot, and its directive is
+   * what executes. Nothing here re-derives which action to take from a continuation type, a Run
+   * status or an execution epoch, so the action that runs is the action that was decided.
+   *
+   * A state the coordinator refuses to route is not guessed at. An active Step and a legacy retry
+   * checkpoint without recorded provenance are resolved by the recovery paths before this loop is
+   * entered, so reaching one here is a lifecycle violation rather than something to route around —
+   * the coordinator's refusal is propagated rather than swallowed.
+   */
   private async driveToolBoundariesLocked(
     initial: RunExecutionSnapshot,
-    initialMode: "EXECUTE" | "RECOVER",
+    initialMode: "EXECUTE" | "RECOVER" = "EXECUTE",
   ): Promise<RunControllerResult> {
     let snapshot = initial;
+    /**
+     * How the *next* Tool batch is entered.
+     *
+     * The frozen coordinator decides *which* batch is next; whether that batch is a fresh execution
+     * or the settlement of one a restart interrupted is a fact only this layer holds, because it is
+     * the layer that knows why it is driving at all. It is threaded explicitly rather than read off
+     * the directive: a durable `RUNNING` invocation must be recovered — never re-dispatched — and
+     * only this caller can say that this is a recovery.
+     *
+     * The intent is spent once a batch has been dispatched: a batch re-entered after accepted results
+     * is a fresh execution of the model's next request.
+     */
     let mode = initialMode;
     while (true) {
       if (snapshot.cancellationIntent !== undefined) return this.finalizeCancellation(snapshot);
       if (this.isExpired(snapshot)) return this.finalizeTimeout(snapshot);
       if (snapshot.run.status === "WAITING_APPROVAL" || snapshot.run.status === "WAITING_RESOURCE")
         return this.resultFromSnapshot(snapshot);
-      const continuation = snapshot.continuation;
-      if (continuation?.type === "WAITING_TOOL_RESULTS") {
-        if (continuation.receivedResults !== undefined) {
-          const execution = await this.executeLoop(snapshot, "TOOL_RESULTS");
-          if (execution.status !== "WAITING_TOOL_RESULTS") return execution;
-          snapshot = await this.load(snapshot.run.id);
-          mode = "EXECUTE";
-          continue;
-        }
+      if (isTerminal(snapshot.run.status)) return this.resultFromSnapshot(snapshot);
+
+      const directive = this.coordinator.next(
+        toAgentExecutionSnapshot(snapshot),
+        this.dependencies.clock.now(),
+      );
+
+      if (directive.kind === "EXECUTE_TOOL_BATCH") {
+        // The coordinator has decided a Tool batch is next; whether this Run Layer can run one is a
+        // Phase 3D composition question, and a Run whose host composed Tool execution out simply
+        // waits on its durable boundary.
         const coordinator = this.dependencies.toolCoordinator;
         if (coordinator === undefined) return this.resultFromSnapshot(snapshot);
+        const continuation = snapshot.continuation;
+        if (continuation?.type !== "WAITING_TOOL_RESULTS") {
+          throw new RunControllerInvariantError(
+            "A Tool batch directive requires an open WAITING_TOOL_RESULTS continuation.",
+          );
+        }
         if (snapshot.state === undefined) {
           throw new RunControllerInvariantError("Tool execution requires an AgentState.");
         }
@@ -678,7 +776,7 @@ export class RunController {
           signal: this.executionSignal(snapshot.run.id),
           sessionId: snapshot.run.sessionId,
           runId: snapshot.run.id,
-          stepId: continuation.sourceStepId,
+          stepId: directive.sourceStepId,
           securityContext: createToolSecurityContext(snapshot.run, snapshot.state),
           environment: {
             workspace: snapshot.run.workspace,
@@ -797,10 +895,34 @@ export class RunController {
         mode = "EXECUTE";
         continue;
       }
-      const execution = await this.executeLoop(snapshot, "START");
-      if (execution.status !== "WAITING_TOOL_RESULTS") return execution;
-      snapshot = await this.load(snapshot.run.id);
-      mode = "EXECUTE";
+
+      if (directive.kind === "ADVANCE_AGENT") {
+        const execution = await this.executeAgentDirective(snapshot, directive);
+        if (execution.status !== "WAITING_TOOL_RESULTS") return execution;
+        snapshot = await this.load(snapshot.run.id);
+        // The turn produced a *new* Tool request, so the next batch is a fresh execution of it.
+        mode = "EXECUTE";
+        continue;
+      }
+
+      if (directive.kind === "FINALIZE") {
+        // A terminal settlement the coordinator decided is committed here rather than left for a
+        // later recovery: the structural step budget and the deadline are governance decisions, not
+        // effects, and a caller that reached the end of the batch budget must see the settled Run
+        // rather than a `RUNNING` snapshot that only the next `recover()` would resolve.
+        switch (directive.reason) {
+          case "CANCELLED":
+            return this.finalizeCancellation(snapshot);
+          case "TIMEOUT":
+            return this.finalizeTimeout(snapshot);
+          case "MAX_STEPS_REACHED":
+            return this.finalizeMaxSteps(snapshot);
+        }
+      }
+
+      // Every other directive is a state the Run Layer does not act on here: the boundary is
+      // already durable and only an external resolution, a commit or a fresh recovery moves it.
+      return this.resultFromSnapshot(snapshot);
     }
   }
 
@@ -1072,205 +1194,279 @@ export class RunController {
   }
 
   /**
-   * One loop epoch.
+   * Drive one `ADVANCE_AGENT` directive through the frozen Run execution driver.
    *
    * ```text
-   * START                a fresh user Reason for this Run
-   * TOOL_RESULTS         resume from accepted Tool results
-   * VERIFICATION_REPAIR  continue the same Run after verification rejected its candidate
+   * Run Layer allocates the Step
+   *        ↓
+   * createAgentLoop(...)  →  createRunExecutionDriver(...)  →  driver.execute(directive)
+   *        ↓
+   * frozen AgentLoop.advance()
+   *        ↓  Context → Admission → durable ModelTurnBoundary → Provider
+   * AgentLoopAdvanceResult  →  canonical settlement
    * ```
+   *
+   * The directive is the *only* Reason authority here. It is not re-derived from a Loop epoch, from
+   * the continuation type, from the Run goal or from the outcome: the coordinator's own decision is
+   * carried into the driver verbatim, and a directive that is not an `ADVANCE_AGENT` fails closed
+   * rather than being silently reinterpreted.
+   *
+   * The Step this effect runs as is allocated **before** `advance()` and is deliberately not durable
+   * yet. It becomes durable exactly once, in `openAgentTurn`, which the durable
+   * `ModelTurnBoundaryPort` enters after admission and before any provider I/O. A context failure, a
+   * budget refusal or a cancellation before that boundary therefore leaves zero durable Step rows —
+   * the pending Step is an in-memory execution fact, not a new persisted state.
+   *
+   * `decision` is the durable snapshot the coordinator decided *from*, and it is the CAS the first
+   * open commits against. Using the state the decision was made from — rather than whatever the
+   * ledger happens to hold when the boundary is entered — is what stops a snapshot that moved after
+   * the decision from being opened as if it had not.
    */
-  private async executeLoop(
-    snapshot: RunExecutionSnapshot,
-    epoch: "START" | "TOOL_RESULTS" | "VERIFICATION_REPAIR",
+  private async executeAgentDirective(
+    decision: RunExecutionSnapshot,
+    directive: AdvanceAgentDirective,
   ): Promise<RunControllerResult> {
-    const resume = epoch === "TOOL_RESULTS";
-    if (snapshot.state === undefined)
-      throw new RunControllerInputError("Run execution has no AgentState");
-    // The coordinator decides; the epoch only selects the compatibility entry point. Asking here,
-    // before the turn, is what makes the directive the settlement authority rather than a value
-    // re-derived from the outcome.
-    const advancement = this.advancementDirective(snapshot, epoch);
+    const snapshot = decision;
+    const state = snapshot.state;
+    if (state === undefined) throw new RunControllerInputError("Run execution has no AgentState");
+
+    const execution = await this.dependencies.agentExecution.resolve(snapshot.run);
+    const signal = this.executionSignal(snapshot.run.id);
     const config = await this.dependencies.configResolver.resolve(snapshot.run);
-    let verificationRepairContext: { readonly text: string } | undefined;
-    const repairContinuation =
-      snapshot.continuation?.type === "WAITING_VERIFICATION_REPAIR"
-        ? snapshot.continuation
-        : undefined;
-    if (repairContinuation !== undefined) {
-      const recovery = this.verificationRecoveryStore();
-      if (recovery === undefined) {
-        throw new RunControllerInfrastructureError(
-          "Verification repair recovery is not configured.",
-        );
-      }
-      const failed = await recovery.getPlanExecutionSnapshot(repairContinuation.failedPlanId);
-      if (failed === null) {
-        throw new RunControllerInfrastructureError("Verification repair plan is unavailable.");
-      }
-      const failedCheckIds = new Set(repairContinuation.failedCheckIds);
-      const repairContext = compileVerificationRepairContext({
-        originalGoal: snapshot.run.goal,
-        failedPlan: failed.plan,
-        failedChecks: failed.plan.checks.filter((check) => failedCheckIds.has(check.id)),
-        evidence: failed.evidence.filter((item) =>
-          repairContinuation.evidenceIds.includes(item.id),
-        ),
-        changedFiles: snapshot.state.changedFiles,
-        repairCycle: repairContinuation.repairCycle,
-      });
-      verificationRepairContext = { text: repairContext.text };
-    }
-    let preProviderError: unknown;
-    // The Core-private record of what the durable boundary, the Context Engine and the provider
-    // actually did for this turn. It is what lets a boundary commit failure be surfaced as an
-    // infrastructure failure instead of being settled as a model outcome (§36–§38).
-    const turnObservation = createAgentTurnObservation();
-    let pendingTurn: PendingAgentTurn | undefined;
+    const step = allocateRunAgentStep({
+      state,
+      runId: snapshot.run.id,
+      stepId: execution.stepIds.create(),
+      now: this.dependencies.clock.now(),
+    });
+
+    // The directive's own turn input, projected against the durable conversation through the frozen
+    // kernel validators. Nothing here re-derives *which* turn this is.
+    const history = projectRunAgentHistory({
+      input: directive.input,
+      conversation: snapshot.conversation,
+      ...(execution.historyPrefix === undefined ? {} : { historyPrefix: execution.historyPrefix }),
+    });
+
+    // The Core-private record of what the boundary, the context engine and the provider actually
+    // did. The frozen result deliberately reports none of it, so this is the only channel through
+    // which a boundary commit failure stays distinguishable from a model failure.
+    const observation = createAgentTurnObservation();
+    const pendingTurn = this.pendingAgentTurn(
+      decision,
+      directive,
+      step,
+      toolRequestStepOf(snapshot),
+    );
     const boundary = createAgentModelTurnBoundary({
-      observation: turnObservation,
-      pendingTurn: () => {
-        if (pendingTurn === undefined) {
-          throw new RunControllerInvariantError(
-            "Model turn boundary was entered before the Run Layer opened a turn.",
-          );
-        }
-        return pendingTurn;
-      },
+      observation,
+      pendingTurn: () => pendingTurn,
       openTurn: (turn) => this.openAgentTurn(turn),
     });
-    const loop = this.dependencies.agentLoop.withLifecycleHooks({
-      beforeProviderAdmission: async ({ run, step, request }) => {
-        if (this.dependencies.budget === undefined) return request;
-        // The estimator runs here, where the AI request lives, so the durable budget
-        // port only ever receives plain numbers.
-        const estimatedInputTokens = this.dependencies.tokenEstimator?.estimate(request);
-        const admission = await this.dependencies.budget.admitLLM({
-          run,
-          step,
-          admission: {
-            ...(estimatedInputTokens === undefined ? {} : { estimatedInputTokens }),
-            ...(request.settings?.maxOutputTokens === undefined
-              ? {}
-              : { configuredMaxOutputTokens: request.settings.maxOutputTokens }),
-          },
-        });
-        if (admission.kind !== "ALLOWED") {
-          // The exact durable block, accounting included: the Run Layer settles with these numbers
-          // and must not have to reconstruct them from the frozen error.
-          turnObservation.admissionBlock = admission;
-          throw new AgentBudgetAdmissionError(admission);
-        }
-        if (admission.effectiveMaxOutputTokens === undefined) return request;
-        return {
-          ...request,
-          settings: { ...request.settings, maxOutputTokens: admission.effectiveMaxOutputTokens },
-        };
+
+    const contextEngine = execution.createContextEngine(
+      snapshot.run,
+      await this.verificationRepairContext(snapshot),
+    );
+    const modelAdmission = this.modelAdmissionPort(observation, snapshot.run, step);
+    const loop = createRunAgentLoop(
+      this.captureContextErrors(contextEngine, observation),
+      createAgentDecisionClassifier(),
+      {
+        // The observation decorator wraps the host's executor without changing it, so the frozen
+        // union the kernel receives is the one the host composed.
+        modelTurnExecutor: createObservingModelTurnExecutor(
+          execution.modelTurnExecutor,
+          observation,
+        ),
+        ...(modelAdmission === undefined ? {} : { modelAdmission }),
+        modelTurnBoundary: boundary,
       },
-      beforeProviderTurn: async ({ run, state, step }) => {
-        // The Run Layer prepared this turn; the boundary validates the frozen input against it,
-        // enforces idempotence, and commits through the RunController-owned callback. Nothing is
-        // committed here directly: the boundary holds no store.
-        pendingTurn = {
-          identity: { runId: run.id, sessionId: run.sessionId, goal: run.goal },
-          run,
-          state,
-          step,
-        };
-        try {
-          await boundary.beforeExecute({
-            identity: pendingTurn.identity,
-            turn: { stepId: step.id, sequence: step.sequence },
-            model: run.model,
-          });
-        } catch (error) {
-          preProviderError = error;
-          throw error;
-        }
+    );
+    const driver = createRunExecutionDriver({
+      agentLoop: loop,
+      // Phase 3D and Phase 3E own the real Tool and completion adapters. The production Agent path
+      // never hands those directives to the driver, and each placeholder throws rather than
+      // approximating work nobody performed.
+      toolTurns: DEFERRED_TOOL_TURN_COORDINATOR,
+      completionGate: DEFERRED_COMPLETION_GATE,
+    });
+
+    const effect = await driver.execute(directive, {
+      identity: {
+        runId: snapshot.run.id,
+        sessionId: snapshot.run.sessionId,
+        goal: snapshot.run.goal,
       },
+      turn: { stepId: step.id, sequence: step.sequence },
+      history: history.history,
+      model: execution.models.resolve(snapshot.run.model),
+      tools: execution.tools,
+      ...(execution.modelSettings === undefined ? {} : { modelSettings: execution.modelSettings }),
+      signal,
     });
-    const durableConversation = snapshot.conversation;
-    // The canonical conversation is projected onto the legacy durable encoding the Run Layer's
-    // history builder still speaks; the direction is one-way and happens only here.
-    const legacyConversation = durableConversation.map((entry) => ({
-      ...entry,
-      message: toLegacyMessage(entry.message),
-    }));
-    const history = buildRunExecutionHistory({
-      ...(config.historyPrefix === undefined ? {} : { historyPrefix: config.historyPrefix }),
-      durableConversation: legacyConversation.map((entry) => entry.message),
-      mode: resume ? "RESUME_WITH_TOOL_RESULTS" : "RUN",
-    });
-    const historySourceSequences = buildRunExecutionHistorySourceSequences({
-      ...(config.historyPrefix === undefined ? {} : { historyPrefix: config.historyPrefix }),
-      durableConversation: legacyConversation,
-      mode: resume ? "RESUME_WITH_TOOL_RESULTS" : "RUN",
-    });
-    const input = {
-      run: snapshot.run,
-      state: snapshot.state,
-      history,
-      ...(historySourceSequences === undefined ? {} : { historySourceSequences }),
-      baseSystemPrompt: config.baseSystemPrompt,
-      contextLimits: config.contextLimits,
-      ...(this.dependencies.toolCoordinator === undefined ||
-      this.dependencies.toolCoordinator.modelDefinitions().length === 0
-        ? {}
-        : { tools: this.dependencies.toolCoordinator.modelDefinitions() }),
-      ...(config.modelSettings === undefined ? {} : { modelSettings: config.modelSettings }),
-      ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
-      ...(config.explicitPaths === undefined ? {} : { explicitPaths: config.explicitPaths }),
-      ...(verificationRepairContext === undefined ? {} : { verificationRepairContext }),
-    };
-    let execution: AgentLoopExecutionResult;
-    const signal = this.executionSignal(snapshot.run.id);
-    if (epoch === "TOOL_RESULTS") {
-      const retryContinuation =
-        snapshot.continuation?.type === "WAITING_RETRY" &&
-        snapshot.continuation.mode === "TOOL_RESULTS"
-          ? snapshot.continuation
-          : undefined;
-      const toolContinuation =
-        snapshot.continuation?.type === "WAITING_TOOL_RESULTS" &&
-        snapshot.continuation.receivedResults !== undefined
-          ? snapshot.continuation
-          : undefined;
-      if (retryContinuation === undefined && toolContinuation === undefined) {
-        throw new RunControllerInputError(
-          "accepted Tool Results are missing from the continuation",
-        );
-      }
-      // The Step that requested these Tools. It is never `failedStepId` (the attempt that
-      // failed) and never a model call identity, and it is never re-derived from either.
-      const sourceStepId =
-        toolContinuation?.sourceStepId ??
-        retryContinuation?.sourceStepId ??
-        recoverToolRequestSourceStep(snapshot, retryContinuation?.pendingDecision);
-      execution = await loop.resumeWithToolResults({
-        ...input,
-        signal,
-        sourceStepId,
-        pendingDecision: (toolContinuation ?? retryContinuation)!.pendingDecision,
-        toolResults: (toolContinuation ?? retryContinuation)!.receivedResults!,
-      });
-    } else if (epoch === "VERIFICATION_REPAIR") {
-      execution = await loop.continueRun({
-        ...input,
-        signal,
-        reason: "VERIFICATION_REPAIR",
-      });
-    } else {
-      execution = await loop.run({ ...input, signal });
+
+    if (effect.kind !== "AGENT") {
+      throw new RunControllerInvariantError(
+        `The Agent driver produced a ${effect.kind} effect for an ADVANCE_AGENT directive.`,
+      );
     }
-    if (preProviderError !== undefined || requiresBoundaryRepair(turnObservation)) {
+    if (requiresBoundaryRepair(observation)) {
       // The durable open-Step commit did not succeed. No provider call was allowed, no Agent effect
       // exists, and settling this as a model failure would durably record an answer the model never
       // gave. The Run stays recoverable and the caller repairs or retries.
       throw new RunControllerInfrastructureError("Unable to durably open the model turn", {
-        cause: turnObservation.boundaryError ?? preProviderError,
+        cause: observation.boundaryError,
       });
     }
-    return this.settle(snapshot, execution, advancement, config.projectFacts);
+
+    return this.settle(snapshot, directive, effect.result, observation, config.projectFacts);
+  }
+
+  /**
+   * The pending Step one Agent effect is opened with.
+   *
+   * It is built from the effect-start snapshot the coordinator decided on: the revisions are the CAS
+   * the first open must compare against, and the Step is the one the Run Layer allocated. No mutable
+   * copy of the Run or the AgentState crosses into the boundary — the boundary commits the *current*
+   * durable snapshot, so a stale pre-provider copy can never become the committed state.
+   */
+  private pendingAgentTurn(
+    snapshot: RunExecutionSnapshot,
+    directive: AdvanceAgentDirective,
+    step: AgentStep,
+    toolRequestStepId: StepId | undefined,
+  ): PendingAgentTurn {
+    return {
+      identity: {
+        runId: snapshot.run.id,
+        sessionId: snapshot.run.sessionId,
+        goal: snapshot.run.goal,
+      },
+      model: snapshot.run.model,
+      step,
+      advanceReason: directive.reason,
+      // The revisions the decision was made from. `null` is the unset marker the commit vocabulary
+      // already uses for "this Run has no revision yet", so the two agree by construction.
+      expectedStateRevision: snapshot.stateRevision ?? null,
+      expectedContinuationRevision: snapshot.continuationRevision ?? null,
+      // The Tool-request Step is the durable continuation's own provenance, never one read back out
+      // of the frozen turn input: it is a fact of the Run's ledger, and the boundary refuses a turn
+      // whose continuation does not record the same Step.
+      ...(toolRequestStepId === undefined ? {} : { sourceStepId: toolRequestStepId }),
+    };
+  }
+
+  /**
+   * The frozen admission port for one turn.
+   *
+   * It is the Run Layer's budget authority, and it runs exactly where the frozen loop puts it: after
+   * the context is prepared and the request is built, and strictly before the durable boundary. A
+   * refusal therefore costs no durable Step and no provider call, and the exact block it reported —
+   * dimension, accounted and limit — travels back through the Core-private observation rather than
+   * being reconstructed from the frozen error.
+   */
+  private modelAdmissionPort(
+    observation: AgentTurnObservation,
+    run: AgentRun,
+    step: AgentStep,
+  ): ModelRequestAdmissionPort | undefined {
+    const budget = this.dependencies.budget;
+    if (budget === undefined) return undefined;
+    return {
+      admit: async ({ request }) => {
+        try {
+          const estimatedInputTokens = this.dependencies.tokenEstimator?.estimate(request);
+          const admission = await budget.admitLLM({
+            run,
+            step,
+            admission: {
+              ...(estimatedInputTokens === undefined ? {} : { estimatedInputTokens }),
+              ...(request.settings?.maxOutputTokens === undefined
+                ? {}
+                : { configuredMaxOutputTokens: request.settings.maxOutputTokens }),
+            },
+          });
+          if (admission.kind !== "ALLOWED") {
+            observation.admissionBlock = toBudgetBlock(admission);
+            return { kind: "BLOCKED", reason: "BUDGET", block: toFrozenBudgetBlock(admission) };
+          }
+          if (admission.effectiveMaxOutputTokens === undefined) {
+            return { kind: "ALLOWED", request };
+          }
+          return {
+            kind: "ALLOWED",
+            request: {
+              ...request,
+              settings: {
+                ...request.settings,
+                maxOutputTokens: admission.effectiveMaxOutputTokens,
+              },
+            },
+          };
+        } catch (error) {
+          observation.admissionError = error;
+          throw error;
+        }
+      },
+    };
+  }
+
+  /**
+   * Record the Context Engine's own failure without letting it cross the frozen boundary.
+   *
+   * The kernel reports only that preparation failed. The value itself may quote a path, a document
+   * or a prompt, so it is kept here — in the layer that owns the engine — and used to classify the
+   * durable failure.
+   */
+  private captureContextErrors(
+    engine: import("@caelush/agent").ContextEnginePort,
+    observation: AgentTurnObservation,
+  ): import("@caelush/agent").ContextEnginePort {
+    return {
+      prepare: async (input) => {
+        try {
+          return await engine.prepare(input);
+        } catch (error) {
+          observation.contextError = error;
+          throw error;
+        }
+      },
+    };
+  }
+
+  /**
+   * The verification-repair context of the turn about to run, when the Run is parked on a repair.
+   *
+   * Still compiled by the existing verification authority and still handed to the frozen loop only
+   * through the Context Engine supplier — never as a field of an `@caelush/agent` contract.
+   */
+  private async verificationRepairContext(
+    snapshot: RunExecutionSnapshot,
+  ): Promise<import("@caelush/context").VerificationRepairContextInput | undefined> {
+    const repairContinuation =
+      snapshot.continuation?.type === "WAITING_VERIFICATION_REPAIR"
+        ? snapshot.continuation
+        : undefined;
+    if (repairContinuation === undefined) return undefined;
+    const recovery = this.verificationRecoveryStore();
+    if (recovery === undefined) {
+      throw new RunControllerInfrastructureError("Verification repair recovery is not configured.");
+    }
+    const failed = await recovery.getPlanExecutionSnapshot(repairContinuation.failedPlanId);
+    if (failed === null) {
+      throw new RunControllerInfrastructureError("Verification repair plan is unavailable.");
+    }
+    const failedCheckIds = new Set(repairContinuation.failedCheckIds);
+    const repairContext = compileVerificationRepairContext({
+      originalGoal: snapshot.run.goal,
+      failedPlan: failed.plan,
+      failedChecks: failed.plan.checks.filter((check) => failedCheckIds.has(check.id)),
+      evidence: failed.evidence.filter((item) => repairContinuation.evidenceIds.includes(item.id)),
+      changedFiles: snapshot.state?.changedFiles ?? [],
+      repairCycle: repairContinuation.repairCycle,
+    });
+    return { text: repairContext.text };
   }
 
   /**
@@ -1285,8 +1481,10 @@ export class RunController {
    * lifecycle committer: a boundary object that held a store would be a second authority able to
    * write a Run status, and nothing would record which of the two actually did.
    *
-   * It is idempotent for the turn it was asked to open, and it fails closed for any other durable
-   * state: overwriting a different active Step would lose an attempt the ledger already recorded.
+   * It commits against the **effect-start revisions** the coordinator's decision was made from, so a
+   * durable snapshot that moved after the decision cannot be opened as if it had not. The one
+   * exception is an exact durable replay of the same turn, which resolves without committing: a
+   * second commit would insert a second Step and publish a second `llm.started`.
    */
   private async openAgentTurn(pending: PendingAgentTurn): Promise<void> {
     const current = await this.load(pending.identity.runId);
@@ -1306,48 +1504,47 @@ export class RunController {
     // whole point: a second commit would insert a second Step and publish a second `llm.started`.
     if (alreadyOpen) return;
 
-    if (current.run.currentStepId !== undefined || active !== undefined) {
+    this.assertBoundaryAuthority(current, pending);
+
+    if (
+      current.run.currentStepId !== undefined ||
+      active !== undefined ||
+      current.state.currentStepId !== undefined
+    ) {
       throw new RunExecutionInvariantError(
         "A model turn cannot open while a different Step is already active.",
       );
     }
 
-    const activeRun = AgentRunSchema.parse({ ...pending.run, currentStepId: pending.step.id });
-    const activeState = { ...pending.state, currentStepId: pending.step.id };
-    const retry = current.continuation?.type === "WAITING_RETRY" ? current.continuation : undefined;
-    const repair =
-      current.continuation?.type === "WAITING_VERIFICATION_REPAIR"
-        ? current.continuation
-        : undefined;
+    // The Step becomes durable here, and only here. The Run and the AgentState are projected from
+    // the *current* durable records, never from a pre-provider copy carried into the boundary.
+    const activeRun = AgentRunSchema.parse({ ...current.run, currentStepId: pending.step.id });
+    const activeState = beginAgentStepState(current.state, pending.step.id, pending.step.startedAt);
+    const consumption = this.continuationConsumption(current, pending);
 
     const commit = await this.commit({
       run: activeRun,
       state: activeState,
-      expectedStateRevision: current.stateRevision ?? null,
-      expectedContinuationRevision: current.continuationRevision ?? null,
+      expectedStateRevision: pending.expectedStateRevision,
+      expectedContinuationRevision: pending.expectedContinuationRevision,
       stepWrites: [{ operation: "INSERT", step: pending.step }],
       messagesToAppend: [],
-      // A retry or a repair boundary is consumed by opening the turn, so it is cleared in the same
-      // atomic transition. A `TOOL_RESULTS` continuation is deliberately *not* cleared: it is the
-      // durable provenance the effect settlement still needs (§28).
-      ...(retry === undefined && repair === undefined
-        ? {}
-        : { continuation: { operation: "CLEAR" as const } }),
+      ...(consumption === "CONSUME" ? { continuation: { operation: "CLEAR" as const } } : {}),
       events: [
-        ...(retry === undefined
-          ? []
-          : [
+        ...(consumption === "CONSUME" && current.continuation?.type === "WAITING_RETRY"
+          ? [
               this.eventFactory.retryStarted(
-                pending.run,
+                current.run,
                 pending.step,
-                retry.attempt,
-                retry.maxAttempts,
+                current.continuation.attempt,
+                current.continuation.maxAttempts,
                 this.nextEventId(),
                 this.dependencies.clock.now(),
               ),
-            ]),
+            ]
+          : []),
         this.eventFactory.llmStarted(
-          pending.run,
+          activeRun,
           pending.step,
           this.nextEventId(),
           this.dependencies.clock.now(),
@@ -1358,61 +1555,150 @@ export class RunController {
   }
 
   /**
-   * The coordinator's own decision for the Agent execution about to run.
+   * Whether opening this turn consumes the durable continuation.
    *
-   * It is read *before* the turn, from the durable state the turn will run against, which is the
-   * only moment at which "what does durable execution do next" is still answerable: once
-   * `beforeProviderTurn` has opened a Step, that state is mid-turn rather than routable.
+   * ```text
+   * RETRY              + WAITING_RETRY                -> consume
+   * COMPLETION_REPAIR  + WAITING_VERIFICATION_REPAIR  -> consume
+   * TOOL_RESULTS       + WAITING_TOOL_RESULTS         -> DO NOT consume
+   * INITIAL / STEERING + any continuation             -> fail closed
+   * ```
    *
-   * `epoch` is not consulted. It selects which legacy loop entry point runs, and it survives only
-   * as a Core execution detail; the directive is the settlement authority, and the two are asserted
-   * to agree rather than one being derived from the other.
+   * A `TOOL_RESULTS` continuation is deliberately *not* cleared: it is the durable provenance the
+   * effect settlement still needs, and clearing it would lose the source Step a later retry
+   * inherits. Every other pairing is a mismatch between why the turn was advanced and what the Run
+   * was actually parked on, so it fails closed rather than consuming a boundary nobody asked for.
    */
-  private advancementDirective(
-    snapshot: RunExecutionSnapshot,
-    epoch: "START" | "TOOL_RESULTS" | "VERIFICATION_REPAIR",
-  ): AdvanceAgentDirective | undefined {
-    // One durable state is deliberately not routable yet: a legacy retry checkpoint whose request
-    // Step exists only in the ledger. The status-specific recovery below determines it — or fails
-    // closed — and asking the coordinator first would only reproduce its refusal. This is the same
-    // condition `coordinatedBoundary` already declines to route, not a new policy.
-    if (
-      snapshot.continuation?.type === "WAITING_RETRY" &&
-      snapshot.continuation.mode === "TOOL_RESULTS" &&
-      snapshot.continuation.sourceStepId === undefined
-    ) {
-      return undefined;
+  private continuationConsumption(
+    current: RunExecutionSnapshot,
+    pending: PendingAgentTurn,
+  ): "CONSUME" | "PRESERVE" {
+    const continuation = current.continuation;
+    switch (pending.advanceReason) {
+      case "RETRY":
+        if (continuation?.type !== "WAITING_RETRY") {
+          throw new RunExecutionInvariantError(
+            "A retry turn requires a WAITING_RETRY continuation to consume.",
+          );
+        }
+        return "CONSUME";
+      case "COMPLETION_REPAIR":
+        if (continuation?.type !== "WAITING_VERIFICATION_REPAIR") {
+          throw new RunExecutionInvariantError(
+            "A completion-repair turn requires a WAITING_VERIFICATION_REPAIR continuation.",
+          );
+        }
+        return "CONSUME";
+      case "TOOL_RESULTS":
+        if (continuation?.type !== "WAITING_TOOL_RESULTS") {
+          throw new RunExecutionInvariantError(
+            "A Tool-results turn requires an open WAITING_TOOL_RESULTS continuation.",
+          );
+        }
+        return "PRESERVE";
+      case "INITIAL":
+      case "STEERING":
+        if (continuation !== undefined) {
+          throw new RunExecutionInvariantError(
+            `An ${pending.advanceReason} turn must not hold a durable continuation.`,
+          );
+        }
+        return "PRESERVE";
+      default:
+        return assertNeverAdvanceReason(pending.advanceReason);
     }
+  }
 
-    const directive: RunExecutionDirective = this.coordinator.next(
-      toAgentExecutionSnapshot(snapshot),
-      this.dependencies.clock.now(),
-    );
-    // A decision that is not "advance the model" means the coordinator governs this state itself —
-    // a terminal settlement, a suspension, or the structural step budget the compatibility loop
-    // still gates. There is no advance directive to plan against, and the effect settles through
-    // the compatibility authority. This is a typed outcome of the classification, never a reaction
-    // to an exception: nothing here catches anything.
-    if (directive.kind !== "ADVANCE_AGENT") return undefined;
-    assertExecutionEpochMatchesDirective(epoch, directive);
-    return directive;
+  /**
+   * Refuse a first open whose effect-start snapshot is no longer the durable state.
+   *
+   * The coordinator decided on one snapshot and the boundary commits against it. If the Run moved
+   * under the effect — a different status, a different model, a different revision, a different Tool
+   * provenance — opening the old turn would durably settle a Step the Run never allocated.
+   */
+  private assertBoundaryAuthority(current: RunExecutionSnapshot, pending: PendingAgentTurn): void {
+    if (current.run.status !== "RUNNING") {
+      throw new RunExecutionInvariantError(
+        `A model turn cannot open against a ${current.run.status} Run.`,
+      );
+    }
+    if (
+      current.run.model.provider !== pending.model.provider ||
+      current.run.model.model !== pending.model.model
+    ) {
+      throw new RunExecutionInvariantError(
+        "Model turn boundary model does not match the Run's durable model.",
+      );
+    }
+    // The CAS compares the revision *values* the decision was made from. An absent revision and an
+    // unset marker are the same fact — "this Run has never had one" — so they are normalized rather
+    // than distinguished: the granularity of the field is not part of what the boundary guards.
+    if (current.stateRevision !== (pending.expectedStateRevision ?? undefined)) {
+      throw new RunExecutionConflictError(
+        "The AgentState moved between the execution decision and the durable boundary.",
+      );
+    }
+    if (current.continuationRevision !== (pending.expectedContinuationRevision ?? undefined)) {
+      throw new RunExecutionConflictError(
+        "The Run continuation moved between the execution decision and the durable boundary.",
+      );
+    }
+    if (pending.sourceStepId !== undefined) {
+      const continuation = current.continuation;
+      // A Tool resume is entered from either boundary that records one: an ordinary open Tool turn,
+      // or a retry checkpoint whose preserved batch is being re-sent. Both must name the same
+      // request Step — never the attempt that failed, and never the turn being opened.
+      const recorded =
+        continuation?.type === "WAITING_TOOL_RESULTS"
+          ? continuation.sourceStepId
+          : continuation?.type === "WAITING_RETRY" && continuation.mode === "TOOL_RESULTS"
+            ? continuation.sourceStepId
+            : undefined;
+      if (recorded !== pending.sourceStepId) {
+        throw new RunExecutionInvariantError(
+          "A Tool-results turn must resume the Tool-request Step the continuation recorded.",
+        );
+      }
+    }
   }
 
   private async settle(
     before: RunExecutionSnapshot,
-    execution: AgentLoopExecutionResult,
-    directive: AdvanceAgentDirective | undefined,
-    projectFacts?: import("@caelush/protocol").VerificationProjectFacts,
+    directive: AdvanceAgentDirective,
+    result: AgentLoopAdvanceResult,
+    observation: AgentTurnObservation,
+    projectFacts: import("@caelush/protocol").VerificationProjectFacts | undefined,
   ): Promise<RunControllerResult> {
-    const route = classifyAgentEffectSettlement({ execution, directive });
+    const route = classifyAgentEffectSettlement({ result, directive, observation });
 
-    // The canonical branch is planned or it fails loudly. A planner error is never caught and
-    // turned into a compatibility settlement: that would leave two authorities able to settle one
-    // effect, with nothing recording which of them actually did.
-    if (route.route === "CANONICAL_AGENT_EFFECT") {
-      return this.settleCanonicalAgentEffect(before, execution, route.directive, route.result);
+    // The canonical branch is planned or it fails loudly. A planner error is never caught and turned
+    // into a compatibility settlement: that would leave two authorities able to settle one effect,
+    // with nothing recording which of them actually did.
+    switch (route.route) {
+      case "CANONICAL_AGENT_EFFECT":
+        return this.settleCanonicalAgentEffect(before, directive, route.result, observation);
+      case "BUDGET_AUTHORITY": {
+        const block = observation.admissionBlock;
+        if (block === undefined || block.kind !== "EXCEEDED") {
+          throw new RunControllerInvariantError(
+            "A budget settlement requires the exact durable block the admission authority returned.",
+          );
+        }
+        const current = await this.load(before.run.id);
+        return this.finalizeBudgetExceeded(current, block);
+      }
+      case "TERMINATION_AUTHORITY":
+        return this.finalizeAbortedExecution(before);
+      case "VERIFICATION_COMPATIBILITY":
+        return this.settleFinalCandidateCompatibility(
+          before,
+          result as Extract<AgentLoopAdvanceResult, { kind: "FINAL_CANDIDATE" }>,
+          observation,
+          projectFacts,
+        );
+      case "RETRY_COMPATIBILITY":
+        return this.settleRetryCompatibility(before, result as AgentLoopFailedResult, observation);
     }
-    return this.settleCompatibilityAgentEffect(before, execution, projectFacts);
   }
 
   /**
@@ -1429,12 +1715,16 @@ export class RunController {
    * Nothing here re-decides the transition. The planner derives the next Run, AgentState, Step
    * settlement, continuation and append list from the durable snapshot and the frozen result; this
    * method only gives it a fresh snapshot, commits what it returns, and reports the outcome.
+   *
+   * Whether a provider turn actually ran comes from the Core-private `AgentTurnObservation`, never
+   * from a legacy facade and never inferred from the outcome: a classifier that refuses a model's
+   * output completes a provider turn *and* fails the Reason, and the ledger records both.
    */
   private async settleCanonicalAgentEffect(
     before: RunExecutionSnapshot,
-    execution: AgentLoopExecutionResult,
     directive: AdvanceAgentDirective,
     result: AgentLoopAdvanceResult,
+    observation: AgentTurnObservation,
   ): Promise<RunControllerResult> {
     // The revision the commit is planned against is the one that is durable *now*, not the one the
     // effect started from: a provider turn is long enough for the Run to have moved under it.
@@ -1446,9 +1736,9 @@ export class RunController {
     if (authority === "UNEXPECTED_ABORT") {
       throw new RunControllerInvariantError("Run execution aborted without a known authority");
     }
-    // Budget governance runs before the transition, exactly as it does on the compatibility path:
-    // a turn that spent the budget settles the Run as exceeded instead of planning a transition.
-    const budgetSettlement = await this.settleBudgetAttempt(current, execution);
+    // Budget governance runs before the transition: a turn that spent the budget settles the Run as
+    // exceeded instead of planning a transition.
+    const budgetSettlement = await this.settleBudgetAttempt(current, result);
     if (budgetSettlement !== undefined) {
       return this.finalizeBudgetExceeded(current, budgetSettlement);
     }
@@ -1464,10 +1754,7 @@ export class RunController {
       effect,
       plannedCommit: this.agentTurnProvenance(planned, result),
       now,
-      // Whether a provider call happened at all is a fact only the facade that made it holds. A
-      // rejected model output completes a provider turn and fails the Reason, and the durable
-      // ledger has always recorded both.
-      providerTurnState: execution.providerTurnState,
+      providerTurnState: observation.providerTurnState,
       ownership: { eventIds: this.dependencies.eventIdFactory },
     });
 
@@ -1477,7 +1764,7 @@ export class RunController {
   }
 
   /**
-   * Preserve the durable reasoning summary the legacy facade used to write.
+   * Preserve the durable reasoning summary the planner cannot produce.
    *
    * ```text
    * TRANSITIONAL — Core-only settlement sidecar
@@ -1510,23 +1797,34 @@ export class RunController {
   }
 
   /**
-   * Settle an Agent effect the frozen planner cannot express.
+   * Settle a `FINAL_CANDIDATE` through the verification compatibility bridge.
    *
    * ```text
-   * TRANSITIONAL — deleted one branch at a time
+   * TRANSITIONAL — Phase 3E owns completion authority
    * ```
    *
-   * Every path here is a bridge to an authority that already exists and still owns its decision:
-   * the verification bridge and the Run Retry Policy for a `FinalCandidate` and a retryable
-   * failure, the termination authority for cancellation, the budget authority for a refusal, and
-   * the facade's own compatibility outcomes for the rest. Phase 3D and Phase 3E delete them.
+   * The frozen planner refuses this branch on purpose: moving a Run to `VERIFYING` needs a real
+   * `VerificationPlanId`, and a pure planner that minted one would be a second completion authority.
+   * So the bridge consumes the **canonical** result — the exact object `advance()` returned — rather
+   * than a legacy projection of it:
+   *
+   * ```text
+   * current durable snapshot        the Step comes from current.activeStep, never from an execution copy
+   * AdvanceAgentDirective           why this turn ran
+   * AgentLoopFinalCandidateResult   the decision, the turn, the usage and the messages to append
+   * AgentTurnObservation            whether a provider turn actually completed
+   * projectFacts                    the host's fresh verification profile
+   * ```
+   *
+   * The Run moves to `VERIFYING` with `AWAITING_VERIFICATION`. It never completes here, and no
+   * `CompletionGate` implementation exists anywhere in this path.
    */
-  private async settleCompatibilityAgentEffect(
+  private async settleFinalCandidateCompatibility(
     before: RunExecutionSnapshot,
-    execution: AgentLoopExecutionResult,
-    projectFacts?: import("@caelush/protocol").VerificationProjectFacts,
+    result: Extract<AgentLoopAdvanceResult, { kind: "FINAL_CANDIDATE" }>,
+    observation: AgentTurnObservation,
+    projectFacts: import("@caelush/protocol").VerificationProjectFacts | undefined,
   ): Promise<RunControllerResult> {
-    if (execution.status === "CANCELLED") return this.finalizeAbortedExecution(before, execution);
     const current = await this.load(before.run.id);
     const authority = this.resolveAuthority(current, false);
     if (authority === "CANCELLED") return this.finalizeCancellation(current);
@@ -1535,102 +1833,58 @@ export class RunController {
     if (authority === "UNEXPECTED_ABORT") {
       throw new RunControllerInvariantError("Run execution aborted without a known authority");
     }
-    if (execution.status === "FAILED" && execution.budget?.kind === "EXCEEDED") {
-      return this.finalizeBudgetExceeded(current, execution.budget);
-    }
-    const budgetSettlement = await this.settleBudgetAttempt(current, execution);
+    const budgetSettlement = await this.settleBudgetAttempt(current, result);
     if (budgetSettlement !== undefined) {
       return this.finalizeBudgetExceeded(current, budgetSettlement);
     }
-    if (current.state === undefined)
+    if (current.state === undefined) {
       throw new RunControllerInfrastructureError("Run state disappeared during settlement");
-    const now = this.dependencies.clock.now();
-    let run: AgentRun;
-    let state: AgentState = execution.state;
-    if (this.dependencies.budget?.reconcileState !== undefined) {
-      state = await this.dependencies.budget.reconcileState(state);
     }
-    let continuation: RunExecutionCommit["continuation"];
-    let events: DurableEventDraft[];
-    let verificationPlan: VerificationPlan | undefined;
-    if (execution.status === "FAILED") {
-      const retrySettlement = await this.settleProviderFailure(current, before, execution, now);
-      if (retrySettlement !== undefined) return retrySettlement;
-      state = markAgentStateFailed(state, execution.error, now);
-      const settledRun = AgentRunSchema.parse({ ...current.run, currentStepId: undefined });
-      run = markAgentRunFailed(settledRun, now);
-      continuation = current.continuation === undefined ? undefined : { operation: "CLEAR" };
-      events = this.failureEvents(current.run, run, execution.error, execution.step, now);
-      if (execution.providerTurnState === "FAILED" && execution.step !== undefined) {
-        events.unshift(
-          this.eventFactory.llmFailed(
-            current.run,
-            execution.step,
-            execution.error,
-            this.nextEventId(),
-            now,
-          ),
-        );
-      }
-      if (execution.providerTurnState === "COMPLETED" && execution.step !== undefined) {
-        events.unshift(
-          this.eventFactory.llmCompleted(
-            current.run,
-            execution.state,
-            execution.step,
-            this.nextEventId(),
-            now,
-          ),
-        );
-      }
-    } else if (execution.outcome.type === "MAX_STEPS_REACHED") {
-      run = AgentRunSchema.parse({ ...current.run, status: "MAX_STEPS_REACHED", finishedAt: now });
-      continuation = current.continuation === undefined ? undefined : { operation: "CLEAR" };
-      events = [
-        this.eventFactory.maxSteps(current.run, state, execution.outcome, this.nextEventId(), now),
-        this.eventFactory.statusChanged(
-          current.run,
-          "RUNNING",
-          "MAX_STEPS_REACHED",
-          this.nextEventId(),
-          now,
-        ),
-      ];
-    } else if (execution.outcome.type === "TOOL_CALLS_REQUESTED") {
-      run = AgentRunSchema.parse({ ...current.run, currentStepId: undefined });
-      continuation = {
-        operation: "SET",
-        checkpoint: {
-          type: "WAITING_TOOL_RESULTS",
-          runId: run.id,
-          sourceStepId: execution.step!.id,
-          pendingDecision: execution.outcome,
-        },
-        updatedAt: now,
-      };
-      events = this.successEvents(current.run, state, execution.step!, execution, now);
-    } else {
-      verificationPlan = this.createVerificationPlan(
-        current.run,
-        execution.step!,
-        state.changedFiles,
-        projectFacts,
-        execution.outcome.candidateText,
-      );
-      run = AgentRunSchema.parse({ ...current.run, status: "VERIFYING", currentStepId: undefined });
-      continuation = {
+
+    const now = this.dependencies.clock.now();
+    const step = this.requireExecutedStep(current, result.turn.stepId, "A final candidate");
+    const settledState = this.settleExecutedStepState(current.state, step, result, now);
+    const completedStep = completeAgentStep(step, {
+      finishedAt: now,
+      reasoningSummary: summarizeAgentDecision(result.decision),
+    });
+    // The Run holds a candidate and is about to verify it, so its AgentState is VERIFYING. The step
+    // count settles exactly once, on this same transition.
+    const decisionState = markAgentStateVerifying(settledState, now);
+    const verificationPlan = this.createVerificationPlan(
+      current.run,
+      step,
+      decisionState.changedFiles,
+      projectFacts,
+      result.decision.candidateText,
+    );
+    const run = AgentRunSchema.parse({
+      ...current.run,
+      status: "VERIFYING",
+      currentStepId: undefined,
+    });
+
+    const commit = await this.commit({
+      run,
+      state: decisionState,
+      expectedStateRevision: current.stateRevision ?? null,
+      expectedContinuationRevision: current.continuationRevision ?? null,
+      stepWrites: [{ operation: "UPDATE", step: completedStep }],
+      messagesToAppend: appendMessages(current, result.messagesToAppend, step.id, now),
+      continuation: {
         operation: "SET",
         checkpoint: {
           type: "AWAITING_VERIFICATION",
           runId: run.id,
-          sourceStepId: execution.step!.id,
+          sourceStepId: step.id,
           verificationPlanId: verificationPlan.id,
-          finalDecision: execution.outcome,
+          finalDecision: result.decision,
         },
         updatedAt: now,
-      };
-      events = [
-        ...this.successEvents(current.run, state, execution.step!, execution, now),
+      },
+      verificationPlan,
+      events: [
+        ...this.successEvents(current.run, decisionState, completedStep, observation, now),
         this.eventFactory.statusChanged(
           current.run,
           "RUNNING",
@@ -1644,89 +1898,81 @@ export class RunController {
           this.nextEventId(),
           now,
         ),
-      ];
-    }
-    const messagesToAppend = execution.messagesToAppend.map((message) => ({
-      createdAt: now,
-      ...(message.role === "assistant" && execution.step === undefined
-        ? {}
-        : message.role === "assistant"
-          ? { sourceStepId: execution.step!.id }
-          : {}),
-      ...(message.role === "tool" && current.continuation?.type === "WAITING_TOOL_RESULTS"
-        ? { sourceStepId: current.continuation.sourceStepId }
-        : {}),
-      message,
-    }));
-    const commit = await this.commit({
-      run,
-      state,
-      expectedStateRevision: current.stateRevision ?? null,
-      expectedContinuationRevision: current.continuationRevision ?? null,
-      stepWrites:
-        execution.step === undefined ? [] : [{ operation: "UPDATE", step: execution.step }],
-      messagesToAppend,
-      ...(continuation === undefined ? {} : { continuation }),
-      ...(verificationPlan === undefined ? {} : { verificationPlan }),
-      events,
+      ],
     });
     this.notify(commit.events);
-    if (verificationPlan !== undefined) {
-      return this.driveProjectVerificationLocked(commit.snapshot);
-    }
-    return this.resultFromSnapshot(commit.snapshot);
+    return this.driveProjectVerificationLocked(commit.snapshot);
   }
 
-  private async settleProviderFailure(
-    current: RunExecutionSnapshot,
+  /**
+   * Settle a retryable provider failure through the Run Retry Policy bridge.
+   *
+   * ```text
+   * TRANSITIONAL — Phase 10C owns the provider retry policy
+   * ```
+   *
+   * The attempt's Step is settled **before** the policy is asked, because the direct AgentLoop does
+   * not settle a Step itself: one provider turn is one Agent Step attempt, and `UsageState.steps`
+   * counts settled attempts including failed ones.
+   *
+   * ```text
+   * failedStep   = failAgentStep(current.activeStep, now)
+   * settledState = settleAgentStepState(current.state, { stepId, usage, now })
+   * ```
+   *
+   * `settledState.usage.steps` is therefore the count *after* this attempt, which is exactly the
+   * number the policy's `maxSteps` gate must compare against. The Step is never a legacy
+   * `execution.step`: the source of truth is the Run's own active Step, and `result.turn.stepId`
+   * must name it.
+   */
+  private async settleRetryCompatibility(
     before: RunExecutionSnapshot,
-    execution: Extract<AgentLoopExecutionResult, { status: "FAILED" }>,
-    now: AgentRun["createdAt"],
-  ): Promise<RunControllerResult | undefined> {
-    if (execution.providerTurnState !== "FAILED" || execution.retry === undefined) return undefined;
-    if (execution.step === undefined) {
-      throw new RunControllerInvariantError("Provider failure has no failed Step");
+    result: AgentLoopFailedResult,
+    observation: AgentTurnObservation,
+  ): Promise<RunControllerResult> {
+    const current = await this.load(before.run.id);
+    const authority = this.resolveAuthority(current, false);
+    if (authority === "CANCELLED") return this.finalizeCancellation(current);
+    if (authority === "TIMEOUT") return this.finalizeTimeout(current);
+    if (authority === "TERMINAL") return this.resultFromSnapshot(current);
+    if (authority === "UNEXPECTED_ABORT") {
+      throw new RunControllerInvariantError("Run execution aborted without a known authority");
     }
+    const budgetSettlement = await this.settleBudgetAttempt(current, result);
+    if (budgetSettlement !== undefined) {
+      return this.finalizeBudgetExceeded(current, budgetSettlement);
+    }
+    if (current.state === undefined) {
+      throw new RunControllerInfrastructureError("Run state disappeared during settlement");
+    }
+
+    const now = this.dependencies.clock.now();
+    const step = this.requireExecutedStep(current, result.turn.stepId, "A provider failure");
+    const failedStep = failAgentStep(step, now);
+    const settledState = this.settleExecutedStepState(current.state, step, result, now);
+    const retry = toDurableRetryMetadata(result.retry);
+    if (retry === undefined) {
+      throw new RunControllerInvariantError(
+        "A retryable provider failure carried no durable retry code.",
+      );
+    }
+
     const deadline = deriveRunDeadline(current.run);
     const attempt = before.continuation?.type === "WAITING_RETRY" ? before.continuation.attempt : 1;
     const decision = this.retryController.decide({
-      retryable: execution.retry.retryable,
+      retryable: true,
       attempt,
-      steps: execution.state.usage.steps,
+      steps: settledState.usage.steps,
       maxSteps: current.run.limits.maxSteps,
       now,
       ...(deadline === undefined ? {} : { deadlineAt: deadline.deadlineAt }),
-      ...(execution.retry.retryAfterMs === undefined
-        ? {}
-        : { retryAfterMs: execution.retry.retryAfterMs }),
+      ...(retry.retryAfterMs === undefined ? {} : { retryAfterMs: retry.retryAfterMs }),
     });
-    const previous = before.continuation;
-    const retryContext =
-      previous?.type === "WAITING_TOOL_RESULTS" && previous.receivedResults !== undefined
-        ? {
-            mode: "TOOL_RESULTS" as const,
-            pendingDecision: previous.pendingDecision,
-            receivedResults: previous.receivedResults,
-            // The first retry of a Tool resume: the original tool request's Step is right here,
-            // so it is captured on the way in and can never be confused with `failedStepId`.
-            sourceStepId: previous.sourceStepId,
-          }
-        : previous?.type === "WAITING_RETRY" && previous.mode === "TOOL_RESULTS"
-          ? {
-              mode: "TOOL_RESULTS" as const,
-              pendingDecision: previous.pendingDecision,
-              receivedResults: previous.receivedResults,
-              // A later retry carries the provenance forward unchanged.
-              ...(previous.sourceStepId === undefined
-                ? {}
-                : { sourceStepId: previous.sourceStepId }),
-            }
-          : { mode: "START" as const };
-    if (decision.kind === "STOP" && decision.reason === "ATTEMPTS_EXHAUSTED") return undefined;
-    if (decision.kind === "STOP" && decision.reason === "NOT_RETRYABLE") return undefined;
+    const retryContext = this.retryResumeContext(before.continuation);
 
+    /* The step budget. The Step settlement is committed on this path too, so no attempt is lost. */
     if (decision.kind === "STOP" && decision.reason === "MAX_STEPS_REACHED") {
-      const state = markAgentStateMaxStepsReached(execution.state, now);
+      const state = markAgentStateMaxStepsReached(settledState, now);
       const run = AgentRunSchema.parse({
         ...current.run,
         status: "MAX_STEPS_REACHED",
@@ -1738,14 +1984,14 @@ export class RunController {
         state,
         expectedStateRevision: current.stateRevision ?? null,
         expectedContinuationRevision: current.continuationRevision ?? null,
-        stepWrites: [{ operation: "UPDATE", step: execution.step }],
+        stepWrites: [{ operation: "UPDATE", step: failedStep }],
         messagesToAppend: [],
         ...(current.continuation === undefined ? {} : { continuation: { operation: "CLEAR" } }),
         events: [
           this.eventFactory.llmFailed(
             current.run,
-            execution.step,
-            execution.error,
+            failedStep,
+            result.error,
             this.nextEventId(),
             now,
           ),
@@ -1773,6 +2019,7 @@ export class RunController {
       return this.resultFromSnapshot(commit.snapshot);
     }
 
+    /* The original deadline, chunked to the deadline itself rather than a fresh attempt time. */
     if (decision.kind === "STOP" && decision.reason === "DEADLINE_EXCEEDED") {
       if (deadline === undefined) {
         throw new RunControllerInvariantError(
@@ -1780,29 +2027,32 @@ export class RunController {
         );
       }
       const run = AgentRunSchema.parse({ ...current.run, currentStepId: undefined });
-      const checkpoint = {
-        type: "WAITING_RETRY" as const,
-        runId: run.id,
-        failedStepId: execution.step.id,
-        attempt: attempt + 1,
-        maxAttempts: this.retryController.maxAttempts,
-        nextAttemptAt: deadline.deadlineAt,
-        errorCode: toDurableRetryCode(execution.retry.code),
-        ...retryContext,
-      };
       const commit = await this.commit({
         run,
-        state: execution.state,
+        state: settledState,
         expectedStateRevision: current.stateRevision ?? null,
         expectedContinuationRevision: current.continuationRevision ?? null,
-        stepWrites: [{ operation: "UPDATE", step: execution.step }],
+        stepWrites: [{ operation: "UPDATE", step: failedStep }],
         messagesToAppend: [],
-        continuation: { operation: "SET", checkpoint, updatedAt: now },
+        continuation: {
+          operation: "SET",
+          checkpoint: {
+            type: "WAITING_RETRY",
+            runId: run.id,
+            failedStepId: step.id,
+            attempt: attempt + 1,
+            maxAttempts: this.retryController.maxAttempts,
+            nextAttemptAt: deadline.deadlineAt,
+            errorCode: toDurableRetryCode(retry.code),
+            ...retryContext,
+          },
+          updatedAt: now,
+        },
         events: [
           this.eventFactory.llmFailed(
             current.run,
-            execution.step,
-            execution.error,
+            failedStep,
+            result.error,
             this.nextEventId(),
             now,
           ),
@@ -1812,43 +2062,72 @@ export class RunController {
       return this.resultFromSnapshot(commit.snapshot);
     }
 
-    if (decision.kind !== "RETRY") return undefined;
+    /* Attempts exhausted: the Run fails, with the same event vocabulary as the planner's branch. */
+    if (decision.kind === "STOP") {
+      const state = markAgentStateFailed(settledState, result.error, now);
+      const failedRun = markAgentRunFailed(
+        AgentRunSchema.parse({ ...current.run, currentStepId: undefined }),
+        now,
+      );
+      const commit = await this.commit({
+        run: failedRun,
+        state,
+        expectedStateRevision: current.stateRevision ?? null,
+        expectedContinuationRevision: current.continuationRevision ?? null,
+        stepWrites: [{ operation: "UPDATE", step: failedStep }],
+        // The caller's turn input is real work the ledger already carries: it is persisted so a
+        // failed Run records the user turn it failed on, exactly as the canonical planner's own
+        // `FAILED` branch does. No *provider* output is appended — the attempt produced none.
+        messagesToAppend: appendMessages(current, result.messagesToAppend, undefined, now),
+        ...(current.continuation === undefined ? {} : { continuation: { operation: "CLEAR" } }),
+        events: this.failureEvents(
+          current.run,
+          failedRun,
+          result.error,
+          failedStep,
+          now,
+          observation.providerTurnState,
+        ),
+      });
+      this.notify(commit.events);
+      return this.resultFromSnapshot(commit.snapshot);
+    }
+
     const nextAttemptAt = addTimestamp(now, decision.delayMs);
     const run = AgentRunSchema.parse({ ...current.run, currentStepId: undefined });
-    const checkpoint = {
-      type: "WAITING_RETRY" as const,
-      runId: run.id,
-      failedStepId: execution.step.id,
-      attempt: decision.attempt,
-      maxAttempts: this.retryController.maxAttempts,
-      nextAttemptAt,
-      errorCode: toDurableRetryCode(execution.retry.code),
-      ...retryContext,
-    };
     const commit = await this.commit({
       run,
-      state: execution.state,
+      state: settledState,
       expectedStateRevision: current.stateRevision ?? null,
       expectedContinuationRevision: current.continuationRevision ?? null,
-      stepWrites: [{ operation: "UPDATE", step: execution.step }],
+      stepWrites: [{ operation: "UPDATE", step: failedStep }],
+      // A failed provider attempt contributes no message. Appending the turn input here would make
+      // the next attempt's request duplicate its own `USER_INPUT` or `TOOL_RESULTS`.
       messagesToAppend: [],
-      continuation: { operation: "SET", checkpoint, updatedAt: now },
+      continuation: {
+        operation: "SET",
+        checkpoint: {
+          type: "WAITING_RETRY",
+          runId: run.id,
+          failedStepId: step.id,
+          attempt: decision.attempt,
+          maxAttempts: this.retryController.maxAttempts,
+          nextAttemptAt,
+          errorCode: toDurableRetryCode(retry.code),
+          ...retryContext,
+        },
+        updatedAt: now,
+      },
       events: [
-        this.eventFactory.llmFailed(
-          current.run,
-          execution.step,
-          execution.error,
-          this.nextEventId(),
-          now,
-        ),
+        this.eventFactory.llmFailed(current.run, failedStep, result.error, this.nextEventId(), now),
         this.eventFactory.retryScheduled(
           current.run,
-          execution.step,
+          failedStep,
           decision.attempt,
           this.retryController.maxAttempts,
           decision.delayMs,
           nextAttemptAt,
-          toDurableRetryCode(execution.retry.code),
+          toDurableRetryCode(retry.code),
           this.nextEventId(),
           now,
         ),
@@ -1859,10 +2138,112 @@ export class RunController {
     return this.resultFromSnapshot(commit.snapshot);
   }
 
-  private async finalizeCancellation(
-    before: RunExecutionSnapshot,
-    execution?: Extract<AgentLoopExecutionResult, { status: "CANCELLED" }>,
-  ): Promise<RunControllerResult> {
+  /**
+   * The retry provenance a new checkpoint carries forward.
+   *
+   * A first retry of a Tool resume captures the original Tool request's Step on the way in, so it
+   * can never be confused with `failedStepId`. A later retry carries the same value forward
+   * unchanged — never re-derived, and never replaced by the attempt that just failed.
+   */
+  private retryResumeContext(
+    previous: RunExecutionSnapshot["continuation"],
+  ): WaitingRetryResumeContext {
+    if (previous?.type === "WAITING_TOOL_RESULTS" && previous.receivedResults !== undefined) {
+      return {
+        mode: "TOOL_RESULTS",
+        pendingDecision: previous.pendingDecision,
+        receivedResults: previous.receivedResults,
+        sourceStepId: previous.sourceStepId,
+      };
+    }
+    if (previous?.type === "WAITING_RETRY" && previous.mode === "TOOL_RESULTS") {
+      return {
+        mode: "TOOL_RESULTS",
+        pendingDecision: previous.pendingDecision,
+        receivedResults: previous.receivedResults,
+        ...(previous.sourceStepId === undefined ? {} : { sourceStepId: previous.sourceStepId }),
+      };
+    }
+    return { mode: "START" };
+  }
+
+  /**
+   * The Step a canonical Agent effect actually ran as.
+   *
+   * It comes from the Run's own durable `activeStep`, never from a legacy execution copy, and it
+   * must be the Step the frozen result names. A mismatch means the Run's ledger and the effect
+   * disagree about which attempt this was, which is not something to settle around.
+   */
+  private requireExecutedStep(
+    current: RunExecutionSnapshot,
+    stepId: StepId,
+    what: string,
+  ): AgentStep {
+    const active = current.activeStep;
+    if (active === undefined) {
+      throw new RunControllerInvariantError(`${what} requires the Run's active Step.`);
+    }
+    if (active.id !== stepId) {
+      throw new RunControllerInvariantError(
+        `${what} ran as Step ${stepId} but the Run's active Step is ${active.id}.`,
+      );
+    }
+    if (active.status !== "RUNNING") {
+      throw new RunControllerInvariantError(
+        `${what} requires a RUNNING Step, found ${active.status}.`,
+      );
+    }
+    return active;
+  }
+
+  /** Clear the active Step and settle the attempt's usage, exactly once. */
+  private settleExecutedStepState(
+    state: AgentState,
+    step: AgentStep,
+    result: Extract<AgentLoopAdvanceResult, { kind: "FINAL_CANDIDATE" | "FAILED" }>,
+    now: AgentRun["createdAt"],
+  ): AgentState {
+    const usage = resolveResultUsage(result);
+    return settleAgentStepState(state, {
+      stepId: step.id,
+      ...(usage === undefined ? {} : { usage }),
+      now,
+    });
+  }
+
+  /**
+   * Settle the provider attempt's durable budget entry.
+   *
+   * The Step is the Run's own active Step, which is the identity the reservation was made under. A
+   * cancelled attempt is settled conservatively rather than released: the reservation was made
+   * before the provider could answer, so releasing it would under-count real spend.
+   */
+  private async settleBudgetAttempt(
+    current: RunExecutionSnapshot,
+    result: AgentLoopAdvanceResult,
+  ): Promise<Extract<AgentBudgetBlock, { kind: "EXCEEDED" }> | undefined> {
+    const budget = this.dependencies.budget;
+    const step = current.activeStep;
+    if (budget === undefined || step === undefined) return undefined;
+    if (result.kind === "CANCELLED") {
+      await budget.markLLMConservative?.({
+        runId: current.run.id,
+        stepId: step.id,
+        settledAt: this.dependencies.clock.now(),
+      });
+      return undefined;
+    }
+    const usage = resolveResultUsage(result);
+    const settlement = await budget.settleLLM({
+      runId: current.run.id,
+      stepId: step.id,
+      ...(usage === undefined ? {} : { usage }),
+      settledAt: this.dependencies.clock.now(),
+    });
+    return settlement?.kind === "EXCEEDED" ? settlement : undefined;
+  }
+
+  private async finalizeCancellation(before: RunExecutionSnapshot): Promise<RunControllerResult> {
     const current = await this.load(before.run.id);
     this.retryRegistry.disarm(current.run.id);
     if (current.run.status === "CANCELLED") return this.resultFromSnapshot(current);
@@ -1875,14 +2256,17 @@ export class RunController {
       };
     }
     const now = this.dependencies.clock.now();
-    let state = execution?.state ?? current.state;
-    let step = execution?.step;
+    // The Step the termination authority settles is the Run's own active Step, never a copy a
+    // legacy execution carried: the direct AgentLoop does not settle a Step itself, so there is
+    // exactly one place that does (§88).
+    let state = current.state;
+    let step: AgentStep | undefined;
     if (state !== undefined && state.currentStepId !== undefined) {
-      const activeStep = current.activeStep ?? step;
+      const activeStep = current.activeStep;
       if (activeStep === undefined || activeStep.id !== state.currentStepId) {
         throw new RunControllerInvariantError("Cancellation cannot reconcile the active Step");
       }
-      step = step ?? cancelAgentStep(activeStep, now);
+      step = cancelAgentStep(activeStep, now);
       state = cancelAgentStepState(state, {
         stepId: state.currentStepId,
         now,
@@ -1930,25 +2314,21 @@ export class RunController {
 
   private async finalizeAbortedExecution(
     before: RunExecutionSnapshot,
-    execution?: Extract<AgentLoopExecutionResult, { status: "CANCELLED" }>,
   ): Promise<RunControllerResult> {
     const current = await this.load(before.run.id);
     const authority = this.resolveAuthority(current, true);
-    if (authority === "CANCELLED") return this.finalizeCancellation(current, execution);
-    if (authority === "TIMEOUT") return this.finalizeTimeout(current, execution);
+    if (authority === "CANCELLED") return this.finalizeCancellation(current);
+    if (authority === "TIMEOUT") return this.finalizeTimeout(current);
     if (authority === "TERMINAL") return this.resultFromSnapshot(current);
     throw new RunControllerInvariantError("Run execution aborted without a known authority");
   }
 
-  private async finalizeTimeout(
-    before: RunExecutionSnapshot,
-    execution?: Extract<AgentLoopExecutionResult, { status: "CANCELLED" }>,
-  ): Promise<RunControllerResult> {
+  private async finalizeTimeout(before: RunExecutionSnapshot): Promise<RunControllerResult> {
     const current = await this.load(before.run.id);
     this.retryRegistry.disarm(current.run.id);
     const authority = this.resolveAuthority(current, false);
     if (authority === "TERMINAL") return this.resultFromSnapshot(current);
-    if (authority === "CANCELLED") return this.finalizeCancellation(current, execution);
+    if (authority === "CANCELLED") return this.finalizeCancellation(current);
     if (authority !== "TIMEOUT") {
       throw new RunControllerInvariantError("Timeout finalization requires an expired Run");
     }
@@ -1962,19 +2342,18 @@ export class RunController {
     }
     const latest = await this.load(current.run.id);
     if (isTerminal(latest.run.status)) return this.resultFromSnapshot(latest);
-    if (latest.cancellationIntent !== undefined)
-      return this.finalizeCancellation(latest, execution);
+    if (latest.cancellationIntent !== undefined) return this.finalizeCancellation(latest);
     if (!this.isExpired(latest)) return this.resultFromSnapshot(latest);
 
     const now = this.dependencies.clock.now();
-    let state = latest.state ?? execution?.state;
-    let step = execution?.step;
+    let state = latest.state;
+    let step: AgentStep | undefined;
     if (state !== undefined && state.currentStepId !== undefined) {
-      const activeStep = latest.activeStep ?? step;
+      const activeStep = latest.activeStep;
       if (activeStep === undefined || activeStep.id !== state.currentStepId) {
         throw new RunControllerInvariantError("Timeout cannot reconcile the active Step");
       }
-      step = step ?? cancelAgentStep(activeStep, now);
+      step = cancelAgentStep(activeStep, now);
       state = cancelAgentStepState(state, {
         stepId: state.currentStepId,
         now,
@@ -2023,36 +2402,6 @@ export class RunController {
     this.deadlineRegistry.disarm(run.id);
     this.notify(commit.events);
     return this.resultFromSnapshot(commit.snapshot);
-  }
-
-  private async settleBudgetAttempt(
-    current: RunExecutionSnapshot,
-    execution: AgentLoopExecutionResult,
-  ): Promise<Extract<AgentBudgetBlock, { kind: "EXCEEDED" }> | undefined> {
-    const budget = this.dependencies.budget;
-    const step = execution.step;
-    if (budget === undefined || step === undefined) return undefined;
-    if (execution.status === "CANCELLED") {
-      await budget.markLLMConservative?.({
-        runId: current.run.id,
-        stepId: step.id,
-        settledAt: this.dependencies.clock.now(),
-      });
-      return undefined;
-    }
-    const usage =
-      execution.status === "FAILED"
-        ? execution.usage
-        : execution.outcome.type === "MAX_STEPS_REACHED"
-          ? undefined
-          : execution.outcome.modelTurn.usage;
-    const result = await budget.settleLLM({
-      runId: current.run.id,
-      stepId: step.id,
-      ...(usage === undefined ? {} : { usage }),
-      settledAt: this.dependencies.clock.now(),
-    });
-    return result?.kind === "EXCEEDED" ? result : undefined;
   }
 
   private async finalizeBudgetExceeded(
@@ -2156,14 +2505,26 @@ export class RunController {
     }
   }
 
+  /**
+   * The durable events of a terminal failure.
+   *
+   * A provider attempt that really failed is described by `llm.failed` *before* the sanitized
+   * `error`, so the ledger reads in the order Phase 11D froze. Whether the provider was contacted
+   * is read from the Core-private observation, never inferred from the outcome: a classifier that
+   * refuses a model's answer fails the Reason while the provider turn itself completed.
+   */
   private failureEvents(
     run: AgentRun,
     failedRun: AgentRun,
     error: AgentError,
     step: AgentStep | undefined,
     timestamp: AgentRun["createdAt"],
+    providerTurnState: AgentProviderTurnState = "NOT_STARTED",
   ): DurableEventDraft[] {
     return [
+      ...(providerTurnState === "FAILED" && step !== undefined
+        ? [this.eventFactory.llmFailed(run, step, error, this.nextEventId(), timestamp)]
+        : []),
       this.eventFactory.error(run, error, step?.id, this.nextEventId(), timestamp),
       this.eventFactory.statusChanged(
         run,
@@ -2176,15 +2537,22 @@ export class RunController {
     ];
   }
 
+  /**
+   * The durable events of a settled successful turn.
+   *
+   * `llm.completed` is recorded when the provider really answered, whatever the classifier then
+   * decided about the answer, and the reasoning summary is recorded only because the Step already
+   * carries it. The fact that the provider answered comes from the Core-private observation.
+   */
   private successEvents(
     run: AgentRun,
     state: AgentState,
     step: AgentStep,
-    execution: AgentLoopOutcomeResult,
+    observation: AgentTurnObservation,
     timestamp: AgentRun["createdAt"],
   ): DurableEventDraft[] {
     const events: DurableEventDraft[] = [];
-    if (execution.providerTurnState === "COMPLETED") {
+    if (observation.providerTurnState === "COMPLETED") {
       events.push(this.eventFactory.llmCompleted(run, state, step, this.nextEventId(), timestamp));
     }
     if (step.reasoningSummary !== undefined) {
@@ -3263,17 +3631,6 @@ export class RunController {
     // below before anything is routed, and never resent to a provider.
     if (snapshot.activeStep !== undefined) return undefined;
 
-    // A legacy retry checkpoint predates the recorded request Step. The status-specific recovery
-    // below determines it from the durable ledger, or fails closed; routing it here would mean
-    // fabricating a Step identity.
-    if (
-      snapshot.continuation?.type === "WAITING_RETRY" &&
-      snapshot.continuation.mode === "TOOL_RESULTS" &&
-      snapshot.continuation.sourceStepId === undefined
-    ) {
-      return undefined;
-    }
-
     const directive = this.coordinator.next(toAgentExecutionSnapshot(snapshot), now);
 
     switch (directive.kind) {
@@ -3378,8 +3735,156 @@ export function createToolSecurityContext(
   });
 }
 
+/** The retry provenance a new checkpoint carries forward. */
+type WaitingRetryResumeContext =
+  | {
+      readonly mode: "START";
+    }
+  | {
+      readonly mode: "TOOL_RESULTS";
+      readonly pendingDecision: import("./agent-decision.js").AgentToolCallsDecision;
+      readonly receivedResults: readonly import("@caelush/ai").AIToolResultMessage[];
+      readonly sourceStepId?: StepId | undefined;
+    };
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The canonical append projection.
+ *
+ * The provenance rule is the durable one and is shared with the frozen planner rather than
+ * re-decided here: an assistant message belongs to the Step that produced it, and a Tool result
+ * belongs to the Step that requested the batch. A user message has no Step source.
+ */
+function appendMessages(
+  snapshot: RunExecutionSnapshot,
+  messages: readonly import("@caelush/ai").AIMessage[],
+  stepId: StepId | undefined,
+  now: AgentRun["createdAt"],
+): readonly {
+  createdAt: AgentRun["createdAt"];
+  sourceStepId?: StepId;
+  message: import("@caelush/ai").AIMessage;
+}[] {
+  const toolStepId =
+    snapshot.continuation?.type === "WAITING_TOOL_RESULTS"
+      ? snapshot.continuation.sourceStepId
+      : undefined;
+  return messages.map((message) => {
+    const sourceStepId =
+      message.role === "assistant" ? stepId : message.role === "tool" ? toolStepId : undefined;
+    return {
+      createdAt: now,
+      ...(sourceStepId === undefined ? {} : { sourceStepId }),
+      message,
+    };
+  });
+}
+
+/**
+ * The usage one frozen Agent result reported, when it reported any.
+ *
+ * A `FAILED` result carries usage only on the post-provider path, and a `FINAL_CANDIDATE` always
+ * carries the settled model turn. Nothing is inferred from the presence of a model turn: the
+ * frozen contract states usage explicitly, and an absent value means the attempt reported none.
+ */
+function resolveResultUsage(
+  result: AgentLoopAdvanceResult,
+): import("@caelush/ai").ModelUsage | undefined {
+  if (result.kind === "FAILED") return result.usage;
+  if (result.kind === "FINAL_CANDIDATE" || result.kind === "TOOL_REQUESTS") {
+    return result.modelTurn.usage;
+  }
+  return undefined;
+}
+
+/**
+ * Project the frozen retry hint onto the durable retry vocabulary.
+ *
+ * The frozen kernel only emits retry metadata for a retryable error, and only the three transient
+ * codes can reach here — the same three Phase 10C allows to be retried. Anything else is refused
+ * rather than stored, because the durable `WAITING_RETRY` checkpoint names one of them.
+ */
+function toDurableRetryMetadata(retry: import("@caelush/agent").AgentRetryMetadata | undefined):
+  | {
+      code: import("./agent-loop-input.js").AgentRetryMetadata["code"];
+      retryable: true;
+      retryAfterMs?: number;
+    }
+  | undefined {
+  if (retry === undefined || !retry.retryable) return undefined;
+  const code =
+    retry.code === "RATE_LIMIT"
+      ? ("AI_RATE_LIMIT" as const)
+      : retry.code === "NETWORK"
+        ? ("AI_NETWORK" as const)
+        : retry.code === "TIMEOUT"
+          ? ("AI_TIMEOUT" as const)
+          : undefined;
+  if (code === undefined) return undefined;
+  return {
+    code,
+    retryable: true,
+    ...(retry.retryAfterMs === undefined ? {} : { retryAfterMs: retry.retryAfterMs }),
+  };
+}
+
+/** Project a Core budget block onto the frozen admission vocabulary. */
+function toFrozenBudgetBlock(block: AgentBudgetBlock): import("@caelush/agent").AgentBudgetBlock {
+  if (block.kind === "UNAVAILABLE") {
+    return { kind: "UNAVAILABLE", reason: block.reason };
+  }
+  return {
+    kind: "EXCEEDED",
+    dimension: block.dimension,
+    accounted: block.accounted,
+    limit: block.limit,
+    ...(block.limitMicros === undefined ? {} : { limitMicros: block.limitMicros }),
+    ...(block.accountedMicros === undefined ? {} : { accountedMicros: block.accountedMicros }),
+  };
+}
+
+/** The Core-side budget block one admission refusal produced. */
+function toBudgetBlock(
+  admission: import("./budget-ports.js").RunLLMBudgetAdmission,
+): AgentBudgetBlock {
+  if (admission.kind === "UNAVAILABLE") {
+    return { kind: "UNAVAILABLE", reason: admission.reason };
+  }
+  if (admission.kind === "EXCEEDED") {
+    return {
+      kind: "EXCEEDED",
+      dimension: admission.dimension,
+      accounted: admission.accounted,
+      limit: admission.limit,
+      ...(admission.limitMicros === undefined ? {} : { limitMicros: admission.limitMicros }),
+      ...(admission.accountedMicros === undefined
+        ? {}
+        : { accountedMicros: admission.accountedMicros }),
+    };
+  }
+  throw new RunControllerInvariantError("A budget block cannot be projected from an allowance.");
+}
+
+/**
+ * The durable Step that requested the Tools an open continuation is resuming with.
+ *
+ * It is read from the continuation itself — the layer that wrote it is the layer that knows it —
+ * rather than from the frozen turn input, so the provenance has exactly one source.
+ */
+function toolRequestStepOf(snapshot: RunExecutionSnapshot): StepId | undefined {
+  const continuation = snapshot.continuation;
+  if (continuation?.type === "WAITING_TOOL_RESULTS") return continuation.sourceStepId;
+  if (continuation?.type === "WAITING_RETRY" && continuation.mode === "TOOL_RESULTS") {
+    return continuation.sourceStepId;
+  }
+  return undefined;
+}
+
+function assertNeverAdvanceReason(reason: never): never {
+  throw new RunControllerInvariantError(`Unhandled Run advance reason: ${String(reason)}`);
 }
 
 /**

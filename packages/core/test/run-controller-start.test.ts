@@ -10,7 +10,6 @@ import {
   type VerificationPlanDraft,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
-import { AgentLoop } from "../src/agent-loop.js";
 import { RunController } from "../src/run-controller.js";
 import { RunDeadlineRegistry } from "../src/run-deadline-registry.js";
 import type {
@@ -21,7 +20,11 @@ import type {
 } from "../src/run-execution-store.js";
 import type { RunEventNotifier, RunExecutionConfigResolver } from "../src/run-controller-ports.js";
 import type { RunBudgetPort } from "../src/budget-ports.js";
-import { fakeModelTurnExecutor, testModelCatalog } from "./support/fake-model-turn-executor.js";
+import type { RunAgentExecutionContextFactory } from "../src/run-agent-execution.js";
+import {
+  fakeFrozenModelTurnExecutor,
+  testRunAgentExecution,
+} from "./support/run-agent-execution.js";
 
 function makeRun(overrides: Partial<ReturnType<typeof AgentRunSchema.parse>> = {}) {
   return AgentRunSchema.parse({
@@ -128,25 +131,20 @@ const verificationPlanner = {
   }),
 };
 
-function makeLoop(
+/**
+ * The Run Layer's direct Agent execution dependencies for these tests.
+ *
+ * The provider script asserts the durable state the boundary must already have committed:
+ * `llm.started`, a RUNNING Step and both `currentStepId` projections. That is the assertion the
+ * legacy facade's lifecycle hook used to make, and it now belongs to the direct driver path.
+ */
+function makeAgentExecution(
   store: MemoryExecutionStore,
   providerFirstLine: () => void,
   providerWait?: (signal: AbortSignal) => Promise<void>,
-): AgentLoop {
-  return new AgentLoop({
-    inspector: { inspect: async () => ({}) as never },
-    planner: { plan: async () => ({}) as never },
-    contextBuilder: {
-      build: (input) => ({
-        messages:
-          input.mode === "TOOL_CONTINUATION"
-            ? input.currentTurnMessages
-            : [input.currentUserMessage],
-        report: {} as never,
-      }),
-    },
-    models: testModelCatalog(),
-    modelTurns: fakeModelTurnExecutor(async (_request, signal) => {
+): RunAgentExecutionContextFactory {
+  return testRunAgentExecution({
+    executor: fakeFrozenModelTurnExecutor(async (_request, signal) => {
       const current = store.snapshot;
       expect(current.run.currentStepId).toBeDefined();
       expect(current.state?.currentStepId).toBe(current.run.currentStepId);
@@ -163,11 +161,9 @@ function makeLoop(
         finishReason: "STOP" as const,
       };
     }),
-    clock: { now: () => createTimestampMs(10) },
-    stepIdFactory: { create: () => createStepId() },
-  });
+    createStepId: () => createStepId(),
+  }).factory;
 }
-
 describe("RunController.start", () => {
   it("aborts an in-flight provider when the Run deadline fires", async () => {
     const run = makeRun({
@@ -181,7 +177,7 @@ describe("RunController.start", () => {
     });
     const tasks: Array<() => void | Promise<void>> = [];
     const controller = new RunController({
-      agentLoop: makeLoop(
+      agentExecution: makeAgentExecution(
         store,
         () => providerEntered(),
         async (signal) => {
@@ -235,7 +231,7 @@ describe("RunController.start", () => {
     let now = 10;
     let providerCalls = 0;
     const controller = new RunController({
-      agentLoop: makeLoop(store, () => {
+      agentExecution: makeAgentExecution(store, () => {
         providerCalls += 1;
       }),
       executionStore: store,
@@ -273,7 +269,7 @@ describe("RunController.start", () => {
       timer: { schedule: () => ({ cancel: () => undefined }) },
     });
     const controller = new RunController({
-      agentLoop: makeLoop(store, () => {
+      agentExecution: makeAgentExecution(store, () => {
         throw new Error("timeout cleanup must precede provider execution");
       }),
       executionStore: store,
@@ -323,7 +319,7 @@ describe("RunController.start", () => {
       }),
     };
     const controller = new RunController({
-      agentLoop: makeLoop(store, () => {
+      agentExecution: makeAgentExecution(store, () => {
         providerCalls += 1;
       }),
       executionStore: store,
@@ -353,7 +349,7 @@ describe("RunController.start", () => {
     const run = makeRun();
     const store = new MemoryExecutionStore(run);
     const controller = new RunController({
-      agentLoop: makeLoop(store, () => undefined),
+      agentExecution: makeAgentExecution(store, () => undefined),
       executionStore: store,
       events: { notifyCommitted: () => undefined },
       configResolver: {
@@ -391,7 +387,7 @@ describe("RunController.start", () => {
       settleLLM: async () => undefined,
     };
     const controller = new RunController({
-      agentLoop: makeLoop(store, () => {
+      agentExecution: makeAgentExecution(store, () => {
         providerCalls += 1;
       }),
       executionStore: store,
@@ -428,7 +424,7 @@ describe("RunController.cancel", () => {
     const store = new MemoryExecutionStore(run);
     const notified: DurableAgentEvent[] = [];
     const controller = new RunController({
-      agentLoop: makeLoop(store, () => {
+      agentExecution: makeAgentExecution(store, () => {
         throw new Error("pending cancellation must not invoke the provider");
       }),
       executionStore: store,
@@ -460,7 +456,7 @@ describe("RunController project verification driving", () => {
     let profileCalls = 0;
     let runtimeCalls = 0;
     const controller = new RunController({
-      agentLoop: makeLoop(store, () => undefined),
+      agentExecution: makeAgentExecution(store, () => undefined),
       executionStore: store,
       events: { notifyCommitted: () => undefined },
       configResolver: {

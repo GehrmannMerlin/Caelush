@@ -4,7 +4,6 @@ import {
   type RunTransitionPlanInput,
 } from "@caelush/agent";
 import {
-  AgentLoop,
   RunController,
   RunControllerInfrastructureError,
   RunExecutionConflictError,
@@ -30,12 +29,11 @@ import {
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
 import { verificationPlanner } from "./support/fixtures.js";
+import { modelTurnResult, aiError } from "./support/model-turns.js";
 import {
-  fakeModelTurnExecutor,
-  modelTurnResult,
-  testModelCatalog,
-  aiError,
-} from "./support/model-turns.js";
+  fakeFrozenModelTurnExecutor,
+  testRunAgentExecution,
+} from "./support/run-agent-execution.js";
 
 /**
  * The production Agent effect cutover, asserted against the real RunController.
@@ -177,28 +175,18 @@ async function setup(options: SetupOptions) {
     commitVerifiedCompletion: (command) => store.commitVerifiedCompletion(command),
   };
 
-  const loop = new AgentLoop({
-    inspector: { inspect: async () => ({}) as never },
-    planner: { plan: async () => ({}) as never },
-    contextBuilder: {
-      build: (input) => ({
-        messages:
-          input.mode === "TOOL_CONTINUATION"
-            ? input.currentTurnMessages
-            : [input.currentUserMessage],
-        report: {} as never,
-      }),
-    },
-    models: testModelCatalog(),
-    modelTurns: fakeModelTurnExecutor(async (_request, signal) =>
-      options.complete(++count, signal),
-    ),
-    clock: { now: () => createTimestampMs(clockState.value++) },
-    stepIdFactory: { create: () => createStepId() },
+  // The Run Layer composes the frozen AgentLoop itself from these collaborator ports, so the
+  // scripted provider turn is the only model authority this fixture hands it.
+  const agentExecution = testRunAgentExecution({
+    executor: fakeFrozenModelTurnExecutor(async (_request, signal) => {
+      count += 1;
+      return options.complete(count, signal);
+    }),
+    createStepId: () => createStepId(),
   });
 
   const controller = new RunController({
-    agentLoop: loop,
+    agentExecution: agentExecution.factory,
     executionStore: instrumented,
     verificationStore: instrumented,
     events: eventBus,
@@ -354,28 +342,15 @@ describe("production Agent effect cutover", () => {
     const order: string[] = [];
     const materializer = spyMaterializer(order);
     let count = 0;
-    const loop = new AgentLoop({
-      inspector: { inspect: async () => ({}) as never },
-      planner: { plan: async () => ({}) as never },
-      contextBuilder: {
-        build: (input) => ({
-          messages:
-            input.mode === "TOOL_CONTINUATION"
-              ? input.currentTurnMessages
-              : [input.currentUserMessage],
-          report: {} as never,
-        }),
-      },
-      models: testModelCatalog(),
-      modelTurns: fakeModelTurnExecutor(async () => {
+    const agentExecution = testRunAgentExecution({
+      executor: fakeFrozenModelTurnExecutor(async () => {
         count += 1;
         throw aiError("AI_NETWORK", { message: "provider secret" });
       }),
-      clock: { now: () => createTimestampMs(clockState.value++) },
-      stepIdFactory: { create: () => createStepId() },
+      createStepId: () => createStepId(),
     });
     const controller = new RunController({
-      agentLoop: loop,
+      agentExecution: agentExecution.factory,
       executionStore: storage.execution,
       verificationStore: storage.execution,
       events: eventBus,

@@ -15,16 +15,18 @@ import { describe, expect, it } from "vitest";
 import type { AgentTurnInput, ContextPrepareInput } from "@caelush/agent";
 import { AgentLoop } from "../src/agent-loop.js";
 import type { AgentLoopCommonInput, AgentLoopContinuationInput } from "../src/agent-loop-input.js";
-import type { AgentLoopExecutionResult } from "../src/agent-loop-input.js";
-import type { AgentLoop as LoopContract } from "../src/agent-loop.js";
 import { createInitialAgentState, startAgentState } from "../src/agent-state.js";
 import { RunController } from "../src/run-controller.js";
 import type {
+  DurableAgentEvent,
+  RunConversationEntry,
   RunExecutionCommit,
   RunExecutionSnapshot,
   RunExecutionStorePort,
 } from "../src/run-execution-store.js";
 import { fakeModelTurnExecutor, testModelCatalog } from "./support/fake-model-turn-executor.js";
+import { fakeFrozenModelTurnExecutor } from "./support/run-agent-execution.js";
+import type { RunAgentExecutionContextFactory } from "../src/run-agent-execution.js";
 
 /**
  * Verification repair is a `CONTINUATION`, not a fabricated user turn.
@@ -252,8 +254,23 @@ describe("AgentLoop.continueRun", () => {
 
 /* --------------------------------------------------------- controller route */
 
+/**
+ * A store that commits the way the production store does.
+ *
+ * The controller's own invariant check runs on every load, so a store that dropped the Step, the
+ * AgentState or the revisions would fail on a shape production never produces. What is tracked here
+ * is exactly what a durable commit changes: the Run, the AgentState, the active Step pointer and
+ * the two revisions the boundary CAS compares.
+ */
 class SeededStore implements RunExecutionStorePort {
-  constructor(public snapshot: RunExecutionSnapshot) {}
+  stateRevision: number | undefined;
+  continuationRevision: number | undefined;
+  private sequence = 0;
+
+  constructor(public snapshot: RunExecutionSnapshot) {
+    this.stateRevision = snapshot.stateRevision;
+    this.continuationRevision = snapshot.continuationRevision;
+  }
 
   async load(): Promise<RunExecutionSnapshot> {
     return this.snapshot;
@@ -264,8 +281,43 @@ class SeededStore implements RunExecutionStorePort {
   }
 
   async commit(command: RunExecutionCommit) {
-    this.snapshot = { ...this.snapshot, run: command.run };
-    return { snapshot: this.snapshot, events: [] };
+    if (command.state !== undefined) this.stateRevision = (this.stateRevision ?? 0) + 1;
+    const activeStep = command.stepWrites.find((write) => write.step.status === "RUNNING")?.step;
+    const nextContinuation =
+      command.continuation === undefined
+        ? this.snapshot.continuation
+        : command.continuation.operation === "CLEAR"
+          ? undefined
+          : command.continuation.checkpoint;
+    if (command.continuation?.operation === "SET") {
+      this.continuationRevision = (this.continuationRevision ?? 0) + 1;
+    }
+    if (command.continuation?.operation === "CLEAR") this.continuationRevision = undefined;
+
+    const conversation: RunConversationEntry[] = [
+      ...this.snapshot.conversation,
+      ...command.messagesToAppend.map((entry, index) => ({
+        runId: command.run.id,
+        sequence: this.snapshot.conversation.length + index + 1,
+        ...entry,
+      })),
+    ];
+    this.snapshot = {
+      run: command.run,
+      conversation,
+      ...(command.state === undefined ? {} : { state: command.state }),
+      ...(this.stateRevision === undefined ? {} : { stateRevision: this.stateRevision }),
+      ...(activeStep === undefined ? {} : { activeStep }),
+      ...(nextContinuation === undefined ? {} : { continuation: nextContinuation }),
+      ...(nextContinuation === undefined || this.continuationRevision === undefined
+        ? {}
+        : { continuationRevision: this.continuationRevision }),
+    };
+    const events: DurableAgentEvent[] = command.events.map((draft) => ({
+      ...draft,
+      durability: { ...draft.durability, sequence: ++this.sequence },
+    }));
+    return { snapshot: this.snapshot, events };
   }
 }
 
@@ -301,33 +353,60 @@ describe("RunController verification repair route", () => {
       continuationRevision: 1,
     } as never);
 
-    const continuations: AgentLoopContinuationInput[] = [];
-    const runs: AgentLoopCommonInput[] = [];
-    const settled = (state: AgentLoopCommonInput["state"]): AgentLoopExecutionResult =>
-      ({
-        status: "FAILED",
-        error: { code: "MODEL_ERROR", message: "spy", retryable: false, phase: "LLM" },
-        state,
-        messagesToAppend: [],
-        providerTurnState: "NOT_STARTED",
-      }) as never;
-    const loop = {
-      withLifecycleHooks: () => loop,
-      async run(input: AgentLoopCommonInput) {
-        runs.push(input);
-        return settled(input.state);
+    /**
+     * The repair turn, observed on the production direct path.
+     *
+     * Phase 3C checkpoint 6 retired the legacy facade, so there is no `continueRun` to spy on: the
+     * authority is the coordinator's `COMPLETION_REPAIR` decision, and what a test can observe is
+     * the frozen turn the provider was handed, the identity it carried and the repair context the
+     * Context Engine factory received.
+     */
+    const repairContexts: (
+      import("@caelush/context").VerificationRepairContextInput | undefined
+    )[] = [];
+    const agentExecution: RunAgentExecutionContextFactory = {
+      async resolve() {
+        return {
+          models: testModelCatalog(),
+          modelTurnExecutor: fakeFrozenModelTurnExecutor(async () => ({
+            text: "repaired",
+            finishReason: "STOP" as const,
+          })),
+          stepIds: { create: () => createStepId() },
+          tools: [],
+          createContextEngine: (_target, repairContext) => {
+            repairContexts.push(repairContext);
+            return {
+              prepare: async (input: ContextPrepareInput) => ({
+                // A repair continuation contributes no caller-visible message of its own, so the
+                // rendered context is the repair block the host supplied plus whatever history the
+                // turn has. Composing that block is the host Context Engine's job; this stand-in
+                // renders it verbatim, which is exactly the wiring under test.
+                messages: [
+                  { role: "system" as const, content: repairContext?.text ?? "" },
+                  ...input.history,
+                ],
+                report: {
+                  estimatedInputTokens: 1,
+                  effectiveInputLimitTokens: 100,
+                  remainingTokens: 99,
+                  pressure: "NORMAL" as const,
+                  compactionCount: 0,
+                  contributions: [],
+                },
+                observationPolicy: {
+                  maxSingleObservationTokens: 10,
+                  maxObservationBatchTokens: 20,
+                },
+              }),
+            };
+          },
+        };
       },
-      async continueRun(input: AgentLoopContinuationInput) {
-        continuations.push(input);
-        return settled(input.state);
-      },
-      async resumeWithToolResults() {
-        throw new Error("a verification repair must never resume Tool results");
-      },
-    } as unknown as LoopContract;
+    };
 
     const controller = new RunController({
-      agentLoop: loop,
+      agentExecution,
       executionStore: store,
       events: { notifyCommitted: () => undefined },
       configResolver: {
@@ -374,12 +453,19 @@ describe("RunController verification repair route", () => {
 
     await controller.recover(run.id);
 
-    // The repair boundary went through `continueRun` with the frozen reason, and `run()` — the
-    // path that would fabricate a user turn — was never called.
-    expect(continuations).toHaveLength(1);
-    expect(continuations[0]?.reason).toBe("VERIFICATION_REPAIR");
-    expect(continuations[0]?.run.id).toBe(run.id);
-    expect(runs).toHaveLength(0);
+    // The repair reached the provider as a *continuation* of the same Run: the Context Engine
+    // factory was asked for the turn's context, and the repair context was supplied to it — never
+    // as a fabricated user follow-up in the durable ledger.
+    expect(repairContexts).toHaveLength(1);
+    expect(repairContexts[0]?.text).toContain(run.goal);
+    expect(repairContexts[0]?.text).toContain("Repair cycle");
+    // No duplicate durable user message: the Run's goal was not re-appended as if the user had
+    // spoken again.
+    expect(
+      store.snapshot.conversation.some(
+        (entry) => entry.message.role === "user" && entry.message.content === run.goal,
+      ),
+    ).toBe(false);
     // Same Run: no new Run was created for the repair.
     expect(store.snapshot.run.id).toBe(run.id);
   });
