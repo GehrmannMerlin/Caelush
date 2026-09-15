@@ -193,6 +193,11 @@ function materialize(
   snapshot: RunExecutionSnapshotView,
   directive: RunExecutionDirective,
   effect: RunExecutionEffectResult,
+  /**
+   * Whether a provider call happened. Defaults to a completed one, which is what the success
+   * fixtures describe; a failure fixture states its own, because the materializer never infers it.
+   */
+  providerTurnState: "NOT_STARTED" | "COMPLETED" | "FAILED" | "CANCELLED" = "COMPLETED",
 ) {
   const planner = createRunTransitionPlanner();
   const planned = planner.plan({ snapshot, directive, effect, now: NOW }) as RunExecutionCommitView;
@@ -206,6 +211,9 @@ function materialize(
     effect,
     plannedCommit: planned,
     now: NOW,
+    // These fixtures describe turns whose provider call completed. Whether one did is a
+    // Core-private fact the facade reports; the materializer never infers it.
+    providerTurnState,
     ownership: { eventIds: { create: ids.create } },
   });
   return { planned, materialized, ids };
@@ -283,7 +291,13 @@ describe("Run commit event materializer", () => {
       },
     };
 
-    const { materialized } = materialize(activeStepSnapshot(), AGENT_DIRECTIVE, effect);
+    const { materialized } = materialize(
+      activeStepSnapshot(),
+      AGENT_DIRECTIVE,
+      effect,
+      // The provider call itself failed, which is what makes this an `llm.failed`.
+      "FAILED",
+    );
 
     // Phase 11D's frozen failure order, produced by this boundary.
     expect(materialized.events.map((event) => event.type)).toEqual([
@@ -296,6 +310,39 @@ describe("Run commit event materializer", () => {
       type: "status.changed",
       payload: { from: "RUNNING", to: "FAILED" },
     });
+  });
+
+  it("records a completed provider turn even when the classifier refused its answer", () => {
+    const effect: RunExecutionEffectResult = {
+      kind: "AGENT",
+      result: {
+        kind: "FAILED",
+        turn: { stepId: STEP_ID, sequence: 2 },
+        error: {
+          code: "MODEL_ERROR",
+          message: "safe",
+          retryable: false,
+          phase: "LLM",
+        },
+        messagesToAppend: [],
+      },
+    };
+
+    const { materialized } = materialize(
+      activeStepSnapshot(),
+      AGENT_DIRECTIVE,
+      effect,
+      "COMPLETED",
+    );
+
+    // The provider answered and the Reason still failed. The ledger records both, and it records
+    // no reasoning summary: a refused answer has none to report.
+    expect(materialized.events.map((event) => event.type)).toEqual([
+      "llm.completed",
+      "error",
+      "status.changed",
+      "run.failed",
+    ]);
   });
 
   it("describes a cancellation and a timeout with their determined payloads", () => {

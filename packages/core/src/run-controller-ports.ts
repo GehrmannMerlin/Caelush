@@ -195,8 +195,22 @@ export interface RunControllerDependencies {
    * live Run. The RunController remains the only object that commits a lifecycle transition.
    */
   readonly coordinator?: import("@caelush/agent").RunExecutionCoordinator;
-  /** The frozen effect-to-commit planner. Injectable for the same reason. */
+  /**
+   * The frozen effect-to-commit planner.
+   *
+   * Phase 3C checkpoint 5 made it the settlement authority for every Agent effect the frozen
+   * contract can express. Injectable for the same reason the coordinator is — so a host can supply
+   * its own policy — and defaulted, because a Run that could not plan a transition could not settle
+   * one either.
+   */
   readonly transitionPlanner?: import("@caelush/agent").RunTransitionPlanner;
+  /**
+   * The transitional event boundary for a planned commit.
+   *
+   * The planner owns no `EventId` factory and plans `events: []`; this fills them in between
+   * planning and committing, and may change nothing else.
+   */
+  readonly eventMaterializer?: import("./run-commit-event-materializer.js").RunCommitEventMaterializer;
   readonly verificationRepairPolicy?: VerificationRepairPolicy;
   readonly verificationPlanCount?: (runId: import("@caelush/protocol").RunId) => Promise<number>;
   readonly onVerifiedCompletion?: (input: {

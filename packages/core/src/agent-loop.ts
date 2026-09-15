@@ -274,7 +274,7 @@ export class AgentLoop {
 
     switch (result.kind) {
       case "CANCELLED":
-        return this.cancelledAfterStep(activeState, step, result.context?.report, true);
+        return this.cancelledAfterStep(activeState, step, result.context?.report, true, result);
       case "FAILED":
         return this.failureFromAdvance(input, activeState, step, result, appendPrefix, outcome);
       case "TOOL_REQUESTS":
@@ -296,10 +296,14 @@ export class AgentLoop {
           decision.type === "FINAL_CANDIDATE"
             ? markAgentStateVerifying(settledState, finishedAt)
             : settledState;
-        return this.outcome(decision, decidedState, completedStep, result.context.report, [
-          ...appendPrefix,
-          projectAssistantMessage(result.modelTurn),
-        ]);
+        return this.outcome(
+          decision,
+          decidedState,
+          completedStep,
+          result.context.report,
+          [...appendPrefix, projectAssistantMessage(result.modelTurn)],
+          result,
+        );
       }
     }
   }
@@ -527,6 +531,7 @@ export class AgentLoop {
       result.retry === undefined ? undefined : toDurableRetryMetadata(result.retry),
       result.usage,
       outcome.providerTurnState,
+      result,
     );
   }
 
@@ -539,6 +544,7 @@ export class AgentLoop {
     retry: import("./agent-loop-input.js").AgentRetryMetadata | undefined,
     usage: ModelUsage | undefined,
     providerTurnState: AgentProviderTurnState,
+    canonical?: AgentLoopAdvanceResult,
   ): AgentLoopFailureResult {
     const finishedAt = monotonicNow(activeState, this.dependencies.clock.now());
     const failedStep = failAgentStep(step, finishedAt);
@@ -558,6 +564,10 @@ export class AgentLoop {
       providerTurnState,
       ...(retry === undefined ? {} : { retry }),
       ...(usage === undefined ? {} : { usage }),
+      // Present only on the post-provider path: this is the one failure a kernel `advance()`
+      // actually produced, which is exactly what makes it plannable. A throw that escaped
+      // `advance()` is an infrastructure failure with no frozen result behind it.
+      ...(canonical === undefined ? {} : { canonical }),
     };
   }
 
@@ -592,6 +602,7 @@ export class AgentLoop {
     step: AgentStep,
     contextReport: ContextBuildReport | undefined,
     countAttempt: boolean,
+    canonical?: AgentLoopAdvanceResult,
   ): AgentLoopCancelledResult {
     const finishedAt = monotonicNow(activeState, this.dependencies.clock.now());
     const cancelledStep = cancelAgentStep(step, finishedAt);
@@ -607,6 +618,10 @@ export class AgentLoop {
       messagesToAppend: [],
       ...(contextReport === undefined ? {} : { contextReport }),
       providerTurnState: countAttempt ? "CANCELLED" : "NOT_STARTED",
+      // Recorded only when a kernel `advance()` really returned it. A cancellation this facade
+      // observed on its own — before the call, or because the call threw — has no frozen result,
+      // and inventing one is exactly what the carrier must never do.
+      ...(canonical === undefined ? {} : { canonical }),
     };
   }
 
@@ -633,6 +648,7 @@ export class AgentLoop {
     step: AgentStep,
     contextReport: ContextBuildReport | undefined,
     messagesToAppend: readonly import("@caelush/llm/messages").LLMMessage[],
+    canonical: AgentLoopAdvanceResult,
   ): AgentLoopOutcomeResult {
     return {
       status: "OUTCOME",
@@ -642,6 +658,9 @@ export class AgentLoop {
       ...(contextReport === undefined ? {} : { contextReport }),
       messagesToAppend: [...messagesToAppend],
       providerTurnState: "COMPLETED",
+      // The exact object `advance()` returned. The settlement router plans from this rather than
+      // from the projection above, so nothing has to be re-derived or guessed.
+      canonical,
     };
   }
 }

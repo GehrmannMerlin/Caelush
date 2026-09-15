@@ -8,6 +8,7 @@ import type {
   ModelUsage,
 } from "@caelush/ai";
 import type { ContextBuildReport } from "@caelush/agent";
+import type { AgentLoopAdvanceResult } from "@caelush/agent";
 import type {
   AgentError,
   AgentRun,
@@ -77,7 +78,29 @@ export interface AgentLoopResumeInput extends AgentLoopCommonInput {
   readonly sourceStepId: StepId;
 }
 
-export interface AgentLoopOutcomeResult {
+/**
+ * The Core-private record of the frozen kernel result a projection came from.
+ *
+ * ```text
+ * CORE COMPATIBILITY SIDECAR — not a Protocol field, never durable, never on the wire
+ * ```
+ *
+ * The facade calls `AgentLoop.advance()` and projects what it returns into the legacy
+ * `AgentLoopExecutionResult` the Run Layer has always consumed. Phase 3C's settlement router needs
+ * the *original* frozen result, and re-deriving one from the legacy projection would mean guessing
+ * at a context receipt, a model turn, a usage count and a Step identity. This carries the object
+ * the kernel actually returned instead.
+ *
+ * It is absent — deliberately, and never fabricated — on every result this facade produces without
+ * a kernel `advance()` behind it: a failure before the provider was contacted, a cancellation
+ * before the Step existed, the `maxSteps` gate, and a budget admission block. A consumer that sees
+ * `canonical === undefined` is looking at a pure compatibility outcome, and must treat it as one.
+ */
+export interface AgentLoopCanonicalResultCarrier {
+  readonly canonical?: AgentLoopAdvanceResult;
+}
+
+export interface AgentLoopOutcomeResult extends AgentLoopCanonicalResultCarrier {
   readonly status: "OUTCOME";
   readonly outcome: AgentLoopOutcome;
   readonly state: AgentState;
@@ -88,7 +111,7 @@ export interface AgentLoopOutcomeResult {
   readonly providerTurnState: AgentProviderTurnState;
 }
 
-export interface AgentLoopFailureResult {
+export interface AgentLoopFailureResult extends AgentLoopCanonicalResultCarrier {
   readonly status: "FAILED";
   readonly error: AgentError;
   readonly state: AgentState;
@@ -101,7 +124,7 @@ export interface AgentLoopFailureResult {
   readonly usage?: ModelUsage;
 }
 
-export interface AgentLoopCancelledResult {
+export interface AgentLoopCancelledResult extends AgentLoopCanonicalResultCarrier {
   readonly status: "CANCELLED";
   readonly state: AgentState;
   readonly step?: AgentStep;

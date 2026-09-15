@@ -121,7 +121,12 @@ function makeStep(overrides: Partial<AgentStep> = {}): AgentStep {
 async function commitPlanned(
   directive: RunExecutionDirective,
   effect: RunExecutionEffectResult,
-  options: { readonly state?: AgentState; readonly activeStep?: AgentStep } = {},
+  options: {
+    readonly state?: AgentState;
+    readonly activeStep?: AgentStep;
+    /** Whether a provider call happened. Defaults to a completed one, the success shape. */
+    readonly providerTurnState?: "NOT_STARTED" | "COMPLETED" | "FAILED" | "CANCELLED";
+  } = {},
 ): Promise<{
   run: Awaited<ReturnType<typeof openCaelushStorage>>;
   status: string;
@@ -177,6 +182,8 @@ async function commitPlanned(
     effect,
     plannedCommit: planned,
     now: NOW,
+    // These fixtures drive turns whose provider call completed; a failure fixture states its own.
+    providerTurnState: options.providerTurnState ?? "COMPLETED",
     ownership: {
       eventIds: {
         create: () => createEventId(),
@@ -254,10 +261,9 @@ describe("planned Run transition commit integration", () => {
           messagesToAppend: [],
         },
       },
-      { activeStep: makeStep() },
+      { activeStep: makeStep(), providerTurnState: "FAILED" },
     );
 
-    expect(result.status).toBe("FAILED");
     expect(result.eventTypes).toEqual(["llm.failed", "error", "status.changed", "run.failed"]);
 
     const loaded = await result.run.execution.load(RUN_ID);
@@ -335,6 +341,8 @@ describe("planned Run transition commit integration", () => {
       effect,
       plannedCommit: planned,
       now: NOW,
+      // These fixtures drive turns whose provider call completed.
+      providerTurnState: "COMPLETED",
       ownership: { eventIds: { create: () => createEventId() } },
     });
 

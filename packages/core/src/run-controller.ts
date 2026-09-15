@@ -1,7 +1,12 @@
 import type { LLMToolResultMessage } from "@caelush/llm/messages";
 import {
   createRunExecutionCoordinator,
+  createRunTransitionPlanner,
+  type AdvanceAgentDirective,
+  type AgentLoopAdvanceResult,
   type RunExecutionCoordinator,
+  type RunExecutionDirective,
+  type RunExecutionEffectResult,
   type RunTransitionPlanner,
 } from "@caelush/agent";
 import {
@@ -73,6 +78,15 @@ import { deriveRunDeadline, isRunDeadlineExceeded } from "./run-deadline.js";
 import { resolveRunTerminationAuthority } from "./run-termination-authority.js";
 import { toAgentExecutionSnapshot } from "./run-execution-facts.js";
 import { toLegacyMessage } from "./ai-invocation-projection.js";
+import {
+  createRunCommitEventMaterializer,
+  type RunCommitEventMaterializer,
+} from "./run-commit-event-materializer.js";
+import {
+  assertExecutionEpochMatchesDirective,
+  classifyAgentEffectSettlement,
+} from "./run-agent-effect-settlement.js";
+import { summarizeAgentDecision } from "./agent-summary.js";
 import {
   RunExecutionConflictError,
   RunExecutionInvariantError,
@@ -179,9 +193,21 @@ export class RunController {
    * object that commits a lifecycle transition.
    */
   private readonly coordinator: RunExecutionCoordinator;
-  /** The frozen effect-to-commit planner. It is pure: it describes a transition, it never writes. */
-  /** The frozen transition planner. Wired to the Agent effect path in the production cutover. */
-  private readonly transitionPlanner: RunTransitionPlanner | undefined;
+  /**
+   * The frozen transition planner.
+   *
+   * Phase 3C checkpoint 5 made this the settlement authority for every Agent effect the frozen
+   * contract can express. It is pure: it describes the transition, it never writes one, and this
+   * controller remains the only object that commits.
+   */
+  private readonly transitionPlanner: RunTransitionPlanner;
+  /**
+   * The transitional event boundary for a planned commit.
+   *
+   * The planner owns no `EventId` factory, so it plans `events: []` and this fills them in. It may
+   * change nothing else, and it runs between planning and committing.
+   */
+  private readonly eventMaterializer: RunCommitEventMaterializer;
 
   constructor(private readonly dependencies: RunControllerDependencies) {
     this.eventFactory = createRunControllerEventFactory();
@@ -191,7 +217,10 @@ export class RunController {
     this.retryRegistry =
       dependencies.retryRegistry ?? new RunRetryRegistry({ clock: dependencies.clock });
     this.coordinator = dependencies.coordinator ?? createRunExecutionCoordinator();
-    this.transitionPlanner = dependencies.transitionPlanner;
+    this.transitionPlanner = dependencies.transitionPlanner ?? createRunTransitionPlanner();
+    this.eventMaterializer =
+      dependencies.eventMaterializer ??
+      createRunCommitEventMaterializer({ eventFactory: this.eventFactory });
     this.retryController = new RetryController({
       ...(dependencies.retryPolicy === undefined ? {} : { policy: dependencies.retryPolicy }),
       ...(dependencies.retryJitter === undefined ? {} : { jitter: dependencies.retryJitter }),
@@ -1052,6 +1081,10 @@ export class RunController {
     const resume = epoch === "TOOL_RESULTS";
     if (snapshot.state === undefined)
       throw new RunControllerInputError("Run execution has no AgentState");
+    // The coordinator decides; the epoch only selects the compatibility entry point. Asking here,
+    // before the turn, is what makes the directive the settlement authority rather than a value
+    // re-derived from the outcome.
+    const advancement = this.advancementDirective(snapshot, epoch);
     const config = await this.dependencies.configResolver.resolve(snapshot.run);
     let verificationRepairContext: { readonly text: string } | undefined;
     const repairContinuation =
@@ -1235,10 +1268,174 @@ export class RunController {
         cause: preProviderError,
       });
     }
-    return this.settle(snapshot, execution, config.projectFacts);
+    return this.settle(snapshot, execution, advancement, config.projectFacts);
+  }
+
+  /**
+   * The coordinator's own decision for the Agent execution about to run.
+   *
+   * It is read *before* the turn, from the durable state the turn will run against, which is the
+   * only moment at which "what does durable execution do next" is still answerable: once
+   * `beforeProviderTurn` has opened a Step, that state is mid-turn rather than routable.
+   *
+   * `epoch` is not consulted. It selects which legacy loop entry point runs, and it survives only
+   * as a Core execution detail; the directive is the settlement authority, and the two are asserted
+   * to agree rather than one being derived from the other.
+   */
+  private advancementDirective(
+    snapshot: RunExecutionSnapshot,
+    epoch: "START" | "TOOL_RESULTS" | "VERIFICATION_REPAIR",
+  ): AdvanceAgentDirective | undefined {
+    // One durable state is deliberately not routable yet: a legacy retry checkpoint whose request
+    // Step exists only in the ledger. The status-specific recovery below determines it — or fails
+    // closed — and asking the coordinator first would only reproduce its refusal. This is the same
+    // condition `coordinatedBoundary` already declines to route, not a new policy.
+    if (
+      snapshot.continuation?.type === "WAITING_RETRY" &&
+      snapshot.continuation.mode === "TOOL_RESULTS" &&
+      snapshot.continuation.sourceStepId === undefined
+    ) {
+      return undefined;
+    }
+
+    const directive: RunExecutionDirective = this.coordinator.next(
+      toAgentExecutionSnapshot(snapshot),
+      this.dependencies.clock.now(),
+    );
+    // A decision that is not "advance the model" means the coordinator governs this state itself —
+    // a terminal settlement, a suspension, or the structural step budget the compatibility loop
+    // still gates. There is no advance directive to plan against, and the effect settles through
+    // the compatibility authority. This is a typed outcome of the classification, never a reaction
+    // to an exception: nothing here catches anything.
+    if (directive.kind !== "ADVANCE_AGENT") return undefined;
+    assertExecutionEpochMatchesDirective(epoch, directive);
+    return directive;
   }
 
   private async settle(
+    before: RunExecutionSnapshot,
+    execution: AgentLoopExecutionResult,
+    directive: AdvanceAgentDirective | undefined,
+    projectFacts?: import("@caelush/protocol").VerificationProjectFacts,
+  ): Promise<RunControllerResult> {
+    const route = classifyAgentEffectSettlement({ execution, directive });
+
+    // The canonical branch is planned or it fails loudly. A planner error is never caught and
+    // turned into a compatibility settlement: that would leave two authorities able to settle one
+    // effect, with nothing recording which of them actually did.
+    if (route.route === "CANONICAL_AGENT_EFFECT") {
+      return this.settleCanonicalAgentEffect(before, execution, route.directive, route.result);
+    }
+    return this.settleCompatibilityAgentEffect(before, execution, projectFacts);
+  }
+
+  /**
+   * Settle an Agent effect the frozen planner can express.
+   *
+   * ```text
+   * PLAN -> MATERIALIZE -> COMMIT -> NOTIFY
+   * ```
+   *
+   * The order is the contract. Events are materialized into the commit and the commit is durable
+   * before anything is published, so a failed write can never leave a subscriber holding an event
+   * for a transition that did not happen.
+   *
+   * Nothing here re-decides the transition. The planner derives the next Run, AgentState, Step
+   * settlement, continuation and append list from the durable snapshot and the frozen result; this
+   * method only gives it a fresh snapshot, commits what it returns, and reports the outcome.
+   */
+  private async settleCanonicalAgentEffect(
+    before: RunExecutionSnapshot,
+    execution: AgentLoopExecutionResult,
+    directive: AdvanceAgentDirective,
+    result: AgentLoopAdvanceResult,
+  ): Promise<RunControllerResult> {
+    // The revision the commit is planned against is the one that is durable *now*, not the one the
+    // effect started from: a provider turn is long enough for the Run to have moved under it.
+    const current = await this.load(before.run.id);
+    const authority = this.resolveAuthority(current, false);
+    if (authority === "CANCELLED") return this.finalizeCancellation(current);
+    if (authority === "TIMEOUT") return this.finalizeTimeout(current);
+    if (authority === "TERMINAL") return this.resultFromSnapshot(current);
+    if (authority === "UNEXPECTED_ABORT") {
+      throw new RunControllerInvariantError("Run execution aborted without a known authority");
+    }
+    // Budget governance runs before the transition, exactly as it does on the compatibility path:
+    // a turn that spent the budget settles the Run as exceeded instead of planning a transition.
+    const budgetSettlement = await this.settleBudgetAttempt(current, execution);
+    if (budgetSettlement !== undefined) {
+      return this.finalizeBudgetExceeded(current, budgetSettlement);
+    }
+
+    const now = this.dependencies.clock.now();
+    const snapshot = toAgentExecutionSnapshot(current);
+    const effect: RunExecutionEffectResult = { kind: "AGENT", result };
+
+    const planned = this.transitionPlanner.plan({ snapshot, directive, effect, now });
+    const materialized = this.eventMaterializer.materialize({
+      snapshot: current,
+      directive,
+      effect,
+      plannedCommit: this.agentTurnProvenance(planned, result),
+      now,
+      // Whether a provider call happened at all is a fact only the facade that made it holds. A
+      // rejected model output completes a provider turn and fails the Reason, and the durable
+      // ledger has always recorded both.
+      providerTurnState: execution.providerTurnState,
+      ownership: { eventIds: this.dependencies.eventIdFactory },
+    });
+
+    const committed = await this.commit(materialized);
+    this.notify(committed.events);
+    return this.resultFromSnapshot(committed.snapshot);
+  }
+
+  /**
+   * Preserve the durable reasoning summary the legacy facade used to write.
+   *
+   * ```text
+   * TRANSITIONAL — Core-only settlement sidecar
+   * ```
+   *
+   * `summarizeAgentDecision` is a real projection of the frozen decision, and the Step has always
+   * persisted it. The planner cannot produce it: the frozen `AgentLoopAdvanceResult` reports a
+   * decision, not prose, and inventing a sentence the model never said is not an option. So the one
+   * authoritative source Core does have is applied here, narrowly, to the Step the planner already
+   * settled — and to nothing else.
+   *
+   * A result without a settled Step — a failure the planner did not settle one for — is returned
+   * unchanged, with no summary and no invention.
+   */
+  private agentTurnProvenance(
+    commit: RunExecutionCommit,
+    result: AgentLoopAdvanceResult,
+  ): RunExecutionCommit {
+    if (result.kind !== "TOOL_REQUESTS" && result.kind !== "FINAL_CANDIDATE") return commit;
+    const settled = commit.stepWrites.find((write) => write.step.status === "COMPLETED");
+    if (settled === undefined) return commit;
+
+    const reasoningSummary = summarizeAgentDecision(result.decision);
+    return {
+      ...commit,
+      stepWrites: commit.stepWrites.map((write) =>
+        write === settled ? { ...write, step: { ...write.step, reasoningSummary } } : write,
+      ),
+    };
+  }
+
+  /**
+   * Settle an Agent effect the frozen planner cannot express.
+   *
+   * ```text
+   * TRANSITIONAL — deleted one branch at a time
+   * ```
+   *
+   * Every path here is a bridge to an authority that already exists and still owns its decision:
+   * the verification bridge and the Run Retry Policy for a `FinalCandidate` and a retryable
+   * failure, the termination authority for cancellation, the budget authority for a refusal, and
+   * the facade's own compatibility outcomes for the rest. Phase 3D and Phase 3E delete them.
+   */
+  private async settleCompatibilityAgentEffect(
     before: RunExecutionSnapshot,
     execution: AgentLoopExecutionResult,
     projectFacts?: import("@caelush/protocol").VerificationProjectFacts,

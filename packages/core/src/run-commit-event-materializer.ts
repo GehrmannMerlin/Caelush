@@ -57,6 +57,22 @@ export interface RunCommitEventMaterializerInput {
   /** The planner's answer. Its `events` are expected to be empty and are replaced wholesale. */
   readonly plannedCommit: RunExecutionCommitView;
   readonly now: TimestampMs;
+  /**
+   * Whether the provider turn behind this effect actually ran.
+   *
+   * ```text
+   * CORE-PRIVATE — not part of the frozen RunExecutionEffectResult
+   * ```
+   *
+   * The frozen effect result describes the *decision*. Whether a provider call happened at all is
+   * something only the facade that made it observed, and the two do not coincide: a classifier that
+   * refuses a model's output completes a provider turn and fails the Reason, so the ledger records
+   * `llm.completed` and `run.failed` for the same attempt.
+   *
+   * Absent means no provider turn was reported, which is the conservative reading: the attempt is
+   * described by its outcome alone.
+   */
+  readonly providerTurnState?: "NOT_STARTED" | "COMPLETED" | "FAILED" | "CANCELLED";
   readonly ownership: RunOwnershipContext;
 }
 
@@ -78,6 +94,7 @@ export function createRunCommitEventMaterializer(
   return {
     materialize(input: RunCommitEventMaterializerInput): RunExecutionCommitView {
       const { snapshot, directive, effect, plannedCommit, now, ownership } = input;
+      const providerTurnState = input.providerTurnState ?? "NOT_STARTED";
       const before = snapshot.run;
       const after = plannedCommit.run;
       const drafts: DurableEventDraft[] = [];
@@ -95,8 +112,26 @@ export function createRunCommitEventMaterializer(
        */
       if (effect.kind === "AGENT") {
         const state = plannedCommit.state ?? snapshot.state;
-        if (completed !== undefined && state !== undefined) {
-          drafts.push(events.llmCompleted(before, state, completed, nextEventId(), now));
+        const settled = completed ?? failed;
+        if (providerTurnState === "COMPLETED" && state !== undefined && settled !== undefined) {
+          /*
+           * The provider answered. The ledger records that whichever way the classifier read the
+           * answer, and it records the reasoning summary only for a turn that settled successfully:
+           * a refused answer has no summary to report.
+           */
+          drafts.push(events.llmCompleted(before, state, settled, nextEventId(), now));
+          if (completed?.reasoningSummary !== undefined) {
+            drafts.push(
+              events.reasoning(
+                before,
+                state,
+                completed,
+                completed.reasoningSummary,
+                nextEventId(),
+                now,
+              ),
+            );
+          }
         } else if (failed !== undefined && failure !== undefined) {
           drafts.push(events.llmFailed(before, failed, failure, nextEventId(), now));
         }
