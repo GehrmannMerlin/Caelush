@@ -381,7 +381,6 @@ export function harness3d(options: {
   const allocatedSteps: StepId[] = [];
   const turns: RecordedTurn[] = [];
   const contextEngine = policyContextEngine(options.observationPolicy);
-  let ordinal = 0;
   const executor = fakeFrozenModelTurnExecutor(async (request, _signal, callIndex) => {
     turns.push({ request });
     return options.script(callIndex);
@@ -393,7 +392,6 @@ export function harness3d(options: {
         modelTurnExecutor: executor,
         stepIds: {
           create: () => {
-            ordinal += 1;
             const id = createStepId();
             allocatedSteps.push(id);
             return id;

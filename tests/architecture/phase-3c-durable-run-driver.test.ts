@@ -678,7 +678,7 @@ describe("Phase 3C Run Layer ownership", () => {
     expect(controller).toContain("private toolTurnDriver(");
     expect(controller).toContain("private async executeToolBatchDirective(");
     expect(controller).toContain("private async settleToolEffect(");
-    expect(controller).toContain("private async settleCanonicalToolEffect(");
+    expect(controller).toContain("private async settleCanonicalToolTurn(");
     expect(controller).toContain("private async settleWaitingResource(");
     // Phase 3E: no production completion gate exists anywhere in the workspace. The port is
     // declared once, the frozen driver depends on it, the kernel's index re-exports it, and the

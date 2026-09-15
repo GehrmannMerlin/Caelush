@@ -39,7 +39,6 @@ import {
   cancelAgentStepState,
   createInitialAgentState,
   markAgentStateCancelled,
-  markAgentStateWaitingApproval,
   markAgentStateWaitingResource,
   markAgentStateMaxStepsReached,
   markAgentStateBudgetExceeded,
@@ -53,13 +52,12 @@ import {
 } from "./agent-state.js";
 import { cancelAgentStep, completeAgentStep, failAgentStep } from "./agent-step.js";
 import { normalizeToolResultBatch } from "./agent-tool-results.js";
-import { defaultObservationPolicy } from "./agent-tool-batch.js";
+import type { AgentToolObservationPolicy } from "./agent-tool-batch.js";
 import {
   markAgentRunFailed,
   markAgentRunCancelled,
   markAgentRunTimedOut,
   markAgentRunBudgetExceeded,
-  markAgentRunWaitingApproval,
   markAgentRunWaitingResource,
   resumeAgentRunFromVerificationRepair,
   resumeAgentRunFromApproval,
@@ -93,16 +91,15 @@ import {
   DEFERRED_COMPLETION_GATE,
 } from "./run-agent-deferred-ports.js";
 import {
+  captureRunToolTurnFacts,
   createRunToolTurnDriverFactory,
   recordRunToolTurnProgress,
   recordRunToolTurnReplan,
   type ResolvedRunToolTurn,
-  type RunToolTurnContext,
   type RunToolTurnDriverDependencies,
 } from "./run-tool-turn-coordinator.js";
 import { classifyToolEffectSettlement } from "./run-tool-effect-settlement.js";
 import type { RunToolTurnObservation } from "./run-tool-turn-observation.js";
-import { createToolSecurityContext } from "./tool-security-context.js";
 import {
   RunControllerBusyError,
   RunControllerConflictError,
@@ -435,7 +432,7 @@ export class RunController {
       ],
     });
     this.notify(commit.events);
-    return this.driveToolBoundariesLocked(commit.snapshot, "RECOVER");
+    return this.driveRunExecutionLocked(commit.snapshot, "RECOVER");
   }
 
   private async resumeResolvedApprovalLocked(
@@ -485,7 +482,7 @@ export class RunController {
     if (resolved.status === "PENDING") {
       throw new RunControllerInvariantError("Approval resolution left a pending ApprovalRequest.");
     }
-    return this.driveToolBoundariesLocked(commit.snapshot, "RECOVER");
+    return this.driveRunExecutionLocked(commit.snapshot, "RECOVER");
   }
 
   private async startLocked(runId: RunId): Promise<RunControllerResult> {
@@ -524,7 +521,7 @@ export class RunController {
       });
     }
     if (this.isExpired(commit.snapshot)) return this.finalizeTimeout(commit.snapshot);
-    return this.driveToolBoundariesLocked(commit.snapshot, "RECOVER");
+    return this.driveRunExecutionLocked(commit.snapshot, "RECOVER");
   }
 
   private async submitToolResultsLocked(
@@ -600,7 +597,7 @@ export class RunController {
       });
       accepted = commit.snapshot;
     }
-    return this.driveToolBoundariesLocked(accepted, "EXECUTE");
+    return this.driveRunExecutionLocked(accepted, "EXECUTE");
   }
 
   private async recoverLocked(runId: RunId): Promise<RunControllerResult> {
@@ -643,7 +640,7 @@ export class RunController {
       (normalized.continuation?.type === "WAITING_TOOL_RESULTS" ||
         (normalized.continuation === undefined && normalized.conversation.length === 0))
     ) {
-      return this.driveToolBoundariesLocked(normalized, "RECOVER");
+      return this.driveRunExecutionLocked(normalized, "RECOVER");
     }
     if (normalized.run.status === "VERIFYING") {
       return this.driveProjectVerificationLocked(normalized);
@@ -652,7 +649,7 @@ export class RunController {
       normalized.run.status === "RUNNING" &&
       normalized.continuation?.type === "WAITING_VERIFICATION_REPAIR"
     ) {
-      return this.driveToolBoundariesLocked(normalized, "RECOVER");
+      return this.driveRunExecutionLocked(normalized, "RECOVER");
     }
     return this.resumeKnownBoundary(normalized);
   }
@@ -766,7 +763,7 @@ export class RunController {
     // The retry resume runs through the same production loop as every other action: the coordinator
     // decides `ADVANCE_AGENT(RETRY)` from the normalized durable state, and the Run Layer allocates a
     // *new* Step for the new attempt. The failed Step is never reopened.
-    return this.driveToolBoundariesLocked(loaded, "RECOVER");
+    return this.driveRunExecutionLocked(loaded, "RECOVER");
   }
 
   /**
@@ -776,20 +773,21 @@ export class RunController {
    * Coordinator.next()          the only routing authority
    *        ↓
    * ADVANCE_AGENT               → Run Layer Step allocation → RunExecutionDriver
-   * EXECUTE_TOOL_BATCH          → the existing Phase 3D Tool compatibility boundary
+   * EXECUTE_TOOL_BATCH          → the run-scoped Tool turn adapter → RunExecutionDriver
+   * FINALIZE                    → the terminal settlement for the reason it carries
    * anything else               → the boundary is already durable
    * ```
    *
-   * The coordinator is asked *before* each action, from the durable snapshot, and its directive is
-   * what executes. Nothing here re-derives which action to take from a continuation type, a Run
-   * status or an execution epoch, so the action that runs is the action that was decided.
+   * Both executable directives go through the *same* frozen driver; what differs is the port the
+   * driver is given for that effect. Nothing here re-derives which action to take from a continuation
+   * type, a Run status or an execution epoch, so the action that runs is the action that was decided.
    *
    * A state the coordinator refuses to route is not guessed at. An active Step and a legacy retry
    * checkpoint without recorded provenance are resolved by the recovery paths before this loop is
    * entered, so reaching one here is a lifecycle violation rather than something to route around —
    * the coordinator's refusal is propagated rather than swallowed.
    */
-  private async driveToolBoundariesLocked(
+  private async driveRunExecutionLocked(
     initial: RunExecutionSnapshot,
     initialMode: "EXECUTE" | "RECOVER" = "EXECUTE",
   ): Promise<RunControllerResult> {
@@ -1085,12 +1083,7 @@ export class RunController {
         return { kind: "SNAPSHOT", snapshot: resource };
       }
       case "CANONICAL_TOOL_EFFECT": {
-        const canonical = await this.settleCanonicalToolEffect(
-          current,
-          directive,
-          route.result,
-          execution.observation,
-        );
+        const canonical = await this.settleCanonicalToolTurn(current, directive, route.result);
         return { kind: "SNAPSHOT", snapshot: canonical };
       }
     }
@@ -1112,11 +1105,10 @@ export class RunController {
    * A `REPLAN` is the one route that also advances the durable replan count, and it does so after
    * its synthetic results are durable for the same reason.
    */
-  private async settleCanonicalToolEffect(
+  private async settleCanonicalToolTurn(
     current: RunExecutionSnapshot,
     directive: ExecuteToolBatchDirective,
     result: Exclude<ToolTurnResult, { kind: "RESOURCE_WAIT" | "BUDGET_EXCEEDED" }>,
-    observation: RunToolTurnObservation,
   ): Promise<RunExecutionSnapshot> {
     const now = this.dependencies.clock.now();
     const snapshot = toAgentExecutionSnapshot(current);
@@ -1137,7 +1129,7 @@ export class RunController {
 
     const committed = await this.commit(materialized);
     this.notify(committed.events);
-    await this.recordToolTurnProgress(committed.snapshot, result, observation);
+    await this.recordToolTurnProgress(committed.snapshot, result);
     return committed.snapshot;
   }
 
@@ -1155,44 +1147,44 @@ export class RunController {
   private async recordToolTurnProgress(
     settled: RunExecutionSnapshot,
     result: Exclude<ToolTurnResult, { kind: "RESOURCE_WAIT" | "BUDGET_EXCEEDED" }>,
-    observation: RunToolTurnObservation,
   ): Promise<void> {
     const batches = this.dependencies.toolCoordinator;
-    const continuation = settled.continuation;
-    const state = settled.state;
-    if (
-      batches === undefined ||
-      continuation?.type !== "WAITING_TOOL_RESULTS" ||
-      state === undefined
-    ) {
-      return;
-    }
+    if (batches === undefined) return;
+    // The facts come from the adapter, which is the only object that derives a security context, an
+    // execution environment or an observation policy for a Tool turn. Rebuilding them here would be a
+    // second capture of the same facts, free to disagree with the batch that actually ran.
+    const facts = captureRunToolTurnFacts({
+      snapshot: settled,
+      ...this.hostObservationPolicy(settled.run.id),
+    });
+    if (facts === undefined) return;
     const dependencies = this.toolTurnDependencies(batches, settled.run.id);
-    const contextRuntime = this.dependencies.contextRuntime;
-    const context: RunToolTurnContext = {
-      run: settled.run,
-      state,
-      continuation,
-      pendingDecision: continuation.pendingDecision,
-      observationPolicy:
-        continuation.observationPolicy ??
-        contextRuntime?.getContextPolicy?.(settled.run.id) ??
-        defaultObservationPolicy(),
-      effectiveMode: observation.effectiveMode,
-      environment: { workspace: settled.run.workspace, runtime: settled.run.runtime },
-      securityContext: createToolSecurityContext(settled.run, state),
-    };
     const results =
       result.kind === "COMPLETED"
         ? result.results
         : result.kind === "REPLAN"
           ? result.syntheticResults
           : [];
-    // A REPLAN writes no Tool invocation at all, so the ledger entry is the only durable trace of
-    // the decision — and it is what a later `WAITING_RESOURCE` reports as `replanCount`.
-    if (result.kind === "REPLAN") await recordRunToolTurnReplan({ dependencies, context });
+    // A REPLAN writes no Tool invocation at all, so the ledger entry is the only durable trace of the
+    // decision — and it is what a later `WAITING_RESOURCE` reports as `replanCount`.
+    if (result.kind === "REPLAN") await recordRunToolTurnReplan({ dependencies, facts });
     if (results.length === 0) return;
-    await recordRunToolTurnProgress({ dependencies, context, state, results });
+    await recordRunToolTurnProgress({ dependencies, facts, results });
+  }
+
+  /**
+   * The host Context runtime's observation policy, when it has one.
+   *
+   * It is a compatibility fallback the adapter consults only for a Tool continuation written before the
+   * durable policy existed. A Run whose Context runtime configures no policy contributes nothing, and
+   * the adapter's own default applies.
+   */
+  private hostObservationPolicy(runId: RunId): {
+    readonly hostObservationPolicy?: () => AgentToolObservationPolicy | undefined;
+  } {
+    const getPolicy = this.dependencies.contextRuntime?.getContextPolicy;
+    if (getPolicy === undefined) return {};
+    return { hostObservationPolicy: () => getPolicy.call(this.dependencies.contextRuntime, runId) };
   }
 
   /**
