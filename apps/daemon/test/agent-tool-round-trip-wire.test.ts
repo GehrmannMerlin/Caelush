@@ -11,8 +11,10 @@ import {
   createWorkspaceId,
 } from "@caelush/protocol";
 import type { VerificationPlanDraft } from "@caelush/protocol";
-import { AgentLoop, RunController, createLegacyModelTurnExecutor } from "@caelush/core";
+import { RunController } from "@caelush/core";
+import type { RunAgentExecutionContextFactory } from "@caelush/core";
 import { createModelTurnExecutor } from "@caelush/agent";
+import type { ContextPrepareInput } from "@caelush/agent";
 import { createAISubsystem } from "@caelush/ai";
 import type { AIProviderBinding, ApiAdapter, ModelDescriptorSourcePort } from "@caelush/ai";
 import { createOpenAICompatibleApiAdapter } from "@caelush/ai/adapters/openai-compatible";
@@ -119,6 +121,14 @@ const verificationPlanner = {
     ],
   }),
 };
+
+/** The messages one turn input contributes, in the order the model sees them. */
+function turnMessages(input: ContextPrepareInput): readonly import("@caelush/ai").AIMessage[] {
+  const turn = input.input;
+  if (turn.kind === "USER_INPUT") return turn.messages;
+  if (turn.kind === "CONTINUATION") return turn.messages ?? [];
+  return [turn.pendingDecision.modelTurn.assistantMessage, ...turn.results];
+}
 
 describe("real provider Tool Call round trip", () => {
   it("carries the provider toolCallId into the next provider request after Dispatcher settlement", async () => {
@@ -245,36 +255,44 @@ describe("real provider Tool Call round trip", () => {
       approvalIdFactory: { create: createApprovalRequestId },
     });
     const coordinator = new ToolBatchCoordinator(dispatcher);
-    const loop = new AgentLoop({
-      inspector: { inspect: async () => ({}) as never },
-      planner: { plan: async () => ({}) as never },
-      contextBuilder: {
-        build: (input) => ({
-          messages:
-            input.mode === "TOOL_CONTINUATION"
-              ? input.currentTurnMessages
-              : [input.currentUserMessage],
-          report: {} as never,
-        }),
+    /**
+     * The Run Layer's direct Agent execution dependencies.
+     *
+     * Phase 3C checkpoint 6 retired the legacy Core `AgentLoop` from this path: the controller
+     * composes the frozen loop itself and drives it through the frozen execution driver, so this
+     * test hands it the frozen collaborator ports — exactly as the production daemon does.
+     */
+    const agentExecution: RunAgentExecutionContextFactory = {
+      async resolve() {
+        return {
+          models: ai.models,
+          modelTurnExecutor: createModelTurnExecutor({ gateway: ai.gateway }),
+          stepIds: { create: () => createStepId() },
+          tools: [],
+          createContextEngine: () => ({
+            async prepare(input) {
+              return {
+                messages: [...input.history, ...turnMessages(input)],
+                report: {
+                  estimatedInputTokens: 1,
+                  effectiveInputLimitTokens: input.model.limits.contextWindowTokens,
+                  remainingTokens: input.model.limits.contextWindowTokens - 1,
+                  pressure: "NORMAL" as const,
+                  compactionCount: 0,
+                  contributions: [],
+                },
+                observationPolicy: {
+                  maxSingleObservationTokens: 4_000,
+                  maxObservationBatchTokens: 12_000,
+                },
+              };
+            },
+          }),
+        };
       },
-      models: ai.models,
-      // The frozen model turn executor requires an explicit Run identity and turn
-      // reference, so the loop drives it through the transitional legacy facade — the same
-      // composition the production daemon uses.
-      modelTurns: createLegacyModelTurnExecutor({
-        executor: createModelTurnExecutor({ gateway: ai.gateway }),
-        identity: () => ({
-          runId: run.id,
-          sessionId: run.sessionId,
-          goal: run.goal,
-        }),
-        createStepId,
-      }),
-      clock: { now: () => createTimestampMs(Date.now()) },
-      stepIdFactory: { create: () => createStepId() },
-    });
+    };
     const controller = new RunController({
-      agentLoop: loop,
+      agentExecution,
       executionStore: storage.execution,
       verificationStore: storage.execution,
       events: eventBus,
