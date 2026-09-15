@@ -44,6 +44,17 @@ function executable(relativePath: string): string {
     .replaceAll(/(^|[^:])\/\/.*$/gm, "$1");
 }
 
+/**
+ * A file's executable code with string literals removed too.
+ *
+ * A refusal message that names a contract is not a use of it. A guard that counted the name inside
+ * a message would flag the very error text that documents why the contract is not implemented, so
+ * the check for "who actually names this type" reads identifiers only.
+ */
+function identifiers(relativePath: string): string {
+  return executable(relativePath).replaceAll(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""');
+}
+
 function moduleSpecifiers(source: string): string[] {
   const specifiers: string[] = [];
   for (const pattern of [
@@ -381,12 +392,99 @@ describe("Phase 3C Run Layer ownership", () => {
     expect(planner).not.toContain("createVerificationPlanId");
   });
 
-  it("never lets the planner become the production Run lifecycle chain", () => {
-    // Checkpoint 4 implements and tests the planner; the RunController cutover is Checkpoint 5.
+  it("routes production Agent effects through the canonical planner", () => {
+    // Checkpoint 5 cut the production Agent effect path over. The controller must plan, materialize
+    // and commit — in that order — and must ask the coordinator for the directive rather than
+    // re-deriving one from the legacy execution epoch.
     const controller = executable("packages/core/src/run-controller.ts");
-    expect(controller).not.toContain("planRunTransition");
-    expect(controller).not.toContain("createRunTransitionPlanner");
-    expect(controller).not.toContain("RunCommitEventMaterializer");
+    expect(controller).toContain("createRunTransitionPlanner()");
+    expect(controller).toContain("createRunCommitEventMaterializer(");
+    expect(controller).toContain(
+      "this.transitionPlanner.plan({ snapshot, directive, effect, now })",
+    );
+    expect(controller).toContain("this.eventMaterializer.materialize(");
+    expect(controller).toContain("classifyAgentEffectSettlement({ execution, directive })");
+    expect(controller).toContain("this.coordinator.next(");
+
+    // The canonical branch is a method of its own: `settle` classifies and dispatches, so the
+    // compatibility settlement is one named adapter rather than a second half of one big if/else.
+    expect(controller).toContain("private async settleCanonicalAgentEffect(");
+    expect(controller).toContain("private async settleCompatibilityAgentEffect(");
+  });
+
+  it("never falls back from a failed plan to a compatibility settlement", () => {
+    const controller = executable("packages/core/src/run-controller.ts");
+    const canonical = controller.slice(
+      controller.indexOf("private async settleCanonicalAgentEffect("),
+      controller.indexOf("private async settleCompatibilityAgentEffect("),
+    );
+    expect(canonical.length).toBeGreaterThan(0);
+
+    // No generic fallback: a planner error is not caught, and the compatibility settlement is not
+    // reachable from this method at all. Dual authority is exactly what that would create.
+    expect(canonical).not.toContain("catch");
+    expect(canonical).not.toContain("settleCompatibilityAgentEffect");
+
+    // Ordering is the contract: plan, materialize, commit, then notify.
+    const plan = canonical.indexOf("this.transitionPlanner.plan(");
+    const materialize = canonical.indexOf("this.eventMaterializer.materialize(");
+    const commit = canonical.indexOf("await this.commit(materialized)");
+    const notify = canonical.indexOf("this.notify(committed.events)");
+    expect(plan).toBeGreaterThan(-1);
+    expect(materialize).toBeGreaterThan(plan);
+    expect(commit).toBeGreaterThan(materialize);
+    expect(notify).toBeGreaterThan(commit);
+
+    // The router classifies by typed discriminant only: no message parsing decides a route, and
+    // nothing is caught. `includes` is allowed only in the epoch-agreement assertion, which tests
+    // membership in a literal table rather than reading a value.
+    const router = executable("packages/core/src/run-agent-effect-settlement.ts");
+    expect(router).not.toContain(".message");
+    expect(router).not.toContain("catch");
+    const classifier = router.slice(
+      router.indexOf("export function classifyAgentEffectSettlement("),
+      router.indexOf("function canonicalRoute("),
+    );
+    expect(classifier.length).toBeGreaterThan(0);
+    expect(classifier).not.toContain("includes(");
+  });
+
+  it("keeps the frozen driver and the checkpoint 6 boundary untouched", () => {
+    // The driver stays a frozen contract that production does not yet drive directly: the Core
+    // AgentLoop facade still owns the model turn, and replacing it is Checkpoint 6.
+    const driver = read("packages/agent/src/run/run-execution-driver.ts");
+    expect(driver).toContain("export function createRunExecutionDriver(");
+    expect(driver).toContain("readonly completionGate: CompletionGate;");
+    expect(driver).toContain("readonly toolTurns: ToolTurnCoordinator;");
+
+    const controller = executable("packages/core/src/run-controller.ts");
+    expect(controller).not.toContain("createRunExecutionDriver");
+    expect(controller).not.toContain("DefaultRunExecutionDriver");
+    // No real durable model turn boundary has appeared: the compatibility port is still the one.
+    expect(controller).not.toContain("ModelTurnBoundaryPort");
+  });
+
+  it("keeps the tool, completion and verification authorities where they were", () => {
+    const controller = executable("packages/core/src/run-controller.ts");
+    // Phase 3D: the Tool boundary is still the Core compatibility path.
+    expect(controller).toContain("private async driveToolBoundariesLocked(");
+    expect(controller).toContain("private async persistCompleteToolResultsLocked(");
+    expect(controller).toContain("private async persistWaitingApprovalLocked(");
+    expect(controller).toContain("private async persistWaitingResourceLocked(");
+    // Phase 3E: no production completion gate exists anywhere in the workspace. The port is
+    // declared once, the frozen driver depends on it, and the kernel's index re-exports it —
+    // nothing else may name it at all, which is what "implementation count = 0" means.
+    const carriers = sourceFiles(join(root, "packages"))
+      .map((path) => relative(root, path).replaceAll("\\", "/"))
+      .filter((file) => !file.includes("/dist/") && !file.includes("/test/"))
+      .filter(
+        (file) =>
+          file !== "packages/agent/src/run/ports/completion-gate.ts" &&
+          file !== "packages/agent/src/run/run-execution-driver.ts" &&
+          file !== "packages/agent/src/index.ts",
+      )
+      .filter((file) => /\bCompletionGate\b(?![A-Za-z])/.test(identifiers(file)));
+    expect(carriers).toEqual([]);
   });
 
   it("keeps the Run state machine declared once, in the kernel", () => {

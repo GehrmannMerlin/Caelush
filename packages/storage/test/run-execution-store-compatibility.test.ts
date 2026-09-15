@@ -130,6 +130,82 @@ const CANONICAL_CONVERSATION: readonly AIMessage[] = [
 ];
 
 describe("SqliteRunExecutionStore canonical/durable compatibility", () => {
+  it("preserves a historical Tool artifact pointer across a canonical commit", async () => {
+    const { storage, session, run, state, step } = await runningFixture();
+
+    // The Step the historical Tool result belongs to, committed the way it always was.
+    await storage.execution.commit({
+      run,
+      state,
+      expectedStateRevision: null,
+      expectedContinuationRevision: null,
+      stepWrites: [{ operation: "INSERT", step }],
+      messagesToAppend: [],
+      events: [event(run.id, session.id, 110)],
+    });
+
+    // A row written before Phase 3C: the durable encoding still carries the artifact pointer, and
+    // the canonical Tool-result contract has no field for it.
+    await storage.messages.append(run.id, [
+      {
+        createdAt: createTimestampMs(111),
+        message: { role: "user", content: run.goal },
+      },
+      {
+        createdAt: createTimestampMs(112),
+        sourceStepId: step.id,
+        message: {
+          role: "tool",
+          toolCallId: "call_legacy",
+          toolName: "read_file",
+          content: "bounded placeholder",
+          isError: false,
+          rawArtifactRef: "artifact:call_legacy",
+        },
+      },
+    ] as never);
+
+    // A canonical commit settles the Step and appends; it never rewrites an existing conversation
+    // row, which is what makes the historical pointer survive without a migration.
+    await storage.execution.commit({
+      run,
+      state: { ...state, currentStepId: undefined },
+      expectedStateRevision: 1,
+      expectedContinuationRevision: null,
+      stepWrites: [
+        {
+          operation: "UPDATE",
+          step: { ...step, status: "COMPLETED", finishedAt: createTimestampMs(120) },
+        },
+      ],
+      messagesToAppend: [
+        {
+          createdAt: createTimestampMs(120),
+          sourceStepId: step.id,
+          message: { role: "assistant", content: [{ type: "text", text: "done" }] },
+        },
+      ],
+      events: [event(run.id, session.id, 120)],
+    });
+
+    // Read back through the durable repository: the historical pointer is byte-for-byte intact,
+    // and the canonical load still projects the row rather than rejecting it.
+    const durable = await storage.messages.listByRun(run.id);
+    expect(durable).toHaveLength(3);
+    expect(durable[1]?.message).toMatchObject({ rawArtifactRef: "artifact:call_legacy" });
+
+    const canonical = await storage.execution.load(run.id);
+    expect(canonical?.conversation).toHaveLength(3);
+    // The canonical projection has no field for it, so it is dropped in memory and never invented.
+    expect(canonical?.conversation[1]?.message).not.toHaveProperty("rawArtifactRef");
+    expect(canonical?.conversation[1]?.message).toMatchObject({
+      role: "tool",
+      toolCallId: "call_legacy",
+      content: "bounded placeholder",
+    });
+    await storage.close();
+  });
+
   it("persists the legacy encoding and loads the canonical conversation unchanged", async () => {
     const { storage, session, run, state, step } = await runningFixture();
 
