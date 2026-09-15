@@ -258,9 +258,6 @@ export {
   timeOutAgentRun,
 } from "./run/state/run-transition-state.js";
 
-/* C4-D-PLACEHOLDER */
-
-/* The durable Run continuation domain. */
 export {
   RUN_CONTINUATION_TYPES,
   RUNNING_CONTINUATION_TYPES,

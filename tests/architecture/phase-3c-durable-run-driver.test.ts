@@ -348,4 +348,65 @@ describe("Phase 3C Run Layer ownership", () => {
       expect(read(file), file).not.toMatch(/\bmaxSteps\b/);
     }
   });
+
+  it("keeps the Run transition planner pure and authority-free", () => {
+    const planner = executable("packages/agent/src/run/default-run-transition-planner.ts");
+
+    // No clock, no identity, no I/O. The planner receives `now` and returns a description.
+    for (const forbidden of [
+      "Date.now",
+      "new Date",
+      "Math.random",
+      "randomUUID",
+      "createEventId",
+      "node:fs",
+      "node:child_process",
+      "fetch(",
+      "EventBus",
+      "Repository",
+      "Storage",
+      "sqlite",
+      "completionGate",
+      "toolCoordinator",
+    ]) {
+      expect(planner, `planner must not reference ${forbidden}`).not.toContain(forbidden);
+    }
+
+    // Events are planned empty; materialization is a separate host boundary.
+    expect(planner).toContain("events: []");
+    // A planner that produced a plan identity or a verified result would be a second completion
+    // authority, and the branches that would need one fail closed instead.
+    expect(planner).not.toContain("VerificationPlan");
+    expect(planner).not.toContain("VerifiedRunFinalResult");
+    expect(planner).not.toContain("createVerificationPlanId");
+  });
+
+  it("never lets the planner become the production Run lifecycle chain", () => {
+    // Checkpoint 4 implements and tests the planner; the RunController cutover is Checkpoint 5.
+    const controller = executable("packages/core/src/run-controller.ts");
+    expect(controller).not.toContain("planRunTransition");
+    expect(controller).not.toContain("createRunTransitionPlanner");
+    expect(controller).not.toContain("RunCommitEventMaterializer");
+  });
+
+  it("keeps the Run state machine declared once, in the kernel", () => {
+    const kernel = executable("packages/agent/src/run/state/run-state-machine.ts");
+    expect(kernel).toContain("export const RUN_STATUS_TRANSITIONS");
+    expect(kernel).toContain("export class InvalidRunStatusTransitionError");
+
+    // Core re-exports; it must not declare a second matrix or a second error class.
+    const facade = executable("packages/core/src/run-state-machine.ts");
+    expect(facade).toContain('from "@caelush/agent"');
+    expect(facade).not.toContain("export const RUN_STATUS_TRANSITIONS");
+    expect(facade).not.toContain("class InvalidRunStatusTransitionError");
+
+    // One terminal predicate among the packages that can see the kernel. `@caelush/client` mirrors
+    // it by necessity — `CLIENT_MUST_NOT_DEPEND_ON_AGENT` forbids it importing the kernel at all —
+    // so the client's copy is a boundary requirement, not a competing authority.
+    const declarations = sourceFiles(join(root, "packages", "agent", "src"))
+      .concat(sourceFiles(join(root, "packages", "core", "src")))
+      .map((path) => relative(root, path).replaceAll("\\", "/"))
+      .filter((file) => executable(file).includes("export function isTerminalRunStatus"));
+    expect(declarations).toEqual(["packages/agent/src/run/state/run-execution-invariant.ts"]);
+  });
 });
