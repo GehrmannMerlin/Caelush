@@ -106,12 +106,26 @@ export type {
   AgentLoopLifecycleHooks,
   AgentProviderTurnState,
 } from "./agent-loop-ports.js";
-export { AgentLoop } from "./agent-loop.js"; /**
+/**
+ * The legacy Core `AgentLoop` facade.
+ *
+ * ```text
+ * LEGACY / TEST COMPATIBILITY SURFACE
+ * NOT the production Agent execution authority
+ * ```
+ *
+ * Phase 3C checkpoint 6 moved Step ownership, the durable boundary and the Reason entry point into
+ * the Run Layer: production Agent execution composes the frozen `@caelush/agent` `AgentLoop` through
+ * `createRunAgentLoop(...)` and drives it with `createRunExecutionDriver(...)`. This class remains
+ * for its own unit and migration-parity tests only, and no production consumer may import it.
+ */
+export { AgentLoop } from "./agent-loop.js";
+/**
  * The transitional throwing facade over the frozen `ModelTurnExecutor`.
  *
- * Exported because a host composition root — the daemon is the current one — must build the
- * legacy throwing port the still-legacy Core loop consumes. It is deleted when the Core
- * loop is replaced in the next phase.
+ * Its only remaining production consumer is the Phase 3E verification reviewer, which has no
+ * `AgentStep` of its own and therefore no `AgentTurnRef` to pass. It is deleted with the Phase 3E
+ * verification migration.
  */
 export { createLegacyModelTurnExecutor } from "./legacy-model-turn-executor.js";
 export type {
@@ -135,6 +149,14 @@ export type { LegacyContextRuntimeAdapterDependencies } from "./legacy-context-r
  * legacy durable message encoding and the Run Layer continuation domain on the way.
  */
 export { toAgentExecutionSnapshot, toExecutionStatus } from "./run-execution-facts.js";
+/**
+ * The one reviewed AI / legacy message projection pair.
+ *
+ * The durable ledger still speaks the legacy encoding, so a host that holds a synthetic
+ * `LLMMessage` conversation — the daemon's session prefix — projects it through here rather than
+ * reimplementing the field-by-field mapping. The Run Layer itself only ever sees `AIMessage`.
+ */
+export { toAIMessage, toLegacyMessage } from "./ai-invocation-projection.js";
 export {
   fingerprintToolBatch,
   fingerprintToolRequest,
@@ -183,6 +205,43 @@ export type {
   VerificationRunnerPort,
   ProjectProfileProviderPort,
 } from "./run-controller-ports.js";
+/**
+ * The Run Layer's direct Agent execution dependencies.
+ *
+ * The composition root supplies the frozen collaborator ports — a `ModelCatalog`, the host's
+ * `ModelTurnExecutor`, a Step identity factory and a Context Engine factory — and the
+ * `RunController` composes `createAgentLoop(...)` and `createRunExecutionDriver(...)` itself.
+ */
+export {
+  allocateRunAgentStep,
+  createRunAgentExecutionContext,
+  createRunAgentLoop,
+  monotonicStepStart,
+} from "./run-agent-execution.js";
+export type {
+  RunAgentContextEngineInput,
+  RunAgentExecutionContext,
+  RunAgentExecutionContextFactory,
+  RunAgentExecutionContextFactoryDependencies,
+  RunAgentExecutionConfiguration,
+  RunAgentExecutionDependencies,
+  RunAgentTurnPorts,
+} from "./run-agent-execution.js";
+/** The canonical durable history projection the production Agent turn reasons from. */
+export { projectRunAgentHistory } from "./run-agent-history.js";
+export type { RunAgentHistoryInput, RunAgentHistoryProjection } from "./run-agent-history.js";
+export { classifyAgentEffectSettlement } from "./run-agent-effect-settlement.js";
+export type {
+  AgentEffectSettlementInput,
+  AgentEffectSettlementRoute,
+} from "./run-agent-effect-settlement.js";
+export {
+  createAgentModelTurnBoundary,
+  createAgentTurnObservation,
+  createObservingModelTurnExecutor,
+  requiresBoundaryRepair,
+} from "./run-model-turn-boundary.js";
+export type { AgentTurnObservation, PendingAgentTurn } from "./run-model-turn-boundary.js";
 export { buildRunExecutionHistory } from "./run-controller-history.js";
 export { TaskAcceptanceReviewer } from "./task-acceptance-reviewer.js";
 export type { TaskAcceptanceReviewerDependencies } from "./task-acceptance-reviewer.js";

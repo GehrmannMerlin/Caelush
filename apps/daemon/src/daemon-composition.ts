@@ -1,5 +1,4 @@
 import {
-  AgentLoop,
   RunController,
   RunDeadlineRegistry,
   RunExecutionScopeRegistry,
@@ -7,7 +6,10 @@ import {
   createLegacyContextRuntimeAdapter,
   createLegacyModelTurnExecutor,
   createProjectProfileProvider,
+  createRunAgentExecutionContext,
+  toAIMessage,
   type LegacyModelTurnExecutor,
+  type RunAgentExecutionContextFactory,
   type RunExecutionConfigResolver,
 } from "@caelush/core";
 import { EventBus } from "@caelush/events";
@@ -197,9 +199,9 @@ export interface DaemonComposition {
   /**
    * The legacy throw-based facade over `modelTurnExecutor`.
    *
-   * Existing Core consumers — the resumable `AgentLoop` and the verification
-   * `TaskAcceptanceReviewer` — were written against the previous throw-based semantics. The
-   * facade is host-only and disappears when the agent loop migration completes.
+   * Phase 3C checkpoint 6 retired the resumable Core `AgentLoop` from production composition, so the
+   * only remaining consumer is the verification `TaskAcceptanceReviewer`, which has no `AgentStep`
+   * of its own. The facade is host-only and disappears with the Phase 3E verification migration.
    */
   readonly modelTurns: LegacyModelTurnExecutor;
   readonly toolRegistry: ReturnType<ToolRegistryBuilder["build"]>;
@@ -213,12 +215,12 @@ export interface DaemonComposition {
   readonly controller: RunController;
   readonly supervisor: RunExecutionSupervisor;
   /**
-   * Publish the Run identity the next model turn executes for.
+   * Publish the Run identity a host-driven model turn executes for.
    *
-   * The frozen model turn executor requires an explicit identity, because the durable model
-   * turn boundary commits against a Run and a Session. The daemon owns the Run context and
-   * publishes it here; a caller that drives a model turn directly — a diagnostic, a test —
-   * must publish the identity first.
+   * A production Agent Reason no longer needs this: the Run Layer projects the identity from the
+   * durable `AgentRun` and hands it to the frozen loop, so nothing is published before a turn for
+   * that turn to commit against a real Run. What still asks for it is a caller that drives a model
+   * turn *outside* the Run Layer — the verification reviewer, a wire diagnostic, a test.
    */
   readonly resolveTurnIdentity: (
     run: Pick<AgentRun, "id" | "sessionId" | "goal">,
@@ -248,23 +250,16 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
       : createModelWireDiagnostic({ writer: options.wireDiagnosticWriter });
   const gateway = createDiagnosedGateway(ai.gateway, wireDiagnostic);
   const modelTurnExecutor = createModelTurnExecutor({ gateway });
-  // The Run identity a legacy model turn executes for. The Core RunController sets it
-  // before it drives the loop and before it reviews a candidate, so the frozen boundary
-  // port always commits against a real Run. This is a host-only compatibility seam: the
-  // agent package keeps no throwing public interface, and the Core loop is replaced by the
-  // frozen `AgentLoop.advance()` in the next phase.
+  /**
+   * The Run identity a *host-driven* model turn executes for.
+   *
+   * It is written only through `resolveTurnIdentity`, which is the host-driven seam: the
+   * verification reviewer and a wire diagnostic. An ordinary Agent Reason never touches it — Phase
+   * 3C checkpoint 6 made the Run Layer project the identity from the durable `AgentRun` and hand it
+   * to the frozen `AgentLoop.advance()` directly, so production Agent execution no longer depends on
+   * anything being published before the turn.
+   */
   const activeTurn: { identity: DaemonTurnIdentity | undefined } = { identity: undefined };
-  const modelTurns = createLegacyModelTurnExecutor({
-    executor: modelTurnExecutor,
-    identity: () => {
-      const identity = activeTurn.identity;
-      if (identity === undefined) {
-        throw new Error("No active Run identity for the legacy model turn executor.");
-      }
-      return identity;
-    },
-    createStepId,
-  });
   const resolveTurnIdentity = (
     run: Pick<AgentRun, "id" | "sessionId" | "goal">,
   ): DaemonTurnIdentity => {
@@ -276,6 +271,17 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     activeTurn.identity = identity;
     return identity;
   };
+  const modelTurns = createLegacyModelTurnExecutor({
+    executor: modelTurnExecutor,
+    identity: () => {
+      const identity = activeTurn.identity;
+      if (identity === undefined) {
+        throw new Error("No active Run identity for the legacy model turn executor.");
+      }
+      return identity;
+    },
+    createStepId,
+  });
 
   const inspector = createLocalProjectInspector();
   const memoryRetriever = new MemoryRetriever(options.storage.memory);
@@ -320,33 +326,6 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
   });
   const planner = createLocalRelevantFilePlanner();
   const contextBuilder = createDefaultContextBuilder();
-  const agentLoop = new AgentLoop({
-    inspector,
-    planner,
-    contextBuilder,
-    contextRuntime,
-    // The frozen Context Engine seam. The legacy Context System is configured per turn — base
-    // prompt, limits, cwd, explicit paths — so the host builds its adapter from the turn's own
-    // input, and the general loop never sees any of it. The adapter takes no model catalog: the
-    // descriptor the loop resolved is the one context build authority for the turn.
-    createContextEngine: (input) =>
-      createLegacyContextRuntimeAdapter({
-        inspector,
-        planner,
-        contextBuilder,
-        contextRuntime,
-        baseSystemPrompt: input.baseSystemPrompt,
-        contextLimits: input.contextLimits,
-        workspace: input.run.workspace,
-        ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
-        ...(input.explicitPaths === undefined ? {} : { explicitPaths: input.explicitPaths }),
-      }),
-    models: ai.models,
-    modelTurns,
-    clock,
-    stepIdFactory: { create: createStepId },
-    resolveTurnIdentity,
-  });
   const builtToolRegistry = new ToolRegistryBuilder();
   for (const registration of createDefaultBuiltinToolRegistrations(runtimeResolver)) {
     builtToolRegistry.register(registration);
@@ -392,11 +371,56 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
       return { ...config, historyPrefix: await historyContext.getHistoryPrefix(run) };
     },
   } satisfies RunExecutionConfigResolver;
+  const agentExecution: RunAgentExecutionContextFactory = {
+    async resolve(run) {
+      const config = await executionConfigResolver.resolve(run);
+      return createRunAgentExecutionContext({
+        config: {
+          baseSystemPrompt: config.baseSystemPrompt,
+          contextLimits: config.contextLimits,
+          tools: toolCoordinator.modelDefinitions(),
+          ...(config.modelSettings === undefined ? {} : { modelSettings: config.modelSettings }),
+          // The synthetic session prefix still arrives in the durable legacy encoding, so it is
+          // projected onto the frozen AI contract here — at the composition root, which is the only
+          // place that knows both sides. The Run Layer only ever sees `AIMessage`.
+          ...(config.historyPrefix === undefined
+            ? {}
+            : { historyPrefix: config.historyPrefix.map(toAIMessage) }),
+          ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
+          ...(config.explicitPaths === undefined ? {} : { explicitPaths: config.explicitPaths }),
+        },
+        models: ai.models,
+        modelTurnExecutor,
+        stepIds: { create: createStepId },
+        // The frozen Context Engine seam. The legacy Context System is configured per turn — base
+        // prompt, limits, cwd, explicit paths — so the host builds its adapter from the turn's own
+        // input, and the general loop never sees any of it. The adapter takes no model catalog: the
+        // descriptor the loop resolved is the one context build authority for the turn.
+        createContextEngine: (input) =>
+          createLegacyContextRuntimeAdapter({
+            inspector,
+            planner,
+            contextBuilder,
+            contextRuntime,
+            baseSystemPrompt: input.baseSystemPrompt,
+            contextLimits: input.contextLimits,
+            workspace: input.run.workspace,
+            ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
+            ...(input.explicitPaths === undefined ? {} : { explicitPaths: input.explicitPaths }),
+            ...(input.verificationRepairContext === undefined
+              ? {}
+              : {
+                  verificationRepairContext: () => Promise.resolve(input.verificationRepairContext),
+                }),
+          }),
+      });
+    },
+  };
   const verificationExecution = createRunBoundVerificationExecution(runtime, options.storage.runs);
   const verificationWorkspace = createRunBoundVerificationWorkspace(runtime);
   const verificationGit = createRunBoundVerificationGit(runtime);
   const controller = new RunController({
-    agentLoop,
+    agentExecution,
     contextRuntime,
     executionStore: options.storage.execution,
     verificationStore: options.storage.execution,
@@ -427,13 +451,14 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     verificationEvidenceIdFactory: createVerificationEvidenceId,
     verificationResolverRegistry: new ProjectCheckResolverRegistry(),
     verificationModelTurns: modelTurns,
-    verificationTurnIdentity: () => {
-      const identity = activeTurn.identity;
-      if (identity === undefined) {
-        throw new Error("No active Run identity for the verification model turn.");
-      }
-      return identity;
-    },
+    /**
+     * Publish the Run identity a verification review executes for.
+     *
+     * The reviewer calls this immediately before its model turn, so verification never depends on an
+     * ordinary Agent turn having published a global identity first (§94 of the checkpoint). The
+     * token-guarded delegate is the same publication a wire diagnostic uses.
+     */
+    verificationTurnIdentity: (run) => resolveTurnIdentity(run),
     verificationRepairPolicy: createVerificationRepairPolicy(),
     verificationPlanCount: (runId) =>
       options.storage.verificationExecution.countPlans?.(runId) ?? Promise.resolve(0),
