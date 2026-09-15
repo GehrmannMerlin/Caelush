@@ -16,6 +16,7 @@ import {
   nextRunExecutionDirective,
 } from "../src/run/run-execution-coordinator.js";
 import { isTerminalExecutionStatus } from "../src/run/directive.js";
+import { RunExecutionInvariantError } from "../src/run/ports/run-execution-store.js";
 import type {
   RunContinuationCheckpoint,
   RunExecutionDirective,
@@ -362,6 +363,59 @@ describe("RunExecutionCoordinator.next(snapshot, now)", () => {
       kind: "FINALIZE",
       reason: "TIMEOUT",
     });
+  });
+
+  it("routes a Run whose deadline is effectively unbounded instead of refusing to route it", () => {
+    // A host may spend the whole safe-integer range as its "no deadline" sentinel, which is what
+    // the local daemon does. `startedAt + timeoutMs` then overflows even though every input is a
+    // safe integer, and a coordinator that formed that sum would make the Run unroutable. The
+    // predicate is exact without it.
+    const input: RunExecutionSnapshot = {
+      run: makeRun({
+        startedAt: createTimestampMs(1_789_000_000_000),
+        limits: { maxSteps: 6, maxToolCalls: 8, timeoutMs: Number.MAX_SAFE_INTEGER },
+      }),
+      conversation: [],
+    };
+
+    expect(nextRunExecutionDirective(input, createTimestampMs(1_789_000_001_000))).toEqual({
+      kind: "ADVANCE_AGENT",
+      mode: "EXECUTE",
+      reason: "INITIAL",
+      input: INITIAL_INPUT,
+    });
+
+    // ...and an unbounded deadline is still a deadline: it expires the moment the elapsed time
+    // reaches it, which for this sentinel is beyond any reachable `now`.
+    const expired: RunExecutionSnapshot = {
+      run: makeRun({
+        startedAt: createTimestampMs(1_000),
+        limits: { maxSteps: 6, maxToolCalls: 8, timeoutMs: 500 },
+      }),
+      conversation: [],
+    };
+    expect(nextRunExecutionDirective(expired, createTimestampMs(1_500))).toEqual({
+      kind: "FINALIZE",
+      reason: "TIMEOUT",
+    });
+    expect(nextRunExecutionDirective(expired, createTimestampMs(1_499))).not.toEqual({
+      kind: "FINALIZE",
+      reason: "TIMEOUT",
+    });
+  });
+
+  it("refuses a timeout that is not a positive safe integer", () => {
+    // The Protocol schema already refuses these, so the coordinator's own guard is defence in
+    // depth: it is stated directly so the routing rule never depends on a caller having validated.
+    for (const timeoutMs of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 2]) {
+      const run = {
+        ...makeRun(),
+        limits: { maxSteps: 6, maxToolCalls: 8, timeoutMs },
+      } as AgentRun;
+      expect(() => nextRunExecutionDirective(snapshot({ run }), NOW), String(timeoutMs)).toThrow(
+        RunExecutionInvariantError,
+      );
+    }
   });
 
   it("gives the step budget priority over an open durable boundary", () => {

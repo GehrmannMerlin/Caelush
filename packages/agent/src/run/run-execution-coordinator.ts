@@ -191,15 +191,22 @@ function initialTurn(snapshot: RunExecutionSnapshot): AgentTurnInput {
  *
  * A PENDING Run has no active deadline. The deadline is `startedAt + limits.timeoutMs` — never
  * `createdAt`, and never a refreshed `now`.
+ *
+ * The comparison is written as a difference rather than as a sum, and that is deliberate. A host
+ * may configure an effectively unbounded deadline — the local daemon uses a safe-integer ceiling —
+ * and `startedAt + timeoutMs` then exceeds the safe-integer range even though every input is a
+ * safe integer. Forming that sum would have to fail, and failing would make the Run unroutable for
+ * a configuration that is perfectly well defined. `now - startedAt >= timeoutMs` is the same
+ * predicate, exact for every safe input, and never forms a value that cannot be represented.
  */
 function deadlineExceeded(snapshot: RunExecutionSnapshot, now: TimestampMs): boolean {
+  const timeoutMs = snapshot.run.limits.timeoutMs;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new RunExecutionInvariantError("Run timeoutMs must be a safe positive integer.");
+  }
   const startedAt = snapshot.state?.startedAt ?? snapshot.run.startedAt;
   if (startedAt === undefined) return false;
-  const deadlineAt = startedAt + snapshot.run.limits.timeoutMs;
-  if (!Number.isSafeInteger(deadlineAt)) {
-    throw new RunExecutionInvariantError("Run deadline exceeded the safe integer range.");
-  }
-  return now >= deadlineAt;
+  return now - startedAt >= timeoutMs;
 }
 
 /* -------------------------------------------------------------- builders */
