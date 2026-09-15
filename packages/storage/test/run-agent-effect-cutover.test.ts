@@ -6,6 +6,7 @@ import {
 import {
   AgentLoop,
   RunController,
+  RunControllerInfrastructureError,
   RunExecutionConflictError,
   RunRetryRegistry,
   createRunCommitEventMaterializer,
@@ -436,6 +437,58 @@ describe("production Agent effect cutover", () => {
       expect(snapshot.continuation.verificationPlanId).toMatch(/^vplan_/);
       expect(snapshot.verificationPlan?.id).toBe(snapshot.continuation.verificationPlanId);
     }
+    await fixture.storage.close();
+  });
+});
+
+describe("durable model turn boundary in production", () => {
+  it("opens the Step durably before the provider runs, exactly once", async () => {
+    const fixture = await setup({ complete: async () => toolTurn() });
+    await fixture.controller.start(fixture.run.id);
+
+    const types = fixture.events.map((event) => event.type);
+    // `llm.started` is the boundary's own durable event: one turn, one of them.
+    expect(types.filter((type) => type === "llm.started")).toHaveLength(1);
+    expect(types.filter((type) => type === "llm.completed")).toHaveLength(1);
+    expect(fixture.providerCalls()).toBe(1);
+    expect(await fixture.storage.steps.listByRun(fixture.run.id)).toHaveLength(1);
+    await fixture.storage.close();
+  });
+
+  it("never reaches the provider when the durable open-Step commit is refused", async () => {
+    const fixture = await setup({
+      complete: async () => toolTurn(),
+      store: (storage) => ({
+        load: (runId) => storage.execution.load(runId),
+        requestCancellation: (runId, intent) =>
+          storage.execution.requestCancellation(runId, intent),
+        commit: async (command) => {
+          // The boundary commit is the one that opens a Step. Refusing it is exactly what a
+          // concurrent writer would have done, and it is the failure mode the invariant covers.
+          if (command.stepWrites.some((write) => write.operation === "INSERT")) {
+            throw new RunExecutionConflictError("boundary conflict");
+          }
+          return storage.execution.commit(command);
+        },
+        loadVerificationPlan: (runId, planId) =>
+          storage.execution.loadVerificationPlan(runId, planId),
+        commitVerifiedCompletion: (command) => storage.execution.commitVerifiedCompletion(command),
+      }),
+    });
+
+    await expect(fixture.controller.start(fixture.run.id)).rejects.toBeInstanceOf(
+      RunControllerInfrastructureError,
+    );
+
+    // No provider I/O, no durable Step, no boundary event, and no retry: a commit conflict is not a
+    // model failure and must never be settled as one.
+    expect(fixture.providerCalls()).toBe(0);
+    expect(await fixture.storage.steps.listByRun(fixture.run.id)).toHaveLength(0);
+    expect(fixture.events.map((event) => event.type)).toEqual(["run.started", "status.changed"]);
+    const snapshot = await fixture.storage.execution.load(fixture.run.id);
+    expect(snapshot?.run.status).toBe("RUNNING");
+    expect(snapshot?.run.currentStepId).toBeUndefined();
+    expect(snapshot?.state?.usage.steps).toBe(0);
     await fixture.storage.close();
   });
 });

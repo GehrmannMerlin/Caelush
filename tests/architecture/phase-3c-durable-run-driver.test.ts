@@ -449,19 +449,68 @@ describe("Phase 3C Run Layer ownership", () => {
     expect(classifier).not.toContain("includes(");
   });
 
-  it("keeps the frozen driver and the checkpoint 6 boundary untouched", () => {
-    // The driver stays a frozen contract that production does not yet drive directly: the Core
-    // AgentLoop facade still owns the model turn, and replacing it is Checkpoint 6.
+  it("keeps the frozen driver contract unchanged", () => {
     const driver = read("packages/agent/src/run/run-execution-driver.ts");
     expect(driver).toContain("export function createRunExecutionDriver(");
     expect(driver).toContain("readonly completionGate: CompletionGate;");
     expect(driver).toContain("readonly toolTurns: ToolTurnCoordinator;");
+    // The frozen effect context still carries nothing a host owns.
+    for (const forbidden of [
+      "workspace",
+      "cwd",
+      "runtime",
+      "verificationPlan",
+      "budget",
+      "store",
+    ]) {
+      expect(driver, `effect context must not carry ${forbidden}`).not.toContain(
+        `readonly ${forbidden}`,
+      );
+    }
+  });
+
+  it("gates provider execution behind the durable model turn boundary", () => {
+    // The boundary is a real Core implementation now, and the RunController is the object that
+    // commits through it: the boundary holds no store of its own.
+    const boundary = executable("packages/core/src/run-model-turn-boundary.ts");
+    expect(boundary).toContain("export function createAgentModelTurnBoundary(");
+    expect(boundary).toContain("ModelTurnBoundaryPort");
+    // It never touches a store, a repository or a provider.
+    for (const forbidden of ["executionStore", "Repository", "sqlite", ".commit(", "gateway"]) {
+      expect(boundary, `boundary must not reference ${forbidden}`).not.toContain(forbidden);
+    }
 
     const controller = executable("packages/core/src/run-controller.ts");
-    expect(controller).not.toContain("createRunExecutionDriver");
-    expect(controller).not.toContain("DefaultRunExecutionDriver");
-    // No real durable model turn boundary has appeared: the compatibility port is still the one.
-    expect(controller).not.toContain("ModelTurnBoundaryPort");
+    expect(controller).toContain("createAgentModelTurnBoundary(");
+    expect(controller).toContain("await boundary.beforeExecute(");
+    // The commit the boundary asks for is RunController-owned, not boundary-owned.
+    expect(controller).toContain("openTurn: (turn) => this.openAgentTurn(turn)");
+    expect(controller).toContain("private async openAgentTurn(");
+
+    // Opening the turn must precede the provider: the hook that calls the boundary is the one the
+    // kernel invokes before it executes the turn, and the provider port is composed after it.
+    const hook = controller.indexOf("beforeProviderTurn:");
+    const boundaryCall = controller.indexOf("await boundary.beforeExecute(");
+    const settlement = controller.indexOf("return this.settle(snapshot, execution, advancement");
+    expect(hook).toBeGreaterThan(-1);
+    expect(boundaryCall).toBeGreaterThan(hook);
+    expect(settlement).toBeGreaterThan(boundaryCall);
+  });
+
+  it("keeps a refused boundary commit out of the Agent failure vocabulary", () => {
+    const controller = executable("packages/core/src/run-controller.ts");
+    // A boundary that never committed means no Step and no provider call, so there is no Agent
+    // effect to plan. Surfacing it as an infrastructure failure is what stops the planner from
+    // durably recording a model failure for a turn that never reached a model.
+    expect(controller).toContain("requiresBoundaryRepair(turnObservation)");
+    expect(controller).toContain(
+      'throw new RunControllerInfrastructureError("Unable to durably open the model turn"',
+    );
+
+    const boundary = executable("packages/core/src/run-model-turn-boundary.ts");
+    // The observation is Core-private; the frozen result is not widened to carry it.
+    expect(boundary).toContain("export function createObservingModelTurnExecutor(");
+    expect(boundary).not.toContain("AgentLoopAdvanceResult");
   });
 
   it("keeps the tool, completion and verification authorities where they were", () => {
