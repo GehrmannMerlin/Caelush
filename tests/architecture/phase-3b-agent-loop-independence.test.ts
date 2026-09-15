@@ -405,10 +405,13 @@ describe("Phase 3B frozen boundary remediation", () => {
     expect(facade).not.toMatch(/sourceStepId:\s*input\.pendingDecision/);
 
     const controller = executable("packages/core/src/run-controller.ts");
-    expect(controller).toContain("sourceStepId,");
-    // A legacy checkpoint without provenance is either determined or refused, never guessed.
+    expect(controller).toContain("sourceStepId");
+    // A legacy checkpoint without provenance is either determined durably or refused, never
+    // guessed — and the normalization is a real write, not a runtime special case.
     expect(controller).toContain("recoverToolRequestSourceStep");
     expect(controller).toContain("cannot be recovered without guessing");
+    expect(controller).toContain("normalizeLegacyRetryProvenance");
+    expect(controller).not.toContain("recoverToolRequestSourceStep(snapshot, retryContinuation");
 
     const continuation = executable("packages/core/src/agent-continuation.ts");
     expect(continuation).toContain("readonly sourceStepId?: StepId | undefined;");
@@ -416,10 +419,19 @@ describe("Phase 3B frozen boundary remediation", () => {
 
   it("routes verification repair through the frozen continuation", () => {
     const controller = executable("packages/core/src/run-controller.ts");
-    expect(controller).toContain("continueRun({");
-    expect(controller).toContain('reason: "VERIFICATION_REPAIR"');
-    // The repair boundary no longer fabricates a user turn.
-    expect(controller).toContain('"START" | "TOOL_RESULTS" | "VERIFICATION_REPAIR"');
+    // Phase 3C checkpoint 6 moved this off the legacy facade: the coordinator's own
+    // `COMPLETION_REPAIR` decision is what the production Run Layer executes, and the turn input it
+    // carries is the frozen `CONTINUATION(VERIFICATION_REPAIR)` — never a re-derived user turn.
+    expect(controller).not.toContain("continueRun({");
+    expect(controller).toContain("this.coordinator.next(");
+    expect(controller).toContain("COMPLETION_REPAIR");
+    expect(controller).toContain("WAITING_VERIFICATION_REPAIR");
+
+    // The frozen kernel owns the continuation turn kind itself.
+    const kernel = executable("packages/agent/src/run/run-execution-coordinator.ts");
+    expect(kernel).toContain('advance("RECOVER", "COMPLETION_REPAIR"');
+    expect(kernel).toContain('kind: "CONTINUATION"');
+    expect(kernel).toContain('reason: "VERIFICATION_REPAIR"');
 
     const facade = executable("packages/core/src/agent-loop.ts");
     expect(facade).toContain('kind: "CONTINUATION"');

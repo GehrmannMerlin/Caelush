@@ -352,6 +352,148 @@ describe("Phase 3C Run Layer ownership", () => {
     expect(controller).toContain("if (snapshot.activeStep !== undefined) return undefined;");
   });
 
+  it("keeps the legacy Core AgentLoop out of production Agent execution", () => {
+    // Checkpoint 6 retired the facade. The file may remain as a test/migration-parity surface, but
+    // no production consumer may call it — and the Run Layer must compose the frozen loop itself.
+    const controller = executable("packages/core/src/run-controller.ts");
+    for (const forbidden of [
+      ".agentLoop.run(",
+      ".resumeWithToolResults(",
+      ".continueRun(",
+      "withLifecycleHooks",
+      "AgentLoopExecutionResult",
+    ]) {
+      expect(controller, `run-controller must not use ${forbidden}`).not.toContain(forbidden);
+    }
+    // It composes the frozen loop and drives it through the frozen driver instead.
+    expect(controller).toContain("createRunAgentLoop(");
+    expect(controller).toContain("createRunExecutionDriver(");
+    expect(controller).toContain("await driver.execute(directive,");
+    // The composition is Core-private and the only `createAgentLoop` call site in the production
+    // Agent path is inside it.
+    const composition = executable("packages/core/src/run-agent-execution.ts");
+    expect(composition).toContain("export function createRunAgentLoop(");
+    expect(composition).toContain("return createAgentLoop({");
+
+    // The daemon composition root must not instantiate the legacy facade either.
+    const daemon = executable("apps/daemon/src/daemon-composition.ts");
+    expect(daemon).not.toContain("new AgentLoop(");
+    expect(daemon).not.toContain("agentLoop");
+    expect(daemon).toContain("createRunAgentExecutionContext(");
+    expect(daemon).toContain("createLegacyContextRuntimeAdapter({");
+  });
+
+  it("allocates the durable Step in the Run Layer, not in a facade", () => {
+    // The production Step allocator is the Run Layer's own direct execution path.
+    const composition = executable("packages/core/src/run-agent-execution.ts");
+    expect(composition).toContain("export function allocateRunAgentStep(");
+    expect(composition).toContain("createRunningAgentStep({");
+    expect(composition).toContain("nextAgentStepSequence(input.state)");
+    expect(composition).toContain("export function monotonicStepStart(");
+
+    const controller = executable("packages/core/src/run-controller.ts");
+    expect(controller).toContain("allocateRunAgentStep({");
+    expect(controller).toContain("stepId: execution.stepIds.create()");
+    // Second authorities are refused outright: a Step id is never a UUID, a timestamp or a call id.
+    for (const forbidden of ["randomUUID", "Date.now()", "callId as", "toolCallId as"]) {
+      expect(controller, `run-controller must not mint a Step via ${forbidden}`).not.toContain(
+        forbidden,
+      );
+    }
+    // The sequence comes from the canonical helper, never from a second `usage.steps + 1` rule.
+    expect(controller).not.toMatch(/usage\.steps\s*\+\s*1/);
+  });
+
+  it("settles canonical Agent effects without the legacy execution projection", () => {
+    const router = executable("packages/core/src/run-agent-effect-settlement.ts");
+    // Classification reads the frozen result and the Core-private observation only.
+    expect(router).toContain("readonly result: AgentLoopAdvanceResult;");
+    expect(router).toContain("readonly observation: AgentTurnObservation;");
+    expect(router).not.toContain("AgentLoopExecutionResult");
+    // Every route is a named authority, and there is no generic fallback.
+    for (const route of [
+      "CANONICAL_AGENT_EFFECT",
+      "VERIFICATION_COMPATIBILITY",
+      "RETRY_COMPATIBILITY",
+      "TERMINATION_AUTHORITY",
+      "BUDGET_AUTHORITY",
+    ]) {
+      expect(router, route).toContain(route);
+    }
+
+    const controller = executable("packages/core/src/run-controller.ts");
+    // The Step settlement source on the compatibility bridges is the Run's own durable active Step.
+    expect(controller).toContain("private requireExecutedStep(");
+    expect(controller).toContain("current.activeStep");
+    expect(controller).toContain("private async settleFinalCandidateCompatibility(");
+    expect(controller).toContain("private async settleRetryCompatibility(");
+    // And the retry bridge settles the attempt *before* asking the policy, so maxSteps compares the
+    // post-attempt count.
+    const retry = controller.slice(
+      controller.indexOf("private async settleRetryCompatibility("),
+      controller.indexOf("private retryResumeContext("),
+    );
+    const settle = retry.indexOf("settleExecutedStepState(");
+    const decide = retry.indexOf("this.retryController.decide(");
+    expect(settle).toBeGreaterThan(-1);
+    expect(decide).toBeGreaterThan(settle);
+    expect(retry).toContain("steps: settledState.usage.steps");
+  });
+
+  it("keeps the deferred Tool and completion ports fail-closed and never called in production", () => {
+    const deferred = executable("packages/core/src/run-agent-deferred-ports.ts");
+    expect(deferred).toContain("export const DEFERRED_TOOL_TURN_COORDINATOR");
+    expect(deferred).toContain("export const DEFERRED_COMPLETION_GATE");
+    // Neither placeholder returns: each throws, naming the phase that owns the real adapter.
+    expect(deferred).toContain("belongs to Phase 3D");
+    expect(deferred).toContain("belongs to Phase 3E");
+    expect(deferred).toMatch(/async execute\(\): Promise<never>/);
+    expect(deferred).toMatch(/async evaluate\(\): Promise<never>/);
+
+    // The production composition binds exactly those placeholders and no real implementation.
+    const controller = executable("packages/core/src/run-controller.ts");
+    expect(controller).toContain("toolTurns: DEFERRED_TOOL_TURN_COORDINATOR");
+    expect(controller).toContain("completionGate: DEFERRED_COMPLETION_GATE");
+    // Phase 3D's Tool boundary is still the Core compatibility path, not the driver port.
+    expect(controller).toContain("this.dependencies.toolCoordinator");
+    expect(controller).toContain("coordinator.recover(request)");
+  });
+
+  it("normalizes legacy retry provenance durably instead of special-casing the runtime", () => {
+    const controller = executable("packages/core/src/run-controller.ts");
+    expect(controller).toContain("private async normalizeLegacyRetryProvenance(");
+    expect(controller).toContain("recoverToolRequestSourceStep(");
+    // The normalization runs before the coordinator is asked, so the coordinator only ever sees a
+    // state it can route — there is no "unroutable legacy checkpoint" branch left.
+    const recover = controller.slice(
+      controller.indexOf("private async recoverLocked("),
+      controller.indexOf("private async resumeRetryLocked("),
+    );
+    expect(recover).toContain("await this.normalizeLegacyRetryProvenance(loaded)");
+    expect(recover.indexOf("this.coordinatedBoundary(")).toBeGreaterThan(
+      recover.indexOf("await this.normalizeLegacyRetryProvenance(loaded)"),
+    );
+    // And no branch returns an absent directive for it any more.
+    expect(controller).not.toContain("advancementDirective");
+    expect(controller).not.toMatch(/sourceStepId === undefined\s*\)\s*\{\s*return undefined/);
+  });
+
+  it("projects the production Agent history onto the frozen AI contract", () => {
+    const history = executable("packages/core/src/run-agent-history.ts");
+    expect(history).toContain("export function projectRunAgentHistory(");
+    // It reuses the frozen validators rather than reimplementing them.
+    expect(history).toContain("assertPendingAssistantHistory");
+    expect(history).toContain("assertConversationProtocolIntegrity");
+    // It decides nothing about the Run: no status, no Step settlement, no continuation.
+    expect(history).not.toMatch(/AgentRunSchema|AgentStateSchema|RunStatus|continuation/);
+    // And no legacy durable encoding crosses into it.
+    expect(history).not.toContain("@caelush/llm");
+
+    const controller = executable("packages/core/src/run-controller.ts");
+    expect(controller).toContain("projectRunAgentHistory({");
+    expect(controller).toContain("input: directive.input");
+  });
+
   it("keeps maxSteps out of the general kernel loop", () => {
     for (const file of sourceFiles(join(root, "packages", "agent", "src", "loop")).map((path) =>
       relative(root, path).replaceAll("\\", "/"),
@@ -393,9 +535,9 @@ describe("Phase 3C Run Layer ownership", () => {
   });
 
   it("routes production Agent effects through the canonical planner", () => {
-    // Checkpoint 5 cut the production Agent effect path over. The controller must plan, materialize
-    // and commit — in that order — and must ask the coordinator for the directive rather than
-    // re-deriving one from the legacy execution epoch.
+    // Checkpoint 5 cut the production Agent effect path over, and checkpoint 6 drove it through the
+    // frozen driver. The controller must plan, materialize and commit — in that order — and must ask
+    // the coordinator for the directive rather than re-deriving one from a legacy execution epoch.
     const controller = executable("packages/core/src/run-controller.ts");
     expect(controller).toContain("createRunTransitionPlanner()");
     expect(controller).toContain("createRunCommitEventMaterializer(");
@@ -403,27 +545,35 @@ describe("Phase 3C Run Layer ownership", () => {
       "this.transitionPlanner.plan({ snapshot, directive, effect, now })",
     );
     expect(controller).toContain("this.eventMaterializer.materialize(");
-    expect(controller).toContain("classifyAgentEffectSettlement({ execution, directive })");
+    expect(controller).toContain(
+      "classifyAgentEffectSettlement({ result, directive, observation })",
+    );
     expect(controller).toContain("this.coordinator.next(");
 
-    // The canonical branch is a method of its own: `settle` classifies and dispatches, so the
-    // compatibility settlement is one named adapter rather than a second half of one big if/else.
+    // The canonical branch is a method of its own: `settle` classifies and dispatches, so each
+    // compatibility bridge is a named adapter rather than a second half of one big if/else.
     expect(controller).toContain("private async settleCanonicalAgentEffect(");
-    expect(controller).toContain("private async settleCompatibilityAgentEffect(");
+    expect(controller).toContain("private async settleFinalCandidateCompatibility(");
+    expect(controller).toContain("private async settleRetryCompatibility(");
+
+    // No execution epoch survives as an Agent execution authority.
+    expect(controller).not.toContain("advancementDirective");
+    expect(controller).not.toContain("executeLoop(");
+    expect(controller).not.toContain('"START" | "TOOL_RESULTS" | "VERIFICATION_REPAIR"');
   });
 
   it("never falls back from a failed plan to a compatibility settlement", () => {
     const controller = executable("packages/core/src/run-controller.ts");
     const canonical = controller.slice(
       controller.indexOf("private async settleCanonicalAgentEffect("),
-      controller.indexOf("private async settleCompatibilityAgentEffect("),
+      controller.indexOf("private agentTurnProvenance("),
     );
     expect(canonical.length).toBeGreaterThan(0);
 
-    // No generic fallback: a planner error is not caught, and the compatibility settlement is not
+    // No generic fallback: a planner error is not caught, and no compatibility settlement is
     // reachable from this method at all. Dual authority is exactly what that would create.
     expect(canonical).not.toContain("catch");
-    expect(canonical).not.toContain("settleCompatibilityAgentEffect");
+    expect(canonical).not.toContain("Compatibility(");
 
     // Ordering is the contract: plan, materialize, commit, then notify.
     const plan = canonical.indexOf("this.transitionPlanner.plan(");
@@ -436,17 +586,13 @@ describe("Phase 3C Run Layer ownership", () => {
     expect(notify).toBeGreaterThan(commit);
 
     // The router classifies by typed discriminant only: no message parsing decides a route, and
-    // nothing is caught. `includes` is allowed only in the epoch-agreement assertion, which tests
-    // membership in a literal table rather than reading a value.
+    // nothing is caught.
     const router = executable("packages/core/src/run-agent-effect-settlement.ts");
     expect(router).not.toContain(".message");
     expect(router).not.toContain("catch");
-    const classifier = router.slice(
-      router.indexOf("export function classifyAgentEffectSettlement("),
-      router.indexOf("function canonicalRoute("),
-    );
-    expect(classifier.length).toBeGreaterThan(0);
-    expect(classifier).not.toContain("includes(");
+    // It consumes the frozen result directly — no legacy execution projection in between.
+    expect(router).toContain("readonly result: AgentLoopAdvanceResult;");
+    expect(router).not.toContain("AgentLoopExecutionResult");
   });
 
   it("keeps the frozen driver contract unchanged", () => {
@@ -470,8 +616,8 @@ describe("Phase 3C Run Layer ownership", () => {
   });
 
   it("gates provider execution behind the durable model turn boundary", () => {
-    // The boundary is a real Core implementation now, and the RunController is the object that
-    // commits through it: the boundary holds no store of its own.
+    // The boundary is a real Core implementation, and the RunController is the object that commits
+    // through it: the boundary holds no store of its own.
     const boundary = executable("packages/core/src/run-model-turn-boundary.ts");
     expect(boundary).toContain("export function createAgentModelTurnBoundary(");
     expect(boundary).toContain("ModelTurnBoundaryPort");
@@ -482,30 +628,37 @@ describe("Phase 3C Run Layer ownership", () => {
 
     const controller = executable("packages/core/src/run-controller.ts");
     expect(controller).toContain("createAgentModelTurnBoundary(");
-    expect(controller).toContain("await boundary.beforeExecute(");
     // The commit the boundary asks for is RunController-owned, not boundary-owned.
     expect(controller).toContain("openTurn: (turn) => this.openAgentTurn(turn)");
     expect(controller).toContain("private async openAgentTurn(");
+    // And the boundary is entered through the frozen driver, not through a legacy lifecycle hook.
+    expect(controller).toContain("createRunExecutionDriver(");
+    expect(controller).toContain("await driver.execute(directive,");
+    expect(controller).not.toContain("beforeProviderTurn:");
+    expect(controller).not.toContain("withLifecycleHooks");
 
-    // Opening the turn must precede the provider: the hook that calls the boundary is the one the
-    // kernel invokes before it executes the turn, and the provider port is composed after it.
-    const hook = controller.indexOf("beforeProviderTurn:");
-    const boundaryCall = controller.indexOf("await boundary.beforeExecute(");
-    const settlement = controller.indexOf("return this.settle(snapshot, execution, advancement");
-    expect(hook).toBeGreaterThan(-1);
-    expect(boundaryCall).toBeGreaterThan(hook);
-    expect(settlement).toBeGreaterThan(boundaryCall);
+    // Opening the turn must precede the provider: the driver is composed with the boundary port,
+    // and the observed effect is settled only after `execute` resolved.
+    const driverComposition = controller.indexOf("createRunExecutionDriver(");
+    const boundaryPort = controller.indexOf("modelTurnBoundary: boundary,");
+    const settlement = controller.indexOf("return this.settle(snapshot, directive, effect.result");
+    expect(driverComposition).toBeGreaterThan(-1);
+    expect(boundaryPort).toBeGreaterThan(-1);
+    expect(settlement).toBeGreaterThan(driverComposition);
+    expect(settlement).toBeGreaterThan(boundaryPort);
   });
 
   it("keeps a refused boundary commit out of the Agent failure vocabulary", () => {
     const controller = executable("packages/core/src/run-controller.ts");
     // A boundary that never committed means no Step and no provider call, so there is no Agent
-    // effect to plan. Surfacing it as an infrastructure failure is what stops the planner from
-    // durably recording a model failure for a turn that never reached a model.
-    expect(controller).toContain("requiresBoundaryRepair(turnObservation)");
+    // effect to settle. Surfacing it as an infrastructure failure is what stops the durable ledger
+    // from recording a model failure for a turn that never reached a model.
+    expect(controller).toContain("requiresBoundaryRepair(observation)");
     expect(controller).toContain(
       'throw new RunControllerInfrastructureError("Unable to durably open the model turn"',
     );
+    // The observation is the only provider-attempt authority on the Agent path.
+    expect(controller).not.toContain("providerTurnState: execution");
 
     const boundary = executable("packages/core/src/run-model-turn-boundary.ts");
     // The observation is Core-private; the frozen result is not widened to carry it.
@@ -521,8 +674,9 @@ describe("Phase 3C Run Layer ownership", () => {
     expect(controller).toContain("private async persistWaitingApprovalLocked(");
     expect(controller).toContain("private async persistWaitingResourceLocked(");
     // Phase 3E: no production completion gate exists anywhere in the workspace. The port is
-    // declared once, the frozen driver depends on it, and the kernel's index re-exports it —
-    // nothing else may name it at all, which is what "implementation count = 0" means.
+    // declared once, the frozen driver depends on it, the kernel's index re-exports it, and the
+    // production Agent composition binds the explicit fail-closed placeholder — nothing else may
+    // name it at all, which is what "implementation count = 0" means.
     const carriers = sourceFiles(join(root, "packages"))
       .map((path) => relative(root, path).replaceAll("\\", "/"))
       .filter((file) => !file.includes("/dist/") && !file.includes("/test/"))
@@ -530,10 +684,23 @@ describe("Phase 3C Run Layer ownership", () => {
         (file) =>
           file !== "packages/agent/src/run/ports/completion-gate.ts" &&
           file !== "packages/agent/src/run/run-execution-driver.ts" &&
-          file !== "packages/agent/src/index.ts",
+          file !== "packages/agent/src/index.ts" &&
+          // The deferred-port module binds the placeholder the frozen driver is constructed with.
+          // It declares no gate: its `evaluate()` throws, and the production end-to-end tests prove
+          // it is called zero times.
+          file !== "packages/core/src/run-agent-deferred-ports.ts",
       )
       .filter((file) => /\bCompletionGate\b(?![A-Za-z])/.test(identifiers(file)));
     expect(carriers).toEqual([]);
+
+    // The one placeholder that does exist is fail-closed, and it names the phase that owns the real
+    // adapter rather than approximating one.
+    const deferred = read("packages/core/src/run-agent-deferred-ports.ts");
+    expect(deferred).toContain("DEFERRED_COMPLETION_GATE");
+    expect(deferred).toContain("DEFERRED_TOOL_TURN_COORDINATOR");
+    expect(deferred).toContain("belongs to Phase 3E");
+    expect(deferred).toContain("belongs to Phase 3D");
+    expect(deferred).not.toMatch(/async evaluate\([^)]*\)\s*\{\s*return/);
   });
 
   it("keeps the Run state machine declared once, in the kernel", () => {
