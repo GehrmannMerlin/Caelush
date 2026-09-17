@@ -5,34 +5,23 @@ import {
 } from "@caelush/agent";
 
 /**
- * The deferred and misrouted Run execution driver ports.
+ * The misrouted Run execution driver ports.
  *
  * ```text
- * ADVANCE_AGENT        real, Phase 3C
+ * ADVANCE_AGENT        real, Phase 3C — createRunAgentLoop over the frozen kernel
  * EXECUTE_TOOL_BATCH   real, Phase 3D — the run-scoped adapter in run-tool-turn-coordinator.ts
- * EVALUATE_COMPLETION  Phase 3E
+ * EVALUATE_COMPLETION  real, Phase 3E — the run-scoped coding gate in run-completion-gate.ts
  * ```
  *
- * The frozen `RunExecutionDriver` requires all three collaborators. Phase 3C wired only the Agent
- * one for real and left two explicit fail-closed placeholders; Phase 3D replaced the Tool one with
- * a real adapter, so what remains here is:
+ * All three effects are real, and each is driven by an effect-specific composition that binds its own
+ * port for real and **misroute guards** for the other two. A guard exists because the frozen
+ * `RunExecutionDriver` requires all three collaborators: an Agent driver has to be given *a* Tool
+ * coordinator and *a* completion gate even though the Agent path never hands it those directives.
  *
- * ```text
- * MISROUTED_TOOL_TURN_COORDINATOR  a Tool directive reaching an *Agent* driver
- * DEFERRED_COMPLETION_GATE         the Phase 3E completion adapter, which does not exist yet
- * ```
- *
- * They are different failures and are named differently. The completion gate is a **deferred**
- * port: nobody has implemented it, the production Run Layer evaluates completion through its
- * existing verification compatibility authority, and reaching the placeholder is a routing bug
- * that Phase 3E closes. The Tool coordinator here is a **misroute** guard: the real Tool adapter
- * exists and is what the Run Layer drives, so a Tool directive arriving at an Agent driver means
- * the wrong effect path was taken — and executing Tools from there would be a second Tool
- * execution authority.
- *
- * Neither returns a value. A placeholder that silently did nothing — or that approximated Tool
- * execution or completion — would be far worse than a throw: it would let a Run Layer believe work
- * had happened. Both are proven to be called zero times in the production end-to-end tests.
+ * A guard fails closed rather than approximating work. A placeholder that silently did nothing would
+ * be far worse than a throw: it would let a Run Layer believe work had happened. There is no deferred
+ * production port left anywhere, and the guards are proven to be called zero times in the production
+ * end-to-end tests.
  */
 
 /**
@@ -50,12 +39,19 @@ export const MISROUTED_TOOL_TURN_COORDINATOR: ToolTurnCoordinator = {
   },
 };
 
-/** The `EVALUATE_COMPLETION` placeholder. Phase 3E owns the real completion adapter. */
-export const DEFERRED_COMPLETION_GATE: CompletionGate = {
-  id: "deferred-phase-3e-completion-gate",
+/**
+ * The refusal the *Agent* and *Tool* drivers answer a completion directive with.
+ *
+ * A real `CompletionGate` exists and is what the Run Layer drives, so a completion directive arriving
+ * at an Agent or Tool driver means the wrong effect path was taken — and evaluating completion from
+ * there would be a second completion authority, and potentially a `run.completed` no verification
+ * produced.
+ */
+export const MISROUTED_COMPLETION_GATE: CompletionGate = {
+  id: "misrouted-completion-gate",
   async evaluate(): Promise<never> {
     throw new RunExecutionInvariantError(
-      "Completion RunExecutionDriver adapter belongs to Phase 3E.",
+      "A completion directive reached a non-completion driver; the Run Layer owns completion evaluation.",
     );
   },
 };

@@ -13,12 +13,13 @@ import {
   RunController,
   RunControllerInfrastructureError,
   RunRetryRegistry,
+  type RunCompletionPersistencePort,
   type RunExecutionStore,
-  type VerificationRunExecutionStoreExtension,
 } from "@caelush/core";
 import { EventBus } from "@caelush/events";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
+import { completionStoreOver } from "./support/completion-store.js";
 import { verificationPlanner } from "./support/fixtures.js";
 import { aiError, type PartialTurnResult } from "./support/model-turns.js";
 import {
@@ -47,9 +48,19 @@ async function setup(options: {
   maxSteps?: number;
   complete: (count: number, signal: AbortSignal) => Promise<PartialTurnResult>;
   contextFailure?: unknown;
+  /**
+   * The completion persistence port a test composes over its own store.
+   *
+   * Phase 3E: a candidate boundary writes the verification plan, so a suite that exercises a final
+   * candidate supplies the port as well as the general store. Defaulting to the real store keeps every
+   * other suite unchanged.
+   */
+  completion?: (
+    storage: Awaited<ReturnType<typeof openCaelushStorage>>,
+  ) => RunCompletionPersistencePort;
   execution?: (
     storage: Awaited<ReturnType<typeof openCaelushStorage>>,
-  ) => RunExecutionStore & VerificationRunExecutionStoreExtension;
+  ) => RunExecutionStore;
   retryRegistry?: RunRetryRegistry;
   retryTimer?: {
     schedule(delayMs: number, callback: () => void | Promise<void>): { cancel(): void };
@@ -83,7 +94,7 @@ async function setup(options: {
       createStepId: () => createStepId(),
     }).factory,
     executionStore: options.execution?.(storage) ?? storage.execution,
-    verificationStore: options.execution?.(storage) ?? storage.execution,
+    completionStore: options.completion?.(storage) ?? completionStoreOver(storage.execution),
     events: eventBus,
     configResolver: {
       resolve: async () => ({
@@ -363,8 +374,6 @@ describe("RunController failure and maxSteps boundaries", () => {
       },
     ]);
     expect(result.status).toBe("MAX_STEPS_REACHED");
-    // The second turn ran inside the budget; the batch *it* requested is never dispatched, because
-    // the budget is already spent by the time the boundary is reached.
     expect(fixture.providerCalls()).toBe(2);
     expect(fixture.events.map((event) => event.type)).not.toContain("run.failed");
     expect(
@@ -376,27 +385,29 @@ describe("RunController failure and maxSteps boundaries", () => {
   it("does not retry after a final settlement persistence failure", async () => {
     const fixture = await setup({
       complete: async () => finalTurn(),
-      execution: (storage) => ({
-        load: (runId) => storage.execution.load(runId),
-        requestCancellation: (runId, intent) =>
-          storage.execution.requestCancellation(runId, intent),
-        commit: async (command) => {
-          if (command.run.status === "VERIFYING") throw new Error("final commit failed");
-          return storage.execution.commit(command);
-        },
-        loadVerificationPlan: (runId, planId) =>
-          storage.execution.loadVerificationPlan(runId, planId),
-        commitVerifiedCompletion: (command) => storage.execution.commitVerifiedCompletion(command),
-      }),
+      // Phase 3E: the candidate boundary is what opens the VERIFYING transition, so this is the
+      // commit that must fail for a final settlement failure to be observable at all.
+      completion: (storage) =>
+        completionStoreOver({
+          load: (runId) => storage.execution.load(runId),
+          requestCancellation: (runId, intent) =>
+            storage.execution.requestCancellation(runId, intent),
+          commit: async (command) => {
+            if (command.run.status === "VERIFYING") throw new Error("final commit failed");
+            return storage.execution.commit(command);
+          },
+        }),
     });
+
     await expect(fixture.controller.start(fixture.run.id)).rejects.toBeInstanceOf(
       RunControllerInfrastructureError,
     );
     expect(fixture.providerCalls()).toBe(1);
+    // The boundary never became durable, so the Run still holds its open Step and no continuation: a
+    // settlement failure is not a silent success.
     expect((await fixture.storage.steps.listByRun(fixture.run.id))[0]?.status).toBe("RUNNING");
     const recovered = await fixture.controller.recover(fixture.run.id);
     expect(recovered.status).toBe("FAILED");
-    expect(fixture.providerCalls()).toBe(1);
     await fixture.storage.close();
   });
 

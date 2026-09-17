@@ -11,8 +11,10 @@ import {
   createRunCommitEventMaterializer,
   type AIModelTurnResult,
   type RunCommitEventMaterializerInput,
+  type RunCandidateBoundaryCommit,
+  type RunCompletionPersistencePort,
   type RunExecutionStore,
-  type VerificationRunExecutionStoreExtension,
+  type RunVerifiedCompletionCommit,
 } from "@caelush/core";
 import { EventBus } from "@caelush/events";
 import {
@@ -25,6 +27,7 @@ import {
   createTimestampMs,
   createWorkspaceId,
   type RunId,
+  type VerificationPlanId,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
@@ -133,9 +136,7 @@ function finalTurn(text = "answer") {
 interface SetupOptions {
   readonly maxSteps?: number;
   readonly complete: (count: number, signal: AbortSignal) => Promise<AIModelTurnResult>;
-  readonly store?: (
-    storage: Awaited<ReturnType<typeof openCaelushStorage>>,
-  ) => RunExecutionStore & VerificationRunExecutionStoreExtension;
+  readonly store?: (storage: Awaited<ReturnType<typeof openCaelushStorage>>) => RunExecutionStore;
 }
 
 async function setup(options: SetupOptions) {
@@ -162,17 +163,38 @@ async function setup(options: SetupOptions) {
   let count = 0;
 
   const store = options.store?.(storage) ?? storage.execution;
-  const instrumented: RunExecutionStore & VerificationRunExecutionStoreExtension = {
+  // The same durable store implements the Core-private completion persistence port; the fixture
+  // reads it through that contract rather than through a verification-shaped store extension.
+  const completion = storage.execution as unknown as RunCompletionPersistencePort;
+  // Phase 3E: the Run Layer names a general execution store and a Core-private completion
+  // persistence port. The real store implements both, and this fixture only observes the *order* in
+  // which the Run Layer commits and notifies.
+  const instrumented: RunExecutionStore = {
     load: (runId: RunId) => store.load(runId),
-    requestCancellation: (runId, intent) => store.requestCancellation(runId, intent),
-    commit: async (command) => {
+    requestCancellation: (runId: RunId, intent: Parameters<typeof store.requestCancellation>[1]) =>
+      store.requestCancellation(runId, intent),
+    commit: async (command: Parameters<typeof store.commit>[0]) => {
       order.push("commit");
       const result = await store.commit(command);
       order.push("notify");
       return result;
     },
-    loadVerificationPlan: (runId, planId) => store.loadVerificationPlan(runId, planId),
-    commitVerifiedCompletion: (command) => store.commitVerifiedCompletion(command),
+  };
+  const completionStore: RunCompletionPersistencePort = {
+    loadVerificationPlan: (runId, planId) =>
+      completion.loadVerificationPlan(runId, planId),
+    commitCandidateBoundary: async (command) => {
+      order.push("commit");
+      const result = await completion.commitCandidateBoundary(command);
+      order.push("notify");
+      return result;
+    },
+    commitVerifiedCompletion: async (command) => {
+      order.push("commit");
+      const result = await completion.commitVerifiedCompletion(command);
+      order.push("notify");
+      return result;
+    },
   };
 
   // The Run Layer composes the frozen AgentLoop itself from these collaborator ports, so the
@@ -188,7 +210,7 @@ async function setup(options: SetupOptions) {
   const controller = new RunController({
     agentExecution: agentExecution.factory,
     executionStore: instrumented,
-    verificationStore: instrumented,
+    completionStore,
     events: eventBus,
     configResolver: {
       resolve: async () => ({
@@ -352,7 +374,6 @@ describe("production Agent effect cutover", () => {
     const controller = new RunController({
       agentExecution: agentExecution.factory,
       executionStore: storage.execution,
-      verificationStore: storage.execution,
       events: eventBus,
       configResolver: {
         resolve: async () => ({
@@ -406,12 +427,18 @@ describe("production Agent effect cutover", () => {
 
     const snapshot = await fixture.storage.execution.load(fixture.run.id);
     expect(snapshot?.run.status).toBe("VERIFYING");
-    expect(snapshot?.continuation?.type).toBe("AWAITING_VERIFICATION");
-    if (snapshot?.continuation?.type === "AWAITING_VERIFICATION") {
-      // A real plan identity, minted by the existing verification authority.
-      expect(snapshot.continuation.verificationPlanId).toMatch(/^vplan_/);
-      expect(snapshot.verificationPlan?.id).toBe(snapshot.continuation.verificationPlanId);
+    if (snapshot?.continuation?.type !== "AWAITING_VERIFICATION") {
+      throw new Error("expected an AWAITING_VERIFICATION boundary");
     }
+    // A real plan identity, minted by the host, and a durable plan row the boundary actually wrote.
+    const planId = snapshot.continuation.verificationPlanId;
+    expect(planId).toMatch(/^vplan_/);
+    const plan = await (
+      fixture.storage.execution as unknown as RunCompletionPersistencePort
+    ).loadVerificationPlan(snapshot.run.id, planId);
+    expect(plan?.id).toBe(planId);
+    expect(plan?.candidateHash).toBeDefined();
+    expect(plan?.checks.length).toBeGreaterThan(0);
     await fixture.storage.close();
   });
 });
@@ -438,16 +465,23 @@ describe("durable model turn boundary in production", () => {
         requestCancellation: (runId, intent) =>
           storage.execution.requestCancellation(runId, intent),
         commit: async (command) => {
-          // The boundary commit is the one that opens a Step. Refusing it is exactly what a
-          // concurrent writer would have done, and it is the failure mode the invariant covers.
-          if (command.stepWrites.some((write) => write.operation === "INSERT")) {
-            throw new RunExecutionConflictError("boundary conflict");
-          }
+          const isBoundary = command.stepWrites.some((write) => write.operation === "INSERT");
+          if (isBoundary) throw new RunExecutionConflictError("boundary conflict");
           return storage.execution.commit(command);
         },
-        loadVerificationPlan: (runId, planId) =>
-          storage.execution.loadVerificationPlan(runId, planId),
-        commitVerifiedCompletion: (command) => storage.execution.commitVerifiedCompletion(command),
+        loadVerificationPlan: (runId: RunId, planId: VerificationPlanId) =>
+          (storage.execution as unknown as RunCompletionPersistencePort).loadVerificationPlan(
+            runId,
+            planId,
+          ),
+        commitCandidateBoundary: (command: RunCandidateBoundaryCommit) =>
+          (storage.execution as unknown as RunCompletionPersistencePort).commitCandidateBoundary(
+            command,
+          ),
+        commitVerifiedCompletion: (command: RunVerifiedCompletionCommit) =>
+          (storage.execution as unknown as RunCompletionPersistencePort).commitVerifiedCompletion(
+            command,
+          ),
       }),
     });
 
@@ -491,10 +525,19 @@ describe("canonical settlement side-effect safety", () => {
             }
             return storage.execution.commit(command);
           },
-          loadVerificationPlan: (runId, planId) =>
-            storage.execution.loadVerificationPlan(runId, planId),
-          commitVerifiedCompletion: (command) =>
-            storage.execution.commitVerifiedCompletion(command),
+          loadVerificationPlan: (runId: RunId, planId: VerificationPlanId) =>
+            (storage.execution as unknown as RunCompletionPersistencePort).loadVerificationPlan(
+              runId,
+              planId,
+            ),
+          commitCandidateBoundary: (command: RunCandidateBoundaryCommit) =>
+            (storage.execution as unknown as RunCompletionPersistencePort).commitCandidateBoundary(
+              command,
+            ),
+          commitVerifiedCompletion: (command: RunVerifiedCompletionCommit) =>
+            (storage.execution as unknown as RunCompletionPersistencePort).commitVerifiedCompletion(
+              command,
+            ),
         };
       },
     });

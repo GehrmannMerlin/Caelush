@@ -10,6 +10,7 @@ import {
   type StepId,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
+import { completionStoreOver } from "./support/completion-store.js";
 import { RunController } from "../src/run-controller.js";
 import type {
   DurableAgentEvent,
@@ -221,6 +222,7 @@ function controllerFor(
   return new RunController({
     agentExecution: agentExecutionFor(observed),
     executionStore: store,
+    completionStore: completionStoreOver(store),
     events: { notifyCommitted: () => undefined },
     configResolver: {
       resolve: async () => ({ baseSystemPrompt: "base", contextLimits: { maxInputTokens: 1000 } }),

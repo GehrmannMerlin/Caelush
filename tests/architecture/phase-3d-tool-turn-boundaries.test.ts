@@ -114,23 +114,30 @@ describe("Phase 3D durable Tool turn driver boundaries", () => {
     expect(adapter).toContain("dependencies.batches.recover(");
     expect(adapter).toContain("dependencies.batches.execute(");
   });
-
-  it("keeps the deferred Tool port out of production and the completion port deferred", () => {
-    // `DEFERRED_TOOL_TURN_COORDINATOR` must not exist anywhere any more: Phase 3D replaced it.
-    const carriers = productionSources().filter((file) =>
-      read(file).includes("DEFERRED_TOOL_TURN_COORDINATOR"),
+  it("keeps every deferred port out of production and each effect on its own real port", () => {
+    // No production file may carry a deferred port any more: Phase 3D replaced the Tool one and Phase
+    // 3E replaced the completion one, so either name appearing again would mean a port nobody
+    // implemented was being bound into a driver.
+    const carriers = productionSources().filter(
+      (file) =>
+        read(file).includes("DEFERRED_TOOL_TURN_COORDINATOR") ||
+        read(file).includes("DEFERRED_COMPLETION_GATE"),
     );
     expect(carriers).toEqual([]);
 
-    // The completion gate is still the explicit fail-closed placeholder, and the Agent path binds a
-    // *misroute* guard rather than a Tool execution path.
+    // Each effect binds a *misroute* guard for the other two rather than a second execution path.
     const deferred = executable("packages/core/src/run-agent-deferred-ports.ts");
-    expect(deferred).toContain("export const DEFERRED_COMPLETION_GATE");
     expect(deferred).toContain("export const MISROUTED_TOOL_TURN_COORDINATOR");
+    expect(deferred).toContain("export const MISROUTED_COMPLETION_GATE");
 
     const controller = executable("packages/core/src/run-controller.ts");
     expect(controller).toContain("toolTurns: MISROUTED_TOOL_TURN_COORDINATOR");
-    expect(controller).toContain("completionGate: DEFERRED_COMPLETION_GATE");
+    expect(controller).toContain("completionGate: MISROUTED_COMPLETION_GATE");
+    // The Tool effect's own composition binds the real Tool coordinator and a misrouted completion
+    // gate, so a Tool batch can never evaluate completion.
+    expect(controller).toContain("toolTurns: turnDriver.coordinator");
+    // The completion effect binds the real gate, with both other ports misrouted.
+    expect(controller).toContain("completionGate: resolved.completion.gate");
   });
 
   it("removes every inline Tool decision from the RunController main loop", () => {
@@ -165,12 +172,12 @@ describe("Phase 3D durable Tool turn driver boundaries", () => {
     expect(controller).toContain("await this.settleToolEffect(");
     expect(controller).toContain("classifyToolEffectSettlement({");
 
-    // The entry mode is threaded in and refreshed in exactly two places — a settled Tool batch and a
-    // completed Agent turn — because those are the two points at which the next batch stops being the
-    // one the caller entered with. A third refresh would mean the loop had re-derived the mode from
-    // something other than its own entry.
+    // The entry mode is threaded in and refreshed in exactly three places — a settled Tool batch, a
+    // completed Agent turn and a settled completion — because those are the three points at which the
+    // next batch stops being the one the caller entered with. A fourth refresh would mean the loop had
+    // re-derived the mode from something other than its own entry.
     const modeRefreshes = controller.match(/^\s+mode = "EXECUTE";$/gm) ?? [];
-    expect(modeRefreshes).toHaveLength(2);
+    expect(modeRefreshes).toHaveLength(3);
   });
 
   it("routes every Tool turn result to exactly one typed settlement authority", () => {
@@ -410,7 +417,9 @@ describe("Phase 3D durable Tool turn driver boundaries", () => {
     expect(adapter).toContain("export function captureRunToolTurnFacts(");
     expect(adapter).toContain("workspace: input.snapshot.run.workspace");
     expect(adapter).toContain("runtime: input.snapshot.run.runtime");
-    expect(adapter).toContain("securityContext: createToolSecurityContext(input.snapshot.run, state)");
+    expect(adapter).toContain(
+      "securityContext: createToolSecurityContext(input.snapshot.run, state)",
+    );
     expect(controller).toContain("captureRunToolTurnFacts({");
     expect(controller).not.toContain("createToolSecurityContext(");
     // The effective mode strengthens and never downgrades.

@@ -56,7 +56,6 @@ function controller(
       createStepId: () => createStepId(),
     }).factory,
     executionStore: storage.execution,
-    verificationStore: storage.execution,
     events: new EventBus(storage.events),
     configResolver: {
       resolve: async () => ({

@@ -425,7 +425,7 @@ describe("Phase 3C Run Layer ownership", () => {
     // The Step settlement source on the compatibility bridges is the Run's own durable active Step.
     expect(controller).toContain("private requireExecutedStep(");
     expect(controller).toContain("current.activeStep");
-    expect(controller).toContain("private async settleFinalCandidateCompatibility(");
+    expect(controller).toContain("private async openCompletionBoundary(");
     expect(controller).toContain("private async settleRetryCompatibility(");
     // And the retry bridge settles the attempt *before* asking the policy, so maxSteps compares the
     // post-attempt count.
@@ -440,15 +440,15 @@ describe("Phase 3C Run Layer ownership", () => {
     expect(retry).toContain("steps: settledState.usage.steps");
   });
 
-  it("keeps the Tool driver real and the completion port fail-closed in production", () => {
-    // Phase 3D replaced the Tool placeholder with a real run-scoped adapter; Phase 3E's completion
-    // adapter still does not exist, so the two ports are no longer the same kind of thing and are
-    // no longer named as if they were.
+  it("keeps the Tool driver real and the completion port misrouted in production", () => {
+    // Phase 3D replaced the Tool placeholder with a real run-scoped adapter and Phase 3E replaced the
+    // completion one, so what remains here are two *misroute* guards: ports the frozen driver requires
+    // but that a wrongly-composed effect must never reach.
     const deferred = executable("packages/core/src/run-agent-deferred-ports.ts");
     expect(deferred).toContain("export const MISROUTED_TOOL_TURN_COORDINATOR");
-    expect(deferred).toContain("export const DEFERRED_COMPLETION_GATE");
+    expect(deferred).toContain("export const MISROUTED_COMPLETION_GATE");
     expect(deferred).not.toContain("DEFERRED_TOOL_TURN_COORDINATOR");
-    expect(deferred).toContain("belongs to Phase 3E");
+    expect(deferred).not.toContain("DEFERRED_COMPLETION_GATE");
     expect(deferred).toMatch(/async execute\(\): Promise<never>/);
     expect(deferred).toMatch(/async evaluate\(\): Promise<never>/);
 
@@ -456,7 +456,7 @@ describe("Phase 3C Run Layer ownership", () => {
     // Tool directive arriving at an Agent driver is refused rather than driven twice.
     const controller = executable("packages/core/src/run-controller.ts");
     expect(controller).toContain("toolTurns: MISROUTED_TOOL_TURN_COORDINATOR");
-    expect(controller).toContain("completionGate: DEFERRED_COMPLETION_GATE");
+    expect(controller).toContain("completionGate: MISROUTED_COMPLETION_GATE");
     // And the Tool batch itself is driven through the frozen driver over the real adapter — not
     // through a direct call to the Tool Layer from the Agent path.
     expect(controller).toContain("createRunToolTurnDriverFactory(");
@@ -557,7 +557,7 @@ describe("Phase 3C Run Layer ownership", () => {
     // The canonical branch is a method of its own: `settle` classifies and dispatches, so each
     // compatibility bridge is a named adapter rather than a second half of one big if/else.
     expect(controller).toContain("private async settleCanonicalAgentEffect(");
-    expect(controller).toContain("private async settleFinalCandidateCompatibility(");
+    expect(controller).toContain("private async openCompletionBoundary(");
     expect(controller).toContain("private async settleRetryCompatibility(");
 
     // No execution epoch survives as an Agent execution authority.
@@ -680,10 +680,16 @@ describe("Phase 3C Run Layer ownership", () => {
     expect(controller).toContain("private async settleToolEffect(");
     expect(controller).toContain("private async settleCanonicalToolTurn(");
     expect(controller).toContain("private async settleWaitingResource(");
-    // Phase 3E: no production completion gate exists anywhere in the workspace. The port is
-    // declared once, the frozen driver depends on it, the kernel's index re-exports it, and the
-    // production Agent composition binds the explicit fail-closed placeholder — nothing else may
-    // name it at all, which is what "implementation count = 0" means.
+    // Phase 3E: exactly one production gate is the coding verification gate. Its identity is
+    // declared once, in the adapter that owns it, and every other completion port in the workspace is
+    // a misroute guard rather than a second policy.
+    const realGates = sourceFiles(join(root, "packages"))
+      .map((path) => relative(root, path).replaceAll("\\", "/"))
+      .filter((file) => !file.includes("/dist/") && !file.includes("/test/"))
+      .filter((file) => read(file).includes("caelush.coding-verification-completion-gate.v1"));
+    expect(realGates).toEqual(["packages/core/src/run-completion-gate.ts"]);
+
+    // And nothing else in the workspace declares a gate-shaped object.
     const carriers = sourceFiles(join(root, "packages"))
       .map((path) => relative(root, path).replaceAll("\\", "/"))
       .filter((file) => !file.includes("/dist/") && !file.includes("/test/"))
@@ -692,19 +698,16 @@ describe("Phase 3C Run Layer ownership", () => {
           file !== "packages/agent/src/run/ports/completion-gate.ts" &&
           file !== "packages/agent/src/run/run-execution-driver.ts" &&
           file !== "packages/agent/src/index.ts" &&
-          // The deferred-port module binds the placeholder the frozen driver is constructed with.
-          // It declares no gate: its `evaluate()` throws, and the production end-to-end tests prove
-          // it is called zero times.
-          file !== "packages/core/src/run-agent-deferred-ports.ts",
+          file !== "packages/core/src/run-agent-deferred-ports.ts" &&
+          // The real gate: it declares the coding implementation the frozen driver is driven with.
+          file !== "packages/core/src/run-completion-gate.ts",
       )
       .filter((file) => /\bCompletionGate\b(?![A-Za-z])/.test(identifiers(file)));
     expect(carriers).toEqual([]);
 
-    // The one placeholder that does exist is fail-closed, and it names the phase that owns the real
-    // adapter rather than approximating one.
+    // The misroute guard is fail-closed: it never returns a decision.
     const deferred = read("packages/core/src/run-agent-deferred-ports.ts");
-    expect(deferred).toContain("DEFERRED_COMPLETION_GATE");
-    expect(deferred).toContain("belongs to Phase 3E");
+    expect(deferred).toContain("MISROUTED_COMPLETION_GATE");
     expect(deferred).not.toMatch(/async evaluate\([^)]*\)\s*\{\s*return/);
   });
 

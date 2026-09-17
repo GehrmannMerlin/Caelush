@@ -372,10 +372,39 @@ export type {
   RunExecutionSnapshotView,
   RunExecutionStepWrite,
   RunExecutionStore,
-  RunVerifiedCompletionCommit,
   RunExecutionStorePort,
-  VerificationRunExecutionStoreExtension,
 } from "./run-execution-store.js";
+export type {
+  RunCandidateBoundaryCommit,
+  RunCompletionPersistencePort,
+  RunVerifiedCompletionCommit,
+} from "./run-completion-store.js";
+export {
+  createRunCandidateBoundaryPlanner,
+  createRunCompletionGate,
+} from "./run-completion-gate.js";
+export type {
+  CandidateBoundaryPlanningDependencies,
+  RunCandidateBoundaryPlanner,
+  RunCompletionGate,
+} from "./run-completion-gate.js";
+export type {
+  CompletionTaskReviewerPort,
+  CompletionVerificationPlannerPort,
+  RunCompletionGateDependencies,
+} from "./run-completion-context.js";
+export { createCompletionGateObservation } from "./run-completion-observation.js";
+export type {
+  CompletionGateObservation,
+  CompletionVerificationStatus,
+  CompletionWorkspaceFreshness,
+} from "./run-completion-observation.js";
+export { classifyCompletionEffectSettlement } from "./run-completion-effect-settlement.js";
+export type {
+  CompletionEffectSettlementInput,
+  CompletionEffectSettlementRoute,
+} from "./run-completion-effect-settlement.js";
+export type { CompletionEventEvidence } from "./run-commit-event-materializer.js";
 export {
   toAgentAIMessage,
   toAgentAssistantMessage,

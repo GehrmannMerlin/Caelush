@@ -1,43 +1,30 @@
 import type {
-  DurableEventDraft,
   RunExecutionCommit,
   RunExecutionCommitResult,
   RunExecutionSnapshot,
   RunExecutionStorePort,
 } from "@caelush/agent";
-import type {
-  AgentRun,
-  AgentState,
-  RunId,
-  VerifiedRunFinalResult,
-  VerificationPlan,
-  VerificationPlanId,
-} from "@caelush/protocol";
+import type { RunId } from "@caelush/protocol";
 
 /**
- * The Run Layer's compatibility view over the canonical Run execution store.
+ * The Run Layer's view over the canonical Run execution store.
  *
  * ```text
  * General Run execution store   @caelush/agent      — the contract, and only the contract
- * Verification compatibility    @caelush/core       — this file
+ * Coding completion persistence @caelush/core       — run-completion-store.ts
  * Storage implementation        @caelush/storage    — implements both
  * ```
  *
  * The general symbols below are *re-exports*. There is deliberately no second declaration of
  * `RunExecutionStorePort`, `RunExecutionSnapshot`, `RunExecutionCommit` or the two error classes:
- * two declarations would mean two identities, and `instanceof` would silently stop agreeing with
- * the throw.
+ * two declarations would mean two identities, and `instanceof` would silently stop agreeing with the
+ * throw.
  *
- * What is genuinely Core-owned is the coding-verification concern, which the general Run port
- * must not carry:
- *
- * ```text
- * VerificationPlan            a coding-verification artefact, not a Run execution fact
- * VerifiedRunFinalResult      the completion authority's result
- * commitVerifiedCompletion    the completion transaction
- * ```
- *
- * This split is transitional and closes in Phase 3E, when completion authority moves.
+ * Phase 3E closed the verification half of this view. A general Run snapshot used to carry the
+ * `VerificationPlan` the Run was bound to, which meant a general store had to answer a verification
+ * question and the Run Layer could read a coding artefact straight off a general snapshot. The plan now
+ * lives behind the Core-private completion persistence port, where it is written in the same
+ * transaction as the boundary that names it, and nothing here mentions verification at all.
  */
 
 export { RunExecutionConflictError, RunExecutionInvariantError } from "@caelush/agent";
@@ -55,27 +42,22 @@ export type {
 } from "@caelush/agent";
 
 /**
- * The general snapshot plus the verification plan the Run Layer's coding path reads.
+ * The general Run snapshot the Run Layer reads.
  *
- * The plan is *not* part of the canonical snapshot: the compatibility layer assembles it from the
- * general snapshot and the verification extension, so a general Run never carries a coding
- * artefact while a coding Run still sees what it needs.
+ * It is the canonical snapshot, unchanged. The alias exists so the Run Layer's call sites keep one
+ * name for it, and so a future change to how a Run is read has exactly one place to happen.
  */
-export type RunExecutionSnapshotView = RunExecutionSnapshot & {
-  readonly verificationPlan?: VerificationPlan | undefined;
-};
+export type RunExecutionSnapshotView = RunExecutionSnapshot;
 
-/** The general commit plus the plan a final candidate's boundary writes atomically. */
-export type RunExecutionCommitView = RunExecutionCommit & {
-  readonly verificationPlan?: VerificationPlan | undefined;
-};
+/** The general Run commit the Run Layer describes. */
+export type RunExecutionCommitView = RunExecutionCommit;
 
 /**
  * The store contract the Run Layer uses.
  *
- * It extends the canonical agent port with the compatibility view, so the General Run surface
- * stays exactly the agent's while the coding path keeps working. A store implementation satisfies
- * both by implementing this interface.
+ * It is the canonical agent port, and nothing more. A store implementation satisfies it directly; a
+ * host that also implements the Core-private completion persistence port is asked for that separately,
+ * by the one boundary that needs it.
  */
 export interface RunExecutionStore extends RunExecutionStorePort {
   load(runId: RunId): Promise<RunExecutionSnapshotView | null>;
@@ -83,31 +65,10 @@ export interface RunExecutionStore extends RunExecutionStorePort {
 }
 
 /**
- * The verification-specific durable completion.
+ * The plan a `VERIFYING` Run is bound to, as the completion boundary needs it.
  *
- * Reused from the existing semantics rather than redesigned: the Run, the AgentState, the final
- * result, the plan and the events settle in one transaction, and the command must name the plan
- * the Run is actually verifying.
+ * Re-exported here so the completion port and the store view agree on one name. It is the only
+ * verification symbol left in this file, and it appears as an *import type of a port*, never as a field
+ * of a general Run.
  */
-export interface RunVerifiedCompletionCommit {
-  readonly run: AgentRun;
-  readonly state: AgentState;
-  readonly finalResult: VerifiedRunFinalResult;
-  readonly verificationPlan: VerificationPlan;
-  readonly expectedStateRevision: number | null;
-  readonly expectedContinuationRevision: number | null;
-  readonly events: readonly DurableEventDraft[];
-}
-
-/**
- * The transitional coding-verification extension of the Run execution store.
- *
- * It exists so a general Run store never has to answer a verification question. Phase 3E replaces
- * it when completion authority is extracted.
- */
-export interface VerificationRunExecutionStoreExtension {
-  /** The plan a `VERIFYING` Run is bound to, or `null` when there is none. */
-  loadVerificationPlan(runId: RunId, planId: VerificationPlanId): Promise<VerificationPlan | null>;
-  /** Settle a verified completion. */
-  commitVerifiedCompletion(command: RunVerifiedCompletionCommit): Promise<RunExecutionCommitResult>;
-}
+export type { RunContinuationCheckpoint } from "./agent-continuation.js";

@@ -7,7 +7,10 @@ import {
   createStepId,
   createTimestampMs,
   createWorkspaceId,
+  type RunId,
+  type VerificationPlan,
   type VerificationPlanDraft,
+  type VerificationPlanId,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import { RunController } from "../src/run-controller.js";
@@ -18,6 +21,11 @@ import type {
   RunExecutionSnapshotView as RunExecutionSnapshot,
   RunExecutionStore,
 } from "../src/run-execution-store.js";
+import type {
+  RunCandidateBoundaryCommit,
+  RunCompletionPersistencePort,
+  RunVerifiedCompletionCommit,
+} from "../src/run-completion-store.js";
 import type { RunEventNotifier, RunExecutionConfigResolver } from "../src/run-controller-ports.js";
 import type { RunBudgetPort } from "../src/budget-ports.js";
 import type { RunAgentExecutionContextFactory } from "../src/run-agent-execution.js";
@@ -43,14 +51,57 @@ function makeRun(overrides: Partial<ReturnType<typeof AgentRunSchema.parse>> = {
   });
 }
 
-class MemoryExecutionStore implements RunExecutionStore {
+/**
+ * A store that commits the way the production store does and also answers the Core-private completion
+ * persistence port.
+ *
+ * Phase 3E: a general Run snapshot carries no verification plan, so the plan lives here — written by
+ * the candidate boundary in the same call that writes the Run continuation, exactly as the durable
+ * store writes them in one transaction.
+ */
+class MemoryExecutionStore implements RunExecutionStore, RunCompletionPersistencePort {
   snapshot: RunExecutionSnapshot;
   stateRevision: number | undefined;
   commits: RunExecutionCommit[] = [];
   sequence = 0;
+  private readonly plans = new Map<string, VerificationPlan>();
 
   constructor(run: ReturnType<typeof makeRun>) {
     this.snapshot = { run, conversation: [] };
+  }
+
+  async loadVerificationPlan(
+    _runId: RunId,
+    planId: VerificationPlanId,
+  ): Promise<VerificationPlan | null> {
+    return this.plans.get(planId) ?? null;
+  }
+
+  async commitCandidateBoundary(command: RunCandidateBoundaryCommit) {
+    this.plans.set(command.verificationPlan.id, command.verificationPlan);
+    return this.commit({
+      run: command.run,
+      state: command.state,
+      expectedStateRevision: command.expectedStateRevision,
+      expectedContinuationRevision: command.expectedContinuationRevision,
+      stepWrites: command.stepWrites,
+      messagesToAppend: command.messagesToAppend,
+      continuation: { operation: "SET", checkpoint: command.continuation, updatedAt: 1 as never },
+      events: command.events,
+    });
+  }
+
+  async commitVerifiedCompletion(command: RunVerifiedCompletionCommit) {
+    return this.commit({
+      run: command.run,
+      state: command.state,
+      expectedStateRevision: command.expectedStateRevision,
+      expectedContinuationRevision: command.expectedContinuationRevision,
+      stepWrites: [],
+      messagesToAppend: [],
+      continuation: { operation: "CLEAR" },
+      events: command.events,
+    });
   }
 
   async load(): Promise<RunExecutionSnapshot> {
@@ -94,11 +145,6 @@ class MemoryExecutionStore implements RunExecutionStore {
       ...(command.continuation?.operation === "SET"
         ? { continuation: command.continuation.checkpoint, continuationRevision: 1 }
         : {}),
-      ...(command.verificationPlan === undefined
-        ? this.snapshot.verificationPlan === undefined
-          ? {}
-          : { verificationPlan: this.snapshot.verificationPlan }
-        : { verificationPlan: command.verificationPlan }),
     };
     const events: DurableAgentEvent[] = command.events.map((draft) => ({
       ...draft,
@@ -529,24 +575,24 @@ describe("RunController project verification driving", () => {
       },
     });
 
-    const result = await controller.start(run.id);
-    expect(result.status).toBe("AWAITING_VERIFICATION");
-    expect(runnerCalls).toBe(1);
-    expect(profileCalls).toBe(1);
+    await controller.start(run.id);
+    // Phase 3E: the Final Candidate opens the durable completion boundary and stops. Verification is
+    // an *effect* now, so the checks run when the coordinator decides `EVALUATE_COMPLETION` — which is
+    // what recovery does — not while the boundary is being opened.
+    expect(runnerCalls).toBe(0);
+    expect(profileCalls).toBe(0);
     expect(runtimeCalls).toBe(0);
     expect(store.snapshot.run.status).toBe("VERIFYING");
+    const continuation = store.snapshot.continuation;
+    if (continuation?.type !== "AWAITING_VERIFICATION") {
+      throw new Error("expected an AWAITING_VERIFICATION boundary");
+    }
+    expect(continuation.verificationPlanId).toMatch(/^vplan_/);
 
-    const plan = store.snapshot.verificationPlan!;
-    store.snapshot = {
-      ...store.snapshot,
-      verificationPlan: {
-        ...plan,
-        checks: [{ ...plan.checks[0]!, status: "RUNNING", startedAt: createTimestampMs(11) }],
-      },
-    };
-    await expect(controller.recover(run.id)).resolves.toMatchObject({
-      status: "AWAITING_VERIFICATION",
-    });
-    expect(runnerCalls).toBe(1);
+    // The plan the boundary wrote is durable, and its checks start PENDING: nothing has been verified
+    // yet, and nothing may be reported as verified.
+    const plan = await store.loadVerificationPlan(run.id, continuation.verificationPlanId);
+    expect(plan?.checks.every((check) => check.status === "PENDING")).toBe(true);
+
   });
 });

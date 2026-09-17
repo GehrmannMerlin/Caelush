@@ -12,6 +12,7 @@ import {
   type StepId,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
+import { completionStoreOver } from "./support/completion-store.js";
 import type { AgentTurnInput, ContextPrepareInput } from "@caelush/agent";
 import { AgentLoop } from "../src/agent-loop.js";
 import type { AgentLoopCommonInput, AgentLoopContinuationInput } from "../src/agent-loop-input.js";
@@ -408,6 +409,7 @@ describe("RunController verification repair route", () => {
     const controller = new RunController({
       agentExecution,
       executionStore: store,
+      completionStore: completionStoreOver(store),
       events: { notifyCommitted: () => undefined },
       configResolver: {
         resolve: async () => ({

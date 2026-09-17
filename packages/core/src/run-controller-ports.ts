@@ -14,11 +14,8 @@ import type {
   VerificationProjectFacts,
 } from "@caelush/protocol";
 import type { ToolBatchCoordinatorPort } from "@caelush/tools";
-import type {
-  DurableAgentEvent,
-  RunExecutionStore,
-  VerificationRunExecutionStoreExtension,
-} from "./run-execution-store.js";
+import type { DurableAgentEvent, RunExecutionStore } from "./run-execution-store.js";
+import type { RunCompletionPersistencePort } from "./run-completion-store.js";
 import type { RunExecutionScopeRegistry } from "./run-execution-scope.js";
 import type { RunDeadlineRegistry } from "./run-deadline-registry.js";
 import type { RunRetryRegistry } from "./run-retry-registry.js";
@@ -149,12 +146,17 @@ export interface RunControllerDependencies {
    */
   readonly executionStore: RunExecutionStore;
   /**
-   * The transitional coding-verification extension of the same store.
+   * The Core-private completion persistence boundary.
    *
-   * Kept separate so a general Run store never has to answer a verification question. Phase 3E
-   * replaces it when completion authority is extracted.
+   * Kept separate from the general store so a general Run store never has to answer a verification
+   * question. Phase 3E made this the *only* way a verification plan or a verified final result is
+   * persisted: the plan commits in the same transaction as the boundary that names it, and the final
+   * result commits in the same transaction as the `COMPLETED` transition.
+   *
+   * Optional, because a general host that has no coding completion path never needs one. When it is
+   * absent the Run Layer asks the general store, and a store that implements both answers.
    */
-  readonly verificationStore?: VerificationRunExecutionStoreExtension;
+  readonly completionStore?: RunCompletionPersistencePort;
   readonly events: RunEventNotifier;
   readonly configResolver: RunExecutionConfigResolver;
   readonly toolCoordinator?: ToolBatchCoordinatorPort;

@@ -1,4 +1,11 @@
-import type { AgentError, EventId, TimestampMs } from "@caelush/protocol";
+import type {
+  AgentError,
+  EventId,
+  TimestampMs,
+  VerificationCheckId,
+  VerificationPlan,
+  VerifiedRunFinalResult,
+} from "@caelush/protocol";
 import type { RunExecutionDirective, RunExecutionEffectResult } from "@caelush/agent";
 import { isTerminalRunStatus } from "@caelush/agent";
 import type { EventIdFactory } from "./run-controller-ports.js";
@@ -73,7 +80,44 @@ export interface RunCommitEventMaterializerInput {
    * described by its outcome alone.
    */
   readonly providerTurnState?: "NOT_STARTED" | "COMPLETED" | "FAILED" | "CANCELLED";
+  /**
+   * What the completion evaluation established, when this effect was one.
+   *
+   * ```text
+   * CORE-PRIVATE — not part of the frozen RunExecutionEffectResult
+   * ```
+   *
+   * `run.completed` may only ever be produced for a candidate that carries a `VerifiedRunFinalResult`
+   * **and** a valid completion seal. The frozen `CompletionGateDecision.ACCEPT` carries the result but
+   * not the seal, so this boundary cannot decide on its own whether a completion is a *verified* one.
+   * A generic host's accept-directly result is a perfectly good `AgentCompletionResult` and is
+   * deliberately not a `VerifiedRunFinalResult` — and emitting `run.completed` for it would durably
+   * publish a verification that never happened.
+   *
+   * So the materializer reads the sealed facts from here and emits the completion events only when they
+   * are present and consistent. Absent means a generic completion: `status.changed` alone, and the gap
+   * is reported rather than hidden.
+   */
+  readonly completion?: CompletionEventEvidence | undefined;
   readonly ownership: RunOwnershipContext;
+}
+
+/**
+ * The verified facts a completion event needs.
+ *
+ * Every field is a value the completion gate actually produced. Nothing here is inferred from a
+ * decision: a `run.completed` payload is the accepted result, and a seal hash belongs to the seal that
+ * was created.
+ */
+export interface CompletionEventEvidence {
+  /** The plan this completion verified against. */
+  readonly plan: VerificationPlan;
+  /** The exact result the gate accepted, which must be the decision's own result. */
+  readonly verifiedFinalResult: VerifiedRunFinalResult;
+  /** The seal hash the verified result carries. */
+  readonly sealHash: string;
+  readonly failedCheckIds?: readonly VerificationCheckId[] | undefined;
+  readonly errorCheckIds?: readonly VerificationCheckId[] | undefined;
 }
 
 export interface RunCommitEventMaterializer {
@@ -138,7 +182,36 @@ export function createRunCommitEventMaterializer(
       }
 
       /*
-       * 2. The sanitized error, before the status it caused.
+       * 2. What verification concluded, before the status it caused.
+       *
+       * Phase 11D froze the order as `verification.finalized`, then `status.changed`, then the terminal
+       * event; on the failure path the sanitized `error` sits between the verdict and the status. The
+       * completion path therefore inserts its verdict here — after everything the executed attempt
+       * produced and before the status it decided — which is exactly where the ordering rule places it.
+       *
+       * Only a completion effect can carry a verification verdict, and only when the gate really
+       * reached one: an evaluation that suspended without a decision has no outcome to publish.
+       */
+      if (effect.kind === "COMPLETION" && input.completion !== undefined) {
+        const outcome = completionOutcome(effect.result);
+        if (outcome !== undefined) {
+          drafts.push(
+            events.verificationFinalized(
+              before,
+              input.completion.plan,
+              outcome,
+              input.completion.failedCheckIds ?? [],
+              input.completion.errorCheckIds ?? [],
+              outcome === "PASSED" ? input.completion.sealHash : undefined,
+              nextEventId(),
+              now,
+            ),
+          );
+        }
+      }
+
+      /*
+       * 3. The sanitized error, before the status it caused.
        *
        * Phase 11D froze the failure order as `error`, `status.changed`, terminal event, and this
        * boundary is where that order is produced.
@@ -147,17 +220,18 @@ export function createRunCommitEventMaterializer(
         drafts.push(events.error(before, failure, failed?.id, nextEventId(), now));
       }
 
-      /* 3. The status the planner decided. Read, never re-derived. */
+      /* 4. The status the planner decided. Read, never re-derived. */
       const statusChanged = after.status !== before.status;
       if (statusChanged) {
         drafts.push(events.statusChanged(before, before.status, after.status, nextEventId(), now));
       }
 
       /*
-       * 4. The terminal lifecycle event, when its payload is already fully determined.
+       * 5. The terminal lifecycle event, when its payload is already fully determined.
        *
-       * `run.completed` is deliberately absent: it needs a verified final result, and the general
-       * completion contract carries only the accepted JSON value.
+       * `run.completed` is emitted here and nowhere else, and only for a completion that carries a
+       * verified result *and* a seal whose identity matches the plan and the result. Every other
+       * terminal payload is produced from the transition alone.
        */
       if (statusChanged && isTerminalRunStatus(after.status)) {
         if (after.status === "FAILED" && failure !== undefined) {
@@ -169,6 +243,10 @@ export function createRunCommitEventMaterializer(
           if (deadline !== undefined) {
             drafts.push(events.timedOut(after, deadline.deadlineAt, nextEventId(), now));
           }
+        } else if (after.status === "COMPLETED" && input.completion !== undefined) {
+          drafts.push(
+            events.completed(after, input.completion.verifiedFinalResult, nextEventId(), now),
+          );
         }
       }
 
@@ -176,6 +254,30 @@ export function createRunCommitEventMaterializer(
       return { ...plannedCommit, events: drafts };
     },
   };
+}
+
+/**
+ * The verification verdict a completion decision reached, when it reached one.
+ *
+ * A `REPAIR` is a failed verification that the policy allowed another attempt for, and an `ERROR` is a
+ * verification that could not be completed. Those are different outcomes and stay different in the
+ * ledger: reporting an error as a failure would claim a check failed when it never ran.
+ */
+function completionOutcome(
+  decision: Extract<RunExecutionEffectResult, { kind: "COMPLETION" }>["result"],
+): "PASSED" | "FAILED" | "ERROR" | undefined {
+  switch (decision.kind) {
+    case "ACCEPT":
+      return "PASSED";
+    case "REPAIR":
+      return "FAILED";
+    case "REJECT":
+      return "FAILED";
+    case "ERROR":
+      return "ERROR";
+    default:
+      return undefined;
+  }
 }
 
 /* ------------------------------------------------------------------ helpers */

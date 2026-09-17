@@ -45,7 +45,14 @@ import {
   fakeFrozenModelTurnExecutor,
   type FakeFrozenModelTurnExecutor,
 } from "./run-agent-execution.js";
-import type { DurableAgentEvent, RunExecutionCommit, RunExecutionStore } from "@caelush/core";
+import type {
+  DurableAgentEvent,
+  RunCandidateBoundaryCommit,
+  RunCompletionPersistencePort,
+  RunExecutionCommit,
+  RunExecutionStore,
+  RunVerifiedCompletionCommit,
+} from "@caelush/core";
 
 /**
  * The Phase 3D Tool turn test harness.
@@ -199,16 +206,62 @@ export function stubToolBatches(
  * commit contract says — which is what makes a continuation-only transition, such as accepting a
  * Tool batch, keep the state it was already holding.
  */
-export class MemoryRunStore implements RunExecutionStore {
+export class MemoryRunStore implements RunExecutionStore, RunCompletionPersistencePort {
   stateRevision: number | undefined;
   continuationRevision: number | undefined;
   readonly commits: RunExecutionCommit[] = [];
   readonly steps = new Map<StepId, AgentStep>();
   private sequence = 0;
+  /**
+   * The verification plans a candidate boundary wrote.
+   *
+   * Phase 3E: a general Run snapshot carries no plan, so the store keeps them behind the Core-private
+   * completion persistence port — written by the boundary that names them, exactly as the durable
+   * store writes them in one transaction.
+   */
+  private readonly plans = new Map<string, import("@caelush/protocol").VerificationPlan>();
 
   constructor(public snapshot: import("@caelush/core").RunExecutionSnapshot) {
     this.stateRevision = snapshot.stateRevision;
     this.continuationRevision = snapshot.continuationRevision;
+  }
+
+  async loadVerificationPlan(
+    _runId: RunId,
+    planId: import("@caelush/protocol").VerificationPlanId,
+  ): Promise<import("@caelush/protocol").VerificationPlan | null> {
+    return this.plans.get(planId) ?? null;
+  }
+
+  async commitCandidateBoundary(command: RunCandidateBoundaryCommit) {
+    this.plans.set(command.verificationPlan.id, command.verificationPlan);
+    return this.commit({
+      run: command.run,
+      state: command.state,
+      expectedStateRevision: command.expectedStateRevision,
+      expectedContinuationRevision: command.expectedContinuationRevision,
+      stepWrites: command.stepWrites,
+      messagesToAppend: command.messagesToAppend,
+      continuation: {
+        operation: "SET",
+        checkpoint: command.continuation,
+        updatedAt: command.state.updatedAt,
+      },
+      events: command.events,
+    });
+  }
+
+  async commitVerifiedCompletion(command: RunVerifiedCompletionCommit) {
+    return this.commit({
+      run: command.run,
+      state: command.state,
+      expectedStateRevision: command.expectedStateRevision,
+      expectedContinuationRevision: command.expectedContinuationRevision,
+      stepWrites: [],
+      messagesToAppend: [],
+      continuation: { operation: "CLEAR" },
+      events: command.events,
+    });
   }
 
   async load(): Promise<import("@caelush/core").RunExecutionSnapshot> {

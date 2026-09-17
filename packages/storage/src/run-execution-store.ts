@@ -4,19 +4,22 @@ import {
   type RunExecutionCommitResult,
   type RunExecutionStorePort,
 } from "@caelush/agent";
+import { createHash } from "node:crypto";
 import {
   assertRunExecutionInvariant,
   toAgentAIMessage,
   toLegacyDurableMessage,
+  type RunCandidateBoundaryCommit,
+  type RunCompletionPersistencePort,
   type RunExecutionCommitView,
   type RunExecutionSnapshotView,
   type RunVerifiedCompletionCommit,
-  type VerificationRunExecutionStoreExtension,
 } from "@caelush/core";
 import {
   AgentRunSchema,
   AgentStateSchema,
   AgentStepSchema,
+  VerificationPlanSchema,
   VerifiedRunFinalResultSchema,
   type AgentState,
   type AgentStep,
@@ -161,7 +164,7 @@ function writeStep(
 }
 
 export class SqliteRunExecutionStore
-  implements RunExecutionStorePort, VerificationRunExecutionStoreExtension
+  implements RunExecutionStorePort, RunCompletionPersistencePort
 {
   private readonly runs: SqliteRunRepository;
   private readonly states: SqliteRunStateRepository;
@@ -203,15 +206,9 @@ export class SqliteRunExecutionStore
     }));
     const loadedActiveStep =
       run.currentStepId === undefined ? undefined : await this.steps.get(run.currentStepId);
-    const loadedVerificationPlan =
-      run.status === "VERIFYING" && run.currentStepId === undefined
-        ? await this.loadVerificationPlan(
-            run.id,
-            continuation?.checkpoint.type === "AWAITING_VERIFICATION"
-              ? continuation.checkpoint.verificationPlanId
-              : undefined,
-          )
-        : null;
+    // Phase 3E: a general Run snapshot carries no verification plan. The plan lives behind the
+    // Core-private completion persistence port, which is the only boundary that reads it, and it is
+    // written in the same transaction as the `VERIFYING` boundary that names it.
     const snapshot: RunExecutionSnapshotView = {
       run,
       ...stateProjection,
@@ -223,7 +220,6 @@ export class SqliteRunExecutionStore
         ? {}
         : { continuation: continuation.checkpoint, continuationRevision: continuation.revision }),
       ...(cancellationIntent === null ? {} : { cancellationIntent }),
-      ...(loadedVerificationPlan === null ? {} : { verificationPlan: loadedVerificationPlan }),
     };
     assertRunExecutionInvariant(snapshot);
     return snapshot;
@@ -262,8 +258,6 @@ export class SqliteRunExecutionStore
                   continuation: before.continuation,
                   continuationRevision: before.continuationRevision,
                 };
-    const candidateVerificationPlan =
-      command.verificationPlan === undefined ? before.verificationPlan : command.verificationPlan;
     const candidateStep = command.stepWrites.find((write) => write.step.status === "RUNNING")?.step;
     assertRunExecutionInvariant({
       run: command.run,
@@ -288,9 +282,6 @@ export class SqliteRunExecutionStore
         })),
       ],
       ...candidateContinuation,
-      ...(candidateVerificationPlan === undefined
-        ? {}
-        : { verificationPlan: candidateVerificationPlan }),
     });
     const client = this.database.client;
     client.exec("BEGIN IMMEDIATE");
@@ -335,9 +326,6 @@ export class SqliteRunExecutionStore
           command.expectedContinuationRevision,
         );
       }
-      if (command.verificationPlan !== undefined) {
-        writeVerificationPlanInTransaction(client, command.verificationPlan);
-      }
       const events = appendDurableEventsInTransaction(client, command.events);
       client.exec("COMMIT");
       const snapshot = await this.load(command.run.id);
@@ -371,16 +359,21 @@ export class SqliteRunExecutionStore
     try {
       const current = await this.load(parsedRun.id);
       if (current === null) throw new StorageError(`AgentRun ${parsedRun.id} was not found`);
+      // The plan is read from its own table now, not from the snapshot: Phase 3E closed the
+      // compatibility view that used to smuggle it through a general Run. The identity check is
+      // therefore against the durable row, which is the authority the completion was verified under.
+      const durablePlan = loadVerificationPlanInTransaction(client, command.verificationPlan.id);
       if (
         current.run.status !== "VERIFYING" ||
         current.continuation?.type !== "AWAITING_VERIFICATION" ||
+        current.continuation.verificationPlanId !== command.verificationPlan.id ||
         current.cancellationIntent !== undefined ||
         current.state === undefined ||
-        current.verificationPlan === undefined ||
-        current.verificationPlan.id !== command.verificationPlan.id ||
-        current.verificationPlan.planHash !== command.verificationPlan.planHash ||
-        current.verificationPlan.sourceStepId !== command.verificationPlan.sourceStepId ||
-        JSON.stringify(current.verificationPlan) !== JSON.stringify(command.verificationPlan)
+        durablePlan === null ||
+        durablePlan.runId !== parsedRun.id ||
+        durablePlan.sourceStepId !== current.continuation.sourceStepId ||
+        durablePlan.planHash !== command.verificationPlan.planHash ||
+        JSON.stringify(durablePlan) !== JSON.stringify(command.verificationPlan)
       ) {
         throw new RunExecutionConflictError("verified completion boundary is stale");
       }
@@ -398,7 +391,6 @@ export class SqliteRunExecutionStore
         state: command.state,
         stateRevision: (current.stateRevision ?? 0) + 1,
         conversation: current.conversation,
-        verificationPlan: current.verificationPlan,
       });
       writeRun(client, parsedRun);
       writeStateSnapshot(client, command.state, command.expectedStateRevision, (actual, expected) =>
@@ -424,11 +416,129 @@ export class SqliteRunExecutionStore
   }
 
   /**
-   * The coding-verification half of the store.
+   * Open a final candidate's verification boundary, atomically.
    *
-   * It is a separate contract because it answers a question only a coding Run asks. Phase 3E
-   * replaces it when completion authority is extracted; until then the same class implements it,
-   * and a general Run store never has to.
+   * ```text
+   * AgentRun · AgentState · AgentStep · continuation · VerificationPlan · events
+   * ```
+   *
+   * The plan and the Run boundary that points at it commit in **one** transaction. That is the whole
+   * reason this is a separate entry point rather than a field on the general commit: a general Run
+   * store has no vocabulary for a verification plan, and a boundary written without its plan — or a plan
+   * written for a boundary that failed — would be a `VERIFYING` Run nobody can verify.
+   *
+   * The candidate hash is checked here, against the continuation the same transaction is writing, so a
+   * plan bound to different text than the boundary records cannot become durable.
+   */
+  async commitCandidateBoundary(
+    command: RunCandidateBoundaryCommit,
+  ): Promise<RunExecutionCommitResult> {
+    const plan = VerificationPlanSchema.parse(command.verificationPlan);
+    const parsedRun = AgentRunSchema.parse(command.run);
+    if (parsedRun.status !== "VERIFYING" || command.state.status !== "VERIFYING") {
+      throw new RunExecutionInvariantError(
+        "a candidate boundary must settle Run and State to VERIFYING",
+      );
+    }
+    if (
+      command.continuation.runId !== parsedRun.id ||
+      command.continuation.verificationPlanId !== plan.id ||
+      command.continuation.sourceStepId !== plan.sourceStepId ||
+      plan.runId !== parsedRun.id
+    ) {
+      throw new RunExecutionInvariantError(
+        "candidate boundary continuation does not match the VerificationPlan it names",
+      );
+    }
+    // The candidate hash is recomputed here rather than imported from the verification package:
+    // Storage must not depend on Verification, and the algorithm is one SHA-256 over the candidate
+    // text — the same one `computeVerificationCandidateTextHash` performs. Reimplementing a hash is
+    // normally exactly what a workspace should not do, so the byte definition is asserted against the
+    // verification helper in Storage's own test suite rather than assumed here.
+    const candidateHash = createHash("sha256")
+      .update(command.continuation.finalDecision.candidateText, "utf8")
+      .digest("hex");
+    if (plan.candidateHash !== candidateHash) {
+      throw new RunExecutionInvariantError(
+        "VerificationPlan does not belong to the candidate this boundary records",
+      );
+    }
+    const client = this.database.client;
+    client.exec("BEGIN IMMEDIATE");
+    try {
+      const current = await this.load(parsedRun.id);
+      if (current === null) throw new StorageError(`AgentRun ${parsedRun.id} was not found`);
+      if (current.run.status !== "RUNNING" || current.cancellationIntent !== undefined) {
+        throw new RunExecutionConflictError("candidate boundary is stale");
+      }
+      expectedRevision(current.stateRevision, command.expectedStateRevision, "AgentState");
+      expectedRevision(
+        current.continuationRevision,
+        command.expectedContinuationRevision,
+        "Continuation",
+      );
+      if (parsedRun.currentStepId !== undefined || command.state.currentStepId !== undefined) {
+        throw new RunExecutionInvariantError("a candidate boundary cannot retain an active Step");
+      }
+      assertRunExecutionInvariant({
+        run: parsedRun,
+        state: command.state,
+        stateRevision: (current.stateRevision ?? 0) + 1,
+        conversation: current.conversation,
+        continuation: command.continuation,
+        continuationRevision: (current.continuationRevision ?? 0) + 1,
+      });
+      if (command.events.some((event) => event.runId !== parsedRun.id)) {
+        throw new RunExecutionInvariantError("boundary Event does not belong to the Run");
+      }
+      writeRun(client, parsedRun);
+      writeStateSnapshot(client, command.state, command.expectedStateRevision, (actual, expected) =>
+        expectedRevision(actual, expected, "AgentState"),
+      );
+      for (const stepWrite of command.stepWrites) {
+        if (stepWrite.step.runId !== parsedRun.id) {
+          throw new RunExecutionInvariantError("boundary Step does not belong to the Run");
+        }
+        writeStep(client, stepWrite.step, stepWrite.operation);
+      }
+      appendConversationMessagesInTransaction(
+        client,
+        parsedRun.id,
+        command.messagesToAppend.map((entry) => ({
+          ...entry,
+          message: toLegacyDurableMessage(entry.message),
+        })),
+      );
+      setContinuationInTransaction(
+        client,
+        parsedRun.id,
+        command.continuation,
+        command.state.updatedAt,
+        command.expectedContinuationRevision,
+      );
+      writeVerificationPlanInTransaction(client, plan);
+      const events = appendDurableEventsInTransaction(client, command.events);
+      client.exec("COMMIT");
+      const snapshot = await this.load(parsedRun.id);
+      if (snapshot === null) throw new StorageError("Run disappeared after opening its boundary");
+      return { snapshot, events };
+    } catch (error) {
+      try {
+        client.exec("ROLLBACK");
+      } catch (rollbackError) {
+        throw new StorageError("candidate boundary rollback failed", { cause: rollbackError });
+      }
+      mapExecutionError(error);
+    }
+  }
+
+  /**
+   * The coding-completion half of the store.
+   *
+   * It is a separate contract because it answers questions only a coding Run asks: where its
+   * verification plan is, and how a candidate boundary and a verified completion settle. The general
+   * `RunExecutionStorePort` stays verification-agnostic, and a general Run store never has to implement
+   * any of this.
    */
   async loadVerificationPlan(
     runId: RunId,

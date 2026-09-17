@@ -7,6 +7,8 @@ import {
   type AdvanceAgentDirective,
   type AgentLoopAdvanceResult,
   type AgentLoopFailedResult,
+  type CompletionGateDecision,
+  type EvaluateCompletionDirective,
   type ExecuteToolBatchDirective,
   type ModelRequestAdmissionPort,
   type RunExecutionCoordinator,
@@ -19,11 +21,6 @@ import { ToolBatchInputError, type ToolBatchCoordinatorPort } from "@caelush/too
 import {
   AgentRunSchema,
   ApprovalResolutionSchema,
-  VerificationEvidenceSchema,
-  VerificationPlanSchema,
-  createVerificationCheckId,
-  createVerificationEvidenceId,
-  createVerificationPlanId,
   createTimestampMs,
   type ApprovalRequestId,
   type AgentRun,
@@ -32,7 +29,6 @@ import {
   type AgentStep,
   type RunId,
   type StepId,
-  type VerificationPlan,
 } from "@caelush/protocol";
 import {
   beginAgentStepState,
@@ -47,7 +43,6 @@ import {
   resumeAgentStateFromResource,
   settleAgentStepState,
   resumeAgentStateFromVerificationRepair,
-  markAgentStateCompleted,
   startAgentState,
 } from "./agent-state.js";
 import { cancelAgentStep, completeAgentStep, failAgentStep } from "./agent-step.js";
@@ -63,12 +58,12 @@ import {
   resumeAgentRunFromApproval,
   resumeAgentRunFromResource,
   markAgentStateFailed,
-  markAgentRunCompleted,
   assertRunExecutionInvariant,
 } from "./run-execution-state.js";
 import { markAgentStateTimedOut } from "./agent-state.js";
 import { RunExecutionScopeRegistry } from "./run-execution-scope.js";
 import { RunDeadlineRegistry } from "./run-deadline-registry.js";
+import { semanticEqual } from "./semantic-equality.js";
 import { deriveRunDeadline, isRunDeadlineExceeded } from "./run-deadline.js";
 import { resolveRunTerminationAuthority } from "./run-termination-authority.js";
 import { toAgentExecutionSnapshot } from "./run-execution-facts.js";
@@ -87,9 +82,25 @@ import {
 import { classifyAgentEffectSettlement } from "./run-agent-effect-settlement.js";
 import type { AgentProviderTurnState } from "./agent-loop-ports.js";
 import {
+  MISROUTED_COMPLETION_GATE,
   MISROUTED_TOOL_TURN_COORDINATOR,
-  DEFERRED_COMPLETION_GATE,
 } from "./run-agent-deferred-ports.js";
+import {
+  createRunCandidateBoundaryPlanner,
+  createRunCompletionGate,
+  CompletionGateIdentityError,
+  type RunCompletionGate,
+} from "./run-completion-gate.js";
+import type { RunCompletionGateDependencies } from "./run-completion-context.js";
+import type { CompletionGateObservation } from "./run-completion-observation.js";
+import {
+  classifyCompletionEffectSettlement,
+  type CompletionEffectSettlementRoute,
+} from "./run-completion-effect-settlement.js";
+import type {
+  RunCandidateBoundaryCommit,
+  RunCompletionPersistencePort,
+} from "./run-completion-store.js";
 import {
   captureRunToolTurnFacts,
   createRunToolTurnDriverFactory,
@@ -118,7 +129,12 @@ import {
 } from "./run-execution-store.js";
 import { RetryController } from "./retry-controller.js";
 import { RunRetryRegistry } from "./run-retry-registry.js";
-import type { DurableAgentEvent, DurableEventDraft } from "./run-execution-store.js";
+import type {
+  DurableAgentEvent,
+  DurableEventDraft,
+  RunExecutionCommitResult,
+} from "./run-execution-store.js";
+import type { CompletionEventEvidence } from "./run-commit-event-materializer.js";
 import type { RunControllerResult } from "./run-controller-input.js";
 import {
   createRunControllerEventFactory,
@@ -128,33 +144,7 @@ import type { RunControllerDependencies } from "./run-controller-ports.js";
 import { TaskAcceptanceReviewer } from "./task-acceptance-reviewer.js";
 import { toDurableRetryCode } from "./ai-invocation-projection.js";
 import type { AgentBudgetBlock } from "./agent-errors.js";
-import {
-  ProjectCheckResolverRegistry,
-  VerificationStageRunner,
-  buildTaskReviewBundle,
-  compileVerificationRepairContext,
-  createDiscoveryEvidence,
-  createGitEvidence,
-  createTaskAcceptanceEvidence,
-  createVerificationRepairPolicy,
-  createWorkspaceEvidence,
-  evaluateVerification,
-  repairCycleForPlanCount,
-  reviewGitChangeset,
-  verifyWorkspaceInspection,
-  computeVerificationCandidateTextHash,
-  computeVerificationEvidenceDigest,
-  createVerificationCompletionSeal,
-  computeWorkspaceFreshnessHash,
-  type VerificationRunnerInput,
-} from "@caelush/verification";
-import {
-  createVerifiedRunFinalResult,
-  evaluateCompletionAuthority,
-  type CompletionFreshness,
-  type CompletionGitFreshness,
-} from "./completion-authority.js";
-import type { VerificationEvidence, VerificationCheck } from "@caelush/protocol";
+import { compileVerificationRepairContext } from "@caelush/verification";
 
 export {
   RunControllerBusyError,
@@ -245,6 +235,63 @@ function isToolTurnResult(
 type ToolEffectSettlement =
   | { readonly kind: "SNAPSHOT"; readonly snapshot: RunExecutionSnapshot }
   | { readonly kind: "RESULT"; readonly result: RunControllerResult };
+
+/** One resolved completion evaluation: the gate and the facts it was assembled from. */
+interface ResolvedCompletionGate {
+  readonly completion: RunCompletionGate;
+  readonly dependencies: RunCompletionGateDependencies;
+}
+
+/** What one driven completion directive produced. Exactly one arm is set. */
+type CompletionDirectiveExecution =
+  | {
+      readonly decision: CompletionGateDecision;
+      readonly observation: CompletionGateObservation;
+    }
+  | { readonly outcome: RunControllerResult };
+
+/**
+ * Whether a driven completion directive produced a decision to settle.
+ *
+ * Told apart by an explicit guard rather than by reading an optional field: the evaluation either has
+ * a decision, or the termination authority already settled the Run.
+ */
+function isCompletionDecision(
+  execution: CompletionDirectiveExecution,
+): execution is Extract<
+  CompletionDirectiveExecution,
+  { readonly decision: CompletionGateDecision }
+> {
+  return "decision" in execution;
+}
+
+/**
+ * The model descriptor one completion effect's context carries.
+ *
+ * The frozen `RunExecutionEffectContext` is a general Reason's context and requires a resolved model,
+ * but a completion evaluation resolves no model and the driver reads none of it. Supplying the Run's own
+ * `ModelRef` with a minimal, truthful limit pair keeps the value *about* this Run rather than
+ * fabricated.
+ */
+function unresolvedCompletionModel(ref: AgentRun["model"]): import("@caelush/ai").ModelDescriptor {
+  return {
+    ref,
+    api: "caelush.none",
+    limits: { contextWindowTokens: 1, maxOutputTokens: 1 },
+    capabilities: {
+      streaming: "UNKNOWN",
+      toolCalling: "UNKNOWN",
+      parallelToolCalls: "UNKNOWN",
+      structuredOutput: "UNKNOWN",
+      vision: "UNKNOWN",
+      reasoning: "UNKNOWN",
+      reasoningSummary: "UNKNOWN",
+      promptCaching: "UNKNOWN",
+      usageReporting: "UNKNOWN",
+    },
+    source: "FALLBACK",
+  };
+}
 
 export class RunController {
   private readonly activeRuns = new Set<RunId>();
@@ -643,7 +690,9 @@ export class RunController {
       return this.driveRunExecutionLocked(normalized, "RECOVER");
     }
     if (normalized.run.status === "VERIFYING") {
-      return this.driveProjectVerificationLocked(normalized);
+      // The coordinator decides `EVALUATE_COMPLETION` from this state, so recovery enters the same
+      // production loop as every other action rather than a verification path of its own.
+      return this.driveRunExecutionLocked(normalized, "RECOVER");
     }
     if (
       normalized.run.status === "RUNNING" &&
@@ -870,6 +919,44 @@ export class RunController {
         continue;
       }
 
+      if (directive.kind === "EVALUATE_COMPLETION") {
+        // ```text
+        // RunExecutionDriver.execute(EVALUATE_COMPLETION)
+        //        ↓
+        // the real coding CompletionGate
+        //        ↓
+        // a frozen decision, plus the Core-private record of what verification established
+        // ```
+        //
+        // The completion effect travels the *same* frozen driver as a model turn and a Tool batch. The
+        // directive is the coordinator's own decision, carried in verbatim; nothing here re-decides
+        // what to evaluate, and nothing here runs verification itself.
+        const resolved = this.completionGate({ snapshot, mode });
+        if (resolved === undefined) return this.resultFromSnapshot(snapshot);
+
+        const execution = await this.executeCompletionDirective(snapshot, directive, resolved);
+        if (!isCompletionDecision(execution)) return execution.outcome;
+
+        // Verification may have advanced the durable AgentState and the plan inside their own
+        // transactions (check settlements, evidence). Always continue from the durable revision the
+        // gate actually left behind before planning a completion transition.
+        snapshot = await this.load(snapshot.run.id);
+        if (this.executionSignal(snapshot.run.id).aborted) {
+          return this.finalizeAbortedExecution(snapshot);
+        }
+
+        const settled = await this.settleCompletionEffect(snapshot, directive, {
+          decision: execution.decision,
+          observation: execution.observation,
+        });
+        if (settled.kind === "RESULT") return settled.result;
+        snapshot = settled.snapshot;
+        // A repair returned the Run to RUNNING, so the next effect is a fresh Reason rather than
+        // another completion evaluation of the plan that just failed.
+        mode = "EXECUTE";
+        continue;
+      }
+
       if (directive.kind === "FINALIZE") {
         // A terminal settlement the coordinator decided is committed here rather than left for a
         // later recovery: the structural step budget and the deadline are governance decisions, not
@@ -978,7 +1065,9 @@ export class RunController {
       // than looping a Run nobody asked for.
       agentLoop: MISROUTED_AGENT_LOOP,
       toolTurns: turnDriver.coordinator,
-      completionGate: DEFERRED_COMPLETION_GATE,
+      // The Agent path never evaluates completion: the Run Layer's own completion effect owns that,
+      // and a completion directive arriving here would be a misrouted effect.
+      completionGate: MISROUTED_COMPLETION_GATE,
     });
     try {
       const effect = await driver.execute(directive, {
@@ -1306,7 +1395,6 @@ export class RunController {
 
     const execution = await this.dependencies.agentExecution.resolve(snapshot.run);
     const signal = this.executionSignal(snapshot.run.id);
-    const config = await this.dependencies.configResolver.resolve(snapshot.run);
     const step = allocateRunAgentStep({
       state,
       runId: snapshot.run.id,
@@ -1366,7 +1454,9 @@ export class RunController {
       // Phase 3E owns the real completion adapter. The production Agent path never hands it an
       // `EVALUATE_COMPLETION` directive, and the placeholder throws rather than approximating work
       // nobody performed.
-      completionGate: DEFERRED_COMPLETION_GATE,
+      // The Agent path never evaluates completion: the Run Layer's own completion effect owns that,
+      // and a completion directive arriving here would be a misrouted effect.
+      completionGate: MISROUTED_COMPLETION_GATE,
     });
 
     const effect = await driver.execute(directive, {
@@ -1397,7 +1487,7 @@ export class RunController {
       });
     }
 
-    return this.settle(snapshot, directive, effect.result, observation, config.projectFacts);
+    return this.settle(snapshot, directive, effect.result, observation);
   }
 
   /**
@@ -1744,7 +1834,6 @@ export class RunController {
     directive: AdvanceAgentDirective,
     result: AgentLoopAdvanceResult,
     observation: AgentTurnObservation,
-    projectFacts: import("@caelush/protocol").VerificationProjectFacts | undefined,
   ): Promise<RunControllerResult> {
     const route = classifyAgentEffectSettlement({ result, directive, observation });
 
@@ -1767,11 +1856,10 @@ export class RunController {
       case "TERMINATION_AUTHORITY":
         return this.finalizeAbortedExecution(before);
       case "VERIFICATION_COMPATIBILITY":
-        return this.settleFinalCandidateCompatibility(
+        return this.openCompletionBoundary(
           before,
           result as Extract<AgentLoopAdvanceResult, { kind: "FINAL_CANDIDATE" }>,
           observation,
-          projectFacts,
         );
       case "RETRY_COMPATIBILITY":
         return this.settleRetryCompatibility(before, result as AgentLoopFailedResult, observation);
@@ -1943,11 +2031,33 @@ export class RunController {
    * The Run moves to `VERIFYING` with `AWAITING_VERIFICATION`. It never completes here, and no
    * `CompletionGate` implementation exists anywhere in this path.
    */
-  private async settleFinalCandidateCompatibility(
+  /**
+   * Open the durable completion boundary of a final candidate.
+   *
+   * ```text
+   * settle the candidate's Agent Step          exactly once
+   * append the candidate's own messages        exactly once
+   * create the verification plan               identity minted here, by the host
+   * commit Run + AgentState + Step + plan      one transaction
+   *        ↓
+   * return to the Run execution loop           the coordinator decides what runs next
+   * ```
+   *
+   * This is the whole of what a `FINAL_CANDIDATE` does. It used to continue straight into the
+   * verification workflow; Phase 3E ends that ownership here. Verification is an *effect* now, and the
+   * only authority that decides which effect runs next is the coordinator — so this method commits the
+   * boundary and returns, and the loop asks the coordinator again.
+   *
+   * It is a compatibility bridge in one respect and one only: the frozen planner cannot mint a
+   * `VerificationPlanId`, so the plan is created here by the host-side completion gate and travels into
+   * the commit on the completion persistence port. Every other part of the transition — the Step
+   * settlement, the state, the status, the continuation, the candidate messages — is described by the
+   * planner, exactly as it is for every other Agent effect.
+   */
+  private async openCompletionBoundary(
     before: RunExecutionSnapshot,
     result: Extract<AgentLoopAdvanceResult, { kind: "FINAL_CANDIDATE" }>,
     observation: AgentTurnObservation,
-    projectFacts: import("@caelush/protocol").VerificationProjectFacts | undefined,
   ): Promise<RunControllerResult> {
     const current = await this.load(before.run.id);
     const authority = this.resolveAuthority(current, false);
@@ -1957,6 +2067,8 @@ export class RunController {
     if (authority === "UNEXPECTED_ABORT") {
       throw new RunControllerInvariantError("Run execution aborted without a known authority");
     }
+    // Budget governance runs before the boundary: an attempt that spent the budget settles the Run as
+    // exceeded instead of opening a verification nobody can afford to run.
     const budgetSettlement = await this.settleBudgetAttempt(current, result);
     if (budgetSettlement !== undefined) {
       return this.finalizeBudgetExceeded(current, budgetSettlement);
@@ -1975,38 +2087,45 @@ export class RunController {
     // The Run holds a candidate and is about to verify it, so its AgentState is VERIFYING. The step
     // count settles exactly once, on this same transition.
     const decisionState = markAgentStateVerifying(settledState, now);
-    const verificationPlan = this.createVerificationPlan(
-      current.run,
-      step,
-      decisionState.changedFiles,
-      projectFacts,
-      result.decision.candidateText,
-    );
     const run = AgentRunSchema.parse({
       ...current.run,
       status: "VERIFYING",
       currentStepId: undefined,
     });
+    const continuation = {
+      type: "AWAITING_VERIFICATION" as const,
+      runId: run.id,
+      sourceStepId: step.id,
+      verificationPlanId: "" as never,
+      finalDecision: result.decision,
+    };
 
-    const commit = await this.commit({
+    const planner = createRunCandidateBoundaryPlanner({
+      run: current.run,
+      state: decisionState,
+      continuation: { ...continuation, verificationPlanId: "" as never },
+      clock: this.dependencies.clock,
+      ...(this.dependencies.verificationPlanner === undefined
+        ? {}
+        : { planner: this.dependencies.verificationPlanner }),
+      ...(this.dependencies.verificationPlanIdFactory === undefined
+        ? {}
+        : { planIdFactory: () => this.dependencies.verificationPlanIdFactory!.create() }),
+      ...(this.dependencies.verificationCheckIdFactory === undefined
+        ? {}
+        : { checkIdFactory: () => this.dependencies.verificationCheckIdFactory!.create() }),
+    });
+    const opening = planner.planCandidateBoundary(result.decision);
+
+    const commit = await this.commitCandidateBoundary({
       run,
       state: decisionState,
+      verificationPlan: opening.plan,
+      continuation: { ...continuation, verificationPlanId: opening.plan.id },
       expectedStateRevision: current.stateRevision ?? null,
       expectedContinuationRevision: current.continuationRevision ?? null,
       stepWrites: [{ operation: "UPDATE", step: completedStep }],
       messagesToAppend: appendMessages(current, result.messagesToAppend, step.id, now),
-      continuation: {
-        operation: "SET",
-        checkpoint: {
-          type: "AWAITING_VERIFICATION",
-          runId: run.id,
-          sourceStepId: step.id,
-          verificationPlanId: verificationPlan.id,
-          finalDecision: result.decision,
-        },
-        updatedAt: now,
-      },
-      verificationPlan,
       events: [
         ...this.successEvents(current.run, decisionState, completedStep, observation, now),
         this.eventFactory.statusChanged(
@@ -2016,16 +2135,13 @@ export class RunController {
           this.nextEventId(),
           now,
         ),
-        this.eventFactory.verificationPlanned(
-          current.run,
-          verificationPlan,
-          this.nextEventId(),
-          now,
-        ),
+        this.eventFactory.verificationPlanned(current.run, opening.plan, this.nextEventId(), now),
       ],
     });
-    this.notify(commit.events);
-    return this.driveProjectVerificationLocked(commit.snapshot);
+    void commit;
+    // The boundary is durable. The loop asks the coordinator again, which decides
+    // `EVALUATE_COMPLETION` from the state this commit just wrote.
+    return this.driveRunExecutionLocked(commit.snapshot, "EXECUTE");
   }
 
   /**
@@ -2769,6 +2885,62 @@ export class RunController {
     }
   }
 
+  /**
+   * Open a candidate's completion boundary in one transaction.
+   *
+   * ```text
+   * AgentStep COMPLETED · Run RUNNING -> VERIFYING · AgentState VERIFYING
+   * candidate messages · AWAITING_VERIFICATION · VerificationPlan
+   * status.changed · verification.planned
+   * ```
+   *
+   * The plan and the Run boundary that names it commit together or not at all. A Run that pointed at a
+   * plan nobody wrote, or a plan written for a boundary that failed to open, is not a state this can
+   * produce — which is why the plan does not travel through the general Run store, whose vocabulary has
+   * no room for a verification artefact.
+   */
+  private async commitCandidateBoundary(
+    command: RunCandidateBoundaryCommit,
+  ): Promise<RunExecutionCommitResult> {
+    const persistence = this.completionPersistence();
+    if (persistence === undefined) {
+      throw new RunControllerInfrastructureError(
+        "Completion persistence is not configured; a verification boundary cannot be opened.",
+      );
+    }
+    try {
+      const committed = await persistence.commitCandidateBoundary(command);
+      this.notify(committed.events);
+      return committed;
+    } catch (error) {
+      if (
+        error instanceof RunExecutionConflictError ||
+        error instanceof RunControllerInvariantError
+      ) {
+        throw error;
+      }
+      throw new RunControllerInfrastructureError("Unable to open the completion boundary", {
+        cause: error,
+      });
+    }
+  }
+
+  /**
+   * The completion persistence boundary.
+   *
+   * It is the coding completion port when the host composed it explicitly, and otherwise the same
+   * store when that store implements it — which is what keeps the daemon's composition unchanged while
+   * the general `RunExecutionStorePort` stays verification-agnostic.
+   */
+  private completionPersistence(): RunCompletionPersistencePort | undefined {
+    if (this.dependencies.completionStore !== undefined) return this.dependencies.completionStore;
+    const store = this.dependencies.executionStore;
+    if ("commitCandidateBoundary" in store && "commitVerifiedCompletion" in store) {
+      return store as unknown as RunCompletionPersistencePort;
+    }
+    return undefined;
+  }
+
   private resultFromSnapshot(snapshot: RunExecutionSnapshot): RunControllerResult {
     if (snapshot.run.status === "PENDING") return { status: "PENDING", run: snapshot.run };
     if (
@@ -2859,717 +3031,19 @@ export class RunController {
     };
   }
 
-  private createVerificationPlan(
-    run: AgentRun,
-    sourceStep: AgentStep,
-    changedFiles: AgentState["changedFiles"],
-    projectFacts?: import("@caelush/protocol").VerificationProjectFacts,
-    candidateText?: string,
-  ): VerificationPlan {
-    const planner = this.dependencies.verificationPlanner;
-    if (planner === undefined) {
-      throw new RunControllerInfrastructureError("Verification planner is not configured.");
-    }
-    const draft = planner.plan({
-      runId: run.id,
-      sourceStepId: sourceStep.id,
-      goal: run.goal,
-      workspace: run.workspace,
-      changedFiles,
-      ...(projectFacts === undefined ? {} : { projectFacts }),
-    });
-    const planId =
-      this.dependencies.verificationPlanIdFactory?.create() ?? createVerificationPlanId();
-    const checkIdFactory = this.dependencies.verificationCheckIdFactory ?? {
-      create: () => createVerificationCheckId(),
-    };
-    return VerificationPlanSchema.parse({
-      id: planId,
-      runId: run.id,
-      sourceStepId: sourceStep.id,
-      plannerVersion: draft.plannerVersion,
-      planHash: draft.planHash,
-      ...(candidateText === undefined
-        ? {}
-        : { candidateHash: computeVerificationCandidateTextHash(candidateText) }),
-      checks: draft.checks.map((check) => ({
-        ...check,
-        id: checkIdFactory.create(),
-        planId,
-        status: "PENDING",
-        createdAt: this.dependencies.clock.now(),
-      })),
-      createdAt: this.dependencies.clock.now(),
-    });
-  }
-
   private resumeKnownBoundary(snapshot: RunExecutionSnapshot): RunControllerResult {
     return this.resultFromSnapshot(snapshot);
   }
-
-  private async driveProjectVerificationLocked(
-    snapshot: RunExecutionSnapshot,
-  ): Promise<RunControllerResult> {
-    const runner = this.dependencies.verificationRunner;
-    const profileProvider = this.dependencies.projectProfileProvider;
-    const execution = this.dependencies.verificationExecution;
-    const executionStore = this.dependencies.verificationExecutionStore;
-    const security = this.dependencies.verificationSecurity;
-    const sanitizer = this.dependencies.verificationEvidenceSanitizer;
-    const plan = snapshot.verificationPlan;
-    if (plan === undefined) return this.resultFromSnapshot(snapshot);
-    const pendingProjectChecks = plan.checks.some(
-      (check) => check.spec.kind === "PROJECT" && check.status === "PENDING",
-    );
-    if (
-      pendingProjectChecks &&
-      (runner === undefined ||
-        profileProvider === undefined ||
-        execution === undefined ||
-        executionStore === undefined ||
-        security === undefined ||
-        sanitizer === undefined)
-    ) {
-      return this.resultFromSnapshot(snapshot);
-    }
-    if (plan.checks.some((check) => check.status === "RUNNING")) {
-      await this.settleStaleVerificationChecksLocked(snapshot, plan);
-      const recovered = await this.load(snapshot.run.id);
-      const authority = this.resolveAuthority(recovered, false);
-      if (authority === "CANCELLED") return this.finalizeCancellation(recovered);
-      if (authority === "TIMEOUT") return this.finalizeTimeout(recovered);
-      return this.driveChangeVerificationLocked(recovered);
-    }
-    if (pendingProjectChecks) {
-      const config = await this.dependencies.configResolver.resolve(snapshot.run);
-      const profile = await profileProvider!.getFreshProfile(snapshot.run, config);
-      const runnerInput: VerificationRunnerInput = {
-        runId: snapshot.run.id,
-        sessionId: snapshot.run.sessionId,
-        plan,
-        profile,
-        permissionProfile: snapshot.run.permissionProfile,
-        approvalPolicy: snapshot.run.approvalPolicy,
-        signal: this.executionSignal(snapshot.run.id),
-        now: () => this.dependencies.clock.now(),
-        resolverRegistry:
-          this.dependencies.verificationResolverRegistry ?? new ProjectCheckResolverRegistry(),
-        security: security!,
-        execution: execution!,
-        store: executionStore!,
-        evidenceIdFactory:
-          this.dependencies.verificationEvidenceIdFactory ?? createVerificationEvidenceId,
-        evidenceSanitizer: sanitizer!,
-        onCommittedEvents: (events) => this.notify(events as readonly DurableAgentEvent[]),
-      };
-      await runner!.run(runnerInput);
-    }
-    const current = await this.load(snapshot.run.id);
-    const authority = this.resolveAuthority(current, false);
-    if (authority === "CANCELLED") return this.finalizeCancellation(current);
-    if (authority === "TIMEOUT") return this.finalizeTimeout(current);
-    return this.driveChangeVerificationLocked(current);
-  }
-
-  private async driveChangeVerificationLocked(
-    snapshot: RunExecutionSnapshot,
-  ): Promise<RunControllerResult> {
-    const plan = snapshot.verificationPlan;
-    const recovery = this.verificationRecoveryStore();
-    if (plan === undefined || snapshot.state === undefined || recovery === undefined) {
-      return this.resultFromSnapshot(snapshot);
-    }
-    const existing = await recovery.getPlanExecutionSnapshot(plan.id);
-    if (existing === null)
-      throw new RunControllerInfrastructureError("Verification plan disappeared.");
-    const currentEvaluation = evaluateVerification(existing.plan, existing.evidence);
-    if (currentEvaluation.status === "FAILED") {
-      return this.maybeStartVerificationRepairLocked(snapshot, currentEvaluation);
-    }
-    if (currentEvaluation.status === "ERROR") {
-      return this.failVerificationLocked(snapshot, currentEvaluation);
-    }
-    const blockingBeforeChange = plan.checks.some(
-      (check) =>
-        check.status === "FAILED" || check.status === "ERROR" || check.status === "RUNNING",
-    );
-    if (blockingBeforeChange) return this.resultFromSnapshot(snapshot);
-
-    const pendingChangeChecks = plan.checks.some(
-      (check) => check.spec.kind !== "PROJECT" && check.status === "PENDING",
-    );
-    if (!pendingChangeChecks) {
-      if (currentEvaluation.status === "PASSED") {
-        return this.finalizePassedVerificationLocked(snapshot, currentEvaluation);
-      }
-      return this.resultFromSnapshot(snapshot);
-    }
-
-    const store = this.dependencies.verificationExecutionStore ?? recovery;
-    const workspace = this.dependencies.verificationWorkspace;
-    const git = this.dependencies.verificationGit;
-    const reviewer =
-      this.dependencies.verificationReviewer ??
-      (this.dependencies.verificationModelTurns !== undefined &&
-      this.dependencies.budget !== undefined
-        ? new TaskAcceptanceReviewer({
-            modelTurns: this.dependencies.verificationModelTurns,
-            budget: this.dependencies.budget,
-            clock: this.dependencies.clock,
-            ...(this.dependencies.verificationTurnIdentity === undefined
-              ? {}
-              : { resolveTurnIdentity: this.dependencies.verificationTurnIdentity }),
-            ...(this.dependencies.tokenEstimator === undefined
-              ? {}
-              : { tokenEstimator: this.dependencies.tokenEstimator }),
-          })
-        : undefined);
-    if (
-      store === undefined ||
-      workspace === undefined ||
-      git === undefined ||
-      reviewer === undefined
-    )
-      return this.resultFromSnapshot(snapshot);
-
-    const signal = this.executionSignal(snapshot.run.id);
-    const changedFiles = snapshot.state.changedFiles;
-    let cachedGitStatus: Awaited<ReturnType<NonNullable<typeof git>["status"]>> | undefined;
-    const stageRunner = new VerificationStageRunner();
-    const stage = await stageRunner.run({
-      runId: snapshot.run.id,
-      sessionId: snapshot.run.sessionId,
-      plan,
-      store,
-      signal,
-      now: () => this.dependencies.clock.now(),
-      discoveryEvidence: (check, capturedAt) =>
-        VerificationEvidenceSchema.parse({
-          id: (this.dependencies.verificationEvidenceIdFactory ?? createVerificationEvidenceId)(),
-          planId: plan.id,
-          checkId: check.id,
-          kind: "DISCOVERY",
-          summary: `${check.spec.kind} verification inspection prepared`,
-          details: { kind: check.spec.kind, purpose: check.spec.purpose },
-          capturedAt,
-        }),
-      onCommittedEvents: (events) => this.notify(events as readonly DurableAgentEvent[]),
-      executors: {
-        WORKSPACE: {
-          execute: async (check) => {
-            const facts = await workspace.inspect({
-              workspace: snapshot.run.workspace,
-              changedFiles,
-              signal,
-            });
-            const result = verifyWorkspaceInspection({ changedFiles, facts });
-            const evidence = createWorkspaceEvidence({
-              id: (
-                this.dependencies.verificationEvidenceIdFactory ?? createVerificationEvidenceId
-              )(),
-              planId: plan.id,
-              checkId: check.id,
-              capturedAt: this.dependencies.clock.now(),
-              result,
-            });
-            return { status: result.status, evidence: [evidence] };
-          },
-        },
-        GIT: {
-          preflight: async (check) => {
-            cachedGitStatus = await git.status({
-              workspace: snapshot.run.workspace,
-              signal,
-            });
-            if (cachedGitStatus.available || check.requirement === "REQUIRED") return undefined;
-            const evidence = createDiscoveryEvidence({
-              id: (
-                this.dependencies.verificationEvidenceIdFactory ?? createVerificationEvidenceId
-              )(),
-              planId: plan.id,
-              checkId: check.id,
-              capturedAt: this.dependencies.clock.now(),
-              resolver: "runtime-git",
-              ecosystem: "git",
-              available: false,
-              reason: "TOOLING_UNAVAILABLE",
-            });
-            return {
-              status: "SKIPPED" as const,
-              skipReason: "NOT_AVAILABLE" as const,
-              evidence: [evidence],
-            };
-          },
-          execute: async (check) => {
-            const status =
-              cachedGitStatus ??
-              (cachedGitStatus = await git.status({
-                workspace: snapshot.run.workspace,
-                signal,
-              }));
-            const diffs = [];
-            for (const changedFile of changedFiles.slice(0, 128)) {
-              if (
-                status.entries?.some(
-                  (entry) => entry.path === changedFile.path && entry.kind === "UNTRACKED",
-                )
-              )
-                continue;
-              diffs.push(
-                await git.diff({
-                  workspace: snapshot.run.workspace,
-                  path: changedFile.path,
-                  scope: "ALL",
-                  signal,
-                }),
-              );
-            }
-            const result = reviewGitChangeset({
-              changedFiles,
-              requirement: check.requirement,
-              status,
-              diffs,
-            });
-            const evidence = createGitEvidence({
-              id: (
-                this.dependencies.verificationEvidenceIdFactory ?? createVerificationEvidenceId
-              )(),
-              planId: plan.id,
-              checkId: check.id,
-              capturedAt: this.dependencies.clock.now(),
-              result,
-            });
-            return { status: result.status, evidence: [evidence] };
-          },
-        },
-        TASK: {
-          execute: async (check) => {
-            if (snapshot.continuation?.type !== "AWAITING_VERIFICATION") {
-              return {
-                status: "ERROR" as const,
-                evidence: [
-                  this.genericTaskEvidence(plan.id, check.id, "FINAL_CANDIDATE_UNAVAILABLE"),
-                ],
-              };
-            }
-            const bundle = buildTaskReviewBundle({
-              originalGoal: snapshot.run.goal,
-              candidateText: snapshot.continuation.finalDecision.candidateText,
-              plan,
-              evidence: (await recovery.getPlanExecutionSnapshot(plan.id))?.evidence ?? [],
-              changedFiles,
-            });
-            const review = await reviewer.review({
-              run: snapshot.run,
-              candidateText: snapshot.continuation.finalDecision.candidateText,
-              bundle,
-              signal,
-            });
-            const evidence =
-              review.review === undefined
-                ? this.genericTaskEvidence(
-                    plan.id,
-                    check.id,
-                    review.errorCode ?? "REVIEWER_ERROR",
-                    review.reviewInputHash,
-                  )
-                : createTaskAcceptanceEvidence({
-                    id: (
-                      this.dependencies.verificationEvidenceIdFactory ??
-                      createVerificationEvidenceId
-                    )(),
-                    planId: plan.id,
-                    checkId: check.id,
-                    capturedAt: this.dependencies.clock.now(),
-                    reviewInputHash: review.reviewInputHash,
-                    verdict: review.review.verdict,
-                    summary: review.review.summary,
-                    ...(review.review.repairInstructions === undefined
-                      ? {}
-                      : { repairInstructions: review.review.repairInstructions }),
-                    reviewedEvidenceIds: bundle.evidence.map((item) => item.id),
-                  });
-            return { status: review.status, evidence: [evidence] };
-          },
-        },
-      },
-    });
-    if (stage.outcome === "CANCELLED")
-      return this.resultFromSnapshot(await this.load(snapshot.run.id));
-    const current = await this.load(snapshot.run.id);
-    const execution = await recovery.getPlanExecutionSnapshot(plan.id);
-    if (execution === null)
-      throw new RunControllerInfrastructureError("Verification evidence disappeared.");
-    const evaluation = evaluateVerification(execution.plan, execution.evidence);
-    if (evaluation.status === "PASSED") {
-      return this.finalizePassedVerificationLocked(current, evaluation);
-    }
-    if (evaluation.status === "ERROR") {
-      return this.failVerificationLocked(current, evaluation);
-    }
-    if (evaluation.status !== "FAILED") return this.resultFromSnapshot(current);
-    return this.maybeStartVerificationRepairLocked(current, evaluation);
-  }
-
-  private async settleStaleVerificationChecksLocked(
-    snapshot: RunExecutionSnapshot,
-    plan: VerificationPlan,
-  ): Promise<void> {
-    const recovery = this.verificationRecoveryStore();
-    if (recovery === undefined) return;
-    for (const check of plan.checks.filter((item) => item.status === "RUNNING")) {
-      const settled = {
-        ...check,
-        status: "ERROR" as const,
-        finishedAt: this.dependencies.clock.now(),
-      };
-      const evidence = VerificationEvidenceSchema.parse({
-        id: (this.dependencies.verificationEvidenceIdFactory ?? createVerificationEvidenceId)(),
-        planId: plan.id,
-        checkId: check.id,
-        kind: check.spec.kind === "PROJECT" ? "COMMAND" : check.spec.kind,
-        summary: "Verification was interrupted before recovery and was not replayed.",
-        details: { errorCode: "VERIFICATION_INTERRUPTED" },
-        capturedAt: this.dependencies.clock.now(),
-      });
-      const committed = await recovery.settleCheck({
-        runId: snapshot.run.id,
-        sessionId: snapshot.run.sessionId,
-        check: settled,
-        evidence: [evidence],
-      });
-      this.notify(committed.events as readonly DurableAgentEvent[]);
-    }
-  }
-
-  private async finalizePassedVerificationLocked(
-    snapshot: RunExecutionSnapshot,
-    evaluation: ReturnType<typeof evaluateVerification>,
-  ): Promise<RunControllerResult> {
-    const plan = snapshot.verificationPlan;
-    const continuation = snapshot.continuation;
-    const recovery = this.verificationRecoveryStore();
-    if (
-      plan === undefined ||
-      snapshot.state === undefined ||
-      continuation?.type !== "AWAITING_VERIFICATION" ||
-      recovery === undefined
-    )
-      return this.resultFromSnapshot(snapshot);
-    const execution = await recovery.getPlanExecutionSnapshot(plan.id);
-    if (execution === null)
-      throw new RunControllerInfrastructureError("Verification evidence disappeared.");
-
-    let workspaceFreshness: CompletionFreshness = "UNPROVABLE";
-    const workspaceCheck = plan.checks.find((check) => check.spec.kind === "WORKSPACE");
-    if (workspaceCheck === undefined) {
-      workspaceFreshness = "FRESH";
-    } else if (this.dependencies.verificationWorkspace !== undefined) {
-      const prior = execution.evidence.find(
-        (item) => item.checkId === workspaceCheck.id && item.kind === "WORKSPACE",
-      );
-      const details = objectDetails(prior?.details);
-      const expectedHash = stringValue(details?.workspaceFreshnessHash);
-      const currentFacts = await this.dependencies.verificationWorkspace.inspect({
-        workspace: snapshot.run.workspace,
-        changedFiles: snapshot.state.changedFiles,
-        signal: this.executionSignal(snapshot.run.id),
-      });
-      const current = verifyWorkspaceInspection({
-        changedFiles: snapshot.state.changedFiles,
-        facts: currentFacts,
-      });
-      workspaceFreshness =
-        current.status === "PASSED" &&
-        expectedHash !== undefined &&
-        current.workspaceFreshnessHash === expectedHash
-          ? "FRESH"
-          : expectedHash === undefined || current.workspaceFreshnessHash === undefined
-            ? "UNPROVABLE"
-            : "STALE";
-    }
-
-    let gitFreshness: CompletionGitFreshness = "SKIPPED";
-    const gitCheck = plan.checks.find((check) => check.spec.kind === "GIT");
-    if (gitCheck !== undefined && gitCheck.status !== "SKIPPED") {
-      gitFreshness = "UNPROVABLE";
-      if (this.dependencies.verificationGit !== undefined) {
-        const prior = execution.evidence.find(
-          (item) => item.checkId === gitCheck.id && item.kind === "GIT",
-        );
-        const status = await this.dependencies.verificationGit.status({
-          workspace: snapshot.run.workspace,
-          signal: this.executionSignal(snapshot.run.id),
-        });
-        const diffs = [];
-        for (const changedFile of snapshot.state.changedFiles.slice(0, 128)) {
-          if (
-            status.entries?.some(
-              (entry) => entry.path === changedFile.path && entry.kind === "UNTRACKED",
-            )
-          )
-            continue;
-          diffs.push(
-            await this.dependencies.verificationGit.diff({
-              workspace: snapshot.run.workspace,
-              path: changedFile.path,
-              scope: "ALL",
-              signal: this.executionSignal(snapshot.run.id),
-            }),
-          );
-        }
-        const current = reviewGitChangeset({
-          changedFiles: snapshot.state.changedFiles,
-          requirement: gitCheck.requirement,
-          status,
-          diffs,
-        });
-        const priorDetails = objectDetails(prior?.details);
-        const currentComparable = {
-          attributedPaths: current.attributedPaths,
-          unattributedDirtyPaths: current.unattributedDirtyPaths,
-          unmergedPaths: current.unmergedPaths,
-          diffHashes: current.diffHashes,
-          noNetDiffPaths: current.noNetDiffPaths,
-          truncated: current.truncated,
-          reviewComplete: current.reviewComplete,
-        };
-        const priorComparable = {
-          attributedPaths: arrayValue(priorDetails?.attributedPaths),
-          unattributedDirtyPaths: arrayValue(priorDetails?.unattributedDirtyPaths),
-          unmergedPaths: arrayValue(priorDetails?.unmergedPaths),
-          diffHashes: objectValue(priorDetails?.diffHashes),
-          noNetDiffPaths: arrayValue(priorDetails?.noNetDiffPaths),
-          truncated: priorDetails?.truncated,
-          reviewComplete: priorDetails?.reviewComplete,
-        };
-        gitFreshness =
-          current.status === "PASSED" &&
-          JSON.stringify(currentComparable) === JSON.stringify(priorComparable)
-            ? "FRESH"
-            : "STALE";
-      }
-    }
-
-    const candidateHash = computeVerificationCandidateTextHash(
-      continuation.finalDecision.candidateText,
-    );
-    const authority = evaluateCompletionAuthority({
-      run: snapshot.run,
-      plan,
-      continuation,
-      verificationStatus: evaluation.status,
-      candidateHash,
-      workspaceFreshness,
-      gitFreshness,
-      cancellationRequested: snapshot.cancellationIntent !== undefined,
-    });
-    if (authority.kind !== "COMPLETE") return this.resultFromSnapshot(snapshot);
-    if (plan.candidateHash === undefined || workspaceFreshness !== "FRESH")
-      return this.resultFromSnapshot(snapshot);
-    const workspaceEvidence = execution.evidence.find(
-      (item) => item.kind === "WORKSPACE" && item.checkId === workspaceCheck?.id,
-    );
-    const workspaceDetails = objectDetails(workspaceEvidence?.details);
-    const workspaceHash =
-      stringValue(workspaceDetails?.workspaceFreshnessHash) ??
-      (workspaceCheck === undefined ? computeWorkspaceFreshnessHash([]) : undefined);
-    if (workspaceHash === undefined) return this.resultFromSnapshot(snapshot);
-    const evidenceDigest = computeVerificationEvidenceDigest(plan, execution.evidence);
-    const seal = createVerificationCompletionSeal({
-      runId: snapshot.run.id,
-      planId: plan.id,
-      sourceStepId: plan.sourceStepId,
-      planHash: plan.planHash,
-      candidateHash,
-      evidenceDigest,
-      workspaceFreshnessHash: workspaceHash,
-    });
-    const finalResult = createVerifiedRunFinalResult({
-      run: snapshot.run,
-      plan,
-      continuation,
-      candidateHash,
-      seal,
-      counts: {
-        total: plan.checks.length,
-        passed: plan.checks.filter((check) => check.status === "PASSED").length,
-        skipped: plan.checks.filter((check) => check.status === "SKIPPED").length,
-        advisoryWarnings: evaluation.warnings.length,
-      },
-    });
-    const verificationStore = this.dependencies.verificationStore;
-    if (verificationStore === undefined) return this.resultFromSnapshot(snapshot);
-    const now = this.dependencies.clock.now();
-    const completedRun = markAgentRunCompleted(snapshot.run, finalResult, now);
-    const completedState = markAgentStateCompleted(snapshot.state, now);
-    const events = [
-      this.eventFactory.verificationFinalized(
-        snapshot.run,
-        plan,
-        "PASSED",
-        [],
-        [],
-        seal.sealHash,
-        this.nextEventId(),
-        now,
-      ),
-      this.eventFactory.statusChanged(
-        snapshot.run,
-        "VERIFYING",
-        "COMPLETED",
-        this.nextEventId(),
-        now,
-      ),
-      this.eventFactory.completed(snapshot.run, finalResult, this.nextEventId(), now),
-    ];
-    const commit = await verificationStore.commitVerifiedCompletion({
-      run: completedRun,
-      state: completedState,
-      finalResult,
-      verificationPlan: plan,
-      expectedStateRevision: snapshot.stateRevision ?? null,
-      expectedContinuationRevision: snapshot.continuationRevision ?? null,
-      events,
-    });
-    this.notify(commit.events);
-    void Promise.resolve()
-      .then(() =>
-        this.dependencies.onVerifiedCompletion?.({ run: commit.snapshot.run, finalResult }),
-      )
-      .catch(() => undefined);
-    return this.resultFromSnapshot(commit.snapshot);
-  }
-
-  private async failVerificationLocked(
-    snapshot: RunExecutionSnapshot,
-    evaluation: ReturnType<typeof evaluateVerification>,
-  ): Promise<RunControllerResult> {
-    if (snapshot.state === undefined || snapshot.verificationPlan === undefined) {
-      return this.resultFromSnapshot(snapshot);
-    }
-    const now = this.dependencies.clock.now();
-    const error: AgentError = {
-      code: "VERIFICATION_FAILED",
-      message: "Verification did not establish a trustworthy completion boundary.",
-      retryable: false,
-      phase: "VERIFICATION",
-    };
-    const failedRun = markAgentRunFailed(
-      AgentRunSchema.parse({ ...snapshot.run, currentStepId: undefined }),
-      now,
-    );
-    const failedState = markAgentStateFailed(snapshot.state, error, now);
-    const events = [
-      this.eventFactory.verificationFinalized(
-        snapshot.run,
-        snapshot.verificationPlan,
-        evaluation.status === "ERROR" ? "ERROR" : "FAILED",
-        evaluation.failedCheckIds,
-        evaluation.errorCheckIds,
-        undefined,
-        this.nextEventId(),
-        now,
-      ),
-      this.eventFactory.error(snapshot.run, error, undefined, this.nextEventId(), now),
-      this.eventFactory.statusChanged(snapshot.run, "VERIFYING", "FAILED", this.nextEventId(), now),
-      this.eventFactory.failed(snapshot.run, error, this.nextEventId(), now),
-    ];
-    const commit = await this.commit({
-      run: failedRun,
-      state: failedState,
-      expectedStateRevision: snapshot.stateRevision ?? null,
-      expectedContinuationRevision: snapshot.continuationRevision ?? null,
-      stepWrites: [],
-      messagesToAppend: [],
-      continuation: { operation: "CLEAR" },
-      events,
-    });
-    this.notify(commit.events);
-    return this.resultFromSnapshot(commit.snapshot);
-  }
-
-  private genericTaskEvidence(
-    planId: VerificationPlan["id"],
-    checkId: VerificationCheck["id"],
-    errorCode: string,
-    reviewInputHash?: string,
-  ): VerificationEvidence {
-    return VerificationEvidenceSchema.parse({
-      id: (this.dependencies.verificationEvidenceIdFactory ?? createVerificationEvidenceId)(),
-      planId,
-      checkId,
-      kind: "TASK",
-      summary: "Task acceptance review errored",
-      details: { errorCode, ...(reviewInputHash === undefined ? {} : { reviewInputHash }) },
-      capturedAt: this.dependencies.clock.now(),
-    });
-  }
-
-  private async maybeStartVerificationRepairLocked(
-    snapshot: RunExecutionSnapshot,
-    evaluation: ReturnType<typeof evaluateVerification>,
-  ): Promise<RunControllerResult> {
-    const plan = snapshot.verificationPlan;
-    if (plan === undefined || snapshot.state === undefined)
-      return this.resultFromSnapshot(snapshot);
-    const recovery = this.verificationRecoveryStore();
-    const count = this.dependencies.verificationPlanCount
-      ? await this.dependencies.verificationPlanCount(snapshot.run.id)
-      : recovery?.countPlans
-        ? await recovery.countPlans(snapshot.run.id)
-        : 1;
-    const repairCycle = repairCycleForPlanCount(count);
-    const policy = this.dependencies.verificationRepairPolicy ?? createVerificationRepairPolicy();
-    if (!policy.canRepair({ ...evaluation, repairCycle })) {
-      return this.failVerificationLocked(snapshot, evaluation);
-    }
-    const evidence = (await recovery?.getPlanExecutionSnapshot(plan.id))?.evidence ?? [];
-    const now = this.dependencies.clock.now();
-    const run = resumeAgentRunFromVerificationRepair(snapshot.run);
-    const state = resumeAgentStateFromVerificationRepair(snapshot.state, now);
-    const checkpoint = {
-      type: "WAITING_VERIFICATION_REPAIR" as const,
-      runId: run.id,
-      failedPlanId: plan.id,
-      sourceStepId: plan.sourceStepId,
-      failedCheckIds: evaluation.failedCheckIds,
-      evidenceIds: evidence
-        .filter((item) => evaluation.failedCheckIds.includes(item.checkId))
-        .map((item) => item.id),
-      repairCycle,
-    };
-    const commit = await this.commit({
-      run,
-      state,
-      expectedStateRevision: snapshot.stateRevision ?? null,
-      expectedContinuationRevision: snapshot.continuationRevision ?? null,
-      stepWrites: [],
-      messagesToAppend: [],
-      continuation: { operation: "SET", checkpoint, updatedAt: now },
-      events: [
-        this.eventFactory.statusChanged(
-          snapshot.run,
-          "VERIFYING",
-          "RUNNING",
-          this.nextEventId(),
-          now,
-        ),
-        this.eventFactory.verificationRepairStarted(
-          snapshot.run,
-          plan.id,
-          evaluation.failedCheckIds,
-          repairCycle,
-          this.nextEventId(),
-          now,
-        ),
-      ],
-    });
-    this.notify(commit.events);
-    return this.resultFromSnapshot(commit.snapshot);
-  }
-
-  private verificationRecoveryStore() {
+  /**
+   * The verification execution recovery store.
+   *
+   * The Run Layer still needs it for one thing: compiling the repair context the *next* Agent turn
+   * reasons from. That context is built from the failed plan and the evidence that described it, which
+   * is durable verification state — and it is read through the same port the gate runs verification
+   * with, rather than the gate handing back a copy.
+   */
+  private verificationRecoveryStore():
+    import("@caelush/verification").VerificationExecutionRecoveryStorePort | undefined {
     if (this.dependencies.verificationExecutionRecovery !== undefined) {
       return this.dependencies.verificationExecutionRecovery;
     }
@@ -3578,6 +3052,447 @@ export class RunController {
       return candidate as import("@caelush/verification").VerificationExecutionRecoveryStorePort;
     }
     return undefined;
+  }
+
+  /* ---------------------------------------------------------- completion */
+
+  /**
+   * The run-scoped completion gate for one `EVALUATE_COMPLETION` directive.
+   *
+   * It captures every host fact the frozen `CompletionGateInput` deliberately does not carry — the
+   * workspace, the Git port, the verification stores, the reviewer, the repair policy — from the
+   * durable Run the coordinator decided on, and binds the Run Layer's own notifier and boundary writer
+   * to it. The gate owns no store, publishes through the layer that owns the ledger, and commits no
+   * lifecycle transition.
+   *
+   * The gate is a real `CompletionGate` for the frozen driver, so `EVALUATE_COMPLETION` travels the
+   * same path as `ADVANCE_AGENT` and `EXECUTE_TOOL_BATCH`.
+   */
+  private completionGate(input: {
+    readonly snapshot: RunExecutionSnapshot;
+    readonly mode: RunExecutionMode;
+  }): ResolvedCompletionGate | undefined {
+    const dependencies = this.completionDependencies(input.snapshot, input.mode);
+    if (dependencies === undefined) return undefined;
+    const completion = createRunCompletionGate(dependencies);
+    return { completion, dependencies };
+  }
+
+  /**
+   * The host facts a completion evaluation runs with.
+   *
+   * This is the one place those facts are derived, so a gate and the settlement that acts on its
+   * decision can never disagree about which plan, which reviewer or which repair policy was in play.
+   */
+  private completionDependencies(
+    snapshot: RunExecutionSnapshot,
+    mode: RunExecutionMode,
+  ): RunCompletionGateDependencies | undefined {
+    const state = snapshot.state;
+    const continuation = snapshot.continuation;
+    if (state === undefined || continuation?.type !== "AWAITING_VERIFICATION") return undefined;
+    const deps = this.dependencies;
+    const persistence = this.completionPersistence();
+    if (persistence === undefined) return undefined;
+    const reviewer =
+      deps.verificationReviewer ??
+      (deps.verificationModelTurns !== undefined && deps.budget !== undefined
+        ? new TaskAcceptanceReviewer({
+            modelTurns: deps.verificationModelTurns,
+            budget: deps.budget,
+            clock: deps.clock,
+            ...(deps.verificationTurnIdentity === undefined
+              ? {}
+              : { resolveTurnIdentity: deps.verificationTurnIdentity }),
+            ...(deps.tokenEstimator === undefined ? {} : { tokenEstimator: deps.tokenEstimator }),
+          })
+        : undefined);
+    return {
+      run: snapshot.run,
+      state,
+      continuation,
+      mode,
+      signal: this.executionSignal(snapshot.run.id),
+      clock: deps.clock,
+      persistence,
+      configResolver: deps.configResolver,
+      notifyCommitted: (events) => this.notify(events),
+      openBoundary: async () => {
+        // The boundary of a candidate is committed by `openCompletionBoundary`, which is the only
+        // caller that has the Step, the messages and the revision to write it with. A gate that asked
+        // for one here would be asking mid-evaluation, after the boundary is already durable.
+        throw new RunControllerInvariantError(
+          "A completion evaluation cannot open a boundary it is already running inside.",
+        );
+      },
+      ...(deps.verificationPlanner === undefined ? {} : { planner: deps.verificationPlanner }),
+      ...(deps.verificationPlanIdFactory === undefined
+        ? {}
+        : { planIdFactory: () => deps.verificationPlanIdFactory!.create() }),
+      ...(deps.verificationCheckIdFactory === undefined
+        ? {}
+        : { checkIdFactory: () => deps.verificationCheckIdFactory!.create() }),
+      ...(deps.verificationEvidenceIdFactory === undefined
+        ? {}
+        : { evidenceIdFactory: deps.verificationEvidenceIdFactory }),
+      ...(deps.verificationRunner === undefined ? {} : { runner: deps.verificationRunner }),
+      ...(deps.projectProfileProvider === undefined
+        ? {}
+        : { profileProvider: deps.projectProfileProvider }),
+      ...(deps.verificationExecution === undefined
+        ? {}
+        : { execution: deps.verificationExecution }),
+      ...(deps.verificationExecutionStore === undefined
+        ? {}
+        : { executionStore: deps.verificationExecutionStore }),
+      ...(deps.verificationExecutionRecovery === undefined
+        ? {}
+        : { executionRecovery: deps.verificationExecutionRecovery }),
+      ...(deps.verificationWorkspace === undefined
+        ? {}
+        : { workspace: deps.verificationWorkspace }),
+      ...(deps.verificationGit === undefined ? {} : { git: deps.verificationGit }),
+      ...(deps.verificationSecurity === undefined ? {} : { security: deps.verificationSecurity }),
+      ...(deps.verificationEvidenceSanitizer === undefined
+        ? {}
+        : { evidenceSanitizer: deps.verificationEvidenceSanitizer }),
+      ...(deps.verificationResolverRegistry === undefined
+        ? {}
+        : { resolverRegistry: deps.verificationResolverRegistry }),
+      ...(reviewer === undefined ? {} : { reviewer }),
+      ...(deps.verificationRepairPolicy === undefined
+        ? {}
+        : { repairPolicy: deps.verificationRepairPolicy }),
+      ...(deps.verificationPlanCount === undefined
+        ? {}
+        : { planCount: deps.verificationPlanCount }),
+    };
+  }
+
+  /**
+   * Drive one `EVALUATE_COMPLETION` directive through the frozen Run execution driver.
+   *
+   * ```text
+   * createRunExecutionDriver({ agentLoop: misroute, toolTurns: misroute, completionGate: REAL })
+   *        ↓
+   * driver.execute(EVALUATE_COMPLETION, context)
+   *        ↓
+   * the real coding completion gate
+   *        ↓
+   * frozen CompletionGateDecision  +  Core-private CompletionGateObservation
+   * ```
+   *
+   * The Agent and Tool ports are fail-closed misroute guards: a completion evaluation that drove an
+   * Agent Reason or a Tool batch from here would be a second execution authority for effects this
+   * directive never named.
+   */
+  private async executeCompletionDirective(
+    snapshot: RunExecutionSnapshot,
+    directive: EvaluateCompletionDirective,
+    resolved: ResolvedCompletionGate,
+  ): Promise<CompletionDirectiveExecution> {
+    const driver = createRunExecutionDriver({
+      agentLoop: MISROUTED_AGENT_LOOP,
+      toolTurns: MISROUTED_TOOL_TURN_COORDINATOR,
+      completionGate: resolved.completion.gate,
+    });
+    try {
+      const effect = await driver.execute(directive, {
+        identity: {
+          runId: snapshot.run.id,
+          sessionId: snapshot.run.sessionId,
+          goal: snapshot.run.goal,
+        },
+        // The Step is the one that produced the candidate, which is the Step the verification plan is
+        // bound to. A completion evaluation creates no Step of its own: it is a host action about an
+        // existing attempt, not a new Reason.
+        turn: { stepId: directive.sourceStepId, sequence: 0 },
+        history: [],
+        model: unresolvedCompletionModel(snapshot.run.model),
+        tools: [],
+        signal: this.executionSignal(snapshot.run.id),
+      });
+      if (effect.kind !== "COMPLETION") {
+        throw new RunControllerInvariantError(
+          `The completion driver produced a ${effect.kind} effect for an EVALUATE_COMPLETION directive.`,
+        );
+      }
+      return { decision: effect.result, observation: resolved.completion.observation };
+    } catch (error) {
+      // An aborted evaluation belongs to the termination authority: the Run Layer resolves it before
+      // and after this call, and it wins over any completion decision.
+      if (this.executionSignal(snapshot.run.id).aborted) {
+        return { outcome: await this.finalizeAbortedExecution(snapshot) };
+      }
+      // The gate's own identity refusal is a lifecycle violation, not a verification outcome.
+      if (error instanceof CompletionGateIdentityError) throw error;
+      throw error;
+    }
+  }
+
+  /**
+   * Settle one executed completion effect through exactly one typed authority.
+   *
+   * ```text
+   * classifyCompletionEffectSettlement()
+   *        ↓
+   * CANONICAL_ACCEPT          PLAN -> MATERIALIZE -> COMMIT -> NOTIFY -> onVerifiedCompletion
+   * CANONICAL_REJECT          the same canonical path, to FAILED
+   * REPAIR_COMPATIBILITY      the durable WAITING_VERIFICATION_REPAIR boundary
+   * RETRYABLE_ERROR_SUSPEND   nothing is written; the Run keeps its AWAITING_VERIFICATION
+   * TERMINATION_AUTHORITY     cancellation or deadline, which own their own settlement
+   * ```
+   *
+   * The route is chosen by typed discriminant only and there is no generic fallback: a planner error
+   * propagates instead of being caught and re-settled by a second authority.
+   */
+  private async settleCompletionEffect(
+    snapshot: RunExecutionSnapshot,
+    directive: EvaluateCompletionDirective,
+    execution: Extract<CompletionDirectiveExecution, { decision: CompletionGateDecision }>,
+  ): Promise<ToolEffectSettlement> {
+    const current = await this.load(snapshot.run.id);
+    const authority = this.resolveAuthority(current, false);
+    const route = classifyCompletionEffectSettlement({
+      decision: execution.decision,
+      observation: execution.observation,
+      terminationDecided:
+        authority === "CANCELLED" ||
+        authority === "TIMEOUT" ||
+        authority === "TERMINAL" ||
+        authority === "UNEXPECTED_ABORT",
+    });
+    switch (route.route) {
+      case "TERMINATION_AUTHORITY":
+        if (authority === "CANCELLED") {
+          return { kind: "RESULT", result: await this.finalizeCancellation(current) };
+        }
+        if (authority === "TIMEOUT") {
+          return { kind: "RESULT", result: await this.finalizeTimeout(current) };
+        }
+        if (authority === "UNEXPECTED_ABORT") {
+          return { kind: "RESULT", result: await this.finalizeAbortedExecution(current) };
+        }
+        return { kind: "RESULT", result: this.resultFromSnapshot(current) };
+      case "RETRYABLE_ERROR_SUSPEND":
+        // The Run already holds exactly the boundary this outcome means: a durable
+        // `AWAITING_VERIFICATION` with its plan and its evidence intact. Nothing is committed and the
+        // drive ends here, which is what keeps a retryable completion error from becoming a busy loop.
+        return { kind: "RESULT", result: this.resultFromSnapshot(current) };
+      case "REPAIR_COMPATIBILITY": {
+        const repaired = await this.settleVerificationRepair(current, directive, route);
+        return { kind: "SNAPSHOT", snapshot: repaired };
+      }
+      case "CANONICAL_ACCEPT":
+      case "CANONICAL_REJECT": {
+        const canonical = await this.settleCanonicalCompletion(
+          current,
+          directive,
+          route.route === "CANONICAL_ACCEPT"
+            ? { kind: "ACCEPT", finalResult: route.decision.finalResult }
+            : { kind: "REJECT", error: route.decision.error },
+          execution.observation,
+        );
+        return canonical;
+      }
+    }
+  }
+
+  /**
+   * Settle a completion decision the frozen planner can express.
+   *
+   * ```text
+   * PLAN -> MATERIALIZE -> COMMIT -> NOTIFY -> onVerifiedCompletion
+   * ```
+   *
+   * The order is the contract. `run.completed` is materialized only because the Core-private
+   * observation carries the verified result *and* the seal that binds it to the plan and the candidate;
+   * a completion whose materializer input has neither produces `status.changed` alone, and the Run is
+   * never reported as verified-complete on the strength of a decision by itself.
+   */
+  private async settleCanonicalCompletion(
+    current: RunExecutionSnapshot,
+    directive: EvaluateCompletionDirective,
+    decision: Extract<CompletionGateDecision, { kind: "ACCEPT" | "REJECT" }>,
+    observation: CompletionGateObservation,
+  ): Promise<ToolEffectSettlement> {
+    const now = this.dependencies.clock.now();
+    const snapshot = toAgentExecutionSnapshot(current);
+    const effect: RunExecutionEffectResult = { kind: "COMPLETION", result: decision };
+    const planned = this.transitionPlanner.plan({ snapshot, directive, effect, now });
+    const completion = this.completionEventEvidence(decision, observation);
+    const materialized = this.eventMaterializer.materialize({
+      snapshot: current,
+      directive,
+      effect,
+      plannedCommit: planned,
+      now,
+      // A completion evaluation performs no provider turn of its own: the reviewer's model call is the
+      // verification subsystem's, and reporting a provider state here would claim a call this effect
+      // never made.
+      providerTurnState: "NOT_STARTED",
+      ...(completion === undefined ? {} : { completion }),
+      ownership: { eventIds: this.dependencies.eventIdFactory },
+    });
+    const committed = await this.commitVerifiedCompletion(materialized, observation);
+    this.notify(committed.events);
+    if (committed.snapshot.run.status === "COMPLETED") {
+      const finalResult = committed.snapshot.run.finalResult;
+      void Promise.resolve()
+        .then(() =>
+          this.dependencies.onVerifiedCompletion?.({ run: committed.snapshot.run, finalResult }),
+        )
+        .catch(() => undefined);
+    }
+    return { kind: "RESULT", result: this.resultFromSnapshot(committed.snapshot) };
+  }
+
+  /**
+   * Commit a planned completion.
+   *
+   * A verified acceptance settles through the completion persistence port, which re-validates inside
+   * the transaction that the Run is still the `VERIFYING` Run bound to this exact plan. Everything else
+   * — a rejection, a repair, a suspension — is an ordinary Run transition and uses the ordinary commit.
+   */
+  private async commitVerifiedCompletion(
+    command: RunExecutionCommit,
+    observation: CompletionGateObservation,
+  ): Promise<RunExecutionCommitResult> {
+    const finalResult = observation.verifiedFinalResult;
+    const plan = observation.plan;
+    if (finalResult === undefined || plan === undefined) {
+      return this.commit(command);
+    }
+    const persistence = this.completionPersistence();
+    const state = command.state;
+    if (persistence === undefined || state === undefined) {
+      throw new RunControllerInfrastructureError(
+        "Verified completion persistence is not configured.",
+      );
+    }
+    try {
+      return await persistence.commitVerifiedCompletion({
+        run: command.run,
+        state,
+        finalResult,
+        verificationPlan: plan,
+        expectedStateRevision: command.expectedStateRevision,
+        expectedContinuationRevision: command.expectedContinuationRevision,
+        events: command.events,
+      });
+    } catch (error) {
+      if (
+        error instanceof RunExecutionConflictError ||
+        error instanceof RunControllerInvariantError
+      ) {
+        throw error;
+      }
+      throw new RunControllerInfrastructureError("Unable to persist verified completion", {
+        cause: error,
+      });
+    }
+  }
+
+  /**
+   * The verified facts a completion event may publish.
+   *
+   * `run.completed` needs a `VerifiedRunFinalResult` *and* a seal, and the frozen `ACCEPT` decision
+   * carries only the result. They are read from the Core-private observation, and only when the two
+   * agree: a decision that accepted one result while the gate recorded another would be a completion
+   * nobody verified, and it must not reach the ledger as one.
+   */
+  private completionEventEvidence(
+    decision: Extract<CompletionGateDecision, { kind: "ACCEPT" | "REJECT" }>,
+    observation: CompletionGateObservation,
+  ): CompletionEventEvidence | undefined {
+    const plan = observation.plan;
+    const verifiedFinalResult = observation.verifiedFinalResult;
+    const sealHash = observation.seal?.sealHash;
+    if (plan === undefined || sealHash === undefined) return undefined;
+    if (decision.kind === "ACCEPT") {
+      // The decision and the observation must describe the *same* accepted result, and that result
+      // must be bound to this plan by its own seal. Anything else is a completion nobody verified, and
+      // no terminal event may be published for it.
+      if (verifiedFinalResult === undefined) return undefined;
+      if (!semanticEqual(decision.finalResult, verifiedFinalResult)) return undefined;
+      if (verifiedFinalResult.verification.sealHash !== sealHash) return undefined;
+      if (verifiedFinalResult.verification.planId !== plan.id) return undefined;
+      if (verifiedFinalResult.verification.sourceStepId !== plan.sourceStepId) return undefined;
+      if (verifiedFinalResult.verification.candidateHash !== plan.candidateHash) return undefined;
+    }
+    // A rejection publishes the verdict and the checks it named. It has no verified result to publish,
+    // and `run.completed` is never emitted for one.
+    if (verifiedFinalResult === undefined) return undefined;
+    return {
+      plan,
+      verifiedFinalResult,
+      sealHash,
+      ...(observation.failedCheckIds === undefined
+        ? {}
+        : { failedCheckIds: observation.failedCheckIds }),
+      ...(observation.errorCheckIds === undefined
+        ? {}
+        : { errorCheckIds: observation.errorCheckIds }),
+    };
+  }
+
+  /**
+   * The durable `WAITING_VERIFICATION_REPAIR` boundary.
+   *
+   * The frozen planner refuses this transition on purpose: the checkpoint has always persisted the
+   * failed plan identity, the source Step, the failed check identities, the evidence identities and the
+   * repair cycle, and the frozen repair request carries a reference, a cycle and a reason. The four
+   * durable identities therefore come from the Core-private observation — which read them from the
+   * durable verification execution — and from nowhere else.
+   */
+  private async settleVerificationRepair(
+    loaded: RunExecutionSnapshot,
+    directive: EvaluateCompletionDirective,
+    route: Extract<CompletionEffectSettlementRoute, { route: "REPAIR_COMPATIBILITY" }>,
+  ): Promise<RunExecutionSnapshot> {
+    if (loaded.state === undefined) {
+      throw new RunControllerInvariantError("Verification repair requires an AgentState");
+    }
+    const now = this.dependencies.clock.now();
+    const run = resumeAgentRunFromVerificationRepair(loaded.run);
+    const state = resumeAgentStateFromVerificationRepair(loaded.state, now);
+    const checkpoint = {
+      type: "WAITING_VERIFICATION_REPAIR" as const,
+      runId: run.id,
+      failedPlanId: directive.sourceStepId === undefined ? "" : route.decision.repair.repairRef,
+      sourceStepId: directive.sourceStepId,
+      failedCheckIds: route.failedCheckIds,
+      evidenceIds: route.evidenceIds,
+      repairCycle: route.repairCycle,
+    } as never;
+    const commit = await this.commit({
+      run,
+      state,
+      expectedStateRevision: loaded.stateRevision ?? null,
+      expectedContinuationRevision: loaded.continuationRevision ?? null,
+      stepWrites: [],
+      messagesToAppend: [],
+      continuation: { operation: "SET", checkpoint, updatedAt: now },
+      events: [
+        this.eventFactory.statusChanged(
+          loaded.run,
+          "VERIFYING",
+          "RUNNING",
+          this.nextEventId(),
+          now,
+        ),
+        this.eventFactory.verificationRepairStarted(
+          loaded.run,
+          route.decision.repair.repairRef as never,
+          route.failedCheckIds,
+          route.repairCycle,
+          this.nextEventId(),
+          now,
+        ),
+      ],
+    });
+    this.notify(commit.events);
+    return commit.snapshot;
   }
 
   private nextEventId() {
@@ -3855,10 +3770,6 @@ type WaitingRetryResumeContext =
       readonly sourceStepId?: StepId | undefined;
     };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 /**
  * The canonical append projection.
  *
@@ -4031,42 +3942,7 @@ function recoverToolRequestSourceStep(
   );
 }
 
-function semanticEqual(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) return true;
-  if (Array.isArray(left) && Array.isArray(right))
-    return (
-      left.length === right.length &&
-      left.every((value, index) => semanticEqual(value, right[index]))
-    );
-  if (isRecord(left) && isRecord(right)) {
-    const leftKeys = Object.keys(left).sort();
-    const rightKeys = Object.keys(right).sort();
-    return (
-      leftKeys.length === rightKeys.length &&
-      leftKeys.every(
-        (key, index) => key === rightKeys[index] && semanticEqual(left[key], right[key]),
-      )
-    );
-  }
-  return false;
-}
-
-function objectDetails(value: unknown): Record<string, unknown> | undefined {
-  return isRecord(value) ? value : undefined;
-}
-
-function stringValue(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
-function arrayValue(value: unknown): readonly unknown[] | undefined {
-  return Array.isArray(value) ? value : undefined;
-}
-
-function objectValue(value: unknown): Record<string, unknown> | undefined {
-  return isRecord(value) ? value : undefined;
-}
-
+/** Whether a status is settled and may never be reopened. */
 function isTerminal(status: AgentRun["status"]): boolean {
   return [
     "COMPLETED",
@@ -4078,6 +3954,13 @@ function isTerminal(status: AgentRun["status"]): boolean {
   ].includes(status);
 }
 
+/**
+ * The one monotonic arithmetic rule of the retry schedule.
+ *
+ * A delay that would exceed the safe integer range is refused rather than silently wrapped: a
+ * timestamp that lost precision would arm a timer for an instant that is not the instant the policy
+ * asked for.
+ */
 function addTimestamp(now: AgentRun["createdAt"], delayMs: number): AgentRun["createdAt"] {
   if (delayMs > Number.MAX_SAFE_INTEGER - now) {
     throw new RunControllerInvariantError("Retry timestamp exceeded the safe integer range");

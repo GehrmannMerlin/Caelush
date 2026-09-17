@@ -246,7 +246,6 @@ function createController(
   return new RunController({
     agentExecution: agentExecution.factory,
     executionStore: storage.execution,
-    verificationStore: storage.execution,
     events: eventBus,
     configResolver: {
       resolve: async () => ({

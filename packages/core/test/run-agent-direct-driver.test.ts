@@ -12,6 +12,7 @@ import {
   type StepId,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
+import { completionStoreOver } from "./support/completion-store.js";
 import { RunController } from "../src/run-controller.js";
 import { RunExecutionConflictError } from "../src/run-execution-store.js";
 import type {
@@ -205,6 +206,7 @@ function harness(options: {
   const controller = new RunController({
     agentExecution: execution,
     executionStore: store,
+    completionStore: completionStoreOver(store),
     events: {
       notifyCommitted: (events: readonly DurableAgentEvent[]) => notifications.push(...events),
     },

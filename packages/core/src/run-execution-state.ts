@@ -88,16 +88,32 @@ export function assertRunExecutionInvariant(snapshot: RunExecutionSnapshotView):
   assertVerificationExecutionInvariant(snapshot);
 }
 
-/** The coding-verification clause: a VERIFYING Run must be bound to its own plan. */
+/**
+ * The coding-completion clause: a `VERIFYING` Run must hold its verification boundary.
+ *
+ * ```text
+ * Phase 3E moved the plan out of the general snapshot
+ * ```
+ *
+ * A general Run snapshot used to carry the `VerificationPlan` the Run was bound to, which is how this
+ * clause used to prove that a `VERIFYING` Run had a plan. Phase 3E closed that: the plan lives behind
+ * the Core-private completion persistence port, written in the same transaction as the boundary that
+ * names it, so a general snapshot has no plan to compare against — and a *general* invariant must not
+ * require a coding artefact to state itself.
+ *
+ * What remains here is the part that is about the Run Layer's own contract: a `VERIFYING` Run holds an
+ * `AWAITING_VERIFICATION` continuation whose plan pointer belongs to its own Run and its own source
+ * Step. The plan's own identity is re-validated inside the completion transaction, where the plan row
+ * is actually read, so a Run that pointed at a plan nobody wrote still cannot complete.
+ */
 function assertVerificationExecutionInvariant(snapshot: RunExecutionSnapshotView): void {
   const { run, continuation } = snapshot;
   if (run.status !== "VERIFYING") return;
   if (
     continuation?.type !== "AWAITING_VERIFICATION" ||
-    snapshot.verificationPlan === undefined ||
-    snapshot.verificationPlan.id !== continuation.verificationPlanId ||
-    snapshot.verificationPlan.runId !== run.id ||
-    snapshot.verificationPlan.sourceStepId !== continuation.sourceStepId
+    continuation.runId !== run.id ||
+    continuation.verificationPlanId === undefined ||
+    continuation.verificationPlanId === null
   ) {
     throw new RunExecutionInvariantError("VERIFYING Run must retain a verification candidate");
   }

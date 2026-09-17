@@ -90,7 +90,6 @@ describe("RunController durable boundaries", () => {
         createStepId,
       }).factory,
       executionStore: storage.execution,
-      verificationStore: storage.execution,
       events: eventBus,
       configResolver: {
         resolve: async () => ({
@@ -149,7 +148,6 @@ describe("RunController durable boundaries", () => {
     const controller = new RunController({
       agentExecution,
       executionStore: storage.execution,
-      verificationStore: storage.execution,
       events: eventBus,
       configResolver: {
         resolve: async () => ({
@@ -239,7 +237,6 @@ describe("RunController durable boundaries", () => {
         createStepId: () => createStepId(),
       }).factory,
       executionStore: storage.execution,
-      verificationStore: storage.execution,
       events: eventBus,
       configResolver: {
         resolve: async () => ({
