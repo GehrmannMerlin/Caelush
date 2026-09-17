@@ -84,15 +84,17 @@ describe("daemon model wire diagnostic", () => {
     });
 
     // The frozen model turn executor carries an explicit Run identity, because the durable
-    // model turn boundary commits against a Run and a Session. The daemon publishes it for
-    // the Run it is about to drive.
-    composition.resolveTurnIdentity({
+    // model turn boundary commits against a Run and a Session. Phase 3E removed the mutable
+    // global this used to be published through: the identity is a pure projection of a Run
+    // and travels with the turn, so nothing here depends on publish ordering.
+    const identity = composition.resolveTurnIdentity({
       id: createRunId(),
       sessionId: createSessionId(),
       goal: "diagnose the model wire",
     });
 
-    await composition.modelTurns.execute({
+    await composition.verificationModelTurns.execute({
+      identity,
       request: {
         model: { provider: "fixture", model: "fixture-model" },
         messages: [
@@ -159,13 +161,14 @@ describe("daemon model wire diagnostic", () => {
         adapterOverrides: [new RecordingAdapter()],
       });
 
-      composition.resolveTurnIdentity({
+      const identity = composition.resolveTurnIdentity({
         id: createRunId(),
         sessionId: createSessionId(),
         goal: "diagnose the model wire",
       });
 
-      await composition.modelTurns.execute({
+      await composition.verificationModelTurns.execute({
+        identity,
         request: {
           model: { provider: "fixture", model: "fixture-model" },
           messages: [{ role: "user", content: SECRET_PROMPT }],

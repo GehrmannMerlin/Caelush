@@ -92,8 +92,7 @@ export interface ProjectProfileProviderPort {
  * reviewer's review is a host action rather than an AgentStep, so it has no durable turn
  * of its own.
  */
-export type VerificationLLMClient =
-  import("./legacy-model-turn-executor.js").LegacyModelTurnExecutor;
+export type VerificationLLMClient = import("./task-acceptance-reviewer.js").VerificationModelClient;
 
 export interface VerificationTaskReviewerPort {
   review(input: {
@@ -191,16 +190,13 @@ export interface RunControllerDependencies {
   readonly verificationReviewer?: VerificationTaskReviewerPort;
   readonly verificationModelTurns?: VerificationLLMClient;
   /**
-   * Projects the Run identity a verification model turn executes for.
+   * Deliberately absent: a global verification turn identity.
    *
-   * A verification review has no AgentStep of its own, so it borrows the identity of the Run it is
-   * reviewing. Phase 3A made identity an explicit input of the frozen model turn executor, so the
-   * host projects it from the Run being reviewed rather than letting a facade invent one — and
-   * ordinary Agent execution no longer publishes a global "active turn" for this to read.
+   * A review is a host action about a Run, and Phase 3E made the identity it executes as an explicit
+   * argument the reviewer projects from that Run. There is no mutable "active turn" for a host to
+   * publish or for a review to read, which is what stops one Run's review from being attributed to
+   * another Run's execution — or from failing because no Agent turn happened to run first.
    */
-  readonly verificationTurnIdentity?: (
-    run: AgentRun,
-  ) => import("@caelush/agent").AgentExecutionIdentity;
   /**
    * The durable Run execution coordinator.
    *

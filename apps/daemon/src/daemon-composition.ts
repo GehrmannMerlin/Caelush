@@ -4,13 +4,12 @@ import {
   RunExecutionScopeRegistry,
   RunRetryRegistry,
   createLegacyContextRuntimeAdapter,
-  createLegacyModelTurnExecutor,
   createProjectProfileProvider,
   createRunAgentExecutionContext,
   createToolExecutionLedgerRawObservationResolver,
   toAIMessage,
-  type LegacyModelTurnExecutor,
   type RunAgentExecutionContextFactory,
+  type VerificationModelClient,
   type RunExecutionConfigResolver,
 } from "@caelush/core";
 import { EventBus } from "@caelush/events";
@@ -25,7 +24,7 @@ import {
   Utf8HeuristicTokenEstimator,
 } from "@caelush/context";
 import { MemoryRetriever, type MemoryRecord } from "@caelush/memory";
-import { createAISubsystem } from "@caelush/ai";
+import { createAIError, createAISubsystem } from "@caelush/ai";
 import {
   createDaemonApiAdapters,
   toAIProviderBinding,
@@ -198,13 +197,16 @@ export interface DaemonComposition {
   /** The frozen V2 model turn executor. One gateway invocation per `execute()`. */
   readonly modelTurnExecutor: ReturnType<typeof createModelTurnExecutor>;
   /**
-   * The legacy throw-based facade over `modelTurnExecutor`.
+   * The explicit-identity model turn authority a host-driven model turn executes through.
    *
-   * Phase 3C checkpoint 6 retired the resumable Core `AgentLoop` from production composition, so the
-   * only remaining consumer is the verification `TaskAcceptanceReviewer`, which has no `AgentStep`
-   * of its own. The facade is host-only and disappears with the Phase 3E verification migration.
+   * Phase 3E retired the throw-based legacy facade from production composition: verification is the
+   * last host action that drives a model turn outside the Run Layer, and it now names the Run it
+   * reviews per call. What still asks for a host-driven turn is a verification review, a wire
+   * diagnostic, and a test — and each of them names the Run it means. There is deliberately no second
+   * provider runtime, and no mutable global for one Run's review to be attributed to another Run's
+   * execution through.
    */
-  readonly modelTurns: LegacyModelTurnExecutor;
+  readonly verificationModelTurns: VerificationModelClient;
   readonly toolRegistry: ReturnType<ToolRegistryBuilder["build"]>;
   readonly toolCoordinator: ToolBatchCoordinator;
   readonly contextRuntime: ContextRuntimeCoordinator;
@@ -254,35 +256,42 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
   /**
    * The Run identity a *host-driven* model turn executes for.
    *
-   * It is written only through `resolveTurnIdentity`, which is the host-driven seam: the
-   * verification reviewer and a wire diagnostic. An ordinary Agent Reason never touches it — Phase
-   * 3C checkpoint 6 made the Run Layer project the identity from the durable `AgentRun` and hand it
-   * to the frozen `AgentLoop.advance()` directly, so production Agent execution no longer depends on
-   * anything being published before the turn.
+   * A pure projection, and nothing more. Phase 3E removed the mutable "active turn" this used to
+   * write: a verification review now carries the identity of the Run it belongs to as an explicit
+   * argument, so there is no global for one Run's review to be attributed to another Run's
+   * execution through, and no ordering requirement for an Agent turn to have run first.
+   *
+   * What still asks for it is a caller that drives a model turn *outside* the Run Layer — a wire
+   * diagnostic, a test — and it asks by naming the Run it means.
    */
-  const activeTurn: { identity: DaemonTurnIdentity | undefined } = { identity: undefined };
   const resolveTurnIdentity = (
     run: Pick<AgentRun, "id" | "sessionId" | "goal">,
-  ): DaemonTurnIdentity => {
-    const identity: DaemonTurnIdentity = {
-      runId: run.id,
-      sessionId: run.sessionId,
-      goal: run.goal,
-    };
-    activeTurn.identity = identity;
-    return identity;
-  };
-  const modelTurns = createLegacyModelTurnExecutor({
-    executor: modelTurnExecutor,
-    identity: () => {
-      const identity = activeTurn.identity;
-      if (identity === undefined) {
-        throw new Error("No active Run identity for the legacy model turn executor.");
-      }
-      return identity;
-    },
-    createStepId,
+  ): DaemonTurnIdentity => ({
+    runId: run.id,
+    sessionId: run.sessionId,
+    goal: run.goal,
   });
+  /**
+   * The explicit-identity model turn authority a verification review executes through.
+   *
+   * It is the same AI subsystem, gateway and provider registry an ordinary Agent turn uses, and it
+   * takes the identity per call. A review is a host action about a Run rather than an Agent Reason,
+   * so it names the Run it reviews instead of borrowing a globally published turn.
+   */
+  const verificationModelTurns: VerificationModelClient = {
+    async execute({ identity, request, signal }) {
+      const result = await modelTurnExecutor.execute({
+        identity,
+        turn: { stepId: createStepId(), sequence: 1 },
+        request,
+        signal,
+      });
+      if (result.kind === "COMPLETED") return result.result;
+      if (result.kind === "CANCELLED")
+        throw createAIError("AI_ABORTED", "The model turn was cancelled.");
+      throw createAIError("AI_PROVIDER_ERROR", "The model turn failed.");
+    },
+  };
 
   const inspector = createLocalProjectInspector();
   const memoryRetriever = new MemoryRetriever(options.storage.memory);
@@ -438,7 +447,7 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     agentExecution,
     contextRuntime,
     executionStore: options.storage.execution,
-    verificationStore: options.storage.execution,
+    completionStore: options.storage.execution,
     events: options.eventBus,
     configResolver: executionConfigResolver,
     toolCoordinator,
@@ -465,15 +474,7 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     verificationEvidenceSanitizer,
     verificationEvidenceIdFactory: createVerificationEvidenceId,
     verificationResolverRegistry: new ProjectCheckResolverRegistry(),
-    verificationModelTurns: modelTurns,
-    /**
-     * Publish the Run identity a verification review executes for.
-     *
-     * The reviewer calls this immediately before its model turn, so verification never depends on an
-     * ordinary Agent turn having published a global identity first (§94 of the checkpoint). The
-     * token-guarded delegate is the same publication a wire diagnostic uses.
-     */
-    verificationTurnIdentity: (run) => resolveTurnIdentity(run),
+    verificationModelTurns,
     verificationRepairPolicy: createVerificationRepairPolicy(),
     verificationPlanCount: (runId) =>
       options.storage.verificationExecution.countPlans?.(runId) ?? Promise.resolve(0),
@@ -520,7 +521,7 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     runtimeResolver,
     ai,
     modelTurnExecutor,
-    modelTurns,
+    verificationModelTurns,
     toolRegistry: activeToolRegistry,
     toolCoordinator,
     contextRuntime,

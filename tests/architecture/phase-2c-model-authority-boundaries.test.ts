@@ -70,9 +70,14 @@ describe("Phase 2C daemon model authority", () => {
     // The loop resolves model metadata through the same catalog generation the gateway
     // uses, so there is exactly one descriptor authority.
     expect(composition).toMatch(/models:\s*ai\.models/);
-    expect(composition).toMatch(/modelTurns[,:]/);
-    // Verification reviews through the same executor, not through a second generation.
-    expect(composition).toMatch(/verificationModelTurns:\s*modelTurns/);
+    // A host-driven turn is executed by the one executor, under the identity its caller names.
+    expect(composition).toMatch(/verificationModelTurns:\s*VerificationModelClient/);
+    expect(composition).toContain("modelTurnExecutor.execute({");
+    // Verification reviews through the same executor, not through a second generation: Phase 3E
+    // retired the throw-based facade, so the explicit-identity client *is* the executor wrapper.
+    expect(composition).toMatch(/const verificationModelTurns: VerificationModelClient = \{/);
+    expect(composition).toContain("verificationModelTurns,");
+    expect(composition).not.toContain("createLegacyModelTurnExecutor(");
   });
 });
 

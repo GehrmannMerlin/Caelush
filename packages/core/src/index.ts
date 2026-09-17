@@ -287,7 +287,10 @@ export {
 export type { AgentTurnObservation, PendingAgentTurn } from "./run-model-turn-boundary.js";
 export { buildRunExecutionHistory } from "./run-controller-history.js";
 export { TaskAcceptanceReviewer } from "./task-acceptance-reviewer.js";
-export type { TaskAcceptanceReviewerDependencies } from "./task-acceptance-reviewer.js";
+export type {
+  TaskAcceptanceReviewerDependencies,
+  VerificationModelClient,
+} from "./task-acceptance-reviewer.js";
 export {
   createProjectProfileProvider,
   toVerificationProjectProfile,
@@ -382,6 +385,10 @@ export type {
 export {
   createRunCandidateBoundaryPlanner,
   createRunCompletionGate,
+} from "./run-completion-gate.js";
+export {
+  CompletionGateIdentityError,
+  CompletionGateInfrastructureError,
 } from "./run-completion-gate.js";
 export type {
   CandidateBoundaryPlanningDependencies,

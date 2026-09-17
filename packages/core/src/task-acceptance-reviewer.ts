@@ -1,5 +1,5 @@
 import type { AIModelRequest, AIModelTurnResult, ModelUsage } from "@caelush/ai";
-import type { LegacyModelTurnExecutor } from "./legacy-model-turn-executor.js";
+import type { AgentExecutionIdentity } from "@caelush/agent";
 import {
   buildTaskReviewPrompt,
   parseTaskAcceptanceReview,
@@ -12,24 +12,54 @@ import type { RunBudgetPort } from "./budget-ports.js";
 import type { VerificationTaskReviewerPort } from "./run-controller-ports.js";
 import { toAIModelRef } from "./ai-invocation-projection.js";
 
+/**
+ * The model turn one verification review executes as.
+ *
+ * ```text
+ * identity   the Run the review belongs to
+ * request    one provider turn, tools forbidden
+ * signal     the Run's own cancellation signal, forwarded unchanged
+ * ```
+ *
+ * The identity is an **explicit argument**. A review is a host action about a Run, not an Agent
+ * Reason, so it has no `AgentTurnRef` of its own — but "no turn of its own" never meant "read whatever
+ * identity was published last". Phase 3E removed the mutable global that used to answer that question:
+ * a reviewer that read it would take a turn identity from another Run's execution, and would fail
+ * entirely when no Agent turn happened to have published one first.
+ *
+ * The identity names the Run for attribution and durable budget ownership. It creates no AgentStep:
+ * verification produces evidence, and evidence is not a Reason.
+ */
+export interface VerificationModelClient {
+  execute(input: {
+    readonly identity: AgentExecutionIdentity;
+    readonly request: AIModelRequest;
+    readonly signal: AbortSignal;
+  }): Promise<AIModelTurnResult>;
+}
+
 export interface TaskAcceptanceReviewerDependencies {
-  readonly modelTurns: LegacyModelTurnExecutor;
+  /**
+   * The model turn authority a review executes through.
+   *
+   * It is the same AI subsystem, gateway and provider registry an ordinary Agent turn uses — there is
+   * deliberately no second provider runtime for verification — and it is handed the Run identity per
+   * call rather than reading one from anywhere.
+   */
+  readonly modelTurns: VerificationModelClient;
   readonly budget: RunBudgetPort;
   readonly clock: { now(): import("@caelush/protocol").TimestampMs };
-  /**
-   * Project the identity of the Run this review executes for.
-   *
-   * A review is a host action rather than an AgentStep, so it has no `AgentTurnRef` of its own and
-   * must borrow the identity of the Run it is reviewing. The Run is supplied as an argument — never
-   * read from a global "active turn" — so verification never depends on an ordinary Agent turn
-   * having published one.
-   */
-  readonly resolveTurnIdentity?: (run: AgentRun) => import("@caelush/agent").AgentExecutionIdentity;
   /** Core-side request estimator: the durable budget port receives plain numbers. */
   readonly tokenEstimator?: import("./llm-token-estimator.js").LLMTokenEstimator;
 }
 
-/** Provider-neutral reviewer orchestration. It creates neither a Step nor a Tool invocation. */
+/**
+ * Provider-neutral reviewer orchestration.
+ *
+ * It creates neither a Step nor a Tool invocation, and it owns no identity: the Run it reviews arrives
+ * as an argument, and the identity it executes as is projected from that Run by this class and handed
+ * to the model client. Nothing here reads a global "active turn", and nothing here publishes one.
+ */
 export class TaskAcceptanceReviewer implements VerificationTaskReviewerPort {
   constructor(private readonly dependencies: TaskAcceptanceReviewerDependencies) {}
 
@@ -46,10 +76,6 @@ export class TaskAcceptanceReviewer implements VerificationTaskReviewerPort {
     readonly budget?: AgentBudgetBlock;
     readonly errorCode?: string;
   }> {
-    // The frozen model turn executor needs the Run identity its durable boundary commits
-    // against. A review is a host action rather than an AgentStep, so it borrows the
-    // identity of the Run it is reviewing — supplied here, from the Run itself.
-    this.dependencies.resolveTurnIdentity?.(input.run);
     const request: AIModelRequest = {
       model: toAIModelRef(input.run.model),
       messages: [
@@ -87,10 +113,10 @@ export class TaskAcceptanceReviewer implements VerificationTaskReviewerPort {
 
     let turn: AIModelTurnResult;
     try {
-      // The verification reviewer runs through the same model turn authority as a
-      // normal agent turn: same AI subsystem, same gateway, no second provider
-      // registry generation.
+      // The review runs through the same AI subsystem an Agent turn does — same gateway, same
+      // provider registry, no second runtime generation — and it names the Run it belongs to.
       turn = await this.dependencies.modelTurns.execute({
+        identity: reviewIdentity(input.run),
         request: effectiveRequest,
         signal: input.signal,
       });
@@ -129,6 +155,17 @@ export class TaskAcceptanceReviewer implements VerificationTaskReviewerPort {
     };
     return this.dependencies.budget.settleVerificationLLM?.(settlementInput);
   }
+}
+
+/**
+ * The identity one verification review executes for.
+ *
+ * It is projected from the Run the review belongs to, which is the only identity a host action about
+ * that Run may have. A review creates no AgentStep, so there is no Step identity to project and none
+ * is invented.
+ */
+function reviewIdentity(run: AgentRun): AgentExecutionIdentity {
+  return { runId: run.id, sessionId: run.sessionId, goal: run.goal };
 }
 
 function errorResult(bundle: TaskReviewBundle, errorCode: string) {

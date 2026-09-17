@@ -526,7 +526,7 @@ function policyContextEngine(policy?: {
   };
 }
 
-function turnMessages(input: ContextPrepareInput): readonly AIMessage[] {
+export function turnMessages(input: ContextPrepareInput): readonly AIMessage[] {
   const turn = input.input;
   if (turn.kind === "USER_INPUT") return turn.messages;
   if (turn.kind === "CONTINUATION") return turn.messages ?? [];

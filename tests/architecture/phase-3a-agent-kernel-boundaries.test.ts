@@ -472,10 +472,16 @@ describe("Phase 3A Core compatibility boundary", () => {
     // Cancellation stays distinguishable from a provider failure.
     expect(facade).toContain("AI_ABORTED");
 
-    // The two legacy consumers name the facade rather than the frozen port.
+    // Phase 3E retired the facade from production composition, so exactly one Core port still names
+    // it: the resumable Agent loop, whose frozen dependencies are unchanged. The verification
+    // reviewer runs on the explicit-identity client instead, because a review is a host action about
+    // a Run rather than an Agent Reason.
     expect(read("packages/core/src/agent-loop-ports.ts")).toContain("LegacyModelTurnExecutor");
-    expect(read("packages/core/src/task-acceptance-reviewer.ts")).toContain(
+    expect(read("packages/core/src/task-acceptance-reviewer.ts")).not.toContain(
       "LegacyModelTurnExecutor",
+    );
+    expect(read("packages/core/src/task-acceptance-reviewer.ts")).toContain(
+      "readonly modelTurns: VerificationModelClient;",
     );
   });
 });

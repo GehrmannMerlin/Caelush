@@ -130,14 +130,6 @@ export interface RunCompletionGateDependencies {
   readonly notifyCommitted: (
     events: readonly import("./run-execution-store.js").DurableAgentEvent[],
   ) => void;
-  /**
-   * Open the durable completion boundary of the candidate about to be verified.
-   *
-   * The boundary is **not** the gate's to commit: the Run Layer owns every lifecycle write, and a gate
-   * that wrote one would be a second lifecycle authority. What the gate supplies is the plan the
-   * boundary must persist; the controller performs the one atomic commit that opens it.
-   */
-  readonly openBoundary: (input: CompletionBoundaryOpening) => Promise<void>;
 }
 
 /**

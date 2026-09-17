@@ -3061,9 +3061,11 @@ export class RunController {
    *
    * It captures every host fact the frozen `CompletionGateInput` deliberately does not carry — the
    * workspace, the Git port, the verification stores, the reviewer, the repair policy — from the
-   * durable Run the coordinator decided on, and binds the Run Layer's own notifier and boundary writer
-   * to it. The gate owns no store, publishes through the layer that owns the ledger, and commits no
-   * lifecycle transition.
+   * durable Run the coordinator decided on, and binds the Run Layer's own notifier to it. The gate owns
+   * no store, publishes through the layer that owns the ledger, commits no lifecycle transition, and
+   * cannot open the boundary it is already running inside: that commit belongs to
+   * `openCompletionBoundary`, which is the only caller holding the Step, the messages and the revision
+   * to write it with.
    *
    * The gate is a real `CompletionGate` for the frozen driver, so `EVALUATE_COMPLETION` travels the
    * same path as `ADVANCE_AGENT` and `EXECUTE_TOOL_BATCH`.
@@ -3101,9 +3103,6 @@ export class RunController {
             modelTurns: deps.verificationModelTurns,
             budget: deps.budget,
             clock: deps.clock,
-            ...(deps.verificationTurnIdentity === undefined
-              ? {}
-              : { resolveTurnIdentity: deps.verificationTurnIdentity }),
             ...(deps.tokenEstimator === undefined ? {} : { tokenEstimator: deps.tokenEstimator }),
           })
         : undefined);
@@ -3117,14 +3116,6 @@ export class RunController {
       persistence,
       configResolver: deps.configResolver,
       notifyCommitted: (events) => this.notify(events),
-      openBoundary: async () => {
-        // The boundary of a candidate is committed by `openCompletionBoundary`, which is the only
-        // caller that has the Step, the messages and the revision to write it with. A gate that asked
-        // for one here would be asking mid-evaluation, after the boundary is already durable.
-        throw new RunControllerInvariantError(
-          "A completion evaluation cannot open a boundary it is already running inside.",
-        );
-      },
       ...(deps.verificationPlanner === undefined ? {} : { planner: deps.verificationPlanner }),
       ...(deps.verificationPlanIdFactory === undefined
         ? {}
