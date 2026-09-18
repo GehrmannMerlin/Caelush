@@ -94,6 +94,8 @@ Phase 10D details are documented in [Budget Architecture](docs/architecture/budg
 
 Phase 11A/11B/11C/11D details are documented in [Verification Architecture](docs/architecture/verification.md), [Verification Execution](docs/architecture/verification-execution.md), [Change Review](docs/architecture/verification-change-review.md), [Task Acceptance Review](docs/architecture/task-acceptance-review.md), [Verification Repair](docs/architecture/verification-repair.md), [Verification Completion](docs/architecture/verification-completion.md), and [Verification Recovery](docs/architecture/verification-recovery.md). Core/RunController alone may complete a Run, and only after the final guarded freshness recheck.
 
+Architecture V2 Phase 3 migrated the Agent Loop execution chain into `@caelush/agent` and closed at Phase 3F. The production Run Layer now names one completion collaborator instead of assembling the coding verification workflow itself, one host builds the model turn executor, and the legacy facades have no production execution consumer. See [Phase 3 Agent Loop Migration Summary](docs/architecture/v2/PHASE_3_AGENT_LOOP_MIGRATION_SUMMARY.md), [Phase 3 Responsibility and Compatibility Inventory](docs/architecture/v2/PHASE_3_RESPONSIBILITY_AND_COMPATIBILITY_INVENTORY.md), [Phase 3 Frozen-Clause Acceptance Map](docs/architecture/v2/PHASE_3_FROZEN_CLAUSE_ACCEPTANCE_MAP.md), and the [Phase 3F Closure Report](docs/architecture/v2/PHASE_3F_AGENT_LOOP_CLOSURE_REPORT.md). Context, Tool, Security, Memory, Verification and Coding Agent package migration is **not** complete and remains owned by its own subsystem.
+
 ## 技术栈
 
 - TypeScript、ESM、Node.js 24 LTS
