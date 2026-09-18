@@ -368,6 +368,43 @@ describe("Phase 2C package edges", () => {
         "toBudgetAgentError",
         "toModelTurnExecutionError",
         "toModelTurnExecutionErrorCode",
+        // --- Phase 4A: the general Agent Tool framework. Tool System V2 splits one Tool definition
+        // into three layers, and this package owns the first two — the executable `AgentTool`
+        // contract and the `AIToolSpec` projection it extends. The canonical schema runtime and
+        // policy, the immutable ordered registry and the call Preparer moved here with it, so a host
+        // can register an in-memory Tool, build a registry, project its model specs and prepare a
+        // call with no Coding, Runtime or Storage implementation involved. The Coding overlay
+        // (`CodingToolDefinition` / `CodingToolCatalog`) lives in `@caelush/coding-agent` and consumes
+        // exactly these contracts.
+        "AgentToolRegistrationError",
+        "AgentToolRegistryStateError",
+        "AgentToolSchemaCompileError",
+        "DEFAULT_MAX_EXTERNAL_CALL_ID_BYTES",
+        "DEFAULT_MAX_INVOCATION_ARGS_BYTES",
+        "DEFAULT_TOOL_EXECUTION_MODE",
+        "DEFAULT_TOOL_REGISTRY_OPTIONS",
+        "DISCARDING_TOOL_EXECUTION_UPDATE_SINK",
+        "DefaultAgentToolRegistryBuilder",
+        "ImmutableAgentToolRegistry",
+        "TOOL_CALL_REJECTION_CODES",
+        "TOOL_EXECUTION_MODES",
+        "ToolArgumentPreparationError",
+        "ToolExecutionInfrastructureError",
+        "ToolPreparationInfrastructureError",
+        "ToolSchemaRuntime",
+        "canonicalJsonString",
+        "canonicalizeJsonValue",
+        "cloneJsonValue",
+        "containsForbiddenSchemaFeature",
+        "createToolCallPreparer",
+        "deepFreezeJson",
+        "isJsonObject",
+        "isToolExecutionMode",
+        "jsonUtf8ByteLength",
+        "normalizeInstancePath",
+        "toolModelSpecByteLength",
+        "validateToolRegistryOptions",
+        "validateToolSchemaSemantics",
       ].sort(),
     );
   });

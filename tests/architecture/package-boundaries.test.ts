@@ -151,11 +151,18 @@ describe("package boundaries", () => {
     expect(dependencies[protocolPackageName]).toBe("workspace:*");
     expect(dependencies.ajv).toBe("8.20.0");
     expect(dependencies["@caelush/runtime"]).toBe("workspace:*");
-    expect(Object.keys(dependencies).sort()).toEqual([
+    // Phase 4A moved the general Tool contracts, the schema runtime and policy, the registry and call
+    // preparation into `@caelush/agent`, and the Coding Tool overlay into `@caelush/coding-agent`. The
+    // legacy package is now a compatibility facade over both, so the two edges point legacy -> target.
+    expect(dependencies["@caelush/agent"]).toBe("workspace:*");
+    expect(Object.keys(manifest.dependencies ?? {}).sort()).toEqual([
+      "@caelush/agent",
       "@caelush/protocol",
       "@caelush/runtime",
       "ajv",
     ]);
+    expect(Object.keys(manifest.devDependencies ?? {}).sort()).toEqual(["@caelush/coding-agent"]);
+    expect(dependencies["@caelush/coding-agent"]).toBe("workspace:*");
 
     const sourceRoot = path.join(repositoryRoot, "packages", "tools", "src");
     const files = await sourceFiles(sourceRoot);
@@ -172,10 +179,26 @@ describe("package boundaries", () => {
     expect(source).not.toMatch(/\b(?:fetch|spawn|exec)\s*\(/);
     expect(source).not.toMatch(/\b(?:EventBus|Permission|ApprovalManager)\b/);
 
+    // The schema compiler is one implementation, and Phase 4A moved it into `@caelush/agent`. The
+    // legacy package therefore imports `ajv` nowhere: a second compiler here would be a second
+    // answer to "is this schema accepted", which is exactly what the migration removed.
     const ajvImports = sources
       .filter(({ contents }) => /from\s+["']ajv["']/.test(contents))
       .map(({ filePath }) => path.relative(repositoryRoot, filePath).replaceAll(path.sep, "/"));
-    expect(ajvImports).toEqual(["packages/tools/src/schema-runtime.ts"]);
+    expect(ajvImports).toEqual([]);
+
+    const agentSources = await sourceFiles(path.join(repositoryRoot, "packages", "agent", "src"));
+    const agentAjvImports = (
+      await Promise.all(
+        agentSources.map(async (filePath) => ({
+          filePath,
+          contents: await readFile(filePath, "utf8"),
+        })),
+      )
+    )
+      .filter(({ contents }) => /from\s+["']ajv["']/.test(contents))
+      .map(({ filePath }) => path.relative(repositoryRoot, filePath).replaceAll(path.sep, "/"));
+    expect(agentAjvImports).toEqual(["packages/agent/src/tools/schema/schema-runtime.ts"]);
   });
 
   it("keeps Runtime below Tools and limits host process access to the fixed search adapter", async () => {

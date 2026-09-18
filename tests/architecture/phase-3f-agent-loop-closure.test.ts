@@ -242,9 +242,12 @@ describe("Phase 3F Agent Loop closure boundaries", () => {
     const manifest = JSON.parse(read("packages/agent/package.json")) as {
       readonly dependencies?: Readonly<Record<string, string>>;
     };
+    // Phase 4A added one non-workspace dependency: the schema compiler the canonical Tool schema
+    // runtime compiles every registered Tool's input and result details schemas with.
     expect(Object.keys(manifest.dependencies ?? {}).sort()).toEqual([
       "@caelush/ai",
       "@caelush/protocol",
+      "ajv",
     ]);
 
     for (const file of productionSources().filter((path) =>

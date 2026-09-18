@@ -127,20 +127,37 @@ describe("Phase 3A agent kernel dependency boundaries", () => {
   });
 
   it("keeps the kernel free of coding-agent vocabulary and host execution", () => {
-    const source = agentKernelFiles()
-      .map((file) => read(file))
-      .join("\n")
-      // Comments are documentation, and the contract documents what it forbids. Only
-      // executable code is guarded.
-      .replaceAll(/\/\*[\s\S]*?\*\//g, "")
-      .replaceAll(/(^|[^:])\/\/.*$/gm, "$1");
+    const executableSource = (file: string): string =>
+      read(file)
+        // Comments are documentation, and the contract documents what it forbids. Only executable
+        // code is guarded.
+        .replaceAll(/\/\*[\s\S]*?\*\//g, "")
+        .replaceAll(/(^|[^:])\/\/.*$/gm, "$1");
+
+    const source = agentKernelFiles().map(executableSource).join("\n");
 
     expect(source).not.toMatch(/\b(?:ProjectInspector|RelevantFilePlanner|ContextBuilder)\b/);
     expect(source).not.toMatch(/\b(?:read_file|exec_command|apply_patch|git_status)\b/);
     expect(source).not.toMatch(
       /\b(?:node:fs|node:path|node:child_process|process\.env|Date\.now|Math\.random)\b/,
     );
-    expect(source).not.toMatch(/\b(?:workspace|cwd|permissionProfile|approvalPolicy)\b/);
+
+    /**
+     * Phase 4A added the general Tool framework to this package, and it carries exactly one of the
+     * host words below for one reason: `ToolExecutionEnvironment` is the durable execution locator,
+     * whose fields are the Workspace and Runtime *references* a Run already declared. It is a
+     * locator, not a capability — the Agent Tool Layer never reads a path or opens a file from it.
+     *
+     * The exception is therefore bounded to the single declaration rather than waived: any other
+     * kernel file that reaches for the word, or any permission/approval vocabulary at all, still
+     * fails this guard.
+     */
+    const hostVocabulary = /\b(?:workspace|cwd|permissionProfile|approvalPolicy)\b/;
+    const offenders = agentKernelFiles()
+      .filter((file) => hostVocabulary.test(executableSource(file)))
+      .map((file) => relative(root, file).replaceAll("\\", "/"));
+    expect(offenders).toEqual(["packages/agent/src/tools/types/execution-environment.ts"]);
+    expect(source).not.toMatch(/\b(?:cwd|permissionProfile|approvalPolicy)\b/);
   });
 
   it("keeps the AgentLoop free of a lifecycle implementation", () => {
