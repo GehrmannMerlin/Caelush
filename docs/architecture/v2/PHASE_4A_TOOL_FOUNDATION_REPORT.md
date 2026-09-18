@@ -458,8 +458,10 @@ no unrelated file was reformatted.
 ```text
 browser smoke                 not run; it exercises the Web session fixture, and 4A changes no UI,
                               route or SSE contract
-clean-checkout reproduction   performed after the push (§19), not before
 whole-repository format:check not a pass, for the recorded CRLF reason; the changed-file check passes
+full suite in the clean clone  not run; the clean environment reported no new problem and the seven
+                              key suites in it passed. The whole suite was run twice on the working
+                              checkout instead (453/453 files, 2659 passed, 5 skipped)
 ```
 
 ---
@@ -469,12 +471,50 @@ whole-repository format:check not a pass, for the recorded CRLF reason; the chan
 ```text
 base                    b96e25ed90b289b36123de8f048506318bc28e5d
 branch                  deepseek/architecture-v2-phase-4a-tool-contract-registry-preparation
+final SHA                f5850101e3ebb352df24f8419a9f015dbbe91482
 remote                  https://github.com/GehrmannMerlin/Caelush.git
+remote branch           refs/heads/deepseek/architecture-v2-phase-4a-tool-contract-registry-preparation
+remote SHA              f5850101e3ebb352df24f8419a9f015dbbe91482
+remote parity           verified by `git ls-remote origin <branch>`: identical to local HEAD
+tracking                origin/deepseek/architecture-v2-phase-4a-tool-contract-registry-preparation
+working tree            clean
 ```
 
-Commits, remote parity and working-tree state are recorded in the section appended below after the
-push. No merge, no force push, no rewrite of any Phase 1–3 commit, and no automatic merge into
-`master`/`main`.
+The four commits, in order:
+
+```text
+219198d  feat(agent): own the executable Tool contract, registry, schema and call preparation
+1d24b09  refactor(tools): delegate registry, schema and preparation to the canonical implementation
+52ea4e2  test(architecture): guard the Phase 4A Tool boundaries and prove the delegation
+f585010  docs(architecture): record the Phase 4 round plan and the Phase 4A contract map
+```
+
+No merge, no force push, no rewrite of any Phase 1–3 commit, and no automatic merge into
+`master`/`main`. Nothing was deployed, released or published.
+
+### 19.1 Clean-checkout verification
+
+Reproduced in an isolated directory, cloned from the remote at
+`f5850101e3ebb352df24f8419a9f015dbbe91482`:
+
+```text
+git clone --branch deepseek/architecture-v2-phase-4a-... --single-branch    exit 0
+pnpm install --frozen-lockfile                                              exit 0
+pnpm build                                                                  exit 0
+pnpm check:architecture:ci                                                  exit 0
+  boundaries PASS · verify PASS · readiness READY · 31 baseline entries · 0 new · 0 stale
+7 key test files (84 tests)                                                 passed
+```
+
+The clean environment reported no new problem, so the whole suite was not re-run there.
+
+### 19.2 Environment adaptation
+
+As in Phase 3F, this host reaches GitHub through a local HTTP proxy that git does not read by
+default, so the proxy was passed per command rather than written into the repository or the user's git
+configuration. No credential appears in any command, log or document. `rg` is installed but is not on
+this shell's `PATH`, so suites that shell out to the fixed ripgrep backend were run with its directory
+prepended for that command.
 
 ---
 
