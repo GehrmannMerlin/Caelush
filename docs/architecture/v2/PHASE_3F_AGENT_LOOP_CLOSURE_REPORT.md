@@ -340,10 +340,58 @@ One behaviour is _newly covered_ rather than changed: recovery of a `WAITING_RES
 
 ## 17. Git delivery
 
-See the closing section of the branch report in the round output; the base SHA is
-`bbc2ebd007527aace7535b80831f914c67fde140` and the branch is
-`deepseek/architecture-v2-phase-3f-agent-loop-closure`. Remote parity and the clean-checkout
-verification are recorded in the round report.
+```text
+base                    bbc2ebd007527aace7535b80831f914c67fde140
+branch                  deepseek/architecture-v2-phase-3f-agent-loop-closure
+commits on the base     4
+code head               94384603c7d5e27c0d1d8581311120f9a590d402
+remote                  https://github.com/GehrmannMerlin/Caelush.git
+remote parity           refs/heads/deepseek/architecture-v2-phase-3f-agent-loop-closure
+                          = 94384603c7d5e27c0d1d8581311120f9a590d402
+working tree            clean
+tracking                origin/deepseek/architecture-v2-phase-3f-agent-loop-closure
+```
+
+The four commits, in order:
+
+```text
+f2909be  refactor(core): converge the Run Layer's completion composition
+e8beef8  test: prove the general chain standalone and cover the Phase 3F boundaries
+0f7af21  fix(scripts): compose the browser smoke through the supported provider seam
+9438460  docs(architecture): record the Phase 3 Agent Loop closure
+```
+
+A fifth, documentation-only commit records this section; it changes no source file. No merge, no force
+push, no rewrite of any Phase 3A–3E commit.
+
+### 17.1 Clean-checkout verification
+
+Verified in an independent directory, cloned from the remote at
+`94384603c7d5e27c0d1d8581311120f9a590d402`:
+
+```text
+git clone --branch deepseek/architecture-v2-phase-3f-agent-loop-closure --single-branch
+pnpm install --frozen-lockfile             exit 0
+pnpm build                                 exit 0
+pnpm typecheck                             exit 0
+pnpm check:architecture:ci                 exit 0 — readiness READY, 0 private imports
+4 key test files (25 tests)                passed
+pnpm build && web-session-browser-smoke    exit 0
+```
+
+The clean environment reported no new problem, so the full suite was not re-run there.
+
+### 17.2 Environment adaptation
+
+The host reaches GitHub through a local HTTP proxy (`127.0.0.1:7890`, configured in the Windows
+Internet Settings) that git does not read by default; a direct `git push` fails with
+`Could not connect to server`. The proxy was passed per command
+(`git -c http.proxy=… -c https.proxy=…`) rather than written into the repository or the user's git
+configuration, so no persistent machine change was made. No credential appears in any command, log or
+document.
+
+`rg` was absent from the host, which is why the Phase 3E baseline recorded two `RIPGREP_UNAVAILABLE`
+failures. ripgrep 15.2.0 was installed through `winget`; both tests now pass rather than being skipped.
 
 ---
 
