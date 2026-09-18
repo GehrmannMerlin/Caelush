@@ -13,9 +13,29 @@
  * depend back on it. Those boundaries are enforced by
  * `pnpm check:architecture`.
  *
- * Phase 1A creates the package identity and the build/dependency boundary only.
- * The Daemon composition, Coding Tools, Coding Verification, and Workspace
- * Context have not been moved here. The real coding business migrates in a later
- * phase.
+ * Phase 1A creates the package identity and the build/dependency boundary. Phase 4A lands the first
+ * real Coding responsibility here: the Coding Tool overlay (`CodingToolDefinition`,
+ * `CodingToolCatalog`) that sits on top of the general Agent Tool framework. The nine built-in
+ * Coding Tools, their Operations interfaces and their Metadata/effects/presentation implementations
+ * still migrate in later Tool System rounds.
  */
-export {};
+export {
+  CodingToolCatalogBuilder,
+  CodingToolCatalogError,
+  CODING_TOOL_CATALOG_ERROR_REASONS,
+  createCodingToolCatalog,
+  createLegacyNumericArgumentNormalization,
+  DEFAULT_MAX_CODING_TOOLS,
+  normalizeSchemaDeclaredNumericStrings,
+  normalizeToolArgumentsForCompatibility,
+} from "./tools/index.js";
+export type {
+  CodingToolCatalog,
+  CodingToolCatalogBuilderOptions,
+  CodingToolCatalogErrorReason,
+  CodingToolDefinition,
+  CodingToolEffectProjector,
+  CodingToolRegistration,
+  CodingToolSecurityFactsProjector,
+  CodingToolSecurityMetadata,
+} from "./tools/index.js";

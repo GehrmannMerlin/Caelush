@@ -81,6 +81,9 @@ importers:
       '@caelush/ai':
         specifier: workspace:*
         version: link:../../packages/ai
+      '@caelush/coding-agent':
+        specifier: workspace:*
+        version: link:../../packages/coding-agent
       '@caelush/context':
         specifier: workspace:*
         version: link:../../packages/context
@@ -182,6 +185,9 @@ importers:
       '@caelush/protocol':
         specifier: workspace:*
         version: link:../protocol
+      ajv:
+        specifier: 8.20.0
+        version: 8.20.0
 
   packages/ai:
     dependencies:
@@ -201,7 +207,20 @@ importers:
         specifier: workspace:*
         version: link:../protocol
 
-  packages/coding-agent: {}
+  packages/coding-agent:
+    dependencies:
+      '@caelush/agent':
+        specifier: workspace:*
+        version: link:../agent
+      '@caelush/ai':
+        specifier: workspace:*
+        version: link:../ai
+      '@caelush/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@caelush/runtime':
+        specifier: workspace:*
+        version: link:../runtime
 
   packages/context:
     dependencies:
@@ -344,6 +363,9 @@ importers:
 
   packages/tools:
     dependencies:
+      '@caelush/agent':
+        specifier: workspace:*
+        version: link:../agent
       '@caelush/protocol':
         specifier: workspace:*
         version: link:../protocol
@@ -353,6 +375,10 @@ importers:
       ajv:
         specifier: 8.20.0
         version: 8.20.0
+    devDependencies:
+      '@caelush/coding-agent':
+        specifier: workspace:*
+        version: link:../coding-agent
 
   packages/verification:
     dependencies:

@@ -12,5 +12,11 @@
   "scripts": {
     "build": "tsc --build",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@caelush/agent": "workspace:*",
+    "@caelush/ai": "workspace:*",
+    "@caelush/protocol": "workspace:*",
+    "@caelush/runtime": "workspace:*"
   }
 }

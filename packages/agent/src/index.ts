@@ -329,3 +329,85 @@ export type {
   AgentTransientToolCallDelta,
   ModelTurnStreamSink,
 } from "./loop/events/transient-stream-event.js";
+
+/*
+ * The general Agent Tool framework. Phase 4A moved the executable Tool contract, the schema runtime
+ * and policy, the immutable registry and call preparation here; the Coding overlay consumes them.
+ *
+ * `AgentToolResult` is deliberately a *shim* name, because the frozen Phase 3 Tool turn contract
+ * already owns that export. The two types are different things and both names are frozen:
+ *
+ *   run/ports/tool-turn.ts   AgentToolResult          the model-visible result of a Tool turn
+ *                                                     (externalCallId, toolName, content, isError)
+ *   tools/types/tool-result  AgentToolResult<TDetails> the raw result of one Tool execution
+ *                                                     (content, details, isError)
+ *
+ * The Phase 3 declaration keeps its name and its fields. The Tool System's own declaration stays
+ * inside `./tools/`, is what `AgentTool.execute()` returns, and is published here under an explicit
+ * alias. That alias is an export mapping, not a third DTO: one structure, one declaration.
+ */
+export {
+  AgentToolRegistrationError,
+  AgentToolRegistryStateError,
+  AgentToolSchemaCompileError,
+  canonicalJsonString,
+  canonicalizeJsonValue,
+  cloneJsonValue,
+  containsForbiddenSchemaFeature,
+  createToolCallPreparer,
+  DEFAULT_MAX_EXTERNAL_CALL_ID_BYTES,
+  DEFAULT_MAX_INVOCATION_ARGS_BYTES,
+  DEFAULT_TOOL_EXECUTION_MODE,
+  DEFAULT_TOOL_REGISTRY_OPTIONS,
+  deepFreezeJson,
+  DefaultAgentToolRegistryBuilder,
+  DISCARDING_TOOL_EXECUTION_UPDATE_SINK,
+  ImmutableAgentToolRegistry,
+  isJsonObject,
+  isToolExecutionMode,
+  jsonUtf8ByteLength,
+  normalizeInstancePath,
+  TOOL_CALL_REJECTION_CODES,
+  TOOL_EXECUTION_MODES,
+  ToolArgumentPreparationError,
+  ToolExecutionInfrastructureError,
+  ToolPreparationInfrastructureError,
+  ToolSchemaRuntime,
+  toolModelSpecByteLength,
+  validateToolRegistryOptions,
+  validateToolSchemaSemantics,
+} from "./tools/index.js";
+export type {
+  AgentTool,
+  AgentToolExecutionInput,
+  AgentToolRegistrationErrorMetadata,
+  AgentToolRegistrationErrorReason,
+  AgentToolRegistry,
+  AgentToolRegistryBuilder,
+  AgentToolSchemaKind,
+  CompiledToolSchema,
+  PreparedToolCall,
+  ResolvedAgentTool,
+  ToolArgumentNormalization,
+  ToolCallPreparationOutcome,
+  ToolCallPreparer,
+  ToolCallPreparerOptions,
+  ToolCallRequest,
+  ToolExecutionEnvironment,
+  ToolExecutionIdentity,
+  ToolExecutionInfrastructurePhase,
+  ToolExecutionMode,
+  ToolExecutionUpdate,
+  ToolExecutionUpdateSink,
+  ToolFailureDisposition,
+  ToolFailureFeedback,
+  ToolInvocationPresentation,
+  ToolModelSpecInput,
+  ToolPresentationPort,
+  ToolRegistryOptions,
+  ToolResultPresentation,
+  ToolSchemaIssue,
+  ToolSchemaValidationResult,
+  ValidatedToolSchemas,
+} from "./tools/index.js";
+export type { AgentToolResult as AgentToolExecutionResult } from "./tools/types/tool-result.js";
