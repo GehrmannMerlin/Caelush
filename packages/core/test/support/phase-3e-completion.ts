@@ -40,6 +40,7 @@ import type {
   RunId,
   SessionId,
   StepId,
+  TimestampMs,
   VerificationCheck,
   VerificationCheckId,
   VerificationEvidence,
@@ -59,11 +60,14 @@ import {
 
 import {
   RunController,
+  createCodingCompletionAssembly,
   createRunCompletionGate,
   type CompletionTaskReviewerPort,
   type DurableAgentEvent,
   type RunAgentExecutionContextFactory,
+  type RunCompletionAssembly,
   type RunCompletionGateDependencies,
+  type VerificationPlannerPort,
   type RunCompletionPersistencePort,
   type RunContinuationCheckpoint,
   type RunExecutionSnapshot,
@@ -300,7 +304,7 @@ export const WORKSPACE_AND_TASK: readonly PlannedCheck[] = [
 export function planDraft(checks: readonly PlannedCheck[]): {
   readonly plannerVersion: string;
   readonly planHash: string;
-  readonly checks: readonly {
+  readonly checks: {
     readonly ordinal: number;
     readonly stage: VerificationCheck["stage"];
     readonly requirement: VerificationCheck["requirement"];
@@ -349,6 +353,8 @@ export type ReviewAnswer =
 export interface StubReviewer extends CompletionTaskReviewerPort {
   /** Every bundle the reviewer was handed, in order. */
   readonly bundles: TaskReviewBundle[];
+  /** The Run each review was attributed to, in call order. */
+  readonly runs: RunId[];
   answerWith: ReviewAnswer | ((bundle: TaskReviewBundle) => ReviewAnswer);
   /** Run before the answer is produced — the hook a test uses to change the world mid-review. */
   onReview?: (bundle: TaskReviewBundle) => void | Promise<void>;
@@ -358,9 +364,11 @@ export function stubReviewer(
   answerWith: ReviewAnswer | ((bundle: TaskReviewBundle) => ReviewAnswer) = { status: "PASSED" },
 ): StubReviewer {
   const bundles: TaskReviewBundle[] = [];
+  const runs: RunId[] = [];
   const state: { answerWith: typeof answerWith } = { answerWith };
   const stub: StubReviewer = {
     bundles,
+    runs,
     get answerWith() {
       return state.answerWith;
     },
@@ -368,6 +376,9 @@ export function stubReviewer(
       state.answerWith = value;
     },
     async review(input) {
+      // The Run the review belongs to is an explicit argument, so recording it is how a test proves a
+      // review was attributed to the Run that asked for it rather than to whichever Run ran first.
+      runs.push(input.run.id);
       bundles.push(input.bundle);
       await stub.onReview?.(input.bundle);
       const answer =
@@ -535,11 +546,41 @@ export interface Phase3EHarnessOptions {
     boolean | ((port: RunCompletionPersistencePort) => RunCompletionPersistencePort);
   /** Compose the verification execution store; `false` models a host that composed it out. */
   readonly verificationStore?: boolean;
+  /**
+   * Which completion composition the Run Layer is built with.
+   *
+   * ```text
+   * LEGACY_FLAT         the flat Phase 3E verification* fields (the default, so every existing test
+   *                     keeps exercising the declared compatibility path)
+   * CANONICAL_ASSEMBLY  the converged `completion:` port, and no flat field at all
+   * ```
+   *
+   * Both must reach the *same* assembly implementation; `CANONICAL_ASSEMBLY` is what proves the
+   * production-shaped path works on its own rather than only through the compatibility projection.
+   */
+  readonly composition?: "LEGACY_FLAT" | "CANONICAL_ASSEMBLY";
+  /**
+   * The clock the Run Layer *and* the completion assembly read.
+   *
+   * Supplying one is what lets a test move the Run past its deadline while a completion evaluation is
+   * in flight: the deadline authority and the gate must be looking at the same time, or the test would
+   * be measuring a disagreement it created itself.
+   */
+  readonly clock?: { now(): TimestampMs };
+  /** Counts every completion commit the Run Layer asks the persistence port for. */
+  readonly commits?: CompletionCommitCounter;
   readonly onVerifiedCompletion?: (input: {
     readonly run: AgentRun;
     readonly finalResult: unknown;
   }) => void;
   readonly extra?: Record<string, unknown>;
+}
+
+/** How many times each completion commit was attempted. CAS conflicts are attempts too. */
+export interface CompletionCommitCounter {
+  candidateBoundaries: number;
+  verifiedCompletions: number;
+  plansLoaded: number;
 }
 
 let clockTick = 100;
@@ -587,8 +628,12 @@ export function harness3e(options: Phase3EHarnessOptions): Phase3EHarness {
   };
 
   const basePersistence: RunCompletionPersistencePort = {
-    loadVerificationPlan: (runId, planId) => store.loadVerificationPlan(runId, planId),
+    loadVerificationPlan: (runId, planId) => {
+      if (options.commits !== undefined) options.commits.plansLoaded += 1;
+      return store.loadVerificationPlan(runId, planId);
+    },
     commitCandidateBoundary: (command) => {
+      if (options.commits !== undefined) options.commits.candidateBoundaries += 1;
       // Production writes the plan row and the Run continuation in one SQLite transaction, and the
       // verification execution store reads the plan back from that same database. Two in-memory
       // objects have to be told the same thing explicitly: the boundary opens the plan, and the
@@ -596,7 +641,10 @@ export function harness3e(options: Phase3EHarnessOptions): Phase3EHarness {
       verification.seed(command.verificationPlan);
       return store.commitCandidateBoundary(command);
     },
-    commitVerifiedCompletion: (command) => store.commitVerifiedCompletion(command),
+    commitVerifiedCompletion: (command) => {
+      if (options.commits !== undefined) options.commits.verifiedCompletions += 1;
+      return store.commitVerifiedCompletion(command);
+    },
   };
   const persistence =
     options.persistence === false
@@ -605,41 +653,83 @@ export function harness3e(options: Phase3EHarnessOptions): Phase3EHarness {
         ? options.persistence(basePersistence)
         : basePersistence;
 
+  /**
+   * The same host facts, grouped the way a production composition groups them.
+   *
+   * It is deliberately built from the harness's own fixtures rather than from the flat fields, so a
+   * canonical-composition test cannot accidentally pass because the compatibility path supplied
+   * something the assembly would not have had.
+   */
+  const clock = options.clock ?? { now: () => createTimestampMs(++clockTick) };
+  const resolver = {
+    resolve: async () => ({ baseSystemPrompt: "base", contextLimits: { maxInputTokens: 1000 } }),
+  };
+  const planner: VerificationPlannerPort = {
+    plan: (input: VerificationPlanningInput) => {
+      plannerInputs.push(input);
+      return { ...planDraft(checks), runId: input.runId, sourceStepId: input.sourceStepId };
+    },
+  };
+  const assemblyFacts = {
+    clock,
+    configResolver: resolver,
+    planner,
+    planIdFactory: createVerificationPlanId,
+    checkIdFactory: createVerificationCheckId,
+    evidenceIdFactory: createVerificationEvidenceId,
+    runner: projectRunner,
+    workspace,
+    git,
+    reviewer,
+  } satisfies Parameters<typeof createCodingCompletionAssembly>[0];
+
+  const canonical = options.composition === "CANONICAL_ASSEMBLY";
+  const completionPort: RunCompletionAssembly | undefined = canonical
+    ? createCodingCompletionAssembly({
+        ...assemblyFacts,
+        planCount: options.planCount ?? (async (runId: RunId) => verification.countPlans(runId)),
+        ...(options.repairPolicy === undefined ? {} : { repairPolicy: options.repairPolicy }),
+        ...(options.verificationStore === false
+          ? {}
+          : { executionStore: verification, executionRecovery: verification }),
+      })
+    : undefined;
+
   const controller = new RunController({
     agentExecution: execution,
     executionStore: store,
     ...(persistence === undefined ? {} : { completionStore: persistence }),
+    ...(completionPort === undefined ? {} : { completion: completionPort }),
     events: {
       notifyCommitted: (events: readonly DurableAgentEvent[]) => notifications.push(...events),
     },
     configResolver: {
       resolve: async () => ({ baseSystemPrompt: "base", contextLimits: { maxInputTokens: 1000 } }),
     },
-    clock: { now: () => createTimestampMs(++clockTick) },
+    clock,
     eventIdFactory: { create: createEventId },
-    verificationPlanner: {
-      plan: (input: VerificationPlanningInput) => {
-        plannerInputs.push(input);
-        return { ...planDraft(checks), runId: input.runId, sourceStepId: input.sourceStepId };
-      },
-    },
-    verificationPlanIdFactory: { create: createVerificationPlanId },
-    verificationCheckIdFactory: { create: createVerificationCheckId },
-    verificationEvidenceIdFactory: createVerificationEvidenceId,
-    verificationRunner: projectRunner,
-    verificationWorkspace: workspace,
-    verificationGit: git,
-    verificationReviewer: reviewer,
-    verificationPlanCount:
-      options.planCount ?? (async (runId: RunId) => verification.countPlans(runId)),
-    ...(options.repairPolicy === undefined
-      ? {}
-      : { verificationRepairPolicy: options.repairPolicy }),
-    ...(options.verificationStore === false
+    ...(canonical
       ? {}
       : {
-          verificationExecutionStore: verification,
-          verificationExecutionRecovery: verification,
+          verificationPlanner: planner,
+          verificationPlanIdFactory: { create: createVerificationPlanId },
+          verificationCheckIdFactory: { create: createVerificationCheckId },
+          verificationEvidenceIdFactory: createVerificationEvidenceId,
+          verificationRunner: projectRunner,
+          verificationWorkspace: workspace,
+          verificationGit: git,
+          verificationReviewer: reviewer,
+          verificationPlanCount:
+            options.planCount ?? (async (runId: RunId) => verification.countPlans(runId)),
+          ...(options.repairPolicy === undefined
+            ? {}
+            : { verificationRepairPolicy: options.repairPolicy }),
+          ...(options.verificationStore === false
+            ? {}
+            : {
+                verificationExecutionStore: verification,
+                verificationExecutionRecovery: verification,
+              }),
         }),
     onVerifiedCompletion: (input: { run: AgentRun; finalResult: unknown }) => {
       verified.push({ run: input.run, finalResult: input.finalResult });

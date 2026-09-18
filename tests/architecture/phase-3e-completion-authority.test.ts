@@ -91,7 +91,7 @@ describe("Phase 3E completion authority boundaries", () => {
       at(controller, "private async settleCompletionEffect("),
     );
     expect(execute).toContain("createRunExecutionDriver({");
-    expect(execute).toContain("completionGate: resolved.completion.gate");
+    expect(execute).toContain("completionGate: resolved.gate");
     // A completion evaluation binds misroute guards for the two effects it must never drive.
     expect(execute).toContain("agentLoop: MISROUTED_AGENT_LOOP");
     expect(execute).toContain("toolTurns: MISROUTED_TOOL_TURN_COORDINATOR");
@@ -135,9 +135,26 @@ describe("Phase 3E completion authority boundaries", () => {
       expect(controller, `run-controller must not call ${forbidden}`).not.toContain(forbidden);
     }
 
-    // The Run Layer knows the completion gate by exactly two names: the factory and the decision type.
-    expect(controller).toContain("createRunCompletionGate(dependencies)");
-    const factories = controller.match(/createRunCompletionGate\(/g) ?? [];
+    // The Run Layer knows the completion gate by exactly one name: the port it asks for an
+    // evaluation. Phase 3F moved gate *construction* into the assembly, so the Run Layer building a
+    // gate again — anywhere, for any reason — would mean it had gone back to composing verification.
+    expect(controller).not.toContain("createRunCompletionGate(");
+    expect(controller).not.toContain("createRunCandidateBoundaryPlanner(");
+    expect(controller).toContain("this.completionAssembly");
+    expect(controller).toContain("assembly.openEvaluation({");
+    expect(controller).toContain("assembly.planCandidateBoundary({");
+    // And it reaches the verification subsystem by no name at all any more.
+    expect(controller).not.toContain("@caelush/verification");
+
+    // The factory is *called* from exactly one production module — the assembly — and exactly once.
+    // The declaring module only exports it, so it is excluded from the caller set.
+    const gateCreators = productionSources()
+      .filter((file) => file !== "packages/core/src/run-completion-gate.ts")
+      .filter((file) => executable(file).includes("createRunCompletionGate("));
+    expect(gateCreators).toEqual(["packages/core/src/run-completion-assembly.ts"]);
+    const factories = executable("packages/core/src/run-completion-assembly.ts").match(
+      /createRunCompletionGate\(/g,
+    );
     expect(factories).toHaveLength(1);
   });
 
@@ -392,23 +409,64 @@ describe("Phase 3E completion authority boundaries", () => {
   it("keeps the daemon the composition root for the completion gate", () => {
     const daemon = executable("apps/daemon/src/daemon-composition.ts");
 
-    // The daemon supplies the run-scoped host facts the frozen request deliberately omits.
+    // The daemon supplies the run-scoped host facts the frozen request deliberately omits, and it does
+    // so by composing the one assembly the Run Layer names. Phase 3F moved these keys under
+    // `completion:`; every host fact the gate needs is still supplied here and nowhere else.
     for (const port of [
-      "verificationWorkspace",
-      "verificationGit",
-      "verificationModelTurns",
-      "verificationExecutionStore",
-      "verificationExecutionRecovery",
-      "completionStore",
-      "verificationEvidenceIdFactory",
+      "createCodingCompletionAssembly({",
+      "workspace: verificationWorkspace",
+      "git: verificationGit",
+      "modelTurns: verificationModelTurns",
+      "executionStore: options.storage.verificationExecution",
+      "executionRecovery: options.storage.verificationExecution",
+      "completionStore: options.storage.execution",
+      "evidenceIdFactory: createVerificationEvidenceId",
+      "runner: new VerificationRunner()",
+      "resolverRegistry: new ProjectCheckResolverRegistry()",
     ]) {
       expect(daemon, `the daemon must compose ${port}`).toContain(port);
     }
-    // The reviewer is *built by the Run Layer* out of the model turn authority the daemon supplies,
-    // so a host that composes one port gets the whole review without composing a second one.
+    // It selects the canonical port, so no production host selects the flat compatibility group.
+    expect(daemon).toContain("completion: createCodingCompletionAssembly({");
+    for (const legacyField of [
+      "verificationPlanner:",
+      "verificationRunner:",
+      "verificationWorkspace:",
+      "verificationGit:",
+      "verificationSecurity:",
+      "verificationResolverRegistry:",
+      "verificationEvidenceIdFactory:",
+      "verificationExecutionStore:",
+      "verificationExecutionRecovery:",
+    ]) {
+      expect(daemon, `the daemon must not select the legacy field ${legacyField}`).not.toContain(
+        legacyField,
+      );
+    }
+    // The reviewer is *built by the completion assembly* out of the model turn authority the daemon
+    // supplies, so a host that composes one port gets the whole review without composing a second one.
     expect(daemon).not.toContain("new TaskAcceptanceReviewer(");
-    expect(controllerSource()).toContain("new TaskAcceptanceReviewer({");
-    expect(controllerSource()).toContain("modelTurns: deps.verificationModelTurns,");
+    expect(executable("packages/core/src/run-completion-assembly.ts")).toContain(
+      "new TaskAcceptanceReviewer({",
+    );
+    expect(executable("packages/core/src/run-completion-assembly.ts")).toContain(
+      "modelTurns: dependencies.modelTurns,",
+    );
+    // The Run Layer must not have grown that reviewer back, nor any of the flat host facts.
+    for (const forbidden of [
+      "new TaskAcceptanceReviewer(",
+      "dependencies.verificationPlanner",
+      "dependencies.verificationRunner",
+      "dependencies.verificationWorkspace",
+      "dependencies.verificationGit",
+      "dependencies.verificationSecurity",
+      "dependencies.verificationModelTurns",
+      "dependencies.verificationResolverRegistry",
+    ]) {
+      expect(controllerSource(), `run-controller must not read ${forbidden}`).not.toContain(
+        forbidden,
+      );
+    }
     // It composes the completion persistence port the Run Layer names, and the plan is written by the
     // boundary rather than by the daemon.
     expect(daemon).toContain("completionStore: options.storage.execution");
@@ -433,9 +491,13 @@ describe("Phase 3E completion authority boundaries", () => {
     );
     expect(creations).toEqual([]);
 
-    // Exactly two production files read an injected `modelTurns`: the frozen Agent loop (the legacy
-    // port) and the verification reviewer (the explicit-identity client). They are different ports
-    // with the same field name, and that is the whole point of the split.
+    // Exactly three production files read an injected `modelTurns`, and they are three different ports
+    // that happen to share a field name — which is the whole point of the split:
+    //   the frozen Agent loop        the legacy per-turn port
+    //   the reviewer                 the explicit-identity client
+    //   the completion assembly      the composer that builds the reviewer from the client
+    // Phase 3F moved the reviewer's *construction* to the assembly; it did not add a fourth reader and
+    // it did not let the Run Layer build one.
     const readers = productionSources().filter(
       (file) =>
         /\bdependencies\.modelTurns\b/.test(executable(file)) &&
@@ -443,8 +505,10 @@ describe("Phase 3E completion authority boundaries", () => {
     );
     expect(readers).toEqual([
       "packages/core/src/agent-loop.ts",
+      "packages/core/src/run-completion-assembly.ts",
       "packages/core/src/task-acceptance-reviewer.ts",
     ]);
+    expect(controllerSource()).not.toMatch(/\bmodelTurns\b/);
 
     // The reviewer's port is the explicit-identity client, and it never touches the legacy facade.
     const reviewer = executable("packages/core/src/task-acceptance-reviewer.ts");

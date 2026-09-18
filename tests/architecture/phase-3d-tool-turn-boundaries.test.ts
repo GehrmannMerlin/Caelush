@@ -136,8 +136,11 @@ describe("Phase 3D durable Tool turn driver boundaries", () => {
     // The Tool effect's own composition binds the real Tool coordinator and a misrouted completion
     // gate, so a Tool batch can never evaluate completion.
     expect(controller).toContain("toolTurns: turnDriver.coordinator");
-    // The completion effect binds the real gate, with both other ports misrouted.
-    expect(controller).toContain("completionGate: resolved.completion.gate");
+    // The completion effect binds the real gate, with both other ports misrouted. Phase 3F moved the
+    // gate *construction* out of the Run Layer, so what the Run Layer binds is the gate the resolved
+    // completion evaluation carries — still a real gate, still driven by this same frozen driver.
+    expect(controller).toContain("completionGate: resolved.gate");
+    expect(controller).not.toContain("createRunCompletionGate(");
   });
 
   it("removes every inline Tool decision from the RunController main loop", () => {

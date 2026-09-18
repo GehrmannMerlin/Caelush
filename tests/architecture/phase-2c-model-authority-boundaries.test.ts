@@ -308,6 +308,9 @@ describe("Phase 2C package edges", () => {
         // Phase 3C restored the frozen completion contract: the four decisions are discriminated
         // by `kind`, so the closed-set constant is named for the discriminant it enumerates.
         "COMPLETION_GATE_KINDS",
+        // Phase 3F added the general gate implementation the frozen contract always named: a host with
+        // no verification subsystem composes it, and a coding host must never.
+        "DIRECT_ACCEPT_COMPLETION_GATE_ID",
         "MODEL_TURN_EXECUTION_ERROR_CODES",
         "RETRYABLE_MODEL_TURN_ERROR_CODES",
         "RUNNING_CONTINUATION_TYPES",
@@ -326,6 +329,7 @@ describe("Phase 2C package edges", () => {
         // The frozen decision carries the approved request, so a shared constant cannot express
         // it: the factory replaces the constant at the same single-authority position.
         "allowedModelAdmission",
+        "createDirectAcceptCompletionGate",
         "assertAgentTurnInput",
         "assertAgentTurnRef",
         "assertConversationProtocolIntegrity",

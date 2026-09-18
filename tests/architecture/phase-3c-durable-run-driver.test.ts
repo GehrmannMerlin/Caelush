@@ -700,10 +700,22 @@ describe("Phase 3C Run Layer ownership", () => {
           file !== "packages/agent/src/index.ts" &&
           file !== "packages/core/src/run-agent-deferred-ports.ts" &&
           // The real gate: it declares the coding implementation the frozen driver is driven with.
-          file !== "packages/core/src/run-completion-gate.ts",
+          file !== "packages/core/src/run-completion-gate.ts" &&
+          // Phase 3F: the composition seam that carries the real gate to the driver. It *names* the
+          // frozen port as its own return type; it declares no gate, no policy and no `evaluate()`.
+          file !== "packages/core/src/run-completion-assembly.ts" &&
+          // Phase 3F: the general accept-directly gate. It is an implementation *of* the frozen port
+          // for a host with no verification subsystem — not the coding policy this guard protects, and
+          // never selected by a coding composition.
+          file !== "packages/agent/src/run/gates/direct-accept-completion-gate.ts",
       )
       .filter((file) => /\bCompletionGate\b(?![A-Za-z])/.test(identifiers(file)));
     expect(carriers).toEqual([]);
+
+    // The seam is a carrier, not a second policy: it holds no gate id and evaluates nothing itself.
+    const assembly = executable("packages/core/src/run-completion-assembly.ts");
+    expect(assembly).not.toContain("caelush.coding-verification-completion-gate.v1");
+    expect(assembly).not.toMatch(/\bevaluate\s*[(:]/);
 
     // The misroute guard is fail-closed: it never returns a decision.
     const deferred = read("packages/core/src/run-agent-deferred-ports.ts");
