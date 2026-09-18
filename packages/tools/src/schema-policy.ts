@@ -1,110 +1,82 @@
-import { ToolDefinitionSchema, type ToolDefinition, type ToolName } from "@caelush/protocol";
-import { canonicalJsonString, jsonUtf8ByteLength } from "./json-canonical.js";
-import { ToolRegistrationError } from "./errors.js";
-import { validateToolRegistryOptions, type ToolRegistryOptions } from "./options.js";
-import type { CompiledToolSchema, ToolSchemaRuntime } from "./schema-runtime.js";
+import type { ToolDefinition } from "@caelush/protocol";
+import {
+  AgentToolSchemaCompileError,
+  AgentToolRegistrationError,
+  AgentToolRegistryStateError,
+  validateToolSchemaSemantics,
+  type CompiledToolSchema,
+  type ToolRegistryOptions as CanonicalToolRegistryOptions,
+  type ToolSchemaRuntime,
+} from "@caelush/agent";
+
+import { toCanonicalToolRegistryOptions, type ToolRegistryOptions } from "./options.js";
+import { throwLegacyRegistrationError } from "./tool-system-bridge.js";
+
+export type {
+  CompiledToolSchema,
+  ToolSchemaIssue,
+  ToolSchemaValidationResult,
+} from "@caelush/agent";
+export { ToolSchemaRuntime, containsForbiddenSchemaFeature } from "@caelush/agent";
 
 export interface ValidatedToolSchemas {
   readonly input: CompiledToolSchema;
   readonly output: CompiledToolSchema;
 }
 
-function containsUnsupportedFeature(value: unknown): boolean {
-  if (Array.isArray(value)) return value.some(containsUnsupportedFeature);
-  if (typeof value !== "object" || value === null) return false;
+const CANONICAL_REGISTRATION_ERRORS = [
+  AgentToolRegistrationError,
+  AgentToolSchemaCompileError,
+  AgentToolRegistryStateError,
+] as const;
 
-  for (const [key, nestedValue] of Object.entries(value)) {
-    if (key === "$async" && nestedValue === true) return true;
-    if (key === "$ref" && typeof nestedValue === "string" && !nestedValue.startsWith("#")) {
-      return true;
-    }
-    if (containsUnsupportedFeature(nestedValue)) return true;
-  }
-  return false;
+/** True when a caller supplied the legacy result-schema budget name instead of the canonical one. */
+function hasLegacyResultBudget(
+  options: ToolRegistryOptions | CanonicalToolRegistryOptions,
+): options is ToolRegistryOptions {
+  return !("maxResultSchemaBytes" in options);
 }
 
-function throwDefinitionError(
-  reason: ConstructorParameters<typeof ToolRegistrationError>[1]["reason"],
-  toolName?: ToolName,
-  schemaKind?: "input" | "output",
-): never {
-  const subject = toolName === undefined ? "Tool definition" : `Tool "${toolName}"`;
-  const metadata = { reason } as {
-    reason: ConstructorParameters<typeof ToolRegistrationError>[1]["reason"];
-    toolName?: ToolName;
-    schemaKind?: "input" | "output";
-  };
-  if (toolName !== undefined) metadata.toolName = toolName;
-  if (schemaKind !== undefined) metadata.schemaKind = schemaKind;
-  throw new ToolRegistrationError(`${subject} is invalid (${reason}).`, metadata);
-}
-
-function compileSchema(
-  schema: ToolDefinition["inputSchema"],
-  kind: "input" | "output",
-  definition: ToolDefinition,
-  maxBytes: number,
-  runtime: ToolSchemaRuntime,
-): CompiledToolSchema {
-  const reasonPrefix = kind === "input" ? "INPUT_SCHEMA" : "OUTPUT_SCHEMA";
-  if (schema.type !== "object") {
-    throwDefinitionError(`${reasonPrefix}_NOT_OBJECT`, definition.name, kind);
-  }
-  if (schema.additionalProperties !== false) {
-    throwDefinitionError(`${reasonPrefix}_ADDITIONAL_PROPERTIES_NOT_FALSE`, definition.name, kind);
-  }
-  if (containsUnsupportedFeature(schema)) {
-    throwDefinitionError(
-      kind === "input" ? "INVALID_INPUT_SCHEMA" : "INVALID_OUTPUT_SCHEMA",
-      definition.name,
-      kind,
-    );
-  }
-  if (jsonUtf8ByteLength(canonicalJsonString(schema)) > maxBytes) {
-    throwDefinitionError("TOOL_SCHEMA_TOO_LARGE", definition.name, kind);
-  }
-
-  try {
-    return runtime.compile(schema);
-  } catch {
-    throwDefinitionError(
-      kind === "input" ? "INVALID_INPUT_SCHEMA" : "INVALID_OUTPUT_SCHEMA",
-      definition.name,
-      kind,
-    );
-  }
-}
-
+/**
+ * The legacy semantic validation entry point, delegating to the canonical schema policy.
+ *
+ * ```text
+ * legacy ToolDefinition     ──▶  { name, description, inputSchema } + outputSchema
+ *                                ──▶ validateToolSchemaSemantics(...)
+ * legacy ValidatedToolSchemas  ◀──  { input, result }
+ * ```
+ *
+ * The two vocabularies differ in one word: the canonical contract calls the result-details schema
+ * budget `maxResultSchemaBytes`, the legacy option set calls it `maxOutputSchemaBytes`. Both bounds,
+ * both rules and the single AJV policy live in the canonical implementation; this function translates
+ * the outside, never the inside.
+ */
 export function validateToolDefinitionSemantics(
   value: unknown,
-  options: ToolRegistryOptions,
+  options: ToolRegistryOptions | CanonicalToolRegistryOptions,
   runtime: ToolSchemaRuntime,
 ): ValidatedToolSchemas {
-  validateToolRegistryOptions(options);
-  const parsed = ToolDefinitionSchema.safeParse(value);
-  if (!parsed.success) throwDefinitionError("INVALID_DEFINITION");
-  const definition = parsed.data;
-  if (definition.description.trim().length === 0) {
-    throwDefinitionError("EMPTY_DESCRIPTION", definition.name);
-  }
-  if (jsonUtf8ByteLength(definition.description) > options.maxDescriptionBytes) {
-    throwDefinitionError("TOOL_DESCRIPTION_TOO_LARGE", definition.name);
-  }
+  const canonicalOptions = hasLegacyResultBudget(options)
+    ? toCanonicalToolRegistryOptions(options)
+    : options;
+  const definition = value as ToolDefinition;
 
-  return {
-    input: compileSchema(
-      definition.inputSchema,
-      "input",
-      definition,
-      options.maxInputSchemaBytes,
-      runtime,
-    ),
-    output: compileSchema(
+  try {
+    const validated = validateToolSchemaSemantics(
+      {
+        name: definition.name,
+        description: definition.description,
+        inputSchema: definition.inputSchema,
+      },
       definition.outputSchema,
-      "output",
-      definition,
-      options.maxOutputSchemaBytes,
+      canonicalOptions,
       runtime,
-    ),
-  };
+    );
+    return { input: validated.input, output: validated.result };
+  } catch (error) {
+    if (CANONICAL_REGISTRATION_ERRORS.some((kind) => error instanceof kind)) {
+      throwLegacyRegistrationError(error);
+    }
+    throw error;
+  }
 }

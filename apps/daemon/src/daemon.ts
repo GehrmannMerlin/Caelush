@@ -2,7 +2,12 @@ import { EventBus } from "@caelush/events";
 import type { AIProviderBinding, ApiAdapter, ModelDescriptorSourcePort } from "@caelush/ai";
 import type { ClientModelSelection } from "@caelush/protocol";
 import { openCaelushStorage } from "@caelush/storage";
-import type { ToolCallingDebugEvent } from "@caelush/tools";
+import {
+  createDefaultBuiltinToolRegistrations,
+  ToolRegistryBuilder,
+  type ToolCallingDebugEvent,
+} from "@caelush/tools";
+import { createLocalRuntimeResolver, LocalRuntime } from "@caelush/runtime";
 import { buildDaemonApp } from "./app.js";
 import { assertLoopbackDaemonHost, createDaemonConfig, type DaemonConfig } from "./config.js";
 import { composeDaemon, type DaemonComposition } from "./daemon-composition.js";
@@ -42,6 +47,22 @@ function resolveConfig(options: DaemonOptions): DaemonConfig {
 
 export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle> {
   const config = resolveConfig(options);
+  /**
+   * The default Coding Tool catalog, built before the composition root composes anything.
+   *
+   * The registry itself is a synchronous derivation; the Coding overlay is a separate artifact
+   * produced by `@caelush/coding-agent`, reached through the declared dynamic compatibility import
+   * that lets a legacy package consume a target one. Building it here — once, per daemon start, from
+   * the same registration set the registry is built from — is what makes the catalog and the active
+   * registry correspond instead of drifting.
+   */
+  const defaultToolRegistrations = createDefaultBuiltinToolRegistrations(
+    createLocalRuntimeResolver(new LocalRuntime()),
+  );
+  const defaultToolBuilder = new ToolRegistryBuilder();
+  for (const registration of defaultToolRegistrations) defaultToolBuilder.register(registration);
+  await defaultToolBuilder.buildCodingCatalog();
+
   const storage = await openCaelushStorage({ path: options.databasePath });
   const eventBus = new EventBus(storage.events);
   let composition: DaemonComposition;
@@ -59,6 +80,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         ? {}
         : { adapterOverrides: options.adapterOverrides }),
       ...(options.logger === true ? { logger: safeSupervisorLogger } : {}),
+      toolRegistrations: defaultToolRegistrations,
       ...(process.env.CAELUSH_DEBUG_TOOL_CALLING === "1"
         ? { toolCallingDebugWriter: writeToolCallingDebugEvent }
         : {}),

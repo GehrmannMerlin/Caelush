@@ -3,8 +3,16 @@ export type { ToolExecutionEnvironment } from "./execution-environment.js";
 export { assertToolSecurityContext } from "./security-context.js";
 export type { ToolSecurityContext } from "./security-context.js";
 export type { ToolExecutionResult } from "./execution-result.js";
-export { ToolValidationError, validateToolArguments } from "./argument-validation.js";
-export type { NormalizedArguments } from "./argument-validation.js";
+export {
+  formatValidationMessage,
+  ToolValidationError,
+  toLegacyToolValidationError,
+  validateToolArguments,
+} from "./legacy-argument-validation.js";
+export type {
+  LegacyArgumentValidationTarget,
+  NormalizedArguments,
+} from "./legacy-argument-validation.js";
 export type {
   ToolInvocationPresentation,
   ToolPresentationPort,
@@ -57,7 +65,11 @@ export {
   ToolDispatcherInputError,
   ToolDispatcherInvariantError,
 } from "./dispatcher-errors.js";
-export type { ToolRegistration } from "./registration.js";
+export type {
+  LegacyCodingToolMetadata,
+  ToolRegistration,
+  ToolRegistrationAdapters,
+} from "./registration.js";
 export {
   cloneToolModelGuidance,
   createBuiltinToolModelGuidance,
@@ -96,6 +108,7 @@ export { filterToolRegistryForEnvironment } from "./tool-exposure.js";
 export type { GitToolAvailability, ToolExposureEnvironment } from "./tool-exposure.js";
 export { DEFAULT_TOOL_REGISTRY_OPTIONS, validateToolRegistryOptions } from "./options.js";
 export type { ToolRegistryOptions } from "./options.js";
+export { toCanonicalToolRegistryOptions } from "./options.js";
 export { ToolSchemaRuntime } from "./schema-runtime.js";
 export type {
   CompiledToolSchema,
@@ -130,8 +143,11 @@ export { ToolBatchCoordinator } from "./batch-coordinator.js";
 export {
   canonicalJsonString,
   canonicalizeJsonValue,
+  cloneJsonValue,
+  deepFreezeJson,
   jsonUtf8ByteLength,
 } from "./json-canonical.js";
+export { cloneToolDefinition } from "./legacy-definition.js";
 export type {
   ToolBatchCoordinatorPort,
   ToolBatchBudgetExceededOutcome,

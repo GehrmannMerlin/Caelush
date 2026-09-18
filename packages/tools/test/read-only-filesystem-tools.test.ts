@@ -13,11 +13,11 @@ import { describe, expect, it } from "vitest";
 import { LocalRuntime, createLocalRuntimeResolver } from "@caelush/runtime";
 
 describe("read-only filesystem registrations", () => {
-  it("builds the four tools in the stable model order with strict schemas", () => {
+  it("builds the four tools in the stable model order with strict schemas", async () => {
     const registrations = createReadOnlyFilesystemToolRegistrations(
       createLocalRuntimeResolver(new LocalRuntime()),
     );
-    const registry = registrations
+    const registry = await registrations
       .reduce((builder, registration) => builder.register(registration), new ToolRegistryBuilder())
       .build();
 
@@ -56,7 +56,9 @@ describe("read-only filesystem registrations", () => {
         isError: false,
         details: { ok: true, path: ".", entries: [{ name: "README.md", path: "README.md" }] },
       });
-      await expect(registration.handler.execute(request({ path: workspace }))).resolves.toMatchObject({
+      await expect(
+        registration.handler.execute(request({ path: workspace })),
+      ).resolves.toMatchObject({
         isError: true,
         details: { ok: false, error: "PATH_OUTSIDE_WORKSPACE" },
       });

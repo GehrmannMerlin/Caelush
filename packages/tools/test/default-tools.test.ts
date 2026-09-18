@@ -7,12 +7,12 @@ import {
 } from "../src/index.js";
 
 describe("default built-in catalog", () => {
-  it("uses one injected resolver and the canonical order", () => {
+  it("uses one injected resolver and the canonical order", async () => {
     const resolver = createLocalRuntimeResolver(new LocalRuntime());
     const registrations = createDefaultBuiltinToolRegistrations(resolver);
     const builder = new ToolRegistryBuilder();
     for (const registration of registrations) builder.register(registration);
-    const registry = builder.build();
+    const registry = await builder.build();
     expect(registry.names()).toEqual(DEFAULT_BUILTIN_TOOL_ORDER);
     expect(registry.modelDefinitions().map((definition) => definition.name)).toEqual(
       DEFAULT_BUILTIN_TOOL_ORDER,

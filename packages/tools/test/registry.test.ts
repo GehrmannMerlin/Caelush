@@ -29,14 +29,14 @@ const handler: ToolHandler = {
   },
 };
 
-function createRegistry() {
+async function createRegistry() {
   const registration: ToolRegistration = { definition, handler };
   return new ToolRegistryBuilder().register(registration).build();
 }
 
 describe("ToolRegistry", () => {
-  it("resolves model definitions and compiled validators without executing handlers", () => {
-    const registry = createRegistry();
+  it("resolves model definitions and compiled validators without executing handlers", async () => {
+    const registry = await createRegistry();
     const resolved = registry.resolve("echo_value");
 
     expect(registry.size).toBe(1);
@@ -54,9 +54,9 @@ describe("ToolRegistry", () => {
     }).toThrow();
   });
 
-  it("freezes copied definitions and nested schemas against caller mutation", () => {
+  it("freezes copied definitions and nested schemas against caller mutation", async () => {
     const mutableDefinition = structuredClone(definition);
-    const registry = new ToolRegistryBuilder()
+    const registry = await new ToolRegistryBuilder()
       .register({ definition: mutableDefinition, handler })
       .build();
 
@@ -71,8 +71,8 @@ describe("ToolRegistry", () => {
     expect(Object.isFrozen(registry.modelDefinitions()[0]?.inputSchema)).toBe(true);
   });
 
-  it("does not allow returned definitions to change later snapshots", () => {
-    const registry = createRegistry();
+  it("does not allow returned definitions to change later snapshots", async () => {
+    const registry = await createRegistry();
     const returned = registry.modelDefinitions()[0] as { description: string };
 
     expect(() => {

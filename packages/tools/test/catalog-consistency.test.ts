@@ -26,7 +26,7 @@ function createDefinition(name: string): ToolDefinition {
 }
 
 describe("tool catalog and runtime consistency", () => {
-  it("derives every model definition from a resolvable registration", () => {
+  it("derives every model definition from a resolvable registration", async () => {
     let executionCount = 0;
     const handler: ToolHandler = {
       async execute() {
@@ -38,7 +38,7 @@ describe("tool catalog and runtime consistency", () => {
       { definition: createDefinition("echo_value"), handler },
       { definition: createDefinition("lookup_value"), handler },
     ];
-    const registry = new ToolRegistryBuilder()
+    const registry = await new ToolRegistryBuilder()
       .register(registrations[0]!)
       .register(registrations[1]!)
       .build();

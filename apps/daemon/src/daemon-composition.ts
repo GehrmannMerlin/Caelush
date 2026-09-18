@@ -86,7 +86,9 @@ import {
   ToolRegistryBuilder,
   type ToolCallingDebugEvent,
   type ToolExposureEnvironment,
+  type ToolRegistration,
 } from "@caelush/tools";
+import { createLegacyNumericArgumentNormalization } from "@caelush/coding-agent";
 import {
   createV1SecureToolDispatcher,
   verificationCommandSecurityPort,
@@ -184,6 +186,14 @@ export interface DaemonCompositionOptions {
   readonly wireDiagnosticWriter?: (
     event: import("./providers/model-wire-diagnostic.js").ModelWireDiagnosticEvent,
   ) => void;
+  /**
+   * A registry the caller already built and validated, including its Coding catalog.
+   *
+   * A builder holds the derivation state — which Tool was registered where — that the Coding catalog
+   * alignment needs, so a host that validated the overlay at startup hands the *same* builder here
+   * rather than a bare registry. It is re-validated on this side, so the trust boundary does not move.
+   */
+  readonly toolRegistrations?: readonly ToolRegistration[] | undefined;
   /** Safe Tool-calling diagnostics; the writer receives no raw arguments or output. */
   readonly toolCallingDebugWriter?: (event: ToolCallingDebugEvent) => void;
 }
@@ -338,7 +348,8 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
   const planner = createLocalRelevantFilePlanner();
   const contextBuilder = createDefaultContextBuilder();
   const builtToolRegistry = new ToolRegistryBuilder();
-  for (const registration of createDefaultBuiltinToolRegistrations(runtimeResolver)) {
+  for (const registration of options.toolRegistrations ??
+    createDefaultBuiltinToolRegistrations(runtimeResolver)) {
     builtToolRegistry.register(registration);
   }
   const activeToolRegistry = filterToolRegistryForEnvironment(
@@ -359,6 +370,7 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     rawOutputStore: options.storage.contextArtifacts,
     terminalOutputSanitizer: sanitizeTerminalOutput,
     securityToolNames: activeToolRegistry.names(),
+    normalization: createLegacyNumericArgumentNormalization(),
     ...(options.toolCallingDebugWriter === undefined
       ? {}
       : { debug: { emit: options.toolCallingDebugWriter } }),

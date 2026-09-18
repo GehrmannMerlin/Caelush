@@ -74,6 +74,14 @@ import type { ToolResultSanitizerPort } from "./result-sanitizer.js";
 import { ToolPreflight, type ToolPreflightResult } from "./preflight.js";
 import { ToolFailureMemory } from "./tool-failure-memory.js";
 import type { ToolCallingDebugEvent, ToolCallingDebugPort } from "./debug.js";
+import {
+  createToolCallPreparer,
+  type PreparedToolCall,
+  type ToolArgumentNormalization,
+  type ToolCallPreparationOutcome,
+  type ToolCallPreparer,
+  type ToolCallRequest,
+} from "@caelush/agent";
 
 export interface ToolBudgetBatchPreflight {
   readonly runId: ToolDispatchRequest["runId"];
@@ -114,6 +122,14 @@ export interface ToolDispatcherOptions {
   };
   readonly maxExternalCallIdBytes?: number;
   readonly maxInvocationArgsBytes?: number;
+  /**
+   * Registration-level argument compatibility normalization, supplied by the composition root.
+   *
+   * The canonical Preparer applies it inside preparation, so the numeric-string compatibility the
+   * legacy Tool registrations rely on keeps exactly one implementation and stays out of the general
+   * Agent Tool Layer.
+   */
+  readonly normalization?: ToolArgumentNormalization | undefined;
 }
 
 const ARGUMENT_ERROR_CONTENT = "Correct the tool arguments before calling it again.";
@@ -134,6 +150,7 @@ export class ToolDispatcher {
   private readonly outputPolicy: ToolOutputPolicy;
   private readonly preflight: ToolPreflight;
   private readonly failureMemory: ToolFailureMemory;
+  private readonly canonicalPreparer: ToolCallPreparer;
 
   constructor(private readonly options: ToolDispatcherOptions) {
     this.outputPolicy = options.outputPolicy ?? DEFAULT_TOOL_OUTPUT_POLICY;
@@ -141,6 +158,37 @@ export class ToolDispatcher {
       maxInvocationArgsBytes: options.maxInvocationArgsBytes ?? DEFAULT_MAX_INVOCATION_ARGS_BYTES,
     });
     this.failureMemory = options.failureMemory ?? new ToolFailureMemory();
+    this.canonicalPreparer = createToolCallPreparer(options.registry.agentRegistry(), {
+      maxInvocationArgsBytes: options.maxInvocationArgsBytes ?? DEFAULT_MAX_INVOCATION_ARGS_BYTES,
+      ...(options.normalization === undefined ? {} : { normalization: options.normalization }),
+    });
+  }
+
+  /**
+   * The canonical Tool-call preparation boundary.
+   *
+   * ```text
+   * registry.resolve            canonical resolution
+   * raw argument bound          before any Tool-authored code runs
+   * defensive copy              the caller's payload is never mutated
+   * prepareArguments            the Tool's own declared compatibility normalization
+   * prepared argument bound     a hook cannot enlarge past the boundary
+   * strict input schema         compiled once, at registry build
+   * ```
+   *
+   * Exposed so the production composition can be asserted to reach this implementation: the
+   * preflight facade and the batch budget preflight both route through it, so there is exactly one
+   * resolution, one normalization and one validation for a Tool call in flight.
+   */
+  prepareToolCall(request: ToolCallRequest): ToolCallPreparationOutcome {
+    return this.canonicalPreparer.prepare(request);
+  }
+
+  /** The canonical Tool that resolves a name, for a caller projecting canonical outcomes. */
+  resolveAgentTool(
+    name: import("@caelush/protocol").ToolName,
+  ): PreparedToolCall["resolved"] | undefined {
+    return this.options.registry.agentRegistry().resolve(name);
   }
 
   modelDefinitions(): readonly import("@caelush/protocol").ToolDefinition[] {
@@ -152,7 +200,13 @@ export class ToolDispatcher {
   ): Promise<import("./dispatcher-ports.js").ToolBudgetAdmission | undefined> {
     if (this.options.budget?.admitBatch === undefined) return undefined;
     const executable = input.requests.filter((request) => {
-      return this.preflight.prepare(request.toolName, request.args).kind === "READY";
+      return (
+        this.prepareToolCall({
+          externalCallId: request.externalCallId,
+          toolName: request.toolName,
+          args: request.args,
+        }).kind === "READY"
+      );
     });
     return this.options.budget.admitBatch({
       runId: input.runId,

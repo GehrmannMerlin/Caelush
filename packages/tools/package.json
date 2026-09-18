@@ -14,8 +14,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@caelush/runtime": "workspace:*",
+    "@caelush/agent": "workspace:*",
     "@caelush/protocol": "workspace:*",
+    "@caelush/runtime": "workspace:*",
     "ajv": "8.20.0"
+  },
+  "devDependencies": {
+    "@caelush/coding-agent": "workspace:*"
   }
 }

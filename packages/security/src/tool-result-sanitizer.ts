@@ -12,9 +12,19 @@ export class CaelushToolResultSanitizer implements ToolResultSanitizerPort {
     void input.toolName;
     void input.invocation;
     let content = redactText(input.result.content);
-    let details = redactJson(input.result.details) as JsonObject;
+    // The Tool System declares the execution-result JSON model locally (its `JsonObject` is the AI
+    // package's, which may not depend on Protocol), so the two recursive types meet here. They
+    // describe the same JSON value; only their declarations differ.
+    let details = redactJson(input.result.details as unknown as JsonObject) as JsonObject;
     if (input.toolName === "search_text") {
-      const search = sanitizeSearchResult(input.result.content, input.result.details, details);
+      // The Tool System declares its execution-result JSON model locally — its `JsonObject` is the AI
+      // package's, which may not depend on Protocol — so the two recursive types meet here. They
+      // describe the same JSON value; only their declarations differ, and the value is copied below.
+      const search = sanitizeSearchResult(
+        input.result.content,
+        input.result.details as unknown as JsonObject,
+        details,
+      );
       content = search.content;
       details = search.details;
     } else if (

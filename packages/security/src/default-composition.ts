@@ -52,7 +52,23 @@ export interface V1SecureToolDispatcherOptions extends Omit<
   readonly terminalOutputSanitizer: TerminalOutputSanitizer;
   readonly securityToolNames?: readonly ToolName[];
 }
-
+/**
+ * The production V1 Secure Tool dispatcher.
+ *
+ * ```text
+ * legacy ToolRegistry  →  createV1SecureToolDispatcher  →  ToolDispatcher
+ *                                                            └─ canonical ToolCallPreparer
+ * ```
+ *
+ * The dispatcher resolves and prepares every call through the canonical registry the legacy facade
+ * carries, so the security composition does not need — and must not acquire — its own resolution or
+ * argument-preparation path.
+ *
+ * `normalization` is the registration-level argument compatibility normalization for the Tools the
+ * composition root registered (the legacy definitions that rely on schema-declared numeric strings).
+ * It is supplied by the caller rather than imported here, because the composition root is the layer
+ * that knows which Tool set it built; this factory must not guess one.
+ */
 export function createV1SecureToolDispatcher(
   options: V1SecureToolDispatcherOptions,
 ): ToolDispatcher {

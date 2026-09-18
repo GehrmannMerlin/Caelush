@@ -1,25 +1,23 @@
-import type { ToolInvocation } from "@caelush/protocol";
-import type { ToolExecutionResult } from "./execution-result.js";
+import type { AgentToolExecutionResult } from "@caelush/agent";
 
-export interface ToolInvocationPresentation {
-  readonly title: string;
-  readonly summary: string;
-}
+/**
+ * The legacy presentation contract.
+ *
+ * ```text
+ * @caelush/tools  ──re-export──▶  @caelush/agent
+ * ```
+ *
+ * The port is a general boundary — it decorates durable and transient Tool events for a UI and may
+ * never influence a Tool call — so its declaration belongs in the Agent Tool Layer with the result
+ * contract it projects. `AgentToolExecutionResult` is the Agent root's public alias for the Tool
+ * System's own `AgentToolResult<TDetails>`; the two names denote one structure, and the legacy alias
+ * below denotes the same structure again so existing imports keep compiling.
+ */
+export type {
+  ToolInvocationPresentation,
+  ToolPresentationPort,
+  ToolResultPresentation,
+} from "@caelush/agent";
 
-export interface ToolResultPresentation {
-  readonly title: string;
-  readonly summary: string;
-  readonly output?: {
-    readonly stream: "stdout" | "stderr";
-    readonly chunk: string;
-  };
-}
-
-export interface ToolPresentationPort {
-  presentInvocation(input: { readonly invocation: ToolInvocation }): ToolInvocationPresentation;
-  presentResult(input: {
-    readonly invocation: ToolInvocation;
-    readonly result?: ToolExecutionResult;
-  }): ToolResultPresentation;
-  presentShellCommand(input: { readonly invocation: ToolInvocation }): string;
-}
+/** The legacy name for the raw Tool execution result. */
+export type ToolExecutionResult = AgentToolExecutionResult;
