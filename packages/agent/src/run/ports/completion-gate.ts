@@ -16,9 +16,10 @@ import type { RunExecutionMode } from "../directive.js";
  * generates one, never calls a provider itself and never commits a Run status. Producing evidence
  * is its job; transitioning the Run is the RunController's.
  *
- * This is a contract only. The implementations — an accept-directly gate, a coding verification
- * gate, workspace and Git freshness, the completion seal — belong to Phase 3E, and nothing here
- * implements or approximates them.
+ * This file is the contract only. The implementations live elsewhere and are two: the accept-directly
+ * gate in `run/gates/` (a general host with no verification subsystem) and the coding verification gate
+ * in Core (behind this same port). A workspace, a Git state, a store and a reviewer stay host facts and
+ * never enter the request below.
  *
  * The four decisions are closed, discriminated by `kind`, and each means something different to
  * the Run Layer:

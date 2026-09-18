@@ -123,9 +123,10 @@ export { AgentLoop } from "./agent-loop.js";
 /**
  * The transitional throwing facade over the frozen `ModelTurnExecutor`.
  *
- * Its only remaining production consumer is the Phase 3E verification reviewer, which has no
- * `AgentStep` of its own and therefore no `AgentTurnRef` to pass. It is deleted with the Phase 3E
- * verification migration.
+ * Phase 3F confirmed its production construction and execution consumer count is zero: Phase 3E moved
+ * the last host-driven model turn — the verification review — onto an explicit-identity client, so
+ * nothing in `apps/` and nothing on the production Agent path builds one. It remains a declared public
+ * export with its own tests, and is deleted with the legacy Core `AgentLoop` facade.
  */
 export { createLegacyModelTurnExecutor } from "./legacy-model-turn-executor.js";
 export type {
@@ -400,6 +401,21 @@ export type {
   CompletionVerificationPlannerPort,
   RunCompletionGateDependencies,
 } from "./run-completion-context.js";
+export { createCodingCompletionAssembly } from "./run-completion-assembly.js";
+export type {
+  CodingCompletionAssemblyDependencies,
+  CodingCompletionGateHostFacts,
+  RunCandidateBoundaryInput,
+  RunCompletionAssembly,
+  RunCompletionEvaluation,
+  RunCompletionEvaluationInput,
+  RunRepairContextInput,
+} from "./run-completion-assembly.js";
+export {
+  hasLegacyCompletionGroup,
+  legacyCompletionDependencies,
+  resolveRunCompletionAssembly,
+} from "./run-completion-compatibility.js";
 export { createCompletionGateObservation } from "./run-completion-observation.js";
 export type {
   CompletionGateObservation,

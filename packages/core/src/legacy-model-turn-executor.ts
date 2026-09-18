@@ -1,10 +1,8 @@
 import { AIError, createAIError } from "@caelush/ai";
 import type { AIErrorCode, AIModelRequest, AIModelTurnResult } from "@caelush/ai";
-import { isRetryableModelTurnErrorCode, toModelTurnExecutionErrorCode } from "@caelush/agent";
 import type {
   AgentExecutionIdentity,
   AgentTurnRef,
-  ModelTurnExecutionError,
   ModelTurnExecutionInput,
   ModelTurnExecutor,
   ModelTurnStreamSink,
@@ -16,8 +14,8 @@ import type { StepId } from "@caelush/protocol";
  *
  * Phase 3A aligned the agent executor with the frozen contract: one model turn now
  * resolves a `ModelTurnExecutionResult` union instead of throwing. The Core consumers that
- * were written against the previous throw-based semantics — the legacy `AgentLoop` and the
- * verification `TaskAcceptanceReviewer` — keep working through this adapter:
+ * were written against the previous throw-based semantics — the legacy `AgentLoop` — keep
+ * working through this adapter:
  *
  * ```text
  * COMPLETED → the AIModelTurnResult
@@ -26,40 +24,26 @@ import type { StepId } from "@caelush/protocol";
  * ```
  *
  * The `@caelush/agent` package keeps no throw-based public interface: this shape exists only
- * at the legacy host boundary and is deleted when the Core loop is replaced in Phase 3B.
+ * at the legacy host boundary.
+ *
+ * Phase 3F retired it from production composition entirely. Its remaining consumers are the legacy
+ * Core `AgentLoop` unit tests and this file's own tests: Phase 3E moved the last host-driven model
+ * turn — the verification review — onto an explicit-identity client, so nothing in `apps/` or in the
+ * production Agent path constructs one.
+ *
+ * ```text
+ * EXIT CONDITION: deleted with the legacy Core `AgentLoop` facade and its tests.
+ * ```
  */
 
 /**
- * Map a thrown failure onto the frozen model-turn error shape.
+ * The Core compatibility boundary's thrown-failure projection.
  *
- * The frozen executor classifies its own failures. This export exists because the Core
- * compatibility loop drives the frozen `AgentLoop.advance()` over the legacy throw-based
- * executor, so a throw has to be translated into the union the loop expects. The thrown
- * message never crosses: a legacy throw may quote a provider body, a prompt or a credential.
+ * Re-exported from `model-turn-error-mapping.ts`, where it now lives: the pure mapping has its own
+ * module so that a consumer needing only the mapping does not have to import this executor's
+ * implementation. Nothing about the classification or the error semantics changed in the move.
  */
-export function toModelTurnExecutionError(error: unknown): ModelTurnExecutionError {
-  const code = readAIErrorCode(error);
-  const mapped = code === undefined ? "PROVIDER_ERROR" : toModelTurnExecutionErrorCode(code);
-  const retryAfterMs = readRetryAfterMs(error);
-  return {
-    code: mapped,
-    message: "The model turn failed.",
-    retryable: isRetryableModelTurnErrorCode(mapped),
-    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
-  };
-}
-
-function readAIErrorCode(error: unknown): AIErrorCode | undefined {
-  if (typeof error !== "object" || error === null) return undefined;
-  const candidate = (error as { readonly code?: unknown }).code;
-  return typeof candidate === "string" ? (candidate as AIErrorCode) : undefined;
-}
-
-function readRetryAfterMs(error: unknown): number | undefined {
-  if (typeof error !== "object" || error === null) return undefined;
-  const candidate = (error as { readonly retryAfterMs?: unknown }).retryAfterMs;
-  return typeof candidate === "number" ? candidate : undefined;
-}
+export { toModelTurnExecutionError } from "./model-turn-error-mapping.js";
 
 /** The legacy throw-based model turn contract. */
 export interface LegacyModelTurnExecutor {

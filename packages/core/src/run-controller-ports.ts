@@ -173,6 +173,43 @@ export interface RunControllerDependencies {
   /** Core-side request estimator. The durable budget port receives plain numbers. */
   readonly tokenEstimator?: import("./llm-token-estimator.js").LLMTokenEstimator;
   readonly resourceGovernance?: ResourceGovernancePort;
+  /**
+   * The Run Layer's completion collaborator.
+   *
+   * ```text
+   * one port   openEvaluation · planCandidateBoundary · compileRepairContext
+   * ```
+   *
+   * Phase 3F converged the completion surface onto this one dependency. It replaces the eighteen
+   * verification-specific fields below, which the Run Layer used to read and assemble itself: which
+   * concrete planner, resolver registry, runner, reviewer, workspace, Git and security ports make up a
+   * completion evaluation is composition, and composition belongs to the module that owns it rather
+   * than to the object that commits lifecycle transitions.
+   *
+   * The Run Layer still commits every lifecycle transition the assembly's answers imply. It hands the
+   * assembly its own notifier and its completion persistence port per evaluation, so the assembly can
+   * neither publish an event nor write a Run status of its own.
+   *
+   * Optional, because a general host that composes no completion path keeps the behaviour it always
+   * had: an Agent effect that cannot evaluate completion waits on its durable boundary.
+   */
+  readonly completion?: import("./run-completion-assembly.js").RunCompletionAssembly;
+  /**
+   * ```text
+   * COMPATIBILITY — the Phase 3E flat verification dependency group
+   * ```
+   *
+   * These fields are the surface the Run Layer read directly before Phase 3F. They remain a stable,
+   * declared part of this public interface under `MIGRATION_EXECUTION_CONTRACT.md` Rule 5, and they are
+   * converted by exactly one module — `run-completion-compatibility.ts` — into the single canonical
+   * completion assembly. There is no second assembly implementation behind them.
+   *
+   * The Run Layer itself must not read any of them; `run-controller.ts` names the converged
+   * `completion` port instead. New hosts compose `completion`.
+   *
+   * Exit condition: the respective subsystem's deletion stage, when this group and the compatibility
+   * module are removed together.
+   */
   readonly verificationPlanner?: VerificationPlannerPort;
   readonly verificationPlanIdFactory?: VerificationPlanIdFactory;
   readonly verificationCheckIdFactory?: VerificationCheckIdFactory;

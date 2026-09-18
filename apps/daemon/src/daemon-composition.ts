@@ -3,6 +3,7 @@ import {
   RunDeadlineRegistry,
   RunExecutionScopeRegistry,
   RunRetryRegistry,
+  createCodingCompletionAssembly,
   createLegacyContextRuntimeAdapter,
   createProjectProfileProvider,
   createRunAgentExecutionContext,
@@ -460,24 +461,46 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     resources: { cancelOwnedResources: (runId) => runtime.cancelOwnedResources(runId) },
     budget: options.storage.budget,
     resourceGovernance: options.storage.resourceGovernance,
-    verificationPlanner: new DefaultVerificationPlanner(),
-    verificationPlanIdFactory: { create: createVerificationPlanId },
-    verificationCheckIdFactory: { create: createVerificationCheckId },
-    verificationRunner: new VerificationRunner(),
-    projectProfileProvider: createProjectProfileProvider(inspector),
-    verificationExecution,
-    verificationExecutionStore: options.storage.verificationExecution,
-    verificationExecutionRecovery: options.storage.verificationExecution,
-    verificationWorkspace,
-    verificationGit,
-    verificationSecurity: verificationCommandSecurityPort,
-    verificationEvidenceSanitizer,
-    verificationEvidenceIdFactory: createVerificationEvidenceId,
-    verificationResolverRegistry: new ProjectCheckResolverRegistry(),
-    verificationModelTurns,
-    verificationRepairPolicy: createVerificationRepairPolicy(),
-    verificationPlanCount: (runId) =>
-      options.storage.verificationExecution.countPlans?.(runId) ?? Promise.resolve(0),
+    /**
+     * The Run Layer's completion collaborator, composed once.
+     *
+     * ```text
+     * BEFORE  eighteen verification* fields, read and assembled by RunController itself
+     * AFTER   one assembly the Run Layer names and asks three questions
+     * ```
+     *
+     * Everything under this key is a property of the deployment rather than of one Run, so the daemon
+     * composes it once: the planner, the identity factories, the project-check runner and resolver
+     * registry, the run-bound workspace/Git/execution ports, the security admission, the evidence
+     * sanitizer, the repair policy and the model-turn authority the reviewer is built from.
+     *
+     * The daemon still supplies one model-turn authority and never builds a reviewer of its own — the
+     * assembly builds the reviewer from `modelTurns`, which is what keeps "one AI subsystem" true for a
+     * review as much as for an Agent turn.
+     */
+    completion: createCodingCompletionAssembly({
+      clock,
+      configResolver: executionConfigResolver,
+      planner: new DefaultVerificationPlanner(),
+      planIdFactory: createVerificationPlanId,
+      checkIdFactory: createVerificationCheckId,
+      evidenceIdFactory: createVerificationEvidenceId,
+      runner: new VerificationRunner(),
+      profileProvider: createProjectProfileProvider(inspector),
+      execution: verificationExecution,
+      executionStore: options.storage.verificationExecution,
+      executionRecovery: options.storage.verificationExecution,
+      workspace: verificationWorkspace,
+      git: verificationGit,
+      security: verificationCommandSecurityPort,
+      evidenceSanitizer: verificationEvidenceSanitizer,
+      resolverRegistry: new ProjectCheckResolverRegistry(),
+      modelTurns: verificationModelTurns,
+      budget: options.storage.budget,
+      repairPolicy: createVerificationRepairPolicy(),
+      planCount: (runId) =>
+        options.storage.verificationExecution.countPlans?.(runId) ?? Promise.resolve(0),
+    }),
     onVerifiedCompletion: ({ run }) => {
       void options.storage.memoryExtractionJobs
         .createOrGet({

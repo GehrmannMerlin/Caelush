@@ -20,7 +20,7 @@ import type {
   ModelTurnExecutor,
 } from "@caelush/agent";
 import { createAgentDecisionClassifier, createAgentLoop, toAIModelSettings } from "@caelush/agent";
-import { toModelTurnExecutionError } from "./legacy-model-turn-executor.js";
+import { toModelTurnExecutionError } from "./model-turn-error-mapping.js";
 import type {
   AgentError,
   AgentRun,

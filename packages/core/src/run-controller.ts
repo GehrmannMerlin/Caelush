@@ -86,13 +86,12 @@ import {
   MISROUTED_TOOL_TURN_COORDINATOR,
 } from "./run-agent-deferred-ports.js";
 import {
-  createRunCandidateBoundaryPlanner,
-  createRunCompletionGate,
   CompletionGateIdentityError,
-  type RunCompletionGate,
+  CompletionGateInfrastructureError,
 } from "./run-completion-gate.js";
-import type { RunCompletionGateDependencies } from "./run-completion-context.js";
 import type { CompletionGateObservation } from "./run-completion-observation.js";
+import { resolveRunCompletionAssembly } from "./run-completion-compatibility.js";
+import type { RunCompletionAssembly, RunCompletionEvaluation } from "./run-completion-assembly.js";
 import {
   classifyCompletionEffectSettlement,
   type CompletionEffectSettlementRoute,
@@ -141,10 +140,8 @@ import {
   type RunControllerEventFactory,
 } from "./run-controller-events.js";
 import type { RunControllerDependencies } from "./run-controller-ports.js";
-import { TaskAcceptanceReviewer } from "./task-acceptance-reviewer.js";
 import { toDurableRetryCode } from "./ai-invocation-projection.js";
 import type { AgentBudgetBlock } from "./agent-errors.js";
-import { compileVerificationRepairContext } from "@caelush/verification";
 
 export {
   RunControllerBusyError,
@@ -236,11 +233,8 @@ type ToolEffectSettlement =
   | { readonly kind: "SNAPSHOT"; readonly snapshot: RunExecutionSnapshot }
   | { readonly kind: "RESULT"; readonly result: RunControllerResult };
 
-/** One resolved completion evaluation: the gate and the facts it was assembled from. */
-interface ResolvedCompletionGate {
-  readonly completion: RunCompletionGate;
-  readonly dependencies: RunCompletionGateDependencies;
-}
+/** How one resolved completion evaluation is carried through a directive execution. */
+type ResolvedCompletionGate = RunCompletionEvaluation;
 
 /** What one driven completion directive produced. Exactly one arm is set. */
 type CompletionDirectiveExecution =
@@ -323,6 +317,19 @@ export class RunController {
    * change nothing else, and it runs between planning and committing.
    */
   private readonly eventMaterializer: RunCommitEventMaterializer;
+  /**
+   * The Run Layer's completion collaborator, resolved once.
+   *
+   * ```text
+   * dependencies.completion   the converged port
+   * otherwise                 the compatibility projection of the flat verification group
+   * neither                   undefined: no completion path was composed
+   * ```
+   *
+   * Resolved in the constructor rather than read per directive, so the Run Layer never has to ask
+   * which shape a host composed with — and so a host cannot switch assemblies mid-Run.
+   */
+  private readonly completionAssembly: RunCompletionAssembly | undefined;
 
   constructor(private readonly dependencies: RunControllerDependencies) {
     this.eventFactory = createRunControllerEventFactory();
@@ -340,6 +347,7 @@ export class RunController {
       ...(dependencies.retryPolicy === undefined ? {} : { policy: dependencies.retryPolicy }),
       ...(dependencies.retryJitter === undefined ? {} : { jitter: dependencies.retryJitter }),
     });
+    this.completionAssembly = resolveRunCompletionAssembly(dependencies);
   }
 
   dispose(): void {
@@ -1607,33 +1615,21 @@ export class RunController {
    *
    * Still compiled by the existing verification authority and still handed to the frozen loop only
    * through the Context Engine supplier — never as a field of an `@caelush/agent` contract.
+   *
+   * Phase 3F moved the *reading* behind the completion assembly too. It was the Run Layer's last direct
+   * reach into the verification execution store, and a Run Layer that reads a failed plan to build a
+   * prompt is composing verification rather than committing a lifecycle. The Run Layer supplies the
+   * snapshot; the assembly supplies the text, or refuses when it cannot.
    */
   private async verificationRepairContext(
     snapshot: RunExecutionSnapshot,
-  ): Promise<import("@caelush/context").VerificationRepairContextInput | undefined> {
-    const repairContinuation =
-      snapshot.continuation?.type === "WAITING_VERIFICATION_REPAIR"
-        ? snapshot.continuation
-        : undefined;
-    if (repairContinuation === undefined) return undefined;
-    const recovery = this.verificationRecoveryStore();
-    if (recovery === undefined) {
+  ): Promise<{ readonly text: string } | undefined> {
+    const assembly = this.completionAssembly;
+    if (assembly === undefined) {
+      if (snapshot.continuation?.type !== "WAITING_VERIFICATION_REPAIR") return undefined;
       throw new RunControllerInfrastructureError("Verification repair recovery is not configured.");
     }
-    const failed = await recovery.getPlanExecutionSnapshot(repairContinuation.failedPlanId);
-    if (failed === null) {
-      throw new RunControllerInfrastructureError("Verification repair plan is unavailable.");
-    }
-    const failedCheckIds = new Set(repairContinuation.failedCheckIds);
-    const repairContext = compileVerificationRepairContext({
-      originalGoal: snapshot.run.goal,
-      failedPlan: failed.plan,
-      failedChecks: failed.plan.checks.filter((check) => failedCheckIds.has(check.id)),
-      evidence: failed.evidence.filter((item) => repairContinuation.evidenceIds.includes(item.id)),
-      changedFiles: snapshot.state?.changedFiles ?? [],
-      repairCycle: repairContinuation.repairCycle,
-    });
-    return { text: repairContext.text };
+    return assembly.compileRepairContext({ snapshot });
   }
 
   /**
@@ -2100,22 +2096,21 @@ export class RunController {
       finalDecision: result.decision,
     };
 
-    const planner = createRunCandidateBoundaryPlanner({
+    const assembly = this.completionAssembly;
+    if (assembly === undefined) {
+      // A Run must never reach `VERIFYING` without a plan to verify against. That is a configuration
+      // failure rather than a candidate that failed, and it is refused with the same error the gate
+      // itself raises rather than degraded into an unverified completion.
+      throw new CompletionGateInfrastructureError(
+        "The verification planner is not configured, so no completion boundary can be opened.",
+      );
+    }
+    const opening = assembly.planCandidateBoundary({
       run: current.run,
       state: decisionState,
       continuation: { ...continuation, verificationPlanId: "" as never },
-      clock: this.dependencies.clock,
-      ...(this.dependencies.verificationPlanner === undefined
-        ? {}
-        : { planner: this.dependencies.verificationPlanner }),
-      ...(this.dependencies.verificationPlanIdFactory === undefined
-        ? {}
-        : { planIdFactory: () => this.dependencies.verificationPlanIdFactory!.create() }),
-      ...(this.dependencies.verificationCheckIdFactory === undefined
-        ? {}
-        : { checkIdFactory: () => this.dependencies.verificationCheckIdFactory!.create() }),
+      candidate: result.decision,
     });
-    const opening = planner.planCandidateBoundary(result.decision);
 
     const commit = await this.commitCandidateBoundary({
       run,
@@ -3034,36 +3029,18 @@ export class RunController {
   private resumeKnownBoundary(snapshot: RunExecutionSnapshot): RunControllerResult {
     return this.resultFromSnapshot(snapshot);
   }
-  /**
-   * The verification execution recovery store.
-   *
-   * The Run Layer still needs it for one thing: compiling the repair context the *next* Agent turn
-   * reasons from. That context is built from the failed plan and the evidence that described it, which
-   * is durable verification state — and it is read through the same port the gate runs verification
-   * with, rather than the gate handing back a copy.
-   */
-  private verificationRecoveryStore():
-    import("@caelush/verification").VerificationExecutionRecoveryStorePort | undefined {
-    if (this.dependencies.verificationExecutionRecovery !== undefined) {
-      return this.dependencies.verificationExecutionRecovery;
-    }
-    const candidate = this.dependencies.verificationExecutionStore;
-    if (candidate !== undefined && "getPlanExecutionSnapshot" in candidate) {
-      return candidate as import("@caelush/verification").VerificationExecutionRecoveryStorePort;
-    }
-    return undefined;
-  }
-
-  /* ---------------------------------------------------------- completion */
 
   /**
-   * The run-scoped completion gate for one `EVALUATE_COMPLETION` directive.
+   * The run-scoped completion evaluation for one `EVALUATE_COMPLETION` directive.
    *
-   * It captures every host fact the frozen `CompletionGateInput` deliberately does not carry — the
-   * workspace, the Git port, the verification stores, the reviewer, the repair policy — from the
-   * durable Run the coordinator decided on, and binds the Run Layer's own notifier to it. The gate owns
-   * no store, publishes through the layer that owns the ledger, commits no lifecycle transition, and
-   * cannot open the boundary it is already running inside: that commit belongs to
+   * The Run Layer's whole contribution is the four facts that belong to *this* evaluation: the durable
+   * snapshot the coordinator decided from, the entry mode, the Run's own cancellation signal, and its
+   * own completion persistence port and notifier. Every host fact — the workspace, the Git port, the
+   * verification stores, the reviewer, the repair policy — is assembled on the other side of the
+   * `RunCompletionAssembly` port, which is what keeps composing a completion out of this object.
+   *
+   * The gate owns no store, publishes through the layer that owns the ledger, commits no lifecycle
+   * transition, and cannot open the boundary it is already running inside: that commit belongs to
    * `openCompletionBoundary`, which is the only caller holding the Step, the messages and the revision
    * to write it with.
    *
@@ -3074,90 +3051,17 @@ export class RunController {
     readonly snapshot: RunExecutionSnapshot;
     readonly mode: RunExecutionMode;
   }): ResolvedCompletionGate | undefined {
-    const dependencies = this.completionDependencies(input.snapshot, input.mode);
-    if (dependencies === undefined) return undefined;
-    const completion = createRunCompletionGate(dependencies);
-    return { completion, dependencies };
-  }
-
-  /**
-   * The host facts a completion evaluation runs with.
-   *
-   * This is the one place those facts are derived, so a gate and the settlement that acts on its
-   * decision can never disagree about which plan, which reviewer or which repair policy was in play.
-   */
-  private completionDependencies(
-    snapshot: RunExecutionSnapshot,
-    mode: RunExecutionMode,
-  ): RunCompletionGateDependencies | undefined {
-    const state = snapshot.state;
-    const continuation = snapshot.continuation;
-    if (state === undefined || continuation?.type !== "AWAITING_VERIFICATION") return undefined;
-    const deps = this.dependencies;
+    const assembly = this.completionAssembly;
+    if (assembly === undefined) return undefined;
     const persistence = this.completionPersistence();
     if (persistence === undefined) return undefined;
-    const reviewer =
-      deps.verificationReviewer ??
-      (deps.verificationModelTurns !== undefined && deps.budget !== undefined
-        ? new TaskAcceptanceReviewer({
-            modelTurns: deps.verificationModelTurns,
-            budget: deps.budget,
-            clock: deps.clock,
-            ...(deps.tokenEstimator === undefined ? {} : { tokenEstimator: deps.tokenEstimator }),
-          })
-        : undefined);
-    return {
-      run: snapshot.run,
-      state,
-      continuation,
-      mode,
-      signal: this.executionSignal(snapshot.run.id),
-      clock: deps.clock,
+    return assembly.openEvaluation({
+      snapshot: input.snapshot,
+      mode: input.mode,
+      signal: this.executionSignal(input.snapshot.run.id),
       persistence,
-      configResolver: deps.configResolver,
       notifyCommitted: (events) => this.notify(events),
-      ...(deps.verificationPlanner === undefined ? {} : { planner: deps.verificationPlanner }),
-      ...(deps.verificationPlanIdFactory === undefined
-        ? {}
-        : { planIdFactory: () => deps.verificationPlanIdFactory!.create() }),
-      ...(deps.verificationCheckIdFactory === undefined
-        ? {}
-        : { checkIdFactory: () => deps.verificationCheckIdFactory!.create() }),
-      ...(deps.verificationEvidenceIdFactory === undefined
-        ? {}
-        : { evidenceIdFactory: deps.verificationEvidenceIdFactory }),
-      ...(deps.verificationRunner === undefined ? {} : { runner: deps.verificationRunner }),
-      ...(deps.projectProfileProvider === undefined
-        ? {}
-        : { profileProvider: deps.projectProfileProvider }),
-      ...(deps.verificationExecution === undefined
-        ? {}
-        : { execution: deps.verificationExecution }),
-      ...(deps.verificationExecutionStore === undefined
-        ? {}
-        : { executionStore: deps.verificationExecutionStore }),
-      ...(deps.verificationExecutionRecovery === undefined
-        ? {}
-        : { executionRecovery: deps.verificationExecutionRecovery }),
-      ...(deps.verificationWorkspace === undefined
-        ? {}
-        : { workspace: deps.verificationWorkspace }),
-      ...(deps.verificationGit === undefined ? {} : { git: deps.verificationGit }),
-      ...(deps.verificationSecurity === undefined ? {} : { security: deps.verificationSecurity }),
-      ...(deps.verificationEvidenceSanitizer === undefined
-        ? {}
-        : { evidenceSanitizer: deps.verificationEvidenceSanitizer }),
-      ...(deps.verificationResolverRegistry === undefined
-        ? {}
-        : { resolverRegistry: deps.verificationResolverRegistry }),
-      ...(reviewer === undefined ? {} : { reviewer }),
-      ...(deps.verificationRepairPolicy === undefined
-        ? {}
-        : { repairPolicy: deps.verificationRepairPolicy }),
-      ...(deps.verificationPlanCount === undefined
-        ? {}
-        : { planCount: deps.verificationPlanCount }),
-    };
+    });
   }
 
   /**
@@ -3185,7 +3089,7 @@ export class RunController {
     const driver = createRunExecutionDriver({
       agentLoop: MISROUTED_AGENT_LOOP,
       toolTurns: MISROUTED_TOOL_TURN_COORDINATOR,
-      completionGate: resolved.completion.gate,
+      completionGate: resolved.gate,
     });
     try {
       const effect = await driver.execute(directive, {
@@ -3208,7 +3112,7 @@ export class RunController {
           `The completion driver produced a ${effect.kind} effect for an EVALUATE_COMPLETION directive.`,
         );
       }
-      return { decision: effect.result, observation: resolved.completion.observation };
+      return { decision: effect.result, observation: resolved.observation };
     } catch (error) {
       // An aborted evaluation belongs to the termination authority: the Run Layer resolves it before
       // and after this call, and it wins over any completion decision.

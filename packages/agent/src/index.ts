@@ -290,6 +290,15 @@ export type {
   CompletionGateInput,
   CompletionRepairRequest,
 } from "./run/ports/completion-gate.js";
+/*
+ * The general gate implementation. The coding gate lives in Core, behind the same frozen contract;
+ * this one is what a host with no verification subsystem composes, and it depends on nothing at all.
+ */
+export {
+  createDirectAcceptCompletionGate,
+  DIRECT_ACCEPT_COMPLETION_GATE_ID,
+} from "./run/gates/direct-accept-completion-gate.js";
+export type { DirectAcceptCompletionGateOptions } from "./run/gates/direct-accept-completion-gate.js";
 
 /* The canonical durable Step lifecycle and its AgentState projection. */
 export { AgentStepStateError } from "./run/turn/step-lifecycle.js";
