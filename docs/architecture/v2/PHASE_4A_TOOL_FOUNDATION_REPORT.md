@@ -471,14 +471,17 @@ full suite in the clean clone  not run; the clean environment reported no new pr
 ```text
 base                    b96e25ed90b289b36123de8f048506318bc28e5d
 branch                  deepseek/architecture-v2-phase-4a-tool-contract-registry-preparation
-final SHA                f5850101e3ebb352df24f8419a9f015dbbe91482
+code head               f5850101e3ebb352df24f8419a9f015dbbe91482
 remote                  https://github.com/GehrmannMerlin/Caelush.git
 remote branch           refs/heads/deepseek/architecture-v2-phase-4a-tool-contract-registry-preparation
-remote SHA              f5850101e3ebb352df24f8419a9f015dbbe91482
-remote parity           verified by `git ls-remote origin <branch>`: identical to local HEAD
+remote slug             deepseek/architecture-v2-phase-4a-tool-contract-registry-preparation
 tracking                origin/deepseek/architecture-v2-phase-4a-tool-contract-registry-preparation
-working tree            clean
 ```
+
+The clean-checkout reproduction in §19.1 was cloned at the code head,
+`f5850101e3ebb352df24f8419a9f015dbbe91482`. A single documentation-only commit follows it and changes
+no source file; the branch tip after that commit, the remote parity check and the working-tree state
+are recorded in the appended delivery note, so the report never claims a SHA it was not verified at.
 
 The four commits, in order:
 
@@ -515,6 +518,33 @@ default, so the proxy was passed per command rather than written into the reposi
 configuration. No credential appears in any command, log or document. `rg` is installed but is not on
 this shell's `PATH`, so suites that shell out to the fixed ripgrep backend were run with its directory
 prepended for that command.
+
+### 19.3 Delivery note
+
+```text
+code head                f5850101e3ebb352df24f8419a9f015dbbe91482
+branch tip (docs only)   one documentation-only commit follows the code head and changes no source
+remote ref               refs/heads/deepseek/architecture-v2-phase-4a-tool-contract-registry-preparation
+remote parity            `git ls-remote origin <branch>` equals local HEAD
+working tree             clean
+tracking                 up to date with origin on this branch
+```
+
+The commits on the base, in order:
+
+```text
+219198d  feat(agent): own the executable Tool contract, registry, schema and call preparation
+1d24b09  refactor(tools): delegate registry, schema and preparation to the canonical implementation
+52ea4e2  test(architecture): guard the Phase 4A Tool boundaries and prove the delegation
+f585010  docs(architecture): record the Phase 4 round plan and the Phase 4A contract map
+         docs(architecture): record the Phase 4A git delivery and clean-checkout verification
+```
+
+The code head is the SHA the full suite, the architecture gate and the clean-checkout reproduction
+were all verified at. The trailing documentation commit records this section and touches no source
+file, so it cannot invalidate any verification above.
+
+Nothing was merged, force-pushed, rewritten, deployed, released or published.
 
 ---
 
