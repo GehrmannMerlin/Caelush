@@ -201,10 +201,38 @@ decomposition above.
     docs/architecture/v2/PHASE_4B_TOOL_EXECUTION_RESULT_REPORT.md
     tests/architecture/phase-4b-tool-execution-result-boundaries.test.ts
 
-4C  not started
+4C  docs/architecture/v2/PHASE_4C_DURABLE_TOOL_ORCHESTRATION_ACCEPTANCE_MAP.md
+    docs/architecture/v2/PHASE_4C_DURABLE_TOOL_ORCHESTRATION_REPORT.md
+    tests/architecture/phase-4c-durable-tool-orchestration-boundaries.test.ts
+
 4D  not started
 4E  not started
 4F  not started
+```
+
+### 4.2 The 4C transition boundary, stated once
+
+```text
+@caelush/agent now owns:  the Tool security context, the admission ports and the admission
+                          coordinator, the Tool budget admission port, the durable metadata seam,
+                          the ToolInvocation lifecycle, the ToolObservation lifecycle, the durable
+                          Tool store contract, the durable Tool events, ToolSettlementCoordinator
+                          and DurableToolExecutionCoordinator — the Tool Invocation Lifecycle
+                          Authority.
+
+@caelush/storage now owns: the canonical ToolExecutionStorePort implementation, the atomic budget
+                          terminal transition inside the terminal commit, and the named settlement
+                          extension compatibility decoder.
+
+@caelush/tools still owns: the batch coordinator and its outcomes, the legacy dispatcher entry point
+                          and its outcome translation, the historical argument-failure durable row,
+                          the nine builtins and the Coding effect vocabulary and its projection.
+                          Those exit in 4D / 4E / 4F.
+
+Not yet true:             the production Tool pipeline is not Tool System V2. A pre-invocation
+                          rejection still creates the historical durable failure, the batch is still
+                          the legacy coordinator, real Coding builtin progress is not yet published,
+                          and no host consumes transient updates.
 ```
 
 ### 4.1 The 4B transition boundary, stated once
@@ -222,4 +250,3 @@ Not yet true:             the production Tool pipeline is not Tool System V2. A 
                           rejection still creates the historical durable failure, real Coding builtin
                           progress is not yet published, and no host consumes transient updates.
 ```
-
