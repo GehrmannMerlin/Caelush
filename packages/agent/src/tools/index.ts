@@ -121,3 +121,62 @@ export type {
   ToolCallPreparer,
   ToolCallRequest,
 } from "./call/tool-call-preparer.js";
+
+/* Invocation execution and the canonical uncertainty vocabulary. */
+export { createToolInvocationExecutor } from "./execution/invocation-executor.js";
+export type {
+  ToolInvocationExecutor,
+  ToolInvocationExecutorOptions,
+} from "./execution/invocation-executor.js";
+export {
+  isToolExecutionUncertainError,
+  ToolExecutionUncertainError,
+  UNCERTAIN_SIDE_EFFECT,
+  uncertainExecutionDetails,
+} from "./execution/execution-disposition.js";
+export type {
+  UncertainExecutionDisposition,
+  UncertainSideEffect,
+} from "./execution/execution-disposition.js";
+export { DISCARDING_TRANSIENT_TOOL_UPDATE_CONSUMER } from "./execution/update-sanitizer-port.js";
+export type {
+  TransientToolUpdateConsumer,
+  TransientToolUpdateDiagnostics,
+  ToolExecutionUpdateSanitizerPort,
+} from "./execution/update-sanitizer-port.js";
+
+/* Result processing. */
+export {
+  boundToolResultContent,
+  CODING_TOOL_EFFECTS_EXTENSION_KIND,
+  DEFAULT_TOOL_RESULT_LIMITS,
+  TOOL_RESULT_TRUNCATION_MARKER,
+  ToolResultLimitError,
+  validateToolResultLimits,
+} from "./result/result-policy.js";
+export type {
+  ToolResultLimits,
+  ToolSettlementExtension,
+  ToolSettlementExtensionProjector,
+} from "./result/result-policy.js";
+export {
+  IDENTITY_TOOL_RESULT_SANITIZER,
+  ToolResultValidationError,
+} from "./result/result-sanitizer-port.js";
+export type {
+  ToolResultSanitizerPort,
+  ToolResultValidationErrorKind,
+  ValidatedToolResult,
+} from "./result/result-sanitizer-port.js";
+export {
+  isAgentToolResult,
+  readResultShape,
+  readSanitizedResultShape,
+  validateToolResult,
+} from "./result/result-validator.js";
+export { createToolResultPipeline } from "./result/result-pipeline.js";
+export type {
+  PreparedToolSettlement,
+  ToolResultPipeline,
+  ToolResultPipelineOptions,
+} from "./result/result-pipeline.js";
