@@ -38,6 +38,7 @@ import {
   type ToolExecutionRequest,
   type ToolExecutionResult,
   type ToolExecutionGatePort,
+  createToolExecutionDependencies,
 } from "@caelush/tools";
 import { describe, expect, it } from "vitest";
 import { LocalRuntime, createLocalRuntimeResolver } from "@caelush/runtime";
@@ -158,7 +159,7 @@ function createRuntime(
     invocationIdFactory: { create: createToolInvocationId },
     observationIdFactory: { create: createObservationId },
     eventIdFactory: { create: createEventId },
-    resultSanitizer: { sanitize: ({ result }) => result },
+    execution: createToolExecutionDependencies({ registry: builder.build() }),
     approvalStore: storage.approvals,
     approvalIdFactory: { create: createApprovalRequestId },
   });
@@ -191,7 +192,7 @@ function createFilesystemRuntime(
     invocationIdFactory: { create: createToolInvocationId },
     observationIdFactory: { create: createObservationId },
     eventIdFactory: { create: createEventId },
-    resultSanitizer: { sanitize: ({ result }) => result },
+    execution: createToolExecutionDependencies({ registry: builder.build() }),
     approvalStore: storage.approvals,
     approvalIdFactory: { create: createApprovalRequestId },
   });

@@ -16,6 +16,7 @@ import {
   type ToolDispatchRequest,
   type ToolExecutionRequest,
   type ToolExecutionResult,
+  createToolExecutionDependencies,
 } from "@caelush/tools";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage, type CaelushStorage } from "../src/index.js";
@@ -62,7 +63,7 @@ function createDispatcher(
     invocationIdFactory: { create: createToolInvocationId },
     observationIdFactory: { create: createObservationId },
     eventIdFactory: { create: createEventId },
-    resultSanitizer: { sanitize: ({ result }) => result },
+    execution: createToolExecutionDependencies({ registry }),
   });
 }
 
@@ -164,9 +165,9 @@ describe("ToolDispatcher with durable storage and EventBus", () => {
       stepId: fixture.step.id,
       externalCallId: "call-restart-1",
       toolName: "echo_value",
-        args: { value: "restart" },
-        environment: { workspace: fixture.run.workspace, runtime: fixture.run.runtime },
-        securityContext: { permissionProfile: "FULL_ACCESS", approvalPolicy: "NEVER_ASK" },
+      args: { value: "restart" },
+      environment: { workspace: fixture.run.workspace, runtime: fixture.run.runtime },
+      securityContext: { permissionProfile: "FULL_ACCESS", approvalPolicy: "NEVER_ASK" },
     };
     let executions = 0;
     try {

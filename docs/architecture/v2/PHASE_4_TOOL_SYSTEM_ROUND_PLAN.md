@@ -184,3 +184,42 @@ prettier --check <changed files>
 Tests are evidence of behaviour and migration authority, never a completion metric: a round does not
 finish by adding tests, and it never finishes by deleting assertions, lowering a bound, or adding a
 skip.
+
+---
+
+## 4. Round completion references
+
+A completed round links its own evidence here. Recording a completion does not change the round
+decomposition above.
+
+```text
+4A  docs/architecture/v2/PHASE_4A_TOOL_CONTRACT_ACCEPTANCE_MAP.md
+    docs/architecture/v2/PHASE_4A_TOOL_FOUNDATION_REPORT.md
+    tests/architecture/phase-4a-tool-contract-boundaries.test.ts
+
+4B  docs/architecture/v2/PHASE_4B_TOOL_EXECUTION_RESULT_ACCEPTANCE_MAP.md
+    docs/architecture/v2/PHASE_4B_TOOL_EXECUTION_RESULT_REPORT.md
+    tests/architecture/phase-4b-tool-execution-result-boundaries.test.ts
+
+4C  not started
+4D  not started
+4E  not started
+4F  not started
+```
+
+### 4.1 The 4B transition boundary, stated once
+
+```text
+@caelush/agent now owns:  AgentTool invocation (ToolInvocationExecutor), the safe transient update
+                          lifecycle, and result processing (ToolResultPipeline).
+
+@caelush/tools still owns: durable invocation lifecycle and recovery, admission/gate, approval,
+                          budget, observation and event creation, the atomic settlement commit, the
+                          batch coordinator, the nine builtins and the Coding effect vocabulary.
+                          Those exit in 4C / 4D / 4E / 4F.
+
+Not yet true:             the production Tool pipeline is not Tool System V2. A pre-invocation
+                          rejection still creates the historical durable failure, real Coding builtin
+                          progress is not yet published, and no host consumes transient updates.
+```
+

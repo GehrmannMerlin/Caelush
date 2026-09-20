@@ -17,6 +17,7 @@ import {
   createReadOnlyFilesystemToolRegistrations,
   type ToolCommittedEventNotifier,
   type ToolDispatcherOutcome,
+  createToolExecutionDependencies,
 } from "@caelush/tools";
 import { LocalRuntime, createLocalRuntimeResolver } from "@caelush/runtime";
 import { describe, expect, it } from "vitest";
@@ -63,7 +64,7 @@ describe("read-only filesystem tools through ToolDispatcher", () => {
       invocationIdFactory: { create: createToolInvocationId },
       observationIdFactory: { create: createObservationId },
       eventIdFactory: { create: createEventId },
-      resultSanitizer: { sanitize: ({ result }) => result },
+      execution: createToolExecutionDependencies({ registry: registryBuilder.build() }),
     });
 
     const environment = { workspace: run.workspace, runtime: run.runtime };
