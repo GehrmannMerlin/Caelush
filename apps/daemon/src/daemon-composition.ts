@@ -80,23 +80,37 @@ import {
   type WorkspaceVerificationPort,
 } from "@caelush/verification";
 import {
+  createToolExecutionDependencies,
+  createCodingToolAdmissionPort,
+  createCodingToolDurableMetadataPort,
+  createDurableInvocationGatePort,
   createDefaultBuiltinToolRegistrations,
   filterToolRegistryForEnvironment,
   ToolBatchCoordinator,
   ToolRegistryBuilder,
+  boundToolModelContent,
   type ToolCallingDebugEvent,
   type ToolExposureEnvironment,
   type ToolRegistration,
 } from "@caelush/tools";
+import {
+  createDurableToolExecutionCoordinator,
+  createToolAdmissionCoordinator,
+  createToolFailureSettlement,
+  type DurableToolExecutionCoordinator,
+} from "@caelush/agent";
 import { createLegacyNumericArgumentNormalization } from "@caelush/coding-agent";
 import {
+  createDefaultV1ToolExecutionSecurity,
   createV1SecureToolDispatcher,
+  createV1ToolApprovalRequestFactory,
   CaelushToolExecutionUpdateSanitizer,
   DISCARDING_TOOL_UPDATE_CONSUMER,
   verificationCommandSecurityPort,
   verificationEvidenceSanitizer,
 } from "@caelush/security";
-import type { CaelushStorage } from "@caelush/storage";
+import { createSqliteToolBudgetAdmission, type CaelushStorage } from "@caelush/storage";
+
 import {
   createRuntimeGitVerificationPort,
   createRuntimeWorkspaceVerificationPort,
@@ -111,6 +125,36 @@ import {
 } from "./execution/run-execution-supervisor.js";
 import { SessionConversationContextProvider } from "./services/session-conversation-context.js";
 import { DAEMON_VERSION } from "./version.js";
+
+/**
+ * Project durable invocation state back onto the canonical prepared call.
+ *
+ * Nothing is resolved, normalized or validated here. The canonical registry resolved the Tool at
+ * registration, preparation validated the arguments before the `REQUESTED` row was written, and the
+ * arguments come from the durable invocation itself. This is durable state projected onto the canonical
+ * call type, not a second preparation path.
+ */
+function preparedCallFromDurableState(
+  registry: ReturnType<typeof filterToolRegistryForEnvironment>,
+  invocation: import("@caelush/protocol").ToolInvocation,
+  externalCallId: string,
+): import("@caelush/agent").PreparedToolCall {
+  const resolved = registry.agentRegistry().resolve(invocation.toolName);
+  if (resolved === undefined) {
+    throw new Error(
+      `The canonical Tool entry "${invocation.toolName}" is unavailable for execution.`,
+    );
+  }
+  return Object.freeze({
+    request: Object.freeze({
+      externalCallId,
+      toolName: invocation.toolName,
+      args: invocation.args,
+    }),
+    resolved,
+    args: invocation.args,
+  });
+}
 
 export const DEFAULT_CORE_AGENT_POLICY = [
   "You are Caelush, a careful workspace agent.",
@@ -358,9 +402,111 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     builtToolRegistry.build(),
     options.toolExposure ?? { git: "AVAILABLE" },
   );
+  /**
+   * The Phase 4C production Tool assembly.
+   *
+   * ```text
+   * ToolAdmissionPort              Security/Coding admission adapter over the real gate
+   * ToolDurableMetadataPort        the registry's risk level, for the durable invocation row
+   * ToolApprovalRequestFactory     the real approval card, from redacted security facts
+   * ToolBudgetAdmissionPort        the canonical view over the durable budget ledger
+   * ToolExecutionStorePort         @caelush/storage, implementing the canonical port
+   * DurableToolExecutionCoordinator   ← the Tool Invocation Lifecycle Authority
+   * ToolDispatcher                 a compatibility facade, delegating to the coordinator
+   * ```
+   *
+   * Every dependency below is a *construction* dependency of the coordinator, never a field of a frozen
+   * request: the durable request carries identity, the prepared call, the environment, the security
+   * context and a signal, and nothing else.
+   *
+   * The composition root is also where the three compatibility pieces that must not live in a canonical
+   * layer are wired:
+   *
+   * ```text
+   * the settlement extension decoder   storage decodes it; the Coding vocabulary is here
+   * the approval request factory       the Agent layer never learns what a safeAction is
+   * the effects projection             AgentState belongs to the host, not to the Tool layer
+   * ```
+   */
+  const toolSecurity = createDefaultV1ToolExecutionSecurity({
+    terminalOutputSanitizer: sanitizeTerminalOutput,
+  });
+  const toolExecutionDependencies = createToolExecutionDependencies({
+    registry: activeToolRegistry,
+    resultSanitizer: toolSecurity.resultSanitizer,
+    updateSanitizer: new CaelushToolExecutionUpdateSanitizer(),
+    transientUpdates: DISCARDING_TOOL_UPDATE_CONSUMER,
+    // The durable event identity factory and the safe presenter, so a Tool effect's host-domain event
+    // (`file.read`, `file.modified`, `process.started`) is drawn from the same sequence as the terminal
+    // event it accompanies and carries the same safe presentation.
+    eventIdFactory: { create: createEventId },
+    presentation: toolSecurity.presentation,
+  });
+  const toolApprovalRequests = createV1ToolApprovalRequestFactory({
+    registry: activeToolRegistry,
+    gate: toolSecurity.gate,
+    approvalIdFactory: { create: createApprovalRequestId },
+  });
+  const toolBudgetAdmission = createSqliteToolBudgetAdmission(options.storage.budget);
+  const toolAdmission = createToolAdmissionCoordinator({
+    policy: createCodingToolAdmissionPort({
+      gate: createDurableInvocationGatePort({
+        gate: toolSecurity.gate,
+        invocations: {
+          resolve: async (request) =>
+            (await options.storage.toolExecution.load(request.invocationId as never))?.invocation,
+        },
+      }),
+      registry: activeToolRegistry,
+      definitions: activeToolRegistry.modelDefinitions(),
+      approvalPresentation: (decision) => decision.safeAction,
+    }),
+    approvals: options.storage.approvals,
+    approvalRequests: toolApprovalRequests,
+    budget: toolBudgetAdmission,
+    clock,
+    eventIdFactory: { create: createEventId },
+  });
+  const toolDurableCoordinator: DurableToolExecutionCoordinator =
+    createDurableToolExecutionCoordinator({
+      store: options.storage.toolExecution,
+      admission: toolAdmission,
+      metadata: createCodingToolDurableMetadataPort({
+        registry: activeToolRegistry,
+        definitions: activeToolRegistry.modelDefinitions(),
+      }),
+      approvalRequests: toolApprovalRequests,
+      approvalLookup: options.storage.approvals,
+      invocationIdFactory: { create: createToolInvocationId },
+      observationIdFactory: { create: createObservationId },
+      eventIdFactory: { create: createEventId },
+      clock,
+      invocationExecutorFactory: toolExecutionDependencies.invocationExecutorFactory,
+      updateSanitizer: toolExecutionDependencies.updateSanitizer,
+      resultPipelineFactory: toolExecutionDependencies.resultPipelineFactory,
+      preparedCallFactory: ({ invocation, externalCallId }) =>
+        preparedCallFromDurableState(activeToolRegistry, invocation, externalCallId),
+      failureSettlement: createToolFailureSettlement({
+        store: options.storage.toolExecution,
+        clock,
+        observationIdFactory: { create: createObservationId },
+        eventIdFactory: { create: createEventId },
+        presentation: toolSecurity.presentation,
+        boundContent: (content) =>
+          boundToolModelContent(content, toolExecutionDependencies.outputPolicy),
+        notifier: options.eventBus,
+      }),
+      budget: toolBudgetAdmission,
+      presentation: toolSecurity.presentation,
+      rawOutputStore: options.storage.contextArtifacts,
+      notifier: options.eventBus,
+      boundFailureContent: (content) =>
+        boundToolModelContent(content, toolExecutionDependencies.outputPolicy),
+    });
   const dispatcher = createV1SecureToolDispatcher({
     registry: activeToolRegistry,
     store: options.storage.toolExecution,
+    coordinator: toolDurableCoordinator,
     notifier: options.eventBus,
     clock,
     invocationIdFactory: { create: createToolInvocationId },
@@ -368,7 +514,12 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     eventIdFactory: { create: createEventId },
     approvalStore: options.storage.approvals,
     approvalIdFactory: { create: createApprovalRequestId },
-    budget: options.storage.budget,
+    budget: {
+      admit: (input) => options.storage.budget.admit(input),
+      admitBatch: (input) => options.storage.budget.admitBatch(input),
+      start: (input) => options.storage.budget.start(input),
+      settle: (input) => options.storage.budget.settle(input),
+    },
     rawOutputStore: options.storage.contextArtifacts,
     terminalOutputSanitizer: sanitizeTerminalOutput,
     securityToolNames: activeToolRegistry.names(),

@@ -59,6 +59,7 @@ export {
   assertDefaultBuiltinSecurityCoverage,
   createDefaultV1ToolExecutionSecurity,
   createV1SecureToolDispatcher,
+  createV1ToolApprovalRequestFactory,
   V1SecurityCompositionError,
 } from "./default-composition.js";
 export type {

@@ -1,9 +1,12 @@
 import { EventBus } from "@caelush/events";
 import type { AIProviderBinding, ApiAdapter, ModelDescriptorSourcePort } from "@caelush/ai";
 import type { ClientModelSelection } from "@caelush/protocol";
-import { openCaelushStorage } from "@caelush/storage";
+import { openCaelushStorage, toHostToolEffectsPort } from "@caelush/storage";
 import {
+  applyToolEffectsToAgentState,
   createDefaultBuiltinToolRegistrations,
+  createLegacyToolSettlementExtensionDecoder,
+  effectsChangeAgentState,
   ToolRegistryBuilder,
   type ToolCallingDebugEvent,
 } from "@caelush/tools";
@@ -63,7 +66,30 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   for (const registration of defaultToolRegistrations) defaultToolBuilder.register(registration);
   await defaultToolBuilder.buildCodingCatalog();
 
-  const storage = await openCaelushStorage({ path: options.databasePath });
+  /**
+   * The Tool settlement compatibility boundary, built once per daemon start.
+   *
+   * ```text
+   * canonical ToolResultPipeline
+   *   └── opaque ToolSettlementExtension          kind = "caelush.coding.effects.v1"
+   *         └── this decoder
+   *               └── the existing Coding ToolEffect[] projection
+   *                     └── the invocation's own SQLite transaction
+   * ```
+   *
+   * It is wired here rather than inside `@caelush/storage` because the Coding effect vocabulary belongs
+   * to the Tool System, which Storage may not import. The Agent layer never sees it at all: it carries
+   * the extension and passes it through.
+   */
+  const storage = await openCaelushStorage({
+    path: options.databasePath,
+    toolSettlementExtension: createLegacyToolSettlementExtensionDecoder({
+      effects: toHostToolEffectsPort({
+        changesState: effectsChangeAgentState,
+        apply: applyToolEffectsToAgentState,
+      }),
+    }),
+  });
   const eventBus = new EventBus(storage.events);
   let composition: DaemonComposition;
   try {
