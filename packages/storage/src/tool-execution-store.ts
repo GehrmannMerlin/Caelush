@@ -8,21 +8,20 @@ import {
   type SessionId,
   type ToolInvocation,
   type ToolObservation,
+  type TimestampMs,
 } from "@caelush/protocol";
 import { DuplicateEventError, type DurableEventDraft } from "@caelush/events";
 import {
   assertToolInvocationInvariant,
   assertToolObservationInvariant,
+  ToolExecutionConflictError,
+  ToolExecutionInvariantError,
   type DurableToolEventDraft,
   type ToolExecutionCommit,
   type ToolExecutionCommitResult,
   type ToolExecutionSnapshot,
   type ToolExecutionStorePort,
-  ToolExecutionConflictError,
-  ToolExecutionInvariantError,
-  applyToolEffectsToAgentState,
-  effectsChangeAgentState,
-} from "@caelush/tools";
+} from "@caelush/agent";
 import type { CaelushDatabase } from "./database.js";
 import { decodeProtocol, encodeProtocol } from "./codec.js";
 import { appendDurableEventsInTransaction } from "./events/sqlite-durable-event-store.js";
@@ -34,6 +33,10 @@ import {
   SqliteApprovalRepository,
   writeApprovalInTransaction,
 } from "./repositories/approval-repository.js";
+import {
+  ToolSettlementExtensionError,
+  type ToolSettlementExtensionDecoder,
+} from "./tool-settlement-extension-adapter.js";
 
 function expectedRevision(actual: number | undefined, expected: number | null): void {
   const normalized = actual ?? null;
@@ -47,6 +50,12 @@ function expectedRevision(actual: number | undefined, expected: number | null): 
 function mapStoreError(error: unknown): never {
   if (error instanceof ToolExecutionConflictError || error instanceof ToolExecutionInvariantError) {
     throw error;
+  }
+  if (error instanceof ToolSettlementExtensionError) {
+    // A settlement the host could not interpret is a fail-closed rollback. It is reported as an
+    // invariant failure so the caller does not mistake it for a retryable conflict: the transaction
+    // rolled back, and re-running the same commit would fail the same way.
+    throw new ToolExecutionInvariantError(error.message, { cause: error });
   }
   if (error instanceof DuplicateEventError) {
     throw new ToolExecutionConflictError(
@@ -184,6 +193,22 @@ function writeObservation(client: CaelushDatabase["client"], observation: ToolOb
     );
 }
 
+/**
+ * Move the matching Tool budget reservation to `IN_FLIGHT`, inside the RUNNING commit.
+ *
+ * ```text
+ * REQUESTED
+ *   ↓ budget.admit  → RESERVED
+ * RUNNING commit    → IN_FLIGHT        ← this function, same transaction
+ * ```
+ *
+ * The atomicity is the point: a crash between "the invocation is RUNNING" and "the budget started"
+ * would leave durable truth that budget recovery has to guess about. Doing both in one transaction
+ * removes the gap rather than narrowing it.
+ *
+ * An absent row is not an error: a host that enforces no Tool budget simply has no ledger entry, and a
+ * `budgetStart` hint with nothing to move is a no-op.
+ */
 function startBudgetInTransaction(
   client: CaelushDatabase["client"],
   runId: string,
@@ -197,9 +222,99 @@ function startBudgetInTransaction(
        WHERE run_id = ? AND kind = 'TOOL_INVOCATION' AND owner_id = ? AND state = 'RESERVED'`,
     )
     .run(startedAt, runId, ownerId);
+  if (result.changes === 0) return;
   if (result.changes !== 1) {
-    throw new ToolExecutionInvariantError("Tool budget reservation is missing or already started.");
+    throw new ToolExecutionInvariantError("Tool budget reservation is ambiguous.");
   }
+}
+
+/**
+ * Finish the matching Tool budget entry, inside the terminal commit.
+ *
+ * ```text
+ * IN_FLIGHT   → SETTLED        a Tool that ran to a final answer
+ * IN_FLIGHT   → CONSERVATIVE   an execution whose side effect is uncertain
+ * RESERVED    → RELEASED       a handler that provably never started
+ * absent                      this host enforces no Tool budget
+ * already terminal            idempotent no-op
+ * ```
+ *
+ * ## Why conservative is not settled
+ *
+ * An `UNCERTAIN_SIDE_EFFECT` invocation may have performed external work that cannot be measured. Its
+ * reservation is real consumption as far as accounting is concerned, so the entry becomes
+ * `CONSERVATIVE` — the same state Run budget recovery uses for an ambiguous in-flight entry. Settling it
+ * as if it had completed cleanly would understate what the Run consumed and would disagree with what
+ * recovery concludes about the same row.
+ *
+ * ## Why this closes the terminal crash gap
+ *
+ * Before Phase 4C the terminal commit and the budget settlement were two calls, and a crash between
+ * them left a terminal Tool invocation beside an `IN_FLIGHT` reservation. The frozen
+ * `ToolExecutionCommit` has no settlement field, so the fix is not a new field: the store recognizes
+ * the invocation's own terminal state and finishes the matching entry in the same transaction. The
+ * coordinator's later `ToolBudgetAdmissionPort.settle(...)` is then an idempotent restatement of a fact
+ * that is already durable.
+ */
+function settleBudgetInTransaction(
+  client: CaelushDatabase["client"],
+  runId: string,
+  ownerId: string,
+  invocation: ToolInvocation,
+): void {
+  const row = client
+    .prepare(
+      `SELECT state FROM run_budget_entries
+       WHERE run_id = ? AND kind = 'TOOL_INVOCATION' AND owner_id = ?`,
+    )
+    .get(runId, ownerId) as { state: string } | undefined;
+  if (row === undefined) return;
+  if (row.state === "SETTLED" || row.state === "CONSERVATIVE" || row.state === "RELEASED") return;
+  const settledAt = invocation.finishedAt ?? invocation.createdAt;
+  if (row.state === "IN_FLIGHT") {
+    const terminal = isUncertainExecution(invocation) ? "CONSERVATIVE" : "SETTLED";
+    const columns =
+      terminal === "SETTLED"
+        ? ", actual_input_tokens = 0, actual_output_tokens = 0, actual_cost_micros = 0"
+        : "";
+    const result = client
+      .prepare(
+        `UPDATE run_budget_entries SET state = ?${columns}, settled_at_ms = ?
+         WHERE run_id = ? AND kind = 'TOOL_INVOCATION' AND owner_id = ? AND state = 'IN_FLIGHT'`,
+      )
+      .run(terminal, settledAt, runId, ownerId);
+    if (result.changes !== 1) {
+      throw new ToolExecutionInvariantError("Tool budget settlement lost its entry.");
+    }
+    return;
+  }
+  if (row.state === "RESERVED") {
+    // The handler provably never started — a policy denial, an approval rejection, a budget block, a
+    // pre-execution abort. The reservation is released rather than consumed.
+    const result = client
+      .prepare(
+        `UPDATE run_budget_entries SET state = 'RELEASED', settled_at_ms = ?
+         WHERE run_id = ? AND kind = 'TOOL_INVOCATION' AND owner_id = ? AND state = 'RESERVED'`,
+      )
+      .run(settledAt, runId, ownerId);
+    if (result.changes !== 1) {
+      throw new ToolExecutionInvariantError("Tool budget release lost its entry.");
+    }
+  }
+}
+
+/**
+ * Did this invocation end with an unverifiable side effect?
+ *
+ * The answer is read from the durable error the invocation carries — `executionDisposition =
+ * UNCERTAIN_SIDE_EFFECT` — never from an in-memory flag, so a recovery that re-settles the same row
+ * reaches the same budget conclusion.
+ */
+function isUncertainExecution(invocation: ToolInvocation): boolean {
+  return (
+    invocation.status !== "COMPLETED" &&
+    invocation.error?.details?.executionDisposition === "UNCERTAIN_SIDE_EFFECT"
+  );
 }
 
 function validateEvents(
@@ -217,15 +332,33 @@ function validateEvents(
   }
 }
 
+/** Options a store needs beyond its database. */
+export interface SqliteToolExecutionStoreOptions {
+  /**
+   * The host's Tool settlement extension decoder.
+   *
+   * It is the compatibility boundary that turns the canonical opaque extension back into the host's own
+   * effect vocabulary, and it is injected so `@caelush/storage` never imports a Coding effect type.
+   * Absent means this host projects nothing: an extension that arrives with no decoder is refused rather
+   * than ignored, because a Tool must never be recorded `COMPLETED` while effects are unaccounted for.
+   */
+  readonly settlementExtension?: ToolSettlementExtensionDecoder | undefined;
+}
+
 export class SqliteToolExecutionStore implements ToolExecutionStorePort {
   private readonly invocations: SqliteToolInvocationRepository;
   private readonly observations: SqliteObservationRepository;
   private readonly approvals: SqliteApprovalRepository;
+  private readonly settlementExtension: ToolSettlementExtensionDecoder | undefined;
 
-  constructor(private readonly database: CaelushDatabase) {
+  constructor(
+    private readonly database: CaelushDatabase,
+    options: SqliteToolExecutionStoreOptions = {},
+  ) {
     this.invocations = new SqliteToolInvocationRepository(database);
     this.observations = new SqliteObservationRepository(database);
     this.approvals = new SqliteApprovalRepository(database);
+    this.settlementExtension = options.settlementExtension;
   }
 
   async load(
@@ -245,7 +378,11 @@ export class SqliteToolExecutionStore implements ToolExecutionStorePort {
         throw new ToolExecutionInvariantError("Non-terminal ToolInvocation has an observation.");
       }
     } else if (observation === null) {
-      throw new ToolExecutionInvariantError("Terminal ToolInvocation is missing its observation.");
+      if (invocation.status !== "CANCELLED") {
+        throw new ToolExecutionInvariantError(
+          "Terminal ToolInvocation is missing its observation.",
+        );
+      }
     } else {
       assertToolObservationInvariant(observation, invocation);
     }
@@ -299,6 +436,9 @@ export class SqliteToolExecutionStore implements ToolExecutionStorePort {
       command.sessionId,
       command.invocation.stepId,
     );
+    // The extension is decoded *before* the transaction opens, so an extension this host cannot
+    // interpret is refused without ever having taken a write lock.
+    const hostEffects = this.decodeExtension(command.extension);
     const client = this.database.client;
     let committedEvents: ToolExecutionCommitResult["events"];
     client.exec("BEGIN IMMEDIATE");
@@ -330,7 +470,7 @@ export class SqliteToolExecutionStore implements ToolExecutionStorePort {
         writeApprovalInTransaction(client, command.approval, command.approvalKey!);
       }
       if (command.observation !== undefined) writeObservation(client, command.observation);
-      if (command.effects !== undefined && effectsChangeAgentState(command.effects)) {
+      if (hostEffects !== undefined && hostEffects.changeState) {
         const stateRow = client
           .prepare("SELECT revision, data_json FROM agent_state_snapshots WHERE run_id = ?")
           .get(command.invocation.runId) as { revision: number; data_json: string } | undefined;
@@ -342,15 +482,12 @@ export class SqliteToolExecutionStore implements ToolExecutionStorePort {
           entityId: command.invocation.runId,
           table: "agent_state_snapshots",
         });
-        const updated = applyToolEffectsToAgentState(
+        const updated = hostEffects.apply(
           state,
-          command.effects,
           Math.max(
             state.updatedAt,
-            command.effectTimestamp ??
-              command.invocation.finishedAt ??
-              command.invocation.createdAt,
-          ) as typeof state.updatedAt,
+            command.invocation.finishedAt ?? command.invocation.createdAt,
+          ) as TimestampMs,
         );
         writeStateSnapshot(client, updated, stateRow.revision, (actual, expected) => {
           if (actual !== expected) {
@@ -359,6 +496,14 @@ export class SqliteToolExecutionStore implements ToolExecutionStorePort {
             );
           }
         });
+      }
+      if (command.invocation.finishedAt !== undefined) {
+        settleBudgetInTransaction(
+          client,
+          command.invocation.runId,
+          command.invocation.id,
+          command.invocation,
+        );
       }
       const events = appendDurableEventsInTransaction(
         client,
@@ -373,5 +518,17 @@ export class SqliteToolExecutionStore implements ToolExecutionStorePort {
     const snapshot = await this.load(command.invocation.id);
     if (snapshot === null) throw new StorageError("Tool invocation disappeared after commit.");
     return { snapshot, events: committedEvents };
+  }
+
+  private decodeExtension(
+    extension: ToolExecutionCommit["extension"],
+  ): ReturnType<ToolSettlementExtensionDecoder["decode"]> {
+    if (extension === undefined) return undefined;
+    if (this.settlementExtension === undefined) {
+      throw new ToolSettlementExtensionError(
+        "Tool settlement carried an extension this host cannot decode.",
+      );
+    }
+    return this.settlementExtension.decode(extension);
   }
 }

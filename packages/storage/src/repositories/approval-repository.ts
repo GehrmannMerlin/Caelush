@@ -13,10 +13,10 @@ import {
 } from "@caelush/protocol";
 import {
   createApprovalResolvedEvent,
-  type ToolApprovalStorePort,
   type DurableToolEventDraft,
   ToolExecutionConflictError,
-} from "@caelush/tools";
+  type ToolApprovalLookupPort,
+} from "@caelush/agent";
 import { appendDurableEventsInTransaction } from "../events/sqlite-durable-event-store.js";
 import { decodeProtocol, encodeProtocol } from "../codec.js";
 import type { CaelushDatabase } from "../database.js";
@@ -32,7 +32,27 @@ export interface ApprovalEventIdFactory {
   create(): import("@caelush/protocol").EventId;
 }
 
-export interface ApprovalRepository extends ToolApprovalStorePort {
+/**
+ * The durable approval repository.
+ *
+ * ```text
+ * admission questions    the canonical ToolApprovalLookupPort   getByInvocation,
+ *                                                               getStoredApprovalKey,
+ *                                                               findApplicableRunGrant
+ * workflow operations    this repository's own surface          getById, listPendingByRun,
+ *                                                               resolve, cancelPendingByRun
+ * ```
+ *
+ * Phase 4C moved the *admission* contract to `@caelush/agent`, because those three questions are what
+ * the admission coordinator and the durable coordinator ask. Resolution, lazy expiry, listing and
+ * cancellation are approval-workflow operations owned by the host and its UI/HTTP surface, so they stay
+ * here rather than being widened into a port that admission does not need.
+ *
+ * `getApprovalKeyByInvocation` is retained under its legacy name and now also answers the canonical
+ * `getStoredApprovalKey`: one question, one query, two spellings, so a caller mid-migration cannot get
+ * two different answers.
+ */
+export interface ApprovalRepository extends ToolApprovalLookupPort {
   getById(id: ApprovalRequestId): Promise<ApprovalRequest | null>;
   listPendingByRun(runId: RunId): Promise<readonly ApprovalRequest[]>;
   resolve(id: ApprovalRequestId, resolution: ApprovalResolution): Promise<ApprovalRequest>;
@@ -199,6 +219,17 @@ export class SqliteApprovalRepository implements ApprovalRepository {
   }
 
   async getApprovalKeyByInvocation(toolInvocationId: ToolInvocationId): Promise<string | null> {
+    return await this.getStoredApprovalKey(toolInvocationId);
+  }
+
+  /**
+   * The canonical spelling of {@link getApprovalKeyByInvocation}.
+   *
+   * The admission coordinator compares this against the identity it recomputes from current durable
+   * state. A `null` answer means "there is no stored approval identity", which the coordinator refuses
+   * to treat as a match.
+   */
+  async getStoredApprovalKey(toolInvocationId: ToolInvocationId): Promise<string | null> {
     const row = selectRow(
       this.database.client,
       `SELECT id, run_id, tool_invocation_id, approval_key, status, scope, granted_scope,

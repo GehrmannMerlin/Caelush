@@ -22,7 +22,8 @@ import {
 } from "./repositories/continuation-repository.js";
 import { SqliteRunExecutionStore } from "./run-execution-store.js";
 import { SqliteToolExecutionStore } from "./tool-execution-store.js";
-import type { ToolExecutionStorePort } from "@caelush/tools";
+import type { ToolSettlementExtensionDecoder } from "./tool-settlement-extension-adapter.js";
+import type { ToolExecutionStorePort } from "@caelush/agent";
 import {
   SqliteToolInvocationRepository,
   type ToolInvocationRepository,
@@ -97,6 +98,14 @@ export async function openCaelushStorage(options: {
   path: string;
   approvalClock?: ApprovalClock;
   budget?: SqliteRunBudgetPortOptions;
+  /**
+   * How this host projects a Tool settlement extension onto its own `AgentState`.
+   *
+   * The production composition supplies the Coding Tool effects projection. Absent means this host has
+   * no effect vocabulary, and a settlement extension arriving without one is **refused** rather than
+   * ignored — a Tool is never recorded `COMPLETED` while the effects it had are unaccounted for.
+   */
+  toolSettlementExtension?: ToolSettlementExtensionDecoder;
 }): Promise<CaelushStorage> {
   const database = await openCaelushDatabase(options);
 
@@ -111,7 +120,12 @@ export async function openCaelushStorage(options: {
       messages: new SqliteConversationRepository(database),
       continuations: new SqliteContinuationRepository(database),
       execution: new SqliteRunExecutionStore(database),
-      toolExecution: new SqliteToolExecutionStore(database),
+      toolExecution: new SqliteToolExecutionStore(
+        database,
+        options.toolSettlementExtension === undefined
+          ? {}
+          : { settlementExtension: options.toolSettlementExtension },
+      ),
       toolInvocations: new SqliteToolInvocationRepository(database),
       observations: new SqliteObservationRepository(database),
       approvals: new SqliteApprovalRepository(

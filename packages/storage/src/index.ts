@@ -12,8 +12,21 @@ export type {
   BudgetLedgerSnapshot,
   NewBudgetLedgerEntry,
 } from "./budget-ledger-repository.js";
-export { SqliteRunBudgetPort } from "./run-budget-port.js";
-export type { SqliteRunBudgetPortOptions } from "./run-budget-port.js";
+export { createSqliteToolBudgetAdmission, SqliteRunBudgetPort } from "./run-budget-port.js";
+export type { SqliteRunBudgetPortOptions, ToolBudgetAdmissionLegacy } from "./run-budget-port.js";
+export {
+  createCodingToolEffectsDecoder,
+  createHostToolEffectsDecoder,
+  toHostToolEffectsPort,
+  ToolSettlementExtensionError,
+  type HostToolEffects,
+  type HostToolEffectsPort,
+  type ToolSettlementExtensionDecoder,
+} from "./tool-settlement-extension-adapter.js";
+export {
+  SqliteToolExecutionStore,
+  type SqliteToolExecutionStoreOptions,
+} from "./tool-execution-store.js";
 export {
   ResourceGovernanceStateSchema,
   ResourceGovernanceConflictError,

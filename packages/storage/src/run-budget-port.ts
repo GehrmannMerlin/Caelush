@@ -5,6 +5,8 @@ import type {
   RunId,
   StepId,
   TimestampMs,
+  ToolInvocationId,
+  ToolName,
 } from "@caelush/protocol";
 import { AgentRunSchema, AgentStateSchema } from "@caelush/protocol";
 import {
@@ -20,7 +22,7 @@ import {
   type ModelUsage as BudgetModelUsage,
   type RunBudgetPort,
 } from "@caelush/core";
-import type { ToolBudgetAdmission, ToolBudgetAdmissionPort } from "@caelush/tools";
+import type { AgentBudgetBlock, ToolBudgetAdmissionPort } from "@caelush/agent";
 import { SqliteBudgetLedgerRepository } from "./budget-ledger-repository.js";
 import type { CaelushDatabase } from "./database.js";
 import { decodeProtocol } from "./codec.js";
@@ -31,8 +33,56 @@ export interface SqliteRunBudgetPortOptions {
   readonly clock?: { now(): TimestampMs };
 }
 
-/** Durable adapter shared by RunController and ToolDispatcher. */
-export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPort {
+/**
+ * The legacy Tool budget answer.
+ *
+ * ```text
+ * ALLOWED    there is room
+ * EXCEEDED   a budget ran out, with the accounting that says so
+ * ```
+ *
+ * It is the shape `ToolDispatcher`'s compatibility facade and its batch preflight still consume, and it
+ * is reproduced here rather than imported from `@caelush/tools`, which `@caelush/storage` may not
+ * depend on. The canonical answer the admission coordinator consumes is `AgentBudgetBlock | null`,
+ * which {@link SqliteRunBudgetPort.preflight} and {@link SqliteRunBudgetPort.admitToolInvocation}
+ * produce from the same ledger calls. One ledger, two vocabularies, no second accounting.
+ */
+export type ToolBudgetAdmissionLegacy =
+  | { readonly kind: "ALLOWED" }
+  | {
+      readonly kind: "EXCEEDED";
+      readonly dimension: "TOOL_CALLS";
+      readonly accounted: number;
+      readonly limit: number;
+    };
+
+/**
+ * Durable budget adapter shared by RunController, the canonical Tool admission layer and the legacy
+ * Tool facade.
+ *
+ * ```text
+ * RunBudgetPort             the Run's own LLM, verification and recovery budget
+ * legacy    Tool budget     admit, admitBatch, start, settle     → ALLOWED | EXCEEDED
+ * canonical Tool budget     createSqliteToolBudgetAdmission(...) → AgentBudgetBlock | null
+ * ```
+ *
+ * Phase 4C does not migrate the Run budget system. It adds a canonical Tool admission view over the
+ * same ledger calls — {@link createSqliteToolBudgetAdmission} — and it makes the Tool half of the two
+ * lifecycle transitions atomic with the durable Tool commit rather than merely adjacent to it.
+ *
+ * The two views cannot be one `admit` method: the legacy signature takes a `requested` count and
+ * answers `ALLOWED | EXCEEDED`, while the canonical one names the Tool and answers an
+ * `AgentBudgetBlock | null`. They are two questions over one ledger, so they are two entry points over
+ * one implementation rather than one overloaded method whose two arms disagree about what it returned.
+ *
+ * ## Timestamps
+ *
+ * `start` and `settle` are the **idempotent second statement** of a fact the production store already
+ * moved inside the `RUNNING` and terminal commits. Neither invents a second answer to "when did this
+ * happen"; the invocation's own durable `startedAt`/`finishedAt` are the facts, and the canonical port
+ * carries them.
+ */
+export class SqliteRunBudgetPort implements RunBudgetPort {
   private readonly manager = new BudgetManager();
   private readonly tokenEstimator: LLMTokenEstimator;
   private readonly clock: { now(): TimestampMs };
@@ -51,7 +101,7 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
     readonly runId: RunId;
     readonly requested: number;
     readonly invocationId?: string;
-  }): Promise<ToolBudgetAdmission> {
+  }): Promise<ToolBudgetAdmissionLegacy> {
     const snapshot = await this.ledger.snapshot(input.runId);
     const run = await this.loadRun(input.runId);
     const result = this.manager.admitToolCalls({
@@ -74,10 +124,11 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
     return { kind: "ALLOWED" };
   }
 
+  /** The legacy whole-segment question, kept for the batch preflight until 4D rewires it. */
   async admitBatch(input: {
     readonly runId: RunId;
     readonly requested: number;
-  }): Promise<ToolBudgetAdmission> {
+  }): Promise<ToolBudgetAdmissionLegacy> {
     const snapshot = await this.ledger.snapshot(input.runId);
     const run = await this.loadRun(input.runId);
     const result = this.manager.admitToolCalls({
@@ -91,13 +142,15 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
 
   async start(input: { readonly runId: RunId; readonly invocationId: string }): Promise<void> {
     const entry = await this.ledger.get(input.runId, "TOOL_INVOCATION", input.invocationId);
+    if (entry === null) return;
     if (
-      entry?.state === "IN_FLIGHT" ||
-      entry?.state === "SETTLED" ||
-      entry?.state === "CONSERVATIVE"
-    )
+      entry.state === "IN_FLIGHT" ||
+      entry.state === "SETTLED" ||
+      entry.state === "CONSERVATIVE" ||
+      entry.state === "RELEASED"
+    ) {
       return;
-    if (entry === null) throw new Error("Tool budget reservation is missing.");
+    }
     await this.ledger.markInFlight(
       input.runId,
       "TOOL_INVOCATION",
@@ -108,7 +161,7 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
 
   async settle(input: { readonly runId: RunId; readonly invocationId: string }): Promise<void> {
     const entry = await this.ledger.get(input.runId, "TOOL_INVOCATION", input.invocationId);
-    if (entry === null || entry.state === "SETTLED" || entry.state === "RELEASED") return;
+    if (entry === null || entry.state === "SETTLED" || entry.state === "CONSERVATIVE") return;
     if (entry.state === "IN_FLIGHT") {
       await this.ledger.settle(input.runId, "TOOL_INVOCATION", input.invocationId, {
         actualInputTokens: 0,
@@ -116,7 +169,51 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
         actualCostMicros: 0,
         settledAt: this.clock.now(),
       });
+      return;
     }
+    if (entry.state === "RESERVED") {
+      await this.ledger.release(input.runId, "TOOL_INVOCATION", input.invocationId);
+    }
+  }
+
+  /**
+   * The canonical Tool budget admission, on top of the same legacy ledger calls.
+   *
+   * ```text
+   * canonical admit({ runId, invocationId, toolName })  → AgentBudgetBlock | null
+   * legacy    admit({ runId, requested, invocationId }) → ALLOWED | EXCEEDED
+   * ```
+   *
+   * A Tool call reserves exactly one Tool call, so `requested` is `1` here rather than a parameter: a
+   * caller that could ask for ten would be describing a batch admission this port does not perform. The
+   * underlying reservation, its identity and its amounts are unchanged.
+   */
+  async admitToolInvocation(input: {
+    readonly runId: RunId;
+    readonly invocationId: ToolInvocationId;
+    readonly toolName: ToolName;
+  }): Promise<AgentBudgetBlock | null> {
+    const admission = await this.admit({
+      runId: input.runId,
+      requested: 1,
+      invocationId: input.invocationId,
+    });
+    return admission.kind === "ALLOWED" ? null : admission;
+  }
+
+  /**
+   * The canonical whole-segment question.
+   *
+   * It answers `AgentBudgetBlock | null` and writes nothing: a preflight is a question, and the whole
+   * point of asking before the first handler runs is that a segment which does not fit has zero side
+   * effects.
+   */
+  async preflight(
+    runId: RunId,
+    requests: readonly { readonly externalCallId: string }[],
+  ): Promise<AgentBudgetBlock | null> {
+    const admission = await this.admitBatch({ runId, requested: requests.length });
+    return admission.kind === "ALLOWED" ? null : admission;
   }
 
   async admitLLM(input: {
@@ -126,7 +223,6 @@ export class SqliteRunBudgetPort implements RunBudgetPort, ToolBudgetAdmissionPo
   }): Promise<import("@caelush/core").RunLLMBudgetAdmission> {
     return this.admitLLMForOwner({ ...input, ownerId: input.step.id, kind: "LLM_ATTEMPT" });
   }
-
   async admitVerificationLLM(input: {
     readonly run: AgentRun;
     readonly ownerId: string;
@@ -340,4 +436,39 @@ function pricingColumns(pricing: ModelPricingSnapshot) {
     inputRateMicrosPerMillion: pricing.inputMicrosPerMillionTokens,
     outputRateMicrosPerMillion: pricing.outputMicrosPerMillionTokens,
   } as const;
+}
+
+/**
+ * The canonical Tool budget admission view over the durable ledger.
+ *
+ * ```text
+ * preflight(runId, requests)                  may this whole segment fit?  no write
+ * admit({ runId, invocationId, toolName })    may this one invocation run? reserves one Tool call
+ * start({ runId, invocationId, startedAt })   idempotent after the atomic RUNNING commit
+ * settle({ runId, invocationId, status, ...}) idempotent after the atomic terminal commit
+ * ```
+ *
+ * It is a separate factory rather than a method on {@link SqliteRunBudgetPort} because the two Tool
+ * budget vocabularies genuinely differ: the legacy one takes a `requested` count and answers
+ * `ALLOWED | EXCEEDED`, and the canonical one names the Tool and answers `AgentBudgetBlock | null`.
+ * One ledger, one implementation of each transition, two entry points — never two accountings.
+ *
+ * `startedAt` and `finishedAt` are accepted and deliberately not used as ledger timestamps on this
+ * path: the production store has already moved the matching entry inside the `RUNNING` and terminal
+ * commits, so this call is a no-op restatement of a fact that is durable. A host that commits without
+ * an atomic budget transition still gets the invocation's own timestamps honoured by its own store.
+ */
+export function createSqliteToolBudgetAdmission(
+  budget: SqliteRunBudgetPort,
+): ToolBudgetAdmissionPort {
+  return {
+    preflight: async (runId, requests) => await budget.preflight(runId, requests),
+    admit: async (input) => await budget.admitToolInvocation(input),
+    start: async (input) => {
+      await budget.start({ runId: input.runId, invocationId: input.invocationId });
+    },
+    settle: async (input) => {
+      await budget.settle({ runId: input.runId, invocationId: input.invocationId });
+    },
+  };
 }
