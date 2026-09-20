@@ -20,10 +20,11 @@ export type ToolFailureDisposition = "SAFE_FAILURE" | "UNCERTAIN_SIDE_EFFECT";
  * A failure a Tool Layer component is willing to state to the model.
  *
  * ```text
- * code         a stable, non-localized machine code (for example TOOL_ARGUMENT_ERROR)
- * content      bounded, sanitized, specific, actionable text
- * details      JSON-safe structure for diagnostics that never carries raw host data
- * disposition  SAFE_FAILURE or UNCERTAIN_SIDE_EFFECT
+ * code               a stable, non-localized machine code (for example TOOL_ARGUMENT_ERROR)
+ * content            bounded, sanitized, specific, actionable text
+ * details            JSON-safe structure for diagnostics that never carries raw host data
+ * disposition        SAFE_FAILURE or UNCERTAIN_SIDE_EFFECT
+ * blockToolFailures  may an identical retry of this exact call be refused pre-execution?
  * ```
  *
  * Every producer of this shape owns the same four obligations:
@@ -34,6 +35,16 @@ export type ToolFailureDisposition = "SAFE_FAILURE" | "UNCERTAIN_SIDE_EFFECT";
  * bounded      content and details respect the layering output policy
  * actionable   the model can tell what to change, not merely that something failed
  * ```
+ *
+ * ## `blockToolFailures` is about repetition, not severity
+ *
+ * A Tool that failed for a reason its own arguments caused should not be called again with the same
+ * arguments: repeating it produces the same failure, and a model that retries forever burns a Run. A
+ * refusal over a *transient* condition must not set this — the same call may legitimately succeed a
+ * moment later.
+ *
+ * The flag is a **request**, not a mechanism: the layer that decides whether a retry is refused is the
+ * one that owns the refusal policy, and it reads this as one input among several.
  *
  * Producing safe feedback is a *request* to describe a failure, not a permission to describe
  * anything: the consumer still enforces structure, size and sanitization, so naming the right error
@@ -48,4 +59,11 @@ export interface ToolFailureFeedback {
   readonly content: string;
   readonly details: JsonObject;
   readonly disposition: ToolFailureDisposition;
+  /**
+   * Whether an identical retry may be refused before execution.
+   *
+   * Absent means "no opinion", which a refusal policy must read as "do not block": blocking on an
+   * unstated assumption would refuse a call nobody concluded was unrepeatable.
+   */
+  readonly blockToolFailures?: boolean | undefined;
 }

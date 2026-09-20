@@ -1,5 +1,6 @@
 import type { ModelUsage } from "@caelush/ai";
 import type { ToolName } from "@caelush/protocol";
+import type { AgentBudgetBlock as CanonicalAgentBudgetBlock } from "@caelush/agent";
 
 /**
  * The canonical agent decision-rejection types live in `@caelush/agent` from Phase 3A.
@@ -64,21 +65,32 @@ export class AgentLoopInputError extends Error {
   }
 }
 
-export type AgentBudgetBlock =
-  | {
-      readonly kind: "EXCEEDED";
-      readonly dimension: "TOOL_CALLS" | "TOKENS" | "COST";
-      readonly accounted: number;
-      readonly limit: number;
-      readonly limitMicros?: number;
-      readonly accountedMicros?: number;
-    }
-  | { readonly kind: "UNAVAILABLE"; readonly reason: "PRICING" | "TOKEN_ESTIMATE" };
-
+/**
+ * The budget refusal vocabulary, in the canonical Agent declaration.
+ *
+ * ```text
+ * Phase 10D froze the shape; Phase 4C moved the declaration
+ * ```
+ *
+ * `AgentBudgetBlock` is the answer the Agent Layer's own admission ports give — the model admission
+ * port, the Tool turn contract and the canonical `ToolBudgetAdmissionPort` all speak it — so the
+ * layer that declares those ports is the layer that declares it. Core re-exports the canonical
+ * declaration rather than restating it:
+ *
+ * ```text
+ * one declaration   @caelush/agent  loop/ports/model-request-admission.ts
+ * one re-export     @caelush/core   this file
+ * ```
+ *
+ * Two structural twins would be a second accounting authority: `EXCEEDED` and `UNAVAILABLE` would be
+ * assignable in one direction only, and a consumer that switched exhaustively over one could silently
+ * fall through the other.
+ */
+export type { AgentBudgetBlock } from "@caelush/agent";
 export class AgentBudgetAdmissionError extends Error {
-  readonly block: AgentBudgetBlock;
+  readonly block: CanonicalAgentBudgetBlock;
 
-  constructor(block: AgentBudgetBlock) {
+  constructor(block: CanonicalAgentBudgetBlock) {
     super(`Agent budget admission rejected: ${block.kind}.`);
     this.name = "AgentBudgetAdmissionError";
     this.block = block;

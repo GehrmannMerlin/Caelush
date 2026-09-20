@@ -180,3 +180,115 @@ export type {
   ToolResultPipeline,
   ToolResultPipelineOptions,
 } from "./result/result-pipeline.js";
+
+/* Admission: the Tool security context, durable metadata, policy, approval and budget boundaries. */
+export {
+  assertToolSecurityContext,
+  isToolSecurityContext,
+  ToolSecurityContextError,
+} from "./admission/security-context.js";
+export type {
+  ToolSecurityContext,
+  ToolSecurityContextErrorReason,
+} from "./admission/security-context.js";
+export {
+  requireToolDurableMetadata,
+  ToolDurableMetadataUnavailableError,
+} from "./admission/durable-metadata-port.js";
+export type {
+  ToolDurableMetadata,
+  ToolDurableMetadataInput,
+  ToolDurableMetadataPort,
+} from "./admission/durable-metadata-port.js";
+export { denyToolPolicyDecision } from "./admission/admission-decision.js";
+export type {
+  ToolAdmissionRequest,
+  ToolApprovalRequirement,
+  ToolPolicyDecision,
+} from "./admission/admission-decision.js";
+export type { ToolAdmissionPort, ToolAdmissionPreCheck } from "./admission/admission-port.js";
+export {
+  createToolAdmissionCoordinator,
+  DEFAULT_TOOL_APPROVAL_SCOPE,
+} from "./admission/admission-coordinator.js";
+export type {
+  ToolAdmissionCoordinator,
+  ToolAdmissionCoordinatorOptions,
+  ToolAdmissionInput,
+  ToolAdmissionOutcome,
+  ToolBudgetAdmissionLike,
+} from "./admission/admission-coordinator.js";
+export type {
+  ToolApprovalLookupPort,
+  ToolApprovalRequestFactory,
+} from "./admission/approval-port.js";
+export { UNBOUNDED_TOOL_BUDGET_ADMISSION } from "./admission/budget-port.js";
+export type { ToolBudgetAdmissionPort } from "./admission/budget-port.js";
+
+/* The durable lifecycle: invocation, observation, store, events, settlement and the coordinator. */
+export {
+  allowedToolInvocationTransitions,
+  assertToolInvocationInvariant,
+  assertToolInvocationTransition,
+  completeToolInvocation,
+  createRequestedToolInvocation,
+  failToolInvocation,
+  isTerminalToolInvocation,
+  markToolInvocationWaitingApproval,
+  startToolInvocation,
+} from "./durable/invocation-lifecycle.js";
+export type { CreateRequestedToolInvocationInput } from "./durable/invocation-lifecycle.js";
+export { assertToolObservationInvariant, createToolObservation } from "./durable/observation.js";
+export type { CreateToolObservationInput } from "./durable/observation.js";
+export {
+  ToolExecutionConflictError,
+  ToolExecutionInvariantError,
+} from "./durable/durable-errors.js";
+export type {
+  DurableToolEvent,
+  DurableToolEventDraft,
+  ToolExecutionCommit,
+  ToolExecutionCommitResult,
+  ToolExecutionSnapshot,
+  ToolExecutionStorePort,
+} from "./durable/execution-store-port.js";
+export {
+  createApprovalRequestedEvent,
+  createApprovalResolvedEvent,
+  createToolCompletedEvent,
+  createToolFailedEvent,
+  createToolOutputEvent,
+  createToolRequestedEvent,
+  createToolStartedEvent,
+  MAX_TOOL_EVENT_PRESENTATION_BYTES,
+} from "./durable/durable-events.js";
+export {
+  createToolFailureSettlement,
+  DURABLE_FAILURE_CODES,
+  feedbackToDurableFailure,
+} from "./durable/failure-settlement.js";
+export type {
+  DurableToolFailureSettlement,
+  ToolFailureSettlementOptions,
+} from "./durable/failure-settlement.js";
+export { createToolSettlementCoordinator } from "./durable/settlement-coordinator.js";
+export type {
+  ToolSettlementCoordinator,
+  ToolSettlementCoordinatorOptions,
+} from "./durable/settlement-coordinator.js";
+export {
+  createDurableToolExecutionCoordinator,
+  ToolCallBusyError,
+  ToolExecutionAbortedError,
+} from "./durable/durable-execution-coordinator.js";
+export type {
+  DurableInvocationExecutorFactory,
+  DurablePreparedCallFactory,
+  DurableRawOutputStore,
+  DurableResultPipelineFactory,
+  DurableToolBudgetPort,
+  DurableToolExecutionCoordinator,
+  DurableToolExecutionCoordinatorOptions,
+  DurableToolExecutionOutcome,
+  DurableToolExecutionRequest,
+} from "./durable/durable-execution-coordinator.js";

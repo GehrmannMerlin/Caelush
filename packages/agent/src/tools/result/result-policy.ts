@@ -3,6 +3,7 @@ import type { TimestampMs } from "@caelush/protocol";
 
 import type { PreparedToolCall } from "../call/tool-call-preparer.js";
 import type { AgentToolResult } from "../types/tool-result.js";
+import type { DurableToolEventDraft } from "../durable/execution-store-port.js";
 
 /**
  * How much of a Tool result this layer will commit.
@@ -135,6 +136,21 @@ export class ToolResultLimitError extends Error {
 export interface ToolSettlementExtension {
   readonly kind: string;
   readonly payload: JsonObject;
+  /**
+   * Durable events the host's extension contributes to the same settlement.
+   *
+   * ```text
+   * a Tool effect becomes a host-domain event   file.read, file.modified, process.started, ...
+   * ```
+   *
+   * The general layer **carries** these drafts and appends them in the invocation's own commit. It
+   * never inspects a `type`, never reads a `payload` and never learns what a host-domain event means —
+   * which is exactly why the projector that understands them produces them, and not this layer.
+   *
+   * They settle atomically with the invocation, the observation and the terminal event, so a host can
+   * never observe an effect without the Tool result that caused it.
+   */
+  readonly events?: readonly DurableToolEventDraft[] | undefined;
 }
 
 /** The extension kind the production Coding compatibility bridge produces. */
