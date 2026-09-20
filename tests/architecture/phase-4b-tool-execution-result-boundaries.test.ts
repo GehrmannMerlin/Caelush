@@ -93,6 +93,21 @@ const RESULT = `${AGENT_TOOLS}result/`;
 const LEGACY_TOOLS = "packages/tools/src/";
 const DISPATCHER = `${LEGACY_TOOLS}dispatcher.ts`;
 
+/**
+ * Every production file's executable code, read once.
+ *
+ * These guards scan the whole production tree, and reading and stripping each file once — rather than
+ * once per assertion — is what keeps a whole-repository assertion inside the default test timeout.
+ */
+let executableCache: Map<string, string> | undefined;
+
+function executableSources(): Map<string, string> {
+  if (executableCache === undefined) {
+    executableCache = new Map(productionSources().map((file) => [file, executable(file)] as const));
+  }
+  return executableCache;
+}
+
 describe("Phase 4B Agent Tool execution boundaries", () => {
   it("keeps the executor and result layers free of outer layers", () => {
     const forbidden = [
@@ -200,7 +215,22 @@ describe("Phase 4B Agent Tool execution boundaries", () => {
     const extension = interfaceBody(policy, "export interface ToolSettlementExtension");
     expect(extension).toContain("readonly kind: string;");
     expect(extension).toContain("readonly payload: JsonObject;");
-    expect(extension.match(/readonly /g) ?? []).toHaveLength(2);
+    /**
+     * Phase 4C added the third and final field, an opaque durable-event channel.
+     *
+     * ```text
+     * kind      what the host calls this extension
+     * payload   the host's own data
+     * events    host-domain durable events that settle with the invocation
+     * ```
+     *
+     * The set stays closed at three, and the pass-through property 4B froze is unchanged: the Agent
+     * layer carries `events` and never inspects a `type`, a `payload` or a `kind`. The assertion is
+     * restated here rather than removed, so a fourth field has to be argued for explicitly.
+     */
+    const extensionFields = extension.match(/readonly \w+[?:]/g) ?? [];
+    expect(extensionFields).toHaveLength(3);
+    expect(extension).toContain("readonly events?: readonly DurableToolEventDraft[] | undefined;");
 
     const pipeline = executable(`${RESULT}result-pipeline.ts`);
     const settlement = interfaceBody(pipeline, "export interface PreparedToolSettlement");
@@ -219,7 +249,7 @@ describe("Phase 4B Agent Tool execution boundaries", () => {
     ] as const) {
       const declarers = productionSources()
         .filter((file) => !file.endsWith("/index.ts"))
-        .filter((file) => pattern.test(executable(file)));
+        .filter((file) => pattern.test(executableSources().get(file) ?? ""));
       expect(declarers, `${entry} must be declared once`).toHaveLength(1);
       expect(
         declarers[0]!.startsWith(AGENT_TOOLS),
@@ -306,7 +336,7 @@ describe("Phase 4B Agent Tool execution boundaries", () => {
     // layers, the coding-free Security sanitizer that implements the port, and type barrels. It is not
     // reachable from a durable store, a coordinator or a host route.
     const consumers = productionSources().filter((file) =>
-      /\bToolExecutionUpdate\b/.test(executable(file)),
+      /\bToolExecutionUpdate\b/.test(executableSources().get(file) ?? ""),
     );
     for (const file of consumers) {
       expect(
@@ -330,32 +360,56 @@ describe("Phase 4B Agent Tool execution boundaries", () => {
     );
     expect(dispatcher).toContain("readonly resultPipelineFactory: ToolResultPipelineFactory;");
     expect(dispatcher).toContain("readonly updateSanitizer: ToolExecutionUpdateSanitizerPort;");
-    expect(dispatcher).toContain("this.options.execution");
-    expect(dispatcher).toContain(".resultPipelineFactory({");
+    /**
+     * Phase 4C moved the *consumer* of the pair to the canonical durable coordinator.
+     *
+     * ```text
+     * before 4C   this shell bound the pair and called it, and ran the lifecycle around it
+     * after 4C    the shell binds the pair and hands it to DurableToolExecutionCoordinator
+     *             the shell itself holds a coordinator and delegates every durable step to it
+     * ```
+     *
+     * The 4B guarantee is restated, not weakened: the execution authority is still
+     * `@caelush/agent`'s and the shell still contains no execution algorithm of its own.
+     */
+    expect(dispatcher).toContain("readonly execution: {");
+    expect(dispatcher).toContain("private readonly coordinator: DurableToolExecutionCoordinator;");
+    expect(dispatcher).toContain("createDurableToolExecutionCoordinator({");
 
     // The execution algorithm, the update lifecycle, the sanitize/revalidate sequence and the generic
     // bounding are gone from the shell. The check is scoped to the execution method, because the
     // sanitizer *is* legitimately named once, as the result pipeline's configuration.
     expect(dispatcher).not.toMatch(/\bhandler\s*\.\s*execute\b/);
-    expect(dispatcher).toContain("await executor.execute({");
-    const execution = dispatcher.slice(dispatcher.indexOf("private async executeHandler("));
-    expect(execution).not.toContain("acceptingUpdates");
-    expect(execution).toContain("updateSanitizer: this.options.execution.updateSanitizer,");
-    expect(execution).not.toContain("updateSanitizer.sanitize");
-    expect(execution).not.toContain("resultSanitizer");
-    expect(execution).not.toContain("ToolExecutionResultValidationError");
-    expect(execution).not.toContain("validateToolExecutionResult(");
-    expect(execution).not.toContain("boundToolResultContent");
-    expect(execution).not.toContain("outputValidator.validate");
+    expect(dispatcher).not.toContain("await executor.execute({");
+    expect(dispatcher).not.toContain("acceptingUpdates");
+    expect(dispatcher).not.toContain("updateSanitizer.sanitize");
+    expect(dispatcher).not.toContain("ToolExecutionResultValidationError");
+    expect(dispatcher).not.toContain("validateToolExecutionResult(");
+    // It bounds *failure* content, which never reaches the canonical result pipeline.
+    expect(dispatcher).not.toContain("boundToolResultContent(content, this.outputPolicy)");
+    expect(dispatcher).toContain("boundToolModelContent");
+    expect(dispatcher).not.toContain("outputValidator.validate");
+    // The canonical pair is *bound* here and *called* by the coordinator, never by this shell.
+    expect(dispatcher).toContain("const createInvocationExecutor:");
+    expect(dispatcher).toContain("const createResultPipeline:");
 
-    // The shell still owns the durable boundary, and must: RUNNING precedes execution, and only the
-    // canonical pipeline's output is settled.
-    expect(dispatcher).toContain(
+    // The shell no longer owns the durable boundary either: it delegates the whole lifecycle, and the
+    // only lifecycle-shaped code left is the retained Phase 4A argument-failure compatibility path.
+    expect(dispatcher).not.toContain(
       "startToolInvocation(snapshot.invocation, this.options.clock.now())",
     );
-    expect(dispatcher).toContain("const effects = this.legacyEffectsFromSettlement(settlement);");
-    expect(dispatcher).toContain("effects,");
-    expect(dispatcher).toContain("effectTimestamp: finishedAt,");
+    expect(dispatcher).not.toContain("completeToolInvocation(");
+    // The only observation this facade builds is the argument-failure one, scoped to that method.
+    expect((dispatcher.match(/createToolObservation\(/g) ?? []).length).toBe(1);
+    expect(dispatcher).not.toContain("legacyEffectsFromSettlement");
+    const argumentFailure = dispatcher.slice(
+      dispatcher.indexOf("private async persistArgumentFailure("),
+    );
+    expect(argumentFailure).toContain("createRequestedToolInvocation({");
+    expect(argumentFailure).toContain("failToolInvocation(");
+    // The one durable row this facade still writes is the historical argument failure, and it is
+    // scoped to that method: the file contains no other `failToolInvocation(` call site.
+    expect((dispatcher.match(/failToolInvocation\(/g) ?? []).length).toBe(1);
   });
 
   it("keeps the legacy result modules delegating rather than reimplementing", () => {
@@ -489,9 +543,18 @@ describe("Phase 4B Agent Tool execution boundaries", () => {
     expect(bridge).toContain("CODING_TOOL_EFFECTS_EXTENSION_KIND");
     expect(bridge).toContain("effectProjector({");
 
-    // Exactly two production modules outside the Agent Type layer resolve that constant: the bridge
-    // that produces it, and the shell that decodes it back into `ToolEffect[]`. The Agent barrels
-    // re-export the declaration itself.
+    /**
+     * Which production modules resolve that constant, after Phase 4C.
+     *
+     * ```text
+     * settlement-extension-bridge.ts   produces the extension, and decodes it back into ToolEffect[]
+     * storage/tool-settlement-extension-adapter.ts   names the kind the decoder accepts
+     * ```
+     *
+     * The *shell* no longer decodes it: reading the Coding effects back out is the storage
+     * compatibility boundary's job now, which is why `dispatcher.ts` is absent from this list and the
+     * storage adapter is present. The Agent barrels re-export the declaration itself.
+     */
     const kindReaders = productionSources()
       .filter((file) => !file.endsWith("/index.ts"))
       .filter(
@@ -499,8 +562,8 @@ describe("Phase 4B Agent Tool execution boundaries", () => {
           executable(file).includes("CODING_TOOL_EFFECTS_EXTENSION_KIND") &&
           !file.startsWith(AGENT_TOOLS),
       );
-    expect(kindReaders).toEqual([
-      `${LEGACY_TOOLS}dispatcher.ts`,
+    expect(kindReaders.sort()).toEqual([
+      "packages/storage/src/tool-settlement-extension-adapter.ts",
       `${LEGACY_TOOLS}settlement-extension-bridge.ts`,
     ]);
     // The Agent result layer declares the generic constant and never compares it to anything.
@@ -517,18 +580,36 @@ describe("Phase 4B Agent Tool execution boundaries", () => {
     expect(security).toContain("updateSanitizer: options.updateSanitizer,");
     expect(security).toContain('"gate" | "execution" | "presentation"');
 
-    // The binding itself is written once, in the legacy Tool System's execution factory, and the
-    // dispatcher holds no result sanitizer of its own.
-    expect(executable(DISPATCHER)).toContain("createToolInvocationExecutor({");
-    expect(executable(DISPATCHER)).toContain("createToolResultPipeline({");
+    /**
+     * The binding itself is written once, in the legacy Tool System's execution factory: the pair, the
+     * effect bridge and the effect-event projection all come from there, and the dispatcher holds no
+     * result sanitizer of its own.
+     */
+    expect(executable(DISPATCHER)).toContain("const createInvocationExecutor: ");
+    expect(executable(DISPATCHER)).toContain("const createResultPipeline: ");
     expect(executable(DISPATCHER)).toContain(
       "settlementExtension: createLegacyToolSettlementExtensionProjector({",
     );
 
-    // And the security composition is the only production construction of a dispatcher.
+    /**
+     * And the security composition is the only production construction of a dispatcher.
+     *
+     * Phase 4C keeps that true and adds one more: the same composition is where the canonical durable
+     * coordinator is handed to the facade, so the *lifecycle* authority is stated at the composition
+     * root rather than inside the shell. The two assertions together are what make "the shell is a
+     * facade" checkable.
+     */
     const constructors = productionSources().filter((file) =>
-      executable(file).includes("new ToolDispatcher("),
+      (executableSources().get(file) ?? "").includes("new ToolDispatcher("),
     );
     expect(constructors).toEqual(["packages/security/src/default-composition.ts"]);
+
+    const coordinatorBuilders = productionSources().filter((file) =>
+      (executableSources().get(file) ?? "").includes("createDurableToolExecutionCoordinator({"),
+    );
+    expect(coordinatorBuilders.sort()).toEqual([
+      "apps/daemon/src/daemon-composition.ts",
+      "packages/tools/src/dispatcher.ts",
+    ]);
   });
 });

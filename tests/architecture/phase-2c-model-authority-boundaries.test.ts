@@ -232,7 +232,16 @@ describe("Phase 2C package edges", () => {
         // identity is Protocol `RunId`/`SessionId`/`StepId` and durable tool identity is the
         // Protocol `ToolName` and `JsonObject`. Both are target packages, and every legacy
         // package stays forbidden.
-        if (specifier !== "@caelush/ai" && specifier !== "@caelush/protocol") {
+        //
+        // A file naming `@caelush/agent` from inside `@caelush/agent` is not a workspace edge: it
+        // resolves to this package itself, which is why the architecture checker excludes it from the
+        // dependency graph. The guard states the exclusion rather than treating the observation as a
+        // violation.
+        if (
+          specifier !== "@caelush/ai" &&
+          specifier !== "@caelush/protocol" &&
+          specifier !== "@caelush/agent"
+        ) {
           offenders.push(`${file}: ${specifier}`);
         }
       }
@@ -430,6 +439,51 @@ describe("Phase 2C package edges", () => {
         "uncertainExecutionDetails",
         "validateToolResult",
         "validateToolResultLimits",
+        // --- Phase 4C: admission, the durable lifecycle and its atomic settlement.
+        //
+        // The kernel now owns the Tool Invocation Lifecycle Authority. `DurableToolExecutionCoordinator`
+        // drives idempotency, the durable `REQUESTED`/`RUNNING` checkpoints, admission, execution,
+        // result processing and terminal settlement; `ToolAdmissionCoordinator` owns policy, approval
+        // and budget admission; `ToolSettlementCoordinator` owns the terminal commit. The store
+        // contract, the lifecycle, the observation and the durable error identity are shipped with
+        // them, because the layer that commits a row is the layer that must state its shape.
+        "DEFAULT_TOOL_APPROVAL_SCOPE",
+        "DURABLE_FAILURE_CODES",
+        "ToolCallBusyError",
+        "ToolDurableMetadataUnavailableError",
+        "ToolExecutionAbortedError",
+        "ToolExecutionConflictError",
+        "ToolExecutionInvariantError",
+        "ToolSecurityContextError",
+        "UNBOUNDED_TOOL_BUDGET_ADMISSION",
+        "allowedToolInvocationTransitions",
+        "assertToolInvocationInvariant",
+        "assertToolInvocationTransition",
+        "assertToolObservationInvariant",
+        "assertToolSecurityContext",
+        "completeToolInvocation",
+        "createApprovalRequestedEvent",
+        "createApprovalResolvedEvent",
+        "createDurableToolExecutionCoordinator",
+        "createRequestedToolInvocation",
+        "createToolAdmissionCoordinator",
+        "createToolCompletedEvent",
+        "createToolFailedEvent",
+        "createToolFailureSettlement",
+        "createToolObservation",
+        "createToolOutputEvent",
+        "createToolRequestedEvent",
+        "createToolSettlementCoordinator",
+        "createToolStartedEvent",
+        "denyToolPolicyDecision",
+        "failToolInvocation",
+        "feedbackToDurableFailure",
+        "isTerminalToolInvocation",
+        "isToolSecurityContext",
+        "markToolInvocationWaitingApproval",
+        "requireToolDurableMetadata",
+        "startToolInvocation",
+        "MAX_TOOL_EVENT_PRESENTATION_BYTES",
       ].sort(),
     );
   });

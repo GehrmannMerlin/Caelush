@@ -21,8 +21,9 @@ import {
 } from "@caelush/tools";
 import { LocalRuntime, createLocalRuntimeResolver } from "@caelush/runtime";
 import { describe, expect, it } from "vitest";
-import { openCaelushStorage } from "../src/index.js";
+
 import { makeRun, makeSession, makeStep } from "./support/fixtures.js";
+import { openToolStorage } from "./support/tool-settlement-decoder.js";
 
 describe("read-only filesystem tools through ToolDispatcher", () => {
   it("executes all built-ins against the run workspace and persists their observations", async () => {
@@ -33,7 +34,7 @@ describe("read-only filesystem tools through ToolDispatcher", () => {
     await writeFile(path.join(workspace, "README.txt"), "alpha\nneedle in readme\n", "utf8");
     await writeFile(path.join(workspace, "src", "app.ts"), "const needle = true;\n", "utf8");
 
-    const storage = await openCaelushStorage({ path: databasePath });
+    const storage = await openToolStorage({ path: databasePath });
     const session = makeSession();
     const run = makeRun(session.id, {
       status: "RUNNING",
@@ -64,7 +65,12 @@ describe("read-only filesystem tools through ToolDispatcher", () => {
       invocationIdFactory: { create: createToolInvocationId },
       observationIdFactory: { create: createObservationId },
       eventIdFactory: { create: createEventId },
-      execution: createToolExecutionDependencies({ registry: registryBuilder.build() }),
+      execution: createToolExecutionDependencies({
+        registry: registryBuilder.build(),
+        // The durable event identity factory, so a Tool effect's host-domain event (`file.read`) is
+        // drawn from the same sequence as the terminal event it accompanies.
+        eventIdFactory: { create: createEventId },
+      }),
     });
 
     const environment = { workspace: run.workspace, runtime: run.runtime };

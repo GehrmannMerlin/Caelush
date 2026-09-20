@@ -21,8 +21,13 @@ import {
   ToolExecutionConflictError,
   ToolExecutionInvariantError,
 } from "@caelush/tools";
-import { openCaelushStorage } from "../src/index.js";
+
 import { makeState } from "./support/fixtures.js";
+import { openCaelushStorage } from "../src/index.js";
+import {
+  codingEffectsExtension,
+  toolSettlementExtensionDecoder,
+} from "./support/tool-settlement-decoder.js";
 
 function makeSession(): AgentSession {
   return {
@@ -98,7 +103,13 @@ async function setup(
   status: AgentRun["status"] = "RUNNING",
   stepStatus: AgentStep["status"] = "COMPLETED",
 ) {
-  const storage = await openCaelushStorage({ path: ":memory:" });
+  const storage = await openCaelushStorage({
+    path: ":memory:",
+    // The production decoder, wired exactly as the daemon composition wires it: Storage applies the
+    // host's effect projection inside the invocation's own transaction, and never learns the effect
+    // vocabulary itself.
+    toolSettlementExtension: toolSettlementExtensionDecoder(),
+  });
   const session = makeSession();
   const run = makeRun(session.id, status);
   const step = makeStep(run.id, stepStatus);
@@ -154,9 +165,9 @@ describe("SqliteToolExecutionStore", () => {
           },
         ],
       });
-      expect((await storage.budgetLedger.get(run.id, "TOOL_INVOCATION", invocation.id))?.state).toBe(
-        "IN_FLIGHT",
-      );
+      expect(
+        (await storage.budgetLedger.get(run.id, "TOOL_INVOCATION", invocation.id))?.state,
+      ).toBe("IN_FLIGHT");
     } finally {
       await storage.close();
     }
@@ -294,10 +305,9 @@ describe("SqliteToolExecutionStore", () => {
           invocation: completed,
           expectedRevision: 2,
           observation,
-          effects: [
+          extension: codingEffectsExtension([
             { type: "FILE_CHANGE", summary: { path: "rollback.ts", changeType: "CREATED" } },
-          ],
-          effectTimestamp: createTimestampMs(130),
+          ]),
           events: [duplicateEvent, duplicateEvent],
         }),
       ).rejects.toBeInstanceOf(ToolExecutionConflictError);
@@ -357,8 +367,9 @@ describe("SqliteToolExecutionStore", () => {
         invocation: completed,
         expectedRevision: 2,
         observation,
-        effects: [{ type: "FILE_CHANGE", summary: event.payload.summary }],
-        effectTimestamp: createTimestampMs(130),
+        extension: codingEffectsExtension([
+          { type: "FILE_CHANGE", summary: event.payload.summary },
+        ]),
         events: [event],
       });
       expect((await storage.runStates.get(run.id))?.changedFiles).toEqual([

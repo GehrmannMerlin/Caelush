@@ -42,8 +42,9 @@ import {
 } from "@caelush/tools";
 import { describe, expect, it } from "vitest";
 import { LocalRuntime, createLocalRuntimeResolver } from "@caelush/runtime";
-import { openCaelushStorage, type CaelushStorage } from "../src/index.js";
+import type { CaelushStorage } from "../src/index.js";
 import { verificationPlanner } from "./support/fixtures.js";
+import { openToolStorage } from "./support/tool-settlement-decoder.js";
 import { CaelushToolExecutionGate } from "@caelush/security";
 import { aiError, modelTurnResult } from "./support/model-turns.js";
 import {
@@ -281,7 +282,7 @@ function turn(
 
 describe("RunController automatic Tool Batch integration", () => {
   it("retries the Provider after Tool Results without redispatching the Tool", async () => {
-    const storage = await openCaelushStorage({ path: ":memory:" });
+    const storage = await openToolStorage({ path: ":memory:" });
     const run = makeRun("/repo", "fixture", {
       limits: { maxSteps: 6, maxToolCalls: 8, timeoutMs: 10_000 },
     });
@@ -369,7 +370,7 @@ describe("RunController automatic Tool Batch integration", () => {
     await writeFile(path.join(workspace, "src", "utf8.ts"), 'export const emoji = "😀";\n', "utf8");
     const before = await snapshotWorkspace(workspace);
 
-    const storage = await openCaelushStorage({ path: ":memory:" });
+    const storage = await openToolStorage({ path: ":memory:" });
     const run = makeRun(workspace, "local");
     await seedRun(storage, run);
     const eventBus = new EventBus(storage.events);
@@ -445,7 +446,7 @@ describe("RunController automatic Tool Batch integration", () => {
     await writeFile(path.join(workspace, "README.md"), "unchanged\n", "utf8");
     const beforeReadme = await readFile(path.join(workspace, "README.md"));
 
-    const storage = await openCaelushStorage({ path: ":memory:" });
+    const storage = await openToolStorage({ path: ":memory:" });
     const run = makeRun(workspace, "local");
     await seedRun(storage, run);
     const eventBus = new EventBus(storage.events);
@@ -540,7 +541,7 @@ describe("RunController automatic Tool Batch integration", () => {
     const workspace = path.join(directory, "workspace");
     await mkdir(workspace, { recursive: true });
     await writeFile(path.join(workspace, "README.md"), "unchanged\n", "utf8");
-    const storage = await openCaelushStorage({ path: ":memory:" });
+    const storage = await openToolStorage({ path: ":memory:" });
     const run = AgentRunSchema.parse({
       ...makeRun(workspace, "local"),
       permissionProfile: "PROJECT_ACCESS",
@@ -592,7 +593,7 @@ describe("RunController automatic Tool Batch integration", () => {
   });
 
   it("executes one complete batch, resumes the AgentLoop, and preserves source order", async () => {
-    const storage = await openCaelushStorage({ path: ":memory:" });
+    const storage = await openToolStorage({ path: ":memory:" });
     const run = makeRun("/repo");
     await seedRun(storage, run);
     const eventBus = new EventBus(storage.events);
@@ -675,7 +676,7 @@ describe("RunController automatic Tool Batch integration", () => {
   });
 
   it("pauses the Run at approval and does not create trailing calls", async () => {
-    const storage = await openCaelushStorage({ path: ":memory:" });
+    const storage = await openToolStorage({ path: ":memory:" });
     const run = makeRun("/repo");
     await seedRun(storage, run);
     const eventBus = new EventBus(storage.events);
@@ -732,7 +733,7 @@ describe("RunController automatic Tool Batch integration", () => {
   });
 
   it("times out an idle approval boundary without a follow-up API call", async () => {
-    const storage = await openCaelushStorage({ path: ":memory:" });
+    const storage = await openToolStorage({ path: ":memory:" });
     const clock = { value: 10 };
     const scheduled: Array<{
       callback: () => void | Promise<void>;
@@ -799,7 +800,7 @@ describe("RunController automatic Tool Batch integration", () => {
 
   it("resolves a durable approval and resumes the exact Tool boundary plus trailing calls", async () => {
     const baseNow = Date.now();
-    const storage = await openCaelushStorage({
+    const storage = await openToolStorage({
       path: ":memory:",
       approvalClock: { now: () => createTimestampMs(baseNow + 500) },
     });
@@ -871,7 +872,7 @@ describe("RunController automatic Tool Batch integration", () => {
   });
 
   it("drives multiple provider Tool turns without recursive controller calls", async () => {
-    const storage = await openCaelushStorage({ path: ":memory:" });
+    const storage = await openToolStorage({ path: ":memory:" });
     const run = makeRun("/repo");
     await seedRun(storage, run);
     const eventBus = new EventBus(storage.events);
@@ -911,7 +912,7 @@ describe("RunController automatic Tool Batch integration", () => {
   });
 
   it("returns an unknown Tool as a model-recoverable result while executing known Tools", async () => {
-    const storage = await openCaelushStorage({ path: ":memory:" });
+    const storage = await openToolStorage({ path: ":memory:" });
     const run = makeRun("/repo");
     await seedRun(storage, run);
     const eventBus = new EventBus(storage.events);
@@ -956,7 +957,7 @@ describe("RunController automatic Tool Batch integration", () => {
   });
 
   it("fails the Run on Tool infrastructure failure without submitting a partial batch", async () => {
-    const storage = await openCaelushStorage({ path: ":memory:" });
+    const storage = await openToolStorage({ path: ":memory:" });
     const run = makeRun("/repo");
     await seedRun(storage, run);
     const eventBus = new EventBus(storage.events);
@@ -1002,7 +1003,7 @@ describe("RunController automatic Tool Batch integration", () => {
   it("resumes directly from durably accepted Tool Results after restart", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "caelush-phase-7c-accepted-"));
     const databasePath = path.join(directory, "caelush.sqlite");
-    const firstStorage = await openCaelushStorage({ path: databasePath });
+    const firstStorage = await openToolStorage({ path: databasePath });
     const run = makeRun(path.join(directory, "project"));
     await seedRun(firstStorage, run);
     const firstBus = new EventBus(firstStorage.events);
@@ -1034,7 +1035,7 @@ describe("RunController automatic Tool Batch integration", () => {
     );
     await firstStorage.close();
 
-    const restarted = await openCaelushStorage({ path: databasePath });
+    const restarted = await openToolStorage({ path: databasePath });
     const secondBus = new EventBus(restarted.events);
     const secondRuntime = createRuntime(
       restarted,
@@ -1076,7 +1077,7 @@ describe("RunController automatic Tool Batch integration", () => {
   it("recovers a mid-batch interruption without retrying or starting the trailing Tool", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "caelush-phase-7c-crash-"));
     const databasePath = path.join(directory, "caelush.sqlite");
-    const firstStorage = await openCaelushStorage({ path: databasePath });
+    const firstStorage = await openToolStorage({ path: databasePath });
     const run = makeRun(path.join(directory, "project"));
     await seedRun(firstStorage, run);
     const firstBus = new EventBus(firstStorage.events);
@@ -1139,7 +1140,7 @@ describe("RunController automatic Tool Batch integration", () => {
     expect(requested.snapshot.invocation.status).toBe("RUNNING");
     await firstStorage.close();
 
-    const restarted = await openCaelushStorage({ path: databasePath });
+    const restarted = await openToolStorage({ path: databasePath });
     const secondBus = new EventBus(restarted.events);
     const recoveredObserved: Array<{ tools?: unknown; messages: unknown[] }> = [];
     const secondRuntime = createRuntime(
