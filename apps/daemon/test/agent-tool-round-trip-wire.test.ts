@@ -22,10 +22,11 @@ import { EventBus } from "@caelush/events";
 import { LocalRuntime, createLocalRuntimeResolver } from "@caelush/runtime";
 import { openCaelushStorage } from "@caelush/storage";
 import {
+  createReadOnlyFilesystemToolRegistrations,
+  createToolExecutionDependencies,
   ToolBatchCoordinator,
   ToolDispatcher,
   ToolRegistryBuilder,
-  createReadOnlyFilesystemToolRegistrations,
   type ToolCommittedEventNotifier,
 } from "@caelush/tools";
 import { describe, expect, it } from "vitest";
@@ -250,7 +251,7 @@ describe("real provider Tool Call round trip", () => {
       invocationIdFactory: { create: createToolInvocationId },
       observationIdFactory: { create: createObservationId },
       eventIdFactory: { create: createEventId },
-      resultSanitizer: { sanitize: ({ result }) => result },
+      execution: createToolExecutionDependencies({ registry }),
       approvalStore: storage.approvals,
       approvalIdFactory: { create: createApprovalRequestId },
     });

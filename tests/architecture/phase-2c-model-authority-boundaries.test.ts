@@ -405,6 +405,31 @@ describe("Phase 2C package edges", () => {
         "toolModelSpecByteLength",
         "validateToolRegistryOptions",
         "validateToolSchemaSemantics",
+        // --- Phase 4B: Tool execution and result processing. The kernel now owns invoking an
+        // already-durably-started Tool through its canonical `AgentTool`, the safe transient update
+        // lifecycle, and the `validate -> sanitize -> revalidate -> bound -> project` result pipeline
+        // with its frozen limits, sanitizer port and opaque settlement extension. The canonical
+        // uncertainty vocabulary lives here too, so a Tool that throws it is recognized structurally
+        // rather than by inspecting an error message.
+        "CODING_TOOL_EFFECTS_EXTENSION_KIND",
+        "DEFAULT_TOOL_RESULT_LIMITS",
+        "DISCARDING_TRANSIENT_TOOL_UPDATE_CONSUMER",
+        "IDENTITY_TOOL_RESULT_SANITIZER",
+        "TOOL_RESULT_TRUNCATION_MARKER",
+        "ToolExecutionUncertainError",
+        "ToolResultLimitError",
+        "ToolResultValidationError",
+        "UNCERTAIN_SIDE_EFFECT",
+        "boundToolResultContent",
+        "createToolInvocationExecutor",
+        "createToolResultPipeline",
+        "isAgentToolResult",
+        "isToolExecutionUncertainError",
+        "readResultShape",
+        "readSanitizedResultShape",
+        "uncertainExecutionDetails",
+        "validateToolResult",
+        "validateToolResultLimits",
       ].sort(),
     );
   });
