@@ -151,3 +151,81 @@ function positiveSafeInteger(value: number, name: string): number {
   }
   return value;
 }
+
+/**
+ * The failure memory as an admission pre-check.
+ *
+ * ## Why it moved
+ *
+ * Before Phase 4C the shell consulted this memory in front of its own durable path and then built a
+ * `FAILED` invocation for the block, with its own observation and its own event — a second failure
+ * settlement algorithm living beside the real one. Now the memory refuses the call **inside** the
+ * canonical admission flow, and the durable coordinator settles that refusal exactly like a policy
+ * denial:
+ *
+ * ```text
+ * ToolAdmissionPreCheck returns DENY(feedback)
+ *        ↓
+ * DurableToolExecutionCoordinator
+ *        ↓
+ * the one failure settlement: FAILED invocation + safe observation + tool.failed event, atomically
+ * ```
+ *
+ * The legacy shell no longer creates a `FAILED` invocation for anything.
+ *
+ * ## What it answers
+ *
+ * A recent, still-unexpired failure of the same Tool with the same canonical argument fingerprint
+ * refuses the call with the same safe content and the same `TOOL_EXECUTION_ERROR` code it always did.
+ * Nothing about the memory's own storage changes: still host-only, still an argument fingerprint plus a
+ * stable code, never raw arguments.
+ */
+export function createToolFailureMemoryPreCheck(input: {
+  readonly memory: ToolFailureMemory;
+  readonly clock: { now(): TimestampMs };
+}): {
+  check(request: {
+    readonly toolName: ToolName;
+    readonly args: Readonly<JsonObject>;
+    readonly identity: { readonly runId: RunId };
+  }): import("@caelush/agent").ToolPolicyDecision | undefined;
+} {
+  return {
+    check(request): import("@caelush/agent").ToolPolicyDecision | undefined {
+      const blocked = input.memory.has({
+        runId: request.identity.runId,
+        toolName: request.toolName,
+        args: request.args as JsonObject,
+        failureCode: "TOOL_EXECUTION_ERROR",
+        now: input.clock.now(),
+      });
+      if (!blocked) return undefined;
+      return Object.freeze({
+        kind: "DENY",
+        feedback: Object.freeze({
+          code: "TOOL_EXECUTION_ERROR",
+          content: FAILURE_MEMORY_CONTENT,
+          details: Object.freeze({ blockedBy: "TOOL_FAILURE_MEMORY" }),
+          disposition: "SAFE_FAILURE" as const,
+          blockToolFailures: true,
+        }),
+      });
+    },
+  };
+}
+
+const FAILURE_MEMORY_CONTENT =
+  "This Tool call was blocked because the same Tool input recently failed. Change the arguments or choose another Tool.";
+
+/**
+ * The code a model-recoverable Tool **execution** failure is recorded under.
+ *
+ * A failure of this kind came from the call's own arguments or from the state they addressed, so
+ * repeating the identical call is a repetition of a known failure. That is exactly the conclusion the
+ * memory exists to reach, and it is what `blockToolFailures` on the feedback states.
+ *
+ * A *transient* refusal — a broken policy evaluator, a storage outage — never records here: the same
+ * call may succeed a moment later, and refusing it would be refusing a call nobody concluded was
+ * unrepeatable.
+ */
+export const TOOL_FAILURE_MEMORY_CODE = "TOOL_EXECUTION_ERROR";

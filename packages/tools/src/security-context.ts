@@ -1,28 +1,25 @@
-import {
-  ApprovalPolicySchema,
-  PermissionProfileSchema,
-  type ApprovalPolicy,
-  type PermissionProfile,
-} from "@caelush/protocol";
-import { ToolDispatcherInputError } from "./dispatcher-errors.js";
-
-export interface ToolSecurityContext {
-  readonly permissionProfile: PermissionProfile;
-  readonly approvalPolicy: ApprovalPolicy;
-}
-
-export function assertToolSecurityContext(value: unknown): asserts value is ToolSecurityContext {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new ToolDispatcherInputError("Tool security context is invalid.");
-  }
-  const context = value as Record<string, unknown>;
-  if (
-    Object.keys(context).length !== 2 ||
-    !Object.hasOwn(context, "permissionProfile") ||
-    !Object.hasOwn(context, "approvalPolicy") ||
-    !PermissionProfileSchema.safeParse(context.permissionProfile).success ||
-    !ApprovalPolicySchema.safeParse(context.approvalPolicy).success
-  ) {
-    throw new ToolDispatcherInputError("Tool security context is invalid.");
-  }
-}
+/**
+ * The legacy Tool security context entry point.
+ *
+ * ```text
+ * Phase 4C moved the canonical declaration to @caelush/agent
+ * this module re-exports it
+ * ```
+ *
+ * The general Admission Context — a `PermissionProfile` and an `ApprovalPolicy` — is what the
+ * admission coordinator consumes, so it belongs with the contract rather than with the legacy Tool
+ * System. Exactly one interface declaration exists in the repository now; this file is an export
+ * mapping, not a second shape.
+ *
+ * The legacy `assertToolSecurityContext` keeps its exact validation semantics — a two-field object
+ * with Protocol-valid values, and nothing else — but its throw type changes from the legacy
+ * `ToolDispatcherInputError` to the Agent layer's `ToolSecurityContextError`, because the assertion
+ * now lives in the layer that owns the contract. A caller that only needs "did this fail" is
+ * unaffected; a caller that matched on the legacy class must match on the canonical one.
+ */
+export {
+  assertToolSecurityContext,
+  isToolSecurityContext,
+  ToolSecurityContextError,
+} from "@caelush/agent";
+export type { ToolSecurityContext, ToolSecurityContextErrorReason } from "@caelush/agent";

@@ -5,7 +5,6 @@ import {
   StepIdSchema,
   ToolNameSchema,
   type AgentError,
-  type ApprovalRequest,
   type JsonObject,
   type RunId,
   type SessionId,
@@ -16,9 +15,15 @@ import {
   type ToolName,
   type ToolObservation,
 } from "@caelush/protocol";
+import type {
+  DurableToolEvent,
+  ToolExecutionCommit,
+  ToolExecutionCommitResult,
+  ToolExecutionStorePort,
+} from "./execution-store.js";
 import { ToolDispatcherInputError } from "./dispatcher-errors.js";
 import { assertToolSecurityContext, type ToolSecurityContext } from "./security-context.js";
-import type { AgentEvent, EventDurability } from "@caelush/protocol";
+
 import {
   assertToolExecutionEnvironment,
   type ToolExecutionEnvironment,
@@ -29,6 +34,14 @@ export const DEFAULT_MAX_EXTERNAL_CALL_ID_BYTES = 512;
 export const DEFAULT_MAX_INVOCATION_ARGS_BYTES = 256 * 1024;
 export const DEFAULT_APPROVAL_TTL_MS = 15 * 60 * 1000;
 
+/**
+ * The legacy dispatch request.
+ *
+ * It keeps the field set and the exact validation semantics it always had, because it is still the
+ * production entry point a batch uses until the pre-invocation rejection path is switched over. What
+ * changed in Phase 4C is *who consumes it*: the legacy shell now translates it into a canonical
+ * `DurableToolExecutionRequest` rather than running a lifecycle of its own.
+ */
 export interface ToolDispatchRequest {
   readonly signal?: AbortSignal;
   readonly sessionId: SessionId;
@@ -87,6 +100,15 @@ export function assertToolDispatchRequest(
 export type ToolDispatcherOutcome =
   ToolResultOutcome | WaitingApprovalOutcome | UnavailableToolOutcome | BudgetExceededOutcome;
 
+export type {
+  DurableToolEvent,
+  DurableToolEventDraft,
+  ToolExecutionCommit,
+  ToolExecutionCommitResult,
+  ToolExecutionSnapshot,
+  ToolExecutionStorePort,
+} from "./execution-store.js";
+
 export interface BudgetExceededOutcome {
   readonly kind: "BUDGET_EXCEEDED";
   readonly invocation?: ToolInvocation;
@@ -118,47 +140,47 @@ export interface ToolErrorResultOutcome extends ToolResultOutcome {
   readonly observation: ToolObservation & { readonly isError: true };
 }
 
-export type DurableToolEvent = AgentEvent;
-
-type DurableEvent = Extract<EventDurability, { readonly kind: "DURABLE" }>;
-
-type WithDurableDraft<TEvent> = TEvent extends { readonly type: string }
-  ? Omit<TEvent, "durability"> & { readonly durability: Omit<DurableEvent, "sequence"> }
-  : never;
-
-export type DurableToolEventDraft = WithDurableDraft<DurableToolEvent>;
-export type DurableToolAgentEvent = WithDurableDraft<DurableToolEvent> & {
-  readonly durability: DurableEvent;
+export type DurableToolAgentEvent = DurableToolEvent & {
+  readonly durability: Extract<
+    import("@caelush/protocol").EventDurability,
+    { readonly kind: "DURABLE" }
+  >;
 };
 
-export interface ToolExecutionSnapshot {
-  readonly sessionId: SessionId;
-  readonly invocation: ToolInvocation;
-  readonly revision: number;
-  readonly observation?: ToolObservation;
-  readonly approval?: ApprovalRequest;
+/**
+ * One durable Tool execution commit, in the vocabulary this layer still speaks.
+ *
+ * The canonical declaration is `@caelush/agent`'s. This local view adds the two **legacy effects
+ * facets** the pre-4C shell carried - `effects` and `effectTimestamp` - and is the shape a
+ * `ToolExecutionStorePort.commit()` implementation still accepts, so the existing Storage
+ * compatibility path keeps compiling unchanged.
+ *
+ * `	ext
+ * canonical ToolExecutionCommit     extension?: ToolSettlementExtension   (opaque)
+ * legacy    ToolExecutionCommit     effects?, effectTimestamp?            (Coding vocabulary)
+ * `
+ *
+ * The canonical coordinator never builds one of these: it commits `extension` and lets the Storage
+ * compatibility boundary decode it back into `ToolEffect[]` inside the same transaction.
+ */
+export interface LegacyToolExecutionCommit extends ToolExecutionCommit {
+  readonly effects?: readonly ToolEffect[] | undefined;
+  readonly effectTimestamp?: import("@caelush/protocol").TimestampMs | undefined;
 }
 
-export interface ToolExecutionCommit {
-  readonly sessionId: SessionId;
-  readonly invocation: ToolInvocation;
-  readonly expectedRevision: number | null;
-  readonly observation?: ToolObservation;
-  readonly events: readonly DurableToolEventDraft[];
-  readonly effects?: readonly ToolEffect[];
-  readonly effectTimestamp?: import("@caelush/protocol").TimestampMs;
-  readonly approval?: ApprovalRequest;
-  readonly approvalKey?: string;
-  /** Data-only hint allowing Storage to move the matching budget entry in the same transaction. */
-  readonly budgetStart?: {
-    readonly ownerId: ToolInvocationId;
-    readonly startedAt: import("@caelush/protocol").TimestampMs;
-  };
-}
-
-export interface ToolExecutionCommitResult {
-  readonly snapshot: ToolExecutionSnapshot;
-  readonly events: readonly DurableToolAgentEvent[];
+/**
+ * The legacy durable Tool store contract.
+ *
+ * It is the **canonical** contract - the same three methods, the same snapshot, the same result -
+ * widened only in the argument type of `commit`, which still accepts the two legacy effects facets.
+ * The widening is deliberate and temporary: a pre-4C implementation (and the test doubles built
+ * against it) accept those facets today, and the production Storage path decodes the canonical
+ * `extension` into exactly those effects inside the same SQLite transaction.
+ *
+ * A new implementation should implement `@caelush/agent`'s `ToolExecutionStorePort` instead.
+ */
+export interface LegacyToolExecutionStorePort extends Omit<ToolExecutionStorePort, "commit"> {
+  commit(command: LegacyToolExecutionCommit): Promise<ToolExecutionCommitResult>;
 }
 
 export interface ToolClock {

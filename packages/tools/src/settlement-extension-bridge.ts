@@ -18,10 +18,23 @@ import type { ToolEffect } from "./tool-effects.js";
  * the durable row supplies them explicitly.
  */
 export interface SettlementInvocationContext {
-  readonly runId: import("@caelush/protocol").RunId;
-  readonly sourceStepId: import("@caelush/protocol").StepId;
-  readonly invocationId: import("@caelush/protocol").ToolInvocationId;
+  readonly invocation: import("@caelush/protocol").ToolInvocation;
+  /**
+   * The Session the Run belongs to.
+   *
+   * An invocation carries its Run and Step but not its Session. It is optional because a host without
+   * it simply produces no effect events; the effects themselves are unaffected.
+   */
+  readonly sessionId?: import("@caelush/protocol").SessionId | undefined;
   readonly environment: import("@caelush/agent").ToolExecutionEnvironment;
+  /**
+   * The next durable event identity, for an extension that contributes events.
+   *
+   * It is the same factory the settlement itself uses, so an effect event and the terminal event it
+   * accompanies are drawn from one sequence. Absent means this host contributes no events.
+   */
+  readonly nextEventId?: (() => import("@caelush/protocol").EventId) | undefined;
+  readonly presentation?: import("./presentation.js").ToolPresentationPort | undefined;
 }
 
 /**
@@ -63,6 +76,23 @@ export function createLegacyToolSettlementExtensionProjector(input: {
   };
   readonly invocation: SettlementInvocationContext;
   readonly effectsPayload: (effects: readonly ToolEffect[]) => JsonObject;
+  /**
+   * Project the effects into the durable host-domain events they imply.
+   *
+   * A Tool effect is a fact about what happened, and the existing `toolEffectsToEvents` turns it into
+   * the event a host already consumes — `file.read`, `file.modified`, `process.started`. The canonical
+   * settlement carries those drafts opaquely and appends them in the same transaction, so the Agent
+   * layer still never learns what a `FILE_CHANGE` is.
+   */
+  readonly effectEvents?:
+    | ((
+        effects: readonly ToolEffect[],
+        context: {
+          readonly sessionId: import("@caelush/protocol").SessionId;
+          readonly nextEventId: () => import("@caelush/protocol").EventId;
+        },
+      ) => readonly import("@caelush/agent").DurableToolEventDraft[])
+    | undefined;
 }): ToolSettlementExtensionProjector {
   return ({ call, result, now }) => {
     const legacy = input.registry.resolve(call.resolved.tool.name);
@@ -83,9 +113,9 @@ export function createLegacyToolSettlementExtensionProjector(input: {
     try {
       effects = effectProjector({
         request: {
-          runId: input.invocation.runId,
-          stepId: input.invocation.sourceStepId,
-          invocationId: input.invocation.invocationId,
+          runId: input.invocation.invocation.runId,
+          stepId: input.invocation.invocation.stepId,
+          invocationId: input.invocation.invocation.id,
           externalCallId: call.request.externalCallId,
           args: call.args as unknown as JsonObject,
           environment: input.invocation.environment,
@@ -107,9 +137,60 @@ export function createLegacyToolSettlementExtensionProjector(input: {
       );
     }
 
+    let events: readonly import("@caelush/agent").DurableToolEventDraft[] = [];
+    const sessionId = input.invocation.sessionId;
+    const nextEventId = input.invocation.nextEventId;
+    if (input.effectEvents !== undefined && sessionId !== undefined && nextEventId !== undefined) {
+      try {
+        events = input.effectEvents(effects, { sessionId, nextEventId });
+      } catch (error) {
+        // An event that cannot be projected is the same failure as an effect that cannot: the host's
+        // durable record would be incomplete in a way nothing downstream can detect.
+        throw new ToolExecutionInfrastructureError(
+          "RESULT_PIPELINE",
+          "Tool effect event projection failed.",
+          { cause: error },
+        );
+      }
+    }
+
     return Object.freeze({
       kind: CODING_TOOL_EFFECTS_EXTENSION_KIND,
       payload: input.effectsPayload(effects),
+      ...(events.length === 0 ? {} : { events: Object.freeze([...events]) }),
     }) satisfies ToolSettlementExtension;
   };
+}
+
+/**
+ * Decode the opaque settlement extension back into the existing Coding Tool effects.
+ *
+ * ```text
+ * canonical pipeline   produced an opaque { kind, payload } it does not interpret
+ * this bridge          decodes it into the ToolEffect[] the atomic commit understands
+ * ```
+ *
+ * The decode is total and defensive:
+ *
+ * ```text
+ * absent extension            no effects
+ * unknown kind                a Coding-overlay contract violation the caller refuses to settle
+ * payload that is not an array   the same
+ * ```
+ *
+ * Phase 4C moved the *call site* of this decode from the legacy shell to the storage compatibility
+ * boundary. The algorithm did not change, and it did not gain a second implementation: this remains the
+ * one place a Coding effect is read out of an extension.
+ */
+export function decodeLegacyToolEffects(
+  extension: ToolSettlementExtension | undefined,
+): readonly ToolEffect[] | undefined {
+  if (extension === undefined) return [];
+  if (extension.kind !== CODING_TOOL_EFFECTS_EXTENSION_KIND) return undefined;
+  // The canonical payload speaks the AI package's JSON model; the Coding effect vocabulary speaks the
+  // legacy one. Same JSON, two declarations, so the boundary is where they meet.
+  const payload = extension.payload as unknown as JsonObject;
+  const effects = payload.effects;
+  if (!Array.isArray(effects)) return undefined;
+  return effects as unknown as readonly ToolEffect[];
 }

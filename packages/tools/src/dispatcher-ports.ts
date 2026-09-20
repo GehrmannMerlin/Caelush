@@ -56,6 +56,28 @@ export interface ToolApprovalStorePort {
   }): Promise<ApprovalRequest | null>;
 }
 
+/**
+ * The legacy approval lookup.
+ *
+ * Phase 4C moved the admission-time approval questions into `@caelush/agent`
+ * (`ToolApprovalLookupPort`). This view keeps the legacy optional
+ * `getApprovalKeyByInvocation` spelling — a Storage repository that implements it also satisfies the
+ * canonical port, and one that implements the canonical `getStoredApprovalKey` spelling satisfies
+ * this one. Either way there is one durable question, asked under two names until the legacy entry
+ * point is retired.
+ */
+export interface ToolApprovalLookupPort {
+  getByInvocation(toolInvocationId: ToolInvocationId): Promise<ApprovalRequest | null>;
+  /** The canonical spelling of the same question. */
+  getStoredApprovalKey?(toolInvocationId: ToolInvocationId): Promise<string | null | undefined>;
+  /** The legacy spelling of the same question. */
+  getApprovalKeyByInvocation?(toolInvocationId: ToolInvocationId): Promise<string | null>;
+  findApplicableRunGrant(input: {
+    readonly runId: RunId;
+    readonly approvalKey: string;
+  }): Promise<ApprovalRequest | null>;
+}
+
 export type ToolBudgetAdmission =
   | { readonly kind: "ALLOWED" }
   | {
@@ -65,8 +87,23 @@ export type ToolBudgetAdmission =
       readonly limit: number;
     };
 
-/** Structural boundary; the concrete ledger adapter remains outside Tools. */
-export interface ToolBudgetAdmissionPort {
+/**
+ * The legacy Tool budget boundary.
+ *
+ * ```text
+ * admit        may this one invocation run? The reservation is owned by the invocation id.
+ * admitBatch   may this whole segment fit? Asked before the first handler of a batch runs.
+ * start        the handler is about to run. Idempotent after an atomic RUNNING commit.
+ * settle       the invocation reached a terminal state. Idempotent.
+ * ```
+ *
+ * The canonical `ToolBudgetAdmissionPort` in `@caelush/agent` is what the admission coordinator
+ * consumes. This view keeps the legacy `ALLOWED`/`EXCEEDED` answer and the whole-segment `admitBatch`
+ * the legacy batch preflight still uses until 4D rewires it.
+ *
+ * Structural boundary; the concrete ledger adapter remains outside Tools.
+ */
+export interface ToolBudgetPorts {
   admit(input: {
     readonly runId: RunId;
     readonly requested: number;
@@ -85,3 +122,13 @@ export interface ToolBudgetAdmissionPort {
   start?(input: { readonly runId: RunId; readonly invocationId: ToolInvocationId }): Promise<void>;
   settle?(input: { readonly runId: RunId; readonly invocationId: ToolInvocationId }): Promise<void>;
 }
+
+/**
+ * The legacy name for {@link ToolBudgetPorts}.
+ *
+ * It is an alias, not a second interface: Phase 4C made the canonical Tool budget contract
+ * `@caelush/agent`'s `ToolBudgetAdmissionPort`, and this name keeps an existing import path compiling
+ * while the legacy `ALLOWED`/`EXCEEDED` answer and the whole-segment `admitBatch` it still uses are
+ * retired with the batch in 4D.
+ */
+export type ToolBudgetAdmissionPort = ToolBudgetPorts;

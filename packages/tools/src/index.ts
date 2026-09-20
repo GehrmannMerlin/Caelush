@@ -37,6 +37,7 @@ export type {
   ToolExecutionCommit,
   ToolExecutionCommitResult,
   ToolExecutionSnapshot,
+  ToolExecutionStorePort,
   ToolClock,
   ToolEventIdFactory,
   ToolInvocationIdFactory,
@@ -52,10 +53,11 @@ export type {
   ToolExecutionGatePort,
   ToolCommittedEventNotifier,
   ToolApprovalStorePort,
+  ToolApprovalLookupPort,
   ToolBudgetAdmission,
   ToolBudgetAdmissionPort,
+  ToolBudgetPorts,
 } from "./dispatcher-ports.js";
-export type { ToolExecutionStorePort } from "./execution-store.js";
 export { computeToolApprovalKey } from "./approval-key.js";
 export type { ToolApprovalKeyInput } from "./approval-key.js";
 export { ToolExecutionConflictError, ToolExecutionInvariantError } from "./execution-store.js";
@@ -137,6 +139,25 @@ export type {
 } from "./dispatcher.js";
 export { createLegacyToolSettlementExtensionProjector } from "./settlement-extension-bridge.js";
 export type { SettlementInvocationContext } from "./settlement-extension-bridge.js";
+export {
+  createCodingToolAdmissionPort,
+  createCodingToolDurableMetadataPort,
+  createDurableInvocationGatePort,
+  DEFAULT_CODING_APPROVAL_SCOPE,
+} from "./tool-admission-adapter.js";
+export type { ToolAdmissionAdapterOptions } from "./tool-admission-adapter.js";
+export { toCanonicalApprovalLookup } from "./approval-lookup-adapter.js";
+export { toCanonicalToolBudgetPort } from "./tool-budget-adapter.js";
+export {
+  createLegacyToolSettlementExtensionDecoder,
+  LegacySettlementExtensionError,
+  toCanonicalCommit,
+  toLegacyToolExecutionStore,
+} from "./tool-execution-store-compatibility.js";
+export type {
+  LegacyToolExecutionCommit,
+  LegacyToolExecutionStorePort,
+} from "./tool-execution-store-compatibility.js";
 export { ToolPreflight } from "./preflight.js";
 export type { ToolPreflightOptions, ToolPreflightResult } from "./preflight.js";
 export { ToolFailureMemory } from "./tool-failure-memory.js";

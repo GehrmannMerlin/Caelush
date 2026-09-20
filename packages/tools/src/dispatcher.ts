@@ -1,25 +1,50 @@
 import {
   ApprovalRequestSchema,
-  type AgentError,
-  type ApprovalRequest,
   type JsonObject,
   type ToolInvocation,
+  type ToolName,
 } from "@caelush/protocol";
+import {
+  createDurableToolExecutionCoordinator,
+  createToolAdmissionCoordinator,
+  createToolFailureSettlement,
+  ToolCallBusyError,
+  ToolExecutionAbortedError,
+  ToolExecutionInfrastructureError,
+  createToolCallPreparer,
+  createToolFailedEvent,
+  createToolObservation,
+  createToolRequestedEvent,
+  createRequestedToolInvocation,
+  failToolInvocation,
+  type DurableToolExecutionCoordinator,
+  type DurableToolExecutionOutcome,
+  type PreparedToolCall,
+  type ToolAdmissionCoordinator,
+  type ToolAdmissionPreCheck,
+  type ToolApprovalRequestFactory,
+  type ToolArgumentNormalization,
+  type ToolCallPreparer,
+  type ToolDurableMetadataPort,
+  type ToolExecutionUpdateSanitizerPort,
+  type ToolInvocationExecutor,
+  type ToolResultPipeline,
+  type TransientToolUpdateConsumer,
+  type TransientToolUpdateDiagnostics,
+  type ToolSettlementExtensionProjector,
+} from "@caelush/agent";
 import {
   assertToolDispatchRequest,
   DEFAULT_MAX_EXTERNAL_CALL_ID_BYTES,
   DEFAULT_MAX_INVOCATION_ARGS_BYTES,
   DEFAULT_APPROVAL_TTL_MS,
-  type DurableToolEventDraft,
   type ToolDispatchRequest,
   type ToolDispatcherOutcome,
-  type ToolExecutionCommitResult,
-  type ToolExecutionSnapshot,
+  type ToolApprovalRequestIdFactory,
   type ToolClock,
   type ToolEventIdFactory,
   type ToolInvocationIdFactory,
   type ToolObservationIdFactory,
-  type ToolApprovalRequestIdFactory,
 } from "./dispatcher-types.js";
 import {
   ToolDispatcherBusyError,
@@ -27,95 +52,91 @@ import {
   ToolDispatcherInvariantError,
 } from "./dispatcher-errors.js";
 import type {
-  ToolExecutionGateDecision,
-  ToolExecutionGatePort,
+  ToolBudgetAdmission,
+  ToolApprovalLookupPort,
+  ToolBudgetPorts,
   ToolCommittedEventNotifier,
-  ToolApprovalStorePort,
-  ToolBudgetAdmissionPort,
+  ToolExecutionGatePort,
 } from "./dispatcher-ports.js";
 import { ToolExecutionConflictError, type ToolExecutionStorePort } from "./execution-store.js";
 import type { ToolOutputPolicy } from "./output-policy.js";
 import { boundToolModelContent, DEFAULT_TOOL_OUTPUT_POLICY } from "./output-policy.js";
-import { canonicalJsonString, cloneJsonValue, jsonUtf8ByteLength } from "./json-canonical.js";
-import { computeToolApprovalKey } from "./approval-key.js";
+import { cloneJsonValue, canonicalJsonString, jsonUtf8ByteLength } from "./json-canonical.js";
 import type { ResolvedTool, ToolRegistry } from "./registry.js";
-import {
-  assertToolInvocationInvariant,
-  completeToolInvocation,
-  createRequestedToolInvocation,
-  createToolObservation,
-  failToolInvocation,
-  markToolInvocationWaitingApproval,
-  startToolInvocation,
-} from "./invocation-lifecycle.js";
-import {
-  createToolCompletedEvent,
-  createToolFailedEvent,
-  createToolOutputEvent,
-  createToolRequestedEvent,
-  createToolStartedEvent,
-  createApprovalRequestedEvent,
-} from "./event-factory.js";
 import type { ToolPresentationPort } from "./presentation.js";
 import {
   assertToolExecutionEnvironment,
   type ToolExecutionEnvironment,
 } from "./execution-environment.js";
 import { assertToolSecurityContext, type ToolSecurityContext } from "./security-context.js";
-import { ToolExecutionUncertainError } from "./errors.js";
-import { toolEffectsToEvents, type ToolEffect } from "./tool-effects.js";
-import type { ToolSecurityFacts } from "./security-facts.js";
-import type { ToolExecutionResult } from "./execution-result.js";
 import { ToolPreflight, type ToolPreflightResult } from "./preflight.js";
-import { ToolFailureMemory } from "./tool-failure-memory.js";
-import type { ToolCallingDebugEvent, ToolCallingDebugPort } from "./debug.js";
 import {
-  CODING_TOOL_EFFECTS_EXTENSION_KIND,
-  createToolCallPreparer,
-  createToolInvocationExecutor,
-  createToolResultPipeline,
-  ToolResultValidationError,
-  type PreparedToolCall,
-  type ToolArgumentNormalization,
-  type ToolCallPreparationOutcome,
-  type ToolCallPreparer,
-  type ToolCallRequest,
-  type ToolExecutionIdentity,
-  type ToolExecutionUpdateSanitizerPort,
-  type ToolInvocationExecutor,
-  type ToolResultPipeline,
-  type ToolResultSanitizerPort,
-  type TransientToolUpdateConsumer,
-  type TransientToolUpdateDiagnostics,
-} from "@caelush/agent";
+  createToolFailureMemoryPreCheck,
+  TOOL_FAILURE_MEMORY_CODE,
+  ToolFailureMemory,
+} from "./tool-failure-memory.js";
+import type { ToolCallingDebugEvent, ToolCallingDebugPort } from "./debug.js";
+import type { ToolResultSanitizerPort } from "./result-sanitizer.js";
 import { createLegacyToolSettlementExtensionProjector } from "./settlement-extension-bridge.js";
+import { toolEffectsToEvents } from "./tool-effects.js";
+import {
+  createCodingToolAdmissionPort,
+  createCodingToolDurableMetadataPort,
+  createDurableInvocationGatePort,
+} from "./tool-admission-adapter.js";
+import { toCanonicalApprovalLookup } from "./approval-lookup-adapter.js";
+import { toCanonicalToolBudgetPort } from "./tool-budget-adapter.js";
+import {
+  toLegacyToolExecutionStore as toLegacyToolExecutionStoreAdapter,
+  type LegacyToolExecutionStorePort,
+} from "./tool-execution-store-compatibility.js";
 
 /**
- * Builds the canonical executor for one durable invocation.
+ * The Agent Tool execution factories, imported once and named in one place.
  *
- * The legacy shell owns the durable row, so it is the layer that binds an invocation to its executor;
- * `@caelush/agent` therefore never loads a ToolInvocation from storage.
+ * They arrive as a namespace binding rather than being re-declared here, so this file cannot drift into
+ * holding a second execution or result algorithm: every identifier below resolves to the Phase 4B
+ * implementation.
  */
+import * as agentToolExecution from "@caelush/agent";
+
+/* ------------------------------------------------------------------------------------------------
+ * Canonical execution dependencies
+ * ---------------------------------------------------------------------------------------------- */
+
+/** Builds the canonical executor for one durable invocation. */
 export type ToolInvocationExecutorFactory = (input: {
   readonly invocation: ToolInvocation;
   readonly updateSanitizer: ToolExecutionUpdateSanitizerPort;
 }) => ToolInvocationExecutor;
 
-/**
- * Builds the canonical result pipeline for one durable invocation.
- *
- * A pipeline is bound per settlement because the Coding effect bridge needs the invocation's durable
- * identity, and the Agent result layer must not be handed one. The factory is how the shell supplies
- * it without widening a frozen contract.
- */
+/** Builds the canonical result pipeline for one durable settlement. */
 export type ToolResultPipelineFactory = (input: {
   readonly invocation: ToolInvocation;
   readonly environment: ToolExecutionEnvironment;
+  /**
+   * The Session the Run belongs to, when the caller knows it.
+   *
+   * An invocation carries its Run and Step but not its Session, and a host-domain effect event needs
+   * one. The durable coordinator knows it from the snapshot it committed and passes it here; a host
+   * that produces no effect events does not need it at all.
+   */
+  readonly sessionId?: import("@caelush/protocol").SessionId | undefined;
 }) => ToolResultPipeline;
 
 /** Everything `createToolExecutionDependencies` needs to assemble the canonical execution pair. */
 export interface ToolExecutionDependenciesOptions {
   readonly registry: ToolRegistry;
+  /**
+   * The durable event identity factory the settlement uses.
+   *
+   * Effect events and the terminal event are drawn from one sequence, so a host sees one ordered
+   * chronology rather than two interleaved ones. Absent means this composition contributes no effect
+   * events; the effects themselves are unaffected.
+   */
+  readonly eventIdFactory?: { create(): import("@caelush/protocol").EventId } | undefined;
+  /** Optional safe, presentation-only projection. A presenter can never alter an outcome. */
+  readonly presentation?: ToolPresentationPort | undefined;
   /** The real result sanitizer. Absent means the canonical identity sanitizer. */
   readonly resultSanitizer?: ToolResultSanitizerPort | undefined;
   /** The real transient update sanitizer. Absent means transient updates are dropped. */
@@ -127,7 +148,7 @@ export interface ToolExecutionDependenciesOptions {
 }
 
 /**
- * Assemble the canonical execution dependencies for a `ToolDispatcher`.
+ * The canonical execution pair, bound for the durable coordinator.
  *
  * ```text
  * invocationExecutorFactory  createToolInvocationExecutor, bound per invocation
@@ -135,20 +156,24 @@ export interface ToolExecutionDependenciesOptions {
  * resultPipelineFactory      createToolResultPipeline with the sanitizer, limits and effect bridge
  * ```
  *
- * This is the one place the legacy shell's execution pair is described, so a production composition
- * and a test composition differ only in which sanitizers they inject — never in how execution or
- * result processing works.
+ * This is the one place a host's execution pair is described, so a production composition and a test
+ * composition differ only in which sanitizers they inject — never in how execution or result processing
+ * works. Phase 4B built the pair; Phase 4C only changed *who calls it*, and the answer is now the
+ * canonical durable coordinator rather than this facade.
  */
-export function createToolExecutionDependencies(
-  options: ToolExecutionDependenciesOptions,
-): NonNullable<ToolDispatcherOptions["execution"]> {
+export function createToolExecutionDependencies(options: ToolExecutionDependenciesOptions): {
+  readonly outputPolicy: ToolOutputPolicy;
+  readonly updateSanitizer: ToolExecutionUpdateSanitizerPort;
+  readonly invocationExecutorFactory: ToolInvocationExecutorFactory;
+  readonly resultPipelineFactory: ToolResultPipelineFactory;
+} {
   const updateSanitizer: ToolExecutionUpdateSanitizerPort =
     options.updateSanitizer ?? DROP_EVERY_TRANSIENT_UPDATE;
   const outputPolicy = options.outputPolicy ?? DEFAULT_TOOL_OUTPUT_POLICY;
   return Object.freeze({
     outputPolicy,
     invocationExecutorFactory: ({ invocation, updateSanitizer: bound }) =>
-      createToolInvocationExecutor({
+      createInvocationExecutor({
         invocation,
         updateSanitizer: bound,
         ...(options.transientUpdates === undefined
@@ -159,8 +184,8 @@ export function createToolExecutionDependencies(
           : { diagnostics: options.updateDiagnostics }),
       }),
     updateSanitizer,
-    resultPipelineFactory: ({ invocation, environment }) =>
-      createToolResultPipeline({
+    resultPipelineFactory: ({ invocation, environment, sessionId }) =>
+      createResultPipeline({
         ...(options.resultSanitizer === undefined ? {} : { sanitizer: options.resultSanitizer }),
         ...(options.outputPolicy === undefined
           ? {}
@@ -173,16 +198,57 @@ export function createToolExecutionDependencies(
         settlementExtension: createLegacyToolSettlementExtensionProjector({
           registry: options.registry,
           invocation: {
-            runId: invocation.runId,
-            sourceStepId: invocation.stepId,
-            invocationId: invocation.id,
+            invocation,
+            ...(sessionId === undefined ? {} : { sessionId }),
             environment,
+            ...(options.eventIdFactory === undefined
+              ? {}
+              : { nextEventId: () => options.eventIdFactory!.create() }),
+            ...(options.presentation === undefined ? {} : { presentation: options.presentation }),
           },
-          effectsPayload: (effects) => ({ effects: effects as unknown as JsonObject }),
+          effectsPayload: (effects) => {
+            return { effects: effects as unknown as never };
+          },
+          ...(options.eventIdFactory === undefined
+            ? {}
+            : {
+                effectEvents: (
+                  effects,
+                  context: {
+                    readonly sessionId: import("@caelush/protocol").SessionId;
+                    readonly nextEventId: () => import("@caelush/protocol").EventId;
+                  },
+                ) =>
+                  toolEffectsToEvents(effects, {
+                    runId: invocation.runId,
+                    sessionId: context.sessionId,
+                    stepId: invocation.stepId,
+                    timestamp: (invocation.finishedAt ?? invocation.createdAt) as never,
+                    nextEventId: context.nextEventId,
+                    invocation,
+                    ...(options.presentation === undefined
+                      ? {}
+                      : { presentation: options.presentation }),
+                  }),
+              }),
         }),
       }),
   });
 }
+
+const createInvocationExecutor: (input: {
+  readonly invocation: ToolInvocation;
+  readonly updateSanitizer: ToolExecutionUpdateSanitizerPort;
+  readonly transientUpdates?: TransientToolUpdateConsumer | undefined;
+  readonly diagnostics?: TransientToolUpdateDiagnostics | undefined;
+}) => ToolInvocationExecutor = agentToolExecution.createToolInvocationExecutor;
+
+const createResultPipeline: (input: {
+  readonly sanitizer?: ToolResultSanitizerPort | undefined;
+  readonly limits?: { readonly maxDurableContentBytes: number; readonly maxDetailsBytes: number };
+  readonly settlementExtension?: ToolSettlementExtensionProjector | undefined;
+}) => ToolResultPipeline = agentToolExecution.createToolResultPipeline;
+
 /**
  * The sanitizer a composition gets when it declares none.
  *
@@ -200,9 +266,21 @@ export interface ToolBudgetBatchPreflight {
   readonly requests: readonly ToolDispatchRequest[];
 }
 
+/* ------------------------------------------------------------------------------------------------
+ * The compatibility facade
+ * ---------------------------------------------------------------------------------------------- */
+
 export interface ToolDispatcherOptions {
   readonly registry: ToolRegistry;
-  readonly store: ToolExecutionStorePort;
+  /**
+   * The durable Tool store.
+   *
+   * Either contract is accepted: the canonical `@caelush/agent` port — which is what a production
+   * composition passes, and what `@caelush/storage` implements — or the pre-4C legacy contract, which
+   * additionally accepts the `effects`/`effectTimestamp` facets. A legacy store is adapted once, in the
+   * constructor, so nothing below this line sees two store shapes.
+   */
+  readonly store: ToolExecutionStorePort | LegacyToolExecutionStorePort;
   readonly gate: ToolExecutionGatePort;
   readonly notifier: ToolCommittedEventNotifier;
   readonly clock: ToolClock;
@@ -213,9 +291,8 @@ export interface ToolDispatcherOptions {
    * The canonical execution authority: the executor, its transient update sanitizer and the result
    * pipeline.
    *
-   * Required, not optional. The durable shell decides *whether* and *when* a Tool may run; it no
-   * longer decides *how*. A composition that reached the lexical Tool without these three would be a
-   * second execution implementation, so the option group is mandatory and the legacy shell holds no
+   * Required, not optional. A composition that reached the lexical Tool without these three would be a
+   * second execution implementation, so the option group is mandatory and this facade holds no
    * fallback path.
    */
   readonly execution: {
@@ -223,18 +300,33 @@ export interface ToolDispatcherOptions {
     readonly updateSanitizer: ToolExecutionUpdateSanitizerPort;
     readonly resultPipelineFactory: ToolResultPipelineFactory;
     /**
-     * The result bound this composition commits under.
+     * The result bound the *failure* observations are written under.
      *
-     * It stays reachable because the shell bounds the *failure* observations it writes on paths that
-     * never reach a Tool (an argument failure, a policy denial, an interrupted recovery). Those are
-     * shell-owned model-facing text, not Tool results, so the canonical pipeline does not see them.
+     * Failure content is host-owned model-facing text — a denial, a rejection, an interruption — and it
+     * never reaches the canonical result pipeline, so this is where it is bounded.
      */
     readonly outputPolicy: ToolOutputPolicy;
-  }; /** Optional safe, presentation-only projection. It must never participate in execution. */
+  };
+  /**
+   * The Tool Invocation Lifecycle Authority.
+   *
+   * Supplied by the production composition, which is the layer that knows its host policy. When it is
+   * absent, this facade builds the canonical coordinator from the options below, so an existing caller
+   * that only knows the legacy option names still runs against the *canonical* implementation — never a
+   * second one.
+   */
+  readonly coordinator?: DurableToolExecutionCoordinator | undefined;
+  /** The durable metadata the invocation row requires. Absent means the Coding catalog projection. */
+  readonly metadata?: ToolDurableMetadataPort | undefined;
+  /** How a durable `ApprovalRequest` is built. Absent means the generic compatibility projection. */
+  readonly approvalRequests?: ToolApprovalRequestFactory | undefined;
+  /** A bounded host short-circuit. Absent means the Tool failure memory. */
+  readonly admissionPreCheck?: ToolAdmissionPreCheck | undefined;
+  /** Optional safe, presentation-only projection. It must never participate in execution. */
   readonly presentation?: ToolPresentationPort;
-  readonly approvalStore?: ToolApprovalStorePort;
+  readonly approvalStore?: ToolApprovalLookupPort;
   readonly approvalIdFactory?: ToolApprovalRequestIdFactory;
-  readonly budget?: ToolBudgetAdmissionPort;
+  readonly budget?: ToolBudgetPorts;
   readonly debug?: ToolCallingDebugPort;
   readonly failureMemory?: ToolFailureMemory;
   readonly outputPolicy?: ToolOutputPolicy;
@@ -265,33 +357,84 @@ export interface ToolDispatcherOptions {
 }
 
 const ARGUMENT_ERROR_CONTENT = "Correct the tool arguments before calling it again.";
-const DENIED_CONTENT = "Tool execution was denied by the active execution policy.";
-const INTERRUPTED_CONTENT =
-  "Tool execution was interrupted before its result was durably recorded. The operation may have partially or fully executed. Do not automatically repeat the operation.";
-const RUNTIME_CONTENT =
-  "Tool execution failed because the tool runtime encountered an internal error.";
-const OUTPUT_CONTENT = "Tool execution failed because its output violated the registered contract.";
-const UNCERTAIN_CONTENT =
-  "Tool execution side effects could not be verified safely. Do not automatically repeat the operation.";
-const APPROVAL_REJECTED_CONTENT = "Tool execution was not approved by the user.";
-const FAILURE_MEMORY_CONTENT =
-  "This Tool call was blocked because the same Tool input recently failed. Change the arguments or choose another Tool.";
 
+/**
+ * The legacy Tool entry point, as a compatibility facade.
+ *
+ * ```text
+ * legacy ToolDispatchRequest
+ *        ↓
+ * legacy boundary validation + argument preparation
+ *        ↓
+ * DurableToolExecutionCoordinator        ← the Tool Invocation Lifecycle Authority
+ *        ↓
+ * canonical DurableToolExecutionOutcome
+ *        ↓
+ * legacy ToolDispatcherOutcome
+ * ```
+ *
+ * ## What it no longer does
+ *
+ * ```text
+ * create REQUESTED                       the coordinator does
+ * apply gate / approve / budget          the admission coordinator does
+ * create ApprovalRequest                 the admission coordinator + the injected factory do
+ * RUNNING transition                     the coordinator does
+ * terminal invocation transition         the settlement coordinator does
+ * ToolObservation creation               the settlement coordinator does
+ * durable Tool events                    the canonical factories do
+ * settlement commit                      the settlement coordinator does
+ * RUNNING / WAITING_APPROVAL recovery    the coordinator does
+ * ```
+ *
+ * ## What it still does, and why
+ *
+ * ```text
+ * legacy request validation and the argument-failure path   the Phase 4A rejection difference
+ * UNAVAILABLE_TOOL outcome mapping                           a model-facing answer with no invocation
+ * debug diagnostics                                          PREFLIGHT and EXECUTION phases
+ * outcome translation                                        durable → legacy vocabulary
+ * budget preflight for the batch                             the batch is still legacy until 4D
+ * ```
+ *
+ * ### The one deliberate difference
+ *
+ * A call whose arguments fail validation still produces the **historical durable failure row** here,
+ * exactly as it always has. The canonical Preparer rejects such a call without creating an invocation,
+ * and switching production onto that behaviour is a Phase 4D acceptance item. This round must not claim
+ * the no-row cutover has happened, so the legacy path is preserved, documented and guarded.
+ */
 export class ToolDispatcher {
-  private readonly activeCalls = new Set<string>();
   private readonly preflight: ToolPreflight;
   private readonly failureMemory: ToolFailureMemory;
   private readonly canonicalPreparer: ToolCallPreparer;
+  private readonly coordinator: DurableToolExecutionCoordinator;
+  private readonly outputPolicy: ToolOutputPolicy;
+  /**
+   * The store in the canonical vocabulary.
+   *
+   * A legacy store is adapted exactly once, here, rather than at each of the three call sites — and the
+   * adapter is pure, so the single transaction argument is untouched.
+   */
+  private readonly store: ToolExecutionStorePort;
 
   constructor(private readonly options: ToolDispatcherOptions) {
     this.preflight = new ToolPreflight(options.registry, {
       maxInvocationArgsBytes: options.maxInvocationArgsBytes ?? DEFAULT_MAX_INVOCATION_ARGS_BYTES,
     });
     this.failureMemory = options.failureMemory ?? new ToolFailureMemory();
+    this.outputPolicy = options.execution.outputPolicy ?? DEFAULT_TOOL_OUTPUT_POLICY;
+    this.store = resolveCanonicalStore(options.store);
     this.canonicalPreparer = createToolCallPreparer(options.registry.agentRegistry(), {
       maxInvocationArgsBytes: options.maxInvocationArgsBytes ?? DEFAULT_MAX_INVOCATION_ARGS_BYTES,
       ...(options.normalization === undefined ? {} : { normalization: options.normalization }),
     });
+    this.coordinator = options.coordinator ?? this.buildCoordinator();
+  }
+
+  /** The failure memory this facade records model-recoverable failures in. */
+  failureMemoryPort(): ToolFailureMemory {
+    return this.failureMemory;
   }
 
   /**
@@ -306,11 +449,11 @@ export class ToolDispatcher {
    * strict input schema         compiled once, at registry build
    * ```
    *
-   * Exposed so the production composition can be asserted to reach this implementation: the
-   * preflight facade and the batch budget preflight both route through it, so there is exactly one
-   * resolution, one normalization and one validation for a Tool call in flight.
+   * Exposed so the production composition can be asserted to reach this implementation: the preflight
+   * facade and the batch budget preflight both route through it, so there is exactly one resolution,
+   * one normalization and one validation for a Tool call in flight.
    */
-  prepareToolCall(request: ToolCallRequest): ToolCallPreparationOutcome {
+  prepareToolCall(request: import("@caelush/agent").ToolCallRequest) {
     return this.canonicalPreparer.prepare(request);
   }
 
@@ -325,10 +468,15 @@ export class ToolDispatcher {
     return this.options.registry.modelDefinitions();
   }
 
-  async preflightBudget(
-    input: ToolBudgetBatchPreflight,
-  ): Promise<import("./dispatcher-ports.js").ToolBudgetAdmission | undefined> {
-    if (this.options.budget?.admitBatch === undefined) return undefined;
+  /**
+   * Whole-segment budget admission for the legacy batch.
+   *
+   * It prepares every call through the **canonical** Preparer, so the segment length the budget is
+   * asked about is the number of calls that would really execute — not the number the batch was handed.
+   */
+  async preflightBudget(input: ToolBudgetBatchPreflight): Promise<ToolBudgetAdmission | undefined> {
+    const budget = this.options.budget;
+    if (budget?.admitBatch === undefined) return undefined;
     const executable = input.requests.filter((request) => {
       return (
         this.prepareToolCall({
@@ -338,13 +486,48 @@ export class ToolDispatcher {
         }).kind === "READY"
       );
     });
-    return this.options.budget.admitBatch({
-      runId: input.runId,
-      requested: executable.length,
-    });
+    return budget.admitBatch({ runId: input.runId, requested: executable.length });
   }
 
   async dispatch(value: unknown): Promise<ToolDispatcherOutcome> {
+    return await this.run(value);
+  }
+
+  /**
+   * The restart-aware entry point.
+   *
+   * It delegates identically to `dispatch`, because the canonical coordinator performs the idempotency
+   * lookup by `(runId, sourceStepId, externalCallId)` on every entry. Two legacy names, one canonical
+   * authority — which is what a compatibility facade is for.
+   */
+  async recoverOrDispatch(value: unknown): Promise<ToolDispatcherOutcome> {
+    return await this.run(value);
+  }
+
+  async recover(
+    invocationId: import("@caelush/protocol").ToolInvocationId,
+    environment: ToolExecutionEnvironment,
+    securityContext: ToolSecurityContext,
+    signal?: AbortSignal,
+  ): Promise<ToolDispatcherOutcome> {
+    assertToolExecutionEnvironment(environment);
+    assertToolSecurityContext(securityContext);
+    const existing = await this.store.load(invocationId);
+    if (existing === null) {
+      throw new ToolDispatcherInvariantError("Tool invocation does not exist.");
+    }
+    return await this.delegate(
+      () =>
+        this.coordinator.recover(existing, {
+          environment,
+          securityContext,
+          signal: signal ?? new AbortController().signal,
+        }),
+      { toolName: existing.invocation.toolName, args: existing.invocation.args },
+    );
+  }
+
+  private async run(value: unknown): Promise<ToolDispatcherOutcome> {
     assertToolDispatchRequest(value, {
       maxExternalCallIdBytes:
         this.options.maxExternalCallIdBytes ?? DEFAULT_MAX_EXTERNAL_CALL_ID_BYTES,
@@ -354,95 +537,21 @@ export class ToolDispatcher {
     const request = {
       ...value,
       args:
-        preflight.kind === "READY" ? preflight.args : (cloneJsonValue(value.args) as JsonObject),
+        preflight.kind === "READY"
+          ? preflight.args
+          : (cloneJsonValue(value.args) as import("@caelush/protocol").JsonObject),
     } satisfies ToolDispatchRequest;
-    const key = callKey(request);
-    this.assertCallIsNotActive(key, request.runId);
-    this.activeCalls.add(key);
-    try {
-      return await this.dispatchLocked(request, preflight);
-    } finally {
-      this.activeCalls.delete(key);
-    }
-  }
 
-  async recoverOrDispatch(value: unknown): Promise<ToolDispatcherOutcome> {
-    assertToolDispatchRequest(value, {
-      maxExternalCallIdBytes:
-        this.options.maxExternalCallIdBytes ?? DEFAULT_MAX_EXTERNAL_CALL_ID_BYTES,
-    });
-    const preflight = this.preflight.prepare(value.toolName, value.args);
-    this.emitPreflightDebug(value.toolName, value.args, preflight);
-    const existing = await this.options.store.findByExternalCall(
-      value.runId,
-      value.stepId,
-      value.externalCallId,
-    );
-    if (existing === null) return this.dispatch(value);
-    this.assertSameCall(
-      preflight.kind === "READY" ? { ...value, args: preflight.args } : value,
-      existing,
-    );
-    return this.recover(
-      existing.invocation.id,
-      value.environment,
-      value.securityContext,
-      value.signal,
-    );
-  }
-
-  async recover(
-    invocationId: ToolInvocation["id"],
-    environment: ToolExecutionEnvironment,
-    securityContext: ToolSecurityContext,
-    signal?: AbortSignal,
-  ): Promise<ToolDispatcherOutcome> {
-    assertToolExecutionEnvironment(environment);
-    assertToolSecurityContext(securityContext);
-    const existing = await this.options.store.load(invocationId);
-    if (existing === null)
-      throw new ToolDispatcherInvariantError("Tool invocation does not exist.");
-    const externalCallId = existing.invocation.externalCallId;
-    if (externalCallId === undefined) {
-      throw new ToolDispatcherInvariantError("Tool invocation has no external call identity.");
-    }
-    const key = callKey({
-      runId: existing.invocation.runId,
-      stepId: existing.invocation.stepId,
-      externalCallId,
-    });
-    this.assertCallIsNotActive(key, existing.invocation.runId);
-    this.activeCalls.add(key);
-    try {
-      return await this.recoverLocked(existing, environment, securityContext, signal);
-    } finally {
-      this.activeCalls.delete(key);
-    }
-  }
-
-  private async dispatchLocked(
-    request: ToolDispatchRequest,
-    preflight: ToolPreflightResult,
-  ): Promise<ToolDispatcherOutcome> {
-    const existing = await this.options.store.findByExternalCall(
-      request.runId,
-      request.stepId,
-      request.externalCallId,
-    );
-    if (existing !== null) {
-      this.assertSameCall(request, existing);
-      if (existing.invocation.status === "RUNNING")
-        throw new ToolDispatcherBusyError(request.runId);
-      return this.recoverLocked(
-        existing,
-        request.environment,
-        request.securityContext,
-        request.signal,
-      );
-    }
-    throwIfAborted(request.signal);
-    const resolvedTool = this.options.registry.resolve(request.toolName);
-    if (resolvedTool === undefined) {
+    const resolved = this.options.registry.resolve(request.toolName);
+    if (resolved === undefined) {
+      this.emitToolDebug({
+        phase: "PREFLIGHT",
+        toolName: request.toolName,
+        args: request.args,
+        validation: "PASS",
+        normalization: "UNCHANGED",
+        preflight: "READY",
+      });
       return {
         kind: "UNAVAILABLE_TOOL",
         toolName: request.toolName,
@@ -450,639 +559,216 @@ export class ToolDispatcher {
         isError: true,
       };
     }
-    if (preflight.kind === "INVALID_ARGUMENTS") {
-      return this.persistArgumentFailure(
-        request,
-        resolvedTool,
-        preflight.error.message,
-        preflight.error.issues,
-      );
-    }
-    if (
-      this.failureMemory.has({
-        runId: request.runId,
-        toolName: request.toolName,
-        args: request.args,
-        failureCode: "TOOL_EXECUTION_ERROR",
-        now: this.options.clock.now(),
-      })
-    ) {
-      this.emitToolDebug({
-        phase: "PREFLIGHT",
-        toolName: request.toolName,
-        args: request.args,
-        validation: "PASS",
-        normalization: "UNCHANGED",
-        preflight: "FAILURE_MEMORY_BLOCKED",
-      });
-      return this.persistFailureMemoryBlock(request, resolvedTool);
-    }
-    const createdAt = this.options.clock.now();
-    const invocation = createRequestedToolInvocation({
-      id: this.options.invocationIdFactory.create(),
-      runId: request.runId,
-      stepId: request.stepId,
-      toolName: request.toolName,
+
+    const prepared = this.prepareToolCall({
       externalCallId: request.externalCallId,
+      toolName: request.toolName,
       args: request.args,
-      riskLevel: resolvedTool.definition.riskLevel,
-      createdAt,
     });
-    const requestedEvent = createToolRequestedEvent({
-      eventId: this.options.eventIdFactory.create(),
-      sessionId: request.sessionId,
-      timestamp: createdAt,
-      invocation,
-      presentation: this.options.presentation,
-    });
-    const requested = await this.commitAndNotify({
-      sessionId: request.sessionId,
-      invocation,
-      expectedRevision: null,
-      events: [requestedEvent],
-    });
-    return this.applyGate(request, resolvedTool, requested.snapshot);
-  }
-
-  private async recoverLocked(
-    snapshot: ToolExecutionSnapshot,
-    environment: ToolExecutionEnvironment,
-    securityContext: ToolSecurityContext,
-    signal?: AbortSignal,
-  ): Promise<ToolDispatcherOutcome> {
-    const resolvedTool = this.options.registry.resolve(snapshot.invocation.toolName);
-    if (resolvedTool === undefined) {
-      throw new ToolDispatcherInvariantError("The registered Tool is unavailable during recovery.");
-    }
-    assertToolInvocationInvariant(snapshot.invocation);
-    if (snapshot.invocation.status === "REQUESTED") {
-      return this.applyGate(
-        {
-          sessionId: snapshot.sessionId,
-          runId: snapshot.invocation.runId,
-          stepId: snapshot.invocation.stepId,
-          externalCallId: snapshot.invocation.externalCallId ?? "",
-          toolName: snapshot.invocation.toolName,
-          args: snapshot.invocation.args,
-          environment,
-          securityContext,
-          ...(signal === undefined ? {} : { signal }),
-        },
-        resolvedTool,
-        snapshot,
+    if (prepared.kind === "REJECTED") {
+      return await this.persistArgumentFailure(
+        request,
+        resolved,
+        preflight.kind === "INVALID_ARGUMENTS" ? preflight.error.message : "",
+        preflight.kind === "INVALID_ARGUMENTS" ? preflight.error.issues : [],
       );
     }
-    if (snapshot.invocation.status === "WAITING_APPROVAL") {
-      return this.recoverWaitingApproval(snapshot, environment, securityContext, signal);
-    }
-    if (snapshot.invocation.status === "RUNNING") return this.failInterrupted(snapshot);
-    if (snapshot.invocation.status === "COMPLETED" || snapshot.invocation.status === "FAILED") {
-      if (snapshot.observation === undefined) {
-        throw new ToolDispatcherInvariantError("Terminal ToolInvocation has no observation.");
-      }
-      return { kind: "RESULT", invocation: snapshot.invocation, observation: snapshot.observation };
-    }
-    throw new ToolDispatcherInvariantError("Cancelled ToolInvocation recovery is not supported.");
+    return await this.delegate(
+      () =>
+        this.coordinator.execute({
+          runId: request.runId,
+          sessionId: request.sessionId,
+          sourceStepId: request.stepId,
+          call: prepared.call,
+          environment: request.environment,
+          securityContext: request.securityContext,
+          signal: request.signal ?? new AbortController().signal,
+        }),
+      { toolName: request.toolName, args: request.args },
+    );
   }
 
-  private async applyGate(
-    request: ToolDispatchRequest,
-    resolvedTool: ResolvedTool,
-    snapshot: ToolExecutionSnapshot,
+  /** Delegate one call to the coordinator and translate its result into the legacy vocabulary. */
+  private async delegate(
+    call: () => Promise<DurableToolExecutionOutcome>,
+    debug: {
+      readonly toolName: ToolName;
+      readonly args: JsonObject;
+    },
   ): Promise<ToolDispatcherOutcome> {
-    throwIfAborted(request.signal);
-    const securityFacts = this.projectSecurityFacts(resolvedTool, snapshot.invocation.args);
-    let decision: ToolExecutionGateDecision;
-    try {
-      decision = await this.options.gate.decide({
-        invocation: snapshot.invocation,
-        toolName: resolvedTool.definition.name,
-        definition: resolvedTool.definition,
-        securityContext: request.securityContext,
-        runtimeKind: request.environment.runtime.kind,
-        ...(securityFacts === undefined ? {} : { securityFacts }),
-      });
-    } catch (error) {
-      throw new ToolDispatcherInfrastructureError("Tool execution policy evaluation failed.", {
-        cause: error,
-      });
-    }
-    this.emitToolDebug({
-      phase: "GATE",
-      toolName: resolvedTool.definition.name,
-      args: snapshot.invocation.args,
-      validation: "PASS",
-      normalization: "UNCHANGED",
-      preflight: "READY",
-      gate: decision.kind,
-    });
-    if (decision.kind === "REQUIRE_APPROVAL") {
-      if (
-        this.options.approvalStore === undefined ||
-        this.options.approvalIdFactory === undefined
-      ) {
-        throw new ToolDispatcherInfrastructureError(
-          "Durable approval infrastructure is required for approval-gated Tool execution.",
-        );
-      }
-      const approvalKey = computeToolApprovalKey({
-        toolName: resolvedTool.definition.name,
-        definition: resolvedTool.definition,
-        args: snapshot.invocation.args,
-        securityContext: request.securityContext,
-      });
-      throwIfAborted(request.signal);
-      const grant = await this.options.approvalStore.findApplicableRunGrant({
-        runId: snapshot.invocation.runId,
-        approvalKey,
-      });
-      if (grant !== null) return this.startAndExecute(request, resolvedTool, snapshot);
-      const waiting = markToolInvocationWaitingApproval(snapshot.invocation);
-      throwIfAborted(request.signal);
-      const approval = this.createApprovalRequest(request, resolvedTool, waiting, decision);
-      const approvalEvent = createApprovalRequestedEvent({
-        eventId: this.options.eventIdFactory.create(),
-        sessionId: request.sessionId,
-        stepId: waiting.stepId,
-        timestamp: approval.createdAt,
-        approval,
-      });
-      const committed = await this.commitAndNotify({
-        sessionId: request.sessionId,
-        invocation: waiting,
-        expectedRevision: snapshot.revision,
-        approval,
-        approvalKey,
-        events: [approvalEvent],
-      });
-      if (committed.snapshot.approval === undefined) {
-        throw new ToolDispatcherInvariantError("Approval request was not durably committed.");
-      }
-      return {
-        kind: "WAITING_APPROVAL",
-        invocation: committed.snapshot.invocation,
-        approvalId: committed.snapshot.approval.id,
-      };
-    }
-    if (decision.kind === "DENY") {
-      return this.persistFailure(
-        request.sessionId,
-        snapshot,
-        "PERMISSION_DENIED",
-        "SECURITY",
-        DENIED_CONTENT,
-        {},
-      );
-    }
-    return this.startAndExecute(request, resolvedTool, snapshot);
-  }
-
-  private async startAndExecute(
-    request: ToolDispatchRequest,
-    resolvedTool: ResolvedTool,
-    snapshot: ToolExecutionSnapshot,
-  ): Promise<ToolDispatcherOutcome> {
-    throwIfAborted(request.signal);
-    if (this.options.budget !== undefined) {
-      const admission = await this.options.budget.admit({
-        runId: request.runId,
-        requested: 1,
-        invocationId: snapshot.invocation.id,
-      });
-      if (admission.kind === "EXCEEDED") {
-        const failed = await this.persistFailure(
-          request.sessionId,
-          snapshot,
-          "BUDGET_EXCEEDED",
-          "INTERNAL",
-          "Tool execution budget is exhausted.",
-          {},
-        );
-        if (failed.kind !== "RESULT") {
-          throw new ToolDispatcherInvariantError("Budget failure did not produce a Tool result.");
-        }
-        return {
-          kind: "BUDGET_EXCEEDED",
-          invocation: failed.invocation,
-          dimension: admission.dimension,
-          accounted: admission.accounted,
-          limit: admission.limit,
-        };
-      }
-    }
-    const running = startToolInvocation(snapshot.invocation, this.options.clock.now());
-    const startedEvent = createToolStartedEvent({
-      eventId: this.options.eventIdFactory.create(),
-      sessionId: request.sessionId,
-      timestamp: running.startedAt ?? running.createdAt,
-      invocation: running,
-      presentation: this.options.presentation,
-    });
-    const committed = await this.commitAndNotify({
-      sessionId: request.sessionId,
-      invocation: running,
-      expectedRevision: snapshot.revision,
-      events: [startedEvent],
-      ...(this.options.budget === undefined
-        ? {}
-        : {
-            budgetStart: {
-              ownerId: snapshot.invocation.id,
-              startedAt: running.startedAt ?? running.createdAt,
-            },
-          }),
-    });
     this.emitToolDebug({
       phase: "EXECUTION",
-      toolName: resolvedTool.definition.name,
-      args: running.args,
+      toolName: debug.toolName,
+      args: debug.args,
       validation: "PASS",
       normalization: "UNCHANGED",
       preflight: "READY",
       execution: "STARTED",
     });
-    await this.options.budget?.start?.({
-      runId: request.runId,
-      invocationId: snapshot.invocation.id,
-    });
-    return this.executeHandler(request, resolvedTool, committed.snapshot);
-  }
-
-  private createApprovalRequest(
-    request: ToolDispatchRequest,
-    resolvedTool: ResolvedTool,
-    invocation: ToolInvocation,
-    decision: Extract<ToolExecutionGateDecision, { kind: "REQUIRE_APPROVAL" }>,
-  ): ApprovalRequest {
-    if (this.options.approvalStore === undefined || this.options.approvalIdFactory === undefined) {
-      throw new ToolDispatcherInfrastructureError(
-        "Durable approval infrastructure is required for approval-gated Tool execution.",
-      );
-    }
-    const createdAt = this.options.clock.now();
-    return ApprovalRequestSchema.parse({
-      id: this.options.approvalIdFactory.create(),
-      runId: invocation.runId,
-      toolInvocationId: invocation.id,
-      riskLevel: invocation.riskLevel,
-      title: "Approve Tool execution",
-      reason: decision.safeReason ?? "The active policy requires review before this Tool runs.",
-      action: decision.safeAction ?? {
-        kind: "TOOL_EXECUTION",
-        toolName: resolvedTool.definition.name,
-        riskLevel: resolvedTool.definition.riskLevel,
-        requiredCapabilities: [...resolvedTool.definition.requiredCapabilities].sort(),
-        runtimeRequirements: resolvedTool.definition.runtimeRequirements,
-        permissionProfile: request.securityContext.permissionProfile,
-        approvalPolicy: request.securityContext.approvalPolicy,
-      },
-      status: "PENDING",
-      scope: "RUN",
-      expiresAt: (createdAt + DEFAULT_APPROVAL_TTL_MS) as typeof createdAt,
-      createdAt,
-    });
-  }
-
-  private async recoverWaitingApproval(
-    snapshot: ToolExecutionSnapshot,
-    environment: ToolExecutionEnvironment,
-    securityContext: ToolSecurityContext,
-    signal?: AbortSignal,
-  ): Promise<ToolDispatcherOutcome> {
-    const approvalStore = this.options.approvalStore;
-    if (approvalStore === undefined) {
-      throw new ToolDispatcherInfrastructureError(
-        "Durable approval infrastructure is required to recover a waiting Tool.",
-      );
-    }
-    const approval =
-      (await approvalStore.getByInvocation(snapshot.invocation.id)) ?? snapshot.approval;
-    if (approval === null || approval === undefined) {
-      throw new ToolDispatcherInvariantError("Waiting ToolInvocation has no ApprovalRequest.");
-    }
-    if (approval.status === "PENDING") {
-      return { kind: "WAITING_APPROVAL", invocation: snapshot.invocation, approvalId: approval.id };
-    }
-    const request: ToolDispatchRequest = {
-      sessionId: snapshot.sessionId,
-      runId: snapshot.invocation.runId,
-      stepId: snapshot.invocation.stepId,
-      externalCallId: snapshot.invocation.externalCallId ?? "",
-      toolName: snapshot.invocation.toolName,
-      args: snapshot.invocation.args,
-      environment,
-      securityContext,
-      ...(signal === undefined ? {} : { signal }),
-    };
-    if (approval.status !== "APPROVED") {
-      return this.persistFailure(
-        request.sessionId,
-        snapshot,
-        "APPROVAL_REJECTED",
-        "SECURITY",
-        APPROVAL_REJECTED_CONTENT,
-        {},
-        { approvalStatus: approval.status },
-      );
-    }
-    const resolvedTool = this.options.registry.resolve(snapshot.invocation.toolName);
-    if (resolvedTool === undefined) {
-      throw new ToolDispatcherInvariantError("The registered Tool is unavailable during recovery.");
-    }
-    const securityFacts = this.projectSecurityFacts(resolvedTool, snapshot.invocation.args);
-    const decision = await this.options.gate.decide({
-      invocation: snapshot.invocation,
-      toolName: resolvedTool.definition.name,
-      definition: resolvedTool.definition,
-      securityContext,
-      runtimeKind: environment.runtime.kind,
-      ...(securityFacts === undefined ? {} : { securityFacts }),
-    });
-    if (decision.kind === "DENY") {
-      return this.persistFailure(
-        request.sessionId,
-        snapshot,
-        "PERMISSION_DENIED",
-        "SECURITY",
-        DENIED_CONTENT,
-        {},
-      );
-    }
-    if (decision.kind === "REQUIRE_APPROVAL") {
-      const approvalKey = computeToolApprovalKey({
-        toolName: resolvedTool.definition.name,
-        definition: resolvedTool.definition,
-        args: snapshot.invocation.args,
-        securityContext,
-      });
-      const storedKey = await approvalStore.getApprovalKeyByInvocation?.(snapshot.invocation.id);
-      if (storedKey !== undefined && storedKey !== approvalKey) {
-        throw new ToolDispatcherInvariantError("Approval identity does not match the Tool call.");
-      }
-      if (approval.grantedScope === undefined) {
-        throw new ToolDispatcherInvariantError("Approved ApprovalRequest has no granted scope.");
-      }
-    }
-    return this.startAndExecute(request, resolvedTool, snapshot);
-  }
-
-  /**
-   * Execute an invocation the shell has already durably started.
-   *
-   * ```text
-   * durable RUNNING commit  (startAndExecute, above)
-   *   ↓
-   * canonical ToolInvocationExecutor.execute(...)      @caelush/agent   ← execution authority
-   *   ↓
-   * raw AgentToolResult
-   *   ↓
-   * raw artifact compatibility                          this shell (storage-owned, so not in the pipeline)
-   *   ↓
-   * canonical ToolResultPipeline.process(...)           @caelush/agent   ← result authority
-   *   ↓
-   * PreparedToolSettlement
-   *   ↓
-   * terminal lifecycle / observation / events / effects / atomic commit   this shell, until 4C
-   * ```
-   *
-   * What this method no longer owns: reaching a `ToolHandler` directly, building an execution input,
-   * the update lifetime, the exact-shape rule, the details budget, the schema check, the sanitize →
-   * revalidate sequence and the content bound. It calls the canonical executor and the canonical
-   * pipeline, and projects what they return into the durable rows this round still commits.
-   */
-  private async executeHandler(
-    request: ToolDispatchRequest,
-    resolvedTool: ResolvedTool,
-    snapshot: ToolExecutionSnapshot,
-  ): Promise<ToolDispatcherOutcome> {
-    const identity: ToolExecutionIdentity = Object.freeze({
-      runId: snapshot.invocation.runId,
-      sessionId: request.sessionId,
-      sourceStepId: snapshot.invocation.stepId,
-      invocationId: snapshot.invocation.id,
-      externalCallId: request.externalCallId,
-    });
-    const executor = this.options.execution.invocationExecutorFactory({
-      invocation: snapshot.invocation,
-      updateSanitizer: this.options.execution.updateSanitizer,
-    });
-
-    // The canonical execution result type. `ToolExecutionResult` is the legacy alias for the same
-    // structure, so this is one value under two names, not a conversion.
-    let rawResult: ToolExecutionResult;
     try {
-      rawResult = await executor.execute({
-        call: this.preparedCallFor(resolvedTool, request),
-        identity,
-        environment: request.environment,
-        signal: request.signal ?? new AbortController().signal,
-      });
-    } catch (error) {
-      if (error instanceof ToolExecutionUncertainError) {
-        return this.persistFailure(
-          request.sessionId,
-          snapshot,
-          "TOOL_EXECUTION_ERROR",
-          "RUNTIME",
-          UNCERTAIN_CONTENT,
-          {},
-          { executionDisposition: "UNCERTAIN_SIDE_EFFECT" },
-        );
-      }
-      await this.persistFatalFailure(
-        request.sessionId,
-        snapshot,
-        "RUNTIME_ERROR",
-        "RUNTIME",
-        RUNTIME_CONTENT,
-      );
-      throw new ToolDispatcherInfrastructureError("Tool execution failed.", { cause: error });
-    }
-
-    /**
-     * The complete raw Tool output, as the compatibility artifact.
-     *
-     * It uses the raw execution `content`, exactly as it always has, and it is written before the
-     * result pipeline runs. Archiving is a storage concern, so it stays here rather than moving into
-     * a pipeline that must not know storage exists; the durable observation still carries only the
-     * sanitized, bounded content.
-     */
-    const rawArtifactRef =
-      this.options.rawOutputStore === undefined
-        ? undefined
-        : (
-            await this.options.rawOutputStore.createOrGet({
-              artifactId: `tool-output:${snapshot.invocation.id}`,
-              runId: snapshot.invocation.runId,
-              kind: "TOOL_OUTPUT",
-              sourceRef: snapshot.invocation.id,
-              content: rawResult.content,
-              mimeType: "text/plain; charset=utf-8",
-              sensitivity: "INTERNAL",
-              createdSequence: 0,
-              createdAt: this.options.clock.now(),
-            })
-          ).artifactId;
-
-    const finishedAt = this.options.clock.now();
-    let settlement;
-    try {
-      settlement = this.options.execution
-        .resultPipelineFactory({
-          invocation: snapshot.invocation,
-          environment: request.environment,
-        })
-        .process({
-          call: this.preparedCallFor(resolvedTool, request),
-          invocation: snapshot.invocation,
-          rawResult,
-          now: finishedAt,
+      const outcome = translateOutcome(await call());
+      if (outcome.kind === "RESULT" && outcome.observation.isError) {
+        // A model-recoverable Tool failure is remembered, so an identical retry can be refused before
+        // it runs again. The *decision* to refuse is the admission pre-check's; this only records the
+        // fact, and a transient infrastructure refusal never reaches here.
+        this.failureMemory.record({
+          runId: outcome.invocation.runId,
+          toolName: outcome.invocation.toolName,
+          args: outcome.invocation.args,
+          failureCode: TOOL_FAILURE_MEMORY_CODE,
+          now: this.options.clock.now(),
         });
-    } catch (error) {
-      // A result contract violation is settled as a fatal Tool output error; a pipeline
-      // infrastructure failure is not. Both leave the durable boundary exactly as they found it, and
-      // neither ever becomes an ordinary `isError: true` model result.
-      if (error instanceof ToolResultValidationError) {
-        await this.persistFatalFailure(
-          request.sessionId,
-          snapshot,
-          "TOOL_OUTPUT_ERROR",
-          "TOOL",
-          OUTPUT_CONTENT,
-        );
-        throw new ToolDispatcherInfrastructureError(
-          "Tool result violated its registered contract.",
-          { cause: error },
-        );
       }
-      throw new ToolDispatcherInfrastructureError("Tool result processing failed.", {
-        cause: error,
+      this.emitToolDebug({
+        phase: "EXECUTION",
+        toolName: debug.toolName,
+        args: debug.args,
+        validation: "PASS",
+        normalization: "UNCHANGED",
+        preflight: "READY",
+        execution:
+          outcome.kind !== "RESULT"
+            ? "STARTED"
+            : outcome.observation.isError
+              ? "MODEL_ERROR"
+              : "COMPLETED",
       });
+      return outcome;
+    } catch (error) {
+      throw translateError(error);
     }
-    const result: ToolExecutionResult = settlement.result;
-    const effects = this.legacyEffectsFromSettlement(settlement);
-    const terminal = result.isError
-      ? failToolInvocation(
-          snapshot.invocation,
-          {
-            code: "TOOL_EXECUTION_ERROR",
-            message: "Tool execution returned an error result.",
-            retryable: false,
-            phase: "TOOL",
-          },
-          finishedAt,
-        )
-      : completeToolInvocation(snapshot.invocation, finishedAt);
-    const observation = createToolObservation({
-      id: this.options.observationIdFactory.create(),
-      runId: terminal.runId,
-      stepId: terminal.stepId,
-      toolInvocationId: terminal.id,
-      content: result.content,
-      // The canonical result layer speaks the AI package's JSON model; the durable observation speaks
-      // the Protocol one. They describe the same JSON value and differ only in declaration, so this is
-      // the single point where the two vocabularies meet.
-      details: result.details as unknown as JsonObject,
-      isError: result.isError,
-      ...(rawArtifactRef === undefined ? {} : { rawArtifactRef }),
-      createdAt: finishedAt,
-    });
-    const event: DurableToolEventDraft = result.isError
-      ? createToolFailedEvent({
-          eventId: this.options.eventIdFactory.create(),
-          sessionId: request.sessionId,
-          timestamp: finishedAt,
-          invocation: terminal,
-          error: terminal.error as AgentError,
-          presentation: this.options.presentation,
-          result,
-        })
-      : createToolCompletedEvent({
-          eventId: this.options.eventIdFactory.create(),
-          sessionId: request.sessionId,
-          timestamp: finishedAt,
-          invocation: terminal,
-          observationId: observation.id,
-          presentation: this.options.presentation,
-          result,
-        });
-    const outputEvent = createToolOutputEvent({
-      eventId: this.options.eventIdFactory.create(),
-      sessionId: request.sessionId,
-      timestamp: finishedAt,
-      invocation: terminal,
-      presentation: this.options.presentation,
-      result,
-    });
-    const committed = await this.commitAndNotify({
-      sessionId: request.sessionId,
-      invocation: terminal,
-      expectedRevision: snapshot.revision,
-      observation,
-      events: [
-        ...toolEffectsToEvents(effects, {
-          runId: terminal.runId,
-          sessionId: request.sessionId,
-          stepId: terminal.stepId,
-          timestamp: finishedAt,
-          nextEventId: () => this.options.eventIdFactory.create(),
-          invocation: terminal,
-          presentation: this.options.presentation,
+  }
+
+  private buildCoordinator(): DurableToolExecutionCoordinator {
+    const options = this.options;
+    const metadata: ToolDurableMetadataPort =
+      options.metadata ??
+      createCodingToolDurableMetadataPort({
+        registry: options.registry,
+        definitions: options.registry.modelDefinitions(),
+      });
+    const approvalRequests = options.approvalRequests ?? this.genericApprovalRequests();
+    const admission: ToolAdmissionCoordinator = createToolAdmissionCoordinator({
+      policy: createCodingToolAdmissionPort({
+        gate: createDurableInvocationGatePort({
+          gate: options.gate,
+          invocations: this.durableInvocations(),
         }),
-        ...(outputEvent === undefined ? [] : [outputEvent]),
-        event,
-      ],
-      effects,
-      effectTimestamp: finishedAt,
+        registry: options.registry,
+        definitions: options.registry.modelDefinitions(),
+        approvalPresentation: (decision) => decision.safeAction,
+        onDecision: (decision, request) => {
+          this.emitToolDebug({
+            phase: "GATE",
+            toolName: request.toolName,
+            args: request.args as JsonObject,
+            validation: "PASS",
+            normalization: "UNCHANGED",
+            preflight: "READY",
+            gate: decision.kind,
+          });
+        },
+      }),
+      preCheck:
+        options.admissionPreCheck ??
+        createToolFailureMemoryPreCheck({ memory: this.failureMemory, clock: options.clock }),
+      ...(options.approvalStore === undefined
+        ? {}
+        : { approvals: toCanonicalApprovalLookup(options.approvalStore) }),
+      ...(options.approvalIdFactory === undefined ? {} : { approvalRequests }),
+      ...(options.budget === undefined
+        ? {}
+        : { budget: toCanonicalToolBudgetPort(options.budget) }),
+      clock: options.clock,
+      eventIdFactory: options.eventIdFactory,
     });
-    if (committed.snapshot.observation === undefined) {
-      throw new ToolDispatcherInvariantError("Tool settlement committed without an observation.");
-    }
-    if (result.isError) {
-      this.failureMemory.record({
-        runId: request.runId,
-        toolName: resolvedTool.definition.name,
-        args: snapshot.invocation.args,
-        failureCode: "TOOL_EXECUTION_ERROR",
-        now: finishedAt,
+    const failureSettlement = createToolFailureSettlement({
+      store: this.store,
+      clock: options.clock,
+      observationIdFactory: options.observationIdFactory,
+      eventIdFactory: options.eventIdFactory,
+      ...(options.presentation === undefined ? {} : { presentation: options.presentation }),
+      boundContent: (content) => boundToolModelContent(content, this.outputPolicy),
+      notifier: options.notifier,
+    });
+    return createDurableToolExecutionCoordinator({
+      store: this.store,
+      admission,
+      metadata,
+      approvalRequests,
+      invocationIdFactory: options.invocationIdFactory,
+      observationIdFactory: options.observationIdFactory,
+      eventIdFactory: options.eventIdFactory,
+      clock: options.clock,
+      invocationExecutorFactory: options.execution.invocationExecutorFactory,
+      updateSanitizer: options.execution.updateSanitizer,
+      resultPipelineFactory: options.execution.resultPipelineFactory,
+      preparedCallFactory: ({ invocation, externalCallId }) =>
+        this.preparedCallFor(invocation, externalCallId),
+      failureSettlement,
+      ...(options.approvalStore === undefined
+        ? {}
+        : { approvalLookup: toCanonicalApprovalLookup(options.approvalStore) }),
+      ...(options.budget === undefined
+        ? {}
+        : {
+            budget: toCanonicalToolBudgetPort(options.budget),
+          }),
+      ...(options.presentation === undefined ? {} : { presentation: options.presentation }),
+      ...(options.rawOutputStore === undefined ? {} : { rawOutputStore: options.rawOutputStore }),
+      notifier: options.notifier,
+      boundFailureContent: (content) => boundToolModelContent(content, this.outputPolicy),
+    });
+  }
+
+  /**
+   * The generic approval projection a legacy caller gets when it declares none.
+   *
+   * It keeps every field the production `ApprovalRequest` has always carried — risk level, title,
+   * reason, action, `PENDING` status, `RUN` scope and the 15-minute TTL — with the timestamp supplied by
+   * the canonical clock. The production composition replaces it with the Security/Coding one, which can
+   * additionally carry a redacted `safeAction` preview from the real security facts.
+   */
+  private genericApprovalRequests(): ToolApprovalRequestFactory {
+    const approvalIdFactory = this.options.approvalIdFactory;
+    return ({ identity, call, requirement, createdAt }) => {
+      if (approvalIdFactory === undefined) return null;
+      const resolved = this.options.registry.resolve(call.resolved.tool.name);
+      if (resolved === undefined) return null;
+      return ApprovalRequestSchema.parse({
+        id: approvalIdFactory.create(),
+        runId: identity.runId,
+        toolInvocationId: identity.invocationId,
+        riskLevel: resolved.definition.riskLevel,
+        title: "Approve Tool execution",
+        reason: requirement.reason,
+        action:
+          requirement.presentation ??
+          ({
+            kind: "TOOL_EXECUTION",
+            toolName: resolved.definition.name,
+            riskLevel: resolved.definition.riskLevel,
+            requiredCapabilities: [...resolved.definition.requiredCapabilities].sort(),
+            runtimeRequirements: resolved.definition.runtimeRequirements,
+          } satisfies JsonObject),
+        status: "PENDING",
+        scope: requirement.requestedScope ?? "RUN",
+        expiresAt: (createdAt + DEFAULT_APPROVAL_TTL_MS) as typeof createdAt,
+        createdAt,
       });
-    }
-    this.emitToolDebug({
-      phase: "EXECUTION",
-      toolName: resolvedTool.definition.name,
-      args: snapshot.invocation.args,
-      validation: "PASS",
-      normalization: "UNCHANGED",
-      preflight: "READY",
-      execution: result.isError ? "MODEL_ERROR" : "COMPLETED",
-    });
-    await this.options.budget?.settle?.({
-      runId: request.runId,
-      invocationId: snapshot.invocation.id,
-    });
-    return {
-      kind: "RESULT",
-      invocation: committed.snapshot.invocation,
-      observation: committed.snapshot.observation,
     };
   }
 
   /**
-   * The canonical prepared call for an invocation this shell already durably started.
+   * The canonical prepared call for an invocation whose durable row already exists.
    *
    * Nothing is resolved, normalized or validated here: the canonical registry resolved the Tool at
-   * registration, 4A's preparation validated the arguments before the `REQUESTED` row was written,
-   * and the arguments come from the durable invocation itself. This is a projection of durable state
-   * onto the canonical call type, not a second preparation path.
+   * registration, preparation validated the arguments before the `REQUESTED` row was written, and the
+   * arguments come from the durable invocation itself. This is a projection of durable state onto the
+   * canonical call type, not a second preparation path.
    */
-  private preparedCallFor(
-    resolvedTool: ResolvedTool,
-    request: ToolDispatchRequest,
-  ): PreparedToolCall {
-    const resolved =
-      resolvedTool.agentTool === undefined
-        ? undefined
-        : this.options.registry.agentRegistry().resolve(resolvedTool.definition.name);
+  private preparedCallFor(invocation: ToolInvocation, externalCallId: string): PreparedToolCall {
+    const resolved = this.options.registry.agentRegistry().resolve(invocation.toolName);
     if (resolved === undefined) {
       throw new ToolDispatcherInvariantError(
         "The canonical Tool entry is unavailable for execution.",
@@ -1090,148 +776,52 @@ export class ToolDispatcher {
     }
     return Object.freeze({
       request: Object.freeze({
-        externalCallId: request.externalCallId,
-        toolName: resolvedTool.definition.name,
-        args: request.args,
+        externalCallId,
+        toolName: invocation.toolName,
+        args: invocation.args,
       }),
       resolved,
-      args: request.args,
+      args: invocation.args,
     });
   }
 
   /**
-   * Project the legacy Tool effects, or refuse to settle.
-   *
-   * Effects are Coding-overlay metadata and stay in the legacy composition until 4E. A projector that
-   * throws leaves the invocation `RUNNING` for uncertain recovery rather than producing a durable
-   * state that disagrees with the workspace.
-   */
-  private projectEffects(
-    resolvedTool: ResolvedTool,
-    request: ToolDispatchRequest,
-    snapshot: ToolExecutionSnapshot,
-    result: ToolExecutionResult,
-    now: import("@caelush/protocol").TimestampMs,
-  ): readonly ToolEffect[] {
-    try {
-      return (
-        resolvedTool.effectProjector?.({
-          request: {
-            ...request,
-            invocationId: snapshot.invocation.id,
-            args: snapshot.invocation.args,
-          },
-          result,
-          now,
-        }) ?? []
-      );
-    } catch (error) {
-      throw new ToolDispatcherInfrastructureError("Tool effect projection failed.", {
-        cause: error,
-      });
-    }
-  }
-
-  /**
-   * Read the Coding Tool effects back out of the opaque settlement extension.
+   * The historical durable argument failure — the Phase 4A rejection difference, retained.
    *
    * ```text
-   * canonical pipeline   produced an opaque { kind, payload } it does not interpret
-   * this shell           decodes it into the ToolEffect[] the existing atomic commit understands
+   * REQUESTED → FAILED, with a TOOL_ARGUMENT_ERROR, a bounded safe observation and one tool.failed
    * ```
    *
-   * The decode is total and defensive: an absent extension means no effects, and a payload that is not
-   * an array is a Coding-overlay contract violation this shell refuses to settle rather than guessing
-   * through.
+   * The canonical Preparer creates **no invocation** for a rejected call. Switching production onto that
+   * is Phase 4D's, and until then this method is the one place a durable row is written for a call that
+   * never became READY. It is deliberately the only lifecycle-shaped code left in this facade, and the
+   * Phase 4C architecture guard asserts that it is.
    */
-  private legacyEffectsFromSettlement(settlement: {
-    readonly effects?: import("@caelush/agent").ToolSettlementExtension | undefined;
-  }): readonly ToolEffect[] {
-    const extension = settlement.effects;
-    if (extension === undefined) return [];
-    if (extension.kind !== CODING_TOOL_EFFECTS_EXTENSION_KIND) {
-      throw new ToolDispatcherInfrastructureError(
-        "Tool settlement carried an unknown settlement extension.",
-      );
-    }
-    // The canonical payload speaks the AI package's JSON model; the Coding effect vocabulary speaks
-    // the legacy one. Same JSON, two declarations, so the boundary is where they meet.
-    const payload = extension.payload as unknown as JsonObject;
-    const effects = payload.effects;
-    if (!Array.isArray(effects)) {
-      throw new ToolDispatcherInfrastructureError(
-        "Tool settlement extension payload is malformed.",
-      );
-    }
-    return effects as unknown as readonly ToolEffect[];
-  }
-
-  private projectSecurityFacts(
-    resolvedTool: ResolvedTool,
-    args: JsonObject,
-  ): ToolSecurityFacts | undefined {
-    if (resolvedTool.securityFactsProjector === undefined) return undefined;
-    try {
-      return resolvedTool.securityFactsProjector(args);
-    } catch {
-      // Security facts that cannot be projected fail closed: the input is described as opaque so an
-      // admission decision is never made on a partial description.
-      return { resourceAccesses: [], secretScanInputs: [], opaqueInput: true };
-    }
-  }
-
-  private emitPreflightDebug(
-    toolName: ToolDispatchRequest["toolName"],
-    rawArgs: JsonObject,
-    preflight: ToolPreflightResult,
-  ): void {
-    this.emitToolDebug({
-      phase: "PREFLIGHT",
-      toolName,
-      args: rawArgs,
-      validation: preflight.kind === "READY" ? "PASS" : "FAIL",
-      normalization:
-        preflight.kind !== "READY"
-          ? "NOT_APPLIED"
-          : canonicalJsonString(rawArgs) === canonicalJsonString(preflight.args)
-            ? "UNCHANGED"
-            : "SAFE_NUMERIC_CONVERSION",
-      preflight: preflight.kind,
-    });
-  }
-
-  private emitToolDebug(input: {
-    readonly phase: ToolCallingDebugEvent["phase"];
-    readonly toolName: ToolCallingDebugEvent["toolName"];
-    readonly args: JsonObject;
-    readonly validation: ToolCallingDebugEvent["validation"];
-    readonly normalization: ToolCallingDebugEvent["normalization"];
-    readonly preflight: ToolCallingDebugEvent["preflight"];
-    readonly gate?: ToolCallingDebugEvent["gate"];
-    readonly execution?: ToolCallingDebugEvent["execution"];
-  }): void {
-    if (this.options.debug === undefined) return;
-    const event: ToolCallingDebugEvent = Object.freeze({
-      phase: input.phase,
-      toolName: input.toolName,
-      argumentKeys: Object.freeze(Object.keys(input.args).sort()),
-      argumentBytes: jsonUtf8ByteLength(canonicalJsonString(input.args)),
-      validation: input.validation,
-      normalization: input.normalization,
-      preflight: input.preflight,
-      ...(input.gate === undefined ? {} : { gate: input.gate }),
-      ...(input.execution === undefined ? {} : { execution: input.execution }),
-    });
-    try {
-      this.options.debug.emit(event);
-    } catch {
-      // Diagnostics are strictly best effort and must never alter execution semantics.
-    }
+  /**
+   * The durable invocation lookup the legacy gate contract requires.
+   *
+   * The gate validates that the invocation it is handed agrees with its definition on Tool name and
+   * **risk level**, so it must be the real durable row — not a synthesized one with a guessed risk.
+   * Admission runs after the `REQUESTED` commit, so the row exists by the time the gate asks.
+   */
+  private durableInvocations(): {
+    resolve(request: {
+      readonly runId: string;
+      readonly stepId: string;
+      readonly invocationId: string;
+      readonly externalCallId: string;
+      readonly toolName: ToolName;
+    }): Promise<ToolInvocation | undefined>;
+  } {
+    return {
+      resolve: async (request) =>
+        (await this.store.load(request.invocationId as never))?.invocation,
+    };
   }
 
   private async persistArgumentFailure(
     request: ToolDispatchRequest,
-    resolvedTool: ResolvedTool,
+    resolved: ResolvedTool,
     reason: string,
     issues: readonly { readonly instancePath: string; readonly message: string }[] = [],
   ): Promise<ToolDispatcherOutcome> {
@@ -1243,7 +833,7 @@ export class ToolDispatcher {
       toolName: request.toolName,
       externalCallId: request.externalCallId,
       args: request.args,
-      riskLevel: resolvedTool.definition.riskLevel,
+      riskLevel: resolved.coding?.riskLevel ?? resolved.definition.riskLevel,
       createdAt,
     });
     const failed = failToolInvocation(
@@ -1272,35 +862,38 @@ export class ToolDispatcher {
       toolInvocationId: failed.id,
       content: boundToolModelContent(
         formatArgumentFailureContent(request.toolName, reason),
-        this.options.execution.outputPolicy,
+        this.outputPolicy,
       ),
       details: {},
       isError: true,
       createdAt,
     });
-    const events = [
-      createToolRequestedEvent({
-        eventId: this.options.eventIdFactory.create(),
-        sessionId: request.sessionId,
-        timestamp: createdAt,
-        invocation,
-        presentation: this.options.presentation,
-      }),
-      createToolFailedEvent({
-        eventId: this.options.eventIdFactory.create(),
-        sessionId: request.sessionId,
-        timestamp: createdAt,
-        invocation: failed,
-        error: failed.error as AgentError,
-        presentation: this.options.presentation,
-      }),
-    ];
-    const committed = await this.commitAndNotify({
+    const committed = await this.commitLegacy({
       sessionId: request.sessionId,
       invocation: failed,
       expectedRevision: null,
       observation,
-      events,
+      events: [
+        createToolRequestedEvent({
+          eventId: this.options.eventIdFactory.create(),
+          sessionId: request.sessionId,
+          timestamp: createdAt,
+          invocation,
+          ...(this.options.presentation === undefined
+            ? {}
+            : { presentation: this.options.presentation }),
+        }),
+        createToolFailedEvent({
+          eventId: this.options.eventIdFactory.create(),
+          sessionId: request.sessionId,
+          timestamp: createdAt,
+          invocation: failed,
+          error: failed.error as import("@caelush/protocol").AgentError,
+          ...(this.options.presentation === undefined
+            ? {}
+            : { presentation: this.options.presentation }),
+        }),
+      ],
     });
     if (committed.snapshot.observation === undefined) {
       throw new ToolDispatcherInvariantError("Argument failure committed without an observation.");
@@ -1312,136 +905,11 @@ export class ToolDispatcher {
     };
   }
 
-  private async persistFailureMemoryBlock(
-    request: ToolDispatchRequest,
-    resolvedTool: ResolvedTool,
-  ): Promise<ToolDispatcherOutcome> {
-    const createdAt = this.options.clock.now();
-    const invocation = createRequestedToolInvocation({
-      id: this.options.invocationIdFactory.create(),
-      runId: request.runId,
-      stepId: request.stepId,
-      toolName: request.toolName,
-      externalCallId: request.externalCallId,
-      args: request.args,
-      riskLevel: resolvedTool.definition.riskLevel,
-      createdAt,
-    });
-    const requestedEvent = createToolRequestedEvent({
-      eventId: this.options.eventIdFactory.create(),
-      sessionId: request.sessionId,
-      timestamp: createdAt,
-      invocation,
-      presentation: this.options.presentation,
-    });
-    const requested = await this.commitAndNotify({
-      sessionId: request.sessionId,
-      invocation,
-      expectedRevision: null,
-      events: [requestedEvent],
-    });
-    return this.persistFailure(
-      request.sessionId,
-      requested.snapshot,
-      "TOOL_EXECUTION_ERROR",
-      "TOOL",
-      FAILURE_MEMORY_CONTENT,
-      {},
-      { blockedBy: "TOOL_FAILURE_MEMORY" },
-    );
-  }
-
-  private async persistFailure(
-    sessionId: ToolDispatchRequest["sessionId"],
-    snapshot: ToolExecutionSnapshot,
-    code: AgentError["code"],
-    phase: AgentError["phase"],
-    content: string,
-    details: JsonObject,
-    errorDetails: JsonObject = {},
-  ): Promise<ToolDispatcherOutcome> {
-    const finishedAt = this.options.clock.now();
-    const failed = failToolInvocation(
-      snapshot.invocation,
-      {
-        code,
-        message:
-          code === "PERMISSION_DENIED" || code === "APPROVAL_REJECTED"
-            ? content
-            : "Tool execution returned an error result.",
-        retryable: false,
-        phase,
-        ...(Object.keys(errorDetails).length === 0 ? {} : { details: errorDetails }),
-      },
-      finishedAt,
-    );
-    const observation = createToolObservation({
-      id: this.options.observationIdFactory.create(),
-      runId: failed.runId,
-      stepId: failed.stepId,
-      toolInvocationId: failed.id,
-      content: boundToolModelContent(content, this.options.execution.outputPolicy),
-      details,
-      isError: true,
-      createdAt: finishedAt,
-    });
-    const event = createToolFailedEvent({
-      eventId: this.options.eventIdFactory.create(),
-      sessionId,
-      timestamp: finishedAt,
-      invocation: failed,
-      error: failed.error as AgentError,
-      presentation: this.options.presentation,
-      result: {
-        content,
-        details,
-        isError: true,
-      },
-    });
-    const committed = await this.commitAndNotify({
-      sessionId,
-      invocation: failed,
-      expectedRevision: snapshot.revision,
-      observation,
-      events: [event],
-    });
-    if (committed.snapshot.observation === undefined) {
-      throw new ToolDispatcherInvariantError("Tool failure committed without an observation.");
-    }
-    return {
-      kind: "RESULT",
-      invocation: committed.snapshot.invocation,
-      observation: committed.snapshot.observation,
-    };
-  }
-
-  private async persistFatalFailure(
-    sessionId: ToolDispatchRequest["sessionId"],
-    snapshot: ToolExecutionSnapshot,
-    code: AgentError["code"],
-    phase: AgentError["phase"],
-    content: string,
-  ): Promise<void> {
-    await this.persistFailure(sessionId, snapshot, code, phase, content, {});
-  }
-
-  private async failInterrupted(snapshot: ToolExecutionSnapshot): Promise<ToolDispatcherOutcome> {
-    return this.persistFailure(
-      snapshot.sessionId,
-      snapshot,
-      "TOOL_EXECUTION_ERROR",
-      "TOOL",
-      INTERRUPTED_CONTENT,
-      {},
-      { executionDisposition: "UNCERTAIN_SIDE_EFFECT" },
-    );
-  }
-
-  private async commitAndNotify(
+  private async commitLegacy(
     command: Parameters<ToolExecutionStorePort["commit"]>[0],
-  ): Promise<ToolExecutionCommitResult> {
+  ): Promise<import("./execution-store.js").ToolExecutionCommitResult> {
     try {
-      const result = await this.options.store.commit(command);
+      const result = await this.store.commit(command);
       if (result.events.length > 0) this.options.notifier.notifyCommitted(result.events);
       return result;
     } catch (error) {
@@ -1452,30 +920,87 @@ export class ToolDispatcher {
     }
   }
 
-  private assertCallIsNotActive(key: string, runId: ToolDispatchRequest["runId"]): void {
-    if (this.activeCalls.has(key)) throw new ToolDispatcherBusyError(runId);
+  private emitPreflightDebug(
+    toolName: import("@caelush/protocol").ToolName,
+    rawArgs: import("@caelush/protocol").JsonObject,
+    preflight: ToolPreflightResult,
+  ): void {
+    this.emitToolDebug({
+      phase: "PREFLIGHT",
+      toolName,
+      args: rawArgs,
+      validation: preflight.kind === "READY" ? "PASS" : "FAIL",
+      normalization:
+        preflight.kind !== "READY"
+          ? "NOT_APPLIED"
+          : canonicalJsonString(rawArgs) === canonicalJsonString(preflight.args)
+            ? "UNCHANGED"
+            : "SAFE_NUMERIC_CONVERSION",
+      preflight: preflight.kind,
+    });
   }
 
-  private assertSameCall(request: ToolDispatchRequest, snapshot: ToolExecutionSnapshot): void {
-    if (
-      snapshot.invocation.toolName !== request.toolName ||
-      canonicalJsonString(snapshot.invocation.args) !== canonicalJsonString(request.args)
-    ) {
-      throw new ToolExecutionConflictError(
-        "Tool call identity conflicts with existing durable data.",
-      );
+  private emitToolDebug(input: {
+    readonly phase: ToolCallingDebugEvent["phase"];
+    readonly toolName: ToolCallingDebugEvent["toolName"];
+    readonly args: import("@caelush/protocol").JsonObject;
+    readonly validation: ToolCallingDebugEvent["validation"];
+    readonly normalization: ToolCallingDebugEvent["normalization"];
+    readonly preflight: ToolCallingDebugEvent["preflight"];
+    readonly gate?: ToolCallingDebugEvent["gate"];
+    readonly execution?: ToolCallingDebugEvent["execution"];
+  }): void {
+    if (this.options.debug === undefined) return;
+    const event: ToolCallingDebugEvent = Object.freeze({
+      phase: input.phase,
+      toolName: input.toolName,
+      argumentKeys: Object.freeze(Object.keys(input.args).sort()),
+      argumentBytes: jsonUtf8ByteLength(canonicalJsonString(input.args)),
+      validation: input.validation,
+      normalization: input.normalization,
+      preflight: input.preflight,
+      ...(input.gate === undefined ? {} : { gate: input.gate }),
+      ...(input.execution === undefined ? {} : { execution: input.execution }),
+    });
+    try {
+      this.options.debug.emit(event);
+    } catch {
+      // Diagnostics are strictly best effort and must never alter execution semantics.
     }
   }
 }
 
-function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (signal?.aborted) throw new Error("Tool execution was cancelled.");
-}
+/* ------------------------------------------------------------------------------------------------
+ * Translation
+ * ---------------------------------------------------------------------------------------------- */
 
-function callKey(
-  request: Pick<ToolDispatchRequest, "runId" | "stepId" | "externalCallId">,
-): string {
-  return `${request.runId}:${request.stepId}:${request.externalCallId}`;
+function translateOutcome(outcome: DurableToolExecutionOutcome): ToolDispatcherOutcome {
+  if (outcome.kind === "SETTLED") {
+    return { kind: "RESULT", invocation: outcome.invocation, observation: outcome.observation };
+  }
+  if (outcome.kind === "WAITING_APPROVAL") {
+    return {
+      kind: "WAITING_APPROVAL",
+      invocation: outcome.invocation,
+      approvalId: outcome.approval.id,
+    };
+  }
+  if (outcome.kind === "BUDGET_EXCEEDED") {
+    const block = outcome.block;
+    return {
+      kind: "BUDGET_EXCEEDED",
+      invocation: outcome.invocation,
+      dimension: "TOOL_CALLS",
+      accounted: block.kind === "EXCEEDED" ? block.accounted : 0,
+      limit: block.kind === "EXCEEDED" ? block.limit : 0,
+    };
+  }
+  if (outcome.observation === undefined) {
+    throw new ToolDispatcherInfrastructureError(
+      "Cancelled ToolInvocation recovery has no legacy outcome.",
+    );
+  }
+  return { kind: "RESULT", invocation: outcome.invocation, observation: outcome.observation };
 }
 
 function formatArgumentFailureContent(toolName: string, reason: string): string {
@@ -1483,4 +1008,45 @@ function formatArgumentFailureContent(toolName: string, reason: string): string 
     return `${reason} ${ARGUMENT_ERROR_CONTENT}`;
   }
   return `Invalid arguments for tool "${toolName}". ${ARGUMENT_ERROR_CONTENT} ${reason}`;
+}
+
+/**
+ * Keep the legacy error vocabulary exact.
+ *
+ * A caller catches these by identity — the batch coordinator turns exactly four of them into a batch
+ * infrastructure failure, and `ToolDispatcherInfrastructureError` is one of the four — so the canonical
+ * classes are mapped back onto the legacy ones rather than leaking a new taxonomy through an unchanged
+ * contract.
+ *
+ * The canonical `phase` is *not* discarded: it becomes the legacy error's `cause`, so a host that wants
+ * to know whether admission, execution, the result pipeline, settlement or recovery failed still can,
+ * without the legacy contract growing a field.
+ */
+function translateError(error: unknown): unknown {
+  if (error instanceof ToolCallBusyError) return new ToolDispatcherBusyError(error.runId);
+  if (error instanceof ToolExecutionAbortedError) {
+    return new ToolDispatcherInfrastructureError("Tool execution was cancelled.", { cause: error });
+  }
+  if (error instanceof ToolExecutionInfrastructureError) {
+    return new ToolDispatcherInfrastructureError(error.message, { cause: error });
+  }
+  return error;
+}
+
+/**
+ * The one place a store is normalized into the canonical vocabulary.
+ *
+ * ```text
+ * canonical store (what @caelush/storage implements)   passed through unchanged
+ * pre-4C store   (a legacy implementation or test double)   commit's effects facets → extension
+ * ```
+ *
+ * The legacy adapter is `commit`-only and pure, so a store that already speaks `extension` loses
+ * nothing by going through it, and a store that speaks `effects` gains the canonical facet. One
+ * normalization, one transaction, and no second durable path.
+ */
+function resolveCanonicalStore(
+  store: ToolExecutionStorePort | LegacyToolExecutionStorePort,
+): ToolExecutionStorePort {
+  return toLegacyToolExecutionStoreAdapter(store);
 }
