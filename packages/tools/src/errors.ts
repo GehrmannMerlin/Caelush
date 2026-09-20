@@ -53,11 +53,12 @@ export class ToolRegistryStateError extends ToolRegistrationError {
   }
 }
 
-export class ToolExecutionUncertainError extends Error {
-  readonly executionDisposition = "UNCERTAIN_SIDE_EFFECT" as const;
-
-  constructor(message = "Tool execution side effects could not be verified safely.") {
-    super(message);
-    this.name = "ToolExecutionUncertainError";
-  }
-}
+/**
+ * The canonical uncertain-execution error, under the legacy entry point.
+ *
+ * A re-export, not a subclass: the Tool vocabulary now lives in `@caelush/agent`, and a builtin that
+ * imports this name must throw the *canonical* class so the canonical executor recognizes it. A
+ * legacy subclass would split `instanceof` across the two packages and turn a proven-unrecognizable
+ * uncertainty into an infrastructure failure.
+ */
+export { ToolExecutionUncertainError } from "@caelush/agent";

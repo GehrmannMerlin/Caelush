@@ -26,6 +26,7 @@ import {
   type ToolExecutionResult,
   type ToolExecutionSnapshot,
   type ToolExecutionStorePort,
+  createToolExecutionDependencies,
 } from "../src/index.js";
 import { ToolExecutionConflictError } from "../src/index.js";
 
@@ -122,7 +123,7 @@ function makeDispatcher(
     invocationIdFactory: { create: createToolInvocationId },
     observationIdFactory: { create: createObservationId },
     eventIdFactory: { create: createEventId },
-    resultSanitizer: { sanitize: ({ result }) => result },
+    execution: createToolExecutionDependencies({ registry: builder.build() }),
   });
 }
 
@@ -226,7 +227,7 @@ describe("ToolDispatcher recovery", () => {
       invocationIdFactory: { create: createToolInvocationId },
       observationIdFactory: { create: createObservationId },
       eventIdFactory: { create: createEventId },
-      resultSanitizer: { sanitize: ({ result }) => result },
+      execution: createToolExecutionDependencies({ registry: new ToolRegistryBuilder().build() }),
     });
 
     await expect(

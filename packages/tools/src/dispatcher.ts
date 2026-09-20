@@ -58,30 +58,142 @@ import {
 } from "./event-factory.js";
 import type { ToolPresentationPort } from "./presentation.js";
 import {
-  ToolExecutionResultValidationError,
-  validateToolExecutionResult,
-} from "./result-validation.js";
-import {
   assertToolExecutionEnvironment,
   type ToolExecutionEnvironment,
 } from "./execution-environment.js";
 import { assertToolSecurityContext, type ToolSecurityContext } from "./security-context.js";
 import { ToolExecutionUncertainError } from "./errors.js";
 import { toolEffectsToEvents, type ToolEffect } from "./tool-effects.js";
-import { ToolSecurityFactsProjectionError, type ToolSecurityFacts } from "./security-facts.js";
+import type { ToolSecurityFacts } from "./security-facts.js";
 import type { ToolExecutionResult } from "./execution-result.js";
-import type { ToolResultSanitizerPort } from "./result-sanitizer.js";
 import { ToolPreflight, type ToolPreflightResult } from "./preflight.js";
 import { ToolFailureMemory } from "./tool-failure-memory.js";
 import type { ToolCallingDebugEvent, ToolCallingDebugPort } from "./debug.js";
 import {
+  CODING_TOOL_EFFECTS_EXTENSION_KIND,
   createToolCallPreparer,
+  createToolInvocationExecutor,
+  createToolResultPipeline,
+  ToolResultValidationError,
   type PreparedToolCall,
   type ToolArgumentNormalization,
   type ToolCallPreparationOutcome,
   type ToolCallPreparer,
   type ToolCallRequest,
+  type ToolExecutionIdentity,
+  type ToolExecutionUpdateSanitizerPort,
+  type ToolInvocationExecutor,
+  type ToolResultPipeline,
+  type ToolResultSanitizerPort,
+  type TransientToolUpdateConsumer,
+  type TransientToolUpdateDiagnostics,
 } from "@caelush/agent";
+import { createLegacyToolSettlementExtensionProjector } from "./settlement-extension-bridge.js";
+
+/**
+ * Builds the canonical executor for one durable invocation.
+ *
+ * The legacy shell owns the durable row, so it is the layer that binds an invocation to its executor;
+ * `@caelush/agent` therefore never loads a ToolInvocation from storage.
+ */
+export type ToolInvocationExecutorFactory = (input: {
+  readonly invocation: ToolInvocation;
+  readonly updateSanitizer: ToolExecutionUpdateSanitizerPort;
+}) => ToolInvocationExecutor;
+
+/**
+ * Builds the canonical result pipeline for one durable invocation.
+ *
+ * A pipeline is bound per settlement because the Coding effect bridge needs the invocation's durable
+ * identity, and the Agent result layer must not be handed one. The factory is how the shell supplies
+ * it without widening a frozen contract.
+ */
+export type ToolResultPipelineFactory = (input: {
+  readonly invocation: ToolInvocation;
+  readonly environment: ToolExecutionEnvironment;
+}) => ToolResultPipeline;
+
+/** Everything `createToolExecutionDependencies` needs to assemble the canonical execution pair. */
+export interface ToolExecutionDependenciesOptions {
+  readonly registry: ToolRegistry;
+  /** The real result sanitizer. Absent means the canonical identity sanitizer. */
+  readonly resultSanitizer?: ToolResultSanitizerPort | undefined;
+  /** The real transient update sanitizer. Absent means transient updates are dropped. */
+  readonly updateSanitizer?: ToolExecutionUpdateSanitizerPort | undefined;
+  readonly transientUpdates?: TransientToolUpdateConsumer | undefined;
+  readonly updateDiagnostics?: TransientToolUpdateDiagnostics | undefined;
+  /** Legacy output policy; its content budget maps onto the canonical durable content bound. */
+  readonly outputPolicy?: ToolOutputPolicy | undefined;
+}
+
+/**
+ * Assemble the canonical execution dependencies for a `ToolDispatcher`.
+ *
+ * ```text
+ * invocationExecutorFactory  createToolInvocationExecutor, bound per invocation
+ * updateSanitizer            the caller's sanitizer, or a drop-everything default
+ * resultPipelineFactory      createToolResultPipeline with the sanitizer, limits and effect bridge
+ * ```
+ *
+ * This is the one place the legacy shell's execution pair is described, so a production composition
+ * and a test composition differ only in which sanitizers they inject — never in how execution or
+ * result processing works.
+ */
+export function createToolExecutionDependencies(
+  options: ToolExecutionDependenciesOptions,
+): NonNullable<ToolDispatcherOptions["execution"]> {
+  const updateSanitizer: ToolExecutionUpdateSanitizerPort =
+    options.updateSanitizer ?? DROP_EVERY_TRANSIENT_UPDATE;
+  const outputPolicy = options.outputPolicy ?? DEFAULT_TOOL_OUTPUT_POLICY;
+  return Object.freeze({
+    outputPolicy,
+    invocationExecutorFactory: ({ invocation, updateSanitizer: bound }) =>
+      createToolInvocationExecutor({
+        invocation,
+        updateSanitizer: bound,
+        ...(options.transientUpdates === undefined
+          ? {}
+          : { transientUpdates: options.transientUpdates }),
+        ...(options.updateDiagnostics === undefined
+          ? {}
+          : { diagnostics: options.updateDiagnostics }),
+      }),
+    updateSanitizer,
+    resultPipelineFactory: ({ invocation, environment }) =>
+      createToolResultPipeline({
+        ...(options.resultSanitizer === undefined ? {} : { sanitizer: options.resultSanitizer }),
+        ...(options.outputPolicy === undefined
+          ? {}
+          : {
+              limits: {
+                maxDurableContentBytes: options.outputPolicy.maxModelContentBytes,
+                maxDetailsBytes: options.outputPolicy.maxDetailsBytes,
+              },
+            }),
+        settlementExtension: createLegacyToolSettlementExtensionProjector({
+          registry: options.registry,
+          invocation: {
+            runId: invocation.runId,
+            sourceStepId: invocation.stepId,
+            invocationId: invocation.id,
+            environment,
+          },
+          effectsPayload: (effects) => ({ effects: effects as unknown as JsonObject }),
+        }),
+      }),
+  });
+}
+/**
+ * The sanitizer a composition gets when it declares none.
+ *
+ * It refuses every update, which the executor turns into a drop. There is no "forward the raw update"
+ * branch anywhere in the pipeline, so an unconfigured host loses progress output and leaks nothing.
+ */
+const DROP_EVERY_TRANSIENT_UPDATE: ToolExecutionUpdateSanitizerPort = Object.freeze({
+  sanitize(): null {
+    return null;
+  },
+});
 
 export interface ToolBudgetBatchPreflight {
   readonly runId: ToolDispatchRequest["runId"];
@@ -97,8 +209,28 @@ export interface ToolDispatcherOptions {
   readonly invocationIdFactory: ToolInvocationIdFactory;
   readonly observationIdFactory: ToolObservationIdFactory;
   readonly eventIdFactory: ToolEventIdFactory;
-  readonly resultSanitizer: ToolResultSanitizerPort;
-  /** Optional safe, presentation-only projection. It must never participate in execution. */
+  /**
+   * The canonical execution authority: the executor, its transient update sanitizer and the result
+   * pipeline.
+   *
+   * Required, not optional. The durable shell decides *whether* and *when* a Tool may run; it no
+   * longer decides *how*. A composition that reached the lexical Tool without these three would be a
+   * second execution implementation, so the option group is mandatory and the legacy shell holds no
+   * fallback path.
+   */
+  readonly execution: {
+    readonly invocationExecutorFactory: ToolInvocationExecutorFactory;
+    readonly updateSanitizer: ToolExecutionUpdateSanitizerPort;
+    readonly resultPipelineFactory: ToolResultPipelineFactory;
+    /**
+     * The result bound this composition commits under.
+     *
+     * It stays reachable because the shell bounds the *failure* observations it writes on paths that
+     * never reach a Tool (an argument failure, a policy denial, an interrupted recovery). Those are
+     * shell-owned model-facing text, not Tool results, so the canonical pipeline does not see them.
+     */
+    readonly outputPolicy: ToolOutputPolicy;
+  }; /** Optional safe, presentation-only projection. It must never participate in execution. */
   readonly presentation?: ToolPresentationPort;
   readonly approvalStore?: ToolApprovalStorePort;
   readonly approvalIdFactory?: ToolApprovalRequestIdFactory;
@@ -147,13 +279,11 @@ const FAILURE_MEMORY_CONTENT =
 
 export class ToolDispatcher {
   private readonly activeCalls = new Set<string>();
-  private readonly outputPolicy: ToolOutputPolicy;
   private readonly preflight: ToolPreflight;
   private readonly failureMemory: ToolFailureMemory;
   private readonly canonicalPreparer: ToolCallPreparer;
 
   constructor(private readonly options: ToolDispatcherOptions) {
-    this.outputPolicy = options.outputPolicy ?? DEFAULT_TOOL_OUTPUT_POLICY;
     this.preflight = new ToolPreflight(options.registry, {
       maxInvocationArgsBytes: options.maxInvocationArgsBytes ?? DEFAULT_MAX_INVOCATION_ARGS_BYTES,
     });
@@ -696,21 +826,56 @@ export class ToolDispatcher {
     return this.startAndExecute(request, resolvedTool, snapshot);
   }
 
+  /**
+   * Execute an invocation the shell has already durably started.
+   *
+   * ```text
+   * durable RUNNING commit  (startAndExecute, above)
+   *   ↓
+   * canonical ToolInvocationExecutor.execute(...)      @caelush/agent   ← execution authority
+   *   ↓
+   * raw AgentToolResult
+   *   ↓
+   * raw artifact compatibility                          this shell (storage-owned, so not in the pipeline)
+   *   ↓
+   * canonical ToolResultPipeline.process(...)           @caelush/agent   ← result authority
+   *   ↓
+   * PreparedToolSettlement
+   *   ↓
+   * terminal lifecycle / observation / events / effects / atomic commit   this shell, until 4C
+   * ```
+   *
+   * What this method no longer owns: reaching a `ToolHandler` directly, building an execution input,
+   * the update lifetime, the exact-shape rule, the details budget, the schema check, the sanitize →
+   * revalidate sequence and the content bound. It calls the canonical executor and the canonical
+   * pipeline, and projects what they return into the durable rows this round still commits.
+   */
   private async executeHandler(
     request: ToolDispatchRequest,
     resolvedTool: ResolvedTool,
     snapshot: ToolExecutionSnapshot,
   ): Promise<ToolDispatcherOutcome> {
-    let rawResult: unknown;
+    const identity: ToolExecutionIdentity = Object.freeze({
+      runId: snapshot.invocation.runId,
+      sessionId: request.sessionId,
+      sourceStepId: snapshot.invocation.stepId,
+      invocationId: snapshot.invocation.id,
+      externalCallId: request.externalCallId,
+    });
+    const executor = this.options.execution.invocationExecutorFactory({
+      invocation: snapshot.invocation,
+      updateSanitizer: this.options.execution.updateSanitizer,
+    });
+
+    // The canonical execution result type. `ToolExecutionResult` is the legacy alias for the same
+    // structure, so this is one value under two names, not a conversion.
+    let rawResult: ToolExecutionResult;
     try {
-      rawResult = await resolvedTool.handler.execute({
-        ...(request.signal === undefined ? {} : { signal: request.signal }),
-        runId: snapshot.invocation.runId,
-        stepId: snapshot.invocation.stepId,
-        invocationId: snapshot.invocation.id,
-        externalCallId: request.externalCallId,
-        args: snapshot.invocation.args,
+      rawResult = await executor.execute({
+        call: this.preparedCallFor(resolvedTool, request),
+        identity,
         environment: request.environment,
+        signal: request.signal ?? new AbortController().signal,
       });
     } catch (error) {
       if (error instanceof ToolExecutionUncertainError) {
@@ -731,30 +896,17 @@ export class ToolDispatcher {
         "RUNTIME",
         RUNTIME_CONTENT,
       );
-      throw new ToolDispatcherInfrastructureError("Tool handler execution failed.", {
-        cause: error,
-      });
+      throw new ToolDispatcherInfrastructureError("Tool execution failed.", { cause: error });
     }
-    let result;
-    try {
-      result = validateToolExecutionResult(rawResult, resolvedTool, this.outputPolicy);
-    } catch (error) {
-      if (!(error instanceof ToolExecutionResultValidationError)) {
-        throw new ToolDispatcherInfrastructureError("Tool result validation failed.", {
-          cause: error,
-        });
-      }
-      await this.persistFatalFailure(
-        request.sessionId,
-        snapshot,
-        "TOOL_OUTPUT_ERROR",
-        "TOOL",
-        OUTPUT_CONTENT,
-      );
-      throw new ToolDispatcherInfrastructureError("Tool result violated its registered contract.", {
-        cause: error,
-      });
-    }
+
+    /**
+     * The complete raw Tool output, as the compatibility artifact.
+     *
+     * It uses the raw execution `content`, exactly as it always has, and it is written before the
+     * result pipeline runs. Archiving is a storage concern, so it stays here rather than moving into
+     * a pipeline that must not know storage exists; the durable observation still carries only the
+     * sanitized, bounded content.
+     */
     const rawArtifactRef =
       this.options.rawOutputStore === undefined
         ? undefined
@@ -764,44 +916,51 @@ export class ToolDispatcher {
               runId: snapshot.invocation.runId,
               kind: "TOOL_OUTPUT",
               sourceRef: snapshot.invocation.id,
-              content: (rawResult as { readonly content: string }).content,
+              content: rawResult.content,
               mimeType: "text/plain; charset=utf-8",
               sensitivity: "INTERNAL",
               createdSequence: 0,
               createdAt: this.options.clock.now(),
             })
           ).artifactId;
-    let sanitizedResult: ToolExecutionResult;
-    try {
-      sanitizedResult = this.options.resultSanitizer.sanitize({
-        toolName: resolvedTool.definition.name,
-        result,
-        invocation: snapshot.invocation,
-      });
-      result = validateToolExecutionResult(sanitizedResult, resolvedTool, this.outputPolicy);
-    } catch (error) {
-      throw new ToolDispatcherInfrastructureError("Tool result sanitization failed.", {
-        cause: error,
-      });
-    }
+
     const finishedAt = this.options.clock.now();
-    let effects: readonly ToolEffect[];
+    let settlement;
     try {
-      effects =
-        resolvedTool.effectProjector?.({
-          request: {
-            ...request,
-            invocationId: snapshot.invocation.id,
-            args: snapshot.invocation.args,
-          },
-          result,
+      settlement = this.options.execution
+        .resultPipelineFactory({
+          invocation: snapshot.invocation,
+          environment: request.environment,
+        })
+        .process({
+          call: this.preparedCallFor(resolvedTool, request),
+          invocation: snapshot.invocation,
+          rawResult,
           now: finishedAt,
-        }) ?? [];
+        });
     } catch (error) {
-      throw new ToolDispatcherInfrastructureError("Tool effect projection failed.", {
+      // A result contract violation is settled as a fatal Tool output error; a pipeline
+      // infrastructure failure is not. Both leave the durable boundary exactly as they found it, and
+      // neither ever becomes an ordinary `isError: true` model result.
+      if (error instanceof ToolResultValidationError) {
+        await this.persistFatalFailure(
+          request.sessionId,
+          snapshot,
+          "TOOL_OUTPUT_ERROR",
+          "TOOL",
+          OUTPUT_CONTENT,
+        );
+        throw new ToolDispatcherInfrastructureError(
+          "Tool result violated its registered contract.",
+          { cause: error },
+        );
+      }
+      throw new ToolDispatcherInfrastructureError("Tool result processing failed.", {
         cause: error,
       });
     }
+    const result: ToolExecutionResult = settlement.result;
+    const effects = this.legacyEffectsFromSettlement(settlement);
     const terminal = result.isError
       ? failToolInvocation(
           snapshot.invocation,
@@ -820,7 +979,10 @@ export class ToolDispatcher {
       stepId: terminal.stepId,
       toolInvocationId: terminal.id,
       content: result.content,
-      details: result.details,
+      // The canonical result layer speaks the AI package's JSON model; the durable observation speaks
+      // the Protocol one. They describe the same JSON value and differ only in declaration, so this is
+      // the single point where the two vocabularies meet.
+      details: result.details as unknown as JsonObject,
       isError: result.isError,
       ...(rawArtifactRef === undefined ? {} : { rawArtifactRef }),
       createdAt: finishedAt,
@@ -905,6 +1067,105 @@ export class ToolDispatcher {
     };
   }
 
+  /**
+   * The canonical prepared call for an invocation this shell already durably started.
+   *
+   * Nothing is resolved, normalized or validated here: the canonical registry resolved the Tool at
+   * registration, 4A's preparation validated the arguments before the `REQUESTED` row was written,
+   * and the arguments come from the durable invocation itself. This is a projection of durable state
+   * onto the canonical call type, not a second preparation path.
+   */
+  private preparedCallFor(
+    resolvedTool: ResolvedTool,
+    request: ToolDispatchRequest,
+  ): PreparedToolCall {
+    const resolved =
+      resolvedTool.agentTool === undefined
+        ? undefined
+        : this.options.registry.agentRegistry().resolve(resolvedTool.definition.name);
+    if (resolved === undefined) {
+      throw new ToolDispatcherInvariantError(
+        "The canonical Tool entry is unavailable for execution.",
+      );
+    }
+    return Object.freeze({
+      request: Object.freeze({
+        externalCallId: request.externalCallId,
+        toolName: resolvedTool.definition.name,
+        args: request.args,
+      }),
+      resolved,
+      args: request.args,
+    });
+  }
+
+  /**
+   * Project the legacy Tool effects, or refuse to settle.
+   *
+   * Effects are Coding-overlay metadata and stay in the legacy composition until 4E. A projector that
+   * throws leaves the invocation `RUNNING` for uncertain recovery rather than producing a durable
+   * state that disagrees with the workspace.
+   */
+  private projectEffects(
+    resolvedTool: ResolvedTool,
+    request: ToolDispatchRequest,
+    snapshot: ToolExecutionSnapshot,
+    result: ToolExecutionResult,
+    now: import("@caelush/protocol").TimestampMs,
+  ): readonly ToolEffect[] {
+    try {
+      return (
+        resolvedTool.effectProjector?.({
+          request: {
+            ...request,
+            invocationId: snapshot.invocation.id,
+            args: snapshot.invocation.args,
+          },
+          result,
+          now,
+        }) ?? []
+      );
+    } catch (error) {
+      throw new ToolDispatcherInfrastructureError("Tool effect projection failed.", {
+        cause: error,
+      });
+    }
+  }
+
+  /**
+   * Read the Coding Tool effects back out of the opaque settlement extension.
+   *
+   * ```text
+   * canonical pipeline   produced an opaque { kind, payload } it does not interpret
+   * this shell           decodes it into the ToolEffect[] the existing atomic commit understands
+   * ```
+   *
+   * The decode is total and defensive: an absent extension means no effects, and a payload that is not
+   * an array is a Coding-overlay contract violation this shell refuses to settle rather than guessing
+   * through.
+   */
+  private legacyEffectsFromSettlement(settlement: {
+    readonly effects?: import("@caelush/agent").ToolSettlementExtension | undefined;
+  }): readonly ToolEffect[] {
+    const extension = settlement.effects;
+    if (extension === undefined) return [];
+    if (extension.kind !== CODING_TOOL_EFFECTS_EXTENSION_KIND) {
+      throw new ToolDispatcherInfrastructureError(
+        "Tool settlement carried an unknown settlement extension.",
+      );
+    }
+    // The canonical payload speaks the AI package's JSON model; the Coding effect vocabulary speaks
+    // the legacy one. Same JSON, two declarations, so the boundary is where they meet.
+    const payload = extension.payload as unknown as JsonObject;
+    const effects = payload.effects;
+    if (!Array.isArray(effects)) {
+      throw new ToolDispatcherInfrastructureError(
+        "Tool settlement extension payload is malformed.",
+      );
+    }
+    return effects as unknown as readonly ToolEffect[];
+  }
+
   private projectSecurityFacts(
     resolvedTool: ResolvedTool,
     args: JsonObject,
@@ -912,10 +1173,9 @@ export class ToolDispatcher {
     if (resolvedTool.securityFactsProjector === undefined) return undefined;
     try {
       return resolvedTool.securityFactsProjector(args);
-    } catch (error) {
-      if (error instanceof ToolSecurityFactsProjectionError) {
-        return { resourceAccesses: [], secretScanInputs: [], opaqueInput: true };
-      }
+    } catch {
+      // Security facts that cannot be projected fail closed: the input is described as opaque so an
+      // admission decision is never made on a partial description.
       return { resourceAccesses: [], secretScanInputs: [], opaqueInput: true };
     }
   }
@@ -1012,7 +1272,7 @@ export class ToolDispatcher {
       toolInvocationId: failed.id,
       content: boundToolModelContent(
         formatArgumentFailureContent(request.toolName, reason),
-        this.outputPolicy,
+        this.options.execution.outputPolicy,
       ),
       details: {},
       isError: true,
@@ -1120,7 +1380,7 @@ export class ToolDispatcher {
       runId: failed.runId,
       stepId: failed.stepId,
       toolInvocationId: failed.id,
-      content: boundToolModelContent(content, this.outputPolicy),
+      content: boundToolModelContent(content, this.options.execution.outputPolicy),
       details,
       isError: true,
       createdAt: finishedAt,

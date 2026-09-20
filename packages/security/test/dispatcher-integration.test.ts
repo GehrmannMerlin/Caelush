@@ -23,6 +23,7 @@ import {
   type ToolExecutionResult,
   type ToolExecutionSnapshot,
   type ToolExecutionStorePort,
+  createToolExecutionDependencies,
 } from "@caelush/tools";
 import { describe, expect, it } from "vitest";
 import { CaelushToolExecutionGate } from "../src/index.js";
@@ -136,7 +137,7 @@ function createDispatcher(store: MemoryStore, onExecute: () => void): ToolDispat
       findApplicableRunGrant: async () => null,
     },
     approvalIdFactory: { create: createApprovalRequestId },
-    resultSanitizer: { sanitize: ({ result }) => result },
+    execution: createToolExecutionDependencies({ registry: builder.build() }),
   });
 }
 
@@ -173,7 +174,7 @@ function createBatchDispatcher(store: MemoryStore, executions: string[]): ToolBa
       findApplicableRunGrant: async () => null,
     },
     approvalIdFactory: { create: createApprovalRequestId },
-    resultSanitizer: { sanitize: ({ result }) => result },
+    execution: createToolExecutionDependencies({ registry: builder.build() }),
   });
   return new ToolBatchCoordinator(dispatcher);
 }

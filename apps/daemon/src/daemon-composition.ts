@@ -91,6 +91,8 @@ import {
 import { createLegacyNumericArgumentNormalization } from "@caelush/coding-agent";
 import {
   createV1SecureToolDispatcher,
+  CaelushToolExecutionUpdateSanitizer,
+  DISCARDING_TOOL_UPDATE_CONSUMER,
   verificationCommandSecurityPort,
   verificationEvidenceSanitizer,
 } from "@caelush/security";
@@ -371,6 +373,11 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     terminalOutputSanitizer: sanitizeTerminalOutput,
     securityToolNames: activeToolRegistry.names(),
     normalization: createLegacyNumericArgumentNormalization(),
+    // The transient update path: sanitized through the Security package's implementation, and
+    // delivered nowhere until a host has an ephemeral transport. Phase 4E wires actual Coding builtin
+    // progress; product transport belongs to the UI layer.
+    updateSanitizer: new CaelushToolExecutionUpdateSanitizer(),
+    transientUpdates: DISCARDING_TOOL_UPDATE_CONSUMER,
     ...(options.toolCallingDebugWriter === undefined
       ? {}
       : { debug: { emit: options.toolCallingDebugWriter } }),

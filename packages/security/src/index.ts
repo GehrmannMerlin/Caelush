@@ -44,6 +44,13 @@ export {
 } from "./secret-redaction.js";
 export { CaelushToolResultSanitizer, sanitizeToolResult } from "./tool-result-sanitizer.js";
 export {
+  boundTransientUpdateText,
+  CaelushToolExecutionUpdateSanitizer,
+  DISCARDING_TOOL_UPDATE_CONSUMER,
+  isSensitiveToolPath,
+  MAX_TRANSIENT_UPDATE_BYTES,
+} from "./tool-update-sanitizer.js";
+export {
   CaelushToolPresentation,
   type CaelushToolPresentationOptions,
   type TerminalOutputSanitizer,

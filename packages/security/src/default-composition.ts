@@ -1,5 +1,11 @@
 import type { ToolDefinition, ToolName } from "@caelush/protocol";
 import {
+  type ToolExecutionUpdateSanitizerPort,
+  type TransientToolUpdateConsumer,
+  type TransientToolUpdateDiagnostics,
+} from "@caelush/agent";
+import {
+  createToolExecutionDependencies,
   DEFAULT_BUILTIN_TOOL_ORDER,
   ToolDispatcher,
   type ToolApprovalRequestIdFactory,
@@ -45,24 +51,47 @@ export function createDefaultV1ToolExecutionSecurity(options: {
 
 export interface V1SecureToolDispatcherOptions extends Omit<
   ToolDispatcherOptions,
-  "gate" | "resultSanitizer" | "presentation" | "approvalStore" | "approvalIdFactory"
+  "gate" | "execution" | "presentation" | "approvalStore" | "approvalIdFactory"
 > {
   readonly approvalStore: ToolApprovalStorePort;
   readonly approvalIdFactory: ToolApprovalRequestIdFactory;
   readonly terminalOutputSanitizer: TerminalOutputSanitizer;
   readonly securityToolNames?: readonly ToolName[];
+  /**
+   * The transient update sanitizer for this composition.
+   *
+   * Supplied rather than defaulted: the executor binds it before any Tool runs, so a composition that
+   * forgot one would forward nothing and prove nothing. The production daemon passes
+   * `new CaelushToolExecutionUpdateSanitizer()`; a test that only needs the durable path passes its
+   * own trivial implementation.
+   */
+  readonly updateSanitizer: ToolExecutionUpdateSanitizerPort;
+  /** Where sanitized transient updates go. Absent means the Agent layer's discarding consumer. */
+  readonly transientUpdates?: TransientToolUpdateConsumer | undefined;
+  readonly updateDiagnostics?: TransientToolUpdateDiagnostics | undefined;
 }
 /**
  * The production V1 Secure Tool dispatcher.
  *
  * ```text
  * legacy ToolRegistry  →  createV1SecureToolDispatcher  →  ToolDispatcher
- *                                                            └─ canonical ToolCallPreparer
+ *                                                            ├─ canonical ToolCallPreparer
+ *                                                            ├─ canonical ToolInvocationExecutor
+ *                                                            └─ canonical ToolResultPipeline
  * ```
  *
- * The dispatcher resolves and prepares every call through the canonical registry the legacy facade
- * carries, so the security composition does not need — and must not acquire — its own resolution or
- * argument-preparation path.
+ * This factory is the one place the production composition builds a `ToolDispatcher`, and it is where
+ * the canonical execution authority is bound:
+ *
+ * ```text
+ * invocationExecutorFactory  createToolInvocationExecutor (invocation-bound)
+ * updateSanitizer            the caller's transient update sanitizer
+ * resultPipeline             createToolResultPipeline with the real result sanitizer and limits
+ * ```
+ *
+ * The result pipeline receives the same `CaelushToolResultSanitizer` the previous shell used, now
+ * behind the canonical port, and the Coding settlement bridge, so effect projection still happens
+ * after sanitization and still settles in the invocation's own atomic commit.
  *
  * `normalization` is the registration-level argument compatibility normalization for the Tools the
  * composition root registered (the legacy definitions that rely on schema-declared numeric strings).
@@ -80,7 +109,20 @@ export function createV1SecureToolDispatcher(
     ...options,
     gate: security.gate,
     presentation: security.presentation,
-    resultSanitizer: security.resultSanitizer,
+    execution: {
+      ...createToolExecutionDependencies({
+        registry: options.registry,
+        resultSanitizer: security.resultSanitizer,
+        updateSanitizer: options.updateSanitizer,
+        ...(options.transientUpdates === undefined
+          ? {}
+          : { transientUpdates: options.transientUpdates }),
+        ...(options.updateDiagnostics === undefined
+          ? {}
+          : { updateDiagnostics: options.updateDiagnostics }),
+        ...(options.outputPolicy === undefined ? {} : { outputPolicy: options.outputPolicy }),
+      }),
+    },
   });
 }
 

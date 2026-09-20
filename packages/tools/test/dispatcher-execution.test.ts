@@ -12,6 +12,7 @@ import {
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import {
+  createToolExecutionDependencies,
   ToolDispatcher,
   ToolDispatcherInfrastructureError,
   ToolRegistryBuilder,
@@ -176,7 +177,10 @@ function makeDispatcher(
       findApplicableRunGrant: async () => null,
     },
     approvalIdFactory: { create: createApprovalRequestId },
-    resultSanitizer: resultSanitizer ?? { sanitize: ({ result }) => result },
+    execution: createToolExecutionDependencies({
+      registry,
+      ...(resultSanitizer === undefined ? {} : { resultSanitizer }),
+    }),
     ...(budget === undefined ? {} : { budget }),
     ...(rawOutputStore === undefined ? {} : { rawOutputStore }),
     ...(failureMemory === undefined ? {} : { failureMemory }),

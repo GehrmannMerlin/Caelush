@@ -5,6 +5,7 @@ import {
   type ToolDispatchRequest,
   type ToolExecutionRequest,
   type ToolExecutionResult,
+  createToolExecutionDependencies,
 } from "../src/index.js";
 import {
   createEventId,
@@ -122,7 +123,7 @@ function dispatcher(
     invocationIdFactory: { create: createToolInvocationId },
     observationIdFactory: { create: createObservationId },
     eventIdFactory: { create: createEventId },
-    resultSanitizer: { sanitize: ({ result }) => result },
+    execution: createToolExecutionDependencies({ registry }),
   });
 }
 

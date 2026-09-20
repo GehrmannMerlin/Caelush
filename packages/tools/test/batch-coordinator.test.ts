@@ -26,6 +26,7 @@ import {
   type ToolExecutionSnapshot,
   type ToolExecutionStorePort,
   type ToolBudgetAdmissionPort,
+  createToolExecutionDependencies,
 } from "../src/index.js";
 
 const environment = {
@@ -132,7 +133,7 @@ function makeCoordinator(options: {
       findApplicableRunGrant: async () => null,
     },
     approvalIdFactory: { create: createApprovalRequestId },
-    resultSanitizer: { sanitize: ({ result }) => result },
+    execution: createToolExecutionDependencies({ registry: builder.build() }),
     ...(options.budget === undefined ? {} : { budget: options.budget }),
   });
   return { coordinator: new ToolBatchCoordinator(dispatcher), dispatcher, store };
@@ -182,9 +183,7 @@ describe("ToolBatchCoordinator", () => {
       },
     });
 
-    const outcome = await coordinator.execute(
-      request([item("A", "slow_a"), item("B", "fast_b")]),
-    );
+    const outcome = await coordinator.execute(request([item("A", "slow_a"), item("B", "fast_b")]));
 
     expect(outcome.kind).toBe("BUDGET_EXCEEDED");
     expect(executions).toBe(0);

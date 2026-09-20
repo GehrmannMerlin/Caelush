@@ -22,6 +22,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@caelush/agent": "workspace:*",
     "@caelush/protocol": "workspace:*",
     "@caelush/runtime": "workspace:*",
     "@caelush/tools": "workspace:*"

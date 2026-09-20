@@ -128,8 +128,15 @@ export {
   validateToolExecutionResult,
 } from "./result-validation.js";
 export type { ValidatedToolExecutionResult } from "./result-validation.js";
-export { ToolDispatcher } from "./dispatcher.js";
-export type { ToolDispatcherOptions } from "./dispatcher.js";
+export { ToolDispatcher, createToolExecutionDependencies } from "./dispatcher.js";
+export type {
+  ToolDispatcherOptions,
+  ToolExecutionDependenciesOptions,
+  ToolInvocationExecutorFactory,
+  ToolResultPipelineFactory,
+} from "./dispatcher.js";
+export { createLegacyToolSettlementExtensionProjector } from "./settlement-extension-bridge.js";
+export type { SettlementInvocationContext } from "./settlement-extension-bridge.js";
 export { ToolPreflight } from "./preflight.js";
 export type { ToolPreflightOptions, ToolPreflightResult } from "./preflight.js";
 export { ToolFailureMemory } from "./tool-failure-memory.js";

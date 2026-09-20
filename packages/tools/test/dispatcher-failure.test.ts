@@ -27,6 +27,7 @@ import {
   type ToolExecutionResult,
   type ToolExecutionSnapshot,
   type ToolExecutionStorePort,
+  createToolExecutionDependencies,
 } from "../src/index.js";
 
 class FailingTerminalStore implements ToolExecutionStorePort {
@@ -121,7 +122,7 @@ function makeDispatcher(
     invocationIdFactory: { create: createToolInvocationId },
     observationIdFactory: { create: createObservationId },
     eventIdFactory: { create: createEventId },
-    resultSanitizer: { sanitize: ({ result }) => result },
+    execution: createToolExecutionDependencies({ registry }),
   });
 }
 
