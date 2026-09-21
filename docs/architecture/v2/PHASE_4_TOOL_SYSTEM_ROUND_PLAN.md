@@ -209,9 +209,12 @@ decomposition above.
     docs/architecture/v2/PHASE_4D_BATCH_FEEDBACK_TOOLTURN_REPORT.md
     tests/architecture/phase-4d-tool-batch-feedback-boundaries.test.ts
 
-4E  BLOCKED — stopped at its own Milestone A reconciliation gate; no code was changed. Evidence:
-    docs/architecture/v2/PHASE_4E_CODING_TOOLS_OPERATIONS_ACCEPTANCE_MAP.md
-    docs/architecture/v2/PHASE_4E_CODING_TOOLS_OPERATIONS_REPORT.md
+4E  IN PROGRESS — Milestone A detected two frozen-contract defects and the round correctly stopped;
+    the architecture owner accepted a minimal scoped errata and the same Phase 4E resumed.
+    Blocker evidence:      docs/architecture/v2/PHASE_4E_CODING_TOOLS_OPERATIONS_ACCEPTANCE_MAP.md
+                           docs/architecture/v2/PHASE_4E_CODING_TOOLS_OPERATIONS_REPORT.md
+    Blocker resolution:    docs/architecture/v2/PHASE_4E_OPERATIONS_INTERFACE_FREEZE_ERRATA.md
+                           (supersedes Interface Freeze §165 and the §169 status arm only)
 
 4F  not started
 ```
