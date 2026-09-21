@@ -3,6 +3,7 @@ import type {
   AIModelRequest,
   AIToolResultMessage,
   AIToolSpec,
+  JsonObject,
   ModelCatalog,
   ModelDescriptor,
 } from "@caelush/ai";
@@ -15,20 +16,28 @@ import type {
   PreparedModelContext,
 } from "@caelush/agent";
 import { RunController, type RunAgentExecutionContextFactory } from "@caelush/core";
-import type {
-  ToolBatchItemResult,
-  ToolBatchOutcome,
-  ToolBatchRequest,
-  ToolBatchCoordinatorPort,
-  ToolDispatchRequest,
-} from "@caelush/tools";
+import {
+  createModelToolFeedbackProjector,
+  createToolResultBatchNormalizer,
+  type ToolBatchCoordinator,
+  type ToolBatchItemOutcome,
+  type ToolBatchOutcome,
+  type ToolBatchRequest,
+} from "@caelush/agent";
+import { toContextObservationProjection } from "@caelush/core";
 import type {
   AgentRun,
   AgentState,
   AgentStep,
+  ApprovalRequest,
+  ApprovalRequestId,
+  ObservationId,
   RunId,
   StepId,
-  ToolDefinition,
+  ToolInvocationId,
+  ToolName,
+  ToolObservation,
+  TimestampMs,
 } from "@caelush/protocol";
 import {
   AgentRunSchema,
@@ -59,19 +68,25 @@ import type {
  *
  * ```text
  * RunController -> RunExecutionDriver -> the run-scoped ToolTurnCoordinator
- *                                              -> ToolBatchCoordinatorPort
+ *                                              -> canonical ToolBatchCoordinator
+ *                                              -> canonical ModelToolFeedbackProjector
+ *                                              -> canonical ToolResultBatchNormalizer
  * ```
  *
- * The Tool Layer is stubbed at the *legacy* port — `ToolBatchCoordinatorPort` — and nowhere else, so
- * every production boundary between the Run Layer and that port is the real one: the frozen driver,
- * the real run-scoped adapter, the identity verification, the resource admission, the observation
- * projection and the typed settlement. That is what lets a test count what the Run Layer actually
- * did rather than what a mock was told to say.
+ * The Tool Layer is stubbed at the canonical `ToolBatchCoordinator` and nowhere else, so every
+ * production boundary between the Run Layer and that port is the real one: the frozen driver, the real
+ * run-scoped adapter, the identity verification, the resource admission, the observation projection
+ * and the typed settlement. That is what lets a test count what the Run Layer actually did rather
+ * than what a mock was told to say.
+ *
+ * Phase 4D changed the stub's *shape*, not its purpose: the canonical batch reports
+ * `ToolBatchItemOutcome` items, so an observation item now carries a durable `ToolObservation` rather
+ * than a flat content string plus a detached artifact pointer.
  */
 
-/** One recorded call to the legacy Tool batch port. */
+/** One recorded call to the canonical Tool batch port. */
 export interface RecordedToolBatch {
-  readonly operation: "execute" | "recover";
+  readonly operation: "execute";
   readonly request: ToolBatchRequest;
 }
 
@@ -83,7 +98,50 @@ export interface RecordedToolBatch {
  */
 export type ToolBatchAnswer = ToolBatchOutcome;
 
-/** One model-facing Tool result item, as the Tool Layer reports it. */
+/** The identity of one requested Tool call, as the canonical batch carries it. */
+export interface ItemLike {
+  readonly externalCallId: string;
+  readonly toolName: ToolName;
+  readonly args: JsonObject;
+}
+
+/** A deterministic id, so a fixture is byte-stable across runs. */
+function fixtureId(prefix: string, index: number): string {
+  return `${prefix}_0195f3a0-0000-7000-8000-${String(index + 1).padStart(12, "0")}`;
+}
+
+/**
+ * One durable Tool observation, as the canonical batch reports it.
+ *
+ * The observation satisfies the Protocol invariant the real settlement enforces: `COMPLETED` carries
+ * `isError: false`, `FAILED` carries `isError: true`, and `createdAt` is the settlement timestamp.
+ */
+export function toolObservation(input: {
+  readonly toolInvocationId: string;
+  readonly content: string;
+  readonly isError?: boolean;
+  readonly index?: number;
+  readonly rawArtifactRef?: string;
+}): ToolObservation {
+  return {
+    id: fixtureId("obs", input.index ?? 0) as ObservationId,
+    runId: fixtureId("run", 0) as RunId,
+    stepId: fixtureId("stp", 0) as StepId,
+    kind: "TOOL",
+    toolInvocationId: input.toolInvocationId as ToolInvocationId,
+    ...(input.rawArtifactRef === undefined ? {} : { rawArtifactRef: input.rawArtifactRef }),
+    content: input.content,
+    isError: input.isError ?? false,
+    createdAt: createTimestampMs(1),
+  };
+}
+
+/**
+ * One `OBSERVATION` item of a canonical batch outcome.
+ *
+ * The durable invocation is named explicitly by the caller when the test cares about recovery identity;
+ * otherwise a deterministic fixture id is used, so two spellings of the same batch agree.
+ */
 export function toolResultItem(input: {
   readonly externalCallId: string;
   readonly toolName: string;
@@ -92,25 +150,77 @@ export function toolResultItem(input: {
   readonly invocationId?: string;
   readonly observationId?: string;
   readonly rawArtifactRef?: string;
-}): ToolBatchItemResult {
+  readonly index?: number;
+}): ToolBatchItemOutcome {
+  const invocationId = input.invocationId ?? fixtureId("tiv", input.index ?? 0);
   return {
-    kind: "TOOL_RESULT",
-    externalCallId: input.externalCallId,
-    toolName: input.toolName,
-    content: input.content,
-    isError: input.isError ?? false,
-    ...(input.invocationId === undefined ? {} : { invocationId: input.invocationId as never }),
-    ...(input.observationId === undefined ? {} : { observationId: input.observationId as never }),
-    ...(input.rawArtifactRef === undefined ? {} : { rawArtifactRef: input.rawArtifactRef }),
+    kind: "OBSERVATION",
+    call: { externalCallId: input.externalCallId, toolName: input.toolName as ToolName, args: {} },
+    invocationId: invocationId as ToolInvocationId,
+    finalStatus: (input.isError ?? false) ? "FAILED" : "COMPLETED",
+    observation: {
+      ...toolObservation({
+        toolInvocationId: invocationId,
+        content: input.content,
+        isError: input.isError ?? false,
+        ...(input.index === undefined ? {} : { index: input.index }),
+        ...(input.rawArtifactRef === undefined ? {} : { rawArtifactRef: input.rawArtifactRef }),
+      }),
+      ...(input.observationId === undefined ? {} : { id: input.observationId as never }),
+    },
   };
 }
 
-export interface StubToolBatches extends ToolBatchCoordinatorPort {
+/**
+ * One `REJECTED` item of a canonical batch outcome.
+ *
+ * A rejection has no durable invocation — that is the whole point of the 4D transition — so it carries
+ * only the model's original call and safe feedback.
+ */
+export function rejectedItem(input: {
+  readonly externalCallId: string;
+  readonly toolName: string;
+  readonly code?: string;
+  readonly content?: string;
+}): ToolBatchItemOutcome {
+  return {
+    kind: "REJECTED",
+    call: { externalCallId: input.externalCallId, toolName: input.toolName as ToolName, args: {} },
+    feedback: {
+      code: input.code ?? "TOOL_ARGUMENT_ERROR",
+      content: input.content ?? "Arguments do not match the Tool's input schema.",
+      details: {},
+      disposition: "SAFE_FAILURE",
+    },
+  };
+}
+
+/** One `SKIPPED` item of a canonical batch outcome. */
+export function skippedItem(input: {
+  readonly externalCallId: string;
+  readonly toolName: string;
+  readonly content?: string;
+}): ToolBatchItemOutcome {
+  return {
+    kind: "SKIPPED",
+    call: { externalCallId: input.externalCallId, toolName: input.toolName as ToolName, args: {} },
+    feedback: {
+      code: "SKIPPED_AFTER_UNCERTAIN_EXECUTION",
+      content:
+        input.content ??
+        "This tool call was skipped because an earlier tool execution may have partially or fully completed.",
+      details: {},
+      disposition: "UNCERTAIN_SIDE_EFFECT",
+    },
+  };
+}
+
+export interface StubToolBatches extends ToolBatchCoordinator {
   readonly calls: RecordedToolBatch[];
   /** Physical Tool executions, as the Tool Layer would count them. */
   physicalExecutions: number;
   /**
-   * What the Tool Layer answers, given the items it was asked about.
+   * What the Tool Layer answers, given the calls it was asked about.
    *
    * It is a property rather than an override of `execute`, so the recorded call log stays the stub's
    * own account of what it was asked: a test that replaced `execute` would lose the very count these
@@ -119,12 +229,6 @@ export interface StubToolBatches extends ToolBatchCoordinatorPort {
   answerWith: ToolBatchAnswer | ((items: readonly ItemLike[]) => ToolBatchAnswer);
   /** A value the next call throws, consumed once. A queued failure outranks the answer. */
   failures: unknown[];
-}
-
-/** The identity of one requested Tool call, as the legacy batch port carries it. */
-export interface ItemLike {
-  readonly externalCallId: string;
-  readonly toolName: string;
 }
 
 export function stubToolBatches(
@@ -139,13 +243,13 @@ export function stubToolBatches(
     answerWith: undefined as
       ToolBatchAnswer | ((items: readonly ItemLike[]) => ToolBatchAnswer) | undefined,
   };
-  async function answer(operation: "execute" | "recover", request: ToolBatchRequest) {
-    calls.push({ operation, request });
+  async function answer(request: ToolBatchRequest): Promise<ToolBatchAnswer> {
+    calls.push({ operation: "execute", request });
     const failure = state.failures.shift();
     if (failure !== undefined) throw failure;
     if (state.answerWith !== undefined) {
       return typeof state.answerWith === "function"
-        ? state.answerWith(request.items)
+        ? state.answerWith(request.calls)
         : state.answerWith;
     }
     const next = state.answers.length > 1 ? state.answers.shift()! : state.answers[0];
@@ -154,12 +258,12 @@ export function stubToolBatches(
   function complete(request: ToolBatchRequest, content: string): ToolBatchAnswer {
     return {
       kind: "COMPLETED",
-      results: request.items.map((item, index) =>
+      items: request.calls.map((call, index) =>
         toolResultItem({
-          externalCallId: item.externalCallId,
-          toolName: item.toolName,
-          content: `${content}:${item.externalCallId}`,
-          invocationId: `tiv_0195f3a0-0000-7000-8000-${String(index + 1).padStart(12, "0")}`,
+          externalCallId: call.externalCallId,
+          toolName: call.toolName,
+          content: `${content}:${call.externalCallId}`,
+          index,
         }),
       ),
     };
@@ -178,7 +282,7 @@ export function stubToolBatches(
       state.answerWith = value;
     },
     get answerWith(): ToolBatchAnswer | ((items: readonly ItemLike[]) => ToolBatchAnswer) {
-      return state.answerWith ?? complete({ items: [] } as never, "completion by default");
+      return state.answerWith ?? { kind: "COMPLETED", items: [] };
     },
     get failures() {
       return state.failures;
@@ -186,15 +290,67 @@ export function stubToolBatches(
     set failures(value: unknown[]) {
       state.failures = [...value];
     },
-    modelDefinitions: (): readonly ToolDefinition[] => [],
     async execute(request) {
       state.physicalExecutions += 1;
-      return answer("execute", request);
-    },
-    async recover(request) {
-      return answer("recover", request);
+      return answer(request);
     },
   } as StubToolBatches;
+}
+
+/**
+ * One `WAITING_APPROVAL` item set: the calls that already reached a final item outcome.
+ *
+ * The pending call is deliberately **not** an item. Building the outcome from an approval request and a
+ * pending call is what the canonical batch does, so the fixture does the same rather than inventing an
+ * observation for a call that is still waiting.
+ */
+export function approvalRequest(input: {
+  readonly id: string;
+  readonly toolInvocationId: string;
+  readonly runId?: string;
+  readonly riskLevel?: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+  readonly expiresAt?: TimestampMs;
+}): ApprovalRequest {
+  return {
+    id: input.id as ApprovalRequestId,
+    runId: (input.runId ?? fixtureId("run", 0)) as RunId,
+    toolInvocationId: input.toolInvocationId as ToolInvocationId,
+    riskLevel: input.riskLevel ?? "HIGH",
+    title: "Tool execution requires approval",
+    reason: "The active approval policy requires a decision for this Tool.",
+    action: {},
+    status: "PENDING",
+    scope: "ONCE",
+    ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
+    createdAt: createTimestampMs(1),
+  };
+}
+
+/**
+ * The canonical Tool turn pipeline over a stubbed batch scheduler.
+ *
+ * ```text
+ * batches      the stub
+ * feedback     the REAL canonical projector, wired with the REAL Context projection adapter
+ * normalizer   the REAL canonical normalizer
+ * ```
+ *
+ * Only the scheduler is stubbed. The projector and normalizer are production objects, so a test that
+ * asserts "the model received these results" is asserting about the production model-feedback path
+ * rather than about a second implementation written inside the test.
+ */
+export function stubToolTurnPipeline(batches: StubToolBatches): {
+  readonly batches: StubToolBatches;
+  readonly feedback: ReturnType<typeof createModelToolFeedbackProjector>;
+  readonly normalizer: ReturnType<typeof createToolResultBatchNormalizer>;
+} {
+  return {
+    batches,
+    feedback: createModelToolFeedbackProjector({
+      projection: toContextObservationProjection(),
+    }),
+    normalizer: createToolResultBatchNormalizer(),
+  };
 }
 
 /* ------------------------------------------------------------------ store */
@@ -468,7 +624,7 @@ export function harness3d(options: {
     },
     clock: { now: () => createTimestampMs(++clockTick) },
     eventIdFactory: { create: createEventId },
-    toolCoordinator: toolBatches,
+    toolTurn: stubToolTurnPipeline(toolBatches),
     verificationPlanner: {
       plan: ({ runId, sourceStepId }: { runId: RunId; sourceStepId: StepId }) => ({
         runId,
@@ -580,9 +736,14 @@ export function eventTypes(events: readonly DurableAgentEvent[]): readonly strin
   return events.map((event) => event.type);
 }
 
-/** A `ToolDispatchRequest`-shaped view of one recorded batch, for identity assertions. */
-export function recordedItems(batch: RecordedToolBatch): readonly ToolDispatchRequest[] {
-  return batch.request.items.map((item) => ({ ...batch.request, ...item }) as ToolDispatchRequest);
+/**
+ * The requested Tool calls of one recorded batch, for identity assertions.
+ *
+ * Phase 4D: the canonical request names its calls `calls`, and the Run facts a batch carries travel
+ * beside them rather than being merged into each call.
+ */
+export function recordedItems(batch: RecordedToolBatch): readonly ItemLike[] {
+  return batch.request.calls;
 }
 
 export function stateOf(harness: { readonly store: MemoryRunStore }): AgentState | undefined {

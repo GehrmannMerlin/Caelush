@@ -333,6 +333,22 @@ describe("Phase 2C package edges", () => {
         "RunExecutionConflictError",
         "RunExecutionInvariantError",
         "TOOL_TURN_RESULT_KINDS",
+        // --- Phase 4D: the canonical Tool batch, its two error classes, and the model-facing Tool
+        // result exit. Each is one declaration in the kernel, because the batch scheduler, the
+        // pre-invocation rejection vocabulary, the result-batch integrity defense and the model
+        // feedback projection are general Agent capabilities rather than Coding ones. Core re-exports
+        // the error classes instead of redeclaring them, so `instanceof` cannot disagree.
+        "AgentToolResultBatchError",
+        "MODEL_FEEDBACK_TRUNCATION_MARKER",
+        "SKIPPED_AFTER_UNCERTAIN_CONTENT",
+        "SKIPPED_AFTER_UNCERTAIN_EXECUTION",
+        "TOOL_BATCH_ITEM_OUTCOME_KINDS",
+        "TOOL_BATCH_OUTCOME_KINDS",
+        "ToolBatchInfrastructureError",
+        "ToolBatchInputError",
+        "createModelToolFeedbackProjector",
+        "createToolBatchCoordinator",
+        "createToolResultBatchNormalizer",
         "agentTurnInputErrorMessage",
         // `ALLOWED_MODEL_ADMISSION` was a frozen constant while ALLOWED carried only `kind`.
         // The frozen decision carries the approved request, so a shared constant cannot express

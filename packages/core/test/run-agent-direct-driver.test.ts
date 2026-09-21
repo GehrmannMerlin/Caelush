@@ -1,5 +1,7 @@
-import type { AIModelRequest, AIModelTurnResult } from "@caelush/ai";
+import type { AIModelRequest, AIModelTurnResult, JsonObject } from "@caelush/ai";
 import type { AgentTurnRef, ModelTurnExecutionResult } from "@caelush/agent";
+import { createModelToolFeedbackProjector, createToolResultBatchNormalizer } from "@caelush/agent";
+import { toContextObservationProjection } from "../src/agent-tool-batch.js";
 import {
   AgentRunSchema,
   createEventId,
@@ -10,6 +12,7 @@ import {
   createWorkspaceId,
   type AgentStep,
   type StepId,
+  type ToolName,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import { completionStoreOver } from "./support/completion-store.js";
@@ -217,8 +220,16 @@ function harness(options: {
     eventIdFactory: { create: createEventId },
     // Phase 3D owns the real Tool boundary; this stands in for the one production composition
     // supplies so the Run round trip (`TOOL_REQUESTS → batch → accepted results → resume`) is
-    // exercised end to end rather than stopping at the boundary.
-    toolCoordinator: toolCoordinatorFixture(),
+    // exercised end to end rather than stopping at the boundary. Phase 4D: the scheduler is the
+    // canonical `ToolBatchCoordinator`, and the projector and normalizer beside it are the real
+    // canonical ones.
+    toolTurn: {
+      batches: toolCoordinatorFixture(),
+      feedback: createModelToolFeedbackProjector({
+        projection: toContextObservationProjection(),
+      }),
+      normalizer: createToolResultBatchNormalizer(),
+    },
     // The FinalCandidate compatibility bridge is Phase 3E's authority to keep: a candidate moves the
     // Run to VERIFYING with a real plan, and never to COMPLETED from here. The planner is the one
     // production composition supplies; this fixture mirrors it so the bridge runs for real.
@@ -260,35 +271,42 @@ function harness(options: {
 /**
  * The Tool batch fixture.
  *
- * It answers each requested call with a deterministic model-facing result, in the assistant's own
- * source order, which is the contract the Run Layer's conversion depends on. It records nothing the
- * Run Layer may not see: no invocation id, no observation, no structured details.
+ * It answers each requested call with a canonical `OBSERVATION` item, in the assistant's own source
+ * order, which is the contract the Run Layer's conversion depends on. The observation is a durable one:
+ * the canonical batch carries the settled ToolObservation, not a flat content string. What reaches the
+ * model is still only `toolCallId`, `toolName`, `content` and `isError` — the invocation id and the
+ * observation id stay in the Tool Layer.
  */
 function toolCoordinatorFixture(): {
-  modelDefinitions(): readonly import("@caelush/protocol").ToolDefinition[];
   execute(request: {
-    readonly items: readonly { readonly externalCallId: string; readonly toolName: string }[];
-  }): Promise<{ readonly kind: "COMPLETED"; readonly results: readonly unknown[] }>;
-  recover(request: {
-    readonly items: readonly { readonly externalCallId: string; readonly toolName: string }[];
-  }): Promise<{ readonly kind: "COMPLETED"; readonly results: readonly unknown[] }>;
+    readonly calls: readonly {
+      readonly externalCallId: string;
+      readonly toolName: ToolName;
+      readonly args: JsonObject;
+    }[];
+  }): Promise<{ readonly kind: "COMPLETED"; readonly items: readonly unknown[] }>;
 } {
   return {
-    modelDefinitions: () => [],
     async execute(request) {
       return {
         kind: "COMPLETED",
-        results: request.items.map((item) => ({
-          kind: "TOOL_RESULT",
-          externalCallId: item.externalCallId,
-          toolName: item.toolName,
-          content: "the file body",
-          isError: false,
+        items: request.calls.map((call, index) => ({
+          kind: "OBSERVATION",
+          call,
+          invocationId: `tiv_0195f3a0-0000-7000-8000-${String(index + 1).padStart(12, "0")}`,
+          finalStatus: "COMPLETED",
+          observation: {
+            id: `obs_0195f3a0-0000-7000-8000-${String(index + 1).padStart(12, "0")}`,
+            runId: "run_0195f3a0-0000-7000-8000-000000000001",
+            stepId: "stp_0195f3a0-0000-7000-8000-000000000001",
+            kind: "TOOL",
+            toolInvocationId: `tiv_0195f3a0-0000-7000-8000-${String(index + 1).padStart(12, "0")}`,
+            content: "the file body",
+            isError: false,
+            createdAt: 1,
+          },
         })),
       };
-    },
-    async recover(request) {
-      return this.execute(request);
     },
   };
 }

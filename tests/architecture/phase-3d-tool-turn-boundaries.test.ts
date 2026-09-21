@@ -107,12 +107,15 @@ describe("Phase 3D durable Tool turn driver boundaries", () => {
     expect(resolve).toContain("requestedMode");
     expect(resolve).toContain("snapshot.run.id");
 
-    // And the real adapter is a real `ToolTurnCoordinator` over the legacy Tool System.
+    // And the real adapter is a real `ToolTurnCoordinator` over the canonical Tool System.
     const adapter = executable("packages/core/src/run-tool-turn-coordinator.ts");
     expect(adapter).toContain("createRunToolTurnDriverFactory(");
     expect(adapter).toContain("readonly coordinator: ToolTurnCoordinator;");
-    expect(adapter).toContain("dependencies.batches.recover(");
+    // Phase 4D: one entry point. `ToolTurnRequest.mode` still exists, is still validated and is still
+    // recorded, but it no longer selects `recover()` vs `execute()` — the durable coordinator owns
+    // per-call recovery, so both entries are the canonical `execute()`.
     expect(adapter).toContain("dependencies.batches.execute(");
+    expect(adapter).not.toContain("dependencies.batches.recover(");
   });
   it("keeps every deferred port out of production and each effect on its own real port", () => {
     // No production file may carry a deferred port any more: Phase 3D replaced the Tool one and Phase
@@ -296,13 +299,19 @@ describe("Phase 3D durable Tool turn driver boundaries", () => {
     }
   });
 
-  it("keeps the run-scoped adapter the only object that speaks the legacy Tool batch", () => {
-    // Exactly one Core file may name the legacy Tool batch *request*: the adapter. The Tool package
-    // declares it, and that is the whole remaining surface.
+  it("keeps the run-scoped adapter the only Core object that speaks a Tool batch", () => {
+    // The canonical `ToolBatchRequest` is declared by the Agent Tool System, and Core may name it only
+    // in the one run-scoped adapter that translates the frozen Tool turn into it. Phase 4D moved the
+    // declaration from `@caelush/tools` to `@caelush/agent`; the legacy declaration still exists as a
+    // compatibility surface and is not used by production.
     const builders = productionSources().filter((file) =>
       /\bToolBatchRequest\b/.test(executable(file)),
     );
     expect(builders.sort()).toEqual([
+      "packages/agent/src/index.ts",
+      "packages/agent/src/tools/batch/batch-coordinator.ts",
+      "packages/agent/src/tools/batch/batch-types.ts",
+      "packages/agent/src/tools/index.ts",
       "packages/core/src/run-tool-turn-coordinator.ts",
       "packages/tools/src/batch-coordinator.ts",
       "packages/tools/src/batch-types.ts",
@@ -333,9 +342,14 @@ describe("Phase 3D durable Tool turn driver boundaries", () => {
 
   it("keeps the daemon the composition root for Tool execution", () => {
     const daemon = executable("apps/daemon/src/daemon-composition.ts");
-    // The composition root still builds the registry, the dispatcher and the batch coordinator...
-    expect(daemon).toContain("new ToolBatchCoordinator(dispatcher)");
-    expect(daemon).toContain("createV1SecureToolDispatcher({");
+    // The composition root builds the registry and — since Phase 4D — the *canonical* batch coordinator
+    // over the dispatcher's own durable coordinator. The legacy Dispatcher facade is no longer composed:
+    // its only production consumer was the legacy batch.
+    expect(daemon).toContain("createToolBatchCoordinator({");
+    expect(daemon).not.toContain("createV1SecureToolDispatcher({");
+    // It does not construct the legacy batch coordinator either: that facade is not a production
+    // authority.
+    expect(daemon).not.toContain("new ToolBatchCoordinator(dispatcher)");
     // ...and it supplies the raw-observation resolver the Context recovery needs, because it is the
     // layer that owns the Tool execution ledger.
     expect(daemon).toContain("createToolExecutionLedgerRawObservationResolver({");
@@ -382,17 +396,24 @@ describe("Phase 3D durable Tool turn driver boundaries", () => {
   });
 
   it("keeps sequential Tool semantics and introduces no parallelism", () => {
-    // The batch coordinator is unchanged: it drives items one at a time.
+    // Phase 4D made the *canonical* Agent batch the production scheduler, and it is strictly sequential:
+    // an ordinary `for` over the calls, and no `Promise.all` anywhere in the batch or its planner.
+    const canonical = executable("packages/agent/src/tools/batch/batch-coordinator.ts");
+    expect(canonical).toContain("for (const call of request.calls)");
+    expect(canonical).not.toContain("Promise.all");
+    const planner = executable("packages/agent/src/tools/batch/batch-planner.ts");
+    expect(planner).not.toContain("Promise.all");
+    // The legacy facade keeps its own sequential shape, and it too has no parallelism.
     const batch = executable("packages/tools/src/batch-coordinator.ts");
     expect(batch).toContain("for (const [index, item] of request.items.entries())");
     expect(batch).not.toContain("Promise.all");
 
-    // And the adapter asks the Tool Layer for exactly one batch per turn: one `execute`/`recover` call
-    // site, never a per-item loop.
+    // And the adapter asks the Tool Layer for exactly one batch per turn: one `execute` call site,
+    // never a per-item loop and never a second entry point.
     const adapter = executable("packages/core/src/run-tool-turn-coordinator.ts");
     expect(adapter).not.toContain("Promise.all");
     const callSites = adapter.match(/dependencies\.batches\.(?:recover|execute)\(/g) ?? [];
-    expect(callSites).toHaveLength(2);
+    expect(callSites).toEqual(["dependencies.batches.execute("]);
   });
 
   it("keeps the Tool result batch a complete, ordered set", () => {
@@ -400,10 +421,14 @@ describe("Phase 3D durable Tool turn driver boundaries", () => {
     // A `WAITING_APPROVAL` outcome reports no partial results: the batch is not complete, so the model
     // is shown none of it and the durable invocations are the recovery authority.
     expect(adapter).toContain("completedResults: [],");
-    // The frozen results are produced by the one observation projection, in source order.
-    expect(adapter).toContain("toAgentToolResults(");
+    // Phase 4D: the frozen results are produced by the canonical projector and then proven by the
+    // canonical normalizer, in source order. Core no longer owns either algorithm.
+    expect(adapter).toContain("context.feedback.project(");
+    expect(adapter).toContain("context.normalizer.normalize(");
+    // The Context token projection is still the one observation algorithm, reached through the seam.
     const projection = executable("packages/core/src/agent-tool-batch.ts");
     expect(projection).toContain("projectToolObservationBatch({");
+    expect(projection).toContain("export function toContextObservationProjection(");
     // The projection rejects a mismatched batch rather than reordering it.
     expect(projection).toContain("result.externalCallId !== request.externalCallId");
     expect(projection).toContain("result.toolName !== request.toolName");

@@ -103,12 +103,13 @@ type DeepPartial<T> = { readonly [K in keyof T]?: T[K] extends object ? DeepPart
 function completeAnswer(): ToolBatchAnswer {
   return {
     kind: "COMPLETED",
-    results: [
+    items: [
       toolResultItem({
         externalCallId: "call_a",
         toolName: "read_file",
         content: "body",
-        invocationId: "tiv_a" as never,
+        invocationId: "tiv_a",
+        index: 0,
       }),
     ],
   };

@@ -532,12 +532,18 @@ describe("Phase 4C durable Tool orchestration boundaries", () => {
     expect(pipeline).toContain("export interface PreparedToolSettlement {");
   });
 
-  it("keeps the batch and the builtins in the legacy layer for 4D and 4E", () => {
-    // The batch coordinator is still legacy, and it still drives the compatibility facade.
+  it("keeps the builtins in the legacy layer for 4E", () => {
+    // The legacy coordinator module still exists as a compatibility facade, and it still drives the
+    // legacy Dispatcher for the direct API.
     expect(existsSync(join(root, `${LEGACY_TOOLS}batch-coordinator.ts`))).toBe(true);
     expect(executable(`${LEGACY_TOOLS}batch-coordinator.ts`)).toContain("this.dispatcher[mode]");
-    // It is constructed from the facade, and the facade reaches the canonical coordinator.
+    // Phase 4D removed it from production: the daemon composes the *canonical* Agent batch instead, and
+    // never constructs the legacy class.
+    // See `tests/architecture/phase-4d-tool-batch-feedback-boundaries.test.ts`.
     expect(executable("apps/daemon/src/daemon-composition.ts")).toContain(
+      "createToolBatchCoordinator(",
+    );
+    expect(executable("apps/daemon/src/daemon-composition.ts")).not.toContain(
       "new ToolBatchCoordinator(dispatcher)",
     );
 
@@ -642,11 +648,14 @@ describe("Phase 4C durable Tool orchestration boundaries", () => {
     }
   });
 
-  it("keeps the Tool Dispatcher reachable only through the canonical coordinator in production", () => {
+  it("keeps the canonical durable coordinator the one Tool lifecycle the production root builds", () => {
     const daemon = executable("apps/daemon/src/daemon-composition.ts");
-    // The composition builds the canonical coordinator and hands it to the facade.
+    // The composition builds the canonical coordinator — one of them — and hands it to the canonical
+    // batch. Phase 4D removed the legacy Dispatcher, which was its only other consumer, so the
+    // coordinator is now driven from exactly one place.
     expect(daemon).toContain("createDurableToolExecutionCoordinator({");
-    expect(daemon).toContain("coordinator: toolDurableCoordinator");
+    expect(daemon).toContain("durable: toolDurableCoordinator");
+    expect(daemon).not.toContain("createV1SecureToolDispatcher(");
     // Every canonical port is assembled here, from the real implementations.
     for (const builder of [
       "createToolAdmissionCoordinator({",

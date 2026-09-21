@@ -6,10 +6,12 @@ import { RunControllerInvariantError } from "../src/index.js";
 import { createRunToolTurnDriverFactory } from "../src/run-tool-turn-coordinator.js";
 import {
   answerTurn,
+  approvalRequest,
   eventTypes,
   harness3d,
   makeRunD,
   stubToolBatches,
+  stubToolTurnPipeline,
   toolResultItem,
   toolTurn,
   type ToolBatchAnswer,
@@ -49,17 +51,19 @@ function completeAnswer(
 ): (items: readonly ItemLike[]) => ToolBatchAnswer {
   return (items) => ({
     kind: "COMPLETED",
-    results: items.map((item, index) =>
-      toolResultItem({
+    items: items.map((item, index) => {
+      const rawArtifactRef = extras.rawArtifactRef?.(index);
+      return toolResultItem({
         externalCallId: item.externalCallId,
         toolName: item.toolName,
         content: `${content}:${item.externalCallId}`,
+        // The index makes the default durable identity (and therefore the observation id) distinct
+        // per call: two calls sharing one invocation id would be one Tool invocation, not two.
+        index,
         ...(extras.invocationId === undefined ? {} : { invocationId: extras.invocationId(index) }),
-        ...(extras.rawArtifactRef?.(index) === undefined
-          ? {}
-          : { rawArtifactRef: extras.rawArtifactRef(index)! }),
-      }),
-    ),
+        ...(rawArtifactRef === undefined ? {} : { rawArtifactRef }),
+      });
+    }),
   });
 }
 
@@ -100,14 +104,13 @@ async function parkOnToolBoundary(
     script: (call) => (call === 0 ? toolTurn(calls) : answerTurn()),
     toolBatches: scriptedBatches({
       kind: "WAITING_APPROVAL",
-      completedResults: [],
-      waiting: {
-        index: 0,
-        invocationId: "tiv_waiting" as never,
-        approvalId: "apr_waiting" as never,
-        externalCallId: calls[0]!.id,
-        toolName: calls[0]!.name,
-      },
+      // Nothing reached a final item outcome before the waiting call.
+      items: [],
+      pendingCall: { externalCallId: calls[0]!.id, toolName: calls[0]!.name, args: {} },
+      approval: approvalRequest({
+        id: "apr_waiting",
+        toolInvocationId: "tiv_waiting",
+      }),
     }),
   });
   const result = await harness.controller.start(harness.store.snapshot.run.id);
@@ -170,11 +173,11 @@ describe("Phase 3D Tool turn driver", () => {
       approvalPolicy: "DANGEROUS_ONLY",
     });
     // The batch is the model's own request, in its own order, with its own arguments.
-    expect(request.items).toEqual([
+    expect(request.calls).toEqual([
       { externalCallId: "call_a", toolName: "read_file", args: { path: "a.ts" } },
     ]);
     // And the source Step is the Step the model's turn actually ran as.
-    expect(request.stepId).toBe(h.allocatedSteps[0]);
+    expect(request.sourceStepId).toBe(h.allocatedSteps[0]);
   });
 
   it("executes a multi-call batch sequentially in assistant source order", async () => {
@@ -194,7 +197,7 @@ describe("Phase 3D Tool turn driver", () => {
     await h.controller.start(h.store.snapshot.run.id);
 
     // The Tool Layer is handed the batch in the assistant's own source order.
-    expect(batches.calls[0]!.request.items.map((item) => item.externalCallId)).toEqual([
+    expect(batches.calls[0]!.request.calls.map((call) => call.externalCallId)).toEqual([
       "call_a",
       "call_b",
       "call_c",
@@ -289,21 +292,16 @@ describe("Phase 3D Tool turn driver", () => {
   it("does not append partial results when a batch stops at approval", async () => {
     const batches = scriptedBatches({
       kind: "WAITING_APPROVAL",
-      completedResults: [
+      items: [
         toolResultItem({
           externalCallId: "call_a",
           toolName: "read_file",
           content: "already done",
-          invocationId: "tiv_a" as never,
+          invocationId: "tiv_a",
         }),
       ],
-      waiting: {
-        index: 1,
-        invocationId: "tiv_b" as never,
-        approvalId: "apr_b" as never,
-        externalCallId: "call_b",
-        toolName: "write_file",
-      },
+      pendingCall: { externalCallId: "call_b", toolName: "write_file", args: {} },
+      approval: approvalRequest({ id: "apr_b", toolInvocationId: "tiv_b" }),
     });
     const h = harness3d({
       script: (call) =>
@@ -366,11 +364,42 @@ describe("Phase 3D Tool turn driver", () => {
       scope: "ONCE",
     });
 
-    // The parked call was a *dispatch*; the resumption is a *recovery*. A batch that may already be
-    // durable is never dispatched a second time, so the call the approval concerned is never run
-    // again — and the Run settles the whole batch once the trailing call answers.
-    expect(harness.toolBatches.calls.map((call) => call.operation)).toEqual(["execute", "recover"]);
-    expect(harness.toolBatches.physicalExecutions).toBe(1);
+    // The parked call was a *dispatch*; the resumption is a *recovery*, and Phase 4D changed which
+    // entry point expresses that. `ToolTurnRequest.mode` is still `RECOVER` and is still recorded in
+    // the Core-private observation — what changed is that the batch no longer selects a
+    // restart-aware entry point of its own. Both entries are the canonical `execute()`, and whether an
+    // individual call is fresh or already durable is decided by the durable coordinator's lookup by
+    // `(runId, sourceStepId, externalCallId)`, not by the batch.
+    expect(harness.toolBatches.calls.map((call) => call.operation)).toEqual(["execute", "execute"]);
+    // That lookup is the durable coordinator's, and this harness stubs the *scheduler*, not the
+    // durable Tool ledger: the stub has no invocation to find, so it cannot demonstrate that a durable
+    // call is not re-executed. `packages/storage/test/run-controller-tool-integration.test.ts` drives
+    // the real canonical batch over a real Tool execution store and is where that is proven.
+    expect(harness.toolBatches.physicalExecutions).toBe(2);
+    expect(result.status).toBe("AWAITING_VERIFICATION");
+  });
+
+  it("re-presents the same batch on RECOVER instead of selecting a second entry point", async () => {
+    const { harness, snapshot, approvalId } = await parkOnToolBoundary();
+    harness.toolBatches.answerWith = completeAnswer("recovered", {
+      invocationId: (i) => `tiv_${i}`,
+    });
+
+    const result = await harness.controller.resolveApproval(snapshot.run.id, approvalId, {
+      action: "APPROVE",
+      scope: "ONCE",
+    });
+
+    // `mode` survives the cutover: the request still declares `RECOVER` and still carries the Run's
+    // live signal, and the same batch identity is re-presented. What it no longer does is call a
+    // second entry point.
+    expect(harness.toolBatches.calls).toHaveLength(2);
+    expect(harness.toolBatches.calls[1]!.request.calls).toEqual([
+      { externalCallId: "call_a", toolName: "read_file", args: { path: "a.ts" } },
+    ]);
+    expect(harness.toolBatches.calls[1]!.request.sourceStepId).toBe(
+      harness.toolBatches.calls[0]!.request.sourceStepId,
+    );
     expect(result.status).toBe("AWAITING_VERIFICATION");
   });
 
@@ -441,7 +470,7 @@ describe("Phase 3D Tool turn driver", () => {
     if (pending?.type !== "WAITING_TOOL_RESULTS") throw new Error("expected a Tool continuation");
     const batches = stubToolBatches([completeAnswer()(pending.pendingDecision.toolRequests)]);
     const factory = createRunToolTurnDriverFactory({
-      batches,
+      ...stubToolTurnPipeline(batches),
       clock: { now: () => createTimestampMs(1) },
       signal: () => new AbortController().signal,
     });
