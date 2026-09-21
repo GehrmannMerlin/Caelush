@@ -292,3 +292,47 @@ export type {
   DurableToolExecutionOutcome,
   DurableToolExecutionRequest,
 } from "./durable/durable-execution-coordinator.js";
+
+/* The canonical Tool batch: request, item outcome, batch outcome, errors and the scheduler. */
+export {
+  AgentToolResultBatchError,
+  ToolBatchInfrastructureError,
+  ToolBatchInputError,
+} from "./batch/batch-errors.js";
+export type {
+  AgentToolResultBatchErrorMetadata,
+  AgentToolResultBatchErrorReason,
+} from "./batch/batch-errors.js";
+export { TOOL_BATCH_ITEM_OUTCOME_KINDS, TOOL_BATCH_OUTCOME_KINDS } from "./batch/batch-types.js";
+export type {
+  ToolBatchCoordinator,
+  ToolBatchItemOutcome,
+  ToolBatchOutcome,
+  ToolBatchRequest,
+} from "./batch/batch-types.js";
+export {
+  createToolBatchCoordinator,
+  SKIPPED_AFTER_UNCERTAIN_CONTENT,
+  SKIPPED_AFTER_UNCERTAIN_EXECUTION,
+} from "./batch/batch-coordinator.js";
+export type { ToolBatchCoordinatorOptions } from "./batch/batch-coordinator.js";
+
+/*
+ * The canonical model-facing Tool result exit: the batch normalizer and the feedback projector.
+ *
+ * `ToolResultBatchNormalizer` is the integrity defense and `ModelToolFeedbackProjector` is the safe
+ * view; neither reads a raw execution result, and the projector's token-projection algorithm is
+ * injected rather than reimplemented here.
+ */
+export { createToolResultBatchNormalizer } from "./observation/result-batch-normalizer.js";
+export type { ToolResultBatchNormalizer } from "./observation/result-batch-normalizer.js";
+export {
+  createModelToolFeedbackProjector,
+  MODEL_FEEDBACK_TRUNCATION_MARKER,
+} from "./observation/model-feedback-projector.js";
+export type {
+  ModelObservationBatchProjector,
+  ModelObservationCandidate,
+  ModelToolFeedbackProjector,
+  ModelToolFeedbackProjectorOptions,
+} from "./observation/model-feedback-projector.js";
