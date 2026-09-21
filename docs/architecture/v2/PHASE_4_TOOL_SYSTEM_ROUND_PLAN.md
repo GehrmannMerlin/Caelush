@@ -205,9 +205,44 @@ decomposition above.
     docs/architecture/v2/PHASE_4C_DURABLE_TOOL_ORCHESTRATION_REPORT.md
     tests/architecture/phase-4c-durable-tool-orchestration-boundaries.test.ts
 
-4D  not started
+4D  docs/architecture/v2/PHASE_4D_BATCH_FEEDBACK_TOOLTURN_ACCEPTANCE_MAP.md
+    docs/architecture/v2/PHASE_4D_BATCH_FEEDBACK_TOOLTURN_REPORT.md
+    tests/architecture/phase-4d-tool-batch-feedback-boundaries.test.ts
+
 4E  not started
 4F  not started
+```
+
+### 4.3 The 4D transition boundary, stated once
+
+```text
+@caelush/agent now owns:  the canonical ToolBatchCoordinator (batch validation, duplicate
+                          externalCallId validation, whole-batch budget preflight, strictly sequential
+                          scheduling, the pre-invocation REJECTED item, the uncertain skip barrier, the
+                          waiting-approval / budget / cancellation stops), the canonical
+                          ToolResultBatchNormalizer, and the canonical ModelToolFeedbackProjector —
+                          the model-facing Tool result exit.
+
+@caelush/core now owns:   the Run ToolTurn host adaptation, Run resource governance, the Run lifecycle
+                          compatibility, the Context token-projection adapter, and the frozen ToolTurn
+                          mapping. It no longer owns a generic Tool batch algorithm, a generic result
+                          batch normalization or generic model Tool feedback semantics.
+
+@caelush/tools still owns: the legacy builtins, the legacy registration surface, the legacy Dispatcher
+                          facade and its direct API, and the legacy Coding effects/facts/presentation.
+                          Those exit in 4E / 4F. The legacy batch coordinator and the legacy batch
+                          types remain as unreferenced compatibility surface.
+
+Now true:                 production Tool requests travel from the model's ToolCalls to the next
+                          AgentLoop TOOL_RESULTS entirely through Tool System V2. A pre-invocation
+                          rejection creates **no** ToolInvocation row and still reaches the model as
+                          safe feedback; the batch is the canonical one; the model view is produced by
+                          the canonical projector and proved by the canonical normalizer.
+
+Not yet true:             the nine Coding builtins are still legacy registrations, Operations
+                          interfaces do not exist, real Coding builtin progress is not yet published,
+                          no host consumes transient updates, and the legacy compatibility surface has
+                          not been retired.
 ```
 
 ### 4.2 The 4C transition boundary, stated once
