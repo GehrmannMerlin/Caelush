@@ -215,6 +215,9 @@ decomposition above.
                            docs/architecture/v2/PHASE_4E_CODING_TOOLS_OPERATIONS_REPORT.md
     Blocker resolution:    docs/architecture/v2/PHASE_4E_OPERATIONS_INTERFACE_FREEZE_ERRATA.md
                            (supersedes Interface Freeze §165 and the §169 status arm only)
+    Progress record:       docs/architecture/v2/PHASE_4E_CODING_TOOLS_OPERATIONS_PROGRESS.md
+                           (errata resolved and the Coding product layer landed; the migration and
+                            the round verification are not complete)
 
 4F  not started
 ```
