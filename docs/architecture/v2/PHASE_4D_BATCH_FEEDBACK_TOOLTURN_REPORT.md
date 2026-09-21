@@ -991,35 +991,55 @@ route. The only `apps/web` touch was its pre-existing build step in `pnpm build`
 
 ## 14. Clean checkout verification
 
-Performed from the pushed 4D remote branch in an independent checkout:
+Performed from the **pushed 4D remote branch** in an independent checkout
+(`git clone --branch deepseek/architecture-v2-phase-4d-batch-feedback-toolturn-cutover --single-branch`),
+which landed on `14d7a3ca5a079e3108d1287954d868a18222f63f` with a clean working tree:
 
 ```bash
-pnpm install --frozen-lockfile
-pnpm build
-pnpm typecheck
-pnpm check:architecture:ci
+pnpm install --frozen-lockfile     PASS  (Done in 5.7s, pnpm v11.21.0)
+pnpm build                         PASS
+pnpm typecheck                     PASS
+pnpm check:architecture:ci         PASS  (27 baseline, 0 new, 0 stale, READY)
+pnpm test                          PASS  (469 files, 2904 passed, 5 skipped, 0 failed)
 ```
 
-plus the canonical batch suite, the model feedback suite, the normalizer suite, the ToolTurn integration
-suite, the no-row rejection E2E, the uncertain skip E2E and the recovery E2E.
+plus the key 4D suites as their own focused invocation — 10 files, 138 tests, all passing:
 
-Results are recorded in §16.
+```text
+canonical batch            packages/agent/test/tool-batch-coordinator.test.ts
+model feedback             packages/agent/test/model-tool-feedback-projector.test.ts
+normalizer                 packages/agent/test/tool-result-batch-normalizer.test.ts
+independent use            packages/agent/test/tools-independent-use.test.ts
+ToolTurn integration       packages/core/test/run-tool-turn-driver.test.ts
+no-row rejection E2E       packages/storage/test/run-tool-turn-no-row-rejection.test.ts
+daemon composition         apps/daemon/test/tool-batch-production-composition.test.ts
+Phase 4D architecture      tests/architecture/phase-4d-tool-batch-feedback-boundaries.test.ts
+Phase 3D architecture      tests/architecture/phase-3d-tool-turn-boundaries.test.ts
+Phase 4C architecture      tests/architecture/phase-4c-durable-tool-orchestration-boundaries.test.ts
+```
+
+The uncertain-skip E2E is exercised by the canonical batch suite (`tool-batch-coordinator.test.ts`), and
+the recovery E2E by `packages/storage/test/run-controller-tool-integration.test.ts`; both pass in the clean
+checkout as part of the full run.
 
 ---
 
 ## 15. Git commits
 
 ```text
-feat(agent): own canonical tool batch coordination
-feat(agent): own tool feedback projection and result normalization
-refactor(core): cut production tool turn over to the canonical batch
-refactor(daemon): compose canonical tool batch pipeline
-test(architecture): guard phase 4d batch and feedback authorities
-docs(architecture): record phase 4d migration
+de03cb5  feat(agent): own canonical tool batch coordination
+de94401  refactor(core): cut production tool turn over to the canonical batch
+dadb1cc  refactor(daemon): compose canonical tool batch pipeline
+90e121d  test(architecture): guard phase 4d batch and feedback authorities
+14d7a3c  docs(architecture): record phase 4d migration
 ```
 
 Each commit is auditable and self-contained. No force push, no `merge master`, no rebase of 4A/4B/4C, no
 rewrite of old commits, no release, no deploy and no package publish was performed.
+
+One transient network failure occurred during the first push (`curl 55 Send failure: Connection was
+reset`, then two `Failed to connect to github.com port 443` refusals). The push was retried unchanged and
+succeeded; nothing was rewritten and no history was altered to work around it.
 
 ---
 
@@ -1028,12 +1048,14 @@ rewrite of old commits, no release, no deploy and no package publish was perform
 ```text
 Base SHA                    d340f909b052920804addccfc4726615cf837238
 Branch                      deepseek/architecture-v2-phase-4d-batch-feedback-toolturn-cutover
-Verified code head          recorded in the commit below
-Final branch tip            identical to the verified code head
-Remote parity               local tip == origin tip
+Verified code head          14d7a3ca5a079e3108d1287954d868a18222f63f
+Final branch tip            14d7a3ca5a079e3108d1287954d868a18222f63f
+Remote parity               local == origin (git ls-remote --heads origin), 0 ahead / 0 behind
 Working tree                clean
-Architecture baseline       27 → 27, 0 new, 0 stale, READY
-Full suite                  469 files, 2904 passed, 5 skipped, 0 failed
+Architecture baseline       27 → 27, 0 new, 0 stale, 0 private imports, READY
+Full suite (working repo)   469 files, 2904 passed, 5 skipped, 0 failed
+Full suite (clean checkout) 469 files, 2904 passed, 5 skipped, 0 failed
+Key 4D suites (clean)       10 files, 138 passed
 ```
 
 ---
