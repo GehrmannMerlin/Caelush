@@ -1,72 +1,87 @@
-import { LLMToolResultMessageSchema, type LLMToolResultMessage } from "@caelush/llm/messages";
-import { AgentToolResultBatchError } from "./agent-errors.js";
+import type { ToolCallRequest, ToolResultBatchNormalizer } from "@caelush/agent";
+import { createToolResultBatchNormalizer } from "@caelush/agent";
+import type { AIToolResultMessage } from "@caelush/ai";
+import type { LLMToolResultMessage } from "@caelush/llm/messages";
 import type { AgentToolRequest } from "./agent-decision.js";
+
+/**
+ * The legacy entry point of the canonical Tool Result batch normalizer.
+ *
+ * ```text
+ * canonical declaration   @caelush/agent  ToolResultBatchNormalizer
+ * this module             a delegation to it, over the legacy message vocabulary
+ * ```
+ *
+ * Phase 4D moved the authority. Core no longer owns a second implementation of "duplicate request,
+ * duplicate result, unexpected result, missing result, tool-name mismatch, original request order" —
+ * it calls the canonical normalizer, which is the same code the production Tool turn uses through
+ * `ModelToolFeedbackProjector` output.
+ *
+ * Keeping the entry point matters for two reasons:
+ *
+ * ```text
+ * the durable conversation ledger still speaks LLMToolResultMessage
+ * the legacy callers and their tests keep working unchanged
+ * ```
+ *
+ * The two message shapes differ by exactly one field — the legacy one may carry `rawArtifactRef`, which
+ * the frozen `AIToolResultMessage` deliberately has no field for — so the projection is a field
+ * selection in each direction rather than a second algorithm. The identity, shape, multiplicity,
+ * matching and ordering checks all happen inside the canonical normalizer.
+ */
+
+const canonicalNormalizer: ToolResultBatchNormalizer = createToolResultBatchNormalizer();
 
 export function normalizeToolResultBatch(
   requests: readonly AgentToolRequest[],
   results: readonly LLMToolResultMessage[],
 ): readonly LLMToolResultMessage[] {
-  const requestById = new Map<string, AgentToolRequest>();
-  for (const request of requests) {
-    if (requestById.has(request.externalCallId)) {
-      throw new AgentToolResultBatchError("DUPLICATE_REQUEST_ID", {
-        toolCallId: request.externalCallId,
-      });
-    }
-    requestById.set(request.externalCallId, request);
-  }
+  // `rawArtifactRef` is a durable artifact-linkage pointer, not model-facing content: the canonical
+  // contract has no field for it, so it is dropped on the way in and restored from the caller's own
+  // input on the way out. Only the position is taken from the canonical result, never the content.
+  const legacyById = new Map<string, LLMToolResultMessage>();
+  for (const result of results) legacyById.set(result.toolCallId, result);
 
-  const parsedResults: LLMToolResultMessage[] = [];
-  for (const result of results) {
-    const parsed = LLMToolResultMessageSchema.safeParse(result);
-    if (!parsed.success) {
-      throw new AgentToolResultBatchError("INVALID_RESULT", {
-        requestCount: requests.length,
-        resultCount: results.length,
-      });
-    }
-    parsedResults.push(parsed.data);
-  }
+  const normalized = canonicalNormalizer.normalize({
+    requests: requests.map(toCanonicalRequest),
+    results: results.map(toCanonicalResult),
+  });
 
-  const resultById = new Map<string, LLMToolResultMessage>();
-  for (const result of parsedResults) {
-    if (resultById.has(result.toolCallId)) {
-      throw new AgentToolResultBatchError("DUPLICATE_RESULT", {
-        toolCallId: result.toolCallId,
-      });
-    }
-    if (!requestById.has(result.toolCallId)) {
-      throw new AgentToolResultBatchError("UNEXPECTED_RESULT", {
-        toolCallId: result.toolCallId,
-        resultCount: results.length,
-      });
-    }
-    resultById.set(result.toolCallId, result);
-  }
+  return normalized.map((message) => {
+    const legacy = legacyById.get(message.toolCallId);
+    return {
+      role: "tool" as const,
+      toolCallId: message.toolCallId,
+      toolName: message.toolName,
+      content: message.content,
+      isError: message.isError,
+      ...(legacy?.rawArtifactRef === undefined ? {} : { rawArtifactRef: legacy.rawArtifactRef }),
+    };
+  });
+}
 
-  for (const request of requests) {
-    const result = resultById.get(request.externalCallId);
-    if (result === undefined) {
-      throw new AgentToolResultBatchError("MISSING_RESULT", {
-        toolCallId: request.externalCallId,
-        requestCount: requests.length,
-        resultCount: results.length,
-      });
-    }
-    if (result.toolName !== request.toolName) {
-      throw new AgentToolResultBatchError("TOOL_NAME_MISMATCH", {
-        toolCallId: request.externalCallId,
-        toolName: request.toolName,
-      });
-    }
-  }
+/** The legacy call shape as the canonical Tool Layer's own call request. */
+function toCanonicalRequest(request: AgentToolRequest): ToolCallRequest {
+  return {
+    externalCallId: request.externalCallId,
+    toolName: request.toolName,
+    args: request.args,
+  };
+}
 
-  if (resultById.size !== requestById.size) {
-    throw new AgentToolResultBatchError("UNEXPECTED_RESULT", {
-      requestCount: requests.length,
-      resultCount: results.length,
-    });
-  }
-
-  return requests.map((request) => resultById.get(request.externalCallId)!);
+/**
+ * The legacy result message as the canonical `AIToolResultMessage`.
+ *
+ * The field selection is deliberately explicit: a legacy message that also carried a provider option or
+ * another non-canonical field would project down to the frozen five fields rather than smuggling the
+ * extra one into the model contract.
+ */
+function toCanonicalResult(message: LLMToolResultMessage): AIToolResultMessage {
+  return {
+    role: "tool",
+    toolCallId: message.toolCallId,
+    toolName: message.toolName,
+    content: message.content,
+    isError: message.isError,
+  };
 }

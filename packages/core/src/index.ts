@@ -53,7 +53,13 @@ export {
 export { classifyAgentDecision } from "./agent-decision-mapper.js";
 export { summarizeAgentDecision, summarizeAgentLoopOutcome } from "./agent-summary.js";
 export { normalizeToolResultBatch } from "./agent-tool-results.js";
-export { toLLMToolResultMessages } from "./agent-tool-batch.js";
+export {
+  defaultObservationPolicy,
+  toAgentToolResults,
+  toContextObservationProjection,
+  toLLMToolResultMessages,
+} from "./agent-tool-batch.js";
+export type { AgentToolObservationPolicy } from "./agent-tool-batch.js";
 export {
   beginAgentStepState,
   cancelAgentStepState,
@@ -248,6 +254,7 @@ export type {
   VerificationCheckIdFactory,
   VerificationRunnerPort,
   ProjectProfileProviderPort,
+  ToolTurnPipeline,
 } from "./run-controller-ports.js";
 /**
  * The Run Layer's direct Agent execution dependencies.

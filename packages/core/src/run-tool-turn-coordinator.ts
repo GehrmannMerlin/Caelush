@@ -1,29 +1,26 @@
 import type {
   AgentBudgetBlock,
+  AgentToolResult,
+  ModelToolFeedbackProjector,
   RunExecutionMode,
+  ToolBatchCoordinator,
+  ToolBatchItemOutcome,
+  ToolBatchOutcome,
+  ToolBatchRequest,
+  ToolCallRequest,
+  ToolExecutionEnvironment,
+  ToolResultBatchNormalizer,
+  ToolSecurityContext,
   ToolTurnCoordinator,
   ToolTurnRequest,
   ToolTurnResult,
   WaitingApprovalBoundary,
 } from "@caelush/agent";
-import type {
-  ToolBatchCoordinatorPort,
-  ToolBatchItem,
-  ToolBatchOutcome,
-  ToolBatchRequest,
-  ToolBatchItemResult,
-  ToolExecutionEnvironment,
-  ToolSecurityContext,
-} from "@caelush/tools";
 import type { AgentRun, AgentState, TimestampMs } from "@caelush/protocol";
 
 import type { AgentToolCallsDecision } from "./agent-decision.js";
 import type { RunContinuationCheckpoint } from "./agent-continuation.js";
-import {
-  defaultObservationPolicy,
-  toAgentToolResults,
-  type AgentToolObservationPolicy,
-} from "./agent-tool-batch.js";
+import { defaultObservationPolicy, type AgentToolObservationPolicy } from "./agent-tool-batch.js";
 import { ResourceGovernor } from "./resource-governor.js";
 import { fingerprintToolBatch, fingerprintToolResultBatch } from "./resource-fingerprint.js";
 import type {
@@ -103,14 +100,33 @@ export interface RunToolTurnContext extends RunToolTurnFacts {
    * be recovered and never re-dispatched, and only the layer that knows *why* it is driving can say
    * which of the two this is — so it is threaded in explicitly rather than read off the frozen
    * directive, which says which batch is next and not whether its work already happened.
+   *
+   * Phase 4D kept this fact and changed only what consumes it: it no longer selects
+   * `execute()` versus `recover()` on the batch, because the durable coordinator owns per-call
+   * recovery. It is still validated, still recorded in the Core-private observation, and still the
+   * entry mode the caller declared.
    */
   readonly effectiveMode: RunExecutionMode;
+  /** The canonical model feedback projector, bound with the host Context token projection. */
+  readonly feedback: ModelToolFeedbackProjector;
+  /** The canonical Tool Result batch integrity defense. */
+  readonly normalizer: ToolResultBatchNormalizer;
 }
 
 /** Everything a run-scoped Tool turn needs from its composition root. */
 export interface RunToolTurnDriverDependencies {
-  /** The legacy durable Tool System. The adapter drives it; it does not replace it. */
-  readonly batches: ToolBatchCoordinatorPort;
+  /** The canonical Tool Batch scheduling authority. The adapter drives it; it does not replace it. */
+  readonly batches: ToolBatchCoordinator;
+  /**
+   * The canonical model feedback projector.
+   *
+   * It is constructed with the host Context runtime's token-projection implementation, so the one
+   * observation-budget algorithm stays owned by `@caelush/context` while `@caelush/agent` owns the model
+   * feedback semantics.
+   */
+  readonly feedback: ModelToolFeedbackProjector;
+  /** The canonical Tool Result batch integrity defense. */
+  readonly normalizer: ToolResultBatchNormalizer;
   /** The durable resource ledger, when this Run's host configured a resource policy. */
   readonly resourceGovernance?: ResourceGovernancePort | undefined;
   readonly clock: { now(): TimestampMs };
@@ -216,6 +232,8 @@ export function createRunToolTurnDriverFactory(
     const context: RunToolTurnContext = {
       ...facts,
       effectiveMode: requestedMode === "RECOVER" ? "RECOVER" : "EXECUTE",
+      feedback: dependencies.feedback,
+      normalizer: dependencies.normalizer,
     };
     const observation = createRunToolTurnObservation({ effectiveMode: context.effectiveMode });
     return {
@@ -280,8 +298,8 @@ async function executeRunToolTurn(
 ): Promise<ToolTurnResult> {
   assertRequestMatchesContext(request, context);
 
-  const items: readonly ToolBatchItem[] = context.pendingDecision.toolRequests;
-  const admission = await admitResource(dependencies, context, items.length);
+  const requests = context.pendingDecision.toolRequests;
+  const admission = await admitResource(dependencies, context, requests.length);
   if (admission.kind === undefined) {
     // No resource policy is configured for this Run. Nothing was decided, so nothing is recorded: an
     // observation that named a decision nobody made would be a fact about work that never ran.
@@ -291,16 +309,12 @@ async function executeRunToolTurn(
   }
 
   if (admission.kind === "REPLAN") {
-    // The model asked for more than one turn may run, or it repeated itself. Nothing is dispatched:
-    // the synthetic results are the whole answer, and the durable replan accounting belongs to the
+    // The model asked for more than one turn may run, or it repeated itself. Nothing is dispatched: the
+    // synthetic results are the whole answer, and the durable replan accounting belongs to the
     // settlement, so a lost Run commit cannot have advanced it.
     return {
       kind: "REPLAN",
-      syntheticResults: toAgentToolResults(
-        context.pendingDecision.toolRequests,
-        ResourceGovernor.replanResults(items),
-        context.observationPolicy,
-      ),
+      syntheticResults: replanResults(context),
     };
   }
   if (admission.kind === "WAIT_FOR_RESOURCE_DECISION") {
@@ -319,12 +333,61 @@ async function executeRunToolTurn(
     };
   }
 
-  const batchRequest = toToolBatchRequest(dependencies, context, items);
-  const outcome =
-    context.effectiveMode === "RECOVER"
-      ? await dependencies.batches.recover(batchRequest)
-      : await dependencies.batches.execute(batchRequest);
+  const batchRequest = toToolBatchRequest(dependencies, context);
+  // `ToolTurnRequest.mode` remains a Run Layer entry fact — it is validated, recorded in the Core-private
+  // observation and never deleted — but it no longer selects an entry point. The durable coordinator
+  // performs a lookup by `(runId, sourceStepId, externalCallId)` on every call, so a fresh batch and a
+  // recovered batch are both entered through the canonical `execute()` and each individual call's
+  // fresh-or-recover decision is made against durable truth.
+  //
+  // An abort during the batch arrives as a throw, and it is deliberately *not* caught: the Run Layer's
+  // `executeToolBatchDirective` already routes `executionSignal.aborted` to its cancellation authority,
+  // and a Tool System that converted the abort into a result would be making a Run decision.
+  const outcome = await dependencies.batches.execute(batchRequest);
   return toToolTurnResult(context, observation, outcome);
+}
+
+/**
+ * The synthetic results of a resource REPLAN.
+ *
+ * ```text
+ * the resource governor's own message   safe, bounded, generated by the governor
+ *        ↓
+ * ModelToolFeedbackProjector            the same projection every other Tool result goes through
+ *        ↓
+ * ToolResultBatchNormalizer             the same integrity defense
+ * ```
+ *
+ * `REPLAN` is not a Tool batch outcome, so it never reaches the canonical Batch: no Tool ran and no
+ * durable row exists. It still owes the model one result per call, and it discharges that through the
+ * identical projector and normalizer — which is what keeps one model-feedback authority rather than a
+ * REPLAN-shaped second one.
+ */
+function replanResults(context: RunToolTurnContext): readonly AgentToolResult[] {
+  const calls = callsOf(context);
+  const messages = ResourceGovernor.replanResults(calls);
+  const items: ToolBatchItemOutcome[] = calls.map((call, index) => ({
+    kind: "REJECTED",
+    call,
+    feedback: {
+      code: "RESOURCE_REPLAN_REQUIRED",
+      content: messages[index]?.content ?? "",
+      details: {},
+      disposition: "SAFE_FAILURE",
+    },
+  }));
+  const projected = context.feedback.project({
+    calls,
+    items,
+    policy: context.observationPolicy,
+  });
+  const normalized = context.normalizer.normalize({ requests: calls, results: projected });
+  return normalized.map((message) => ({
+    externalCallId: message.toolCallId,
+    toolName: message.toolName,
+    content: message.content,
+    isError: message.isError,
+  }));
 }
 
 /** Refuse a request whose identity is not this Run's durable batch. */
@@ -354,7 +417,6 @@ function assertRequestMatchesContext(request: ToolTurnRequest, context: RunToolT
 function toToolBatchRequest(
   dependencies: RunToolTurnDriverDependencies,
   context: RunToolTurnContext,
-  items: readonly ToolBatchItem[],
 ): ToolBatchRequest {
   return {
     // The Run's live cancellation signal, forwarded unchanged. The adapter never creates an abort
@@ -362,11 +424,33 @@ function toToolBatchRequest(
     signal: dependencies.signal(),
     sessionId: context.run.sessionId,
     runId: context.run.id,
-    stepId: context.continuation.sourceStepId,
+    sourceStepId: context.continuation.sourceStepId,
+    calls: callsOf(context),
     environment: context.environment,
     securityContext: context.securityContext,
-    items,
   };
+}
+
+/**
+ * The model's Tool calls, projected onto the Tool Layer's canonical call shape.
+ *
+ * ```text
+ * externalCallId  carried unchanged — never regenerated
+ * toolName        carried unchanged
+ * args            carried unchanged
+ * order           assistant source order, preserved exactly
+ * ```
+ *
+ * The identity is the load-bearing part: `(runId, sourceStepId, externalCallId)` is what decides whether
+ * a call has already run, so a projection that minted a new id would make every recovery look like a
+ * fresh batch.
+ */
+function callsOf(context: RunToolTurnContext): readonly ToolCallRequest[] {
+  return context.pendingDecision.toolRequests.map((request) => ({
+    externalCallId: request.externalCallId,
+    toolName: request.toolName,
+    args: request.args,
+  }));
 }
 
 /* ------------------------------------------------------ resource admission */
@@ -469,6 +553,30 @@ async function admitResource(
 
 /* --------------------------------------------------------------- outcomes */
 
+/**
+ * Map one canonical Batch outcome onto the frozen Tool turn result.
+ *
+ * ```text
+ * COMPLETED         projector -> normalizer -> frozen COMPLETED
+ * WAITING_APPROVAL  stop before the trailing calls; no partial model result
+ * BUDGET_EXCEEDED   stop; no partial model result
+ * CANCELLED         never a ToolTurnResult — Run cancellation authority owns it
+ * ```
+ *
+ * ## Why a cancelled batch does not become a result
+ *
+ * The frozen `ToolTurnResult` has five discriminants and `CANCELLED` is not one of them; adding it would
+ * change a Phase 3 contract, and its absence is deliberate. Cancellation is a **Run** authority, so:
+ *
+ * ```text
+ * signal aborted      the run-scoped abort is allowed to propagate to
+ *                     `executeToolBatchDirective`, which already routes `executionSignal.aborted` to
+ *                     `finalizeAbortedExecution` — the Tool System never writes a Run status
+ * signal not aborted  fail closed, because the frozen Tool turn has no safe arm to express a cancelled
+ *                     batch under a live signal, and every available forgery (COMPLETED, an error Tool
+ *                     result, an automatic Run cancel) would invent an authority
+ * ```
+ */
 function toToolTurnResult(
   context: RunToolTurnContext,
   observation: RunToolTurnObservation,
@@ -476,73 +584,141 @@ function toToolTurnResult(
 ): ToolTurnResult {
   switch (outcome.kind) {
     case "COMPLETED":
-      return settleObservation(observation, "COMPLETED", outcome.results, () => ({
-        kind: "COMPLETED",
-        results: toAgentToolResults(
-          context.pendingDecision.toolRequests,
-          outcome.results,
-          context.observationPolicy,
-        ),
-      }));
+      return settleObservation(observation, "COMPLETED", outcome.items, () =>
+        completedToolTurnResult(context, outcome),
+      );
     case "WAITING_APPROVAL":
-      return settleObservation(observation, "WAITING_APPROVAL", outcome.completedResults, () => ({
+      return settleObservation(observation, "WAITING_APPROVAL", outcome.items, () => ({
         kind: "WAITING_APPROVAL",
-        // The partial results are deliberately *not* reported to the Run Layer: the batch is not
+        // The partial item outcomes are deliberately *not* reported to the Run Layer: the batch is not
         // complete, so the model is shown none of it. The completed invocations are already durable in
-        // the Tool ledger, and that — not a partial model message — is what recovery resumes from, so
-        // an approved trailing call can never cause a completed one to run twice.
+        // the Tool ledger, and that — not a partial model message — is what recovery resumes from, so an
+        // approved trailing call can never cause a completed one to run twice.
         completedResults: [],
         waiting: waitingBoundaryOf(outcome),
       }));
     case "BUDGET_EXCEEDED":
-      return settleObservation(observation, "BUDGET_EXCEEDED", outcome.completedResults, () => ({
+      return settleObservation(observation, "BUDGET_EXCEEDED", outcome.items, () => ({
         kind: "BUDGET_EXCEEDED",
         completedResults: [],
         // The exact numbers the Tool budget authority returned. They are reported, never re-derived: a
         // Run Layer that recomputed them would be a second accounting authority.
         block: budgetBlockOf(outcome),
       }));
+    case "CANCELLED":
+      // `CANCELLED` is only ever reported on an aborted signal, and that case never reaches here: the
+      // adapter rethrows the run-scoped abort before this mapping runs. A batch that cancelled itself
+      // while the Run's signal says execution is still wanted is a contradiction with no safe arm in
+      // the frozen result, so it fails closed.
+      throw new RunControllerInvariantError(
+        `Tool batch reported CANCELLED (${String(outcome.items.length)} final item(s)) with a live Run signal.`,
+      );
   }
 }
+
+/**
+ * Build the frozen `COMPLETED` result from a complete canonical batch.
+ *
+ * ```text
+ * ToolBatchOutcome.COMPLETED
+ *        ↓
+ * ModelToolFeedbackProjector.project({ calls, items, policy })
+ *        ↓
+ * AIToolResultMessage[]                    the safe, token-bounded model view
+ *        ↓
+ * ToolResultBatchNormalizer.normalize({ requests, results })
+ *        ↓
+ * normalized ordered AIToolResultMessage[] the final identity/order/integrity defense
+ * ```
+ *
+ * The projector *builds* the safe view and the normalizer *proves* it. Neither reads a durable
+ * observation on the other's behalf, and the normalizer is never asked to recover a missing result.
+ *
+ * The last step is a one-field-wide compatibility conversion onto the frozen Phase 3
+ * `AgentToolResult`. It does **not** truncate, sanitize, read an observation or reorder: the safe
+ * projection already happened, and a second pass here would be a second projection authority.
+ */
+function completedToolTurnResult(
+  context: RunToolTurnContext,
+  outcome: Extract<ToolBatchOutcome, { kind: "COMPLETED" }>,
+): ToolTurnResult {
+  const calls = callsOf(context);
+  const projected = context.feedback.project({
+    calls,
+    items: outcome.items,
+    policy: context.observationPolicy,
+  });
+  const normalized = context.normalizer.normalize({ requests: calls, results: projected });
+  return {
+    kind: "COMPLETED",
+    results: normalized.map((message) => ({
+      externalCallId: message.toolCallId,
+      toolName: message.toolName,
+      content: message.content,
+      isError: message.isError,
+    })),
+  };
+}
+
+/**
+ * Refuse a cancelled batch that the Run's own signal does not explain.
+ *
+ * The abort case never reaches here: it propagates out of the canonical batch call so the Run Layer's
+ * existing cancellation path settles the Run. This function is only for the contradiction — a batch that
+ * cancelled itself while the Run's signal says execution is still wanted — and it fails closed. A Run
+ * that silently treated this as `COMPLETED` would hand the model a batch it never received; one that
+ * treated it as a Tool error would tell the model a Tool failed when nothing ran; one that cancelled the
+ * Run would forge a decision only the user or the deadline may make.
+ */
 
 function waitingBoundaryOf(
   outcome: Extract<ToolBatchOutcome, { kind: "WAITING_APPROVAL" }>,
 ): WaitingApprovalBoundary {
   return {
-    invocationId: outcome.waiting.invocationId,
-    ...(outcome.waiting.approvalId === undefined ? {} : { approvalId: outcome.waiting.approvalId }),
-    externalCallId: outcome.waiting.externalCallId,
-    toolName: outcome.waiting.toolName,
+    // The approval owns the invocation it is about; the pending call owns the model-facing identity.
+    invocationId: outcome.approval.toolInvocationId,
+    approvalId: outcome.approval.id,
+    externalCallId: outcome.pendingCall.externalCallId,
+    toolName: outcome.pendingCall.toolName,
   };
 }
 
 function budgetBlockOf(
   outcome: Extract<ToolBatchOutcome, { kind: "BUDGET_EXCEEDED" }>,
 ): Extract<AgentBudgetBlock, { kind: "EXCEEDED" }> {
+  const block = outcome.block;
+  if (block.kind !== "EXCEEDED") {
+    // The frozen `ToolTurnResult.BUDGET_EXCEEDED` carries the accounting of an exhausted budget. An
+    // `UNAVAILABLE` block is a *different* statement — enforcement could not be established — and the
+    // Run Layer reports it through its own budget error path rather than as a spent budget.
+    throw new RunControllerInvariantError(
+      "Tool budget enforcement was unavailable rather than exhausted.",
+    );
+  }
   return {
     kind: "EXCEEDED",
-    dimension: outcome.blocked.dimension,
-    accounted: outcome.blocked.accounted,
-    limit: outcome.blocked.limit,
+    dimension: block.dimension,
+    accounted: block.accounted,
+    limit: block.limit,
   };
 }
 
 /**
  * Record what the Tool Layer actually produced, then build the frozen result.
  *
- * The observation is the only place these facts exist: the frozen result reports what the model will
- * be told, and `executionAttempted` distinguishes a batch that ran from one that never reached the
- * Tool Layer at all.
+ * The observation is the only place these facts exist: the frozen result reports what the model will be
+ * told, and `executionAttempted` distinguishes a batch that ran from one that never reached the Tool
+ * Layer at all.
  */
 function settleObservation(
   observation: RunToolTurnObservation,
   outcome: ToolTurnResult["kind"],
-  results: readonly ToolBatchItemResult[],
+  items: readonly ToolBatchItemOutcome[],
   build: () => ToolTurnResult,
 ): ToolTurnResult {
   observation.executionAttempted = true;
   observation.underlyingOutcome = outcome;
-  observation.rawObservations = rawObservationsOf(results);
+  observation.rawObservations = rawObservationsOf(items);
   return build();
 }
 

@@ -1,5 +1,4 @@
 import type { ModelUsage } from "@caelush/ai";
-import type { ToolName } from "@caelush/protocol";
 import type { AgentBudgetBlock as CanonicalAgentBudgetBlock } from "@caelush/agent";
 
 /**
@@ -12,35 +11,25 @@ import type { AgentBudgetBlock as CanonicalAgentBudgetBlock } from "@caelush/age
 export { AgentModelOutputError } from "@caelush/agent";
 export type { AgentModelOutputErrorReason, AgentModelOutputMetadata } from "@caelush/agent";
 
-export type AgentToolResultBatchErrorReason =
-  | "INVALID_RESULT"
-  | "MISSING_RESULT"
-  | "UNEXPECTED_RESULT"
-  | "DUPLICATE_RESULT"
-  | "TOOL_NAME_MISMATCH"
-  | "DUPLICATE_REQUEST_ID";
-
-export interface AgentToolResultBatchErrorMetadata {
-  readonly toolCallId?: string;
-  readonly toolName?: ToolName;
-  readonly requestCount?: number;
-  readonly resultCount?: number;
-}
-
-export class AgentToolResultBatchError extends Error {
-  readonly reason: AgentToolResultBatchErrorReason;
-  readonly metadata: AgentToolResultBatchErrorMetadata;
-
-  constructor(
-    reason: AgentToolResultBatchErrorReason,
-    metadata: AgentToolResultBatchErrorMetadata = {},
-  ) {
-    super(`Agent tool result batch rejected: ${reason}.`);
-    this.name = "AgentToolResultBatchError";
-    this.reason = reason;
-    this.metadata = metadata;
-  }
-}
+/**
+ * The canonical Tool result batch error lives in `@caelush/agent` from Phase 4D.
+ *
+ * ```text
+ * canonical declaration   @caelush/agent  (tools/batch/batch-errors.ts)
+ * this module             a re-export of the same class identity
+ * ```
+ *
+ * As with `AgentModelOutputError` above, a second declaration would make `instanceof` disagree about
+ * the same failure: the canonical `ToolResultBatchNormalizer` throws the Agent class, and the Run
+ * Layer catches it by class when it decides whether a batch failure is a model error or a runtime
+ * error. Re-exporting keeps one declaration and one identity, so an existing Core caller that imports
+ * `AgentToolResultBatchError` from `@caelush/core` gets exactly the class the normalizer throws.
+ */
+export { AgentToolResultBatchError } from "@caelush/agent";
+export type {
+  AgentToolResultBatchErrorMetadata,
+  AgentToolResultBatchErrorReason,
+} from "@caelush/agent";
 
 export class ToolBatchResultConversionError extends Error {
   constructor(reason = "Tool batch result does not match the source Tool Calls.") {

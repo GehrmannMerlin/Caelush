@@ -17,7 +17,7 @@ import {
   type RunTransitionPlanner,
   type ToolTurnResult,
 } from "@caelush/agent";
-import { ToolBatchInputError, type ToolBatchCoordinatorPort } from "@caelush/tools";
+import { ToolBatchInputError } from "@caelush/agent";
 import {
   AgentRunSchema,
   ApprovalResolutionSchema,
@@ -139,7 +139,7 @@ import {
   createRunControllerEventFactory,
   type RunControllerEventFactory,
 } from "./run-controller-events.js";
-import type { RunControllerDependencies } from "./run-controller-ports.js";
+import type { RunControllerDependencies, ToolTurnPipeline } from "./run-controller-ports.js";
 import { toDurableRetryCode } from "./ai-invocation-projection.js";
 import type { AgentBudgetBlock } from "./agent-errors.js";
 
@@ -1008,9 +1008,9 @@ export class RunController {
     snapshot: RunExecutionSnapshot,
     requestedMode: RunExecutionMode,
   ): ReturnType<ReturnType<typeof createRunToolTurnDriverFactory>> | undefined {
-    const batches = this.dependencies.toolCoordinator;
-    if (batches === undefined) return undefined;
-    return createRunToolTurnDriverFactory(this.toolTurnDependencies(batches, snapshot.run.id))(
+    const pipeline = this.dependencies.toolTurn;
+    if (pipeline === undefined) return undefined;
+    return createRunToolTurnDriverFactory(this.toolTurnDependencies(pipeline, snapshot.run.id))(
       snapshot,
       requestedMode,
     );
@@ -1019,18 +1019,20 @@ export class RunController {
   /**
    * The host facts the Tool turn adapter is assembled from.
    *
-   * The RunController names a `ToolBatchCoordinatorPort` and a resource ledger — nothing narrower.
+   * The RunController names the canonical Tool turn pipeline and a resource ledger — nothing narrower.
    * It does not know a `ToolBatchItem`, a security context, an execution environment or a
-   * `ResourceGovernor`: those belong to the adapter, which is the only object that translates the
-   * frozen Tool turn contract into the legacy Tool batch request.
+   * `ResourceGovernor`: those belong to the adapter, which is the only object that translates the frozen
+   * Tool turn contract into a canonical `ToolBatchRequest`.
    */
   private toolTurnDependencies(
-    batches: ToolBatchCoordinatorPort,
+    pipeline: ToolTurnPipeline,
     runId: RunId,
   ): RunToolTurnDriverDependencies {
     const contextRuntime = this.dependencies.contextRuntime;
     return {
-      batches,
+      batches: pipeline.batches,
+      feedback: pipeline.feedback,
+      normalizer: pipeline.normalizer,
       ...(this.dependencies.resourceGovernance === undefined
         ? {}
         : { resourceGovernance: this.dependencies.resourceGovernance }),
@@ -1245,8 +1247,8 @@ export class RunController {
     settled: RunExecutionSnapshot,
     result: Exclude<ToolTurnResult, { kind: "RESOURCE_WAIT" | "BUDGET_EXCEEDED" }>,
   ): Promise<void> {
-    const batches = this.dependencies.toolCoordinator;
-    if (batches === undefined) return;
+    const pipeline = this.dependencies.toolTurn;
+    if (pipeline === undefined) return;
     // The facts come from the adapter, which is the only object that derives a security context, an
     // execution environment or an observation policy for a Tool turn. Rebuilding them here would be a
     // second capture of the same facts, free to disagree with the batch that actually ran.
@@ -1255,7 +1257,7 @@ export class RunController {
       ...this.hostObservationPolicy(settled.run.id),
     });
     if (facts === undefined) return;
-    const dependencies = this.toolTurnDependencies(batches, settled.run.id);
+    const dependencies = this.toolTurnDependencies(pipeline, settled.run.id);
     const results =
       result.kind === "COMPLETED"
         ? result.results

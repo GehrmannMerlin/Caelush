@@ -13,7 +13,11 @@ import type {
   VerificationPlanDraft,
   VerificationProjectFacts,
 } from "@caelush/protocol";
-import type { ToolBatchCoordinatorPort } from "@caelush/tools";
+import type {
+  ModelToolFeedbackProjector,
+  ToolBatchCoordinator,
+  ToolResultBatchNormalizer,
+} from "@caelush/agent";
 import type { DurableAgentEvent, RunExecutionStore } from "./run-execution-store.js";
 import type { RunCompletionPersistencePort } from "./run-completion-store.js";
 import type { RunExecutionScopeRegistry } from "./run-execution-scope.js";
@@ -125,6 +129,32 @@ export interface RunOwnedResourceControllerPort {
   }>;
 }
 
+/**
+ * The three canonical Tool System authorities, as one pipeline.
+ *
+ * ```text
+ * ToolBatchCoordinator        schedule the batch and settle each call durably
+ * ModelToolFeedbackProjector  build the safe, token-bounded model view
+ * ToolResultBatchNormalizer   prove identity, multiplicity and order before it enters history
+ * ```
+ *
+ * They are declared together and passed together because no subset is a working Tool Layer: scheduling
+ * without projection has no model-facing exit, and projection without normalization would let a
+ * mismatched result batch reach the model's conversation. Grouping them makes the half-wired
+ * composition unrepresentable rather than merely discouraged.
+ *
+ * The model-facing Tool catalog travels with them because it must be derived from *the same* registry
+ * that resolves execution. Phase 7A's rule is that there is never a separate model-tool map that can
+ * drift from the runtime-tool map, so the two are read from one place and passed as one value.
+ */
+export interface ToolTurnPipeline {
+  readonly batches: ToolBatchCoordinator;
+  readonly feedback: ModelToolFeedbackProjector;
+  readonly normalizer: ToolResultBatchNormalizer;
+  /** The model-visible Tool catalog, projected from the registry that resolves execution. */
+  modelDefinitions(): readonly import("@caelush/protocol").ToolDefinition[];
+}
+
 export interface RunControllerDependencies {
   /**
    * The Run Layer's direct Agent execution dependencies.
@@ -158,7 +188,21 @@ export interface RunControllerDependencies {
   readonly completionStore?: RunCompletionPersistencePort;
   readonly events: RunEventNotifier;
   readonly configResolver: RunExecutionConfigResolver;
-  readonly toolCoordinator?: ToolBatchCoordinatorPort;
+  /**
+   * The canonical Tool System exit: schedule a batch, project it for the model, normalize it.
+   *
+   * Phase 4D cut this over from the legacy `ToolBatchCoordinatorPort` to the Agent package's three
+   * canonical authorities. They arrive as one value because they are one pipeline: a Run that could
+   * schedule a batch but not project its result would have no model-facing exit from the Tool System,
+   * and two of the three would be a half-wired Tool Layer. A host that composed Tool execution out
+   * omits the whole field and the Run waits on its durable boundary.
+   *
+   * The Run Layer names the *pipeline* and nothing narrower: it does not know a `ToolBatchItem`, a
+   * security context, an execution environment or a `ResourceGovernor`. Those belong to the run-scoped
+   * adapter, which is the only object that translates the frozen Tool turn contract into a canonical
+   * `ToolBatchRequest`.
+   */
+  readonly toolTurn?: ToolTurnPipeline;
   readonly contextRuntime?: Pick<ContextRuntimeCoordinatorPort, "getContextPolicy">;
   readonly clock: { now(): import("@caelush/protocol").TimestampMs };
   readonly eventIdFactory: EventIdFactory;

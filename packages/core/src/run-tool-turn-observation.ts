@@ -1,5 +1,5 @@
 import type { ToolTurnResult } from "@caelush/agent";
-import type { ToolBatchItemResult } from "@caelush/tools";
+import type { ToolBatchItemOutcome } from "@caelush/agent";
 
 /**
  * The Core-private record of what one Tool turn actually did.
@@ -105,16 +105,24 @@ export function createRunToolTurnObservation(
 /**
  * Record the raw observations of a completed Tool Layer outcome.
  *
- * Only a result that names a durable invocation can carry a raw artifact pointer: an unavailable
- * Tool and a call skipped after an uncertain execution never ran, so they have no raw output and
+ * Only an `OBSERVATION` item names a durable invocation and therefore a raw artifact pointer: a
+ * `REJECTED` call never ran and a `SKIPPED` call was never started, so neither has raw output and
  * inventing one would point a Context recovery at an artifact nobody wrote.
+ *
+ * The pointer is read from the **durable** `ToolObservation` the canonical batch carried, which is the
+ * same authority the settlement wrote — not from a model-facing message, which deliberately has no field
+ * for it.
  */
 export function rawObservationsOf(
-  results: readonly ToolBatchItemResult[],
+  items: readonly ToolBatchItemOutcome[],
 ): readonly RunToolRawObservation[] {
-  return results.map((result) => ({
-    externalCallId: result.externalCallId,
-    ...(result.invocationId === undefined ? {} : { invocationId: result.invocationId }),
-    ...(result.rawArtifactRef === undefined ? {} : { rawArtifactRef: result.rawArtifactRef }),
-  }));
+  return items.map((item) => {
+    if (item.kind !== "OBSERVATION") return { externalCallId: item.call.externalCallId };
+    const rawArtifactRef = item.observation.rawArtifactRef;
+    return {
+      externalCallId: item.call.externalCallId,
+      invocationId: item.invocationId,
+      ...(rawArtifactRef === undefined ? {} : { rawArtifactRef }),
+    };
+  });
 }
