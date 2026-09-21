@@ -26,7 +26,6 @@ import {
 import { EventBus } from "@caelush/events";
 
 import {
-  ToolBatchCoordinator,
   ToolDispatcher,
   ToolRegistryBuilder,
   createFileMutationToolRegistrations,
@@ -40,6 +39,15 @@ import {
   type ToolExecutionGatePort,
   createToolExecutionDependencies,
 } from "@caelush/tools";
+import {
+  createModelToolFeedbackProjector,
+  createToolBatchCoordinator,
+  createToolCallPreparer,
+  createToolResultBatchNormalizer,
+  UNBOUNDED_TOOL_BUDGET_ADMISSION,
+  type ToolBatchCoordinator,
+} from "@caelush/agent";
+import { toContextObservationProjection } from "@caelush/core";
 import { describe, expect, it } from "vitest";
 import { LocalRuntime, createLocalRuntimeResolver } from "@caelush/runtime";
 import type { CaelushStorage } from "../src/index.js";
@@ -137,6 +145,49 @@ async function seedRun(storage: CaelushStorage, run: ReturnType<typeof makeRun>)
   await storage.runs.insert(run);
 }
 
+/**
+ * The canonical Tool turn pipeline over one already-composed `ToolDispatcher`.
+ *
+ * ```text
+ * the dispatcher's own DurableToolExecutionCoordinator   the 4C invocation lifecycle
+ *        ↓
+ * createToolBatchCoordinator                            the 4D scheduler
+ * createModelToolFeedbackProjector                      the 4D model-facing exit
+ * createToolResultBatchNormalizer                       the 4D integrity defense
+ * ```
+ *
+ * The dispatcher is built first and its canonical durable coordinator is *reused* rather than
+ * reconstructed: one store, one coordinator, one in-process call guard. The canonical batch is what the
+ * Run Layer drives; the legacy facade still exists beside it for the direct API tests.
+ */
+function canonicalPipeline(
+  dispatcher: ToolDispatcher,
+  registry: ReturnType<ToolRegistryBuilder["build"]>,
+): ToolBatchCoordinator {
+  return createToolBatchCoordinator({
+    preparer: createToolCallPreparer(registry.agentRegistry()),
+    budget: UNBOUNDED_TOOL_BUDGET_ADMISSION,
+    durable: dispatcher.durableCoordinator(),
+    registry: registry.agentRegistry(),
+  });
+}
+
+/** The three canonical authorities, as the Run Layer receives them. */
+function canonicalToolTurn(runtime: {
+  readonly coordinator: ToolBatchCoordinator;
+  readonly registry: ReturnType<ToolRegistryBuilder["build"]>;
+}) {
+  return {
+    batches: runtime.coordinator,
+    feedback: createModelToolFeedbackProjector({
+      projection: toContextObservationProjection(),
+    }),
+    normalizer: createToolResultBatchNormalizer(),
+    // The model-facing catalog comes from the registry that resolves execution: one registry, never two.
+    modelDefinitions: () => runtime.registry.modelDefinitions(),
+  };
+}
+
 function createRuntime(
   storage: CaelushStorage,
   eventBus: EventBus,
@@ -164,7 +215,11 @@ function createRuntime(
     approvalStore: storage.approvals,
     approvalIdFactory: { create: createApprovalRequestId },
   });
-  return { dispatcher, coordinator: new ToolBatchCoordinator(dispatcher), registry };
+  return {
+    dispatcher,
+    coordinator: canonicalPipeline(dispatcher, registry),
+    registry,
+  };
 }
 
 function createFilesystemRuntime(
@@ -180,12 +235,13 @@ function createFilesystemRuntime(
   for (const registration of createFileMutationToolRegistrations(runtimeResolver)) {
     builder.register(registration);
   }
+  const registry = builder.build();
   const notifier: ToolCommittedEventNotifier = {
     notifyCommitted: (events) => eventBus.notifyCommitted(events),
   };
   let now = Date.now();
   const dispatcher = new ToolDispatcher({
-    registry: builder.build(),
+    registry,
     store: storage.toolExecution,
     gate,
     notifier,
@@ -193,11 +249,15 @@ function createFilesystemRuntime(
     invocationIdFactory: { create: createToolInvocationId },
     observationIdFactory: { create: createObservationId },
     eventIdFactory: { create: createEventId },
-    execution: createToolExecutionDependencies({ registry: builder.build() }),
+    execution: createToolExecutionDependencies({ registry }),
     approvalStore: storage.approvals,
     approvalIdFactory: { create: createApprovalRequestId },
   });
-  return { dispatcher, coordinator: new ToolBatchCoordinator(dispatcher) };
+  return {
+    dispatcher,
+    coordinator: canonicalPipeline(dispatcher, registry),
+    registry,
+  };
 }
 
 /**
@@ -224,7 +284,10 @@ function createController(
   storage: CaelushStorage,
   eventBus: EventBus,
   turns: Array<AIModelTurnResult | Error>,
-  coordinator?: ToolBatchCoordinator,
+  runtime?: {
+    readonly coordinator: ToolBatchCoordinator;
+    readonly registry: ReturnType<ToolRegistryBuilder["build"]>;
+  },
   observedRequests: Array<{ tools?: unknown; messages: readonly unknown[] }> = [],
   initialNow = 10,
   deadlineRegistry?: RunDeadlineRegistry,
@@ -240,9 +303,9 @@ function createController(
       if (next instanceof Error) throw next;
       return next!;
     }),
-    // The model-visible catalog comes from the same coordinator that resolves execution, exactly
-    // as the production composition root derives it from the active Tool registry.
-    ...(coordinator === undefined ? {} : { tools: modelFacing(coordinator.modelDefinitions()) }),
+    // The model-visible catalog comes from the same registry that resolves execution, exactly as the
+    // production composition root derives it from the active Tool registry.
+    ...(runtime === undefined ? {} : { tools: modelFacing(runtime.registry.modelDefinitions()) }),
     createStepId: () => createStepId(),
   });
   return new RunController({
@@ -255,7 +318,7 @@ function createController(
         contextLimits: { maxInputTokens: 1000 },
       }),
     },
-    ...(coordinator === undefined ? {} : { toolCoordinator: coordinator }),
+    ...(runtime === undefined ? {} : { toolTurn: canonicalToolTurn(runtime) }),
     clock,
     eventIdFactory: { create: createEventId },
     verificationPlanner,
@@ -316,7 +379,7 @@ describe("RunController automatic Tool Batch integration", () => {
         aiError("AI_NETWORK", { message: "provider secret" }),
         turn("recovered", [], "STOP"),
       ],
-      runtime.coordinator,
+      runtime,
       [],
       10,
       undefined,
@@ -396,7 +459,7 @@ describe("RunController automatic Tool Batch integration", () => {
         ),
         turn("Final Candidate", [], "STOP"),
       ],
-      runtime.coordinator,
+      runtime,
       observed,
     );
 
@@ -404,7 +467,7 @@ describe("RunController automatic Tool Batch integration", () => {
       const result = await controller.start(run.id);
 
       expect(result.status).toBe("AWAITING_VERIFICATION");
-      expect(observed[0]?.tools).toEqual(modelFacing(runtime.coordinator.modelDefinitions()));
+      expect(observed[0]?.tools).toEqual(modelFacing(runtime.registry.modelDefinitions()));
       expect(observed[1]?.messages.slice(-4)).toEqual([
         expect.objectContaining({ toolCallId: "call-list", isError: false }),
         expect.objectContaining({
@@ -483,7 +546,7 @@ describe("RunController automatic Tool Batch integration", () => {
         ),
         turn("Final Candidate", [], "STOP"),
       ],
-      runtime.coordinator,
+      runtime,
       observed,
       // A patch is the one Tool in this suite whose effect projection moves the durable
       // `AgentState`, and the Tool Layer stamps that projection from the Tool dispatcher clock. The
@@ -575,7 +638,7 @@ describe("RunController automatic Tool Batch integration", () => {
           "TOOL_CALLS",
         ),
       ],
-      runtime.coordinator,
+      runtime,
     );
 
     try {
@@ -628,7 +691,7 @@ describe("RunController automatic Tool Batch integration", () => {
         ),
         turn("final answer", [], "STOP"),
       ],
-      runtime.coordinator,
+      runtime,
       observed,
     );
 
@@ -638,7 +701,7 @@ describe("RunController automatic Tool Batch integration", () => {
     expect(order).toEqual(["start:call-A", "finish:call-A", "start:call-B", "finish:call-B"]);
     expect(maxActive).toBe(1);
     expect(observed).toHaveLength(2);
-    expect(observed[0]?.tools).toEqual(modelFacing(runtime.coordinator.modelDefinitions()));
+    expect(observed[0]?.tools).toEqual(modelFacing(runtime.registry.modelDefinitions()));
     expect(observed[1]?.messages.slice(-2)).toEqual([
       {
         role: "tool",
@@ -704,7 +767,7 @@ describe("RunController automatic Tool Batch integration", () => {
           "TOOL_CALLS",
         ),
       ],
-      runtime.coordinator,
+      runtime,
     );
 
     const result = await controller.start(run.id);
@@ -768,7 +831,7 @@ describe("RunController automatic Tool Batch integration", () => {
       storage,
       eventBus,
       [turn("inspect", [{ id: "call-approval", name: "approval_value", input: {} }], "TOOL_CALLS")],
-      runtime.coordinator,
+      runtime,
       [],
       10,
       deadlineRegistry,
@@ -834,7 +897,7 @@ describe("RunController automatic Tool Batch integration", () => {
         ),
         turn("final after approval", [], "STOP"),
       ],
-      runtime.coordinator,
+      runtime,
       observed,
       baseNow + 1_000,
     );
@@ -890,7 +953,7 @@ describe("RunController automatic Tool Batch integration", () => {
         turn("second", [{ id: "call-B", name: "echo_value", input: {} }], "TOOL_CALLS"),
         turn("final", [], "STOP"),
       ],
-      runtime.coordinator,
+      runtime,
       providerRequests,
     );
 
@@ -936,7 +999,7 @@ describe("RunController automatic Tool Batch integration", () => {
         ),
         turn("self corrected", [], "STOP"),
       ],
-      runtime.coordinator,
+      runtime,
       requests,
     );
 
@@ -981,7 +1044,7 @@ describe("RunController automatic Tool Batch integration", () => {
         ),
         turn("must not run", [], "STOP"),
       ],
-      runtime.coordinator,
+      runtime,
     );
 
     const result = await controller.start(run.id);
@@ -1051,7 +1114,7 @@ describe("RunController automatic Tool Batch integration", () => {
       restarted,
       secondBus,
       [turn("accepted final", [], "STOP")],
-      secondRuntime.coordinator,
+      secondRuntime,
       observed,
       200,
     );
@@ -1156,7 +1219,7 @@ describe("RunController automatic Tool Batch integration", () => {
       restarted,
       secondBus,
       [turn("recovered final", [], "STOP")],
-      secondRuntime.coordinator,
+      secondRuntime,
       recoveredObserved,
       400,
     );

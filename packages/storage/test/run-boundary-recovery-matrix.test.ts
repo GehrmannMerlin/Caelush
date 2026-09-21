@@ -15,7 +15,8 @@ import {
   type StepId,
   type TimestampMs,
 } from "@caelush/protocol";
-import { RunController, RunRetryRegistry } from "@caelush/core";
+import { RunController, RunRetryRegistry, toContextObservationProjection } from "@caelush/core";
+import { createModelToolFeedbackProjector, createToolResultBatchNormalizer } from "@caelush/agent";
 import { EventBus } from "@caelush/events";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage, type CaelushStorage } from "../src/index.js";
@@ -98,38 +99,53 @@ function makeRun(overrides: Record<string, unknown> = {}) {
  */
 function recordingToolBatches(): {
   readonly batches: {
-    modelDefinitions(): readonly never[];
     execute(request: never): Promise<never>;
-    recover(request: never): Promise<never>;
+  };
+  readonly turn: {
+    readonly batches: { execute(request: never): Promise<never> };
+    readonly feedback: ReturnType<typeof createModelToolFeedbackProjector>;
+    readonly normalizer: ReturnType<typeof createToolResultBatchNormalizer>;
   };
   requests(): readonly { readonly observationPolicy?: unknown; readonly mode: unknown }[];
 } {
   const seen: { observationPolicy?: unknown; mode: unknown }[] = [];
   const completed = {
     kind: "COMPLETED",
-    results: [
+    items: [
       {
-        kind: "TOOL_RESULT",
-        externalCallId: "call_boundary",
-        toolName: "read_file",
-        // Deliberately far larger than any policy under test, so the projected model-facing text is a
-        // function of the observation policy and of nothing else.
-        content: "x".repeat(40_000),
-        isError: false,
+        kind: "OBSERVATION",
+        call: { externalCallId: "call_boundary", toolName: "read_file", args: {} },
+        invocationId: "tiv_0195f3a0-0000-7000-8000-000000000001",
+        finalStatus: "COMPLETED",
+        observation: {
+          id: "obs_0195f3a0-0000-7000-8000-000000000001",
+          runId: "run_0195f3a0-0000-7000-8000-000000000001",
+          stepId: "stp_0195f3a0-0000-7000-8000-000000000001",
+          kind: "TOOL",
+          toolInvocationId: "tiv_0195f3a0-0000-7000-8000-000000000001",
+          // Deliberately far larger than any policy under test, so the projected model-facing text is a
+          // function of the observation policy and of nothing else.
+          content: "x".repeat(40_000),
+          isError: false,
+          createdAt: 1,
+        },
       },
     ],
   };
+  const batches = {
+    execute: (request: never) => {
+      seen.push(request as never);
+      return Promise.resolve(completed as never);
+    },
+  };
   return {
-    batches: {
-      modelDefinitions: () => [],
-      execute: (request) => {
-        seen.push(request as never);
-        return Promise.resolve(completed as never);
-      },
-      recover: (request) => {
-        seen.push(request as never);
-        return Promise.resolve(completed as never);
-      },
+    batches,
+    turn: {
+      batches,
+      feedback: createModelToolFeedbackProjector({
+        projection: toContextObservationProjection(),
+      }),
+      normalizer: createToolResultBatchNormalizer(),
     },
     requests: () => seen,
   };
@@ -210,9 +226,7 @@ function controllerOver(
     clock: { now: input.now },
     eventIdFactory: { create: createEventId },
     verificationPlanner,
-    ...(input.toolBatches === undefined
-      ? {}
-      : { toolCoordinator: input.toolBatches.batches as never }),
+    ...(input.toolBatches === undefined ? {} : { toolTurn: input.toolBatches.turn as never }),
     ...(input.hostContextPolicy === undefined
       ? {}
       : { contextRuntime: { getContextPolicy: input.hostContextPolicy } as never }),

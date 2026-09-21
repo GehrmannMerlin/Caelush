@@ -132,7 +132,7 @@ describe("daemon production composition", () => {
       "exec_command",
       "write_stdin",
     ]);
-    expect(composition.toolCoordinator.modelDefinitions().map((tool) => tool.name)).toEqual(
+    expect(composition.toolTurn.modelDefinitions().map((tool) => tool.name)).toEqual(
       composition.toolRegistry.names(),
     );
     expect(composition.toolRegistry.modelGuidance().map((entry) => entry.toolName)).toEqual(

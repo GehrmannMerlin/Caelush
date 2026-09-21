@@ -24,11 +24,18 @@ import { openCaelushStorage } from "@caelush/storage";
 import {
   createReadOnlyFilesystemToolRegistrations,
   createToolExecutionDependencies,
-  ToolBatchCoordinator,
   ToolDispatcher,
   ToolRegistryBuilder,
   type ToolCommittedEventNotifier,
 } from "@caelush/tools";
+import {
+  createModelToolFeedbackProjector,
+  createToolBatchCoordinator,
+  createToolCallPreparer,
+  createToolResultBatchNormalizer,
+  UNBOUNDED_TOOL_BUDGET_ADMISSION,
+} from "@caelush/agent";
+import { toContextObservationProjection } from "@caelush/core";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -255,7 +262,21 @@ describe("real provider Tool Call round trip", () => {
       approvalStore: storage.approvals,
       approvalIdFactory: { create: createApprovalRequestId },
     });
-    const coordinator = new ToolBatchCoordinator(dispatcher);
+    // The canonical Tool turn pipeline: the dispatcher's own durable coordinator drives the 4D batch,
+    // and the projector and normalizer beside it are the production canonical ones.
+    const toolTurn = {
+      batches: createToolBatchCoordinator({
+        preparer: createToolCallPreparer(registry.agentRegistry()),
+        budget: UNBOUNDED_TOOL_BUDGET_ADMISSION,
+        durable: dispatcher.durableCoordinator(),
+        registry: registry.agentRegistry(),
+      }),
+      feedback: createModelToolFeedbackProjector({
+        projection: toContextObservationProjection(),
+      }),
+      normalizer: createToolResultBatchNormalizer(),
+      modelDefinitions: () => registry.modelDefinitions(),
+    };
     /**
      * The Run Layer's direct Agent execution dependencies.
      *
@@ -303,7 +324,7 @@ describe("real provider Tool Call round trip", () => {
           contextLimits: { maxInputTokens: 2_000 },
         }),
       },
-      toolCoordinator: coordinator,
+      toolTurn,
       clock: { now: () => createTimestampMs(Date.now()) },
       eventIdFactory: { create: createEventId },
       verificationPlanner,

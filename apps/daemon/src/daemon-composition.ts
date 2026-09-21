@@ -9,9 +9,11 @@ import {
   createRunAgentExecutionContext,
   createToolExecutionLedgerRawObservationResolver,
   toAIMessage,
+  toContextObservationProjection,
   type RunAgentExecutionContextFactory,
   type VerificationModelClient,
   type RunExecutionConfigResolver,
+  type ToolTurnPipeline,
 } from "@caelush/core";
 import { EventBus } from "@caelush/events";
 import {
@@ -86,7 +88,6 @@ import {
   createDurableInvocationGatePort,
   createDefaultBuiltinToolRegistrations,
   filterToolRegistryForEnvironment,
-  ToolBatchCoordinator,
   ToolRegistryBuilder,
   boundToolModelContent,
   type ToolCallingDebugEvent,
@@ -95,14 +96,17 @@ import {
 } from "@caelush/tools";
 import {
   createDurableToolExecutionCoordinator,
+  createModelToolFeedbackProjector,
   createToolAdmissionCoordinator,
+  createToolBatchCoordinator,
+  createToolCallPreparer,
   createToolFailureSettlement,
+  createToolResultBatchNormalizer,
   type DurableToolExecutionCoordinator,
 } from "@caelush/agent";
 import { createLegacyNumericArgumentNormalization } from "@caelush/coding-agent";
 import {
   createDefaultV1ToolExecutionSecurity,
-  createV1SecureToolDispatcher,
   createV1ToolApprovalRequestFactory,
   CaelushToolExecutionUpdateSanitizer,
   DISCARDING_TOOL_UPDATE_CONSUMER,
@@ -265,7 +269,19 @@ export interface DaemonComposition {
    */
   readonly verificationModelTurns: VerificationModelClient;
   readonly toolRegistry: ReturnType<ToolRegistryBuilder["build"]>;
-  readonly toolCoordinator: ToolBatchCoordinator;
+  /**
+   * The one canonical Tool turn pipeline this host composes.
+   *
+   * ```text
+   * ToolBatchCoordinator        the canonical batch scheduler
+   * ModelToolFeedbackProjector  the canonical model-facing exit
+   * ToolResultBatchNormalizer   the canonical batch integrity defense
+   * ```
+   *
+   * Phase 4D replaced the legacy batch coordinator construction with these three. They are one
+   * value because they are one pipeline, and exactly one of each exists per daemon.
+   */
+  readonly toolTurn: ToolTurnPipeline;
   readonly contextRuntime: ContextRuntimeCoordinator;
   readonly contextUsage: {
     getContextUsage(
@@ -503,37 +519,60 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
       boundFailureContent: (content) =>
         boundToolModelContent(content, toolExecutionDependencies.outputPolicy),
     });
-  const dispatcher = createV1SecureToolDispatcher({
-    registry: activeToolRegistry,
-    store: options.storage.toolExecution,
-    coordinator: toolDurableCoordinator,
-    notifier: options.eventBus,
-    clock,
-    invocationIdFactory: { create: createToolInvocationId },
-    observationIdFactory: { create: createObservationId },
-    eventIdFactory: { create: createEventId },
-    approvalStore: options.storage.approvals,
-    approvalIdFactory: { create: createApprovalRequestId },
-    budget: {
-      admit: (input) => options.storage.budget.admit(input),
-      admitBatch: (input) => options.storage.budget.admitBatch(input),
-      start: (input) => options.storage.budget.start(input),
-      settle: (input) => options.storage.budget.settle(input),
-    },
-    rawOutputStore: options.storage.contextArtifacts,
-    terminalOutputSanitizer: sanitizeTerminalOutput,
-    securityToolNames: activeToolRegistry.names(),
+  /**
+   * Phase 4D: the legacy `ToolDispatcher` is no longer composed here.
+   *
+   * ```text
+   * BEFORE 4D   ToolDispatcher → legacy ToolBatchCoordinator → RunController
+   * AFTER  4D   ToolCallPreparer + ToolBudgetAdmissionPort + DurableToolExecutionCoordinator
+   *                     → canonical ToolBatchCoordinator → RunController
+   * ```
+   *
+   * The dispatcher's only production consumer was the legacy batch coordinator. Phase 4D replaced that
+   * with the canonical batch, which drives the same `toolDurableCoordinator` the facade was built
+   * around, directly. A facade nothing production calls is dead weight rather than compatibility, so the
+   * composition root does not build one.
+   *
+   * `@caelush/tools` keeps the Dispatcher class for its legacy direct API and for its own tests until
+   * Phase 4F decides that surface's retirement. Nothing in this composition root depends on it.
+   */
+  /**
+   * The canonical Tool turn pipeline.
+   *
+   * ```text
+   * the canonical Preparer      resolve, normalize and validate a model Tool call      4A
+   * ToolBudgetAdmissionPort     whole-segment preflight over the RAW requested calls    4C
+   * DurableToolExecutionCoordinator  the durable invocation lifecycle                 4C
+   *        ↓
+   * ToolBatchCoordinator        the scheduler and the rejection/uncertainty barrier    4D
+   * ```
+   *
+   * The legacy batch coordinator is deliberately **not** constructed here, and the canonical batch never
+   * reaches the Dispatcher: production scheduling, pre-invocation rejection and the uncertain barrier are
+   * the Agent package's. The Dispatcher remains composed for the legacy direct API and for the Coding
+   * builtin registrations, not as a production batch authority.
+   */
+  const toolPreparer = createToolCallPreparer(activeToolRegistry.agentRegistry(), {
     normalization: createLegacyNumericArgumentNormalization(),
-    // The transient update path: sanitized through the Security package's implementation, and
-    // delivered nowhere until a host has an ephemeral transport. Phase 4E wires actual Coding builtin
-    // progress; product transport belongs to the UI layer.
-    updateSanitizer: new CaelushToolExecutionUpdateSanitizer(),
-    transientUpdates: DISCARDING_TOOL_UPDATE_CONSUMER,
-    ...(options.toolCallingDebugWriter === undefined
-      ? {}
-      : { debug: { emit: options.toolCallingDebugWriter } }),
   });
-  const toolCoordinator = new ToolBatchCoordinator(dispatcher);
+  const toolBatch = createToolBatchCoordinator({
+    preparer: toolPreparer,
+    budget: toolBudgetAdmission,
+    durable: toolDurableCoordinator,
+    registry: activeToolRegistry.agentRegistry(),
+  });
+  const toolTurn = {
+    batches: toolBatch,
+    // The one place the Agent package's model feedback semantics and the Context package's token
+    // projection algorithm are joined. Architecture V2 forbids `agent -> context`, so the adapter lives
+    // at the composition root that legitimately knows both.
+    feedback: createModelToolFeedbackProjector({
+      projection: toContextObservationProjection(),
+    }),
+    normalizer: createToolResultBatchNormalizer(),
+    // The same registry the batch resolves and executes against: one catalog, never two.
+    modelDefinitions: () => activeToolRegistry.modelDefinitions(),
+  } satisfies ToolTurnPipeline;
   /**
    * Where a Tool result's raw output is resolved from, for the legacy Context adapter.
    *
@@ -571,7 +610,7 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
         config: {
           baseSystemPrompt: config.baseSystemPrompt,
           contextLimits: config.contextLimits,
-          tools: toolCoordinator.modelDefinitions(),
+          tools: activeToolRegistry.modelDefinitions(),
           ...(config.modelSettings === undefined ? {} : { modelSettings: config.modelSettings }),
           // The synthetic session prefix still arrives in the durable legacy encoding, so it is
           // projected onto the frozen AI contract here — at the composition root, which is the only
@@ -621,7 +660,7 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     completionStore: options.storage.execution,
     events: options.eventBus,
     configResolver: executionConfigResolver,
-    toolCoordinator,
+    toolTurn,
     clock,
     eventIdFactory: { create: createEventId },
     approvals: options.storage.approvals,
@@ -716,7 +755,7 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
     modelTurnExecutor,
     verificationModelTurns,
     toolRegistry: activeToolRegistry,
-    toolCoordinator,
+    toolTurn,
     contextRuntime,
     contextUsage: {
       getContextUsage: async (runId) => {

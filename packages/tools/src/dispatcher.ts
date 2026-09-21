@@ -457,6 +457,25 @@ export class ToolDispatcher {
     return this.canonicalPreparer.prepare(request);
   }
 
+  /**
+   * The canonical durable invocation lifecycle this facade already drives.
+   *
+   * The dispatcher constructs one `DurableToolExecutionCoordinator` over its own store, gate,
+   * admission metadata and approval store; the legacy `dispatch` facade is one caller of it and the
+   * canonical Tool batch is another.
+   *
+   * This accessor exists so a **test** can compose the canonical batch over the *same* coordinator
+   * rather than building a second one over the same SQLite store. Two coordinators over one store would
+   * each hold their own in-process busy guard, so the concurrency guard would silently stop covering
+   * both callers — the durable idempotency would still hold, but the fast, in-process guard would not.
+   *
+   * It adds no behaviour and grants no authority the dispatcher did not already have: the returned
+   * object is the same instance the facade calls.
+   */
+  durableCoordinator(): DurableToolExecutionCoordinator {
+    return this.coordinator;
+  }
+
   /** The canonical Tool that resolves a name, for a caller projecting canonical outcomes. */
   resolveAgentTool(
     name: import("@caelush/protocol").ToolName,
