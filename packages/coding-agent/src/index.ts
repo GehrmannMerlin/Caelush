@@ -13,29 +13,160 @@
  * depend back on it. Those boundaries are enforced by
  * `pnpm check:architecture`.
  *
- * Phase 1A creates the package identity and the build/dependency boundary. Phase 4A lands the first
- * real Coding responsibility here: the Coding Tool overlay (`CodingToolDefinition`,
- * `CodingToolCatalog`) that sits on top of the general Agent Tool framework. The nine built-in
- * Coding Tools, their Operations interfaces and their Metadata/effects/presentation implementations
- * still migrate in later Tool System rounds.
+ * Phase 4A landed the Coding Tool overlay contracts here. **Phase 4E made this package the Coding Tool
+ * product authority**:
+ *
+ * ```text
+ * the nine Coding builtins              read_file · list_directory · find_files · search_text
+ *                                       apply_patch · exec_command · write_stdin
+ *                                       git_status · git_diff
+ * the default order and composition     DEFAULT_CODING_TOOL_ORDER · createDefaultCodingTools
+ * the narrow Operations ports           ReadFileOperations … GitOperations
+ * the Runtime Operations adapters       the only code allowed to hold a RuntimeResolver
+ * Coding security metadata and facts    risk levels, capabilities, facts projectors
+ * the Coding approval identity          computeCodingToolApprovalKey
+ * the Coding effect vocabulary          effects, effect/state/event projectors
+ * the Coding output policy              Coding bounds and the canonical content bounder
+ * prompt snippets + the Context provider  usage guidance delivered through Context, not description
+ * ```
+ *
+ * `@caelush/tools` keeps compatibility facades that delegate here. The dependency direction is one-way:
+ *
+ * ```text
+ * @caelush/tools  ──delegates──▶  @caelush/coding-agent  ──▶  @caelush/agent  ──▶  @caelush/ai
+ * ```
  */
+
 export {
+  APPLY_PATCH_PROMPT_SNIPPET,
+  applyToolEffectsToAgentState,
+  assertToolSecurityFactsProjector,
+  boundToolModelContent,
+  CODING_TOOL_CATALOG_ERROR_REASONS,
+  CODING_TOOL_EFFECTS_PAYLOAD_KIND,
+  CODING_TOOL_PROMPT_SNIPPETS,
+  codingToolEffectsPayload,
   CodingToolCatalogBuilder,
   CodingToolCatalogError,
-  CODING_TOOL_CATALOG_ERROR_REASONS,
+  computeCodingToolApprovalKey,
+  createApplyPatchTool,
   createCodingToolCatalog,
+  createDefaultCodingTools,
+  createExecCommandTool,
+  createFindFilesTool,
+  createGitDiffTool,
+  createGitStatusTool,
   createLegacyNumericArgumentNormalization,
+  createListDirectoryTool,
+  createReadFileTool,
+  createRuntimeGitOperations,
+  createRuntimePatchOperations,
+  createRuntimeProcessOperations,
+  createRuntimeReadOnlyOperations,
+  createSearchTextTool,
+  createToolPromptContextProvider,
+  createWriteStdinTool,
+  DEFAULT_CODING_TOOL_ORDER,
   DEFAULT_MAX_CODING_TOOLS,
+  DEFAULT_TOOL_OUTPUT_POLICY,
+  defineCodingTool,
+  effectsChangeAgentState,
+  emptyToolSecurityFacts,
+  errorResult,
+  EXEC_COMMAND_PROMPT_SNIPPET,
+  EXEC_OUTPUT_SCHEMA,
+  FIND_FILES_DEFAULT_LIMIT,
+  FIND_FILES_MAX_LIMIT,
+  FIND_FILES_PROMPT_SNIPPET,
+  GIT_DIFF_PROMPT_SNIPPET,
+  GIT_STATUS_PROMPT_SNIPPET,
+  GIT_TOOL_NAMES,
+  humanizeToolName,
+  LIST_DIRECTORY_DEFAULT_LIMIT,
+  LIST_DIRECTORY_MAX_LIMIT,
+  LIST_DIRECTORY_PROMPT_SNIPPET,
+  MAX_CHANGED_FILES,
+  MAX_FIND_PATTERN_BYTES,
+  MAX_PROMPT_SNIPPET_BYTES,
+  MAX_SEARCH_GLOB_BYTES,
+  MAX_SEARCH_MATCH_CHARS,
+  MAX_TOOL_PROMPT_TOTAL_BYTES,
   normalizeSchemaDeclaredNumericStrings,
   normalizeToolArgumentsForCompatibility,
+  OPERATIONS_INTERFACE_NAMES,
+  positiveBoundedInteger,
+  projectApplyPatchSecurityFacts,
+  projectExecCommandSecurityFacts,
+  projectExecEffects,
+  projectFindFilesSecurityFacts,
+  projectGitDiffSecurityFacts,
+  projectGitStatusSecurityFacts,
+  projectListDirectorySecurityFacts,
+  projectPatchEffects,
+  projectReadFileEffect,
+  projectReadFileSecurityFacts,
+  projectSearchTextSecurityFacts,
+  projectStdinEffects,
+  projectWriteStdinSecurityFacts,
+  promptSnippetFor,
+  READ_FILE_DEFAULT_LIMIT,
+  READ_FILE_MAX_BYTES,
+  READ_FILE_MAX_LIMIT,
+  READ_FILE_PROMPT_SNIPPET,
+  READ_ONLY_OUTPUT_SCHEMA,
+  resolveRuntimeWorkspace,
+  runtimeErrorToResult,
+  safeRuntimeMessage,
+  SAFE_SHELL_COMMAND_LABEL,
+  SEARCH_TEXT_DEFAULT_LIMIT,
+  SEARCH_TEXT_MAX_LIMIT,
+  SEARCH_TEXT_PROMPT_SNIPPET,
+  successResult,
+  toCanonicalToolResultLimits,
+  toolEffectsToEvents,
+  TOOL_OUTPUT_TRUNCATION_MARKER,
+  ToolSecurityFactsProjectionError,
+  withoutGitTools,
+  WRITE_STDIN_PROMPT_SNIPPET,
 } from "./tools/index.js";
 export type {
+  CodingToolApprovalIdentityInput,
   CodingToolCatalog,
   CodingToolCatalogBuilderOptions,
   CodingToolCatalogErrorReason,
   CodingToolDefinition,
+  CodingToolDefinitionInput,
+  CodingToolEffectEventDraft,
   CodingToolEffectProjector,
+  CodingToolOutputPolicy,
   CodingToolRegistration,
+  CodingToolRuntimeRequirements,
   CodingToolSecurityFactsProjector,
   CodingToolSecurityMetadata,
+  DefaultCodingToolOperations,
+  ExecOperations,
+  FindFilesOperations,
+  GitOperations,
+  ListDirectoryOperations,
+  PatchOperations,
+  ProcessOperations,
+  ReadFileOperations,
+  RuntimeOperationsAll,
+  RuntimeOperationsProcess,
+  RuntimeOperationsReadOnly,
+  RuntimeReadOnlyOperations,
+  SearchTextOperations,
+  ToolEffect,
+  ToolEffectEventContext,
+  ToolEffectProjector,
+  ToolEffectProjectorInput,
+  ToolPromptContextItem,
+  ToolPromptContextProvider,
+  ToolPromptContextProviderInput,
+  ToolResourceAccess,
+  ToolResourceOperation,
+  ToolSecretScanInput,
+  ToolSecurityFacts,
+  ToolSecurityFactsProjector,
+  ToolShellCommandFact,
 } from "./tools/index.js";
