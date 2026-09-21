@@ -209,8 +209,44 @@ decomposition above.
     docs/architecture/v2/PHASE_4D_BATCH_FEEDBACK_TOOLTURN_REPORT.md
     tests/architecture/phase-4d-tool-batch-feedback-boundaries.test.ts
 
-4E  not started
+4E  BLOCKED — stopped at its own Milestone A reconciliation gate; no code was changed. Evidence:
+    docs/architecture/v2/PHASE_4E_CODING_TOOLS_OPERATIONS_ACCEPTANCE_MAP.md
+    docs/architecture/v2/PHASE_4E_CODING_TOOLS_OPERATIONS_REPORT.md
+
 4F  not started
+```
+
+### 4.4 The 4E blocked boundary, stated once
+
+```text
+Blocking condition   two frozen Operations contracts cannot express arguments their Tools must honour
+
+  GitOperations.status   §169 carries { environment, signal } only, while git_status passes a real Git
+                         pathspec to `git status -- <path>` and exposes a `limit` up to 1000. The
+                         freeze demonstrably knows how to carry per-call arguments — GitOperations.diff
+                         takes `args` and is explicitly allowed to carry scope and path — so status is
+                         a deliberate omission rather than an oversight.
+
+  SearchTextOperations   §165 carries { environment, pattern, path?, signal } only, while search_text
+                         exposes `include` (ripgrep --glob, a path-level pre-filter applied before
+                         truncation) and `limit`. Tool-side post-filtering cannot be equivalent,
+                         because the port's own `limit` is the ceiling the Tool can request.
+
+Forbidden treatments  widening either interface · silently dropping include/limit/path ·
+                      simulating a Git pathspec with string matching · folding include into pattern ·
+                      hidden global state · letting builtin code import RuntimeResolver
+
+Also forbidden        migrating part of the nine and returning later; the round's own rule is to decide
+                      implementable-or-BLOCKED before moving any Tool
+
+Minimum decision      §165 gains `include?` and `limit`; §169.status gains `args: JsonObject`, symmetric
+                      with the diff arm that already has one — or the freeze explicitly states the
+                      reduced Tool behaviour as a deliberate product decision
+
+Not a 4F concern      this is a missing statement in the freeze, not compatibility retirement
+
+Unchanged by 4E       the whole 4D production Tool chain, all nine builtin owners, packages/tools,
+                      protocol.ToolDefinition, and the architecture baseline (27 / 0 new / 0 stale)
 ```
 
 ### 4.3 The 4D transition boundary, stated once
