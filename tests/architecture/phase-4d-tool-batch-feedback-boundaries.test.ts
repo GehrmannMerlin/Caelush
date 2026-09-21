@@ -712,8 +712,28 @@ describe("Phase 4D frozen contracts and phase boundaries", () => {
     expect(executable(`${BATCH}batch-coordinator.ts`)).not.toContain("commit(");
   });
 
-  it("leaves the nine builtins and the Operations migration where 4C left them", () => {
-    // 27. The nine Coding builtins are still legacy registrations, reached through the 4A-4C adapters.
+  it("leaves the nine builtins and the Operations migration where Phase 4E put them", () => {
+    /**
+     * Phase 4D asserted assertions 27 and 28 against the *4C* state:
+     *
+     * ```text
+     * 27  the nine builtins are still legacy registrations
+     * 28  the Operations migration has not started; no Operations interface exists anywhere
+     * ```
+     *
+     * Phase 4E is the round that was always going to invalidate both — it owns "all nine Coding builtins"
+     * and "Operations ports" by its own frozen scope statement. The correction is to the guards'
+     * *subject*, not to their strength: the same two properties are asserted against the state 4E is
+     * required to reach.
+     *
+     * ```text
+     * the nine builtins are owned by @caelush/coding-agent
+     * the eight Operations interfaces exist, in @caelush/coding-agent
+     * ```
+     *
+     * The separate Phase 4E guard (`phase-4e-coding-tools-operations-boundaries.test.ts`) carries the
+     * structural detail: exact names, order, schemas and the Operations shapes.
+     */
     const builtinNames = [
       "read_file",
       "list_directory",
@@ -725,13 +745,16 @@ describe("Phase 4D frozen contracts and phase boundaries", () => {
       "git_status",
       "git_diff",
     ];
-    const defaultTools = executable(`${LEGACY_TOOLS}builtins/default-tools.ts`);
+    // 27. The nine builtins are now Coding-owned: their authoritative factories live in the Coding layer.
+    const codingBuiltins = "packages/coding-agent/src/tools/builtins/";
+    const codingDefaultTools = executable(`${codingBuiltins}default-tools.ts`);
     for (const name of builtinNames) {
-      expect(defaultTools, `${name} must still be registered by the legacy package`).toContain(
+      expect(codingDefaultTools, `${name} must be composed by the Coding default set`).toContain(
         name,
       );
     }
-    // No Coding builtin has crept into the Agent layer.
+
+    // No Coding builtin implementation has crept into the general Agent layer.
     for (const file of filesUnder(AGENT_TOOLS)) {
       const source = executableSources().get(file) ?? "";
       for (const name of builtinNames) {
@@ -739,8 +762,8 @@ describe("Phase 4D frozen contracts and phase boundaries", () => {
       }
     }
 
-    // 28. The Operations migration has not started: no Operations interface exists anywhere.
-    for (const forbidden of [
+    // 28. The Operations migration happened in Phase 4E: all eight interfaces exist, once, in Coding.
+    for (const name of [
       "ReadFileOperations",
       "ListDirectoryOperations",
       "FindFilesOperations",
@@ -751,9 +774,14 @@ describe("Phase 4D frozen contracts and phase boundaries", () => {
       "GitOperations",
     ]) {
       const carriers = productionSources().filter((file) =>
-        (executableSources().get(file) ?? "").includes(forbidden),
+        new RegExp(`export interface ${name}\\b`).test(executableSources().get(file) ?? ""),
       );
-      expect(carriers, `${forbidden} belongs to Phase 4E`).toEqual([]);
+      expect(carriers, `${name} must be declared once, in the Coding layer`).toEqual([
+        `packages/coding-agent/src/tools/operations/${name
+          .replace(/([A-Z])/g, "-$1")
+          .toLowerCase()
+          .replace(/^-/, "")}.ts`,
+      ]);
     }
   });
 

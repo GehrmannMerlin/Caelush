@@ -335,6 +335,11 @@ describe("Phase 4B Agent Tool execution boundaries", () => {
     // The update type is a Tool-execution concern: it is reachable from the Agent execution and type
     // layers, the coding-free Security sanitizer that implements the port, and type barrels. It is not
     // reachable from a durable store, a coordinator or a host route.
+    //
+    // Phase 4E added the one further legitimate consumer: a Coding builtin that *publishes* transient
+    // output. `exec_command` and `write_stdin` project the Operations `onOutput` callback onto the
+    // canonical update sink, which is exactly the integration Phase 4B's infrastructure was built for.
+    // The allowlist is a directory, not a file: a Tool that publishes progress is a consumer by design.
     const consumers = productionSources().filter((file) =>
       /\bToolExecutionUpdate\b/.test(executableSources().get(file) ?? ""),
     );
@@ -342,6 +347,7 @@ describe("Phase 4B Agent Tool execution boundaries", () => {
       expect(
         file.startsWith(EXECUTION) ||
           file.startsWith(`${AGENT_TOOLS}types/`) ||
+          file.startsWith("packages/coding-agent/src/tools/builtins/") ||
           file === "packages/security/src/tool-update-sanitizer.ts" ||
           file.endsWith("/index.ts"),
         `${file} must not reach a transient update type`,
