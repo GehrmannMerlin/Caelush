@@ -41,18 +41,30 @@ export type { JsonObject, JsonPrimitive, JsonValue } from "./json/json-value.js"
 
 /* Messages, tools and usage. */
 export {
+  assertAIConversationMessage,
+  assertAIContent,
   assertAIAssistantContent,
   assertAIMessage,
   assertAIMessages,
+  assertAIProviderOpaqueState,
+  isAIContent,
   isAIAssistantContent,
+  providerStateMatches,
+  AI_PROVIDER_OPAQUE_STATE_KEYS,
+  AI_PROVIDER_OPAQUE_STATE_VERSION,
 } from "./messages/index.js";
 export type {
   AIAssistantContent,
   AIAssistantMessage,
   AIAssistantTextContent,
   AIAssistantToolCallContent,
+  AIConversationMessage,
+  AIContent,
   AIMessage,
+  AIProviderOpaqueState,
   AISystemMessage,
+  AITextContent,
+  AIToolCallContent,
   AIToolResultMessage,
   AIUserMessage,
 } from "./messages/index.js";
