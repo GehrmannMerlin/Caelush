@@ -52,6 +52,51 @@ export type { SessionListOptions, SessionRepository } from "./repositories/sessi
 export type { RunListOptions, RunRepository } from "./repositories/run-repository.js";
 export type { StepRepository } from "./repositories/step-repository.js";
 export type { RunStateRepository } from "./repositories/run-state-repository.js";
+/*
+ * The Message System V2 storage substrate.
+ *
+ * ```text
+ * SqliteAgentMessageRecordStore          the canonical V2 record store
+ * appendAgentMessageRecordsInTransaction the transaction-neutral append Phase 5C composes
+ * SqliteConversationRepository           the pre-V2 production compatibility reader/writer
+ * ```
+ *
+ * The two are deliberately not both canonical:
+ *
+ * ```text
+ * SqliteAgentMessageRecordStore   target V2 storage authority
+ * SqliteConversationRepository    temporary production compatibility, retiring with the
+ *                                 legacy encoding in Phase 5C / 5F
+ * ```
+ *
+ * The legacy compatibility modules live under `messages/legacy/` and are the only place in this package
+ * that reads the pre-V2 `LLMMessage` encoding. **Phase 5F exit.**
+ */
+export { SqliteAgentMessageRecordStore } from "./messages/sqlite-agent-message-record-store.js";
+export { appendAgentMessageRecordsInTransaction } from "./messages/sqlite-agent-message-record-store.js";
+export {
+  AmbiguousObservationError,
+  backfillLegacyAgentMessages,
+} from "./messages/legacy/backfill.js";
+export type { LegacyBackfillOptions, LegacyBackfillReport } from "./messages/legacy/backfill.js";
+export {
+  LegacyMessageMigrationError,
+  LegacyMessageParseError,
+  legacyRowToAgentMessageRecord,
+  legacyRowWithParser,
+} from "./messages/legacy/legacy-llm-message-codec.js";
+export type {
+  LegacyMessageContext,
+  LegacyMessageMigrationFailureReason,
+  LegacyParsedMessage,
+} from "./messages/legacy/legacy-llm-message-codec.js";
+export { readRowAsRecord, readRowsForRun } from "./messages/legacy/dual-reader.js";
+export type {
+  DualReadOutcome,
+  LegacyAndV2MessageRow,
+  LegacyMessageParser,
+} from "./messages/legacy/dual-reader.js";
+
 export { SqliteConversationRepository } from "./repositories/conversation-repository.js";
 export type {
   ConversationAppendInput,
