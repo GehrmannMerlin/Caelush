@@ -1,5 +1,21 @@
 # Phase 4E — Operations Freeze Errata Resolution & Product Layer Progress
 
+> **Document type: preserved historical record of the IN PROGRESS state. Not the round's final report.**
+>
+> This is the progress record written at `1b15697f`, when the target product layer had landed but
+> production had not cut over to it and the round was still `IN PROGRESS`. It is kept because its §4 —
+> "what did NOT land, and therefore why the round is not complete" — is the checklist the continuation
+> worked through, and a reader can compare that list against what the final report says was done.
+>
+> ```text
+> final report      PHASE_4E_CODING_TOOLS_OPERATIONS_REPORT.md
+> acceptance map    PHASE_4E_CODING_TOOLS_OPERATIONS_ACCEPTANCE_MAP.md
+> blocker evidence  PHASE_4E_MILESTONE_A_BLOCKED_EVIDENCE.md
+> current status    Phase 4E COMPLETE
+> ```
+>
+> Nothing below has been rewritten.
+
 > Round: **Phase 4E** — same round, resumed after the Milestone A blocker. **Not** a new round.
 > Status at the end of this session: **IN PROGRESS — NOT COMPLETE.**
 >
