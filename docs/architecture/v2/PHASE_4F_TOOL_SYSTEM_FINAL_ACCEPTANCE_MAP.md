@@ -312,10 +312,19 @@ replaced by direct assertions on the expected values. No guard was weakened into
 | Clean checkout               | PASS — fresh install, build, typecheck, lint, architecture, tests |
 | Targeted Phase 4 suites      | PASS — 47 files · 635 tests                                       |
 
-The Prettier gate is recorded honestly in the final report §9.1: `pnpm format:check` fails in this
-working copy because it carries CRLF endings while `.prettierrc.json` sets no `endOfLine`. A detached
-worktree of the Phase 4E tip fails it identically, so it is pre-existing and environmental; every file
-this round touched is clean under the same override.
+Two environment findings are recorded in the final report §9.1 rather than claimed as bare passes:
+
+```text
+pnpm format:check fails in this working copy because it carries CRLF line endings while
+.prettierrc.json sets no endOfLine. A detached worktree of the Phase 4E tip fails it identically, so it
+is pre-existing; every file this round touched is clean under the same override.
+
+pnpm test is flaky under this host's default 16-way file parallelism: a small, different set of
+real-daemon and real-subprocess tests exceeds its 5 s timeout on each parallel run, and every one of
+them passes in isolation. Run serially (pnpm exec vitest run --no-file-parallelism) the suite is
+deterministic: 443 files · 2985 passed · 5 skipped · 0 failed. That serial run is the measurement of
+record.
+```
 
 ### E.1 Baseline
 

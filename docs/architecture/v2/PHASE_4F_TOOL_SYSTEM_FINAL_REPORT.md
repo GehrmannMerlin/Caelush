@@ -385,7 +385,9 @@ git diff --check            PASS
 prettier                    PASS   every changed file
 ```
 
-### 9.1 The format-check finding
+### 9.1 Two environment findings, both measured and both pre-existing
+
+**Prettier and line endings.**
 
 ```text
 pnpm format:check fails in this checkout, and it failed at the Phase 4E tip too.
@@ -403,8 +405,42 @@ with --end-of-line crlf
 
 The cause is the environment: this working copy carries CRLF line endings and no `.gitattributes`
 normalizes them, while `.prettierrc.json` does not set `endOfLine`. Nothing in this round changed that,
-and every file this round touched is Prettier-clean under the checkout's own line endings. It is
-recorded as a pre-existing, environment-level condition rather than claimed as a pass.
+and every file this round touched is Prettier-clean under the checkout's own line endings.
+
+**The suite is flaky under this host's default worker parallelism.**
+
+This host reports 16 logical processors, and Vitest's default file parallelism runs that many test
+files at once. Under that load a small, _different_ set of time-sensitive tests fails on each run —
+real-daemon E2E tests and real-subprocess tests whose bodies exceed the 5 s default timeout while 16
+workers compete for processes and disk:
+
+```text
+run 1   1 failure   apps/cli/test/phase-12d-e2e.test.tsx
+run 2   0 failures
+run 3   0 failures
+run 4   10 failures  daemon-anthropic-dialect-e2e · argv-exec · pipe-process-adapter ·
+                     daemon-provider-security · …
+run 5   3 failures   daemon-provider-security · pipe-process-adapter · argv-exec
+run 6   1 failure    daemon-anthropic-dialect-e2e
+```
+
+Every individual failure was re-run in isolation and passes in ~300 ms to ~6 s; the affected suites
+include ones this round never touched (`apps/web`, `packages/ai`, `packages/llm`). `pnpm exec vitest run
+packages/runtime/test/argv-exec.test.ts` completes in under a second on its own and takes 7.5 s inside
+the parallel run — the signature of contention, not of a regression.
+
+Run serially, the whole suite is deterministic and clean:
+
+```text
+pnpm exec vitest run --no-file-parallelism
+  Test Files  443 passed (443)
+  Tests       2985 passed | 5 skipped (2990)
+  Duration    416s
+```
+
+That serial run is the measurement this report relies on. It is recorded here rather than presented as
+a bare pass, because a gate whose result depends on how many workers happen to be running is a gate
+that has to say so.
 
 ### 9.2 Architecture baseline
 
