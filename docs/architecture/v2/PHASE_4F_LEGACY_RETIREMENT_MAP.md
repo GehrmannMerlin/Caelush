@@ -11,8 +11,21 @@
 4C  COMPLETE
 4D  COMPLETE
 4E  COMPLETE
-4F  ← this round
+4F  COMPLETE          ← this round
 ```
+
+> **Historical document — Milestone A of Phase 4F.**
+>
+> This file was written **before** anything was deleted, from a source scan at the Phase 4E tip
+> `7d0700ae2849378324398770df533fae45f39b3e`. It is the plan the round executed against, kept as
+> evidence of what the inventory found and how each surface was classified.
+>
+> Every surface it maps was subsequently retired. Where the executed round departed from the plan, the
+> departure is recorded in §9 of this file rather than edited into the earlier sections, so a reader can
+> still see what was known before the work and what was learned during it.
+>
+> **Outcome:** [PHASE_4F_TOOL_SYSTEM_FINAL_REPORT.md](PHASE_4F_TOOL_SYSTEM_FINAL_REPORT.md) and
+> [PHASE_4F_TOOL_SYSTEM_FINAL_ACCEPTANCE_MAP.md](PHASE_4F_TOOL_SYSTEM_FINAL_ACCEPTANCE_MAP.md).
 
 > This document is **Milestone A** of Phase 4F. It was written by scanning the real source _before_
 > anything was deleted, and it is the map every later milestone in this round executes against.

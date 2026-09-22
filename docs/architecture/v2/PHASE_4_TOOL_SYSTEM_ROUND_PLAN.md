@@ -187,6 +187,27 @@ skip.
 
 ---
 
+```text
+4A  COMPLETE
+4B  COMPLETE
+4C  COMPLETE
+4D  COMPLETE
+4E  COMPLETE
+4F  COMPLETE
+
+PHASE 4 COMPLETE
+```
+
+> Phase 4 is closed. The migration is complete: the legacy `@caelush/tools` package has been removed,
+> `protocol.ToolDefinition` has been retired, and production depends only on the canonical Tool System V2
+> authorities `4A`–`4E` established. Evidence:
+> [PHASE_4F_TOOL_SYSTEM_FINAL_ACCEPTANCE_MAP.md](PHASE_4F_TOOL_SYSTEM_FINAL_ACCEPTANCE_MAP.md) and
+> [PHASE_4F_TOOL_SYSTEM_FINAL_REPORT.md](PHASE_4F_TOOL_SYSTEM_FINAL_REPORT.md).
+>
+> No Phase 5 work has started.
+
+---
+
 ## 4. Round completion references
 
 A completed round links its own evidence here. Recording a completion does not change the round
@@ -209,17 +230,22 @@ decomposition above.
     docs/architecture/v2/PHASE_4D_BATCH_FEEDBACK_TOOLTURN_REPORT.md
     tests/architecture/phase-4d-tool-batch-feedback-boundaries.test.ts
 
-4E  IN PROGRESS — Milestone A detected two frozen-contract defects and the round correctly stopped;
+4E  COMPLETE — Milestone A detected two frozen-contract defects and the round correctly stopped;
     the architecture owner accepted a minimal scoped errata and the same Phase 4E resumed.
     Blocker evidence:      docs/architecture/v2/PHASE_4E_CODING_TOOLS_OPERATIONS_ACCEPTANCE_MAP.md
                            docs/architecture/v2/PHASE_4E_CODING_TOOLS_OPERATIONS_REPORT.md
     Blocker resolution:    docs/architecture/v2/PHASE_4E_OPERATIONS_INTERFACE_FREEZE_ERRATA.md
                            (supersedes Interface Freeze §165 and the §169 status arm only)
     Progress record:       docs/architecture/v2/PHASE_4E_CODING_TOOLS_OPERATIONS_PROGRESS.md
-                           (errata resolved and the Coding product layer landed; the migration and
-                            the round verification are not complete)
+    Completion:            docs/architecture/v2/PHASE_4E_CODING_TOOLS_OPERATIONS_REPORT.md
+    tests/architecture/phase-4e-operations-freeze-errata.test.ts
+    tests/architecture/phase-4e-coding-tools-operations-boundaries.test.ts
 
-4F  not started
+4F  COMPLETE
+    Milestone A  docs/architecture/v2/PHASE_4F_LEGACY_RETIREMENT_MAP.md
+    Milestone F  tests/architecture/phase-4f-tool-system-final-boundaries.test.ts
+    Milestone H  docs/architecture/v2/PHASE_4F_TOOL_SYSTEM_FINAL_ACCEPTANCE_MAP.md
+                 docs/architecture/v2/PHASE_4F_TOOL_SYSTEM_FINAL_REPORT.md
 ```
 
 ### 4.4 The 4E blocked boundary, stated once
