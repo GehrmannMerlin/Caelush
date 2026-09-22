@@ -247,6 +247,71 @@ Summary of the two independent missing facts:
 Neither is a migration bug. Both are the frozen contract requiring a fact the durable record never
 held, which is exactly the contradiction the round's Gate 3 was written to detect.
 
+### 3.6 Resolution — the round's outcome for this gate
+
+```text
+INITIAL      the frozen ToolResult required an ObservationId and a policy snapshot
+BLOCKED      existing durable history and current Tool System semantics disproved the assumption
+ERRATA       explicit observation provenance + explicit policy provenance
+RESOLVED     all four Tool Result states are representable
+IMPLEMENTED  backfill and Storage use the corrected contract
+```
+
+The blocker was **real, source-verified and correctly declared**. It was resolved not by approximating
+the missing facts but by correcting the frozen contract through a scoped Message Interface Freeze
+Errata. The blocker evidence is preserved unrewritten in
+[PHASE_5B_MESSAGE_STORAGE_GATE3_BLOCKED_EVIDENCE.md](PHASE_5B_MESSAGE_STORAGE_GATE3_BLOCKED_EVIDENCE.md),
+because a resolved blocker is still part of the round's record.
+
+**What changed:**
+
+```text
+ToolResultObservationRef       OBSERVATION { observationId } | NO_OBSERVATION
+ToolFeedbackProjectionPolicy   SNAPSHOT { snapshot } | LEGACY_UNKNOWN
+AgentMessageSource.TOOL        drops the duplicated observationId
+AgentToolResultMessage         observation replaces observationId
+AgentMessageDraft              gains a required `data` field (errata §11A)
+```
+
+The single observation authority matters: `source` now answers only _who produced this message_, while
+`message.observation` answers _does execution evidence exist_. While both carried an `ObservationId` the
+two could disagree with nothing to arbitrate; now the identity appears once.
+
+**The four Tool Result states:**
+
+```text
+A  new executed               OBSERVATION    + SNAPSHOT
+B  new rejected / skipped     NO_OBSERVATION + SNAPSHOT
+C  legacy, observation found  OBSERVATION    + LEGACY_UNKNOWN
+D  legacy, none exists        NO_OBSERVATION + LEGACY_UNKNOWN
+```
+
+State B is why the errata was necessary for _new_ messages rather than only historical ones:
+`ToolBatchItemOutcome` is `OBSERVATION | REJECTED | SKIPPED`, the `ModelToolFeedbackProjector` turns all
+three into a model-visible Tool Result, and the Run Layer's own frozen `AgentToolResult` has no
+observation field at all.
+
+**No fabrication:**
+
+```text
+no synthetic ObservationId           an id still means exactly one agent_observations row exists
+no synthetic ToolObservation         ToolObservation remains real execution truth only
+no default historical policy         LEGACY_UNKNOWN is stated instead
+no current-policy substitution       the surviving checkpoint describes a different boundary
+no guessed model provenance          assistant rows stay LEGACY_MODEL_TURN
+no re-projection of legacy content   projectedContent is copied byte for byte
+no downgrade of ambiguity            >1 possible observation fails the row; it never becomes NONE
+```
+
+### 3.7 Gate summary
+
+```text
+gate 1  RESOLVED   additive-column strategy; Stage A activation stays with Phase 5C
+gate 2  RESOLVED   v2_data_json beside data_json; one authority per fact
+gate 3  RESOLVED   by scoped errata; all four Tool Result states representable
+gate 4  RESOLVED   injected conversation run metadata reader
+```
+
 ---
 
 ## 4. Gate 4 — `loadSnapshot()` Run metadata
@@ -473,6 +538,10 @@ verification  build, typecheck, lint, architecture READY, 5A and 5B suites, full
 
 ```text
 5A  COMPLETE
-5B  BLOCKED at Gate 3
+5B  COMPLETE
 5C  not started
 ```
+
+The full round record — git state, the migration stage wording, the backfill ownership boundary, the
+Tool Result migration account and the verification results — is in
+[PHASE_5B_MESSAGE_STORAGE_FOUNDATION_REPORT.md](PHASE_5B_MESSAGE_STORAGE_FOUNDATION_REPORT.md).

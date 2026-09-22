@@ -343,8 +343,10 @@ describe("Phase 5A guard — package boundaries (freeze §150, §151)", () => {
       "packages/storage/src/messages/legacy/legacy-llm-message-codec.ts",
       "packages/storage/src/messages/legacy/dual-reader.ts",
       "packages/storage/src/messages/legacy/backfill.ts",
-      // The package barrel that publishes them.
+      // The package barrel that publishes them, and the facade that exposes the V2 store beside
+      // the pre-V2 compatibility reader.
       "packages/storage/src/index.ts",
+      "packages/storage/src/storage.ts",
     ];
     const consumers: string[] = [];
     for (const file of await activeSourceFiles(["packages", "apps"])) {

@@ -116,7 +116,7 @@ describe("Freeze errata guard — the superseded contracts carry the corrected s
     for (const [declaration, expectedFile] of declarations) {
       const holders: string[] = [];
       for (const candidate of await sourceFiles()) {
-        if ((await read(candidate)).includes(declaration)) holders.push(candidate);
+        if ((await cachedSource(candidate)).includes(declaration)) holders.push(candidate);
       }
       expect(holders.sort(), declaration).toEqual([expectedFile]);
     }
@@ -377,15 +377,43 @@ describe("Freeze errata guard — authority and source anchors", () => {
 const SELF = "tests/architecture/phase-5b-message-freeze-errata.test.ts";
 
 async function messageDomainFiles(): Promise<readonly string[]> {
-  const found: string[] = [];
-  await collect(MESSAGES, found, SELF);
-  return found.sort();
+  return (await allSourceFiles()).filter((file) => file.startsWith(`${MESSAGES}/`));
 }
 
+/**
+ * Every `.ts` path under `packages`, walked once.
+ *
+ * The walk is cached because this guard asks several questions about the same population, and this suite
+ * runs beside the whole workspace's test run: a per-assertion directory walk over a few hundred files
+ * pushes neighbouring guards past the default test timeout, which makes an unrelated guard look broken.
+ */
+let fileCache: readonly string[] | undefined;
+
+async function allSourceFiles(): Promise<readonly string[]> {
+  if (fileCache === undefined) {
+    const found: string[] = [];
+    await collect("packages", found, SELF);
+    fileCache = Object.freeze(found.sort());
+  }
+  return fileCache;
+}
+
+/** The source-file population a declaration-holder scan runs over, read once. */
+let textCache: Map<string, string> | undefined;
+
 async function sourceFiles(): Promise<readonly string[]> {
-  const found: string[] = [];
-  await collect("packages", found, SELF);
-  return found.sort();
+  if (textCache === undefined) {
+    const files = await allSourceFiles();
+    const entries = await Promise.all(files.map(async (file) => [file, await read(file)] as const));
+    textCache = new Map(entries);
+  }
+  return allSourceFiles();
+}
+
+/** One cached source file. Every scan below reads through this, never from disk again. */
+async function cachedSource(file: string): Promise<string> {
+  await sourceFiles();
+  return textCache?.get(file) ?? (await read(file));
 }
 
 async function collect(relativeDir: string, into: string[], skip: string): Promise<void> {
