@@ -13,30 +13,47 @@ import {
 import type { VerificationPlanDraft } from "@caelush/protocol";
 import { RunController } from "@caelush/core";
 import type { RunAgentExecutionContextFactory } from "@caelush/core";
+import {
+  boundToolResultContent,
+  createDurableToolExecutionCoordinator,
+  createModelToolFeedbackProjector,
+  createToolAdmissionCoordinator,
+  createToolBatchCoordinator,
+  createToolCallPreparer,
+  createToolFailureSettlement,
+  createToolInvocationExecutor,
+  createToolResultBatchNormalizer,
+  createToolResultPipeline,
+  UNBOUNDED_TOOL_BUDGET_ADMISSION,
+  type AgentToolRegistry,
+  type DurableToolExecutionCoordinator,
+  type PreparedToolCall,
+} from "@caelush/agent";
 import { createModelTurnExecutor } from "@caelush/agent";
 import type { ContextPrepareInput } from "@caelush/agent";
 import { createAISubsystem } from "@caelush/ai";
 import type { AIProviderBinding, ApiAdapter, ModelDescriptorSourcePort } from "@caelush/ai";
 import { createOpenAICompatibleApiAdapter } from "@caelush/ai/adapters/openai-compatible";
+import {
+  assertDefaultBuiltinSecurityCoverage,
+  CaelushToolExecutionUpdateSanitizer,
+  createDefaultV1ToolExecutionSecurity,
+  createV1ToolApprovalRequestFactory,
+  DISCARDING_TOOL_UPDATE_CONSUMER,
+} from "@caelush/security";
+import {
+  createCodingToolAdmissionPort,
+  createCodingToolDurableMetadataPort,
+  createCodingToolSettlementExtensionProjector,
+  createDurableInvocationGatePort,
+} from "@caelush/coding-agent";
 import { EventBus } from "@caelush/events";
-import { LocalRuntime, createLocalRuntimeResolver } from "@caelush/runtime";
+import { sanitizeTerminalOutput } from "@caelush/runtime";
 import { openCaelushStorage } from "@caelush/storage";
-import {
-  createReadOnlyFilesystemToolRegistrations,
-  createToolExecutionDependencies,
-  ToolDispatcher,
-  ToolRegistryBuilder,
-  type ToolCommittedEventNotifier,
-} from "@caelush/tools";
-import {
-  createModelToolFeedbackProjector,
-  createToolBatchCoordinator,
-  createToolCallPreparer,
-  createToolResultBatchNormalizer,
-  UNBOUNDED_TOOL_BUDGET_ADMISSION,
-} from "@caelush/agent";
 import { toContextObservationProjection } from "@caelush/core";
 import { describe, expect, it } from "vitest";
+
+import { createCodingToolComposition } from "./support/coding-tool-composition.js";
 
 /**
  * The Tool-call round trip over a real OpenAI-shaped wire.
@@ -49,9 +66,14 @@ import { describe, expect, it } from "vitest";
  *   → createOpenAICompatibleApiAdapter() → @ai-sdk/openai-compatible → fetch
  * ```
  *
- * The transport is the only stub: a `fetch` that answers with real SSE. Everything
- * else — gateway, model catalog, provider registry, stream validator, turn assembler,
- * Dispatcher, Tool batch, durable settlement — is the production implementation.
+ * The transport is the only stub: a `fetch` that answers with real SSE. Everything else — gateway,
+ * model catalog, provider registry, stream validator, turn assembler, the canonical Tool registry over
+ * the nine Coding Tools, the real Security gate and result sanitizer, the durable Tool execution
+ * coordinator, the Tool batch and the durable settlement — is the production implementation.
+ *
+ * Phase 4F retired the legacy `ToolDispatcher` this test used to compose. The wiring below mirrors
+ * `apps/daemon/src/daemon-composition.ts` with the same canonical factories, so what the round trip
+ * travels through is the composition the daemon actually builds.
  */
 
 function openAIChunk(input: {
@@ -104,7 +126,9 @@ function makeRun(workspace: string) {
     model: { provider: "deepseek-compatible", model: "deepseek-chat" },
     runtime: { id: "local", kind: "local" },
     permissionProfile: "READ_ONLY",
-    approvalPolicy: "ALWAYS_ASK",
+    // The real Security gate is on this path, so the Run's policy is one that does not require review:
+    // an `ALWAYS_ASK` Run would park the round trip on an approval instead of exercising it.
+    approvalPolicy: "NEVER_ASK",
     limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 10_000 },
     createdAt: createTimestampMs(1),
   });
@@ -138,8 +162,37 @@ function turnMessages(input: ContextPrepareInput): readonly import("@caelush/ai"
   return [turn.pendingDecision.modelTurn.assistantMessage, ...turn.results];
 }
 
+/**
+ * Project durable invocation state back onto the canonical prepared call.
+ *
+ * The canonical registry resolved the Tool at registration and the arguments come from the durable
+ * invocation itself, so nothing is resolved, normalized or validated a second time here. This is the
+ * same projection `daemon-composition.ts` makes.
+ */
+function preparedCallFromDurableState(
+  registry: AgentToolRegistry,
+  invocation: import("@caelush/protocol").ToolInvocation,
+  externalCallId: string,
+): PreparedToolCall {
+  const resolved = registry.resolve(invocation.toolName);
+  if (resolved === undefined) {
+    throw new Error(
+      `The canonical Tool entry "${invocation.toolName}" is unavailable for execution.`,
+    );
+  }
+  return Object.freeze({
+    request: Object.freeze({
+      externalCallId,
+      toolName: invocation.toolName,
+      args: invocation.args,
+    }),
+    resolved,
+    args: invocation.args,
+  });
+}
+
 describe("real provider Tool Call round trip", () => {
-  it("carries the provider toolCallId into the next provider request after Dispatcher settlement", async () => {
+  it("carries the provider toolCallId into the next provider request after settlement", async () => {
     const storage = await openCaelushStorage({ path: ":memory:" });
     const run = makeRun(process.cwd());
     await storage.sessions.insert({
@@ -238,44 +291,119 @@ describe("real provider Tool Call round trip", () => {
     });
 
     const eventBus = new EventBus(storage.events);
-    const registryBuilder = new ToolRegistryBuilder();
-    for (const registration of createReadOnlyFilesystemToolRegistrations(
-      createLocalRuntimeResolver(new LocalRuntime()),
-    )) {
-      registryBuilder.register(registration);
-    }
-    const notifier: ToolCommittedEventNotifier = {
-      notifyCommitted: (events) => eventBus.notifyCommitted(events),
-    };
+    /**
+     * The production Tool composition.
+     *
+     * ```text
+     * Runtime Operations adapters      → the nine Coding Tool definitions
+     * DefaultAgentToolRegistryBuilder  → the canonical AgentToolRegistry
+     * CodingToolCatalogBuilder         → the Coding overlay, aligned to that registry
+     * createDefaultV1ToolExecutionSecurity → the real gate, result sanitizer and presentation
+     * createDurableToolExecutionCoordinator → the durable invocation lifecycle
+     *        ↓
+     * canonical ToolBatchCoordinator   → the Run Layer
+     * ```
+     */
+    const { registry, catalog, definitions } = createCodingToolComposition();
+    const toolSecurity = createDefaultV1ToolExecutionSecurity({
+      terminalOutputSanitizer: sanitizeTerminalOutput,
+    });
     let now = Date.now();
-    const registry = registryBuilder.build();
-    const dispatcher = new ToolDispatcher({
+    const clock = { now: () => createTimestampMs(++now) };
+    const gate = createDurableInvocationGatePort({
+      gate: toolSecurity.gate,
+      invocations: {
+        resolve: async (request) =>
+          (await storage.toolExecution.load(request.invocationId as never))?.invocation,
+      },
+    });
+    const toolApprovalRequests = createV1ToolApprovalRequestFactory({
       registry,
-      store: storage.toolExecution,
-      gate: { decide: async () => ({ kind: "ALLOW" as const }) },
-      notifier,
-      clock: { now: () => createTimestampMs(++now) },
-      invocationIdFactory: { create: createToolInvocationId },
-      observationIdFactory: { create: createObservationId },
-      eventIdFactory: { create: createEventId },
-      execution: createToolExecutionDependencies({ registry }),
-      approvalStore: storage.approvals,
+      catalog,
+      gate,
       approvalIdFactory: { create: createApprovalRequestId },
     });
-    // The canonical Tool turn pipeline: the dispatcher's own durable coordinator drives the 4D batch,
-    // and the projector and normalizer beside it are the production canonical ones.
+    // The startup self-check the production root runs: every Tool this host offers is described by the
+    // Coding catalog and executable by the registry it built.
+    assertDefaultBuiltinSecurityCoverage(
+      registry,
+      catalog,
+      definitions.map((definition) => definition.tool.name),
+    );
+    const toolAdmission = createToolAdmissionCoordinator({
+      policy: createCodingToolAdmissionPort({
+        gate,
+        registry,
+        catalog,
+        approvalPresentation: (decision) => decision.safeAction,
+      }),
+      approvals: storage.approvals,
+      approvalRequests: toolApprovalRequests,
+      budget: UNBOUNDED_TOOL_BUDGET_ADMISSION,
+      clock,
+      eventIdFactory: { create: createEventId },
+    });
+    const toolDurableCoordinator: DurableToolExecutionCoordinator =
+      createDurableToolExecutionCoordinator({
+        store: storage.toolExecution,
+        admission: toolAdmission,
+        metadata: createCodingToolDurableMetadataPort({ registry, catalog }),
+        approvalRequests: toolApprovalRequests,
+        approvalLookup: storage.approvals,
+        invocationIdFactory: { create: createToolInvocationId },
+        observationIdFactory: { create: createObservationId },
+        eventIdFactory: { create: createEventId },
+        clock,
+        invocationExecutorFactory: ({ invocation, updateSanitizer }) =>
+          createToolInvocationExecutor({
+            invocation,
+            updateSanitizer,
+            transientUpdates: DISCARDING_TOOL_UPDATE_CONSUMER,
+          }),
+        updateSanitizer: new CaelushToolExecutionUpdateSanitizer(),
+        resultPipelineFactory: ({ invocation, environment, sessionId }) =>
+          createToolResultPipeline({
+            sanitizer: toolSecurity.resultSanitizer,
+            settlementExtension: createCodingToolSettlementExtensionProjector({
+              catalog,
+              invocation: {
+                invocation,
+                ...(sessionId === undefined ? {} : { sessionId }),
+                environment,
+                nextEventId: () => createEventId(),
+                presentation: toolSecurity.presentation,
+              },
+            }),
+          }),
+        preparedCallFactory: ({ invocation, externalCallId }) =>
+          preparedCallFromDurableState(registry, invocation, externalCallId),
+        failureSettlement: createToolFailureSettlement({
+          store: storage.toolExecution,
+          clock,
+          observationIdFactory: { create: createObservationId },
+          eventIdFactory: { create: createEventId },
+          presentation: toolSecurity.presentation,
+          boundContent: (content) => boundToolResultContent(content),
+          notifier: eventBus,
+        }),
+        presentation: toolSecurity.presentation,
+        notifier: eventBus,
+        boundFailureContent: (content) => boundToolResultContent(content),
+      });
+    // The canonical Tool turn pipeline: the canonical durable coordinator drives the batch, and the
+    // projector and normalizer beside it are the production canonical ones.
     const toolTurn = {
       batches: createToolBatchCoordinator({
-        preparer: createToolCallPreparer(registry.agentRegistry()),
+        preparer: createToolCallPreparer(registry),
         budget: UNBOUNDED_TOOL_BUDGET_ADMISSION,
-        durable: dispatcher.durableCoordinator(),
-        registry: registry.agentRegistry(),
+        durable: toolDurableCoordinator,
+        registry,
       }),
       feedback: createModelToolFeedbackProjector({
         projection: toContextObservationProjection(),
       }),
       normalizer: createToolResultBatchNormalizer(),
-      modelDefinitions: () => registry.modelDefinitions(),
+      modelSpecs: () => registry.modelSpecs(),
     };
     /**
      * The Run Layer's direct Agent execution dependencies.

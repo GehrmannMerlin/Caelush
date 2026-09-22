@@ -79,7 +79,6 @@ describe("Phase 3B general loop independence", () => {
     const forbidden = [
       "@caelush/context",
       "@caelush/coding-agent",
-      "@caelush/tools",
       "@caelush/verification",
       "@caelush/runtime",
       "@caelush/storage",
@@ -94,6 +93,12 @@ describe("Phase 3B general loop independence", () => {
       }
     }
     expect(violations).toEqual([]);
+
+    // Phase 4F deleted the legacy `@caelush/tools` package: the general Tool Kernel is `@caelush/agent`
+    // and the Coding Tool product layer is `@caelush/coding-agent`, which the list above forbids. The
+    // deleted package is asserted gone so that its absence from the list cannot hide a resurrection.
+    expect(existsSync(join(root, "packages", "tools")), "packages/tools").toBe(false);
+    expect(existsSync(join(root, "packages", "tools", "package.json"))).toBe(false);
   });
 
   it("names no project inspector and no relevant-file planner", () => {
@@ -272,10 +277,10 @@ describe("Phase 3B context boundary", () => {
       "@caelush/ai",
       "@caelush/protocol",
     ]);
-    // No workspace, Git, Runtime, Storage, legacy Context, legacy Tools or Verification.
+    // No workspace, Git, Runtime, Storage, legacy Context, the deleted legacy Tool package or
+    // Verification: the standalone proof runs on the kernel and its two allowed packages.
     for (const forbidden of [
       "@caelush/context",
-      "@caelush/tools",
       "@caelush/verification",
       "@caelush/runtime",
       "@caelush/storage",
@@ -349,15 +354,17 @@ describe("Phase 3B frozen boundary remediation", () => {
     ]) {
       expect(canonical, exported).toContain(exported);
     }
-    // The kernel's validator may not reach for a host context implementation.
+    // The kernel's validator may not reach for a host context implementation, and the legacy Tool
+    // package it once named as a boundary is deleted rather than merely unlisted.
     for (const forbidden of [
       "@caelush/context",
-      "@caelush/tools",
+      "@caelush/coding-agent",
       "@caelush/runtime",
       "@caelush/core",
     ]) {
       expect(canonical).not.toContain(`"${forbidden}"`);
     }
+    expect(existsSync(join(root, "packages", "tools", "package.json"))).toBe(false);
 
     const core = executable("packages/core/src/agent-loop-history.ts");
     // Core delegates the general checks and keeps only the Run/Coding projection invariants.

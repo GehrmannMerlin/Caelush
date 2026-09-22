@@ -79,9 +79,7 @@ describe("Phase 4D daemon Tool batch composition", () => {
     expect(typeof pipeline.normalizer.normalize).toBe("function");
 
     // The catalog travels with the pipeline and is the registry's own: one registry, never two.
-    expect(pipeline.modelDefinitions().map((tool) => tool.name)).toEqual(
-      daemon.toolRegistry.names(),
-    );
+    expect(pipeline.modelSpecs().map((tool) => tool.name)).toEqual(daemon.toolRegistry.names());
   });
 
   it("constructs the legacy batch coordinator nowhere in the production root", async () => {

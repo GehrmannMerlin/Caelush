@@ -78,13 +78,8 @@ export { RuntimeRefSchema } from "./runtime.js";
 export type { RuntimeRef } from "./runtime.js";
 export { WorkspaceRefSchema } from "./workspace.js";
 export type { WorkspaceRef } from "./workspace.js";
-export {
-  ToolDefinitionSchema,
-  ToolInvocationSchema,
-  ToolInvocationStatusSchema,
-  ToolNameSchema,
-} from "./tool.js";
-export type { ToolDefinition, ToolInvocation, ToolInvocationStatus, ToolName } from "./tool.js";
+export { ToolInvocationSchema, ToolInvocationStatusSchema, ToolNameSchema } from "./tool.js";
+export type { ToolInvocation, ToolInvocationStatus, ToolName } from "./tool.js";
 export {
   ObservationSchema,
   SystemObservationSchema,

@@ -17,7 +17,7 @@ import {
   v2WorkspaceSpec,
   type FixtureProjectSpec,
 } from "./support/fixture-workspace.js";
-import { repositoryRoot } from "./support/workspace.js";
+import { pathExists, repositoryRoot, retiredLegacyToolPackage } from "./support/workspace.js";
 
 const FIXED_HEAD = "0000000000000000000000000000000000000000";
 const FIXED_TIME = "2026-09-12T00:00:00.000Z";
@@ -402,9 +402,13 @@ describe("architecture v2 target to legacy prohibition", () => {
           "packages/agent": {
             source: { "index.ts": 'import { RunController } from "@caelush/core";\nexport {};\n' },
           },
+          // Phase 4F deleted `@caelush/tools`, so the third leg of this fixture names the legacy
+          // Context package instead: a target package that imports a legacy package from source is
+          // the same violation whatever the legacy package is, and the deleted identity can no longer
+          // stand in for a live graph edge.
           "packages/coding-agent": {
             source: {
-              "index.ts": 'import { ToolDispatcher } from "@caelush/tools";\nexport {};\n',
+              "index.ts": 'import { ProjectInspector } from "@caelush/context";\nexport {};\n',
             },
           },
         }),
@@ -420,14 +424,14 @@ describe("architecture v2 target to legacy prohibition", () => {
         expect.arrayContaining([
           "ai->llm:target-to-legacy",
           "agent->core:target-to-legacy",
-          "coding-agent->tools:target-to-legacy",
+          "coding-agent->context:target-to-legacy",
         ]),
       );
       expect(rulesOf(evaluated)).toEqual(
         expect.arrayContaining([
           "AI_MUST_NOT_DEPEND_ON_LLM",
           "AGENT_MUST_NOT_DEPEND_ON_CORE",
-          "CODING_AGENT_MUST_NOT_DEPEND_ON_TOOLS",
+          "CODING_AGENT_MUST_NOT_DEPEND_ON_CONTEXT",
         ]),
       );
     },
@@ -641,13 +645,28 @@ describe("architecture v2 legacy migration map", () => {
     }
   });
 
-  it("keeps the migration map distinct from the dependency allowlist", () => {
-    // tools -> runtime exists today; that must not make runtime a target that the
-    // future agent tool framework may depend on, and it must not keep
-    // @caelush/tools alive.
+  it("keeps the migration map distinct from the dependency allowlist", async () => {
+    // `tools -> runtime` was real migration debt; recording it in the map must not make runtime a
+    // target that the agent tool framework may depend on.
     expect(rules.findRule("source-import", "tools", "runtime")).toBeUndefined();
     expect(rules.packageRole("tools")).toBe("legacy");
     expect(migrationMap.migrationEntryFor("tools")?.destinations).not.toContain("runtime");
+
+    // Phase 4F deleted that package: the general Tool Kernel is `@caelush/agent` and the Coding Tool
+    // product layer is `@caelush/coding-agent`. The legacy identity survives only as a migration-map
+    // record, so the workspace itself must neither contain it nor declare it anywhere.
+    expect(await pathExists(retiredLegacyToolPackage.directory)).toBe(false);
+    const scan = await scanner.scanWorkspace(repositoryRoot);
+    expect(
+      scan.projects.some((project) => project.identity === "tools"),
+      "the deleted legacy Tool package is a workspace project again",
+    ).toBe(false);
+    for (const project of scan.projects) {
+      expect(
+        project.manifestDependencies.map((dependency) => dependency.name),
+        `${project.identity} declares ${retiredLegacyToolPackage.name}`,
+      ).not.toContain(retiredLegacyToolPackage.name);
+    }
   });
 });
 
@@ -1357,7 +1376,10 @@ describe("architecture v2 repository baseline integration", () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.summary.written).toBe(true);
-      expect(JSON.parse(after).entryCount).toBe(JSON.parse(before).entryCount);
+      // Migration resolves frozen debt, so a regeneration may legitimately drop an entry (Phase 4F
+      // dropped the resolved storage -> tools manifest debt); what it may never do is grow. The
+      // ratchet is one-directional.
+      expect(JSON.parse(after).entryCount).toBeLessThanOrEqual(JSON.parse(before).entryCount);
       expect(await readFile(CHECKED_IN_BASELINE_PATH, "utf8")).toBe(before);
     },
     GIT_TEST_TIMEOUT_MS,

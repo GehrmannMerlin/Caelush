@@ -260,7 +260,6 @@ describe("Phase 3F Agent Loop closure boundaries", () => {
         "@caelush/core",
         "@caelush/storage",
         "@caelush/runtime",
-        "@caelush/tools",
         "@caelush/verification",
         "@caelush/coding-agent",
         "@caelush/security",
@@ -273,6 +272,12 @@ describe("Phase 3F Agent Loop closure boundaries", () => {
         "CompletionGateObservation",
       );
     }
+
+    // Phase 4F deleted the legacy `@caelush/tools` package: the general Tool Kernel is this package
+    // and the Coding Tool product layer is `@caelush/coding-agent`, which the list above forbids. The
+    // deleted package is asserted gone so its absence cannot mask a resurrection.
+    expect(existsSync(join(root, "packages", "tools")), "packages/tools").toBe(false);
+    expect(existsSync(join(root, "packages", "tools", "package.json"))).toBe(false);
   });
 
   it("keeps the legacy facades free of production execution consumers", () => {

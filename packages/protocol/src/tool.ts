@@ -1,25 +1,24 @@
 import { z } from "zod";
 import { AgentErrorSchema } from "./error.js";
-import { CapabilitySchema, RiskLevelSchema } from "./policy.js";
+import { RiskLevelSchema } from "./policy.js";
 import { JsonObjectSchema } from "./primitives/json.js";
 import { RunIdSchema, StepIdSchema, ToolInvocationIdSchema } from "./primitives/ids.js";
 import { TimestampMsSchema } from "./primitives/time.js";
 
+/**
+ * The durable Tool identity primitive.
+ *
+ * ```text
+ * ^[a-z][a-z0-9_]*$        a stable, lowercase, underscore-separated Tool name
+ * ```
+ *
+ * It remains a Protocol primitive after Phase 4F retired `ToolDefinition` and `ToolDefinitionSchema`
+ * from this module, because it is not part of that contract: a `ToolName` is a durable value the
+ * `ToolInvocation` row stores, the model catalog keys on, and the approval identity hashes. It is
+ * used by layers that have no opinion about a Tool's description or its input schema.
+ */
 export const ToolNameSchema = z.string().regex(/^[a-z][a-z0-9_]*$/);
 export type ToolName = z.infer<typeof ToolNameSchema>;
-
-export const ToolDefinitionSchema = z
-  .object({
-    name: ToolNameSchema,
-    description: z.string().min(1),
-    inputSchema: JsonObjectSchema,
-    outputSchema: JsonObjectSchema,
-    riskLevel: RiskLevelSchema,
-    requiredCapabilities: z.array(CapabilitySchema),
-    runtimeRequirements: JsonObjectSchema,
-  })
-  .strict();
-export type ToolDefinition = z.infer<typeof ToolDefinitionSchema>;
 
 export const ToolInvocationStatusSchema = z.enum([
   "REQUESTED",

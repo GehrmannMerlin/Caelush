@@ -111,7 +111,6 @@ describe("Phase 3A agent kernel dependency boundaries", () => {
     const forbidden = [
       "@caelush/core",
       "@caelush/context",
-      "@caelush/tools",
       "@caelush/verification",
       "@caelush/runtime",
       "@caelush/storage",
@@ -133,6 +132,15 @@ describe("Phase 3A agent kernel dependency boundaries", () => {
       }
     }
     expect(violations).toEqual([]);
+
+    /**
+     * Phase 4F deleted the legacy `@caelush/tools` package: the general Tool Kernel is this package
+     * and the Coding Tool product layer is `@caelush/coding-agent`, which the list above already
+     * forbids. Asserting the deleted package is gone keeps that removal honest — the missing entry
+     * above is missing because the package is, not because this list forgot it.
+     */
+    expect(existsSync(join(root, "packages", "tools")), "packages/tools").toBe(false);
+    expect(existsSync(join(root, "packages", "tools", "package.json"))).toBe(false);
   });
 
   it("keeps the kernel free of coding-agent vocabulary and host execution", () => {

@@ -2,19 +2,30 @@ import * as protocol from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "@caelush/protocol";
 
+/**
+ * The Protocol contract schemas every consumer resolves from the package root.
+ *
+ * Phase 4F retired `ToolDefinitionSchema` from this list with the contract itself. The durable Tool
+ * primitives it sat beside — a Tool's name, its invocation and that invocation's statuses — are still
+ * here, because they are what a persisted row and an approval identity actually store.
+ */
 const requiredExports = [
   "AgentSessionSchema",
   "AgentRunSchema",
   "AgentStepSchema",
   "AgentStateSchema",
   "AgentEventSchema",
-  "ToolDefinitionSchema",
+  "ToolNameSchema",
   "ToolInvocationSchema",
+  "ToolInvocationStatusSchema",
   "ObservationSchema",
   "ApprovalRequestSchema",
   "VerificationResultSchema",
   "RunStatusSchema",
 ] as const;
+
+/** Names the retirement removed. A reappearing export would be a second Tool contract. */
+const retiredExports = ["ToolDefinitionSchema", "ToolDefinition"] as const;
 
 function eventSummary(event: AgentEvent): string {
   switch (event.type) {
@@ -31,6 +42,12 @@ describe("protocol public API", () => {
   it("exports every Phase 1 contract schema from the package root", () => {
     for (const exportName of requiredExports) {
       expect(protocol[exportName], exportName).toBeDefined();
+    }
+  });
+
+  it("no longer exports the retired legacy ToolDefinition contract", () => {
+    for (const exportName of retiredExports) {
+      expect(Object.hasOwn(protocol, exportName), exportName).toBe(false);
     }
   });
 

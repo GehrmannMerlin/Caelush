@@ -7,6 +7,7 @@ import {
   pathExists,
   readManifest,
   repositoryRoot,
+  retiredLegacyToolPackage,
   workspaceSourceContents,
 } from "./support/workspace.js";
 
@@ -47,6 +48,22 @@ function isOpenAICompatibleAdapterPath(filePath: string): boolean {
 async function packageSource(packageName: string): Promise<string> {
   const files = await sourceFiles(path.join(repositoryRoot, "packages", packageName, "src"));
   return (await Promise.all(files.map((filePath) => readFile(filePath, "utf8")))).join("\n");
+}
+
+/** A file's executable code: a comment naming a dependency is documentation, not a dependency. */
+function executableSource(source: string): string {
+  return source.replaceAll(/\/\*[\s\S]*?\*\//g, "").replaceAll(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
+/** Every source file of a package that imports the schema compiler, workspace-relative and sorted. */
+async function ajvImportPaths(packageName: string): Promise<string[]> {
+  const files = await sourceFiles(path.join(repositoryRoot, "packages", packageName, "src"));
+  const sources = await Promise.all(
+    files.map(async (filePath) => ({ filePath, contents: await readFile(filePath, "utf8") })),
+  );
+  return sources
+    .filter(({ contents }) => /from\s+["']ajv["']/.test(contents))
+    .map(({ filePath }) => path.relative(repositoryRoot, filePath).replaceAll(path.sep, "/"));
 }
 
 describe("package boundaries", () => {
@@ -146,64 +163,68 @@ describe("package boundaries", () => {
   });
 
   it("keeps the Tool Kernel below execution layers and free of host side effects", async () => {
-    const manifest = await readManifest("packages/tools/package.json");
-    const dependencies = dependencyEntries(manifest);
-    expect(dependencies[protocolPackageName]).toBe("workspace:*");
-    expect(dependencies.ajv).toBe("8.20.0");
-    expect(dependencies["@caelush/runtime"]).toBe("workspace:*");
-    // Phase 4A moved the general Tool contracts, the schema runtime and policy, the registry and call
-    // preparation into `@caelush/agent`, and the Coding Tool overlay into `@caelush/coding-agent`.
-    // Phase 4E completed the move: the nine legacy builtin modules are now delegating facades over the
-    // Coding factories, so `@caelush/coding-agent` is a *runtime* dependency of the legacy package
-    // rather than a test-only one. The direction is unchanged and one-way — legacy -> target.
-    expect(dependencies["@caelush/agent"]).toBe("workspace:*");
-    expect(Object.keys(manifest.dependencies ?? {}).sort()).toEqual([
-      "@caelush/agent",
-      "@caelush/coding-agent",
+    // Phase 4F deleted the legacy `@caelush/tools` package. The general Tool Kernel is
+    // `@caelush/agent` and the Coding Tool product layer is `@caelush/coding-agent`, so both are
+    // asserted directly, and the retired identity is pinned as gone: a manifest or a source directory
+    // under `packages/tools` would be the deleted package coming back.
+    expect(await pathExists(`${retiredLegacyToolPackage.directory}/package.json`)).toBe(false);
+    expect(await pathExists(retiredLegacyToolPackage.directory)).toBe(false);
+
+    // The kernel sits below every execution layer: the AI core contract and Protocol, and no other
+    // workspace package at all — no Runtime, no Storage, no Security, no Coding overlay, no host.
+    const kernelManifest = await readManifest("packages/agent/package.json");
+    const kernelDependencies = dependencyEntries(kernelManifest);
+    expect(kernelDependencies[protocolPackageName]).toBe("workspace:*");
+    expect(kernelDependencies.ajv).toBe("8.20.0");
+    expect(Object.keys(kernelManifest.dependencies ?? {}).sort()).toEqual([
+      "@caelush/ai",
       "@caelush/protocol",
-      "@caelush/runtime",
       "ajv",
     ]);
-    expect(dependencies["@caelush/coding-agent"]).toBe("workspace:*");
 
-    const sourceRoot = path.join(repositoryRoot, "packages", "tools", "src");
-    const files = await sourceFiles(sourceRoot);
-    const sources = await Promise.all(
-      files.map(async (filePath) => ({ filePath, contents: await readFile(filePath, "utf8") })),
+    // The Coding Tool product layer owns the nine builtins, their narrow Operations ports and Runtime
+    // adapters, the Coding security facts, the approval identity, the Coding effects and the prompt
+    // snippets. It is the one Tool package that may reach Runtime, and the edge stays one-way.
+    const codingManifest = await readManifest("packages/coding-agent/package.json");
+    expect(Object.keys(codingManifest.dependencies ?? {}).sort()).toEqual([
+      "@caelush/agent",
+      "@caelush/ai",
+      "@caelush/protocol",
+      "@caelush/runtime",
+    ]);
+
+    const kernelSource = executableSource(await packageSource("agent"));
+    expect(kernelSource).toMatch(/from\s+["']@caelush\/protocol["']/);
+    expect(kernelSource).not.toMatch(
+      /from\s+["']@caelush\/(?:core|context|runtime|storage|events|security|verification|daemon|llm|coding-agent)["']/,
     );
-    const source = sources.map(({ contents }) => contents).join("\n");
-    expect(source).toMatch(/from\s+["']@caelush\/protocol["']/);
-    expect(source).not.toMatch(
+    expect(kernelSource).not.toMatch(/from\s+["'](?:ai|@ai-sdk\/)/);
+    expect(kernelSource).not.toMatch(/node:(?:fs|child_process|http|https|sqlite)/);
+    expect(kernelSource).not.toMatch(/\b(?:fetch|spawn|exec)\s*\(/);
+    expect(kernelSource).not.toMatch(/\b(?:EventBus|Permission|ApprovalManager)\b/);
+
+    // The Coding layer reaches the Runtime only through the adapters it injects: it never imports the
+    // host process boundary itself, and it never reaches back into a legacy package.
+    const codingSource = executableSource(await packageSource("coding-agent"));
+    expect(codingSource).toMatch(/from\s+["']@caelush\/agent["']/);
+    expect(codingSource).toMatch(/from\s+["']@caelush\/runtime["']/);
+    expect(codingSource).not.toMatch(
       /from\s+["']@caelush\/(?:core|context|storage|events|security|verification|daemon|llm)["']/,
     );
-    expect(source).not.toMatch(/from\s+["'](?:ai|@ai-sdk\/)/);
-    expect(source).not.toMatch(/node:(?:fs|child_process|http|https|sqlite)/);
-    expect(source).not.toMatch(/\b(?:fetch|spawn|exec)\s*\(/);
-    expect(source).not.toMatch(/\b(?:EventBus|Permission|ApprovalManager)\b/);
+    expect(codingSource).not.toMatch(/node:(?:child_process|pty)/);
+    expect(codingSource).not.toMatch(/\b(?:fetch|spawn|exec)\s*\(/);
+    expect(codingSource).not.toMatch(/\b(?:EventBus|Permission|ApprovalManager)\b/);
 
     // The schema compiler is one implementation, and Phase 4A moved it into `@caelush/agent`. The
-    // legacy package therefore imports `ajv` nowhere: a second compiler here would be a second
-    // answer to "is this schema accepted", which is exactly what the migration removed.
-    const ajvImports = sources
-      .filter(({ contents }) => /from\s+["']ajv["']/.test(contents))
-      .map(({ filePath }) => path.relative(repositoryRoot, filePath).replaceAll(path.sep, "/"));
-    expect(ajvImports).toEqual([]);
-
-    const agentSources = await sourceFiles(path.join(repositoryRoot, "packages", "agent", "src"));
-    const agentAjvImports = (
-      await Promise.all(
-        agentSources.map(async (filePath) => ({
-          filePath,
-          contents: await readFile(filePath, "utf8"),
-        })),
-      )
-    )
-      .filter(({ contents }) => /from\s+["']ajv["']/.test(contents))
-      .map(({ filePath }) => path.relative(repositoryRoot, filePath).replaceAll(path.sep, "/"));
-    expect(agentAjvImports).toEqual(["packages/agent/src/tools/schema/schema-runtime.ts"]);
+    // Coding layer therefore imports `ajv` nowhere: a second compiler there would be a second answer
+    // to "is this schema accepted", which is exactly what the migration removed.
+    expect(await ajvImportPaths("coding-agent")).toEqual([]);
+    expect(await ajvImportPaths("agent")).toEqual([
+      "packages/agent/src/tools/schema/schema-runtime.ts",
+    ]);
   });
 
-  it("keeps Runtime below Tools and limits host process access to the fixed search adapter", async () => {
+  it("keeps Runtime below the Tool layer and limits host process access to the fixed search adapter", async () => {
     const manifest = await readManifest("packages/runtime/package.json");
     const dependencies = dependencyEntries(manifest);
     expect(dependencies[protocolPackageName]).toBe("workspace:*");
@@ -236,7 +257,7 @@ describe("package boundaries", () => {
       .map(({ contents }) => contents)
       .join("\n");
     expect(source).not.toMatch(
-      /from\s+["']@caelush\/(?:tools|core|context|storage|events|llm|security|verification|daemon)["']|from\s+["'](?:ai|@ai-sdk\/)/,
+      /from\s+["']@caelush\/(?:agent|coding-agent|core|context|storage|events|llm|security|verification|daemon)["']|from\s+["'](?:ai|@ai-sdk\/)/,
     );
     expect(nonMutationSource).not.toMatch(
       /\b(?:writeFile|appendFile|rename|unlink|rm|truncate|copyFile|chmod|chown)\s*\(/,
@@ -266,7 +287,21 @@ describe("package boundaries", () => {
     expect(eventDependencies).not.toContain("@caelush/storage");
     expect(storageDependencies).toContain("@caelush/events");
     expect(storageDependencies).toContain("@caelush/protocol");
-    expect(storageDependencies).toContain("@caelush/tools");
+    // Phase 4F deleted `@caelush/tools`. Storage depends on `@caelush/agent` for the canonical Tool
+    // and Agent contracts it persists, and it must never reach up into `@caelush/coding-agent`: the
+    // Coding Tool product layer sits above Storage, so that edge would be a cycle.
+    expect(Object.keys(storage.dependencies ?? {}).sort()).toEqual([
+      "@caelush/agent",
+      "@caelush/core",
+      "@caelush/events",
+      "@caelush/llm",
+      "@caelush/memory",
+      "@caelush/protocol",
+      "@caelush/verification",
+      "drizzle-orm",
+    ]);
+    expect(storageDependencies).not.toContain("@caelush/coding-agent");
+    expect(storageDependencies).not.toContain(retiredLegacyToolPackage.name);
     expect(coreDependencies).not.toContain("@caelush/storage");
   });
 
@@ -301,7 +336,10 @@ describe("package boundaries", () => {
     expect(dependencies["@caelush/context"]).toBe("workspace:*");
     expect(dependencies["@caelush/llm"]).toBe("workspace:*");
     expect(dependencies["@caelush/protocol"]).toBe("workspace:*");
-    expect(dependencies["@caelush/tools"]).toBe("workspace:*");
+    // Phase 4F deleted `@caelush/tools`: the Tool Kernel the Phase 6B loop prepares tool calls for is
+    // `@caelush/agent` now, and Core depends on it directly.
+    expect(dependencies["@caelush/agent"]).toBe("workspace:*");
+    expect(dependencies[retiredLegacyToolPackage.name]).toBeUndefined();
     expect(Object.keys(dependencies)).not.toContain("ai");
     expect(Object.keys(dependencies)).not.toContain("@ai-sdk/openai-compatible");
   });
@@ -349,7 +387,7 @@ describe("package boundaries", () => {
       expect.arrayContaining(["@caelush/security/redaction", "@caelush/security/sensitive-path"]),
     );
     expect(source).not.toMatch(
-      /from\s+["']@caelush\/(?:security|tools|runtime|storage|events|daemon)["']/,
+      /from\s+["']@caelush\/(?:security|agent|coding-agent|runtime|storage|events|daemon)["']/,
     );
   });
 

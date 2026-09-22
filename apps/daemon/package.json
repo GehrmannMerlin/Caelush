@@ -45,7 +45,6 @@
     "@caelush/runtime": "workspace:*",
     "@caelush/security": "workspace:*",
     "@caelush/storage": "workspace:*",
-    "@caelush/tools": "workspace:*",
     "@caelush/verification": "workspace:*",
     "@fastify/sse": "0.6.0",
     "fastify": "5.12.1",

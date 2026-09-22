@@ -302,8 +302,8 @@ describe("Phase 3D durable Tool turn driver boundaries", () => {
   it("keeps the run-scoped adapter the only Core object that speaks a Tool batch", () => {
     // The canonical `ToolBatchRequest` is declared by the Agent Tool System, and Core may name it only
     // in the one run-scoped adapter that translates the frozen Tool turn into it. Phase 4D moved the
-    // declaration from `@caelush/tools` to `@caelush/agent`; the legacy declaration still exists as a
-    // compatibility surface and is not used by production.
+    // declaration from the legacy Tool System to `@caelush/agent`; Phase 4F deleted the legacy
+    // declaration, so the list below is the complete set of places the name exists at all.
     const builders = productionSources().filter((file) =>
       /\bToolBatchRequest\b/.test(executable(file)),
     );
@@ -313,14 +313,11 @@ describe("Phase 3D durable Tool turn driver boundaries", () => {
       "packages/agent/src/tools/batch/batch-types.ts",
       "packages/agent/src/tools/index.ts",
       "packages/core/src/run-tool-turn-coordinator.ts",
-      "packages/tools/src/batch-coordinator.ts",
-      "packages/tools/src/batch-types.ts",
-      "packages/tools/src/index.ts",
     ]);
 
     // The RunController holds the batch *port* and hands it to the adapter; it never builds a request
     // from it, and it names none of the Tool Layer's own types. That is what "the Run Layer does not
-    // understand the legacy Tool batch" means structurally.
+    // understand the Tool batch" means structurally.
     const controller = executable("packages/core/src/run-controller.ts");
     expect(controller).toContain("private toolTurnDependencies(");
     for (const forbidden of [
@@ -334,9 +331,16 @@ describe("Phase 3D durable Tool turn driver boundaries", () => {
       expect(controller, `run-controller must not name ${forbidden}`).not.toContain(forbidden);
     }
 
-    // The Tool Layer knows nothing about Core: the dependency direction is one-way.
-    for (const file of productionSources().filter((path) => path.startsWith("packages/tools/"))) {
-      expect(read(file), `${file} must not depend on Core`).not.toContain("@caelush/core");
+    // The Tool Layer knows nothing about Core: the dependency direction is one-way. Comments are
+    // stripped, because the Agent layer legitimately *describes* in prose which transitions stayed in
+    // Core; what it may not do is import it.
+    for (const file of productionSources().filter(
+      (path) =>
+        path.startsWith("packages/coding-agent/") ||
+        path.startsWith("packages/agent/") ||
+        path.startsWith("packages/tools/"),
+    )) {
+      expect(executable(file), `${file} must not depend on Core`).not.toContain("@caelush/core");
     }
   });
 
@@ -396,17 +400,23 @@ describe("Phase 3D durable Tool turn driver boundaries", () => {
   });
 
   it("keeps sequential Tool semantics and introduces no parallelism", () => {
-    // Phase 4D made the *canonical* Agent batch the production scheduler, and it is strictly sequential:
-    // an ordinary `for` over the calls, and no `Promise.all` anywhere in the batch or its planner.
+    // The canonical Agent batch is the production scheduler, and it is strictly sequential: an ordinary
+    // `for` over the calls, and no `Promise.all` anywhere in the batch or its planner.
     const canonical = executable("packages/agent/src/tools/batch/batch-coordinator.ts");
     expect(canonical).toContain("for (const call of request.calls)");
     expect(canonical).not.toContain("Promise.all");
     const planner = executable("packages/agent/src/tools/batch/batch-planner.ts");
     expect(planner).not.toContain("Promise.all");
-    // The legacy facade keeps its own sequential shape, and it too has no parallelism.
-    const batch = executable("packages/tools/src/batch-coordinator.ts");
-    expect(batch).toContain("for (const [index, item] of request.items.entries())");
-    expect(batch).not.toContain("Promise.all");
+    // Phase 4F removed the legacy batch, so there is no second sequential scheduler to check.
+    expect(existsSync(join(root, "packages/tools/src/batch-coordinator.ts"))).toBe(false);
+    // And no Tool execution path reaches for a fan-out primitive.
+    for (const file of productionSources().filter((path) =>
+      /\/(?:tools|batch|durable|execution)\//.test(path),
+    )) {
+      expect(executable(file), `${file} must not introduce parallelism`).not.toMatch(
+        /\bPromise\.all\b|\bPromise\.allSettled\b|\bnew Worker\b/,
+      );
+    }
 
     // And the adapter asks the Tool Layer for exactly one batch per turn: one `execute` call site,
     // never a per-item loop and never a second entry point.
@@ -429,9 +439,12 @@ describe("Phase 3D durable Tool turn driver boundaries", () => {
     const projection = executable("packages/core/src/agent-tool-batch.ts");
     expect(projection).toContain("projectToolObservationBatch({");
     expect(projection).toContain("export function toContextObservationProjection(");
-    // The projection rejects a mismatched batch rather than reordering it.
-    expect(projection).toContain("result.externalCallId !== request.externalCallId");
-    expect(projection).toContain("result.toolName !== request.toolName");
+    // The projection rejects a mismatched batch rather than reordering it. Phase 4F replaced the legacy
+    // per-item result with the canonical durable snapshot, so the identity check reads the invocation
+    // the snapshot belongs to — and it still refuses a batch that does not line up.
+    expect(projection).toContain("snapshot.invocation.toolName !== request.toolName");
+    expect(projection).toContain("snapshot.invocation.externalCallId !== request.externalCallId");
+    expect(projection).toContain("throw new ToolBatchResultConversionError()");
     expect(projection).not.toContain(".sort(");
   });
 

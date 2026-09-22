@@ -47,7 +47,7 @@ describe("daemon production composition", () => {
       composition.runtime,
     );
     expect(composition.runtime.kind).toBe("local");
-    expect(composition.toolRegistry.modelDefinitions().map((tool) => tool.name)).toEqual([
+    expect(composition.toolRegistry.modelSpecs().map((tool) => tool.name)).toEqual([
       "read_file",
       "list_directory",
       "find_files",
@@ -59,9 +59,17 @@ describe("daemon production composition", () => {
       "git_diff",
     ]);
     // Phase 4E moved usage guidance out of the provider-visible tool catalog: the nine defaults carry
-    // no legacy `modelGuidance`, because their guidance travels as a Coding `promptSnippet` through the
-    // budgeted Context path. The catalog and the registry still describe the same nine Tools.
-    expect(composition.toolRegistry.modelGuidance()).toEqual([]);
+    // no guidance folded into a description, because their guidance travels as a Coding `promptSnippet`
+    // through the budgeted Context path. Phase 4F removed the legacy `modelGuidance` accessor with the
+    // package that declared it, so the assertion is now the structural one: every model spec is exactly
+    // the three model-facing fields, and no description carries a guidance heading.
+    for (const spec of composition.toolRegistry.modelSpecs()) {
+      expect(Object.keys(spec).sort(), spec.name).toEqual(["description", "inputSchema", "name"]);
+      expect(spec.description, spec.name).not.toContain("Purpose:");
+      expect(spec.description, spec.name).not.toContain("When:");
+      expect(spec.description, spec.name).not.toContain("Safety:");
+    }
+    expect(composition.toolRegistry).not.toHaveProperty("modelGuidance");
     // Phase 2C: provider authority is the AI subsystem registry, not a legacy registry.
     expect(composition.ai.providers.list().map((provider) => provider.id)).toEqual([
       "openai-compatible",
@@ -114,14 +122,14 @@ describe("daemon production composition", () => {
     ).toThrow("model provider is unavailable");
   });
 
-  it("filters Git tools from the model and dispatcher registry for a non-Git workspace", async () => {
+  it("filters Git tools from the model catalog and the registry for a non-Git workspace", async () => {
     directory = await mkdtemp(join(tmpdir(), "caelush-composition-non-git-"));
     storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
     const eventBus = new EventBus(storage.events);
     composition = await composeDaemon({
       storage,
       eventBus,
-      toolExposure: { git: "UNAVAILABLE" },
+      toolExposure: "UNAVAILABLE",
     });
 
     expect(composition.toolRegistry.names()).toEqual([
@@ -133,11 +141,17 @@ describe("daemon production composition", () => {
       "exec_command",
       "write_stdin",
     ]);
-    expect(composition.toolTurn.modelDefinitions().map((tool) => tool.name)).toEqual(
+    expect(composition.toolTurn.modelSpecs().map((tool) => tool.name)).toEqual(
       composition.toolRegistry.names(),
     );
     // Filtering is aligned across every view: the registry, the model catalog the Tool turn publishes
-    // and the (now guidance-free) legacy overlay all describe the same seven active Tools.
-    expect(composition.toolRegistry.modelGuidance()).toEqual([]);
+    // and the Coding catalog all describe the same seven active Tools. Phase 4F made that one
+    // derivation — the reduced *definition* list builds all three — rather than a registry the catalog
+    // was then filtered against.
+    for (const spec of composition.toolTurn.modelSpecs()) {
+      expect(Object.keys(spec).sort(), spec.name).toEqual(["description", "inputSchema", "name"]);
+    }
+    expect(composition.toolRegistry.names()).not.toContain("git_status");
+    expect(composition.toolRegistry.names()).not.toContain("git_diff");
   });
 });

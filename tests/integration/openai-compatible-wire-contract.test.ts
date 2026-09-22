@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { createAISubsystem } from "@caelush/ai";
 import { createOpenAICompatibleApiAdapter } from "@caelush/ai/adapters/openai-compatible";
-import { toAIToolSpec } from "../../packages/core/src/ai-invocation-projection.js";
-import { LocalRuntime, createLocalRuntimeResolver } from "@caelush/runtime";
+import { DefaultAgentToolRegistryBuilder, type AgentToolRegistry } from "@caelush/agent";
 import {
-  createDefaultBuiltinToolRegistrations,
-  DEFAULT_BUILTIN_TOOL_ORDER,
-  ToolRegistryBuilder,
-} from "@caelush/tools";
+  createDefaultCodingTools,
+  createRuntimeGitOperations,
+  createRuntimePatchOperations,
+  createRuntimeProcessOperations,
+  createRuntimeReadOnlyOperations,
+  DEFAULT_CODING_TOOL_ORDER,
+  type DefaultCodingToolOperations,
+} from "@caelush/coding-agent";
+import { LocalRuntime, createLocalRuntimeResolver } from "@caelush/runtime";
 import { assertSafeWireRequestBody, normalizeWireRequest } from "./support/wire-trace.js";
 import { finishChunk, openAIChunk, sseResponse } from "./support/openai-compatible-sse.js";
 import type { AIModelRequest, ApiAdapter, ModelDescriptorSourcePort } from "@caelush/ai";
@@ -21,28 +25,49 @@ import type { AIModelRequest, ApiAdapter, ModelDescriptorSourcePort } from "@cae
  * ```text
  * AIGateway.complete() → createOpenAICompatibleApiAdapter() → fetch
  * ```
+ *
+ * The Tool catalog it sends is the production one: the nine Coding Tools, built through the four
+ * Runtime Operations adapters, the canonical `DefaultAgentToolRegistryBuilder`, and read back in the
+ * registry's own model-facing form. Phase 4F retired Protocol's `ToolDefinition` and Core's
+ * `toAIToolSpec` projection — `AgentToolRegistry.modelSpecs()` *is* `readonly AIToolSpec[]` — so there
+ * is no longer a second shape for a catalog to be projected through.
  */
 
 const model = { provider: "deepseek", model: "fixture-model" } as const;
 const API_ID = "openai-compatible-chat";
 
-function canonicalToolDefinitions() {
+/** The four Runtime Operations adapters, as the one bundle `createDefaultCodingTools` expects. */
+function codingToolOperations(runtimeResolver: ReturnType<typeof createLocalRuntimeResolver>) {
+  const readOnly = createRuntimeReadOnlyOperations(runtimeResolver);
+  return {
+    readFile: readOnly,
+    readOnly,
+    patch: createRuntimePatchOperations(runtimeResolver),
+    exec: createRuntimeProcessOperations(runtimeResolver),
+    process: createRuntimeProcessOperations(runtimeResolver),
+    git: createRuntimeGitOperations(runtimeResolver),
+  } satisfies DefaultCodingToolOperations;
+}
+
+function canonicalToolRegistry(): { registry: AgentToolRegistry; runtime: LocalRuntime } {
   const runtime = new LocalRuntime();
-  const registrations = createDefaultBuiltinToolRegistrations(createLocalRuntimeResolver(runtime));
-  const builder = new ToolRegistryBuilder();
-  for (const registration of registrations) builder.register(registration);
-  return { definitions: builder.build().modelDefinitions(), runtime };
+  const builder = new DefaultAgentToolRegistryBuilder();
+  const definitions = createDefaultCodingTools(
+    codingToolOperations(createLocalRuntimeResolver(runtime)),
+  );
+  for (const definition of definitions) builder.register(definition.tool);
+  return { registry: builder.build(), runtime };
 }
 
 function requestWithCanonicalTools(): AIModelRequest {
-  const { definitions } = canonicalToolDefinitions();
+  const { registry } = canonicalToolRegistry();
   return {
     model,
     messages: [
       { role: "system", content: "You are a safe coding agent." },
       { role: "user", content: "Inspect the workspace." },
     ],
-    tools: definitions.map(toAIToolSpec),
+    tools: registry.modelSpecs(),
     toolChoice: { type: "AUTO" },
   };
 }
@@ -120,7 +145,7 @@ describe("OpenAI-compatible wire tool contract", () => {
     expect(() => assertSafeWireRequestBody(body)).not.toThrow();
     const trace = normalizeWireRequest(body);
     expect(trace.model).toBe("fixture-model");
-    expect(trace.toolNames).toEqual([...DEFAULT_BUILTIN_TOOL_ORDER]);
+    expect(trace.toolNames).toEqual([...DEFAULT_CODING_TOOL_ORDER]);
     expect(trace.toolCount).toBe(9);
     expect(trace.roleSequence).toEqual(["system", "user"]);
     expect(trace.roleCounts).toEqual({ system: 1, user: 1 });

@@ -203,18 +203,11 @@ describe("Phase 4C durable Tool orchestration boundaries", () => {
     );
   });
 
-  it("keeps the legacy durable contracts as aliases and facades, never second declarations", () => {
-    for (const [file, marker] of [
-      [`${LEGACY_TOOLS}execution-store.ts`, "@caelush/agent"],
-      [`${LEGACY_TOOLS}invocation-lifecycle.ts`, "@caelush/agent"],
-      [`${LEGACY_TOOLS}observation.ts`, "@caelush/agent"],
-      [`${LEGACY_TOOLS}event-factory.ts`, "@caelush/agent"],
-      [`${LEGACY_TOOLS}security-context.ts`, "@caelush/agent"],
-    ] as const) {
-      const source = executable(file);
-      expect(source, `${file} must re-export from the canonical owner`).toContain(marker);
-      expect(source, `${file} must not import an outer layer`).not.toContain("@caelush/storage");
-    }
+  it("keeps every durable Tool contract declared exactly once, in @caelush/agent", () => {
+    // Phase 4C asserted that the legacy modules were aliases and facades. Phase 4F removed them, so
+    // the rule is stated as the strong form: the Agent layer is the only declaration site.
+    expect(existsSync(join(root, "packages/tools"))).toBe(false);
+
     // No second transition table, no second observation factory, no second error class.
     for (const [entry, pattern] of [
       ["the transition table", /const ALLOWED_TRANSITIONS\b/],
@@ -230,6 +223,19 @@ describe("Phase 4C durable Tool orchestration boundaries", () => {
       expect(declarers[0]!.startsWith(AGENT_TOOLS), `${entry} belongs to the Agent layer`).toBe(
         true,
       );
+    }
+
+    // And none of those declarations reaches an outer layer.
+    for (const file of [
+      `${AGENT_TOOLS}durable/durable-errors.ts`,
+      `${AGENT_TOOLS}durable/invocation-lifecycle.ts`,
+      `${AGENT_TOOLS}durable/observation.ts`,
+      `${AGENT_TOOLS}durable/durable-events.ts`,
+      `${AGENT_TOOLS}admission/security-context.ts`,
+    ]) {
+      const source = executable(file);
+      expect(source, `${file} must not import an outer layer`).not.toContain("@caelush/storage");
+      expect(source, `${file} must not import the retired package`).not.toContain("@caelush/tools");
     }
   });
 
@@ -264,41 +270,32 @@ describe("Phase 4C durable Tool orchestration boundaries", () => {
     expect(adapter).not.toMatch(/\bToolEffect\b/);
     expect(adapter).toContain("CODING_TOOL_EFFECTS_EXTENSION_KIND");
 
-    // `/caelush/storage` still declares the legacy Tool System as a runtime dependency, and that
-    // declaration is frozen baseline debt this round does not retire: the storage *test* suite imports
-    // the production effect projection through it, and the architecture ratchet requires a manifest
-    // edge to disappear only when its last source import does. What the round did retire is every
-    // source import, which is what the four removed baseline entries record.
+    // Phase 4C recorded the legacy Tool System as frozen baseline debt on the storage manifest, with
+    // the storage test suite as the reason. Phase 4F retired the package AND migrated those tests, so
+    // the edge is gone and the frozen violation was removed from the baseline with it.
     const manifest = JSON.parse(read("packages/storage/package.json")) as {
       dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
     };
-    expect(Object.keys(manifest.dependencies ?? {})).toContain("@caelush/tools");
+    expect(Object.keys(manifest.dependencies ?? {})).not.toContain("@caelush/tools");
+    expect(Object.keys(manifest.devDependencies ?? {})).not.toContain("@caelush/tools");
+    // The canonical Agent Tool contracts are what storage implements against.
+    expect(Object.keys(manifest.dependencies ?? {})).toContain("@caelush/agent");
+    const baseline = read("scripts/architecture/legacy-import-baseline.json");
+    expect(baseline).not.toContain("STORAGE_MUST_NOT_DECLARE_DEPENDENCY_ON_TOOLS");
   });
 
-  it("keeps the production Dispatcher a compatibility facade, not a second lifecycle", () => {
-    const dispatcher = executable(DISPATCHER);
+  it("keeps the durable Tool lifecycle authority in exactly one place", () => {
+    // Phase 4C proved the legacy Dispatcher was a *facade* over the canonical coordinator. Phase 4F
+    // removed the facade, so the coordinator is now the only object that moves a durable invocation.
+    expect(existsSync(join(root, DISPATCHER))).toBe(false);
 
-    // It delegates the whole durable lifecycle.
-    expect(dispatcher).toContain("private readonly coordinator: DurableToolExecutionCoordinator;");
-    expect(dispatcher).toContain("this.coordinator.execute({");
-    expect(dispatcher).toContain("this.coordinator.recover(existing, {");
-
-    // It no longer implements any of the durable algorithms.
-    for (const forbidden of [
-      "private async applyGate(",
-      "private async startAndExecute(",
-      "private async recoverWaitingApproval(",
-      "private async executeHandler(",
-      "createApprovalRequestEvent",
-      "startToolInvocation(",
-      "completeToolInvocation(",
-      "assertToolInvocationInvariant(",
-      "commitAndNotify(",
-      "legacyEffectsFromSettlement(",
-      "activeCalls",
-    ]) {
-      expect(dispatcher, `the facade must not own ${forbidden}`).not.toContain(forbidden);
-    }
+    const coordinator = executable(
+      "packages/agent/src/tools/durable/durable-execution-coordinator.ts",
+    );
+    expect(coordinator).toContain("async execute(request: DurableToolExecutionRequest)");
+    expect(coordinator).toContain("async recover(");
+    expect(coordinator).toContain("createDurableToolExecutionCoordinator(");
 
     // The durable state transitions live in exactly one place, and it is the canonical layer.
     for (const [entry, pattern] of [
@@ -309,60 +306,39 @@ describe("Phase 4C durable Tool orchestration boundaries", () => {
       const callers = productionSources()
         .filter((file) => !file.endsWith("/index.ts"))
         .filter((file) => pattern.test(executableSources().get(file) ?? ""));
+      expect(callers.length, `${entry} must have at least one caller`).toBeGreaterThan(0);
       for (const file of callers) {
         expect(
-          file.startsWith(AGENT_TOOLS) || file === DISPATCHER,
-          `${entry} may only be reached from the Agent layer or the retained facade path (${file})`,
+          file.startsWith(AGENT_TOOLS),
+          `${entry} may only be reached from the Agent layer (${file})`,
         ).toBe(true);
       }
-      // The facade's own use is the retained argument-failure path, and nothing else.
-      const inDispatcher = (dispatcher.match(pattern) ?? []).length;
-      expect(inDispatcher, `${entry} call sites in the facade`).toBeLessThanOrEqual(
-        entry === "startToolInvocation" || entry === "completeToolInvocation" ? 0 : 0,
-      );
     }
   });
 
-  it("keeps the retained Phase 4A rejection difference explicit and bounded", () => {
-    const dispatcher = read(DISPATCHER);
+  it("keeps no durable row written for a call the Preparer rejected", () => {
+    // Phase 4C recorded a retained Phase 4A difference: the legacy facade wrote one durable
+    // REQUESTED+FAILED pair for an argument rejection. Phase 4D removed that path's only caller and
+    // Phase 4F removed the facade, so a pre-invocation rejection now creates **no** durable row — the
+    // canonical batch reports it as a REJECTED item carrying safe model feedback and nothing else.
+    const preparer = executable("packages/agent/src/tools/call/tool-call-preparer-impl.ts");
+    expect(preparer).not.toContain("createRequestedToolInvocation");
+    expect(preparer).not.toContain("failToolInvocation");
 
-    /**
-     * The one place a durable row is still written for a call that never became READY.
-     *
-     * ```text
-     * createRequestedToolInvocation   exactly once, on the argument-failure path
-     * failToolInvocation              exactly once, on the same path
-     * ```
-     *
-     * The two are checked both by count and by order, so neither can have grown a second call site
-     * elsewhere in the facade.
-     */
-    expect(dispatcher).toContain("private async persistArgumentFailure(");
-    expect((dispatcher.match(/createRequestedToolInvocation\(/g) ?? []).length).toBe(1);
-    expect((dispatcher.match(/failToolInvocation\(/g) ?? []).length).toBe(1);
-    expect(dispatcher).toContain('code: "TOOL_ARGUMENT_ERROR"');
-    expect(dispatcher.indexOf("createRequestedToolInvocation({")).toBeLessThan(
-      dispatcher.indexOf("failToolInvocation("),
-    );
-    // The retained path is reached only when the canonical Preparer rejects a call.
-    expect(dispatcher).toContain('if (prepared.kind === "REJECTED") {');
-    expect(dispatcher.indexOf('prepared.kind === "REJECTED"')).toBeLessThan(
-      dispatcher.indexOf("persistArgumentFailure("),
-    );
-
-    // The canonical Preparer still creates no invocation for a rejection.
-    expect(executable(`${AGENT_TOOLS}call/tool-call-preparer.ts`)).not.toContain(
-      "createRequestedToolInvocation",
-    );
-
-    // And the difference is recorded, with its exit round, rather than silently claimed as migrated.
-    const map = read("docs/architecture/v2/PHASE_4C_DURABLE_TOOL_ORCHESTRATION_ACCEPTANCE_MAP.md");
-    expect(map).toMatch(/argument[- ]failure/i);
-    expect(map).toContain("4D");
+    const batch = executable("packages/agent/src/tools/batch/batch-coordinator.ts");
+    expect(batch).toContain('kind: "REJECTED"');
+    // The batch itself never writes durable state either: the coordinator does, and only for a call
+    // that reached the durable start boundary.
+    expect(batch).not.toContain("createRequestedToolInvocation(");
+    expect(batch).not.toContain("failToolInvocation(");
   });
   it("keeps the admission layer ignorant of Coding policy vocabulary", () => {
     for (const file of filesUnder(ADMISSION)) {
       const source = executable(file);
+      // The Gate contract module is the one deliberate exception, and it is a narrow one: the shape a
+      // Security evaluator is asked in has to name the facts it evaluates. It declares a *structural*
+      // subset and no Coding metadata field, which the second loop below asserts.
+      if (file.endsWith("/gate-port.ts")) continue;
       for (const forbidden of [
         "ToolEffect",
         "securityFacts",
@@ -378,6 +354,19 @@ describe("Phase 4C durable Tool orchestration boundaries", () => {
       // It never hashes anything: the approval identity belongs to the admission implementation.
       expect(source, `${file} must not hash`).not.toContain("createHash");
       expect(source, `${file} must not import a crypto module`).not.toContain("node:crypto");
+    }
+
+    // And the exception declares no Coding metadata field at all.
+    const gatePort = executable(`${ADMISSION}gate-port.ts`);
+    for (const codingField of [
+      "CodingToolDefinition",
+      "CodingToolCatalog",
+      "CodingToolSecurityMetadata",
+      "promptSnippet",
+      "effectProjector",
+      "securityFactsProjector",
+    ]) {
+      expect(gatePort, `gate-port must not know ${codingField}`).not.toContain(codingField);
     }
     /**
      * `riskLevel` is reachable in exactly two canonical files, and both are named.
@@ -428,7 +417,7 @@ describe("Phase 4C durable Tool orchestration boundaries", () => {
       expect(source, `${file} must not import a Coding effect type`).not.toContain("ToolEffect");
     }
     // The Agent layer declares the generic constant and never compares it to anything; the two
-    // non-Agent modules that name it are the producer and the storage decoder.
+    // non-Agent modules that name it are the Coding producer/decoder and the storage decoder.
     const kindReaders = productionSources()
       .filter((file) => !file.endsWith("/index.ts"))
       .filter(
@@ -437,8 +426,8 @@ describe("Phase 4C durable Tool orchestration boundaries", () => {
           !file.startsWith(AGENT_TOOLS),
       );
     expect(kindReaders.sort()).toEqual([
+      "packages/coding-agent/src/tools/settlement/settlement-extension.ts",
       "packages/storage/src/tool-settlement-extension-adapter.ts",
-      `${LEGACY_TOOLS}settlement-extension-bridge.ts`,
     ]);
   });
 
@@ -462,7 +451,7 @@ describe("Phase 4C durable Tool orchestration boundaries", () => {
   });
 
   it("adds no parallelism, no new ToolInvocation status and no new durable surface", () => {
-    for (const file of [...filesUnder(ADMISSION), ...filesUnder(DURABLE), DISPATCHER]) {
+    for (const file of [...filesUnder(ADMISSION), ...filesUnder(DURABLE)]) {
       const source = executable(file);
       expect(source, `${file} must not introduce parallelism`).not.toMatch(
         /\bPromise\.all\b|\bPromise\.allSettled\b|\bnew Worker\b/,
@@ -532,22 +521,18 @@ describe("Phase 4C durable Tool orchestration boundaries", () => {
     expect(pipeline).toContain("export interface PreparedToolSettlement {");
   });
 
-  it("keeps the builtins in the legacy layer for 4E", () => {
-    // The legacy coordinator module still exists as a compatibility facade, and it still drives the
-    // legacy Dispatcher for the direct API.
-    expect(existsSync(join(root, `${LEGACY_TOOLS}batch-coordinator.ts`))).toBe(true);
-    expect(executable(`${LEGACY_TOOLS}batch-coordinator.ts`)).toContain("this.dispatcher[mode]");
-    // Phase 4D removed it from production: the daemon composes the *canonical* Agent batch instead, and
-    // never constructs the legacy class.
-    // See `tests/architecture/phase-4d-tool-batch-feedback-boundaries.test.ts`.
-    expect(executable("apps/daemon/src/daemon-composition.ts")).toContain(
-      "createToolBatchCoordinator(",
-    );
-    expect(executable("apps/daemon/src/daemon-composition.ts")).not.toContain(
-      "new ToolBatchCoordinator(dispatcher)",
-    );
+  it("keeps the nine builtins target-owned and the legacy batch retired", () => {
+    // Phase 4C recorded that the nine builtins had not yet moved and that the legacy batch coordinator
+    // still existed for its own direct API. Phase 4E moved the builtins and Phase 4F removed the legacy
+    // package, so both statements are now their final form.
+    expect(existsSync(join(root, `${LEGACY_TOOLS}batch-coordinator.ts`))).toBe(false);
+    expect(existsSync(join(root, `${LEGACY_TOOLS}builtins/default-tools.ts`))).toBe(false);
 
-    // The nine builtins have not moved: they are still registrations in the legacy package.
+    const daemon = executable("apps/daemon/src/daemon-composition.ts");
+    expect(daemon).toContain("createToolBatchCoordinator(");
+    expect(daemon).not.toContain("new ToolBatchCoordinator(dispatcher)");
+
+    // The nine builtins are declared by the Coding product layer, once each, in the frozen order.
     const builtinNames = [
       "read_file",
       "list_directory",
@@ -559,12 +544,21 @@ describe("Phase 4C durable Tool orchestration boundaries", () => {
       "git_status",
       "git_diff",
     ];
-    const defaultTools = executable(`${LEGACY_TOOLS}builtins/default-tools.ts`);
+    const defaultTools = executable("packages/coding-agent/src/tools/builtins/default-tools.ts");
     for (const name of builtinNames) {
-      expect(defaultTools, `${name} must still be registered by the legacy package`).toContain(
+      expect(defaultTools, `${name} must be registered by the Coding product layer`).toContain(
         name,
       );
     }
+    for (const name of builtinNames) {
+      const owners = productionSources().filter((file) =>
+        executable(file).includes(`name: "${name}"`),
+      );
+      expect(owners, name).toEqual([
+        `packages/coding-agent/src/tools/builtins/${name.replaceAll("_", "-")}.ts`,
+      ]);
+    }
+
     // And no Coding builtin has crept into the Agent layer.
     for (const file of filesUnder(AGENT_TOOLS)) {
       const source = executable(file);
@@ -669,25 +663,40 @@ describe("Phase 4C durable Tool orchestration boundaries", () => {
     // And the durable store is Storage's, implementing the canonical port.
     expect(daemon).toContain("store: options.storage.toolExecution");
     // The settlement extension decoder is wired where the storage instance is opened, because that is
-    // the layer that holds the Coding effect projection.
+    // the layer that holds the Coding effect projection. Phase 4F moved the decoder itself into the
+    // Coding product layer, with the same extension kind.
     expect(executable("apps/daemon/src/daemon.ts")).toContain(
-      "toolSettlementExtension: createLegacyToolSettlementExtensionDecoder({",
+      "toolSettlementExtension: createCodingToolSettlementExtensionDecoder({",
     );
 
     const security = executable("packages/security/src/default-composition.ts");
-    expect(security).toContain("approvalRequests: createV1ToolApprovalRequestFactory({");
-    expect(security).toContain("execution: createToolExecutionDependencies({");
+    // The approval card factory is Security's, exactly as Phase 4C placed it. It now reads the
+    // canonical registry and the Coding catalog instead of the retired legacy registry view.
+    expect(security).toContain("export function createV1ToolApprovalRequestFactory(");
+    expect(daemon).toContain("approvalRequests: toolApprovalRequests,");
+    expect(daemon).toContain("createV1ToolApprovalRequestFactory({");
+    // Phase 4F replaced the legacy execution-dependency facade with the two canonical factories, which
+    // the composition root now builds directly.
+    expect(daemon).toContain("createToolInvocationExecutor({");
+    expect(daemon).toContain("createToolResultPipeline({");
+    expect(existsSync(join(root, "packages/tools"))).toBe(false);
   });
 
-  it("keeps the Tool failure memory inside the canonical admission flow", () => {
-    const memory = executable(`${LEGACY_TOOLS}tool-failure-memory.ts`);
-    // It is a pre-check, so it returns a policy decision instead of writing a durable row.
-    expect(memory).toContain("export function createToolFailureMemoryPreCheck(");
-    expect(memory).toContain('kind: "DENY"');
-    expect(memory).toContain("blockToolFailures: true");
-    expect(memory).not.toContain("failToolInvocation");
-    expect(memory).not.toContain("createRequestedToolInvocation");
-    expect(memory).not.toContain("commit(");
+  it("keeps the Tool failure memory retired and the pre-check port with one owner", () => {
+    // Phase 4C kept `ToolFailureMemory` inside the canonical admission *flow* through the injected
+    // pre-check port, without ever making it a durable writer. Phase 4F removed the class itself: it
+    // was not part of the V2 pipeline, and its only caller was the retired facade.
+    expect(existsSync(join(root, `${LEGACY_TOOLS}tool-failure-memory.ts`))).toBe(false);
+    const declarations = productionSources().filter((file) =>
+      executable(file).includes("class ToolFailureMemory"),
+    );
+    expect(declarations).toEqual([]);
+
+    // The pre-check *port* is the permanent contract, and it stays canonical and single-owned.
+    const portOwners = productionSources().filter((file) =>
+      executable(file).includes("export interface ToolAdmissionPreCheck {"),
+    );
+    expect(portOwners).toEqual([`${ADMISSION}admission-port.ts`]);
 
     // The canonical admission coordinator is the only caller, through the injected pre-check.
     const coordinator = executable(`${ADMISSION}admission-coordinator.ts`);

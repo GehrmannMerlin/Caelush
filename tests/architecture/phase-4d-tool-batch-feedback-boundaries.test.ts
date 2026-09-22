@@ -209,11 +209,13 @@ describe("Phase 4D canonical batch boundaries", () => {
       expect(carriers, `${name} must be declared once, in ${owner}`).toEqual([owner]);
     }
 
-    // The legacy package may keep a *compatibility* type of the same name, but never a second
-    // canonical declaration: the two are different contracts and only one is production.
-    const legacyBatchTypes = executable(`${LEGACY_TOOLS}batch-types.ts`);
-    expect(legacyBatchTypes).toContain("export interface ToolBatchCoordinatorPort");
-    expect(legacyBatchTypes).not.toContain("export interface ToolBatchCoordinator {");
+    // A *second* declaration of the batch coordinator contract anywhere in production would be a
+    // competing batch authority. Phase 4F removed the legacy package that used to carry a
+    // compatibility type of the same name, so `@caelush/agent` is now the only one.
+    const competing = productionSources().filter((file) =>
+      /export interface ToolBatchCoordinatorPort\b/.test(executableSources().get(file) ?? ""),
+    );
+    expect(competing, "no second batch coordinator contract may exist").toEqual([]);
   });
 
   it("keeps the canonical ToolBatchRequest and ToolBatchOutcome shapes frozen", () => {
@@ -547,11 +549,12 @@ describe("Phase 4D production cutover", () => {
     expect(daemon).not.toContain("new ToolBatchCoordinator(");
     expect(daemon).toContain("toolTurn,");
 
-    // 14. The canonical batch does not call the Dispatcher, and the production path cannot reach the
-    // legacy argument-failure persistence.
+    // 14. The canonical batch does not call a Dispatcher, and the production path cannot reach legacy
+    // argument-failure persistence. Phase 4F removed the Dispatcher entirely, so the file is gone
+    // rather than merely unreachable.
     expect(executable(`${BATCH}batch-coordinator.ts`)).not.toContain("Dispatcher");
     expect(daemon).not.toContain("persistArgumentFailure");
-    expect(existsSync(join(root, `${LEGACY_TOOLS}dispatcher.ts`))).toBe(true);
+    expect(existsSync(join(root, `${LEGACY_TOOLS}dispatcher.ts`))).toBe(false);
   });
 
   it("keeps Core free of a second model-feedback or normalization algorithm", () => {
@@ -573,7 +576,8 @@ describe("Phase 4D production cutover", () => {
       expect(coreResults, `Core must not re-derive ${reason}`).not.toContain(reason);
     }
 
-    // One declaration of the result-batch error, re-exported rather than redeclared.
+    // One declaration of the result-batch error; `@caelush/core` re-exports it rather than
+    // redeclaring it, and Phase 4F removed the legacy package that used to carry a second re-export.
     const errorOwners = productionSources().filter((file) =>
       /export class AgentToolResultBatchError\b/.test(executableSources().get(file) ?? ""),
     );
@@ -581,7 +585,7 @@ describe("Phase 4D production cutover", () => {
     expect(executable(`${CORE}agent-errors.ts`)).toContain(
       'export { AgentToolResultBatchError } from "@caelush/agent";',
     );
-    expect(executable(`${LEGACY_TOOLS}batch-errors.ts`)).toContain('from "@caelush/agent"');
+    expect(existsSync(join(root, `${LEGACY_TOOLS}batch-errors.ts`))).toBe(false);
 
     // And the Run Layer keeps its classification: a batch input error is a model error in the LLM
     // phase, and everything else is a Tool runtime error.
@@ -785,31 +789,39 @@ describe("Phase 4D frozen contracts and phase boundaries", () => {
     }
   });
 
-  it("keeps the legacy facade out of production without deleting it", () => {
-    // 4F owns the retirement. Until then the facade exists, is unreferenced by production, and its
-    // historical direct-call behaviour is explicitly *not* the production behaviour.
-    expect(existsSync(join(root, `${LEGACY_TOOLS}batch-coordinator.ts`))).toBe(true);
-    expect(existsSync(join(root, `${LEGACY_TOOLS}dispatcher.ts`))).toBe(true);
+  it("keeps the legacy batch facade retired rather than merely unreferenced", () => {
+    // Phase 4D left the facade in place and proved production did not reach it. Phase 4F owns the
+    // retirement, so the assertion is now the stronger one: the package, the facade and the second
+    // batch coordinator no longer exist anywhere.
+    expect(existsSync(join(root, "packages/tools"))).toBe(false);
+    expect(existsSync(join(root, `${LEGACY_TOOLS}batch-coordinator.ts`))).toBe(false);
+    expect(existsSync(join(root, `${LEGACY_TOOLS}dispatcher.ts`))).toBe(false);
 
     const legacyUsers = productionSources().filter((file) => {
-      if (file.startsWith(LEGACY_TOOLS)) return false;
       const source = executableSources().get(file) ?? "";
       return (
         /new ToolBatchCoordinator\(/.test(source) || /\bToolBatchCoordinatorPort\b/.test(source)
       );
     });
-    expect(legacyUsers, "no production file may construct or name the legacy batch").toEqual([]);
+    expect(legacyUsers, "no production file may construct or name a legacy batch").toEqual([]);
 
-    // The canonical package does not depend on the legacy one in either direction.
+    // The canonical package does not depend on the retired one in either direction.
     for (const file of filesUnder(BATCH)) {
       expect(executableSources().get(file) ?? "").not.toContain("@caelush/tools");
     }
 
-    // And the legacy package's *error* classes are re-exports, so `instanceof` agrees across packages.
-    const legacyErrors = executable(`${LEGACY_TOOLS}batch-errors.ts`);
-    expect(legacyErrors).toContain("export {");
-    expect(legacyErrors).toContain('} from "@caelush/agent";');
-    expect(legacyErrors).not.toContain("export class ToolBatchInputError");
-    expect(legacyErrors).not.toContain("export class ToolBatchInfrastructureError");
+    // And the batch error classes are declared exactly once, in the Agent package: an `instanceof`
+    // check agrees everywhere because there is only one class object to check against.
+    const batchErrors = executable(`${BATCH}batch-errors.ts`);
+    expect(batchErrors).toContain("export class ToolBatchInputError");
+    expect(batchErrors).toContain("export class ToolBatchInfrastructureError");
+    const competing = productionSources().filter(
+      (file) =>
+        file !== `${BATCH}batch-errors.ts` &&
+        /export class ToolBatch(?:Input|Infrastructure)Error\b/.test(
+          executableSources().get(file) ?? "",
+        ),
+    );
+    expect(competing, "the batch error classes are declared exactly once").toEqual([]);
   });
 });

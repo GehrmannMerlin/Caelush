@@ -205,7 +205,7 @@ describe("Phase 4A Agent Tool package boundaries", () => {
     ]);
   });
 
-  it("keeps the target packages from importing the legacy Tool System", () => {
+  it("keeps the target packages from importing the retired legacy Tool System", () => {
     const violations: string[] = [];
     for (const file of [...filesUnder(AGENT_TOOLS), ...filesUnder(CODING_TOOLS)]) {
       for (const specifier of importsFrom(executable(file))) {
@@ -216,13 +216,17 @@ describe("Phase 4A Agent Tool package boundaries", () => {
     }
     expect(violations).toEqual([]);
 
-    // And each mechanism has exactly one declaration site, in the package that now owns it. A
-    // second declaration anywhere would be a second authority with the same name; a barrel file
-    // (`index.ts`) re-exporting is the whole point of a facade and is not a declaration.
+    // And each mechanism Phase 4A moved has exactly one declaration site, in the package that owns it.
+    // A second declaration anywhere would be a second authority with the same name. Phase 4F removed
+    // the legacy package that used to hold the twins of the first three, so the rule is now stated
+    // over all production source rather than over the by-then-deleted directory.
     for (const [entry, declaration, owner] of [
-      ["ToolRegistryBuilder", /\bclass ToolRegistryBuilder\b/, LEGACY_TOOLS],
-      ["ToolPreflight", /\bclass ToolPreflight\b/, LEGACY_TOOLS],
-      ["validateToolArguments", /\bfunction validateToolArguments\(/, LEGACY_TOOLS],
+      [
+        "ToolRegistryBuilder",
+        /\bclass DefaultAgentToolRegistryBuilder\b/,
+        `${AGENT_TOOLS}registry/`,
+      ],
+      ["ToolCallPreparer", /\bfunction createToolCallPreparer\(/, `${AGENT_TOOLS}call/`],
       ["ToolSchemaRuntime", /\bclass ToolSchemaRuntime\b/, `${AGENT_TOOLS}schema/`],
     ] as const) {
       const declarers = productionSources()
@@ -233,44 +237,36 @@ describe("Phase 4A Agent Tool package boundaries", () => {
     }
   });
 
-  it("declares the legacy package as a delegating facade, not a second implementation", () => {
-    // The registry builder delegates to the canonical builder and declares no compiler of its own.
-    const builder = executable(`${LEGACY_TOOLS}registry-builder.ts`);
-    expect(builder).toContain("new DefaultAgentToolRegistryBuilder(this.canonicalOptions)");
-    expect(builder).toContain("this.canonical.register(classified.agentTool)");
-    expect(builder).toContain("this.canonical.build()");
-    expect(builder).not.toContain("new Ajv(");
-    expect(builder).not.toContain("compileSchema(");
+  it("has retired the legacy Tool System rather than leaving it as a facade", () => {
+    // Phase 4A kept `packages/tools` alive as a delegating facade and this guard asserted *how* it
+    // delegated. Phase 4F owns the retirement, so every one of those modules is gone.
+    expect(existsSync(join(root, "packages/tools"))).toBe(false);
+    for (const retired of [
+      "registry-builder.ts",
+      "schema-runtime.ts",
+      "preflight.ts",
+      "legacy-argument-validation.ts",
+      "tool-adapters.ts",
+      "dispatcher.ts",
+    ]) {
+      expect(existsSync(join(root, `${LEGACY_TOOLS}${retired}`)), retired).toBe(false);
+    }
 
-    // Schema compilation is re-exported, not reimplemented.
-    const schemaRuntime = executable(`${LEGACY_TOOLS}schema-runtime.ts`);
-    expect(schemaRuntime).toContain("export { ToolSchemaRuntime");
-    expect(schemaRuntime).not.toContain("new Ajv(");
+    // And the canonical Preparer is what production prepares a call with.
+    const preparer = executable(`${AGENT_TOOLS}call/tool-call-preparer-impl.ts`);
+    expect(preparer).toContain("export function createToolCallPreparer(");
+    expect(preparer).not.toContain("new Ajv(");
+  });
 
-    // Preflight delegates resolution and validation to the canonical implementations.
-    const preflight = executable(`${LEGACY_TOOLS}preflight.ts`);
-    expect(preflight).toContain("this.registry.resolve(toolName)");
-    expect(preflight).toContain("validateToolArguments(tool, args");
-    expect(preflight).not.toContain("inputValidator.validate(");
-
-    // The one argument-validation entry point validates with the compiler that built the validator.
-    const argumentValidation = executable(`${LEGACY_TOOLS}legacy-argument-validation.ts`);
-    expect(argumentValidation).toContain("normalizeToolArgumentsForCompatibility");
-    expect(argumentValidation).toContain("tool.inputValidator.validate(normalized)");
-    expect(argumentValidation).not.toContain("new Ajv(");
-    expect(argumentValidation).not.toContain("function parseNumericString(");
-
-    // A legacy definition becomes a canonical Tool through exactly one classification function.
-    const adapters = executable(`${LEGACY_TOOLS}tool-adapters.ts`);
-    expect(adapters).toContain("export function resolveAgentToolRegistration(");
-    expect(adapters).toContain("export function createLegacyExecute(");
-    expect(adapters).not.toContain("new Ajv(");
-
-    // The dispatcher prepares every call through the canonical Preparer.
-    const dispatcher = executable(`${LEGACY_TOOLS}dispatcher.ts`);
-    expect(dispatcher).toContain("createToolCallPreparer(options.registry.agentRegistry()");
-    expect(dispatcher).toContain("return this.canonicalPreparer.prepare(request);");
-    expect(dispatcher).toContain("this.prepareToolCall({");
+  it("keeps exactly one argument-normalization implementation", () => {
+    // Phase 4A's rule was "never two argument-validation algorithms". The canonical Preparer validates
+    // the prepared call, and the compatibility normalization exists once, in the Coding package.
+    const normalizationDeclarers = productionSources().filter((file) =>
+      executable(file).includes("function parseNumericString("),
+    );
+    expect(normalizationDeclarers).toEqual([
+      "packages/coding-agent/src/tools/legacy-argument-normalization.ts",
+    ]);
   });
 
   it("keeps the Coding overlay in the Coding package, keyed by the registry's ToolName", () => {
@@ -314,13 +310,22 @@ describe("Phase 4A Agent Tool package boundaries", () => {
       }
     }
 
-    // No production file gains a concurrency primitive for Tool execution.
-    for (const file of [
-      ...toolFiles,
-      `${LEGACY_TOOLS}dispatcher.ts`,
-      `${LEGACY_TOOLS}batch-coordinator.ts`,
-    ]) {
+    // No production file gains a concurrency primitive for Tool execution. Phase 4F removed the two
+    // legacy modules that used to be named here, so the rule now covers all production source.
+    for (const file of toolFiles) {
       const source = executable(file);
+      expect(source, `${file} must not introduce parallelism`).not.toMatch(
+        /\bPromise\.all\b|\bPromise\.allSettled\b|\bnew Worker\b/,
+      );
+    }
+    for (const file of productionSources()) {
+      const source = executable(file);
+      const isToolExecutionPath =
+        file.includes("/tools/batch/") ||
+        file.includes("/tools/durable/") ||
+        file.includes("/tools/execution/") ||
+        file.includes("/tools/result/");
+      if (!isToolExecutionPath) continue;
       expect(source, `${file} must not introduce parallelism`).not.toMatch(
         /\bPromise\.all\b|\bPromise\.allSettled\b|\bnew Worker\b/,
       );

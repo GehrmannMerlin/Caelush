@@ -13,6 +13,12 @@ export const repositoryRoot = path.resolve(
  * `coding-agent` were added by Architecture V2 Phase 1A as empty skeletons; the
  * legacy packages stay listed until their own migration phase renames or
  * deletes them.
+ *
+ * `tools` was removed by Architecture V2 Phase 4F: the legacy `@caelush/tools`
+ * package is gone, its general responsibilities live in `agent`, its Coding
+ * responsibilities in `coding-agent`. It is deliberately not listed here, and
+ * `phase-4f-tool-system-final-boundaries.test.ts` asserts instead that the
+ * directory and every workspace reference to it are absent.
  */
 export const packageNames = [
   "protocol",
@@ -21,7 +27,6 @@ export const packageNames = [
   "agent",
   "llm",
   "context",
-  "tools",
   "runtime",
   "security",
   "verification",
@@ -33,6 +38,12 @@ export const packageNames = [
   "client",
   "coding-agent",
 ] as const;
+
+/** The workspace package that Phase 4F retired. It must never reappear. */
+export const retiredLegacyToolPackage = {
+  directory: "packages/tools",
+  name: "@caelush/tools",
+} as const;
 
 export const appNames = ["daemon", "cli", "web", "launcher"] as const;
 

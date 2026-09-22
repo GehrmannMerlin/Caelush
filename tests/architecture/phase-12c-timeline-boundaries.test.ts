@@ -9,19 +9,38 @@ describe("Phase 12C timeline boundaries", () => {
 
     expect(source).toMatch(/@caelush\/client/);
     expect(source).toMatch(/@caelush\/protocol/);
-    expect(source).not.toMatch(/@caelush\/(core|storage|runtime|security|tools|verification|llm)/);
+    // Phase 4F deleted `@caelush/tools`: the Tool System's live packages are the general kernel
+    // `@caelush/agent` and the Coding product layer `@caelush/coding-agent`, and a client-only host
+    // reaches neither.
+    expect(source).not.toMatch(
+      /@caelush\/(core|storage|runtime|security|agent|coding-agent|verification|llm)/,
+    );
     // Phase 12D adds an injected reconnect scheduler and one system timer adapter.
     expect(source).not.toMatch(/fetch\s*\(|node:fs|toolCallId/);
     expect(source.match(/<Static\b/g)).toHaveLength(1);
   });
 
   it("keeps presentation direction and raw argument boundaries intact", async () => {
-    const toolsSource = await readFile(resolve("packages/tools/src/presentation.ts"), "utf8");
-    const eventFactory = await readFile(resolve("packages/tools/src/event-factory.ts"), "utf8");
+    // Phase 4F deleted `@caelush/tools`. The presentation *ports* are part of the general Tool Kernel
+    // in `@caelush/agent`, the durable Tool events are the kernel's, and the Coding/Security side
+    // consumes the ports rather than the reverse.
+    const presentationPorts = await readFile(
+      resolve("packages/agent/src/tools/types/tool-presentation.ts"),
+      "utf8",
+    );
+    const eventFactory = await readFile(
+      resolve("packages/agent/src/tools/durable/durable-events.ts"),
+      "utf8",
+    );
     const securitySource = await readFile(resolve("packages/security/src/presentation.ts"), "utf8");
 
-    expect(toolsSource).not.toContain("@caelush/security");
-    expect(securitySource).toContain("@caelush/tools");
+    // Presentation is a projection of the Tool layer, never an input to Security policy: the port
+    // names no Security implementation, and Security imports the port rather than the reverse.
+    expect(presentationPorts).not.toContain("@caelush/security");
+    expect(securitySource).toContain("@caelush/agent");
+    expect(securitySource).not.toMatch(/from\s+["']@caelush\/tools["']/);
+    // The durable Tool events carry identifiers and sanitized presentation text only: raw invocation
+    // arguments never enter an event payload.
     expect(eventFactory).not.toMatch(/invocation\.args|payload:.*args/);
     expect(eventFactory).toContain("createToolOutputEvent");
   });

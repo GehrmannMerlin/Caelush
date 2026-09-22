@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
-import { repositoryRoot } from "./support/workspace.js";
+import { pathExists, repositoryRoot, retiredLegacyToolPackage } from "./support/workspace.js";
 
 async function sourceTree(relativeRoot: string): Promise<string> {
   const root = path.join(repositoryRoot, relativeRoot);
@@ -15,12 +15,16 @@ async function sourceTree(relativeRoot: string): Promise<string> {
 describe("Phase 8C process runtime boundaries", () => {
   it("keeps spawning inside runtime adapters and below the Tool layer", async () => {
     const runtime = await sourceTree("packages/runtime/src");
-    const tools = await sourceTree("packages/tools/src");
+    // Phase 4F deleted `@caelush/tools`; the Coding Tool product layer that owns the nine builtins and
+    // their Runtime adapters is `@caelush/coding-agent` now, so that is the Tool layer this guard
+    // reads.
+    expect(await pathExists(retiredLegacyToolPackage.directory)).toBe(false);
+    const codingTools = await sourceTree("packages/coding-agent/src");
     expect(runtime).not.toMatch(
-      /from\s+["']@caelush\/(?:tools|core|storage|events|llm|security|verification)["']/,
+      /from\s+["']@caelush\/(?:agent|coding-agent|core|storage|events|llm|security|verification)["']/,
     );
-    expect(tools).not.toMatch(/from\s+["']node:(?:child_process|pty)["']/);
-    expect(tools).not.toContain("node-pty");
+    expect(codingTools).not.toMatch(/from\s+["']node:(?:child_process|pty)["']/);
+    expect(codingTools).not.toContain("node-pty");
     expect(runtime).not.toContain("shell: true");
     expect(runtime).not.toMatch(/\b(?:exec|execSync|execFile)\s*\(/);
   });

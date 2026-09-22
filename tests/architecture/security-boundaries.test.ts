@@ -16,13 +16,22 @@ async function sourceFiles(directory: string): Promise<string[]> {
 }
 
 describe("security architecture boundaries", () => {
-  it("keeps Security above only Protocol and the Tool Gate port", async () => {
+  it("keeps Security above only Protocol, the Agent Tool contract and its own implementation", async () => {
     const sourceRoot = path.join(repositoryRoot, "packages", "security", "src");
     const files = await sourceFiles(sourceRoot);
     const sources = await Promise.all(files.map((file) => readFile(file, "utf8")));
     const source = sources.join("\n");
+
     expect(source).toMatch(/from\s+["']@caelush\/protocol["']/);
-    expect(source).toMatch(/from\s+["']@caelush\/tools["']/);
+    // The Tool Gate contract lives in the Agent Tool framework, which is where the layer that consumes
+    // the decision can reach it without a build-order cycle against the Coding product layer.
+    expect(source).toMatch(/from\s+["']@caelush\/agent["']/);
+    // The Coding security-fact vocabulary and the Coding metadata types are the overlay this Gate
+    // evaluates; they are consumed as types, never as an implementation.
+    expect(source).toMatch(/from\s+["']@caelush\/coding-agent["']/);
+    // The retired legacy Tool System must never come back.
+    expect(source).not.toMatch(/from\s+["']@caelush\/tools["']/);
+
     expect(source).not.toMatch(
       /from\s+["']@caelush\/(?:runtime|core|storage|events|llm|context|verification|daemon|cli|web)["']/,
     );
@@ -44,20 +53,53 @@ describe("security architecture boundaries", () => {
     expect(source).not.toContain("SECRET_TOKEN_9A_789");
   });
 
-  it("does not make Tools depend on Security", async () => {
-    const sourceRoot = path.join(repositoryRoot, "packages", "tools", "src");
+  it("keeps Security implementation detail out of the Coding Tool product layer", async () => {
+    // The retired `packages/tools` suite asserted "Tools must not import Security". Phase 4F deleted
+    // that package, and the equivalent permanent rule is now about the Coding product layer, which is
+    // the only Tool product layer left: it owns the Coding security facts and must not reach into the
+    // Security implementation, an evaluator, a Gate instance or the redaction helpers.
+    const sourceRoot = path.join(repositoryRoot, "packages", "coding-agent", "src");
     const files = await sourceFiles(sourceRoot);
-    const source = (await Promise.all(files.map((file) => readFile(file, "utf8")))).join("\n");
+    const source = (await Promise.all(files.map((file) => readFile(file, "utf8"))))
+      // Comments stripped: a Coding module may *describe* the Security implementation it deliberately
+      // does not use, and describing it is not depending on it.
+      .map((text) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, ""))
+      .join("\n");
+
     expect(source).not.toMatch(/from\s+["']@caelush\/security["']/);
+    expect(source).not.toMatch(/\bCaelushToolExecutionGate\b/);
+    for (const implementation of [
+      "evaluateSecurityPolicy",
+      "evaluateInputSecurityPolicy",
+      "CaelushToolResultSanitizer",
+      "CaelushToolPresentation",
+      "redactText(",
+      "detectSecrets(",
+    ]) {
+      expect(source, implementation).not.toContain(implementation);
+    }
   });
 
   it("keeps Phase 9C sanitizer injection explicit and documents the Phase 9D boundary", async () => {
-    const sourceRoot = path.join(repositoryRoot, "packages", "tools", "src");
-    const files = await sourceFiles(sourceRoot);
-    const source = (await Promise.all(files.map((file) => readFile(file, "utf8")))).join("\n");
-    expect(source).toContain("resultSanitizer");
-    expect(source).not.toContain("INSECURE_NOOP_SANITIZER");
-    expect(source).not.toContain("SECRET_APPROVAL_9C_TOKEN");
+    // The sanitizer is injected into the canonical result pipeline, so "explicit, never defaulted to a
+    // no-op" is now a property of the composition and of the canonical pipeline contract.
+    const composition = await readFile(
+      path.join(repositoryRoot, "apps", "daemon", "src", "daemon-composition.ts"),
+      "utf8",
+    );
+    expect(composition).toContain("sanitizer: toolSecurity.resultSanitizer");
+    expect(composition).toContain("CaelushToolExecutionUpdateSanitizer");
+    expect(composition).not.toContain("INSECURE_NOOP_SANITIZER");
+
+    const securitySource = (
+      await Promise.all(
+        (await sourceFiles(path.join(repositoryRoot, "packages", "security", "src"))).map((file) =>
+          readFile(file, "utf8"),
+        ),
+      )
+    ).join("\n");
+    expect(securitySource).not.toContain("INSECURE_NOOP_SANITIZER");
+    expect(securitySource).not.toContain("SECRET_APPROVAL_9C_TOKEN");
 
     const readme = await readFile(path.join(repositoryRoot, "README.md"), "utf8");
     expect(readme).toContain("Phase 9C");

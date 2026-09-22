@@ -1,4 +1,4 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -7,8 +7,8 @@ import { describe, expect, it } from "vitest";
  *
  * ```text
  * @caelush/coding-agent   the nine Coding builtin business implementations
- * @caelush/tools          compatibility facades that delegate there and own no algorithm
- * apps/daemon             composes the target layer; the legacy default builder is not on the path
+ * @caelush/agent          the general Agent Tool Kernel they are built on
+ * apps/daemon             composes the target layer
  * ```
  *
  * The round's completion gate names two conditions that must hold *together*:
@@ -20,12 +20,20 @@ import { describe, expect, it } from "vitest";
  *
  * Either one alone is satisfiable by doing nothing useful — the first by leaving the target code
  * unreferenced, the second by deleting it. This guard is written to fail on both failure modes: it
- * asserts where the implementations are, that the legacy modules contain none, and that production
- * actually executes the target ones.
+ * asserts where the implementations are, that nothing outside the Coding product layer contains a
+ * second one, and that production actually executes the target ones.
  *
  * It is a *source* guard, deliberately. The runtime behaviour is proven by the builtin suites, the
  * Operations contract suite, the Runtime adapter suite, the fidelity suite and the daemon E2E suites;
  * what a source guard adds is the thing those cannot see — that a second copy did not quietly return.
+ *
+ * ## Phase 4F revised this file
+ *
+ * Phase 4E's acceptance boundary included keeping the legacy `@caelush/tools` package alive with its
+ * facade surface intact, and this guard asserted that directly. Phase 4F **retired that package**, so
+ * every assertion that named it has been restated as the permanent rule it was standing in for:
+ * "the Coding product layer owns this and nothing else does". The migration-era assertions were
+ * replaced, never weakened — a guard whose subject was deleted is repointed at the owner, not emptied.
  */
 
 const repositoryRoot = process.cwd();
@@ -36,6 +44,16 @@ function abs(...parts: readonly string[]): string {
 
 async function read(relativePath: string): Promise<string> {
   return await readFile(abs(relativePath), "utf8");
+}
+
+/** True when a path exists. A guard must be able to assert an absence without throwing. */
+async function exists(relativePath: string): Promise<boolean> {
+  try {
+    await stat(abs(relativePath));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Source with comments removed, so documentation about a forbidden pattern is not a violation. */
@@ -51,6 +69,38 @@ async function filesUnder(relativeDir: string): Promise<readonly string[]> {
     else if (entry.name.endsWith(".ts")) found.push(relative);
   }
   return found;
+}
+
+/** Every active TypeScript source in the workspace, so a rule can be checked repository-wide. */
+async function allSourceFiles(): Promise<readonly string[]> {
+  const roots = ["apps", "packages", "tests", "scripts"];
+  const found: string[] = [];
+  for (const root of roots) {
+    if (!(await exists(root))) continue;
+    for (const file of await filesUnder(root)) {
+      // Normalise before filtering: on Windows `path.join` produces backslashes, and a `/dist/` test
+      // against a backslash path silently keeps generated output in scope.
+      const normalized = file.replaceAll("\\", "/");
+      if (normalized.includes("node_modules") || normalized.includes("/dist/")) continue;
+      // The top-level `tests/` tree is a test tree even where its path has no `/test/` segment.
+      if (normalized.startsWith("tests/")) continue;
+      found.push(normalized);
+    }
+  }
+  return found;
+}
+
+/**
+ * The workspace's production sources only.
+ *
+ * A guard that asserts "nobody else declares this" must exclude tests: a test fixture is allowed — and
+ * often required — to build a Tool of its own, and treating a fixture as a second implementation would
+ * make the rule unfalsifiable in the other direction.
+ */
+async function sourceFilesUnder(relativeDir: string): Promise<readonly string[]> {
+  return (await allSourceFiles()).filter(
+    (file) => file.startsWith(`${relativeDir}/`) && !file.includes("/test/"),
+  );
 }
 
 const NINE = [
@@ -88,94 +138,112 @@ describe("Phase 4E guard — builtin ownership", () => {
     expect(order).toEqual([...NINE]);
   });
 
-  it("keeps the nine authoritative implementations out of @caelush/tools", async () => {
-    const files = await filesUnder("packages/tools/src/builtins");
+  it("declares the nine builtins in exactly one place in production source", async () => {
+    // Which package declares each Tool's provider-visible name, and how many times. Tests are excluded:
+    // a fixture may construct a Tool, and that is not a second implementation of a Coding builtin.
+    const declarations = new Map<string, string[]>(NINE.map((name) => [name, []]));
+    for (const file of await allSourceFiles()) {
+      if (file.includes("/test/")) continue;
+      const text = code(await read(file));
+      for (const name of NINE) {
+        if (text.includes(`name: "${name}"`)) declarations.get(name)!.push(file);
+      }
+    }
 
-    for (const file of files) {
-      const text = code(await readFile(abs(file), "utf8"));
-      const name = path.relative(repositoryRoot, abs(file)).replaceAll("\\", "/");
-      // `result.ts` is the shared helper module and is asserted separately: it is a re-export list.
-      if (name === "packages/tools/src/builtins/result.ts") continue;
+    for (const [name, where] of declarations) {
+      expect(where, name).toEqual([
+        `packages/coding-agent/src/tools/builtins/${name.replaceAll("_", "-")}.ts`,
+      ]);
+    }
 
-      // A facade may not declare a Tool's provider-visible surface...
-      expect(text, name).not.toContain("inputSchema");
-      expect(text, name).not.toContain("additionalProperties");
-      // ...nor its argument bounds...
-      expect(text, name).not.toContain("positiveBoundedInteger");
-      expect(text, name).not.toContain("DEFAULT_LIMIT =");
-      // ...nor its failure vocabulary...
-      expect(text, name).not.toContain("errorResult(");
-      // ...nor its result shaping...
-      expect(text, name).not.toContain("successResult(");
-      // ...nor a Runtime scope of its own.
-      expect(text, name).not.toContain("withRuntimeScope");
-      expect(text, name).not.toContain("openWorkspace");
-      expect(text, name).not.toMatch(/\bscope\./);
+    // And the default set composes exactly those nine, in the frozen order.
+    const defaultTools = code(
+      await read("packages/coding-agent/src/tools/builtins/default-tools.ts"),
+    );
+    const order = [...defaultTools.matchAll(/^\s{2}"([a-z_]+)",$/gm)].map((match) => match[1]);
+    expect(order).toEqual([...NINE]);
+  });
+
+  it("has no second business implementation of any builtin", async () => {
+    // A builtin's provider-visible surface exists in its own module and nowhere else in production
+    // source. A file that names a Tool is a consumer, and a consumer may not restate the Tool's
+    // contract — the name plus schema is what a Tool *is* in this architecture.
+    const ownerDir = "packages/coding-agent/src/tools/builtins";
+    for (const file of await allSourceFiles()) {
+      if (file.includes("/test/")) continue;
+      if (file.startsWith(`${ownerDir}/`)) continue;
+
+      const text = code(await read(file));
+      for (const name of NINE) {
+        if (!text.includes(`name: "${name}"`)) continue;
+        expect(file, `${name} redeclared`).toBe(ownerDir);
+      }
     }
   });
 
-  it("keeps the legacy builtin result helpers a re-export list", async () => {
-    const text = code(await read("packages/tools/src/builtins/result.ts"));
-
-    // One bound table and one pair of details schemas, both in the Coding product layer. The legacy
-    // module names them and declares nothing.
-    expect(text).toContain('from "@caelush/coding-agent"');
-    expect(text).not.toContain("export const");
-    expect(text).not.toContain("export function");
-    expect(text).not.toContain("additionalProperties");
-    // And it does not bring back the per-call runtime resolution the round removed.
-    expect(text).not.toContain("withRuntimeScope");
-    expect(text).not.toContain("RuntimeResolver");
-  });
-
-  it("makes every legacy builtin module delegate to a Coding factory", async () => {
+  it("declares each of the nine Coding factories exactly once", async () => {
     const expected: readonly (readonly [string, string])[] = [
-      ["read-file.ts", "createReadFileTool"],
-      ["list-directory.ts", "createListDirectoryTool"],
-      ["find-files.ts", "createFindFilesTool"],
-      ["search-text.ts", "createSearchTextTool"],
-      ["apply-patch.ts", "createApplyPatchTool"],
-      ["exec-command.ts", "createExecCommandTool"],
-      ["write-stdin.ts", "createWriteStdinTool"],
-      ["git-status.ts", "createGitStatusTool"],
-      ["git-diff.ts", "createGitDiffTool"],
+      ["createReadFileTool", "read-file.ts"],
+      ["createListDirectoryTool", "list-directory.ts"],
+      ["createFindFilesTool", "find-files.ts"],
+      ["createSearchTextTool", "search-text.ts"],
+      ["createApplyPatchTool", "apply-patch.ts"],
+      ["createExecCommandTool", "exec-command.ts"],
+      ["createWriteStdinTool", "write-stdin.ts"],
+      ["createGitStatusTool", "git-status.ts"],
+      ["createGitDiffTool", "git-diff.ts"],
     ];
 
-    for (const [fileName, factory] of expected) {
-      const text = await read(`packages/tools/src/builtins/${fileName}`);
-      expect(text, fileName).toContain(`from "@caelush/coding-agent"`);
-      expect(text, fileName).toContain(factory);
-      // The delegation is the whole body: the module adapts a CodingToolDefinition and returns.
-      expect(text, fileName).toContain("toLegacyToolRegistration(");
-      expect(text, fileName).toContain("createRuntime");
+    const declared = new Map<string, string[]>(expected.map(([name]) => [name, []]));
+    for (const file of await allSourceFiles()) {
+      const text = code(await read(file));
+      const normalized = file.replaceAll("\\", "/");
+      for (const [name] of expected) {
+        if (new RegExp(`export function ${name}\\(`).test(text))
+          declared.get(name)!.push(normalized);
+      }
+    }
+
+    for (const [name, fileName] of expected) {
+      expect(declared.get(name), name).toEqual([`${ownerDirPath()}/${fileName}`]);
     }
   });
 
-  it("keeps the legacy security facts, effects and approval identity as re-exports", async () => {
-    // Each of the three modules the round re-pointed must read as a delegation list, not as a second
-    // algorithm. The projectors themselves are asserted to be the canonical function objects by the
-    // authority-fidelity suite; this is the source-side statement of the same fact.
-    const securityFacts = code(await read("packages/tools/src/builtins/security-facts.ts"));
-    expect(securityFacts).toContain('from "@caelush/coding-agent"');
-    expect(securityFacts).not.toContain("inspectPatchTargets");
-    expect(securityFacts).not.toContain("replaceAll");
+  it("re-exports the canonical Coding security facts, effects and approval identity", async () => {
+    // Each of the three modules the round owns must contain the algorithm, not a delegation to a
+    // second copy. Phase 4F removed the legacy package that used to hold the delegating twins, so the
+    // statement is now the strong one: this is where the function objects live.
+    const securityFacts = code(
+      await read("packages/coding-agent/src/tools/security/security-facts.ts"),
+    );
+    expect(securityFacts).toContain("inspectPatchTargets");
+    expect(securityFacts).toContain("projectReadFileSecurityFacts");
 
-    const effects = code(await read("packages/tools/src/tool-effects.ts"));
-    expect(effects).toContain('from "@caelush/coding-agent"');
-    expect(effects).not.toContain("changeType ===");
-    expect(effects).not.toContain("switch (effect.type)");
+    const effects = code(
+      await read("packages/coding-agent/src/tools/effects/effect-projectors.ts"),
+    );
+    // The patch effect projector switches on the change kind: one algorithm, in the Coding layer.
+    expect(effects).toContain("export function projectPatchEffects(");
+    expect(effects).toContain(".kind ===");
+    expect(effects).toContain("export function projectReadFileEffect(");
 
-    const approval = code(await read("packages/tools/src/approval-key.ts"));
+    const approval = code(
+      await read("packages/coding-agent/src/tools/security/approval-identity.ts"),
+    );
     expect(approval).toContain("computeCodingToolApprovalKey");
-    expect(approval).not.toContain("createHash");
-    expect(approval).not.toContain("canonicalJsonString");
+    expect(approval).toContain("createHash");
+    expect(approval).toContain("canonicalJsonString");
 
-    const guidance = code(await read("packages/tools/src/model-guidance.ts"));
+    const guidance = code(await read("packages/coding-agent/src/tools/prompt/prompt-snippets.ts"));
     expect(guidance).toContain("CODING_TOOL_PROMPT_SNIPPETS");
-    // The eight-field table is gone: the text has one source, the Coding prompt snippet.
-    expect(guidance).not.toContain('purpose: "Read bounded UTF-8 text."');
+    expect(guidance).toContain("READ_FILE_PROMPT_SNIPPET");
   });
 });
+
+/** The one directory the nine Coding builtin modules live in, with forward slashes. */
+function ownerDirPath(): string {
+  return "packages/coding-agent/src/tools/builtins";
+}
 
 describe("Phase 4E guard — the Runtime boundary", () => {
   it("keeps RuntimeResolver and RuntimeWorkspaceScope out of the builtins", async () => {
@@ -244,25 +312,32 @@ describe("Phase 4E guard — the Runtime boundary", () => {
 });
 
 describe("Phase 4E guard — dependency direction", () => {
-  it("lets @caelush/tools depend on @caelush/coding-agent and never the reverse", async () => {
-    const toolsManifest = JSON.parse(await read("packages/tools/package.json")) as {
-      dependencies?: Record<string, string>;
-    };
-    expect(toolsManifest.dependencies?.["@caelush/coding-agent"]).toBe("workspace:*");
-
+  it("keeps the Coding product layer one-way: it depends on the Agent Kernel, never the reverse", async () => {
     const codingManifest = JSON.parse(await read("packages/coding-agent/package.json")) as {
       dependencies?: Record<string, string>;
       devDependencies?: Record<string, string>;
     };
+    // The Coding product layer builds on the general Agent Tool Kernel and on nothing legacy.
+    expect(codingManifest.dependencies?.["@caelush/agent"]).toBe("workspace:*");
     expect(codingManifest.dependencies?.["@caelush/tools"]).toBeUndefined();
     expect(codingManifest.devDependencies?.["@caelush/tools"]).toBeUndefined();
+
+    const agentManifest = JSON.parse(await read("packages/agent/package.json")) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    // The Kernel may never depend back on the Coding product layer.
+    expect(agentManifest.dependencies?.["@caelush/coding-agent"]).toBeUndefined();
+    expect(agentManifest.devDependencies?.["@caelush/coding-agent"]).toBeUndefined();
+    expect(agentManifest.dependencies?.["@caelush/tools"]).toBeUndefined();
   });
 
-  it("keeps @caelush/tools out of the coding-agent source", async () => {
+  it("keeps the retired legacy package out of the coding-agent source and out of the workspace", async () => {
     for (const file of await filesUnder("packages/coding-agent/src")) {
       const text = code(await read(file));
       expect(text, path.relative(repositoryRoot, abs(file))).not.toContain('"@caelush/tools"');
     }
+    expect(await exists("packages/tools")).toBe(false);
   });
 });
 
@@ -294,7 +369,7 @@ describe("Phase 4E guard — Operations declarations", () => {
       expect(where, name).toHaveLength(1);
     }
     // And no second declaration anywhere else in the repository's source.
-    for (const root of ["packages/tools/src", "packages/agent/src", "packages/core/src"]) {
+    for (const root of ["packages/agent/src", "packages/core/src", "packages/security/src"]) {
       for (const file of await filesUnder(root)) {
         const text = code(await read(file));
         for (const name of names) {
@@ -344,17 +419,19 @@ describe("Phase 4E guard — the Coding definition field", () => {
 
 describe("Phase 4E guard — prompt authority", () => {
   it("keeps promptSnippet out of AIToolSpec.description", async () => {
-    // The legacy builder still folds *explicitly supplied* guidance into a description, which is public
-    // API until Phase 4F. What must not happen is the Coding snippet being appended there.
-    const builder = code(await read("packages/tools/src/registry-builder.ts"));
-    expect(builder).toContain("appendToolModelGuidance");
-    expect(builder).not.toContain("promptSnippet");
-
-    // And no builtin facade supplies guidance at all.
-    for (const file of await filesUnder("packages/tools/src/builtins")) {
+    // Phase 4F removed the legacy builder that used to fold *explicitly supplied* guidance into a
+    // description. The rule is now absolute and repository-wide: nothing in the workspace appends
+    // Coding guidance to a Tool description, and no Coding Tool supplies `modelGuidance` at all.
+    // That is what keeps usage guidance in the budgeted Context block, where Phase 4E put it.
+    for (const file of await allSourceFiles()) {
       const text = code(await read(file));
-      expect(text, file).not.toContain("modelGuidance");
+      expect(text, `${file} / appendToolModelGuidance`).not.toContain("appendToolModelGuidance");
+      expect(text, `${file} / ToolModelGuidance`).not.toContain("ToolModelGuidance");
+      expect(text, `${file} / createBuiltinToolModelGuidance`).not.toContain(
+        "createBuiltinToolModelGuidance",
+      );
     }
+    expect(await exists("packages/tools")).toBe(false);
   });
 
   it("gives ToolPromptContextProvider a real production composition reference", async () => {
@@ -407,19 +484,25 @@ describe("Phase 4E guard — production composition", () => {
     }
   });
 
-  it("reads a Coding Tool's durable risk from the catalog rather than a legacy definition", async () => {
-    const adapter = code(await read("packages/tools/src/tool-admission-adapter.ts"));
-
-    // `catalog` is consulted first; the registered definition is the fallback for a generic Tool that
-    // has no Coding metadata at all, which is what keeps a plugin Tool a first-class citizen.
-    expect(adapter).toContain("options.catalog?.get(toolName)?.security.riskLevel");
-    expect(adapter).toContain(
-      "definitionsByName.get(toolName) ?? options.registry.resolve(toolName)?.definition",
+  it("reads a Coding Tool's durable risk from the catalog rather than a second Tool description", async () => {
+    const adapter = code(
+      await read("packages/coding-agent/src/tools/admission/tool-admission-port.ts"),
     );
+
+    // The Coding catalog is the authority for a Coding Tool's risk; a Tool it does not describe has no
+    // Coding metadata at all, which is what keeps a plugin Tool a first-class citizen.
+    expect(adapter).toContain("options.catalog?.get(toolName)?.security.riskLevel");
+    expect(adapter).toContain("options.registry.resolve(toolName)");
 
     const composition = await read("apps/daemon/src/daemon-composition.ts");
     expect(composition).toContain("catalog: codingCatalog,");
-    expect(composition).toContain("await builtToolRegistry.buildCodingCatalog()");
+    // The overlay is built from the definitions the registry was built from, against that registry, so
+    // a dangling overlay is refused rather than left behind.
+    const catalogFactory = code(await read("apps/daemon/src/daemon-composition.ts"));
+    expect(
+      catalogFactory.includes("new CodingToolCatalogBuilder().forRegistry(") ||
+        catalogFactory.includes("createCodingToolCatalog("),
+    ).toBe(true);
   });
 });
 
@@ -444,82 +527,43 @@ describe("Phase 4E guard — the Phase 4D pipeline is still production", () => {
   });
 });
 
-describe("Phase 4E guard — no early Phase 4F", () => {
-  it("keeps @caelush/tools, its public surface and protocol.ToolDefinition", async () => {
-    const manifest = JSON.parse(await read("packages/tools/package.json")) as { exports?: unknown };
-    expect(manifest.exports).toBeDefined();
-
-    const index = await read("packages/tools/src/index.ts");
-    for (const legacyName of [
-      "ToolRegistryBuilder",
-      "ToolDispatcher",
-      "computeToolApprovalKey",
-      "createDefaultBuiltinToolRegistrations",
-      "createGitToolRegistrations",
-      "createReadOnlyFilesystemToolRegistrations",
-      "createFileMutationToolRegistrations",
-      "createShellToolRegistrations",
-      "createExecCommandRegistration",
-      "createWriteStdinRegistration",
-      "createGitStatusRegistration",
-      "createGitDiffRegistration",
-      "ToolDefinition",
-      "ToolExecutionResult",
-      "ToolBatchCoordinator",
-    ]) {
-      expect(index, legacyName).toContain(legacyName);
-    }
-
-    // `protocol.ToolDefinition` is untouched: still the seven-field strict schema.
-    const protocolTool = code(await read("packages/protocol/src/tool.ts"));
-    expect(protocolTool).toContain("export const ToolDefinitionSchema = z");
-    expect(protocolTool).toContain("inputSchema: JsonObjectSchema");
-    expect(protocolTool).toContain("outputSchema: JsonObjectSchema");
-    expect(protocolTool).toContain(".strict()");
+describe("Phase 4E guard — the surfaces 4E deliberately preserved are now retired", () => {
+  it("records that Phase 4F removed @caelush/tools rather than leaving it in the workspace", async () => {
+    expect(await exists("packages/tools")).toBe(false);
+    expect(await exists("packages/tools/package.json")).toBe(false);
+    expect(await exists("packages/tools/src/index.ts")).toBe(false);
   });
 
-  it("keeps the legacy direct compatibility APIs callable", async () => {
-    // A representative set of names the round promised to keep until Phase 4F. The fidelity suite proves
-    // they work; this proves each still has a declaration on the legacy package's surface.
-    const declarations = (
-      await Promise.all(
-        (await filesUnder("packages/tools/src")).map(async (file) => await read(file)),
-      )
-    ).join("\n");
-
-    for (const name of [
-      "createReadFileRegistration",
-      "createListDirectoryRegistration",
-      "createFindFilesRegistration",
-      "createSearchTextRegistration",
-      "createApplyPatchRegistration",
-      "createExecCommandRegistration",
-      "createWriteStdinRegistration",
-      "createGitStatusRegistration",
-      "createGitDiffRegistration",
-      "createDefaultBuiltinToolRegistrations",
-      "createGitToolRegistrations",
-      "createReadOnlyFilesystemToolRegistrations",
-      "createFileMutationToolRegistrations",
-      "createShellToolRegistrations",
-      "createCodingToolAdmissionPort",
-      "createCodingToolDurableMetadataPort",
-      "createLegacyToolSettlementExtensionProjector",
-      "createLegacyToolSettlementExtensionDecoder",
-      "filterToolRegistryForEnvironment",
-      "computeToolApprovalKey",
-    ]) {
-      expect(declarations, name).toContain(`export function ${name}`);
+  it("leaves no legacy Tool symbol declared anywhere in production source", async () => {
+    for (const root of ["packages", "apps"]) {
+      for (const file of await sourceFilesUnder(root)) {
+        const text = code(await read(file));
+        // A `class`/`interface`/`type` declaration is the thing that must be gone. A guard or a
+        // migration record may still *name* a retired symbol — several deliberately do, to assert that
+        // it stays gone — so this test binds every production source, not every file in the tree.
+        for (const declaration of [
+          "class ToolDispatcher",
+          "class ToolRegistryBuilder",
+          "class ToolPreflight",
+          "class ToolFailureMemory",
+          "interface ToolRegistration",
+          "interface ToolBatchItemResult",
+          "class ToolBatchCoordinator",
+        ]) {
+          expect(text, `${file} / ${declaration}`).not.toContain(declaration);
+        }
+      }
     }
+  });
 
-    for (const name of [
-      "ToolRegistryBuilder",
-      "ToolDispatcher",
-      "ToolPreflight",
-      "ToolFailureMemory",
-      "ToolBatchCoordinator",
-    ]) {
-      expect(declarations, name).toContain(`export class ${name}`);
-    }
+  it("leaves protocol.ToolDefinition and its schema retired", async () => {
+    const protocolTool = code(await read("packages/protocol/src/tool.ts"));
+    expect(protocolTool).not.toContain("ToolDefinitionSchema");
+    expect(protocolTool).not.toContain("export type ToolDefinition");
+    // The durable identity primitives the round must keep are untouched.
+    expect(protocolTool).toContain("export const ToolNameSchema = z");
+    expect(protocolTool).toContain("export const ToolInvocationSchema = z");
+    expect(protocolTool).toContain("export type ToolInvocation =");
+    expect(protocolTool).toContain(".strict()");
   });
 });
