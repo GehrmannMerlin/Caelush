@@ -155,9 +155,33 @@ describe("Phase 3A agent kernel dependency boundaries", () => {
 
     expect(source).not.toMatch(/\b(?:ProjectInspector|RelevantFilePlanner|ContextBuilder)\b/);
     expect(source).not.toMatch(/\b(?:read_file|exec_command|apply_patch|git_status)\b/);
-    expect(source).not.toMatch(
-      /\b(?:node:fs|node:path|node:child_process|process\.env|Date\.now|Math\.random)\b/,
-    );
+    expect(source).not.toMatch(/\b(?:node:fs|node:path|node:child_process|process\.env)\b/);
+    expect(source).not.toMatch(/\bMath\.random\b/);
+
+    /**
+     * Phase 5A introduces the one bounded exception to the clock rule, and it is bounded to a
+     * single declaration rather than waived.
+     *
+     * ```text
+     * Phase 3A froze:  the Agent Kernel owns no wall-clock time.
+     * Phase 5A adds:   the Message Domain's identity authority.
+     * ```
+     *
+     * A *new* Agent message identity must be unique, and a UUIDv7-shaped identifier sorts by
+     * creation time, so `createAgentMessageIdFactory()` reads the clock exactly once per id and
+     * nowhere else. It is not a scheduling decision, a timeout, a retry delay or an ordering
+     * authority: nothing in the kernel branches on the value, and the conversation turn identity
+     * — the one identifier that must be reproducible — is derived from the `RunId` alone and is
+     * separately asserted below to be clock-free.
+     *
+     * Every other kernel file reaching for a clock still fails this guard, and the aggregate
+     * assertion above still covers `Math.random`, `process.env` and the host modules everywhere.
+     */
+    const clockOffenders = agentKernelFiles()
+      .filter((file) => /\bDate\.now\b/.test(executableSource(file)))
+      .map((file) => relative(root, file).replaceAll("\\", "/"))
+      .filter((file) => file !== "packages/agent/src/messages/types/ids.ts");
+    expect(clockOffenders).toEqual([]);
 
     /**
      * Phase 4A added the general Tool framework to this package, and it carries exactly one of the

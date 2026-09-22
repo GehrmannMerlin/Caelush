@@ -289,19 +289,36 @@ export function createAgentConversationValidator(): AgentConversationValidator {
  *
  * ```text
  * a toolCallId is announced by exactly one model-visible assistant message
- * every announced call is answered exactly once, by a model-visible result
+ * every announced call is answered at most once, by a model-visible result
  * no model-visible result answers a call that was never announced
  * a result names the same tool the call named
+ * an unanswered call may only be the LAST model-visible material of the turn
  * ```
  *
- * The last rule matters because the provider is told both: a result attributed to the wrong
- * Tool would let a model conclude that `read_file` produced `exec_command`'s output.
+ * ## Why an unanswered call is usually legal
+ *
+ * A Run in the middle of a Tool batch has announced calls whose results have not arrived.
+ * That is not corruption — it is the normal state of a live Tool turn, and it is exactly what
+ * an `ExecutionUnit` reports as `OPEN`. Refusing it here would make the validator reject every
+ * conversation a recovery has to load, which is the opposite of what a validator is for.
+ *
+ * What *is* illegal is an announced call the conversation then moved past. If any
+ * model-visible message follows an unanswered call, the batch was abandoned: the model was
+ * shown a call and never learned its outcome, or the ledger lost a result. So the rule is
+ * positional — an unanswered call must be the trailing model-visible material of the turn —
+ * which is both the honest statement of the invariant and the one the provider protocol
+ * actually requires.
+ *
+ * ## The name rule matters because the provider is told both
+ *
+ * A result attributed to the wrong Tool would let a model conclude that `read_file` produced
+ * `exec_command`'s output, so a result's name must equal the name its call announced.
  *
  * A hidden message between an announcement and its answer is *fine* here: it is filtered out
  * before this pass runs, so it can neither break the pairing nor be mistaken for one.
  */
 function validateModelVisibleToolStructure(turn: ConversationTurn): void {
-  /** Announcement order matters only for reporting; identity is the toolCallId. */
+  /** Identity is the `toolCallId`; announcement order is not needed to decide pairing. */
   const announced = new Map<string, string>();
   const answered = new Set<string>();
 
@@ -310,6 +327,10 @@ function validateModelVisibleToolStructure(turn: ConversationTurn): void {
     if (!message.audience.model) continue;
 
     if (message.type === "ASSISTANT") {
+      // An assistant message *continues* the conversation, so a batch the model was already
+      // waiting on must have been answered before this turn moved on. Checked before this
+      // message's own calls are announced, so a new batch is not mistaken for the old one.
+      assertNoOpenBatch(turn, announced, answered, message.id);
       for (const part of message.content) {
         if (part.type !== "TOOL_CALL") continue;
         if (announced.has(part.toolCallId)) {
@@ -346,24 +367,53 @@ function validateModelVisibleToolStructure(turn: ConversationTurn): void {
         });
       }
       answered.add(message.toolCallId);
+      continue;
     }
+
+    // Any other model-visible message — a user turn, or a custom kind a product layer added —
+    // also carries the conversation on, so the same rule applies.
+    assertNoOpenBatch(turn, announced, answered, message.id);
   }
 
+  /*
+   * There is deliberately no check on the *tail* of the turn. An unanswered call that is the
+   * last model-visible material is a live batch — `OPEN` in `ExecutionUnit` terms — and
+   * refusing it here would reject exactly the conversations a recovery has to load.
+   */
+}
+
+/**
+ * Refuse a batch left open when the conversation continued.
+ *
+ * Two distinct situations, and the distinction is worth keeping because they have different
+ * causes even though both are refusals:
+ *
+ * ```text
+ * nothing answered the call           MISSING_TOOL_RESULT
+ * a hidden message answered it        MODEL_VISIBLE_RESULT_REQUIRED
+ * ```
+ *
+ * The second arm is the subtle one: the durable ledger looks complete, so only a check that
+ * reads `audience.model` can tell that the model never received the answer.
+ */
+function assertNoOpenBatch(
+  turn: ConversationTurn,
+  announced: ReadonlyMap<string, string>,
+  answered: ReadonlySet<string>,
+  continuedByMessageId: string,
+): void {
   for (const [toolCallId, toolName] of announced) {
     if (answered.has(toolCallId)) continue;
-    // Unanswered. Two ways this can happen and both are refusals: nothing answered it at
-    // all, or something did and the answer is hidden from the model. The second arm is the
-    // one worth naming precisely, because it looks valid in the durable ledger.
     const hiddenAnswer = turn.messages.some(
-      (stored) =>
-        stored.message.type === "TOOL_RESULT" &&
-        stored.message.toolCallId === toolCallId &&
-        stored.message.toolName === toolName &&
-        !stored.message.audience.model,
+      (candidate) =>
+        candidate.message.type === "TOOL_RESULT" &&
+        candidate.message.toolCallId === toolCallId &&
+        candidate.message.toolName === toolName &&
+        !candidate.message.audience.model,
     );
     throw new AgentConversationError(
       hiddenAnswer ? "MODEL_VISIBLE_RESULT_REQUIRED" : "MISSING_TOOL_RESULT",
-      { turnId: turn.id },
+      { turnId: turn.id, messageId: continuedByMessageId },
     );
   }
 }

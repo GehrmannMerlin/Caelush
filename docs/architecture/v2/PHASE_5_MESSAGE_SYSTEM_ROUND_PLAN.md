@@ -70,38 +70,38 @@ consequence             AgentMessageBase.sequence is forbidden, and Phase 5A shi
 
 ## 1. The six rounds
 
-| Round  | Scope (fixed)                                                                                                                                                                                                             | Owner of the result                                |
-| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------- |
-| **5A** | The pure Message Domain core: additive AI message refinement, `AgentMessage` and its identity, audience, source and content, the Message Factory, persistence record contracts, the versioned Codec Registry, the versioned AI Projector Registry, `ConversationTurn`, `AgentConversationSnapshot`, the Conversation Validator, `ExecutionUnit` and the projected `ConversationSelector` | `@caelush/agent`, `@caelush/ai` (additive only)     |
-| **5B** | Durable message storage: the `agent_messages` schema and its migration, the codec-driven repository, sequence assignment, the `AgentConversationRepository`, the opaque-record preserve policy, backfill of existing rows                                                                    | `@caelush/storage`                                 |
-| **5C** | Durable conversation runtime cutover: `RunExecutionStore` commits `AgentMessage` records, the Message Factory becomes the production message authority, Tool feedback settles as `AgentToolResultMessage`, `RunExecutionMessageAppend` changes shape                                                    | `@caelush/agent` ports, `@caelush/storage`, hosts |
-| **5D** | Context and replay cutover: `ContextPrepareInput.history` and `AgentLoopAdvanceInput.history` become the projected snapshot conversation, the Context Engine consumes `ConversationSelector`, `ToolObservationPolicySnapshot` reads from the receipt                                                | `@caelush/context`, `@caelush/agent`              |
-| **5E** | Transcript and client cutover: the transcript protocol and API, the client's `hydrateSessionTranscript` consumes durable Agent messages, the coding custom message proof (`CodingCommandExecutionMessage`)                                                                                            | `@caelush/protocol`, `@caelush/client`, hosts     |
-| **5F** | Backfill verification, legacy retirement and final acceptance: the `LLMMessage` ownership retirement, the legacy `agent_messages` column removal, the AI history validator deletion, whole-phase acceptance                                | the whole Message System                          |
+| Round  | Scope (fixed)                                                                                                                                                                                                                                                                                                                                                                            | Owner of the result                               |
+| ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| **5A** | The pure Message Domain core: additive AI message refinement, `AgentMessage` and its identity, audience, source and content, the Message Factory, persistence record contracts, the versioned Codec Registry, the versioned AI Projector Registry, `ConversationTurn`, `AgentConversationSnapshot`, the Conversation Validator, `ExecutionUnit` and the projected `ConversationSelector` | `@caelush/agent`, `@caelush/ai` (additive only)   |
+| **5B** | Durable message storage: the `agent_messages` schema and its migration, the codec-driven repository, sequence assignment, the `AgentConversationRepository`, the opaque-record preserve policy, backfill of existing rows                                                                                                                                                                | `@caelush/storage`                                |
+| **5C** | Durable conversation runtime cutover: `RunExecutionStore` commits `AgentMessage` records, the Message Factory becomes the production message authority, Tool feedback settles as `AgentToolResultMessage`, `RunExecutionMessageAppend` changes shape                                                                                                                                     | `@caelush/agent` ports, `@caelush/storage`, hosts |
+| **5D** | Context and replay cutover: `ContextPrepareInput.history` and `AgentLoopAdvanceInput.history` become the projected snapshot conversation, the Context Engine consumes `ConversationSelector`, `ToolObservationPolicySnapshot` reads from the receipt                                                                                                                                     | `@caelush/context`, `@caelush/agent`              |
+| **5E** | Transcript and client cutover: the transcript protocol and API, the client's `hydrateSessionTranscript` consumes durable Agent messages, the coding custom message proof (`CodingCommandExecutionMessage`)                                                                                                                                                                               | `@caelush/protocol`, `@caelush/client`, hosts     |
+| **5F** | Backfill verification, legacy retirement and final acceptance: the `LLMMessage` ownership retirement, the legacy `agent_messages` column removal, the AI history validator deletion, whole-phase acceptance                                                                                                                                                                              | the whole Message System                          |
 
 ### 1.1 What each round is allowed to leave open
 
 A round may leave a responsibility with the pre-V2 implementation **only** if this table names the
 round that takes it. "Later" is not an exit round.
 
-| Responsibility                                              | 5A              | 5B           | 5C           | 5D           | 5E           | 5F                  |
-| ----------------------------------------------------------- | --------------- | ------------ | ------------ | ------------ | ------------ | ------------------- |
-| AI message additive refinement (`providerState`, content names) | **moves**       |              |              |              |              |                     |
-| `AgentMessage` types, identity, audience, source, content   | **moves**       |              |              |              |              |                     |
-| Message Factory                                             | **moves**       |              | production   |              |              |                     |
-| Persistence record/draft/stored contracts                   | **contracts**   | **implements** |              |              |              |                     |
-| Codec registry                                              | **moves**       | production   |              |              |              |                     |
-| AI projector registry                                       | **moves**       |              |              | production   |              |                     |
-| Conversation Validator                                      | **moves**       |              |              | production   |              |                     |
-| `ExecutionUnit` identity and grouping                       | **moves**       |              |              | production   |              |                     |
-| `ConversationSelector` primitive                            | **moves**       |              |              | production   |              |                     |
-| `agent_messages` schema, migration, sequence assignment      | —               | **moves**    |              |              |              |                     |
-| `RunExecutionStore` message shape                           | unchanged       |              | **moves**    |              |              |                     |
-| Tool feedback durable wiring                                | unchanged       |              | **moves**    |              |              |                     |
-| Context history shape                                       | unchanged       |              |              | **moves**    |              |                     |
-| Transcript protocol and client                              | unchanged       |              |              |              | **moves**    |                     |
-| Coding custom message proof                                 | seam only       |              |              |              | **moves**    |                     |
-| `LLMMessage` retirement, legacy column removal              | —               | —            | —            | —            | —            | **only 5F**         |
+| Responsibility                                                  | 5A            | 5B             | 5C         | 5D         | 5E        | 5F          |
+| --------------------------------------------------------------- | ------------- | -------------- | ---------- | ---------- | --------- | ----------- |
+| AI message additive refinement (`providerState`, content names) | **moves**     |                |            |            |           |             |
+| `AgentMessage` types, identity, audience, source, content       | **moves**     |                |            |            |           |             |
+| Message Factory                                                 | **moves**     |                | production |            |           |             |
+| Persistence record/draft/stored contracts                       | **contracts** | **implements** |            |            |           |             |
+| Codec registry                                                  | **moves**     | production     |            |            |           |             |
+| AI projector registry                                           | **moves**     |                |            | production |           |             |
+| Conversation Validator                                          | **moves**     |                |            | production |           |             |
+| `ExecutionUnit` identity and grouping                           | **moves**     |                |            | production |           |             |
+| `ConversationSelector` primitive                                | **moves**     |                |            | production |           |             |
+| `agent_messages` schema, migration, sequence assignment         | —             | **moves**      |            |            |           |             |
+| `RunExecutionStore` message shape                               | unchanged     |                | **moves**  |            |           |             |
+| Tool feedback durable wiring                                    | unchanged     |                | **moves**  |            |           |             |
+| Context history shape                                           | unchanged     |                |            | **moves**  |           |             |
+| Transcript protocol and client                                  | unchanged     |                |            |            | **moves** |             |
+| Coding custom message proof                                     | seam only     |                |            |            | **moves** |             |
+| `LLMMessage` retirement, legacy column removal                  | —             | —              | —          | —          | —         | **only 5F** |
 
 ### 1.2 What every round must not do
 

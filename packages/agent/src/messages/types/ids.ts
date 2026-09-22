@@ -98,46 +98,61 @@ export interface ConversationTurnIdFactory {
 }
 
 /**
- * A UUIDv7-shaped identifier.
+ * Shape sixteen arbitrary bytes into a UUIDv7-formatted string.
  *
- * The 48-bit big-endian millisecond timestamp comes from `nowMs` and up to ten random
- * bytes supply the rest, and the version and variant nibbles are forced to `7` and to
- * RFC 4122 variant bits. The result sorts lexicographically by creation time, which is
- * what makes a raw `sqlite3` inspection tolerable in Phase 5B.
+ * The version and variant nibbles are forced to `7` and to RFC 4122 variant bits, so the
+ * result is a well-formed identifier of the same family `@caelush/protocol` mints. The
+ * *contents* are the caller's: a message id passes a real millisecond timestamp and ten random
+ * bytes, while a conversation turn id passes sixteen digest bytes so that no component of it
+ * is zeroed and none of it depends on the clock.
  */
-function uuidV7(nowMs: number, random: Uint8Array): string {
-  const bytes = new Uint8Array(16);
-  bytes.set(random.subarray(0, 16));
-  const timestamp = BigInt(Math.floor(nowMs));
-  for (let offset = 0; offset < 6; offset += 1) {
-    bytes[offset] = Number((timestamp >> BigInt(8 * (5 - offset))) & 0xffn);
-  }
-  const version = bytes[6] ?? 0;
-  const variant = bytes[8] ?? 0;
-  bytes[6] = (version & 0x0f) | 0x70;
-  bytes[8] = (variant & 0x3f) | 0x80;
+function uuidV7FromBytes(bytes: Uint8Array): string {
+  const shaped = new Uint8Array(16);
+  shaped.set(bytes.subarray(0, 16));
+  shaped[6] = ((shaped[6] ?? 0) & 0x0f) | 0x70;
+  shaped[8] = ((shaped[8] ?? 0) & 0x3f) | 0x80;
 
-  const hex = Buffer.from(bytes).toString("hex");
+  const hex = Buffer.from(shaped).toString("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
 /**
- * Create the default message id factory.
+ * Write a millisecond timestamp into the leading six bytes, big-endian.
  *
- * It is pure on purpose, and it is the **only** implementation in the repository. A
- * factory that mixed in a timestamp would still be deterministic *within* a process and
- * would stop being deterministic across a restart, which is exactly the property a
- * backfill depends on. `anchorMs` is therefore not a clock read: it is a fixed
- * embedding of the factory's own identity, constant for the lifetime of the factory, so
- * the *only* input that can change the answer is the `RunId`.
+ * The timestamp region is a UUIDv7's only time-carrying component. It is used for *message*
+ * identifiers, where "which millisecond was this created in" is real information. It is
+ * deliberately **not** used for conversation turn identifiers: a turn id is a pure function of
+ * a `RunId`, so a timestamp there would either be a clock read — destroying determinism — or a
+ * constant, which would make every turn id of a Session share a prefix.
+ */
+function writeTimestamp(bytes: Uint8Array, nowMs: number): void {
+  const timestamp = BigInt(Math.floor(nowMs));
+  for (let offset = 0; offset < 6; offset += 1) {
+    bytes[offset] = Number((timestamp >> BigInt(8 * (5 - offset))) & 0xffn);
+  }
+}
+
+/**
+ * The pure, clock-free conversation turn derivation.
+ *
+ * It is pure on purpose, and it is the **only** implementation in the repository. A factory
+ * that mixed in a timestamp would still be deterministic *within* a process and would stop
+ * being deterministic across a restart, which is exactly the property a backfill depends on.
+ * `anchorMs` is therefore not a clock read: it is a fixed embedding of the factory's own
+ * identity, constant for the lifetime of the factory, so the *only* input that can change the
+ * answer is the `RunId`.
+ *
+ * The `RunId` is hashed rather than embedded — a turn id must not grow with a longer run id,
+ * and two Runs whose ids share a prefix must still produce unrelated turn ids — and the digest
+ * is *combined* with the anchor rather than overwritten by it, so every byte of the identifier
+ * remains a function of the Run. Two Runs differ throughout their turn ids rather than only in
+ * a suffix, and no region of the identifier is zeroed.
  */
 function deriveConversationTurnId(runId: RunId, anchorMs: number): ConversationTurnId {
-  // The RunId is hashed, never embedded: a turn id must not grow with a longer RunId,
-  // and two Runs whose ids share a prefix must still produce unrelated turn ids.
-  const digest = createHash("sha256").update(runId, "utf8").digest();
-  return conversationTurnId(
-    `${CONVERSATION_TURN_ID_PREFIX}${uuidV7(anchorMs, digest.subarray(0, 10))}`,
-  );
+  const digest = createHash("sha256")
+    .update(`${runId}\u0000${String(anchorMs)}`, "utf8")
+    .digest();
+  return conversationTurnId(`${CONVERSATION_TURN_ID_PREFIX}${uuidV7FromBytes(digest)}`);
 }
 
 /**
@@ -149,7 +164,9 @@ function deriveConversationTurnId(runId: RunId, anchorMs: number): ConversationT
 export function createAgentMessageIdFactory(): AgentMessageIdFactory {
   return {
     create(): AgentMessageId {
-      return agentMessageId(`${AGENT_MESSAGE_ID_PREFIX}${uuidV7(Date.now(), randomBytes(10))}`);
+      const bytes = new Uint8Array(randomBytes(16));
+      writeTimestamp(bytes, Date.now());
+      return agentMessageId(`${AGENT_MESSAGE_ID_PREFIX}${uuidV7FromBytes(bytes)}`);
     },
   };
 }
