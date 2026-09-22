@@ -71,7 +71,14 @@ describe("find_files target builtin", () => {
     expect(result).toMatchObject({
       isError: false,
       content: "a.ts\nb.ts",
-      details: { ok: true, path: ".", pattern: "*.ts", count: 2, truncated: false, files: ["a.ts", "b.ts"] },
+      details: {
+        ok: true,
+        path: ".",
+        pattern: "*.ts",
+        count: 2,
+        truncated: false,
+        files: ["a.ts", "b.ts"],
+      },
     });
     expect(fake.calls.findWithRoot).toEqual([
       { environment: ENVIRONMENT, pattern: "*.ts", path: ".", limit: 100, signal },
@@ -89,15 +96,21 @@ describe("find_files target builtin", () => {
   it("reports no matches as 'No files found.' and keeps the resolved root", async () => {
     const { tool } = toolWith({ find: found("src", []) });
 
-    await expect(tool.execute(executionInput({ pattern: "*.rs", path: "src" }))).resolves.toMatchObject(
-      { isError: false, content: "No files found.", details: { count: 0, path: "src" } },
-    );
+    await expect(
+      tool.execute(executionInput({ pattern: "*.rs", path: "src" })),
+    ).resolves.toMatchObject({
+      isError: false,
+      content: "No files found.",
+      details: { count: 0, path: "src" },
+    });
   });
 
   it("reports truncation from the port", async () => {
     const { tool } = toolWith({ find: found(".", ["a.ts"], true) });
 
-    await expect(tool.execute(executionInput({ pattern: "*.ts", limit: 1 }))).resolves.toMatchObject({
+    await expect(
+      tool.execute(executionInput({ pattern: "*.ts", limit: 1 })),
+    ).resolves.toMatchObject({
       isError: false,
       details: { truncated: true, count: 1 },
     });
@@ -139,10 +152,12 @@ describe("find_files target builtin", () => {
   it("refuses a non-string path with INVALID_RANGE", async () => {
     const { tool } = toolWith({ find: found(".", []) });
 
-    await expect(tool.execute(executionInput({ pattern: "*.ts", path: 7 }))).resolves.toMatchObject({
-      isError: true,
-      details: { error: "INVALID_RANGE" },
-    });
+    await expect(tool.execute(executionInput({ pattern: "*.ts", path: 7 }))).resolves.toMatchObject(
+      {
+        isError: true,
+        details: { error: "INVALID_RANGE" },
+      },
+    );
   });
 
   it("maps a Runtime failure and keeps an invariant travelling", async () => {

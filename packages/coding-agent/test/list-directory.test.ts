@@ -24,9 +24,7 @@ import {
  * rather than guessed, and these tests pin that arithmetic exactly.
  */
 
-function toolWith(
-  answer: Parameters<typeof readOnlyFake>[0]["listDirectoryWithKind"],
-) {
+function toolWith(answer: Parameters<typeof readOnlyFake>[0]["listDirectoryWithKind"]) {
   const fake = readOnlyFake({ listDirectoryWithKind: answer });
   const definition = createListDirectoryTool(fake.operations);
   return { tool: definition.tool, definition, fake };
@@ -81,11 +79,7 @@ describe("list_directory target builtin", () => {
   it("suffixes directories with '/' and symlinks with '@', and lists files bare", async () => {
     const { tool } = toolWith(async () =>
       listDirectoryAnswer({
-        entries: [
-          entry("src", "DIRECTORY"),
-          entry("link", "SYMLINK"),
-          entry("a.ts", "FILE"),
-        ],
+        entries: [entry("src", "DIRECTORY"), entry("link", "SYMLINK"), entry("a.ts", "FILE")],
       }),
     );
 
@@ -211,7 +205,7 @@ describe("list_directory target builtin", () => {
     const { tool, fake } = toolWith(async () => listDirectoryAnswer({ entries: [] }));
 
     for (const value of [
-      { path: "." , offset: 0 },
+      { path: ".", offset: 0 },
       { path: ".", limit: 0 },
       { path: ".", limit: 501 },
       { path: ".", limit: 2.5 },

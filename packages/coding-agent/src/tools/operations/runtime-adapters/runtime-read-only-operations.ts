@@ -10,7 +10,10 @@ import {
 } from "@caelush/runtime";
 
 import type { ReadFileOperations } from "../operations.js";
-import type { CodingReadOnlyOperations, CodingToolPathKind } from "../coding-read-only-operations.js";
+import type {
+  CodingReadOnlyOperations,
+  CodingToolPathKind,
+} from "../coding-read-only-operations.js";
 import { resolveRuntimeWorkspace } from "./resolve-runtime-workspace.js";
 
 /**
@@ -77,7 +80,10 @@ export function createRuntimeReadOnlyOperations(
   async function resolveKind(
     scope: RuntimeWorkspaceScope,
     path: string,
-  ): Promise<{ readonly resolved: ResolvedPathLike; readonly kind: CodingToolPathKind | "MISSING" }> {
+  ): Promise<{
+    readonly resolved: ResolvedPathLike;
+    readonly kind: CodingToolPathKind | "MISSING";
+  }> {
     let resolved: ResolvedPathLike;
     try {
       resolved = (await scope.pathResolver.resolveExisting(path)) as ResolvedPathLike;
@@ -92,7 +98,8 @@ export function createRuntimeReadOnlyOperations(
     }
     const target = await scope.filesystem.getMetadata(resolved.realPath);
     if (target === null) return { resolved, kind: "MISSING" };
-    return { resolved, kind: target.kind === "DIRECTORY" ? "DIRECTORY" : "FILE" };  }
+    return { resolved, kind: target.kind === "DIRECTORY" ? "DIRECTORY" : "FILE" };
+  }
 
   /** The shared directory read: resolve, kind-check and list, with no windowing applied. */
   async function readDirectory(input: {
@@ -263,7 +270,8 @@ export function createRuntimeReadOnlyOperations(
       };
     },
 
-    async listDirectoryWithKind(input) {      const listed = await readDirectory(input);
+    async listDirectoryWithKind(input) {
+      const listed = await readDirectory(input);
       if (listed.kind !== "DIRECTORY") return { path: listed.path, kind: listed.kind, entries: [] };
       return {
         path: listed.path,

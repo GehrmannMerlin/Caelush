@@ -87,7 +87,11 @@ function membersOf(source: string, interfaceName: string): readonly string[] {
  * the result shape is a separate projection a Tool reports. Reading them together would make a change
  * to either one look like a change to the contract.
  */
-function methodInputMembers(source: string, interfaceName: string, methodName: string): readonly string[] {
+function methodInputMembers(
+  source: string,
+  interfaceName: string,
+  methodName: string,
+): readonly string[] {
   const body = interfaceBody(source, interfaceName);
   const methodStart = body.indexOf(`${methodName}(input: {`);
   if (methodStart < 0) throw new Error(`method ${methodName} not found in ${interfaceName}`);
@@ -120,41 +124,37 @@ const UNCHANGED_FILES = [
 
 describe("Operations exact contracts — the six unchanged contracts", () => {
   it("ReadFileOperations is exactly environment, path, offset, limit, signal", () => {
-    expect(methodInputMembers(declaration("read-file-operations.ts"), "ReadFileOperations", "read")).toEqual([
-      "environment",
-      "path",
-      "offset",
-      "limit",
-      "signal",
-    ]);
+    expect(
+      methodInputMembers(declaration("read-file-operations.ts"), "ReadFileOperations", "read"),
+    ).toEqual(["environment", "path", "offset", "limit", "signal"]);
   });
 
   it("ListDirectoryOperations is exactly environment, path, limit, signal", () => {
-    expect(methodInputMembers(declaration("list-directory-operations.ts"), "ListDirectoryOperations", "list")).toEqual(
-      ["environment", "path", "limit", "signal"],
-    );
+    expect(
+      methodInputMembers(
+        declaration("list-directory-operations.ts"),
+        "ListDirectoryOperations",
+        "list",
+      ),
+    ).toEqual(["environment", "path", "limit", "signal"]);
   });
 
   it("FindFilesOperations is exactly environment, pattern, path?, limit, signal", () => {
-    expect(methodInputMembers(declaration("find-files-operations.ts"), "FindFilesOperations", "find")).toEqual([
-      "environment",
-      "pattern",
-      "path?",
-      "limit",
-      "signal",
-    ]);
+    expect(
+      methodInputMembers(declaration("find-files-operations.ts"), "FindFilesOperations", "find"),
+    ).toEqual(["environment", "pattern", "path?", "limit", "signal"]);
   });
 
   it("PatchOperations is exactly environment, patch, signal", () => {
-    expect(methodInputMembers(declaration("patch-operations.ts"), "PatchOperations", "apply")).toEqual([
-      "environment",
-      "patch",
-      "signal",
-    ]);
+    expect(
+      methodInputMembers(declaration("patch-operations.ts"), "PatchOperations", "apply"),
+    ).toEqual(["environment", "patch", "signal"]);
   });
 
   it("ExecOperations is exactly environment, ownerRunId, command, workdir?, tty, yieldTimeMs, signal, onOutput?", () => {
-    expect(methodInputMembers(declaration("exec-operations.ts"), "ExecOperations", "execute")).toEqual([
+    expect(
+      methodInputMembers(declaration("exec-operations.ts"), "ExecOperations", "execute"),
+    ).toEqual([
       "environment",
       "ownerRunId",
       "command",
@@ -167,7 +167,9 @@ describe("Operations exact contracts — the six unchanged contracts", () => {
   });
 
   it("ProcessOperations is exactly environment, ownerRunId, sessionId, chars, yieldTimeMs, signal, onOutput?", () => {
-    expect(methodInputMembers(declaration("process-operations.ts"), "ProcessOperations", "interact")).toEqual([
+    expect(
+      methodInputMembers(declaration("process-operations.ts"), "ProcessOperations", "interact"),
+    ).toEqual([
       "environment",
       "ownerRunId",
       "sessionId",
@@ -184,14 +186,13 @@ describe("Operations exact contracts — the two errata-corrected contracts", ()
     // The corrected contract. `include` and `limit` are operation semantics — `include` is a ripgrep
     // `--glob` applied BEFORE truncation and `limit` determines the capture strategy — which is why the
     // errata superseded the original shape rather than letting a Tool post-filter.
-    expect(methodInputMembers(declaration("search-text-operations.ts"), "SearchTextOperations", "search")).toEqual([
-      "environment",
-      "pattern",
-      "path?",
-      "include?",
-      "limit",
-      "signal",
-    ]);
+    expect(
+      methodInputMembers(
+        declaration("search-text-operations.ts"),
+        "SearchTextOperations",
+        "search",
+      ),
+    ).toEqual(["environment", "pattern", "path?", "include?", "limit", "signal"]);
     expect(declaration("search-text-operations.ts")).toContain(
       "PHASE_4E_OPERATIONS_INTERFACE_FREEZE_ERRATA.md",
     );

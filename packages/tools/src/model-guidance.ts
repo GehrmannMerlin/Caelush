@@ -83,10 +83,9 @@ function readSnippetField(snippet: string, label: string, toolName: ToolName): s
 export function createBuiltinToolModelGuidance(toolName: ToolName): ToolModelGuidance {
   const snippet = CODING_TOOL_PROMPT_SNIPPETS[toolName];
   if (snippet === undefined) throw new Error(`Missing model guidance for tool ${toolName}.`);
-  const fields = GUIDANCE_FIELDS.map((field) => [
-    field.key,
-    readSnippetField(snippet, field.label, toolName),
-  ] as const);
+  const fields = GUIDANCE_FIELDS.map(
+    (field) => [field.key, readSnippetField(snippet, field.label, toolName)] as const,
+  );
   return freezeGuidance({ toolName, ...Object.fromEntries(fields) } as ToolModelGuidance);
 }
 

@@ -176,7 +176,9 @@ export function createCodingToolDurableMetadataPort(options: {
   readonly registry: { resolve(name: ToolName): ResolvedTool | undefined };
   readonly definitions?: readonly ToolDefinition[] | undefined;
   /** The Coding overlay authority, when the host has built one. */
-  readonly catalog?: { get(name: ToolName): { readonly security: { readonly riskLevel: RiskLevel } } | undefined } | undefined;
+  readonly catalog?:
+    | { get(name: ToolName): { readonly security: { readonly riskLevel: RiskLevel } } | undefined }
+    | undefined;
 }): { get(toolName: ToolName): { readonly riskLevel: RiskLevel } } {
   const definitionsByName = indexDefinitions(options.definitions);
   return {

@@ -7,7 +7,12 @@ import {
 } from "@caelush/runtime";
 import { describe, expect, it } from "vitest";
 
-import { ENVIRONMENT, executionInput, patchFake, testSignal } from "./support/operations-fixtures.js";
+import {
+  ENVIRONMENT,
+  executionInput,
+  patchFake,
+  testSignal,
+} from "./support/operations-fixtures.js";
 
 /**
  * `apply_patch` — the target Coding builtin.
@@ -157,15 +162,24 @@ describe("apply_patch target builtin", () => {
         now: 1,
       }),
     ).toEqual([
-      { type: "FILE_CHANGE", summary: { path: "a.ts", changeType: "CREATED", additions: 3, deletions: 0 } },
-      { type: "FILE_CHANGE", summary: { path: "b.ts", changeType: "MODIFIED", additions: 1, deletions: 2 } },
+      {
+        type: "FILE_CHANGE",
+        summary: { path: "a.ts", changeType: "CREATED", additions: 3, deletions: 0 },
+      },
+      {
+        type: "FILE_CHANGE",
+        summary: { path: "b.ts", changeType: "MODIFIED", additions: 1, deletions: 2 },
+      },
       {
         type: "FILE_CHANGE",
         fromPath: "old.ts",
         toPath: "c.ts",
         summary: { path: "c.ts", changeType: "MOVED", additions: 0, deletions: 0 },
       },
-      { type: "FILE_CHANGE", summary: { path: "d.ts", changeType: "DELETED", additions: 0, deletions: 4 } },
+      {
+        type: "FILE_CHANGE",
+        summary: { path: "d.ts", changeType: "DELETED", additions: 0, deletions: 4 },
+      },
     ]);
 
     expect(

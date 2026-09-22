@@ -8,7 +8,12 @@ import {
 } from "@caelush/runtime";
 import { describe, expect, it } from "vitest";
 
-import { ENVIRONMENT, executionInput, processFake, testSignal } from "./support/operations-fixtures.js";
+import {
+  ENVIRONMENT,
+  executionInput,
+  processFake,
+  testSignal,
+} from "./support/operations-fixtures.js";
 
 /**
  * `write_stdin` — the target Coding builtin.
@@ -202,10 +207,10 @@ describe("write_stdin target builtin", () => {
 
   it("converts a stale or uncertain session into the canonical uncertain signal", async () => {
     const stale = toolWith(async () => {
-      throw new RuntimeProcessStaleSessionError("a previous runtime generation");
+      throw new RuntimeProcessStaleSessionError();
     }).tool;
     const uncertain = toolWith(async () => {
-      throw new RuntimeProcessUncertainError("the process fate is unknown");
+      throw new RuntimeProcessUncertainError();
     }).tool;
     const invariant = toolWith(async () => {
       throw new RuntimeInvariantError("guarantee violated");
@@ -224,7 +229,11 @@ describe("write_stdin target builtin", () => {
 
   it("produces PROCESS_STOPPED only when an interaction proved the process ended", () => {
     const { definition } = toolWith(interacted({ status: "RUNNING" }));
-    const request = { invocationId: "inv" as never, externalCallId: "c", args: { session_id: "s1" } };
+    const request = {
+      invocationId: "inv" as never,
+      externalCallId: "c",
+      args: { session_id: "s1" },
+    };
     const result = (details: Record<string, unknown>, isError = false) =>
       ({ content: "x", details, isError }) as never;
 

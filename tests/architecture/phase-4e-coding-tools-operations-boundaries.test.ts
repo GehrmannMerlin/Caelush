@@ -70,7 +70,9 @@ describe("Phase 4E guard — builtin ownership", () => {
     const files = await filesUnder("packages/coding-agent/src/tools/builtins");
 
     for (const name of NINE) {
-      const file = files.find((entry) => path.basename(entry) === `${name.replaceAll("_", "-")}.ts`);
+      const file = files.find(
+        (entry) => path.basename(entry) === `${name.replaceAll("_", "-")}.ts`,
+      );
       expect(file, name).toBeDefined();
       const text = await readFile(abs(file!), "utf8");
       // Each one really declares its Tool, rather than re-exporting another module's.
@@ -79,7 +81,9 @@ describe("Phase 4E guard — builtin ownership", () => {
     }
 
     // And the default set composes exactly those nine, in the frozen order.
-    const defaultTools = code(await read("packages/coding-agent/src/tools/builtins/default-tools.ts"));
+    const defaultTools = code(
+      await read("packages/coding-agent/src/tools/builtins/default-tools.ts"),
+    );
     const order = [...defaultTools.matchAll(/^\s{2}"([a-z_]+)",$/gm)].map((match) => match[1]);
     expect(order).toEqual([...NINE]);
   });
@@ -169,7 +173,7 @@ describe("Phase 4E guard — builtin ownership", () => {
     const guidance = code(await read("packages/tools/src/model-guidance.ts"));
     expect(guidance).toContain("CODING_TOOL_PROMPT_SNIPPETS");
     // The eight-field table is gone: the text has one source, the Coding prompt snippet.
-    expect(guidance).not.toContain("purpose: \"Read bounded UTF-8 text.\"");
+    expect(guidance).not.toContain('purpose: "Read bounded UTF-8 text."');
   });
 });
 
@@ -199,7 +203,9 @@ describe("Phase 4E guard — the Runtime boundary", () => {
   });
 
   it("names the one directory allowed to hold the broad Runtime types", async () => {
-    const adapters = await filesUnder("packages/coding-agent/src/tools/operations/runtime-adapters");
+    const adapters = await filesUnder(
+      "packages/coding-agent/src/tools/operations/runtime-adapters",
+    );
     expect(adapters.length).toBeGreaterThan(0);
 
     const holders: string[] = [];
@@ -292,9 +298,7 @@ describe("Phase 4E guard — Operations declarations", () => {
       for (const file of await filesUnder(root)) {
         const text = code(await read(file));
         for (const name of names) {
-          expect(text, `${file} / ${name}`).not.toMatch(
-            new RegExp(`export interface ${name} \\{`),
-          );
+          expect(text, `${file} / ${name}`).not.toMatch(new RegExp(`export interface ${name} \\{`));
         }
       }
     }
@@ -409,7 +413,9 @@ describe("Phase 4E guard — production composition", () => {
     // `catalog` is consulted first; the registered definition is the fallback for a generic Tool that
     // has no Coding metadata at all, which is what keeps a plugin Tool a first-class citizen.
     expect(adapter).toContain("options.catalog?.get(toolName)?.security.riskLevel");
-    expect(adapter).toContain("definitionsByName.get(toolName) ?? options.registry.resolve(toolName)?.definition");
+    expect(adapter).toContain(
+      "definitionsByName.get(toolName) ?? options.registry.resolve(toolName)?.definition",
+    );
 
     const composition = await read("apps/daemon/src/daemon-composition.ts");
     expect(composition).toContain("catalog: codingCatalog,");
@@ -469,14 +475,16 @@ describe("Phase 4E guard — no early Phase 4F", () => {
     expect(protocolTool).toContain("export const ToolDefinitionSchema = z");
     expect(protocolTool).toContain("inputSchema: JsonObjectSchema");
     expect(protocolTool).toContain("outputSchema: JsonObjectSchema");
-    expect(protocolTool).toContain('.strict()');
+    expect(protocolTool).toContain(".strict()");
   });
 
   it("keeps the legacy direct compatibility APIs callable", async () => {
     // A representative set of names the round promised to keep until Phase 4F. The fidelity suite proves
     // they work; this proves each still has a declaration on the legacy package's surface.
     const declarations = (
-      await Promise.all((await filesUnder("packages/tools/src")).map(async (file) => await read(file)))
+      await Promise.all(
+        (await filesUnder("packages/tools/src")).map(async (file) => await read(file)),
+      )
     ).join("\n");
 
     for (const name of [

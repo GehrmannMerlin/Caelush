@@ -267,9 +267,10 @@ describe("approval identity fidelity", () => {
           };
           // A durable approval key resolved before the migration must still match a key computed
           // after it, or an approval restart would silently invalidate every stored grant.
-          expect(targetKey(input), `${definition.tool.name}/${permissionProfile}/${approvalPolicy}`).toBe(
-            legacyKey(input),
-          );
+          expect(
+            targetKey(input),
+            `${definition.tool.name}/${permissionProfile}/${approvalPolicy}`,
+          ).toBe(legacyKey(input));
           compared += 1;
         }
       }
@@ -344,8 +345,14 @@ describe("effects fidelity", () => {
           now: 1,
         }),
         [
-          { type: "FILE_CHANGE", summary: { path: "a.ts", changeType: "CREATED", additions: 1, deletions: 0 } },
-          { type: "FILE_CHANGE", summary: { path: "b.ts", changeType: "DELETED", additions: 0, deletions: 2 } },
+          {
+            type: "FILE_CHANGE",
+            summary: { path: "a.ts", changeType: "CREATED", additions: 1, deletions: 0 },
+          },
+          {
+            type: "FILE_CHANGE",
+            summary: { path: "b.ts", changeType: "DELETED", additions: 0, deletions: 2 },
+          },
         ],
       ],
       [
@@ -461,7 +468,9 @@ describe("default Tool set fidelity", () => {
     expect(legacy.map((registration) => registration.definition.name)).toEqual([
       ...DEFAULT_CODING_TOOL_ORDER,
     ]);
-    expect(target.map((definition) => definition.tool.name)).toEqual([...DEFAULT_CODING_TOOL_ORDER]);
+    expect(target.map((definition) => definition.tool.name)).toEqual([
+      ...DEFAULT_CODING_TOOL_ORDER,
+    ]);
 
     for (const [index, registration] of legacy.entries()) {
       const definition = target[index]!;
@@ -475,7 +484,9 @@ describe("default Tool set fidelity", () => {
       expect(registration.definition.requiredCapabilities).toEqual([
         ...definition.security.requiredCapabilities,
       ]);
-      expect(registration.definition.runtimeRequirements).toEqual(definition.security.runtimeRequirements);
+      expect(registration.definition.runtimeRequirements).toEqual(
+        definition.security.runtimeRequirements,
+      );
       // And the executable the legacy facade registered is the same target-shaped AgentTool: same name,
       // same schema, same execution mode, same execute contract.
       const agentTool = registration.adapters?.agent;
@@ -522,7 +533,9 @@ describe("default Tool set fidelity", () => {
 
   it("keeps apply_patch, exec_command and write_stdin carrying their effect projectors", () => {
     const legacy = createDefaultBuiltinToolRegistrations(RESOLVER);
-    const byName = new Map(legacy.map((registration) => [registration.definition.name, registration]));
+    const byName = new Map(
+      legacy.map((registration) => [registration.definition.name, registration]),
+    );
 
     // A projector is what makes an effect settle atomically with the invocation, so a facade that
     // dropped one would silently stop projecting effects.
@@ -576,15 +589,17 @@ describe("target Tool execution fidelity", () => {
     const process = processFake({ execute: async () => ({}), interact: async () => ({}) });
     const git = gitFake({ status: async () => ({}) }).operations;
 
+    // Each factory answers with its own Tool, under its own frozen name.
+    expect(createReadFileTool(readOnly).tool.name).toBe("read_file");
+    expect(createSearchTextTool(readOnly).tool.name).toBe("search_text");
     expect(
-      createReadFileTool(readOnly).tool.name,
-      createSearchTextTool(readOnly).tool.name,
-      createApplyPatchTool(patchFake(async () => ({ changeCount: 0, changes: [] })).operations).tool.name,
-      createExecCommandTool(process.exec).tool.name,
-      createWriteStdinTool(process.process).tool.name,
-      createGitStatusTool(git).tool.name,
-      createGitDiffTool(git).tool.name,
-    ).toBe("read_file", "search_text", "apply_patch", "exec_command", "write_stdin", "git_status", "git_diff");
+      createApplyPatchTool(patchFake(async () => ({ changeCount: 0, changes: [] })).operations).tool
+        .name,
+    ).toBe("apply_patch");
+    expect(createExecCommandTool(process.exec).tool.name).toBe("exec_command");
+    expect(createWriteStdinTool(process.process).tool.name).toBe("write_stdin");
+    expect(createGitStatusTool(git).tool.name).toBe("git_status");
+    expect(createGitDiffTool(git).tool.name).toBe("git_diff");
   });
 });
 

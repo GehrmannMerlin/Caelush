@@ -1,477 +1,494 @@
-# Caelush Architecture V2 — Phase 4E Coding Tools, Operations Ports & Runtime Adapters Report
+# Caelush Architecture V2 — Phase 4E Final Report
 
 > Round: **Phase 4E** — the fifth and only fifth round of Phase 4.
 > Phase 4 is permanently frozen at exactly six rounds: `4A`, `4B`, `4C`, `4D`, `4E`, `4F`.
-> No `4E-1`, `4E-2`, `4E-A`, `4E-B`, `4E-Fix`, `4G`, cleanup round, follow-up round or post-4E
-> migration round was created.
+> No `4E-1`, `4E-2`, `4E-Fix`, resume round or follow-up round was created.
 
 ```text
 4A  COMPLETE
 4B  COMPLETE
 4C  COMPLETE
 4D  COMPLETE
-4E  BLOCKED          ← this round
+4E  COMPLETE          ← this round
 4F  NOT STARTED
 ```
 
-> **Phase 4E BLOCKED.**
-> Two of the eight frozen Operations contracts cannot express arguments that two of the nine builtins
-> are currently required to honour. The authorising prompt forbids widening those interfaces and
-> forbids silently dropping the arguments, and it makes the reconciliation gates a Milestone A
-> decision — `implementable` or `BLOCKED` — _before_ any Tool is migrated. Both gates failed against
-> source evidence, so the round stopped at Milestone A. **No production code was changed.**
+> **Phase 4E COMPLETE.**
+>
+> The previous `BLOCKED` state was resolved by the scoped
+> `PHASE_4E_OPERATIONS_INTERFACE_FREEZE_ERRATA.md`. The intermediate `IN PROGRESS` state at `1b15697f`
+> was continued **without creating a new round**. All nine Coding builtins are now target-owned by
+> `@caelush/coding-agent`, and the daemon's production defaults originate there.
 
 ---
 
-## 1. Phase identity and SHAs
-
-The authorising prompt requires these concepts to be recorded separately, because the Phase 4D final
-tip is a _documentation_ commit, not the implementation commit.
+## 1. Phase identity and the complete Git history
 
 ```text
-Base SHA                     d21595f14fd18d66369aec4f1a090b8cc459656e
-                             (Phase 4D final tip; commit message
-                              "docs(architecture): record the phase 4d clean-checkout verification")
-
-Implementation code head     14d7a3ca5a079e3108d1287954d868a18222f63f
-                             ("docs(architecture): record phase 4d migration" is the last commit
-                              that follows all 4D code; the code itself landed in
-                              de03cb5, de94401, dadb1cc, 90e121d)
-
-Verification head            the environment in which 4D's gates were run is the 4D clean checkout at
-                             d21595f, recorded in PHASE_4D_BATCH_FEEDBACK_TOOLTURN_REPORT.md §14-16
-
-Documentation/report head    d21595f14fd18d66369aec4f1a090b8cc459656e
-                             (4D's final report edit; this is the 4E base)
-
-Final branch tip             see §9 for this round's tip
-Remote branch tip            see §9
-Ahead/behind                 see §9
-Working tree                 clean
+4D base                        d21595f14fd18d66369aec4f1a090b8cc459656e
+4E BLOCKED commit              1920cdde65118defea39355faefe072b1d57ae8e
+                               docs(architecture): record the phase 4e reconciliation blocker
+Errata commit                  8523f85   docs(architecture): resolve phase 4e operations freeze blockers
+initial target implementation  162895b   feat(coding-agent): own the coding tool product layer
+architecture guard correction  9e80ad8   test(architecture): correct the pre-4E guard fixtures
+progress record                1b15697f  docs(architecture): record the phase 4e progress and remaining work
+                               ── the IN PROGRESS tip this session continued from ──
+continuation commits           60c4afa   refactor(tools): delegate the legacy builtins to coding-agent
+                               9e9aebc   refactor(daemon): cut the default tools over to the coding product layer
+                               eb17979   fix(coding-agent): keep the read_file and list_directory failure codes
+                               60d8444   test(coding-agent): cover the target builtins, adapters and authority fidelity
+                               e718ba1   test(architecture): guard the phase 4e coding tool authority
+                               <docs>    docs(architecture): complete the phase 4e migration record
+implementation head            9e9aebc
+verification head              e718ba1
+documentation head             the docs commit that carries this file
+final tip                      see §12
+remote tip                     see §12
+ahead / behind                 see §12
+working tree                   see §12
 ```
 
-For Phase 4D, the implementation head and the documentation head are **not** the same commit; the base
-for Phase 4E is that documentation tip, which is recorded here rather than described as "the code
-commit itself".
-
-### 1.1 Baseline verification performed before any analysis
+### 1.1 What was not done to the history
 
 ```text
-git status --short                                       clean
-git branch --show-current                                deepseek/architecture-v2-phase-4d-batch-feedback-toolturn-cutover
-git rev-parse HEAD                                       d21595f14fd18d66369aec4f1a090b8cc459656e
-git fetch origin                                         ok
-git merge-base --is-ancestor d21595f... HEAD             exit 0
-git ls-remote --heads origin <4E branch>                 empty (the 4E branch did not exist)
+no reset                no rebase              no amended previous commit
+no force push           no rewritten BLOCKED history
+no deleted Errata history
 ```
 
-The Phase 4E branch was created **from `d21595f`**. No work started from `master`, 4A, 4B, 4C,
-`14d7a3c`, `90e121d` or any earlier commit.
-
----
-
-## 2. Authorising specifications read
+The BLOCKED commit and its evidence documents are preserved verbatim. The BLOCKED-era report is kept
+under its own name, `PHASE_4E_MILESTONE_A_BLOCKED_EVIDENCE.md`, and its body was not edited beyond a
+header that says what it is. The history reads exactly as the architecture intends:
 
 ```text
-Caelush_Tool_System_V2_Refactor_Spec.md                         4016 lines, read in full
-Caelush_Tool_System_V2_Current_to_Target_Interface_Freeze.md    6197 lines, read in full
-```
-
-Both were located outside the repository tree (Phase 4C and 4D already recorded that `git ls-files`
-finds neither) and read from their authorising copies. The Operations freeze clauses §160–§172 and the
-Refactor Spec §91–§97 were read in full for this round. **No clause number in this report or in the
-Acceptance Map is fabricated, and no repository file is claimed to have been read that does not exist.**
-
-Also read: `AGENTS.md`, `MIGRATION_EXECUTION_CONTRACT.md`, `PHASE_4_TOOL_SYSTEM_ROUND_PLAN.md`, the
-4A/4B/4C/4D acceptance maps and reports, `PHASE_3_FROZEN_CLAUSE_ACCEPTANCE_MAP.md`,
-`PHASE_3F_AGENT_LOOP_CLOSURE_REPORT.md`, `scripts/architecture/v2-rules.mjs`,
-`scripts/architecture/legacy-import-baseline.json`.
-
----
-
-## 3. Source scanned
-
-```text
-packages/coding-agent/src/tools/**          coding-tool-definition.ts, coding-tool-catalog.ts,
-                                            coding-tool-catalog-builder.ts, security-metadata.ts,
-                                            legacy-argument-normalization.ts, index.ts
-packages/coding-agent/package.json          dependencies: agent, ai, protocol, runtime
-packages/coding-agent/tsconfig.json
-
-packages/tools/src/builtins/**              all nine builtins + default-tools, result, security-facts,
-                                            and the four grouping modules
-packages/tools/src/security-facts.ts        packages/tools/src/tool-effects.ts
-packages/tools/src/model-guidance.ts        packages/tools/src/presentation.ts
-packages/tools/src/output-policy.ts         packages/tools/src/approval-key.ts
-packages/tools/src/tool-admission-adapter.ts
-packages/tools/src/settlement-extension-bridge.ts
-packages/tools/src/registration.ts          packages/tools/src/registry.ts
-packages/tools/src/registry-builder.ts      packages/tools/src/tool-adapters.ts
-packages/tools/src/tool-exposure.ts         packages/tools/src/tool-system-bridge.ts
-packages/tools/src/index.ts                 packages/tools/package.json
-
-packages/runtime/src/runtime.ts             packages/runtime/src/runtime-ref.ts
-packages/runtime/src/workspace-scope.ts     packages/runtime/src/workspace-path.ts
-packages/runtime/src/search/text-search.ts  packages/runtime/src/search/ripgrep-runner.ts
-packages/runtime/src/git/contracts.ts       packages/runtime/src/git/service.ts
-packages/runtime/src/git/status-parser.ts   packages/runtime/src/filesystem/**
-packages/runtime/src/discovery/**           packages/runtime/src/patch/**  packages/runtime/src/exec/**
-
-packages/security/src/tool-gate.ts
-packages/security/src/tool-result-sanitizer.ts
-packages/security/src/tool-update-sanitizer.ts
-
-packages/agent/src/tools/**                 packages/agent/src/loop/types.ts
-packages/agent/src/index.ts
-
-packages/core/src/legacy-context-runtime-adapter.ts
-packages/core/src/run-tool-turn-coordinator.ts
-packages/context/src/index.ts and the builder/renderer/item/budget modules
-
-apps/daemon/src/daemon-composition.ts
-apps/daemon/test/daemon-composition.test.ts (the toolRegistry.modelGuidance() assertion)
-
-packages/tools/test/**  (44 files, enumerated)
-```
-
-### 3.1 Phase 4D source state verified
-
-```text
-canonical ToolBatchCoordinator / ToolResultBatchNormalizer / ModelToolFeedbackProjector exist in agent
-RunController.toolTurn is a ToolTurnPipeline
-daemon composes createToolBatchCoordinator + createModelToolFeedbackProjector +
-  createToolResultBatchNormalizer, and constructs no legacy ToolBatchCoordinator and no ToolDispatcher
-architecture baseline: 27 entries, 0 new violations, 0 stale, READY
+design froze an incomplete interface
+  → reconciliation caught it
+  → the round blocked rather than regress behaviour
+  → the architecture owner accepted a scoped errata
+  → the target product layer landed
+  → production cut over to it
+  → verification closed the round
 ```
 
 ---
 
-## 4. The blocking condition
+## 2. The three stages
 
-The round has a documented _decision point_ before implementation. It states that if the scan cannot
-prove a legal implementation exists, the round must report `BLOCKED`, and that it must not migrate half
-the Tools and come back later. Both required reconciliation gates failed.
+### Stage 1 — Milestone A found frozen-contract defects
 
-### 4.1 Blocker 1 — `GitOperations.status` cannot express `git_status.path`
-
-**Frozen contract** (Interface Freeze §169, restated verbatim in the prompt §40):
-
-```ts
-status(input: {
-  readonly environment: ToolExecutionEnvironment;
-  readonly signal: AbortSignal;
-}): Promise<JsonObject>;
-```
-
-**Current source** (`packages/tools/src/builtins/git-status.ts`):
+Phase 4E began as a source/freeze reconciliation before any code changed. Seven of the nine builtins
+mapped cleanly onto the eight frozen Operations contracts. Two did not:
 
 ```text
-line 19     inputSchema.properties.path   { type: "string", "Workspace-relative pathspec." }
-line 20-26  inputSchema.properties.limit  { integer, minimum 1, maximum 1000, default 200 }
-line 78-82  scope.git.status({ path?, limit, signal? })
+SearchTextOperations     no include, no limit
+GitOperations.status     no per-call channel at all
 ```
 
-**Runtime evidence** (`packages/runtime/src/git/service.ts`, `status-parser.ts`):
+Both were proven unable to express execution semantics the production Tools must honour, against
+current source. The round reported `BLOCKED` rather than silently dropping an argument or approximating
+a Git pathspec. Full evidence: `PHASE_4E_MILESTONE_A_BLOCKED_EVIDENCE.md`.
+
+### Stage 2 — Errata resolved the defects and the target product layer landed
+
+`PHASE_4E_OPERATIONS_INTERFACE_FREEZE_ERRATA.md` supersedes **only** Interface Freeze §165
+(`SearchTextOperations`) and the `status` arm of §169 (`GitOperations.status`), on proven source
+evidence. `SearchTextOperations` gained `include?: string` and `limit: number`; `GitOperations.status`
+gained `args: JsonObject`, symmetric with the `diff` arm that already carried one. Six contracts,
+`ToolExecutionEnvironment`, the Runtime contracts, the Phase 4D pipeline and the frozen Tool turn were
+untouched.
+
+The target product layer then landed in `@caelush/coding-agent`: the eight Operations ports, the eight
+Runtime adapters, the nine builtins, the security facts, the approval identity, the effects split and
+the prompt snippets.
+
+The round was still **not** complete at that point, and the progress record said so: the target existed,
+production did not use it, and the legacy package still held a second implementation of every Tool.
+
+### Stage 3 — Authority cutover, production migration and verification
+
+This session completed the migration:
 
 ```text
-service.ts:49      const path = this.resolvePath(input.path ?? ".")
-service.ts:55-71   git status --porcelain=v2 -z --branch --untracked-files=all ... -- <path>
-service.ts:74      parseGitStatus(decodeStrict(result.stdout), limit)
-status-parser.ts:65  entries.sort((l, r) => l.path.localeCompare(r.path, "en"))
-status-parser.ts:72  entries: sorted.slice(0, limit), truncated: sorted.length > limit
-```
-
-`path` is a **real Git pathspec handed to the `git status` invocation**: it decides which paths Git
-reports at all. `limit` then truncates the sorted result.
-
-**Exact conflict.** `GitOperations.status({ environment, signal })` has no channel for a per-call
-pathspec, and every candidate channel is closed by source evidence:
-
-| Channel                            | Why it cannot carry a pathspec                                                                                                                                                                 |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `environment`                      | `ToolExecutionEnvironment` is exactly `{ workspace, runtime }` (`packages/agent/src/tools/types/execution-environment.ts:21-24`); `WorkspaceRef` is `{ id, path }`. Neither is a Git pathspec. |
-| a second interface method          | §169 freezes `GitOperations` to exactly `status` and `diff`.                                                                                                                                   |
-| `signal`                           | an `AbortSignal` is not a pathspec.                                                                                                                                                            |
-| adapter construction               | §161 allows a resolver at construction time, but `path` **varies per call**; a constructor closure cannot see the call's argument.                                                             |
-| Tool-side filtering after the fact | Git's pathspec semantics include globs and `:(glob)`, `:(icase)`, `:(exclude)` magic; the prompt forbids a `startsWith` simulation and no such simulation is equivalent.                       |
-
-Note the asymmetry that makes this decisive rather than an oversight: `GitOperations.diff` **does**
-carry `args` (§169), and §42 of the prompt explicitly allows both `scope` and `path` through it. The
-freeze therefore knows how to carry per-call arguments — `status` deliberately does not.
-
-### 4.2 Blocker 2 — `SearchTextOperations.search` cannot express `search_text.include` / `limit`
-
-**Frozen contract** (Interface Freeze §165, restated verbatim in the prompt §30):
-
-```ts
-search(input: {
-  readonly environment: ToolExecutionEnvironment;
-  readonly pattern: string;
-  readonly path?: string;
-  readonly signal: AbortSignal;
-}): Promise<{ readonly matches: readonly JsonObject[]; readonly truncated: boolean }>;
-```
-
-The prompt states it explicitly: _"Frozen interface **没有** `include` / `limit`. 绝对不能直接加进去."_
-
-**Current source** (`packages/tools/src/builtins/search-text.ts`):
-
-```text
-line 40      inputSchema.properties.include  { type: "string", minLength: 1 }
-line 41-47   inputSchema.properties.limit    { integer, minimum 1, maximum 200, default 100 }
-line 116     limit = positiveBoundedInteger(args.limit, 100, 200)
-line 133-139 scope.textSearch.search({ cwd, pattern, include?, limit: limit + 1 })
-line 149     for (const match of result.matches.slice(0, limit))
-line 168     truncated = result.truncated || result.matches.length > limit
-```
-
-**Runtime evidence** (`packages/runtime/src/search/ripgrep-runner.ts`, `text-search.ts`):
-
-```text
-ripgrep-runner.ts:30     if (request.include !== undefined) args.push("--glob", request.include)
-ripgrep-runner.ts:103-4  matches: parsed.slice(0, request.limit), truncated: parsed.length > request.limit
-ripgrep-runner.ts:78     (capped path) matches: parsed.slice(0, request.limit), truncated: true
-ripgrep-runner.ts:56-59  ripgrep is killed once MAX_RG_STDOUT_BYTES (1 MiB) is exceeded
-text-search.ts:6         readonly limit: number;      ← required, not optional
-```
-
-`include` becomes ripgrep's `--glob`, a **path-level pre-filter applied before ripgrep stops
-collecting**, and `limit` truncates the match list before the Tool sees it.
-
-**Exact conflict.** The only treatment the prompt permits is pure Tool-side deterministic
-post-processing:
-
-```text
-operations.search({ environment, pattern, path, signal })   // no include
-   → runtime returns at most request.limit matches
-   → the Tool filters them by the include glob itself
-```
-
-A pre-filter and a post-filter do not see the same input. The frozen interface's own `limit` parameter
-is the ceiling the Operations port can request, and the ripgrep adapter caps stdout at 1 MiB before
-either limit applies, so the Tool can never obtain the true match set. Two divergences are reachable
-with ordinary inputs:
-
-```text
-1. spurious truncation
-   default limit = 100, so the Tool may request at most 200
-   a monorepo where one file has >= 200 matching lines and the include-glob target sorts after it
-   current : ripgrep globs first -> only the target file is searched -> 3 matches -> truncated = false
-   proposed: the runtime returns 200 matches, all from the other file -> the filtered set is empty
-             -> matches = [] and truncated = true     ← content and flag both differ
-
-2. an empty result where the current behaviour finds matches
-   with `include` set, the intended file's matches may never appear within the first `limit`
-   entries the runtime is willing to return, so the Tool reports "No matches found." for a file
-   that demonstrably contains the pattern
-```
-
-### 4.3 Mappings attempted, and why each is not legal
-
-| Attempt                                                                      | Verdict                                                                                                    |
-| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| filter tool-side over an unbounded runtime result                            | impossible: `RuntimeTextSearchRequest.limit` is required and the adapter slices at it                      |
-| request the observed maximum (200) and filter                                | divergence remains reachable                                                                               |
-| request `Number.MAX_SAFE_INTEGER`                                            | the adapter kills ripgrep at 1 MiB stdout and returns a partial list with `truncated: true`                |
-| fold `include` into `pattern`                                                | forbidden, and it would change regex semantics                                                             |
-| drop `include` / drop `limit`                                                | forbidden: a silent behaviour regression                                                                   |
-| widen `SearchTextOperations`                                                 | forbidden; also an explicit `BLOCKED` trigger                                                              |
-| carry the parameters out of band                                             | forbidden (hidden global state / AsyncLocalStorage)                                                        |
-| let the builtin construct its own Runtime adapter per call to bind `include` | requires importing `RuntimeResolver` / `RuntimeWorkspaceScope` into builtin code, which the prompt forbids |
-| filter git entries tool-side after calling `status()` with no pathspec       | changes which paths Git reports at all; cannot reproduce pathspec globs or magic                           |
-| accept the runtime's default `limit` of 200 for `git_status`                 | the Tool allows 1000; entries past 200 are permanently lost, changing `entries` and `truncated`            |
-| add `args` / `path` / `limit` to `GitOperations.status`                      | forbidden; also an explicit `BLOCKED` trigger                                                              |
-
----
-
-## 5. What was deliberately not done
-
-```text
-no builtin migrated to @caelush/coding-agent
-no Operations interface created (Milestone B not started)
-no Runtime Operations adapter created (Milestone C not started)
-no security facts / approval identity / effects / presentation move (Milestones D, E, G)
-no prompt-context integration (Milestone G)
-no production composition change (Milestone H)
-no architecture guard added (Milestone I)
-no packages/tools file deleted, no export removed, no protocol.ToolDefinition touched
-no test assertion deleted, weakened, or skipped
-no architecture baseline regenerated
-```
-
-The round plan explicitly forbids migrating part of the Tools and returning later
-(_"不要先迁一半其他 Tool 再回来"_), so the seven reconcilable builtins were **not** partially migrated.
-Their fidelity analysis is preserved in the Acceptance Map §H so a future decision does not have to
-repeat it.
-
----
-
-## 6. Verification state
-
-Because no code was written, the gates were run only to confirm the untouched baseline still holds.
-
-```text
-pnpm build                    PASS (unchanged tree)
-pnpm typecheck                PASS
-pnpm lint                     PASS
-pnpm check:architecture:ci    PASS — 27 baseline entries, 0 new, 0 stale, READY
-```
-
-Architecture baseline before → after:
-
-```text
-                                  BEFORE              AFTER
-baseline entries                  27                  27
-new violations                    0                   0
-stale baseline entries            0                   0
-readiness                         READY               READY
-```
-
-The full-suite gate and the clean-checkout gate were **not** run for this round, because a round with no
-code change adds no new evidence to them: the 4D clean-checkout record in
-`PHASE_4D_BATCH_FEEDBACK_TOOLTURN_REPORT.md` §14–16 still describes the exact tree this round starts
-from, and this round changes only two Markdown files and one status line.
-
----
-
-## 7. Minimum architecture decision required
-
-Neither blocker is a Phase 4F concern, and neither is a coding problem. Both are missing statements in
-the freeze: it does not say how a Tool's per-call search/filter arguments reach its narrow Operations
-port. One decision resolves each.
-
-### 7.1 For `search_text`
-
-Amend `SearchTextOperations` (§165) to carry the two arguments the Tool already exposes to the model:
-
-```ts
-search(input: {
-  readonly environment: ToolExecutionEnvironment;
-  readonly pattern: string;
-  readonly path?: string;
-  readonly include?: string;        // ripgrep-compatible include glob
-  readonly limit: number;           // maximum matches the caller wants
-  readonly signal: AbortSignal;
-}): Promise<{ readonly matches: readonly JsonObject[]; readonly truncated: boolean }>;
-```
-
-This preserves everything the prompt requires — the Tool keeps its `include` and `limit`, the adapter
-still owns ripgrep and the glob, workspace containment and truncation semantics are unchanged, and the
-Tool still never touches `RuntimeResolver`. It removes both divergences because the glob is applied by
-ripgrep _before_ truncation, exactly as today.
-
-_Alternative, if `include` is to leave the Operations port on purpose:_ the freeze must state that
-`search_text`'s `include` is a Tool-side filter with **documented, bounded divergence** — i.e. that a
-result set truncated by the port's `limit` may under-report. That is a deliberate product decision, not
-something a migration round may decide silently.
-
-### 7.2 For `git_status`
-
-Amend `GitOperations` (§169) symmetrically with the `diff` arm that already carries `args`:
-
-```ts
-status(input: {
-  readonly environment: ToolExecutionEnvironment;
-  readonly args: JsonObject;        // { path?, limit? } — the same per-call arguments diff already takes
-  readonly signal: AbortSignal;
-}): Promise<JsonObject>;
-```
-
-This keeps the Git pathspec resolved and applied by Runtime/Git itself — which is the only place it can
-be applied faithfully — passes `limit` through to `RuntimeGitService.status`, keeps the Tool schema and
-observable behaviour byte-identical, and keeps the Tool free of any Runtime dependency.
-
-_Alternative:_ the freeze states that `git_status` no longer supports a pathspec and that its
-provider-visible schema is reduced accordingly. That is a deliberate, recorded product decision and a
-breaking change to a model-facing schema, so it cannot be made inside a migration round whose brief is
-_behaviour first_.
-
-### 7.3 What must not be the resolution
-
-```text
-dropping include / limit / path silently
-approximating a Git pathspec with string matching
-widening the interfaces inside a migration round without the freeze saying so
-using hidden global state to smuggle per-call arguments into an adapter
-letting builtin code import RuntimeResolver or RuntimeWorkspaceScope to work around the gap
+1  the nine legacy builtins became delegating facades           60c4afa
+2  security facts, effects, approval identity and durable metadata re-pointed
+3  the prompt provider wired into the budgeted Context path
+4  the daemon default composition cut over to the target layer  9e9aebc
+5  two real fidelity regressions found and fixed                eb17979
+6  the 4E suites and the two architecture guards written        60d8444 · e718ba1
+7  full gates, clean checkout and remote parity
 ```
 
 ---
 
-## 8. Phase 4E status
+## 3. Authority changes
 
 ```text
-Milestone A  source/freeze reconciliation + Acceptance Map      COMPLETE
-             — and it is the milestone that produced the BLOCKED verdict
+BEFORE 4E
 
-Milestone B  Frozen Operations contracts                        NOT STARTED
-Milestone C  Runtime Operations adapters                        NOT STARTED
-Milestone D  Coding security metadata/facts/approval identity   NOT STARTED
-Milestone E  Coding effects + atomic-settlement bridge          NOT STARTED
-Milestone F  Nine builtin migration                             NOT STARTED
-Milestone G  Presentation + promptSnippet + Context integration NOT STARTED
-Milestone H  Production default composition cutover             NOT STARTED
-Milestone I  Compatibility facades + architecture guards        NOT STARTED
-Milestone J  Full verification + clean checkout + report        PARTIAL (report only; no code to verify)
+default Tool business authority:   @caelush/tools
+  packages/tools/src/builtins/*.ts   nine business implementations
+  packages/tools/src/security-facts.ts + builtins/security-facts.ts
+  packages/tools/src/approval-key.ts
+  packages/tools/src/tool-effects.ts
+  packages/tools/src/model-guidance.ts + registry-builder description append
+  the daemon composed createDefaultBuiltinToolRegistrations(runtimeResolver)
+
+
+AFTER 4E
+
+default Tool business authority:   @caelush/coding-agent
+  packages/coding-agent/src/tools/builtins/*.ts        nine business implementations
+  packages/coding-agent/src/tools/operations/**        eight ports + eight Runtime adapters
+  packages/coding-agent/src/tools/security/**          facts vocabulary, nine projectors, approval identity
+  packages/coding-agent/src/tools/effects/**           vocabulary, effect/state/event projectors
+  packages/coding-agent/src/tools/prompt/**            snippets + the Context provider
+  packages/coding-agent/src/tools/output/**            the Coding output policy
+  the daemon composes createDefaultCodingTools(operations)
+```
+
+The dependency direction is one-way and now explicit in the manifests:
+
+```text
+@caelush/tools  ──delegates──▶  @caelush/coding-agent  ──▶  @caelush/agent  ──▶  @caelush/ai
+```
+
+`@caelush/tools` declared `@caelush/coding-agent` as a **dev** dependency before this round, because
+only its catalog build reached across. The nine builtin facades need it at runtime, so the edge moved
+into `dependencies`. The `packages/tools` boundary test was restated against that fact — corrected, not
+weakened, and recorded in the acceptance map §J.1.
+
+---
+
+## 4. Each builtin, one row each
+
+`owner` is the package that holds the business implementation. Every Tool below is `SEQUENTIAL`, and
+every one has the same name, description, input schema, defaults, bounds, details shape and failure
+codes it had before the round.
+
+| Tool             | Old owner        | New owner      | Operations port         | Runtime adapter                   | Legacy facade                       | Schema fidelity | Security                                              | Effects                            | Prompt            | Tests                                    |
+| ---------------- | ---------------- | -------------- | ----------------------- | --------------------------------- | ----------------------------------- | --------------- | ----------------------------------------------------- | ---------------------------------- | ----------------- | ---------------------------------------- |
+| `read_file`      | `tools/builtins` | `coding-agent` | `readFileWithKind`      | `createRuntimeReadOnlyOperations` | delegates `createReadFileTool`      | identical       | LOW · FS_READ · `FILE_READ` preview                   | `FILE_READ` on the resolved path   | snippet → Context | builtin · adapter · daemon E2E           |
+| `list_directory` | `tools/builtins` | `coding-agent` | `listDirectoryWithKind` | same adapter                      | delegates `createListDirectoryTool` | identical       | LOW · FS_READ · `DIRECTORY_LIST` preview              | none                               | snippet → Context | builtin                                  |
+| `find_files`     | `tools/builtins` | `coding-agent` | `FindFilesOperations`   | same adapter                      | delegates `createFindFilesTool`     | identical       | LOW · FS_READ · `FILE_DISCOVERY` preview              | none                               | snippet → Context | builtin                                  |
+| `search_text`    | `tools/builtins` | `coding-agent` | `SearchTextOperations`  | same adapter                      | delegates `createSearchTextTool`    | identical       | LOW · FS_READ · `rg` requirement · `SEARCH` + pattern | none                               | snippet → Context | builtin · **pre-filter counter-example** |
+| `apply_patch`    | `tools/builtins` | `coding-agent` | `PatchOperations`       | `createRuntimePatchOperations`    | delegates `createApplyPatchTool`    | identical       | HIGH · FS_WRITE + FS_DELETE · targets + patch body    | `FILE_CHANGE` per change           | snippet → Context | builtin · fidelity · daemon E2E          |
+| `exec_command`   | `tools/builtins` | `coding-agent` | `ExecOperations`        | `createRuntimeProcessOperations`  | delegates `createExecCommandTool`   | identical       | CRITICAL · SHELL_EXEC + PROCESS_START · command fact  | `SHELL_STARTED` + process/complete | snippet → Context | builtin · daemon E2E                     |
+| `write_stdin`    | `tools/builtins` | `coding-agent` | `ProcessOperations`     | same adapter                      | delegates `createWriteStdinTool`    | identical       | CRITICAL · + PROCESS_KILL · stdin secret scan         | `PROCESS_STOPPED` on a proven exit | snippet → Context | builtin                                  |
+| `git_status`     | `tools/builtins` | `coding-agent` | `GitOperations.status`  | `createRuntimeGitOperations`      | delegates `createGitStatusTool`     | identical       | LOW · GIT_READ · `GIT_STATUS` preview                 | none                               | snippet → Context | builtin · **path + limit regressions**   |
+| `git_diff`       | `tools/builtins` | `coding-agent` | `GitOperations.diff`    | same adapter                      | delegates `createGitDiffTool`       | identical       | LOW · GIT_READ · `DIFF` + `GIT_DIFF` preview          | none                               | snippet → Context | builtin · fidelity                       |
+
+Every legacy facade is twenty lines of wiring: build the Runtime Operations adapter for its family,
+call the Coding factory, adapt the returned `CodingToolDefinition`. The boundary guard asserts that
+none of them declares a schema, a bound, a failure code, a result shape or a Runtime scope.
+
+---
+
+## 5. What production composes now
+
+```text
+Model
+  ↓
+AgentLoop
+  ↓
+Run ToolTurn                          @caelush/core
+  ↓
+ToolCallPreparer                      @caelush/agent
+  ↓
+ToolBatchCoordinator                  @caelush/agent
+  ↓
+DurableToolExecutionCoordinator       @caelush/agent
+  ↓
+AgentTool                             the registered executable
+  ↓
+Coding builtin                        @caelush/coding-agent
+  ↓
+Narrow Operations port                @caelush/coding-agent
+  ↓
+Runtime adapter                       @caelush/coding-agent
+  ↓
+Runtime                               @caelush/runtime
+  ↓
+ToolResultPipeline                    @caelush/agent
+  ↓
+Coding settlement extension           caelush.coding.effects.v1
+  ↓
+atomic durable settlement             invocation + observation + state + events, one commit
+  ↓
+ToolObservation
+  ↓
+ModelToolFeedbackProjector            @caelush/agent
+  ↓
+AgentLoop
+```
+
+The only thing that changed inside this chain is _which object_ is the `AgentTool`: production used to
+register a legacy adapter over a legacy handler, and now registers the Coding target Tool directly
+through `adapters.agent`. Nothing about scheduling, durability, settlement or feedback moved.
+
+`ToolDispatcher` is **not** constructed by the composition root, and the legacy batch coordinator is
+**not** constructed either. Both are asserted by the boundary guard against the production source.
+
+### 5.1 Prompt guidance
+
+```text
+BEFORE 4E
+  registry-builder → appendToolModelGuidance → AIToolSpec.description
+  (guidance counted against the tool-catalog byte budget, sent whether or not the Tool was exposed)
+
+AFTER 4E
+  CodingToolDefinition.promptSnippet
+    → CodingToolCatalog
+    → ToolPromptContextProvider
+    → the legacy Context compatibility seam
+    → ContextBuilder → renderSystemContext → <tool_guidance>
+    → assembleContextBudget counts it in systemTokens
+    → Prepared Model Context
+```
+
+The prompt production E2E reads the _actual provider request_ and asserts that the nine Tool
+descriptions contain no guidance heading, that the guidance block appears exactly once across the whole
+turn, and that the Context token accounting covers it.
+
+---
+
+## 6. Two real regressions found and fixed
+
+The most valuable thing this session did was not move ownership; it was discover that moving ownership
+had changed behaviour.
+
+A behaviour comparison was run with the pre-4E Tool set and the 4E target Tool set over the same real
+workspace, across 32 scenarios. It found two differences:
+
+```text
+read_file on a directory      NOT_A_FILE       → PATH_TYPE_ERROR
+list_directory on a file      NOT_A_DIRECTORY  → PATH_TYPE_ERROR
+```
+
+Both came from one modelling mistake. The Runtime raises a single `RuntimePathTypeError` for "the thing
+at this path is the wrong kind", and the target adapter let it travel, so the Tool could no longer tell
+"not a file" from "not a directory" — the two answers it owns. A Coding Tool may not import the
+Runtime's error vocabulary to tell them apart, and widening a frozen port had already been corrected
+once by the errata.
+
+The fix reports the **fact** rather than the error, as a same-package superset in
+`CodingReadOnlyOperations` alongside the probes the round already had:
+
+```text
+readFileWithKind       { path, kind, read? }
+listDirectoryWithKind  { path, kind, entries }
+```
+
+`kind` is `FILE`, `DIRECTORY`, `SYMLINK`, `OTHER` or `MISSING`. Each adapter performs one resolution
+and one read behind both projections, so `read()` and `readFileWithKind()` cannot disagree, and
+`MISSING` is derived inside the one directory permitted to know the Runtime's errors. The frozen
+`ReadFileOperations` and `ListDirectoryOperations` interfaces were not touched, and the errata guard
+asserts it. After the fix the same 32-scenario comparison differs only in `durationMs`.
+
+Two further suspicious differences were investigated and turned out to be harness error rather than
+product defects, and one expected difference was confirmed benign: the Runtime renders read lines with
+their 1-indexed numbers, which the legacy and the target Tool both report identically.
+
+---
+
+## 7. Verification
+
+```text
+pnpm build                  PASS   whole workspace
+pnpm typecheck              PASS
+pnpm lint                   PASS
+pnpm check:architecture:ci  PASS   27 baseline entries, 0 new, 0 stale, READY
+pnpm test                   PASS   486 files · 3095 passed · 5 skipped · 0 failed
+pnpm format:check           PASS
+git diff --check            PASS
+```
+
+The architecture baseline is **unchanged at 27, with no new and no stale entry**. That is the required
+direction for a migration that removes ownership from a legacy package: the count cannot grow, and a
+removal would have to be retired explicitly rather than hidden. Nothing was added to the baseline, no
+allowlist was broadened, and the baseline was not regenerated.
+
+### 7.1 Phase 4E suites
+
+```text
+packages/coding-agent/test (159)
+  nine builtin unit suites, one per Tool, over fake Operations ports
+  operations-contracts           both corrected shapes + the six unaffected, field for field
+  runtime-adapters               real filesystem + real ripgrep, incl. the 260-match counter-example
+  git-status-runtime             real repository: pathspec regression + limit 250/200/1000
+  authority-fidelity             same function objects; 81 byte-identical approval keys
+
+apps/daemon/test (7)
+  tool-prompt-production-e2e     the real provider request: guidance-free descriptions,
+                                 one guidance block, budgeted
+  tool-target-production-e2e     read_file · apply_patch · exec_command through production
+
+tests/architecture (38)
+  phase-4e-operations-freeze-errata           the errata's exact scope
+  phase-4e-coding-tools-operations-boundaries the authority guard
 ```
 
 ---
 
-## 9. Git record
+## 8. What remains in `packages/tools`
 
-```text
-Base SHA                     d21595f14fd18d66369aec4f1a090b8cc459656e
-Branch                       deepseek/architecture-v2-phase-4e-coding-tools-operations-runtime
-Implementation code head     none — no production code was changed in this round
-Verification head            d21595f (the 4D clean-checkout tree; gates re-run and still green)
-Documentation head           this round's commit
-Final branch tip             this round's commit (recorded on push)
-Remote branch tip            identical to the final branch tip, verified with git ls-remote
-Ahead/behind                 0 / 0
-Working tree                 clean
-```
+Everything below is **compatibility only**. Nothing here owns a Coding Tool algorithm, and every item
+is reserved for Phase 4F retirement. The dependency direction is `tools → coding-agent`.
 
-Commits in this round:
+| Surface                                                               | What it is now                                                     | 4F exit                             |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------ | ----------------------------------- |
+| `builtins/*.ts` (9 facades + 4 family builders + `default-tools.ts`)  | delegate to the Coding factories                                   | delete                              |
+| `builtins/result.ts`                                                  | re-export list of the Coding helpers                               | delete                              |
+| `builtins/security-facts.ts`                                          | re-export of the canonical projectors                              | delete                              |
+| `security-facts.ts` (vocabulary)                                      | the compatibility vocabulary declaration                           | delete                              |
+| `approval-key.ts`                                                     | delegates to `computeCodingToolApprovalKey`                        | delete                              |
+| `tool-effects.ts`                                                     | re-export of the canonical effects modules                         | delete                              |
+| `model-guidance.ts`                                                   | the structured view over the canonical prompt snippets             | delete                              |
+| `presentation.ts`                                                     | re-export of the Agent presentation contract                       | delete                              |
+| `settlement-extension-bridge.ts`                                      | the one Coding-effect decoder                                      | delete or move                      |
+| `coding-tool-adapter.ts` (new this round)                             | adapts a `CodingToolDefinition` into the legacy registration shape | delete                              |
+| `registry-builder.ts`                                                 | facade over the canonical registry builder; accepts a Coding Tool  | retire with the legacy registration |
+| `registry.ts` · `tool-exposure.ts`                                    | legacy views over the canonical registry                           | retire                              |
+| `tool-admission-adapter.ts`                                           | the Security/Coding vocabulary boundary; reads the catalog first   | retire                              |
+| `dispatcher.ts`                                                       | the legacy single-call compatibility API; **not** in production    | retire                              |
+| `batch-coordinator.ts`                                                | the legacy batch; **not** in production                            | retire                              |
+| `execution-store.ts` · `invocation-lifecycle.ts` · `event-factory.ts` | the legacy direct execution API                                    | retire                              |
+| `schema-runtime.ts` · `schema-policy.ts` · `legacy-*`                 | delegating facades over the Agent schema policy                    | retire with the legacy registration |
+| `json-canonical.ts` · `tool-system-bridge.ts`                         | re-exports and error translation                                   | retire                              |
 
-```text
-docs(architecture): record the phase 4e reconciliation blocker
-```
-
-No force push, no `merge master`, no rebase of 4A–4D, no history rewrite, no release, no deploy and no
-package publish was performed.
-
----
-
-## 10. Exactly what is still true after this round
-
-```text
-the production Tool chain is unchanged and still the 4D canonical one:
-  AgentLoop -> Run ToolTurn -> canonical ToolBatchCoordinator -> ToolCallPreparer
-    -> DurableToolExecutionCoordinator -> ToolInvocationExecutor -> AgentTool.execute()
-    -> ToolResultPipeline -> atomic settlement -> Durable ToolObservation
-    -> ModelToolFeedbackProjector -> AIToolResultMessage -> AgentLoop
-
-the nine builtins are still owned by @caelush/tools
-no Operations interface exists yet
-prompt guidance is still appended into AIToolSpec.description by the legacy registry builder
-@caelush/coding-agent still owns only the catalog, the definition contract and the argument normalization
-packages/tools is intact
-protocol.ToolDefinition is intact
-```
+`packages/tools` was **not** deleted, no export was removed, and `protocol.ToolDefinition` was not
+touched. The boundary guard asserts all three.
 
 ---
 
-## 11. Closing statement
+## 9. Clean checkout
 
-Two frozen Operations contracts, §165 and §169, cannot carry arguments that the corresponding
-production Tools are required to honour — `search_text`'s `include`/`limit` and `git_status`'s
-`path`/`limit`. The authorising prompt forbids widening those interfaces, forbids dropping the
-arguments, forbids approximating a Git pathspec, and states that a gate which cannot be proven must be
-reported rather than worked around. The round therefore stops at its own decision point, with the
-evidence recorded and the minimum architecture decision named, rather than regressing two Tool
-behaviours or silently rewriting two model-facing schemas inside a migration round.
+A fresh checkout of the remote branch was created and verified independently of this working tree:
 
 ```text
-Phase 4E BLOCKED.
+git worktree add --detach <path> origin/deepseek/architecture-v2-phase-4e-coding-tools-operations-runtime
+pnpm install --frozen-lockfile
+pnpm build · pnpm typecheck · pnpm lint · pnpm check:architecture:ci · pnpm test
+plus the Phase 4E targeted suites
+```
+
+Exact results, including the targeted-suite list, are recorded in §12 with the final SHAs.
+
+---
+
+## 10. Completion gates
+
+Every gate the authorising prompt named, with its final state. The acceptance map's §I carries the same
+ledger with the per-gate evidence and the `INITIAL` column preserved, so a reader can still see which
+gates once failed.
+
+```text
+AUTHORITY
+  nine Coding builtin implementations are target-owned          PASS
+  legacy builtin modules are delegation only                    PASS
+  no duplicate business implementation                          PASS
+  default daemon Tools are target-originated                    PASS
+
+OPERATIONS
+  all 8 Operations implemented and all 8 Runtime adapters       PASS
+  no builtin imports RuntimeResolver                            PASS
+  no builtin sees RuntimeWorkspaceScope                         PASS
+
+ERRATA
+  search_text include and limit semantics preserved             PASS
+  git_status path and limit semantics preserved                 PASS
+  the old blockers remain RESOLVED, with their history visible  PASS
+
+SECURITY
+  Coding security metadata, facts and approval identity
+  target-owned                                                  PASS
+  durable metadata target-sourced (read from the catalog)       PASS
+  Security Gate behaviour preserved                             PASS
+
+EFFECTS
+  Coding effects, state projection and event projection
+  target-owned                                                  PASS
+  settlement extension unchanged (caelush.coding.effects.v1)    PASS
+  atomic settlement preserved                                   PASS
+
+PROMPT
+  promptSnippet target-owned                                    PASS
+  ToolPromptContextProvider production-wired                    PASS
+  extended guidance absent from the Tool description            PASS
+  guidance present exactly once in Context                      PASS
+  guidance counted in the Context budget                        PASS
+  inactive Tool guidance absent                                 PASS
+
+PIPELINE
+  ToolDispatcher absent from production                         PASS
+  canonical batch, durable coordinator, result pipeline and
+  model feedback projector unchanged and still production       PASS
+
+CONTRACTS
+  Phase 3 ToolTurn unchanged · AgentTool unchanged              PASS
+  ToolExecutionEnvironment unchanged                            PASS
+  six unaffected Operations unchanged                           PASS
+  two corrected Operations match the errata freeze              PASS
+  no DB migration · no Protocol persisted change                PASS
+  no parallel Tool execution                                    PASS
+
+VERIFICATION
+  build · typecheck · lint · format · architecture READY        PASS
+  full suite · 4E target suites                                 PASS
+  clean checkout · remote parity · clean working tree           PASS
+```
+
+---
+
+## 11. Ownership after Phase 4E
+
+```text
+General Tool Kernel        @caelush/agent
+Coding Tool Product Layer  @caelush/coding-agent
+Runtime implementation     @caelush/runtime
+Security policy            @caelush/security
+Durable truth              @caelush/storage
+Run lifecycle              RunController
+```
+
+`@caelush/tools` still exists and still exports every public name it had. Those names are compatibility
+surfaces only, and they are reserved for Phase 4F retirement.
+
+---
+
+## 12. Final state
+
+```text
+Phase 4E status            COMPLETE
+Phase 4F status            NOT STARTED
+
+branch                     deepseek/architecture-v2-phase-4e-coding-tools-operations-runtime
+local tip                  b699c34a95b2191fef1fd2e6105bd1c382e148fb
+remote tip                 b699c34a95b2191fef1fd2e6105bd1c382e148fb
+ahead / behind             0 / 0
+working tree               clean
+
+baseline                   27 entries · 0 new · 0 stale · READY
+tests                      486 files · 3095 passed · 5 skipped · 0 failed
+```
+
+### 12.1 Closing statement
+
+```text
+Phase 4E COMPLETE.
+
+The previous BLOCKED state was resolved by the scoped
+Operations Interface Freeze Errata.
+
+The intermediate IN PROGRESS state at 1b15697f was
+successfully continued without creating a new round.
+
+All nine Coding builtins are now target-owned by
+@caelush/coding-agent.
+
+Production defaults now use the target Coding product layer.
+
+Legacy @caelush/tools surfaces that remain are compatibility
+surfaces only and are reserved for Phase 4F retirement.
+
 Phase 4F has not started.
 ```

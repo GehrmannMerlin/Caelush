@@ -318,9 +318,7 @@ export interface DaemonComposition {
   dispose(): Promise<void>;
 }
 
-export async function composeDaemon(
-  options: DaemonCompositionOptions,
-): Promise<DaemonComposition> {
+export async function composeDaemon(options: DaemonCompositionOptions): Promise<DaemonComposition> {
   const providers = [...(options.providers ?? [])];
   const clock = options.clock ?? { now: () => createTimestampMs(Date.now()) };
   const runtime = options.runtime ?? new LocalRuntime();
@@ -932,9 +930,7 @@ function defaultCodingToolSet(
   const definitions = createDefaultCodingTools(operations);
   if (environment.git === "AVAILABLE") return definitions;
   const excluded = new Set<string>(GIT_TOOL_NAMES);
-  return Object.freeze(
-    definitions.filter((definition) => !excluded.has(definition.tool.name)),
-  );
+  return Object.freeze(definitions.filter((definition) => !excluded.has(definition.tool.name)));
 }
 
 /**
@@ -959,7 +955,8 @@ function toContextGuidanceItem(
   item: import("@caelush/agent").ContextItem,
   activeToolCount: number,
 ): ContextItem {
-  const tokenEstimate = item.tokenEstimate ?? Math.ceil(Buffer.byteLength(item.content, "utf8") / 3);
+  const tokenEstimate =
+    item.tokenEstimate ?? Math.ceil(Buffer.byteLength(item.content, "utf8") / 3);
   return createContextItem({
     id: item.id,
     type: "TOOL_GUIDANCE",

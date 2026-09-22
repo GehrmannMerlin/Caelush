@@ -66,7 +66,7 @@ function execute(args: Record<string, unknown>) {
       invocationId: createToolInvocationId(),
       externalCallId: "call",
     },
-    args,
+    args: args as never,
     environment,
     signal: new AbortController().signal,
     updates: { publish() {} },
@@ -124,11 +124,7 @@ describe("git_status path regression", () => {
     const result = await execute({});
 
     const entries = result.details.entries as readonly { path: string }[];
-    expect(entries.map((entry) => entry.path)).toEqual([
-      "docs/a.md",
-      "src/a.ts",
-      "src/b.ts",
-    ]);
+    expect(entries.map((entry) => entry.path)).toEqual(["docs/a.md", "src/a.ts", "src/b.ts"]);
   });
 
   it("reports the branch and a dirty tree", async () => {

@@ -8,7 +8,12 @@ import {
 } from "@caelush/runtime";
 import { describe, expect, it } from "vitest";
 
-import { ENVIRONMENT, executionInput, processFake, testSignal } from "./support/operations-fixtures.js";
+import {
+  ENVIRONMENT,
+  executionInput,
+  processFake,
+  testSignal,
+} from "./support/operations-fixtures.js";
 
 /**
  * `exec_command` — the target Coding builtin.
@@ -76,12 +81,21 @@ describe("exec_command target builtin", () => {
 
   it("forwards command, workdir, tty, yield time, owner Run and the signal", async () => {
     const { tool, fake } = toolWith(
-      executed({ status: "EXITED", exitCode: 0, output: "hi", totalOutputBytes: 3, omittedBytes: 0 }),
+      executed({
+        status: "EXITED",
+        exitCode: 0,
+        output: "hi",
+        totalOutputBytes: 3,
+        omittedBytes: 0,
+      }),
     );
     const signal = testSignal();
 
     await tool.execute(
-      executionInput({ cmd: "echo hi", workdir: "src", tty: true, yield_time_ms: 3000 }, { signal }),
+      executionInput(
+        { cmd: "echo hi", workdir: "src", tty: true, yield_time_ms: 3000 },
+        { signal },
+      ),
     );
 
     const call = fake.calls.execute[0] as Record<string, unknown>;
@@ -212,10 +226,10 @@ describe("exec_command target builtin", () => {
 
   it("converts a stale or uncertain process session into the canonical uncertain signal", async () => {
     const stale = toolWith(async () => {
-      throw new RuntimeProcessStaleSessionError("a previous runtime generation");
+      throw new RuntimeProcessStaleSessionError();
     }).tool;
     const uncertain = toolWith(async () => {
-      throw new RuntimeProcessUncertainError("the process fate is unknown");
+      throw new RuntimeProcessUncertainError();
     }).tool;
     const invariant = toolWith(async () => {
       throw new RuntimeInvariantError("guarantee violated");

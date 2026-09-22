@@ -14,7 +14,12 @@ import {
   RuntimePathTypeError,
   RuntimeSearchUnavailableError,
 } from "@caelush/runtime";
-import { createRunId, createStepId, createToolInvocationId, createWorkspaceId } from "@caelush/protocol";
+import {
+  createRunId,
+  createStepId,
+  createToolInvocationId,
+  createWorkspaceId,
+} from "@caelush/protocol";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /**
@@ -245,7 +250,10 @@ describe("search_text Runtime adapter", () => {
       updates: { publish() {} },
     });
 
-    expect(result).toMatchObject({ isError: true, details: { ok: false, error: "INVALID_PATTERN" } });
+    expect(result).toMatchObject({
+      isError: true,
+      details: { ok: false, error: "INVALID_PATTERN" },
+    });
     expect(RIPGREP_UNAVAILABLE_CODES.has(String(result.details.error))).toBe(false);
   });
 });

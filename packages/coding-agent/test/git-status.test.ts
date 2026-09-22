@@ -156,7 +156,7 @@ describe("git_status target builtin", () => {
 
   it("maps a Git failure to its safe code and keeps an invariant travelling", async () => {
     const notARepo = toolWith(async () => {
-      throw new RuntimeGitError("NOT_A_REPOSITORY", "no repository");
+      throw new RuntimeGitError("NOT_A_GIT_REPOSITORY", "no repository");
     }).tool;
     const invariant = toolWith(async () => {
       throw new RuntimeInvariantError("guarantee violated");
@@ -164,7 +164,7 @@ describe("git_status target builtin", () => {
 
     await expect(notARepo.execute(executionInput({}))).resolves.toMatchObject({
       isError: true,
-      details: { ok: false, error: "NOT_A_REPOSITORY" },
+      details: { ok: false, error: "NOT_A_GIT_REPOSITORY" },
     });
     await expect(invariant.execute(executionInput({}))).rejects.toBeInstanceOf(
       RuntimeInvariantError,

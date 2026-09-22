@@ -1,4 +1,4 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -30,8 +30,8 @@ const OPERATIONS_DIR = path.join(
   "operations",
 );
 
-async function source(fileName: string): Promise<string> {
-  return await readFile(path.join(OPERATIONS_DIR, fileName), "utf8");
+async function read(relativePath: string): Promise<string> {
+  return await readFile(path.join(OPERATIONS_DIR, relativePath), "utf8");
 }
 
 /** The source with comments removed, so a doc block cannot satisfy or break a shape assertion. */
@@ -40,7 +40,11 @@ function code(text: string): string {
 }
 
 /** The members of one interface's method-input object literal. */
-function methodInputMembers(text: string, interfaceName: string, methodName: string): readonly string[] {
+function methodInputMembers(
+  text: string,
+  interfaceName: string,
+  methodName: string,
+): readonly string[] {
   const clean = code(text);
   const start = clean.indexOf(`export interface ${interfaceName} {`);
   if (start < 0) throw new Error(`interface ${interfaceName} not found`);
@@ -64,19 +68,9 @@ function methodInputMembers(text: string, interfaceName: string, methodName: str
   return members;
 }
 
-async function sourceFiles(root: string): Promise<readonly string[]> {
-  const found: string[] = [];
-  for (const entry of await readdir(root, { withFileTypes: true })) {
-    const full = path.join(root, entry.name);
-    if (entry.isDirectory()) found.push(...(await sourceFiles(full)));
-    else if (entry.name.endsWith(".ts")) found.push(full);
-  }
-  return found;
-}
-
 describe("Phase 4E errata — SearchTextOperations", () => {
   it("has exactly environment, pattern, path?, include?, limit, signal", async () => {
-    const text = await source("search-text-operations.ts");
+    const text = await read("search-text-operations.ts");
 
     expect(methodInputMembers(text, "SearchTextOperations", "search")).toEqual([
       "environment",
@@ -89,7 +83,7 @@ describe("Phase 4E errata — SearchTextOperations", () => {
   });
 
   it("makes limit required, because it is a business bound rather than a convenience", async () => {
-    const text = await source("search-text-operations.ts");
+    const text = await read("search-text-operations.ts");
 
     // The old contract had no limit at all, and the adapter's `N + 1` capture probe is derived from it.
     // An optional limit would make "how many matches did the caller ask for" unanswerable.
@@ -98,7 +92,7 @@ describe("Phase 4E errata — SearchTextOperations", () => {
   });
 
   it("carries include as an optional input and not as a result field", async () => {
-    const text = await source("search-text-operations.ts");
+    const text = await read("search-text-operations.ts");
 
     expect(methodInputMembers(text, "SearchTextOperations", "search")).toContain("include?");
     // `include` is a capability input: it changes what ripgrep searches, so it may not be a filter the
@@ -109,7 +103,7 @@ describe("Phase 4E errata — SearchTextOperations", () => {
 
 describe("Phase 4E errata — GitOperations", () => {
   it("gives status and diff the same exact three inputs", async () => {
-    const text = await source("git-operations.ts");
+    const text = await read("git-operations.ts");
 
     expect(methodInputMembers(text, "GitOperations", "status")).toEqual([
       "environment",
@@ -124,7 +118,7 @@ describe("Phase 4E errata — GitOperations", () => {
   });
 
   it("keeps status a three-field shape rather than a widened one", async () => {
-    const text = await code(await source("git-operations.ts"));
+    const text = await code(await read("git-operations.ts"));
 
     // The errata names the fields the corrected contract may not carry. Each of them would turn the
     // narrow port into a capability handle.
@@ -134,7 +128,7 @@ describe("Phase 4E errata — GitOperations", () => {
   });
 
   it("still declares exactly the two arms the freeze names", async () => {
-    const text = await code(await source("git-operations.ts"));
+    const text = await code(await read("git-operations.ts"));
 
     expect(text).toContain("status(input: {");
     expect(text).toContain("diff(input: {");
@@ -146,15 +140,39 @@ describe("Phase 4E errata — GitOperations", () => {
 
 describe("Phase 4E errata — the six contracts it promised not to touch", () => {
   const unchanged: readonly (readonly [string, string, string, readonly string[]])[] = [
-    ["read-file-operations.ts", "ReadFileOperations", "read", ["environment", "path", "offset", "limit", "signal"]],
-    ["list-directory-operations.ts", "ListDirectoryOperations", "list", ["environment", "path", "limit", "signal"]],
-    ["find-files-operations.ts", "FindFilesOperations", "find", ["environment", "pattern", "path?", "limit", "signal"]],
+    [
+      "read-file-operations.ts",
+      "ReadFileOperations",
+      "read",
+      ["environment", "path", "offset", "limit", "signal"],
+    ],
+    [
+      "list-directory-operations.ts",
+      "ListDirectoryOperations",
+      "list",
+      ["environment", "path", "limit", "signal"],
+    ],
+    [
+      "find-files-operations.ts",
+      "FindFilesOperations",
+      "find",
+      ["environment", "pattern", "path?", "limit", "signal"],
+    ],
     ["patch-operations.ts", "PatchOperations", "apply", ["environment", "patch", "signal"]],
     [
       "exec-operations.ts",
       "ExecOperations",
       "execute",
-      ["environment", "ownerRunId", "command", "workdir?", "tty", "yieldTimeMs", "signal", "onOutput?"],
+      [
+        "environment",
+        "ownerRunId",
+        "command",
+        "workdir?",
+        "tty",
+        "yieldTimeMs",
+        "signal",
+        "onOutput?",
+      ],
     ],
     [
       "process-operations.ts",
@@ -166,7 +184,7 @@ describe("Phase 4E errata — the six contracts it promised not to touch", () =>
 
   for (const [fileName, interfaceName, methodName, expected] of unchanged) {
     it(`${interfaceName} still matches the original freeze`, async () => {
-      const text = await source(fileName);
+      const text = await read(fileName);
       expect(methodInputMembers(text, interfaceName, methodName)).toEqual(expected);
     });
   }
@@ -261,7 +279,15 @@ describe("Phase 4E errata — the invariants the correction did not move", () =>
 
     const batch = code(
       await readFile(
-        path.join(repositoryRoot, "packages", "agent", "src", "tools", "batch", "batch-coordinator.ts"),
+        path.join(
+          repositoryRoot,
+          "packages",
+          "agent",
+          "src",
+          "tools",
+          "batch",
+          "batch-coordinator.ts",
+        ),
         "utf8",
       ),
     );

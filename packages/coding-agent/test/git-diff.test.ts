@@ -12,7 +12,7 @@ import { ENVIRONMENT, executionInput, gitFake, testSignal } from "./support/oper
  * reporting fields and the decode-replacement flag.
  */
 
-function toolWith(diff: Parameters<typeof gitFake>[0]["diff"]) {
+function toolWith(diff: NonNullable<Parameters<typeof gitFake>[0]["diff"]>) {
   const fake = gitFake({ status: async () => ({}) as never, diff });
   const definition = createGitDiffTool(fake.operations);
   return { tool: definition.tool, definition, fake };
@@ -96,20 +96,21 @@ describe("git_diff target builtin", () => {
       }),
     );
 
-    await expect(tool.execute(executionInput({ scope: "WORKTREE", path: "src/a.ts" }))).resolves
-      .toMatchObject({
-        isError: false,
-        content: "--- a\n+++ b\n",
-        details: {
-          ok: true,
-          scope: "WORKTREE",
-          path: "src/a.ts",
-          truncated: true,
-          bytesReturned: 12,
-          omittedBytes: 4096,
-          hadDecodeReplacement: true,
-        },
-      });
+    await expect(
+      tool.execute(executionInput({ scope: "WORKTREE", path: "src/a.ts" })),
+    ).resolves.toMatchObject({
+      isError: false,
+      content: "--- a\n+++ b\n",
+      details: {
+        ok: true,
+        scope: "WORKTREE",
+        path: "src/a.ts",
+        truncated: true,
+        bytesReturned: 12,
+        omittedBytes: 4096,
+        hadDecodeReplacement: true,
+      },
+    });
   });
 
   it("reports an empty diff as 'No changes.'", async () => {
@@ -143,7 +144,7 @@ describe("git_diff target builtin", () => {
 
   it("maps a Git failure to its safe code and keeps an invariant travelling", async () => {
     const notARepo = toolWith(async () => {
-      throw new RuntimeGitError("NOT_A_REPOSITORY", "no repository");
+      throw new RuntimeGitError("NOT_A_GIT_REPOSITORY", "no repository");
     }).tool;
     const invariant = toolWith(async () => {
       throw new RuntimeInvariantError("guarantee violated");
@@ -151,7 +152,7 @@ describe("git_diff target builtin", () => {
 
     await expect(notARepo.execute(executionInput({}))).resolves.toMatchObject({
       isError: true,
-      details: { ok: false, error: "NOT_A_REPOSITORY" },
+      details: { ok: false, error: "NOT_A_GIT_REPOSITORY" },
     });
     await expect(invariant.execute(executionInput({}))).rejects.toBeInstanceOf(
       RuntimeInvariantError,

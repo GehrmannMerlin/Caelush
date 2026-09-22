@@ -8,7 +8,13 @@ import { createWorkspaceId } from "@caelush/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { startDaemon } from "../src/index.js";
-import { FIXTURE_API, finish, fixtureBinding, fixtureModelSource, toolCall } from "./support/ai-fixture.js";
+import {
+  FIXTURE_API,
+  finish,
+  fixtureBinding,
+  fixtureModelSource,
+  toolCall,
+} from "./support/ai-fixture.js";
 
 /**
  * The daemon cutover, end to end, through a real Run.
@@ -142,8 +148,12 @@ function toolResults(provider: ScriptedProvider): readonly AIMessage[] {
 
 describe("Phase 4E daemon production Tool E2E", () => {
   it("runs read_file through the production composition and feeds the result back", async () => {
-    const provider = new ScriptedProvider(toolCall("call_read", "read_file", { path: "README.md" }));
-    const { status } = await drive(provider, { "README.md": "fixture line one\nfixture line two\n" });
+    const provider = new ScriptedProvider(
+      toolCall("call_read", "read_file", { path: "README.md" }),
+    );
+    const { status } = await drive(provider, {
+      "README.md": "fixture line one\nfixture line two\n",
+    });
 
     expect(status).toBe("COMPLETED");
     const results = toolResults(provider);
@@ -177,7 +187,9 @@ describe("Phase 4E daemon production Tool E2E", () => {
   }, 40_000);
 
   it("runs exec_command through the production composition and reports its output", async () => {
-    const provider = new ScriptedProvider(toolCall("call_exec", "exec_command", { cmd: "echo caelush-4e-marker" }));
+    const provider = new ScriptedProvider(
+      toolCall("call_exec", "exec_command", { cmd: "echo caelush-4e-marker" }),
+    );
     const { status } = await drive(provider, { "README.md": "x\n" });
 
     expect(status).toBe("COMPLETED");

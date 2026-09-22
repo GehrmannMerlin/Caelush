@@ -1,8 +1,4 @@
-import type {
-  AgentTool,
-  AgentToolExecutionInput,
-  ToolExecutionUpdateSink,
-} from "@caelush/agent";
+import type { AgentTool, AgentToolExecutionInput, ToolExecutionUpdateSink } from "@caelush/agent";
 import type { CodingToolDefinition, CodingToolSecurityMetadata } from "@caelush/coding-agent";
 import { DISCARDING_TOOL_EXECUTION_UPDATE_SINK } from "@caelush/agent";
 import type { Capability, JsonObject, ToolDefinition, ToolName } from "@caelush/protocol";
@@ -150,7 +146,9 @@ export function toLegacyToolRegistration(definition: CodingToolDefinition): Tool
     // reader looks for them. Both are the canonical functions behind one typed bridge.
     ...(definition.securityFactsProjector === undefined
       ? {}
-      : { securityFactsProjector: bridgeSecurityFactsProjector(definition.securityFactsProjector) }),
+      : {
+          securityFactsProjector: bridgeSecurityFactsProjector(definition.securityFactsProjector),
+        }),
     ...(definition.effectProjector === undefined
       ? {}
       : { effectProjector: bridgeEffectProjector(definition.effectProjector) }),

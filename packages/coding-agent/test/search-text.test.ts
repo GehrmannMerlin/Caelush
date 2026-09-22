@@ -33,7 +33,11 @@ function toolWith(answers: Parameters<typeof readOnlyFake>[0]) {
   return { tool: definition.tool, definition, fake };
 }
 
-function matches(path: string, found: readonly { line: number; text: string }[], truncated = false) {
+function matches(
+  path: string,
+  found: readonly { line: number; text: string }[],
+  truncated = false,
+) {
   return async () => ({
     path,
     matches: found.map((match) => ({ path: `${path}/x`, ...match })),
@@ -92,10 +96,7 @@ describe("search_text target builtin", () => {
     const signal = testSignal();
 
     const result = await tool.execute(
-      executionInput(
-        { pattern: "alpha", path: "src", include: "*.ts", limit: 7 },
-        { signal },
-      ),
+      executionInput({ pattern: "alpha", path: "src", include: "*.ts", limit: 7 }, { signal }),
     );
 
     // `include` and `limit` reach the Operation: they are capability inputs, not presentation, and the
@@ -175,7 +176,9 @@ describe("search_text target builtin", () => {
       }),
     });
 
-    await expect(tool.execute(executionInput({ pattern: "alpha", limit: 1 }))).resolves.toMatchObject({
+    await expect(
+      tool.execute(executionInput({ pattern: "alpha", limit: 1 })),
+    ).resolves.toMatchObject({
       isError: false,
       details: { truncated: true, count: 1 },
     });

@@ -82,5 +82,9 @@ export const projectGitDiffSecurityFacts = bridge(
   canonicalProjectGitDiffSecurityFacts as unknown as CanonicalProjector,
 );
 
-export { assertToolSecurityFactsProjector, emptyToolSecurityFacts, ToolSecurityFactsProjectionError };
+export {
+  assertToolSecurityFactsProjector,
+  emptyToolSecurityFacts,
+  ToolSecurityFactsProjectionError,
+};
 export type { JsonObject };

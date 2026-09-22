@@ -164,8 +164,30 @@ export function entry(name: string, kind: "FILE" | "DIRECTORY" | "SYMLINK" = "FI
   return { name, path: name, kind };
 }
 
-/** Build a fake read-only family whose answers each test supplies. */
-export function readOnlyFake(answers: {
+/**
+ * Pick the answer for one probe.
+ *
+ * ```text
+ * a probe the test supplied        use it
+ * a probe the test did not supply  fall back to the frozen port's answer
+ * ```
+ *
+ * The presence check is `Object.hasOwn`, not `??`: `exactOptionalPropertyTypes` treats "absent" and
+ * "explicitly undefined" as different, and a test that passes `find` alone means "the probe falls back
+ * to `find`", while a test that passes `findWithRoot` means "use it".
+ */
+function answerFor<T>(supplied: T | undefined, fallback: T | undefined): T {
+  return (supplied === undefined ? fallback : supplied)!;
+}
+/**
+ * Build a fake read-only family whose answers each test supplies.
+ *
+ * The parameter is a record of optional answers rather than an inline object type, because a caller
+ * passing a *single* answer whose own type contains optional members hits
+ * `exactOptionalPropertyTypes`: the compiler cannot tell "this key is absent" from "this key holds a
+ * value that may itself be `undefined`". The explicit shape keeps the call sites readable.
+ */
+export interface ReadOnlyFakeAnswers {
   /**
    * The read answer.
    *
@@ -174,15 +196,22 @@ export function readOnlyFake(answers: {
    * plain `read` is derived from it. That is also what keeps a test from accidentally asserting one
    * projection while the Tool uses the other.
    */
-  read?: ReadFileOperations["read"] | RuntimeReadOnlyOperations["readFileWithKind"];
-  list?: RuntimeReadOnlyOperations["list"];
-  listWithProbe?: RuntimeReadOnlyOperations["listWithProbe"];
-  listDirectoryWithKind?: RuntimeReadOnlyOperations["listDirectoryWithKind"];
-  find?: RuntimeReadOnlyOperations["find"];
-  findWithRoot?: RuntimeReadOnlyOperations["findWithRoot"];
-  search?: RuntimeReadOnlyOperations["search"];
-  searchWithRoot?: RuntimeReadOnlyOperations["searchWithRoot"];
-}): ReadOnlyFake {
+  readonly read?:
+    | ReadFileOperations["read"]
+    | RuntimeReadOnlyOperations["readFileWithKind"]
+    | undefined;
+  readonly list?: RuntimeReadOnlyOperations["list"] | undefined;
+  readonly listWithProbe?: RuntimeReadOnlyOperations["listWithProbe"] | undefined;
+  readonly listDirectoryWithKind?:
+    | RuntimeReadOnlyOperations["listDirectoryWithKind"]
+    | undefined;
+  readonly find?: RuntimeReadOnlyOperations["find"] | undefined;
+  readonly findWithRoot?: RuntimeReadOnlyOperations["findWithRoot"] | undefined;
+  readonly search?: RuntimeReadOnlyOperations["search"] | undefined;
+  readonly searchWithRoot?: RuntimeReadOnlyOperations["searchWithRoot"] | undefined;
+}
+
+export function readOnlyFake(answers: ReadOnlyFakeAnswers): ReadOnlyFake {
   const calls: {
     read: unknown[];
     list: unknown[];
@@ -202,9 +231,7 @@ export function readOnlyFake(answers: {
     search: [],
     searchWithRoot: [],
   };
-  const kindAnswer = answers.read as
-    | RuntimeReadOnlyOperations["readFileWithKind"]
-    | undefined;
+  const kindAnswer = answers.read as RuntimeReadOnlyOperations["readFileWithKind"] | undefined;
   const plainAnswer = answers.read as ReadFileOperations["read"] | undefined;
   const operations: RuntimeReadOnlyOperations = {
     async read(input) {
@@ -240,7 +267,9 @@ export function readOnlyFake(answers: {
       calls.listWithProbe.push(input);
       return await answers.listWithProbe!(input);
     },
-    listDirectoryWithKind: async (input) => {
+    listDirectoryWithKind: async (
+      input: Parameters<RuntimeReadOnlyOperations["listDirectoryWithKind"]>[0],
+    ) => {
       calls.listDirectoryWithKind.push(input);
       return await (answers.listDirectoryWithKind ?? (async () => listDirectoryAnswer({})))!(input);
     },
@@ -248,18 +277,18 @@ export function readOnlyFake(answers: {
       calls.find.push(input);
       return await answers.find!(input);
     },
-    findWithRoot: async (input) => {
+    findWithRoot: (async (input: unknown) => {
       calls.findWithRoot.push(input);
-      return await (answers.findWithRoot ?? answers.find)!(input);
-    },
+      return await answerFor(answers.findWithRoot, answers.find)!(input as never);
+    }) as never,
     async search(input) {
       calls.search.push(input);
       return await answers.search!(input);
     },
-    searchWithRoot: async (input) => {
+    searchWithRoot: (async (input: unknown) => {
       calls.searchWithRoot.push(input);
-      return await (answers.searchWithRoot ?? answers.search)!(input);
-    },
+      return await answerFor(answers.searchWithRoot, answers.search)!(input as never);
+    }) as never,
   };
   return { operations, calls: calls as ReadOnlyFakeCalls };
 }

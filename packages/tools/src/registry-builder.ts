@@ -25,7 +25,11 @@ import { validateToolDefinitionSemantics } from "./schema-policy.js";
 import type { ToolRegistration } from "./registration.js";
 import { createToolRegistry, type ResolvedTool, type ToolRegistry } from "./registry.js";
 import { appendToolModelGuidance, normalizeToolModelGuidance } from "./model-guidance.js";
-import { buildLegacyCodingToolCatalog, classifyCodingOverlay, resolveAgentToolRegistration } from "./tool-adapters.js";
+import {
+  buildLegacyCodingToolCatalog,
+  classifyCodingOverlay,
+  resolveAgentToolRegistration,
+} from "./tool-adapters.js";
 import { throwLegacyRegistrationError } from "./tool-system-bridge.js";
 
 /**
@@ -138,9 +142,7 @@ export class ToolRegistryBuilder {
     this.registrations.push({
       definition,
       handler: entry.handler,
-      ...(entry.effectProjector === undefined
-        ? {}
-        : { effectProjector: entry.effectProjector }),
+      ...(entry.effectProjector === undefined ? {} : { effectProjector: entry.effectProjector }),
       ...(entry.securityFactsProjector === undefined
         ? {}
         : { securityFactsProjector: entry.securityFactsProjector }),

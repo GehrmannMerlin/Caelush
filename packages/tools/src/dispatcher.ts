@@ -853,8 +853,7 @@ export class ToolDispatcher {
       toolName: request.toolName,
       externalCallId: request.externalCallId,
       args: request.args,
-      riskLevel:
-        classifyCodingOverlay(resolved.coding)?.riskLevel ?? resolved.definition.riskLevel,
+      riskLevel: classifyCodingOverlay(resolved.coding)?.riskLevel ?? resolved.definition.riskLevel,
       createdAt,
     });
     const failed = failToolInvocation(
