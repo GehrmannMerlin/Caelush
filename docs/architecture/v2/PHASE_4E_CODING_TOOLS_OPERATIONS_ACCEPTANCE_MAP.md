@@ -484,7 +484,7 @@ keeps that history in the middle column.
 
 | Gate                                | Initial                                   | Final    | Evidence                                                                                       |
 | ----------------------------------- | ----------------------------------------- | -------- | ---------------------------------------------------------------------------------------------- |
-| Authority: nine builtins            | target existed, production unused         | **PASS** | boundary guard: ownership; nine builtin suites; daemon E2E                                     |
+| Authority: nine builtins            | target existed, production unused         | **PASS** | boundary guard: ownership; nine builtin suites; daemon target E2E                              |
 | Authority: no duplicate impl        | **FAILED** — two implementations per Tool | **PASS** | boundary guard: legacy modules delegate; structure assertions                                  |
 | Authority: daemon defaults          | legacy builder                            | **PASS** | boundary guard: production composition; daemon target E2E                                      |
 | Operations implemented              | —                                         | **PASS** | eight interfaces + eight Runtime adapters; contract suite; adapter suite                       |
@@ -504,7 +504,7 @@ keeps that history in the middle column.
 | Prompt: snippet target-owned        | guidance in `description`                 | **PASS** | boundary guard: snippet never appended; nine facades carry no guidance                         |
 | Prompt: provider production         | provider unreferenced                     | **PASS** | boundary guard: composition reference; prompt E2E reads the real provider request              |
 | Prompt: exactly once, budgeted      | —                                         | **PASS** | prompt E2E: one `<tool_guidance>` block; Context token accounting covers it                    |
-| Prompt: inactive Tools absent       | —                                         | **PASS** | prompt E2E asserts the active spec set; Git filtering asserted in composition and prompt paths |
+| Prompt: inactive Tools absent       | —                                         | **PASS** | the production `toolGuidance` intersects the active registry order with the turn's own tool list; the Git-hidden set is asserted by the daemon composition test |
 | Pipeline: no Dispatcher             | —                                         | **PASS** | boundary guard: production root references neither the class nor the factory                   |
 | Pipeline: 4D authorities            | —                                         | **PASS** | boundary guard: batch, durable coordinator, result pipeline and feedback still composed        |
 | Contracts: Phase 3 ToolTurn         | —                                         | **PASS** | errata guard: out of the correction's scope                                                    |
