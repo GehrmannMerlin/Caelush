@@ -468,7 +468,7 @@ Phase 4F status            NOT STARTED
 branch                     deepseek/architecture-v2-phase-4e-coding-tools-operations-runtime
 final tip                  the branch tip; `git rev-parse HEAD` names it
 local working tree         clean
-local ahead of origin     10 commits, 0 behind
+local ahead of origin     10 commits, 0 behind (before this commit)
 
 baseline                   27 entries · 0 new · 0 stale · READY
 tests                      486 files · 3095 passed · 5 skipped · 0 failed
@@ -523,12 +523,13 @@ than claimed:
 ```text
 origin/deepseek/architecture-v2-phase-4e-coding-tools-operations-runtime   1b15697f74109a76b96c545ab19cd48fbb94cf7b
 HEAD                                                                      the local tip
-git rev-list --left-right --count HEAD...origin/<branch>                  10  0
+git rev-list --left-right --count HEAD...origin/<branch>                  10  0   measured at b98d76b
 ```
 
 `origin/<branch>` is the pre-existing remote-tracking ref, which still points at the round's resume
-point `1b15697f`. The ten commits this session added are local only, and **they are not published**.
-The branch is fast-forwardable — `0 behind` — so publishing is a plain push with no rewrite:
+point `1b15697f`. The commits this session added are local only, and **they are not published**. The
+branch is fast-forwardable — `0 behind`, and the `ahead` count only grows as documentation commits are
+added — so publishing is a plain push with no rewrite:
 
 ```text
 git push origin deepseek/architecture-v2-phase-4e-coding-tools-operations-runtime
