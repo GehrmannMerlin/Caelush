@@ -24,7 +24,7 @@
 
 ## 1. Phase identity and the complete Git history
 
-```text
+````text
 4D base                        d21595f14fd18d66369aec4f1a090b8cc459656e
 4E BLOCKED commit              1920cdde65118defea39355faefe072b1d57ae8e
                                docs(architecture): record the phase 4e reconciliation blocker
@@ -38,23 +38,23 @@ continuation commits           60c4afa   refactor(tools): delegate the legacy bu
                                eb17979   fix(coding-agent): keep the read_file and list_directory failure codes
                                60d8444   test(coding-agent): cover the target builtins, adapters and authority fidelity
                                e718ba1   test(architecture): guard the phase 4e coding tool authority
-                               <docs>    docs(architecture): complete the phase 4e migration record
+                               c54f4ae   docs(architecture): complete the phase 4e migration record
+                               459836b   docs(architecture): correct two phase 4e gate evidence cells
+                               <final>   docs(architecture): record the verified final state
 implementation head            9e9aebc
 verification head              e718ba1
-documentation head             the docs commit that carries this file
-final tip                      see §12
-remote tip                     see §12
-ahead / behind                 see §12
+documentation head             c54f4ae
+final tip                      the tip named in §12, which carries this file
+remote tip                     see §12.2
+ahead / behind                 see §12.2
 working tree                   see §12
-```
-
-### 1.1 What was not done to the history
+```### 1.1 What was not done to the history
 
 ```text
 no reset                no rebase              no amended previous commit
 no force push           no rewritten BLOCKED history
 no deleted Errata history
-```
+````
 
 The BLOCKED commit and its evidence documents are preserved verbatim. The BLOCKED-era report is kept
 under its own name, `PHASE_4E_MILESTONE_A_BLOCKED_EVIDENCE.md`, and its body was not edited beyond a
@@ -434,7 +434,8 @@ CONTRACTS
 VERIFICATION
   build · typecheck · lint · format · architecture READY        PASS
   full suite · 4E target suites                                 PASS
-  clean checkout · remote parity · clean working tree           PASS
+  clean checkout · clean working tree                           PASS
+  remote parity                                                 SEE §12
 ```
 
 ---
@@ -462,16 +463,88 @@ Phase 4E status            COMPLETE
 Phase 4F status            NOT STARTED
 
 branch                     deepseek/architecture-v2-phase-4e-coding-tools-operations-runtime
-local tip                  b699c34a95b2191fef1fd2e6105bd1c382e148fb
-remote tip                 b699c34a95b2191fef1fd2e6105bd1c382e148fb
-ahead / behind             0 / 0
-working tree               clean
+local tip                  459836bb9b4f55ef2126ff26c3da55e15f78d43c
+local working tree         clean
+local ahead of origin     7 commits, 0 behind
 
 baseline                   27 entries · 0 new · 0 stale · READY
 tests                      486 files · 3095 passed · 5 skipped · 0 failed
 ```
 
-### 12.1 Closing statement
+### 12.1 Clean checkout — verified
+
+A fresh detached checkout of the local tip was installed and verified independently of the session's
+working tree:
+
+```text
+git worktree add --detach <path> 459836bb9b4f55ef2126ff26c3da55e15f78d43c
+pnpm install --frozen-lockfile        PASS   (the frozen lockfile is consistent with HEAD)
+pnpm build                            PASS
+pnpm typecheck                        PASS
+pnpm lint                             PASS
+pnpm check:architecture:ci            PASS   27 entries, 0 new, 0 stale, READY
+pnpm test                             PASS   486 files · 3095 passed · 5 skipped · 0 failed
+```
+
+Targeted suites in that checkout:
+
+```text
+packages/coding-agent/test (all)                                  PASS
+apps/daemon/test/tool-prompt-production-e2e.test.ts               PASS
+apps/daemon/test/tool-target-production-e2e.test.ts               PASS
+tests/architecture/phase-4e-operations-freeze-errata.test.ts      PASS
+tests/architecture/phase-4e-coding-tools-operations-boundaries.test.ts  PASS
+                                             18 files · 204 tests  PASS
+packages/tools/test (all)                                         PASS
+packages/storage/test/read-only-filesystem-tools-integration.ts   PASS
+packages/security/test/secure-composition.test.ts                 PASS
+tests/integration/openai-compatible-wire-contract.test.ts         PASS
+                                             47 files · 175 tests  PASS
+```
+
+The checkout was left clean — its `git status --short` was empty after `pnpm install`, which is the
+independent confirmation that the committed lockfile matches the committed manifests.
+
+### 12.2 Remote parity — blocked by machine network, exact state recorded
+
+`git fetch` and `git ls-remote` both fail on this machine:
+
+```text
+fatal: unable to access 'https://github.com/GehrmannMerlin/Caelush.git/':
+       Failed to connect to github.com port 443 after 21153 ms: Could not connect to server
+```
+
+Every part of the round that could be done offline was, and the parity state is recorded exactly rather
+than claimed:
+
+```text
+origin/deepseek/architecture-v2-phase-4e-coding-tools-operations-runtime   1b15697f74109a76b96c545ab19cd48fbb94cf7b
+HEAD                                                                      459836bb9b4f55ef2126ff26c3da55e15f78d43c
+git rev-list --left-right --count HEAD...origin/<branch>                  7   0
+```
+
+`origin/<branch>` is the pre-existing remote-tracking ref, which still points at the round's resume
+point `1b15697f`. The seven commits this session added are local only, and **they are not published**.
+The branch is fast-forwardable — `0 behind` — so publishing is a plain push with no rewrite:
+
+```text
+git push origin deepseek/architecture-v2-phase-4e-coding-tools-operations-runtime
+```
+
+Once that succeeds, parity is confirmed by:
+
+```text
+git status --short
+git rev-parse HEAD
+git rev-parse origin/deepseek/architecture-v2-phase-4e-coding-tools-operations-runtime
+git rev-list --left-right --count HEAD...origin/deepseek/architecture-v2-phase-4e-coding-tools-operations-runtime
+```
+
+This is an environment limitation, not a Phase 4E finding. It does not weaken any gate above: the clean
+checkout was taken from the local commit, every suite ran against it, and the round's completion
+conditions are about the repository's content, which is complete and verified at that commit.
+
+### 12.3 Closing statement
 
 ```text
 Phase 4E COMPLETE.
