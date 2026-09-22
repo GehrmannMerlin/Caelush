@@ -14,23 +14,28 @@ Next   Phase 5C has not started
 base SHA                       e46a6cc882278956c72687a53d6a5085fd16c092   (Phase 5A final tip)
 branch                         deepseek/architecture-v2-phase-5b-message-storage-foundation
 blocked-evidence commit        752a2d16c12269078528d448c22cf2cb418aae12
-errata commit                  d694f1c
-contract-correction commit     41facdf
-errata-tests commit            aa94efb
-storage-ports commit           4044010
-schema-migration commit        f8a6143
-storage-implementation commit  2694ad8
-verification commit            recorded in §9
-final branch tip               recorded in §9
-remote branch tip              recorded in §9
-ahead / behind                 recorded in §9
-working tree                   clean
+final branch tip               5b5ab9bdeff71247b79833eec4c64807ce5356fd
+remote branch tip              5b5ab9bdeff71247b79833eec4c64807ce5356fd
+ahead / behind                 0 behind, 9 ahead of
+                               origin/deepseek/architecture-v2-phase-5a-message-domain-foundation
+working tree                   clean (0 changed entries)
+```
+
+The round distinguishes its heads, because they answer different questions:
+
+```text
+documentation head     the acceptance map, written before any production code was modified
+blocked-evidence head  752a2d16 — the BLOCKED declaration, preserved unrewritten
+contract head          41facdf — the scoped errata applied to the Message contracts
+implementation head    2694ad8 — the storage substrate
+verification head      c0b41b7 — the guards and the tests
+final documentation    5b5ab9b — the completion record, and the final branch tip
 ```
 
 ### 1.1 The BLOCKED history was preserved, not rewritten
 
 ```text
-752a2d16 is an ancestor of the final tip                    git merge-base --is-ancestor
+752a2d16 is an ancestor of the final tip                    merge-base --is-ancestor → 0
 the BLOCKED acceptance map and its Gate 3 section survive    recorded, then marked RESOLVED
 the BLOCKED evidence dossier survives unrewritten            PHASE_5B_..._GATE3_BLOCKED_EVIDENCE.md
 no reset, rebase, amend, squash or force push                none
@@ -316,14 +321,25 @@ pnpm build                       PASS
 pnpm typecheck                   PASS
 pnpm lint                        PASS
 pnpm check:architecture:ci       PASS — 26 baseline entries, 0 new violations, 0 stale, READY
-pnpm exec vitest run             parallel measurement, recorded
+pnpm exec vitest run             parallel: 9 host-contention timeouts, all in pre-existing guards
 pnpm exec vitest run --maxWorkers=1
-                                 serial authoritative result, recorded
-changed-file Prettier            PASS
+                                 PASS — 457 test files, 3363 passed, 5 skipped, 0 failed
+changed-file Prettier            PASS — 39 of 39 changed files
 git diff --check                 PASS
-pnpm format:check                the inherited Phase 4F CRLF baseline, reported honestly
-clean checkout                   PASS
+pnpm format:check                FAIL — 784 files, the inherited Phase 4F CRLF baseline
+clean checkout                   PASS — install, build, typecheck, lint, architecture,
+                                 migration assets, 47 storage suites, full serial suite
 remote parity                    local == remote, clean tree
+```
+
+Baseline comparison against Phase 5A:
+
+```text
+Phase 5A   parallel PASS — 452 files, 3263 passed, 5 skipped
+Phase 5B   parallel 9 host-contention timeouts, all in pre-existing guards
+Phase 5B   serial   PASS — 457 files, 3363 passed, 5 skipped
+format:check           784 files in both rounds — unchanged, so zero formatting regression
+architecture baseline  26 entries, 0 new, 0 stale in both rounds — unchanged
 ```
 
 ### 10.1 Phase 5B test additions
