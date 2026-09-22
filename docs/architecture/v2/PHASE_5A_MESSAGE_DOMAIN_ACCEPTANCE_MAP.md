@@ -722,3 +722,73 @@ D10 Architecture guard runtime
 5A  COMPLETE
 5B  not started
 ```
+
+---
+
+## 15. Verification record
+
+```text
+base SHA                          6cbdfce6671221ceb3422c9b2a8bad0b2e9102db
+branch                            deepseek/architecture-v2-phase-5a-message-domain-foundation
+```
+
+### 15.1 Gate results
+
+| Gate                                     | Result                                                                                               |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `pnpm --filter @caelush/ai build`        | PASS                                                                                                 |
+| `pnpm --filter @caelush/agent build`     | PASS                                                                                                 |
+| `pnpm --filter @caelush/ai typecheck`    | PASS                                                                                                 |
+| `pnpm --filter @caelush/agent typecheck` | PASS                                                                                                 |
+| `pnpm build`                             | PASS — all 20 workspace projects                                                                     |
+| `pnpm typecheck`                         | PASS — every package plus the root `tests` project                                                   |
+| `pnpm lint`                              | PASS — 0 errors, 0 warnings                                                                          |
+| `pnpm check:architecture:ci`             | PASS — 26 baseline entries, 0 new violations, 0 stale entries, READY. **The baseline did not grow.** |
+| `pnpm exec vitest run --maxWorkers=1`    | **PASS — 452 test files, 3263 passed, 5 skipped, 0 failed** (serial authoritative result, 428 s)     |
+| `pnpm exec vitest run`                   | **PASS — 452 test files, 3263 passed, 5 skipped, 0 failed** (parallel measurement, 112 s)            |
+| changed-file Prettier                    | PASS — all 38 changed files                                                                          |
+| `git diff --check`                       | PASS — no whitespace errors                                                                          |
+
+### 15.2 The parallel-versus-serial record, stated honestly
+
+The first parallel run reported 7 failures across 3 files. Every one was `Test timed out in 5000ms`
+inside the Phase 5A architecture guard's declaration assertions — a defect in the guard, which
+re-read and re-stripped the whole workspace once per assertion. Serial execution passed with the same
+guard because it had the whole host to itself.
+
+The guard was fixed to cache comment-stripped production source once and filter it in memory (the
+discipline the Phase 4F guard already uses), taking it from ~31 s to ~0.6 s. Both runs then passed
+identically, with no test deleted, no assertion weakened and no skip added. §13 D10 records this.
+
+```text
+parallel measurement        PASS after the guard fix
+serial authoritative        PASS
+flaky host behaviour        none remaining; the one observed cause is named and fixed
+```
+
+### 15.3 Global `pnpm format:check`
+
+```text
+result      FAIL — 784 files
+cause       inherited Phase 4F baseline, not a Phase 5A regression
+```
+
+The checkout has `core.autocrlf=true` and `.prettierrc.json` sets no `endOfLine`, so every file that
+was committed with CRLF fails Prettier while every file written fresh in LF passes. The evidence that
+this is inherited rather than introduced:
+
+```text
+all 38 files changed by Phase 5A pass prettier --check      PASS
+the 784 failures are unchanged files                        none is a Phase 5A file
+a sample failure (tests/architecture/phase-3d-tool-turn-boundaries.test.ts) carries
+  48 carriage returns in its first 2000 bytes               committed CRLF, untouched by 5A
+```
+
+This matches the Phase 4F report's own record of the same baseline. It is reported as a failure, not
+as a pass.
+
+### 15.4 What was not run, and why
+
+A fresh detached worktree was created from the final tip for a clean-checkout confirmation. The
+result is recorded in
+[PHASE_5A_MESSAGE_DOMAIN_FOUNDATION_REPORT.md](PHASE_5A_MESSAGE_DOMAIN_FOUNDATION_REPORT.md).
