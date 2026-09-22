@@ -79,9 +79,57 @@ describe("committed storage migrations", () => {
         "verification_evidence",
         "verification_plans",
       ]);
+      // Phase 5B added the thirteenth committed migration: the Message V2 storage substrate. It is
+      // additive, so the table set above is unchanged and only the count moves.
       expect(sqlite.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get()).toEqual({
-        count: 12,
+        count: 13,
       });
+
+      // And the substrate is really there, on a database built from nothing.
+      const columns = sqlite.prepare("PRAGMA table_info('agent_messages')").all() as Array<{
+        name: string;
+      }>;
+      const names = columns.map(({ name }) => name);
+      for (const added of [
+        "message_id",
+        "session_id",
+        "conversation_turn_id",
+        "message_type",
+        "schema_version",
+        "model_projection_version",
+        "source_json",
+        "audience_json",
+        "v2_data_json",
+      ]) {
+        expect(names, added).toContain(added);
+      }
+      // The legacy surface is preserved: the current production writer depends on all of it.
+      for (const legacy of [
+        "run_id",
+        "sequence",
+        "role",
+        "protocol_version",
+        "data_json",
+        "created_at_ms",
+      ]) {
+        expect(names, legacy).toContain(legacy);
+      }
+
+      const indexes = sqlite
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' ORDER BY name")
+        .all() as Array<{ name: string }>;
+      const indexNames = indexes.map(({ name }) => name);
+      for (const index of [
+        "agent_messages_message_id_unique",
+        "agent_messages_session_sequence_idx",
+        "agent_messages_conversation_turn_idx",
+        "agent_messages_message_type_idx",
+      ]) {
+        expect(indexNames, index).toContain(index);
+      }
+
+      // No turn table: a turn is derived from Run metadata plus message records.
+      expect(tables.map(({ name }) => name)).not.toContain("conversation_turns");
     } finally {
       sqlite.close();
     }
