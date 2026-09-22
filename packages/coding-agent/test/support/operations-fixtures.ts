@@ -197,14 +197,10 @@ export interface ReadOnlyFakeAnswers {
    * projection while the Tool uses the other.
    */
   readonly read?:
-    | ReadFileOperations["read"]
-    | RuntimeReadOnlyOperations["readFileWithKind"]
-    | undefined;
+    ReadFileOperations["read"] | RuntimeReadOnlyOperations["readFileWithKind"] | undefined;
   readonly list?: RuntimeReadOnlyOperations["list"] | undefined;
   readonly listWithProbe?: RuntimeReadOnlyOperations["listWithProbe"] | undefined;
-  readonly listDirectoryWithKind?:
-    | RuntimeReadOnlyOperations["listDirectoryWithKind"]
-    | undefined;
+  readonly listDirectoryWithKind?: RuntimeReadOnlyOperations["listDirectoryWithKind"] | undefined;
   readonly find?: RuntimeReadOnlyOperations["find"] | undefined;
   readonly findWithRoot?: RuntimeReadOnlyOperations["findWithRoot"] | undefined;
   readonly search?: RuntimeReadOnlyOperations["search"] | undefined;
