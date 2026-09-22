@@ -79,7 +79,7 @@ export function assertAgentMessageProjectionVersion(
  * ```text
  * USER         content
  * ASSISTANT    content, model, providerState?
- * TOOL_RESULT  toolCallId, toolName, observationId, isError, projectedContent, projection
+ * TOOL_RESULT  toolCallId, toolName, observation, isError, projectedContent, projection
  * ```
  *
  * ## `sequence` lives here, and only here

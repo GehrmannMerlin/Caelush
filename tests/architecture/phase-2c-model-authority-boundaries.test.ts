@@ -608,6 +608,23 @@ describe("Phase 2C package edges", () => {
         "projectionVersionTable",
         "toolMessageSource",
         "userMessageSource",
+        // --- Phase 5B: the Message Interface Freeze Errata, applied. The Tool Result provenance
+        // contracts now distinguish feedback that has a real execution behind it from feedback that
+        // does not, and a known projection policy from one a legacy row never recorded. The Tool
+        // System genuinely produces both kinds — a rejected call and a skipped trailing call reach
+        // the model as feedback with no observation — so the older single-shape contract could not
+        // represent what the runtime actually does. The list stays asserted exactly.
+        "LEGACY_UNKNOWN_TOOL_FEEDBACK_POLICY",
+        "NO_TOOL_RESULT_OBSERVATION",
+        "TOOL_FEEDBACK_PROJECTION_POLICY_KINDS",
+        "TOOL_MESSAGE_SOURCE",
+        "TOOL_RESULT_OBSERVATION_REF_KINDS",
+        "assertToolFeedbackProjectionPolicy",
+        "assertToolResultObservationRef",
+        "hasToolResultObservation",
+        "toolFeedbackPolicySnapshot",
+        "toolResultObservation",
+        "toolResultObservationId",
       ].sort(),
     );
   });
