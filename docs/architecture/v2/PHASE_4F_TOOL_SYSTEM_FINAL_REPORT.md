@@ -31,12 +31,11 @@ PHASE 4 COMPLETE
 >
 > **No Phase 5 work has started.**
 
-> **On this file's own SHA.** §1 states `f02d6c1eff82d5794c0e63eff11ef2c6a684c3f3` as the final tip,
-> and it is: local and remote both report it. The file you are reading is the commit immediately below
-> it. A document cannot contain the SHA of the commit that introduces it, so the record names the
-> commit that carries the record — which is one commit above the document — rather than claiming a
-> SHA it could not know. The alternative would be a third commit that only rewrites a hash, which
-> would itself invalidate what it wrote.
+> **On this file's own SHA.** §1 states `75db1cd1e1ea2083f69a9f5a621283aaa5be2301` as the final tip, and
+> it is: local, the fetched remote ref and `git ls-remote` all report it, with `0 0` ahead/behind. This
+> document is the commit immediately below it. A document cannot contain the SHA of the commit that
+> introduces it, so the record names the tip that carries it rather than a hash it could not know. The
+> alternative — a further commit that only rewrites a hash — would invalidate what it wrote.
 
 ---
 
@@ -52,13 +51,16 @@ implementation commits
   6f2b57a   test(architecture): guard the final tool system ownership
   ca0b54c   refactor(protocol): retire the legacy tool definition contract
   3f55470   docs(architecture): close phase 4 tool system migration
+  933c6c6   docs(architecture): state the final-tip hash convention
+  f02d6c1   docs(architecture): record the verified phase 4f git state
+  75db1cd   docs(architecture): record the measured verification environment findings
 
 verification head      ca0b54c0d6690a669a58330adb9f6a9980ad3fd4
                        build · typecheck · lint · architecture · full suite · clean checkout,
                        all measured at that tip
-documentation head     3f55470c8c14ecc8859cc94a07487c4bdf3ed692
-final branch tip       3f55470c8c14ecc8859cc94a07487c4bdf3ed692
-remote branch tip      3f55470c8c14ecc8859cc94a07487c4bdf3ed692
+documentation head     75db1cd1e1ea2083f69a9f5a621283aaa5be2301
+final branch tip       75db1cd1e1ea2083f69a9f5a621283aaa5be2301
+remote branch tip      75db1cd1e1ea2083f69a9f5a621283aaa5be2301
 ahead / behind         0 / 0
 working tree           clean
 ```
@@ -105,9 +107,9 @@ The four parity checks, after a fresh fetch:
 
 ```text
 git status --short                            empty — working tree clean
-git rev-parse HEAD                            3f55470c8c14ecc8859cc94a07487c4bdf3ed692
-git rev-parse origin/<branch>                 3f55470c8c14ecc8859cc94a07487c4bdf3ed692
-git ls-remote origin refs/heads/<branch>      3f55470c8c14ecc8859cc94a07487c4bdf3ed692
+git rev-parse HEAD                            75db1cd1e1ea2083f69a9f5a621283aaa5be2301
+git rev-parse origin/<branch>                 75db1cd1e1ea2083f69a9f5a621283aaa5be2301
+git ls-remote origin refs/heads/<branch>      75db1cd1e1ea2083f69a9f5a621283aaa5be2301
 git rev-list --left-right --count HEAD...origin/<branch>     0   0
 ```
 
@@ -656,8 +658,8 @@ Phase 4 status             COMPLETE
 branch                     deepseek/architecture-v2-phase-4f-tool-system-final-assembly
 Phase 4E base SHA          7d0700ae2849378324398770df533fae45f39b3e
 verification head          ca0b54c0d6690a669a58330adb9f6a9980ad3fd4
-final tip                  3f55470c8c14ecc8859cc94a07487c4bdf3ed692
-remote tip                 3f55470c8c14ecc8859cc94a07487c4bdf3ed692
+final tip                  75db1cd1e1ea2083f69a9f5a621283aaa5be2301
+remote tip                 75db1cd1e1ea2083f69a9f5a621283aaa5be2301
 local working tree         clean
 local == remote            verified at the final tip
 ahead / behind             0 / 0
