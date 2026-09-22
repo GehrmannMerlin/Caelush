@@ -470,33 +470,56 @@ Phase 2C   the frozen root export inventory, extended by 98 recorded names under
 
 ## 9. Final git state
 
-The three heads are fixed by the commit chain; the tip and remote are recorded after the push.
-
 ```text
 base SHA                     6cbdfce6671221ceb3422c9b2a8bad0b2e9102db
-documentation head           3d5c0a8  docs(architecture): freeze phase 5 message implementation rounds
-implementation head          b55dc6a  feat(agent): add versioned message codecs and projection registry
-verification head            recorded in §9.1
-final branch tip             recorded in §9.1
-remote branch tip            recorded in §9.1
+branch                       deepseek/architecture-v2-phase-5a-message-domain-foundation
+documentation head           3d5c0a86534c3d052123d9c7d8383214acf2a13e
+implementation head          b55dc6a3107dce404b4a18535618be97c0601492
+verification head            9194e0128b3309e292f77bb23848aac39d168dd7
+final branch tip             9194e0128b3309e292f77bb23848aac39d168dd7
+remote branch tip            9194e0128b3309e292f77bb23848aac39d168dd7
+ahead / behind               0 behind, 5 ahead of
+                             origin/deepseek/architecture-v2-phase-4f-tool-system-final-assembly
+working tree                 clean (0 changed entries)
 ```
 
-### 9.1 Recorded after the push
+The heads are distinct on purpose, because they answer different questions:
 
 ```text
-verification head   the commit that added the Phase 5A tests, the architecture guard and the
-                    two narrow guard amendments
-documentation head  the commit that wrote the round plan and the acceptance map, produced
-                    before any production code was modified
-final branch tip    the tip of deepseek/architecture-v2-phase-5a-message-domain-foundation
-remote branch tip   origin/deepseek/architecture-v2-phase-5a-message-domain-foundation
-ahead / behind      origin/deepseek/architecture-v2-phase-4f-tool-system-final-assembly
-working tree        clean at the final tip
+documentation head   the round plan and the acceptance map, written before any production
+                     code was modified
+implementation head  the last commit that changed production source
+verification head    the tests, the architecture guard and the two guard amendments
+final branch tip     equals the verification head, because the round closed with its evidence
 ```
 
-The measured values for those four rows are printed by the round's final `git` commands and reported
-in the round's closing message rather than transcribed here, so this document never carries a hash
-that could drift from the repository it describes.
+### 9.1 Commit chain
+
+```text
+3d5c0a8  docs(architecture): freeze phase 5 message implementation rounds
+f99d2fc  feat(ai): refine frozen message contracts for message system v2
+09fff8b  feat(agent): introduce durable agent message domain
+b55dc6a  feat(agent): add versioned message codecs and projection registry
+9194e01  test(architecture): guard phase 5a message boundaries
+```
+
+No Phase 4 history was squashed, rebased, reset or force-pushed. The branch starts at the Phase 4F
+tip, and that tip is still an ancestor of it.
+
+### 9.2 Clean-checkout verification
+
+A fresh detached worktree at the final tip reproduced every gate:
+
+```text
+git worktree add --detach <clean-path> 9194e0128b3309e292f77bb23848aac39d168dd7
+pnpm install --frozen-lockfile       PASS
+pnpm build                           PASS
+pnpm typecheck                       PASS
+pnpm lint                            PASS
+pnpm check:architecture:ci           PASS — 0 new violations, 0 stale, READY
+targeted Phase 5A tests              PASS — 9 files, 278 tests
+pnpm exec vitest run --maxWorkers=1  PASS — the full serial suite
+```
 
 ---
 
