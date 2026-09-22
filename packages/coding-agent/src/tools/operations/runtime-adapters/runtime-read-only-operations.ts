@@ -6,10 +6,11 @@ import {
   RuntimePathNotFoundError,
   RuntimePathTypeError,
   type RuntimeResolver,
+  type RuntimeWorkspaceScope,
 } from "@caelush/runtime";
 
 import type { ReadFileOperations } from "../operations.js";
-import type { CodingReadOnlyOperations } from "../coding-read-only-operations.js";
+import type { CodingReadOnlyOperations, CodingToolPathKind } from "../coding-read-only-operations.js";
 import { resolveRuntimeWorkspace } from "./resolve-runtime-workspace.js";
 
 /**
@@ -56,24 +57,62 @@ export interface RuntimeReadOnlyOperations extends CodingReadOnlyOperations, Rea
 export function createRuntimeReadOnlyOperations(
   resolver: RuntimeResolver,
 ): RuntimeReadOnlyOperations {
+  /**
+   * Resolve a path and report what it is, as a Tool may see it.
+   *
+   * ```text
+   * resolveExisting()            succeeds → a kind
+   * resolveExisting() throws     → MISSING, which the Tool maps to PATH_NOT_FOUND
+   * ```
+   *
+   * The Runtime raises `RuntimePathNotFoundError` for an absent path, and a Tool is not allowed to
+   * import that vocabulary to find out. Catching it here — inside the one directory permitted to know
+   * the Runtime — is what turns "the Runtime said 404" into "the operation reports MISSING", which is a
+   * fact a Coding Tool can act on without reaching across the boundary.
+   *
+   * A symlink is reported as `SYMLINK` and separately followed: a Tool decides from the *resolved*
+   * entry whether the value is readable, which is what the legacy Tools did when they inspected both
+   * `resolved.kind` and `resolved.metadata`.
+   */
+  async function resolveKind(
+    scope: RuntimeWorkspaceScope,
+    path: string,
+  ): Promise<{ readonly resolved: ResolvedPathLike; readonly kind: CodingToolPathKind | "MISSING" }> {
+    let resolved: ResolvedPathLike;
+    try {
+      resolved = (await scope.pathResolver.resolveExisting(path)) as ResolvedPathLike;
+    } catch (error) {
+      if (error instanceof RuntimePathNotFoundError) {
+        return { resolved: missingPath(path), kind: "MISSING" };
+      }
+      throw error;
+    }
+    if (resolved.kind !== "SYMLINK") {
+      return { resolved, kind: resolved.kind === "DIRECTORY" ? "DIRECTORY" : "FILE" };
+    }
+    const target = await scope.filesystem.getMetadata(resolved.realPath);
+    if (target === null) return { resolved, kind: "MISSING" };
+    return { resolved, kind: target.kind === "DIRECTORY" ? "DIRECTORY" : "FILE" };  }
+
   /** The shared directory read: resolve, kind-check and list, with no windowing applied. */
   async function readDirectory(input: {
     readonly environment: ToolExecutionEnvironment;
     readonly path: string;
-  }): Promise<{ readonly path: string; readonly entries: readonly JsonObject[] }> {
+  }): Promise<{
+    readonly path: string;
+    readonly kind: CodingToolPathKind | "MISSING";
+    readonly entries: readonly JsonObject[];
+  }> {
     const scope = await resolveRuntimeWorkspace(resolver, input.environment);
-    const resolved = await scope.pathResolver.resolveExisting(input.path);
     // A symlinked directory is inspected through its real target, so the kind check answers about
     // the thing the caller will actually read.
-    const target =
-      resolved.kind === "SYMLINK"
-        ? await scope.filesystem.getMetadata(resolved.realPath)
-        : resolved.metadata;
-    if (target === null) throw new RuntimePathNotFoundError("path does not exist");
-    if (target.kind !== "DIRECTORY") throw new RuntimePathTypeError("path is not a directory");
+    const { resolved, kind } = await resolveKind(scope, input.path);
+    if (kind === "MISSING") return { path: resolved.relativePath, kind, entries: [] };
+    if (kind !== "DIRECTORY") return { path: resolved.relativePath, kind, entries: [] };
     const entries = await scope.filesystem.readDirectory(resolved.absolutePath);
     return {
       path: resolved.relativePath,
+      kind,
       entries: entries.map((entry) => ({
         name: entry.name,
         path: resolved.relativePath === "." ? entry.name : `${resolved.relativePath}/${entry.name}`,
@@ -168,35 +207,54 @@ export function createRuntimeReadOnlyOperations(
     };
   }
 
-  return {
-    async read(input) {
-      const scope = await resolveRuntimeWorkspace(resolver, input.environment);
-      const resolved = await scope.pathResolver.resolveExisting(input.path);
-      if (resolved.kind !== "FILE" && resolved.kind !== "SYMLINK") {
-        throw new RuntimePathTypeError("path is not a readable file");
-      }
-      const read = await scope.filesystem.readTextFile(resolved.absolutePath, {
-        offset: input.offset,
-        limit: input.limit,
-        maxBytes: READ_FILE_MAX_BYTES,
-      });
-      // A window that starts past the end of the file is an invalid range rather than an empty read:
-      // the caller asked for lines that cannot exist, and reporting "(empty file)" would be a lie.
-      if (read.lines.length === 0 && input.offset > 1 && !read.truncated) {
-        throw new RuntimeInvalidRangeError("line offset is outside the file");
-      }
-      return {
-        path: resolved.relativePath,
+  /**
+   * The shared file read, reporting what the path resolved to.
+   *
+   * Extracted from `read()` so `readFileWithKind()` and `read()` cannot disagree: both perform exactly
+   * one resolution and one read, and they differ only in what they do with a path that is not a file.
+   */
+  async function readFile(
+    input: Parameters<CodingReadOnlyOperations["readFileWithKind"]>[0],
+  ): ReturnType<CodingReadOnlyOperations["readFileWithKind"]> {
+    const scope = await resolveRuntimeWorkspace(resolver, input.environment);
+    const { resolved, kind } = await resolveKind(scope, input.path);
+    if (kind !== "FILE") return { path: resolved.relativePath, kind };
+    const read = await scope.filesystem.readTextFile(resolved.absolutePath, {
+      offset: input.offset,
+      limit: input.limit,
+      maxBytes: READ_FILE_MAX_BYTES,
+    });
+    // A window that starts past the end of the file is an invalid range rather than an empty read:
+    // the caller asked for lines that cannot exist, and reporting "(empty file)" would be a lie.
+    if (read.lines.length === 0 && input.offset > 1 && !read.truncated) {
+      throw new RuntimeInvalidRangeError("line offset is outside the file");
+    }
+    return {
+      path: resolved.relativePath,
+      kind,
+      read: {
         lines: read.lines,
         truncated: read.truncated,
         ...(read.nextOffset === undefined ? {} : { nextOffset: read.nextOffset }),
         bytesReturned: read.bytesReturned,
         utf8Bom: read.utf8Bom,
-      };
+      },
+    };
+  }
+
+  return {
+    async read(input) {
+      const read = await readFile(input);
+      if (read.read === undefined) throw new RuntimePathTypeError("path is not a readable file");
+      return { path: read.path, ...read.read };
     },
+
+    readFileWithKind: readFile,
 
     async list(input) {
       const listed = await readDirectory(input);
+      if (listed.kind === "MISSING") throw new RuntimePathNotFoundError("path does not exist");
+      if (listed.kind !== "DIRECTORY") throw new RuntimePathTypeError("path is not a directory");
       const sliced = listed.entries.slice(0, input.limit);
       return {
         path: listed.path,
@@ -205,7 +263,16 @@ export function createRuntimeReadOnlyOperations(
       };
     },
 
-    async listWithProbe(input) {
+    async listDirectoryWithKind(input) {      const listed = await readDirectory(input);
+      if (listed.kind !== "DIRECTORY") return { path: listed.path, kind: listed.kind, entries: [] };
+      return {
+        path: listed.path,
+        kind: listed.kind,
+        entries: listed.entries.slice(0, input.limit),
+      };
+    },
+
+    async listWithProbe(input: Parameters<CodingReadOnlyOperations["listDirectoryWithKind"]>[0]) {
       const listed = await readDirectory(input);
       return { path: listed.path, entries: listed.entries.slice(0, input.limit) };
     },
@@ -224,6 +291,25 @@ export function createRuntimeReadOnlyOperations(
 
     searchWithRoot: searchTree,
   };
+}
+
+/**
+ * The resolved-path shape this adapter uses structurally.
+ *
+ * It is declared here rather than imported because `RuntimePathResolver.resolveExisting`'s return type
+ * is a broad internal record; what this file actually reads is `kind`, `realPath`, `absolutePath` and
+ * `relativePath`, and stating that is what keeps the read honest.
+ */
+interface ResolvedPathLike {
+  readonly kind: "FILE" | "DIRECTORY" | "SYMLINK" | "OTHER";
+  readonly realPath: string;
+  readonly absolutePath: string;
+  readonly relativePath: string;
+}
+
+/** The placeholder a MISSING resolution carries, so a caller still receives a relative path. */
+function missingPath(path: string): ResolvedPathLike {
+  return { kind: "OTHER", realPath: path, absolutePath: path, relativePath: path };
 }
 
 /** The JSON-object shape the Operations returns carry. Structural, so no import is needed. */

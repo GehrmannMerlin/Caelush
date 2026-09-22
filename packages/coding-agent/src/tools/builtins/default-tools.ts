@@ -6,7 +6,6 @@ import type {
   GitOperations,
   PatchOperations,
   ProcessOperations,
-  ReadFileOperations,
 } from "../operations/operations.js";
 import type { CodingReadOnlyOperations } from "../operations/coding-read-only-operations.js";
 import { createApplyPatchTool } from "./apply-patch.js";
@@ -63,7 +62,16 @@ export const DEFAULT_CODING_TOOL_ORDER = Object.freeze([
 
 /** The Operations the default nine need, one port per capability family. */
 export interface DefaultCodingToolOperations {
-  readonly readFile: ReadFileOperations;
+  /**
+   * The read-file probe port.
+   *
+   * `read_file` needs `readFileWithKind` rather than the frozen `ReadFileOperations.read`, because it
+   * answers `NOT_A_FILE` for a path that resolved to something else and a Tool may not import the
+   * Runtime's error vocabulary to interpret a path kind. The extra method is part of the same-package
+   * read-only superset documented in `operations/coding-read-only-operations.ts`; the frozen
+   * `ReadFileOperations` interface is untouched.
+   */
+  readonly readFile: Pick<CodingReadOnlyOperations, "readFileWithKind">;
   /**
    * The directory, discovery and search ports.
    *

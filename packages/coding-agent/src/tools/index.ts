@@ -77,7 +77,10 @@ export type {
   RuntimeOperationsReadOnly,
 } from "./operations/runtime-adapters/index.js";
 export type { RuntimeReadOnlyOperations } from "./operations/runtime-adapters/runtime-read-only-operations.js";
-export type { CodingReadOnlyOperations } from "./operations/coding-read-only-operations.js";
+export type {
+  CodingReadOnlyOperations,
+  CodingToolPathKind,
+} from "./operations/coding-read-only-operations.js";
 
 /* The nine builtins and the default set. */
 export { createReadFileTool, readFileInputSchema } from "./builtins/read-file.js";

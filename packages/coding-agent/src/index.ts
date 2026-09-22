@@ -130,6 +130,7 @@ export {
   WRITE_STDIN_PROMPT_SNIPPET,
 } from "./tools/index.js";
 export type {
+  CodingReadOnlyOperations,
   CodingToolApprovalIdentityInput,
   CodingToolCatalog,
   CodingToolCatalogBuilderOptions,
@@ -139,6 +140,7 @@ export type {
   CodingToolEffectEventDraft,
   CodingToolEffectProjector,
   CodingToolOutputPolicy,
+  CodingToolPathKind,
   CodingToolRegistration,
   CodingToolRuntimeRequirements,
   CodingToolSecurityFactsProjector,

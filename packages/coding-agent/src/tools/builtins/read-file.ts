@@ -2,7 +2,7 @@ import type { ToolExecutionEnvironment } from "@caelush/agent";
 import { RuntimeInvariantError } from "@caelush/runtime";
 
 import type { CodingToolDefinition } from "../coding-tool-definition.js";
-import type { ReadFileOperations } from "../operations/operations.js";
+import type { CodingReadOnlyOperations } from "../operations/coding-read-only-operations.js";
 import { projectReadFileEffect } from "../effects/effect-projectors.js";
 import { projectReadFileSecurityFacts } from "../security/security-facts.js";
 import { READ_FILE_PROMPT_SNIPPET } from "../prompt/prompt-snippets.js";
@@ -19,6 +19,9 @@ import {
   asOverlayEffectProjector,
   type AgentToolResult,
 } from "./result.js";
+
+/** The one port this Tool needs, so its own read is the only capability it can reach. */
+type ReadFileProbeOperations = Pick<CodingReadOnlyOperations, "readFileWithKind">;
 
 /**
  * `read_file` — read bounded text from one workspace file.
@@ -66,7 +69,7 @@ const inputSchema = {
   additionalProperties: false,
 } as const;
 
-export function createReadFileTool(operations: ReadFileOperations): CodingToolDefinition {
+export function createReadFileTool(operations: ReadFileProbeOperations): CodingToolDefinition {
   const tool = defineCodingTool({
     name: "read_file",
     description: "Read workspace text.",
@@ -87,23 +90,32 @@ export function createReadFileTool(operations: ReadFileOperations): CodingToolDe
       }
 
       try {
-        const read = await operations.read({
+        // The port reports what the path resolved to. `NOT_A_FILE` is this Tool's own model-facing
+        // decision about that fact, which is why it is made here and not mapped from a Runtime error
+        // code: a Tool may not import the Runtime's error vocabulary to interpret a path kind.
+        const read = await operations.readFileWithKind({
           environment: input.environment,
           path: args.path,
           offset,
           limit: limit,
           signal: input.signal,
         });
+        if (read.kind === "MISSING") {
+          return errorResult("PATH_NOT_FOUND", "Tool operation failed: PATH_NOT_FOUND.");
+        }
+        if (read.read === undefined) {
+          return errorResult("NOT_A_FILE", "Tool operation failed: NOT_A_FILE.");
+        }
         const details = {
           path: read.path,
           offset,
-          linesReturned: read.lines.length,
-          truncated: read.truncated,
-          ...(read.nextOffset === undefined ? {} : { nextOffset: read.nextOffset }),
-          bytesReturned: read.bytesReturned,
-          utf8Bom: read.utf8Bom,
+          linesReturned: read.read.lines.length,
+          truncated: read.read.truncated,
+          ...(read.read.nextOffset === undefined ? {} : { nextOffset: read.read.nextOffset }),
+          bytesReturned: read.read.bytesReturned,
+          utf8Bom: read.read.utf8Bom,
         };
-        const content = read.lines.length === 0 ? "(empty file)" : read.lines.join("\n");
+        const content = read.read.lines.length === 0 ? "(empty file)" : read.read.lines.join("\n");
         return successResult(content, details);
       } catch (error) {
         if (error instanceof RuntimeInvariantError) throw error;

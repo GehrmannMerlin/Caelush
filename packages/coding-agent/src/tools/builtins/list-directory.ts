@@ -70,7 +70,7 @@ const inputSchema = {
 } as const;
 
 export function createListDirectoryTool(
-  operations: Pick<CodingReadOnlyOperations, "list" | "listWithProbe">,
+  operations: Pick<CodingReadOnlyOperations, "listDirectoryWithKind">,
 ): CodingToolDefinition {
   const tool = defineCodingTool({
     name: "list_directory",
@@ -99,12 +99,21 @@ export function createListDirectoryTool(
         // Ask for the prefix this request may reveal, plus one entry. The extra entry is what makes
         // `truncated` and `nextOffset` decidable from the returned list alone: receiving `limit + 1`
         // entries after the offset proves something follows, and receiving fewer proves the end.
-        const listed = await operations.listWithProbe({
+        //
+        // The port also reports what the path resolved to, so `PATH_NOT_FOUND` and `NOT_A_DIRECTORY`
+        // stay distinguishable without this Tool importing the Runtime's error vocabulary.
+        const listed = await operations.listDirectoryWithKind({
           environment: input.environment,
           path: args.path,
           limit: offset - 1 + limit + 1,
           signal: input.signal,
         });
+        if (listed.kind === "MISSING") {
+          return errorResult("PATH_NOT_FOUND", "Tool operation failed: PATH_NOT_FOUND.");
+        }
+        if (listed.kind !== "DIRECTORY") {
+          return errorResult("NOT_A_DIRECTORY", "Tool operation failed: NOT_A_DIRECTORY.");
+        }
         const window = listed.entries.slice(offset - 1);
         const items = window.slice(0, limit);
         const lines = items.map((entry) => {
