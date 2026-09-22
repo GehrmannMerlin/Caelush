@@ -1,111 +1,42 @@
-import {
-  RuntimeError,
-  RuntimeInvariantError,
-  RuntimeProcessStaleSessionError,
-  RuntimeProcessUncertainError,
-  type RuntimeResolver,
-  type RuntimeWorkspaceScope,
-} from "@caelush/runtime";
-import type { JsonObject } from "@caelush/protocol";
-import type { ToolExecutionRequest } from "../handler.js";
-import type { ToolExecutionResult } from "../execution-result.js";
-
-export const READ_FILE_DEFAULT_LIMIT = 400;
-export const READ_FILE_MAX_LIMIT = 2000;
-export const LIST_DIRECTORY_DEFAULT_LIMIT = 200;
-export const LIST_DIRECTORY_MAX_LIMIT = 500;
-export const FIND_FILES_DEFAULT_LIMIT = 100;
-export const FIND_FILES_MAX_LIMIT = 500;
-export const SEARCH_TEXT_DEFAULT_LIMIT = 100;
-export const SEARCH_TEXT_MAX_LIMIT = 200;
-export const MAX_FIND_PATTERN_BYTES = 2048;
-export const MAX_SEARCH_MATCH_CHARS = 1000;
-
-export const READ_ONLY_OUTPUT_SCHEMA = {
-  type: "object",
-  properties: {
-    ok: { type: "boolean" },
-    error: { type: "string" },
-    path: { type: "string" },
-    pattern: { type: "string" },
-    offset: { type: "integer" },
-    count: { type: "integer" },
-    linesReturned: { type: "integer" },
-    bytesReturned: { type: "integer" },
-    truncated: { type: "boolean" },
-    nextOffset: { type: "integer" },
-    utf8Bom: { type: "boolean" },
-    files: { type: "array", items: { type: "string" } },
-    entries: { type: "array", items: { type: "object" } },
-    matches: { type: "array", items: { type: "object" } },
-  },
-  required: ["ok"],
-  additionalProperties: false,
-};
-
-export const EXEC_OUTPUT_SCHEMA = {
-  type: "object",
-  properties: {
-    ok: { type: "boolean" },
-    error: { type: "string" },
-    status: { type: "string", enum: ["RUNNING", "EXITED"] },
-    sessionId: { type: "string" },
-    exitCode: { type: "integer" },
-    signal: { type: "string" },
-    totalOutputBytes: { type: "integer", minimum: 0 },
-    omittedBytes: { type: "integer", minimum: 0 },
-    tty: { type: "boolean" },
-    workdir: { type: "string" },
-    durationMs: { type: "integer", minimum: 0 },
-    charsAcceptedBytes: { type: "integer", minimum: 0 },
-  },
-  required: ["ok"],
-  additionalProperties: false,
-};
-
-export function errorResult(code: string, message: string): ToolExecutionResult {
-  return { content: message, details: { ok: false, error: code }, isError: true };
-}
-
-export function successResult(content: string, details: JsonObject): ToolExecutionResult {
-  return { content, details: { ok: true, ...details }, isError: false };
-}
-
-export async function withRuntimeScope(
-  request: ToolExecutionRequest,
-  resolver: RuntimeResolver,
-  operation: (scope: RuntimeWorkspaceScope) => Promise<ToolExecutionResult>,
-): Promise<ToolExecutionResult> {
-  const runtime = resolver.resolve(request.environment.runtime);
-  if (runtime === undefined)
-    return errorResult("UNSUPPORTED_RUNTIME", "The requested runtime is unavailable.");
-  try {
-    return await operation(await runtime.openWorkspace(request.environment.workspace));
-  } catch (error) {
-    if (error instanceof RuntimeInvariantError) throw error;
-    if (
-      error instanceof RuntimeProcessStaleSessionError ||
-      error instanceof RuntimeProcessUncertainError
-    )
-      throw error;
-    if (error instanceof RuntimeError) return errorResult(error.code, safeRuntimeMessage(error));
-    throw error;
-  }
-}
-
-export function positiveBoundedInteger(value: unknown, fallback: number, maximum: number): number {
-  const result = value === undefined ? fallback : value;
-  if (
-    typeof result !== "number" ||
-    !Number.isSafeInteger(result) ||
-    result < 1 ||
-    result > maximum
-  ) {
-    throw new Error("INVALID_RANGE");
-  }
-  return result;
-}
-
-export function safeRuntimeMessage(error: RuntimeError): string {
-  return `Tool operation failed: ${error.code}.`;
-}
+/**
+ * The legacy Coding builtin result helpers — a compatibility re-export.
+ *
+ * ```text
+ * @caelush/tools/src/builtins/result.ts     this file: the legacy names over the target helpers
+ *        └── re-exports ──▶  @caelush/coding-agent  tools/builtins/result.ts
+ * ```
+ *
+ * Phase 4E moved the nine builtins' result vocabulary to the Coding product layer: the two details
+ * schemas, the six argument bounds, `errorResult` / `successResult`, `positiveBoundedInteger`,
+ * `runtimeErrorToResult` and `safeRuntimeMessage`. Every one of them describes *what a Coding Tool
+ * tells a model*, which is Coding business knowledge, so a second copy here would be a second answer to
+ * "what does this Tool report".
+ *
+ * ## What deliberately did not come back
+ *
+ * The module this replaces also owned `withRuntimeScope`, `RuntimeResolver` and `RuntimeWorkspaceScope`
+ * — the per-call runtime resolution every legacy builtin performed itself. None of that has a place in
+ * the compatibility layer any more: a Tool receives a narrow Operations port, the port is built once by
+ * the Coding factory, and the workspace is opened inside `operations/runtime-adapters/`. Re-exporting
+ * `withRuntimeScope` would restore exactly the broad capability the round removed, so it is gone.
+ */
+export {
+  errorResult,
+  EXEC_OUTPUT_SCHEMA,
+  FIND_FILES_DEFAULT_LIMIT,
+  FIND_FILES_MAX_LIMIT,
+  LIST_DIRECTORY_DEFAULT_LIMIT,
+  LIST_DIRECTORY_MAX_LIMIT,
+  MAX_FIND_PATTERN_BYTES,
+  MAX_SEARCH_GLOB_BYTES,
+  MAX_SEARCH_MATCH_CHARS,
+  positiveBoundedInteger,
+  READ_FILE_DEFAULT_LIMIT,
+  READ_FILE_MAX_LIMIT,
+  READ_ONLY_OUTPUT_SCHEMA,
+  runtimeErrorToResult,
+  safeRuntimeMessage,
+  SEARCH_TEXT_DEFAULT_LIMIT,
+  SEARCH_TEXT_MAX_LIMIT,
+  successResult,
+} from "@caelush/coding-agent";
