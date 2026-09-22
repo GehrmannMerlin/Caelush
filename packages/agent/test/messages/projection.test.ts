@@ -225,7 +225,7 @@ describe("Phase 5A projection — TOOL_RESULT v1", () => {
     const message = toolResultMessage({
       projectedContent: "the exact text the model was shown",
     }).message;
-    expect(message.observationId).toBe(OBSERVATION_ID);
+    expect(message.observation).toEqual({ kind: "OBSERVATION", observationId: OBSERVATION_ID });
 
     const projection = AGENT_TOOL_RESULT_MESSAGE_PROJECTOR_V1.project(message);
     const projected = projection.messages[0] as { content: string };

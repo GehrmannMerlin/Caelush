@@ -12,8 +12,17 @@ import type { ObservationId, RunId, SessionId, StepId, TimestampMs } from "@cael
 import type { AgentUserContentPart } from "../types/content.js";
 import type { AgentAssistantContentPart } from "../types/content.js";
 import type { AgentAssistantModelProvenance } from "../types/assistant-message.js";
-import type { ToolFeedbackProjectionReceipt } from "../types/tool-result-message.js";
-import { TOOL_FEEDBACK_PROJECTION_RECEIPT_VERSION } from "../types/tool-result-message.js";
+import type {
+  ToolFeedbackProjectionPolicy,
+  ToolFeedbackProjectionReceipt,
+} from "../types/tool-result-message.js";
+import {
+  LEGACY_UNKNOWN_TOOL_FEEDBACK_POLICY,
+  TOOL_FEEDBACK_PROJECTION_RECEIPT_VERSION,
+  toolFeedbackPolicySnapshot,
+} from "../types/tool-result-message.js";
+import { NO_TOOL_RESULT_OBSERVATION } from "../types/tool-result-observation.js";
+import type { ToolResultObservationRef } from "../types/tool-result-observation.js";
 import type { AgentUserMessage } from "../types/user-message.js";
 import type { AgentAssistantMessage } from "../types/assistant-message.js";
 import type { AgentToolResultMessage } from "../types/tool-result-message.js";
@@ -34,7 +43,7 @@ import { AgentMessageCodecError } from "./codec.js";
  * ```text
  * USER v1          data = { content }
  * ASSISTANT v1     data = { content, model, providerState? }
- * TOOL_RESULT v1   data = { toolCallId, toolName, observationId, isError, projectedContent, projection }
+ * TOOL_RESULT v1   data = { toolCallId, toolName, observation, isError, projectedContent, projection }
  * ```
  *
  * ## The envelope is never repeated in `data`
@@ -121,14 +130,27 @@ export const AGENT_TOOL_RESULT_MESSAGE_CODEC_V1: AgentMessageCodec<AgentToolResu
     return {
       toolCallId: message.toolCallId,
       toolName: message.toolName,
-      observationId: message.observationId,
+      // The corrected provenance pair. `observation` says whether a real execution stands behind
+      // this feedback; `projection.policy` says whether the policy it was projected under is known.
+      observation:
+        message.observation.kind === "OBSERVATION"
+          ? { kind: "OBSERVATION", observationId: message.observation.observationId }
+          : { kind: "NO_OBSERVATION" },
       isError: message.isError,
       projectedContent: message.projectedContent,
       projection: {
-        policy: {
-          maxSingleObservationTokens: message.projection.policy.maxSingleObservationTokens,
-          maxObservationBatchTokens: message.projection.policy.maxObservationBatchTokens,
-        },
+        policy:
+          message.projection.policy.kind === "SNAPSHOT"
+            ? {
+                kind: "SNAPSHOT",
+                snapshot: {
+                  maxSingleObservationTokens:
+                    message.projection.policy.snapshot.maxSingleObservationTokens,
+                  maxObservationBatchTokens:
+                    message.projection.policy.snapshot.maxObservationBatchTokens,
+                },
+              }
+            : { kind: "LEGACY_UNKNOWN" },
         fingerprint: message.projection.fingerprint,
         version: message.projection.version,
       },
@@ -139,7 +161,7 @@ export const AGENT_TOOL_RESULT_MESSAGE_CODEC_V1: AgentMessageCodec<AgentToolResu
     return createAgentToolResultMessage(base, {
       toolCallId: requireString(record.data, "toolCallId", "TOOL_RESULT"),
       toolName: requireString(record.data, "toolName", "TOOL_RESULT"),
-      observationId: requireString(record.data, "observationId", "TOOL_RESULT") as ObservationId,
+      observation: decodeObservationRef(record.data["observation"]),
       isError: requireBoolean(record.data, "isError", "TOOL_RESULT"),
       // Copied verbatim. The decoder never re-reads an observation and never re-truncates:
       // this text is what the model was shown, and recomputing it would replace history.
@@ -226,14 +248,9 @@ function decodeSource(value: unknown, type: string): AgentMessageSource {
     case "MODEL":
       return { kind: "MODEL", callId: requireNonEmpty(candidate["callId"], "source.callId", type) };
     case "TOOL":
-      return {
-        kind: "TOOL",
-        observationId: requireNonEmpty(
-          candidate["observationId"],
-          "source.observationId",
-          type,
-        ) as ObservationId,
-      };
+      // The corrected TOOL arm carries no field. Whether this feedback has a real execution behind
+      // it lives on the message body as `observation`, so the envelope states provenance only.
+      return { kind: "TOOL" };
     case "AGENT":
       return {
         kind: "AGENT",
@@ -502,18 +519,37 @@ function decodeProviderState(value: unknown): AIProviderOpaqueState | undefined 
 
 /* ------------------------------------------------------------------- tool result specifics */
 
+/**
+ * Decode the observation provenance arm.
+ *
+ * Strictly a union on the wire as well as in the type: a reader must be able to tell "a real execution
+ * stands behind this" from "no execution does", and an unrecognised or malformed arm is refused rather
+ * than silently treated as either. In particular `NO_OBSERVATION` is never inferred from a missing
+ * field, because a missing field is exactly the ambiguity the union exists to remove.
+ */
+function decodeObservationRef(value: unknown): ToolResultObservationRef {
+  if (!isJsonObject(value)) throw new AgentMessageCodecError("INVALID_RECORD", "TOOL_RESULT");
+  if (value["kind"] === "NO_OBSERVATION") return NO_TOOL_RESULT_OBSERVATION;
+  if (value["kind"] === "OBSERVATION") {
+    const observationId = value["observationId"];
+    if (typeof observationId !== "string" || observationId.length === 0) {
+      throw new AgentMessageCodecError("INVALID_RECORD", "TOOL_RESULT");
+    }
+    return { kind: "OBSERVATION", observationId: observationId as ObservationId };
+  }
+  throw new AgentMessageCodecError("INVALID_RECORD", "TOOL_RESULT");
+}
+
+/**
+ * Decode the projection receipt, including the policy provenance arm.
+ *
+ * `LEGACY_UNKNOWN` is a legal stored value — it is what a migrated row carries — and it decodes to the
+ * shared frozen arm. It is never produced by a normal factory, which is a *creation* rule, not a
+ * decoding rule: a reader must be able to read every record that was legitimately written.
+ */
 function decodeProjectionReceipt(value: unknown): ToolFeedbackProjectionReceipt {
   if (!isJsonObject(value)) throw new AgentMessageCodecError("INVALID_RECORD", "TOOL_RESULT");
-  const policy = value["policy"];
-  if (!isJsonObject(policy)) throw new AgentMessageCodecError("INVALID_RECORD", "TOOL_RESULT");
-  const single = policy["maxSingleObservationTokens"];
-  const batch = policy["maxObservationBatchTokens"];
-  if (!Number.isSafeInteger(single) || (single as number) < 1) {
-    throw new AgentMessageCodecError("INVALID_RECORD", "TOOL_RESULT");
-  }
-  if (!Number.isSafeInteger(batch) || (batch as number) < 1) {
-    throw new AgentMessageCodecError("INVALID_RECORD", "TOOL_RESULT");
-  }
+  const policy = decodeProjectionPolicy(value["policy"]);
   const fingerprint = value["fingerprint"];
   if (typeof fingerprint !== "string" || fingerprint.length === 0) {
     throw new AgentMessageCodecError("INVALID_RECORD", "TOOL_RESULT");
@@ -522,13 +558,32 @@ function decodeProjectionReceipt(value: unknown): ToolFeedbackProjectionReceipt 
     throw new AgentMessageCodecError("INVALID_RECORD", "TOOL_RESULT");
   }
   return {
-    policy: {
-      maxSingleObservationTokens: single as number,
-      maxObservationBatchTokens: batch as number,
-    },
+    policy,
     fingerprint,
     version: TOOL_FEEDBACK_PROJECTION_RECEIPT_VERSION,
   };
+}
+
+function decodeProjectionPolicy(value: unknown): ToolFeedbackProjectionPolicy {
+  if (!isJsonObject(value)) throw new AgentMessageCodecError("INVALID_RECORD", "TOOL_RESULT");
+  if (value["kind"] === "LEGACY_UNKNOWN") return LEGACY_UNKNOWN_TOOL_FEEDBACK_POLICY;
+  if (value["kind"] !== "SNAPSHOT") {
+    throw new AgentMessageCodecError("INVALID_RECORD", "TOOL_RESULT");
+  }
+  const snapshot = value["snapshot"];
+  if (!isJsonObject(snapshot)) throw new AgentMessageCodecError("INVALID_RECORD", "TOOL_RESULT");
+  const single = snapshot["maxSingleObservationTokens"];
+  const batch = snapshot["maxObservationBatchTokens"];
+  if (!Number.isSafeInteger(single) || (single as number) < 1) {
+    throw new AgentMessageCodecError("INVALID_RECORD", "TOOL_RESULT");
+  }
+  if (!Number.isSafeInteger(batch) || (batch as number) < 1) {
+    throw new AgentMessageCodecError("INVALID_RECORD", "TOOL_RESULT");
+  }
+  return toolFeedbackPolicySnapshot({
+    maxSingleObservationTokens: single as number,
+    maxObservationBatchTokens: batch as number,
+  });
 }
 
 /* -------------------------------------------------------------------------------- helpers */

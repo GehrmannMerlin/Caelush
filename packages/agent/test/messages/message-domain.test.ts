@@ -17,6 +17,7 @@ import {
   legacyMessageSource,
   modelMessageSource,
   toolMessageSource,
+  toolResultObservation,
   userMessageSource,
   AGENT_ASSISTANT_MESSAGE_AUDIENCE,
   AGENT_MESSAGE_ID_PREFIX,
@@ -198,7 +199,9 @@ describe("Phase 5A source provenance", () => {
     expect(assistant.source).toEqual({ kind: "MODEL", callId: "llm_42" });
 
     const toolResult = toolResultMessage().message;
-    expect(toolResult.source).toEqual({ kind: "TOOL", observationId: OBSERVATION_ID });
+    // The corrected TOOL arm names the producing subsystem and nothing else: whether an execution
+    // observation exists is stated once, on the message body, so the two cannot disagree.
+    expect(toolResult.source).toEqual({ kind: "TOOL" });
   });
 
   it("refuses a LEGACY source on a newly created message (freeze §32)", () => {
@@ -235,7 +238,7 @@ describe("Phase 5A source provenance", () => {
         source: userMessageSource("GOAL"),
         toolCallId: "call_1",
         toolName: "tool_0",
-        observationId: OBSERVATION_ID as never,
+        observation: toolResultObservation(OBSERVATION_ID as never),
         isError: false,
         projectedContent: "x",
         projection: RECEIPT,
@@ -443,7 +446,7 @@ describe("Phase 5A tool result message", () => {
     expect(message.type).toBe("TOOL_RESULT");
     expect(message.toolCallId).toBe("call_1");
     expect(message.toolName).toBe("tool_0");
-    expect(message.observationId).toBe(OBSERVATION_ID);
+    expect(message.observation).toEqual({ kind: "OBSERVATION", observationId: OBSERVATION_ID });
     expect(message.isError).toBe(false);
     expect(message.projectedContent).toBe("tool output");
   });
@@ -463,8 +466,8 @@ describe("Phase 5A tool result message", () => {
     expect(TOOL_FEEDBACK_PROJECTION_RECEIPT_VERSION).toBe(1);
     expect(message.projection.version).toBe(1);
     expect(message.projection.policy).toEqual({
-      maxSingleObservationTokens: 1000,
-      maxObservationBatchTokens: 4000,
+      kind: "SNAPSHOT",
+      snapshot: { maxSingleObservationTokens: 1000, maxObservationBatchTokens: 4000 },
     });
     expect(message.projection.fingerprint).toBe("fixture-fingerprint");
   });
@@ -475,10 +478,10 @@ describe("Phase 5A tool result message", () => {
         runId: RUN_ID as never,
         sessionId: SESSION_ID as never,
         conversationTurnId: turnIdFor(),
-        source: toolMessageSource(OBSERVATION_ID as never),
+        source: toolMessageSource(),
         toolCallId: "call_1",
         toolName: "tool_0",
-        observationId: OBSERVATION_ID as never,
+        observation: toolResultObservation(OBSERVATION_ID as never),
         isError: false,
         projectedContent: "x",
         projection: { ...RECEIPT, version: 2 as never },
@@ -493,10 +496,10 @@ describe("Phase 5A tool result message", () => {
           runId: RUN_ID as never,
           sessionId: SESSION_ID as never,
           conversationTurnId: turnIdFor(),
-          source: toolMessageSource(OBSERVATION_ID as never),
+          source: toolMessageSource(),
           toolCallId: "call_1",
           toolName: "tool_0",
-          observationId: OBSERVATION_ID as never,
+          observation: toolResultObservation(OBSERVATION_ID as never),
           isError: false,
           projectedContent: "x",
           projection: RECEIPT,

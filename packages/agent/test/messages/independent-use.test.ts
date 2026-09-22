@@ -25,6 +25,8 @@ import {
   isAgentMessageId,
   isConversationTurnId,
   projectionVersionTable,
+  toolMessageSource,
+  toolResultObservation,
   AgentMessageCodecError,
   AGENT_ASSISTANT_MESSAGE_CODEC_V1,
   AGENT_USER_MESSAGE_CODEC_V1,
@@ -262,19 +264,22 @@ describe("Phase 5A independent use — the whole Message Domain with no host", (
     });
 
     // The Tool result message carries what the model was shown. No observation is loaded:
-    // the text is the historical truth, and the id is a pointer of record.
+    // the text is the historical truth, and the observation reference is a pointer of record.
     const toolResult = factory.createToolResult({
       runId: RUN_ID as never,
       sessionId: SESSION_ID as never,
       conversationTurnId,
-      source: { kind: "TOOL", observationId: OBSERVATION_ID as never },
+      source: toolMessageSource(),
       toolCallId: "call_1",
       toolName: "read_file",
-      observationId: OBSERVATION_ID as never,
+      observation: toolResultObservation(OBSERVATION_ID as never),
       isError: false,
       projectedContent: "export const answer = 42;",
       projection: {
-        policy: { maxSingleObservationTokens: 512, maxObservationBatchTokens: 2048 },
+        policy: {
+          kind: "SNAPSHOT",
+          snapshot: { maxSingleObservationTokens: 512, maxObservationBatchTokens: 2048 },
+        },
         fingerprint: digestJsonObject({ content: "export const answer = 42;" }),
         version: 1,
       },

@@ -21,7 +21,6 @@ import type {
 
 import {
   CREATED_AT,
-  OBSERVATION_ID,
   RECEIPT,
   RUN_ID,
   SESSION_ID,
@@ -220,7 +219,7 @@ describe("Phase 5A codec — TOOL_RESULT round trip", () => {
     const data = AGENT_TOOL_RESULT_MESSAGE_CODEC_V1.encode(toolResultMessage().message);
     expect(Object.keys(data).sort()).toEqual([
       "isError",
-      "observationId",
+      "observation",
       "projectedContent",
       "projection",
       "toolCallId",
@@ -309,7 +308,7 @@ describe("Phase 5A codec — decode identity and version validation", () => {
     const data = AGENT_TOOL_RESULT_MESSAGE_CODEC_V1.encode(original);
     const decoded = AGENT_TOOL_RESULT_MESSAGE_CODEC_V1.decode(recordFor(original, data));
     expect(decoded.audience).toEqual({ model: true, transcript: false, debug: true });
-    expect(decoded.source).toEqual({ kind: "TOOL", observationId: OBSERVATION_ID });
+    expect(decoded.source).toEqual({ kind: "TOOL" });
     expect(decoded.runId).toBe(RUN_ID);
     expect(decoded.sessionId).toBe(SESSION_ID);
     expect(decoded.conversationTurnId).toBe(turnIdFor());

@@ -172,12 +172,26 @@ export const AGENT_TOOL_RESULT_MESSAGE_PROJECTOR_VERSION = 1;
  * one the model actually received, and the difference would be invisible: a message that
  * now says the output was truncated where the model was originally shown it in full, or
  * one that now leaks a region a later redaction rule would have removed. The
- * `observationId` on the message is a pointer of record for audit; it is not an
+ * `observation` reference on the message is a pointer of record for audit; it is not an
  * instruction to go and look something up.
  *
- * A Phase 5A test proves this by projecting a message whose `observationId` names an
- * observation that does not exist anywhere, and asserting the projection still succeeds
- * with the stored text.
+ * ## Neither provenance arm changes a single byte of the model view
+ *
+ * ```text
+ * observation OBSERVATION       the same message NO_OBSERVATION would produce
+ * observation NO_OBSERVATION    the same message OBSERVATION would produce
+ * policy      SNAPSHOT          the same message LEGACY_UNKNOWN would produce
+ * policy      LEGACY_UNKNOWN    the same message SNAPSHOT would produce
+ * ```
+ *
+ * This is what makes recording an unknown policy *safe*. Historical model replay is
+ * identical whether the historical truncation policy is known, because `projectedContent`
+ * already **is** the historical model-visible truth. An unknown policy is not an unknown
+ * message.
+ *
+ * A projector therefore never branches on either arm and never fails because a policy is
+ * unknown. A Phase 5A test proves the no-observation case by projecting a message with no
+ * execution behind it; a Phase 5B test proves the unknown-policy case the same way.
  */
 export const AGENT_TOOL_RESULT_MESSAGE_PROJECTOR_V1: AgentMessageProjector<AgentToolResultMessage> =
   {

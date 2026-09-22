@@ -1,5 +1,5 @@
 import type { AIFinishReason, AIProviderOpaqueState, ModelRef, ModelUsage } from "@caelush/ai";
-import type { ObservationId, RunId, SessionId, StepId, TimestampMs } from "@caelush/protocol";
+import type { RunId, SessionId, StepId, TimestampMs } from "@caelush/protocol";
 
 import type { AgentMessageSource } from "./source.js";
 import {
@@ -14,6 +14,7 @@ import type { AgentAssistantModelProvenance } from "./assistant-message.js";
 import { createAgentAssistantMessage } from "./assistant-message.js";
 import { createAgentToolResultMessage } from "./tool-result-message.js";
 import type { ToolFeedbackProjectionReceipt } from "./tool-result-message.js";
+import type { ToolResultObservationRef } from "./tool-result-observation.js";
 import { createAgentUserMessage } from "./user-message.js";
 import type { AgentAssistantMessage } from "./assistant-message.js";
 import type { AgentToolResultMessage } from "./tool-result-message.js";
@@ -108,13 +109,27 @@ export interface CreateAgentToolResultMessageInput extends AgentMessageScope {
 
   readonly toolName: string;
 
-  readonly observationId: ObservationId;
+  /**
+   * Whether a real execution observation exists behind this feedback.
+   *
+   * Both arms are accepted. The Tool System legitimately produces model-visible feedback for calls
+   * that never executed — a rejected call, a skipped trailing call, a synthetic replan result — and
+   * those results state `NO_OBSERVATION` rather than being refused or given a fabricated identity.
+   */
+  readonly observation: ToolResultObservationRef;
 
   readonly isError: boolean;
 
   /** The exact text the model was shown. Copied verbatim; never re-derived. */
   readonly projectedContent: string;
 
+  /**
+   * The projection receipt.
+   *
+   * Its `policy` must be a `SNAPSHOT`. A `LEGACY_UNKNOWN` policy is refused: this factory creates
+   * *new* messages, and a new message was created under a policy that was known at the time. The
+   * unknown arm exists for a migration describing a row whose policy really was never recorded.
+   */
   readonly projection: ToolFeedbackProjectionReceipt;
 }
 
@@ -208,10 +223,18 @@ export function createAgentMessageFactory(
     },
 
     createToolResult(input: CreateAgentToolResultMessageInput): AgentToolResultMessage {
+      if (input.projection.policy.kind === "LEGACY_UNKNOWN") {
+        // A structural refusal, not a comment: a new message was created under a policy that was
+        // known at the time, so "the historical policy is not recoverable" is a claim this factory
+        // cannot truthfully make. Only a migration describing a real unrecorded policy may.
+        throw new TypeError(
+          "Agent message factory creates SNAPSHOT projection policies only; LEGACY_UNKNOWN belongs to migration.",
+        );
+      }
       return createAgentToolResultMessage(base(input, input.source, "TOOL_RESULT"), {
         toolCallId: input.toolCallId,
         toolName: input.toolName,
-        observationId: input.observationId,
+        observation: input.observation,
         isError: input.isError,
         projectedContent: input.projectedContent,
         projection: input.projection,

@@ -24,7 +24,9 @@ import {
   modelMessageSource,
   projectionVersionTable,
   toolMessageSource,
+  toolResultObservation,
   userMessageSource,
+  NO_TOOL_RESULT_OBSERVATION,
 } from "@caelush/agent";
 import type {
   AgentAssistantMessage,
@@ -35,6 +37,7 @@ import type {
   ConversationTurn,
   StoredAgentMessage,
   ToolFeedbackProjectionReceipt,
+  ToolResultObservationRef,
 } from "@caelush/agent";
 
 /**
@@ -117,7 +120,22 @@ export const projectionVersions = projectionVersionTable({
 export const codecs = createStandardAgentMessageCodecRegistry(projectionVersions);
 
 export const RECEIPT: ToolFeedbackProjectionReceipt = {
-  policy: { maxSingleObservationTokens: 1000, maxObservationBatchTokens: 4000 },
+  policy: {
+    kind: "SNAPSHOT",
+    snapshot: { maxSingleObservationTokens: 1000, maxObservationBatchTokens: 4000 },
+  },
+  fingerprint: "fixture-fingerprint",
+  version: 1,
+};
+
+/**
+ * The migration-only receipt.
+ *
+ * A migrated legacy row preserved what the model saw but not the policy it was projected under, so
+ * this is what its receipt carries. It is never produced by the normal Message Factory.
+ */
+export const LEGACY_RECEIPT: ToolFeedbackProjectionReceipt = {
+  policy: { kind: "LEGACY_UNKNOWN" },
   fingerprint: "fixture-fingerprint",
   version: 1,
 };
@@ -221,6 +239,16 @@ export function toolResultMessage(
     readonly projectedContent?: string;
     readonly sequence?: number;
     readonly modelVisible?: boolean;
+    /**
+     * Whether a real execution observation stands behind this feedback.
+     *
+     * Defaults to observation-backed, which is the executed-Tool case. `false` models the Tool
+     * System's other legitimate producer: a rejected or skipped call, which reaches the model as
+     * feedback but has no execution to point at.
+     */
+    readonly observationBacked?: boolean;
+    /** The projection receipt. Defaults to a known policy; a migration supplies the unknown arm. */
+    readonly projection?: ToolFeedbackProjectionReceipt;
   } = {},
 ): StoredAgentMessage<AgentToolResultMessage> {
   const runId = options.runId ?? RUN_ID;
@@ -232,13 +260,16 @@ export function toolResultMessage(
     sessionId: sessionId as never,
     conversationTurnId,
     sourceStepId: "stp_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e02" as never,
-    source: toolMessageSource(OBSERVATION_ID as never),
+    source: toolMessageSource(),
     toolCallId: options.toolCallId ?? "call_1",
     toolName: options.toolName ?? "tool_0",
-    observationId: OBSERVATION_ID as never,
+    observation:
+      options.observationBacked === false
+        ? NO_TOOL_RESULT_OBSERVATION
+        : toolResultObservation(OBSERVATION_ID as never),
     isError: options.isError ?? false,
     projectedContent: options.projectedContent ?? "tool output",
-    projection: RECEIPT,
+    projection: options.projection ?? RECEIPT,
   });
   return stored(message, options.sequence ?? 3, options.modelVisible);
 }
@@ -340,7 +371,11 @@ export function rawAssistantMessage(
   );
 }
 
-export function rawToolResultMessage(projectedContent = "tool output"): AgentToolResultMessage {
+export function rawToolResultMessage(
+  projectedContent = "tool output",
+  observation: ToolResultObservationRef = toolResultObservation(OBSERVATION_ID as never),
+  projection: ToolFeedbackProjectionReceipt = RECEIPT,
+): AgentToolResultMessage {
   return createAgentToolResultMessage(
     createAgentMessageBase({
       id: "amsg_0192f5b1-4d3a-7c2e-8a91-000000000003" as never,
@@ -348,25 +383,27 @@ export function rawToolResultMessage(projectedContent = "tool output"): AgentToo
       sessionId: SESSION_ID as never,
       conversationTurnId: turnIdFor(),
       createdAt: CREATED_AT as never,
-      source: toolMessageSource(OBSERVATION_ID as never),
+      source: toolMessageSource(),
       audience: { model: true, transcript: false, debug: true },
     }),
     {
       toolCallId: "call_1",
       toolName: "tool_0",
-      observationId: OBSERVATION_ID as never,
+      observation,
       isError: false,
       projectedContent,
-      projection: RECEIPT,
+      projection,
     },
   );
 }
 
 export {
+  NO_TOOL_RESULT_OBSERVATION,
   STRUCTURAL_TOKEN_ESTIMATOR,
   conversationTurnStatus,
   legacyMessageSource,
   modelMessageSource,
   toolMessageSource,
+  toolResultObservation,
   userMessageSource,
 };

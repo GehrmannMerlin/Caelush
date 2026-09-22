@@ -1,12 +1,10 @@
-import type { ObservationId } from "@caelush/protocol";
-
 /**
  * Where one Agent message came from.
  *
  * ```text
  * USER    a human (or a host acting as one) said it
  * MODEL   a settled model turn produced it
- * TOOL    a durable Tool observation produced it
+ * TOOL    the Tool feedback subsystem produced it
  * AGENT   an Agent-side subsystem produced it
  * LEGACY  it was migrated from the pre-V2 durable encoding
  * ```
@@ -22,10 +20,27 @@ import type { ObservationId } from "@caelush/protocol";
  * ```text
  * USER    which kind of user input it was (a goal, a follow-up, a steering note)
  * MODEL   the LLM call id the turn settled under
- * TOOL    the ObservationId of the durable Tool observation
  * AGENT   the stable id of the producing subsystem
  * LEGACY  the pre-V2 role it was stored under
  * ```
+ *
+ * ## The `TOOL` arm deliberately carries no `observationId`
+ *
+ * Phase 5B's Interface Freeze Errata removed it, and the removal is the point. `source` answers
+ * exactly one question — *who produced this message* — and `TOOL` answers it in full by naming the
+ * Tool feedback subsystem.
+ *
+ * Whether that feedback has execution evidence behind it is a *different* question, answered in
+ * exactly one place:
+ *
+ * ```text
+ * AgentMessageSource                   who produced it          this union
+ * AgentToolResultMessage.observation   is there execution evidence?   ToolResultObservationRef
+ * ```
+ *
+ * While both carried an `ObservationId`, the two could disagree: a message whose source named one
+ * observation and whose body named another had no authority to resolve the conflict. The identity
+ * now appears once, so the disagreement is unrepresentable rather than merely checked.
  */
 export type AgentMessageSource =
   | {
@@ -40,8 +55,6 @@ export type AgentMessageSource =
     }
   | {
       readonly kind: "TOOL";
-
-      readonly observationId: ObservationId;
     }
   | {
       readonly kind: "AGENT";
@@ -95,10 +108,18 @@ export function modelMessageSource(callId: string): AgentMessageSource {
   return Object.freeze({ kind: "MODEL", callId });
 }
 
-/** The canonical Tool-observation source. */
-export function toolMessageSource(observationId: ObservationId): AgentMessageSource {
-  return Object.freeze({ kind: "TOOL", observationId });
+/**
+ * The canonical Tool-feedback source.
+ *
+ * It names the subsystem and nothing else. The observation linkage — whether this feedback has a real
+ * execution behind it — belongs to `AgentToolResultMessage.observation`, so it is not repeated here.
+ */
+export function toolMessageSource(): AgentMessageSource {
+  return TOOL_MESSAGE_SOURCE;
 }
+
+/** The single frozen Tool-feedback source value, since it now carries no per-message data. */
+export const TOOL_MESSAGE_SOURCE: AgentMessageSource = Object.freeze({ kind: "TOOL" });
 
 /**
  * The canonical migrated-message source.
@@ -132,7 +153,8 @@ export function assertAgentMessageSource(value: unknown): asserts value is Agent
       assertNonEmpty(candidate, "callId", "Agent model message source");
       return;
     case "TOOL":
-      assertNonEmpty(candidate, "observationId", "Agent tool message source");
+      // The arm carries no field by design: the producing subsystem is the whole statement, and the
+      // observation linkage lives on the message body where it cannot disagree with itself.
       return;
     case "AGENT":
       assertNonEmpty(candidate, "producer", "Agent message source");

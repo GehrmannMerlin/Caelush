@@ -24,6 +24,9 @@ import {
   factory,
   snapshot,
   stored,
+  toolMessageSource,
+  toolResultObservation,
+  RECEIPT,
   toolResultMessage,
   turn,
   turnIdFor,
@@ -420,17 +423,13 @@ describe("Phase 5A validator — turn versus execution unit (freeze §102)", () 
       runId: RUN_ID as never,
       sessionId: SESSION_ID as never,
       conversationTurnId: turnIdFor(RUN_ID),
-      source: { kind: "TOOL", observationId: OBSERVATION_ID as never },
+      source: toolMessageSource(),
       toolCallId: "c1",
       toolName: "t",
-      observationId: OBSERVATION_ID as never,
+      observation: toolResultObservation(OBSERVATION_ID as never),
       isError: false,
       projectedContent: "x",
-      projection: {
-        policy: { maxSingleObservationTokens: 1, maxObservationBatchTokens: 1 },
-        fingerprint: "f",
-        version: 1,
-      },
+      projection: RECEIPT,
     });
     expect(crossRunAttempt.runId).toBe(RUN_ID);
   });

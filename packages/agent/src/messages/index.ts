@@ -56,6 +56,7 @@ export {
   AGENT_LEGACY_ROLES,
   AGENT_MESSAGE_SOURCE_KINDS,
   AGENT_USER_MESSAGE_ORIGINS,
+  TOOL_MESSAGE_SOURCE,
 } from "./types/source.js";
 export type { AgentMessageSource } from "./types/source.js";
 
@@ -93,13 +94,28 @@ export type {
 } from "./types/assistant-message.js";
 
 export {
+  assertToolFeedbackProjectionPolicy,
   createAgentToolResultMessage,
+  toolFeedbackPolicySnapshot,
+  toolResultObservationId,
+  LEGACY_UNKNOWN_TOOL_FEEDBACK_POLICY,
+  TOOL_FEEDBACK_PROJECTION_POLICY_KINDS,
   TOOL_FEEDBACK_PROJECTION_RECEIPT_VERSION,
 } from "./types/tool-result-message.js";
 export type {
   AgentToolResultMessage,
+  ToolFeedbackProjectionPolicy,
   ToolFeedbackProjectionReceipt,
 } from "./types/tool-result-message.js";
+
+export {
+  assertToolResultObservationRef,
+  hasToolResultObservation,
+  toolResultObservation,
+  NO_TOOL_RESULT_OBSERVATION,
+  TOOL_RESULT_OBSERVATION_REF_KINDS,
+} from "./types/tool-result-observation.js";
+export type { ToolResultObservationRef } from "./types/tool-result-observation.js";
 
 export type { CustomAgentMessages } from "./types/custom-agent-messages.js";
 
