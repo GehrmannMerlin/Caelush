@@ -225,6 +225,7 @@ export function createAgentMessageCodecRegistry(options: {
         // anyway would claim a projection that never happens.
         return Object.freeze({
           message,
+          data,
           schemaVersion: codec.currentVersion,
         });
       }
@@ -235,6 +236,7 @@ export function createAgentMessageCodecRegistry(options: {
       }
       return Object.freeze({
         message,
+        data,
         schemaVersion: codec.currentVersion,
         modelProjectionVersion: projectionVersion,
       });

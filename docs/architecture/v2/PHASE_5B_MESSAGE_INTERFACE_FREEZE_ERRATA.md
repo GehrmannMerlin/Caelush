@@ -574,6 +574,98 @@ Phase 5C owns the Tool pipeline → AgentMessage writer wiring.
 
 ---
 
+## 11A. Second scoped correction — `AgentMessageDraft` must carry the encoded payload
+
+This section was added while implementing the storage round, and it is recorded as part of the same
+scoped errata because it is the same class of defect: a Phase 5A contract shape that cannot express what
+Phase 5B must do.
+
+### 11A.1 The defect
+
+Phase 5A's implementation decided what `AgentMessageDraft.message` means:
+
+```ts
+encode(message: AgentMessage): AgentMessageDraft {
+  const data = codec.encode(message);          // the type-specific payload
+  assertJsonSafePayload(data, message.type);   // proved JSON-safe…
+  // …and then DISCARDED
+  return Object.freeze({ message, schemaVersion: codec.currentVersion, modelProjectionVersion });
+}
+```
+
+```text
+draft.message              the semantic AgentMessage          (asserted by the Phase 5A suite)
+the encoded payload        computed, validated, then dropped
+```
+
+So the draft carries **no bytes**. The frozen definition reads:
+
+```ts
+export interface AgentMessageDraft<TMessage extends AgentMessage = AgentMessage> {
+  readonly message: TMessage;
+  readonly schemaVersion: AgentMessageSchemaVersion;
+  readonly modelProjectionVersion?: AgentMessageProjectionVersion;
+}
+```
+
+### 11A.2 Why that blocks the storage round
+
+```text
+AgentConversationRepository.append(runId, drafts)
+  must write AgentMessageRecord.data        the encoded payload
+  must write AgentMessageRecord.schemaVersion   the version the payload was encoded at
+  must NOT re-select a codec                 the draft already names its version
+```
+
+The repository cannot obtain the payload:
+
+```text
+re-encoding it                  forbidden — it would re-choose the version the draft already carries
+reaching into the codec registry
+  for a codec by draft version  possible, but it makes the repository a second encoder and it
+                                re-does work the draft's producer already did
+```
+
+This is the same defect class as Gate 3: a contract that cannot carry a fact its own consumer requires.
+
+### 11A.3 The correction
+
+```ts
+export interface AgentMessageDraft<TMessage extends AgentMessage = AgentMessage> {
+  readonly message: TMessage;
+
+  /** The codec's encoded payload: exactly what `AgentMessageRecord.data` must contain. */
+  readonly data: JsonObject;
+
+  readonly schemaVersion: AgentMessageSchemaVersion;
+
+  readonly modelProjectionVersion?: AgentMessageProjectionVersion;
+}
+```
+
+```text
+added     `data` — the bytes the record stores
+kept      `message` is still the semantic message, matching the Phase 5A suite
+kept      schemaVersion and modelProjectionVersion unchanged
+changed   `data` is REQUIRED, because a draft that cannot supply its payload cannot be appended
+```
+
+### 11A.4 Why this is a correction and not a new capability
+
+The registry already computes and validates exactly this value; the correction stops it discarding a
+result it has already proved correct. No new encoding happens, no version is re-selected, and the codec
+registry remains the only encoder.
+
+### 11A.5 Invariants after the correction
+
+```text
+draft.data is the payload of draft.message, encoded at draft.schemaVersion
+the repository copies draft.data verbatim into AgentMessageRecord.data
+neither the repository nor Storage ever re-encodes a message
+```
+
+---
+
 ## 12. Non-goals
 
 ```text

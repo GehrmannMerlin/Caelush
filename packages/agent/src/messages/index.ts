@@ -22,6 +22,7 @@ export {
   createAgentMessageIdFactory,
   createConversationTurnIdFactory,
   createDeterministicConversationTurnIdFactory,
+  deriveLegacyAgentMessageId,
   createScriptedAgentMessageIdFactory,
   createSeededConversationTurnIdFactory,
   agentMessageId,
@@ -158,6 +159,18 @@ export type {
   StoredAgentMessage,
 } from "./persistence/record.js";
 
+export type {
+  AgentMessageRecordStorePort,
+  SessionReadableAgentMessageRecordStore,
+} from "./persistence/record-store-port.js";
+
+export { createAgentConversationRepository } from "./persistence/conversation-repository.js";
+export type {
+  AgentConversationRepository,
+  AgentConversationRepositoryDependencies,
+  ConversationRunMetadataReader,
+} from "./persistence/conversation-repository.js";
+
 /* --------------------------------------------------------------------------------- codec */
 
 export {
@@ -250,11 +263,14 @@ export type { AgentConversationSnapshot } from "./conversation/conversation-snap
 
 export {
   AgentConversationError,
+  AgentConversationLoadError,
   agentConversationErrorMessage,
+  agentConversationLoadFailureMessage,
   createAgentConversationValidator,
   AGENT_CONVERSATION_VIOLATION_REASONS,
 } from "./conversation/validator.js";
 export type {
+  AgentConversationLoadFailureReason,
   AgentConversationValidator,
   AgentConversationViolationReason,
 } from "./conversation/validator.js";

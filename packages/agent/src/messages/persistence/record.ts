@@ -134,18 +134,37 @@ export interface StoredAgentMessage<TMessage extends AgentMessage = AgentMessage
 }
 
 /**
- * A message plus its encoding versions, before storage.
+ * A message plus its encoding versions and its encoded payload, before storage.
  *
  * ```text
  * no sequence   the store assigns it
  * ```
  *
- * This is what `AgentMessageCodecRegistry.encode()` returns, and the absence of
- * `sequence` is the contract: a caller cannot choose its own position in the ledger, and
- * two callers encoding the same message cannot disagree about where it goes.
+ * ## Why it carries `data`
+ *
+ * This is what `AgentMessageCodecRegistry.encode()` returns, and Phase 5B's Interface Freeze Errata
+ * added `data` because the storage round cannot otherwise obtain the bytes it must persist.
+ *
+ * ```text
+ * the codec computes the payload and the registry validates it is JSON-safe
+ * the repository must write exactly those bytes as AgentMessageRecord.data
+ * re-encoding at the repository would re-choose the version this draft already carries
+ * ```
+ *
+ * `data` is required for the same reason: a draft that cannot supply its payload cannot be appended.
+ * Nothing else about the shape changes — `message` is still the semantic message, and the two versions
+ * keep their meaning.
+ *
+ * ## Why there is still no `sequence`
+ *
+ * A caller cannot choose its own position in the ledger, and two callers encoding the same message
+ * cannot disagree about where it goes.
  */
 export interface AgentMessageDraft<TMessage extends AgentMessage = AgentMessage> {
   readonly message: TMessage;
+
+  /** The codec's encoded payload: exactly what `AgentMessageRecord.data` must contain. */
+  readonly data: JsonObject;
 
   readonly schemaVersion: AgentMessageSchemaVersion;
 

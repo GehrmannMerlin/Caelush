@@ -244,3 +244,43 @@ export function createDeterministicConversationTurnIdFactory(): ConversationTurn
     },
   };
 }
+
+/**
+ * Derive the message identity of a legacy durable row.
+ *
+ * ```text
+ * input    the Run the row belongs to, and its storage sequence
+ * output   the AgentMessageId that row's V2 record must carry
+ * ```
+ *
+ * ## Why it lives here and not in Storage
+ *
+ * A migration must name the messages it migrates, and the identity it invents becomes permanent: the
+ * V2 record it writes is the canonical representation from that moment on. If Storage minted that id,
+ * Storage would be a semantic identity authority — the second one, alongside the Message Factory —
+ * and the two could disagree about what a message is called.
+ *
+ * So the derivation belongs to the module that already owns the `AgentMessageId` brand, and it is
+ * **pure**: the same `(runId, sequence)` yields the same id in any process, on any host, at any time.
+ * That is what makes a backfill idempotent and a partial backfill resumable (§37 of the round).
+ *
+ * ## Why it is not `legacy:<run>:<seq>`
+ *
+ * The 5A contract requires an `AgentMessageId` of the canonical `amsg_<uuidv7-shaped>` form, and a
+ * human-readable composite would not satisfy `isAgentMessageId`. Deriving through a digest keeps the
+ * id opaque, fixed-width and format-valid, while remaining exactly reproducible.
+ *
+ * The `sequence` is part of the pre-image and is also carried on the record envelope, so the
+ * derivation is not a second ordering authority: it consumes the ordering the store already assigned.
+ */
+export function deriveLegacyAgentMessageId(runId: RunId, sequence: number): AgentMessageId {
+  if (!Number.isSafeInteger(sequence) || sequence < 1) {
+    throw new TypeError("A legacy agent message sequence must be a positive safe integer.");
+  }
+  const digest = createHash("sha256")
+    // A NUL separator keeps the two fields from running together: `run_ab` + `1` must not collide
+    // with `run_a` + `b1`.
+    .update(`legacy\u0000${runId}\u0000${String(sequence)}`, "utf8")
+    .digest();
+  return agentMessageId(`${AGENT_MESSAGE_ID_PREFIX}${uuidV7FromBytes(digest)}`);
+}

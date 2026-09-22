@@ -85,6 +85,53 @@ export const AGENT_CONVERSATION_VIOLATION_REASONS = [
 ] as const satisfies readonly AgentConversationViolationReason[];
 
 /**
+ * Why a *loading* operation could not produce a conversation.
+ *
+ * A separate union from the validation reasons, because the two answer different questions and
+ * conflating them would let a caller report "the conversation is invalid" when the conversation was
+ * never loaded. Neither arm is a statement about message content.
+ *
+ * ```text
+ * CURRENT_RUN_NOT_FOUND     the snapshot named a current Run the Session does not contain
+ * RUN_NOT_FOUND             a stored message belongs to a Run that no longer exists
+ * RUN_SESSION_MISMATCH      a turn belongs to a Run of a different Session
+ * ```
+ */
+export type AgentConversationLoadFailureReason =
+  "CURRENT_RUN_NOT_FOUND" | "RUN_NOT_FOUND" | "RUN_SESSION_MISMATCH";
+
+/** The fixed, safe summary of one load failure. */
+export function agentConversationLoadFailureMessage(
+  reason: AgentConversationLoadFailureReason,
+): string {
+  switch (reason) {
+    case "CURRENT_RUN_NOT_FOUND":
+      return "The conversation snapshot's current Run does not exist.";
+    case "RUN_NOT_FOUND":
+      return "A stored message belongs to a Run that no longer exists.";
+    case "RUN_SESSION_MISMATCH":
+      return "A conversation turn belongs to a Run of a different Session.";
+  }
+}
+
+/**
+ * The refusal a conversation *load* raises.
+ *
+ * It is deliberately a distinct type from {@link AgentConversationError}, so a caller can tell "this
+ * conversation is not valid" from "this conversation could not be read". Both carry only a closed code
+ * and never a message body, a Tool result or a Run's content.
+ */
+export class AgentConversationLoadError extends Error {
+  readonly reason: AgentConversationLoadFailureReason;
+
+  constructor(reason: AgentConversationLoadFailureReason) {
+    super(agentConversationLoadFailureMessage(reason));
+    this.name = "AgentConversationLoadError";
+    this.reason = reason;
+  }
+}
+
+/**
  * The refusal.
  *
  * It carries the closed reason, the turn id and the message id when one is identifiable —
