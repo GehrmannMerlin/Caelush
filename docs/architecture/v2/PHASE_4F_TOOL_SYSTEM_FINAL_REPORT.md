@@ -42,17 +42,23 @@ Phase 4F branch        deepseek/architecture-v2-phase-4f-tool-system-final-assem
 implementation commits
   6b601f9   refactor(tool-system): move the remaining compatibility surfaces to canonical owners
   9a5abeb   refactor(daemon): compose the canonical Tool pipeline directly
-            ── the legacy package's modules were moved out by 6b601f9's own deletion pass ──
   6f2b57a   test(architecture): guard the final tool system ownership
   ca0b54c   refactor(protocol): retire the legacy tool definition contract
+  3f55470   docs(architecture): close phase 4 tool system migration
 
-verification head      ca0b54c   (build · typecheck · lint · architecture · full suite · clean checkout)
-documentation head     the branch tip, which carries this file
-final branch tip       the branch tip; `git rev-parse HEAD` names it
-remote branch tip      identical to the local tip; verified with git ls-remote
+verification head      ca0b54c0d6690a669a58330adb9f6a9980ad3fd4
+                       build · typecheck · lint · architecture · full suite · clean checkout,
+                       all measured at that tip
+documentation head     3f55470c8c14ecc8859cc94a07487c4bdf3ed692
+final branch tip       3f55470c8c14ecc8859cc94a07487c4bdf3ed692
+remote branch tip      3f55470c8c14ecc8859cc94a07487c4bdf3ed692
 ahead / behind         0 / 0
 working tree           clean
 ```
+
+The gate sets were re-run at the final tip after the documentation commit and every one of them passes
+there too: that commit changes only Markdown, and the architecture guards which read those documents are
+asserted against the closed state.
 
 ### 1.1 What was not done to the history
 
@@ -60,18 +66,42 @@ working tree           clean
 no reset            no rebase             no amended previous commit
 no force push       no rewritten 4A-4E history
 no branch created from master or 4D
-no merge of an unrelated branch
+no merge of an unrelated branch        0 merge commits between the 4E tip and the final tip
 ```
 
 The branch was created from `7d0700a` and only ever moved forward. `git merge-base --is-ancestor
-7d0700ae2849378324398770df533fae45f39b3e HEAD` was run before any work began and holds at every commit.
+7d0700ae2849378324398770df533fae45f39b3e HEAD` was run before any work began and holds at the final tip.
+The five commits form a linear sequence from the Phase 4E tip with no graph divergence.
 
 ### 1.2 Production output
 
 ```text
 101 files deleted          the whole of packages/tools
  14 files added or moved   the canonical owners that received its responsibilities
- 93 files formatted        every changed file, against this checkout's line endings
+ 97 files formatted        every changed file, against this checkout's line endings
+```
+
+### 1.3 Publishing
+
+The machine's connection to `github.com` was intermittent during this session, as it was during Phase
+4E. The branch was published once the connection returned; no force push was used and the push created
+the remote branch rather than rewriting anything:
+
+```text
+git push -u origin deepseek/architecture-v2-phase-4f-tool-system-final-assembly
+To https://github.com/GehrmannMerlin/Caelush.git
+ * [new branch]  deepseek/architecture-v2-phase-4f-tool-system-final-assembly
+                 -> deepseek/architecture-v2-phase-4f-tool-system-final-assembly
+```
+
+The four parity checks, after a fresh fetch:
+
+```text
+git status --short                            empty — working tree clean
+git rev-parse HEAD                            3f55470c8c14ecc8859cc94a07487c4bdf3ed692
+git rev-parse origin/<branch>                 3f55470c8c14ecc8859cc94a07487c4bdf3ed692
+git ls-remote origin refs/heads/<branch>      3f55470c8c14ecc8859cc94a07487c4bdf3ed692
+git rev-list --left-right --count HEAD...origin/<branch>     0   0
 ```
 
 ---
@@ -582,7 +612,9 @@ Phase 4 status             COMPLETE
 
 branch                     deepseek/architecture-v2-phase-4f-tool-system-final-assembly
 Phase 4E base SHA          7d0700ae2849378324398770df533fae45f39b3e
-final tip                  ca0b54c0d6690a669a58330adb9f6a9980ad3fd4
+verification head          ca0b54c0d6690a669a58330adb9f6a9980ad3fd4
+final tip                  3f55470c8c14ecc8859cc94a07487c4bdf3ed692
+remote tip                 3f55470c8c14ecc8859cc94a07487c4bdf3ed692
 local working tree         clean
 local == remote            verified at the final tip
 ahead / behind             0 / 0
