@@ -1,0 +1,41 @@
+test(coding-agent): cover the target builtins, adapters and authority fidelity
+
+Phase 4E acceptance coverage, part 1 of 2: the target-side suites.
+
+packages/coding-agent/test (159 tests)
+  nine builtin suites, one per Tool, over fake Operations ports:
+    read_file, list_directory, find_files, search_text, apply_patch,
+    exec_command, write_stdin, git_status, git_diff
+  - schemas, defaults, bounds, details shapes and failure codes per Tool
+  - the uncertain boundaries: apply_patch, exec_command and write_stdin must
+    convert a stale or uncertain Runtime state into the canonical
+    ToolExecutionUncertainError, never into a retryable failure
+  - the transient update channel: exec_command and write_stdin project the
+    port's onOutput onto the canonical update sink
+  operations-contracts: both errata-corrected shapes field for field, the six
+    unaffected contracts, the required environment/signal on all eight, and the
+    assertion that no Operation input names a Runtime capability
+  runtime-adapters: against a real filesystem and a real ripgrep, including the
+    errata's decisive counter-example - a 260-match file plus include targeting a
+    later-sorting file must answer 3 matches with truncated false, which a
+    tool-side post-filter answers as zero matches with truncated true
+  git-status-runtime: against a real repository, including the two regressions
+    the errata exists for - path = "src" returns only src entries because Git
+    applies the pathspec, and limit = 250 returns 250 entries rather than being
+    pinned to the Runtime's own default of 200
+  authority-fidelity: the legacy surface and the target authority compared
+    directly - the security-facts and effects modules are the same function
+    objects, the approval key is byte-identical across all nine Tools and every
+    policy pair (81 comparisons), and the default Tool set produced by either
+    entry point is field-for-field the same nine Tools
+
+apps/daemon/test (7 tests)
+  tool-prompt-production-e2e: drives a real Run and reads the real provider
+    request - the nine Tool specs carry guidance-free descriptions, the
+    tool-guidance block appears exactly once, and the guidance is inside the
+    Context token estimate
+  tool-target-production-e2e: the production composition runs read_file,
+    apply_patch and exec_command through the Coding target Tools and feeds each
+    observation back to the model
+
+full suite: 484 files, 3057 passed, 5 skipped, 0 failed.
