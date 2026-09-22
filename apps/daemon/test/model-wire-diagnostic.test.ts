@@ -69,7 +69,7 @@ describe("daemon model wire diagnostic", () => {
     storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
     const recorded: ModelWireDiagnosticEvent[] = [];
 
-    composition = composeDaemon({
+    composition = await composeDaemon({
       storage,
       eventBus: new EventBus(storage.events),
       modelSources: [fixtureModelSource()],
@@ -153,7 +153,7 @@ describe("daemon model wire diagnostic", () => {
     }) as typeof process.stderr.write;
 
     try {
-      composition = composeDaemon({
+      composition = await composeDaemon({
         storage,
         eventBus: new EventBus(storage.events),
         modelSources: [fixtureModelSource()],

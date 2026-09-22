@@ -45,7 +45,7 @@ async function compose(): Promise<DaemonComposition> {
   directory = await mkdtemp(join(tmpdir(), "caelush-phase-4d-composition-"));
   storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
   const eventBus = new EventBus(storage.events);
-  composition = composeDaemon({
+  composition = await composeDaemon({
     storage,
     eventBus,
     providers: [

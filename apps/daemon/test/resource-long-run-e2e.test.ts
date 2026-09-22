@@ -29,7 +29,7 @@ describe("daemon adaptive long-run boundary", () => {
     directory = await mkdtemp(join(tmpdir(), "caelush-resource-e2e-"));
     storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
     const eventBus = new EventBus(storage.events);
-    composition = composeDaemon({
+    composition = await composeDaemon({
       storage,
       eventBus,
       providers: [

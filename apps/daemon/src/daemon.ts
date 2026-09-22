@@ -4,13 +4,19 @@ import type { ClientModelSelection } from "@caelush/protocol";
 import { openCaelushStorage, toHostToolEffectsPort } from "@caelush/storage";
 import {
   applyToolEffectsToAgentState,
-  createDefaultBuiltinToolRegistrations,
   createLegacyToolSettlementExtensionDecoder,
   effectsChangeAgentState,
-  ToolRegistryBuilder,
   type ToolCallingDebugEvent,
 } from "@caelush/tools";
 import { createLocalRuntimeResolver, LocalRuntime } from "@caelush/runtime";
+import {
+  createDefaultCodingTools,
+  createRuntimeGitOperations,
+  createRuntimePatchOperations,
+  createRuntimeProcessOperations,
+  createRuntimeReadOnlyOperations,
+  type DefaultCodingToolOperations,
+} from "@caelush/coding-agent";
 import { buildDaemonApp } from "./app.js";
 import { assertLoopbackDaemonHost, createDaemonConfig, type DaemonConfig } from "./config.js";
 import { composeDaemon, type DaemonComposition } from "./daemon-composition.js";
@@ -51,20 +57,27 @@ function resolveConfig(options: DaemonOptions): DaemonConfig {
 export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle> {
   const config = resolveConfig(options);
   /**
-   * The default Coding Tool catalog, built before the composition root composes anything.
+   * The default Coding Tool set, built before the composition root composes anything.
    *
-   * The registry itself is a synchronous derivation; the Coding overlay is a separate artifact
-   * produced by `@caelush/coding-agent`, reached through the declared dynamic compatibility import
-   * that lets a legacy package consume a target one. Building it here — once, per daemon start, from
-   * the same registration set the registry is built from — is what makes the catalog and the active
-   * registry correspond instead of drifting.
+   * ```text
+   * RuntimeResolver
+   *   → the Runtime Operations adapters
+   *   → createDefaultCodingTools(...)   @caelush/coding-agent
+   * ```
+   *
+   * Phase 4E made the Coding product layer the production source for the nine defaults. The legacy
+   * `createDefaultBuiltinToolRegistrations` — which this function used to call — is no longer part of
+   * the production path: it survives as a compatibility facade over the same Coding factories until
+   * Phase 4F, and the composition root registers these definitions directly.
+   *
+   * The set is built here, once per daemon start, and the same value reaches `composeDaemon`, so the
+   * registry, the Coding catalog and the model catalog are three views of one derivation.
    */
-  const defaultToolRegistrations = createDefaultBuiltinToolRegistrations(
-    createLocalRuntimeResolver(new LocalRuntime()),
+  const runtime = new LocalRuntime();
+  const runtimeResolver = createLocalRuntimeResolver(runtime);
+  const defaultToolRegistrations = createDefaultCodingTools(
+    daemonCodingOperations(runtimeResolver),
   );
-  const defaultToolBuilder = new ToolRegistryBuilder();
-  for (const registration of defaultToolRegistrations) defaultToolBuilder.register(registration);
-  await defaultToolBuilder.buildCodingCatalog();
 
   /**
    * The Tool settlement compatibility boundary, built once per daemon start.
@@ -93,9 +106,10 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   const eventBus = new EventBus(storage.events);
   let composition: DaemonComposition;
   try {
-    composition = composeDaemon({
+    composition = await composeDaemon({
       storage,
       eventBus,
+      runtime,
       ...(options.providers === undefined ? {} : { providers: options.providers }),
       ...(options.defaultModel === undefined ? {} : { defaultModel: options.defaultModel }),
       ...(options.providerBindings === undefined
@@ -171,6 +185,27 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
 
 function writeToolCallingDebugEvent(event: ToolCallingDebugEvent): void {
   console.error("[caelush:tool-calling]", JSON.stringify(event));
+}
+
+/**
+ * The four Runtime Operations adapters, as the one bundle `createDefaultCodingTools` expects.
+ *
+ * Built here rather than in the composition root because the daemon must hand `composeDaemon` the
+ * *definitions* it built this set from — one derivation, three views (the registry, the Coding catalog
+ * and the model catalog) rather than three independent constructions.
+ */
+function daemonCodingOperations(
+  runtimeResolver: ReturnType<typeof createLocalRuntimeResolver>,
+): DefaultCodingToolOperations {
+  const readOnly = createRuntimeReadOnlyOperations(runtimeResolver);
+  return {
+    readFile: readOnly,
+    readOnly,
+    patch: createRuntimePatchOperations(runtimeResolver),
+    exec: createRuntimeProcessOperations(runtimeResolver),
+    process: createRuntimeProcessOperations(runtimeResolver),
+    git: createRuntimeGitOperations(runtimeResolver),
+  };
 }
 
 const safeSupervisorLogger = {

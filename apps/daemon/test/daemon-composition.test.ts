@@ -25,7 +25,7 @@ describe("daemon production composition", () => {
     storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
     const eventBus = new EventBus(storage.events);
 
-    composition = composeDaemon({
+    composition = await composeDaemon({
       storage,
       eventBus,
       providers: [
@@ -58,9 +58,10 @@ describe("daemon production composition", () => {
       "git_status",
       "git_diff",
     ]);
-    expect(composition.toolRegistry.modelGuidance().map((entry) => entry.toolName)).toEqual(
-      composition.toolRegistry.modelDefinitions().map((tool) => tool.name),
-    );
+    // Phase 4E moved usage guidance out of the provider-visible tool catalog: the nine defaults carry
+    // no legacy `modelGuidance`, because their guidance travels as a Coding `promptSnippet` through the
+    // budgeted Context path. The catalog and the registry still describe the same nine Tools.
+    expect(composition.toolRegistry.modelGuidance()).toEqual([]);
     // Phase 2C: provider authority is the AI subsystem registry, not a legacy registry.
     expect(composition.ai.providers.list().map((provider) => provider.id)).toEqual([
       "openai-compatible",
@@ -117,7 +118,7 @@ describe("daemon production composition", () => {
     directory = await mkdtemp(join(tmpdir(), "caelush-composition-non-git-"));
     storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
     const eventBus = new EventBus(storage.events);
-    composition = composeDaemon({
+    composition = await composeDaemon({
       storage,
       eventBus,
       toolExposure: { git: "UNAVAILABLE" },
@@ -135,8 +136,8 @@ describe("daemon production composition", () => {
     expect(composition.toolTurn.modelDefinitions().map((tool) => tool.name)).toEqual(
       composition.toolRegistry.names(),
     );
-    expect(composition.toolRegistry.modelGuidance().map((entry) => entry.toolName)).toEqual(
-      composition.toolRegistry.names(),
-    );
+    // Filtering is aligned across every view: the registry, the model catalog the Tool turn publishes
+    // and the (now guidance-free) legacy overlay all describe the same seven active Tools.
+    expect(composition.toolRegistry.modelGuidance()).toEqual([]);
   });
 });

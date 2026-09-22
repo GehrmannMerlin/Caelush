@@ -25,6 +25,7 @@ import {
   createLocalRelevantFilePlanner,
   createModelContextProfile,
   Utf8HeuristicTokenEstimator,
+  type ContextItem,
 } from "@caelush/context";
 import { MemoryRetriever, type MemoryRecord } from "@caelush/memory";
 import { createAIError, createAISubsystem } from "@caelush/ai";
@@ -86,7 +87,6 @@ import {
   createCodingToolAdmissionPort,
   createCodingToolDurableMetadataPort,
   createDurableInvocationGatePort,
-  createDefaultBuiltinToolRegistrations,
   filterToolRegistryForEnvironment,
   ToolRegistryBuilder,
   boundToolModelContent,
@@ -105,6 +105,17 @@ import {
   type DurableToolExecutionCoordinator,
 } from "@caelush/agent";
 import { createLegacyNumericArgumentNormalization } from "@caelush/coding-agent";
+import {
+  createDefaultCodingTools,
+  createRuntimeGitOperations,
+  createRuntimePatchOperations,
+  createRuntimeProcessOperations,
+  createRuntimeReadOnlyOperations,
+  createToolPromptContextProvider,
+  GIT_TOOL_NAMES,
+  type CodingToolDefinition,
+  type DefaultCodingToolOperations,
+} from "@caelush/coding-agent";
 import {
   createDefaultV1ToolExecutionSecurity,
   createV1ToolApprovalRequestFactory,
@@ -243,7 +254,7 @@ export interface DaemonCompositionOptions {
    * alignment needs, so a host that validated the overlay at startup hands the *same* builder here
    * rather than a bare registry. It is re-validated on this side, so the trust boundary does not move.
    */
-  readonly toolRegistrations?: readonly ToolRegistration[] | undefined;
+  readonly toolRegistrations?: readonly (ToolRegistration | CodingToolDefinition)[] | undefined;
   /** Safe Tool-calling diagnostics; the writer receives no raw arguments or output. */
   readonly toolCallingDebugWriter?: (event: ToolCallingDebugEvent) => void;
 }
@@ -307,7 +318,9 @@ export interface DaemonComposition {
   dispose(): Promise<void>;
 }
 
-export function composeDaemon(options: DaemonCompositionOptions): DaemonComposition {
+export async function composeDaemon(
+  options: DaemonCompositionOptions,
+): Promise<DaemonComposition> {
   const providers = [...(options.providers ?? [])];
   const clock = options.clock ?? { now: () => createTimestampMs(Date.now()) };
   const runtime = options.runtime ?? new LocalRuntime();
@@ -409,15 +422,76 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
   });
   const planner = createLocalRelevantFilePlanner();
   const contextBuilder = createDefaultContextBuilder();
+  /**
+   * The Phase 4E production Tool composition.
+   *
+   * ```text
+   * RuntimeResolver
+   *   → the four Runtime Operations adapters     @caelush/coding-agent
+   *   → createDefaultCodingTools(...)            the nine Coding Tool definitions
+   *   → ToolRegistryBuilder                      the canonical AgentToolRegistry
+   * ```
+   *
+   * The default nine Tools now **originate in `@caelush/coding-agent`**. The legacy package's
+   * `createDefaultBuiltinToolRegistrations` is no longer called here: it survives as a compatibility
+   * facade for its own callers and for its tests, and every registration it builds delegates to these
+   * same Coding factories. Production does not go through it, so there is exactly one place the
+   * default Tool set is declared and exactly one implementation behind each Tool.
+   *
+   * Git exposure still fails closed. A host whose Git capability is not `AVAILABLE` builds the default
+   * set *without* the Git Tools rather than filtering a built registry, which is what keeps the
+   * registry, the Coding catalog, the model-visible specs and the prompt guidance block describing the
+   * same active set.
+   */
+  const defaultCodingTools = defaultCodingToolSet(defaultCodingOperations(runtimeResolver), {
+    git: options.toolExposure?.git ?? "AVAILABLE",
+  });
   const builtToolRegistry = new ToolRegistryBuilder();
   for (const registration of options.toolRegistrations ??
-    createDefaultBuiltinToolRegistrations(runtimeResolver)) {
+    (defaultCodingTools as readonly (ToolRegistration | CodingToolDefinition)[])) {
     builtToolRegistry.register(registration);
   }
+  /**
+   * The Coding Tool catalog for the Tools this host registered.
+   *
+   * `buildCodingCatalog()` is what refuses a *dangling* overlay — a catalog entry whose Tool the active
+   * registry cannot execute — so building it before the registry is used is what keeps Coding metadata
+   * and executable Tools describing one set. The returned catalog is retained because the composition
+   * root is the layer that reads it: the durable `riskLevel` below comes from the catalog rather than
+   * from a second derivation.
+   */
+  const codingCatalog = await builtToolRegistry.buildCodingCatalog();
   const activeToolRegistry = filterToolRegistryForEnvironment(
     builtToolRegistry.build(),
     options.toolExposure ?? { git: "AVAILABLE" },
   );
+  /**
+   * The Coding Tool prompt provider, composed once per daemon.
+   *
+   * ```text
+   * the active registry's tools   →  their Coding promptSnippets  →  the budgeted Context build
+   * ```
+   *
+   * Phase 4E moved usage guidance out of `AIToolSpec.description` and into Context. The provider is the
+   * Coding product layer's, and this composition supplies the **active tool names in registry order** —
+   * the order the registry, the model catalog and this guidance block all share.
+   *
+   * The adapter hands it the tools a turn actually exposes, and the intersection with the active
+   * registry is taken here, so a Tool this host did not register (a Git Tool on a non-Git workspace)
+   * can never describe itself to a model and the guidance block cannot name a Tool the model was not
+   * offered.
+   */
+  const toolPromptProvider = createToolPromptContextProvider();
+  const activeToolNames = activeToolRegistry.names();
+  const toolGuidance: (
+    turnToolNames: readonly string[],
+  ) => Promise<readonly ContextItem[]> = async (turnToolNames) => {
+    const offered = new Set<string>(turnToolNames);
+    const items = await toolPromptProvider.provide({
+      activeTools: activeToolNames.filter((name) => offered.has(name)),
+    });
+    return items.map((item) => toContextGuidanceItem(item, activeToolNames.length));
+  };
   /**
    * The Phase 4C production Tool assembly.
    *
@@ -490,6 +564,7 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
       metadata: createCodingToolDurableMetadataPort({
         registry: activeToolRegistry,
         definitions: activeToolRegistry.modelDefinitions(),
+        catalog: codingCatalog,
       }),
       approvalRequests: toolApprovalRequests,
       approvalLookup: options.storage.approvals,
@@ -639,6 +714,7 @@ export function composeDaemon(options: DaemonCompositionOptions): DaemonComposit
             workspace: input.run.workspace,
             runId: input.run.id,
             rawObservationRefs,
+            toolGuidance,
             ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
             ...(input.explicitPaths === undefined ? {} : { explicitPaths: input.explicitPaths }),
             ...(input.verificationRepairContext === undefined
@@ -818,6 +894,89 @@ function projectMemoryRecords(
     usedTokens += tokenEstimate;
   }
   return items;
+}
+
+/**
+ * The four Runtime Operations adapters, as the one bundle `createDefaultCodingTools` expects.
+ *
+ * This is the only place in the daemon that constructs them, and it is the only place that holds a
+ * `RuntimeResolver` for a Coding Tool: the Tools themselves receive narrow ports, so a `read_file`
+ * implementation cannot reach `git` and a `git_status` implementation cannot reach the filesystem.
+ */
+function defaultCodingOperations(
+  runtimeResolver: ReturnType<typeof createLocalRuntimeResolver>,
+): DefaultCodingToolOperations {
+  const readOnly = createRuntimeReadOnlyOperations(runtimeResolver);
+  return {
+    readFile: readOnly,
+    readOnly,
+    patch: createRuntimePatchOperations(runtimeResolver),
+    exec: createRuntimeProcessOperations(runtimeResolver),
+    process: createRuntimeProcessOperations(runtimeResolver),
+    git: createRuntimeGitOperations(runtimeResolver),
+  };
+}
+
+/**
+ * The default Coding Tool set for a known environment.
+ *
+ * Git exposure fails closed: `UNKNOWN` is treated exactly like `UNAVAILABLE`, because a host that
+ * cannot prove Git works must not offer a model a Tool that will fail. Dropping the two Git
+ * *definitions* — rather than filtering a built registry — is what keeps the registry, the Coding
+ * catalog, the model-visible specs and the prompt guidance block describing the same active set.
+ */
+function defaultCodingToolSet(
+  operations: DefaultCodingToolOperations,
+  environment: ToolExposureEnvironment,
+): readonly CodingToolDefinition[] {
+  const definitions = createDefaultCodingTools(operations);
+  if (environment.git === "AVAILABLE") return definitions;
+  const excluded = new Set<string>(GIT_TOOL_NAMES);
+  return Object.freeze(
+    definitions.filter((definition) => !excluded.has(definition.tool.name)),
+  );
+}
+
+/**
+ * The Coding Tool prompt provider, as the legacy Context build reads it.
+ *
+ * ```text
+ * the provider's ContextItem   { id, priorityClass, content, tokenEstimate, whyLoaded }
+ *        ↓  this projection
+ * the Context package's item   { id, type: "TOOL_GUIDANCE", …, content, tokenEstimate }
+ * ```
+ *
+ * Two packages declare a `ContextItem`: `@caelush/agent` states the minimal text item a Context
+ * *provider* contributes, and `@caelush/context` states the typed item its budgeted build stores. The
+ * composition root is the only layer that knows both, so the projection is made here.
+ *
+ * `type` is `TOOL_GUIDANCE` rather than `MEMORY`, because the renderer labels the block from it and
+ * guidance is not retrieved knowledge. `sensitivity` is `PUBLIC`: a Coding prompt snippet is a constant
+ * compiled into a Tool definition — it carries no workspace path, no secret and no live value — and
+ * marking it otherwise would make the renderer drop it.
+ */
+function toContextGuidanceItem(
+  item: import("@caelush/agent").ContextItem,
+  activeToolCount: number,
+): ContextItem {
+  const tokenEstimate = item.tokenEstimate ?? Math.ceil(Buffer.byteLength(item.content, "utf8") / 3);
+  return createContextItem({
+    id: item.id,
+    type: "TOOL_GUIDANCE",
+    sourceRef: "coding.tool_prompt",
+    scope: "RUN",
+    retention: "EPHEMERAL",
+    priorityClass: item.priorityClass === "OPTIONAL" ? "LOW" : item.priorityClass,
+    tokenEstimate,
+    cacheStability: "STABLE",
+    freshness: "CURRENT",
+    sensitivity: "PUBLIC",
+    whyLoaded:
+      item.whyLoaded ?? `Tool guidance for ${String(activeToolCount)} active Coding tool(s).`,
+    createdSequence: 0,
+    updatedSequence: 0,
+    content: item.content,
+  });
 }
 
 function createRunBoundVerificationExecution(

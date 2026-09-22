@@ -95,6 +95,35 @@ export interface LegacyContextRuntimeAdapterDependencies {
   readonly verificationRepairContext?: () => Promise<
     import("@caelush/context").VerificationRepairContextInput | undefined
   >;
+  /**
+   * Supplies this turn's Tool usage guidance.
+   *
+   * ```text
+   * the frozen ContextPrepareInput.tools   the tools THIS turn exposes
+   *        ↓
+   * this supplier                          their canonical Coding prompt snippets
+   *        ↓
+   * the budgeted Context build             one <tool_guidance> block inside the system message
+   * ```
+   *
+   * ## Why the supplier takes the turn's own tool list
+   *
+   * The frozen boundary already carries the resolved tool specs for the turn, so nothing new crosses
+   * into the general kernel. Taking the names as an argument rather than a pre-built block is what makes
+   * "guidance for the active set, in registry order" a property of the composition rather than
+   * something a caller has to remember: a host supplies the snippet *lookup*, and this adapter supplies
+   * the set.
+   *
+   * ## Why it is not a field of the frozen contract
+   *
+   * `ContextPrepareInput` is the general Kernel's boundary and has no Coding field — deliberately, and
+   * Phase 4E does not add one. Tool guidance is Coding product content delivered through a compatibility
+   * seam that already exists, which is the same shape the base system prompt and the context limits
+   * already use.
+   */
+  readonly toolGuidance?: (
+    activeToolNames: readonly string[],
+  ) => Promise<readonly import("@caelush/context").ContextItem[]>;
 }
 
 /**
@@ -191,6 +220,7 @@ async function buildLegacyContextInput(
     ...(relevantFiles === undefined ? {} : { relevantFiles }),
     history,
     limits: dependencies.contextLimits,
+    ...(await toolGuidance(dependencies, input)),
     ...(await repairContext(dependencies, input)),
   };
 
@@ -202,6 +232,28 @@ async function buildLegacyContextInput(
     ...common,
     currentUserMessage: currentUserMessage(input.input, input.identity.goal),
   };
+}
+
+/**
+ * The Tool guidance block for this turn, if the host supplies one.
+ *
+ * The names come from the frozen `ContextPrepareInput.tools` — the tools this turn actually exposes,
+ * in the order the loop resolved them — and are handed to the supplier unchanged. A supplier that has
+ * no snippet for a name returns nothing for it, so a generic Agent Tool simply contributes no guidance
+ * rather than a placeholder that would describe a Tool nobody declared.
+ *
+ * An empty result contributes no key at all: the legacy build input stays exactly as it was for a host
+ * with no Coding Tools.
+ */
+async function toolGuidance(
+  dependencies: LegacyContextRuntimeAdapterDependencies,
+  input: ContextPrepareInput,
+): Promise<{
+  readonly toolGuidanceItems?: readonly import("@caelush/context").ContextItem[];
+}> {
+  if (dependencies.toolGuidance === undefined) return {};
+  const items = await dependencies.toolGuidance(input.tools.map((tool) => tool.name));
+  return items.length === 0 ? {} : { toolGuidanceItems: items };
 }
 
 async function inspect(
