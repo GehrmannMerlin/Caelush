@@ -1,4 +1,4 @@
-import type { AIErrorCode, AIToolResultMessage, ModelUsage } from "@caelush/ai";
+import type { AIErrorCode, AIToolResultMessage, AIToolSpec, ModelUsage } from "@caelush/ai";
 import type {
   AgentBudgetBlock as FrozenAgentBudgetBlock,
   AgentDecision,
@@ -28,7 +28,6 @@ import type {
   AgentStep,
   StepId,
   TimestampMs,
-  ToolDefinition,
 } from "@caelush/protocol";
 import {
   beginAgentStepState,
@@ -65,7 +64,7 @@ import type {
   AgentLoopLifecycleHooks,
   AgentProviderTurnState,
 } from "./agent-loop-ports.js";
-import { toAIMessage, toAIToolSpec, toLegacyMessage } from "./ai-invocation-projection.js";
+import { toAIMessage, toLegacyMessage } from "./ai-invocation-projection.js";
 import { createLegacyContextRuntimeAdapter } from "./legacy-context-runtime-adapter.js";
 
 /**
@@ -252,7 +251,7 @@ export class AgentLoop {
         history: history.map(toAIMessage),
         input: turnInput,
         model: this.dependencies.models.resolve(input.run.model),
-        tools: input.tools?.map(toAIToolSpec) ?? [],
+        tools: input.tools ?? [],
         ...(settings === undefined ? {} : { modelSettings: settings }),
         signal: input.signal,
       };
@@ -838,4 +837,4 @@ function monotonicNow(state: AgentState, now: TimestampMs): TimestampMs {
 }
 
 /** Re-exported so the Run Layer keeps one import for the Tool catalog it passes in. */
-export type { ToolDefinition };
+export type { AIToolSpec };

@@ -27,6 +27,7 @@ import type { RetryJitterSource, RetryPolicy } from "./retry-controller.js";
 import type { RunBudgetPort } from "./budget-ports.js";
 import type { ResourceGovernancePort } from "./resource-governance-port.js";
 import type { ModelUsage } from "@caelush/ai";
+import type { AIToolSpec } from "@caelush/ai";
 import type {
   VerificationCommandExecutionPort,
   VerificationCommandSecurityPort,
@@ -151,8 +152,15 @@ export interface ToolTurnPipeline {
   readonly batches: ToolBatchCoordinator;
   readonly feedback: ModelToolFeedbackProjector;
   readonly normalizer: ToolResultBatchNormalizer;
-  /** The model-visible Tool catalog, projected from the registry that resolves execution. */
-  modelDefinitions(): readonly import("@caelush/protocol").ToolDefinition[];
+  /**
+   * The model-visible Tool catalog, read from the registry that resolves execution.
+   *
+   * It is the canonical registry's own `modelSpecs()` answer — three fields per Tool, in registration
+   * order — rather than a seven-field description that then has to be projected. Phase 4F made that
+   * substitution so there is exactly one model-facing Tool contract in the architecture, and so a value
+   * that reaches a provider request is never derived from runtime metadata.
+   */
+  modelSpecs(): readonly AIToolSpec[];
 }
 
 export interface RunControllerDependencies {

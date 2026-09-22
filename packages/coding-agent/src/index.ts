@@ -30,10 +30,12 @@
  * prompt snippets + the Context provider  usage guidance delivered through Context, not description
  * ```
  *
- * `@caelush/tools` keeps compatibility facades that delegate here. The dependency direction is one-way:
+ * `@caelush/tools` — the legacy Tool System package that once held a second implementation of every
+ * one of these — was removed in Phase 4F. The dependency direction this package participates in is
+ * one-way and permanent:
  *
  * ```text
- * @caelush/tools  ──delegates──▶  @caelush/coding-agent  ──▶  @caelush/agent  ──▶  @caelush/ai
+ * @caelush/coding-agent  ──▶  @caelush/agent  ──▶  @caelush/ai
  * ```
  */
 
@@ -45,13 +47,19 @@ export {
   CODING_TOOL_CATALOG_ERROR_REASONS,
   CODING_TOOL_EFFECTS_PAYLOAD_KIND,
   CODING_TOOL_PROMPT_SNIPPETS,
+  CodingSettlementExtensionError,
   codingToolEffectsPayload,
   CodingToolCatalogBuilder,
   CodingToolCatalogError,
   computeCodingToolApprovalKey,
   createApplyPatchTool,
+  createCodingToolAdmissionPort,
   createCodingToolCatalog,
+  createCodingToolDurableMetadataPort,
+  createCodingToolSettlementExtensionDecoder,
+  createCodingToolSettlementExtensionProjector,
   createDefaultCodingTools,
+  createDurableInvocationGatePort,
   createExecCommandTool,
   createFindFilesTool,
   createGitDiffTool,
@@ -66,10 +74,13 @@ export {
   createSearchTextTool,
   createToolPromptContextProvider,
   createWriteStdinTool,
+  decodeCodingToolEffects,
+  DEFAULT_CODING_APPROVAL_SCOPE,
   DEFAULT_CODING_TOOL_ORDER,
   DEFAULT_MAX_CODING_TOOLS,
   DEFAULT_TOOL_OUTPUT_POLICY,
   defineCodingTool,
+  deniedFeedback,
   effectsChangeAgentState,
   emptyToolSecurityFacts,
   errorResult,
@@ -131,6 +142,8 @@ export {
 } from "./tools/index.js";
 export type {
   CodingReadOnlyOperations,
+  CodingSettlementContext,
+  CodingToolAdmissionPortOptions,
   CodingToolApprovalIdentityInput,
   CodingToolCatalog,
   CodingToolCatalogBuilderOptions,
@@ -146,6 +159,7 @@ export type {
   CodingToolSecurityFactsProjector,
   CodingToolSecurityMetadata,
   DefaultCodingToolOperations,
+  GitToolAvailability,
   ExecOperations,
   FindFilesOperations,
   GitOperations,

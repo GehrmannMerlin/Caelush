@@ -5,15 +5,14 @@ import {
   ToolNameSchema,
   ToolInvocationSchema,
   type JsonObject,
-  type ToolDefinition,
 } from "@caelush/protocol";
-import {
-  assertToolSecurityContext,
-  type ToolExecutionGateDecision,
-  type ToolExecutionGateInput,
-  type ToolExecutionGatePort,
-  type ToolDefinitionMetadata,
-} from "@caelush/tools";
+import { assertToolSecurityContext } from "@caelush/agent";
+import type {
+  ToolDefinitionMetadata,
+  ToolExecutionGateDecision,
+  ToolExecutionGateInput,
+  ToolExecutionGatePort,
+} from "./tool-gate-types.js";
 import { SecurityPolicyInvariantError } from "./errors.js";
 import { evaluateSecurityPolicy } from "./evaluator.js";
 import { combineSecurityDecisions, type SecurityDecision } from "./decision.js";
@@ -190,35 +189,31 @@ function sanitizeStructuralPreview(value: JsonObject): JsonObject {
   return output;
 }
 
-function isToolDefinitionMetadata(
-  value: unknown,
-): value is ToolDefinitionMetadata | ToolDefinition {
+/**
+ * Refuse anything that is not exactly the four-field Tool policy metadata.
+ *
+ * The check is deliberately *exact*: four own properties on the canonical metadata shape, plus the
+ * Protocol schemas for every value. A partially-configured host that hands the gate a wider or
+ * narrower object gets an invariant failure rather than a policy decision made over fields the gate
+ * did not read.
+ *
+ * Phase 4F removed the second accepted arm. The gate used to also admit a legacy seven-field
+ * `protocol.ToolDefinition`, which existed only because the retired Tool System carried that shape to
+ * it. With that contract retired, `ToolGateMetadata` is the only shape the gate can be asked about,
+ * and the runtime check narrowed with it — the policy behaviour is unchanged, because the four fields
+ * it reads are the same four fields it always read.
+ */
+function isToolDefinitionMetadata(value: unknown): value is ToolDefinitionMetadata {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const definition = value as Record<string, unknown>;
-  const keys = Object.keys(definition);
-  const hasFullDefinition =
-    keys.length === 7 &&
-    Object.hasOwn(definition, "description") &&
-    Object.hasOwn(definition, "inputSchema") &&
-    Object.hasOwn(definition, "outputSchema");
-  const hasMetadata = keys.length === 4;
   return (
-    (hasFullDefinition || hasMetadata) &&
+    Object.keys(definition).length === 4 &&
     ToolNameSchema.safeParse(definition.name).success &&
     RiskLevelSchema.safeParse(definition.riskLevel).success &&
     Array.isArray(definition.requiredCapabilities) &&
     definition.requiredCapabilities.every(
       (capability) => CapabilitySchema.safeParse(capability).success,
     ) &&
-    JsonObjectSchema.safeParse(definition.runtimeRequirements).success &&
-    (!hasFullDefinition ||
-      (typeof definition.description === "string" &&
-        JsonObjectSchema.safeParse(definition.inputSchema).success &&
-        JsonObjectSchema.safeParse(definition.outputSchema).success))
+    JsonObjectSchema.safeParse(definition.runtimeRequirements).success
   );
 }
-
-export type SecurityToolDefinition = Pick<
-  ToolDefinition,
-  "name" | "riskLevel" | "requiredCapabilities" | "runtimeRequirements"
->;

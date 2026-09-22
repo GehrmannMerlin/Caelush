@@ -17,8 +17,8 @@ import {
   createToolObservation,
   startToolInvocation,
   ToolExecutionConflictError,
-  type ToolEffect,
-} from "@caelush/tools";
+} from "@caelush/agent";
+import type { ToolEffect } from "@caelush/coding-agent";
 import { openCaelushStorage, type ToolSettlementExtensionDecoder } from "../src/index.js";
 import { makeState, makeStep } from "./support/fixtures.js";
 import {

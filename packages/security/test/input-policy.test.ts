@@ -1,8 +1,20 @@
 import { describe, expect, it } from "vitest";
-import type { ToolSecurityFacts } from "@caelush/tools";
+import type { ToolSecurityFacts } from "@caelush/coding-agent";
 import { evaluateInputSecurityPolicy } from "../src/index.js";
 
-const facts = (path: string, operation: "READ" | "WRITE" = "READ"): ToolSecurityFacts => ({
+/**
+ * The facts this fixture builds, named with the canonical Coding vocabulary.
+ *
+ * It is the single-path subset of `ToolSecurityFacts` — the two fields the input policy reads for a
+ * path (`shellCommand`, `structuralPreview` and `opaqueInput` are what a Tool's own projector adds and
+ * are covered by the Gate suite). Naming the subset is also what keeps the fixture assignable to the
+ * policy's structural input type: the Coding vocabulary types `structuralPreview` with the AI core's
+ * `JsonObject` and the policy types it with Protocol's, and only a value that carries the field would
+ * have to reconcile the two.
+ */
+type SinglePathFacts = Pick<ToolSecurityFacts, "resourceAccesses" | "secretScanInputs">;
+
+const facts = (path: string, operation: "READ" | "WRITE" = "READ"): SinglePathFacts => ({
   resourceAccesses: [{ operation, path }],
   secretScanInputs: [],
 });

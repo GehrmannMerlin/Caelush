@@ -108,14 +108,11 @@ function makeInput(root: string): AgentLoopCommonInput {
     signal: new AbortController().signal,
     cwd: root,
     tools: [
+      // The model-facing catalog a Run Layer passes the loop: `AIToolSpec`, three fields.
       {
         name: "read_file",
         description: "Read a project file.",
         inputSchema: { type: "object" },
-        outputSchema: { type: "string" },
-        riskLevel: "LOW",
-        requiredCapabilities: ["FS_READ"],
-        runtimeRequirements: {},
       },
     ],
   };

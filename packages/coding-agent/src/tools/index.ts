@@ -8,15 +8,14 @@
  *                         prompt snippets
  * ```
  *
- * Phase 4E moved the Coding Tool *business authority* here. The nine builtins, the default order, the
- * Operations ports, the Runtime adapters, the security facts, the effects and the prompt snippets are
- * this package's; `@caelush/tools` keeps compatibility facades that delegate here and owns no algorithm
- * of its own.
+ * Phase 4E moved the Coding Tool *business authority* here. Phase 4F removed `@caelush/tools`, the
+ * legacy package whose remaining modules were compatibility facades over this one and owned no
+ * algorithm of their own.
  *
  * The dependency direction is one-way and permanent:
  *
  * ```text
- * @caelush/tools  ──delegates──▶  @caelush/coding-agent  ──▶  @caelush/agent  ──▶  @caelush/ai
+ * @caelush/coding-agent  ──▶  @caelush/agent  ──▶  @caelush/ai
  * ```
  */
 
@@ -98,7 +97,7 @@ export {
   GIT_TOOL_NAMES,
   withoutGitTools,
 } from "./builtins/default-tools.js";
-export type { DefaultCodingToolOperations } from "./builtins/default-tools.js";
+export type { DefaultCodingToolOperations, GitToolAvailability } from "./builtins/default-tools.js";
 export { defineCodingTool, humanizeToolName } from "./builtins/define-coding-tool.js";
 export { asOverlayEffectProjector, asOverlaySecurityFactsProjector } from "./builtins/result.js";
 export type { CodingToolDefinitionInput } from "./builtins/define-coding-tool.js";
@@ -160,6 +159,34 @@ export type {
 export { computeCodingToolApprovalKey } from "./security/approval-identity.js";
 export type { CodingToolApprovalIdentityInput } from "./security/approval-identity.js";
 
+/**
+ * The Security admission boundary and the durable metadata projection.
+ *
+ * ```text
+ * generic admission contract        @caelush/agent
+ * Coding metadata projection        here
+ * concrete security policy          @caelush/security
+ * host composition                  the composition root
+ * ```
+ */
+export {
+  createCodingToolAdmissionPort,
+  createCodingToolDurableMetadataPort,
+  createDurableInvocationGatePort,
+  DEFAULT_CODING_APPROVAL_SCOPE,
+  deniedFeedback,
+} from "./admission/tool-admission-port.js";
+export type { CodingToolAdmissionPortOptions } from "./admission/tool-admission-port.js";
+
+/** The Coding settlement extension: the encoder and the decoder, both owned here. */
+export {
+  CodingSettlementExtensionError,
+  createCodingToolSettlementExtensionDecoder,
+  decodeCodingToolEffects,
+} from "./settlement/settlement-extension.js";
+export { createCodingToolSettlementExtensionProjector } from "./settlement/settlement-extension-projector.js";
+export type { CodingSettlementContext } from "./settlement/settlement-extension-projector.js";
+
 /* Coding effects: the vocabulary and its three projections. */
 export {
   CODING_TOOL_EFFECTS_PAYLOAD_KIND,
@@ -183,8 +210,7 @@ export type {
   ToolEffectEventContext,
 } from "./effects/event-projector.js";
 
-/* Prompt snippets and the prompt context provider. */
-export {
+/* Prompt snippets and the prompt context provider. */ export {
   APPLY_PATCH_PROMPT_SNIPPET,
   CODING_TOOL_PROMPT_SNIPPETS,
   EXEC_COMMAND_PROMPT_SNIPPET,

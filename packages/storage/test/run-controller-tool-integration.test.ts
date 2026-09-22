@@ -2,94 +2,145 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AIToolSpec } from "@caelush/ai";
 import {
   AgentRunSchema,
   createApprovalRequestId,
   createEventId,
   createLLMCallId,
-  createObservationId,
   createRunId,
   createSessionId,
   createStepId,
   createTimestampMs,
   createToolInvocationId,
   createWorkspaceId,
-  type ToolDefinition,
+  type TimestampMs,
+  type ToolInvocationId,
 } from "@caelush/protocol";
 import {
   RunController,
   RunDeadlineRegistry,
   RunRetryRegistry,
+  toContextObservationProjection,
   type AIModelTurnResult,
 } from "@caelush/core";
 import { EventBus } from "@caelush/events";
 
 import {
-  ToolDispatcher,
-  ToolRegistryBuilder,
-  createFileMutationToolRegistrations,
-  createReadOnlyFilesystemToolRegistrations,
-  createRequestedToolInvocation,
-  startToolInvocation,
-  type ToolCommittedEventNotifier,
-  type ToolExecutionCommit,
-  type ToolExecutionRequest,
-  type ToolExecutionResult,
-  type ToolExecutionGatePort,
-  createToolExecutionDependencies,
-} from "@caelush/tools";
-import {
   createModelToolFeedbackProjector,
-  createToolBatchCoordinator,
-  createToolCallPreparer,
+  createRequestedToolInvocation,
+  createToolAdmissionCoordinator,
   createToolResultBatchNormalizer,
+  createToolResultPipeline,
+  startToolInvocation,
+  DefaultAgentToolRegistryBuilder,
   UNBOUNDED_TOOL_BUDGET_ADMISSION,
+  type AgentTool,
+  type AgentToolRegistry,
+  type ToolAdmissionCoordinator,
   type ToolBatchCoordinator,
+  type ToolExecutionCommit,
+  type ToolExecutionGatePort,
 } from "@caelush/agent";
-import { toContextObservationProjection } from "@caelush/core";
+import {
+  createCodingToolAdmissionPort,
+  createCodingToolCatalog,
+  createCodingToolDurableMetadataPort,
+  createCodingToolSettlementExtensionProjector,
+  createDefaultCodingTools,
+  createDurableInvocationGatePort,
+  createRuntimeGitOperations,
+  createRuntimePatchOperations,
+  createRuntimeProcessOperations,
+  createRuntimeReadOnlyOperations,
+  type CodingToolCatalog,
+  type CodingToolDefinition,
+  type DefaultCodingToolOperations,
+} from "@caelush/coding-agent";
 import { describe, expect, it } from "vitest";
 import { LocalRuntime, createLocalRuntimeResolver } from "@caelush/runtime";
 import type { CaelushStorage } from "../src/index.js";
 import { verificationPlanner } from "./support/fixtures.js";
 import { openToolStorage } from "./support/tool-settlement-decoder.js";
-import { CaelushToolExecutionGate } from "@caelush/security";
+import { CaelushToolExecutionGate, createV1ToolApprovalRequestFactory } from "@caelush/security";
 import { aiError, modelTurnResult } from "./support/model-turns.js";
+import { createCanonicalToolRuntime } from "./support/canonical-tool-runtime.js";
 import {
   fakeFrozenModelTurnExecutor,
   testRunAgentExecution,
 } from "./support/run-agent-execution.js";
 
-const definitions = [
-  {
-    name: "echo_value" as const,
+/**
+ * The two fixture Tools, as canonical `AgentTool`s plus their Coding overlay.
+ *
+ * ```text
+ * echo_value       LOW    a plain Tool, always admissible
+ * approval_value   HIGH   the Tool the policy stops at approval
+ * ```
+ *
+ * The executable half is a general `AgentTool` and carries no risk level; the risk level is Coding
+ * overlay metadata and travels on the `CodingToolDefinition`, exactly as it does for a builtin.
+ */
+function fixtureDefinitions(execute: AgentTool["execute"]): readonly CodingToolDefinition[] {
+  const echo: AgentTool = {
+    name: "echo_value",
     description: "Echo a value.",
     inputSchema: { type: "object", additionalProperties: false },
-    outputSchema: {
+    label: "Echo value",
+    resultDetailsSchema: {
       type: "object",
       properties: { value: { type: "string" }, secret: { type: "string" } },
       required: [],
       additionalProperties: false,
     },
-    riskLevel: "LOW" as const,
-    requiredCapabilities: [],
-    runtimeRequirements: {},
-  },
-  {
-    name: "approval_value" as const,
+    executionMode: "SEQUENTIAL",
+    execute,
+  };
+  const approval: AgentTool = {
+    name: "approval_value",
     description: "Requires approval.",
     inputSchema: { type: "object", additionalProperties: false },
-    outputSchema: {
+    label: "Approval value",
+    resultDetailsSchema: {
       type: "object",
       properties: { value: { type: "string" } },
       required: [],
       additionalProperties: false,
     },
-    riskLevel: "HIGH" as const,
-    requiredCapabilities: [],
-    runtimeRequirements: {},
-  },
-];
+    executionMode: "SEQUENTIAL",
+    execute,
+  };
+  return Object.freeze([
+    {
+      tool: echo,
+      security: { riskLevel: "LOW", requiredCapabilities: [], runtimeRequirements: {} },
+    },
+    {
+      tool: approval,
+      security: { riskLevel: "HIGH", requiredCapabilities: [], runtimeRequirements: {} },
+    },
+  ]);
+}
+
+/** Every host here admits every call unless it says otherwise. */
+const ALLOW_ALL: ToolExecutionGatePort = { decide: async () => ({ kind: "ALLOW" as const }) };
+
+/** A fixture policy: one named Tool requires review, every other Tool is admitted. */
+function approvalFor(toolName: string): ToolExecutionGatePort {
+  return {
+    decide: async ({ toolName: called }) => ({
+      kind: called === toolName ? ("REQUIRE_APPROVAL" as const) : ("ALLOW" as const),
+    }),
+  };
+}
+
+/** The Tools the legacy read-only and file-mutation registrations used to produce, in Coding order. */
+const FILESYSTEM_TOOL_NAMES = Object.freeze([
+  "read_file",
+  "list_directory",
+  "find_files",
+  "search_text",
+  "apply_patch",
+] as const);
 
 function makeRun(
   pathname: string,
@@ -146,138 +197,172 @@ async function seedRun(storage: CaelushStorage, run: ReturnType<typeof makeRun>)
 }
 
 /**
- * The canonical Tool turn pipeline over one already-composed `ToolDispatcher`.
+ * The Coding/Security admission over the real durable store.
  *
  * ```text
- * the dispatcher's own DurableToolExecutionCoordinator   the 4C invocation lifecycle
- *        ↓
- * createToolBatchCoordinator                            the 4D scheduler
- * createModelToolFeedbackProjector                      the 4D model-facing exit
- * createToolResultBatchNormalizer                       the 4D integrity defense
+ * createCodingToolAdmissionPort        the Coding catalog's risk metadata + facts projector
+ *        ↓ over
+ * createDurableInvocationGatePort      the durable Invocation the Security gate validates against
+ *        ↓ around
+ * the host's gate                      the real CaelushToolExecutionGate, or a fixture policy
  * ```
  *
- * The dispatcher is built first and its canonical durable coordinator is *reused* rather than
- * reconstructed: one store, one coordinator, one in-process call guard. The canonical batch is what the
- * Run Layer drives; the legacy facade still exists beside it for the direct API tests.
+ * The durable-invocation wrapper is what the production composition root uses, and it is load-bearing
+ * here: the Security gate requires the invocation it is handed to agree with the policy metadata on
+ * Tool name and risk level, and the durable row — written from the Coding catalog — is the value that
+ * agrees.
  */
-function canonicalPipeline(
-  dispatcher: ToolDispatcher,
-  registry: ReturnType<ToolRegistryBuilder["build"]>,
-): ToolBatchCoordinator {
-  return createToolBatchCoordinator({
-    preparer: createToolCallPreparer(registry.agentRegistry()),
+function createCodingAdmission(input: {
+  readonly storage: CaelushStorage;
+  readonly registry: AgentToolRegistry;
+  readonly catalog: CodingToolCatalog;
+  readonly gate: ToolExecutionGatePort;
+  readonly clock: { now(): TimestampMs };
+}): ToolAdmissionCoordinator {
+  return createToolAdmissionCoordinator({
+    policy: createCodingToolAdmissionPort({
+      gate: createDurableInvocationGatePort({
+        gate: input.gate,
+        invocations: {
+          resolve: async ({ invocationId }) =>
+            (await input.storage.toolExecution.load(invocationId as ToolInvocationId))?.invocation,
+        },
+      }),
+      registry: input.registry,
+      catalog: input.catalog,
+      approvalPresentation: (decision) => decision.safeAction,
+    }),
+    approvals: input.storage.approvals,
+    approvalRequests: createV1ToolApprovalRequestFactory({
+      registry: input.registry,
+      catalog: input.catalog,
+      gate: input.gate,
+      approvalIdFactory: { create: createApprovalRequestId },
+    }),
     budget: UNBOUNDED_TOOL_BUDGET_ADMISSION,
-    durable: dispatcher.durableCoordinator(),
-    registry: registry.agentRegistry(),
+    clock: input.clock,
+    eventIdFactory: { create: createEventId },
   });
 }
 
 /** The three canonical authorities, as the Run Layer receives them. */
 function canonicalToolTurn(runtime: {
-  readonly coordinator: ToolBatchCoordinator;
-  readonly registry: ReturnType<ToolRegistryBuilder["build"]>;
+  readonly batch: ToolBatchCoordinator;
+  readonly registry: AgentToolRegistry;
 }) {
   return {
-    batches: runtime.coordinator,
+    batches: runtime.batch,
     feedback: createModelToolFeedbackProjector({
       projection: toContextObservationProjection(),
     }),
     normalizer: createToolResultBatchNormalizer(),
-    // The model-facing catalog comes from the registry that resolves execution: one registry, never two.
-    modelDefinitions: () => runtime.registry.modelDefinitions(),
+    // The model-facing catalog comes from the registry that resolves execution: one registry, never
+    // two, read in the registry's own `modelSpecs()` form rather than projected down to it.
+    modelSpecs: () => runtime.registry.modelSpecs(),
   };
+}
+
+/** Compose one immutable registry, its Coding overlay and the canonical durable Tool pipeline. */
+function createCanonicalRuntime(
+  storage: CaelushStorage,
+  eventBus: EventBus,
+  definitions: readonly CodingToolDefinition[],
+  gate: ToolExecutionGatePort,
+  initialNow: number,
+) {
+  const builder = new DefaultAgentToolRegistryBuilder();
+  for (const definition of definitions) builder.register(definition.tool);
+  const registry = builder.build();
+  const catalog = createCodingToolCatalog({ registry, definitions });
+  let now = initialNow;
+  const runtime = createCanonicalToolRuntime({
+    storage,
+    registry,
+    notifier: eventBus,
+    clock: { now: () => createTimestampMs(++now) },
+    admission: createCodingAdmission({
+      storage,
+      registry,
+      catalog,
+      gate,
+      clock: { now: () => createTimestampMs(++now) },
+    }),
+    // The durable row's risk level comes from the Coding catalog, which is the authority that owns it —
+    // the same value the Security gate validates the invocation against.
+    metadata: createCodingToolDurableMetadataPort({ registry, catalog }),
+    // The Coding settlement extension, exactly as the daemon composition builds it: the effect
+    // vocabulary belongs to the Coding layer, and the host-domain events an effect implies are drawn
+    // from the same event identity factory as the terminal event they accompany.
+    resultPipelineFactory: ({ invocation, environment, sessionId }) =>
+      createToolResultPipeline({
+        settlementExtension: createCodingToolSettlementExtensionProjector({
+          catalog,
+          invocation: {
+            invocation,
+            ...(sessionId === undefined ? {} : { sessionId }),
+            environment,
+            nextEventId: () => createEventId(),
+          },
+        }),
+      }),
+  });
+  return { runtime, registry, catalog };
 }
 
 function createRuntime(
   storage: CaelushStorage,
   eventBus: EventBus,
-  execute: (request: ToolExecutionRequest) => Promise<ToolExecutionResult>,
-  gate: (toolName: string) => "ALLOW" | "REQUIRE_APPROVAL" = () => "ALLOW",
+  execute: AgentTool["execute"],
+  gate: ToolExecutionGatePort = ALLOW_ALL,
   initialNow = Date.now(),
 ) {
-  const builder = new ToolRegistryBuilder();
-  for (const definition of definitions) builder.register({ definition, handler: { execute } });
-  const registry = builder.build();
-  const notifier: ToolCommittedEventNotifier = {
-    notifyCommitted: (events) => eventBus.notifyCommitted(events),
-  };
-  let now = initialNow;
-  const dispatcher = new ToolDispatcher({
-    registry,
-    store: storage.toolExecution,
-    gate: { decide: async ({ toolName }) => ({ kind: gate(toolName) }) },
-    notifier,
-    clock: { now: () => createTimestampMs(++now) },
-    invocationIdFactory: { create: createToolInvocationId },
-    observationIdFactory: { create: createObservationId },
-    eventIdFactory: { create: createEventId },
-    execution: createToolExecutionDependencies({ registry: builder.build() }),
-    approvalStore: storage.approvals,
-    approvalIdFactory: { create: createApprovalRequestId },
-  });
+  const composed = createCanonicalRuntime(
+    storage,
+    eventBus,
+    fixtureDefinitions(execute),
+    gate,
+    initialNow,
+  );
   return {
-    dispatcher,
-    coordinator: canonicalPipeline(dispatcher, registry),
-    registry,
+    runtime: composed.runtime,
+    dispatcher: composed.runtime.coordinator,
+    batch: composed.runtime.batch,
+    registry: composed.registry,
   };
 }
 
 function createFilesystemRuntime(
   storage: CaelushStorage,
   eventBus: EventBus,
-  gate: ToolExecutionGatePort = { decide: async () => ({ kind: "ALLOW" as const }) },
+  gate: ToolExecutionGatePort = ALLOW_ALL,
+  initialNow = Date.now(),
 ) {
   const runtimeResolver = createLocalRuntimeResolver(new LocalRuntime());
-  const builder = new ToolRegistryBuilder();
-  for (const registration of createReadOnlyFilesystemToolRegistrations(runtimeResolver)) {
-    builder.register(registration);
-  }
-  for (const registration of createFileMutationToolRegistrations(runtimeResolver)) {
-    builder.register(registration);
-  }
-  const registry = builder.build();
-  const notifier: ToolCommittedEventNotifier = {
-    notifyCommitted: (events) => eventBus.notifyCommitted(events),
+  const readOnly = createRuntimeReadOnlyOperations(runtimeResolver);
+  const operations: DefaultCodingToolOperations = {
+    readFile: readOnly,
+    readOnly,
+    patch: createRuntimePatchOperations(runtimeResolver),
+    exec: createRuntimeProcessOperations(runtimeResolver),
+    process: createRuntimeProcessOperations(runtimeResolver),
+    git: createRuntimeGitOperations(runtimeResolver),
   };
-  let now = Date.now();
-  const dispatcher = new ToolDispatcher({
-    registry,
-    store: storage.toolExecution,
-    gate,
-    notifier,
-    clock: { now: () => createTimestampMs(++now) },
-    invocationIdFactory: { create: createToolInvocationId },
-    observationIdFactory: { create: createObservationId },
-    eventIdFactory: { create: createEventId },
-    execution: createToolExecutionDependencies({ registry }),
-    approvalStore: storage.approvals,
-    approvalIdFactory: { create: createApprovalRequestId },
-  });
+  // The legacy suite composed the read-only registrations plus the file-mutation one: the four read
+  // Tools and `apply_patch`, in the Coding order. Selecting those by name from the one declaration of
+  // the default set is what keeps this subset and the Coding catalog describing the same five Tools.
+  const selected = new Set<string>(FILESYSTEM_TOOL_NAMES);
+  const definitions = createDefaultCodingTools(operations).filter((definition) =>
+    selected.has(definition.tool.name),
+  );
+  expect(definitions.map((definition) => definition.tool.name)).toEqual([...FILESYSTEM_TOOL_NAMES]);
+  const composed = createCanonicalRuntime(storage, eventBus, definitions, gate, initialNow);
   return {
-    dispatcher,
-    coordinator: canonicalPipeline(dispatcher, registry),
-    registry,
+    runtime: composed.runtime,
+    dispatcher: composed.runtime.coordinator,
+    batch: composed.runtime.batch,
+    registry: composed.registry,
+    catalog: composed.catalog,
   };
-}
-
-/**
- * The model-facing projection of a Tool catalog.
- *
- * Phase 2C routes the request through the AI core, and the AI core accepts only
- * `{name, description, inputSchema}`. `outputSchema`, `riskLevel`,
- * `requiredCapabilities` and `runtimeRequirements` are runtime metadata and must never
- * reach a provider request, so the expectation is built by projecting them away.
- *
- * Under Phase 3C checkpoint 6 the projection is also what the Run Layer hands the provider:
- * `RunAgentExecutionContext.tools` is this exact data-only catalog, and the Tool Layer resolves
- * execution from the same immutable registry.
- */
-function modelFacing(definitions: readonly ToolDefinition[]): readonly AIToolSpec[] {
-  return definitions.map(({ name, description, inputSchema }) => ({
-    name,
-    description,
-    inputSchema,
-  }));
 }
 
 function createController(
@@ -285,8 +370,8 @@ function createController(
   eventBus: EventBus,
   turns: Array<AIModelTurnResult | Error>,
   runtime?: {
-    readonly coordinator: ToolBatchCoordinator;
-    readonly registry: ReturnType<ToolRegistryBuilder["build"]>;
+    readonly batch: ToolBatchCoordinator;
+    readonly registry: AgentToolRegistry;
   },
   observedRequests: Array<{ tools?: unknown; messages: readonly unknown[] }> = [],
   initialNow = 10,
@@ -305,7 +390,7 @@ function createController(
     }),
     // The model-visible catalog comes from the same registry that resolves execution, exactly as the
     // production composition root derives it from the active Tool registry.
-    ...(runtime === undefined ? {} : { tools: modelFacing(runtime.registry.modelDefinitions()) }),
+    ...(runtime === undefined ? {} : { tools: runtime.registry.modelSpecs() }),
     createStepId: () => createStepId(),
   });
   return new RunController({
@@ -352,7 +437,7 @@ describe("RunController automatic Tool Batch integration", () => {
     await seedRun(storage, run);
     const eventBus = new EventBus(storage.events);
     const toolCalls: string[] = [];
-    const runtime = createRuntime(storage, eventBus, async ({ externalCallId }) => {
+    const runtime = createRuntime(storage, eventBus, async ({ identity: { externalCallId } }) => {
       toolCalls.push(externalCallId);
       return { content: "tool-result", details: {}, isError: false };
     });
@@ -467,7 +552,7 @@ describe("RunController automatic Tool Batch integration", () => {
       const result = await controller.start(run.id);
 
       expect(result.status).toBe("AWAITING_VERIFICATION");
-      expect(observed[0]?.tools).toEqual(modelFacing(runtime.registry.modelDefinitions()));
+      expect(observed[0]?.tools).toEqual(runtime.registry.modelSpecs());
       expect(observed[1]?.messages.slice(-4)).toEqual([
         expect.objectContaining({ toolCallId: "call-list", isError: false }),
         expect.objectContaining({
@@ -663,7 +748,7 @@ describe("RunController automatic Tool Batch integration", () => {
     const order: string[] = [];
     let active = 0;
     let maxActive = 0;
-    const runtime = createRuntime(storage, eventBus, async ({ externalCallId }) => {
+    const runtime = createRuntime(storage, eventBus, async ({ identity: { externalCallId } }) => {
       active += 1;
       maxActive = Math.max(maxActive, active);
       order.push(`start:${externalCallId}`);
@@ -701,7 +786,7 @@ describe("RunController automatic Tool Batch integration", () => {
     expect(order).toEqual(["start:call-A", "finish:call-A", "start:call-B", "finish:call-B"]);
     expect(maxActive).toBe(1);
     expect(observed).toHaveLength(2);
-    expect(observed[0]?.tools).toEqual(modelFacing(runtime.registry.modelDefinitions()));
+    expect(observed[0]?.tools).toEqual(runtime.registry.modelSpecs());
     expect(observed[1]?.messages.slice(-2)).toEqual([
       {
         role: "tool",
@@ -747,11 +832,11 @@ describe("RunController automatic Tool Batch integration", () => {
     const runtime = createRuntime(
       storage,
       eventBus,
-      async ({ externalCallId }) => {
+      async ({ identity: { externalCallId } }) => {
         calls.push(externalCallId);
         return { content: externalCallId, details: {}, isError: false };
       },
-      (toolName) => (toolName === "approval_value" ? "REQUIRE_APPROVAL" : "ALLOW"),
+      approvalFor("approval_value"),
     );
     const controller = createController(
       storage,
@@ -821,11 +906,11 @@ describe("RunController automatic Tool Batch integration", () => {
     const runtime = createRuntime(
       storage,
       eventBus,
-      async ({ externalCallId }) => {
+      async ({ identity: { externalCallId } }) => {
         calls.push(externalCallId);
         return { content: externalCallId, details: {}, isError: false };
       },
-      (toolName) => (toolName === "approval_value" ? "REQUIRE_APPROVAL" : "ALLOW"),
+      approvalFor("approval_value"),
     );
     const controller = createController(
       storage,
@@ -874,11 +959,11 @@ describe("RunController automatic Tool Batch integration", () => {
     const runtime = createRuntime(
       storage,
       eventBus,
-      async ({ externalCallId }) => {
+      async ({ identity: { externalCallId } }) => {
         calls.push(externalCallId);
         return { content: externalCallId, details: {}, isError: false };
       },
-      (toolName) => (toolName === "approval_value" ? "REQUIRE_APPROVAL" : "ALLOW"),
+      approvalFor("approval_value"),
       baseNow,
     );
     const observed: Array<{ tools?: unknown; messages: unknown[] }> = [];
@@ -940,7 +1025,7 @@ describe("RunController automatic Tool Batch integration", () => {
     await seedRun(storage, run);
     const eventBus = new EventBus(storage.events);
     const calls: string[] = [];
-    const runtime = createRuntime(storage, eventBus, async ({ externalCallId }) => {
+    const runtime = createRuntime(storage, eventBus, async ({ identity: { externalCallId } }) => {
       calls.push(externalCallId);
       return { content: externalCallId, details: {}, isError: false };
     });
@@ -980,7 +1065,7 @@ describe("RunController automatic Tool Batch integration", () => {
     await seedRun(storage, run);
     const eventBus = new EventBus(storage.events);
     const calls: string[] = [];
-    const runtime = createRuntime(storage, eventBus, async ({ externalCallId }) => {
+    const runtime = createRuntime(storage, eventBus, async ({ identity: { externalCallId } }) => {
       calls.push(externalCallId);
       return { content: "known result", details: {}, isError: false };
     });
@@ -1025,7 +1110,7 @@ describe("RunController automatic Tool Batch integration", () => {
     await seedRun(storage, run);
     const eventBus = new EventBus(storage.events);
     const calls: string[] = [];
-    const runtime = createRuntime(storage, eventBus, async ({ externalCallId }) => {
+    const runtime = createRuntime(storage, eventBus, async ({ identity: { externalCallId } }) => {
       calls.push(externalCallId);
       if (externalCallId === "call-B") throw new Error("handler-secret");
       return { content: "A", details: {}, isError: false };
@@ -1106,7 +1191,7 @@ describe("RunController automatic Tool Batch integration", () => {
       async () => {
         throw new Error("accepted Tool Results must not redispatch");
       },
-      () => "ALLOW",
+      ALLOW_ALL,
       200,
     );
     const observed: Array<{ tools?: unknown; messages: unknown[] }> = [];
@@ -1152,7 +1237,7 @@ describe("RunController automatic Tool Batch integration", () => {
         firstCalls += 1;
         return { content: "A", details: {}, isError: false };
       },
-      () => "ALLOW",
+      ALLOW_ALL,
       100,
     );
     const firstController = createController(firstStorage, firstBus, [
@@ -1170,17 +1255,21 @@ describe("RunController automatic Tool Batch integration", () => {
     expect(waiting.status).toBe("WAITING_TOOL_RESULTS");
     if (waiting.status !== "WAITING_TOOL_RESULTS") throw new Error("expected waiting boundary");
     const sourceStepId = waiting.sourceStepId;
-    const firstA = await firstRuntime.dispatcher.dispatch({
-      sessionId: run.sessionId,
+    // The first call is executed durably and settles normally: recovery must reuse its terminal row.
+    const firstA = await firstRuntime.runtime.coordinator.execute({
       runId: run.id,
-      stepId: sourceStepId,
-      externalCallId: "call-A",
-      toolName: "echo_value",
-      args: {},
+      sessionId: run.sessionId,
+      sourceStepId,
+      call: firstRuntime.runtime.prepare({
+        externalCallId: "call-A",
+        toolName: "echo_value",
+        args: {},
+      }),
       environment: { workspace: run.workspace, runtime: run.runtime },
       securityContext: { permissionProfile: "READ_ONLY", approvalPolicy: "DANGEROUS_ONLY" },
+      signal: new AbortController().signal,
     });
-    expect(firstA.kind).toBe("RESULT");
+    expect(firstA.kind).toBe("SETTLED");
     const running = startToolInvocation(
       createRequestedToolInvocation({
         id: createToolInvocationId(),
@@ -1212,7 +1301,7 @@ describe("RunController automatic Tool Batch integration", () => {
       async () => {
         throw new Error("no recovered Tool may execute");
       },
-      () => "ALLOW",
+      ALLOW_ALL,
       300,
     );
     const controller = createController(

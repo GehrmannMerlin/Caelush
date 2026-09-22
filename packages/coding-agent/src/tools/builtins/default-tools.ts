@@ -113,6 +113,21 @@ export function createDefaultCodingTools(
 export const GIT_TOOL_NAMES = Object.freeze(["git_status", "git_diff"] as const);
 
 /**
+ * What a host knows about Git for the workspace it is composing Tools for.
+ *
+ * ```text
+ * AVAILABLE     a repository was proven to work; the nine-Tool default is offered
+ * UNAVAILABLE   no repository, or Git does not work here; the Git Tools are not offered
+ * UNKNOWN       the host could not prove it; treated exactly like UNAVAILABLE
+ * ```
+ *
+ * `UNKNOWN` failing closed is the whole point: a host that cannot prove Git works must not offer a
+ * model a Tool that will fail. It is declared here rather than in a host because the *set* it selects
+ * is a Coding product decision, and the composition root is what reads the capability.
+ */
+export type GitToolAvailability = "AVAILABLE" | "UNAVAILABLE" | "UNKNOWN";
+
+/**
  * The default nine minus the Git Tools, for a host whose Git availability is not `AVAILABLE`.
  *
  * Git exposure fails closed: `UNKNOWN` is treated exactly like `UNAVAILABLE`, because a host that cannot

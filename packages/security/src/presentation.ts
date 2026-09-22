@@ -1,10 +1,10 @@
 import type { ToolInvocation } from "@caelush/protocol";
 import type {
-  ToolExecutionResult,
+  AgentToolExecutionResult,
   ToolInvocationPresentation,
   ToolPresentationPort,
   ToolResultPresentation,
-} from "@caelush/tools";
+} from "@caelush/agent";
 import { redactText } from "./secret-redaction.js";
 import { classifySensitivePath, normalizeWorkspaceFactPath } from "./sensitive-path.js";
 import { CaelushToolResultSanitizer } from "./tool-result-sanitizer.js";
@@ -48,7 +48,7 @@ export class CaelushToolPresentation implements ToolPresentationPort {
 
   presentResult(input: {
     readonly invocation: ToolInvocation;
-    readonly result?: ToolExecutionResult;
+    readonly result?: AgentToolExecutionResult;
   }): ToolResultPresentation {
     const title = TOOL_LABELS[input.invocation.toolName] ?? "Use tool";
     if (input.result === undefined) return { title, summary: "Tool finished" };
@@ -133,7 +133,7 @@ export class CaelushToolPresentation implements ToolPresentationPort {
     }
   }
 
-  private resultSummary(invocation: ToolInvocation, result: ToolExecutionResult): string {
+  private resultSummary(invocation: ToolInvocation, result: AgentToolExecutionResult): string {
     const args = invocation.args;
     if (invocation.toolName === "read_file") {
       const path = safePath(args.path);

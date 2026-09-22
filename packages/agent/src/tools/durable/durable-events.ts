@@ -29,9 +29,9 @@ import type { AgentToolResult } from "../types/tool-result.js";
  * approval.requested    a durable ApprovalRequest was created with its waiting invocation
  * ```
  *
- * Phase 4C moved these factories here from `packages/tools/src/event-factory.ts`, because the layer
- * that performs a durable commit is the layer that must state what it is committing. The legacy module
- * is now a re-export facade.
+ * Phase 4C moved these factories here from the legacy Tool System, because the layer that performs a
+ * durable commit is the layer that must state what it is committing. Phase 4F then removed the package
+ * that used to re-export them, so this module is their only declaration.
  *
  * ## Events are built from committed values only
  *

@@ -21,7 +21,8 @@ import { ToolExecutionInvariantError } from "./durable-errors.js";
  * ToolObservation    what the model and the host may see about it
  * ```
  *
- * Phase 4C moved the canonical factory and invariant here from `packages/tools/src/observation.ts`.
+ * Phase 4C moved the canonical factory and invariant here from the legacy Tool System. Phase 4F then
+ * removed the package that used to re-export them, so this module is their only declaration.
  * The legacy module is now a re-export facade, so there is one observation factory in the repository.
  *
  * ## An observation is derived, never authored

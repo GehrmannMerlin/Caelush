@@ -1,5 +1,5 @@
 import type { RunId, StepId } from "@caelush/protocol";
-import type { ToolExecutionStorePort } from "@caelush/tools";
+import type { ToolExecutionStorePort } from "@caelush/agent";
 
 /**
  * Where a Tool's raw output pointer is resolved from, durably.

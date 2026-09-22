@@ -1,5 +1,5 @@
 import type { ApprovalPolicy, PermissionProfile } from "@caelush/protocol";
-import type { ToolSecurityFacts } from "@caelush/tools";
+import type { ToolGateSecurityFacts } from "./tool-gate-types.js";
 import { analyzeCommand, type CommandClassification } from "./command-policy.js";
 import {
   classifySensitivePath,
@@ -25,7 +25,7 @@ export interface InputSecurityContext {
 }
 
 export function evaluateInputSecurityPolicy(
-  facts: ToolSecurityFacts,
+  facts: ToolGateSecurityFacts,
   context: InputSecurityContext,
 ): InputSecurityAssessment {
   const categories = new Set<SensitivePathCategory>();
@@ -115,7 +115,7 @@ function reviewOrDeny(
 }
 
 function analyzeShellCommand(
-  fact: NonNullable<ToolSecurityFacts["shellCommand"]>,
+  fact: NonNullable<ToolGateSecurityFacts["shellCommand"]>,
 ): readonly CommandClassification[] {
   const classifications = new Set<CommandClassification>();
   for (const platform of ["POSIX_SH", "POWERSHELL", "CMD"] as const) {

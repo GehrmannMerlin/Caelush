@@ -2,10 +2,10 @@ import type {
   AgentToolResult,
   ModelObservationBatchProjector,
   ModelObservationCandidate,
+  ToolExecutionSnapshot,
 } from "@caelush/agent";
 import { LLMToolResultMessageSchema, type LLMToolResultMessage } from "@caelush/llm/messages";
 import type { AgentToolRequest } from "./agent-decision.js";
-import type { ToolBatchItemResult } from "@caelush/tools";
 import { ToolBatchResultConversionError } from "./agent-errors.js";
 import {
   projectToolObservationBatch,
@@ -80,28 +80,34 @@ export function toContextObservationProjection(): ModelObservationBatchProjector
 }
 
 /**
- * Project one legacy Tool batch onto the frozen model-facing Tool results.
+ * Project one settled Tool batch onto the frozen model-facing Tool results.
  *
  * ```text
- * ToolBatchItemResult   raw output, invocation id, observation id, artifact pointer
+ * ToolExecutionSnapshot   the durable invocation + its observation
  *        ↓
  * Context token projection (the one truncation policy the workspace owns)
  *        ↓
- * AgentToolResult       externalCallId, toolName, summary content, isError
+ * AgentToolResult         externalCallId, toolName, summary content, isError
  * ```
  *
- * This is the **legacy compatibility** projection. Canonical production no longer calls it: the
- * canonical `ModelToolFeedbackProjector` projects durable observations and safe feedback, and the Run
- * Layer reaches it through `packages/core/src/run-tool-turn-coordinator.ts`. It is retained for legacy
- * callers and their tests, and it is the same Context algorithm either way — there is one truncation
- * policy, not two.
+ * This is a **compatibility** projection for a caller that still holds durable snapshots. Canonical
+ * production does not call it: the canonical `ModelToolFeedbackProjector` projects durable observations
+ * and safe feedback, and the Run Layer reaches it through `packages/core/src/run-tool-turn-coordinator.ts`.
+ * It is retained for legacy callers and their tests, and it is the same Context algorithm either way —
+ * there is one truncation policy, not two.
+ *
+ * Phase 4F replaced the legacy `ToolBatchItemResult` input with the canonical `ToolExecutionSnapshot`.
+ * The projection itself did not change: an invocation's observation carries exactly the content, the
+ * error flag and the raw artifact pointer the legacy per-item result carried, and the durable identity
+ * is the same invocation id. A snapshot with no observation has not settled, and is refused here rather
+ * than projected as empty content.
  */
 export function toAgentToolResults(
   requests: readonly AgentToolRequest[],
-  results: readonly ToolBatchItemResult[],
+  snapshots: readonly ToolExecutionSnapshot[],
   policy: AgentToolObservationPolicy = defaultObservationPolicy(),
 ): readonly AgentToolResult[] {
-  return toLLMToolResultMessages(requests, results, policy).map((message) => ({
+  return toLLMToolResultMessages(requests, snapshots, policy).map((message) => ({
     externalCallId: message.toolCallId,
     toolName: message.toolName,
     content: message.content,
@@ -119,39 +125,65 @@ export function toAgentToolResults(
  */
 export function toLLMToolResultMessages(
   requests: readonly AgentToolRequest[],
-  results: readonly ToolBatchItemResult[],
+  snapshots: readonly ToolExecutionSnapshot[],
   policy: AgentToolObservationPolicy = defaultObservationPolicy(),
 ): readonly LLMToolResultMessage[] {
-  if (requests.length !== results.length) throw new ToolBatchResultConversionError();
+  if (requests.length !== snapshots.length) throw new ToolBatchResultConversionError();
   const candidates: ModelObservationCandidate[] = requests.map((request, index) => {
-    const result = results[index];
-    if (
-      result === undefined ||
-      result.externalCallId !== request.externalCallId ||
-      result.toolName !== request.toolName
-    ) {
-      throw new ToolBatchResultConversionError();
-    }
+    const observation = observationOf(snapshots[index], request);
     return {
-      sourceToolInvocationId: result.invocationId ?? result.externalCallId,
-      toolName: result.toolName,
-      content: result.content,
-      ...(result.rawArtifactRef === undefined ? {} : { rawArtifactRef: result.rawArtifactRef }),
+      sourceToolInvocationId: observation.toolInvocationId,
+      toolName: request.toolName,
+      content: observation.content,
+      ...(observation.rawArtifactRef === undefined
+        ? {}
+        : { rawArtifactRef: observation.rawArtifactRef }),
     };
   });
   const summaries = toContextObservationProjection().projectBatch({ candidates, policy });
   return requests.map((request, index) => {
-    const result = results[index];
+    const snapshot = snapshots[index];
     const summary = summaries[index];
-    if (result === undefined || summary === undefined) throw new ToolBatchResultConversionError();
+    if (snapshot === undefined || summary === undefined) {
+      throw new ToolBatchResultConversionError();
+    }
+    const observation = observationOf(snapshot, request);
     const message = {
       role: "tool" as const,
-      toolCallId: result.externalCallId,
-      toolName: result.toolName,
+      toolCallId: request.externalCallId,
+      toolName: request.toolName,
       content: summary,
-      isError: result.isError,
-      ...(result.rawArtifactRef === undefined ? {} : { rawArtifactRef: result.rawArtifactRef }),
+      isError: observation.isError,
+      ...(observation.rawArtifactRef === undefined
+        ? {}
+        : { rawArtifactRef: observation.rawArtifactRef }),
     };
     return LLMToolResultMessageSchema.parse(message);
   });
+}
+
+/**
+ * The durable observation of one request's snapshot.
+ *
+ * The identity is checked rather than assumed: a snapshot whose invocation is a different Tool or a
+ * different model call is a batch-conversion defect, not a Tool error, so it is refused instead of
+ * being projected onto the wrong request.
+ */
+function observationOf(
+  snapshot: ToolExecutionSnapshot | undefined,
+  request: AgentToolRequest,
+): import("@caelush/protocol").ToolObservation {
+  if (snapshot === undefined) throw new ToolBatchResultConversionError();
+  if (snapshot.invocation.toolName !== request.toolName) {
+    throw new ToolBatchResultConversionError();
+  }
+  if (
+    snapshot.invocation.externalCallId !== undefined &&
+    snapshot.invocation.externalCallId !== request.externalCallId
+  ) {
+    throw new ToolBatchResultConversionError();
+  }
+  const observation = snapshot.observation;
+  if (observation === undefined) throw new ToolBatchResultConversionError();
+  return observation;
 }

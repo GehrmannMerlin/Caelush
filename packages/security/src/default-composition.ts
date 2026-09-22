@@ -1,34 +1,49 @@
-import type { ApprovalRequest, ToolDefinition, ToolName } from "@caelush/protocol";
+import type {
+  ApprovalRequest,
+  ApprovalRequestId,
+  EventId,
+  JsonObject,
+  ObservationId,
+  TimestampMs,
+  ToolInvocationId,
+  ToolName,
+} from "@caelush/protocol";
 import { ApprovalRequestSchema } from "@caelush/protocol";
 import {
-  type DurableToolExecutionCoordinator,
+  type AgentToolRegistry,
+  type ResolvedAgentTool,
   type ToolApprovalRequestFactory,
-  type ToolExecutionUpdateSanitizerPort,
-  type TransientToolUpdateConsumer,
-  type TransientToolUpdateDiagnostics,
-} from "@caelush/agent";
-import {
-  createToolExecutionDependencies,
-  DEFAULT_APPROVAL_TTL_MS,
-  DEFAULT_BUILTIN_TOOL_ORDER,
-  ToolDispatcher,
-  type ResolvedTool,
-  type ToolApprovalRequestIdFactory,
-  type ToolApprovalStorePort,
-  type ToolClock,
-  type ToolDispatcherOptions,
-  type ToolEventIdFactory,
   type ToolExecutionStorePort,
-  type ToolInvocationIdFactory,
-  type ToolObservationIdFactory,
-  type ToolCommittedEventNotifier,
-  type ToolRegistry,
-  type ToolResultSanitizerPort,
   type ToolPresentationPort,
-} from "@caelush/tools";
+  type ToolResultSanitizerPort,
+} from "@caelush/agent";
+import type { CodingToolCatalog, CodingToolSecurityMetadata } from "@caelush/coding-agent";
+import type { ToolExecutionGatePort, ToolGateSecurityFacts } from "./tool-gate-types.js";
 import { CaelushToolExecutionGate } from "./tool-gate.js";
 import { CaelushToolPresentation, type TerminalOutputSanitizer } from "./presentation.js";
 import { CaelushToolResultSanitizer } from "./tool-result-sanitizer.js";
+
+/**
+ * The pending-approval lifetime, in milliseconds.
+ *
+ * Fifteen minutes, the value production has always used. It is a Security/composition constant rather
+ * than an Agent one because the Agent contract deliberately carries no TTL: an approval's lifetime is a
+ * host policy decision about how long it will hold a Tool call open, and the layer that creates the
+ * durable request is the layer that decides it.
+ */
+export const DEFAULT_APPROVAL_TTL_MS = 15 * 60 * 1_000;
+
+/** The scope an approval requirement grants when the policy does not state one. */
+export const DEFAULT_CODING_APPROVAL_SCOPE = "RUN";
+
+/** The durable Tool identity factories a host supplies. One `create()` each, and nothing else. */
+export interface ToolIdentityFactories {
+  readonly invocationIdFactory: { create(): ToolInvocationId };
+  readonly observationIdFactory: { create(): ObservationId };
+  readonly eventIdFactory: { create(): EventId };
+  readonly approvalIdFactory: { create(): ApprovalRequestId };
+  readonly clock: { now(): TimestampMs };
+}
 
 export interface V1ToolExecutionSecurity {
   readonly gate: CaelushToolExecutionGate;
@@ -50,100 +65,6 @@ export function createDefaultV1ToolExecutionSecurity(options: {
     gate: new CaelushToolExecutionGate(),
     presentation: new CaelushToolPresentation(options),
     resultSanitizer: new CaelushToolResultSanitizer(),
-  });
-}
-
-export interface V1SecureToolDispatcherOptions extends Omit<
-  ToolDispatcherOptions,
-  "gate" | "execution" | "presentation" | "approvalStore" | "approvalIdFactory"
-> {
-  readonly approvalStore: ToolApprovalStorePort;
-  readonly approvalIdFactory: ToolApprovalRequestIdFactory;
-  readonly terminalOutputSanitizer: TerminalOutputSanitizer;
-  readonly securityToolNames?: readonly ToolName[];
-  /**
-   * The transient update sanitizer for this composition.
-   *
-   * Supplied rather than defaulted: the executor binds it before any Tool runs, so a composition that
-   * forgot one would forward nothing and prove nothing. The production daemon passes
-   * `new CaelushToolExecutionUpdateSanitizer()`; a test that only needs the durable path passes its
-   * own trivial implementation.
-   */
-  readonly updateSanitizer: ToolExecutionUpdateSanitizerPort;
-  /** Where sanitized transient updates go. Absent means the Agent layer's discarding consumer. */
-  readonly transientUpdates?: TransientToolUpdateConsumer | undefined;
-  readonly updateDiagnostics?: TransientToolUpdateDiagnostics | undefined;
-}
-
-/**
- * The production V1 Secure Tool dispatcher.
- *
- * ```text
- * legacy ToolRegistry
- *        ↓
- * createV1SecureToolDispatcher
- *        ├─ canonical ToolCallPreparer              (@caelush/agent, via the shell)
- *        ├─ canonical ToolInvocationExecutor        (Phase 4B)
- *        ├─ canonical ToolResultPipeline            (Phase 4B)
- *        └─ compatibility ToolDispatcher            ← this composition returns it, for 4D
- * ```
- *
- * ## What changed in Phase 4C
- *
- * Before, this factory built a `ToolDispatcher` and handed it a gate, an approval store and a budget —
- * and the dispatcher then owned the lifecycle. Now the lifecycle belongs to the canonical
- * `DurableToolExecutionCoordinator`, and the composition is what assembles it:
- *
- * ```text
- * ToolAdmissionPort              Security/Coding admission adapter over CaelushToolExecutionGate
- * ToolDurableMetadataPort        the Coding catalog's risk level for the invocation row
- * ToolApprovalRequestFactory     the security-facts-derived approval card
- * ToolBudgetAdmissionPort        the durable ledger's canonical Tool admission
- * ToolExecutionStorePort         @caelush/storage, implementing the canonical port
- * DurableToolExecutionCoordinator
- * ToolDispatcher                 a compatibility facade, delegating to the coordinator
- * ```
- *
- * The legacy `ToolDispatcher` remains the object the batch and the Run layer hold, so no production
- * consumer has to change in this round. What it *is* has changed: it validates a legacy request,
- * prepares the call, and translates the canonical outcome back.
- *
- * ## Why the coordinator is required
- *
- * A composition that reached the lexical Tool without one would be a second lifecycle implementation,
- * so this factory demands it rather than building one. The layer that knows the host's policy — here,
- * the daemon and this security composition — is the layer that assembles it.
- */
-export function createV1SecureToolDispatcher(
-  options: V1SecureToolDispatcherOptions & {
-    readonly coordinator: DurableToolExecutionCoordinator;
-  },
-): ToolDispatcher {
-  assertDefaultBuiltinSecurityCoverage(options.registry, options.securityToolNames);
-  const security = createDefaultV1ToolExecutionSecurity({
-    terminalOutputSanitizer: options.terminalOutputSanitizer,
-  });
-  return new ToolDispatcher({
-    ...options,
-    gate: security.gate,
-    presentation: security.presentation,
-    approvalRequests: createV1ToolApprovalRequestFactory({
-      registry: options.registry,
-      gate: security.gate,
-      approvalIdFactory: options.approvalIdFactory,
-    }),
-    execution: createToolExecutionDependencies({
-      registry: options.registry,
-      resultSanitizer: security.resultSanitizer,
-      updateSanitizer: options.updateSanitizer,
-      ...(options.transientUpdates === undefined
-        ? {}
-        : { transientUpdates: options.transientUpdates }),
-      ...(options.updateDiagnostics === undefined
-        ? {}
-        : { updateDiagnostics: options.updateDiagnostics }),
-      ...(options.outputPolicy === undefined ? {} : { outputPolicy: options.outputPolicy }),
-    }),
   });
 }
 
@@ -180,11 +101,21 @@ export function createV1SecureToolDispatcher(
  * The redaction itself already happened: `safeAction` is built by `CaelushToolExecutionGate` from
  * redacted security facts, so a raw command, stdin, patch body or absolute host path never reaches the
  * approval row.
+ *
+ * ## Why it reads two canonical objects
+ *
+ * The registry is the Tool Execution authority — it decides whether this Tool can run at all — and the
+ * catalog is the Coding metadata authority — it decides what the Tool's risk is. Phase 4F replaced the
+ * legacy `ToolRegistry` view with those two directly, because the *value* the card needs is the same
+ * one the durable invocation row was written from, and reading it from the object that owns it is what
+ * keeps the two describing one Tool.
  */
 export function createV1ToolApprovalRequestFactory(input: {
-  readonly registry: ToolRegistry;
+  readonly registry: AgentToolRegistry;
+  /** The Coding overlay authority, when this host built one. */
+  readonly catalog?: Pick<CodingToolCatalog, "get"> | undefined;
   /** The real gate. Its own `safeAction` is what keeps the approval card's preview. */
-  readonly gate: import("@caelush/tools").ToolExecutionGatePort;
+  readonly gate: ToolExecutionGatePort;
   /**
    * The Tool's own security-facts projector.
    *
@@ -193,10 +124,10 @@ export function createV1ToolApprovalRequestFactory(input: {
    * is still correct, only less specific.
    */
   readonly securityFacts?: (
-    resolved: import("@caelush/tools").ResolvedTool,
-    args: Readonly<import("@caelush/protocol").JsonObject>,
-  ) => import("@caelush/tools").ToolSecurityFacts | undefined;
-  readonly approvalIdFactory: ToolApprovalRequestIdFactory;
+    resolved: ResolvedAgentTool,
+    args: Readonly<JsonObject>,
+  ) => ToolGateSecurityFacts | undefined;
+  readonly approvalIdFactory: { create(): ApprovalRequestId };
   readonly ttlMs?: number;
 }): ToolApprovalRequestFactory {
   /**
@@ -211,7 +142,7 @@ export function createV1ToolApprovalRequestFactory(input: {
   return ({ identity, call, requirement, createdAt }) => {
     const resolved = input.registry.resolve(call.resolved.tool.name);
     if (resolved === undefined) return null;
-    const riskLevel = resolved.codingMetadata?.riskLevel ?? resolved.definition.riskLevel;
+    const riskLevel = riskLevelOf(input.catalog, resolved);
     return ApprovalRequestSchema.parse({
       id: input.approvalIdFactory.create(),
       runId: identity.runId,
@@ -219,13 +150,39 @@ export function createV1ToolApprovalRequestFactory(input: {
       riskLevel,
       title: "Approve Tool execution",
       reason: requirement.reason,
-      action: requirement.presentation ?? genericToolAction(resolved),
+      action: requirement.presentation ?? genericToolAction(resolved, riskLevel),
       status: "PENDING",
-      scope: requirement.requestedScope ?? "RUN",
+      scope: requirement.requestedScope ?? DEFAULT_CODING_APPROVAL_SCOPE,
       expiresAt: (createdAt + (input.ttlMs ?? DEFAULT_APPROVAL_TTL_MS)) as typeof createdAt,
       createdAt,
     } satisfies ApprovalRequest);
   };
+}
+
+/**
+ * The Tool's risk level, read from the authority that owns it.
+ *
+ * A Coding Tool's risk is Coding metadata and belongs to the catalog; a general Agent Tool has no
+ * Coding metadata at all, and falls back to its own declared risk. Neither authority is derived from
+ * the other, and an empty catalog is not a failure — it is a host with no Coding Tools.
+ */
+function riskLevelOf(
+  catalog: Pick<CodingToolCatalog, "get"> | undefined,
+  resolved: ResolvedAgentTool,
+): import("@caelush/protocol").RiskLevel {
+  return catalog?.get(resolved.tool.name)?.security.riskLevel ?? metadataRiskLevel(resolved);
+}
+
+/**
+ * The risk a Tool declared when it was registered.
+ *
+ * The canonical registry stores a Tool's model-facing spec separately from its executable contract, so
+ * the registration-time metadata is read back from the executable contract itself — the same object a
+ * `CodingToolDefinition` wraps and the same object the durable invocation row was written from.
+ */
+function metadataRiskLevel(resolved: ResolvedAgentTool): import("@caelush/protocol").RiskLevel {
+  const declared = (resolved.tool as { readonly riskLevel?: unknown }).riskLevel;
+  return declared === "MEDIUM" || declared === "HIGH" || declared === "CRITICAL" ? declared : "LOW";
 }
 
 /**
@@ -235,26 +192,51 @@ export function createV1ToolApprovalRequestFactory(input: {
  * level, its sorted capabilities and its runtime requirements. It carries no arguments, no paths and
  * no command text, so it is safe for every Tool that has no richer preview.
  */
-function genericToolAction(resolved: ResolvedTool): import("@caelush/protocol").JsonObject {
+function genericToolAction(
+  resolved: ResolvedAgentTool,
+  riskLevel: import("@caelush/protocol").RiskLevel,
+): JsonObject {
+  const tool = resolved.tool as {
+    readonly name: string;
+    readonly requiredCapabilities?: readonly string[];
+    readonly runtimeRequirements?: JsonObject;
+  };
   return {
     kind: "TOOL_EXECUTION",
-    toolName: resolved.definition.name,
-    riskLevel: resolved.codingMetadata?.riskLevel ?? resolved.definition.riskLevel,
-    requiredCapabilities: [...resolved.definition.requiredCapabilities].sort(),
-    runtimeRequirements: resolved.definition.runtimeRequirements,
+    toolName: tool.name,
+    riskLevel,
+    requiredCapabilities: [...(tool.requiredCapabilities ?? [])].sort(),
+    runtimeRequirements: tool.runtimeRequirements ?? {},
   };
 }
 
+/**
+ * Refuse a host whose default Coding Tools are not all security-described.
+ *
+ * ```text
+ * for each expected Tool
+ *   the active registry can execute it
+ *   the Coding catalog describes its security metadata, with a facts projector
+ * ```
+ *
+ * It is a composition self-check, not a policy decision: a Tool that reaches admission without facts
+ * is refused there anyway, and this is what turns a partially-wired host into a startup error instead
+ * of a Runtime surprise. The expected set is injected rather than restated, so the host that owns the
+ * default order is the only place that order is declared.
+ */
 export function assertDefaultBuiltinSecurityCoverage(
-  registry: ToolRegistry,
-  expectedToolNames: readonly ToolName[] = DEFAULT_BUILTIN_TOOL_ORDER,
+  registry: AgentToolRegistry,
+  catalog: Pick<CodingToolCatalog, "get">,
+  expectedToolNames: readonly ToolName[],
 ): void {
   const missing = expectedToolNames.filter((name) => {
     const resolved = registry.resolve(name);
+    if (resolved === undefined) return true;
+    const definition = catalog.get(name);
     return (
-      resolved === undefined ||
-      resolved.securityFactsProjector === undefined ||
-      !isValidBuiltinDefinition(resolved.definition)
+      definition === undefined ||
+      definition.securityFactsProjector === undefined ||
+      !isValidCodingToolMetadata(definition.security, resolved)
     );
   });
   if (missing.length > 0) {
@@ -264,12 +246,22 @@ export function assertDefaultBuiltinSecurityCoverage(
   }
 }
 
-function isValidBuiltinDefinition(definition: ToolDefinition): boolean {
-  const runtimeKinds = definition.runtimeRequirements.runtimeKinds;
+/**
+ * A Tool's Coding security metadata must describe a real executable Tool.
+ *
+ * `runtimeKinds` is the one structured runtime requirement the current default nine all declare, and
+ * it must include `local`: a Tool offered to a local host that cannot say it runs locally is a
+ * metadata defect, not an exotic configuration.
+ */
+function isValidCodingToolMetadata(
+  security: CodingToolSecurityMetadata,
+  resolved: ResolvedAgentTool,
+): boolean {
+  const runtimeKinds = security.runtimeRequirements.runtimeKinds;
   return (
-    definition.name.length > 0 &&
-    definition.description.length > 0 &&
-    definition.requiredCapabilities.length > 0 &&
+    resolved.tool.name.length > 0 &&
+    resolved.tool.description.length > 0 &&
+    security.requiredCapabilities.length > 0 &&
     Array.isArray(runtimeKinds) &&
     runtimeKinds.length > 0 &&
     runtimeKinds.every((kind): kind is string => typeof kind === "string") &&
@@ -277,26 +269,9 @@ function isValidBuiltinDefinition(definition: ToolDefinition): boolean {
   );
 }
 
-export type SecureDispatcherDependencySummary = Pick<
-  V1SecureToolDispatcherOptions,
-  | "registry"
-  | "store"
-  | "notifier"
-  | "clock"
-  | "invocationIdFactory"
-  | "observationIdFactory"
-  | "eventIdFactory"
-  | "approvalStore"
-  | "approvalIdFactory"
->;
-
-export type {
-  ToolApprovalRequestIdFactory,
-  ToolApprovalStorePort,
-  ToolClock,
-  ToolCommittedEventNotifier,
-  ToolEventIdFactory,
-  ToolExecutionStorePort,
-  ToolInvocationIdFactory,
-  ToolObservationIdFactory,
-};
+export type SecureDispatcherDependencySummary = {
+  readonly registry: AgentToolRegistry;
+  readonly store: ToolExecutionStorePort;
+  readonly sessionId: import("@caelush/protocol").SessionId;
+  readonly approvalTtlMs?: number;
+} & ToolIdentityFactories;

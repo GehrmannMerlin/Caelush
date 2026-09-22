@@ -207,6 +207,16 @@ export type {
   ToolPolicyDecision,
 } from "./admission/admission-decision.js";
 export type { ToolAdmissionPort, ToolAdmissionPreCheck } from "./admission/admission-port.js";
+export type {
+  ToolExecutionGateDecision,
+  ToolExecutionGateInput,
+  ToolExecutionGatePort,
+  ToolGateMetadata,
+  ToolGateResourceAccess,
+  ToolGateSecretScanInput,
+  ToolGateSecurityFacts,
+  ToolGateShellCommandFact,
+} from "./admission/gate-port.js";
 export {
   createToolAdmissionCoordinator,
   DEFAULT_TOOL_APPROVAL_SCOPE,

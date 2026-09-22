@@ -29,8 +29,8 @@ import {
  * Phase 4C moved the Tool Invocation Security Context into the general Agent Tool Layer. It names
  * only Protocol values — `PermissionProfile` and `ApprovalPolicy` — so a general Agent host can
  * express its own policy without a Coding product, and the layer that consumes it (the admission
- * coordinator) shares a package with the layer that declares it. The legacy `@caelush/tools` entry
- * point remains as a re-export facade for its existing consumers.
+ * coordinator) shares a package with the layer that declares it. Phase 4F removed the legacy
+ * `@caelush/tools` package, so `@caelush/agent` is now the only declaration of `ToolSecurityContext`.
  */
 export interface ToolSecurityContext {
   readonly permissionProfile: PermissionProfile;

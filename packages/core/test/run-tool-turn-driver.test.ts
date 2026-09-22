@@ -1,5 +1,5 @@
 import { createTimestampMs, type StepId } from "@caelush/protocol";
-import { ToolBatchInfrastructureError, ToolBatchInputError } from "@caelush/tools";
+import { ToolBatchInfrastructureError, ToolBatchInputError } from "@caelush/agent";
 import { describe, expect, it } from "vitest";
 
 import { RunControllerInvariantError } from "../src/index.js";

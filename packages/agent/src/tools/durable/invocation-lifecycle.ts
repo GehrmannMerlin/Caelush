@@ -26,9 +26,9 @@ import { ToolExecutionInvariantError } from "./durable-errors.js";
  * ```
  *
  * Phase 4C moved this table here, into the general Agent Tool Layer, because the *decision* to move an
- * invocation belongs to the same coordinator that owns its durable commit. The legacy
- * `packages/tools/src/invocation-lifecycle.ts` is now a re-export facade: there is exactly one
- * transition table in the repository, and it is this one.
+ * invocation belongs to the same coordinator that owns its durable commit. Phase 4F then removed the
+ * legacy package that used to re-export it: there is exactly one transition table in the repository,
+ * and it is this one.
  *
  * ## The transition table is not a convenience
  *

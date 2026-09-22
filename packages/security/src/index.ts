@@ -13,7 +13,18 @@ export type {
 } from "./decision.js";
 export { SecurityPolicyInputError, SecurityPolicyInvariantError } from "./errors.js";
 export { CaelushToolExecutionGate } from "./tool-gate.js";
-export type { SecurityToolDefinition } from "./tool-gate.js";
+export type {
+  ToolDefinitionMetadata,
+  ToolExecutionGateDecision,
+  ToolExecutionGateInput,
+  ToolExecutionGatePort,
+  ToolGateMetadata,
+  ToolGateResourceAccess,
+  ToolGateSecretScanInput,
+  ToolGateSecurityFacts,
+  ToolGateShellCommandFact,
+  ToolSecurityFactsShape,
+} from "./tool-gate-types.js";
 export {
   classifySensitivePath,
   isValidWorkspaceFactPath,
@@ -58,12 +69,14 @@ export {
 export {
   assertDefaultBuiltinSecurityCoverage,
   createDefaultV1ToolExecutionSecurity,
-  createV1SecureToolDispatcher,
   createV1ToolApprovalRequestFactory,
+  DEFAULT_APPROVAL_TTL_MS,
+  DEFAULT_CODING_APPROVAL_SCOPE,
   V1SecurityCompositionError,
 } from "./default-composition.js";
 export type {
-  V1SecureToolDispatcherOptions,
+  SecureDispatcherDependencySummary,
+  ToolIdentityFactories,
   V1ToolExecutionSecurity,
 } from "./default-composition.js";
 export type {

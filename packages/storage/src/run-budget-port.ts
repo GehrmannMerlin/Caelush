@@ -41,11 +41,13 @@ export interface SqliteRunBudgetPortOptions {
  * EXCEEDED   a budget ran out, with the accounting that says so
  * ```
  *
- * It is the shape `ToolDispatcher`'s compatibility facade and its batch preflight still consume, and it
- * is reproduced here rather than imported from `@caelush/tools`, which `@caelush/storage` may not
- * depend on. The canonical answer the admission coordinator consumes is `AgentBudgetBlock | null`,
- * which {@link SqliteRunBudgetPort.preflight} and {@link SqliteRunBudgetPort.admitToolInvocation}
- * produce from the same ledger calls. One ledger, two vocabularies, no second accounting.
+ * `ToolDispatcher` and the legacy `@caelush/tools` package were removed in Phase 4F. This legacy
+ * `ALLOWED | EXCEEDED` answer is retained only because the durable budget ledger's own legacy `admit`
+ * and `admitBatch` entry points still answer in it, while the canonical Tool budget view is
+ * `createSqliteToolBudgetAdmission(...)`, answering `AgentBudgetBlock | null` over the same ledger.
+ * {@link SqliteRunBudgetPort.preflight} and {@link SqliteRunBudgetPort.admitToolInvocation} produce
+ * that canonical answer from the same ledger calls. One ledger, two vocabularies, no second
+ * accounting.
  */
 export type ToolBudgetAdmissionLegacy =
   | { readonly kind: "ALLOWED" }

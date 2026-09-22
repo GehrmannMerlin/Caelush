@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { canonicalJsonString } from "@caelush/tools";
+import { canonicalJsonString } from "@caelush/agent";
 import type { JsonObject, JsonValue } from "@caelush/protocol";
 
 export function fingerprintToolRequest(toolName: string, args: JsonObject): string {

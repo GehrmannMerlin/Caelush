@@ -2,7 +2,6 @@ import type {
   AIAssistantContent,
   AIMessage,
   AIModelTurnResult,
-  AIToolSpec,
   ModelRef as AIModelRef,
 } from "@caelush/ai";
 import type { AgentDecision, AgentExecutionIdentity, AgentTurnRef } from "@caelush/agent";
@@ -13,7 +12,6 @@ import type {
   JsonValue as ProtocolJsonValue,
   LLMCallId,
   ModelRef,
-  ToolDefinition,
 } from "@caelush/protocol";
 
 /**
@@ -152,14 +150,18 @@ export function toLegacyAssistantMessage(result: AIModelTurnResult): LLMAssistan
  * `requiredCapabilities`, `runtimeRequirements` and any handler are Caelush runtime and
  * security metadata: the model must never see them, and the AI tool contract has no field
  * for them in the first place.
+ *
+ * Retired in Phase 4F.
+ *
+ * ```text
+ * BEFORE   protocol.ToolDefinition (7 fields)  →  AIToolSpec (3 fields)   one projection per turn
+ * AFTER    AgentToolRegistry.modelSpecs()      →  AIToolSpec              the stored value itself
+ * ```
+ *
+ * The registry already keeps a Tool's model-facing spec in the exact shape the model receives, so the
+ * projection had nothing left to do. Keeping it would have preserved a second place where a provider
+ * request is assembled from a wider structure, and the wide structure no longer exists.
  */
-export function toAIToolSpec(definition: ToolDefinition): AIToolSpec {
-  return {
-    name: definition.name,
-    description: definition.description,
-    inputSchema: definition.inputSchema,
-  };
-}
 
 /**
  * Project an AI retry code onto the frozen durable spelling.

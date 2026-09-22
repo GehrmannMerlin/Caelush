@@ -9,13 +9,8 @@
  * ## One class, one identity
  *
  * Phase 4C moved the durable Tool store contract into `@caelush/agent`, and the error identity moved
- * with it. The legacy `@caelush/tools` names remain, but they are **re-exports of these classes**, not
- * parallel declarations:
- *
- * ```ts
- * // @caelush/tools
- * export { ToolExecutionConflictError } from "@caelush/agent";
- * ```
+ * with it. Phase 4F deleted the legacy `@caelush/tools` package, including the re-exports that had
+ * kept its old error names alive, so these classes are now the only declarations.
  *
  * That matters because callers catch these by identity. A second class with the same name would make
  * `error instanceof ToolExecutionConflictError` silently false for one of the two, and a lost

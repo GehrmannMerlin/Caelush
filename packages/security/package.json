@@ -23,8 +23,8 @@
   },
   "dependencies": {
     "@caelush/agent": "workspace:*",
+    "@caelush/coding-agent": "workspace:*",
     "@caelush/protocol": "workspace:*",
-    "@caelush/runtime": "workspace:*",
-    "@caelush/tools": "workspace:*"
+    "@caelush/runtime": "workspace:*"
   }
 }

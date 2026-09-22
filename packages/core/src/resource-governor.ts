@@ -1,5 +1,28 @@
 import type { RunResourcePolicy } from "@caelush/protocol";
-import type { ToolBatchItemResult } from "@caelush/tools";
+
+/**
+ * One synthetic model-facing result for a call the Run never dispatched.
+ *
+ * ```text
+ * kind               always UNAVAILABLE_TOOL: nothing ran, so nothing is being reported as a result
+ * externalCallId     the model call this answers, so the batch stays cardinality-preserving
+ * toolName           the Tool the model asked for, echoed back unexecuted
+ * content            the safe guidance the model receives in its place
+ * isError            true — an unexecuted call is a recoverable failure, never a success
+ * ```
+ *
+ * It is deliberately **not** a durable shape. No invocation, no observation and no raw artifact pointer
+ * can appear here, because a replan creates none: Phase 4F replaced the legacy `ToolBatchItemResult`
+ * with this Core-local shape precisely so a governance decision cannot borrow the vocabulary of the
+ * ledger.
+ */
+export interface SyntheticToolResult {
+  readonly kind: "UNAVAILABLE_TOOL";
+  readonly externalCallId: string;
+  readonly toolName: string;
+  readonly content: string;
+  readonly isError: true;
+}
 
 export type ResourceDecision =
   | { readonly kind: "ALLOW" }
@@ -88,9 +111,9 @@ export class ResourceGovernor {
 
   static replanResults(
     calls: readonly { readonly externalCallId: string; readonly toolName: string }[],
-  ): readonly ToolBatchItemResult[] {
+  ): readonly SyntheticToolResult[] {
     return calls.map((call) => ({
-      kind: "UNAVAILABLE_TOOL",
+      kind: "UNAVAILABLE_TOOL" as const,
       externalCallId: call.externalCallId,
       toolName: call.toolName,
       content:

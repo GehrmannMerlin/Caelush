@@ -1,20 +1,15 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AIToolSpec } from "@caelush/ai";
 import {
   AgentRunSchema,
-  createApprovalRequestId,
   createEventId,
   createLLMCallId,
-  createObservationId,
   createRunId,
   createSessionId,
   createStepId,
   createTimestampMs,
-  createToolInvocationId,
   createWorkspaceId,
-  type ToolDefinition,
 } from "@caelush/protocol";
 import {
   RunController,
@@ -24,23 +19,18 @@ import {
 } from "@caelush/core";
 import { EventBus } from "@caelush/events";
 import {
-  ToolDispatcher,
-  ToolRegistryBuilder,
-  createToolExecutionDependencies,
-  type ToolCommittedEventNotifier,
-} from "@caelush/tools";
-import {
   createModelToolFeedbackProjector,
-  createToolBatchCoordinator,
-  createToolCallPreparer,
   createToolResultBatchNormalizer,
-  UNBOUNDED_TOOL_BUDGET_ADMISSION,
+  DefaultAgentToolRegistryBuilder,
+  type AgentTool,
+  type AgentToolRegistry,
 } from "@caelush/agent";
 import { describe, expect, it } from "vitest";
 
 import type { CaelushStorage } from "../src/index.js";
 import { verificationPlanner } from "./support/fixtures.js";
 import { openToolStorage } from "./support/tool-settlement-decoder.js";
+import { createCanonicalToolRuntime } from "./support/canonical-tool-runtime.js";
 import { modelTurnResult } from "./support/model-turns.js";
 import {
   fakeFrozenModelTurnExecutor,
@@ -75,25 +65,35 @@ import {
  * "no durable row" claim is measured against the actual ledger rather than against a mock's opinion.
  */
 
-const echo: ToolDefinition = {
-  name: "echo_value",
-  description: "Echo a value.",
-  inputSchema: {
-    type: "object",
-    properties: { value: { type: "string", minLength: 1 } },
-    required: ["value"],
-    additionalProperties: false,
-  },
-  outputSchema: {
-    type: "object",
-    properties: { value: { type: "string" } },
-    required: ["value"],
-    additionalProperties: false,
-  },
-  riskLevel: "LOW",
-  requiredCapabilities: [],
-  runtimeRequirements: {},
-};
+/**
+ * The one Tool this suite offers the model.
+ *
+ * It is a canonical `AgentTool`: name, description and `inputSchema` are the model-facing `AIToolSpec`
+ * the registry derives; `label`, `resultDetailsSchema` and `executionMode` are the execution and result
+ * contract. `riskLevel` is deliberately absent — that is Coding overlay metadata and lives on a
+ * `CodingToolDefinition`, never on a general Agent Tool.
+ */
+function echoTool(execute: AgentTool["execute"]): AgentTool {
+  return {
+    name: "echo_value",
+    description: "Echo a value.",
+    inputSchema: {
+      type: "object",
+      properties: { value: { type: "string", minLength: 1 } },
+      required: ["value"],
+      additionalProperties: false,
+    },
+    label: "Echo value",
+    resultDetailsSchema: {
+      type: "object",
+      properties: { value: { type: "string" } },
+      required: ["value"],
+      additionalProperties: false,
+    },
+    executionMode: "SEQUENTIAL",
+    execute,
+  };
+}
 
 function makeRun(workspacePath: string) {
   return AgentRunSchema.parse({
@@ -126,25 +126,20 @@ function turn(
   });
 }
 
-/** The canonical pipeline over the dispatcher's own durable coordinator. */
+/** The canonical pipeline over the durable coordinator. */
 function canonicalToolTurn(
-  registry: ReturnType<ToolRegistryBuilder["build"]>,
-  dispatcher: ToolDispatcher,
+  registry: AgentToolRegistry,
+  runtime: ReturnType<typeof createCanonicalToolRuntime>,
 ): ToolTurnPipeline {
   return {
-    // One store, one durable coordinator, one in-process call guard: the canonical batch borrows the
-    // coordinator the legacy facade already built rather than constructing a second one.
-    batches: createToolBatchCoordinator({
-      preparer: createToolCallPreparer(registry.agentRegistry()),
-      budget: UNBOUNDED_TOOL_BUDGET_ADMISSION,
-      durable: dispatcher.durableCoordinator(),
-      registry: registry.agentRegistry(),
-    }),
+    // One store, one durable coordinator, one in-process call guard: the canonical batch drives the
+    // same `DurableToolExecutionCoordinator` every other canonical caller uses.
+    batches: runtime.batch,
     feedback: createModelToolFeedbackProjector({
       projection: toContextObservationProjection(),
     }),
     normalizer: createToolResultBatchNormalizer(),
-    modelDefinitions: () => registry.modelDefinitions(),
+    modelSpecs: () => registry.modelSpecs(),
   };
 }
 
@@ -184,37 +179,22 @@ async function harness(input: {
   await storage.runs.insert(run);
 
   const eventBus = new EventBus(storage.events);
-  const builder = new ToolRegistryBuilder();
   const toolExecutions: string[] = [];
-  for (const definition of [echo]) {
-    builder.register({
-      definition,
-      handler: {
-        execute: async ({ externalCallId }) => {
-          toolExecutions.push(externalCallId);
-          return { content: "hello", details: { value: "hello" }, isError: false };
-        },
-      },
-    });
-  }
+  const builder = new DefaultAgentToolRegistryBuilder();
+  builder.register(
+    echoTool(async ({ identity }) => {
+      toolExecutions.push(identity.externalCallId);
+      return { content: "hello", details: { value: "hello" }, isError: false };
+    }),
+  );
   const registry = builder.build();
-  const notifier: ToolCommittedEventNotifier = {
-    notifyCommitted: (events) => eventBus.notifyCommitted(events),
-  };
-  let now = 10;
-  const dispatcher = new ToolDispatcher({
+  const runtime = createCanonicalToolRuntime({
+    storage,
     registry,
-    store: storage.toolExecution,
-    gate: { decide: async () => ({ kind: "ALLOW" as const }) },
-    notifier,
-    clock: { now: () => createTimestampMs(++now) },
-    invocationIdFactory: { create: createToolInvocationId },
-    observationIdFactory: { create: createObservationId },
-    eventIdFactory: { create: createEventId },
-    execution: createToolExecutionDependencies({ registry }),
-    approvalStore: storage.approvals,
-    approvalIdFactory: { create: createApprovalRequestId },
+    notifier: eventBus,
+    startTimestamp: 10,
   });
+  let now = 10;
 
   const observed: Array<{ tools?: unknown; messages: readonly unknown[] }> = [];
   const turns: Array<AIModelTurnResult | Error> = [
@@ -229,11 +209,9 @@ async function harness(input: {
   });
   const agentExecution = testRunAgentExecution({
     executor,
-    tools: registry.modelDefinitions().map((definition) => ({
-      name: definition.name,
-      description: definition.description,
-      inputSchema: definition.inputSchema,
-    })) as readonly AIToolSpec[],
+    // The model-visible catalog is the registry's own `modelSpecs()`: three fields per Tool, read from
+    // the same registry that resolves and executes the call.
+    tools: registry.modelSpecs(),
     createStepId: () => createStepId(),
   });
 
@@ -247,7 +225,7 @@ async function harness(input: {
         contextLimits: { maxInputTokens: 1_000 },
       }),
     },
-    toolTurn: canonicalToolTurn(registry, dispatcher),
+    toolTurn: canonicalToolTurn(registry, runtime),
     clock: { now: () => createTimestampMs(++now) },
     eventIdFactory: { create: createEventId },
     verificationPlanner,

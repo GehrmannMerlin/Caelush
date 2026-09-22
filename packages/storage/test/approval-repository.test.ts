@@ -6,10 +6,14 @@ import {
   type ApprovalRequest,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
-import { createToolRequestedEvent, type ToolExecutionCommit } from "@caelush/tools";
+import {
+  createRequestedToolInvocation,
+  createToolRequestedEvent,
+  markToolInvocationWaitingApproval,
+  type ToolExecutionCommit,
+} from "@caelush/agent";
 import { openCaelushStorage } from "../src/index.js";
 import { makeSession, makeRun, makeState, makeStep } from "./support/fixtures.js";
-import { createRequestedToolInvocation, markToolInvocationWaitingApproval } from "@caelush/tools";
 
 describe("SqliteApprovalRepository", () => {
   it("persists approval and resolves it atomically with one approval.resolved event", async () => {

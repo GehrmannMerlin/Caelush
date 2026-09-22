@@ -23,9 +23,9 @@ import type { ToolSettlementExtension } from "../result/result-policy.js";
  *
  * A draft carries no `sequence`: the durable sequence is assigned by the store inside the commit
  * transaction, and it — never a timestamp — is the canonical chronology of what happened. The
- * declaration is intentionally structural rather than an alias of the legacy
- * `@caelush/tools` type, so the store contract can be implemented and consumed without the legacy
- * package existing.
+ * declaration is intentionally structural rather than an alias of a legacy type: Phase 4F removed the
+ * `@caelush/tools` package, so the store contract declared here is the only declaration, and it can be
+ * implemented and consumed without any legacy package existing.
  */
 export type DurableToolEventDraft = AgentEvent extends infer TEvent
   ? TEvent extends { readonly type: string }

@@ -4,6 +4,7 @@ import type {
   AIModelRequest,
   AIModelTurnResult,
   AIToolChoice,
+  AIToolSpec,
   AIUserMessage,
   ModelUsage,
 } from "@caelush/ai";
@@ -16,7 +17,6 @@ import type {
   AgentStep,
   StepId,
   TimestampMs,
-  ToolDefinition,
 } from "@caelush/protocol";
 import type { AgentToolCallsDecision, AgentLoopOutcome } from "./agent-decision.js";
 import type { AgentBudgetBlock } from "./agent-errors.js";
@@ -43,7 +43,17 @@ export interface AgentLoopCommonInput {
   readonly historySourceSequences?: readonly number[];
   readonly baseSystemPrompt: string;
   readonly contextLimits: ContextBuildLimits;
-  readonly tools?: readonly ToolDefinition[];
+  /**
+   * The model-visible Tool catalog for this turn.
+   *
+   * It is the AI package's `AIToolSpec` — exactly `name`, `description` and `inputSchema` — because that
+   * is the one model-facing Tool contract in the architecture. Phase 4F replaced the legacy Protocol
+   * `ToolDefinition` here: the registry already stores a tool's model-facing spec separately from its
+   * executable contract, so passing that spec through is not a projection but the value itself, and the
+   * legacy seven-field shape cannot leak risk level, capabilities or runtime requirements into a
+   * provider request.
+   */
+  readonly tools?: readonly AIToolSpec[];
   readonly modelSettings?: AgentLoopModelSettings;
   readonly cwd?: string;
   readonly explicitPaths?: readonly string[];

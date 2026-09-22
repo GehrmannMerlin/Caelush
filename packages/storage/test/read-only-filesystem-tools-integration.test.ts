@@ -3,29 +3,89 @@ import os from "node:os";
 import path from "node:path";
 import {
   createEventId,
-  createObservationId,
   createTimestampMs,
-  createToolInvocationId,
   createWorkspaceId,
   type JsonObject,
   type ToolName,
 } from "@caelush/protocol";
 import { EventBus } from "@caelush/events";
 import {
-  ToolDispatcher,
-  ToolRegistryBuilder,
-  createReadOnlyFilesystemToolRegistrations,
-  type ToolCommittedEventNotifier,
-  type ToolDispatcherOutcome,
-  createToolExecutionDependencies,
-} from "@caelush/tools";
+  createToolResultPipeline,
+  DefaultAgentToolRegistryBuilder,
+  type AgentToolRegistry,
+} from "@caelush/agent";
+import {
+  createCodingToolCatalog,
+  createCodingToolDurableMetadataPort,
+  createCodingToolSettlementExtensionProjector,
+  createDefaultCodingTools,
+  createRuntimeGitOperations,
+  createRuntimePatchOperations,
+  createRuntimeProcessOperations,
+  createRuntimeReadOnlyOperations,
+  type CodingToolCatalog,
+  type CodingToolDefinition,
+  type DefaultCodingToolOperations,
+} from "@caelush/coding-agent";
 import { LocalRuntime, createLocalRuntimeResolver } from "@caelush/runtime";
 import { describe, expect, it } from "vitest";
 
 import { makeRun, makeSession, makeStep } from "./support/fixtures.js";
 import { openToolStorage } from "./support/tool-settlement-decoder.js";
+import { createCanonicalToolRuntime } from "./support/canonical-tool-runtime.js";
 
-describe("read-only filesystem tools through ToolDispatcher", () => {
+/**
+ * The four read-only filesystem Tools, end to end through the canonical durable Tool pipeline.
+ *
+ * ```text
+ * createDefaultCodingTools(...)      read_file · list_directory · find_files · search_text   Coding layer
+ *        ↓
+ * AgentToolRegistry                  the immutable execution authority                      Agent layer
+ *        ↓
+ * DurableToolExecutionCoordinator    REQUESTED → RUNNING → execute → settle                  Agent layer
+ *        ↓
+ * SqliteToolExecutionStore           invocation + observation + effects + events, atomically
+ * ```
+ *
+ * The Tools themselves are the real Coding builtins over the real `LocalRuntime`; only the policy port
+ * is a fixture, because this suite is about the read-only Tool surface and its durable settlement. The
+ * `file.read` host event is produced by the Coding settlement extension projector — the same one the
+ * daemon composition builds — so an effect and the terminal event it accompanies are drawn from one
+ * durable sequence.
+ */
+const READ_ONLY_TOOL_NAMES = Object.freeze([
+  "read_file",
+  "list_directory",
+  "find_files",
+  "search_text",
+] as const);
+
+function readOnlyDefinitions(runtimeResolver: ReturnType<typeof createLocalRuntimeResolver>): {
+  readonly definitions: readonly CodingToolDefinition[];
+  readonly registry: AgentToolRegistry;
+  readonly catalog: CodingToolCatalog;
+} {
+  const readOnly = createRuntimeReadOnlyOperations(runtimeResolver);
+  const operations: DefaultCodingToolOperations = {
+    readFile: readOnly,
+    readOnly,
+    patch: createRuntimePatchOperations(runtimeResolver),
+    exec: createRuntimeProcessOperations(runtimeResolver),
+    process: createRuntimeProcessOperations(runtimeResolver),
+    git: createRuntimeGitOperations(runtimeResolver),
+  };
+  const selected = new Set<string>(READ_ONLY_TOOL_NAMES);
+  const definitions = createDefaultCodingTools(operations).filter((definition) =>
+    selected.has(definition.tool.name),
+  );
+  expect(definitions.map((definition) => definition.tool.name)).toEqual([...READ_ONLY_TOOL_NAMES]);
+  const builder = new DefaultAgentToolRegistryBuilder();
+  for (const definition of definitions) builder.register(definition.tool);
+  const registry = builder.build();
+  return { definitions, registry, catalog: createCodingToolCatalog({ registry, definitions }) };
+}
+
+describe("read-only filesystem tools through the canonical Tool pipeline", () => {
   it("executes all built-ins against the run workspace and persists their observations", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "caelush-read-only-tools-"));
     const workspace = path.join(directory, "workspace");
@@ -47,49 +107,51 @@ describe("read-only filesystem tools through ToolDispatcher", () => {
     await storage.steps.insert(step);
 
     const eventBus = new EventBus(storage.events);
-    const registrations = createReadOnlyFilesystemToolRegistrations(
+    const { definitions, registry, catalog } = readOnlyDefinitions(
       createLocalRuntimeResolver(new LocalRuntime()),
     );
-    const registryBuilder = new ToolRegistryBuilder();
-    for (const registration of registrations) registryBuilder.register(registration);
-    const notifier: ToolCommittedEventNotifier = {
-      notifyCommitted: (events) => eventBus.notifyCommitted(events),
-    };
-    let now = 200;
-    const dispatcher = new ToolDispatcher({
-      registry: registryBuilder.build(),
-      store: storage.toolExecution,
-      gate: { decide: async () => ({ kind: "ALLOW" as const }) },
-      notifier,
-      clock: { now: () => createTimestampMs(++now) },
-      invocationIdFactory: { create: createToolInvocationId },
-      observationIdFactory: { create: createObservationId },
-      eventIdFactory: { create: createEventId },
-      execution: createToolExecutionDependencies({
-        registry: registryBuilder.build(),
-        // The durable event identity factory, so a Tool effect's host-domain event (`file.read`) is
-        // drawn from the same sequence as the terminal event it accompanies.
-        eventIdFactory: { create: createEventId },
-      }),
+    const runtime = createCanonicalToolRuntime({
+      storage,
+      registry,
+      notifier: eventBus,
+      startTimestamp: 200,
+      // The durable row's risk level comes from the Coding catalog, which owns it.
+      metadata: createCodingToolDurableMetadataPort({ registry, catalog }),
+      // The Coding effect vocabulary, projected inside the invocation's own settlement transaction.
+      resultPipelineFactory: ({ invocation, environment, sessionId }) =>
+        createToolResultPipeline({
+          settlementExtension: createCodingToolSettlementExtensionProjector({
+            catalog,
+            invocation: {
+              invocation,
+              ...(sessionId === undefined ? {} : { sessionId }),
+              environment,
+              // The durable event identity factory, so a Tool effect's host-domain event (`file.read`)
+              // is drawn from the same sequence as the terminal event it accompanies.
+              nextEventId: () => createEventId(),
+            },
+          }),
+        }),
     });
+    expect(definitions).toHaveLength(4);
 
     const environment = { workspace: run.workspace, runtime: run.runtime };
     const dispatch = async (externalCallId: string, toolName: ToolName, args: JsonObject) => {
-      const outcome = await dispatcher.dispatch({
-        sessionId: session.id,
+      const outcome = await runtime.coordinator.execute({
         runId: run.id,
-        stepId: step.id,
-        externalCallId,
-        toolName,
-        args,
+        sessionId: session.id,
+        sourceStepId: step.id,
+        call: runtime.prepare({ externalCallId, toolName, args }),
         environment,
         securityContext: {
           permissionProfile: run.permissionProfile,
           approvalPolicy: run.approvalPolicy,
         },
+        signal: new AbortController().signal,
       });
-      expect(outcome.kind).toBe("RESULT");
-      return outcome as Extract<ToolDispatcherOutcome, { kind: "RESULT" }>;
+      expect(outcome.kind).toBe("SETTLED");
+      if (outcome.kind !== "SETTLED") throw new Error("expected a settled Tool execution");
+      return outcome;
     };
 
     try {

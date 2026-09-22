@@ -31,15 +31,13 @@ const descriptor = testModelCatalog().resolve(aiRef);
 
 describe("AgentLoop AI model request builder", () => {
   it("uses run.model, forwards tools/settings, and defaults tool choice to AUTO", () => {
+    // The catalog is already in its model-facing form — `AIToolSpec`, three fields — so there is nothing
+    // left to strip on the way to a provider request. Phase 4F removed the projection that used to do it.
     const tools = [
       {
         name: "read_file",
         description: "read",
         inputSchema: {},
-        outputSchema: {},
-        riskLevel: "LOW" as const,
-        requiredCapabilities: [],
-        runtimeRequirements: {},
       },
     ];
     const request = buildAgentAIModelRequest(
@@ -53,8 +51,9 @@ describe("AgentLoop AI model request builder", () => {
     // `baseUrl` is a legacy compatibility hint and must not survive the projection.
     expect(request.model).toEqual({ provider: "fixture", model: "fixture-model" });
     expect(request.messages).toEqual(context.messages);
-    // Only the model-facing tool fields cross the boundary.
+    // Exactly the three model-facing Tool fields cross the boundary, and nothing else exists to cross.
     expect(request.tools).toEqual([{ name: "read_file", description: "read", inputSchema: {} }]);
+    expect(Object.keys(request.tools![0]!).sort()).toEqual(["description", "inputSchema", "name"]);
     expect(request.toolChoice).toEqual({ type: "AUTO" });
     expect(request.settings).toEqual({ maxOutputTokens: 40, temperature: 0.2 });
     // RunLimits are budget policy, not model settings.
@@ -98,14 +97,11 @@ describe("AgentLoop AI model request builder", () => {
         context,
         run,
         [
+          // The model-facing catalog is `AIToolSpec`: three fields, and nothing else may travel.
           {
             name: "read_file",
             description: "read",
             inputSchema: {},
-            outputSchema: {},
-            riskLevel: "LOW" as const,
-            requiredCapabilities: [],
-            runtimeRequirements: {},
           },
         ],
         undefined,

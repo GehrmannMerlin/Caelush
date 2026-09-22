@@ -20,7 +20,7 @@ import {
   createToolObservation,
   ToolExecutionConflictError,
   ToolExecutionInvariantError,
-} from "@caelush/tools";
+} from "@caelush/agent";
 
 import { makeState } from "./support/fixtures.js";
 import { openCaelushStorage } from "../src/index.js";

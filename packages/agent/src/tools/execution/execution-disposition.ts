@@ -11,11 +11,11 @@
  * an unproven side effect is how one patch becomes two, one command becomes two, and one external
  * request becomes two.
  *
- * The declaration lives here rather than in the legacy Tool package because the canonical executor
- * must recognize the error a Tool throws, and `@caelush/agent` may not import `@caelush/tools`. The
- * legacy package re-exports both the constant and the error class, so an existing builtin that
- * imports them from `@caelush/tools` gets the canonical identity and an `instanceof` check in either
- * package agrees.
+ * The declaration lives here rather than in the Coding Tool product layer because the canonical
+ * executor must recognize the error a Tool throws, and `@caelush/agent` may not depend on
+ * `@caelush/coding-agent`. Phase 4F removed the legacy `@caelush/tools` package that used to re-export
+ * both the constant and the error class, so a builtin that throws it imports the one canonical
+ * identity from `@caelush/agent` and an `instanceof` check agrees everywhere.
  */
 export const UNCERTAIN_SIDE_EFFECT = "UNCERTAIN_SIDE_EFFECT" as const;
 

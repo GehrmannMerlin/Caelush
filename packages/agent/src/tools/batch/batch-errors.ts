@@ -12,7 +12,8 @@
  * whether a failure is a model error or an infrastructure error by class, and two structurally equal
  * classes declared in two packages would silently send one of those decisions down the wrong branch.
  *
- * `@caelush/tools` re-exports `ToolBatchInputError` and `ToolBatchInfrastructureError`;
+ * The legacy `@caelush/tools` re-exports of `ToolBatchInputError` and
+ * `ToolBatchInfrastructureError` were removed in Phase 4F, so this module is their only declaration;
  * `@caelush/core` re-exports `AgentToolResultBatchError`. No caller needs to change its import to get
  * the same class object.
  */

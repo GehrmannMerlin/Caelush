@@ -25,7 +25,6 @@ import type {
 
 import type { AgentStepIdFactory } from "./agent-loop-ports.js";
 import type { AgentLoopModelSettings } from "./agent-loop-input.js";
-import { toAIToolSpec } from "./ai-invocation-projection.js";
 
 /**
  * The Run Layer's direct Agent execution dependencies.
@@ -120,7 +119,13 @@ export interface RunAgentExecutionContextFactory {
 export interface RunAgentExecutionConfiguration {
   readonly baseSystemPrompt: string;
   readonly contextLimits: ContextBuildLimits;
-  readonly tools: readonly import("@caelush/protocol").ToolDefinition[];
+  /**
+   * The model-facing Tool catalog, already in its model-facing form.
+   *
+   * It is the `AIToolSpec[]` the registry stores — the canonical `AgentToolRegistry.modelSpecs()` answer —
+   * rather than a legacy seven-field description that then has to be projected down to three.
+   */
+  readonly tools: readonly AIToolSpec[];
   readonly modelSettings?: AgentLoopModelSettings | undefined;
   /** Synthetic conversation the host prepends, already projected onto the frozen AI contract. */
   readonly historyPrefix?: readonly AIMessage[] | undefined;
@@ -159,7 +164,7 @@ export function createRunAgentExecutionContext(
     models: dependencies.models,
     modelTurnExecutor: dependencies.modelTurnExecutor,
     stepIds: dependencies.stepIds,
-    tools: config.tools.map(toAIToolSpec),
+    tools: [...config.tools],
     ...(config.modelSettings === undefined
       ? {}
       : { modelSettings: toAIModelSettings(config.modelSettings) }),

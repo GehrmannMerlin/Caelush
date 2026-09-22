@@ -1,4 +1,4 @@
-import type { ToolSecurityContext } from "@caelush/tools";
+import type { ToolSecurityContext } from "@caelush/agent";
 import type { AgentRun, AgentState } from "@caelush/protocol";
 
 import { RunControllerInvariantError } from "./run-controller-errors.js";
