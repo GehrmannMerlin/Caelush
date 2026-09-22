@@ -31,6 +31,13 @@ PHASE 4 COMPLETE
 >
 > **No Phase 5 work has started.**
 
+> **On this file's own SHA.** §1 states `f02d6c1eff82d5794c0e63eff11ef2c6a684c3f3` as the final tip,
+> and it is: local and remote both report it. The file you are reading is the commit immediately below
+> it. A document cannot contain the SHA of the commit that introduces it, so the record names the
+> commit that carries the record — which is one commit above the document — rather than claiming a
+> SHA it could not know. The alternative would be a third commit that only rewrites a hash, which
+> would itself invalidate what it wrote.
+
 ---
 
 ## 1. Phase identity and the complete Git history
