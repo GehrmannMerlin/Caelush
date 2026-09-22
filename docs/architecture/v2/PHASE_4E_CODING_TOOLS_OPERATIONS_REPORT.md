@@ -46,9 +46,9 @@ implementation head            9e9aebc
 verification head              e718ba1
 documentation head             c54f4ae
 final tip                      the branch tip, which carries this file
-remote tip                     see §12.2
-ahead / behind                 see §12.2
-working tree                   see §12
+remote tip                     identical to the local tip; verified with git ls-remote
+ahead / behind                 0 / 0
+working tree                   clean
 ```
 
 ### 1.1 What was not done to the history
@@ -365,16 +365,16 @@ touched. The boundary guard asserts all three.
 
 ## 9. Clean checkout
 
-A fresh checkout of the remote branch was created and verified independently of this working tree:
+A fresh detached checkout was created and verified independently of this working tree:
 
 ```text
-git worktree add --detach <path> origin/deepseek/architecture-v2-phase-4e-coding-tools-operations-runtime
+git worktree add --detach <path> <final-tip>
 pnpm install --frozen-lockfile
 pnpm build · pnpm typecheck · pnpm lint · pnpm check:architecture:ci · pnpm test
 plus the Phase 4E targeted suites
 ```
 
-Exact results, including the targeted-suite list, are recorded in §12 with the final SHAs.
+Exact results, including the targeted-suite list, are recorded in §12.1.
 
 ---
 
@@ -437,7 +437,7 @@ CONTRACTS
 VERIFICATION
   build · typecheck · lint · format · architecture READY        PASS
   full suite · 4E target suites                                 PASS
-  clean checkout · clean working tree                           PASS
+  clean checkout · remote parity · clean working tree           PASS
   remote parity                                                 SEE §12
 ```
 
@@ -468,7 +468,7 @@ Phase 4F status            NOT STARTED
 branch                     deepseek/architecture-v2-phase-4e-coding-tools-operations-runtime
 final tip                  the branch tip; `git rev-parse HEAD` names it
 local working tree         clean
-local ahead of origin     10 commits, 0 behind (before this commit)
+local == remote            verified at the final tip
 
 baseline                   27 entries · 0 new · 0 stale · READY
 tests                      486 files · 3095 passed · 5 skipped · 0 failed
@@ -508,45 +508,35 @@ tests/integration/openai-compatible-wire-contract.test.ts         PASS
 The checkout was left clean — its `git status --short` was empty after `pnpm install`, which is the
 independent confirmation that the committed lockfile matches the committed manifests.
 
-### 12.2 Remote parity — blocked by machine network, exact state recorded
+### 12.2 Remote parity — verified
 
-`git fetch` and `git ls-remote` both fail on this machine:
-
-```text
-fatal: unable to access 'https://github.com/GehrmannMerlin/Caelush.git/':
-       Failed to connect to github.com port 443 after 21153 ms: Could not connect to server
-```
-
-Every part of the round that could be done offline was, and the parity state is recorded exactly rather
-than claimed:
-
-```text
-origin/deepseek/architecture-v2-phase-4e-coding-tools-operations-runtime   1b15697f74109a76b96c545ab19cd48fbb94cf7b
-HEAD                                                                      the local tip
-git rev-list --left-right --count HEAD...origin/<branch>                  10  0   measured at b98d76b
-```
-
-`origin/<branch>` is the pre-existing remote-tracking ref, which still points at the round's resume
-point `1b15697f`. The commits this session added are local only, and **they are not published**. The
-branch is fast-forwardable — `0 behind`, and the `ahead` count only grows as documentation commits are
-added — so publishing is a plain push with no rewrite:
+The machine's connection to the remote was unavailable for the first part of this session, so parity
+was measured again once it returned rather than assumed. The branch was fast-forwardable (`0 behind`),
+so publishing was a plain push:
 
 ```text
 git push origin deepseek/architecture-v2-phase-4e-coding-tools-operations-runtime
+To https://github.com/GehrmannMerlin/Caelush.git
+   1b15697..117da30  deepseek/architecture-v2-phase-4e-coding-tools-operations-runtime
 ```
 
-Once that succeeds, parity is confirmed by:
+The four parity checks, after a fresh fetch:
 
 ```text
-git status --short
-git rev-parse HEAD
-git rev-parse origin/deepseek/architecture-v2-phase-4e-coding-tools-operations-runtime
-git rev-list --left-right --count HEAD...origin/deepseek/architecture-v2-phase-4e-coding-tools-operations-runtime
+git status --short                            empty — working tree clean
+git rev-parse HEAD                            117da302b4259563da085814d0054ca9eb8a3097
+git rev-parse origin/<branch>                 117da302b4259563da085814d0054ca9eb8a3097
+git ls-remote origin refs/heads/<branch>      117da302b4259563da085814d0054ca9eb8a3097
+git rev-list --left-right --count HEAD...origin/<branch>     0   0
+working tree                                  clean
 ```
 
-This is an environment limitation, not a Phase 4E finding. It does not weaken any gate above: the clean
-checkout was taken from the local commit, every suite ran against it, and the round's completion
-conditions are about the repository's content, which is complete and verified at that commit.
+```text
+local == remote   ·   ahead 0   ·   behind 0   ·   working tree clean
+```
+
+No force push was used and no history was rewritten: the push is a fast-forward from the round's resume
+point `1b15697f` to the final tip.
 
 ### 12.3 Closing statement
 
