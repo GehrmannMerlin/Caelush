@@ -1,3 +1,4 @@
+import type { JsonObject, JsonValue } from "@caelush/ai";
 import type { ObservationId } from "@caelush/protocol";
 
 import type { ToolObservationPolicySnapshot } from "../../loop/types.js";
@@ -68,6 +69,95 @@ export function toolFeedbackPolicySnapshot(
   return Object.freeze({
     kind: "SNAPSHOT",
     snapshot: Object.freeze({ ...snapshot }),
+  });
+}
+
+/**
+ * The JSON-safe mirror of {@link ToolFeedbackProjectionPolicy}.
+ *
+ * ## Why a mirror exists
+ *
+ * A projection receipt travels inside `AgentMessageRecord.data`, whose type is `JsonObject`, and
+ * `JsonObject` requires an index signature. A TypeScript `interface` does not acquire one implicitly, so
+ * `ToolObservationPolicySnapshot` and the union above are structurally *not* assignable to `JsonObject`
+ * even though every value they can hold is plainly JSON-safe.
+ *
+ * ```text
+ * a TypeScript assignability quirk, not a domain difference
+ * ```
+ *
+ * ## Why the mirror is here rather than on the snapshot
+ *
+ * Adding the index signature to `ToolObservationPolicySnapshot` would have been the smaller edit, but it
+ * widens `keyof` on a frozen Phase 3 contract, and Phase 3A asserts that contract's key set and exact
+ * type. The Message Domain is the layer that needs to make the JSON claim, so the claim is made here and
+ * the Phase 3 type stays exactly as frozen.
+ *
+ * `snapshot` is a `JsonObject` rather than a mirror of the snapshot type: two number-valued token limits
+ * already satisfy the index signature, so no second snapshot-shaped type is required.
+ *
+ * The mirror's own index signature is what makes it assignable to `JsonObject`. It is free here: the
+ * mirror is a Phase 5B type with no frozen key set to preserve, which is exactly why the JSON claim
+ * belongs on this side of the boundary rather than on the Phase 3 snapshot.
+ */
+export type ToolFeedbackProjectionPolicyJson =
+  | {
+      readonly kind: "SNAPSHOT";
+
+      readonly snapshot: JsonObject;
+
+      readonly [field: string]: JsonValue;
+    }
+  | {
+      readonly kind: "LEGACY_UNKNOWN";
+
+      readonly [field: string]: JsonValue;
+    };
+
+/**
+ * The JSON-safe mirror of {@link ToolFeedbackProjectionReceipt}.
+ *
+ * The field names, the version and the fingerprint are identical; only the policy arm's type differs. A
+ * receipt and its mirror are therefore the same value at runtime and the same shape on the wire — the
+ * mirror states JSON-safety, it does not restate the contract.
+ */
+export interface ToolFeedbackProjectionReceiptJson {
+  readonly policy: ToolFeedbackProjectionPolicyJson;
+
+  readonly fingerprint: string;
+
+  readonly version: 1;
+
+  readonly [field: string]: JsonValue;
+}
+
+/**
+ * Project a policy into its JSON-safe mirror.
+ *
+ * The snapshot is copied field by field rather than spread, so the mirror carries exactly the two frozen
+ * limits and nothing a caller happened to attach to its own object.
+ */
+export function toToolFeedbackProjectionPolicyJson(
+  policy: ToolFeedbackProjectionPolicy,
+): ToolFeedbackProjectionPolicyJson {
+  if (policy.kind === "LEGACY_UNKNOWN") return Object.freeze({ kind: "LEGACY_UNKNOWN" });
+  return Object.freeze({
+    kind: "SNAPSHOT",
+    snapshot: Object.freeze({
+      maxSingleObservationTokens: policy.snapshot.maxSingleObservationTokens,
+      maxObservationBatchTokens: policy.snapshot.maxObservationBatchTokens,
+    }),
+  });
+}
+
+/** Project a receipt into its JSON-safe mirror, for the durable record payload. */
+export function toToolFeedbackProjectionReceiptJson(
+  receipt: ToolFeedbackProjectionReceipt,
+): ToolFeedbackProjectionReceiptJson {
+  return Object.freeze({
+    policy: toToolFeedbackProjectionPolicyJson(receipt.policy),
+    fingerprint: receipt.fingerprint,
+    version: receipt.version,
   });
 }
 

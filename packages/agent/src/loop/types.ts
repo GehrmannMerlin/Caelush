@@ -214,6 +214,12 @@ export interface ContextBuildReport {
  * Tool boundary opens: a later continuation must project results under the policy that
  * was in force when the turn was prepared, not under whatever a restarted process
  * happens to default to.
+ *
+ * The shape stays exactly two members. Phase 5B needed this value to travel inside durable JSON, which
+ * `JsonObject` expresses as an index signature, and that signature would widen `keyof` and change this
+ * frozen Phase 3 contract. The Message Domain therefore represents the snapshot as an explicit
+ * JSON-safe mirror at the point where it enters a record, rather than the snapshot type being widened
+ * here.
  */
 export interface ToolObservationPolicySnapshot {
   readonly maxSingleObservationTokens: number;

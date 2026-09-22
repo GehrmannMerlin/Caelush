@@ -99,6 +99,8 @@ export {
   createAgentToolResultMessage,
   toolFeedbackPolicySnapshot,
   toolResultObservationId,
+  toToolFeedbackProjectionPolicyJson,
+  toToolFeedbackProjectionReceiptJson,
   LEGACY_UNKNOWN_TOOL_FEEDBACK_POLICY,
   TOOL_FEEDBACK_PROJECTION_POLICY_KINDS,
   TOOL_FEEDBACK_PROJECTION_RECEIPT_VERSION,
@@ -106,7 +108,9 @@ export {
 export type {
   AgentToolResultMessage,
   ToolFeedbackProjectionPolicy,
+  ToolFeedbackProjectionPolicyJson,
   ToolFeedbackProjectionReceipt,
+  ToolFeedbackProjectionReceiptJson,
 } from "./types/tool-result-message.js";
 
 export {

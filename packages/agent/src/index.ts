@@ -642,6 +642,8 @@ export {
   projectionVersionTable,
   toolFeedbackPolicySnapshot,
   toolResultObservation,
+  toToolFeedbackProjectionPolicyJson,
+  toToolFeedbackProjectionReceiptJson,
   toolResultObservationId,
   toolMessageSource,
   userMessageSource,

@@ -334,13 +334,24 @@ describe("Phase 5A guard — package boundaries (freeze §150, §151)", () => {
   });
 
   it("keeps the Message Domain out of every consumer that must not need it yet", async () => {
-    // 5A is a pure addition. No production consumer was switched onto it, so outside the
-    // domain itself and the package root, no production file names a Message Domain concept.
+    // 5A was a pure addition. Phase 5B legitimately added exactly one consumer: the storage layer that
+    // implements the Agent-owned record store port. Every other production file still names no Message
+    // Domain concept, so the rule is stated as a closed allowlist rather than dropped.
+    const allowedConsumers = [
+      // The V2 record store and its legacy compatibility reader — the port implementations.
+      "packages/storage/src/messages/sqlite-agent-message-record-store.ts",
+      "packages/storage/src/messages/legacy/legacy-llm-message-codec.ts",
+      "packages/storage/src/messages/legacy/dual-reader.ts",
+      "packages/storage/src/messages/legacy/backfill.ts",
+      // The package barrel that publishes them.
+      "packages/storage/src/index.ts",
+    ];
     const consumers: string[] = [];
     for (const file of await activeSourceFiles(["packages", "apps"])) {
       if (file.startsWith(MESSAGE_SOURCE)) continue;
       if (file === "packages/agent/src/index.ts") continue;
       if (file.includes("/test/")) continue;
+      if (allowedConsumers.includes(file)) continue;
       const text = code(await read(file));
       for (const name of [
         "AgentMessageRecord",
@@ -568,13 +579,20 @@ describe("Phase 5A guard — no persistence implementation (freeze §157, §164)
   });
 
   it("declares no store port, repository or SQLite schema", async () => {
-    for (const declaration of [
-      "AgentMessageRecordStorePort",
-      "AgentConversationRepository",
-      "SqliteAgentMessageRepository",
-      "agentMessagesTable",
-    ]) {
+    // Phase 5A declared no persistence contract at all. Phase 5B added the two Agent-owned ports — that
+    // is the whole point of the storage round — so the rule now names what must still be absent: a
+    // Storage-side declaration of either port, and any SQLite table object for messages.
+    for (const declaration of ["SqliteAgentMessageRepository", "agentMessagesTable"]) {
       expect(await declarationHolders(declaration), declaration).toEqual([]);
+    }
+    // The ports are declared once each, and in the Agent package. Storage implements them.
+    for (const declaration of [
+      "export interface AgentMessageRecordStorePort {",
+      "export interface AgentConversationRepository {",
+    ]) {
+      const holders = await declarationHolders(declaration);
+      expect(holders.length, declaration).toBe(1);
+      expect(holders[0], declaration).toContain("packages/agent/src/messages/");
     }
   });
 

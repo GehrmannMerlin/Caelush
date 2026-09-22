@@ -375,7 +375,7 @@ describe("Phase 5A codec registry — encode and decode versioning", () => {
     // The payload travels with the draft. Phase 5B's errata added it because the storage round must
     // write exactly these bytes and re-encoding at the repository would re-choose the version.
     expect(draft.data).toEqual({ content: [{ type: "TEXT", text: "hello" }] });
-    expect(AGENT_USER_MESSAGE_CODEC_V1.encode(draft.message)).toEqual(draft.data);
+    expect(AGENT_USER_MESSAGE_CODEC_V1.encode(draft.message as never)).toEqual(draft.data);
   });
 
   it("decodes with the version the record carries, not the current one", () => {

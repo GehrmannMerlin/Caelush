@@ -19,6 +19,7 @@ import type {
 import {
   LEGACY_UNKNOWN_TOOL_FEEDBACK_POLICY,
   TOOL_FEEDBACK_PROJECTION_RECEIPT_VERSION,
+  toToolFeedbackProjectionReceiptJson,
   toolFeedbackPolicySnapshot,
 } from "../types/tool-result-message.js";
 import { NO_TOOL_RESULT_OBSERVATION } from "../types/tool-result-observation.js";
@@ -138,22 +139,7 @@ export const AGENT_TOOL_RESULT_MESSAGE_CODEC_V1: AgentMessageCodec<AgentToolResu
           : { kind: "NO_OBSERVATION" },
       isError: message.isError,
       projectedContent: message.projectedContent,
-      projection: {
-        policy:
-          message.projection.policy.kind === "SNAPSHOT"
-            ? {
-                kind: "SNAPSHOT",
-                snapshot: {
-                  maxSingleObservationTokens:
-                    message.projection.policy.snapshot.maxSingleObservationTokens,
-                  maxObservationBatchTokens:
-                    message.projection.policy.snapshot.maxObservationBatchTokens,
-                },
-              }
-            : { kind: "LEGACY_UNKNOWN" },
-        fingerprint: message.projection.fingerprint,
-        version: message.projection.version,
-      },
+      projection: toToolFeedbackProjectionReceiptJson(message.projection),
     };
   },
   decode(record: AgentMessageRecord): AgentToolResultMessage {
