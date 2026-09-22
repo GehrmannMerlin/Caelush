@@ -78,6 +78,7 @@ import {
 import type { ToolCallingDebugEvent, ToolCallingDebugPort } from "./debug.js";
 import type { ToolResultSanitizerPort } from "./result-sanitizer.js";
 import { createLegacyToolSettlementExtensionProjector } from "./settlement-extension-bridge.js";
+import { classifyCodingOverlay } from "./tool-adapters.js";
 import { toolEffectsToEvents } from "./tool-effects.js";
 import {
   createCodingToolAdmissionPort,
@@ -852,7 +853,8 @@ export class ToolDispatcher {
       toolName: request.toolName,
       externalCallId: request.externalCallId,
       args: request.args,
-      riskLevel: resolved.coding?.riskLevel ?? resolved.definition.riskLevel,
+      riskLevel:
+        classifyCodingOverlay(resolved.coding)?.riskLevel ?? resolved.definition.riskLevel,
       createdAt,
     });
     const failed = failToolInvocation(

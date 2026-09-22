@@ -1,84 +1,31 @@
-import type { ToolDefinition } from "@caelush/protocol";
-import { type GitDiffScope, type RuntimeResolver } from "@caelush/runtime";
-import type { ToolExecutionRequest, ToolHandler } from "../handler.js";
+import { createGitDiffTool, createRuntimeGitOperations } from "@caelush/coding-agent";
+import type { RuntimeResolver } from "@caelush/runtime";
+
+import {
+  DEFINITION_ONLY_RUNTIME_RESOLVER,
+  toLegacyToolRegistration,
+  toolDefinitionFromCodingTool,
+} from "../coding-tool-adapter.js";
 import type { ToolRegistration } from "../registration.js";
-import { errorResult, successResult, withRuntimeScope } from "./result.js";
-import { projectGitDiffSecurityFacts } from "./security-facts.js";
-import { createBuiltinToolModelGuidance } from "../model-guidance.js";
 
-const definition: ToolDefinition = {
-  name: "git_diff",
-  description: "Git.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      scope: {
-        type: "string",
-        enum: ["WORKTREE", "STAGED", "ALL"],
-        default: "ALL",
-        description: "Diff scope; defaults to ALL.",
-      },
-      path: { type: "string", minLength: 1, description: "Workspace-relative pathspec." },
-    },
-    additionalProperties: false,
-  },
-  outputSchema: {
-    type: "object",
-    properties: {
-      ok: { type: "boolean" },
-      error: { type: "string" },
-      scope: { type: "string", enum: ["WORKTREE", "STAGED", "ALL"] },
-      path: { type: "string" },
-      truncated: { type: "boolean" },
-      bytesReturned: { type: "integer", minimum: 0 },
-      omittedBytes: { type: "integer", minimum: 0 },
-      hadDecodeReplacement: { type: "boolean" },
-    },
-    required: ["ok"],
-    additionalProperties: false,
-  },
-  riskLevel: "LOW",
-  requiredCapabilities: ["GIT_READ"],
-  runtimeRequirements: { runtimeKinds: ["local"] },
-};
-
+/**
+ * `git_diff` — a thin compatibility facade over the Coding product layer.
+ *
+ * `scope` validation, the `INVALID_GIT_SCOPE` / `INVALID_GIT_PATH` codes, the truncation and
+ * decode-replacement reporting and the `GIT_DIFF` security facts all belong to the target factory.
+ * `GitOperations.diff` already carried an `args` bag before the errata, so this arm needed no
+ * contract correction; only its owner moved.
+ */
 export function createGitDiffRegistration(runtimeResolver: RuntimeResolver): ToolRegistration {
-  const handler: ToolHandler = {
-    execute: async (request) => executeGitDiff(request, runtimeResolver),
-  };
-  return {
-    definition,
-    handler,
-    securityFactsProjector: projectGitDiffSecurityFacts,
-    modelGuidance: createBuiltinToolModelGuidance("git_diff"),
-  };
+  const operations = createRuntimeGitOperations(runtimeResolver);
+  return toLegacyToolRegistration(createGitDiffTool(operations));
 }
 
-async function executeGitDiff(request: ToolExecutionRequest, resolver: RuntimeResolver) {
-  const scope = request.args.scope;
-  const path = request.args.path;
-  const invalidScope =
-    scope !== undefined && scope !== "WORKTREE" && scope !== "STAGED" && scope !== "ALL";
-  const invalidPath = path !== undefined && typeof path !== "string";
-  if (invalidScope || invalidPath) {
-    const code = invalidScope ? "INVALID_GIT_SCOPE" : "INVALID_GIT_PATH";
-    return errorResult(code, `Tool operation failed: ${code}.`);
-  }
-  return withRuntimeScope(request, resolver, async (runtimeScope) => {
-    const result = await runtimeScope.git.diff({
-      ...(scope === undefined ? {} : { scope: scope as GitDiffScope }),
-      ...(path === undefined ? {} : { path }),
-      ...(request.signal === undefined ? {} : { signal: request.signal }),
-    });
-    return successResult(result.diff || "No changes.", {
-      scope: result.scope,
-      path: result.path,
-      truncated: result.truncated,
-      bytesReturned: result.bytesReturned,
-      omittedBytes: result.omittedBytes,
-      hadDecodeReplacement: result.hadDecodeReplacement,
-    });
-  });
-}
-
-export { definition as gitDiffDefinition };
+/**
+ * The `git_diff` data description, for the legacy public export surface.
+ *
+ * A projection of the target Tool's own schema and Coding security metadata.
+ */
+export const gitDiffDefinition = toolDefinitionFromCodingTool(
+  createGitDiffTool(createRuntimeGitOperations(DEFINITION_ONLY_RUNTIME_RESOLVER)),
+);

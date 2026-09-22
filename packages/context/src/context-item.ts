@@ -6,6 +6,14 @@ export type ContextItemType =
   | "OBSERVATION"
   | "MEMORY"
   | "RELEVANT_FILE"
+  /**
+   * Usage guidance for the Tools this turn actually exposes.
+   *
+   * Phase 4E moved Coding Tool guidance here from the provider-visible tool description. The type is
+   * named because the two sources are rendered under different headings — guidance is not memory, and
+   * labelling it as memory would be a false statement about where the text came from.
+   */
+  | "TOOL_GUIDANCE"
   | "EPHEMERAL";
 
 export type ContextRetention =

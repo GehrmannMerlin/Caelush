@@ -20,6 +20,7 @@ export interface VerificationRepairContextInput {
 export interface RenderSystemContextOptions {
   readonly checkpoint?: StructuredCheckpoint;
   readonly memoryItems?: readonly ContextItem[];
+  readonly toolGuidanceItems?: readonly ContextItem[];
 }
 
 const scriptOrder = ["build", "test", "lint", "typecheck", "check", "dev", "start"] as const;
@@ -138,6 +139,41 @@ function renderMemory(items: readonly ContextItem[]): string[] {
   ];
 }
 
+/**
+ * Render the active Tool guidance block.
+ *
+ * ```text
+ * a Coding prompt snippet  →  <tool_guidance>  →  the budgeted system message
+ * ```
+ *
+ * ## Why this is not `renderMemory`
+ *
+ * The two blocks carry different kinds of statement. Memory is retrieved knowledge about the project;
+ * Tool guidance is a usage instruction for the Tools this turn exposes. Rendering guidance inside
+ * `<retrieved_memory>` would mislabel its provenance, and a model told that a Tool's argument rules
+ * were "retrieved memory" has been told something untrue about the text.
+ *
+ * ## Why it is inside the system message
+ *
+ * The block is part of `renderSystemContext`, so it is counted by
+ * `assembleContextBudget` as `systemTokens` — mandatory context — rather than appended to the request
+ * afterwards. Guidance that entered after budgeting would be context the token accounting never saw.
+ *
+ * One item, one block: the provider emits a single item carrying every active Tool's guidance, so a
+ * budget algorithm cannot drop half of it.
+ */
+function renderToolGuidance(items: readonly ContextItem[]): string[] {
+  const safeItems = items.filter(
+    (item) => item.sensitivity !== "SENSITIVE" && item.content !== undefined,
+  );
+  if (safeItems.length === 0) return [];
+  return [
+    "<tool_guidance>",
+    ...safeItems.map((item) => `<![CDATA[${cdata(item.content ?? "")}]]>`),
+    "</tool_guidance>",
+  ];
+}
+
 export function renderSystemContext(
   baseSystemPrompt: string,
   snapshot: ProjectIntelligenceSnapshot,
@@ -162,6 +198,7 @@ export function renderSystemContext(
     "</project_instructions>",
     ...(options.checkpoint === undefined ? [] : renderCheckpoint(options.checkpoint)),
     ...renderMemory(options.memoryItems ?? []),
+    ...renderToolGuidance(options.toolGuidanceItems ?? []),
   );
   if (verificationRepairContext !== undefined) {
     lines.push(

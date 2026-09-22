@@ -7,6 +7,7 @@ import type { ToolEffectProjector } from "./tool-effects.js";
 import type { ToolSecurityFactsProjector } from "./security-facts.js";
 import type { ToolModelGuidance } from "./model-guidance.js";
 import type { ClassifiedCodingMetadata } from "./tool-adapters.js";
+import type { RegistrationCodingOverlay } from "./registration.js";
 
 /**
  * A resolved legacy Tool.
@@ -26,6 +27,14 @@ import type { ClassifiedCodingMetadata } from "./tool-adapters.js";
  * `agentTool` is the canonical entry this view was projected from. It is the link that lets a legacy
  * caller (and the environment filter) reach the canonical Tool without re-deriving it, and it is how
  * the Coding overlay stays aligned with the registry instead of drifting beside it.
+ *
+ * ## `coding` carries whichever overlay the registration supplied
+ *
+ * A Phase 4E builtin facade registers a whole `CodingToolDefinition`, so `coding` *is* the target's own
+ * overlay — its projectors, its risk metadata and its prompt snippet included. A hand-written
+ * registration carries the narrower `LegacyCodingToolMetadata`. Both are the same field, because both
+ * are what the catalog build needs; a reader that wants one shape narrows it rather than the registry
+ * keeping two.
  */
 export interface ResolvedTool {
   readonly definition: ToolDefinition;
@@ -38,7 +47,19 @@ export interface ResolvedTool {
   /** The canonical AgentTool and compiled validators this legacy view mirrors. */
   readonly agentTool?: AgentTool | undefined;
   /** The Coding overlay metadata, before it is projected into a `CodingToolDefinition`. */
-  readonly coding?: ClassifiedCodingMetadata | undefined;
+  readonly coding?: RegistrationCodingOverlay | undefined;
+  /**
+   * The Coding overlay read as the legacy seven-field view.
+   *
+   * A registration may carry either overlay shape — a whole `CodingToolDefinition` from a Phase 4E
+   * builtin facade, or the narrower `LegacyCodingToolMetadata` from a hand-written one — and a reader
+   * that wants the *metadata* rather than the overlay should not have to branch. This is that reading,
+   * produced once at build time by the same classifier the registry builder uses.
+   *
+   * It is derived, never independent: both fields describe one object, so `codingMetadata.riskLevel`
+   * and the Coding catalog entry for the same Tool cannot disagree.
+   */
+  readonly codingMetadata?: ClassifiedCodingMetadata | undefined;
 }
 
 /**

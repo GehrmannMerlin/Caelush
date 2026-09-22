@@ -1,11 +1,20 @@
-import { ToolDefinitionSchema, type ToolName } from "@caelush/protocol";
+import { ToolDefinitionSchema, type JsonObject, type ToolName } from "@caelush/protocol";
+import type { CodingToolCatalog, CodingToolDefinition } from "@caelush/coding-agent";
 import {
   DefaultAgentToolRegistryBuilder,
+  type AgentTool,
   type AgentToolRegistry,
   type ToolRegistryOptions as CanonicalToolRegistryOptions,
 } from "@caelush/agent";
 
 import { ToolRegistryStateError, ToolRegistrationError } from "./errors.js";
+import {
+  bridgeEffectProjector,
+  bridgeSecurityFactsProjector,
+  createDelegatingToolHandler,
+  isCodingToolDefinition,
+  toolDefinitionFromCodingTool,
+} from "./coding-tool-adapter.js";
 import { cloneToolDefinition } from "./legacy-definition.js";
 import {
   DEFAULT_TOOL_REGISTRY_OPTIONS,
@@ -16,7 +25,7 @@ import { validateToolDefinitionSemantics } from "./schema-policy.js";
 import type { ToolRegistration } from "./registration.js";
 import { createToolRegistry, type ResolvedTool, type ToolRegistry } from "./registry.js";
 import { appendToolModelGuidance, normalizeToolModelGuidance } from "./model-guidance.js";
-import { buildLegacyCodingToolCatalog, resolveAgentToolRegistration } from "./tool-adapters.js";
+import { buildLegacyCodingToolCatalog, classifyCodingOverlay, resolveAgentToolRegistration } from "./tool-adapters.js";
 import { throwLegacyRegistrationError } from "./tool-system-bridge.js";
 
 /**
@@ -59,16 +68,32 @@ export class ToolRegistryBuilder {
     this.canonical = new DefaultAgentToolRegistryBuilder(this.canonicalOptions);
   }
 
-  register(registration: ToolRegistration): this {
+  /**
+   * Register a Tool.
+   *
+   * ```text
+   * ToolRegistration        a legacy definition + handler (+ optional overlay, + optional AgentTool)
+   * CodingToolDefinition    a Tool built by @caelush/coding-agent
+   * ```
+   *
+   * Both are accepted because Phase 4E's production composition builds its Tools with the Coding
+   * product layer and still needs to reach the canonical registry through this builder. Registering a
+   * `CodingToolDefinition` is a projection, not a second registration path: the executor it registers
+   * *is* the target `AgentTool`, and the overlay it stores *is* the target definition — so the catalog
+   * this builder can subsequently build carries the target's own projectors and prompt snippet rather
+   * than a re-derivation of them.
+   */
+  register(registration: ToolRegistration | CodingToolDefinition): this {
     if (this.finalized) {
       throw new ToolRegistryStateError("Tool registry builder is already finalized.", {
         reason: "BUILDER_FINALIZED",
       });
     }
-    if (registration === null || typeof registration !== "object") invalidRegistration();
+    const entry = toRegistrationEntry(registration);
+    if (entry === null || typeof entry !== "object") invalidRegistration();
 
-    const parsed = ToolDefinitionSchema.safeParse(registration.definition);
-    if (!parsed.success || typeof registration.handler?.execute !== "function") {
+    const parsed = ToolDefinitionSchema.safeParse(entry.definition);
+    if (!parsed.success || typeof entry.handler?.execute !== "function") {
       invalidRegistration();
     }
     const parsedDefinition = parsed.data;
@@ -80,12 +105,9 @@ export class ToolRegistryBuilder {
     }
 
     let modelGuidance: ToolRegistration["modelGuidance"];
-    if (registration.modelGuidance !== undefined) {
+    if (entry.modelGuidance !== undefined) {
       try {
-        modelGuidance = normalizeToolModelGuidance(
-          registration.modelGuidance,
-          parsedDefinition.name,
-        );
+        modelGuidance = normalizeToolModelGuidance(entry.modelGuidance, parsedDefinition.name);
       } catch {
         throw new ToolRegistrationError("Tool model guidance is invalid.", {
           reason: "INVALID_MODEL_GUIDANCE",
@@ -96,7 +118,8 @@ export class ToolRegistryBuilder {
 
     // Guidance is folded into the description *before* the canonical builder sees it, so the model
     // catalog byte budget is measured against what a model actually receives. That is the legacy
-    // builder's observable behaviour, preserved exactly.
+    // builder's observable behaviour, preserved exactly for a caller that supplies guidance; the nine
+    // Coding builtins no longer do, because Phase 4E delivers their guidance through Context.
     const definition = cloneToolDefinition({
       ...parsedDefinition,
       ...(modelGuidance === undefined
@@ -104,7 +127,7 @@ export class ToolRegistryBuilder {
         : { description: appendToolModelGuidance(parsedDefinition.description, modelGuidance) }),
     });
 
-    const classified = resolveAgentToolRegistration(registration, definition, modelGuidance);
+    const classified = resolveAgentToolRegistration(entry, definition, modelGuidance);
     try {
       this.canonical.register(classified.agentTool);
     } catch (error) {
@@ -114,15 +137,22 @@ export class ToolRegistryBuilder {
     this.names.add(definition.name);
     this.registrations.push({
       definition,
-      handler: registration.handler,
-      ...(registration.effectProjector === undefined
+      handler: entry.handler,
+      ...(entry.effectProjector === undefined
         ? {}
-        : { effectProjector: registration.effectProjector }),
-      ...(registration.securityFactsProjector === undefined
+        : { effectProjector: entry.effectProjector }),
+      ...(entry.securityFactsProjector === undefined
         ? {}
-        : { securityFactsProjector: registration.securityFactsProjector }),
+        : { securityFactsProjector: entry.securityFactsProjector }),
       ...(modelGuidance === undefined ? {} : { modelGuidance }),
-      adapters: { agent: classified.agentTool, coding: classified.coding },
+      adapters: {
+        agent: classified.agentTool,
+        // The overlay the catalog will receive. A Coding Tool carries its own — projectors and prompt
+        // snippet included, so nothing is re-derived and the legacy path cannot strip what the Coding
+        // product layer attached. A narrow hand-written overlay is widened into the same shape, which
+        // keeps one overlay type flowing through the builder, the filter and the catalog.
+        coding: codingOverlayFor(entry, classified),
+      },
     });
     return this;
   }
@@ -159,6 +189,10 @@ export class ToolRegistryBuilder {
         this.canonicalOptions,
         runtime,
       );
+      // The overlay read as the legacy seven-field view, so a reader that wants Coding *metadata*
+      // — the admission adapter, the dispatcher's durable row, the security composition — does not
+      // have to branch on which of the two overlay shapes this registration carried.
+      const codingMetadata = classifyCodingOverlay(registration.adapters?.coding);
       resolvedTools.push({
         definition,
         handler: registration.handler,
@@ -179,6 +213,7 @@ export class ToolRegistryBuilder {
         ...(registration.adapters?.coding === undefined
           ? {}
           : { coding: registration.adapters.coding }),
+        ...(codingMetadata === undefined ? {} : { codingMetadata }),
       });
     }
 
@@ -188,15 +223,25 @@ export class ToolRegistryBuilder {
   }
 
   /**
-   * Build the Coding overlay for the Tools this builder registered.
+   * Build the Coding overlay for the Tools this builder registered, and return it.
    *
-   * Separate from `build()` on purpose: the registry is a general artifact and the catalog is a
-   * Coding artifact, and only the caller that owns Coding policy needs to wait for it. It is also
-   * what refuses a *dangling* overlay — a catalog entry whose Tool the active registry cannot execute.
+   * ```text
+   * ToolRegistryBuilder  (compatibility facade, this file)
+   *        └── delegates ──▶  CodingToolCatalogBuilder  (@caelush/coding-agent)
+   * ```
+   *
+   * Separate from `build()` on purpose: the registry is a general artifact and the catalog is a Coding
+   * artifact, and only the caller that owns Coding policy needs it. It is also what refuses a
+   * *dangling* overlay — a catalog entry whose Tool the active registry cannot execute.
+   *
+   * Returned rather than only validated, because Phase 4E's composition root is the layer that reads
+   * Coding metadata (a durable `riskLevel`, a security facts projector, a prompt snippet) and it must
+   * read it from the catalog rather than from a second derivation. It is still `async`, so an existing
+   * `await` — and an existing caller that ignores the answer — keeps working unchanged.
    */
-  async buildCodingCatalog(): Promise<void> {
+  async buildCodingCatalog(): Promise<CodingToolCatalog> {
     const canonicalRegistry = this.buildAgentRegistry();
-    await buildLegacyCodingToolCatalog({
+    return buildLegacyCodingToolCatalog({
       agentRegistry: canonicalRegistry,
       entries: this.registrations.map((registration) => {
         const agentTool = registration.adapters?.agent;
@@ -217,4 +262,69 @@ function invalidRegistration(): never {
   throw new ToolRegistrationError("Tool registration is invalid.", {
     reason: "INVALID_DEFINITION",
   });
+}
+
+/**
+ * The overlay the catalog will receive for one registration.
+ *
+ * ```text
+ * CodingToolDefinition       carried through unchanged — projectors and prompt snippet included
+ * LegacyCodingToolMetadata   widened into the same shape, so one overlay type flows onward
+ * ```
+ *
+ * The widening is what keeps the builder, the environment filter and the catalog from each needing a
+ * branch, and it is why a narrow hand-written registration produces exactly the catalog entry a Coding
+ * Tool would: the executable Tool is the canonical `AgentTool` the registry will run, so the entry
+ * cannot become a dangling overlay.
+ */
+function codingOverlayFor(
+  entry: ToolRegistration,
+  classified: import("./tool-adapters.js").ClassifiedRegistration,
+): CodingToolDefinition {
+  const declared = entry.adapters?.coding;
+  if (declared !== undefined && isCodingToolDefinition(declared)) return declared;
+  const metadata = classified.coding;
+  return {
+    tool: classified.agentTool,
+    security: {
+      riskLevel: metadata.riskLevel,
+      requiredCapabilities: metadata.requiredCapabilities,
+      runtimeRequirements: metadata.runtimeRequirements as JsonObject,
+    },
+    ...(metadata.securityFactsProjector === undefined
+      ? {}
+      : { securityFactsProjector: metadata.securityFactsProjector as never }),
+    ...(metadata.effectProjector === undefined
+      ? {}
+      : { effectProjector: metadata.effectProjector as never }),
+    ...(metadata.presentation === undefined ? {} : { presentation: metadata.presentation }),
+  };
+}
+
+/**
+ * Read either accepted registration form as the legacy entry this builder works on.
+ * ```text
+ * ToolRegistration       used as given
+ * CodingToolDefinition   projected: definition from the target Tool, handler from the target
+ *                        execute, adapters.agent from the target AgentTool
+ * ```
+ *
+ * The projection reads every value out of the Coding Tool, so the legacy entry cannot describe a Tool
+ * the Coding product layer does not. It is deliberately the same projection the legacy builtin facades
+ * use, expressed through the one builder that consumes it.
+ */
+function toRegistrationEntry(input: ToolRegistration | CodingToolDefinition): ToolRegistration {
+  if (!isCodingToolDefinition(input)) return input;
+  const tool: AgentTool = input.tool;
+  return {
+    definition: toolDefinitionFromCodingTool(input),
+    handler: createDelegatingToolHandler(tool.execute),
+    adapters: { agent: tool, coding: input },
+    ...(input.securityFactsProjector === undefined
+      ? {}
+      : { securityFactsProjector: bridgeSecurityFactsProjector(input.securityFactsProjector) }),
+    ...(input.effectProjector === undefined
+      ? {}
+      : { effectProjector: bridgeEffectProjector(input.effectProjector) }),
+  };
 }

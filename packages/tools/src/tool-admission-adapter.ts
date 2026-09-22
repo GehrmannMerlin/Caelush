@@ -16,6 +16,7 @@ import {
 } from "@caelush/agent";
 
 import { assertToolSecurityContext } from "./security-context.js";
+import { classifyCodingOverlay } from "./tool-adapters.js";
 import { computeToolApprovalKey } from "./approval-key.js";
 import type {
   ToolExecutionGateDecision,
@@ -152,17 +153,36 @@ export function createCodingToolAdmissionPort(
 /**
  * The durable metadata the invocation row requires.
  *
- * `riskLevel` is read from the same registered definition the *adapter* reads its policy inputs from,
- * so a durable invocation and the policy decision about it can never disagree on a Tool's risk. The
- * Agent layer only ever sees the value.
+ * ```text
+ * CodingToolCatalog   the Tool's Coding metadata, when this Tool has any
+ *        ↓
+ * legacy definition   the registry's data description, for a Tool with no Coding overlay
+ * ```
+ *
+ * Phase 4E made the **Coding catalog** the source of truth for a Coding Tool's `riskLevel`. The
+ * catalog is the artifact the Coding product layer builds, so reading the risk from it is what makes a
+ * durable `ToolInvocation` row and the policy decision about it describe the same Tool metadata — and
+ * it is what stops a legacy `ToolDefinition` from being a second, drifting authority for a value that
+ * belongs to the Coding overlay.
+ *
+ * A generic Agent Tool — an echo tool, a plugin tool — has no Coding metadata at all. `catalog.get()`
+ * returning `undefined` for it is the designed answer, not a failure, and the fallback to the
+ * registered definition is what keeps such a Tool a first-class citizen.
+ *
+ * A Tool that neither the catalog nor the registry can describe is refused: an identity nobody
+ * computed must never authorize anything.
  */
 export function createCodingToolDurableMetadataPort(options: {
   readonly registry: { resolve(name: ToolName): ResolvedTool | undefined };
   readonly definitions?: readonly ToolDefinition[] | undefined;
+  /** The Coding overlay authority, when the host has built one. */
+  readonly catalog?: { get(name: ToolName): { readonly security: { readonly riskLevel: RiskLevel } } | undefined } | undefined;
 }): { get(toolName: ToolName): { readonly riskLevel: RiskLevel } } {
   const definitionsByName = indexDefinitions(options.definitions);
   return {
     get(toolName: ToolName): { readonly riskLevel: RiskLevel } {
+      const fromCatalog = options.catalog?.get(toolName)?.security.riskLevel;
+      if (fromCatalog !== undefined) return Object.freeze({ riskLevel: fromCatalog });
       const definition =
         definitionsByName.get(toolName) ?? options.registry.resolve(toolName)?.definition;
       if (definition === undefined) {
@@ -316,7 +336,7 @@ function translateDecision(
   if (decision.kind === "DENY") {
     return Object.freeze({ kind: "DENY", feedback: deniedFeedback(decision) });
   }
-  const riskLevel = resolved?.coding?.riskLevel ?? definition?.riskLevel;
+  const riskLevel = classifyCodingOverlay(resolved?.coding)?.riskLevel ?? definition?.riskLevel;
   if (riskLevel === undefined) {
     // A `REQUIRE_APPROVAL` decision whose Tool has no resolvable metadata cannot produce an approval
     // identity, and an identity nobody computed must never authorize anything.

@@ -20,12 +20,17 @@ describe("default built-in catalog", () => {
     expect(registrations.every((registration) => registration.handler !== undefined)).toBe(true);
 
     for (const definition of registry.modelDefinitions()) {
+      // Phase 4E moved usage guidance out of `AIToolSpec.description`. The description is now the
+      // stable, concise statement of what the Tool is; the eight guidance fields travel as a Coding
+      // `promptSnippet` through the budgeted Context path instead, exactly once.
       expect(Buffer.byteLength(definition.description, "utf8")).toBeLessThanOrEqual(256);
-      expect(definition.description).toContain("Purpose:");
-      expect(definition.description).toContain("When:");
-      expect(definition.description).toContain("When not:");
-      expect(definition.description).toContain("Side effects:");
-      expect(definition.description).toContain("Safety:");
+      expect(definition.description).not.toContain("Purpose:");
+      expect(definition.description).not.toContain("When:");
+      expect(definition.description).not.toContain("When not:");
+      expect(definition.description).not.toContain("Args:");
+      expect(definition.description).not.toContain("Side effects:");
+      expect(definition.description).not.toContain("Safety:");
+      expect(definition.description).not.toContain("Results:");
     }
     const readFile = registry.resolve("read_file")?.definition.inputSchema.properties as Record<
       string,

@@ -211,7 +211,7 @@ export function createV1ToolApprovalRequestFactory(input: {
   return ({ identity, call, requirement, createdAt }) => {
     const resolved = input.registry.resolve(call.resolved.tool.name);
     if (resolved === undefined) return null;
-    const riskLevel = resolved.coding?.riskLevel ?? resolved.definition.riskLevel;
+    const riskLevel = resolved.codingMetadata?.riskLevel ?? resolved.definition.riskLevel;
     return ApprovalRequestSchema.parse({
       id: input.approvalIdFactory.create(),
       runId: identity.runId,
@@ -239,7 +239,7 @@ function genericToolAction(resolved: ResolvedTool): import("@caelush/protocol").
   return {
     kind: "TOOL_EXECUTION",
     toolName: resolved.definition.name,
-    riskLevel: resolved.coding?.riskLevel ?? resolved.definition.riskLevel,
+    riskLevel: resolved.codingMetadata?.riskLevel ?? resolved.definition.riskLevel,
     requiredCapabilities: [...resolved.definition.requiredCapabilities].sort(),
     runtimeRequirements: resolved.definition.runtimeRequirements,
   };

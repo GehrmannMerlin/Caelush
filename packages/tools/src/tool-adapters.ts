@@ -1,14 +1,21 @@
 import type { AgentTool, AgentToolExecutionInput, AgentToolRegistry } from "@caelush/agent";
+import {
+  CodingToolCatalogBuilder,
+  type CodingToolCatalog,
+  type CodingToolDefinition,
+} from "@caelush/coding-agent";
 import type { Capability, JsonObject, RiskLevel, ToolDefinition } from "@caelush/protocol";
 
 import type { ToolExecutionResult } from "./execution-result.js";
 import type { ToolExecutionRequest, ToolHandler } from "./handler.js";
 import type { AgentToolRegistration } from "./registry-builder.js";
+import type { LegacyCodingToolMetadata, RegistrationCodingOverlay } from "./registration.js";
 import type { ToolEffectProjector } from "./tool-effects.js";
 import type { ToolModelGuidance } from "./model-guidance.js";
 import type { ToolPresentationPort } from "./presentation.js";
 import type { ToolSecurityFactsProjector } from "./security-facts.js";
-import { loadCodingAgentTools, throwLegacyRegistrationError } from "./tool-system-bridge.js";
+import { throwLegacyRegistrationError } from "./tool-system-bridge.js";
+import { isCodingToolDefinition } from "./coding-tool-adapter.js";
 
 /**
  * Legacy definition + handler  ──adapted──▶  canonical AgentTool + CodingToolDefinition
@@ -80,6 +87,13 @@ function withOptionalModelGuidance(
  * A registration that supplies its own canonical `AgentTool` keeps it; one that does not gets an
  * AgentTool built from its definition and handler. Either way the Coding metadata is separated out,
  * so the value handed to the canonical registry never carries it.
+ *
+ * ## Two overlay shapes, one classification
+ *
+ * Phase 4E's builtin facades carry a whole `CodingToolDefinition`; a hand-written or external
+ * registration carries the narrower `LegacyCodingToolMetadata`. Both are read here so the rest of the
+ * builder sees one `ClassifiedCodingMetadata` — which is what keeps the legacy registry builder, the
+ * environment filter and the catalog build from each needing their own branch.
  */
 export function resolveAgentToolRegistration(
   registration: AgentToolRegistration,
@@ -87,7 +101,7 @@ export function resolveAgentToolRegistration(
   modelGuidance: ToolModelGuidance | undefined,
 ): ClassifiedRegistration {
   const provided = registration.adapters?.agent;
-  const coding = registration.adapters?.coding;
+  const coding = classifyCodingOverlay(registration.adapters?.coding);
   const model = withOptionalModelGuidance(
     {
       riskLevel: coding?.riskLevel ?? definition.riskLevel,
@@ -119,6 +133,35 @@ export function resolveAgentToolRegistration(
       : provided;
 
   return { agentTool, coding: model };
+}
+
+/**
+ * Read either overlay shape as the legacy classification.
+ *
+ * A `CodingToolDefinition` already holds its metadata under `security`, and its projectors are the
+ * canonical ones — the same values, read rather than restated.
+ *
+ * Exported because three places in the legacy package ask the same question of a resolved Tool's
+ * overlay — the admission adapter, the dispatcher's durable metadata and this classifier — and three
+ * copies of the branch would be three places for the two shapes to drift.
+ */
+export function classifyCodingOverlay(
+  coding: RegistrationCodingOverlay | undefined,
+): ClassifiedCodingMetadata | undefined {
+  if (coding === undefined) return undefined;
+  if (!isCodingToolDefinition(coding)) return coding;
+  return {
+    riskLevel: coding.security.riskLevel,
+    requiredCapabilities: coding.security.requiredCapabilities,
+    runtimeRequirements: coding.security.runtimeRequirements as unknown as JsonObject,
+    ...(coding.securityFactsProjector === undefined
+      ? {}
+      : { securityFactsProjector: asOverlayProjector(coding.securityFactsProjector) }),
+    ...(coding.effectProjector === undefined
+      ? {}
+      : { effectProjector: asOverlayProjector(coding.effectProjector) }),
+    ...(coding.presentation === undefined ? {} : { presentation: coding.presentation }),
+  };
 }
 
 /**
@@ -196,36 +239,71 @@ function asOverlayProjector<TProjector>(projector: TProjector): never {
  * This is the one place a legacy registration becomes a `CodingToolDefinition`, and it is a pure
  * projection — the catalog implementation, the duplicate and dangling checks and the immutability
  * all belong to `@caelush/coding-agent`.
+ *
+ * ## A registration that already carries a target Coding Tool
+ *
+ * Phase 4E's builtin facades adapt a whole `CodingToolDefinition`: `adapters.coding` *is* the target
+ * definition, projectors and prompt snippet included. That case is registered verbatim, so the catalog
+ * entry a legacy registration produces is the same object the Coding product layer built. Nothing is
+ * re-derived, and in particular the `promptSnippet` survives — which is what lets the legacy default
+ * set and a direct `createDefaultCodingTools(...)` call describe the same tools to a model.
+ *
+ * The lifecycle points that guard a legacy catalog build — dropping a dangling entry, rebuilding a
+ * filtered overlay against the wrong registry — are the ones the target builder already enforces, so
+ * this function still delegates both checks rather than restating them.
+ *
+ * ## Synchronous, because the catalog is a derivation
+ *
+ * Phase 4E replaced the cached dynamic import with the declared static dependency: `@caelush/tools`
+ * depends on `@caelush/coding-agent` in its manifest now, so nothing has to be discovered at runtime.
+ * The catalog is therefore available wherever a registry is, with no initialisation step for a host to
+ * forget — which is what lets production read its durable metadata out of the catalog itself.
  */
-export async function buildLegacyCodingToolCatalog(input: {
+export function buildLegacyCodingToolCatalog(input: {
   readonly agentRegistry: AgentToolRegistry;
   readonly entries: readonly {
     readonly agentTool: AgentTool;
-    readonly coding: ClassifiedCodingMetadata;
+    readonly coding: RegistrationCodingOverlay;
   }[];
-}): Promise<void> {
-  const codingAgent = await loadCodingAgentTools();
-  const builder = new codingAgent.CodingToolCatalogBuilder().forRegistry(input.agentRegistry);
-  for (const entry of input.entries) {
-    try {
-      builder.register({
-        tool: entry.agentTool,
-        security: {
-          riskLevel: entry.coding.riskLevel,
-          requiredCapabilities: entry.coding.requiredCapabilities,
-          runtimeRequirements: entry.coding.runtimeRequirements,
-        },
-        ...(entry.coding.securityFactsProjector == null
-          ? {}
-          : { securityFactsProjector: asOverlayProjector(entry.coding.securityFactsProjector) }),
-        ...(entry.coding.effectProjector == null
-          ? {}
-          : { effectProjector: asOverlayProjector(entry.coding.effectProjector) }),
-        ...(entry.coding.presentation == null ? {} : { presentation: entry.coding.presentation }),
-      });
-    } catch (error) {
-      throwLegacyRegistrationError(error);
+}): CodingToolCatalog {
+  const builder = new CodingToolCatalogBuilder().forRegistry(input.agentRegistry);
+  try {
+    for (const entry of input.entries) {
+      builder.register(
+        isCodingToolDefinition(entry.coding)
+          ? entry.coding
+          : toCodingToolDefinition(entry.agentTool, entry.coding),
+      );
     }
+    return builder.build();
+  } catch (error) {
+    throwLegacyRegistrationError(error);
   }
-  builder.build();
+}
+
+/**
+ * Assemble the target `CodingToolDefinition` a narrow legacy registration describes.
+ *
+ * The executable Tool is the canonical `AgentTool` the registry will run, so a catalog entry built
+ * here names the same Tool the registry resolves — it cannot become a dangling overlay.
+ */
+function toCodingToolDefinition(
+  agentTool: AgentTool,
+  coding: LegacyCodingToolMetadata,
+): CodingToolDefinition {
+  return {
+    tool: agentTool,
+    security: {
+      riskLevel: coding.riskLevel,
+      requiredCapabilities: coding.requiredCapabilities,
+      runtimeRequirements: coding.runtimeRequirements,
+    },
+    ...(coding.securityFactsProjector === undefined
+      ? {}
+      : { securityFactsProjector: asOverlayProjector(coding.securityFactsProjector) }),
+    ...(coding.effectProjector === undefined
+      ? {}
+      : { effectProjector: asOverlayProjector(coding.effectProjector) }),
+    ...(coding.presentation === undefined ? {} : { presentation: coding.presentation }),
+  };
 }

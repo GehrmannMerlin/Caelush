@@ -138,47 +138,47 @@ describe("OpenAI-compatible wire tool contract", () => {
         {
           "inputSchemaHash": "e0e2ea148c97826d5c9ec75e5a2b97a85e6ab90e7d6de6bba70c143587eb1362",
           "name": "read_file",
-          "schemaHash": "493e768ac4795b076ecedbd09f73e1f8d4254801bc1f1fcaa835399eb607e1c6",
+          "schemaHash": "50da2f1470e0795cf5c5155552a26168878cc1477cefc845d3d21a9ee6043585",
         },
         {
           "inputSchemaHash": "7660439b3e7a8529dece2f98702bcbd82315a5649727e1698b6145c79d18de90",
           "name": "list_directory",
-          "schemaHash": "21683fe5a44d7f8f425d217b6dc583401406f1ee65b8f0ff98545789cdca755d",
+          "schemaHash": "43212e606ca9b7cbb91028a0c157b8fee19bce53393b3194dfab2b780f236f85",
         },
         {
           "inputSchemaHash": "ecfc94aa8995a3306d54a9853f508de11d859164648ac2916827cd2b4e46769b",
           "name": "find_files",
-          "schemaHash": "d3a9dded0da2b6dd441ea0c67bc062d428542bc573bbe02cbf55e453a0889eec",
+          "schemaHash": "2f0196038ea2f3d195ec298c092a9f8d4aaa7c14928cacfb3d63cee80798c96e",
         },
         {
           "inputSchemaHash": "ad77d96e0a1e24ff1a893fe65d9192839e96f5db77079475ba1c18925b1bf3cc",
           "name": "search_text",
-          "schemaHash": "1b86a0b2c98b2a1a5525133feab0b2422c6a908d7bbd2c85a66ff30ada42ff7a",
+          "schemaHash": "55891a5b0acfcdc71c30cd2e08fff4ccae5692802882e4eb0f8b2c1bfd53f007",
         },
         {
           "inputSchemaHash": "127aa1f8deb5a8d83a7136d796e5cd2394714a38414ff84e27b7a6f5bac0cae5",
           "name": "apply_patch",
-          "schemaHash": "ab508e56f57d28256a7985d420e63fa3b8303db6b7950a80d7b70332acc1e8a8",
+          "schemaHash": "a1831faf8f448560247f9e02bc66eb5a0ce7724128bbf190357fe30bdec03072",
         },
         {
           "inputSchemaHash": "66f7ca301faa8b4999e5a4e55aae3f75fe5ce6433dfcdc89b4fce0e176666fcc",
           "name": "exec_command",
-          "schemaHash": "d86636594873ca5464f773af1e79e161fdbb999ea9b8e65af74088b22c08f316",
+          "schemaHash": "dc9750f8787e6dd8a586733332389d2ad2138c756db48b8648836f6273445422",
         },
         {
           "inputSchemaHash": "0ee0ff81044b6828de9de3cb8427b23003d2951f3bdc3f9cb0538a36f77d0295",
           "name": "write_stdin",
-          "schemaHash": "a01b64b8c129642b03beb10f77fe016ae97f0c160fca81cb6c9af88862f4eb76",
+          "schemaHash": "2830460db2cfed5a1bef5cb01323024b443c28c56102ccac61734e5a11df00cc",
         },
         {
           "inputSchemaHash": "b9da1384ec88c9de6bf953d77a2b11cab146c499daf9ca0a6cd7c959bcf5e046",
           "name": "git_status",
-          "schemaHash": "3cf0764c9151055004c37e776d696b4499516264e12be17cfe6c8019ebbc17df",
+          "schemaHash": "ac0ef37e2d135d12ac4d1d2b0bcbeb9a46d8f5a9b55ce9f9465f39a9a5bcd1a2",
         },
         {
           "inputSchemaHash": "b40395c21919afb294b7789b18d9218128f686a6aa39c4308c27019d65a57e99",
           "name": "git_diff",
-          "schemaHash": "314bff5fa5f261a5641d6af1e35a6a6a875b715894e111eb0c6b94dcfad19aee",
+          "schemaHash": "a3b921c3d1ca57d803c5eaf9ce175d01cc2cbf1b710f59111f5ce128e64e623e",
         },
       ]
     `);

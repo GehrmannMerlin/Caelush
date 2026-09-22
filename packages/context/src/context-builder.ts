@@ -41,6 +41,18 @@ export interface ContextBuildCommonInput {
   readonly contextPolicy?: ContextPolicy;
   readonly checkpoint?: StructuredCheckpoint;
   readonly memoryItems?: readonly ContextItem[];
+  /**
+   * Usage guidance for the Tools this turn exposes.
+   *
+   * Phase 4E moved Coding Tool guidance here from the provider-visible Tool `description`. It is a
+   * `ContextItem[]` for the same reason `memoryItems` is: the block is assembled during the budgeted
+   * build, so the guidance is counted by `assembleContextBudget` as part of `systemTokens` instead of
+   * being appended to a request the accounting never measured.
+   *
+   * Absent or empty for a host that has no Coding Tools, which is why the field is optional rather
+   * than an empty array the caller must remember to pass.
+   */
+  readonly toolGuidanceItems?: readonly ContextItem[];
 }
 
 export interface UserTurnContextBuildInput extends ContextBuildCommonInput {
@@ -162,6 +174,9 @@ export class ContextBuilder {
       {
         ...(input.checkpoint === undefined ? {} : { checkpoint: input.checkpoint }),
         ...(input.memoryItems === undefined ? {} : { memoryItems: input.memoryItems }),
+        ...(input.toolGuidanceItems === undefined
+          ? {}
+          : { toolGuidanceItems: input.toolGuidanceItems }),
       },
     );
     const budget = assembleContextBudget({
@@ -197,6 +212,10 @@ export class ContextBuilder {
         .filter((message) => message.role === "tool")
         .reduce((total, message) => total + this.tokenEstimator.estimateText(message.content), 0),
       memoryTokens: (input.memoryItems ?? []).reduce(
+        (total, item) => total + (item.content === undefined ? 0 : item.tokenEstimate),
+        0,
+      ),
+      toolGuidanceTokens: (input.toolGuidanceItems ?? []).reduce(
         (total, item) => total + (item.content === undefined ? 0 : item.tokenEstimate),
         0,
       ),

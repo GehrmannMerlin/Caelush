@@ -152,16 +152,18 @@ describe("package boundaries", () => {
     expect(dependencies.ajv).toBe("8.20.0");
     expect(dependencies["@caelush/runtime"]).toBe("workspace:*");
     // Phase 4A moved the general Tool contracts, the schema runtime and policy, the registry and call
-    // preparation into `@caelush/agent`, and the Coding Tool overlay into `@caelush/coding-agent`. The
-    // legacy package is now a compatibility facade over both, so the two edges point legacy -> target.
+    // preparation into `@caelush/agent`, and the Coding Tool overlay into `@caelush/coding-agent`.
+    // Phase 4E completed the move: the nine legacy builtin modules are now delegating facades over the
+    // Coding factories, so `@caelush/coding-agent` is a *runtime* dependency of the legacy package
+    // rather than a test-only one. The direction is unchanged and one-way — legacy -> target.
     expect(dependencies["@caelush/agent"]).toBe("workspace:*");
     expect(Object.keys(manifest.dependencies ?? {}).sort()).toEqual([
       "@caelush/agent",
+      "@caelush/coding-agent",
       "@caelush/protocol",
       "@caelush/runtime",
       "ajv",
     ]);
-    expect(Object.keys(manifest.devDependencies ?? {}).sort()).toEqual(["@caelush/coding-agent"]);
     expect(dependencies["@caelush/coding-agent"]).toBe("workspace:*");
 
     const sourceRoot = path.join(repositoryRoot, "packages", "tools", "src");

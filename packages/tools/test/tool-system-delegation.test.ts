@@ -1,6 +1,7 @@
 import { LocalRuntime, createLocalRuntimeResolver } from "@caelush/runtime";
 import { describe, expect, it } from "vitest";
 import {
+  createBuiltinToolModelGuidance,
   createDefaultBuiltinToolRegistrations,
   filterToolRegistryForEnvironment,
   ToolPreflight,
@@ -120,18 +121,40 @@ describe("legacy Tool registry delegation", () => {
         "inputValidator",
         "resultValidator",
       ]);
-      expect(registry.resolve(name)!.coding?.riskLevel).toBe(definition.riskLevel);
+      expect(registry.resolve(name)!.codingMetadata?.riskLevel).toBe(definition.riskLevel);
     }
   });
 
-  it("keeps the model guidance observable through the legacy behaviour", () => {
+  it("keeps usage guidance out of the provider-visible description", () => {
     const registry = builtRegistry(defaultRegistrations());
 
-    expect(registry.modelGuidance().map((entry) => entry.toolName)).toEqual(registry.names());
+    // Before Phase 4E the legacy builder folded `ToolModelGuidance` into `description`, which put the
+    // guidance inside the provider tool definition and counted it against the tool-catalog byte budget.
+    // The nine default registrations no longer carry guidance: the Coding `promptSnippet` is delivered
+    // through the budgeted Context path instead, so the legacy list is empty and the description stays
+    // the short, stable statement of what the Tool is.
+    expect(registry.modelGuidance()).toEqual([]);
     for (const definition of registry.modelDefinitions()) {
-      expect(definition.description).toContain("Purpose:");
+      expect(definition.description).not.toContain("Purpose:");
+      expect(definition.description).not.toContain("Safety:");
       expect(Buffer.byteLength(definition.description, "utf8")).toBeLessThanOrEqual(256);
     }
+  });
+
+  it("still serves an explicitly supplied guidance through the legacy field", () => {
+    // The field is public API until Phase 4F, so an external caller that supplies guidance keeps the
+    // behaviour it always had — including the description fold the legacy builder performs.
+    const definition = defaultRegistrations()[0]!.definition;
+    const builder = new ToolRegistryBuilder();
+    builder.register({
+      definition,
+      handler: defaultRegistrations()[0]!.handler,
+      modelGuidance: createBuiltinToolModelGuidance(definition.name),
+    });
+    const registry = builder.build();
+
+    expect(registry.modelGuidance().map((entry) => entry.toolName)).toEqual([definition.name]);
+    expect(registry.modelDefinitions()[0]?.description).toContain("Purpose:");
   });
 
   it("keeps the frozen registry budgets, under the legacy option name", () => {
@@ -171,7 +194,28 @@ describe("legacy Tool registry delegation", () => {
 
     // The overlay build is what refuses a dangling Coding entry, so a successful build proves every
     // registered Tool had exactly one overlay entry and every overlay entry had a registered Tool.
-    await expect(builder.buildCodingCatalog()).resolves.toBeUndefined();
+    // Phase 4E returns the catalog rather than discarding it, because the composition root reads Coding
+    // metadata — a durable `riskLevel`, a security facts projector, a prompt snippet — out of it. The
+    // catalog is asserted to correspond to the registry name for name.
+    const catalog = await builder.buildCodingCatalog();
+    expect(catalog.names()).toEqual([
+      "read_file",
+      "list_directory",
+      "find_files",
+      "search_text",
+      "apply_patch",
+      "exec_command",
+      "write_stdin",
+      "git_status",
+      "git_diff",
+    ]);
+    // The overlay is the target Coding Tool, prompt snippet included: the legacy path does not strip the
+    // guidance the Coding product layer attached to it, which is what lets the legacy default set and a
+    // direct `createDefaultCodingTools(...)` call describe the same Tools.
+    for (const name of catalog.names()) {
+      expect(catalog.get(name)?.tool.name).toBe(name);
+      expect(catalog.get(name)?.promptSnippet).toBeDefined();
+    }
     expect(builder.build().names()).toEqual([
       "read_file",
       "list_directory",
@@ -201,7 +245,10 @@ describe("legacy environment filtering", () => {
       "write_stdin",
     ]);
     expect(filtered.resolve("git_status")).toBeUndefined();
-    expect(filtered.modelGuidance().map((entry) => entry.toolName)).toEqual(filtered.names());
+    // Filtering removes the disabled Git Tools from every aligned view, guidance included: the default
+    // nine no longer carry legacy guidance, so the filtered list is empty for the same reason the
+    // unfiltered one is.
+    expect(filtered.modelGuidance()).toEqual([]);
 
     // The filtered facade is backed by its own canonical registry, and every entry in it resolves.
     const canonical = filtered.agentRegistry();
@@ -246,7 +293,8 @@ describe("legacy environment filtering", () => {
     });
     // `git_status`'s AgentTool is present in this builder, so its overlay is consistent; the point
     // is that the catalog build runs against the registry this builder actually produces.
-    await expect(builder.buildCodingCatalog()).resolves.toBeUndefined();
+    const catalog = await builder.buildCodingCatalog();
+    expect(catalog.has("git_status")).toBe(true);
   });
 });
 

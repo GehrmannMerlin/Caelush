@@ -369,6 +369,9 @@ importers:
       '@caelush/agent':
         specifier: workspace:*
         version: link:../agent
+      '@caelush/coding-agent':
+        specifier: workspace:*
+        version: link:../coding-agent
       '@caelush/protocol':
         specifier: workspace:*
         version: link:../protocol
@@ -378,10 +381,6 @@ importers:
       ajv:
         specifier: 8.20.0
         version: 8.20.0
-    devDependencies:
-      '@caelush/coding-agent':
-        specifier: workspace:*
-        version: link:../coding-agent
 
   packages/verification:
     dependencies:

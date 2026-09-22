@@ -1,6 +1,7 @@
 import type { AgentTool, AgentToolRegistrationErrorReason } from "@caelush/agent";
 import type { JsonObject } from "@caelush/ai";
 import type { ToolName } from "@caelush/protocol";
+import { createLegacyNumericArgumentNormalization } from "@caelush/coding-agent";
 
 import {
   ToolRegistrationError,
@@ -120,24 +121,18 @@ export function throwLegacyRegistrationError(error: unknown): never {
  *
  * The algorithm itself lives in `@caelush/coding-agent`
  * (`tools/legacy-argument-normalization.ts`) so exactly one implementation exists and the general
- * `@caelush/agent` Preparer stays free of it. The Coding product layer is reached through a cached
- * dynamic import, which is how a legacy package consumes a target package without declaring a
- * static dependency edge back into it.
+ * `@caelush/agent` Preparer stays free of it.
+ *
+ * Phase 4E replaced the cached dynamic import this used to perform with the declared static
+ * dependency: `@caelush/tools` now names `@caelush/coding-agent` in its manifest, because the nine
+ * legacy builtin modules are delegating facades over the Coding factories and cannot reach them any
+ * other way. The compatibility direction is unchanged — `tools -> coding-agent` — and a static edge
+ * cannot silently resolve to a different implementation than the one under test.
  */
-type CodingAgentTools = Awaited<typeof import("@caelush/coding-agent")>;
-
-let codingAgentTools: Promise<CodingAgentTools> | undefined;
-
-export function loadCodingAgentTools(): Promise<CodingAgentTools> {
-  codingAgentTools ??= import("@caelush/coding-agent");
-  return codingAgentTools;
-}
-
-export async function createLegacyArgumentNormalization(): Promise<
-  ReturnType<CodingAgentTools["createLegacyNumericArgumentNormalization"]>
+export function createLegacyArgumentNormalization(): ReturnType<
+  typeof createLegacyNumericArgumentNormalization
 > {
-  const codingAgent = await loadCodingAgentTools();
-  return codingAgent.createLegacyNumericArgumentNormalization();
+  return createLegacyNumericArgumentNormalization();
 }
 
 /** Build the canonical Agent Tool a legacy definition and handler describe. */
