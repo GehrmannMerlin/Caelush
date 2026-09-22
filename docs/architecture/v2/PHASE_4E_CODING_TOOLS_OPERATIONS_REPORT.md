@@ -40,11 +40,11 @@ continuation commits           60c4afa   refactor(tools): delegate the legacy bu
                                e718ba1   test(architecture): guard the phase 4e coding tool authority
                                c54f4ae   docs(architecture): complete the phase 4e migration record
                                459836b   docs(architecture): correct two phase 4e gate evidence cells
-                               <final>   docs(architecture): record the verified final state
+                               b98d76b   docs(architecture): record the verified final state
 implementation head            9e9aebc
 verification head              e718ba1
 documentation head             c54f4ae
-final tip                      the tip named in §12, which carries this file
+final tip                      b98d76b3d3ca500dfb131f999de3581f6537cc5a
 remote tip                     see §12.2
 ahead / behind                 see §12.2
 working tree                   see §12
@@ -463,9 +463,9 @@ Phase 4E status            COMPLETE
 Phase 4F status            NOT STARTED
 
 branch                     deepseek/architecture-v2-phase-4e-coding-tools-operations-runtime
-local tip                  459836bb9b4f55ef2126ff26c3da55e15f78d43c
+final tip                  b98d76b3d3ca500dfb131f999de3581f6537cc5a
 local working tree         clean
-local ahead of origin     7 commits, 0 behind
+local ahead of origin     8 commits, 0 behind
 
 baseline                   27 entries · 0 new · 0 stale · READY
 tests                      486 files · 3095 passed · 5 skipped · 0 failed
@@ -477,7 +477,7 @@ A fresh detached checkout of the local tip was installed and verified independen
 working tree:
 
 ```text
-git worktree add --detach <path> 459836bb9b4f55ef2126ff26c3da55e15f78d43c
+git worktree add --detach <path> b98d76b3d3ca500dfb131f999de3581f6537cc5a
 pnpm install --frozen-lockfile        PASS   (the frozen lockfile is consistent with HEAD)
 pnpm build                            PASS
 pnpm typecheck                        PASS
@@ -519,12 +519,12 @@ than claimed:
 
 ```text
 origin/deepseek/architecture-v2-phase-4e-coding-tools-operations-runtime   1b15697f74109a76b96c545ab19cd48fbb94cf7b
-HEAD                                                                      459836bb9b4f55ef2126ff26c3da55e15f78d43c
-git rev-list --left-right --count HEAD...origin/<branch>                  7   0
+HEAD                                                                      b98d76b3d3ca500dfb131f999de3581f6537cc5a
+git rev-list --left-right --count HEAD...origin/<branch>                  8   0
 ```
 
 `origin/<branch>` is the pre-existing remote-tracking ref, which still points at the round's resume
-point `1b15697f`. The seven commits this session added are local only, and **they are not published**.
+point `1b15697f`. The eight commits this session added are local only, and **they are not published**.
 The branch is fast-forwardable — `0 behind` — so publishing is a plain push with no rewrite:
 
 ```text
