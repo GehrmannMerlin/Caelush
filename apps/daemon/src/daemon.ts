@@ -2,19 +2,16 @@ import { EventBus } from "@caelush/events";
 import type { AIProviderBinding, ApiAdapter, ModelDescriptorSourcePort } from "@caelush/ai";
 import type { ClientModelSelection } from "@caelush/protocol";
 import { openCaelushStorage, toHostToolEffectsPort } from "@caelush/storage";
-import {
-  applyToolEffectsToAgentState,
-  createLegacyToolSettlementExtensionDecoder,
-  effectsChangeAgentState,
-  type ToolCallingDebugEvent,
-} from "@caelush/tools";
 import { createLocalRuntimeResolver, LocalRuntime } from "@caelush/runtime";
 import {
+  applyToolEffectsToAgentState,
+  createCodingToolSettlementExtensionDecoder,
   createDefaultCodingTools,
   createRuntimeGitOperations,
   createRuntimePatchOperations,
   createRuntimeProcessOperations,
   createRuntimeReadOnlyOperations,
+  effectsChangeAgentState,
   type DefaultCodingToolOperations,
 } from "@caelush/coding-agent";
 import { buildDaemonApp } from "./app.js";
@@ -96,7 +93,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
    */
   const storage = await openCaelushStorage({
     path: options.databasePath,
-    toolSettlementExtension: createLegacyToolSettlementExtensionDecoder({
+    toolSettlementExtension: createCodingToolSettlementExtensionDecoder({
       effects: toHostToolEffectsPort({
         changesState: effectsChangeAgentState,
         apply: applyToolEffectsToAgentState,
@@ -121,9 +118,6 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         : { adapterOverrides: options.adapterOverrides }),
       ...(options.logger === true ? { logger: safeSupervisorLogger } : {}),
       toolRegistrations: defaultToolRegistrations,
-      ...(process.env.CAELUSH_DEBUG_TOOL_CALLING === "1"
-        ? { toolCallingDebugWriter: writeToolCallingDebugEvent }
-        : {}),
     });
   } catch (error) {
     await storage.close().catch(() => undefined);
@@ -181,10 +175,6 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       return closePromise;
     },
   };
-}
-
-function writeToolCallingDebugEvent(event: ToolCallingDebugEvent): void {
-  console.error("[caelush:tool-calling]", JSON.stringify(event));
 }
 
 /**

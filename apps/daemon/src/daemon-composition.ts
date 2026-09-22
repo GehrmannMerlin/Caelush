@@ -83,40 +83,44 @@ import {
   type WorkspaceVerificationPort,
 } from "@caelush/verification";
 import {
-  createToolExecutionDependencies,
-  createCodingToolAdmissionPort,
-  createCodingToolDurableMetadataPort,
-  createDurableInvocationGatePort,
-  filterToolRegistryForEnvironment,
-  ToolRegistryBuilder,
-  boundToolModelContent,
-  type ToolCallingDebugEvent,
-  type ToolExposureEnvironment,
-  type ToolRegistration,
-} from "@caelush/tools";
-import {
+  boundToolResultContent,
   createDurableToolExecutionCoordinator,
   createModelToolFeedbackProjector,
   createToolAdmissionCoordinator,
   createToolBatchCoordinator,
   createToolCallPreparer,
   createToolFailureSettlement,
+  createToolInvocationExecutor,
   createToolResultBatchNormalizer,
+  createToolResultPipeline,
+  DefaultAgentToolRegistryBuilder,
+  type AgentToolRegistry,
+  type DurableInvocationExecutorFactory,
+  type DurableResultPipelineFactory,
   type DurableToolExecutionCoordinator,
+  type ToolExecutionUpdateSanitizerPort,
 } from "@caelush/agent";
-import { createLegacyNumericArgumentNormalization } from "@caelush/coding-agent";
 import {
+  createCodingToolAdmissionPort,
+  createCodingToolDurableMetadataPort,
+  createCodingToolSettlementExtensionProjector,
   createDefaultCodingTools,
+  createDurableInvocationGatePort,
   createRuntimeGitOperations,
   createRuntimePatchOperations,
   createRuntimeProcessOperations,
   createRuntimeReadOnlyOperations,
   createToolPromptContextProvider,
+  createLegacyNumericArgumentNormalization,
   GIT_TOOL_NAMES,
+  CodingToolCatalogBuilder,
+  type CodingToolCatalog,
   type CodingToolDefinition,
   type DefaultCodingToolOperations,
+  type GitToolAvailability,
 } from "@caelush/coding-agent";
 import {
+  assertDefaultBuiltinSecurityCoverage,
   createDefaultV1ToolExecutionSecurity,
   createV1ToolApprovalRequestFactory,
   CaelushToolExecutionUpdateSanitizer,
@@ -150,11 +154,11 @@ import { DAEMON_VERSION } from "./version.js";
  * call type, not a second preparation path.
  */
 function preparedCallFromDurableState(
-  registry: ReturnType<typeof filterToolRegistryForEnvironment>,
+  registry: AgentToolRegistry,
   invocation: import("@caelush/protocol").ToolInvocation,
   externalCallId: string,
 ): import("@caelush/agent").PreparedToolCall {
-  const resolved = registry.agentRegistry().resolve(invocation.toolName);
+  const resolved = registry.resolve(invocation.toolName);
   if (resolved === undefined) {
     throw new Error(
       `The canonical Tool entry "${invocation.toolName}" is unavailable for execution.`,
@@ -239,7 +243,7 @@ export interface DaemonCompositionOptions {
   readonly modelSources?: readonly ModelDescriptorSourcePort[];
   readonly adapterOverrides?: readonly import("@caelush/ai").ApiAdapter[];
   /** Capability discovered for the selected workspace; unknown hides Git tools. */
-  readonly toolExposure?: ToolExposureEnvironment;
+  readonly toolExposure?: GitToolAvailability;
   readonly runtime?: LocalRuntime;
   readonly clock?: DaemonClock;
   readonly logger?: RunExecutionSupervisorLogger;
@@ -248,15 +252,15 @@ export interface DaemonCompositionOptions {
     event: import("./providers/model-wire-diagnostic.js").ModelWireDiagnosticEvent,
   ) => void;
   /**
-   * A registry the caller already built and validated, including its Coding catalog.
+   * The Coding Tool definitions this host composed, when it does not want the default nine.
    *
-   * A builder holds the derivation state — which Tool was registered where — that the Coding catalog
-   * alignment needs, so a host that validated the overlay at startup hands the *same* builder here
-   * rather than a bare registry. It is re-validated on this side, so the trust boundary does not move.
+   * The same value reaches the registry and the Coding catalog, so the executable Tool set and its
+   * overlay are always two views of one derivation. Phase 4F narrowed this from the legacy
+   * `ToolRegistration | CodingToolDefinition` union to the Coding product layer's own type: a host that
+   * wants a different Tool set builds it with `createDefaultCodingTools`-style factories, and there is no
+   * second registration shape to translate.
    */
-  readonly toolRegistrations?: readonly (ToolRegistration | CodingToolDefinition)[] | undefined;
-  /** Safe Tool-calling diagnostics; the writer receives no raw arguments or output. */
-  readonly toolCallingDebugWriter?: (event: ToolCallingDebugEvent) => void;
+  readonly toolRegistrations?: readonly CodingToolDefinition[] | undefined;
 }
 
 export interface DaemonComposition {
@@ -279,7 +283,7 @@ export interface DaemonComposition {
    * execution through.
    */
   readonly verificationModelTurns: VerificationModelClient;
-  readonly toolRegistry: ReturnType<ToolRegistryBuilder["build"]>;
+  readonly toolRegistry: AgentToolRegistry;
   /**
    * The one canonical Tool turn pipeline this host composes.
    *
@@ -441,27 +445,31 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
    * registry, the Coding catalog, the model-visible specs and the prompt guidance block describing the
    * same active set.
    */
-  const defaultCodingTools = defaultCodingToolSet(defaultCodingOperations(runtimeResolver), {
-    git: options.toolExposure?.git ?? "AVAILABLE",
-  });
-  const builtToolRegistry = new ToolRegistryBuilder();
-  for (const registration of options.toolRegistrations ??
-    (defaultCodingTools as readonly (ToolRegistration | CodingToolDefinition)[])) {
-    builtToolRegistry.register(registration);
-  }
+  const defaultCodingTools = defaultCodingToolSet(
+    defaultCodingOperations(runtimeResolver),
+    options.toolExposure ?? "AVAILABLE",
+  );
+  const activeToolRegistry = buildToolRegistry(options.toolRegistrations ?? defaultCodingTools);
   /**
    * The Coding Tool catalog for the Tools this host registered.
    *
-   * `buildCodingCatalog()` is what refuses a *dangling* overlay — a catalog entry whose Tool the active
-   * registry cannot execute — so building it before the registry is used is what keeps Coding metadata
-   * and executable Tools describing one set. The returned catalog is retained because the composition
-   * root is the layer that reads it: the durable `riskLevel` below comes from the catalog rather than
-   * from a second derivation.
+   * ```text
+   * the Coding Tool definitions this host built   →  CodingToolCatalog
+   *        └── forRegistry(activeToolRegistry)     refuses a DANGLING overlay
+   * ```
+   *
+   * `CodingToolCatalogBuilder.forRegistry()` is what refuses a *dangling* overlay — a catalog entry
+   * whose Tool the active registry cannot execute — so building it against the registry is what keeps
+   * Coding metadata and executable Tools describing one set. The catalog is retained because the
+   * composition root is the layer that reads it: the durable `riskLevel`, the security-facts projector
+   * and the effect projector all come from it rather than from a second derivation.
+   *
+   * Phase 4F replaced the legacy `ToolRegistryBuilder.buildCodingCatalog()` with the canonical builder.
+   * The check is the same check, performed by the package that owns the catalog.
    */
-  const codingCatalog = await builtToolRegistry.buildCodingCatalog();
-  const activeToolRegistry = filterToolRegistryForEnvironment(
-    builtToolRegistry.build(),
-    options.toolExposure ?? { git: "AVAILABLE" },
+  const codingCatalog = createActiveCodingCatalog(
+    activeToolRegistry,
+    options.toolRegistrations ?? defaultCodingTools,
   );
   /**
    * The Coding Tool prompt provider, composed once per daemon.
@@ -491,50 +499,95 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     return items.map((item) => toContextGuidanceItem(item, activeToolNames.length));
   };
   /**
-   * The Phase 4C production Tool assembly.
+   * The production Tool assembly.
    *
    * ```text
-   * ToolAdmissionPort              Security/Coding admission adapter over the real gate
-   * ToolDurableMetadataPort        the registry's risk level, for the durable invocation row
+   * ToolAdmissionPort              the Coding/Security admission adapter over the real gate
+   * ToolDurableMetadataPort        the Coding catalog's risk level, for the durable invocation row
    * ToolApprovalRequestFactory     the real approval card, from redacted security facts
    * ToolBudgetAdmissionPort        the canonical view over the durable budget ledger
    * ToolExecutionStorePort         @caelush/storage, implementing the canonical port
+   * ToolInvocationExecutor         @caelush/agent
+   * ToolResultPipeline             @caelush/agent, with the Coding settlement extension
    * DurableToolExecutionCoordinator   ← the Tool Invocation Lifecycle Authority
-   * ToolDispatcher                 a compatibility facade, delegating to the coordinator
    * ```
    *
    * Every dependency below is a *construction* dependency of the coordinator, never a field of a frozen
    * request: the durable request carries identity, the prepared call, the environment, the security
    * context and a signal, and nothing else.
    *
-   * The composition root is also where the three compatibility pieces that must not live in a canonical
-   * layer are wired:
+   * Phase 4F replaced the legacy `createToolExecutionDependencies` facade with the two canonical Agent
+   * factories directly. Nothing was reimplemented: the facade assembled exactly these two values, and its
+   * only remaining legacy-specific contribution was a settlement extension projector that read an effect
+   * projector out of a compatibility registry view — which the Coding catalog now supplies.
+   *
+   * The composition root is also where the pieces that must not live in a canonical layer are wired:
    *
    * ```text
-   * the settlement extension decoder   storage decodes it; the Coding vocabulary is here
-   * the approval request factory       the Agent layer never learns what a safeAction is
-   * the effects projection             AgentState belongs to the host, not to the Tool layer
+   * the settlement extension projector   the Coding effect vocabulary, from the catalog
+   * the approval request factory         the Agent layer never learns what a safeAction is
+   * the effects projection               AgentState belongs to the host, not to the Tool layer
    * ```
    */
   const toolSecurity = createDefaultV1ToolExecutionSecurity({
     terminalOutputSanitizer: sanitizeTerminalOutput,
   });
-  const toolExecutionDependencies = createToolExecutionDependencies({
-    registry: activeToolRegistry,
-    resultSanitizer: toolSecurity.resultSanitizer,
-    updateSanitizer: new CaelushToolExecutionUpdateSanitizer(),
-    transientUpdates: DISCARDING_TOOL_UPDATE_CONSUMER,
-    // The durable event identity factory and the safe presenter, so a Tool effect's host-domain event
-    // (`file.read`, `file.modified`, `process.started`) is drawn from the same sequence as the terminal
-    // event it accompanies and carries the same safe presentation.
-    eventIdFactory: { create: createEventId },
-    presentation: toolSecurity.presentation,
-  });
+  const toolUpdateSanitizer: ToolExecutionUpdateSanitizerPort =
+    new CaelushToolExecutionUpdateSanitizer();
+  const toolInvocationExecutorFactory: DurableInvocationExecutorFactory = ({
+    invocation,
+    updateSanitizer,
+  }) =>
+    createToolInvocationExecutor({
+      invocation,
+      updateSanitizer,
+      transientUpdates: DISCARDING_TOOL_UPDATE_CONSUMER,
+    });
+  /**
+   * The result pipeline for one invocation.
+   *
+   * ```text
+   * the real Security sanitizer
+   * the canonical durable content bound   64 KiB, the value the Tool System already enforced
+   * the Coding settlement extension       effects + the host-domain events they imply
+   * ```
+   *
+   * The extension is built per invocation because the Coding effect projector needs the durable
+   * invocation and the environment the canonical call does not carry, and the coordinator is the layer
+   * that knows them. The projector is still pure and synchronous and still settles inside the same single
+   * commit, so atomicity is untouched.
+   */
+  const toolResultPipelineFactory: DurableResultPipelineFactory = ({
+    invocation,
+    environment,
+    sessionId,
+  }) =>
+    createToolResultPipeline({
+      sanitizer: toolSecurity.resultSanitizer,
+      settlementExtension: createCodingToolSettlementExtensionProjector({
+        catalog: codingCatalog,
+        invocation: {
+          invocation,
+          ...(sessionId === undefined ? {} : { sessionId }),
+          environment,
+          // The same event identity factory the settlement uses, so an effect event and the terminal
+          // event it accompanies are drawn from one durable sequence.
+          nextEventId: () => createEventId(),
+          presentation: toolSecurity.presentation,
+        },
+      }),
+    });
   const toolApprovalRequests = createV1ToolApprovalRequestFactory({
     registry: activeToolRegistry,
+    catalog: codingCatalog,
     gate: toolSecurity.gate,
     approvalIdFactory: { create: createApprovalRequestId },
   });
+  assertDefaultBuiltinSecurityCoverage(
+    activeToolRegistry,
+    codingCatalog,
+    (options.toolRegistrations ?? defaultCodingTools).map((definition) => definition.tool.name),
+  );
   const toolBudgetAdmission = createSqliteToolBudgetAdmission(options.storage.budget);
   const toolAdmission = createToolAdmissionCoordinator({
     policy: createCodingToolAdmissionPort({
@@ -546,7 +599,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
         },
       }),
       registry: activeToolRegistry,
-      definitions: activeToolRegistry.modelDefinitions(),
+      catalog: codingCatalog,
       approvalPresentation: (decision) => decision.safeAction,
     }),
     approvals: options.storage.approvals,
@@ -561,7 +614,6 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       admission: toolAdmission,
       metadata: createCodingToolDurableMetadataPort({
         registry: activeToolRegistry,
-        definitions: activeToolRegistry.modelDefinitions(),
         catalog: codingCatalog,
       }),
       approvalRequests: toolApprovalRequests,
@@ -570,9 +622,9 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       observationIdFactory: { create: createObservationId },
       eventIdFactory: { create: createEventId },
       clock,
-      invocationExecutorFactory: toolExecutionDependencies.invocationExecutorFactory,
-      updateSanitizer: toolExecutionDependencies.updateSanitizer,
-      resultPipelineFactory: toolExecutionDependencies.resultPipelineFactory,
+      invocationExecutorFactory: toolInvocationExecutorFactory,
+      updateSanitizer: toolUpdateSanitizer,
+      resultPipelineFactory: toolResultPipelineFactory,
       preparedCallFactory: ({ invocation, externalCallId }) =>
         preparedCallFromDurableState(activeToolRegistry, invocation, externalCallId),
       failureSettlement: createToolFailureSettlement({
@@ -581,33 +633,30 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
         observationIdFactory: { create: createObservationId },
         eventIdFactory: { create: createEventId },
         presentation: toolSecurity.presentation,
-        boundContent: (content) =>
-          boundToolModelContent(content, toolExecutionDependencies.outputPolicy),
+        boundContent: (content) => boundToolResultContent(content),
         notifier: options.eventBus,
       }),
       budget: toolBudgetAdmission,
       presentation: toolSecurity.presentation,
       rawOutputStore: options.storage.contextArtifacts,
       notifier: options.eventBus,
-      boundFailureContent: (content) =>
-        boundToolModelContent(content, toolExecutionDependencies.outputPolicy),
+      boundFailureContent: (content) => boundToolResultContent(content),
     });
   /**
-   * Phase 4D: the legacy `ToolDispatcher` is no longer composed here.
+   * The legacy `ToolDispatcher` is not composed here, and in Phase 4F it no longer exists.
    *
    * ```text
    * BEFORE 4D   ToolDispatcher → legacy ToolBatchCoordinator → RunController
    * AFTER  4D   ToolCallPreparer + ToolBudgetAdmissionPort + DurableToolExecutionCoordinator
    *                     → canonical ToolBatchCoordinator → RunController
+   * AFTER  4F   the class itself is retired; the canonical four above are the whole Tool System
    * ```
    *
    * The dispatcher's only production consumer was the legacy batch coordinator. Phase 4D replaced that
-   * with the canonical batch, which drives the same `toolDurableCoordinator` the facade was built
-   * around, directly. A facade nothing production calls is dead weight rather than compatibility, so the
-   * composition root does not build one.
-   *
-   * `@caelush/tools` keeps the Dispatcher class for its legacy direct API and for its own tests until
-   * Phase 4F decides that surface's retirement. Nothing in this composition root depends on it.
+   * with the canonical batch, which drives the same `toolDurableCoordinator` the facade was built around,
+   * directly. A facade nothing production calls is dead weight rather than compatibility, so the
+   * composition root never built one — and Phase 4F removed the surface entirely rather than leaving an
+   * unreachable second lifecycle implementation in the repository.
    */
   /**
    * The canonical Tool turn pipeline.
@@ -621,18 +670,17 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
    * ```
    *
    * The legacy batch coordinator is deliberately **not** constructed here, and the canonical batch never
-   * reaches the Dispatcher: production scheduling, pre-invocation rejection and the uncertain barrier are
-   * the Agent package's. The Dispatcher remains composed for the legacy direct API and for the Coding
-   * builtin registrations, not as a production batch authority.
+   * reaches a Dispatcher: production scheduling, pre-invocation rejection and the uncertain barrier are
+   * the Agent package's.
    */
-  const toolPreparer = createToolCallPreparer(activeToolRegistry.agentRegistry(), {
+  const toolPreparer = createToolCallPreparer(activeToolRegistry, {
     normalization: createLegacyNumericArgumentNormalization(),
   });
   const toolBatch = createToolBatchCoordinator({
     preparer: toolPreparer,
     budget: toolBudgetAdmission,
     durable: toolDurableCoordinator,
-    registry: activeToolRegistry.agentRegistry(),
+    registry: activeToolRegistry,
   });
   const toolTurn = {
     batches: toolBatch,
@@ -643,8 +691,9 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       projection: toContextObservationProjection(),
     }),
     normalizer: createToolResultBatchNormalizer(),
-    // The same registry the batch resolves and executes against: one catalog, never two.
-    modelDefinitions: () => activeToolRegistry.modelDefinitions(),
+    // The same registry the batch resolves and executes against: one catalog, never two, read in its
+    // model-facing form rather than projected down to it.
+    modelSpecs: () => activeToolRegistry.modelSpecs(),
   } satisfies ToolTurnPipeline;
   /**
    * Where a Tool result's raw output is resolved from, for the legacy Context adapter.
@@ -683,7 +732,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
         config: {
           baseSystemPrompt: config.baseSystemPrompt,
           contextLimits: config.contextLimits,
-          tools: activeToolRegistry.modelDefinitions(),
+          tools: activeToolRegistry.modelSpecs(),
           ...(config.modelSettings === undefined ? {} : { modelSettings: config.modelSettings }),
           // The synthetic session prefix still arrives in the durable legacy encoding, so it is
           // projected onto the frozen AI contract here — at the composition root, which is the only
@@ -918,19 +967,70 @@ function defaultCodingOperations(
 /**
  * The default Coding Tool set for a known environment.
  *
- * Git exposure fails closed: `UNKNOWN` is treated exactly like `UNAVAILABLE`, because a host that
- * cannot prove Git works must not offer a model a Tool that will fail. Dropping the two Git
- * *definitions* — rather than filtering a built registry — is what keeps the registry, the Coding
- * catalog, the model-visible specs and the prompt guidance block describing the same active set.
+ * Git exposure fails closed: `UNKNOWN` is treated exactly like `UNAVAILABLE`, because a host that cannot
+ * prove Git works must not offer a model a Tool that will fail. Dropping the two Git *definitions* —
+ * rather than filtering a built registry — is what keeps the registry, the Coding catalog, the
+ * model-visible specs and the prompt guidance block describing the same active set.
+ *
+ * Phase 4F replaced the legacy `filterToolRegistryForEnvironment` with the Coding product layer's own
+ * `withoutGitTools` semantics, applied at the one point the default set is derived. There is now a single
+ * exposure authority: the definition list, decided before anything is built.
  */
 function defaultCodingToolSet(
   operations: DefaultCodingToolOperations,
-  environment: ToolExposureEnvironment,
+  environment: GitToolAvailability,
 ): readonly CodingToolDefinition[] {
   const definitions = createDefaultCodingTools(operations);
-  if (environment.git === "AVAILABLE") return definitions;
+  if (environment === "AVAILABLE") return definitions;
   const excluded = new Set<string>(GIT_TOOL_NAMES);
   return Object.freeze(definitions.filter((definition) => !excluded.has(definition.tool.name)));
+}
+
+/**
+ * Build one immutable canonical Tool registry from the host's Coding Tool definitions.
+ *
+ * ```text
+ * CodingToolDefinition   the executable AgentTool plus its Coding overlay
+ *        ↓ registry.register(definition.tool)
+ * AgentToolRegistry      the resolvable, model-spec-producing execution authority
+ * ```
+ *
+ * The registry receives the **executable Tool**, not the overlay: the Agent Tool Layer may not learn what
+ * risk level, capability or prompt snippet a Coding Tool carries, and
+ * `AgentToolRegistry.modelSpecs()` is what keeps a provider request to three fields per Tool.
+ *
+ * Phase 4F replaced the legacy `ToolRegistryBuilder` — which accepted `ToolRegistration |
+ * CodingToolDefinition` and projected both into this registry — with the canonical builder directly. The
+ * legacy shape is gone, so there is nothing left to project.
+ */
+function buildToolRegistry(
+  definitions: readonly CodingToolDefinition[],
+): import("@caelush/agent").AgentToolRegistry {
+  const builder = new DefaultAgentToolRegistryBuilder();
+  for (const definition of definitions) builder.register(definition.tool);
+  return builder.build();
+}
+
+/**
+ * Build the Coding overlay for the Tools this host registered, refusing a dangling entry.
+ *
+ * ```text
+ * the Coding Tool definitions        → CodingToolCatalogBuilder.register
+ * the active AgentToolRegistry       → CodingToolCatalogBuilder.forRegistry
+ *        ↓
+ * CodingToolCatalog                  risk level · facts projector · effect projector · prompt snippet
+ * ```
+ *
+ * `forRegistry()` is the alignment step: it refuses any entry whose Tool the active registry cannot
+ * execute, which is what keeps Coding metadata describing a call that can actually happen.
+ */
+function createActiveCodingCatalog(
+  registry: import("@caelush/agent").AgentToolRegistry,
+  definitions: readonly CodingToolDefinition[],
+): CodingToolCatalog {
+  const builder = new CodingToolCatalogBuilder().forRegistry(registry);
+  for (const definition of definitions) builder.register(definition);
+  return builder.build();
 }
 
 /**
