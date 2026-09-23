@@ -1,4 +1,4 @@
-import type { ToolTurnResult } from "@caelush/agent";
+import type { ProjectedToolFeedback, ToolTurnResult } from "@caelush/agent";
 import type { ToolBatchItemOutcome } from "@caelush/agent";
 
 /**
@@ -93,6 +93,11 @@ export interface RunToolTurnObservation {
   underlyingOutcome?: RunToolUnderlyingOutcome | undefined;
   /** The raw observations the Tool Layer reported, in assistant source order. */
   rawObservations?: readonly RunToolRawObservation[] | undefined;
+  /**
+   * The exact model feedback projection accepted by the normalizer, retained only for Core's
+   * atomic TOOL_RESULT materialization. The frozen ToolTurnResult intentionally remains narrow.
+   */
+  projectedFeedback?: readonly ProjectedToolFeedback[] | undefined;
 }
 
 /** The observation of a Tool turn that has not reached the Tool Layer yet. */

@@ -1,4 +1,3 @@
-import type { AIMessage } from "@caelush/ai";
 import type {
   AgentEvent,
   AgentRun,
@@ -7,11 +6,14 @@ import type {
   EventDurability,
   RunCancellationIntent,
   RunId,
-  StepId,
   TimestampMs,
 } from "@caelush/protocol";
 
 import type { RunContinuationCheckpoint } from "../continuation/continuation.js";
+import type {
+  AgentMessageRecord,
+  AgentMessageRecordDraft,
+} from "../../messages/persistence/record.js";
 
 /**
  * The canonical Run execution store port.
@@ -30,7 +32,7 @@ import type { RunContinuationCheckpoint } from "../continuation/continuation.js"
  *
  * ```text
  * VerificationPlan / VerifiedRunFinalResult     a coding-verification concern, not a general one
- * LLMMessage                                    the legacy durable message encoding
+ * AIMessage / LLMMessage                       compatibility projections, never durable state
  * rows, SQL, Drizzle clients, database handles
  * ```
  *
@@ -55,21 +57,6 @@ export type DurableAgentEvent = AgentEvent extends infer Event
   : never;
 
 /**
- * One model-visible conversation entry.
- *
- * `message` is an `AIMessage`: the general Run domain speaks the frozen AI message contract, and
- * a legacy durable encoding is projected at the storage boundary rather than leaking inwards.
- */
-export interface RunConversationEntry {
-  readonly runId: RunId;
-  readonly sequence: number;
-  /** The Step that produced this entry, when a Step did. */
-  readonly sourceStepId?: StepId;
-  readonly createdAt: TimestampMs;
-  readonly message: AIMessage;
-}
-
-/**
  * The durable Run state one execution decision is made from.
  *
  * It carries the Run, its AgentState, the active Step, the conversation and the continuation —
@@ -82,16 +69,14 @@ export interface RunExecutionSnapshot {
   readonly stateRevision?: number;
   /** A Step that was committed as RUNNING and not yet settled. */
   readonly activeStep?: AgentStep;
-  readonly conversation: readonly RunConversationEntry[];
+  readonly conversationRecords: readonly AgentMessageRecord[];
   readonly continuation?: RunContinuationCheckpoint;
   readonly continuationRevision?: number;
   readonly cancellationIntent?: RunCancellationIntent;
 }
 
 export interface RunExecutionMessageAppend {
-  readonly createdAt: TimestampMs;
-  readonly sourceStepId?: StepId;
-  readonly message: AIMessage;
+  readonly draft: AgentMessageRecordDraft;
 }
 
 export interface RunExecutionStepWrite {

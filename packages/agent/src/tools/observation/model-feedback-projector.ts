@@ -1,4 +1,11 @@
 import type { AIToolResultMessage } from "@caelush/ai";
+import { fingerprintProjection } from "../../messages/projection/projector.js";
+import {
+  TOOL_FEEDBACK_PROJECTION_RECEIPT_VERSION,
+  toolFeedbackPolicySnapshot,
+} from "../../messages/types/tool-result-message.js";
+import type { ToolFeedbackProjectionReceipt } from "../../messages/types/tool-result-message.js";
+import type { ToolResultObservationRef } from "../../messages/types/tool-result-observation.js";
 
 import type { ToolObservationPolicySnapshot } from "../../loop/types.js";
 import type { ToolBatchItemOutcome } from "../batch/batch-types.js";
@@ -50,12 +57,18 @@ import type { ToolCallRequest } from "../call/tool-call-preparer.js";
  * Context projector applies to `read_file` and `exec_command`-shaped output is preserved rather than
  * silently degraded to a prefix cut.
  */
+export interface ProjectedToolFeedback {
+  readonly message: AIToolResultMessage;
+  readonly receipt: ToolFeedbackProjectionReceipt;
+  readonly observation: ToolResultObservationRef;
+}
+
 export interface ModelToolFeedbackProjector {
   project(input: {
     readonly calls: readonly ToolCallRequest[];
     readonly items: readonly ToolBatchItemOutcome[];
     readonly policy: ToolObservationPolicySnapshot;
-  }): readonly AIToolResultMessage[];
+  }): readonly ProjectedToolFeedback[];
 }
 
 /**
@@ -123,7 +136,7 @@ export function createModelToolFeedbackProjector(
       readonly calls: readonly ToolCallRequest[];
       readonly items: readonly ToolBatchItemOutcome[];
       readonly policy: ToolObservationPolicySnapshot;
-    }): readonly AIToolResultMessage[] {
+    }): readonly ProjectedToolFeedback[] {
       const { calls, items, policy } = input;
       assertItemBatchMatchesCalls(calls, items);
       assertProjectionPolicy(policy);
@@ -144,19 +157,35 @@ export function createModelToolFeedbackProjector(
       }
 
       return Object.freeze(
-        items.map((item, index) =>
-          Object.freeze({
+        items.map((item, index) => {
+          const message = Object.freeze({
             role: "tool" as const,
             // Identity is read from the original call: never parsed, never supplied by the projection.
             toolCallId: item.call.externalCallId,
             toolName: item.call.toolName,
             content: bounded[index] ?? "",
             isError: isErrorOf(item),
-          }),
-        ),
+          });
+          const receipt: ToolFeedbackProjectionReceipt = Object.freeze({
+            policy: toolFeedbackPolicySnapshot(policy),
+            fingerprint: fingerprintProjection([message]),
+            version: TOOL_FEEDBACK_PROJECTION_RECEIPT_VERSION,
+          });
+          return Object.freeze({
+            message,
+            receipt,
+            observation: observationRefOf(item),
+          });
+        }),
       );
     },
   };
+}
+
+function observationRefOf(item: ToolBatchItemOutcome): ToolResultObservationRef {
+  return item.kind === "OBSERVATION"
+    ? { kind: "OBSERVATION", observationId: item.observation.id }
+    : { kind: "NO_OBSERVATION" };
 }
 
 /* ------------------------------------------------------------------------------------------------
@@ -219,7 +248,11 @@ function boundProportionally(
 }
 
 /** Bound one text to a token budget with a marker, cutting on code-point boundaries. */
-function boundText(content: string, maxTokens: number, estimator: (text: string) => number): string {
+function boundText(
+  content: string,
+  maxTokens: number,
+  estimator: (text: string) => number,
+): string {
   if (estimator(content) <= maxTokens) return content;
   const marker =
     estimator(MODEL_FEEDBACK_TRUNCATION_MARKER) <= maxTokens

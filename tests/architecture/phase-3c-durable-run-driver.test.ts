@@ -249,8 +249,11 @@ describe("Phase 3C Run Layer ownership", () => {
     expect(storeCode).not.toContain("VerificationPlan");
     expect(storeCode).not.toContain("VerifiedRunFinalResult");
     expect(storeCode).not.toContain("commitVerifiedCompletion");
-    // And the conversation speaks the frozen AI message contract.
-    expect(store).toContain("readonly message: AIMessage;");
+    // Phase 5C moved the durable conversation contract to raw V2 records; AI messages remain a
+    // compatibility projection at the Context/AgentLoop seam.
+    expect(store).toContain("readonly conversationRecords: readonly AgentMessageRecord[];");
+    expect(store).toContain("readonly draft: AgentMessageRecordDraft;");
+    expect(store).not.toContain("RunConversationEntry");
 
     const continuation = read("packages/agent/src/run/continuation/continuation.ts");
     for (const type of [

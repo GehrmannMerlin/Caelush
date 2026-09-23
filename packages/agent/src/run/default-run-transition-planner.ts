@@ -1,9 +1,8 @@
-import type { AIMessage, AIToolResultMessage } from "@caelush/ai";
+import type { AIToolResultMessage } from "@caelush/ai";
 import {
   AgentRunSchema,
   type AgentRun,
   type AgentState,
-  type StepId,
   type TimestampMs,
 } from "@caelush/protocol";
 
@@ -14,7 +13,6 @@ import type { AgentToolResult, ToolTurnResult } from "./ports/tool-turn.js";
 import { RunExecutionInvariantError } from "./ports/run-execution-store.js";
 import type {
   RunExecutionCommit,
-  RunExecutionMessageAppend,
   RunExecutionSnapshot,
   RunExecutionStepWrite,
 } from "./ports/run-execution-store.js";
@@ -260,7 +258,7 @@ function planToolRequests(
       now,
     }),
     stepWrites: [{ operation: "UPDATE", step: completeAgentStep(step, { finishedAt: now }) }],
-    messagesToAppend: messageAppends(snapshot, result.messagesToAppend, step.id, now),
+    messagesToAppend: [],
     continuation: {
       operation: "SET",
       checkpoint: {
@@ -312,7 +310,7 @@ function planAgentFailed(
     run: failAgentRun(clearActiveStep(snapshot.run), now),
     state: markAgentStateFailed(settledState, result.error, now),
     stepWrites,
-    messagesToAppend: messageAppends(snapshot, result.messagesToAppend, undefined, now),
+    messagesToAppend: [],
     ...clearContinuation(snapshot),
   };
 }
@@ -347,7 +345,7 @@ function planAgentCancelled(
       countAttempt: result.context !== undefined,
     }),
     stepWrites: [{ operation: "UPDATE", step: cancelAgentStep(active, now) }],
-    messagesToAppend: messageAppends(snapshot, result.messagesToAppend, undefined, now),
+    messagesToAppend: [],
     events: [],
   };
 }
@@ -614,34 +612,6 @@ function toToolResultMessage(result: AgentToolResult): AIToolResultMessage {
     content: result.content,
     isError: result.isError,
   };
-}
-
-/**
- * The canonical append projection.
- *
- * The provenance rule is the durable one and is preserved verbatim: an assistant message belongs to
- * the Step that produced it, and a Tool result belongs to the Step that requested the batch.
- */
-function messageAppends(
-  snapshot: RunExecutionSnapshot,
-  messages: readonly AIMessage[],
-  stepId: StepId | undefined,
-  now: TimestampMs,
-): readonly RunExecutionMessageAppend[] {
-  const toolStepId =
-    snapshot.continuation?.type === "WAITING_TOOL_RESULTS"
-      ? snapshot.continuation.sourceStepId
-      : undefined;
-
-  return messages.map((message): RunExecutionMessageAppend => {
-    const sourceStepId =
-      message.role === "assistant" ? stepId : message.role === "tool" ? toolStepId : undefined;
-    return {
-      createdAt: now,
-      ...(sourceStepId === undefined ? {} : { sourceStepId }),
-      message,
-    };
-  });
 }
 
 /* ------------------------------------------------------- fail-closed helpers */

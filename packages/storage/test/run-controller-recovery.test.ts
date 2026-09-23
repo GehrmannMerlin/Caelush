@@ -8,7 +8,7 @@ import {
   createTimestampMs,
   createWorkspaceId,
 } from "@caelush/protocol";
-import { RunController } from "@caelush/core";
+import { createUserMessageAppend, RunController } from "@caelush/core";
 import { EventBus } from "@caelush/events";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
@@ -17,6 +17,7 @@ import {
   fakeFrozenModelTurnExecutor,
   testRunAgentExecution,
 } from "./support/run-agent-execution.js";
+import { testRunMessageAuthority } from "../../core/test/support/run-message-authority.js";
 
 function run() {
   return AgentRunSchema.parse({
@@ -56,6 +57,7 @@ function controller(
       createStepId: () => createStepId(),
     }).factory,
     executionStore: storage.execution,
+    messages: testRunMessageAuthority(),
     events: new EventBus(storage.events),
     configResolver: {
       resolve: async () => ({
@@ -100,6 +102,10 @@ describe("RunController recovery", () => {
       updatedAt: createTimestampMs(10),
     });
     await insertParents(storage, currentRun);
+    const messages = testRunMessageAuthority();
+    await storage.messageRecords.append(currentRun.id, [
+      createUserMessageAppend(messages, currentRun, "GOAL").draft,
+    ]);
     await storage.steps.insert(step);
     await storage.runStates.save(state);
     await storage.events.append({

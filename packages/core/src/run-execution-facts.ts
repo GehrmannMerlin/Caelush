@@ -21,7 +21,7 @@ export function toAgentExecutionSnapshot(snapshot: RunExecutionSnapshotView): Ru
     ...(snapshot.state === undefined ? {} : { state: snapshot.state }),
     ...(snapshot.stateRevision === undefined ? {} : { stateRevision: snapshot.stateRevision }),
     ...(snapshot.activeStep === undefined ? {} : { activeStep: snapshot.activeStep }),
-    conversation: snapshot.conversation,
+    conversationRecords: snapshot.conversationRecords,
     ...(snapshot.continuation === undefined ? {} : { continuation: snapshot.continuation }),
     ...(snapshot.continuationRevision === undefined
       ? {}

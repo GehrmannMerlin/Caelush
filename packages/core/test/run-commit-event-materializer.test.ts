@@ -104,7 +104,7 @@ function activeStepSnapshot(
     run,
     state: overrides.state ?? makeState(run, { currentStepId: STEP_ID }),
     stateRevision: 1,
-    conversation: [],
+    conversationRecords: [],
     activeStep:
       overrides.activeStep ??
       ({
@@ -133,7 +133,7 @@ function runningBoundarySnapshot(
     state: overrides.state ?? makeState(run),
     stateRevision: 1,
     continuationRevision: 1,
-    conversation: [],
+    conversationRecords: [],
     continuation: {
       type: "WAITING_TOOL_RESULTS",
       runId: run.id,
@@ -154,7 +154,7 @@ function verifyingSnapshot(
     state: overrides.state ?? makeState(run, { status: "VERIFYING" }),
     stateRevision: 1,
     continuationRevision: 1,
-    conversation: [],
+    conversationRecords: [],
     ...overrides,
   };
 }

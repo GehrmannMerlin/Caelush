@@ -37,6 +37,8 @@ import {
   fakeFrozenModelTurnExecutor,
   testRunAgentExecution,
 } from "./support/run-agent-execution.js";
+import { testRunMessageAuthority } from "../../core/test/support/run-message-authority.js";
+import { projectedRunMessages } from "./support/projected-run-messages.js";
 
 /**
  * The production Agent effect cutover, asserted against the real RunController.
@@ -181,8 +183,7 @@ async function setup(options: SetupOptions) {
     },
   };
   const completionStore: RunCompletionPersistencePort = {
-    loadVerificationPlan: (runId, planId) =>
-      completion.loadVerificationPlan(runId, planId),
+    loadVerificationPlan: (runId, planId) => completion.loadVerificationPlan(runId, planId),
     commitCandidateBoundary: async (command) => {
       order.push("commit");
       const result = await completion.commitCandidateBoundary(command);
@@ -210,6 +211,7 @@ async function setup(options: SetupOptions) {
   const controller = new RunController({
     agentExecution: agentExecution.factory,
     executionStore: instrumented,
+    messages: testRunMessageAuthority(),
     completionStore,
     events: eventBus,
     configResolver: {
@@ -270,12 +272,15 @@ describe("production Agent effect cutover", () => {
     expect(planned.events).toEqual([]);
     expect(planned.stepWrites.map((write) => write.operation)).toEqual(["UPDATE"]);
     expect(planned.stepWrites[0]?.step.status).toBe("COMPLETED");
-    // The first user message and the assistant turn it produced, each appended once — the planner
-    // is the only thing that writes them.
-    expect(planned.messagesToAppend.map((entry) => entry.message.role)).toEqual([
-      "user",
-      "assistant",
-    ]);
+    // The frozen planner owns the state transition but not the semantic message materialization.
+    expect(planned.messagesToAppend).toEqual([]);
+    // The Core settlement adds exactly the assistant message for the completed provider turn; the
+    // user message was durably written in the PENDING -> RUNNING checkpoint before the provider.
+    expect(
+      fixture.materializer.inputs[0]?.plannedCommit.messagesToAppend.map(
+        (entry) => entry.draft.messageType,
+      ),
+    ).toEqual(["ASSISTANT"]);
     expect(planned.continuation?.operation).toBe("SET");
 
     const snapshot = await fixture.storage.execution.load(fixture.run.id);
@@ -286,10 +291,9 @@ describe("production Agent effect cutover", () => {
       pendingDecision: { type: "TOOL_CALLS_REQUESTED" },
     });
     // The goal and the assistant turn it produced, each appended exactly once, by the planner.
-    expect(snapshot?.conversation.map((entry) => entry.message.role)).toEqual([
-      "user",
-      "assistant",
-    ]);
+    expect(
+      (await projectedRunMessages(fixture.storage, fixture.run.id)).map((message) => message.role),
+    ).toEqual(["user", "assistant"]);
 
     // One durable Step, opened once and settled once.
     expect(await fixture.storage.steps.listByRun(fixture.run.id)).toHaveLength(1);
@@ -374,6 +378,7 @@ describe("production Agent effect cutover", () => {
     const controller = new RunController({
       agentExecution: agentExecution.factory,
       executionStore: storage.execution,
+      messages: testRunMessageAuthority(),
       events: eventBus,
       configResolver: {
         resolve: async () => ({
@@ -557,7 +562,7 @@ describe("canonical settlement side-effect safety", () => {
     // And nothing was durably settled.
     const snapshot = await fixture.storage.execution.load(fixture.run.id);
     expect(snapshot?.continuation).toBeUndefined();
-    expect(snapshot?.conversation).toHaveLength(0);
+    expect(snapshot?.conversationRecords).toHaveLength(1);
     await fixture.storage.close();
   });
 

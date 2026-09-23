@@ -434,7 +434,7 @@ type SnapshotKeys = Expect<
     | "state"
     | "stateRevision"
     | "activeStep"
-    | "conversation"
+    | "conversationRecords"
     | "continuation"
     | "continuationRevision"
     | "cancellationIntent"
@@ -443,9 +443,12 @@ type SnapshotKeys = Expect<
 type SnapshotHasNoVerificationPlan = Expect<
   Equal<Extract<Keys<RunExecutionSnapshot>, "verificationPlan">, never>
 >;
-/** The canonical conversation speaks the frozen AI message contract, not a legacy encoding. */
-type ConversationMessageIsAIMessage = Expect<
-  Equal<RunExecutionSnapshot["conversation"][number]["message"], import("@caelush/ai").AIMessage>
+/** The durable execution snapshot speaks the raw Message V2 record contract. */
+type ConversationRecordsAreAgentRecords = Expect<
+  Equal<
+    RunExecutionSnapshot["conversationRecords"][number],
+    import("@caelush/agent").AgentMessageRecord
+  >
 >;
 
 /* The continuation domain is agent-owned and ordinal-stable. */
@@ -593,7 +596,7 @@ export type PHASE_3C_ASSERTIONS = [
   StorePortHasNoVerification,
   SnapshotKeys,
   SnapshotHasNoVerificationPlan,
-  ConversationMessageIsAIMessage,
+  ConversationRecordsAreAgentRecords,
   ContinuationTypes,
   ToolContinuationHasPolicy,
   ToolContinuationResultsAreAI,

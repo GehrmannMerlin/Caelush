@@ -33,6 +33,7 @@ import {
   fakeFrozenModelTurnExecutor,
   testRunAgentExecution,
 } from "./support/run-agent-execution.js";
+import { testRunMessageAuthority } from "./support/run-message-authority.js";
 
 function makeRun(overrides: Partial<ReturnType<typeof AgentRunSchema.parse>> = {}) {
   return AgentRunSchema.parse({
@@ -67,7 +68,7 @@ class MemoryExecutionStore implements RunExecutionStore, RunCompletionPersistenc
   private readonly plans = new Map<string, VerificationPlan>();
 
   constructor(run: ReturnType<typeof makeRun>) {
-    this.snapshot = { run, conversation: [] };
+    this.snapshot = { run, conversationRecords: [] };
   }
 
   async loadVerificationPlan(
@@ -122,12 +123,12 @@ class MemoryExecutionStore implements RunExecutionStore, RunCompletionPersistenc
     this.stateRevision =
       command.state === undefined ? this.stateRevision : (this.stateRevision ?? 0) + 1;
     const activeStep = command.stepWrites.find((write) => write.step.status === "RUNNING")?.step;
-    const updatedConversation = [
-      ...this.snapshot.conversation,
+    const conversationRecords = [
+      ...this.snapshot.conversationRecords,
       ...command.messagesToAppend.map((entry, index) => ({
         runId: command.run.id,
-        sequence: this.snapshot.conversation.length + index + 1,
-        ...entry,
+        sequence: this.snapshot.conversationRecords.length + index + 1,
+        ...entry.draft,
       })),
     ];
     const stateProjection =
@@ -141,7 +142,7 @@ class MemoryExecutionStore implements RunExecutionStore, RunCompletionPersistenc
         : { cancellationIntent: this.snapshot.cancellationIntent }),
       ...stateProjection,
       ...(activeStep === undefined ? {} : { activeStep }),
-      conversation: updatedConversation,
+      conversationRecords,
       ...(command.continuation?.operation === "SET"
         ? { continuation: command.continuation.checkpoint, continuationRevision: 1 }
         : {}),
@@ -235,6 +236,7 @@ describe("RunController.start", () => {
         },
       ),
       executionStore: store,
+      messages: testRunMessageAuthority(),
       events: { notifyCommitted: () => undefined },
       configResolver: {
         resolve: async () => ({
@@ -281,6 +283,7 @@ describe("RunController.start", () => {
         providerCalls += 1;
       }),
       executionStore: store,
+      messages: testRunMessageAuthority(),
       events: { notifyCommitted: () => undefined },
       configResolver: {
         resolve: async () => ({
@@ -319,6 +322,7 @@ describe("RunController.start", () => {
         throw new Error("timeout cleanup must precede provider execution");
       }),
       executionStore: store,
+      messages: testRunMessageAuthority(),
       events: { notifyCommitted: () => undefined },
       configResolver: {
         resolve: async () => ({
@@ -369,6 +373,7 @@ describe("RunController.start", () => {
         providerCalls += 1;
       }),
       executionStore: store,
+      messages: testRunMessageAuthority(),
       events: notifier,
       configResolver: resolver,
       clock: { now: () => createTimestampMs(10) },
@@ -397,6 +402,7 @@ describe("RunController.start", () => {
     const controller = new RunController({
       agentExecution: makeAgentExecution(store, () => undefined),
       executionStore: store,
+      messages: testRunMessageAuthority(),
       events: { notifyCommitted: () => undefined },
       configResolver: {
         resolve: async () => ({
@@ -437,6 +443,7 @@ describe("RunController.start", () => {
         providerCalls += 1;
       }),
       executionStore: store,
+      messages: testRunMessageAuthority(),
       events: { notifyCommitted: () => undefined },
       configResolver: {
         resolve: async () => ({
@@ -474,6 +481,7 @@ describe("RunController.cancel", () => {
         throw new Error("pending cancellation must not invoke the provider");
       }),
       executionStore: store,
+      messages: testRunMessageAuthority(),
       events: { notifyCommitted: (events) => notified.push(...events) },
       configResolver: {
         resolve: async () => ({
@@ -504,6 +512,7 @@ describe("RunController project verification driving", () => {
     const controller = new RunController({
       agentExecution: makeAgentExecution(store, () => undefined),
       executionStore: store,
+      messages: testRunMessageAuthority(),
       events: { notifyCommitted: () => undefined },
       configResolver: {
         resolve: async () => ({
@@ -593,6 +602,5 @@ describe("RunController project verification driving", () => {
     // yet, and nothing may be reported as verified.
     const plan = await store.loadVerificationPlan(run.id, continuation.verificationPlanId);
     expect(plan?.checks.every((check) => check.status === "PENDING")).toBe(true);
-
   });
 });

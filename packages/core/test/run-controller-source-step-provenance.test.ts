@@ -12,9 +12,12 @@ import {
 import { describe, expect, it } from "vitest";
 import { completionStoreOver } from "./support/completion-store.js";
 import { RunController } from "../src/run-controller.js";
+import {
+  createAssistantMessageAppend,
+  createUserMessageAppend,
+} from "../src/run-message-materializer.js";
 import type {
   DurableAgentEvent,
-  RunConversationEntry,
   RunExecutionCommit,
   RunExecutionSnapshot,
   RunExecutionStorePort,
@@ -32,6 +35,7 @@ import {
   fakeFrozenModelTurnExecutor,
   testRunAgentExecution,
 } from "./support/run-agent-execution.js";
+import { testRunMessageAuthority } from "./support/run-message-authority.js";
 
 /**
  * `AgentTurnInput.TOOL_RESULTS.sourceStepId` provenance.
@@ -132,17 +136,17 @@ class SeededStore implements RunExecutionStorePort {
     if (command.continuation?.operation === "CLEAR") this.continuationRevision = undefined;
     // Rebuilt member by member rather than spread from a `Record`: the snapshot fields are
     // optional-without-undefined, so "absent" has to be omitted rather than assigned.
-    const conversation: RunConversationEntry[] = [
-      ...this.snapshot.conversation,
+    const conversationRecords = [
+      ...this.snapshot.conversationRecords,
       ...command.messagesToAppend.map((entry, index) => ({
         runId: command.run.id,
-        sequence: this.snapshot.conversation.length + index + 1,
-        ...entry,
+        sequence: this.snapshot.conversationRecords.length + index + 1,
+        ...entry.draft,
       })),
     ];
     this.snapshot = {
       run: command.run,
-      conversation,
+      conversationRecords,
       ...(command.state === undefined
         ? this.snapshot.state === undefined
           ? {}
@@ -222,6 +226,7 @@ function controllerFor(
   return new RunController({
     agentExecution: agentExecutionFor(observed),
     executionStore: store,
+    messages: testRunMessageAuthority(),
     completionStore: completionStoreOver(store),
     events: { notifyCommitted: () => undefined },
     configResolver: {
@@ -277,7 +282,7 @@ function waitingToolResults(overrides: Partial<RunContinuationCheckpoint> = {}) 
   const store = new SeededStore({
     run: AgentRunSchema.parse({ ...run, status: "RUNNING", startedAt: createTimestampMs(1) }),
     state: stateFor(run) as never,
-    conversation: openToolTurn(run.id),
+    conversationRecords: openToolTurn(run),
     continuation: checkpoint,
     continuationRevision: 1,
   });
@@ -285,23 +290,25 @@ function waitingToolResults(overrides: Partial<RunContinuationCheckpoint> = {}) 
 }
 
 /** The durable conversation of a Run parked on an open Tool turn. */
-function openToolTurn(runId: ReturnType<typeof makeRun>["id"]): RunConversationEntry[] {
+function openToolTurn(run: ReturnType<typeof makeRun>) {
+  const messages = testRunMessageAuthority();
+  const user = createUserMessageAppend(messages, run, "GOAL").draft;
+  const assistant = createAssistantMessageAppend(
+    messages,
+    run,
+    ORIGINAL_TOOL_STEP,
+    PENDING_DECISION.modelTurn,
+  ).draft;
   return [
     {
-      runId,
       sequence: 1,
-      createdAt: createTimestampMs(1),
-      message: { role: "user", content: "resume the tools" },
+      runId: run.id,
+      ...user,
     },
     {
-      runId,
       sequence: 2,
-      createdAt: createTimestampMs(1),
-      sourceStepId: ORIGINAL_TOOL_STEP,
-      message: {
-        role: "assistant",
-        content: PENDING_DECISION.modelTurn.assistantMessage.content,
-      },
+      runId: run.id,
+      ...assistant,
     },
   ];
 }
@@ -394,7 +401,7 @@ describe("RunController Tool resume provenance", () => {
       ...store.snapshot,
       // A checkpoint written before the retry continuation carried `sourceStepId`. The Step is
       // still determinable: the assistant message that announced the calls records it.
-      conversation: openToolTurn(run.id) as never,
+      conversationRecords: openToolTurn(run) as never,
       continuation: {
         type: "WAITING_RETRY",
         runId: run.id,
@@ -438,7 +445,7 @@ describe("RunController Tool resume provenance", () => {
     store.snapshot = {
       ...store.snapshot,
       // No `sourceStepId`, and no durable assistant message to recover it from.
-      conversation: [],
+      conversationRecords: [],
       continuation: {
         type: "WAITING_RETRY",
         runId: run.id,
@@ -536,7 +543,7 @@ describe("RunController Tool resume provenance", () => {
         startedAt: createTimestampMs(1),
       }),
       state: stateFor(run, "WAITING_RESOURCE") as never,
-      conversation: [],
+      conversationRecords: [],
       continuation: {
         type: "WAITING_RESOURCE",
         runId: run.id,

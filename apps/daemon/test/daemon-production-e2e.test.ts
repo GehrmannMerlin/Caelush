@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { CaelushClient } from "@caelush/client";
 import { openCaelushStorage } from "@caelush/storage";
 import { startDaemon } from "../src/index.js";
+import { projectedRunMessages } from "../../../packages/storage/test/support/projected-run-messages.js";
 import { FIXTURE_API, fixtureBinding, fixtureModelSource } from "./support/ai-fixture.js";
 
 let directory: string | undefined;
@@ -259,11 +260,11 @@ describe("daemon production composition E2E", () => {
           : await persistedStorage.contextArtifacts.readInternal(observation.rawArtifactRef);
       expect(artifact?.content).toContain("2: 0-payload-");
       expect(artifact?.content.length).toBeGreaterThan(10_000);
-      const modelToolMessage = (await persistedStorage.messages.listByRun(run.id)).find(
-        (entry) => entry.message.role === "tool",
+      const modelToolMessage = (await projectedRunMessages(persistedStorage, run.id)).find(
+        (message) => message.role === "tool",
       );
-      if (modelToolMessage?.message.role !== "tool") throw new Error("model tool message missing");
-      expect(modelToolMessage.message.content.length).toBeLessThan(artifact?.content.length ?? 0);
+      if (modelToolMessage?.role !== "tool") throw new Error("model tool message missing");
+      expect(modelToolMessage.content.length).toBeLessThan(artifact?.content.length ?? 0);
     } finally {
       await persistedStorage.close();
     }

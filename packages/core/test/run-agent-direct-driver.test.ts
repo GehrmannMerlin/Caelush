@@ -2,6 +2,7 @@ import type { AIModelRequest, AIModelTurnResult, JsonObject } from "@caelush/ai"
 import type { AgentTurnRef, ModelTurnExecutionResult } from "@caelush/agent";
 import { createModelToolFeedbackProjector, createToolResultBatchNormalizer } from "@caelush/agent";
 import { toContextObservationProjection } from "../src/agent-tool-batch.js";
+import { createUserMessageAppend } from "../src/run-message-materializer.js";
 import {
   AgentRunSchema,
   createEventId,
@@ -20,7 +21,6 @@ import { RunController } from "../src/run-controller.js";
 import { RunExecutionConflictError } from "../src/run-execution-store.js";
 import type {
   DurableAgentEvent,
-  RunConversationEntry,
   RunExecutionCommit,
   RunExecutionSnapshot,
   RunExecutionStore,
@@ -36,6 +36,7 @@ import {
   type FakeContextEngine,
   type FakeFrozenModelTurnExecutor,
 } from "./support/run-agent-execution.js";
+import { testRunMessageAuthority } from "./support/run-message-authority.js";
 
 /**
  * The production direct Run execution path.
@@ -124,17 +125,17 @@ class MemoryExecutionStore implements RunExecutionStore {
     }
     if (command.continuation?.operation === "CLEAR") this.continuationRevision = undefined;
 
-    const conversation: RunConversationEntry[] = [
-      ...this.snapshot.conversation,
+    const conversationRecords = [
+      ...this.snapshot.conversationRecords,
       ...command.messagesToAppend.map((entry, index) => ({
         runId: command.run.id,
-        sequence: this.snapshot.conversation.length + index + 1,
-        ...entry,
+        sequence: this.snapshot.conversationRecords.length + index + 1,
+        ...entry.draft,
       })),
     ];
     this.snapshot = {
       run: command.run,
-      conversation,
+      conversationRecords,
       // An absent `state` means "this transition leaves it alone", which is what the canonical
       // commit contract says and what the production store does. A continuation-only transition —
       // which is exactly what accepting a Tool batch is — therefore keeps the AgentState it was
@@ -187,7 +188,7 @@ function harness(options: {
   const run = options.run ?? makeRun();
   const store = new MemoryExecutionStore({
     run,
-    conversation: [],
+    conversationRecords: [],
     ...options.snapshot,
   });
   const notifications: DurableAgentEvent[] = [];
@@ -209,6 +210,7 @@ function harness(options: {
   const controller = new RunController({
     agentExecution: execution,
     executionStore: store,
+    messages: testRunMessageAuthority(),
     completionStore: completionStoreOver(store),
     events: {
       notifyCommitted: (events: readonly DurableAgentEvent[]) => notifications.push(...events),
@@ -384,13 +386,15 @@ describe("production ADVANCE_AGENT settlement", () => {
     // The durable ledger holds one user, one assistant, one tool result and the answering assistant
     // message; the tool result is attributed to the Step that requested the batch — never to the
     // resume attempt.
-    expect(h.store.snapshot.conversation.map((entry) => entry.message.role)).toEqual([
-      "user",
-      "assistant",
-      "tool",
-      "assistant",
+    expect(h.store.snapshot.conversationRecords.map((entry) => entry.messageType)).toEqual([
+      "USER",
+      "ASSISTANT",
+      "TOOL_RESULT",
+      "ASSISTANT",
     ]);
-    const toolEntry = h.store.snapshot.conversation.find((entry) => entry.message.role === "tool");
+    const toolEntry = h.store.snapshot.conversationRecords.find(
+      (entry) => entry.messageType === "TOOL_RESULT",
+    );
     expect(toolEntry?.sourceStepId).toBe(h.allocatedSteps[0]);
     expect(h.store.snapshot.state?.usage.steps).toBe(2);
 
@@ -564,7 +568,9 @@ describe("production ADVANCE_AGENT settlement", () => {
     expect(h.store.snapshot.continuation).toBeUndefined();
     // The ledger records the user turn the Run failed on. No provider output is appended: the
     // attempt produced none, and inventing one would durably record an answer the model never gave.
-    expect(h.store.snapshot.conversation.map((entry) => entry.message.role)).toEqual(["user"]);
+    expect(h.store.snapshot.conversationRecords.map((entry) => entry.messageType)).toEqual([
+      "USER",
+    ]);
     expect(h.notifications.map((event) => event.type)).toEqual([
       "run.started",
       "status.changed",
@@ -618,7 +624,11 @@ describe("production ADVANCE_AGENT settlement", () => {
     expect(types.filter((type) => type === "llm.failed")).toHaveLength(1);
     expect(types).not.toContain("run.failed");
     // A failed attempt appends no message: the next attempt must not duplicate its own turn input.
-    expect(h.store.commits.flatMap((commit) => commit.messagesToAppend)).toHaveLength(0);
+    expect(
+      h.store.commits
+        .filter((commit) => commit.events.some((event) => event.type === "llm.failed"))
+        .flatMap((commit) => commit.messagesToAppend),
+    ).toHaveLength(0);
 
     // When the retry becomes due, the resume allocates a *new* Step: the failed Step is never reused.
     h.store.snapshot = {
@@ -679,11 +689,19 @@ describe("production ADVANCE_AGENT settlement", () => {
       startedAt: createTimestampMs(2),
     };
     const call = fakeFrozenModelTurnExecutor(async () => turn());
+    const messages = testRunMessageAuthority();
     const h = harness({
       executor: call,
       run,
       snapshot: {
         run: { ...run, currentStepId: step.id },
+        conversationRecords: [
+          {
+            runId: run.id,
+            sequence: 1,
+            ...createUserMessageAppend(messages, run, "GOAL").draft,
+          },
+        ],
         state: {
           ...startAgentState(
             createInitialAgentState(

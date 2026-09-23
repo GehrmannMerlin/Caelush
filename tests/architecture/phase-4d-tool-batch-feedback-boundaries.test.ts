@@ -463,8 +463,9 @@ describe("Phase 4D model feedback boundaries", () => {
       "function completedToolTurnResult(",
       "): ToolTurnResult {",
     );
-    expect(completed).toContain("context.feedback.project(");
-    expect(completed).toContain("context.normalizer.normalize(");
+    expect(completed).toContain("projectAndNormalize(");
+    expect(adapter).toContain("context.feedback.project(");
+    expect(adapter).toContain("context.normalizer.normalize(");
     expect(adapter).toContain("completedResults: [],");
 
     // The three non-complete arms never project.
@@ -476,9 +477,9 @@ describe("Phase 4D model feedback boundaries", () => {
       const marker = adapter.indexOf(arm);
       expect(marker).toBeGreaterThan(-1);
     }
-    // One projection call site in the whole adapter, plus the REPLAN compatibility path.
+    // The shared helper is the sole projection call site; both complete and REPLAN routes use it.
     const projections = adapter.match(/feedback\.project\(/g) ?? [];
-    expect(projections).toHaveLength(2);
+    expect(projections).toHaveLength(1);
   });
 
   it("keeps the normalizer a defense rather than a producer", () => {

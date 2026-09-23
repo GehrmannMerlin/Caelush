@@ -23,6 +23,8 @@ import {
   fakeFrozenModelTurnExecutor,
   testRunAgentExecution,
 } from "./support/run-agent-execution.js";
+import { testRunMessageAuthority } from "../../core/test/support/run-message-authority.js";
+import { projectedRunMessages } from "./support/projected-run-messages.js";
 
 function makeRun() {
   return AgentRunSchema.parse({
@@ -90,6 +92,7 @@ describe("RunController durable boundaries", () => {
         createStepId,
       }).factory,
       executionStore: storage.execution,
+      messages: testRunMessageAuthority(),
       events: eventBus,
       configResolver: {
         resolve: async () => ({
@@ -148,6 +151,7 @@ describe("RunController durable boundaries", () => {
     const controller = new RunController({
       agentExecution,
       executionStore: storage.execution,
+      messages: testRunMessageAuthority(),
       events: eventBus,
       configResolver: {
         resolve: async () => ({
@@ -165,7 +169,7 @@ describe("RunController durable boundaries", () => {
     expect(await storage.runs.get(run.id)).toMatchObject({ status: "RUNNING" });
     expect((await storage.steps.listByRun(run.id))[0]).toMatchObject({ status: "COMPLETED" });
     expect((await storage.continuations.get(run.id))?.checkpoint.type).toBe("WAITING_TOOL_RESULTS");
-    expect((await storage.messages.listByRun(run.id)).map((entry) => entry.message.role)).toEqual([
+    expect((await projectedRunMessages(storage, run.id)).map((message) => message.role)).toEqual([
       "user",
       "assistant",
     ]);
@@ -182,7 +186,7 @@ describe("RunController durable boundaries", () => {
     expect(final.status).toBe("AWAITING_VERIFICATION");
     expect((await storage.runs.get(run.id))?.status).toBe("VERIFYING");
     expect((await storage.runStates.get(run.id))?.status).toBe("VERIFYING");
-    expect((await storage.messages.listByRun(run.id)).map((entry) => entry.message.role)).toEqual([
+    expect((await projectedRunMessages(storage, run.id)).map((message) => message.role)).toEqual([
       "user",
       "assistant",
       "tool",
@@ -237,6 +241,7 @@ describe("RunController durable boundaries", () => {
         createStepId: () => createStepId(),
       }).factory,
       executionStore: storage.execution,
+      messages: testRunMessageAuthority(),
       events: eventBus,
       configResolver: {
         resolve: async () => ({

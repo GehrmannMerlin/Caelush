@@ -7,14 +7,13 @@ import {
 import { createHash } from "node:crypto";
 import {
   assertRunExecutionInvariant,
-  toAgentAIMessage,
-  toLegacyDurableMessage,
   type RunCandidateBoundaryCommit,
   type RunCompletionPersistencePort,
   type RunExecutionCommitView,
   type RunExecutionSnapshotView,
   type RunVerifiedCompletionCommit,
 } from "@caelush/core";
+import type { AgentMessageRecord, AgentMessageRecordDraft } from "@caelush/agent";
 import {
   AgentRunSchema,
   AgentStateSchema,
@@ -32,13 +31,13 @@ import { DuplicateEventError } from "@caelush/events";
 import type { CaelushDatabase } from "./database.js";
 import { decodeProtocol, encodeProtocol } from "./codec.js";
 import { StorageConflictError, StorageError } from "./errors.js";
-import { appendConversationMessagesInTransaction } from "./repositories/conversation-repository.js";
+import { appendAgentMessageRecordsInTransaction } from "./messages/sqlite-agent-message-record-store.js";
 import {
   clearContinuationInTransaction,
   setContinuationInTransaction,
 } from "./repositories/continuation-repository.js";
 import { appendDurableEventsInTransaction } from "./events/sqlite-durable-event-store.js";
-import { SqliteConversationRepository } from "./repositories/conversation-repository.js";
+import { SqliteAgentMessageRecordStore } from "./messages/sqlite-agent-message-record-store.js";
 import { SqliteContinuationRepository } from "./repositories/continuation-repository.js";
 import { SqliteRunRepository } from "./repositories/run-repository.js";
 import { SqliteRunStateRepository } from "./repositories/run-state-repository.js";
@@ -91,6 +90,30 @@ function mapExecutionError(error: unknown): never {
   }
   if (error instanceof StorageError) throw error;
   throw new StorageError("Unable to commit Run execution", { cause: error });
+}
+
+function recordFromDraft(
+  runId: RunId,
+  sequence: number,
+  draft: AgentMessageRecordDraft,
+): AgentMessageRecord {
+  return {
+    messageId: draft.messageId,
+    runId,
+    sessionId: draft.sessionId,
+    sequence,
+    conversationTurnId: draft.conversationTurnId,
+    messageType: draft.messageType,
+    schemaVersion: draft.schemaVersion,
+    ...(draft.modelProjectionVersion === undefined
+      ? {}
+      : { modelProjectionVersion: draft.modelProjectionVersion }),
+    ...(draft.sourceStepId === undefined ? {} : { sourceStepId: draft.sourceStepId }),
+    createdAt: draft.createdAt,
+    source: draft.source,
+    audience: draft.audience,
+    data: draft.data,
+  };
 }
 
 function writeRun(client: CaelushDatabase["client"], run: RunExecutionCommitView["run"]): void {
@@ -169,7 +192,7 @@ export class SqliteRunExecutionStore
   private readonly runs: SqliteRunRepository;
   private readonly states: SqliteRunStateRepository;
   private readonly steps: SqliteStepRepository;
-  private readonly messages: SqliteConversationRepository;
+  private readonly messageRecords: SqliteAgentMessageRecordStore;
   private readonly continuations: SqliteContinuationRepository;
   private readonly cancellations: SqliteCancellationRepository;
 
@@ -177,7 +200,7 @@ export class SqliteRunExecutionStore
     this.runs = new SqliteRunRepository(database);
     this.states = new SqliteRunStateRepository(database);
     this.steps = new SqliteStepRepository(database);
-    this.messages = new SqliteConversationRepository(database);
+    this.messageRecords = new SqliteAgentMessageRecordStore(database);
     this.continuations = new SqliteContinuationRepository(database);
     this.cancellations = new SqliteCancellationRepository(database);
   }
@@ -198,12 +221,7 @@ export class SqliteRunExecutionStore
         : { state: state as AgentState, stateRevision: stateRow.revision };
     const continuation = await this.continuations.get(runId);
     const cancellationIntent = await this.cancellations.get(runId);
-    // The stored bytes stay the legacy encoding; the snapshot the Run Layer reads is canonical.
-    const storedConversation = await this.messages.listByRun(runId);
-    const conversation = storedConversation.map((entry) => ({
-      ...entry,
-      message: toAgentAIMessage(entry.message),
-    }));
+    const conversationRecords = await this.messageRecords.listByRun(runId);
     const loadedActiveStep =
       run.currentStepId === undefined ? undefined : await this.steps.get(run.currentStepId);
     // Phase 3E: a general Run snapshot carries no verification plan. The plan lives behind the
@@ -215,7 +233,7 @@ export class SqliteRunExecutionStore
       ...(loadedActiveStep === undefined || loadedActiveStep === null
         ? {}
         : { activeStep: loadedActiveStep }),
-      conversation,
+      conversationRecords,
       ...(continuation === undefined || continuation === null
         ? {}
         : { continuation: continuation.checkpoint, continuationRevision: continuation.revision }),
@@ -273,12 +291,14 @@ export class SqliteRunExecutionStore
             ? {}
             : { activeStep: before.activeStep }
           : { activeStep: candidateStep }),
-      conversation: [
-        ...before.conversation,
+      conversationRecords: [
+        ...before.conversationRecords,
         ...command.messagesToAppend.map((entry, index) => ({
-          runId: command.run.id,
-          sequence: before.conversation.length + index + 1,
-          ...entry,
+          ...recordFromDraft(
+            command.run.id,
+            before.conversationRecords.length + index + 1,
+            entry.draft,
+          ),
         })),
       ],
       ...candidateContinuation,
@@ -303,13 +323,10 @@ export class SqliteRunExecutionStore
       if (command.events.some((event) => event.runId !== command.run.id)) {
         throw new RunExecutionInvariantError("execution Event does not belong to the Run");
       }
-      appendConversationMessagesInTransaction(
+      appendAgentMessageRecordsInTransaction(
         client,
         command.run.id,
-        command.messagesToAppend.map((entry) => ({
-          ...entry,
-          message: toLegacyDurableMessage(entry.message),
-        })),
+        command.messagesToAppend.map((entry) => entry.draft),
       );
       if (command.continuation?.operation === "SET") {
         setContinuationInTransaction(
@@ -390,7 +407,7 @@ export class SqliteRunExecutionStore
         run: parsedRun,
         state: command.state,
         stateRevision: (current.stateRevision ?? 0) + 1,
-        conversation: current.conversation,
+        conversationRecords: current.conversationRecords,
       });
       writeRun(client, parsedRun);
       writeStateSnapshot(client, command.state, command.expectedStateRevision, (actual, expected) =>
@@ -484,7 +501,7 @@ export class SqliteRunExecutionStore
         run: parsedRun,
         state: command.state,
         stateRevision: (current.stateRevision ?? 0) + 1,
-        conversation: current.conversation,
+        conversationRecords: current.conversationRecords,
         continuation: command.continuation,
         continuationRevision: (current.continuationRevision ?? 0) + 1,
       });
@@ -501,13 +518,10 @@ export class SqliteRunExecutionStore
         }
         writeStep(client, stepWrite.step, stepWrite.operation);
       }
-      appendConversationMessagesInTransaction(
+      appendAgentMessageRecordsInTransaction(
         client,
         parsedRun.id,
-        command.messagesToAppend.map((entry) => ({
-          ...entry,
-          message: toLegacyDurableMessage(entry.message),
-        })),
+        command.messagesToAppend.map((entry) => entry.draft),
       );
       setContinuationInTransaction(
         client,

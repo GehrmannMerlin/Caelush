@@ -21,6 +21,7 @@ import type {
 import type { DurableAgentEvent, RunExecutionStore } from "./run-execution-store.js";
 import type { RunCompletionPersistencePort } from "./run-completion-store.js";
 import type { RunExecutionScopeRegistry } from "./run-execution-scope.js";
+import type { RunMessageAuthority } from "./run-message-materializer.js";
 import type { RunDeadlineRegistry } from "./run-deadline-registry.js";
 import type { RunRetryRegistry } from "./run-retry-registry.js";
 import type { RetryJitterSource, RetryPolicy } from "./retry-controller.js";
@@ -196,6 +197,8 @@ export interface RunControllerDependencies {
   readonly completionStore?: RunCompletionPersistencePort;
   readonly events: RunEventNotifier;
   readonly configResolver: RunExecutionConfigResolver;
+  /** One canonical Factory/Codec/Projector authority for durable message materialization and history. */
+  readonly messages: RunMessageAuthority;
   /**
    * The canonical Tool System exit: schedule a batch, project it for the model, normalize it.
    *

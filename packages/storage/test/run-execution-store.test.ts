@@ -3,6 +3,18 @@ import { AgentRunSchema, createEventId, createStepId, createTimestampMs } from "
 import type { RunId, SessionId, StepId } from "@caelush/protocol";
 import { RunExecutionConflictError } from "@caelush/core";
 import type { DurableEventDraft, RunContinuationCheckpoint } from "@caelush/core";
+import {
+  agentAssistantToolCallPart,
+  agentTextPart,
+  createAgentMessageFactory,
+  createAgentMessageIdFactory,
+  createDeterministicConversationTurnIdFactory,
+  createStandardAgentMessageCodecRegistry,
+  createStandardAgentMessageProjectorRegistry,
+  modelMessageSource,
+  userMessageSource,
+} from "@caelush/agent";
+import type { AgentMessage } from "@caelush/agent";
 import { openCaelushStorage } from "../src/index.js";
 import { makeRun, makeSession, makeState, makeStep } from "./support/fixtures.js";
 
@@ -76,30 +88,72 @@ describe("SqliteRunExecutionStore", () => {
     await storage.sessions.insert(session);
     await storage.runs.insert(pendingRun);
 
+    const projectors = createStandardAgentMessageProjectorRegistry();
+    const codecs = createStandardAgentMessageCodecRegistry((type) =>
+      projectors.currentVersion(type),
+    );
+    const turns = createDeterministicConversationTurnIdFactory();
+    const factory = createAgentMessageFactory({
+      ids: createAgentMessageIdFactory(),
+      now: () => createTimestampMs(105),
+      turns,
+    });
+    const scope = {
+      runId: run.id,
+      sessionId: run.sessionId,
+      conversationTurnId: turns.forRun(run.id),
+    };
+    const user = factory.createUser({
+      ...scope,
+      source: userMessageSource("GOAL"),
+      content: [agentTextPart(run.goal)],
+    });
+    const assistant = factory.createAssistant({
+      ...scope,
+      sourceStepId: step.id,
+      source: modelMessageSource("llm_fixture"),
+      content: [
+        agentAssistantToolCallPart({
+          toolCallId: "call_a",
+          toolName: "read_file",
+          input: { path: "a" },
+        }),
+      ],
+      model: {
+        kind: "MODEL_TURN",
+        callId: "llm_fixture",
+        model: { provider: "fixture", model: "fixture-model" },
+        finishReason: "TOOL_CALLS",
+      },
+    });
+    const append = (message: AgentMessage) => {
+      const encoded = codecs.encode(message);
+      return {
+        draft: {
+          messageId: message.id,
+          sessionId: message.sessionId,
+          conversationTurnId: message.conversationTurnId,
+          messageType: message.type,
+          schemaVersion: encoded.schemaVersion,
+          ...(encoded.modelProjectionVersion === undefined
+            ? {}
+            : { modelProjectionVersion: encoded.modelProjectionVersion }),
+          ...(message.sourceStepId === undefined ? {} : { sourceStepId: message.sourceStepId }),
+          createdAt: message.createdAt,
+          source: message.source,
+          audience: message.audience,
+          data: encoded.data,
+        },
+      } as const;
+    };
+
     const result = await storage.execution.commit({
       run,
       state,
       expectedStateRevision: null,
       expectedContinuationRevision: null,
       stepWrites: [{ operation: "INSERT", step }],
-      messagesToAppend: [
-        { createdAt: createTimestampMs(105), message: { role: "user", content: run.goal } },
-        {
-          createdAt: createTimestampMs(120),
-          sourceStepId: step.id,
-          message: step.id && {
-            role: "assistant",
-            content: [
-              {
-                type: "tool-call",
-                toolCallId: "call_a",
-                toolName: "read_file",
-                input: { path: "a" },
-              },
-            ],
-          },
-        },
-      ],
+      messagesToAppend: [append(user), append(assistant)],
       continuation: {
         operation: "SET",
         checkpoint: checkpoint(run.id, step.id),
@@ -110,7 +164,10 @@ describe("SqliteRunExecutionStore", () => {
     expect(result.snapshot.run.status).toBe("RUNNING");
     expect(result.snapshot.stateRevision).toBe(1);
     expect(result.snapshot.continuationRevision).toBe(1);
-    expect(result.snapshot.conversation).toHaveLength(2);
+    expect(result.snapshot.conversationRecords).toHaveLength(2);
+    expect(
+      (await storage.messageRecords.listByRun(run.id)).map((record) => record.messageType),
+    ).toEqual(["USER", "ASSISTANT"]);
 
     await expect(
       storage.execution.commit({
@@ -139,7 +196,7 @@ describe("SqliteRunExecutionStore", () => {
     ).rejects.toThrow();
     const afterRollback = await storage.execution.load(run.id);
     expect(afterRollback?.stateRevision).toBe(1);
-    expect(afterRollback?.conversation).toHaveLength(2);
+    expect(afterRollback?.conversationRecords).toHaveLength(2);
     expect(await storage.events.latestSequence(run.id)).toBe(1);
     await storage.close();
   });

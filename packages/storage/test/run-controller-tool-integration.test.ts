@@ -68,6 +68,23 @@ import {
   fakeFrozenModelTurnExecutor,
   testRunAgentExecution,
 } from "./support/run-agent-execution.js";
+import { testRunMessageAuthority } from "../../core/test/support/run-message-authority.js";
+
+async function projectedMessages(storage: CaelushStorage, runId: string) {
+  const messages = testRunMessageAuthority();
+  const records = await storage.messageRecords.listByRun(runId as never);
+  return records.flatMap(
+    (record) =>
+      messages.projectors.project({
+        sequence: record.sequence,
+        schemaVersion: record.schemaVersion,
+        ...(record.modelProjectionVersion === undefined
+          ? {}
+          : { modelProjectionVersion: record.modelProjectionVersion }),
+        message: messages.codecs.decode(record),
+      }).messages,
+  );
+}
 
 /**
  * The two fixture Tools, as canonical `AgentTool`s plus their Coding overlay.
@@ -381,6 +398,7 @@ function createController(
 ) {
   let now = initialNow;
   const clock = { now: () => createTimestampMs(fixedClock?.value ?? now++) };
+  const messages = testRunMessageAuthority();
   const agentExecution = testRunAgentExecution({
     executor: fakeFrozenModelTurnExecutor(async (request) => {
       observedRequests.push({ tools: request.tools, messages: request.messages });
@@ -403,6 +421,7 @@ function createController(
         contextLimits: { maxInputTokens: 1000 },
       }),
     },
+    messages,
     ...(runtime === undefined ? {} : { toolTurn: canonicalToolTurn(runtime) }),
     clock,
     eventIdFactory: { create: createEventId },
@@ -491,7 +510,7 @@ describe("RunController automatic Tool Batch integration", () => {
     expect(toolCalls).toEqual(["call-tool"]);
     expect((await storage.runs.get(run.id))?.status).toBe("VERIFYING");
     expect(await storage.steps.listByRun(run.id)).toHaveLength(3);
-    expect((await storage.messages.listByRun(run.id)).map((entry) => entry.message.role)).toEqual([
+    expect((await projectedMessages(storage, run.id)).map((entry) => entry.role)).toEqual([
       "user",
       "assistant",
       "tool",
@@ -803,7 +822,7 @@ describe("RunController automatic Tool Batch integration", () => {
         isError: true,
       },
     ]);
-    expect((await storage.messages.listByRun(run.id)).map((entry) => entry.message.role)).toEqual([
+    expect((await projectedMessages(storage, run.id)).map((entry) => entry.role)).toEqual([
       "user",
       "assistant",
       "tool",
@@ -814,7 +833,7 @@ describe("RunController automatic Tool Batch integration", () => {
       (await storage.toolInvocations.listByRun(run.id)).map((invocation) => invocation.status),
     ).toEqual(["COMPLETED", "FAILED"]);
     expect(await storage.observations.listByRun(run.id)).toHaveLength(2);
-    expect(JSON.stringify(await storage.messages.listByRun(run.id))).not.toContain(
+    expect(JSON.stringify(await projectedMessages(storage, run.id))).not.toContain(
       "details-secret",
     );
     expect((await storage.events.replay(run.id)).map((event) => event.type)).not.toContain(
@@ -871,7 +890,7 @@ describe("RunController automatic Tool Batch integration", () => {
     expect(checkpoint.checkpoint.receivedResults).toBeUndefined();
     expect((await storage.runs.get(run.id))?.status).toBe("WAITING_APPROVAL");
     expect((await storage.runStates.get(run.id))?.status).toBe("WAITING_APPROVAL");
-    expect((await storage.messages.listByRun(run.id)).map((entry) => entry.message.role)).toEqual([
+    expect((await projectedMessages(storage, run.id)).map((entry) => entry.role)).toEqual([
       "user",
       "assistant",
     ]);
@@ -1048,7 +1067,7 @@ describe("RunController automatic Tool Batch integration", () => {
     expect(calls).toEqual(["call-A", "call-B"]);
     expect(providerRequests).toHaveLength(3);
     expect(await storage.toolInvocations.listByRun(run.id)).toHaveLength(2);
-    expect((await storage.messages.listByRun(run.id)).map((entry) => entry.message.role)).toEqual([
+    expect((await projectedMessages(storage, run.id)).map((entry) => entry.role)).toEqual([
       "user",
       "assistant",
       "tool",
@@ -1140,7 +1159,7 @@ describe("RunController automatic Tool Batch integration", () => {
     expect(await storage.observations.listByRun(run.id)).toHaveLength(2);
     expect((await storage.runs.get(run.id))?.status).toBe("FAILED");
     expect(await storage.continuations.get(run.id)).toBeNull();
-    expect((await storage.messages.listByRun(run.id)).map((entry) => entry.message.role)).toEqual([
+    expect((await projectedMessages(storage, run.id)).map((entry) => entry.role)).toEqual([
       "user",
       "assistant",
     ]);
@@ -1327,9 +1346,14 @@ describe("RunController automatic Tool Batch integration", () => {
     expect((await restarted.toolInvocations.listByRun(run.id)).at(-1)?.error?.details).toEqual({
       executionDisposition: "UNCERTAIN_SIDE_EFFECT",
     });
-    expect((await restarted.messages.listByRun(run.id)).map((entry) => entry.message.role)).toEqual(
-      ["user", "assistant", "tool", "tool", "tool", "assistant"],
-    );
+    expect((await projectedMessages(restarted, run.id)).map((entry) => entry.role)).toEqual([
+      "user",
+      "assistant",
+      "tool",
+      "tool",
+      "tool",
+      "assistant",
+    ]);
     await restarted.close();
     await rm(directory, { recursive: true, force: true });
   });

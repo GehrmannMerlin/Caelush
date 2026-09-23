@@ -113,7 +113,7 @@ function routeRunning(snapshot: RunExecutionSnapshot, now: TimestampMs): RunExec
     // Nothing durable is open. A Run with no conversation at all is starting its first Reason; a
     // Run that already has one has finished a turn without leaving a boundary, which is a
     // lifecycle violation rather than something to route around.
-    return snapshot.conversation.length === 0
+    return isInitialDurableUserTurn(snapshot)
       ? advance("EXECUTE", "INITIAL", initialTurn(snapshot))
       : throwUnroutable("A RUNNING Run with no continuation cannot be routed.");
   }
@@ -182,6 +182,17 @@ function routeRunning(snapshot: RunExecutionSnapshot, now: TimestampMs): RunExec
  */
 function initialTurn(snapshot: RunExecutionSnapshot): AgentTurnInput {
   return { kind: "USER_INPUT", messages: [{ role: "user", content: snapshot.run.goal }] };
+}
+
+function isInitialDurableUserTurn(snapshot: RunExecutionSnapshot): boolean {
+  const conversationRecords = snapshot.conversationRecords ?? [];
+  if (conversationRecords.length !== 1) return false;
+  const record = conversationRecords[0];
+  return (
+    record?.messageType === "USER" &&
+    record.source.kind === "USER" &&
+    record.source.origin !== "STEERING"
+  );
 }
 
 /* ----------------------------------------------------------- derivations */

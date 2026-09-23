@@ -50,6 +50,7 @@ import {
 } from "@caelush/protocol";
 
 import { modelTurnResult } from "./fake-model-turn-executor.js";
+import { testRunMessageAuthority } from "./run-message-authority.js";
 import {
   fakeFrozenModelTurnExecutor,
   type FakeFrozenModelTurnExecutor,
@@ -355,6 +356,16 @@ export function stubToolTurnPipeline(batches: StubToolBatches): {
 
 /* ------------------------------------------------------------------ store */
 
+type LegacyProjectedConversation = readonly {
+  readonly runId: RunId;
+  readonly sequence: number;
+  readonly message: AIMessage;
+}[];
+
+type TestRunExecutionSnapshot = import("@caelush/core").RunExecutionSnapshot & {
+  readonly conversation: LegacyProjectedConversation;
+};
+
 /**
  * A store that commits the way the production store does.
  *
@@ -363,6 +374,7 @@ export function stubToolTurnPipeline(batches: StubToolBatches): {
  * Tool batch, keep the state it was already holding.
  */
 export class MemoryRunStore implements RunExecutionStore, RunCompletionPersistencePort {
+  snapshot: TestRunExecutionSnapshot;
   stateRevision: number | undefined;
   continuationRevision: number | undefined;
   readonly commits: RunExecutionCommit[] = [];
@@ -376,10 +388,16 @@ export class MemoryRunStore implements RunExecutionStore, RunCompletionPersisten
    * store writes them in one transaction.
    */
   private readonly plans = new Map<string, import("@caelush/protocol").VerificationPlan>();
+  private readonly messages = testRunMessageAuthority();
 
-  constructor(public snapshot: import("@caelush/core").RunExecutionSnapshot) {
+  constructor(snapshot: import("@caelush/core").RunExecutionSnapshot) {
     this.stateRevision = snapshot.stateRevision;
     this.continuationRevision = snapshot.continuationRevision;
+    this.snapshot = {
+      ...snapshot,
+      conversationRecords: snapshot.conversationRecords ?? [],
+      conversation: [],
+    } as TestRunExecutionSnapshot;
   }
 
   async loadVerificationPlan(
@@ -449,17 +467,18 @@ export class MemoryRunStore implements RunExecutionStore, RunCompletionPersisten
     }
     if (command.continuation?.operation === "CLEAR") this.continuationRevision = undefined;
 
-    const conversation: import("@caelush/core").RunConversationEntry[] = [
-      ...this.snapshot.conversation,
+    const conversationRecords = [
+      ...this.snapshot.conversationRecords,
       ...command.messagesToAppend.map((entry, index) => ({
         runId: command.run.id,
-        sequence: this.snapshot.conversation.length + index + 1,
-        ...entry,
+        sequence: this.snapshot.conversationRecords.length + index + 1,
+        ...entry.draft,
       })),
     ];
     this.snapshot = {
       run: command.run,
-      conversation,
+      conversationRecords,
+      conversation: this.legacyConversation(conversationRecords),
       ...(command.state === undefined
         ? this.snapshot.state === undefined
           ? {}
@@ -477,6 +496,25 @@ export class MemoryRunStore implements RunExecutionStore, RunCompletionPersisten
       durability: { ...draft.durability, sequence: ++this.sequence },
     }));
     return { snapshot: this.snapshot, events };
+  }
+
+  private legacyConversation(records: readonly import("@caelush/agent").AgentMessageRecord[]) {
+    return records.flatMap((record) => {
+      const message = this.messages.codecs.decode(record);
+      const projection = this.messages.projectors.project({
+        sequence: record.sequence,
+        schemaVersion: record.schemaVersion,
+        ...(record.modelProjectionVersion === undefined
+          ? {}
+          : { modelProjectionVersion: record.modelProjectionVersion }),
+        message,
+      });
+      return projection.messages.map((projected) => ({
+        runId: record.runId,
+        sequence: record.sequence,
+        message: projected,
+      }));
+    });
   }
 }
 
@@ -583,7 +621,7 @@ export function harness3d(options: {
   const run = options.run ?? makeRunD();
   const store = new MemoryRunStore({
     run,
-    conversation: [],
+    conversationRecords: [],
     ...options.snapshot,
   });
   const notifications: DurableAgentEvent[] = [];
@@ -613,6 +651,7 @@ export function harness3d(options: {
   };
   const toolBatches = options.toolBatches ?? stubToolBatches();
   const approvals = testApprovalBoundary(run.id);
+  const messages = testRunMessageAuthority();
   const controller = new RunController({
     agentExecution: execution,
     executionStore: store,
@@ -622,6 +661,7 @@ export function harness3d(options: {
     configResolver: {
       resolve: async () => ({ baseSystemPrompt: "base", contextLimits: { maxInputTokens: 1000 } }),
     },
+    messages,
     clock: { now: () => createTimestampMs(++clockTick) },
     eventIdFactory: { create: createEventId },
     toolTurn: stubToolTurnPipeline(toolBatches),

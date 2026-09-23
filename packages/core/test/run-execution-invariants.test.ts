@@ -5,6 +5,7 @@ import {
   RUN_EXECUTION_DIRECTIVE_KINDS,
 } from "@caelush/agent";
 import type { RunExecutionSnapshot } from "@caelush/agent";
+import type { AgentMessageRecord } from "@caelush/agent";
 import { toAgentExecutionSnapshot, toExecutionStatus } from "../src/run-execution-facts.js";
 import { evaluateAgentStepGate } from "../src/agent-step-gate.js";
 import { createInitialAgentState, startAgentState } from "../src/agent-state.js";
@@ -65,7 +66,7 @@ function snapshot(overrides: Partial<RunExecutionSnapshot> = {}): RunExecutionSn
   return {
     run: agentRun,
     state: overrides.state ?? scheduled(agentRun, 0),
-    conversation: [],
+    conversationRecords: [],
     ...overrides,
   };
 }
@@ -215,22 +216,13 @@ describe("the routing vocabulary stays closed", () => {
 
   it("projects the Run Layer's durable record onto the canonical snapshot", () => {
     const agentRun = run(3);
+    const records: readonly AgentMessageRecord[] = [];
     const projected = toAgentExecutionSnapshot({
       run: agentRun,
       state: scheduled(agentRun, 0),
-      conversation: [
-        {
-          runId: agentRun.id,
-          sequence: 1,
-          sourceStepId: createStepId(),
-          createdAt: createTimestampMs(0),
-          message: { role: "user", content: "hello" },
-        },
-      ],
+      conversationRecords: records,
     });
     expect(projected.run).toBe(agentRun);
-    expect(projected.conversation).toHaveLength(1);
-    // The legacy durable encoding is projected, not leaked: the canonical domain is AIMessage.
-    expect(projected.conversation[0]?.message).toEqual({ role: "user", content: "hello" });
+    expect(projected.conversationRecords).toBe(records);
   });
 });

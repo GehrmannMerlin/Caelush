@@ -1,6 +1,5 @@
 import { RunExecutionConflictError, RunExecutionInvariantError } from "@caelush/agent";
 import type { AIMessage } from "@caelush/ai";
-import { LLMMessageSchema } from "@caelush/llm/messages";
 import type { RunContinuationCheckpoint } from "@caelush/agent";
 import type { AgentStep } from "@caelush/protocol";
 import {
@@ -15,9 +14,16 @@ import {
   type StepId,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
-import type { DurableEventDraft } from "@caelush/core";
+import {
+  createAssistantMessageAppend,
+  createExternalToolResultMessageAppend,
+  createUserMessageAppend,
+  type DurableEventDraft,
+} from "@caelush/core";
 import { openCaelushStorage } from "../src/index.js";
 import { makeRun, makeSession, makeState, makeStep } from "./support/fixtures.js";
+import { projectedRunMessages } from "./support/projected-run-messages.js";
+import { testRunMessageAuthority } from "../../core/test/support/run-message-authority.js";
 
 /**
  * The storage compatibility cutover, asserted against the real database.
@@ -99,7 +105,7 @@ async function runningFixture(): Promise<{
 }
 
 const CANONICAL_CONVERSATION: readonly AIMessage[] = [
-  { role: "user", content: "inspect the project" },
+  { role: "user", content: "test goal" },
   {
     role: "assistant",
     content: [
@@ -130,43 +136,20 @@ const CANONICAL_CONVERSATION: readonly AIMessage[] = [
 ];
 
 describe("SqliteRunExecutionStore canonical/durable compatibility", () => {
-  it("preserves a historical Tool artifact pointer across a canonical commit", async () => {
+  it("writes new conversation messages only through the V2 record path", async () => {
     const { storage, session, run, state, step } = await runningFixture();
+    const messages = testRunMessageAuthority();
 
-    // The Step the historical Tool result belongs to, committed the way it always was.
     await storage.execution.commit({
       run,
       state,
       expectedStateRevision: null,
       expectedContinuationRevision: null,
       stepWrites: [{ operation: "INSERT", step }],
-      messagesToAppend: [],
+      messagesToAppend: [createUserMessageAppend(messages, run, "GOAL")],
       events: [event(run.id, session.id, 110)],
     });
 
-    // A row written before Phase 3C: the durable encoding still carries the artifact pointer, and
-    // the canonical Tool-result contract has no field for it.
-    await storage.messages.append(run.id, [
-      {
-        createdAt: createTimestampMs(111),
-        message: { role: "user", content: run.goal },
-      },
-      {
-        createdAt: createTimestampMs(112),
-        sourceStepId: step.id,
-        message: {
-          role: "tool",
-          toolCallId: "call_legacy",
-          toolName: "read_file",
-          content: "bounded placeholder",
-          isError: false,
-          rawArtifactRef: "artifact:call_legacy",
-        },
-      },
-    ] as never);
-
-    // A canonical commit settles the Step and appends; it never rewrites an existing conversation
-    // row, which is what makes the historical pointer survive without a migration.
     await storage.execution.commit({
       run,
       state: { ...state, currentStepId: undefined },
@@ -179,67 +162,69 @@ describe("SqliteRunExecutionStore canonical/durable compatibility", () => {
         },
       ],
       messagesToAppend: [
-        {
-          createdAt: createTimestampMs(120),
-          sourceStepId: step.id,
-          message: { role: "assistant", content: [{ type: "text", text: "done" }] },
-        },
+        createAssistantMessageAppend(messages, run, step.id, {
+          callId: CALL_ID as never,
+          model: run.model,
+          finishReason: "STOP",
+          assistantMessage: { role: "assistant", content: [{ type: "text", text: "done" }] },
+        }),
       ],
       events: [event(run.id, session.id, 120)],
     });
 
-    // Read back through the durable repository: the historical pointer is byte-for-byte intact,
-    // and the canonical load still projects the row rather than rejecting it.
-    const durable = await storage.messages.listByRun(run.id);
-    expect(durable).toHaveLength(3);
-    expect(durable[1]?.message).toMatchObject({ rawArtifactRef: "artifact:call_legacy" });
-
-    const canonical = await storage.execution.load(run.id);
-    expect(canonical?.conversation).toHaveLength(3);
-    // The canonical projection has no field for it, so it is dropped in memory and never invented.
-    expect(canonical?.conversation[1]?.message).not.toHaveProperty("rawArtifactRef");
-    expect(canonical?.conversation[1]?.message).toMatchObject({
-      role: "tool",
-      toolCallId: "call_legacy",
-      content: "bounded placeholder",
-    });
+    const durable = await storage.messageRecords.listByRun(run.id);
+    expect(durable.map((record) => record.messageType)).toEqual(["USER", "ASSISTANT"]);
+    expect((await storage.execution.load(run.id))?.conversationRecords).toHaveLength(2);
     await storage.close();
   });
 
   it("persists the legacy encoding and loads the canonical conversation unchanged", async () => {
     const { storage, session, run, state, step } = await runningFixture();
+    const messages = testRunMessageAuthority();
+    const assistant = CANONICAL_CONVERSATION[1]! as Extract<AIMessage, { role: "assistant" }>;
+    const policy = { maxSingleObservationTokens: 11, maxObservationBatchTokens: 22 };
 
-    const committed = await storage.execution.commit({
+    await storage.execution.commit({
       run,
       state,
       expectedStateRevision: null,
       expectedContinuationRevision: null,
       stepWrites: [{ operation: "INSERT", step }],
-      messagesToAppend: CANONICAL_CONVERSATION.map((message, index) => ({
-        createdAt: createTimestampMs(105 + index),
-        ...(message.role === "assistant" ? { sourceStepId: step.id } : {}),
-        message,
-      })),
+      messagesToAppend: [
+        createUserMessageAppend(messages, run, "GOAL"),
+        createAssistantMessageAppend(messages, run, step.id, {
+          callId: CALL_ID as never,
+          model: run.model,
+          finishReason: "TOOL_CALLS",
+          assistantMessage: assistant,
+        }),
+        createExternalToolResultMessageAppend(
+          messages,
+          run,
+          step.id,
+          CANONICAL_CONVERSATION[2]! as Extract<AIMessage, { role: "tool" }>,
+          policy,
+        ),
+        createExternalToolResultMessageAppend(
+          messages,
+          run,
+          step.id,
+          CANONICAL_CONVERSATION[3]! as Extract<AIMessage, { role: "tool" }>,
+          policy,
+        ),
+      ],
       events: [event(run.id, session.id, 120)],
     });
 
-    // The bytes on disk are the encoding the database has always stored: a durable row decodes
-    // as an `LLMMessage` and carries no canonical-only member.
-    const durable = await storage.messages.listByRun(run.id);
+    const durable = await storage.messageRecords.listByRun(run.id);
     expect(durable).toHaveLength(CANONICAL_CONVERSATION.length);
-    for (const entry of durable) {
-      expect(() => LLMMessageSchema.parse(entry.message)).not.toThrow();
-    }
-    expect(durable.map((entry) => entry.sequence)).toEqual([1, 2, 3, 4]);
+    expect(durable.map((record) => record.sequence)).toEqual([1, 2, 3, 4]);
 
-    // ...and the snapshot the Run Layer reads is the canonical conversation, in order.
-    const canonical = committed.snapshot.conversation.map((entry) => entry.message);
+    const canonical = await projectedRunMessages(storage, run.id);
     expect(canonical).toEqual([...CANONICAL_CONVERSATION]);
 
     const reloaded = await storage.execution.load(run.id);
-    expect(reloaded?.conversation.map((entry) => entry.message)).toEqual([
-      ...CANONICAL_CONVERSATION,
-    ]);
+    expect(reloaded?.conversationRecords).toHaveLength(CANONICAL_CONVERSATION.length);
     await storage.close();
   });
 

@@ -31,7 +31,6 @@ export { RunExecutionConflictError, RunExecutionInvariantError } from "@caelush/
 export type {
   DurableAgentEvent,
   DurableEventDraft,
-  RunConversationEntry,
   RunExecutionCommit,
   RunExecutionCommitResult,
   RunExecutionContinuationWrite,

@@ -21,6 +21,8 @@ import {
   testRunAgentExecution,
   type FakeFrozenModelTurnExecutor,
 } from "./support/run-agent-execution.js";
+import { testRunMessageAuthority } from "../../core/test/support/run-message-authority.js";
+import { projectedRunMessages } from "./support/projected-run-messages.js";
 
 /**
  * A scripted model turn authority.
@@ -75,6 +77,7 @@ function createController(
   return new RunController({
     agentExecution: execution.factory,
     executionStore: storage.execution,
+    messages: testRunMessageAuthority(),
     events: new EventBus(storage.events),
     configResolver: {
       resolve: async () => ({
@@ -125,7 +128,7 @@ describe("RunController file-backed restart recovery", () => {
     ]);
     expect(modelTurns.callCount()).toBe(1);
     expect(
-      (await firstStorage.messages.listByRun(run.id)).map((entry) => entry.message.role),
+      (await projectedRunMessages(firstStorage, run.id)).map((message) => message.role),
     ).toEqual(["user", "assistant"]);
     expect(await firstStorage.events.latestSequence(run.id)).toBe(5);
     await firstStorage.close();
@@ -152,7 +155,7 @@ describe("RunController file-backed restart recovery", () => {
     expect(modelTurns.callCount()).toBe(2);
     expect((await secondStorage.runs.get(run.id))?.finalResult).toBeUndefined();
     expect(
-      (await secondStorage.messages.listByRun(run.id)).map((entry) => entry.message.role),
+      (await projectedRunMessages(secondStorage, run.id)).map((message) => message.role),
     ).toEqual(["user", "assistant", "tool", "assistant"]);
     await secondStorage.close();
 

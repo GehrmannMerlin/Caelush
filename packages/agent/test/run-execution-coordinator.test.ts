@@ -76,6 +76,11 @@ const toolResults = [
   },
 ];
 
+const DURABLE_USER_RECORD = {
+  messageType: "USER",
+  source: { kind: "USER", origin: "GOAL" },
+} as never;
+
 function makeRun(overrides: Partial<AgentRun> = {}): AgentRun {
   return AgentRunSchema.parse({
     id: RUN_ID,
@@ -122,7 +127,7 @@ function snapshot(overrides: Partial<RunExecutionSnapshot> = {}): RunExecutionSn
   return {
     run,
     state: overrides.state ?? makeState(run),
-    conversation: [],
+    conversationRecords: [DURABLE_USER_RECORD],
     ...overrides,
   };
 }
@@ -375,7 +380,7 @@ describe("RunExecutionCoordinator.next(snapshot, now)", () => {
         startedAt: createTimestampMs(1_789_000_000_000),
         limits: { maxSteps: 6, maxToolCalls: 8, timeoutMs: Number.MAX_SAFE_INTEGER },
       }),
-      conversation: [],
+      conversationRecords: [DURABLE_USER_RECORD],
     };
 
     expect(nextRunExecutionDirective(input, createTimestampMs(1_789_000_001_000))).toEqual({
@@ -392,7 +397,7 @@ describe("RunExecutionCoordinator.next(snapshot, now)", () => {
         startedAt: createTimestampMs(1_000),
         limits: { maxSteps: 6, maxToolCalls: 8, timeoutMs: 500 },
       }),
-      conversation: [],
+      conversationRecords: [DURABLE_USER_RECORD],
     };
     expect(nextRunExecutionDirective(expired, createTimestampMs(1_500))).toEqual({
       kind: "FINALIZE",
@@ -440,14 +445,7 @@ describe("RunExecutionCoordinator.next(snapshot, now)", () => {
 
   it("refuses to route a RUNNING Run with a conversation but no continuation", () => {
     const input = snapshot({
-      conversation: [
-        {
-          runId: RUN_ID,
-          sequence: 1,
-          createdAt: AT,
-          message: { role: "user", content: "earlier" },
-        },
-      ],
+      conversationRecords: [DURABLE_USER_RECORD, { messageType: "ASSISTANT" } as never],
     });
     expect(() => nextRunExecutionDirective(input, NOW)).toThrow(/no continuation/);
   });

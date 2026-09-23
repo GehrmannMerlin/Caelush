@@ -80,7 +80,9 @@ describe("durable Run execution state", () => {
 
   it("rejects an active Step on a terminal Run and accepts the PENDING exception", () => {
     const pending = run();
-    expect(() => assertRunExecutionInvariant({ run: pending, conversation: [] })).not.toThrow();
+    expect(() =>
+      assertRunExecutionInvariant({ run: pending, conversationRecords: [] }),
+    ).not.toThrow();
 
     const running = { ...pending, status: "RUNNING" as const, startedAt: createTimestampMs(2) };
     const state = startAgentState(
@@ -99,7 +101,7 @@ describe("durable Run execution state", () => {
         run: { ...running, status: "FAILED", currentStepId: step.id },
         state: { ...activeState, status: "FAILED" },
         activeStep: step,
-        conversation: [],
+        conversationRecords: [],
       }),
     ).toThrow();
   });
@@ -149,7 +151,7 @@ describe("durable Run execution state", () => {
       assertRunExecutionInvariant({
         run: { ...completedRun, finalResult: undefined },
         state: completedState,
-        conversation: [],
+        conversationRecords: [],
       }),
     ).toThrow();
   });
@@ -195,7 +197,7 @@ describe("durable Run execution state", () => {
         run: waitingRun,
         state: waitingState,
         continuation: checkpoint,
-        conversation: [],
+        conversationRecords: [],
       }),
     ).not.toThrow();
     expect(() =>
@@ -214,7 +216,7 @@ describe("durable Run execution state", () => {
             },
           ],
         } as unknown as RunContinuationCheckpoint,
-        conversation: [],
+        conversationRecords: [],
       }),
     ).toThrow();
   });
@@ -241,7 +243,7 @@ describe("durable Run execution state", () => {
         run: running,
         state,
         continuation: checkpoint,
-        conversation: [],
+        conversationRecords: [],
       }),
     ).not.toThrow();
     const step = createRunningAgentStep({
@@ -256,7 +258,7 @@ describe("durable Run execution state", () => {
         state: beginAgentStepState(state, step.id, createTimestampMs(3)),
         activeStep: step,
         continuation: checkpoint,
-        conversation: [],
+        conversationRecords: [],
       }),
     ).toThrow();
   });

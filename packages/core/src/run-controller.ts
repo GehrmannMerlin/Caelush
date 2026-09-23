@@ -47,7 +47,7 @@ import {
 } from "./agent-state.js";
 import { cancelAgentStep, completeAgentStep, failAgentStep } from "./agent-step.js";
 import { normalizeToolResultBatch } from "./agent-tool-results.js";
-import type { AgentToolObservationPolicy } from "./agent-tool-batch.js";
+import { defaultObservationPolicy, type AgentToolObservationPolicy } from "./agent-tool-batch.js";
 import {
   markAgentRunFailed,
   markAgentRunCancelled,
@@ -119,6 +119,12 @@ import {
 } from "./run-controller-errors.js";
 import { allocateRunAgentStep, createRunAgentLoop } from "./run-agent-execution.js";
 import { projectRunAgentHistory } from "./run-agent-history.js";
+import {
+  createAssistantMessageAppend,
+  createExternalToolResultMessageAppend,
+  createToolResultMessageAppend,
+  createUserMessageAppend,
+} from "./run-message-materializer.js";
 import { summarizeAgentDecision } from "./agent-summary.js";
 import {
   RunExecutionConflictError,
@@ -555,13 +561,17 @@ export class RunController {
     const initialState = createInitialAgentState(loaded.run, now);
     const state = startAgentState(initialState, now);
     const run = AgentRunSchema.parse({ ...loaded.run, status: "RUNNING", startedAt: now });
+    const userOrigin = await this.dependencies.messages.userOrigin(run);
+    const userAppend = hasDurableUserMessage(loaded, run)
+      ? []
+      : [createUserMessageAppend(this.dependencies.messages, run, userOrigin)];
     const commit = await this.commit({
       run,
       state,
       expectedStateRevision: null,
       expectedContinuationRevision: null,
       stepWrites: [],
-      messagesToAppend: [],
+      messagesToAppend: userAppend,
       events: [
         this.eventFactory.runStarted(loaded.run, this.nextEventId(), now),
         this.eventFactory.statusChanged(loaded.run, "PENDING", "RUNNING", this.nextEventId(), now),
@@ -636,13 +646,28 @@ export class RunController {
     }
     let accepted = loaded;
     if (loaded.continuation.receivedResults === undefined) {
+      const sourceStepId = loaded.continuation.sourceStepId;
+      if (sourceStepId === undefined) {
+        throw new RunControllerInvariantError(
+          "A Tool Result boundary must identify the requesting Step before persistence.",
+        );
+      }
+      const policy = loaded.continuation.observationPolicy ?? defaultObservationPolicy();
       const commit = await this.commit({
         run: loaded.run,
         state: loaded.state,
         expectedStateRevision: loaded.stateRevision ?? null,
         expectedContinuationRevision: loaded.continuationRevision ?? null,
         stepWrites: [],
-        messagesToAppend: [],
+        messagesToAppend: normalized.map((message) =>
+          createExternalToolResultMessageAppend(
+            this.dependencies.messages,
+            loaded.run,
+            sourceStepId,
+            message,
+            policy,
+          ),
+        ),
         continuation: {
           operation: "SET",
           checkpoint: { ...loaded.continuation, receivedResults: normalized },
@@ -659,13 +684,14 @@ export class RunController {
     const loaded = await this.load(runId);
     // Legacy retry provenance is normalized *durably* before anything is routed, so the coordinator
     // only ever sees a state it can decide on and no runtime special case is needed for it.
-    const normalized = await this.normalizeLegacyRetryProvenance(loaded);
+    let normalized = await this.normalizeLegacyRetryProvenance(loaded);
     // The coordinator owns the governance priority — terminal, cancellation, deadline, exception,
     // step budget, boundary — so the ordering cannot drift between call sites.
     const coordinated = this.coordinatedBoundary(normalized);
     if (coordinated !== undefined) return coordinated;
     if (normalized.cancellationIntent !== undefined) return this.finalizeCancellation(normalized);
     if (this.isExpired(normalized)) return this.finalizeTimeout(normalized);
+    normalized = await this.ensureDurableUserMessage(normalized);
     if (normalized.run.status === "RUNNING" && normalized.continuation?.type === "WAITING_RETRY") {
       return this.resumeRetryLocked(normalized);
     }
@@ -693,7 +719,7 @@ export class RunController {
       normalized.run.status === "RUNNING" &&
       normalized.state !== undefined &&
       (normalized.continuation?.type === "WAITING_TOOL_RESULTS" ||
-        (normalized.continuation === undefined && normalized.conversation.length === 0))
+        (normalized.continuation === undefined && hasInitialDurableUserMessage(normalized)))
     ) {
       return this.driveRunExecutionLocked(normalized, "RECOVER");
     }
@@ -709,6 +735,34 @@ export class RunController {
       return this.driveRunExecutionLocked(normalized, "RECOVER");
     }
     return this.resumeKnownBoundary(normalized);
+  }
+
+  /**
+   * Repair the only safe pre-Context recovery gap: a started Run whose atomic start commit predates
+   * the durable USER cutover. The append is idempotent by ledger presence and happens before the
+   * coordinator is allowed to route an initial provider turn.
+   */
+  private async ensureDurableUserMessage(
+    loaded: RunExecutionSnapshot,
+  ): Promise<RunExecutionSnapshot> {
+    if (loaded.run.status !== "RUNNING" || loaded.state === undefined) return loaded;
+    if (hasDurableUserMessage(loaded, loaded.run)) return loaded;
+    if (loaded.conversationRecords.length !== 0 || loaded.activeStep !== undefined) {
+      throw new RunControllerInvariantError(
+        "A started Run has no durable USER message but already has conversation or an active Step.",
+      );
+    }
+    const origin = await this.dependencies.messages.userOrigin(loaded.run);
+    const commit = await this.commit({
+      run: loaded.run,
+      state: loaded.state,
+      expectedStateRevision: loaded.stateRevision ?? null,
+      expectedContinuationRevision: loaded.continuationRevision ?? null,
+      stepWrites: [],
+      messagesToAppend: [createUserMessageAppend(this.dependencies.messages, loaded.run, origin)],
+      events: [],
+    });
+    return commit.snapshot;
   }
 
   /**
@@ -745,7 +799,11 @@ export class RunController {
     ) {
       return snapshot;
     }
-    const sourceStepId = recoverToolRequestSourceStep(snapshot, continuation.pendingDecision);
+    const sourceStepId = recoverToolRequestSourceStep(
+      snapshot,
+      continuation.pendingDecision,
+      this.dependencies.messages,
+    );
     const commit = await this.commit({
       run: snapshot.run,
       ...(snapshot.state === undefined ? {} : { state: snapshot.state }),
@@ -1182,7 +1240,12 @@ export class RunController {
         return { kind: "SNAPSHOT", snapshot: resource };
       }
       case "CANONICAL_TOOL_EFFECT": {
-        const canonical = await this.settleCanonicalToolTurn(current, directive, route.result);
+        const canonical = await this.settleCanonicalToolTurn(
+          current,
+          directive,
+          route.result,
+          execution.observation,
+        );
         return { kind: "SNAPSHOT", snapshot: canonical };
       }
     }
@@ -1208,17 +1271,31 @@ export class RunController {
     current: RunExecutionSnapshot,
     directive: ExecuteToolBatchDirective,
     result: Exclude<ToolTurnResult, { kind: "RESOURCE_WAIT" | "BUDGET_EXCEEDED" }>,
+    observation: RunToolTurnObservation,
   ): Promise<RunExecutionSnapshot> {
     const now = this.dependencies.clock.now();
     const snapshot = toAgentExecutionSnapshot(current);
     const effect: RunExecutionEffectResult = { kind: "TOOLS", result };
 
     const planned = this.transitionPlanner.plan({ snapshot, directive, effect, now });
+    const feedbackMessages =
+      observation.projectedFeedback?.map((projected) =>
+        createToolResultMessageAppend(
+          this.dependencies.messages,
+          current.run,
+          directive.sourceStepId,
+          projected,
+        ),
+      ) ?? [];
+    const plannedWithMessages = {
+      ...planned,
+      messagesToAppend: feedbackMessages,
+    };
     const materialized = this.eventMaterializer.materialize({
       snapshot: current,
       directive,
       effect,
-      plannedCommit: planned,
+      plannedCommit: plannedWithMessages,
       now,
       // A Tool turn performs no provider turn: the Tool Layer's own lifecycle is what it reports,
       // and a provider state here would be a claim about a model call this effect never made.
@@ -1416,9 +1493,14 @@ export class RunController {
     // kernel validators. Nothing here re-derives *which* turn this is.
     const history = projectRunAgentHistory({
       input: directive.input,
-      conversation: snapshot.conversation,
+      conversationRecords: snapshot.conversationRecords,
+      messageProjection: this.dependencies.messages,
       ...(execution.historyPrefix === undefined ? {} : { historyPrefix: execution.historyPrefix }),
     });
+    const executionDirective: AdvanceAgentDirective =
+      history.kind === "COMPLETE_TURN" && history.input !== undefined
+        ? { ...directive, input: history.input }
+        : directive;
 
     // The Core-private record of what the boundary, the context engine and the provider actually
     // did. The frozen result deliberately reports none of it, so this is the only channel through
@@ -1469,7 +1551,7 @@ export class RunController {
       completionGate: MISROUTED_COMPLETION_GATE,
     });
 
-    const effect = await driver.execute(directive, {
+    const effect = await driver.execute(executionDirective, {
       identity: {
         runId: snapshot.run.id,
         sessionId: snapshot.run.sessionId,
@@ -1911,12 +1993,26 @@ export class RunController {
     const effect: RunExecutionEffectResult = { kind: "AGENT", result };
 
     const planned = this.transitionPlanner.plan({ snapshot, directive, effect, now });
+    const plannedWithMessages =
+      result.kind === "TOOL_REQUESTS"
+        ? {
+            ...planned,
+            messagesToAppend: [
+              createAssistantMessageAppend(
+                this.dependencies.messages,
+                current.run,
+                result.turn.stepId,
+                result.modelTurn,
+              ),
+            ],
+          }
+        : planned;
     const materialized = this.eventMaterializer.materialize({
       snapshot: current,
       directive,
       effect,
       plannedCommit: this.agentTurnProvenance(
-        this.observationPolicyProvenance(planned, result),
+        this.observationPolicyProvenance(plannedWithMessages, result),
         result,
       ),
       now,
@@ -2122,7 +2218,14 @@ export class RunController {
       expectedStateRevision: current.stateRevision ?? null,
       expectedContinuationRevision: current.continuationRevision ?? null,
       stepWrites: [{ operation: "UPDATE", step: completedStep }],
-      messagesToAppend: appendMessages(current, result.messagesToAppend, step.id, now),
+      messagesToAppend: [
+        createAssistantMessageAppend(
+          this.dependencies.messages,
+          current.run,
+          result.turn.stepId,
+          result.modelTurn,
+        ),
+      ],
       events: [
         ...this.successEvents(current.run, decisionState, completedStep, observation, now),
         this.eventFactory.statusChanged(
@@ -2315,7 +2418,7 @@ export class RunController {
         // The caller's turn input is real work the ledger already carries: it is persisted so a
         // failed Run records the user turn it failed on, exactly as the canonical planner's own
         // `FAILED` branch does. No *provider* output is appended — the attempt produced none.
-        messagesToAppend: appendMessages(current, result.messagesToAppend, undefined, now),
+        messagesToAppend: [],
         ...(current.continuation === undefined ? {} : { continuation: { operation: "CLEAR" } }),
         events: this.failureEvents(
           current.run,
@@ -3668,38 +3771,6 @@ type WaitingRetryResumeContext =
     };
 
 /**
- * The canonical append projection.
- *
- * The provenance rule is the durable one and is shared with the frozen planner rather than
- * re-decided here: an assistant message belongs to the Step that produced it, and a Tool result
- * belongs to the Step that requested the batch. A user message has no Step source.
- */
-function appendMessages(
-  snapshot: RunExecutionSnapshot,
-  messages: readonly import("@caelush/ai").AIMessage[],
-  stepId: StepId | undefined,
-  now: AgentRun["createdAt"],
-): readonly {
-  createdAt: AgentRun["createdAt"];
-  sourceStepId?: StepId;
-  message: import("@caelush/ai").AIMessage;
-}[] {
-  const toolStepId =
-    snapshot.continuation?.type === "WAITING_TOOL_RESULTS"
-      ? snapshot.continuation.sourceStepId
-      : undefined;
-  return messages.map((message) => {
-    const sourceStepId =
-      message.role === "assistant" ? stepId : message.role === "tool" ? toolStepId : undefined;
-    return {
-      createdAt: now,
-      ...(sourceStepId === undefined ? {} : { sourceStepId }),
-      message,
-    };
-  });
-}
-
-/**
  * The usage one frozen Agent result reported, when it reported any.
  *
  * A `FAILED` result carries usage only on the post-provider path, and a `FINAL_CANDIDATE` always
@@ -3799,6 +3870,22 @@ function toolRequestStepOf(snapshot: RunExecutionSnapshot): StepId | undefined {
   return undefined;
 }
 
+function hasDurableUserMessage(snapshot: RunExecutionSnapshot, run: AgentRun): boolean {
+  return snapshot.conversationRecords.some(
+    (record) =>
+      record.runId === run.id &&
+      record.sessionId === run.sessionId &&
+      record.messageType === "USER" &&
+      record.conversationTurnId !== undefined &&
+      record.source.kind === "USER" &&
+      record.source.origin !== "STEERING",
+  );
+}
+
+function hasInitialDurableUserMessage(snapshot: RunExecutionSnapshot): boolean {
+  return snapshot.conversationRecords.length === 1 && hasDurableUserMessage(snapshot, snapshot.run);
+}
+
 function assertNeverAdvanceReason(reason: never): never {
   throw new RunControllerInvariantError(`Unhandled Run advance reason: ${String(reason)}`);
 }
@@ -3820,18 +3907,25 @@ function assertNeverAdvanceReason(reason: never): never {
 function recoverToolRequestSourceStep(
   snapshot: RunExecutionSnapshot,
   pendingDecision: import("./agent-decision.js").AgentToolCallsDecision | undefined,
+  messages: import("./run-message-materializer.js").RunMessageAuthority,
 ): StepId {
   if (pendingDecision !== undefined) {
     const expected = pendingDecision.modelTurn.assistantMessage;
-    const matched = snapshot.conversation.find(
-      (entry) =>
-        entry.sourceStepId !== undefined &&
-        entry.message.role === "assistant" &&
-        // The durable record and the persisted decision are two projections of the same turn,
-        // so they are compared structurally: key order is not part of a tool call's identity
-        // and the two sides carry nominally different JSON types.
-        semanticEqual(entry.message.content, expected.content),
-    );
+    const matched = snapshot.conversationRecords.find((entry) => {
+      if (entry.sourceStepId === undefined || entry.messageType !== "ASSISTANT") return false;
+      const decoded = messages.codecs.decode(entry);
+      const projected = messages.projectors.project({
+        sequence: entry.sequence,
+        schemaVersion: entry.schemaVersion,
+        ...(entry.modelProjectionVersion === undefined
+          ? {}
+          : { modelProjectionVersion: entry.modelProjectionVersion }),
+        message: decoded,
+      });
+      return projected.messages.some(
+        (message) => message.role === "assistant" && semanticEqual(message, expected),
+      );
+    });
     if (matched?.sourceStepId !== undefined) return matched.sourceStepId;
   }
   throw new RunControllerInvariantError(

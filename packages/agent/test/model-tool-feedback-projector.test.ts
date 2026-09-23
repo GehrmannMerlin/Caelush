@@ -41,6 +41,17 @@ const GENEROUS: ToolObservationPolicySnapshot = {
   maxObservationBatchTokens: 12_000,
 };
 
+function modelMessages(
+  projector: ModelToolFeedbackProjector,
+  input: {
+    readonly calls: readonly ToolCallRequest[];
+    readonly items: readonly ToolBatchItemOutcome[];
+    readonly policy: ToolObservationPolicySnapshot;
+  },
+): readonly import("@caelush/ai").AIToolResultMessage[] {
+  return projector.project(input).map((projected) => projected.message);
+}
+
 function call(externalCallId: string, toolName = "read_file"): ToolCallRequest {
   return { externalCallId, toolName, args: { path: "a.ts" } };
 }
@@ -128,7 +139,7 @@ describe("canonical model feedback — identity and order", () => {
   it("produces one message per original call, in original order", () => {
     const projector = createModelToolFeedbackProjector();
     const calls = [call("call_1"), call("call_2"), call("call_3")];
-    const messages = projector.project({
+    const messages = modelMessages(projector, {
       calls,
       items: [observed(calls[0]!, "one"), rejected(calls[1]!), skipped(calls[2]!)],
       policy: GENEROUS,
@@ -162,7 +173,7 @@ describe("canonical model feedback — identity and order", () => {
   it("takes identity from the original call, never from the content", () => {
     const projector = createModelToolFeedbackProjector();
     const calls = [call("call_a", "exec_command")];
-    const messages = projector.project({
+    const messages = modelMessages(projector, {
       // The observation's own content names a different call entirely: identity must not be parsed.
       calls,
       items: [observed(calls[0]!, "toolCallId: call_something_else")],
@@ -175,7 +186,7 @@ describe("canonical model feedback — identity and order", () => {
   it("preserves the observation's own isError and the failure arms' true", () => {
     const projector = createModelToolFeedbackProjector();
     const calls = [call("ok"), call("bad"), call("rej"), call("skip")];
-    const messages = projector.project({
+    const messages = modelMessages(projector, {
       calls,
       items: [
         observed(calls[0]!, "fine", false),
@@ -190,7 +201,28 @@ describe("canonical model feedback — identity and order", () => {
 
   it("returns nothing for an empty batch", () => {
     const projector = createModelToolFeedbackProjector();
-    expect(projector.project({ calls: [], items: [], policy: GENEROUS })).toEqual([]);
+    expect(modelMessages(projector, { calls: [], items: [], policy: GENEROUS })).toEqual([]);
+  });
+
+  it("returns a SNAPSHOT receipt over the exact projected message", () => {
+    const projector = createModelToolFeedbackProjector();
+    const calls = [call("call_a")];
+    const first = projector.project({
+      calls,
+      items: [observed(calls[0]!, "one")],
+      policy: GENEROUS,
+    });
+    const second = projector.project({
+      calls,
+      items: [observed(calls[0]!, "one")],
+      policy: GENEROUS,
+    });
+
+    expect(first[0]?.receipt.policy).toEqual({ kind: "SNAPSHOT", snapshot: GENEROUS });
+    expect(first[0]?.receipt.version).toBe(1);
+    expect(first[0]?.receipt.fingerprint).toBeDefined();
+    expect(first[0]?.message.content).toBe("one");
+    expect(first[0]?.receipt.fingerprint).toBe(second[0]?.receipt.fingerprint);
   });
 });
 
@@ -198,7 +230,7 @@ describe("canonical model feedback — the raw result never enters", () => {
   it("carries no rawArtifactRef, invocationId or details field", () => {
     const projector = createModelToolFeedbackProjector();
     const calls = [call("call_a")];
-    const messages = projector.project({
+    const messages = modelMessages(projector, {
       calls,
       items: [observed(calls[0]!, "body", false, "artifact:raw-1")],
       policy: GENEROUS,
@@ -394,7 +426,7 @@ describe("canonical model feedback — the injection seam", () => {
       },
     });
     const calls = [call("call_a")];
-    const messages = projector.project({
+    const messages = modelMessages(projector, {
       calls,
       items: [observed(calls[0]!, "x".repeat(100_000))],
       policy: GENEROUS,
@@ -432,7 +464,7 @@ describe("canonical model feedback — the fallback budget", () => {
   it("bounds a single oversized observation", () => {
     const projector = createModelToolFeedbackProjector();
     const calls = [call("call_a")];
-    const messages = projector.project({
+    const messages = modelMessages(projector, {
       calls,
       items: [observed(calls[0]!, "x".repeat(40_000))],
       policy: { maxSingleObservationTokens: 100, maxObservationBatchTokens: 1_000 },
@@ -448,7 +480,7 @@ describe("canonical model feedback — the fallback budget", () => {
   it("bounds the whole batch, preserving a representation for every Tool Result", () => {
     const projector = createModelToolFeedbackProjector();
     const calls = [call("call_a"), call("call_b"), call("call_c")];
-    const messages = projector.project({
+    const messages = modelMessages(projector, {
       calls,
       items: calls.map((request) => observed(request, "y".repeat(20_000))),
       policy: { maxSingleObservationTokens: 200, maxObservationBatchTokens: 300 },
@@ -466,7 +498,7 @@ describe("canonical model feedback — the fallback budget", () => {
   it("bounds safe feedback exactly like an observation", () => {
     const projector = createModelToolFeedbackProjector();
     const calls = [call("call_a")];
-    const messages = projector.project({
+    const messages = modelMessages(projector, {
       calls,
       items: [rejected(calls[0]!, "z".repeat(40_000))],
       policy: { maxSingleObservationTokens: 50, maxObservationBatchTokens: 200 },
@@ -481,7 +513,7 @@ describe("canonical model feedback — the fallback budget", () => {
   it("does not split a multibyte code point", () => {
     const projector = createModelToolFeedbackProjector();
     const calls = [call("call_a")];
-    const messages = projector.project({
+    const messages = modelMessages(projector, {
       // Astral code points, so a naive byte or UTF-16 slice would produce a lone surrogate.
       calls,
       items: [observed(calls[0]!, "🙂".repeat(20_000))],
@@ -512,7 +544,7 @@ describe("canonical model feedback — the fallback budget", () => {
   it("leaves content that already fits exactly as it is", () => {
     const projector: ModelToolFeedbackProjector = createModelToolFeedbackProjector();
     const calls = [call("call_a")];
-    const messages = projector.project({
+    const messages = modelMessages(projector, {
       calls,
       items: [observed(calls[0]!, "short body")],
       policy: GENEROUS,
@@ -533,12 +565,16 @@ describe("canonical model feedback — normalize composes with project", () => {
     });
 
     // The projector preserves the *call* order it was given, which is assistant source order.
-    expect(projected.map((message) => message.toolCallId)).toEqual(["call_3", "call_1", "call_2"]);
+    expect(projected.map(({ message }) => message.toolCallId)).toEqual([
+      "call_3",
+      "call_1",
+      "call_2",
+    ]);
     // And the normalizer restores that same order from a result list that arrives out of order,
     // which is the provider completion-order defense.
     const normalized = normalizer.normalize({
       requests: calls,
-      results: [projected[2]!, projected[0]!, projected[1]!],
+      results: [projected[2]!.message, projected[0]!.message, projected[1]!.message],
     });
     expect(normalized.map((message) => message.toolCallId)).toEqual(["call_3", "call_1", "call_2"]);
   });

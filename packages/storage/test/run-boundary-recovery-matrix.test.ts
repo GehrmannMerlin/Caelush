@@ -15,7 +15,13 @@ import {
   type StepId,
   type TimestampMs,
 } from "@caelush/protocol";
-import { RunController, RunRetryRegistry, toContextObservationProjection } from "@caelush/core";
+import {
+  RunController,
+  RunRetryRegistry,
+  createAssistantMessageAppend,
+  createUserMessageAppend,
+  toContextObservationProjection,
+} from "@caelush/core";
 import { createModelToolFeedbackProjector, createToolResultBatchNormalizer } from "@caelush/agent";
 import { EventBus } from "@caelush/events";
 import { describe, expect, it } from "vitest";
@@ -26,6 +32,7 @@ import {
   testRunAgentExecution,
 } from "./support/run-agent-execution.js";
 import { modelTurnResult } from "./support/model-turns.js";
+import { testRunMessageAuthority } from "../../core/test/support/run-message-authority.js";
 
 /**
  * Phase 3F — the durable recovery boundaries, across a real storage reopen.
@@ -199,6 +206,7 @@ function controllerOver(
     // assertion about the durable timestamp from turning into a real wall-clock wait.
     timer: { schedule: () => ({ cancel: () => undefined }) },
   });
+  const messages = testRunMessageAuthority();
   return new RunController({
     agentExecution: testRunAgentExecution({
       executor: fakeFrozenModelTurnExecutor(async (request) => {
@@ -215,6 +223,7 @@ function controllerOver(
       }),
       createStepId: () => createStepId(),
     }).factory,
+    messages,
     executionStore: storage.execution,
     events: new EventBus(storage.events),
     configResolver: {
@@ -282,15 +291,12 @@ async function seedBoundary(
       usage: { steps: 2, toolCalls: 0, inputTokens: 0, outputTokens: 0 },
     }),
   );
-  await storage.messages.append(run.id as RunId, [
-    { createdAt: createTimestampMs(2), message: { role: "user", content: run.goal } },
+  const messages = testRunMessageAuthority();
+  await storage.messageRecords.append(run.id as RunId, [
+    createUserMessageAppend(messages, run, "GOAL").draft,
     // The assistant turn that requested the Tools. A resume is only valid behind the message that asked
     // for them, so the durable ledger has to hold it before a Tool boundary can be recovered.
-    {
-      createdAt: createTimestampMs(10),
-      sourceStepId: step.id,
-      message: TOOL_DECISION.modelTurn.assistantMessage,
-    },
+    createAssistantMessageAppend(messages, run, step.id, TOOL_DECISION.modelTurn).draft,
   ]);
   const ids = { sourceStepId: step.id, failedStepId: failedStep.id };
   await storage.continuations.set(

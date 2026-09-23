@@ -14,6 +14,7 @@ import {
   type VerificationModelClient,
   type RunExecutionConfigResolver,
   type ToolTurnPipeline,
+  type RunMessageAuthority,
 } from "@caelush/core";
 import { EventBus } from "@caelush/events";
 import {
@@ -41,7 +42,14 @@ import {
   type ModelWireDiagnostic,
   type ModelWireDiagnosticEvent,
 } from "./providers/model-wire-diagnostic.js";
-import { createModelTurnExecutor } from "@caelush/agent";
+import {
+  createAgentMessageFactory,
+  createAgentMessageIdFactory,
+  createDeterministicConversationTurnIdFactory,
+  createStandardAgentMessageCodecRegistry,
+  createStandardAgentMessageProjectorRegistry,
+  createModelTurnExecutor,
+} from "@caelush/agent";
 import type { AgentExecutionIdentity } from "@caelush/agent";
 import type {
   AISubsystem,
@@ -297,6 +305,7 @@ export interface DaemonComposition {
    * value because they are one pipeline, and exactly one of each exists per daemon.
    */
   readonly toolTurn: ToolTurnPipeline;
+  readonly messages: RunMessageAuthority;
   readonly contextRuntime: ContextRuntimeCoordinator;
   readonly contextUsage: {
     getContextUsage(
@@ -422,6 +431,31 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       return artifact?.runId === runId ? artifact.content : undefined;
     },
   });
+  const messageProjectors = createStandardAgentMessageProjectorRegistry();
+  const messageCodecs = createStandardAgentMessageCodecRegistry((type) =>
+    messageProjectors.currentVersion(type),
+  );
+  const messageTurns = createDeterministicConversationTurnIdFactory();
+  const messages: RunMessageAuthority = {
+    codecs: messageCodecs,
+    projectors: messageProjectors,
+    factory: createAgentMessageFactory({
+      ids: createAgentMessageIdFactory(),
+      now: () => clock.now(),
+      turns: messageTurns,
+    }),
+    turns: messageTurns,
+    userOrigin: async (run) => {
+      const sessionRuns = await options.storage.runs.listBySession(run.sessionId);
+      const hasEarlierRun = sessionRuns.some(
+        (candidate) =>
+          candidate.id !== run.id &&
+          (candidate.createdAt < run.createdAt ||
+            (candidate.createdAt === run.createdAt && candidate.id < run.id)),
+      );
+      return hasEarlierRun ? "FOLLOW_UP" : "GOAL";
+    },
+  };
   const planner = createLocalRelevantFilePlanner();
   const contextBuilder = createDefaultContextBuilder();
   /**
@@ -783,6 +817,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     completionStore: options.storage.execution,
     events: options.eventBus,
     configResolver: executionConfigResolver,
+    messages,
     toolTurn,
     clock,
     eventIdFactory: { create: createEventId },
@@ -879,6 +914,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     verificationModelTurns,
     toolRegistry: activeToolRegistry,
     toolTurn,
+    messages,
     contextRuntime,
     contextUsage: {
       getContextUsage: async (runId) => {

@@ -342,7 +342,7 @@ describe("independent use of the general Agent Tool framework", () => {
       policy: { maxSingleObservationTokens: 1_000, maxObservationBatchTokens: 4_000 },
     });
 
-    expect(messages).toEqual([
+    expect(messages.map((projected) => projected.message)).toEqual([
       {
         role: "tool",
         toolCallId: "call_echo",
@@ -365,7 +365,7 @@ describe("independent use of the general Agent Tool framework", () => {
           { externalCallId: "call_echo", toolName: "echo", args: { text: "hello" } },
           { externalCallId: "call_missing", toolName: "not_registered", args: {} },
         ],
-        results: messages,
+        results: messages.map((projected) => projected.message),
       }),
     ).toHaveLength(2);
   });

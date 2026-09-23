@@ -60,8 +60,9 @@ function toToolResultMessage(
     items: [item],
     policy: { maxSingleObservationTokens: 1000, maxObservationBatchTokens: 4000 },
   });
-  const message = projected[0];
-  if (message === undefined) throw new Error("the projector produced no Tool result");
+  const projectedFeedback = projected[0];
+  if (projectedFeedback === undefined) throw new Error("the projector produced no Tool result");
+  const message = projectedFeedback.message;
 
   return createAgentToolResultMessage(
     createAgentMessageBase({
@@ -109,7 +110,7 @@ describe("Phase 5B regression — the Tool System produces non-observation feedb
 
     // The Tool System's own output: one model-visible Tool result, and no invocation was created.
     expect(projected).toHaveLength(1);
-    expect(projected[0]).toMatchObject({
+    expect(projected[0]?.message).toMatchObject({
       role: "tool",
       toolCallId: "call_rejected",
       toolName: "exec_command",
@@ -142,11 +143,11 @@ describe("Phase 5B regression — the Tool System produces non-observation feedb
       policy: { maxSingleObservationTokens: 1000, maxObservationBatchTokens: 4000 },
     });
     expect(projected).toHaveLength(1);
-    expect(projected[0]?.isError).toBe(true);
+    expect(projected[0]?.message.isError).toBe(true);
 
     const message = toToolResultMessage(item, false);
     expect(message.observation.kind).toBe("NO_OBSERVATION");
-    expect(message.projectedContent).toBe(projected[0]?.content);
+    expect(message.projectedContent).toBe(projected[0]?.message.content);
   });
 
   it("keeps the executed OBSERVATION path observation-backed", () => {

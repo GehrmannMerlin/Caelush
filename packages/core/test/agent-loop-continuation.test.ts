@@ -20,13 +20,13 @@ import { createInitialAgentState, startAgentState } from "../src/agent-state.js"
 import { RunController } from "../src/run-controller.js";
 import type {
   DurableAgentEvent,
-  RunConversationEntry,
   RunExecutionCommit,
   RunExecutionSnapshot,
   RunExecutionStorePort,
 } from "../src/run-execution-store.js";
 import { fakeModelTurnExecutor, testModelCatalog } from "./support/fake-model-turn-executor.js";
 import { fakeFrozenModelTurnExecutor } from "./support/run-agent-execution.js";
+import { testRunMessageAuthority } from "./support/run-message-authority.js";
 import type { RunAgentExecutionContextFactory } from "../src/run-agent-execution.js";
 
 /**
@@ -295,17 +295,17 @@ class SeededStore implements RunExecutionStorePort {
     }
     if (command.continuation?.operation === "CLEAR") this.continuationRevision = undefined;
 
-    const conversation: RunConversationEntry[] = [
-      ...this.snapshot.conversation,
+    const conversationRecords = [
+      ...this.snapshot.conversationRecords,
       ...command.messagesToAppend.map((entry, index) => ({
         runId: command.run.id,
-        sequence: this.snapshot.conversation.length + index + 1,
-        ...entry,
+        sequence: this.snapshot.conversationRecords.length + index + 1,
+        ...entry.draft,
       })),
     ];
     this.snapshot = {
       run: command.run,
-      conversation,
+      conversationRecords,
       ...(command.state === undefined ? {} : { state: command.state }),
       ...(this.stateRevision === undefined ? {} : { stateRevision: this.stateRevision }),
       ...(activeStep === undefined ? {} : { activeStep }),
@@ -341,7 +341,7 @@ describe("RunController verification repair route", () => {
         ),
         createTimestampMs(1),
       ),
-      conversation: [],
+      conversationRecords: [],
       continuation: {
         type: "WAITING_VERIFICATION_REPAIR",
         runId: run.id,
@@ -409,6 +409,7 @@ describe("RunController verification repair route", () => {
     const controller = new RunController({
       agentExecution,
       executionStore: store,
+      messages: testRunMessageAuthority(),
       completionStore: completionStoreOver(store),
       events: { notifyCommitted: () => undefined },
       configResolver: {
@@ -464,10 +465,10 @@ describe("RunController verification repair route", () => {
     // No duplicate durable user message: the Run's goal was not re-appended as if the user had
     // spoken again.
     expect(
-      store.snapshot.conversation.some(
-        (entry) => entry.message.role === "user" && entry.message.content === run.goal,
+      store.snapshot.conversationRecords.some(
+        (entry) => entry.messageType === "USER" && entry.source.kind === "USER",
       ),
-    ).toBe(false);
+    ).toBe(true);
     // Same Run: no new Run was created for the repair.
     expect(store.snapshot.run.id).toBe(run.id);
   });

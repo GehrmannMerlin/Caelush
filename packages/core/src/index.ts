@@ -373,7 +373,6 @@ export type {
 export type {
   DurableAgentEvent,
   DurableEventDraft,
-  RunConversationEntry,
   RunExecutionCommit,
   RunExecutionCommitResult,
   RunExecutionCommitView,
@@ -390,6 +389,13 @@ export type {
   RunCompletionPersistencePort,
   RunVerifiedCompletionCommit,
 } from "./run-completion-store.js";
+export {
+  createAssistantMessageAppend,
+  createExternalToolResultMessageAppend,
+  createToolResultMessageAppend,
+  createUserMessageAppend,
+} from "./run-message-materializer.js";
+export type { RunMessageAuthority, RunToolFeedbackProjection } from "./run-message-materializer.js";
 export {
   createRunCandidateBoundaryPlanner,
   createRunCompletionGate,

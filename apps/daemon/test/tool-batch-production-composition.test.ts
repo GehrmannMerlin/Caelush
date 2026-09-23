@@ -134,7 +134,7 @@ describe("Phase 4D daemon Tool batch composition", () => {
     });
     const normalized = daemon.toolTurn.normalizer.normalize({
       requests: calls,
-      results: projected,
+      results: projected.map((item) => item.message),
     });
 
     // The two production objects compose without an adapter: exactly one result, same identity, error.

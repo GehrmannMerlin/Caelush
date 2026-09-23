@@ -27,6 +27,8 @@ import {
   fakeFrozenModelTurnExecutor,
   testRunAgentExecution,
 } from "./support/run-agent-execution.js";
+import { testRunMessageAuthority } from "../../core/test/support/run-message-authority.js";
+import { projectedRunMessages } from "./support/projected-run-messages.js";
 
 function makeRun(maxSteps = 4) {
   return AgentRunSchema.parse({
@@ -58,9 +60,7 @@ async function setup(options: {
   completion?: (
     storage: Awaited<ReturnType<typeof openCaelushStorage>>,
   ) => RunCompletionPersistencePort;
-  execution?: (
-    storage: Awaited<ReturnType<typeof openCaelushStorage>>,
-  ) => RunExecutionStore;
+  execution?: (storage: Awaited<ReturnType<typeof openCaelushStorage>>) => RunExecutionStore;
   retryRegistry?: RunRetryRegistry;
   retryTimer?: {
     schedule(delayMs: number, callback: () => void | Promise<void>): { cancel(): void };
@@ -94,6 +94,7 @@ async function setup(options: {
       createStepId: () => createStepId(),
     }).factory,
     executionStore: options.execution?.(storage) ?? storage.execution,
+    messages: testRunMessageAuthority(),
     completionStore: options.completion?.(storage) ?? completionStoreOver(storage.execution),
     events: eventBus,
     configResolver: {
@@ -286,7 +287,7 @@ describe("RunController failure and maxSteps boundaries", () => {
     expect(fixture.providerCalls()).toBe(3);
     expect(await fixture.storage.steps.listByRun(fixture.run.id)).toHaveLength(3);
     expect(
-      (await fixture.storage.messages.listByRun(fixture.run.id)).map((entry) => entry.message.role),
+      (await projectedRunMessages(fixture.storage, fixture.run.id)).map((message) => message.role),
     ).toEqual(["user"]);
     expect((await fixture.storage.runStates.get(fixture.run.id))?.usage.steps).toBe(3);
     expect(
@@ -377,7 +378,7 @@ describe("RunController failure and maxSteps boundaries", () => {
     expect(fixture.providerCalls()).toBe(2);
     expect(fixture.events.map((event) => event.type)).not.toContain("run.failed");
     expect(
-      (await fixture.storage.messages.listByRun(fixture.run.id)).map((entry) => entry.message.role),
+      (await projectedRunMessages(fixture.storage, fixture.run.id)).map((message) => message.role),
     ).toEqual(["user", "assistant", "tool", "assistant"]);
     await fixture.storage.close();
   });
@@ -439,7 +440,9 @@ describe("RunController failure and maxSteps boundaries", () => {
     expect((await fixture.storage.runStates.get(fixture.run.id))?.status).toBe("CANCELLED");
     expect((await fixture.storage.runStates.get(fixture.run.id))?.usage.steps).toBe(1);
     expect((await fixture.storage.steps.listByRun(fixture.run.id))[0]?.status).toBe("CANCELLED");
-    expect(await fixture.storage.messages.listByRun(fixture.run.id)).toEqual([]);
+    expect(await projectedRunMessages(fixture.storage, fixture.run.id)).toEqual([
+      { role: "user", content: "inspect parser" },
+    ]);
     expect(fixture.events.map((event) => event.type)).toEqual(
       expect.arrayContaining(["status.changed", "run.cancelled"]),
     );

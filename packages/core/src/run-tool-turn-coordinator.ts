@@ -2,6 +2,7 @@ import type {
   AgentBudgetBlock,
   AgentToolResult,
   ModelToolFeedbackProjector,
+  ProjectedToolFeedback,
   RunExecutionMode,
   ToolBatchCoordinator,
   ToolBatchItemOutcome,
@@ -314,7 +315,7 @@ async function executeRunToolTurn(
     // settlement, so a lost Run commit cannot have advanced it.
     return {
       kind: "REPLAN",
-      syntheticResults: replanResults(context),
+      syntheticResults: replanResults(context, observation),
     };
   }
   if (admission.kind === "WAIT_FOR_RESOURCE_DECISION") {
@@ -363,7 +364,10 @@ async function executeRunToolTurn(
  * identical projector and normalizer — which is what keeps one model-feedback authority rather than a
  * REPLAN-shaped second one.
  */
-function replanResults(context: RunToolTurnContext): readonly AgentToolResult[] {
+function replanResults(
+  context: RunToolTurnContext,
+  observation: RunToolTurnObservation,
+): readonly AgentToolResult[] {
   const calls = callsOf(context);
   const messages = ResourceGovernor.replanResults(calls);
   const items: ToolBatchItemOutcome[] = calls.map((call, index) => ({
@@ -376,13 +380,8 @@ function replanResults(context: RunToolTurnContext): readonly AgentToolResult[] 
       disposition: "SAFE_FAILURE",
     },
   }));
-  const projected = context.feedback.project({
-    calls,
-    items,
-    policy: context.observationPolicy,
-  });
-  const normalized = context.normalizer.normalize({ requests: calls, results: projected });
-  return normalized.map((message) => ({
+  const projected = projectAndNormalize(context, observation, calls, items);
+  return projected.map(({ message }) => ({
     externalCallId: message.toolCallId,
     toolName: message.toolName,
     content: message.content,
@@ -585,7 +584,7 @@ function toToolTurnResult(
   switch (outcome.kind) {
     case "COMPLETED":
       return settleObservation(observation, "COMPLETED", outcome.items, () =>
-        completedToolTurnResult(context, outcome),
+        completedToolTurnResult(context, observation, outcome),
       );
     case "WAITING_APPROVAL":
       return settleObservation(observation, "WAITING_APPROVAL", outcome.items, () => ({
@@ -640,24 +639,54 @@ function toToolTurnResult(
  */
 function completedToolTurnResult(
   context: RunToolTurnContext,
+  observation: RunToolTurnObservation,
   outcome: Extract<ToolBatchOutcome, { kind: "COMPLETED" }>,
 ): ToolTurnResult {
   const calls = callsOf(context);
-  const projected = context.feedback.project({
-    calls,
-    items: outcome.items,
-    policy: context.observationPolicy,
-  });
-  const normalized = context.normalizer.normalize({ requests: calls, results: projected });
+  const projected = projectAndNormalize(context, observation, calls, outcome.items);
   return {
     kind: "COMPLETED",
-    results: normalized.map((message) => ({
+    results: projected.map(({ message }) => ({
       externalCallId: message.toolCallId,
       toolName: message.toolName,
       content: message.content,
       isError: message.isError,
     })),
   };
+}
+
+/**
+ * Run the single feedback projection and the single batch normalizer, retaining the same ordered
+ * wrapper objects for the Core-private durable materializer. The wrapper is never widened into the
+ * public ToolTurnResult: receipts and observation identity belong to the durable message boundary.
+ */
+function projectAndNormalize(
+  context: RunToolTurnContext,
+  observation: RunToolTurnObservation,
+  calls: readonly ToolCallRequest[],
+  items: readonly ToolBatchItemOutcome[],
+): readonly ProjectedToolFeedback[] {
+  const projected = context.feedback.project({
+    calls,
+    items,
+    policy: context.observationPolicy,
+  });
+  const normalized = context.normalizer.normalize({
+    requests: calls,
+    results: projected.map(({ message }) => message),
+  });
+  const byCallId = new Map(projected.map((item) => [item.message.toolCallId, item] as const));
+  const ordered = normalized.map((message) => {
+    const item = byCallId.get(message.toolCallId);
+    if (item === undefined) {
+      throw new RunControllerInvariantError(
+        "The normalized Tool feedback lost the projection receipt for a requested call.",
+      );
+    }
+    return item;
+  });
+  observation.projectedFeedback = Object.freeze(ordered);
+  return observation.projectedFeedback;
 }
 
 /**

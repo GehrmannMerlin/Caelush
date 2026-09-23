@@ -144,7 +144,7 @@ function toolBoundarySnapshot(overrides: Partial<RunExecutionSnapshot> = {}): Ru
     state: overrides.state ?? makeState(run),
     stateRevision: 1,
     continuationRevision: 1,
-    conversation: [],
+    conversationRecords: [],
     continuation: {
       type: "WAITING_TOOL_RESULTS",
       runId: run.id,
@@ -163,7 +163,7 @@ function activeStepSnapshot(overrides: Partial<RunExecutionSnapshot> = {}): RunE
     run,
     state: overrides.state ?? makeState(run, { currentStepId: STEP_ID }),
     stateRevision: 1,
-    conversation: [],
+    conversationRecords: [],
     activeStep: overrides.activeStep ?? makeStep(),
     ...overrides,
   };
@@ -177,7 +177,7 @@ function verifyingSnapshot(overrides: Partial<RunExecutionSnapshot> = {}): RunEx
     state: overrides.state ?? makeState(run, { status: "VERIFYING" }),
     stateRevision: 1,
     continuationRevision: 1,
-    conversation: [],
+    conversationRecords: [],
     continuation: {
       type: "AWAITING_VERIFICATION",
       runId: run.id,
@@ -294,9 +294,9 @@ describe("planner branch matrix", () => {
     expect(commit.stepWrites).toEqual([
       { operation: "UPDATE", step: { ...makeStep(), status: "COMPLETED", finishedAt: NOW } },
     ]);
-    expect(commit.messagesToAppend).toEqual([
-      { createdAt: NOW, sourceStepId: STEP_ID, message: ASSISTANT_APPEND },
-    ]);
+    // Message V2 semantic materialization belongs to Core's RunMessageAuthority; the frozen
+    // transition planner only plans lifecycle state and continuation changes.
+    expect(commit.messagesToAppend).toEqual([]);
     expect(commit.continuation).toEqual({
       operation: "SET",
       checkpoint: {

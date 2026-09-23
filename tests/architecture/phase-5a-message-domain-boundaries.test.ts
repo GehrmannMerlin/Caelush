@@ -334,9 +334,9 @@ describe("Phase 5A guard — package boundaries (freeze §150, §151)", () => {
   });
 
   it("keeps the Message Domain out of every consumer that must not need it yet", async () => {
-    // 5A was a pure addition. Phase 5B legitimately added exactly one consumer: the storage layer that
-    // implements the Agent-owned record store port. Every other production file still names no Message
-    // Domain concept, so the rule is stated as a closed allowlist rather than dropped.
+    // Phase 5C activates the durable-record cutover. The allowlist remains closed: only the explicit
+    // production composition, Run execution projection/materialization, and raw V2 store paths may
+    // consume Message Domain records; Context/AgentLoop remains on its AI compatibility seam.
     const allowedConsumers = [
       // The V2 record store and its legacy compatibility reader — the port implementations.
       "packages/storage/src/messages/sqlite-agent-message-record-store.ts",
@@ -347,6 +347,11 @@ describe("Phase 5A guard — package boundaries (freeze §150, §151)", () => {
       // the pre-V2 compatibility reader.
       "packages/storage/src/index.ts",
       "packages/storage/src/storage.ts",
+      "apps/daemon/src/daemon-composition.ts",
+      "packages/agent/src/run/ports/run-execution-store.ts",
+      "packages/core/src/run-agent-history.ts",
+      "packages/core/src/run-message-materializer.ts",
+      "packages/storage/src/run-execution-store.ts",
     ];
     const consumers: string[] = [];
     for (const file of await activeSourceFiles(["packages", "apps"])) {
@@ -623,11 +628,11 @@ describe("Phase 5A guard — no persistence implementation (freeze §157, §164)
 describe("Phase 5A guard — no production cutover (freeze §158, §197)", () => {
   it("keeps the RunExecutionStore message shape unchanged", async () => {
     const store = code(await read("packages/agent/src/run/ports/run-execution-store.ts"));
-    // The production contract still speaks AIMessage.
-    expect(store).toContain("readonly message: AIMessage;");
-    expect(store).not.toContain("AgentMessage");
-    expect(store).not.toContain("StoredAgentMessage");
-    expect(store).not.toContain("modelProjectionVersion");
+    // Phase 5C is the deliberate cutover point: the execution contract carries raw V2 records and
+    // encoded drafts; AIMessage remains only on the temporary projection seam.
+    expect(store).toContain("readonly conversationRecords: readonly AgentMessageRecord[];");
+    expect(store).toContain("readonly draft: AgentMessageRecordDraft;");
+    expect(store).not.toContain("RunConversationEntry");
   });
 
   it("keeps AgentLoopAdvanceInput.history on AIMessage", async () => {

@@ -3,7 +3,11 @@ import {
   type RunExecutionDirective,
   type RunExecutionEffectResult,
 } from "@caelush/agent";
-import { createRunCommitEventMaterializer } from "@caelush/core";
+import {
+  createAssistantMessageAppend,
+  createRunCommitEventMaterializer,
+  createUserMessageAppend,
+} from "@caelush/core";
 import type { RunExecutionCommitView } from "@caelush/core";
 import {
   AgentRunSchema,
@@ -21,6 +25,7 @@ import {
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
 import { makeSession } from "./support/fixtures.js";
+import { testRunMessageAuthority } from "../../core/test/support/run-message-authority.js";
 
 /**
  * The planned commit is one the durable store actually accepts.
@@ -136,6 +141,7 @@ async function commitPlanned(
   const session = makeSession({ id: SESSION_ID });
   const pendingRun = makeRun({ status: "PENDING", startedAt: undefined });
   const run = makeRun(options.activeStep === undefined ? {} : { currentStepId: STEP_ID });
+  const messages = testRunMessageAuthority();
   // The Run and its AgentState are two projections of one fact, so the fixture must agree with
   // itself before the planner is asked to plan anything.
   const state =
@@ -150,7 +156,7 @@ async function commitPlanned(
     expectedContinuationRevision: null,
     stepWrites:
       options.activeStep === undefined ? [] : [{ operation: "INSERT", step: options.activeStep }],
-    messagesToAppend: [],
+    messagesToAppend: [createUserMessageAppend(messages, run, "GOAL")],
     events: [
       {
         eventId: createEventId(),
@@ -176,11 +182,20 @@ async function commitPlanned(
     now: NOW,
   }) as RunExecutionCommitView;
 
+  const plannedWithMessages =
+    effect.kind === "AGENT" && effect.result.kind === "TOOL_REQUESTS"
+      ? {
+          ...planned,
+          messagesToAppend: [
+            createAssistantMessageAppend(messages, run, STEP_ID, MODEL_TURN as never),
+          ],
+        }
+      : planned;
   const materialized = createRunCommitEventMaterializer().materialize({
     snapshot,
     directive,
     effect,
-    plannedCommit: planned,
+    plannedCommit: plannedWithMessages,
     now: NOW,
     // These fixtures drive turns whose provider call completed; a failure fixture states its own.
     providerTurnState: options.providerTurnState ?? "COMPLETED",
@@ -240,7 +255,10 @@ describe("planned Run transition commit integration", () => {
     expect(loaded?.state?.usage).toMatchObject({ steps: 2, inputTokens: 5, outputTokens: 3 });
     expect(loaded?.run.currentStepId).toBeUndefined();
     // The assistant message the turn produced is durable.
-    expect(loaded?.conversation).toHaveLength(1);
+    expect(loaded?.conversationRecords.map((record) => record.messageType)).toEqual([
+      "USER",
+      "ASSISTANT",
+    ]);
     await result.run.close();
   });
 

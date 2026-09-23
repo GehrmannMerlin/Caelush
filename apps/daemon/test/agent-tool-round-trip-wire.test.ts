@@ -13,6 +13,7 @@ import {
 import type { VerificationPlanDraft } from "@caelush/protocol";
 import { RunController } from "@caelush/core";
 import type { RunAgentExecutionContextFactory } from "@caelush/core";
+import { testRunMessageAuthority } from "../../../packages/core/test/support/run-message-authority.js";
 import {
   boundToolResultContent,
   createDurableToolExecutionCoordinator,
@@ -444,6 +445,7 @@ describe("real provider Tool Call round trip", () => {
     const controller = new RunController({
       agentExecution,
       executionStore: storage.execution,
+      messages: testRunMessageAuthority(),
       completionStore: storage.execution,
       events: eventBus,
       configResolver: {

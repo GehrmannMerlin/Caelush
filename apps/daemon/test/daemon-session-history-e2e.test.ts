@@ -12,6 +12,7 @@ import { CaelushClient } from "@caelush/client";
 import { openCaelushStorage } from "@caelush/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { startDaemon } from "../src/index.js";
+import { projectedRunMessages } from "../../../packages/storage/test/support/projected-run-messages.js";
 import {
   FIXTURE_API,
   FIXTURE_MODEL,
@@ -99,8 +100,8 @@ describe("daemon Session conversation history E2E", () => {
 
     const storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
     try {
-      const secondConversation = await storage.messages.listByRun(second.id);
-      expect(secondConversation.map((entry) => entry.message)).toEqual([
+      const secondConversation = await projectedRunMessages(storage, second.id);
+      expect(secondConversation).toEqual([
         { role: "user", content: "second goal" },
         { role: "assistant", content: [{ type: "text", text: "second verified answer" }] },
       ]);

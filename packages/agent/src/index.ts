@@ -205,7 +205,6 @@ export {
 export type {
   DurableAgentEvent,
   DurableEventDraft,
-  RunConversationEntry,
   RunExecutionCommit,
   RunExecutionCommitResult,
   RunExecutionContinuationWrite,
@@ -473,6 +472,7 @@ export type {
   ModelObservationCandidate,
   ModelToolFeedbackProjector,
   ModelToolFeedbackProjectorOptions,
+  ProjectedToolFeedback,
   PreparedToolCall,
   PreparedToolSettlement,
   ResolvedAgentTool,

@@ -36,6 +36,8 @@ import {
   fakeFrozenModelTurnExecutor,
   testRunAgentExecution,
 } from "./support/run-agent-execution.js";
+import { testRunMessageAuthority } from "../../core/test/support/run-message-authority.js";
+import { projectedRunMessages } from "./support/projected-run-messages.js";
 
 /**
  * Phase 4D — the pre-invocation rejection, end to end.
@@ -218,6 +220,7 @@ async function harness(input: {
   const controller = new RunController({
     agentExecution: agentExecution.factory,
     executionStore: storage.execution,
+    messages: testRunMessageAuthority(),
     events: eventBus,
     configResolver: {
       resolve: async () => ({
@@ -380,10 +383,10 @@ describe("Phase 4D pre-invocation rejection — the durable ledger stays empty",
       )?.receivedResults;
       // The boundary that accepted the batch has since been replaced by the verification boundary, so
       // the durable conversation is the authority for what the model was told.
-      const conversation = await h.storage.messages.listByRun(h.run.id);
-      const toolEntries = conversation.filter((entry) => entry.message.role === "tool");
+      const conversation = await projectedRunMessages(h.storage, h.run.id);
+      const toolEntries = conversation.filter((entry) => entry.role === "tool");
       expect(toolEntries).toHaveLength(1);
-      expect(toolEntries[0]?.message).toMatchObject({
+      expect(toolEntries[0]).toMatchObject({
         role: "tool",
         toolCallId: "call_unknown",
         toolName: "not_a_tool",

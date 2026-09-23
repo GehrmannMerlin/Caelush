@@ -73,6 +73,7 @@ import {
   type RunExecutionSnapshot,
 } from "../../src/index.js";
 import { fakeFrozenModelTurnExecutor } from "./run-agent-execution.js";
+import { testRunMessageAuthority } from "./run-message-authority.js";
 import { MemoryRunStore, makeRunD, turnMessages } from "./phase-3d-tool-turn.js";
 import { modelTurnResult } from "./fake-model-turn-executor.js";
 
@@ -587,7 +588,8 @@ let clockTick = 100;
 
 export function harness3e(options: Phase3EHarnessOptions): Phase3EHarness {
   const run = options.run ?? makeRunD();
-  const store = new MemoryRunStore({ run, conversation: [], ...options.snapshot });
+  const store = new MemoryRunStore({ run, conversationRecords: [], ...options.snapshot });
+  const messages = testRunMessageAuthority();
   const notifications: DurableAgentEvent[] = [];
   const allocatedSteps: StepId[] = [];
   const turns: { readonly request: AIModelRequest }[] = [];
@@ -706,6 +708,7 @@ export function harness3e(options: Phase3EHarnessOptions): Phase3EHarness {
     configResolver: {
       resolve: async () => ({ baseSystemPrompt: "base", contextLimits: { maxInputTokens: 1000 } }),
     },
+    messages,
     clock,
     eventIdFactory: { create: createEventId },
     ...(canonical

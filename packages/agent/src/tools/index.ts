@@ -345,4 +345,5 @@ export type {
   ModelObservationCandidate,
   ModelToolFeedbackProjector,
   ModelToolFeedbackProjectorOptions,
+  ProjectedToolFeedback,
 } from "./observation/model-feedback-projector.js";
