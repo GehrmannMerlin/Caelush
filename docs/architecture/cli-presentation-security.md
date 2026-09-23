@@ -8,7 +8,7 @@ authority, or a replacement for the existing Security policy kernel.
 ToolInvocation / sanitized ToolExecutionResult
                     │
                     ▼
-       ToolPresentationPort (packages/tools)
+       ToolPresentationPort (@caelush/agent)
                     │
                     ▼
        CaelushToolPresentation (packages/security)
@@ -18,7 +18,7 @@ ToolInvocation / sanitized ToolExecutionResult
                     └── safe shell command label
 ```
 
-`packages/tools` defines the provider-independent, data-only port. It does not
+`@caelush/agent` defines the provider-independent, data-only port. It does not
 depend on `@caelush/security`. The default daemon composition creates the
 Security implementation and injects it into `ToolDispatcher`. A presentation
 exception is caught and omitted or replaced with a generic label; Tool handler
