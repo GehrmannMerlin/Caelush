@@ -7,7 +7,10 @@ import type {
   ModelDescriptor,
 } from "@caelush/ai";
 import {
+  agentMessageId,
+  conversationTurnId,
   createAgentDecisionClassifier,
+  createAgentConversationSnapshot,
   createAgentLoop,
   createAgentTurnRef,
   createDirectAcceptCompletionGate,
@@ -60,6 +63,14 @@ const IDENTITY: AgentExecutionIdentity = {
   sessionId: createSessionId(),
   goal: "echo the input back",
 };
+
+const CONVERSATION = createAgentConversationSnapshot({
+  sessionId: IDENTITY.sessionId,
+  currentRunId: IDENTITY.runId,
+  currentTurnId: conversationTurnId("cturn_run_fixture"),
+  turns: [],
+});
+const USER_MESSAGE_ID = agentMessageId("run-user");
 
 const MODEL: ModelDescriptor = {
   ref: { provider: "fixture", model: "fixture-model" },
@@ -194,16 +205,7 @@ function echoContextEngine(): {
     engine: {
       prepare(input): Promise<PreparedModelContext> {
         inputs.push(input);
-        const messages =
-          input.input.kind === "USER_INPUT"
-            ? [...input.history, ...input.input.messages]
-            : input.input.kind === "TOOL_RESULTS"
-              ? [
-                  ...input.history,
-                  input.input.pendingDecision.modelTurn.assistantMessage,
-                  ...input.input.results,
-                ]
-              : [...input.history, ...(input.input.messages ?? [])];
+        const messages = [{ role: "user" as const, content: "fixture" }];
         return Promise.resolve({ messages, report: REPORT, observationPolicy: POLICY });
       },
     },
@@ -255,7 +257,7 @@ function effectContext(turn: { stepId: StepId; sequence: number }, signal: Abort
   return {
     identity: IDENTITY,
     turn,
-    history: [],
+    conversation: CONVERSATION,
     model: MODEL,
     tools: TOOLS,
     signal,
@@ -289,7 +291,7 @@ describe("General Agent Run execution, standalone", () => {
     const firstStep: StepId = createStepId();
     const userInput = {
       kind: "USER_INPUT",
-      messages: [{ role: "user", content: "say hello" }],
+      userMessageId: USER_MESSAGE_ID,
     } satisfies AgentLoopAdvanceInput["input"];
     const first = await driver.execute(
       { kind: "ADVANCE_AGENT", mode: "EXECUTE", reason: "INITIAL", input: userInput },
@@ -370,7 +372,9 @@ describe("General Agent Run execution, standalone", () => {
           kind: "TOOL_RESULTS",
           sourceStepId: firstStep,
           pendingDecision: requested,
-          results: toolResults,
+          toolResultMessageIds: toolResults.map((result) =>
+            agentMessageId(`result-${result.toolCallId}`),
+          ),
         },
       },
       effectContext(createAgentTurnRef(secondStep, 2), signal),
@@ -388,15 +392,8 @@ describe("General Agent Run execution, standalone", () => {
     // summary for the first, and the two Tool results plus the answer for the second. The original user
     // message is not appended again by the resumed Reason — the ledger is a ledger, not a transcript of
     // everything the provider was shown.
-    expect(second.result.messagesToAppend.map((message) => message.role)).toEqual([
-      "tool",
-      "tool",
-      "assistant",
-    ]);
-    expect(first.result.messagesToAppend.map((message) => message.role)).toEqual([
-      "user",
-      "assistant",
-    ]);
+    expect(second.result.messagesToAppend.map((message) => message.role)).toEqual(["assistant"]);
+    expect(first.result.messagesToAppend.map((message) => message.role)).toEqual(["assistant"]);
 
     /* 4. FINAL_CANDIDATE → the Driver evaluates it through the general CompletionGate → ACCEPT. */
     const completionStep: StepId = secondStep;
@@ -469,7 +466,7 @@ describe("General Agent Run execution, standalone", () => {
         kind: "ADVANCE_AGENT",
         mode: "EXECUTE",
         reason: "INITIAL",
-        input: { kind: "USER_INPUT", messages: [{ role: "user", content: "say hello" }] },
+        input: { kind: "USER_INPUT", userMessageId: USER_MESSAGE_ID },
       },
       effectContext(createAgentTurnRef(step, 1), signal),
     );
@@ -578,7 +575,7 @@ describe("General Agent Run execution, standalone", () => {
         kind: "ADVANCE_AGENT",
         mode: "EXECUTE",
         reason: "INITIAL",
-        input: { kind: "USER_INPUT", messages: [{ role: "user", content: "say hello" }] },
+        input: { kind: "USER_INPUT", userMessageId: USER_MESSAGE_ID },
       },
       effectContext(createAgentTurnRef(step, 1), controller.signal),
     );

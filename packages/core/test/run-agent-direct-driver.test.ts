@@ -210,7 +210,7 @@ function harness(options: {
   const controller = new RunController({
     agentExecution: execution,
     executionStore: store,
-    messages: testRunMessageAuthority(),
+    messages: testRunMessageAuthority({ snapshot: () => store.snapshot }),
     completionStore: completionStoreOver(store),
     events: {
       notifyCommitted: (events: readonly DurableAgentEvent[]) => notifications.push(...events),

@@ -25,13 +25,14 @@ import {
   createToolInvocationExecutor,
   createToolResultBatchNormalizer,
   createToolResultPipeline,
+  createStandardAgentMessageProjectorRegistry,
+  projectStoredMessages,
   UNBOUNDED_TOOL_BUDGET_ADMISSION,
   type AgentToolRegistry,
   type DurableToolExecutionCoordinator,
   type PreparedToolCall,
 } from "@caelush/agent";
 import { createModelTurnExecutor } from "@caelush/agent";
-import type { ContextPrepareInput } from "@caelush/agent";
 import { createAISubsystem } from "@caelush/ai";
 import type { AIProviderBinding, ApiAdapter, ModelDescriptorSourcePort } from "@caelush/ai";
 import { createOpenAICompatibleApiAdapter } from "@caelush/ai/adapters/openai-compatible";
@@ -154,14 +155,6 @@ const verificationPlanner = {
     ],
   }),
 };
-
-/** The messages one turn input contributes, in the order the model sees them. */
-function turnMessages(input: ContextPrepareInput): readonly import("@caelush/ai").AIMessage[] {
-  const turn = input.input;
-  if (turn.kind === "USER_INPUT") return turn.messages;
-  if (turn.kind === "CONTINUATION") return turn.messages ?? [];
-  return [turn.pendingDecision.modelTurn.assistantMessage, ...turn.results];
-}
 
 /**
  * Project durable invocation state back onto the canonical prepared call.
@@ -423,7 +416,10 @@ describe("real provider Tool Call round trip", () => {
           createContextEngine: () => ({
             async prepare(input) {
               return {
-                messages: [...input.history, ...turnMessages(input)],
+                messages: projectStoredMessages(
+                  input.conversation.turns.flatMap((turn) => [...turn.messages]),
+                  createStandardAgentMessageProjectorRegistry(),
+                ).messages,
                 report: {
                   estimatedInputTokens: 1,
                   effectiveInputLimitTokens: input.model.limits.contextWindowTokens,
@@ -445,7 +441,9 @@ describe("real provider Tool Call round trip", () => {
     const controller = new RunController({
       agentExecution,
       executionStore: storage.execution,
-      messages: testRunMessageAuthority(),
+      messages: testRunMessageAuthority({
+        records: (runId) => storage.messageRecords.listByRun(runId),
+      }),
       completionStore: storage.execution,
       events: eventBus,
       configResolver: {

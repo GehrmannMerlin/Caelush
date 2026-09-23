@@ -94,7 +94,9 @@ async function setup(options: {
       createStepId: () => createStepId(),
     }).factory,
     executionStore: options.execution?.(storage) ?? storage.execution,
-    messages: testRunMessageAuthority(),
+    messages: testRunMessageAuthority({
+      records: (runId) => storage.messageRecords.listByRun(runId),
+    }),
     completionStore: options.completion?.(storage) ?? completionStoreOver(storage.execution),
     events: eventBus,
     configResolver: {

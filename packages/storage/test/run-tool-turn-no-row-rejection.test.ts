@@ -220,7 +220,9 @@ async function harness(input: {
   const controller = new RunController({
     agentExecution: agentExecution.factory,
     executionStore: storage.execution,
-    messages: testRunMessageAuthority(),
+    messages: testRunMessageAuthority({
+      records: (runId) => storage.messageRecords.listByRun(runId),
+    }),
     events: eventBus,
     configResolver: {
       resolve: async () => ({

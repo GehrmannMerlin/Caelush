@@ -5,12 +5,17 @@ import {
   type AgentMessageCodecRegistry,
   type AgentMessageProjectorRegistry,
   type AgentMessageRecord,
-  type AgentTurnInput,
   type AgentToolCallsDecision,
 } from "@caelush/agent";
 import type { AIMessage, AIToolResultMessage } from "@caelush/ai";
 
 import { semanticEqual } from "./semantic-equality.js";
+import type { LegacyFacadeTurnInput } from "./legacy-agent-conversation.js";
+
+/** Machine-readable marker retained for architecture guards and migration diagnostics. */
+export const RUN_AGENT_HISTORY_MODE = "COMPATIBILITY ONLY" as const;
+
+/** COMPATIBILITY ONLY — Phase 5D production Context and Run execution do not call this projector. */
 
 /** The compatibility projection required while Context/AgentLoop still speak AI messages. */
 export interface RunAgentMessageProjection {
@@ -24,7 +29,7 @@ export type RunAgentHistoryProjection =
       readonly kind: "COMPLETE_TURN";
       readonly history: readonly AIMessage[];
       /** The current USER_INPUT projected from the durable ledger. */
-      readonly input?: Extract<AgentTurnInput, { kind: "USER_INPUT" }>;
+      readonly input?: Extract<LegacyFacadeTurnInput, { kind: "USER_INPUT" }>;
     }
   | {
       readonly kind: "TOOL_RESULTS";
@@ -35,7 +40,7 @@ export type RunAgentHistoryProjection =
 
 export interface RunAgentHistoryInput {
   /** The frozen turn input the coordinator's directive carries. */
-  readonly input: AgentTurnInput;
+  readonly input: LegacyFacadeTurnInput;
   /** Raw V2 records are the durable authority; AI messages are made only below this seam. */
   readonly conversationRecords: readonly AgentMessageRecord[];
   readonly messageProjection: RunAgentMessageProjection;
@@ -101,7 +106,7 @@ function flattenProjected(entries: readonly ProjectedDurableMessage[]): readonly
 function projectToolResults(
   prefix: readonly AIMessage[],
   durable: readonly ProjectedDurableMessage[],
-  turn: Extract<AgentTurnInput, { kind: "TOOL_RESULTS" }>,
+  turn: Extract<LegacyFacadeTurnInput, { kind: "TOOL_RESULTS" }>,
 ): RunAgentHistoryProjection {
   assertKnownResults(turn);
 
@@ -132,7 +137,7 @@ function projectToolResults(
   };
 }
 
-function assertKnownResults(turn: Extract<AgentTurnInput, { kind: "TOOL_RESULTS" }>): void {
+function assertKnownResults(turn: Extract<LegacyFacadeTurnInput, { kind: "TOOL_RESULTS" }>): void {
   if (typeof turn.sourceStepId !== "string" || turn.sourceStepId.length === 0) {
     throw new AgentTurnInputError("MISSING_SOURCE_STEP_ID");
   }
@@ -176,8 +181,8 @@ function dropTrailingUserTurn(messages: readonly AIMessage[]): readonly AIMessag
 
 function durableUserInput(
   entries: readonly ProjectedDurableMessage[],
-  fallback: Extract<AgentTurnInput, { kind: "USER_INPUT" }>,
-): Extract<AgentTurnInput, { kind: "USER_INPUT" }> {
+  fallback: Extract<LegacyFacadeTurnInput, { kind: "USER_INPUT" }>,
+): Extract<LegacyFacadeTurnInput, { kind: "USER_INPUT" }> {
   const entry = [...entries].reverse().find((candidate) => candidate.record.messageType === "USER");
   if (entry === undefined) return fallback;
   const messages = entry.messages.filter(

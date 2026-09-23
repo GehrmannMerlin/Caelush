@@ -1,6 +1,7 @@
 import type { StepId, TimestampMs } from "@caelush/protocol";
 
 import type { AgentTurnInput } from "../loop/types.js";
+import type { AgentMessageId } from "../messages/types/ids.js";
 import type {
   AdvanceAgentDirective,
   EvaluateCompletionDirective,
@@ -126,7 +127,7 @@ function routeRunning(snapshot: RunExecutionSnapshot, now: TimestampMs): RunExec
           kind: "TOOL_RESULTS",
           sourceStepId: continuation.sourceStepId,
           pendingDecision: continuation.pendingDecision,
-          results: continuation.receivedResults,
+          toolResultMessageIds: toolResultMessageIds(snapshot, continuation.sourceStepId),
         });
       }
       return toolBatch("EXECUTE", {
@@ -159,7 +160,7 @@ function routeRunning(snapshot: RunExecutionSnapshot, now: TimestampMs): RunExec
           kind: "TOOL_RESULTS",
           sourceStepId,
           pendingDecision: continuation.pendingDecision,
-          results: continuation.receivedResults,
+          toolResultMessageIds: toolResultMessageIds(snapshot, sourceStepId),
         });
       }
       return advance("RECOVER", "RETRY", initialTurn(snapshot));
@@ -181,7 +182,32 @@ function routeRunning(snapshot: RunExecutionSnapshot, now: TimestampMs): RunExec
  * belongs here, in the Run Layer.
  */
 function initialTurn(snapshot: RunExecutionSnapshot): AgentTurnInput {
-  return { kind: "USER_INPUT", messages: [{ role: "user", content: snapshot.run.goal }] };
+  const user = [...snapshot.conversationRecords]
+    .reverse()
+    .find(
+      (record) =>
+        record.messageType === "USER" &&
+        record.source.kind === "USER" &&
+        record.source.origin !== "STEERING",
+    );
+  if (user === undefined) {
+    throw new RunExecutionInvariantError(
+      "An Agent turn requires a durable USER message before model preparation.",
+    );
+  }
+  return { kind: "USER_INPUT", userMessageId: user.messageId as AgentMessageId };
+}
+
+function toolResultMessageIds(
+  snapshot: RunExecutionSnapshot,
+  sourceStepId: StepId,
+): readonly AgentMessageId[] {
+  return snapshot.conversationRecords
+    .filter(
+      (record) => record.messageType === "TOOL_RESULT" && record.sourceStepId === sourceStepId,
+    )
+    .sort((left, right) => left.sequence - right.sequence)
+    .map((record) => record.messageId as AgentMessageId);
 }
 
 function isInitialDurableUserTurn(snapshot: RunExecutionSnapshot): boolean {

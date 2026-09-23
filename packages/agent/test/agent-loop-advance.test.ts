@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   allowedModelAdmission,
+  agentMessageId,
+  conversationTurnId,
   createAgentDecisionClassifier,
+  createAgentConversationSnapshot,
   createAgentLoop,
   createAgentTurnRef,
 } from "../src/index.js";
@@ -41,6 +44,13 @@ const IDENTITY: AgentExecutionIdentity = {
 };
 
 const TURN = createAgentTurnRef(createStepId(), 1);
+const USER_MESSAGE_ID = agentMessageId("amsg_user_input");
+const CONVERSATION = createAgentConversationSnapshot({
+  sessionId: IDENTITY.sessionId,
+  currentRunId: IDENTITY.runId,
+  currentTurnId: conversationTurnId("cturn_fixture"),
+  turns: [],
+});
 
 const MODEL: ModelDescriptor = {
   ref: { provider: "test", model: "model-a" },
@@ -112,7 +122,8 @@ function turnResult(partial: Partial<AIModelTurnResult> = {}): AIModelTurnResult
 }
 
 function userTurn(content = "hello"): AgentLoopAdvanceInput["input"] {
-  return { kind: "USER_INPUT", messages: [{ role: "user", content }] };
+  void content;
+  return { kind: "USER_INPUT", userMessageId: USER_MESSAGE_ID };
 }
 
 /** A context engine that records what it was asked and returns a fixed context. */
@@ -170,7 +181,7 @@ function advanceInput(overrides: Partial<AgentLoopAdvanceInput> = {}): AgentLoop
     identity: IDENTITY,
     turn: TURN,
     input: userTurn(),
-    history: [],
+    conversation: CONVERSATION,
     model: MODEL,
     tools: [],
     signal: new AbortController().signal,
@@ -225,7 +236,7 @@ describe("AgentLoop.advance() one Reason", () => {
     // The loop never executes a tool: it reports the request and stops.
     expect(turns.callCount()).toBe(1);
     if (result.kind !== "TOOL_REQUESTS") throw new Error("expected tool requests");
-    expect(result.messagesToAppend.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(result.messagesToAppend.map((message) => message.role)).toEqual(["assistant"]);
     expect(result.context).toEqual({ report: REPORT, observationPolicy: POLICY, recovery: "NONE" });
     expect(result.turn).toEqual(TURN);
     expect(result.modelTurn.finishReason).toBe("TOOL_CALLS");
@@ -278,22 +289,14 @@ describe("AgentLoop.advance() one Reason", () => {
           kind: "TOOL_RESULTS",
           sourceStepId: TURN.stepId,
           pendingDecision: pending,
-          results: [
-            {
-              role: "tool",
-              toolCallId: "call_a",
-              toolName: "read_file",
-              content: "data",
-              isError: false,
-            },
-          ],
+          toolResultMessageIds: [agentMessageId("result-call_a")],
         },
       }),
     );
 
     expect(decisionOf(result).type).toBe("TOOL_CALLS_REQUESTED");
     if (result.kind !== "TOOL_REQUESTS") throw new Error("expected tool requests");
-    expect(result.messagesToAppend.map((message) => message.role)).toEqual(["tool", "assistant"]);
+    expect(result.messagesToAppend.map((message) => message.role)).toEqual(["assistant"]);
   });
 
   it("returns a final candidate from a tool-result continuation", async () => {
@@ -324,15 +327,7 @@ describe("AgentLoop.advance() one Reason", () => {
           kind: "TOOL_RESULTS",
           sourceStepId: TURN.stepId,
           pendingDecision: pending,
-          results: [
-            {
-              role: "tool",
-              toolCallId: "call_a",
-              toolName: "read_file",
-              content: "data",
-              isError: false,
-            },
-          ],
+          toolResultMessageIds: [agentMessageId("result-call_a")],
         },
       }),
     );
@@ -346,14 +341,14 @@ describe("AgentLoop.advance() one Reason", () => {
         input: {
           kind: "CONTINUATION",
           reason: "VERIFICATION_REPAIR",
-          messages: [{ role: "user", content: "the tests failed" }],
+          messageIds: [agentMessageId("steering-message")],
         },
       }),
     );
 
     expect(decisionOf(result).type).toBe("FINAL_CANDIDATE");
     if (result.kind !== "FINAL_CANDIDATE") throw new Error("expected final candidate");
-    expect(result.messagesToAppend.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(result.messagesToAppend.map((message) => message.role)).toEqual(["assistant"]);
   });
 
   it("accepts a STEERING continuation as a contract with no special behaviour", async () => {
@@ -734,7 +729,7 @@ describe("AgentLoop.advance() tool result validation", () => {
       kind: "TOOL_RESULTS",
       sourceStepId: TURN.stepId,
       pendingDecision: pending,
-      results,
+      toolResultMessageIds: results.map((entry) => agentMessageId(`result-${entry.toolCallId}`)),
     };
   }
 
@@ -774,16 +769,25 @@ describe("AgentLoop.advance() tool result validation", () => {
     await expectRefusedBeforeWork(toolTurn([result("call_a")]));
   });
 
-  it("refuses a wrong tool call id before any port is called", async () => {
-    await expectRefusedBeforeWork(toolTurn([result("call_b"), result("call_a")]));
+  it("refuses a duplicate durable Tool-result ID before any port is called", async () => {
+    await expectRefusedBeforeWork({
+      kind: "TOOL_RESULTS",
+      sourceStepId: TURN.stepId,
+      pendingDecision: pending,
+      toolResultMessageIds: [agentMessageId("result-call_a"), agentMessageId("result-call_a")],
+    });
   });
 
-  it("refuses a wrong tool name before any port is called", async () => {
-    await expectRefusedBeforeWork(toolTurn([result("call_a", "search_text"), result("call_b")]));
+  it("refuses an invalid durable Tool-result ID before any port is called", async () => {
+    await expectRefusedBeforeWork({
+      kind: "TOOL_RESULTS",
+      sourceStepId: TURN.stepId,
+      pendingDecision: pending,
+      toolResultMessageIds: [agentMessageId("result-call_a"), agentMessageId("")],
+    });
   });
 
-  it("refuses a reordered batch and a duplicate result id", async () => {
-    await expectRefusedBeforeWork(toolTurn([result("call_b"), result("call_a")]));
+  it("refuses a duplicate result ID", async () => {
     await expectRefusedBeforeWork(toolTurn([result("call_a"), result("call_a")]));
   });
 
@@ -853,7 +857,7 @@ describe("AgentLoop.advance() context boundary", () => {
 
     const received = context.inputs()[0]!;
     expect(Object.keys(received).sort()).toEqual([
-      "history",
+      "conversation",
       "identity",
       "input",
       "mode",
@@ -871,18 +875,16 @@ describe("AgentLoop.advance() context boundary", () => {
     expect(received).not.toHaveProperty("runtime");
   });
 
-  it("passes the caller history and turn through unchanged", async () => {
+  it("passes the caller conversation snapshot and turn through unchanged", async () => {
     const context = contextEngine({});
-    const history = [{ role: "user" as const, content: "earlier" }];
 
     await loopWith({ context }).advance(
       advanceInput({
-        history,
         turn: createAgentTurnRef("stp_0195f3a0-0000-7000-8000-000000000000" as StepId, 7),
       }),
     );
 
-    expect(context.inputs()[0]?.history).toBe(history);
+    expect(context.inputs()[0]?.conversation).toBe(CONVERSATION);
     expect(context.inputs()[0]?.turn.sequence).toBe(7);
     expect(context.inputs()[0]?.identity).toBe(IDENTITY);
   });

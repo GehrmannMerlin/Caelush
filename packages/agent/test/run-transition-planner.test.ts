@@ -13,6 +13,7 @@ import {
   type StepId,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
+import { agentMessageId } from "../src/index.js";
 import type { AgentLoopAdvanceResult } from "../src/loop/types.js";
 import {
   createRunTransitionPlanner,
@@ -276,7 +277,7 @@ describe("planner branch matrix", () => {
         kind: "ADVANCE_AGENT",
         mode: "EXECUTE",
         reason: "INITIAL",
-        input: { kind: "USER_INPUT", messages: [] },
+        input: { kind: "USER_INPUT", userMessageId: agentMessageId("planner-user") },
       },
       { kind: "AGENT", result },
     );
@@ -326,7 +327,7 @@ describe("planner branch matrix", () => {
         kind: "ADVANCE_AGENT",
         mode: "EXECUTE",
         reason: "INITIAL",
-        input: { kind: "USER_INPUT", messages: [] },
+        input: { kind: "USER_INPUT", userMessageId: agentMessageId("planner-user") },
       },
       { kind: "AGENT", result },
     );
@@ -355,7 +356,7 @@ describe("planner branch matrix", () => {
         kind: "ADVANCE_AGENT",
         mode: "EXECUTE",
         reason: "INITIAL",
-        input: { kind: "USER_INPUT", messages: [] },
+        input: { kind: "USER_INPUT", userMessageId: agentMessageId("planner-user") },
       },
       { kind: "AGENT", result },
     );
@@ -551,7 +552,7 @@ describe("planner refuses transitions the frozen input cannot express", () => {
     kind: "ADVANCE_AGENT",
     mode: "EXECUTE",
     reason,
-    input: { kind: "USER_INPUT", messages: [] },
+    input: { kind: "USER_INPUT", userMessageId: agentMessageId("planner-user") },
   });
 
   const completionDirective = (): Extract<

@@ -1,4 +1,4 @@
-import type { AIMessage, AIModelRequest, AIToolResultMessage, AIToolSpec } from "@caelush/ai";
+import type { AIMessage, AIModelRequest, AIToolSpec } from "@caelush/ai";
 import type {
   ContextEnginePort,
   ContextPrepareInput,
@@ -6,6 +6,7 @@ import type {
   ModelTurnExecutor,
   PreparedModelContext,
 } from "@caelush/agent";
+import { createStandardAgentMessageProjectorRegistry, projectStoredMessages } from "@caelush/agent";
 import type { RunAgentExecutionContextFactory } from "@caelush/core";
 import type { StepId } from "@caelush/protocol";
 
@@ -136,13 +137,18 @@ export interface FakeContextEngine extends ContextEnginePort {
  */
 export function fakeContextEngine(): FakeContextEngine {
   const preparations: PreparedTestContext[] = [];
+  const projectors = createStandardAgentMessageProjectorRegistry();
   const engine: FakeContextEngine = {
     preparations,
     async prepare(input: ContextPrepareInput): Promise<PreparedModelContext> {
       if (engine.prepareFailure !== undefined) throw engine.prepareFailure;
-      preparations.push({ mode: input.mode, messages: input.history });
+      const messages = projectStoredMessages(
+        input.conversation.turns.flatMap((turn) => [...turn.messages]),
+        projectors,
+      ).messages;
+      preparations.push({ mode: input.mode, messages });
       return {
-        messages: [...input.history, ...turnMessages(input)],
+        messages,
         report: {
           estimatedInputTokens: 1,
           effectiveInputLimitTokens: input.model.limits.contextWindowTokens,
@@ -159,17 +165,6 @@ export function fakeContextEngine(): FakeContextEngine {
     },
   };
   return engine;
-}
-
-/** The messages one turn input contributes, in the order the model sees them. */
-function turnMessages(input: ContextPrepareInput): readonly AIMessage[] {
-  const turn = input.input;
-  if (turn.kind === "USER_INPUT") return turn.messages;
-  if (turn.kind === "CONTINUATION") return turn.messages ?? [];
-  return [
-    turn.pendingDecision.modelTurn.assistantMessage,
-    ...(turn.results as readonly AIToolResultMessage[]),
-  ];
 }
 
 /** What a test needs in order to compose the production direct Agent execution path. */

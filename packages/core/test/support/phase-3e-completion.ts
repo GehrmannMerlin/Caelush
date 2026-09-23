@@ -589,7 +589,7 @@ let clockTick = 100;
 export function harness3e(options: Phase3EHarnessOptions): Phase3EHarness {
   const run = options.run ?? makeRunD();
   const store = new MemoryRunStore({ run, conversationRecords: [], ...options.snapshot });
-  const messages = testRunMessageAuthority();
+  const messages = testRunMessageAuthority({ snapshot: () => store.snapshot });
   const notifications: DurableAgentEvent[] = [];
   const allocatedSteps: StepId[] = [];
   const turns: { readonly request: AIModelRequest }[] = [];
@@ -886,7 +886,7 @@ function policyContextEngine(): ContextEnginePort {
   return {
     async prepare(input: ContextPrepareInput): Promise<PreparedModelContext> {
       return {
-        messages: [...input.history, ...turnMessages(input)],
+        messages: [...turnMessages(input)],
         report: {
           estimatedInputTokens: 1,
           effectiveInputLimitTokens: input.model.limits.contextWindowTokens,

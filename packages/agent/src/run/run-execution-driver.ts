@@ -1,7 +1,8 @@
-import type { AIMessage, AIModelSettings, AIToolSpec, ModelDescriptor } from "@caelush/ai";
+import type { AIModelSettings, AIToolSpec, ModelDescriptor } from "@caelush/ai";
 
 import type { AgentLoop } from "../loop/agent-loop.js";
 import type { AgentExecutionIdentity, AgentTurnRef } from "../loop/types.js";
+import type { AgentConversationSnapshot } from "../messages/conversation/conversation-snapshot.js";
 import type { RunExecutionDirective } from "./directive.js";
 import type { RunExecutionEffectResult } from "./effect-result.js";
 import type { CompletionGate } from "./ports/completion-gate.js";
@@ -54,7 +55,7 @@ export interface RunExecutionDriver {
  * The context one effect is executed in.
  *
  * It is everything a general Reason needs and nothing a host knows: an identity, the allocated
- * turn, the history it reasons from, the resolved model, the Tool catalog, the model settings and
+ * turn, the durable conversation snapshot it reasons from, the resolved model, the Tool catalog, the model settings and
  * the caller's cancellation signal.
  *
  * Deliberately absent: a workspace, a Runtime, a Git state, a project inspector, a verification
@@ -71,7 +72,7 @@ export interface RunExecutionEffectContext {
    * `AgentTurnRef` rather than inventing one. A durable boundary commits against it.
    */
   readonly turn: AgentTurnRef;
-  readonly history: readonly AIMessage[];
+  readonly conversation: AgentConversationSnapshot;
   readonly model: ModelDescriptor;
   readonly tools: readonly AIToolSpec[];
   readonly modelSettings?: AIModelSettings | undefined;
@@ -101,7 +102,7 @@ export function createRunExecutionDriver(
           const result = await dependencies.agentLoop.advance({
             identity: context.identity,
             turn: context.turn,
-            history: context.history,
+            conversation: context.conversation,
             input: directive.input,
             model: context.model,
             tools: context.tools,

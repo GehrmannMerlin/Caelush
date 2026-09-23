@@ -15,6 +15,7 @@ import {
   createRunExecutionCoordinator,
   nextRunExecutionDirective,
 } from "../src/run/run-execution-coordinator.js";
+import { agentMessageId } from "../src/index.js";
 import { isTerminalExecutionStatus } from "../src/run/directive.js";
 import { RunExecutionInvariantError } from "../src/run/ports/run-execution-store.js";
 import type {
@@ -63,7 +64,7 @@ const PENDING_DECISION = {
 
 const INITIAL_INPUT = {
   kind: "USER_INPUT" as const,
-  messages: [{ role: "user" as const, content: "inspect the project" }],
+  userMessageId: agentMessageId("user-message"),
 };
 
 const toolResults = [
@@ -77,8 +78,15 @@ const toolResults = [
 ];
 
 const DURABLE_USER_RECORD = {
+  messageId: agentMessageId("user-message"),
   messageType: "USER",
   source: { kind: "USER", origin: "GOAL" },
+} as never;
+
+const DURABLE_TOOL_RESULT_RECORD = {
+  messageId: agentMessageId("result-call_a"),
+  messageType: "TOOL_RESULT",
+  sourceStepId: TOOL_STEP,
 } as never;
 
 function makeRun(overrides: Partial<AgentRun> = {}): AgentRun {
@@ -124,10 +132,18 @@ function makeState(run: AgentRun): AgentState {
 
 function snapshot(overrides: Partial<RunExecutionSnapshot> = {}): RunExecutionSnapshot {
   const run = overrides.run ?? makeRun();
+  const records =
+    overrides.conversationRecords ??
+    ((overrides.continuation?.type === "WAITING_TOOL_RESULTS" &&
+      overrides.continuation.receivedResults !== undefined) ||
+    (overrides.continuation?.type === "WAITING_RETRY" &&
+      overrides.continuation.mode === "TOOL_RESULTS")
+      ? [DURABLE_USER_RECORD, DURABLE_TOOL_RESULT_RECORD]
+      : [DURABLE_USER_RECORD]);
   return {
     run,
     state: overrides.state ?? makeState(run),
-    conversationRecords: [DURABLE_USER_RECORD],
+    conversationRecords: records,
     ...overrides,
   };
 }
@@ -180,7 +196,7 @@ const MATRIX: readonly (readonly [string, RunExecutionSnapshot, RunExecutionDire
         kind: "TOOL_RESULTS",
         sourceStepId: TOOL_STEP,
         pendingDecision: PENDING_DECISION,
-        results: toolResults,
+        toolResultMessageIds: [agentMessageId("result-call_a")],
       },
     },
   ],
@@ -241,7 +257,7 @@ const MATRIX: readonly (readonly [string, RunExecutionSnapshot, RunExecutionDire
         kind: "TOOL_RESULTS",
         sourceStepId: TOOL_STEP,
         pendingDecision: PENDING_DECISION,
-        results: toolResults,
+        toolResultMessageIds: [agentMessageId("result-call_a")],
       },
     },
   ],

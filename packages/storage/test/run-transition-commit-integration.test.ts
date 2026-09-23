@@ -1,4 +1,5 @@
 import {
+  agentMessageId,
   createRunTransitionPlanner,
   type RunExecutionDirective,
   type RunExecutionEffectResult,
@@ -44,6 +45,7 @@ const NOW = createTimestampMs(1_100);
 const RUN_ID = createRunId();
 const SESSION_ID = createSessionId();
 const STEP_ID: StepId = createStepId();
+const USER_MESSAGE_ID = agentMessageId("user-message");
 
 const MODEL_TURN = {
   callId: "llm_0195f3a0-0000-7000-8000-000000000000",
@@ -141,7 +143,9 @@ async function commitPlanned(
   const session = makeSession({ id: SESSION_ID });
   const pendingRun = makeRun({ status: "PENDING", startedAt: undefined });
   const run = makeRun(options.activeStep === undefined ? {} : { currentStepId: STEP_ID });
-  const messages = testRunMessageAuthority();
+  const messages = testRunMessageAuthority({
+    records: (runId) => storage.messageRecords.listByRun(runId),
+  });
   // The Run and its AgentState are two projections of one fact, so the fixture must agree with
   // itself before the planner is asked to plan anything.
   const state =
@@ -222,7 +226,7 @@ describe("planned Run transition commit integration", () => {
         kind: "ADVANCE_AGENT",
         mode: "EXECUTE",
         reason: "INITIAL",
-        input: { kind: "USER_INPUT", messages: [] },
+        input: { kind: "USER_INPUT", userMessageId: USER_MESSAGE_ID },
       },
       {
         kind: "AGENT",
@@ -268,7 +272,7 @@ describe("planned Run transition commit integration", () => {
         kind: "ADVANCE_AGENT",
         mode: "EXECUTE",
         reason: "INITIAL",
-        input: { kind: "USER_INPUT", messages: [] },
+        input: { kind: "USER_INPUT", userMessageId: USER_MESSAGE_ID },
       },
       {
         kind: "AGENT",

@@ -206,7 +206,9 @@ function controllerOver(
     // assertion about the durable timestamp from turning into a real wall-clock wait.
     timer: { schedule: () => ({ cancel: () => undefined }) },
   });
-  const messages = testRunMessageAuthority();
+  const messages = testRunMessageAuthority({
+    records: (runId) => storage.messageRecords.listByRun(runId),
+  });
   return new RunController({
     agentExecution: testRunAgentExecution({
       executor: fakeFrozenModelTurnExecutor(async (request) => {
@@ -291,7 +293,9 @@ async function seedBoundary(
       usage: { steps: 2, toolCalls: 0, inputTokens: 0, outputTokens: 0 },
     }),
   );
-  const messages = testRunMessageAuthority();
+  const messages = testRunMessageAuthority({
+    records: (runId) => storage.messageRecords.listByRun(runId),
+  });
   await storage.messageRecords.append(run.id as RunId, [
     createUserMessageAppend(messages, run, "GOAL").draft,
     // The assistant turn that requested the Tools. A resume is only valid behind the message that asked

@@ -5,8 +5,9 @@ and future hosts share one Agent Kernel and one daemon composition root; they
 do not own separate Agent implementations.
 
 The current source-of-truth branch is `main`. The Message System migration is
-complete through Architecture V2 Phase 5C. Phase 5D and later Message V2
-consumer/replay migration are not started.
+complete through Architecture V2 Phase 5D. Phase 5E transcript/client
+projection migration and Phase 5F legacy Message V2 retirement are not
+started.
 
 ## Architecture contract
 
@@ -61,7 +62,7 @@ consumer/replay migration are not started.
   results but cannot transition a Run to `COMPLETED`. Only Core/RunController
   owns that transition.
 
-## Message V2 / Phase 5C
+## Message V2 / Phase 5D
 
 - `AgentMessageRecord[]` is the durable conversation authority at the Run
   execution boundary.
@@ -69,11 +70,19 @@ consumer/replay migration are not started.
   System prompts, project instructions, relevant-file context, and other
   synthetic prompt input are not ordinary durable-history appends.
 - `RunExecutionStore` and `SqliteAgentMessageRecordStore` are the durable
-  record path. Project records into AI/model messages only at the model-input
+  record path. Project records through the Agent Conversation Repository,
+  validator, selector, and projector registry at the Context/model-input
   boundary.
+- `AgentTurnInput` carries durable message IDs and source step IDs, never
+  provider-shaped AI message arrays or array-index references.
+- Historical Tool replay uses stored projected content and projection version;
+  unknown model-visible schema or projection versions fail closed.
+- Context selection reports IDs, AI-projection token estimates, and compaction
+  pressure without rewriting, summarizing, or deleting durable records.
 - Compatibility readers, legacy physical columns, client projections, and
-  `@caelush/llm` schemas remain intentionally during migration. Do not start
-  Phase 5D in a Phase 5C-scoped change.
+  `@caelush/llm` schemas remain intentionally during migration. Phase 5E
+  transcript/client projection migration and Phase 5F legacy retirement are
+  deferred.
 
 ## Durable execution rules
 
@@ -90,6 +99,11 @@ consumer/replay migration are not started.
   one result per requested call before the next provider turn.
 - Verification evidence is not completion. Require the current Completion
   Authority guards before claiming a task is complete.
+
+Phase 11B rules:
+
+- Verification command execution is a host adapter over typed argv and Runtime `executeArgv()`; the Verification package does not spawn processes or read the workspace.
+- Keep verification output bounded and treat evidence as input to Completion Authority, never as a direct `COMPLETED` transition.
 
 ## Development rules
 

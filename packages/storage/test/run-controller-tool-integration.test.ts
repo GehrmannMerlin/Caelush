@@ -71,7 +71,9 @@ import {
 import { testRunMessageAuthority } from "../../core/test/support/run-message-authority.js";
 
 async function projectedMessages(storage: CaelushStorage, runId: string) {
-  const messages = testRunMessageAuthority();
+  const messages = testRunMessageAuthority({
+    records: (runId) => storage.messageRecords.listByRun(runId),
+  });
   const records = await storage.messageRecords.listByRun(runId as never);
   return records.flatMap(
     (record) =>
@@ -398,7 +400,9 @@ function createController(
 ) {
   let now = initialNow;
   const clock = { now: () => createTimestampMs(fixedClock?.value ?? now++) };
-  const messages = testRunMessageAuthority();
+  const messages = testRunMessageAuthority({
+    records: (runId) => storage.messageRecords.listByRun(runId),
+  });
   const agentExecution = testRunAgentExecution({
     executor: fakeFrozenModelTurnExecutor(async (request) => {
       observedRequests.push({ tools: request.tools, messages: request.messages });

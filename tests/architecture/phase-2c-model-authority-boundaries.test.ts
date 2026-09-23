@@ -119,6 +119,7 @@ describe("Phase 2C Core model authority", () => {
       "packages/core/src/agent-tool-batch.ts",
       "packages/core/src/agent-tool-results.ts",
       "packages/core/src/ai-invocation-projection.ts",
+      "packages/core/src/legacy-agent-conversation.ts",
       "packages/core/src/legacy-context-runtime-adapter.ts",
       "packages/core/src/run-controller-history.ts",
       "packages/core/src/run-controller-input.ts",

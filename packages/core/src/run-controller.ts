@@ -118,7 +118,6 @@ import {
   RunControllerInvariantError,
 } from "./run-controller-errors.js";
 import { allocateRunAgentStep, createRunAgentLoop } from "./run-agent-execution.js";
-import { projectRunAgentHistory } from "./run-agent-history.js";
 import {
   createAssistantMessageAppend,
   createExternalToolResultMessageAppend,
@@ -677,6 +676,7 @@ export class RunController {
       });
       accepted = commit.snapshot;
     }
+    accepted = await this.ensureDurableToolResults(accepted);
     return this.driveRunExecutionLocked(accepted, "EXECUTE");
   }
 
@@ -692,6 +692,7 @@ export class RunController {
     if (normalized.cancellationIntent !== undefined) return this.finalizeCancellation(normalized);
     if (this.isExpired(normalized)) return this.finalizeTimeout(normalized);
     normalized = await this.ensureDurableUserMessage(normalized);
+    normalized = await this.ensureDurableToolResults(normalized);
     if (normalized.run.status === "RUNNING" && normalized.continuation?.type === "WAITING_RETRY") {
       return this.resumeRetryLocked(normalized);
     }
@@ -763,6 +764,87 @@ export class RunController {
       events: [],
     });
     return commit.snapshot;
+  }
+
+  /**
+   * Normalize a legacy accepted Tool batch into the Phase 5D message ledger.
+   *
+   * Older boundaries stored `receivedResults` on the Run continuation before the V2
+   * `TOOL_RESULT` records existed. Recovery may encounter that shape after a restart. The
+   * compatibility value is admitted exactly once, with the stored projected content and the
+   * boundary's observation policy, before the coordinator can create an ID-based TOOL_RESULTS
+   * input. Partial presence fails closed: silently appending the whole batch would duplicate the
+   * records whose write boundary is unknown.
+   */
+  private async ensureDurableToolResults(
+    loaded: RunExecutionSnapshot,
+  ): Promise<RunExecutionSnapshot> {
+    const continuation = loaded.continuation;
+    if (
+      continuation === undefined ||
+      !(
+        continuation.type === "WAITING_TOOL_RESULTS" ||
+        (continuation.type === "WAITING_RETRY" && continuation.mode === "TOOL_RESULTS")
+      ) ||
+      continuation.receivedResults === undefined
+    ) {
+      return loaded;
+    }
+    const sourceStepId = continuation.sourceStepId;
+    const receivedResults = continuation.receivedResults;
+    if (sourceStepId === undefined) {
+      throw new RunControllerInvariantError(
+        "An accepted Tool Result batch has no requesting Step provenance.",
+      );
+    }
+    if (loaded.state === undefined) {
+      throw new RunControllerInvariantError(
+        "An accepted Tool Result batch cannot be normalized without AgentState.",
+      );
+    }
+
+    const existing = loaded.conversationRecords
+      .filter(
+        (record) => record.messageType === "TOOL_RESULT" && record.sourceStepId === sourceStepId,
+      )
+      .sort((left, right) => left.sequence - right.sequence)
+      .map((record) => this.dependencies.messages.codecs.decode(record))
+      .filter(
+        (message): message is Extract<typeof message, { type: "TOOL_RESULT" }> =>
+          message.type === "TOOL_RESULT",
+      );
+    if (existing.length > 0) {
+      if (
+        existing.length !== receivedResults.length ||
+        existing.some((message, index) => message.toolCallId !== receivedResults[index]?.toolCallId)
+      ) {
+        throw new RunControllerInvariantError(
+          "A legacy accepted Tool Result batch is only partially present in the message ledger.",
+        );
+      }
+      return loaded;
+    }
+
+    const policy = continuation.observationPolicy ?? defaultObservationPolicy();
+    return (
+      await this.commit({
+        run: loaded.run,
+        state: loaded.state,
+        expectedStateRevision: loaded.stateRevision ?? null,
+        expectedContinuationRevision: loaded.continuationRevision ?? null,
+        stepWrites: [],
+        messagesToAppend: receivedResults.map((message) =>
+          createExternalToolResultMessageAppend(
+            this.dependencies.messages,
+            loaded.run,
+            sourceStepId,
+            message,
+            policy,
+          ),
+        ),
+        events: [],
+      })
+    ).snapshot;
   }
 
   /**
@@ -1149,7 +1231,10 @@ export class RunController {
         // the Tool Layer records its invocations against — and the history, model and catalog are
         // supplied minimally because the driver reads none of them for a Tool directive.
         turn: { stepId: directive.sourceStepId, sequence: 0 },
-        history: [],
+        conversation: await this.dependencies.messages.conversation.loadSnapshot({
+          sessionId: snapshot.run.sessionId,
+          currentRunId: snapshot.run.id,
+        }),
         model: unresolvedToolTurnModel(snapshot.run.model),
         tools: [],
         signal: this.executionSignal(snapshot.run.id),
@@ -1489,18 +1574,13 @@ export class RunController {
       now: this.dependencies.clock.now(),
     });
 
-    // The directive's own turn input, projected against the durable conversation through the frozen
-    // kernel validators. Nothing here re-derives *which* turn this is.
-    const history = projectRunAgentHistory({
-      input: directive.input,
-      conversationRecords: snapshot.conversationRecords,
-      messageProjection: this.dependencies.messages,
-      ...(execution.historyPrefix === undefined ? {} : { historyPrefix: execution.historyPrefix }),
+    // The semantic repository is the only production loader of the durable conversation. The
+    // directive already carries durable message references, so no Core compatibility projector may
+    // rewrite it into an AI-message history or substitute a newer projection version here.
+    const conversation = await this.dependencies.messages.conversation.loadSnapshot({
+      sessionId: snapshot.run.sessionId,
+      currentRunId: snapshot.run.id,
     });
-    const executionDirective: AdvanceAgentDirective =
-      history.kind === "COMPLETE_TURN" && history.input !== undefined
-        ? { ...directive, input: history.input }
-        : directive;
 
     // The Core-private record of what the boundary, the context engine and the provider actually
     // did. The frozen result deliberately reports none of it, so this is the only channel through
@@ -1551,14 +1631,14 @@ export class RunController {
       completionGate: MISROUTED_COMPLETION_GATE,
     });
 
-    const effect = await driver.execute(executionDirective, {
+    const effect = await driver.execute(directive, {
       identity: {
         runId: snapshot.run.id,
         sessionId: snapshot.run.sessionId,
         goal: snapshot.run.goal,
       },
       turn: { stepId: step.id, sequence: step.sequence },
-      history: history.history,
+      conversation,
       model: execution.models.resolve(snapshot.run.model),
       tools: execution.tools,
       ...(execution.modelSettings === undefined ? {} : { modelSettings: execution.modelSettings }),
@@ -3207,7 +3287,10 @@ export class RunController {
         // bound to. A completion evaluation creates no Step of its own: it is a host action about an
         // existing attempt, not a new Reason.
         turn: { stepId: directive.sourceStepId, sequence: 0 },
-        history: [],
+        conversation: await this.dependencies.messages.conversation.loadSnapshot({
+          sessionId: snapshot.run.sessionId,
+          currentRunId: snapshot.run.id,
+        }),
         model: unresolvedCompletionModel(snapshot.run.model),
         tools: [],
         signal: this.executionSignal(snapshot.run.id),

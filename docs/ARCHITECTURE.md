@@ -190,11 +190,12 @@ SSE maps durable event sequence to the SSE id. Ephemeral updates never receive
 an SSE id. The daemon closes stream consumers before closing Storage during
 shutdown.
 
-## Phase 5C durable conversation authority
+## Phase 5D Context and replay authority
 
 The current Message V2 runtime cutover uses `AgentMessageRecord[]` as the
-durable conversation representation at the Run execution boundary. The
-production path is:
+durable conversation representation at the Run execution boundary. Phase 5D
+cuts the production Context and replay path over to semantic Agent-domain
+snapshots:
 
 ```text
 AgentMessageFactory
@@ -209,10 +210,42 @@ instructions, relevant-file context, and other prompt assembly data are not
 written as ordinary durable conversation records. User, assistant, and
 normalized Tool-result records are the durable conversation ledger.
 
+The production input path is:
+
+```text
+AgentMessageRecord[]
+  → Agent Conversation Repository/loader
+  → AgentConversationSnapshot
+  → AgentConversationValidator
+  → ConversationSelector
+  → AgentMessageProjectorRegistry
+  → AIConversationMessage[] + Context material
+  → PreparedModelContext
+  → AIMessage[]
+  → ModelTurnExecutor
+```
+
+`AgentTurnInput` is a durable-reference protocol: `USER_INPUT` carries a
+`userMessageId`, `TOOL_RESULTS` carries `sourceStepId`, the pending decision,
+and ordered `toolResultMessageIds`, and `CONTINUATION` carries only its reason
+and optional durable message IDs. Execution units use durable IDs and source
+step IDs rather than array positions. Only closed units are eligible for
+selection compaction.
+
+The validator is the production authority for record ordering, turn
+boundaries, pending Tool agreement, and model-visible replay support. Unknown
+model-visible schema or projection versions fail closed; there is no current
+projector fallback. Historical Tool replay uses the stored projected content
+and projection version, never a fresh raw observation projection. The selector
+reports selected/dropped IDs, an AI-projection token estimate, and
+`requiresCompaction`; it does not rewrite, summarize, or delete durable
+records. Context owns materialization and has no Storage dependency.
+
 The compatibility boundary is deliberate: legacy readers, physical columns,
 client transcript projections, and the `@caelush/llm` schema surface remain
-until later Message V2 migration work. Phase 5D is not started in this
-repository, and this governance task does not begin it.
+until the later Message V2 migration phases. Phase 5E will migrate transcript
+and client projections; Phase 5F will retire the remaining legacy readers and
+schemas. Neither later phase is part of the current source cutover.
 
 ## Verification and completion authority
 
@@ -229,15 +262,17 @@ produce evidence but never own final completion.
 
 ## Architecture V2 status
 
-| Area                                             | Current status                                               |
-| ------------------------------------------------ | ------------------------------------------------------------ |
-| Architecture foundation and public boundaries    | Complete                                                     |
-| AI domain and provider migration                 | Complete in the current composition                          |
-| Agent Kernel and durable Run boundaries          | Complete in the current composition                          |
-| Tool System and Coding Agent composition         | Complete in the current composition                          |
-| Message domain and storage foundation (5A/5B)    | Complete                                                     |
-| Durable conversation runtime cutover (5C)        | Complete; `AgentMessageRecord` is the Run boundary authority |
-| Message replay/consumer migration (5D and later) | Not started                                                  |
+| Area                                          | Current status                                               |
+| --------------------------------------------- | ------------------------------------------------------------ |
+| Architecture foundation and public boundaries | Complete                                                     |
+| AI domain and provider migration              | Complete in the current composition                          |
+| Agent Kernel and durable Run boundaries       | Complete in the current composition                          |
+| Tool System and Coding Agent composition      | Complete in the current composition                          |
+| Message domain and storage foundation (5A/5B) | Complete                                                     |
+| Durable conversation runtime cutover (5C)     | Complete; `AgentMessageRecord` is the Run boundary authority |
+| Context and replay cutover (5D)               | Complete                                                     |
+| Transcript/client projection migration (5E)   | Not started                                                  |
+| Legacy Message V2 retirement (5F)             | Not started                                                  |
 
 The phase table describes the Message System migration line. Existing Runtime,
 Security, Verification, CLI, Web, and daemon layers are documented as current
@@ -248,14 +283,15 @@ phase boundary in this task.
 
 The current architecture must not be described as already providing:
 
-- Phase 5D+ message replay/consumer migration;
+- Phase 5E transcript/client projection migration;
+- Phase 5F legacy Message V2 reader/schema retirement;
 - production MCP, Skills, Browser Agent, Computer Use, Web Search, or Multi-Agent;
 - true parallel Tool execution;
 - an OS-level hard sandbox or universal process-tree termination;
 - a provider-specific public SDK or raw model chain-of-thought surface.
 
 Those capabilities require new contracts and deliberate future work. They do
-not belong in the current Phase 5C source freeze.
+not belong in the current Phase 5D source freeze.
 
 ## Reference material
 

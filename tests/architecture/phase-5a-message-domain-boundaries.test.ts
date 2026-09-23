@@ -334,9 +334,9 @@ describe("Phase 5A guard — package boundaries (freeze §150, §151)", () => {
   });
 
   it("keeps the Message Domain out of every consumer that must not need it yet", async () => {
-    // Phase 5C activates the durable-record cutover. The allowlist remains closed: only the explicit
-    // production composition, Run execution projection/materialization, and raw V2 store paths may
-    // consume Message Domain records; Context/AgentLoop remains on its AI compatibility seam.
+    // Phase 5D activates the semantic conversation cutover. The allowlist remains closed: only the
+    // explicit production composition, Agent execution snapshot path, Context compatibility adapter,
+    // and raw V2 store paths may consume Message Domain records.
     const allowedConsumers = [
       // The V2 record store and its legacy compatibility reader — the port implementations.
       "packages/storage/src/messages/sqlite-agent-message-record-store.ts",
@@ -351,7 +351,12 @@ describe("Phase 5A guard — package boundaries (freeze §150, §151)", () => {
       "packages/agent/src/run/ports/run-execution-store.ts",
       "packages/core/src/run-agent-history.ts",
       "packages/core/src/run-message-materializer.ts",
+      "packages/core/src/legacy-agent-conversation.ts",
+      "packages/core/src/legacy-context-runtime-adapter.ts",
       "packages/storage/src/run-execution-store.ts",
+      "packages/agent/src/loop/context/context-engine-port.ts",
+      "packages/agent/src/loop/types.ts",
+      "packages/agent/src/run/run-execution-driver.ts",
     ];
     const consumers: string[] = [];
     for (const file of await activeSourceFiles(["packages", "apps"])) {
@@ -625,7 +630,7 @@ describe("Phase 5A guard — no persistence implementation (freeze §157, §164)
   });
 });
 
-describe("Phase 5A guard — no production cutover (freeze §158, §197)", () => {
+describe("Phase 5A guard — retained foundations after the Phase 5D cutover", () => {
   it("keeps the RunExecutionStore message shape unchanged", async () => {
     const store = code(await read("packages/agent/src/run/ports/run-execution-store.ts"));
     // Phase 5C is the deliberate cutover point: the execution contract carries raw V2 records and
@@ -635,18 +640,17 @@ describe("Phase 5A guard — no production cutover (freeze §158, §197)", () =>
     expect(store).not.toContain("RunConversationEntry");
   });
 
-  it("keeps AgentLoopAdvanceInput.history on AIMessage", async () => {
+  it("moves AgentLoopAdvanceInput to the Phase 5D conversation snapshot", async () => {
     const types = code(await read("packages/agent/src/loop/types.ts"));
-    expect(types).toContain("readonly history: readonly AIMessage[];");
-    expect(types).not.toContain("AgentConversationSnapshot");
-    expect(types).not.toContain("SelectedAgentConversation");
+    expect(types).toContain("readonly conversation: AgentConversationSnapshot;");
+    expect(types).toContain("AgentMessageId");
+    expect(types).not.toContain("readonly history: readonly AIMessage[];");
   });
 
-  it("keeps ContextPrepareInput.history on AIMessage", async () => {
+  it("moves ContextPrepareInput to the Phase 5D conversation snapshot", async () => {
     const port = code(await read("packages/agent/src/loop/context/context-engine-port.ts"));
-    expect(port).toContain("readonly history: readonly AIMessage[];");
-    expect(port).not.toContain("AgentConversationSnapshot");
-    expect(port).not.toContain("ConversationSelector");
+    expect(port).toContain("readonly conversation: AgentConversationSnapshot;");
+    expect(port).not.toContain("readonly history: readonly AIMessage[];");
   });
 
   it("keeps the legacy AI history validator present and unextended (freeze §161)", async () => {

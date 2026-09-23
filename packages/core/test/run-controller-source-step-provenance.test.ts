@@ -14,6 +14,7 @@ import { completionStoreOver } from "./support/completion-store.js";
 import { RunController } from "../src/run-controller.js";
 import {
   createAssistantMessageAppend,
+  createExternalToolResultMessageAppend,
   createUserMessageAppend,
 } from "../src/run-message-materializer.js";
 import type {
@@ -226,7 +227,7 @@ function controllerFor(
   return new RunController({
     agentExecution: agentExecutionFor(observed),
     executionStore: store,
-    messages: testRunMessageAuthority(),
+    messages: testRunMessageAuthority({ snapshot: () => store.snapshot }),
     completionStore: completionStoreOver(store),
     events: { notifyCommitted: () => undefined },
     configResolver: {
@@ -299,6 +300,13 @@ function openToolTurn(run: ReturnType<typeof makeRun>) {
     ORIGINAL_TOOL_STEP,
     PENDING_DECISION.modelTurn,
   ).draft;
+  const result = createExternalToolResultMessageAppend(
+    messages,
+    run,
+    ORIGINAL_TOOL_STEP,
+    RECEIVED_RESULTS[0]!,
+    { maxSingleObservationTokens: 100, maxObservationBatchTokens: 200 },
+  ).draft;
   return [
     {
       sequence: 1,
@@ -309,6 +317,11 @@ function openToolTurn(run: ReturnType<typeof makeRun>) {
       sequence: 2,
       runId: run.id,
       ...assistant,
+    },
+    {
+      sequence: 3,
+      runId: run.id,
+      ...result,
     },
   ];
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  agentMessageId,
   AgentTurnInputError,
   assertAgentTurnInput,
   assertConversationProtocolIntegrity,
@@ -49,7 +50,12 @@ function toolResultsTurn(
   results: readonly AIToolResultMessage[],
   sourceStepId: StepId = SOURCE_STEP,
 ): AgentTurnInput {
-  return { kind: "TOOL_RESULTS", sourceStepId, pendingDecision: DECISION, results };
+  return {
+    kind: "TOOL_RESULTS",
+    sourceStepId,
+    pendingDecision: DECISION,
+    toolResultMessageIds: results.map((result) => agentMessageId(`result-${result.toolCallId}`)),
+  };
 }
 
 function expectReason(run: () => void, reason: string): void {
@@ -72,7 +78,7 @@ describe("assertAgentTurnInput", () => {
 
   it("accepts a user turn and both continuation reasons", () => {
     expect(() =>
-      assertAgentTurnInput({ kind: "USER_INPUT", messages: [{ role: "user", content: "hi" }] }),
+      assertAgentTurnInput({ kind: "USER_INPUT", userMessageId: agentMessageId("user-1") }),
     ).not.toThrow();
     expect(() =>
       assertAgentTurnInput({ kind: "CONTINUATION", reason: "VERIFICATION_REPAIR" }),
@@ -80,7 +86,7 @@ describe("assertAgentTurnInput", () => {
     expect(() => assertAgentTurnInput({ kind: "CONTINUATION", reason: "STEERING" })).not.toThrow();
   });
 
-  it("rejects a wrong result count", () => {
+  it("rejects a wrong durable result reference count", () => {
     expectReason(
       () => assertAgentTurnInput(toolResultsTurn([toolResult("call_a")])),
       "TOOL_RESULT_COUNT_MISMATCH",
@@ -94,30 +100,35 @@ describe("assertAgentTurnInput", () => {
     );
   });
 
-  it("rejects a wrong tool call id", () => {
-    expectReason(
-      () => assertAgentTurnInput(toolResultsTurn([toolResult("call_b"), toolResult("call_a")])),
-      "TOOL_RESULT_ID_MISMATCH",
-    );
-  });
-
-  it("rejects a wrong tool name", () => {
+  it("rejects duplicate durable result references", () => {
     expectReason(
       () =>
-        assertAgentTurnInput(
-          toolResultsTurn([toolResult("call_a", "search_text"), toolResult("call_b")]),
-        ),
-      "TOOL_RESULT_NAME_MISMATCH",
+        assertAgentTurnInput({
+          ...toolResultsTurn([toolResult("call_a"), toolResult("call_b")]),
+          toolResultMessageIds: [agentMessageId("same"), agentMessageId("same")],
+        }),
+      "DUPLICATE_TOOL_RESULT_ID",
     );
   });
 
-  it("rejects a reordered batch instead of normalizing it", () => {
-    // The batch is positional by contract. Normalizing here would let the caller believe it had
-    // answered calls it had not, and the model would see results attributed to the wrong call.
+  it("does not inspect Tool names in the durable-ID turn contract", () => {
     expectReason(
-      () => assertAgentTurnInput(toolResultsTurn([toolResult("call_b"), toolResult("call_a")])),
-      "TOOL_RESULT_ID_MISMATCH",
+      () =>
+        assertAgentTurnInput({
+          ...toolResultsTurn([toolResult("call_a"), toolResult("call_b")]),
+          toolResultMessageIds: [agentMessageId(""), agentMessageId("result-call_b")],
+        }),
+      "INVALID_TOOL_RESULT",
     );
+  });
+
+  it("accepts opaque durable IDs without re-projecting Tool observations", () => {
+    expect(() =>
+      assertAgentTurnInput({
+        ...toolResultsTurn([toolResult("call_b"), toolResult("call_a")]),
+        toolResultMessageIds: [agentMessageId("stored-b"), agentMessageId("stored-a")],
+      }),
+    ).not.toThrow();
   });
 
   it("rejects a duplicate result id and a duplicate request id", () => {
@@ -128,13 +139,11 @@ describe("assertAgentTurnInput", () => {
     expectReason(
       () =>
         assertAgentTurnInput({
-          kind: "TOOL_RESULTS",
-          sourceStepId: SOURCE_STEP,
+          ...toolResultsTurn([toolResult("call_a"), toolResult("call_b")]),
           pendingDecision: {
             ...DECISION,
             toolRequests: [DECISION.toolRequests[0]!, DECISION.toolRequests[0]!],
           },
-          results: [toolResult("call_a"), toolResult("call_b")],
         }),
       "DUPLICATE_TOOL_REQUEST_ID",
     );
@@ -147,7 +156,7 @@ describe("assertAgentTurnInput", () => {
           kind: "TOOL_RESULTS",
           sourceStepId: "" as StepId,
           pendingDecision: DECISION,
-          results: [toolResult("call_a"), toolResult("call_b")],
+          toolResultMessageIds: [agentMessageId("result-call_a"), agentMessageId("result-call_b")],
         }),
       "MISSING_SOURCE_STEP_ID",
     );
@@ -157,16 +166,14 @@ describe("assertAgentTurnInput", () => {
     expectReason(() => assertAgentTurnInput(toolResultsTurn([])), "EMPTY_TOOL_RESULTS");
     expectReason(
       () =>
-        assertAgentTurnInput(
-          toolResultsTurn([
-            { role: "tool", toolCallId: "", toolName: "read_file", content: "", isError: false },
-            toolResult("call_b"),
-          ]),
-        ),
+        assertAgentTurnInput({
+          ...toolResultsTurn([toolResult("call_a"), toolResult("call_b")]),
+          toolResultMessageIds: [agentMessageId(""), agentMessageId("result-call_b")],
+        }),
       "INVALID_TOOL_RESULT",
     );
     expectReason(
-      () => assertAgentTurnInput({ kind: "USER_INPUT", messages: [] }),
+      () => assertAgentTurnInput({ kind: "USER_INPUT", userMessageId: agentMessageId("") }),
       "EMPTY_USER_INPUT",
     );
   });

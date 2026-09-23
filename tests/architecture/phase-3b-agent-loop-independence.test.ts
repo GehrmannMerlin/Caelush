@@ -213,7 +213,7 @@ describe("Phase 3B context boundary", () => {
     );
     const fields = [...input.matchAll(/^\s+readonly (\w+)[?]?:/gm)].map((match) => match[1] ?? "");
     expect(fields.sort()).toEqual([
-      "history",
+      "conversation",
       "identity",
       "input",
       "mode",
@@ -230,7 +230,7 @@ describe("Phase 3B context boundary", () => {
     expect(port).toContain("ContextProvider");
     // The exclusions are the contract: none of these may appear even as a type name.
     expect(port).not.toMatch(
-      /\b(?:cwd|workspace|project|git|verificationPlan|runtime|snapshot|filePlan)\b/i,
+      /\b(?:cwd|workspace|project|git|verificationPlan|runtime|filePlan)\b/i,
     );
   });
 

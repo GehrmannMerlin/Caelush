@@ -15,7 +15,8 @@ clients of the same execution authority rather than separate Agent
 implementations.
 
 The project is in active Architecture V2 development. The current Message
-System migration ends at Phase 5C; Phase 5D is not started.
+System migration is complete through Phase 5D. Phase 5E transcript/client
+projection migration and Phase 5F legacy retirement remain future work.
 
 ## What Caelush provides
 
@@ -79,8 +80,8 @@ Core / Agent Kernel
 
 ### Durable conversation
 
-Phase 5C makes `AgentMessageRecord[]` the durable conversation authority at
-the Run execution boundary:
+Phase 5D makes the durable conversation the production Context and replay
+input at the Run execution boundary:
 
 ```text
 AgentMessageFactory
@@ -92,9 +93,28 @@ AgentMessageFactory
 The production ledger contains user, assistant, and normalized Tool-result
 records. System prompts, project instructions, relevant-file context, and
 other synthetic model input are assembled for a turn but are not written as
-ordinary conversation history. Compatibility readers and the `@caelush/llm`
-schema surface remain intentionally while later Message V2 migration work is
-deferred.
+ordinary conversation history. The production input path is:
+
+```text
+AgentMessageRecord[]
+  → AgentConversationSnapshot
+  → AgentConversationValidator
+  → ConversationSelector
+  → AgentMessageProjectorRegistry
+  → PreparedModelContext
+  → AIMessage[]
+  → ModelTurnExecutor
+```
+
+`AgentTurnInput` carries durable message IDs and execution-unit references, not
+provider-shaped AI message arrays. Historical Tool messages replay their
+stored projection and projection version; a missing model-visible codec or
+projector fails closed. Selection reports selected/dropped IDs, token estimate,
+and compaction pressure without rewriting or deleting durable records.
+
+Compatibility readers, physical columns, client transcript projections, and
+the `@caelush/llm` schema surface remain intentionally while Phase 5E and 5F
+are deferred.
 
 ## Coding Tool surface
 
@@ -253,6 +273,9 @@ relevant Prettier check.
 
 ## Architecture V2 status
 
+The repository also records the completed host-boundary work that remains relevant to the current
+runtime: Phase 9C sanitizer injection, Phase 9D — V1 Security Integration, Phase 11B — Verification Execution: **COMPLETED**, and Phase 11D — Completion Authority & Finalization: **COMPLETED**.
+
 | Migration boundary                                      | Status      |
 | ------------------------------------------------------- | ----------- |
 | Phase 1 — architecture foundation and public boundaries | Complete    |
@@ -262,7 +285,9 @@ relevant Prettier check.
 | Phase 5A — Message domain foundation                    | Complete    |
 | Phase 5B — Message storage foundation                   | Complete    |
 | Phase 5C — durable conversation runtime cutover         | Complete    |
-| Phase 5D and later Message V2 consumer migration        | Not started |
+| Phase 5D — Context & replay cutover                     | Complete    |
+| Phase 5E — transcript/client projection migration       | Not started |
+| Phase 5F — legacy Message V2 retirement                 | Not started |
 
 The status table is specifically the Message System migration boundary. The
 repository also contains the current Runtime, Security, Verification, daemon,
@@ -274,7 +299,8 @@ Message V2 phases have begun.
 Caelush is not presented as a frozen public SDK or a universal sandbox. The
 following remain future boundaries or explicit limitations:
 
-- Message V2 Phase 5D and later consumer/replay migration.
+- Message V2 Phase 5E transcript/client projection migration.
+- Message V2 Phase 5F legacy schema/reader retirement.
 - Production MCP integration, Skills, Browser Agent, Computer Use, and Web
   Search.
 - Multi-Agent/Sub-Agent orchestration and true parallel Tool execution.

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { AIGateway, AIStream, AIStreamEvent, AIModelTurnResult } from "@caelush/ai";
 import {
+  agentMessageId,
+  conversationTurnId,
   createAgentDecisionClassifier,
+  createAgentConversationSnapshot,
   createAgentLoop,
   createAgentTurnRef,
   createModelTurnExecutor,
@@ -35,6 +38,14 @@ const IDENTITY: AgentExecutionIdentity = {
   sessionId: createSessionId(),
   goal: "echo the input back",
 };
+
+const CONVERSATION = createAgentConversationSnapshot({
+  sessionId: IDENTITY.sessionId,
+  currentRunId: IDENTITY.runId,
+  currentTurnId: conversationTurnId("cturn_kernel_fixture"),
+  turns: [],
+});
+const USER_MESSAGE_ID = agentMessageId("kernel-user");
 
 /**
  * A minimal echo Tool.
@@ -139,16 +150,7 @@ function fakeContextEngine(): {
         inputs.push(input);
         // The engine contributes the turn's own user text and nothing else: there is no project,
         // no workspace and no file to consult.
-        const messages =
-          input.input.kind === "USER_INPUT"
-            ? [...input.history, ...input.input.messages]
-            : input.input.kind === "TOOL_RESULTS"
-              ? [
-                  ...input.history,
-                  input.input.pendingDecision.modelTurn.assistantMessage,
-                  ...input.input.results,
-                ]
-              : [...input.history, ...(input.input.messages ?? [])];
+        const messages = [{ role: "user" as const, content: "fixture" }];
         return Promise.resolve({ messages, report: REPORT, observationPolicy: POLICY });
       },
     },
@@ -200,7 +202,7 @@ describe("General Agent Kernel, standalone", () => {
           },
         },
       ],
-      history: [],
+      conversation: CONVERSATION,
       signal: new AbortController().signal,
     };
 
@@ -208,7 +210,7 @@ describe("General Agent Kernel, standalone", () => {
     const first = await loop.advance({
       ...base,
       turn: createAgentTurnRef(createStepId(), 1),
-      input: { kind: "USER_INPUT", messages: [{ role: "user", content: "say hello" }] },
+      input: { kind: "USER_INPUT", userMessageId: USER_MESSAGE_ID },
     } satisfies AgentLoopAdvanceInput);
 
     expect(first.kind).toBe("TOOL_REQUESTS");
@@ -234,14 +236,14 @@ describe("General Agent Kernel, standalone", () => {
     const second = await loop.advance({
       ...base,
       turn: createAgentTurnRef(createStepId(), 2),
-      // The history this Reason sees is what the previous Reason appended, which is exactly the
-      // ledger a caller persists.
-      history: first.messagesToAppend,
+      conversation: CONVERSATION,
       input: {
         kind: "TOOL_RESULTS",
         sourceStepId: "stp_0195f3a0-0000-7000-8000-000000000000" as StepId,
         pendingDecision: requested,
-        results,
+        toolResultMessageIds: results.map((result) =>
+          agentMessageId(`result-${result.toolCallId}`),
+        ),
       },
     } satisfies AgentLoopAdvanceInput);
 
@@ -253,7 +255,7 @@ describe("General Agent Kernel, standalone", () => {
 
     /* 4. The kernel performed no Tool execution and no completion. */
     expect(gateway.calls()).toBe(2);
-    expect(second.messagesToAppend.map((message) => message.role)).toEqual(["tool", "assistant"]);
+    expect(second.messagesToAppend.map((message) => message.role)).toEqual(["assistant"]);
     // The only thing the kernel ever says about finishing is "candidate".
     expect(JSON.stringify(second.decision)).not.toContain("COMPLETED");
   });
@@ -288,8 +290,8 @@ describe("General Agent Kernel, standalone", () => {
     const first = await loop.advance({
       identity: IDENTITY,
       turn: createAgentTurnRef(createStepId(), 1),
-      input: { kind: "USER_INPUT", messages: [{ role: "user", content: "say hello" }] },
-      history: [],
+      input: { kind: "USER_INPUT", userMessageId: USER_MESSAGE_ID },
+      conversation: CONVERSATION,
       model,
       tools: [],
       signal: new AbortController().signal,
@@ -299,21 +301,13 @@ describe("General Agent Kernel, standalone", () => {
     const refused = await loop.advance({
       identity: IDENTITY,
       turn: createAgentTurnRef(createStepId(), 2),
-      history: first.messagesToAppend,
+      conversation: CONVERSATION,
       input: {
         kind: "TOOL_RESULTS",
         sourceStepId: "stp_0195f3a0-0000-7000-8000-000000000000" as StepId,
         pendingDecision: first.decision,
-        // The Tool is real, the identity is not: this result answers a call nobody made.
-        results: [
-          {
-            role: "tool",
-            toolCallId: "call_someone_else",
-            toolName: "echo",
-            content: "echo:hello",
-            isError: false,
-          },
-        ],
+        // The durable reference is malformed, so the kernel refuses the batch before Context.
+        toolResultMessageIds: [agentMessageId("")],
       },
       model,
       tools: [],
@@ -359,8 +353,8 @@ describe("General Agent Kernel, standalone", () => {
     const result = await loop.advance({
       identity: IDENTITY,
       turn,
-      input: { kind: "USER_INPUT", messages: [{ role: "user", content: "say hello" }] },
-      history: [],
+      input: { kind: "USER_INPUT", userMessageId: USER_MESSAGE_ID },
+      conversation: CONVERSATION,
       model: {
         ref: { provider: "test", model: "model-a" },
         api: "test-api",
@@ -449,8 +443,8 @@ describe("General Agent Kernel, standalone", () => {
       }).advance({
         identity: entry.identity,
         turn: entry.turn,
-        input: { kind: "USER_INPUT", messages: [{ role: "user", content: "say hello" }] },
-        history: [],
+        input: { kind: "USER_INPUT", userMessageId: USER_MESSAGE_ID },
+        conversation: CONVERSATION,
         model,
         tools: [],
         signal: new AbortController().signal,

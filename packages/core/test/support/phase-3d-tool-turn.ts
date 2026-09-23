@@ -1,7 +1,6 @@
 import type {
   AIMessage,
   AIModelRequest,
-  AIToolResultMessage,
   AIToolSpec,
   JsonObject,
   ModelCatalog,
@@ -19,6 +18,8 @@ import { RunController, type RunAgentExecutionContextFactory } from "@caelush/co
 import {
   createModelToolFeedbackProjector,
   createToolResultBatchNormalizer,
+  createStandardAgentMessageProjectorRegistry,
+  projectStoredMessages,
   type ToolBatchCoordinator,
   type ToolBatchItemOutcome,
   type ToolBatchOutcome,
@@ -651,7 +652,7 @@ export function harness3d(options: {
   };
   const toolBatches = options.toolBatches ?? stubToolBatches();
   const approvals = testApprovalBoundary(run.id);
-  const messages = testRunMessageAuthority();
+  const messages = testRunMessageAuthority({ snapshot: () => store.snapshot });
   const controller = new RunController({
     agentExecution: execution,
     executionStore: store,
@@ -704,7 +705,7 @@ function policyContextEngine(policy?: {
   return {
     async prepare(input: ContextPrepareInput): Promise<PreparedModelContext> {
       return {
-        messages: [...input.history, ...turnMessages(input)],
+        messages: [...turnMessages(input)],
         report: {
           estimatedInputTokens: 1,
           effectiveInputLimitTokens: input.model.limits.contextWindowTokens,
@@ -723,13 +724,8 @@ function policyContextEngine(policy?: {
 }
 
 export function turnMessages(input: ContextPrepareInput): readonly AIMessage[] {
-  const turn = input.input;
-  if (turn.kind === "USER_INPUT") return turn.messages;
-  if (turn.kind === "CONTINUATION") return turn.messages ?? [];
-  return [
-    turn.pendingDecision.modelTurn.assistantMessage,
-    ...(turn.results as readonly AIToolResultMessage[]),
-  ];
+  const stored = input.conversation.turns.flatMap((turn) => [...turn.messages]);
+  return projectStoredMessages(stored, createStandardAgentMessageProjectorRegistry()).messages;
 }
 
 /** One provider turn that asks for Tools. */

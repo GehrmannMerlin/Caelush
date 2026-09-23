@@ -13,7 +13,12 @@ import {
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import { completionStoreOver } from "./support/completion-store.js";
-import type { AgentTurnInput, ContextPrepareInput } from "@caelush/agent";
+import {
+  createStandardAgentMessageProjectorRegistry,
+  projectStoredMessages,
+  type AgentTurnInput,
+  type ContextPrepareInput,
+} from "@caelush/agent";
 import { AgentLoop } from "../src/agent-loop.js";
 import type { AgentLoopCommonInput, AgentLoopContinuationInput } from "../src/agent-loop-input.js";
 import { createInitialAgentState, startAgentState } from "../src/agent-state.js";
@@ -80,7 +85,9 @@ function commonInput(run: ReturnType<typeof makeRun>): AgentLoopCommonInput {
       createInitialAgentState(pending, createTimestampMs(1)),
       createTimestampMs(1),
     ),
-    history: [],
+    // A continuation resumes an already durable conversation. This user message represents the
+    // existing ledger entry; it is not created by the repair attempt.
+    history: [{ role: "user", content: run.goal }],
     baseSystemPrompt: "base",
     contextLimits: { maxInputTokens: 1000 },
     signal: new AbortController().signal,
@@ -242,11 +249,11 @@ describe("AgentLoop.continueRun", () => {
     });
 
     expect(result.status).toBe("OUTCOME");
-    expect(observer.prepares()[0]!.input).toEqual({
+    expect(observer.prepares()[0]!.input).toMatchObject({
       kind: "CONTINUATION",
       reason: "STEERING",
-      messages: [{ role: "user", content: "steer left" }],
     });
+    expect(observer.prepares()[0]!.input).toHaveProperty("messageIds");
     // A supplied steering message is the caller's message, so it is appended; nothing is invented.
     if (result.status !== "OUTCOME") throw new Error("expected outcome");
     expect(result.messagesToAppend.map((message) => message.role)).toEqual(["user", "assistant"]);
@@ -385,7 +392,10 @@ describe("RunController verification repair route", () => {
                 // renders it verbatim, which is exactly the wiring under test.
                 messages: [
                   { role: "system" as const, content: repairContext?.text ?? "" },
-                  ...input.history,
+                  ...projectStoredMessages(
+                    input.conversation.turns.flatMap((turn) => [...turn.messages]),
+                    createStandardAgentMessageProjectorRegistry(),
+                  ).messages,
                 ],
                 report: {
                   estimatedInputTokens: 1,

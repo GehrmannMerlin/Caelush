@@ -236,7 +236,7 @@ describe("RunController.start", () => {
         },
       ),
       executionStore: store,
-      messages: testRunMessageAuthority(),
+      messages: testRunMessageAuthority({ snapshot: () => store.snapshot }),
       events: { notifyCommitted: () => undefined },
       configResolver: {
         resolve: async () => ({
@@ -283,7 +283,7 @@ describe("RunController.start", () => {
         providerCalls += 1;
       }),
       executionStore: store,
-      messages: testRunMessageAuthority(),
+      messages: testRunMessageAuthority({ snapshot: () => store.snapshot }),
       events: { notifyCommitted: () => undefined },
       configResolver: {
         resolve: async () => ({
@@ -322,7 +322,7 @@ describe("RunController.start", () => {
         throw new Error("timeout cleanup must precede provider execution");
       }),
       executionStore: store,
-      messages: testRunMessageAuthority(),
+      messages: testRunMessageAuthority({ snapshot: () => store.snapshot }),
       events: { notifyCommitted: () => undefined },
       configResolver: {
         resolve: async () => ({
@@ -373,7 +373,7 @@ describe("RunController.start", () => {
         providerCalls += 1;
       }),
       executionStore: store,
-      messages: testRunMessageAuthority(),
+      messages: testRunMessageAuthority({ snapshot: () => store.snapshot }),
       events: notifier,
       configResolver: resolver,
       clock: { now: () => createTimestampMs(10) },
@@ -402,7 +402,7 @@ describe("RunController.start", () => {
     const controller = new RunController({
       agentExecution: makeAgentExecution(store, () => undefined),
       executionStore: store,
-      messages: testRunMessageAuthority(),
+      messages: testRunMessageAuthority({ snapshot: () => store.snapshot }),
       events: { notifyCommitted: () => undefined },
       configResolver: {
         resolve: async () => ({
@@ -443,7 +443,7 @@ describe("RunController.start", () => {
         providerCalls += 1;
       }),
       executionStore: store,
-      messages: testRunMessageAuthority(),
+      messages: testRunMessageAuthority({ snapshot: () => store.snapshot }),
       events: { notifyCommitted: () => undefined },
       configResolver: {
         resolve: async () => ({
@@ -481,7 +481,7 @@ describe("RunController.cancel", () => {
         throw new Error("pending cancellation must not invoke the provider");
       }),
       executionStore: store,
-      messages: testRunMessageAuthority(),
+      messages: testRunMessageAuthority({ snapshot: () => store.snapshot }),
       events: { notifyCommitted: (events) => notified.push(...events) },
       configResolver: {
         resolve: async () => ({
@@ -512,7 +512,7 @@ describe("RunController project verification driving", () => {
     const controller = new RunController({
       agentExecution: makeAgentExecution(store, () => undefined),
       executionStore: store,
-      messages: testRunMessageAuthority(),
+      messages: testRunMessageAuthority({ snapshot: () => store.snapshot }),
       events: { notifyCommitted: () => undefined },
       configResolver: {
         resolve: async () => ({

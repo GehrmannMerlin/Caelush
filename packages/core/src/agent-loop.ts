@@ -8,7 +8,6 @@ import type {
   AgentLoop as FrozenAgentLoop,
   AgentLoopFailedResult,
   AgentRetryMetadata as FrozenAgentRetryMetadata,
-  AgentTurnInput,
   AgentTurnRef,
   ContextBuildReport,
   ContextEnginePort,
@@ -66,6 +65,10 @@ import type {
 } from "./agent-loop-ports.js";
 import { toAIMessage, toLegacyMessage } from "./ai-invocation-projection.js";
 import { createLegacyContextRuntimeAdapter } from "./legacy-context-runtime-adapter.js";
+import {
+  createLegacyFacadeConversation,
+  type LegacyFacadeTurnInput,
+} from "./legacy-agent-conversation.js";
 
 /**
  * The legacy Core AgentLoop facade.
@@ -157,9 +160,8 @@ export class AgentLoop {
 
     // The legacy history invariants stay in force: the open user turn must be intact, the
     // pending assistant must match the decision, and the results must not already be present.
-    let history;
     try {
-      history = prepareResumeHistory(
+      prepareResumeHistory(
         input.history,
         input.pendingDecision,
         normalizedResults,
@@ -185,27 +187,12 @@ export class AgentLoop {
         pendingDecision: input.pendingDecision,
         results: normalizedResults.map(toAIMessage) as unknown as readonly AIToolResultMessage[],
       },
-      AgentLoop.continuationHistory(history.historyBeforeCurrentTurn, input.history),
+      // Phase 5D's compatibility translator needs the pending assistant together with the open
+      // user turn. The durable-ID input then selects the newly appended Tool-result records; it
+      // must not reconstruct the assistant from the pending decision or pass a partial history.
+      input.history,
       normalizedResults,
     );
-  }
-
-  /**
-   * The messages a frozen turn may use as its prepared history.
-   *
-   * A tool continuation's open user turn is not ordinary history: it must stay with the tool
-   * results so the next request never orphans a call from its result. The frozen context
-   * boundary therefore receives the history that precedes the open turn, plus the open turn's
-   * own user message — which is what lets the legacy adapter reconstruct the complete
-   * `TOOL_CONTINUATION` shape without the frozen boundary growing a
-   * `currentTurnMessages` field.
-   */
-  private static continuationHistory(
-    historyBeforeTurn: readonly import("@caelush/llm/messages").LLMMessage[],
-    fullHistory: readonly import("@caelush/llm/messages").LLMMessage[],
-  ): readonly import("@caelush/llm/messages").LLMMessage[] {
-    const openUser = findOpenUserMessage(fullHistory);
-    return openUser === undefined ? historyBeforeTurn : [...historyBeforeTurn, openUser];
   }
 
   /**
@@ -218,7 +205,7 @@ export class AgentLoop {
   private async advanceTurn(
     input: AgentLoopCommonInput & { readonly signal: AbortSignal },
     sequence: number,
-    turnInput: AgentTurnInput,
+    turnInput: LegacyFacadeTurnInput,
     history: readonly import("@caelush/llm/messages").LLMMessage[],
     appendPrefix: readonly import("@caelush/llm/messages").LLMMessage[],
   ): Promise<AgentLoopExecutionResult> {
@@ -245,11 +232,17 @@ export class AgentLoop {
     try {
       const settings =
         input.modelSettings === undefined ? undefined : toAIModelSettings(input.modelSettings);
+      const durable = createLegacyFacadeConversation({
+        run: input.run,
+        history,
+        appendPrefix,
+        turnInput,
+      });
       const advanceInput: AgentLoopAdvanceInput = {
         identity,
         turn,
-        history: history.map(toAIMessage),
-        input: turnInput,
+        conversation: durable.conversation,
+        input: durable.input,
         model: this.dependencies.models.resolve(input.run.model),
         tools: input.tools ?? [],
         ...(settings === undefined ? {} : { modelSettings: settings }),
@@ -772,19 +765,6 @@ function toDurableRetryMetadata(
 /** The frozen identity of the Run a turn belongs to. */
 function turnIdentity(run: AgentRun): AgentExecutionIdentity {
   return { runId: run.id, sessionId: run.sessionId, goal: run.goal };
-}
-
-/**
- * The last user message of a conversation.
- *
- * Legacy history keeps exactly one user message per open turn, so the last one is the turn's
- * own opening message.
- */
-function findOpenUserMessage(
-  history: readonly import("@caelush/llm/messages").LLMMessage[],
-): import("@caelush/llm/messages").LLMUserMessage | undefined {
-  const last = [...history].reverse().find((message) => message.role === "user");
-  return last?.role === "user" ? last : undefined;
 }
 
 /**

@@ -1,9 +1,7 @@
 import type {
   AIMessage,
   AIModelSettings,
-  AIToolResultMessage,
   AIToolSpec,
-  AIUserMessage,
   ModelDescriptor,
   ModelUsage,
 } from "@caelush/ai";
@@ -15,6 +13,8 @@ import type {
   AgentToolCallsDecision,
 } from "./decision/decision.js";
 import type { ModelTurnExecutionErrorCode } from "./turn/model-turn-error.js";
+import type { AgentConversationSnapshot } from "../messages/conversation/conversation-snapshot.js";
+import type { AgentMessageId } from "../messages/types/ids.js";
 
 /**
  * The frozen Agent Kernel contracts of Architecture V2.
@@ -111,18 +111,21 @@ export function createAgentTurnRef(stepId: StepId, sequence: number): AgentTurnR
 export type AgentTurnInput =
   | {
       readonly kind: "USER_INPUT";
-      readonly messages: readonly AIUserMessage[];
+      /** The durable USER record this turn is about. */
+      readonly userMessageId: AgentMessageId;
     }
   | {
       readonly kind: "TOOL_RESULTS";
       readonly sourceStepId: StepId;
       readonly pendingDecision: AgentToolCallsDecision;
-      readonly results: readonly AIToolResultMessage[];
+      /** Durable TOOL_RESULT records, in the exact requested-call order. */
+      readonly toolResultMessageIds: readonly AgentMessageId[];
     }
   | {
       readonly kind: "CONTINUATION";
       readonly reason: "VERIFICATION_REPAIR" | "STEERING";
-      readonly messages?: readonly AIUserMessage[];
+      /** Optional durable message references supplied by a steering/recovery boundary. */
+      readonly messageIds?: readonly AgentMessageId[];
     };
 
 /**
@@ -304,7 +307,8 @@ export interface AgentLoopAdvanceInput {
 
   readonly turn: AgentTurnRef;
 
-  readonly history: readonly AIMessage[];
+  /** The validated durable conversation snapshot used by Context and replay. */
+  readonly conversation: AgentConversationSnapshot;
 
   readonly input: AgentTurnInput;
 

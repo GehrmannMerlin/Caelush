@@ -6,6 +6,7 @@ import { createRunExecutionDriver } from "../src/run/run-execution-driver.js";
 import type { CompletionGate, CompletionGateInput } from "../src/run/ports/completion-gate.js";
 import type { RunExecutionDirective } from "../src/run/directive.js";
 import type { ToolTurnCoordinator, ToolTurnRequest } from "../src/run/ports/tool-turn.js";
+import { conversationTurnId, createAgentConversationSnapshot } from "../src/index.js";
 
 /**
  * The frozen driver, asserted as a boundary rather than as a worker.
@@ -27,6 +28,12 @@ const IDENTITY: AgentExecutionIdentity = {
 };
 
 const TURN: AgentTurnRef = { stepId: STEP_ID, sequence: 1 };
+const CONVERSATION = createAgentConversationSnapshot({
+  sessionId: SESSION_ID,
+  currentRunId: RUN_ID,
+  currentTurnId: conversationTurnId("cturn_driver_fixture"),
+  turns: [],
+});
 
 const MODEL: ModelDescriptor = {
   provider: "fixture",
@@ -98,7 +105,7 @@ const SIGNAL = new AbortController().signal;
 const CONTEXT = {
   identity: IDENTITY,
   turn: TURN,
-  history: [],
+  conversation: CONVERSATION,
   model: MODEL,
   tools: [],
   signal: SIGNAL,

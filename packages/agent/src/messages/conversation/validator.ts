@@ -10,20 +10,20 @@ import type { AgentMessage } from "../types/agent-message.js";
  * AI history validator         the OLD one — loop/history/conversation-history.ts
  * ```
  *
- * ## Two validators exist during Phase 5A, and only one of them is the target
+ * ## Two validators exist during the migration, and only one of them is the target
  *
  * ```text
- * assertConversationProtocolIntegrity   validates AIMessage history, is called by the
- *                                       production AgentLoop today, and is NOT extended
- * AgentConversationValidator            validates AgentMessage snapshots, is called by
- *                                       nothing in production yet, and is where new rules go
+ * assertConversationProtocolIntegrity   validates AIMessage history at the compatibility seam
+ *                                       and is NOT extended
+ * AgentConversationValidator            validates AgentMessage snapshots at the production
+ *                                       repository boundary and is where new rules go
  * ```
  *
  * The old validator stays because removing it would break the production loop that still
- * speaks `AIMessage`; that cutover is Phase 5C and 5D. It must not *grow*: a rule added
- * there would live in the compatibility layer and never reach the target. The two are not
- * two authorities over one question — the old one answers the question for the language
- * production currently uses, and it retires with that language.
+ * speaks `AIMessage`; that seam remains only for the deferred compatibility retirement. It must
+ * not *grow*: a rule added there would live in the compatibility layer and never reach the target.
+ * The two are not two authorities over one question — the old one answers the question for the
+ * compatibility language, while this validator is authoritative for durable production replay.
  *
  * ## There is no such thing as a partial validation
  *

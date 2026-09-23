@@ -6,6 +6,7 @@ import type {
   AgentMessageFactory,
   AgentMessageProjectorRegistry,
   AgentMessageRecordDraft,
+  AgentConversationRepository,
   ConversationTurnIdFactory,
   ToolFeedbackProjectionReceipt,
   ToolResultObservationRef,
@@ -34,6 +35,8 @@ export interface RunMessageAuthority extends RunAgentMessageProjection {
   readonly turns: ConversationTurnIdFactory;
   readonly codecs: AgentMessageCodecRegistry;
   readonly projectors: AgentMessageProjectorRegistry;
+  /** The semantic V2 conversation loader used by Context and replay. */
+  readonly conversation: AgentConversationRepository;
   userOrigin(run: AgentRun): Promise<"GOAL" | "FOLLOW_UP">;
 }
 

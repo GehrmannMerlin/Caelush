@@ -8,7 +8,8 @@ import type {
 import { ContextExhaustedError } from "@caelush/context";
 import type { ModelDescriptor } from "@caelush/ai";
 import type {
-  AgentTurnInput,
+  AgentConversationSnapshot,
+  AgentMessageProjectorRegistry,
   ContextBuildContribution,
   ContextBuildReport,
   ContextEnginePort,
@@ -17,6 +18,13 @@ import type {
   ContextPressure,
   PreparedModelContext,
   ToolObservationPolicySnapshot,
+  ConversationSelector,
+} from "@caelush/agent";
+import {
+  createConversationSelector,
+  createStandardAgentMessageProjectorRegistry,
+  projectStoredMessages,
+  STRUCTURAL_TOKEN_ESTIMATOR,
 } from "@caelush/agent";
 import type { LLMMessage, LLMUserMessage } from "@caelush/llm/messages";
 import type { AgentRun, WorkspaceRef } from "@caelush/protocol";
@@ -27,7 +35,7 @@ import type {
   AgentRelevantFilePlannerPort,
 } from "./agent-loop-ports.js";
 import { defaultObservationPolicy } from "./agent-tool-batch.js";
-import { toAIMessage, toLegacyMessage, toProtocolJsonObject } from "./ai-invocation-projection.js";
+import { toAIMessage, toLegacyMessage } from "./ai-invocation-projection.js";
 
 /**
  * TRANSITIONAL — the legacy Context runtime behind the frozen Context Engine boundary.
@@ -61,6 +69,10 @@ export interface LegacyContextRuntimeAdapterDependencies {
   readonly planner?: AgentRelevantFilePlannerPort;
   readonly contextBuilder: AgentContextBuilderPort;
   readonly contextRuntime?: AgentContextRuntimePort;
+  /** The production Message V2 projector authority. */
+  readonly conversationProjectors?: AgentMessageProjectorRegistry;
+  /** The production Message V2 selection authority. */
+  readonly conversationSelector?: ConversationSelector;
   readonly baseSystemPrompt: string;
   readonly contextLimits: import("@caelush/context").ContextBuildLimits;
   /** The run's workspace, needed only for the legacy project inspection input. */
@@ -146,8 +158,8 @@ export function createLegacyContextRuntimeAdapter(
 ): ContextEnginePort {
   return {
     async prepare(input: ContextPrepareInput): Promise<PreparedModelContext> {
-      const history = input.history.map(toLegacyMessage);
-      const legacyInput = await buildLegacyContextInput(dependencies, input, history); // The single descriptor authority for this build. Never re-resolved.
+      const projectedConversation = projectConversationForContext(dependencies, input);
+      const legacyInput = await buildLegacyContextInput(dependencies, input, projectedConversation); // The single descriptor authority for this build. Never re-resolved.
       const descriptor = input.model;
       const runtime = resolveRuntime(dependencies);
 
@@ -209,7 +221,7 @@ function createBuilderRuntime(builder: AgentContextBuilderPort): AgentContextRun
 async function buildLegacyContextInput(
   dependencies: LegacyContextRuntimeAdapterDependencies,
   input: ContextPrepareInput,
-  history: readonly LLMMessage[],
+  conversation: ProjectedLegacyConversation,
 ): Promise<ContextBuildInput> {
   const snapshot = await inspect(dependencies);
   const relevantFiles = await plan(dependencies, input, snapshot);
@@ -218,19 +230,152 @@ async function buildLegacyContextInput(
     baseSystemPrompt: dependencies.baseSystemPrompt,
     snapshot,
     ...(relevantFiles === undefined ? {} : { relevantFiles }),
-    history,
+    history: conversation.history,
     limits: dependencies.contextLimits,
     ...(await toolGuidance(dependencies, input)),
     ...(await repairContext(dependencies, input)),
   };
 
-  const currentTurnMessages = await currentTurn(dependencies, input, history);
+  const currentTurnMessages = conversation.currentTurnMessages;
   if (currentTurnMessages !== undefined) {
     return { ...common, mode: "TOOL_CONTINUATION", currentTurnMessages };
   }
   return {
     ...common,
-    currentUserMessage: currentUserMessage(input.input, input.identity.goal),
+    currentUserMessage: requireCurrentUserMessage(conversation),
+  };
+}
+
+interface ProjectedLegacyConversation {
+  readonly history: readonly LLMMessage[];
+  readonly currentTurnMessages?: readonly LLMMessage[];
+  readonly currentUserMessage?: LLMUserMessage;
+}
+
+/**
+ * The one production conversation projection path.
+ *
+ * Durable records are validated and selected as Agent messages first. Only the selected
+ * provider-neutral AI conversation crosses the legacy adapter and becomes an LLM message for the
+ * existing Context materializer. A historical Tool result is therefore read from its stored
+ * `projectedContent`; this function never projects raw observations or chooses a newer version.
+ */
+function projectConversationForContext(
+  dependencies: LegacyContextRuntimeAdapterDependencies,
+  input: ContextPrepareInput,
+): ProjectedLegacyConversation {
+  const projectors =
+    dependencies.conversationProjectors ?? createStandardAgentMessageProjectorRegistry();
+  const selector =
+    dependencies.conversationSelector ?? createConversationSelector({ projector: projectors });
+  const durableConversation: AgentConversationSnapshot = input.conversation;
+  const selected = selector.select({
+    conversation: durableConversation,
+    maxTokens:
+      dependencies.contextLimits.maxConversationTokens ?? dependencies.contextLimits.maxInputTokens,
+    estimator: STRUCTURAL_TOKEN_ESTIMATOR,
+  });
+  const stored = selected.turns.flatMap((turn) => [...turn.messages]);
+  const byId = new Map(stored.map((entry) => [entry.message.id, entry]));
+  const historyWithout = (ids: ReadonlySet<string>): readonly LLMMessage[] =>
+    projectStoredMessages(
+      stored.filter((entry) => !ids.has(entry.message.id)),
+      projectors,
+    ).messages.map(toLegacyMessage);
+
+  if (input.input.kind === "USER_INPUT") {
+    const user = byId.get(input.input.userMessageId);
+    if (user === undefined || user.message.type !== "USER") {
+      throw new Error("The durable USER message referenced by the turn input is unavailable.");
+    }
+    const projected = projectors.project(user).messages.map(toLegacyMessage);
+    const currentUser = projected.find(
+      (message): message is LLMUserMessage => message.role === "user",
+    );
+    if (currentUser === undefined) {
+      throw new Error("The durable USER message did not produce a model-visible user message.");
+    }
+    return {
+      history: historyWithout(new Set([user.message.id])),
+      currentUserMessage: currentUser,
+    };
+  }
+
+  if (input.input.kind === "TOOL_RESULTS") {
+    const toolInput = input.input;
+    const assistant = stored.find(
+      (entry) =>
+        entry.message.type === "ASSISTANT" && entry.message.sourceStepId === toolInput.sourceStepId,
+    );
+    if (assistant === undefined) {
+      throw new Error("The durable assistant message for the Tool continuation is unavailable.");
+    }
+    const assistantIndex = stored.indexOf(assistant);
+    const user = [...stored.slice(0, assistantIndex)]
+      .reverse()
+      .find((entry) => entry.message.type === "USER");
+    if (user === undefined) {
+      throw new Error("The durable user message for the Tool continuation is unavailable.");
+    }
+    const resultEntries = toolInput.toolResultMessageIds.map((id) => {
+      const entry = byId.get(id);
+      if (entry === undefined || entry.message.type !== "TOOL_RESULT") {
+        throw new Error("A durable Tool result referenced by the turn input is unavailable.");
+      }
+      return entry;
+    });
+    const currentIds = new Set([
+      user.message.id,
+      assistant.message.id,
+      ...resultEntries.map((entry) => entry.message.id),
+    ]);
+    return {
+      history: historyWithout(currentIds),
+      currentTurnMessages: [
+        ...projectors.project(user).messages.map(toLegacyMessage),
+        ...projectors.project(assistant).messages.map(toLegacyMessage),
+        ...resultEntries.flatMap((entry) =>
+          projectors.project(entry).messages.map(toLegacyMessage),
+        ),
+      ],
+    };
+  }
+
+  const currentEntries = (input.input.messageIds ?? []).map((id) => {
+    const entry = byId.get(id);
+    if (entry === undefined) {
+      throw new Error(
+        "A durable continuation message referenced by the turn input is unavailable.",
+      );
+    }
+    return entry;
+  });
+  const currentMessages = currentEntries.flatMap((entry) =>
+    projectors.project(entry).messages.map(toLegacyMessage),
+  );
+  const currentUserEntry =
+    [...currentEntries].reverse().find((entry) => entry.message.type === "USER") ??
+    [...stored].reverse().find((entry) => entry.message.type === "USER");
+  const currentUser =
+    [...currentMessages]
+      .reverse()
+      .find((message): message is LLMUserMessage => message.role === "user") ??
+    (currentUserEntry === undefined
+      ? undefined
+      : projectors
+          .project(currentUserEntry)
+          .messages.map(toLegacyMessage)
+          .find((message): message is LLMUserMessage => message.role === "user"));
+  if (currentUser === undefined || currentUserEntry === undefined) {
+    throw new Error("The durable user message for the continuation is unavailable.");
+  }
+  const currentIds = new Set([
+    ...currentEntries.map((entry) => entry.message.id),
+    currentUserEntry.message.id,
+  ]);
+  return {
+    history: historyWithout(currentIds),
+    currentUserMessage: currentUser,
   };
 }
 
@@ -299,50 +444,19 @@ async function repairContext(
   return repair === undefined ? {} : { verificationRepairContext: repair };
 }
 
-/**
- * The current turn's own messages for a legacy tool continuation.
- *
- * A `TOOL_RESULTS` turn knows its own assistant message and results, so the legacy
- * `TOOL_CONTINUATION` shape is reconstructed from the frozen turn input rather than from a
- * second copy of the conversation. That keeps the frozen boundary free of a
- * `currentTurnMessages` field.
- *
- * Each Tool result's raw output pointer is resolved from the durable Tool execution ledger, because
- * the frozen `AIToolResultMessage` deliberately has no field for it. The pointer is what a forced
- * recovery needs in order to re-project the *unbounded* output under a tighter policy; without it
- * the legacy runtime can only tighten the bounded summary it was already given. A call the ledger
- * does not know — an externally submitted Tool result — resolves to no pointer, and the bounded
- * content carries the message exactly as before.
- */
-async function currentTurn(
-  dependencies: LegacyContextRuntimeAdapterDependencies,
-  input: ContextPrepareInput,
-  history: readonly LLMMessage[],
-): Promise<readonly LLMMessage[] | undefined> {
-  const turn = input.input;
-  if (turn.kind !== "TOOL_RESULTS") return undefined;
-  const pending = toLegacyAssistantContent(turn.pendingDecision.modelTurn.assistantMessage);
-  // The open user turn is the last user message before this turn; it must stay inside the
-  // continuation so the tool results are never orphaned from the request that produced them.
-  // The frozen boundary carries it as the history's last user message in this phase.
-  const currentUser = [...history].reverse().find((message) => message.role === "user");
-  const results = await Promise.all(
-    turn.results.map(async (result) =>
-      toLegacyToolResultMessage(
-        result,
-        await resolveRawObservationRef(
-          dependencies,
-          input.identity.runId,
-          turn.sourceStepId,
-          result,
-        ),
-      ),
-    ),
-  );
-  return [...(currentUser === undefined ? [] : [currentUser]), pending, ...results];
+function requireCurrentUserMessage(conversation: ProjectedLegacyConversation): LLMUserMessage {
+  if (conversation.currentUserMessage !== undefined) return conversation.currentUserMessage;
+  throw new Error("The durable conversation has no model-visible user message for this turn.");
 }
 
-async function resolveRawObservationRef(
+/**
+ * COMPATIBILITY ONLY: resolve a raw observation pointer for the legacy Context runtime.
+ *
+ * Phase 5D historical replay never calls this seam: stored TOOL_RESULT projectedContent is the
+ * replay authority. The resolver remains available for still-legacy Context integration paths
+ * until the deferred 5F retirement.
+ */
+export async function resolveRawObservationRef(
   dependencies: LegacyContextRuntimeAdapterDependencies,
   runId: import("@caelush/protocol").RunId,
   sourceStepId: import("@caelush/protocol").StepId,
@@ -354,66 +468,6 @@ async function resolveRawObservationRef(
     sourceStepId,
     externalCallId: result.toolCallId,
   });
-}
-
-/**
- * Project one frozen Tool result onto the legacy encoding, restoring its raw-output pointer.
- *
- * The four canonical fields are carried unchanged; `rawArtifactRef` is added only when the ledger
- * resolved one, so the legacy message never claims an artifact that does not exist.
- */
-function toLegacyToolResultMessage(
-  result: import("@caelush/ai").AIToolResultMessage,
-  rawArtifactRef: string | undefined,
-): LLMMessage {
-  return {
-    role: "tool",
-    toolCallId: result.toolCallId,
-    toolName: result.toolName,
-    content: result.content,
-    isError: result.isError,
-    ...(rawArtifactRef === undefined ? {} : { rawArtifactRef }),
-  };
-}
-
-/** Project one AI assistant message onto the durable legacy assistant message. */
-function toLegacyAssistantContent(message: import("@caelush/ai").AIAssistantMessage): LLMMessage {
-  const content = message.content.map((part) =>
-    part.type === "text"
-      ? { type: "text" as const, text: part.text }
-      : {
-          type: "tool-call" as const,
-          toolCallId: part.toolCallId,
-          toolName: part.toolName,
-          input: toProtocolJsonObject(part.input),
-        },
-  );
-  return { role: "assistant", content };
-}
-
-/**
- * The legacy `currentUserMessage` of a turn the frozen input does not phrase as one.
- *
- * A `CONTINUATION` is a Reason that carries no new user message: the Run continues from where
- * it was, and the frozen contract deliberately expresses that as a reason rather than as text.
- * The legacy builder still requires a current user message, so the compatibility boundary maps
- * the continuation onto the Run's own goal — which is exactly the prompt the previous loop
- * produced — instead of widening the frozen interface with a message the caller never sent.
- *
- * A continuation that *does* carry messages uses its last one, so a future steering or repair
- * message stays authoritative over the goal.
- */
-function currentUserMessage(input: AgentTurnInput, goal: string): LLMUserMessage {
-  if (input.kind === "USER_INPUT") {
-    const last = input.messages.at(-1);
-    if (last !== undefined) return { role: "user", content: last.content };
-  }
-  if (input.kind === "CONTINUATION") {
-    const last = input.messages?.at(-1);
-    if (last !== undefined) return { role: "user", content: last.content };
-    return { role: "user", content: goal };
-  }
-  throw new Error("a user turn requires at least one user message");
 }
 
 /**

@@ -92,7 +92,9 @@ describe("RunController durable boundaries", () => {
         createStepId,
       }).factory,
       executionStore: storage.execution,
-      messages: testRunMessageAuthority(),
+      messages: testRunMessageAuthority({
+        records: (runId) => storage.messageRecords.listByRun(runId),
+      }),
       events: eventBus,
       configResolver: {
         resolve: async () => ({
@@ -151,7 +153,9 @@ describe("RunController durable boundaries", () => {
     const controller = new RunController({
       agentExecution,
       executionStore: storage.execution,
-      messages: testRunMessageAuthority(),
+      messages: testRunMessageAuthority({
+        records: (runId) => storage.messageRecords.listByRun(runId),
+      }),
       events: eventBus,
       configResolver: {
         resolve: async () => ({
@@ -241,7 +245,9 @@ describe("RunController durable boundaries", () => {
         createStepId: () => createStepId(),
       }).factory,
       executionStore: storage.execution,
-      messages: testRunMessageAuthority(),
+      messages: testRunMessageAuthority({
+        records: (runId) => storage.messageRecords.listByRun(runId),
+      }),
       events: eventBus,
       configResolver: {
         resolve: async () => ({

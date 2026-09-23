@@ -24,7 +24,6 @@ import type {
   AgentLoopAdvanceInput,
   AgentLoopAdvanceResult,
   AgentLoopContextReceipt,
-  AgentTurnInput,
   PreparedModelContext,
 } from "./types.js";
 
@@ -101,7 +100,11 @@ export function createAgentLoop(dependencies: AgentLoopDependencies): AgentLoop 
 
   return {
     async advance(input: AgentLoopAdvanceInput): Promise<AgentLoopAdvanceResult> {
-      const appended = appendedByInput(input.input);
+      // The turn input contains durable IDs, not model messages. Its records are already inside
+      // `input.conversation` and the Context Engine projects them exactly once. Reconstructing an
+      // AI append here would create a second conversation authority and would duplicate the current
+      // user/tool turn on a retry.
+      const appended: readonly AIMessage[] = [];
 
       // General turn-input integrity is checked before any port is touched, so an invalid Tool
       // result batch costs no context build, no admission decision, no durable commit and no
@@ -293,7 +296,7 @@ async function prepare(
     const context = await engine.prepare({
       identity: input.identity,
       turn: input.turn,
-      history: input.history,
+      conversation: input.conversation,
       input: input.input,
       model: input.model,
       tools: input.tools,
@@ -306,21 +309,6 @@ async function prepare(
     if (input.signal.aborted) return { kind: "CANCELLED" };
     return { kind: "FAILED", error: toContextFailure(error) };
   }
-}
-
-/**
- * The messages a turn input contributes, before the assistant message.
- *
- * ```text
- * USER_INPUT     the user delta
- * TOOL_RESULTS   the normalized tool results
- * CONTINUATION   the supplied continuation messages, if any
- * ```
- */
-function appendedByInput(input: AgentTurnInput): readonly AIMessage[] {
-  if (input.kind === "USER_INPUT") return input.messages;
-  if (input.kind === "TOOL_RESULTS") return input.results;
-  return input.messages ?? [];
 }
 
 function failed(

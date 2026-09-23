@@ -485,7 +485,7 @@ describe("Phase 3C Run Layer ownership", () => {
     expect(controller).not.toMatch(/sourceStepId === undefined\s*\)\s*\{\s*return undefined/);
   });
 
-  it("projects the production Agent history onto the frozen AI contract", () => {
+  it("retains the legacy Agent history projector only as a compatibility surface", () => {
     const history = executable("packages/core/src/run-agent-history.ts");
     expect(history).toContain("export function projectRunAgentHistory(");
     // It reuses the frozen validators rather than reimplementing them.
@@ -497,8 +497,9 @@ describe("Phase 3C Run Layer ownership", () => {
     expect(history).not.toContain("@caelush/llm");
 
     const controller = executable("packages/core/src/run-controller.ts");
-    expect(controller).toContain("projectRunAgentHistory({");
-    expect(controller).toContain("input: directive.input");
+    expect(history).toContain("COMPATIBILITY ONLY");
+    expect(controller).toContain("messages.conversation.loadSnapshot");
+    expect(controller).not.toContain("projectRunAgentHistory({");
   });
 
   it("keeps maxSteps out of the general kernel loop", () => {

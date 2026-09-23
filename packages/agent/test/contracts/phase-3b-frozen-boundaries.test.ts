@@ -48,7 +48,7 @@ type EmptyObject = {};
 interface FrozenContextPrepareInput {
   readonly identity: AgentExecutionIdentity;
   readonly turn: AgentTurnRef;
-  readonly history: readonly import("@caelush/ai").AIMessage[];
+  readonly conversation: import("@caelush/agent").AgentConversationSnapshot;
   readonly input: AgentTurnInput;
   readonly model: ModelDescriptor;
   readonly tools: readonly import("@caelush/ai").AIToolSpec[];
@@ -60,7 +60,7 @@ interface FrozenContextPrepareInput {
  * The frozen provider seam.
  *
  * `model` is present: a provider may read the resolved descriptor to judge capabilities.
- * `history` is absent: the conversation is a context source, and handing it to every provider
+ * `conversation` is absent: the conversation is a context source, and handing it to every provider
  * would let each one become a second conversation assembler.
  */
 interface FrozenContextProviderInput {
@@ -79,7 +79,7 @@ type PrepareInputExact = Expect<
 type PrepareInputKeys = Expect<
   Equal<
     Keys<import("@caelush/agent").ContextPrepareInput>,
-    "identity" | "turn" | "history" | "input" | "model" | "tools" | "mode" | "signal"
+    "identity" | "turn" | "conversation" | "input" | "model" | "tools" | "mode" | "signal"
   >
 >;
 

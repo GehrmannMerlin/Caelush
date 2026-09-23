@@ -6,6 +6,7 @@ import type {
   ContextProvider,
   ContextProviderInput,
 } from "@caelush/agent";
+import { agentMessageId } from "@caelush/agent";
 import type { ModelDescriptor } from "@caelush/ai";
 import { createRunId, createSessionId, createStepId } from "@caelush/protocol";
 
@@ -74,7 +75,7 @@ function testProvider(): {
         received.push(input);
         const goal =
           input.input.kind === "USER_INPUT"
-            ? (input.input.messages.at(-1)?.content ?? "")
+            ? `durable-user:${input.input.userMessageId}`
             : input.input.kind === "CONTINUATION"
               ? `continuation:${input.input.reason}`
               : "tool results";
@@ -99,7 +100,7 @@ describe("ContextProvider conformance", () => {
     const turn = { stepId: createStepId(), sequence: 1 };
     const input: AgentTurnInput = {
       kind: "USER_INPUT",
-      messages: [{ role: "user", content: "what changed?" }],
+      userMessageId: agentMessageId("provider-user"),
     };
 
     const items = await fixture.provider.provide({
@@ -126,7 +127,7 @@ describe("ContextProvider conformance", () => {
       {
         id: "test:1",
         priorityClass: "NORMAL",
-        content: "goal=what changed? model=test/model-a",
+        content: "goal=durable-user:provider-user model=test/model-a",
         tokenEstimate: 8,
       },
     ]);
@@ -138,7 +139,7 @@ describe("ContextProvider conformance", () => {
     const turn = { stepId: createStepId(), sequence: 4 };
 
     for (const input of [
-      { kind: "USER_INPUT", messages: [{ role: "user", content: "a" }] },
+      { kind: "USER_INPUT", userMessageId: agentMessageId("provider-user-a") },
       { kind: "CONTINUATION", reason: "VERIFICATION_REPAIR" },
       { kind: "CONTINUATION", reason: "STEERING" },
     ] satisfies readonly AgentTurnInput[]) {

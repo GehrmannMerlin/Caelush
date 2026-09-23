@@ -1,5 +1,9 @@
 import type { AIMessage } from "@caelush/ai";
-import type { RunExecutionDirective, RunExecutionEffectResult } from "@caelush/agent";
+import {
+  agentMessageId,
+  type RunExecutionDirective,
+  type RunExecutionEffectResult,
+} from "@caelush/agent";
 import {
   AgentRunSchema,
   AgentStateSchema,
@@ -37,6 +41,7 @@ const NOW = createTimestampMs(1_100);
 const RUN_ID = createRunId();
 const SESSION_ID = createSessionId();
 const STEP_ID: StepId = createStepId();
+const USER_MESSAGE_ID = agentMessageId("user-message");
 
 const MODEL_TURN = {
   callId: "llm_0195f3a0-0000-7000-8000-000000000000",
@@ -185,7 +190,7 @@ const AGENT_DIRECTIVE: RunExecutionDirective = {
   kind: "ADVANCE_AGENT",
   mode: "EXECUTE",
   reason: "INITIAL",
-  input: { kind: "USER_INPUT", messages: [] },
+  input: { kind: "USER_INPUT", userMessageId: USER_MESSAGE_ID },
 };
 
 /** Materialize a planned commit, and return everything worth asserting about. */

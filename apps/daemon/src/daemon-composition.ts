@@ -45,6 +45,9 @@ import {
 import {
   createAgentMessageFactory,
   createAgentMessageIdFactory,
+  createAgentConversationRepository,
+  createAgentConversationValidator,
+  createConversationSelector,
   createDeterministicConversationTurnIdFactory,
   createStandardAgentMessageCodecRegistry,
   createStandardAgentMessageProjectorRegistry,
@@ -436,9 +439,36 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     messageProjectors.currentVersion(type),
   );
   const messageTurns = createDeterministicConversationTurnIdFactory();
+  const conversation = createAgentConversationRepository({
+    codecs: messageCodecs,
+    store: options.storage.messageRecords,
+    turns: messageTurns,
+    runMetadata: {
+      async read(runId) {
+        const run = await options.storage.runs.get(runId);
+        if (run === null) return undefined;
+        const terminal =
+          run.status === "COMPLETED" ||
+          run.status === "FAILED" ||
+          run.status === "CANCELLED" ||
+          run.status === "TIMEOUT" ||
+          run.status === "MAX_STEPS_REACHED" ||
+          run.status === "BUDGET_EXCEEDED";
+        return {
+          runId: run.id,
+          sessionId: run.sessionId,
+          createdAt: run.createdAt,
+          ...(run.finishedAt === undefined ? {} : { finishedAt: run.finishedAt }),
+          terminal,
+        };
+      },
+    },
+    validator: createAgentConversationValidator(),
+  });
   const messages: RunMessageAuthority = {
     codecs: messageCodecs,
     projectors: messageProjectors,
+    conversation,
     factory: createAgentMessageFactory({
       ids: createAgentMessageIdFactory(),
       now: () => clock.now(),
@@ -790,6 +820,8 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
             planner,
             contextBuilder,
             contextRuntime,
+            conversationProjectors: messageProjectors,
+            conversationSelector: createConversationSelector({ projector: messageProjectors }),
             baseSystemPrompt: input.baseSystemPrompt,
             contextLimits: input.contextLimits,
             workspace: input.run.workspace,

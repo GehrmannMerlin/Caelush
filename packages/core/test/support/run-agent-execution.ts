@@ -3,11 +3,14 @@ import type {
   AIMessage,
   AIModelRequest,
   AIModelTurnResult,
-  AIToolResultMessage,
   AIToolSpec,
   ModelDescriptor,
 } from "@caelush/ai";
-import { toModelTurnExecutionError } from "@caelush/agent";
+import {
+  createStandardAgentMessageProjectorRegistry,
+  projectStoredMessages,
+  toModelTurnExecutionError,
+} from "@caelush/agent";
 import type {
   AgentTurnRef,
   ContextEnginePort,
@@ -145,30 +148,22 @@ export function fakeContextEngine(
   overrides: { readonly report?: PreparedModelContext["report"] } = {},
 ): FakeContextEngine {
   const preparations: PreparedTestContext[] = [];
+  const projectors = createStandardAgentMessageProjectorRegistry();
   const engine: FakeContextEngine = {
     preparations,
     async prepare(input: ContextPrepareInput): Promise<PreparedModelContext> {
       if (engine.prepareFailure !== undefined) throw engine.prepareFailure;
-      preparations.push({ mode: input.mode, messages: input.history });
+      const stored = input.conversation.turns.flatMap((turn) => [...turn.messages]);
+      const messages = projectStoredMessages(stored, projectors).messages;
+      preparations.push({ mode: input.mode, messages });
       return {
-        messages: [...input.history, ...turnMessages(input)],
+        messages,
         report: overrides.report ?? defaultReport(input),
         observationPolicy: { maxSingleObservationTokens: 4_000, maxObservationBatchTokens: 12_000 },
       };
     },
   };
   return engine;
-}
-
-/** The messages one turn input contributes, in the order the model sees them. */
-function turnMessages(input: ContextPrepareInput): readonly AIMessage[] {
-  const turn = input.input;
-  if (turn.kind === "USER_INPUT") return turn.messages;
-  if (turn.kind === "CONTINUATION") return turn.messages ?? [];
-  return [
-    turn.pendingDecision.modelTurn.assistantMessage,
-    ...(turn.results as readonly AIToolResultMessage[]),
-  ];
 }
 
 function defaultReport(input: ContextPrepareInput): PreparedModelContext["report"] {

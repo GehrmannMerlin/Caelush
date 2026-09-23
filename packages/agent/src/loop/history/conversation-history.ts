@@ -1,10 +1,5 @@
 import { assertAIMessage } from "@caelush/ai";
-import type {
-  AIAssistantMessage,
-  AIMessage,
-  AIToolResultMessage,
-  AIUserMessage,
-} from "@caelush/ai";
+import type { AIAssistantMessage, AIMessage, AIToolResultMessage } from "@caelush/ai";
 
 import type { AgentToolCallsDecision } from "../decision/decision.js";
 import type { AgentTurnInput } from "../types.js";
@@ -16,14 +11,13 @@ import type { AgentTurnInput } from "../types.js";
  * before it spends any work on a turn:
  *
  * ```text
- * Layer A   is this AgentTurnInput internally consistent?
- * Layer B   does the caller's history agree with the decision it is resuming from?
+ * Layer A   is this durable-reference AgentTurnInput internally consistent?
+ * Layer B   does a compatibility caller's projected history agree with the decision it is resuming from?
  * ```
  *
- * Both are protocol questions about `AIMessage`, `AgentTurnInput` and `AgentDecision`. That is
- * why they live here and not in a host: the same checks must hold for a CLI, a daemon and a
- * test that drives the kernel with hand-written ports, and a host that reimplemented them
- * would be a second authority free to disagree about what a valid Tool result batch is.
+ * Layer A is about IDs and decision cardinality only. Message identity, ordering and Tool linkage
+ * are the Conversation Validator's question over the durable snapshot. The AI-message helpers below
+ * remain a compatibility authority for the legacy Core projector and do not participate in Phase 5D.
  *
  * What is deliberately *not* here:
  *
@@ -156,7 +150,10 @@ export function assertAgentTurnInput(value: unknown): asserts value is AgentTurn
   const input = value as { readonly kind?: unknown };
   switch (input.kind) {
     case "USER_INPUT":
-      assertUserMessages((input as { readonly messages?: unknown }).messages);
+      assertMessageId(
+        (input as { readonly userMessageId?: unknown }).userMessageId,
+        "EMPTY_USER_INPUT",
+      );
       return;
     case "TOOL_RESULTS":
       assertToolResultsTurn(input as ToolResultsTurn);
@@ -172,20 +169,17 @@ export function assertAgentTurnInput(value: unknown): asserts value is AgentTurn
 interface ToolResultsTurn {
   readonly sourceStepId?: unknown;
   readonly pendingDecision?: unknown;
-  readonly results?: unknown;
+  readonly toolResultMessageIds?: unknown;
 }
 
 interface ContinuationTurn {
   readonly reason?: unknown;
-  readonly messages?: unknown;
+  readonly messageIds?: unknown;
 }
 
-function assertUserMessages(messages: unknown): asserts messages is readonly AIUserMessage[] {
-  if (!Array.isArray(messages) || messages.length === 0) {
-    throw new AgentTurnInputError("EMPTY_USER_INPUT");
-  }
-  for (const [index, message] of messages.entries()) {
-    if (!isUserMessage(message)) throw new AgentTurnInputError("INVALID_USER_MESSAGE", index);
+function assertMessageId(value: unknown, reason: AgentTurnInputErrorReason): void {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new AgentTurnInputError(reason);
   }
 }
 
@@ -204,29 +198,22 @@ function assertToolResultsTurn(turn: ToolResultsTurn): void {
   if (!isToolCallsDecision(decision)) {
     throw new AgentTurnInputError("INVALID_TURN_INPUT_KIND");
   }
-  const results = turn.results;
-  if (!Array.isArray(results) || results.length === 0) {
+  const messageIds = turn.toolResultMessageIds;
+  if (!Array.isArray(messageIds) || messageIds.length === 0) {
     throw new AgentTurnInputError("EMPTY_TOOL_RESULTS");
   }
-  for (const [index, result] of results.entries()) {
-    if (!isToolResultMessage(result)) throw new AgentTurnInputError("INVALID_TOOL_RESULT", index);
+  for (const [index, messageId] of messageIds.entries()) {
+    if (typeof messageId !== "string" || messageId.length === 0) {
+      throw new AgentTurnInputError("INVALID_TOOL_RESULT", index);
+    }
   }
 
   const requests = decision.toolRequests;
   assertUniqueRequestIds(requests.map((request) => request.externalCallId));
-  assertUniqueResultIds(results.map((result) => result.toolCallId));
+  assertUniqueResultIds(messageIds);
 
-  if (requests.length !== results.length) {
+  if (requests.length !== messageIds.length) {
     throw new AgentTurnInputError("TOOL_RESULT_COUNT_MISMATCH");
-  }
-  for (const [index, result] of results.entries()) {
-    const request = requests[index];
-    if (request === undefined || result.toolCallId !== request.externalCallId) {
-      throw new AgentTurnInputError("TOOL_RESULT_ID_MISMATCH", index);
-    }
-    if (result.toolName !== request.toolName) {
-      throw new AgentTurnInputError("TOOL_RESULT_NAME_MISMATCH", index);
-    }
   }
 }
 
@@ -234,10 +221,15 @@ function assertContinuationTurn(turn: ContinuationTurn): void {
   if (typeof turn.reason !== "string" || !CONTINUATION_REASONS.includes(turn.reason)) {
     throw new AgentTurnInputError("INVALID_CONTINUATION_REASON");
   }
-  if (turn.messages === undefined) return;
-  if (!Array.isArray(turn.messages)) throw new AgentTurnInputError("INVALID_USER_MESSAGE");
-  for (const [index, message] of turn.messages.entries()) {
-    if (!isUserMessage(message)) throw new AgentTurnInputError("INVALID_USER_MESSAGE", index);
+  if (turn.messageIds === undefined) return;
+  if (!Array.isArray(turn.messageIds)) throw new AgentTurnInputError("INVALID_USER_MESSAGE");
+  const seen = new Set<string>();
+  for (const [index, messageId] of turn.messageIds.entries()) {
+    if (typeof messageId !== "string" || messageId.length === 0) {
+      throw new AgentTurnInputError("INVALID_USER_MESSAGE", index);
+    }
+    if (seen.has(messageId)) throw new AgentTurnInputError("DUPLICATE_TOOL_RESULT_ID", index);
+    seen.add(messageId);
   }
 }
 
@@ -368,36 +360,6 @@ function assertHistory(history: readonly AIMessage[]): void {
       throw new AgentTurnInputError("INVALID_HISTORY", index);
     }
   }
-}
-
-function isUserMessage(value: unknown): value is AIUserMessage {
-  if (typeof value !== "object" || value === null) return false;
-  const candidate = value as { readonly role?: unknown; readonly content?: unknown };
-  return (
-    candidate.role === "user" &&
-    typeof candidate.content === "string" &&
-    candidate.content.length > 0
-  );
-}
-
-function isToolResultMessage(value: unknown): value is AIToolResultMessage {
-  if (typeof value !== "object" || value === null) return false;
-  const candidate = value as {
-    readonly role?: unknown;
-    readonly toolCallId?: unknown;
-    readonly toolName?: unknown;
-    readonly content?: unknown;
-    readonly isError?: unknown;
-  };
-  return (
-    candidate.role === "tool" &&
-    typeof candidate.toolCallId === "string" &&
-    candidate.toolCallId.length > 0 &&
-    typeof candidate.toolName === "string" &&
-    candidate.toolName.length > 0 &&
-    typeof candidate.content === "string" &&
-    typeof candidate.isError === "boolean"
-  );
 }
 
 function isToolCallsDecision(value: unknown): value is AgentToolCallsDecision {

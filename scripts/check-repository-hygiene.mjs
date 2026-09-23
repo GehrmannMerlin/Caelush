@@ -1,3 +1,5 @@
+/* global console */
+
 import { readdir } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";

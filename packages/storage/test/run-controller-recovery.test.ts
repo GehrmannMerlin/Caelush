@@ -57,7 +57,9 @@ function controller(
       createStepId: () => createStepId(),
     }).factory,
     executionStore: storage.execution,
-    messages: testRunMessageAuthority(),
+    messages: testRunMessageAuthority({
+      records: (runId) => storage.messageRecords.listByRun(runId),
+    }),
     events: new EventBus(storage.events),
     configResolver: {
       resolve: async () => ({

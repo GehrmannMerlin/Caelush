@@ -4,9 +4,7 @@ import type {
   AIModelRequest,
   AIModelSettings,
   AIModelTurnResult,
-  AIToolResultMessage,
   AIToolSpec,
-  AIUserMessage,
   ModelDescriptor,
   ModelUsage,
 } from "@caelush/ai";
@@ -15,6 +13,7 @@ import type {
   AgentDecision,
   AgentDecisionClassifier,
   AgentExecutionIdentity,
+  AgentMessageId,
   AgentFinalCandidateDecision,
   AgentLoopAdvanceInput,
   AgentLoopAdvanceResult,
@@ -97,18 +96,18 @@ interface FrozenAgentTurnRef {
 type FrozenAgentTurnInput =
   | {
       readonly kind: "USER_INPUT";
-      readonly messages: readonly AIUserMessage[];
+      readonly userMessageId: AgentMessageId;
     }
   | {
       readonly kind: "TOOL_RESULTS";
       readonly sourceStepId: StepId;
       readonly pendingDecision: AgentToolCallsDecision;
-      readonly results: readonly AIToolResultMessage[];
+      readonly toolResultMessageIds: readonly AgentMessageId[];
     }
   | {
       readonly kind: "CONTINUATION";
       readonly reason: "VERIFICATION_REPAIR" | "STEERING";
-      readonly messages?: readonly AIUserMessage[];
+      readonly messageIds?: readonly AgentMessageId[];
     };
 
 interface FrozenContextBuildContribution {
@@ -150,7 +149,7 @@ interface FrozenAgentLoopContextReceipt {
 interface FrozenAgentLoopAdvanceInput {
   readonly identity: FrozenAgentExecutionIdentity;
   readonly turn: FrozenAgentTurnRef;
-  readonly history: readonly AIMessage[];
+  readonly conversation: import("@caelush/agent").AgentConversationSnapshot;
   readonly input: FrozenAgentTurnInput;
   readonly model: ModelDescriptor;
   readonly tools: readonly AIToolSpec[];
@@ -273,7 +272,7 @@ type AdvanceInputExact = Expect<Equal<AgentLoopAdvanceInput, FrozenAgentLoopAdva
 type AdvanceInputKeys = Expect<
   Equal<
     Keys<AgentLoopAdvanceInput>,
-    "identity" | "turn" | "history" | "input" | "model" | "tools" | "modelSettings" | "signal"
+    "identity" | "turn" | "conversation" | "input" | "model" | "tools" | "modelSettings" | "signal"
   >
 >;
 type ModelSettingsIsOptional = Expect<

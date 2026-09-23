@@ -1,4 +1,4 @@
-import type { AIMessage, AIModelSettings, AIToolSpec, ModelDescriptor } from "@caelush/ai";
+import type { AIModelSettings, AIToolSpec, ModelDescriptor } from "@caelush/ai";
 
 import type {
   AgentExecutionIdentity,
@@ -7,6 +7,7 @@ import type {
   ContextItem,
   PreparedModelContext,
 } from "../types.js";
+import type { AgentConversationSnapshot } from "../../messages/conversation/conversation-snapshot.js";
 
 /**
  * The frozen Context Engine boundary.
@@ -17,7 +18,7 @@ import type {
  *
  * One call prepares everything the model will be shown for exactly one turn. The loop never
  * builds context itself and never learns how it was built: it hands over the identity, the
- * turn, the history, the turn input, the resolved model, the tool catalog and the mode, and
+ * turn, the durable conversation snapshot, the turn input, the resolved model, the tool catalog and the mode, and
  * receives messages plus opaque diagnostics.
  *
  * The input is deliberately narrow, and the exclusions are the point:
@@ -60,8 +61,8 @@ export type ContextPrepareMode = "NORMAL" | "FORCED_RECOVERY";
 export interface ContextPrepareInput {
   readonly identity: AgentExecutionIdentity;
   readonly turn: AgentTurnRef;
-  /** The settled conversation before this turn. Never the current turn's own messages. */
-  readonly history: readonly AIMessage[];
+  /** The validated durable conversation source for this turn. */
+  readonly conversation: AgentConversationSnapshot;
   /** What this Reason is about: new user input, tool results, or a continuation. */
   readonly input: AgentTurnInput;
   /** The resolved model authority, so the engine can size its budget to it. */

@@ -211,7 +211,9 @@ async function setup(options: SetupOptions) {
   const controller = new RunController({
     agentExecution: agentExecution.factory,
     executionStore: instrumented,
-    messages: testRunMessageAuthority(),
+    messages: testRunMessageAuthority({
+      records: (runId) => storage.messageRecords.listByRun(runId),
+    }),
     completionStore,
     events: eventBus,
     configResolver: {
@@ -378,7 +380,9 @@ describe("production Agent effect cutover", () => {
     const controller = new RunController({
       agentExecution: agentExecution.factory,
       executionStore: storage.execution,
-      messages: testRunMessageAuthority(),
+      messages: testRunMessageAuthority({
+        records: (runId) => storage.messageRecords.listByRun(runId),
+      }),
       events: eventBus,
       configResolver: {
         resolve: async () => ({
