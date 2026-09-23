@@ -36,12 +36,12 @@ state machine.
 
 ## Applications
 
-| Application | Responsibility | Explicitly not its authority |
-| --- | --- | --- |
-| `apps/daemon` | Local service lifecycle, dependency composition, HTTP routes, SSE, and public projections | A second Agent implementation, provider registry, Tool executor, or UI state machine |
-| `apps/cli` | Interactive terminal presentation, input routing, reconnect/recovery UX, and typed client calls | Core, Runtime, Storage, Security, Provider, or Tool execution |
-| `apps/web` | Browser presentation, session UI, timeline projections, and typed HTTP/SSE client usage | Node Runtime, Agent execution, persistence, or permission decisions |
-| `apps/launcher` | Product startup, daemon discovery, version checks, leases, and process hand-off | Agent semantics, Tool execution, Storage ownership, or Provider work |
+| Application     | Responsibility                                                                                  | Explicitly not its authority                                                         |
+| --------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `apps/daemon`   | Local service lifecycle, dependency composition, HTTP routes, SSE, and public projections       | A second Agent implementation, provider registry, Tool executor, or UI state machine |
+| `apps/cli`      | Interactive terminal presentation, input routing, reconnect/recovery UX, and typed client calls | Core, Runtime, Storage, Security, Provider, or Tool execution                        |
+| `apps/web`      | Browser presentation, session UI, timeline projections, and typed HTTP/SSE client usage         | Node Runtime, Agent execution, persistence, or permission decisions                  |
+| `apps/launcher` | Product startup, daemon discovery, version checks, leases, and process hand-off                 | Agent semantics, Tool execution, Storage ownership, or Provider work                 |
 
 The daemon owns one process-scoped composition. The CLI and Web may have
 different presentation models, but their execution facts come from the same
@@ -49,24 +49,24 @@ durable Run and AgentEvent contracts.
 
 ## Package responsibilities
 
-| Package | Current authority |
-| --- | --- |
-| `@caelush/protocol` | JSON-safe IDs, entities, schemas, API DTOs, Run/Tool/Approval/Verification contracts, and cross-package event shapes. It is a low-level contract package. |
-| `@caelush/ai` | Provider-independent model domain, model descriptors, AI messages/tools, gateway lifecycle, adapters, stream validation, usage, and secret-safe AI errors. It does not know Runs or local Tools. |
-| `@caelush/agent` | General Agent Kernel contracts and implementation: AgentLoop, decisions, durable message domain, Tool registry/batch pipeline, Run execution ports, continuations, and recovery-facing data structures. It does not know concrete filesystem Tools or SQLite. |
-| `@caelush/core` | RunController and canonical lifecycle coordination: state transitions, durable Run/State/Step/Continuation commits, model-turn and Tool-turn boundaries, resource governance, and completion authority. |
-| `@caelush/context` | Workspace/project discovery, instructions, relevant-file planning, memory/context runtime coordination, and bounded model-input construction. It does not own provider invocation. |
-| `@caelush/coding-agent` | Coding composition layer and the single source of truth for built-in coding Tool definitions, operations adapters, Tool metadata, effects, output bounds, and coding prompt guidance. |
-| `@caelush/runtime` | Replaceable execution substrate. The current `LocalRuntime` owns workspace containment, bounded filesystem access, verified patching, shell/process sessions, and read-only Git operations. |
-| `@caelush/security` | Permission/capability policy, Tool execution gate, approval identity, sensitive-path and command policy, secret detection/redaction, and safe Tool-result presentation. It does not execute commands. |
-| `@caelush/storage` | SQLite opening/migrations and repositories for Protocol entities, Run execution snapshots, durable messages, Tool lifecycle, Verification, budgets, and durable events. Database rows do not become a second public state model. |
-| `@caelush/events` | Durable event contracts and EventBus replay/live-watch behavior. It owns event ordering at the interface; Storage supplies the durable implementation. |
-| `@caelush/verification` | Verification planning, bounded evidence, project checks, change/task review, repair workflow, freshness/integrity checks, and Verification results. It can provide evidence but cannot complete a Run. |
-| `@caelush/client` | Browser/host-safe HTTP and SSE transport plus client-side projections. |
-| `@caelush/llm` | Compatibility surface for durable conversation/turn schemas retained during the Message V2 migration. It is not the model invocation authority. |
-| `@caelush/memory` | Provider-independent memory records, sensitivity validation, and memory-store contracts used by Context composition. |
-| `@caelush/shared` | Small dependency-free shared boundary utilities such as path containment and project exclusions. |
-| `@caelush/observability` | Reserved observability package boundary; it currently exports no production API. |
+| Package                  | Current authority                                                                                                                                                                                                                                             |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@caelush/protocol`      | JSON-safe IDs, entities, schemas, API DTOs, Run/Tool/Approval/Verification contracts, and cross-package event shapes. It is a low-level contract package.                                                                                                     |
+| `@caelush/ai`            | Provider-independent model domain, model descriptors, AI messages/tools, gateway lifecycle, adapters, stream validation, usage, and secret-safe AI errors. It does not know Runs or local Tools.                                                              |
+| `@caelush/agent`         | General Agent Kernel contracts and implementation: AgentLoop, decisions, durable message domain, Tool registry/batch pipeline, Run execution ports, continuations, and recovery-facing data structures. It does not know concrete filesystem Tools or SQLite. |
+| `@caelush/core`          | RunController and canonical lifecycle coordination: state transitions, durable Run/State/Step/Continuation commits, model-turn and Tool-turn boundaries, resource governance, and completion authority.                                                       |
+| `@caelush/context`       | Workspace/project discovery, instructions, relevant-file planning, memory/context runtime coordination, and bounded model-input construction. It does not own provider invocation.                                                                            |
+| `@caelush/coding-agent`  | Coding composition layer and the single source of truth for built-in coding Tool definitions, operations adapters, Tool metadata, effects, output bounds, and coding prompt guidance.                                                                         |
+| `@caelush/runtime`       | Replaceable execution substrate. The current `LocalRuntime` owns workspace containment, bounded filesystem access, verified patching, shell/process sessions, and read-only Git operations.                                                                   |
+| `@caelush/security`      | Permission/capability policy, Tool execution gate, approval identity, sensitive-path and command policy, secret detection/redaction, and safe Tool-result presentation. It does not execute commands.                                                         |
+| `@caelush/storage`       | SQLite opening/migrations and repositories for Protocol entities, Run execution snapshots, durable messages, Tool lifecycle, Verification, budgets, and durable events. Database rows do not become a second public state model.                              |
+| `@caelush/events`        | Durable event contracts and EventBus replay/live-watch behavior. It owns event ordering at the interface; Storage supplies the durable implementation.                                                                                                        |
+| `@caelush/verification`  | Verification planning, bounded evidence, project checks, change/task review, repair workflow, freshness/integrity checks, and Verification results. It can provide evidence but cannot complete a Run.                                                        |
+| `@caelush/client`        | Browser/host-safe HTTP and SSE transport plus client-side projections.                                                                                                                                                                                        |
+| `@caelush/llm`           | Compatibility surface for durable conversation/turn schemas retained during the Message V2 migration. It is not the model invocation authority.                                                                                                               |
+| `@caelush/memory`        | Provider-independent memory records, sensitivity validation, and memory-store contracts used by Context composition.                                                                                                                                          |
+| `@caelush/shared`        | Small dependency-free shared boundary utilities such as path containment and project exclusions.                                                                                                                                                              |
+| `@caelush/observability` | Reserved observability package boundary; it currently exports no production API.                                                                                                                                                                              |
 
 ## Dependency direction
 
@@ -229,15 +229,15 @@ produce evidence but never own final completion.
 
 ## Architecture V2 status
 
-| Area | Current status |
-| --- | --- |
-| Architecture foundation and public boundaries | Complete |
-| AI domain and provider migration | Complete in the current composition |
-| Agent Kernel and durable Run boundaries | Complete in the current composition |
-| Tool System and Coding Agent composition | Complete in the current composition |
-| Message domain and storage foundation (5A/5B) | Complete |
-| Durable conversation runtime cutover (5C) | Complete; `AgentMessageRecord` is the Run boundary authority |
-| Message replay/consumer migration (5D and later) | Not started |
+| Area                                             | Current status                                               |
+| ------------------------------------------------ | ------------------------------------------------------------ |
+| Architecture foundation and public boundaries    | Complete                                                     |
+| AI domain and provider migration                 | Complete in the current composition                          |
+| Agent Kernel and durable Run boundaries          | Complete in the current composition                          |
+| Tool System and Coding Agent composition         | Complete in the current composition                          |
+| Message domain and storage foundation (5A/5B)    | Complete                                                     |
+| Durable conversation runtime cutover (5C)        | Complete; `AgentMessageRecord` is the Run boundary authority |
+| Message replay/consumer migration (5D and later) | Not started                                                  |
 
 The phase table describes the Message System migration line. Existing Runtime,
 Security, Verification, CLI, Web, and daemon layers are documented as current

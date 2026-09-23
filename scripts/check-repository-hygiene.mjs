@@ -56,9 +56,7 @@ async function walkRepository(root, relativeDirectory = "") {
 
   const violations = [];
   for (const entry of entries) {
-    const relativePath = relativeDirectory
-      ? path.join(relativeDirectory, entry.name)
-      : entry.name;
+    const relativePath = relativeDirectory ? path.join(relativeDirectory, entry.name) : entry.name;
     const normalized = normalizeRelativePath(relativePath);
 
     if (entry.isDirectory() && IGNORED_DIRECTORIES.has(entry.name)) continue;
@@ -76,9 +74,7 @@ async function walkRepository(root, relativeDirectory = "") {
 }
 
 export async function collectViolations(root = REPOSITORY_ROOT) {
-  return [...new Set(await walkRepository(root))].sort((left, right) =>
-    left.localeCompare(right),
-  );
+  return [...new Set(await walkRepository(root))].sort((left, right) => left.localeCompare(right));
 }
 
 export async function main() {
@@ -93,6 +89,9 @@ export async function main() {
   console.log("Repository hygiene check passed.");
 }
 
-if (process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (
+  process.argv[1] !== undefined &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
   await main();
 }

@@ -253,16 +253,16 @@ relevant Prettier check.
 
 ## Architecture V2 status
 
-| Migration boundary | Status |
-| --- | --- |
-| Phase 1 — architecture foundation and public boundaries | Complete |
-| Phase 2 — AI domain and provider migration | Complete |
-| Phase 3 — Agent Kernel and durable Run boundaries | Complete |
-| Phase 4 — Tool System and Coding Agent composition | Complete |
-| Phase 5A — Message domain foundation | Complete |
-| Phase 5B — Message storage foundation | Complete |
-| Phase 5C — durable conversation runtime cutover | Complete |
-| Phase 5D and later Message V2 consumer migration | Not started |
+| Migration boundary                                      | Status      |
+| ------------------------------------------------------- | ----------- |
+| Phase 1 — architecture foundation and public boundaries | Complete    |
+| Phase 2 — AI domain and provider migration              | Complete    |
+| Phase 3 — Agent Kernel and durable Run boundaries       | Complete    |
+| Phase 4 — Tool System and Coding Agent composition      | Complete    |
+| Phase 5A — Message domain foundation                    | Complete    |
+| Phase 5B — Message storage foundation                   | Complete    |
+| Phase 5C — durable conversation runtime cutover         | Complete    |
+| Phase 5D and later Message V2 consumer migration        | Not started |
 
 The status table is specifically the Message System migration boundary. The
 repository also contains the current Runtime, Security, Verification, daemon,
