@@ -31,6 +31,9 @@ jobs:
       - name: Enable Corepack
         run: corepack enable
 
+      - name: Run repository hygiene gate
+        run: node scripts/check-repository-hygiene.mjs
+
       - name: Install dependencies
         run: corepack pnpm@11.21.0 install --frozen-lockfile
 

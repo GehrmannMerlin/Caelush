@@ -10,3 +10,7 @@ test-results/
 .env
 .env.*
 !.env.example
+.superpowers/
+docs/superpowers/
+docs/reports/
+docs/characterization/
