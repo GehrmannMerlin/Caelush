@@ -17,6 +17,7 @@ import {
 import { buildDaemonApp } from "./app.js";
 import { assertLoopbackDaemonHost, createDaemonConfig, type DaemonConfig } from "./config.js";
 import { composeDaemon, type DaemonComposition } from "./daemon-composition.js";
+import { SessionTranscriptService } from "./services/session-transcript-service.js";
 import type { DaemonModelProviderConfig } from "./providers/model-canonicalizer.js";
 import type { WebStaticHostOptions } from "./web/static-host.js";
 
@@ -135,6 +136,13 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       execution: composition,
       info: composition.info,
       modelCanonicalizer: composition.modelCanonicalizer,
+      transcript: new SessionTranscriptService({
+        sessions: storage.sessions,
+        runs: storage.runs,
+        messageRecords: storage.messageRecords,
+        codecs: composition.messages.codecs,
+        transcriptProjectors: composition.transcriptProjectors,
+      }),
       ...(options.logger === undefined ? {} : { logger: options.logger }),
       ...(options.web === undefined ? {} : { web: options.web }),
     });

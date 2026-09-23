@@ -19,6 +19,7 @@ export {
   nonTerminalRuns,
   normalizeWorkspacePath,
   otherWorkspaceError,
+  reconcileSessionTranscript,
   resolveSessionWorkspace,
   SESSION_ENRICH_CONCURRENCY,
   sortSessionCandidates,
@@ -28,5 +29,5 @@ export * from "./control/index.js";
 export type {
   SessionCandidate,
   SessionCandidateClient,
-  SessionHistoryEntry,
+  TranscriptEntry,
 } from "./session-projection.js";

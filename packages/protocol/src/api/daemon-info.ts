@@ -27,6 +27,7 @@ const DaemonCapabilitiesSchema = z
     cancellation: z.literal(true),
     approvals: z.literal(true),
     sseReplay: z.literal(true),
+    sessionTranscript: z.literal(true).optional(),
   })
   .strict();
 

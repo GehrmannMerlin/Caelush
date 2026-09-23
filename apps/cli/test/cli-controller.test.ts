@@ -177,7 +177,14 @@ describe("CliConversationController", () => {
 
     expect(calls).toEqual(["createRun", "watch", "startRun"]);
     expect(controller.getState().displayHistory).toEqual([
-      { id: "user-1", kind: "USER", text: "the first prompt", runId: run.id },
+      {
+        id: "user-1",
+        conversationTurnId: run.id,
+        createdAt: run.createdAt,
+        kind: "USER",
+        text: "the first prompt",
+        runId: run.id,
+      },
     ]);
     expect(controller.getState().composerEnabled).toBe(false);
     controller.dispose();

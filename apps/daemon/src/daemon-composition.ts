@@ -49,9 +49,13 @@ import {
   createAgentConversationValidator,
   createConversationSelector,
   createDeterministicConversationTurnIdFactory,
-  createStandardAgentMessageCodecRegistry,
-  createStandardAgentMessageProjectorRegistry,
+  createAgentMessageCodecRegistry,
+  createAgentMessageProjectorRegistry,
+  createAgentMessageTranscriptProjectorRegistry,
   createModelTurnExecutor,
+  STANDARD_AGENT_MESSAGE_CODECS,
+  STANDARD_AGENT_MESSAGE_PROJECTORS,
+  STANDARD_AGENT_MESSAGE_TRANSCRIPT_PROJECTORS,
 } from "@caelush/agent";
 import type { AgentExecutionIdentity } from "@caelush/agent";
 import type {
@@ -113,6 +117,9 @@ import {
 } from "@caelush/agent";
 import {
   createCodingToolAdmissionPort,
+  CODING_COMMAND_EXECUTION_MESSAGE_CODEC_V1,
+  CODING_COMMAND_EXECUTION_MESSAGE_PROJECTOR_V1,
+  CODING_COMMAND_EXECUTION_TRANSCRIPT_PROJECTOR,
   createCodingToolDurableMetadataPort,
   createCodingToolSettlementExtensionProjector,
   createDefaultCodingTools,
@@ -309,6 +316,7 @@ export interface DaemonComposition {
    */
   readonly toolTurn: ToolTurnPipeline;
   readonly messages: RunMessageAuthority;
+  readonly transcriptProjectors: import("@caelush/agent").AgentMessageTranscriptProjectorRegistry;
   readonly contextRuntime: ContextRuntimeCoordinator;
   readonly contextUsage: {
     getContextUsage(
@@ -434,10 +442,22 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       return artifact?.runId === runId ? artifact.content : undefined;
     },
   });
-  const messageProjectors = createStandardAgentMessageProjectorRegistry();
-  const messageCodecs = createStandardAgentMessageCodecRegistry((type) =>
-    messageProjectors.currentVersion(type),
-  );
+  const messageProjectors = createAgentMessageProjectorRegistry({
+    projectors: [
+      ...STANDARD_AGENT_MESSAGE_PROJECTORS,
+      CODING_COMMAND_EXECUTION_MESSAGE_PROJECTOR_V1,
+    ],
+  });
+  const messageCodecs = createAgentMessageCodecRegistry({
+    codecs: [...STANDARD_AGENT_MESSAGE_CODECS, CODING_COMMAND_EXECUTION_MESSAGE_CODEC_V1],
+    projectionVersionOf: (type) => messageProjectors.currentVersion(type),
+  });
+  const transcriptProjectors = createAgentMessageTranscriptProjectorRegistry({
+    projectors: [
+      ...STANDARD_AGENT_MESSAGE_TRANSCRIPT_PROJECTORS,
+      CODING_COMMAND_EXECUTION_TRANSCRIPT_PROJECTOR,
+    ],
+  });
   const messageTurns = createDeterministicConversationTurnIdFactory();
   const conversation = createAgentConversationRepository({
     codecs: messageCodecs,
@@ -928,6 +948,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       cancellation: true,
       approvals: true,
       sseReplay: true,
+      sessionTranscript: true,
     },
     runtimeKinds: ["local"],
     configuredProviders: ai.providers.list().map((provider) => provider.id),
@@ -947,6 +968,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     toolRegistry: activeToolRegistry,
     toolTurn,
     messages,
+    transcriptProjectors,
     contextRuntime,
     contextUsage: {
       getContextUsage: async (runId) => {

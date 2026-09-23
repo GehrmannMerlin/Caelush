@@ -626,6 +626,13 @@ describe("Phase 2C package edges", () => {
         "toolFeedbackPolicySnapshot",
         "toolResultObservation",
         "toolResultObservationId",
+        "AGENT_ASSISTANT_MESSAGE_TRANSCRIPT_PROJECTOR",
+        "AGENT_TOOL_RESULT_MESSAGE_TRANSCRIPT_PROJECTOR",
+        "AGENT_USER_MESSAGE_TRANSCRIPT_PROJECTOR",
+        "STANDARD_AGENT_MESSAGE_TRANSCRIPT_PROJECTORS",
+        "createAgentMessageTranscriptProjectorRegistry",
+        "createStandardAgentMessageTranscriptProjectorRegistry",
+        "unsupportedHistoricalTranscriptEntry",
         // --- Phase 5B: the durable storage contracts and the migration identity. The kernel now owns
         // the record store port and the conversation repository the storage layer implements, the
         // deterministic identity a legacy backfill derives, and the JSON-safe projection receipt mirror

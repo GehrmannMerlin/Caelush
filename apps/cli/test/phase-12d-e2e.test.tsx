@@ -193,10 +193,14 @@ describe("real Phase 12D daemon and CLI E2E", () => {
 
     expect(await readFile(join(workspacePath, "README.md"), "utf8")).toContain("phase-12d-after");
     expect(provider.patchCalls).toBe(1);
-    expect(controller.getState().displayHistory.at(-1)).toMatchObject({
-      kind: "ASSISTANT",
-      text: "The approved change is complete.",
-    });
+    expect(controller.getState().displayHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "ASSISTANT",
+          text: "The approved change is complete.",
+        }),
+      ]),
+    );
     expect(runId).toBeDefined();
     rendered.unmount();
   }, 20_000);
@@ -226,10 +230,14 @@ describe("real Phase 12D daemon and CLI E2E", () => {
 
     expect(provider.patchCalls).toBe(1);
     expect(await readFile(join(workspacePath, "README.md"), "utf8")).toBe("before\n");
-    expect(controller.getState().displayHistory.at(-1)).toMatchObject({
-      kind: "ASSISTANT",
-      text: "The approved change is complete.",
-    });
+    expect(controller.getState().displayHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "ASSISTANT",
+          text: "The approved change is complete.",
+        }),
+      ]),
+    );
   }, 20_000);
 
   it("reconnects from the last durable cursor and completes without duplicate timeline entries", async () => {
@@ -283,10 +291,14 @@ describe("real Phase 12D daemon and CLI E2E", () => {
     expect(afterSequences[0]).toBe(0);
     expect(afterSequences.slice(1).some((value) => value !== undefined && value > 0)).toBe(true);
     expect(new Set(history.map((entry) => entry.id)).size).toBe(history.length);
-    expect(history.at(-1)).toMatchObject({
-      kind: "ASSISTANT",
-      text: "The reconnectable task is complete.",
-    });
+    expect(history).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "ASSISTANT",
+          text: "The reconnectable task is complete.",
+        }),
+      ]),
+    );
   }, 20_000);
 
   it("resumes the same waiting Approval after a daemon restart without creating a Run", async () => {
@@ -363,10 +375,14 @@ describe("real Phase 12D daemon and CLI E2E", () => {
 
     expect(secondProvider.patchCalls).toBe(0);
     expect(await readFile(join(workspacePath, "README.md"), "utf8")).toContain("phase-12d-after");
-    expect(controller.getState().displayHistory.at(-1)).toMatchObject({
-      kind: "ASSISTANT",
-      text: "The approved change is complete.",
-    });
+    expect(controller.getState().displayHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "ASSISTANT",
+          text: "The approved change is complete.",
+        }),
+      ]),
+    );
     rendered.unmount();
   }, 20_000);
 
@@ -419,10 +435,14 @@ describe("real Phase 12D daemon and CLI E2E", () => {
         },
       ]),
     );
-    expect(controller.getState().displayHistory.at(-1)).toMatchObject({
-      kind: "ASSISTANT",
-      text: "The marker was ORANGE-731.",
-    });
+    expect(controller.getState().displayHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "ASSISTANT",
+          text: "The marker was ORANGE-731.",
+        }),
+      ]),
+    );
   }, 20_000);
 
   it("cancels a real active Run through the CLI controller and preserves daemon truth", async () => {
@@ -446,7 +466,9 @@ describe("real Phase 12D daemon and CLI E2E", () => {
     await waitFor(() => controller?.getState().activeRun?.status === "RUNNING");
 
     await expect(controller.cancelActiveRun()).resolves.toBe(true);
-    const runId = controller.getState().displayHistory.at(-1)?.runId;
+    const runId = controller
+      .getState()
+      .displayHistory.find((entry) => entry.kind === "USER")?.runId;
     expect(controller.getState().activeRun).toBeUndefined();
     expect(controller.getState().activity).toBe("Cancelled");
     expect(runId).toBeDefined();

@@ -186,3 +186,10 @@ export type {
   ToolSecurityFactsProjector,
   ToolShellCommandFact,
 } from "./tools/index.js";
+
+export {
+  CODING_COMMAND_EXECUTION_MESSAGE_CODEC_V1,
+  CODING_COMMAND_EXECUTION_MESSAGE_PROJECTOR_V1,
+  CODING_COMMAND_EXECUTION_TRANSCRIPT_PROJECTOR,
+} from "./messages/command-execution.js";
+export type { CodingCommandExecutionMessage } from "./messages/command-execution.js";

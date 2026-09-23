@@ -242,10 +242,25 @@ reports selected/dropped IDs, an AI-projection token estimate, and
 records. Context owns materialization and has no Storage dependency.
 
 The compatibility boundary is deliberate: legacy readers, physical columns,
-client transcript projections, and the `@caelush/llm` schema surface remain
-until the later Message V2 migration phases. Phase 5E will migrate transcript
-and client projections; Phase 5F will retire the remaining legacy readers and
-schemas. Neither later phase is part of the current source cutover.
+and the `@caelush/llm` schema surface remain after the Phase 5E cutover. The
+daemon now projects `AgentMessageRecord[]` into Protocol `TranscriptEntry[]`
+through the server-side Agent projector registry at
+`GET /api/v1/sessions/:sessionId/transcript`. CLI and Web use that endpoint
+when the additive `sessionTranscript` capability is present and retain a
+run-based hydration path only for older daemons. Phase 5F will retire the
+remaining legacy readers and schemas; it is not part of this source cutover.
+
+Transcript and Timeline are separate projections:
+
+```text
+AgentMessageRecord[] → AgentMessage → AI projector        → model input
+AgentMessageRecord[] → AgentMessage → Transcript projector → TranscriptEntry[]
+AgentEvent[]         → host event reducer                  → Timeline
+```
+
+Transcript projection honors `audience.transcript`, emits only safe public
+fields, and degrades unknown historical transcript-visible messages to a fixed
+placeholder. It never serializes raw durable records or provider state.
 
 ## Verification and completion authority
 
@@ -271,8 +286,8 @@ produce evidence but never own final completion.
 | Message domain and storage foundation (5A/5B) | Complete                                                     |
 | Durable conversation runtime cutover (5C)     | Complete; `AgentMessageRecord` is the Run boundary authority |
 | Context and replay cutover (5D)               | Complete                                                     |
-| Transcript/client projection migration (5E)   | Not started                                                  |
-| Legacy Message V2 retirement (5F)             | Not started                                                  |
+| Transcript/client projection migration (5E)   | COMPLETE; daemon-owned Protocol Transcript projection        |
+| Legacy Message V2 retirement (5F)             | NOT STARTED                                                  |
 
 The phase table describes the Message System migration line. Existing Runtime,
 Security, Verification, CLI, Web, and daemon layers are documented as current
@@ -283,7 +298,6 @@ phase boundary in this task.
 
 The current architecture must not be described as already providing:
 
-- Phase 5E transcript/client projection migration;
 - Phase 5F legacy Message V2 reader/schema retirement;
 - production MCP, Skills, Browser Agent, Computer Use, Web Search, or Multi-Agent;
 - true parallel Tool execution;
@@ -291,7 +305,7 @@ The current architecture must not be described as already providing:
 - a provider-specific public SDK or raw model chain-of-thought surface.
 
 Those capabilities require new contracts and deliberate future work. They do
-not belong in the current Phase 5D source freeze.
+not belong in the current Phase 5E source freeze.
 
 ## Reference material
 

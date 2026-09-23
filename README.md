@@ -15,8 +15,9 @@ clients of the same execution authority rather than separate Agent
 implementations.
 
 The project is in active Architecture V2 development. The current Message
-System migration is complete through Phase 5D. Phase 5E transcript/client
-projection migration and Phase 5F legacy retirement remain future work.
+System migration is complete through Phase 5E. The daemon now owns the
+server-side Transcript projection and CLI/Web consume the Protocol Transcript;
+Phase 5F legacy retirement remains future work.
 
 ## What Caelush provides
 
@@ -112,9 +113,23 @@ stored projection and projection version; a missing model-visible codec or
 projector fails closed. Selection reports selected/dropped IDs, token estimate,
 and compaction pressure without rewriting or deleting durable records.
 
-Compatibility readers, physical columns, client transcript projections, and
-the `@caelush/llm` schema surface remain intentionally while Phase 5E and 5F
-are deferred.
+Compatibility readers, physical columns, and the `@caelush/llm` schema surface
+remain intentionally after the Phase 5E cutover. The normal client path is
+`GET /api/v1/sessions/:sessionId/transcript`; Phase 5F will retire the
+remaining legacy readers and physical schema only after a separate cutover.
+
+The public conversation surfaces are deliberately separate:
+
+```text
+AgentMessageRecord[] → AgentMessage → AI projector → model input
+AgentMessageRecord[] → AgentMessage → Transcript projector → Protocol TranscriptEntry[]
+AgentEvent[]         → CLI/Web event reducer → Timeline
+```
+
+Transcript projection is audience-controlled: standard Tool results remain
+model-visible but are not transcript-visible by default. Unknown historical
+transcript-visible message types degrade to a fixed safe placeholder rather
+than exposing stored payloads.
 
 ## Coding Tool surface
 
@@ -286,8 +301,8 @@ runtime: Phase 9C sanitizer injection, Phase 9D — V1 Security Integration, Pha
 | Phase 5B — Message storage foundation                   | Complete    |
 | Phase 5C — durable conversation runtime cutover         | Complete    |
 | Phase 5D — Context & replay cutover                     | Complete    |
-| Phase 5E — transcript/client projection migration       | Not started |
-| Phase 5F — legacy Message V2 retirement                 | Not started |
+| Phase 5E — transcript/client projection migration       | COMPLETE    |
+| Phase 5F — legacy Message V2 retirement                 | NOT STARTED |
 
 The status table is specifically the Message System migration boundary. The
 repository also contains the current Runtime, Security, Verification, daemon,
@@ -299,7 +314,6 @@ Message V2 phases have begun.
 Caelush is not presented as a frozen public SDK or a universal sandbox. The
 following remain future boundaries or explicit limitations:
 
-- Message V2 Phase 5E transcript/client projection migration.
 - Message V2 Phase 5F legacy schema/reader retirement.
 - Production MCP integration, Skills, Browser Agent, Computer Use, and Web
   Search.

@@ -3,14 +3,22 @@ import {
   CreateSessionRequestSchema,
   SessionListQuerySchema,
   SessionListResponseSchema,
+  SessionTranscriptQuerySchema,
+  SessionTranscriptResponseSchema,
   type CreateSessionRequest,
   type SessionListQuery,
+  type SessionTranscriptQuery,
 } from "@caelush/protocol";
 import type { FastifyInstance } from "fastify";
 import { SessionService } from "../services/session-service.js";
+import { SessionTranscriptService } from "../services/session-transcript-service.js";
 import { toClientAgentSession } from "../services/public-projection.js";
 
-export function registerSessionRoutes(app: FastifyInstance, service: SessionService): void {
+export function registerSessionRoutes(
+  app: FastifyInstance,
+  service: SessionService,
+  dependencies: { readonly transcript?: SessionTranscriptService } = {},
+): void {
   app.post(
     "/api/v1/sessions",
     { schema: { body: CreateSessionRequestSchema, response: { 201: ClientAgentSessionSchema } } },
@@ -39,4 +47,21 @@ export function registerSessionRoutes(app: FastifyInstance, service: SessionServ
       return toClientAgentSession(await service.getSession(sessionId as never));
     },
   );
+
+  if (dependencies.transcript !== undefined) {
+    app.get(
+      "/api/v1/sessions/:sessionId/transcript",
+      {
+        schema: {
+          querystring: SessionTranscriptQuerySchema,
+          response: { 200: SessionTranscriptResponseSchema },
+        },
+      },
+      async (request) => {
+        const { sessionId } = request.params as { sessionId: string };
+        const query = request.query as SessionTranscriptQuery;
+        return dependencies.transcript!.getTranscript(sessionId as never, query);
+      },
+    );
+  }
 }

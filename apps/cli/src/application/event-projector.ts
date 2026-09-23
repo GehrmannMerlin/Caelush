@@ -57,7 +57,13 @@ function appendSettledTimeline(
 }
 
 function isTimelineEntry(entry: CliViewState["displayHistory"][number]): entry is CliTimelineEntry {
-  return entry.kind !== "USER" && entry.kind !== "ASSISTANT" && entry.kind !== "RUN_TERMINAL";
+  return (
+    entry.kind !== "USER" &&
+    entry.kind !== "ASSISTANT" &&
+    entry.kind !== "TOOL_RESULT" &&
+    entry.kind !== "CUSTOM" &&
+    entry.kind !== "RUN_TERMINAL"
+  );
 }
 
 function asTerminalStatus(

@@ -15,6 +15,8 @@ import {
   RunListResponseSchema,
   SessionListQuerySchema,
   SessionListResponseSchema,
+  SessionTranscriptQuerySchema,
+  SessionTranscriptResponseSchema,
   type AgentEvent,
   type ApiErrorCode,
   type ApprovalListResponse,
@@ -32,6 +34,8 @@ import {
   type SessionId,
   type SessionListQuery,
   type SessionListResponse,
+  type SessionTranscriptQuery,
+  type SessionTranscriptResponse,
 } from "@caelush/protocol";
 import { ApprovalRequestIdSchema } from "@caelush/protocol";
 
@@ -150,6 +154,23 @@ export class CaelushClient {
       `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
       { method: "GET" },
       ClientAgentSessionSchema,
+      [200],
+      options,
+    );
+  }
+
+  async getSessionTranscript(
+    sessionId: SessionId,
+    query: Partial<SessionTranscriptQuery> = {},
+    options: CaelushClientRequestOptions = {},
+  ): Promise<SessionTranscriptResponse> {
+    const parsed = SessionTranscriptQuerySchema.parse(query);
+    const cursor =
+      parsed.cursor === undefined ? "" : `&cursor=${encodeURIComponent(parsed.cursor)}`;
+    return this.request(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/transcript?limit=${encodeURIComponent(String(parsed.limit))}${cursor}`,
+      { method: "GET" },
+      SessionTranscriptResponseSchema,
       [200],
       options,
     );

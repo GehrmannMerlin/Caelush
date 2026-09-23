@@ -757,3 +757,18 @@ export type {
   ToolFeedbackProjectionReceipt,
   ToolResultObservationRef,
 } from "./messages/index.js";
+
+/* The user-visible transcript projection. */
+export {
+  AGENT_ASSISTANT_MESSAGE_TRANSCRIPT_PROJECTOR,
+  AGENT_TOOL_RESULT_MESSAGE_TRANSCRIPT_PROJECTOR,
+  AGENT_USER_MESSAGE_TRANSCRIPT_PROJECTOR,
+  STANDARD_AGENT_MESSAGE_TRANSCRIPT_PROJECTORS,
+  unsupportedHistoricalTranscriptEntry,
+} from "./messages/transcript/projector.js";
+export type { AgentMessageTranscriptProjector } from "./messages/transcript/projector.js";
+export {
+  createAgentMessageTranscriptProjectorRegistry,
+  createStandardAgentMessageTranscriptProjectorRegistry,
+} from "./messages/transcript/registry.js";
+export type { AgentMessageTranscriptProjectorRegistry } from "./messages/transcript/registry.js";

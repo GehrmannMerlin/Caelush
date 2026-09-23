@@ -12,6 +12,8 @@ import {
   type ClientAgentSession,
   type DaemonInfo,
   type RunActionResponse,
+  type SessionTranscriptResponse,
+  type TranscriptEntry,
   type WorkspaceRef,
 } from "@caelush/protocol";
 import type { WatchRunEventsOptions } from "@caelush/client";
@@ -123,12 +125,45 @@ describe("WebSessionManager", () => {
     expect(manager.getSnapshot()).toMatchObject({
       selectedSessionId: session.id,
       composerEnabled: true,
-      history: [
-        { kind: "USER", text: "repair login" },
-        { kind: "ASSISTANT", text: "verified answer" },
-      ],
+      history: expect.arrayContaining([
+        expect.objectContaining({ kind: "USER", text: "repair login" }),
+        expect.objectContaining({ kind: "ASSISTANT", text: "verified answer" }),
+      ]),
     });
 
+    manager.dispose();
+  });
+
+  it("reconciles an optimistic Web user entry with the canonical transcript by Run identity", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const pendingRun = makeRun({ sessionId: session.id, goal: "canonical web prompt" });
+    const durableUser: TranscriptEntry = {
+      id: "amsg_0192f5b1-4d3a-7c2e-8a91-000000000006",
+      runId: pendingRun.id,
+      conversationTurnId: pendingRun.id,
+      createdAt: pendingRun.createdAt,
+      kind: "USER",
+      text: pendingRun.goal,
+    };
+    const transcriptResponse: SessionTranscriptResponse = { items: [durableUser] };
+    const client = makeClient({
+      createSessionResult: session,
+      createRunResult: pendingRun,
+      transcriptResponse,
+    });
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      info: makeInfo({
+        capabilities: { ...makeInfo().capabilities, sessionTranscript: true },
+      }),
+    });
+    manager.beginDraft();
+
+    await expect(manager.submitPrompt(pendingRun.goal)).resolves.toBe(true);
+
+    expect(client.getSessionTranscript).toHaveBeenCalled();
+    expect(manager.getSnapshot().history).toEqual([durableUser]);
     manager.dispose();
   });
 
@@ -352,17 +387,28 @@ describe("WebSessionManager", () => {
     expect(manager.getSnapshot().history).toEqual([
       {
         id: `history:user:${previousRun.id}`,
+        conversationTurnId: previousRun.id,
+        createdAt: previousRun.createdAt,
         kind: "USER",
         text: "previous task",
         runId: previousRun.id,
       },
       {
         id: `history:assistant:${previousRun.id}`,
+        conversationTurnId: previousRun.id,
+        createdAt: previousRun.finishedAt,
         kind: "ASSISTANT",
         text: "verified answer",
         runId: previousRun.id,
       },
-      { id: `history:user:${nextRun.id}`, kind: "USER", text: "next task", runId: nextRun.id },
+      {
+        id: `history:user:${nextRun.id}`,
+        conversationTurnId: nextRun.id,
+        createdAt: nextRun.createdAt,
+        kind: "USER",
+        text: "next task",
+        runId: nextRun.id,
+      },
     ]);
     manager.dispose();
   });
@@ -512,12 +558,14 @@ function makeClient(
     createRunResult?: ClientAgentRun;
     watchEvents?: readonly AgentEvent[];
     refreshedRuns?: readonly ClientAgentRun[];
+    transcriptResponse?: SessionTranscriptResponse;
   } = {},
 ): WebSessionClient & {
   readonly createSession: ReturnType<typeof vi.fn>;
   readonly createRun: ReturnType<typeof vi.fn>;
   readonly startRun: ReturnType<typeof vi.fn>;
   readonly getRun: ReturnType<typeof vi.fn>;
+  readonly getSessionTranscript: ReturnType<typeof vi.fn>;
   readonly watchRunEvents: ReturnType<typeof vi.fn>;
   readonly watchEvents: readonly AgentEvent[];
 } {
@@ -542,6 +590,7 @@ function makeClient(
     getRun: vi.fn(
       async () => options.refreshedRuns?.at(-1) ?? options.createRunResult ?? makeRun(),
     ),
+    getSessionTranscript: vi.fn(async () => options.transcriptResponse ?? { items: [] }),
     startRun: vi.fn(async (runId: string) =>
       actionResponse(options.createRunResult ?? makeRun(), runId),
     ),
@@ -555,6 +604,7 @@ function makeClient(
     readonly createRun: ReturnType<typeof vi.fn>;
     readonly startRun: ReturnType<typeof vi.fn>;
     readonly getRun: ReturnType<typeof vi.fn>;
+    readonly getSessionTranscript: ReturnType<typeof vi.fn>;
     readonly watchRunEvents: ReturnType<typeof vi.fn>;
     readonly watchEvents: readonly AgentEvent[];
   };

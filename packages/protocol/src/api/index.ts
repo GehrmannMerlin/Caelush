@@ -25,6 +25,30 @@ export type {
 export { HealthResponseSchema } from "./health.js";
 export type { HealthResponse } from "./health.js";
 export {
+  AssistantTranscriptEntrySchema,
+  CustomTranscriptEntrySchema,
+  RunTerminalTranscriptEntrySchema,
+  SessionTranscriptQuerySchema,
+  SessionTranscriptResponseSchema,
+  ToolTranscriptEntrySchema,
+  TranscriptAttachmentRefSchema,
+  TranscriptEntryBaseSchema,
+  TranscriptEntrySchema,
+  UserTranscriptEntrySchema,
+} from "./transcript.js";
+export type {
+  AssistantTranscriptEntry,
+  CustomTranscriptEntry,
+  RunTerminalTranscriptEntry,
+  SessionTranscriptQuery,
+  SessionTranscriptResponse,
+  ToolTranscriptEntry,
+  TranscriptAttachmentRef,
+  TranscriptEntry,
+  TranscriptEntryBase,
+  UserTranscriptEntry,
+} from "./transcript.js";
+export {
   CreateSessionRequestSchema,
   SessionListQuerySchema,
   SessionListResponseSchema,

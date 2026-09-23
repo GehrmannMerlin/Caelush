@@ -11,6 +11,7 @@ import {
   isTerminalRunStatus,
   listMatchingSessionCandidates,
   nonTerminalRuns,
+  reconcileSessionTranscript,
   reduceTimelineEvent,
   ReconnectScheduler,
   resolveSessionWorkspace,
@@ -18,7 +19,7 @@ import {
   type SessionCandidate,
   type ApprovalView,
   type SessionCandidateClient,
-  type SessionHistoryEntry,
+  type TranscriptEntry,
   type TimelineState,
   type Timer,
   type WatchRunEventsOptions,
@@ -36,6 +37,7 @@ import type {
   RunId,
   RunStatus,
   SessionId,
+  SessionTranscriptResponse,
   WorkspaceRef,
   ContextUsageProjection,
 } from "@caelush/protocol";
@@ -47,6 +49,10 @@ export interface WebSessionClient extends SessionCandidateClient, WebHostClient 
   createSession(input: CreateSessionRequest): Promise<ClientAgentSession>;
   createRun(sessionId: SessionId, input: CreateRunRequest): Promise<ClientAgentRun>;
   getRun(runId: RunId): Promise<ClientAgentRun>;
+  getSessionTranscript?(
+    sessionId: SessionId,
+    query?: { readonly limit?: number; readonly cursor?: string },
+  ): Promise<SessionTranscriptResponse>;
   listPendingApprovals(
     runId: RunId,
   ): Promise<{ readonly items: readonly import("@caelush/protocol").ApprovalRequest[] }>;
@@ -105,7 +111,7 @@ export interface WebSessionSnapshot {
   readonly selectedSession?: ClientAgentSession;
   readonly selectedSessionId?: SessionId;
   readonly runs: readonly ClientAgentRun[];
-  readonly history: readonly SessionHistoryEntry[];
+  readonly history: readonly TranscriptEntry[];
   readonly activeRuns: readonly ClientAgentRun[];
   readonly activeRun?: ClientAgentRun;
   readonly timeline: TimelineState;
@@ -256,7 +262,7 @@ export class WebSessionManager {
           selectedSession: candidate.session,
           selectedSessionId: candidate.session.id,
           runs,
-          history: hydrateSessionTranscript(runs),
+          history: await this.loadSessionTranscript(sessionId, runs),
           activeRuns: [],
           activeRun: undefined,
           timeline: createInitialTimelineState(),
@@ -329,11 +335,19 @@ export class WebSessionManager {
         ...this.options.info.defaultRunConfiguration,
       });
       const runs = [...this.snapshot.runs, run];
+      const optimisticUser: TranscriptEntry = {
+        id: `optimistic:user:${run.id}`,
+        runId: run.id,
+        conversationTurnId: run.id,
+        createdAt: run.createdAt,
+        kind: "USER",
+        text: goal,
+      };
       this.publish({
         candidates: this.upsertCandidate(session, run),
         status: "READY",
         runs,
-        history: hydrateSessionTranscript(runs, run.id),
+        history: await this.loadSessionTranscript(session.id, runs, run.id, [optimisticUser]),
         activeRuns: [run],
         activeRun: run,
         timeline: createInitialTimelineState(run.id),
@@ -572,6 +586,28 @@ export class WebSessionManager {
     this.listeners.clear();
   }
 
+  private async loadSessionTranscript(
+    sessionId: SessionId,
+    runs: readonly ClientAgentRun[],
+    activeRunId?: RunId,
+    optimistic: readonly TranscriptEntry[] = [],
+  ): Promise<readonly TranscriptEntry[]> {
+    const getSessionTranscript = this.options.client.getSessionTranscript;
+    if (this.options.info.capabilities.sessionTranscript === true && getSessionTranscript) {
+      const response = await getSessionTranscript.call(this.options.client, sessionId, {
+        limit: 100,
+      });
+      return reconcileSessionTranscript(response.items, optimistic);
+    }
+    return hydrateSessionTranscript(runs, activeRunId);
+  }
+
+  private optimisticTranscriptEntries(): readonly TranscriptEntry[] {
+    return this.snapshot.history.filter(
+      (entry) => entry.kind === "USER" && entry.id.startsWith("optimistic:user:"),
+    );
+  }
+
   private async applySelectedSession(
     session: ClientAgentSession,
     runs: readonly ClientAgentRun[],
@@ -583,7 +619,8 @@ export class WebSessionManager {
       selectedSession: session,
       selectedSessionId: session.id,
       runs,
-      history: hydrateSessionTranscript(
+      history: await this.loadSessionTranscript(
+        session.id,
         runs,
         activeRuns.length === 1 ? activeRuns[0]?.id : undefined,
       ),
@@ -795,7 +832,12 @@ export class WebSessionManager {
           : this.snapshot.candidates,
         status: "READY",
         runs,
-        history: hydrateSessionTranscript(runs),
+        history: await this.loadSessionTranscript(
+          run.sessionId,
+          runs,
+          undefined,
+          this.optimisticTranscriptEntries(),
+        ),
         activeRuns,
         activeRun,
         timeline:
@@ -921,7 +963,12 @@ export class WebSessionManager {
         ? this.upsertCandidate(this.snapshot.selectedSession, latestRun(runs))
         : this.snapshot.candidates,
       runs,
-      history: hydrateSessionTranscript(runs),
+      history: await this.loadSessionTranscript(
+        run.sessionId,
+        runs,
+        undefined,
+        this.optimisticTranscriptEntries(),
+      ),
       activeRuns,
       activeRun,
       timeline:

@@ -89,6 +89,7 @@ describe("daemon production composition", () => {
         runRecovery: true,
         cancellation: true,
         approvals: true,
+        sessionTranscript: true,
         sseReplay: true,
       },
       runtimeKinds: ["local"],

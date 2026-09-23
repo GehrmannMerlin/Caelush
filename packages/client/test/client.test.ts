@@ -43,6 +43,43 @@ function makeEvent(
 }
 
 describe("CaelushClient", () => {
+  it("loads and validates the Session Transcript through the canonical endpoint", async () => {
+    const runId = createRunId();
+    const requests: Request[] = [];
+    const client = new CaelushClient({
+      baseUrl: "http://daemon.test",
+      fetch: async (input, init) => {
+        requests.push(new Request(input, init));
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: "message-1",
+                runId,
+                conversationTurnId: "turn-1",
+                createdAt: 1,
+                kind: "ASSISTANT",
+                text: "answer",
+              },
+            ],
+            nextCursor: "1",
+          }),
+          { status: 200 },
+        );
+      },
+    });
+
+    await expect(
+      client.getSessionTranscript("ses_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9b" as never, {
+        limit: 10,
+        cursor: "0",
+      }),
+    ).resolves.toMatchObject({ items: [{ kind: "ASSISTANT", text: "answer" }] });
+    expect(requests[0]?.url).toBe(
+      "http://daemon.test/api/v1/sessions/ses_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9b/transcript?limit=10&cursor=0",
+    );
+  });
+
   it("binds the ambient browser fetch before invoking it", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = function (this: typeof globalThis) {

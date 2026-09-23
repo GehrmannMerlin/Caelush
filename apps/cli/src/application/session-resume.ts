@@ -7,17 +7,14 @@ export {
   ambiguousWorkspaceError,
   deriveSessionActivity,
   hydrateSessionTranscript,
+  reconcileSessionTranscript,
   nonTerminalRuns,
   otherWorkspaceError,
   resolveSessionWorkspace,
   sortSessionCandidates,
 } from "@caelush/client";
 export { MAX_SESSION_CANDIDATES, SESSION_ENRICH_CONCURRENCY } from "@caelush/client";
-export type {
-  SessionCandidate,
-  SessionCandidateClient,
-  SessionHistoryEntry,
-} from "@caelush/client";
+export type { SessionCandidate, SessionCandidateClient, TranscriptEntry } from "@caelush/client";
 import type { SessionCandidateClient } from "@caelush/client";
 
 export function normalizeWorkspacePath(value: string): string {

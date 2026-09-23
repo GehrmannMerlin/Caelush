@@ -17,11 +17,13 @@ import type {
   SessionListQuery,
   SessionListResponse,
   SessionId,
+  SessionTranscriptResponse,
   RunStatus,
+  TranscriptEntry,
   WorkspaceRef,
   ContextUsageProjection,
 } from "@caelush/protocol";
-import { createWorkspaceId, VerifiedRunFinalResultSchema } from "@caelush/protocol";
+import { createRunId, createTimestampMs, createWorkspaceId } from "@caelush/protocol";
 import type { WatchRunEventsOptions } from "@caelush/client";
 import type { LaunchIntent } from "../bootstrap/cli-args.js";
 import { projectAgentEvent } from "./event-projector.js";
@@ -39,6 +41,7 @@ import {
   hydrateSessionTranscript,
   listMatchingSessionCandidates,
   nonTerminalRuns,
+  reconcileSessionTranscript,
   resolveSessionWorkspace,
 } from "./session-resume.js";
 import { runStatusLabel } from "./timeline-model.js";
@@ -75,6 +78,11 @@ export interface CliDaemonClient {
     sessionId: SessionId,
     options?: { readonly signal?: AbortSignal },
   ): Promise<ClientAgentSession>;
+  getSessionTranscript?(
+    sessionId: SessionId,
+    query?: { readonly limit?: number; readonly cursor?: string },
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<SessionTranscriptResponse>;
   listRuns(
     sessionId: SessionId,
     query?: Partial<RunListQuery>,
@@ -174,12 +182,20 @@ export class CliConversationController {
     const workspace = this.workspace;
     if (workspace === undefined) return false;
     const optimisticId = this.nextTranscriptId("user");
+    const optimisticRunId = createRunId();
     this.submissionInFlight = true;
     this.publish({
       ...this.state,
       displayHistory: [
         ...this.state.displayHistory,
-        { id: optimisticId, kind: "USER", text: goal },
+        {
+          id: optimisticId,
+          runId: optimisticRunId,
+          conversationTurnId: optimisticRunId,
+          createdAt: createTimestampMs(Date.now()),
+          kind: "USER",
+          text: goal,
+        },
       ],
       composerEnabled: false,
       activity: "Preparing",
@@ -203,7 +219,9 @@ export class CliConversationController {
     this.publish({
       ...this.state,
       displayHistory: this.state.displayHistory.map((entry) =>
-        entry.id === optimisticId ? { ...entry, runId: run.id } : entry,
+        entry.id === optimisticId && isTranscriptEntry(entry)
+          ? { ...entry, runId: run.id, conversationTurnId: run.id, createdAt: run.createdAt }
+          : entry,
       ),
       timeline: createInitialCliTimelineState(run.id),
       activeRun: { runId: run.id, status: run.status },
@@ -581,7 +599,8 @@ export class CliConversationController {
     this.workspace = workspaceResult.workspace;
 
     const activeRuns = nonTerminalRuns(runs);
-    const displayHistory = hydrateSessionTranscript(
+    const displayHistory = await this.loadSessionTranscript(
+      session.id,
       runs,
       activeRuns.length === 1 ? activeRuns[0]?.id : undefined,
     );
@@ -968,30 +987,40 @@ export class CliConversationController {
   private async settleCanonicalRun(active: ActiveRun, run: ClientAgentRun): Promise<void> {
     if (this.activeRun !== active || this.disposed) return;
 
-    const finalResult = VerifiedRunFinalResultSchema.safeParse(run.finalResult);
-    const transcriptEntry =
-      run.status === "COMPLETED" && finalResult.success
-        ? {
-            id: this.nextTranscriptId("assistant"),
-            kind: "ASSISTANT" as const,
-            text: finalResult.data.text,
-            runId: run.id,
-          }
-        : {
-            id: this.nextTranscriptId("terminal"),
-            kind: "RUN_TERMINAL" as const,
-            text:
-              run.status === "COMPLETED"
-                ? "Run completed without a verified final result."
-                : `Run ended with status ${run.status}.`,
-            runId: run.id,
-          };
-
     let remainingRuns: readonly ClientAgentRun[];
+    let refreshedRuns: readonly ClientAgentRun[];
     try {
-      remainingRuns = nonTerminalRuns(
-        (await this.options.client.listRuns(run.sessionId, { limit: 100 })).items,
-      );
+      const listedRuns = (await this.options.client.listRuns(run.sessionId, { limit: 100 })).items;
+      refreshedRuns = upsertConfirmedRun(listedRuns, run);
+      remainingRuns = nonTerminalRuns(refreshedRuns);
+      const transcript = await this.loadSessionTranscript(run.sessionId, refreshedRuns);
+      const displayHistory = [
+        ...transcript,
+        ...this.state.displayHistory.filter((entry) => !isTranscriptEntry(entry)),
+      ];
+      if (this.activeRun !== active || this.disposed) return;
+      active.streamAbortController.abort();
+      this.activeRun = undefined;
+      const nextState = { ...this.state };
+      delete nextState.activeRun;
+      delete nextState.approvalState;
+      delete nextState.pendingRunId;
+      delete nextState.fatalError;
+      delete nextState.controlError;
+      delete nextState.transportError;
+      this.publish({
+        ...nextState,
+        controlMode: remainingRuns.length > 0 ? "RUN_RECOVERY_PICKER" : "NONE",
+        recoveryCandidates: remainingRuns,
+        recoverySelectionIndex: 0,
+        displayHistory,
+        composerEnabled: remainingRuns.length === 0,
+        activity:
+          remainingRuns.length > 0
+            ? (runStatusLabel(remainingRuns[0]!.status) as CliActivity)
+            : (runStatusLabel(run.status) as CliActivity),
+      });
+      return;
     } catch (error) {
       if (this.activeRun !== active || this.disposed) return;
       active.streamAbortController.abort();
@@ -1005,7 +1034,7 @@ export class CliConversationController {
       this.publish({
         ...nextState,
         controlMode: "NONE",
-        displayHistory: [...this.state.displayHistory, transcriptEntry],
+        displayHistory: this.state.displayHistory,
         composerEnabled: false,
         activity: "Transport error",
         transportError: "The Session could not be refreshed after Run settlement.",
@@ -1013,29 +1042,25 @@ export class CliConversationController {
       });
       return;
     }
-    if (this.activeRun !== active || this.disposed) return;
+  }
 
-    active.streamAbortController.abort();
-    this.activeRun = undefined;
-    const nextState = { ...this.state };
-    delete nextState.activeRun;
-    delete nextState.approvalState;
-    delete nextState.pendingRunId;
-    delete nextState.fatalError;
-    delete nextState.controlError;
-    delete nextState.transportError;
-    this.publish({
-      ...nextState,
-      controlMode: remainingRuns.length > 0 ? "RUN_RECOVERY_PICKER" : "NONE",
-      recoveryCandidates: remainingRuns,
-      recoverySelectionIndex: 0,
-      displayHistory: [...this.state.displayHistory, transcriptEntry],
-      composerEnabled: remainingRuns.length === 0,
-      activity:
-        remainingRuns.length > 0
-          ? (runStatusLabel(remainingRuns[0]!.status) as CliActivity)
-          : (runStatusLabel(run.status) as CliActivity),
-    });
+  private async loadSessionTranscript(
+    sessionId: SessionId,
+    runs: readonly ClientAgentRun[],
+    activeRunId?: RunId,
+  ): Promise<readonly TranscriptEntry[]> {
+    const getSessionTranscript = this.options.client.getSessionTranscript;
+    if (this.state.daemonInfo?.capabilities.sessionTranscript === true && getSessionTranscript) {
+      const response = await getSessionTranscript.call(this.options.client, sessionId, {
+        limit: 100,
+      });
+      return reconcileSessionTranscript(response.items, this.optimisticTranscriptEntries());
+    }
+    return hydrateSessionTranscript(runs, activeRunId);
+  }
+
+  private optimisticTranscriptEntries(): readonly TranscriptEntry[] {
+    return this.state.displayHistory.filter(isTranscriptEntry);
   }
 
   private removeOptimisticEntry(id: string, safeError: string): void {
@@ -1067,6 +1092,18 @@ function formatContextUsage(usage: ContextUsageProjection): string {
     `Capacity ${usage.effectiveInputLimitTokens} · Remaining ${usage.remainingTokens}`,
     `Pressure ${usage.pressureState} · Compactions ${usage.compactionCount}`,
   ].join(" · ");
+}
+
+function isTranscriptEntry(
+  entry: CliViewState["displayHistory"][number],
+): entry is TranscriptEntry {
+  return (
+    entry.kind === "USER" ||
+    entry.kind === "ASSISTANT" ||
+    entry.kind === "TOOL_RESULT" ||
+    entry.kind === "CUSTOM" ||
+    entry.kind === "RUN_TERMINAL"
+  );
 }
 
 class CliConfigurationError extends Error {
@@ -1104,4 +1141,17 @@ function activeStatus(state: CliViewState, runId: RunId): RunStatus {
 function boundedIndex(index: number, length: number): number {
   if (length <= 0) return 0;
   return Math.max(0, Math.min(index, length - 1));
+}
+
+function upsertConfirmedRun(
+  runs: readonly ClientAgentRun[],
+  confirmedRun: ClientAgentRun,
+): readonly ClientAgentRun[] {
+  let replaced = false;
+  const result = runs.map((candidate) => {
+    if (candidate.id !== confirmedRun.id) return candidate;
+    replaced = true;
+    return confirmedRun;
+  });
+  return replaced ? result : [...result, confirmedRun];
 }

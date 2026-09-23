@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("Phase 12C timeline boundaries", () => {
-  it("keeps the CLI as a client-only projection host with one settled Static", async () => {
+  it("keeps the CLI as a client-only projection host with one canonical History", async () => {
     const files = await sourceFiles(resolve("apps/cli/src"));
     const source = (await Promise.all(files.map((file) => readFile(file, "utf8")))).join("\n");
 
@@ -17,7 +17,10 @@ describe("Phase 12C timeline boundaries", () => {
     );
     // Phase 12D adds an injected reconnect scheduler and one system timer adapter.
     expect(source).not.toMatch(/fetch\s*\(|node:fs|toolCallId/);
-    expect(source.match(/<Static\b/g)).toHaveLength(1);
+    // Phase 5E makes canonical transcript replacement visible in the CLI, so History renders the
+    // current bounded projection rather than using Ink Static's append-only collection semantics.
+    expect(source.match(/<History\b/g)).toHaveLength(1);
+    expect(source).toContain("entries.map((entry)");
   });
 
   it("keeps presentation direction and raw argument boundaries intact", async () => {

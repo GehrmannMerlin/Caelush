@@ -4,11 +4,11 @@ import type {
   DaemonInfo,
   RunId,
   RunStatus,
+  TranscriptEntry,
   WorkspaceRef,
 } from "@caelush/protocol";
 import type { CliApprovalState, CliControlMode, CliTransportState } from "./cli-control.js";
 import type { SessionCandidate } from "./session-resume.js";
-import type { SessionHistoryEntry } from "@caelush/client";
 import {
   createInitialCliTimelineState,
   type CliTimelineEntry,
@@ -45,7 +45,7 @@ export type CliActivity =
   | "Budget exceeded"
   | "Terminal error";
 
-export type CliTranscriptEntry = SessionHistoryEntry;
+export type CliTranscriptEntry = TranscriptEntry;
 
 export type CliDisplayHistoryEntry = CliTranscriptEntry | CliTimelineEntry;
 

@@ -250,6 +250,23 @@ export type {
   AgentMessageProjectorRegistryWithVersions,
 } from "./projection/registry.js";
 
+/* ------------------------------------------------------------------------- transcript */
+
+export {
+  AGENT_ASSISTANT_MESSAGE_TRANSCRIPT_PROJECTOR,
+  AGENT_TOOL_RESULT_MESSAGE_TRANSCRIPT_PROJECTOR,
+  AGENT_USER_MESSAGE_TRANSCRIPT_PROJECTOR,
+  STANDARD_AGENT_MESSAGE_TRANSCRIPT_PROJECTORS,
+  unsupportedHistoricalTranscriptEntry,
+} from "./transcript/projector.js";
+export type { AgentMessageTranscriptProjector } from "./transcript/projector.js";
+
+export {
+  createAgentMessageTranscriptProjectorRegistry,
+  createStandardAgentMessageTranscriptProjectorRegistry,
+} from "./transcript/registry.js";
+export type { AgentMessageTranscriptProjectorRegistry } from "./transcript/registry.js";
+
 /* -------------------------------------------------------------------------- conversation */
 
 export {

@@ -1,6 +1,6 @@
 import { createElement, type ReactElement } from "react";
 import type { ClientAgentRun } from "@caelush/protocol";
-import { canCancelRunStatus, type SessionHistoryEntry, type TimelineState } from "@caelush/client";
+import { canCancelRunStatus, type TimelineState, type TranscriptEntry } from "@caelush/client";
 import type { ApprovalResolution, RunId } from "@caelush/protocol";
 import type { ApprovalView } from "@caelush/client";
 import type { WebControlMode } from "../application/session-manager.js";
@@ -12,7 +12,7 @@ import { RecoveryPanel, type RecoveryRunView } from "./recovery-panel.js";
 export interface SessionWorkspaceProps {
   readonly title: string;
   readonly activeRun?: ClientAgentRun | undefined;
-  readonly history: readonly SessionHistoryEntry[];
+  readonly history: readonly TranscriptEntry[];
   readonly timeline: TimelineState;
   readonly composer: ReactElement;
   readonly controlMode?: WebControlMode | undefined;
@@ -140,11 +140,15 @@ function canShowCancel(status: Parameters<typeof canCancelRunStatus>[0]): boolea
   return canCancelRunStatus(status);
 }
 
-function historyAuthor(kind: SessionHistoryEntry["kind"]): string {
+function historyAuthor(kind: TranscriptEntry["kind"]): string {
   switch (kind) {
     case "USER":
       return "你";
     case "ASSISTANT":
+      return "Caelush";
+    case "TOOL_RESULT":
+      return "Tool result";
+    case "CUSTOM":
       return "Caelush";
     case "RUN_TERMINAL":
       return "任务状态";

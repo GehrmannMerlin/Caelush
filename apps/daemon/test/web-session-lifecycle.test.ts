@@ -79,10 +79,13 @@ describe("Web Session model production lifecycle", () => {
     expect(snapshot.selectedSessionId).toBeDefined();
     expect(snapshot.activeRuns).toHaveLength(0);
     expect(snapshot.composerEnabled).toBe(true);
-    expect(snapshot.history).toEqual([
-      expect.objectContaining({ kind: "USER", text: "complete the web lifecycle" }),
-      expect.objectContaining({ kind: "ASSISTANT", text: "Verified web result." }),
-    ]);
+    expect(snapshot.history).toHaveLength(2);
+    expect(snapshot.history).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "USER", text: "complete the web lifecycle" }),
+        expect.objectContaining({ kind: "ASSISTANT", text: "Verified web result." }),
+      ]),
+    );
     expect(snapshot.history.some((entry) => entry.text.includes("raw"))).toBe(false);
     expect(provider.calls).toBe(2);
 

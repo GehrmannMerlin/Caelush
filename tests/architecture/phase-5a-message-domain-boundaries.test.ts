@@ -348,6 +348,7 @@ describe("Phase 5A guard — package boundaries (freeze §150, §151)", () => {
       "packages/storage/src/index.ts",
       "packages/storage/src/storage.ts",
       "apps/daemon/src/daemon-composition.ts",
+      "apps/daemon/src/services/session-transcript-service.ts",
       "packages/agent/src/run/ports/run-execution-store.ts",
       "packages/core/src/run-agent-history.ts",
       "packages/core/src/run-message-materializer.ts",
@@ -714,12 +715,16 @@ describe("Phase 5A guard — retained foundations after the Phase 5D cutover", (
     expect(found).toBe(true);
   });
 
-  it("enables no Coding custom message (freeze §55, §166)", async () => {
-    expect(await declarationHolders("CodingCommandExecutionMessage")).toEqual([]);
+  it("keeps Coding custom messages in the product extension seam (Phase 5E)", async () => {
+    expect(await declarationHolders("CodingCommandExecutionMessage")).toEqual([
+      "packages/coding-agent/src/index.ts",
+      "packages/coding-agent/src/messages/command-execution.ts",
+    ]);
     expect(await declarationHolders("CustomAgentMessages {")).toEqual([
       "packages/agent/src/messages/types/custom-agent-messages.ts",
+      "packages/coding-agent/src/messages/command-execution.ts",
     ]);
-    // The seam is empty: nothing declares an arm for it.
+    // The general seam stays empty; the Coding layer contributes its arm by module augmentation.
     const seam = code(await read("packages/agent/src/messages/types/custom-agent-messages.ts"));
     expect(seam).toMatch(/export interface CustomAgentMessages \{\}/);
   });

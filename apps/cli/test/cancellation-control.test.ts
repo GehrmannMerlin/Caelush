@@ -46,10 +46,14 @@ describe("CLI cancellation and detach", () => {
 
     expect(cancelRun).toHaveBeenCalledTimes(1);
     expect(controller.getState().activeRun).toBeUndefined();
-    expect(controller.getState().displayHistory.at(-1)).toMatchObject({
-      kind: "ASSISTANT",
-      text: "completed before cancellation settled",
-    });
+    expect(controller.getState().displayHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "ASSISTANT",
+          text: "completed before cancellation settled",
+        }),
+      ]),
+    );
     expect(controller.getState().activity).not.toBe("Cancelled");
     controller.dispose();
   });

@@ -8,6 +8,7 @@ import {
   type SessionId,
   type SessionListQuery,
   type SessionListResponse,
+  type TranscriptEntry,
   type WorkspaceRef,
 } from "@caelush/protocol";
 
@@ -25,12 +26,7 @@ export interface SessionCandidate {
   readonly lastActivityAt: number;
 }
 
-export interface SessionHistoryEntry {
-  readonly id: string;
-  readonly kind: "USER" | "ASSISTANT" | "RUN_TERMINAL";
-  readonly text: string;
-  readonly runId?: RunId;
-}
+export type { TranscriptEntry } from "@caelush/protocol";
 
 export function normalizeWorkspacePath(value: string): string {
   const slashNormalized = value.replace(/[\\/]+/g, "/");
@@ -126,38 +122,53 @@ export function resolveSessionWorkspace(
 export function hydrateSessionTranscript(
   runs: readonly ClientAgentRun[],
   activeRunId?: RunId,
-): readonly SessionHistoryEntry[] {
-  const history: SessionHistoryEntry[] = [];
+): readonly TranscriptEntry[] {
+  const history: TranscriptEntry[] = [];
   const ordered = [...runs].sort((left, right) => {
     if (left.createdAt !== right.createdAt) return left.createdAt - right.createdAt;
     return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
   });
 
   for (const run of ordered) {
-    history.push({ id: `history:user:${run.id}`, kind: "USER", text: run.goal, runId: run.id });
+    history.push({
+      id: `history:user:${run.id}`,
+      runId: run.id,
+      conversationTurnId: run.id,
+      createdAt: run.createdAt,
+      kind: "USER",
+      text: run.goal,
+    });
     if (run.status === "COMPLETED") {
       const finalResult = VerifiedRunFinalResultSchema.safeParse(run.finalResult);
       history.push(
         finalResult.success
           ? {
               id: `history:assistant:${run.id}`,
+              runId: run.id,
+              conversationTurnId: run.id,
+              createdAt: run.finishedAt ?? run.createdAt,
               kind: "ASSISTANT",
               text: finalResult.data.text,
-              runId: run.id,
             }
           : {
               id: `history:terminal:${run.id}`,
-              kind: "RUN_TERMINAL",
-              text: "Run completed without a verified final result.",
               runId: run.id,
+              conversationTurnId: run.id,
+              createdAt: run.finishedAt ?? run.createdAt,
+              kind: "RUN_TERMINAL",
+              status: run.status,
+              text: "Run completed without a verified final result.",
             },
       );
     } else if (isTerminalRun(run)) {
       history.push({
         id: `history:terminal:${run.id}`,
-        kind: "RUN_TERMINAL",
-        text: `Run ended with status ${run.status}.`,
         runId: run.id,
+        conversationTurnId: run.id,
+        createdAt: run.finishedAt ?? run.createdAt,
+        kind: "RUN_TERMINAL",
+        status: run.status,
+        text: `Run ended with status ${run.status}.`,
       });
     }
   }
@@ -167,6 +178,18 @@ export function hydrateSessionTranscript(
     (entry) => entry.kind === "USER" && entry.runId === activeRunId,
   );
   return activeGoalEntries.length <= 1 ? history : deduplicateActiveGoal(history, activeRunId);
+}
+
+/** Reconcile an optimistic user entry by Run identity, never by matching text. */
+export function reconcileSessionTranscript(
+  canonical: readonly TranscriptEntry[],
+  optimistic: readonly TranscriptEntry[],
+): readonly TranscriptEntry[] {
+  const canonicalRunIds = new Set(canonical.map((entry) => entry.runId));
+  const retainedOptimistic = optimistic.filter(
+    (entry) => entry.kind === "USER" && !canonicalRunIds.has(entry.runId),
+  );
+  return [...canonical, ...retainedOptimistic];
 }
 
 export function nonTerminalRuns(runs: readonly ClientAgentRun[]): readonly ClientAgentRun[] {
@@ -203,9 +226,9 @@ function isTerminalRun(run: ClientAgentRun): boolean {
 }
 
 function deduplicateActiveGoal(
-  history: readonly SessionHistoryEntry[],
+  history: readonly TranscriptEntry[],
   activeRunId: RunId,
-): readonly SessionHistoryEntry[] {
+): readonly TranscriptEntry[] {
   let retained = false;
   return history.filter((entry) => {
     if (entry.kind !== "USER" || entry.runId !== activeRunId) return true;

@@ -5,9 +5,10 @@ and future hosts share one Agent Kernel and one daemon composition root; they
 do not own separate Agent implementations.
 
 The current source-of-truth branch is `main`. The Message System migration is
-complete through Architecture V2 Phase 5D. Phase 5E transcript/client
-projection migration and Phase 5F legacy Message V2 retirement are not
-started.
+complete through Architecture V2 Phase 5E. Architecture V2 Phase 5D is
+complete, and Phase 5E now owns the daemon-side
+Transcript projection and client cutover; Phase 5F legacy Message V2
+retirement is NOT STARTED.
 
 ## Architecture contract
 
@@ -62,7 +63,7 @@ started.
   results but cannot transition a Run to `COMPLETED`. Only Core/RunController
   owns that transition.
 
-## Message V2 / Phase 5D
+## Message V2 / Phase 5E
 
 - `AgentMessageRecord[]` is the durable conversation authority at the Run
   execution boundary.
@@ -79,10 +80,15 @@ started.
   unknown model-visible schema or projection versions fail closed.
 - Context selection reports IDs, AI-projection token estimates, and compaction
   pressure without rewriting, summarizing, or deleting durable records.
-- Compatibility readers, legacy physical columns, client projections, and
-  `@caelush/llm` schemas remain intentionally during migration. Phase 5E
-  transcript/client projection migration and Phase 5F legacy retirement are
-  deferred.
+- Compatibility readers, legacy physical columns, and `@caelush/llm` schemas
+  remain intentionally during migration. Phase 5E projects safe Protocol
+  Transcript entries on the daemon and clients consume them through the
+  additive `sessionTranscript` capability. Phase 5F physical legacy retirement
+  is NOT STARTED.
+- `AgentMessageRecord[]` has separate server-side AI and Transcript projector
+  paths. `AgentEvent[]` remains the Timeline authority. Transcript-visible
+  output must never serialize raw record data, provider state, hidden
+  reasoning, or unbounded custom payloads.
 
 ## Durable execution rules
 
