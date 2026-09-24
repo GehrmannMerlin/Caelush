@@ -1,5 +1,5 @@
 import { CaelushClientProtocolError } from "@caelush/client";
-import type { AgentEvent, ClientAgentRun, DaemonInfo, RunActionResponse } from "@caelush/protocol";
+import type { PublicRunEvent, ClientAgentRun, DaemonInfo, RunActionResponse } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import { type CliDaemonClient } from "../src/application/cli-controller.js";
 import { main } from "../src/main.js";
@@ -37,7 +37,7 @@ describe("CLI process lifecycle", () => {
         throw new Error("must not create a Run");
       },
       watchRunEvents: async function* () {
-        yield* [] as AgentEvent[];
+        yield* [] as PublicRunEvent[];
       },
       startRun: async (): Promise<RunActionResponse> => {
         throw new Error("must not start a Run");

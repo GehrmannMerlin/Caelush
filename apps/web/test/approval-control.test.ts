@@ -11,7 +11,7 @@ import {
   createToolInvocationId,
   createVerificationPlanId,
   createWorkspaceId,
-  type AgentEvent,
+  type PublicRunEvent,
   type ApprovalRequest,
   type ClientAgentRun,
   type ClientAgentSession,
@@ -382,7 +382,7 @@ async function openActiveSession(
 function makeClient(input: {
   readonly session: ClientAgentSession;
   readonly run: ClientAgentRun;
-  readonly events?: readonly AgentEvent[];
+  readonly events?: readonly PublicRunEvent[];
   readonly pendingApprovals?: readonly ApprovalRequest[];
 }): WebSessionClient & {
   readonly listPendingApprovals: ReturnType<typeof vi.fn>;
@@ -519,7 +519,7 @@ function makeApproval(runId: ClientAgentRun["id"], createdAt: number): ApprovalR
     createdAt,
   });
 }
-function approvalRequested(run: ClientAgentRun, approval: ApprovalRequest): AgentEvent {
+function approvalRequested(run: ClientAgentRun, approval: ApprovalRequest): PublicRunEvent {
   return {
     type: "approval.requested",
     eventId: "evt_00000000-0000-7000-8000-000000000001",
@@ -530,9 +530,9 @@ function approvalRequested(run: ClientAgentRun, approval: ApprovalRequest): Agen
     visibility: "USER_VISIBLE",
     durability: { kind: "DURABLE", sequence: 1 },
     payload: { approval },
-  } as AgentEvent;
+  } as PublicRunEvent;
 }
-function approvalResolved(run: ClientAgentRun, approval: ApprovalRequest): AgentEvent {
+function approvalResolved(run: ClientAgentRun, approval: ApprovalRequest): PublicRunEvent {
   return {
     type: "approval.resolved",
     eventId: "evt_00000000-0000-7000-8000-000000000002",
@@ -543,12 +543,12 @@ function approvalResolved(run: ClientAgentRun, approval: ApprovalRequest): Agent
     visibility: "USER_VISIBLE",
     durability: { kind: "DURABLE", sequence: 2 },
     payload: { approvalId: approval.id, status: "APPROVED", scope: "ONCE" },
-  } as AgentEvent;
+  } as PublicRunEvent;
 }
 function lifecycleEvent(
   run: ClientAgentRun,
-  type: Extract<AgentEvent["type"], "run.completed">,
-): AgentEvent {
+  type: Extract<PublicRunEvent["type"], "run.completed">,
+): PublicRunEvent {
   return {
     type,
     eventId: "evt_00000000-0000-7000-8000-000000000003",
@@ -559,7 +559,7 @@ function lifecycleEvent(
     visibility: "USER_VISIBLE",
     durability: { kind: "DURABLE", sequence: 3 },
     payload: { runId: run.id },
-  } as AgentEvent;
+  } as PublicRunEvent;
 }
 async function waitFor(predicate: () => boolean): Promise<void> {
   for (let index = 0; index < 100 && !predicate(); index += 1)

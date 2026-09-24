@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
-  AgentEvent,
+  PublicRunEvent,
   ClientAgentRun,
   ClientAgentSession,
   DaemonInfo,
@@ -25,7 +25,7 @@ describe("WebSessionManager durable recovery", () => {
     const client = makeClient(run);
     let open!: () => void;
     client.watchRunEvents.mockImplementation(async function* (_runId, options) {
-      yield* [] as AgentEvent[];
+      yield* [] as PublicRunEvent[];
       open = () => options?.onOpen?.();
       await new Promise<void>(() => undefined);
     });
@@ -94,7 +94,7 @@ describe("WebSessionManager durable recovery", () => {
     waitingClient.listPendingApprovals.mockRejectedValueOnce(new Error("offline"));
     let open!: () => void;
     waitingClient.watchRunEvents.mockImplementation(async function* (_runId, options) {
-      yield* [] as AgentEvent[];
+      yield* [] as PublicRunEvent[];
       open = () => options?.onOpen?.();
       await new Promise<void>(() => undefined);
     });
@@ -138,7 +138,7 @@ describe("WebSessionManager durable recovery", () => {
       ],
     });
     waitingClient.watchRunEvents.mockImplementation(async function* (_runId, options) {
-      yield* [] as AgentEvent[];
+      yield* [] as PublicRunEvent[];
       opens.push(() => options?.onOpen?.());
       if (opens.length === 1) throw new Error("offline");
       await new Promise<void>(() => undefined);
@@ -176,7 +176,7 @@ describe("WebSessionManager durable recovery", () => {
     const waitingClient = makeClient(waiting);
     let open!: () => void;
     waitingClient.watchRunEvents.mockImplementation(async function* (_runId, options) {
-      yield* [] as AgentEvent[];
+      yield* [] as PublicRunEvent[];
       open = () => options?.onOpen?.();
       await new Promise<void>(() => undefined);
     });
@@ -207,7 +207,7 @@ describe("WebSessionManager durable recovery", () => {
       .mockRejectedValueOnce(new Error("offline"))
       .mockResolvedValue({ items: [] });
     waitingClient.watchRunEvents.mockImplementation(async function* (_runId, options) {
-      yield* [] as AgentEvent[];
+      yield* [] as PublicRunEvent[];
       opens.push(() => options?.onOpen?.());
       await new Promise<void>(() => undefined);
     });
@@ -241,7 +241,7 @@ describe("WebSessionManager durable recovery", () => {
       .mockRejectedValueOnce(new Error("offline"))
       .mockResolvedValue({ items: [] });
     waitingClient.watchRunEvents.mockImplementation(async function* (_runId, options) {
-      yield* [] as AgentEvent[];
+      yield* [] as PublicRunEvent[];
       opens.push(() => options?.onOpen?.());
       if (opens.length === 1) throw new Error("offline");
       await new Promise<void>(() => undefined);
@@ -409,7 +409,7 @@ function makeRun(overrides: Partial<ClientAgentRun> = {}): ClientAgentRun {
   });
 }
 
-function durableReasoning(run: ClientAgentRun, summary: string): AgentEvent {
+function durableReasoning(run: ClientAgentRun, summary: string): PublicRunEvent {
   return {
     type: "reasoning.summary",
     eventId: "evt_00000000-0000-7000-8000-000000000001",
@@ -420,7 +420,7 @@ function durableReasoning(run: ClientAgentRun, summary: string): AgentEvent {
     visibility: "USER_VISIBLE",
     durability: { kind: "DURABLE", sequence: 1 },
     payload: { summary },
-  } as AgentEvent;
+  } as PublicRunEvent;
 }
 
 function makeInfo(): DaemonInfo {

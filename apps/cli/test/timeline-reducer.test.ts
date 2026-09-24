@@ -7,7 +7,7 @@ import {
   createStepId,
   createVerificationCheckId,
   createVerificationPlanId,
-  type AgentEvent,
+  type PublicRunEvent,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import {
@@ -88,9 +88,8 @@ describe("CLI timeline reducer", () => {
     expect(conflict.lastDurableSequence).toBe(1);
   });
 
-  it("ignores non-user events and does not advance the cursor for ephemeral events", () => {
+  it("accepts public events and does not advance the cursor for ephemeral events", () => {
     const state = createInitialCliTimelineState(runId);
-    const debug = eventOf("reasoning.summary", 1, { summary: "hidden" }, { visibility: "DEBUG" });
     const ephemeral = eventOf(
       "reasoning.summary",
       undefined,
@@ -98,10 +97,8 @@ describe("CLI timeline reducer", () => {
       { durability: { kind: "EPHEMERAL" } },
     );
 
-    const afterDebug = reduceTimelineEvent(state, debug);
-    const afterEphemeral = reduceTimelineEvent(afterDebug, ephemeral);
+    const afterEphemeral = reduceTimelineEvent(state, ephemeral);
 
-    expect(afterDebug).toBe(state);
     expect(afterEphemeral.lastDurableSequence).toBe(0);
     expect(afterEphemeral.settled[0]!.text).toBe("visible ephemeral");
   });
@@ -273,11 +270,11 @@ describe("CLI timeline reducer", () => {
 });
 
 function eventOf(
-  type: AgentEvent["type"],
+  type: PublicRunEvent["type"],
   sequence: number | undefined,
   payload: unknown,
-  overrides: Partial<AgentEvent> = {},
-): AgentEvent {
+  overrides: Partial<PublicRunEvent> = {},
+): PublicRunEvent {
   return {
     eventId: createEventId(),
     schemaVersion: 1,
@@ -291,5 +288,5 @@ function eventOf(
       sequence === undefined ? { kind: "EPHEMERAL" } : { kind: "DURABLE", version: 1, sequence },
     payload,
     ...overrides,
-  } as AgentEvent;
+  } as PublicRunEvent;
 }

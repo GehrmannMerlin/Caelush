@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
-  AgentEvent,
+  PublicRunEvent,
   ClientAgentRun,
   ClientAgentSession,
   DaemonInfo,
@@ -90,7 +90,7 @@ describe("WebSessionManager live run reconnection", () => {
     const lateRecovery = deferred<{ disposition: "SCHEDULED"; run: ClientAgentRun }>();
     let streamCount = 0;
     client.watchRunEvents.mockImplementation(async function* (_runId, options) {
-      yield* [] as AgentEvent[];
+      yield* [] as PublicRunEvent[];
       streamCount += 1;
       options?.onOpen?.();
       if (streamCount === 3) {
@@ -122,7 +122,7 @@ describe("WebSessionManager live run reconnection", () => {
     const client = makeClient(run);
     let connectionCount = 0;
     client.watchRunEvents.mockImplementation(async function* (_runId, options) {
-      yield* [] as AgentEvent[];
+      yield* [] as PublicRunEvent[];
       if (connectionCount++ === 0) options?.onOpen?.();
       throw new Error("lost");
     });
@@ -242,7 +242,7 @@ function deferred<T>(): { readonly promise: Promise<T>; resolve(value: T): void 
   return { promise, resolve };
 }
 
-function durableReasoning(run: ClientAgentRun, sequence: number, summary: string): AgentEvent {
+function durableReasoning(run: ClientAgentRun, sequence: number, summary: string): PublicRunEvent {
   return {
     type: "reasoning.summary",
     eventId: `evt_00000000-0000-7000-8000-${sequence.toString().padStart(12, "0")}`,
@@ -253,7 +253,7 @@ function durableReasoning(run: ClientAgentRun, sequence: number, summary: string
     visibility: "USER_VISIBLE",
     durability: { kind: "DURABLE", sequence },
     payload: { summary },
-  } as AgentEvent;
+  } as PublicRunEvent;
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {

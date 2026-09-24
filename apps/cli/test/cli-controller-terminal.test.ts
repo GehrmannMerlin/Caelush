@@ -5,7 +5,7 @@ import {
   createStepId,
   createVerificationPlanId,
   createWorkspaceId,
-  type AgentEvent,
+  type PublicRunEvent,
   type ClientAgentRun,
   type ClientAgentSession,
   type DaemonInfo,
@@ -130,7 +130,7 @@ describe("CLI terminal lifecycle", () => {
       createRun: async () => run,
       watchRunEvents: async function* () {
         throw new Error("raw daemon internals");
-        yield* [] as AgentEvent[];
+        yield* [] as PublicRunEvent[];
       },
       startRun: async () => actionResponse(run),
     });
@@ -168,7 +168,7 @@ describe("CLI terminal lifecycle", () => {
             { once: true },
           );
         });
-        yield* [] as AgentEvent[];
+        yield* [] as PublicRunEvent[];
       },
     });
     const controller = new CliConversationController({
@@ -194,7 +194,7 @@ function makeClient(overrides: Partial<CliDaemonClient> = {}): CliDaemonClient {
     createRun: async () => run,
     watchRunEvents: async function* () {
       await new Promise<void>(() => undefined);
-      yield* [] as AgentEvent[];
+      yield* [] as PublicRunEvent[];
     },
     startRun: async () => actionResponse(run),
     getRun: async () => run,
@@ -307,7 +307,7 @@ function terminalEvent(
   run: ClientAgentRun,
   type: "run.completed" | "run.failed",
   payload: unknown,
-): AgentEvent {
+): PublicRunEvent {
   return {
     eventId: createEventId(),
     schemaVersion: 1,
@@ -319,7 +319,7 @@ function terminalEvent(
     visibility: "USER_VISIBLE",
     durability: { kind: "DURABLE", version: 1, sequence: 1 },
     payload,
-  } as AgentEvent;
+  } as PublicRunEvent;
 }
 
 function verifiedFinalResult(text: string) {

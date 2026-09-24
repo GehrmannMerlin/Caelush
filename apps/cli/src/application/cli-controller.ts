@@ -1,6 +1,6 @@
 import { basename, resolve } from "node:path";
 import type {
-  AgentEvent,
+  PublicRunEvent,
   ApprovalListResponse,
   ApprovalRequestId,
   ApprovalResolutionRequest,
@@ -27,7 +27,7 @@ import { createRunId, createTimestampMs, createWorkspaceId } from "@caelush/prot
 import { CaelushProtocolCompatibilityError } from "@caelush/client";
 import type { WatchRunEventsOptions } from "@caelush/client";
 import type { LaunchIntent } from "../bootstrap/cli-args.js";
-import { projectAgentEvent } from "./event-projector.js";
+import { projectPublicRunEvent } from "./event-projector.js";
 import {
   createInitialCliState,
   type CliActivity,
@@ -67,7 +67,7 @@ export interface CliDaemonClient {
     input: CreateRunRequest,
     options?: { readonly signal?: AbortSignal },
   ): Promise<ClientAgentRun>;
-  watchRunEvents(runId: RunId, options?: WatchRunEventsOptions): AsyncIterable<AgentEvent>;
+  watchRunEvents(runId: RunId, options?: WatchRunEventsOptions): AsyncIterable<PublicRunEvent>;
   startRun(runId: RunId, options?: { readonly signal?: AbortSignal }): Promise<RunActionResponse>;
   getRun(runId: RunId, options?: { readonly signal?: AbortSignal }): Promise<ClientAgentRun>;
   listSessions(
@@ -115,7 +115,7 @@ export interface CliConversationControllerOptions {
   readonly workspacePath: string;
   readonly launchIntent?: LaunchIntent;
   readonly timer?: CliTimer;
-  readonly onUserVisibleEvent?: (event: AgentEvent) => void;
+  readonly onUserVisibleEvent?: (event: PublicRunEvent) => void;
 }
 
 interface ActiveRun {
@@ -949,13 +949,13 @@ export class CliConversationController {
 
   private async consumeRunEvents(
     active: ActiveRun,
-    stream: AsyncIterable<AgentEvent>,
+    stream: AsyncIterable<PublicRunEvent>,
   ): Promise<void> {
     try {
       for await (const event of stream) {
         if (this.activeRun !== active || active.generation !== this.streamGeneration) return;
         if (event.visibility === "USER_VISIBLE") this.options.onUserVisibleEvent?.(event);
-        const projected = projectAgentEvent(this.state, event);
+        const projected = projectPublicRunEvent(this.state, event);
         this.publish(projected.state);
         if (event.type === "approval.requested") this.addApproval(event.payload.approval);
         if (event.type === "approval.resolved") this.removeApproval(event.payload.approvalId);

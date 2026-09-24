@@ -9,7 +9,7 @@ import {
   createToolInvocationId,
   createVerificationCheckId,
   createVerificationPlanId,
-  type AgentEvent,
+  type PublicRunEvent,
 } from "@caelush/protocol";
 import {
   createInitialTimelineState,
@@ -73,7 +73,7 @@ describe("Timeline", () => {
     const sessionId = createSessionId();
     const stepId = createStepId();
     const invocationId = "tool-output-sentinel";
-    const event = (type: AgentEvent["type"], sequence: number, payload: unknown): AgentEvent =>
+    const event = (type: PublicRunEvent["type"], sequence: number, payload: unknown): PublicRunEvent =>
       ({
         eventId: createEventId(),
         schemaVersion: 1,
@@ -85,7 +85,7 @@ describe("Timeline", () => {
         visibility: "USER_VISIBLE",
         durability: { kind: "DURABLE", version: 1, sequence },
         payload,
-      }) as AgentEvent;
+      }) as PublicRunEvent;
     let timeline = createInitialTimelineState(runId);
     timeline = reduceTimelineEvent(
       timeline,
@@ -121,7 +121,7 @@ describe("Timeline", () => {
     const planId = "plan-sentinel";
     const checkId = "check-sentinel";
     const evidenceId = "evidence-sentinel";
-    const event = (type: AgentEvent["type"], sequence: number, payload: unknown): AgentEvent =>
+    const event = (type: PublicRunEvent["type"], sequence: number, payload: unknown): PublicRunEvent =>
       ({
         eventId: createEventId(),
         schemaVersion: 1,
@@ -133,7 +133,7 @@ describe("Timeline", () => {
         visibility: "USER_VISIBLE",
         durability: { kind: "DURABLE", version: 1, sequence },
         payload,
-      }) as AgentEvent;
+      }) as PublicRunEvent;
     let timeline = createInitialTimelineState(runId);
     timeline = reduceTimelineEvent(
       timeline,
@@ -199,7 +199,7 @@ function timelineFromVisibleEvents(): TimelineState {
   const observationId = createObservationId();
   const planId = createVerificationPlanId();
   const checkId = createVerificationCheckId();
-  const event = (type: AgentEvent["type"], sequence: number, payload: unknown): AgentEvent =>
+  const event = (type: PublicRunEvent["type"], sequence: number, payload: unknown): PublicRunEvent =>
     ({
       eventId: createEventId(),
       schemaVersion: 1,
@@ -211,7 +211,7 @@ function timelineFromVisibleEvents(): TimelineState {
       visibility: "USER_VISIBLE",
       durability: { kind: "DURABLE", version: 1, sequence },
       payload,
-    }) as AgentEvent;
+    }) as PublicRunEvent;
 
   return [
     event("reasoning.summary", 1, { summary: "检查认证代码" }),

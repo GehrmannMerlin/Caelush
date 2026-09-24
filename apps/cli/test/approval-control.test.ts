@@ -5,7 +5,7 @@ import {
   createSessionId,
   createToolInvocationId,
   createWorkspaceId,
-  type AgentEvent,
+  type PublicRunEvent,
   type ApprovalRequest,
   type ClientAgentRun,
   type ClientAgentSession,
@@ -156,7 +156,7 @@ function makeClient(overrides: Partial<CliDaemonClient> = {}): CliDaemonClient {
       await new Promise<void>((resolve) => {
         options?.signal?.addEventListener("abort", () => resolve(), { once: true });
       });
-      yield* [] as AgentEvent[];
+      yield* [] as PublicRunEvent[];
     },
     startRun: async () => actionResponse(run, "START"),
     recoverRun: async () => actionResponse(run, "RECOVER"),

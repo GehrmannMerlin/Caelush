@@ -7,7 +7,7 @@ import {
   createStepId,
   createVerificationPlanId,
   createWorkspaceId,
-  type AgentEvent,
+  type PublicRunEvent,
   type ClientAgentRun,
   type ClientAgentSession,
   type DaemonInfo,
@@ -204,7 +204,7 @@ describe("WebSessionManager", () => {
     const client = makeClient({ createSessionResult: session, createRunResult: pendingRun });
     client.watchRunEvents.mockImplementation(async function* (_runId, options) {
       options?.onOpen?.();
-      yield* [] as AgentEvent[];
+      yield* [] as PublicRunEvent[];
       await new Promise<void>(() => undefined);
     });
     client.startRun.mockResolvedValue(
@@ -388,7 +388,7 @@ describe("WebSessionManager", () => {
     client.watchRunEvents.mockImplementation(async function* (_runId, options) {
       options?.onOpen?.();
       await new Promise((resolve) => setTimeout(resolve, 0));
-      yield* [] as AgentEvent[];
+      yield* [] as PublicRunEvent[];
     });
     const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
     await manager.loadSessions();
@@ -519,7 +519,7 @@ describe("WebSessionManager", () => {
       options?.onOpen?.();
       await new Promise((resolve) => setTimeout(resolve, 0));
       throw new Error("raw stream detail");
-      yield* [] as AgentEvent[];
+      yield* [] as PublicRunEvent[];
     });
     const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
     await manager.loadSessions();
@@ -568,7 +568,7 @@ function makeClient(
     latestRuns?: Map<string, readonly ClientAgentRun[]>;
     createSessionResult?: ClientAgentSession;
     createRunResult?: ClientAgentRun;
-    watchEvents?: readonly AgentEvent[];
+  watchEvents?: readonly PublicRunEvent[];
     refreshedRuns?: readonly ClientAgentRun[];
     transcriptResponse?: SessionTranscriptResponse;
   } = {},
@@ -579,7 +579,7 @@ function makeClient(
   readonly getRun: ReturnType<typeof vi.fn>;
   readonly getSessionTranscript: ReturnType<typeof vi.fn>;
   readonly watchRunEvents: ReturnType<typeof vi.fn>;
-  readonly watchEvents: readonly AgentEvent[];
+  readonly watchEvents: readonly PublicRunEvent[];
 } {
   let refreshIndex = 0;
   const sessions = options.sessions ?? [];
@@ -618,7 +618,7 @@ function makeClient(
     readonly getRun: ReturnType<typeof vi.fn>;
     readonly getSessionTranscript: ReturnType<typeof vi.fn>;
     readonly watchRunEvents: ReturnType<typeof vi.fn>;
-    readonly watchEvents: readonly AgentEvent[];
+    readonly watchEvents: readonly PublicRunEvent[];
   };
   return client;
 }
@@ -724,7 +724,7 @@ function makeCompletedRun(run: ClientAgentRun): ClientAgentRun {
   });
 }
 
-function lifecycleEvent(type: string, run: ClientAgentRun): AgentEvent {
+function lifecycleEvent(type: string, run: ClientAgentRun): PublicRunEvent {
   return {
     type,
     eventId: "evt_00000000-0000-7000-8000-000000000001",
@@ -735,10 +735,10 @@ function lifecycleEvent(type: string, run: ClientAgentRun): AgentEvent {
     visibility: "USER_VISIBLE",
     durability: { kind: "EPHEMERAL" },
     payload: {},
-  } as AgentEvent;
+  } as PublicRunEvent;
 }
 
-function reasoningEvent(run: ClientAgentRun, summary: string): AgentEvent {
+function reasoningEvent(run: ClientAgentRun, summary: string): PublicRunEvent {
   return {
     type: "reasoning.summary",
     eventId: "evt_00000000-0000-7000-8000-000000000002",
@@ -749,7 +749,7 @@ function reasoningEvent(run: ClientAgentRun, summary: string): AgentEvent {
     visibility: "USER_VISIBLE",
     durability: { kind: "EPHEMERAL" },
     payload: { summary },
-  } as AgentEvent;
+  } as PublicRunEvent;
 }
 
 function durableReasoningEvent(
@@ -757,12 +757,12 @@ function durableReasoningEvent(
   eventId: string,
   sequence: number,
   summary: string,
-): AgentEvent {
+): PublicRunEvent {
   return {
     ...reasoningEvent(run, summary),
     eventId,
     durability: { kind: "DURABLE", sequence },
-  } as AgentEvent;
+  } as PublicRunEvent;
 }
 
 function actionResponse(run: ClientAgentRun, runId: string): RunActionResponse {

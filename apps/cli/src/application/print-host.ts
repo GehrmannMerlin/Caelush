@@ -1,4 +1,4 @@
-import type { AgentEvent, ClientAgentRun, RunId, RunStatus } from "@caelush/protocol";
+import type { PublicRunEvent, ClientAgentRun, RunId, RunStatus } from "@caelush/protocol";
 import { VerifiedRunFinalResultSchema } from "@caelush/protocol";
 import {
   CliConversationController,
@@ -80,7 +80,7 @@ export function serializePrintResult(result: PrintResult): string {
   return JSON.stringify(result);
 }
 
-export function shouldEmitPrintEvent(event: Pick<AgentEvent, "visibility">): boolean {
+export function shouldEmitPrintEvent(event: Pick<PublicRunEvent, "visibility">): boolean {
   return event.visibility === "USER_VISIBLE";
 }
 

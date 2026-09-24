@@ -5,7 +5,7 @@ import {
   createSessionId,
   createToolInvocationId,
   createWorkspaceId,
-  type AgentEvent,
+  type PublicRunEvent,
   type ClientAgentRun,
   type ClientAgentSession,
   type RunActionResponse,
@@ -86,7 +86,7 @@ describe("CLI active Run recovery", () => {
         await new Promise<void>((resolve) => {
           options?.signal?.addEventListener("abort", () => resolve(), { once: true });
         });
-        yield* [] as AgentEvent[];
+        yield* [] as PublicRunEvent[];
       },
     });
     const controller = new CliConversationController({
@@ -153,7 +153,7 @@ function makeClient(overrides: Partial<CliDaemonClient> = {}): CliDaemonClient {
     listRuns: async () => ({ items: [] }),
     watchRunEvents: async function* () {
       await new Promise<void>(() => undefined);
-      yield* [] as AgentEvent[];
+      yield* [] as PublicRunEvent[];
     },
     startRun: async () => actionResponse(defaultRun, "START"),
     recoverRun: async () => actionResponse(defaultRun, "RECOVER"),

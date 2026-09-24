@@ -4,7 +4,7 @@ import {
   createSessionId,
   createStepId,
   createWorkspaceId,
-  type AgentEvent,
+  type PublicRunEvent,
   type ClientAgentRun,
   type ClientAgentSession,
   type DaemonInfo,
@@ -108,7 +108,7 @@ describe("CliConversationController", () => {
       },
       watchRunEvents: async function* () {
         throw new Error("not used");
-        yield* [] as AgentEvent[];
+        yield* [] as PublicRunEvent[];
       },
       startRun: async () => {
         throw new Error("not used");
@@ -159,7 +159,7 @@ describe("CliConversationController", () => {
       watchRunEvents: async function* () {
         calls.push("watch");
         await new Promise<void>(() => undefined);
-        yield* [] as AgentEvent[];
+        yield* [] as PublicRunEvent[];
       },
       startRun: async () => {
         calls.push("startRun");
@@ -284,7 +284,7 @@ export function makeClient(overrides: Partial<CliDaemonClient> = {}): CliDaemonC
     createRun: async () => run,
     watchRunEvents: async function* () {
       await new Promise<void>(() => undefined);
-      yield* [] as AgentEvent[];
+      yield* [] as PublicRunEvent[];
     },
     startRun: async () => actionResponse(run),
     getRun: async () => run,
@@ -363,7 +363,7 @@ export function actionResponse(run: ClientAgentRun) {
   };
 }
 
-export function completedEvent(run: ClientAgentRun): AgentEvent {
+export function completedEvent(run: ClientAgentRun): PublicRunEvent {
   return {
     eventId: createEventId(),
     schemaVersion: 1,
@@ -375,5 +375,5 @@ export function completedEvent(run: ClientAgentRun): AgentEvent {
     visibility: "USER_VISIBLE",
     durability: { kind: "DURABLE", version: 1, sequence: 1 },
     payload: { result: { type: "VERIFIED_COMPLETION" } },
-  } as AgentEvent;
+  } as PublicRunEvent;
 }

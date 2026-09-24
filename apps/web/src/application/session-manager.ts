@@ -24,7 +24,7 @@ import {
   type WatchRunEventsOptions,
 } from "@caelush/client";
 import type {
-  AgentEvent,
+  PublicRunEvent,
   ApprovalRequestId,
   ApprovalResolution,
   ClientAgentRun,
@@ -65,7 +65,7 @@ export interface WebSessionClient extends SessionCandidateClient, WebHostClient 
   cancelRun(runId: RunId): Promise<RunActionResponse>;
   continueResourceGuard(runId: RunId): Promise<RunActionResponse>;
   getRunContextUsage?(runId: RunId): Promise<ContextUsageProjection | null>;
-  watchRunEvents(runId: RunId, options?: WatchRunEventsOptions): AsyncIterable<AgentEvent>;
+  watchRunEvents(runId: RunId, options?: WatchRunEventsOptions): AsyncIterable<PublicRunEvent>;
 }
 
 export type WebSessionLoadState = "IDLE" | "LOADING" | "READY" | "ERROR";
@@ -894,7 +894,7 @@ export class WebSessionManager {
     }
   }
 
-  private projectApprovalEvent(event: AgentEvent): void {
+  private projectApprovalEvent(event: PublicRunEvent): void {
     if (event.type === "approval.requested") {
       const current = this.snapshot.approvalState?.requests ?? [];
       const otherRequests = current.filter((item) => item.id !== event.payload.approval.id);
@@ -1138,7 +1138,7 @@ function isTimelineTerminalRunStatus(
   return isTerminalRunStatus(status);
 }
 
-function isLifecycleEvent(event: AgentEvent): boolean {
+function isLifecycleEvent(event: PublicRunEvent): boolean {
   return (
     event.type === "run.started" ||
     event.type === "status.changed" ||

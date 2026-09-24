@@ -4,7 +4,7 @@ import {
   createStepId,
   createVerificationPlanId,
   createWorkspaceId,
-  type AgentEvent,
+  type PublicRunEvent,
   type ClientAgentRun,
   type ClientAgentSession,
   type RunActionResponse,
@@ -127,7 +127,7 @@ describe("CLI cancellation and detach", () => {
               { once: true },
             );
           });
-          yield* [] as AgentEvent[];
+          yield* [] as PublicRunEvent[];
         },
       }),
     );
@@ -193,7 +193,7 @@ function makeClient(overrides: Partial<CliDaemonClient> = {}): CliDaemonClient {
       await new Promise<void>((resolve) => {
         options?.signal?.addEventListener("abort", () => resolve(), { once: true });
       });
-      yield* [] as AgentEvent[];
+      yield* [] as PublicRunEvent[];
     },
     startRun: async () => actionResponse(run, "START"),
     recoverRun: async () => actionResponse(run, "RECOVER"),

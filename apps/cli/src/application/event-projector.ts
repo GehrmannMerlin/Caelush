@@ -1,4 +1,4 @@
-import type { AgentEvent, RunStatus } from "@caelush/protocol";
+import type { PublicRunEvent, RunStatus } from "@caelush/protocol";
 import type { CliActivity, CliViewState } from "./cli-state.js";
 import type { CliTimelineEntry } from "./timeline-model.js";
 import { flushTimelineForTerminal, reduceTimelineEvent } from "./timeline-reducer.js";
@@ -9,7 +9,7 @@ export interface CliEventProjection {
   readonly terminalStatus?: RunStatus;
 }
 
-export function projectAgentEvent(state: CliViewState, event: AgentEvent): CliEventProjection {
+export function projectPublicRunEvent(state: CliViewState, event: PublicRunEvent): CliEventProjection {
   if (state.activeRun === undefined || state.activeRun.runId !== event.runId) {
     return { state, terminal: false };
   }
@@ -78,7 +78,7 @@ interface EventLifecycle {
   readonly terminal: boolean;
 }
 
-function lifecycleForEvent(event: AgentEvent): EventLifecycle | undefined {
+function lifecycleForEvent(event: PublicRunEvent): EventLifecycle | undefined {
   switch (event.type) {
     case "status.changed":
       return {

@@ -3,18 +3,18 @@ import {
   createRunId,
   createSessionId,
   createStepId,
-  type AgentEvent,
+  type PublicRunEvent,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import { createInitialCliState } from "../src/application/cli-state.js";
-import { projectAgentEvent } from "../src/application/event-projector.js";
+import { projectPublicRunEvent } from "../src/application/event-projector.js";
 
 const runId = createRunId();
 const otherRunId = createRunId();
 const sessionId = createSessionId();
 const stepId = createStepId();
 
-describe("CLI AgentEvent projection", () => {
+describe("CLI PublicRunEvent projection", () => {
   it("projects matching lifecycle statuses to safe activity labels", () => {
     const state = {
       ...createInitialCliState(),
@@ -27,7 +27,7 @@ describe("CLI AgentEvent projection", () => {
       to: "VERIFYING",
     });
 
-    const result = projectAgentEvent(state, event);
+    const result = projectPublicRunEvent(state, event);
 
     expect(result.state.activeRun).toEqual({ runId, status: "VERIFYING" });
     expect(result.state.activity).toBe("Verifying");
@@ -43,7 +43,7 @@ describe("CLI AgentEvent projection", () => {
     };
     const event = eventOf("run.completed", { result: { hidden: "provider output" } });
 
-    const result = projectAgentEvent(state, event);
+    const result = projectPublicRunEvent(state, event);
 
     expect(result.terminal).toBe(true);
     expect(result.terminalStatus).toBe("COMPLETED");
@@ -64,12 +64,12 @@ describe("CLI AgentEvent projection", () => {
     });
     const mismatched = { ...event, runId: otherRunId };
 
-    expect(projectAgentEvent(state, event).state.timeline.settled[0]?.text).toBe("secret output");
-    expect(projectAgentEvent(state, mismatched).state).toEqual(state);
+    expect(projectPublicRunEvent(state, event).state.timeline.settled[0]?.text).toBe("secret output");
+    expect(projectPublicRunEvent(state, mismatched).state).toEqual(state);
   });
 });
 
-function eventOf(type: AgentEvent["type"], payload: unknown): AgentEvent {
+function eventOf(type: PublicRunEvent["type"], payload: unknown): PublicRunEvent {
   return {
     eventId: createEventId(),
     schemaVersion: 1,
@@ -81,5 +81,5 @@ function eventOf(type: AgentEvent["type"], payload: unknown): AgentEvent {
     visibility: "USER_VISIBLE",
     durability: { kind: "DURABLE", version: 1, sequence: 1 },
     payload,
-  } as AgentEvent;
+  } as PublicRunEvent;
 }
