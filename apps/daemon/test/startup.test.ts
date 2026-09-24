@@ -2,7 +2,12 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { getDefaultDatabasePath } from "../src/main.js";
-import { assertLoopbackDaemonHost, readProviderConfiguration } from "../src/config.js";
+import {
+  assertLoopbackDaemonHost,
+  createDaemonConfig,
+  DEFAULT_DAEMON_CONFIG,
+  readProviderConfiguration,
+} from "../src/config.js";
 
 describe("daemon command startup", () => {
   it("derives the default database path cross-platform", () => {
@@ -46,5 +51,28 @@ describe("daemon command startup", () => {
     expect(() => readProviderConfiguration({ CAELUSH_DEFAULT_PROVIDER: "configured" })).toThrow(
       "required together",
     );
+  });
+
+  it("validates the bounded RunEventHub policy at daemon configuration time", () => {
+    expect(DEFAULT_DAEMON_CONFIG.runEventQueuePolicy).toMatchObject({
+      maxPendingItems: 256,
+      maxPendingBytes: 1_048_576,
+    });
+    expect(() =>
+      createDaemonConfig({
+        runEventQueuePolicy: {
+          ...DEFAULT_DAEMON_CONFIG.runEventQueuePolicy,
+          maxPendingItems: 0,
+        },
+      }),
+    ).toThrow(/maxPendingItems/);
+    expect(() =>
+      createDaemonConfig({
+        runEventQueuePolicy: {
+          ...DEFAULT_DAEMON_CONFIG.runEventQueuePolicy,
+          maxPendingBytes: Number.MAX_SAFE_INTEGER + 1,
+        },
+      }),
+    ).toThrow(/maxPendingBytes/);
   });
 });

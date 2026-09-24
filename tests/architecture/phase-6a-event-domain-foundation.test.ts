@@ -36,9 +36,7 @@ describe("Architecture V2 Phase 6A event domain foundation", () => {
   });
 
   it("keeps future-phase runtime components absent", async () => {
-    await expect(read("apps/daemon/src/events/run-event-hub.ts")).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    expect(await read("apps/daemon/src/events/run-event-hub.ts")).toContain("class RunEventHub");
     await expect(read("packages/agent/src/hooks/control-hook-registry.ts")).rejects.toMatchObject({
       code: "ENOENT",
     });

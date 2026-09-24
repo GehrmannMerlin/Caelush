@@ -5,7 +5,6 @@ import {
   validatorCompiler,
   type ZodTypeProvider,
 } from "fastify-type-provider-zod";
-import type { EventBus } from "@caelush/events";
 import type { DaemonInfo } from "@caelush/protocol";
 import type { SessionRepository, RunRepository } from "@caelush/storage";
 import type { DaemonConfig } from "./config.js";
@@ -22,11 +21,14 @@ import { registerEventStreamRoute } from "./routes/events.js";
 import { registerExecutionRoutes, type DaemonExecutionSurface } from "./routes/execution.js";
 import { registerInfoRoute } from "./routes/info.js";
 import { registerWebStaticHost, type WebStaticHostOptions } from "./web/static-host.js";
+import type { RunEventHub } from "./events/run-event-hub.js";
 
 export interface DaemonDependencies {
   readonly sessions: SessionRepository;
   readonly runs: RunRepository;
-  readonly eventBus: EventBus;
+  readonly eventHub?: Pick<RunEventHub, "watch">;
+  /** @deprecated Legacy tests and hosts may still provide an EventBus watch port. */
+  readonly eventBus?: Pick<RunEventHub, "watch">;
   readonly config: DaemonConfig;
   readonly activeStreams?: Set<AbortController>;
   readonly execution?: DaemonExecutionSurface;
@@ -71,8 +73,9 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
   app.after(() => {
     registerEventStreamRoute(app, {
       runs: dependencies.runs,
-      eventBus: dependencies.eventBus,
       activeStreams: { controllers: dependencies.activeStreams ?? new Set() },
+      ...(dependencies.eventHub === undefined ? {} : { eventHub: dependencies.eventHub }),
+      ...(dependencies.eventBus === undefined ? {} : { eventBus: dependencies.eventBus }),
     });
   });
   return app;

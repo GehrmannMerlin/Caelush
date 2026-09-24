@@ -1,10 +1,10 @@
 import { EventStreamQuerySchema, type EventStreamQuery, type AgentEvent } from "@caelush/protocol";
-import type { EventBus } from "@caelush/events";
 import type { RunRepository } from "@caelush/storage";
 import { StorageNotFoundError } from "@caelush/storage";
 import type { FastifyInstance } from "fastify";
 import { mapAgentEventToSse } from "../transport/sse-event-mapper.js";
 import { InvalidEventCursorError } from "../transport/error-handler.js";
+import type { RunEventHub } from "../events/run-event-hub.js";
 
 export interface ActiveStreamRegistry {
   readonly controllers: Set<AbortController>;
@@ -43,7 +43,9 @@ export function registerEventStreamRoute(
   app: FastifyInstance,
   dependencies: {
     readonly runs: RunRepository;
-    readonly eventBus: EventBus;
+    readonly eventHub?: Pick<RunEventHub, "watch">;
+    /** @deprecated Compatibility watch port for legacy test hosts. */
+    readonly eventBus?: Pick<RunEventHub, "watch">;
     readonly activeStreams: ActiveStreamRegistry;
   },
 ): void {
@@ -67,9 +69,11 @@ export function registerEventStreamRoute(
       reply.sse.onClose(() => controller.abort());
 
       try {
+        const eventSource = dependencies.eventHub ?? dependencies.eventBus;
+        if (eventSource === undefined) throw new Error("RunEventHub is not composed.");
         await reply.sse.send(
           mapEvents(
-            dependencies.eventBus.watch(runId as never, {
+            eventSource.watch(runId as never, {
               afterSequence,
               signal: controller.signal,
             }),

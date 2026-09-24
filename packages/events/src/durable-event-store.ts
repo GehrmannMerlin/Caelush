@@ -5,7 +5,7 @@ export interface DurableEventStore {
   append(event: DurableEventDraft): Promise<DurableAgentEvent>;
   replay(
     runId: RunId,
-    options?: { afterSequence?: number; limit?: number },
+    options?: { afterSequence?: number; throughSequence?: number; limit?: number },
   ): Promise<DurableAgentEvent[]>;
   latestSequence(runId: RunId): Promise<number>;
 }

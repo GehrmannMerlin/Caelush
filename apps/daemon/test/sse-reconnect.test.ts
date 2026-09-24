@@ -11,19 +11,23 @@ import {
   createWorkspaceId,
 } from "@caelush/protocol";
 import { EventBus } from "@caelush/events";
+import type { DurableRunEvent } from "@caelush/protocol";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildDaemonApp } from "../src/index.js";
+import { RunEventHub } from "../src/index.js";
 import { resolveEventCursor } from "../src/routes/events.js";
 
 let app: ReturnType<typeof buildDaemonApp> | undefined;
 let storage: CaelushStorage | undefined;
 let directory: string | undefined;
 let activeStreams: Set<AbortController> | undefined;
+let eventHub: RunEventHub | undefined;
 
 afterEach(async () => {
   for (const controller of activeStreams ?? []) controller.abort();
   await app?.close();
+  await eventHub?.dispose();
   await storage?.close();
   if (directory) await rm(directory, { recursive: true, force: true });
   app = undefined;
@@ -36,6 +40,8 @@ async function makeServer() {
   directory = await mkdtemp(join(tmpdir(), "caelush-reconnect-"));
   storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
   const eventBus = new EventBus(storage.events);
+  const hub = new RunEventHub(storage.eventReader);
+  eventHub = hub;
   const session = AgentSessionSchema.parse({
     id: createSessionId(),
     createdAt: 1_700_000_000_000,
@@ -61,14 +67,14 @@ async function makeServer() {
   app = buildDaemonApp({
     sessions: storage.sessions,
     runs: storage.runs,
-    eventBus,
+    eventHub: hub,
     activeStreams,
     config: { host: "127.0.0.1", port: 0, sseHeartbeatIntervalMs: 0 },
   });
   await app.listen({ host: "127.0.0.1", port: 0 });
   const address = app.server.address();
   if (!address || typeof address === "string") throw new Error("server did not bind a TCP port");
-  return { eventBus, run, url: `http://127.0.0.1:${address.port}` };
+  return { eventBus, eventHub: hub, run, url: `http://127.0.0.1:${address.port}` };
 }
 
 function eventDraft(run: { id: string; sessionId: string }, sequence: number) {
@@ -87,6 +93,15 @@ function eventDraft(run: { id: string; sessionId: string }, sequence: number) {
       chunk: String(sequence),
     },
   };
+}
+
+async function publishAndNotify(
+  eventBus: EventBus,
+  hub: RunEventHub,
+  draft: ReturnType<typeof eventDraft>,
+): Promise<void> {
+  const committed = await eventBus.publish(draft);
+  hub.notifyCommitted([committed as DurableRunEvent]);
 }
 
 async function nextFrame(
@@ -131,10 +146,10 @@ describe("SSE reconnect", () => {
   });
 
   it("replays after Last-Event-ID without gaps or duplicates, then tails live", async () => {
-    const { eventBus, run, url } = await makeServer();
-    await eventBus.publish(eventDraft(run, 1));
-    await eventBus.publish(eventDraft(run, 2));
-    await eventBus.publish(eventDraft(run, 3));
+    const { eventBus, eventHub: hub, run, url } = await makeServer();
+    await publishAndNotify(eventBus, hub, eventDraft(run, 1));
+    await publishAndNotify(eventBus, hub, eventDraft(run, 2));
+    await publishAndNotify(eventBus, hub, eventDraft(run, 3));
 
     const response = await fetch(`${url}/api/v1/runs/${run.id}/events`, {
       headers: { accept: "text/event-stream", "last-event-id": "1" },
@@ -150,7 +165,7 @@ describe("SSE reconnect", () => {
     expect([frameId(first.frame), frameId(second.frame)]).toEqual(["2", "3"]);
 
     const liveFrame = reader.read();
-    await eventBus.publish(eventDraft(run, 4));
+    await publishAndNotify(eventBus, hub, eventDraft(run, 4));
     const live = await Promise.race([
       liveFrame,
       new Promise<never>((_, reject) =>
@@ -162,9 +177,9 @@ describe("SSE reconnect", () => {
   });
 
   it("supports query cursors and returns typed errors for invalid cursor input", async () => {
-    const { eventBus, run, url } = await makeServer();
-    await eventBus.publish(eventDraft(run, 1));
-    await eventBus.publish(eventDraft(run, 2));
+    const { eventBus, eventHub: hub, run, url } = await makeServer();
+    await publishAndNotify(eventBus, hub, eventDraft(run, 1));
+    await publishAndNotify(eventBus, hub, eventDraft(run, 2));
 
     const queryResponse = await fetch(`${url}/api/v1/runs/${run.id}/events?afterSequence=1`, {
       headers: { accept: "text/event-stream" },

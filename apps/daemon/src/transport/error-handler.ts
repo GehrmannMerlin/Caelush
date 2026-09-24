@@ -19,6 +19,7 @@ import {
   RunExecutionSupervisorInfrastructureError,
 } from "../execution/run-execution-supervisor.js";
 import { DaemonModelConfigurationError } from "../providers/model-canonicalizer.js";
+import { EventCursorAheadError } from "../events/run-event-hub.js";
 
 export class InvalidEventCursorError extends Error {
   constructor() {
@@ -64,6 +65,13 @@ function mapError(error: unknown): MappedError {
       statusCode: 400,
       code: "INVALID_EVENT_CURSOR",
       message: "The event cursor is invalid.",
+    };
+  }
+  if (error instanceof EventCursorAheadError) {
+    return {
+      statusCode: 409,
+      code: "EVENT_CURSOR_AHEAD",
+      message: "The event cursor is ahead of the committed Run history.",
     };
   }
   if (isEventCursorValidationError(error)) {

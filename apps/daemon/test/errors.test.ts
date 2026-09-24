@@ -6,6 +6,7 @@ import {
 } from "@caelush/storage";
 import { describe, expect, it } from "vitest";
 import { toApiErrorResponse } from "../src/transport/error-handler.js";
+import { EventCursorAheadError } from "../src/events/run-event-hub.js";
 
 describe("daemon error mapping", () => {
   it.each([
@@ -43,5 +44,14 @@ describe("daemon error mapping", () => {
     );
     expect(mapped.statusCode).toBe(400);
     expect(mapped.body.error.code).toBe("INVALID_EVENT_CURSOR");
+  });
+
+  it("maps a cursor ahead of the fixed high watermark explicitly", () => {
+    const mapped = toApiErrorResponse(
+      new EventCursorAheadError("run_00000000-0000-7000-8000-000000000000" as never, 3, 2),
+      "req-900",
+    );
+    expect(mapped.statusCode).toBe(409);
+    expect(mapped.body.error.code).toBe("EVENT_CURSOR_AHEAD");
   });
 });

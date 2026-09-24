@@ -4,6 +4,7 @@ import { JsonObjectSchema } from "../primitives/json.js";
 export const ApiErrorCodeSchema = z.enum([
   "INVALID_REQUEST",
   "INVALID_EVENT_CURSOR",
+  "EVENT_CURSOR_AHEAD",
   "NOT_FOUND",
   "CONFLICT",
   "MODEL_PROVIDER_UNAVAILABLE",

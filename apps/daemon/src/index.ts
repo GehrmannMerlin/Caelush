@@ -1,6 +1,25 @@
 export { buildDaemonApp } from "./app.js";
 export type { DaemonDependencies } from "./app.js";
 export {
+  EventCursorAheadError,
+  RunEventHub,
+  RunEventHubDisposedError,
+  RunEventReplayError,
+  DEFAULT_SUBSCRIBER_QUEUE_POLICY,
+} from "./events/index.js";
+export type {
+  ObserverErrorSink,
+  RunEventDeliveryContext,
+  RunEventHubOptions,
+  RunEventObserver,
+  RunEventStream,
+  RunEventSubscription,
+  RunEventSubscriptionCloseReason,
+  RunEventSubscriptionFilter,
+  RunEventWatchOptions,
+  SubscriberQueuePolicy,
+} from "./events/index.js";
+export {
   DEFAULT_DAEMON_CONFIG,
   assertLoopbackDaemonHost,
   createDaemonConfig,

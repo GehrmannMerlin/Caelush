@@ -1,11 +1,16 @@
 import type { ClientModelSelection } from "@caelush/protocol";
 import type { DaemonModelProviderConfig } from "./providers/model-canonicalizer.js";
+import {
+  DEFAULT_SUBSCRIBER_QUEUE_POLICY,
+  type SubscriberQueuePolicy,
+} from "./events/subscriber-queue.js";
 import { z } from "zod";
 
 export interface DaemonConfig {
   readonly host: string;
   readonly port: number;
   readonly sseHeartbeatIntervalMs: number;
+  readonly runEventQueuePolicy: SubscriberQueuePolicy;
 }
 
 export interface DaemonProviderStartupConfiguration {
@@ -17,10 +22,13 @@ export const DEFAULT_DAEMON_CONFIG: DaemonConfig = {
   host: "127.0.0.1",
   port: 43120,
   sseHeartbeatIntervalMs: 15_000,
+  runEventQueuePolicy: DEFAULT_SUBSCRIBER_QUEUE_POLICY,
 };
 
 export function createDaemonConfig(overrides: Partial<DaemonConfig> = {}): DaemonConfig {
-  return { ...DEFAULT_DAEMON_CONFIG, ...overrides };
+  const config = { ...DEFAULT_DAEMON_CONFIG, ...overrides };
+  validateSubscriberQueuePolicy(config.runEventQueuePolicy);
+  return config;
 }
 
 export function assertLoopbackDaemonHost(host: string): void {
@@ -126,4 +134,24 @@ function splitEnvironmentList(value: string | undefined): string[] {
         .split(",")
         .map((item) => item.trim())
         .filter((item) => item.length > 0);
+}
+
+function validateSubscriberQueuePolicy(policy: SubscriberQueuePolicy): void {
+  if (!Number.isSafeInteger(policy.maxPendingItems) || policy.maxPendingItems <= 0) {
+    throw new Error("runEventQueuePolicy.maxPendingItems must be a positive safe integer");
+  }
+  if (!Number.isSafeInteger(policy.maxPendingBytes) || policy.maxPendingBytes <= 0) {
+    throw new Error("runEventQueuePolicy.maxPendingBytes must be a positive safe integer");
+  }
+  if (policy.durableOverflow !== "CLOSE_SUBSCRIPTION") {
+    throw new Error("runEventQueuePolicy.durableOverflow must be CLOSE_SUBSCRIPTION");
+  }
+  if (policy.orderedTransientOverflow !== "CLOSE_SUBSCRIPTION") {
+    throw new Error("runEventQueuePolicy.orderedTransientOverflow must be CLOSE_SUBSCRIPTION");
+  }
+  if (policy.coalescibleTransientOverflow !== "REPLACE_BY_STREAM_KEY") {
+    throw new Error(
+      "runEventQueuePolicy.coalescibleTransientOverflow must be REPLACE_BY_STREAM_KEY",
+    );
+  }
 }

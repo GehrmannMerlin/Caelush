@@ -1,4 +1,5 @@
 import { AgentEventSchema, type RunId } from "@caelush/protocol";
+import type { DurableRunEventReaderPort } from "@caelush/agent";
 import type { DurableAgentEvent, DurableEventDraft, DurableEventStore } from "@caelush/events";
 import { DuplicateEventError } from "@caelush/events";
 import type { CaelushDatabase } from "../database.js";
@@ -31,10 +32,18 @@ function validateLimit(limit: number | undefined): number {
 
 function validateAfterSequence(sequence: number | undefined): number {
   const value = sequence ?? 0;
-  if (!Number.isInteger(value) || value < 0) {
+  if (!Number.isSafeInteger(value) || value < 0) {
     throw new RangeError("afterSequence must be a non-negative integer");
   }
   return value;
+}
+
+function validateThroughSequence(sequence: number | undefined): number | undefined {
+  if (sequence === undefined) return undefined;
+  if (!Number.isSafeInteger(sequence) || sequence < 0) {
+    throw new RangeError("throughSequence must be a non-negative safe integer");
+  }
+  return sequence;
 }
 
 function decodeEvent(row: EventRow): DurableAgentEvent {
@@ -127,7 +136,7 @@ export function appendDurableEventsInTransaction(
   });
 }
 
-export class SqliteDurableEventStore implements DurableEventStore {
+export class SqliteDurableEventStore implements DurableEventStore, DurableRunEventReaderPort {
   constructor(private readonly database: CaelushDatabase) {}
 
   async append(draft: DurableEventDraft): Promise<DurableAgentEvent> {
@@ -146,19 +155,27 @@ export class SqliteDurableEventStore implements DurableEventStore {
 
   async replay(
     runId: RunId,
-    options: { afterSequence?: number; limit?: number } = {},
+    options: { afterSequence?: number; throughSequence?: number; limit?: number } = {},
   ): Promise<DurableAgentEvent[]> {
     const afterSequence = validateAfterSequence(options.afterSequence);
+    const throughSequence = validateThroughSequence(options.throughSequence);
     const limit = validateLimit(options.limit);
+    if (throughSequence !== undefined && throughSequence < afterSequence) return [];
+    const upperBound = throughSequence === undefined ? "" : " AND aggregate_sequence <= ?";
+    const parameters =
+      throughSequence === undefined
+        ? [runId, afterSequence, limit]
+        : [runId, afterSequence, throughSequence, limit];
     const rows = this.database.client
       .prepare(
         `SELECT event_id, run_id, session_id, step_id, aggregate_sequence, event_type,
                 event_schema_version, visibility, timestamp_ms, data_json
          FROM agent_events
          WHERE run_id = ? AND aggregate_sequence > ?
+         ${upperBound}
          ORDER BY aggregate_sequence ASC LIMIT ?`,
       )
-      .all(runId, afterSequence, limit);
+      .all(...parameters);
     return (rows as unknown as EventRow[]).map(decodeEvent);
   }
 

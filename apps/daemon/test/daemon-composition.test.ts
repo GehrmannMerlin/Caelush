@@ -1,7 +1,6 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EventBus } from "@caelush/events";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { composeDaemon, type DaemonComposition } from "../src/daemon-composition.js";
@@ -23,11 +22,8 @@ describe("daemon production composition", () => {
   it("builds one shared runtime, tool catalog, gateway, controller, and supervisor", async () => {
     directory = await mkdtemp(join(tmpdir(), "caelush-composition-"));
     storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
-    const eventBus = new EventBus(storage.events);
-
     composition = await composeDaemon({
       storage,
-      eventBus,
       providers: [
         {
           provider: "openai-compatible",
@@ -39,7 +35,8 @@ describe("daemon production composition", () => {
       defaultModel: { provider: "openai-compatible", model: "fixture-model" },
     });
 
-    expect(composition.eventBus).toBe(eventBus);
+    expect(composition.eventHub).toBeDefined();
+    expect(composition.events).toBe(composition.eventHub);
     expect(composition.runs).toBe(storage.runs);
     expect(composition.approvals).toBe(storage.approvals);
     expect(composition.contextRuntime).toBeDefined();
@@ -126,10 +123,8 @@ describe("daemon production composition", () => {
   it("filters Git tools from the model catalog and the registry for a non-Git workspace", async () => {
     directory = await mkdtemp(join(tmpdir(), "caelush-composition-non-git-"));
     storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
-    const eventBus = new EventBus(storage.events);
     composition = await composeDaemon({
       storage,
-      eventBus,
       toolExposure: "UNAVAILABLE",
     });
 

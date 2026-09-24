@@ -1,4 +1,3 @@
-import { EventBus } from "@caelush/events";
 import type { AIProviderBinding, ApiAdapter, ModelDescriptorSourcePort } from "@caelush/ai";
 import type { ClientModelSelection } from "@caelush/protocol";
 import { openCaelushStorage, toHostToolEffectsPort } from "@caelush/storage";
@@ -20,12 +19,14 @@ import { composeDaemon, type DaemonComposition } from "./daemon-composition.js";
 import { SessionTranscriptService } from "./services/session-transcript-service.js";
 import type { DaemonModelProviderConfig } from "./providers/model-canonicalizer.js";
 import type { WebStaticHostOptions } from "./web/static-host.js";
+import type { SubscriberQueuePolicy } from "./events/subscriber-queue.js";
 
 export interface DaemonOptions {
   readonly databasePath: string;
   readonly host?: string;
   readonly port?: number;
   readonly sseHeartbeatIntervalMs?: number;
+  readonly runEventQueuePolicy?: SubscriberQueuePolicy;
   readonly logger?: boolean;
   readonly providers?: readonly DaemonModelProviderConfig[];
   readonly defaultModel?: ClientModelSelection;
@@ -47,6 +48,9 @@ function resolveConfig(options: DaemonOptions): DaemonConfig {
     ...(options.sseHeartbeatIntervalMs === undefined
       ? {}
       : { sseHeartbeatIntervalMs: options.sseHeartbeatIntervalMs }),
+    ...(options.runEventQueuePolicy === undefined
+      ? {}
+      : { runEventQueuePolicy: options.runEventQueuePolicy }),
   });
   assertLoopbackDaemonHost(config.host);
   return config;
@@ -101,12 +105,11 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       }),
     }),
   });
-  const eventBus = new EventBus(storage.events);
   let composition: DaemonComposition;
   try {
     composition = await composeDaemon({
       storage,
-      eventBus,
+      eventQueuePolicy: config.runEventQueuePolicy,
       runtime,
       ...(options.providers === undefined ? {} : { providers: options.providers }),
       ...(options.defaultModel === undefined ? {} : { defaultModel: options.defaultModel }),
@@ -127,10 +130,13 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   const activeStreams = new Set<AbortController>();
   let app: Awaited<ReturnType<typeof buildDaemonApp>>;
   try {
+    if (composition.eventHub === undefined) {
+      throw new Error("Production daemon composition did not create a RunEventHub.");
+    }
     app = buildDaemonApp({
       sessions: storage.sessions,
       runs: storage.runs,
-      eventBus,
+      eventHub: composition.eventHub,
       activeStreams,
       config,
       execution: composition,

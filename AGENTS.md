@@ -6,9 +6,10 @@ do not own separate Agent implementations.
 
 The current source-of-truth branch is `main`. The Message System migration is
 complete through Architecture V2 Phase 5F. The Event System migration is
-complete through Phase 6A only: the canonical RunEvent domain and Protocol
-foundation are present, while the runtime/control-plane phases remain pending.
-Phase 5: COMPLETE. Phase 6A: COMPLETE. Phase 6B–6H: NOT STARTED.
+complete through Phase 6B: the canonical RunEvent domain and Protocol foundation
+plus the daemon-owned asynchronous observation runtime are present, while the
+public projection and control-plane phases remain pending. Phase 5: COMPLETE.
+Phase 6A: COMPLETE. Phase 6B: COMPLETE. Phase 6C–6H: NOT STARTED.
 Phase 5F owns the final historical
 backfill, physical `agent_messages` rebuild, legacy reader/package retirement,
 and daemon/client final cutover.
@@ -67,15 +68,20 @@ Phase 5D established durable conversation authority for Context and replay.
 - `@caelush/agent` owns `DurableRunEventDraft`, `RunEventNotifierPort`, and the
   read-only `DurableRunEventReaderPort` contracts. Agent has no Storage or
   daemon write authority.
-- `@caelush/events` remains the transitional EventBus runtime and compatibility
-  package during Phase 6A. Durable events are persisted before publication;
-  sequence is the authoritative order. Durable SSE events use sequence as
-  `id`; ephemeral events never receive an SSE id.
+- `apps/daemon` owns the process-scoped `RunEventHub`, bounded per-subscriber
+  queues, independent observer workers, observer error isolation, and the
+  replay/live bridge. The Hub has no durable write authority.
+- `@caelush/storage` exposes a read-only durable event reader with inclusive
+  `throughSequence` replay while retaining the legacy append writer.
+- `@caelush/events` remains the transitional EventBus compatibility package
+  during Phase 6B. Durable events are persisted before publication; sequence
+  is the authoritative order. Durable SSE events use sequence as `id`;
+  ephemeral events never receive an SSE id.
 - `@caelush/verification` can produce bounded evidence and verification
   results but cannot transition a Run to `COMPLETED`. Only Core/RunController
   owns that transition.
 
-## Event V2 / Phase 6A
+## Event V2 / Phase 6B
 
 - `RunEvent` is the target Event domain name; `AgentEvent` is migration
   compatibility naming only.
@@ -85,9 +91,19 @@ Phase 5D established durable conversation authority for Context and replay.
   delivery classification in the static Protocol catalog.
 - Do not make `@caelush/ai` or `@caelush/runtime` depend on RunEvent.
 - Do not introduce new `EventBus` durable `publish()` call sites.
-- Phase 6A does not cut over RunEventHub, public projection, transient output,
-  SSE/client behavior, durable writers, or Control Hooks; those remain
-  6B–6H work.
+- `RunEventHub` belongs to the daemon, depends on the read-only reader port,
+  and must not append durable events or import SQLite implementation details.
+- Every subscriber queue is bounded by both pending item count and UTF-8 byte
+  count. Durable and ordered-transient overflow closes the slow subscription;
+  coalescible pending signals use same-stream latest-wins replacement.
+- Observer callbacks execute outside the producer stack on independent workers;
+  synchronous throws and rejected Promises are reported and isolated.
+- Replay subscribes before reading a fixed high watermark, rejects a cursor
+  ahead of that watermark, validates strict sequence order, deduplicates
+  buffered durable events, and discards catch-up transient events.
+- Phase 6B does not cut over PublicEventProjector, USER_VISIBLE-only public
+  projection, durable writer retirement, transient producers, model streaming,
+  or Control Hooks; those remain 6C–6G work. Package retirement remains 6H.
 
 ## Message V2 / Phase 5F
 

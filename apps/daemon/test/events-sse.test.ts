@@ -11,18 +11,22 @@ import {
   createWorkspaceId,
 } from "@caelush/protocol";
 import { EventBus } from "@caelush/events";
+import type { DurableRunEvent } from "@caelush/protocol";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildDaemonApp } from "../src/index.js";
+import { RunEventHub } from "../src/index.js";
 
 let app: ReturnType<typeof buildDaemonApp> | undefined;
 let storage: CaelushStorage | undefined;
 let directory: string | undefined;
 let activeStreams: Set<AbortController> | undefined;
+let eventHub: RunEventHub | undefined;
 
 afterEach(async () => {
   for (const controller of activeStreams ?? []) controller.abort();
   await app?.close();
+  await eventHub?.dispose();
   await storage?.close();
   if (directory) await rm(directory, { recursive: true, force: true });
   app = undefined;
@@ -35,6 +39,8 @@ async function makeServer() {
   directory = await mkdtemp(join(tmpdir(), "caelush-events-"));
   storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
   const eventBus = new EventBus(storage.events);
+  const hub = new RunEventHub(storage.eventReader);
+  eventHub = hub;
   activeStreams = new Set();
   const session = AgentSessionSchema.parse({
     id: createSessionId(),
@@ -60,11 +66,11 @@ async function makeServer() {
   app = buildDaemonApp({
     sessions: storage.sessions,
     runs: storage.runs,
-    eventBus,
+    eventHub: hub,
     activeStreams,
     config: { host: "127.0.0.1", port: 0, sseHeartbeatIntervalMs: 0 },
   });
-  return { app, eventBus, run };
+  return { app, eventBus, eventHub: hub, run };
 }
 
 function eventDraft(run: { id: string; sessionId: string }) {
@@ -95,7 +101,7 @@ describe("event stream route", () => {
   });
 
   it("streams a Durable event over a real HTTP socket", async () => {
-    const { app: server, eventBus, run } = await makeServer();
+    const { app: server, eventBus, eventHub: hub, run } = await makeServer();
     await server.listen({ host: "127.0.0.1", port: 0 });
     const address = server.server.address();
     if (!address || typeof address === "string") throw new Error("server did not bind a TCP port");
@@ -104,7 +110,8 @@ describe("event stream route", () => {
       headers: { accept: "text/event-stream" },
     });
     await new Promise((resolve) => setTimeout(resolve, 50));
-    await eventBus.publish(eventDraft(run));
+    const committed = await eventBus.publish(eventDraft(run));
+    hub.notifyCommitted([committed as DurableRunEvent]);
     const response = await responsePromise;
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/event-stream");

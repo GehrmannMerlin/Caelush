@@ -123,6 +123,28 @@ describe("SqliteDurableEventStore", () => {
     await database.close();
   });
 
+  it("replays through an inclusive upper sequence bound", async () => {
+    const { database, store } = await createStore();
+    const sessionId = createSessionId();
+    const runId = createRunId();
+    await createParents(database, runId, sessionId);
+
+    await store.append(makeDraft(runId, sessionId, 1));
+    await store.append(makeDraft(runId, sessionId, 2));
+    await store.append(makeDraft(runId, sessionId, 3));
+
+    expect(
+      (await store.replay(runId, { afterSequence: 0, throughSequence: 2, limit: 10 })).map(
+        (event) => event.durability.sequence,
+      ),
+    ).toEqual([1, 2]);
+    expect(await store.replay(runId, { afterSequence: 2, throughSequence: 1, limit: 10 })).toEqual(
+      [],
+    );
+
+    await database.close();
+  });
+
   it("rejects an invalid replay limit", async () => {
     const { database, store } = await createStore();
     await expect(store.replay(createRunId(), { limit: 0 })).rejects.toThrow(/limit/);

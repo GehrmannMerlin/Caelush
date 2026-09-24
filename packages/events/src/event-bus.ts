@@ -1,4 +1,4 @@
-import type { AgentEvent, RunId } from "@caelush/protocol";
+import type { AgentEvent, RunId, TransientRunEvent } from "@caelush/protocol";
 import type { DurableEventStore } from "./durable-event-store.js";
 import type { DurableAgentEvent, DurableEventDraft } from "./event-draft.js";
 import { AsyncEventQueue } from "./event-stream.js";
@@ -36,6 +36,11 @@ export class EventBus {
 
   notifyCommitted(events: readonly DurableAgentEvent[]): void {
     for (const event of events) this.notify(event);
+  }
+
+  /** @deprecated Observation is daemon-owned by RunEventHub in Phase 6B. */
+  emitTransient(event: TransientRunEvent): void {
+    this.notify(event);
   }
 
   subscribe(

@@ -18,10 +18,11 @@ The project is in active Architecture V2 development. The Message System
 migration through Phase 5F is complete: the daemon owns the server-side
 Transcript projection, CLI/Web consume the Protocol Transcript, and the final
 durable Message V2 schema is now the only runtime storage shape.
-The Event System migration has entered Phase 6 and its canonical RunEvent
-domain and Protocol foundation are complete through Phase 6A. Runtime fan-out,
-public projection, durable-writer cleanup, transient signal cutover, and
-Control Hooks remain later Phase 6 work.
+The Event System migration is complete through Phase 6B. The canonical RunEvent
+domain and Protocol foundation are now paired with a daemon-owned asynchronous
+RunEventHub, bounded per-subscriber delivery, observer isolation, and
+high-watermark replay/live bridging. Public projection, durable-writer cleanup,
+transient producer cutover, and Control Hooks remain later Phase 6 work.
 
 ## What Caelush provides
 
@@ -80,13 +81,14 @@ Core / Agent Kernel
   ├── one model turn → AI gateway → provider adapter
   ├── Tool decision → Registry → Security gate → Dispatcher → Runtime
   ├── durable records/events → SQLite + transitional EventBus
+  ├── committed/live RunEvents → daemon RunEventHub → SSE/host observation
   └── final candidate → Verification → Completion Authority
 ```
 
-### Phase 6A Event domain foundation
+### Phase 6 Event domain and observation runtime
 
-Phase 6A establishes the canonical event vocabulary without changing the
-production delivery path:
+Phase 6A established the canonical event vocabulary; Phase 6B adds the
+daemon-owned observation runtime without changing durable writer authority:
 
 ```text
 @caelush/protocol
@@ -98,8 +100,17 @@ production delivery path:
                 RunEventNotifierPort
                 DurableRunEventReaderPort
 
-@caelush/events
-  transitional EventBus + current replay/live runtime
+@caelush/storage
+  durable reader with throughSequence + legacy append compatibility
+          │
+          ▼
+apps/daemon
+  RunEventHub
+    bounded per-subscriber queues
+    independent observer workers
+    fixed-high-watermark replay/live bridge
+          │
+          └── SSE route observation (external shape unchanged)
 ```
 
 `AgentEvent` remains a deprecated compatibility name while v1 event fixtures
@@ -108,10 +119,17 @@ empty ephemeral metadata shape. New canonical transient metadata requires its
 delivery class and stream identity. Durable sequence allocation remains a
 Storage transaction responsibility.
 
-`RunEventHub`, bounded subscriber queues and observer workers,
-`PublicEventProjector`, SSE or Client migration, durable writer cleanup,
-transient output/model signal wiring, and Control Hook pipelines are not part
-of Phase 6A; they remain Phase 6B–6H work.
+Phase 6B makes the daemon observation plane producer-nonblocking and bounded:
+durable and ordered-transient overflow closes a slow subscription, while
+coalescible transient signals use same-stream latest-wins replacement. Replay
+subscribes before reading a fixed high watermark, rejects a cursor ahead of the
+watermark, deduplicates buffered durable events, and discards catch-up
+transients. `@caelush/events` remains the legacy EventBus compatibility package;
+its durable writer is intentionally retained for Phase 6D.
+
+`PublicEventProjector`, USER_VISIBLE-only public projection, transient producer
+and model-stream cutover, Control Hook pipelines, and legacy package retirement
+are not part of Phase 6B; they remain Phase 6C–6H work.
 
 ### Durable conversation
 
@@ -340,7 +358,8 @@ runtime: Phase 9C sanitizer injection, Phase 9D — V1 Security Integration, Pha
 | Phase 5E — transcript/client projection migration       | COMPLETE    |
 | Phase 5F — legacy Message V2 retirement                 | COMPLETE    |
 | Phase 6A — Event domain and Protocol foundation         | COMPLETE    |
-| Phase 6B–6H — Event runtime and control-plane migration | NOT STARTED |
+| Phase 6B — RunEventHub, replay, and backpressure        | COMPLETE    |
+| Phase 6C–6H — Public projection and control-plane work  | NOT STARTED |
 
 The status table records the completed Architecture V2 migration boundaries
 that are relevant to the current runtime. The repository also contains the

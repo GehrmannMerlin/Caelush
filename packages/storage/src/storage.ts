@@ -21,6 +21,7 @@ import { SqliteRunExecutionStore } from "./run-execution-store.js";
 import { SqliteToolExecutionStore } from "./tool-execution-store.js";
 import type { ToolSettlementExtensionDecoder } from "./tool-settlement-extension-adapter.js";
 import type { ToolExecutionStorePort } from "@caelush/agent";
+import type { DurableRunEventReaderPort } from "@caelush/agent";
 import {
   SqliteToolInvocationRepository,
   type ToolInvocationRepository,
@@ -70,6 +71,7 @@ export interface CaelushStorage {
   readonly steps: StepRepository;
   readonly runStates: RunStateRepository;
   readonly events: DurableEventStore;
+  readonly eventReader: DurableRunEventReaderPort;
   /** The canonical Message V2 record store. */
   readonly messageRecords: SqliteAgentMessageRecordStore;
   readonly continuations: ContinuationRepository;
@@ -109,12 +111,14 @@ export async function openCaelushStorage(options: {
 
   try {
     await migrateCaelushDatabase(database);
+    const eventStore = new SqliteDurableEventStore(database);
     return {
       sessions: new SqliteSessionRepository(database),
       runs: new SqliteRunRepository(database),
       steps: new SqliteStepRepository(database),
       runStates: new SqliteRunStateRepository(database),
-      events: new SqliteDurableEventStore(database),
+      events: eventStore,
+      eventReader: eventStore,
       messageRecords: new SqliteAgentMessageRecordStore(database),
       continuations: new SqliteContinuationRepository(database),
       execution: new SqliteRunExecutionStore(database),

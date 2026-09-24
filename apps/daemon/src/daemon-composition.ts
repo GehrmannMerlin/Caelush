@@ -15,7 +15,6 @@ import {
   type ToolTurnPipeline,
   type RunMessageAuthority,
 } from "@caelush/core";
-import { EventBus } from "@caelush/events";
 import {
   ContextRuntimeCoordinator,
   createContextItem,
@@ -56,7 +55,7 @@ import {
   STANDARD_AGENT_MESSAGE_PROJECTORS,
   STANDARD_AGENT_MESSAGE_TRANSCRIPT_PROJECTORS,
 } from "@caelush/agent";
-import type { AgentExecutionIdentity } from "@caelush/agent";
+import type { AgentExecutionIdentity, RunEventNotifierPort } from "@caelush/agent";
 import type {
   AISubsystem,
   AIGateway,
@@ -161,6 +160,7 @@ import {
 } from "./execution/run-execution-supervisor.js";
 import { SessionConversationContextProvider } from "./services/session-conversation-context.js";
 import { DAEMON_VERSION } from "./version.js";
+import { RunEventHub, type SubscriberQueuePolicy } from "./events/index.js";
 
 /**
  * Project durable invocation state back onto the canonical prepared call.
@@ -252,7 +252,11 @@ export type DaemonTurnIdentity = AgentExecutionIdentity;
 
 export interface DaemonCompositionOptions {
   readonly storage: CaelushStorage;
-  readonly eventBus: EventBus;
+  /** Canonical daemon observation notifier. Production composition creates the RunEventHub when omitted. */
+  readonly notifier?: RunEventNotifierPort;
+  /** @deprecated Test-only legacy notifier alias; EventBus remains a compatibility package. */
+  readonly eventBus?: RunEventNotifierPort;
+  readonly eventQueuePolicy?: SubscriberQueuePolicy;
   readonly providers?: readonly DaemonModelProviderConfig[];
   readonly defaultModel?: ClientModelSelection;
   /** AI-native composition seams for tests and hosts. */
@@ -281,7 +285,10 @@ export interface DaemonCompositionOptions {
 }
 
 export interface DaemonComposition {
-  readonly eventBus: EventBus;
+  readonly eventHub: RunEventHub | undefined;
+  readonly events: RunEventNotifierPort;
+  /** @deprecated Compatibility name for the notifier surface. */
+  readonly eventBus: RunEventNotifierPort;
   readonly runs: Pick<CaelushStorage["runs"], "get">;
   readonly runtime: LocalRuntime;
   readonly runtimeResolver: ReturnType<typeof createLocalRuntimeResolver>;
@@ -342,6 +349,18 @@ export interface DaemonComposition {
 }
 
 export async function composeDaemon(options: DaemonCompositionOptions): Promise<DaemonComposition> {
+  const eventHub =
+    options.notifier === undefined && options.eventBus === undefined
+      ? new RunEventHub(options.storage.eventReader, {
+          ...(options.eventQueuePolicy === undefined
+            ? {}
+            : { queuePolicy: options.eventQueuePolicy }),
+        })
+      : undefined;
+  const eventNotifier = options.notifier ?? options.eventBus ?? eventHub;
+  if (eventNotifier === undefined) {
+    throw new Error("Daemon composition requires a RunEventNotifierPort.");
+  }
   const providers = [...(options.providers ?? [])];
   const clock = options.clock ?? { now: () => createTimestampMs(Date.now()) };
   const runtime = options.runtime ?? new LocalRuntime();
@@ -717,12 +736,12 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
         eventIdFactory: { create: createEventId },
         presentation: toolSecurity.presentation,
         boundContent: (content) => boundToolResultContent(content),
-        notifier: options.eventBus,
+        notifier: eventNotifier,
       }),
       budget: toolBudgetAdmission,
       presentation: toolSecurity.presentation,
       rawOutputStore: options.storage.contextArtifacts,
-      notifier: options.eventBus,
+      notifier: eventNotifier,
       boundFailureContent: (content) => boundToolResultContent(content),
     });
   /**
@@ -822,9 +841,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
           contextLimits: config.contextLimits,
           tools: activeToolRegistry.modelSpecs(),
           ...(config.modelSettings === undefined ? {} : { modelSettings: config.modelSettings }),
-          ...(config.historyPrefix === undefined
-            ? {}
-            : { historyPrefix: config.historyPrefix }),
+          ...(config.historyPrefix === undefined ? {} : { historyPrefix: config.historyPrefix }),
           ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
           ...(config.explicitPaths === undefined ? {} : { explicitPaths: config.explicitPaths }),
         },
@@ -868,7 +885,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     contextRuntime,
     executionStore: options.storage.execution,
     completionStore: options.storage.execution,
-    events: options.eventBus,
+    events: eventNotifier,
     configResolver: executionConfigResolver,
     messages,
     toolTurn,
@@ -959,7 +976,9 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
 
   let disposed = false;
   return {
-    eventBus: options.eventBus,
+    eventHub,
+    events: eventNotifier,
+    eventBus: eventNotifier,
     runs: options.storage.runs,
     runtime,
     runtimeResolver,
@@ -994,6 +1013,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       controller.dispose();
       deadlineRegistry.dispose();
       retryRegistry.dispose();
+      await eventHub?.dispose();
       await runtime.dispose();
     },
   };
