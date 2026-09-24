@@ -10,13 +10,12 @@ import {
   createToolInvocationId,
   createWorkspaceId,
 } from "@caelush/protocol";
-import { EventBus } from "@caelush/events";
-import type { DurableRunEvent } from "@caelush/protocol";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildDaemonApp } from "../src/index.js";
 import { RunEventHub } from "../src/index.js";
 import { resolveEventCursor } from "../src/routes/events.js";
+import { commitDurableTestEvent } from "./support/committed-event.js";
 
 let app: ReturnType<typeof buildDaemonApp> | undefined;
 let storage: CaelushStorage | undefined;
@@ -39,7 +38,6 @@ afterEach(async () => {
 async function makeServer() {
   directory = await mkdtemp(join(tmpdir(), "caelush-reconnect-"));
   storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
-  const eventBus = new EventBus(storage.eventReader);
   const hub = new RunEventHub(storage.eventReader);
   eventHub = hub;
   const session = AgentSessionSchema.parse({
@@ -74,7 +72,7 @@ async function makeServer() {
   await app.listen({ host: "127.0.0.1", port: 0 });
   const address = app.server.address();
   if (!address || typeof address === "string") throw new Error("server did not bind a TCP port");
-  return { eventBus, eventHub: hub, run, url: `http://127.0.0.1:${address.port}` };
+  return { eventHub: hub, run, url: `http://127.0.0.1:${address.port}` };
 }
 
 function eventDraft(run: { id: string; sessionId: string }, sequence: number) {
@@ -96,12 +94,11 @@ function eventDraft(run: { id: string; sessionId: string }, sequence: number) {
 }
 
 async function publishAndNotify(
-  eventBus: EventBus,
   hub: RunEventHub,
   draft: ReturnType<typeof eventDraft>,
 ): Promise<void> {
-  const committed = await eventBus.publish(draft);
-  hub.notifyCommitted([committed as DurableRunEvent]);
+  if (storage === undefined) throw new Error("storage is unavailable for the test event");
+  await commitDurableTestEvent(storage, hub, draft);
 }
 
 async function nextFrame(
@@ -146,10 +143,10 @@ describe("SSE reconnect", () => {
   });
 
   it("replays after Last-Event-ID without gaps or duplicates, then tails live", async () => {
-    const { eventBus, eventHub: hub, run, url } = await makeServer();
-    await publishAndNotify(eventBus, hub, eventDraft(run, 1));
-    await publishAndNotify(eventBus, hub, eventDraft(run, 2));
-    await publishAndNotify(eventBus, hub, eventDraft(run, 3));
+    const { eventHub: hub, run, url } = await makeServer();
+    await publishAndNotify(hub, eventDraft(run, 1));
+    await publishAndNotify(hub, eventDraft(run, 2));
+    await publishAndNotify(hub, eventDraft(run, 3));
 
     const response = await fetch(`${url}/api/v1/runs/${run.id}/events`, {
       headers: { accept: "text/event-stream", "last-event-id": "1" },
@@ -165,7 +162,7 @@ describe("SSE reconnect", () => {
     expect([frameId(first.frame), frameId(second.frame)]).toEqual(["2", "3"]);
 
     const liveFrame = reader.read();
-    await publishAndNotify(eventBus, hub, eventDraft(run, 4));
+    await publishAndNotify(hub, eventDraft(run, 4));
     const live = await Promise.race([
       liveFrame,
       new Promise<never>((_, reject) =>
@@ -177,9 +174,9 @@ describe("SSE reconnect", () => {
   });
 
   it("supports query cursors and returns typed errors for invalid cursor input", async () => {
-    const { eventBus, eventHub: hub, run, url } = await makeServer();
-    await publishAndNotify(eventBus, hub, eventDraft(run, 1));
-    await publishAndNotify(eventBus, hub, eventDraft(run, 2));
+    const { eventHub: hub, run, url } = await makeServer();
+    await publishAndNotify(hub, eventDraft(run, 1));
+    await publishAndNotify(hub, eventDraft(run, 2));
 
     const queryResponse = await fetch(`${url}/api/v1/runs/${run.id}/events?afterSequence=1`, {
       headers: { accept: "text/event-stream" },

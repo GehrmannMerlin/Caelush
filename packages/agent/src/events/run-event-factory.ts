@@ -36,7 +36,12 @@ export interface RunEventFactory {
     eventId: EventId,
     timestamp: TimestampMs,
   ): DurableEventDraft;
-  llmStarted(run: AgentRun, step: AgentStep, eventId: EventId, timestamp: TimestampMs): DurableEventDraft;
+  llmStarted(
+    run: AgentRun,
+    step: AgentStep,
+    eventId: EventId,
+    timestamp: TimestampMs,
+  ): DurableEventDraft;
   llmCompleted(
     run: AgentRun,
     state: AgentState,
@@ -85,7 +90,12 @@ export interface RunEventFactory {
     eventId: EventId,
     timestamp: TimestampMs,
   ): DurableEventDraft;
-  failed(run: AgentRun, error: AgentError, eventId: EventId, timestamp: TimestampMs): DurableEventDraft;
+  failed(
+    run: AgentRun,
+    error: AgentError,
+    eventId: EventId,
+    timestamp: TimestampMs,
+  ): DurableEventDraft;
   cancelled(run: AgentRun, eventId: EventId, timestamp: TimestampMs): DurableEventDraft;
   timedOut(
     run: AgentRun,

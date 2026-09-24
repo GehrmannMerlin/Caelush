@@ -140,10 +140,15 @@ describe("DurableToolExecutionCoordinator with durable storage and EventBus", ()
           identity.externalCallId,
         );
         expect(running?.invocation.status).toBe("RUNNING");
-        expect((await storage.eventReader.replay(run.id, { afterSequence: 0, throughSequence: Number.MAX_SAFE_INTEGER, limit: 1000 })).map((event) => event.type)).toEqual([
-          "tool.requested",
-          "tool.started",
-        ]);
+        expect(
+          (
+            await storage.eventReader.replay(run.id, {
+              afterSequence: 0,
+              throughSequence: Number.MAX_SAFE_INTEGER,
+              limit: 1000,
+            })
+          ).map((event) => event.type),
+        ).toEqual(["tool.requested", "tool.started"]);
         return {
           content: String(args.value),
           details: { echoed: String(args.value) },
@@ -189,11 +194,15 @@ describe("DurableToolExecutionCoordinator with durable storage and EventBus", ()
       const settled = await storage.toolExecution.load(outcome.invocation.id);
       expect(settled?.invocation.status).toBe("COMPLETED");
       expect(settled?.observation?.content).toBe("hello");
-      expect((await storage.eventReader.replay(run.id, { afterSequence: 0, throughSequence: Number.MAX_SAFE_INTEGER, limit: 1000 })).map((event) => event.type)).toEqual([
-        "tool.requested",
-        "tool.started",
-        "tool.completed",
-      ]);
+      expect(
+        (
+          await storage.eventReader.replay(run.id, {
+            afterSequence: 0,
+            throughSequence: Number.MAX_SAFE_INTEGER,
+            limit: 1000,
+          })
+        ).map((event) => event.type),
+      ).toEqual(["tool.requested", "tool.started", "tool.completed"]);
       expect(await storage.sessions.get(session.id)).toEqual(before.session);
       expect(await storage.runs.get(run.id)).toEqual(before.run);
       expect(await storage.steps.get(step.id)).toEqual(before.step);
@@ -265,7 +274,13 @@ describe("DurableToolExecutionCoordinator with durable storage and EventBus", ()
         if (outcome.kind !== "SETTLED") throw new Error("expected a settled outcome");
         expect(outcome.observation.content).toBe("restart");
         expect(
-          (await restarted.eventReader.replay(fixture.run.id, { afterSequence: 0, throughSequence: Number.MAX_SAFE_INTEGER, limit: 1000 })).map((event) => event.durability.sequence),
+          (
+            await restarted.eventReader.replay(fixture.run.id, {
+              afterSequence: 0,
+              throughSequence: Number.MAX_SAFE_INTEGER,
+              limit: 1000,
+            })
+          ).map((event) => event.durability.sequence),
         ).toEqual([1, 2, 3]);
       } finally {
         await restarted.close();

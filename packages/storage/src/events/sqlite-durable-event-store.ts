@@ -6,7 +6,7 @@ import type {
 } from "@caelush/agent";
 import type { CaelushDatabase } from "../database.js";
 import { decodeProtocol, encodeProtocol } from "../codec.js";
-import { StorageDecodeError, StorageError } from "../errors.js";
+import { StorageDecodeError } from "../errors.js";
 
 interface EventRow {
   event_id: string;

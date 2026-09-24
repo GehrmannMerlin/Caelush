@@ -173,7 +173,15 @@ describe("read-only filesystem tools through the canonical Tool pipeline", () =>
 
       expect(await storage.toolInvocations.listByRun(run.id)).toHaveLength(4);
       expect(await storage.observations.listByRun(run.id)).toHaveLength(4);
-      expect((await storage.eventReader.replay(run.id, { afterSequence: 0, throughSequence: Number.MAX_SAFE_INTEGER, limit: 1000 })).map((event) => event.type)).toEqual([
+      expect(
+        (
+          await storage.eventReader.replay(run.id, {
+            afterSequence: 0,
+            throughSequence: Number.MAX_SAFE_INTEGER,
+            limit: 1000,
+          })
+        ).map((event) => event.type),
+      ).toEqual([
         "tool.requested",
         "tool.started",
         "file.read",

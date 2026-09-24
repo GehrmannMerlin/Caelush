@@ -10,13 +10,12 @@ import {
   createToolInvocationId,
   createWorkspaceId,
 } from "@caelush/protocol";
-import { EventBus } from "@caelush/events";
-import type { DurableRunEvent } from "@caelush/protocol";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildDaemonApp } from "../src/index.js";
 import { RunEventHub } from "../src/index.js";
 import { nextSseFrame, sseFrameId } from "./support/sse-client.js";
+import { commitDurableTestEvent } from "./support/committed-event.js";
 
 let app: ReturnType<typeof buildDaemonApp> | undefined;
 let storage: CaelushStorage | undefined;
@@ -39,7 +38,6 @@ afterEach(async () => {
 async function makeServer() {
   directory = await mkdtemp(join(tmpdir(), "caelush-events-"));
   storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
-  const eventBus = new EventBus(storage.eventReader);
   const hub = new RunEventHub(storage.eventReader);
   eventHub = hub;
   activeStreams = new Set();
@@ -71,7 +69,7 @@ async function makeServer() {
     activeStreams,
     config: { host: "127.0.0.1", port: 0, sseHeartbeatIntervalMs: 0 },
   });
-  return { app, eventBus, eventHub: hub, run };
+  return { app, eventHub: hub, run };
 }
 
 function eventDraft(
@@ -105,7 +103,7 @@ describe("event stream route", () => {
   });
 
   it("streams a Durable event over a real HTTP socket", async () => {
-    const { app: server, eventBus, eventHub: hub, run } = await makeServer();
+    const { app: server, eventHub: hub, run } = await makeServer();
     await server.listen({ host: "127.0.0.1", port: 0 });
     const address = server.server.address();
     if (!address || typeof address === "string") throw new Error("server did not bind a TCP port");
@@ -114,8 +112,7 @@ describe("event stream route", () => {
       headers: { accept: "text/event-stream" },
     });
     await new Promise((resolve) => setTimeout(resolve, 50));
-    const committed = await eventBus.publish(eventDraft(run));
-    hub.notifyCommitted([committed as DurableRunEvent]);
+    await commitDurableTestEvent(storage!, hub, eventDraft(run));
     const response = await responsePromise;
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/event-stream");
@@ -136,7 +133,7 @@ describe("event stream route", () => {
   });
 
   it("projects mixed visibility events before SSE while preserving durable ids", async () => {
-    const { app: server, eventBus, eventHub: hub, run } = await makeServer();
+    const { app: server, eventHub: hub, run } = await makeServer();
     await server.listen({ host: "127.0.0.1", port: 0 });
     const address = server.server.address();
     if (!address || typeof address === "string") throw new Error("server did not bind a TCP port");
@@ -146,8 +143,7 @@ describe("event stream route", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 50));
     const publish = async (visibility: "USER_VISIBLE" | "SYSTEM" | "DEBUG") => {
-      const committed = await eventBus.publish(eventDraft(run, visibility));
-      hub.notifyCommitted([committed as DurableRunEvent]);
+      await commitDurableTestEvent(storage!, hub, eventDraft(run, visibility));
     };
 
     await publish("USER_VISIBLE");

@@ -36,7 +36,9 @@ describe("Architecture V2 Phase 6D durable event authority", () => {
     const ports = await read("packages/core/src/run-controller-ports.ts");
     const settlement = await read("packages/agent/src/tools/durable/settlement-coordinator.ts");
     const failure = await read("packages/agent/src/tools/durable/failure-settlement.ts");
-    const coordinator = await read("packages/agent/src/tools/durable/durable-execution-coordinator.ts");
+    const coordinator = await read(
+      "packages/agent/src/tools/durable/durable-execution-coordinator.ts",
+    );
     const daemon = await read("apps/daemon/src/daemon-composition.ts");
 
     expect(ports).toContain("RunEventNotifierPort");
@@ -54,7 +56,9 @@ describe("Architecture V2 Phase 6D durable event authority", () => {
     const agentFactory = await read("packages/agent/src/events/run-event-factory.ts");
     const materializer = await read("packages/core/src/run-commit-event-materializer.ts");
 
-    await expect(access(resolve(repositoryRoot, "packages/core/src/run-controller-events.ts"))).rejects.toThrow();
+    await expect(
+      access(resolve(repositoryRoot, "packages/core/src/run-controller-events.ts")),
+    ).rejects.toThrow();
     expect(agentFactory).toContain("createRunEventFactory");
     expect(agentFactory).not.toContain("@caelush/core");
     expect(materializer).toContain('from "@caelush/agent"');

@@ -44,9 +44,9 @@ describe("conversation.message.committed protocol contract", () => {
     (field) => {
       const payload = { ...event.payload } as Record<string, unknown>;
       delete payload[field];
-      expect(
-        ConversationMessageCommittedEventSchema.safeParse({ ...event, payload }).success,
-      ).toBe(false);
+      expect(ConversationMessageCommittedEventSchema.safeParse({ ...event, payload }).success).toBe(
+        false,
+      );
     },
   );
 

@@ -496,10 +496,7 @@ export class SqliteToolExecutionStore implements ToolExecutionStorePort {
           command.invocation,
         );
       }
-      const events = appendDurableEventsInTransaction(
-        client,
-        command.events,
-      );
+      const events = appendDurableEventsInTransaction(client, command.events);
       client.exec("COMMIT");
       committedEvents = events as unknown as ToolExecutionCommitResult["events"];
     } catch (error) {

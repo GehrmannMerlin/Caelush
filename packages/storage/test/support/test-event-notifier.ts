@@ -1,9 +1,4 @@
-import type {
-  AgentEvent,
-  DurableRunEvent,
-  RunId,
-  TransientRunEvent,
-} from "@caelush/protocol";
+import type { AgentEvent, DurableRunEvent, RunId, TransientRunEvent } from "@caelush/protocol";
 import type { RunEventNotifierPort } from "@caelush/agent";
 
 type Listener = (event: AgentEvent) => void;
@@ -12,7 +7,9 @@ type Listener = (event: AgentEvent) => void;
 export class EventBus implements RunEventNotifierPort {
   private readonly listeners = new Map<RunId, Set<Listener>>();
 
-  constructor(_eventReader?: unknown) {}
+  constructor(eventReader?: unknown) {
+    void eventReader;
+  }
 
   subscribe(runId: RunId, listener: Listener): () => void {
     let listeners = this.listeners.get(runId);

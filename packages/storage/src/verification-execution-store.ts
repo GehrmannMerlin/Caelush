@@ -286,7 +286,10 @@ function startEvent(eventId: EventId, input: VerificationStartCommit): DurableRu
   } as DurableRunEventDraft;
 }
 
-function completedEvent(eventId: EventId, input: VerificationSettlementCommit): DurableRunEventDraft {
+function completedEvent(
+  eventId: EventId,
+  input: VerificationSettlementCommit,
+): DurableRunEventDraft {
   const capturedAt = input.evidence[0]?.capturedAt ?? input.check.finishedAt!;
   return {
     eventId,

@@ -5,12 +5,7 @@ import {
   createTimestampMs,
   createToolInvocationId,
 } from "@caelush/protocol";
-import type {
-  AgentEvent,
-  RunId,
-  SessionId,
-  TransientRunEvent,
-} from "@caelush/protocol";
+import type { AgentEvent, RunId, SessionId, TransientRunEvent } from "@caelush/protocol";
 import type { DurableRunEventReaderPort } from "@caelush/agent";
 import type { DurableEventDraft } from "../src/index.js";
 import { describe, expect, it } from "vitest";
@@ -51,7 +46,9 @@ class InMemoryStore implements DurableRunEventReaderPort {
     return [];
   }
 
-  async latestSequence(): Promise<number> { return 0; }
+  async latestSequence(): Promise<number> {
+    return 0;
+  }
 }
 
 describe("EventBus", () => {

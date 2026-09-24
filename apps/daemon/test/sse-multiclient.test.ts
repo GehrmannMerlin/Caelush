@@ -7,28 +7,44 @@ import {
   createToolInvocationId,
   createWorkspaceId,
 } from "@caelush/protocol";
-import type { DurableAgentEvent, DurableEventDraft, DurableEventStore } from "@caelush/events";
-import { EventBus } from "@caelush/events";
+import type {
+  DurableRunEvent,
+  DurableRunEventDraft,
+  DurableRunEventReaderPort,
+  TransientRunEvent,
+} from "@caelush/agent";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildDaemonApp, RunEventHub } from "../src/index.js";
 
-class MemoryEventStore implements DurableEventStore {
-  private readonly events: DurableAgentEvent[] = [];
+class MemoryEventStore implements DurableRunEventReaderPort {
+  private readonly events: DurableRunEvent[] = [];
 
-  async append(draft: DurableEventDraft): Promise<DurableAgentEvent> {
+  commit(draft: DurableRunEventDraft): DurableRunEvent {
     const sequence = this.events.filter((event) => event.runId === draft.runId).length + 1;
     const event = AgentEventSchema.parse({
       ...draft,
       durability: { ...draft.durability, sequence },
-    }) as DurableAgentEvent;
+    }) as DurableRunEvent;
     this.events.push(event);
     return event;
   }
 
-  async replay(runId: DurableAgentEvent["runId"], options: { afterSequence?: number } = {}) {
-    return this.events.filter(
-      (event) => event.runId === runId && event.durability.sequence > (options.afterSequence ?? 0),
-    );
+  async replay(
+    runId: DurableRunEvent["runId"],
+    options: {
+      afterSequence: number;
+      throughSequence: number;
+      limit: number;
+    },
+  ) {
+    return this.events
+      .filter(
+        (event) =>
+          event.runId === runId &&
+          event.durability.sequence > options.afterSequence &&
+          event.durability.sequence <= options.throughSequence,
+      )
+      .slice(0, options.limit);
   }
 
   async latestSequence(runId: DurableAgentEvent["runId"]): Promise<number> {
@@ -83,7 +99,6 @@ describe("multi-client SSE", () => {
       createdAt: 1_700_000_000_000,
     });
     const store = new MemoryEventStore();
-    const eventBus = new EventBus(store);
     eventHub = new RunEventHub(store);
     activeStreams = new Set();
     app = buildDaemonApp({
@@ -101,8 +116,8 @@ describe("multi-client SSE", () => {
     const responseA = fetch(url, { headers: { accept: "text/event-stream" } });
     const responseB = fetch(url, { headers: { accept: "text/event-stream" } });
     await new Promise((resolve) => setTimeout(resolve, 50));
-    const durable = await eventBus.publish(makeEvent(run.id, sessionId, "DURABLE") as never);
-    eventHub.notifyCommitted([durable as DurableAgentEvent]);
+    const durable = store.commit(makeEvent(run.id, sessionId, "DURABLE") as DurableRunEventDraft);
+    eventHub.notifyCommitted([durable]);
     const [streamA, streamB] = await Promise.all([responseA, responseB]);
     const readerA = streamA.body?.getReader();
     const readerB = streamB.body?.getReader();
@@ -113,8 +128,10 @@ describe("multi-client SSE", () => {
 
     const nextA = readerA.read();
     const nextB = readerB.read();
-    const ephemeral = await eventBus.publish(makeEvent(run.id, sessionId, "EPHEMERAL") as never);
-    eventHub.emitTransient(ephemeral as never);
+    const ephemeral = AgentEventSchema.parse(
+      makeEvent(run.id, sessionId, "EPHEMERAL"),
+    ) as TransientRunEvent;
+    eventHub.emitTransient(ephemeral);
     const [ephemeralA, ephemeralB] = await Promise.all([nextA, nextB]);
     const frameA = new TextDecoder().decode(ephemeralA.value);
     const frameB = new TextDecoder().decode(ephemeralB.value);

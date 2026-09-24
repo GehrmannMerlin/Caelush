@@ -7,26 +7,43 @@ import {
   createToolInvocationId,
   createWorkspaceId,
 } from "@caelush/protocol";
-import type { DurableAgentEvent, DurableEventDraft, DurableEventStore } from "@caelush/events";
-import { EventBus } from "@caelush/events";
+import type {
+  DurableRunEvent,
+  DurableRunEventDraft,
+  DurableRunEventReaderPort,
+} from "@caelush/agent";
 import { RunEventHub } from "../src/index.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildDaemonApp } from "../src/index.js";
 
-class Store implements DurableEventStore {
-  private readonly events: DurableAgentEvent[] = [];
+class Store implements DurableRunEventReaderPort {
+  private readonly events: DurableRunEvent[] = [];
 
-  async append(draft: DurableEventDraft): Promise<DurableAgentEvent> {
+  commit(draft: DurableRunEventDraft): DurableRunEvent {
     const event = AgentEventSchema.parse({
       ...draft,
       durability: { ...draft.durability, sequence: this.events.length + 1 },
-    }) as DurableAgentEvent;
+    }) as DurableRunEvent;
     this.events.push(event);
     return event;
   }
 
-  async replay(runId: DurableAgentEvent["runId"]) {
-    return this.events.filter((event) => event.runId === runId);
+  async replay(
+    runId: DurableRunEvent["runId"],
+    options: {
+      afterSequence: number;
+      throughSequence: number;
+      limit: number;
+    },
+  ) {
+    return this.events
+      .filter(
+        (event) =>
+          event.runId === runId &&
+          event.durability.sequence > options.afterSequence &&
+          event.durability.sequence <= options.throughSequence,
+      )
+      .slice(0, options.limit);
   }
 
   async latestSequence(runId: DurableAgentEvent["runId"]): Promise<number> {
@@ -76,7 +93,6 @@ describe("SSE disconnect cleanup", () => {
       createdAt: 1_700_000_000_000,
     });
     const store = new Store();
-    const eventBus = new EventBus(store);
     eventHub = new RunEventHub(store);
     activeStreams = new Set();
     app = buildDaemonApp({
@@ -94,8 +110,8 @@ describe("SSE disconnect cleanup", () => {
       headers: { accept: "text/event-stream" },
     });
     await new Promise((resolve) => setTimeout(resolve, 50));
-    const first = await eventBus.publish(makeEvent(run.id, sessionId) as never);
-    eventHub.notifyCommitted([first as DurableAgentEvent]);
+    const first = store.commit(makeEvent(run.id, sessionId));
+    eventHub.notifyCommitted([first]);
     const response = await responsePromise;
     const reader = response.body?.getReader();
     if (!reader) throw new Error("SSE response has no body");
@@ -106,7 +122,7 @@ describe("SSE disconnect cleanup", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     expect(activeStreams).toHaveLength(0);
-    const later = await eventBus.publish(makeEvent(run.id, sessionId) as never);
-    eventHub.notifyCommitted([later as DurableAgentEvent]);
+    const later = store.commit(makeEvent(run.id, sessionId));
+    eventHub.notifyCommitted([later]);
   });
 });

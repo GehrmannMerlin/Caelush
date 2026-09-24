@@ -18,11 +18,13 @@ The project is in active Architecture V2 development. The Message System
 migration through Phase 5F is complete: the daemon owns the server-side
 Transcript projection, CLI/Web consume the Protocol Transcript, and the final
 durable Message V2 schema is now the only runtime storage shape.
-The Event System migration is complete through Phase 6B. The canonical RunEvent
-domain and Protocol foundation are now paired with a daemon-owned asynchronous
-RunEventHub, bounded per-subscriber delivery, observer isolation, and
-high-watermark replay/live bridging. Public projection, durable-writer cleanup,
-transient producer cutover, and Control Hooks remain later Phase 6 work.
+The Event System migration is complete through Phase 6D. The canonical RunEvent
+domain, daemon-owned asynchronous RunEventHub, bounded replay/live delivery,
+public projection, and authoritative durable-event transactions are now in
+place. Durable events are written only inside the authoritative Run or Tool
+transaction and are notified to the RunEventHub only after commit. Standalone
+durable event publication has been retired. Transient producer/streaming
+cutover and Control Hooks remain later Phase 6 work.
 
 ## What Caelush provides
 
@@ -80,15 +82,17 @@ Daemon
 Core / Agent Kernel
   ├── one model turn → AI gateway → provider adapter
   ├── Tool decision → Registry → Security gate → Dispatcher → Runtime
-  ├── durable records/events → SQLite + transitional EventBus
+  ├── durable records/events → authoritative SQLite transactions
   ├── committed/live RunEvents → daemon RunEventHub → SSE/host observation
   └── final candidate → Verification → Completion Authority
 ```
 
-### Phase 6 Event domain and observation runtime
+### Phase 6 Event domain, observation, and durable authority
 
-Phase 6A established the canonical event vocabulary; Phase 6B adds the
-daemon-owned observation runtime without changing durable writer authority:
+Phase 6A established the canonical event vocabulary, Phase 6B adds the
+daemon-owned observation runtime, Phase 6C projects safe public events, and
+Phase 6D makes authoritative Run and Tool transactions the only durable-event
+writers:
 
 ```text
 @caelush/protocol
@@ -101,7 +105,7 @@ daemon-owned observation runtime without changing durable writer authority:
                 DurableRunEventReaderPort
 
 @caelush/storage
-  durable reader with throughSequence + legacy append compatibility
+  read-only durable reader with throughSequence
           │
           ▼
 apps/daemon
@@ -117,19 +121,22 @@ apps/daemon
 continue to decode, including historical durable output events and the old
 empty ephemeral metadata shape. New canonical transient metadata requires its
 delivery class and stream identity. Durable sequence allocation remains a
-Storage transaction responsibility.
+Storage transaction responsibility. `RunExecutionStore` and
+`ToolExecutionStore` commit durable event drafts together with the truth they
+describe; `RunEventNotifierPort.notifyCommitted` receives only post-commit
+events. `@caelush/events` remains only as transitional observation
+compatibility and has no standalone durable write authority.
 
 Phase 6B makes the daemon observation plane producer-nonblocking and bounded:
 durable and ordered-transient overflow closes a slow subscription, while
 coalescible transient signals use same-stream latest-wins replacement. Replay
 subscribes before reading a fixed high watermark, rejects a cursor ahead of the
 watermark, deduplicates buffered durable events, and discards catch-up
-transients. `@caelush/events` remains the legacy EventBus compatibility package;
-its durable writer is intentionally retained for Phase 6D.
+transients. `@caelush/events` remains only as legacy observation compatibility;
+its standalone durable writer has been retired in Phase 6D.
 
-`PublicEventProjector`, USER_VISIBLE-only public projection, transient producer
-and model-stream cutover, Control Hook pipelines, and legacy package retirement
-are not part of Phase 6B; they remain Phase 6C–6H work.
+Transient producer and model-stream cutover, Control Hook pipelines, and legacy
+package retirement remain Phase 6E–6H work.
 
 ### Durable conversation
 
@@ -185,6 +192,12 @@ Transcript projection is audience-controlled: standard Tool results remain
 model-visible but are not transcript-visible by default. Unknown historical
 transcript-visible message types degrade to a fixed safe placeholder rather
 than exposing stored payloads.
+
+Each durable conversation append also produces one lightweight
+`conversation.message.committed` event containing only the message ID,
+conversation-turn ID, and message type. It is a commit notification fact, not
+a copy of `AgentMessageRecord` content; the record and event are committed in
+the same authoritative transaction.
 
 ## Coding Tool surface
 
@@ -300,7 +313,7 @@ Caelush/
 │   ├── coding-agent/ Coding Tools and coding composition
 │   ├── context/      Workspace intelligence and context building
 │   ├── core/         Run lifecycle and Completion Authority
-│   ├── events/       Transitional durable event runtime and EventBus
+│   ├── events/       Transitional event observation compatibility
 │   ├── memory/       Memory records and store contracts
 │   ├── observability/Observability package boundary
 │   ├── protocol/     Stable JSON-safe cross-package contracts
@@ -359,7 +372,9 @@ runtime: Phase 9C sanitizer injection, Phase 9D — V1 Security Integration, Pha
 | Phase 5F — legacy Message V2 retirement                 | COMPLETE    |
 | Phase 6A — Event domain and Protocol foundation         | COMPLETE    |
 | Phase 6B — RunEventHub, replay, and backpressure        | COMPLETE    |
-| Phase 6C–6H — Public projection and control-plane work  | NOT STARTED |
+| Phase 6C — Public projection, SSE, and client cutover   | COMPLETE    |
+| Phase 6D — Durable event authority and writer cutover   | COMPLETE    |
+| Phase 6E–6H — Transient, hooks, and package retirement  | NOT STARTED |
 
 The status table records the completed Architecture V2 migration boundaries
 that are relevant to the current runtime. The repository also contains the

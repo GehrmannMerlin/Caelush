@@ -30,7 +30,7 @@ describe("Architecture V2 Phase 6A event domain foundation", () => {
 
     expect(eventBus).toContain("async publish(");
     expect(eventBus).toContain("notifyCommitted(");
-    expect(daemonComposition).toContain("EventBus");
+    expect(daemonComposition).not.toContain("EventBus");
     expect(daemonRoute).toContain("PublicEventProjector");
     expect(daemonRoute).toContain("mapPublicRunEventToSse");
     expect(await read("packages/storage/src/schema.ts")).not.toContain("event_schema_version_v2");

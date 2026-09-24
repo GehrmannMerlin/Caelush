@@ -6,10 +6,11 @@ do not own separate Agent implementations.
 
 The current source-of-truth branch is `main`. The Message System migration is
 complete through Architecture V2 Phase 5F. The Event System migration is
-complete through Phase 6B: the canonical RunEvent domain and Protocol foundation
-plus the daemon-owned asynchronous observation runtime are present, while the
-public projection and control-plane phases remain pending. Phase 5: COMPLETE.
-Phase 6A: COMPLETE. Phase 6B: COMPLETE. Phase 6C–6H: NOT STARTED.
+complete through Phase 6D: the canonical RunEvent domain and Protocol foundation,
+daemon-owned asynchronous observation runtime, public projection, and
+authoritative durable-event transactions are present. Phase 5: COMPLETE.
+Phase 6A: COMPLETE. Phase 6B: COMPLETE. Phase 6C: COMPLETE. Phase 6D:
+COMPLETE. Phase 6E–6H: NOT STARTED.
 Phase 5F owns the final historical
 backfill, physical `agent_messages` rebuild, legacy reader/package retirement,
 and daemon/client final cutover.
@@ -72,16 +73,16 @@ Phase 5D established durable conversation authority for Context and replay.
   queues, independent observer workers, observer error isolation, and the
   replay/live bridge. The Hub has no durable write authority.
 - `@caelush/storage` exposes a read-only durable event reader with inclusive
-  `throughSequence` replay while retaining the legacy append writer.
-- `@caelush/events` remains the transitional EventBus compatibility package
-  during Phase 6B. Durable events are persisted before publication; sequence
-  is the authoritative order. Durable SSE events use sequence as `id`;
-  ephemeral events never receive an SSE id.
+  `throughSequence` replay; it exposes no writable event surface.
+- `@caelush/events` remains the transitional EventBus observation compatibility
+  package. It has no standalone durable writer or durable `publish` authority.
+  Durable SSE events use sequence as `id`; ephemeral events never receive an
+  SSE id.
 - `@caelush/verification` can produce bounded evidence and verification
   results but cannot transition a Run to `COMPLETED`. Only Core/RunController
   owns that transition.
 
-## Event V2 / Phase 6B
+## Event V2 / Phase 6A–6D
 
 - `RunEvent` is the target Event domain name; `AgentEvent` is migration
   compatibility naming only.
@@ -101,9 +102,12 @@ Phase 5D established durable conversation authority for Context and replay.
 - Replay subscribes before reading a fixed high watermark, rejects a cursor
   ahead of that watermark, validates strict sequence order, deduplicates
   buffered durable events, and discards catch-up transient events.
-- Phase 6B does not cut over PublicEventProjector, USER_VISIBLE-only public
-  projection, durable writer retirement, transient producers, model streaming,
-  or Control Hooks; those remain 6C–6G work. Package retirement remains 6H.
+- Phase 6C owns the safe public projection, SSE, and client cutover. Phase 6D
+  makes Run and Tool authority transactions the only durable event writers:
+  durable drafts and their underlying truth commit together, then
+  `RunEventNotifierPort.notifyCommitted` is called with post-commit events.
+  `RunEventHub` has no write authority. Phase 6E–6H transient producers,
+  streaming, Control Hooks, and package retirement are not started.
 
 ## Message V2 / Phase 5F
 
@@ -135,11 +139,17 @@ Phase 5D established durable conversation authority for Context and replay.
   paths. `AgentEvent[]` remains the Timeline authority. Transcript-visible
   output must never serialize raw record data, provider state, hidden
   reasoning, or unbounded custom payloads.
+- `conversation.message.committed` is a durable metadata-only commit fact with
+  exactly `messageId`, `conversationTurnId`, and `messageType`; it never copies
+  `AgentMessageRecord` content and is committed atomically with the record.
 
 ## Durable execution rules
 
 - Run creation is not Run execution. Do not publish `run.started` for a
   `PENDING` Run.
+- Durable events may be written only inside the authoritative Run or Tool state
+  transaction. Do not add standalone durable event append APIs or write a
+  state change and its event in a second transaction.
 - Persist durable state and events before notifying live subscribers.
 - Use the canonical Run State Machine; callers must not copy transition rules.
 - Recovery resumes only from explicit durable boundaries. Stale in-flight work

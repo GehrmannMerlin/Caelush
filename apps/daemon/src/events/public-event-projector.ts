@@ -78,7 +78,9 @@ export class DefaultPublicEventProjector implements PublicEventProjector {
           toolName: event.payload.toolName,
           ...(event.payload.externalCallId === undefined
             ? {}
-            : { externalCallId: boundedText(event.payload.externalCallId, PUBLIC_EVENT_TEXT_BYTES) }),
+            : {
+                externalCallId: boundedText(event.payload.externalCallId, PUBLIC_EVENT_TEXT_BYTES),
+              }),
           riskLevel: event.payload.riskLevel,
         };
         break;
@@ -144,7 +146,9 @@ export class DefaultPublicEventProjector implements PublicEventProjector {
         payload = {
           invocationId: event.payload.invocationId,
           ...(event.payload.exitCode === undefined ? {} : { exitCode: event.payload.exitCode }),
-          ...(event.payload.signal === undefined ? {} : { signal: boundedText(event.payload.signal, PUBLIC_EVENT_TEXT_BYTES) }),
+          ...(event.payload.signal === undefined
+            ? {}
+            : { signal: boundedText(event.payload.signal, PUBLIC_EVENT_TEXT_BYTES) }),
         };
         break;
       case "process.started":
@@ -217,7 +221,9 @@ export class DefaultPublicEventProjector implements PublicEventProjector {
           checkId: event.payload.checkId,
           status: event.payload.status,
           evidenceIds: event.payload.evidenceIds.slice(0, 64),
-          ...(event.payload.durationMs === undefined ? {} : { durationMs: event.payload.durationMs }),
+          ...(event.payload.durationMs === undefined
+            ? {}
+            : { durationMs: event.payload.durationMs }),
         };
         break;
       case "verification.repair.started":
@@ -262,7 +268,10 @@ export class DefaultPublicEventProjector implements PublicEventProjector {
         payload = { model: projectModel(event.payload.model), usage: event.payload.usage };
         break;
       case "llm.failed":
-        payload = { model: projectModel(event.payload.model), error: projectError(event.payload.error) };
+        payload = {
+          model: projectModel(event.payload.model),
+          error: projectError(event.payload.error),
+        };
         break;
       case "retry.scheduled":
         payload = {
@@ -313,7 +322,10 @@ export class DefaultPublicEventProjector implements PublicEventProjector {
     const parsed = PublicRunEventSchema.safeParse(candidate);
     if (!parsed.success) return null;
     const serialized = JSON.stringify(parsed.data);
-    if (serialized === undefined || Buffer.byteLength(serialized, "utf8") > MAX_PUBLIC_EVENT_BYTES) {
+    if (
+      serialized === undefined ||
+      Buffer.byteLength(serialized, "utf8") > MAX_PUBLIC_EVENT_BYTES
+    ) {
       return null;
     }
     return parsed.data;
@@ -405,10 +417,21 @@ function projectVerificationResult(result: {
     type: nonEmptyText(result.type, "Verification"),
     ...(result.command === undefined
       ? {}
-      : { command: nonEmptyBoundedText(result.command, "Verification", PUBLIC_EVENT_COMMAND_BYTES, true) }),
+      : {
+          command: nonEmptyBoundedText(
+            result.command,
+            "Verification",
+            PUBLIC_EVENT_COMMAND_BYTES,
+            true,
+          ),
+        }),
     status: result.status,
-    ...(result.stdout === undefined ? {} : { stdout: terminalText(result.stdout, PUBLIC_EVENT_OUTPUT_BYTES) }),
-    ...(result.stderr === undefined ? {} : { stderr: terminalText(result.stderr, PUBLIC_EVENT_OUTPUT_BYTES) }),
+    ...(result.stdout === undefined
+      ? {}
+      : { stdout: terminalText(result.stdout, PUBLIC_EVENT_OUTPUT_BYTES) }),
+    ...(result.stderr === undefined
+      ? {}
+      : { stderr: terminalText(result.stderr, PUBLIC_EVENT_OUTPUT_BYTES) }),
     startedAt: result.startedAt,
     finishedAt: result.finishedAt,
   };
@@ -450,11 +473,7 @@ function projectSafeJson(value: unknown): JsonValue {
   return projectJsonValue(redactJson(value), 0, { nodes: 0 });
 }
 
-function projectJsonValue(
-  value: unknown,
-  depth: number,
-  state: { nodes: number },
-): JsonValue {
+function projectJsonValue(value: unknown, depth: number, state: { nodes: number }): JsonValue {
   state.nodes += 1;
   if (depth > MAX_PUBLIC_JSON_DEPTH || state.nodes > MAX_PUBLIC_JSON_NODES) return TEXT_PLACEHOLDER;
   if (value === null || typeof value === "boolean" || typeof value === "number") return value;
@@ -469,9 +488,7 @@ function projectJsonValue(
   const output: Record<string, JsonValue> = {};
   for (const [key, item] of Object.entries(value).slice(0, MAX_PUBLIC_JSON_ITEMS)) {
     if (isHiddenInternalKey(key)) continue;
-    output[key] = isSensitiveKey(key)
-      ? "[REDACTED]"
-      : projectJsonValue(item, depth + 1, state);
+    output[key] = isSensitiveKey(key) ? "[REDACTED]" : projectJsonValue(item, depth + 1, state);
   }
   return output;
 }

@@ -7,11 +7,11 @@ import {
   createToolInvocationId,
   createWorkspaceId,
 } from "@caelush/protocol";
-import { EventBus } from "@caelush/events";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildDaemonApp, RunEventHub, startDaemon } from "../src/index.js";
 import { nextSseFrame, sseFrameId } from "./support/sse-client.js";
+import { commitDurableTestEvent } from "./support/committed-event.js";
 
 let directory: string | undefined;
 let storage: CaelushStorage | undefined;
@@ -65,7 +65,6 @@ function ephemeralEvent(runId: string, sessionId: string) {
 
 async function startFactory(databasePath: string) {
   storage = await openCaelushStorage({ path: databasePath });
-  const eventBus = new EventBus(storage.eventReader);
   eventHub = new RunEventHub(storage.eventReader);
   activeStreams = new Set();
   app = buildDaemonApp({
@@ -78,23 +77,22 @@ async function startFactory(databasePath: string) {
   await app.listen({ host: "127.0.0.1", port: 0 });
   const address = app.server.address();
   if (!address || typeof address === "string") throw new Error("server did not bind a TCP port");
-  return { eventBus, eventHub, url: `http://127.0.0.1:${address.port}` };
+  return { eventHub, url: `http://127.0.0.1:${address.port}` };
 }
 
 async function publishDurable(
-  eventBus: EventBus,
   hub: RunEventHub,
   draft: ReturnType<typeof durableDraft>,
 ): Promise<void> {
-  const committed = await eventBus.publish(draft);
-  hub.notifyCommitted([committed as never]);
+  if (storage === undefined) throw new Error("storage is unavailable for the test event");
+  await commitDurableTestEvent(storage, hub, draft);
 }
 
 describe("Caelush local service E2E", () => {
   it("closes, reconnects, and recovers durable state across restart", async () => {
     directory = await mkdtemp(join(tmpdir(), "caelush-e2e-"));
     const databasePath = join(directory, "caelush.db");
-    const { eventBus, eventHub: hub, url } = await startFactory(databasePath);
+    const { eventHub: hub, url } = await startFactory(databasePath);
 
     const sessionResponse = await fetch(`${url}/api/v1/sessions`, {
       method: "POST",
@@ -125,7 +123,7 @@ describe("Caelush local service E2E", () => {
     const responseA = fetch(streamUrl, { headers: { accept: "text/event-stream" } });
     const responseB = fetch(streamUrl, { headers: { accept: "text/event-stream" } });
     await new Promise((resolve) => setTimeout(resolve, 50));
-    await publishDurable(eventBus, hub, durableDraft(run.id, session.id, "1"));
+    await publishDurable(hub, durableDraft(run.id, session.id, "1"));
     const [sseA, sseB] = await Promise.all([responseA, responseB]);
     const readerA = sseA.body?.getReader();
     const readerB = sseB.body?.getReader();
@@ -135,8 +133,8 @@ describe("Caelush local service E2E", () => {
     expect(sseFrameId(frameB1.frame)).toBe("1");
     await readerA.cancel();
 
-    await publishDurable(eventBus, hub, durableDraft(run.id, session.id, "2"));
-    await publishDurable(eventBus, hub, durableDraft(run.id, session.id, "3"));
+    await publishDurable(hub, durableDraft(run.id, session.id, "2"));
+    await publishDurable(hub, durableDraft(run.id, session.id, "3"));
     const bReplay2 = await nextSseFrame(readerB);
     const bReplay3 = await nextSseFrame(readerB, bReplay2.rest);
     expect([sseFrameId(bReplay2.frame), sseFrameId(bReplay3.frame)]).toEqual(["2", "3"]);
@@ -151,7 +149,7 @@ describe("Caelush local service E2E", () => {
 
     const liveA = reconnectReader.read();
     const liveB = readerB.read();
-    await publishDurable(eventBus, hub, durableDraft(run.id, session.id, "4"));
+    await publishDurable(hub, durableDraft(run.id, session.id, "4"));
     const liveAResult = await liveA;
     const liveBResult = await liveB;
     expect(sseFrameId(new TextDecoder().decode(liveAResult.value))).toBe("4");

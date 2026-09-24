@@ -47,20 +47,24 @@ describe("storage restart recovery", () => {
       expect(await second.runs.get(run.id)).toEqual(run);
       expect(await second.steps.get(step.id)).toEqual(step);
       expect(await second.runStates.get(run.id)).toEqual(makeState(run));
-      expect((await second.eventReader.replay(run.id, {
-        afterSequence: 0,
-        throughSequence: Number.MAX_SAFE_INTEGER,
-        limit: 100,
-      })).map((item) => item.eventId)).toEqual([
-        event.eventId,
-      ]);
+      expect(
+        (
+          await second.eventReader.replay(run.id, {
+            afterSequence: 0,
+            throughSequence: Number.MAX_SAFE_INTEGER,
+            limit: 100,
+          })
+        ).map((item) => item.eventId),
+      ).toEqual([event.eventId]);
       const secondClient = second.messageRecords.database.client;
       secondClient.exec("BEGIN IMMEDIATE");
-      const [next] = appendDurableEventsInTransaction(secondClient, [{
-        ...draft,
-        eventId: createEventId(),
-        timestamp: createTimestampMs(2),
-      }]);
+      const [next] = appendDurableEventsInTransaction(secondClient, [
+        {
+          ...draft,
+          eventId: createEventId(),
+          timestamp: createTimestampMs(2),
+        },
+      ]);
       if (next === undefined) throw new Error("second event append returned no event");
       secondClient.exec("COMMIT");
       expect(next.durability).toMatchObject({ sequence: 2 });

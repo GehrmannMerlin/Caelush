@@ -72,10 +72,15 @@ describe("SqliteApprovalRepository", () => {
       });
       expect(resolved.status).toBe("APPROVED");
       expect(resolved.grantedScope).toBe("RUN");
-      expect((await storage.eventReader.replay(run.id, { afterSequence: 0, throughSequence: Number.MAX_SAFE_INTEGER, limit: 1000 })).map((item) => item.type)).toEqual([
-        "tool.requested",
-        "approval.resolved",
-      ]);
+      expect(
+        (
+          await storage.eventReader.replay(run.id, {
+            afterSequence: 0,
+            throughSequence: Number.MAX_SAFE_INTEGER,
+            limit: 1000,
+          })
+        ).map((item) => item.type),
+      ).toEqual(["tool.requested", "approval.resolved"]);
       expect(
         await storage.approvals.resolve(approval.id, { action: "APPROVE", scope: "RUN" }),
       ).toEqual(resolved);

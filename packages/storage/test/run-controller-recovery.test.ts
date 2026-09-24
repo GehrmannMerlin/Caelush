@@ -8,7 +8,11 @@ import {
   createTimestampMs,
   createWorkspaceId,
 } from "@caelush/protocol";
-import { createAssistantMessageAppend, createUserMessageAppend, RunController } from "@caelush/core";
+import {
+  createAssistantMessageAppend,
+  createUserMessageAppend,
+  RunController,
+} from "@caelush/core";
 import { EventBus } from "./support/test-event-notifier.js";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
@@ -113,18 +117,20 @@ describe("RunController recovery", () => {
     await storage.runStates.save(state);
     const client = storage.messageRecords.database.client;
     client.exec("BEGIN IMMEDIATE");
-    appendDurableEventsInTransaction(client, [{
-      eventId: createEventId(),
-      schemaVersion: 1,
-      runId: pending.id,
-      sessionId: pending.sessionId,
-      stepId: step.id,
-      timestamp: createTimestampMs(10),
-      visibility: "USER_VISIBLE",
-      durability: { kind: "DURABLE", version: 1 },
-      type: "llm.started",
-      payload: { model: pending.model },
-    }]);
+    appendDurableEventsInTransaction(client, [
+      {
+        eventId: createEventId(),
+        schemaVersion: 1,
+        runId: pending.id,
+        sessionId: pending.sessionId,
+        stepId: step.id,
+        timestamp: createTimestampMs(10),
+        visibility: "USER_VISIBLE",
+        durability: { kind: "DURABLE", version: 1 },
+        type: "llm.started",
+        payload: { model: pending.model },
+      },
+    ]);
     client.exec("COMMIT");
     const calls = { count: 0 };
     const result = await controller(storage, calls).recover(pending.id);
@@ -197,9 +203,13 @@ describe("RunController recovery", () => {
     expect(calls.count).toBe(0);
     expect((await storage.continuations.get(currentRun.id))?.checkpoint).toBeUndefined();
     expect(
-      (await storage.eventReader.replay(currentRun.id, { afterSequence: 0, throughSequence: Number.MAX_SAFE_INTEGER, limit: 1000 })).filter(
-        (event) => event.type === "run.timed_out",
-      ),
+      (
+        await storage.eventReader.replay(currentRun.id, {
+          afterSequence: 0,
+          throughSequence: Number.MAX_SAFE_INTEGER,
+          limit: 1000,
+        })
+      ).filter((event) => event.type === "run.timed_out"),
     ).toHaveLength(1);
     await storage.close();
   });

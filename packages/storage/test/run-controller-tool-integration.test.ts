@@ -840,9 +840,15 @@ describe("RunController automatic Tool Batch integration", () => {
     expect(JSON.stringify(await projectedMessages(storage, run.id))).not.toContain(
       "details-secret",
     );
-    expect((await storage.eventReader.replay(run.id, { afterSequence: 0, throughSequence: Number.MAX_SAFE_INTEGER, limit: 1000 })).map((event) => event.type)).not.toContain(
-      "run.completed",
-    );
+    expect(
+      (
+        await storage.eventReader.replay(run.id, {
+          afterSequence: 0,
+          throughSequence: Number.MAX_SAFE_INTEGER,
+          limit: 1000,
+        })
+      ).map((event) => event.type),
+    ).not.toContain("run.completed");
     await storage.close();
   });
 
@@ -962,7 +968,13 @@ describe("RunController automatic Tool Batch integration", () => {
       expect((await storage.approvals.getById(waiting.approvalId!))?.status).toBe("CANCELLED");
       expect(calls).toEqual([]);
       expect(
-        (await storage.eventReader.replay(run.id, { afterSequence: 0, throughSequence: Number.MAX_SAFE_INTEGER, limit: 1000 })).filter((event) => event.type === "run.timed_out"),
+        (
+          await storage.eventReader.replay(run.id, {
+            afterSequence: 0,
+            throughSequence: Number.MAX_SAFE_INTEGER,
+            limit: 1000,
+          })
+        ).filter((event) => event.type === "run.timed_out"),
       ).toHaveLength(1);
     } finally {
       await storage.close();
@@ -1036,9 +1048,15 @@ describe("RunController automatic Tool Batch integration", () => {
       "COMPLETED",
       "COMPLETED",
     ]);
-    expect((await storage.eventReader.replay(run.id, { afterSequence: 0, throughSequence: Number.MAX_SAFE_INTEGER, limit: 1000 })).map(({ type }) => type)).toContain(
-      "approval.resolved",
-    );
+    expect(
+      (
+        await storage.eventReader.replay(run.id, {
+          afterSequence: 0,
+          throughSequence: Number.MAX_SAFE_INTEGER,
+          limit: 1000,
+        })
+      ).map(({ type }) => type),
+    ).toContain("approval.resolved");
     await storage.close();
   });
 
@@ -1167,7 +1185,15 @@ describe("RunController automatic Tool Batch integration", () => {
       "user",
       "assistant",
     ]);
-    expect(JSON.stringify(await storage.eventReader.replay(run.id, { afterSequence: 0, throughSequence: Number.MAX_SAFE_INTEGER, limit: 1000 }))).not.toContain("handler-secret");
+    expect(
+      JSON.stringify(
+        await storage.eventReader.replay(run.id, {
+          afterSequence: 0,
+          throughSequence: Number.MAX_SAFE_INTEGER,
+          limit: 1000,
+        }),
+      ),
+    ).not.toContain("handler-secret");
     await storage.close();
   });
 

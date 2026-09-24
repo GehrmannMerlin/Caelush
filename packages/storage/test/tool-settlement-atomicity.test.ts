@@ -219,10 +219,15 @@ describe("Phase 4C atomic Tool settlement", () => {
       expect((await storage.runStates.get(run.id))?.changedFiles).toEqual([
         { path: "src/a.ts", changeType: "MODIFIED", additions: 2, deletions: 1 },
       ]);
-      expect((await storage.eventReader.replay(run.id, { afterSequence: 0, throughSequence: Number.MAX_SAFE_INTEGER, limit: 1000 })).map(({ type }) => type)).toEqual([
-        "tool.requested",
-        "file.modified",
-      ]);
+      expect(
+        (
+          await storage.eventReader.replay(run.id, {
+            afterSequence: 0,
+            throughSequence: Number.MAX_SAFE_INTEGER,
+            limit: 1000,
+          })
+        ).map(({ type }) => type),
+      ).toEqual(["tool.requested", "file.modified"]);
       expect(
         await storage.budgetLedger.get(run.id, "TOOL_INVOCATION", invocation.id),
       ).toMatchObject({
@@ -420,7 +425,13 @@ describe("Phase 4C atomic Tool settlement", () => {
         durability: { kind: "DURABLE" as const, version: 1 as const },
         payload: { path: "src/a.ts" },
       };
-      const before = (await storage.eventReader.replay(run.id, { afterSequence: 0, throughSequence: Number.MAX_SAFE_INTEGER, limit: 1000 })).length;
+      const before = (
+        await storage.eventReader.replay(run.id, {
+          afterSequence: 0,
+          throughSequence: Number.MAX_SAFE_INTEGER,
+          limit: 1000,
+        })
+      ).length;
 
       await expect(
         storage.toolExecution.commit({
@@ -432,7 +443,15 @@ describe("Phase 4C atomic Tool settlement", () => {
         }),
       ).rejects.toBeTruthy();
 
-      expect((await storage.eventReader.replay(run.id, { afterSequence: 0, throughSequence: Number.MAX_SAFE_INTEGER, limit: 1000 })).length).toBe(before);
+      expect(
+        (
+          await storage.eventReader.replay(run.id, {
+            afterSequence: 0,
+            throughSequence: Number.MAX_SAFE_INTEGER,
+            limit: 1000,
+          })
+        ).length,
+      ).toBe(before);
       const loaded = await storage.toolExecution.load(invocation.id);
       expect(loaded?.invocation.status).toBe("RUNNING");
       expect(loaded?.observation).toBeUndefined();
