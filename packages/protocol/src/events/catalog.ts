@@ -69,6 +69,7 @@ export const RUN_EVENT_TYPE_CATALOG: readonly RunEventTypeDefinition[] = Object.
   durable("error", "DEBUG"),
   durable("budget.exceeded"),
   durable("resource.guard"),
+  durable("conversation.message.committed"),
 ]);
 
 export const RunEventTypeCatalog = RUN_EVENT_TYPE_CATALOG;

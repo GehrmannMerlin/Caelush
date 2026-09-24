@@ -384,6 +384,8 @@ function reduceRegisteredEvent(state: TimelineState, event: PublicRunEvent): Tim
           status: "PENDING",
         })),
       };
+    case "conversation.message.committed":
+      return state;
     default:
       return state;
   }

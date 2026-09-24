@@ -3,6 +3,7 @@ import type { RunEvent } from "./index.js";
 import { getRunEventTypeDefinition, RUN_EVENT_TYPE_CATALOG } from "./catalog.js";
 import { ApprovalRequestedEventSchema, ApprovalResolvedEventSchema } from "./approval.js";
 import { BudgetExceededEventSchema } from "./budget.js";
+import { ConversationMessageCommittedEventSchema } from "./conversation.js";
 import { ErrorEventSchema } from "./error.js";
 import {
   FileCreatedEventSchema,
@@ -120,6 +121,7 @@ const registeredSchemas: ReadonlyMap<string, RegisteredSchema> = new Map<string,
   ["error\u00001", ErrorEventSchema],
   ["budget.exceeded\u00001", BudgetExceededEventSchema],
   ["resource.guard\u00001", ResourceGuardEventSchema],
+  ["conversation.message.committed\u00001", ConversationMessageCommittedEventSchema],
 ]);
 
 for (const definition of RUN_EVENT_TYPE_CATALOG) {

@@ -54,6 +54,7 @@ import { ErrorEventSchema } from "./error.js";
 import { BudgetExceededEventSchema } from "./budget.js";
 import { ResourceGuardEventSchema } from "./resource.js";
 import { createPublicRunEventSchema, type PublicRunEventFrom } from "./public.js";
+import { ConversationMessageCommittedEventSchema } from "./conversation.js";
 
 export {
   CoalescibleTransientEventMetaSchema,
@@ -88,6 +89,8 @@ export {
   RunEventTypeCatalog,
 } from "./catalog.js";
 export type { RunEventTypeDefinition } from "./catalog.js";
+export { ConversationMessageCommittedEventSchema } from "./conversation.js";
+export type { ConversationMessageCommittedEvent } from "./conversation.js";
 export { createPublicRunEventSchema } from "./public.js";
 export type { PublicRunEventFrom } from "./public.js";
 export {
@@ -155,6 +158,7 @@ const currentRunEventSchema = z.discriminatedUnion("type", [
   ErrorEventSchema,
   BudgetExceededEventSchema,
   ResourceGuardEventSchema,
+  ConversationMessageCommittedEventSchema,
 ]);
 
 /**

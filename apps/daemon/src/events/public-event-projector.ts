@@ -285,6 +285,13 @@ export class DefaultPublicEventProjector implements PublicEventProjector {
       case "resource.guard":
         payload = event.payload;
         break;
+      case "conversation.message.committed":
+        payload = {
+          messageId: event.payload.messageId,
+          conversationTurnId: event.payload.conversationTurnId,
+          messageType: event.payload.messageType,
+        };
+        break;
       default:
         return null;
     }

@@ -21,6 +21,24 @@ const invocationId = createToolInvocationId();
 const observationId = createObservationId();
 
 describe("shared Timeline reducer", () => {
+  it("accepts a conversation message notification without adding a Timeline activity", () => {
+    const state = createInitialTimelineState(runId);
+    const next = reduceTimelineEvent(
+      state,
+      eventOf("conversation.message.committed", 1, {
+        messageId: "amsg_00000000-0000-7000-8000-000000000000",
+        conversationTurnId: "cturn_00000000-0000-7000-8000-000000000000",
+        messageType: "ASSISTANT",
+      }),
+    );
+
+    expect(next.settled).toEqual([]);
+    expect(next.activeTools).toEqual([]);
+    expect(next.activeLlm).toEqual([]);
+    expect(next.activeApprovals).toEqual([]);
+    expect(next.activeProcesses).toEqual([]);
+  });
+
   it("counts completed verification outcomes and replaces a check without double-counting", () => {
     const planId = createVerificationPlanId();
     let state = createInitialTimelineState(runId, { limits: { maxActiveEntries: 1 } });

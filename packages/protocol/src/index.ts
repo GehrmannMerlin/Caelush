@@ -171,6 +171,7 @@ export { UsageStateSchema } from "./usage.js";
 export type { UsageState } from "./usage.js";
 export {
   AgentEventSchema,
+  ConversationMessageCommittedEventSchema,
   CoalescibleTransientEventMetaSchema,
   DurableEventSchema,
   DurableRunEventMetaSchema,
@@ -196,6 +197,7 @@ export {
 } from "./events/index.js";
 export type {
   AgentEvent,
+  ConversationMessageCommittedEvent,
   CoalescibleTransientEventMeta,
   DurableEvent,
   DurableRunEvent,
