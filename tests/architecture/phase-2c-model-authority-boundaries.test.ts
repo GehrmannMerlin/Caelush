@@ -101,45 +101,14 @@ describe("Phase 2C Core model authority", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("imports the legacy message contract from an explicit per-file allowlist only", async () => {
-    // Message System V2 is out of scope for Phase 2C, so `@caelush/llm/messages` stays
-    // legal for the frozen message schemas — but only in the files that actually own
-    // history, continuations or conversations. A new file must be a deliberate decision.
-    //
-    // Phase 3A moved the decision contract into `@caelush/agent`, so `agent-decision.ts` no
-    // longer imports the legacy message type, and it was removed from the list rather than left
-    // as a stale entry. Phase 3B added the Core compatibility context boundary, which projects
-    // between the frozen AI messages and the still-legacy durable conversation.
-    const allowlist = [
-      "packages/core/src/agent-continuation-schema.ts",
-      "packages/core/src/agent-continuation.ts",
-      "packages/core/src/agent-loop-history.ts",
-      "packages/core/src/agent-loop-input.ts",
-      "packages/core/src/agent-loop.ts",
-      "packages/core/src/agent-tool-batch.ts",
-      "packages/core/src/agent-tool-results.ts",
-      "packages/core/src/ai-invocation-projection.ts",
-      "packages/core/src/legacy-agent-conversation.ts",
-      "packages/core/src/legacy-context-runtime-adapter.ts",
-      "packages/core/src/run-controller-history.ts",
-      "packages/core/src/run-controller-input.ts",
-      "packages/core/src/run-controller-ports.ts",
-      "packages/core/src/run-controller.ts",
-      // Phase 3C made the Run execution snapshot agent-owned. The legacy durable encoding is
-      // projected in exactly one reviewed codec, and nowhere else in the Run Layer:
-      // `run-message-compatibility.ts` for messages, `run-continuation-compatibility.ts` for
-      // the continuations that carry them. Storage implements the port and calls the codec
-      // rather than naming the AI contract itself.
-      "packages/core/src/run-message-compatibility.ts",
-    ];
-
+  it("contains no legacy model-message imports after the Phase 5F retirement", async () => {
     const files = await scan("packages/core/src");
     const actual = files
-      .filter(({ source }) => source.includes('"@caelush/llm/messages"'))
+      .filter(({ source }) => source.includes("@caelush/llm"))
       .map(({ file }) => file)
       .sort();
 
-    expect(actual).toEqual([...allowlist].sort());
+    expect(actual).toEqual([]);
   });
 
   it("names the model execution seam through the AI contract and the agent facade", async () => {

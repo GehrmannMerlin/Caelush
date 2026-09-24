@@ -1,5 +1,5 @@
 import type { ContextBuildLimits, VerificationRepairContextInput } from "@caelush/context";
-import type { LLMMessage, LLMToolResultMessage } from "@caelush/llm/messages";
+import type { AIMessage, AIToolResultMessage } from "@caelush/ai";
 import type {
   AIModelRequest,
   AIModelTurnResult,
@@ -38,7 +38,7 @@ export interface AgentLoopCommonInput {
   readonly signal: AbortSignal;
   readonly run: AgentRun;
   readonly state: AgentState;
-  readonly history: readonly LLMMessage[];
+  readonly history: readonly AIMessage[];
   /** Durable conversation sequence values aligned with history when available. */
   readonly historySourceSequences?: readonly number[];
   readonly baseSystemPrompt: string;
@@ -76,7 +76,7 @@ export interface AgentLoopContinuationInput extends AgentLoopCommonInput {
 
 export interface AgentLoopResumeInput extends AgentLoopCommonInput {
   readonly pendingDecision: AgentToolCallsDecision;
-  readonly toolResults: readonly LLMToolResultMessage[];
+  readonly toolResults: readonly AIToolResultMessage[];
   /**
    * The durable Step that produced `pendingDecision`.
    *
@@ -115,7 +115,7 @@ export interface AgentLoopOutcomeResult extends AgentLoopCanonicalResultCarrier 
   readonly outcome: AgentLoopOutcome;
   readonly state: AgentState;
   readonly step?: AgentStep;
-  readonly messagesToAppend: readonly LLMMessage[];
+  readonly messagesToAppend: readonly AIMessage[];
   /** The frozen context receipt's report, carried through untouched. */
   readonly contextReport?: ContextBuildReport;
   readonly providerTurnState: AgentProviderTurnState;
@@ -126,7 +126,7 @@ export interface AgentLoopFailureResult extends AgentLoopCanonicalResultCarrier 
   readonly error: AgentError;
   readonly state: AgentState;
   readonly step?: AgentStep;
-  readonly messagesToAppend: readonly LLMMessage[];
+  readonly messagesToAppend: readonly AIMessage[];
   readonly contextReport?: ContextBuildReport;
   readonly providerTurnState: AgentProviderTurnState;
   readonly retry?: AgentRetryMetadata;
@@ -138,7 +138,7 @@ export interface AgentLoopCancelledResult extends AgentLoopCanonicalResultCarrie
   readonly status: "CANCELLED";
   readonly state: AgentState;
   readonly step?: AgentStep;
-  readonly messagesToAppend: readonly LLMMessage[];
+  readonly messagesToAppend: readonly AIMessage[];
   readonly contextReport?: ContextBuildReport;
   readonly providerTurnState: "NOT_STARTED" | "CANCELLED";
 }

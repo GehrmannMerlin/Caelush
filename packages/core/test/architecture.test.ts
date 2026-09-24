@@ -17,9 +17,8 @@ async function sourceContents(): Promise<string> {
  *
  * Core used to reach a model through the legacy LLM abstraction. After the cutover it
  * executes a model turn through `ModelTurnExecutor` (the `@caelush/agent` port) over an
- * `AIModelRequest` / `AIModelTurnResult` (`@caelush/ai`). The legacy package is allowed
- * to remain only for the frozen message contracts, which Message System V2 will retire
- * in a later phase.
+ * `AIModelRequest` / `AIModelTurnResult` (`@caelush/ai`). The former legacy package was
+ * fully retired by Message System V2 Phase 5F.
  *
  * Phase 4F deleted the legacy Tool System package, so it is no longer an approved edge for
  * anyone — Core included. The permanent rule it leaves behind is checked below: no workspace
@@ -30,8 +29,6 @@ const ALLOWED_CORE_EDGES = [
   "@caelush/ai",
   "@caelush/context",
   "@caelush/protocol",
-  "@caelush/llm/messages",
-  "@caelush/llm/turn",
   "@caelush/verification",
 ];
 

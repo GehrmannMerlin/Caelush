@@ -8,7 +8,7 @@ import {
   createTimestampMs,
   createWorkspaceId,
 } from "@caelush/protocol";
-import { createUserMessageAppend, RunController } from "@caelush/core";
+import { createAssistantMessageAppend, createUserMessageAppend, RunController } from "@caelush/core";
 import { EventBus } from "@caelush/events";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
@@ -217,12 +217,14 @@ describe("RunController recovery", () => {
     await insertParents(storage, currentRun);
     await storage.steps.insert(step);
     await storage.runStates.save(state);
-    await storage.messages.append(pending.id, [
-      { createdAt: createTimestampMs(2), message: { role: "user", content: pending.goal } },
-      {
-        createdAt: createTimestampMs(10),
-        sourceStepId: step.id,
-        message: {
+    const messages = testRunMessageAuthority();
+    await storage.messageRecords.append(pending.id, [
+      createUserMessageAppend(messages, pending, "GOAL").draft,
+      createAssistantMessageAppend(messages, pending, step.id, {
+        callId: createLLMCallId(),
+        model: pending.model,
+        finishReason: "TOOL_CALLS",
+        assistantMessage: {
           role: "assistant",
           content: [
             {
@@ -233,7 +235,7 @@ describe("RunController recovery", () => {
             },
           ],
         },
-      },
+      }).draft,
     ]);
     await storage.continuations.set(
       pending.id,

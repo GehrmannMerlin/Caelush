@@ -1,10 +1,11 @@
-import { LLMMessageSchema, type LLMAssistantMessage, type LLMMessage } from "@caelush/llm/messages";
+import { type AIAssistantMessage, type AIMessage } from "@caelush/ai";
 import { ContextConversationError } from "./errors.js";
 import type { ContextConversationReport } from "./context-build-report.js";
+import { isAIMessage } from "./message-validation.js";
 import type { TokenEstimator } from "./token-estimator.js";
 
 export interface ConversationTurnGroup {
-  readonly messages: readonly LLMMessage[];
+  readonly messages: readonly AIMessage[];
   readonly estimatedTokens: number;
 }
 
@@ -14,29 +15,29 @@ export interface ValidatedConversation {
 }
 
 export interface SelectedConversation extends ContextConversationReport {
-  readonly messages: readonly LLMMessage[];
+  readonly messages: readonly AIMessage[];
 }
 
 function invalidHistory(): ContextConversationError {
   return new ContextConversationError("conversation history contains an invalid message");
 }
 
-function assistantToolCalls(message: LLMAssistantMessage): readonly { id: string; name: string }[] {
+function assistantToolCalls(message: AIAssistantMessage): readonly { id: string; name: string }[] {
   return message.content.flatMap((part) =>
     part.type === "tool-call" ? [{ id: part.toolCallId, name: part.toolName }] : [],
   );
 }
 
-export function estimateLLMMessage(message: LLMMessage, estimator: TokenEstimator): number {
+export function estimateAIMessage(message: AIMessage, estimator: TokenEstimator): number {
   return estimator.estimateText(JSON.stringify(message));
 }
 
 export function validateAndGroupConversation(
-  messages: readonly LLMMessage[],
+  messages: readonly AIMessage[],
   estimator: TokenEstimator,
 ): ValidatedConversation {
   const groups: ConversationTurnGroup[] = [];
-  let current: LLMMessage[] = [];
+  let current: AIMessage[] = [];
   let pendingTools = new Map<string, string>();
   let completedTools = new Set<string>();
 
@@ -45,7 +46,7 @@ export function validateAndGroupConversation(
     groups.push({
       messages: current,
       estimatedTokens: current.reduce(
-        (total, message) => total + estimateLLMMessage(message, estimator),
+        (total, message) => total + estimateAIMessage(message, estimator),
         0,
       ),
     });
@@ -55,8 +56,7 @@ export function validateAndGroupConversation(
   };
 
   for (const message of messages) {
-    const parsed = LLMMessageSchema.safeParse(message);
-    if (!parsed.success) throw invalidHistory();
+    if (!isAIMessage(message)) throw invalidHistory();
     if (message.role === "system")
       throw new ContextConversationError("system messages are not allowed in conversation history");
     if (message.role === "user") {

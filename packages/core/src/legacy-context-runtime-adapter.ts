@@ -26,7 +26,7 @@ import {
   projectStoredMessages,
   STRUCTURAL_TOKEN_ESTIMATOR,
 } from "@caelush/agent";
-import type { LLMMessage, LLMUserMessage } from "@caelush/llm/messages";
+import type { AIMessage, AIUserMessage, AIToolResultMessage } from "@caelush/ai";
 import type { AgentRun, WorkspaceRef } from "@caelush/protocol";
 import type {
   AgentContextBuilderPort,
@@ -35,7 +35,6 @@ import type {
   AgentRelevantFilePlannerPort,
 } from "./agent-loop-ports.js";
 import { defaultObservationPolicy } from "./agent-tool-batch.js";
-import { toAIMessage, toLegacyMessage } from "./ai-invocation-projection.js";
 
 /**
  * TRANSITIONAL — the legacy Context runtime behind the frozen Context Engine boundary.
@@ -43,7 +42,7 @@ import { toAIMessage, toLegacyMessage } from "./ai-invocation-projection.js";
  * Phase 3B froze `ContextEnginePort`: one call prepares everything the model will be shown,
  * and the general loop never learns how it was built. The current Context System still works
  * from a `ProjectIntelligenceSnapshot`, a `RelevantFileContextPlan`, a `ContextBuildInput`
- * and legacy durable `LLMMessage`s, so this adapter is where that knowledge lives:
+ * and durable Agent messages projected to AI messages, so this adapter is where that knowledge lives:
  *
  * ```text
  * Workspace/project context  →  PreparedModelContext
@@ -158,7 +157,7 @@ export function createLegacyContextRuntimeAdapter(
 ): ContextEnginePort {
   return {
     async prepare(input: ContextPrepareInput): Promise<PreparedModelContext> {
-      const projectedConversation = projectConversationForContext(dependencies, input);
+      const projectedConversation = await projectConversationForContext(dependencies, input);
       const legacyInput = await buildLegacyContextInput(dependencies, input, projectedConversation); // The single descriptor authority for this build. Never re-resolved.
       const descriptor = input.model;
       const runtime = resolveRuntime(dependencies);
@@ -238,7 +237,14 @@ async function buildLegacyContextInput(
 
   const currentTurnMessages = conversation.currentTurnMessages;
   if (currentTurnMessages !== undefined) {
-    return { ...common, mode: "TOOL_CONTINUATION", currentTurnMessages };
+    return {
+      ...common,
+      mode: "TOOL_CONTINUATION",
+      currentTurnMessages,
+      ...(conversation.rawObservationRefs === undefined
+        ? {}
+        : { rawObservationRefs: conversation.rawObservationRefs }),
+    };
   }
   return {
     ...common,
@@ -247,23 +253,27 @@ async function buildLegacyContextInput(
 }
 
 interface ProjectedLegacyConversation {
-  readonly history: readonly LLMMessage[];
-  readonly currentTurnMessages?: readonly LLMMessage[];
-  readonly currentUserMessage?: LLMUserMessage;
+  readonly history: readonly AIMessage[];
+  readonly currentTurnMessages?: readonly AIMessage[];
+  readonly currentUserMessage?: AIUserMessage;
+  readonly rawObservationRefs?: readonly {
+    readonly toolCallId: string;
+    readonly artifactRef: string;
+  }[];
 }
 
 /**
  * The one production conversation projection path.
  *
  * Durable records are validated and selected as Agent messages first. Only the selected
- * provider-neutral AI conversation crosses the legacy adapter and becomes an LLM message for the
+ * provider-neutral AI conversation crosses the adapter directly into the
  * existing Context materializer. A historical Tool result is therefore read from its stored
  * `projectedContent`; this function never projects raw observations or chooses a newer version.
  */
-function projectConversationForContext(
+async function projectConversationForContext(
   dependencies: LegacyContextRuntimeAdapterDependencies,
   input: ContextPrepareInput,
-): ProjectedLegacyConversation {
+): Promise<ProjectedLegacyConversation> {
   const projectors =
     dependencies.conversationProjectors ?? createStandardAgentMessageProjectorRegistry();
   const selector =
@@ -277,20 +287,20 @@ function projectConversationForContext(
   });
   const stored = selected.turns.flatMap((turn) => [...turn.messages]);
   const byId = new Map(stored.map((entry) => [entry.message.id, entry]));
-  const historyWithout = (ids: ReadonlySet<string>): readonly LLMMessage[] =>
+  const historyWithout = (ids: ReadonlySet<string>): readonly AIMessage[] =>
     projectStoredMessages(
       stored.filter((entry) => !ids.has(entry.message.id)),
       projectors,
-    ).messages.map(toLegacyMessage);
+    ).messages;
 
   if (input.input.kind === "USER_INPUT") {
     const user = byId.get(input.input.userMessageId);
     if (user === undefined || user.message.type !== "USER") {
       throw new Error("The durable USER message referenced by the turn input is unavailable.");
     }
-    const projected = projectors.project(user).messages.map(toLegacyMessage);
+    const projected = projectors.project(user).messages;
     const currentUser = projected.find(
-      (message): message is LLMUserMessage => message.role === "user",
+      (message): message is AIUserMessage => message.role === "user",
     );
     if (currentUser === undefined) {
       throw new Error("The durable USER message did not produce a model-visible user message.");
@@ -329,15 +339,21 @@ function projectConversationForContext(
       assistant.message.id,
       ...resultEntries.map((entry) => entry.message.id),
     ]);
+    const projectedResults = resultEntries.flatMap((entry) => projectors.project(entry).messages);
+    const rawObservationRefs = await resolveRawObservationRefs(
+      dependencies,
+      input.identity.runId,
+      toolInput.sourceStepId,
+      projectedResults,
+    );
     return {
       history: historyWithout(currentIds),
       currentTurnMessages: [
-        ...projectors.project(user).messages.map(toLegacyMessage),
-        ...projectors.project(assistant).messages.map(toLegacyMessage),
-        ...resultEntries.flatMap((entry) =>
-          projectors.project(entry).messages.map(toLegacyMessage),
-        ),
+        ...projectors.project(user).messages,
+        ...projectors.project(assistant).messages,
+        ...projectedResults,
       ],
+      ...(rawObservationRefs.length === 0 ? {} : { rawObservationRefs }),
     };
   }
 
@@ -351,7 +367,7 @@ function projectConversationForContext(
     return entry;
   });
   const currentMessages = currentEntries.flatMap((entry) =>
-    projectors.project(entry).messages.map(toLegacyMessage),
+    projectors.project(entry).messages,
   );
   const currentUserEntry =
     [...currentEntries].reverse().find((entry) => entry.message.type === "USER") ??
@@ -359,13 +375,13 @@ function projectConversationForContext(
   const currentUser =
     [...currentMessages]
       .reverse()
-      .find((message): message is LLMUserMessage => message.role === "user") ??
+      .find((message): message is AIUserMessage => message.role === "user") ??
     (currentUserEntry === undefined
       ? undefined
       : projectors
           .project(currentUserEntry)
-          .messages.map(toLegacyMessage)
-          .find((message): message is LLMUserMessage => message.role === "user"));
+          .messages
+          .find((message): message is AIUserMessage => message.role === "user"));
   if (currentUser === undefined || currentUserEntry === undefined) {
     throw new Error("The durable user message for the continuation is unavailable.");
   }
@@ -444,7 +460,7 @@ async function repairContext(
   return repair === undefined ? {} : { verificationRepairContext: repair };
 }
 
-function requireCurrentUserMessage(conversation: ProjectedLegacyConversation): LLMUserMessage {
+function requireCurrentUserMessage(conversation: ProjectedLegacyConversation): AIUserMessage {
   if (conversation.currentUserMessage !== undefined) return conversation.currentUserMessage;
   throw new Error("The durable conversation has no model-visible user message for this turn.");
 }
@@ -468,6 +484,28 @@ export async function resolveRawObservationRef(
     sourceStepId,
     externalCallId: result.toolCallId,
   });
+}
+
+async function resolveRawObservationRefs(
+  dependencies: LegacyContextRuntimeAdapterDependencies,
+  runId: import("@caelush/protocol").RunId,
+  sourceStepId: import("@caelush/protocol").StepId,
+  messages: readonly AIMessage[],
+): Promise<readonly { readonly toolCallId: string; readonly artifactRef: string }[]> {
+  if (dependencies.rawObservationRefs === undefined) return [];
+  const toolMessages = messages.filter(
+    (message): message is AIToolResultMessage => message.role === "tool",
+  );
+  const resolved = await Promise.all(
+    toolMessages.map(async (message) => ({
+      toolCallId: message.toolCallId,
+      artifactRef: await resolveRawObservationRef(dependencies, runId, sourceStepId, message),
+    })),
+  );
+  return resolved.filter(
+    (reference): reference is { readonly toolCallId: string; readonly artifactRef: string } =>
+      reference.artifactRef !== undefined,
+  );
 }
 
 /**
@@ -495,7 +533,7 @@ function toPreparedModelContext(
   const usage = runtime.getContextUsage?.(runId);
   const policy = runtime.getContextPolicy?.(runId);
   return {
-    messages: built.messages.map(toAIMessage),
+    messages: built.messages,
     report: toContextBuildReport(built, usage, mode),
     observationPolicy: toObservationPolicy(policy),
   };

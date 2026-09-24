@@ -22,7 +22,7 @@ import { StorageConflictError, StorageDecodeError, StorageError } from "../error
  * ```text
  * SQL read and write · row serialization · source and audience JSON
  * sequence assignment · foreign identity validation · transactions
- * record envelope validation · dual-read physical reconciliation
+ * record envelope validation
  * ```
  *
  * ## What it must never do
@@ -41,27 +41,24 @@ import { StorageConflictError, StorageDecodeError, StorageError } from "../error
 
 /** A row of `agent_messages`, as SQLite returns it. */
 interface MessageRow {
+  message_id: string;
   run_id: string;
+  session_id: string;
   sequence: number;
-  role: string;
-  source_step_id: string | null;
-  protocol_version: number;
-  created_at_ms: number;
-  data_json: string;
-  message_id: string | null;
-  session_id: string | null;
-  conversation_turn_id: string | null;
-  message_type: string | null;
-  schema_version: number | null;
+  conversation_turn_id: string;
+  message_type: string;
+  schema_version: number;
   model_projection_version: number | null;
-  source_json: string | null;
-  audience_json: string | null;
-  v2_data_json: string | null;
+  source_step_id: string | null;
+  created_at_ms: number;
+  source_json: string;
+  audience_json: string;
+  data_json: string;
 }
 
-const ROW_COLUMNS = `run_id, sequence, role, source_step_id, protocol_version, created_at_ms, data_json,
-   message_id, session_id, conversation_turn_id, message_type, schema_version,
-   model_projection_version, source_json, audience_json, v2_data_json`;
+const ROW_COLUMNS = `message_id, run_id, session_id, sequence, conversation_turn_id, message_type,
+   schema_version, model_projection_version, source_step_id, created_at_ms, source_json, audience_json,
+   data_json`;
 
 /**
  * Append Message V2 records inside a transaction the **caller** owns.
@@ -129,7 +126,7 @@ export function appendAgentMessageRecordsInTransaction(
   }
 
   const existing = client
-    .prepare("SELECT message_id FROM agent_messages WHERE run_id = ? AND message_id IS NOT NULL")
+    .prepare("SELECT message_id FROM agent_messages WHERE run_id = ?")
     .all(runId) as Array<{ message_id: string }>;
   const known = new Set(existing.map((row) => row.message_id));
   for (const draft of drafts) {
@@ -146,35 +143,25 @@ export function appendAgentMessageRecordsInTransaction(
 
   const insert = client.prepare(
     `INSERT INTO agent_messages
-      (run_id, sequence, role, source_step_id, protocol_version, created_at_ms, data_json,
-       message_id, session_id, conversation_turn_id, message_type, schema_version,
-       model_projection_version, source_json, audience_json, v2_data_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      (message_id, run_id, session_id, sequence, conversation_turn_id, message_type, schema_version,
+       model_projection_version, source_step_id, created_at_ms, source_json, audience_json, data_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
 
   return drafts.map((draft, offset) => {
     assertRecordDraft(draft);
     const sequence = firstSequence + offset;
     insert.run(
-      runId,
-      sequence,
-      // The legacy `role` column is still NOT NULL. A V2 row records the model-protocol role that
-      // corresponds to its message type, so the legacy reader can still classify the row without
-      // understanding the V2 payload.
-      legacyRoleFor(draft.messageType),
-      draft.sourceStepId ?? null,
-      1,
-      draft.createdAt,
-      // `data_json` stays NOT NULL and keeps the legacy contract: a V2-backed row carries a JSON
-      // object there too. It is the *V2* payload that lives in `v2_data_json`, so neither encoding can
-      // be mistaken for the other.
-      EMPTY_LEGACY_PAYLOAD,
       draft.messageId,
+      runId,
       draft.sessionId,
+      sequence,
       draft.conversationTurnId,
       draft.messageType,
       draft.schemaVersion,
       draft.modelProjectionVersion ?? null,
+      draft.sourceStepId ?? null,
+      draft.createdAt,
       JSON.stringify(draft.source),
       JSON.stringify(draft.audience),
       JSON.stringify(draft.data),
@@ -197,33 +184,6 @@ export function appendAgentMessageRecordsInTransaction(
       data: draft.data,
     };
   });
-}
-
-/**
- * A placeholder for the legacy column on a V2-backed row.
- *
- * `data_json` is `NOT NULL` and the legacy reader still parses it, so a V2 row must put *something*
- * schema-valid there. An empty object is deliberately not a valid `LLMMessage` — it has no `role` — so
- * a legacy reader that somehow received this row fails loudly instead of decoding a V2 payload as a
- * legacy message.
- */
-const EMPTY_LEGACY_PAYLOAD = "{}";
-
-/** The model-protocol role a V2 message type corresponds to, for the legacy column. */
-function legacyRoleFor(messageType: string): string {
-  switch (messageType) {
-    case "USER":
-      return "user";
-    case "ASSISTANT":
-      return "assistant";
-    case "TOOL_RESULT":
-      return "tool";
-    default:
-      // A product-layer message type has no legacy role. It is stored under its own name, and the
-      // legacy reader will refuse the row rather than guess — which is the correct outcome, because
-      // the legacy language cannot express it.
-      return messageType;
-  }
 }
 
 /**
@@ -288,18 +248,6 @@ function assertRecordDraft(draft: AgentMessageRecordDraft): void {
 /** Decode one row that carries a V2 record. Throws when the row is legacy-only. */
 function rowToRecord(row: MessageRow): AgentMessageRecord {
   const identity = `${row.run_id}:${String(row.sequence)}`;
-  if (
-    row.message_id === null ||
-    row.session_id === null ||
-    row.conversation_turn_id === null ||
-    row.message_type === null ||
-    row.schema_version === null ||
-    row.source_json === null ||
-    row.audience_json === null ||
-    row.v2_data_json === null
-  ) {
-    throw new StorageDecodeError("AgentMessageRecord", identity, "agent_messages");
-  }
   return {
     messageId: row.message_id as AgentMessageRecord["messageId"],
     runId: row.run_id as RunId,
@@ -315,7 +263,7 @@ function rowToRecord(row: MessageRow): AgentMessageRecord {
     createdAt: row.created_at_ms as TimestampMs,
     source: parseJsonColumn<AgentMessageSource>(row.source_json, identity),
     audience: parseJsonColumn<AgentMessageAudience>(row.audience_json, identity),
-    data: parseJsonColumn<AgentMessageRecord["data"]>(row.v2_data_json, identity),
+    data: parseJsonColumn<AgentMessageRecord["data"]>(row.data_json, identity),
   };
 }
 
@@ -355,9 +303,8 @@ function mapWriteError(error: unknown, runId: RunId): never {
  *
  * ## Reads are not writes
  *
- * `listByRun` and `listBySession` return V2-backed rows only; a legacy-only row is not a record yet.
- * Nothing here backfills on read — a read that silently wrote would make an ordinary load a migration
- * and would make a page fetch mutate the database.
+ * Historical conversion is complete before a storage facade is exposed. Reads therefore return only
+ * final V2 rows and never become an implicit migration.
  */
 export class SqliteAgentMessageRecordStore {
   /**
@@ -392,25 +339,23 @@ export class SqliteAgentMessageRecordStore {
     const rows = this.database.client
       .prepare(
         `SELECT ${ROW_COLUMNS} FROM agent_messages
-         WHERE run_id = ? AND v2_data_json IS NOT NULL ORDER BY sequence ASC`,
+         WHERE run_id = ? ORDER BY sequence ASC`,
       )
       .all(runId) as unknown as MessageRow[];
     return Object.freeze(rows.map(rowToRecord));
   }
 
   /**
-   * Every V2-backed record of one Session, in `(run, sequence)` order.
+   * Every final V2 record of one Session, in deterministic creation order.
    *
-   * Ordered by `run_id` then `sequence` so the read is deterministic; the repository re-orders turns by
-   * `Run.createdAt` and `Run.id`, which it owns because Run lifecycle is its business and not this
-   * layer's.
+   * The repository still owns turn semantics; this store owns only the physical record ordering.
    */
   async listBySession(sessionId: SessionId): Promise<readonly AgentMessageRecord[]> {
     const rows = this.database.client
       .prepare(
         `SELECT ${ROW_COLUMNS} FROM agent_messages
-         WHERE session_id = ? AND v2_data_json IS NOT NULL
-         ORDER BY run_id ASC, sequence ASC`,
+         WHERE session_id = ?
+         ORDER BY created_at_ms ASC, run_id ASC, sequence ASC`,
       )
       .all(sessionId) as unknown as MessageRow[];
     return Object.freeze(rows.map(rowToRecord));

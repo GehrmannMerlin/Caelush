@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { LLMMessageSchema } from "@caelush/llm/messages";
+import { assertAIMessage } from "@caelush/ai";
 import { createWorkspaceId } from "@caelush/protocol";
 import { afterEach, expect, it } from "vitest";
 import {
@@ -80,11 +80,10 @@ it("builds real inspected and planned project context to a model-ready message a
     limits: { maxInputTokens: 3000, safetyMarginTokens: 100 },
   });
   // Context owns no model invocation, so the built array is validated against the
-  // message contract it actually produces rather than a request envelope it does not
-  // build. Phase 2D retired the legacy request schema with the rest of the legacy
-  // model-invocation surface.
-  const messages = built.messages.map((message) => LLMMessageSchema.parse(message));
-  expect(messages.at(-1)).toEqual({
+  // AI message contract it actually produces rather than a request envelope it does not
+  // build.
+  built.messages.forEach((message) => assertAIMessage(message));
+  expect(built.messages.at(-1)).toEqual({
     role: "user",
     content: "Fix parser behavior without breaking the tests.",
   });

@@ -8,7 +8,6 @@ import {
   createProjectProfileProvider,
   createRunAgentExecutionContext,
   createToolExecutionLedgerRawObservationResolver,
-  toAIMessage,
   toContextObservationProjection,
   type RunAgentExecutionContextFactory,
   type VerificationModelClient,
@@ -801,7 +800,12 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     }),
   } satisfies RunExecutionConfigResolver;
   const baseResolver: RunExecutionConfigResolver = options.configResolver ?? defaultResolver;
-  const historyContext = new SessionConversationContextProvider({ runs: options.storage.runs });
+  const historyContext = new SessionConversationContextProvider({
+    runs: options.storage.runs,
+    messageRecords: options.storage.messageRecords,
+    codecs: messageCodecs,
+    projectors: messageProjectors,
+  });
   const executionConfigResolver = {
     resolve: async (run) => {
       const config = await baseResolver.resolve(run);
@@ -818,12 +822,9 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
           contextLimits: config.contextLimits,
           tools: activeToolRegistry.modelSpecs(),
           ...(config.modelSettings === undefined ? {} : { modelSettings: config.modelSettings }),
-          // The synthetic session prefix still arrives in the durable legacy encoding, so it is
-          // projected onto the frozen AI contract here — at the composition root, which is the only
-          // place that knows both sides. The Run Layer only ever sees `AIMessage`.
           ...(config.historyPrefix === undefined
             ? {}
-            : { historyPrefix: config.historyPrefix.map(toAIMessage) }),
+            : { historyPrefix: config.historyPrefix }),
           ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
           ...(config.explicitPaths === undefined ? {} : { explicitPaths: config.explicitPaths }),
         },

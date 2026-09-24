@@ -21,9 +21,6 @@ import {
   type AgentToolCallsDecision,
   type StoredAgentMessage,
 } from "@caelush/agent";
-import type { LLMMessage } from "@caelush/llm/messages";
-
-import { toAIMessage } from "./ai-invocation-projection.js";
 
 /**
  * Compatibility-only input accepted by the retired Core facade.
@@ -54,8 +51,8 @@ export interface LegacyFacadeConversationInput {
 /** Translate one legacy facade attempt into a semantic snapshot and durable ID references. */
 export function createLegacyFacadeConversation(input: {
   readonly run: AgentRun;
-  readonly history: readonly LLMMessage[];
-  readonly appendPrefix: readonly LLMMessage[];
+  readonly history: readonly AIMessage[];
+  readonly appendPrefix: readonly AIMessage[];
   readonly turnInput: LegacyFacadeTurnInput;
 }): LegacyFacadeConversationInput {
   const turns = createDeterministicConversationTurnIdFactory();
@@ -65,7 +62,6 @@ export function createLegacyFacadeConversation(input: {
     turns,
   });
   const aiMessages = [...input.history, ...input.appendPrefix]
-    .map(toAIMessage)
     .filter(
       (message): message is Exclude<AIMessage, { role: "system" }> => message.role !== "system",
     );

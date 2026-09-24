@@ -1,4 +1,4 @@
-import type { LLMAssistantMessage, LLMMessage, LLMToolResultMessage } from "@caelush/llm/messages";
+import type { AIAssistantMessage, AIMessage, AIToolResultMessage } from "@caelush/ai";
 import { describe, expect, it } from "vitest";
 import {
   ContextBuilder,
@@ -42,7 +42,7 @@ function snapshot() {
   };
 }
 
-function assistantFor(index: number, content = "progress"): LLMAssistantMessage {
+function assistantFor(index: number, content = "progress"): AIAssistantMessage {
   return {
     role: "assistant",
     content: [
@@ -57,7 +57,7 @@ function assistantFor(index: number, content = "progress"): LLMAssistantMessage 
   };
 }
 
-function resultFor(index: number, content = "source"): LLMToolResultMessage {
+function resultFor(index: number, content = "source"): AIToolResultMessage {
   return {
     role: "tool",
     toolCallId: `call_${index}`,
@@ -88,7 +88,7 @@ function pendingDecision(index: number) {
 
 describe("Context Runtime baseline characterization", () => {
   it("reproduces the real coordinator failure when an open tool turn exceeds the fallback budget", async () => {
-    const history: LLMMessage[] = [{ role: "user", content: "inspect the workspace" }];
+    const history: AIMessage[] = [{ role: "user", content: "inspect the workspace" }];
     history.push(assistantFor(1));
     const currentTurn = prepareResumeHistory(history, pendingDecision(1), [
       resultFor(1, "build output ".repeat(6000)),
@@ -159,7 +159,7 @@ describe("Context Runtime baseline characterization", () => {
   });
 
   it("bounds the current mandatory unit across 32 execution cycles from one user goal", () => {
-    const history: LLMMessage[] = [{ role: "user", content: "inspect the workspace" }];
+    const history: AIMessage[] = [{ role: "user", content: "inspect the workspace" }];
     const trace: Array<{ turn: number; messageCount: number; estimatedTokens: number }> = [];
 
     for (let index = 1; index <= 32; index += 1) {
@@ -185,8 +185,8 @@ describe("Context Runtime baseline characterization", () => {
   });
 
   it("keeps a healthy long continuation below the old 16K mandatory current-turn boundary", () => {
-    const history: LLMMessage[] = [{ role: "user", content: "inspect the workspace" }];
-    let currentTurn: readonly LLMMessage[] = [];
+    const history: AIMessage[] = [{ role: "user", content: "inspect the workspace" }];
+    let currentTurn: readonly AIMessage[] = [];
     const largeResult = "build output ".repeat(700);
 
     for (let index = 1; index <= 32; index += 1) {
@@ -216,7 +216,7 @@ describe("Context Runtime baseline characterization", () => {
 
   it("keeps the old raw tool-result pressure visible in model history", () => {
     const raw = "line ".repeat(200_000);
-    const history: LLMMessage[] = [
+    const history: AIMessage[] = [
       { role: "user", content: "run the build" },
       assistantFor(1),
       resultFor(1, raw),

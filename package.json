@@ -26,7 +26,6 @@
     "@caelush/agent": "workspace:*",
     "@caelush/ai": "workspace:*",
     "@caelush/coding-agent": "workspace:*",
-    "@caelush/llm": "workspace:*",
     "@caelush/runtime": "workspace:*",
     "@caelush/security": "workspace:*",
     "@eslint/js": "10.0.1",

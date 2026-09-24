@@ -348,6 +348,7 @@ describe("Phase 5A guard — package boundaries (freeze §150, §151)", () => {
       "packages/storage/src/index.ts",
       "packages/storage/src/storage.ts",
       "apps/daemon/src/daemon-composition.ts",
+      "apps/daemon/src/services/session-conversation-context.ts",
       "apps/daemon/src/services/session-transcript-service.ts",
       "packages/agent/src/run/ports/run-execution-store.ts",
       "packages/core/src/run-agent-history.ts",
@@ -672,20 +673,24 @@ describe("Phase 5A guard — retained foundations after the Phase 5D cutover", (
     }
   });
 
-  it("keeps the storage schema and its repository on the pre-V2 encoding", async () => {
-    const repository = code(
-      await read("packages/storage/src/repositories/conversation-repository.ts"),
-    );
-    // The production table is untouched: no message identity, no schema version column.
-    expect(repository).toContain("agent_messages");
-    expect(repository).not.toContain("AgentMessageRecord");
-    expect(repository).not.toContain("model_projection_version");
-    expect(repository).not.toContain("message_id");
+  it("keeps the final Message V2 schema and record store as the only storage path", async () => {
+    const schema = code(await read("packages/storage/src/schema.ts"));
+    const store = code(await read("packages/storage/src/messages/sqlite-agent-message-record-store.ts"));
+    expect(schema).toContain("messageId: text(\"message_id\").primaryKey()");
+    expect(schema).toContain("modelProjectionVersion");
+    expect(schema).toContain("dataJson: text(\"data_json\").notNull()");
+    expect(schema).not.toContain("v2_data_json");
+    expect(store).toContain("appendAgentMessageRecordsInTransaction");
+    expect(store).not.toContain("conversation-repository");
+    expect(await exists("packages/storage/src/repositories/conversation-repository.ts")).toBe(false);
+    expect(await exists("packages/storage/src/messages/legacy/dual-reader.ts")).toBe(false);
   });
 
-  it("keeps the Context execution unit on LLMMessage", async () => {
+  it("keeps the Context execution unit on the canonical AI message contract", async () => {
     const contextUnit = code(await read("packages/context/src/execution-unit.ts"));
-    expect(contextUnit).toContain("LLMMessage");
+    expect(contextUnit).toContain("AIMessage");
+    expect(contextUnit).toContain('from "@caelush/ai"');
+    expect(contextUnit).not.toContain("LLMMessage");
     expect(contextUnit).not.toContain("AgentMessageId");
     expect(contextUnit).not.toContain("conversationTurnId");
   });
@@ -702,17 +707,14 @@ describe("Phase 5A guard — retained foundations after the Phase 5D cutover", (
     expect(agentEstimator).not.toContain("Utf8HeuristicTokenEstimator");
   });
 
-  it("keeps the Client transcript hydration unchanged", async () => {
+  it("keeps Client transcript loading on the canonical capability", async () => {
     const candidates = await activeSourceFiles(["packages/client/src"]);
-    let found = false;
     for (const file of candidates) {
       const text = code(await read(file));
-      if (!text.includes("hydrateSessionTranscript")) continue;
-      found = true;
-      expect(text, file).not.toContain("AgentMessageRecord");
-      expect(text, file).not.toContain("AgentConversationSnapshot");
+      expect(text, file).not.toContain("hydrateSessionTranscript");
     }
-    expect(found).toBe(true);
+    const client = code(await read("packages/client/src/client.ts"));
+    expect(client).toContain("getSessionTranscript");
   });
 
   it("keeps Coding custom messages in the product extension seam (Phase 5E)", async () => {
@@ -849,12 +851,10 @@ describe("Phase 5A guard — one authority per responsibility", () => {
   });
 
   it("keeps the Agent Message Domain's ExecutionUnit the only one in @caelush/agent", async () => {
-    // Two `ExecutionUnit` types exist during Phase 5 during the migration, and this is the
-    // honest statement of that fact rather than a claim of singularity:
+    // Two `ExecutionUnit` types remain for the Agent domain and Context selection mechanics:
     //
     //   packages/agent/src/messages/conversation/execution-unit.ts   the Agent Message Domain
-    //   packages/context/src/execution-unit.ts                       the LLMMessage-based one,
-    //                                                                which exits in 5D
+    //   packages/context/src/execution-unit.ts                       the AIMessage-based one
     //
     // `@caelush/agent` may contain only the first, and the second must stay outside the domain
     // so `agent -X-> context` remains true.
@@ -864,11 +864,11 @@ describe("Phase 5A guard — one authority per responsibility", () => {
       "packages/context/src/execution-unit.ts",
     ]);
     expect(holders.filter((holder) => holder.startsWith("packages/agent/"))).toHaveLength(1);
-    // The Context one is the legacy shape: an array index for identity and LLMMessage input.
+    // The Context one uses canonical AI messages and local source positions only for compaction.
     const legacy = code(await read("packages/context/src/execution-unit.ts"));
-    expect(legacy).toContain("LLMMessage");
+    expect(legacy).toContain("AIMessage");
     expect(legacy).toContain(":execution:${index}");
-    // The Agent one derives identity from the message, never from a position.
+    // The Agent one derives identity from the durable message, never from a position.
     const domain = code(await read("packages/agent/src/messages/conversation/execution-unit.ts"));
     expect(domain).toContain("assistantMessageId");
     expect(domain).not.toContain("LLMMessage");
@@ -1079,7 +1079,6 @@ describe("Phase 5A guard — source anchors", () => {
       "packages/agent/src/loop/history/conversation-history.ts",
       "packages/agent/src/loop/context/context-engine-port.ts",
       "packages/agent/src/run/ports/run-execution-store.ts",
-      "packages/storage/src/repositories/conversation-repository.ts",
       "packages/context/src/execution-unit.ts",
       "packages/context/src/token-estimator.ts",
       "packages/client/src/index.ts",

@@ -1,4 +1,4 @@
-import type { LLMToolResultMessage } from "@caelush/llm/messages";
+import type { AIToolResultMessage } from "@caelush/ai";
 import {
   createAgentDecisionClassifier,
   createRunExecutionCoordinator,
@@ -366,7 +366,7 @@ export class RunController {
 
   async submitToolResults(
     runId: RunId,
-    results: readonly LLMToolResultMessage[],
+    results: readonly AIToolResultMessage[],
   ): Promise<RunControllerResult> {
     return this.withLock(runId, () => this.submitToolResultsLocked(runId, results));
   }
@@ -590,7 +590,7 @@ export class RunController {
 
   private async submitToolResultsLocked(
     runId: RunId,
-    results: readonly LLMToolResultMessage[],
+    results: readonly AIToolResultMessage[],
   ): Promise<RunControllerResult> {
     const loaded = await this.load(runId);
     if (loaded.cancellationIntent !== undefined) return this.finalizeCancellation(loaded);
@@ -610,12 +610,12 @@ export class RunController {
 
   private async acceptToolResultsLocked(
     loaded: RunExecutionSnapshot,
-    results: readonly LLMToolResultMessage[],
+    results: readonly AIToolResultMessage[],
   ): Promise<RunControllerResult> {
     if (loaded.state === undefined || loaded.continuation?.type !== "WAITING_TOOL_RESULTS") {
       throw new RunControllerInputError("Run is not waiting for Tool Results");
     }
-    let normalized: readonly LLMToolResultMessage[];
+    let normalized: readonly AIToolResultMessage[];
     try {
       normalized = normalizeToolResultBatch(
         loaded.continuation.pendingDecision.toolRequests,

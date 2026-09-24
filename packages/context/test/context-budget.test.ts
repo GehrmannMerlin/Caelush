@@ -1,4 +1,4 @@
-import type { LLMSystemMessage, LLMUserMessage } from "@caelush/llm/messages";
+import type { AISystemMessage, AIUserMessage } from "@caelush/ai";
 import { describe, expect, it } from "vitest";
 import { ContextBudgetExceededError } from "../src/errors.js";
 import { assembleContextBudget } from "../src/context-budget.js";
@@ -17,8 +17,8 @@ const limits = (maxInputTokens: number, overrides: Partial<ContextBuildLimits> =
   minRelevantFileTokens: 1,
   ...overrides,
 });
-const system: LLMSystemMessage = { role: "system", content: "s" };
-const current: LLMUserMessage = { role: "user", content: "u" };
+const system: AISystemMessage = { role: "system", content: "s" };
+const current: AIUserMessage = { role: "user", content: "u" };
 const group = (content: string): ConversationTurnGroup => ({
   messages: [{ role: "user", content }],
   estimatedTokens: JSON.stringify({ role: "user", content }).length,

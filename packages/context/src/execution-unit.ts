@@ -1,5 +1,5 @@
-import type { LLMMessage } from "@caelush/llm/messages";
-import { estimateLLMMessage } from "./conversation-history.js";
+import type { AIMessage } from "@caelush/ai";
+import { estimateAIMessage } from "./conversation-history.js";
 import type { TokenEstimator } from "./token-estimator.js";
 
 export type ExecutionUnitStatus = "OPEN" | "CLOSED";
@@ -57,7 +57,7 @@ export function isCompactionCandidate(unit: ExecutionUnit): boolean {
 }
 
 export function buildExecutionUnits(
-  messages: readonly LLMMessage[],
+  messages: readonly AIMessage[],
   options: ExecutionUnitBuildOptions,
 ): readonly ExecutionUnit[] {
   if (options.sourceSequences !== undefined && options.sourceSequences.length !== messages.length) {
@@ -102,7 +102,7 @@ export function buildExecutionUnits(
         toolInvocationIds: callIds,
         toolResultRefs: resultIds,
         tokenEstimate: sourceMessages.reduce(
-          (total, current) => total + estimateLLMMessage(current, options),
+          (total, current) => total + estimateAIMessage(current, options),
           0,
         ),
         createdAt: options.createdAt,

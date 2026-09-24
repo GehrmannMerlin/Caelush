@@ -63,7 +63,6 @@ durable Run and AgentEvent contracts.
 | `@caelush/events`        | Durable event contracts and EventBus replay/live-watch behavior. It owns event ordering at the interface; Storage supplies the durable implementation.                                                                                                        |
 | `@caelush/verification`  | Verification planning, bounded evidence, project checks, change/task review, repair workflow, freshness/integrity checks, and Verification results. It can provide evidence but cannot complete a Run.                                                        |
 | `@caelush/client`        | Browser/host-safe HTTP and SSE transport plus client-side projections.                                                                                                                                                                                        |
-| `@caelush/llm`           | Compatibility surface for durable conversation/turn schemas retained during the Message V2 migration. It is not the model invocation authority.                                                                                                               |
 | `@caelush/memory`        | Provider-independent memory records, sensitivity validation, and memory-store contracts used by Context composition.                                                                                                                                          |
 | `@caelush/shared`        | Small dependency-free shared boundary utilities such as path containment and project exclusions.                                                                                                                                                              |
 | `@caelush/observability` | Reserved observability package boundary; it currently exports no production API.                                                                                                                                                                              |
@@ -85,13 +84,12 @@ apps/daemon  ──▶ all production composition packages
 
 agent        ──▶ ai, protocol
 coding-agent ──▶ agent, ai, runtime, protocol
-context      ──▶ llm, protocol, security, shared
-core         ──▶ agent, ai, context, llm, protocol, verification
+context      ──▶ ai, protocol, security, shared
+core         ──▶ agent, ai, context, protocol, verification
 runtime      ──▶ protocol, shared
 security     ──▶ agent, coding-agent, protocol, runtime
-storage      ──▶ agent, core, events, llm, memory, protocol, runtime, verification
+storage      ──▶ agent, core, events, memory, protocol, runtime, verification
 events       ──▶ protocol
-llm          ──▶ protocol
 verification ──▶ protocol
 ```
 
@@ -143,8 +141,10 @@ Provider credentials are runtime-only. Provider SDK types, raw SSE, prompts,
 credentials, and hidden chain-of-thought do not cross public Caelush
 contracts. Gateway retry, Tool execution, and Run policy are owned elsewhere.
 
-`@caelush/llm` remains only as an intentional compatibility boundary for
-durable conversation and turn schemas while Message V2 adoption continues.
+The legacy model-invocation and conversation package has been retired. The AI
+package owns provider-neutral model messages and invocation; historical Message
+V2 parsing is private to the Storage migration finalizer and is not a runtime
+package boundary.
 
 ## Tool and Coding Agent boundary
 
@@ -241,14 +241,14 @@ reports selected/dropped IDs, an AI-projection token estimate, and
 `requiresCompaction`; it does not rewrite, summarize, or delete durable
 records. Context owns materialization and has no Storage dependency.
 
-The compatibility boundary is deliberate: legacy readers, physical columns,
-and the `@caelush/llm` schema surface remain after the Phase 5E cutover. The
-daemon now projects `AgentMessageRecord[]` into Protocol `TranscriptEntry[]`
-through the server-side Agent projector registry at
-`GET /api/v1/sessions/:sessionId/transcript`. CLI and Web use that endpoint
-when the additive `sessionTranscript` capability is present and retain a
-run-based hydration path only for older daemons. Phase 5F will retire the
-remaining legacy readers and schemas; it is not part of this source cutover.
+The Phase 5F final cutover is complete: historical rows are deterministically
+backfilled and validated before an atomic physical rebuild removes the
+transitional columns. The daemon projects `AgentMessageRecord[]` into Protocol
+`TranscriptEntry[]` through the server-side Agent projector registry at
+`GET /api/v1/sessions/:sessionId/transcript`. CLI and Web require the additive
+`sessionTranscript` capability and raise an explicit compatibility error when a
+daemon cannot provide it. Legacy parsing and the old migration remain only as
+upgrade history, never as a runtime read path.
 
 Transcript and Timeline are separate projections:
 
@@ -286,8 +286,8 @@ produce evidence but never own final completion.
 | Message domain and storage foundation (5A/5B) | Complete                                                     |
 | Durable conversation runtime cutover (5C)     | Complete; `AgentMessageRecord` is the Run boundary authority |
 | Context and replay cutover (5D)               | Complete                                                     |
-| Transcript/client projection migration (5E)   | COMPLETE; daemon-owned Protocol Transcript projection        |
-| Legacy Message V2 retirement (5F)             | NOT STARTED                                                  |
+ | Phase 5E transcript/client projection migration | COMPLETE; daemon-owned Protocol Transcript projection        |
+| Legacy Message V2 retirement (5F)             | COMPLETE; final schema, backfill, and runtime cutover         |
 
 The phase table describes the Message System migration line. Existing Runtime,
 Security, Verification, CLI, Web, and daemon layers are documented as current
@@ -298,14 +298,13 @@ phase boundary in this task.
 
 The current architecture must not be described as already providing:
 
-- Phase 5F legacy Message V2 reader/schema retirement;
 - production MCP, Skills, Browser Agent, Computer Use, Web Search, or Multi-Agent;
 - true parallel Tool execution;
 - an OS-level hard sandbox or universal process-tree termination;
 - a provider-specific public SDK or raw model chain-of-thought surface.
 
 Those capabilities require new contracts and deliberate future work. They do
-not belong in the current Phase 5E source freeze.
+not belong in the current Phase 5F source freeze.
 
 ## Reference material
 

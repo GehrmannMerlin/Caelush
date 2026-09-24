@@ -77,6 +77,12 @@ describe("WebSessionManager", () => {
     });
     const runningRun = makeRun({ ...pendingRun, status: "RUNNING" });
     const completedRun = makeCompletedRun(pendingRun);
+    client.getSessionTranscript.mockResolvedValue({
+      items: [
+        userTranscript(completedRun, "repair login"),
+        assistantTranscript(completedRun, "verified answer"),
+      ],
+    });
     const calls: string[] = [];
     client.createSession.mockImplementation(async (input) => {
       calls.push("createSession");
@@ -373,6 +379,12 @@ describe("WebSessionManager", () => {
       createRunResult: nextRun,
     });
     client.listRuns.mockResolvedValue({ items: [previousRun] });
+    client.getSessionTranscript.mockResolvedValue({
+      items: [
+        userTranscript(previousRun, "previous task"),
+        assistantTranscript(previousRun, "verified answer", "history:assistant"),
+      ],
+    });
     client.watchRunEvents.mockImplementation(async function* (_runId, options) {
       options?.onOpen?.();
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -402,7 +414,7 @@ describe("WebSessionManager", () => {
         runId: previousRun.id,
       },
       {
-        id: `history:user:${nextRun.id}`,
+        id: `optimistic:user:${nextRun.id}`,
         conversationTurnId: nextRun.id,
         createdAt: nextRun.createdAt,
         kind: "USER",
@@ -611,6 +623,32 @@ function makeClient(
   return client;
 }
 
+function userTranscript(run: ClientAgentRun, text: string): TranscriptEntry {
+  return {
+    id: `history:user:${run.id}`,
+    runId: run.id,
+    conversationTurnId: run.id,
+    createdAt: run.createdAt,
+    kind: "USER",
+    text,
+  };
+}
+
+function assistantTranscript(
+  run: ClientAgentRun,
+  text: string,
+  idPrefix = "transcript:assistant",
+): TranscriptEntry {
+  return {
+    id: `${idPrefix}:${run.id}`,
+    runId: run.id,
+    conversationTurnId: run.id,
+    createdAt: run.finishedAt ?? run.createdAt,
+    kind: "ASSISTANT",
+    text,
+  };
+}
+
 function makeInfo(overrides: Partial<DaemonInfo> = {}): DaemonInfo {
   return DaemonInfoSchema.parse({
     apiVersion: "v1",
@@ -622,6 +660,7 @@ function makeInfo(overrides: Partial<DaemonInfo> = {}): DaemonInfo {
       cancellation: true,
       approvals: true,
       sseReplay: true,
+      sessionTranscript: true,
     },
     runtimeKinds: ["local"],
     configuredProviders: ["fixture"],

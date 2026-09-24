@@ -56,6 +56,7 @@ describe("CliConversationController", () => {
     let createRunInput: Parameters<CliDaemonClient["createRun"]>[1] | undefined;
     const client = makeClient({
       getSession: async () => session,
+      getSessionTranscript: async () => ({ items: [] }),
       listRuns: async (): Promise<RunListResponse> => ({ items: [] }),
       createRun: async (_sessionId, input) => {
         createRunInput = input;
@@ -117,6 +118,7 @@ describe("CliConversationController", () => {
       },
       listSessions: async () => ({ items: [] }),
       getSession: async () => session,
+      getSessionTranscript: async () => ({ items: [] }),
       listRuns: async () => ({ items: [] }),
       recoverRun: async () => actionResponse(makeRun("recovery")),
       cancelRun: async () => actionResponse(makeRun("cancel")),
@@ -288,6 +290,7 @@ export function makeClient(overrides: Partial<CliDaemonClient> = {}): CliDaemonC
     getRun: async () => run,
     listSessions: async () => ({ items: [session] }),
     getSession: async () => session,
+    getSessionTranscript: async () => ({ items: [] }),
     listRuns: async () => ({ items: [] }),
     recoverRun: async () => actionResponse(run),
     cancelRun: async () => actionResponse(run),
@@ -308,6 +311,7 @@ export function makeInfo(): DaemonInfo {
       cancellation: true,
       approvals: true,
       sseReplay: true,
+      sessionTranscript: true,
     },
     runtimeKinds: ["local"],
     configuredProviders: ["fixture"],

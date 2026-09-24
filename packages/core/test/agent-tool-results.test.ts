@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
+import type { AIToolResultMessage } from "@caelush/ai";
 import { AgentToolResultBatchError, normalizeToolResultBatch } from "../src/index.js";
 import type { AgentToolRequest } from "../src/index.js";
-import type { LLMToolResultMessage } from "@caelush/llm/messages";
 
 function request(toolCallId: string, toolName = "read_file"): AgentToolRequest {
   return { externalCallId: toolCallId, toolName, args: { path: `${toolCallId}.ts` } };
 }
 
-function result(toolCallId: string, toolName = "read_file", isError = false): LLMToolResultMessage {
+function result(toolCallId: string, toolName = "read_file", isError = false): AIToolResultMessage {
   return { role: "tool", toolCallId, toolName, content: `${toolCallId} output`, isError };
 }
 
@@ -47,7 +47,7 @@ describe("Agent tool result batches", () => {
   it("rejects an invalid result message without exposing request arguments", () => {
     const secret = "CAELUSH_AGENT_KERNEL_SECRET_42";
     const requests = [{ externalCallId: "call_a", toolName: "read_file", args: { secret } }];
-    const invalidResult = { role: "assistant", content: secret } as unknown as LLMToolResultMessage;
+    const invalidResult = { role: "assistant", content: secret } as unknown as AIToolResultMessage;
     try {
       normalizeToolResultBatch(requests, [invalidResult]);
       throw new Error("expected validation to fail");

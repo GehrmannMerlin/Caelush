@@ -1,4 +1,4 @@
-import type { LLMAssistantMessage, LLMMessage, LLMToolResultMessage } from "@caelush/llm/messages";
+import type { AIAssistantMessage, AIMessage, AIToolResultMessage } from "@caelush/ai";
 import { describe, expect, it } from "vitest";
 import {
   ContextBuilder,
@@ -38,7 +38,7 @@ function snapshot() {
   };
 }
 
-function assistant(index: number): LLMAssistantMessage {
+function assistant(index: number): AIAssistantMessage {
   return {
     role: "assistant",
     content: [
@@ -53,7 +53,7 @@ function assistant(index: number): LLMAssistantMessage {
   };
 }
 
-function result(index: number): LLMToolResultMessage {
+function result(index: number): AIToolResultMessage {
   return {
     role: "tool",
     toolCallId: "call-" + index,
@@ -75,7 +75,7 @@ class RecordingContextBuilder extends ContextBuilder {
 
 describe("Context Runtime V2 baseline characterization", () => {
   it("checkpoint tokensBefore describes the real pre-compaction model input", async () => {
-    const history: LLMMessage[] = [];
+    const history: AIMessage[] = [];
     for (let index = 0; index < 12; index += 1) {
       history.push(
         { role: "user", content: "previous goal " + index },
@@ -129,7 +129,7 @@ describe("Context Runtime V2 baseline characterization", () => {
         return "raw-head-" + "x".repeat(24_000) + "-raw-tail";
       },
     });
-    const currentTurn: LLMMessage[] = [
+    const currentTurn: AIMessage[] = [
       { role: "user", content: "scan the workspace" },
       {
         role: "assistant",
@@ -154,7 +154,6 @@ describe("Context Runtime V2 baseline characterization", () => {
         toolName: "read_file",
         content: "A".repeat(12_000),
         isError: false,
-        rawArtifactRef: "artifact:call-a",
       },
       {
         role: "tool",
@@ -175,6 +174,7 @@ describe("Context Runtime V2 baseline characterization", () => {
         snapshot: snapshot(),
         history: [],
         currentTurnMessages: currentTurn,
+        rawObservationRefs: [{ toolCallId: "call-a", artifactRef: "artifact:call-a" }],
         limits: { maxInputTokens: 5_000 },
       },
       signal: new AbortController().signal,

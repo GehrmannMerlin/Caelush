@@ -32,7 +32,7 @@ import type {
  *
  * ```text
  * VerificationPlan / VerifiedRunFinalResult     a coding-verification concern, not a general one
- * AIMessage / LLMMessage                       compatibility projections, never durable state
+ * provider-facing AI message arrays              compatibility projections, never durable state
  * rows, SQL, Drizzle clients, database handles
  * ```
  *

@@ -2,11 +2,8 @@ import {
   ClientAgentRunSchema,
   ClientAgentSessionSchema,
   SessionIdSchema,
-  VerifiedRunFinalResultSchema,
   createRunId,
   createSessionId,
-  createStepId,
-  createVerificationPlanId,
   createWorkspaceId,
   type ClientAgentRun,
   type ClientAgentSession,
@@ -15,7 +12,6 @@ import {
 import { describe, expect, it } from "vitest";
 import {
   deriveSessionActivity,
-  hydrateSessionTranscript,
   listMatchingSessionCandidates,
   normalizeWorkspacePath,
   nonTerminalRuns,
@@ -69,35 +65,6 @@ describe("Session resume policies", () => {
     expect(resolveSessionWorkspace(session, [one, ambiguous], home.path)).toEqual({
       error: "Session cannot be resumed safely because its workspace identity is ambiguous.",
     });
-  });
-
-  it("hydrates only public chronological transcript and includes an active goal once", () => {
-    const failed = makeRun("first", { status: "FAILED", createdAt: 1, finishedAt: 2 });
-    const completed = makeRun("second", {
-      status: "COMPLETED",
-      createdAt: 2,
-      finishedAt: 3,
-      finalResult: verifiedFinalResult("answer 2"),
-    });
-    const active = makeRun("active", {
-      status: "RUNNING",
-      createdAt: 3,
-      startedAt: 4,
-    });
-
-    expect(hydrateSessionTranscript([completed, active, failed], active.id)).toMatchObject([
-      { kind: "USER", text: "first" },
-      { kind: "RUN_TERMINAL", text: "Run ended with status FAILED." },
-      { kind: "USER", text: "second" },
-      { kind: "ASSISTANT", text: "answer 2" },
-      { kind: "USER", text: "active" },
-    ]);
-    expect(
-      hydrateSessionTranscript([active], active.id).filter((entry) => entry.kind === "USER"),
-    ).toHaveLength(1);
-    expect(JSON.stringify(hydrateSessionTranscript([active], active.id))).not.toContain(
-      "workspace",
-    );
   });
 
   it("derives activity from the newest Run and bounds candidate enrichment to eight calls", async () => {
@@ -176,23 +143,6 @@ function makeRun(goal: string, overrides: Partial<ClientAgentRun> = {}): ClientA
     ...overrides,
   };
   return ClientAgentRunSchema.parse(run);
-}
-
-function verifiedFinalResult(text: string) {
-  return VerifiedRunFinalResultSchema.parse({
-    type: "VERIFIED_COMPLETION",
-    text,
-    verification: {
-      planId: createVerificationPlanId(),
-      sourceStepId: createStepId(),
-      planHash: "a".repeat(64),
-      candidateHash: "b".repeat(64),
-      evidenceDigest: "c".repeat(64),
-      freshnessHash: "d".repeat(64),
-      sealHash: "e".repeat(64),
-      checks: { total: 1, passed: 1, skipped: 0, advisoryWarnings: 0 },
-    },
-  });
 }
 
 function fixedSessionId(index: number) {

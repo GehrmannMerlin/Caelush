@@ -28,7 +28,7 @@ import {
   type ContextPressureState,
 } from "./compaction.js";
 import { ContextRehydrator, type ContextAuthoritySnapshot } from "./context-rehydrator.js";
-import { estimateLLMMessage } from "./conversation-history.js";
+import { estimateAIMessage } from "./conversation-history.js";
 import { projectToolObservationBatch } from "./observation-projector.js";
 import { Utf8HeuristicTokenEstimator } from "./token-estimator.js";
 
@@ -471,7 +471,7 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
     const eligible = units.filter((unit) => isCompactionCandidate(unit));
     const tokensBefore =
       preCompactionTokens ??
-      history.reduce((total, message) => total + estimateLLMMessage(message, estimator), 0);
+      history.reduce((total, message) => total + estimateAIMessage(message, estimator), 0);
     const maxCompactionTokens = Math.max(0, tokensBefore - policy.targetRecentTailTokens);
     const oldestCandidates = [];
     let selectedTokens = 0;
@@ -613,22 +613,21 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
   ): Promise<ContextBuildInput> {
     if (input.mode !== "TOOL_CONTINUATION") return input;
     const multiplier = level === "TIGHT" ? 0.5 : level === "EMERGENCY" ? 0.25 : 0.08;
+    const rawRefs = new Map(
+      (input.rawObservationRefs ?? []).map((reference) => [reference.toolCallId, reference.artifactRef]),
+    );
     const rawContents = await Promise.all(
       input.currentTurnMessages
         .filter((message) => message.role === "tool")
         .map(async (message) => {
-          if (message.rawArtifactRef !== undefined) {
-            if (this.options.rawObservationLoader === undefined) {
-              throw new ContextExhaustedError();
-            }
-            const raw = await this.options.rawObservationLoader({
-              runId,
-              artifactRef: message.rawArtifactRef,
-            });
-            if (raw === undefined) throw new ContextExhaustedError();
-            return raw;
+          const artifactRef = rawRefs.get(message.toolCallId);
+          if (artifactRef === undefined) return message.content;
+          if (this.options.rawObservationLoader === undefined) {
+            throw new ContextExhaustedError();
           }
-          return message.content;
+          const raw = await this.options.rawObservationLoader({ runId, artifactRef });
+          if (raw === undefined) throw new ContextExhaustedError();
+          return raw;
         }),
     );
     let rawIndex = 0;
@@ -639,9 +638,6 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
           sourceToolInvocationId: message.toolCallId,
           toolName: message.toolName,
           content: rawContents[rawIndex++] ?? message.content,
-          ...(message.rawArtifactRef === undefined
-            ? {}
-            : { rawArtifactRef: message.rawArtifactRef }),
         })),
       maxSingleObservationTokens: Math.max(
         1,
@@ -702,10 +698,10 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
       return (
         estimator.estimateText(input.baseSystemPrompt) +
         (input.history ?? []).reduce(
-          (total, message) => total + estimateLLMMessage(message, estimator),
+          (total, message) => total + estimateAIMessage(message, estimator),
           0,
         ) +
-        currentTurn.reduce((total, message) => total + estimateLLMMessage(message, estimator), 0)
+        currentTurn.reduce((total, message) => total + estimateAIMessage(message, estimator), 0)
       );
     }
   }
@@ -724,7 +720,7 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
         : [attempted.currentUserMessage];
     const estimatedInputTokens =
       estimator.estimateText(attempted.baseSystemPrompt) +
-      currentTurn.reduce((total, message) => total + estimateLLMMessage(message, estimator), 0);
+      currentTurn.reduce((total, message) => total + estimateAIMessage(message, estimator), 0);
     const previous = this.usageByRun.get(input.runId);
     const now = this.options.clock?.now() ?? Date.now();
     const usage = createContextUsageProjection({
@@ -745,7 +741,7 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
         pinned: 0,
         checkpoint: 0,
         recentTail: currentTurn.reduce(
-          (total, message) => total + estimateLLMMessage(message, estimator),
+          (total, message) => total + estimateAIMessage(message, estimator),
           0,
         ),
         project: estimator.estimateText(attempted.baseSystemPrompt),
@@ -761,16 +757,16 @@ export class ContextRuntimeCoordinator implements ContextRuntimeCoordinatorPort 
             : 0,
         currentUserTokens:
           attempted.mode === "USER_TURN"
-            ? estimateLLMMessage(attempted.currentUserMessage, estimator)
+            ? estimateAIMessage(attempted.currentUserMessage, estimator)
             : 0,
         relevantFileTokens: 0,
         currentTurnTokens: currentTurn.reduce(
-          (total, message) => total + estimateLLMMessage(message, estimator),
+          (total, message) => total + estimateAIMessage(message, estimator),
           0,
         ),
         mandatoryTokens:
           estimator.estimateText(attempted.baseSystemPrompt) +
-          currentTurn.reduce((total, message) => total + estimateLLMMessage(message, estimator), 0),
+          currentTurn.reduce((total, message) => total + estimateAIMessage(message, estimator), 0),
       },
       updatedAt: now,
       lastBuildAt: now,

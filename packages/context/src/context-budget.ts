@@ -1,4 +1,4 @@
-import { type LLMMessage, type LLMSystemMessage, type LLMUserMessage } from "@caelush/llm/messages";
+import { type AIMessage, type AISystemMessage, type AIUserMessage } from "@caelush/ai";
 import type { ContextBuildLimits } from "./context-builder.js";
 import type {
   ContextConversationReport,
@@ -7,7 +7,7 @@ import type {
 import { renderRelevantFileContext } from "./context-renderer.js";
 import { ContextBudgetExceededError, type ContextBudgetBreakdown } from "./errors.js";
 import {
-  estimateLLMMessage,
+  estimateAIMessage,
   selectRecentConversation,
   type ConversationTurnGroup,
 } from "./conversation-history.js";
@@ -15,9 +15,9 @@ import type { RelevantFileContextSection } from "./relevant-file-plan.js";
 import type { TokenEstimator } from "./token-estimator.js";
 
 export interface ContextBudgetInput {
-  readonly system: LLMSystemMessage;
-  readonly current?: LLMUserMessage;
-  readonly currentTurn?: readonly LLMMessage[];
+  readonly system: AISystemMessage;
+  readonly current?: AIUserMessage;
+  readonly currentTurn?: readonly AIMessage[];
   readonly currentTurnType?: "USER_TURN" | "TOOL_CONTINUATION";
   readonly groups: readonly ConversationTurnGroup[];
   readonly files: readonly RelevantFileContextSection[];
@@ -26,7 +26,7 @@ export interface ContextBudgetInput {
 }
 
 export interface ContextBudgetResult {
-  readonly messages: readonly LLMMessage[];
+  readonly messages: readonly AIMessage[];
   readonly estimatedInputTokens: number;
   readonly remainingTokens: number;
   readonly safetyMarginTokens: number;
@@ -42,13 +42,13 @@ export interface ContextBudgetResult {
 
 interface FileSelection {
   readonly sections: readonly RelevantFileContextSection[];
-  readonly message: LLMUserMessage | undefined;
+  readonly message: AIUserMessage | undefined;
   readonly estimatedTokensUsed: number;
   readonly furtherTruncatedFiles: number;
 }
 
-function estimateMessages(messages: readonly LLMMessage[], estimator: TokenEstimator): number {
-  return messages.reduce((total, message) => total + estimateLLMMessage(message, estimator), 0);
+function estimateMessages(messages: readonly AIMessage[], estimator: TokenEstimator): number {
+  return messages.reduce((total, message) => total + estimateAIMessage(message, estimator), 0);
 }
 
 function fitTextToMessageBudget(
@@ -73,7 +73,7 @@ function fitTextToMessageBudget(
       truncated: true,
     };
     const message = renderRelevantFileContext([...sections, candidate]);
-    if (message !== undefined && estimateLLMMessage(message, estimator) <= target) {
+    if (message !== undefined && estimateAIMessage(message, estimator) <= target) {
       best = prefix;
       low = middle + 1;
     } else {
@@ -103,7 +103,7 @@ function selectFiles(
   let furtherTruncatedFiles = 0;
   for (const section of files) {
     const whole = renderRelevantFileContext([...sections, section]);
-    if (whole !== undefined && estimateLLMMessage(whole, estimator) <= target) {
+    if (whole !== undefined && estimateAIMessage(whole, estimator) <= target) {
       sections.push(section);
       continue;
     }
@@ -117,7 +117,7 @@ function selectFiles(
   return {
     sections,
     message,
-    estimatedTokensUsed: message === undefined ? 0 : estimateLLMMessage(message, estimator),
+    estimatedTokensUsed: message === undefined ? 0 : estimateAIMessage(message, estimator),
     furtherTruncatedFiles,
   };
 }
@@ -156,14 +156,14 @@ function relevantFilesReport(
     selectedFiles: selected.sections.length,
     droppedFiles: provided.length - selected.sections.length,
     estimatedTokensUsed:
-      selected.message === undefined ? 0 : estimateLLMMessage(selected.message, estimator),
+      selected.message === undefined ? 0 : estimateAIMessage(selected.message, estimator),
     furtherTruncatedFiles: selected.furtherTruncatedFiles,
   };
 }
 
 export function assembleContextBudget(input: ContextBudgetInput): ContextBudgetResult {
   const currentTurn = input.currentTurn ?? (input.current === undefined ? [] : [input.current]);
-  const systemTokens = estimateLLMMessage(input.system, input.estimator);
+  const systemTokens = estimateAIMessage(input.system, input.estimator);
   if (currentTurn.length === 0) {
     throw new ContextBudgetExceededError({
       maxInputTokens: input.limits.maxInputTokens,
@@ -177,7 +177,7 @@ export function assembleContextBudget(input: ContextBudgetInput): ContextBudgetR
   const currentTurnTokens = estimateMessages(currentTurn, input.estimator);
   const currentUserTokens =
     (input.currentTurnType ?? "USER_TURN") === "USER_TURN" && input.current !== undefined
-      ? estimateLLMMessage(input.current, input.estimator)
+      ? estimateAIMessage(input.current, input.estimator)
       : 0;
   const mandatoryTokens = systemTokens + currentTurnTokens;
   const breakdown: ContextBudgetBreakdown = {
@@ -231,7 +231,7 @@ export function assembleContextBudget(input: ContextBudgetInput): ContextBudgetR
     input.limits.minRelevantFileTokens,
   );
 
-  const compose = (): readonly LLMMessage[] => [
+  const compose = (): readonly AIMessage[] => [
     input.system,
     ...selectedGroups.flatMap((group) => group.messages),
     ...(selectedFiles.message === undefined ? [] : [selectedFiles.message]),
@@ -262,7 +262,7 @@ export function assembleContextBudget(input: ContextBudgetInput): ContextBudgetR
         estimatedTokensUsed:
           selectedFiles.message === undefined
             ? 0
-            : estimateLLMMessage(selectedFiles.message, input.estimator),
+            : estimateAIMessage(selectedFiles.message, input.estimator),
       };
     } else if (selectedGroups.length > 0) {
       selectedGroups = selectedGroups.slice(1);

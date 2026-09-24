@@ -14,10 +14,10 @@ is designed around one shared Agent Kernel: CLI, Web, and future hosts are
 clients of the same execution authority rather than separate Agent
 implementations.
 
-The project is in active Architecture V2 development. The current Message
-System migration is complete through Phase 5E. The daemon now owns the
-server-side Transcript projection and CLI/Web consume the Protocol Transcript;
-Phase 5F legacy retirement remains future work.
+The project is in active Architecture V2 development. The Message System
+migration through Phase 5F is complete: the daemon owns the server-side
+Transcript projection, CLI/Web consume the Protocol Transcript, and the final
+durable Message V2 schema is now the only runtime storage shape.
 
 ## What Caelush provides
 
@@ -113,10 +113,13 @@ stored projection and projection version; a missing model-visible codec or
 projector fails closed. Selection reports selected/dropped IDs, token estimate,
 and compaction pressure without rewriting or deleting durable records.
 
-Compatibility readers, physical columns, and the `@caelush/llm` schema surface
-remain intentionally after the Phase 5E cutover. The normal client path is
-`GET /api/v1/sessions/:sessionId/transcript`; Phase 5F will retire the
-remaining legacy readers and physical schema only after a separate cutover.
+The normal client path is `GET /api/v1/sessions/:sessionId/transcript`. The
+Phase 5F finalizer deterministically backfills historical rows, fails closed on
+unsupported or ambiguous legacy data, verifies that no legacy-only rows remain,
+and atomically rebuilds `agent_messages` to the final Message V2 schema. The
+legacy parser and transitional migration remain only as migration history; the
+runtime has no legacy conversation reader, dual-read path, or `@caelush/llm`
+package.
 
 The public conversation surfaces are deliberately separate:
 
@@ -246,7 +249,6 @@ Caelush/
 │   ├── context/      Workspace intelligence and context building
 │   ├── core/         Run lifecycle and Completion Authority
 │   ├── events/       Durable event contract and EventBus
-│   ├── llm/          Message/turn compatibility boundary
 │   ├── memory/       Memory records and store contracts
 │   ├── observability/Observability package boundary
 │   ├── protocol/     Stable JSON-safe cross-package contracts
@@ -302,19 +304,18 @@ runtime: Phase 9C sanitizer injection, Phase 9D — V1 Security Integration, Pha
 | Phase 5C — durable conversation runtime cutover         | Complete    |
 | Phase 5D — Context & replay cutover                     | Complete    |
 | Phase 5E — transcript/client projection migration       | COMPLETE    |
-| Phase 5F — legacy Message V2 retirement                 | NOT STARTED |
+| Phase 5F — legacy Message V2 retirement                 | COMPLETE    |
 
 The status table is specifically the Message System migration boundary. The
 repository also contains the current Runtime, Security, Verification, daemon,
-CLI, and Web layers described above; this page does not claim that future
-Message V2 phases have begun.
+CLI, and Web layers described above; this page does not claim that unrelated
+future product capabilities have begun.
 
 ## Current limitations and roadmap
 
 Caelush is not presented as a frozen public SDK or a universal sandbox. The
 following remain future boundaries or explicit limitations:
 
-- Message V2 Phase 5F legacy schema/reader retirement.
 - Production MCP integration, Skills, Browser Agent, Computer Use, and Web
   Search.
 - Multi-Agent/Sub-Agent orchestration and true parallel Tool execution.

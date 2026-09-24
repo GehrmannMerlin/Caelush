@@ -2,12 +2,9 @@ import {
   ClientAgentRunSchema,
   ClientAgentSessionSchema,
   SessionIdSchema,
-  VerifiedRunFinalResultSchema,
   createRunId,
   createSessionId,
-  createStepId,
   createTimestampMs,
-  createVerificationPlanId,
   createWorkspaceId,
   type ClientAgentRun,
   type ClientAgentSession,
@@ -16,7 +13,6 @@ import {
 import { describe, expect, it } from "vitest";
 import {
   deriveSessionActivity,
-  hydrateSessionTranscript,
   listMatchingSessionCandidates,
   nonTerminalRuns,
   normalizeWorkspacePath,
@@ -111,45 +107,6 @@ describe("browser-safe Session projection", () => {
     });
   });
 
-  it("hydrates only Run-level public history and shows a verified result", () => {
-    const failed = makeRun("first", {
-      status: "FAILED",
-      createdAt: createTimestampMs(1),
-      finishedAt: createTimestampMs(2),
-    });
-    const completed = makeRun("second", {
-      status: "COMPLETED",
-      createdAt: createTimestampMs(2),
-      finishedAt: createTimestampMs(3),
-      finalResult: verifiedFinalResult("answer 2"),
-    });
-    const active = makeRun("active", {
-      status: "RUNNING",
-      createdAt: createTimestampMs(3),
-      startedAt: createTimestampMs(4),
-    });
-
-    expect(hydrateSessionTranscript([completed, active, failed], active.id)).toMatchObject([
-      { kind: "USER", text: "first" },
-      { kind: "RUN_TERMINAL", text: "Run ended with status FAILED." },
-      { kind: "USER", text: "second" },
-      { kind: "ASSISTANT", text: "answer 2" },
-      { kind: "USER", text: "active" },
-    ]);
-    expect(JSON.stringify(hydrateSessionTranscript([active], active.id))).not.toContain(
-      "workspace",
-    );
-  });
-
-  it("marks a completed Run without a valid result as terminal rather than an answer", () => {
-    const completed = makeRun("without result", { status: "COMPLETED" });
-
-    expect(hydrateSessionTranscript([completed])).toMatchObject([
-      { kind: "USER", text: "without result" },
-      { kind: "RUN_TERMINAL", text: "Run completed without a verified final result." },
-    ]);
-  });
-
   it("identifies only non-terminal Run statuses", () => {
     const runs = [
       makeRun("pending", { status: "PENDING" }),
@@ -192,23 +149,6 @@ function makeRun(goal: string, overrides: Partial<ClientAgentRun> = {}): ClientA
     model: { provider: "fixture", model: "fixture-model" },
     createdAt: 1,
     ...overrides,
-  });
-}
-
-function verifiedFinalResult(text: string) {
-  return VerifiedRunFinalResultSchema.parse({
-    type: "VERIFIED_COMPLETION",
-    text,
-    verification: {
-      planId: createVerificationPlanId(),
-      sourceStepId: createStepId(),
-      planHash: "a".repeat(64),
-      candidateHash: "b".repeat(64),
-      evidenceDigest: "c".repeat(64),
-      freshnessHash: "d".repeat(64),
-      sealHash: "e".repeat(64),
-      checks: { total: 1, passed: 1, skipped: 0, advisoryWarnings: 0 },
-    },
   });
 }
 

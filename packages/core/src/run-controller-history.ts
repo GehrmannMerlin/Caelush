@@ -1,10 +1,10 @@
-import type { LLMMessage } from "@caelush/llm/messages";
+import type { AIMessage } from "@caelush/ai";
 
 export function buildRunExecutionHistory(input: {
-  readonly historyPrefix?: readonly LLMMessage[];
-  readonly durableConversation: readonly LLMMessage[];
+  readonly historyPrefix?: readonly AIMessage[];
+  readonly durableConversation: readonly AIMessage[];
   readonly mode: "RUN" | "RESUME_WITH_TOOL_RESULTS";
-}): readonly LLMMessage[] {
+}): readonly AIMessage[] {
   const currentRunHistory =
     input.mode === "RESUME_WITH_TOOL_RESULTS"
       ? input.durableConversation
@@ -18,9 +18,9 @@ export function buildRunExecutionHistory(input: {
  * mapping; callers then retain the explicit LOCAL_HISTORY_INDEX semantics.
  */
 export function buildRunExecutionHistorySourceSequences(input: {
-  readonly historyPrefix?: readonly LLMMessage[];
+  readonly historyPrefix?: readonly AIMessage[];
   readonly durableConversation: readonly {
-    readonly message: LLMMessage;
+    readonly message: AIMessage;
     readonly sequence: number;
   }[];
   readonly mode: "RUN" | "RESUME_WITH_TOOL_RESULTS";
@@ -34,7 +34,7 @@ export function buildRunExecutionHistorySourceSequences(input: {
   return currentRun.map((entry) => entry.sequence);
 }
 
-function findCurrentTurnStart(messages: readonly LLMMessage[]): number {
+function findCurrentTurnStart(messages: readonly AIMessage[]): number {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     if (messages[index]?.role === "user") return index;
   }

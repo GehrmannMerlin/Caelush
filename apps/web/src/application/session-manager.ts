@@ -7,7 +7,6 @@ import {
   createInitialTimelineState,
   deriveSessionActivity,
   flushTimelineForTerminal,
-  hydrateSessionTranscript,
   isTerminalRunStatus,
   listMatchingSessionCandidates,
   nonTerminalRuns,
@@ -262,7 +261,7 @@ export class WebSessionManager {
           selectedSession: candidate.session,
           selectedSessionId: candidate.session.id,
           runs,
-          history: await this.loadSessionTranscript(sessionId, runs),
+          history: await this.loadSessionTranscript(sessionId),
           activeRuns: [],
           activeRun: undefined,
           timeline: createInitialTimelineState(),
@@ -347,7 +346,7 @@ export class WebSessionManager {
         candidates: this.upsertCandidate(session, run),
         status: "READY",
         runs,
-        history: await this.loadSessionTranscript(session.id, runs, run.id, [optimisticUser]),
+        history: await this.loadSessionTranscript(session.id, [optimisticUser]),
         activeRuns: [run],
         activeRun: run,
         timeline: createInitialTimelineState(run.id),
@@ -588,8 +587,6 @@ export class WebSessionManager {
 
   private async loadSessionTranscript(
     sessionId: SessionId,
-    runs: readonly ClientAgentRun[],
-    activeRunId?: RunId,
     optimistic: readonly TranscriptEntry[] = [],
   ): Promise<readonly TranscriptEntry[]> {
     const getSessionTranscript = this.options.client.getSessionTranscript;
@@ -599,7 +596,7 @@ export class WebSessionManager {
       });
       return reconcileSessionTranscript(response.items, optimistic);
     }
-    return hydrateSessionTranscript(runs, activeRunId);
+    throw new CaelushProtocolCompatibilityError();
   }
 
   private optimisticTranscriptEntries(): readonly TranscriptEntry[] {
@@ -621,8 +618,6 @@ export class WebSessionManager {
       runs,
       history: await this.loadSessionTranscript(
         session.id,
-        runs,
-        activeRuns.length === 1 ? activeRuns[0]?.id : undefined,
       ),
       activeRuns,
       activeRun: activeRuns.length === 1 ? activeRuns[0] : undefined,
@@ -834,8 +829,6 @@ export class WebSessionManager {
         runs,
         history: await this.loadSessionTranscript(
           run.sessionId,
-          runs,
-          undefined,
           this.optimisticTranscriptEntries(),
         ),
         activeRuns,
@@ -965,8 +958,6 @@ export class WebSessionManager {
       runs,
       history: await this.loadSessionTranscript(
         run.sessionId,
-        runs,
-        undefined,
         this.optimisticTranscriptEntries(),
       ),
       activeRuns,

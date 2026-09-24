@@ -1,4 +1,4 @@
-import type { LLMMessage, LLMToolResultMessage } from "@caelush/llm/messages";
+import type { AIMessage, AIToolResultMessage } from "@caelush/ai";
 import {
   AgentRunSchema,
   createLLMCallId,
@@ -53,7 +53,7 @@ function snapshot() {
   };
 }
 
-function toolTurn(content: string, rawArtifactRef: string): readonly LLMMessage[] {
+function toolTurn(content: string): readonly AIMessage[] {
   return [
     { role: "user", content: "inspect the workspace" },
     {
@@ -73,8 +73,7 @@ function toolTurn(content: string, rawArtifactRef: string): readonly LLMMessage[
       toolName: "read_file",
       content,
       isError: false,
-      rawArtifactRef,
-    } satisfies LLMToolResultMessage,
+    } satisfies AIToolResultMessage,
   ];
 }
 
@@ -100,7 +99,8 @@ describe("Context Runtime production integration", () => {
         baseSystemPrompt: "inspect the workspace",
         snapshot: snapshot(),
         history: [],
-        currentTurnMessages: toolTurn("bounded placeholder ".repeat(5_000), "artifact:raw-1"),
+        currentTurnMessages: toolTurn("bounded placeholder ".repeat(5_000)),
+        rawObservationRefs: [{ toolCallId: "call-1", artifactRef: "artifact:raw-1" }],
         limits: { maxInputTokens: 2_000 },
       },
       signal: new AbortController().signal,
@@ -132,7 +132,7 @@ describe("Context Runtime production integration", () => {
       createInitialAgentState(pendingRun, createTimestampMs(1)),
       createTimestampMs(2),
     );
-    const history: readonly LLMMessage[] = [
+    const history: readonly AIMessage[] = [
       { role: "user", content: "previous task" },
       {
         role: "assistant",

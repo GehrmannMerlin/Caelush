@@ -27,10 +27,9 @@ import type {
  *
  * ## It does not parse the legacy language
  *
- * `@caelush/llm` is a *retiring* package: Architecture V2 forbids a target package from depending on it,
- * and `@caelush/storage`'s single sanctioned `llm` edge is the pre-V2 compatibility reader the baseline
- * already froze. Adding a second one from this module would deepen exactly the dependency the migration
- * exists to remove.
+ * The former `@caelush/llm` package is retired. This migration-only module does not import it or expose
+ * its schemas; the historical language is represented structurally and is reachable only while an
+ * upgrade converts legacy rows to the final record envelope.
  *
  * So this module is handed an **already-parsed** message through {@link LegacyParsedMessage} — a
  * structural shape a parsed legacy message satisfies without this package naming the legacy schema.
@@ -64,7 +63,7 @@ const deterministicTurnIds = createDeterministicConversationTurnIdFactory();
 /**
  * The structural shape of a parsed legacy message.
  *
- * It is a **subset** of the legacy `LLMMessage` contract, restated without importing it, so a value
+ * It is a **subset** of the former legacy message contract, restated without importing it, so a value
  * produced by the real legacy parser satisfies this type structurally. Typing it as a subset rather than
  * as `unknown` is what makes the migration's reads type-checked: this module reads `role`, `content`,
  * `toolCallId`, `toolName` and `isError`, and the type says exactly that.

@@ -8,7 +8,7 @@ import {
   createTimestampMs,
   createToolInvocationId,
 } from "@caelush/protocol";
-import { toLLMToolResultMessages } from "../src/agent-tool-batch.js";
+import { toAIToolResultMessages } from "../src/agent-tool-batch.js";
 
 /**
  * The durable batch encoding bounds a large settled observation.
@@ -52,7 +52,7 @@ function settled(content: string): ToolExecutionSnapshot {
 
 describe("tool result model projection", () => {
   it("bounds large settled output while preserving source call identity", () => {
-    const message = toLLMToolResultMessages(
+    const message = toAIToolResultMessages(
       [{ externalCallId: "call-1", toolName: "exec_command", args: {} }],
       [settled(`${"head\n".repeat(100_000)}tail-secret-marker`)],
     )[0]!;

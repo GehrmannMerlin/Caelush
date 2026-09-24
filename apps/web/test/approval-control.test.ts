@@ -294,6 +294,12 @@ describe("WebSessionManager approval controls", () => {
     const client = makeClient({ session, run, pendingApprovals: [approval] });
     client.getRun.mockResolvedValue(terminal);
     client.listRuns.mockResolvedValue({ items: [terminal] });
+    client.getSessionTranscript.mockResolvedValue({
+      items: [
+        userTranscript(terminal, terminal.goal),
+        assistantTranscript(terminal, "verified answer"),
+      ],
+    });
     client.resolveApproval.mockRejectedValueOnce(new Error("conflict"));
     const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
     await openActiveSession(manager, session);
@@ -386,6 +392,7 @@ function makeClient(input: {
     listSessions: vi.fn(async () => ({ items: [input.session] })),
     listRuns: vi.fn(async () => ({ items: [input.run] })),
     getSession: vi.fn(async () => input.session),
+    getSessionTranscript: vi.fn(async () => ({ items: [] })),
     createSession: vi.fn(),
     createRun: vi.fn(),
     startRun: vi.fn(),
@@ -401,6 +408,28 @@ function makeClient(input: {
   };
 }
 
+function assistantTranscript(run: ClientAgentRun, text: string): TranscriptEntry {
+  return {
+    id: `transcript:assistant:${run.id}`,
+    runId: run.id,
+    conversationTurnId: run.id,
+    createdAt: run.finishedAt ?? run.createdAt,
+    kind: "ASSISTANT",
+    text,
+  };
+}
+
+function userTranscript(run: ClientAgentRun, text: string): TranscriptEntry {
+  return {
+    id: `transcript:user:${run.id}`,
+    runId: run.id,
+    conversationTurnId: run.id,
+    createdAt: run.createdAt,
+    kind: "USER",
+    text,
+  };
+}
+
 function makeInfo(): DaemonInfo {
   return DaemonInfoSchema.parse({
     apiVersion: "v1",
@@ -412,6 +441,7 @@ function makeInfo(): DaemonInfo {
       cancellation: true,
       approvals: true,
       sseReplay: true,
+      sessionTranscript: true,
     },
     runtimeKinds: ["local"],
     configuredProviders: ["fixture"],

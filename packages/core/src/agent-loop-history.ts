@@ -1,8 +1,4 @@
-import {
-  LLMMessageSchema,
-  type LLMMessage,
-  type LLMToolResultMessage,
-} from "@caelush/llm/messages";
+import { assertAIMessage, type AIMessage, type AIToolResultMessage } from "@caelush/ai";
 import {
   AgentTurnInputError,
   assertConversationProtocolIntegrity,
@@ -11,7 +7,6 @@ import {
 import type { AgentToolCallsDecision } from "./agent-decision.js";
 import { AgentLoopInputError } from "./agent-errors.js";
 import type { AgentLoopCommonInput } from "./agent-loop-input.js";
-import { toAIMessage } from "./ai-invocation-projection.js";
 
 /**
  * The durable-history compatibility boundary.
@@ -41,9 +36,9 @@ import { toAIMessage } from "./ai-invocation-projection.js";
  */
 
 export interface ResumeHistoryParts {
-  readonly historyBeforeCurrentTurn: readonly LLMMessage[];
+  readonly historyBeforeCurrentTurn: readonly AIMessage[];
   readonly historyBeforeCurrentTurnSourceSequences?: readonly number[];
-  readonly currentTurnMessages: readonly LLMMessage[];
+  readonly currentTurnMessages: readonly AIMessage[];
 }
 
 /**
@@ -116,15 +111,14 @@ function assertGeneral(assertion: () => void, fallback: string): void {
 }
 
 /** Assert the history up to, but excluding, the pending assistant message. */
-function assertCompleteHistory(messages: readonly LLMMessage[], reason: string): void {
-  const projected = messages.map(toAIMessage);
-  assertGeneral(() => assertConversationProtocolIntegrity(projected), reason);
+function assertCompleteHistory(messages: readonly AIMessage[], reason: string): void {
+  assertGeneral(() => assertConversationProtocolIntegrity(messages), reason);
 }
 
 export function prepareResumeHistory(
-  history: readonly LLMMessage[],
+  history: readonly AIMessage[],
   pendingDecision: AgentToolCallsDecision,
-  normalizedResults: readonly LLMToolResultMessage[],
+  normalizedResults: readonly AIToolResultMessage[],
   historySourceSequences?: readonly number[],
 ): ResumeHistoryParts {
   // The general kernel owns the pending-assistant and already-consumed-result checks: the same
@@ -133,13 +127,15 @@ export function prepareResumeHistory(
   assertGeneral(
     () =>
       assertPendingAssistantHistory(
-        history.map(toAIMessage),
+        history,
         pendingDecision,
-        normalizedResults.map(toAIMessage) as never,
+        normalizedResults,
       ),
     "resume history does not match the pending decision",
   );
-  if (!LLMMessageSchema.safeParse(history.at(-1)).success) {
+  try {
+    assertAIMessage(history.at(-1));
+  } catch {
     throw new AgentLoopInputError("resume history has an invalid pending assistant");
   }
 

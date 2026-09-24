@@ -10,7 +10,6 @@ const forbiddenImports = [
   "@caelush/runtime",
   "@caelush/security",
   "@caelush/verification",
-  "@caelush/llm",
   "startDaemon",
 ];
 

@@ -529,11 +529,15 @@ describe("Phase 3A Core compatibility boundary", () => {
 
   it("keeps the durable projection in the Core boundary and out of the agent package", () => {
     const projection = read("packages/core/src/ai-invocation-projection.ts");
-    // Core may import both sides; that is exactly what makes it the boundary.
-    expect(projection).toContain('from "@caelush/llm/messages"');
+    // Core owns the small Protocol/AI/Agent identity projections; Message V2 conversion
+    // helpers were removed when the legacy package was retired.
+    expect(projection).toContain('from "@caelush/ai"');
     expect(projection).toContain('from "@caelush/agent"');
-    expect(projection).toContain("toLegacyMessage");
-    expect(projection).toContain("toLegacyAssistantMessage");
+    expect(projection).toContain("toAIModelRef");
+    expect(projection).toContain("toDurableCallId");
+    expect(projection).not.toContain("@caelush/llm");
+    expect(projection).not.toContain("toLegacyMessage");
+    expect(projection).not.toContain("toLegacyAssistantMessage");
 
     for (const file of agentKernelFiles()) {
       expect(read(file), file).not.toContain("@caelush/llm");

@@ -1,4 +1,16 @@
 import {
+  agentAssistantTextPart,
+  agentTextPart,
+  createAgentMessageFactory,
+  createAgentMessageIdFactory,
+  createDeterministicConversationTurnIdFactory,
+  createStandardAgentMessageCodecRegistry,
+  createStandardAgentMessageProjectorRegistry,
+  modelMessageSource,
+  userMessageSource,
+} from "@caelush/agent";
+import type { AgentMessage, AgentMessageRecord } from "@caelush/agent";
+import {
   AgentRunSchema,
   createRunId,
   createSessionId,
@@ -16,6 +28,14 @@ import {
 
 const sessionId = createSessionId();
 const workspace = { id: createWorkspaceId(), path: "C:/workspace" };
+const turns = createDeterministicConversationTurnIdFactory();
+const projectors = createStandardAgentMessageProjectorRegistry();
+const codecs = createStandardAgentMessageCodecRegistry((type) => projectors.currentVersion(type));
+const messageFactory = createAgentMessageFactory({
+  ids: createAgentMessageIdFactory(),
+  now: () => 1 as never,
+  turns,
+});
 
 describe("SessionConversationContextProvider", () => {
   it("projects only eligible verified Runs in deterministic chronological order", async () => {
@@ -78,6 +98,8 @@ describe("SessionConversationContextProvider", () => {
       finalText: "do not include",
     });
 
+    const allRuns = [late, otherSession, failed, differentWorkspace, invalid, tieB, tieA, older];
+    const records = durableRecords(allRuns);
     const provider = new SessionConversationContextProvider({
       runs: {
         listBySession: async (id: SessionId) => {
@@ -85,6 +107,9 @@ describe("SessionConversationContextProvider", () => {
           return [late, otherSession, failed, differentWorkspace, invalid, tieB, tieA, older];
         },
       },
+      messageRecords: messageRecordStore(records),
+      codecs,
+      projectors,
     });
     const history = await provider.getHistoryPrefix(makeCurrentRun({ createdAt: 100 }));
 
@@ -119,6 +144,9 @@ describe("SessionConversationContextProvider", () => {
     );
     const provider = new SessionConversationContextProvider({
       runs: { listBySession: async () => runs },
+      messageRecords: messageRecordStore(durableRecords(runs)),
+      codecs,
+      projectors,
     });
 
     const history = await provider.getHistoryPrefix(makeCurrentRun({ createdAt: 1000 }));
@@ -131,6 +159,67 @@ describe("SessionConversationContextProvider", () => {
     });
   });
 });
+
+function messageRecordStore(records: readonly AgentMessageRecord[]) {
+  return {
+    append: async () => [],
+    listByRun: async (runId: AgentMessageRecord["runId"]) =>
+      records.filter((record) => record.runId === runId),
+    listBySession: async (id: AgentMessageRecord["sessionId"]) =>
+      records.filter((record) => record.sessionId === id),
+  } as never;
+}
+
+function durableRecords(runs: readonly AgentRun[]): readonly AgentMessageRecord[] {
+  return runs.flatMap((run) => {
+    const user = messageFactory.createUser({
+      runId: run.id,
+      sessionId: run.sessionId,
+      conversationTurnId: turns.forRun(run.id),
+      source: userMessageSource("GOAL"),
+      content: [agentTextPart(run.goal)],
+    });
+    const messages: AgentMessage[] = [user];
+    if (run.finalResult?.type === "VERIFIED_COMPLETION") {
+      const assistant = messageFactory.createAssistant({
+        runId: run.id,
+        sessionId: run.sessionId,
+        conversationTurnId: turns.forRun(run.id),
+        source: modelMessageSource("llm_fixture" as never),
+        content: [agentAssistantTextPart(run.finalResult.text)],
+        model: {
+          kind: "MODEL_TURN",
+          callId: "llm_fixture" as never,
+          model: { provider: "fixture", model: "fixture-model" },
+          finishReason: "STOP",
+        },
+      });
+      messages.push(assistant);
+    }
+    return messages.map((message, index) => toRecord(message, index + 1));
+  });
+}
+
+function toRecord(message: AgentMessage, sequence: number): AgentMessageRecord {
+  const draft = codecs.encode(message);
+  return {
+    messageId: message.id,
+    runId: message.runId,
+    sessionId: message.sessionId,
+    sequence,
+    conversationTurnId: message.conversationTurnId,
+    messageType: message.type,
+    schemaVersion: draft.schemaVersion,
+    ...(draft.modelProjectionVersion === undefined
+      ? {}
+      : { modelProjectionVersion: draft.modelProjectionVersion }),
+    ...(message.sourceStepId === undefined ? {} : { sourceStepId: message.sourceStepId }),
+    createdAt: message.createdAt,
+    source: message.source,
+    audience: message.audience,
+    data: draft.data,
+  };
+}
 
 function makeCurrentRun(overrides: Partial<AgentRun> = {}): AgentRun {
   return makeCompletedRun({

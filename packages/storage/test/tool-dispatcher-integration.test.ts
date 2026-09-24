@@ -124,7 +124,7 @@ describe("DurableToolExecutionCoordinator with durable storage and EventBus", ()
         run: await storage.runs.get(run.id),
         step: await storage.steps.get(step.id),
         state: await storage.runStates.get(run.id),
-        messages: await storage.messages.listByRun(run.id),
+        messages: await storage.messageRecords.listByRun(run.id),
         continuation: await storage.continuations.get(run.id),
       };
       const durableStatusAtAdmission: { value?: string | undefined } = {};
@@ -198,7 +198,7 @@ describe("DurableToolExecutionCoordinator with durable storage and EventBus", ()
       expect(await storage.runs.get(run.id)).toEqual(before.run);
       expect(await storage.steps.get(step.id)).toEqual(before.step);
       expect(await storage.runStates.get(run.id)).toEqual(before.state);
-      expect(await storage.messages.listByRun(run.id)).toEqual(before.messages);
+      expect(await storage.messageRecords.listByRun(run.id)).toEqual(before.messages);
       expect(await storage.continuations.get(run.id)).toEqual(before.continuation);
       expect(notified.filter((type) => type === "tool.output")).toHaveLength(0);
     } finally {

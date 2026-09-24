@@ -13,7 +13,6 @@ export type {
 export {
   ambiguousWorkspaceError,
   deriveSessionActivity,
-  hydrateSessionTranscript,
   listMatchingSessionCandidates,
   MAX_SESSION_CANDIDATES,
   nonTerminalRuns,

@@ -61,98 +61,20 @@ function filesMatching(files: readonly string[], predicate: (path: string) => bo
 describe("legacy model invocation is closed", () => {
   const productionFiles = workspaceFiles("src");
 
-  /**
-   * The only legacy specifiers a production file may still import.
-   *
-   * `./messages` and `./turn` are durable conversation and turn schemas that the
-   * Message System will own later. The root entry, `./request` and `./errors` are
-   * model invocation and were retired in Phase 2D.
-   */
-  const ALLOWED_LEGACY_SUBPATHS = ["@caelush/llm/messages", "@caelush/llm/turn"] as const;
-
-  it("allows no production file outside packages/llm to import a retired legacy specifier", () => {
+  it("allows no production file to import the retired LLM package", () => {
     const violations = productionFiles
-      .filter((path) => !path.includes(join("packages", "llm")))
       .flatMap((path) =>
         moduleSpecifiers(readFileSync(path, "utf8"))
-          .filter(
-            (specifier) =>
-              specifier === "@caelush/llm" ||
-              (specifier.startsWith("@caelush/llm/") &&
-                !(ALLOWED_LEGACY_SUBPATHS as readonly string[]).includes(specifier)),
-          )
+          .filter((specifier) => specifier === "@caelush/llm" || specifier.startsWith("@caelush/llm/"))
           .map((specifier) => `${relative(root, path).replaceAll("\\", "/")} -> ${specifier}`),
       );
 
     expect(violations).toEqual([]);
   });
 
-  it("keeps the durable-compatibility consumers on the narrow subpaths only", () => {
-    const consumers = productionFiles
-      .filter((path) => !path.includes(join("packages", "llm")))
-      .filter((path) =>
-        moduleSpecifiers(readFileSync(path, "utf8")).some((specifier) =>
-          specifier.startsWith("@caelush/llm"),
-        ),
-      )
-      .map((path) => relative(root, path).replaceAll("\\", "/"));
-
-    // A new consumer is not forbidden, but it must be a deliberate, reviewable change
-    // rather than an accidental widening of the legacy surface.
-    expect(consumers.length).toBeGreaterThan(0);
-    for (const consumer of consumers) {
-      const specifiers = moduleSpecifiers(readFileSync(join(root, consumer), "utf8")).filter(
-        (specifier) => specifier.startsWith("@caelush/llm"),
-      );
-      for (const specifier of specifiers) {
-        expect(ALLOWED_LEGACY_SUBPATHS as readonly string[], `${consumer}`).toContain(specifier);
-      }
-    }
-  });
-
-  it("retired the legacy invocation implementation from packages/llm", () => {
-    const retired = [
-      "gateway.ts",
-      "provider.ts",
-      "provider-registry.ts",
-      "request.ts",
-      "request-validation.ts",
-      "capabilities.ts",
-      "events.ts",
-      "abort.ts",
-      "stream-validator.ts",
-      "wire-diagnostic.ts",
-      "errors.ts",
-      "result.ts",
-      "providers",
-      "compatibility",
-    ];
-
-    for (const entry of retired) {
-      expect(existsSync(join(root, "packages", "llm", "src", entry)), entry).toBe(false);
-    }
-  });
-
-  it("keeps the surviving legacy surface to durable schemas only", () => {
-    const remaining = readdirSync(join(root, "packages", "llm", "src")).sort();
-
-    expect(remaining).toEqual(["index.ts", "messages.ts", "tool-call.ts", "turn.ts", "usage.ts"]);
-  });
-
-  it("removed the legacy dependency on the AI core", () => {
-    const manifest = JSON.parse(
-      readFileSync(join(root, "packages", "llm", "package.json"), "utf8"),
-    ) as Record<string, Record<string, string> | undefined>;
-
-    const dependencies = {
-      ...manifest.dependencies,
-      ...manifest.devDependencies,
-      ...manifest.peerDependencies,
-      ...manifest.optionalDependencies,
-    };
-
-    expect(Object.keys(dependencies)).not.toContain("@caelush/ai");
-    expect(Object.keys(dependencies).sort()).toEqual(["@caelush/protocol", "zod"]);
+  it("fully retires the legacy package directory and manifest", () => {
+    expect(existsSync(join(root, "packages", "llm"))).toBe(false);
+    expect(existsSync(join(root, "packages", "llm", "package.json"))).toBe(false);
   });
 
   it("declares no legacy model-invocation authority anywhere in production source", () => {

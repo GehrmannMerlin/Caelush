@@ -20,7 +20,7 @@ import {
   LegacyMessageParseError,
 } from "./legacy-llm-message-codec.js";
 import { legacyRowToAgentMessageRecord } from "./legacy-llm-message-codec.js";
-import type { LegacyMessageParser } from "./dual-reader.js";
+import type { LegacyMessageParser } from "../migration/legacy-types.js";
 
 /**
  * The deterministic legacy-message backfill.
@@ -52,9 +52,9 @@ import type { LegacyMessageParser } from "./dual-reader.js";
  *
  * ## It never deletes and never rewrites the legacy source
  *
- * `role`, `protocol_version` and `data_json` are left exactly as they were. The V2 columns are added
- * beside them, because the current production reader still needs the legacy encoding until Phase 5C
- * cuts the writer over.
+ * `role`, `protocol_version` and `data_json` are left exactly as they were during this historical
+ * sweep. The final Phase 5F physical rebuild consumes the completed V2 columns only after the gate
+ * proves that every row is representable.
  */
 
 /** The structured result of one backfill run. */

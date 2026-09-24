@@ -1,8 +1,8 @@
-import type { LLMMessage } from "@caelush/llm/messages";
+import type { AIMessage } from "@caelush/ai";
 import { describe, expect, it } from "vitest";
 import { buildModelContextProjection } from "../src/model-context-projection.js";
 
-const closedHistory: LLMMessage[] = Array.from({ length: 50 }, (_, index) => [
+const closedHistory: AIMessage[] = Array.from({ length: 50 }, (_, index) => [
   {
     role: "assistant" as const,
     content: [

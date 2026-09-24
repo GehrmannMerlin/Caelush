@@ -1,4 +1,4 @@
-import type { LLMMessage } from "@caelush/llm/messages";
+import type { AIMessage } from "@caelush/ai";
 import { describe, expect, it } from "vitest";
 import {
   buildExecutionUnits,
@@ -7,11 +7,11 @@ import {
   selectSafeExecutionUnits,
 } from "../src/execution-unit.js";
 
-const assistant = (id: string): LLMMessage => ({
+const assistant = (id: string): AIMessage => ({
   role: "assistant",
   content: [{ type: "tool-call", toolCallId: id, toolName: "read_file", input: { path: id } }],
 });
-const result = (id: string): LLMMessage => ({
+const result = (id: string): AIMessage => ({
   role: "tool",
   toolCallId: id,
   toolName: "read_file",

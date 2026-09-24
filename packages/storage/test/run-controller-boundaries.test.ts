@@ -7,7 +7,7 @@ import {
   createTimestampMs,
   createWorkspaceId,
 } from "@caelush/protocol";
-import type { LLMToolResultMessage } from "@caelush/llm/messages";
+import type { AIToolResultMessage } from "@caelush/ai";
 import {
   RunController,
   RunControllerConflictError,
@@ -263,7 +263,7 @@ describe("RunController durable boundaries", () => {
     const stored = await storage.continuations.get(run.id);
     if (stored?.checkpoint.type !== "WAITING_TOOL_RESULTS")
       throw new Error("expected waiting checkpoint");
-    const accepted: LLMToolResultMessage[] = [
+    const accepted: AIToolResultMessage[] = [
       {
         role: "tool" as const,
         toolCallId: "call_a",

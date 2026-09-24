@@ -105,7 +105,7 @@ export type {
   ContextSystemReport,
 } from "./context-build-report.js";
 export {
-  estimateLLMMessage,
+  estimateAIMessage,
   selectRecentConversation,
   validateAndGroupConversation,
 } from "./conversation-history.js";

@@ -1,4 +1,10 @@
-import type { AIErrorCode, AIToolResultMessage, AIToolSpec, ModelUsage } from "@caelush/ai";
+import type {
+  AIAssistantMessage,
+  AIErrorCode,
+  AIMessage,
+  AIToolSpec,
+  ModelUsage,
+} from "@caelush/ai";
 import type {
   AgentBudgetBlock as FrozenAgentBudgetBlock,
   AgentDecision,
@@ -63,7 +69,6 @@ import type {
   AgentLoopLifecycleHooks,
   AgentProviderTurnState,
 } from "./agent-loop-ports.js";
-import { toAIMessage, toLegacyMessage } from "./ai-invocation-projection.js";
 import { createLegacyContextRuntimeAdapter } from "./legacy-context-runtime-adapter.js";
 import {
   createLegacyFacadeConversation,
@@ -185,7 +190,7 @@ export class AgentLoop {
         // names the AgentStep a recovery must re-open, not the provider call that asked.
         sourceStepId: input.sourceStepId,
         pendingDecision: input.pendingDecision,
-        results: normalizedResults.map(toAIMessage) as unknown as readonly AIToolResultMessage[],
+        results: normalizedResults,
       },
       // Phase 5D's compatibility translator needs the pending assistant together with the open
       // user turn. The durable-ID input then selects the newly appended Tool-result records; it
@@ -206,8 +211,8 @@ export class AgentLoop {
     input: AgentLoopCommonInput & { readonly signal: AbortSignal },
     sequence: number,
     turnInput: LegacyFacadeTurnInput,
-    history: readonly import("@caelush/llm/messages").LLMMessage[],
-    appendPrefix: readonly import("@caelush/llm/messages").LLMMessage[],
+    history: readonly AIMessage[],
+    appendPrefix: readonly AIMessage[],
   ): Promise<AgentLoopExecutionResult> {
     const startedAt = monotonicNow(input.state, this.dependencies.clock.now());
     const step = createRunningAgentStep({
@@ -488,7 +493,7 @@ export class AgentLoop {
     activeState: AgentState,
     step: AgentStep,
     result: AgentLoopFailedResult,
-    appendPrefix: readonly import("@caelush/llm/messages").LLMMessage[],
+    appendPrefix: readonly AIMessage[],
     outcome: CoreTurnOutcome,
   ): AgentLoopFailureResult {
     // A failure before the provider was contacted means no provider attempt happened, so no Step
@@ -531,7 +536,7 @@ export class AgentLoop {
     activeState: AgentState,
     step: AgentStep,
     contextReport: ContextBuildReport | undefined,
-    appendPrefix: readonly import("@caelush/llm/messages").LLMMessage[],
+    appendPrefix: readonly AIMessage[],
     error: AgentError,
     retry: import("./agent-loop-input.js").AgentRetryMetadata | undefined,
     usage: ModelUsage | undefined,
@@ -566,7 +571,7 @@ export class AgentLoop {
   private failureBeforeStep(
     state: AgentState,
     error: AgentError,
-    messagesToAppend: readonly import("@caelush/llm/messages").LLMMessage[],
+    messagesToAppend: readonly AIMessage[],
     contextReport?: ContextBuildReport,
   ): AgentLoopFailureResult {
     return {
@@ -620,7 +625,7 @@ export class AgentLoop {
   private maxStepsResult(
     state: AgentState,
     outcome: Extract<AgentLoopOutcomeResult["outcome"], { type: "MAX_STEPS_REACHED" }>,
-    messagesToAppend: readonly import("@caelush/llm/messages").LLMMessage[],
+    messagesToAppend: readonly AIMessage[],
   ): AgentLoopOutcomeResult {
     return {
       status: "OUTCOME",
@@ -639,7 +644,7 @@ export class AgentLoop {
     state: AgentState,
     step: AgentStep,
     contextReport: ContextBuildReport | undefined,
-    messagesToAppend: readonly import("@caelush/llm/messages").LLMMessage[],
+    messagesToAppend: readonly AIMessage[],
     canonical: AgentLoopAdvanceResult,
   ): AgentLoopOutcomeResult {
     return {
@@ -767,21 +772,11 @@ function turnIdentity(run: AgentRun): AgentExecutionIdentity {
   return { runId: run.id, sessionId: run.sessionId, goal: run.goal };
 }
 
-/**
- * Project the agent's settled assistant message onto the durable legacy conversation record.
- *
- * The shared projection helper is typed for a full AI turn result; the frozen decision carries
- * the assistant message directly, so the one-message case goes through the same field-by-field
- * projection rather than re-deriving any text.
- */
+/** The settled assistant message is already the canonical AI message. */
 function projectAssistantMessage(
   modelTurn: import("@caelush/agent").AgentModelTurn,
-): import("@caelush/llm/messages").LLMAssistantMessage {
-  const projected = toLegacyMessage(modelTurn.assistantMessage);
-  if (projected.role !== "assistant") {
-    throw new TypeError("an agent model turn must project onto an assistant message");
-  }
-  return projected;
+): AIAssistantMessage {
+  return modelTurn.assistantMessage;
 }
 
 function withCurrentStep<T extends AgentRun | AgentState>(value: T, stepId: StepId): T {

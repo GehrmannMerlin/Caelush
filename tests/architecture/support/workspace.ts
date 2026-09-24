@@ -18,14 +18,15 @@ export const repositoryRoot = path.resolve(
  * package is gone, its general responsibilities live in `agent`, its Coding
  * responsibilities in `coding-agent`. It is deliberately not listed here, and
  * `phase-4f-tool-system-final-boundaries.test.ts` asserts instead that the
- * directory and every workspace reference to it are absent.
+ * directory and every workspace reference to it are absent. The legacy
+ * `llm` package was fully retired by Architecture V2 Phase 5F and is likewise
+ * intentionally absent from the workspace inventory.
  */
 export const packageNames = [
   "protocol",
   "ai",
   "core",
   "agent",
-  "llm",
   "context",
   "runtime",
   "security",

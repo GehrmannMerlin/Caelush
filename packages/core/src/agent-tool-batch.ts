@@ -4,7 +4,7 @@ import type {
   ModelObservationCandidate,
   ToolExecutionSnapshot,
 } from "@caelush/agent";
-import { LLMToolResultMessageSchema, type LLMToolResultMessage } from "@caelush/llm/messages";
+import type { AIToolResultMessage } from "@caelush/ai";
 import type { AgentToolRequest } from "./agent-decision.js";
 import { ToolBatchResultConversionError } from "./agent-errors.js";
 import {
@@ -107,7 +107,7 @@ export function toAgentToolResults(
   snapshots: readonly ToolExecutionSnapshot[],
   policy: AgentToolObservationPolicy = defaultObservationPolicy(),
 ): readonly AgentToolResult[] {
-  return toLLMToolResultMessages(requests, snapshots, policy).map((message) => ({
+  return toAIToolResultMessages(requests, snapshots, policy).map((message) => ({
     externalCallId: message.toolCallId,
     toolName: message.toolName,
     content: message.content,
@@ -123,11 +123,11 @@ export function toAgentToolResults(
  * canonical `AIToolResultMessage`; the Context adapter re-attaches it from the durable ledger, which is
  * the authority for it.
  */
-export function toLLMToolResultMessages(
+export function toAIToolResultMessages(
   requests: readonly AgentToolRequest[],
   snapshots: readonly ToolExecutionSnapshot[],
   policy: AgentToolObservationPolicy = defaultObservationPolicy(),
-): readonly LLMToolResultMessage[] {
+): readonly AIToolResultMessage[] {
   if (requests.length !== snapshots.length) throw new ToolBatchResultConversionError();
   const candidates: ModelObservationCandidate[] = requests.map((request, index) => {
     const observation = observationOf(snapshots[index], request);
@@ -148,17 +148,14 @@ export function toLLMToolResultMessages(
       throw new ToolBatchResultConversionError();
     }
     const observation = observationOf(snapshot, request);
-    const message = {
+    const message: AIToolResultMessage = {
       role: "tool" as const,
       toolCallId: request.externalCallId,
       toolName: request.toolName,
       content: summary,
       isError: observation.isError,
-      ...(observation.rawArtifactRef === undefined
-        ? {}
-        : { rawArtifactRef: observation.rawArtifactRef }),
     };
-    return LLMToolResultMessageSchema.parse(message);
+    return message;
   });
 }
 

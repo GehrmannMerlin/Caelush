@@ -1,5 +1,5 @@
 import { createWorkspaceId } from "@caelush/protocol";
-import type { LLMUserMessage } from "@caelush/llm/messages";
+import type { AIUserMessage } from "@caelush/ai";
 import { describe, expect, it } from "vitest";
 import {
   ContextBudgetExceededError,
@@ -39,7 +39,7 @@ function snapshot(): ProjectIntelligenceSnapshot {
   };
 }
 
-const user: LLMUserMessage = { role: "user", content: "hello" };
+const user: AIUserMessage = { role: "user", content: "hello" };
 
 function input(limits: ContextBuildLimits) {
   return {

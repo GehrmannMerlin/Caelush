@@ -15,7 +15,6 @@
   },
   "dependencies": {
     "@caelush/context": "workspace:*",
-    "@caelush/llm": "workspace:*",
     "@caelush/protocol": "workspace:*",
     "@caelush/verification": "workspace:*",
     "zod": "4.4.3",

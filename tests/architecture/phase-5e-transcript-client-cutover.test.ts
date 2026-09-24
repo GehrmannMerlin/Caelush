@@ -47,15 +47,17 @@ describe("Phase 5E transcript/client cutover", () => {
     expect(route).toContain("SessionTranscriptResponseSchema");
   });
 
-  it("makes CLI and Web consume Protocol Transcript entries while retaining only a compatibility fallback", async () => {
+  it("makes CLI and Web consume Protocol Transcript entries with explicit incompatibility handling", async () => {
     const cli = await read("apps/cli/src/application/cli-controller.ts");
     const web = await read("apps/web/src/application/session-manager.ts");
     expect(cli).toContain("getSessionTranscript");
     expect(web).toContain("getSessionTranscript");
     expect(cli).toContain("capabilities.sessionTranscript");
     expect(web).toContain("capabilities.sessionTranscript");
-    expect(cli).toContain("hydrateSessionTranscript(runs, activeRunId)");
-    expect(web).toContain("hydrateSessionTranscript(runs, activeRunId)");
+    expect(cli).not.toContain("hydrateSessionTranscript");
+    expect(web).not.toContain("hydrateSessionTranscript");
+    expect(cli).toContain("CaelushProtocolCompatibilityError");
+    expect(web).toContain("CaelushProtocolCompatibilityError");
     expect(await read("apps/cli/src/application/cli-state.ts")).toContain("TranscriptEntry");
     expect(await read("apps/web/src/components/session-workspace.ts")).toContain("TranscriptEntry");
   });
@@ -79,7 +81,7 @@ describe("Phase 5E transcript/client cutover", () => {
     expect(coreUnion).not.toContain("CODING_COMMAND_EXECUTION");
   });
 
-  it("records 5E complete while leaving 5F explicitly unstarted and legacy storage intact", async () => {
+  it("records the completed 5F cutover and final storage shape", async () => {
     const documents = await Promise.all([
       read("README.md"),
       read("docs/ARCHITECTURE.md"),
@@ -89,10 +91,16 @@ describe("Phase 5E transcript/client cutover", () => {
       expect(document).toContain("Phase 5E");
       expect(document).toContain("COMPLETE");
       expect(document).toContain("Phase 5F");
-      expect(document).toContain("NOT STARTED");
+      expect(document).toContain("COMPLETE");
     }
-    const migration = await read("packages/storage/src/schema.ts");
-    expect(migration).toContain("agent_messages");
-    expect(migration).toContain("v2_data_json");
+    const schema = await read("packages/storage/src/schema.ts");
+    const migration = await read(
+      "packages/storage/drizzle/20260924120000_message_system_v2_final/migration.sql",
+    );
+    expect(schema).toContain("agent_messages");
+    expect(schema).toContain("message_id");
+    expect(schema).not.toContain("v2_data_json");
+    expect(migration).toContain("CREATE TABLE `agent_messages__phase5f`");
+    expect(migration).toContain("data_json");
   });
 });

@@ -1,16 +1,16 @@
-import type { LLMMessage } from "@caelush/llm/messages";
+import type { AIMessage } from "@caelush/ai";
 import { describe, expect, it } from "vitest";
 import {
   buildRunExecutionHistory,
   buildRunExecutionHistorySourceSequences,
 } from "../src/run-controller-history.js";
 
-const prefix: readonly LLMMessage[] = [
+const prefix: readonly AIMessage[] = [
   { role: "user", content: "first goal" },
   { role: "assistant", content: [{ type: "text", text: "first verified result" }] },
 ];
 
-const durableConversation: readonly LLMMessage[] = [
+const durableConversation: readonly AIMessage[] = [
   { role: "user", content: "current goal" },
   {
     role: "assistant",

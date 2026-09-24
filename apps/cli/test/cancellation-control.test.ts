@@ -9,6 +9,7 @@ import {
   type ClientAgentSession,
   type RunActionResponse,
   type RunListResponse,
+  type TranscriptEntry,
 } from "@caelush/protocol";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -38,7 +39,13 @@ describe("CLI cancellation and detach", () => {
     const controller = await boot(
       makeClient({
         listRuns: async (): Promise<RunListResponse> => ({ items: [running] }),
-        cancelRun,
+      cancelRun,
+      getSessionTranscript: async () => ({
+        items: [
+          userTranscript(completed, "cancel this Run"),
+          assistantTranscript(completed, "completed before cancellation settled"),
+        ],
+      }),
       }),
     );
 
@@ -163,6 +170,7 @@ function makeClient(overrides: Partial<CliDaemonClient> = {}): CliDaemonClient {
         cancellation: true,
         approvals: true,
         sseReplay: true,
+        sessionTranscript: true,
       },
       runtimeKinds: ["local"],
       configuredProviders: ["fixture"],
@@ -177,6 +185,7 @@ function makeClient(overrides: Partial<CliDaemonClient> = {}): CliDaemonClient {
     createSession: async () => session,
     listSessions: async () => ({ items: [session] }),
     getSession: async () => session,
+    getSessionTranscript: async () => ({ items: [] }),
     createRun: async () => run,
     listRuns: async () => ({ items: [] }),
     watchRunEvents: async function* (_runId, options) {
@@ -193,6 +202,28 @@ function makeClient(overrides: Partial<CliDaemonClient> = {}): CliDaemonClient {
     listPendingApprovals: async () => ({ items: [] }),
     resolveApproval: async () => actionResponse(run, "RESOLVE_APPROVAL"),
     ...overrides,
+  };
+}
+
+function assistantTranscript(run: ClientAgentRun, text: string): TranscriptEntry {
+  return {
+    id: `transcript:assistant:${run.id}`,
+    runId: run.id,
+    conversationTurnId: run.id,
+    createdAt: run.finishedAt ?? run.createdAt,
+    kind: "ASSISTANT",
+    text,
+  };
+}
+
+function userTranscript(run: ClientAgentRun, text: string): TranscriptEntry {
+  return {
+    id: `transcript:user:${run.id}`,
+    runId: run.id,
+    conversationTurnId: run.id,
+    createdAt: run.createdAt,
+    kind: "USER",
+    text,
   };
 }
 

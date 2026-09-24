@@ -23,7 +23,7 @@ describe("Core Phase 6B public API", () => {
       "AgentLoop",
       "classifyAgentDecision",
       "normalizeToolResultBatch",
-      "toLLMToolResultMessages",
+      "toAIToolResultMessages",
       "summarizeAgentDecision",
       "summarizeAgentLoopOutcome",
       "createInitialAgentState",

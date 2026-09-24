@@ -1,5 +1,5 @@
 import { createWorkspaceId } from "@caelush/protocol";
-import type { LLMMessage } from "@caelush/llm/messages";
+import type { AIMessage } from "@caelush/ai";
 import { describe, expect, it } from "vitest";
 import { ContextBuilder, createDefaultContextBuilder } from "../src/context-builder.js";
 import type { RelevantFileContextPlan } from "../src/relevant-file-plan.js";
@@ -109,7 +109,7 @@ describe("ContextBuilder", () => {
   });
 
   it("assembles system, selected structured history, file reference, and exact current user", () => {
-    const history: readonly LLMMessage[] = [
+    const history: readonly AIMessage[] = [
       { role: "user", content: "inspect" },
       { role: "assistant", content: [{ type: "text", text: "done" }] },
     ];
@@ -154,7 +154,7 @@ describe("ContextBuilder", () => {
   });
 
   it("projects repeated Tool history into the bounded context without changing durable input", () => {
-    const history = Array.from({ length: 12 }, (_, index): LLMMessage[] => [
+    const history = Array.from({ length: 12 }, (_, index): AIMessage[] => [
       { role: "user", content: `inspect ${index}` },
       {
         role: "assistant",
@@ -175,7 +175,7 @@ describe("ContextBuilder", () => {
         isError: false,
       },
     ]).flat();
-    const currentTurn: LLMMessage[] = [
+    const currentTurn: AIMessage[] = [
       { role: "user", content: "continue inspection" },
       {
         role: "assistant",

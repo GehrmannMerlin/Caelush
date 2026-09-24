@@ -8,7 +8,7 @@ const forbidden = [
   /node:child_process/,
   /\b(?:spawn|exec|execFile)\s*\(/,
   /\bfetch\s*\(/,
-  /from\s+["'](?:node:http|node:https|http|https|@caelush\/llm(?:["']|\/(?!messages["']))|ai|@ai-sdk\/)/,
+  /from\s+["'](?:node:http|node:https|http|https|ai["']|@ai-sdk\/)/,
   /\bany\b/,
 ];
 
@@ -48,17 +48,16 @@ describe("context architecture guards", () => {
     expect(declaration).toContain("RelevantFileContextPlan");
   });
 
-  it("allows only the provider-independent LLM message subpath", async () => {
+  it("uses the provider-independent AI message contract", async () => {
     const files = await sourcePaths(sourceRoot);
     const contents = await Promise.all(files.map((filePath) => readFile(filePath, "utf8")));
     const imports = contents.flatMap((content) =>
-      [...content.matchAll(/from\s+["'](@caelush\/llm(?:\/[^"']*)?)["']/g)].map(
+      [...content.matchAll(/from\s+["'](@caelush\/ai(?:\/[^"']*)?)["']/g)].map(
         (match) => match[1],
       ),
     );
-    expect(imports).toContain("@caelush/llm/messages");
-    expect(imports).not.toContain("@caelush/llm");
-    expect(imports.filter((value) => value !== "@caelush/llm/messages")).toEqual([]);
+    expect(imports).toContain("@caelush/ai");
+    expect(imports.filter((value) => value !== "@caelush/ai")).toEqual([]);
   });
 
   it("keeps the public context declaration free of provider and SDK types", async () => {
@@ -67,10 +66,10 @@ describe("context architecture guards", () => {
       path.resolve("packages/context/dist/context-builder.d.ts"),
       "utf8",
     );
-    expect(builderDeclaration).toContain("LLMMessage");
-    expect(builderDeclaration).toContain("@caelush/llm/messages");
+    expect(builderDeclaration).toContain("AIMessage");
+    expect(builderDeclaration).toContain("@caelush/ai");
     expect(`${declaration}\n${builderDeclaration}`).not.toMatch(
-      /(?:\bai\b|@ai-sdk\/|StreamTextResult|LanguageModel|ToolSet|ModelMessage)/,
+      /(?:@ai-sdk\/|StreamTextResult|LanguageModel|ToolSet|ModelMessage)/,
     );
   });
 });

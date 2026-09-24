@@ -20,7 +20,7 @@ import type { AgentMessageRecord, AgentMessageRecordDraft } from "./record.js";
  * ```text
  * AgentMessageRecord        what this port carries
  * AgentMessage              never — that is the codec registry's question
- * AIMessage / LLMMessage    never — the AI language is not durable here
+ * provider message arrays     never — the AI language is not durable here
  * ```
  *
  * A store that decoded a record into a semantic message would need the codec registry, which would

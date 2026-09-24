@@ -3,7 +3,7 @@ import { validateAIModelRequest } from "@caelush/ai";
 import type { AIModelRequest, AIToolChoice, AIToolSpec, ModelDescriptor } from "@caelush/ai";
 import type { AgentRun } from "@caelush/protocol";
 import type { AgentLoopModelSettings } from "./agent-loop-input.js";
-import { toAIMessage, toAIModelRef } from "./ai-invocation-projection.js";
+import { toAIModelRef } from "./ai-invocation-projection.js";
 
 /**
  * Build the frozen AI model request for one agent turn.
@@ -35,7 +35,7 @@ export function buildAgentAIModelRequest(
 
   const request: AIModelRequest = {
     model: toAIModelRef(run.model),
-    messages: context.messages.map(toAIMessage),
+    messages: context.messages,
     ...(effectiveTools === undefined ? {} : { tools: [...effectiveTools] }),
     ...(toolChoice === undefined ? {} : { toolChoice }),
     ...(settings?.maxOutputTokens === undefined && settings?.temperature === undefined

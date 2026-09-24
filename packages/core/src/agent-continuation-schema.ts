@@ -1,6 +1,12 @@
-import { LLMAssistantMessageSchema, LLMToolResultMessageSchema } from "@caelush/llm/messages";
-import { FinishReasonSchema, LLMUsageSchema } from "@caelush/llm/turn";
-import type { ModelUsage } from "@caelush/ai";
+import {
+  AI_FINISH_REASONS,
+  assertAIMessage,
+  assertModelUsage,
+  type AIAssistantMessage,
+  type AIMessage,
+  type AIToolResultMessage,
+  type ModelUsage,
+} from "@caelush/ai";
 
 /**
  * The durable usage shape.
@@ -10,13 +16,39 @@ import type { ModelUsage } from "@caelush/ai";
  * the frozen `ModelUsage` contract, which distinguishes an absent counter from a
  * present-but-undefined one.
  */
-const DurableModelUsageSchema = LLMUsageSchema.transform((usage): ModelUsage => {
+const DurableModelUsageSchema = z.custom<ModelUsage>((value) => {
+  try {
+    assertModelUsage(value);
+    return true;
+  } catch {
+    return false;
+  }
+}).transform((usage): ModelUsage => {
   const normalized: Record<string, number> = {};
   for (const [key, value] of Object.entries(usage)) {
     if (value !== undefined) normalized[key] = value as number;
   }
   return normalized as ModelUsage;
 });
+
+const AIMessageSchema = z.custom<AIMessage>((value) => {
+  try {
+    assertAIMessage(value);
+    return true;
+  } catch {
+    return false;
+  }
+});
+
+const AIAssistantMessageSchema = AIMessageSchema.refine(
+  (message): message is AIAssistantMessage => message.role === "assistant",
+);
+
+const AIToolResultMessageSchema = AIMessageSchema.refine(
+  (message): message is AIToolResultMessage => message.role === "tool",
+);
+
+const FinishReasonSchema = z.enum(AI_FINISH_REASONS);
 import {
   JsonObjectSchema,
   ApprovalRequestIdSchema,
@@ -38,7 +70,7 @@ export const AgentModelTurnSchema = z
     callId: LLMCallIdSchema,
     model: ModelRefSchema,
     finishReason: FinishReasonSchema,
-    assistantMessage: LLMAssistantMessageSchema,
+    assistantMessage: AIAssistantMessageSchema,
     usage: DurableModelUsageSchema.optional(),
   })
   .strict();
@@ -52,7 +84,7 @@ export const AgentToolRequestSchema = z
   .strict();
 
 function assistantToolCalls(
-  message: z.infer<typeof LLMAssistantMessageSchema>,
+  message: AIAssistantMessage,
 ): readonly { toolCallId: string; toolName: string; input: unknown }[] {
   return message.content.flatMap((part) =>
     part.type === "tool-call"
@@ -138,7 +170,7 @@ export const WaitingToolResultsContinuationSchema = z
     runId: RunIdSchema,
     sourceStepId: StepIdSchema,
     pendingDecision: AgentToolCallsDecisionSchema,
-    receivedResults: z.array(LLMToolResultMessageSchema).min(1).optional(),
+    receivedResults: z.array(AIToolResultMessageSchema).min(1).optional(),
     observationPolicy: ToolObservationPolicySnapshotSchema.optional(),
     waitingApproval: z
       .object({
@@ -211,7 +243,7 @@ export const WaitingRetryContinuationSchema = z.discriminatedUnion("mode", [
       ...WaitingRetryBase,
       mode: z.literal("TOOL_RESULTS"),
       pendingDecision: AgentToolCallsDecisionSchema,
-      receivedResults: z.array(LLMToolResultMessageSchema).min(1),
+      receivedResults: z.array(AIToolResultMessageSchema).min(1),
       observationPolicy: ToolObservationPolicySnapshotSchema.optional(),
       // Backward-compatible JSON evolution: the field is optional so a checkpoint written
       // before it existed still decodes. Recovery treats a missing value as "not determined"

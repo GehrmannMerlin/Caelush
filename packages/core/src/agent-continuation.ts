@@ -1,4 +1,4 @@
-import type { LLMToolResultMessage } from "@caelush/llm/messages";
+import type { AIToolResultMessage } from "@caelush/ai";
 import type { ToolObservationPolicySnapshot } from "@caelush/agent";
 import type {
   ApprovalRequestId,
@@ -17,7 +17,7 @@ export interface WaitingToolResultsContinuation {
   readonly runId: RunId;
   readonly sourceStepId: StepId;
   readonly pendingDecision: AgentToolCallsDecision;
-  readonly receivedResults?: readonly LLMToolResultMessage[] | undefined;
+  readonly receivedResults?: readonly AIToolResultMessage[] | undefined;
   /**
    * The Tool observation policy the requesting turn was prepared under.
    *
@@ -84,7 +84,7 @@ export type WaitingRetryContinuation =
   | (WaitingRetryContinuationBase & {
       readonly mode: "TOOL_RESULTS";
       readonly pendingDecision: AgentToolCallsDecision;
-      readonly receivedResults: readonly LLMToolResultMessage[];
+      readonly receivedResults: readonly AIToolResultMessage[];
       /**
        * The durable Step that requested the tools this retry is resuming with.
        *

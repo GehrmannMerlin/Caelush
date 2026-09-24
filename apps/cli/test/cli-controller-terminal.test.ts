@@ -10,6 +10,7 @@ import {
   type ClientAgentSession,
   type DaemonInfo,
   type HealthResponse,
+  type TranscriptEntry,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import {
@@ -21,6 +22,7 @@ describe("CLI terminal lifecycle", () => {
   it("fetches one canonical Run and appends only its verified final text", async () => {
     const run = makeRun("complete this");
     const completed = makeRun("complete this", {
+      id: run.id,
       status: "COMPLETED",
       finishedAt: 3,
       finalResult: verifiedFinalResult("verified answer"),
@@ -35,6 +37,9 @@ describe("CLI terminal lifecycle", () => {
         getRunCalls += 1;
         return completed;
       },
+      getSessionTranscript: async () => ({
+        items: [userTranscript(completed, "complete this"), assistantTranscript(completed, "verified answer")],
+      }),
     });
     const controller = new CliConversationController({
       client,
@@ -56,13 +61,16 @@ describe("CLI terminal lifecycle", () => {
 
   it("renders non-completed canonical status without fabricating an assistant answer", async () => {
     const run = makeRun("fail this");
-    const failed = makeRun("fail this", { status: "FAILED", finishedAt: 3 });
+    const failed = makeRun("fail this", { id: run.id, status: "FAILED", finishedAt: 3 });
     const client = makeClient({
       createRun: async () => run,
       watchRunEvents: async function* () {
         yield terminalEvent(run, "run.failed", { error: { message: "hidden" } });
       },
       getRun: async () => failed,
+      getSessionTranscript: async () => ({
+        items: [userTranscript(failed, "fail this"), terminalTranscript(failed)],
+      }),
     });
     const controller = new CliConversationController({
       client,
@@ -192,12 +200,47 @@ function makeClient(overrides: Partial<CliDaemonClient> = {}): CliDaemonClient {
     getRun: async () => run,
     listSessions: async () => ({ items: [session] }),
     getSession: async () => session,
+    getSessionTranscript: async () => ({ items: [] }),
     listRuns: async () => ({ items: [] }),
     recoverRun: async () => actionResponse(run),
     cancelRun: async () => actionResponse(run),
     listPendingApprovals: async () => ({ items: [] }),
     resolveApproval: async () => actionResponse(run),
     ...overrides,
+  };
+}
+
+function assistantTranscript(run: ClientAgentRun, text: string): TranscriptEntry {
+  return {
+    id: `transcript:assistant:${run.id}`,
+    runId: run.id,
+    conversationTurnId: run.id,
+    createdAt: run.finishedAt ?? run.createdAt,
+    kind: "ASSISTANT",
+    text,
+  };
+}
+
+function userTranscript(run: ClientAgentRun, text: string): TranscriptEntry {
+  return {
+    id: `transcript:user:${run.id}`,
+    runId: run.id,
+    conversationTurnId: run.id,
+    createdAt: run.createdAt,
+    kind: "USER",
+    text,
+  };
+}
+
+function terminalTranscript(run: ClientAgentRun): TranscriptEntry {
+  return {
+    id: `transcript:terminal:${run.id}`,
+    runId: run.id,
+    conversationTurnId: run.id,
+    createdAt: run.finishedAt ?? run.createdAt,
+    kind: "RUN_TERMINAL",
+    status: run.status,
+    text: `Run ended with status ${run.status}.`,
   };
 }
 
@@ -212,6 +255,7 @@ function makeInfo(): DaemonInfo {
       cancellation: true,
       approvals: true,
       sseReplay: true,
+      sessionTranscript: true,
     },
     runtimeKinds: ["local"],
     configuredProviders: ["fixture"],

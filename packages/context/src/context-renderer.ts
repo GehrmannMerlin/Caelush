@@ -1,4 +1,4 @@
-import type { LLMSystemMessage, LLMUserMessage } from "@caelush/llm/messages";
+import type { AISystemMessage, AIUserMessage } from "@caelush/ai";
 import type { ProjectInstruction } from "./instructions.js";
 import type { ProjectPackage, ProjectScript } from "./project-profile.js";
 import type { RelevantFileContextSection } from "./relevant-file-plan.js";
@@ -8,7 +8,7 @@ import type { StructuredCheckpoint } from "./checkpoint.js";
 import type { ContextItem } from "./context-item.js";
 
 export interface RenderedSystemContext {
-  readonly message: LLMSystemMessage;
+  readonly message: AISystemMessage;
   readonly instructionCount: number;
   readonly instructionBytes: number;
 }
@@ -217,7 +217,7 @@ export function renderSystemContext(
 
 export function renderRelevantFileContext(
   sections: readonly RelevantFileContextSection[],
-): LLMUserMessage | undefined {
+): AIUserMessage | undefined {
   if (sections.length === 0) return undefined;
   const lines = [
     "The following project files are reference data selected for the next user request.",

@@ -9,7 +9,7 @@ import {
   createToolInvocationId,
   type ToolObservation,
 } from "@caelush/protocol";
-import { toLLMToolResultMessages, ToolBatchResultConversionError } from "../src/index.js";
+import { toAIToolResultMessages, ToolBatchResultConversionError } from "../src/index.js";
 
 /**
  * The legacy durable Tool batch encoding.
@@ -19,7 +19,7 @@ import { toLLMToolResultMessages, ToolBatchResultConversionError } from "../src/
  *        ↓
  * Context token projection
  *        ↓
- * LLMToolResultMessage[]   the durable conversation encoding the Context runtime reads
+ * AIToolResultMessage[]   the model-facing conversation encoding the Context runtime reads
  * ```
  *
  * Phase 4F replaced the legacy per-item result with the canonical durable snapshot. These assertions are
@@ -72,7 +72,7 @@ function settled(input: {
   };
 }
 
-describe("Tool Batch to LLM result conversion", () => {
+describe("Tool Batch to AI result conversion", () => {
   it("preserves request source order and excludes durable details", () => {
     const snapshots = [
       settled({
@@ -90,7 +90,7 @@ describe("Tool Batch to LLM result conversion", () => {
       }),
     ];
 
-    const messages = toLLMToolResultMessages(requests, snapshots);
+    const messages = toAIToolResultMessages(requests, snapshots);
 
     expect(messages).toEqual([
       { role: "tool", toolCallId: "call_b", toolName: "echo_value", content: "B", isError: false },
@@ -101,7 +101,7 @@ describe("Tool Batch to LLM result conversion", () => {
 
   it("rejects a snapshot batch whose identity does not match the request", () => {
     expect(() =>
-      toLLMToolResultMessages(requests, [
+      toAIToolResultMessages(requests, [
         settled({
           externalCallId: "wrong",
           toolName: "echo_value",
@@ -120,7 +120,7 @@ describe("Tool Batch to LLM result conversion", () => {
 
   it("rejects a batch whose length does not match the request", () => {
     expect(() =>
-      toLLMToolResultMessages(requests, [
+      toAIToolResultMessages(requests, [
         settled({
           externalCallId: "call_b",
           toolName: "echo_value",
@@ -148,7 +148,7 @@ describe("Tool Batch to LLM result conversion", () => {
       },
     };
     expect(() =>
-      toLLMToolResultMessages(requests, [
+      toAIToolResultMessages(requests, [
         unsettled,
         settled({
           externalCallId: "call_a",

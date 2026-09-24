@@ -24,6 +24,7 @@ import type {
   ContextUsageProjection,
 } from "@caelush/protocol";
 import { createRunId, createTimestampMs, createWorkspaceId } from "@caelush/protocol";
+import { CaelushProtocolCompatibilityError } from "@caelush/client";
 import type { WatchRunEventsOptions } from "@caelush/client";
 import type { LaunchIntent } from "../bootstrap/cli-args.js";
 import { projectAgentEvent } from "./event-projector.js";
@@ -38,7 +39,6 @@ import { createInitialCliTimelineState } from "./timeline-model.js";
 import { canCancelRunStatus, createApprovalView, isTerminalRunStatus } from "./cli-control.js";
 import { CliReconnectScheduler, type CliTimer } from "./reconnect-scheduler.js";
 import {
-  hydrateSessionTranscript,
   listMatchingSessionCandidates,
   nonTerminalRuns,
   reconcileSessionTranscript,
@@ -601,8 +601,6 @@ export class CliConversationController {
     const activeRuns = nonTerminalRuns(runs);
     const displayHistory = await this.loadSessionTranscript(
       session.id,
-      runs,
-      activeRuns.length === 1 ? activeRuns[0]?.id : undefined,
     );
     const next: CliViewState = {
       ...this.state,
@@ -993,7 +991,7 @@ export class CliConversationController {
       const listedRuns = (await this.options.client.listRuns(run.sessionId, { limit: 100 })).items;
       refreshedRuns = upsertConfirmedRun(listedRuns, run);
       remainingRuns = nonTerminalRuns(refreshedRuns);
-      const transcript = await this.loadSessionTranscript(run.sessionId, refreshedRuns);
+      const transcript = await this.loadSessionTranscript(run.sessionId);
       const displayHistory = [
         ...transcript,
         ...this.state.displayHistory.filter((entry) => !isTranscriptEntry(entry)),
@@ -1046,8 +1044,6 @@ export class CliConversationController {
 
   private async loadSessionTranscript(
     sessionId: SessionId,
-    runs: readonly ClientAgentRun[],
-    activeRunId?: RunId,
   ): Promise<readonly TranscriptEntry[]> {
     const getSessionTranscript = this.options.client.getSessionTranscript;
     if (this.state.daemonInfo?.capabilities.sessionTranscript === true && getSessionTranscript) {
@@ -1056,7 +1052,7 @@ export class CliConversationController {
       });
       return reconcileSessionTranscript(response.items, this.optimisticTranscriptEntries());
     }
-    return hydrateSessionTranscript(runs, activeRunId);
+    throw new CaelushProtocolCompatibilityError();
   }
 
   private optimisticTranscriptEntries(): readonly TranscriptEntry[] {

@@ -1,8 +1,6 @@
 import {
-  VerifiedRunFinalResultSchema,
   type ClientAgentRun,
   type ClientAgentSession,
-  type RunId,
   type RunListQuery,
   type RunListResponse,
   type SessionId,
@@ -119,67 +117,6 @@ export function resolveSessionWorkspace(
     : { error: otherWorkspaceError() };
 }
 
-export function hydrateSessionTranscript(
-  runs: readonly ClientAgentRun[],
-  activeRunId?: RunId,
-): readonly TranscriptEntry[] {
-  const history: TranscriptEntry[] = [];
-  const ordered = [...runs].sort((left, right) => {
-    if (left.createdAt !== right.createdAt) return left.createdAt - right.createdAt;
-    return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
-  });
-
-  for (const run of ordered) {
-    history.push({
-      id: `history:user:${run.id}`,
-      runId: run.id,
-      conversationTurnId: run.id,
-      createdAt: run.createdAt,
-      kind: "USER",
-      text: run.goal,
-    });
-    if (run.status === "COMPLETED") {
-      const finalResult = VerifiedRunFinalResultSchema.safeParse(run.finalResult);
-      history.push(
-        finalResult.success
-          ? {
-              id: `history:assistant:${run.id}`,
-              runId: run.id,
-              conversationTurnId: run.id,
-              createdAt: run.finishedAt ?? run.createdAt,
-              kind: "ASSISTANT",
-              text: finalResult.data.text,
-            }
-          : {
-              id: `history:terminal:${run.id}`,
-              runId: run.id,
-              conversationTurnId: run.id,
-              createdAt: run.finishedAt ?? run.createdAt,
-              kind: "RUN_TERMINAL",
-              status: run.status,
-              text: "Run completed without a verified final result.",
-            },
-      );
-    } else if (isTerminalRun(run)) {
-      history.push({
-        id: `history:terminal:${run.id}`,
-        runId: run.id,
-        conversationTurnId: run.id,
-        createdAt: run.finishedAt ?? run.createdAt,
-        kind: "RUN_TERMINAL",
-        status: run.status,
-        text: `Run ended with status ${run.status}.`,
-      });
-    }
-  }
-
-  if (activeRunId === undefined) return history;
-  const activeGoalEntries = history.filter(
-    (entry) => entry.kind === "USER" && entry.runId === activeRunId,
-  );
-  return activeGoalEntries.length <= 1 ? history : deduplicateActiveGoal(history, activeRunId);
-}
-
 /** Reconcile an optimistic user entry by Run identity, never by matching text. */
 export function reconcileSessionTranscript(
   canonical: readonly TranscriptEntry[],
@@ -213,27 +150,4 @@ export function otherWorkspaceError(): string {
 
 export function ambiguousWorkspaceError(): string {
   return "Session cannot be resumed safely because its workspace identity is ambiguous.";
-}
-
-function isTerminalRun(run: ClientAgentRun): boolean {
-  return (
-    run.status === "FAILED" ||
-    run.status === "CANCELLED" ||
-    run.status === "TIMEOUT" ||
-    run.status === "MAX_STEPS_REACHED" ||
-    run.status === "BUDGET_EXCEEDED"
-  );
-}
-
-function deduplicateActiveGoal(
-  history: readonly TranscriptEntry[],
-  activeRunId: RunId,
-): readonly TranscriptEntry[] {
-  let retained = false;
-  return history.filter((entry) => {
-    if (entry.kind !== "USER" || entry.runId !== activeRunId) return true;
-    if (retained) return false;
-    retained = true;
-    return true;
-  });
 }

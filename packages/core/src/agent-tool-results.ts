@@ -1,7 +1,6 @@
 import type { ToolCallRequest, ToolResultBatchNormalizer } from "@caelush/agent";
 import { createToolResultBatchNormalizer } from "@caelush/agent";
 import type { AIToolResultMessage } from "@caelush/ai";
-import type { LLMToolResultMessage } from "@caelush/llm/messages";
 import type { AgentToolRequest } from "./agent-decision.js";
 
 /**
@@ -34,30 +33,14 @@ const canonicalNormalizer: ToolResultBatchNormalizer = createToolResultBatchNorm
 
 export function normalizeToolResultBatch(
   requests: readonly AgentToolRequest[],
-  results: readonly LLMToolResultMessage[],
-): readonly LLMToolResultMessage[] {
-  // `rawArtifactRef` is a durable artifact-linkage pointer, not model-facing content: the canonical
-  // contract has no field for it, so it is dropped on the way in and restored from the caller's own
-  // input on the way out. Only the position is taken from the canonical result, never the content.
-  const legacyById = new Map<string, LLMToolResultMessage>();
-  for (const result of results) legacyById.set(result.toolCallId, result);
-
+  results: readonly AIToolResultMessage[],
+): readonly AIToolResultMessage[] {
   const normalized = canonicalNormalizer.normalize({
     requests: requests.map(toCanonicalRequest),
     results: results.map(toCanonicalResult),
   });
 
-  return normalized.map((message) => {
-    const legacy = legacyById.get(message.toolCallId);
-    return {
-      role: "tool" as const,
-      toolCallId: message.toolCallId,
-      toolName: message.toolName,
-      content: message.content,
-      isError: message.isError,
-      ...(legacy?.rawArtifactRef === undefined ? {} : { rawArtifactRef: legacy.rawArtifactRef }),
-    };
-  });
+  return normalized;
 }
 
 /** The legacy call shape as the canonical Tool Layer's own call request. */
@@ -76,7 +59,7 @@ function toCanonicalRequest(request: AgentToolRequest): ToolCallRequest {
  * another non-canonical field would project down to the frozen five fields rather than smuggling the
  * extra one into the model contract.
  */
-function toCanonicalResult(message: LLMToolResultMessage): AIToolResultMessage {
+function toCanonicalResult(message: AIToolResultMessage): AIToolResultMessage {
   return {
     role: "tool",
     toolCallId: message.toolCallId,

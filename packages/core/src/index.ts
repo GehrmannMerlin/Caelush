@@ -56,8 +56,8 @@ export { normalizeToolResultBatch } from "./agent-tool-results.js";
 export {
   defaultObservationPolicy,
   toAgentToolResults,
+  toAIToolResultMessages,
   toContextObservationProjection,
-  toLLMToolResultMessages,
 } from "./agent-tool-batch.js";
 export type { AgentToolObservationPolicy } from "./agent-tool-batch.js";
 export {
@@ -156,14 +156,6 @@ export type { LegacyContextRuntimeAdapterDependencies } from "./legacy-context-r
  * legacy durable message encoding and the Run Layer continuation domain on the way.
  */
 export { toAgentExecutionSnapshot, toExecutionStatus } from "./run-execution-facts.js";
-/**
- * The one reviewed AI / legacy message projection pair.
- *
- * The durable ledger still speaks the legacy encoding, so a host that holds a synthetic
- * `LLMMessage` conversation — the daemon's session prefix — projects it through here rather than
- * reimplementing the field-by-field mapping. The Run Layer itself only ever sees `AIMessage`.
- */
-export { toAIMessage, toLegacyMessage } from "./ai-invocation-projection.js";
 export {
   fingerprintToolBatch,
   fingerprintToolRequest,
@@ -441,16 +433,6 @@ export type {
   CompletionEffectSettlementRoute,
 } from "./run-completion-effect-settlement.js";
 export type { CompletionEventEvidence } from "./run-commit-event-materializer.js";
-export {
-  toAgentAIMessage,
-  toAgentAssistantMessage,
-  toAgentToolResultMessage,
-  toAgentUserMessage,
-  toLegacyAssistantMessage,
-  toLegacyDurableMessage,
-  toLegacyToolResultMessage,
-  toLegacyUserMessage,
-} from "./run-message-compatibility.js";
 export {
   parseDurableContinuation,
   toAgentContinuation,

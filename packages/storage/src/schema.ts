@@ -124,60 +124,34 @@ export const agentStateSnapshots = sqliteTable("agent_state_snapshots", {
   dataJson: text("data_json").notNull(),
 });
 
-/**
- * The durable conversation ledger.
- *
- * ## Transitional shape, stated honestly
- *
- * This table carries **two encodings** during the Phase 5B/5C/5D/5E compatibility window, and this
- * declaration describes the table that actually exists rather than the one Phase 5F will build:
- *
- * ```text
- * data_json      the legacy LLMMessage JSON          written by the legacy Run writer    until 5F
- * v2_data_json   AgentMessageRecord.data             written by the V2 record store      until Stage C
- * ```
- *
- * A row is legacy-only (`v2_data_json IS NULL`) or V2-backed (`v2_data_json IS NOT NULL`), never both,
- * so neither encoding can be misread as the other.
- *
- * ## Why the V2 columns are nullable
- *
- * The pre-V2 production writer knows nothing about them and must keep working until Phase 5C cuts it
- * over. A `NOT NULL` constraint here would crash the current production path the moment it appended a
- * message. Phase 5F's Stage C rebuild promotes `message_id` to the primary key and drops the legacy
- * columns; declaring the final shape now while the migration ships the transitional one would be a
- * schema declaration that lies about its own database.
- */
+/** The final Message System V2 durable conversation ledger. */
 export const agentMessages = sqliteTable(
   "agent_messages",
   {
+    messageId: text("message_id").primaryKey(),
     runId: text("run_id")
       .notNull()
       .references(() => agentRuns.id),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => agentSessions.id),
     sequence: integer("sequence").notNull(),
-    role: text("role").notNull(),
-    sourceStepId: text("source_step_id").references(() => agentSteps.id),
-    protocolVersion: integer("protocol_version").notNull(),
-    createdAtMs: integer("created_at_ms").notNull(),
-    dataJson: text("data_json").notNull(),
-
-    /* Message V2 substrate. Null for a legacy-only row. */
-    messageId: text("message_id"),
-    sessionId: text("session_id"),
-    conversationTurnId: text("conversation_turn_id"),
-    messageType: text("message_type"),
-    schemaVersion: integer("schema_version"),
+    conversationTurnId: text("conversation_turn_id").notNull(),
+    messageType: text("message_type").notNull(),
+    schemaVersion: integer("schema_version").notNull(),
     modelProjectionVersion: integer("model_projection_version"),
-    sourceJson: text("source_json"),
-    audienceJson: text("audience_json"),
-    v2DataJson: text("v2_data_json"),
+    sourceStepId: text("source_step_id").references(() => agentSteps.id),
+    createdAtMs: integer("created_at_ms").notNull(),
+    sourceJson: text("source_json").notNull(),
+    audienceJson: text("audience_json").notNull(),
+    dataJson: text("data_json").notNull(),
   },
   (table) => [
     uniqueIndex("agent_messages_run_sequence_unique").on(table.runId, table.sequence),
     index("agent_messages_run_sequence_idx").on(table.runId, table.sequence),
-    index("agent_messages_session_sequence_idx").on(table.sessionId, table.runId, table.sequence),
-    index("agent_messages_conversation_turn_idx").on(table.conversationTurnId),
-    index("agent_messages_message_type_idx").on(table.messageType),
+    index("agent_messages_session_created_idx").on(table.sessionId, table.createdAtMs),
+    index("agent_messages_turn_sequence_idx").on(table.conversationTurnId, table.sequence),
+    index("agent_messages_type_idx").on(table.messageType),
   ],
 );
 

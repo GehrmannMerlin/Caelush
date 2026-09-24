@@ -1,8 +1,8 @@
+import type { AIToolResultMessage } from "@caelush/ai";
 import type { RunContinuationCheckpoint as AgentContinuation } from "@caelush/agent";
 import type { z } from "zod";
 import type { RunContinuationCheckpoint as DurableContinuation } from "./agent-continuation.js";
 import { RunContinuationCheckpointSchema } from "./agent-continuation-schema.js";
-import { toAgentAIMessage, toLegacyDurableMessage } from "./run-message-compatibility.js";
 
 /**
  * The Run continuation compatibility codec.
@@ -13,8 +13,8 @@ import { toAgentAIMessage, toLegacyDurableMessage } from "./run-message-compatib
  * ```
  *
  * The two carry the same discriminants and the same semantic fields; they differ in exactly one
- * place, the message payload — canonical `AIMessage` against the persisted legacy encoding. This
- * file is the only translator, and it is a projection in both directions:
+ * place, the message payload is validated as the canonical `AIToolResultMessage` in both domains.
+ * This file remains a structural codec for checkpoint evolution:
  *
  * ```text
  * it never invents a checkpoint, a Step, a revision or a timestamp
@@ -22,8 +22,6 @@ import { toAgentAIMessage, toLegacyDurableMessage } from "./run-message-compatib
  * it never drops a discriminant: every variant is projected explicitly
  * ```
  *
- * The one persisted field with no canonical counterpart is `rawArtifactRef` on a Tool result; see
- * {@link toAgentAIMessage}. It is dropped by the canonical projection by design, not by omission.
  */
 
 /**
@@ -43,7 +41,7 @@ export function toDurableContinuation(checkpoint: AgentContinuation): DurableCon
         ...(checkpoint.receivedResults === undefined
           ? {}
           : {
-              receivedResults: checkpoint.receivedResults.map(toLegacyDurableMessage).map(asTool),
+              receivedResults: checkpoint.receivedResults.map(asTool),
             }),
         ...(checkpoint.observationPolicy === undefined
           ? {}
@@ -101,7 +99,7 @@ export function toDurableContinuation(checkpoint: AgentContinuation): DurableCon
             nextAttemptAt: checkpoint.nextAttemptAt,
             errorCode: checkpoint.errorCode,
             pendingDecision: checkpoint.pendingDecision,
-            receivedResults: checkpoint.receivedResults.map(toLegacyDurableMessage).map(asTool),
+            receivedResults: checkpoint.receivedResults.map(asTool),
             ...(checkpoint.sourceStepId === undefined
               ? {}
               : { sourceStepId: checkpoint.sourceStepId }),
@@ -141,7 +139,7 @@ export function toAgentContinuation(checkpoint: DurableContinuation): AgentConti
         pendingDecision: checkpoint.pendingDecision,
         ...(checkpoint.receivedResults === undefined
           ? {}
-          : { receivedResults: checkpoint.receivedResults.map(toAgentAIMessage).map(asTool) }),
+          : { receivedResults: checkpoint.receivedResults.map(asTool) }),
         ...(checkpoint.observationPolicy === undefined
           ? {}
           : { observationPolicy: checkpoint.observationPolicy }),
@@ -198,7 +196,7 @@ export function toAgentContinuation(checkpoint: DurableContinuation): AgentConti
             nextAttemptAt: checkpoint.nextAttemptAt,
             errorCode: checkpoint.errorCode,
             pendingDecision: checkpoint.pendingDecision,
-            receivedResults: checkpoint.receivedResults.map(toAgentAIMessage).map(asTool),
+            receivedResults: checkpoint.receivedResults.map(asTool),
             ...(checkpoint.sourceStepId === undefined
               ? {}
               : { sourceStepId: checkpoint.sourceStepId }),
@@ -217,11 +215,23 @@ export function toAgentContinuation(checkpoint: DurableContinuation): AgentConti
  * The role is re-stated rather than asserted away so the projection cannot silently accept a
  * system, user or assistant message in a batch the canonical contract types as Tool results.
  */
-function asTool<T extends { readonly role: string }>(message: T): Extract<T, { role: "tool" }> {
+function asTool(message: {
+  readonly role: string;
+  readonly toolCallId: string;
+  readonly toolName: string;
+  readonly content: string;
+  readonly isError: boolean;
+}): AIToolResultMessage {
   if (message.role !== "tool") {
     throw new TypeError(`A continuation can only hold Tool results, received "${message.role}"`);
   }
-  return message as Extract<T, { role: "tool" }>;
+  return {
+    role: "tool",
+    toolCallId: message.toolCallId,
+    toolName: message.toolName,
+    content: message.content,
+    isError: message.isError,
+  };
 }
 
 /** Exhaustiveness guard: a new discriminant must break the build rather than lose a checkpoint. */

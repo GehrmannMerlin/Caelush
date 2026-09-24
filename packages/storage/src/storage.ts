@@ -12,10 +12,6 @@ import {
 } from "./repositories/run-state-repository.js";
 import { SqliteDurableEventStore } from "./events/sqlite-durable-event-store.js";
 import type { DurableEventStore } from "@caelush/events";
-import {
-  SqliteConversationRepository,
-  type ConversationRepository,
-} from "./repositories/conversation-repository.js";
 import { SqliteAgentMessageRecordStore } from "./messages/sqlite-agent-message-record-store.js";
 import {
   SqliteContinuationRepository,
@@ -74,25 +70,7 @@ export interface CaelushStorage {
   readonly steps: StepRepository;
   readonly runStates: RunStateRepository;
   readonly events: DurableEventStore;
-  /**
-   * The pre-V2 conversation reader and writer.
-   *
-   * **Phase 5C/5F exit.** This is the compatibility surface the current production Run execution path
-   * still uses, and it is deliberately not the canonical one. The canonical V2 surface is
-   * {@link CaelushStorage.messageRecords}.
-   */
-  readonly messages: ConversationRepository;
-  /**
-   * The Message V2 record store: the target storage authority for a durable agent message.
-   *
-   * ```text
-   * messageRecords   target V2 storage authority
-   * messages         temporary production compatibility
-   * ```
-   *
-   * It speaks `AgentMessageRecord` and nothing else: decoding a record into a semantic message belongs
-   * to the codec registry, and projecting one belongs to the projector registry.
-   */
+  /** The canonical Message V2 record store. */
   readonly messageRecords: SqliteAgentMessageRecordStore;
   readonly continuations: ContinuationRepository;
   readonly execution: SqliteRunExecutionStore;
@@ -137,7 +115,6 @@ export async function openCaelushStorage(options: {
       steps: new SqliteStepRepository(database),
       runStates: new SqliteRunStateRepository(database),
       events: new SqliteDurableEventStore(database),
-      messages: new SqliteConversationRepository(database),
       messageRecords: new SqliteAgentMessageRecordStore(database),
       continuations: new SqliteContinuationRepository(database),
       execution: new SqliteRunExecutionStore(database),

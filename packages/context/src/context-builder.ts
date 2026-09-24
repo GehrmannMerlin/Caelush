@@ -1,9 +1,4 @@
-import {
-  LLMMessageSchema,
-  LLMUserMessageSchema,
-  type LLMMessage,
-  type LLMUserMessage,
-} from "@caelush/llm/messages";
+import { type AIMessage, type AIUserMessage } from "@caelush/ai";
 import type { ContextBuildReport } from "./context-build-report.js";
 import { assembleContextBudget } from "./context-budget.js";
 import { validateAndGroupConversation } from "./conversation-history.js";
@@ -19,6 +14,7 @@ import type { ModelContextProfile } from "./model-context-profile.js";
 import { createContextBuildTrace } from "./context-build-trace.js";
 import type { ContextItem } from "./context-item.js";
 import type { StructuredCheckpoint } from "./checkpoint.js";
+import { isAIMessage, isAIUserMessage } from "./message-validation.js";
 
 export interface ContextBuildLimits {
   readonly maxInputTokens: number;
@@ -32,7 +28,7 @@ export interface ContextBuildCommonInput {
   readonly baseSystemPrompt: string;
   readonly snapshot: ProjectIntelligenceSnapshot;
   readonly relevantFiles?: RelevantFileContextPlan;
-  readonly history?: readonly LLMMessage[];
+  readonly history?: readonly AIMessage[];
   /** Durable agent_messages.sequence values aligned with history when available. */
   readonly historySourceSequences?: readonly number[];
   readonly limits: ContextBuildLimits;
@@ -57,18 +53,26 @@ export interface ContextBuildCommonInput {
 
 export interface UserTurnContextBuildInput extends ContextBuildCommonInput {
   readonly mode?: "USER_TURN";
-  readonly currentUserMessage: LLMUserMessage;
+  readonly currentUserMessage: AIUserMessage;
 }
 
 export interface ToolContinuationContextBuildInput extends ContextBuildCommonInput {
   readonly mode: "TOOL_CONTINUATION";
-  readonly currentTurnMessages: readonly LLMMessage[];
+  readonly currentTurnMessages: readonly AIMessage[];
+  /**
+   * Non-model metadata used only when a forced recovery must reload an unbounded Tool result.
+   * These references are deliberately separate from AIMessage, whose contract is model-facing.
+   */
+  readonly rawObservationRefs?: readonly {
+    readonly toolCallId: string;
+    readonly artifactRef: string;
+  }[];
 }
 
 export type ContextBuildInput = UserTurnContextBuildInput | ToolContinuationContextBuildInput;
 
 export interface BuiltModelContext {
-  readonly messages: readonly LLMMessage[];
+  readonly messages: readonly AIMessage[];
   readonly report: ContextBuildReport;
 }
 
@@ -147,7 +151,7 @@ export class ContextBuilder {
     const isContinuation = input.mode === "TOOL_CONTINUATION";
     const currentTurn = isContinuation ? input.currentTurnMessages : [input.currentUserMessage];
     if (currentTurn.length === 0) throw new ContextBuildError("current turn must not be empty");
-    if (!isContinuation && !LLMUserMessageSchema.safeParse(input.currentUserMessage).success) {
+    if (!isContinuation && !isAIUserMessage(input.currentUserMessage)) {
       throw new ContextBuildError("current user message is invalid");
     }
     if (isContinuation) {
@@ -190,7 +194,7 @@ export class ContextBuilder {
       estimator: this.tokenEstimator,
     });
     for (const message of budget.messages) {
-      if (!LLMMessageSchema.safeParse(message).success) {
+      if (!isAIMessage(message)) {
         throw new ContextBuildError("context builder produced an invalid message");
       }
     }

@@ -15,16 +15,7 @@ const appPackageNames = new Set(["@caelush/daemon", "@caelush/cli", "@caelush/we
 const protocolPackageName = "@caelush/protocol";
 const internalPackagePattern = /^@caelush\//;
 const deepSourceImportPattern = /\.\.\/(?:\.\.\/)+packages\/[^\s"'`]+\/src\//;
-const forbiddenLlmSdkImportPattern = /\bfrom\s+["'](?:ai|@ai-sdk\/)/;
 const explicitAnyPattern = /(?::\s*any\b|<any>|\bas\s+any\b|\bany\[\]|Array<any>)/;
-const openAICompatibleAdapterRoot = path.join(
-  repositoryRoot,
-  "packages",
-  "llm",
-  "src",
-  "providers",
-  "openai-compatible",
-);
 
 async function sourceFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -36,13 +27,6 @@ async function sourceFiles(directory: string): Promise<string[]> {
     }),
   );
   return nestedFiles.flat();
-}
-
-function isOpenAICompatibleAdapterPath(filePath: string): boolean {
-  return (
-    filePath === openAICompatibleAdapterRoot ||
-    filePath.startsWith(`${openAICompatibleAdapterRoot}${path.sep}`)
-  );
 }
 
 async function packageSource(packageName: string): Promise<string> {
@@ -103,63 +87,9 @@ describe("package boundaries", () => {
     ).toBe(false);
   });
 
-  it("keeps the LLM package as a durable-compatibility facade with no invocation authority", async () => {
-    const manifest = await readManifest("packages/llm/package.json");
-    const dependencies = dependencyEntries(manifest);
-    expect(dependencies[protocolPackageName]).toBe("workspace:*");
-    expect(dependencies.zod).toBe("4.4.3");
-    // Phase 2D retired the legacy model-invocation surface, so the package no longer
-    // depends on the AI core at all: `@caelush/ai` owns model invocation exclusively,
-    // and this package keeps only the durable conversation and turn schemas.
-    expect(dependencies["@caelush/ai"]).toBeUndefined();
-    expect(dependencies.ai).toBeUndefined();
-    expect(dependencies["@ai-sdk/openai-compatible"]).toBeUndefined();
-    expect(
-      Object.keys(dependencies).some((dependency) =>
-        ["@ai-sdk/core", "@ai-sdk/openai", "openai", "anthropic", "@anthropic-ai/sdk"].includes(
-          dependency,
-        ),
-      ),
-    ).toBe(false);
-
-    const sourceContents = await workspaceSourceContents();
-    expect(sourceContents.some((contents) => contents.includes('from "@caelush/protocol"'))).toBe(
-      true,
-    );
-  });
-
-  it("keeps provider SDK imports out of the legacy package and explicit any out of production source", async () => {
-    const llmSourcePaths = await sourceFiles(path.join(repositoryRoot, "packages", "llm", "src"));
-    const llmSourceContents = await Promise.all(
-      llmSourcePaths.map(async (filePath) => ({
-        filePath,
-        contents: await readFile(filePath, "utf8"),
-      })),
-    );
-    const violations = llmSourceContents
-      .filter(({ filePath }) => !isOpenAICompatibleAdapterPath(filePath))
-      .filter(({ contents }) => forbiddenLlmSdkImportPattern.test(contents))
-      .map(({ filePath }) => path.relative(repositoryRoot, filePath));
-    expect(violations).toEqual([]);
-    expect(llmSourceContents.some(({ contents }) => explicitAnyPattern.test(contents))).toBe(false);
-  });
-
-  it("keeps the Phase 4B gateway isolated from adapters and host execution", async () => {
-    const llmSourceFileNames = (
-      await readdir(path.join(repositoryRoot, "packages", "llm", "src"))
-    ).filter((fileName) => fileName.endsWith(".ts"));
-    const llmSourceContents = await Promise.all(
-      llmSourceFileNames.map((fileName) =>
-        readFile(path.join(repositoryRoot, "packages", "llm", "src", fileName), "utf8"),
-      ),
-    );
-    const productionSource = llmSourceContents.join("\n");
-    expect(productionSource).not.toMatch(/from\s+["']@caelush\/(?:daemon|storage|events|core)["']/);
-    expect(productionSource).not.toMatch(/from\s+["'](?:ai|@ai-sdk\/|openai|anthropic|@google\/)/);
-    expect(productionSource).not.toMatch(/\b(?:fetch|ToolDispatcher|AgentLoop|runAgent)\s*\(/);
-    expect(productionSource).not.toContain("providerOptions");
-    expect(productionSource).not.toContain("stream.error");
-    expect(productionSource).not.toContain("reasoning.delta");
+  it("retires the legacy LLM package after the Phase 5F cutover", async () => {
+    expect(await pathExists("packages/llm")).toBe(false);
+    expect(await pathExists("packages/llm/package.json")).toBe(false);
   });
 
   it("keeps the Tool Kernel below execution layers and free of host side effects", async () => {
@@ -294,7 +224,6 @@ describe("package boundaries", () => {
       "@caelush/agent",
       "@caelush/core",
       "@caelush/events",
-      "@caelush/llm",
       "@caelush/memory",
       "@caelush/protocol",
       "@caelush/verification",
@@ -313,7 +242,7 @@ describe("package boundaries", () => {
     ]);
     expect(core).not.toMatch(/from\s+["']@caelush\/storage["']/);
     expect(events).not.toMatch(/from\s+["']@caelush\/(?:core|storage)["']/);
-    expect(storage).not.toMatch(/from\s+["']@caelush\/(?:context|runtime|security|daemon|llm)["']/);
+    expect(storage).not.toMatch(/from\s+["']@caelush\/(?:context|runtime|security|daemon)["']/);
     for (const [name, source] of [
       ["Core", core],
       ["Events", events],
@@ -334,7 +263,7 @@ describe("package boundaries", () => {
     const core = await readManifest("packages/core/package.json");
     const dependencies = dependencyEntries(core);
     expect(dependencies["@caelush/context"]).toBe("workspace:*");
-    expect(dependencies["@caelush/llm"]).toBe("workspace:*");
+    expect(dependencies["@caelush/llm"]).toBeUndefined();
     expect(dependencies["@caelush/protocol"]).toBe("workspace:*");
     // Phase 4F deleted `@caelush/tools`: the Tool Kernel the Phase 6B loop prepares tool calls for is
     // `@caelush/agent` now, and Core depends on it directly.
@@ -352,7 +281,7 @@ describe("package boundaries", () => {
     expect(dependencies["@caelush/shared"]).toBe("workspace:*");
     expect(dependencies.ignore).toBe("7.0.6");
     expect(Object.keys(dependencies).sort()).toEqual([
-      "@caelush/llm",
+      "@caelush/ai",
       "@caelush/protocol",
       "@caelush/security",
       "@caelush/shared",
@@ -366,11 +295,11 @@ describe("package boundaries", () => {
     const source = (await Promise.all(files.map((filePath) => readFile(filePath, "utf8")))).join(
       "\n",
     );
-    const imports = [...source.matchAll(/from\s+["'](@caelush\/llm(?:\/[^"']*)?)["']/g)].map(
+    const imports = [...source.matchAll(/from\s+["'](@caelush\/ai(?:\/[^"']*)?)["']/g)].map(
       (match) => match[1],
     );
-    expect(imports).toContain("@caelush/llm/messages");
-    expect(imports.filter((value) => value !== "@caelush/llm/messages")).toEqual([]);
+    expect(imports.length).toBeGreaterThan(0);
+    expect(imports.every((value) => value === "@caelush/ai")).toBe(true);
   });
 
   it("keeps Context security reuse narrow and execution-independent", async () => {

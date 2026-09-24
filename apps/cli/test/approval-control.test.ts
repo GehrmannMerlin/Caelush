@@ -133,6 +133,7 @@ function makeClient(overrides: Partial<CliDaemonClient> = {}): CliDaemonClient {
         cancellation: true,
         approvals: true,
         sseReplay: true,
+        sessionTranscript: true,
       },
       runtimeKinds: ["local"],
       configuredProviders: ["fixture"],
@@ -147,6 +148,7 @@ function makeClient(overrides: Partial<CliDaemonClient> = {}): CliDaemonClient {
     createSession: async () => session,
     listSessions: async () => ({ items: [session] }),
     getSession: async () => session,
+    getSessionTranscript: async () => ({ items: [] }),
     createRun: async () => run,
     listRuns: async () => ({ items: [] }),
     watchRunEvents: async function* (_runId, options) {

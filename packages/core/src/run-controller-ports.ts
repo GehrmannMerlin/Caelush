@@ -1,6 +1,6 @@
 import type { AgentLoopModelSettings } from "./agent-loop-input.js";
 import type { ContextRuntimeCoordinatorPort } from "@caelush/context";
-import type { LLMMessage } from "@caelush/llm/messages";
+import type { AIMessage } from "@caelush/ai";
 import type { ContextBuildLimits } from "@caelush/context";
 import type {
   AgentRun,
@@ -49,7 +49,7 @@ import type {
 export interface RunExecutionConfig {
   readonly baseSystemPrompt: string;
   readonly contextLimits: ContextBuildLimits;
-  readonly historyPrefix?: readonly LLMMessage[];
+  readonly historyPrefix?: readonly AIMessage[];
   readonly modelSettings?: AgentLoopModelSettings;
   readonly cwd?: string;
   readonly explicitPaths?: readonly string[];

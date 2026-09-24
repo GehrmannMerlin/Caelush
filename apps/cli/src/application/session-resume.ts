@@ -6,7 +6,6 @@ import {
 export {
   ambiguousWorkspaceError,
   deriveSessionActivity,
-  hydrateSessionTranscript,
   reconcileSessionTranscript,
   nonTerminalRuns,
   otherWorkspaceError,

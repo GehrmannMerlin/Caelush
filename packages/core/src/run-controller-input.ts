@@ -1,4 +1,4 @@
-import type { LLMToolResultMessage } from "@caelush/llm/messages";
+import type { AIToolResultMessage } from "@caelush/ai";
 import type {
   AgentError,
   AgentRun,
@@ -82,4 +82,4 @@ export type RunControllerResult =
     }
   | { readonly status: "TERMINAL"; readonly run: AgentRun; readonly state?: AgentState };
 
-export type RunControllerToolResults = readonly LLMToolResultMessage[];
+export type RunControllerToolResults = readonly AIToolResultMessage[];
