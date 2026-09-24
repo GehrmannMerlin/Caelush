@@ -17,7 +17,7 @@ import {
   type AIModelTurnResult,
   type ToolTurnPipeline,
 } from "@caelush/core";
-import { EventBus } from "@caelush/events";
+import { EventBus } from "./support/test-event-notifier.js";
 import {
   createModelToolFeedbackProjector,
   createToolResultBatchNormalizer,
@@ -180,7 +180,7 @@ async function harness(input: {
   });
   await storage.runs.insert(run);
 
-  const eventBus = new EventBus(storage.events);
+  const eventBus = new EventBus(storage.eventReader);
   const toolExecutions: string[] = [];
   const builder = new DefaultAgentToolRegistryBuilder();
   builder.register(

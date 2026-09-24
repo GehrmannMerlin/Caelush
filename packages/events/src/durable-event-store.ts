@@ -1,11 +1,10 @@
-import type { RunId } from "@caelush/protocol";
-import type { DurableAgentEvent, DurableEventDraft } from "./event-draft.js";
+import type { RunId, DurableRunEvent } from "@caelush/protocol";
 
+/** @deprecated Use the Agent-owned read-only DurableRunEventReaderPort. */
 export interface DurableEventStore {
-  append(event: DurableEventDraft): Promise<DurableAgentEvent>;
   replay(
     runId: RunId,
     options?: { afterSequence?: number; throughSequence?: number; limit?: number },
-  ): Promise<DurableAgentEvent[]>;
+  ): Promise<readonly DurableRunEvent[]>;
   latestSequence(runId: RunId): Promise<number>;
 }

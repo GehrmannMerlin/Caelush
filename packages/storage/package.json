@@ -21,7 +21,6 @@
     "@caelush/agent": "workspace:*",
     "@caelush/core": "workspace:*",
     "@caelush/memory": "workspace:*",
-    "@caelush/events": "workspace:*",
     "@caelush/protocol": "workspace:*",
     "@caelush/verification": "workspace:*",
     "drizzle-orm": "1.0.0-rc.4"

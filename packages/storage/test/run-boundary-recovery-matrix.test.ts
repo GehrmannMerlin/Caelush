@@ -23,7 +23,7 @@ import {
   toContextObservationProjection,
 } from "@caelush/core";
 import { createModelToolFeedbackProjector, createToolResultBatchNormalizer } from "@caelush/agent";
-import { EventBus } from "@caelush/events";
+import { EventBus } from "./support/test-event-notifier.js";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage, type CaelushStorage } from "../src/index.js";
 import { makeState, makeStep, verificationPlanner } from "./support/fixtures.js";
@@ -227,7 +227,7 @@ function controllerOver(
     }).factory,
     messages,
     executionStore: storage.execution,
-    events: new EventBus(storage.events),
+    events: new EventBus(storage.eventReader),
     configResolver: {
       resolve: async () => ({
         baseSystemPrompt: "synthetic",

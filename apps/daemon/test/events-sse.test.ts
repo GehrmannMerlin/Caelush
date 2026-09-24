@@ -39,7 +39,7 @@ afterEach(async () => {
 async function makeServer() {
   directory = await mkdtemp(join(tmpdir(), "caelush-events-"));
   storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
-  const eventBus = new EventBus(storage.events);
+  const eventBus = new EventBus(storage.eventReader);
   const hub = new RunEventHub(storage.eventReader);
   eventHub = hub;
   activeStreams = new Set();

@@ -1,6 +1,5 @@
-import type { AgentEvent, RunId, TransientRunEvent } from "@caelush/protocol";
-import type { DurableEventStore } from "./durable-event-store.js";
-import type { DurableAgentEvent, DurableEventDraft } from "./event-draft.js";
+import type { AgentEvent, DurableRunEvent, RunId, TransientRunEvent } from "@caelush/protocol";
+import type { DurableRunEventReaderPort, RunEventNotifierPort } from "@caelush/agent";
 import { AsyncEventQueue } from "./event-stream.js";
 import type { EventStream, EventWatchOptions } from "./event-stream.js";
 
@@ -17,24 +16,20 @@ interface Subscriber {
   readonly onError?: (error: unknown, event: AgentEvent) => void;
 }
 
-export class EventBus {
+export class EventBus implements RunEventNotifierPort {
   private readonly subscribers = new Map<RunId, Set<Subscriber>>();
 
-  constructor(private readonly durableStore: DurableEventStore) {}
+  constructor(private readonly eventReader: DurableRunEventReaderPort) {}
 
-  async publish(event: AgentEvent | DurableEventDraft): Promise<AgentEvent> {
-    if (event.durability.kind === "DURABLE") {
-      const durable = await this.durableStore.append(event as unknown as DurableEventDraft);
-      this.notify(durable as AgentEvent);
-      return durable as AgentEvent;
+  async publish(event: TransientRunEvent): Promise<TransientRunEvent> {
+    if ((event as AgentEvent).durability.kind === "DURABLE") {
+      throw new Error("EventBus cannot persist durable events; use an authoritative transaction.");
     }
-
-    const ephemeral = event as unknown as AgentEvent;
-    this.notify(ephemeral);
-    return ephemeral;
+    this.notify(event);
+    return event;
   }
 
-  notifyCommitted(events: readonly DurableAgentEvent[]): void {
+  notifyCommitted(events: readonly DurableRunEvent[]): void {
     for (const event of events) this.notify(event);
   }
 
@@ -90,11 +85,12 @@ export class EventBus {
 
     try {
       if (aborted) return;
-      const replay: DurableAgentEvent[] = [];
+      const replay: DurableRunEvent[] = [];
       let replayCursor = afterSequence;
       while (true) {
-        const page = await this.durableStore.replay(runId, {
+        const page = await this.eventReader.replay(runId, {
           afterSequence: replayCursor,
+          throughSequence: Number.MAX_SAFE_INTEGER,
           limit: REPLAY_PAGE_SIZE,
         });
         replay.push(...page);

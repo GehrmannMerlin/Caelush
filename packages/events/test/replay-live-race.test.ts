@@ -6,7 +6,8 @@ import {
   createToolInvocationId,
 } from "@caelush/protocol";
 import type { AgentEvent, RunId, SessionId } from "@caelush/protocol";
-import type { DurableAgentEvent, DurableEventDraft, DurableEventStore } from "../src/index.js";
+import type { DurableAgentEvent } from "../src/index.js";
+import type { DurableRunEventReaderPort } from "@caelush/agent";
 import { describe, expect, it } from "vitest";
 import { EventBus } from "../src/event-bus.js";
 
@@ -24,19 +25,13 @@ function makeEvent(runId: RunId, sessionId: SessionId, sequence: number): Durabl
   } as unknown as DurableAgentEvent;
 }
 
-class PausedReplayStore implements DurableEventStore {
+class PausedReplayStore implements DurableRunEventReaderPort {
   readonly persisted: DurableAgentEvent[] = [];
   replayStarted!: () => void;
   private resolveReplay!: (events: DurableAgentEvent[]) => void;
   readonly replayPromise = new Promise<DurableAgentEvent[]>((resolve) => {
     this.resolveReplay = resolve;
   });
-
-  async append(event: DurableEventDraft): Promise<DurableAgentEvent> {
-    const persisted = makeEvent(event.runId, event.sessionId, this.persisted.length + 1);
-    this.persisted.push(persisted);
-    return persisted;
-  }
 
   async replay(runId: RunId): Promise<DurableAgentEvent[]> {
     this.replayStarted();
@@ -64,12 +59,9 @@ describe("replay/live race", () => {
     const iterator = bus.watch(runId)[Symbol.asyncIterator]();
     const first = iterator.next();
     await Promise.resolve();
-    const newEvent = await bus.publish({
-      ...makeEvent(runId, sessionId, 2),
-      eventId: createEventId(),
-      durability: { kind: "DURABLE", version: 1 },
-    });
-    store.releaseReplay([old, newEvent as DurableAgentEvent]);
+    const newEvent = makeEvent(runId, sessionId, 2);
+    bus.notifyCommitted([newEvent]);
+    store.releaseReplay([old, newEvent]);
 
     const received: AgentEvent[] = [];
     received.push((await first).value as AgentEvent);

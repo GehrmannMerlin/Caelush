@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createSessionId, createTimestampMs, type RunId, type StepId } from "@caelush/protocol";
-import { EventBus } from "@caelush/events";
+import { EventBus } from "./support/test-event-notifier.js";
 import {
   DefaultAgentToolRegistryBuilder,
   type AgentTool,
@@ -115,7 +115,7 @@ describe("DurableToolExecutionCoordinator with durable storage and EventBus", ()
     const directory = await mkdtemp(path.join(os.tmpdir(), "caelush-tool-coordinator-"));
     const databasePath = path.join(directory, "caelush.db");
     const { storage, session, run, step } = await createFixture(databasePath);
-    const eventBus = new EventBus(storage.events);
+    const eventBus = new EventBus(storage.eventReader);
     const notified: string[] = [];
     const unsubscribe = eventBus.subscribe(run.id, (event) => notified.push(event.type));
     try {
@@ -140,7 +140,7 @@ describe("DurableToolExecutionCoordinator with durable storage and EventBus", ()
           identity.externalCallId,
         );
         expect(running?.invocation.status).toBe("RUNNING");
-        expect((await storage.events.replay(run.id)).map((event) => event.type)).toEqual([
+        expect((await storage.eventReader.replay(run.id, { afterSequence: 0, throughSequence: Number.MAX_SAFE_INTEGER, limit: 1000 })).map((event) => event.type)).toEqual([
           "tool.requested",
           "tool.started",
         ]);
@@ -189,7 +189,7 @@ describe("DurableToolExecutionCoordinator with durable storage and EventBus", ()
       const settled = await storage.toolExecution.load(outcome.invocation.id);
       expect(settled?.invocation.status).toBe("COMPLETED");
       expect(settled?.observation?.content).toBe("hello");
-      expect((await storage.events.replay(run.id)).map((event) => event.type)).toEqual([
+      expect((await storage.eventReader.replay(run.id, { afterSequence: 0, throughSequence: Number.MAX_SAFE_INTEGER, limit: 1000 })).map((event) => event.type)).toEqual([
         "tool.requested",
         "tool.started",
         "tool.completed",
@@ -215,7 +215,7 @@ describe("DurableToolExecutionCoordinator with durable storage and EventBus", ()
     const externalCallId = "call-restart-1";
     let executions = 0;
     try {
-      const firstBus = new EventBus(fixture.storage.events);
+      const firstBus = new EventBus(fixture.storage.eventReader);
       const firstRegistry = registryWith(async () => {
         executions += 1;
         return { content: "restart", details: { echoed: "restart" }, isError: false };
@@ -243,7 +243,7 @@ describe("DurableToolExecutionCoordinator with durable storage and EventBus", ()
 
       const restarted = await openCaelushStorage({ path: databasePath });
       try {
-        const secondBus = new EventBus(restarted.events);
+        const secondBus = new EventBus(restarted.eventReader);
         const secondRegistry = registryWith(async () => {
           executions += 1;
           return { content: "unexpected", details: { echoed: "unexpected" }, isError: false };
@@ -265,7 +265,7 @@ describe("DurableToolExecutionCoordinator with durable storage and EventBus", ()
         if (outcome.kind !== "SETTLED") throw new Error("expected a settled outcome");
         expect(outcome.observation.content).toBe("restart");
         expect(
-          (await restarted.events.replay(fixture.run.id)).map((event) => event.durability.sequence),
+          (await restarted.eventReader.replay(fixture.run.id, { afterSequence: 0, throughSequence: Number.MAX_SAFE_INTEGER, limit: 1000 })).map((event) => event.durability.sequence),
         ).toEqual([1, 2, 3]);
       } finally {
         await restarted.close();

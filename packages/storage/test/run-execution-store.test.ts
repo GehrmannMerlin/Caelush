@@ -197,7 +197,7 @@ describe("SqliteRunExecutionStore", () => {
     const afterRollback = await storage.execution.load(run.id);
     expect(afterRollback?.stateRevision).toBe(1);
     expect(afterRollback?.conversationRecords).toHaveLength(2);
-    expect(await storage.events.latestSequence(run.id)).toBe(1);
+    expect(await storage.eventReader.latestSequence(run.id)).toBe(1);
     await storage.close();
   });
 });

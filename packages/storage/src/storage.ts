@@ -11,7 +11,6 @@ import {
   type RunStateRepository,
 } from "./repositories/run-state-repository.js";
 import { SqliteDurableEventStore } from "./events/sqlite-durable-event-store.js";
-import type { DurableEventStore } from "@caelush/events";
 import { SqliteAgentMessageRecordStore } from "./messages/sqlite-agent-message-record-store.js";
 import {
   SqliteContinuationRepository,
@@ -70,7 +69,6 @@ export interface CaelushStorage {
   readonly runs: RunRepository;
   readonly steps: StepRepository;
   readonly runStates: RunStateRepository;
-  readonly events: DurableEventStore;
   readonly eventReader: DurableRunEventReaderPort;
   /** The canonical Message V2 record store. */
   readonly messageRecords: SqliteAgentMessageRecordStore;
@@ -117,7 +115,6 @@ export async function openCaelushStorage(options: {
       runs: new SqliteRunRepository(database),
       steps: new SqliteStepRepository(database),
       runStates: new SqliteRunStateRepository(database),
-      events: eventStore,
       eventReader: eventStore,
       messageRecords: new SqliteAgentMessageRecordStore(database),
       continuations: new SqliteContinuationRepository(database),

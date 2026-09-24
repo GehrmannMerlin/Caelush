@@ -14,7 +14,7 @@ import {
   RunDeadlineRegistry,
   type AIModelTurnResult,
 } from "@caelush/core";
-import { EventBus } from "@caelush/events";
+import { EventBus } from "./support/test-event-notifier.js";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
 import { verificationPlanner } from "./support/fixtures.js";
@@ -71,7 +71,7 @@ describe("RunController durable boundaries", () => {
       metadata: {},
     } as never);
     await storage.runs.insert(run);
-    const eventBus = new EventBus(storage.events);
+    const eventBus = new EventBus(storage.eventReader);
     const callbacks: Array<{ callback: () => void | Promise<void>; cancelled: boolean }> = [];
     const clock = { value: 10 };
     const deadlineRegistry = new RunDeadlineRegistry({
@@ -134,7 +134,7 @@ describe("RunController durable boundaries", () => {
     const session = { id: run.sessionId, createdAt: 1, updatedAt: 1, metadata: {} } as never;
     await storage.sessions.insert(session);
     await storage.runs.insert(run);
-    const eventBus = new EventBus(storage.events);
+    const eventBus = new EventBus(storage.eventReader);
     const events: unknown[] = [];
     eventBus.subscribe(run.id, (event) => events.push(event));
     const results = [
@@ -211,7 +211,7 @@ describe("RunController durable boundaries", () => {
     );
     expect((await storage.runs.get(run.id))?.finalResult).toBeUndefined();
     expect(events.map((event) => (event as { type: string }).type)).not.toContain("run.completed");
-    expect(await storage.events.latestSequence(run.id)).toBeGreaterThan(0);
+    expect(await storage.eventReader.latestSequence(run.id)).toBeGreaterThan(0);
     await storage.close();
   });
 
@@ -225,7 +225,7 @@ describe("RunController durable boundaries", () => {
       metadata: {},
     } as never);
     await storage.runs.insert(run);
-    const eventBus = new EventBus(storage.events);
+    const eventBus = new EventBus(storage.eventReader);
     const turns = [
       turn(
         "inspect",

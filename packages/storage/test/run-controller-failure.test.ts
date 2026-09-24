@@ -16,7 +16,7 @@ import {
   type RunCompletionPersistencePort,
   type RunExecutionStore,
 } from "@caelush/core";
-import { EventBus } from "@caelush/events";
+import { EventBus } from "./support/test-event-notifier.js";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
 import { completionStoreOver } from "./support/completion-store.js";
@@ -76,7 +76,7 @@ async function setup(options: {
     metadata: {},
   } as never);
   await storage.runs.insert(run);
-  const eventBus = new EventBus(storage.events);
+  const eventBus = new EventBus(storage.eventReader);
   const events: { type: string }[] = [];
   eventBus.subscribe(run.id, (event) => events.push({ type: event.type }));
   const clockState = options.clockState ?? { value: 10 };

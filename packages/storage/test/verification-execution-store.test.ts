@@ -125,7 +125,7 @@ describe("atomic verification execution persistence", () => {
     ).rejects.toThrow();
     expect((await storage.verification.getPlan(value.id))?.checks[0]?.status).toBe("RUNNING");
     expect(await storage.verification.listEvidence(value.id)).toHaveLength(1);
-    expect(await storage.events.latestSequence(value.runId)).toBe(1);
+    expect(await storage.eventReader.latestSequence(value.runId)).toBe(1);
 
     const settled = await storage.verificationExecution.settleCheck({
       runId: value.runId,
@@ -137,7 +137,7 @@ describe("atomic verification execution persistence", () => {
     expect(settled.events).toHaveLength(1);
     expect(settled.events[0]!.type).toBe("verification.check.completed");
     expect(await storage.verification.listEvidence(value.id)).toHaveLength(2);
-    expect(await storage.events.latestSequence(value.runId)).toBe(2);
+    expect(await storage.eventReader.latestSequence(value.runId)).toBe(2);
 
     const duplicate = await storage.verificationExecution.settleCheck({
       runId: value.runId,
@@ -146,7 +146,7 @@ describe("atomic verification execution persistence", () => {
       evidence: [commandEvidence(value)],
     });
     expect(duplicate.events).toEqual([]);
-    expect(await storage.events.latestSequence(value.runId)).toBe(2);
+    expect(await storage.eventReader.latestSequence(value.runId)).toBe(2);
   });
 
   it("uses the shared durable event sequence and never exposes a raw command in events", async () => {

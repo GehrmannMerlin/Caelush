@@ -9,11 +9,11 @@ import {
   type RunId,
   type SessionId,
 } from "@caelush/protocol";
-import type { DurableEventDraft } from "@caelush/events";
+import type { DurableRunEventDraft } from "@caelush/agent";
 import { openCaelushDatabase } from "../src/database.js";
 import { migrateCaelushDatabase } from "../src/migrate.js";
 import { SqliteDurableEventStore } from "../src/events/sqlite-durable-event-store.js";
-import { DuplicateEventError } from "@caelush/events";
+import { appendDurableEventsInTransaction } from "../src/events/sqlite-durable-event-store.js";
 
 async function createStore() {
   const database = await openCaelushDatabase({ path: ":memory:" });
@@ -21,7 +21,7 @@ async function createStore() {
   return { database, store: new SqliteDurableEventStore(database) };
 }
 
-function makeDraft(runId: RunId, sessionId: SessionId, timestamp: number): DurableEventDraft {
+function makeDraft(runId: RunId, sessionId: SessionId, timestamp: number): DurableRunEventDraft {
   return {
     eventId: createEventId(),
     schemaVersion: 1,
@@ -37,6 +37,23 @@ function makeDraft(runId: RunId, sessionId: SessionId, timestamp: number): Durab
       chunk: `event-${timestamp}`,
     },
   };
+}
+
+function appendInAuthoritativeTestTransaction(
+  database: Awaited<ReturnType<typeof openCaelushDatabase>>,
+  draft: DurableRunEventDraft,
+) {
+  const client = database.client;
+  client.exec("BEGIN IMMEDIATE");
+  try {
+    const [event] = appendDurableEventsInTransaction(client, [draft]);
+    if (event === undefined) throw new Error("test event append returned no event");
+    client.exec("COMMIT");
+    return event;
+  } catch (error) {
+    client.exec("ROLLBACK");
+    throw error;
+  }
 }
 
 async function createParents(
@@ -75,7 +92,7 @@ async function createParents(
     );
 }
 
-describe("SqliteDurableEventStore", () => {
+describe("SqliteDurableEventStore reader and internal appender", () => {
   it("allocates independent per-run sequences and replays exclusively after a cursor", async () => {
     const { database, store } = await createStore();
     const sessionId = createSessionId();
@@ -85,9 +102,9 @@ describe("SqliteDurableEventStore", () => {
     const sessionB = createSessionId();
     await createParents(database, runB, sessionB);
 
-    const first = await store.append(makeDraft(runA, sessionId, 3));
-    const second = await store.append(makeDraft(runA, sessionId, 1));
-    const other = await store.append(makeDraft(runB, sessionB, 2));
+    const first = appendInAuthoritativeTestTransaction(database, makeDraft(runA, sessionId, 3));
+    const second = appendInAuthoritativeTestTransaction(database, makeDraft(runA, sessionId, 1));
+    const other = appendInAuthoritativeTestTransaction(database, makeDraft(runB, sessionB, 2));
 
     expect(first.durability).toMatchObject({ kind: "DURABLE", sequence: 1 });
     expect(second.durability).toMatchObject({ kind: "DURABLE", sequence: 2 });
@@ -106,13 +123,13 @@ describe("SqliteDurableEventStore", () => {
     const runId = createRunId();
     await createParents(database, runId, sessionId);
     const draft = makeDraft(runId, sessionId, 1);
-    await store.append(draft);
-    await expect(store.append(draft)).rejects.toBeInstanceOf(DuplicateEventError);
+    appendInAuthoritativeTestTransaction(database, draft);
+    expect(() => appendInAuthoritativeTestTransaction(database, draft)).toThrow();
     expect(await store.latestSequence(runId)).toBe(1);
 
     const sequences = await Promise.all(
       Array.from({ length: 50 }, (_, index) =>
-        store.append(makeDraft(runId, sessionId, index + 10)),
+        appendInAuthoritativeTestTransaction(database, makeDraft(runId, sessionId, index + 10)),
       ),
     );
     expect(new Set(sequences.map((event) => event.durability.sequence)).size).toBe(50);
@@ -129,9 +146,9 @@ describe("SqliteDurableEventStore", () => {
     const runId = createRunId();
     await createParents(database, runId, sessionId);
 
-    await store.append(makeDraft(runId, sessionId, 1));
-    await store.append(makeDraft(runId, sessionId, 2));
-    await store.append(makeDraft(runId, sessionId, 3));
+    appendInAuthoritativeTestTransaction(database, makeDraft(runId, sessionId, 1));
+    appendInAuthoritativeTestTransaction(database, makeDraft(runId, sessionId, 2));
+    appendInAuthoritativeTestTransaction(database, makeDraft(runId, sessionId, 3));
 
     expect(
       (await store.replay(runId, { afterSequence: 0, throughSequence: 2, limit: 10 })).map(
@@ -142,6 +159,7 @@ describe("SqliteDurableEventStore", () => {
       [],
     );
 
+    expect("append" in store).toBe(false);
     await database.close();
   });
 

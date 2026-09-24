@@ -9,7 +9,7 @@ import {
   createWorkspaceId,
 } from "@caelush/protocol";
 import { createAssistantMessageAppend, createUserMessageAppend, RunController } from "@caelush/core";
-import { EventBus } from "@caelush/events";
+import { EventBus } from "./support/test-event-notifier.js";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
 import { makeState, makeStep, verificationPlanner } from "./support/fixtures.js";
@@ -18,6 +18,7 @@ import {
   testRunAgentExecution,
 } from "./support/run-agent-execution.js";
 import { testRunMessageAuthority } from "../../core/test/support/run-message-authority.js";
+import { appendDurableEventsInTransaction } from "../src/events/sqlite-durable-event-store.js";
 
 function run() {
   return AgentRunSchema.parse({
@@ -60,7 +61,7 @@ function controller(
     messages: testRunMessageAuthority({
       records: (runId) => storage.messageRecords.listByRun(runId),
     }),
-    events: new EventBus(storage.events),
+    events: new EventBus(storage.eventReader),
     configResolver: {
       resolve: async () => ({
         baseSystemPrompt: "synthetic",
@@ -110,7 +111,9 @@ describe("RunController recovery", () => {
     ]);
     await storage.steps.insert(step);
     await storage.runStates.save(state);
-    await storage.events.append({
+    const client = storage.messageRecords.database.client;
+    client.exec("BEGIN IMMEDIATE");
+    appendDurableEventsInTransaction(client, [{
       eventId: createEventId(),
       schemaVersion: 1,
       runId: pending.id,
@@ -121,7 +124,8 @@ describe("RunController recovery", () => {
       durability: { kind: "DURABLE", version: 1 },
       type: "llm.started",
       payload: { model: pending.model },
-    });
+    }]);
+    client.exec("COMMIT");
     const calls = { count: 0 };
     const result = await controller(storage, calls).recover(pending.id);
     expect(result.status).toBe("FAILED");
@@ -193,7 +197,7 @@ describe("RunController recovery", () => {
     expect(calls.count).toBe(0);
     expect((await storage.continuations.get(currentRun.id))?.checkpoint).toBeUndefined();
     expect(
-      (await storage.events.replay(currentRun.id)).filter(
+      (await storage.eventReader.replay(currentRun.id, { afterSequence: 0, throughSequence: Number.MAX_SAFE_INTEGER, limit: 1000 })).filter(
         (event) => event.type === "run.timed_out",
       ),
     ).toHaveLength(1);

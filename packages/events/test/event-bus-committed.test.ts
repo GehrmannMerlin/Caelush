@@ -6,7 +6,8 @@ import {
   createTimestampMs,
   createToolInvocationId,
 } from "@caelush/protocol";
-import type { DurableAgentEvent, DurableEventStore } from "../src/index.js";
+import type { DurableAgentEvent } from "../src/index.js";
+import type { DurableRunEventReaderPort } from "@caelush/agent";
 import { EventBus } from "../src/event-bus.js";
 
 function event(): DurableAgentEvent {
@@ -23,12 +24,7 @@ function event(): DurableAgentEvent {
   };
 }
 
-class Store implements DurableEventStore {
-  appendCount = 0;
-  async append(): Promise<never> {
-    this.appendCount += 1;
-    throw new Error("notifyCommitted must not append");
-  }
+class Store implements DurableRunEventReaderPort {
   async replay(): Promise<DurableAgentEvent[]> {
     return [];
   }
@@ -48,6 +44,5 @@ describe("EventBus committed notification", () => {
     bus.notifyCommitted([committed]);
 
     expect(received).toEqual([committed]);
-    expect(store.appendCount).toBe(0);
   });
 });

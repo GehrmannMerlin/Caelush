@@ -1,7 +1,9 @@
 import { AgentEventSchema, type RunId } from "@caelush/protocol";
-import type { DurableRunEventReaderPort } from "@caelush/agent";
-import type { DurableAgentEvent, DurableEventDraft, DurableEventStore } from "@caelush/events";
-import { DuplicateEventError } from "@caelush/events";
+import type {
+  DurableRunEvent,
+  DurableRunEventDraft,
+  DurableRunEventReaderPort,
+} from "@caelush/agent";
 import type { CaelushDatabase } from "../database.js";
 import { decodeProtocol, encodeProtocol } from "../codec.js";
 import { StorageDecodeError, StorageError } from "../errors.js";
@@ -46,7 +48,7 @@ function validateThroughSequence(sequence: number | undefined): number | undefin
   return sequence;
 }
 
-function decodeEvent(row: EventRow): DurableAgentEvent {
+function decodeEvent(row: EventRow): DurableRunEvent {
   const event = decodeProtocol(AgentEventSchema, row.data_json, {
     entityType: "AgentEvent",
     entityId: row.event_id,
@@ -56,7 +58,7 @@ function decodeEvent(row: EventRow): DurableAgentEvent {
   if (event.durability.kind !== "DURABLE") {
     throw new StorageDecodeError("AgentEvent", row.event_id, "agent_events");
   }
-  const durable = event as unknown as DurableAgentEvent;
+  const durable = event as unknown as DurableRunEvent;
   if (
     durable.eventId !== row.event_id ||
     durable.runId !== row.run_id ||
@@ -74,19 +76,10 @@ function decodeEvent(row: EventRow): DurableAgentEvent {
   return durable;
 }
 
-function mapAppendError(error: unknown, eventId: string): never {
-  const message = error instanceof Error ? error.message : String(error);
-  if (message.includes("UNIQUE") || message.includes("PRIMARY KEY")) {
-    throw new DuplicateEventError(eventId, { cause: error });
-  }
-  if (error instanceof StorageError || error instanceof DuplicateEventError) throw error;
-  throw new StorageError(`Unable to append AgentEvent ${eventId}`, { cause: error });
-}
-
 export function appendDurableEventsInTransaction(
   client: CaelushDatabase["client"],
-  drafts: readonly DurableEventDraft[],
-): DurableAgentEvent[] {
+  drafts: readonly DurableRunEventDraft[],
+): DurableRunEvent[] {
   return drafts.map((draft) => {
     client
       .prepare(
@@ -107,7 +100,7 @@ export function appendDurableEventsInTransaction(
     if (event.durability.kind !== "DURABLE") {
       throw new StorageDecodeError("AgentEvent", draft.eventId, "agent_events");
     }
-    const durable = event as unknown as DurableAgentEvent;
+    const durable = event as unknown as DurableRunEvent;
     const dataJson = encodeProtocol(AgentEventSchema, durable, {
       entityType: "AgentEvent",
       entityId: durable.eventId,
@@ -136,27 +129,13 @@ export function appendDurableEventsInTransaction(
   });
 }
 
-export class SqliteDurableEventStore implements DurableEventStore, DurableRunEventReaderPort {
+export class SqliteDurableEventStore implements DurableRunEventReaderPort {
   constructor(private readonly database: CaelushDatabase) {}
-
-  async append(draft: DurableEventDraft): Promise<DurableAgentEvent> {
-    const client = this.database.client;
-    client.exec("BEGIN IMMEDIATE");
-    try {
-      const [durable] = appendDurableEventsInTransaction(client, [draft]);
-      if (durable === undefined) throw new StorageError("Unable to append empty AgentEvent batch");
-      client.exec("COMMIT");
-      return durable;
-    } catch (error) {
-      client.exec("ROLLBACK");
-      mapAppendError(error, draft.eventId);
-    }
-  }
 
   async replay(
     runId: RunId,
     options: { afterSequence?: number; throughSequence?: number; limit?: number } = {},
-  ): Promise<DurableAgentEvent[]> {
+  ): Promise<DurableRunEvent[]> {
     const afterSequence = validateAfterSequence(options.afterSequence);
     const throughSequence = validateThroughSequence(options.throughSequence);
     const limit = validateLimit(options.limit);

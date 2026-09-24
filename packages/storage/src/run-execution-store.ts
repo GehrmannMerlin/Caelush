@@ -27,7 +27,6 @@ import {
   type VerificationPlan,
   type VerificationPlanId,
 } from "@caelush/protocol";
-import { DuplicateEventError } from "@caelush/events";
 import type { CaelushDatabase } from "./database.js";
 import { decodeProtocol, encodeProtocol } from "./codec.js";
 import { StorageConflictError, StorageError } from "./errors.js";
@@ -81,7 +80,7 @@ function mapExecutionError(error: unknown): never {
   if (error instanceof RunExecutionConflictError || error instanceof RunExecutionInvariantError) {
     throw error;
   }
-  if (error instanceof StorageConflictError || error instanceof DuplicateEventError) {
+  if (error instanceof StorageConflictError) {
     throw new RunExecutionConflictError("Run execution commit conflicted", { cause: error });
   }
   const message = error instanceof Error ? error.message : String(error);

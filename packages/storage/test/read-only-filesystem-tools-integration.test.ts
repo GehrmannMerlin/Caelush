@@ -8,7 +8,7 @@ import {
   type JsonObject,
   type ToolName,
 } from "@caelush/protocol";
-import { EventBus } from "@caelush/events";
+import { EventBus } from "./support/test-event-notifier.js";
 import {
   createToolResultPipeline,
   DefaultAgentToolRegistryBuilder,
@@ -106,7 +106,7 @@ describe("read-only filesystem tools through the canonical Tool pipeline", () =>
     await storage.runs.insert(run);
     await storage.steps.insert(step);
 
-    const eventBus = new EventBus(storage.events);
+    const eventBus = new EventBus(storage.eventReader);
     const { definitions, registry, catalog } = readOnlyDefinitions(
       createLocalRuntimeResolver(new LocalRuntime()),
     );
@@ -173,7 +173,7 @@ describe("read-only filesystem tools through the canonical Tool pipeline", () =>
 
       expect(await storage.toolInvocations.listByRun(run.id)).toHaveLength(4);
       expect(await storage.observations.listByRun(run.id)).toHaveLength(4);
-      expect((await storage.events.replay(run.id)).map((event) => event.type)).toEqual([
+      expect((await storage.eventReader.replay(run.id, { afterSequence: 0, throughSequence: Number.MAX_SAFE_INTEGER, limit: 1000 })).map((event) => event.type)).toEqual([
         "tool.requested",
         "tool.started",
         "file.read",

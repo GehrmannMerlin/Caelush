@@ -28,7 +28,7 @@ describe("daemon adaptive long-run boundary", () => {
   it("creates a Run with the canonical Adaptive policy and no implicit 10-second deadline", async () => {
     directory = await mkdtemp(join(tmpdir(), "caelush-resource-e2e-"));
     storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
-    const eventBus = new EventBus(storage.events);
+    const eventBus = new EventBus(storage.eventReader);
     composition = await composeDaemon({
       storage,
       eventBus,

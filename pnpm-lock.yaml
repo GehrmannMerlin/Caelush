@@ -320,9 +320,6 @@ importers:
       '@caelush/core':
         specifier: workspace:*
         version: link:../core
-      '@caelush/events':
-        specifier: workspace:*
-        version: link:../events
       '@caelush/memory':
         specifier: workspace:*
         version: link:../memory

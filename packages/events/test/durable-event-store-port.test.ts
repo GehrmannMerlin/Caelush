@@ -3,13 +3,13 @@ import type { DurableRunEventDraft } from "@caelush/agent";
 import type { DurableEventDraft, DurableEventStore } from "../src/index.js";
 
 describe("DurableEventStore port", () => {
-  it("is provider-neutral and exposes append, replay, and latest sequence", () => {
+  it("is provider-neutral and exposes only replay and latest sequence", () => {
     const store: DurableEventStore = {
-      append: async (event) => ({ ...event, durability: { ...event.durability, sequence: 1 } }),
       replay: async () => [],
       latestSequence: async () => 0,
     };
 
+    expect("append" in store).toBe(false);
     expect(store.latestSequence).toBeTypeOf("function");
   });
 

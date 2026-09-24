@@ -11,7 +11,7 @@ import {
   createWorkspaceId,
 } from "@caelush/protocol";
 import { RunController, type RunControllerResult } from "@caelush/core";
-import { EventBus } from "@caelush/events";
+import { EventBus } from "./support/test-event-notifier.js";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
 import { verificationPlanner } from "./support/fixtures.js";
@@ -80,7 +80,7 @@ function createController(
     messages: testRunMessageAuthority({
       records: (runId) => storage.messageRecords.listByRun(runId),
     }),
-    events: new EventBus(storage.events),
+    events: new EventBus(storage.eventReader),
     configResolver: {
       resolve: async () => ({
         baseSystemPrompt: "synthetic context is not durable conversation",
@@ -132,7 +132,7 @@ describe("RunController file-backed restart recovery", () => {
     expect(
       (await projectedRunMessages(firstStorage, run.id)).map((message) => message.role),
     ).toEqual(["user", "assistant"]);
-    expect(await firstStorage.events.latestSequence(run.id)).toBe(5);
+    expect(await firstStorage.eventReader.latestSequence(run.id)).toBe(5);
     await firstStorage.close();
 
     const secondStorage = await openCaelushStorage({
@@ -170,7 +170,11 @@ describe("RunController file-backed restart recovery", () => {
     expect(recoveredFinal.candidateText).toBe("updated parser");
     expect(recoveredFinal.verificationPlanId).toBeDefined();
     expect(modelTurns.callCount()).toBe(2);
-    const events = await thirdStorage.events.replay(run.id, { limit: 100 });
+    const events = await thirdStorage.eventReader.replay(run.id, {
+      afterSequence: 0,
+      throughSequence: Number.MAX_SAFE_INTEGER,
+      limit: 100,
+    });
     expect(events.map((event) => event.durability.sequence)).toEqual(
       Array.from({ length: events.length }, (_, index) => index + 1),
     );

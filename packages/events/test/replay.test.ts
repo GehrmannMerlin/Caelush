@@ -5,8 +5,9 @@ import {
   createTimestampMs,
   createToolInvocationId,
 } from "@caelush/protocol";
-import type { AgentEvent, RunId, SessionId } from "@caelush/protocol";
-import type { DurableAgentEvent, DurableEventDraft, DurableEventStore } from "../src/index.js";
+import type { AgentEvent, RunId, SessionId, TransientRunEvent } from "@caelush/protocol";
+import type { DurableAgentEvent } from "../src/index.js";
+import type { DurableRunEventReaderPort } from "@caelush/agent";
 import { describe, expect, it } from "vitest";
 import { EventBus } from "../src/event-bus.js";
 
@@ -24,16 +25,10 @@ function makeEvent(runId: RunId, sessionId: SessionId, sequence: number): Durabl
   };
 }
 
-class ReplayStore implements DurableEventStore {
+class ReplayStore implements DurableRunEventReaderPort {
   readonly events: DurableAgentEvent[] = [];
   replayStarted?: () => void;
   replayImplementation?: () => Promise<DurableAgentEvent[]>;
-
-  async append(event: DurableEventDraft): Promise<DurableAgentEvent> {
-    const persisted = makeEvent(event.runId, event.sessionId, this.events.length + 1);
-    this.events.push(persisted);
-    return persisted;
-  }
 
   async replay(
     runId: RunId,
@@ -66,8 +61,14 @@ describe("EventBus replay and live tail", () => {
     expect((await iterator.next()).value).toMatchObject({ durability: { sequence: 2 } });
     await bus.publish({
       ...makeEvent(runId, sessionId, 3),
-      durability: { kind: "EPHEMERAL" },
-    });
+      durability: {
+        kind: "EPHEMERAL",
+        version: 1,
+        deliveryClass: "ORDERED",
+        streamKey: "test",
+        streamSequence: 3,
+      },
+    } as TransientRunEvent);
     const live = iterator.next();
     await expect(live).resolves.toMatchObject({ value: { durability: { kind: "EPHEMERAL" } } });
     await iterator.return?.();

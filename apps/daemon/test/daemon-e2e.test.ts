@@ -65,7 +65,7 @@ function ephemeralEvent(runId: string, sessionId: string) {
 
 async function startFactory(databasePath: string) {
   storage = await openCaelushStorage({ path: databasePath });
-  const eventBus = new EventBus(storage.events);
+  const eventBus = new EventBus(storage.eventReader);
   eventHub = new RunEventHub(storage.eventReader);
   activeStreams = new Set();
   app = buildDaemonApp({

@@ -4,8 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createEventId, createTimestampMs, createToolInvocationId } from "@caelush/protocol";
-import type { DurableEventDraft } from "@caelush/events";
+import type { DurableRunEventDraft } from "@caelush/agent";
 import { openCaelushStorage } from "../src/index.js";
+import { appendDurableEventsInTransaction } from "../src/events/sqlite-durable-event-store.js";
 import { makeRun, makeSession, makeState, makeStep } from "./support/fixtures.js";
 
 describe("storage restart recovery", () => {
@@ -15,7 +16,7 @@ describe("storage restart recovery", () => {
     const session = makeSession();
     const run = makeRun(session.id);
     const step = makeStep(run.id);
-    const draft: DurableEventDraft = {
+    const draft: DurableRunEventDraft = {
       eventId: createEventId(),
       schemaVersion: 1,
       runId: run.id,
@@ -33,7 +34,11 @@ describe("storage restart recovery", () => {
       await first.runs.insert(run);
       await first.steps.insert(step);
       await first.runStates.save(makeState(run));
-      const event = await first.events.append(draft);
+      const firstClient = first.messageRecords.database.client;
+      firstClient.exec("BEGIN IMMEDIATE");
+      const [event] = appendDurableEventsInTransaction(firstClient, [draft]);
+      if (event === undefined) throw new Error("first event append returned no event");
+      firstClient.exec("COMMIT");
       expect(event.durability).toMatchObject({ sequence: 1 });
       await first.close();
 
@@ -42,14 +47,22 @@ describe("storage restart recovery", () => {
       expect(await second.runs.get(run.id)).toEqual(run);
       expect(await second.steps.get(step.id)).toEqual(step);
       expect(await second.runStates.get(run.id)).toEqual(makeState(run));
-      expect((await second.events.replay(run.id)).map((item) => item.eventId)).toEqual([
+      expect((await second.eventReader.replay(run.id, {
+        afterSequence: 0,
+        throughSequence: Number.MAX_SAFE_INTEGER,
+        limit: 100,
+      })).map((item) => item.eventId)).toEqual([
         event.eventId,
       ]);
-      const next = await second.events.append({
+      const secondClient = second.messageRecords.database.client;
+      secondClient.exec("BEGIN IMMEDIATE");
+      const [next] = appendDurableEventsInTransaction(secondClient, [{
         ...draft,
         eventId: createEventId(),
         timestamp: createTimestampMs(2),
-      });
+      }]);
+      if (next === undefined) throw new Error("second event append returned no event");
+      secondClient.exec("COMMIT");
       expect(next.durability).toMatchObject({ sequence: 2 });
       await second.close();
 

@@ -284,7 +284,7 @@ describe("real provider Tool Call round trip", () => {
       adapters: [createOpenAICompatibleApiAdapter() as ApiAdapter],
     });
 
-    const eventBus = new EventBus(storage.events);
+    const eventBus = new EventBus(storage.eventReader);
     /**
      * The production Tool composition.
      *

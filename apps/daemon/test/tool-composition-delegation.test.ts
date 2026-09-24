@@ -128,7 +128,7 @@ describe("production Tool composition delegation", () => {
   it("composes the nine defaults through the production root unchanged", async () => {
     directory = await mkdtemp(join(tmpdir(), "caelush-tool-delegation-"));
     storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
-    daemon = await composeDaemon({ storage, eventBus: new EventBus(storage.events) });
+    daemon = await composeDaemon({ storage, eventBus: new EventBus(storage.eventReader) });
 
     // The production root's registry is the canonical one, in the frozen Coding order.
     expect(daemon.toolRegistry.names()).toEqual(EXPECTED_DEFAULT_TOOL_ORDER);

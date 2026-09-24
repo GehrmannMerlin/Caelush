@@ -8,7 +8,7 @@ import {
   type VerificationEvidence,
   type VerificationPlan,
 } from "@caelush/protocol";
-import type { DurableAgentEvent, DurableEventDraft } from "@caelush/events";
+import type { DurableRunEvent, DurableRunEventDraft } from "@caelush/agent";
 import type {
   VerificationCommittedEvent,
   VerificationExecutionRecoveryStorePort,
@@ -265,7 +265,7 @@ function persistCheckAndEvidence(
   }
 }
 
-function startEvent(eventId: EventId, input: VerificationStartCommit): DurableEventDraft {
+function startEvent(eventId: EventId, input: VerificationStartCommit): DurableRunEventDraft {
   return {
     eventId,
     schemaVersion: 1,
@@ -283,10 +283,10 @@ function startEvent(eventId: EventId, input: VerificationStartCommit): DurableEv
       purpose: input.check.spec.purpose,
       stage: input.check.stage,
     },
-  } as DurableEventDraft;
+  } as DurableRunEventDraft;
 }
 
-function completedEvent(eventId: EventId, input: VerificationSettlementCommit): DurableEventDraft {
+function completedEvent(eventId: EventId, input: VerificationSettlementCommit): DurableRunEventDraft {
   const capturedAt = input.evidence[0]?.capturedAt ?? input.check.finishedAt!;
   return {
     eventId,
@@ -307,11 +307,11 @@ function completedEvent(eventId: EventId, input: VerificationSettlementCommit): 
           ? undefined
           : input.check.finishedAt - input.check.startedAt,
     },
-  } as DurableEventDraft;
+  } as DurableRunEventDraft;
 }
 
 function asVerificationEvents(
-  events: readonly DurableAgentEvent[],
+  events: readonly DurableRunEvent[],
 ): readonly VerificationCommittedEvent[] {
   return events as readonly VerificationCommittedEvent[];
 }

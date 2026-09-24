@@ -23,7 +23,7 @@ import {
   toContextObservationProjection,
   type AIModelTurnResult,
 } from "@caelush/core";
-import { EventBus } from "@caelush/events";
+import { EventBus } from "./support/test-event-notifier.js";
 
 import {
   createModelToolFeedbackProjector,
@@ -458,7 +458,7 @@ describe("RunController automatic Tool Batch integration", () => {
       limits: { maxSteps: 6, maxToolCalls: 8, timeoutMs: 10_000 },
     });
     await seedRun(storage, run);
-    const eventBus = new EventBus(storage.events);
+    const eventBus = new EventBus(storage.eventReader);
     const toolCalls: string[] = [];
     const runtime = createRuntime(storage, eventBus, async ({ identity: { externalCallId } }) => {
       toolCalls.push(externalCallId);
@@ -544,7 +544,7 @@ describe("RunController automatic Tool Batch integration", () => {
     const storage = await openToolStorage({ path: ":memory:" });
     const run = makeRun(workspace, "local");
     await seedRun(storage, run);
-    const eventBus = new EventBus(storage.events);
+    const eventBus = new EventBus(storage.eventReader);
     const runtime = createFilesystemRuntime(storage, eventBus);
     const observed: Array<{ tools?: unknown; messages: unknown[] }> = [];
     const controller = createController(
@@ -620,7 +620,7 @@ describe("RunController automatic Tool Batch integration", () => {
     const storage = await openToolStorage({ path: ":memory:" });
     const run = makeRun(workspace, "local");
     await seedRun(storage, run);
-    const eventBus = new EventBus(storage.events);
+    const eventBus = new EventBus(storage.eventReader);
     const runtime = createFilesystemRuntime(storage, eventBus);
     const observed: Array<{ tools?: unknown; messages: unknown[] }> = [];
     const controller = createController(
@@ -719,7 +719,7 @@ describe("RunController automatic Tool Batch integration", () => {
       approvalPolicy: "DANGEROUS_ONLY",
     });
     await seedRun(storage, run);
-    const eventBus = new EventBus(storage.events);
+    const eventBus = new EventBus(storage.eventReader);
     const runtime = createFilesystemRuntime(storage, eventBus, new CaelushToolExecutionGate());
     const controller = createController(
       storage,
@@ -767,7 +767,7 @@ describe("RunController automatic Tool Batch integration", () => {
     const storage = await openToolStorage({ path: ":memory:" });
     const run = makeRun("/repo");
     await seedRun(storage, run);
-    const eventBus = new EventBus(storage.events);
+    const eventBus = new EventBus(storage.eventReader);
     const order: string[] = [];
     let active = 0;
     let maxActive = 0;
@@ -840,7 +840,7 @@ describe("RunController automatic Tool Batch integration", () => {
     expect(JSON.stringify(await projectedMessages(storage, run.id))).not.toContain(
       "details-secret",
     );
-    expect((await storage.events.replay(run.id)).map((event) => event.type)).not.toContain(
+    expect((await storage.eventReader.replay(run.id, { afterSequence: 0, throughSequence: Number.MAX_SAFE_INTEGER, limit: 1000 })).map((event) => event.type)).not.toContain(
       "run.completed",
     );
     await storage.close();
@@ -850,7 +850,7 @@ describe("RunController automatic Tool Batch integration", () => {
     const storage = await openToolStorage({ path: ":memory:" });
     const run = makeRun("/repo");
     await seedRun(storage, run);
-    const eventBus = new EventBus(storage.events);
+    const eventBus = new EventBus(storage.eventReader);
     const calls: string[] = [];
     const runtime = createRuntime(
       storage,
@@ -924,7 +924,7 @@ describe("RunController automatic Tool Batch integration", () => {
       limits: { maxSteps: 6, maxToolCalls: 8, timeoutMs: 100 },
     });
     await seedRun(storage, run);
-    const eventBus = new EventBus(storage.events);
+    const eventBus = new EventBus(storage.eventReader);
     const calls: string[] = [];
     const runtime = createRuntime(
       storage,
@@ -962,7 +962,7 @@ describe("RunController automatic Tool Batch integration", () => {
       expect((await storage.approvals.getById(waiting.approvalId!))?.status).toBe("CANCELLED");
       expect(calls).toEqual([]);
       expect(
-        (await storage.events.replay(run.id)).filter((event) => event.type === "run.timed_out"),
+        (await storage.eventReader.replay(run.id, { afterSequence: 0, throughSequence: Number.MAX_SAFE_INTEGER, limit: 1000 })).filter((event) => event.type === "run.timed_out"),
       ).toHaveLength(1);
     } finally {
       await storage.close();
@@ -977,7 +977,7 @@ describe("RunController automatic Tool Batch integration", () => {
     });
     const run = makeRun("/repo");
     await seedRun(storage, run);
-    const eventBus = new EventBus(storage.events);
+    const eventBus = new EventBus(storage.eventReader);
     const calls: string[] = [];
     const runtime = createRuntime(
       storage,
@@ -1036,7 +1036,7 @@ describe("RunController automatic Tool Batch integration", () => {
       "COMPLETED",
       "COMPLETED",
     ]);
-    expect((await storage.events.replay(run.id)).map(({ type }) => type)).toContain(
+    expect((await storage.eventReader.replay(run.id, { afterSequence: 0, throughSequence: Number.MAX_SAFE_INTEGER, limit: 1000 })).map(({ type }) => type)).toContain(
       "approval.resolved",
     );
     await storage.close();
@@ -1046,7 +1046,7 @@ describe("RunController automatic Tool Batch integration", () => {
     const storage = await openToolStorage({ path: ":memory:" });
     const run = makeRun("/repo");
     await seedRun(storage, run);
-    const eventBus = new EventBus(storage.events);
+    const eventBus = new EventBus(storage.eventReader);
     const calls: string[] = [];
     const runtime = createRuntime(storage, eventBus, async ({ identity: { externalCallId } }) => {
       calls.push(externalCallId);
@@ -1086,7 +1086,7 @@ describe("RunController automatic Tool Batch integration", () => {
     const storage = await openToolStorage({ path: ":memory:" });
     const run = makeRun("/repo");
     await seedRun(storage, run);
-    const eventBus = new EventBus(storage.events);
+    const eventBus = new EventBus(storage.eventReader);
     const calls: string[] = [];
     const runtime = createRuntime(storage, eventBus, async ({ identity: { externalCallId } }) => {
       calls.push(externalCallId);
@@ -1131,7 +1131,7 @@ describe("RunController automatic Tool Batch integration", () => {
     const storage = await openToolStorage({ path: ":memory:" });
     const run = makeRun("/repo");
     await seedRun(storage, run);
-    const eventBus = new EventBus(storage.events);
+    const eventBus = new EventBus(storage.eventReader);
     const calls: string[] = [];
     const runtime = createRuntime(storage, eventBus, async ({ identity: { externalCallId } }) => {
       calls.push(externalCallId);
@@ -1167,7 +1167,7 @@ describe("RunController automatic Tool Batch integration", () => {
       "user",
       "assistant",
     ]);
-    expect(JSON.stringify(await storage.events.replay(run.id))).not.toContain("handler-secret");
+    expect(JSON.stringify(await storage.eventReader.replay(run.id, { afterSequence: 0, throughSequence: Number.MAX_SAFE_INTEGER, limit: 1000 }))).not.toContain("handler-secret");
     await storage.close();
   });
 
@@ -1177,7 +1177,7 @@ describe("RunController automatic Tool Batch integration", () => {
     const firstStorage = await openToolStorage({ path: databasePath });
     const run = makeRun(path.join(directory, "project"));
     await seedRun(firstStorage, run);
-    const firstBus = new EventBus(firstStorage.events);
+    const firstBus = new EventBus(firstStorage.eventReader);
     const firstController = createController(firstStorage, firstBus, [
       turn("inspect", [{ id: "call-A", name: "echo_value", input: {} }], "TOOL_CALLS"),
     ]);
@@ -1207,7 +1207,7 @@ describe("RunController automatic Tool Batch integration", () => {
     await firstStorage.close();
 
     const restarted = await openToolStorage({ path: databasePath });
-    const secondBus = new EventBus(restarted.events);
+    const secondBus = new EventBus(restarted.eventReader);
     const secondRuntime = createRuntime(
       restarted,
       secondBus,
@@ -1251,7 +1251,7 @@ describe("RunController automatic Tool Batch integration", () => {
     const firstStorage = await openToolStorage({ path: databasePath });
     const run = makeRun(path.join(directory, "project"));
     await seedRun(firstStorage, run);
-    const firstBus = new EventBus(firstStorage.events);
+    const firstBus = new EventBus(firstStorage.eventReader);
     let firstCalls = 0;
     const firstRuntime = createRuntime(
       firstStorage,
@@ -1316,7 +1316,7 @@ describe("RunController automatic Tool Batch integration", () => {
     await firstStorage.close();
 
     const restarted = await openToolStorage({ path: databasePath });
-    const secondBus = new EventBus(restarted.events);
+    const secondBus = new EventBus(restarted.eventReader);
     const recoveredObserved: Array<{ tools?: unknown; messages: unknown[] }> = [];
     const secondRuntime = createRuntime(
       restarted,

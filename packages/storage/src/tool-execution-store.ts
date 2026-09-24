@@ -10,7 +10,6 @@ import {
   type ToolObservation,
   type TimestampMs,
 } from "@caelush/protocol";
-import { DuplicateEventError, type DurableEventDraft } from "@caelush/events";
 import {
   assertToolInvocationInvariant,
   assertToolObservationInvariant,
@@ -56,14 +55,6 @@ function mapStoreError(error: unknown): never {
     // invariant failure so the caller does not mistake it for a retryable conflict: the transaction
     // rolled back, and re-running the same commit would fail the same way.
     throw new ToolExecutionInvariantError(error.message, { cause: error });
-  }
-  if (error instanceof DuplicateEventError) {
-    throw new ToolExecutionConflictError(
-      "Tool execution event conflicts with existing durable data.",
-      {
-        cause: error,
-      },
-    );
   }
   if (error instanceof StorageError) throw error;
   const message = error instanceof Error ? error.message : String(error);
@@ -507,7 +498,7 @@ export class SqliteToolExecutionStore implements ToolExecutionStorePort {
       }
       const events = appendDurableEventsInTransaction(
         client,
-        command.events as unknown as readonly DurableEventDraft[],
+        command.events,
       );
       client.exec("COMMIT");
       committedEvents = events as unknown as ToolExecutionCommitResult["events"];

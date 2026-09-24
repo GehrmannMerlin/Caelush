@@ -71,7 +71,7 @@ describe("daemon model wire diagnostic", () => {
 
     composition = await composeDaemon({
       storage,
-      eventBus: new EventBus(storage.events),
+      eventBus: new EventBus(storage.eventReader),
       modelSources: [fixtureModelSource()],
       providerBindings: [
         fixtureBinding({
@@ -155,7 +155,7 @@ describe("daemon model wire diagnostic", () => {
     try {
       composition = await composeDaemon({
         storage,
-        eventBus: new EventBus(storage.events),
+        eventBus: new EventBus(storage.eventReader),
         modelSources: [fixtureModelSource()],
         providerBindings: [fixtureBinding()],
         adapterOverrides: [new RecordingAdapter()],
