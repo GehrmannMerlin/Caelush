@@ -20,6 +20,7 @@ import { SessionTranscriptService } from "./services/session-transcript-service.
 import type { DaemonModelProviderConfig } from "./providers/model-canonicalizer.js";
 import type { WebStaticHostOptions } from "./web/static-host.js";
 import type { SubscriberQueuePolicy } from "./events/subscriber-queue.js";
+import { DefaultPublicEventProjector } from "./events/public-event-projector.js";
 
 export interface DaemonOptions {
   readonly databasePath: string;
@@ -137,6 +138,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       sessions: storage.sessions,
       runs: storage.runs,
       eventHub: composition.eventHub,
+      publicEventProjector: new DefaultPublicEventProjector(),
       activeStreams,
       config,
       execution: composition,

@@ -1,10 +1,12 @@
-import type { AgentEvent } from "@caelush/protocol";
+import type { PublicRunEvent } from "@caelush/protocol";
 
-export type SseEventMessage =
-  | { readonly event: string; readonly data: AgentEvent }
-  | { readonly event: string; readonly data: AgentEvent; readonly id: string };
+export interface SseRunEventMessage {
+  readonly event: string;
+  readonly data: PublicRunEvent;
+  readonly id?: string;
+}
 
-export function mapAgentEventToSse(event: AgentEvent): SseEventMessage {
+export function mapPublicRunEventToSse(event: PublicRunEvent): SseRunEventMessage {
   const message = { event: event.type, data: event };
   if (event.durability.kind === "DURABLE") {
     return { ...message, id: String(event.durability.sequence) };

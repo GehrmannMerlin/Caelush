@@ -1,15 +1,15 @@
 import {
-  AgentEventSchema,
+  PublicRunEventSchema,
   createEventId,
   createRunId,
   createSessionId,
   createToolInvocationId,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
-import { mapAgentEventToSse } from "../src/transport/sse-event-mapper.js";
+import { mapPublicRunEventToSse } from "../src/transport/sse-event-mapper.js";
 
 function makeEvent(kind: "DURABLE" | "EPHEMERAL") {
-  return AgentEventSchema.parse({
+  return PublicRunEventSchema.parse({
     eventId: createEventId(),
     schemaVersion: 1,
     runId: createRunId(),
@@ -26,7 +26,7 @@ function makeEvent(kind: "DURABLE" | "EPHEMERAL") {
 describe("SSE event mapper", () => {
   it("maps a Durable event sequence to the SSE id", () => {
     const event = makeEvent("DURABLE");
-    expect(mapAgentEventToSse(event)).toEqual({
+    expect(mapPublicRunEventToSse(event)).toEqual({
       event: "shell.output",
       id: "10",
       data: event,
@@ -35,7 +35,7 @@ describe("SSE event mapper", () => {
 
   it("does not assign an SSE id to an Ephemeral event", () => {
     const event = makeEvent("EPHEMERAL");
-    const mapped = mapAgentEventToSse(event);
+    const mapped = mapPublicRunEventToSse(event);
     expect(mapped.event).toBe("shell.output");
     expect(mapped.data).toEqual(event);
     expect(mapped).not.toHaveProperty("id");

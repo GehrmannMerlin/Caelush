@@ -16,6 +16,7 @@ import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildDaemonApp } from "../src/index.js";
 import { RunEventHub } from "../src/index.js";
+import { nextSseFrame, sseFrameId } from "./support/sse-client.js";
 
 let app: ReturnType<typeof buildDaemonApp> | undefined;
 let storage: CaelushStorage | undefined;
@@ -73,7 +74,10 @@ async function makeServer() {
   return { app, eventBus, eventHub: hub, run };
 }
 
-function eventDraft(run: { id: string; sessionId: string }) {
+function eventDraft(
+  run: { id: string; sessionId: string },
+  visibility: "USER_VISIBLE" | "SYSTEM" | "DEBUG" = "USER_VISIBLE",
+) {
   return {
     eventId: createEventId(),
     schemaVersion: 1,
@@ -81,7 +85,7 @@ function eventDraft(run: { id: string; sessionId: string }) {
     sessionId: run.sessionId,
     type: "shell.output" as const,
     timestamp: 1_700_000_000_001,
-    visibility: "USER_VISIBLE" as const,
+    visibility,
     durability: { kind: "DURABLE" as const, version: 1 },
     payload: { invocationId: createToolInvocationId(), stream: "stdout" as const, chunk: "hello" },
   };
@@ -128,6 +132,40 @@ describe("event stream route", () => {
     expect(text).toContain("event: shell.output");
     expect(text).toContain("id: 1");
     expect(text).toContain('"chunk":"hello"');
+    await reader.cancel();
+  });
+
+  it("projects mixed visibility events before SSE while preserving durable ids", async () => {
+    const { app: server, eventBus, eventHub: hub, run } = await makeServer();
+    await server.listen({ host: "127.0.0.1", port: 0 });
+    const address = server.server.address();
+    if (!address || typeof address === "string") throw new Error("server did not bind a TCP port");
+
+    const responsePromise = fetch(`http://127.0.0.1:${address.port}/api/v1/runs/${run.id}/events`, {
+      headers: { accept: "text/event-stream" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const publish = async (visibility: "USER_VISIBLE" | "SYSTEM" | "DEBUG") => {
+      const committed = await eventBus.publish(eventDraft(run, visibility));
+      hub.notifyCommitted([committed as DurableRunEvent]);
+    };
+
+    await publish("USER_VISIBLE");
+    const response = await responsePromise;
+    expect(response.status).toBe(200);
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("SSE response has no body");
+
+    const first = await nextSseFrame(reader);
+    await publish("SYSTEM");
+    await publish("DEBUG");
+    await publish("USER_VISIBLE");
+    const second = await nextSseFrame(reader, first.rest);
+
+    expect(sseFrameId(first.frame)).toBe("1");
+    expect(sseFrameId(second.frame)).toBe("4");
+    expect(first.frame).toContain('"chunk":"hello"');
+    expect(second.frame).toContain('"chunk":"hello"');
     await reader.cancel();
   });
 });

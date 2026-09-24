@@ -1,17 +1,24 @@
-import { EventStreamQuerySchema, type EventStreamQuery, type AgentEvent } from "@caelush/protocol";
+import { EventStreamQuerySchema, type EventStreamQuery, type RunEvent } from "@caelush/protocol";
 import type { RunRepository } from "@caelush/storage";
 import { StorageNotFoundError } from "@caelush/storage";
 import type { FastifyInstance } from "fastify";
-import { mapAgentEventToSse } from "../transport/sse-event-mapper.js";
+import { mapPublicRunEventToSse } from "../transport/sse-event-mapper.js";
 import { InvalidEventCursorError } from "../transport/error-handler.js";
 import type { RunEventHub } from "../events/run-event-hub.js";
+import type { PublicEventProjector } from "../events/public-event-projector.js";
 
 export interface ActiveStreamRegistry {
   readonly controllers: Set<AbortController>;
 }
 
-async function* mapEvents(events: AsyncIterable<AgentEvent>) {
-  for await (const event of events) yield mapAgentEventToSse(event);
+async function* mapEvents(
+  events: AsyncIterable<RunEvent>,
+  publicEventProjector: PublicEventProjector,
+) {
+  for await (const event of events) {
+    const publicEvent = publicEventProjector.project(event);
+    if (publicEvent !== null) yield mapPublicRunEventToSse(publicEvent);
+  }
 }
 
 function parseCursor(value: unknown): number | undefined {
@@ -43,9 +50,8 @@ export function registerEventStreamRoute(
   app: FastifyInstance,
   dependencies: {
     readonly runs: RunRepository;
-    readonly eventHub?: Pick<RunEventHub, "watch">;
-    /** @deprecated Compatibility watch port for legacy test hosts. */
-    readonly eventBus?: Pick<RunEventHub, "watch">;
+    readonly eventHub: Pick<RunEventHub, "watch">;
+    readonly publicEventProjector: PublicEventProjector;
     readonly activeStreams: ActiveStreamRegistry;
   },
 ): void {
@@ -69,14 +75,13 @@ export function registerEventStreamRoute(
       reply.sse.onClose(() => controller.abort());
 
       try {
-        const eventSource = dependencies.eventHub ?? dependencies.eventBus;
-        if (eventSource === undefined) throw new Error("RunEventHub is not composed.");
         await reply.sse.send(
           mapEvents(
-            eventSource.watch(runId as never, {
+            dependencies.eventHub.watch(runId as never, {
               afterSequence,
               signal: controller.signal,
             }),
+            dependencies.publicEventProjector,
           ),
         );
       } finally {
