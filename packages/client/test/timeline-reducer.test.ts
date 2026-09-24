@@ -8,7 +8,7 @@ import {
   createToolInvocationId,
   createVerificationCheckId,
   createVerificationPlanId,
-  type AgentEvent,
+  type PublicRunEvent,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import { createInitialTimelineState } from "../src/timeline/model.js";
@@ -587,15 +587,13 @@ describe("shared Timeline reducer", () => {
     });
     expect(state.verification[0]?.checks[0]).toMatchObject({ checkId, title: "Check" });
   });
-  it("accepts visible events and ignores other Runs and visibility", () => {
+  it("accepts public events and ignores other Runs", () => {
     const initial = createInitialTimelineState(runId);
     const visible = eventOf("reasoning.summary", 1, { summary: "检查认证代码" });
-    const hidden = { ...visible, visibility: "DEBUG" as const };
     const otherRun = { ...visible, runId: createRunId() };
 
     const projected = reduceTimelineEvent(initial, visible);
     expect(projected.settled[0]?.text).toBe("检查认证代码");
-    expect(reduceTimelineEvent(projected, hidden)).toBe(projected);
     expect(reduceTimelineEvent(projected, otherRun)).toBe(projected);
   });
 
@@ -1032,11 +1030,11 @@ function toolForShell() {
 }
 
 function eventOf(
-  type: AgentEvent["type"],
+  type: PublicRunEvent["type"],
   sequence: number,
   payload: unknown,
-  overrides: Partial<AgentEvent> = {},
-): AgentEvent {
+  overrides: Partial<PublicRunEvent> = {},
+): PublicRunEvent {
   return {
     eventId: createEventId(),
     schemaVersion: 1,
@@ -1049,5 +1047,5 @@ function eventOf(
     durability: { kind: "DURABLE", version: 1, sequence },
     payload,
     ...overrides,
-  } as AgentEvent;
+  } as PublicRunEvent;
 }

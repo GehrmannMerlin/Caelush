@@ -1,5 +1,5 @@
 import {
-  AgentEventSchema,
+  PublicRunEventSchema,
   ApprovalListResponseSchema,
   ApprovalResolutionRequestSchema,
   ApiErrorResponseSchema,
@@ -17,7 +17,7 @@ import {
   SessionListResponseSchema,
   SessionTranscriptQuerySchema,
   SessionTranscriptResponseSchema,
-  type AgentEvent,
+  type PublicRunEvent,
   type ApiErrorCode,
   type ApprovalListResponse,
   type ApprovalResolutionRequest,
@@ -296,7 +296,7 @@ export class CaelushClient {
   async *watchRunEvents(
     runId: RunId,
     options: WatchRunEventsOptions = {},
-  ): AsyncIterable<AgentEvent> {
+  ): AsyncIterable<PublicRunEvent> {
     const afterSequence = validateCursor(options.afterSequence);
     const suffix = afterSequence === undefined ? "" : `?afterSequence=${afterSequence}`;
     let response: Response;
@@ -428,7 +428,7 @@ export async function* parseSseReader(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   expectedRunId: RunId,
   signal?: AbortSignal,
-): AsyncIterable<AgentEvent> {
+): AsyncIterable<PublicRunEvent> {
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   let buffer = "";
@@ -502,10 +502,10 @@ function parseSseField(line: string): { readonly name: string; readonly value: s
   return { name: line.slice(0, separator), value: value.startsWith(" ") ? value.slice(1) : value };
 }
 
-function decodeSseFrame(frame: SseFrame, expectedRunId: RunId): AgentEvent | undefined {
+function decodeSseFrame(frame: SseFrame, expectedRunId: RunId): PublicRunEvent | undefined {
   if (frame.data.length === 0) return undefined;
   const parsedJson = parseJson(frame.data.join("\n"));
-  const parsedEvent = AgentEventSchema.safeParse(parsedJson);
+  const parsedEvent = PublicRunEventSchema.safeParse(parsedJson);
   if (!parsedEvent.success) throw new CaelushClientProtocolError("SSE event payload is invalid.");
   const event = parsedEvent.data;
   if (event.runId !== expectedRunId)

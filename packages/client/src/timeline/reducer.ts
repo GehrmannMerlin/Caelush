@@ -1,4 +1,4 @@
-import type { AgentEvent, RunStatus } from "@caelush/protocol";
+import type { PublicRunEvent, RunStatus } from "@caelush/protocol";
 import type {
   TimelineEntry,
   TimelineEntryStatus,
@@ -25,10 +25,9 @@ type TerminalStatus = Extract<
   "COMPLETED" | "FAILED" | "CANCELLED" | "TIMEOUT" | "MAX_STEPS_REACHED" | "BUDGET_EXCEEDED"
 >;
 
-export function reduceTimelineEvent(state: TimelineState, event: AgentEvent): TimelineState {
+export function reduceTimelineEvent(state: TimelineState, event: PublicRunEvent): TimelineState {
   if (state.error !== undefined) return state;
   if (state.runId !== undefined && state.runId !== event.runId) return state;
-  if (event.visibility !== "USER_VISIBLE") return state;
   const registration = registerEvent(state, event);
   if (registration.kind === "DUPLICATE") return state;
   if (registration.kind === "CONFLICT") return { ...state, error: ORDER_ERROR };
@@ -87,7 +86,7 @@ export function flushTimelineForTerminal(
   };
 }
 
-function reduceRegisteredEvent(state: TimelineState, event: AgentEvent): TimelineState {
+function reduceRegisteredEvent(state: TimelineState, event: PublicRunEvent): TimelineState {
   switch (event.type) {
     case "reasoning.summary":
       return reduceReasoning(state, event);
@@ -392,7 +391,7 @@ function reduceRegisteredEvent(state: TimelineState, event: AgentEvent): Timelin
 
 function registerEvent(
   state: TimelineState,
-  event: AgentEvent,
+  event: PublicRunEvent,
 ): { kind: "NEW"; state: TimelineState } | { kind: "DUPLICATE" | "CONFLICT" } {
   const sequence = event.durability.kind === "DURABLE" ? event.durability.sequence : undefined;
   const known = state.seenEvents.find((seen) => seen.eventId === event.eventId);
@@ -419,7 +418,7 @@ function registerEvent(
 
 function reduceReasoning(
   state: TimelineState,
-  event: Extract<AgentEvent, { type: "reasoning.summary" }>,
+  event: Extract<PublicRunEvent, { type: "reasoning.summary" }>,
 ): TimelineState {
   const text = bound(event.payload.summary, state);
   if (state.settled.at(-1)?.kind === "REASONING" && state.settled.at(-1)?.text === text)
@@ -433,13 +432,13 @@ function reduceReasoning(
   });
 }
 function llmId(
-  event: Extract<AgentEvent, { type: "llm.started" | "llm.completed" | "llm.failed" }>,
+  event: Extract<PublicRunEvent, { type: "llm.started" | "llm.completed" | "llm.failed" }>,
 ): string {
   return `llm:${event.stepId ?? "run"}:${event.payload.model.provider}:${event.payload.model.model}`;
 }
 function reduceFile(
   state: TimelineState,
-  event: AgentEvent,
+  event: PublicRunEvent,
   text: string,
   filePath: string,
 ): TimelineState {
@@ -518,7 +517,7 @@ function settleActive(
 }
 function upsertRetry(
   state: TimelineState,
-  event: Extract<AgentEvent, { type: "retry.scheduled" | "retry.started" }>,
+  event: Extract<PublicRunEvent, { type: "retry.scheduled" | "retry.started" }>,
   status: TimelineEntryStatus,
 ): TimelineState {
   const id = `${event.stepId ?? "run"}:${event.payload.attempt}`;
@@ -562,7 +561,7 @@ function upsertVerification(state: TimelineState, group: TimelineVerificationGro
 function updateVerificationCheck(
   state: TimelineState,
   event: Extract<
-    AgentEvent,
+    PublicRunEvent,
     { type: "verification.check.started" | "verification.check.completed" }
   >,
   status: TimelineEntryStatus,

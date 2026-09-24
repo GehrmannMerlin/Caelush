@@ -1,5 +1,5 @@
 import {
-  AgentEventSchema,
+  PublicRunEventSchema,
   ClientAgentSessionSchema,
   createEventId,
   createRunId,
@@ -28,7 +28,7 @@ function makeEvent(
   sequence: number,
   kind: "DURABLE" | "EPHEMERAL",
 ) {
-  return AgentEventSchema.parse({
+  return PublicRunEventSchema.parse({
     eventId: createEventId(),
     schemaVersion: 1,
     runId,
