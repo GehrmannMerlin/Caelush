@@ -62,11 +62,11 @@ describe("Phase 5E transcript/client cutover", () => {
     expect(await read("apps/web/src/components/session-workspace.ts")).toContain("TranscriptEntry");
   });
 
-  it("keeps AgentEvent Timeline projection separate from Transcript projection", async () => {
+  it("keeps PublicRunEvent Timeline projection separate from Transcript projection", async () => {
     const cliEventProjector = await read("apps/cli/src/application/event-projector.ts");
     const webManager = await read("apps/web/src/application/session-manager.ts");
-    expect(cliEventProjector).toContain("AgentEvent");
-    expect(webManager).toContain("AgentEvent");
+    expect(cliEventProjector).toContain("PublicRunEvent");
+    expect(webManager).toContain("PublicRunEvent");
     expect(cliEventProjector).not.toContain("TranscriptEntry");
   });
 

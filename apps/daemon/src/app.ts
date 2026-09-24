@@ -24,12 +24,11 @@ import { registerWebStaticHost, type WebStaticHostOptions } from "./web/static-h
 import type { RunEventHub } from "./events/run-event-hub.js";
 import { DefaultPublicEventProjector } from "./events/public-event-projector.js";
 import type { PublicEventProjector } from "./events/public-event-projector.js";
-import type { RunEvent } from "@caelush/protocol";
 
 export interface DaemonDependencies {
   readonly sessions: SessionRepository;
   readonly runs: RunRepository;
-  readonly eventHub?: Pick<RunEventHub, "watch">;
+  readonly eventHub: Pick<RunEventHub, "watch">;
   readonly publicEventProjector?: PublicEventProjector;
   readonly config: DaemonConfig;
   readonly activeStreams?: Set<AbortController>;
@@ -73,15 +72,10 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
   if (dependencies.execution !== undefined) registerExecutionRoutes(app, dependencies.execution);
   if (dependencies.web !== undefined) registerWebStaticHost(app, dependencies.web);
   app.after(() => {
-    const eventHub = dependencies.eventHub ?? {
-      async *watch(): AsyncIterable<RunEvent> {
-        throw new Error("RunEventHub is not composed.");
-      },
-    };
     registerEventStreamRoute(app, {
       runs: dependencies.runs,
       activeStreams: { controllers: dependencies.activeStreams ?? new Set() },
-      eventHub,
+      eventHub: dependencies.eventHub,
       publicEventProjector: dependencies.publicEventProjector ?? new DefaultPublicEventProjector(),
     });
   });

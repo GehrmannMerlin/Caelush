@@ -10,7 +10,7 @@ import {
 import type { DurableAgentEvent, DurableEventDraft, DurableEventStore } from "@caelush/events";
 import { EventBus } from "@caelush/events";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildDaemonApp } from "../src/index.js";
+import { buildDaemonApp, RunEventHub } from "../src/index.js";
 
 class MemoryEventStore implements DurableEventStore {
   private readonly events: DurableAgentEvent[] = [];
@@ -38,12 +38,15 @@ class MemoryEventStore implements DurableEventStore {
 
 let app: ReturnType<typeof buildDaemonApp> | undefined;
 let activeStreams: Set<AbortController> | undefined;
+let eventHub: RunEventHub | undefined;
 
 afterEach(async () => {
   for (const controller of activeStreams ?? []) controller.abort();
   await app?.close();
+  await eventHub?.dispose();
   app = undefined;
   activeStreams = undefined;
+  eventHub = undefined;
 });
 
 function makeEvent(runId: string, sessionId: string, kind: "DURABLE" | "EPHEMERAL") {
@@ -79,12 +82,14 @@ describe("multi-client SSE", () => {
       limits: { maxSteps: 10, maxToolCalls: 10, timeoutMs: 1000 },
       createdAt: 1_700_000_000_000,
     });
-    const eventBus = new EventBus(new MemoryEventStore());
+    const store = new MemoryEventStore();
+    const eventBus = new EventBus(store);
+    eventHub = new RunEventHub(store);
     activeStreams = new Set();
     app = buildDaemonApp({
       sessions: {} as never,
       runs: { get: async () => run } as never,
-      eventBus,
+      eventHub,
       activeStreams,
       config: { host: "127.0.0.1", port: 0, sseHeartbeatIntervalMs: 0 },
     });
@@ -96,7 +101,8 @@ describe("multi-client SSE", () => {
     const responseA = fetch(url, { headers: { accept: "text/event-stream" } });
     const responseB = fetch(url, { headers: { accept: "text/event-stream" } });
     await new Promise((resolve) => setTimeout(resolve, 50));
-    await eventBus.publish(makeEvent(run.id, sessionId, "DURABLE") as never);
+    const durable = await eventBus.publish(makeEvent(run.id, sessionId, "DURABLE") as never);
+    eventHub.notifyCommitted([durable as DurableAgentEvent]);
     const [streamA, streamB] = await Promise.all([responseA, responseB]);
     const readerA = streamA.body?.getReader();
     const readerB = streamB.body?.getReader();
@@ -107,7 +113,8 @@ describe("multi-client SSE", () => {
 
     const nextA = readerA.read();
     const nextB = readerB.read();
-    await eventBus.publish(makeEvent(run.id, sessionId, "EPHEMERAL") as never);
+    const ephemeral = await eventBus.publish(makeEvent(run.id, sessionId, "EPHEMERAL") as never);
+    eventHub.emitTransient(ephemeral as never);
     const [ephemeralA, ephemeralB] = await Promise.all([nextA, nextB]);
     const frameA = new TextDecoder().decode(ephemeralA.value);
     const frameB = new TextDecoder().decode(ephemeralB.value);

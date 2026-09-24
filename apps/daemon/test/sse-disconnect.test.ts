@@ -9,6 +9,7 @@ import {
 } from "@caelush/protocol";
 import type { DurableAgentEvent, DurableEventDraft, DurableEventStore } from "@caelush/events";
 import { EventBus } from "@caelush/events";
+import { RunEventHub } from "../src/index.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildDaemonApp } from "../src/index.js";
 
@@ -35,10 +36,13 @@ class Store implements DurableEventStore {
 
 let app: ReturnType<typeof buildDaemonApp> | undefined;
 let activeStreams: Set<AbortController> | undefined;
+let eventHub: RunEventHub | undefined;
 
 afterEach(async () => {
   for (const controller of activeStreams ?? []) controller.abort();
   await app?.close();
+  await eventHub?.dispose();
+  eventHub = undefined;
 });
 
 function makeEvent(runId: string, sessionId: string) {
@@ -71,12 +75,14 @@ describe("SSE disconnect cleanup", () => {
       limits: { maxSteps: 10, maxToolCalls: 10, timeoutMs: 1000 },
       createdAt: 1_700_000_000_000,
     });
-    const eventBus = new EventBus(new Store());
+    const store = new Store();
+    const eventBus = new EventBus(store);
+    eventHub = new RunEventHub(store);
     activeStreams = new Set();
     app = buildDaemonApp({
       sessions: {} as never,
       runs: { get: async () => run } as never,
-      eventBus,
+      eventHub,
       activeStreams,
       config: { host: "127.0.0.1", port: 0, sseHeartbeatIntervalMs: 0 },
     });
@@ -88,7 +94,8 @@ describe("SSE disconnect cleanup", () => {
       headers: { accept: "text/event-stream" },
     });
     await new Promise((resolve) => setTimeout(resolve, 50));
-    await eventBus.publish(makeEvent(run.id, sessionId) as never);
+    const first = await eventBus.publish(makeEvent(run.id, sessionId) as never);
+    eventHub.notifyCommitted([first as DurableAgentEvent]);
     const response = await responsePromise;
     const reader = response.body?.getReader();
     if (!reader) throw new Error("SSE response has no body");
@@ -99,6 +106,7 @@ describe("SSE disconnect cleanup", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     expect(activeStreams).toHaveLength(0);
-    await eventBus.publish(makeEvent(run.id, sessionId) as never);
+    const later = await eventBus.publish(makeEvent(run.id, sessionId) as never);
+    eventHub.notifyCommitted([later as DurableAgentEvent]);
   });
 });

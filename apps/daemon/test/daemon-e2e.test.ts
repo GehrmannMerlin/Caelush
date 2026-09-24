@@ -10,7 +10,7 @@ import {
 import { EventBus } from "@caelush/events";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildDaemonApp, startDaemon } from "../src/index.js";
+import { buildDaemonApp, RunEventHub, startDaemon } from "../src/index.js";
 import { nextSseFrame, sseFrameId } from "./support/sse-client.js";
 
 let directory: string | undefined;
@@ -18,18 +18,21 @@ let storage: CaelushStorage | undefined;
 let app: ReturnType<typeof buildDaemonApp> | undefined;
 let handle: { close(): Promise<void> } | undefined;
 let activeStreams: Set<AbortController> | undefined;
+let eventHub: RunEventHub | undefined;
 
 afterEach(async () => {
   for (const controller of activeStreams ?? []) controller.abort();
   await app?.close().catch(() => undefined);
   await handle?.close().catch(() => undefined);
   await storage?.close().catch(() => undefined);
+  await eventHub?.dispose();
   if (directory) await rm(directory, { recursive: true, force: true });
   directory = undefined;
   storage = undefined;
   app = undefined;
   handle = undefined;
   activeStreams = undefined;
+  eventHub = undefined;
 });
 
 function durableDraft(runId: string, sessionId: string, chunk: string) {
@@ -63,25 +66,35 @@ function ephemeralEvent(runId: string, sessionId: string) {
 async function startFactory(databasePath: string) {
   storage = await openCaelushStorage({ path: databasePath });
   const eventBus = new EventBus(storage.events);
+  eventHub = new RunEventHub(storage.eventReader);
   activeStreams = new Set();
   app = buildDaemonApp({
     sessions: storage.sessions,
     runs: storage.runs,
-    eventBus,
+    eventHub,
     activeStreams,
     config: { host: "127.0.0.1", port: 0, sseHeartbeatIntervalMs: 0 },
   });
   await app.listen({ host: "127.0.0.1", port: 0 });
   const address = app.server.address();
   if (!address || typeof address === "string") throw new Error("server did not bind a TCP port");
-  return { eventBus, url: `http://127.0.0.1:${address.port}` };
+  return { eventBus, eventHub, url: `http://127.0.0.1:${address.port}` };
+}
+
+async function publishDurable(
+  eventBus: EventBus,
+  hub: RunEventHub,
+  draft: ReturnType<typeof durableDraft>,
+): Promise<void> {
+  const committed = await eventBus.publish(draft);
+  hub.notifyCommitted([committed as never]);
 }
 
 describe("Caelush local service E2E", () => {
   it("closes, reconnects, and recovers durable state across restart", async () => {
     directory = await mkdtemp(join(tmpdir(), "caelush-e2e-"));
     const databasePath = join(directory, "caelush.db");
-    const { eventBus, url } = await startFactory(databasePath);
+    const { eventBus, eventHub: hub, url } = await startFactory(databasePath);
 
     const sessionResponse = await fetch(`${url}/api/v1/sessions`, {
       method: "POST",
@@ -112,7 +125,7 @@ describe("Caelush local service E2E", () => {
     const responseA = fetch(streamUrl, { headers: { accept: "text/event-stream" } });
     const responseB = fetch(streamUrl, { headers: { accept: "text/event-stream" } });
     await new Promise((resolve) => setTimeout(resolve, 50));
-    await eventBus.publish(durableDraft(run.id, session.id, "1"));
+    await publishDurable(eventBus, hub, durableDraft(run.id, session.id, "1"));
     const [sseA, sseB] = await Promise.all([responseA, responseB]);
     const readerA = sseA.body?.getReader();
     const readerB = sseB.body?.getReader();
@@ -122,8 +135,8 @@ describe("Caelush local service E2E", () => {
     expect(sseFrameId(frameB1.frame)).toBe("1");
     await readerA.cancel();
 
-    await eventBus.publish(durableDraft(run.id, session.id, "2"));
-    await eventBus.publish(durableDraft(run.id, session.id, "3"));
+    await publishDurable(eventBus, hub, durableDraft(run.id, session.id, "2"));
+    await publishDurable(eventBus, hub, durableDraft(run.id, session.id, "3"));
     const bReplay2 = await nextSseFrame(readerB);
     const bReplay3 = await nextSseFrame(readerB, bReplay2.rest);
     expect([sseFrameId(bReplay2.frame), sseFrameId(bReplay3.frame)]).toEqual(["2", "3"]);
@@ -138,7 +151,7 @@ describe("Caelush local service E2E", () => {
 
     const liveA = reconnectReader.read();
     const liveB = readerB.read();
-    await eventBus.publish(durableDraft(run.id, session.id, "4"));
+    await publishDurable(eventBus, hub, durableDraft(run.id, session.id, "4"));
     const liveAResult = await liveA;
     const liveBResult = await liveB;
     expect(sseFrameId(new TextDecoder().decode(liveAResult.value))).toBe("4");
@@ -146,7 +159,7 @@ describe("Caelush local service E2E", () => {
 
     const ephemeralA = reconnectReader.read();
     const ephemeralB = readerB.read();
-    await eventBus.publish(ephemeralEvent(run.id, session.id));
+    hub.emitTransient(ephemeralEvent(run.id, session.id));
     const ephemeralFrameA = new TextDecoder().decode((await ephemeralA).value);
     const ephemeralFrameB = new TextDecoder().decode((await ephemeralB).value);
     expect(ephemeralFrameA).not.toContain("id:");
@@ -154,6 +167,8 @@ describe("Caelush local service E2E", () => {
     await Promise.all([reconnectReader.cancel(), readerB.cancel()]);
 
     await app?.close();
+    await eventHub?.dispose();
+    eventHub = undefined;
     await storage?.close();
     app = undefined;
     storage = undefined;

@@ -23,7 +23,7 @@ describe("Architecture V2 Phase 6A event domain foundation", () => {
     expect(legacyManifest).toContain('"@caelush/agent": "workspace:*"');
   });
 
-  it("does not cut over runtime behavior reserved for later phases", async () => {
+  it("preserves the foundation while allowing the completed Phase 6C public cutover", async () => {
     const eventBus = await read("packages/events/src/event-bus.ts");
     const daemonComposition = await read("apps/daemon/src/daemon-composition.ts");
     const daemonRoute = await read("apps/daemon/src/routes/events.ts");
@@ -31,7 +31,8 @@ describe("Architecture V2 Phase 6A event domain foundation", () => {
     expect(eventBus).toContain("async publish(");
     expect(eventBus).toContain("notifyCommitted(");
     expect(daemonComposition).toContain("EventBus");
-    expect(daemonRoute).toContain("mapAgentEventToSse");
+    expect(daemonRoute).toContain("PublicEventProjector");
+    expect(daemonRoute).toContain("mapPublicRunEventToSse");
     expect(await read("packages/storage/src/schema.ts")).not.toContain("event_schema_version_v2");
   });
 

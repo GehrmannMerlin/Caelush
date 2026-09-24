@@ -6,7 +6,6 @@ import {
   createStandardAgentMessageTranscriptProjectorRegistry,
   projectionVersionTable,
 } from "@caelush/agent";
-import { EventBus } from "@caelush/events";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -30,7 +29,7 @@ describe("Session transcript route", () => {
     const app = buildDaemonApp({
       sessions: storage.sessions,
       runs: storage.runs,
-      eventBus: new EventBus(storage.events),
+      eventHub: { watch: async function* () {} } as never,
       config: { host: "127.0.0.1", port: 43120, sseHeartbeatIntervalMs: 15_000 },
       transcript: new SessionTranscriptService({
         sessions: storage.sessions,

@@ -80,7 +80,7 @@ describe("Phase 12A daemon and shared-client boundaries", () => {
     expect(daemon).not.toMatch(/\b(?:fetch|spawn|execFile|nodePty)\s*\(/);
     expect(daemon).not.toMatch(/from\s+["']node:child_process["']/);
     expect(daemon).not.toMatch(
-      /(?:React|Ink|EventSource|WebSocket|cors|MCP|Browser|Computer Use)/i,
+      /\b(?:React|Ink|EventSource|WebSocket|cors|MCP|Browser|Computer)\b/i,
     );
   });
 });

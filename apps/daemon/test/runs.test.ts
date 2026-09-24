@@ -1,7 +1,6 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EventBus } from "@caelush/events";
 import { createWorkspaceId } from "@caelush/protocol";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import { afterEach, describe, expect, it } from "vitest";
@@ -20,14 +19,13 @@ afterEach(async () => {
 async function makeApp() {
   directory = await mkdtemp(join(tmpdir(), "caelush-run-"));
   storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
-  const eventBus = new EventBus(storage.events);
   const app = buildDaemonApp({
     sessions: storage.sessions,
     runs: storage.runs,
-    eventBus,
+    eventHub: { watch: async function* () {} } as never,
     config: { host: "127.0.0.1", port: 43120, sseHeartbeatIntervalMs: 15_000 },
   });
-  return { app, eventBus };
+  return { app };
 }
 
 const runInput = {

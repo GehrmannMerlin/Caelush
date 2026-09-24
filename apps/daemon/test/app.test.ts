@@ -7,7 +7,7 @@ describe("daemon app factory", () => {
     const app = buildDaemonApp({
       sessions: {} as never,
       runs: {} as never,
-      eventBus: {} as never,
+      eventHub: { watch: async function* () {} } as never,
       config: {
         host: "127.0.0.1",
         port: 43120,

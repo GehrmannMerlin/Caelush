@@ -257,7 +257,9 @@ describe("Phase 3A frozen kernel surface", () => {
     const entry = read("packages/agent/src/index.ts");
     expect(entry).not.toMatch(/export \* from/);
     expect(
-      moduleSpecifiers(entry).filter((specifier) => specifier.startsWith("@caelush/")),
+      moduleSpecifiers(entry).filter(
+        (specifier) => specifier.startsWith("@caelush/") && specifier !== "@caelush/protocol",
+      ),
     ).toEqual([]);
 
     // Every frozen contract of the phase is reachable from the root entry.

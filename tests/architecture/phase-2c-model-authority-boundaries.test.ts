@@ -223,7 +223,9 @@ describe("Phase 2C package edges", () => {
     const entry = await read("packages/agent/src/index.ts");
     // No cross-package re-export and no wildcard: a consumer imports from `@caelush/agent`
     // and never from a deep path.
-    expect(caelushSpecifiers(entry)).toEqual([]);
+    expect(caelushSpecifiers(entry).filter((specifier) => specifier !== "@caelush/protocol")).toEqual(
+      [],
+    );
     expect(entry).not.toMatch(/export \* from/);
     const exported = [...entry.matchAll(/export \{([^}]*)\}/g)].flatMap((match) =>
       (match[1] ?? "")

@@ -38,21 +38,21 @@ describe("Architecture V2 Phase 6B RunEventHub", () => {
     expect(ai).not.toContain("RunEventHub");
     expect(runtime).not.toContain("RunEventHub");
     expect(events).not.toContain("apps/daemon");
-    expect(route).toContain("eventSource.watch");
-    expect(route).toContain("mapAgentEventToSse");
+    expect(route).toContain("eventHub.watch");
+    expect(route).toContain("mapPublicRunEventToSse");
     expect(daemon).not.toContain("new EventBus");
     await expect(read("packages/agent/src/hooks/control-hook-registry.ts")).rejects.toMatchObject({
       code: "ENOENT",
     });
   });
 
-  it("keeps later public projection, writer retirement and producer migration out of Phase 6B", async () => {
+  it("keeps writer retirement and producer migration out of the completed 6B/6C boundary", async () => {
     const route = await read("apps/daemon/src/routes/events.ts");
     const eventBus = await read("packages/events/src/event-bus.ts");
     const protocol = await read("packages/protocol/src/events/base.ts");
 
-    expect(route).not.toContain("PublicEventProjector");
-    expect(route).not.toContain("USER_VISIBLE");
+    expect(route).toContain("PublicEventProjector");
+    expect(route).toContain("publicEventProjector.project");
     expect(eventBus).toContain("async publish(");
     expect(eventBus).toContain("notifyCommitted(");
     expect(protocol).toContain('deliveryClass: z.literal("ORDERED")');

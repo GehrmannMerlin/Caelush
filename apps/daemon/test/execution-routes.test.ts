@@ -92,7 +92,7 @@ function makeApp(surface: DaemonExecutionSurface) {
   return buildDaemonApp({
     sessions: {} as never,
     runs: { get: vi.fn(async () => currentRun) } as never,
-    eventBus: {} as never,
+    eventHub: { watch: async function* () {} } as never,
     config: { host: "127.0.0.1", port: 43120, sseHeartbeatIntervalMs: 0 },
     execution: surface,
     info,
