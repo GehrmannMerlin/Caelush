@@ -215,7 +215,9 @@ describe("package boundaries", () => {
 
     expect(eventDependencies).toContain("@caelush/protocol");
     expect(eventDependencies).not.toContain("@caelush/storage");
-    expect(storageDependencies).toContain("@caelush/events");
+    // Phase 6D moved durable-event observation compatibility out of Storage: Storage exposes only
+    // the read-only durable reader, while the daemon owns the live Hub and its notifier.
+    expect(storageDependencies).not.toContain("@caelush/events");
     expect(storageDependencies).toContain("@caelush/protocol");
     // Phase 4F deleted `@caelush/tools`. Storage depends on `@caelush/agent` for the canonical Tool
     // and Agent contracts it persists, and it must never reach up into `@caelush/coding-agent`: the
@@ -223,7 +225,6 @@ describe("package boundaries", () => {
     expect(Object.keys(storage.dependencies ?? {}).sort()).toEqual([
       "@caelush/agent",
       "@caelush/core",
-      "@caelush/events",
       "@caelush/memory",
       "@caelush/protocol",
       "@caelush/verification",

@@ -21,9 +21,15 @@ import {
 } from "./llm.js";
 import {
   ProcessOutputEventSchema,
+  ProcessOutputEventV2Schema,
   ProcessStartedEventSchema,
   ProcessStoppedEventSchema,
 } from "./process.js";
+import {
+  ModelReasoningSummaryDeltaEventSchema,
+  ModelTextDeltaEventSchema,
+  ModelToolCallDeltaEventSchema,
+} from "./model.js";
 import { PlanUpdatedEventSchema, ReasoningSummaryEventSchema } from "./reasoning.js";
 import { ResourceGuardEventSchema } from "./resource.js";
 import {
@@ -37,12 +43,14 @@ import {
 import {
   ShellCompletedEventSchema,
   ShellOutputEventSchema,
+  ShellOutputEventV2Schema,
   ShellStartedEventSchema,
 } from "./shell.js";
 import {
   ToolCompletedEventSchema,
   ToolFailedEventSchema,
   ToolOutputEventSchema,
+  ToolOutputEventV2Schema,
   ToolRequestedEventSchema,
   ToolStartedEventSchema,
 } from "./tool.js";
@@ -90,6 +98,7 @@ const registeredSchemas: ReadonlyMap<string, RegisteredSchema> = new Map<string,
   ["tool.requested\u00001", ToolRequestedEventSchema],
   ["tool.started\u00001", ToolStartedEventSchema],
   ["tool.output\u00001", ToolOutputEventSchema],
+  ["tool.output\u00002", ToolOutputEventV2Schema],
   ["tool.completed\u00001", ToolCompletedEventSchema],
   ["tool.failed\u00001", ToolFailedEventSchema],
   ["file.read\u00001", FileReadEventSchema],
@@ -99,9 +108,11 @@ const registeredSchemas: ReadonlyMap<string, RegisteredSchema> = new Map<string,
   ["file.deleted\u00001", FileDeletedEventSchema],
   ["shell.started\u00001", ShellStartedEventSchema],
   ["shell.output\u00001", ShellOutputEventSchema],
+  ["shell.output\u00002", ShellOutputEventV2Schema],
   ["shell.completed\u00001", ShellCompletedEventSchema],
   ["process.started\u00001", ProcessStartedEventSchema],
   ["process.output\u00001", ProcessOutputEventSchema],
+  ["process.output\u00002", ProcessOutputEventV2Schema],
   ["process.stopped\u00001", ProcessStoppedEventSchema],
   ["verification.started\u00001", VerificationStartedEventSchema],
   ["verification.completed\u00001", VerificationCompletedEventSchema],
@@ -122,6 +133,9 @@ const registeredSchemas: ReadonlyMap<string, RegisteredSchema> = new Map<string,
   ["budget.exceeded\u00001", BudgetExceededEventSchema],
   ["resource.guard\u00001", ResourceGuardEventSchema],
   ["conversation.message.committed\u00001", ConversationMessageCommittedEventSchema],
+  ["model.text.delta\u00001", ModelTextDeltaEventSchema],
+  ["model.reasoning_summary.delta\u00001", ModelReasoningSummaryDeltaEventSchema],
+  ["model.tool_call.delta\u00001", ModelToolCallDeltaEventSchema],
 ]);
 
 for (const definition of RUN_EVENT_TYPE_CATALOG) {

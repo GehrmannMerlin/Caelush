@@ -11,7 +11,6 @@ import type {
 } from "@caelush/protocol";
 import type { AgentBudgetBlock } from "../loop/ports/model-request-admission.js";
 import type { DurableEventDraft } from "../run/ports/run-execution-store.js";
-import type { AgentMessageRecordDraft } from "../messages/persistence/record.js";
 
 /** The only outcome fact needed to describe the bounded max-step terminal event. */
 export interface MaxStepsReachedOutcome {
@@ -163,7 +162,11 @@ export interface RunEventFactory {
   ): DurableEventDraft;
   messageCommitted(
     run: AgentRun,
-    message: AgentMessageRecordDraft,
+    message: Readonly<{
+      readonly messageId: string;
+      readonly conversationTurnId: string;
+      readonly messageType: string;
+    }>,
     eventId: EventId,
     timestamp: TimestampMs,
   ): DurableEventDraft;

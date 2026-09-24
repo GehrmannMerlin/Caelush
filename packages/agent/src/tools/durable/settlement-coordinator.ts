@@ -18,11 +18,7 @@ import {
   isTerminalToolInvocation,
 } from "./invocation-lifecycle.js";
 import { assertToolObservationInvariant, createToolObservation } from "./observation.js";
-import {
-  createToolCompletedEvent,
-  createToolFailedEvent,
-  createToolOutputEvent,
-} from "./durable-events.js";
+import { createToolCompletedEvent, createToolFailedEvent } from "./durable-events.js";
 import type {
   DurableToolEventDraft,
   ToolExecutionSnapshot,
@@ -257,15 +253,6 @@ async function commitTerminal(
     // of the settlement reads effect-then-outcome.
     ...(extension?.events ?? []),
   ];
-  const outputEvent = createToolOutputEvent({
-    eventId: options.eventIdFactory.create(),
-    sessionId: snapshot.sessionId,
-    timestamp: now,
-    invocation: terminal,
-    presentation: options.presentation,
-    result,
-  });
-  if (outputEvent !== undefined) events.push(outputEvent);
   events.push(
     terminal.status === "FAILED"
       ? createToolFailedEvent({

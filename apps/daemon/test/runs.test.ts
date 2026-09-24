@@ -64,7 +64,7 @@ describe("run API", () => {
     const run = response.json();
     expect(run).toMatchObject({ sessionId: session.id, goal: runInput.goal, status: "PENDING" });
     expect(run.id).toMatch(/^run_/);
-    await expect(storage?.events.latestSequence(run.id)).resolves.toBe(0);
+    await expect(storage?.eventReader.latestSequence(run.id)).resolves.toBe(0);
     await app.close();
   });
 

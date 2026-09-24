@@ -215,6 +215,7 @@ export interface DurableToolExecutionCoordinator {
 /** Builds the executor for one durably started invocation. */
 export type DurableInvocationExecutorFactory = (input: {
   readonly invocation: ToolInvocation;
+  readonly sessionId: SessionId;
   readonly updateSanitizer: ToolExecutionUpdateSanitizerPort;
 }) => ToolInvocationExecutor;
 
@@ -534,6 +535,7 @@ export function createDurableToolExecutionCoordinator(
     });
     const executor = input.invocationExecutorFactory({
       invocation,
+      sessionId: snapshot.sessionId,
       updateSanitizer: input.updateSanitizer,
     });
 

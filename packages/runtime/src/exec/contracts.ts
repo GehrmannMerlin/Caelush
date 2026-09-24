@@ -21,6 +21,8 @@ export interface RuntimeExecRequest {
   readonly workdir?: string;
   readonly tty: boolean;
   readonly yieldTimeMs: number;
+  /** Neutral live output observation; Runtime does not interpret or persist the event. */
+  readonly onOutput?: (event: ProcessOutputEvent) => void;
 }
 
 export interface RuntimeArgvExecRequest {
@@ -30,6 +32,8 @@ export interface RuntimeArgvExecRequest {
   readonly args: readonly string[];
   readonly workdir?: string;
   readonly yieldTimeMs: number;
+  /** Neutral live output observation; Runtime does not interpret or persist the event. */
+  readonly onOutput?: (event: ProcessOutputEvent) => void;
 }
 
 export interface RuntimeProcessInteractionRequest {
@@ -38,6 +42,8 @@ export interface RuntimeProcessInteractionRequest {
   readonly sessionId: string;
   readonly chars: string;
   readonly yieldTimeMs: number;
+  /** Neutral live output observation; Runtime does not interpret or persist the event. */
+  readonly onOutput?: (event: ProcessOutputEvent) => void;
 }
 
 export interface RuntimeExecResult {

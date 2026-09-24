@@ -76,7 +76,10 @@ describe("DefaultPublicEventProjector", () => {
     ["SYSTEM", "shell.output"],
     ["USER_VISIBLE", "error"],
   ] as const)("filters %s/%s before ordinary public transport", (visibility, type) => {
-    const payload = type === "error" ? errorPayload() : { invocationId: createToolInvocationId(), stream: "stdout", chunk: "hidden" };
+    const payload =
+      type === "error"
+        ? errorPayload()
+        : { invocationId: createToolInvocationId(), stream: "stdout", chunk: "hidden" };
     expect(projector.project(makeEvent(type, payload, { visibility }))).toBeNull();
   });
 
@@ -190,6 +193,9 @@ describe("DefaultPublicEventProjector", () => {
       "run.cancelled": { reason: "cancelled" },
       "status.changed": { from: "PENDING", to: "RUNNING" },
       "reasoning.summary": { summary: "safe summary" },
+      "model.text.delta": { text: "partial answer" },
+      "model.reasoning_summary.delta": { text: "safe summary" },
+      "model.tool_call.delta": { toolCallId: "call-1", delta: '{"path":' },
       "plan.updated": {
         plan: [{ id: createPlanItemId(), title: "step", status: "PENDING" }],
       },
@@ -200,7 +206,10 @@ describe("DefaultPublicEventProjector", () => {
       },
       "tool.started": { invocationId: ids.invocationId },
       "tool.output": { invocationId: ids.invocationId, stream: "stdout", chunk: "out" },
-      "tool.completed": { invocationId: ids.invocationId, observationId: "obs_00000000-0000-7000-8000-000000000000" },
+      "tool.completed": {
+        invocationId: ids.invocationId,
+        observationId: "obs_00000000-0000-7000-8000-000000000000",
+      },
       "tool.failed": { invocationId: ids.invocationId, ...errorPayload() },
       "file.read": { path: "src/file.ts" },
       "file.created": { summary: { path: "src/file.ts", changeType: "CREATED" } },
@@ -245,9 +254,22 @@ describe("DefaultPublicEventProjector", () => {
         status: "PASSED",
         evidenceIds: [],
       },
-      "verification.repair.started": { failedPlanId: ids.planId, failedCheckIds: [ids.checkId], repairCycle: 0 },
-      "verification.repair.limit_reached": { planId: ids.planId, attemptedRepairs: 1, maxAutoRepairs: 1 },
-      "verification.finalized": { planId: ids.planId, outcome: "PASSED", failedCheckIds: [], errorCheckIds: [] },
+      "verification.repair.started": {
+        failedPlanId: ids.planId,
+        failedCheckIds: [ids.checkId],
+        repairCycle: 0,
+      },
+      "verification.repair.limit_reached": {
+        planId: ids.planId,
+        attemptedRepairs: 1,
+        maxAutoRepairs: 1,
+      },
+      "verification.finalized": {
+        planId: ids.planId,
+        outcome: "PASSED",
+        failedCheckIds: [],
+        errorCheckIds: [],
+      },
       "approval.requested": {
         approval: {
           id: createApprovalRequestId(),
@@ -269,10 +291,21 @@ describe("DefaultPublicEventProjector", () => {
         usage: { steps: 1, toolCalls: 0, inputTokens: 1, outputTokens: 1 },
       },
       "llm.failed": { model: { provider: "fixture", model: "model" }, ...errorPayload() },
-      "retry.scheduled": { attempt: 1, maxAttempts: 2, delayMs: 1, nextAttemptAt: 1_700_000_000_001, errorCode: "LLM_NETWORK" },
+      "retry.scheduled": {
+        attempt: 1,
+        maxAttempts: 2,
+        delayMs: 1,
+        nextAttemptAt: 1_700_000_000_001,
+        errorCode: "LLM_NETWORK",
+      },
       "retry.started": { attempt: 1, maxAttempts: 2 },
       "budget.exceeded": { dimension: "TOKENS", limit: 10, accounted: 11 },
       "resource.guard": { reason: "NO_PROGRESS", replanCount: 1, requestedToolCalls: 1 },
+      "conversation.message.committed": {
+        messageId: "msg_fixture",
+        conversationTurnId: "turn_fixture",
+        messageType: "USER",
+      },
     };
 
     for (const definition of RUN_EVENT_TYPE_CATALOG.filter(
@@ -280,7 +313,21 @@ describe("DefaultPublicEventProjector", () => {
     )) {
       const payload = payloads[definition.type];
       expect(payload, `fixture missing for ${definition.type}`).toBeDefined();
-      const projected = projector.project(makeEvent(definition.type, payload));
+      const projected = projector.project(
+        makeEvent(definition.type, payload, {
+          schemaVersion: definition.schemaVersion,
+          durability:
+            definition.delivery.kind === "DURABLE"
+              ? { kind: "DURABLE", version: 1, sequence: 1 }
+              : {
+                  kind: "EPHEMERAL",
+                  version: 1,
+                  deliveryClass: definition.delivery.class,
+                  streamKey: `${definition.type}:fixture`,
+                  ...(definition.delivery.class === "ORDERED" ? { streamSequence: 1 } : {}),
+                },
+        }),
+      );
       expect(projected, `projection missing for ${definition.type}`).not.toBeNull();
     }
   });

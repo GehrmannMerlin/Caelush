@@ -11,6 +11,7 @@ describe("CLI application state", () => {
         activeTools: [],
         activeProcesses: [],
       }),
+      liveActivity: expect.objectContaining({ activities: [], terminal: false }),
       transportState: "CONNECTED",
       controlMode: "NONE",
       sessionCandidates: [],

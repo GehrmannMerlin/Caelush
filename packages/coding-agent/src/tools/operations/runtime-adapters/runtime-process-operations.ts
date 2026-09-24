@@ -1,5 +1,5 @@
 import type { JsonObject } from "@caelush/ai";
-import type { RuntimeExecResult, RuntimeResolver } from "@caelush/runtime";
+import type { ProcessOutputEvent, RuntimeExecResult, RuntimeResolver } from "@caelush/runtime";
 
 import type { ExecOperations, ProcessOperations } from "../operations.js";
 import { resolveRuntimeWorkspace } from "./resolve-runtime-workspace.js";
@@ -16,17 +16,11 @@ import { resolveRuntimeWorkspace } from "./resolve-runtime-workspace.js";
  * contracts specify: the Runtime's exec result schema is still evolving, and the boundary frozen here is
  * the capability rather than the result vocabulary.
  *
- * ## `onOutput` is not invoked, and this file says so
+ * ## `onOutput` is a neutral live callback
  *
- * The contract carries an `onOutput` callback so a Tool can publish transient output as it arrives. The
- * first Runtime adapter has **no live streaming source**: `RuntimeExecService.execute()` is a
- * yield-and-return call, so there is no chunk to hand back while the process runs. This adapter
- * therefore never calls `onOutput`.
- *
- * It does not poll the session to manufacture chunks, and it does not claim realtime output. The seam
- * exists for two reasons that are both real today: a Runtime that later gains a live stream needs no
- * Tool change, and a fake Operations implementation in a unit test can already prove that the Coding
- * Tool projects the callback onto the canonical transient-update channel.
+ * Runtime owns the process output callback and this adapter only changes its shape to the frozen
+ * Coding Operations callback. It does not create RunEvents, choose delivery classes, or persist
+ * anything; the daemon/Coding composition owns that projection.
  *
  * ## Uncertain process state is preserved
  *
@@ -65,6 +59,11 @@ export function createRuntimeProcessOperations(
         ...(input.workdir === undefined ? {} : { workdir: input.workdir }),
         tty: input.tty,
         yieldTimeMs: input.yieldTimeMs,
+        ...(input.onOutput === undefined
+          ? {}
+          : {
+              onOutput: (event: ProcessOutputEvent) => input.onOutput?.(event.stream, event.text),
+            }),
       });
       return toJsonObject(result);
     },
@@ -77,6 +76,11 @@ export function createRuntimeProcessOperations(
         sessionId: input.sessionId,
         chars: input.chars,
         yieldTimeMs: input.yieldTimeMs,
+        ...(input.onOutput === undefined
+          ? {}
+          : {
+              onOutput: (event: ProcessOutputEvent) => input.onOutput?.(event.stream, event.text),
+            }),
       });
       return toJsonObject(result);
     },

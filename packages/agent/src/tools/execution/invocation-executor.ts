@@ -235,41 +235,51 @@ function createUpdatePipeline(input: {
         }
 
         let sanitized: ToolExecutionUpdate | null;
+        let sanitizedMany: readonly ToolExecutionUpdate[] | undefined;
         try {
-          sanitized = sanitizer.sanitize({
+          const sanitizerInput = {
             toolName: input.invocation.toolName,
             invocation: input.invocation,
             update,
-          });
+          };
+          if (sanitizer.sanitizeMany !== undefined) {
+            sanitizedMany = sanitizer.sanitizeMany(sanitizerInput);
+            sanitized = null;
+          } else {
+            sanitized = sanitizer.sanitize(sanitizerInput);
+          }
         } catch (error) {
           dropped("SANITIZER_FAILED", error);
           return;
         }
-        if (sanitized === null) {
+        const deliveries =
+          sanitizedMany === undefined ? (sanitized === null ? [] : [sanitized]) : sanitizedMany;
+        if (deliveries.length === 0) {
           dropped("SANITIZER_REJECTED");
           return;
         }
 
-        const delivery = sanitized;
-        chain = chain
-          .then(async () => {
-            await input.transientUpdates.publish({
-              toolName: input.invocation.toolName,
-              invocation: input.invocation,
-              update: delivery,
-            });
-          })
-          .catch((error: unknown) => {
-            // A transient consumer failure is observational. It cannot change the Tool result and it
-            // cannot break the ordering chain for the updates that follow.
-            report(() =>
-              input.diagnostics?.onDeliveryFailed({
+        for (const delivery of deliveries) {
+          chain = chain
+            .then(async () => {
+              await input.transientUpdates.publish({
                 toolName: input.invocation.toolName,
-                invocationId: input.invocation.id,
-                cause: error,
-              }),
-            );
-          });
+                invocation: input.invocation,
+                update: delivery,
+              });
+            })
+            .catch((error: unknown) => {
+              // A transient consumer failure is observational. It cannot change the Tool result and it
+              // cannot break the ordering chain for the updates that follow.
+              report(() =>
+                input.diagnostics?.onDeliveryFailed({
+                  toolName: input.invocation.toolName,
+                  invocationId: input.invocation.id,
+                  cause: error,
+                }),
+              );
+            });
+        }
       },
     }),
     close(): void {

@@ -88,7 +88,7 @@ describe("CLI timeline reducer", () => {
     expect(conflict.lastDurableSequence).toBe(1);
   });
 
-  it("accepts public events and does not advance the cursor for ephemeral events", () => {
+  it("keeps ephemeral events out of the durable Timeline", () => {
     const state = createInitialCliTimelineState(runId);
     const ephemeral = eventOf(
       "reasoning.summary",
@@ -100,7 +100,7 @@ describe("CLI timeline reducer", () => {
     const afterEphemeral = reduceTimelineEvent(state, ephemeral);
 
     expect(afterEphemeral.lastDurableSequence).toBe(0);
-    expect(afterEphemeral.settled[0]!.text).toBe("visible ephemeral");
+    expect(afterEphemeral.settled).toEqual([]);
   });
 
   it("deduplicates consecutive reasoning summaries and keeps bounded output", () => {

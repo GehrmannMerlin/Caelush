@@ -4,6 +4,7 @@ import {
   CaelushClientProtocolError,
   CaelushProtocolCompatibilityError,
   canCancelRunStatus,
+  createInitialLiveActivityState,
   createInitialTimelineState,
   deriveSessionActivity,
   flushTimelineForTerminal,
@@ -11,6 +12,7 @@ import {
   listMatchingSessionCandidates,
   nonTerminalRuns,
   reconcileSessionTranscript,
+  reduceLiveActivityEvent,
   reduceTimelineEvent,
   ReconnectScheduler,
   resolveSessionWorkspace,
@@ -18,6 +20,7 @@ import {
   type SessionCandidate,
   type ApprovalView,
   type SessionCandidateClient,
+  type LiveActivityState,
   type TranscriptEntry,
   type TimelineState,
   type Timer,
@@ -114,6 +117,7 @@ export interface WebSessionSnapshot {
   readonly activeRuns: readonly ClientAgentRun[];
   readonly activeRun?: ClientAgentRun;
   readonly timeline: TimelineState;
+  readonly liveActivity: LiveActivityState;
   readonly contextUsage?: ContextUsageProjection | null;
   readonly isDraft: boolean;
   readonly composerEnabled: boolean;
@@ -232,6 +236,7 @@ export class WebSessionManager {
       activeRuns: [],
       activeRun: undefined,
       timeline: createInitialTimelineState(),
+      liveActivity: createInitialLiveActivityState(),
       isDraft: true,
       composerEnabled: true,
       submission: "IDLE",
@@ -265,6 +270,7 @@ export class WebSessionManager {
           activeRuns: [],
           activeRun: undefined,
           timeline: createInitialTimelineState(),
+          liveActivity: createInitialLiveActivityState(),
           contextUsage: null,
           isDraft: false,
           composerEnabled: false,
@@ -284,6 +290,7 @@ export class WebSessionManager {
         activeRuns: [],
         activeRun: undefined,
         timeline: createInitialTimelineState(),
+        liveActivity: createInitialLiveActivityState(),
         contextUsage: null,
         isDraft: false,
         composerEnabled: false,
@@ -350,6 +357,7 @@ export class WebSessionManager {
         activeRuns: [run],
         activeRun: run,
         timeline: createInitialTimelineState(run.id),
+        liveActivity: createInitialLiveActivityState(run.id),
         contextUsage: null,
         isDraft: false,
         composerEnabled: false,
@@ -616,12 +624,13 @@ export class WebSessionManager {
       selectedSession: session,
       selectedSessionId: session.id,
       runs,
-      history: await this.loadSessionTranscript(
-        session.id,
-      ),
+      history: await this.loadSessionTranscript(session.id),
       activeRuns,
       activeRun: activeRuns.length === 1 ? activeRuns[0] : undefined,
       timeline: createInitialTimelineState(activeRuns.length === 1 ? activeRuns[0]?.id : undefined),
+      liveActivity: createInitialLiveActivityState(
+        activeRuns.length === 1 ? activeRuns[0]?.id : undefined,
+      ),
       contextUsage: null,
       isDraft: false,
       composerEnabled: activeRuns.length === 0,
@@ -709,8 +718,9 @@ export class WebSessionManager {
       })) {
         if (!this.isCurrentStream(active, generation)) return;
         if (event.runId !== active.run.id) continue;
+        const liveActivity = reduceLiveActivityEvent(this.snapshot.liveActivity, event);
         const timeline = reduceTimelineEvent(this.snapshot.timeline, event);
-        this.publish({ timeline });
+        this.publish({ timeline, liveActivity });
         if (timeline.error !== undefined) {
           this.handleTerminalStreamError(active, generation);
           return;
@@ -839,6 +849,12 @@ export class WebSessionManager {
             : activeRuns.length > 1
               ? createInitialTimelineState()
               : this.snapshot.timeline,
+        liveActivity:
+          activeRun !== undefined && activeRun.id !== run.id
+            ? createInitialLiveActivityState(activeRun.id)
+            : activeRuns.length > 1
+              ? createInitialLiveActivityState()
+              : this.snapshot.liveActivity,
         composerEnabled: activeRuns.length === 0,
         submission: "IDLE",
         approvalState: undefined,
@@ -956,10 +972,7 @@ export class WebSessionManager {
         ? this.upsertCandidate(this.snapshot.selectedSession, latestRun(runs))
         : this.snapshot.candidates,
       runs,
-      history: await this.loadSessionTranscript(
-        run.sessionId,
-        this.optimisticTranscriptEntries(),
-      ),
+      history: await this.loadSessionTranscript(run.sessionId, this.optimisticTranscriptEntries()),
       activeRuns,
       activeRun,
       timeline:
@@ -968,6 +981,12 @@ export class WebSessionManager {
           : activeRuns.length > 1
             ? createInitialTimelineState()
             : this.snapshot.timeline,
+      liveActivity:
+        activeRun !== undefined && activeRun.id !== run.id
+          ? createInitialLiveActivityState(activeRun.id)
+          : activeRuns.length > 1
+            ? createInitialLiveActivityState()
+            : this.snapshot.liveActivity,
       composerEnabled: activeRuns.length === 0,
       submission: "IDLE",
       approvalState: undefined,
@@ -1108,6 +1127,7 @@ function initialSnapshot(): WebSessionSnapshot {
     history: [],
     activeRuns: [],
     timeline: createInitialTimelineState(),
+    liveActivity: createInitialLiveActivityState(),
     contextUsage: null,
     isDraft: false,
     composerEnabled: false,

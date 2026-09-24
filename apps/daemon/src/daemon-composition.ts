@@ -124,6 +124,7 @@ import {
   createDurableInvocationGatePort,
   createRuntimeGitOperations,
   createRuntimePatchOperations,
+  createRuntimeProgressSignalProjector,
   createRuntimeProcessOperations,
   createRuntimeReadOnlyOperations,
   createToolPromptContextProvider,
@@ -140,7 +141,6 @@ import {
   createDefaultV1ToolExecutionSecurity,
   createV1ToolApprovalRequestFactory,
   CaelushToolExecutionUpdateSanitizer,
-  DISCARDING_TOOL_UPDATE_CONSUMER,
   verificationCommandSecurityPort,
   verificationEvidenceSanitizer,
 } from "@caelush/security";
@@ -374,7 +374,12 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       ? createSafeModelWireDiagnostic()
       : createModelWireDiagnostic({ writer: options.wireDiagnosticWriter });
   const gateway = createDiagnosedGateway(ai.gateway, wireDiagnostic);
-  const modelTurnExecutor = createModelTurnExecutor({ gateway });
+  const modelTurnExecutor = createModelTurnExecutor({
+    gateway,
+    notifier: eventNotifier,
+    eventIdFactory: { create: createEventId },
+    clock,
+  });
   /**
    * The Run identity a *host-driven* model turn executes for.
    *
@@ -634,13 +639,38 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     new CaelushToolExecutionUpdateSanitizer();
   const toolInvocationExecutorFactory: DurableInvocationExecutorFactory = ({
     invocation,
+    sessionId,
     updateSanitizer,
-  }) =>
-    createToolInvocationExecutor({
+  }) => {
+    const projector = createRuntimeProgressSignalProjector({
+      eventIdFactory: { create: createEventId },
+      clock,
+    });
+    return createToolInvocationExecutor({
       invocation,
       updateSanitizer,
-      transientUpdates: DISCARDING_TOOL_UPDATE_CONSUMER,
+      transientUpdates: {
+        publish: ({ toolName, invocation: boundInvocation, update }) => {
+          try {
+            const projectInput = {
+              sessionId,
+              toolName,
+              invocation: boundInvocation,
+              update,
+            };
+            const events = projector.projectMany?.(projectInput) ?? [
+              projector.project(projectInput),
+            ];
+            for (const event of events) {
+              if (event !== null) eventNotifier.emitTransient(event);
+            }
+          } catch {
+            // A live observer/projector failure cannot change Tool execution or settlement.
+          }
+        },
+      },
     });
+  };
   /**
    * The result pipeline for one invocation.
    *

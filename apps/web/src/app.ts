@@ -8,7 +8,7 @@ import {
   type ReactElement,
 } from "react";
 import type { SessionId } from "@caelush/protocol";
-import { createInitialTimelineState } from "@caelush/client";
+import { createInitialLiveActivityState, createInitialTimelineState } from "@caelush/client";
 import {
   bootstrapWebHost,
   createInitialWebHostState,
@@ -35,6 +35,7 @@ const EMPTY_SESSION_SNAPSHOT: WebSessionSnapshot = {
   history: [],
   activeRuns: [],
   timeline: createInitialTimelineState(),
+  liveActivity: createInitialLiveActivityState(),
   isDraft: false,
   composerEnabled: false,
   submission: "IDLE",
@@ -228,6 +229,7 @@ function renderSessionApp(input: {
           })),
           history: snapshot.history,
           timeline: snapshot.timeline,
+          liveActivity: snapshot.liveActivity,
           composer: createElement(PromptComposer, {
             disabled: composerDisabled,
             submission: snapshot.submission,

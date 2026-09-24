@@ -7,6 +7,7 @@ import type {
   TranscriptEntry,
   WorkspaceRef,
 } from "@caelush/protocol";
+import { createInitialLiveActivityState, type LiveActivityState } from "@caelush/client";
 import type { CliApprovalState, CliControlMode, CliTransportState } from "./cli-control.js";
 import type { SessionCandidate } from "./session-resume.js";
 import {
@@ -69,6 +70,7 @@ export interface CliViewState {
   readonly pendingRunId?: RunId;
   readonly displayHistory: readonly CliDisplayHistoryEntry[];
   readonly timeline: CliTimelineState;
+  readonly liveActivity: LiveActivityState;
   readonly activeRun?: CliActiveRun;
   readonly composerEnabled: boolean;
   readonly activity: CliActivity;
@@ -91,6 +93,7 @@ export function createInitialCliState(): CliViewState {
     recoverySelectionIndex: 0,
     displayHistory: [],
     timeline: createInitialCliTimelineState(),
+    liveActivity: createInitialLiveActivityState(),
     composerEnabled: false,
     activity: "Starting",
   };

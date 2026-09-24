@@ -364,7 +364,8 @@ describe("Phase 3F Agent Loop closure boundaries", () => {
     // The Run Layer remains the only lifecycle committer, and both of its completion writes still go
     // through the Core-private completion persistence port.
     expect(controller).toContain("private async commitCandidateBoundary(");
-    expect(controller).toContain("persistence.commitCandidateBoundary(command)");
+    expect(controller).toContain("persistence.commitCandidateBoundary(");
+    expect(controller).toContain("withMessageCommitEvents(command)");
     expect(controller).toContain("private async commitVerifiedCompletion(");
     expect(controller).toContain("persistence.commitVerifiedCompletion({");
   });

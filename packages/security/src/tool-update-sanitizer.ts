@@ -42,6 +42,8 @@ import { classifySensitivePath } from "./sensitive-path.js";
 
 /** The bound applied to one transient update. Deliberately far below the durable result bound. */
 export const MAX_TRANSIENT_UPDATE_BYTES = 8 * 1024;
+/** Maximum raw semantic update accepted before safe projection; larger values are dropped. */
+export const MAX_TRANSIENT_UPDATE_INPUT_BYTES = 256 * 1024;
 
 /** Absolute Windows drive, UNC and POSIX host paths, as seen in tool output. */
 const HOST_PATH =
@@ -91,16 +93,72 @@ export class CaelushToolExecutionUpdateSanitizer implements ToolExecutionUpdateS
     }
   }
 
+  sanitizeMany(input: {
+    readonly toolName: import("@caelush/protocol").ToolName;
+    readonly invocation: import("@caelush/protocol").ToolInvocation;
+    readonly update: ToolExecutionUpdate;
+  }): readonly ToolExecutionUpdate[] {
+    const { update } = input;
+    if (update === null || typeof update !== "object") return [];
+    switch (update.kind) {
+      case "OUTPUT": {
+        if (update.stream !== "stdout" && update.stream !== "stderr") return [];
+        const safe = this.#safeSemanticText(update.chunk);
+        return safe === null
+          ? []
+          : splitTransientUpdateText(safe).map((chunk) =>
+              Object.freeze({ kind: "OUTPUT", stream: update.stream, chunk }),
+            );
+      }
+      case "PROGRESS": {
+        const safe = this.#safeSemanticText(update.message);
+        return safe === null
+          ? []
+          : splitTransientUpdateText(safe).map((message, index) =>
+              Object.freeze({
+                kind: "PROGRESS",
+                message,
+                ...(index === 0 &&
+                typeof update.completed === "number" &&
+                Number.isFinite(update.completed)
+                  ? { completed: update.completed }
+                  : {}),
+                ...(index === 0 && typeof update.total === "number" && Number.isFinite(update.total)
+                  ? { total: update.total }
+                  : {}),
+              }),
+            );
+      }
+      case "STATUS": {
+        const safe = this.#safeSemanticText(update.message);
+        return safe === null
+          ? []
+          : splitTransientUpdateText(safe).map((message) =>
+              Object.freeze({ kind: "STATUS", message }),
+            );
+      }
+      default:
+        return [];
+    }
+  }
+
   /**
    * Redact, refuse a host path, and bound.
    *
    * `null` means "this update cannot be represented safely", which the executor turns into a drop.
    */
   #safeText(value: string): string | null {
+    const safe = this.#safeSemanticText(value);
+    return safe === null ? null : boundTransientUpdateText(safe);
+  }
+
+  #safeSemanticText(value: string): string | null {
+    if (typeof value !== "string") return null;
+    if (Buffer.byteLength(value, "utf8") > MAX_TRANSIENT_UPDATE_INPUT_BYTES) return null;
     if (HOST_PATH.test(value)) return null;
     const redacted = redactText(value);
     if (HOST_PATH.test(redacted)) return null;
-    return boundTransientUpdateText(redacted);
+    return redacted;
   }
 }
 
@@ -116,6 +174,25 @@ export function boundTransientUpdateText(
     prefix += character;
   }
   return prefix;
+}
+
+/** Split already-sanitized text on whole Unicode code points and UTF-8 byte boundaries. */
+export function splitTransientUpdateText(
+  value: string,
+  maxBytes = MAX_TRANSIENT_UPDATE_BYTES,
+): readonly string[] {
+  if (value.length === 0) return [""];
+  const chunks: string[] = [];
+  let current = "";
+  for (const character of value) {
+    if (current.length > 0 && Buffer.byteLength(`${current}${character}`, "utf8") > maxBytes) {
+      chunks.push(current);
+      current = "";
+    }
+    current += character;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
 }
 
 /** True when a path a Tool touched is one whose content must not be shown. */

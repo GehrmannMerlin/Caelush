@@ -43,6 +43,12 @@ export interface ToolExecutionUpdateSanitizerPort {
     readonly invocation: ToolInvocation;
     readonly update: ToolExecutionUpdate;
   }): ToolExecutionUpdate | null;
+  /** Optional production path for full sanitization followed by bounded ordered splitting. */
+  sanitizeMany?(input: {
+    readonly toolName: ToolName;
+    readonly invocation: ToolInvocation;
+    readonly update: ToolExecutionUpdate;
+  }): readonly ToolExecutionUpdate[];
 }
 
 /**

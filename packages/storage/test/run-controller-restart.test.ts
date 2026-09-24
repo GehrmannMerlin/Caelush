@@ -132,7 +132,7 @@ describe("RunController file-backed restart recovery", () => {
     expect(
       (await projectedRunMessages(firstStorage, run.id)).map((message) => message.role),
     ).toEqual(["user", "assistant"]);
-    expect(await firstStorage.eventReader.latestSequence(run.id)).toBe(5);
+    expect(await firstStorage.eventReader.latestSequence(run.id)).toBe(7);
     await firstStorage.close();
 
     const secondStorage = await openCaelushStorage({

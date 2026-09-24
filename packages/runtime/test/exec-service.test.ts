@@ -6,6 +6,29 @@ import { LocalRuntime, RuntimeBoundaryError, RuntimePathTypeError } from "../src
 import { createWorkspaceId } from "@caelush/protocol";
 
 describe("LocalRuntime exec service", () => {
+  it("forwards live process output through a neutral call-scoped callback", async () => {
+    const parent = await mkdtemp(path.join(os.tmpdir(), "caelush-exec-output-callback-"));
+    let runtime: LocalRuntime | undefined;
+    const output: string[] = [];
+    try {
+      runtime = new LocalRuntime();
+      const scope = await runtime.openWorkspace({ id: createWorkspaceId(), path: parent });
+      await expect(
+        scope.exec.execute({
+          ownerRunId: "run_output_callback" as never,
+          command: `${process.execPath} -e "process.stdout.write('runtime-signal')"`,
+          tty: false,
+          yieldTimeMs: 5000,
+          onOutput: (event) => output.push(event.text),
+        }),
+      ).resolves.toMatchObject({ status: "EXITED", output: "runtime-signal" });
+      expect(output.join("")).toContain("runtime-signal");
+    } finally {
+      await runtime?.dispose();
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
   it("validates workspace-relative workdirs and keeps yield separate from timeout", async () => {
     const parent = await mkdtemp(path.join(os.tmpdir(), "caelush-exec-service-"));
     let runtime: LocalRuntime | undefined;

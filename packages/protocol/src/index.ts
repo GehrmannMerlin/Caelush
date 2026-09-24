@@ -184,6 +184,13 @@ export {
   RunEventSchema,
   TransientDeliveryClassSchema,
   TransientRunEventMetaSchema,
+  ModelReasoningSummaryDeltaEventSchema,
+  ModelTextDeltaEventSchema,
+  ModelToolCallDeltaEventSchema,
+  ProcessOutputEventV2Schema,
+  ShellOutputEventV2Schema,
+  ToolOutputEventV2Schema,
+  createVersionedEventSchema,
 } from "./events/index.js";
 export {
   LlmFailedEventSchema,
@@ -213,6 +220,12 @@ export type {
   TransientDeliveryClass,
   TransientRunEvent,
   TransientRunEventMeta,
+  ModelReasoningSummaryDeltaEvent,
+  ModelTextDeltaEvent,
+  ModelToolCallDeltaEvent,
+  ProcessOutputEventV2,
+  ShellOutputEventV2,
+  ToolOutputEventV2,
 } from "./events/index.js";
 export {
   getRunEventTypeDefinition,

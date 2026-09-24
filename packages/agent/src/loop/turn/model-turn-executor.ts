@@ -2,6 +2,13 @@ import { createAIModelTurnAssembler } from "@caelush/ai";
 import { AIError } from "@caelush/ai";
 import type { AIGateway, AIModelRequest, AIModelTurnResult, AIStreamEvent } from "@caelush/ai";
 
+import type { RunEventNotifierPort } from "../../events/notifier-port.js";
+import {
+  createModelStreamSignalProjector,
+  type EventClock,
+  type EventIdFactory,
+  type ModelStreamSignalProjector,
+} from "../../events/model-stream-signal-projector.js";
 import type { AgentTransientStreamEvent } from "../events/transient-stream-event.js";
 import type { ModelTurnStreamSink } from "../events/transient-stream-event.js";
 import type { AgentExecutionIdentity, AgentTurnRef } from "../types.js";
@@ -78,6 +85,12 @@ export type ModelTurnExecutionResult =
 /** The frozen collaborators of a model turn executor. */
 export interface ModelTurnExecutorDependencies {
   readonly gateway: AIGateway;
+  /** Canonical live-event sink. It has no durable write authority. */
+  readonly notifier?: RunEventNotifierPort;
+  /** Injected so the Agent projector never manufactures IDs internally. */
+  readonly eventIdFactory?: EventIdFactory;
+  /** Injected clock used for Protocol event timestamps. */
+  readonly clock?: EventClock;
 }
 
 /** Execute exactly one model turn. */
@@ -99,9 +112,11 @@ export function createModelTurnExecutor(
         // retry, never this boundary.
         const stream = await dependencies.gateway.stream(input.request, { signal: input.signal });
         const assembler = createAIModelTurnAssembler();
+        const signalProjector = createTurnProjector(dependencies);
 
         for await (const event of stream.events) {
-          publishTransient(input, event);
+          emitCanonicalTransient(input, event, signalProjector, dependencies.notifier);
+          publishLegacyTransient(input, event);
           assembler.accept(event);
         }
 
@@ -127,7 +142,31 @@ export function createModelTurnExecutor(
  * A sink failure is isolated. Presentation can never fail a model turn, and it can never
  * change the frozen result the durable layer will persist.
  */
-function publishTransient(input: ModelTurnExecutionInput, event: AIStreamEvent): void {
+function emitCanonicalTransient(
+  input: ModelTurnExecutionInput,
+  event: AIStreamEvent,
+  projector: ModelStreamSignalProjector | undefined,
+  notifier: RunEventNotifierPort | undefined,
+): void {
+  if (projector === undefined || notifier === undefined) return;
+  const projectInput = {
+    identity: input.identity,
+    stepId: input.turn.stepId,
+    event,
+  } as const;
+  const transients = projector.projectMany?.(projectInput) ?? [projector.project(projectInput)];
+  for (const transient of transients) {
+    if (transient === null) continue;
+    try {
+      notifier.emitTransient(transient);
+    } catch {
+      // Live observation failures cannot change the model result or its error classification.
+    }
+  }
+}
+
+/** Compatibility-only bridge for the earlier frozen sink contract. Production composes notifier. */
+function publishLegacyTransient(input: ModelTurnExecutionInput, event: AIStreamEvent): void {
   const sink = input.streamSink;
   if (sink === undefined) return;
   const transient = toTransientEvent(input, event);
@@ -142,6 +181,25 @@ function publishTransient(input: ModelTurnExecutionInput, event: AIStreamEvent):
   } catch {
     // Deliberately swallowed: a presentation failure is not a model failure.
   }
+}
+
+function createTurnProjector(
+  dependencies: ModelTurnExecutorDependencies,
+): ModelStreamSignalProjector | undefined {
+  // The kernel never manufactures live-event identity or wall-clock time. The daemon
+  // composition root supplies both when it wires the canonical notifier; compatibility-only
+  // callers without the complete observation seam simply retain the legacy sink behavior.
+  if (
+    dependencies.notifier === undefined ||
+    dependencies.eventIdFactory === undefined ||
+    dependencies.clock === undefined
+  ) {
+    return undefined;
+  }
+  return createModelStreamSignalProjector({
+    eventIdFactory: dependencies.eventIdFactory,
+    clock: dependencies.clock,
+  });
 }
 
 /**

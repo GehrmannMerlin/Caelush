@@ -311,9 +311,11 @@ describe("production Agent effect cutover", () => {
     expect(types).toEqual([
       "run.started",
       "status.changed",
+      "conversation.message.committed",
       "llm.started",
       "llm.completed",
       "reasoning.summary",
+      "conversation.message.committed",
     ]);
     expect(types.filter((type) => type === "llm.completed")).toHaveLength(1);
     expect(types.filter((type) => type === "status.changed")).toHaveLength(1);
@@ -502,7 +504,11 @@ describe("durable model turn boundary in production", () => {
     // model failure and must never be settled as one.
     expect(fixture.providerCalls()).toBe(0);
     expect(await fixture.storage.steps.listByRun(fixture.run.id)).toHaveLength(0);
-    expect(fixture.events.map((event) => event.type)).toEqual(["run.started", "status.changed"]);
+    expect(fixture.events.map((event) => event.type)).toEqual([
+      "run.started",
+      "status.changed",
+      "conversation.message.committed",
+    ]);
     const snapshot = await fixture.storage.execution.load(fixture.run.id);
     expect(snapshot?.run.status).toBe("RUNNING");
     expect(snapshot?.run.currentStepId).toBeUndefined();
@@ -561,6 +567,7 @@ describe("canonical settlement side-effect safety", () => {
     expect(fixture.events.map((event) => event.type)).toEqual([
       "run.started",
       "status.changed",
+      "conversation.message.committed",
       "llm.started",
     ]);
     // And nothing was durably settled.

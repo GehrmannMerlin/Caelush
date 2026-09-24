@@ -60,6 +60,8 @@ export {
   DISCARDING_TOOL_UPDATE_CONSUMER,
   isSensitiveToolPath,
   MAX_TRANSIENT_UPDATE_BYTES,
+  MAX_TRANSIENT_UPDATE_INPUT_BYTES,
+  splitTransientUpdateText,
 } from "./tool-update-sanitizer.js";
 export {
   CaelushToolPresentation,

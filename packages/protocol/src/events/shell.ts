@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { ToolInvocationIdSchema } from "../primitives/ids.js";
-import { createEventSchema } from "./base.js";
+import {
+  createEventSchema,
+  createVersionedEventSchema,
+  OrderedTransientEventMetaSchema,
+} from "./base.js";
 
 const outputStreamSchema = z.enum(["stdout", "stderr"]);
 
@@ -14,6 +18,16 @@ export const ShellOutputEventSchema = createEventSchema(
     .object({ invocationId: ToolInvocationIdSchema, stream: outputStreamSchema, chunk: z.string() })
     .strict(),
 );
+/** Current live shell output. Historical durable output remains `ShellOutputEventSchema` v1. */
+export const ShellOutputEventV2Schema = createVersionedEventSchema(
+  "shell.output",
+  2,
+  z
+    .object({ invocationId: ToolInvocationIdSchema, stream: outputStreamSchema, chunk: z.string() })
+    .strict(),
+  OrderedTransientEventMetaSchema,
+);
+export const ShellOutputTransientEventSchema = ShellOutputEventV2Schema;
 export const ShellCompletedEventSchema = createEventSchema(
   "shell.completed",
   z
@@ -30,4 +44,5 @@ export const ShellCompletedEventSchema = createEventSchema(
 
 export type ShellStartedEvent = z.infer<typeof ShellStartedEventSchema>;
 export type ShellOutputEvent = z.infer<typeof ShellOutputEventSchema>;
+export type ShellOutputEventV2 = z.infer<typeof ShellOutputEventV2Schema>;
 export type ShellCompletedEvent = z.infer<typeof ShellCompletedEventSchema>;

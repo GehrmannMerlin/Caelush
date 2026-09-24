@@ -4,6 +4,7 @@ import type {
   TimelineEntryStatus,
   TimelineState,
   TimelineVerificationCheck,
+  LiveActivityState,
 } from "@caelush/client";
 import { isNearTimelineBottom, timelineActivityDelta } from "./timeline-scroll.js";
 
@@ -22,6 +23,7 @@ const MAX_PUBLIC_ID_LENGTH = 128;
 
 export interface TimelineProps {
   readonly timeline: TimelineState;
+  readonly liveActivity?: LiveActivityState | undefined;
 }
 
 export function Timeline(props: TimelineProps): ReactElement {
@@ -32,9 +34,11 @@ export function Timeline(props: TimelineProps): ReactElement {
     ...props.timeline.activeApprovals,
   ];
   const settled = props.timeline.settled.filter((entry) => entry.title !== "Tool output");
+  const liveActivities = props.liveActivity?.activities ?? [];
   const activityCount =
     active.length +
     settled.length +
+    liveActivities.length +
     props.timeline.verification.reduce((count, group) => count + group.checks.length, 0);
   const regionRef = useRef<HTMLDivElement>(null);
   const seenActivityCount = useRef(activityCount);
@@ -104,7 +108,10 @@ export function Timeline(props: TimelineProps): ReactElement {
           tabIndex: 0,
           "aria-label": "任务活动流",
         },
-        active.length === 0 && settled.length === 0 && props.timeline.verification.length === 0
+        active.length === 0 &&
+          settled.length === 0 &&
+          liveActivities.length === 0 &&
+          props.timeline.verification.length === 0
           ? createElement("p", { className: "timeline-empty" }, "等待任务活动。")
           : null,
         active.length === 0
@@ -120,6 +127,26 @@ export function Timeline(props: TimelineProps): ReactElement {
               "ol",
               { className: "timeline-list", "aria-label": "已完成的活动" },
               settled.map((entry) => renderEntry(entry, "settled")),
+            ),
+        liveActivities.length === 0
+          ? null
+          : createElement(
+              "section",
+              { className: "timeline-live-activity", "aria-label": "实时输出" },
+              createElement("h3", null, "实时输出"),
+              createElement(
+                "ul",
+                null,
+                liveActivities.map((activity) =>
+                  createElement(
+                    "li",
+                    { key: activity.id },
+                    `${liveActivityLabel(activity.kind)}: ${activity.text}${
+                      activity.status === "SETTLED" ? " · 已收敛" : ""
+                    }`,
+                  ),
+                ),
+              ),
             ),
         props.timeline.verification.length === 0
           ? null
@@ -164,6 +191,23 @@ export function Timeline(props: TimelineProps): ReactElement {
           ),
     ),
   );
+}
+
+function liveActivityLabel(kind: LiveActivityState["activities"][number]["kind"]): string {
+  switch (kind) {
+    case "MODEL_TEXT":
+      return "回答";
+    case "MODEL_REASONING":
+      return "推理摘要";
+    case "MODEL_TOOL_CALL":
+      return "工具调用";
+    case "TOOL_OUTPUT":
+      return "工具输出";
+    case "SHELL_OUTPUT":
+      return "Shell 输出";
+    case "PROCESS_OUTPUT":
+      return "进程输出";
+  }
 }
 
 function renderEntry(entry: TimelineEntry, phase: "active" | "settled"): ReactElement {

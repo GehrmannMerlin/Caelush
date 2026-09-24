@@ -121,29 +121,39 @@ export class LocalProcessManager {
       if (entry.signal !== "KILLED") entry.signal = signal;
       this.notify(entry);
     });
-    await this.waitForYield(
-      entry,
-      request.yieldTimeMs ?? DEFAULT_EXEC_YIELD_TIME_MS,
-      request.signal,
-    );
-    return this.resultAndMaybeRemove(entry);
+    const removeLiveOutput = attachLiveOutput(adapter, request.onOutput);
+    try {
+      await this.waitForYield(
+        entry,
+        request.yieldTimeMs ?? DEFAULT_EXEC_YIELD_TIME_MS,
+        request.signal,
+      );
+      return this.resultAndMaybeRemove(entry);
+    } finally {
+      removeLiveOutput?.();
+    }
   }
 
   async interact(request: RuntimeProcessInteractionRequest): Promise<RuntimeExecResult> {
     const entry = this.lookup(request.sessionId, request.ownerRunId);
     const charsAcceptedBytes = Buffer.byteLength(request.chars, "utf8");
-    if (request.chars.length > 0) {
-      if (entry.state === "EXITED") throw new RuntimeExecError("STDIN_UNAVAILABLE");
-      try {
-        await entry.adapter.write(request.chars);
-      } catch {
-        if ((entry as ProcessEntry).state === "EXITED")
-          throw new RuntimeExecError("STDIN_UNAVAILABLE");
-        throw new RuntimeProcessUncertainError();
+    const removeLiveOutput = attachLiveOutput(entry.adapter, request.onOutput);
+    try {
+      if (request.chars.length > 0) {
+        if (entry.state === "EXITED") throw new RuntimeExecError("STDIN_UNAVAILABLE");
+        try {
+          await entry.adapter.write(request.chars);
+        } catch {
+          if ((entry as ProcessEntry).state === "EXITED")
+            throw new RuntimeExecError("STDIN_UNAVAILABLE");
+          throw new RuntimeProcessUncertainError();
+        }
       }
+      await this.waitForYield(entry, request.yieldTimeMs, request.signal);
+      return this.resultAndMaybeRemove(entry, charsAcceptedBytes);
+    } finally {
+      removeLiveOutput?.();
     }
-    await this.waitForYield(entry, request.yieldTimeMs, request.signal);
-    return this.resultAndMaybeRemove(entry, charsAcceptedBytes);
   }
 
   async dispose(): Promise<void> {
@@ -261,4 +271,18 @@ export class LocalProcessManager {
     if (entry.state === "EXITED") this.entries.delete(entry.id);
     return result;
   }
+}
+
+function attachLiveOutput(
+  adapter: ManagedProcessAdapter,
+  listener: ((event: import("./contracts.js").ProcessOutputEvent) => void) | undefined,
+): (() => void) | undefined {
+  if (listener === undefined) return undefined;
+  return adapter.onOutput((event) => {
+    try {
+      listener(event);
+    } catch {
+      // Presentation observers are not allowed to change Runtime execution semantics.
+    }
+  });
 }

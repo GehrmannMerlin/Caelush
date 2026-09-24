@@ -53,6 +53,17 @@ const baseState: CliViewState = {
     { id: "assistant-1", kind: "ASSISTANT", text: "已完成检查。", runId },
   ],
   timeline: createInitialCliTimelineState(runId),
+  liveActivity: {
+    runId,
+    activities: [],
+    seenEventIds: [],
+    lastStreamSequences: {},
+    lastDurableSequence: 0,
+    terminal: false,
+    maxActivities: 64,
+    maxTextBytes: 16 * 1024,
+    maxSeenEventIds: 1024,
+  },
   composerEnabled: true,
   activity: "Ready",
 };
@@ -74,6 +85,7 @@ describe("Ink CLI shell", () => {
 
   it("renders a safe fatal state without enabling the composer", () => {
     const controller = fakeController({
+      ...baseState,
       bootstrap: "BOOTSTRAP_ERROR",
       displayHistory: [],
       timeline: baseState.timeline,

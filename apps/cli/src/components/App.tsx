@@ -96,7 +96,7 @@ export function App({ controller, writeMessage = defaultWriteMessage }: AppProps
     <Box flexDirection="column" paddingX={1}>
       <Header state={state} />
       <History entries={state.displayHistory} />
-      <ActiveTimeline timeline={state.timeline} />
+      <ActiveTimeline timeline={state.timeline} liveActivity={state.liveActivity} />
       {state.controlMode === "SESSION_PICKER" ? (
         <SessionPicker
           candidates={state.sessionCandidates}

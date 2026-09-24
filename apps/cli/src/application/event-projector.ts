@@ -1,4 +1,5 @@
 import type { PublicRunEvent, RunStatus } from "@caelush/protocol";
+import { reduceLiveActivityEvent } from "@caelush/client";
 import type { CliActivity, CliViewState } from "./cli-state.js";
 import type { CliTimelineEntry } from "./timeline-model.js";
 import { flushTimelineForTerminal, reduceTimelineEvent } from "./timeline-reducer.js";
@@ -9,12 +10,16 @@ export interface CliEventProjection {
   readonly terminalStatus?: RunStatus;
 }
 
-export function projectPublicRunEvent(state: CliViewState, event: PublicRunEvent): CliEventProjection {
+export function projectPublicRunEvent(
+  state: CliViewState,
+  event: PublicRunEvent,
+): CliEventProjection {
   if (state.activeRun === undefined || state.activeRun.runId !== event.runId) {
     return { state, terminal: false };
   }
 
   const lifecycle = lifecycleForEvent(event);
+  const liveActivity = reduceLiveActivityEvent(state.liveActivity, event);
   const reducedTimeline = reduceTimelineEvent(state.timeline, event);
   const terminalStatus =
     lifecycle === undefined || !lifecycle.terminal ? undefined : asTerminalStatus(lifecycle.status);
@@ -22,7 +27,7 @@ export function projectPublicRunEvent(state: CliViewState, event: PublicRunEvent
     terminalStatus === undefined
       ? reducedTimeline
       : flushTimelineForTerminal(reducedTimeline, terminalStatus);
-  const nextStateWithTimeline = appendSettledTimeline(state, timeline);
+  const nextStateWithTimeline = appendSettledTimeline(state, timeline, liveActivity);
   if (lifecycle === undefined) {
     return { state: nextStateWithTimeline, terminal: false };
   }
@@ -46,12 +51,14 @@ export function projectPublicRunEvent(state: CliViewState, event: PublicRunEvent
 function appendSettledTimeline(
   state: CliViewState,
   timeline: CliViewState["timeline"],
+  liveActivity: CliViewState["liveActivity"],
 ): CliViewState {
   const known = new Set(state.displayHistory.filter(isTimelineEntry).map((entry) => entry.id));
   const additions = timeline.settled.filter((entry) => !known.has(entry.id));
   return {
     ...state,
     timeline,
+    liveActivity,
     ...(additions.length === 0 ? {} : { displayHistory: [...state.displayHistory, ...additions] }),
   };
 }

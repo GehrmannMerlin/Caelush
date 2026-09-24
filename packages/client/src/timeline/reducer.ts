@@ -28,6 +28,9 @@ type TerminalStatus = Extract<
 export function reduceTimelineEvent(state: TimelineState, event: PublicRunEvent): TimelineState {
   if (state.error !== undefined) return state;
   if (state.runId !== undefined && state.runId !== event.runId) return state;
+  // Live output and model deltas belong to LiveActivity. Historical v1 durable output remains
+  // timeline-compatible, while no transient signal is allowed to become durable history here.
+  if (event.durability.kind === "EPHEMERAL") return state;
   const registration = registerEvent(state, event);
   if (registration.kind === "DUPLICATE") return state;
   if (registration.kind === "CONFLICT") return { ...state, error: ORDER_ERROR };

@@ -253,8 +253,11 @@ describe("WebSessionManager", () => {
     expect(client.watchRunEvents).toHaveBeenCalledTimes(1);
     expect(client.getRun).toHaveBeenCalledTimes(1);
     expect(snapshot.timeline.runId).toBe(pendingRun.id);
-    expect(snapshot.timeline.settled).toContainEqual(
+    expect(snapshot.timeline.settled).not.toContainEqual(
       expect.objectContaining({ kind: "REASONING", text: "Inspecting the workspace." }),
+    );
+    expect(snapshot.liveActivity.activities).toContainEqual(
+      expect.objectContaining({ kind: "MODEL_REASONING", text: "Inspecting the workspace." }),
     );
     expect(snapshot.timeline).toMatchObject({
       activeLlm: [],
@@ -568,7 +571,7 @@ function makeClient(
     latestRuns?: Map<string, readonly ClientAgentRun[]>;
     createSessionResult?: ClientAgentSession;
     createRunResult?: ClientAgentRun;
-  watchEvents?: readonly PublicRunEvent[];
+    watchEvents?: readonly PublicRunEvent[];
     refreshedRuns?: readonly ClientAgentRun[];
     transcriptResponse?: SessionTranscriptResponse;
   } = {},
@@ -740,15 +743,21 @@ function lifecycleEvent(type: string, run: ClientAgentRun): PublicRunEvent {
 
 function reasoningEvent(run: ClientAgentRun, summary: string): PublicRunEvent {
   return {
-    type: "reasoning.summary",
+    type: "model.reasoning_summary.delta",
     eventId: "evt_00000000-0000-7000-8000-000000000002",
     schemaVersion: 1,
     runId: run.id,
     sessionId: run.sessionId,
     timestamp: 1,
     visibility: "USER_VISIBLE",
-    durability: { kind: "EPHEMERAL" },
-    payload: { summary },
+    durability: {
+      kind: "EPHEMERAL",
+      version: 1,
+      deliveryClass: "ORDERED",
+      streamKey: `model:reasoning:${run.id}`,
+      streamSequence: 1,
+    },
+    payload: { text: summary },
   } as PublicRunEvent;
 }
 
@@ -759,9 +768,15 @@ function durableReasoningEvent(
   summary: string,
 ): PublicRunEvent {
   return {
-    ...reasoningEvent(run, summary),
+    type: "reasoning.summary",
+    schemaVersion: 1,
+    runId: run.id,
+    sessionId: run.sessionId,
+    timestamp: sequence,
+    visibility: "USER_VISIBLE",
     eventId,
     durability: { kind: "DURABLE", sequence },
+    payload: { summary },
   } as PublicRunEvent;
 }
 

@@ -196,6 +196,7 @@ describe("RunController failure and maxSteps boundaries", () => {
     expect(fixture.events.map((event) => event.type)).toEqual([
       "run.started",
       "status.changed",
+      "conversation.message.committed",
       "llm.started",
       "llm.failed",
       "retry.scheduled",
@@ -205,6 +206,7 @@ describe("RunController failure and maxSteps boundaries", () => {
       "reasoning.summary",
       "status.changed",
       "verification.planned",
+      "conversation.message.committed",
     ]);
     await fixture.storage.close();
   });

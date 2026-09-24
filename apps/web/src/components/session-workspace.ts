@@ -1,6 +1,11 @@
 import { createElement, type ReactElement } from "react";
 import type { ClientAgentRun } from "@caelush/protocol";
-import { canCancelRunStatus, type TimelineState, type TranscriptEntry } from "@caelush/client";
+import {
+  canCancelRunStatus,
+  type LiveActivityState,
+  type TimelineState,
+  type TranscriptEntry,
+} from "@caelush/client";
 import type { ApprovalResolution, RunId } from "@caelush/protocol";
 import type { ApprovalView } from "@caelush/client";
 import type { WebControlMode } from "../application/session-manager.js";
@@ -14,6 +19,7 @@ export interface SessionWorkspaceProps {
   readonly activeRun?: ClientAgentRun | undefined;
   readonly history: readonly TranscriptEntry[];
   readonly timeline: TimelineState;
+  readonly liveActivity?: LiveActivityState;
   readonly composer: ReactElement;
   readonly controlMode?: WebControlMode | undefined;
   readonly approvals?: readonly ApprovalView[] | undefined;
@@ -85,7 +91,7 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
             ),
           ),
     ),
-    createElement(Timeline, { timeline: props.timeline }),
+    createElement(Timeline, { timeline: props.timeline, liveActivity: props.liveActivity }),
     props.activeRun !== undefined &&
       (props.onCancel !== undefined || props.onContinueResource !== undefined)
       ? createElement(

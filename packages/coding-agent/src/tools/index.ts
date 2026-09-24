@@ -76,6 +76,12 @@ export type {
   RuntimeOperationsReadOnly,
 } from "./operations/runtime-adapters/index.js";
 export type { RuntimeReadOnlyOperations } from "./operations/runtime-adapters/runtime-read-only-operations.js";
+export { createRuntimeProgressSignalProjector } from "./runtime-progress-signal-projector.js";
+export type {
+  CodingRuntimeProgressEnvelope,
+  RuntimeProgressSignalProjector,
+  RuntimeProgressSignalProjectorDependencies,
+} from "./runtime-progress-signal-projector.js";
 export type {
   CodingReadOnlyOperations,
   CodingToolPathKind,

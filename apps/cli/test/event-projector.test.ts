@@ -64,8 +64,35 @@ describe("CLI PublicRunEvent projection", () => {
     });
     const mismatched = { ...event, runId: otherRunId };
 
-    expect(projectPublicRunEvent(state, event).state.timeline.settled[0]?.text).toBe("secret output");
+    expect(projectPublicRunEvent(state, event).state.timeline.settled[0]?.text).toBe(
+      "secret output",
+    );
     expect(projectPublicRunEvent(state, mismatched).state).toEqual(state);
+  });
+
+  it("routes canonical ordered transient output to Live Activity instead of Timeline", () => {
+    const state = {
+      ...createInitialCliState(),
+      bootstrap: "READY" as const,
+      activeRun: { runId, status: "RUNNING" as const },
+    };
+    const event = {
+      ...eventOf("model.reasoning_summary.delta", { text: "Inspecting the workspace." }),
+      durability: {
+        kind: "EPHEMERAL" as const,
+        version: 1 as const,
+        deliveryClass: "ORDERED" as const,
+        streamKey: `model:reasoning:${runId}`,
+        streamSequence: 1,
+      },
+    } as PublicRunEvent;
+
+    const result = projectPublicRunEvent(state, event);
+
+    expect(result.state.timeline.settled).toEqual([]);
+    expect(result.state.liveActivity.activities).toContainEqual(
+      expect.objectContaining({ kind: "MODEL_REASONING", text: "Inspecting the workspace." }),
+    );
   });
 });
 

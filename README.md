@@ -18,13 +18,15 @@ The project is in active Architecture V2 development. The Message System
 migration through Phase 5F is complete: the daemon owns the server-side
 Transcript projection, CLI/Web consume the Protocol Transcript, and the final
 durable Message V2 schema is now the only runtime storage shape.
-The Event System migration is complete through Phase 6D. The canonical RunEvent
+The Event System migration is complete through Phase 6E. The canonical RunEvent
 domain, daemon-owned asynchronous RunEventHub, bounded replay/live delivery,
-public projection, and authoritative durable-event transactions are now in
-place. Durable events are written only inside the authoritative Run or Tool
-transaction and are notified to the RunEventHub only after commit. Standalone
-durable event publication has been retired. Transient producer/streaming
-cutover and Control Hooks remain later Phase 6 work.
+public projection, authoritative durable-event transactions, and transient
+signal/streaming cutover are now in place. Durable events are written only
+inside the authoritative Run or Tool transaction and are notified to the
+RunEventHub only after commit. Live model, Tool, and Runtime progress travels
+through non-persistent `TransientRunEvent` signals, while lifecycle truth remains
+durable and replayable. Control Hooks and legacy package retirement remain in
+Phases 6F–6H.
 
 ## What Caelush provides
 
@@ -135,8 +137,28 @@ watermark, deduplicates buffered durable events, and discards catch-up
 transients. `@caelush/events` remains only as legacy observation compatibility;
 its standalone durable writer has been retired in Phase 6D.
 
-Transient producer and model-stream cutover, Control Hook pipelines, and legacy
-package retirement remain Phase 6E–6H work.
+### Phase 6E transient signal and streaming cutover
+
+Phase 6E keeps live progress separate from durable lifecycle truth:
+
+```text
+AIStreamEvent
+  → Agent ModelStreamSignalProjector
+  → RunEventNotifierPort.emitTransient
+  → daemon RunEventHub → public projection → SSE → client Live Activity
+
+Runtime progress
+  → Coding Agent RuntimeProgressSignalProjector
+  → bounded Security sanitization
+  → RunEventNotifierPort.emitTransient
+```
+
+Historical `tool.output`, `shell.output`, and `process.output` v1 events remain
+durable and replayable. Their v2 counterparts are ordered, bounded transient
+signals: they live in memory, are not persisted or replayed, and do not receive
+an SSE id. CLI and Web keep these signals in bounded Live Activity state while
+durable events continue to drive the Timeline. Control Hooks and legacy package
+retirement remain Phases 6F–6H.
 
 ### Durable conversation
 
@@ -374,7 +396,8 @@ runtime: Phase 9C sanitizer injection, Phase 9D — V1 Security Integration, Pha
 | Phase 6B — RunEventHub, replay, and backpressure        | COMPLETE    |
 | Phase 6C — Public projection, SSE, and client cutover   | COMPLETE    |
 | Phase 6D — Durable event authority and writer cutover   | COMPLETE    |
-| Phase 6E–6H — Transient, hooks, and package retirement  | NOT STARTED |
+| Phase 6E — Transient signal and streaming cutover       | COMPLETE    |
+| Phase 6F–6H — Control Hooks and package retirement      | NOT STARTED |
 
 The status table records the completed Architecture V2 migration boundaries
 that are relevant to the current runtime. The repository also contains the

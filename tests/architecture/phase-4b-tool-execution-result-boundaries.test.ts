@@ -349,6 +349,7 @@ describe("Phase 4B Agent Tool execution boundaries", () => {
         file.startsWith(EXECUTION) ||
           file.startsWith(`${AGENT_TOOLS}types/`) ||
           file.startsWith("packages/coding-agent/src/tools/builtins/") ||
+          file === "packages/coding-agent/src/tools/runtime-progress-signal-projector.ts" ||
           file === "packages/security/src/tool-update-sanitizer.ts" ||
           file.endsWith("/index.ts"),
         `${file} must not reach a transient update type`,

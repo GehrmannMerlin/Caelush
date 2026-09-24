@@ -12,6 +12,7 @@ import {
   ToolCompletedEventSchema,
   ToolFailedEventSchema,
   ToolOutputEventSchema,
+  ToolOutputEventV2Schema,
   ToolRequestedEventSchema,
   ToolStartedEventSchema,
 } from "./tool.js";
@@ -25,13 +26,20 @@ import {
 import {
   ShellCompletedEventSchema,
   ShellOutputEventSchema,
+  ShellOutputEventV2Schema,
   ShellStartedEventSchema,
 } from "./shell.js";
 import {
   ProcessOutputEventSchema,
+  ProcessOutputEventV2Schema,
   ProcessStartedEventSchema,
   ProcessStoppedEventSchema,
 } from "./process.js";
+import {
+  ModelReasoningSummaryDeltaEventSchema,
+  ModelTextDeltaEventSchema,
+  ModelToolCallDeltaEventSchema,
+} from "./model.js";
 import {
   VerificationCompletedEventSchema,
   VerificationCheckCompletedEventSchema,
@@ -68,6 +76,7 @@ export {
   RunEventDurabilitySchema,
   TransientDeliveryClassSchema,
   TransientRunEventMetaSchema,
+  createVersionedEventSchema,
 } from "./base.js";
 export type {
   CoalescibleTransientEventMeta,
@@ -83,6 +92,22 @@ export type {
   TransientDeliveryClass,
   TransientRunEventMeta,
 } from "./base.js";
+export {
+  ModelReasoningSummaryDeltaEventSchema,
+  ModelTextDeltaEventSchema,
+  ModelToolCallDeltaEventSchema,
+} from "./model.js";
+export type {
+  ModelReasoningSummaryDeltaEvent,
+  ModelTextDeltaEvent,
+  ModelToolCallDeltaEvent,
+} from "./model.js";
+export { ProcessOutputEventV2Schema } from "./process.js";
+export type { ProcessOutputEventV2 } from "./process.js";
+export { ShellOutputEventV2Schema } from "./shell.js";
+export type { ShellOutputEventV2 } from "./shell.js";
+export { ToolOutputEventV2Schema } from "./tool.js";
+export type { ToolOutputEventV2 } from "./tool.js";
 export {
   getRunEventTypeDefinition,
   RUN_EVENT_TYPE_CATALOG,
@@ -115,7 +140,9 @@ export {
   VerificationFinalizedEventSchema,
 } from "./verification.js";
 
-const currentRunEventSchema = z.discriminatedUnion("type", [
+// A type may have multiple registered schema versions, so this union deliberately uses the
+// version-aware static registry instead of Zod's single-discriminator optimization.
+const currentRunEventSchema = z.union([
   RunStartedEventSchema,
   RunTimedOutEventSchema,
   RunCompletedEventSchema,
@@ -127,6 +154,7 @@ const currentRunEventSchema = z.discriminatedUnion("type", [
   ToolRequestedEventSchema,
   ToolStartedEventSchema,
   ToolOutputEventSchema,
+  ToolOutputEventV2Schema,
   ToolCompletedEventSchema,
   ToolFailedEventSchema,
   FileReadEventSchema,
@@ -136,9 +164,11 @@ const currentRunEventSchema = z.discriminatedUnion("type", [
   FileDeletedEventSchema,
   ShellStartedEventSchema,
   ShellOutputEventSchema,
+  ShellOutputEventV2Schema,
   ShellCompletedEventSchema,
   ProcessStartedEventSchema,
   ProcessOutputEventSchema,
+  ProcessOutputEventV2Schema,
   ProcessStoppedEventSchema,
   VerificationStartedEventSchema,
   VerificationCompletedEventSchema,
@@ -159,6 +189,9 @@ const currentRunEventSchema = z.discriminatedUnion("type", [
   BudgetExceededEventSchema,
   ResourceGuardEventSchema,
   ConversationMessageCommittedEventSchema,
+  ModelTextDeltaEventSchema,
+  ModelReasoningSummaryDeltaEventSchema,
+  ModelToolCallDeltaEventSchema,
 ]);
 
 /**

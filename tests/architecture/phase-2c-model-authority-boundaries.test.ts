@@ -223,9 +223,9 @@ describe("Phase 2C package edges", () => {
     const entry = await read("packages/agent/src/index.ts");
     // No cross-package re-export and no wildcard: a consumer imports from `@caelush/agent`
     // and never from a deep path.
-    expect(caelushSpecifiers(entry).filter((specifier) => specifier !== "@caelush/protocol")).toEqual(
-      [],
-    );
+    expect(
+      caelushSpecifiers(entry).filter((specifier) => specifier !== "@caelush/protocol"),
+    ).toEqual([]);
     expect(entry).not.toMatch(/export \* from/);
     const exported = [...entry.matchAll(/export \{([^}]*)\}/g)].flatMap((match) =>
       (match[1] ?? "")
@@ -343,6 +343,9 @@ describe("Phase 2C package edges", () => {
         "createAgentLoop",
         "createAgentTurnRef",
         "createModelRequestBuilder",
+        // Phase 6E: the Agent-side projector is the only bridge from public AI deltas to the
+        // canonical transient Protocol domain; identity and time remain injected ports.
+        "createModelStreamSignalProjector",
         "createModelTurnExecutor",
         "createRunExecutionCoordinator",
         "createRunExecutionDriver",
@@ -472,6 +475,8 @@ describe("Phase 2C package edges", () => {
         "requireToolDurableMetadata",
         "startToolInvocation",
         "MAX_TOOL_EVENT_PRESENTATION_BYTES",
+        // Phase 6A/6D: durable event drafts are constructed here and committed by the Run layer.
+        "createRunEventFactory",
         // --- Phase 5A: the Message Domain. The kernel now owns the conversation language, its
         // identity and audience, the Message Factory, the durable record contracts, the versioned
         // codec registry, the versioned model-projection registry, the Conversation Validator, the

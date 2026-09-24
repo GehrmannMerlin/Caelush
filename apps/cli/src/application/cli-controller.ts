@@ -24,7 +24,7 @@ import type {
   ContextUsageProjection,
 } from "@caelush/protocol";
 import { createRunId, createTimestampMs, createWorkspaceId } from "@caelush/protocol";
-import { CaelushProtocolCompatibilityError } from "@caelush/client";
+import { CaelushProtocolCompatibilityError, createInitialLiveActivityState } from "@caelush/client";
 import type { WatchRunEventsOptions } from "@caelush/client";
 import type { LaunchIntent } from "../bootstrap/cli-args.js";
 import { projectPublicRunEvent } from "./event-projector.js";
@@ -224,6 +224,7 @@ export class CliConversationController {
           : entry,
       ),
       timeline: createInitialCliTimelineState(run.id),
+      liveActivity: createInitialLiveActivityState(run.id),
       activeRun: { runId: run.id, status: run.status },
       composerEnabled: false,
       activity: "Preparing",
@@ -599,9 +600,7 @@ export class CliConversationController {
     this.workspace = workspaceResult.workspace;
 
     const activeRuns = nonTerminalRuns(runs);
-    const displayHistory = await this.loadSessionTranscript(
-      session.id,
-    );
+    const displayHistory = await this.loadSessionTranscript(session.id);
     const next: CliViewState = {
       ...this.state,
       bootstrap: "READY",
@@ -792,6 +791,7 @@ export class CliConversationController {
     this.publish({
       ...this.state,
       ...(resetTimeline ? { timeline: createInitialCliTimelineState(run.id) } : {}),
+      ...(resetTimeline ? { liveActivity: createInitialLiveActivityState(run.id) } : {}),
       activeRun: { runId: run.id, status: run.status },
       composerEnabled: false,
     });
@@ -1008,6 +1008,9 @@ export class CliConversationController {
       delete nextState.transportError;
       this.publish({
         ...nextState,
+        liveActivity: createInitialLiveActivityState(
+          remainingRuns.length === 1 ? remainingRuns[0]?.id : undefined,
+        ),
         controlMode: remainingRuns.length > 0 ? "RUN_RECOVERY_PICKER" : "NONE",
         recoveryCandidates: remainingRuns,
         recoverySelectionIndex: 0,
@@ -1042,9 +1045,7 @@ export class CliConversationController {
     }
   }
 
-  private async loadSessionTranscript(
-    sessionId: SessionId,
-  ): Promise<readonly TranscriptEntry[]> {
+  private async loadSessionTranscript(sessionId: SessionId): Promise<readonly TranscriptEntry[]> {
     const getSessionTranscript = this.options.client.getSessionTranscript;
     if (this.state.daemonInfo?.capabilities.sessionTranscript === true && getSessionTranscript) {
       const response = await getSessionTranscript.call(this.options.client, sessionId, {

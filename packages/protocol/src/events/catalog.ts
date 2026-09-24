@@ -22,6 +22,21 @@ function durable(
   });
 }
 
+function transient(
+  type: string,
+  schemaVersion: EventSchemaVersion,
+  deliveryClass: TransientDeliveryClass,
+  visibility: EventVisibility = "USER_VISIBLE",
+): RunEventTypeDefinition {
+  const delivery = Object.freeze({ kind: "TRANSIENT" as const, class: deliveryClass });
+  return Object.freeze({
+    type,
+    schemaVersion,
+    visibility,
+    delivery,
+  });
+}
+
 /**
  * The Phase 6A catalog describes the schemas that are registered today. It does not change the
  * current v1 write behavior: output events remain durable until the designated transient phase.
@@ -70,6 +85,12 @@ export const RUN_EVENT_TYPE_CATALOG: readonly RunEventTypeDefinition[] = Object.
   durable("budget.exceeded"),
   durable("resource.guard"),
   durable("conversation.message.committed"),
+  transient("tool.output", 2, "ORDERED"),
+  transient("shell.output", 2, "ORDERED"),
+  transient("process.output", 2, "ORDERED"),
+  transient("model.text.delta", 1, "ORDERED"),
+  transient("model.reasoning_summary.delta", 1, "ORDERED"),
+  transient("model.tool_call.delta", 1, "ORDERED"),
 ]);
 
 export const RunEventTypeCatalog = RUN_EVENT_TYPE_CATALOG;

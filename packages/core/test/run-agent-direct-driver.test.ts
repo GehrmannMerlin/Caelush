@@ -575,6 +575,7 @@ describe("production ADVANCE_AGENT settlement", () => {
     expect(h.notifications.map((event) => event.type)).toEqual([
       "run.started",
       "status.changed",
+      "conversation.message.committed",
       "llm.started",
       "llm.failed",
       "error",

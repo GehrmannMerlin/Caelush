@@ -66,6 +66,7 @@ export class LocalRuntimeExecService implements RuntimeExecService {
       command: request.executable,
       tty: false,
       yieldTimeMs: request.yieldTimeMs,
+      ...(request.onOutput === undefined ? {} : { onOutput: request.onOutput }),
       cwd,
       env: executionEnvironment(
         createAgentProcessEnvironment(this.env, this.options.platform ?? process.platform),

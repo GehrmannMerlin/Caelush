@@ -96,28 +96,52 @@ export interface RunEventBase<TDurability extends DurableRunEventMeta | Transien
   readonly durability: TDurability;
 }
 
-const eventBaseShape = {
+const eventBaseShape = (
+  schemaVersion: EventSchemaVersion,
+  durability: z.ZodType<EventDurability>,
+) => ({
   eventId: EventIdSchema,
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(schemaVersion),
   runId: RunIdSchema,
   sessionId: SessionIdSchema,
   stepId: StepIdSchema.optional(),
   timestamp: TimestampMsSchema,
   visibility: EventVisibilitySchema,
-  durability: EventDurabilitySchema,
+  durability,
   title: z.string().min(1).optional(),
   summary: z.string().min(1).optional(),
-};
+});
+
+/**
+ * Creates a versioned event schema without changing the compatibility-shaped v1 factory.
+ *
+ * A type may intentionally have more than one registered version: for example, historical
+ * `tool.output@1` is durable while current `tool.output@2` is transient. The version and
+ * durability metadata are therefore explicit inputs rather than inferred from the event type.
+ */
+export function createVersionedEventSchema<
+  const EventType extends string,
+  const SchemaVersion extends EventSchemaVersion,
+  PayloadSchema extends z.ZodType,
+  DurabilitySchema extends z.ZodType<EventDurability> = typeof EventDurabilitySchema,
+>(
+  type: EventType,
+  schemaVersion: SchemaVersion,
+  payload: PayloadSchema,
+  durability: DurabilitySchema = EventDurabilitySchema as unknown as DurabilitySchema,
+) {
+  return z
+    .object({
+      ...eventBaseShape(schemaVersion, durability),
+      type: z.literal(type),
+      payload,
+    })
+    .strict();
+}
 
 export function createEventSchema<const EventType extends string, PayloadSchema extends z.ZodType>(
   type: EventType,
   payload: PayloadSchema,
 ) {
-  return z
-    .object({
-      ...eventBaseShape,
-      type: z.literal(type),
-      payload,
-    })
-    .strict();
+  return createVersionedEventSchema(type, 1, payload);
 }
