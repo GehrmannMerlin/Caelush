@@ -658,6 +658,7 @@ export function harness3d(options: {
     executionStore: store,
     events: {
       notifyCommitted: (events: readonly DurableAgentEvent[]) => notifications.push(...events),
+      emitTransient: () => undefined,
     },
     configResolver: {
       resolve: async () => ({ baseSystemPrompt: "base", contextLimits: { maxInputTokens: 1000 } }),

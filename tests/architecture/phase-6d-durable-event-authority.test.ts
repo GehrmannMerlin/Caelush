@@ -31,4 +31,22 @@ describe("Architecture V2 Phase 6D durable event authority", () => {
     expect(eventBus).not.toContain("durableStore.append");
     expect(hub).not.toMatch(/\bappend\s*\(/);
   });
+
+  it("uses the Agent-owned notifier port at every production boundary", async () => {
+    const ports = await read("packages/core/src/run-controller-ports.ts");
+    const settlement = await read("packages/agent/src/tools/durable/settlement-coordinator.ts");
+    const failure = await read("packages/agent/src/tools/durable/failure-settlement.ts");
+    const coordinator = await read("packages/agent/src/tools/durable/durable-execution-coordinator.ts");
+    const daemon = await read("apps/daemon/src/daemon-composition.ts");
+
+    expect(ports).toContain("RunEventNotifierPort");
+    expect(ports).not.toMatch(/interface RunEventNotifier\b/);
+    for (const source of [settlement, failure, coordinator]) {
+      expect(source).toContain("RunEventNotifierPort");
+      expect(source).not.toMatch(/readonly notifier\?:\s*\{[\s\S]*?readonly unknown\[\]/);
+    }
+    expect(daemon).not.toMatch(/readonly eventBus\??:/);
+    expect(daemon).not.toMatch(/\beventBus:\s*eventNotifier/);
+    expect(daemon).not.toMatch(/options\.eventBus/);
+  });
 });

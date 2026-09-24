@@ -229,7 +229,7 @@ function controllerFor(
     executionStore: store,
     messages: testRunMessageAuthority({ snapshot: () => store.snapshot }),
     completionStore: completionStoreOver(store),
-    events: { notifyCommitted: () => undefined },
+    events: { notifyCommitted: () => undefined, emitTransient: () => undefined },
     configResolver: {
       resolve: async () => ({ baseSystemPrompt: "base", contextLimits: { maxInputTokens: 1000 } }),
     },

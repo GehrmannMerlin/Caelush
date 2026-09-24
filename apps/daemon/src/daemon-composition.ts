@@ -254,8 +254,6 @@ export interface DaemonCompositionOptions {
   readonly storage: CaelushStorage;
   /** Canonical daemon observation notifier. Production composition creates the RunEventHub when omitted. */
   readonly notifier?: RunEventNotifierPort;
-  /** @deprecated Test-only legacy notifier alias; EventBus remains a compatibility package. */
-  readonly eventBus?: RunEventNotifierPort;
   readonly eventQueuePolicy?: SubscriberQueuePolicy;
   readonly providers?: readonly DaemonModelProviderConfig[];
   readonly defaultModel?: ClientModelSelection;
@@ -287,8 +285,6 @@ export interface DaemonCompositionOptions {
 export interface DaemonComposition {
   readonly eventHub: RunEventHub | undefined;
   readonly events: RunEventNotifierPort;
-  /** @deprecated Compatibility name for the notifier surface. */
-  readonly eventBus: RunEventNotifierPort;
   readonly runs: Pick<CaelushStorage["runs"], "get">;
   readonly runtime: LocalRuntime;
   readonly runtimeResolver: ReturnType<typeof createLocalRuntimeResolver>;
@@ -350,14 +346,14 @@ export interface DaemonComposition {
 
 export async function composeDaemon(options: DaemonCompositionOptions): Promise<DaemonComposition> {
   const eventHub =
-    options.notifier === undefined && options.eventBus === undefined
+    options.notifier === undefined
       ? new RunEventHub(options.storage.eventReader, {
           ...(options.eventQueuePolicy === undefined
             ? {}
             : { queuePolicy: options.eventQueuePolicy }),
         })
       : undefined;
-  const eventNotifier = options.notifier ?? options.eventBus ?? eventHub;
+  const eventNotifier = options.notifier ?? eventHub;
   if (eventNotifier === undefined) {
     throw new Error("Daemon composition requires a RunEventNotifierPort.");
   }
@@ -978,7 +974,6 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
   return {
     eventHub,
     events: eventNotifier,
-    eventBus: eventNotifier,
     runs: options.storage.runs,
     runtime,
     runtimeResolver,

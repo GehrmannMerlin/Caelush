@@ -15,10 +15,11 @@ import type {
 } from "@caelush/protocol";
 import type {
   ModelToolFeedbackProjector,
+  RunEventNotifierPort,
   ToolBatchCoordinator,
   ToolResultBatchNormalizer,
 } from "@caelush/agent";
-import type { DurableAgentEvent, RunExecutionStore } from "./run-execution-store.js";
+import type { RunExecutionStore } from "./run-execution-store.js";
 import type { RunCompletionPersistencePort } from "./run-completion-store.js";
 import type { RunExecutionScopeRegistry } from "./run-execution-scope.js";
 import type { RunMessageAuthority } from "./run-message-materializer.js";
@@ -58,10 +59,6 @@ export interface RunExecutionConfig {
 
 export interface RunExecutionConfigResolver {
   resolve(run: AgentRun): Promise<RunExecutionConfig>;
-}
-
-export interface RunEventNotifier {
-  notifyCommitted(events: readonly DurableAgentEvent[]): void;
 }
 
 export interface EventIdFactory {
@@ -195,7 +192,7 @@ export interface RunControllerDependencies {
    * absent the Run Layer asks the general store, and a store that implements both answers.
    */
   readonly completionStore?: RunCompletionPersistencePort;
-  readonly events: RunEventNotifier;
+  readonly events: RunEventNotifierPort;
   readonly configResolver: RunExecutionConfigResolver;
   /** One canonical Factory/Codec/Projector authority for durable message materialization and history. */
   readonly messages: RunMessageAuthority;

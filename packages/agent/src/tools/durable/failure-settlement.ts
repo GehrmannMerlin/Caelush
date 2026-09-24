@@ -13,6 +13,7 @@ import type {
   ToolExecutionStorePort,
 } from "./execution-store-port.js";
 import { ToolExecutionConflictError, ToolExecutionInvariantError } from "./durable-errors.js";
+import type { RunEventNotifierPort } from "../../events/notifier-port.js";
 
 /**
  * The bounded durable failure settlement.
@@ -70,7 +71,7 @@ export interface ToolFailureSettlementOptions {
   readonly presentation?: ToolPresentationPort | undefined;
   /** Bounds the model-facing content this helper writes. */
   readonly boundContent: (content: string) => string;
-  readonly notifier?: { notifyCommitted(events: readonly unknown[]): void } | undefined;
+  readonly notifier?: RunEventNotifierPort | undefined;
 }
 
 export function createToolFailureSettlement(

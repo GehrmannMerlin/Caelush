@@ -29,6 +29,7 @@ import type {
   ToolExecutionStorePort,
 } from "./execution-store-port.js";
 import { ToolExecutionConflictError, ToolExecutionInvariantError } from "./durable-errors.js";
+import type { RunEventNotifierPort } from "../../events/notifier-port.js";
 
 /**
  * The terminal settlement boundary.
@@ -124,7 +125,7 @@ export interface ToolSettlementCoordinatorOptions {
         }): Promise<void>;
       }
     | undefined;
-  readonly notifier?: { notifyCommitted(events: readonly unknown[]): void } | undefined;
+  readonly notifier?: RunEventNotifierPort | undefined;
 }
 
 export function createToolSettlementCoordinator(

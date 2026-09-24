@@ -421,7 +421,7 @@ describe("RunController verification repair route", () => {
       executionStore: store,
       messages: testRunMessageAuthority(),
       completionStore: completionStoreOver(store),
-      events: { notifyCommitted: () => undefined },
+      events: { notifyCommitted: () => undefined, emitTransient: () => undefined },
       configResolver: {
         resolve: async () => ({
           baseSystemPrompt: "base",

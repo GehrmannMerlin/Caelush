@@ -56,6 +56,7 @@ import type {
   ToolExecutionSnapshot,
   ToolExecutionStorePort,
 } from "./execution-store-port.js";
+import type { RunEventNotifierPort } from "../../events/notifier-port.js";
 
 /* ------------------------------------------------------------------------------------------------
  * The frozen contracts
@@ -286,7 +287,7 @@ export interface DurableToolExecutionCoordinatorOptions {
   readonly budget?: DurableToolBudgetPort | undefined;
   readonly presentation?: ToolPresentationPort | undefined;
   readonly rawOutputStore?: DurableRawOutputStore | undefined;
-  readonly notifier?: { notifyCommitted(events: readonly unknown[]): void } | undefined;
+  readonly notifier?: RunEventNotifierPort | undefined;
   /** Bounds the model-facing content a *failure* settlement writes. */
   readonly boundFailureContent?: ((content: string) => string) | undefined;
   readonly settlementCoordinator?: ToolSettlementCoordinator | undefined;

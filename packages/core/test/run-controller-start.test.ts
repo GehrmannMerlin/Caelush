@@ -26,7 +26,8 @@ import type {
   RunCompletionPersistencePort,
   RunVerifiedCompletionCommit,
 } from "../src/run-completion-store.js";
-import type { RunEventNotifier, RunExecutionConfigResolver } from "../src/run-controller-ports.js";
+import type { RunExecutionConfigResolver } from "../src/run-controller-ports.js";
+import type { RunEventNotifierPort } from "@caelush/agent";
 import type { RunBudgetPort } from "../src/budget-ports.js";
 import type { RunAgentExecutionContextFactory } from "../src/run-agent-execution.js";
 import {
@@ -237,7 +238,7 @@ describe("RunController.start", () => {
       ),
       executionStore: store,
       messages: testRunMessageAuthority({ snapshot: () => store.snapshot }),
-      events: { notifyCommitted: () => undefined },
+      events: { notifyCommitted: () => undefined, emitTransient: () => undefined },
       configResolver: {
         resolve: async () => ({
           baseSystemPrompt: "base",
@@ -284,7 +285,7 @@ describe("RunController.start", () => {
       }),
       executionStore: store,
       messages: testRunMessageAuthority({ snapshot: () => store.snapshot }),
-      events: { notifyCommitted: () => undefined },
+      events: { notifyCommitted: () => undefined, emitTransient: () => undefined },
       configResolver: {
         resolve: async () => ({
           baseSystemPrompt: "base",
@@ -323,7 +324,7 @@ describe("RunController.start", () => {
       }),
       executionStore: store,
       messages: testRunMessageAuthority({ snapshot: () => store.snapshot }),
-      events: { notifyCommitted: () => undefined },
+      events: { notifyCommitted: () => undefined, emitTransient: () => undefined },
       configResolver: {
         resolve: async () => ({
           baseSystemPrompt: "base",
@@ -361,7 +362,10 @@ describe("RunController.start", () => {
     const store = new MemoryExecutionStore(run);
     let providerCalls = 0;
     const notified: DurableAgentEvent[] = [];
-    const notifier: RunEventNotifier = { notifyCommitted: (events) => notified.push(...events) };
+    const notifier: RunEventNotifierPort = {
+      notifyCommitted: (events) => notified.push(...events),
+      emitTransient: () => undefined,
+    };
     const resolver: RunExecutionConfigResolver = {
       resolve: async () => ({
         baseSystemPrompt: "private synthetic prompt",
@@ -403,7 +407,7 @@ describe("RunController.start", () => {
       agentExecution: makeAgentExecution(store, () => undefined),
       executionStore: store,
       messages: testRunMessageAuthority({ snapshot: () => store.snapshot }),
-      events: { notifyCommitted: () => undefined },
+      events: { notifyCommitted: () => undefined, emitTransient: () => undefined },
       configResolver: {
         resolve: async () => ({
           baseSystemPrompt: "base",
@@ -444,7 +448,7 @@ describe("RunController.start", () => {
       }),
       executionStore: store,
       messages: testRunMessageAuthority({ snapshot: () => store.snapshot }),
-      events: { notifyCommitted: () => undefined },
+      events: { notifyCommitted: () => undefined, emitTransient: () => undefined },
       configResolver: {
         resolve: async () => ({
           baseSystemPrompt: "base",
@@ -482,7 +486,10 @@ describe("RunController.cancel", () => {
       }),
       executionStore: store,
       messages: testRunMessageAuthority({ snapshot: () => store.snapshot }),
-      events: { notifyCommitted: (events) => notified.push(...events) },
+      events: {
+        notifyCommitted: (events) => notified.push(...events),
+        emitTransient: () => undefined,
+      },
       configResolver: {
         resolve: async () => ({
           baseSystemPrompt: "base",
@@ -513,7 +520,7 @@ describe("RunController project verification driving", () => {
       agentExecution: makeAgentExecution(store, () => undefined),
       executionStore: store,
       messages: testRunMessageAuthority({ snapshot: () => store.snapshot }),
-      events: { notifyCommitted: () => undefined },
+      events: { notifyCommitted: () => undefined, emitTransient: () => undefined },
       configResolver: {
         resolve: async () => ({
           baseSystemPrompt: "base",

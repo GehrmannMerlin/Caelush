@@ -214,6 +214,7 @@ function harness(options: {
     completionStore: completionStoreOver(store),
     events: {
       notifyCommitted: (events: readonly DurableAgentEvent[]) => notifications.push(...events),
+      emitTransient: () => undefined,
     },
     configResolver: options.configResolver ?? {
       resolve: async () => ({ baseSystemPrompt: "base", contextLimits: { maxInputTokens: 1000 } }),

@@ -704,6 +704,7 @@ export function harness3e(options: Phase3EHarnessOptions): Phase3EHarness {
     ...(completionPort === undefined ? {} : { completion: completionPort }),
     events: {
       notifyCommitted: (events: readonly DurableAgentEvent[]) => notifications.push(...events),
+      emitTransient: () => undefined,
     },
     configResolver: {
       resolve: async () => ({ baseSystemPrompt: "base", contextLimits: { maxInputTokens: 1000 } }),
