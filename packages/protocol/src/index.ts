@@ -178,6 +178,7 @@ export {
   EventSchemaVersionSchema,
   EventVisibilitySchema,
   OrderedTransientEventMetaSchema,
+  PublicRunEventSchema,
   RunEventDurabilitySchema,
   RunEventSchema,
   TransientDeliveryClassSchema,
@@ -203,6 +204,7 @@ export type {
   EventSchemaVersion,
   EventVisibility,
   OrderedTransientEventMeta,
+  PublicRunEvent,
   RunEvent,
   RunEventBase,
   RunEventDurability,
@@ -218,7 +220,11 @@ export {
   RunEventSchemaRegistryInstance,
   RunEventTypeCatalog,
 } from "./events/index.js";
-export type { RunEventSchemaRegistry, RunEventTypeDefinition } from "./events/index.js";
+export type {
+  PublicRunEventFrom,
+  RunEventSchemaRegistry,
+  RunEventTypeDefinition,
+} from "./events/index.js";
 export type { RunTimedOutEvent } from "./events/index.js";
 export type { VerificationPlannedEvent } from "./events/verification.js";
 export { AgentSessionSchema } from "./session.js";

@@ -53,6 +53,7 @@ import {
 import { ErrorEventSchema } from "./error.js";
 import { BudgetExceededEventSchema } from "./budget.js";
 import { ResourceGuardEventSchema } from "./resource.js";
+import { createPublicRunEventSchema, type PublicRunEventFrom } from "./public.js";
 
 export {
   CoalescibleTransientEventMetaSchema,
@@ -87,6 +88,8 @@ export {
   RunEventTypeCatalog,
 } from "./catalog.js";
 export type { RunEventTypeDefinition } from "./catalog.js";
+export { createPublicRunEventSchema } from "./public.js";
+export type { PublicRunEventFrom } from "./public.js";
 export {
   RunEventSchemaDecodeError,
   RUN_EVENT_SCHEMA_REGISTRY,
@@ -164,6 +167,9 @@ export const RunEventSchema = currentRunEventSchema;
 export const AgentEventSchema = RunEventSchema;
 
 export type RunEvent = z.infer<typeof RunEventSchema>;
+
+export const PublicRunEventSchema = createPublicRunEventSchema(RunEventSchema);
+export type PublicRunEvent = PublicRunEventFrom<RunEvent>;
 
 type WithDurability<TEvent, TDurability> = TEvent extends { readonly type: string }
   ? Omit<TEvent, "durability"> & { readonly durability: TDurability }
