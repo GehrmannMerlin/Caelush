@@ -197,6 +197,12 @@ export type {
 export { RUN_EXECUTION_EFFECT_KINDS } from "./run/effect-result.js";
 export type { RunExecutionEffectResult } from "./run/effect-result.js";
 
+/* Phase 6A canonical event contracts. */
+export type { DurableRunEvent, TransientRunEvent } from "@caelush/protocol";
+export type { DurableRunEventDraft } from "./events/durable-run-event-draft.js";
+export type { RunEventNotifierPort } from "./events/notifier-port.js";
+export type { DurableRunEventReaderPort } from "./events/reader-port.js";
+
 /* The canonical Run execution store port. */
 export {
   RunExecutionConflictError,

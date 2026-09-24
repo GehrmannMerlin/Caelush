@@ -169,7 +169,20 @@ export { ProcessStatusSchema, ProcessSummarySchema } from "./process.js";
 export type { ProcessStatus, ProcessSummary } from "./process.js";
 export { UsageStateSchema } from "./usage.js";
 export type { UsageState } from "./usage.js";
-export { AgentEventSchema, EventDurabilitySchema, EventVisibilitySchema } from "./events/index.js";
+export {
+  AgentEventSchema,
+  CoalescibleTransientEventMetaSchema,
+  DurableEventSchema,
+  DurableRunEventMetaSchema,
+  EventDurabilitySchema,
+  EventSchemaVersionSchema,
+  EventVisibilitySchema,
+  OrderedTransientEventMetaSchema,
+  RunEventDurabilitySchema,
+  RunEventSchema,
+  TransientDeliveryClassSchema,
+  TransientRunEventMetaSchema,
+} from "./events/index.js";
 export {
   LlmFailedEventSchema,
   RetryScheduledEventSchema,
@@ -180,7 +193,32 @@ export {
   VerificationRepairLimitReachedEventSchema,
   VerificationFinalizedEventSchema,
 } from "./events/index.js";
-export type { AgentEvent, EventDurability, EventVisibility } from "./events/index.js";
+export type {
+  AgentEvent,
+  CoalescibleTransientEventMeta,
+  DurableEvent,
+  DurableRunEvent,
+  DurableRunEventMeta,
+  EventDurability,
+  EventSchemaVersion,
+  EventVisibility,
+  OrderedTransientEventMeta,
+  RunEvent,
+  RunEventBase,
+  RunEventDurability,
+  TransientDeliveryClass,
+  TransientRunEvent,
+  TransientRunEventMeta,
+} from "./events/index.js";
+export {
+  getRunEventTypeDefinition,
+  RUN_EVENT_SCHEMA_REGISTRY,
+  RUN_EVENT_TYPE_CATALOG,
+  RunEventSchemaDecodeError,
+  RunEventSchemaRegistryInstance,
+  RunEventTypeCatalog,
+} from "./events/index.js";
+export type { RunEventSchemaRegistry, RunEventTypeDefinition } from "./events/index.js";
 export type { RunTimedOutEvent } from "./events/index.js";
 export type { VerificationPlannedEvent } from "./events/verification.js";
 export { AgentSessionSchema } from "./session.js";

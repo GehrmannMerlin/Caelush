@@ -5,7 +5,11 @@ and future hosts share one Agent Kernel and one daemon composition root; they
 do not own separate Agent implementations.
 
 The current source-of-truth branch is `main`. The Message System migration is
-complete through Architecture V2 Phase 5F. Phase 5F owns the final historical
+complete through Architecture V2 Phase 5F. The Event System migration is
+complete through Phase 6A only: the canonical RunEvent domain and Protocol
+foundation are present, while the runtime/control-plane phases remain pending.
+Phase 5: COMPLETE. Phase 6A: COMPLETE. Phase 6B–6H: NOT STARTED.
+Phase 5F owns the final historical
 backfill, physical `agent_messages` rebuild, legacy reader/package retirement,
 and daemon/client final cutover.
 Phase 5E previously completed the daemon Transcript projection and client
@@ -57,13 +61,33 @@ Phase 5D established durable conversation authority for Context and replay.
 - `@caelush/storage` owns SQLite initialization, migrations, repositories,
   codecs, and durable adapters. Public APIs expose Protocol entities and
   records, not `DatabaseSync`, Drizzle clients, or raw database rows.
-- `@caelush/events` owns durable event contracts and EventBus replay/watch
-  semantics. Durable events are persisted before publication; sequence is the
-  authoritative order. Durable SSE events use sequence as `id`; ephemeral
-  events never receive an SSE id.
+- `@caelush/protocol` owns the canonical JSON-safe `RunEvent` domain, including
+  `DurableRunEventMeta`, ordered/coalescible transient metadata, the static
+  schema registry, and the static event catalog.
+- `@caelush/agent` owns `DurableRunEventDraft`, `RunEventNotifierPort`, and the
+  read-only `DurableRunEventReaderPort` contracts. Agent has no Storage or
+  daemon write authority.
+- `@caelush/events` remains the transitional EventBus runtime and compatibility
+  package during Phase 6A. Durable events are persisted before publication;
+  sequence is the authoritative order. Durable SSE events use sequence as
+  `id`; ephemeral events never receive an SSE id.
 - `@caelush/verification` can produce bounded evidence and verification
   results but cannot transition a Run to `COMPLETED`. Only Core/RunController
   owns that transition.
+
+## Event V2 / Phase 6A
+
+- `RunEvent` is the target Event domain name; `AgentEvent` is migration
+  compatibility naming only.
+- Durable sequence belongs to the authoritative Storage transaction. A
+  `DurableRunEventDraft` has no sequence until Storage commits it.
+- Every new Event type requires explicit type, schema version, visibility, and
+  delivery classification in the static Protocol catalog.
+- Do not make `@caelush/ai` or `@caelush/runtime` depend on RunEvent.
+- Do not introduce new `EventBus` durable `publish()` call sites.
+- Phase 6A does not cut over RunEventHub, public projection, transient output,
+  SSE/client behavior, durable writers, or Control Hooks; those remain
+  6B–6H work.
 
 ## Message V2 / Phase 5F
 

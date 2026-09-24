@@ -260,6 +260,9 @@ importers:
 
   packages/events:
     dependencies:
+      '@caelush/agent':
+        specifier: workspace:*
+        version: link:../agent
       '@caelush/protocol':
         specifier: workspace:*
         version: link:../protocol

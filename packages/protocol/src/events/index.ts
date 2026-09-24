@@ -1,11 +1,5 @@
 import { z } from "zod";
 import {
-  DurableEventSchema,
-  EphemeralEventSchema,
-  EventDurabilitySchema,
-  EventVisibilitySchema,
-} from "./base.js";
-import {
   RunCancelledEventSchema,
   RunCompletedEventSchema,
   RunFailedEventSchema,
@@ -60,8 +54,45 @@ import { ErrorEventSchema } from "./error.js";
 import { BudgetExceededEventSchema } from "./budget.js";
 import { ResourceGuardEventSchema } from "./resource.js";
 
-export { DurableEventSchema, EphemeralEventSchema, EventDurabilitySchema, EventVisibilitySchema };
-export type { DurableEvent, EphemeralEvent, EventDurability, EventVisibility } from "./base.js";
+export {
+  CoalescibleTransientEventMetaSchema,
+  DurableEventSchema,
+  DurableRunEventMetaSchema,
+  EphemeralEventSchema,
+  EventDurabilitySchema,
+  EventSchemaVersionSchema,
+  EventVisibilitySchema,
+  OrderedTransientEventMetaSchema,
+  RunEventDurabilitySchema,
+  TransientDeliveryClassSchema,
+  TransientRunEventMetaSchema,
+} from "./base.js";
+export type {
+  CoalescibleTransientEventMeta,
+  DurableEvent,
+  DurableRunEventMeta,
+  EphemeralEvent,
+  EventDurability,
+  EventSchemaVersion,
+  EventVisibility,
+  OrderedTransientEventMeta,
+  RunEventBase,
+  RunEventDurability,
+  TransientDeliveryClass,
+  TransientRunEventMeta,
+} from "./base.js";
+export {
+  getRunEventTypeDefinition,
+  RUN_EVENT_TYPE_CATALOG,
+  RunEventTypeCatalog,
+} from "./catalog.js";
+export type { RunEventTypeDefinition } from "./catalog.js";
+export {
+  RunEventSchemaDecodeError,
+  RUN_EVENT_SCHEMA_REGISTRY,
+  RunEventSchemaRegistryInstance,
+} from "./registry.js";
+export type { RunEventSchemaRegistry } from "./registry.js";
 export { BudgetExceededEventSchema } from "./budget.js";
 export type { BudgetExceededEvent } from "./budget.js";
 export { ResourceGuardEventSchema } from "./resource.js";
@@ -78,7 +109,7 @@ export {
   VerificationFinalizedEventSchema,
 } from "./verification.js";
 
-export const AgentEventSchema = z.discriminatedUnion("type", [
+const currentRunEventSchema = z.discriminatedUnion("type", [
   RunStartedEventSchema,
   RunTimedOutEventSchema,
   RunCompletedEventSchema,
@@ -122,4 +153,27 @@ export const AgentEventSchema = z.discriminatedUnion("type", [
   BudgetExceededEventSchema,
   ResourceGuardEventSchema,
 ]);
-export type AgentEvent = z.infer<typeof AgentEventSchema>;
+
+/**
+ * The parser remains compatibility-shaped in Phase 6A so historical v1 events, including the old
+ * empty EPHEMERAL metadata, continue to decode. New producers must use the canonical metadata
+ * contracts exported from base.ts; the runtime parser is intentionally not a second authority.
+ */
+export const RunEventSchema = currentRunEventSchema;
+/** @deprecated Use RunEventSchema. */
+export const AgentEventSchema = RunEventSchema;
+
+export type RunEvent = z.infer<typeof RunEventSchema>;
+
+type WithDurability<TEvent, TDurability> = TEvent extends { readonly type: string }
+  ? Omit<TEvent, "durability"> & { readonly durability: TDurability }
+  : never;
+
+export type DurableRunEvent = WithDurability<RunEvent, import("./base.js").DurableRunEventMeta>;
+
+export type TransientRunEvent = WithDurability<RunEvent, import("./base.js").TransientRunEventMeta>;
+
+export type RunEventWithCanonicalDurability = DurableRunEvent | TransientRunEvent;
+
+/** @deprecated Use RunEvent. */
+export type AgentEvent = RunEvent;

@@ -28,6 +28,204 @@ function getFactory(name: string): (() => string) | undefined {
 }
 
 describe("protocol AgentEvent", () => {
+  it("exposes strict Phase 6A durability metadata contracts", () => {
+    const ordered = getSchema("OrderedTransientEventMetaSchema");
+    const coalescible = getSchema("CoalescibleTransientEventMetaSchema");
+    const durable = getSchema("DurableRunEventMetaSchema");
+    const version = getSchema("EventSchemaVersionSchema");
+    if (
+      ordered === undefined ||
+      coalescible === undefined ||
+      durable === undefined ||
+      version === undefined
+    ) {
+      return;
+    }
+
+    expect(version.safeParse(1).success).toBe(true);
+    expect(version.safeParse(0).success).toBe(false);
+    expect(version.safeParse(Number.MAX_SAFE_INTEGER + 1).success).toBe(false);
+    expect(
+      durable.safeParse({ kind: "DURABLE", version: 1, sequence: Number.MAX_SAFE_INTEGER }).success,
+    ).toBe(true);
+    expect(durable.safeParse({ kind: "DURABLE", version: 1 }).success).toBe(false);
+    expect(durable.safeParse({ kind: "DURABLE", version: 1, sequence: 0 }).success).toBe(false);
+    expect(
+      durable.safeParse({ kind: "DURABLE", version: 1, sequence: Number.MAX_SAFE_INTEGER + 1 })
+        .success,
+    ).toBe(false);
+    expect(
+      ordered.safeParse({
+        kind: "EPHEMERAL",
+        version: 1,
+        deliveryClass: "ORDERED",
+        streamKey: "model-turn",
+        streamSequence: 1,
+      }).success,
+    ).toBe(true);
+    expect(
+      ordered.safeParse({
+        kind: "EPHEMERAL",
+        version: 1,
+        deliveryClass: "ORDERED",
+        streamKey: "",
+        streamSequence: 1,
+      }).success,
+    ).toBe(false);
+    expect(
+      ordered.safeParse({
+        kind: "EPHEMERAL",
+        version: 1,
+        deliveryClass: "ORDERED",
+        streamKey: "model-turn",
+      }).success,
+    ).toBe(false);
+    expect(
+      ordered.safeParse({
+        kind: "EPHEMERAL",
+        version: 1,
+        deliveryClass: "ORDERED",
+        streamKey: "model-turn",
+        streamSequence: Number.MAX_SAFE_INTEGER + 1,
+      }).success,
+    ).toBe(false);
+    expect(
+      ordered.safeParse({
+        kind: "EPHEMERAL",
+        version: 1,
+        deliveryClass: "ORDERED",
+        streamKey: "model-turn",
+        streamSequence: 0,
+      }).success,
+    ).toBe(false);
+    expect(
+      coalescible.safeParse({
+        kind: "EPHEMERAL",
+        version: 1,
+        deliveryClass: "COALESCIBLE",
+        streamKey: "tool-progress",
+      }).success,
+    ).toBe(true);
+    expect(
+      coalescible.safeParse({
+        kind: "EPHEMERAL",
+        version: 1,
+        deliveryClass: "COALESCIBLE",
+        streamKey: "",
+      }).success,
+    ).toBe(false);
+    expect(
+      coalescible.safeParse({
+        kind: "EPHEMERAL",
+        version: 1,
+        deliveryClass: "COALESCIBLE",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("uses one static type/version registry and catalog for current v1 events", () => {
+    const registry = (protocol as Record<string, unknown>).RUN_EVENT_SCHEMA_REGISTRY as
+      | { supports: (type: string, version: number) => boolean; parse: (value: unknown) => unknown }
+      | undefined;
+    const catalog = (protocol as Record<string, unknown>).RUN_EVENT_TYPE_CATALOG as
+      | readonly { type: string; schemaVersion: number; visibility: string; delivery: unknown }[]
+      | undefined;
+    expect(registry).toBeDefined();
+    expect(catalog).toBeDefined();
+    if (registry === undefined || catalog === undefined) return;
+    const createEventId = getFactory("createEventId");
+    const createRunId = getFactory("createRunId");
+    const createSessionId = getFactory("createSessionId");
+    if (createEventId === undefined || createRunId === undefined || createSessionId === undefined) {
+      return;
+    }
+
+    expect(registry.supports("status.changed", 1)).toBe(true);
+    expect(registry.supports("unknown.event", 1)).toBe(false);
+    expect(registry.supports("status.changed", 2)).toBe(false);
+    for (const definition of catalog) {
+      expect(registry.supports(definition.type, definition.schemaVersion)).toBe(true);
+    }
+    expect(catalog.find(({ type }) => type === "tool.output")?.delivery).toEqual({
+      kind: "DURABLE",
+    });
+    expect(
+      registry.parse({
+        eventId: createEventId(),
+        schemaVersion: 1,
+        runId: createRunId(),
+        sessionId: createSessionId(),
+        timestamp: 1,
+        visibility: "USER_VISIBLE",
+        durability: { kind: "DURABLE", version: 1, sequence: 1 },
+        type: "status.changed",
+        payload: { from: "RUNNING", to: "VERIFYING" },
+      }),
+    ).toMatchObject({ type: "status.changed" });
+    expect(() => registry.parse({ type: "unknown.event", schemaVersion: 1 })).toThrow(
+      /unsupported event type/i,
+    );
+    expect(() =>
+      registry.parse({
+        eventId: "evt_invalid",
+        schemaVersion: 2,
+        runId: "run_invalid",
+        sessionId: "session_invalid",
+        timestamp: 1,
+        visibility: "USER_VISIBLE",
+        durability: { kind: "DURABLE", version: 1, sequence: 1 },
+        type: "status.changed",
+        payload: { from: "RUNNING", to: "VERIFYING" },
+      }),
+    ).toThrow(/unsupported event schema version/i);
+    expect(() =>
+      registry.parse({
+        eventId: createEventId(),
+        schemaVersion: 1,
+        runId: createRunId(),
+        sessionId: createSessionId(),
+        timestamp: 1,
+        visibility: "USER_VISIBLE",
+        durability: { kind: "DURABLE", version: 1, sequence: 1 },
+        type: "status.changed",
+        payload: { wrong: true },
+      }),
+    ).toThrow(/invalid payload/i);
+  });
+
+  it("keeps current v1 ephemeral compatibility separate from canonical transient metadata", () => {
+    const eventSchema = getSchema("AgentEventSchema");
+    const createEventId = getFactory("createEventId");
+    const createRunId = getFactory("createRunId");
+    const createSessionId = getFactory("createSessionId");
+    const createToolInvocationId = getFactory("createToolInvocationId");
+    if (
+      eventSchema === undefined ||
+      createEventId === undefined ||
+      createRunId === undefined ||
+      createSessionId === undefined ||
+      createToolInvocationId === undefined
+    ) {
+      return;
+    }
+
+    const legacy = {
+      eventId: createEventId(),
+      schemaVersion: 1,
+      runId: createRunId(),
+      sessionId: createSessionId(),
+      type: "shell.output",
+      timestamp: 1_700_000_000_000,
+      visibility: "DEBUG",
+      durability: { kind: "EPHEMERAL" },
+      payload: { invocationId: createToolInvocationId(), stream: "stdout", chunk: "legacy" },
+    };
+    expect(eventSchema.safeParse(legacy).success).toBe(true);
+    expect(getSchema("TransientRunEventMetaSchema")?.safeParse(legacy.durability).success).toBe(
+      false,
+    );
+  });
+
   it("parses a sanitized budget.exceeded event for each budget dimension", () => {
     const eventSchema = getSchema("AgentEventSchema");
     const createEventId = getFactory("createEventId");
@@ -52,7 +250,10 @@ describe("protocol AgentEvent", () => {
       type: "budget.exceeded",
     };
     expect(
-      eventSchema.parse({ ...common, payload: { dimension: "TOOL_CALLS", limit: 10, accounted: 10 } }),
+      eventSchema.parse({
+        ...common,
+        payload: { dimension: "TOOL_CALLS", limit: 10, accounted: 10 },
+      }),
     ).toMatchObject({ type: "budget.exceeded", payload: { dimension: "TOOL_CALLS" } });
     expect(
       eventSchema.parse({

@@ -1,11 +1,7 @@
-import type { AgentEvent, EventDurability } from "@caelush/protocol";
+import type { DurableRunEvent, DurableRunEventDraft } from "@caelush/agent";
 
-type DurableEvent = Extract<EventDurability, { kind: "DURABLE" }>;
+/** @deprecated Use the Agent-owned DurableRunEventDraft. */
+export type DurableEventDraft = DurableRunEventDraft;
 
-type WithDurability<TEvent, TDurability> = TEvent extends { type: string }
-  ? Omit<TEvent, "durability"> & { durability: TDurability }
-  : never;
-
-export type DurableEventDraft = WithDurability<AgentEvent, Omit<DurableEvent, "sequence">>;
-
-export type DurableAgentEvent = WithDurability<AgentEvent, DurableEvent>;
+/** @deprecated Use the Protocol DurableRunEvent type. */
+export type DurableAgentEvent = DurableRunEvent;

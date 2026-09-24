@@ -1,7 +1,6 @@
 import type {
-  AgentEvent,
   ApprovalRequest,
-  EventDurability,
+  DurableRunEvent,
   RunId,
   SessionId,
   StepId,
@@ -11,6 +10,7 @@ import type {
   ToolObservation,
 } from "@caelush/protocol";
 
+import type { DurableRunEventDraft } from "../../events/durable-run-event-draft.js";
 import type { ToolSettlementExtension } from "../result/result-policy.js";
 
 /**
@@ -27,18 +27,10 @@ import type { ToolSettlementExtension } from "../result/result-policy.js";
  * `@caelush/tools` package, so the store contract declared here is the only declaration, and it can be
  * implemented and consumed without any legacy package existing.
  */
-export type DurableToolEventDraft = AgentEvent extends infer TEvent
-  ? TEvent extends { readonly type: string }
-    ? Omit<TEvent, "durability"> & {
-        readonly durability: Omit<Extract<EventDurability, { kind: "DURABLE" }>, "sequence">;
-      }
-    : never
-  : never;
+export type DurableToolEventDraft = DurableRunEventDraft;
 
 /** A committed durable Tool event: the same value with Storage's sequence attached. */
-export type DurableToolEvent = DurableToolEventDraft & {
-  readonly durability: Extract<EventDurability, { kind: "DURABLE" }>;
-};
+export type DurableToolEvent = DurableRunEvent;
 
 /**
  * Everything durable that is known about one Tool invocation, at one revision.

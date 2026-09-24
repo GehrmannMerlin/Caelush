@@ -1,15 +1,15 @@
 import type {
-  AgentEvent,
   AgentRun,
   AgentState,
   AgentStep,
-  EventDurability,
+  DurableRunEvent,
   RunCancellationIntent,
   RunId,
   TimestampMs,
 } from "@caelush/protocol";
 
 import type { RunContinuationCheckpoint } from "../continuation/continuation.js";
+import type { DurableRunEventDraft } from "../../events/durable-run-event-draft.js";
 import type {
   AgentMessageRecord,
   AgentMessageRecordDraft,
@@ -40,21 +40,11 @@ import type {
  * general contract must not grow a field only one subsystem can satisfy.
  */
 
-type DurableEvent = Extract<EventDurability, { kind: "DURABLE" }>;
+/** @deprecated Use DurableRunEventDraft. */
+export type DurableEventDraft = DurableRunEventDraft;
 
-/** A durable event before the store assigns it a chronology sequence. */
-export type DurableEventDraft = AgentEvent extends infer Event
-  ? Event extends { type: string }
-    ? Omit<Event, "durability"> & { durability: Omit<DurableEvent, "sequence"> }
-    : never
-  : never;
-
-/** A durable event as the store returns it, with its sequence settled. */
-export type DurableAgentEvent = AgentEvent extends infer Event
-  ? Event extends { type: string }
-    ? Omit<Event, "durability"> & { durability: DurableEvent }
-    : never
-  : never;
+/** @deprecated Use DurableRunEvent. */
+export type DurableAgentEvent = DurableRunEvent;
 
 /**
  * The durable Run state one execution decision is made from.

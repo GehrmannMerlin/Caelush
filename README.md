@@ -18,6 +18,10 @@ The project is in active Architecture V2 development. The Message System
 migration through Phase 5F is complete: the daemon owns the server-side
 Transcript projection, CLI/Web consume the Protocol Transcript, and the final
 durable Message V2 schema is now the only runtime storage shape.
+The Event System migration has entered Phase 6 and its canonical RunEvent
+domain and Protocol foundation are complete through Phase 6A. Runtime fan-out,
+public projection, durable-writer cleanup, transient signal cutover, and
+Control Hooks remain later Phase 6 work.
 
 ## What Caelush provides
 
@@ -57,8 +61,8 @@ Local daemon — the only production composition root
 ```
 
 The daemon owns execution. The CLI and Web render safe Protocol projections
-and AgentEvent streams. They do not construct their own AgentLoop, invoke a
-provider directly, or execute local Tools.
+and the migration-compatible AgentEvent/RunEvent stream. They do not construct
+their own AgentLoop, invoke a provider directly, or execute local Tools.
 
 ## Architecture at a glance
 
@@ -75,9 +79,39 @@ Daemon
 Core / Agent Kernel
   ├── one model turn → AI gateway → provider adapter
   ├── Tool decision → Registry → Security gate → Dispatcher → Runtime
-  ├── durable records/events → SQLite + EventBus
+  ├── durable records/events → SQLite + transitional EventBus
   └── final candidate → Verification → Completion Authority
 ```
+
+### Phase 6A Event domain foundation
+
+Phase 6A establishes the canonical event vocabulary without changing the
+production delivery path:
+
+```text
+@caelush/protocol
+  RunEvent / DurableRunEvent / TransientRunEvent
+  version-aware static schema registry + event catalog
+          │
+          └── @caelush/agent
+                DurableRunEventDraft
+                RunEventNotifierPort
+                DurableRunEventReaderPort
+
+@caelush/events
+  transitional EventBus + current replay/live runtime
+```
+
+`AgentEvent` remains a deprecated compatibility name while v1 event fixtures
+continue to decode, including historical durable output events and the old
+empty ephemeral metadata shape. New canonical transient metadata requires its
+delivery class and stream identity. Durable sequence allocation remains a
+Storage transaction responsibility.
+
+`RunEventHub`, bounded subscriber queues and observer workers,
+`PublicEventProjector`, SSE or Client migration, durable writer cleanup,
+transient output/model signal wiring, and Control Hook pipelines are not part
+of Phase 6A; they remain Phase 6B–6H work.
 
 ### Durable conversation
 
@@ -248,7 +282,7 @@ Caelush/
 │   ├── coding-agent/ Coding Tools and coding composition
 │   ├── context/      Workspace intelligence and context building
 │   ├── core/         Run lifecycle and Completion Authority
-│   ├── events/       Durable event contract and EventBus
+│   ├── events/       Transitional durable event runtime and EventBus
 │   ├── memory/       Memory records and store contracts
 │   ├── observability/Observability package boundary
 │   ├── protocol/     Stable JSON-safe cross-package contracts
@@ -305,11 +339,14 @@ runtime: Phase 9C sanitizer injection, Phase 9D — V1 Security Integration, Pha
 | Phase 5D — Context & replay cutover                     | Complete    |
 | Phase 5E — transcript/client projection migration       | COMPLETE    |
 | Phase 5F — legacy Message V2 retirement                 | COMPLETE    |
+| Phase 6A — Event domain and Protocol foundation         | COMPLETE    |
+| Phase 6B–6H — Event runtime and control-plane migration | NOT STARTED |
 
-The status table is specifically the Message System migration boundary. The
-repository also contains the current Runtime, Security, Verification, daemon,
-CLI, and Web layers described above; this page does not claim that unrelated
-future product capabilities have begun.
+The status table records the completed Architecture V2 migration boundaries
+that are relevant to the current runtime. The repository also contains the
+current Runtime, Security, Verification, daemon, CLI, and Web layers described
+above; this page does not claim that unrelated future product capabilities have
+begun.
 
 ## Current limitations and roadmap
 

@@ -13,7 +13,7 @@ submits a Session or Run request to the local daemon. The daemon composes one
 shared Agent Kernel with the AI, Context, Coding Agent, Runtime, Security,
 Storage, Events, and Verification packages. The Kernel owns execution
 semantics; CLI and Web render projections of the resulting Protocol contracts
-and AgentEvent stream.
+and the migration-compatible AgentEvent/RunEvent stream.
 
 ```text
 CLI / Web / future hosts
@@ -49,23 +49,23 @@ durable Run and AgentEvent contracts.
 
 ## Package responsibilities
 
-| Package                  | Current authority                                                                                                                                                                                                                                             |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@caelush/protocol`      | JSON-safe IDs, entities, schemas, API DTOs, Run/Tool/Approval/Verification contracts, and cross-package event shapes. It is a low-level contract package.                                                                                                     |
-| `@caelush/ai`            | Provider-independent model domain, model descriptors, AI messages/tools, gateway lifecycle, adapters, stream validation, usage, and secret-safe AI errors. It does not know Runs or local Tools.                                                              |
-| `@caelush/agent`         | General Agent Kernel contracts and implementation: AgentLoop, decisions, durable message domain, Tool registry/batch pipeline, Run execution ports, continuations, and recovery-facing data structures. It does not know concrete filesystem Tools or SQLite. |
-| `@caelush/core`          | RunController and canonical lifecycle coordination: state transitions, durable Run/State/Step/Continuation commits, model-turn and Tool-turn boundaries, resource governance, and completion authority.                                                       |
-| `@caelush/context`       | Workspace/project discovery, instructions, relevant-file planning, memory/context runtime coordination, and bounded model-input construction. It does not own provider invocation.                                                                            |
-| `@caelush/coding-agent`  | Coding composition layer and the single source of truth for built-in coding Tool definitions, operations adapters, Tool metadata, effects, output bounds, and coding prompt guidance.                                                                         |
-| `@caelush/runtime`       | Replaceable execution substrate. The current `LocalRuntime` owns workspace containment, bounded filesystem access, verified patching, shell/process sessions, and read-only Git operations.                                                                   |
-| `@caelush/security`      | Permission/capability policy, Tool execution gate, approval identity, sensitive-path and command policy, secret detection/redaction, and safe Tool-result presentation. It does not execute commands.                                                         |
-| `@caelush/storage`       | SQLite opening/migrations and repositories for Protocol entities, Run execution snapshots, durable messages, Tool lifecycle, Verification, budgets, and durable events. Database rows do not become a second public state model.                              |
-| `@caelush/events`        | Durable event contracts and EventBus replay/live-watch behavior. It owns event ordering at the interface; Storage supplies the durable implementation.                                                                                                        |
-| `@caelush/verification`  | Verification planning, bounded evidence, project checks, change/task review, repair workflow, freshness/integrity checks, and Verification results. It can provide evidence but cannot complete a Run.                                                        |
-| `@caelush/client`        | Browser/host-safe HTTP and SSE transport plus client-side projections.                                                                                                                                                                                        |
-| `@caelush/memory`        | Provider-independent memory records, sensitivity validation, and memory-store contracts used by Context composition.                                                                                                                                          |
-| `@caelush/shared`        | Small dependency-free shared boundary utilities such as path containment and project exclusions.                                                                                                                                                              |
-| `@caelush/observability` | Reserved observability package boundary; it currently exports no production API.                                                                                                                                                                              |
+| Package                  | Current authority                                                                                                                                                                                                                                                                                                              |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `@caelush/protocol`      | JSON-safe IDs, entities, schemas, API DTOs, Run/Tool/Approval/Verification contracts, and the canonical JSON-safe RunEvent domain, version-aware registry, and static event catalog. It is a low-level contract package.                                                                                                       |
+| `@caelush/ai`            | Provider-independent model domain, model descriptors, AI messages/tools, gateway lifecycle, adapters, stream validation, usage, and secret-safe AI errors. It does not know Runs or local Tools.                                                                                                                               |
+| `@caelush/agent`         | General Agent Kernel contracts and implementation: AgentLoop, decisions, durable message domain, Tool registry/batch pipeline, Run execution ports, Agent-owned DurableRunEventDraft/RunEventNotifierPort contracts, continuations, and recovery-facing data structures. It does not know concrete filesystem Tools or SQLite. |
+| `@caelush/core`          | RunController and canonical lifecycle coordination: state transitions, durable Run/State/Step/Continuation commits, model-turn and Tool-turn boundaries, resource governance, and completion authority.                                                                                                                        |
+| `@caelush/context`       | Workspace/project discovery, instructions, relevant-file planning, memory/context runtime coordination, and bounded model-input construction. It does not own provider invocation.                                                                                                                                             |
+| `@caelush/coding-agent`  | Coding composition layer and the single source of truth for built-in coding Tool definitions, operations adapters, Tool metadata, effects, output bounds, and coding prompt guidance.                                                                                                                                          |
+| `@caelush/runtime`       | Replaceable execution substrate. The current `LocalRuntime` owns workspace containment, bounded filesystem access, verified patching, shell/process sessions, and read-only Git operations.                                                                                                                                    |
+| `@caelush/security`      | Permission/capability policy, Tool execution gate, approval identity, sensitive-path and command policy, secret detection/redaction, and safe Tool-result presentation. It does not execute commands.                                                                                                                          |
+| `@caelush/storage`       | SQLite opening/migrations and repositories for Protocol entities, Run execution snapshots, durable messages, Tool lifecycle, Verification, budgets, and durable events. Database rows do not become a second public state model.                                                                                               |
+| `@caelush/events`        | Transitional compatibility/runtime package for the existing durable event aliases and EventBus replay/live-watch behavior. It is not the Phase 6A RunEvent domain authority.                                                                                                                                                   |
+| `@caelush/verification`  | Verification planning, bounded evidence, project checks, change/task review, repair workflow, freshness/integrity checks, and Verification results. It can provide evidence but cannot complete a Run.                                                                                                                         |
+| `@caelush/client`        | Browser/host-safe HTTP and SSE transport plus client-side projections.                                                                                                                                                                                                                                                         |
+| `@caelush/memory`        | Provider-independent memory records, sensitivity validation, and memory-store contracts used by Context composition.                                                                                                                                                                                                           |
+| `@caelush/shared`        | Small dependency-free shared boundary utilities such as path containment and project exclusions.                                                                                                                                                                                                                               |
+| `@caelush/observability` | Reserved observability package boundary; it currently exports no production API.                                                                                                                                                                                                                                               |
 
 ## Dependency direction
 
@@ -188,7 +188,38 @@ loss.
 
 SSE maps durable event sequence to the SSE id. Ephemeral updates never receive
 an SSE id. The daemon closes stream consumers before closing Storage during
-shutdown.
+shutdown. During Phase 6A the EventBus, SSE mapper, replay behavior, and
+client Timeline remain the current runtime path.
+
+## Phase 6A Event domain foundation
+
+Phase 6A establishes the canonical event vocabulary without changing the
+production delivery path:
+
+```text
+@caelush/protocol
+  RunEvent / DurableRunEvent / TransientRunEvent
+  version-aware static schema registry + event catalog
+          │
+          └── @caelush/agent
+                DurableRunEventDraft
+                RunEventNotifierPort
+                DurableRunEventReaderPort
+
+@caelush/events
+  transitional EventBus + current replay/live runtime
+```
+
+`AgentEvent` remains a deprecated compatibility name while v1 event fixtures
+continue to decode, including historical durable output events and the old
+empty ephemeral metadata shape. New canonical transient metadata requires its
+delivery class and stream identity. Durable sequence allocation remains a
+Storage transaction responsibility.
+
+`RunEventHub`, bounded subscriber queues and observer workers,
+`PublicEventProjector`, SSE or Client migration, durable writer cleanup,
+transient output/model signal wiring, and Control Hook pipelines are not part
+of Phase 6A; they remain Phase 6B–6H work.
 
 ## Phase 5D Context and replay authority
 
@@ -277,22 +308,24 @@ produce evidence but never own final completion.
 
 ## Architecture V2 status
 
-| Area                                          | Current status                                               |
-| --------------------------------------------- | ------------------------------------------------------------ |
-| Architecture foundation and public boundaries | Complete                                                     |
-| AI domain and provider migration              | Complete in the current composition                          |
-| Agent Kernel and durable Run boundaries       | Complete in the current composition                          |
-| Tool System and Coding Agent composition      | Complete in the current composition                          |
-| Message domain and storage foundation (5A/5B) | Complete                                                     |
-| Durable conversation runtime cutover (5C)     | Complete; `AgentMessageRecord` is the Run boundary authority |
-| Context and replay cutover (5D)               | Complete                                                     |
- | Phase 5E transcript/client projection migration | COMPLETE; daemon-owned Protocol Transcript projection        |
-| Legacy Message V2 retirement (5F)             | COMPLETE; final schema, backfill, and runtime cutover         |
+| Area                                            | Current status                                                    |
+| ----------------------------------------------- | ----------------------------------------------------------------- |
+| Architecture foundation and public boundaries   | Complete                                                          |
+| AI domain and provider migration                | Complete in the current composition                               |
+| Agent Kernel and durable Run boundaries         | Complete in the current composition                               |
+| Tool System and Coding Agent composition        | Complete in the current composition                               |
+| Message domain and storage foundation (5A/5B)   | Complete                                                          |
+| Durable conversation runtime cutover (5C)       | Complete; `AgentMessageRecord` is the Run boundary authority      |
+| Context and replay cutover (5D)                 | Complete                                                          |
+| Phase 5E transcript/client projection migration | COMPLETE; daemon-owned Protocol Transcript projection             |
+| Legacy Message V2 retirement (5F)               | COMPLETE; final schema, backfill, and runtime cutover             |
+| Event domain and Protocol foundation (6A)       | COMPLETE; canonical contracts, registry, catalog, and Agent ports |
+| Event runtime/control-plane migration (6B–6H)   | NOT STARTED; current EventBus/SSE path remains transitional       |
 
-The phase table describes the Message System migration line. Existing Runtime,
-Security, Verification, CLI, Web, and daemon layers are documented as current
-code above; they are not an invitation to reopen or extend the Message System
-phase boundary in this task.
+The phase table records the current Architecture V2 migration lines. Existing
+Runtime, Security, Verification, CLI, Web, and daemon layers are documented as
+current code above; they are not an invitation to reopen completed phases or
+to implement the pending Event System phases in this task.
 
 ## Explicit non-goals and future boundaries
 
@@ -303,8 +336,9 @@ The current architecture must not be described as already providing:
 - an OS-level hard sandbox or universal process-tree termination;
 - a provider-specific public SDK or raw model chain-of-thought surface.
 
-Those capabilities require new contracts and deliberate future work. They do
-not belong in the current Phase 5F source freeze.
+Those capabilities require new contracts and deliberate future work. The Event
+runtime fan-out, public projection, transient signal cutover, and Control Hook
+work likewise remain outside the completed Phase 6A foundation.
 
 ## Reference material
 

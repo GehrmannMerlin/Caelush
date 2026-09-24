@@ -1,0 +1,46 @@
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { describe, expect, it } from "vitest";
+
+const repositoryRoot = resolve(import.meta.dirname, "../..");
+
+async function read(relativePath: string): Promise<string> {
+  return readFile(resolve(repositoryRoot, relativePath), "utf8");
+}
+
+describe("Architecture V2 Phase 6A event domain foundation", () => {
+  it("keeps the canonical event ownership and compatibility direction explicit", async () => {
+    const protocol = await read("packages/protocol/src/events/index.ts");
+    const agent = await read("packages/agent/src/index.ts");
+    const legacyEvents = await read("packages/events/src/event-draft.ts");
+    const legacyManifest = await read("packages/events/package.json");
+
+    expect(protocol).toContain("RunEventSchema");
+    expect(protocol).toContain("AgentEventSchema = RunEventSchema");
+    expect(agent).toContain("./events/durable-run-event-draft.js");
+    expect(agent).toContain("./events/notifier-port.js");
+    expect(legacyEvents).toContain("@caelush/agent");
+    expect(legacyManifest).toContain('"@caelush/agent": "workspace:*"');
+  });
+
+  it("does not cut over runtime behavior reserved for later phases", async () => {
+    const eventBus = await read("packages/events/src/event-bus.ts");
+    const daemonComposition = await read("apps/daemon/src/daemon-composition.ts");
+    const daemonRoute = await read("apps/daemon/src/routes/events.ts");
+
+    expect(eventBus).toContain("async publish(");
+    expect(eventBus).toContain("notifyCommitted(");
+    expect(daemonComposition).toContain("EventBus");
+    expect(daemonRoute).toContain("mapAgentEventToSse");
+    expect(await read("packages/storage/src/schema.ts")).not.toContain("event_schema_version_v2");
+  });
+
+  it("keeps future-phase runtime components absent", async () => {
+    await expect(read("apps/daemon/src/events/run-event-hub.ts")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(read("packages/agent/src/hooks/control-hook-registry.ts")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+});
