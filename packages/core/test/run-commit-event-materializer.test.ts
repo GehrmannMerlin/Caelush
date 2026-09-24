@@ -20,7 +20,7 @@ import {
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import { createRunCommitEventMaterializer } from "../src/run-commit-event-materializer.js";
-import { createRunControllerEventFactory } from "../src/run-controller-events.js";
+import { createRunEventFactory } from "@caelush/agent";
 import type {
   RunExecutionCommitView,
   RunExecutionSnapshotView,
@@ -208,7 +208,7 @@ function materialize(
   const planned = planner.plan({ snapshot, directive, effect, now: NOW }) as RunExecutionCommitView;
   const ids = eventIds();
   const materializer = createRunCommitEventMaterializer({
-    eventFactory: createRunControllerEventFactory(),
+    eventFactory: createRunEventFactory(),
   });
   const materialized = materializer.materialize({
     snapshot,

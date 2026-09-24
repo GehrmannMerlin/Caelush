@@ -19,6 +19,7 @@ import {
   type AgentToolRegistry,
   type DurableResultPipelineFactory,
   type DurableToolExecutionCoordinator,
+  type RunEventNotifierPort,
   type PreparedToolCall,
   type ToolAdmissionCoordinator,
   type ToolAdmissionPort,
@@ -72,7 +73,7 @@ export interface CanonicalToolRuntimeOptions {
   readonly storage: CaelushStorage;
   readonly registry: AgentToolRegistry;
   /** The committed-event notifier, when the test also asserts live publication. */
-  readonly notifier?: { notifyCommitted(events: readonly unknown[]): void } | undefined;
+  readonly notifier?: RunEventNotifierPort | undefined;
   /** The whole admission coordinator, for a host that composes Coding/Security admission itself. */
   readonly admission?: ToolAdmissionCoordinator | undefined;
   /** The policy half of admission, for a host that only needs a policy port. */

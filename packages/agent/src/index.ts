@@ -202,6 +202,8 @@ export type { DurableRunEvent, TransientRunEvent } from "@caelush/protocol";
 export type { DurableRunEventDraft } from "./events/durable-run-event-draft.js";
 export type { RunEventNotifierPort } from "./events/notifier-port.js";
 export type { DurableRunEventReaderPort } from "./events/reader-port.js";
+export { createRunEventFactory } from "./events/run-event-factory.js";
+export type { MaxStepsReachedOutcome, RunEventFactory } from "./events/run-event-factory.js";
 
 /* The canonical Run execution store port. */
 export {

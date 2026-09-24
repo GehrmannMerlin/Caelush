@@ -129,6 +129,7 @@ function build(options: { readonly notifier?: (events: readonly unknown[]) => vo
               notified.push([...events]);
               options.notifier!(events);
             },
+            emitTransient: () => undefined,
           },
         }),
   });
@@ -378,6 +379,7 @@ describe("ToolSettlementCoordinator", () => {
         notifyCommitted() {
           order.push("notify");
         },
+        emitTransient: () => undefined,
       },
     });
     store.committedEvents = [createEventId()];

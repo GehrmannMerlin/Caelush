@@ -212,6 +212,18 @@ describe("RunController durable boundaries", () => {
     expect((await storage.runs.get(run.id))?.finalResult).toBeUndefined();
     expect(events.map((event) => (event as { type: string }).type)).not.toContain("run.completed");
     expect(await storage.eventReader.latestSequence(run.id)).toBeGreaterThan(0);
+    const records = await storage.messageRecords.listByRun(run.id);
+    const committedMessageEvents = (
+      await storage.eventReader.replay(run.id, {
+        afterSequence: 0,
+        throughSequence: Number.MAX_SAFE_INTEGER,
+        limit: 1000,
+      })
+    ).filter((event) => event.type === "conversation.message.committed");
+    expect(committedMessageEvents).toHaveLength(records.length);
+    expect(committedMessageEvents.map((event) => event.payload.messageId)).toEqual(
+      records.map((record) => record.messageId),
+    );
     await storage.close();
   });
 

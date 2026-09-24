@@ -5,16 +5,29 @@ import type {
   AgentStep,
   EventId,
   TimestampMs,
-  VerificationPlan,
   VerificationCheckId,
+  VerificationPlan,
   VerifiedRunFinalResult,
 } from "@caelush/protocol";
-import type { AgentLoopOutcomeResult } from "./agent-loop-input.js";
-import type { DurableEventDraft } from "./run-execution-store.js";
-import { summarizeAgentLoopOutcome } from "./agent-summary.js";
-import type { AgentBudgetBlock } from "./agent-errors.js";
+import type { AgentBudgetBlock } from "../loop/ports/model-request-admission.js";
+import type { DurableEventDraft } from "../run/ports/run-execution-store.js";
+import type { AgentMessageRecordDraft } from "../messages/persistence/record.js";
 
-export interface RunControllerEventFactory {
+/** The only outcome fact needed to describe the bounded max-step terminal event. */
+export interface MaxStepsReachedOutcome {
+  readonly type: "MAX_STEPS_REACHED";
+  readonly stepsCompleted: number;
+  readonly maxSteps: number;
+}
+
+/**
+ * Reusable durable Run-event construction owned by Agent.
+ *
+ * The factory creates JSON-safe drafts only. It does not assign durable sequence numbers, write
+ * Storage, publish notifications, or decide a Run transition; those authorities remain at the
+ * Run commit boundary and in Storage.
+ */
+export interface RunEventFactory {
   runStarted(run: AgentRun, eventId: EventId, timestamp: TimestampMs): DurableEventDraft;
   statusChanged(
     run: AgentRun,
@@ -23,12 +36,7 @@ export interface RunControllerEventFactory {
     eventId: EventId,
     timestamp: TimestampMs,
   ): DurableEventDraft;
-  llmStarted(
-    run: AgentRun,
-    step: AgentStep,
-    eventId: EventId,
-    timestamp: TimestampMs,
-  ): DurableEventDraft;
+  llmStarted(run: AgentRun, step: AgentStep, eventId: EventId, timestamp: TimestampMs): DurableEventDraft;
   llmCompleted(
     run: AgentRun,
     state: AgentState,
@@ -77,12 +85,7 @@ export interface RunControllerEventFactory {
     eventId: EventId,
     timestamp: TimestampMs,
   ): DurableEventDraft;
-  failed(
-    run: AgentRun,
-    error: AgentError,
-    eventId: EventId,
-    timestamp: TimestampMs,
-  ): DurableEventDraft;
+  failed(run: AgentRun, error: AgentError, eventId: EventId, timestamp: TimestampMs): DurableEventDraft;
   cancelled(run: AgentRun, eventId: EventId, timestamp: TimestampMs): DurableEventDraft;
   timedOut(
     run: AgentRun,
@@ -93,7 +96,7 @@ export interface RunControllerEventFactory {
   maxSteps(
     run: AgentRun,
     state: AgentState,
-    outcome: Extract<AgentLoopOutcomeResult["outcome"], { type: "MAX_STEPS_REACHED" }>,
+    outcome: MaxStepsReachedOutcome,
     eventId: EventId,
     timestamp: TimestampMs,
   ): DurableEventDraft;
@@ -148,6 +151,12 @@ export interface RunControllerEventFactory {
     eventId: EventId,
     timestamp: TimestampMs,
   ): DurableEventDraft;
+  messageCommitted(
+    run: AgentRun,
+    message: AgentMessageRecordDraft,
+    eventId: EventId,
+    timestamp: TimestampMs,
+  ): DurableEventDraft;
 }
 
 function base(run: AgentRun, eventId: EventId, timestamp: TimestampMs, stepId?: AgentStep["id"]) {
@@ -163,7 +172,11 @@ function base(run: AgentRun, eventId: EventId, timestamp: TimestampMs, stepId?: 
   };
 }
 
-export function createRunControllerEventFactory(): RunControllerEventFactory {
+function summarizeMaxSteps(outcome: MaxStepsReachedOutcome): string {
+  return `Reached the configured maximum of ${outcome.maxSteps} agent steps.`;
+}
+
+export function createRunEventFactory(): RunEventFactory {
   return {
     runStarted: (run, eventId, timestamp) => ({
       ...base(run, eventId, timestamp),
@@ -238,7 +251,7 @@ export function createRunControllerEventFactory(): RunControllerEventFactory {
     maxSteps: (run, _state, outcome, eventId, timestamp) => ({
       ...base(run, eventId, timestamp),
       type: "reasoning.summary",
-      payload: { summary: summarizeAgentLoopOutcome(outcome) },
+      payload: { summary: summarizeMaxSteps(outcome) },
     }),
     budgetExceeded: (run, block, eventId, timestamp) => ({
       ...base(run, eventId, timestamp),
@@ -324,6 +337,15 @@ export function createRunControllerEventFactory(): RunControllerEventFactory {
       ...base(run, eventId, timestamp),
       type: "run.completed",
       payload: { result },
+    }),
+    messageCommitted: (run, message, eventId, timestamp) => ({
+      ...base(run, eventId, timestamp),
+      type: "conversation.message.committed",
+      payload: {
+        messageId: message.messageId,
+        conversationTurnId: message.conversationTurnId,
+        messageType: message.messageType,
+      },
     }),
   };
 }

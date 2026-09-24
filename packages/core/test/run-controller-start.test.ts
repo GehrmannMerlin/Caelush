@@ -392,7 +392,13 @@ describe("RunController.start", () => {
     expect(store.commits[0]?.events.map((event) => event.type)).toEqual([
       "run.started",
       "status.changed",
+      "conversation.message.committed",
     ]);
+    expect(store.commits[0]?.events[2]?.payload).toEqual({
+      messageId: store.commits[0]?.messagesToAppend[0]?.draft.messageId,
+      conversationTurnId: store.commits[0]?.messagesToAppend[0]?.draft.conversationTurnId,
+      messageType: store.commits[0]?.messagesToAppend[0]?.draft.messageType,
+    });
     expect(store.commits.at(-1)?.events.map((event) => event.type)).toContain(
       "verification.planned",
     );

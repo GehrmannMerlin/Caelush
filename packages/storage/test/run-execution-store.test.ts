@@ -126,6 +126,18 @@ describe("SqliteRunExecutionStore", () => {
         finishReason: "TOOL_CALLS",
       },
     });
+    const assistantAfterFailedEvent = factory.createAssistant({
+      ...scope,
+      sourceStepId: step.id,
+      source: modelMessageSource("llm_fixture_2"),
+      content: [agentTextPart("this must roll back")],
+      model: {
+        kind: "MODEL_TURN",
+        callId: "llm_fixture_2",
+        model: { provider: "fixture", model: "fixture-model" },
+        finishReason: "STOP",
+      },
+    });
     const append = (message: AgentMessage) => {
       const encoded = codecs.encode(message);
       return {
@@ -190,7 +202,7 @@ describe("SqliteRunExecutionStore", () => {
         expectedStateRevision: 1,
         expectedContinuationRevision: 1,
         stepWrites: [],
-        messagesToAppend: [],
+        messagesToAppend: [append(assistantAfterFailedEvent)],
         events: [event(run.id, session.id, duplicateEventId)],
       }),
     ).rejects.toThrow();

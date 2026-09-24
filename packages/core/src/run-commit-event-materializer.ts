@@ -6,11 +6,14 @@ import type {
   VerificationPlan,
   VerifiedRunFinalResult,
 } from "@caelush/protocol";
-import type { RunExecutionDirective, RunExecutionEffectResult } from "@caelush/agent";
-import { isTerminalRunStatus } from "@caelush/agent";
+import {
+  createRunEventFactory,
+  isTerminalRunStatus,
+  type RunEventFactory,
+  type RunExecutionDirective,
+  type RunExecutionEffectResult,
+} from "@caelush/agent";
 import type { EventIdFactory } from "./run-controller-ports.js";
-import { createRunControllerEventFactory } from "./run-controller-events.js";
-import type { RunControllerEventFactory } from "./run-controller-events.js";
 import { deriveRunDeadline } from "./run-deadline.js";
 import type {
   DurableEventDraft,
@@ -126,14 +129,14 @@ export interface RunCommitEventMaterializer {
 
 export interface RunCommitEventMaterializerDependencies {
   /** Reused verbatim, so there is no second event vocabulary. */
-  readonly eventFactory?: RunControllerEventFactory;
+  readonly eventFactory?: RunEventFactory;
 }
 
 /** Create the materializer over the existing Run Controller event factory. */
 export function createRunCommitEventMaterializer(
   dependencies: RunCommitEventMaterializerDependencies = {},
 ): RunCommitEventMaterializer {
-  const events = dependencies.eventFactory ?? createRunControllerEventFactory();
+  const events = dependencies.eventFactory ?? createRunEventFactory();
 
   return {
     materialize(input: RunCommitEventMaterializerInput): RunExecutionCommitView {

@@ -140,10 +140,7 @@ import type {
 } from "./run-execution-store.js";
 import type { CompletionEventEvidence } from "./run-commit-event-materializer.js";
 import type { RunControllerResult } from "./run-controller-input.js";
-import {
-  createRunControllerEventFactory,
-  type RunControllerEventFactory,
-} from "./run-controller-events.js";
+import { createRunEventFactory, type RunEventFactory } from "@caelush/agent";
 import type { RunControllerDependencies, ToolTurnPipeline } from "./run-controller-ports.js";
 import { toDurableRetryCode } from "./ai-invocation-projection.js";
 import type { AgentBudgetBlock } from "./agent-errors.js";
@@ -298,7 +295,7 @@ export class RunController {
   private readonly deadlineRegistry: RunDeadlineRegistry;
   private readonly retryRegistry: RunRetryRegistry;
   private readonly retryController: RetryController;
-  private readonly eventFactory: RunControllerEventFactory;
+  private readonly eventFactory: RunEventFactory;
   /**
    * The durable Run execution coordinator.
    *
@@ -337,7 +334,7 @@ export class RunController {
   private readonly completionAssembly: RunCompletionAssembly | undefined;
 
   constructor(private readonly dependencies: RunControllerDependencies) {
-    this.eventFactory = createRunControllerEventFactory();
+    this.eventFactory = createRunEventFactory();
     this.scopes = dependencies.scopes ?? new RunExecutionScopeRegistry();
     this.deadlineRegistry =
       dependencies.deadlineRegistry ?? new RunDeadlineRegistry({ clock: dependencies.clock });
@@ -3050,7 +3047,7 @@ export class RunController {
 
   private async commit(command: RunExecutionCommit) {
     try {
-      return await this.dependencies.executionStore.commit(command);
+      return await this.dependencies.executionStore.commit(this.withMessageCommitEvents(command));
     } catch (error) {
       if (
         error instanceof RunControllerInfrastructureError ||
@@ -3063,6 +3060,29 @@ export class RunController {
         cause: error,
       });
     }
+  }
+
+  /**
+   * Add the metadata-only event for each durable conversation append at the Run authority boundary.
+   *
+   * The Storage transaction receives the records and these event drafts together, so the message
+   * ledger and its live/public projection fact cannot diverge. Existing lifecycle events retain
+   * their frozen order; message facts follow them in the same append order as the durable records.
+   */
+  private withMessageCommitEvents<
+    T extends Pick<RunExecutionCommit, "run" | "messagesToAppend" | "events">,
+  >(command: T): T {
+    if (command.messagesToAppend.length === 0) return command;
+    const timestamp = this.dependencies.clock.now();
+    return {
+      ...command,
+      events: [
+        ...command.events,
+        ...command.messagesToAppend.map(({ draft }) =>
+          this.eventFactory.messageCommitted(command.run, draft, this.nextEventId(), timestamp),
+        ),
+      ],
+    };
   }
 
   /**
@@ -3089,7 +3109,9 @@ export class RunController {
       );
     }
     try {
-      const committed = await persistence.commitCandidateBoundary(command);
+      const committed = await persistence.commitCandidateBoundary(
+        this.withMessageCommitEvents(command),
+      );
       this.notify(committed.events);
       return committed;
     } catch (error) {

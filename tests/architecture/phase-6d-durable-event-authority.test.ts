@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -48,5 +48,16 @@ describe("Architecture V2 Phase 6D durable event authority", () => {
     expect(daemon).not.toMatch(/readonly eventBus\??:/);
     expect(daemon).not.toMatch(/\beventBus:\s*eventNotifier/);
     expect(daemon).not.toMatch(/options\.eventBus/);
+  });
+
+  it("keeps the reusable Run event factory in Agent", async () => {
+    const agentFactory = await read("packages/agent/src/events/run-event-factory.ts");
+    const materializer = await read("packages/core/src/run-commit-event-materializer.ts");
+
+    await expect(access(resolve(repositoryRoot, "packages/core/src/run-controller-events.ts"))).rejects.toThrow();
+    expect(agentFactory).toContain("createRunEventFactory");
+    expect(agentFactory).not.toContain("@caelush/core");
+    expect(materializer).toContain('from "@caelush/agent"');
+    expect(materializer).not.toContain("./run-controller-events.js");
   });
 });
