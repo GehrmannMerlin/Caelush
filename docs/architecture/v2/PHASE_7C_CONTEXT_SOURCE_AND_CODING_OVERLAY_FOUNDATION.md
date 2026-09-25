@@ -1,6 +1,6 @@
 # Phase 7C — Context Source Provider Migration & Coding Context Overlay Foundation
 
-Status: design approved; implementation pending.
+Status: implementation verified; production cutover intentionally pending.
 
 Phase 7C establishes the target Context Source layer without changing the
 production Context composition. The source layer is a parallel target path for
@@ -309,15 +309,15 @@ coding.temporal
 The existing Document Builder maps these semantic item types to explicit
 authority labels:
 
-| Item type | Document authority |
-| --- | --- |
-| `coding.project_instruction` | `PROJECT_INSTRUCTION` |
-| `coding.workspace`, `coding.runtime_fact`, `coding.git_state`, `coding.temporal` | `RUNTIME_FACT` |
-| `agent.checkpoint` | `RECOVERY_RECORD` |
-| `agent.memory`, `coding.project_metadata`, `coding.relevant_file`, `coding.skill_catalog` | `REFERENCE` |
-| `coding.verification_repair` | `DIAGNOSTIC` |
-| `agent.conversation` | `REFERENCE` |
-| `agent.extension` | existing extension authority semantics |
+| Item type                                                                                 | Document authority                     |
+| ----------------------------------------------------------------------------------------- | -------------------------------------- |
+| `coding.project_instruction`                                                              | `PROJECT_INSTRUCTION`                  |
+| `coding.workspace`, `coding.runtime_fact`, `coding.git_state`, `coding.temporal`          | `RUNTIME_FACT`                         |
+| `agent.checkpoint`                                                                        | `RECOVERY_RECORD`                      |
+| `agent.memory`, `coding.project_metadata`, `coding.relevant_file`, `coding.skill_catalog` | `REFERENCE`                            |
+| `coding.verification_repair`                                                              | `DIAGNOSTIC`                           |
+| `agent.conversation`                                                                      | `REFERENCE`                            |
+| `agent.extension`                                                                         | existing extension authority semantics |
 
 The generic Planner remains source-agnostic. It may inspect priority,
 retention, scope, freshness, sensitivity, source caps, atomicity, and history
@@ -325,22 +325,22 @@ semantics, but it must not branch on Coding Source IDs.
 
 ## Current-to-target source inventory
 
-| Fact family | Current authority | Phase 7C target | Migration form |
-| --- | --- | --- | --- |
-| Conversation | Message Domain snapshot and stored messages | `agent.conversation` | Generic provider over snapshot |
-| Checkpoint | Existing compatible checkpoint data | `agent.checkpoint` | Injected loader/adapter |
-| Memory | Existing safe memory projection | `agent.memory` | Injected data port |
-| Extension contribution | Phase 6F validated contribution pipeline | `agent.extension-contributions` | Adapter over validated input |
-| Branch context | Not implemented | `agent.branch-context` | Intentional NoOp |
-| Workspace | Legacy Workspace/Environment facts | `coding.workspace` | Safe descriptor port |
-| Runtime facts | Runtime/authority projection | `coding.runtime-facts` | Narrow safe projection port |
-| Project instructions | Legacy ProjectInstructionDiscovery | `coding.project-instructions` | Discovery-result adapter |
-| Project metadata | Legacy ProjectInspector/Profile | `coding.project-metadata` | Metadata projection adapter |
-| Relevant files | Legacy discovery/rank/budget chain | `coding.relevant-files` | Relevant-plan adapter |
-| Skill catalog | No current runtime required | `coding.skill-catalog` | Frozen port with NoOp default |
-| Git state | Runtime/public Git facts | `coding.git-state` | Narrow Git projection port |
-| Verification repair | Existing Verification repair projection | `coding.verification-repair` | Evidence adapter |
-| Temporal facts | Host clock | `coding.temporal` | Injected clock |
+| Fact family            | Current authority                           | Phase 7C target                 | Migration form                 |
+| ---------------------- | ------------------------------------------- | ------------------------------- | ------------------------------ |
+| Conversation           | Message Domain snapshot and stored messages | `agent.conversation`            | Generic provider over snapshot |
+| Checkpoint             | Existing compatible checkpoint data         | `agent.checkpoint`              | Injected loader/adapter        |
+| Memory                 | Existing safe memory projection             | `agent.memory`                  | Injected data port             |
+| Extension contribution | Phase 6F validated contribution pipeline    | `agent.extension-contributions` | Adapter over validated input   |
+| Branch context         | Not implemented                             | `agent.branch-context`          | Intentional NoOp               |
+| Workspace              | Legacy Workspace/Environment facts          | `coding.workspace`              | Safe descriptor port           |
+| Runtime facts          | Runtime/authority projection                | `coding.runtime-facts`          | Narrow safe projection port    |
+| Project instructions   | Legacy ProjectInstructionDiscovery          | `coding.project-instructions`   | Discovery-result adapter       |
+| Project metadata       | Legacy ProjectInspector/Profile             | `coding.project-metadata`       | Metadata projection adapter    |
+| Relevant files         | Legacy discovery/rank/budget chain          | `coding.relevant-files`         | Relevant-plan adapter          |
+| Skill catalog          | No current runtime required                 | `coding.skill-catalog`          | Frozen port with NoOp default  |
+| Git state              | Runtime/public Git facts                    | `coding.git-state`              | Narrow Git projection port     |
+| Verification repair    | Existing Verification repair projection     | `coding.verification-repair`    | Evidence adapter               |
+| Temporal facts         | Host clock                                  | `coding.temporal`               | Injected clock                 |
 
 The legacy implementation remains in `@caelush/context`. This round does not
 physically retire `environment.ts`, `filesystem.ts`, `project-root.ts`,
@@ -416,3 +416,25 @@ Phase 7C does not implement or wire:
 Phase 7D has not started. The Phase 7C target path ends at
 `ContextDocument`.
 
+## Implementation verification
+
+The Phase 7C target path is present in the current source tree and is covered
+by focused provider, public-API, authority, integration, and architecture
+tests. The verified implementation includes:
+
+- the five Generic Agent Source Providers under
+  `packages/agent/src/context/source/`;
+- the nine Coding Context Source IDs, safe data ports, and nine Coding
+  provider factories under `packages/coding-agent/src/context/`;
+- root-only public exports for both provider families and the functional
+  `planContext` entry point;
+- explicit test-only Registry → Planner → Document composition;
+- the unchanged `Core → LegacyContextRuntimeAdapter → @caelush/context`
+  production compatibility path; and
+- executable guards against forbidden dependencies and Phase 7D+ leakage.
+
+This verification does not imply a production Context Engine cutover. The
+legacy Context runtime remains the production path, and the following remain
+explicitly deferred: ContextMaterializer, AIMessage projection, semantic
+compaction, Checkpoint V2, rehydration, persistence, daemon/client rewiring,
+Skill Runtime, Branch Context, Tool changes, and Event changes.
