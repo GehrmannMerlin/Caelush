@@ -84,7 +84,12 @@ function authorityForType(type: string): ContextSectionAuthority {
   if (type === "agent.goal" || type === "agent.extension") return "CORE_POLICY";
   if (type === "agent.checkpoint") return "RECOVERY_RECORD";
   if (type === "coding.project_instruction") return "PROJECT_INSTRUCTION";
-  if (type === "coding.runtime_fact" || type === "coding.git_state" || type === "coding.temporal") {
+  if (
+    type === "coding.workspace" ||
+    type === "coding.runtime_fact" ||
+    type === "coding.git_state" ||
+    type === "coding.temporal"
+  ) {
     return "RUNTIME_FACT";
   }
   if (type === "coding.verification_repair") return "DIAGNOSTIC";
