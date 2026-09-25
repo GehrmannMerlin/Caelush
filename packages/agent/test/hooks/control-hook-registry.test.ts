@@ -38,20 +38,31 @@ describe("ControlHookRegistryBuilder", () => {
 
     builder.register(registration("later", 20));
     expect(registry.list().map((item) => item.id)).toEqual(["early", "alpha", "zeta"]);
-    expect(() => listed.push(first)).toThrow();
+    expect(() => (listed as ControlHookRegistration<TestHook>[]).push(first)).toThrow();
   });
 
-  it.each([
+  it.each<
+    [
+      string,
+      () => ControlHookRegistration<TestHook>,
+      (() => ControlHookRegistration<TestHook>) | undefined,
+    ]
+  >([
     ["duplicate hook id", () => registration("same", 1), () => registration("same", 2)],
-    ["invalid priority", () => registration("bad", -1)],
-    ["non-safe priority", () => registration("bad", Number.MAX_SAFE_INTEGER + 1)],
-    ["invalid timeout", () => ({ ...registration("bad", 1), timeoutMs: 0 })],
+    ["invalid priority", () => registration("bad", -1), undefined],
+    ["non-safe priority", () => registration("bad", Number.MAX_SAFE_INTEGER + 1), undefined],
+    ["invalid timeout", () => ({ ...registration("bad", 1), timeoutMs: 0 }), undefined],
     [
       "non-safe timeout",
       () => ({ ...registration("bad", 1), timeoutMs: Number.MAX_SAFE_INTEGER + 1 }),
+      undefined,
     ],
-    ["invalid criticality", () => ({ ...registration("bad", 1), criticality: "MAYBE" as never })],
-    ["missing callable", () => ({ ...registration("bad", 1), hook: {} as TestHook })],
+    [
+      "invalid criticality",
+      () => ({ ...registration("bad", 1), criticality: "MAYBE" as never }),
+      undefined,
+    ],
+    ["missing callable", () => ({ ...registration("bad", 1), hook: {} as TestHook }), undefined],
   ])("rejects %s", (_name, first, second) => {
     const builder = createControlHookRegistryBuilder<TestHook>();
     builder.register(first());

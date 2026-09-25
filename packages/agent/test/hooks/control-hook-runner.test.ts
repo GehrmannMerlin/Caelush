@@ -1,4 +1,4 @@
-import { createRunId, createSessionId, createStepId } from "@caelush/protocol";
+import { createRunId, createSessionId, createStepId, createTimestampMs } from "@caelush/protocol";
 import { describe, expect, it, vi } from "vitest";
 import {
   createControlHookId,
@@ -87,7 +87,7 @@ describe("ControlHookRunner", () => {
       clock: {
         now: (() => {
           let value = 100;
-          return () => (value += 1);
+          return () => createTimestampMs((value += 1));
         })(),
       },
     });
@@ -119,7 +119,10 @@ describe("ControlHookRunner", () => {
         ),
       )
       .build();
-    const runner = createControlHookRunner({ clock: { now: () => 10 }, pipelineId: "failure" });
+    const runner = createControlHookRunner({
+      clock: { now: () => createTimestampMs(10) },
+      pipelineId: "failure",
+    });
     const skipped = await runner.run(optional, undefined, context, {
       initial: "initial",
       onResult: (_current, next) => next,
@@ -130,7 +133,7 @@ describe("ControlHookRunner", () => {
     });
     expect(skipped.result).toBe("initial");
     expect(skipped.receipts[0]).toMatchObject({ outcome: "FAILED", hookId: "optional" });
-    expect(skipped.receipts[0]?.error).toBeUndefined();
+    expect(skipped.receipts[0]).not.toHaveProperty("error");
 
     const required = createControlHookRegistryBuilder<ControlHook<undefined, string>>()
       .register(
@@ -162,7 +165,10 @@ describe("ControlHookRunner", () => {
           registration("slow", { invoke: () => late }, { timeoutMs: 5, criticality: "OPTIONAL" }),
         )
         .build();
-      const runner = createControlHookRunner({ clock: { now: () => 10 }, pipelineId: "timeout" });
+      const runner = createControlHookRunner({
+        clock: { now: () => createTimestampMs(10) },
+        pipelineId: "timeout",
+      });
       const pending = runner.run(registry, undefined, context, {
         initial: "initial",
         onResult: (_current, next) => next,
@@ -207,7 +213,10 @@ describe("ControlHookRunner", () => {
         ),
       )
       .build();
-    const runner = createControlHookRunner({ clock: { now: () => 10 }, pipelineId: "abort" });
+    const runner = createControlHookRunner({
+      clock: { now: () => createTimestampMs(10) },
+      pipelineId: "abort",
+    });
     await expect(
       runner.run(registry, undefined, { ...context, signal: controller.signal }, policy("initial")),
     ).rejects.toBeInstanceOf(ControlHookAbortedError);
@@ -215,7 +224,10 @@ describe("ControlHookRunner", () => {
   });
 
   it("rejects nested same-pipeline execution but permits independent top-level runs", async () => {
-    const runner = createControlHookRunner({ clock: { now: () => 10 }, pipelineId: "reentrant" });
+    const runner = createControlHookRunner({
+      clock: { now: () => createTimestampMs(10) },
+      pipelineId: "reentrant",
+    });
     let nested!: Promise<unknown>;
     const registry = createControlHookRegistryBuilder<ControlHook<undefined, string>>();
     const hook: ControlHook<undefined, string> = {
