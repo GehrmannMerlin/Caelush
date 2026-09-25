@@ -90,3 +90,16 @@ export function assertBoundedText(value: string, maxBytes: number, label: string
     throw new TypeError(`${label} exceeds its bounded text contract.`);
   }
 }
+
+export function assertSafeOpaqueReference(value: string, label: string): void {
+  if (
+    value.length === 0 ||
+    value.includes("\0") ||
+    value.startsWith("/") ||
+    value.startsWith("\\") ||
+    /^[A-Za-z]:[\\/]/.test(value) ||
+    value.replaceAll("\\", "/").split("/").includes("..")
+  ) {
+    throw new TypeError(`${label} must be an opaque non-host reference.`);
+  }
+}

@@ -3,6 +3,7 @@ import type { ContextSourceInput, ContextSourceProvider } from "@caelush/agent";
 import type { ProjectInstructionContextPort } from "../ports.js";
 import {
   assertBoundedText,
+  assertSafeOpaqueReference,
   createCodingSourceResult,
   createCodingTextItem,
   resolveCodingTokenEstimator,
@@ -15,8 +16,7 @@ const PROVIDER_VERSION = "project-instructions-v1";
 const MAX_TOTAL_INSTRUCTION_BYTES = 32 * 1024;
 const MAX_PATH_BYTES = 4096;
 
-export interface ProjectInstructionContextSourceProviderOptions
-  extends CodingContextProviderOptions {
+export interface ProjectInstructionContextSourceProviderOptions extends CodingContextProviderOptions {
   readonly port: ProjectInstructionContextPort;
 }
 
@@ -31,6 +31,7 @@ export function createProjectInstructionContextSourceProvider(
         identity: input.identity,
         signal: input.signal,
       });
+      assertSafeOpaqueReference(projection.sourceRef, "Project instruction sourceRef");
       let totalBytes = 0;
       const items = projection.entries.map((entry) => {
         assertRelativeWorkspacePath(entry.relativePath);

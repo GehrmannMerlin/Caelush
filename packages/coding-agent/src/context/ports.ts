@@ -61,3 +61,74 @@ export interface ProjectMetadataContextPort {
     readonly signal: AbortSignal;
   }): Promise<ProjectMetadataProjection>;
 }
+
+export interface RelevantFileSectionProjection {
+  readonly relativePath: string;
+  readonly sourceRef: string;
+  readonly version: string;
+  readonly content: string;
+  readonly tokenEstimate: number;
+  readonly bytesIncluded: number;
+  readonly truncated: boolean;
+  readonly maxReadBytes?: number;
+}
+
+export interface RelevantFileProjection {
+  readonly sections: readonly RelevantFileSectionProjection[];
+}
+
+export interface RelevantFileContextPort {
+  load(input: {
+    readonly identity: AgentExecutionIdentity;
+    readonly signal: AbortSignal;
+  }): Promise<RelevantFileProjection>;
+}
+
+export interface SkillCatalogEntry {
+  readonly name: string;
+  readonly description: string;
+  readonly resourceRef: string;
+  readonly version: string;
+}
+
+export interface SkillCatalogPort {
+  list(input: {
+    readonly projectId?: string;
+    readonly signal: AbortSignal;
+  }): Promise<readonly SkillCatalogEntry[]>;
+}
+
+export interface GitStateProjection {
+  readonly sourceRef: string;
+  readonly version: string;
+  readonly branch?: string;
+  readonly changedPaths: readonly string[];
+  readonly summary: string;
+}
+
+export interface GitStateContextPort {
+  read(input: {
+    readonly identity: AgentExecutionIdentity;
+    readonly signal: AbortSignal;
+  }): Promise<GitStateProjection>;
+}
+
+export interface VerificationRepairProjection {
+  readonly repairRef?: string;
+  readonly sourceRef: string;
+  readonly version: string;
+  readonly text: string;
+}
+
+export interface VerificationRepairContextPort {
+  read(input: {
+    readonly identity: AgentExecutionIdentity;
+    readonly signal: AbortSignal;
+  }): Promise<VerificationRepairProjection | undefined>;
+}
+
+export interface ContextClock {
+  now(): number;
+}
+
+export type CodingContextClock = ContextClock;

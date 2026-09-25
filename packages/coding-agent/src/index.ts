@@ -41,9 +41,16 @@
 
 export {
   CODING_CONTEXT_SOURCE_IDS,
+  CODING_RELEVANT_FILE_LIMITS,
+  createGitStateContextSourceProvider,
+  createNoOpSkillCatalogPort,
   createProjectInstructionContextSourceProvider,
   createProjectMetadataContextSourceProvider,
+  createRelevantFileContextSourceProvider,
   createRuntimeFactsContextSourceProvider,
+  createSkillCatalogContextSourceProvider,
+  createTemporalContextSourceProvider,
+  createVerificationRepairContextSourceProvider,
   createWorkspaceContextSourceProvider,
 } from "./context/index.js";
 export type {
@@ -52,6 +59,10 @@ export type {
   CodingRuntimeFactsPort,
   CodingWorkspaceDescriptor,
   CodingWorkspacePort,
+  ContextClock,
+  CodingContextClock,
+  GitStateContextPort,
+  GitStateProjection,
   ProjectInstructionContextPort,
   ProjectInstructionContextSourceProviderOptions,
   ProjectInstructionEntry,
@@ -59,7 +70,18 @@ export type {
   ProjectMetadataContextPort,
   ProjectMetadataContextSourceProviderOptions,
   ProjectMetadataProjection,
+  RelevantFileContextPort,
+  RelevantFileContextSourceProviderOptions,
+  RelevantFileProjection,
+  RelevantFileSectionProjection,
   RuntimeFactsContextSourceProviderOptions,
+  SkillCatalogContextSourceProviderOptions,
+  SkillCatalogEntry,
+  SkillCatalogPort,
+  TemporalContextSourceProviderOptions,
+  VerificationRepairContextPort,
+  VerificationRepairContextSourceProviderOptions,
+  VerificationRepairProjection,
   WorkspaceContextSourceProviderOptions,
 } from "./context/index.js";
 
