@@ -100,6 +100,11 @@ export {
 export type { ContextTokenEstimatorPort } from "./token/context-token-estimator.js";
 
 export { assertContextSourceResult } from "./source/context-source.js";
+export {
+  createContextSourceItem,
+  freezeContextSourceResult,
+} from "./source/context-source-item.js";
+export { AGENT_CONTEXT_SOURCE_IDS } from "./source/source-ids.js";
 export type {
   ContextSourceCriticality,
   ContextSourceDiagnostic,

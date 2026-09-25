@@ -94,6 +94,7 @@ export {
   assertContextItem,
   assertContextRequestOverhead,
   assertContextSourceResult,
+  AGENT_CONTEXT_SOURCE_IDS,
   assertContextPlan,
   classifyContextPressure,
   collectContextSources,
@@ -112,8 +113,10 @@ export {
   createContextPolicy,
   createContextRequestOverheadEstimator,
   createContextSourceId,
+  createContextSourceItem,
   createContextSourceRegistryBuilder,
   createUtf8HeuristicTokenEstimator,
+  freezeContextSourceResult,
   Utf8HeuristicTokenEstimator,
 } from "./context/index.js";
 export type {
