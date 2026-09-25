@@ -90,9 +90,6 @@ importers:
       '@caelush/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@caelush/events':
-        specifier: workspace:*
-        version: link:../../packages/events
       '@caelush/memory':
         specifier: workspace:*
         version: link:../../packages/memory
@@ -257,15 +254,6 @@ importers:
       zod:
         specifier: 4.4.3
         version: 4.4.3
-
-  packages/events:
-    dependencies:
-      '@caelush/agent':
-        specifier: workspace:*
-        version: link:../agent
-      '@caelush/protocol':
-        specifier: workspace:*
-        version: link:../protocol
 
   packages/memory: {}
 

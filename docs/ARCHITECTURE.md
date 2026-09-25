@@ -25,7 +25,7 @@ Local daemon (the only production composition root)
           ├── @caelush/ai + @caelush/context
           ├── @caelush/coding-agent + @caelush/runtime
           ├── @caelush/security
-          ├── @caelush/storage + @caelush/events
+          ├── @caelush/storage
           │       └── daemon-owned RunEventHub observation plane
           └── @caelush/verification
 ```
@@ -61,7 +61,6 @@ durable Run and AgentEvent contracts.
 | `@caelush/runtime`       | Replaceable execution substrate. The current `LocalRuntime` owns workspace containment, bounded filesystem access, verified patching, shell/process sessions, and read-only Git operations.                                                                                                                                    |
 | `@caelush/security`      | Permission/capability policy, Tool execution gate, approval identity, sensitive-path and command policy, secret detection/redaction, and safe Tool-result presentation. It does not execute commands.                                                                                                                          |
 | `@caelush/storage`       | SQLite opening/migrations and repositories for Protocol entities, Run execution snapshots, durable messages, Tool lifecycle, Verification, budgets, and durable events; exposes only a read-only durable reader with `throughSequence`. Database rows do not become a second public state model.                               |
-| `@caelush/events`        | Transitional observation compatibility package for legacy EventBus consumers. It has no standalone durable-event write authority and is not the RunEvent domain or daemon observation authority.                                                                                                                               |
 | `@caelush/verification`  | Verification planning, bounded evidence, project checks, change/task review, repair workflow, freshness/integrity checks, and Verification results. It can provide evidence but cannot complete a Run.                                                                                                                         |
 | `@caelush/client`        | Browser/host-safe HTTP and SSE transport plus client-side projections.                                                                                                                                                                                                                                                         |
 | `@caelush/memory`        | Provider-independent memory records, sensitivity validation, and memory-store contracts used by Context composition.                                                                                                                                                                                                           |
@@ -193,17 +192,19 @@ bound; there is no public standalone durable-event writer.
 SSE maps durable event sequence to the SSE id. Ephemeral updates never receive
 an SSE id. The daemon closes stream consumers, disposes the RunEventHub, and
 only then closes Storage during shutdown. Phase 6B moves daemon observation to
-the asynchronous `RunEventHub`; the EventBus remains only legacy observation
-compatibility, while the SSE mapper and external event shape remain unchanged.
+the asynchronous `RunEventHub`; Phase 6H retires the transitional Events
+package while preserving the SSE mapper, external event shape, and historical
+Protocol compatibility.
 
-## Phase 6A–6G Event domain, observation, durable authority, live signals, and Tool control
+## Phase 6A–6H Event domain, observation, durable authority, live signals, Tool control, and package retirement
 
 Phase 6A established the canonical event vocabulary, Phase 6B adds the
 daemon-owned observation runtime, Phase 6C adds the public projection boundary,
 Phase 6D establishes durable writer authority, Phase 6E adds the transient
 signal path, Phase 6F adds the bounded Control Hook and Context Contribution
 path, and Phase 6G adds the Coding-owned Tool Guard and Tool Feedback control
-pipelines described below:
+pipelines. Phase 6H retires the transitional Event package and freezes the
+canonical ownership described below:
 
 ```text
 @caelush/protocol
@@ -399,6 +400,16 @@ with the existing `fingerprintProjection` helper before the message is
 materialized. Hook receipts remain Core-private diagnostics, not RunEvents,
 and Phase 6G adds no runtime Hook or HTTP plugin registry.
 
+## Phase 6H legacy Event package retirement
+
+The transitional `@caelush/events` workspace package is retired. There is no
+standalone EventBus runtime or durable Event writer outside the canonical
+owners: Protocol retains the RunEvent schemas and deprecated `AgentEvent`
+compatibility aliases, Agent retains event drafts and ports, Storage persists
+durable events and serves read-only replay, and the daemon owns RunEventHub and
+public projection. A permanent architecture tombstone verifies the package is
+absent from the workspace graph, manifests, lockfile, and production source.
+
 ## Phase 5D Context and replay authority
 
 The current Message V2 runtime cutover uses `AgentMessageRecord[]` as the
@@ -510,12 +521,12 @@ produce evidence but never own final completion.
 | Transient signal and streaming cutover (6E)     | COMPLETE; bounded live-only model/Tool/Runtime progress             |
 | Control Hooks and Context Contributions (6F)    | COMPLETE; generic Agent runner and bounded Core/Context integration |
 | Tool Guard and Tool Feedback control (6G)       | COMPLETE; Coding pipelines preserve Core Security and Tool truth    |
-| Package retirement (6H)                         | NOT STARTED                                                         |
+| Legacy Event package retirement (6H)            | COMPLETE; package, graph edges, and second EventBus runtime removed |
+| Event System V2 (6A–6H)                         | COMPLETE                                                            |
 
 The phase table records the current Architecture V2 migration lines. Existing
 Runtime, Security, Verification, CLI, Web, and daemon layers are documented as
-current code above; they are not an invitation to reopen completed phases or
-to implement the pending package-retirement phases in this task.
+current code above; they are not an invitation to reopen completed phases.
 
 ## Explicit non-goals and future boundaries
 
@@ -526,9 +537,9 @@ The current architecture must not be described as already providing:
 - an OS-level hard sandbox or universal process-tree termination;
 - a provider-specific public SDK or raw model chain-of-thought surface.
 
-Those capabilities require new contracts and deliberate future work. Package
-retirement remains a future Phase 6 boundary. Context compaction activity
-remains outside Event V2 until it has an atomic Context persistence boundary.
+Those capabilities require new contracts and deliberate future work. Context
+compaction activity remains outside Event V2 until it has an atomic Context
+persistence boundary.
 
 ## Reference material
 

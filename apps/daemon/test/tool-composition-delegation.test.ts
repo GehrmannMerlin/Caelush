@@ -1,7 +1,6 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EventBus } from "@caelush/events";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import { sanitizeTerminalOutput } from "@caelush/runtime";
 import {
@@ -128,7 +127,7 @@ describe("production Tool composition delegation", () => {
   it("composes the nine defaults through the production root unchanged", async () => {
     directory = await mkdtemp(join(tmpdir(), "caelush-tool-delegation-"));
     storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
-    daemon = await composeDaemon({ storage, notifier: new EventBus(storage.eventReader) });
+    daemon = await composeDaemon({ storage });
 
     // The production root's registry is the canonical one, in the frozen Coding order.
     expect(daemon.toolRegistry.names()).toEqual(EXPECTED_DEFAULT_TOOL_ORDER);

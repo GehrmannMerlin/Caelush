@@ -7,7 +7,7 @@ import type { CaelushStorage } from "@caelush/storage";
  *
  * It uses the public Run execution authority, so SSE tests exercise the same
  * transaction → committed event → notifier sequence as production without
- * granting EventBus a durable write capability.
+ * granting a test notifier a durable write capability.
  */
 export async function commitDurableTestEvent(
   storage: CaelushStorage,

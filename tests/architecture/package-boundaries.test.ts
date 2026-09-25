@@ -205,16 +205,12 @@ describe("package boundaries", () => {
     expect(source).not.toMatch(/\b(?:exec|execSync)\s*\(/);
   });
 
-  it("keeps Events provider-neutral and Storage below Core", async () => {
-    const events = await readManifest("packages/events/package.json");
+  it("keeps Storage below Core and provider-neutral", async () => {
     const storage = await readManifest("packages/storage/package.json");
     const core = await readManifest("packages/core/package.json");
-    const eventDependencies = Object.keys(dependencyEntries(events));
     const storageDependencies = Object.keys(dependencyEntries(storage));
     const coreDependencies = Object.keys(dependencyEntries(core));
 
-    expect(eventDependencies).toContain("@caelush/protocol");
-    expect(eventDependencies).not.toContain("@caelush/storage");
     // Phase 6D moved durable-event observation compatibility out of Storage: Storage exposes only
     // the read-only durable reader, while the daemon owns the live Hub and its notifier.
     expect(storageDependencies).not.toContain("@caelush/events");
@@ -235,18 +231,12 @@ describe("package boundaries", () => {
     expect(coreDependencies).not.toContain("@caelush/storage");
   });
 
-  it("keeps Core, Events, and Storage within the Phase 6C execution boundaries", async () => {
-    const [core, events, storage] = await Promise.all([
-      packageSource("core"),
-      packageSource("events"),
-      packageSource("storage"),
-    ]);
+  it("keeps Core and Storage within the Phase 6C execution boundaries", async () => {
+    const [core, storage] = await Promise.all([packageSource("core"), packageSource("storage")]);
     expect(core).not.toMatch(/from\s+["']@caelush\/storage["']/);
-    expect(events).not.toMatch(/from\s+["']@caelush\/(?:core|storage)["']/);
     expect(storage).not.toMatch(/from\s+["']@caelush\/(?:context|runtime|security|daemon)["']/);
     for (const [name, source] of [
       ["Core", core],
-      ["Events", events],
       ["Storage", storage],
     ] as const) {
       expect(source, `${name} imports an AI SDK`).not.toMatch(/from\s+["'](?:ai|@ai-sdk\/)/);
@@ -323,13 +313,13 @@ describe("package boundaries", () => {
     );
   });
 
-  it("allows the daemon to compose protocol, storage, and events through public entries", async () => {
+  it("allows the daemon to compose protocol, storage, and canonical event observation through public entries", async () => {
     const daemon = await readManifest("apps/daemon/package.json");
     const dependencies = Object.keys(dependencyEntries(daemon));
 
     expect(dependencies).toContain("@caelush/protocol");
     expect(dependencies).toContain("@caelush/storage");
-    expect(dependencies).toContain("@caelush/events");
+    expect(dependencies).not.toContain("@caelush/events");
     expect(dependencies).not.toContain("@caelush/cli");
     expect(dependencies).not.toContain("@caelush/web");
   });

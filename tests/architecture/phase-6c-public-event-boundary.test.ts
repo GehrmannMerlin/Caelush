@@ -41,14 +41,12 @@ describe("Architecture V2 Phase 6C public event boundary", () => {
     const reducer = await read("packages/client/src/timeline/reducer.ts");
     const app = await read("apps/daemon/src/app.ts");
     const daemonEvents = await read("apps/daemon/src/events/run-event-hub.ts");
-    const legacyBus = await read("packages/events/src/event-bus.ts");
 
     expect(client).toContain("PublicRunEventSchema");
     expect(client).not.toContain("AgentEventSchema");
     expect(reducer).toContain("PublicRunEvent");
     expect(app).toContain("publicEventProjector");
     expect(daemonEvents).toContain("class RunEventHub");
-    expect(legacyBus).toContain("async publish(");
     expect(await read("apps/daemon/src/routes/events.ts")).not.toMatch(
       /include(?:Debug|System)|[?&]debug=/,
     );

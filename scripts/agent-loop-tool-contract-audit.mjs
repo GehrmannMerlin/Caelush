@@ -29,7 +29,11 @@ async function createWorkspace(isGit) {
   const parent = await mkdtemp(path.join(os.tmpdir(), "caelush-agent-loop-audit-"));
   const workspace = path.join(parent, "workspace");
   await mkdir(path.join(workspace, "src"), { recursive: true });
-  await writeFile(path.join(workspace, "README.md"), "This fixture is for a read-only audit.\n", "utf8");
+  await writeFile(
+    path.join(workspace, "README.md"),
+    "This fixture is for a read-only audit.\n",
+    "utf8",
+  );
   await writeFile(path.join(workspace, "src", "answer.ts"), "export const answer = 42;\n", "utf8");
   if (isGit) {
     await runCommand("git", ["init", "-q"], { cwd: workspace });
@@ -42,19 +46,27 @@ async function createWorkspace(isGit) {
 }
 
 async function runCase({ isGit }) {
-  const [{ AgentRunSchema, createRunId, createSessionId, createTimestampMs, createWorkspaceId }, { EventBus }, { openCaelushStorage }, { composeDaemon }] = await Promise.all([
+  const [
+    { AgentRunSchema, createRunId, createSessionId, createTimestampMs, createWorkspaceId },
+    { openCaelushStorage },
+    { composeDaemon },
+  ] = await Promise.all([
     import("../packages/protocol/dist/index.js"),
-    import("../packages/events/dist/index.js"),
     import("../packages/storage/dist/index.js"),
     import("../apps/daemon/dist/daemon-composition.js"),
   ]);
   const fixture = await createWorkspace(isGit);
   const storage = await openCaelushStorage({ path: ":memory:" });
-  const eventBus = new EventBus(storage.events);
   const composition = composeDaemon({
     storage,
-    eventBus,
-    providers: [{ provider: providerId, baseUrl, apiKey, allowedModels: allowedModels.length > 0 ? allowedModels : [modelId] }],
+    providers: [
+      {
+        provider: providerId,
+        baseUrl,
+        apiKey,
+        allowedModels: allowedModels.length > 0 ? allowedModels : [modelId],
+      },
+    ],
     defaultModel: { provider: providerId, model: modelId },
     toolExposure: { git: isGit ? "AVAILABLE" : "UNAVAILABLE" },
   });
@@ -80,7 +92,11 @@ async function runCase({ isGit }) {
   await storage.runs.insert(run);
   try {
     const result = await composition.controller.start(run.id);
-    const events = await storage.events.replay(run.id, { limit: 256 });
+    const events = await storage.eventReader.replay(run.id, {
+      afterSequence: 0,
+      throughSequence: Number.MAX_SAFE_INTEGER,
+      limit: 256,
+    });
     const invocations = await storage.toolInvocations.listByRun(run.id);
     return {
       workspace: isGit ? "GIT" : "NON_GIT",
@@ -102,17 +118,39 @@ async function runCase({ isGit }) {
 }
 
 if (apiKey === undefined || apiKey.length === 0) {
-  globalThis.console.log(JSON.stringify({
-    status: "SKIPPED",
-    reason: "CAELUSH_PROVIDER_API_KEY_MISSING",
-    env: { CAELUSH_PROVIDER_ID: runtimeProcess.env.CAELUSH_PROVIDER_ID === undefined ? "MISSING" : "PRESENT", CAELUSH_PROVIDER_BASE_URL: configuredBaseUrl === undefined ? "MISSING" : "PRESENT", CAELUSH_PROVIDER_API_KEY: apiKey === undefined ? "MISSING" : "PRESENT", CAELUSH_PROVIDER_ALLOWED_MODELS: allowedModels.length === 0 ? "MISSING" : "PRESENT", CAELUSH_DEFAULT_PROVIDER: runtimeProcess.env.CAELUSH_DEFAULT_PROVIDER === undefined ? "MISSING" : "PRESENT", CAELUSH_DEFAULT_MODEL: configuredModel === undefined ? "MISSING" : "PRESENT" },
-  }));
+  globalThis.console.log(
+    JSON.stringify({
+      status: "SKIPPED",
+      reason: "CAELUSH_PROVIDER_API_KEY_MISSING",
+      env: {
+        CAELUSH_PROVIDER_ID:
+          runtimeProcess.env.CAELUSH_PROVIDER_ID === undefined ? "MISSING" : "PRESENT",
+        CAELUSH_PROVIDER_BASE_URL: configuredBaseUrl === undefined ? "MISSING" : "PRESENT",
+        CAELUSH_PROVIDER_API_KEY: apiKey === undefined ? "MISSING" : "PRESENT",
+        CAELUSH_PROVIDER_ALLOWED_MODELS: allowedModels.length === 0 ? "MISSING" : "PRESENT",
+        CAELUSH_DEFAULT_PROVIDER:
+          runtimeProcess.env.CAELUSH_DEFAULT_PROVIDER === undefined ? "MISSING" : "PRESENT",
+        CAELUSH_DEFAULT_MODEL: configuredModel === undefined ? "MISSING" : "PRESENT",
+      },
+    }),
+  );
 } else {
   const results = [];
   for (const isGit of [true, false]) results.push(await runCase({ isGit }));
-  globalThis.console.log(JSON.stringify({
-    status: "COMPLETED",
-    env: { CAELUSH_PROVIDER_ID: runtimeProcess.env.CAELUSH_PROVIDER_ID === undefined ? "MISSING" : "PRESENT", CAELUSH_PROVIDER_BASE_URL: configuredBaseUrl === undefined ? "MISSING" : "PRESENT", CAELUSH_PROVIDER_API_KEY: "PRESENT", CAELUSH_PROVIDER_ALLOWED_MODELS: allowedModels.length === 0 ? "MISSING" : "PRESENT", CAELUSH_DEFAULT_PROVIDER: runtimeProcess.env.CAELUSH_DEFAULT_PROVIDER === undefined ? "MISSING" : "PRESENT", CAELUSH_DEFAULT_MODEL: configuredModel === undefined ? "MISSING" : "PRESENT" },
-    results,
-  }));
+  globalThis.console.log(
+    JSON.stringify({
+      status: "COMPLETED",
+      env: {
+        CAELUSH_PROVIDER_ID:
+          runtimeProcess.env.CAELUSH_PROVIDER_ID === undefined ? "MISSING" : "PRESENT",
+        CAELUSH_PROVIDER_BASE_URL: configuredBaseUrl === undefined ? "MISSING" : "PRESENT",
+        CAELUSH_PROVIDER_API_KEY: "PRESENT",
+        CAELUSH_PROVIDER_ALLOWED_MODELS: allowedModels.length === 0 ? "MISSING" : "PRESENT",
+        CAELUSH_DEFAULT_PROVIDER:
+          runtimeProcess.env.CAELUSH_DEFAULT_PROVIDER === undefined ? "MISSING" : "PRESENT",
+        CAELUSH_DEFAULT_MODEL: configuredModel === undefined ? "MISSING" : "PRESENT",
+      },
+      results,
+    }),
+  );
 }

@@ -18,7 +18,7 @@ The project is in active Architecture V2 development. The Message System
 migration through Phase 5F is complete: the daemon owns the server-side
 Transcript projection, CLI/Web consume the Protocol Transcript, and the final
 durable Message V2 schema is now the only runtime storage shape.
-The Event System migration is complete through Phase 6G. The canonical RunEvent
+The Event System migration is complete through Phase 6H. The canonical RunEvent
 domain, daemon-owned asynchronous RunEventHub, bounded replay/live delivery,
 public projection, authoritative durable-event transactions, and transient
 signal/streaming cutover are now in place. Durable events are written only
@@ -29,8 +29,10 @@ durable and replayable. Phase 6F adds the generic Agent Control Hook registry
 and runner, bounded Context Contributions, safe Context projection, and the
 daemon-to-Core composition path. Phase 6G adds the Coding-owned Tool Guard and
 Tool Feedback control pipelines while preserving Core Security, durable Tool
-observations, and the existing model-feedback authority. Legacy package
-retirement remains in Phase 6H.
+observations, and the existing model-feedback authority. Phase 6H retires the
+transitional Events package and leaves the daemon RunEventHub, Protocol
+contracts, Agent ports, and Storage reader as the only canonical Event V2
+surfaces.
 
 ## What Caelush provides
 
@@ -130,16 +132,16 @@ delivery class and stream identity. Durable sequence allocation remains a
 Storage transaction responsibility. `RunExecutionStore` and
 `ToolExecutionStore` commit durable event drafts together with the truth they
 describe; `RunEventNotifierPort.notifyCommitted` receives only post-commit
-events. `@caelush/events` remains only as transitional observation
-compatibility and has no standalone durable write authority.
+events. There is no standalone Events package or second durable writer.
 
 Phase 6B makes the daemon observation plane producer-nonblocking and bounded:
 durable and ordered-transient overflow closes a slow subscription, while
 coalescible transient signals use same-stream latest-wins replacement. Replay
 subscribes before reading a fixed high watermark, rejects a cursor ahead of the
 watermark, deduplicates buffered durable events, and discards catch-up
-transients. `@caelush/events` remains only as legacy observation compatibility;
-its standalone durable writer has been retired in Phase 6D.
+transients. Phase 6H removes the transitional observation package; historical
+Protocol compatibility remains available for decoding and replaying existing
+event data.
 
 ### Phase 6E transient signal and streaming cutover
 
@@ -240,6 +242,17 @@ existing Tool infrastructure-failure path; optional failures are skipped.
 The final projection fingerprint is recomputed before the message is
 materialized. No Hook receipt is a RunEvent, and no runtime Hook registry or
 HTTP plugin API is introduced.
+
+### Phase 6H Event package retirement
+
+Phase 6H completes the Event System V2 cutover. The legacy `@caelush/events`
+workspace package, its manifest and lockfile edges, and its production
+EventBus implementation are retired. Canonical ownership is explicit:
+Protocol owns RunEvent schemas and historical compatibility aliases, Agent owns
+event drafts and ports, Storage owns durable event persistence and read-only
+replay, and the daemon owns the RunEventHub and public projection. The permanent
+architecture tombstone prevents a second Events package or EventBus runtime from
+being reintroduced.
 
 ### Durable conversation
 
@@ -461,26 +474,27 @@ relevant Prettier check.
 The repository also records the completed host-boundary work that remains relevant to the current
 runtime: Phase 9C sanitizer injection, Phase 9D — V1 Security Integration, Phase 11B — Verification Execution: **COMPLETED**, and Phase 11D — Completion Authority & Finalization: **COMPLETED**.
 
-| Migration boundary                                      | Status      |
-| ------------------------------------------------------- | ----------- |
-| Phase 1 — architecture foundation and public boundaries | Complete    |
-| Phase 2 — AI domain and provider migration              | Complete    |
-| Phase 3 — Agent Kernel and durable Run boundaries       | Complete    |
-| Phase 4 — Tool System and Coding Agent composition      | Complete    |
-| Phase 5A — Message domain foundation                    | Complete    |
-| Phase 5B — Message storage foundation                   | Complete    |
-| Phase 5C — durable conversation runtime cutover         | Complete    |
-| Phase 5D — Context & replay cutover                     | Complete    |
-| Phase 5E — transcript/client projection migration       | COMPLETE    |
-| Phase 5F — legacy Message V2 retirement                 | COMPLETE    |
-| Phase 6A — Event domain and Protocol foundation         | COMPLETE    |
-| Phase 6B — RunEventHub, replay, and backpressure        | COMPLETE    |
-| Phase 6C — Public projection, SSE, and client cutover   | COMPLETE    |
-| Phase 6D — Durable event authority and writer cutover   | COMPLETE    |
-| Phase 6E — Transient signal and streaming cutover       | COMPLETE    |
-| Phase 6F — Control Hooks and Context Contributions      | COMPLETE    |
-| Phase 6G — Tool Guard and Tool Feedback control         | COMPLETE    |
-| Phase 6H — Package retirement                           | NOT STARTED |
+| Migration boundary                                      | Status   |
+| ------------------------------------------------------- | -------- |
+| Phase 1 — architecture foundation and public boundaries | Complete |
+| Phase 2 — AI domain and provider migration              | Complete |
+| Phase 3 — Agent Kernel and durable Run boundaries       | Complete |
+| Phase 4 — Tool System and Coding Agent composition      | Complete |
+| Phase 5A — Message domain foundation                    | Complete |
+| Phase 5B — Message storage foundation                   | Complete |
+| Phase 5C — durable conversation runtime cutover         | Complete |
+| Phase 5D — Context & replay cutover                     | Complete |
+| Phase 5E — transcript/client projection migration       | COMPLETE |
+| Phase 5F — legacy Message V2 retirement                 | COMPLETE |
+| Phase 6A — Event domain and Protocol foundation         | COMPLETE |
+| Phase 6B — RunEventHub, replay, and backpressure        | COMPLETE |
+| Phase 6C — Public projection, SSE, and client cutover   | COMPLETE |
+| Phase 6D — Durable event authority and writer cutover   | COMPLETE |
+| Phase 6E — Transient signal and streaming cutover       | COMPLETE |
+| Phase 6F — Control Hooks and Context Contributions      | COMPLETE |
+| Phase 6G — Tool Guard and Tool Feedback control         | COMPLETE |
+| Phase 6H — Legacy Event package retirement              | COMPLETE |
+| Phase 6 — Event System V2                               | COMPLETE |
 
 The status table records the completed Architecture V2 migration boundaries
 that are relevant to the current runtime. The repository also contains the

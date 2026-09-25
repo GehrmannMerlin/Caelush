@@ -49,13 +49,13 @@ import {
   createCodingToolSettlementExtensionProjector,
   createDurableInvocationGatePort,
 } from "@caelush/coding-agent";
-import { EventBus } from "@caelush/events";
 import { sanitizeTerminalOutput } from "@caelush/runtime";
 import { openCaelushStorage } from "@caelush/storage";
 import { toContextObservationProjection } from "@caelush/core";
 import { describe, expect, it } from "vitest";
 
 import { createCodingToolComposition } from "./support/coding-tool-composition.js";
+import { RunEventHub } from "../src/events/run-event-hub.js";
 
 /**
  * The Tool-call round trip over a real OpenAI-shaped wire.
@@ -284,7 +284,7 @@ describe("real provider Tool Call round trip", () => {
       adapters: [createOpenAICompatibleApiAdapter() as ApiAdapter],
     });
 
-    const eventBus = new EventBus(storage.eventReader);
+    const eventHub = new RunEventHub(storage.eventReader);
     /**
      * The production Tool composition.
      *
@@ -378,10 +378,10 @@ describe("real provider Tool Call round trip", () => {
           eventIdFactory: { create: createEventId },
           presentation: toolSecurity.presentation,
           boundContent: (content) => boundToolResultContent(content),
-          notifier: eventBus,
+          notifier: eventHub,
         }),
         presentation: toolSecurity.presentation,
-        notifier: eventBus,
+        notifier: eventHub,
         boundFailureContent: (content) => boundToolResultContent(content),
       });
     // The canonical Tool turn pipeline: the canonical durable coordinator drives the batch, and the
@@ -445,7 +445,7 @@ describe("real provider Tool Call round trip", () => {
         records: (runId) => storage.messageRecords.listByRun(runId),
       }),
       completionStore: storage.execution,
-      events: eventBus,
+      events: eventHub,
       configResolver: {
         resolve: async () => ({
           baseSystemPrompt: "Inspect the workspace.",
@@ -488,6 +488,7 @@ describe("real provider Tool Call round trip", () => {
       ]);
       expect(await storage.observations.listByRun(run.id)).toHaveLength(1);
     } finally {
+      await eventHub.dispose();
       await storage.close();
     }
   });

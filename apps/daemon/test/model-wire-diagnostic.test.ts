@@ -1,7 +1,6 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { EventBus } from "@caelush/events";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import type { AIAdapterEvent, ApiAdapter, ApiAdapterStreamInput } from "@caelush/ai";
 import { createRunId, createSessionId } from "@caelush/protocol";
@@ -71,7 +70,6 @@ describe("daemon model wire diagnostic", () => {
 
     composition = await composeDaemon({
       storage,
-      notifier: new EventBus(storage.eventReader),
       modelSources: [fixtureModelSource()],
       providerBindings: [
         fixtureBinding({
@@ -155,7 +153,6 @@ describe("daemon model wire diagnostic", () => {
     try {
       composition = await composeDaemon({
         storage,
-        notifier: new EventBus(storage.eventReader),
         modelSources: [fixtureModelSource()],
         providerBindings: [fixtureBinding()],
         adapterOverrides: [new RecordingAdapter()],

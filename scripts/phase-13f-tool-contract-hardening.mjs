@@ -63,19 +63,16 @@ async function createWorkspace(taskName) {
 }
 
 async function runTask({ taskName, goal, prepare }) {
-  const [protocol, eventsPackage, storagePackage, daemonPackage] = await Promise.all([
+  const [protocol, storagePackage, daemonPackage] = await Promise.all([
     import("../packages/protocol/dist/index.js"),
-    import("../packages/events/dist/index.js"),
     import("../packages/storage/dist/index.js"),
     import("../apps/daemon/dist/daemon-composition.js"),
   ]);
   const fixture = await createWorkspace(taskName);
   if (prepare !== undefined) await prepare(fixture.workspace);
   const storage = await storagePackage.openCaelushStorage({ path: ":memory:" });
-  const eventBus = new eventsPackage.EventBus(storage.events);
   const composition = daemonPackage.composeDaemon({
     storage,
-    eventBus,
     providers: [
       {
         provider: providerId,
@@ -127,7 +124,11 @@ async function runTask({ taskName, goal, prepare }) {
       });
     }
     const invocations = await storage.toolInvocations.listByRun(run.id);
-    const durableEvents = await storage.events.replay(run.id, { limit: 512 });
+    const durableEvents = await storage.eventReader.replay(run.id, {
+      afterSequence: 0,
+      throughSequence: Number.MAX_SAFE_INTEGER,
+      limit: 512,
+    });
     const failureKeys = new Map();
     for (const invocation of invocations) {
       if (invocation.status !== "FAILED") continue;

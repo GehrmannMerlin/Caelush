@@ -20,7 +20,9 @@ export const repositoryRoot = path.resolve(
  * `phase-4f-tool-system-final-boundaries.test.ts` asserts instead that the
  * directory and every workspace reference to it are absent. The legacy
  * `llm` package was fully retired by Architecture V2 Phase 5F and is likewise
- * intentionally absent from the workspace inventory.
+ * intentionally absent from the workspace inventory. The legacy `events`
+ * package was retired by Architecture V2 Phase 6H and is likewise absent;
+ * `phase-6h-event-package-retirement.test.ts` owns its tombstone assertions.
  */
 export const packageNames = [
   "protocol",
@@ -31,7 +33,6 @@ export const packageNames = [
   "runtime",
   "security",
   "verification",
-  "events",
   "memory",
   "storage",
   "observability",

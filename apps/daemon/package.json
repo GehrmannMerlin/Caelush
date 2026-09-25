@@ -39,7 +39,6 @@
     "@caelush/coding-agent": "workspace:*",
     "@caelush/context": "workspace:*",
     "@caelush/core": "workspace:*",
-    "@caelush/events": "workspace:*",
     "@caelush/memory": "workspace:*",
     "@caelush/protocol": "workspace:*",
     "@caelush/runtime": "workspace:*",

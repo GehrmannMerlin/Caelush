@@ -69,6 +69,7 @@ function makeTransient(
 class MemoryReader implements DurableRunEventReaderPort {
   readonly events: DurableRunEvent[] = [];
   latestValue = 0;
+  replayCalls = 0;
   latestCalled = deferred<void>();
   replayCalled = deferred<void>();
   replayGate: { readonly promise: Promise<void>; readonly resolve: () => void } | undefined;
@@ -77,6 +78,7 @@ class MemoryReader implements DurableRunEventReaderPort {
     runId: RunId,
     options: { afterSequence: number; throughSequence: number; limit: number },
   ): Promise<readonly DurableRunEvent[]> {
+    this.replayCalls += 1;
     this.replayCalled.resolve();
     await this.replayGate?.promise;
     return this.events
@@ -328,6 +330,30 @@ describe("RunEventHub", () => {
     const third = makeDurable(runId, 3);
     hub.notifyCommitted([third]);
     expect((await iterator.next()).value).toEqual(third);
+    await iterator.return?.();
+    await hub.dispose();
+  });
+
+  it("paginates historical replay past the bounded page size before entering the live tail", async () => {
+    const reader = new MemoryReader();
+    const runId = createRunId();
+    const historical = Array.from({ length: 1001 }, (_, index) => makeDurable(runId, index + 1));
+    reader.events.push(...historical);
+    reader.latestValue = historical.length;
+    const hub = new RunEventHub(reader, { queuePolicy: policy() });
+    const iterator = hub.watch(runId)[Symbol.asyncIterator]();
+    const received: DurableRunEvent[] = [];
+
+    for (let index = 0; index < historical.length; index += 1) {
+      const next = await iterator.next();
+      expect(next.done).toBe(false);
+      if (!next.done) received.push(next.value as DurableRunEvent);
+    }
+
+    expect(received.map((event) => event.durability.sequence)).toEqual(
+      historical.map((event) => event.durability.sequence),
+    );
+    expect(reader.replayCalls).toBe(2);
     await iterator.return?.();
     await hub.dispose();
   });

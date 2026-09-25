@@ -25,11 +25,10 @@ describe("Architecture V2 Phase 6B RunEventHub", () => {
   });
 
   it("does not move observation authority into packages or future phases", async () => {
-    const [agent, ai, runtime, events, route, daemon] = await Promise.all([
+    const [agent, ai, runtime, route, daemon] = await Promise.all([
       read("packages/agent/src/index.ts"),
       read("packages/ai/src/index.ts"),
       read("packages/runtime/src/index.ts"),
-      read("packages/events/src/event-bus.ts"),
       read("apps/daemon/src/routes/events.ts"),
       read("apps/daemon/src/daemon.ts"),
     ]);
@@ -37,7 +36,6 @@ describe("Architecture V2 Phase 6B RunEventHub", () => {
     expect(agent).not.toContain("RunEventHub");
     expect(ai).not.toContain("RunEventHub");
     expect(runtime).not.toContain("RunEventHub");
-    expect(events).not.toContain("apps/daemon");
     expect(route).toContain("eventHub.watch");
     expect(route).toContain("mapPublicRunEventToSse");
     expect(daemon).not.toContain("new EventBus");
@@ -49,13 +47,10 @@ describe("Architecture V2 Phase 6B RunEventHub", () => {
 
   it("keeps writer retirement and producer migration out of the completed 6B/6C boundary", async () => {
     const route = await read("apps/daemon/src/routes/events.ts");
-    const eventBus = await read("packages/events/src/event-bus.ts");
     const protocol = await read("packages/protocol/src/events/base.ts");
 
     expect(route).toContain("PublicEventProjector");
     expect(route).toContain("publicEventProjector.project");
-    expect(eventBus).toContain("async publish(");
-    expect(eventBus).toContain("notifyCommitted(");
     expect(protocol).toContain('deliveryClass: z.literal("ORDERED")');
     expect(protocol).toContain('deliveryClass: z.literal("COALESCIBLE")');
   });

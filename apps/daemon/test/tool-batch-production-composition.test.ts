@@ -2,7 +2,6 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
-import { EventBus } from "@caelush/events";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { composeDaemon, type DaemonComposition } from "../src/daemon-composition.js";
@@ -44,10 +43,8 @@ afterEach(async () => {
 async function compose(): Promise<DaemonComposition> {
   directory = await mkdtemp(join(tmpdir(), "caelush-phase-4d-composition-"));
   storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
-  const eventBus = new EventBus(storage.eventReader);
   composition = await composeDaemon({
     storage,
-    eventBus,
     providers: [
       {
         provider: "openai-compatible",
