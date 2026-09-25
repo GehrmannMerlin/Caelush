@@ -133,6 +133,12 @@ export interface ToolAdmissionInput {
   readonly storedApprovalKey?: string | null | undefined;
 }
 
+/** Transient execution facts for one admission evaluation; never durable request data. */
+export interface ToolAdmissionEvaluationContext {
+  readonly mode: "EXECUTE" | "RECOVER";
+  readonly signal: AbortSignal;
+}
+
 /**
  * The admission coordinator.
  *
@@ -169,11 +175,14 @@ export interface ToolAdmissionInput {
  */
 export function createToolAdmissionCoordinator(options: ToolAdmissionCoordinatorOptions) {
   return {
-    async admit(input: ToolAdmissionInput): Promise<ToolAdmissionOutcome> {
+    async admit(
+      input: ToolAdmissionInput,
+      evaluationContext?: ToolAdmissionEvaluationContext,
+    ): Promise<ToolAdmissionOutcome> {
       const request = toAdmissionRequest(input);
       let decision: ToolPolicyDecision;
       try {
-        decision = await evaluateAdmission(options, request);
+        decision = await evaluateAdmission(options, request, evaluationContext);
       } catch (error) {
         if (error instanceof ToolExecutionInfrastructureError) throw error;
         throw new ToolExecutionInfrastructureError(
@@ -235,17 +244,21 @@ export function createToolAdmissionCoordinator(options: ToolAdmissionCoordinator
 
 /** The admission coordinator contract. */
 export interface ToolAdmissionCoordinator {
-  admit(input: ToolAdmissionInput): Promise<ToolAdmissionOutcome>;
+  admit(
+    input: ToolAdmissionInput,
+    evaluationContext?: ToolAdmissionEvaluationContext,
+  ): Promise<ToolAdmissionOutcome>;
 }
 
 function evaluateAdmission(
   options: ToolAdmissionCoordinatorOptions,
   request: ToolAdmissionRequest,
+  evaluationContext?: ToolAdmissionEvaluationContext,
 ): ToolPolicyDecision | Promise<ToolPolicyDecision> {
   const preChecked = options.preCheck?.check(request);
   if (preChecked !== undefined) return preChecked;
   try {
-    return options.policy.evaluate(request);
+    return options.policy.evaluate(request, evaluationContext);
   } catch (error) {
     // A synchronous throw from a port declared asynchronous is still an admission infrastructure
     // failure, and it must not escape as if it were a policy decision.

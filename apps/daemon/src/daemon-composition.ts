@@ -13,6 +13,7 @@ import {
   type VerificationModelClient,
   type RunExecutionConfigResolver,
   type ToolTurnPipeline,
+  type ToolFeedbackContributionApplier,
   type RunMessageAuthority,
 } from "@caelush/core";
 import {
@@ -121,6 +122,7 @@ import {
   type DurableResultPipelineFactory,
   type DurableToolExecutionCoordinator,
   type ToolExecutionUpdateSanitizerPort,
+  type ProjectedToolFeedback,
 } from "@caelush/agent";
 import {
   createCodingToolAdmissionPort,
@@ -138,18 +140,26 @@ import {
   createRuntimeReadOnlyOperations,
   createToolPromptContextProvider,
   createLegacyNumericArgumentNormalization,
+  createToolGuardPipeline,
+  createToolFeedbackContributionPipeline,
   GIT_TOOL_NAMES,
   CodingToolCatalogBuilder,
   type CodingToolCatalog,
   type CodingToolDefinition,
   type DefaultCodingToolOperations,
   type GitToolAvailability,
+  type BeforeToolDispatchRegistration,
+  type ToolGuardPipeline,
+  type ToolFeedbackContributionBudget,
+  type ToolFeedbackContributionPipeline,
+  type ToolFeedbackContributionRegistration,
 } from "@caelush/coding-agent";
 import {
   assertDefaultBuiltinSecurityCoverage,
   createDefaultV1ToolExecutionSecurity,
   createV1ToolApprovalRequestFactory,
   CaelushToolExecutionUpdateSanitizer,
+  redactText,
   verificationCommandSecurityPort,
   verificationEvidenceSanitizer,
 } from "@caelush/security";
@@ -293,6 +303,15 @@ export interface DaemonCompositionOptions {
   readonly contextContributionHooks?: readonly ContextContributionRegistration[];
   /** Optional fully composed pipeline for a host that owns the registry construction. */
   readonly contextContributionPipeline?: ContextContributionPipeline;
+  /** Typed host/test seam for pre-dispatch Tool Guard evaluation. */
+  readonly beforeToolDispatchHooks?: readonly BeforeToolDispatchRegistration[];
+  /** Optional fully composed Tool Guard pipeline for a host that owns the registry construction. */
+  readonly beforeToolDispatchPipeline?: ToolGuardPipeline;
+  /** Typed host/test seam for observation-backed Tool feedback contributions. */
+  readonly toolFeedbackContributionHooks?: readonly ToolFeedbackContributionRegistration[];
+  /** Optional fully composed feedback contribution pipeline for a host that owns the registry. */
+  readonly toolFeedbackContributionPipeline?: ToolFeedbackContributionPipeline;
+  readonly toolFeedbackContributionBudget?: Partial<ToolFeedbackContributionBudget>;
 }
 
 export interface DaemonComposition {
@@ -400,6 +419,23 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
         clock,
       });
     })();
+  const toolGuardPipeline =
+    options.beforeToolDispatchPipeline ??
+    createToolGuardPipeline({
+      registrations: options.beforeToolDispatchHooks ?? [],
+      clock,
+      sanitizeReason: (reason) => sanitizeTerminalOutput(redactText(reason)),
+    });
+  const toolFeedbackContributionPipeline =
+    options.toolFeedbackContributionPipeline ??
+    createToolFeedbackContributionPipeline({
+      registrations: options.toolFeedbackContributionHooks ?? [],
+      ...(options.toolFeedbackContributionBudget === undefined
+        ? {}
+        : { budget: options.toolFeedbackContributionBudget }),
+      clock,
+      textSanitizer: (text) => sanitizeTerminalOutput(redactText(text)),
+    });
   const runtime = options.runtime ?? new LocalRuntime();
   const runtimeResolver = createLocalRuntimeResolver(runtime);
   const ai = createAISubsystem({
@@ -770,6 +806,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       registry: activeToolRegistry,
       catalog: codingCatalog,
       approvalPresentation: (decision) => decision.safeAction,
+      guard: toolGuardPipeline,
     }),
     approvals: options.storage.approvals,
     approvalRequests: toolApprovalRequests,
@@ -851,6 +888,52 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     durable: toolDurableCoordinator,
     registry: activeToolRegistry,
   });
+  const feedbackContributions: ToolFeedbackContributionApplier = {
+    async apply(input) {
+      if (input.items.length !== input.projected.length) {
+        throw new Error("Tool feedback contribution input lost batch identity.");
+      }
+      const output: ProjectedToolFeedback[] = [];
+      for (const [index, item] of input.items.entries()) {
+        const projected = input.projected[index];
+        if (projected === undefined) {
+          throw new Error("Tool feedback contribution input lost a projected result.");
+        }
+        if (item.kind !== "OBSERVATION") {
+          output.push(projected);
+          continue;
+        }
+        const contribution = await toolFeedbackContributionPipeline.contribute(
+          {
+            runId: input.runId,
+            sessionId: input.sessionId,
+            sourceStepId: input.sourceStepId,
+            toolCallId: projected.message.toolCallId,
+            toolName: projected.message.toolName,
+            observationId: item.observation.id,
+            isError: item.observation.isError,
+            builtInFeedback: projected.message.content,
+          },
+          {
+            identity: { runId: input.runId, sessionId: input.sessionId },
+            stepId: input.sourceStepId,
+            mode: input.mode,
+            signal: input.signal,
+          },
+        );
+        if (contribution.content === projected.message.content) {
+          output.push(projected);
+          continue;
+        }
+        const message = Object.freeze({
+          ...projected.message,
+          content: contribution.content,
+        });
+        output.push(Object.freeze({ ...projected, message }));
+      }
+      return Object.freeze(output);
+    },
+  };
   const toolTurn = {
     batches: toolBatch,
     // The one place the Agent package's model feedback semantics and the Context package's token
@@ -860,6 +943,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       projection: toContextObservationProjection(),
     }),
     normalizer: createToolResultBatchNormalizer(),
+    feedbackContributions,
     // The same registry the batch resolves and executes against: one catalog, never two, read in its
     // model-facing form rather than projected down to it.
     modelSpecs: () => activeToolRegistry.modelSpecs(),

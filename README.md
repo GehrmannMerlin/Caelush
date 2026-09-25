@@ -18,7 +18,7 @@ The project is in active Architecture V2 development. The Message System
 migration through Phase 5F is complete: the daemon owns the server-side
 Transcript projection, CLI/Web consume the Protocol Transcript, and the final
 durable Message V2 schema is now the only runtime storage shape.
-The Event System migration is complete through Phase 6F. The canonical RunEvent
+The Event System migration is complete through Phase 6G. The canonical RunEvent
 domain, daemon-owned asynchronous RunEventHub, bounded replay/live delivery,
 public projection, authoritative durable-event transactions, and transient
 signal/streaming cutover are now in place. Durable events are written only
@@ -27,8 +27,10 @@ RunEventHub only after commit. Live model, Tool, and Runtime progress travels
 through non-persistent `TransientRunEvent` signals, while lifecycle truth remains
 durable and replayable. Phase 6F adds the generic Agent Control Hook registry
 and runner, bounded Context Contributions, safe Context projection, and the
-daemon-to-Core composition path. Legacy package retirement remains in Phases
-6G–6H.
+daemon-to-Core composition path. Phase 6G adds the Coding-owned Tool Guard and
+Tool Feedback control pipelines while preserving Core Security, durable Tool
+observations, and the existing model-feedback authority. Legacy package
+retirement remains in Phase 6H.
 
 ## What Caelush provides
 
@@ -200,6 +202,44 @@ non-replayable Hook. Qualified `RECOMPUTE` behavior remains an explicit host
 policy and is not an implicit recovery fallback. Hook failures, timeouts,
 cancellation, and oversized output follow the registered required/optional
 policy and cannot bypass Completion Authority.
+
+### Phase 6G Tool Guard and Tool Feedback control pipelines
+
+Phase 6G extends the same immutable startup composition model to Tool control:
+
+```text
+prepared Tool args
+  → safe Coding Guard projection
+  → awaited BeforeToolDispatch pipeline
+  → Core Security gate and existing admission/approval authority
+  → durable Tool execution and ToolObservation
+  → built-in ModelToolFeedbackProjector
+  → observation-backed Tool Feedback contributions
+  → ToolResultBatchNormalizer
+  → durable AgentToolResultMessage and the next model turn
+```
+
+Guard hooks receive no raw arguments or raw Security facts. Their
+`argsFingerprint` is SHA-256 over prepared canonical arguments, and `safeFacts`
+is an explicit bounded projection. Guard decisions can only strengthen the
+Core decision (`PASS < REQUIRE_APPROVAL < BLOCK`); Core Security still runs for
+non-blocking Guard results. Guard approval restrictions are folded into the
+existing opaque approval identity, while an empty or PASS-only Guard keeps the
+legacy key byte-for-byte compatible. Fresh `REQUESTED` recovery evaluates in
+`EXECUTE`, approved `WAITING_APPROVAL` recovery re-enters admission in
+`RECOVER`, and `RUNNING` invocations are never redispatched.
+
+Tool Feedback hooks run only for real `OBSERVATION` outcomes, after the
+built-in, bounded projector. Rejected, skipped, synthetic, external, and
+legacy results retain their built-in content. Hook contributions have an
+independent byte/count budget, are sanitized by the daemon's existing secret
+and terminal-output safeguards, and may change only model-visible content;
+Tool identity, observation provenance, durable Tool truth, and effects remain
+unchanged. Required contribution failures stop the current Run through the
+existing Tool infrastructure-failure path; optional failures are skipped.
+The final projection fingerprint is recomputed before the message is
+materialized. No Hook receipt is a RunEvent, and no runtime Hook registry or
+HTTP plugin API is introduced.
 
 ### Durable conversation
 
@@ -439,7 +479,8 @@ runtime: Phase 9C sanitizer injection, Phase 9D — V1 Security Integration, Pha
 | Phase 6D — Durable event authority and writer cutover   | COMPLETE    |
 | Phase 6E — Transient signal and streaming cutover       | COMPLETE    |
 | Phase 6F — Control Hooks and Context Contributions      | COMPLETE    |
-| Phase 6G–6H — Package retirement                        | NOT STARTED |
+| Phase 6G — Tool Guard and Tool Feedback control         | COMPLETE    |
+| Phase 6H — Package retirement                           | NOT STARTED |
 
 The status table records the completed Architecture V2 migration boundaries
 that are relevant to the current runtime. The repository also contains the

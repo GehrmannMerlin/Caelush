@@ -192,6 +192,40 @@ export type {
 } from "./tools/index.js";
 
 export {
+  createToolFeedbackContributionPipeline,
+  createToolGuardPipeline,
+  fingerprintPreparedToolArgs,
+  projectSafeToolGuardFacts,
+  DEFAULT_TOOL_FEEDBACK_CONTRIBUTION_BUDGET,
+  MAX_TOOL_FEEDBACK_CONTRIBUTION_ID_BYTES,
+  MAX_TOOL_FEEDBACK_CONTRIBUTION_TEXT_BYTES,
+  MAX_TOOL_FEEDBACK_CONTRIBUTIONS_PER_HOOK,
+  MAX_TOOL_GUARD_CODE_BYTES,
+  MAX_TOOL_GUARD_REASON_BYTES,
+  TOOL_FEEDBACK_SEPARATOR,
+} from "./hooks/index.js";
+export type {
+  BeforeToolDispatchControlHook,
+  BeforeToolDispatchHook,
+  BeforeToolDispatchInput,
+  BeforeToolDispatchRegistration,
+  ToolFeedbackContribution,
+  ToolFeedbackContributionBudget,
+  ToolFeedbackContributionControlHook,
+  ToolFeedbackContributionHook,
+  ToolFeedbackContributionInput,
+  ToolFeedbackContributionPipelineOptions,
+  ToolFeedbackContributionPipelineResult,
+  ToolFeedbackContributionPipeline,
+  ToolFeedbackContributionRegistration,
+  ToolGuardDecision,
+  ToolGuardPipelineOptions,
+  ToolGuardPipelineResult,
+  ToolGuardPipeline,
+  ToolGuardProjectionInput,
+} from "./hooks/index.js";
+
+export {
   CODING_COMMAND_EXECUTION_MESSAGE_CODEC_V1,
   CODING_COMMAND_EXECUTION_MESSAGE_PROJECTOR_V1,
   CODING_COMMAND_EXECUTION_TRANSCRIPT_PROJECTOR,

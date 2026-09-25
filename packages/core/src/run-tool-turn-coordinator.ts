@@ -17,6 +17,7 @@ import type {
   ToolTurnResult,
   WaitingApprovalBoundary,
 } from "@caelush/agent";
+import { fingerprintProjection } from "@caelush/agent";
 import type { AgentRun, AgentState, TimestampMs } from "@caelush/protocol";
 
 import type { AgentToolCallsDecision } from "./agent-decision.js";
@@ -30,6 +31,7 @@ import type {
 } from "./resource-governance-port.js";
 import type { RunExecutionSnapshotView as RunExecutionSnapshot } from "./run-execution-store.js";
 import { RunControllerInvariantError } from "./run-controller-errors.js";
+import type { ToolFeedbackContributionApplier } from "./run-controller-ports.js";
 import {
   createRunToolTurnObservation,
   rawObservationsOf,
@@ -128,6 +130,8 @@ export interface RunToolTurnDriverDependencies {
   readonly feedback: ModelToolFeedbackProjector;
   /** The canonical Tool Result batch integrity defense. */
   readonly normalizer: ToolResultBatchNormalizer;
+  /** Optional host-owned contribution pass over observation-backed safe feedback. */
+  readonly feedbackContributions?: ToolFeedbackContributionApplier;
   /** The durable resource ledger, when this Run's host configured a resource policy. */
   readonly resourceGovernance?: ResourceGovernancePort | undefined;
   readonly clock: { now(): TimestampMs };
@@ -315,7 +319,7 @@ async function executeRunToolTurn(
     // settlement, so a lost Run commit cannot have advanced it.
     return {
       kind: "REPLAN",
-      syntheticResults: replanResults(context, observation),
+      syntheticResults: await replanResults(dependencies, context, observation),
     };
   }
   if (admission.kind === "WAIT_FOR_RESOURCE_DECISION") {
@@ -345,7 +349,7 @@ async function executeRunToolTurn(
   // `executeToolBatchDirective` already routes `executionSignal.aborted` to its cancellation authority,
   // and a Tool System that converted the abort into a result would be making a Run decision.
   const outcome = await dependencies.batches.execute(batchRequest);
-  return toToolTurnResult(context, observation, outcome);
+  return toToolTurnResult(context, observation, outcome, dependencies);
 }
 
 /**
@@ -364,10 +368,11 @@ async function executeRunToolTurn(
  * identical projector and normalizer — which is what keeps one model-feedback authority rather than a
  * REPLAN-shaped second one.
  */
-function replanResults(
+async function replanResults(
+  dependencies: RunToolTurnDriverDependencies,
   context: RunToolTurnContext,
   observation: RunToolTurnObservation,
-): readonly AgentToolResult[] {
+): Promise<readonly AgentToolResult[]> {
   const calls = callsOf(context);
   const messages = ResourceGovernor.replanResults(calls);
   const items: ToolBatchItemOutcome[] = calls.map((call, index) => ({
@@ -380,7 +385,7 @@ function replanResults(
       disposition: "SAFE_FAILURE",
     },
   }));
-  const projected = projectAndNormalize(context, observation, calls, items);
+  const projected = await projectAndNormalize(dependencies, context, observation, calls, items);
   return projected.map(({ message }) => ({
     externalCallId: message.toolCallId,
     toolName: message.toolName,
@@ -576,18 +581,19 @@ async function admitResource(
  *                     result, an automatic Run cancel) would invent an authority
  * ```
  */
-function toToolTurnResult(
+async function toToolTurnResult(
   context: RunToolTurnContext,
   observation: RunToolTurnObservation,
   outcome: ToolBatchOutcome,
-): ToolTurnResult {
+  dependencies: RunToolTurnDriverDependencies,
+): Promise<ToolTurnResult> {
   switch (outcome.kind) {
     case "COMPLETED":
-      return settleObservation(observation, "COMPLETED", outcome.items, () =>
-        completedToolTurnResult(context, observation, outcome),
+      return settleObservation(observation, "COMPLETED", outcome.items, async () =>
+        completedToolTurnResult(dependencies, context, observation, outcome),
       );
     case "WAITING_APPROVAL":
-      return settleObservation(observation, "WAITING_APPROVAL", outcome.items, () => ({
+      return settleObservation(observation, "WAITING_APPROVAL", outcome.items, async () => ({
         kind: "WAITING_APPROVAL",
         // The partial item outcomes are deliberately *not* reported to the Run Layer: the batch is not
         // complete, so the model is shown none of it. The completed invocations are already durable in
@@ -597,7 +603,7 @@ function toToolTurnResult(
         waiting: waitingBoundaryOf(outcome),
       }));
     case "BUDGET_EXCEEDED":
-      return settleObservation(observation, "BUDGET_EXCEEDED", outcome.items, () => ({
+      return settleObservation(observation, "BUDGET_EXCEEDED", outcome.items, async () => ({
         kind: "BUDGET_EXCEEDED",
         completedResults: [],
         // The exact numbers the Tool budget authority returned. They are reported, never re-derived: a
@@ -637,13 +643,20 @@ function toToolTurnResult(
  * `AgentToolResult`. It does **not** truncate, sanitize, read an observation or reorder: the safe
  * projection already happened, and a second pass here would be a second projection authority.
  */
-function completedToolTurnResult(
+async function completedToolTurnResult(
+  dependencies: RunToolTurnDriverDependencies,
   context: RunToolTurnContext,
   observation: RunToolTurnObservation,
   outcome: Extract<ToolBatchOutcome, { kind: "COMPLETED" }>,
-): ToolTurnResult {
+): Promise<ToolTurnResult> {
   const calls = callsOf(context);
-  const projected = projectAndNormalize(context, observation, calls, outcome.items);
+  const projected = await projectAndNormalize(
+    dependencies,
+    context,
+    observation,
+    calls,
+    outcome.items,
+  );
   return {
     kind: "COMPLETED",
     results: projected.map(({ message }) => ({
@@ -660,20 +673,34 @@ function completedToolTurnResult(
  * wrapper objects for the Core-private durable materializer. The wrapper is never widened into the
  * public ToolTurnResult: receipts and observation identity belong to the durable message boundary.
  */
-function projectAndNormalize(
+async function projectAndNormalize(
+  dependencies: RunToolTurnDriverDependencies,
   context: RunToolTurnContext,
   observation: RunToolTurnObservation,
   calls: readonly ToolCallRequest[],
   items: readonly ToolBatchItemOutcome[],
-): readonly ProjectedToolFeedback[] {
+): Promise<readonly ProjectedToolFeedback[]> {
   const projected = context.feedback.project({
     calls,
     items,
     policy: context.observationPolicy,
   });
+  const contributed =
+    dependencies.feedbackContributions === undefined
+      ? projected
+      : await dependencies.feedbackContributions.apply({
+          runId: context.run.id,
+          sessionId: context.run.sessionId,
+          sourceStepId: context.continuation.sourceStepId,
+          mode: context.effectiveMode,
+          signal: dependencies.signal(),
+          items,
+          projected,
+        });
+  assertFeedbackContributionInvariants(projected, contributed);
   const normalized = context.normalizer.normalize({
     requests: calls,
-    results: projected.map(({ message }) => message),
+    results: contributed.map(({ message }) => message),
   });
   const byCallId = new Map(projected.map((item) => [item.message.toolCallId, item] as const));
   const ordered = normalized.map((message) => {
@@ -683,10 +710,46 @@ function projectAndNormalize(
         "The normalized Tool feedback lost the projection receipt for a requested call.",
       );
     }
-    return item;
+    const fingerprint = fingerprintProjection([message]);
+    if (fingerprint === item.receipt.fingerprint && item.message === message) return item;
+    return Object.freeze({
+      ...item,
+      message,
+      receipt: Object.freeze({ ...item.receipt, fingerprint }),
+    });
   });
   observation.projectedFeedback = Object.freeze(ordered);
   return observation.projectedFeedback;
+}
+
+function assertFeedbackContributionInvariants(
+  projected: readonly ProjectedToolFeedback[],
+  contributed: readonly ProjectedToolFeedback[],
+): void {
+  if (projected.length !== contributed.length) {
+    throw new RunControllerInvariantError(
+      "The Tool feedback contribution pass changed the requested result count.",
+    );
+  }
+  const baselineByCallId = new Map(
+    projected.map((item) => [item.message.toolCallId, item] as const),
+  );
+  for (const candidate of contributed) {
+    const baseline = baselineByCallId.get(candidate.message.toolCallId);
+    if (
+      baseline === undefined ||
+      baseline.message.toolName !== candidate.message.toolName ||
+      baseline.message.isError !== candidate.message.isError ||
+      baseline.observation.kind !== candidate.observation.kind ||
+      (baseline.observation.kind === "OBSERVATION" &&
+        candidate.observation.kind === "OBSERVATION" &&
+        baseline.observation.observationId !== candidate.observation.observationId)
+    ) {
+      throw new RunControllerInvariantError(
+        "The Tool feedback contribution pass changed Tool execution truth.",
+      );
+    }
+  }
 }
 
 /**
@@ -739,12 +802,12 @@ function budgetBlockOf(
  * told, and `executionAttempted` distinguishes a batch that ran from one that never reached the Tool
  * Layer at all.
  */
-function settleObservation(
+async function settleObservation(
   observation: RunToolTurnObservation,
   outcome: ToolTurnResult["kind"],
   items: readonly ToolBatchItemOutcome[],
-  build: () => ToolTurnResult,
-): ToolTurnResult {
+  build: () => Promise<ToolTurnResult>,
+): Promise<ToolTurnResult> {
   observation.executionAttempted = true;
   observation.underlyingOutcome = outcome;
   observation.rawObservations = rawObservationsOf(items);

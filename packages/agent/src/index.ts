@@ -547,6 +547,7 @@ export type {
   ResolvedAgentTool,
   ToolAdmissionCoordinator,
   ToolAdmissionCoordinatorOptions,
+  ToolAdmissionEvaluationContext,
   ToolAdmissionInput,
   ToolAdmissionOutcome,
   ToolAdmissionPort,

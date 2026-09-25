@@ -6,12 +6,13 @@ do not own separate Agent implementations.
 
 The current source-of-truth branch is `main`. The Message System migration is
 complete through Architecture V2 Phase 5F. The Event System migration is
-complete through Phase 6F: the canonical RunEvent domain and Protocol
+complete through Phase 6G: the canonical RunEvent domain and Protocol
 foundation, daemon-owned asynchronous observation runtime, public projection,
 authoritative durable-event transactions, transient signal/streaming cutover,
 and the Control Hook/Context Contribution path are present. Phase 5: COMPLETE.
 Phase 6A: COMPLETE. Phase 6B: COMPLETE. Phase 6C: COMPLETE. Phase 6D:
-COMPLETE. Phase 6E: COMPLETE. Phase 6F: COMPLETE. Phase 6G–6H: NOT STARTED.
+COMPLETE. Phase 6E: COMPLETE. Phase 6F: COMPLETE. Phase 6G: COMPLETE.
+Phase 6H: NOT STARTED.
 Phase 5F owns the final historical
 backfill, physical `agent_messages` rebuild, legacy reader/package retirement,
 and daemon/client final cutover.
@@ -92,7 +93,7 @@ Phase 5D established durable conversation authority for Context and replay.
   results but cannot transition a Run to `COMPLETED`. Only Core/RunController
   owns that transition.
 
-## Event V2 / Phase 6A–6F
+## Event V2 / Phase 6A–6G
 
 - `RunEvent` is the target Event domain name; `AgentEvent` is migration
   compatibility naming only.
@@ -118,7 +119,8 @@ Phase 5D established durable conversation authority for Context and replay.
   `RunEventNotifierPort.notifyCommitted` is called with post-commit events.
   `RunEventHub` has no write authority. Phase 6E owns non-persistent transient
   model/Tool/Runtime signals. Phase 6F owns generic Control Hooks and bounded
-  Context Contributions; Phase 6G–6H package retirement is not started.
+  Context Contributions. Phase 6G owns Coding Tool Guard and observation-backed
+  Tool Feedback control pipelines; Phase 6H package retirement is not started.
 
 ## Control Hooks / Phase 6F
 
@@ -139,6 +141,34 @@ Phase 5D established durable conversation authority for Context and replay.
   validated `SNAPSHOT` artifact and fails closed if it is missing, mismatched,
   or corrupt; it never silently reruns a non-replayable Hook. `RECOMPUTE` is
   allowed only through explicit host policy.
+
+## Tool Control / Phase 6G
+
+- `@caelush/coding-agent` owns the specialized `BeforeToolDispatch` Guard and
+  `ToolFeedbackContribution` pipelines. Both reuse the generic Agent
+  `ControlHookRunner`; they do not create a plugin registry, HTTP hook API, or
+  second Tool lifecycle.
+- `ToolAdmissionRequest` remains the exact five-field closed contract. Guard
+  mode and cancellation use the separate transient
+  `ToolAdmissionEvaluationContext`; raw arguments never enter a Guard hook.
+- Guard input uses a SHA-256 fingerprint of prepared canonical arguments and
+  a dedicated bounded safe-facts projection. Guard restrictions combine as
+  `PASS < REQUIRE_APPROVAL < BLOCK`, while Core Security still evaluates every
+  non-blocking result. Guard approval restrictions enter the existing opaque
+  approval identity; empty/PASS-only Guard behavior preserves the legacy key.
+- Fresh `REQUESTED` admission uses `EXECUTE`; approved `WAITING_APPROVAL`
+  recovery re-enters admission with `RECOVER`; durable `RUNNING` and terminal
+  invocations never rerun Guard or Tool execution.
+- Tool Feedback runs only for real `OBSERVATION` outcomes, after the built-in
+  bounded model-feedback projector and before the existing batch normalizer.
+  Rejected, skipped, synthetic, external, and legacy results retain built-in
+  feedback. Contributions have independent byte/count budgets and pass the
+  daemon's existing secret-redaction and terminal-output sanitizers.
+- Feedback hooks may change only model-visible content. Tool identity,
+  observation provenance, ToolInvocation/ToolObservation truth, and effects
+  remain unchanged; `fingerprintProjection` is recomputed for final content.
+  Required failures reuse the existing Tool infrastructure-failure path, while
+  optional failures skip safely. Receipts are diagnostics, not RunEvents.
 
 ## Message V2 / Phase 5F
 

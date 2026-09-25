@@ -222,6 +222,7 @@ export {
   DEFAULT_TOOL_APPROVAL_SCOPE,
 } from "./admission/admission-coordinator.js";
 export type {
+  ToolAdmissionEvaluationContext,
   ToolAdmissionCoordinator,
   ToolAdmissionCoordinatorOptions,
   ToolAdmissionInput,

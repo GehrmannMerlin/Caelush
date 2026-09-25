@@ -1170,6 +1170,9 @@ export class RunController {
       batches: pipeline.batches,
       feedback: pipeline.feedback,
       normalizer: pipeline.normalizer,
+      ...(pipeline.feedbackContributions === undefined
+        ? {}
+        : { feedbackContributions: pipeline.feedbackContributions }),
       ...(this.dependencies.resourceGovernance === undefined
         ? {}
         : { resourceGovernance: this.dependencies.resourceGovernance }),

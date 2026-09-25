@@ -1,5 +1,9 @@
 import { createTimestampMs, type StepId } from "@caelush/protocol";
-import { ToolBatchInfrastructureError, ToolBatchInputError } from "@caelush/agent";
+import {
+  ToolBatchInfrastructureError,
+  ToolBatchInputError,
+  type ProjectedToolFeedback,
+} from "@caelush/agent";
 import { describe, expect, it } from "vitest";
 
 import { RunControllerInvariantError } from "../src/index.js";
@@ -265,6 +269,52 @@ describe("Phase 3D Tool turn driver", () => {
         isError: false,
       },
     ]);
+  });
+
+  it("applies the Core-private feedback contribution seam before normalization and durable history", async () => {
+    const batches = scriptedBatches(completeAnswer("the raw body"));
+    const applied: string[] = [];
+    const h = harness3d({
+      script: (call) =>
+        call === 0 ? toolTurn([{ id: "call_a", name: "read_file" }]) : answerTurn(),
+      toolBatches: batches,
+      extra: {
+        toolTurn: {
+          ...stubToolTurnPipeline(batches),
+          feedbackContributions: {
+            apply: async (input: {
+              readonly projected: readonly ProjectedToolFeedback[];
+            }): Promise<readonly ProjectedToolFeedback[]> => {
+              applied.push(input.projected[0]?.message.content ?? "");
+              return input.projected.map((item) => ({
+                ...item,
+                message: {
+                  ...item.message,
+                  content: `PREPENDED\\n\\n${item.message.content}\\n\\nAPPENDED`,
+                },
+              }));
+            },
+          },
+        },
+      },
+    });
+
+    await h.controller.start(h.store.snapshot.run.id);
+
+    expect(applied).toEqual(["the raw body:call_a"]);
+    const toolResult = h.store.snapshot.conversation.find((entry) => entry.message.role === "tool");
+    expect(toolResult?.message).toMatchObject({
+      role: "tool",
+      toolCallId: "call_a",
+      content: "PREPENDED\\n\\nthe raw body:call_a\\n\\nAPPENDED",
+    });
+    expect(h.turns[1]!.request.messages).toContainEqual({
+      role: "tool",
+      toolCallId: "call_a",
+      toolName: "read_file",
+      content: "PREPENDED\\n\\nthe raw body:call_a\\n\\nAPPENDED",
+      isError: false,
+    });
   });
 
   it("persists the observation policy the requesting turn was prepared under", async () => {

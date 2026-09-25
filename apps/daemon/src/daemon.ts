@@ -1,5 +1,10 @@
 import type { AIProviderBinding, ApiAdapter, ModelDescriptorSourcePort } from "@caelush/ai";
 import type { ContextContributionRegistration } from "@caelush/agent";
+import type {
+  BeforeToolDispatchRegistration,
+  ToolFeedbackContributionBudget,
+  ToolFeedbackContributionRegistration,
+} from "@caelush/coding-agent";
 import type { ClientModelSelection } from "@caelush/protocol";
 import { openCaelushStorage, toHostToolEffectsPort } from "@caelush/storage";
 import { createLocalRuntimeResolver, LocalRuntime } from "@caelush/runtime";
@@ -38,6 +43,11 @@ export interface DaemonOptions {
   readonly web?: WebStaticHostOptions;
   /** Typed host/test seam for Context Contributions; no HTTP plugin registration is implied. */
   readonly contextContributionHooks?: readonly ContextContributionRegistration[];
+  /** Typed host/test seam for pre-dispatch Tool Guard evaluation. */
+  readonly beforeToolDispatchHooks?: readonly BeforeToolDispatchRegistration[];
+  /** Typed host/test seam for observation-backed Tool feedback contributions. */
+  readonly toolFeedbackContributionHooks?: readonly ToolFeedbackContributionRegistration[];
+  readonly toolFeedbackContributionBudget?: Partial<ToolFeedbackContributionBudget>;
 }
 
 export interface DaemonHandle {
@@ -129,6 +139,15 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       ...(options.contextContributionHooks === undefined
         ? {}
         : { contextContributionHooks: options.contextContributionHooks }),
+      ...(options.beforeToolDispatchHooks === undefined
+        ? {}
+        : { beforeToolDispatchHooks: options.beforeToolDispatchHooks }),
+      ...(options.toolFeedbackContributionHooks === undefined
+        ? {}
+        : { toolFeedbackContributionHooks: options.toolFeedbackContributionHooks }),
+      ...(options.toolFeedbackContributionBudget === undefined
+        ? {}
+        : { toolFeedbackContributionBudget: options.toolFeedbackContributionBudget }),
     });
   } catch (error) {
     await storage.close().catch(() => undefined);

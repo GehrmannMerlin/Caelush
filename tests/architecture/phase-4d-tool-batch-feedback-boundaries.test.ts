@@ -461,7 +461,7 @@ describe("Phase 4D model feedback boundaries", () => {
     const completed = declarationBody(
       adapter,
       "function completedToolTurnResult(",
-      "): ToolTurnResult {",
+      "): Promise<ToolTurnResult> {",
     );
     expect(completed).toContain("projectAndNormalize(");
     expect(adapter).toContain("context.feedback.project(");

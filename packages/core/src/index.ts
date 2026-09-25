@@ -245,6 +245,7 @@ export type {
   VerificationCheckIdFactory,
   VerificationRunnerPort,
   ProjectProfileProviderPort,
+  ToolFeedbackContributionApplier,
   ToolTurnPipeline,
 } from "./run-controller-ports.js";
 /**

@@ -2,6 +2,7 @@ import type { ToolCallRequest } from "../call/tool-call-preparer.js";
 import type { ToolExecutionIdentity } from "../types/execution-identity.js";
 import type { ToolAdmissionRequest } from "./admission-decision.js";
 import type { ToolPolicyDecision } from "./admission-decision.js";
+import type { ToolAdmissionEvaluationContext } from "./admission-coordinator.js";
 
 /**
  * The policy evaluation boundary.
@@ -34,7 +35,10 @@ import type { ToolPolicyDecision } from "./admission-decision.js";
  * infrastructure failure, and a refusal is a decision.
  */
 export interface ToolAdmissionPort {
-  evaluate(request: ToolAdmissionRequest): Promise<ToolPolicyDecision>;
+  evaluate(
+    request: ToolAdmissionRequest,
+    evaluationContext?: ToolAdmissionEvaluationContext,
+  ): Promise<ToolPolicyDecision>;
 }
 
 /**

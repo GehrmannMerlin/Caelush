@@ -17,7 +17,10 @@ import type {
   ModelToolFeedbackProjector,
   RunEventNotifierPort,
   ToolBatchCoordinator,
+  ToolBatchItemOutcome,
   ToolResultBatchNormalizer,
+  ProjectedToolFeedback,
+  RunExecutionMode,
 } from "@caelush/agent";
 import type { RunExecutionStore } from "./run-execution-store.js";
 import type { RunCompletionPersistencePort } from "./run-completion-store.js";
@@ -46,6 +49,25 @@ import type {
   TaskAcceptanceReview,
   TaskReviewBundle,
 } from "@caelush/verification";
+
+/**
+ * Core's narrow, private hand-off to the host-owned Tool feedback contribution pipeline.
+ *
+ * Core supplies the already projected feedback and the observation outcomes. The host may replace
+ * only the safe model-facing content and must return the same ordered projection identities so the
+ * normalizer remains the final integrity authority.
+ */
+export interface ToolFeedbackContributionApplier {
+  apply(input: {
+    readonly runId: AgentRun["id"];
+    readonly sessionId: AgentRun["sessionId"];
+    readonly sourceStepId: import("@caelush/protocol").StepId;
+    readonly mode: RunExecutionMode;
+    readonly signal: AbortSignal;
+    readonly items: readonly ToolBatchItemOutcome[];
+    readonly projected: readonly ProjectedToolFeedback[];
+  }): Promise<readonly ProjectedToolFeedback[]>;
+}
 
 export interface RunExecutionConfig {
   readonly baseSystemPrompt: string;
@@ -150,6 +172,8 @@ export interface ToolTurnPipeline {
   readonly batches: ToolBatchCoordinator;
   readonly feedback: ModelToolFeedbackProjector;
   readonly normalizer: ToolResultBatchNormalizer;
+  /** Optional host-owned contribution pass over observation-backed safe feedback. */
+  readonly feedbackContributions?: ToolFeedbackContributionApplier;
   /**
    * The model-visible Tool catalog, read from the registry that resolves execution.
    *

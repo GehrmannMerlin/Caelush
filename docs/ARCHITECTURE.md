@@ -196,13 +196,14 @@ only then closes Storage during shutdown. Phase 6B moves daemon observation to
 the asynchronous `RunEventHub`; the EventBus remains only legacy observation
 compatibility, while the SSE mapper and external event shape remain unchanged.
 
-## Phase 6A–6F Event domain, observation, durable authority, live signals, and Control Hooks
+## Phase 6A–6G Event domain, observation, durable authority, live signals, and Tool control
 
 Phase 6A established the canonical event vocabulary, Phase 6B adds the
 daemon-owned observation runtime, Phase 6C adds the public projection boundary,
 Phase 6D establishes durable writer authority, Phase 6E adds the transient
-signal path, and Phase 6F adds the bounded Control Hook and Context
-Contribution path described below:
+signal path, Phase 6F adds the bounded Control Hook and Context Contribution
+path, and Phase 6G adds the Coding-owned Tool Guard and Tool Feedback control
+pipelines described below:
 
 ```text
 @caelush/protocol
@@ -349,6 +350,55 @@ and accepts typed host registrations at the single production composition root.
 CLI and Web do not construct Hook runners, Context runtimes, providers, or Run
 state machines.
 
+## Phase 6G Tool Guard and Tool Feedback authority
+
+Phase 6G adds two specialized Coding Agent pipelines while keeping the generic
+runner and the existing authority boundaries intact:
+
+```text
+prepared canonical Tool args
+  → safe Tool Guard facts / argsFingerprint
+  → BeforeToolDispatchPipeline
+  → Core Security gate
+  → durable Tool admission, execution, and ToolObservation
+  → ModelToolFeedbackProjector
+  → observation-backed ToolFeedbackContributionPipeline
+  → ToolResultBatchNormalizer
+  → AgentToolResultMessage durable materialization
+```
+
+`BeforeToolDispatchInput` is a closed safe view: it contains identity,
+Tool name, a SHA-256 fingerprint of prepared canonical arguments, and an
+explicit bounded Security-facts projection. Raw arguments, commands, paths,
+stdin, patches, secrets, and raw Security facts do not cross the Guard
+boundary. Guard decisions are combined by the strict restriction lattice
+`PASS < REQUIRE_APPROVAL < BLOCK`; Core Security remains authoritative and is
+still evaluated for PASS and REQUIRE_APPROVAL. A Guard REQUIRE_APPROVAL is
+folded into the existing Coding approval identity, so recovery recomputes and
+compares one durable approval key. Empty or PASS-only Guard behavior preserves
+the pre-6G approval key.
+
+Fresh `REQUESTED` admission uses `EXECUTE`; an approved
+`WAITING_APPROVAL` invocation re-enters admission with `RECOVER`; a durable
+`RUNNING` invocation is never redispatched. Hook cancellation follows the
+Run execution signal, while all other Guard pipeline failures fail closed.
+The daemon constructs an empty immutable Guard registry by default and
+accepts typed registrations only at startup composition.
+
+Tool Feedback contributions run only for `OBSERVATION` outcomes and only after
+the existing bounded `ModelToolFeedbackProjector`. Rejected, skipped,
+synthetic, external, and legacy results keep their built-in feedback without a
+fabricated observation ID. Contributions are validated as bounded plain data,
+sanitized by daemon-injected secret and terminal-output safeguards, and
+limited by an independent byte/count budget that cannot evict built-in
+feedback. Required failures reuse the existing Tool infrastructure-failure
+boundary; optional failures are skipped. The only mutable model projection
+field is `content`; Tool identity, observation reference, durable Tool truth,
+and effects remain unchanged. The final projection fingerprint is recomputed
+with the existing `fingerprintProjection` helper before the message is
+materialized. Hook receipts remain Core-private diagnostics, not RunEvents,
+and Phase 6G adds no runtime Hook or HTTP plugin registry.
+
 ## Phase 5D Context and replay authority
 
 The current Message V2 runtime cutover uses `AgentMessageRecord[]` as the
@@ -459,7 +509,8 @@ produce evidence but never own final completion.
 | Durable event authority and writer cutover (6D) | COMPLETE; only Run/Tool authority transactions write events         |
 | Transient signal and streaming cutover (6E)     | COMPLETE; bounded live-only model/Tool/Runtime progress             |
 | Control Hooks and Context Contributions (6F)    | COMPLETE; generic Agent runner and bounded Core/Context integration |
-| Package retirement (6G–6H)                      | NOT STARTED                                                         |
+| Tool Guard and Tool Feedback control (6G)       | COMPLETE; Coding pipelines preserve Core Security and Tool truth    |
+| Package retirement (6H)                         | NOT STARTED                                                         |
 
 The phase table records the current Architecture V2 migration lines. Existing
 Runtime, Security, Verification, CLI, Web, and daemon layers are documented as

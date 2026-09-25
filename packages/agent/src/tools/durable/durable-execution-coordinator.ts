@@ -27,7 +27,10 @@ import type { ToolExecutionUpdateSanitizerPort } from "../execution/update-sanit
 import type { ToolResultPipeline } from "../result/result-pipeline.js";
 import { ToolResultValidationError } from "../result/result-sanitizer-port.js";
 import { canonicalJsonString } from "../schema/json-canonical.js";
-import type { ToolAdmissionCoordinator } from "../admission/admission-coordinator.js";
+import type {
+  ToolAdmissionCoordinator,
+  ToolAdmissionEvaluationContext,
+} from "../admission/admission-coordinator.js";
 import type { ToolApprovalRequestFactory } from "../admission/approval-port.js";
 import type { ToolSecurityContext } from "../admission/security-context.js";
 import type { ToolDurableMetadataPort } from "../admission/durable-metadata-port.js";
@@ -442,6 +445,7 @@ export function createDurableToolExecutionCoordinator(
   async function admitAndProceed(
     execution: ExecutionInput,
     snapshot: ToolExecutionSnapshot,
+    evaluationContext: ToolAdmissionEvaluationContext,
   ): Promise<DurableToolExecutionOutcome> {
     const invocation = snapshot.invocation;
     if (invocation.status !== "REQUESTED") {
@@ -450,13 +454,16 @@ export function createDurableToolExecutionCoordinator(
         `Tool admission requires a REQUESTED invocation, not ${invocation.status}.`,
       );
     }
-    const admitted = await input.admission.admit({
-      sessionId: snapshot.sessionId,
-      invocation,
-      call: execution.call,
-      environment: execution.environment,
-      securityContext: execution.securityContext,
-    });
+    const admitted = await input.admission.admit(
+      {
+        sessionId: snapshot.sessionId,
+        invocation,
+        call: execution.call,
+        environment: execution.environment,
+        securityContext: execution.securityContext,
+      },
+      evaluationContext,
+    );
 
     if (admitted.kind === "WAITING_APPROVAL") {
       const waiting = markToolInvocationWaitingApproval(invocation);
@@ -678,14 +685,17 @@ export function createDurableToolExecutionCoordinator(
     // approval identity recomputes the opaque key. The stored key is handed in so the comparison
     // happens against the identity this exact call would be admitted under today.
     const storedApprovalKey = await lookupStoredApprovalKey(input, snapshot.invocation.id);
-    const admitted = await input.admission.admit({
-      sessionId: snapshot.sessionId,
-      invocation: snapshot.invocation,
-      call: execution.call,
-      environment: execution.environment,
-      securityContext: execution.securityContext,
-      storedApprovalKey,
-    });
+    const admitted = await input.admission.admit(
+      {
+        sessionId: snapshot.sessionId,
+        invocation: snapshot.invocation,
+        call: execution.call,
+        environment: execution.environment,
+        securityContext: execution.securityContext,
+        storedApprovalKey,
+      },
+      { mode: "RECOVER", signal: execution.signal },
+    );
 
     if (admitted.kind === "DENY") {
       const failure = feedbackToDurableFailure(admitted.feedback);
@@ -776,7 +786,10 @@ export function createDurableToolExecutionCoordinator(
     if (invocation.status === "REQUESTED") {
       // Nothing has started, so re-entering admission is safe: policy, approval and budget are all
       // re-evaluated against current durable state.
-      return await admitAndProceed(execution, snapshot);
+      return await admitAndProceed(execution, snapshot, {
+        mode: "RECOVER",
+        signal: restore.signal,
+      });
     }
     if (invocation.status === "WAITING_APPROVAL") {
       return await recoverWaitingApproval(execution, snapshot);
@@ -891,6 +904,7 @@ export function createDurableToolExecutionCoordinator(
             signal: request.signal,
           },
           requested.snapshot,
+          { mode: "EXECUTE", signal: request.signal },
         );
       } finally {
         activeCalls.delete(key);

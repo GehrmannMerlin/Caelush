@@ -583,7 +583,9 @@ describe("Phase 4C durable Tool orchestration boundaries", () => {
     );
     // ③ admission, ④ RUNNING, ⑤ execution, ⑥ settlement.
     const admitBody = bodyOf(coordinator, "async function admitAndProceed(");
-    expect(admitBody).toContain("await input.admission.admit({");
+    // Phase 6G carries the transient Guard mode/signal as a second argument; the five-field
+    // ToolAdmissionRequest remains the first argument and stays closed.
+    expect(admitBody).toContain("await input.admission.admit(");
     expect(admitBody).toContain("startAndExecute(execution, snapshot)");
     expect(admitBody.indexOf("admission.admit")).toBeLessThan(
       admitBody.indexOf("startAndExecute(execution, snapshot)"),
@@ -702,8 +704,8 @@ describe("Phase 4C durable Tool orchestration boundaries", () => {
     const coordinator = executable(`${ADMISSION}admission-coordinator.ts`);
     expect(coordinator).toContain("options.preCheck?.check(request)");
     // And the pre-check runs before the policy port, which runs before any budget side effect.
-    const admitBody = bodyOf(coordinator, "async admit(input: ToolAdmissionInput)");
-    expect(admitBody.indexOf("evaluateAdmission(options, request)")).toBeLessThan(
+    const admitBody = bodyOf(coordinator, "async admit(");
+    expect(admitBody.indexOf("evaluateAdmission(options, request,")).toBeLessThan(
       admitBody.indexOf("admitBudget(options, input)"),
     );
   });

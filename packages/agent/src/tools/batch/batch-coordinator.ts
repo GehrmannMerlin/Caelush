@@ -304,7 +304,11 @@ async function executeOne(
       }),
     };
   } catch (error) {
-    if (error instanceof ToolExecutionAbortedError) return { kind: "ABORTED" };
+    // A parent cancellation owns the outcome even when an admission/Guard boundary reports a
+    // wrapped infrastructure error while the abort races with its async evaluation.
+    if (request.signal.aborted || error instanceof ToolExecutionAbortedError) {
+      return { kind: "ABORTED" };
+    }
     throw new ToolBatchInfrastructureError("Tool execution failed.", { cause: error });
   }
 }
@@ -461,7 +465,8 @@ export function assertToolBatchRequest(
       throw new ToolBatchInputError();
     }
     const call = entry as Record<string, unknown>;
-    const externalCallId = typeof call.externalCallId === "string" ? call.externalCallId : undefined;
+    const externalCallId =
+      typeof call.externalCallId === "string" ? call.externalCallId : undefined;
     const parsedToolName = ToolNameSchema.safeParse(call.toolName);
     const parsedArgs = JsonObjectSchema.safeParse(call.args);
     if (

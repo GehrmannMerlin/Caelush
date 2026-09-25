@@ -51,6 +51,8 @@ export interface CodingToolApprovalIdentityInput {
   readonly args: JsonObject;
   /** The Run's validated authorization context. It comes from durable state, never from arguments. */
   readonly securityContext: Pick<ToolSecurityContext, "permissionProfile" | "approvalPolicy">;
+  /** Present only when a Guard added an approval restriction; absent preserves the legacy key. */
+  readonly guardDecisionFingerprint?: string | undefined;
 }
 
 /** Host-internal identity for an exact security decision; never expose this as a model field. */
@@ -63,6 +65,9 @@ export function computeCodingToolApprovalKey(input: CodingToolApprovalIdentityIn
     runtimeRequirements: input.security.runtimeRequirements,
     permissionProfile: input.securityContext.permissionProfile,
     approvalPolicy: input.securityContext.approvalPolicy,
+    ...(input.guardDecisionFingerprint === undefined
+      ? {}
+      : { guardDecisionFingerprint: input.guardDecisionFingerprint }),
   };
   return createHash("sha256").update(canonicalJsonString(identity), "utf8").digest("hex");
 }

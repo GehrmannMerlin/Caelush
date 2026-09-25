@@ -14,11 +14,22 @@ import {
   type ToolFailureFeedback,
   type ToolPolicyDecision,
   type ToolGateSecurityFacts,
+  type ToolAdmissionEvaluationContext,
 } from "@caelush/agent";
 
 import { computeCodingToolApprovalKey } from "../security/approval-identity.js";
 import type { CodingToolDefinition } from "../coding-tool-definition.js";
 import type { CodingToolCatalog } from "../coding-tool-catalog.js";
+import {
+  fingerprintPreparedToolArgs,
+  projectSafeToolGuardFacts,
+  type BeforeToolDispatchInput,
+  type ToolGuardDecision,
+  type ToolGuardPipeline,
+  type ToolGuardPipelineResult,
+} from "../../hooks/index.js";
+
+const MAX_MERGED_APPROVAL_REASON_BYTES = 4 * 1024;
 
 /**
  * The Security/Coding admission adapter.
@@ -97,19 +108,26 @@ export interface CodingToolAdmissionPortOptions {
    */
   readonly onDecision?:
     ((decision: ToolExecutionGateDecision, request: ToolAdmissionRequest) => void) | undefined;
+  /** The typed Coding Guard pipeline, already composed over the shared ControlHookRunner. */
+  readonly guard?: ToolGuardPipeline | undefined;
 }
 
 export function createCodingToolAdmissionPort(
   options: CodingToolAdmissionPortOptions,
 ): ToolAdmissionPort {
-  const codingFor = (name: ToolName): CodingToolDefinition | undefined => options.catalog?.get(name);
+  const codingFor = (name: ToolName): CodingToolDefinition | undefined =>
+    options.catalog?.get(name);
   const metadataFor = (name: ToolName): ToolGateMetadata =>
     toolDefinitionMetadata(name, options.registry.resolve(name), codingFor(name));
 
   return {
-    async evaluate(request: ToolAdmissionRequest): Promise<ToolPolicyDecision> {
+    async evaluate(
+      request: ToolAdmissionRequest,
+      evaluationContext?: ToolAdmissionEvaluationContext,
+    ): Promise<ToolPolicyDecision> {
       const metadata = metadataFor(request.toolName);
       const facts = projectFacts(codingFor(request.toolName), request.args as JsonObject);
+      const guard = await evaluateGuard(options.guard, request, metadata, facts, evaluationContext);
       let decision: ToolExecutionGateDecision;
       try {
         decision = await options.gate.decide({
@@ -135,7 +153,7 @@ export function createCodingToolAdmissionPort(
       } catch {
         // Diagnostics are strictly best effort and must never alter admission semantics.
       }
-      return translateDecision(decision, request, metadata, options);
+      return translateDecision(decision, request, metadata, options, guard);
     },
   };
 }
@@ -303,9 +321,7 @@ function toolDefinitionMetadata(
  */
 function declaredRiskLevel(tool: AgentTool): RiskLevel {
   const declared = (tool as { readonly riskLevel?: unknown }).riskLevel;
-  return declared === "MEDIUM" || declared === "HIGH" || declared === "CRITICAL"
-    ? declared
-    : "LOW";
+  return declared === "MEDIUM" || declared === "HIGH" || declared === "CRITICAL" ? declared : "LOW";
 }
 
 /**
@@ -356,10 +372,15 @@ function translateDecision(
   request: ToolAdmissionRequest,
   metadata: ToolGateMetadata,
   options: CodingToolAdmissionPortOptions,
+  guard?: ToolGuardPipelineResult,
 ): ToolPolicyDecision {
-  if (decision.kind === "ALLOW") return Object.freeze({ kind: "ALLOW" });
+  if (guard?.decision.kind === "BLOCK") return guardDeniedFeedback(guard.decision);
   if (decision.kind === "DENY") {
     return Object.freeze({ kind: "DENY", feedback: deniedFeedback(decision) });
+  }
+  const guardApproval = guard?.decision.kind === "REQUIRE_APPROVAL" ? guard.decision : undefined;
+  if (decision.kind === "ALLOW" && guardApproval === undefined) {
+    return Object.freeze({ kind: "ALLOW" });
   }
   const requirement: ToolApprovalRequirement = Object.freeze({
     key: computeCodingToolApprovalKey({
@@ -374,17 +395,96 @@ function translateDecision(
       // boundary, and the value is hashed exactly as it arrives.
       args: request.args as never,
       securityContext: request.securityContext,
+      ...(guardApproval === undefined || guard?.approvalFingerprint === undefined
+        ? {}
+        : { guardDecisionFingerprint: guard.approvalFingerprint }),
     }),
-    reason: decision.safeReason ?? "The active policy requires review before this Tool runs.",
+    reason: mergedApprovalReason(
+      decision.safeReason ?? "The active policy requires review before this Tool runs.",
+      guardApproval?.reason,
+    ),
     requestedScope: DEFAULT_CODING_APPROVAL_SCOPE,
     ...(options.approvalPresentation === undefined
       ? {}
       : (() => {
-          const presentation = options.approvalPresentation(decision);
+          const presentation =
+            decision.kind === "REQUIRE_APPROVAL"
+              ? options.approvalPresentation(decision)
+              : undefined;
           return presentation === undefined ? {} : { presentation };
         })()),
   });
   return Object.freeze({ kind: "REQUIRE_APPROVAL", requirement });
+}
+
+async function evaluateGuard(
+  guard: ToolGuardPipeline | undefined,
+  request: ToolAdmissionRequest,
+  metadata: ToolGateMetadata,
+  facts: ToolGateSecurityFacts | undefined,
+  evaluationContext: ToolAdmissionEvaluationContext | undefined,
+): Promise<ToolGuardPipelineResult | undefined> {
+  if (guard === undefined) return undefined;
+  if (evaluationContext === undefined) {
+    throw new ToolExecutionInfrastructureError(
+      "ADMISSION",
+      "Tool Guard evaluation requires a live execution context.",
+    );
+  }
+  const input: BeforeToolDispatchInput = {
+    runId: request.identity.runId,
+    sessionId: request.identity.sessionId,
+    sourceStepId: request.identity.sourceStepId,
+    externalCallId: request.identity.externalCallId,
+    toolName: request.toolName,
+    argsFingerprint: fingerprintPreparedToolArgs(request.args as JsonObject),
+    safeFacts: projectSafeToolGuardFacts({
+      definition: metadata,
+      runtimeKind: request.environment.runtime.kind,
+      ...(facts === undefined ? {} : { securityFacts: facts }),
+    }),
+  };
+  try {
+    return await guard.evaluate(input, {
+      identity: { runId: request.identity.runId, sessionId: request.identity.sessionId },
+      stepId: request.identity.sourceStepId,
+      mode: evaluationContext.mode,
+      signal: evaluationContext.signal,
+    });
+  } catch (error) {
+    if (error instanceof ToolExecutionInfrastructureError) throw error;
+    throw new ToolExecutionInfrastructureError("ADMISSION", "Tool Guard pipeline failed safely.", {
+      cause: error,
+    });
+  }
+}
+
+function guardDeniedFeedback(
+  decision: Extract<ToolGuardDecision, { kind: "BLOCK" }>,
+): ToolPolicyDecision {
+  return Object.freeze({
+    kind: "DENY",
+    feedback: Object.freeze({
+      code: "PERMISSION_DENIED" as const,
+      content: "Tool execution was blocked by an active extension policy.",
+      details: Object.freeze({ reasonCode: decision.code }),
+      disposition: "SAFE_FAILURE" as const,
+    }),
+  });
+}
+
+function mergedApprovalReason(coreReason: string, guardReason: string | undefined): string {
+  if (guardReason === undefined) return coreReason;
+  const combined = `${coreReason} Guard policy: ${guardReason}`;
+  let result = "";
+  let bytes = 0;
+  for (const character of combined) {
+    const characterBytes = Buffer.byteLength(character, "utf8");
+    if (bytes + characterBytes > MAX_MERGED_APPROVAL_REASON_BYTES) break;
+    result += character;
+    bytes += characterBytes;
+  }
+  return result;
 }
 
 /**
