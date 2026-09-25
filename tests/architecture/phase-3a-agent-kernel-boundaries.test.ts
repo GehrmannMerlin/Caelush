@@ -212,7 +212,11 @@ describe("Phase 3A agent kernel dependency boundaries", () => {
       .filter(
         (file) =>
           !file.endsWith("tools/types/execution-environment.ts") &&
-          !file.endsWith("tools/admission/security-context.ts"),
+          !file.endsWith("tools/admission/security-context.ts") &&
+          // Phase 7C extends the existing semantic document authority table with the
+          // provider-neutral coding.workspace source type. The document is still a pure
+          // projection boundary; it does not access a workspace or host execution API.
+          !file.endsWith("context/document/context-document.ts"),
       )
       .map((file) => relative(root, file).replaceAll("\\", "/"));
     expect(offenders).toEqual([]);

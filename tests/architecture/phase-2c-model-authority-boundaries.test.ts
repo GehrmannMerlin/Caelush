@@ -257,6 +257,10 @@ describe("Phase 2C package edges", () => {
         "ContextPlanningError",
         "ContextSourceCollectionError",
         "Utf8HeuristicTokenEstimator",
+        // Phase 7C publishes the generic Source Provider contracts and factories from the
+        // Agent root. The coding overlay remains in @caelush/coding-agent; these are only the
+        // provider-neutral source IDs, projections, and adapters.
+        "AGENT_CONTEXT_SOURCE_IDS",
         "assertContextFingerprint",
         "assertContextItem",
         "assertContextPlan",
@@ -273,8 +277,16 @@ describe("Phase 2C package edges", () => {
         "createContextPolicy",
         "createContextRequestOverheadEstimator",
         "createContextSourceId",
+        "createContextSourceItem",
         "createContextSourceRegistryBuilder",
+        "createConversationContextSourceProvider",
+        "createCheckpointContextSourceProvider",
+        "createExtensionContributionContextSourceProvider",
+        "createMemoryContextSourceProvider",
+        "createBranchContextSourceProvider",
         "createUtf8HeuristicTokenEstimator",
+        "freezeContextSourceResult",
+        "planContext",
         // Phase 6F: the generic Control Hook runner and bounded Context Contribution pipeline are
         // public Agent contracts; their concrete Context projection remains outside this package.
         "ContextContributionPipelineError",
