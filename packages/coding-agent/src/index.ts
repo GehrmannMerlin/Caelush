@@ -40,6 +40,30 @@
  */
 
 export {
+  CODING_CONTEXT_SOURCE_IDS,
+  createProjectInstructionContextSourceProvider,
+  createProjectMetadataContextSourceProvider,
+  createRuntimeFactsContextSourceProvider,
+  createWorkspaceContextSourceProvider,
+} from "./context/index.js";
+export type {
+  CodingContextProviderOptions,
+  CodingRuntimeFactsProjection,
+  CodingRuntimeFactsPort,
+  CodingWorkspaceDescriptor,
+  CodingWorkspacePort,
+  ProjectInstructionContextPort,
+  ProjectInstructionContextSourceProviderOptions,
+  ProjectInstructionEntry,
+  ProjectInstructionProjection,
+  ProjectMetadataContextPort,
+  ProjectMetadataContextSourceProviderOptions,
+  ProjectMetadataProjection,
+  RuntimeFactsContextSourceProviderOptions,
+  WorkspaceContextSourceProviderOptions,
+} from "./context/index.js";
+
+export {
   APPLY_PATCH_PROMPT_SNIPPET,
   applyToolEffectsToAgentState,
   assertToolSecurityFactsProjector,
