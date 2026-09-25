@@ -250,6 +250,15 @@ describe("Phase 2C package edges", () => {
         // or a Step, and a host that reimplemented one would be a second authority over it.
         "AgentStepStateError",
         "AgentTurnInputError",
+        // Phase 6F: the generic Control Hook runner and bounded Context Contribution pipeline are
+        // public Agent contracts; their concrete Context projection remains outside this package.
+        "ContextContributionPipelineError",
+        "ControlHookAbortedError",
+        "ControlHookConfigurationError",
+        "ControlHookPipelineError",
+        "ControlHookReentrancyError",
+        "ControlHookTimeoutError",
+        "DEFAULT_CONTEXT_CONTRIBUTION_LIMITS",
         // --- Phase 3C Checkpoint 4: the canonical Run state machine and the general Run/AgentState
         // transitions moved into the kernel, and the pure Run transition planner was implemented
         // there. Each of these is one declaration: Core re-exports them rather than redeclaring
@@ -342,6 +351,10 @@ describe("Phase 2C package edges", () => {
         "createAgentDecisionClassifier",
         "createAgentLoop",
         "createAgentTurnRef",
+        "createContextContributionPipeline",
+        "createControlHookId",
+        "createControlHookRegistryBuilder",
+        "createControlHookRunner",
         "createModelRequestBuilder",
         // Phase 6E: the Agent-side projector is the only bridge from public AI deltas to the
         // canonical transient Protocol domain; identity and time remain injected ports.

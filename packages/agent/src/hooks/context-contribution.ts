@@ -1,4 +1,4 @@
-import type { TimestampMs } from "@caelush/protocol";
+import { createTimestampMs, type TimestampMs } from "@caelush/protocol";
 
 import type {
   AgentExecutionIdentity,
@@ -136,7 +136,9 @@ export function createContextContributionPipeline(
     options.runner ??
     createControlHookRunner({
       pipelineId: options.pipelineId ?? "context-contribution",
-      clock: options.clock ?? { now: () => Date.now() as TimestampMs },
+      // Agent has no wall-clock authority. Production composition supplies the daemon clock;
+      // this deterministic fallback keeps direct contract tests free of host time.
+      clock: options.clock ?? { now: () => createTimestampMs(0) },
     });
 
   return {

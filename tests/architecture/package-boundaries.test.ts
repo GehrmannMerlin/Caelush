@@ -312,7 +312,9 @@ describe("package boundaries", () => {
     const securityImports = [
       ...source.matchAll(/from\s+["'](@caelush\/security(?:\/[^"']*)?)["']/g),
     ].map((match) => match[1]);
-    expect(securityImports).toHaveLength(2);
+    // Phase 6F adds the Context Contribution projection, which reuses the same narrow redaction
+    // source of truth as Context's existing project-derived text path.
+    expect(securityImports).toHaveLength(3);
     expect(securityImports).toEqual(
       expect.arrayContaining(["@caelush/security/redaction", "@caelush/security/sensitive-path"]),
     );
