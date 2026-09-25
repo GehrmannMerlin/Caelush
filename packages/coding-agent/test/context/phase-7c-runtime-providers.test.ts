@@ -7,9 +7,9 @@ import {
   createSkillCatalogContextSourceProvider,
   createTemporalContextSourceProvider,
   createVerificationRepairContextSourceProvider,
-  type ContextSourceInput,
   type RelevantFileProjection,
 } from "@caelush/coding-agent";
+import type { ContextSourceInput } from "@caelush/agent";
 
 const sourceInput = {
   identity: {

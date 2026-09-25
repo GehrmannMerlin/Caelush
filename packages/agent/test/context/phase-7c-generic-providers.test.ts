@@ -67,9 +67,9 @@ describe("Phase 7C Generic Source Providers", () => {
       AGENT_CONTEXT_SOURCE_IDS.conversation,
       AGENT_CONTEXT_SOURCE_IDS.conversation,
     ]);
-    expect(result.items[0]!.payload.kind === "AGENT_MESSAGE" && result.items[0]!.payload.message).toEqual(
-      conversation.turns[0]!.messages[0],
-    );
+    expect(
+      result.items[0]!.payload.kind === "AGENT_MESSAGE" && result.items[0]!.payload.message,
+    ).toEqual(conversation.turns[0]!.messages[0]);
     expect(result.items[0]!.scope).toBe("SESSION");
     expect(result.items[0]!.retention).toBe("COMPRESSIBLE");
     expect(Object.isFrozen(result)).toBe(true);
@@ -77,7 +77,9 @@ describe("Phase 7C Generic Source Providers", () => {
   });
 
   it("adapts an injected checkpoint loader into one rehydratable item", async () => {
-    let received: ContextSourceInput | undefined;
+    let received:
+      | { readonly identity: ContextSourceInput["identity"]; readonly signal: AbortSignal }
+      | undefined;
     const provider = createCheckpointContextSourceProvider({
       loader: {
         async load(input) {
@@ -188,9 +190,7 @@ describe("Phase 7C Generic Source Providers", () => {
         whyLoaded: "host fact",
       },
     ]);
-    expect(result.items[0]!.source.sourceRef).toBe(
-      "host.extension/extension_1/fact_1",
-    );
+    expect(result.items[0]!.source.sourceRef).toBe("host.extension/extension_1/fact_1");
   });
 
   it("keeps branch context as an explicit stable no-op", async () => {

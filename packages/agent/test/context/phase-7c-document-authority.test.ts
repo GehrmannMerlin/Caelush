@@ -23,6 +23,7 @@ const MODEL: ModelDescriptor = {
     vision: "UNKNOWN",
     reasoning: "UNKNOWN",
     reasoningSummary: "UNKNOWN",
+    promptCaching: "UNKNOWN",
     usageReporting: "UNKNOWN",
   },
   source: "CONFIGURATION",

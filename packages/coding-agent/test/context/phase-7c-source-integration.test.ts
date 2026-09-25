@@ -4,7 +4,6 @@ import type { ModelDescriptor } from "@caelush/ai";
 import {
   collectContextSources,
   createContextDocumentBuilder,
-  createContextHistoryIndexer,
   createContextPolicy,
   createContextSourceRegistryBuilder,
   planContext,
@@ -30,6 +29,7 @@ const MODEL: ModelDescriptor = {
     vision: "UNKNOWN",
     reasoning: "UNKNOWN",
     reasoningSummary: "UNKNOWN",
+    promptCaching: "UNKNOWN",
     usageReporting: "UNKNOWN",
   },
   source: "CONFIGURATION",

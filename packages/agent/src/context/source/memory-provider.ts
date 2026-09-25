@@ -34,10 +34,11 @@ export function createMemoryContextSourceProvider(
   return Object.freeze({
     id: AGENT_CONTEXT_SOURCE_IDS.memory,
     async collect(input: ContextSourceInput) {
-      const projections = (await options.loader?.load({
-        identity: input.identity,
-        signal: input.signal,
-      })) ?? [];
+      const projections =
+        (await options.loader?.load({
+          identity: input.identity,
+          signal: input.signal,
+        })) ?? [];
       const items = projections.map((projection) =>
         createContextSourceItem({
           id: createContextItemId(`agent.memory:${projection.id}`),

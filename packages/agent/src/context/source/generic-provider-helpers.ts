@@ -1,4 +1,8 @@
-import { createContextItemId, type ContextItem, type ContextSourceId } from "../item/context-item.js";
+import {
+  createContextItemId,
+  type ContextItem,
+  type ContextSourceId,
+} from "../item/context-item.js";
 import { createContextSourceItem, freezeContextSourceResult } from "./context-source-item.js";
 import type { ContextSourceResult } from "./context-source.js";
 

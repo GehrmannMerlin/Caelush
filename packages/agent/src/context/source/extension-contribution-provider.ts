@@ -5,7 +5,11 @@ import type { ContextSourceInput, ContextSourceProvider } from "./context-source
 import { createContextItemId } from "../item/context-item.js";
 import { createContextSourceItem } from "./context-source-item.js";
 import { AGENT_CONTEXT_SOURCE_IDS } from "./source-ids.js";
-import { createSourceResult, estimateContextTokens, mapLegacyPriority } from "./generic-provider-helpers.js";
+import {
+  createSourceResult,
+  estimateContextTokens,
+  mapLegacyPriority,
+} from "./generic-provider-helpers.js";
 
 const PROVIDER_VERSION = "extension-contributions-v1";
 
@@ -28,12 +32,13 @@ export function createExtensionContributionContextSourceProvider(
   return Object.freeze({
     id: AGENT_CONTEXT_SOURCE_IDS.extensionContributions,
     async collect(input: ContextSourceInput) {
-      const contributions = (await options.loader?.load({
-        identity: input.identity,
-        turn: input.turn,
-        mode: input.mode,
-        signal: input.signal,
-      })) ?? [];
+      const contributions =
+        (await options.loader?.load({
+          identity: input.identity,
+          turn: input.turn,
+          mode: input.mode,
+          signal: input.signal,
+        })) ?? [];
       const items = contributions.flatMap((contribution) =>
         contribution.items.map((contributionItem) =>
           createContextSourceItem({

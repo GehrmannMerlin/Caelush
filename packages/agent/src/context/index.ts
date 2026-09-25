@@ -106,9 +106,7 @@ export {
 } from "./source/context-source-item.js";
 export { AGENT_CONTEXT_SOURCE_IDS } from "./source/source-ids.js";
 export { createConversationContextSourceProvider } from "./source/conversation-provider.js";
-export {
-  createCheckpointContextSourceProvider,
-} from "./source/checkpoint-provider.js";
+export { createCheckpointContextSourceProvider } from "./source/checkpoint-provider.js";
 export type {
   CheckpointContextSourceProviderOptions,
   ContextCheckpointLoader,
@@ -120,9 +118,7 @@ export type {
   ContextMemoryProjection,
   MemoryContextSourceProviderOptions,
 } from "./source/memory-provider.js";
-export {
-  createExtensionContributionContextSourceProvider,
-} from "./source/extension-contribution-provider.js";
+export { createExtensionContributionContextSourceProvider } from "./source/extension-contribution-provider.js";
 export type {
   ContextContributionLoader,
   ExtensionContributionContextSourceProviderOptions,

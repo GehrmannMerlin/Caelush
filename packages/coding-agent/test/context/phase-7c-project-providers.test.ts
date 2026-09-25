@@ -6,9 +6,9 @@ import {
   createProjectMetadataContextSourceProvider,
   createRuntimeFactsContextSourceProvider,
   createWorkspaceContextSourceProvider,
-  type ContextSourceInput,
   type ProjectInstructionProjection,
 } from "@caelush/coding-agent";
+import type { ContextSourceInput } from "@caelush/agent";
 
 const sourceInput = {
   identity: {
@@ -133,7 +133,11 @@ describe("Phase 7C Coding workspace/project providers", () => {
       ],
     };
     const provider = createProjectInstructionContextSourceProvider({
-      port: { async load() { return projection; } },
+      port: {
+        async load() {
+          return projection;
+        },
+      },
     });
 
     const result = await provider.collect(sourceInput);
