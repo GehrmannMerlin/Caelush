@@ -3,7 +3,7 @@ import type {
   AgentExecutionIdentity,
   AgentTurnInput,
   AgentTurnRef,
-  ContextItem,
+  LegacyContextItem,
   ContextProvider,
   ContextProviderInput,
 } from "@caelush/agent";
@@ -105,7 +105,7 @@ type ProviderExact = Expect<
     ContextProvider,
     {
       readonly id: string;
-      provide(input: ContextProviderInput): Promise<readonly ContextItem[]>;
+      provide(input: ContextProviderInput): Promise<readonly LegacyContextItem[]>;
     }
   >
 >;

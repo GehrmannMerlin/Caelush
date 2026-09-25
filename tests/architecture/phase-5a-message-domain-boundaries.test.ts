@@ -358,6 +358,8 @@ describe("Phase 5A guard — package boundaries (freeze §150, §151)", () => {
       "packages/storage/src/run-execution-store.ts",
       "packages/agent/src/loop/context/context-engine-port.ts",
       "packages/agent/src/loop/types.ts",
+      // Phase 7A freezes ContextSourceInput with the durable conversation snapshot as semantic input.
+      "packages/agent/src/context/source/context-source.ts",
       "packages/agent/src/run/run-execution-driver.ts",
     ];
     const consumers: string[] = [];

@@ -3,7 +3,7 @@ import { createTimestampMs, type TimestampMs } from "@caelush/protocol";
 import type {
   AgentExecutionIdentity,
   AgentTurnRef,
-  ContextItem,
+  LegacyContextItem,
   ContextItemPriorityClass,
 } from "../loop/types.js";
 import type { ContextPrepareMode } from "../loop/context/context-engine-port.js";
@@ -25,7 +25,7 @@ export type ContextContributionReplay = "SNAPSHOT" | "RECOMPUTE";
 export interface ContextContribution {
   readonly id: string;
   readonly source: string;
-  readonly items: readonly ContextItem[];
+  readonly items: readonly LegacyContextItem[];
   readonly replay: ContextContributionReplay;
 }
 
@@ -293,7 +293,7 @@ function validateAndNormalizeOutput(input: {
         "Context contribution output is invalid.",
       );
     }
-    const items: ContextItem[] = [];
+    const items: LegacyContextItem[] = [];
     let contributionBytes = 0;
     for (const itemCandidate of contribution.items) {
       const item = validateItem(itemCandidate, input.limits);
@@ -351,7 +351,10 @@ function validateAndNormalizeOutput(input: {
   return { contributions: Object.freeze(normalized), bytes, itemCount };
 }
 
-function validateItem(value: unknown, limits: ContextContributionPipelineLimits): ContextItem {
+function validateItem(
+  value: unknown,
+  limits: ContextContributionPipelineLimits,
+): LegacyContextItem {
   if (!isPlainObject(value)) {
     throw new ContextContributionPipelineError(
       "OUTPUT_INVALID",

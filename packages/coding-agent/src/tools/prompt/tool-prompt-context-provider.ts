@@ -1,4 +1,4 @@
-import type { ContextItem } from "@caelush/agent";
+import type { LegacyContextItem } from "@caelush/agent";
 import type { ToolName } from "@caelush/protocol";
 
 import { MAX_TOOL_PROMPT_TOTAL_BYTES, promptSnippetFor } from "./prompt-snippets.js";
@@ -53,10 +53,10 @@ export interface ToolPromptContextProviderInput {
 }
 
 export interface ToolPromptContextProvider {
-  provide(input: ToolPromptContextProviderInput): Promise<readonly ContextItem[]>;
+  provide(input: ToolPromptContextProviderInput): Promise<readonly LegacyContextItem[]>;
 }
 
-export interface ToolPromptContextItem extends ContextItem {
+export interface ToolPromptContextItem extends LegacyContextItem {
   readonly type: "TOOL_GUIDANCE";
 }
 
@@ -66,7 +66,7 @@ export const TOOL_PROMPT_CONTEXT_ITEM_ID = "coding.tool_guidance.v1";
 /**
  * Build the provider.
  *
- * One `ContextItem` carrying every active Tool's guidance, rather than one item per Tool: the block is
+ * One compatibility ContextItem carrying every active Tool's guidance, rather than one item per Tool: the block is
  * read as a unit, and splitting it would let a budget algorithm drop half of a Tool's guidance while
  * keeping the other half.
  *
@@ -76,7 +76,7 @@ export const TOOL_PROMPT_CONTEXT_ITEM_ID = "coding.tool_guidance.v1";
  */
 export function createToolPromptContextProvider(): ToolPromptContextProvider {
   return {
-    async provide(input): Promise<readonly ContextItem[]> {
+    async provide(input): Promise<readonly LegacyContextItem[]> {
       const blocks: string[] = [];
       let bytes = 0;
       for (const toolName of input.activeTools) {

@@ -149,13 +149,13 @@ export type AgentContinuationReason = "VERIFICATION_REPAIR" | "STEERING";
 export type ContextItemPriorityClass = "CRITICAL" | "HIGH" | "NORMAL" | "OPTIONAL";
 
 /**
- * One piece of prepared model context.
+ * One piece of context contributed through the pre-7A Provider compatibility seam.
  *
  * Text only. The loop must never receive a project snapshot, a Git state, a file list
  * or a workspace path through this contract: a legacy adapter may hold those as
  * compatibility diagnostics, but they do not cross into the general kernel.
  */
-export interface ContextItem {
+export interface LegacyContextItem {
   /** Stable identity of the item, for provenance and deduplication. */
   readonly id: string;
   readonly priorityClass: ContextItemPriorityClass;

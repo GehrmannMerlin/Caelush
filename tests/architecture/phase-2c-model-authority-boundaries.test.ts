@@ -250,6 +250,23 @@ describe("Phase 2C package edges", () => {
         // or a Step, and a host that reimplemented one would be a second authority over it.
         "AgentStepStateError",
         "AgentTurnInputError",
+        // Phase 7A publishes the parallel Context Kernel foundation from the Agent root.
+        "ContextSourceCollectionError",
+        "Utf8HeuristicTokenEstimator",
+        "assertContextFingerprint",
+        "assertContextItem",
+        "assertContextRequestOverhead",
+        "assertContextSourceResult",
+        "collectContextSources",
+        "createContextArtifactId",
+        "createContextFingerprint",
+        "createContextItem",
+        "createContextItemId",
+        "createContextPolicy",
+        "createContextRequestOverheadEstimator",
+        "createContextSourceId",
+        "createContextSourceRegistryBuilder",
+        "createUtf8HeuristicTokenEstimator",
         // Phase 6F: the generic Control Hook runner and bounded Context Contribution pipeline are
         // public Agent contracts; their concrete Context projection remains outside this package.
         "ContextContributionPipelineError",
@@ -347,6 +364,7 @@ describe("Phase 2C package edges", () => {
         "cancelAgentStep",
         "cancelAgentStepState",
         "classifyAgentDecision",
+        "classifyContextPressure",
         "completeAgentStep",
         "createAgentDecisionClassifier",
         "createAgentLoop",

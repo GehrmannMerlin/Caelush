@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type {
   AgentExecutionIdentity,
   AgentTurnInput,
-  ContextItem,
+  LegacyContextItem,
   ContextProvider,
   ContextProviderInput,
 } from "@caelush/agent";
@@ -71,7 +71,7 @@ function testProvider(): {
   return {
     provider: {
       id: "test-provider",
-      provide(input): Promise<readonly ContextItem[]> {
+      provide(input): Promise<readonly LegacyContextItem[]> {
         received.push(input);
         const goal =
           input.input.kind === "USER_INPUT"

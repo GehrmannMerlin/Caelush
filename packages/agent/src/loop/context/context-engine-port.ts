@@ -4,7 +4,7 @@ import type {
   AgentExecutionIdentity,
   AgentTurnInput,
   AgentTurnRef,
-  ContextItem,
+  LegacyContextItem,
   PreparedModelContext,
 } from "../types.js";
 import type { AgentConversationSnapshot } from "../../messages/conversation/conversation-snapshot.js";
@@ -87,7 +87,7 @@ export interface ContextPrepareInput {
 export interface ContextProvider {
   readonly id: string;
 
-  provide(input: ContextProviderInput): Promise<readonly ContextItem[]>;
+  provide(input: ContextProviderInput): Promise<readonly LegacyContextItem[]>;
 }
 
 /**

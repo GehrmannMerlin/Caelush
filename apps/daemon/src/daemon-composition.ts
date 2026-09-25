@@ -1318,7 +1318,7 @@ function createActiveCodingCatalog(
  * marking it otherwise would make the renderer drop it.
  */
 function toContextGuidanceItem(
-  item: import("@caelush/agent").ContextItem,
+  item: import("@caelush/agent").LegacyContextItem,
   activeToolCount: number,
 ): ContextItem {
   const tokenEstimate =
