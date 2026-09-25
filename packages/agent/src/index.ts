@@ -122,6 +122,7 @@ export {
   createBranchContextSourceProvider,
   createUtf8HeuristicTokenEstimator,
   freezeContextSourceResult,
+  planContext,
   Utf8HeuristicTokenEstimator,
 } from "./context/index.js";
 export type {
