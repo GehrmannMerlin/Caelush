@@ -36,9 +36,40 @@ export {
 export type { ContextFingerprint } from "./contracts/context-fingerprint.js";
 export type {
   ContextBuildReceipt,
-  ContextDocument,
   PreparedAgentContext,
 } from "./contracts/prepared-agent-context.js";
+export type { RehydratedContextState } from "./contracts/rehydrated-context-state.js";
+
+export {
+  ContextDocumentConstructionError,
+  createContextDocumentBuilder,
+} from "./document/context-document.js";
+export type {
+  ContextDocument,
+  ContextDocumentBuilder,
+  ContextDocumentSection,
+  ContextSectionAuthority,
+} from "./document/context-document.js";
+
+export { createContextHistoryIndexer } from "./history/semantic-history-unit.js";
+export type {
+  ContextHistoryIndex,
+  ContextHistoryIndexer,
+  ContextHistoryUnit,
+  ContextHistoryUnitKind,
+  ContextHistoryUnitStatus,
+  ContextMessageRef,
+  ToolProtocolUnit,
+} from "./history/semantic-history-unit.js";
+
+export {
+  ContextCurrentTurnTooLargeError,
+  ContextMandatoryInputTooLargeError,
+  ContextPlanningError,
+} from "./planner/context-planning-errors.js";
+export type { ContextPlanningErrorCode } from "./planner/context-planning-errors.js";
+export { assertContextPlan, createContextPlanner, planContext } from "./planner/context-planner.js";
+export type { ContextPlanner, ContextPlannerInput } from "./planner/context-planner.js";
 
 export { classifyContextPressure, createContextPolicy } from "./policy/context-policy.js";
 export type {

@@ -360,6 +360,9 @@ describe("Phase 5A guard — package boundaries (freeze §150, §151)", () => {
       "packages/agent/src/loop/types.ts",
       // Phase 7A freezes ContextSourceInput with the durable conversation snapshot as semantic input.
       "packages/agent/src/context/source/context-source.ts",
+      // Phase 7B consumes the Message Domain only through the canonical semantic history seam.
+      "packages/agent/src/context/history/semantic-history-unit.ts",
+      "packages/agent/src/context/planner/context-planner.ts",
       "packages/agent/src/run/run-execution-driver.ts",
     ];
     const consumers: string[] = [];
