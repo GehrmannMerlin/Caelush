@@ -50,12 +50,21 @@ import {
   createAgentMessageCodecRegistry,
   createAgentMessageProjectorRegistry,
   createAgentMessageTranscriptProjectorRegistry,
+  createControlHookRegistryBuilder,
+  createControlHookRunner,
+  createContextContributionPipeline,
   createModelTurnExecutor,
   STANDARD_AGENT_MESSAGE_CODECS,
   STANDARD_AGENT_MESSAGE_PROJECTORS,
   STANDARD_AGENT_MESSAGE_TRANSCRIPT_PROJECTORS,
 } from "@caelush/agent";
-import type { AgentExecutionIdentity, RunEventNotifierPort } from "@caelush/agent";
+import type {
+  AgentExecutionIdentity,
+  ContextContributionHook,
+  ContextContributionPipeline,
+  ContextContributionRegistration,
+  RunEventNotifierPort,
+} from "@caelush/agent";
 import type {
   AISubsystem,
   AIGateway,
@@ -280,6 +289,10 @@ export interface DaemonCompositionOptions {
    * second registration shape to translate.
    */
   readonly toolRegistrations?: readonly CodingToolDefinition[] | undefined;
+  /** Typed host/test seam for Context Contributions; production has no HTTP plugin registration. */
+  readonly contextContributionHooks?: readonly ContextContributionRegistration[];
+  /** Optional fully composed pipeline for a host that owns the registry construction. */
+  readonly contextContributionPipeline?: ContextContributionPipeline;
 }
 
 export interface DaemonComposition {
@@ -359,6 +372,34 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
   }
   const providers = [...(options.providers ?? [])];
   const clock = options.clock ?? { now: () => createTimestampMs(Date.now()) };
+  const contextContributionPipelineId = "context-contribution";
+  const contributionPipeline =
+    options.contextContributionPipeline ??
+    (() => {
+      const registryBuilder = createControlHookRegistryBuilder<ContextContributionHook>();
+      for (const registration of options.contextContributionHooks ?? []) {
+        const hook = registration.hook;
+        registryBuilder.register({
+          ...registration,
+          hook:
+            "contribute" in hook
+              ? hook
+              : {
+                  contribute: (input, context) => hook.invoke(input, context),
+                },
+        });
+      }
+      const registry = registryBuilder.build();
+      return createContextContributionPipeline({
+        registry,
+        runner: createControlHookRunner({
+          pipelineId: contextContributionPipelineId,
+          clock,
+        }),
+        pipelineId: contextContributionPipelineId,
+        clock,
+      });
+    })();
   const runtime = options.runtime ?? new LocalRuntime();
   const runtimeResolver = createLocalRuntimeResolver(runtime);
   const ai = createAISubsystem({
@@ -899,6 +940,11 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
               : {
                   verificationRepairContext: () => Promise.resolve(input.verificationRepairContext),
                 }),
+            contextContributionPipeline: contributionPipeline,
+            contextArtifacts: options.storage.contextArtifacts,
+            contextContributionPipelineId,
+            ...(input.runMode === undefined ? {} : { runMode: input.runMode }),
+            now: clock.now,
           }),
       });
     },

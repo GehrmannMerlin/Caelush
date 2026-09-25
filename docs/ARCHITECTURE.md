@@ -196,12 +196,13 @@ only then closes Storage during shutdown. Phase 6B moves daemon observation to
 the asynchronous `RunEventHub`; the EventBus remains only legacy observation
 compatibility, while the SSE mapper and external event shape remain unchanged.
 
-## Phase 6A–6E Event domain, observation, durable authority, and live signals
+## Phase 6A–6F Event domain, observation, durable authority, live signals, and Control Hooks
 
 Phase 6A established the canonical event vocabulary, Phase 6B adds the
 daemon-owned observation runtime, Phase 6C adds the public projection boundary,
-Phase 6D establishes durable writer authority, and Phase 6E adds the transient
-signal path described below:
+Phase 6D establishes durable writer authority, Phase 6E adds the transient
+signal path, and Phase 6F adds the bounded Control Hook and Context
+Contribution path described below:
 
 ```text
 @caelush/protocol
@@ -298,8 +299,55 @@ CLI and Web consume only the public Protocol projection. Their Timeline reducers
 ignore transient events, while their Live Activity projections deduplicate by
 event identity, enforce ordered stream sequence, and settle from durable
 `llm.*`, Tool, process, and terminal Run events. Live Activity is presentation
-state, not Run lifecycle authority. Control Hook pipelines and legacy package
-retirement remain Phase 6F–6H work.
+state, not Run lifecycle authority.
+
+## Phase 6F Control Hook and Context Contribution authority
+
+Phase 6F adds host-provided control behavior while preserving the existing
+authority graph:
+
+```text
+apps/daemon composition root
+  → @caelush/agent ControlHookRegistry
+  → @caelush/agent ControlHookRunner
+  → bounded ContextContributionPipeline
+  → @caelush/core adapter
+  → @caelush/context projection and budget assembly
+  → AI gateway model turn
+```
+
+`@caelush/agent` owns generic immutable registration, deterministic priority/id
+ordering, serial invocation, timeout and parent-cancellation behavior,
+same-pipeline reentrancy protection, safe receipts, and bounded contribution
+validation. It has no Context, Storage, Runtime, Security, Core, daemon, or
+provider SDK dependency. Required Hook failures fail the configured operation;
+optional failures produce bounded diagnostics and do not abort the pipeline.
+No Hook exception text or unbounded Hook payload is placed in a public event or
+provider contract.
+
+`@caelush/core` is the integration boundary. It passes the durable Run mode
+(`EXECUTE` or `RECOVER`) into the Hook context, maps validated Agent
+contributions into Context items, applies Security redaction and host-path
+rejection, and persists `SNAPSHOT` contributions as integrity-checked Context
+artifact envelopes. `@caelush/context` renders contributions in a separate
+`<context_contributions>` system block and includes that block in the existing
+budget calculation; it does not turn them into durable conversation history or
+Tool messages. Token cost is measured after redaction and the Hook-provided
+token hint is not authoritative.
+
+Recovery reuses a validated snapshot artifact and fails closed when a required
+artifact is missing, mismatched, or corrupt. It never silently reruns a Hook
+whose output is not available at the recovery boundary. `RECOMPUTE` is only
+eligible under an explicit host policy; otherwise it is treated as a snapshot
+for bounded execution. `EXECUTE`/`RECOVER` must not be confused with Context's
+internal `NORMAL`/`FORCED_RECOVERY` preparation mode. Hook execution remains
+non-durable observation/control input: the durable Run, message, Tool, and
+Completion Authority records continue to own lifecycle truth.
+
+The daemon constructs an empty immutable Hook registry and pipeline by default,
+and accepts typed host registrations at the single production composition root.
+CLI and Web do not construct Hook runners, Context runtimes, providers, or Run
+state machines.
 
 ## Phase 5D Context and replay authority
 
@@ -394,28 +442,29 @@ produce evidence but never own final completion.
 
 ## Architecture V2 status
 
-| Area                                            | Current status                                                    |
-| ----------------------------------------------- | ----------------------------------------------------------------- |
-| Architecture foundation and public boundaries   | Complete                                                          |
-| AI domain and provider migration                | Complete in the current composition                               |
-| Agent Kernel and durable Run boundaries         | Complete in the current composition                               |
-| Tool System and Coding Agent composition        | Complete in the current composition                               |
-| Message domain and storage foundation (5A/5B)   | Complete                                                          |
-| Durable conversation runtime cutover (5C)       | Complete; `AgentMessageRecord` is the Run boundary authority      |
-| Context and replay cutover (5D)                 | Complete                                                          |
-| Phase 5E transcript/client projection migration | COMPLETE; daemon-owned Protocol Transcript projection             |
-| Legacy Message V2 retirement (5F)               | COMPLETE; final schema, backfill, and runtime cutover             |
-| Event domain and Protocol foundation (6A)       | COMPLETE; canonical contracts, registry, catalog, and Agent ports |
-| RunEventHub, replay, and backpressure (6B)      | COMPLETE; daemon-owned bounded observation runtime                |
-| Public projection and SSE/client cutover (6C)   | COMPLETE; safe Protocol projection boundary                       |
-| Durable event authority and writer cutover (6D) | COMPLETE; only Run/Tool authority transactions write events       |
-| Transient signal and streaming cutover (6E)     | COMPLETE; bounded live-only model/Tool/Runtime progress           |
-| Control Hooks and package retirement (6F–6H)    | NOT STARTED                                                       |
+| Area                                            | Current status                                                      |
+| ----------------------------------------------- | ------------------------------------------------------------------- |
+| Architecture foundation and public boundaries   | Complete                                                            |
+| AI domain and provider migration                | Complete in the current composition                                 |
+| Agent Kernel and durable Run boundaries         | Complete in the current composition                                 |
+| Tool System and Coding Agent composition        | Complete in the current composition                                 |
+| Message domain and storage foundation (5A/5B)   | Complete                                                            |
+| Durable conversation runtime cutover (5C)       | Complete; `AgentMessageRecord` is the Run boundary authority        |
+| Context and replay cutover (5D)                 | Complete                                                            |
+| Phase 5E transcript/client projection migration | COMPLETE; daemon-owned Protocol Transcript projection               |
+| Legacy Message V2 retirement (5F)               | COMPLETE; final schema, backfill, and runtime cutover               |
+| Event domain and Protocol foundation (6A)       | COMPLETE; canonical contracts, registry, catalog, and Agent ports   |
+| RunEventHub, replay, and backpressure (6B)      | COMPLETE; daemon-owned bounded observation runtime                  |
+| Public projection and SSE/client cutover (6C)   | COMPLETE; safe Protocol projection boundary                         |
+| Durable event authority and writer cutover (6D) | COMPLETE; only Run/Tool authority transactions write events         |
+| Transient signal and streaming cutover (6E)     | COMPLETE; bounded live-only model/Tool/Runtime progress             |
+| Control Hooks and Context Contributions (6F)    | COMPLETE; generic Agent runner and bounded Core/Context integration |
+| Package retirement (6G–6H)                      | NOT STARTED                                                         |
 
 The phase table records the current Architecture V2 migration lines. Existing
 Runtime, Security, Verification, CLI, Web, and daemon layers are documented as
 current code above; they are not an invitation to reopen completed phases or
-to implement the pending Control Hook and package-retirement phases in this task.
+to implement the pending package-retirement phases in this task.
 
 ## Explicit non-goals and future boundaries
 
@@ -426,9 +475,9 @@ The current architecture must not be described as already providing:
 - an OS-level hard sandbox or universal process-tree termination;
 - a provider-specific public SDK or raw model chain-of-thought surface.
 
-Those capabilities require new contracts and deliberate future work. Control
-Hook work remains a future Phase 6 boundary. Context compaction activity remains
-outside Event V2 until it has an atomic Context persistence boundary.
+Those capabilities require new contracts and deliberate future work. Package
+retirement remains a future Phase 6 boundary. Context compaction activity
+remains outside Event V2 until it has an atomic Context persistence boundary.
 
 ## Reference material
 

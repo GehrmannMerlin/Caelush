@@ -1598,6 +1598,7 @@ export class RunController {
     const contextEngine = execution.createContextEngine(
       snapshot.run,
       await this.verificationRepairContext(snapshot),
+      directive.mode,
     );
     const modelAdmission = this.modelAdmissionPort(observation, snapshot.run, step);
     const loop = createRunAgentLoop(

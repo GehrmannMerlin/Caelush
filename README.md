@@ -18,15 +18,17 @@ The project is in active Architecture V2 development. The Message System
 migration through Phase 5F is complete: the daemon owns the server-side
 Transcript projection, CLI/Web consume the Protocol Transcript, and the final
 durable Message V2 schema is now the only runtime storage shape.
-The Event System migration is complete through Phase 6E. The canonical RunEvent
+The Event System migration is complete through Phase 6F. The canonical RunEvent
 domain, daemon-owned asynchronous RunEventHub, bounded replay/live delivery,
 public projection, authoritative durable-event transactions, and transient
 signal/streaming cutover are now in place. Durable events are written only
 inside the authoritative Run or Tool transaction and are notified to the
 RunEventHub only after commit. Live model, Tool, and Runtime progress travels
 through non-persistent `TransientRunEvent` signals, while lifecycle truth remains
-durable and replayable. Control Hooks and legacy package retirement remain in
-Phases 6F–6H.
+durable and replayable. Phase 6F adds the generic Agent Control Hook registry
+and runner, bounded Context Contributions, safe Context projection, and the
+daemon-to-Core composition path. Legacy package retirement remains in Phases
+6G–6H.
 
 ## What Caelush provides
 
@@ -157,8 +159,47 @@ Historical `tool.output`, `shell.output`, and `process.output` v1 events remain
 durable and replayable. Their v2 counterparts are ordered, bounded transient
 signals: they live in memory, are not persisted or replayed, and do not receive
 an SSE id. CLI and Web keep these signals in bounded Live Activity state while
-durable events continue to drive the Timeline. Control Hooks and legacy package
-retirement remain Phases 6F–6H.
+durable events continue to drive the Timeline.
+
+### Phase 6F Control Hooks and Context Contributions
+
+Phase 6F adds a host-neutral control plane without creating a second Agent or
+Run state machine:
+
+```text
+daemon composition root
+  → immutable Agent ControlHookRegistry
+  → serial, cancellable ControlHookRunner
+  → bounded ContextContributionPipeline
+  → Core adapter
+  → Context projection / redaction / budget assembly
+  → one model-turn request
+```
+
+The Agent package owns only generic hook contracts, deterministic ordering,
+timeouts, cancellation, reentrancy protection, safe receipts, and bounded
+contribution validation. It does not import Context, Storage, Runtime,
+Security, Core, or provider SDK types. Core is the integration boundary: it
+maps validated contributions into Context items, rejects unsafe or malformed
+snapshot artifacts, and persists only `SNAPSHOT` contributions through the
+existing Context artifact repository before the model turn. The daemon builds
+an empty immutable registry by default and accepts typed host registrations;
+it remains the only production composition root.
+
+Contribution text is rendered in a dedicated `<context_contributions>` system
+block and passes through the existing Context budget. Secret redaction,
+host-path rejection, UTF-8 bounds, and post-redaction token measurement happen
+before provider input. Hook output is never copied into durable conversation
+history, public events, or provider-native message types.
+
+Run recovery is distinct from Context preparation: `EXECUTE`/`RECOVER` is the
+durable Run directive, while `NORMAL`/`FORCED_RECOVERY` is an internal Context
+preparation mode. Recovery reuses a validated snapshot artifact and fails
+closed when the required artifact is missing or corrupt; it never reruns a
+non-replayable Hook. Qualified `RECOMPUTE` behavior remains an explicit host
+policy and is not an implicit recovery fallback. Hook failures, timeouts,
+cancellation, and oversized output follow the registered required/optional
+policy and cannot bypass Completion Authority.
 
 ### Durable conversation
 
@@ -397,7 +438,8 @@ runtime: Phase 9C sanitizer injection, Phase 9D — V1 Security Integration, Pha
 | Phase 6C — Public projection, SSE, and client cutover   | COMPLETE    |
 | Phase 6D — Durable event authority and writer cutover   | COMPLETE    |
 | Phase 6E — Transient signal and streaming cutover       | COMPLETE    |
-| Phase 6F–6H — Control Hooks and package retirement      | NOT STARTED |
+| Phase 6F — Control Hooks and Context Contributions      | COMPLETE    |
+| Phase 6G–6H — Package retirement                        | NOT STARTED |
 
 The status table records the completed Architecture V2 migration boundaries
 that are relevant to the current runtime. The repository also contains the

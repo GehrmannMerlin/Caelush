@@ -213,6 +213,59 @@ export type {
 export { createRunEventFactory } from "./events/run-event-factory.js";
 export type { MaxStepsReachedOutcome, RunEventFactory } from "./events/run-event-factory.js";
 
+/* Phase 6F typed Control Hook core. */
+export {
+  createControlHookId,
+  createControlHookRegistryBuilder,
+  ControlHookConfigurationError,
+} from "./hooks/control-hook.js";
+export type {
+  ControlHook,
+  ControlHookContext,
+  ControlHookCriticality,
+  ControlHookId,
+  ControlHookInvocation,
+  ControlHookPipelinePolicy,
+  ControlHookPipelineResult,
+  ControlHookReceipt,
+  ControlHookRegistration,
+  ControlHookRegistry,
+  ControlHookRegistryBuilder,
+  HookFailurePolicy,
+} from "./hooks/control-hook.js";
+export {
+  ControlHookAbortedError,
+  ControlHookPipelineError,
+  ControlHookReentrancyError,
+  ControlHookTimeoutError,
+} from "./hooks/control-hook-errors.js";
+export { createControlHookRunner } from "./hooks/control-hook-runner.js";
+export type {
+  ControlHookRunner,
+  ControlHookRunnerDependencies,
+} from "./hooks/control-hook-runner.js";
+export {
+  DEFAULT_CONTEXT_CONTRIBUTION_LIMITS,
+  ContextContributionPipelineError,
+  createContextContributionPipeline,
+} from "./hooks/context-contribution.js";
+export type {
+  ContextContribution,
+  ContextContributionControlHook,
+  ContextContributionCriticality,
+  ContextContributionDiagnostic,
+  ContextContributionDiagnosticCode,
+  ContextContributionHook,
+  ContextContributionInput,
+  ContextContributionPipeline,
+  ContextContributionPipelineLimits,
+  ContextContributionPipelineOptions,
+  ContextContributionPipelineResult,
+  ContextContributionRegistration,
+  ContextContributionReplay,
+  ContextContributionRecomputeEligibilityInput,
+} from "./hooks/context-contribution.js";
+
 /* The canonical Run execution store port. */
 export {
   RunExecutionConflictError,

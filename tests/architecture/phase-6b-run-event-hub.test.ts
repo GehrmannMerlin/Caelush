@@ -41,9 +41,10 @@ describe("Architecture V2 Phase 6B RunEventHub", () => {
     expect(route).toContain("eventHub.watch");
     expect(route).toContain("mapPublicRunEventToSse");
     expect(daemon).not.toContain("new EventBus");
-    await expect(read("packages/agent/src/hooks/control-hook-registry.ts")).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    const registry = await read("packages/agent/src/hooks/control-hook.ts");
+    expect(registry).toContain("ControlHookRegistry");
+    expect(registry).not.toContain("@caelush/context");
+    expect(registry).not.toContain("@caelush/storage");
   });
 
   it("keeps writer retirement and producer migration out of the completed 6B/6C boundary", async () => {

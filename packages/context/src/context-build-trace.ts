@@ -23,6 +23,8 @@ export interface ContextBuildTraceInput {
    * and keeps meaning what it meant: no guidance block.
    */
   readonly toolGuidanceTokens?: number;
+  /** The contribution block's measured text cost; it is a subset of systemTokens. */
+  readonly contributionTokens?: number;
   readonly droppedItems: number;
   readonly truncatedItems: number;
   readonly pressureRatio: number;
@@ -45,6 +47,7 @@ export interface ContextBuildTrace {
   readonly observationTokens: number;
   readonly memoryTokens: number;
   readonly toolGuidanceTokens: number;
+  readonly contributionTokens: number;
   readonly droppedItems: number;
   readonly truncatedItems: number;
   readonly pressureRatio: number;
@@ -56,6 +59,7 @@ export interface ContextBuildTrace {
 
 export function createContextBuildTrace(input: ContextBuildTraceInput): ContextBuildTrace {
   const toolGuidanceTokens = input.toolGuidanceTokens ?? 0;
+  const contributionTokens = input.contributionTokens ?? 0;
   const numeric = [
     "contextWindow",
     "effectiveInputLimit",
@@ -82,6 +86,9 @@ export function createContextBuildTrace(input: ContextBuildTraceInput): ContextB
   if (!Number.isSafeInteger(toolGuidanceTokens) || toolGuidanceTokens < 0) {
     throw new RangeError("toolGuidanceTokens must be a non-negative safe integer");
   }
+  if (!Number.isSafeInteger(contributionTokens) || contributionTokens < 0) {
+    throw new RangeError("contributionTokens must be a non-negative safe integer");
+  }
   if (!Number.isFinite(input.pressureRatio) || input.pressureRatio < 0) {
     throw new RangeError("pressureRatio must be non-negative");
   }
@@ -98,6 +105,7 @@ export function createContextBuildTrace(input: ContextBuildTraceInput): ContextB
     observationTokens: input.observationTokens,
     memoryTokens: input.memoryTokens,
     toolGuidanceTokens,
+    contributionTokens,
     droppedItems: input.droppedItems,
     truncatedItems: input.truncatedItems,
     pressureRatio: input.pressureRatio,

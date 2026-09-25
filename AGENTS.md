@@ -6,11 +6,12 @@ do not own separate Agent implementations.
 
 The current source-of-truth branch is `main`. The Message System migration is
 complete through Architecture V2 Phase 5F. The Event System migration is
-complete through Phase 6D: the canonical RunEvent domain and Protocol foundation,
-daemon-owned asynchronous observation runtime, public projection, and
-authoritative durable-event transactions are present. Phase 5: COMPLETE.
+complete through Phase 6F: the canonical RunEvent domain and Protocol
+foundation, daemon-owned asynchronous observation runtime, public projection,
+authoritative durable-event transactions, transient signal/streaming cutover,
+and the Control Hook/Context Contribution path are present. Phase 5: COMPLETE.
 Phase 6A: COMPLETE. Phase 6B: COMPLETE. Phase 6C: COMPLETE. Phase 6D:
-COMPLETE. Phase 6E–6H: NOT STARTED.
+COMPLETE. Phase 6E: COMPLETE. Phase 6F: COMPLETE. Phase 6G–6H: NOT STARTED.
 Phase 5F owns the final historical
 backfill, physical `agent_messages` rebuild, legacy reader/package retirement,
 and daemon/client final cutover.
@@ -36,12 +37,21 @@ Phase 5D established durable conversation authority for Context and replay.
 
 - `@caelush/agent` owns the general Agent Kernel, AgentLoop decisions,
   durable message contracts, Tool registry/batch coordination, and execution
-  ports. It must not know concrete filesystem Tools, SQLite, daemon routes, or
-  UI concerns.
+  ports. It also owns generic Control Hook contracts, immutable registration,
+  serial invocation, safe receipts, and bounded Context Contribution
+  validation. It must not know concrete filesystem Tools, SQLite, daemon
+  routes, UI concerns, Context, Storage, Runtime, Security, Core, or provider
+  SDK types.
+- `@caelush/context` owns Context item mapping, contribution redaction and
+  host-path rejection, contribution rendering, and budget accounting. It does
+  not own Hook execution or durable conversation history.
 - `@caelush/core` and `RunController` own canonical Run lifecycle
   transitions, durable Run/State/Step/Continuation commits, and Completion
-  Authority. A final model answer is a verification candidate, never direct
-  `COMPLETED`.
+  Authority. Core is the integration boundary for Context Contributions:
+  durable Run mode is passed into the Hook context, validated contributions are
+  mapped into Context items, and `SNAPSHOT` artifacts are persisted and
+  integrity-checked before a model turn. A final model answer is a
+  verification candidate, never direct `COMPLETED`.
 - `@caelush/ai` owns the provider-neutral model domain and the single gateway
   model-turn boundary. One gateway invocation is one provider turn. Providers
   do not execute local Tools, generate Caelush call IDs, retry, or expose SDK
@@ -82,7 +92,7 @@ Phase 5D established durable conversation authority for Context and replay.
   results but cannot transition a Run to `COMPLETED`. Only Core/RunController
   owns that transition.
 
-## Event V2 / Phase 6A–6D
+## Event V2 / Phase 6A–6F
 
 - `RunEvent` is the target Event domain name; `AgentEvent` is migration
   compatibility naming only.
@@ -106,8 +116,29 @@ Phase 5D established durable conversation authority for Context and replay.
   makes Run and Tool authority transactions the only durable event writers:
   durable drafts and their underlying truth commit together, then
   `RunEventNotifierPort.notifyCommitted` is called with post-commit events.
-  `RunEventHub` has no write authority. Phase 6E–6H transient producers,
-  streaming, Control Hooks, and package retirement are not started.
+  `RunEventHub` has no write authority. Phase 6E owns non-persistent transient
+  model/Tool/Runtime signals. Phase 6F owns generic Control Hooks and bounded
+  Context Contributions; Phase 6G–6H package retirement is not started.
+
+## Control Hooks / Phase 6F
+
+- The daemon is the only production composition root. It constructs an empty
+  immutable Control Hook registry and Context Contribution pipeline by default,
+  and accepts typed host registrations without creating another Agent or Run
+  state machine.
+- Hook execution is serial, cancellable, timeout-bounded, reentrancy-protected,
+  and receipt-producing. Required failures fail closed according to the
+  operation policy; optional failures continue with safe bounded diagnostics.
+- Agent `ContextContribution` values are generic and bounded. Core maps them
+  into Context items; Context redacts secrets and rejects host paths before
+  rendering a dedicated `<context_contributions>` system block included in the
+  existing budget. Contributions are not durable conversation records, events,
+  provider-native messages, or a second prompt authority.
+- `EXECUTE`/`RECOVER` is the durable Run mode and must remain distinct from
+  Context's `NORMAL`/`FORCED_RECOVERY` preparation mode. Recovery reuses a
+  validated `SNAPSHOT` artifact and fails closed if it is missing, mismatched,
+  or corrupt; it never silently reruns a non-replayable Hook. `RECOMPUTE` is
+  allowed only through explicit host policy.
 
 ## Message V2 / Phase 5F
 

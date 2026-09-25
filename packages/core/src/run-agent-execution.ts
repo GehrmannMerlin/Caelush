@@ -10,6 +10,7 @@ import {
   type ModelRequestAdmissionPort,
   type ModelTurnBoundaryPort,
   type ModelTurnExecutor,
+  type RunExecutionMode,
 } from "@caelush/agent";
 import type { AIModelSettings, AIToolSpec, ModelCatalog } from "@caelush/ai";
 import type { ContextBuildLimits, VerificationRepairContextInput } from "@caelush/context";
@@ -84,6 +85,8 @@ export interface RunAgentContextEngineInput {
   readonly cwd?: string | undefined;
   readonly explicitPaths?: readonly string[] | undefined;
   readonly verificationRepairContext?: VerificationRepairContextInput | undefined;
+  /** Durable Run execution mode; distinct from ContextPrepareMode's window-recovery mode. */
+  readonly runMode?: RunExecutionMode | undefined;
 }
 
 /**
@@ -107,6 +110,7 @@ export interface RunAgentExecutionContext {
   readonly createContextEngine: (
     run: AgentRun,
     verificationRepairContext?: VerificationRepairContextInput,
+    runMode?: RunExecutionMode,
   ) => ContextEnginePort;
 }
 
@@ -169,7 +173,7 @@ export function createRunAgentExecutionContext(
       ? {}
       : { modelSettings: toAIModelSettings(config.modelSettings) }),
     ...(config.historyPrefix === undefined ? {} : { historyPrefix: config.historyPrefix }),
-    createContextEngine: (run, verificationRepairContext) =>
+    createContextEngine: (run, verificationRepairContext, runMode) =>
       dependencies.createContextEngine({
         run,
         identity: { runId: run.id, sessionId: run.sessionId, goal: run.goal },
@@ -178,6 +182,7 @@ export function createRunAgentExecutionContext(
         ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
         ...(config.explicitPaths === undefined ? {} : { explicitPaths: config.explicitPaths }),
         ...(verificationRepairContext === undefined ? {} : { verificationRepairContext }),
+        ...(runMode === undefined ? {} : { runMode }),
       }),
   };
 }

@@ -49,6 +49,8 @@ export interface ContextBuildCommonInput {
    * than an empty array the caller must remember to pass.
    */
   readonly toolGuidanceItems?: readonly ContextItem[];
+  /** Bounded, redacted output from the Agent Context Contribution pipeline. */
+  readonly contextContributionItems?: readonly ContextItem[];
 }
 
 export interface UserTurnContextBuildInput extends ContextBuildCommonInput {
@@ -181,6 +183,9 @@ export class ContextBuilder {
         ...(input.toolGuidanceItems === undefined
           ? {}
           : { toolGuidanceItems: input.toolGuidanceItems }),
+        ...(input.contextContributionItems === undefined
+          ? {}
+          : { contextContributionItems: input.contextContributionItems }),
       },
     );
     const budget = assembleContextBudget({
@@ -221,6 +226,11 @@ export class ContextBuilder {
       ),
       toolGuidanceTokens: (input.toolGuidanceItems ?? []).reduce(
         (total, item) => total + (item.content === undefined ? 0 : item.tokenEstimate),
+        0,
+      ),
+      contributionTokens: (input.contextContributionItems ?? []).reduce(
+        (total, item) =>
+          total + (item.content === undefined ? 0 : this.tokenEstimator.estimateText(item.content)),
         0,
       ),
       droppedItems: budget.conversation.droppedMessages + budget.relevantFiles.droppedFiles,

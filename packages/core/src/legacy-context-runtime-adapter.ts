@@ -1,11 +1,19 @@
+import { createHash } from "node:crypto";
 import type {
   BuiltModelContext,
   ContextBuildInput,
+  ContextArtifactRepository,
   ContextUsageProjection,
+  ContextItem,
+  Artifact,
   ProjectIntelligenceSnapshot,
   RelevantFileContextPlan,
 } from "@caelush/context";
-import { ContextExhaustedError } from "@caelush/context";
+import {
+  ContextExhaustedError,
+  createContextItem,
+  projectContextContributions,
+} from "@caelush/context";
 import type { ModelDescriptor } from "@caelush/ai";
 import type {
   AgentConversationSnapshot,
@@ -16,7 +24,10 @@ import type {
   ContextPrepareInput,
   ContextPrepareMode,
   ContextPressure,
+  ContextContribution,
+  ContextContributionPipeline,
   PreparedModelContext,
+  RunExecutionMode,
   ToolObservationPolicySnapshot,
   ConversationSelector,
 } from "@caelush/agent";
@@ -135,6 +146,14 @@ export interface LegacyContextRuntimeAdapterDependencies {
   readonly toolGuidance?: (
     activeToolNames: readonly string[],
   ) => Promise<readonly import("@caelush/context").ContextItem[]>;
+  /** The Agent-owned Context Contribution pipeline; the adapter is its only Context consumer. */
+  readonly contextContributionPipeline?: ContextContributionPipeline;
+  /** Read/write artifact port supplied by the composition root, never by a Hook instance. */
+  readonly contextArtifacts?: ContextArtifactRepository;
+  readonly contextContributionPipelineId?: string;
+  /** Durable Run mode, distinct from ContextPrepareMode.FORCED_RECOVERY. */
+  readonly runMode?: RunExecutionMode;
+  readonly now?: () => import("@caelush/protocol").TimestampMs;
 }
 
 /**
@@ -224,6 +243,7 @@ async function buildLegacyContextInput(
 ): Promise<ContextBuildInput> {
   const snapshot = await inspect(dependencies);
   const relevantFiles = await plan(dependencies, input, snapshot);
+  const contextContributionItems = await prepareContextContributions(dependencies, input);
 
   const common = {
     baseSystemPrompt: dependencies.baseSystemPrompt,
@@ -233,6 +253,9 @@ async function buildLegacyContextInput(
     limits: dependencies.contextLimits,
     ...(await toolGuidance(dependencies, input)),
     ...(await repairContext(dependencies, input)),
+    ...(contextContributionItems === undefined || contextContributionItems.length === 0
+      ? {}
+      : { contextContributionItems }),
   };
 
   const currentTurnMessages = conversation.currentTurnMessages;
@@ -260,6 +283,408 @@ interface ProjectedLegacyConversation {
     readonly toolCallId: string;
     readonly artifactRef: string;
   }[];
+}
+
+const CONTEXT_CONTRIBUTION_SNAPSHOT_SCHEMA_VERSION = 1 as const;
+const CONTEXT_CONTRIBUTION_SNAPSHOT_KIND = "CONTEXT_CONTRIBUTION_SNAPSHOT";
+const CONTEXT_CONTRIBUTION_SNAPSHOT_MIME = "application/vnd.caelush.context-contribution+json";
+
+interface ContextContributionSnapshotContribution {
+  readonly id: string;
+  readonly source: string;
+  readonly replay: "SNAPSHOT";
+  readonly items: readonly ContextItem[];
+}
+
+interface ContextContributionSnapshotPayload {
+  readonly schemaVersion: typeof CONTEXT_CONTRIBUTION_SNAPSHOT_SCHEMA_VERSION;
+  readonly identity: {
+    readonly runId: string;
+    readonly sessionId: string;
+    readonly stepId: string;
+    readonly sequence: number;
+  };
+  readonly pipelineId: string;
+  readonly sourceRef: string;
+  readonly replay: "SNAPSHOT";
+  readonly contributions: readonly ContextContributionSnapshotContribution[];
+  readonly receipts: readonly {
+    readonly pipeline: string;
+    readonly hookId: string;
+    readonly outcome: "APPLIED" | "SKIPPED" | "FAILED";
+    readonly startedAt: number;
+    readonly finishedAt: number;
+    readonly inputFingerprint?: string;
+    readonly outputFingerprint?: string;
+  }[];
+}
+
+interface ContextContributionSnapshotEnvelope extends ContextContributionSnapshotPayload {
+  readonly integrity: { readonly payloadHash: string };
+}
+
+class ContextContributionSnapshotError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ContextContributionSnapshotError";
+  }
+}
+
+async function prepareContextContributions(
+  dependencies: LegacyContextRuntimeAdapterDependencies,
+  input: ContextPrepareInput,
+): Promise<readonly ContextItem[] | undefined> {
+  const pipeline = dependencies.contextContributionPipeline;
+  if (pipeline === undefined || !pipeline.hasHooks) return undefined;
+  const pipelineId = dependencies.contextContributionPipelineId ?? "context-contribution";
+  const identity = snapshotIdentity(input, pipelineId);
+  const existing = await readContextContributionSnapshot(dependencies.contextArtifacts, identity);
+  if (existing !== undefined) return existing;
+
+  if (dependencies.runMode === "RECOVER" || input.mode === "FORCED_RECOVERY") {
+    throw new ContextContributionSnapshotError(
+      "A Context Contribution snapshot required for recovery is unavailable.",
+    );
+  }
+
+  const result = await pipeline.run(
+    {
+      identity: input.identity,
+      turn: input.turn,
+      mode: input.mode,
+      goal: input.identity.goal,
+    },
+    {
+      identity: {
+        runId: input.identity.runId,
+        sessionId: input.identity.sessionId,
+      },
+      stepId: input.turn.stepId,
+      mode: dependencies.runMode ?? "EXECUTE",
+      signal: input.signal,
+    },
+  );
+  if (input.signal.aborted)
+    throw new ContextContributionSnapshotError("Context preparation was cancelled.");
+
+  const projectionOptions = {
+    runId: input.identity.runId,
+    sequence: input.turn.sequence,
+  };
+  const allItems = projectContextContributions(result.contributions, projectionOptions);
+  const snapshotContributions = result.contributions.filter(
+    (contribution): contribution is ContextContribution & { readonly replay: "SNAPSHOT" } =>
+      contribution.replay === "SNAPSHOT",
+  );
+  if (snapshotContributions.length > 0) {
+    const payload: ContextContributionSnapshotPayload = {
+      schemaVersion: CONTEXT_CONTRIBUTION_SNAPSHOT_SCHEMA_VERSION,
+      identity: {
+        runId: input.identity.runId,
+        sessionId: input.identity.sessionId,
+        stepId: input.turn.stepId,
+        sequence: input.turn.sequence,
+      },
+      pipelineId,
+      sourceRef: identity.sourceRef,
+      replay: "SNAPSHOT",
+      contributions: snapshotContributions.map((contribution) => ({
+        id: contribution.id,
+        source: contribution.source,
+        replay: "SNAPSHOT" as const,
+        items: projectContextContributions([contribution], projectionOptions),
+      })),
+      receipts: result.receipts.map((receipt) => ({
+        pipeline: receipt.pipeline,
+        hookId: receipt.hookId,
+        outcome: receipt.outcome,
+        startedAt: receipt.startedAt,
+        finishedAt: receipt.finishedAt,
+        ...(receipt.inputFingerprint === undefined
+          ? {}
+          : { inputFingerprint: receipt.inputFingerprint }),
+        ...(receipt.outputFingerprint === undefined
+          ? {}
+          : { outputFingerprint: receipt.outputFingerprint }),
+      })),
+    };
+    await persistContextContributionSnapshot(
+      dependencies.contextArtifacts,
+      identity,
+      payload,
+      dependencies,
+    );
+  }
+  return allItems;
+}
+
+function snapshotIdentity(
+  input: ContextPrepareInput,
+  pipelineId: string,
+): {
+  readonly artifactId: string;
+  readonly sourceRef: string;
+  readonly runId: string;
+  readonly sessionId: string;
+  readonly stepId: string;
+  readonly sequence: number;
+  readonly pipelineId: string;
+} {
+  const sourceRef = [
+    "run",
+    input.identity.runId,
+    "session",
+    input.identity.sessionId,
+    "turn",
+    input.turn.stepId,
+    String(input.turn.sequence),
+    "pipeline",
+    pipelineId,
+    "schema",
+    String(CONTEXT_CONTRIBUTION_SNAPSHOT_SCHEMA_VERSION),
+  ].join(":");
+  const digest = createHash("sha256").update(sourceRef, "utf8").digest("hex");
+  return {
+    artifactId: `context-contribution-snapshot:${digest}`,
+    sourceRef,
+    runId: input.identity.runId,
+    sessionId: input.identity.sessionId,
+    stepId: input.turn.stepId,
+    sequence: input.turn.sequence,
+    pipelineId,
+  };
+}
+
+async function readContextContributionSnapshot(
+  repository: ContextArtifactRepository | undefined,
+  identity: ReturnType<typeof snapshotIdentity>,
+): Promise<readonly ContextItem[] | undefined> {
+  if (repository === undefined) return undefined;
+  const artifact = await repository.readInternal(identity.artifactId);
+  if (artifact === undefined) return undefined;
+  return validateContextContributionSnapshot(artifact, identity);
+}
+
+async function persistContextContributionSnapshot(
+  repository: ContextArtifactRepository | undefined,
+  identity: ReturnType<typeof snapshotIdentity>,
+  payload: ContextContributionSnapshotPayload,
+  dependencies: LegacyContextRuntimeAdapterDependencies,
+): Promise<void> {
+  if (repository === undefined) {
+    throw new ContextContributionSnapshotError(
+      "Context Contribution snapshots require the composition root's artifact repository.",
+    );
+  }
+  const payloadText = JSON.stringify(payload);
+  const envelope: ContextContributionSnapshotEnvelope = {
+    ...payload,
+    integrity: {
+      payloadHash: createHash("sha256").update(payloadText, "utf8").digest("hex"),
+    },
+  };
+  const content = JSON.stringify(envelope);
+  const artifact = await repository.createOrGet({
+    artifactId: identity.artifactId,
+    runId: identity.runId,
+    kind: CONTEXT_CONTRIBUTION_SNAPSHOT_KIND,
+    sourceRef: identity.sourceRef,
+    content,
+    mimeType: CONTEXT_CONTRIBUTION_SNAPSHOT_MIME,
+    sensitivity: "INTERNAL",
+    createdSequence: identity.sequence,
+    createdAt: dependencies.now?.() ?? (Date.now() as import("@caelush/protocol").TimestampMs),
+  });
+  validateContextContributionSnapshot(artifact, identity);
+}
+
+function validateContextContributionSnapshot(
+  artifact: Artifact,
+  identity: ReturnType<typeof snapshotIdentity>,
+): readonly ContextItem[] {
+  if (
+    artifact.artifactId !== identity.artifactId ||
+    artifact.runId !== identity.runId ||
+    artifact.kind !== CONTEXT_CONTRIBUTION_SNAPSHOT_KIND ||
+    artifact.sourceRef !== identity.sourceRef ||
+    artifact.mimeType !== CONTEXT_CONTRIBUTION_SNAPSHOT_MIME ||
+    artifact.sensitivity !== "INTERNAL" ||
+    artifact.createdSequence !== identity.sequence ||
+    artifact.byteLength !== Buffer.byteLength(artifact.content, "utf8") ||
+    artifact.contentHash !== createHash("sha256").update(artifact.content, "utf8").digest("hex")
+  ) {
+    throw new ContextContributionSnapshotError(
+      "Context Contribution snapshot metadata is incompatible.",
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(artifact.content) as unknown;
+  } catch {
+    throw new ContextContributionSnapshotError(
+      "Context Contribution snapshot content is malformed.",
+    );
+  }
+  if (!isPlainRecord(parsed)) {
+    throw new ContextContributionSnapshotError(
+      "Context Contribution snapshot envelope is malformed.",
+    );
+  }
+  const envelope = parsed;
+  const envelopeIdentity = envelope.identity;
+  const envelopeIntegrity = envelope.integrity;
+  if (
+    envelope.schemaVersion !== CONTEXT_CONTRIBUTION_SNAPSHOT_SCHEMA_VERSION ||
+    envelope.pipelineId !== identity.pipelineId ||
+    envelope.sourceRef !== identity.sourceRef ||
+    envelope.replay !== "SNAPSHOT" ||
+    !isPlainRecord(envelopeIdentity) ||
+    envelopeIdentity.runId !== identity.runId ||
+    envelopeIdentity.sessionId !== identity.sessionId ||
+    envelopeIdentity.stepId !== identity.stepId ||
+    envelopeIdentity.sequence !== identity.sequence ||
+    !isPlainRecord(envelopeIntegrity) ||
+    typeof envelopeIntegrity.payloadHash !== "string" ||
+    !Array.isArray(envelope.contributions)
+  ) {
+    throw new ContextContributionSnapshotError(
+      "Context Contribution snapshot identity is incompatible.",
+    );
+  }
+  const payload: ContextContributionSnapshotPayload = {
+    schemaVersion: CONTEXT_CONTRIBUTION_SNAPSHOT_SCHEMA_VERSION,
+    identity: {
+      runId: identity.runId,
+      sessionId: identity.sessionId,
+      stepId: identity.stepId,
+      sequence: identity.sequence,
+    },
+    pipelineId: identity.pipelineId,
+    sourceRef: identity.sourceRef,
+    replay: "SNAPSHOT",
+    contributions: parseSnapshotContributions(envelope.contributions),
+    receipts: parseSnapshotReceipts(envelope.receipts),
+  };
+  const expectedPayloadHash = createHash("sha256")
+    .update(JSON.stringify(payload), "utf8")
+    .digest("hex");
+  if (expectedPayloadHash !== (envelopeIntegrity as Record<string, unknown>).payloadHash) {
+    throw new ContextContributionSnapshotError(
+      "Context Contribution snapshot integrity check failed.",
+    );
+  }
+  return Object.freeze(payload.contributions.flatMap((contribution) => [...contribution.items]));
+}
+
+function parseSnapshotContributions(
+  value: unknown[],
+): readonly ContextContributionSnapshotContribution[] {
+  return Object.freeze(
+    value.map((candidate) => {
+      if (
+        !isPlainRecord(candidate) ||
+        typeof candidate.id !== "string" ||
+        typeof candidate.source !== "string" ||
+        candidate.replay !== "SNAPSHOT" ||
+        !Array.isArray(candidate.items)
+      ) {
+        throw new ContextContributionSnapshotError(
+          "Context Contribution snapshot contribution is malformed.",
+        );
+      }
+      return Object.freeze({
+        id: candidate.id,
+        source: candidate.source,
+        replay: "SNAPSHOT" as const,
+        items: Object.freeze(candidate.items.map(parseSnapshotItem)),
+      });
+    }),
+  );
+}
+
+function parseSnapshotReceipts(value: unknown): ContextContributionSnapshotPayload["receipts"] {
+  if (!Array.isArray(value)) {
+    throw new ContextContributionSnapshotError(
+      "Context Contribution snapshot receipts are malformed.",
+    );
+  }
+  return Object.freeze(
+    value.map((candidate) => {
+      if (
+        !isPlainRecord(candidate) ||
+        typeof candidate.pipeline !== "string" ||
+        typeof candidate.hookId !== "string" ||
+        !["APPLIED", "SKIPPED", "FAILED"].includes(String(candidate.outcome)) ||
+        typeof candidate.startedAt !== "number" ||
+        typeof candidate.finishedAt !== "number"
+      ) {
+        throw new ContextContributionSnapshotError(
+          "Context Contribution snapshot receipt is malformed.",
+        );
+      }
+      return Object.freeze({
+        pipeline: candidate.pipeline,
+        hookId: candidate.hookId,
+        outcome: candidate.outcome as "APPLIED" | "SKIPPED" | "FAILED",
+        startedAt: candidate.startedAt,
+        finishedAt: candidate.finishedAt,
+        ...(typeof candidate.inputFingerprint === "string"
+          ? { inputFingerprint: candidate.inputFingerprint }
+          : {}),
+        ...(typeof candidate.outputFingerprint === "string"
+          ? { outputFingerprint: candidate.outputFingerprint }
+          : {}),
+      });
+    }),
+  );
+}
+
+function parseSnapshotItem(value: unknown): ContextItem {
+  if (
+    !isPlainRecord(value) ||
+    typeof value.id !== "string" ||
+    typeof value.type !== "string" ||
+    typeof value.sourceRef !== "string" ||
+    typeof value.scope !== "string" ||
+    typeof value.retention !== "string" ||
+    typeof value.priorityClass !== "string" ||
+    typeof value.tokenEstimate !== "number" ||
+    typeof value.cacheStability !== "string" ||
+    typeof value.freshness !== "string" ||
+    typeof value.sensitivity !== "string" ||
+    typeof value.whyLoaded !== "string" ||
+    typeof value.createdSequence !== "number" ||
+    typeof value.updatedSequence !== "number" ||
+    typeof value.content !== "string"
+  ) {
+    throw new ContextContributionSnapshotError("Context Contribution snapshot item is malformed.");
+  }
+  try {
+    return createContextItem({
+      id: value.id,
+      type: value.type as ContextItem["type"],
+      sourceRef: value.sourceRef,
+      scope: value.scope as ContextItem["scope"],
+      retention: value.retention as ContextItem["retention"],
+      priorityClass: value.priorityClass as ContextItem["priorityClass"],
+      tokenEstimate: value.tokenEstimate,
+      cacheStability: value.cacheStability as ContextItem["cacheStability"],
+      freshness: value.freshness as ContextItem["freshness"],
+      sensitivity: value.sensitivity as ContextItem["sensitivity"],
+      whyLoaded: value.whyLoaded,
+      createdSequence: value.createdSequence,
+      updatedSequence: value.updatedSequence,
+      content: value.content,
+    });
+  } catch {
+    throw new ContextContributionSnapshotError("Context Contribution snapshot item is invalid.");
+  }
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 /**
@@ -366,9 +791,7 @@ async function projectConversationForContext(
     }
     return entry;
   });
-  const currentMessages = currentEntries.flatMap((entry) =>
-    projectors.project(entry).messages,
-  );
+  const currentMessages = currentEntries.flatMap((entry) => projectors.project(entry).messages);
   const currentUserEntry =
     [...currentEntries].reverse().find((entry) => entry.message.type === "USER") ??
     [...stored].reverse().find((entry) => entry.message.type === "USER");
@@ -380,8 +803,7 @@ async function projectConversationForContext(
       ? undefined
       : projectors
           .project(currentUserEntry)
-          .messages
-          .find((message): message is AIUserMessage => message.role === "user"));
+          .messages.find((message): message is AIUserMessage => message.role === "user"));
   if (currentUser === undefined || currentUserEntry === undefined) {
     throw new Error("The durable user message for the continuation is unavailable.");
   }

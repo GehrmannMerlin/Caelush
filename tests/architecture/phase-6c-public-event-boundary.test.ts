@@ -52,8 +52,9 @@ describe("Architecture V2 Phase 6C public event boundary", () => {
     expect(await read("apps/daemon/src/routes/events.ts")).not.toMatch(
       /include(?:Debug|System)|[?&]debug=/,
     );
-    await expect(read("packages/agent/src/hooks/control-hook-registry.ts")).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    const registry = await read("packages/agent/src/hooks/control-hook.ts");
+    expect(registry).toContain("ControlHookRegistry");
+    expect(registry).not.toContain("@caelush/context");
+    expect(registry).not.toContain("@caelush/storage");
   });
 });

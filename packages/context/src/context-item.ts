@@ -6,6 +6,7 @@ export type ContextItemType =
   | "OBSERVATION"
   | "MEMORY"
   | "RELEVANT_FILE"
+  | "CONTRIBUTION"
   /**
    * Usage guidance for the Tools this turn actually exposes.
    *

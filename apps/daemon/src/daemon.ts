@@ -1,4 +1,5 @@
 import type { AIProviderBinding, ApiAdapter, ModelDescriptorSourcePort } from "@caelush/ai";
+import type { ContextContributionRegistration } from "@caelush/agent";
 import type { ClientModelSelection } from "@caelush/protocol";
 import { openCaelushStorage, toHostToolEffectsPort } from "@caelush/storage";
 import { createLocalRuntimeResolver, LocalRuntime } from "@caelush/runtime";
@@ -35,6 +36,8 @@ export interface DaemonOptions {
   readonly modelSources?: readonly ModelDescriptorSourcePort[];
   readonly adapterOverrides?: readonly ApiAdapter[];
   readonly web?: WebStaticHostOptions;
+  /** Typed host/test seam for Context Contributions; no HTTP plugin registration is implied. */
+  readonly contextContributionHooks?: readonly ContextContributionRegistration[];
 }
 
 export interface DaemonHandle {
@@ -123,6 +126,9 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         : { adapterOverrides: options.adapterOverrides }),
       ...(options.logger === true ? { logger: safeSupervisorLogger } : {}),
       toolRegistrations: defaultToolRegistrations,
+      ...(options.contextContributionHooks === undefined
+        ? {}
+        : { contextContributionHooks: options.contextContributionHooks }),
     });
   } catch (error) {
     await storage.close().catch(() => undefined);

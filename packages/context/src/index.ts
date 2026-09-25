@@ -136,6 +136,12 @@ export type {
   ContextRetention,
   ContextSensitivity,
 } from "./context-item.js";
+export { projectContextContributions } from "./context-contribution.js";
+export type {
+  ContextContributionItemInput,
+  ContextContributionProjectionInput,
+  ContextContributionProjectionOptions,
+} from "./context-contribution.js";
 export {
   buildExecutionUnits,
   createExecutionUnit,

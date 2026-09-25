@@ -36,10 +36,11 @@ describe("Architecture V2 Phase 6A event domain foundation", () => {
     expect(await read("packages/storage/src/schema.ts")).not.toContain("event_schema_version_v2");
   });
 
-  it("keeps future-phase runtime components absent", async () => {
+  it("keeps Control Hook ownership in Agent without moving Context or Storage into the kernel", async () => {
     expect(await read("apps/daemon/src/events/run-event-hub.ts")).toContain("class RunEventHub");
-    await expect(read("packages/agent/src/hooks/control-hook-registry.ts")).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    const registry = await read("packages/agent/src/hooks/control-hook.ts");
+    expect(registry).toContain("ControlHookRegistry");
+    expect(registry).not.toContain("@caelush/context");
+    expect(registry).not.toContain("@caelush/storage");
   });
 });
