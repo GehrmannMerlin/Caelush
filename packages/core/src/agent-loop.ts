@@ -485,6 +485,7 @@ export class AgentLoop {
       ...(repairContext === undefined
         ? {}
         : { verificationRepairContext: () => Promise.resolve(repairContext) }),
+      now: () => this.dependencies.clock.now(),
     });
   }
 

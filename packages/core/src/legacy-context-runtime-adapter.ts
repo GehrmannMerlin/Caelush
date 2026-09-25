@@ -38,6 +38,7 @@ import {
   STRUCTURAL_TOKEN_ESTIMATOR,
 } from "@caelush/agent";
 import type { AIMessage, AIUserMessage, AIToolResultMessage } from "@caelush/ai";
+import { createTimestampMs } from "@caelush/protocol";
 import type { AgentRun, WorkspaceRef } from "@caelush/protocol";
 import type {
   AgentContextBuilderPort,
@@ -493,7 +494,7 @@ async function persistContextContributionSnapshot(
     mimeType: CONTEXT_CONTRIBUTION_SNAPSHOT_MIME,
     sensitivity: "INTERNAL",
     createdSequence: identity.sequence,
-    createdAt: dependencies.now?.() ?? (Date.now() as import("@caelush/protocol").TimestampMs),
+    createdAt: dependencies.now?.() ?? createTimestampMs(0),
   });
   validateContextContributionSnapshot(artifact, identity);
 }
