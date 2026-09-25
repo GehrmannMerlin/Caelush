@@ -105,6 +105,29 @@ export {
   freezeContextSourceResult,
 } from "./source/context-source-item.js";
 export { AGENT_CONTEXT_SOURCE_IDS } from "./source/source-ids.js";
+export { createConversationContextSourceProvider } from "./source/conversation-provider.js";
+export {
+  createCheckpointContextSourceProvider,
+} from "./source/checkpoint-provider.js";
+export type {
+  CheckpointContextSourceProviderOptions,
+  ContextCheckpointLoader,
+  ContextCheckpointProjection,
+} from "./source/checkpoint-provider.js";
+export { createMemoryContextSourceProvider } from "./source/memory-provider.js";
+export type {
+  ContextMemoryLoader,
+  ContextMemoryProjection,
+  MemoryContextSourceProviderOptions,
+} from "./source/memory-provider.js";
+export {
+  createExtensionContributionContextSourceProvider,
+} from "./source/extension-contribution-provider.js";
+export type {
+  ContextContributionLoader,
+  ExtensionContributionContextSourceProviderOptions,
+} from "./source/extension-contribution-provider.js";
+export { createBranchContextSourceProvider } from "./source/branch-context-provider.js";
 export type {
   ContextSourceCriticality,
   ContextSourceDiagnostic,
