@@ -15,7 +15,6 @@ import {
   type ContextMessageRange,
   type ContextSummarizationInput,
   type RehydratedContextState,
-  type StructuredCheckpoint,
 } from "@caelush/agent";
 import { agentMessageId, conversationTurnId, type StoredAgentMessage } from "@caelush/agent";
 import type { ModelDescriptor } from "@caelush/ai";
