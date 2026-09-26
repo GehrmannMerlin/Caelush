@@ -419,7 +419,9 @@ function isContextOverflow(error: unknown): boolean {
   }
   return (
     typeof candidate.name === "string" &&
-    /ContextBudgetExceeded|ContextOverflow|ContextExhausted/.test(candidate.name)
+    /ContextBudgetExceeded|ContextOverflow|ContextExhausted|ContextMandatoryInputTooLarge|ContextCurrentTurnTooLarge/.test(
+      candidate.name,
+    )
   );
 }
 

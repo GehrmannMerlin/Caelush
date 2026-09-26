@@ -5,6 +5,14 @@ export type {
   ContextProvider,
   ContextProviderInput,
 } from "./contracts/context-engine.js";
+export {
+  createContextCompactionEventFactory,
+  createV2ContextEngine,
+} from "./engine/context-engine.js";
+export type {
+  ContextCompactionEventFactory,
+  V2ContextEngineOptions,
+} from "./engine/context-engine.js";
 
 export {
   assertContextItem,
@@ -150,6 +158,7 @@ export type {
 export {
   ContextCurrentTurnTooLargeError,
   ContextMandatoryInputTooLargeError,
+  ContextExhaustedError,
   ContextPlanningError,
 } from "./planner/context-planning-errors.js";
 export type { ContextPlanningErrorCode } from "./planner/context-planning-errors.js";
@@ -209,6 +218,10 @@ export type {
   ExtensionContributionContextSourceProviderOptions,
 } from "./source/extension-contribution-provider.js";
 export { createBranchContextSourceProvider } from "./source/branch-context-provider.js";
+export {
+  CORE_POLICY_CONTEXT_SOURCE_ID,
+  createCorePolicyContextSourceProvider,
+} from "./source/core-policy-provider.js";
 export type {
   ContextSourceCriticality,
   ContextSourceDiagnostic,

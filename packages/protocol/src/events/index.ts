@@ -63,6 +63,7 @@ import { BudgetExceededEventSchema } from "./budget.js";
 import { ResourceGuardEventSchema } from "./resource.js";
 import { createPublicRunEventSchema, type PublicRunEventFrom } from "./public.js";
 import { ConversationMessageCommittedEventSchema } from "./conversation.js";
+import { ContextCompactionCompletedEventSchema } from "./context.js";
 
 export {
   CoalescibleTransientEventMetaSchema,
@@ -116,6 +117,8 @@ export {
 export type { RunEventTypeDefinition } from "./catalog.js";
 export { ConversationMessageCommittedEventSchema } from "./conversation.js";
 export type { ConversationMessageCommittedEvent } from "./conversation.js";
+export { ContextCompactionCompletedEventSchema } from "./context.js";
+export type { ContextCompactionCompletedEvent } from "./context.js";
 export { createPublicRunEventSchema } from "./public.js";
 export type { PublicRunEventFrom } from "./public.js";
 export {
@@ -189,6 +192,7 @@ const currentRunEventSchema = z.union([
   BudgetExceededEventSchema,
   ResourceGuardEventSchema,
   ConversationMessageCommittedEventSchema,
+  ContextCompactionCompletedEventSchema,
   ModelTextDeltaEventSchema,
   ModelReasoningSummaryDeltaEventSchema,
   ModelToolCallDeltaEventSchema,

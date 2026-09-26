@@ -46,3 +46,5 @@ export { createProjectInstructionContextSourceProvider } from "./providers/proje
 export type { ProjectInstructionContextSourceProviderOptions } from "./providers/project-instruction-provider.js";
 export { createProjectMetadataContextSourceProvider } from "./providers/project-metadata-provider.js";
 export type { ProjectMetadataContextSourceProviderOptions } from "./providers/project-metadata-provider.js";
+export { createLocalCodingContextPorts } from "./local-ports.js";
+export type { LocalCodingContextPorts, LocalCodingContextPortOptions } from "./local-ports.js";

@@ -84,7 +84,8 @@ function toSection(item: ContextPlan["selectedItems"][number]): ContextDocumentS
 }
 
 function authorityForType(type: string): ContextSectionAuthority {
-  if (type === "agent.goal" || type === "agent.extension") return "CORE_POLICY";
+  if (type === "agent.goal" || type === "agent.extension" || type === "agent.core-policy")
+    return "CORE_POLICY";
   if (type === "agent.checkpoint") return "RECOVERY_RECORD";
   if (type === "coding.project_instruction") return "PROJECT_INSTRUCTION";
   if (

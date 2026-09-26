@@ -85,6 +85,7 @@ export const RUN_EVENT_TYPE_CATALOG: readonly RunEventTypeDefinition[] = Object.
   durable("budget.exceeded"),
   durable("resource.guard"),
   durable("conversation.message.committed"),
+  durable("context.compaction.completed", "SYSTEM"),
   transient("tool.output", 2, "ORDERED"),
   transient("shell.output", 2, "ORDERED"),
   transient("process.output", 2, "ORDERED"),

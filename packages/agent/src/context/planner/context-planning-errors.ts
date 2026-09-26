@@ -41,6 +41,16 @@ export class ContextCurrentTurnTooLargeError extends ContextPlanningError {
   }
 }
 
+/** The final V2 context still cannot fit without violating a mandatory invariant. */
+export class ContextExhaustedError extends Error {
+  readonly code = "CONTEXT_EXHAUSTED" as const;
+
+  constructor() {
+    super("The model context is exhausted and cannot be reduced safely.");
+    this.name = "ContextExhaustedError";
+  }
+}
+
 function contextPlanningErrorMessage(code: ContextPlanningErrorCode): string {
   switch (code) {
     case "INVALID_CONTEXT_ITEM":
