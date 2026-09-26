@@ -139,11 +139,7 @@ describe("Phase 7E Context persistence architecture", () => {
 
   it("keeps the target contracts out of daemon composition", () => {
     const daemonFiles = sourceFiles(join(root, "apps", "daemon", "src"));
-    const forbidden = [
-      "createContextReceiptBuilder",
-      "SqliteContextCompactionCommitStore",
-      "createContextFingerprint",
-    ];
+    const forbidden = ["SqliteContextCompactionCommitStore", "createContextFingerprint"];
     const offenders = daemonFiles.flatMap((file) =>
       forbidden
         .filter((token) => source(file).includes(token))

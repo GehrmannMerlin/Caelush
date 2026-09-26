@@ -33,6 +33,7 @@ function testItem(): ContextItem {
 describe("Phase 7C source foundation", () => {
   it("publishes the exact Generic Source IDs", () => {
     expect(AGENT_CONTEXT_SOURCE_IDS).toEqual({
+      corePolicy: "agent.core-policy",
       conversation: "agent.conversation",
       checkpoint: "agent.checkpoint",
       memory: "agent.memory",

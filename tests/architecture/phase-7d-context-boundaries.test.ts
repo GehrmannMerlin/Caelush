@@ -105,7 +105,7 @@ describe("Phase 7D Context target architecture", () => {
     ).toContain("@caelush/context");
   });
 
-  it("publishes the target contracts without adding a second production composition root", () => {
+  it("publishes the target contracts and leaves daemon composition in the sole host root", () => {
     const agentRoot = readFileSync(join(root, "packages", "agent", "src", "index.ts"), "utf8");
     for (const exported of [
       "createContextCompactionPlanner",
@@ -119,8 +119,12 @@ describe("Phase 7D Context target architecture", () => {
       expect(agentRoot, exported).toContain(exported);
     }
     const daemonFiles = sourceFiles(join(root, "apps", "daemon", "src"));
-    expect(daemonFiles.some((file) => source(file).includes("createContextMaterializer"))).toBe(
-      false,
+    // Phase 7D froze the pre-cutover rule that the daemon must not compose target Context
+    // collaborators. Phase 7F intentionally supersedes that rule: the daemon remains the sole
+    // production composition root, and it now injects the Agent-owned V2 Materializer through the
+    // V2 Context Engine factory.
+    expect(daemonFiles.some((file) => source(file).includes("createDaemonV2ContextEngine"))).toBe(
+      true,
     );
   });
 });
