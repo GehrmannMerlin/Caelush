@@ -257,6 +257,18 @@ describe("Phase 2C package edges", () => {
         "ContextPlanningError",
         "ContextSourceCollectionError",
         "Utf8HeuristicTokenEstimator",
+        "CONTEXT_COMPACTION_REASONS",
+        "assertStructuredCheckpoint",
+        "createContextCheckpointId",
+        "createContextCompactionPlanner",
+        "createContextMaterializer",
+        "createContextMessageRange",
+        "createContextRehydrator",
+        "createContextSummarizationRunner",
+        "createContextSummaryPromptVersion",
+        "createStructuredCheckpoint",
+        "prepareContextCompactionCandidates",
+        "serializeContextSummarySource",
         // Phase 7C publishes the generic Source Provider contracts and factories from the
         // Agent root. The coding overlay remains in @caelush/coding-agent; these are only the
         // provider-neutral source IDs, projections, and adapters.

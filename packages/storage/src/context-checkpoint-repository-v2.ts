@@ -14,7 +14,6 @@ import {
   createContextSummaryPromptVersion,
   createStructuredCheckpoint,
 } from "@caelush/agent";
-import type { ModelRef } from "@caelush/ai";
 import type { RunId, TimestampMs } from "@caelush/protocol";
 
 import type { CaelushDatabase } from "./database.js";
@@ -286,7 +285,7 @@ function parseSourceRange(value: unknown): ContextMessageRange {
   });
 }
 
-function parseModelRef(value: unknown): ModelRef {
+function parseModelRef(value: unknown): ContextCheckpointRecordV2["modelRef"] {
   const record = recordValue(value);
   if (
     !hasExactKeys(record, [

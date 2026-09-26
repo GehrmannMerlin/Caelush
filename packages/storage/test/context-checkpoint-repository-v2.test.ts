@@ -16,6 +16,7 @@ import {
   createTimestampMs,
   createWorkspaceId,
 } from "@caelush/protocol";
+import type { RunId } from "@caelush/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
 import type { ContextCheckpointCreateInputV2 } from "@caelush/agent";
@@ -48,7 +49,7 @@ function makeRun() {
 }
 
 function checkpoint(
-  runId: string,
+  runId: RunId,
   sourceFrom: number,
   sourceTo: number,
 ): ContextCheckpointCreateInputV2 {

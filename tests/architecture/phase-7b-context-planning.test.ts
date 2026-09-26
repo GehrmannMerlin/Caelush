@@ -34,7 +34,6 @@ describe("Phase 7B Context Kernel architecture", () => {
       "fetch(",
       "sqlite",
       "drizzle",
-      "AIMessage",
     ];
     for (const file of await sourceFiles(CONTEXT_ROOT)) {
       const text = await code(file);
@@ -105,16 +104,13 @@ describe("Phase 7B Context Kernel architecture", () => {
     });
   });
 
-  it("does not introduce a provider materializer, compactor, rehydrator, or persistence path", async () => {
+  it("keeps the Phase 7D extension inside the pure Agent Context target path", async () => {
     const files = await sourceFiles(CONTEXT_ROOT);
-    expect(files.some((file) => /materializer|compactor|rehydrator|persistence/i.test(file))).toBe(
-      false,
-    );
+    expect(files.some((file) => file.endsWith("context-compaction-planner.ts"))).toBe(true);
+    expect(files.some((file) => file.endsWith("context-rehydrator.ts"))).toBe(true);
+    expect(files.some((file) => file.endsWith("context-materializer.ts"))).toBe(true);
     for (const file of files) {
       const text = await code(file);
-      expect(text, file).not.toContain("ContextMaterializer");
-      expect(text, file).not.toContain("ContextCompactionPlanner");
-      expect(text, file).not.toContain("ContextRehydratorPort");
       expect(text, file).not.toContain("ContextPlanRepository");
     }
   });

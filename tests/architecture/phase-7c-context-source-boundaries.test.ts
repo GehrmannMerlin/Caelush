@@ -35,10 +35,6 @@ describe("Phase 7C Context Source architecture", () => {
       "@caelush/security",
       "@caelush/memory",
       "fetch(",
-      "AIMessage",
-      "ContextMaterializer",
-      "ContextCompactionPlanner",
-      "ContextCheckpointRecordV2",
     ];
     const offenders = sourceFiles(contextRoot).flatMap((file) => {
       const text = source(file);
@@ -58,9 +54,6 @@ describe("Phase 7C Context Source architecture", () => {
       "apps/daemon",
       "apps/cli",
       "apps/web",
-      "ContextMaterializer",
-      "ContextCompactionPlanner",
-      "ContextCheckpointRecordV2",
       "provider-sdk",
       "Date.now(",
       "Math.random(",

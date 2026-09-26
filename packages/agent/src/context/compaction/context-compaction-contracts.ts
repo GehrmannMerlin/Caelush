@@ -60,9 +60,7 @@ export interface ContextCompactionPlanner {
   }): ContextCompactionPlan | null;
 }
 
-export type ContextSummaryPromptVersion = number & {
-  readonly __contextSummaryPromptVersion: unique symbol;
-};
+export type ContextSummaryPromptVersion = number;
 
 export function createContextSummaryPromptVersion(value: number): ContextSummaryPromptVersion {
   if (!Number.isSafeInteger(value) || value < 1) {

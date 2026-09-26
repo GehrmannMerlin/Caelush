@@ -5,6 +5,7 @@ import {
   createContextCheckpointId,
   createContextCompactionPlanner,
   createContextMessageRange,
+  createContextSummaryPromptVersion,
   prepareContextCompactionCandidates,
   type ContextHistoryIndex,
   type ContextHistoryUnit,
@@ -95,7 +96,7 @@ function checkpoint(sourceFrom: number, sourceTo: number): ContextCheckpointReco
     tokensBefore: 100,
     tokensAfter: 20,
     modelRef: { provider: "test", model: "phase-7d" },
-    summaryPromptVersion: 1,
+    summaryPromptVersion: createContextSummaryPromptVersion(1),
     sourceDigest: "sha256:source",
     checkpointDigest: "sha256:checkpoint",
     degraded: false,
@@ -172,9 +173,11 @@ describe("Phase 7D semantic compaction planner", () => {
 
   it("is deterministic for recreated unit arrays and fails closed at a turn boundary", () => {
     const original = history([unit("a", 1, 10, 50), unit("b", 11, 20, 50)]);
+    const secondUnit = original.units[1]!;
+    const firstUnit = original.units[0]!;
     const recreated = history([
-      { ...original.units[1], messages: [...original.units[1].messages] },
-      { ...original.units[0], messages: [...original.units[0].messages] },
+      { ...secondUnit, messages: [...secondUnit.messages] },
+      { ...firstUnit, messages: [...firstUnit.messages] },
     ]);
 
     const first = createContextCompactionPlanner().plan({

@@ -7,6 +7,7 @@ import {
   createConversationContextSourceProvider,
   createExtensionContributionContextSourceProvider,
   createMemoryContextSourceProvider,
+  createStructuredCheckpoint,
   type ContextContribution,
   type ContextSourceInput,
 } from "@caelush/agent";
@@ -88,7 +89,26 @@ describe("Phase 7C Generic Source Providers", () => {
             checkpointId: "checkpoint_1",
             sourceRef: "run/checkpoint_1",
             version: "checkpoint-v1",
-            checkpoint: { kind: "SNAPSHOT", stepSequence: 3 },
+            checkpoint: createStructuredCheckpoint({
+              version: 1,
+              goal: "checkpoint goal",
+              constraints: [],
+              completedWork: [],
+              inProgress: [],
+              blocked: [],
+              importantDiscoveries: [],
+              keyDecisions: [],
+              changedFiles: [],
+              readFiles: [],
+              recentErrors: [],
+              verificationState: "unknown",
+              activeProcesses: [],
+              pendingApprovals: [],
+              resourceGovernance: "bounded",
+              criticalReferences: [],
+              nextIntent: "continue",
+              sourceRange: { from: 3, to: 3 },
+            }),
           };
         },
       },
@@ -109,7 +129,7 @@ describe("Phase 7C Generic Source Providers", () => {
         sourceRef: "run/checkpoint_1",
         version: "checkpoint-v1",
       },
-      payload: { kind: "CHECKPOINT", checkpoint: { kind: "SNAPSHOT", stepSequence: 3 } },
+      payload: { kind: "CHECKPOINT", checkpoint: { goal: "checkpoint goal" } },
     });
   });
 
