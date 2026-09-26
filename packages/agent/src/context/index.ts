@@ -87,10 +87,43 @@ export {
   createContextFingerprint,
 } from "./contracts/context-fingerprint.js";
 export type { ContextFingerprint } from "./contracts/context-fingerprint.js";
+export {
+  buildContextFingerprint,
+  CONTEXT_DOCUMENT_RENDERER_VERSION,
+  CONTEXT_MATERIALIZER_VERSION,
+} from "./contracts/context-fingerprint.js";
+export type { ContextFingerprintInput } from "./contracts/context-fingerprint.js";
 export type {
   ContextBuildReceipt,
   PreparedAgentContext,
 } from "./contracts/prepared-agent-context.js";
+export type {
+  ArtifactSensitivity,
+  ContextArtifact,
+  ContextArtifactCreateInput,
+  ContextArtifactMetadata,
+  ContextArtifactStorePort,
+} from "./artifacts/context-artifact.js";
+export type {
+  ContextBuildReceipt as CanonicalContextBuildReceipt,
+  ContextCompactionReceipt,
+  ContextContributionReport,
+  ContextSourceReceipt,
+} from "./receipts/context-build-receipt.js";
+export { createContextReceiptBuilder } from "./receipts/context-receipt-builder.js";
+export type {
+  ContextReceiptBuilder,
+  ContextReceiptBuilderInput,
+  ContextReceiptBuilderOptions,
+  ContextReceiptBuilderResult,
+} from "./receipts/context-receipt-builder.js";
+export type {
+  ContextUsageBuildStatus,
+  ContextUsageSnapshot,
+  ContextUsageSourceBreakdown,
+  ContextUsageStorePort,
+} from "./receipts/context-usage.js";
+export type { ContextCompactionCommitPort } from "./ports/context-compaction-commit-port.js";
 export type { RehydratedContextState as LegacyRehydratedContextState } from "./contracts/rehydrated-context-state.js";
 
 export {

@@ -208,6 +208,8 @@ export interface ContextBuildReport {
 
   readonly compactionCount: number;
 
+  readonly requestOverheadTokens: number;
+
   readonly contributions: readonly ContextBuildContribution[];
 }
 
