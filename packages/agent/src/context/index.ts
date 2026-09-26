@@ -44,6 +44,10 @@ export {
 } from "./compaction/context-compaction-contracts.js";
 export { createContextCompactionPlanner } from "./compaction/context-compaction-planner.js";
 export { prepareContextCompactionCandidates } from "./compaction/context-compaction-coverage.js";
+export {
+  createContextSummarizationRunner,
+  serializeContextSummarySource,
+} from "./compaction/context-summary.js";
 export type {
   ContextCheckpointCreateInputV2,
   ContextCheckpointId,
@@ -61,6 +65,10 @@ export type {
   LegacyContextCheckpointRecordV1,
 } from "./compaction/context-compaction-contracts.js";
 export type { ContextCompactionCandidatePreparation } from "./compaction/context-compaction-coverage.js";
+export type {
+  ContextSummarizationRunner,
+  ContextSummaryExecutionResult,
+} from "./compaction/context-summary.js";
 export type {
   ContextAuthorityProviderPort,
   ContextAuthoritySnapshot,
