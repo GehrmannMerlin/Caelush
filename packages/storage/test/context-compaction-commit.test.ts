@@ -42,7 +42,12 @@ async function addRun(storage: CaelushStorage, runId: RunId = createRunId()) {
     createdAt: createTimestampMs(1),
     startedAt: createTimestampMs(2),
   });
-  await storage.sessions.insert({ id: run.sessionId, createdAt: run.createdAt, updatedAt: run.createdAt, metadata: {} });
+  await storage.sessions.insert({
+    id: run.sessionId,
+    createdAt: run.createdAt,
+    updatedAt: run.createdAt,
+    metadata: {},
+  });
   await storage.runs.insert(run);
   return run;
 }
@@ -130,7 +135,9 @@ describe("SqliteContextCompactionCommitStore", () => {
         events: [event(run.id, run.sessionId)],
       }),
     ).rejects.toThrow();
-    await expect(storage.contextCheckpointsV2.getById(invalid.checkpointId)).resolves.toBeUndefined();
+    await expect(
+      storage.contextCheckpointsV2.getById(invalid.checkpointId),
+    ).resolves.toBeUndefined();
     await expect(storage.eventReader.latestSequence(run.id)).resolves.toBe(0);
   });
 
@@ -156,7 +163,10 @@ describe("SqliteContextCompactionCommitStore", () => {
     const other = await addRun(storage);
     const input = checkpoint(run.id, "checkpoint:ownership");
     await expect(
-      storage.contextCompactionCommit.commit({ checkpoint: input, events: [event(other.id, other.sessionId)] }),
+      storage.contextCompactionCommit.commit({
+        checkpoint: input,
+        events: [event(other.id, other.sessionId)],
+      }),
     ).rejects.toThrow();
     await expect(storage.contextCheckpointsV2.getById(input.checkpointId)).resolves.toBeUndefined();
     await expect(storage.eventReader.latestSequence(run.id)).resolves.toBe(0);
@@ -169,7 +179,9 @@ describe("SqliteContextCompactionCommitStore", () => {
     expect(committed.checkpoint.checkpointId).toBe(successInput.checkpointId);
     expect(committed.events).toHaveLength(1);
     expect(committed.events[0]?.durability).toMatchObject({ kind: "DURABLE", sequence: 1 });
-    await expect(storage.contextCheckpointsV2.getById(successInput.checkpointId)).resolves.toMatchObject({
+    await expect(
+      storage.contextCheckpointsV2.getById(successInput.checkpointId),
+    ).resolves.toMatchObject({
       checkpointId: successInput.checkpointId,
     });
   });

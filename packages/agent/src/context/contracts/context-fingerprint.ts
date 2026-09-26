@@ -2,11 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { AIToolSpec, ModelDescriptor } from "@caelush/ai";
 
-import type {
-  AgentExecutionIdentity,
-  AgentTurnInput,
-  AgentTurnRef,
-} from "../../loop/types.js";
+import type { AgentExecutionIdentity, AgentTurnInput, AgentTurnRef } from "../../loop/types.js";
 import type { StoredAgentMessage } from "../../messages/persistence/record.js";
 import type { ContextItem } from "../item/context-item.js";
 import type { ContextPolicy } from "../policy/context-policy.js";
@@ -80,7 +76,9 @@ export function buildContextFingerprint(input: ContextFingerprintInput): Context
     rendererVersion: input.rendererVersion ?? CONTEXT_DOCUMENT_RENDERER_VERSION,
     materializerVersion: input.materializerVersion ?? CONTEXT_MATERIALIZER_VERSION,
   });
-  return createContextFingerprint(`sha256:${createHash("sha256").update(canonical, "utf8").digest("hex")}`);
+  return createContextFingerprint(
+    `sha256:${createHash("sha256").update(canonical, "utf8").digest("hex")}`,
+  );
 }
 
 function policyIdentity(policy: ContextPolicy): unknown {

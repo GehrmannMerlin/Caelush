@@ -36,7 +36,9 @@ export class SqliteContextUsageStore implements ContextUsageStorePort {
 
   async upsert(snapshot: ContextUsageSnapshot): Promise<void> {
     assertSnapshot(snapshot);
-    const breakdown = [...snapshot.breakdown].sort((left, right) => compareStrings(left.sourceId, right.sourceId));
+    const breakdown = [...snapshot.breakdown].sort((left, right) =>
+      compareStrings(left.sourceId, right.sourceId),
+    );
     const envelope: UsageEnvelope = {
       version: 2,
       breakdown,
@@ -120,22 +122,37 @@ function assertSnapshot(snapshot: ContextUsageSnapshot): void {
     [snapshot.compactionCount, "compactionCount"],
     [snapshot.updatedAt, "updatedAt"],
   ] as const) {
-    if (!Number.isSafeInteger(value) || value < 0) throw new StorageError(`Context Usage ${label} is invalid.`);
+    if (!Number.isSafeInteger(value) || value < 0)
+      throw new StorageError(`Context Usage ${label} is invalid.`);
   }
   if (snapshot.effectiveInputLimitTokens > snapshot.contextWindowTokens) {
     throw new StorageError("Context Usage effective input limit is invalid.");
   }
-  if (!(snapshot.pressureState === "NORMAL" || snapshot.pressureState === "PROACTIVE" || snapshot.pressureState === "EMERGENCY")) {
+  if (!(
+    snapshot.pressureState === "NORMAL" ||
+    snapshot.pressureState === "PROACTIVE" ||
+    snapshot.pressureState === "EMERGENCY"
+  )) {
     throw new StorageError("Context Usage pressure is invalid.");
   }
-  if (!(snapshot.lastBuildStatus === "SUCCESS" || snapshot.lastBuildStatus === "FAILED" || snapshot.lastBuildStatus === "CONTEXT_EXHAUSTED")) {
+  if (!(
+    snapshot.lastBuildStatus === "SUCCESS" ||
+    snapshot.lastBuildStatus === "FAILED" ||
+    snapshot.lastBuildStatus === "CONTEXT_EXHAUSTED"
+  )) {
     throw new StorageError("Context Usage build status is invalid.");
   }
   const ids = new Set<string>();
   for (const item of snapshot.breakdown) {
-    if (!item.sourceId || ids.has(item.sourceId)) throw new StorageError("Context Usage source breakdown is invalid.");
+    if (!item.sourceId || ids.has(item.sourceId))
+      throw new StorageError("Context Usage source breakdown is invalid.");
     ids.add(item.sourceId);
-    if (!Number.isSafeInteger(item.tokens) || item.tokens < 0 || !Number.isSafeInteger(item.itemCount) || item.itemCount < 0) {
+    if (
+      !Number.isSafeInteger(item.tokens) ||
+      item.tokens < 0 ||
+      !Number.isSafeInteger(item.itemCount) ||
+      item.itemCount < 0
+    ) {
       throw new StorageError("Context Usage source breakdown values are invalid.");
     }
   }
@@ -143,22 +160,55 @@ function assertSnapshot(snapshot: ContextUsageSnapshot): void {
 
 function decodeUsage(row: UsageRow): ContextUsageSnapshot {
   try {
-    if (!Number.isSafeInteger(row.context_window_tokens) || row.context_window_tokens < 0) throw new Error("invalid context window");
-    if (!Number.isSafeInteger(row.effective_input_limit_tokens) || row.effective_input_limit_tokens < 0 || row.effective_input_limit_tokens > row.context_window_tokens) throw new Error("invalid input limit");
-    for (const value of [row.estimated_input_tokens, row.remaining_tokens, row.compaction_count, row.last_build_at_ms, row.updated_at_ms]) {
+    if (!Number.isSafeInteger(row.context_window_tokens) || row.context_window_tokens < 0)
+      throw new Error("invalid context window");
+    if (
+      !Number.isSafeInteger(row.effective_input_limit_tokens) ||
+      row.effective_input_limit_tokens < 0 ||
+      row.effective_input_limit_tokens > row.context_window_tokens
+    )
+      throw new Error("invalid input limit");
+    for (const value of [
+      row.estimated_input_tokens,
+      row.remaining_tokens,
+      row.compaction_count,
+      row.last_build_at_ms,
+      row.updated_at_ms,
+    ]) {
       if (!Number.isSafeInteger(value) || value < 0) throw new Error("invalid usage number");
     }
-    if (!(row.pressure_state === "NORMAL" || row.pressure_state === "PROACTIVE" || row.pressure_state === "EMERGENCY")) throw new Error("invalid pressure");
-    if (!(row.last_build_status === "SUCCESS" || row.last_build_status === "FAILED" || row.last_build_status === "CONTEXT_EXHAUSTED")) throw new Error("invalid build status");
-    if (row.last_compaction_at_ms !== null && (!Number.isSafeInteger(row.last_compaction_at_ms) || row.last_compaction_at_ms < 0)) throw new Error("invalid compaction timestamp");
+    if (!(
+      row.pressure_state === "NORMAL" ||
+      row.pressure_state === "PROACTIVE" ||
+      row.pressure_state === "EMERGENCY"
+    ))
+      throw new Error("invalid pressure");
+    if (!(
+      row.last_build_status === "SUCCESS" ||
+      row.last_build_status === "FAILED" ||
+      row.last_build_status === "CONTEXT_EXHAUSTED"
+    ))
+      throw new Error("invalid build status");
+    if (
+      row.last_compaction_at_ms !== null &&
+      (!Number.isSafeInteger(row.last_compaction_at_ms) || row.last_compaction_at_ms < 0)
+    )
+      throw new Error("invalid compaction timestamp");
     const envelope = JSON.parse(row.breakdown_json) as unknown;
-    if (envelope === null || typeof envelope !== "object" || Array.isArray(envelope)) throw new Error("invalid usage envelope");
+    if (envelope === null || typeof envelope !== "object" || Array.isArray(envelope))
+      throw new Error("invalid usage envelope");
     const candidate = envelope as Record<string, unknown>;
-    if (candidate.version !== 2 || !Array.isArray(candidate.breakdown) || (candidate.contextFingerprint !== null && typeof candidate.contextFingerprint !== "string")) throw new Error("invalid usage envelope");
+    if (
+      candidate.version !== 2 ||
+      !Array.isArray(candidate.breakdown) ||
+      (candidate.contextFingerprint !== null && typeof candidate.contextFingerprint !== "string")
+    )
+      throw new Error("invalid usage envelope");
     const breakdown = candidate.breakdown.map((item) => decodeBreakdown(item));
     const ids = breakdown.map((item) => item.sourceId);
     if (new Set(ids).size !== ids.length) throw new Error("duplicate usage source");
-    if (ids.some((id, index) => index > 0 && ids[index - 1]! >= id)) throw new Error("usage sources are not ordered");
+    if (ids.some((id, index) => index > 0 && ids[index - 1]! >= id))
+      throw new Error("usage sources are not ordered");
     return Object.freeze({
       runId: row.run_id as RunId,
       modelRef: Object.freeze({ provider: text(row.provider_id), model: text(row.model_id) }),
@@ -173,19 +223,36 @@ function decodeUsage(row: UsageRow): ContextUsageSnapshot {
         : { lastCompactionAt: row.last_compaction_at_ms as ContextUsageSnapshot["updatedAt"] }),
       breakdown: Object.freeze(breakdown),
       lastBuildStatus: row.last_build_status,
-      ...(candidate.contextFingerprint === null ? {} : { contextFingerprint: candidate.contextFingerprint as never }),
+      ...(candidate.contextFingerprint === null
+        ? {}
+        : { contextFingerprint: candidate.contextFingerprint as never }),
       updatedAt: row.updated_at_ms as ContextUsageSnapshot["updatedAt"],
     });
   } catch (error) {
-    throw new StorageDecodeError("ContextUsage", row.run_id, "context_runtime_states", { cause: error });
+    throw new StorageDecodeError("ContextUsage", row.run_id, "context_runtime_states", {
+      cause: error,
+    });
   }
 }
 
 function decodeBreakdown(value: unknown): ContextUsageSourceBreakdown {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid source breakdown");
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    throw new Error("invalid source breakdown");
   const candidate = value as Record<string, unknown>;
-  if (typeof candidate.sourceId !== "string" || candidate.sourceId.length === 0 || !Number.isSafeInteger(candidate.tokens) || (candidate.tokens as number) < 0 || !Number.isSafeInteger(candidate.itemCount) || (candidate.itemCount as number) < 0) throw new Error("invalid source breakdown");
-  return Object.freeze({ sourceId: candidate.sourceId, tokens: candidate.tokens as number, itemCount: candidate.itemCount as number });
+  if (
+    typeof candidate.sourceId !== "string" ||
+    candidate.sourceId.length === 0 ||
+    !Number.isSafeInteger(candidate.tokens) ||
+    (candidate.tokens as number) < 0 ||
+    !Number.isSafeInteger(candidate.itemCount) ||
+    (candidate.itemCount as number) < 0
+  )
+    throw new Error("invalid source breakdown");
+  return Object.freeze({
+    sourceId: candidate.sourceId,
+    tokens: candidate.tokens as number,
+    itemCount: candidate.itemCount as number,
+  });
 }
 
 function text(value: string): string {

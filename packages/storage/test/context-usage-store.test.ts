@@ -35,7 +35,12 @@ describe("SqliteContextUsageStore", () => {
       createdAt: createTimestampMs(1),
       startedAt: createTimestampMs(2),
     });
-    await storage.sessions.insert({ id: sessionId, createdAt: run.createdAt, updatedAt: run.createdAt, metadata: {} });
+    await storage.sessions.insert({
+      id: sessionId,
+      createdAt: run.createdAt,
+      updatedAt: run.createdAt,
+      metadata: {},
+    });
     await storage.runs.insert(run);
     const snapshot: ContextUsageSnapshot = {
       runId,

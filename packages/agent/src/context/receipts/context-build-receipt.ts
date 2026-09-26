@@ -2,11 +2,11 @@ import type { ModelRef } from "@caelush/ai";
 
 import type { ContextPrepareMode } from "../contracts/context-engine.js";
 import type { ContextFingerprint } from "../contracts/context-fingerprint.js";
-import type { ContextCheckpointRef, ContextCompactionReason } from "../compaction/context-compaction-contracts.js";
 import type {
-  ContextBudgetSnapshot,
-  ContextPressureState,
-} from "../policy/context-policy.js";
+  ContextCheckpointRef,
+  ContextCompactionReason,
+} from "../compaction/context-compaction-contracts.js";
+import type { ContextBudgetSnapshot, ContextPressureState } from "../policy/context-policy.js";
 import type { ContextItemId, ContextSourceId } from "../item/context-item.js";
 import type { ContextBuildContribution } from "../../loop/types.js";
 

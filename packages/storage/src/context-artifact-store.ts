@@ -37,10 +37,14 @@ export class SqliteContextArtifactStore implements ContextArtifactStorePort {
     const existing = this.readRow(artifactId);
     if (existing !== undefined) {
       if (existing.run_id !== input.runId) {
-        throw new StorageConflictError("Context artifact ownership does not match the requested Run.");
+        throw new StorageConflictError(
+          "Context artifact ownership does not match the requested Run.",
+        );
       }
       if (!sameSemanticArtifact(existing, input, contentHash)) {
-        throw new StorageConflictError("Context artifact identity is already bound to different content.");
+        throw new StorageConflictError(
+          "Context artifact identity is already bound to different content.",
+        );
       }
       return decodeArtifact(existing);
     }
@@ -69,16 +73,21 @@ export class SqliteContextArtifactStore implements ContextArtifactStorePort {
       throw new StorageError("Unable to persist Context Artifact V2.", { cause: error });
     }
     const saved = this.readRow(artifactId);
-    if (saved === undefined) throw new StorageError("Persisted Context Artifact V2 is unavailable.");
+    if (saved === undefined)
+      throw new StorageError("Persisted Context Artifact V2 is unavailable.");
     return decodeArtifact(saved);
   }
 
-  async getMetadata(artifactId: ContextArtifactMetadata["artifactId"]): Promise<ContextArtifactMetadata | undefined> {
+  async getMetadata(
+    artifactId: ContextArtifactMetadata["artifactId"],
+  ): Promise<ContextArtifactMetadata | undefined> {
     const row = this.readRow(artifactId);
     return row === undefined ? undefined : toMetadata(decodeArtifact(row));
   }
 
-  async readInternal(artifactId: ContextArtifactMetadata["artifactId"]): Promise<ContextArtifact | undefined> {
+  async readInternal(
+    artifactId: ContextArtifactMetadata["artifactId"],
+  ): Promise<ContextArtifact | undefined> {
     const row = this.readRow(artifactId);
     return row === undefined ? undefined : decodeArtifact(row);
   }
@@ -112,7 +121,8 @@ function assertCreateInput(input: ContextArtifactCreateInput): void {
       throw new StorageError(`Context Artifact ${label} is invalid.`);
     }
   }
-  if (!SENSITIVITIES.has(input.sensitivity)) throw new StorageError("Context Artifact sensitivity is invalid.");
+  if (!SENSITIVITIES.has(input.sensitivity))
+    throw new StorageError("Context Artifact sensitivity is invalid.");
   if (!Number.isSafeInteger(input.createdSequence) || input.createdSequence < 1) {
     throw new StorageError("Context Artifact sequence is invalid.");
   }
@@ -130,7 +140,11 @@ function createRunScopedArtifactId(input: ContextArtifactCreateInput, contentHas
   return `artifact:v2:${createHash("sha256").update(identity, "utf8").digest("hex")}`;
 }
 
-function sameSemanticArtifact(row: ArtifactRow, input: ContextArtifactCreateInput, contentHash: string): boolean {
+function sameSemanticArtifact(
+  row: ArtifactRow,
+  input: ContextArtifactCreateInput,
+  contentHash: string,
+): boolean {
   return (
     row.kind === input.kind &&
     row.source_ref === input.sourceRef &&
@@ -148,10 +162,13 @@ function decodeArtifact(row: ArtifactRow): ContextArtifact {
   try {
     if (!SENSITIVITIES.has(row.sensitivity)) throw new Error("invalid sensitivity");
     if (typeof row.content !== "string") throw new Error("invalid content");
-    if (row.byte_length !== Buffer.byteLength(row.content, "utf8")) throw new Error("byte length mismatch");
+    if (row.byte_length !== Buffer.byteLength(row.content, "utf8"))
+      throw new Error("byte length mismatch");
     if (row.content_hash !== hashContent(row.content)) throw new Error("content hash mismatch");
-    if (!Number.isSafeInteger(row.created_sequence) || row.created_sequence < 1) throw new Error("invalid sequence");
-    if (!Number.isSafeInteger(row.created_at_ms) || row.created_at_ms < 0) throw new Error("invalid timestamp");
+    if (!Number.isSafeInteger(row.created_sequence) || row.created_sequence < 1)
+      throw new Error("invalid sequence");
+    if (!Number.isSafeInteger(row.created_at_ms) || row.created_at_ms < 0)
+      throw new Error("invalid timestamp");
     return Object.freeze({
       artifactId: row.id as ContextArtifact["artifactId"],
       runId: row.run_id as ContextArtifact["runId"],

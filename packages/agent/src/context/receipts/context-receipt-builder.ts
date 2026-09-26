@@ -22,11 +22,11 @@ import type {
   ContextBuildReceipt,
   ContextSourceReceipt,
 } from "./context-build-receipt.js";
-import type {
-  ContextUsageSnapshot,
-  ContextUsageSourceBreakdown,
-} from "./context-usage.js";
-import { createUtf8HeuristicTokenEstimator, type ContextTokenEstimatorPort } from "../token/context-token-estimator.js";
+import type { ContextUsageSnapshot, ContextUsageSourceBreakdown } from "./context-usage.js";
+import {
+  createUtf8HeuristicTokenEstimator,
+  type ContextTokenEstimatorPort,
+} from "../token/context-token-estimator.js";
 import type { ContextItemId } from "../item/context-item.js";
 
 export interface ContextReceiptBuilderInput {
@@ -108,7 +108,7 @@ export function createContextReceiptBuilder(
         materializedTokens,
       });
       const contributions = Object.freeze(
-        sources.map((source) => contributionFor(source, input.sourceResults, input.plan)),
+        sources.map((source) => contributionFor(source, input.sourceResults)),
       );
       const report: ContextBuildReport = Object.freeze({
         estimatedInputTokens: materializedTokens,
@@ -132,7 +132,7 @@ export function createContextReceiptBuilder(
           ? {}
           : { lastCompactionAt: input.lastCompactionAt }),
         breakdown: Object.freeze(
-          sources.map((source) => breakdownFor(source, input.sourceResults, input.plan)),
+          sources.map((source) => breakdownFor(source, input.sourceResults)),
         ),
         lastBuildStatus: "SUCCESS",
         contextFingerprint,
@@ -149,7 +149,8 @@ function buildSourceReceipts(
 ): readonly ContextSourceReceipt[] {
   const seen = new Set<string>();
   return results.map((result) => {
-    if (seen.has(result.providerId)) throw new TypeError("Duplicate Context source receipt provider.");
+    if (seen.has(result.providerId))
+      throw new TypeError("Duplicate Context source receipt provider.");
     seen.add(result.providerId);
     const itemIds = new Set(result.items.map((item) => item.id));
     const decisions = plan.decisions.filter((decision) => itemIds.has(decision.itemId));
@@ -178,7 +179,6 @@ function buildSourceReceipts(
 function contributionFor(
   source: ContextSourceReceipt,
   results: readonly ContextSourceResult[],
-  plan: ContextPlan,
 ): ContextBuildContribution {
   const result = results.find((candidate) => candidate.providerId === source.providerId);
   if (result === undefined) throw new TypeError("Context source receipt has no source result.");
@@ -197,9 +197,8 @@ function contributionFor(
 function breakdownFor(
   source: ContextSourceReceipt,
   results: readonly ContextSourceResult[],
-  plan: ContextPlan,
 ): ContextUsageSourceBreakdown {
-  const contribution = contributionFor(source, results, plan);
+  const contribution = contributionFor(source, results);
   return Object.freeze({
     sourceId: contribution.providerId,
     tokens: contribution.tokenEstimate,
@@ -209,12 +208,19 @@ function breakdownFor(
 
 function policyFingerprint(policy: ContextPolicy): string {
   return buildContextFingerprint({
-    identity: { runId: "run:policy" as never, sessionId: "session:policy" as never, goal: "policy" },
+    identity: {
+      runId: "run:policy" as never,
+      sessionId: "session:policy" as never,
+      goal: "policy",
+    },
     turn: { stepId: "step:policy" as never, sequence: 1 },
     model: {
       ref: { provider: "policy", model: "policy" },
       api: "policy",
-      limits: { contextWindowTokens: policy.contextWindowTokens, maxOutputTokens: policy.maxOutputTokens },
+      limits: {
+        contextWindowTokens: policy.contextWindowTokens,
+        maxOutputTokens: policy.maxOutputTokens,
+      },
       capabilities: {} as never,
       source: "CONFIGURATION",
     },
@@ -234,7 +240,8 @@ function estimateMessages(
 ): number {
   const text = stableJson(messages);
   const estimate = estimator.estimateText(text, model);
-  if (!Number.isSafeInteger(estimate) || estimate < 0) throw new TypeError("Materialized token estimate is invalid.");
+  if (!Number.isSafeInteger(estimate) || estimate < 0)
+    throw new TypeError("Materialized token estimate is invalid.");
   return estimate;
 }
 
@@ -254,7 +261,10 @@ function assertBuildFacts(input: ContextReceiptBuilderInput): void {
     throw new TypeError("Context plan request overhead does not match policy.");
   }
   if (input.compaction !== undefined) {
-    if (input.checkpoint === undefined || input.compaction.checkpoint.checkpointId !== input.checkpoint.checkpointId) {
+    if (
+      input.checkpoint === undefined ||
+      input.compaction.checkpoint.checkpointId !== input.checkpoint.checkpointId
+    ) {
       throw new TypeError("Context compaction and checkpoint references do not match.");
     }
   }

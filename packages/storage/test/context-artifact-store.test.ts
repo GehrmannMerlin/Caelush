@@ -72,7 +72,9 @@ describe("SqliteContextArtifactStore", () => {
       artifactId: "artifact:legacy-id",
       ...input,
     });
-    await expect(storage.contextArtifactsV2.readInternal(legacy.artifactId as never)).resolves.toMatchObject({
+    await expect(
+      storage.contextArtifactsV2.readInternal(legacy.artifactId as never),
+    ).resolves.toMatchObject({
       artifactId: "artifact:legacy-id",
       runId: firstRun.id,
     });
