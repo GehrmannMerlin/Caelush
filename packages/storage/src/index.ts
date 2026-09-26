@@ -104,6 +104,8 @@ export {
   type ContextArtifactCreateInput,
   type ContextArtifactRepository,
 } from "./context-artifact-repository.js";
+export { SqliteContextArtifactStore } from "./context-artifact-store.js";
+export { SqliteContextUsageStore } from "./context-usage-store.js";
 export { SqliteMemoryExtractionJobRepository } from "./memory-extraction-job-repository.js";
 export {
   SqliteContextRuntimeStateRepository,
