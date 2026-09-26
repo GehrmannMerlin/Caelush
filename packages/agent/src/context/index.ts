@@ -75,6 +75,12 @@ export type {
   ContextRehydratorPort,
   RehydratedContextState,
 } from "./rehydration/context-authority-contracts.js";
+export { createContextRehydrator } from "./rehydration/context-rehydrator.js";
+export { createContextMaterializer } from "./materializer/context-materializer.js";
+export type {
+  ContextMaterializer,
+  ContextMaterializerOptions,
+} from "./materializer/context-materializer.js";
 
 export {
   assertContextFingerprint,

@@ -53,7 +53,10 @@ export function createContextDocumentBuilder(): ContextDocumentBuilder {
       try {
         assertContextPlan(input.plan);
         assertRehydratedShape(input.rehydrated);
-        const sections = input.plan.selectedItems.map(toSection);
+        const sections = [
+          ...input.plan.selectedItems.map(toSection),
+          ...(hasCurrentAuthority(input.rehydrated) ? authoritySections(input.rehydrated) : []),
+        ];
         const planOrder = new Map(sections.map((section, index) => [section.id, index]));
         sections.sort((left, right) => compareSections(left, right, planOrder));
         return Object.freeze({
@@ -111,7 +114,7 @@ function semanticText(item: ContextPlan["selectedItems"][number]): string {
     case "ARTIFACT_REFERENCE":
       return item.payload.preview ?? `artifact:${item.payload.artifactId}`;
     case "CHECKPOINT":
-      return stableJson(item.payload.checkpoint);
+      return `RECOVERY SUMMARY (NON-AUTHORITATIVE): ${stableJson(item.payload.checkpoint)}`;
     case "AGENT_MESSAGE":
       return agentMessageText(item.payload.message.message);
   }
@@ -194,6 +197,46 @@ function assertRehydratedShape(value: RehydratedContextState): void {
   ) {
     throw new ContextDocumentConstructionError();
   }
+}
+
+function hasCurrentAuthority(value: RehydratedContextState): boolean {
+  return (
+    value.goal.length > 0 ||
+    value.changedFiles.length > 0 ||
+    value.pendingApprovals.length > 0 ||
+    value.activeProcesses.length > 0 ||
+    value.verificationState.length > 0 ||
+    value.resourceGovernance.length > 0 ||
+    value.projectFacts.length > 0
+  );
+}
+
+function authoritySections(value: RehydratedContextState): readonly ContextDocumentSection[] {
+  return [
+    authoritySection("goal", "CORE_POLICY", value.goal),
+    authoritySection("changed-files", "RUNTIME_FACT", value.changedFiles),
+    authoritySection("pending-approvals", "RUNTIME_FACT", value.pendingApprovals),
+    authoritySection("active-processes", "RUNTIME_FACT", value.activeProcesses),
+    authoritySection("verification", "DIAGNOSTIC", value.verificationState),
+    authoritySection("resource-governance", "RUNTIME_FACT", value.resourceGovernance),
+    authoritySection("project-facts", "RUNTIME_FACT", value.projectFacts),
+  ];
+}
+
+function authoritySection(
+  field: string,
+  authority: ContextSectionAuthority,
+  value: string | readonly string[],
+): ContextDocumentSection {
+  const rendered = typeof value === "string" ? value : stableJson(value);
+  return {
+    id: `authority.current.${field}`,
+    authority,
+    sourceRef: `authority:current:${field}`,
+    cacheStability: "DYNAMIC",
+    sensitivity: "INTERNAL",
+    text: `AUTHORITATIVE CURRENT STATE — ${field}: ${rendered}`,
+  };
 }
 
 function compareStrings(left: string, right: string): number {
