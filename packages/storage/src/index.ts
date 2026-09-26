@@ -98,6 +98,9 @@ export {
 } from "./context-checkpoint-repository.js";
 export { SqliteContextCheckpointRepositoryV2 } from "./context-checkpoint-repository-v2.js";
 export {
+  SqliteContextCompactionCommitStore,
+} from "./context-compaction-commit-store.js";
+export {
   SqliteContextArtifactRepository,
   type Artifact,
   type ArtifactSensitivity,

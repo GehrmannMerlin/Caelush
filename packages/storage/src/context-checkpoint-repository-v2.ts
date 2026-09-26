@@ -58,46 +58,7 @@ export class SqliteContextCheckpointRepositoryV2 implements ContextCheckpointRep
   }
 
   async create(input: ContextCheckpointCreateInputV2): Promise<ContextCheckpointRecordV2> {
-    assertCreateInput(input);
-    const envelope: V2DataEnvelope = {
-      version: 2,
-      structuredCheckpoint: input.structuredCheckpoint,
-      sourceRange: input.sourceRange,
-      summaryPromptVersion: input.summaryPromptVersion,
-      sourceDigest: input.sourceDigest,
-      checkpointDigest: input.checkpointDigest,
-      degraded: input.degraded,
-      reason: input.reason,
-    };
-    try {
-      this.database.client
-        .prepare(
-          `INSERT INTO context_checkpoints
-           (id, run_id, previous_checkpoint_id, source_sequence_from, source_sequence_to,
-            tokens_before, tokens_after, summary_version, model_ref_json, created_at_ms,
-            data_json, read_file_refs_json, changed_file_refs_json)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          input.checkpointId,
-          input.runId,
-          input.previousCheckpointId ?? null,
-          input.sourceRange.firstSequence,
-          input.sourceRange.lastSequence,
-          input.tokensBefore,
-          input.tokensAfter,
-          2,
-          JSON.stringify(input.modelRef),
-          input.createdAt,
-          JSON.stringify(envelope),
-          JSON.stringify(input.structuredCheckpoint.readFiles),
-          JSON.stringify(input.structuredCheckpoint.changedFiles),
-        );
-    } catch (error) {
-      throw new StorageError("Unable to persist immutable Context Checkpoint V2.", {
-        cause: error,
-      });
-    }
+    writeContextCheckpointV2InTransaction(this.database.client, input);
     const saved = this.database.client.prepare(`${SELECT} WHERE id = ?`).get(input.checkpointId) as
       CheckpointRow | undefined;
     if (saved === undefined)
@@ -142,6 +103,59 @@ export class SqliteContextCheckpointRepositoryV2 implements ContextCheckpointRep
       return legacy as LegacyContextCheckpointRecordV1;
     }
     return decodeV2(row);
+  }
+}
+
+/**
+ * Writes the V2 checkpoint row using the caller's active transaction.
+ *
+ * This is deliberately a low-level storage helper: callers that need to
+ * atomically commit a checkpoint with another durable fact must use this
+ * helper rather than the repository's standalone create operation.
+ */
+export function writeContextCheckpointV2InTransaction(
+  client: CaelushDatabase["client"],
+  input: ContextCheckpointCreateInputV2,
+): void {
+  assertCreateInput(input);
+  const envelope: V2DataEnvelope = {
+    version: 2,
+    structuredCheckpoint: input.structuredCheckpoint,
+    sourceRange: input.sourceRange,
+    summaryPromptVersion: input.summaryPromptVersion,
+    sourceDigest: input.sourceDigest,
+    checkpointDigest: input.checkpointDigest,
+    degraded: input.degraded,
+    reason: input.reason,
+  };
+  try {
+    client
+      .prepare(
+        `INSERT INTO context_checkpoints
+         (id, run_id, previous_checkpoint_id, source_sequence_from, source_sequence_to,
+          tokens_before, tokens_after, summary_version, model_ref_json, created_at_ms,
+          data_json, read_file_refs_json, changed_file_refs_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        input.checkpointId,
+        input.runId,
+        input.previousCheckpointId ?? null,
+        input.sourceRange.firstSequence,
+        input.sourceRange.lastSequence,
+        input.tokensBefore,
+        input.tokensAfter,
+        2,
+        JSON.stringify(input.modelRef),
+        input.createdAt,
+        JSON.stringify(envelope),
+        JSON.stringify(input.structuredCheckpoint.readFiles),
+        JSON.stringify(input.structuredCheckpoint.changedFiles),
+      );
+  } catch (error) {
+    throw new StorageError("Unable to persist immutable Context Checkpoint V2.", {
+      cause: error,
+    });
   }
 }
 

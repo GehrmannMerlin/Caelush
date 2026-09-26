@@ -62,6 +62,8 @@ import type { ContextCheckpointRepositoryPort } from "@caelush/agent";
 import { SqliteContextArtifactStore } from "./context-artifact-store.js";
 import { SqliteContextUsageStore } from "./context-usage-store.js";
 import type { ContextArtifactStorePort, ContextUsageStorePort } from "@caelush/agent";
+import { SqliteContextCompactionCommitStore } from "./context-compaction-commit-store.js";
+import type { ContextCompactionCommitPort } from "@caelush/agent";
 import { SqliteMemoryExtractionJobRepository } from "./memory-extraction-job-repository.js";
 import type { MemoryExtractionJobStore } from "@caelush/memory";
 import {
@@ -97,6 +99,7 @@ export interface CaelushStorage {
   readonly contextArtifactsV2: ContextArtifactStorePort;
   readonly contextRuntimeStates: ContextRuntimeStateRepository;
   readonly contextUsage: ContextUsageStorePort;
+  readonly contextCompactionCommit: ContextCompactionCommitPort;
   close(): Promise<void>;
 }
 
@@ -153,6 +156,7 @@ export async function openCaelushStorage(options: {
       contextArtifactsV2: new SqliteContextArtifactStore(database),
       contextRuntimeStates: new SqliteContextRuntimeStateRepository(database),
       contextUsage: new SqliteContextUsageStore(database),
+      contextCompactionCommit: new SqliteContextCompactionCommitStore(database),
       close: async () => database.close(),
     };
   } catch (error) {
