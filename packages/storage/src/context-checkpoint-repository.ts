@@ -327,7 +327,9 @@ export class SqliteContextCheckpointRepository implements ContextCheckpointRepos
       throw new StorageError("Context checkpoint token estimate is invalid.");
     }
     const result = this.database.client
-      .prepare("UPDATE context_checkpoints SET tokens_after = ? WHERE id = ?")
+      .prepare(
+        "UPDATE context_checkpoints SET tokens_after = ? WHERE id = ? AND summary_version = 1",
+      )
       .run(tokensAfter, checkpointId);
     if (result.changes === 0) throw new StorageError("Context checkpoint is unavailable.");
   }

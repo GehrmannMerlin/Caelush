@@ -96,6 +96,7 @@ export {
   type ContextCheckpointRepository,
   type StoredStructuredCheckpoint,
 } from "./context-checkpoint-repository.js";
+export { SqliteContextCheckpointRepositoryV2 } from "./context-checkpoint-repository-v2.js";
 export {
   SqliteContextArtifactRepository,
   type Artifact,

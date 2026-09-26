@@ -57,6 +57,8 @@ import {
   SqliteContextCheckpointRepository,
   type ContextCheckpointRepository,
 } from "./context-checkpoint-repository.js";
+import { SqliteContextCheckpointRepositoryV2 } from "./context-checkpoint-repository-v2.js";
+import type { ContextCheckpointRepositoryPort } from "@caelush/agent";
 import { SqliteMemoryExtractionJobRepository } from "./memory-extraction-job-repository.js";
 import type { MemoryExtractionJobStore } from "@caelush/memory";
 import {
@@ -87,6 +89,7 @@ export interface CaelushStorage {
   readonly memory: MemoryStore;
   readonly memoryExtractionJobs: MemoryExtractionJobStore;
   readonly contextCheckpoints: ContextCheckpointRepository;
+  readonly contextCheckpointsV2: ContextCheckpointRepositoryPort;
   readonly contextArtifacts: ContextArtifactRepository;
   readonly contextRuntimeStates: ContextRuntimeStateRepository;
   close(): Promise<void>;
@@ -140,6 +143,7 @@ export async function openCaelushStorage(options: {
       memory: new SqliteMemoryRepository(database),
       memoryExtractionJobs: new SqliteMemoryExtractionJobRepository(database),
       contextCheckpoints: new SqliteContextCheckpointRepository(database),
+      contextCheckpointsV2: new SqliteContextCheckpointRepositoryV2(database),
       contextArtifacts: new SqliteContextArtifactRepository(database),
       contextRuntimeStates: new SqliteContextRuntimeStateRepository(database),
       close: async () => database.close(),
