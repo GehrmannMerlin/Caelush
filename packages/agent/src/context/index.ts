@@ -42,6 +42,8 @@ export {
   createContextMessageRange,
   createContextSummaryPromptVersion,
 } from "./compaction/context-compaction-contracts.js";
+export { createContextCompactionPlanner } from "./compaction/context-compaction-planner.js";
+export { prepareContextCompactionCandidates } from "./compaction/context-compaction-coverage.js";
 export type {
   ContextCheckpointCreateInputV2,
   ContextCheckpointId,
@@ -58,6 +60,7 @@ export type {
   ContextSummaryPromptVersion,
   LegacyContextCheckpointRecordV1,
 } from "./compaction/context-compaction-contracts.js";
+export type { ContextCompactionCandidatePreparation } from "./compaction/context-compaction-coverage.js";
 export type {
   ContextAuthorityProviderPort,
   ContextAuthoritySnapshot,
