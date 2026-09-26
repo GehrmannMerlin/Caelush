@@ -1,4 +1,5 @@
-import type { ContextCheckpointRef, ToolObservationPolicySnapshot } from "../../loop/types.js";
+import type { ToolObservationPolicySnapshot } from "../../loop/types.js";
+import type { ContextCheckpointRef } from "../compaction/context-compaction-contracts.js";
 import type { StoredAgentMessage } from "../../messages/index.js";
 import type { ContextDocument } from "../document/context-document.js";
 import type { ContextItem } from "../item/context-item.js";

@@ -1,4 +1,7 @@
 import type { AgentMessage, StoredAgentMessage } from "../../messages/index.js";
+import type { StructuredCheckpoint } from "../checkpoint/structured-checkpoint.js";
+
+export type { StructuredCheckpoint } from "../checkpoint/structured-checkpoint.js";
 
 declare const ContextItemIdBrand: unique symbol;
 declare const ContextSourceIdBrand: unique symbol;
@@ -36,13 +39,6 @@ export interface ContextItemSource {
   readonly sourceRef: string;
   readonly version: string;
 }
-
-/**
- * The checkpoint shape is intentionally opaque in 7A. Checkpoint V2 owns its
- * canonical payload and persistence in a later round; the ContextItem boundary
- * only needs to carry a JSON-safe checkpoint value.
- */
-export type StructuredCheckpoint = Readonly<Record<string, unknown>>;
 
 export type ContextItemPayload =
   | { readonly kind: "TEXT"; readonly text: string }

@@ -26,8 +26,44 @@ export type {
   ContextSensitivity,
   ContextSourceId,
   ContextItemSource,
-  StructuredCheckpoint,
 } from "./item/context-item.js";
+export {
+  assertStructuredCheckpoint,
+  createStructuredCheckpoint,
+} from "./checkpoint/structured-checkpoint.js";
+export type {
+  CheckpointSourceRange,
+  StructuredCheckpoint,
+} from "./checkpoint/structured-checkpoint.js";
+
+export {
+  CONTEXT_COMPACTION_REASONS,
+  createContextCheckpointId,
+  createContextMessageRange,
+  createContextSummaryPromptVersion,
+} from "./compaction/context-compaction-contracts.js";
+export type {
+  ContextCheckpointCreateInputV2,
+  ContextCheckpointId,
+  ContextCheckpointRecordV2,
+  ContextCheckpointRef,
+  ContextCheckpointRepositoryPort,
+  ContextCompactionPlan,
+  ContextCompactionPlanner,
+  ContextCompactionReason,
+  ContextMessageRange,
+  ContextSummarizationInput,
+  ContextSummarizationResult,
+  ContextSummarizerPort,
+  ContextSummaryPromptVersion,
+  LegacyContextCheckpointRecordV1,
+} from "./compaction/context-compaction-contracts.js";
+export type {
+  ContextAuthorityProviderPort,
+  ContextAuthoritySnapshot,
+  ContextRehydratorPort,
+  RehydratedContextState,
+} from "./rehydration/context-authority-contracts.js";
 
 export {
   assertContextFingerprint,
@@ -38,7 +74,7 @@ export type {
   ContextBuildReceipt,
   PreparedAgentContext,
 } from "./contracts/prepared-agent-context.js";
-export type { RehydratedContextState } from "./contracts/rehydrated-context-state.js";
+export type { RehydratedContextState as LegacyRehydratedContextState } from "./contracts/rehydrated-context-state.js";
 
 export {
   ContextDocumentConstructionError,

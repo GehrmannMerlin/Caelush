@@ -15,6 +15,7 @@ import type {
 import type { ModelTurnExecutionErrorCode } from "./turn/model-turn-error.js";
 import type { AgentConversationSnapshot } from "../messages/conversation/conversation-snapshot.js";
 import type { AgentMessageId } from "../messages/types/ids.js";
+import type { ContextCheckpointRef } from "../context/compaction/context-compaction-contracts.js";
 
 /**
  * The frozen Agent Kernel contracts of Architecture V2.
@@ -230,10 +231,8 @@ export interface ToolObservationPolicySnapshot {
   readonly maxObservationBatchTokens: number;
 }
 
-/** A durable context checkpoint reference. Opaque to the loop. */
-export interface ContextCheckpointRef {
-  readonly id: string;
-}
+/** A durable context checkpoint reference owned by the Context target path. */
+export type { ContextCheckpointRef } from "../context/compaction/context-compaction-contracts.js";
 
 /**
  * The Context Engine's answer for one turn.
