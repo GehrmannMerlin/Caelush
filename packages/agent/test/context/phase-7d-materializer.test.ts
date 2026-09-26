@@ -93,7 +93,17 @@ function prepared(): PreparedAgentContext {
     ],
     document,
     plan,
-    receipt: {},
+    receipt: {
+      contextFingerprint: createContextFingerprint("sha256:phase-7d-materializer"),
+      mode: "NORMAL",
+      modelRef: MODEL.ref,
+      policyFingerprint: "sha256:phase-7d-policy",
+      sources: [],
+      budget: plan.budget,
+      pressure: plan.pressure,
+      toolSchemaTokens: 0,
+      materializedTokens: 0,
+    },
     observationPolicy: {
       maxSingleObservationTokens: 100,
       maxObservationBatchTokens: 200,

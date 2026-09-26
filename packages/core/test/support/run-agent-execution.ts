@@ -173,6 +173,7 @@ function defaultReport(input: ContextPrepareInput): PreparedModelContext["report
     remainingTokens: input.model.limits.contextWindowTokens - 1,
     pressure: "NORMAL",
     compactionCount: 0,
+    requestOverheadTokens: 0,
     contributions: [],
   };
 }

@@ -105,7 +105,6 @@ export type {
   ContextArtifactStorePort,
 } from "./artifacts/context-artifact.js";
 export type {
-  ContextBuildReceipt as CanonicalContextBuildReceipt,
   ContextCompactionReceipt,
   ContextContributionReport,
   ContextSourceReceipt,

@@ -21,7 +21,7 @@ describe("Phase 7E Agent-owned contracts", () => {
   it("exposes one typed Artifact port without duplicating ContextArtifactId", () => {
     const input: ContextArtifactCreateInput = {
       artifactId: createContextArtifactId("artifact:v2:test"),
-      runId: createRunId("run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9a"),
+      runId: createRunId(),
       kind: "tool-output",
       sourceRef: "tool:exec",
       content: "bounded content",
@@ -31,7 +31,14 @@ describe("Phase 7E Agent-owned contracts", () => {
       createdAt: createTimestampMs(1),
     };
     const metadata: ContextArtifactMetadata = {
-      ...input,
+      artifactId: input.artifactId!,
+      runId: input.runId,
+      kind: input.kind,
+      sourceRef: input.sourceRef,
+      mimeType: input.mimeType,
+      sensitivity: input.sensitivity,
+      createdSequence: input.createdSequence,
+      createdAt: input.createdAt,
       contentHash: "sha256:content",
       byteLength: input.content.length,
     };
@@ -69,7 +76,7 @@ describe("Phase 7E Agent-owned contracts", () => {
         checkpointId: "checkpoint:test" as never,
         schemaVersion: 2,
         sourceRange: {
-          runId: createRunId("run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9a"),
+          runId: createRunId(),
           conversationTurnId: "cturn:test" as never,
           firstMessageId: "amsg:first" as never,
           lastMessageId: "amsg:last" as never,
@@ -105,7 +112,7 @@ describe("Phase 7E Agent-owned contracts", () => {
       materializedTokens: 20,
     };
     const usage: ContextUsageSnapshot = {
-      runId: createRunId("run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9a"),
+      runId: createRunId(),
       modelRef: { provider: "test", model: "model" },
       contextWindowTokens: 1000,
       effectiveInputLimitTokens: 885,

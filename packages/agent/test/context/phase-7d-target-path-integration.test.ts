@@ -9,6 +9,7 @@ import {
   createContextHistoryIndexer,
   createContextMaterializer,
   createContextPolicy,
+  createContextReceiptBuilder,
   createContextRehydrator,
   createContextSourceRegistryBuilder,
   createConversationContextSourceProvider,
@@ -169,6 +170,22 @@ describe("Phase 7D target path integration", () => {
       plan: contextPlan,
       rehydrated,
     });
+    const receiptBuilder = createContextReceiptBuilder({ now: () => 100 as never });
+    const auditBeforeMaterialization = receiptBuilder.build({
+      identity: sourceInput.identity,
+      turn: sourceInput.turn,
+      input: sourceInput.input,
+      mode: sourceInput.mode,
+      model: MODEL,
+      tools: [],
+      policy,
+      sourceResults,
+      plan: contextPlan,
+      conversationMessages: conversation.turns.flatMap(
+        (conversationTurn) => conversationTurn.messages,
+      ),
+      materializedMessages: [],
+    });
     const messages = await createContextMaterializer({
       projectors: createStandardAgentMessageProjectorRegistry(),
       tokenEstimator: createUtf8HeuristicTokenEstimator(),
@@ -179,17 +196,34 @@ describe("Phase 7D target path integration", () => {
         ),
         document,
         plan: contextPlan,
-        receipt: {},
+        receipt: auditBeforeMaterialization.receipt,
         observationPolicy: policy.observationPolicy,
-        contextFingerprint: "sha256:integration" as never,
+        contextFingerprint: auditBeforeMaterialization.contextFingerprint,
       },
       model: MODEL,
       signal: new AbortController().signal,
+    });
+    const audit = receiptBuilder.build({
+      identity: sourceInput.identity,
+      turn: sourceInput.turn,
+      input: sourceInput.input,
+      mode: sourceInput.mode,
+      model: MODEL,
+      tools: [],
+      policy,
+      sourceResults,
+      plan: contextPlan,
+      conversationMessages: conversation.turns.flatMap(
+        (conversationTurn) => conversationTurn.messages,
+      ),
+      materializedMessages: messages,
     });
 
     expect(sourceResults).toHaveLength(1);
     expect(document.sections.length).toBeGreaterThan(0);
     expect(messages[0]).toMatchObject({ role: "system" });
+    expect(audit.receipt.contextFingerprint).toBe(audit.contextFingerprint);
+    expect(audit.receipt.materializedTokens).toBeGreaterThan(0);
     expect(
       messages.some((message) => message.role === "user" && message.content === "current request"),
     ).toBe(true);

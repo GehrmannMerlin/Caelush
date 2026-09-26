@@ -146,7 +146,6 @@ export type {
   ContextArtifactCreateInput,
   ContextArtifactMetadata,
   ContextArtifactStorePort,
-  ContextBuildReceipt as CanonicalContextBuildReceipt,
   ContextCompactionCommitPort,
   ContextCompactionReceipt,
   ContextContributionReport,

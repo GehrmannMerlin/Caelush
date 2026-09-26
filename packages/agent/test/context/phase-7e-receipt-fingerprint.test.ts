@@ -10,7 +10,7 @@ import {
   type ContextSourceResult,
 } from "@caelush/agent";
 
-const RUN_ID = createRunId("run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9a");
+const RUN_ID = createRunId();
 const MODEL: ModelDescriptor = {
   ref: { provider: "test", model: "phase-7e" },
   api: "test-api",
@@ -29,11 +29,18 @@ const MODEL: ModelDescriptor = {
   source: "CONFIGURATION",
 };
 
-function buildFacts(sourceVersion = "v1", tools = [{ name: "read", description: "Read", inputSchema: {} }]) {
+function buildFacts(
+  sourceVersion = "v1",
+  tools = [{ name: "read", description: "Read", inputSchema: {} }],
+) {
   const item = createContextItem({
     id: "item:secret" as never,
     type: "coding.relevant_file",
-    source: { providerId: "coding.relevant-files" as never, sourceRef: "src/app.ts", version: sourceVersion },
+    source: {
+      providerId: "coding.relevant-files" as never,
+      sourceRef: "src/app.ts",
+      version: sourceVersion,
+    },
     scope: "RUN",
     retention: "RECENT",
     priorityClass: "NORMAL",
@@ -51,7 +58,9 @@ function buildFacts(sourceVersion = "v1", tools = [{ name: "read", description: 
   });
   const plan: ContextPlan = {
     selectedItems: [item],
-    decisions: [{ itemId: item.id, disposition: "SELECTED", reason: "PRIORITY", tokenEstimate: 10 }],
+    decisions: [
+      { itemId: item.id, disposition: "SELECTED", reason: "PRIORITY", tokenEstimate: 10 },
+    ],
     budget: {
       contextWindowTokens: 1000,
       outputReserveTokens: 100,
@@ -83,7 +92,7 @@ function buildFacts(sourceVersion = "v1", tools = [{ name: "read", description: 
     sourceResults,
     plan,
     conversationMessages: [],
-    materializedMessages: [{ role: "system", content: "bounded" }],
+    materializedMessages: [{ role: "system", content: "bounded" } as const],
   };
 }
 
@@ -109,7 +118,9 @@ describe("Phase 7E receipt and fingerprint builder", () => {
   it("is stable for irrelevant metadata but changes for source and tool schema drift", () => {
     const first = createContextReceiptBuilder({ now: () => 1234 as never }).build(buildFacts());
     const same = createContextReceiptBuilder({ now: () => 9999 as never }).build(buildFacts());
-    const sourceDrift = createContextReceiptBuilder({ now: () => 1234 as never }).build(buildFacts("v2"));
+    const sourceDrift = createContextReceiptBuilder({ now: () => 1234 as never }).build(
+      buildFacts("v2"),
+    );
     const toolDrift = createContextReceiptBuilder({ now: () => 1234 as never }).build(
       buildFacts("v1", [{ name: "write", description: "Write", inputSchema: { type: "object" } }]),
     );

@@ -108,6 +108,7 @@ const REPORT: ContextBuildReport = {
   remainingTokens: 891,
   pressure: "NORMAL",
   compactionCount: 0,
+  requestOverheadTokens: 0,
   contributions: [
     { providerId: "turn", tokenEstimate: 9, itemCount: 1, droppedItems: 0, truncatedItems: 0 },
   ],

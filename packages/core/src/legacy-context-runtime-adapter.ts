@@ -33,6 +33,8 @@ import type {
 } from "@caelush/agent";
 import {
   createConversationSelector,
+  createContextRequestOverheadEstimator,
+  createUtf8HeuristicTokenEstimator,
   createStandardAgentMessageProjectorRegistry,
   projectStoredMessages,
   STRUCTURAL_TOKEN_ESTIMATOR,
@@ -203,7 +205,14 @@ export function createLegacyContextRuntimeAdapter(
         ...(input.mode === "FORCED_RECOVERY" ? { forceRecovery: true } : {}),
       });
 
-      return toPreparedModelContext(built, runtime, input.identity.runId, input.mode);
+      return toPreparedModelContext(
+        built,
+        runtime,
+        input.identity.runId,
+        input.mode,
+        input.model,
+        input.tools,
+      );
     },
   };
 }
@@ -952,12 +961,17 @@ function toPreparedModelContext(
   runtime: AgentContextRuntimePort,
   runId: string,
   mode: ContextPrepareMode,
+  model: ModelDescriptor,
+  tools: readonly import("@caelush/ai").AIToolSpec[],
 ): PreparedModelContext {
   const usage = runtime.getContextUsage?.(runId);
   const policy = runtime.getContextPolicy?.(runId);
+  const requestOverheadTokens = createContextRequestOverheadEstimator({
+    tokenEstimator: createUtf8HeuristicTokenEstimator(),
+  }).estimate({ model, tools }).totalTokens;
   return {
     messages: built.messages,
-    report: toContextBuildReport(built, usage, mode),
+    report: toContextBuildReport(built, usage, mode, requestOverheadTokens),
     observationPolicy: toObservationPolicy(policy),
   };
 }
@@ -1010,6 +1024,7 @@ function toContextBuildReport(
   built: BuiltModelContext,
   usage: ContextUsageProjection | undefined,
   mode: ContextPrepareMode,
+  requestOverheadTokens: number,
 ): ContextBuildReport {
   const report = legacyReport(built);
   return {
@@ -1019,6 +1034,7 @@ function toContextBuildReport(
     remainingTokens: usage?.remainingTokens ?? report.remainingTokens ?? 0,
     pressure: usage?.pressureState ?? derivePressure(built, mode),
     compactionCount: usage?.compactionCount ?? deriveCompactionCount(built, mode),
+    requestOverheadTokens,
     contributions: toContributions(built),
   };
 }

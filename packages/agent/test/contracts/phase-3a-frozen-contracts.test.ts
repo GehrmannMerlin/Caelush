@@ -124,6 +124,7 @@ interface FrozenContextBuildReport {
   readonly remainingTokens: number;
   readonly pressure: "NORMAL" | "PROACTIVE" | "EMERGENCY";
   readonly compactionCount: number;
+  readonly requestOverheadTokens: number;
   readonly contributions: readonly FrozenContextBuildContribution[];
 }
 
@@ -304,6 +305,7 @@ type BuildReportKeys = Expect<
     | "remainingTokens"
     | "pressure"
     | "compactionCount"
+    | "requestOverheadTokens"
     | "contributions"
   >
 >;

@@ -149,6 +149,7 @@ function productionLoop(
                   remainingTokens: 99,
                   pressure: "NORMAL" as const,
                   compactionCount: 0,
+                  requestOverheadTokens: 0,
                   contributions: [],
                 },
                 observationPolicy: {
@@ -403,6 +404,7 @@ describe("RunController verification repair route", () => {
                   remainingTokens: 99,
                   pressure: "NORMAL" as const,
                   compactionCount: 0,
+                  requestOverheadTokens: 0,
                   contributions: [],
                 },
                 observationPolicy: {
