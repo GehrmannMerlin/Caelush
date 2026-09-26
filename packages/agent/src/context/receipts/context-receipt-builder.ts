@@ -8,7 +8,6 @@ import type {
   ContextBuildContribution,
   ContextBuildReport,
 } from "../../loop/types.js";
-import type { AgentConversationSnapshot } from "../../messages/conversation/conversation-snapshot.js";
 import type { StoredAgentMessage } from "../../messages/persistence/record.js";
 import type { ContextPrepareMode } from "../contracts/context-engine.js";
 import {
@@ -39,7 +38,6 @@ export interface ContextReceiptBuilderInput {
   readonly policy: ContextPolicy;
   readonly sourceResults: readonly ContextSourceResult[];
   readonly plan: ContextPlan;
-  readonly conversation?: AgentConversationSnapshot;
   readonly conversationMessages: readonly StoredAgentMessage[];
   readonly materializedMessages: readonly AIMessage[];
   readonly checkpoint?: import("../compaction/context-compaction-contracts.js").ContextCheckpointRef;
@@ -56,7 +54,7 @@ export interface ContextReceiptBuilderResult {
 }
 
 export interface ContextReceiptBuilderOptions {
-  readonly now?: () => TimestampMs;
+  readonly now: () => TimestampMs;
   readonly tokenEstimator?: ContextTokenEstimatorPort;
 }
 
@@ -65,10 +63,10 @@ export interface ContextReceiptBuilder {
 }
 
 export function createContextReceiptBuilder(
-  options: ContextReceiptBuilderOptions = {},
+  options: ContextReceiptBuilderOptions,
 ): ContextReceiptBuilder {
   const tokenEstimator = options.tokenEstimator ?? createUtf8HeuristicTokenEstimator();
-  const now = options.now ?? (() => Date.now() as TimestampMs);
+  const now = options.now;
   return Object.freeze({
     build(input: ContextReceiptBuilderInput): ContextReceiptBuilderResult {
       assertBuildFacts(input);
