@@ -364,6 +364,11 @@ describe("Phase 5A guard — package boundaries (freeze §150, §151)", () => {
       "packages/agent/src/context/history/semantic-history-unit.ts",
       "packages/agent/src/context/planner/context-planner.ts",
       "packages/agent/src/run/run-execution-driver.ts",
+      // Phase 7D extends the same pure Agent Context target path with deterministic compaction
+      // contracts and the provider-neutral materializer. These are still Agent-owned contracts,
+      // not a new consumer-owned Message Domain implementation.
+      "packages/agent/src/context/compaction/context-compaction-contracts.ts",
+      "packages/agent/src/context/materializer/context-materializer.ts",
     ];
     const consumers: string[] = [];
     for (const file of await activeSourceFiles(["packages", "apps"])) {
@@ -680,14 +685,18 @@ describe("Phase 5A guard — retained foundations after the Phase 5D cutover", (
 
   it("keeps the final Message V2 schema and record store as the only storage path", async () => {
     const schema = code(await read("packages/storage/src/schema.ts"));
-    const store = code(await read("packages/storage/src/messages/sqlite-agent-message-record-store.ts"));
-    expect(schema).toContain("messageId: text(\"message_id\").primaryKey()");
+    const store = code(
+      await read("packages/storage/src/messages/sqlite-agent-message-record-store.ts"),
+    );
+    expect(schema).toContain('messageId: text("message_id").primaryKey()');
     expect(schema).toContain("modelProjectionVersion");
-    expect(schema).toContain("dataJson: text(\"data_json\").notNull()");
+    expect(schema).toContain('dataJson: text("data_json").notNull()');
     expect(schema).not.toContain("v2_data_json");
     expect(store).toContain("appendAgentMessageRecordsInTransaction");
     expect(store).not.toContain("conversation-repository");
-    expect(await exists("packages/storage/src/repositories/conversation-repository.ts")).toBe(false);
+    expect(await exists("packages/storage/src/repositories/conversation-repository.ts")).toBe(
+      false,
+    );
     expect(await exists("packages/storage/src/messages/legacy/dual-reader.ts")).toBe(false);
   });
 
