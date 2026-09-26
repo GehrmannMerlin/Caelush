@@ -399,7 +399,6 @@ describe("Phase 4F guard — no reverse legacy dependency", () => {
       "security",
       "storage",
       "verification",
-      "context",
       "runtime",
       "protocol",
     ]) {
@@ -548,9 +547,12 @@ describe("Phase 4F guard — Runtime isolation", () => {
     const unique = [...new Set(holders)].sort();
     expect(unique.length).toBeGreaterThan(0);
     for (const holder of unique) {
-      expect(holder, holder).toContain(
-        "packages/coding-agent/src/tools/operations/runtime-adapters/",
-      );
+      expect(
+        holder.startsWith("packages/coding-agent/src/tools/operations/runtime-adapters/") ||
+          holder === "packages/coding-agent/src/context/local-ports.ts" ||
+          holder === "packages/coding-agent/src/context/project-intelligence.ts",
+        holder,
+      ).toBe(true);
     }
   });
 });
@@ -568,9 +570,13 @@ describe("Phase 4F guard — prompt, effects and cancellation boundaries", () =>
         expect(text, `${file} / ${dead}`).not.toContain(dead);
       }
     }
-    // The one production delivery path is the Context provider.
+    // The one production delivery path is the V2 Context Engine, which registers Coding project
+    // instruction guidance as a bounded source rather than widening AIToolSpec.description.
     const composition = code(await read("apps/daemon/src/daemon-composition.ts"));
-    expect(composition).toContain("createToolPromptContextProvider()");
+    expect(composition).toContain("createDaemonV2ContextEngine(");
+    expect(code(await read("apps/daemon/src/context/v2-context-composition.ts"))).toContain(
+      "createProjectInstructionContextSourceProvider(",
+    );
   });
 
   it("keeps the Agent layer unable to interpret a Coding Tool effect", async () => {

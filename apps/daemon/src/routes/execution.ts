@@ -6,6 +6,7 @@ import {
   ContextUsageResponseSchema,
   type ApprovalResolutionRequest,
   type RunId,
+  type ContextUsageProjection,
 } from "@caelush/protocol";
 import type { FastifyInstance } from "fastify";
 import { StorageNotFoundError, type RunRepository } from "@caelush/storage";
@@ -25,9 +26,7 @@ export interface DaemonExecutionSurface {
     listPendingByRun(runId: RunId): Promise<readonly import("@caelush/protocol").ApprovalRequest[]>;
   };
   readonly contextUsage?: {
-    getContextUsage(
-      runId: RunId,
-    ): Promise<import("@caelush/context").ContextUsageProjection | undefined>;
+    getContextUsage(runId: RunId): Promise<ContextUsageProjection | undefined>;
   };
 }
 

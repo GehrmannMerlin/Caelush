@@ -14,7 +14,7 @@ import {
   type ToolFeedbackContributionApplier,
   type RunMessageAuthority,
 } from "@caelush/core";
-import { createContextUsageProjection, createLocalProjectInspector } from "@caelush/context";
+import { createLocalProjectInspector } from "@caelush/coding-agent";
 import { createAIError, createAISubsystem } from "@caelush/ai";
 import {
   createDaemonApiAdapters,
@@ -77,6 +77,7 @@ import {
   type DefaultRunConfiguration,
   type RunId,
   type TimestampMs,
+  type ContextUsageProjection,
 } from "@caelush/protocol";
 import {
   LocalRuntime,
@@ -213,14 +214,6 @@ export const DEFAULT_CORE_AGENT_POLICY = [
 
 export const DEFAULT_BASE_SYSTEM_PROMPT = DEFAULT_CORE_AGENT_POLICY;
 
-const DEFAULT_CONTEXT_LIMITS = Object.freeze({
-  maxInputTokens: 32_000,
-  safetyMarginTokens: 512,
-  maxConversationTokens: 12_000,
-  maxRelevantFileTokens: 12_000,
-  minRelevantFileTokens: 128,
-});
-
 export const DEFAULT_ADAPTIVE_RESOURCE_POLICY = Object.freeze({
   mode: "ADAPTIVE",
   operationalLease: Object.freeze({ maxAgentTurns: 24, maxToolOperations: 64 }),
@@ -338,19 +331,8 @@ export interface DaemonComposition {
   readonly toolTurn: ToolTurnPipeline;
   readonly messages: RunMessageAuthority;
   readonly transcriptProjectors: import("@caelush/agent").AgentMessageTranscriptProjectorRegistry;
-  /** Narrow compatibility view retained for Core's pre-V2 Tool observation fallback. */
-  readonly contextRuntime: {
-    readonly getContextPolicy?: (runId: string) =>
-      | {
-          readonly maxSingleObservationTokens: number;
-          readonly maxObservationBatchTokens: number;
-        }
-      | undefined;
-  };
   readonly contextUsage: {
-    getContextUsage(
-      runId: string,
-    ): Promise<import("@caelush/context").ContextUsageProjection | undefined>;
+    getContextUsage(runId: string): Promise<ContextUsageProjection | undefined>;
   };
   readonly controller: RunController;
   readonly supervisor: RunExecutionSupervisor;
@@ -492,8 +474,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     },
   };
 
-  const inspector = createLocalProjectInspector();
-  const contextRuntime = Object.freeze({});
+  const inspector = createLocalProjectInspector(runtime);
   const messageProjectors = createAgentMessageProjectorRegistry({
     projectors: [
       ...STANDARD_AGENT_MESSAGE_PROJECTORS,
@@ -863,9 +844,9 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
   };
   const toolTurn = {
     batches: toolBatch,
-    // The one place the Agent package's model feedback semantics and the Context package's token
-    // projection algorithm are joined. Architecture V2 forbids `agent -> context`, so the adapter lives
-    // at the composition root that legitimately knows both.
+    // The one place the Agent package's model feedback semantics and bounded observation projection are
+    // joined. The composition root wires the canonical Agent Tool observation implementation into the
+    // model-facing feedback pipeline.
     feedback: createModelToolFeedbackProjector({
       projection: toContextObservationProjection(),
     }),
@@ -881,7 +862,6 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
   const defaultResolver = {
     resolve: async () => ({
       baseSystemPrompt: DEFAULT_BASE_SYSTEM_PROMPT,
-      contextLimits: DEFAULT_CONTEXT_LIMITS,
     }),
   } satisfies RunExecutionConfigResolver;
   const baseResolver: RunExecutionConfigResolver = options.configResolver ?? defaultResolver;
@@ -894,7 +874,6 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       return createRunAgentExecutionContext({
         config: {
           baseSystemPrompt: config.baseSystemPrompt,
-          contextLimits: config.contextLimits,
           tools: activeToolRegistry.modelSpecs(),
           ...(config.modelSettings === undefined ? {} : { modelSettings: config.modelSettings }),
           ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
@@ -903,9 +882,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
         models: ai.models,
         modelTurnExecutor,
         stepIds: { create: createStepId },
-        // Production Run turns use the Agent-owned V2 Context Engine. The legacy Context package
-        // remains available through the read-only compatibility facade below, but it is not an
-        // active prompt, selection, compaction, or persistence authority.
+        // Production Run turns use the Agent-owned V2 Context Engine.
         createContextEngine: (input) =>
           createDaemonV2ContextEngine({
             input,
@@ -925,7 +902,6 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
   const verificationGit = createRunBoundVerificationGit(runtime);
   const controller = new RunController({
     agentExecution,
-    contextRuntime,
     executionStore: options.storage.execution,
     completionStore: options.storage.execution,
     events: eventNotifier,
@@ -1031,7 +1007,6 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     toolTurn,
     messages,
     transcriptProjectors,
-    contextRuntime,
     contextUsage: {
       getContextUsage: async (runId) => {
         const usage = await options.storage.contextUsage.getByRun(runId as RunId);
@@ -1076,15 +1051,21 @@ function projectV2ContextUsage(input: ContextUsageSnapshot) {
     sourceTokens("coding.runtime-facts") +
     sourceTokens("coding.project-metadata") +
     sourceTokens("coding.git-state");
-  return createContextUsageProjection({
+  const effectiveInputLimitTokens = input.effectiveInputLimitTokens;
+  const estimatedInputTokens = input.estimatedInputTokens;
+  const usedRatio = Math.min(1, Math.max(0, estimatedInputTokens / effectiveInputLimitTokens));
+  const remainingTokens = Math.max(0, effectiveInputLimitTokens - estimatedInputTokens);
+  return {
     runId: input.runId,
     providerId: input.modelRef.provider,
     modelId: input.modelRef.model,
     profileSource: "CONFIGURATION",
     contextWindowTokens: input.contextWindowTokens,
     rawContextWindowTokens: input.contextWindowTokens,
-    effectiveInputLimitTokens: input.effectiveInputLimitTokens,
-    estimatedInputTokens: input.estimatedInputTokens,
+    effectiveInputLimitTokens,
+    estimatedInputTokens,
+    usedRatio,
+    remainingTokens,
     pressureState: input.pressureState,
     compactionCount: input.compactionCount,
     ...(input.lastCompactionAt === undefined ? {} : { lastCompactionAt: input.lastCompactionAt }),
@@ -1105,9 +1086,9 @@ function projectV2ContextUsage(input: ContextUsageSnapshot) {
     },
     updatedAt: input.updatedAt,
     lastBuildAt: input.updatedAt,
-    lastRecoveryStages: [],
+    lastRecoveryStages: [...(input.lastRecoveryStages ?? [])],
     lastBuildStatus: input.lastBuildStatus,
-  });
+  } satisfies ContextUsageProjection;
 }
 
 /**
@@ -1201,7 +1182,7 @@ function createActiveCodingCatalog(
 }
 
 /**
- * The Coding Tool prompt provider, as the legacy Context build reads it.
+ * The Coding Tool prompt provider, as the V2 Context Engine reads it.
  *
  * ```text
  * the provider's ContextItem   { id, priorityClass, content, tokenEstimate, whyLoaded }
@@ -1210,7 +1191,7 @@ function createActiveCodingCatalog(
  * ```
  *
  * Two packages declare a `ContextItem`: `@caelush/agent` states the minimal text item a Context
- * *provider* contributes, and `@caelush/context` states the typed item its budgeted build stores. The
+ * *provider* contributes, and `@caelush/agent` owns the typed item its budgeted build stores. The
  * composition root is the only layer that knows both, so the projection is made here.
  *
  * `type` is `TOOL_GUIDANCE` rather than `MEMORY`, because the renderer labels the block from it and

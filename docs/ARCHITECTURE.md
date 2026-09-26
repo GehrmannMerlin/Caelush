@@ -10,7 +10,7 @@ tests win in that order.
 
 Caelush is a local-first, durable coding-agent runtime. A user-facing host
 submits a Session or Run request to the local daemon. The daemon composes one
-shared Agent Kernel with the AI, Context, Coding Agent, Runtime, Security,
+shared Agent Kernel with the AI, V2 Context Engine, Coding Agent, Runtime, Security,
 Storage, Events, and Verification packages. The Kernel owns execution
 semantics; CLI and Web render projections of the resulting Protocol contracts
 and the migration-compatible AgentEvent/RunEvent stream.
@@ -22,7 +22,7 @@ CLI / Web / future hosts
 Local daemon (the only production composition root)
           │
           ├── @caelush/core + @caelush/agent
-          ├── @caelush/ai + @caelush/context
+          ├── @caelush/ai + Agent V2 Context Engine
           ├── @caelush/coding-agent + @caelush/runtime
           ├── @caelush/security
           ├── @caelush/storage
@@ -50,22 +50,21 @@ durable Run and AgentEvent contracts.
 
 ## Package responsibilities
 
-| Package                  | Current authority                                                                                                                                                                                                                                                                                                              |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `@caelush/protocol`      | JSON-safe IDs, entities, schemas, API DTOs, Run/Tool/Approval/Verification contracts, and the canonical JSON-safe RunEvent domain, version-aware registry, and static event catalog. It is a low-level contract package.                                                                                                       |
-| `@caelush/ai`            | Provider-independent model domain, model descriptors, AI messages/tools, gateway lifecycle, adapters, stream validation, usage, and secret-safe AI errors. It does not know Runs or local Tools.                                                                                                                               |
-| `@caelush/agent`         | General Agent Kernel contracts and implementation: AgentLoop, decisions, durable message domain, Tool registry/batch pipeline, Run execution ports, Agent-owned DurableRunEventDraft/RunEventNotifierPort contracts, continuations, and recovery-facing data structures. It does not know concrete filesystem Tools or SQLite. |
-| `@caelush/core`          | RunController and canonical lifecycle coordination: state transitions, durable Run/State/Step/Continuation commits, model-turn and Tool-turn boundaries, resource governance, and completion authority.                                                                                                                        |
-| `@caelush/context`       | Workspace/project discovery, instructions, relevant-file planning, memory/context runtime coordination, and bounded model-input construction. It does not own provider invocation.                                                                                                                                             |
-| `@caelush/coding-agent`  | Coding composition layer and the single source of truth for built-in coding Tool definitions, operations adapters, Tool metadata, effects, output bounds, and coding prompt guidance.                                                                                                                                          |
-| `@caelush/runtime`       | Replaceable execution substrate. The current `LocalRuntime` owns workspace containment, bounded filesystem access, verified patching, shell/process sessions, and read-only Git operations.                                                                                                                                    |
-| `@caelush/security`      | Permission/capability policy, Tool execution gate, approval identity, sensitive-path and command policy, secret detection/redaction, and safe Tool-result presentation. It does not execute commands.                                                                                                                          |
-| `@caelush/storage`       | SQLite opening/migrations and repositories for Protocol entities, Run execution snapshots, durable messages, Tool lifecycle, Verification, budgets, and durable events; exposes only a read-only durable reader with `throughSequence`. Database rows do not become a second public state model.                               |
-| `@caelush/verification`  | Verification planning, bounded evidence, project checks, change/task review, repair workflow, freshness/integrity checks, and Verification results. It can provide evidence but cannot complete a Run.                                                                                                                         |
-| `@caelush/client`        | Browser/host-safe HTTP and SSE transport plus client-side projections.                                                                                                                                                                                                                                                         |
-| `@caelush/memory`        | Provider-independent memory records, sensitivity validation, and memory-store contracts used by Context composition.                                                                                                                                                                                                           |
-| `@caelush/shared`        | Small dependency-free shared boundary utilities such as path containment and project exclusions.                                                                                                                                                                                                                               |
-| `@caelush/observability` | Reserved observability package boundary; it currently exports no production API.                                                                                                                                                                                                                                               |
+| Package                  | Current authority                                                                                                                                                                                                                                                                                                                              |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@caelush/protocol`      | JSON-safe IDs, entities, schemas, API DTOs, Run/Tool/Approval/Verification contracts, and the canonical JSON-safe RunEvent domain, version-aware registry, and static event catalog. It is a low-level contract package.                                                                                                                       |
+| `@caelush/ai`            | Provider-independent model domain, model descriptors, AI messages/tools, gateway lifecycle, adapters, stream validation, usage, and secret-safe AI errors. It does not know Runs or local Tools.                                                                                                                                               |
+| `@caelush/agent`         | General Agent Kernel and Agent V2 Context Engine: AgentLoop, decisions, durable message domain, Tool registry/batch pipeline, bounded Context planning/materialization, checkpoints, compaction, receipts, usage, V1 checkpoint compatibility, and generic Context contributions. It does not collect host facts or depend on Runtime/Storage. |
+| `@caelush/core`          | RunController and canonical lifecycle coordination: state transitions, durable Run/State/Step/Continuation commits, model-turn and Tool-turn boundaries, resource governance, and completion authority.                                                                                                                                        |
+| `@caelush/coding-agent`  | Coding composition layer and the single source of truth for built-in coding Tool definitions, operations adapters, Tool metadata, effects, output bounds, coding prompt guidance, Runtime-backed Context ports, and Project Intelligence.                                                                                                      |
+| `@caelush/runtime`       | Replaceable execution substrate. The current `LocalRuntime` owns workspace containment, bounded filesystem access, verified patching, shell/process sessions, and read-only Git operations.                                                                                                                                                    |
+| `@caelush/security`      | Permission/capability policy, Tool execution gate, approval identity, sensitive-path and command policy, secret detection/redaction, and safe Tool-result presentation. It does not execute commands.                                                                                                                                          |
+| `@caelush/storage`       | SQLite opening/migrations and repositories for Protocol entities, Run execution snapshots, durable messages, Tool lifecycle, Verification, budgets, and durable events; exposes only a read-only durable reader with `throughSequence`. Database rows do not become a second public state model.                                               |
+| `@caelush/verification`  | Verification planning, bounded evidence, project checks, change/task review, repair workflow, freshness/integrity checks, and Verification results. It can provide evidence but cannot complete a Run.                                                                                                                                         |
+| `@caelush/client`        | Browser/host-safe HTTP and SSE transport plus client-side projections.                                                                                                                                                                                                                                                                         |
+| `@caelush/memory`        | Provider-independent memory records, sensitivity validation, and memory-store contracts used by daemon Context composition.                                                                                                                                                                                                                    |
+| `@caelush/shared`        | Small dependency-free shared boundary utilities such as path containment and project exclusions.                                                                                                                                                                                                                                               |
+| `@caelush/observability` | Reserved observability package boundary; it currently exports no production API.                                                                                                                                                                                                                                                               |
 
 ## Dependency direction
 
@@ -84,8 +83,7 @@ apps/daemon  ──▶ all production composition packages
 
 agent        ──▶ ai, protocol
 coding-agent ──▶ agent, ai, runtime, protocol
-context      ──▶ ai, protocol, security, shared
-core         ──▶ agent, ai, context, protocol, verification
+core         ──▶ agent, ai, protocol, verification
 runtime      ──▶ protocol, shared
 security     ──▶ agent, coding-agent, protocol, runtime
 storage      ──▶ agent, core, events, memory, protocol, runtime, verification
@@ -314,7 +312,7 @@ apps/daemon composition root
   → @caelush/agent ControlHookRunner
   → bounded ContextContributionPipeline
   → @caelush/core adapter
-  → @caelush/context projection and budget assembly
+  → Agent V2 Context Engine projection and budget assembly
   → AI gateway model turn
 ```
 
@@ -331,10 +329,10 @@ provider contract.
 (`EXECUTE` or `RECOVER`) into the Hook context, maps validated Agent
 contributions into Context items, applies Security redaction and host-path
 rejection, and persists `SNAPSHOT` contributions as integrity-checked Context
-artifact envelopes. `@caelush/context` renders contributions in a separate
-`<context_contributions>` system block and includes that block in the existing
-budget calculation; it does not turn them into durable conversation history or
-Tool messages. Token cost is measured after redaction and the Hook-provided
+artifact envelopes. The Agent V2 Context Engine renders contributions in a
+separate `<context_contributions>` system block and includes that block in the
+existing budget calculation; it does not turn them into durable conversation
+history or Tool messages. Token cost is measured after redaction and the Hook-provided
 token hint is not authoritative.
 
 Recovery reuses a validated snapshot artifact and fails closed when a required
@@ -465,7 +463,7 @@ projector fallback. Historical Tool replay uses the stored projected content
 and projection version, never a fresh raw observation projection. The selector
 reports selected/dropped IDs, an AI-projection token estimate, and
 `requiresCompaction`; it does not rewrite, summarize, or delete durable
-records. Context owns materialization and has no Storage dependency.
+records. The Agent V2 Context Engine owns materialization and has no Storage dependency.
 
 The Phase 5F final cutover is complete: historical rows are deterministically
 backfilled and validated before an atomic physical rebuild removes the

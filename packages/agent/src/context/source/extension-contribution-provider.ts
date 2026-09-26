@@ -12,6 +12,11 @@ import {
 } from "./generic-provider-helpers.js";
 
 const PROVIDER_VERSION = "extension-contributions-v1";
+const MAX_ITEM_BYTES = 16 * 1024;
+const MAX_SOURCE_BYTES = 512;
+const MAX_WHY_LOADED_BYTES = 2 * 1024;
+const HOST_PATH =
+  /(?:[A-Za-z]:[\\/]{1,2}|\\\\[^\s\\/]+[\\/]|\/(?:Users|home|root|var|etc|opt|tmp)\/)/;
 
 export interface ContextContributionLoader {
   load(input: {
@@ -40,29 +45,34 @@ export function createExtensionContributionContextSourceProvider(
           signal: input.signal,
         })) ?? [];
       const items = contributions.flatMap((contribution) =>
-        contribution.items.map((contributionItem) =>
-          createContextSourceItem({
-            id: createContextItemId(
-              `agent.extension-contributions:${contribution.id}:${contributionItem.id}`,
-            ),
+        contribution.items.map((contributionItem) => {
+          const source = boundedSafeText(contribution.source, MAX_SOURCE_BYTES);
+          const contributionId = boundedSafeText(contribution.id, MAX_SOURCE_BYTES);
+          const itemId = boundedSafeText(contributionItem.id, MAX_SOURCE_BYTES);
+          const content = boundedSafeText(contributionItem.content, MAX_ITEM_BYTES);
+          const whyLoaded = boundedSafeText(
+            contributionItem.whyLoaded ?? `validated extension contribution from ${source}`,
+            MAX_WHY_LOADED_BYTES,
+          );
+          return createContextSourceItem({
+            id: createContextItemId(`agent.extension-contributions:${contributionId}:${itemId}`),
             type: "agent.extension-contribution",
             source: {
               providerId: AGENT_CONTEXT_SOURCE_IDS.extensionContributions,
-              sourceRef: `${contribution.source}/${contribution.id}/${contributionItem.id}`,
+              sourceRef: `${source}/${contributionId}/${itemId}`,
               version: PROVIDER_VERSION,
             },
             scope: "TURN",
             retention: "EPHEMERAL",
             priorityClass: mapLegacyPriority(contributionItem.priorityClass),
-            tokenEstimate:
-              contributionItem.tokenEstimate ?? estimateContextTokens(contributionItem.content),
+            tokenEstimate: estimateContextTokens(content),
             cacheStability: "DYNAMIC",
             freshness: "CURRENT",
             sensitivity: "INTERNAL",
-            whyLoaded: contributionItem.whyLoaded ?? "validated extension contribution",
-            payload: { kind: "TEXT", text: contributionItem.content },
-          }),
-        ),
+            whyLoaded,
+            payload: { kind: "TEXT", text: content },
+          });
+        }),
       );
       return createSourceResult(
         AGENT_CONTEXT_SOURCE_IDS.extensionContributions,
@@ -71,4 +81,24 @@ export function createExtensionContributionContextSourceProvider(
       );
     },
   });
+}
+
+function boundedSafeText(value: string, maxBytes: number): string {
+  const safe = safeContributionText(value);
+  if (new TextEncoder().encode(safe).byteLength <= maxBytes) return safe;
+  let output = "";
+  for (const character of safe) {
+    const candidate = output + character;
+    if (new TextEncoder().encode(candidate).byteLength > maxBytes) break;
+    output = candidate;
+  }
+  return output;
+}
+
+function safeContributionText(value: string): string {
+  const redacted = value
+    .replace(/\bBearer\s+\S+/gi, "Bearer [REDACTED]")
+    .replace(/\b(?:sk|rk)-[A-Za-z0-9_-]+/g, "[REDACTED_TOKEN]")
+    .replace(/\b(api[_-]?key|token|secret|password|authorization)\s*[:=]\s*\S+/gi, "$1=[REDACTED]");
+  return HOST_PATH.test(redacted) ? "[REDACTED:HOST_PATH]" : redacted;
 }

@@ -19,8 +19,6 @@ describe("Core Phase 6B public API", () => {
       "AgentModelOutputError",
       "AgentToolResultBatchError",
       "AgentKernelStateError",
-      "AgentLoopInputError",
-      "AgentLoop",
       "classifyAgentDecision",
       "normalizeToolResultBatch",
       "toAIToolResultMessages",
@@ -45,8 +43,8 @@ describe("Core Phase 6B public API", () => {
     }
   });
 
-  it("exposes the resumable AgentLoop without exposing a duplicate runner", () => {
-    expect((core as Record<string, unknown>).AgentLoop).toBeDefined();
+  it("does not expose the retired Core AgentLoop facade", () => {
+    expect((core as Record<string, unknown>).AgentLoop).toBeUndefined();
     expect((core as Record<string, unknown>).runAgentLoop).toBeUndefined();
   });
 

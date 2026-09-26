@@ -27,7 +27,6 @@ async function sourceContents(): Promise<string> {
 const ALLOWED_CORE_EDGES = [
   "@caelush/agent",
   "@caelush/ai",
-  "@caelush/context",
   "@caelush/protocol",
   "@caelush/verification",
 ];
@@ -93,13 +92,7 @@ async function workspaceManifests(): Promise<readonly WorkspaceManifest[]> {
  * shape would reappear, so the canonical replacement — `AIToolSpec`, read from the registry's own
  * `modelSpecs()` — is what they must name.
  */
-const MODEL_TOOL_DECLARATION_FILES = [
-  "agent-loop.ts",
-  "run-controller-ports.ts",
-  "run-agent-execution.ts",
-  "agent-loop-input.ts",
-  "agent-loop-request.ts",
-] as const;
+const MODEL_TOOL_DECLARATION_FILES = ["run-controller-ports.ts", "run-agent-execution.ts"] as const;
 
 describe("Core Phase 6B architecture", () => {
   it("keeps Core imports inside the approved narrow contract edges", async () => {

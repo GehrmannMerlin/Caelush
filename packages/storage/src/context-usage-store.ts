@@ -22,6 +22,7 @@ interface UsageRow {
   breakdown_json: string;
   last_build_status: string;
   last_build_at_ms: number;
+  last_recovery_stages_json: string | null;
   updated_at_ms: number;
 }
 
@@ -88,7 +89,7 @@ export class SqliteContextUsageStore implements ContextUsageStorePort {
           JSON.stringify(envelope),
           snapshot.lastBuildStatus,
           snapshot.updatedAt,
-          "[]",
+          JSON.stringify(snapshot.lastRecoveryStages ?? []),
           snapshot.updatedAt,
         );
     } catch (error) {
@@ -102,7 +103,7 @@ export class SqliteContextUsageStore implements ContextUsageStorePort {
         `SELECT run_id, provider_id, model_id, context_window_tokens,
                 effective_input_limit_tokens, estimated_input_tokens, remaining_tokens,
                 pressure_state, compaction_count, last_compaction_at_ms, breakdown_json,
-                last_build_status, last_build_at_ms, updated_at_ms
+                last_build_status, last_build_at_ms, last_recovery_stages_json, updated_at_ms
          FROM context_runtime_states WHERE run_id = ?`,
       )
       .get(runId) as UsageRow | undefined;
@@ -141,6 +142,13 @@ function assertSnapshot(snapshot: ContextUsageSnapshot): void {
     snapshot.lastBuildStatus === "CONTEXT_EXHAUSTED"
   )) {
     throw new StorageError("Context Usage build status is invalid.");
+  }
+  if (
+    snapshot.lastRecoveryStages !== undefined &&
+    (snapshot.lastRecoveryStages.length > 32 ||
+      snapshot.lastRecoveryStages.some((stage) => stage.trim().length === 0))
+  ) {
+    throw new StorageError("Context Usage recovery stages are invalid.");
   }
   const ids = new Set<string>();
   for (const item of snapshot.breakdown) {
@@ -221,6 +229,7 @@ function decodeUsage(row: UsageRow): ContextUsageSnapshot {
       ...(row.last_compaction_at_ms === null
         ? {}
         : { lastCompactionAt: row.last_compaction_at_ms as ContextUsageSnapshot["updatedAt"] }),
+      lastRecoveryStages: decodeRecoveryStages(row.last_recovery_stages_json),
       breakdown: Object.freeze(breakdown),
       lastBuildStatus: row.last_build_status,
       ...(candidate.contextFingerprint === null
@@ -233,6 +242,19 @@ function decodeUsage(row: UsageRow): ContextUsageSnapshot {
       cause: error,
     });
   }
+}
+
+function decodeRecoveryStages(value: string | null): readonly string[] {
+  if (value === null || value === undefined) return Object.freeze([]);
+  const parsed = JSON.parse(value) as unknown;
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length > 32 ||
+    parsed.some((stage) => typeof stage !== "string" || stage.trim().length === 0)
+  ) {
+    throw new Error("invalid recovery stages");
+  }
+  return Object.freeze([...parsed]);
 }
 
 function decodeBreakdown(value: unknown): ContextUsageSourceBreakdown {

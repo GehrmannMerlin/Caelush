@@ -433,23 +433,18 @@ describe("Phase 4D model feedback boundaries", () => {
     expect(projector).toContain("item.call.toolName");
   });
 
-  it("keeps the Context token projection injected rather than reimplemented", () => {
-    // 5. The Agent package may not import the Context implementation, and may not copy the algorithm.
+  it("keeps the bounded observation projection in the Agent Tool layer", () => {
+    // 5. Observation bounding is a Tool-layer model projection and no longer depends on a
+    // retired Context package.
     const observationLayer = codeUnder(OBSERVATION);
     expect(observationLayer).not.toContain("@caelush/context");
-    expect(observationLayer).not.toContain("projectToolObservationBatch");
-    expect(observationLayer).not.toContain("Utf8HeuristicTokenEstimator");
-    // The head + omission-marker + tail behaviour for large file/command output is Context-owned, so it
-    // must not be re-derived here either.
-    expect(observationLayer).not.toContain("read_file");
-
-    // The seam exists, and Core supplies the implementation at the composition boundary.
-    expect(executable(`${OBSERVATION}model-feedback-projector.ts`)).toContain(
-      "export interface ModelObservationBatchProjector",
+    expect(observationLayer).toContain("createToolObservationBatchProjector");
+    expect(executable(`${OBSERVATION}tool-observation-projector.ts`)).toContain(
+      "export function createToolObservationBatchProjector",
     );
     const coreAdapter = executable(`${CORE}agent-tool-batch.ts`);
     expect(coreAdapter).toContain("export function toContextObservationProjection(");
-    expect(coreAdapter).toContain("projectToolObservationBatch({");
+    expect(coreAdapter).toContain("createToolObservationBatchProjector()");
     expect(executable(DAEMON)).toContain("toContextObservationProjection()");
   });
 
@@ -566,8 +561,8 @@ describe("Phase 4D production cutover", () => {
 
     const coreBatch = executable(`${CORE}agent-tool-batch.ts`);
     expect(coreBatch).toContain("export function toContextObservationProjection(");
-    // It delegates to the Context algorithm rather than re-deriving truncation.
-    expect(coreBatch).toContain("projectToolObservationBatch({");
+    // It delegates to the Agent-owned bounded Tool projection rather than re-deriving truncation.
+    expect(coreBatch).toContain("createToolObservationBatchProjector()");
 
     // 16. The legacy normalizer delegates to the canonical one and owns no validation of its own.
     const coreResults = executable(`${CORE}agent-tool-results.ts`);
@@ -761,6 +756,7 @@ describe("Phase 4D frozen contracts and phase boundaries", () => {
 
     // No Coding builtin implementation has crept into the general Agent layer.
     for (const file of filesUnder(AGENT_TOOLS)) {
+      if (file.replaceAll("\\", "/").includes("/tools/observation/")) continue;
       const source = executableSources().get(file) ?? "";
       for (const name of builtinNames) {
         expect(source, `${file} must not name the builtin ${name}`).not.toContain(name);

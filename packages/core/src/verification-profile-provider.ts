@@ -1,10 +1,43 @@
-import type { ProjectInspector, ProjectProfile } from "@caelush/context";
 import type { AgentRun } from "@caelush/protocol";
 import type { ProjectProfileProviderPort, RunExecutionConfig } from "./run-controller-ports.js";
 import type { VerificationProjectProfile } from "@caelush/verification";
 
+/**
+ * Core's deliberately narrow view of Coding Project Intelligence.
+ *
+ * The implementation lives in `@caelush/coding-agent`; Core only consumes the
+ * verification-relevant projection and therefore does not depend on a coding
+ * package or on a Context implementation.
+ */
+export interface CoreProjectProfile {
+  readonly ecosystems: readonly string[];
+  readonly packageManager: {
+    readonly name: string;
+    readonly source?: string;
+  };
+  readonly tooling: readonly {
+    readonly name: string;
+    readonly evidencePaths: readonly string[];
+  }[];
+  readonly isMonorepo: boolean;
+  readonly rootPackage?: CoreProjectPackage;
+  readonly activePackage?: CoreProjectPackage;
+}
+
+export interface CoreProjectPackage {
+  readonly relativePath: string;
+  readonly scripts: readonly { readonly name: string; readonly command: string }[];
+}
+
+export interface CoreProjectProfileInspector {
+  inspect(input: {
+    readonly workspace: AgentRun["workspace"];
+    readonly cwd?: string;
+  }): Promise<{ readonly profile: CoreProjectProfile }>;
+}
+
 export function createProjectProfileProvider(
-  inspector: Pick<ProjectInspector, "inspect">,
+  inspector: Pick<CoreProjectProfileInspector, "inspect">,
 ): ProjectProfileProviderPort {
   return {
     async getFreshProfile(
@@ -20,7 +53,9 @@ export function createProjectProfileProvider(
   };
 }
 
-export function toVerificationProjectProfile(profile: ProjectProfile): VerificationProjectProfile {
+export function toVerificationProjectProfile(
+  profile: CoreProjectProfile,
+): VerificationProjectProfile {
   return {
     ecosystems: [...profile.ecosystems],
     packageManager: {
@@ -44,7 +79,7 @@ export function toVerificationProjectProfile(profile: ProjectProfile): Verificat
   };
 }
 
-function toVerificationPackage(packageInfo: ProjectProfile["rootPackage"]): {
+function toVerificationPackage(packageInfo: CoreProjectPackage | undefined): {
   readonly relativePath: string;
   readonly scripts: readonly { readonly name: string; readonly command: string }[];
 } {

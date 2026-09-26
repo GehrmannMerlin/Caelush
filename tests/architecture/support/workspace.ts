@@ -29,7 +29,6 @@ export const packageNames = [
   "ai",
   "core",
   "agent",
-  "context",
   "runtime",
   "security",
   "verification",

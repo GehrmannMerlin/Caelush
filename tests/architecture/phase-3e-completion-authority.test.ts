@@ -504,7 +504,6 @@ describe("Phase 3E completion authority boundaries", () => {
         !file.startsWith("packages/core/src/legacy-model-turn-executor.ts"),
     );
     expect(readers).toEqual([
-      "packages/core/src/agent-loop.ts",
       "packages/core/src/run-completion-assembly.ts",
       "packages/core/src/task-acceptance-reviewer.ts",
     ]);

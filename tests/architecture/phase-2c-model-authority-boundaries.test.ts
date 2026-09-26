@@ -112,45 +112,29 @@ describe("Phase 2C Core model authority", () => {
   });
 
   it("names the model execution seam through the AI contract and the agent facade", async () => {
-    const ports = await read("packages/core/src/agent-loop-ports.ts");
+    const ports = await read("packages/core/src/run-agent-execution.ts");
     expect(ports).toContain('from "@caelush/ai"');
-    // Phase 3A aligned the agent executor with the frozen union result, so the Core loop
-    // now consumes the transitional throw-based facade over it rather than the frozen port
-    // itself. The agent package keeps no throw-based public interface.
-    expect(ports).toMatch(/readonly modelTurns:\s*LegacyModelTurnExecutor/);
-    const facade = await read("packages/core/src/legacy-model-turn-executor.ts");
-    expect(facade).toContain('from "@caelush/agent"');
+    expect(ports).toMatch(/readonly modelTurnExecutor:\s*ModelTurnExecutor/);
+    expect(ports).toContain('from "@caelush/agent"');
     expect(ports).toMatch(/readonly models:\s*ModelCatalog/);
     expect(ports).not.toMatch(/\bllmClient\b/);
   });
 });
 
 describe("Phase 2C Context model metadata authority", () => {
-  it("projects intrinsic limits from a descriptor instead of resolving a second profile", async () => {
-    const coordinator = await read("packages/context/src/context-runtime-coordinator.ts");
-
-    // The descriptor path is the authority...
-    expect(coordinator).toContain("projectModelContextProfile");
-    // ...and the legacacy resolver is reachable only when the caller supplied no
-    // descriptor, which is the one compatibility case Phase 2C keeps.
-    const resolveCalls = coordinator.match(/resolveModelContextProfile\(/g) ?? [];
-    expect(resolveCalls).toHaveLength(1);
-    expect(coordinator).toMatch(
-      /input\.model === undefined \? undefined : this\.#compatibilityProfile\(input\)/,
-    );
+  it("projects intrinsic limits from the Agent model descriptor", async () => {
+    const policy = await read("packages/agent/src/context/policy/context-policy.ts");
+    expect(policy).toContain("input.model.limits.contextWindowTokens");
+    expect(policy).toContain("input.model.limits.maxOutputTokens");
+    expect(policy).not.toContain("resolveModelContextProfile");
   });
 
-  it("keeps the policy fields out of the descriptor projection", async () => {
-    const profile = await read("packages/context/src/model-context-profile.ts");
-    const projection = profile.slice(profile.indexOf("export function projectModelContextProfile"));
-
-    // The intrinsic fields come from the descriptor...
-    expect(projection).toContain("descriptor.limits.contextWindowTokens");
-    expect(projection).toContain("descriptor.limits.maxOutputTokens");
-    // ...and the policy fields come from the caller, never from the descriptor.
-    expect(projection).toContain("input.recommendedOutputReserveTokens");
-    expect(projection).not.toContain("descriptor.recommendedOutputReserveTokens");
-    expect(projection).not.toContain("descriptor.toolOutputSoftLimitTokens");
+  it("keeps policy fields as caller options rather than descriptor fields", async () => {
+    const policy = await read("packages/agent/src/context/policy/context-policy.ts");
+    expect(policy).toContain("readonly outputReserveTokens?: number");
+    expect(policy).toContain("options.outputReserveTokens");
+    expect(policy).not.toContain("descriptor.recommendedOutputReserveTokens");
+    expect(policy).not.toContain("descriptor.toolOutputSoftLimitTokens");
   });
 });
 
@@ -252,6 +236,7 @@ describe("Phase 2C package edges", () => {
         "AgentTurnInputError",
         // Phase 7A/7B publish the parallel Context Kernel foundation from the Agent root.
         "ContextCurrentTurnTooLargeError",
+        "ContextExhaustedError",
         "ContextDocumentConstructionError",
         "ContextMandatoryInputTooLargeError",
         "ContextPlanningError",
@@ -260,6 +245,7 @@ describe("Phase 2C package edges", () => {
         "CONTEXT_COMPACTION_REASONS",
         "assertStructuredCheckpoint",
         "createContextCheckpointId",
+        "createContextCompactionEventFactory",
         "createContextCompactionPlanner",
         "createContextMaterializer",
         "createContextMessageRange",
@@ -295,6 +281,7 @@ describe("Phase 2C package edges", () => {
         "createContextSourceRegistryBuilder",
         "createConversationContextSourceProvider",
         "createCheckpointContextSourceProvider",
+        "createCorePolicyContextSourceProvider",
         "createExtensionContributionContextSourceProvider",
         "createMemoryContextSourceProvider",
         "createBranchContextSourceProvider",
@@ -381,6 +368,7 @@ describe("Phase 2C package edges", () => {
         "createModelToolFeedbackProjector",
         "createToolBatchCoordinator",
         "createToolResultBatchNormalizer",
+        "createToolObservationBatchProjector",
         "agentTurnInputErrorMessage",
         // `ALLOWED_MODEL_ADMISSION` was a frozen constant while ALLOWED carried only `kind`.
         // The frozen decision carries the approved request, so a shared constant cannot express
@@ -412,6 +400,7 @@ describe("Phase 2C package edges", () => {
         // canonical transient Protocol domain; identity and time remain injected ports.
         "createModelStreamSignalProjector",
         "createModelTurnExecutor",
+        "createV2ContextEngine",
         "createRunExecutionCoordinator",
         "createRunExecutionDriver",
         "createRunningAgentStep",

@@ -7,7 +7,6 @@ export {
 export {
   AgentKernelStateError,
   AgentBudgetAdmissionError,
-  AgentLoopInputError,
   AgentModelOutputError,
   AgentToolResultBatchError,
   ToolBatchResultConversionError,
@@ -89,43 +88,6 @@ export {
 export type { CompleteAgentStepInput, CreateRunningAgentStepInput } from "./agent-step.js";
 export { evaluateAgentStepGate } from "./agent-step-gate.js";
 export type { AgentStepGate } from "./agent-step-gate.js";
-export type {
-  AgentLoopCommonInput,
-  AgentLoopExecutionResult,
-  AgentLoopFailureResult,
-  AgentRetryMetadata,
-  AgentLoopCancelledResult,
-  AgentLoopModelSettings,
-  AgentLoopOutcomeResult,
-  AgentLoopResumeInput,
-  AgentLoopStartInput,
-} from "./agent-loop-input.js";
-export type {
-  AgentContextBuilderPort,
-  AgentLoopDependencies,
-  AgentProjectInspectorPort,
-  AgentRelevantFilePlannerPort,
-  AgentClock,
-  AgentStepIdFactory,
-  AgentBeforeProviderTurn,
-  AgentBeforeProviderAdmission,
-  AgentLoopLifecycleHooks,
-  AgentProviderTurnState,
-} from "./agent-loop-ports.js";
-/**
- * The legacy Core `AgentLoop` facade.
- *
- * ```text
- * LEGACY / TEST COMPATIBILITY SURFACE
- * NOT the production Agent execution authority
- * ```
- *
- * Phase 3C checkpoint 6 moved Step ownership, the durable boundary and the Reason entry point into
- * the Run Layer: production Agent execution composes the frozen `@caelush/agent` `AgentLoop` through
- * `createRunAgentLoop(...)` and drives it with `createRunExecutionDriver(...)`. This class remains
- * for its own unit and migration-parity tests only, and no production consumer may import it.
- */
-export { AgentLoop } from "./agent-loop.js";
 /**
  * The transitional throwing facade over the frozen `ModelTurnExecutor`.
  *
@@ -139,14 +101,6 @@ export type {
   LegacyModelTurnExecutor,
   LegacyModelTurnExecutorDependencies,
 } from "./legacy-model-turn-executor.js";
-/**
- * The transitional legacy Context Engine behind the frozen context boundary.
- *
- * Exported because a host composition root must build the frozen `ContextEnginePort` over the
- * current Context System. It is deleted when Context Engineering V2 owns real context assembly.
- */
-export { createLegacyContextRuntimeAdapter } from "./legacy-context-runtime-adapter.js";
-export type { LegacyContextRuntimeAdapterDependencies } from "./legacy-context-runtime-adapter.js";
 /**
  * The durable Run execution projection.
  *

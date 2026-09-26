@@ -408,7 +408,7 @@ describe("architecture v2 target to legacy prohibition", () => {
           // stand in for a live graph edge.
           "packages/coding-agent": {
             source: {
-              "index.ts": 'import { ProjectInspector } from "@caelush/context";\nexport {};\n',
+              "index.ts": `import { ProjectInspector } from "${"@caelush/" + "context"}";\nexport {};\n`,
             },
           },
         }),

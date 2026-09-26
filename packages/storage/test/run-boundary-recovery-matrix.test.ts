@@ -527,15 +527,11 @@ describe("Phase 3F durable recovery boundaries", () => {
         turns: hostTurns,
       }).recover(withHostRun.id);
 
-      // A host policy is the *next* fallback, and it is consulted only because the durable record has
-      // none. That ordering is the whole compatibility contract for an older checkpoint — and a
-      // continuation with no recorded policy is the only one that may consult it.
+      // A retired host Context policy must not become a second authority. A V1 continuation with no
+      // persisted observation policy uses the deterministic Agent fallback, even when an old-style
+      // host object is present in the test harness.
       expect(withHost.requests()).toHaveLength(1);
-      // Both projections are far below the 40,000-character result, so both policies truncated; the
-      // host's is the smaller by an order of magnitude, which is what makes the fallback observable.
-      expect(projectedResultLength(hostTurns)).toBeLessThan(
-        projectedResultLength(defaultTurns) / 10,
-      );
+      expect(projectedResultLength(hostTurns)).toBe(projectedResultLength(defaultTurns));
     });
   });
 

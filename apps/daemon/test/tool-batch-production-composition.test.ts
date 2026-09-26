@@ -96,8 +96,8 @@ describe("Phase 4D daemon Tool batch composition", () => {
 
   it("wires the Context token projection into the projector's seam", async () => {
     const source = await readFile(new URL("../src/daemon-composition.ts", import.meta.url), "utf8");
-    // `@caelush/agent` owns the model feedback semantics; `@caelush/context` owns the truncation
-    // algorithm; the composition root is the only place allowed to know both.
+    // `@caelush/agent` owns the model feedback semantics and canonical bounded observation projector;
+    // the composition root wires that projector into the production pipeline.
     expect(source).toContain("projection: toContextObservationProjection()");
     expect(source).toContain("toContextObservationProjection");
     // And it passes the whole pipeline to the Run Layer, not a subset of it.

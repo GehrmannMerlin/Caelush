@@ -47,13 +47,6 @@ export class ToolBatchResultConversionError extends Error {
  */
 export { AgentStepStateError as AgentKernelStateError } from "@caelush/agent";
 
-export class AgentLoopInputError extends Error {
-  constructor(reason: string) {
-    super(`Agent loop input rejected: ${reason}.`);
-    this.name = "AgentLoopInputError";
-  }
-}
-
 /**
  * The budget refusal vocabulary, in the canonical Agent declaration.
  *

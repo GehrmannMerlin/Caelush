@@ -1,6 +1,6 @@
 import type { ModelRef as AIModelRef } from "@caelush/ai";
 import type { AgentDecision, AgentExecutionIdentity, AgentTurnRef } from "@caelush/agent";
-import type { AgentRetryMetadata } from "./agent-loop-input.js";
+import type { AgentRetryMetadata } from "./run-agent-types.js";
 import type {
   JsonObject as ProtocolJsonObject,
   JsonValue as ProtocolJsonValue,

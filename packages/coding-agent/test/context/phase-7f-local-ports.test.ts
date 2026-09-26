@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { createLocalCodingContextPorts } from "@caelush/coding-agent";
 import type { WorkspaceRef } from "@caelush/protocol";
-import type { Runtime, RuntimeWorkspaceScope } from "@caelush/runtime";
+import { RuntimeGitError, type Runtime, type RuntimeWorkspaceScope } from "@caelush/runtime";
 
 const ROOT = path.resolve("C:/caelush-phase-7f-workspace");
 const WORKSPACE: WorkspaceRef = {
@@ -49,6 +49,60 @@ describe("Phase 7F local Coding Context ports", () => {
     expect(instructions.entries.map((entry) => entry.relativePath)).toEqual(["AGENTS.md"]);
     expect(files.sections.map((section) => section.relativePath)).toEqual(["src/kept.ts"]);
     expect(files.sections.some((section) => section.content.includes("secret"))).toBe(false);
+  });
+
+  it("keeps runtime context preparation available outside a Git repository", async () => {
+    const base = fakeScope({ "README.md": "fixture\n" });
+    const scope = {
+      ...base,
+      git: {
+        ...base.git,
+        async status() {
+          throw new RuntimeGitError("NOT_A_GIT_REPOSITORY");
+        },
+      },
+    } as RuntimeWorkspaceScope;
+    const runtime: Runtime = {
+      kind: "local",
+      supports: () => true,
+      async openWorkspace() {
+        return scope;
+      },
+    };
+    const ports = createLocalCodingContextPorts({ runtime, workspace: WORKSPACE });
+
+    const projection = await ports.runtimeFacts.read({
+      identity: {
+        runId: "run_phase_7f" as never,
+        sessionId: "session_phase_7f" as never,
+        goal: "inspect the workspace",
+      },
+      signal: new AbortController().signal,
+    });
+
+    expect(projection.facts).toEqual([
+      "runtimeKind=local",
+      `workspace=${WORKSPACE.id}`,
+      "gitRepository=false",
+      "gitClean=unknown",
+      "changedPathCount=0",
+    ]);
+
+    const git = await ports.gitState.read({
+      identity: {
+        runId: "run_phase_7f" as never,
+        sessionId: "session_phase_7f" as never,
+        goal: "inspect the workspace",
+      },
+      signal: new AbortController().signal,
+    });
+
+    expect(git).toEqual({
+      sourceRef: `git:${WORKSPACE.id}`,
+      version: "runtime-git-v1",
+      changedPaths: [],
+      summary: "repository=none clean=unknown ahead=0 behind=0",
+    });
   });
 });
 

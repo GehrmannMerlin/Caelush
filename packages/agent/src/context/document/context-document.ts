@@ -1,4 +1,9 @@
-import type { ContextCacheStability, ContextSensitivity } from "../item/context-item.js";
+import type {
+  ContextCacheStability,
+  ContextFreshness,
+  ContextPriorityClass,
+  ContextSensitivity,
+} from "../item/context-item.js";
 import type { ContextPlan } from "../policy/context-policy.js";
 import type { RehydratedContextState } from "../contracts/rehydrated-context-state.js";
 import { assertContextPlan } from "../planner/context-planner.js";
@@ -17,6 +22,8 @@ export interface ContextDocumentSection {
   readonly authority: ContextSectionAuthority;
   readonly sourceRef: string;
   readonly cacheStability: ContextCacheStability;
+  readonly priorityClass: ContextPriorityClass;
+  readonly freshness: ContextFreshness;
   readonly sensitivity: ContextSensitivity;
   readonly text: string;
 }
@@ -78,6 +85,8 @@ function toSection(item: ContextPlan["selectedItems"][number]): ContextDocumentS
     authority: authorityForType(item.type),
     sourceRef: `${item.source.providerId}@${item.source.version}:${item.source.sourceRef}`,
     cacheStability: item.cacheStability,
+    priorityClass: item.priorityClass,
+    freshness: item.freshness,
     sensitivity: item.sensitivity,
     text: semanticText(item),
   };
@@ -235,6 +244,8 @@ function authoritySection(
     authority,
     sourceRef: `authority:current:${field}`,
     cacheStability: "DYNAMIC",
+    priorityClass: "NORMAL",
+    freshness: "CURRENT",
     sensitivity: "INTERNAL",
     text: `AUTHORITATIVE CURRENT STATE — ${field}: ${rendered}`,
   };

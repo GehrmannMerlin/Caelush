@@ -80,9 +80,8 @@ export interface ContextPrepareInput {
  * uses to add knowledge — memory, project facts, a session summary — without the general loop
  * learning what that knowledge is.
  *
- * Phase 3B freezes the seam and the item contract only. It does not rewrite the Context
- * System: a legacy Context runtime is bridged by a host adapter, and the provider pipeline
- * itself is later work.
+ * The daemon-composed V2 Context Engine crosses this seam at the Run boundary; no legacy Context
+ * runtime or host-owned second execution path is required.
  */
 export interface ContextProvider {
   readonly id: string;

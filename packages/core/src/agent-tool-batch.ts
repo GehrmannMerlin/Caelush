@@ -4,21 +4,15 @@ import type {
   ModelObservationCandidate,
   ToolExecutionSnapshot,
 } from "@caelush/agent";
+import { createToolObservationBatchProjector } from "@caelush/agent";
 import type { AIToolResultMessage } from "@caelush/ai";
 import type { AgentToolRequest } from "./agent-decision.js";
 import { ToolBatchResultConversionError } from "./agent-errors.js";
-import {
-  projectToolObservationBatch,
-  Utf8HeuristicTokenEstimator,
-  type ContextPolicy,
-} from "@caelush/context";
 
-const modelObservationEstimator = new Utf8HeuristicTokenEstimator();
-
-export type AgentToolObservationPolicy = Pick<
-  ContextPolicy,
-  "maxSingleObservationTokens" | "maxObservationBatchTokens"
->;
+export interface AgentToolObservationPolicy {
+  readonly maxSingleObservationTokens: number;
+  readonly maxObservationBatchTokens: number;
+}
 
 const LEGACY_EFFECTIVE_INPUT_LIMIT = 32_000;
 
@@ -38,45 +32,18 @@ export function defaultObservationPolicy(): AgentToolObservationPolicy {
 }
 
 /**
- * The Context-owned observation token projection, as the canonical projector's implementation seam.
+ * The Agent-owned observation token projection, as the canonical projector's implementation seam.
  *
  * ```text
- * @caelush/agent      owns model feedback semantics        (ModelToolFeedbackProjector)
- * @caelush/context    owns the token projection algorithm  (projectToolObservationBatch)
- * @caelush/core       adapts the two, here
+ * @caelush/agent      owns model feedback semantics and the bounded projection
+ * @caelush/core       adapts the canonical projector to legacy Core message helpers
  * ```
  *
- * This is a **compatibility adapter**, not an authority. The canonical projector decides *what* the
- * model is told; this function decides only *how much of it fits*. It is wired in at the composition
- * boundary because Architecture V2 forbids `@caelush/agent` from importing `@caelush/context`, and the
- * agent package must not copy the algorithm either — a copy would be a second observation-budget
- * algorithm, and it would silently lose the head + omission-marker + tail treatment the Context
- * projector applies to large `read_file` and `exec_command` output.
+ * This is a **compatibility adapter**, not a second authority. The canonical Agent projector decides
+ * how much of a safe observation fits; Core only converts durable snapshots into the Agent contract.
  */
 export function toContextObservationProjection(): ModelObservationBatchProjector {
-  return {
-    projectBatch(input: {
-      readonly candidates: readonly ModelObservationCandidate[];
-      readonly policy: AgentToolObservationPolicy;
-    }): readonly string[] {
-      return projectToolObservationBatch({
-        observations: input.candidates.map((candidate) => ({
-          // The durable invocation id is the projection's stable source identity; it is never
-          // model-facing, and a `REJECTED`/`SKIPPED` call falls back to its external call id because it
-          // has no durable invocation to name.
-          sourceToolInvocationId: candidate.sourceToolInvocationId,
-          toolName: candidate.toolName,
-          content: candidate.content,
-          ...(candidate.rawArtifactRef === undefined
-            ? {}
-            : { rawArtifactRef: candidate.rawArtifactRef }),
-        })),
-        maxSingleObservationTokens: input.policy.maxSingleObservationTokens,
-        maxObservationBatchTokens: input.policy.maxObservationBatchTokens,
-        estimator: modelObservationEstimator,
-      }).map((observation) => observation.summary);
-    },
-  };
+  return createToolObservationBatchProjector();
 }
 
 /**
@@ -85,7 +52,7 @@ export function toContextObservationProjection(): ModelObservationBatchProjector
  * ```text
  * ToolExecutionSnapshot   the durable invocation + its observation
  *        ↓
- * Context token projection (the one truncation policy the workspace owns)
+ * Agent Tool observation projection (the one truncation policy the workspace owns)
  *        ↓
  * AgentToolResult         externalCallId, toolName, summary content, isError
  * ```
@@ -93,8 +60,8 @@ export function toContextObservationProjection(): ModelObservationBatchProjector
  * This is a **compatibility** projection for a caller that still holds durable snapshots. Canonical
  * production does not call it: the canonical `ModelToolFeedbackProjector` projects durable observations
  * and safe feedback, and the Run Layer reaches it through `packages/core/src/run-tool-turn-coordinator.ts`.
- * It is retained for legacy callers and their tests, and it is the same Context algorithm either way —
- * there is one truncation policy, not two.
+ * It is retained for compatibility callers and their tests, and it uses the same Agent observation
+ * algorithm as the canonical feedback path — there is one truncation policy, not two.
  *
  * Phase 4F replaced the legacy `ToolBatchItemResult` input with the canonical `ToolExecutionSnapshot`.
  * The projection itself did not change: an invocation's observation carries exactly the content, the
@@ -118,10 +85,9 @@ export function toAgentToolResults(
 /**
  * The legacy durable message encoding of one Tool batch.
  *
- * Kept because the durable conversation ledger and the legacy Context runtime still speak
- * `LLMToolResultMessage`, including its `rawArtifactRef` recovery pointer. The pointer never enters the
- * canonical `AIToolResultMessage`; the Context adapter re-attaches it from the durable ledger, which is
- * the authority for it.
+ * Kept because the durable conversation compatibility ledger still speaks `LLMToolResultMessage`,
+ * including its `rawArtifactRef` recovery pointer. The pointer never enters the canonical
+ * `AIToolResultMessage`; durable Tool recovery remains the authority for it.
  */
 export function toAIToolResultMessages(
   requests: readonly AgentToolRequest[],

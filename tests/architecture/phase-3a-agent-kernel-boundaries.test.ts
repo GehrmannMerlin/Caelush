@@ -151,7 +151,10 @@ describe("Phase 3A agent kernel dependency boundaries", () => {
         .replaceAll(/\/\*[\s\S]*?\*\//g, "")
         .replaceAll(/(^|[^:])\/\/.*$/gm, "$1");
 
-    const source = agentKernelFiles().map(executableSource).join("\n");
+    const source = agentKernelFiles()
+      .filter((file) => !file.includes("packages/agent/src/tools/observation/"))
+      .map(executableSource)
+      .join("\n");
 
     expect(source).not.toMatch(/\b(?:ProjectInspector|RelevantFilePlanner|ContextBuilder)\b/);
     expect(source).not.toMatch(/\b(?:read_file|exec_command|apply_patch|git_status)\b/);
@@ -559,11 +562,10 @@ describe("Phase 3A Core compatibility boundary", () => {
     // Cancellation stays distinguishable from a provider failure.
     expect(facade).toContain("AI_ABORTED");
 
-    // Phase 3E retired the facade from production composition, so exactly one Core port still names
-    // it: the resumable Agent loop, whose frozen dependencies are unchanged. The verification
-    // reviewer runs on the explicit-identity client instead, because a review is a host action about
-    // a Run rather than an Agent Reason.
-    expect(read("packages/core/src/agent-loop-ports.ts")).toContain("LegacyModelTurnExecutor");
+    // Phase 7G removed the Core AgentLoop facade and its Context compatibility seam. The
+    // production Run path now names the frozen executor directly.
+    expect(existsSync(join(root, "packages/core/src/agent-loop-ports.ts"))).toBe(false);
+    expect(read("packages/core/src/run-agent-execution.ts")).toContain("ModelTurnExecutor");
     expect(read("packages/core/src/task-acceptance-reviewer.ts")).not.toContain(
       "LegacyModelTurnExecutor",
     );

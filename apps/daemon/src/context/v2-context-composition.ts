@@ -15,6 +15,7 @@ import {
   createCorePolicyContextSourceProvider,
   createExtensionContributionContextSourceProvider,
   createMemoryContextSourceProvider,
+  createToolObservationBatchProjector,
   createV2ContextEngine,
   createUtf8HeuristicTokenEstimator,
   type ContextAuthorityProviderPort,
@@ -106,6 +107,10 @@ export function createDaemonV2ContextEngine(options: DaemonV2ContextCompositionO
     targetRecentTailTokensCap: 4_096,
     minRecentTailRatio: 0.05,
     minRecentTailTokensCap: 1_024,
+    maxSingleObservationTokensCap: 4_096,
+    maxSingleObservationRatio: 0.05,
+    maxObservationBatchTokensCap: 8_192,
+    maxObservationBatchRatio: 0.12,
     sourceLimits: {
       [String(CODING_CONTEXT_SOURCE_IDS.relevantFiles)]: 4_096,
       [String(CODING_CONTEXT_SOURCE_IDS.projectMetadata)]: 1_024,
@@ -132,6 +137,50 @@ export function createDaemonV2ContextEngine(options: DaemonV2ContextCompositionO
     materializer: createContextMaterializer({
       projectors: options.messageProjectors,
       tokenEstimator,
+      toolObservationReprojector: {
+        async reproject({ stored, policy, signal }) {
+          if (signal.aborted) throw createContextAbortError();
+          if (stored.message.type !== "TOOL_RESULT") return undefined;
+          if (stored.message.observation.kind !== "OBSERVATION") return undefined;
+          const observation = await options.storage.observations.get(
+            stored.message.observation.observationId,
+          );
+          if (signal.aborted) throw createContextAbortError();
+          if (observation === null || observation.kind !== "TOOL") return undefined;
+
+          let content = observation.content;
+          if (observation.rawArtifactRef !== undefined) {
+            const artifact = await options.storage.contextArtifacts.readInternal(
+              observation.rawArtifactRef,
+            );
+            if (signal.aborted) throw createContextAbortError();
+            if (artifact !== undefined && artifact.runId === observation.runId) {
+              content = artifact.content;
+            }
+          }
+          const [projected] = createToolObservationBatchProjector().projectBatch({
+            candidates: [
+              {
+                sourceToolInvocationId: observation.toolInvocationId,
+                toolName: stored.message.toolName,
+                content,
+                ...(observation.rawArtifactRef === undefined
+                  ? {}
+                  : { rawArtifactRef: observation.rawArtifactRef }),
+              },
+            ],
+            policy,
+          });
+          if (projected === undefined) return undefined;
+          return {
+            role: "tool",
+            toolCallId: stored.message.toolCallId,
+            toolName: stored.message.toolName,
+            content: projected,
+            isError: stored.message.isError,
+          };
+        },
+      },
     }),
     receiptBuilder: createContextReceiptBuilder({
       now: options.clock.now,
@@ -139,6 +188,12 @@ export function createDaemonV2ContextEngine(options: DaemonV2ContextCompositionO
     }),
     summarizationRunner,
   });
+}
+
+function createContextAbortError(): Error {
+  const error = new Error("Context materialization was cancelled.");
+  error.name = "AbortError";
+  return error;
 }
 
 function createSourceRegistry(options: {

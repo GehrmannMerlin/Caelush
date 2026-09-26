@@ -47,7 +47,7 @@ import {
 } from "./agent-state.js";
 import { cancelAgentStep, completeAgentStep, failAgentStep } from "./agent-step.js";
 import { normalizeToolResultBatch } from "./agent-tool-results.js";
-import { defaultObservationPolicy, type AgentToolObservationPolicy } from "./agent-tool-batch.js";
+import { defaultObservationPolicy } from "./agent-tool-batch.js";
 import {
   markAgentRunFailed,
   markAgentRunCancelled,
@@ -80,7 +80,7 @@ import {
   type RunCommitEventMaterializer,
 } from "./run-commit-event-materializer.js";
 import { classifyAgentEffectSettlement } from "./run-agent-effect-settlement.js";
-import type { AgentProviderTurnState } from "./agent-loop-ports.js";
+import type { AgentProviderTurnState } from "./run-agent-types.js";
 import {
   MISROUTED_COMPLETION_GATE,
   MISROUTED_TOOL_TURN_COORDINATOR,
@@ -1165,7 +1165,6 @@ export class RunController {
     pipeline: ToolTurnPipeline,
     runId: RunId,
   ): RunToolTurnDriverDependencies {
-    const contextRuntime = this.dependencies.contextRuntime;
     return {
       batches: pipeline.batches,
       feedback: pipeline.feedback,
@@ -1180,9 +1179,6 @@ export class RunController {
       // The Run's live cancellation signal, read when the batch runs. The adapter never creates an
       // abort scope, never owns a timeout and never reads a deadline: it forwards this unchanged.
       signal: () => this.executionSignal(runId),
-      ...(contextRuntime?.getContextPolicy === undefined
-        ? {}
-        : { hostObservationPolicy: () => contextRuntime.getContextPolicy?.(runId) }),
     };
   }
 
@@ -1416,7 +1412,6 @@ export class RunController {
     // second capture of the same facts, free to disagree with the batch that actually ran.
     const facts = captureRunToolTurnFacts({
       snapshot: settled,
-      ...this.hostObservationPolicy(settled.run.id),
     });
     if (facts === undefined) return;
     const dependencies = this.toolTurnDependencies(pipeline, settled.run.id);
@@ -1431,21 +1426,6 @@ export class RunController {
     if (result.kind === "REPLAN") await recordRunToolTurnReplan({ dependencies, facts });
     if (results.length === 0) return;
     await recordRunToolTurnProgress({ dependencies, facts, results });
-  }
-
-  /**
-   * The host Context runtime's observation policy, when it has one.
-   *
-   * It is a compatibility fallback the adapter consults only for a Tool continuation written before the
-   * durable policy existed. A Run whose Context runtime configures no policy contributes nothing, and
-   * the adapter's own default applies.
-   */
-  private hostObservationPolicy(runId: RunId): {
-    readonly hostObservationPolicy?: () => AgentToolObservationPolicy | undefined;
-  } {
-    const getPolicy = this.dependencies.contextRuntime?.getContextPolicy;
-    if (getPolicy === undefined) return {};
-    return { hostObservationPolicy: () => getPolicy.call(this.dependencies.contextRuntime, runId) };
   }
 
   /**
@@ -3905,7 +3885,7 @@ function resolveResultUsage(
  */
 function toDurableRetryMetadata(retry: import("@caelush/agent").AgentRetryMetadata | undefined):
   | {
-      code: import("./agent-loop-input.js").AgentRetryMetadata["code"];
+      code: import("./run-agent-types.js").AgentRetryMetadata["code"];
       retryable: true;
       retryAfterMs?: number;
     }

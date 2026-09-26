@@ -354,11 +354,12 @@ describe("Phase 3D durable Tool turn driver boundaries", () => {
     // It does not construct the legacy batch coordinator either: that facade is not a production
     // authority.
     expect(daemon).not.toContain("new ToolBatchCoordinator(dispatcher)");
-    // ...and it supplies the raw-observation resolver the Context recovery needs, because it is the
-    // layer that owns the Tool execution ledger.
-    expect(daemon).toContain("createToolExecutionLedgerRawObservationResolver({");
-    expect(daemon).toContain("store: options.storage.toolExecution");
-    expect(daemon).toContain("rawObservationRefs,");
+    // ...and it composes the canonical durable coordinator and the Agent-owned bounded model
+    // feedback projection. Raw observation recovery remains an internal durable Tool concern and
+    // never becomes a second host-owned model projection.
+    expect(daemon).toContain("createDurableToolExecutionCoordinator({");
+    expect(daemon).toContain("createModelToolFeedbackProjector({");
+    expect(daemon).toContain("projection: toContextObservationProjection(),");
     // It does not build a Tool batch request, a security context or an environment: those belong to
     // the adapter.
     expect(daemon).not.toContain("new ResourceGovernor(");
@@ -392,11 +393,11 @@ describe("Phase 3D durable Tool turn driver boundaries", () => {
     expect(recovery).toContain("findByExternalCall(");
     expect(recovery).toContain("observation?.rawArtifactRef");
 
-    // The legacy Context adapter resolves it onto its own Context-only message, which is the one place
-    // a raw pointer is allowed to exist outside the Tool Layer.
-    const adapter = executable("packages/core/src/legacy-context-runtime-adapter.ts");
-    expect(adapter).toContain("rawObservationRefs");
-    expect(adapter).toContain("resolveRawObservationRef");
+    // The retired Context adapter no longer exists; the recovery resolver remains the only place that
+    // can resolve the durable pointer, and its result is consumed before model projection.
+    expect(existsSync(join(root, "packages/core/src/legacy-context-runtime-adapter.ts"))).toBe(
+      false,
+    );
   });
 
   it("keeps sequential Tool semantics and introduces no parallelism", () => {
@@ -437,7 +438,7 @@ describe("Phase 3D durable Tool turn driver boundaries", () => {
     expect(adapter).toContain("context.normalizer.normalize(");
     // The Context token projection is still the one observation algorithm, reached through the seam.
     const projection = executable("packages/core/src/agent-tool-batch.ts");
-    expect(projection).toContain("projectToolObservationBatch({");
+    expect(projection).toContain("createToolObservationBatchProjector()");
     expect(projection).toContain("export function toContextObservationProjection(");
     // The projection rejects a mismatched batch rather than reordering it. Phase 4F replaced the legacy
     // per-item result with the canonical durable snapshot, so the identity check reads the invocation

@@ -22,6 +22,8 @@ export interface ContextUsageSnapshot {
   readonly pressureState: ContextPressureState;
   readonly compactionCount: number;
   readonly lastCompactionAt?: TimestampMs;
+  /** Compatibility projection of the bounded recovery stages used by the existing API. */
+  readonly lastRecoveryStages?: readonly string[];
   readonly breakdown: readonly ContextUsageSourceBreakdown[];
   readonly lastBuildStatus: ContextUsageBuildStatus;
   readonly contextFingerprint?: ContextFingerprint;

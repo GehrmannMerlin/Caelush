@@ -631,6 +631,7 @@ export {
   markToolInvocationWaitingApproval,
   MAX_TOOL_EVENT_PRESENTATION_BYTES,
   MODEL_FEEDBACK_TRUNCATION_MARKER,
+  createToolObservationBatchProjector,
   normalizeInstancePath,
   readResultShape,
   readSanitizedResultShape,

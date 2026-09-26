@@ -39,7 +39,9 @@ describe("daemon production composition", () => {
     expect(composition.events).toBe(composition.eventHub);
     expect(composition.runs).toBe(storage.runs);
     expect(composition.approvals).toBe(storage.approvals);
-    expect(composition.contextRuntime).toBeDefined();
+    // Context V2 is composed per Run behind the Agent seam; the daemon no longer exposes a legacy
+    // process-wide Context runtime or a second policy authority.
+    expect(composition).not.toHaveProperty("contextRuntime");
     expect(composition.runtimeResolver.resolve({ id: "local", kind: "local" })).toBe(
       composition.runtime,
     );

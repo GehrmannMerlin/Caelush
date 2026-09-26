@@ -376,7 +376,8 @@ describe("Phase 3C Run Layer ownership", () => {
     expect(daemon).not.toContain("new AgentLoop(");
     expect(daemon).not.toContain("agentLoop");
     expect(daemon).toContain("createRunAgentExecutionContext(");
-    expect(daemon).toContain("createLegacyContextRuntimeAdapter({");
+    expect(daemon).not.toContain("createLegacyContextRuntimeAdapter");
+    expect(daemon).toContain("createDaemonV2ContextEngine({");
   });
 
   it("allocates the durable Step in the Run Layer, not in a facade", () => {

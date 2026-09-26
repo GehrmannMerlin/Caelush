@@ -34,15 +34,13 @@ describe("Phase 11B verification boundaries", () => {
   });
 
   it("keeps runtime and security as structural lower-layer adapters", async () => {
-    const [runtime, security, context] = await Promise.all([
+    const [runtime, security] = await Promise.all([
       packageSources("runtime"),
       packageSources("security"),
-      packageSources("context"),
     ]);
     for (const [name, source] of [
       ["runtime", runtime],
       ["security", security],
-      ["context", context],
     ] as const) {
       expect(source, `${name} imports verification`).not.toMatch(
         /from\s+["']@caelush\/verification(?:\/[^"']*)?["']/,
@@ -58,17 +56,13 @@ describe("Phase 11B verification boundaries", () => {
   });
 
   it("documents the 11B host-action and non-completion boundary", async () => {
-    const [verification, runtime, security, context, readme, agents] = await Promise.all([
+    const [verification, runtime, security, readme, agents] = await Promise.all([
       readFile(
         path.join(repositoryRoot, "docs", "architecture", "verification-execution.md"),
         "utf8",
       ),
       readFile(path.join(repositoryRoot, "docs", "architecture", "runtime.md"), "utf8"),
       readFile(path.join(repositoryRoot, "docs", "architecture", "security.md"), "utf8"),
-      readFile(
-        path.join(repositoryRoot, "docs", "architecture", "context-and-project-intelligence.md"),
-        "utf8",
-      ),
       readFile(path.join(repositoryRoot, "README.md"), "utf8"),
       readFile(path.join(repositoryRoot, "AGENTS.md"), "utf8"),
     ]);
@@ -77,7 +71,11 @@ describe("Phase 11B verification boundaries", () => {
     expect(verification).toContain("32 KiB");
     expect(runtime).toContain("executeArgv()");
     expect(security).toContain("verification command adapter");
-    expect(context).toContain("ProjectInspector.inspect()");
+    const contextDocs = await readFile(
+      path.join(repositoryRoot, "docs", "architecture", "context-and-project-intelligence.md"),
+      "utf8",
+    );
+    expect(contextDocs).toContain("ProjectInspector.inspect()");
     expect(readme).toContain("Phase 11B — Verification Execution: **COMPLETED**");
     expect(readme).toContain("Phase 11D — Completion Authority & Finalization: **COMPLETED**");
     expect(agents).toContain("Phase 11B rules:");

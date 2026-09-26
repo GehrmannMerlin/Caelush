@@ -1078,7 +1078,7 @@ describe("architecture v2 repository integration", () => {
     async () => {
       const scan = await scanner.scanWorkspace(repositoryRoot);
 
-      expect(scan.projects.length).toBeGreaterThanOrEqual(18);
+      expect(scan.projects.length).toBeGreaterThanOrEqual(17);
       expect(scan.sourceFileCount).toBeGreaterThan(300);
       expect(scan.sourceImportCount).toBeGreaterThan(1000);
       expect(scan.unknownCaelushSpecifiers).toEqual([]);

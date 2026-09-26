@@ -1,7 +1,5 @@
-import type { AgentLoopModelSettings } from "./agent-loop-input.js";
-import type { ContextRuntimeCoordinatorPort } from "@caelush/context";
+import type { AgentLoopModelSettings } from "./run-agent-types.js";
 import type { AIMessage } from "@caelush/ai";
-import type { ContextBuildLimits } from "@caelush/context";
 import type {
   AgentRun,
   ApprovalRequest,
@@ -71,7 +69,6 @@ export interface ToolFeedbackContributionApplier {
 
 export interface RunExecutionConfig {
   readonly baseSystemPrompt: string;
-  readonly contextLimits: ContextBuildLimits;
   readonly historyPrefix?: readonly AIMessage[];
   readonly modelSettings?: AgentLoopModelSettings;
   readonly cwd?: string;
@@ -235,7 +232,6 @@ export interface RunControllerDependencies {
    * `ToolBatchRequest`.
    */
   readonly toolTurn?: ToolTurnPipeline;
-  readonly contextRuntime?: Pick<ContextRuntimeCoordinatorPort, "getContextPolicy">;
   readonly clock: { now(): import("@caelush/protocol").TimestampMs };
   readonly eventIdFactory: EventIdFactory;
   readonly approvals?: ApprovalResolutionPort;

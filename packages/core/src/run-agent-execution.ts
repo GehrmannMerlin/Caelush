@@ -13,7 +13,6 @@ import {
   type RunExecutionMode,
 } from "@caelush/agent";
 import type { AIModelSettings, AIToolSpec, ModelCatalog } from "@caelush/ai";
-import type { ContextBuildLimits, VerificationRepairContextInput } from "@caelush/context";
 import type { AIMessage } from "@caelush/ai";
 import type {
   AgentRun,
@@ -24,8 +23,11 @@ import type {
   TimestampMs,
 } from "@caelush/protocol";
 
-import type { AgentStepIdFactory } from "./agent-loop-ports.js";
-import type { AgentLoopModelSettings } from "./agent-loop-input.js";
+import type {
+  AgentLoopModelSettings,
+  AgentStepIdFactory,
+  AgentVerificationRepairContext,
+} from "./run-agent-types.js";
 
 /**
  * The Run Layer's direct Agent execution dependencies.
@@ -81,10 +83,9 @@ export interface RunAgentContextEngineInput {
   readonly run: AgentRun;
   readonly identity: AgentExecutionIdentity;
   readonly baseSystemPrompt: string;
-  readonly contextLimits: ContextBuildLimits;
   readonly cwd?: string | undefined;
   readonly explicitPaths?: readonly string[] | undefined;
-  readonly verificationRepairContext?: VerificationRepairContextInput | undefined;
+  readonly verificationRepairContext?: AgentVerificationRepairContext | undefined;
   /** Durable Run execution mode; distinct from ContextPrepareMode's window-recovery mode. */
   readonly runMode?: RunExecutionMode | undefined;
 }
@@ -109,7 +110,7 @@ export interface RunAgentExecutionContext {
   readonly historyPrefix?: readonly AIMessage[] | undefined;
   readonly createContextEngine: (
     run: AgentRun,
-    verificationRepairContext?: VerificationRepairContextInput,
+    verificationRepairContext?: AgentVerificationRepairContext,
     runMode?: RunExecutionMode,
   ) => ContextEnginePort;
 }
@@ -122,7 +123,6 @@ export interface RunAgentExecutionContextFactory {
 /** The resolved configuration one Run's Agent execution is composed from. */
 export interface RunAgentExecutionConfiguration {
   readonly baseSystemPrompt: string;
-  readonly contextLimits: ContextBuildLimits;
   /**
    * The model-facing Tool catalog, already in its model-facing form.
    *
@@ -178,7 +178,6 @@ export function createRunAgentExecutionContext(
         run,
         identity: { runId: run.id, sessionId: run.sessionId, goal: run.goal },
         baseSystemPrompt: config.baseSystemPrompt,
-        contextLimits: config.contextLimits,
         ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
         ...(config.explicitPaths === undefined ? {} : { explicitPaths: config.explicitPaths }),
         ...(verificationRepairContext === undefined ? {} : { verificationRepairContext }),

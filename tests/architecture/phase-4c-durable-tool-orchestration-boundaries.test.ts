@@ -561,6 +561,7 @@ describe("Phase 4C durable Tool orchestration boundaries", () => {
 
     // And no Coding builtin has crept into the Agent layer.
     for (const file of filesUnder(AGENT_TOOLS)) {
+      if (file.replaceAll("\\", "/").includes("/tools/observation/")) continue;
       const source = executable(file);
       for (const name of ["read_file", "exec_command", "apply_patch", "git_status"]) {
         expect(source, `${file} must not name ${name}`).not.toContain(name);

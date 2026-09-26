@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { Runtime, RuntimeWorkspaceScope } from "@caelush/runtime";
+import { RuntimeGitError, type Runtime, type RuntimeWorkspaceScope } from "@caelush/runtime";
 import type { WorkspaceRef } from "@caelush/protocol";
 
 import type {
@@ -57,15 +57,16 @@ export function createLocalCodingContextPorts(
     runtimeFacts: {
       async read(input: Parameters<CodingRuntimeFactsPort["read"]>[0]) {
         const opened = await scope();
-        const status = await opened.git.status({ limit: 128, signal: input.signal });
+        const status = await readGitStatus(opened, input.signal);
         return {
           sourceRef: `runtime:${options.workspace.id}`,
           version: "local-runtime-v1",
           facts: Object.freeze([
             `runtimeKind=local`,
             `workspace=${options.workspace.id}`,
-            `gitClean=${String(status.clean)}`,
-            `changedPathCount=${String(status.entries.length)}`,
+            `gitRepository=${String(status !== undefined)}`,
+            `gitClean=${status === undefined ? "unknown" : String(status.clean)}`,
+            `changedPathCount=${String(status?.entries.length ?? 0)}`,
           ]),
         };
       },
@@ -100,17 +101,36 @@ export function createLocalCodingContextPorts(
     gitState: {
       async read(input: Parameters<GitStateContextPort["read"]>[0]) {
         const opened = await scope();
-        const status = await opened.git.status({ limit: 128, signal: input.signal });
+        const status = await readGitStatus(opened, input.signal);
         return {
           sourceRef: `git:${options.workspace.id}`,
           version: "runtime-git-v1",
-          ...(status.branch === undefined ? {} : { branch: status.branch }),
-          changedPaths: Object.freeze(status.entries.map((entry) => entry.path)),
-          summary: `clean=${String(status.clean)} ahead=${String(status.ahead)} behind=${String(status.behind)}`,
+          ...(status === undefined || status.branch === undefined ? {} : { branch: status.branch }),
+          changedPaths: Object.freeze(status?.entries.map((entry) => entry.path) ?? []),
+          summary:
+            status === undefined
+              ? "repository=none clean=unknown ahead=0 behind=0"
+              : `clean=${String(status.clean)} ahead=${String(status.ahead)} behind=${String(status.behind)}`,
         };
       },
     },
   });
+}
+
+type LocalGitStatus = Awaited<ReturnType<RuntimeWorkspaceScope["git"]["status"]>>;
+
+async function readGitStatus(
+  scope: RuntimeWorkspaceScope,
+  signal: AbortSignal,
+): Promise<LocalGitStatus | undefined> {
+  try {
+    return await scope.git.status({ limit: 128, signal });
+  } catch (error) {
+    if (error instanceof RuntimeGitError && error.code === "NOT_A_GIT_REPOSITORY") {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 async function loadInstructions(

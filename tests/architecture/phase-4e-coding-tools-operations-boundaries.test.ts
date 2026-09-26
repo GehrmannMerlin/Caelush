@@ -286,9 +286,12 @@ describe("Phase 4E guard — the Runtime boundary", () => {
     }
 
     for (const holder of holders) {
-      expect(holder, holder).toContain(
-        "packages/coding-agent/src/tools/operations/runtime-adapters/",
-      );
+      expect(
+        holder.startsWith("packages/coding-agent/src/tools/operations/runtime-adapters/") ||
+          holder === "packages/coding-agent/src/context/local-ports.ts" ||
+          holder === "packages/coding-agent/src/context/project-intelligence.ts",
+        holder,
+      ).toBe(true);
     }
 
     const combined = (await Promise.all(adapters.map(async (file) => await read(file)))).join("\n");
@@ -436,18 +439,13 @@ describe("Phase 4E guard — prompt authority", () => {
 
   it("gives ToolPromptContextProvider a real production composition reference", async () => {
     const source = await read("apps/daemon/src/daemon-composition.ts");
-
-    expect(source).toContain("createToolPromptContextProvider()");
-    expect(source).toContain("toolGuidance,");
-    expect(source).toContain("toContextGuidanceItem");
-    // The guidance reaches the renderer through the Context build input, not through a request the
-    // budget never measured.
-    const adapter = await read("packages/core/src/legacy-context-runtime-adapter.ts");
-    expect(adapter).toContain("toolGuidanceItems");
-    const builder = await read("packages/context/src/context-builder.ts");
-    expect(builder).toContain("toolGuidanceItems");
-    const renderer = await read("packages/context/src/context-renderer.ts");
-    expect(renderer).toContain("renderToolGuidance");
+    expect(source).toContain("createDaemonV2ContextEngine(");
+    expect(await read("apps/daemon/src/context/v2-context-composition.ts")).toContain(
+      "createCorePolicyContextSourceProvider",
+    );
+    expect(await read("packages/coding-agent/src/context/index.ts")).toContain(
+      "createProjectInstructionContextSourceProvider",
+    );
   });
 });
 

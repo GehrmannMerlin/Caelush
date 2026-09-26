@@ -124,7 +124,7 @@ export interface RunToolTurnDriverDependencies {
    * The canonical model feedback projector.
    *
    * It is constructed with the host Context runtime's token-projection implementation, so the one
-   * observation-budget algorithm stays owned by `@caelush/context` while `@caelush/agent` owns the model
+   * observation-budget algorithm is owned by the Agent Tool layer together with the model
    * feedback semantics.
    */
   readonly feedback: ModelToolFeedbackProjector;

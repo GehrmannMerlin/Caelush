@@ -48,3 +48,24 @@ export { createProjectMetadataContextSourceProvider } from "./providers/project-
 export type { ProjectMetadataContextSourceProviderOptions } from "./providers/project-metadata-provider.js";
 export { createLocalCodingContextPorts } from "./local-ports.js";
 export type { LocalCodingContextPorts, LocalCodingContextPortOptions } from "./local-ports.js";
+export { createLocalProjectInspector } from "./project-intelligence.js";
+export type {
+  CodingProjectDiagnostic,
+  CodingWorkspaceScope,
+  EnvironmentSnapshot,
+  InstructionKind,
+  PackageManagerInfo,
+  ProjectEcosystem,
+  ProjectInspector,
+  ProjectInspectorInput,
+  ProjectInstruction,
+  ProjectInstructions,
+  ProjectIntelligenceSnapshot,
+  ProjectLanguageSignal,
+  ProjectManifestEvidence,
+  ProjectPackage,
+  ProjectProfile,
+  ProjectRootDetectionResult,
+  ProjectScript,
+  ProjectToolEvidence,
+} from "./project-intelligence.js";

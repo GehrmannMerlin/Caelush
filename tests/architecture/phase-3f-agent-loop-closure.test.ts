@@ -300,8 +300,7 @@ describe("Phase 3F Agent Loop closure boundaries", () => {
         "AgentLoop",
       );
     }
-    // The one legal importer is Core's own public entry point, which re-exports the facade as the
-    // declared compatibility surface. Any *other* module importing it would be a second consumer.
+    // Phase 7G removed the retired Core facade and all of its compatibility imports.
     const loopImports = production.filter(
       (file) =>
         !file.startsWith("packages/core/src/agent-loop.ts") &&
@@ -309,9 +308,8 @@ describe("Phase 3F Agent Loop closure boundaries", () => {
         /from "\.\/agent-loop\.js"/.test(read(file)),
     );
     expect(loopImports).toEqual([]);
-    expect(read("packages/core/src/index.ts")).toContain(
-      'export { AgentLoop } from "./agent-loop.js";',
-    );
+    expect(existsSync(join(root, "packages/core/src/agent-loop.ts"))).toBe(false);
+    expect(read("packages/core/src/index.ts")).not.toContain("export { AgentLoop }");
 
     // The throwing model-turn facade has no production construction site either.
     const builders = production.filter(
@@ -336,9 +334,7 @@ describe("Phase 3F Agent Loop closure boundaries", () => {
     // The pure error mapping has its own module, so the facade's *implementation* file is no longer a
     // dependency of anything that only needs the mapping.
     expect(executable(CONTROLLER)).not.toContain("legacy-model-turn-executor");
-    expect(executable("packages/core/src/agent-loop.ts")).not.toContain(
-      "./legacy-model-turn-executor.js",
-    );
+    expect(existsSync(join(root, "packages/core/src/agent-loop.ts"))).toBe(false);
     expect(read("packages/core/src/model-turn-error-mapping.ts")).toContain(
       "export function toModelTurnExecutionError(",
     );

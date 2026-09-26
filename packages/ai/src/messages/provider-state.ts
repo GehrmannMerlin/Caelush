@@ -23,7 +23,7 @@ import type { JsonObject } from "../json/json-value.js";
  * ```text
  * @caelush/ai            stores, validates, carries
  * @caelush/agent         stores, projects, carries
- * @caelush/context       never sees it
+ * Context Engine          never sees it
  * @caelush/coding-agent  never sees it
  * ```
  *

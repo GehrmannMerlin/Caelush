@@ -341,6 +341,7 @@ export {
   createModelToolFeedbackProjector,
   MODEL_FEEDBACK_TRUNCATION_MARKER,
 } from "./observation/model-feedback-projector.js";
+export { createToolObservationBatchProjector } from "./observation/tool-observation-projector.js";
 export type {
   ModelObservationBatchProjector,
   ModelObservationCandidate,

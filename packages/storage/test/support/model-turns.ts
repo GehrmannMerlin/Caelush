@@ -1,6 +1,5 @@
 import type { AIModelRequest, AIModelTurnResult, ModelUsage } from "@caelush/ai";
 import { createLLMCallId } from "@caelush/protocol";
-import type { AgentLoopDependencies } from "@caelush/core";
 
 /** The frozen AI error spellings the durable retry layer understands. */
 export type TestAIErrorCode =
@@ -35,10 +34,9 @@ export interface TestAIErrorOptions {
 /**
  * Storage test support for the post-2C model seams.
  *
- * Phase 2C made the AgentLoop depend on `ModelCatalog` + a model turn executor instead of
- * an LLM client. Storage tests only need to *feed* those ports, so the port types here are
- * named through the Core dependency itself: Storage gains no production dependency on
- * `@caelush/agent`, and the package keeps its frozen dependency direction.
+ * Storage tests only need to feed the old throw-based fixture shape. Keep this fixture-local contract
+ * here rather than importing the retired Core AgentLoop facade or making test code a new production
+ * dependency edge.
  *
  * Phase 3A aligned the agent executor with the frozen union result and kept the legacy
  * throwing facade at the Core boundary. The production `AgentLoop.send` path therefore
@@ -48,14 +46,23 @@ export interface TestAIErrorOptions {
  * package's test tree would violate the workspace import boundary.
  */
 
-/** The input of one turn, named through the Core port. */
-export type ModelTurnExecutionInput = Parameters<AgentLoopDependencies["modelTurns"]["execute"]>[0];
+/** The input of one turn for the fixture-local throw-based executor. */
+export interface ModelTurnExecutionInput {
+  readonly request: AIModelRequest;
+  readonly signal: AbortSignal;
+}
 
-/** The executor port Core expects. */
-export type ModelTurnExecutor = AgentLoopDependencies["modelTurns"];
+/** The legacy fixture executor shape, intentionally local to these tests. */
+export interface ModelTurnExecutor {
+  execute(input: ModelTurnExecutionInput): Promise<AIModelTurnResult>;
+}
 
-/** The catalog port Core expects. */
-export type ModelTurnCatalog = AgentLoopDependencies["models"];
+/** The minimal catalog shape retained by an unused compatibility fixture. */
+export interface ModelTurnCatalog {
+  resolve(ref: AIModelRequest["model"]): unknown;
+  has(ref: AIModelRequest["model"]): boolean;
+  list(): readonly unknown[];
+}
 
 /** The subset of a turn result a test usually cares about. */
 export interface PartialTurnResult {

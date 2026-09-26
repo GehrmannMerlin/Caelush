@@ -348,13 +348,13 @@ describe("Phase 5A guard — package boundaries (freeze §150, §151)", () => {
       "packages/storage/src/index.ts",
       "packages/storage/src/storage.ts",
       "apps/daemon/src/daemon-composition.ts",
+      "apps/daemon/src/context/v2-context-composition.ts",
       "apps/daemon/src/services/session-conversation-context.ts",
       "apps/daemon/src/services/session-transcript-service.ts",
       "packages/agent/src/run/ports/run-execution-store.ts",
       "packages/core/src/run-agent-history.ts",
       "packages/core/src/run-message-materializer.ts",
       "packages/core/src/legacy-agent-conversation.ts",
-      "packages/core/src/legacy-context-runtime-adapter.ts",
       "packages/storage/src/run-execution-store.ts",
       "packages/agent/src/loop/context/context-engine-port.ts",
       "packages/agent/src/loop/types.ts",
@@ -700,27 +700,6 @@ describe("Phase 5A guard — retained foundations after the Phase 5D cutover", (
     expect(await exists("packages/storage/src/messages/legacy/dual-reader.ts")).toBe(false);
   });
 
-  it("keeps the Context execution unit on the canonical AI message contract", async () => {
-    const contextUnit = code(await read("packages/context/src/execution-unit.ts"));
-    expect(contextUnit).toContain("AIMessage");
-    expect(contextUnit).toContain('from "@caelush/ai"');
-    expect(contextUnit).not.toContain("LLMMessage");
-    expect(contextUnit).not.toContain("AgentMessageId");
-    expect(contextUnit).not.toContain("conversationTurnId");
-  });
-
-  it("keeps the Context TokenEstimator where it lives", async () => {
-    const estimator = code(await read("packages/context/src/token-estimator.ts"));
-    expect(estimator).toContain("export interface TokenEstimator");
-    expect(estimator).toContain("estimateText(text: string): number;");
-    // The Agent Domain declares its own narrow port and does not restate the heuristic.
-    const agentEstimator = code(
-      await read("packages/agent/src/messages/conversation/token-estimator.ts"),
-    );
-    expect(agentEstimator).toContain("estimateMessages(");
-    expect(agentEstimator).not.toContain("Utf8HeuristicTokenEstimator");
-  });
-
   it("keeps Client transcript loading on the canonical capability", async () => {
     const candidates = await activeSourceFiles(["packages/client/src"]);
     for (const file of candidates) {
@@ -809,9 +788,7 @@ describe("Phase 5A guard — one authority per responsibility", () => {
         "export interface SelectedAgentConversation {",
         "packages/agent/src/messages/conversation/selector.ts",
       ],
-      // `TokenEstimator` is deliberately absent from this list: the Agent Domain declares its
-      // own narrow port while `@caelush/context` keeps the algorithm, and the boundary has its
-      // own test below.
+      // `TokenEstimator` has its own focused declaration test below.
     ];
 
     for (const [declaration, expectedFile] of declarations) {
@@ -819,20 +796,12 @@ describe("Phase 5A guard — one authority per responsibility", () => {
     }
   });
 
-  it("keeps the Agent Domain's TokenEstimator a port, with the algorithm in @caelush/context", async () => {
-    // The freeze forbids `agent -> context`, so the two are separate declarations with
-    // different shapes: the Agent port takes projected AI messages, the Context one takes text.
+  it("keeps the Agent Domain's TokenEstimator as the sole token-estimation port", async () => {
     const holders = await declarationHolders("export interface TokenEstimator {");
-    expect(holders).toEqual([
-      "packages/agent/src/messages/conversation/token-estimator.ts",
-      "packages/context/src/token-estimator.ts",
-    ]);
+    expect(holders).toEqual(["packages/agent/src/messages/conversation/token-estimator.ts"]);
 
     const file = await read("packages/agent/src/messages/conversation/token-estimator.ts");
-    // The documentation is the contract statement here, so it is checked with comments intact.
-    // A production host injects the Context implementation; the Agent default is a floor.
-    expect(file).toMatch(/A production\s+\*\s+host injects the Context implementation\./);
-    expect(file).toMatch(/a floor that keeps a\s+\*\s+misconfigured composition root/);
+    expect(file).toContain("STRUCTURAL_TOKEN_ESTIMATOR");
 
     const port = code(file);
     // The port speaks projected AI, so an implementation cannot accidentally count a durable
@@ -858,30 +827,12 @@ describe("Phase 5A guard — one authority per responsibility", () => {
       port.indexOf("}", port.indexOf("export interface TokenEstimator {")),
     );
     expect([...portBody.matchAll(/^\s{2}\w+\(/gm)]).toHaveLength(1);
-
-    const concrete = code(await read("packages/context/src/token-estimator.ts"));
-    expect(concrete).toContain("export class Utf8HeuristicTokenEstimator");
-    expect(concrete).toContain("estimateText(text: string): number;");
   });
 
   it("keeps the Agent Message Domain's ExecutionUnit the only one in @caelush/agent", async () => {
-    // Two `ExecutionUnit` types remain for the Agent domain and Context selection mechanics:
-    //
-    //   packages/agent/src/messages/conversation/execution-unit.ts   the Agent Message Domain
-    //   packages/context/src/execution-unit.ts                       the AIMessage-based one
-    //
-    // `@caelush/agent` may contain only the first, and the second must stay outside the domain
-    // so `agent -X-> context` remains true.
+    // The Agent Message Domain owns the only ExecutionUnit contract.
     const holders = await declarationHolders("export interface ExecutionUnit {");
-    expect(holders).toEqual([
-      "packages/agent/src/messages/conversation/execution-unit.ts",
-      "packages/context/src/execution-unit.ts",
-    ]);
-    expect(holders.filter((holder) => holder.startsWith("packages/agent/"))).toHaveLength(1);
-    // The Context one uses canonical AI messages and local source positions only for compaction.
-    const legacy = code(await read("packages/context/src/execution-unit.ts"));
-    expect(legacy).toContain("AIMessage");
-    expect(legacy).toContain(":execution:${index}");
+    expect(holders).toEqual(["packages/agent/src/messages/conversation/execution-unit.ts"]);
     // The Agent one derives identity from the durable message, never from a position.
     const domain = code(await read("packages/agent/src/messages/conversation/execution-unit.ts"));
     expect(domain).toContain("assistantMessageId");
@@ -1093,8 +1044,6 @@ describe("Phase 5A guard — source anchors", () => {
       "packages/agent/src/loop/history/conversation-history.ts",
       "packages/agent/src/loop/context/context-engine-port.ts",
       "packages/agent/src/run/ports/run-execution-store.ts",
-      "packages/context/src/execution-unit.ts",
-      "packages/context/src/token-estimator.ts",
       "packages/client/src/index.ts",
       "packages/agent/test/messages/independent-use.test.ts",
     ];

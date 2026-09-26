@@ -88,6 +88,7 @@ export { createContextMaterializer } from "./materializer/context-materializer.j
 export type {
   ContextMaterializer,
   ContextMaterializerOptions,
+  ContextToolObservationReprojector,
 } from "./materializer/context-materializer.js";
 
 export {

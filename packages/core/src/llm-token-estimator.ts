@@ -1,4 +1,3 @@
-import { Utf8HeuristicTokenEstimator, type TokenEstimator } from "@caelush/context";
 import type { AIModelRequest } from "@caelush/ai";
 
 export interface LLMTokenEstimator {
@@ -10,12 +9,10 @@ export interface LLMTokenEstimator {
  * the complete JSON-safe request, including tool schemas and tool results.
  */
 export class RequestTokenEstimator implements LLMTokenEstimator {
-  constructor(private readonly textEstimator: TokenEstimator) {}
-
   estimate(request: AIModelRequest): number | undefined {
     try {
-      const value = this.textEstimator.estimateText(JSON.stringify(request));
-      return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+      const bytes = new TextEncoder().encode(JSON.stringify(request)).byteLength;
+      return bytes === 0 ? 0 : Math.ceil(bytes / 3);
     } catch {
       return undefined;
     }
@@ -23,5 +20,5 @@ export class RequestTokenEstimator implements LLMTokenEstimator {
 }
 
 export function createDefaultLLMTokenEstimator(): RequestTokenEstimator {
-  return new RequestTokenEstimator(new Utf8HeuristicTokenEstimator());
+  return new RequestTokenEstimator();
 }

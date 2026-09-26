@@ -55,12 +55,30 @@ function prepared(): PreparedAgentContext {
     whyLoaded: "test reference",
     payload: { kind: "TEXT", text: "Reference context, never a conversation instruction." },
   });
+  const contribution = createContextItem({
+    id: createContextItemId("contribution:fact"),
+    type: "agent.extension-contribution",
+    source: {
+      providerId: createContextSourceId("agent.extension-contributions"),
+      sourceRef: "hook/fact",
+      version: "v1",
+    },
+    scope: "TURN",
+    retention: "EPHEMERAL",
+    priorityClass: "HIGH",
+    tokenEstimate: 4,
+    cacheStability: "DYNAMIC",
+    freshness: "CURRENT",
+    sensitivity: "INTERNAL",
+    whyLoaded: "validated contribution",
+    payload: { kind: "TEXT", text: "[REDACTED:HOST_PATH]" },
+  });
   const policy = createContextPolicy({
     model: MODEL,
     requestOverhead: { toolSchemaTokens: 0, protocolOverheadTokens: 0, totalTokens: 0 },
     options: { outputReserveTokens: 1, safetyReserveTokens: 1 },
   });
-  const plan = createContextPlanner().plan({ items: [instruction], policy });
+  const plan = createContextPlanner().plan({ items: [instruction, contribution], policy });
   const document = createContextDocumentBuilder().build({
     plan,
     rehydrated: {
@@ -140,6 +158,8 @@ describe("Phase 7D ContextMaterializer", () => {
 
     expect(messages[0]).toMatchObject({ role: "system" });
     expect(messages[0]?.content).toContain("Reference context");
+    expect(messages[0]?.content).toContain("<context_contributions>");
+    expect(messages[0]?.content).toContain("[REDACTED:HOST_PATH]");
     expect(messages.map((message) => message.role)).toEqual([
       "system",
       "user",
@@ -177,5 +197,47 @@ describe("Phase 7D ContextMaterializer", () => {
     await expect(
       materializer.materialize({ prepared: prepared(), model: MODEL, signal: controller.signal }),
     ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("reprojects only the recovery tail while preserving normal historical projection", async () => {
+    let reprojectCalls = 0;
+    const materializer = createContextMaterializer({
+      projectors: createStandardAgentMessageProjectorRegistry(),
+      tokenEstimator: createUtf8HeuristicTokenEstimator(),
+      toolObservationReprojector: {
+        async reproject({ stored }) {
+          reprojectCalls += 1;
+          if (stored.message.type !== "TOOL_RESULT") return undefined;
+          return {
+            role: "tool",
+            toolCallId: stored.message.toolCallId,
+            toolName: stored.message.toolName,
+            content: "reprojected recovery content",
+            isError: stored.message.isError,
+          };
+        },
+      },
+    });
+
+    const normal = await materializer.materialize({
+      prepared: prepared(),
+      model: MODEL,
+      signal: new AbortController().signal,
+    });
+    expect(normal.find((message) => message.role === "tool")).toMatchObject({
+      content: "tool output",
+    });
+    expect(reprojectCalls).toBe(0);
+
+    const recovered = await materializer.materialize({
+      prepared: prepared(),
+      model: MODEL,
+      signal: new AbortController().signal,
+      reprojectOpenToolObservations: true,
+    });
+    expect(recovered.find((message) => message.role === "tool")).toMatchObject({
+      content: "reprojected recovery content",
+    });
+    expect(reprojectCalls).toBe(1);
   });
 });

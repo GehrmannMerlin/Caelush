@@ -213,6 +213,35 @@ describe("Phase 7C Generic Source Providers", () => {
     expect(result.items[0]!.source.sourceRef).toBe("host.extension/extension_1/fact_1");
   });
 
+  it("redacts contribution secrets and host paths before they enter ContextItems", async () => {
+    const provider = createExtensionContributionContextSourceProvider({
+      loader: {
+        async load() {
+          return [
+            {
+              id: "unsafe",
+              source: "host.extension",
+              replay: "SNAPSHOT" as const,
+              items: [
+                {
+                  id: "unsafe-fact",
+                  priorityClass: "NORMAL" as const,
+                  content: "TOKEN=secret-value /home/private/project",
+                  whyLoaded: "host path /tmp/private",
+                },
+              ],
+            },
+          ];
+        },
+      },
+    });
+
+    const result = await provider.collect(sourceInput);
+
+    expect(result.items[0]!.payload).toEqual({ kind: "TEXT", text: "[REDACTED:HOST_PATH]" });
+    expect(result.items[0]!.whyLoaded).toBe("[REDACTED:HOST_PATH]");
+  });
+
   it("keeps branch context as an explicit stable no-op", async () => {
     const provider = createBranchContextSourceProvider();
     const result = await provider.collect(sourceInput);

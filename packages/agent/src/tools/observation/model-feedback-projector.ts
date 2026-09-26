@@ -49,13 +49,10 @@ import type { ToolCallRequest } from "../call/tool-call-preparer.js";
  *
  * ## What it deliberately does not own
  *
- * The token-projection *algorithm* is not here. `@caelush/context` owns it, and the Architecture V2
- * dependency rules forbid `agent -> context`. The projector therefore receives it as a narrow injected
- * callback ({@link ModelObservationBatchProjector}); the composition root wires the two together. That
- * keeps `@caelush/agent` authoritative over model feedback *semantics* while leaving the truncation
- * algorithm with its existing owner — and it means the head + omission-marker + tail behaviour the
- * Context projector applies to `read_file` and `exec_command`-shaped output is preserved rather than
- * silently degraded to a prefix cut.
+ * The bounded rendering policy is a narrow Agent Tool observation seam. The public feedback projector
+ * owns model-feedback semantics, while `ModelObservationBatchProjector` owns bounded rendering in the
+ * production composition. This keeps head + omission-marker + tail behavior for file and command
+ * output explicit without exposing raw execution data to the model.
  */
 export interface ProjectedToolFeedback {
   readonly message: AIToolResultMessage;
@@ -91,8 +88,8 @@ export interface ModelObservationCandidate {
  *
  * It is an *implementation* dependency, not part of the frozen `project(...)` input: a host that
  * supplies one is choosing how to bound text, not widening the contract. The composition root supplies
- * the existing Context implementation, so there is exactly one observation-budget algorithm in the
- * repository.
+ * the canonical Agent observation implementation, so there is exactly one observation-budget algorithm
+ * in the repository.
  *
  * Implementations must return exactly one bounded summary per candidate, in the same order, and should
  * throw rather than silently return a different count.

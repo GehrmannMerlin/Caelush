@@ -37,7 +37,6 @@
     "@caelush/agent": "workspace:*",
     "@caelush/ai": "workspace:*",
     "@caelush/coding-agent": "workspace:*",
-    "@caelush/context": "workspace:*",
     "@caelush/core": "workspace:*",
     "@caelush/memory": "workspace:*",
     "@caelush/protocol": "workspace:*",

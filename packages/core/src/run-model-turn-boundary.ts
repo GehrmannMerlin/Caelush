@@ -4,7 +4,7 @@ import type { ModelTurnBoundaryInput, ModelTurnBoundaryPort } from "@caelush/age
 import type { ModelRef, StepId } from "@caelush/protocol";
 
 import type { AgentBudgetBlock } from "./agent-errors.js";
-import type { AgentProviderTurnState } from "./agent-loop-ports.js";
+import type { AgentProviderTurnState } from "./run-agent-types.js";
 
 /**
  * The durable model turn boundary.

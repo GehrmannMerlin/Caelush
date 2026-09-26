@@ -253,7 +253,7 @@ describe("package boundaries", () => {
   it("keeps the Phase 6B loop above Context and narrow LLM contracts", async () => {
     const core = await readManifest("packages/core/package.json");
     const dependencies = dependencyEntries(core);
-    expect(dependencies["@caelush/context"]).toBe("workspace:*");
+    expect(dependencies["@caelush/context"]).toBeUndefined();
     expect(dependencies["@caelush/llm"]).toBeUndefined();
     expect(dependencies["@caelush/protocol"]).toBe("workspace:*");
     // Phase 4F deleted `@caelush/tools`: the Tool Kernel the Phase 6B loop prepares tool calls for is
@@ -262,55 +262,6 @@ describe("package boundaries", () => {
     expect(dependencies[retiredLegacyToolPackage.name]).toBeUndefined();
     expect(Object.keys(dependencies)).not.toContain("ai");
     expect(Object.keys(dependencies)).not.toContain("@ai-sdk/openai-compatible");
-  });
-
-  it("allows context to reuse Protocol while keeping it below all execution boundaries", async () => {
-    const context = await readManifest("packages/context/package.json");
-    const dependencies = dependencyEntries(context);
-
-    expect(dependencies[protocolPackageName]).toBe("workspace:*");
-    expect(dependencies["@caelush/shared"]).toBe("workspace:*");
-    expect(dependencies.ignore).toBe("7.0.6");
-    expect(Object.keys(dependencies).sort()).toEqual([
-      "@caelush/ai",
-      "@caelush/protocol",
-      "@caelush/security",
-      "@caelush/shared",
-      "ignore",
-    ]);
-  });
-
-  it("allows Context to import only the provider-independent messages subpath", async () => {
-    const sourceRoot = path.join(repositoryRoot, "packages", "context", "src");
-    const files = await sourceFiles(sourceRoot);
-    const source = (await Promise.all(files.map((filePath) => readFile(filePath, "utf8")))).join(
-      "\n",
-    );
-    const imports = [...source.matchAll(/from\s+["'](@caelush\/ai(?:\/[^"']*)?)["']/g)].map(
-      (match) => match[1],
-    );
-    expect(imports.length).toBeGreaterThan(0);
-    expect(imports.every((value) => value === "@caelush/ai")).toBe(true);
-  });
-
-  it("keeps Context security reuse narrow and execution-independent", async () => {
-    const sourceRoot = path.join(repositoryRoot, "packages", "context", "src");
-    const files = await sourceFiles(sourceRoot);
-    const source = (await Promise.all(files.map((filePath) => readFile(filePath, "utf8")))).join(
-      "\n",
-    );
-    const securityImports = [
-      ...source.matchAll(/from\s+["'](@caelush\/security(?:\/[^"']*)?)["']/g),
-    ].map((match) => match[1]);
-    // Phase 6F adds the Context Contribution projection, which reuses the same narrow redaction
-    // source of truth as Context's existing project-derived text path.
-    expect(securityImports).toHaveLength(3);
-    expect(securityImports).toEqual(
-      expect.arrayContaining(["@caelush/security/redaction", "@caelush/security/sensitive-path"]),
-    );
-    expect(source).not.toMatch(
-      /from\s+["']@caelush\/(?:security|agent|coding-agent|runtime|storage|events|daemon)["']/,
-    );
   });
 
   it("allows the daemon to compose protocol, storage, and canonical event observation through public entries", async () => {

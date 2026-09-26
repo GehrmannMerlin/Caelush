@@ -331,6 +331,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         },
         model: input.model,
         signal: input.signal,
+        reprojectOpenToolObservations: input.mode === "FORCED_RECOVERY",
       });
       const audit = receiptBuilder.build({
         identity: input.identity,
@@ -352,7 +353,14 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
       if (audit.report.estimatedInputTokens > policy.effectiveInputLimitTokens) {
         throw new ContextExhaustedError();
       }
-      await options.usageStore.upsert(audit.usage);
+      await options.usageStore.upsert(
+        input.mode === "FORCED_RECOVERY"
+          ? {
+              ...audit.usage,
+              lastRecoveryStages: ["REPROJECT_OPEN_OBSERVATIONS_EMERGENCY"],
+            }
+          : audit.usage,
+      );
       throwIfAborted(input.signal);
       return Object.freeze({
         messages: materialized,
