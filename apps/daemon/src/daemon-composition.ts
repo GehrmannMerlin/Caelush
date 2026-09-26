@@ -4,10 +4,8 @@ import {
   RunExecutionScopeRegistry,
   RunRetryRegistry,
   createCodingCompletionAssembly,
-  createLegacyContextRuntimeAdapter,
   createProjectProfileProvider,
   createRunAgentExecutionContext,
-  createToolExecutionLedgerRawObservationResolver,
   toContextObservationProjection,
   type RunAgentExecutionContextFactory,
   type VerificationModelClient,
@@ -16,18 +14,7 @@ import {
   type ToolFeedbackContributionApplier,
   type RunMessageAuthority,
 } from "@caelush/core";
-import {
-  ContextRuntimeCoordinator,
-  createContextItem,
-  createContextUsageProjection,
-  createDefaultContextBuilder,
-  createLocalProjectInspector,
-  createLocalRelevantFilePlanner,
-  createModelContextProfile,
-  Utf8HeuristicTokenEstimator,
-  type ContextItem,
-} from "@caelush/context";
-import { MemoryRetriever, type MemoryRecord } from "@caelush/memory";
+import { createContextUsageProjection, createLocalProjectInspector } from "@caelush/context";
 import { createAIError, createAISubsystem } from "@caelush/ai";
 import {
   createDaemonApiAdapters,
@@ -46,7 +33,6 @@ import {
   createAgentMessageIdFactory,
   createAgentConversationRepository,
   createAgentConversationValidator,
-  createConversationSelector,
   createDeterministicConversationTurnIdFactory,
   createAgentMessageCodecRegistry,
   createAgentMessageProjectorRegistry,
@@ -64,6 +50,7 @@ import type {
   ContextContributionHook,
   ContextContributionPipeline,
   ContextContributionRegistration,
+  ContextUsageSnapshot,
   RunEventNotifierPort,
 } from "@caelush/agent";
 import type {
@@ -88,6 +75,7 @@ import {
   type ClientModelSelection,
   type DaemonInfo,
   type DefaultRunConfiguration,
+  type RunId,
   type TimestampMs,
 } from "@caelush/protocol";
 import {
@@ -138,7 +126,6 @@ import {
   createRuntimeProgressSignalProjector,
   createRuntimeProcessOperations,
   createRuntimeReadOnlyOperations,
-  createToolPromptContextProvider,
   createLegacyNumericArgumentNormalization,
   createToolGuardPipeline,
   createToolFeedbackContributionPipeline,
@@ -177,9 +164,9 @@ import {
   RunExecutionSupervisor,
   type RunExecutionSupervisorLogger,
 } from "./execution/run-execution-supervisor.js";
-import { SessionConversationContextProvider } from "./services/session-conversation-context.js";
 import { DAEMON_VERSION } from "./version.js";
 import { RunEventHub, type SubscriberQueuePolicy } from "./events/index.js";
+import { createDaemonV2ContextEngine } from "./context/v2-context-composition.js";
 
 /**
  * Project durable invocation state back onto the canonical prepared call.
@@ -351,7 +338,15 @@ export interface DaemonComposition {
   readonly toolTurn: ToolTurnPipeline;
   readonly messages: RunMessageAuthority;
   readonly transcriptProjectors: import("@caelush/agent").AgentMessageTranscriptProjectorRegistry;
-  readonly contextRuntime: ContextRuntimeCoordinator;
+  /** Narrow compatibility view retained for Core's pre-V2 Tool observation fallback. */
+  readonly contextRuntime: {
+    readonly getContextPolicy?: (runId: string) =>
+      | {
+          readonly maxSingleObservationTokens: number;
+          readonly maxObservationBatchTokens: number;
+        }
+      | undefined;
+  };
   readonly contextUsage: {
     getContextUsage(
       runId: string,
@@ -498,46 +493,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
   };
 
   const inspector = createLocalProjectInspector();
-  const memoryRetriever = new MemoryRetriever(options.storage.memory);
-  const memoryEstimator = new Utf8HeuristicTokenEstimator();
-  const configuredProfiles = providers.flatMap((config) =>
-    Object.entries(config.modelProfiles ?? {}).map(([modelId, profile]) =>
-      createModelContextProfile({
-        providerId: config.provider,
-        modelId,
-        contextWindowTokens: profile.contextWindowTokens,
-        maxOutputTokens: profile.maxOutputTokens,
-        recommendedOutputReserveTokens: profile.recommendedOutputReserveTokens,
-        supportsPromptCaching: profile.supportsPromptCaching ?? false,
-        supportsUsageReporting: profile.supportsUsageReporting ?? false,
-        ...(profile.toolOutputSoftLimitTokens === undefined
-          ? {}
-          : { toolOutputSoftLimitTokens: profile.toolOutputSoftLimitTokens }),
-        profileSource: "CONFIGURATION",
-      }),
-    ),
-  );
-  const contextRuntime = new ContextRuntimeCoordinator({
-    configuredProfiles,
-    checkpointRepository: options.storage.contextCheckpoints,
-    usageRepository: options.storage.contextRuntimeStates,
-    clock,
-    checkpointIdFactory: { create: () => createEventId() },
-    memoryLoader: async ({ projectId, goal, maxTokens }) => {
-      const records = await memoryRetriever.retrieve({
-        scope: "PROJECT",
-        ...(projectId === undefined ? {} : { projectId }),
-        goal,
-        maxItems: 32,
-        maxTokens,
-      });
-      return projectMemoryRecords(records, maxTokens, memoryEstimator);
-    },
-    rawObservationLoader: async ({ runId, artifactRef }) => {
-      const artifact = await options.storage.contextArtifacts.readInternal(artifactRef);
-      return artifact?.runId === runId ? artifact.content : undefined;
-    },
-  });
+  const contextRuntime = Object.freeze({});
   const messageProjectors = createAgentMessageProjectorRegistry({
     projectors: [
       ...STANDARD_AGENT_MESSAGE_PROJECTORS,
@@ -602,8 +558,6 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       return hasEarlierRun ? "FOLLOW_UP" : "GOAL";
     },
   };
-  const planner = createLocalRelevantFilePlanner();
-  const contextBuilder = createDefaultContextBuilder();
   /**
    * The Phase 4E production Tool composition.
    *
@@ -651,33 +605,6 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     activeToolRegistry,
     options.toolRegistrations ?? defaultCodingTools,
   );
-  /**
-   * The Coding Tool prompt provider, composed once per daemon.
-   *
-   * ```text
-   * the active registry's tools   →  their Coding promptSnippets  →  the budgeted Context build
-   * ```
-   *
-   * Phase 4E moved usage guidance out of `AIToolSpec.description` and into Context. The provider is the
-   * Coding product layer's, and this composition supplies the **active tool names in registry order** —
-   * the order the registry, the model catalog and this guidance block all share.
-   *
-   * The adapter hands it the tools a turn actually exposes, and the intersection with the active
-   * registry is taken here, so a Tool this host did not register (a Git Tool on a non-Git workspace)
-   * can never describe itself to a model and the guidance block cannot name a Tool the model was not
-   * offered.
-   */
-  const toolPromptProvider = createToolPromptContextProvider();
-  const activeToolNames = activeToolRegistry.names();
-  const toolGuidance: (
-    turnToolNames: readonly string[],
-  ) => Promise<readonly ContextItem[]> = async (turnToolNames) => {
-    const offered = new Set<string>(turnToolNames);
-    const items = await toolPromptProvider.provide({
-      activeTools: activeToolNames.filter((name) => offered.has(name)),
-    });
-    return items.map((item) => toContextGuidanceItem(item, activeToolNames.length));
-  };
   /**
    * The production Tool assembly.
    *
@@ -948,18 +875,6 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     // model-facing form rather than projected down to it.
     modelSpecs: () => activeToolRegistry.modelSpecs(),
   } satisfies ToolTurnPipeline;
-  /**
-   * Where a Tool result's raw output is resolved from, for the legacy Context adapter.
-   *
-   * A forced Context recovery re-projects the unbounded Tool output under a tighter policy, and the
-   * frozen `AIToolResultMessage` deliberately has no field for the artifact pointer that finds it.
-   * The Tool execution ledger already holds it, keyed by the same `(run, step, externalCallId)`
-   * identity the invocation was executed under, so this is a lookup over durable data rather than a
-   * second store — and it is what makes the recovery survive a restart.
-   */
-  const rawObservationRefs = createToolExecutionLedgerRawObservationResolver({
-    store: options.storage.toolExecution,
-  });
   const scopes = new RunExecutionScopeRegistry();
   const deadlineRegistry = new RunDeadlineRegistry({ clock });
   const retryRegistry = new RunRetryRegistry({ clock });
@@ -970,18 +885,8 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     }),
   } satisfies RunExecutionConfigResolver;
   const baseResolver: RunExecutionConfigResolver = options.configResolver ?? defaultResolver;
-  const historyContext = new SessionConversationContextProvider({
-    runs: options.storage.runs,
-    messageRecords: options.storage.messageRecords,
-    codecs: messageCodecs,
-    projectors: messageProjectors,
-  });
   const executionConfigResolver = {
-    resolve: async (run) => {
-      const config = await baseResolver.resolve(run);
-      if (config.historyPrefix !== undefined) return config;
-      return { ...config, historyPrefix: await historyContext.getHistoryPrefix(run) };
-    },
+    resolve: (run) => baseResolver.resolve(run),
   } satisfies RunExecutionConfigResolver;
   const agentExecution: RunAgentExecutionContextFactory = {
     async resolve(run) {
@@ -992,43 +897,25 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
           contextLimits: config.contextLimits,
           tools: activeToolRegistry.modelSpecs(),
           ...(config.modelSettings === undefined ? {} : { modelSettings: config.modelSettings }),
-          ...(config.historyPrefix === undefined ? {} : { historyPrefix: config.historyPrefix }),
           ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
           ...(config.explicitPaths === undefined ? {} : { explicitPaths: config.explicitPaths }),
         },
         models: ai.models,
         modelTurnExecutor,
         stepIds: { create: createStepId },
-        // The frozen Context Engine seam. The legacy Context System is configured per turn — base
-        // prompt, limits, cwd, explicit paths — so the host builds its adapter from the turn's own
-        // input, and the general loop never sees any of it. The adapter takes no model catalog: the
-        // descriptor the loop resolved is the one context build authority for the turn.
+        // Production Run turns use the Agent-owned V2 Context Engine. The legacy Context package
+        // remains available through the read-only compatibility facade below, but it is not an
+        // active prompt, selection, compaction, or persistence authority.
         createContextEngine: (input) =>
-          createLegacyContextRuntimeAdapter({
-            inspector,
-            planner,
-            contextBuilder,
-            contextRuntime,
-            conversationProjectors: messageProjectors,
-            conversationSelector: createConversationSelector({ projector: messageProjectors }),
-            baseSystemPrompt: input.baseSystemPrompt,
-            contextLimits: input.contextLimits,
-            workspace: input.run.workspace,
-            runId: input.run.id,
-            rawObservationRefs,
-            toolGuidance,
-            ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
-            ...(input.explicitPaths === undefined ? {} : { explicitPaths: input.explicitPaths }),
-            ...(input.verificationRepairContext === undefined
-              ? {}
-              : {
-                  verificationRepairContext: () => Promise.resolve(input.verificationRepairContext),
-                }),
-            contextContributionPipeline: contributionPipeline,
-            contextArtifacts: options.storage.contextArtifacts,
-            contextContributionPipelineId,
-            ...(input.runMode === undefined ? {} : { runMode: input.runMode }),
-            now: clock.now,
+          createDaemonV2ContextEngine({
+            input,
+            storage: options.storage,
+            runtime,
+            gateway,
+            messageProjectors,
+            contributionPipeline,
+            notifier: eventNotifier,
+            clock,
           }),
       });
     },
@@ -1147,11 +1034,8 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     contextRuntime,
     contextUsage: {
       getContextUsage: async (runId) => {
-        const current = contextRuntime.getContextUsage(runId);
-        if (current !== undefined) return current;
-        const persisted = await options.storage.contextRuntimeStates.getByRun(runId);
-        if (persisted !== undefined) return createContextUsageProjection(persisted);
-        return undefined;
+        const usage = await options.storage.contextUsage.getByRun(runId as RunId);
+        return usage === undefined ? undefined : projectV2ContextUsage(usage);
       },
     },
     controller,
@@ -1174,39 +1058,56 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
   };
 }
 
-function projectMemoryRecords(
-  records: readonly MemoryRecord[],
-  maxTokens: number,
-  estimator: Utf8HeuristicTokenEstimator,
-): readonly import("@caelush/context").ContextItem[] {
-  const items: import("@caelush/context").ContextItem[] = [];
-  let usedTokens = 0;
-  for (const record of records) {
-    if (record.sensitivity === "SENSITIVE") continue;
-    const content = `${record.topic}: ${record.fact}`;
-    const tokenEstimate = estimator.estimateText(content);
-    if (usedTokens + tokenEstimate > maxTokens) continue;
-    items.push(
-      createContextItem({
-        id: record.id,
-        type: "MEMORY",
-        sourceRef: record.id,
-        scope: "PROJECT",
-        retention: "RETRIEVABLE",
-        priorityClass: "NORMAL",
-        tokenEstimate,
-        cacheStability: "STABLE",
-        freshness: "CURRENT",
-        sensitivity: record.sensitivity,
-        whyLoaded: "project goal match",
-        createdSequence: 0,
-        updatedSequence: 0,
-        content,
-      }),
-    );
-    usedTokens += tokenEstimate;
-  }
-  return items;
+function projectV2ContextUsage(input: ContextUsageSnapshot) {
+  const tokens = new Map(input.breakdown.map((item) => [item.sourceId, item.tokens]));
+  const sourceTokens = (prefix: string): number =>
+    [...tokens.entries()]
+      .filter(([sourceId]) => sourceId === prefix || sourceId.startsWith(`${prefix}.`))
+      .reduce((total, [, value]) => total + value, 0);
+  const corePolicy = sourceTokens("agent.core-policy");
+  const checkpoint = sourceTokens("agent.checkpoint");
+  const conversation = sourceTokens("agent.conversation");
+  const projectInstructions = sourceTokens("coding.project-instructions");
+  const relevantFiles = sourceTokens("coding.relevant-files");
+  const memory = sourceTokens("agent.memory");
+  const project =
+    projectInstructions +
+    sourceTokens("coding.workspace") +
+    sourceTokens("coding.runtime-facts") +
+    sourceTokens("coding.project-metadata") +
+    sourceTokens("coding.git-state");
+  return createContextUsageProjection({
+    runId: input.runId,
+    providerId: input.modelRef.provider,
+    modelId: input.modelRef.model,
+    profileSource: "CONFIGURATION",
+    contextWindowTokens: input.contextWindowTokens,
+    rawContextWindowTokens: input.contextWindowTokens,
+    effectiveInputLimitTokens: input.effectiveInputLimitTokens,
+    estimatedInputTokens: input.estimatedInputTokens,
+    pressureState: input.pressureState,
+    compactionCount: input.compactionCount,
+    ...(input.lastCompactionAt === undefined ? {} : { lastCompactionAt: input.lastCompactionAt }),
+    breakdown: {
+      pinned: corePolicy + projectInstructions,
+      checkpoint,
+      recentTail: conversation,
+      project,
+      files: relevantFiles,
+      toolObservations: 0,
+      memory,
+      systemTokens: corePolicy,
+      goalTokens: 0,
+      currentUserTokens: conversation,
+      relevantFileTokens: relevantFiles,
+      currentTurnTokens: conversation,
+      mandatoryTokens: corePolicy + projectInstructions + checkpoint,
+    },
+    updatedAt: input.updatedAt,
+    lastBuildAt: input.updatedAt,
+    lastRecoveryStages: [],
+    lastBuildStatus: input.lastBuildStatus,
+  });
 }
 
 /**
@@ -1317,31 +1218,6 @@ function createActiveCodingCatalog(
  * compiled into a Tool definition — it carries no workspace path, no secret and no live value — and
  * marking it otherwise would make the renderer drop it.
  */
-function toContextGuidanceItem(
-  item: import("@caelush/agent").LegacyContextItem,
-  activeToolCount: number,
-): ContextItem {
-  const tokenEstimate =
-    item.tokenEstimate ?? Math.ceil(Buffer.byteLength(item.content, "utf8") / 3);
-  return createContextItem({
-    id: item.id,
-    type: "TOOL_GUIDANCE",
-    sourceRef: "coding.tool_prompt",
-    scope: "RUN",
-    retention: "EPHEMERAL",
-    priorityClass: item.priorityClass === "OPTIONAL" ? "LOW" : item.priorityClass,
-    tokenEstimate,
-    cacheStability: "STABLE",
-    freshness: "CURRENT",
-    sensitivity: "PUBLIC",
-    whyLoaded:
-      item.whyLoaded ?? `Tool guidance for ${String(activeToolCount)} active Coding tool(s).`,
-    createdSequence: 0,
-    updatedSequence: 0,
-    content: item.content,
-  });
-}
-
 function createRunBoundVerificationExecution(
   runtime: LocalRuntime,
   runs: Pick<CaelushStorage["runs"], "get">,
