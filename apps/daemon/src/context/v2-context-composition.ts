@@ -10,7 +10,6 @@ import {
   createContextRequestOverheadEstimator,
   createContextRehydrator,
   createContextSourceRegistryBuilder,
-  createContextSummarizationRunner,
   createConversationContextSourceProvider,
   createCorePolicyContextSourceProvider,
   createExtensionContributionContextSourceProvider,
@@ -27,7 +26,6 @@ import {
   type RunEventNotifierPort,
 } from "@caelush/agent";
 import {
-  CODING_CONTEXT_SOURCE_IDS,
   createGitStateContextSourceProvider,
   createNoOpSkillCatalogPort,
   createProjectInstructionContextSourceProvider,
@@ -50,7 +48,7 @@ import { MemoryRetriever } from "@caelush/memory";
 import { redactText } from "@caelush/security";
 import { createEventId } from "@caelush/protocol";
 import type { AgentMessageProjectorRegistry } from "@caelush/agent";
-import { createAIContextSummarizerAdapter } from "./ai-context-summarizer-adapter.js";
+import { createBudgetedContextSummarizer } from "./context-compaction-composition.js";
 import { createDeterministicCompactionFactsProvider } from "./deterministic-compaction-facts-adapter.js";
 
 export interface DaemonV2ContextCompositionOptions {
@@ -94,25 +92,13 @@ export function createDaemonV2ContextEngine(options: DaemonV2ContextCompositionO
     codingPorts,
     storage: options.storage,
   });
-  const summarizationRunner = createContextSummarizationRunner({
-    summarizer: createAIContextSummarizerAdapter(options.gateway),
+  const summarizer = createBudgetedContextSummarizer({
+    gateway: options.gateway,
+    budget: options.storage.budget,
+    run: input.run,
+    clock: options.clock,
   });
   const factsProvider = createDeterministicCompactionFactsProvider({ storage: options.storage });
-  const forcedPolicy = {
-    targetRecentTailRatio: 0.12,
-    targetRecentTailTokensCap: 4_096,
-    minRecentTailRatio: 0.05,
-    minRecentTailTokensCap: 1_024,
-    maxSingleObservationTokensCap: 4_096,
-    maxSingleObservationRatio: 0.05,
-    maxObservationBatchTokensCap: 8_192,
-    maxObservationBatchRatio: 0.12,
-    sourceLimits: {
-      [String(CODING_CONTEXT_SOURCE_IDS.relevantFiles)]: 4_096,
-      [String(CODING_CONTEXT_SOURCE_IDS.projectMetadata)]: 1_024,
-      "agent.memory": 1_024,
-    },
-  } as const;
 
   return createV2ContextEngine({
     sourceRegistry: sources,
@@ -125,7 +111,12 @@ export function createDaemonV2ContextEngine(options: DaemonV2ContextCompositionO
     checkpointIdFactory: { create: () => `ctx_${String(createEventId())}` },
     eventIdFactory: { create: createEventId },
     clock: options.clock,
-    forcedPolicy,
+    forcedObservationPolicy: {
+      maxSingleObservationTokensCap: 4_096,
+      maxSingleObservationRatio: 0.05,
+      maxObservationBatchTokensCap: 8_192,
+      maxObservationBatchRatio: 0.12,
+    },
     requestOverheadEstimator: createContextRequestOverheadEstimator({ tokenEstimator }),
     historyIndexer: createContextHistoryIndexer(),
     documentBuilder: createContextDocumentBuilder(),
@@ -182,7 +173,7 @@ export function createDaemonV2ContextEngine(options: DaemonV2ContextCompositionO
       now: options.clock.now,
       tokenEstimator,
     }),
-    summarizationRunner,
+    summarizer,
     deterministicFactsProvider: factsProvider,
   });
 }

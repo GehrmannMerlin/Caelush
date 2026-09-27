@@ -73,6 +73,11 @@ export {
   withRecoveryTailPolicy,
 } from "./compaction/context-recovery-planner.js";
 export {
+  applyContextRecoveryToPlan,
+  contextSourceCriticality,
+} from "./compaction/context-recovery-application.js";
+export type { ContextRecoveryApplicationInput } from "./compaction/context-recovery-application.js";
+export {
   assertSemanticCheckpointDraft,
   createSemanticCheckpointDraft,
 } from "./compaction/semantic-checkpoint-draft.js";

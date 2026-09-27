@@ -40,9 +40,7 @@ export function createContextRecoveryPlanner(): ContextRecoveryPlanner {
   return Object.freeze({
     plan(input: Parameters<ContextRecoveryPlanner["plan"]>[0]): ContextRecoveryPlan {
       const actions: readonly ContextRecoveryAction[] =
-        input.pressure.shouldCompact && input.hasCompressibleHistory
-          ? ["COMPACT_HISTORY"]
-          : [];
+        input.pressure.shouldCompact && input.hasCompressibleHistory ? ["COMPACT_HISTORY"] : [];
       if (input.mode === "FORCED_RECOVERY") {
         return Object.freeze({
           stage: "FORCED",
@@ -75,7 +73,10 @@ export function withRecoveryTailPolicy(
     ...policy,
     targetRecentTailTokens: recovery.targetRecentTailTokens,
     minRecentTailTokens: recovery.minRecentTailTokens,
-    elasticPoolTokens: Math.max(0, policy.effectiveInputLimitTokens - recovery.targetRecentTailTokens),
+    elasticPoolTokens: Math.max(
+      0,
+      policy.effectiveInputLimitTokens - recovery.targetRecentTailTokens,
+    ),
   });
 }
 

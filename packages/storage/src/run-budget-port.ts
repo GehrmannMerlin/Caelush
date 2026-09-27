@@ -232,12 +232,29 @@ export class SqliteRunBudgetPort implements RunBudgetPort {
   }): Promise<import("@caelush/core").RunLLMBudgetAdmission> {
     return this.admitLLMForOwner({ ...input, kind: "VERIFICATION_LLM" });
   }
+  async admitContextCompactionLLM(input: {
+    readonly run: AgentRun;
+    readonly ownerId: string;
+    readonly admission: RunLLMBudgetAdmissionInput;
+  }): Promise<import("@caelush/core").RunLLMBudgetAdmission> {
+    const existing = await this.ledger.get(input.run.id, "CONTEXT_COMPACTION", input.ownerId);
+    if (
+      existing !== null &&
+      (existing.state === "IN_FLIGHT" ||
+        existing.state === "SETTLED" ||
+        existing.state === "CONSERVATIVE" ||
+        existing.state === "RELEASED")
+    ) {
+      return { kind: "UNAVAILABLE", reason: "TOKEN_ESTIMATE" };
+    }
+    return this.admitLLMForOwner({ ...input, kind: "CONTEXT_COMPACTION" });
+  }
 
   private async admitLLMForOwner(input: {
     readonly run: AgentRun;
     readonly ownerId: string;
     readonly admission: RunLLMBudgetAdmissionInput;
-    readonly kind: "LLM_ATTEMPT" | "VERIFICATION_LLM";
+    readonly kind: "LLM_ATTEMPT" | "VERIFICATION_LLM" | "CONTEXT_COMPACTION";
   }): Promise<import("@caelush/core").RunLLMBudgetAdmission> {
     const estimatedInputTokens = input.admission.estimatedInputTokens;
     if (estimatedInputTokens === undefined) {
@@ -298,13 +315,21 @@ export class SqliteRunBudgetPort implements RunBudgetPort {
   }): Promise<import("@caelush/core").RunBudgetSettlement | void> {
     return this.settleLLMForOwner({ ...input, kind: "VERIFICATION_LLM" });
   }
+  async settleContextCompactionLLM(input: {
+    readonly runId: RunId;
+    readonly ownerId: string;
+    readonly usage?: BudgetModelUsage;
+    readonly settledAt: TimestampMs;
+  }): Promise<import("@caelush/core").RunBudgetSettlement | void> {
+    return this.settleLLMForOwner({ ...input, kind: "CONTEXT_COMPACTION" });
+  }
 
   private async settleLLMForOwner(input: {
     readonly runId: RunId;
     readonly ownerId: string;
     readonly usage?: BudgetModelUsage;
     readonly settledAt: TimestampMs;
-    readonly kind: "LLM_ATTEMPT" | "VERIFICATION_LLM";
+    readonly kind: "LLM_ATTEMPT" | "VERIFICATION_LLM" | "CONTEXT_COMPACTION";
   }): Promise<import("@caelush/core").RunBudgetSettlement | void> {
     const entry = await this.ledger.get(input.runId, input.kind, input.ownerId);
     if (entry === null || entry.state === "SETTLED" || entry.state === "CONSERVATIVE") {
@@ -355,12 +380,19 @@ export class SqliteRunBudgetPort implements RunBudgetPort {
   }): Promise<void> {
     await this.markLLMConservativeForOwner({ ...input, kind: "VERIFICATION_LLM" });
   }
+  async markContextCompactionLLMConservative(input: {
+    readonly runId: RunId;
+    readonly ownerId: string;
+    readonly settledAt: TimestampMs;
+  }): Promise<void> {
+    await this.markLLMConservativeForOwner({ ...input, kind: "CONTEXT_COMPACTION" });
+  }
 
   private async markLLMConservativeForOwner(input: {
     readonly runId: RunId;
     readonly ownerId: string;
     readonly settledAt: TimestampMs;
-    readonly kind: "LLM_ATTEMPT" | "VERIFICATION_LLM";
+    readonly kind: "LLM_ATTEMPT" | "VERIFICATION_LLM" | "CONTEXT_COMPACTION";
   }): Promise<void> {
     const entry = await this.ledger.get(input.runId, input.kind, input.ownerId);
     if (entry?.state === "IN_FLIGHT") {

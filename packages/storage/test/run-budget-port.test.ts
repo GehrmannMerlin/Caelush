@@ -166,12 +166,123 @@ describe("SqliteRunBudgetPort", () => {
       toolCalls: 0,
     });
   });
+
+  it("accounts context compaction auxiliary work without consuming Steps or Tools", async () => {
+    const database = await openCaelushDatabase({ path: ":memory:" });
+    databases.push(database);
+    await migrateCaelushDatabase(database);
+    const session = makeSession();
+    const run = makeRun(session.id, {
+      status: "RUNNING",
+      startedAt: createTimestampMs(100),
+      limits: { maxSteps: 10, maxToolCalls: 10, timeoutMs: 1000, maxTokens: 100 },
+    });
+    await new SqliteSessionRepository(database).insert(session);
+    await new SqliteRunRepository(database).insert(run);
+    const budget = new SqliteRunBudgetPort(database, {
+      tokenEstimator: { estimate: () => 8 },
+      clock: { now: () => createTimestampMs(101) },
+    });
+
+    const admitted = await budget.admitContextCompactionLLM({
+      run,
+      ownerId: "context-compaction:run-1",
+      admission: { estimatedInputTokens: 8, configuredMaxOutputTokens: 20 },
+    });
+    expect(admitted.kind).toBe("ALLOWED");
+    expect(
+      (await budgetLedger(database, run.id, "CONTEXT_COMPACTION", "context-compaction:run-1"))
+        ?.state,
+    ).toBe("IN_FLIGHT");
+
+    await budget.settleContextCompactionLLM({
+      runId: run.id,
+      ownerId: "context-compaction:run-1",
+      usage: { inputTokens: 7, outputTokens: 5, totalTokens: 12 },
+      settledAt: createTimestampMs(102),
+    });
+    const projected = await budget.reconcileState(makeState(run));
+    expect(projected.usage).toMatchObject({
+      inputTokens: 7,
+      outputTokens: 5,
+      steps: 0,
+      toolCalls: 0,
+    });
+  });
+
+  it("does not reopen a conservative context compaction owner", async () => {
+    const database = await openCaelushDatabase({ path: ":memory:" });
+    databases.push(database);
+    await migrateCaelushDatabase(database);
+    const session = makeSession();
+    const run = makeRun(session.id, {
+      status: "RUNNING",
+      startedAt: createTimestampMs(100),
+      limits: { maxSteps: 10, maxToolCalls: 10, timeoutMs: 1000, maxTokens: 100 },
+    });
+    await new SqliteSessionRepository(database).insert(session);
+    await new SqliteRunRepository(database).insert(run);
+    const budget = new SqliteRunBudgetPort(database, {
+      tokenEstimator: { estimate: () => 8 },
+    });
+    const ownerId = "context-compaction:conservative-owner";
+    await expect(
+      budget.admitContextCompactionLLM({
+        run,
+        ownerId,
+        admission: { estimatedInputTokens: 8, configuredMaxOutputTokens: 20 },
+      }),
+    ).resolves.toMatchObject({ kind: "ALLOWED" });
+    await budget.markContextCompactionLLMConservative({
+      runId: run.id,
+      ownerId,
+      settledAt: createTimestampMs(101),
+    });
+    await expect(
+      budget.admitContextCompactionLLM({
+        run,
+        ownerId,
+        admission: { estimatedInputTokens: 8, configuredMaxOutputTokens: 20 },
+      }),
+    ).resolves.toEqual({ kind: "UNAVAILABLE", reason: "TOKEN_ESTIMATE" });
+  });
+
+  it("marks missing context compaction usage conservative instead of settling zero", async () => {
+    const database = await openCaelushDatabase({ path: ":memory:" });
+    databases.push(database);
+    await migrateCaelushDatabase(database);
+    const session = makeSession();
+    const run = makeRun(session.id, {
+      status: "RUNNING",
+      startedAt: createTimestampMs(100),
+      limits: { maxSteps: 10, maxToolCalls: 10, timeoutMs: 1000, maxTokens: 100 },
+    });
+    await new SqliteSessionRepository(database).insert(session);
+    await new SqliteRunRepository(database).insert(run);
+    const budget = new SqliteRunBudgetPort(database, {
+      tokenEstimator: { estimate: () => 8 },
+    });
+    const ownerId = "context-compaction:missing-usage";
+    await budget.admitContextCompactionLLM({
+      run,
+      ownerId,
+      admission: { estimatedInputTokens: 8, configuredMaxOutputTokens: 20 },
+    });
+    await budget.settleContextCompactionLLM({
+      runId: run.id,
+      ownerId,
+      settledAt: createTimestampMs(101),
+    });
+    expect((await budgetLedger(database, run.id, "CONTEXT_COMPACTION", ownerId))?.state).toBe(
+      "CONSERVATIVE",
+    );
+  });
 });
 
 async function budgetLedger(
   database: Awaited<ReturnType<typeof openCaelushDatabase>>,
   runId: ReturnType<typeof makeRun>["id"],
-  kind: "LLM_ATTEMPT" | "VERIFICATION_LLM" | "TOOL_INVOCATION",
+  kind: "LLM_ATTEMPT" | "VERIFICATION_LLM" | "CONTEXT_COMPACTION" | "TOOL_INVOCATION",
   ownerId: string,
 ) {
   return new (await import("../src/budget-ledger-repository.js")).SqliteBudgetLedgerRepository(

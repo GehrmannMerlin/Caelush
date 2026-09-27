@@ -42,7 +42,10 @@ export interface ContextSummarizationRunner {
 
 /** A host budget/storage invariant failure that must not degrade into fallback. */
 export class ContextSummarizationInfrastructureError extends Error {
-  constructor(message = "Context summarization infrastructure failed.", options?: { cause?: unknown }) {
+  constructor(
+    message = "Context summarization infrastructure failed.",
+    options?: { cause?: unknown },
+  ) {
     super(message, options);
     this.name = "ContextSummarizationInfrastructureError";
   }

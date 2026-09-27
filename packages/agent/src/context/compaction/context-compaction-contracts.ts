@@ -17,9 +17,7 @@ import type { DeterministicCompactionFactsProvider } from "./deterministic-compa
 import type { DeterministicCheckpointBuilder } from "./deterministic-checkpoint-builder.js";
 import type { ContextCheckpointEnricher } from "./checkpoint-enricher.js";
 import type { ContextCompactionRebuilder } from "./context-compaction-rebuilder.js";
-import type {
-  ContextCompactionRebuildResult,
-} from "./context-compaction-rebuilder.js";
+import type { ContextCompactionRebuildResult } from "./context-compaction-rebuilder.js";
 import type { ContextCompactionCommitPort } from "../ports/context-compaction-commit-port.js";
 import type { ContextIncrementalCompactionResolver } from "./incremental-compaction-resolver.js";
 import type { IncrementalCheckpointState } from "./incremental-checkpoint-resolver.js";

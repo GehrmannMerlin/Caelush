@@ -4,15 +4,22 @@ import {
   createContextCompactionCoordinator,
   createContextMessageRange,
   createStructuredCheckpoint,
+  agentMessageId,
+  conversationTurnId,
   type ContextCompactionDependencies,
   type ContextCompactionPlan,
   type ContextCompactionRequest,
   type ContextCheckpointIdFactory,
   type ContextSummarizationResult,
 } from "@caelush/agent";
+import { ContextSummarizationInfrastructureError } from "@caelush/agent";
 
 const request = {
-  identity: { runId: "run_phase_8e" as never, sessionId: "session_phase_8e" as never, goal: "goal" },
+  identity: {
+    runId: "run_phase_8e" as never,
+    sessionId: "session_phase_8e" as never,
+    goal: "goal",
+  },
   conversation: {} as never,
   history: {} as never,
   policy: { effectiveInputLimitTokens: 100 } as never,
@@ -32,7 +39,12 @@ const range = createContextMessageRange({
 
 const plan = {
   reason: "PROACTIVE_PRESSURE",
-  cut: { kind: "TURN_BOUNDARY", firstKeptTurnId: "turn_kept", firstKeptMessageId: "message_kept", firstKeptSequence: 3 },
+  cut: {
+    kind: "TURN_BOUNDARY",
+     firstKeptTurnId: conversationTurnId("turn_kept"),
+     firstKeptMessageId: agentMessageId("message_kept"),
+    firstKeptSequence: 3,
+  },
   sourceRange: range,
   selectedUnitIds: ["unit_selected"],
   retainedUnitIds: ["unit_retained"],
@@ -122,11 +134,13 @@ function dependencies(
     deterministicFallback: { build: () => structuredCheckpoint },
     enricher: { enrich: () => structuredCheckpoint },
     rehydrator: {} as never,
-    tentativeRebuilder: { rebuild: async () => ({ estimatedInputTokens: 42, retainedMessageIds: [] }) },
+    tentativeRebuilder: {
+      rebuild: async () => ({ estimatedInputTokens: 42, retainedMessageIds: [] }),
+    },
     commit: {
       commit: async ({ checkpoint, events }) => ({
         checkpoint: { ...checkpoint, schemaVersion: 2 as const },
-        events,
+          events: events as never,
       }),
     },
     clock: { now: () => 1 as never },
@@ -155,11 +169,16 @@ describe("Phase 8E ContextCompactionCoordinator", () => {
       dependencies: dependencies(
         { plan: () => plan },
         {
-          summarizer: { summarize: async () => { summaryCalls += 1; return summary; } },
+          summarizer: {
+            summarize: async () => {
+              summaryCalls += 1;
+              return summary;
+            },
+          },
           commit: {
             commit: async ({ checkpoint, events }) => {
               commitCalls += 1;
-              return { checkpoint: { ...checkpoint, schemaVersion: 2 as const }, events };
+        return { checkpoint: { ...checkpoint, schemaVersion: 2 as const }, events: events as never };
             },
           },
         },
@@ -191,7 +210,10 @@ describe("Phase 8E ContextCompactionCoordinator", () => {
           commit: {
             commit: async ({ checkpoint, events }) => {
               commitCalls += 1;
-              return { checkpoint: { ...checkpoint, schemaVersion: 2 as const }, events };
+              return {
+                checkpoint: { ...checkpoint, schemaVersion: 2 as const },
+                events: events as never,
+              };
             },
           },
         },
@@ -203,6 +225,84 @@ describe("Phase 8E ContextCompactionCoordinator", () => {
       kind: "NOT_APPLICABLE",
       reason: "INSUFFICIENT_GAIN",
     });
+    expect(commitCalls).toBe(0);
+  });
+
+  it("propagates summarizer infrastructure failures without fallback or commit", async () => {
+    let fallbackCalls = 0;
+    let commitCalls = 0;
+    const coordinator = createContextCompactionCoordinator({
+      dependencies: dependencies(
+        { plan: () => plan },
+        {
+          summarizer: {
+            summarize: async () => {
+              throw new ContextSummarizationInfrastructureError("budget ledger failed");
+            },
+          },
+          deterministicFallback: {
+            build: () => {
+              fallbackCalls += 1;
+              return structuredCheckpoint;
+            },
+          },
+          commit: {
+            commit: async ({ checkpoint, events }) => {
+              commitCalls += 1;
+              return {
+                checkpoint: { ...checkpoint, schemaVersion: 2 as const },
+                events: events as never,
+              };
+            },
+          },
+        },
+      ),
+      latest: { kind: "NONE" },
+    });
+
+    await expect(coordinator.compact(request)).rejects.toThrow("budget ledger failed");
+    expect(fallbackCalls).toBe(0);
+    expect(commitCalls).toBe(0);
+  });
+
+  it("propagates cancellation before facts and never commits", async () => {
+    const controller = new AbortController();
+    let commitCalls = 0;
+    const coordinator = createContextCompactionCoordinator({
+      dependencies: dependencies(
+        { plan: () => plan },
+        {
+          factsProvider: {
+            collect: async () => {
+              controller.abort();
+              return {
+                readFiles: [],
+                changedFiles: [],
+                recentErrors: [],
+                verificationState: "CURRENT",
+                activeProcesses: [],
+                pendingApprovals: [],
+                resourceGovernance: "BOUNDED",
+              };
+            },
+          },
+          commit: {
+            commit: async ({ checkpoint, events }) => {
+              commitCalls += 1;
+              return {
+                checkpoint: { ...checkpoint, schemaVersion: 2 as const },
+                events: events as never,
+              };
+            },
+          },
+        },
+      ),
+      latest: { kind: "NONE" },
+    });
+
+    await expect(
+      coordinator.compact({ ...request, signal: controller.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
     expect(commitCalls).toBe(0);
   });
 });

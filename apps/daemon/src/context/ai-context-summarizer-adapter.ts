@@ -23,14 +23,7 @@ export function createAIContextSummarizerAdapter(gateway: AIGateway) {
       input: ContextSummarizationInput,
       options: { readonly signal: AbortSignal },
     ): Promise<ContextSummarizationResult> {
-      const request: AIModelRequest = {
-        model: input.model.ref,
-        tools: [],
-        messages: [
-          { role: "system", content: CONTEXT_SEMANTIC_SUMMARY_SYSTEM_PROMPT },
-          { role: "user", content: serializeContextSummarySource(input) },
-        ],
-      };
+      const request = createAIContextSummaryRequest(input);
       const result = await gateway.complete(request, { signal: options.signal });
       if (result.toolCalls.length > 0) {
         throw new TypeError("Semantic summary returned unexpected Tool calls.");
@@ -51,6 +44,18 @@ export function createAIContextSummarizerAdapter(gateway: AIGateway) {
       };
     },
   });
+}
+
+export function createAIContextSummaryRequest(input: ContextSummarizationInput): AIModelRequest {
+  return {
+    model: input.model.ref,
+    tools: [],
+    settings: { maxOutputTokens: input.targetTokens },
+    messages: [
+      { role: "system", content: CONTEXT_SEMANTIC_SUMMARY_SYSTEM_PROMPT },
+      { role: "user", content: serializeContextSummarySource(input) },
+    ],
+  };
 }
 
 function parseSemanticDraft(text: string): unknown {

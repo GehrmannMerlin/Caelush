@@ -107,7 +107,12 @@ describe("Context Runtime production recovery E2E", () => {
     expect(settled.status).toBe("COMPLETED");
     expect(await client.getRunContextUsage(run.id)).toMatchObject({
       lastBuildStatus: "SUCCESS",
-      lastRecoveryStages: ["REPROJECT_OPEN_OBSERVATIONS_EMERGENCY"],
+      lastRecoveryStages: [
+        "DEFER_LOW_RETRIEVABLE",
+        "REDUCE_OPTIONAL_SOURCES",
+        "COMPACT_HISTORY",
+        "TIGHTEN_RECENT_TAIL",
+      ],
     });
     expect(provider.calls).toBeGreaterThanOrEqual(4);
     const firstToolRequest = provider.requests[1];

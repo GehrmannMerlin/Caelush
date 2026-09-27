@@ -3,9 +3,7 @@ import {
   createContextSummarizationRunner,
   type ContextSummaryExecutionResult,
 } from "./context-summary.js";
-import {
-  ContextSummarizationInfrastructureError,
-} from "./context-summary.js";
+import { ContextSummarizationInfrastructureError } from "./context-summary.js";
 import {
   CONTEXT_SUMMARY_PROMPT_VERSION,
   type ContextCheckpointCreateInputV2,
@@ -212,7 +210,9 @@ function createStructuredCheckpoint(input: {
     goal: input.request.identity.goal,
     sourceRange: input.sourceRange,
     facts: input.facts,
-    ...(input.previousCheckpoint === undefined ? {} : { previousCheckpoint: input.previousCheckpoint }),
+    ...(input.previousCheckpoint === undefined
+      ? {}
+      : { previousCheckpoint: input.previousCheckpoint }),
   });
 }
 
