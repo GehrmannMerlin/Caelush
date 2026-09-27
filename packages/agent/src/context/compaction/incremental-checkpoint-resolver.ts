@@ -1,6 +1,7 @@
 import type { RunId } from "@caelush/protocol";
 
 import type { ContextHistoryIndex } from "../history/semantic-history-unit.js";
+import { ContextPlanningError } from "../planner/context-planning-errors.js";
 import {
   createContextCompactionCoverage,
 } from "./context-compaction-coverage.js";
@@ -32,6 +33,9 @@ export function createIncrementalCheckpointResolver(options: {
     }): Promise<IncrementalCheckpointState> {
       const latest = await options.checkpointRepository.getLatestByRun(input.runId);
       if (latest === undefined) return Object.freeze({ kind: "NONE" });
+      if (String(latest.runId) !== String(input.runId)) {
+        throw new ContextPlanningError("INCONSISTENT_PLAN");
+      }
       if (latest.schemaVersion === 2) {
         createContextCompactionCoverage({
           history: input.history,

@@ -16,8 +16,31 @@ import {
 import { createContextCompactionPlanner } from "../compaction/context-compaction-planner.js";
 import { createContextPressureEvaluator } from "../compaction/context-pressure-evaluator.js";
 import type { ContextCompactionCommitPort } from "../ports/context-compaction-commit-port.js";
-import { prepareContextCompactionCandidates } from "../compaction/context-compaction-coverage.js";
 import type { ContextSummarizationRunner } from "../compaction/context-summary.js";
+import {
+  createContextCompactionCoverage,
+  type ContextCompactionCoverage,
+} from "../compaction/context-compaction-coverage.js";
+import {
+  createIncrementalCheckpointResolver,
+  type IncrementalCheckpointResolver,
+  type IncrementalCheckpointState,
+} from "../compaction/incremental-checkpoint-resolver.js";
+import {
+  createContextIncrementalCompactionResolver,
+  type ContextIncrementalCompactionResolver,
+} from "../compaction/incremental-compaction-resolver.js";
+import {
+  createContextCheckpointBudgetResolver,
+  ContextCheckpointBudgetUnavailableError,
+  type ContextCheckpointBudget,
+  type ContextCheckpointBudgetResolver,
+} from "../compaction/checkpoint-budget.js";
+import {
+  createContextCompactionGainEvaluator,
+  isMeaningfulContextCompactionGain,
+  type ContextCompactionGainEvaluator,
+} from "../compaction/compaction-gain.js";
 import {
   createContextDocumentBuilder,
   type ContextDocumentBuilder,
@@ -126,6 +149,10 @@ export interface V2ContextEngineOptions {
   readonly planner?: ContextPlanner;
   readonly compactionPlanner?: ReturnType<typeof createContextCompactionPlanner>;
   readonly summarizationRunner?: ContextSummarizationRunner;
+  readonly incrementalCheckpointResolver?: IncrementalCheckpointResolver;
+  readonly incrementalCompactionResolver?: ContextIncrementalCompactionResolver;
+  readonly checkpointBudgetResolver?: ContextCheckpointBudgetResolver;
+  readonly compactionGainEvaluator?: ContextCompactionGainEvaluator;
   readonly rehydrator?: ContextRehydratorPort;
   readonly documentBuilder?: ContextDocumentBuilder;
   readonly materializer: ContextMaterializer;
@@ -150,6 +177,15 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
   const rehydrator = options.rehydrator ?? createContextRehydrator();
   const documentBuilder = options.documentBuilder ?? createContextDocumentBuilder();
   const summarizationRunner = options.summarizationRunner;
+  const incrementalCheckpointResolver =
+    options.incrementalCheckpointResolver ??
+    createIncrementalCheckpointResolver({ checkpointRepository: options.checkpointRepository });
+  const incrementalCompactionResolver =
+    options.incrementalCompactionResolver ?? createContextIncrementalCompactionResolver();
+  const checkpointBudgetResolver =
+    options.checkpointBudgetResolver ?? createContextCheckpointBudgetResolver();
+  const compactionGainEvaluator =
+    options.compactionGainEvaluator ?? createContextCompactionGainEvaluator();
   const receiptBuilder =
     options.receiptBuilder ??
     createContextReceiptBuilder({ now: options.clock.now, tokenEstimator });
@@ -173,20 +209,23 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
       });
       throwIfAborted(input.signal);
 
-      const latestCheckpoint = await options.checkpointRepository.getLatestByRun(
-        input.identity.runId,
-      );
-      throwIfAborted(input.signal);
       const sourceInput = {
         ...input,
         policy,
       };
       const collected = await collectContextSources(options.sourceRegistry, sourceInput);
-      const coverage = prepareContextCompactionCandidates({
-        history: historyIndexer.index({ conversation: input.conversation, model: input.model }),
+      const history = historyIndexer.index({ conversation: input.conversation, model: input.model });
+      const latestState = await incrementalCheckpointResolver.resolve({
+        runId: input.identity.runId,
+        history,
+      });
+      throwIfAborted(input.signal);
+      const latestCheckpoint = checkpointFromIncrementalState(latestState);
+      const coverage: ContextCompactionCoverage = createContextCompactionCoverage({
+        history,
         ...(latestCheckpoint === undefined ? {} : { latestCheckpoint }),
       });
-      const sourceResults = removeCoveredConversationMessages(collected, latestCheckpoint);
+      const sourceResults = removeCoveredConversationMessages(collected, coverage.coveredMessageIds);
       const initialPlan = planner.plan({
         items: sourceResults.flatMap((result) => result.items),
         policy,
@@ -233,66 +272,87 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           reason,
         });
         if (compactionPlan !== null) {
-          if (summarizationRunner === undefined) throw new ContextExhaustedError();
-          const sourceMessages = messagesInRange(input.conversation, compactionPlan);
-          const summary = await summarizationRunner.summarize(
-            {
-              identity: input.identity,
-              reason,
-              ...(activeCoverage.previousCheckpoint === undefined
-                ? {}
-                : { previousCheckpoint: activeCoverage.previousCheckpoint }),
-              sourceMessages,
-              sourceRange: compactionPlan.sourceRange,
-              cut: compactionPlan.cut,
-              authorities,
-              targetTokens: compactionPlan.targetRecentTailTokens,
-              model: input.model,
-            },
-            { signal: input.signal },
-          );
-          const checkpointInput = {
-            checkpointId: createContextCheckpointId(requireCheckpointId(options)),
-            runId: input.identity.runId,
-            ...(activeCoverage.trustedPreviousCheckpointId === undefined
-              ? {}
-              : { previousCheckpointId: activeCoverage.trustedPreviousCheckpointId }),
-            sourceRange: compactionPlan.sourceRange,
-            structuredCheckpoint: summary.result.checkpoint,
-            tokensBefore: compactionPlan.estimatedTokensBefore,
-            tokensAfter: compactionPlan.retainedTokens,
-            modelRef: summary.result.modelRef,
-            summaryPromptVersion: summary.result.summaryPromptVersion,
-            sourceDigest: summary.result.sourceDigest,
-            checkpointDigest: summary.result.checkpointDigest,
-            degraded: summary.degraded,
-            reason,
-            createdAt: options.clock.now(),
-          } as const;
-          const committed = await commitCompaction(options, {
-            checkpoint: checkpointInput,
-            input,
-            reason,
-            compactionPlan,
-            degraded: summary.degraded,
-          });
-          activeCheckpoint = committed.checkpoint;
-          activeCoverage = prepareContextCompactionCandidates({
-            history: activeCoverage.history,
-            latestCheckpoint: committed.checkpoint,
-          });
-          activeSources = withActiveCheckpoint(
-            removeCoveredConversationMessages(activeSources, committed.checkpoint),
-            committed.checkpoint,
-          );
-          compactionCount = 1;
-          compactionReceipt = {
-            reason,
-            checkpoint: checkpointRef(committed.checkpoint),
-            tokensBefore: compactionPlan.estimatedTokensBefore,
-            tokensAfter: committed.checkpoint.tokensAfter,
-            degraded: summary.degraded,
-          } as const;
+          let checkpointBudget: ContextCheckpointBudget | undefined;
+          try {
+            checkpointBudget = checkpointBudgetResolver.resolve({
+              policy,
+              plan: compactionPlan,
+            });
+          } catch (error) {
+            if (!(error instanceof ContextCheckpointBudgetUnavailableError)) throw error;
+          }
+          if (checkpointBudget !== undefined) {
+            const gain = compactionGainEvaluator.evaluate({
+              plan: compactionPlan,
+              checkpointBudget,
+            });
+            if (isMeaningfulContextCompactionGain(gain)) {
+              if (summarizationRunner === undefined) throw new ContextExhaustedError();
+              const incremental = incrementalCompactionResolver.resolve({
+                plan: compactionPlan,
+                latest: latestState,
+                conversation: input.conversation,
+              });
+              const summary = await summarizationRunner.summarize(
+                {
+                  identity: input.identity,
+                  reason,
+                  ...(incremental.previousCheckpoint === undefined
+                    ? {}
+                    : { previousCheckpoint: incremental.previousCheckpoint.structuredCheckpoint }),
+                  sourceMessages: incremental.newSourceMessages,
+                  sourceRange: incremental.cumulativeSourceRange,
+                  cut: compactionPlan.cut,
+                  authorities,
+                  targetTokens: checkpointBudget.targetTokens,
+                  model: input.model,
+                },
+                { signal: input.signal },
+              );
+              const checkpointInput = {
+                checkpointId: createContextCheckpointId(requireCheckpointId(options)),
+                runId: input.identity.runId,
+                ...(incremental.previousCheckpoint === undefined
+                  ? {}
+                  : { previousCheckpointId: incremental.previousCheckpoint.checkpointId }),
+                sourceRange: incremental.cumulativeSourceRange,
+                structuredCheckpoint: summary.result.checkpoint,
+                tokensBefore: compactionPlan.estimatedTokensBefore,
+                tokensAfter: compactionPlan.retainedTokens,
+                modelRef: summary.result.modelRef,
+                summaryPromptVersion: summary.result.summaryPromptVersion,
+                sourceDigest: summary.result.sourceDigest,
+                checkpointDigest: summary.result.checkpointDigest,
+                degraded: summary.degraded,
+                reason,
+                createdAt: options.clock.now(),
+              } as const;
+              const committed = await commitCompaction(options, {
+                checkpoint: checkpointInput,
+                input,
+                reason,
+                compactionPlan,
+                degraded: summary.degraded,
+              });
+              activeCheckpoint = committed.checkpoint;
+              activeCoverage = createContextCompactionCoverage({
+                history,
+                latestCheckpoint: committed.checkpoint,
+              });
+              activeSources = withActiveCheckpoint(
+                removeCoveredConversationMessages(collected, activeCoverage.coveredMessageIds),
+                committed.checkpoint,
+              );
+              compactionCount = 1;
+              compactionReceipt = {
+                reason,
+                checkpoint: checkpointRef(committed.checkpoint),
+                tokensBefore: compactionPlan.estimatedTokensBefore,
+                tokensAfter: committed.checkpoint.tokensAfter,
+                degraded: summary.degraded,
+              } as const;
+            }
+          }
         }
       }
 
@@ -465,56 +525,27 @@ function selectedConversationMessages(plan: ContextPlan): readonly StoredAgentMe
   );
 }
 
-function messagesInRange(
-  conversation: ContextPrepareInput["conversation"],
-  plan: ContextCompactionPlan,
-): readonly StoredAgentMessage[] {
-  const range = plan.sourceRange;
-  const messages = conversation.turns.flatMap((turn) => turn.messages);
-  return Object.freeze(
-    messages
-      .filter(
-        (stored) =>
-          stored.message.runId === range.runId &&
-          stored.sequence >= range.firstSequence &&
-          stored.sequence <= range.lastSequence,
-      )
-      .sort((left, right) => left.sequence - right.sequence),
-  );
-}
-
 function removeCoveredConversationMessages(
   results: readonly ContextSourceCollectionResult[],
-  checkpoint: ContextCheckpointRecordV2 | LegacyContextCheckpointRecordV1 | undefined,
+  coveredMessageIds: ReadonlySet<string>,
 ): readonly ContextSourceResult[] {
-  if (checkpoint === undefined) return Object.freeze([...results]);
-  const runId = checkpoint.runId;
-  const turnId =
-    checkpoint.schemaVersion === 2 ? checkpoint.sourceRange.conversationTurnId : undefined;
-  const from =
-    checkpoint.schemaVersion === 2
-      ? checkpoint.sourceRange.firstSequence
-      : checkpoint.sourceSequenceFrom;
-  const to =
-    checkpoint.schemaVersion === 2
-      ? checkpoint.sourceRange.lastSequence
-      : checkpoint.sourceSequenceTo;
   return Object.freeze(
     results.map((result) => {
       if (result.providerId !== AGENT_CONTEXT_SOURCE_IDS.conversation) return result;
       const items = result.items.filter((item) => {
         if (item.payload.kind !== "AGENT_MESSAGE") return true;
         const message = item.payload.message;
-        return !(
-          message.message.runId === runId &&
-          (turnId === undefined || message.message.conversationTurnId === turnId) &&
-          message.sequence >= from &&
-          message.sequence <= to
-        );
+        return !coveredMessageIds.has(String(message.message.id));
       });
       return Object.freeze({ ...result, items: Object.freeze(items) });
     }),
   );
+}
+
+function checkpointFromIncrementalState(
+  state: IncrementalCheckpointState,
+): ContextCheckpointRecordV2 | LegacyContextCheckpointRecordV1 | undefined {
+  return state.kind === "NONE" ? undefined : state.checkpoint;
 }
 
 function withActiveCheckpoint(

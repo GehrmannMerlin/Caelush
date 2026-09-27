@@ -4,17 +4,20 @@ import type { ModelDescriptor } from "@caelush/ai";
 import {
   AGENT_CONTEXT_SOURCE_IDS,
   createCheckpointContextSourceProvider,
+  createContextCheckpointId,
   createContextCompactionEventFactory,
   createContextDocumentBuilder,
   createContextHistoryIndexer,
   createContextItemId,
   createContextMaterializer,
+  createContextMessageRange,
   createContextPlanner,
   createContextReceiptBuilder,
   createContextRehydrator,
   createContextRequestOverheadEstimator,
   createContextSourceItem,
   createContextSourceRegistryBuilder,
+  createContextSummaryPromptVersion,
   createContextSummarizationRunner,
   createConversationContextSourceProvider,
   createCorePolicyContextSourceProvider,
@@ -24,7 +27,9 @@ import {
   createV2ContextEngine,
   type ContextAuthorityProviderPort,
   type ContextCompactionCommitPort,
+  type ContextCheckpointRecordV2,
   type ContextCheckpointRepositoryPort,
+  type StoredAgentMessage,
   type ContextUsageSnapshot,
   type ContextUsageStorePort,
 } from "@caelush/agent";
@@ -50,20 +55,69 @@ const MODEL: ModelDescriptor = {
   source: "CONFIGURATION",
 };
 
-function checkpointRepository(): ContextCheckpointRepositoryPort {
+function checkpointRepository(
+  latest?: ContextCheckpointRecordV2,
+): ContextCheckpointRepositoryPort {
   return {
     async create() {
-      throw new Error("not used");
+      if (latest === undefined) throw new Error("not used");
+      return latest;
     },
     async getLatestByRun() {
-      return undefined;
+      return latest;
     },
     async getById() {
-      return undefined;
+      return latest;
     },
     async listByRun() {
-      return [];
+      return latest === undefined ? [] : [latest];
     },
+  };
+}
+
+function checkpointForMessage(message: StoredAgentMessage): ContextCheckpointRecordV2 {
+  const sourceRange = createContextMessageRange({
+    runId: message.message.runId,
+    conversationTurnId: message.message.conversationTurnId,
+    firstMessageId: message.message.id,
+    lastMessageId: message.message.id,
+    firstSequence: message.sequence,
+    lastSequence: message.sequence,
+  });
+  return {
+    checkpointId: createContextCheckpointId("checkpoint_phase_8b_existing"),
+    runId: message.message.runId,
+    schemaVersion: 2,
+    sourceRange,
+    structuredCheckpoint: createStructuredCheckpoint({
+      version: 1,
+      goal: "existing checkpoint",
+      constraints: [],
+      completedWork: [],
+      inProgress: [],
+      blocked: [],
+      importantDiscoveries: [],
+      keyDecisions: [],
+      changedFiles: [],
+      readFiles: [],
+      recentErrors: [],
+      verificationState: "NOT_RUN",
+      activeProcesses: [],
+      pendingApprovals: [],
+      resourceGovernance: "UNKNOWN",
+      criticalReferences: [],
+      nextIntent: "continue",
+      sourceRange: { from: message.sequence, to: message.sequence },
+    }),
+    tokensBefore: 100,
+    tokensAfter: 10,
+    modelRef: MODEL.ref,
+    summaryPromptVersion: createContextSummaryPromptVersion(1),
+    sourceDigest: "source",
+    checkpointDigest: "checkpoint",
+    degraded: false,
+    reason: "SELECTION_PRESSURE",
+    createdAt: 1 as never,
   };
 }
 
@@ -258,6 +312,12 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       .build();
     const estimator = createUtf8HeuristicTokenEstimator();
     const committed: { eventCount: number } = { eventCount: 0 };
+    let summaryTargetTokens: number | undefined;
+    let summarySourceSequences: readonly number[] | undefined;
+    let summarySourceRange:
+      | { readonly firstSequence: number; readonly lastSequence: number }
+      | undefined;
+    const existingCheckpoint = checkpointForMessage(historical[0]!);
     let commitFinished = false;
     let notificationObservedAfterCommit = false;
     const compactionCommit: ContextCompactionCommitPort = {
@@ -276,7 +336,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     };
     const engine = createV2ContextEngine({
       sourceRegistry: registry,
-      checkpointRepository: checkpointRepository(),
+      checkpointRepository: checkpointRepository(existingCheckpoint),
       authorityProvider: authority,
       usageStore: usage,
       compactionCommit,
@@ -300,6 +360,9 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       summarizationRunner: createContextSummarizationRunner({
         summarizer: {
           async summarize(input) {
+            summaryTargetTokens = input.targetTokens;
+            summarySourceSequences = input.sourceMessages.map((message) => message.sequence);
+            summarySourceRange = input.sourceRange;
             return {
               checkpoint: createStructuredCheckpoint({
                 version: 1,
@@ -332,6 +395,21 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
           },
         },
       }),
+      checkpointBudgetResolver: {
+        resolve() {
+          return { targetTokens: 7, maxTokens: 10 };
+        },
+      },
+      compactionGainEvaluator: {
+        evaluate() {
+          return {
+            selectedTokens: 100,
+            estimatedCheckpointTokens: 10,
+            estimatedFreedTokens: 90,
+            gainRatio: 0.9,
+          };
+        },
+      },
       historyIndexer: createContextHistoryIndexer(),
       planner: createContextPlanner(),
       rehydrator: createContextRehydrator(),
@@ -363,6 +441,9 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     });
 
     expect(committed.eventCount).toBe(1);
+    expect(summaryTargetTokens).toBe(7);
+    expect(summarySourceSequences).toEqual([2]);
+    expect(summarySourceRange).toMatchObject({ firstSequence: 1, lastSequence: 2 });
     expect(notificationObservedAfterCommit).toBe(true);
     expect(
       prepared.messages.some(
@@ -377,5 +458,9 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     expect(prepared.messages[0]).toMatchObject({ role: "system" });
     expect(prepared.messages[0]?.content).toContain("historical context compacted");
     expect(prepared.checkpoint?.schemaVersion).toBe(2);
+    expect(prepared.checkpoint?.sourceRange).toMatchObject({
+      firstSequence: 1,
+      lastSequence: 2,
+    });
   });
 });
