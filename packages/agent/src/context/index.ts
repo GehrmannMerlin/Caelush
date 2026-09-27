@@ -59,6 +59,8 @@ export {
 } from "./compaction/context-compaction-coverage.js";
 export { createContextIncrementalCompactionResolver } from "./compaction/incremental-compaction-resolver.js";
 export { createIncrementalCheckpointResolver } from "./compaction/incremental-checkpoint-resolver.js";
+export { createContextCheckpointBudgetResolver } from "./compaction/checkpoint-budget.js";
+export { createContextCompactionGainEvaluator } from "./compaction/compaction-gain.js";
 export {
   createContextSummarizationRunner,
   serializeContextSummarySource,
@@ -91,6 +93,14 @@ export type {
   IncrementalCheckpointResolver,
   IncrementalCheckpointState,
 } from "./compaction/incremental-checkpoint-resolver.js";
+export type {
+  ContextCheckpointBudget,
+  ContextCheckpointBudgetResolver,
+} from "./compaction/checkpoint-budget.js";
+export type {
+  ContextCompactionGain,
+  ContextCompactionGainEvaluator,
+} from "./compaction/compaction-gain.js";
 export type {
   ContextPressureEvaluation,
   ContextPressureEvaluator,
