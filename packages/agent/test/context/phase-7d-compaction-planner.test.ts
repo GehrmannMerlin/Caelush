@@ -63,8 +63,8 @@ function checkpoint(sourceFrom: number, sourceTo: number): ContextCheckpointReco
   const sourceRange = createContextMessageRange({
     runId,
     conversationTurnId: turnId,
-    firstMessageId: agentMessageId(`amsg_checkpoint_${String(sourceFrom)}`),
-    lastMessageId: agentMessageId(`amsg_checkpoint_${String(sourceTo)}`),
+    firstMessageId: agentMessageId(`amsg_covered_${String(sourceFrom)}`),
+    lastMessageId: agentMessageId(`amsg_covered_${String(sourceTo)}`),
     firstSequence: sourceFrom,
     lastSequence: sourceTo,
   });

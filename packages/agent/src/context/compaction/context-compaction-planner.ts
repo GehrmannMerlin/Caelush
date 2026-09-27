@@ -98,7 +98,7 @@ function createRange(
   const first = sortedRefs[0];
   const last = sortedRefs[sortedRefs.length - 1];
   if (first === undefined || last === undefined) return null;
-  if (first.runId !== last.runId) return null;
+  if (sortedRefs.some((ref) => ref.runId !== first.runId)) return null;
   return createContextMessageRange({
     runId: first.runId,
     conversationTurnId: first.conversationTurnId,

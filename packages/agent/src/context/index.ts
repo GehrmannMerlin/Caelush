@@ -53,7 +53,10 @@ export {
 export { createContextPressureEvaluator } from "./compaction/context-pressure-evaluator.js";
 export { createContextCutPointSelector } from "./compaction/context-cut-point-selector.js";
 export { createContextCompactionPlanner } from "./compaction/context-compaction-planner.js";
-export { prepareContextCompactionCandidates } from "./compaction/context-compaction-coverage.js";
+export {
+  createContextCompactionCoverage,
+  prepareContextCompactionCandidates,
+} from "./compaction/context-compaction-coverage.js";
 export {
   createContextSummarizationRunner,
   serializeContextSummarySource,
@@ -88,7 +91,10 @@ export type {
   ProtocolSafeSplitCut,
   TurnBoundaryCut,
 } from "./compaction/context-compaction-cut.js";
-export type { ContextCompactionCandidatePreparation } from "./compaction/context-compaction-coverage.js";
+export type {
+  ContextCompactionCandidatePreparation,
+  ContextCompactionCoverage,
+} from "./compaction/context-compaction-coverage.js";
 export type {
   ContextSummarizationRunner,
   ContextSummaryExecutionResult,
