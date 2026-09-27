@@ -11,7 +11,7 @@ tests win in that order.
 Caelush is a local-first, durable coding-agent runtime. A user-facing host
 submits a Session or Run request to the local daemon. The daemon composes one
 shared Agent Kernel with the AI, V2 Context Engine, Coding Agent, Runtime, Security,
-Storage, Events, and Verification packages. The Kernel owns execution
+Storage, the daemon-owned RunEvent observation plane, and Verification. The Kernel owns execution
 semantics; CLI and Web render projections of the resulting Protocol contracts
 and the migration-compatible AgentEvent/RunEvent stream.
 
@@ -56,7 +56,7 @@ durable Run and AgentEvent contracts.
 | `@caelush/ai`            | Provider-independent model domain, model descriptors, AI messages/tools, gateway lifecycle, adapters, stream validation, usage, and secret-safe AI errors. It does not know Runs or local Tools.                                                                                                                                               |
 | `@caelush/agent`         | General Agent Kernel and Agent V2 Context Engine: AgentLoop, decisions, durable message domain, Tool registry/batch pipeline, bounded Context planning/materialization, checkpoints, compaction, receipts, usage, V1 checkpoint compatibility, and generic Context contributions. It does not collect host facts or depend on Runtime/Storage. |
 | `@caelush/core`          | RunController and canonical lifecycle coordination: state transitions, durable Run/State/Step/Continuation commits, model-turn and Tool-turn boundaries, resource governance, and completion authority.                                                                                                                                        |
-| `@caelush/coding-agent`  | Coding composition layer and the single source of truth for built-in coding Tool definitions, operations adapters, Tool metadata, effects, output bounds, coding prompt guidance, Runtime-backed Context ports, and Project Intelligence.                                                                                                      |
+| `@caelush/coding-agent`  | Coding composition layer and the single source of truth for built-in coding Tool definitions, operations adapters, Tool metadata, effects, output bounds, coding prompt guidance and its native ContextSourceProvider, Runtime-backed Context ports, and Project Intelligence.                                                                 |
 | `@caelush/runtime`       | Replaceable execution substrate. The current `LocalRuntime` owns workspace containment, bounded filesystem access, verified patching, shell/process sessions, and read-only Git operations.                                                                                                                                                    |
 | `@caelush/security`      | Permission/capability policy, Tool execution gate, approval identity, sensitive-path and command policy, secret detection/redaction, and safe Tool-result presentation. It does not execute commands.                                                                                                                                          |
 | `@caelush/storage`       | SQLite opening/migrations and repositories for Protocol entities, Run execution snapshots, durable messages, Tool lifecycle, Verification, budgets, and durable events; exposes only a read-only durable reader with `throughSequence`. Database rows do not become a second public state model.                                               |
@@ -86,8 +86,7 @@ coding-agent ──▶ agent, ai, runtime, protocol
 core         ──▶ agent, ai, protocol, verification
 runtime      ──▶ protocol, shared
 security     ──▶ agent, coding-agent, protocol, runtime
-storage      ──▶ agent, core, events, memory, protocol, runtime, verification
-events       ──▶ protocol
+storage      ──▶ agent, core, memory, protocol, runtime, verification
 verification ──▶ protocol
 ```
 
@@ -486,6 +485,31 @@ Transcript projection honors `audience.transcript`, emits only safe public
 fields, and degrades unknown historical transcript-visible messages to a fixed
 placeholder. It never serializes raw durable records or provider state.
 
+## Phase 7–8 Context V2 and compaction closure
+
+The production Context path is the Agent V2 source registry, planner, document,
+materializer, and usage ledger. Coding Tool guidance is a native Coding Agent
+source with one active-run Context item:
+
+```text
+Coding Tool prompt snippets
+  → Coding Agent native ContextSourceProvider
+  → Agent V2 Context
+  → one system context
+```
+
+The guidance is selected from the same immutable active Tool registry that
+produces model-visible Tool specs. It is not appended to Tool descriptions, is
+not persisted as conversation history, and does not create a second Context
+authority. Its bounded token contribution participates in the normal V2 Context
+plan and usage accounting.
+
+Phase 7 Context Engineering V2 and Phase 8 Context Compaction V2 are complete
+through Phase 8F. Context compaction completion is represented by the
+metadata-only durable `context.compaction.completed` event, atomically committed
+with the immutable V2 checkpoint. The checkpoint remains Context authority; the
+Event stream does not become a second Context store.
+
 ## Verification and completion authority
 
 Verification plans and bounded evidence are separate from model output. The
@@ -501,26 +525,28 @@ produce evidence but never own final completion.
 
 ## Architecture V2 status
 
-| Area                                            | Current status                                                      |
-| ----------------------------------------------- | ------------------------------------------------------------------- |
-| Architecture foundation and public boundaries   | Complete                                                            |
-| AI domain and provider migration                | Complete in the current composition                                 |
-| Agent Kernel and durable Run boundaries         | Complete in the current composition                                 |
-| Tool System and Coding Agent composition        | Complete in the current composition                                 |
-| Message domain and storage foundation (5A/5B)   | Complete                                                            |
-| Durable conversation runtime cutover (5C)       | Complete; `AgentMessageRecord` is the Run boundary authority        |
-| Context and replay cutover (5D)                 | Complete                                                            |
-| Phase 5E transcript/client projection migration | COMPLETE; daemon-owned Protocol Transcript projection               |
-| Legacy Message V2 retirement (5F)               | COMPLETE; final schema, backfill, and runtime cutover               |
-| Event domain and Protocol foundation (6A)       | COMPLETE; canonical contracts, registry, catalog, and Agent ports   |
-| RunEventHub, replay, and backpressure (6B)      | COMPLETE; daemon-owned bounded observation runtime                  |
-| Public projection and SSE/client cutover (6C)   | COMPLETE; safe Protocol projection boundary                         |
-| Durable event authority and writer cutover (6D) | COMPLETE; only Run/Tool authority transactions write events         |
-| Transient signal and streaming cutover (6E)     | COMPLETE; bounded live-only model/Tool/Runtime progress             |
-| Control Hooks and Context Contributions (6F)    | COMPLETE; generic Agent runner and bounded Core/Context integration |
-| Tool Guard and Tool Feedback control (6G)       | COMPLETE; Coding pipelines preserve Core Security and Tool truth    |
-| Legacy Event package retirement (6H)            | COMPLETE; package, graph edges, and second EventBus runtime removed |
-| Event System V2 (6A–6H)                         | COMPLETE                                                            |
+| Area                                            | Current status                                                         |
+| ----------------------------------------------- | ---------------------------------------------------------------------- |
+| Architecture foundation and public boundaries   | Complete                                                               |
+| AI domain and provider migration                | Complete in the current composition                                    |
+| Agent Kernel and durable Run boundaries         | Complete in the current composition                                    |
+| Tool System and Coding Agent composition        | Complete in the current composition                                    |
+| Message domain and storage foundation (5A/5B)   | Complete                                                               |
+| Durable conversation runtime cutover (5C)       | Complete; `AgentMessageRecord` is the Run boundary authority           |
+| Context and replay cutover (5D)                 | Complete                                                               |
+| Phase 5E transcript/client projection migration | COMPLETE; daemon-owned Protocol Transcript projection                  |
+| Legacy Message V2 retirement (5F)               | COMPLETE; final schema, backfill, and runtime cutover                  |
+| Event domain and Protocol foundation (6A)       | COMPLETE; canonical contracts, registry, catalog, and Agent ports      |
+| RunEventHub, replay, and backpressure (6B)      | COMPLETE; daemon-owned bounded observation runtime                     |
+| Public projection and SSE/client cutover (6C)   | COMPLETE; safe Protocol projection boundary                            |
+| Durable event authority and writer cutover (6D) | COMPLETE; only Run/Tool authority transactions write events            |
+| Transient signal and streaming cutover (6E)     | COMPLETE; bounded live-only model/Tool/Runtime progress                |
+| Control Hooks and Context Contributions (6F)    | COMPLETE; generic Agent runner and bounded Core/Context integration    |
+| Tool Guard and Tool Feedback control (6G)       | COMPLETE; Coding pipelines preserve Core Security and Tool truth       |
+| Legacy Event package retirement (6H)            | COMPLETE; package, graph edges, and second EventBus runtime removed    |
+| Event System V2 (6A–6H)                         | COMPLETE                                                               |
+| Context Engineering V2 (7)                      | COMPLETE; native source registry, planning, materialization, and usage |
+| Context Compaction V2 (8 through 8F)            | COMPLETE; durable checkpoint and compaction authority                  |
 
 The phase table records the current Architecture V2 migration lines. Existing
 Runtime, Security, Verification, CLI, Web, and daemon layers are documented as
@@ -536,8 +562,9 @@ The current architecture must not be described as already providing:
 - a provider-specific public SDK or raw model chain-of-thought surface.
 
 Those capabilities require new contracts and deliberate future work. Context
-compaction activity remains outside Event V2 until it has an atomic Context
-persistence boundary.
+compaction now has an atomic Context persistence boundary and its completion is
+represented by the metadata-only `context.compaction.completed` durable event;
+the immutable checkpoint remains the Context authority.
 
 ## Reference material
 

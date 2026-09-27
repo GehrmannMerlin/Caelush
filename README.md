@@ -14,7 +14,7 @@ is designed around one shared Agent Kernel: CLI, Web, and future hosts are
 clients of the same execution authority rather than separate Agent
 implementations.
 
-The project is in active Architecture V2 development. The Message System
+The planned Architecture V2 refactor through Phase 8F is complete. The Message System
 migration through Phase 5F is complete: the daemon owns the server-side
 Transcript projection, CLI/Web consume the Protocol Transcript, and the final
 durable Message V2 schema is now the only runtime storage shape.
@@ -33,6 +33,18 @@ observations, and the existing model-feedback authority. Phase 6H retires the
 transitional Events package and leaves the daemon RunEventHub, Protocol
 contracts, Agent ports, and Storage reader as the only canonical Event V2
 surfaces.
+
+Coding Tool prompt snippets follow the native Context V2 path:
+
+```text
+Coding Tool prompt snippets
+  → Coding Agent native ContextSourceProvider
+  → Agent V2 Context
+  → one system context
+```
+
+They are active-run synthetic Context, not Tool descriptions and not durable
+conversation history.
 
 ## What Caelush provides
 
@@ -427,9 +439,7 @@ Caelush/
 │   ├── ai/           Provider-neutral AI domain and gateway
 │   ├── client/       HTTP/SSE client and host projections
 │   ├── coding-agent/ Coding Tools and coding composition
-│   ├── context/      Workspace intelligence and context building
 │   ├── core/         Run lifecycle and Completion Authority
-│   ├── events/       Transitional event observation compatibility
 │   ├── memory/       Memory records and store contracts
 │   ├── observability/Observability package boundary
 │   ├── protocol/     Stable JSON-safe cross-package contracts
@@ -495,12 +505,12 @@ runtime: Phase 9C sanitizer injection, Phase 9D — V1 Security Integration, Pha
 | Phase 6G — Tool Guard and Tool Feedback control         | COMPLETE |
 | Phase 6H — Legacy Event package retirement              | COMPLETE |
 | Phase 6 — Event System V2                               | COMPLETE |
+| Phase 7 — Context Engineering V2                        | COMPLETE |
+| Phase 8 — Context Compaction V2                         | COMPLETE |
 
 The status table records the completed Architecture V2 migration boundaries
-that are relevant to the current runtime. The repository also contains the
-current Runtime, Security, Verification, daemon, CLI, and Web layers described
-above; this page does not claim that unrelated future product capabilities have
-begun.
+through Phase 8F. This does not claim that unrelated future product capabilities
+have begun or that the Caelush product is feature complete.
 
 ## Current limitations and roadmap
 
