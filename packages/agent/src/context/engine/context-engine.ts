@@ -16,7 +16,6 @@ import {
 import { createContextCompactionPlanner } from "../compaction/context-compaction-planner.js";
 import { createContextPressureEvaluator } from "../compaction/context-pressure-evaluator.js";
 import type { ContextCompactionCommitPort } from "../ports/context-compaction-commit-port.js";
-import type { ContextSummarizationRunner } from "../compaction/context-summary.js";
 import {
   createContextCheckpointEnricher,
   type ContextCheckpointEnricher,
@@ -117,7 +116,6 @@ import {
 } from "../compaction/context-recovery-application.js";
 import type { SemanticSummaryValidator } from "../compaction/semantic-summary-validator.js";
 import { createSemanticSummaryValidator } from "../compaction/semantic-summary-validator.js";
-import { createContextSummarizerFromRunner } from "../compaction/context-summary-compatibility.js";
 
 export interface ContextCompactionEventFactory {
   completed(input: {
@@ -186,7 +184,6 @@ export interface V2ContextEngineOptions {
   readonly historyIndexer?: ContextHistoryIndexer;
   readonly planner?: ContextPlanner;
   readonly compactionPlanner?: ReturnType<typeof createContextCompactionPlanner>;
-  readonly summarizationRunner?: ContextSummarizationRunner;
   readonly summarizer?: ContextSummarizerPort;
   readonly summaryValidator?: SemanticSummaryValidator;
   readonly deterministicFactsProvider?: DeterministicCompactionFactsProvider;
@@ -221,8 +218,13 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
   const pressureEvaluator = createContextPressureEvaluator();
   const rehydrator = options.rehydrator ?? createContextRehydrator();
   const documentBuilder = options.documentBuilder ?? createContextDocumentBuilder();
-  const summarizationRunner = options.summarizationRunner;
-  const summarizer = options.summarizer ?? createContextSummarizerFromRunner(summarizationRunner);
+  const summarizer: ContextSummarizerPort =
+    options.summarizer ??
+    ({
+      async summarize() {
+        throw new ContextExhaustedError();
+      },
+    } satisfies ContextSummarizerPort);
   const summaryValidator = options.summaryValidator ?? createSemanticSummaryValidator();
   const checkpointBuilder = options.checkpointBuilder ?? createDeterministicCheckpointBuilder();
   const checkpointEnricher = options.checkpointEnricher ?? createContextCheckpointEnricher();

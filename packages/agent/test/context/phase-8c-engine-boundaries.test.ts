@@ -21,7 +21,7 @@ import {
   createV2ContextEngine,
   type ContextCompactionCommitPort,
   type ContextSummarizationResult,
-  type ContextSummarizationRunner,
+  type ContextSummarizerPort,
   type DeterministicCompactionFactsProvider,
 } from "@caelush/agent";
 
@@ -67,7 +67,7 @@ function acceptedResult(): ContextSummarizationResult {
 }
 
 function compactionFixture(options: {
-  readonly summarizationRunner: ContextSummarizationRunner;
+  readonly summarizer: ContextSummarizerPort;
   readonly factsProvider: DeterministicCompactionFactsProvider;
   readonly signal: AbortSignal;
 }) {
@@ -173,7 +173,7 @@ function compactionFixture(options: {
       tokenEstimator,
       protocolOverheadTokens: 500,
     }),
-    summarizationRunner: options.summarizationRunner,
+    summarizer: options.summarizer,
     deterministicFactsProvider: options.factsProvider,
     checkpointBudgetResolver: {
       resolve() {
@@ -228,11 +228,11 @@ function compactionFixture(options: {
   };
 }
 
-function acceptedRunner(onAttempt?: () => void): ContextSummarizationRunner {
+function acceptedSummarizer(onAttempt?: () => void): ContextSummarizerPort {
   return {
     async summarize() {
       onAttempt?.();
-      return { kind: "ACCEPTED", result: acceptedResult(), degraded: false };
+      return acceptedResult();
     },
   };
 }
@@ -257,7 +257,7 @@ describe("Phase 8C Context Engine failure boundaries", () => {
   it("throws facts infrastructure failure without committing a checkpoint", async () => {
     let factsCalls = 0;
     const fixture = compactionFixture({
-      summarizationRunner: acceptedRunner(),
+      summarizer: acceptedSummarizer(),
       factsProvider: {
         async collect() {
           factsCalls += 1;
@@ -276,17 +276,9 @@ describe("Phase 8C Context Engine failure boundaries", () => {
 
   it("builds a degraded deterministic checkpoint for semantic fallback", async () => {
     const fixture = compactionFixture({
-      summarizationRunner: {
+      summarizer: {
         async summarize() {
-          return {
-            kind: "FALLBACK_REQUIRED",
-            outcome: "FAILED",
-            reason: "provider failure",
-            modelRef: MODEL.ref,
-            summaryPromptVersion: 2,
-            sourceDigest: "source",
-            degraded: true,
-          };
+          throw new Error("provider failure");
         },
       },
       factsProvider: facts(),
@@ -307,7 +299,7 @@ describe("Phase 8C Context Engine failure boundaries", () => {
     const controller = new AbortController();
     let factsCalls = 0;
     const fixture = compactionFixture({
-      summarizationRunner: acceptedRunner(() => controller.abort()),
+      summarizer: acceptedSummarizer(() => controller.abort()),
       factsProvider: {
         async collect() {
           factsCalls += 1;
@@ -334,7 +326,7 @@ describe("Phase 8C Context Engine failure boundaries", () => {
     let summaryCalls = 0;
     let factsCalls = 0;
     const fixture = compactionFixture({
-      summarizationRunner: acceptedRunner(() => {
+      summarizer: acceptedSummarizer(() => {
         summaryCalls += 1;
       }),
       factsProvider: {

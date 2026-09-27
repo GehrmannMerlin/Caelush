@@ -211,9 +211,9 @@ function fixture(
         totalTokens: 500,
       }),
     },
-    summarizationRunner: {
+    summarizer: {
       async summarize() {
-        return { kind: "ACCEPTED", result: acceptedResult(), degraded: false };
+        return acceptedResult();
       },
     },
     deterministicFactsProvider: factsProvider(),

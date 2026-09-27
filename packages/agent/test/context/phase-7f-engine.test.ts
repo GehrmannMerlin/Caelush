@@ -18,7 +18,6 @@ import {
   createContextSourceItem,
   createContextSourceRegistryBuilder,
   createContextSummaryPromptVersion,
-  createContextSummarizationRunner,
   createDeterministicCompactionFacts,
   createConversationContextSourceProvider,
   createCorePolicyContextSourceProvider,
@@ -383,35 +382,33 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
         tokenEstimator: estimator,
         protocolOverheadTokens: 500,
       }),
-      summarizationRunner: createContextSummarizationRunner({
-        summarizer: {
-          async summarize(input) {
-            summaryTargetTokens = input.targetTokens;
-            summarySourceSequences = input.sourceMessages.map((message) => message.sequence);
-            summarySourceRange = input.sourceRange;
-            summaryFinished = true;
-            verificationState = "NEW";
-            return {
-              semantic: {
-                goal: input.identity.goal,
-                constraints: [],
-                completedWork: ["historical context compacted"],
-                inProgress: [],
-                blocked: [],
-                importantDiscoveries: [],
-                keyDecisions: [],
-                criticalReferences: [],
-                nextIntent: "Continue current intent.",
-              },
-              modelRef: input.model.ref,
-              finishReason: "STOP",
-              summaryPromptVersion: 2,
-              sourceDigest: "source",
-              semanticDigest: "semantic",
-            };
-          },
+      summarizer: {
+        async summarize(input) {
+          summaryTargetTokens = input.targetTokens;
+          summarySourceSequences = input.sourceMessages.map((message) => message.sequence);
+          summarySourceRange = input.sourceRange;
+          summaryFinished = true;
+          verificationState = "NEW";
+          return {
+            semantic: {
+              goal: input.identity.goal,
+              constraints: [],
+              completedWork: ["historical context compacted"],
+              inProgress: [],
+              blocked: [],
+              importantDiscoveries: [],
+              keyDecisions: [],
+              criticalReferences: [],
+              nextIntent: "Continue current intent.",
+            },
+            modelRef: input.model.ref,
+            finishReason: "STOP",
+            summaryPromptVersion: 2,
+            sourceDigest: "source",
+            semanticDigest: "semantic",
+          };
         },
-      }),
+      },
       checkpointBudgetResolver: {
         resolve() {
           return { targetTokens: 7, maxTokens: 10 };
