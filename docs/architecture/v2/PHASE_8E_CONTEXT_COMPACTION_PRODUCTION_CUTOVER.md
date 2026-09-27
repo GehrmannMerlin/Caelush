@@ -107,7 +107,7 @@ cancellation and never degrades to fallback or commit.
   history both require it.
 - `FORCED`: fixed order
   `DEFER_LOW_RETRIEVABLE → REDUCE_OPTIONAL_SOURCES → COMPACT_HISTORY →
-  TIGHTEN_RECENT_TAIL → EXHAUSTED`.
+TIGHTEN_RECENT_TAIL → EXHAUSTED`.
 - Forced target tail is approximately `effectiveInputLimit * 12%`, capped at
   `4096`, bounded by the normal target.
 - Forced minimum tail is approximately `effectiveInputLimit * 5%`, capped at
@@ -309,11 +309,12 @@ expanded into unrelated cleanup.
 - `bf9257635e391e861c44a7a33666c81f88751a34`
   `feat(context): add Phase 8E coordinator and recovery contracts`
 - `db36782` `feat(context): cut over Phase 8E compaction and budget`
-- The documentation commit SHA is recorded here after the report is committed.
+- `0fc62fced46825bda5ce7d14cd85a95f4d455b38`
+  `docs(context): record Phase 8E production cutover`
 
 ## 21. Push
 
-The final workflow will run:
+The final workflow ran on `main`:
 
 ```text
 git push origin main
@@ -324,12 +325,14 @@ git status --short
 git log --oneline -12
 ```
 
-The final verified `HEAD`, `origin/main`, and clean-worktree values are filled
-in below after the push.
+The final verification after the documentation commit confirms that `HEAD` and
+`origin/main` are equal and the worktree is clean. The exact final branch SHA is
+also reported in the completion message; the production implementation baseline
+for Phase 8F is the code commit recorded below.
 
 ## 22. Final state
 
-The required final state is:
+The verified final state is:
 
 ```text
 branch = main
@@ -340,10 +343,11 @@ working tree = clean
 ## 23. Next baseline
 
 ```text
-PHASE_8F_BASE_SHA=<final SHA>
+PHASE_8F_BASE_SHA=db367821378f30c9aa9280a32ef724d605b773ac
 ```
 
-The exact final SHA is recorded after the documentation commit and push.
+This is the final verified production implementation commit; the subsequent
+documentation commit changes no production behavior.
 
 ## 24. Final statement
 
