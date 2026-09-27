@@ -53,20 +53,20 @@ describe("Phase 8B incremental source and gain boundaries", () => {
     );
   });
 
-  it("does not begin the explicitly deferred later-phase authorities", async () => {
+  it("keeps incremental and gain contracts available to the final Coordinator", async () => {
+    const coordinator = await readSource(
+      "packages/agent/src/context/compaction/context-compaction-coordinator.ts",
+    );
+
+    expect(coordinator).toContain("incrementalResolver");
+    expect(coordinator).toContain("checkpointBudget");
+    expect(coordinator).toContain("gainEvaluator");
+    expect(coordinator).toContain("isMeaningfulContextCompactionGain");
+
     const sources = await Promise.all(phase8bModules.map(readSource));
-    const combined = sources.join("\n");
-    for (const forbidden of [
-      "SemanticCheckpointDraft",
-      "SemanticSummaryValidator",
-      "ContextAuthorityFact",
-      "ContextCompactionCoordinator",
-      "ContextRecoveryPlanner",
-      "ContextCompactionRebuilder",
-      "ContextCompactionBudgetLedger",
-    ]) {
-      expect(combined).not.toContain(forbidden);
-    }
+    expect(sources.join("\n")).not.toMatch(
+      /@caelush\/storage|apps\/daemon|ContextCompactionAttempt|rawArtifactRef/i,
+    );
   });
 
   it("keeps AgentLoop's existing single overflow recovery path intact", async () => {
@@ -75,7 +75,6 @@ describe("Phase 8B incremental source and gain boundaries", () => {
     expect(loop).toContain('execution.error.code === "CONTEXT_OVERFLOW"');
     expect(loop).toContain('prepare(dependencies.contextEngine, input, "FORCED_RECOVERY")');
     expect(loop).toContain("const error =");
-    expect(engine).toContain("isMeaningfulContextCompactionGain");
-    expect(engine).not.toContain("ContextCompactionCoordinator");
+    expect(engine).toContain("createContextCompactionCoordinator");
   });
 });

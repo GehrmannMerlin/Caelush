@@ -25,15 +25,16 @@ describe("Phase 8D Context compaction durability architecture", () => {
     expect(digest).not.toMatch(/@caelush\/storage|DatabaseSync|SQLITE/u);
   });
 
-  it("keeps the Engine on the shared production build path without V2 token patching", () => {
+  it("keeps the Engine on the shared final Coordinator path without V2 token patching", () => {
     const engine = source("../../packages/agent/src/context/engine/context-engine.ts");
 
     expect(engine).toContain("buildPreparedProjectionWithoutCompaction");
     expect(engine).toContain("createContextCompactionRebuilder");
+    expect(engine).toContain("createContextCompactionCoordinator");
+    expect(engine).toContain("createContextRecoveryPlanner");
+    expect(engine).toContain("withRecoveryTailPolicy");
     expect(engine).not.toContain("updateTokensAfter");
-    expect(engine).not.toMatch(
-      /ContextCompactionCoordinator|ContextRecoveryPlanner|ContextCompactionAttempt|AUXILIARY_LLM/u,
-    );
+    expect(engine).not.toMatch(/ContextCompactionAttempt|AUXILIARY_LLM/u);
   });
 
   it("keeps persistence and event proof in Storage and adds no attempt schema", () => {
