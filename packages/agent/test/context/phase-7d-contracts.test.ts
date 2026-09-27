@@ -100,12 +100,20 @@ describe("Phase 7D canonical contracts", () => {
     };
     const plan: ContextCompactionPlan = {
       reason: "SELECTION_PRESSURE",
+      cut: {
+        kind: "TURN_BOUNDARY",
+        firstKeptTurnId: sourceRange.conversationTurnId,
+        firstKeptMessageId: sourceRange.firstMessageId,
+        firstKeptSequence: sourceRange.firstSequence,
+      },
       sourceRange,
       selectedUnitIds: ["conversation:one"],
       retainedUnitIds: ["conversation:two"],
       estimatedTokensBefore: 100,
       selectedTokens: 40,
+      retainedTokens: 60,
       targetRecentTailTokens: 60,
+      minRecentTailTokens: 40,
     };
 
     expect(Object.isFrozen(sourceRange)).toBe(true);

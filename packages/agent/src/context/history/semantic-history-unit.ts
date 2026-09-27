@@ -14,6 +14,8 @@ export interface ContextMessageRef {
   readonly runId: RunId;
   readonly conversationTurnId: ConversationTurnId;
   readonly sequence: number;
+  /** Provider-neutral derived estimate; absent on hand-authored compatibility fixtures. */
+  readonly tokenEstimate?: number;
 }
 
 export type ContextHistoryUnitStatus = "OPEN" | "CLOSED";
@@ -112,7 +114,7 @@ function createConversationTurnUnit(
     id: `conversation:${turn.id}`,
     kind: "CONVERSATION_TURN",
     status: turn.status,
-    messages: messages.map(toMessageRef),
+    messages: messages.map((stored) => toMessageRef(stored, model, estimator)),
     tokenEstimate: messages.reduce(
       (total, stored) => total + estimator.estimateAgentMessage(stored.message, model),
       0,
@@ -159,7 +161,7 @@ function createToolProtocolUnits(
       .map((call) => results.get(call.toolCallId)?.message.id)
       .filter((id): id is AgentMessageId => id !== undefined);
     const closed = resultIds.length === callIds.length;
-    const refs = members.map(toMessageRef);
+    const refs = members.map((member) => toMessageRef(member, model, estimator));
     const tokenEstimate = members.reduce(
       (total, member) => total + estimator.estimateAgentMessage(member.message, model),
       0,
@@ -188,13 +190,18 @@ function messagesAfter(
   return index < 0 ? [] : messages.slice(index + 1);
 }
 
-function toMessageRef(stored: StoredAgentMessage): ContextMessageRef {
+function toMessageRef(
+  stored: StoredAgentMessage,
+  model: ModelDescriptor,
+  estimator: ReturnType<typeof createUtf8HeuristicTokenEstimator>,
+): ContextMessageRef {
   const message = stored.message;
   return Object.freeze({
     messageId: message.id,
     runId: message.runId,
     conversationTurnId: message.conversationTurnId,
     sequence: stored.sequence,
+    tokenEstimate: estimator.estimateAgentMessage(message, model),
   });
 }
 

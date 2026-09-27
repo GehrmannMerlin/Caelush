@@ -14,6 +14,7 @@ import {
   type LegacyContextCheckpointRecordV1,
 } from "../compaction/context-compaction-contracts.js";
 import { createContextCompactionPlanner } from "../compaction/context-compaction-planner.js";
+import { createContextPressureEvaluator } from "../compaction/context-pressure-evaluator.js";
 import type { ContextCompactionCommitPort } from "../ports/context-compaction-commit-port.js";
 import { prepareContextCompactionCandidates } from "../compaction/context-compaction-coverage.js";
 import type { ContextSummarizationRunner } from "../compaction/context-summary.js";
@@ -145,6 +146,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
   const historyIndexer = options.historyIndexer ?? createContextHistoryIndexer();
   const planner = options.planner ?? createContextPlanner();
   const compactionPlanner = options.compactionPlanner ?? createContextCompactionPlanner();
+  const pressureEvaluator = createContextPressureEvaluator();
   const rehydrator = options.rehydrator ?? createContextRehydrator();
   const documentBuilder = options.documentBuilder ?? createContextDocumentBuilder();
   const summarizationRunner = options.summarizationRunner;
@@ -203,17 +205,26 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
       let activeSources = sourceResults;
       let compactionReceipt;
       let compactionCount = 0;
-      const shouldCompact =
-        initialPlan.requiresCompaction ||
-        initialPlan.pressure === "PROACTIVE" ||
-        initialPlan.pressure === "EMERGENCY" ||
-        activeCoverage.history.estimatedTokens > policy.targetRecentTailTokens ||
-        input.mode === "FORCED_RECOVERY";
+      const pressure = pressureEvaluator.evaluate({
+        estimatedInputTokens:
+          initialPlan.budget.selectedTokens + policy.requestOverhead.totalTokens,
+        mandatoryTokens: initialPlan.budget.mandatoryTokens + policy.requestOverhead.totalTokens,
+        effectiveInputLimitTokens: policy.effectiveInputLimitTokens,
+        proactiveCompactionTokens: policy.proactiveCompactionTokens,
+        emergencyCompactionTokens: policy.emergencyCompactionTokens,
+        targetRecentTailTokens: policy.targetRecentTailTokens,
+        minRecentTailTokens: policy.minRecentTailTokens,
+        mode: input.mode,
+        hasCompressibleHistory: activeCoverage.history.units.some(
+          (unit) => unit.status === "CLOSED" && unit.compactionEligible,
+        ),
+      });
+      const shouldCompact = pressure.shouldCompact;
       if (shouldCompact) {
         const reason: ContextCompactionReason =
-          input.mode === "FORCED_RECOVERY"
+          pressure.trigger === "FORCED_PROVIDER_OVERFLOW"
             ? "FORCED_PROVIDER_OVERFLOW"
-            : initialPlan.requiresCompaction
+            : pressure.trigger === "SELECTION_PRESSURE"
               ? "SELECTION_PRESSURE"
               : "PROACTIVE_PRESSURE";
         const compactionPlan = compactionPlanner.plan({
@@ -248,10 +259,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
             sourceRange: compactionPlan.sourceRange,
             structuredCheckpoint: summary.result.checkpoint,
             tokensBefore: compactionPlan.estimatedTokensBefore,
-            tokensAfter: Math.max(
-              0,
-              compactionPlan.estimatedTokensBefore - compactionPlan.selectedTokens,
-            ),
+            tokensAfter: compactionPlan.retainedTokens,
             modelRef: summary.result.modelRef,
             summaryPromptVersion: summary.result.summaryPromptVersion,
             sourceDigest: summary.result.sourceDigest,
@@ -467,7 +475,6 @@ function messagesInRange(
       .filter(
         (stored) =>
           stored.message.runId === range.runId &&
-          stored.message.conversationTurnId === range.conversationTurnId &&
           stored.sequence >= range.firstSequence &&
           stored.sequence <= range.lastSequence,
       )

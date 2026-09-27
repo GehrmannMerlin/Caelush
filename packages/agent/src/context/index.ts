@@ -50,6 +50,8 @@ export {
   createContextMessageRange,
   createContextSummaryPromptVersion,
 } from "./compaction/context-compaction-contracts.js";
+export { createContextPressureEvaluator } from "./compaction/context-pressure-evaluator.js";
+export { createContextCutPointSelector } from "./compaction/context-cut-point-selector.js";
 export { createContextCompactionPlanner } from "./compaction/context-compaction-planner.js";
 export { prepareContextCompactionCandidates } from "./compaction/context-compaction-coverage.js";
 export {
@@ -72,6 +74,20 @@ export type {
   ContextSummaryPromptVersion,
   LegacyContextCheckpointRecordV1,
 } from "./compaction/context-compaction-contracts.js";
+export type {
+  ContextPressureEvaluation,
+  ContextPressureEvaluator,
+  ContextPressureInput,
+  ContextPressureTrigger,
+} from "./compaction/context-pressure-evaluator.js";
+export type {
+  ContextCompactionCut,
+  ContextCompactionCutCandidate,
+  ContextCompactionCutKind,
+  ContextCutPointSelector,
+  ProtocolSafeSplitCut,
+  TurnBoundaryCut,
+} from "./compaction/context-compaction-cut.js";
 export type { ContextCompactionCandidatePreparation } from "./compaction/context-compaction-coverage.js";
 export type {
   ContextSummarizationRunner,

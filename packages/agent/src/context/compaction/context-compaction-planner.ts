@@ -6,18 +6,21 @@ import type {
   ContextMessageRange,
 } from "./context-compaction-contracts.js";
 import { createContextMessageRange } from "./context-compaction-contracts.js";
+import { createContextCutPointSelector } from "./context-cut-point-selector.js";
+import type { ContextCompactionCutCandidate } from "./context-compaction-cut.js";
 import type { ContextHistoryUnit } from "../history/semantic-history-unit.js";
 import type { ContextPolicy } from "../policy/context-policy.js";
 
 /** Create the pure, deterministic semantic compaction planner. */
 export function createContextCompactionPlanner(): ContextCompactionPlanner {
+  const selector = createContextCutPointSelector();
   return Object.freeze({
     plan(input: {
       readonly history: ContextHistoryIndex;
       readonly policy: ContextPolicy;
       readonly reason: ContextCompactionReason;
     }): ContextCompactionPlan | null {
-      return planCompaction(input.history, input.policy, input.reason);
+      return planCompaction(input.history, input.policy, input.reason, selector);
     },
   });
 }
@@ -26,47 +29,29 @@ function planCompaction(
   history: ContextHistoryIndex,
   policy: ContextPolicy,
   reason: ContextCompactionReason,
+  selector: ReturnType<typeof createContextCutPointSelector>,
 ): ContextCompactionPlan | null {
-  const units = canonicalUnits(history.units);
-  if (units.length === 0 || history.estimatedTokens <= policy.targetRecentTailTokens) return null;
+  const candidate = selector.select({
+    history,
+    targetRecentTailTokens: policy.targetRecentTailTokens,
+    minRecentTailTokens: policy.minRecentTailTokens,
+  });
+  if (candidate === null) return null;
 
-  const compactablePrefix: ContextHistoryUnit[] = [];
-  let sourceTurn = units[0]?.messages[0]?.conversationTurnId;
-  for (const unit of units) {
-    const firstRef = unit.messages[0];
-    if (firstRef === undefined) continue;
-    if (unit.status !== "CLOSED" || !unit.compactionEligible) break;
-    if (sourceTurn === undefined) sourceTurn = firstRef.conversationTurnId;
-    if (firstRef.conversationTurnId !== sourceTurn) break;
-    compactablePrefix.push(unit);
-  }
-
-  const selected: ContextHistoryUnit[] = [];
-  let selectedTokens = 0;
-  for (const unit of compactablePrefix) {
-    const remainingAfterSelection = history.estimatedTokens - selectedTokens - unit.tokenEstimate;
-    if (remainingAfterSelection < policy.minRecentTailTokens) break;
-    selected.push(unit);
-    selectedTokens += unit.tokenEstimate;
-    if (remainingAfterSelection <= policy.targetRecentTailTokens) break;
-  }
-  if (selected.length === 0) return null;
-
-  const selectedIds = new Set(selected.map((unit) => unit.id));
-  const selectedRefs = selected.flatMap((unit) => unit.messages).sort(compareRefs);
-  const sourceRange = createRange(selectedRefs);
+  const sourceRange = createRange(history.units, candidate);
   if (sourceRange === null) return null;
 
   return Object.freeze({
     reason,
+    cut: candidate.cut,
     sourceRange,
-    selectedUnitIds: Object.freeze(selected.map((unit) => unit.id)),
-    retainedUnitIds: Object.freeze(
-      units.filter((unit) => !selectedIds.has(unit.id)).map((unit) => unit.id),
-    ),
+    selectedUnitIds: candidate.compactedUnitIds,
+    retainedUnitIds: candidate.retainedUnitIds,
     estimatedTokensBefore: history.estimatedTokens,
-    selectedTokens,
+    selectedTokens: candidate.compactedTokens,
+    retainedTokens: candidate.retainedTokens,
     targetRecentTailTokens: policy.targetRecentTailTokens,
+    minRecentTailTokens: policy.minRecentTailTokens,
   });
 }
 
@@ -89,12 +74,30 @@ function canonicalUnits(units: readonly ContextHistoryUnit[]): readonly ContextH
 }
 
 function createRange(
-  refs: readonly ContextHistoryUnit["messages"][number][],
+  units: readonly ContextHistoryUnit[],
+  candidate: ContextCompactionCutCandidate,
 ): ContextMessageRange | null {
-  const first = refs[0];
-  const last = refs[refs.length - 1];
+  const selectedIds = new Set(candidate.compactedUnitIds);
+  const cut = candidate.cut;
+  const primaryTurns = canonicalUnits(units).filter((unit) => unit.kind === "CONVERSATION_TURN");
+  const refs =
+    cut.kind === "TURN_BOUNDARY"
+      ? primaryTurns.filter((unit) => selectedIds.has(unit.id)).flatMap((unit) => unit.messages)
+      : (() => {
+          const splitTurnIndex = primaryTurns.findIndex(
+            (unit) => unit.messages[0]?.conversationTurnId === cut.conversationTurnId,
+          );
+          if (splitTurnIndex < 0) return [];
+          return primaryTurns.flatMap((unit, index) => {
+            if (index < splitTurnIndex) return unit.messages;
+            if (index > splitTurnIndex) return [];
+            return unit.messages.filter((message) => message.sequence < cut.firstKeptSequence);
+          });
+        })();
+  const sortedRefs = refs.sort(compareRefs);
+  const first = sortedRefs[0];
+  const last = sortedRefs[sortedRefs.length - 1];
   if (first === undefined || last === undefined) return null;
-  if (refs.some((ref) => ref.conversationTurnId !== first.conversationTurnId)) return null;
   if (first.runId !== last.runId) return null;
   return createContextMessageRange({
     runId: first.runId,

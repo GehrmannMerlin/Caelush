@@ -221,7 +221,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       runId: currentRunId,
       turnId: currentTurnId,
       sequence: 10,
-      text: "current intent ".repeat(250),
+      text: "current intent ".repeat(725),
     });
     const conversation = snapshot(
       [
@@ -295,6 +295,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       policy: { outputReserveTokens: 128, safetyReserveTokens: 0 },
       requestOverheadEstimator: createContextRequestOverheadEstimator({
         tokenEstimator: estimator,
+        protocolOverheadTokens: 500,
       }),
       summarizationRunner: createContextSummarizationRunner({
         summarizer: {
@@ -355,7 +356,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       turn: { stepId: "step:phase-7f-compaction" as never, sequence: 1 },
       conversation,
       input: { kind: "USER_INPUT", userMessageId: current.message.id },
-      model: { ...MODEL, limits: { contextWindowTokens: 4_000, maxOutputTokens: 128 } },
+      model: { ...MODEL, limits: { contextWindowTokens: 5_000, maxOutputTokens: 128 } },
       tools: [],
       mode: "NORMAL",
       signal: new AbortController().signal,

@@ -111,9 +111,9 @@ describe("Phase 7D target path integration", () => {
       .flatMap((conversationTurn) => conversationTurn.messages)
       .filter(
         (stored) =>
+          stored.message.runId === compactionPlan!.sourceRange.runId &&
           compactionPlan!.sourceRange.firstSequence <= stored.sequence &&
-          stored.sequence <= compactionPlan!.sourceRange.lastSequence &&
-          stored.message.conversationTurnId === compactionPlan!.sourceRange.conversationTurnId,
+          stored.sequence <= compactionPlan!.sourceRange.lastSequence,
       );
     const summarizer: ContextSummarizerPort = {
       async summarize(input) {

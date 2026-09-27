@@ -8,6 +8,7 @@ import type { ContextHistoryIndex } from "../history/semantic-history-unit.js";
 import type { ContextPolicy } from "../policy/context-policy.js";
 import type { ContextAuthoritySnapshot } from "../rehydration/context-authority-contracts.js";
 import type { StructuredCheckpoint } from "../checkpoint/structured-checkpoint.js";
+import type { ContextCompactionCut } from "./context-compaction-cut.js";
 
 export type ContextCompactionReason =
   "PROACTIVE_PRESSURE" | "SELECTION_PRESSURE" | "FORCED_PROVIDER_OVERFLOW";
@@ -44,12 +45,15 @@ export function createContextMessageRange(input: ContextMessageRange): ContextMe
 
 export interface ContextCompactionPlan {
   readonly reason: ContextCompactionReason;
+  readonly cut: ContextCompactionCut;
   readonly sourceRange: ContextMessageRange;
   readonly selectedUnitIds: readonly string[];
   readonly retainedUnitIds: readonly string[];
   readonly estimatedTokensBefore: number;
   readonly selectedTokens: number;
+  readonly retainedTokens: number;
   readonly targetRecentTailTokens: number;
+  readonly minRecentTailTokens: number;
 }
 
 export interface ContextCompactionPlanner {

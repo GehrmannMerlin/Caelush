@@ -124,7 +124,14 @@ describe("Phase 7D semantic compaction planner", () => {
       retainedUnitIds: ["recent"],
       estimatedTokensBefore: 130,
       selectedTokens: 80,
+      retainedTokens: 50,
       targetRecentTailTokens: 60,
+      minRecentTailTokens: 40,
+    });
+    expect(plan?.cut).toMatchObject({
+      kind: "TURN_BOUNDARY",
+      firstKeptTurnId: turnId,
+      firstKeptSequence: 21,
     });
     expect(plan?.sourceRange.firstSequence).toBe(1);
     expect(plan?.sourceRange.lastSequence).toBe(20);
