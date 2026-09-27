@@ -154,6 +154,7 @@ describe("Phase 7D target path integration", () => {
         reason: "PROACTIVE_PRESSURE",
         sourceMessages,
         sourceRange: compactionPlan!.sourceRange,
+        cut: compactionPlan!.cut,
         authorities: { goal: "current request", verificationState: "not-run" },
         targetTokens: policy.targetRecentTailTokens,
         model: MODEL,

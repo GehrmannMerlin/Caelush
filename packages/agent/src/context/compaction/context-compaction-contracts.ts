@@ -79,6 +79,7 @@ export interface ContextSummarizationInput {
   readonly previousCheckpoint?: StructuredCheckpoint;
   readonly sourceMessages: readonly StoredAgentMessage[];
   readonly sourceRange: ContextMessageRange;
+  readonly cut: ContextCompactionCut;
   readonly authorities: ContextAuthoritySnapshot;
   readonly targetTokens: number;
   readonly model: ModelDescriptor;

@@ -244,6 +244,7 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
                 : { previousCheckpoint: activeCoverage.previousCheckpoint }),
               sourceMessages,
               sourceRange: compactionPlan.sourceRange,
+              cut: compactionPlan.cut,
               authorities,
               targetTokens: compactionPlan.targetRecentTailTokens,
               model: input.model,

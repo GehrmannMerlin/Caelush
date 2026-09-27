@@ -102,6 +102,9 @@ function checkpointRange(
   checkpoint: ContextCheckpointRecordV2 | LegacyContextCheckpointRecordV1,
 ): ContextCheckpointRange {
   if (checkpoint.schemaVersion === 2) {
+    if (String(checkpoint.runId) !== String(checkpoint.sourceRange.runId)) {
+      throw new ContextPlanningError("INCONSISTENT_PLAN");
+    }
     return {
       runId: String(checkpoint.runId),
       firstMessageId: checkpoint.sourceRange.firstMessageId,

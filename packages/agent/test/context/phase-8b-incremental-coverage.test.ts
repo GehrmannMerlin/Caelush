@@ -6,15 +6,27 @@ import {
   conversationTurnId,
   createContextCheckpointId,
   createContextCompactionCoverage,
+  createContextIncrementalCompactionResolver,
   createContextMessageRange,
   createContextSummaryPromptVersion,
+  createIncrementalCheckpointResolver,
   type ContextHistoryIndex,
   type ContextHistoryUnit,
   type ContextMessageRef,
   type ContextCheckpointRecordV2,
+  type ContextCheckpointRepositoryPort,
+  type ContextCompactionPlan,
+  type IncrementalCheckpointState,
   type LegacyContextCheckpointRecordV1,
+  type StoredAgentMessage,
   type ToolProtocolUnit,
 } from "@caelush/agent";
+import {
+  assistantMessage as fixtureAssistant,
+  snapshot as fixtureSnapshot,
+  turn as fixtureTurn,
+  userMessage as fixtureUser,
+} from "../messages/fixtures.js";
 
 const RUN_ID = createRunId("run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9a");
 const OTHER_RUN_ID = createRunId("run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9b");
@@ -179,6 +191,71 @@ function expectInconsistentPlan(action: () => unknown): void {
   }
 }
 
+function storedRef(stored: StoredAgentMessage): ContextMessageRef {
+  return {
+    messageId: stored.message.id,
+    runId: stored.message.runId,
+    conversationTurnId: stored.message.conversationTurnId,
+    sequence: stored.sequence,
+    tokenEstimate: 1,
+  };
+}
+
+function planForRange(sourceRange: ReturnType<typeof createContextMessageRange>): ContextCompactionPlan {
+  return {
+    reason: "SELECTION_PRESSURE",
+    cut: {
+      kind: "TURN_BOUNDARY",
+      firstKeptTurnId: sourceRange.conversationTurnId,
+      firstKeptMessageId: sourceRange.lastMessageId,
+      firstKeptSequence: sourceRange.lastSequence + 1,
+    },
+    sourceRange,
+    selectedUnitIds: ["conversation:phase-8b"],
+    retainedUnitIds: [],
+    estimatedTokensBefore: 100,
+    selectedTokens: 60,
+    retainedTokens: 40,
+    targetRecentTailTokens: 40,
+    minRecentTailTokens: 20,
+  };
+}
+
+function historyFromStored(messages: readonly StoredAgentMessage[]): ContextHistoryIndex {
+  const refs = messages.map(storedRef);
+  const unit: ContextHistoryUnit = {
+    id: "conversation:phase-8b",
+    kind: "CONVERSATION_TURN",
+    status: "CLOSED",
+    messages: refs,
+    tokenEstimate: refs.length,
+    atomicGroupId: "phase-8b",
+    compactionEligible: true,
+  };
+  return history([unit]);
+}
+
+function repositoryWithLatest(
+  latest: ContextCheckpointRecordV2 | LegacyContextCheckpointRecordV1 | undefined,
+): ContextCheckpointRepositoryPort {
+  const v2 = latest?.schemaVersion === 2 ? latest : undefined;
+  return {
+    async create(input) {
+      if (v2 === undefined) throw new Error("fixture create is not used");
+      return v2;
+    },
+    async getLatestByRun() {
+      return latest;
+    },
+    async getById() {
+      return latest;
+    },
+    async listByRun() {
+      return latest === undefined ? [] : [latest];
+    },
+  };
+}
+
 describe("Phase 8B canonical Context checkpoint coverage", () => {
   it("removes a cross-Turn V2 range and counts overlapping refs once", () => {
     const turnARefs = [
@@ -300,5 +377,169 @@ describe("Phase 8B canonical Context checkpoint coverage", () => {
         ),
       }),
     );
+  });
+});
+
+describe("Phase 8B incremental checkpoint and source resolution", () => {
+  const messages = [
+    fixtureUser({ runId: String(RUN_ID), sequence: 1, text: "A first" }),
+    fixtureAssistant({ runId: String(RUN_ID), sequence: 100, text: "A last" }),
+    fixtureUser({ runId: String(RUN_ID), sequence: 101, text: "B first" }),
+    fixtureUser({ runId: String(RUN_ID), sequence: 150, text: "hidden B", modelVisible: false }),
+    fixtureAssistant({ runId: String(RUN_ID), sequence: 160, text: "B last" }),
+    fixtureUser({ runId: String(RUN_ID), sequence: 161, text: "C first" }),
+    fixtureAssistant({ runId: String(RUN_ID), sequence: 220, text: "C last" }),
+  ];
+  const refs = messages.map(storedRef);
+  const rangeA = createContextMessageRange({
+    runId: RUN_ID,
+    conversationTurnId: refs[0]!.conversationTurnId,
+    firstMessageId: refs[0]!.messageId,
+    lastMessageId: refs[1]!.messageId,
+    firstSequence: 1,
+    lastSequence: 100,
+  });
+  const rangeB = createContextMessageRange({
+    runId: RUN_ID,
+    conversationTurnId: refs[2]!.conversationTurnId,
+    firstMessageId: refs[2]!.messageId,
+    lastMessageId: refs[4]!.messageId,
+    firstSequence: 101,
+    lastSequence: 160,
+  });
+  const rangeC = createContextMessageRange({
+    runId: RUN_ID,
+    conversationTurnId: refs[5]!.conversationTurnId,
+    firstMessageId: refs[5]!.messageId,
+    lastMessageId: refs[6]!.messageId,
+    firstSequence: 161,
+    lastSequence: 220,
+  });
+  const conversation = fixtureSnapshot([
+    fixtureTurn(messages, { runId: String(RUN_ID), status: "CLOSED", openedAt: 1 }),
+  ]);
+
+  it("resolves NONE, V2, and legacy state without inventing a predecessor", async () => {
+    const historyIndex = historyFromStored(messages);
+    const none = await createIncrementalCheckpointResolver({
+      checkpointRepository: repositoryWithLatest(undefined),
+    }).resolve({ runId: RUN_ID, history: historyIndex });
+    expect(none).toEqual({ kind: "NONE" });
+
+    const checkpointA = checkpoint(refs[0]!, refs[1]!);
+    const v2 = await createIncrementalCheckpointResolver({
+      checkpointRepository: repositoryWithLatest(checkpointA),
+    }).resolve({ runId: RUN_ID, history: historyIndex });
+    expect(v2).toEqual({ kind: "V2", checkpoint: checkpointA });
+
+    const legacy = await createIncrementalCheckpointResolver({
+      checkpointRepository: repositoryWithLatest(legacyCheckpoint(1, 100)),
+    }).resolve({ runId: RUN_ID, history: historyIndex });
+    expect(legacy).toMatchObject({ kind: "LEGACY_V1" });
+    expect((legacy as Extract<IncrementalCheckpointState, { kind: "LEGACY_V1" }>).checkpoint.schemaVersion).toBe(1);
+  });
+
+  it("builds cumulative A-to-B-to-C ranges from only the new model-visible source", () => {
+    const resolver = createContextIncrementalCompactionResolver();
+    const checkpointA = checkpoint(refs[0]!, refs[1]!);
+    const checkpointB = checkpoint(refs[0]!, refs[4]!);
+
+    const first = resolver.resolve({
+      plan: planForRange(rangeB),
+      latest: { kind: "V2", checkpoint: checkpointA },
+      conversation,
+    });
+    expect(first).toMatchObject({
+      previousCheckpoint: checkpointA,
+      newSourceRange: rangeB,
+      cumulativeSourceRange: {
+        firstMessageId: rangeA.firstMessageId,
+        firstSequence: 1,
+        lastMessageId: rangeB.lastMessageId,
+        lastSequence: 160,
+      },
+    });
+    expect(first.newSourceMessages.map((message) => message.sequence)).toEqual([101, 160]);
+
+    const second = resolver.resolve({
+      plan: planForRange(rangeC),
+      latest: { kind: "V2", checkpoint: checkpointB },
+      conversation,
+    });
+    expect(second.cumulativeSourceRange).toMatchObject({
+      firstMessageId: rangeA.firstMessageId,
+      firstSequence: 1,
+      lastMessageId: rangeC.lastMessageId,
+      lastSequence: 220,
+    });
+    expect(second.newSourceMessages.map((message) => message.sequence)).toEqual([161, 220]);
+
+    const none = resolver.resolve({
+      plan: planForRange(rangeB),
+      latest: { kind: "NONE" },
+      conversation,
+    });
+    expect(none.previousCheckpoint).toBeUndefined();
+    expect(none.cumulativeSourceRange).toEqual(rangeB);
+
+    const legacy = resolver.resolve({
+      plan: planForRange(rangeB),
+      latest: { kind: "LEGACY_V1", checkpoint: legacyCheckpoint(1, 100) },
+      conversation,
+    });
+    expect(legacy.previousCheckpoint).toBeUndefined();
+    expect(legacy.cumulativeSourceRange).toEqual(rangeB);
+  });
+
+  it("fails closed for invalid V2 coverage, overlap, and endpoint identity", async () => {
+    const invalidCheckpoint = checkpoint(refs[0]!, refs[1]!);
+    const badRepository = repositoryWithLatest({
+      ...invalidCheckpoint,
+      sourceRange: createContextMessageRange({
+        ...invalidCheckpoint.sourceRange,
+        lastMessageId: agentMessageId("amsg_missing_endpoint"),
+        lastSequence: 100,
+      }),
+    });
+    await expect(
+      createIncrementalCheckpointResolver({ checkpointRepository: badRepository }).resolve({
+        runId: RUN_ID,
+        history: historyFromStored(messages),
+      }),
+    ).rejects.toMatchObject({ code: "INCONSISTENT_PLAN" });
+
+    const resolver = createContextIncrementalCompactionResolver();
+    expect(() =>
+      resolver.resolve({
+        plan: planForRange(rangeB),
+        latest: { kind: "V2", checkpoint: invalidCheckpoint },
+        conversation,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      resolver.resolve({
+        plan: planForRange(
+          createContextMessageRange({
+            ...rangeB,
+            firstMessageId: refs[1]!.messageId,
+            firstSequence: 100,
+          }),
+        ),
+        latest: { kind: "V2", checkpoint: invalidCheckpoint },
+        conversation,
+      }),
+    ).toThrowError(/inconsistent/i);
+    expect(() =>
+      resolver.resolve({
+        plan: planForRange(
+          createContextMessageRange({
+            ...rangeB,
+            firstMessageId: agentMessageId("amsg_missing_endpoint"),
+          }),
+        ),
+        latest: { kind: "NONE" },
+        conversation,
+      }),
+    ).toThrowError(/inconsistent/i);
   });
 });

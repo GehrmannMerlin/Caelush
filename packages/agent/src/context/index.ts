@@ -57,6 +57,8 @@ export {
   createContextCompactionCoverage,
   prepareContextCompactionCandidates,
 } from "./compaction/context-compaction-coverage.js";
+export { createContextIncrementalCompactionResolver } from "./compaction/incremental-compaction-resolver.js";
+export { createIncrementalCheckpointResolver } from "./compaction/incremental-checkpoint-resolver.js";
 export {
   createContextSummarizationRunner,
   serializeContextSummarySource,
@@ -77,6 +79,14 @@ export type {
   ContextSummaryPromptVersion,
   LegacyContextCheckpointRecordV1,
 } from "./compaction/context-compaction-contracts.js";
+export type {
+  ContextIncrementalCompactionInput,
+  ContextIncrementalCompactionResolver,
+} from "./compaction/incremental-compaction-resolver.js";
+export type {
+  IncrementalCheckpointResolver,
+  IncrementalCheckpointState,
+} from "./compaction/incremental-checkpoint-resolver.js";
 export type {
   ContextPressureEvaluation,
   ContextPressureEvaluator,

@@ -99,6 +99,12 @@ function input(): ContextSummarizationInput {
     reason: "PROACTIVE_PRESSURE",
     sourceMessages,
     sourceRange,
+    cut: {
+      kind: "TURN_BOUNDARY",
+      firstKeptTurnId: sourceRange.conversationTurnId,
+      firstKeptMessageId: sourceRange.lastMessageId,
+      firstKeptSequence: sourceRange.lastSequence + 1,
+    },
     authorities,
     targetTokens: 60,
     model: MODEL,
