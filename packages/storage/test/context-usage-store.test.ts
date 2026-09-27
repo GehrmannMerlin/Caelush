@@ -52,6 +52,7 @@ describe("SqliteContextUsageStore", () => {
       pressureState: "PROACTIVE",
       compactionCount: 2,
       lastCompactionAt: createTimestampMs(20),
+      lastRecoveryStages: [],
       breakdown: [
         { sourceId: "agent.conversation", tokens: 200, itemCount: 3 },
         { sourceId: "coding.relevant-files", tokens: 200, itemCount: 2 },

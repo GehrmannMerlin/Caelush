@@ -241,12 +241,14 @@ describe("Phase 2C package edges", () => {
         "ContextMandatoryInputTooLargeError",
         "ContextPlanningError",
         "ContextSourceCollectionError",
+        "ContextSummarizationInfrastructureError",
         "Utf8HeuristicTokenEstimator",
         "CONTEXT_COMPACTION_DIGEST_VERSION",
         "CONTEXT_COMPACTION_REASONS",
         "CONTEXT_SUMMARY_PROMPT_VERSION",
         "assertStructuredCheckpoint",
         "createContextCheckpointId",
+        "createContextCompactionCoordinator",
         "createContextCompactionEventFactory",
         "createContextCompactionPlanner",
         "createContextMaterializer",
@@ -289,6 +291,7 @@ describe("Phase 2C package edges", () => {
         "createContextPressureEvaluator",
         "createContextRequestOverheadEstimator",
         "createContextReceiptBuilder",
+        "createContextRecoveryPlanner",
         "createContextSourceId",
         "createContextSourceItem",
         "createContextSourceRegistryBuilder",
@@ -390,6 +393,7 @@ describe("Phase 2C package edges", () => {
         // The frozen decision carries the approved request, so a shared constant cannot express
         // it: the factory replaces the constant at the same single-authority position.
         "allowedModelAdmission",
+        "applyContextRecoveryToPlan",
         "createDirectAcceptCompletionGate",
         "assertAgentTurnInput",
         "assertAgentTurnRef",
@@ -466,6 +470,7 @@ describe("Phase 2C package edges", () => {
         "canonicalizeJsonValue",
         "cloneJsonValue",
         "containsForbiddenSchemaFeature",
+        "contextSourceCriticality",
         "createToolCallPreparer",
         "deepFreezeJson",
         "isJsonObject",
@@ -475,6 +480,7 @@ describe("Phase 2C package edges", () => {
         "toolModelSpecByteLength",
         "validateToolRegistryOptions",
         "validateToolSchemaSemantics",
+        "withRecoveryTailPolicy",
         // --- Phase 4B: Tool execution and result processing. The kernel now owns invoking an
         // already-durably-started Tool through its canonical `AgentTool`, the safe transient update
         // lifecycle, and the `validate -> sanitize -> revalidate -> bound -> project` result pipeline

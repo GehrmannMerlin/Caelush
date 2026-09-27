@@ -64,4 +64,30 @@ describe("Phase 8F final Context Compaction architecture", () => {
     expect(loop).toContain('prepare(dependencies.contextEngine, input, "FORCED_RECOVERY")');
     expect(coordinator).not.toMatch(/RunEventHub|subscribe\(|eventSubscriber|ContextCompactionAttempt/u);
   });
+
+  it("keeps the frozen Context Compaction contracts on the Agent root", () => {
+    const agent = source("packages/agent/src/index.ts");
+    for (const contract of [
+      "ContextPressureEvaluator",
+      "ContextCutPointSelector",
+      "ContextCompactionPlanner",
+      "IncrementalCheckpointResolver",
+      "ContextIncrementalCompactionResolver",
+      "ContextSummarySourceSerializer",
+      "ContextSummarizerPort",
+      "SemanticSummaryValidator",
+      "DeterministicCompactionFactsProvider",
+      "DeterministicCheckpointBuilder",
+      "ContextCheckpointEnricher",
+      "ContextCheckpointBudgetResolver",
+      "ContextCompactionGainEvaluator",
+      "ContextCompactionRebuilder",
+      "ContextCheckpointRecordV2",
+      "ContextCompactionCommitPort",
+      "ContextCompactionCoordinator",
+      "ContextRecoveryPlanner",
+    ]) {
+      expect(agent).toContain(contract);
+    }
+  });
 });
