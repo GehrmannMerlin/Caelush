@@ -13,7 +13,14 @@ describe("Phase 8F final Context Compaction architecture", () => {
 
     expect(engine).not.toContain("summarizationRunner");
     expect(engine).not.toContain("createContextSummarizerFromRunner");
-    expect(existsSync(resolve(process.cwd(), "packages/agent/src/context/compaction/context-summary-compatibility.ts"))).toBe(false);
+    expect(
+      existsSync(
+        resolve(
+          process.cwd(),
+          "packages/agent/src/context/compaction/context-summary-compatibility.ts",
+        ),
+      ),
+    ).toBe(false);
   });
 
   it("keeps one Agent-owned compaction and recovery authority", () => {
@@ -21,9 +28,7 @@ describe("Phase 8F final Context Compaction architecture", () => {
     const coordinator = source(
       "packages/agent/src/context/compaction/context-compaction-coordinator.ts",
     );
-    const recovery = source(
-      "packages/agent/src/context/compaction/context-recovery-planner.ts",
-    );
+    const recovery = source("packages/agent/src/context/compaction/context-recovery-planner.ts");
     const daemon = source("apps/daemon/src/context/v2-context-composition.ts");
 
     expect(engine).toContain("createContextCompactionCoordinator");
@@ -50,7 +55,9 @@ describe("Phase 8F final Context Compaction architecture", () => {
     expect(semanticSources.join("\n")).not.toMatch(
       /rawArtifactRef|readSafeProjection|reprojectOpenToolObservations|raw artifact/i,
     );
-    expect(engine).toContain("reprojectOpenToolObservations: input.contextInput.mode === \"FORCED_RECOVERY\"");
+    expect(engine).toContain(
+      'reprojectOpenToolObservations: input.contextInput.mode === "FORCED_RECOVERY"',
+    );
     expect(materializer).toContain("reprojectOpenToolObservations");
   });
 
@@ -62,7 +69,9 @@ describe("Phase 8F final Context Compaction architecture", () => {
 
     expect(loop).toContain('execution.error.code === "CONTEXT_OVERFLOW"');
     expect(loop).toContain('prepare(dependencies.contextEngine, input, "FORCED_RECOVERY")');
-    expect(coordinator).not.toMatch(/RunEventHub|subscribe\(|eventSubscriber|ContextCompactionAttempt/u);
+    expect(coordinator).not.toMatch(
+      /RunEventHub|subscribe\(|eventSubscriber|ContextCompactionAttempt/u,
+    );
   });
 
   it("keeps the frozen Context Compaction contracts on the Agent root", () => {
