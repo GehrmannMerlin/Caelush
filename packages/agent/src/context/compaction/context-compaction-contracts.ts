@@ -9,6 +9,24 @@ import type { ContextPolicy } from "../policy/context-policy.js";
 import type { StructuredCheckpoint } from "../checkpoint/structured-checkpoint.js";
 import type { ContextCompactionCut } from "./context-compaction-cut.js";
 import type { SemanticCheckpointDraft } from "./semantic-checkpoint-draft.js";
+import type { AgentConversationSnapshot } from "../../messages/conversation/conversation-snapshot.js";
+import type { ContextCompactionReceipt } from "../receipts/context-build-receipt.js";
+import type { ContextRehydratorPort } from "../rehydration/context-authority-contracts.js";
+import type { SemanticSummaryValidator } from "./semantic-summary-validator.js";
+import type { DeterministicCompactionFactsProvider } from "./deterministic-compaction-facts.js";
+import type { DeterministicCheckpointBuilder } from "./deterministic-checkpoint-builder.js";
+import type { ContextCheckpointEnricher } from "./checkpoint-enricher.js";
+import type { ContextCompactionRebuilder } from "./context-compaction-rebuilder.js";
+import type {
+  ContextCompactionRebuildResult,
+} from "./context-compaction-rebuilder.js";
+import type { ContextCompactionCommitPort } from "../ports/context-compaction-commit-port.js";
+import type { ContextIncrementalCompactionResolver } from "./incremental-compaction-resolver.js";
+import type { IncrementalCheckpointState } from "./incremental-checkpoint-resolver.js";
+import type { ContextCheckpointBudgetResolver } from "./checkpoint-budget.js";
+import type { ContextCompactionGainEvaluator } from "./compaction-gain.js";
+import type { DurableRunEvent } from "@caelush/protocol";
+import type { DurableRunEventDraft } from "../../events/durable-run-event-draft.js";
 
 export type ContextCompactionReason =
   "PROACTIVE_PRESSURE" | "SELECTION_PRESSURE" | "FORCED_PROVIDER_OVERFLOW";
@@ -61,6 +79,7 @@ export interface ContextCompactionPlanner {
     readonly history: ContextHistoryIndex;
     readonly policy: ContextPolicy;
     readonly reason: ContextCompactionReason;
+    readonly latestCheckpoint?: ContextCheckpointRecordV2;
   }): ContextCompactionPlan | null;
 }
 
@@ -167,5 +186,86 @@ export interface ContextCheckpointRepositoryPort {
     runId: RunId,
   ): Promise<readonly (ContextCheckpointRecordV2 | LegacyContextCheckpointRecordV1)[]>;
 }
+
+export interface ContextCheckpointIdFactory {
+  create(): ContextCheckpointId;
+}
+
+export interface ContextCompactionRequest {
+  readonly identity: AgentExecutionIdentity;
+  readonly conversation: AgentConversationSnapshot;
+  readonly history: ContextHistoryIndex;
+  readonly policy: ContextPolicy;
+  readonly model: ModelDescriptor;
+  readonly reason: ContextCompactionReason;
+  readonly signal: AbortSignal;
+}
+
+export type ContextCompactionOutcome =
+  | {
+      readonly kind: "COMPACTED";
+      readonly checkpoint: ContextCheckpointRecordV2;
+      readonly receipt: ContextCompactionReceipt;
+    }
+  | {
+      readonly kind: "NOT_APPLICABLE";
+      readonly reason: "NO_COMPRESSIBLE_HISTORY" | "INSUFFICIENT_GAIN";
+    };
+
+export interface ContextCompactionCoordinator {
+  compact(request: ContextCompactionRequest): Promise<ContextCompactionOutcome>;
+}
+
+export interface ClockPort {
+  now(): TimestampMs;
+}
+
+export interface ContextCompactionDependencies {
+  readonly planner: ContextCompactionPlanner;
+  readonly incrementalResolver: ContextIncrementalCompactionResolver;
+  readonly checkpointBudget: ContextCheckpointBudgetResolver;
+  readonly gainEvaluator: ContextCompactionGainEvaluator;
+  readonly summarizer: ContextSummarizerPort;
+  readonly summaryValidator: SemanticSummaryValidator;
+  readonly factsProvider: DeterministicCompactionFactsProvider;
+  readonly deterministicFallback: DeterministicCheckpointBuilder;
+  readonly enricher: ContextCheckpointEnricher;
+  readonly rehydrator: ContextRehydratorPort;
+  readonly tentativeRebuilder: ContextCompactionRebuilder;
+  readonly commit: ContextCompactionCommitPort;
+  readonly clock: ClockPort;
+  readonly checkpointIdFactory: ContextCheckpointIdFactory;
+}
+
+export interface ContextCompactionEventFactoryInput {
+  readonly request: ContextCompactionRequest;
+  readonly plan: ContextCompactionPlan;
+  readonly checkpoint: ContextCheckpointCreateInputV2;
+  readonly degraded: boolean;
+}
+
+export interface ContextCompactionCoordinatorOptions {
+  readonly dependencies: ContextCompactionDependencies;
+  readonly latest: IncrementalCheckpointState;
+  readonly createEvents?: (
+    input: ContextCompactionEventFactoryInput,
+  ) => readonly DurableRunEventDraft[];
+  readonly notifyCommitted?: (events: readonly DurableRunEvent[]) => void;
+  readonly tentativeRebuild?: (
+    input: ContextCompactionRebuildInputWithIdentity,
+  ) => Promise<ContextCompactionRebuildResult>;
+}
+
+export interface ContextCompactionRebuildInputWithIdentity {
+  readonly checkpointId: ContextCheckpointId;
+  readonly degraded: boolean;
+  readonly input: import("./context-compaction-rebuilder.js").ContextCompactionRebuildInput;
+}
+
+export type { IncrementalCheckpointState } from "./incremental-checkpoint-resolver.js";
+export type {
+  ContextCompactionRebuildResult,
+  ContextCompactionRebuilder,
+} from "./context-compaction-rebuilder.js";
 
 export type { ContextHistoryIndex, ContextPolicy };

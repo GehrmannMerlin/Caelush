@@ -40,6 +40,14 @@ export interface ContextSummarizationRunner {
   ): Promise<ContextSummaryExecutionResult>;
 }
 
+/** A host budget/storage invariant failure that must not degrade into fallback. */
+export class ContextSummarizationInfrastructureError extends Error {
+  constructor(message = "Context summarization infrastructure failed.", options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "ContextSummarizationInfrastructureError";
+  }
+}
+
 export function createContextSummarizationRunner(options: {
   readonly summarizer: ContextSummarizerPort;
   readonly validator?: SemanticSummaryValidator;
@@ -72,6 +80,7 @@ export function createContextSummarizationRunner(options: {
         return Object.freeze({ kind: "ACCEPTED", result, degraded: false });
       } catch (error) {
         if (isCancellation(error, callOptions.signal)) throw error;
+        if (error instanceof ContextSummarizationInfrastructureError) throw error;
         return fallbackRequired({
           outcome: error instanceof SemanticSummaryMalformedError ? "MALFORMED" : "FAILED",
           reason:

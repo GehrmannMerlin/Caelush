@@ -19,6 +19,7 @@ export function createContextCompactionPlanner(): ContextCompactionPlanner {
       readonly history: ContextHistoryIndex;
       readonly policy: ContextPolicy;
       readonly reason: ContextCompactionReason;
+      readonly latestCheckpoint?: import("./context-compaction-contracts.js").ContextCheckpointRecordV2;
     }): ContextCompactionPlan | null {
       return planCompaction(input.history, input.policy, input.reason, selector);
     },

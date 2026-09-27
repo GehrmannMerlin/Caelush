@@ -67,6 +67,11 @@ export {
   createContextSummarizationRunner,
   serializeContextSummarySource,
 } from "./compaction/context-summary.js";
+export { createContextCompactionCoordinator } from "./compaction/context-compaction-coordinator.js";
+export {
+  createContextRecoveryPlanner,
+  withRecoveryTailPolicy,
+} from "./compaction/context-recovery-planner.js";
 export {
   assertSemanticCheckpointDraft,
   createSemanticCheckpointDraft,
@@ -90,9 +95,16 @@ export {
 export type {
   ContextCheckpointCreateInputV2,
   ContextCheckpointId,
+  ContextCheckpointIdFactory,
   ContextCheckpointRecordV2,
   ContextCheckpointRef,
   ContextCheckpointRepositoryPort,
+  ContextCompactionCoordinator,
+  ContextCompactionCoordinatorOptions,
+  ContextCompactionDependencies,
+  ContextCompactionEventFactoryInput,
+  ContextCompactionOutcome,
+  ContextCompactionRequest,
   ContextCompactionPlan,
   ContextCompactionPlanner,
   ContextCompactionReason,
@@ -103,6 +115,12 @@ export type {
   ContextSummaryPromptVersion,
   LegacyContextCheckpointRecordV1,
 } from "./compaction/context-compaction-contracts.js";
+export type {
+  ContextRecoveryAction,
+  ContextRecoveryPlan,
+  ContextRecoveryPlanner,
+  ContextRecoveryStage,
+} from "./compaction/context-recovery-planner.js";
 export type { SemanticCheckpointDraft } from "./compaction/semantic-checkpoint-draft.js";
 export type {
   SemanticSummaryValidator,
@@ -159,6 +177,7 @@ export type {
   ContextSummarizationRunner,
   ContextSummaryExecutionResult,
 } from "./compaction/context-summary.js";
+export { ContextSummarizationInfrastructureError } from "./compaction/context-summary.js";
 export type {
   CompactionSemanticSource,
   ContextSummarySourceSerializer,
