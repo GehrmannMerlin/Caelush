@@ -52,6 +52,7 @@ export {
   createRuntimeFactsContextSourceProvider,
   createSkillCatalogContextSourceProvider,
   createTemporalContextSourceProvider,
+  projectCodingCompactionFacts,
   createVerificationRepairContextSourceProvider,
   createWorkspaceContextSourceProvider,
 } from "./context/index.js";
@@ -105,6 +106,7 @@ export type {
   VerificationRepairContextSourceProviderOptions,
   VerificationRepairProjection,
   WorkspaceContextSourceProviderOptions,
+  CodingCompactionFacts,
 } from "./context/index.js";
 
 export {

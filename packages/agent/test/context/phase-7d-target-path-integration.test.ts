@@ -16,7 +16,8 @@ import {
   createStandardAgentMessageProjectorRegistry,
   createUtf8HeuristicTokenEstimator,
   createContextSummarizationRunner,
-  createStructuredCheckpoint,
+  createContextCheckpointEnricher,
+  createDeterministicCompactionFacts,
   planContext,
   type ContextSummarizerPort,
 } from "@caelush/agent";
@@ -118,8 +119,7 @@ describe("Phase 7D target path integration", () => {
     const summarizer: ContextSummarizerPort = {
       async summarize(input) {
         return {
-          checkpoint: createStructuredCheckpoint({
-            version: 1,
+          semantic: {
             goal: input.identity.goal,
             constraints: [],
             completedWork: ["old request"],
@@ -127,24 +127,14 @@ describe("Phase 7D target path integration", () => {
             blocked: [],
             importantDiscoveries: [],
             keyDecisions: [],
-            changedFiles: [],
-            readFiles: [],
-            recentErrors: [],
-            verificationState: "not-run",
-            activeProcesses: [],
-            pendingApprovals: [],
-            resourceGovernance: "bounded",
             criticalReferences: [],
             nextIntent: "continue",
-            sourceRange: {
-              from: input.sourceRange.firstSequence,
-              to: input.sourceRange.lastSequence,
-            },
-          }),
+          },
           modelRef: input.model.ref,
-          summaryPromptVersion: 1,
+          finishReason: "STOP",
+          summaryPromptVersion: 2,
           sourceDigest: "ignored",
-          checkpointDigest: "ignored",
+          semanticDigest: "ignored",
         };
       },
     };
@@ -155,16 +145,29 @@ describe("Phase 7D target path integration", () => {
         sourceMessages,
         sourceRange: compactionPlan!.sourceRange,
         cut: compactionPlan!.cut,
-        authorities: { goal: "current request", verificationState: "not-run" },
         targetTokens: policy.targetRecentTailTokens,
         model: MODEL,
       },
       { signal: sourceInput.signal },
     );
     expect(summary.degraded).toBe(false);
+    if (summary.kind !== "ACCEPTED") throw new Error("expected accepted semantic summary");
+    const checkpoint = createContextCheckpointEnricher().enrich({
+      semantic: summary.result.semantic,
+      facts: createDeterministicCompactionFacts({
+        readFiles: [],
+        changedFiles: [],
+        recentErrors: [],
+        verificationState: "not-run",
+        activeProcesses: [],
+        pendingApprovals: [],
+        resourceGovernance: "bounded",
+      }),
+      sourceRange: compactionPlan!.sourceRange,
+    });
 
     const rehydrated = await createContextRehydrator().rehydrate({
-      checkpoint: summary.result.checkpoint,
+      checkpoint,
       authorities: { goal: "current request", changedFiles: [], verificationState: "not-run" },
     });
     const document = createContextDocumentBuilder().build({

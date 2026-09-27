@@ -19,6 +19,7 @@ import {
   createContextSourceRegistryBuilder,
   createContextSummaryPromptVersion,
   createContextSummarizationRunner,
+  createDeterministicCompactionFacts,
   createConversationContextSourceProvider,
   createCorePolicyContextSourceProvider,
   createStructuredCheckpoint,
@@ -32,6 +33,7 @@ import {
   type StoredAgentMessage,
   type ContextUsageSnapshot,
   type ContextUsageStorePort,
+  type DeterministicCompactionFactsProvider,
 } from "@caelush/agent";
 import { createEventId, createRunId, createSessionId } from "@caelush/protocol";
 
@@ -137,8 +139,10 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     const current = userMessage({ text: "current intent" });
     const conversation = snapshot([turn([current])]);
     const usage = usageStore();
+    let authoritySnapshotCount = 0;
     const authority: ContextAuthorityProviderPort = {
       async snapshot() {
+        authoritySnapshotCount += 1;
         return {
           goal: "current goal",
           changedFiles: ["src/current.ts"],
@@ -248,6 +252,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     );
     expect(usage.values).toHaveLength(1);
     expect(usage.values[0]?.contextFingerprint).toBe(prepared.contextFingerprint);
+    expect(authoritySnapshotCount).toBe(1);
   });
 
   it("commits compaction facts atomically before notifying and removes the covered tail", async () => {
@@ -283,9 +288,12 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       { runId: currentRunId },
     );
     const usage = usageStore();
+    let verificationState = "OLD";
+    let capturedRehydrationAuthority: string | undefined;
     const authority: ContextAuthorityProviderPort = {
       async snapshot() {
-        return { goal: "current goal", verificationState: "NOT_RUN" };
+        expect(commitFinished).toBe(true);
+        return { goal: "current goal", verificationState };
       },
     };
     const registry = createContextSourceRegistryBuilder()
@@ -314,6 +322,23 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     let summarySourceSequences: readonly number[] | undefined;
     let summarySourceRange:
       { readonly firstSequence: number; readonly lastSequence: number } | undefined;
+    let summaryFinished = false;
+    const factsProvider: DeterministicCompactionFactsProvider = {
+      async collect(input) {
+        expect(summaryFinished).toBe(true);
+        expect(commitFinished).toBe(false);
+        expect(input.sourceRange).toMatchObject({ firstSequence: 1, lastSequence: 2 });
+        return createDeterministicCompactionFacts({
+          readFiles: ["packages/agent/src/context/engine/context-engine.ts"],
+          changedFiles: ["packages/agent/src/context/engine/context-engine.ts"],
+          recentErrors: [],
+          verificationState: "NOT_RUN",
+          activeProcesses: [],
+          pendingApprovals: [],
+          resourceGovernance: "bounded",
+        });
+      },
+    };
     const existingCheckpoint = checkpointForMessage(historical[0]!);
     let commitFinished = false;
     let notificationObservedAfterCommit = false;
@@ -348,6 +373,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       compactionEvents: createContextCompactionEventFactory(),
       checkpointIdFactory: { create: () => "ctx_phase_7f" },
       eventIdFactory: { create: createEventId },
+      deterministicFactsProvider: factsProvider,
       clock: { now: () => 1000 as never },
       policy: { outputReserveTokens: 128, safetyReserveTokens: 0 },
       requestOverheadEstimator: createContextRequestOverheadEstimator({
@@ -360,34 +386,25 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
             summaryTargetTokens = input.targetTokens;
             summarySourceSequences = input.sourceMessages.map((message) => message.sequence);
             summarySourceRange = input.sourceRange;
+            summaryFinished = true;
+            verificationState = "NEW";
             return {
-              checkpoint: createStructuredCheckpoint({
-                version: 1,
-                goal: input.authorities.goal ?? input.identity.goal,
+              semantic: {
+                goal: input.identity.goal,
                 constraints: [],
                 completedWork: ["historical context compacted"],
                 inProgress: [],
                 blocked: [],
                 importantDiscoveries: [],
                 keyDecisions: [],
-                changedFiles: [],
-                readFiles: [],
-                recentErrors: [],
-                verificationState: "NOT_RUN",
-                activeProcesses: [],
-                pendingApprovals: [],
-                resourceGovernance: "UNKNOWN",
                 criticalReferences: [],
                 nextIntent: "Continue current intent.",
-                sourceRange: {
-                  from: input.sourceRange.firstSequence,
-                  to: input.sourceRange.lastSequence,
-                },
-              }),
+              },
               modelRef: input.model.ref,
-              summaryPromptVersion: 1,
+              finishReason: "STOP",
+              summaryPromptVersion: 2,
               sourceDigest: "source",
-              checkpointDigest: "checkpoint",
+              semanticDigest: "semantic",
             };
           },
         },
@@ -409,7 +426,12 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       },
       historyIndexer: createContextHistoryIndexer(),
       planner: createContextPlanner(),
-      rehydrator: createContextRehydrator(),
+      rehydrator: {
+        async rehydrate(input) {
+          capturedRehydrationAuthority = input.authorities.verificationState;
+          return await createContextRehydrator().rehydrate(input);
+        },
+      },
       documentBuilder: createContextDocumentBuilder(),
       materializer: createContextMaterializer({
         projectors: createStandardAgentMessageProjectorRegistry(),
@@ -442,6 +464,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     expect(summarySourceSequences).toEqual([2]);
     expect(summarySourceRange).toMatchObject({ firstSequence: 1, lastSequence: 2 });
     expect(notificationObservedAfterCommit).toBe(true);
+    expect(capturedRehydrationAuthority).toBe("NEW");
     expect(
       prepared.messages.some(
         (message) => message.role === "user" && message.content.includes("current intent"),
@@ -454,6 +477,9 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     ).toBe(false);
     expect(prepared.messages[0]).toMatchObject({ role: "system" });
     expect(prepared.messages[0]?.content).toContain("historical context compacted");
+    expect(prepared.messages[0]?.content).toContain(
+      "packages/agent/src/context/engine/context-engine.ts",
+    );
     expect(prepared.checkpoint?.schemaVersion).toBe(2);
     expect(prepared.checkpoint?.sourceRange).toMatchObject({
       firstSequence: 1,

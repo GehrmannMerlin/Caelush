@@ -1,4 +1,4 @@
-import type { AIGateway, AIModelRequest } from "@caelush/ai";
+import type { AIGateway } from "@caelush/ai";
 import {
   createBranchContextSourceProvider,
   createCheckpointContextSourceProvider,
@@ -21,7 +21,6 @@ import {
   type ContextAuthorityProviderPort,
   type ContextCheckpointProjection,
   type ContextContributionPipeline,
-  type ContextSummarizerPort,
   type ContextSourceProvider,
   type ContextSourceRegistration,
   type ContextTokenEstimatorPort,
@@ -44,11 +43,6 @@ import {
 } from "@caelush/coding-agent";
 import type { RunAgentContextEngineInput } from "@caelush/core";
 import type { ContextContribution, ContextMemoryProjection } from "@caelush/agent";
-import {
-  createStructuredCheckpoint,
-  serializeContextSummarySource,
-  type ContextSummarizationInput,
-} from "@caelush/agent";
 import type { TimestampMs } from "@caelush/protocol";
 import type { Runtime } from "@caelush/runtime";
 import type { CaelushStorage } from "@caelush/storage";
@@ -56,6 +50,8 @@ import { MemoryRetriever } from "@caelush/memory";
 import { redactText } from "@caelush/security";
 import { createEventId } from "@caelush/protocol";
 import type { AgentMessageProjectorRegistry } from "@caelush/agent";
+import { createAIContextSummarizerAdapter } from "./ai-context-summarizer-adapter.js";
+import { createDeterministicCompactionFactsProvider } from "./deterministic-compaction-facts-adapter.js";
 
 export interface DaemonV2ContextCompositionOptions {
   readonly input: RunAgentContextEngineInput;
@@ -67,7 +63,6 @@ export interface DaemonV2ContextCompositionOptions {
   readonly contributionPipeline: ContextContributionPipeline;
   readonly clock: { now(): TimestampMs };
 }
-
 /**
  * Compose the production Context Engine for one Run.
  *
@@ -100,8 +95,9 @@ export function createDaemonV2ContextEngine(options: DaemonV2ContextCompositionO
     storage: options.storage,
   });
   const summarizationRunner = createContextSummarizationRunner({
-    summarizer: createGatewaySummarizer(options.gateway),
+    summarizer: createAIContextSummarizerAdapter(options.gateway),
   });
+  const factsProvider = createDeterministicCompactionFactsProvider({ storage: options.storage });
   const forcedPolicy = {
     targetRecentTailRatio: 0.12,
     targetRecentTailTokensCap: 4_096,
@@ -187,6 +183,7 @@ export function createDaemonV2ContextEngine(options: DaemonV2ContextCompositionO
       tokenEstimator,
     }),
     summarizationRunner,
+    deterministicFactsProvider: factsProvider,
   });
 }
 
@@ -432,45 +429,4 @@ function createAuthorityProvider(options: {
       };
     },
   };
-}
-
-function createGatewaySummarizer(gateway: AIGateway): ContextSummarizerPort {
-  return {
-    async summarize(input: ContextSummarizationInput, options: { readonly signal: AbortSignal }) {
-      const request: AIModelRequest = {
-        model: input.model.ref,
-        messages: [
-          {
-            role: "system",
-            content:
-              "Return exactly one JSON object matching the StructuredCheckpoint schema. Preserve durable facts, never invent tool effects, and keep every string concise.",
-          },
-          {
-            role: "user",
-            content: serializeContextSummarySource(input),
-          },
-        ],
-      };
-      const result = await gateway.complete(request, { signal: options.signal });
-      return {
-        checkpoint: createStructuredCheckpoint(parseCheckpoint(result.text)),
-        modelRef: input.model.ref,
-        summaryPromptVersion: 1,
-        sourceDigest: "gateway-summary-source",
-        checkpointDigest: "gateway-summary-checkpoint",
-      };
-    },
-  };
-}
-
-function parseCheckpoint(text: string) {
-  const trimmed = text.trim();
-  const withoutFence = trimmed.startsWith("```")
-    ? trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")
-    : trimmed;
-  const value: unknown = JSON.parse(withoutFence);
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new TypeError("Context summary did not return a checkpoint object.");
-  }
-  return value as Parameters<typeof createStructuredCheckpoint>[0];
 }

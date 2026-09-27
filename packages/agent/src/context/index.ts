@@ -45,6 +45,7 @@ export type {
 } from "./checkpoint/structured-checkpoint.js";
 
 export {
+  CONTEXT_SUMMARY_PROMPT_VERSION,
   CONTEXT_COMPACTION_REASONS,
   createContextCheckpointId,
   createContextMessageRange,
@@ -66,6 +67,20 @@ export {
   serializeContextSummarySource,
 } from "./compaction/context-summary.js";
 export {
+  assertSemanticCheckpointDraft,
+  createSemanticCheckpointDraft,
+} from "./compaction/semantic-checkpoint-draft.js";
+export {
+  createSemanticSummaryValidator,
+  SemanticSummaryMalformedError,
+} from "./compaction/semantic-summary-validator.js";
+export { createDeterministicCompactionFacts } from "./compaction/deterministic-compaction-facts.js";
+export { createDeterministicCheckpointBuilder } from "./compaction/deterministic-checkpoint-builder.js";
+export {
+  createContextCheckpointEnricher,
+  digestStructuredCheckpoint,
+} from "./compaction/checkpoint-enricher.js";
+export {
   createContextSummarySourceSerializer,
   SUMMARY_SOURCE_POLICY,
 } from "./compaction/summary-source-serializer.js";
@@ -85,6 +100,17 @@ export type {
   ContextSummaryPromptVersion,
   LegacyContextCheckpointRecordV1,
 } from "./compaction/context-compaction-contracts.js";
+export type { SemanticCheckpointDraft } from "./compaction/semantic-checkpoint-draft.js";
+export type {
+  SemanticSummaryValidator,
+  SummaryModelOutcome,
+} from "./compaction/semantic-summary-validator.js";
+export type {
+  DeterministicCompactionFacts,
+  DeterministicCompactionFactsProvider,
+} from "./compaction/deterministic-compaction-facts.js";
+export type { DeterministicCheckpointBuilder } from "./compaction/deterministic-checkpoint-builder.js";
+export type { ContextCheckpointEnricher } from "./compaction/checkpoint-enricher.js";
 export type {
   ContextIncrementalCompactionInput,
   ContextIncrementalCompactionResolver,

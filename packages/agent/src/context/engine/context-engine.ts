@@ -18,6 +18,16 @@ import { createContextPressureEvaluator } from "../compaction/context-pressure-e
 import type { ContextCompactionCommitPort } from "../ports/context-compaction-commit-port.js";
 import type { ContextSummarizationRunner } from "../compaction/context-summary.js";
 import {
+  createContextCheckpointEnricher,
+  digestStructuredCheckpoint,
+  type ContextCheckpointEnricher,
+} from "../compaction/checkpoint-enricher.js";
+import {
+  createDeterministicCheckpointBuilder,
+  type DeterministicCheckpointBuilder,
+} from "../compaction/deterministic-checkpoint-builder.js";
+import type { DeterministicCompactionFactsProvider } from "../compaction/deterministic-compaction-facts.js";
+import {
   createContextCompactionCoverage,
   type ContextCompactionCoverage,
 } from "../compaction/context-compaction-coverage.js";
@@ -149,6 +159,9 @@ export interface V2ContextEngineOptions {
   readonly planner?: ContextPlanner;
   readonly compactionPlanner?: ReturnType<typeof createContextCompactionPlanner>;
   readonly summarizationRunner?: ContextSummarizationRunner;
+  readonly deterministicFactsProvider?: DeterministicCompactionFactsProvider;
+  readonly checkpointBuilder?: DeterministicCheckpointBuilder;
+  readonly checkpointEnricher?: ContextCheckpointEnricher;
   readonly incrementalCheckpointResolver?: IncrementalCheckpointResolver;
   readonly incrementalCompactionResolver?: ContextIncrementalCompactionResolver;
   readonly checkpointBudgetResolver?: ContextCheckpointBudgetResolver;
@@ -177,6 +190,9 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
   const rehydrator = options.rehydrator ?? createContextRehydrator();
   const documentBuilder = options.documentBuilder ?? createContextDocumentBuilder();
   const summarizationRunner = options.summarizationRunner;
+  const deterministicFactsProvider = options.deterministicFactsProvider;
+  const checkpointBuilder = options.checkpointBuilder ?? createDeterministicCheckpointBuilder();
+  const checkpointEnricher = options.checkpointEnricher ?? createContextCheckpointEnricher();
   const incrementalCheckpointResolver =
     options.incrementalCheckpointResolver ??
     createIncrementalCheckpointResolver({ checkpointRepository: options.checkpointRepository });
@@ -239,12 +255,6 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         currentTurnId: input.conversation.currentTurnId,
         sourcePriorities: sourcePriorityMap(options.sourceRegistry),
       });
-      const authorities = await options.authorityProvider.snapshot({
-        identity: input.identity,
-        signal: input.signal,
-      });
-      throwIfAborted(input.signal);
-
       let activeCheckpoint = latestCheckpoint;
       let activeCoverage = coverage;
       let activeSources = sourceResults;
@@ -309,12 +319,42 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
                   sourceMessages: incremental.newSourceMessages,
                   sourceRange: incremental.cumulativeSourceRange,
                   cut: compactionPlan.cut,
-                  authorities,
                   targetTokens: checkpointBudget.targetTokens,
                   model: input.model,
                 },
                 { signal: input.signal },
               );
+              throwIfAborted(input.signal);
+              if (deterministicFactsProvider === undefined) throw new ContextExhaustedError();
+              const facts = await deterministicFactsProvider.collect({
+                identity: input.identity,
+                sourceRange: incremental.cumulativeSourceRange,
+                signal: input.signal,
+              });
+              throwIfAborted(input.signal);
+              const structuredCheckpoint =
+                summary.kind === "ACCEPTED"
+                  ? checkpointEnricher.enrich({
+                      semantic: summary.result.semantic,
+                      facts,
+                      sourceRange: incremental.cumulativeSourceRange,
+                    })
+                  : checkpointBuilder.build({
+                      goal: input.identity.goal,
+                      sourceRange: incremental.cumulativeSourceRange,
+                      facts,
+                      ...(activeCoverage.previousCheckpoint === undefined
+                        ? {}
+                        : { previousCheckpoint: activeCoverage.previousCheckpoint }),
+                    });
+              const summaryModelRef =
+                summary.kind === "ACCEPTED" ? summary.result.modelRef : summary.modelRef;
+              const summaryPromptVersion =
+                summary.kind === "ACCEPTED"
+                  ? summary.result.summaryPromptVersion
+                  : summary.summaryPromptVersion;
+              const sourceDigest =
+                summary.kind === "ACCEPTED" ? summary.result.sourceDigest : summary.sourceDigest;
               const checkpointInput = {
                 checkpointId: createContextCheckpointId(requireCheckpointId(options)),
                 runId: input.identity.runId,
@@ -322,13 +362,13 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
                   ? {}
                   : { previousCheckpointId: incremental.previousCheckpoint.checkpointId }),
                 sourceRange: incremental.cumulativeSourceRange,
-                structuredCheckpoint: summary.result.checkpoint,
+                structuredCheckpoint,
                 tokensBefore: compactionPlan.estimatedTokensBefore,
                 tokensAfter: compactionPlan.retainedTokens,
-                modelRef: summary.result.modelRef,
-                summaryPromptVersion: summary.result.summaryPromptVersion,
-                sourceDigest: summary.result.sourceDigest,
-                checkpointDigest: summary.result.checkpointDigest,
+                modelRef: summaryModelRef,
+                summaryPromptVersion,
+                sourceDigest,
+                checkpointDigest: digestStructuredCheckpoint(structuredCheckpoint),
                 degraded: summary.degraded,
                 reason,
                 createdAt: options.clock.now(),
@@ -369,6 +409,11 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         currentTurnId: input.conversation.currentTurnId,
         sourcePriorities: sourcePriorityMap(options.sourceRegistry),
       });
+      const authorities = await options.authorityProvider.snapshot({
+        identity: input.identity,
+        signal: input.signal,
+      });
+      throwIfAborted(input.signal);
       const rehydrated = await rehydrator.rehydrate({
         ...(activeCheckpoint === undefined
           ? {}

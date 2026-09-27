@@ -8,7 +8,6 @@ import {
   createContextSummaryPromptVersion,
   createStructuredCheckpoint,
   type AgentExecutionIdentity,
-  type ContextAuthoritySnapshot,
   type ContextCheckpointRecordV2,
   type ContextCheckpointRef,
   type ContextCompactionPlan,
@@ -122,7 +121,7 @@ describe("Phase 7D canonical contracts", () => {
     expect(plan.sourceRange.lastSequence).toBe(20);
   });
 
-  it("expresses V2 records, summarization inputs, and authority snapshots without widening them", () => {
+  it("expresses V2 records and summarization inputs without widening them", () => {
     const record: ContextCheckpointRecordV2 = {
       checkpointId: createContextCheckpointId("checkpoint_7d_record"),
       runId: identity.runId,
@@ -132,21 +131,12 @@ describe("Phase 7D canonical contracts", () => {
       tokensBefore: 100,
       tokensAfter: 45,
       modelRef: model.ref,
-      summaryPromptVersion: createContextSummaryPromptVersion(1),
+      summaryPromptVersion: createContextSummaryPromptVersion(2),
       sourceDigest: "sha256:source",
       checkpointDigest: "sha256:checkpoint",
       degraded: false,
       reason: "PROACTIVE_PRESSURE",
       createdAt: createTimestampMs(1),
-    };
-    const authorities: ContextAuthoritySnapshot = {
-      goal: "Current goal",
-      changedFiles: [],
-      pendingApprovals: ["approval-1"],
-      activeProcesses: [],
-      verificationState: "passed",
-      resourceGovernance: "bounded",
-      projectFacts: [],
     };
     const sourceMessages: readonly StoredAgentMessage[] = [];
     const input: ContextSummarizationInput = {
@@ -161,7 +151,6 @@ describe("Phase 7D canonical contracts", () => {
         firstKeptMessageId: sourceRange.lastMessageId,
         firstKeptSequence: sourceRange.lastSequence + 1,
       },
-      authorities,
       targetTokens: 45,
       model,
     };

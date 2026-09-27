@@ -1,4 +1,4 @@
-import type { ModelDescriptor, ModelRef } from "@caelush/ai";
+import type { AIFinishReason, ModelDescriptor, ModelRef } from "@caelush/ai";
 import type { RunId, TimestampMs } from "@caelush/protocol";
 
 import type { AgentExecutionIdentity } from "../../loop/types.js";
@@ -6,9 +6,9 @@ import type { StoredAgentMessage } from "../../messages/persistence/record.js";
 import type { AgentMessageId, ConversationTurnId } from "../../messages/types/ids.js";
 import type { ContextHistoryIndex } from "../history/semantic-history-unit.js";
 import type { ContextPolicy } from "../policy/context-policy.js";
-import type { ContextAuthoritySnapshot } from "../rehydration/context-authority-contracts.js";
 import type { StructuredCheckpoint } from "../checkpoint/structured-checkpoint.js";
 import type { ContextCompactionCut } from "./context-compaction-cut.js";
+import type { SemanticCheckpointDraft } from "./semantic-checkpoint-draft.js";
 
 export type ContextCompactionReason =
   "PROACTIVE_PRESSURE" | "SELECTION_PRESSURE" | "FORCED_PROVIDER_OVERFLOW";
@@ -66,6 +66,8 @@ export interface ContextCompactionPlanner {
 
 export type ContextSummaryPromptVersion = number;
 
+export const CONTEXT_SUMMARY_PROMPT_VERSION = 2 as ContextSummaryPromptVersion;
+
 export function createContextSummaryPromptVersion(value: number): ContextSummaryPromptVersion {
   if (!Number.isSafeInteger(value) || value < 1) {
     throw new TypeError("Context summary prompt version must be a positive safe integer.");
@@ -80,17 +82,17 @@ export interface ContextSummarizationInput {
   readonly sourceMessages: readonly StoredAgentMessage[];
   readonly sourceRange: ContextMessageRange;
   readonly cut: ContextCompactionCut;
-  readonly authorities: ContextAuthoritySnapshot;
   readonly targetTokens: number;
   readonly model: ModelDescriptor;
 }
 
 export interface ContextSummarizationResult {
-  readonly checkpoint: StructuredCheckpoint;
+  readonly semantic: SemanticCheckpointDraft;
   readonly modelRef: ModelRef;
+  readonly finishReason: AIFinishReason;
   readonly summaryPromptVersion: ContextSummaryPromptVersion;
   readonly sourceDigest: string;
-  readonly checkpointDigest: string;
+  readonly semanticDigest: string;
 }
 
 export interface ContextSummarizerPort {

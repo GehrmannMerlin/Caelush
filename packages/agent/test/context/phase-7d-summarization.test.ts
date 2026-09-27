@@ -3,12 +3,10 @@ import { describe, expect, it } from "vitest";
 import { createRunId, createSessionId } from "@caelush/protocol";
 import {
   createContextMessageRange,
-  createContextSummaryPromptVersion,
   createContextSummarizationRunner,
-  createStructuredCheckpoint,
+  createSemanticCheckpointDraft,
   serializeContextSummarySource,
   type AgentExecutionIdentity,
-  type ContextAuthoritySnapshot,
   type ContextSummarizationInput,
   type ContextSummarizerPort,
 } from "@caelush/agent";
@@ -59,19 +57,8 @@ const sourceRange = createContextMessageRange({
   lastSequence: 3,
 });
 
-const authorities: ContextAuthoritySnapshot = {
-  goal: identity.goal,
-  changedFiles: ["packages/agent/src/context"],
-  pendingApprovals: [],
-  activeProcesses: [],
-  verificationState: "not-run",
-  resourceGovernance: "bounded",
-  projectFacts: ["local-first"],
-};
-
-function checkpoint(overrides: Partial<Parameters<typeof createStructuredCheckpoint>[0]> = {}) {
-  return createStructuredCheckpoint({
-    version: 1,
+function semantic(overrides: Partial<Parameters<typeof createSemanticCheckpointDraft>[0]> = {}) {
+  return createSemanticCheckpointDraft({
     goal: identity.goal,
     constraints: [],
     completedWork: [],
@@ -79,16 +66,8 @@ function checkpoint(overrides: Partial<Parameters<typeof createStructuredCheckpo
     blocked: [],
     importantDiscoveries: [],
     keyDecisions: [],
-    changedFiles: [],
-    readFiles: [],
-    recentErrors: [],
-    verificationState: "not-run",
-    activeProcesses: [],
-    pendingApprovals: [],
-    resourceGovernance: "bounded",
     criticalReferences: [],
     nextIntent: "Continue from the checkpoint.",
-    sourceRange: { from: 1, to: 3 },
     ...overrides,
   });
 }
@@ -105,7 +84,6 @@ function input(): ContextSummarizationInput {
       firstKeptMessageId: sourceRange.lastMessageId,
       firstKeptSequence: sourceRange.lastSequence + 1,
     },
-    authorities,
     targetTokens: 60,
     model: MODEL,
   };
@@ -115,11 +93,12 @@ function successfulSummarizer(): ContextSummarizerPort {
   return {
     async summarize() {
       return {
-        checkpoint: checkpoint({ nextIntent: "Continue with verification." }),
+        semantic: semantic({ nextIntent: "Continue with verification." }),
         modelRef: MODEL.ref,
-        summaryPromptVersion: createContextSummaryPromptVersion(1),
+        finishReason: "STOP",
+        summaryPromptVersion: 2,
         sourceDigest: "ignored-by-runner",
-        checkpointDigest: "ignored-by-runner",
+        semanticDigest: "ignored-by-runner",
       };
     },
   };
@@ -156,10 +135,14 @@ describe("Phase 7D semantic summarization", () => {
 
     expect(calls).toBe(2);
     expect(first.degraded).toBe(false);
+    expect(first.kind).toBe("ACCEPTED");
+    expect(second.kind).toBe("ACCEPTED");
+    if (first.kind !== "ACCEPTED" || second.kind !== "ACCEPTED")
+      throw new Error("expected accepted");
     expect(first.result.sourceDigest).toBe(second.result.sourceDigest);
-    expect(first.result.checkpointDigest).toBe(second.result.checkpointDigest);
+    expect(first.result.semanticDigest).toBe(second.result.semanticDigest);
     expect(first.result.sourceDigest).not.toBe("ignored-by-runner");
-    expect(first.result.checkpointDigest).not.toBe("ignored-by-runner");
+    expect(first.result.semanticDigest).not.toBe("ignored-by-runner");
   });
 
   it("uses a deterministic minimal checkpoint after one non-cancellation failure", async () => {
@@ -174,10 +157,12 @@ describe("Phase 7D semantic summarization", () => {
     const result = await runner.summarize(input(), { signal: new AbortController().signal });
 
     expect(calls).toBe(1);
-    expect(result.degraded).toBe(true);
-    expect(result.result.checkpoint.goal).toBe(identity.goal);
-    expect(result.result.checkpoint.sourceRange).toEqual({ from: 1, to: 3 });
-    expect(result.result.checkpoint.changedFiles).toEqual(authorities.changedFiles);
+    expect(result).toMatchObject({
+      kind: "FALLBACK_REQUIRED",
+      degraded: true,
+      outcome: "FAILED",
+      summaryPromptVersion: 2,
+    });
   });
 
   it("propagates cancellation and never creates a fallback checkpoint", async () => {
