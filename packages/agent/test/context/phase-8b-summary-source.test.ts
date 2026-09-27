@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 
 import { createRunId, createSessionId } from "@caelush/protocol";
 import {
-  agentMessageId,
   conversationTurnId,
   createContextMessageRange,
   createContextSummarySourceSerializer,
@@ -12,11 +11,7 @@ import {
   type CompactionSemanticSource,
 } from "@caelush/agent";
 
-import {
-  assistantMessage,
-  toolResultMessage,
-  userMessage,
-} from "../messages/fixtures.js";
+import { assistantMessage, toolResultMessage, userMessage } from "../messages/fixtures.js";
 
 const RUN_ID = createRunId();
 const TURN_ID = conversationTurnId("cturn_phase_8b_summary_source");
@@ -24,7 +19,12 @@ const SESSION_ID = createSessionId();
 
 function source(overrides: Partial<CompactionSemanticSource> = {}): CompactionSemanticSource {
   const messages = [
-    userMessage({ runId: String(RUN_ID), sessionId: String(SESSION_ID), sequence: 1, text: "User text" }),
+    userMessage({
+      runId: String(RUN_ID),
+      sessionId: String(SESSION_ID),
+      sequence: 1,
+      text: "User text",
+    }),
     assistantMessage({
       runId: String(RUN_ID),
       sessionId: String(SESSION_ID),
@@ -191,6 +191,8 @@ describe("Phase 8B canonical semantic summary source", () => {
       "packages/agent/src/context/compaction/summary-source-serializer.ts",
       "utf8",
     );
-    expect(implementation).not.toMatch(/ContextArtifactStorePort|ObservationRepository|rawArtifactRef|filesystem/i);
+    expect(implementation).not.toMatch(
+      /ContextArtifactStorePort|ObservationRepository|rawArtifactRef|filesystem/i,
+    );
   });
 });

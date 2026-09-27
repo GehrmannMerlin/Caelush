@@ -32,7 +32,10 @@ export function createContextCheckpointBudgetResolver(): ContextCheckpointBudget
       readonly policy: ContextPolicy;
       readonly plan: ContextCompactionPlan;
     }): ContextCheckpointBudget {
-      assertPositiveSafeInteger(input.policy.effectiveInputLimitTokens, "effectiveInputLimitTokens");
+      assertPositiveSafeInteger(
+        input.policy.effectiveInputLimitTokens,
+        "effectiveInputLimitTokens",
+      );
       assertPositiveSafeInteger(input.plan.selectedTokens, "selectedTokens");
       if (input.plan.selectedTokens <= 1) throw new ContextCheckpointBudgetUnavailableError();
 

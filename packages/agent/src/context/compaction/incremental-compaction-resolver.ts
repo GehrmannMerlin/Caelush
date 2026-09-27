@@ -32,8 +32,7 @@ export function createContextIncrementalCompactionResolver(): ContextIncremental
       readonly conversation: AgentConversationSnapshot;
     }): ContextIncrementalCompactionInput {
       const newSourceRange = input.plan.sourceRange;
-      const previousCheckpoint =
-        input.latest.kind === "V2" ? input.latest.checkpoint : undefined;
+      const previousCheckpoint = input.latest.kind === "V2" ? input.latest.checkpoint : undefined;
       if (
         previousCheckpoint !== undefined &&
         (String(previousCheckpoint.runId) !== String(newSourceRange.runId) ||

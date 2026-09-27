@@ -214,7 +214,10 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         policy,
       };
       const collected = await collectContextSources(options.sourceRegistry, sourceInput);
-      const history = historyIndexer.index({ conversation: input.conversation, model: input.model });
+      const history = historyIndexer.index({
+        conversation: input.conversation,
+        model: input.model,
+      });
       const latestState = await incrementalCheckpointResolver.resolve({
         runId: input.identity.runId,
         history,
@@ -225,7 +228,10 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         history,
         ...(latestCheckpoint === undefined ? {} : { latestCheckpoint }),
       });
-      const sourceResults = removeCoveredConversationMessages(collected, coverage.coveredMessageIds);
+      const sourceResults = removeCoveredConversationMessages(
+        collected,
+        coverage.coveredMessageIds,
+      );
       const initialPlan = planner.plan({
         items: sourceResults.flatMap((result) => result.items),
         policy,
@@ -297,9 +303,9 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
                 {
                   identity: input.identity,
                   reason,
-                  ...(incremental.previousCheckpoint === undefined
+                  ...(activeCoverage.previousCheckpoint === undefined
                     ? {}
-                    : { previousCheckpoint: incremental.previousCheckpoint.structuredCheckpoint }),
+                    : { previousCheckpoint: activeCoverage.previousCheckpoint }),
                   sourceMessages: incremental.newSourceMessages,
                   sourceRange: incremental.cumulativeSourceRange,
                   cut: compactionPlan.cut,
@@ -529,6 +535,9 @@ function removeCoveredConversationMessages(
   results: readonly ContextSourceCollectionResult[],
   coveredMessageIds: ReadonlySet<string>,
 ): readonly ContextSourceResult[] {
+  // Canonical coverage replaces the former inline predicate:
+  // stored.message.runId === range.runId &&
+  // stored.sequence >= range.firstSequence && stored.sequence <= range.lastSequence.
   return Object.freeze(
     results.map((result) => {
       if (result.providerId !== AGENT_CONTEXT_SOURCE_IDS.conversation) return result;

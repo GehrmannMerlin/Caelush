@@ -2,9 +2,7 @@ import type { RunId } from "@caelush/protocol";
 
 import type { ContextHistoryIndex } from "../history/semantic-history-unit.js";
 import { ContextPlanningError } from "../planner/context-planning-errors.js";
-import {
-  createContextCompactionCoverage,
-} from "./context-compaction-coverage.js";
+import { createContextCompactionCoverage } from "./context-compaction-coverage.js";
 import type {
   ContextCheckpointRecordV2,
   ContextCheckpointRepositoryPort,

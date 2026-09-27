@@ -55,9 +55,7 @@ const MODEL: ModelDescriptor = {
   source: "CONFIGURATION",
 };
 
-function checkpointRepository(
-  latest?: ContextCheckpointRecordV2,
-): ContextCheckpointRepositoryPort {
+function checkpointRepository(latest?: ContextCheckpointRecordV2): ContextCheckpointRepositoryPort {
   return {
     async create() {
       if (latest === undefined) throw new Error("not used");
@@ -315,8 +313,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     let summaryTargetTokens: number | undefined;
     let summarySourceSequences: readonly number[] | undefined;
     let summarySourceRange:
-      | { readonly firstSequence: number; readonly lastSequence: number }
-      | undefined;
+      { readonly firstSequence: number; readonly lastSequence: number } | undefined;
     const existingCheckpoint = checkpointForMessage(historical[0]!);
     let commitFinished = false;
     let notificationObservedAfterCommit = false;

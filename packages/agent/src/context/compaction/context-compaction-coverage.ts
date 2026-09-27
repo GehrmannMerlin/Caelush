@@ -4,10 +4,7 @@ import type {
   LegacyContextCheckpointRecordV1,
 } from "./context-compaction-contracts.js";
 import type { StructuredCheckpoint } from "../checkpoint/structured-checkpoint.js";
-import type {
-  ContextHistoryUnit,
-  ContextMessageRef,
-} from "../history/semantic-history-unit.js";
+import type { ContextHistoryUnit, ContextMessageRef } from "../history/semantic-history-unit.js";
 import type { AgentMessageId } from "../../messages/types/ids.js";
 import type { ContextCheckpointId } from "./context-compaction-contracts.js";
 import { ContextPlanningError } from "../planner/context-planning-errors.js";
@@ -163,7 +160,8 @@ function resolveRangeCoverage(
   let firstRef: ContextMessageRef | undefined;
   let lastRef: ContextMessageRef | undefined;
   if (isV2) {
-    firstRef = range.firstMessageId === undefined ? undefined : refs.get(String(range.firstMessageId));
+    firstRef =
+      range.firstMessageId === undefined ? undefined : refs.get(String(range.firstMessageId));
     lastRef = range.lastMessageId === undefined ? undefined : refs.get(String(range.lastMessageId));
     if (
       firstRef === undefined ||
@@ -180,11 +178,17 @@ function resolveRangeCoverage(
   }
 
   const covered: AgentMessageId[] = [];
+  const messageIdBySequence = new Map<number, AgentMessageId>();
   for (const ref of refs.values()) {
     if (ref.sequence < range.firstSequence || ref.sequence > range.lastSequence) continue;
     if (String(ref.runId) !== range.runId) {
       throw new ContextPlanningError("INCONSISTENT_PLAN");
     }
+    const existingMessageId = messageIdBySequence.get(ref.sequence);
+    if (existingMessageId !== undefined && existingMessageId !== ref.messageId) {
+      throw new ContextPlanningError("INCONSISTENT_PLAN");
+    }
+    messageIdBySequence.set(ref.sequence, ref.messageId);
     covered.push(ref.messageId);
   }
   return covered;

@@ -7,9 +7,7 @@ import type {
   AgentUserContentPart,
 } from "../../messages/types/content.js";
 import type { StructuredCheckpoint } from "../checkpoint/structured-checkpoint.js";
-import type {
-  ContextMessageRange,
-} from "./context-compaction-contracts.js";
+import type { ContextMessageRange } from "./context-compaction-contracts.js";
 import type { ContextCompactionCut } from "./context-compaction-cut.js";
 
 export interface CompactionSemanticSource {
@@ -185,15 +183,14 @@ function redactJsonValue(value: JsonValue, key?: string): JsonValue {
 }
 
 function isCredentialKey(value: string | undefined): boolean {
-  return value !== undefined && /^(?:api[_-]?key|authorization|password|secret|token)$/i.test(value);
+  return (
+    value !== undefined && /^(?:api[_-]?key|authorization|password|secret|token)$/i.test(value)
+  );
 }
 
 function redactText(value: string): string {
   return value
     .replace(/\bBearer\s+\S+/gi, "Bearer [REDACTED]")
     .replace(/\b(?:sk|rk)-[A-Za-z0-9_-]+/g, "[REDACTED_TOKEN]")
-    .replace(
-      /\b(api[_-]?key|token|secret|password|authorization)\s*[:=]\s*\S+/gi,
-      "$1=[REDACTED]",
-    );
+    .replace(/\b(api[_-]?key|token|secret|password|authorization)\s*[:=]\s*\S+/gi, "$1=[REDACTED]");
 }

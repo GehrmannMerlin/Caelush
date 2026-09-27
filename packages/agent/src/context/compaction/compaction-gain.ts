@@ -32,8 +32,7 @@ export function createContextCompactionGainEvaluator(): ContextCompactionGainEva
       ) {
         throw new RangeError("Checkpoint budget must fit below the selected compaction source.");
       }
-      const estimatedFreedTokens =
-        input.plan.selectedTokens - input.checkpointBudget.maxTokens;
+      const estimatedFreedTokens = input.plan.selectedTokens - input.checkpointBudget.maxTokens;
       return Object.freeze({
         selectedTokens: input.plan.selectedTokens,
         estimatedCheckpointTokens: input.checkpointBudget.maxTokens,

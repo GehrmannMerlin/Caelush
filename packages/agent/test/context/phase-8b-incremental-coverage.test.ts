@@ -28,8 +28,8 @@ import {
   userMessage as fixtureUser,
 } from "../messages/fixtures.js";
 
-const RUN_ID = createRunId("run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9a");
-const OTHER_RUN_ID = createRunId("run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9b");
+const RUN_ID = createRunId();
+const OTHER_RUN_ID = createRunId();
 
 function messageRef(
   name: string,
@@ -201,7 +201,9 @@ function storedRef(stored: StoredAgentMessage): ContextMessageRef {
   };
 }
 
-function planForRange(sourceRange: ReturnType<typeof createContextMessageRange>): ContextCompactionPlan {
+function planForRange(
+  sourceRange: ReturnType<typeof createContextMessageRange>,
+): ContextCompactionPlan {
   return {
     reason: "SELECTION_PRESSURE",
     cut: {
@@ -240,7 +242,7 @@ function repositoryWithLatest(
 ): ContextCheckpointRepositoryPort {
   const v2 = latest?.schemaVersion === 2 ? latest : undefined;
   return {
-    async create(input) {
+    async create() {
       if (v2 === undefined) throw new Error("fixture create is not used");
       return v2;
     },
@@ -258,18 +260,9 @@ function repositoryWithLatest(
 
 describe("Phase 8B canonical Context checkpoint coverage", () => {
   it("removes a cross-Turn V2 range and counts overlapping refs once", () => {
-    const turnARefs = [
-      messageRef("a_1", 1, "a", 10),
-      messageRef("a_2", 2, "a", 10),
-    ];
-    const turnBRefs = [
-      messageRef("b_1", 3, "b", 20),
-      messageRef("b_2", 4, "b", 20),
-    ];
-    const turnCRefs = [
-      messageRef("c_1", 5, "c", 30),
-      messageRef("c_2", 6, "c", 30),
-    ];
+    const turnARefs = [messageRef("a_1", 1, "a", 10), messageRef("a_2", 2, "a", 10)];
+    const turnBRefs = [messageRef("b_1", 3, "b", 20), messageRef("b_2", 4, "b", 20)];
+    const turnCRefs = [messageRef("c_1", 5, "c", 30), messageRef("c_2", 6, "c", 30)];
     const indexed = history([
       turnUnit("a", turnARefs),
       turnUnit("b", turnBRefs),
@@ -306,23 +299,15 @@ describe("Phase 8B canonical Context checkpoint coverage", () => {
       latestCheckpoint: checkpoint(refs[0]!, refs[4]!),
     });
 
-    const residualTurn = projection.history.units.find(
-      (unit) => unit.id === "conversation:huge",
-    );
+    const residualTurn = projection.history.units.find((unit) => unit.id === "conversation:huge");
     expect(residualTurn?.messages.map((ref) => ref.sequence)).toEqual([6, 7, 8, 9]);
     expect(residualTurn?.tokenEstimate).toBe(30);
     expect(projection.history.estimatedTokens).toBe(30);
   });
 
   it("fails closed when a V2 range bisects a ToolProtocolUnit", () => {
-    const refs = [
-      messageRef("call", 1, "protocol", 10),
-      messageRef("result", 2, "protocol", 10),
-    ];
-    const indexed = history([
-      turnUnit("protocol", refs),
-      protocolUnit("protocol", refs, refs[0]!),
-    ]);
+    const refs = [messageRef("call", 1, "protocol", 10), messageRef("result", 2, "protocol", 10)];
+    const indexed = history([turnUnit("protocol", refs), protocolUnit("protocol", refs, refs[0]!)]);
 
     expectInconsistentPlan(() =>
       createContextCompactionCoverage({
@@ -371,10 +356,7 @@ describe("Phase 8B canonical Context checkpoint coverage", () => {
     expectInconsistentPlan(() =>
       createContextCompactionCoverage({
         history: history([turnUnit("identity", [first, last])]),
-        latestCheckpoint: checkpoint(
-          first,
-          messageRef("not_in_history", 3, "identity", 10),
-        ),
+        latestCheckpoint: checkpoint(first, messageRef("not_in_history", 3, "identity", 10)),
       }),
     );
   });
@@ -436,7 +418,10 @@ describe("Phase 8B incremental checkpoint and source resolution", () => {
       checkpointRepository: repositoryWithLatest(legacyCheckpoint(1, 100)),
     }).resolve({ runId: RUN_ID, history: historyIndex });
     expect(legacy).toMatchObject({ kind: "LEGACY_V1" });
-    expect((legacy as Extract<IncrementalCheckpointState, { kind: "LEGACY_V1" }>).checkpoint.schemaVersion).toBe(1);
+    expect(
+      (legacy as Extract<IncrementalCheckpointState, { kind: "LEGACY_V1" }>).checkpoint
+        .schemaVersion,
+    ).toBe(1);
   });
 
   it("builds cumulative A-to-B-to-C ranges from only the new model-visible source", () => {
