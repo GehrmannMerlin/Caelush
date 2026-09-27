@@ -1,11 +1,6 @@
 import type { JsonObject } from "@caelush/ai";
 
 import { canonicalJsonText, digestJsonValue } from "../../messages/canonical-json.js";
-import type {
-  AgentAssistantContentPart,
-  AgentUserContentPart,
-} from "../../messages/types/content.js";
-import type { StoredAgentMessage } from "../../messages/persistence/record.js";
 import {
   createContextSummaryPromptVersion,
   type ContextSummarizationInput,
@@ -15,12 +10,10 @@ import {
 } from "./context-compaction-contracts.js";
 import { createStructuredCheckpoint } from "../checkpoint/structured-checkpoint.js";
 import type { StructuredCheckpoint } from "../checkpoint/structured-checkpoint.js";
+import { createContextSummarySourceSerializer } from "./summary-source-serializer.js";
 
 const DEFAULT_SUMMARY_PROMPT_VERSION = createContextSummaryPromptVersion(1);
-const MAX_SUMMARY_TEXT = 512;
-const MAX_SUMMARY_MESSAGES = 128;
-const MAX_SUMMARY_CONTENT_PARTS = 32;
-const MAX_SERIALIZED_SUMMARY_SOURCE = 24_000;
+const summarySourceSerializer = createContextSummarySourceSerializer();
 
 export interface ContextSummaryExecutionResult {
   readonly result: ContextSummarizationResult;
@@ -72,12 +65,20 @@ export function createContextSummarizationRunner(options: {
   });
 }
 
-/** Serialize only bounded semantic facts suitable for a summarizer adapter. */
+/** Serialize canonical semantic facts plus the temporary Phase 7D adapter compatibility fields. */
 export function serializeContextSummarySource(input: ContextSummarizationInput): string {
-  const messages = input.sourceMessages
-    .slice(0, MAX_SUMMARY_MESSAGES)
-    .map((stored) => serializeStoredMessage(stored));
+  const semantic = JSON.parse(
+    summarySourceSerializer.serialize({
+      sourceMessages: input.sourceMessages,
+      sourceRange: input.sourceRange,
+      cut: input.cut,
+      ...(input.previousCheckpoint === undefined
+        ? {}
+        : { previousCheckpoint: input.previousCheckpoint }),
+    }),
+  ) as JsonObject;
   const value: JsonObject = {
+    ...semantic,
     reason: input.reason,
     targetTokens: input.targetTokens,
     model: {
@@ -86,15 +87,8 @@ export function serializeContextSummarySource(input: ContextSummarizationInput):
     },
     sourceRange: input.sourceRange as unknown as JsonObject,
     authorities: serializeAuthorities(input),
-    previousCheckpoint:
-      input.previousCheckpoint === undefined ? null : serializeCheckpoint(input.previousCheckpoint),
-    messages,
-    omittedMessageCount: Math.max(0, input.sourceMessages.length - messages.length),
   };
-  const serialized = canonicalJsonText(value);
-  return serialized.length <= MAX_SERIALIZED_SUMMARY_SOURCE
-    ? serialized
-    : `${serialized.slice(0, MAX_SERIALIZED_SUMMARY_SOURCE - 1)}…`;
+  return canonicalJsonText(value);
 }
 
 function createDeterministicMinimalCheckpoint(
@@ -129,62 +123,6 @@ function createDeterministicMinimalCheckpoint(
       to: input.sourceRange.lastSequence,
     },
   });
-}
-
-function serializeStoredMessage(stored: StoredAgentMessage): JsonObject {
-  const message = stored.message;
-  const base: JsonObject = {
-    messageId: message.id,
-    runId: message.runId,
-    conversationTurnId: message.conversationTurnId,
-    sequence: stored.sequence,
-    schemaVersion: stored.schemaVersion,
-    modelProjectionVersion: stored.modelProjectionVersion ?? null,
-    type: message.type,
-  };
-  if (message.type === "USER") {
-    return {
-      ...base,
-      content: message.content.slice(0, MAX_SUMMARY_CONTENT_PARTS).map(serializeUserPart),
-    };
-  }
-  if (message.type === "ASSISTANT") {
-    return {
-      ...base,
-      content: message.content.slice(0, MAX_SUMMARY_CONTENT_PARTS).map(serializeAssistantPart),
-    };
-  }
-  if (message.type === "TOOL_RESULT") {
-    return {
-      ...base,
-      toolCallId: message.toolCallId,
-      toolName: message.toolName,
-      isError: message.isError,
-      observation: message.observation.kind,
-      projectedContent: "[tool observation omitted from semantic summary]",
-    };
-  }
-  return base;
-}
-
-function serializeUserPart(part: AgentUserContentPart): JsonObject {
-  if (part.type === "TEXT") return { type: part.type, text: safeText(part.text) };
-  return {
-    type: part.type,
-    artifactId: safeText(part.artifactId),
-    ...(part.label === undefined ? {} : { label: safeText(part.label) }),
-    ...(part.mediaType === undefined ? {} : { mediaType: safeText(part.mediaType) }),
-  };
-}
-
-function serializeAssistantPart(part: AgentAssistantContentPart): JsonObject {
-  if (part.type === "TEXT") return { type: part.type, text: safeText(part.text) };
-  return {
-    type: part.type,
-    toolCallId: part.toolCallId,
-    toolName: safeText(part.toolName),
-    input: "[tool input omitted from semantic summary]",
-  };
 }
 
 function serializeAuthorities(input: ContextSummarizationInput): JsonObject {
@@ -246,13 +184,10 @@ function freezeSummaryResult(result: ContextSummarizationResult): ContextSummari
 }
 
 function safeText(value: string): string {
-  const redacted = value
+  return value
     .replace(/\bBearer\s+\S+/gi, "Bearer [REDACTED]")
     .replace(/\b(?:sk|rk)-[A-Za-z0-9_-]+/g, "[REDACTED_TOKEN]")
     .replace(/\b(api[_-]?key|token|secret|password|authorization)\s*[:=]\s*\S+/gi, "$1=[REDACTED]");
-  return redacted.length <= MAX_SUMMARY_TEXT
-    ? redacted
-    : `${redacted.slice(0, MAX_SUMMARY_TEXT - 1)}…`;
 }
 
 function throwIfAborted(signal: AbortSignal): void {

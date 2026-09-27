@@ -126,12 +126,12 @@ function successfulSummarizer(): ContextSummarizerPort {
 }
 
 describe("Phase 7D semantic summarization", () => {
-  it("serializes bounded semantic source without raw Tool output or credentials", () => {
+  it("serializes projected Tool feedback without credentials", () => {
     const serialized = serializeContextSummarySource(input());
 
     expect(serialized).toContain("TOOL_RESULT");
     expect(serialized).toContain("tool_0");
-    expect(serialized).not.toContain("FULL_ARTIFACT_BODY");
+    expect(serialized).toContain("FULL_ARTIFACT_BODY password=[REDACTED] Bearer [REDACTED]");
     expect(serialized).not.toContain("super-secret");
     expect(serialized).not.toContain("Bearer abc123");
     expect(serialized.length).toBeLessThanOrEqual(24_000);

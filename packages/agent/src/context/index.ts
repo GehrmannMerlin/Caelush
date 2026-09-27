@@ -63,6 +63,10 @@ export {
   createContextSummarizationRunner,
   serializeContextSummarySource,
 } from "./compaction/context-summary.js";
+export {
+  createContextSummarySourceSerializer,
+  SUMMARY_SOURCE_POLICY,
+} from "./compaction/summary-source-serializer.js";
 export type {
   ContextCheckpointCreateInputV2,
   ContextCheckpointId,
@@ -109,6 +113,11 @@ export type {
   ContextSummarizationRunner,
   ContextSummaryExecutionResult,
 } from "./compaction/context-summary.js";
+export type {
+  CompactionSemanticSource,
+  ContextSummarySourceSerializer,
+  SummarySourcePolicy,
+} from "./compaction/summary-source-serializer.js";
 export type {
   ContextAuthorityProviderPort,
   ContextAuthoritySnapshot,
