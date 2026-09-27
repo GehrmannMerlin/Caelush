@@ -10,6 +10,7 @@ export const CODING_CONTEXT_SOURCE_IDS = Object.freeze({
   gitState: createContextSourceId("coding.git-state"),
   verificationRepair: createContextSourceId("coding.verification-repair"),
   temporal: createContextSourceId("coding.temporal"),
+  toolGuidance: createContextSourceId("coding.tool-guidance"),
 } satisfies Readonly<{
   readonly workspace: ContextSourceId;
   readonly runtimeFacts: ContextSourceId;
@@ -20,4 +21,5 @@ export const CODING_CONTEXT_SOURCE_IDS = Object.freeze({
   readonly gitState: ContextSourceId;
   readonly verificationRepair: ContextSourceId;
   readonly temporal: ContextSourceId;
+  readonly toolGuidance: ContextSourceId;
 }>);

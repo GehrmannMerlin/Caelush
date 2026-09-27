@@ -37,6 +37,7 @@ describe("Phase 7C Coding workspace/project providers", () => {
       gitState: "coding.git-state",
       verificationRepair: "coding.verification-repair",
       temporal: "coding.temporal",
+      toolGuidance: "coding.tool-guidance",
     });
   });
 

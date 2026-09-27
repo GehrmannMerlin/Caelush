@@ -216,7 +216,7 @@ export type {
   ToolEffectEventContext,
 } from "./effects/event-projector.js";
 
-/* Prompt snippets and the prompt context provider. */ export {
+/* Prompt snippets; Tool Guidance is a native Context V2 source in ../context. */ export {
   APPLY_PATCH_PROMPT_SNIPPET,
   CODING_TOOL_PROMPT_SNIPPETS,
   EXEC_COMMAND_PROMPT_SNIPPET,
@@ -231,9 +231,3 @@ export type {
   SEARCH_TEXT_PROMPT_SNIPPET,
   WRITE_STDIN_PROMPT_SNIPPET,
 } from "./prompt/prompt-snippets.js";
-export { createToolPromptContextProvider } from "./prompt/tool-prompt-context-provider.js";
-export type {
-  ToolPromptContextItem,
-  ToolPromptContextProvider,
-  ToolPromptContextProviderInput,
-} from "./prompt/tool-prompt-context-provider.js";

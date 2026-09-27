@@ -437,15 +437,33 @@ describe("Phase 4E guard — prompt authority", () => {
     expect(await exists("packages/tools")).toBe(false);
   });
 
-  it("gives ToolPromptContextProvider a real production composition reference", async () => {
+  it("gives native Tool Guidance a real production composition reference", async () => {
     const source = await read("apps/daemon/src/daemon-composition.ts");
     expect(source).toContain("createDaemonV2ContextEngine(");
-    expect(await read("apps/daemon/src/context/v2-context-composition.ts")).toContain(
-      "createCorePolicyContextSourceProvider",
-    );
+    const composition = await read("apps/daemon/src/context/v2-context-composition.ts");
+    expect(composition).toContain("createCorePolicyContextSourceProvider");
+    expect(composition).toContain("createToolGuidanceContextSourceProvider");
     expect(await read("packages/coding-agent/src/context/index.ts")).toContain(
       "createProjectInstructionContextSourceProvider",
     );
+    expect(await read("packages/coding-agent/src/context/index.ts")).toContain(
+      "createToolGuidanceContextSourceProvider",
+    );
+  });
+
+  it("keeps Tool Guidance product semantics out of the generic Agent Context kernel", async () => {
+    const provider = await read(
+      "packages/coding-agent/src/context/providers/tool-guidance-provider.ts",
+    );
+    const agentContext = await Promise.all(
+      (await filesUnder("packages/agent/src/context")).map((file) => read(file)),
+    );
+
+    expect(provider).toContain("promptSnippetFor");
+    expect(provider).toContain("<tool_guidance>");
+    expect(provider).not.toContain("LegacyContextItem");
+    expect(agentContext.join("\n")).not.toContain("read_file");
+    expect(agentContext.join("\n")).not.toContain("tool_guidance");
   });
 });
 
@@ -460,6 +478,7 @@ describe("Phase 4E guard — production composition", () => {
     expect(source).toContain("createRuntimeGitOperations(");
     // The legacy default builder is no longer named in the composition root.
     expect(source).not.toContain("createDefaultBuiltinToolRegistrations");
+    expect(source).toContain("activeToolNames");
   });
 
   it("has the daemon bootstrap compose the target Coding layer too", async () => {

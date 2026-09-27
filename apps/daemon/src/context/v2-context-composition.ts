@@ -34,6 +34,7 @@ import {
   createRuntimeFactsContextSourceProvider,
   createSkillCatalogContextSourceProvider,
   createTemporalContextSourceProvider,
+  createToolGuidanceContextSourceProvider,
   createVerificationRepairContextSourceProvider,
   createWorkspaceContextSourceProvider,
   createLocalCodingContextPorts,
@@ -41,7 +42,7 @@ import {
 } from "@caelush/coding-agent";
 import type { RunAgentContextEngineInput } from "@caelush/core";
 import type { ContextContribution, ContextMemoryProjection } from "@caelush/agent";
-import type { TimestampMs } from "@caelush/protocol";
+import type { TimestampMs, ToolName } from "@caelush/protocol";
 import type { Runtime } from "@caelush/runtime";
 import type { CaelushStorage } from "@caelush/storage";
 import { MemoryRetriever } from "@caelush/memory";
@@ -60,6 +61,7 @@ export interface DaemonV2ContextCompositionOptions {
   readonly notifier: RunEventNotifierPort;
   readonly contributionPipeline: ContextContributionPipeline;
   readonly clock: { now(): TimestampMs };
+  readonly activeToolNames: readonly ToolName[];
 }
 /**
  * Compose the production Context Engine for one Run.
@@ -86,6 +88,7 @@ export function createDaemonV2ContextEngine(options: DaemonV2ContextCompositionO
     storage: options.storage,
     contributionPipeline: options.contributionPipeline,
     clock: options.clock,
+    activeToolNames: options.activeToolNames,
   });
   const authorityProvider = createAuthorityProvider({
     input,
@@ -192,6 +195,7 @@ function createSourceRegistry(options: {
   readonly storage: CaelushStorage;
   readonly contributionPipeline: ContextContributionPipeline;
   readonly clock: { now(): TimestampMs };
+  readonly activeToolNames: readonly ToolName[];
 }) {
   const builder = createContextSourceRegistryBuilder();
   const register = (
@@ -223,6 +227,14 @@ function createSourceRegistry(options: {
       },
     }),
     20,
+    "REQUIRED",
+  );
+  register(
+    createToolGuidanceContextSourceProvider({
+      activeToolNames: options.activeToolNames,
+      tokenEstimator: options.tokenEstimator,
+    }),
+    25,
     "REQUIRED",
   );
   register(

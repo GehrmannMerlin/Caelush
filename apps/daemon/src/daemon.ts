@@ -17,7 +17,9 @@ import {
   createRuntimeProcessOperations,
   createRuntimeReadOnlyOperations,
   effectsChangeAgentState,
+  withoutGitTools,
   type DefaultCodingToolOperations,
+  type GitToolAvailability,
 } from "@caelush/coding-agent";
 import { buildDaemonApp } from "./app.js";
 import { assertLoopbackDaemonHost, createDaemonConfig, type DaemonConfig } from "./config.js";
@@ -48,6 +50,7 @@ export interface DaemonOptions {
   /** Typed host/test seam for observation-backed Tool feedback contributions. */
   readonly toolFeedbackContributionHooks?: readonly ToolFeedbackContributionRegistration[];
   readonly toolFeedbackContributionBudget?: Partial<ToolFeedbackContributionBudget>;
+  readonly toolExposure?: GitToolAvailability;
 }
 
 export interface DaemonHandle {
@@ -94,6 +97,10 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   const defaultToolRegistrations = createDefaultCodingTools(
     daemonCodingOperations(runtimeResolver),
   );
+  const exposedToolRegistrations =
+    options.toolExposure === undefined || options.toolExposure === "AVAILABLE"
+      ? defaultToolRegistrations
+      : withoutGitTools(defaultToolRegistrations);
 
   /**
    * The Tool settlement compatibility boundary, built once per daemon start.
@@ -135,7 +142,8 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         ? {}
         : { adapterOverrides: options.adapterOverrides }),
       ...(options.logger === true ? { logger: safeSupervisorLogger } : {}),
-      toolRegistrations: defaultToolRegistrations,
+      toolRegistrations: exposedToolRegistrations,
+      ...(options.toolExposure === undefined ? {} : { toolExposure: options.toolExposure }),
       ...(options.contextContributionHooks === undefined
         ? {}
         : { contextContributionHooks: options.contextContributionHooks }),

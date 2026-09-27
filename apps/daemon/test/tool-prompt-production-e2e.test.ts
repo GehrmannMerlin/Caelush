@@ -14,7 +14,7 @@ import { FIXTURE_API, fixtureBinding, fixtureModelSource } from "./support/ai-fi
  *
  * ```text
  * BEFORE 4E   registry-builder folds modelGuidance into AIToolSpec.description
- * AFTER  4E   CodingToolCatalog.promptSnippet → ToolPromptContextProvider → budgeted Context
+ * AFTER  4E   Coding promptSnippet → native ContextSourceProvider → budgeted Context
  * ```
  *
  * The test drives a real Run through the real HTTP surface and then reads the *actual provider
@@ -87,7 +87,10 @@ function isTerminal(status: string): boolean {
   ].includes(status);
 }
 
-async function runOnce(provider: ApiAdapter) {
+async function runOnce(
+  provider: ApiAdapter,
+  toolExposure: "AVAILABLE" | "UNAVAILABLE" = "AVAILABLE",
+) {
   directory = await mkdtemp(join(tmpdir(), "caelush-4e-prompt-e2e-"));
   await writeFile(join(directory, "README.md"), "# fixture\n", "utf8");
   daemon = await startDaemon({
@@ -97,6 +100,7 @@ async function runOnce(provider: ApiAdapter) {
     providerBindings: [fixtureBinding()],
     modelSources: [fixtureModelSource()],
     adapterOverrides: [provider],
+    toolExposure,
     defaultModel: { provider: "fixture", model: "fixture-model" },
   });
   const client = new CaelushClient({ baseUrl: daemon.url });
@@ -182,6 +186,29 @@ describe("Phase 4E prompt production E2E", () => {
     for (const name of ["read_file", "list_directory", "find_files", "search_text"]) {
       expect(systemText).toContain(`${name}\nPurpose:`);
     }
+  }, 30_000);
+
+  it("describes only the active Tool set when Git Tools are unavailable", async () => {
+    const provider = new CapturingProvider();
+    await runOnce(provider, "UNAVAILABLE");
+
+    const turn = provider.turns[0]!;
+    expect(turn.tools.map((tool) => tool.name)).toEqual([
+      "read_file",
+      "list_directory",
+      "find_files",
+      "search_text",
+      "apply_patch",
+      "exec_command",
+      "write_stdin",
+    ]);
+    const systemText = turn.messages
+      .filter((message) => message.role === "system")
+      .map((message) => message.content)
+      .join("\n");
+    expect(systemText).toContain("<tool_guidance>");
+    expect(systemText).not.toContain("git_status\nPurpose:");
+    expect(systemText).not.toContain("git_diff\nPurpose:");
   }, 30_000);
 
   it("accounts the guidance inside the Context token estimate", async () => {

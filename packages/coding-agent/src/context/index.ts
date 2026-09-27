@@ -40,6 +40,8 @@ export { createVerificationRepairContextSourceProvider } from "./providers/verif
 export type { VerificationRepairContextSourceProviderOptions } from "./providers/verification-repair-provider.js";
 export { createTemporalContextSourceProvider } from "./providers/temporal-context-provider.js";
 export type { TemporalContextSourceProviderOptions } from "./providers/temporal-context-provider.js";
+export { createToolGuidanceContextSourceProvider } from "./providers/tool-guidance-provider.js";
+export type { ToolGuidanceContextSourceProviderOptions } from "./providers/tool-guidance-provider.js";
 export { createWorkspaceContextSourceProvider } from "./providers/workspace-provider.js";
 export type { WorkspaceContextSourceProviderOptions } from "./providers/workspace-provider.js";
 export { createRuntimeFactsContextSourceProvider } from "./providers/runtime-facts-provider.js";

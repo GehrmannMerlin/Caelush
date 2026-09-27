@@ -565,6 +565,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     options.toolExposure ?? "AVAILABLE",
   );
   const activeToolRegistry = buildToolRegistry(options.toolRegistrations ?? defaultCodingTools);
+  const activeToolNames = activeToolRegistry.names();
   /**
    * The Coding Tool catalog for the Tools this host registered.
    *
@@ -893,6 +894,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
             contributionPipeline,
             notifier: eventNotifier,
             clock,
+            activeToolNames,
           }),
       });
     },

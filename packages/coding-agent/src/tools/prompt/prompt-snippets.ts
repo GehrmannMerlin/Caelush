@@ -5,7 +5,7 @@ import type { ToolName } from "@caelush/protocol";
  *
  * ```text
  * legacy   ToolModelGuidance  →  appended into AIToolSpec.description by the registry builder
- * target   promptSnippet      →  ToolPromptContextProvider  →  ContextEngine  →  model context
+ * target   promptSnippet      →  native Tool Guidance ContextSourceProvider  →  ContextEngine  →  model context
  * ```
  *
  * ## Why this moved

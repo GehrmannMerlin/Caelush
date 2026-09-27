@@ -355,8 +355,8 @@ describe("Phase 4F guard — one authority per responsibility", () => {
         "packages/coding-agent/src/tools/effects/event-projector.ts",
       ],
       [
-        "export function createToolPromptContextProvider(",
-        "packages/coding-agent/src/tools/prompt/tool-prompt-context-provider.ts",
+        "export function createToolGuidanceContextSourceProvider(",
+        "packages/coding-agent/src/context/providers/tool-guidance-provider.ts",
       ],
       [
         "export function createCodingToolAdmissionPort(",
