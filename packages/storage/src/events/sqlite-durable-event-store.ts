@@ -129,6 +129,27 @@ export function appendDurableEventsInTransaction(
   });
 }
 
+/** Storage-private proof query used by atomic Context compaction replay. */
+export function findContextCompactionCompletionEventsInTransaction(
+  client: CaelushDatabase["client"],
+  input: { readonly runId: RunId; readonly checkpointId: string },
+): DurableRunEvent[] {
+  const rows = client
+    .prepare(
+      `SELECT event_id, run_id, session_id, step_id, aggregate_sequence, event_type,
+              event_schema_version, visibility, timestamp_ms, data_json
+       FROM agent_events
+       WHERE run_id = ? AND event_type = ?
+       ORDER BY aggregate_sequence ASC`,
+    )
+    .all(input.runId, "context.compaction.completed") as unknown as EventRow[];
+  return rows.map(decodeEvent).filter((event) => {
+    if (event.type !== "context.compaction.completed") return false;
+    const payload = event.payload as { readonly checkpointId?: unknown };
+    return payload.checkpointId === input.checkpointId;
+  });
+}
+
 export class SqliteDurableEventStore implements DurableRunEventReaderPort {
   constructor(private readonly database: CaelushDatabase) {}
 

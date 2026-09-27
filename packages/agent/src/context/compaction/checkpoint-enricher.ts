@@ -2,7 +2,6 @@ import {
   createStructuredCheckpoint,
   type StructuredCheckpoint,
 } from "../checkpoint/structured-checkpoint.js";
-import { digestJsonValue } from "../../messages/canonical-json.js";
 import type { ContextMessageRange } from "./context-compaction-contracts.js";
 import type { DeterministicCompactionFacts } from "./deterministic-compaction-facts.js";
 import type { SemanticCheckpointDraft } from "./semantic-checkpoint-draft.js";
@@ -44,9 +43,4 @@ export function createContextCheckpointEnricher(): ContextCheckpointEnricher {
     },
   };
   return Object.freeze(enricher);
-}
-
-/** Digest the final V1 semantic checkpoint after all deterministic enrichment. */
-export function digestStructuredCheckpoint(checkpoint: StructuredCheckpoint): string {
-  return digestJsonValue(JSON.parse(JSON.stringify(checkpoint)));
 }

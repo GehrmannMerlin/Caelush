@@ -13,11 +13,12 @@ import {
   createContextMessageRange,
   createContextSummaryPromptVersion,
   createStructuredCheckpoint,
+  canonicalJsonText,
 } from "@caelush/agent";
 import type { RunId, TimestampMs } from "@caelush/protocol";
 
 import type { CaelushDatabase } from "./database.js";
-import { StorageDecodeError, StorageError } from "./errors.js";
+import { StorageConflictError, StorageDecodeError, StorageError } from "./errors.js";
 import { SqliteContextCheckpointRepository } from "./context-checkpoint-repository.js";
 
 interface CheckpointRow {
@@ -58,7 +59,8 @@ export class SqliteContextCheckpointRepositoryV2 implements ContextCheckpointRep
   }
 
   async create(input: ContextCheckpointCreateInputV2): Promise<ContextCheckpointRecordV2> {
-    writeContextCheckpointV2InTransaction(this.database.client, input);
+    const written = writeContextCheckpointV2InTransaction(this.database.client, input);
+    if (written.kind === "IDEMPOTENT_EXISTING") return written.checkpoint;
     const saved = this.database.client.prepare(`${SELECT} WHERE id = ?`).get(input.checkpointId) as
       CheckpointRow | undefined;
     if (saved === undefined)
@@ -116,8 +118,24 @@ export class SqliteContextCheckpointRepositoryV2 implements ContextCheckpointRep
 export function writeContextCheckpointV2InTransaction(
   client: CaelushDatabase["client"],
   input: ContextCheckpointCreateInputV2,
-): void {
+): ContextCheckpointV2WriteResult {
   assertCreateInput(input);
+  const existing = client.prepare(`${SELECT} WHERE id = ?`).get(input.checkpointId) as
+    CheckpointRow | undefined;
+  if (existing !== undefined) {
+    if (existing.summary_version !== 2) {
+      throw new StorageConflictError(
+        `Context Checkpoint ID ${String(input.checkpointId)} is already a V1 record.`,
+      );
+    }
+    const existingRecord = decodeV2(existing);
+    if (!sameImmutableRecord(existingRecord, input)) {
+      throw new StorageConflictError(
+        `Context Checkpoint V2 ${String(input.checkpointId)} has a conflicting immutable payload.`,
+      );
+    }
+    return Object.freeze({ kind: "IDEMPOTENT_EXISTING" as const, checkpoint: existingRecord });
+  }
   const envelope: V2DataEnvelope = {
     version: 2,
     structuredCheckpoint: input.structuredCheckpoint,
@@ -157,6 +175,44 @@ export function writeContextCheckpointV2InTransaction(
       cause: error,
     });
   }
+  return Object.freeze({ kind: "INSERTED" as const });
+}
+
+export type ContextCheckpointV2WriteResult =
+  | { readonly kind: "INSERTED" }
+  | { readonly kind: "IDEMPOTENT_EXISTING"; readonly checkpoint: ContextCheckpointRecordV2 };
+
+function sameImmutableRecord(
+  existing: ContextCheckpointRecordV2,
+  input: ContextCheckpointCreateInputV2,
+): boolean {
+  return (
+    canonicalJsonText(canonicalImmutableRecord(existing) as never) ===
+    canonicalJsonText(canonicalImmutableRecord(input) as never)
+  );
+}
+
+function canonicalImmutableRecord(
+  record: ContextCheckpointRecordV2 | ContextCheckpointCreateInputV2,
+): Record<string, unknown> {
+  return {
+    checkpointId: String(record.checkpointId),
+    runId: String(record.runId),
+    schemaVersion: 2,
+    previousCheckpointId:
+      record.previousCheckpointId === undefined ? null : String(record.previousCheckpointId),
+    sourceRange: record.sourceRange,
+    structuredCheckpoint: record.structuredCheckpoint,
+    tokensBefore: record.tokensBefore,
+    tokensAfter: record.tokensAfter,
+    modelRef: record.modelRef,
+    summaryPromptVersion: record.summaryPromptVersion,
+    sourceDigest: record.sourceDigest,
+    checkpointDigest: record.checkpointDigest,
+    degraded: record.degraded,
+    reason: record.reason,
+    createdAt: record.createdAt,
+  };
 }
 
 function assertCreateInput(input: ContextCheckpointCreateInputV2): void {

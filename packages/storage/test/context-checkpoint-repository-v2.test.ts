@@ -20,6 +20,7 @@ import type { RunId } from "@caelush/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
 import type { ContextCheckpointCreateInputV2 } from "@caelush/agent";
+import { StorageConflictError } from "../src/errors.js";
 
 const directories: string[] = [];
 const storages: Array<{ close(): Promise<void> }> = [];
@@ -176,5 +177,134 @@ describe("SqliteContextCheckpointRepositoryV2", () => {
       schemaVersion: 2,
       checkpointId: v2Input.checkpointId,
     });
+  });
+
+  it("replays an exact immutable V2 record idempotently without adding a row", async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "caelush-context-checkpoint-v2-replay-"),
+    );
+    directories.push(directory);
+    const storage = await openCaelushStorage({ path: path.join(directory, "caelush.db") });
+    storages.push(storage);
+    const run = makeRun();
+    await storage.sessions.insert({
+      id: run.sessionId,
+      createdAt: run.createdAt,
+      updatedAt: run.createdAt,
+      metadata: {},
+    });
+    await storage.runs.insert(run);
+
+    const input = checkpoint(run.id, 10, 12);
+    const first = await storage.contextCheckpointsV2.create(input);
+    const second = await storage.contextCheckpointsV2.create(input);
+
+    expect(second).toEqual(first);
+    expect(await storage.contextCheckpointsV2.listByRun(run.id)).toHaveLength(1);
+  });
+
+  it("rejects a same-ID V2 record with any immutable payload difference", async () => {
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    storages.push(storage);
+    const run = makeRun();
+    await storage.sessions.insert({
+      id: run.sessionId,
+      createdAt: run.createdAt,
+      updatedAt: run.createdAt,
+      metadata: {},
+    });
+    await storage.runs.insert(run);
+
+    const input = checkpoint(run.id, 20, 22);
+    await storage.contextCheckpointsV2.create(input);
+    const conflicting = { ...input, tokensAfter: input.tokensAfter + 1 };
+
+    await expect(storage.contextCheckpointsV2.create(conflicting)).rejects.toBeInstanceOf(
+      StorageConflictError,
+    );
+    await expect(
+      storage.contextCheckpointsV2.getById(String(input.checkpointId)),
+    ).resolves.toMatchObject({
+      tokensAfter: input.tokensAfter,
+    });
+  });
+
+  it("rejects a V2 write that collides with an existing V1 checkpoint ID", async () => {
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    storages.push(storage);
+    const run = makeRun();
+    await storage.sessions.insert({
+      id: run.sessionId,
+      createdAt: run.createdAt,
+      updatedAt: run.createdAt,
+      metadata: {},
+    });
+    await storage.runs.insert(run);
+    await storage.contextCheckpoints.create({
+      checkpointId: "checkpoint:same-id",
+      runId: run.id,
+      sourceSequenceFrom: 1,
+      sourceSequenceTo: 2,
+      structuredCheckpoint: {
+        version: 1,
+        goal: run.goal,
+        constraints: [],
+        completedWork: [],
+        inProgress: [],
+        blocked: [],
+        importantDiscoveries: [],
+        keyDecisions: [],
+        changedFiles: [],
+        readFiles: [],
+        recentErrors: [],
+        verificationState: "PENDING",
+        activeProcesses: [],
+        pendingApprovals: [],
+        resourceGovernance: "NONE",
+        criticalReferences: [],
+        nextIntent: "continue",
+        sourceRange: { from: 1, to: 2 },
+      },
+      tokensBefore: 100,
+      tokensAfter: 40,
+      modelRef: { providerId: "fixture", modelId: "fixture-model" },
+      createdAt: createTimestampMs(4),
+    });
+
+    const input = {
+      ...checkpoint(run.id, 30, 32),
+      checkpointId: createContextCheckpointId("checkpoint:same-id"),
+    };
+    await expect(storage.contextCheckpointsV2.create(input)).rejects.toBeInstanceOf(
+      StorageConflictError,
+    );
+  });
+
+  it("reloads the same immutable V2 record after restart and preserves replay identity", async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "caelush-context-checkpoint-v2-restart-"),
+    );
+    directories.push(directory);
+    const databasePath = path.join(directory, "caelush.db");
+    const firstStorage = await openCaelushStorage({ path: databasePath });
+    const run = makeRun();
+    await firstStorage.sessions.insert({
+      id: run.sessionId,
+      createdAt: run.createdAt,
+      updatedAt: run.createdAt,
+      metadata: {},
+    });
+    await firstStorage.runs.insert(run);
+    const input = checkpoint(run.id, 40, 42);
+    const created = await firstStorage.contextCheckpointsV2.create(input);
+    await firstStorage.close();
+
+    const reopened = await openCaelushStorage({ path: databasePath });
+    storages.push(reopened);
+    await expect(reopened.contextCheckpointsV2.getLatestByRun(run.id)).resolves.toEqual(created);
+    await expect(reopened.contextCheckpointsV2.create(input)).resolves.toEqual(created);
+    await expect(
+      reopened.contextCheckpointsV2.create({ ...input, tokensAfter: 31 }),
+    ).rejects.toBeInstanceOf(StorageConflictError);
   });
 });

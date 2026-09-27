@@ -290,9 +290,12 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     const usage = usageStore();
     let verificationState = "OLD";
     let capturedRehydrationAuthority: string | undefined;
+    let authoritySnapshotCount = 0;
     const authority: ContextAuthorityProviderPort = {
       async snapshot() {
-        expect(commitFinished).toBe(true);
+        authoritySnapshotCount += 1;
+        if (authoritySnapshotCount === 1) expect(commitFinished).toBe(false);
+        else expect(commitFinished).toBe(true);
         return { goal: "current goal", verificationState };
       },
     };
@@ -460,6 +463,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     });
 
     expect(committed.eventCount).toBe(1);
+    expect(authoritySnapshotCount).toBe(2);
     expect(summaryTargetTokens).toBe(7);
     expect(summarySourceSequences).toEqual([2]);
     expect(summarySourceRange).toMatchObject({ firstSequence: 1, lastSequence: 2 });

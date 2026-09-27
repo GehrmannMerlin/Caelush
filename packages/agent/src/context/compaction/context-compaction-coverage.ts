@@ -2,6 +2,7 @@ import type {
   ContextCheckpointRecordV2,
   ContextHistoryIndex,
   LegacyContextCheckpointRecordV1,
+  ContextMessageRange,
 } from "./context-compaction-contracts.js";
 import type { StructuredCheckpoint } from "../checkpoint/structured-checkpoint.js";
 import type { ContextHistoryUnit, ContextMessageRef } from "../history/semantic-history-unit.js";
@@ -33,7 +34,6 @@ export function createContextCompactionCoverage(input: {
   readonly history: ContextHistoryIndex;
   readonly latestCheckpoint?: ContextCheckpointRecordV2 | LegacyContextCheckpointRecordV1;
 }): ContextCompactionCoverage {
-  const uniqueRefs = collectUniqueMessageRefs(input.history.units);
   const latest = input.latestCheckpoint;
   if (latest === undefined) {
     return Object.freeze({
@@ -42,26 +42,43 @@ export function createContextCompactionCoverage(input: {
     });
   }
 
-  const range = checkpointRange(latest);
-  const initialCoverage = resolveRangeCoverage(uniqueRefs, range, latest.schemaVersion === 2);
-  const coveredMessageIds = new Set<AgentMessageId>(initialCoverage);
-
-  if (latest.schemaVersion === 2) {
-    assertV2ProtocolBoundaries(input.history.units, coveredMessageIds);
-  } else {
-    protectPartialLegacyProtocols(input.history.units, coveredMessageIds);
-  }
-
-  const remainingUnits = input.history.units
-    .map((unit) => projectUnit(unit, coveredMessageIds, latest.schemaVersion === 2))
-    .filter((unit): unit is ContextHistoryUnit => unit !== null);
-  const history = rebuildHistory(remainingUnits);
+  const projection = projectCoverage({
+    history: input.history,
+    range: checkpointRange(latest),
+    isV2: latest.schemaVersion === 2,
+  });
 
   return Object.freeze({
-    history,
-    coveredMessageIds,
+    history: projection.history,
+    coveredMessageIds: projection.coveredMessageIds,
     previousCheckpoint: latest.structuredCheckpoint,
     ...(latest.schemaVersion === 2 ? { trustedPreviousCheckpointId: latest.checkpointId } : {}),
+  });
+}
+
+/**
+ * Project a not-yet-durable V2 candidate range using the same coverage algorithm as a
+ * committed checkpoint. It intentionally returns no predecessor or durable record.
+ */
+export function createContextCompactionCoverageForRange(input: {
+  readonly history: ContextHistoryIndex;
+  readonly sourceRange: ContextMessageRange;
+}): ContextCompactionCoverage {
+  const projection = projectCoverage({
+    history: input.history,
+    range: {
+      runId: String(input.sourceRange.runId),
+      firstMessageId: input.sourceRange.firstMessageId,
+      lastMessageId: input.sourceRange.lastMessageId,
+      firstSequence: input.sourceRange.firstSequence,
+      lastSequence: input.sourceRange.lastSequence,
+      conversationTurnId: String(input.sourceRange.conversationTurnId),
+    },
+    isV2: true,
+  });
+  return Object.freeze({
+    history: projection.history,
+    coveredMessageIds: projection.coveredMessageIds,
   });
 }
 
@@ -93,6 +110,30 @@ interface ContextCheckpointRange {
   readonly firstSequence: number;
   readonly lastSequence: number;
   readonly conversationTurnId?: string;
+}
+
+function projectCoverage(input: {
+  readonly history: ContextHistoryIndex;
+  readonly range: ContextCheckpointRange;
+  readonly isV2: boolean;
+}): { readonly history: ContextHistoryIndex; readonly coveredMessageIds: Set<AgentMessageId> } {
+  const uniqueRefs = collectUniqueMessageRefs(input.history.units);
+  const initialCoverage = resolveRangeCoverage(uniqueRefs, input.range, input.isV2);
+  const coveredMessageIds = new Set<AgentMessageId>(initialCoverage);
+
+  if (input.isV2) {
+    assertV2ProtocolBoundaries(input.history.units, coveredMessageIds);
+  } else {
+    protectPartialLegacyProtocols(input.history.units, coveredMessageIds);
+  }
+
+  const remainingUnits = input.history.units
+    .map((unit) => projectUnit(unit, coveredMessageIds, input.isV2))
+    .filter((unit): unit is ContextHistoryUnit => unit !== null);
+  return Object.freeze({
+    history: rebuildHistory(remainingUnits),
+    coveredMessageIds,
+  });
 }
 
 function checkpointRange(

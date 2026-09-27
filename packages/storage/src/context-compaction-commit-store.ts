@@ -6,8 +6,11 @@ import type {
 import type { DurableRunEvent, DurableRunEventDraft } from "@caelush/agent";
 
 import type { CaelushDatabase } from "./database.js";
-import { StorageError } from "./errors.js";
-import { appendDurableEventsInTransaction } from "./events/sqlite-durable-event-store.js";
+import { StorageConflictError, StorageError } from "./errors.js";
+import {
+  appendDurableEventsInTransaction,
+  findContextCompactionCompletionEventsInTransaction,
+} from "./events/sqlite-durable-event-store.js";
 import {
   SqliteContextCheckpointRepositoryV2,
   writeContextCheckpointV2InTransaction,
@@ -36,7 +39,25 @@ export class SqliteContextCompactionCommitStore implements ContextCompactionComm
     let committed = false;
     try {
       this.database.client.exec("BEGIN IMMEDIATE");
-      writeContextCheckpointV2InTransaction(this.database.client, input.checkpoint);
+      const written = writeContextCheckpointV2InTransaction(this.database.client, input.checkpoint);
+      if (written.kind === "IDEMPOTENT_EXISTING") {
+        const matchingEvents = findContextCompactionCompletionEventsInTransaction(
+          this.database.client,
+          {
+            runId: input.checkpoint.runId,
+            checkpointId: String(input.checkpoint.checkpointId),
+          },
+        );
+        if (matchingEvents.length !== 1) {
+          throw new StorageConflictError(
+            "Existing Context Checkpoint V2 has no unique durable completion proof.",
+          );
+        }
+        assertCompletionEventMatchesCheckpoint(matchingEvents[0]!, input.checkpoint);
+        this.database.client.exec("COMMIT");
+        committed = true;
+        return Object.freeze({ checkpoint: written.checkpoint, events: Object.freeze([]) });
+      }
       const events = appendDurableEventsInTransaction(this.database.client, input.events);
       this.database.client.exec("COMMIT");
       committed = true;
@@ -72,6 +93,39 @@ function assertEventOwnership(
   for (const event of events) {
     if (event.runId !== checkpoint.runId) {
       throw new StorageError("Context compaction events must belong to the checkpoint Run.");
+    }
+    if (event.type === "context.compaction.completed") {
+      assertCompletionEventMatchesCheckpoint(event, checkpoint);
+    }
+  }
+}
+
+function assertCompletionEventMatchesCheckpoint(
+  event: { readonly type?: unknown; readonly payload?: unknown },
+  checkpoint: ContextCheckpointCreateInputV2 | ContextCheckpointRecordV2,
+): void {
+  if (event.type !== "context.compaction.completed") {
+    throw new StorageConflictError("Context completion event type is invalid.");
+  }
+  const payload = event.payload;
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new StorageConflictError("Context completion event payload is invalid.");
+  }
+  const candidate = payload as Record<string, unknown>;
+  const expected = {
+    checkpointId: String(checkpoint.checkpointId),
+    reason: checkpoint.reason,
+    sourceSequenceFrom: checkpoint.sourceRange.firstSequence,
+    sourceSequenceTo: checkpoint.sourceRange.lastSequence,
+    tokensBefore: checkpoint.tokensBefore,
+    tokensAfter: checkpoint.tokensAfter,
+    degraded: checkpoint.degraded,
+  };
+  for (const [key, value] of Object.entries(expected)) {
+    if (candidate[key] !== value) {
+      throw new StorageConflictError(
+        `Context completion event field ${key} does not match its checkpoint.`,
+      );
     }
   }
 }

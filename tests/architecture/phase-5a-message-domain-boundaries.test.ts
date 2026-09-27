@@ -368,6 +368,9 @@ describe("Phase 5A guard — package boundaries (freeze §150, §151)", () => {
       // contracts and the provider-neutral materializer. These are still Agent-owned contracts,
       // not a new consumer-owned Message Domain implementation.
       "packages/agent/src/context/compaction/context-compaction-contracts.ts",
+      "packages/agent/src/context/compaction/context-compaction-cut.ts",
+      "packages/agent/src/context/compaction/context-compaction-rebuilder.ts",
+      "packages/agent/src/context/compaction/incremental-compaction-resolver.ts",
       "packages/agent/src/context/materializer/context-materializer.ts",
     ];
     const consumers: string[] = [];

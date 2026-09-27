@@ -56,6 +56,7 @@ export { createContextCutPointSelector } from "./compaction/context-cut-point-se
 export { createContextCompactionPlanner } from "./compaction/context-compaction-planner.js";
 export {
   createContextCompactionCoverage,
+  createContextCompactionCoverageForRange,
   prepareContextCompactionCandidates,
 } from "./compaction/context-compaction-coverage.js";
 export { createContextIncrementalCompactionResolver } from "./compaction/incremental-compaction-resolver.js";
@@ -77,9 +78,11 @@ export {
 export { createDeterministicCompactionFacts } from "./compaction/deterministic-compaction-facts.js";
 export { createDeterministicCheckpointBuilder } from "./compaction/deterministic-checkpoint-builder.js";
 export {
-  createContextCheckpointEnricher,
-  digestStructuredCheckpoint,
-} from "./compaction/checkpoint-enricher.js";
+  CONTEXT_COMPACTION_DIGEST_VERSION,
+  createContextCompactionDigestBuilder,
+} from "./compaction/context-compaction-digest.js";
+export { createContextCompactionRebuilder } from "./compaction/context-compaction-rebuilder.js";
+export { createContextCheckpointEnricher } from "./compaction/checkpoint-enricher.js";
 export {
   createContextSummarySourceSerializer,
   SUMMARY_SOURCE_POLICY,
@@ -111,6 +114,13 @@ export type {
 } from "./compaction/deterministic-compaction-facts.js";
 export type { DeterministicCheckpointBuilder } from "./compaction/deterministic-checkpoint-builder.js";
 export type { ContextCheckpointEnricher } from "./compaction/checkpoint-enricher.js";
+export type { ContextCompactionDigestBuilder } from "./compaction/context-compaction-digest.js";
+export type {
+  ContextCompactionRebuildInput,
+  ContextCompactionRebuildResult,
+  ContextCompactionRebuilder,
+  ContextCompactionRebuilderOptions,
+} from "./compaction/context-compaction-rebuilder.js";
 export type {
   ContextIncrementalCompactionInput,
   ContextIncrementalCompactionResolver,
