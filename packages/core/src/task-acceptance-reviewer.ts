@@ -6,11 +6,13 @@ import {
   type TaskAcceptanceReview,
   type TaskReviewBundle,
 } from "@caelush/verification";
-import type { AgentRun } from "@caelush/protocol";
+import { createLLMCallId, type AgentRun } from "@caelush/protocol";
 import type { AgentBudgetBlock } from "./agent-errors.js";
 import type { RunBudgetPort } from "./budget-ports.js";
 import type { VerificationTaskReviewerPort } from "./run-controller-ports.js";
 import { toAIModelRef } from "./ai-invocation-projection.js";
+
+const REVIEWER_MAX_OUTPUT_TOKENS = 8_192;
 
 /**
  * The model turn one verification review executes as.
@@ -87,63 +89,82 @@ export class TaskAcceptanceReviewer implements VerificationTaskReviewerPort {
         { role: "user" as const, content: buildTaskReviewPrompt(input.bundle) },
       ],
       toolChoice: { type: "NONE" as const },
-      settings: { maxOutputTokens: 1_024 },
+      settings: { maxOutputTokens: REVIEWER_MAX_OUTPUT_TOKENS },
     };
-    const ownerId = `verify:${input.bundle.plan.checks.find((check) => check.kind === "TASK")?.id ?? input.bundle.plan.id}`;
-    const estimatedInputTokens = this.dependencies.tokenEstimator?.estimate(request);
-    const admitted = await this.dependencies.budget.admitVerificationLLM?.({
-      run: input.run,
-      ownerId,
-      admission: {
-        ...(estimatedInputTokens === undefined ? {} : { estimatedInputTokens }),
-        configuredMaxOutputTokens: 1_024,
-      },
-    });
-    if (admitted === undefined) return errorResult(input.bundle, "BUDGET_NOT_CONFIGURED");
-    if (admitted.kind !== "ALLOWED") {
-      return { ...errorResult(input.bundle, "BUDGET_BLOCKED"), budget: admitted };
-    }
-    const effectiveRequest =
-      admitted.effectiveMaxOutputTokens === undefined
-        ? request
-        : {
-            ...request,
-            settings: { ...request.settings, maxOutputTokens: admitted.effectiveMaxOutputTokens },
-          };
-
-    let turn: AIModelTurnResult;
-    try {
-      // The review runs through the same AI subsystem an Agent turn does — same gateway, same
-      // provider registry, no second runtime generation — and it names the Run it belongs to.
-      turn = await this.dependencies.modelTurns.execute({
-        identity: reviewIdentity(input.run),
-        request: effectiveRequest,
-        signal: input.signal,
+    const taskCheckId = input.bundle.plan.checks.find((check) => check.kind === "TASK")?.id;
+    // Each review invocation is a new durable budget reservation. The retry within this invocation
+    // keeps its `:retry` suffix, while an explicit verification recovery must not reuse the owner
+    // whose reservation was already settled by the previous review.
+    const ownerId = `verify:${taskCheckId ?? input.bundle.plan.id}:${createLLMCallId()}`;
+    const maxAttempts = 2;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const attemptOwnerId = attempt === 0 ? ownerId : `${ownerId}:retry`;
+      const attemptRequest = attempt === 0 ? request : retryRequest(request);
+      const estimatedInputTokens = this.dependencies.tokenEstimator?.estimate(attemptRequest);
+      const admitted = await this.dependencies.budget.admitVerificationLLM?.({
+        run: input.run,
+        ownerId: attemptOwnerId,
+        admission: {
+          ...(estimatedInputTokens === undefined ? {} : { estimatedInputTokens }),
+          configuredMaxOutputTokens: REVIEWER_MAX_OUTPUT_TOKENS,
+        },
       });
-    } catch {
-      await this.settle(ownerId, input.run.id, undefined);
-      return errorResult(
-        input.bundle,
-        input.signal.aborted ? "RUN_ABORTED" : "REVIEWER_PROVIDER_ERROR",
-      );
+      if (admitted === undefined) return errorResult(input.bundle, "BUDGET_NOT_CONFIGURED");
+      if (admitted.kind !== "ALLOWED") {
+        return { ...errorResult(input.bundle, "BUDGET_BLOCKED"), budget: admitted };
+      }
+      const effectiveRequest =
+        admitted.effectiveMaxOutputTokens === undefined
+          ? attemptRequest
+          : {
+              ...attemptRequest,
+              settings: {
+                ...attemptRequest.settings,
+                maxOutputTokens: admitted.effectiveMaxOutputTokens,
+              },
+            };
+
+      let turn: AIModelTurnResult;
+      try {
+        // The review runs through the same AI subsystem an Agent turn does — same gateway, same
+        // provider registry, no second runtime generation — and it names the Run it belongs to.
+        turn = await this.dependencies.modelTurns.execute({
+          identity: reviewIdentity(input.run),
+          request: effectiveRequest,
+          signal: input.signal,
+        });
+      } catch {
+        await this.settle(attemptOwnerId, input.run.id, undefined);
+        if (input.signal.aborted) return errorResult(input.bundle, "RUN_ABORTED");
+        if (attempt + 1 < maxAttempts) continue;
+        return errorResult(input.bundle, "REVIEWER_PROVIDER_ERROR");
+      }
+      const settlement = await this.settle(attemptOwnerId, input.run.id, turn.usage);
+      if (settlement?.kind === "EXCEEDED") {
+        return { ...errorResult(input.bundle, "BUDGET_EXCEEDED"), budget: settlement };
+      }
+      if (turn.toolCalls.length > 0) {
+        if (attempt + 1 < maxAttempts) continue;
+        return errorResult(input.bundle, "REVIEWER_TOOLS_FORBIDDEN");
+      }
+      if (turn.finishReason !== "STOP") {
+        if (attempt + 1 < maxAttempts) continue;
+        return errorResult(input.bundle, "REVIEWER_OUTPUT_INVALID");
+      }
+      try {
+        const review = parseTaskAcceptanceReview(turn.text);
+        return {
+          status: review.verdict === "PASS" ? "PASSED" : "FAILED",
+          review,
+          reviewInputHash: input.bundle.reviewInputHash,
+          ...(turn.usage === undefined ? {} : { usage: turn.usage }),
+        };
+      } catch {
+        if (attempt + 1 < maxAttempts) continue;
+        return errorResult(input.bundle, "REVIEWER_RESPONSE_INVALID");
+      }
     }
-    const settlement = await this.settle(ownerId, input.run.id, turn.usage);
-    if (settlement?.kind === "EXCEEDED") {
-      return { ...errorResult(input.bundle, "BUDGET_EXCEEDED"), budget: settlement };
-    }
-    if (turn.toolCalls.length > 0) return errorResult(input.bundle, "REVIEWER_TOOLS_FORBIDDEN");
-    if (turn.finishReason !== "STOP") return errorResult(input.bundle, "REVIEWER_OUTPUT_INVALID");
-    try {
-      const review = parseTaskAcceptanceReview(turn.text);
-      return {
-        status: review.verdict === "PASS" ? "PASSED" : "FAILED",
-        review,
-        reviewInputHash: input.bundle.reviewInputHash,
-        ...(turn.usage === undefined ? {} : { usage: turn.usage }),
-      };
-    } catch {
-      return errorResult(input.bundle, "REVIEWER_RESPONSE_INVALID");
-    }
+    return errorResult(input.bundle, "REVIEWER_RESPONSE_INVALID");
   }
 
   private async settle(ownerId: string, runId: AgentRun["id"], usage: AIModelTurnResult["usage"]) {
@@ -155,6 +176,20 @@ export class TaskAcceptanceReviewer implements VerificationTaskReviewerPort {
     };
     return this.dependencies.budget.settleVerificationLLM?.(settlementInput);
   }
+}
+
+function retryRequest(request: AIModelRequest): AIModelRequest {
+  return {
+    ...request,
+    messages: [
+      {
+        role: "system" as const,
+        content:
+          "The previous reviewer response was not protocol-valid. Return one single JSON object with no markdown fences or surrounding prose.",
+      },
+      ...request.messages,
+    ],
+  };
 }
 
 /**

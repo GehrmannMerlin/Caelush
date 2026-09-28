@@ -39,6 +39,55 @@ describe("shared Timeline reducer", () => {
     expect(next.activeProcesses).toEqual([]);
   });
 
+  it("preserves the safe plan status and detail in the shared projection", () => {
+    const next = reduceTimelineEvent(
+      createInitialTimelineState(runId),
+      eventOf("plan.updated", 1, {
+        plan: [
+          {
+            id: "plan_item_00000000-0000-7000-8000-000000000001",
+            title: "Inspect",
+            status: "COMPLETED",
+          },
+          {
+            id: "plan_item_00000000-0000-7000-8000-000000000002",
+            title: "Repair",
+            detail: "Apply the bounded fix",
+            status: "IN_PROGRESS",
+          },
+        ],
+      }),
+    );
+
+    expect(next.currentPlan).toEqual([
+      expect.objectContaining({ title: "Inspect", status: "COMPLETED" }),
+      expect.objectContaining({
+        title: "Repair",
+        detail: "Apply the bounded fix",
+        status: "IN_PROGRESS",
+      }),
+    ]);
+    expect(next.currentPlan[0]).not.toHaveProperty("text");
+  });
+
+  it("projects bounded Resource Guard facts without raw event data", () => {
+    const next = reduceTimelineEvent(
+      createInitialTimelineState(runId),
+      eventOf("resource.guard", 1, {
+        reason: "NO_PROGRESS",
+        replanCount: 2,
+        requestedToolCalls: 17,
+      }),
+    );
+
+    expect(next.resourceGuard).toEqual({
+      reason: "NO_PROGRESS",
+      replanCount: 2,
+      requestedToolCalls: 17,
+    });
+    expect(JSON.stringify(next.resourceGuard)).not.toContain("payload");
+  });
+
   it("counts completed verification outcomes and replaces a check without double-counting", () => {
     const planId = createVerificationPlanId();
     let state = createInitialTimelineState(runId, { limits: { maxActiveEntries: 1 } });

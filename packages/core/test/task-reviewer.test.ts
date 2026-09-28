@@ -122,6 +122,38 @@ describe("TaskAcceptanceReviewer", () => {
     });
   });
 
+  it("reserves reasoning headroom for protocol-valid reviewer output", async () => {
+    const { run, bundle } = fixture();
+    const requests: unknown[] = [];
+    const configuredOutputTokens: number[] = [];
+    const reviewer = new TaskAcceptanceReviewer({
+      modelTurns: fakeModelTurnExecutor(async (request) => {
+        requests.push(request);
+        return turn('{"verdict":"PASS","summary":"The evidence supports the goal."}');
+      }),
+      budget: {
+        async admitVerificationLLM(input) {
+          configuredOutputTokens.push(input.admission.configuredMaxOutputTokens);
+          return { kind: "ALLOWED" as const };
+        },
+        async settleVerificationLLM() {
+          return { kind: "SETTLED" as const };
+        },
+      } as unknown as RunBudgetPort,
+      clock: { now: () => createTimestampMs(50) },
+    });
+
+    await reviewer.review({
+      run,
+      candidateText: "Implemented it.",
+      bundle,
+      signal: new AbortController().signal,
+    });
+
+    expect(configuredOutputTokens).toEqual([8_192]);
+    expect(requests[0]).toMatchObject({ settings: { maxOutputTokens: 8_192 } });
+  });
+
   it("fails closed for tool calls and malformed reviewer output", async () => {
     const { run, bundle } = fixture();
     const make = (response: ReturnType<typeof turn>) =>
@@ -146,5 +178,101 @@ describe("TaskAcceptanceReviewer", () => {
         signal: new AbortController().signal,
       }),
     ).resolves.toMatchObject({ status: "ERROR", errorCode: "REVIEWER_RESPONSE_INVALID" });
+  });
+
+  it("retries one protocol-invalid reviewer response before accepting a valid verdict", async () => {
+    const { run, bundle } = fixture();
+    const responses = ["not-json", '{"verdict":"PASS","summary":"Evidence matches."}'];
+    const modelTurns = fakeModelTurnExecutor(async (_request, _signal, callIndex) =>
+      turn(responses[callIndex] ?? "not-json"),
+    );
+    const budgets = budget();
+    const reviewer = new TaskAcceptanceReviewer({
+      modelTurns,
+      budget: budgets,
+      clock: { now: () => createTimestampMs(50) },
+    });
+
+    const result = await reviewer.review({
+      run,
+      candidateText: "Implemented it.",
+      bundle,
+      signal: new AbortController().signal,
+    });
+
+    expect(result.status).toBe("PASSED");
+    expect(modelTurns.callCount()).toBe(2);
+    expect(budgets.calls.filter((call) => call.startsWith("admit:")).length).toBe(2);
+    expect(budgets.calls.filter((call) => call.startsWith("settle:")).length).toBe(2);
+    expect(modelTurns.requests[1]?.messages[0]?.content).toContain("single JSON object");
+  });
+
+  it("bounds protocol retry after two invalid reviewer responses", async () => {
+    const { run, bundle } = fixture();
+    const modelTurns = fakeModelTurnExecutor(async () => turn("not-json"));
+    const reviewer = new TaskAcceptanceReviewer({
+      modelTurns,
+      budget: budget(),
+      clock: { now: () => createTimestampMs(50) },
+    });
+
+    const result = await reviewer.review({
+      run,
+      candidateText: "Implemented it.",
+      bundle,
+      signal: new AbortController().signal,
+    });
+
+    expect(result).toMatchObject({ status: "ERROR", errorCode: "REVIEWER_RESPONSE_INVALID" });
+    expect(modelTurns.callCount()).toBe(2);
+  });
+
+  it("uses a fresh durable budget owner for each review invocation", async () => {
+    const { run, bundle } = fixture();
+    const ownerIds: string[] = [];
+    const responses = ["not-json", "not-json", '{"verdict":"PASS","summary":"Evidence matches."}'];
+    const modelTurns = fakeModelTurnExecutor(async (_request, _signal, callIndex) =>
+      turn(responses[callIndex] ?? "not-json"),
+    );
+    const durableBudget = {
+      async admitVerificationLLM(
+        input: Parameters<NonNullable<RunBudgetPort["admitVerificationLLM"]>>[0],
+      ) {
+        if (ownerIds.includes(input.ownerId))
+          throw new Error("duplicate verification budget owner");
+        ownerIds.push(input.ownerId);
+        return { kind: "ALLOWED" as const };
+      },
+      async settleVerificationLLM(
+        _input: Parameters<NonNullable<RunBudgetPort["settleVerificationLLM"]>>[0],
+      ) {
+        return { kind: "SETTLED" as const };
+      },
+    } as unknown as RunBudgetPort;
+    const reviewer = new TaskAcceptanceReviewer({
+      modelTurns,
+      budget: durableBudget,
+      clock: { now: () => createTimestampMs(50) },
+    });
+
+    await expect(
+      reviewer.review({
+        run,
+        candidateText: "Implemented it.",
+        bundle,
+        signal: new AbortController().signal,
+      }),
+    ).resolves.toMatchObject({ status: "ERROR", errorCode: "REVIEWER_RESPONSE_INVALID" });
+    await expect(
+      reviewer.review({
+        run,
+        candidateText: "Implemented it.",
+        bundle,
+        signal: new AbortController().signal,
+      }),
+    ).resolves.toMatchObject({ status: "PASSED" });
+
+    expect(ownerIds).toHaveLength(3);
+    expect(new Set(ownerIds).size).toBe(ownerIds.length);
   });
 });

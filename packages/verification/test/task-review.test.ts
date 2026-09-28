@@ -116,6 +116,35 @@ describe("task acceptance review", () => {
     expect(() => parseTaskAcceptanceReview("not json")).toThrow();
   });
 
+  it("canonicalizes only an empty PASS repair list before strict schema validation", () => {
+    expect(
+      parseTaskAcceptanceReview(
+        '{"verdict":"PASS","summary":"Evidence matches.","repairInstructions":[]}',
+      ),
+    ).toEqual({ verdict: "PASS", summary: "Evidence matches." });
+    expect(() =>
+      parseTaskAcceptanceReview(
+        '{"verdict":"PASS","summary":"Evidence matches.","repairInstructions":["change it"]}',
+      ),
+    ).toThrow();
+  });
+
+  it("accepts one fenced JSON transport wrapper without accepting surrounding prose", () => {
+    expect(
+      parseTaskAcceptanceReview('```json\n{"verdict":"PASS","summary":"Evidence matches."}\n```'),
+    ).toEqual({ verdict: "PASS", summary: "Evidence matches." });
+    expect(() =>
+      parseTaskAcceptanceReview(
+        'Reviewer says:\n```json\n{"verdict":"PASS","summary":"Evidence matches."}\n```',
+      ),
+    ).toThrow();
+    expect(() =>
+      parseTaskAcceptanceReview(
+        '```json\n{"verdict":"PASS","summary":"Evidence matches."}\n```\nAdditional text',
+      ),
+    ).toThrow();
+  });
+
   it("rejects self-certifying task evidence and critical evidence overflow", () => {
     expect(() =>
       buildTaskReviewBundle({

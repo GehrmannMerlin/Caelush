@@ -503,8 +503,8 @@ describe("default Tool set fidelity", () => {
       ["read_file", "LOW", ["FS_READ"], { runtimeKinds: ["local"] }],
       ["list_directory", "LOW", ["FS_READ"], { runtimeKinds: ["local"] }],
       ["find_files", "LOW", ["FS_READ"], { runtimeKinds: ["local"] }],
-      // `search_text` is the one default Tool that declares an external executable it needs.
-      ["search_text", "LOW", ["FS_READ"], { runtimeKinds: ["local"], executables: ["rg"] }],
+      // `search_text` has a bounded Runtime fallback and does not require an external executable.
+      ["search_text", "LOW", ["FS_READ"], { runtimeKinds: ["local"] }],
       ["apply_patch", "HIGH", ["FS_WRITE", "FS_DELETE"], { runtimeKinds: ["local"] }],
       ["exec_command", "CRITICAL", ["SHELL_EXEC", "PROCESS_START"], { runtimeKinds: ["local"] }],
       [

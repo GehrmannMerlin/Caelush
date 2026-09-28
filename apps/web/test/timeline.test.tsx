@@ -73,7 +73,11 @@ describe("Timeline", () => {
     const sessionId = createSessionId();
     const stepId = createStepId();
     const invocationId = "tool-output-sentinel";
-    const event = (type: PublicRunEvent["type"], sequence: number, payload: unknown): PublicRunEvent =>
+    const event = (
+      type: PublicRunEvent["type"],
+      sequence: number,
+      payload: unknown,
+    ): PublicRunEvent =>
       ({
         eventId: createEventId(),
         schemaVersion: 1,
@@ -121,7 +125,11 @@ describe("Timeline", () => {
     const planId = "plan-sentinel";
     const checkId = "check-sentinel";
     const evidenceId = "evidence-sentinel";
-    const event = (type: PublicRunEvent["type"], sequence: number, payload: unknown): PublicRunEvent =>
+    const event = (
+      type: PublicRunEvent["type"],
+      sequence: number,
+      payload: unknown,
+    ): PublicRunEvent =>
       ({
         eventId: createEventId(),
         schemaVersion: 1,
@@ -188,6 +196,46 @@ describe("Timeline", () => {
     expect(html).not.toContain("evidenceIds");
     expect(html).not.toContain('"payload"');
   });
+
+  it("renders the shared plan, retry, and Resource Guard projection", () => {
+    const timeline = createInitialTimelineState();
+    const html = renderToStaticMarkup(
+      <Timeline
+        timeline={{
+          ...timeline,
+          currentPlan: [
+            { id: "plan-1", title: "扫描项目结构", status: "COMPLETED" },
+            { id: "plan-2", title: "检查调用链", status: "IN_PROGRESS" },
+            { id: "plan-3", title: "执行验证", status: "PENDING" },
+          ],
+          retries: [
+            {
+              id: "retry-2",
+              attempt: 2,
+              text: "Retry 2",
+              started: true,
+              status: "RUNNING",
+            },
+          ],
+          resourceGuard: {
+            reason: "NO_PROGRESS",
+            replanCount: 2,
+            requestedToolCalls: 17,
+          },
+        }}
+      />,
+    );
+
+    expect(html).toContain("任务计划");
+    expect(html).toContain("扫描项目结构");
+    expect(html).toContain("检查调用链");
+    expect(html).toContain("重试活动");
+    expect(html).toContain("第 2 次");
+    expect(html).toContain("任务需要资源决策");
+    expect(html).toContain("已重新规划：2 次");
+    expect(html).toContain("本阶段已请求工具：17 次");
+    expect(html).not.toContain("NO_PROGRESS");
+  });
 });
 
 function timelineFromVisibleEvents(): TimelineState {
@@ -199,7 +247,11 @@ function timelineFromVisibleEvents(): TimelineState {
   const observationId = createObservationId();
   const planId = createVerificationPlanId();
   const checkId = createVerificationCheckId();
-  const event = (type: PublicRunEvent["type"], sequence: number, payload: unknown): PublicRunEvent =>
+  const event = (
+    type: PublicRunEvent["type"],
+    sequence: number,
+    payload: unknown,
+  ): PublicRunEvent =>
     ({
       eventId: createEventId(),
       schemaVersion: 1,

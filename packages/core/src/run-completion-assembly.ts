@@ -205,6 +205,9 @@ export function createCodingCompletionAssembly(
         ...(dependencies.evidenceSanitizer === undefined
           ? {}
           : { evidenceSanitizer: dependencies.evidenceSanitizer }),
+        ...(dependencies.toolObservations === undefined
+          ? {}
+          : { toolObservations: dependencies.toolObservations }),
         ...(dependencies.resolverRegistry === undefined
           ? {}
           : { resolverRegistry: dependencies.resolverRegistry }),

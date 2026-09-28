@@ -2,6 +2,7 @@ import type { PublicRunEvent, RunStatus } from "@caelush/protocol";
 import type {
   TimelineEntry,
   TimelineEntryStatus,
+  TimelineResourceGuard,
   TimelineRetry,
   TimelineState,
   TimelineVerificationCheck,
@@ -74,8 +75,10 @@ export function flushTimelineForTerminal(
       text: `Verification interrupted by ${status}.`,
       status: "INTERRUPTED",
     });
+  const withoutResourceGuard = { ...next };
+  delete withoutResourceGuard.resourceGuard;
   return {
-    ...next,
+    ...withoutResourceGuard,
     settled: next.settled.map((entry) =>
       entry.status === "RUNNING" ? { ...entry, status: "INTERRUPTED" } : entry,
     ),
@@ -376,15 +379,19 @@ function reduceRegisteredEvent(state: TimelineState, event: PublicRunEvent): Tim
         text: `Budget exceeded: ${event.payload.dimension}.`,
         status: "FAILED",
       });
+    case "resource.guard":
+      return {
+        ...state,
+        resourceGuard: projectResourceGuard(event.payload),
+      };
     case "plan.updated":
       return {
         ...state,
         currentPlan: event.payload.plan.slice(0, state.limits.maxActiveEntries).map((item) => ({
           id: item.id,
-          kind: "SYSTEM",
           title: bound(item.title, state),
-          text: item.status,
-          status: "PENDING",
+          ...(item.detail === undefined ? {} : { detail: bound(item.detail, state) }),
+          status: item.status,
         })),
       };
     case "conversation.message.committed":
@@ -392,6 +399,18 @@ function reduceRegisteredEvent(state: TimelineState, event: PublicRunEvent): Tim
     default:
       return state;
   }
+}
+
+function projectResourceGuard(payload: {
+  readonly reason: "NO_PROGRESS";
+  readonly replanCount: number;
+  readonly requestedToolCalls: number;
+}): TimelineResourceGuard {
+  return {
+    reason: payload.reason,
+    replanCount: Math.min(100, Math.max(0, payload.replanCount)),
+    requestedToolCalls: Math.min(128, Math.max(1, payload.requestedToolCalls)),
+  };
 }
 
 function registerEvent(

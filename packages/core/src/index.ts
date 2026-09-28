@@ -358,6 +358,7 @@ export type {
 export type {
   CompletionTaskReviewerPort,
   CompletionVerificationPlannerPort,
+  CompletionToolObservationPort,
   RunCompletionGateDependencies,
 } from "./run-completion-context.js";
 export { createCodingCompletionAssembly } from "./run-completion-assembly.js";

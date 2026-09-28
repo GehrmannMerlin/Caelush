@@ -2,11 +2,17 @@ import { createElement, useCallback, useEffect, useRef, useState, type ReactElem
 import type {
   TimelineEntry,
   TimelineEntryStatus,
+  TimelineResourceGuard,
+  TimelineRetry,
   TimelineState,
   TimelineVerificationCheck,
   LiveActivityState,
 } from "@caelush/client";
-import { isNearTimelineBottom, timelineActivityDelta } from "./timeline-scroll.js";
+import {
+  isNearTimelineBottom,
+  timelineActivityCount,
+  timelineActivityDelta,
+} from "./timeline-scroll.js";
 
 const WEB_TOOL_LABELS: Readonly<Record<string, string>> = Object.freeze({
   read_file: "读取文件",
@@ -35,11 +41,7 @@ export function Timeline(props: TimelineProps): ReactElement {
   ];
   const settled = props.timeline.settled.filter((entry) => entry.title !== "Tool output");
   const liveActivities = props.liveActivity?.activities ?? [];
-  const activityCount =
-    active.length +
-    settled.length +
-    liveActivities.length +
-    props.timeline.verification.reduce((count, group) => count + group.checks.length, 0);
+  const activityCount = timelineActivityCount(props.timeline, props.liveActivity);
   const regionRef = useRef<HTMLDivElement>(null);
   const seenActivityCount = useRef(activityCount);
   const [following, setFollowing] = useState(true);
@@ -108,12 +110,21 @@ export function Timeline(props: TimelineProps): ReactElement {
           tabIndex: 0,
           "aria-label": "任务活动流",
         },
-        active.length === 0 &&
-          settled.length === 0 &&
-          liveActivities.length === 0 &&
-          props.timeline.verification.length === 0
+        activityCount === 0
           ? createElement("p", { className: "timeline-empty" }, "等待任务活动。")
           : null,
+        props.timeline.currentPlan.length === 0
+          ? null
+          : createElement(
+              "section",
+              { className: "timeline-plan", "aria-label": "任务计划" },
+              createElement("h3", null, "任务计划"),
+              createElement(
+                "ol",
+                { className: "timeline-plan-list" },
+                props.timeline.currentPlan.map(renderPlanItem),
+              ),
+            ),
         active.length === 0
           ? null
           : createElement(
@@ -128,6 +139,21 @@ export function Timeline(props: TimelineProps): ReactElement {
               { className: "timeline-list", "aria-label": "已完成的活动" },
               settled.map((entry) => renderEntry(entry, "settled")),
             ),
+        props.timeline.retries.length === 0
+          ? null
+          : createElement(
+              "section",
+              { className: "timeline-retries", "aria-label": "重试活动" },
+              createElement("h3", null, "重试活动"),
+              createElement(
+                "ul",
+                { className: "timeline-retry-list" },
+                props.timeline.retries.map(renderRetry),
+              ),
+            ),
+        props.timeline.resourceGuard === undefined
+          ? null
+          : renderResourceGuard(props.timeline.resourceGuard),
         liveActivities.length === 0
           ? null
           : createElement(
@@ -191,6 +217,86 @@ export function Timeline(props: TimelineProps): ReactElement {
           ),
     ),
   );
+}
+
+function renderPlanItem(item: TimelineState["currentPlan"][number]): ReactElement {
+  return createElement(
+    "li",
+    {
+      className: `timeline-plan-item timeline-plan-item--${item.status.toLowerCase()}`,
+      key: item.id,
+    },
+    createElement(
+      "span",
+      { className: "timeline-plan-mark", "aria-hidden": "true" },
+      planMark(item.status),
+    ),
+    createElement(
+      "span",
+      { className: "timeline-plan-title" },
+      item.title,
+      createElement(
+        "span",
+        { className: "timeline-plan-status" },
+        ` · ${planStatusLabel(item.status)}`,
+      ),
+    ),
+  );
+}
+
+function renderRetry(retry: TimelineRetry): ReactElement {
+  return createElement(
+    "li",
+    { className: `timeline-retry timeline-retry--${retry.status.toLowerCase()}`, key: retry.id },
+    createElement("span", { className: "timeline-entry-mark", "aria-hidden": "true" }, "●"),
+    createElement(
+      "span",
+      { className: "timeline-retry-text" },
+      retry.started ? "正在重试模型调用" : "等待重试",
+      ` · 第 ${retry.attempt} 次`,
+    ),
+  );
+}
+
+function renderResourceGuard(guard: TimelineResourceGuard): ReactElement {
+  return createElement(
+    "section",
+    { className: "timeline-resource-guard", "aria-label": "资源决策" },
+    createElement("h3", null, "任务需要资源决策"),
+    createElement("p", null, "原因：连续低进展"),
+    createElement("p", null, `已重新规划：${guard.replanCount} 次`),
+    createElement("p", null, `本阶段已请求工具：${guard.requestedToolCalls} 次`),
+  );
+}
+
+function planMark(status: TimelineState["currentPlan"][number]["status"]): string {
+  switch (status) {
+    case "COMPLETED":
+      return "✓";
+    case "IN_PROGRESS":
+      return "●";
+    case "FAILED":
+      return "!";
+    case "SKIPPED":
+      return "–";
+    case "PENDING":
+      return "○";
+  }
+}
+
+function planStatusLabel(status: TimelineState["currentPlan"][number]["status"]): string {
+  switch (status) {
+    case "COMPLETED":
+      return "已完成";
+    case "IN_PROGRESS":
+      return "进行中";
+    case "FAILED":
+      return "失败";
+    case "SKIPPED":
+      return "已跳过";
+    case "PENDING":
+      return "待执行";
+  }
 }
 
 function liveActivityLabel(kind: LiveActivityState["activities"][number]["kind"]): string {

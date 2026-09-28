@@ -101,6 +101,86 @@ describe("workspace verification", () => {
     expect(evidence.details).toMatchObject({ checkedFileCount: 4, inspectionComplete: true });
   });
 
+  it("projects bounded changed-file content only when it matches the authoritative fingerprint", () => {
+    const result = verifyWorkspaceInspection({
+      changedFiles: [
+        { path: "src/z.ts", changeType: "CREATED" },
+        { path: "src/a.ts", changeType: "MODIFIED" },
+      ],
+      facts: {
+        inspectionComplete: true,
+        paths: [
+          {
+            path: "src/z.ts",
+            kind: "FILE",
+            fingerprint: { kind: "FILE", sizeBytes: 5, sha256: "z".repeat(64) },
+          },
+          {
+            path: "src/a.ts",
+            kind: "FILE",
+            fingerprint: { kind: "FILE", sizeBytes: 5, sha256: "a".repeat(64) },
+          },
+        ],
+        artifactEvidence: [
+          {
+            path: "unattributed.txt",
+            kind: "TEXT",
+            sha256: "u".repeat(64),
+            sizeBytes: 1,
+            content: "must not be projected",
+            truncated: false,
+          },
+          {
+            path: "src/z.ts",
+            kind: "TEXT",
+            sha256: "z".repeat(64),
+            sizeBytes: 5,
+            content: "z-content",
+            truncated: false,
+          },
+          {
+            path: "src/a.ts",
+            kind: "TEXT",
+            sha256: "wrong".padEnd(64, "x"),
+            sizeBytes: 5,
+            content: "unbound-content",
+            truncated: false,
+          },
+        ],
+      },
+    });
+    expect(result.artifactEvidence).toEqual([
+      {
+        path: "src/a.ts",
+        kind: "UNAVAILABLE",
+        sha256: "a".repeat(64),
+        sizeBytes: 5,
+        truncated: false,
+      },
+      {
+        path: "src/z.ts",
+        kind: "TEXT",
+        sha256: "z".repeat(64),
+        sizeBytes: 5,
+        content: "z-content",
+        truncated: false,
+      },
+    ]);
+    const evidence = createWorkspaceEvidence({
+      id: createVerificationEvidenceId(),
+      planId: createVerificationPlanId(),
+      checkId: createVerificationCheckId(),
+      capturedAt: 1_700_000_000_000 as never,
+      result,
+    });
+    expect(evidence.details).toMatchObject({
+      artifactEvidence: result.artifactEvidence,
+      workspaceFreshnessHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
+    expect(JSON.stringify(evidence)).not.toContain("must not be projected");
+    expect(JSON.stringify(evidence)).not.toContain("unbound-content");
+  });
+
   it("records a freshness hash over raw-byte fingerprints and detects newline changes", () => {
     const first = verifyWorkspaceInspection({
       changedFiles: [{ path: "src/a.ts", changeType: "MODIFIED" }],

@@ -2,6 +2,8 @@ import fastGlob from "fast-glob";
 import { PROJECT_HARD_EXCLUDED_GLOBS } from "@caelush/shared";
 import { RuntimeDiscoveryError } from "../runtime-errors.js";
 
+export const RUNTIME_PROJECT_HARD_EXCLUDED_GLOBS = PROJECT_HARD_EXCLUDED_GLOBS;
+
 export interface RuntimeFileDiscoveryRequest {
   readonly cwd: string;
   readonly pattern: string;

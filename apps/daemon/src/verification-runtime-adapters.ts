@@ -1,15 +1,23 @@
 import {
+  RuntimeBinaryFileError,
   RuntimeBoundaryError,
   RuntimePathNotFoundError,
   RuntimeGitError,
   type RuntimeWorkspaceScope,
 } from "@caelush/runtime";
+import { classifySensitivePath, verificationEvidenceSanitizer } from "@caelush/security";
 import type {
   VerificationGitPort,
   VerificationGitStatus,
+  WorkspaceArtifactEvidence,
+  WorkspaceContentFingerprint,
   WorkspaceInspectionFacts,
   WorkspacePathObservation,
   WorkspaceVerificationPort,
+} from "@caelush/verification";
+import {
+  MAX_WORKSPACE_ARTIFACT_FILE_BYTES,
+  MAX_WORKSPACE_ARTIFACT_TOTAL_BYTES,
 } from "@caelush/verification";
 
 export function createRuntimeWorkspaceVerificationPort(
@@ -19,14 +27,32 @@ export function createRuntimeWorkspaceVerificationPort(
   return {
     async inspect(input) {
       const paths = new Map<string, WorkspacePathObservation>();
-      for (const changedFile of input.changedFiles) {
+      const artifacts: WorkspaceArtifactEvidence[] = [];
+      let artifactContentBytes = 0;
+      for (const changedFile of [...input.changedFiles].sort(compareChangedFiles)) {
         if (input.signal?.aborted) throw new Error("workspace inspection aborted");
         try {
           const resolved = await scope.pathResolver.resolveExisting(changedFile.path);
-          const fingerprint =
+          let fingerprint =
             scope.filesystem === undefined
               ? undefined
               : await scope.filesystem.fingerprint(resolved.absolutePath);
+          if (
+            scope.filesystem !== undefined &&
+            resolved.kind === "FILE" &&
+            fingerprint?.kind === "FILE"
+          ) {
+            const artifact = await inspectArtifact({
+              path: changedFile.path,
+              absolutePath: resolved.absolutePath,
+              fingerprint,
+              filesystem: scope.filesystem,
+              contentBytes: artifactContentBytes,
+            });
+            artifacts.push(artifact.evidence);
+            fingerprint = artifact.fingerprint;
+            artifactContentBytes += artifact.contentBytes;
+          }
           paths.set(changedFile.path, {
             path: changedFile.path,
             kind: resolved.kind,
@@ -34,7 +60,13 @@ export function createRuntimeWorkspaceVerificationPort(
           });
         } catch (error) {
           if (error instanceof RuntimePathNotFoundError) {
-            paths.set(changedFile.path, { path: changedFile.path, kind: "MISSING" });
+            paths.set(changedFile.path, {
+              path: changedFile.path,
+              kind: "MISSING",
+              ...(changedFile.changeType === "DELETED"
+                ? { fingerprint: { kind: "MISSING" as const } }
+                : {}),
+            });
           } else if (error instanceof RuntimeBoundaryError) {
             paths.set(changedFile.path, { path: changedFile.path, kind: "OUTSIDE" });
           } else {
@@ -45,10 +77,119 @@ export function createRuntimeWorkspaceVerificationPort(
       const facts: WorkspaceInspectionFacts = {
         inspectionComplete: true,
         paths: [...paths.values()].sort((left, right) => left.path.localeCompare(right.path)),
+        ...(artifacts.length === 0
+          ? {}
+          : {
+              artifactEvidence: artifacts.sort((left, right) =>
+                left.path.localeCompare(right.path),
+              ),
+            }),
       };
       return facts;
     },
   };
+}
+
+async function inspectArtifact(input: {
+  readonly path: string;
+  readonly absolutePath: string;
+  readonly fingerprint: WorkspaceContentFingerprint;
+  readonly filesystem: RuntimeWorkspaceScope["filesystem"];
+  readonly contentBytes: number;
+}): Promise<{
+  readonly evidence: WorkspaceArtifactEvidence;
+  readonly fingerprint: WorkspaceContentFingerprint;
+  readonly contentBytes: number;
+}> {
+  const metadata = {
+    path: input.path,
+    ...(input.fingerprint.sha256 === undefined ? {} : { sha256: input.fingerprint.sha256 }),
+    ...(input.fingerprint.sizeBytes === undefined
+      ? {}
+      : { sizeBytes: input.fingerprint.sizeBytes }),
+  };
+  if (classifySensitivePath(input.path) !== undefined) {
+    return {
+      evidence: { ...metadata, kind: "SENSITIVE", truncated: false },
+      fingerprint: input.fingerprint,
+      contentBytes: 0,
+    };
+  }
+  if (input.contentBytes >= MAX_WORKSPACE_ARTIFACT_TOTAL_BYTES) {
+    return {
+      evidence: { ...metadata, kind: "UNAVAILABLE", truncated: true },
+      fingerprint: input.fingerprint,
+      contentBytes: 0,
+    };
+  }
+  try {
+    const read = await input.filesystem.readTextFile(input.absolutePath, {
+      offset: 0,
+      limit: 256,
+      maxBytes: MAX_WORKSPACE_ARTIFACT_FILE_BYTES,
+    });
+    const refreshed = await input.filesystem.fingerprint(input.absolutePath);
+    if (!sameFingerprint(input.fingerprint, refreshed)) {
+      return {
+        evidence: {
+          path: input.path,
+          ...(refreshed.sha256 === undefined ? {} : { sha256: refreshed.sha256 }),
+          ...(refreshed.sizeBytes === undefined ? {} : { sizeBytes: refreshed.sizeBytes }),
+          kind: "UNAVAILABLE",
+          truncated: true,
+        },
+        fingerprint: refreshed,
+        contentBytes: 0,
+      };
+    }
+    const redacted = verificationEvidenceSanitizer.redactText(read.lines.join("\n"));
+    const bounded = verificationEvidenceSanitizer.boundText(
+      redacted,
+      Math.min(
+        MAX_WORKSPACE_ARTIFACT_FILE_BYTES,
+        MAX_WORKSPACE_ARTIFACT_TOTAL_BYTES - input.contentBytes,
+      ),
+    );
+    return {
+      evidence: {
+        ...metadata,
+        kind: "TEXT",
+        content: bounded.text,
+        truncated: read.truncated || bounded.truncated,
+      },
+      fingerprint: refreshed,
+      contentBytes: Buffer.byteLength(bounded.text, "utf8"),
+    };
+  } catch (error) {
+    if (error instanceof RuntimeBinaryFileError) {
+      return {
+        evidence: { ...metadata, kind: "BINARY", truncated: false },
+        fingerprint: input.fingerprint,
+        contentBytes: 0,
+      };
+    }
+    return {
+      evidence: { ...metadata, kind: "UNAVAILABLE", truncated: false },
+      fingerprint: input.fingerprint,
+      contentBytes: 0,
+    };
+  }
+}
+
+function sameFingerprint(
+  left: WorkspaceContentFingerprint,
+  right: WorkspaceContentFingerprint,
+): boolean {
+  return (
+    left.kind === right.kind && left.sizeBytes === right.sizeBytes && left.sha256 === right.sha256
+  );
+}
+
+function compareChangedFiles(
+  left: { readonly path: string; readonly changeType: string },
+  right: { readonly path: string; readonly changeType: string },
+): number {
+  return left.path.localeCompare(right.path) || left.changeType.localeCompare(right.changeType);
 }
 
 export function createRuntimeGitVerificationPort(

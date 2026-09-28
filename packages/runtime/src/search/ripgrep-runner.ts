@@ -11,6 +11,7 @@ import type {
   RuntimeTextSearchRequest,
   RuntimeTextSearchResult,
 } from "./text-search.js";
+import { LocalTextSearchFallback } from "./text-search-fallback.js";
 import process from "node:process";
 import { createStructuredHelperEnvironment } from "../exec/environment-policy.js";
 
@@ -18,12 +19,25 @@ export const RIPGREP_EXECUTABLE = "rg";
 export const MAX_RG_STDOUT_BYTES = 1024 * 1024;
 export const MAX_RG_STDERR_BYTES = 16 * 1024;
 
+export interface LocalRipgrepRunnerOptions {
+  readonly spawn?: typeof spawn;
+  readonly fallback?: RuntimeTextSearch;
+}
+
 function boundedText(chunks: Buffer[], size: number): { text: string; exceeded: boolean } {
   const value = Buffer.concat(chunks);
   return { text: value.subarray(0, size).toString("utf8"), exceeded: value.byteLength > size };
 }
 
 export class LocalRipgrepRunner implements RuntimeTextSearch {
+  private readonly spawnProcess: typeof spawn;
+  private readonly fallback: RuntimeTextSearch;
+
+  constructor(options: LocalRipgrepRunnerOptions = {}) {
+    this.spawnProcess = options.spawn ?? spawn;
+    this.fallback = options.fallback ?? new LocalTextSearchFallback();
+  }
+
   async search(request: RuntimeTextSearchRequest): Promise<RuntimeTextSearchResult> {
     const args = ["--no-config", "--json", "--line-number", "--color=never"];
     for (const exclusion of PROJECT_HARD_EXCLUDED_GLOBS) args.push("--glob", `!${exclusion}`);
@@ -33,20 +47,33 @@ export class LocalRipgrepRunner implements RuntimeTextSearch {
     return new Promise((resolve, reject) => {
       let child;
       try {
-        child = spawn(RIPGREP_EXECUTABLE, args, {
+        child = this.spawnProcess(RIPGREP_EXECUTABLE, args, {
           cwd: request.cwd,
           shell: false,
           env: createStructuredHelperEnvironment(process.env, process.platform),
           stdio: ["ignore", "pipe", "pipe"],
         });
       } catch (error) {
-        reject(new RuntimeSearchUnavailableError("ripgrep could not be started", { cause: error }));
+        if (isMissingExecutable(error)) {
+          void this.fallback.search(request).then(resolve, reject);
+        } else {
+          reject(
+            new RuntimeSearchUnavailableError("ripgrep could not be started", { cause: error }),
+          );
+        }
         return;
       }
       const stdout: Buffer[] = [];
       const stderr: Buffer[] = [];
       const onAbort = () => child.kill();
       request.signal?.addEventListener("abort", onAbort, { once: true });
+      let fallbackStarted = false;
+      const fallbackToLocalSearch = () => {
+        if (fallbackStarted) return;
+        fallbackStarted = true;
+        request.signal?.removeEventListener("abort", onAbort);
+        void this.fallback.search(request).then(resolve, reject);
+      };
       let stdoutBytes = 0;
       let stderrBytes = 0;
       let capped = false;
@@ -63,11 +90,13 @@ export class LocalRipgrepRunner implements RuntimeTextSearch {
         if (stderrBytes <= MAX_RG_STDERR_BYTES) stderr.push(chunk);
       });
       child.once("error", (error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") reject(new RuntimeSearchUnavailableError());
-        else reject(new RuntimeSearchError("ripgrep failed to start", { cause: error }));
+        if (isMissingExecutable(error)) {
+          fallbackToLocalSearch();
+        } else reject(new RuntimeSearchError("ripgrep failed to start", { cause: error }));
       });
       child.once("close", (code: number | null) => {
         request.signal?.removeEventListener("abort", onAbort);
+        if (fallbackStarted) return;
         if (request.signal?.aborted) {
           reject(new RuntimeSearchError("ripgrep was cancelled"));
           return;
@@ -106,4 +135,8 @@ export class LocalRipgrepRunner implements RuntimeTextSearch {
       });
     });
   }
+}
+
+function isMissingExecutable(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }

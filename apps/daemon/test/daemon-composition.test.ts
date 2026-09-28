@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
@@ -19,6 +19,12 @@ afterEach(async () => {
 });
 
 describe("daemon production composition", () => {
+  it("does not enqueue memory extraction jobs without a production extractor", async () => {
+    const source = await readFile(new URL("../src/daemon-composition.ts", import.meta.url), "utf8");
+
+    expect(source).not.toMatch(/memoryExtractionJobs[\s\S]{0,100}\.createOrGet/u);
+  });
+
   it("builds one shared runtime, tool catalog, gateway, controller, and supervisor", async () => {
     directory = await mkdtemp(join(tmpdir(), "caelush-composition-"));
     storage = await openCaelushStorage({ path: join(directory, "caelush.db") });

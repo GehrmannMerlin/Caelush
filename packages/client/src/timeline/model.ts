@@ -1,4 +1,4 @@
-import type { RunId } from "@caelush/protocol";
+import type { PlanItem, RunId } from "@caelush/protocol";
 
 export type TimelineEntryKind =
   | "USER"
@@ -92,6 +92,11 @@ export interface TimelineRetry {
   readonly reason?: string;
   readonly status: TimelineEntryStatus;
 }
+export interface TimelineResourceGuard {
+  readonly reason: "NO_PROGRESS";
+  readonly replanCount: number;
+  readonly requestedToolCalls: number;
+}
 export interface TimelineSeenEvent {
   readonly eventId: string;
   readonly sequence?: number;
@@ -131,7 +136,8 @@ export interface TimelineState {
   readonly activeLlm: readonly TimelineEntry[];
   readonly verification: readonly TimelineVerificationGroup[];
   readonly retries: readonly TimelineRetry[];
-  readonly currentPlan: readonly TimelineEntry[];
+  readonly currentPlan: readonly PlanItem[];
+  readonly resourceGuard?: TimelineResourceGuard;
   readonly lastDurableSequence: number;
   readonly seenEvents: readonly TimelineSeenEvent[];
   readonly verificationOutcomes: readonly TimelineVerificationOutcome[];

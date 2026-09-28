@@ -181,4 +181,61 @@ describe("atomic verification execution persistence", () => {
     expect(started.events[0]?.payload).toMatchObject({ kind: "WORKSPACE" });
     expect(await storage.verificationExecution.countPlans?.(value.runId)).toBe(1);
   });
+
+  it("allows an errored check to restart only through an explicit retry", async () => {
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    stores.push(storage);
+    const value = changePlan();
+    const session = makeSession({ id: createSessionId() });
+    const run = makeRun(session.id, { id: value.runId, status: "VERIFYING" });
+    await storage.sessions.insert(session);
+    await storage.runs.insert(run);
+    await storage.steps.insert(makeStep(run.id, { id: value.sourceStepId, status: "COMPLETED" }));
+    await storage.runStates.save(makeState(run));
+    await storage.verification.createPlan(value);
+
+    const started = await storage.verificationExecution.startCheck({
+      runId: value.runId,
+      sessionId: session.id,
+      check: { ...value.checks[0]!, status: "RUNNING", startedAt: createTimestampMs(111) },
+      discoveryEvidence: discovery(value),
+    });
+    const errored = await storage.verificationExecution.settleCheck({
+      runId: value.runId,
+      sessionId: session.id,
+      check: { ...started.check, status: "ERROR", finishedAt: createTimestampMs(121) },
+      evidence: [
+        {
+          ...discovery(value),
+          kind: "WORKSPACE" as const,
+          summary: "Workspace verification errored",
+          details: { errorCode: "REVIEWER_RESPONSE_INVALID" },
+          capturedAt: createTimestampMs(120),
+        },
+      ],
+    });
+    expect(errored.check.status).toBe("ERROR");
+
+    const { finishedAt: _finishedAt, skipReason: _skipReason, ...retryBase } = errored.check;
+    const retried = await storage.verificationExecution.startCheck({
+      runId: value.runId,
+      sessionId: session.id,
+      check: {
+        ...retryBase,
+        status: "RUNNING",
+        startedAt: createTimestampMs(131),
+      },
+      discoveryEvidence: {
+        ...discovery(value),
+        capturedAt: createTimestampMs(130),
+      },
+      retry: true,
+    });
+
+    expect(retried.check.status).toBe("RUNNING");
+    expect(retried.check.startedAt).toBe(createTimestampMs(131));
+    expect(await storage.verification.getPlan(value.id)).toMatchObject({
+      checks: [{ status: "RUNNING" }],
+    });
+  });
 });

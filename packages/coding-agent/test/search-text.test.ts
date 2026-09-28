@@ -80,7 +80,7 @@ describe("search_text target builtin", () => {
     expect(definition.security).toEqual({
       riskLevel: "LOW",
       requiredCapabilities: ["FS_READ"],
-      runtimeRequirements: { runtimeKinds: ["local"], executables: ["rg"] },
+      runtimeRequirements: { runtimeKinds: ["local"] },
     });
     expect(definition.effectProjector).toBeUndefined();
   });

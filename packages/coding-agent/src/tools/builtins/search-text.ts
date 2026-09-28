@@ -191,7 +191,7 @@ export function createSearchTextTool(
     security: {
       riskLevel: "LOW",
       requiredCapabilities: ["FS_READ"],
-      runtimeRequirements: { runtimeKinds: ["local"], executables: ["rg"] },
+      runtimeRequirements: { runtimeKinds: ["local"] },
     },
     securityFactsProjector: asOverlaySecurityFactsProjector(projectSearchTextSecurityFacts),
     promptSnippet: SEARCH_TEXT_PROMPT_SNIPPET,

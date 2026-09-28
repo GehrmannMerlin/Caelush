@@ -91,6 +91,13 @@ export {
   MAX_RG_STDOUT_BYTES,
   RIPGREP_EXECUTABLE,
 } from "./search/ripgrep-runner.js";
+export type { LocalRipgrepRunnerOptions } from "./search/ripgrep-runner.js";
+export {
+  LocalTextSearchFallback,
+  MAX_FALLBACK_SEARCH_FILES,
+  MAX_FALLBACK_SEARCH_FILE_BYTES,
+  MAX_FALLBACK_SEARCH_MATCH_CHARS,
+} from "./search/text-search-fallback.js";
 export { parseRipgrepJson } from "./search/ripgrep-parser.js";
 export * from "./exec/index.js";
 export * from "./git/index.js";

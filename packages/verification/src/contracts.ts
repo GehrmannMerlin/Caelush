@@ -11,6 +11,8 @@ import type {
   VerificationCheckStage,
   WorkspaceRef,
   FileChangeSummary,
+  ToolInvocationStatus,
+  ToolObservation,
 } from "@caelush/protocol";
 import type { VerificationProjectProfile } from "./resolver.js";
 
@@ -94,6 +96,19 @@ export interface VerificationCommandEvidenceInput {
   readonly errorCode?: string;
 }
 
+/**
+ * The small, read-only slice of a durable Agent Tool result that a task reviewer may see.
+ *
+ * Invocation arguments are intentionally absent. The host may add the canonical Tool name and
+ * terminal invocation status, but the observation projector is the only place that decides which
+ * observation fields become model-visible evidence.
+ */
+export interface VerificationToolObservationInput {
+  readonly observation: ToolObservation;
+  readonly toolName?: string;
+  readonly invocationStatus?: ToolInvocationStatus;
+}
+
 export interface VerificationCandidateInput {
   readonly checkId: VerificationCommandCandidate["checkId"];
   readonly executable: string;
@@ -145,6 +160,7 @@ export interface VerificationStartCommit {
   readonly sessionId: SessionId;
   readonly check: VerificationCheck;
   readonly discoveryEvidence: VerificationEvidence;
+  readonly retry?: boolean;
 }
 
 export interface VerificationSettlementCommit {
@@ -217,9 +233,21 @@ export interface WorkspaceContentFingerprint {
   readonly sha256?: string;
 }
 
+export type WorkspaceArtifactEvidenceKind = "TEXT" | "BINARY" | "SENSITIVE" | "UNAVAILABLE";
+
+export interface WorkspaceArtifactEvidence {
+  readonly path: string;
+  readonly kind: WorkspaceArtifactEvidenceKind;
+  readonly sha256?: string;
+  readonly sizeBytes?: number;
+  readonly content?: string;
+  readonly truncated: boolean;
+}
+
 export interface WorkspaceInspectionFacts {
   readonly inspectionComplete: boolean;
   readonly paths: readonly WorkspacePathObservation[];
+  readonly artifactEvidence?: readonly WorkspaceArtifactEvidence[];
 }
 
 export interface WorkspaceVerificationPort {
@@ -296,6 +324,7 @@ export interface VerificationStageRunnerInput {
   ) => VerificationEvidence;
   readonly now: () => number;
   readonly signal?: AbortSignal;
+  readonly retryCheckIds?: readonly VerificationCheck["id"][];
   readonly onCommittedEvents?: (events: readonly VerificationCommittedEvent[]) => void;
 }
 

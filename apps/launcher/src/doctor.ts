@@ -130,7 +130,12 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
     checks.push({
       name: executable === "git" ? "Git" : "ripgrep",
       status: available ? "PASS" : "WARN",
-      detail: available ? "available" : "not available",
+      detail:
+        available || executable === "git"
+          ? available
+            ? "available"
+            : "not available"
+          : "not available; bounded Runtime fallback active",
     });
   }
   const pty = await (options.nodePtyCheck ?? checkNodePtyLoadability)();

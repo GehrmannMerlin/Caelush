@@ -96,6 +96,18 @@ describe("doctor", () => {
     expect(result.checks.filter((check) => check.status === "FAIL").length).toBeGreaterThan(0);
   });
 
+  it("reports missing ripgrep as an optional accelerator because search has a fallback", async () => {
+    const result = await runDoctor(
+      options({ executableCheck: async (executable) => executable === "git" }),
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.checks.find((check) => check.name === "ripgrep")).toMatchObject({
+      status: "WARN",
+      detail: "not available; bounded Runtime fallback active",
+    });
+  });
+
   it("redacts credentials and query values from a configured daemon URL", async () => {
     const result = await runDoctor(
       options({

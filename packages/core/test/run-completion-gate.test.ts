@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { createTimestampMs } from "@caelush/protocol";
+import {
+  createObservationId,
+  createTimestampMs,
+  createToolInvocationId,
+  createStepId,
+} from "@caelush/protocol";
 
 import {
   classifyCompletionEffectSettlement,
@@ -582,7 +587,7 @@ describe("Phase 3E durable verification work", () => {
 });
 
 describe("Phase 3E task acceptance review", () => {
-  it("fails the Run when the reviewer cannot reach a verdict", async () => {
+  it("suspends the Run when the reviewer cannot reach a verdict", async () => {
     const harness = harness3e({
       script: () => candidateTurn("done"),
       reviewer: stubReviewer({ status: "ERROR", errorCode: "REVIEWER_TIMEOUT" }),
@@ -590,11 +595,35 @@ describe("Phase 3E task acceptance review", () => {
 
     const result = await harness.controller.start(harness.store.snapshot.run.id);
 
-    expect(result.run.status).toBe("FAILED");
+    expect(result.run.status).toBe("VERIFYING");
+    expect(harness.store.snapshot.continuation?.type).toBe("AWAITING_VERIFICATION");
     expect(harness.eventTypes()).not.toContain("run.completed");
-    // An unreviewable candidate is an errored check, not a refused one — and an errored check is
-    // never repairable, so this is terminal rather than a new attempt.
+    // An unreviewable candidate is an errored check, not a refused one. The Run remains on its
+    // explicit verification boundary so infrastructure recovery cannot be mistaken for a candidate FAIL.
     expect(harness.eventTypes()).not.toContain("verification.repair.started");
+  });
+
+  it("retries a reviewer infrastructure error on explicit recovery without rerunning workspace checks", async () => {
+    const reviewer = stubReviewer({ status: "ERROR", errorCode: "REVIEWER_RESPONSE_INVALID" });
+    const harness = harness3e({
+      script: () => candidateTurn("done"),
+      reviewer,
+      checks: WORKSPACE_AND_TASK,
+    });
+
+    const suspended = await harness.controller.start(harness.store.snapshot.run.id);
+    expect(suspended.run.status).toBe("VERIFYING");
+    expect(reviewer.bundles).toHaveLength(1);
+    expect(harness.verification.started).toHaveLength(2);
+
+    reviewer.answerWith = { status: "PASSED" };
+    const recovered = await harness.controller.recover(harness.store.snapshot.run.id);
+
+    expect(recovered.run.status).toBe("COMPLETED");
+    expect(reviewer.bundles).toHaveLength(2);
+    expect(harness.verification.started).toHaveLength(3);
+    expect(harness.verification.started[1]).toBe(harness.verification.started[2]);
+    expect(harness.workspace.inspections).toBe(2);
   });
 
   it("never lets a task review read its own verdict as evidence", async () => {
@@ -609,6 +638,46 @@ describe("Phase 3E task acceptance review", () => {
     // The only evidence the reviewer may see is the inspection row that preceded it.
     expect(bundle.evidence.map((item) => item.kind)).toEqual(["DISCOVERY"]);
     expect(bundle.plan.checks.map((check) => check.status)).toEqual(["PENDING"]);
+  });
+
+  it("includes bounded durable Agent Tool observations in the task review bundle", async () => {
+    const reviewer = stubReviewer({ status: "PASSED" });
+    const harness = harness3e({
+      script: () => candidateTurn("done"),
+      reviewer,
+      composition: "CANONICAL_ASSEMBLY",
+      toolObservations: (runId) => [
+        {
+          observation: {
+            id: createObservationId(),
+            runId,
+            stepId: createStepId(),
+            kind: "TOOL",
+            toolInvocationId: createToolInvocationId(),
+            content: "javac exit=0",
+            details: { status: "EXITED", exitCode: 0, workdir: "fixture" },
+            isError: false,
+            createdAt: createTimestampMs(1_001),
+          },
+          toolName: "exec_command",
+          invocationStatus: "COMPLETED",
+        },
+      ],
+    });
+
+    await harness.controller.start(harness.store.snapshot.run.id);
+    expect(reviewer.bundles[0]?.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "COMMAND",
+          details: expect.objectContaining({
+            source: "AGENT_TOOL_OBSERVATION",
+            toolName: "exec_command",
+            content: "javac exit=0",
+          }),
+        }),
+      ]),
+    );
   });
 });
 

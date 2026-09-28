@@ -29,6 +29,8 @@ import type {
   VerificationSettlementCommitResult,
   VerificationStartCommit,
   VerificationStartCommitResult,
+  VerificationEvidenceSanitizer,
+  VerificationToolObservationInput,
   WorkspaceInspectionFacts,
   WorkspaceVerificationPort,
 } from "@caelush/verification";
@@ -197,8 +199,10 @@ export function memoryVerificationStore(input: {
       ) {
         return { check: current, events: [] };
       }
-      if (current.status !== "PENDING") throw new Error("verification check is not pending");
-      assertVerificationCheckTransition(current, commit.check);
+      if (current.status !== "PENDING" && !(commit.retry === true && current.status === "ERROR")) {
+        throw new Error("verification check is not pending");
+      }
+      if (commit.retry !== true) assertVerificationCheckTransition(current, commit.check);
       const discovery = VerificationEvidenceSchema.parse(commit.discoveryEvidence);
       replace(plan, commit.check);
       evidence.push(discovery);
@@ -539,6 +543,9 @@ export interface Phase3EHarnessOptions {
   readonly workspace?: StubWorkspace;
   readonly git?: StubGit;
   readonly reviewer?: StubReviewer;
+  readonly toolObservations?:
+    | readonly VerificationToolObservationInput[]
+    | ((runId: RunId) => readonly VerificationToolObservationInput[]);
   readonly projectRunner?: StubProjectRunner;
   readonly repairPolicy?: VerificationRepairPolicy;
   readonly planCount?: (runId: RunId) => Promise<number>;
@@ -683,6 +690,20 @@ export function harness3e(options: Phase3EHarnessOptions): Phase3EHarness {
     workspace,
     git,
     reviewer,
+    evidenceSanitizer: {
+      redactText: (value: string) => value,
+      boundText: (value: string, maxBytes: number) => ({
+        text: value.slice(0, maxBytes),
+        omittedBytes: Math.max(0, Buffer.byteLength(value, "utf8") - maxBytes),
+        truncated: Buffer.byteLength(value, "utf8") > maxBytes,
+      }),
+    } satisfies VerificationEvidenceSanitizer,
+    toolObservations: {
+      listByRun: async (runId: RunId) =>
+        typeof options.toolObservations === "function"
+          ? options.toolObservations(runId)
+          : (options.toolObservations ?? []),
+    },
   } satisfies Parameters<typeof createCodingCompletionAssembly>[0];
 
   const canonical = options.composition === "CANONICAL_ASSEMBLY";

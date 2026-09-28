@@ -18,7 +18,10 @@ import type {
   VerificationStartCommit,
   VerificationStartCommitResult,
 } from "@caelush/verification";
-import { assertVerificationCheckTransition } from "@caelush/verification";
+import {
+  assertVerificationCheckRetry,
+  assertVerificationCheckTransition,
+} from "@caelush/verification";
 import type { CaelushDatabase } from "./database.js";
 import { encodeProtocol } from "./codec.js";
 import { StorageConflictError, StorageError, StorageNotFoundError } from "./errors.js";
@@ -52,13 +55,15 @@ export class SqliteVerificationExecutionStore implements VerificationExecutionRe
         client.exec("COMMIT");
         return { check: current, events: [] };
       }
-      if (current.status !== "PENDING") {
+      const retry = input.retry === true;
+      if (current.status !== "PENDING" && !(retry && current.status === "ERROR")) {
         throw new StorageConflictError("Verification check is not pending.");
       }
       if (input.check.status !== "RUNNING" || input.check.startedAt === undefined) {
         throw new StorageConflictError("Verification check start must transition to RUNNING.");
       }
-      assertVerificationCheckTransition(current, input.check);
+      if (retry) assertVerificationCheckRetry(current, input.check);
+      else assertVerificationCheckTransition(current, input.check);
       const discovery = VerificationEvidenceSchema.parse(input.discoveryEvidence);
       assertEvidenceBelongsTo(discovery, plan, current);
       const event = startEvent(this.eventIdFactory(), input);

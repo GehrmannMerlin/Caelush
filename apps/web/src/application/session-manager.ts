@@ -24,6 +24,7 @@ import {
   type TranscriptEntry,
   type TimelineState,
   type Timer,
+  type TimerHandle,
   type WatchRunEventsOptions,
 } from "@caelush/client";
 import type {
@@ -174,6 +175,10 @@ export class WebSessionManager {
   private readonly resolvingApprovals = new Set<ApprovalRequestId>();
   private approvalContextGeneration = 0;
   private cancelPromise: Promise<boolean> | undefined;
+  private resourceContinuePromise: Promise<boolean> | undefined;
+  private contextUsageRefreshGeneration = 0;
+  private contextUsageRefreshTimer: TimerHandle | undefined;
+  private contextUsageRefreshRunId: RunId | undefined;
   private disposed = false;
 
   constructor(
@@ -470,15 +475,29 @@ export class WebSessionManager {
     return promise;
   }
 
-  async continueResourceGuard(): Promise<boolean> {
+  continueResourceGuard(): Promise<boolean> {
+    if (this.resourceContinuePromise !== undefined) return this.resourceContinuePromise;
     const run = this.snapshot.activeRun;
-    if (this.disposed || run === undefined || run.status !== "WAITING_RESOURCE") return false;
+    if (this.disposed || run === undefined || run.status !== "WAITING_RESOURCE")
+      return Promise.resolve(false);
+    const promise = this.requestResourceContinuation(run.id);
+    this.resourceContinuePromise = promise;
+    void promise.then(() => {
+      if (this.resourceContinuePromise === promise) this.resourceContinuePromise = undefined;
+    });
+    return promise;
+  }
+
+  private async requestResourceContinuation(runId: RunId): Promise<boolean> {
     try {
-      const response = await this.options.client.continueResourceGuard(run.id);
+      const response = await this.options.client.continueResourceGuard(runId);
+      if (this.disposed || this.snapshot.activeRun?.id !== runId) return false;
       this.publishActiveRun(response.run, "ACTIVE");
       return true;
     } catch {
-      this.publish({ controlMode: "RESOURCE_GUARD", error: sessionError("RUN_REFRESH_FAILED") });
+      if (!this.disposed && this.snapshot.activeRun?.id === runId) {
+        this.publish({ controlMode: "RESOURCE_GUARD", error: sessionError("RUN_REFRESH_FAILED") });
+      }
       return false;
     }
   }
@@ -645,7 +664,7 @@ export class WebSessionManager {
     if (activeRuns.length > 1) this.publish({ controlMode: "RECOVERY_PICKER" });
     if (activeRuns.length === 1 && activeRuns[0] !== undefined) {
       await this.prepareRecoveryRun(activeRuns[0]);
-      await this.refreshContextUsage(activeRuns[0].id);
+      this.scheduleContextUsageRefresh(activeRuns[0].id);
     }
     return true;
   }
@@ -726,6 +745,7 @@ export class WebSessionManager {
           return;
         }
         this.projectApprovalEvent(event);
+        if (isContextUsageRefreshEvent(event)) this.scheduleContextUsageRefresh(active.run.id);
         if (!isLifecycleEvent(event)) continue;
         let refreshed: ClientAgentRun;
         try {
@@ -895,15 +915,42 @@ export class WebSessionManager {
           ? sessionError(lifecycle.failure)
           : undefined,
     });
-    void this.refreshContextUsage(run.id);
+    this.scheduleContextUsageRefresh(run.id);
   }
 
-  private async refreshContextUsage(runId: RunId): Promise<void> {
+  private scheduleContextUsageRefresh(runId: RunId): void {
+    if (this.options.client.getRunContextUsage === undefined || this.disposed) return;
+    if (this.contextUsageRefreshTimer !== undefined) {
+      if (this.contextUsageRefreshRunId === runId) return;
+      this.contextUsageRefreshTimer.cancel();
+      this.contextUsageRefreshTimer = undefined;
+    }
+    const generation = ++this.contextUsageRefreshGeneration;
+    this.contextUsageRefreshRunId = runId;
+    this.contextUsageRefreshTimer = (this.options.timer ?? systemWebTimer).schedule(
+      CONTEXT_USAGE_REFRESH_DELAY_MS,
+      () => {
+        this.contextUsageRefreshTimer = undefined;
+        if (this.contextUsageRefreshGeneration !== generation) return;
+        void this.refreshContextUsage(runId, generation);
+      },
+    );
+  }
+
+  private async refreshContextUsage(
+    runId: RunId,
+    generation = this.contextUsageRefreshGeneration,
+  ): Promise<void> {
     const getContextUsage = this.options.client.getRunContextUsage;
     if (getContextUsage === undefined || this.disposed) return;
     try {
       const usage = await getContextUsage.call(this.options.client, runId);
-      if (this.disposed || this.snapshot.activeRun?.id !== runId) return;
+      if (
+        this.disposed ||
+        this.contextUsageRefreshGeneration !== generation ||
+        this.snapshot.activeRun?.id !== runId
+      )
+        return;
       this.publish({ contextUsage: usage ?? null });
     } catch {
       // Context diagnostics are optional UI and never change Run control state.
@@ -1088,9 +1135,17 @@ export class WebSessionManager {
   }
 
   private cancelActiveLifecycle(): void {
+    this.invalidateContextUsageRefresh();
     this.activeLifecycle?.scheduler.dispose();
     this.activeLifecycle?.controller.abort();
     this.activeLifecycle = undefined;
+  }
+
+  private invalidateContextUsageRefresh(): void {
+    this.contextUsageRefreshGeneration += 1;
+    this.contextUsageRefreshTimer?.cancel();
+    this.contextUsageRefreshTimer = undefined;
+    this.contextUsageRefreshRunId = undefined;
   }
 
   private hasActiveRun(): boolean {
@@ -1144,6 +1199,8 @@ const systemWebTimer: Timer = {
   },
 };
 
+const CONTEXT_USAGE_REFRESH_DELAY_MS = 750;
+
 function isTerminalStreamError(error: unknown): boolean {
   return (
     error instanceof CaelushClientHttpError ||
@@ -1167,6 +1224,23 @@ function isLifecycleEvent(event: PublicRunEvent): boolean {
     event.type === "run.cancelled" ||
     event.type === "run.timed_out" ||
     event.type === "budget.exceeded"
+  );
+}
+
+function isContextUsageRefreshEvent(event: PublicRunEvent): boolean {
+  return (
+    event.type === "status.changed" ||
+    event.type === "llm.started" ||
+    event.type === "llm.completed" ||
+    event.type === "llm.failed" ||
+    event.type === "tool.completed" ||
+    event.type === "tool.failed" ||
+    event.type === "verification.started" ||
+    event.type === "verification.completed" ||
+    event.type === "verification.finalized" ||
+    event.type === "verification.check.completed" ||
+    event.type === "verification.repair.started" ||
+    event.type === "verification.repair.limit_reached"
   );
 }
 

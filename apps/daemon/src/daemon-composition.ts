@@ -92,6 +92,7 @@ import {
   createVerificationRepairPolicy,
   type VerificationCommandExecutionPort,
   type VerificationGitPort,
+  type VerificationToolObservationInput,
   type WorkspaceVerificationPort,
 } from "@caelush/verification";
 import {
@@ -952,6 +953,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       git: verificationGit,
       security: verificationCommandSecurityPort,
       evidenceSanitizer: verificationEvidenceSanitizer,
+      toolObservations: createDurableToolObservationPort(options.storage),
       resolverRegistry: new ProjectCheckResolverRegistry(),
       modelTurns: verificationModelTurns,
       budget: options.storage.budget,
@@ -959,16 +961,9 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       planCount: (runId) =>
         options.storage.verificationExecution.countPlans?.(runId) ?? Promise.resolve(0),
     }),
-    onVerifiedCompletion: ({ run }) => {
-      void options.storage.memoryExtractionJobs
-        .createOrGet({
-          id: createEventId(),
-          sourceRunId: run.id,
-          projectId: run.workspace.id,
-          createdAt: clock.now(),
-        })
-        .catch(() => undefined);
-    },
+    // Memory extraction is intentionally not composed here. The daemon has a bounded worker shell,
+    // but no production extractor or lifecycle owner yet; creating durable jobs without a consumer
+    // would leave completed Runs with permanently pending work.
   });
   const supervisor = new RunExecutionSupervisor({
     runs: options.storage.runs,
@@ -1226,6 +1221,40 @@ function createRunBoundVerificationWorkspace(runtime: LocalRuntime): WorkspaceVe
     async inspect(input) {
       const scope = await runtime.openWorkspace(input.workspace);
       return createRuntimeWorkspaceVerificationPort(scope).inspect(input);
+    },
+  };
+}
+
+/**
+ * Read-only completion evidence view over the durable Tool and observation repositories.
+ *
+ * The completion reviewer receives the observation content projection, never the durable invocation
+ * arguments. Storage remains the authority for both records; this adapter only joins their identities
+ * so Core can request one Run-scoped evidence input.
+ */
+function createDurableToolObservationPort(
+  storage: Pick<CaelushStorage, "observations" | "toolInvocations">,
+): { listByRun(runId: RunId): Promise<readonly VerificationToolObservationInput[]> } {
+  return {
+    async listByRun(runId) {
+      const [observations, invocations] = await Promise.all([
+        storage.observations.listByRun(runId),
+        storage.toolInvocations.listByRun(runId),
+      ]);
+      const invocationById = new Map(invocations.map((invocation) => [invocation.id, invocation]));
+      const projected: VerificationToolObservationInput[] = [];
+      for (const observation of observations) {
+        if (observation.kind !== "TOOL") continue;
+        const invocation = invocationById.get(observation.toolInvocationId);
+        projected.push({
+          observation,
+          ...(invocation === undefined ? {} : { toolName: invocation.toolName }),
+          ...(invocation === undefined
+            ? {}
+            : { invocationStatus: invocation.status }),
+        });
+      }
+      return projected;
     },
   };
 }

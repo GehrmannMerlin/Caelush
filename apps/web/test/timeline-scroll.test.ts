@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isNearTimelineBottom,
+  timelineActivityCount,
   timelineActivityDelta,
   timelineFollowState,
 } from "../src/components/timeline-scroll.js";
@@ -23,5 +24,25 @@ describe("Timeline scroll behavior", () => {
   it("clears the indicator and resumes follow after jumping to latest", () => {
     expect(timelineFollowState(true, 6, 7)).toEqual({ following: true, newActivityCount: 0 });
     expect(timelineActivityDelta(true, 6, 7)).toBe(0);
+  });
+
+  it("counts retry activity for the detached new-activity indicator", () => {
+    expect(
+      timelineActivityCount(
+        {
+          activeLlm: [],
+          activeTools: [],
+          activeProcesses: [],
+          activeApprovals: [],
+          settled: [],
+          verification: [],
+          retries: [
+            { id: "retry-1", attempt: 1, text: "Retry 1", started: false, status: "PENDING" },
+          ],
+          currentPlan: [],
+        } as never,
+        undefined,
+      ),
+    ).toBe(1);
   });
 });

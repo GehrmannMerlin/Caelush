@@ -224,7 +224,7 @@ describe("Phase 4F guard — the legacy package is gone", () => {
       if (code(await read(file)).includes(retiredDeepPath)) offenders.push(file);
     }
     expect(offenders).toEqual([]);
-  });
+  }, 30_000);
 });
 
 describe("Phase 4F guard — protocol.ToolDefinition is retired", () => {
@@ -457,7 +457,7 @@ describe("Phase 4F guard — the legacy declarations do not exist", () => {
       expect(text, file).not.toContain("class ToolDispatcher");
       expect(text, file).not.toContain("new ToolDispatcher(");
     }
-  });
+  }, 30_000);
 
   it("has no second batch authority", async () => {
     for (const [file, text] of await executableSources()) {

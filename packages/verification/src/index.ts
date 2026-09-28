@@ -6,7 +6,7 @@ export {
 export type { VerificationPlanner } from "./planner.js";
 export { evaluateVerification } from "./evaluator.js";
 export type { VerificationEvaluation, VerificationEvaluationStatus } from "./evaluator.js";
-export { assertVerificationCheckTransition } from "./lifecycle.js";
+export { assertVerificationCheckRetry, assertVerificationCheckTransition } from "./lifecycle.js";
 export { computeVerificationCandidateHash, createVerificationCandidate } from "./candidate.js";
 export {
   computeVerificationCandidateTextHash,
@@ -17,6 +17,10 @@ export type { VerificationCompletionSealInput } from "./completion-integrity.js"
 export {
   createCommandEvidence,
   createDiscoveryEvidence,
+  createToolObservationEvidence,
+  MAX_TOOL_OBSERVATION_CONTENT_BYTES,
+  MAX_TOOL_OBSERVATION_EVIDENCE_COUNT,
+  MAX_TOOL_OBSERVATION_TOTAL_CONTENT_BYTES,
   MAX_VERIFICATION_OUTPUT_SNIPPET_BYTES,
 } from "./evidence.js";
 export type {
@@ -27,6 +31,7 @@ export type {
   VerificationCommandSecurityInput,
   VerificationDiscoveryEvidenceInput,
   VerificationDiscoveryReason,
+  VerificationToolObservationInput,
   VerificationEvidenceSanitizer,
   VerificationCommandSecurityPort,
   VerificationCommandExecutionPort,
@@ -45,6 +50,8 @@ export type {
   VerificationCommittedEvent,
   WorkspaceInspectionFacts,
   WorkspaceContentFingerprint,
+  WorkspaceArtifactEvidence,
+  WorkspaceArtifactEvidenceKind,
   WorkspacePathObservation,
   WorkspacePathObservationKind,
   WorkspaceVerificationPort,
@@ -63,6 +70,8 @@ export {
   verifyWorkspaceInspection,
   MAX_WORKSPACE_REVIEW_PATHS,
   MAX_WORKSPACE_FINGERPRINT_BYTES,
+  MAX_WORKSPACE_ARTIFACT_FILE_BYTES,
+  MAX_WORKSPACE_ARTIFACT_TOTAL_BYTES,
   computeWorkspaceFreshnessHash,
 } from "./workspace-verifier.js";
 export type { WorkspaceInspectionResult } from "./workspace-verifier.js";

@@ -17,6 +17,7 @@ import {
   createDiscoveryEvidence,
   createGitEvidence,
   createTaskAcceptanceEvidence,
+  createToolObservationEvidence,
   createVerificationCompletionSeal,
   createVerificationRepairPolicy,
   createWorkspaceEvidence,
@@ -127,14 +128,39 @@ async function continueVerification(
 
   const recovery = recoveryStore(dependencies);
   if (recovery === undefined) return errorOutcome("VERIFICATION_STORE_UNAVAILABLE");
-  const execution = await recovery.getPlanExecutionSnapshot(current.id);
+  let execution = await recovery.getPlanExecutionSnapshot(current.id);
   if (execution === null) return errorOutcome("VERIFICATION_EVIDENCE_MISSING");
   observation.plan = execution.plan;
 
-  const evaluation = evaluateVerification(execution.plan, execution.evidence);
+  let evaluation = evaluateVerification(execution.plan, execution.evidence);
   observation.verificationStatus = evaluation.status;
   observation.failedCheckIds = evaluation.failedCheckIds;
   observation.errorCheckIds = evaluation.errorCheckIds;
+
+  if (evaluation.status === "ERROR" && dependencies.mode === "RECOVER") {
+    const retryCheckIds = reviewerInfrastructureErrorCheckIds(
+      execution.plan,
+      execution.evidence,
+      evaluation.errorCheckIds,
+    );
+    if (retryCheckIds.length > 0) {
+      const retried = await runChangeChecks(
+        dependencies,
+        observation,
+        execution.plan,
+        candidateHash,
+        retryCheckIds,
+      );
+      if (retried.kind !== "CONTINUE") return retried.outcome;
+      execution = await recovery.getPlanExecutionSnapshot(current.id);
+      if (execution === null) return errorOutcome("VERIFICATION_EVIDENCE_MISSING");
+      observation.plan = execution.plan;
+      evaluation = evaluateVerification(execution.plan, execution.evidence);
+      observation.verificationStatus = evaluation.status;
+      observation.failedCheckIds = evaluation.failedCheckIds;
+      observation.errorCheckIds = evaluation.errorCheckIds;
+    }
+  }
 
   if (evaluation.status === "FAILED") {
     return repairOrReject(
@@ -146,6 +172,9 @@ async function continueVerification(
     );
   }
   if (evaluation.status === "ERROR") {
+    if (hasReviewerInfrastructureError(execution.evidence, evaluation.errorCheckIds)) {
+      return errorOutcome("VERIFICATION_INFRASTRUCTURE_ERROR");
+    }
     return {
       kind: "REJECT",
       decision: rejectDecision(
@@ -188,6 +217,9 @@ async function continueVerification(
     );
   }
   if (finalEvaluation.status === "ERROR") {
+    if (hasReviewerInfrastructureError(settled.evidence, finalEvaluation.errorCheckIds)) {
+      return errorOutcome("VERIFICATION_INFRASTRUCTURE_ERROR");
+    }
     return {
       kind: "REJECT",
       decision: rejectDecision(
@@ -283,6 +315,7 @@ async function runChangeChecks(
   observation: CompletionGateObservation,
   plan: VerificationPlan,
   candidateHash: string,
+  retryCheckIds: readonly VerificationCheck["id"][] = [],
 ): Promise<
   | { readonly kind: "CONTINUE" }
   | { readonly kind: "STOP"; readonly outcome: CompletionVerificationOutcome }
@@ -314,6 +347,7 @@ async function runChangeChecks(
     store,
     signal,
     now: () => dependencies.clock.now(),
+    retryCheckIds,
     discoveryEvidence: (check, capturedAt) =>
       VerificationEvidenceSchema.parse({
         id: evidenceId(),
@@ -385,11 +419,21 @@ async function runChangeChecks(
       },
       TASK: {
         execute: async (check) => {
+          const priorEvidence =
+            (await recovery.getPlanExecutionSnapshot(plan.id))?.evidence.filter(
+              (item) => item.kind !== "TASK" && !isToolObservationEvidence(item),
+            ) ?? [];
+          const toolObservationEvidence = await projectToolObservationEvidence(
+            dependencies,
+            plan,
+            candidateHash,
+            check,
+          );
           const bundle = buildTaskReviewBundle({
             originalGoal: run.goal,
             candidateText: dependencies.continuation.finalDecision.candidateText,
             plan,
-            evidence: (await recovery.getPlanExecutionSnapshot(plan.id))?.evidence ?? [],
+            evidence: [...priorEvidence, ...toolObservationEvidence],
             changedFiles,
           });
           const review = await reviewer.review({
@@ -420,7 +464,10 @@ async function runChangeChecks(
                     : { repairInstructions: review.review.repairInstructions }),
                   reviewedEvidenceIds: bundle.evidence.map((item) => item.id),
                 });
-          return { status: review.status, evidence: [evidence] };
+          return {
+            status: review.status,
+            evidence: [...toolObservationEvidence, evidence],
+          };
         },
       },
     },
@@ -433,6 +480,42 @@ async function runChangeChecks(
     return { kind: "STOP", outcome: errorOutcome("VERIFICATION_PLAN_MISSING") };
   observation.plan = reloaded;
   return { kind: "CONTINUE" };
+}
+
+async function projectToolObservationEvidence(
+  dependencies: CompletionVerificationContext,
+  plan: VerificationPlan,
+  candidateHash: string,
+  check: VerificationCheck,
+): Promise<readonly VerificationEvidence[]> {
+  const observations = dependencies.toolObservations;
+  const sanitizer = dependencies.evidenceSanitizer;
+  if (observations === undefined || sanitizer === undefined) return [];
+  const inputs = (await observations.listByRun(dependencies.run.id)).filter(
+    (item) => item.observation.runId === dependencies.run.id,
+  );
+  if (inputs.length === 0) return [];
+  return createToolObservationEvidence({
+    planId: plan.id,
+    checkId: check.id,
+    candidateHash,
+    capturedAt: dependencies.clock.now(),
+    evidenceIdFactory: dependencies.evidenceIdFactory ?? createVerificationEvidenceId,
+    observations: inputs,
+    sanitizer,
+  });
+}
+
+function isToolObservationEvidence(evidence: VerificationEvidence): boolean {
+  const details = evidence.details;
+  return (
+    evidence.kind === "COMMAND" &&
+    details !== undefined &&
+    typeof details === "object" &&
+    !Array.isArray(details) &&
+    details !== null &&
+    details.source === "AGENT_TOOL_OBSERVATION"
+  );
 }
 
 /** Collect the bounded Git diff set for the change review. */
@@ -824,6 +907,39 @@ function taskErrorEvidence(
     details: { errorCode, ...(reviewInputHash === undefined ? {} : { reviewInputHash }) },
     capturedAt: dependencies.clock.now(),
   });
+}
+
+function hasReviewerInfrastructureError(
+  evidence: readonly VerificationEvidence[],
+  errorCheckIds: readonly VerificationCheck["id"][],
+): boolean {
+  return evidence.some((item) => {
+    if (item.kind !== "TASK" || !errorCheckIds.includes(item.checkId)) return false;
+    const details = objectDetails(item.details);
+    const errorCode = stringValue(details?.errorCode);
+    return errorCode?.startsWith("REVIEWER_") === true;
+  });
+}
+
+function reviewerInfrastructureErrorCheckIds(
+  plan: VerificationPlan,
+  evidence: readonly VerificationEvidence[],
+  errorCheckIds: readonly VerificationCheck["id"][],
+): VerificationCheck["id"][] {
+  const errorIds = new Set(errorCheckIds);
+  return plan.checks
+    .filter(
+      (check) => check.spec.kind === "TASK" && check.status === "ERROR" && errorIds.has(check.id),
+    )
+    .filter((check) =>
+      evidence.some((item) => {
+        if (item.kind !== "TASK" || item.checkId !== check.id) return false;
+        const details = objectDetails(item.details);
+        const errorCode = stringValue(details?.errorCode);
+        return errorCode?.startsWith("REVIEWER_") === true;
+      }),
+    )
+    .map((check) => check.id);
 }
 
 function objectDetails(value: unknown): Record<string, unknown> | undefined {

@@ -91,12 +91,36 @@ try {
       "index.js",
     ),
   ).href;
-  const toolsModule = pathToFileURL(
-    join(bundleDirectory, "node_modules", "@caelush", "tools", "dist", "index.js"),
+  const codingAgentModule = pathToFileURL(
+    join(bundleDirectory, "node_modules", "@caelush", "coding-agent", "dist", "index.js"),
+  ).href;
+  const agentModule = pathToFileURL(
+    join(bundleDirectory, "node_modules", "@caelush", "agent", "dist", "index.js"),
   ).href;
   // The packaged child probe composes the real AI core in a fresh process and speaks
   // both native dialects through one gateway.
-  const packagedAiProbeSource = `const ai = await import(${JSON.stringify(aiModule)}); const openai = await import(${JSON.stringify(openAIAdapterModule)}); const anthropic = await import(${JSON.stringify(anthropicAdapterModule)}); const tools = await import(${JSON.stringify(toolsModule)}); const base = process.env.CAELUSH_PROVIDER_BASE_URL; const definitions = tools.createDefaultBuiltinToolRegistrations({ resolve: async () => { throw new Error("not used"); } }).map((item) => item.definition); const model = (provider, id, api) => ({ ref: { provider, model: id }, api, limits: { contextWindowTokens: 32000, maxOutputTokens: 4096 }, capabilities: { streaming: "SUPPORTED", toolCalling: "SUPPORTED", parallelToolCalls: "SUPPORTED", structuredOutput: "UNKNOWN", vision: "UNKNOWN", reasoning: "UNKNOWN", reasoningSummary: "UNKNOWN", promptCaching: "UNKNOWN", usageReporting: "SUPPORTED" }, source: "CONFIGURATION" }); const descriptors = [model("openai-compatible", "fixture-model", openai.OPENAI_COMPATIBLE_API_ID), model("anthropic-compatible", "fixture-model", anthropic.ANTHROPIC_MESSAGES_API_ID)]; const source = { id: "artifact-probe", priority: 0, resolve: (ref) => descriptors.find((item) => item.ref.provider === ref.provider && item.ref.model === ref.model), list: () => descriptors }; const subsystem = ai.createAISubsystem({ modelSources: [source], providers: [{ id: "openai-compatible", endpoint: base, defaultApi: openai.OPENAI_COMPATIBLE_API_ID, allowUnknownModels: false, credentials: { resolve: async () => ({ apiKey: process.env.CAELUSH_PROVIDER_API_KEY }) } }, { id: "anthropic-compatible", endpoint: base.replace(/\\/v1$/, ""), defaultApi: anthropic.ANTHROPIC_MESSAGES_API_ID, allowUnknownModels: false, credentials: { resolve: async () => ({ apiKey: process.env.CAELUSH_PROVIDER_API_KEY }) } }], adapters: [openai.createOpenAICompatibleApiAdapter(), anthropic.createAnthropicMessagesApiAdapter()] }); const openAIResult = await subsystem.gateway.complete({ model: { provider: "openai-compatible", model: "fixture-model" }, messages: [{ role: "user", content: "packaged child probe" }], tools: definitions, toolChoice: { type: "AUTO" } }); if (openAIResult.text !== "artifact smoke complete") process.exit(1); const anthropicResult = await subsystem.gateway.complete({ model: { provider: "anthropic-compatible", model: "fixture-model" }, messages: [{ role: "user", content: "packaged child probe" }] }); if (anthropicResult.text !== "artifact anthropic complete") process.exit(1); if (anthropicResult.resolution.api !== anthropic.ANTHROPIC_MESSAGES_API_ID) process.exit(1);`;
+  const packagedAiProbeSource = [
+    `const ai = await import(${JSON.stringify(aiModule)});`,
+    `const openai = await import(${JSON.stringify(openAIAdapterModule)});`,
+    `const anthropic = await import(${JSON.stringify(anthropicAdapterModule)});`,
+    `const coding = await import(${JSON.stringify(codingAgentModule)});`,
+    `const agent = await import(${JSON.stringify(agentModule)});`,
+    `const base = process.env.CAELUSH_PROVIDER_BASE_URL;`,
+    `const unavailable = async () => { throw new Error("not used"); };`,
+    `const definitions = coding.createDefaultCodingTools({ readFile: { readFileWithKind: unavailable }, readOnly: { readFileWithKind: unavailable, list: unavailable, listDirectoryWithKind: unavailable, listWithProbe: unavailable, find: unavailable, findWithRoot: unavailable, search: unavailable, searchWithRoot: unavailable }, patch: { apply: unavailable }, exec: { execute: unavailable }, process: { interact: unavailable }, git: { status: unavailable, diff: unavailable } });`,
+    `const registryBuilder = new agent.DefaultAgentToolRegistryBuilder();`,
+    `for (const definition of definitions) registryBuilder.register(definition.tool);`,
+    `const toolSpecs = registryBuilder.build().modelSpecs();`,
+    `const model = (provider, id, api) => ({ ref: { provider, model: id }, api, limits: { contextWindowTokens: 32000, maxOutputTokens: 4096 }, capabilities: { streaming: "SUPPORTED", toolCalling: "SUPPORTED", parallelToolCalls: "SUPPORTED", structuredOutput: "UNKNOWN", vision: "UNKNOWN", reasoning: "UNKNOWN", reasoningSummary: "UNKNOWN", promptCaching: "UNKNOWN", usageReporting: "SUPPORTED" }, source: "CONFIGURATION" });`,
+    `const descriptors = [model("openai-compatible", "fixture-model", openai.OPENAI_COMPATIBLE_API_ID), model("anthropic-compatible", "fixture-model", anthropic.ANTHROPIC_MESSAGES_API_ID)];`,
+    `const source = { id: "artifact-probe", priority: 0, resolve: (ref) => descriptors.find((item) => item.ref.provider === ref.provider && item.ref.model === ref.model), list: () => descriptors };`,
+    `const subsystem = ai.createAISubsystem({ modelSources: [source], providers: [{ id: "openai-compatible", endpoint: base, defaultApi: openai.OPENAI_COMPATIBLE_API_ID, allowUnknownModels: false, credentials: { resolve: async () => ({ apiKey: process.env.CAELUSH_PROVIDER_API_KEY }) } }, { id: "anthropic-compatible", endpoint: base.replace(/\\/v1$/, ""), defaultApi: anthropic.ANTHROPIC_MESSAGES_API_ID, allowUnknownModels: false, credentials: { resolve: async () => ({ apiKey: process.env.CAELUSH_PROVIDER_API_KEY }) } }], adapters: [openai.createOpenAICompatibleApiAdapter(), anthropic.createAnthropicMessagesApiAdapter()] });`,
+    `const openAIResult = await subsystem.gateway.complete({ model: { provider: "openai-compatible", model: "fixture-model" }, messages: [{ role: "user", content: "packaged child probe" }], tools: toolSpecs, toolChoice: { type: "AUTO" } });`,
+    `if (openAIResult.text !== "artifact smoke complete") process.exit(1);`,
+    `const anthropicResult = await subsystem.gateway.complete({ model: { provider: "anthropic-compatible", model: "fixture-model" }, messages: [{ role: "user", content: "packaged child probe" }] });`,
+    `if (anthropicResult.text !== "artifact anthropic complete") process.exit(1);`,
+    `if (anthropicResult.resolution.api !== anthropic.ANTHROPIC_MESSAGES_API_ID) process.exit(1);`,
+  ].join("\n");
   const packagedAdapterProbe = await run(
     process.execPath,
     ["--input-type=module", "-e", packagedAiProbeSource],

@@ -18,9 +18,13 @@ export class VerificationStageRunner {
     const failedCheckIds: VerificationCheck["id"][] = [];
     const errorCheckIds: VerificationCheck["id"][] = [];
     let blockingCheckId: VerificationCheck["id"] | undefined;
+    const retryCheckIds = new Set(input.retryCheckIds ?? []);
 
     const checks = [...input.plan.checks]
-      .filter((check) => check.status === "PENDING")
+      .filter(
+        (check) =>
+          check.status === "PENDING" || (check.status === "ERROR" && retryCheckIds.has(check.id)),
+      )
       .sort((left, right) => left.ordinal - right.ordinal);
     for (const check of checks) {
       if (input.signal?.aborted) {
@@ -107,12 +111,16 @@ export class VerificationStageRunner {
         continue;
       }
 
-      const running = { ...check, status: "RUNNING" as const, startedAt: timestamp(input) };
+      const startedAt = timestamp(input);
+      const running = retryCheckIds.has(check.id)
+        ? retryRunningCheck(check, startedAt)
+        : { ...check, status: "RUNNING" as const, startedAt };
       const started = await input.store.startCheck({
         runId: input.runId,
         sessionId: input.sessionId,
         check: running,
-        discoveryEvidence: input.discoveryEvidence(check, running.startedAt),
+        discoveryEvidence: input.discoveryEvidence(check, startedAt),
+        ...(retryCheckIds.has(check.id) ? { retry: true } : {}),
       });
       input.onCommittedEvents?.(started.events);
       counters.executedCount += 1;
@@ -179,6 +187,19 @@ export class VerificationStageRunner {
       blockingCheckId,
     );
   }
+}
+
+function retryRunningCheck(
+  check: VerificationCheck,
+  startedAt: NonNullable<VerificationCheck["startedAt"]>,
+): VerificationCheck {
+  const {
+    startedAt: _previousStartedAt,
+    finishedAt: _finishedAt,
+    skipReason: _skipReason,
+    ...base
+  } = check;
+  return { ...base, status: "RUNNING", startedAt };
 }
 
 function timestamp(input: VerificationStageRunnerInput) {

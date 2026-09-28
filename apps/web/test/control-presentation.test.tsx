@@ -121,6 +121,31 @@ describe("Web control presentation", () => {
     expect(cancellingHtml).toContain("disabled");
   });
 
+  it("keeps continue and cancel controls together for Resource Guard", () => {
+    const onCancel = vi.fn(async () => true);
+    const onContinueResource = vi.fn(async () => true);
+    const html = renderToStaticMarkup(
+      <SessionWorkspace
+        title="控制台"
+        activeRun={{ id: "run-1", status: "WAITING_RESOURCE" } as never}
+        controlMode="RESOURCE_GUARD"
+        history={[]}
+        timeline={{
+          ...createInitialTimelineState(),
+          resourceGuard: { reason: "NO_PROGRESS", replanCount: 2, requestedToolCalls: 17 },
+        }}
+        onCancel={onCancel}
+        onContinueResource={onContinueResource}
+        composer={<PromptComposer disabled submission="IDLE" onSubmit={vi.fn(async () => true)} />}
+      />,
+    );
+
+    expect(html).toContain("继续任务");
+    expect(html).toContain("取消任务");
+    expect(html).toContain("已重新规划：2 次");
+    expect(html).toContain("本阶段已请求工具：17 次");
+  });
+
   it("renders technical reconnect states and one manual retry", () => {
     expect(renderToStaticMarkup(<ReconnectBanner state="CONNECTED" />)).toBe("");
     expect(renderToStaticMarkup(<ReconnectBanner state="RECONNECTING" attempt={3} />)).toContain(

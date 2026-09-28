@@ -33,3 +33,24 @@ export function assertVerificationCheckTransition(
     throw new Error(`Invalid verification check transition ${previous.status} -> ${next.status}`);
   }
 }
+
+export function assertVerificationCheckRetry(
+  previous: VerificationCheck,
+  next: VerificationCheck,
+): void {
+  VerificationCheckSchema.parse(previous);
+  VerificationCheckSchema.parse(next);
+  if (previous.status !== "ERROR" || next.status !== "RUNNING") {
+    throw new Error(`Invalid verification check retry ${previous.status} -> ${next.status}`);
+  }
+  if (
+    previous.id !== next.id ||
+    previous.planId !== next.planId ||
+    previous.ordinal !== next.ordinal
+  ) {
+    throw new Error("Verification check identity cannot change during retry");
+  }
+  if (JSON.stringify(previous.spec) !== JSON.stringify(next.spec)) {
+    throw new Error("Verification check intent cannot change during retry");
+  }
+}

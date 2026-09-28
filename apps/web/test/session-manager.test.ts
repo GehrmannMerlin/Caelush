@@ -10,13 +10,14 @@ import {
   type PublicRunEvent,
   type ClientAgentRun,
   type ClientAgentSession,
+  type ContextUsageProjection,
   type DaemonInfo,
   type RunActionResponse,
   type SessionTranscriptResponse,
   type TranscriptEntry,
   type WorkspaceRef,
 } from "@caelush/protocol";
-import type { WatchRunEventsOptions } from "@caelush/client";
+import type { Timer, WatchRunEventsOptions } from "@caelush/client";
 import { describe, expect, it, vi } from "vitest";
 import { WebSessionManager, type WebSessionClient } from "../src/application/session-manager.js";
 
@@ -563,6 +564,65 @@ describe("WebSessionManager", () => {
     });
     manager.dispose();
   });
+
+  it("throttles context usage refreshes after public lifecycle activity", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const pendingRun = makeRun({ sessionId: session.id });
+    const runningRun = makeRun({ ...pendingRun, status: "RUNNING" });
+    const timer = new TestTimer();
+    const client = makeClient({
+      createSessionResult: session,
+      createRunResult: pendingRun,
+      contextUsage: { runId: runningRun.id },
+    });
+    client.startRun.mockResolvedValue(actionResponse(runningRun, runningRun.id));
+    client.watchRunEvents.mockImplementation(async function* (_runId, options) {
+      options?.onOpen?.();
+      yield lifecycleEvent("llm.started", runningRun);
+      await new Promise<void>(() => undefined);
+    });
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo(), timer });
+    manager.beginDraft();
+
+    await expect(manager.submitPrompt("refresh context safely")).resolves.toBe(true);
+    expect(client.getRunContextUsage).not.toHaveBeenCalled();
+
+    timer.flush();
+    await waitFor(() => client.getRunContextUsage.mock.calls.length === 1);
+    await waitFor(() => manager.getSnapshot().contextUsage?.runId === runningRun.id);
+    expect(manager.getSnapshot().contextUsage).toMatchObject({ runId: runningRun.id });
+    manager.dispose();
+  });
+
+  it("ignores a delayed context usage response after disposal", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const activeRun = makeRun({ sessionId: session.id, status: "RUNNING" });
+    const timer = new TestTimer();
+    let resolveUsage: ((value: null) => void) | undefined;
+    const client = makeClient({
+      sessions: [session],
+      latestRuns: new Map([[session.id, [activeRun]]]),
+      contextUsage: new Promise((resolve) => {
+        resolveUsage = resolve;
+      }),
+    });
+    client.listRuns.mockResolvedValue({ items: [activeRun] });
+    client.watchRunEvents.mockImplementation(async function* (_runId, options) {
+      options?.onOpen?.();
+      await new Promise<void>(() => undefined);
+      yield* [] as PublicRunEvent[];
+    });
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo(), timer });
+    await manager.loadSessions();
+    await expect(manager.selectSession(session.id)).resolves.toBe(true);
+    timer.flush();
+    await waitFor(() => client.getRunContextUsage.mock.calls.length === 1);
+    manager.dispose();
+    resolveUsage?.(null);
+    await Promise.resolve();
+
+    expect(manager.getSnapshot().contextUsage).toBeNull();
+  });
 });
 
 function makeClient(
@@ -574,6 +634,7 @@ function makeClient(
     watchEvents?: readonly PublicRunEvent[];
     refreshedRuns?: readonly ClientAgentRun[];
     transcriptResponse?: SessionTranscriptResponse;
+    contextUsage?: ContextUsageProjection | Promise<ContextUsageProjection | null> | null;
   } = {},
 ): WebSessionClient & {
   readonly createSession: ReturnType<typeof vi.fn>;
@@ -583,6 +644,7 @@ function makeClient(
   readonly getSessionTranscript: ReturnType<typeof vi.fn>;
   readonly watchRunEvents: ReturnType<typeof vi.fn>;
   readonly watchEvents: readonly PublicRunEvent[];
+  readonly getRunContextUsage: ReturnType<typeof vi.fn>;
 } {
   let refreshIndex = 0;
   const sessions = options.sessions ?? [];
@@ -614,6 +676,7 @@ function makeClient(
       for (const event of options.watchEvents ?? []) yield event;
     }),
     watchEvents: options.watchEvents ?? [],
+    getRunContextUsage: vi.fn(async () => (await options.contextUsage) ?? null),
   } as unknown as WebSessionClient & {
     readonly createSession: ReturnType<typeof vi.fn>;
     readonly createRun: ReturnType<typeof vi.fn>;
@@ -622,6 +685,7 @@ function makeClient(
     readonly getSessionTranscript: ReturnType<typeof vi.fn>;
     readonly watchRunEvents: ReturnType<typeof vi.fn>;
     readonly watchEvents: readonly PublicRunEvent[];
+    readonly getRunContextUsage: ReturnType<typeof vi.fn>;
   };
   return client;
 }
@@ -789,4 +853,18 @@ async function waitFor(predicate: () => boolean): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   expect(predicate()).toBe(true);
+}
+
+class TestTimer implements Timer {
+  private readonly callbacks: Array<() => void> = [];
+
+  schedule(_delayMs: number, callback: () => void) {
+    this.callbacks.push(callback);
+    return { cancel: () => undefined };
+  }
+
+  flush(): void {
+    const callbacks = this.callbacks.splice(0);
+    for (const callback of callbacks) callback();
+  }
 }

@@ -197,13 +197,46 @@ export function buildTaskReviewPrompt(bundle: TaskReviewBundle): string {
 export function parseTaskAcceptanceReview(value: unknown): TaskAcceptanceReview {
   if (typeof value === "string") {
     try {
-      return TaskAcceptanceReviewSchema.parse(JSON.parse(value));
+      return TaskAcceptanceReviewSchema.parse(
+        normalizeTaskAcceptanceReviewValue(JSON.parse(normalizeTaskReviewTransport(value))),
+      );
     } catch (error) {
       if (error instanceof z.ZodError) throw error;
       throw new TaskReviewInputError("Task reviewer response is not valid JSON.");
     }
   }
-  return TaskAcceptanceReviewSchema.parse(value);
+  return TaskAcceptanceReviewSchema.parse(normalizeTaskAcceptanceReviewValue(value));
+}
+
+function normalizeTaskReviewTransport(value: string): string {
+  const trimmed = value.trim();
+  const fenced = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n?```$/iu.exec(trimmed);
+  return fenced?.[1]?.trim() ?? trimmed;
+}
+
+/**
+ * Canonicalize one semantically absent optional field before strict validation.
+ *
+ * DeepSeek commonly serializes a PASS response with `repairInstructions: []`. An empty repair list
+ * carries no repair instruction and is therefore the transport equivalent of the optional field being
+ * omitted. This deliberately does not normalize non-empty lists, unknown fields, or any other schema
+ * shape; the strict acceptance schema remains the authority after this narrow projection.
+ */
+function normalizeTaskAcceptanceReviewValue(value: unknown): unknown {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return value;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return value;
+  const candidate = value as Record<string, unknown>;
+  if (
+    candidate.verdict !== "PASS" ||
+    !Array.isArray(candidate.repairInstructions) ||
+    candidate.repairInstructions.length !== 0
+  ) {
+    return value;
+  }
+  const canonical = { ...candidate };
+  delete canonical.repairInstructions;
+  return canonical;
 }
 
 function assertTextBound(value: string, label: string): void {

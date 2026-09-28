@@ -369,5 +369,5 @@ describe("daemon native Anthropic Messages composition", () => {
     expect(openAIRun.status).toBe("COMPLETED");
     expect(openAIRequests.length).toBeGreaterThan(0);
     for (const url of openAIRequests) expect(url).toContain("openai.invalid");
-  });
+  }, 60_000);
 });

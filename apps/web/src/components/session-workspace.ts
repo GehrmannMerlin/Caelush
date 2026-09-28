@@ -117,6 +117,22 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
                   "div",
                   { className: "resource-guard-card", role: "alert" },
                   createElement("span", null, "检测到重复或低进展路径。"),
+                  props.timeline.resourceGuard === undefined
+                    ? null
+                    : createElement(
+                        "div",
+                        { className: "resource-guard-details" },
+                        createElement(
+                          "span",
+                          null,
+                          `已重新规划：${props.timeline.resourceGuard.replanCount} 次`,
+                        ),
+                        createElement(
+                          "span",
+                          null,
+                          `本阶段已请求工具：${props.timeline.resourceGuard.requestedToolCalls} 次`,
+                        ),
+                      ),
                   props.onContinueResource === undefined
                     ? null
                     : createElement(
@@ -127,6 +143,13 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
                           onClick: props.onContinueResource,
                         },
                         "继续任务",
+                      ),
+                  props.onCancel === undefined
+                    ? null
+                    : createElement(
+                        "button",
+                        { type: "button", className: "cancel-button", onClick: props.onCancel },
+                        "取消任务",
                       ),
                 )
               : canShowCancel(props.activeRun.status)

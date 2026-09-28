@@ -18,6 +18,8 @@ import { URL, fileURLToPath } from "node:url";
 
 const REPOSITORY_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const NODE_RANGE = ">=24.0.0 <25.0.0";
+const RETIRED_TOOL_PACKAGE = ["@caelush", "tools"].join("/");
+const RETIRED_TOOL_ARTIFACT_PATH = ["node_modules", "@caelush", "tools"].join("/");
 
 export function getPlatformArtifactName(version, platform = process.platform, arch = process.arch) {
   const platformName =
@@ -54,6 +56,7 @@ export async function buildRelease(options = {}) {
   );
   const runCommands = options.runCommands ?? true;
   if (runCommands) {
+    await cleanWorkspaceBuildOutputs(repositoryRoot);
     runCommand(repositoryRoot, "build", ["build"]);
   }
   const temporaryRoot = await mkdtemp(join(options.stagingParent ?? tmpdir(), "caelush-release-"));
@@ -189,6 +192,21 @@ async function copyReleaseWorkspace(sourceRoot, destinationRoot) {
           // This package has no release payload of this kind.
         }
       }
+    }
+  }
+}
+
+async function cleanWorkspaceBuildOutputs(repositoryRoot) {
+  for (const group of ["apps", "packages"]) {
+    const sourceGroup = join(repositoryRoot, group);
+    for (const packageDirectoryName of await readdir(sourceGroup)) {
+      const packageDirectory = join(sourceGroup, packageDirectoryName);
+      try {
+        await stat(join(packageDirectory, "package.json"));
+      } catch {
+        continue;
+      }
+      await rm(join(packageDirectory, "dist"), { recursive: true, force: true });
     }
   }
 }
@@ -386,20 +404,47 @@ async function removePnpmBuildMetadata(deployDirectory) {
 async function assertPortableArtifact(directory, workspaceVersions) {
   const files = await collectEntries(directory);
   for (const path of files) {
+    const relativePath = relative(directory, path).replaceAll("\\", "/");
+    if (
+      relativePath === RETIRED_TOOL_ARTIFACT_PATH ||
+      relativePath.startsWith(`${RETIRED_TOOL_ARTIFACT_PATH}/`)
+    ) {
+      throw new Error(
+        `Portable artifact contains retired ${RETIRED_TOOL_PACKAGE}: ${relativePath}`,
+      );
+    }
     const details = await lstat(path);
     if (details.isSymbolicLink()) {
       throw new Error(`Portable artifact contains a symbolic link: ${relative(directory, path)}`);
     }
-    if (path.endsWith("package.json")) {
+    if (details.isFile() && path.endsWith("package.json")) {
       const manifest = JSON.parse(await readFile(path, "utf8"));
       for (const section of ["dependencies", "optionalDependencies", "devDependencies"]) {
         for (const [name, version] of Object.entries(manifest[section] ?? {})) {
           if (typeof version === "string" && version.startsWith("workspace:")) {
+            throw new Error(`Unresolved workspace dependency ${name} in ${relativePath}`);
+          }
+          if (name === RETIRED_TOOL_PACKAGE) {
             throw new Error(
-              `Unresolved workspace dependency ${name} in ${relative(directory, path)}`,
+              `Portable artifact references retired ${RETIRED_TOOL_PACKAGE} in ${relativePath}`,
             );
           }
         }
+      }
+    } else if (details.isFile() && path.endsWith(".js")) {
+      const source = await readFile(path, "utf8");
+      const importNeedles = [
+        `from "${RETIRED_TOOL_PACKAGE}"`,
+        `from '${RETIRED_TOOL_PACKAGE}'`,
+        `import("${RETIRED_TOOL_PACKAGE}")`,
+        `import('${RETIRED_TOOL_PACKAGE}')`,
+        `require("${RETIRED_TOOL_PACKAGE}")`,
+        `require('${RETIRED_TOOL_PACKAGE}')`,
+      ];
+      if (importNeedles.some((needle) => source.includes(needle))) {
+        throw new Error(
+          `Portable artifact imports retired ${RETIRED_TOOL_PACKAGE} in ${relativePath}`,
+        );
       }
     }
   }

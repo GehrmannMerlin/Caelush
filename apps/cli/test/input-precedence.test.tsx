@@ -102,6 +102,23 @@ describe("CLI input precedence", () => {
     rendered.unmount();
   });
 
+  it("dispatches Resource Guard Enter to the controller through the rendered App", () => {
+    const state: CliViewState = {
+      ...createInitialCliState(),
+      bootstrap: "READY",
+      controlMode: "RESOURCE_GUARD",
+      activeRun: { runId: createRunId(), status: "WAITING_RESOURCE" },
+      composerEnabled: false,
+    };
+    const continueResourceGuard = vi.fn(async () => true);
+    const rendered = render(<App controller={fakeController(state, { continueResourceGuard })} />);
+
+    rendered.stdin.write("\r");
+
+    expect(continueResourceGuard).toHaveBeenCalledTimes(1);
+    rendered.unmount();
+  });
+
   it("keeps Ctrl+C cancellation available while an Approval dialog is open", () => {
     const runId = createRunId();
     const state: CliViewState = {

@@ -404,8 +404,17 @@ The Web package can be built with:
 pnpm --filter @caelush/web build
 ```
 
-The daemon can serve a built Web bundle when `CAELUSH_WEB_BUILD_ROOT` points to
-that output directory.
+After the repository build (`pnpm build`) or the Web-only build above, start
+the production browser host with:
+
+```bash
+caelush web
+```
+
+The launcher resolves the built Web bundle, starts or reuses the local daemon,
+passes the current workspace through `CAELUSH_WORKSPACE_PATH`, and opens the
+daemon's static Web host in the browser. Set `CAELUSH_WEB_BUILD_ROOT` when the
+bundle lives outside the standard build location.
 
 ## Host behavior
 

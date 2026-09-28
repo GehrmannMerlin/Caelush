@@ -1,6 +1,7 @@
 import type {
   AgentRun,
   AgentState,
+  RunId,
   VerificationCheckId,
   VerificationPlanId,
 } from "@caelush/protocol";
@@ -16,6 +17,7 @@ import type {
   WorkspaceVerificationPort,
   TaskAcceptanceReview,
   TaskReviewBundle,
+  VerificationToolObservationInput,
 } from "@caelush/verification";
 import type { VerificationEvidence } from "@caelush/protocol";
 
@@ -56,6 +58,11 @@ export interface CompletionTaskReviewerPort {
     readonly reviewInputHash: string;
     readonly errorCode?: string;
   }>;
+}
+
+/** Read-only durable Tool observations attributed to the Run being reviewed. */
+export interface CompletionToolObservationPort {
+  listByRun(runId: RunId): Promise<readonly VerificationToolObservationInput[]>;
 }
 
 /** The verification planner, reduced to the one call a candidate boundary makes. */
@@ -115,6 +122,7 @@ export interface RunCompletionGateDependencies {
   readonly git?: VerificationGitPort | undefined;
   readonly security?: VerificationCommandSecurityPort | undefined;
   readonly evidenceSanitizer?: VerificationEvidenceSanitizer | undefined;
+  readonly toolObservations?: CompletionToolObservationPort | undefined;
   readonly resolverRegistry?:
     import("@caelush/verification").ProjectCheckResolverRegistry | undefined;
   readonly reviewer?: CompletionTaskReviewerPort | undefined;
