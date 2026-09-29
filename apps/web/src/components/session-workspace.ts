@@ -91,7 +91,13 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
                   }`,
                   key: entry.id,
                 },
-                createElement("p", { className: "conversation-author" }, historyAuthor(entry.kind)),
+                entry.kind === "USER"
+                  ? null
+                  : createElement(
+                      "p",
+                      { className: "conversation-author" },
+                      historyAuthor(entry.kind),
+                    ),
                 createElement(
                   "p",
                   {

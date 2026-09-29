@@ -35,8 +35,10 @@ describe("WorkspaceSidebar", () => {
 
     expect(html).toContain("项目");
     expect(html).toContain('class="workspace-sidebar-brand"');
-    expect(html).toContain('class="brand-symbol"');
-    expect(html).toContain("Caelush");
+    expect(html).toContain('class="workspace-sidebar-logo"');
+    expect(html).toContain('alt="Caelush"');
+    expect(html).not.toContain('class="brand-symbol"');
+    expect(html).not.toContain('class="brand-name"');
     expect(html).toContain("新建会话");
     expect(html).toContain("从 Caelush 中移除");
     expect(html).toContain("添加工作区");

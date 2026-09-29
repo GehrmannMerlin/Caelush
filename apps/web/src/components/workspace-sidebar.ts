@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { derivePromptTitle } from "../application/prompt.js";
+import caelushLogo from "../assets/logo/caelush-logo.png";
 import { RunStatusIcon, runStatusClass, runStatusLabel } from "./run-status.js";
 
 export interface WorkspaceSidebarProps {
@@ -46,8 +47,11 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps): ReactElement {
     createElement(
       "div",
       { className: "workspace-sidebar-brand" },
-      createElement("span", { className: "brand-symbol", "aria-hidden": "true" }, "C"),
-      createElement("span", { className: "brand-name" }, "Caelush"),
+      createElement("img", {
+        className: "workspace-sidebar-logo",
+        src: caelushLogo,
+        alt: "Caelush",
+      }),
     ),
     createElement(
       "div",

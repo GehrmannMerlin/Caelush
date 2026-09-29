@@ -163,6 +163,23 @@ describe("Web presentation", () => {
     expect(html).toContain("修复登录");
   });
 
+  it("does not render an author label above user message bubbles", () => {
+    const html = renderToStaticMarkup(
+      <SessionWorkspace
+        title="认证修复"
+        history={[
+          { id: "history-user", kind: "USER", text: "修复登录" },
+          { id: "history-report", kind: "RUN_TERMINAL", text: "任务结束报告" },
+        ]}
+        timeline={createInitialTimelineState()}
+        composer={<div>COMPOSER_MARKER</div>}
+      />,
+    );
+
+    expect(html).not.toContain('class="conversation-author">你</p>');
+    expect(html).toContain('class="conversation-author">任务结束报告</p>');
+  });
+
   it("does not show an empty execution process before the first task", () => {
     const html = renderToStaticMarkup(
       <SessionWorkspace

@@ -52,4 +52,31 @@ describe("responsive workspace layout", () => {
     expect(titleOverride).toContain("font-size: 0.95rem");
     expect(titleOverride).toContain("font-weight: 700");
   });
+
+  it("aligns user message bubbles with the full-width report edge", () => {
+    const conversationOverride = styles.slice(
+      styles.lastIndexOf("/* Align user requests with the report edge"),
+    );
+
+    expect(conversationOverride).toContain(".conversation-entry--user {");
+    expect(conversationOverride).toContain("width: 100%");
+    expect(conversationOverride).toContain("max-width: 100%");
+    expect(conversationOverride).toContain("display: flex");
+    expect(conversationOverride).toContain("justify-content: flex-end");
+    expect(conversationOverride).toContain(".conversation-bubble--user {");
+    expect(conversationOverride).toContain("margin-left: auto");
+  });
+
+  it("keeps the sidebar brand logo centered, contained, and on the sidebar surface", () => {
+    const brandOverride = styles.slice(
+      styles.lastIndexOf("/* Use the provided Caelush brand lockup"),
+    );
+
+    expect(brandOverride).toContain(".workspace-sidebar-brand {");
+    expect(brandOverride).toContain("justify-content: center");
+    expect(brandOverride).toContain("background: var(--web-sidebar-bg)");
+    expect(brandOverride).toContain(".workspace-sidebar-logo {");
+    expect(brandOverride).toContain("max-width: 100%");
+    expect(brandOverride).toContain("object-fit: contain");
+  });
 });
