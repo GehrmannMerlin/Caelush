@@ -1,7 +1,7 @@
 import { createElement, type ReactElement } from "react";
 import type { RunId, RunStatus } from "@caelush/protocol";
 import type { WebControlMode } from "../application/session-manager.js";
-import { runStatusClass, runStatusGlyph, runStatusLabel } from "./run-status.js";
+import { RunStatusIcon, runStatusClass, runStatusLabel } from "./run-status.js";
 
 export interface RecoveryRunView {
   readonly id: RunId;
@@ -38,7 +38,7 @@ export function RecoveryPanel(props: RecoveryPanelProps): ReactElement {
               "aria-label": runStatusLabel(run.status),
               title: runStatusLabel(run.status),
             },
-            runStatusGlyph(run.status),
+            createElement(RunStatusIcon, { status: run.status }),
           ),
           createElement("strong", null, boundedGoal(run.goal)),
           createElement(

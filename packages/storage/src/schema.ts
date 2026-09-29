@@ -1,5 +1,21 @@
 import { integer, sqliteTable, text, uniqueIndex, index } from "drizzle-orm/sqlite-core";
 
+export const workspaces = sqliteTable(
+  "workspaces",
+  {
+    id: text("id").primaryKey(),
+    canonicalPath: text("canonical_path").notNull(),
+    displayName: text("display_name").notNull(),
+    createdAtMs: integer("created_at_ms").notNull(),
+    updatedAtMs: integer("updated_at_ms").notNull(),
+    lastOpenedAtMs: integer("last_opened_at_ms").notNull(),
+  },
+  (table) => [
+    uniqueIndex("workspaces_canonical_path_unique").on(table.canonicalPath),
+    index("workspaces_last_opened_at_idx").on(table.lastOpenedAtMs),
+  ],
+);
+
 export const agentSessions = sqliteTable("agent_sessions", {
   id: text("id").primaryKey(),
   protocolVersion: integer("protocol_version").notNull(),
@@ -441,6 +457,7 @@ export const verificationEvidence = sqliteTable(
 );
 
 export const storageSchema = {
+  workspaces,
   agentSessions,
   agentRuns,
   runCancellationRequests,

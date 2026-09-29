@@ -4,7 +4,6 @@ import { pathToFileURL } from "node:url";
 import { startDaemon, type DaemonHandle } from "./daemon.js";
 import { readProviderConfiguration } from "./config.js";
 import { resolveProductPaths } from "./product-paths.js";
-import { createWorkspaceRef } from "./web/workspace-launch-context.js";
 import type { WebStaticHostOptions } from "./web/static-host.js";
 
 export function getDefaultDatabasePath(environment: NodeJS.ProcessEnv = process.env): string {
@@ -18,9 +17,13 @@ export async function main(): Promise<void> {
   let daemon: DaemonHandle;
   try {
     const web = readWebHostOptions(process.env);
+    const compatibilityWorkspacePath = process.env.CAELUSH_WORKSPACE_PATH?.trim();
     daemon = await startDaemon({
       databasePath,
       ...readProviderConfiguration(process.env),
+      ...(compatibilityWorkspacePath === undefined || compatibilityWorkspacePath.length === 0
+        ? {}
+        : { workspacePath: compatibilityWorkspacePath }),
       ...(web === undefined ? {} : { web }),
     });
   } catch (error) {
@@ -46,8 +49,7 @@ function readWebHostOptions(
 ): WebStaticHostOptions | undefined {
   const buildRoot = environment.CAELUSH_WEB_BUILD_ROOT?.trim();
   if (buildRoot === undefined || buildRoot.length === 0) return undefined;
-  const workspacePath = environment.CAELUSH_WORKSPACE_PATH?.trim() || process.cwd();
-  return { buildRoot, workspace: createWorkspaceRef(workspacePath) };
+  return { buildRoot };
 }
 
 const entryPath = process.argv[1];

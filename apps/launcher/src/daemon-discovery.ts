@@ -1,6 +1,11 @@
 import { spawn as systemSpawn, type SpawnOptions } from "node:child_process";
 import { CaelushClient, type CaelushClientOptions } from "@caelush/client";
-import type { DaemonInfo, HealthResponse } from "@caelush/protocol";
+import type {
+  CreateWorkspaceRequest,
+  DaemonInfo,
+  HealthResponse,
+  WorkspaceRecord,
+} from "@caelush/protocol";
 import { daemonEntryPath } from "@caelush/daemon/entry";
 import { resolveProductPaths, type ProductPaths } from "@caelush/daemon/paths";
 import { PRODUCT_VERSION } from "./version.js";
@@ -18,6 +23,7 @@ export const DAEMON_STARTUP_POLL_MS = 100;
 export interface DaemonProbeClient {
   getHealth(): Promise<HealthResponse>;
   getInfo(): Promise<DaemonInfo>;
+  createWorkspace(input: CreateWorkspaceRequest): Promise<WorkspaceRecord>;
 }
 
 export interface SpawnedDaemon {

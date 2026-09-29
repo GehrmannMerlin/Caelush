@@ -19,6 +19,16 @@ import {
 import { Timeline } from "../src/components/timeline.js";
 
 describe("Timeline", () => {
+  it("collapses the execution process after completion and expands it while active", () => {
+    const timeline = timelineFromVisibleEvents();
+    const completedHtml = renderToStaticMarkup(<Timeline timeline={timeline} isActive={false} />);
+    const activeHtml = renderToStaticMarkup(<Timeline timeline={timeline} isActive />);
+
+    expect(completedHtml).toContain('<details class="timeline"');
+    expect(completedHtml).not.toContain('<details class="timeline" open');
+    expect(activeHtml).toContain('<details class="timeline" open');
+  });
+
   it("renders safe projected activity without controls or raw process output", () => {
     const html = renderToStaticMarkup(<Timeline timeline={timelineFromVisibleEvents()} />);
 

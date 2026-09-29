@@ -3,12 +3,15 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   useSyncExternalStore,
+  type FormEvent,
   type ReactElement,
 } from "react";
-import type { SessionId } from "@caelush/protocol";
+import type { SessionId, WorkspaceId, WorkspaceRecord, WorkspaceRef } from "@caelush/protocol";
 import { createInitialLiveActivityState, createInitialTimelineState } from "@caelush/client";
+import { PanelLeft } from "lucide-react";
 import {
   bootstrapWebHost,
   createInitialWebHostState,
@@ -19,14 +22,23 @@ import {
   type WebSessionClient,
   type WebSessionSnapshot,
 } from "./application/session-manager.js";
+import {
+  WebWorkspaceManager,
+  WorkspaceSelectionStore,
+  type WorkspaceManagerClient,
+  type WorkspaceManagerState,
+} from "./application/workspace-manager.js";
 import { derivePromptTitle } from "./application/prompt.js";
 import { PromptComposer } from "./components/prompt-composer.js";
-import { SessionSidebar, sessionDisplayTitle } from "./components/session-sidebar.js";
 import { SessionWorkspace } from "./components/session-workspace.js";
 import { SessionSelectionStore } from "./application/session-persistence.js";
 import { ReconnectBanner } from "./components/reconnect-banner.js";
+import { WorkspaceSidebar } from "./components/workspace-sidebar.js";
+import { WorkspaceEmptyState } from "./components/workspace-empty-state.js";
+import { WorkspaceDialog } from "./components/workspace-dialog.js";
 
 const sessionSelectionStore = new SessionSelectionStore();
+const workspaceSelectionStore = new WorkspaceSelectionStore();
 
 const EMPTY_SESSION_SNAPSHOT: WebSessionSnapshot = {
   status: "IDLE",
@@ -43,17 +55,32 @@ const EMPTY_SESSION_SNAPSHOT: WebSessionSnapshot = {
   controlMode: "NONE",
 };
 
+const EMPTY_WORKSPACE_STATE: WorkspaceManagerState = {
+  status: "IDLE",
+  workspaces: [],
+  expandedWorkspaceIds: [],
+  sessionSummaries: {},
+};
+
 export function WebHostApp(props: {
   readonly client: WebSessionClient;
-  readonly launchContext: unknown;
+  readonly launchContext?: unknown | undefined;
+  readonly initialWorkspaceId?: WorkspaceId | undefined;
 }): ReactElement {
   const [state, setState] = useState<WebHostState>(createInitialWebHostState);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [workspaceDialogOpen, setWorkspaceDialogOpen] = useState(false);
+  const [workspacePath, setWorkspacePath] = useState("");
+  const [workspacePickerBusy, setWorkspacePickerBusy] = useState(false);
+  const [workspaceActionError, setWorkspaceActionError] = useState<string | undefined>();
+  const pendingDraftWorkspaceId = useRef<WorkspaceId | undefined>(undefined);
 
   useEffect(() => {
     let active = true;
     void bootstrapWebHost({
-      ...props,
+      client: props.client,
+      launchContext: props.launchContext,
+      initialWorkspaceId: props.initialWorkspaceId,
       onState: (nextState) => {
         if (active) setState(nextState);
       },
@@ -61,19 +88,63 @@ export function WebHostApp(props: {
     return () => {
       active = false;
     };
-  }, [props.client, props.launchContext]);
+  }, [props.client, props.launchContext, props.initialWorkspaceId]);
+
+  const workspaceManager = useMemo(() => {
+    if (state.bootstrap !== "READY") return undefined;
+    return new WebWorkspaceManager({
+      client: props.client as unknown as WorkspaceManagerClient,
+      selectionStore: workspaceSelectionStore,
+      initialWorkspaceId: state.initialWorkspaceId,
+    });
+  }, [props.client, state.bootstrap, state.initialWorkspaceId]);
+
+  useEffect(() => {
+    if (workspaceManager === undefined) return;
+    void workspaceManager.loadWorkspaces();
+    return () => workspaceManager.dispose();
+  }, [workspaceManager]);
+
+  const workspaceSubscribe = useCallback(
+    (listener: () => void) => workspaceManager?.subscribe(() => listener()) ?? (() => undefined),
+    [workspaceManager],
+  );
+  const workspaceGetSnapshot = useCallback(
+    () => workspaceManager?.getSnapshot() ?? EMPTY_WORKSPACE_STATE,
+    [workspaceManager],
+  );
+  const workspaceState = useSyncExternalStore(
+    workspaceSubscribe,
+    workspaceGetSnapshot,
+    workspaceGetSnapshot,
+  );
+
+  const selectedWorkspace = workspaceState.workspaces.find(
+    (workspace) => workspace.id === workspaceState.selectedWorkspaceId,
+  );
+  const selectedWorkspaceRef = useMemo<WorkspaceRef | undefined>(
+    () =>
+      selectedWorkspace === undefined
+        ? undefined
+        : { id: selectedWorkspace.id, path: selectedWorkspace.canonicalPath },
+    [selectedWorkspace],
+  );
 
   const sessionManager = useMemo(() => {
-    if (state.bootstrap !== "READY" || state.info === undefined || state.workspace === undefined) {
+    if (
+      state.bootstrap !== "READY" ||
+      state.info === undefined ||
+      selectedWorkspaceRef === undefined
+    ) {
       return undefined;
     }
     return new WebSessionManager({
       client: props.client,
       info: state.info,
-      workspace: state.workspace,
+      workspace: selectedWorkspaceRef,
       selectionStore: sessionSelectionStore,
     });
-  }, [props.client, state.bootstrap, state.info, state.workspace]);
+  }, [props.client, selectedWorkspaceRef, state.bootstrap, state.info]);
 
   useEffect(() => {
     if (sessionManager === undefined) return;
@@ -81,183 +152,331 @@ export function WebHostApp(props: {
     return () => sessionManager.dispose();
   }, [sessionManager]);
 
-  const subscribe = useCallback(
+  const sessionSubscribe = useCallback(
     (listener: () => void) => sessionManager?.subscribe(() => listener()) ?? (() => undefined),
     [sessionManager],
   );
-  const getSnapshot = useCallback(
+  const sessionGetSnapshot = useCallback(
     () => sessionManager?.getSnapshot() ?? EMPTY_SESSION_SNAPSHOT,
     [sessionManager],
   );
-  const sessionSnapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const sessionSnapshot = useSyncExternalStore(
+    sessionSubscribe,
+    sessionGetSnapshot,
+    sessionGetSnapshot,
+  );
+  const sessionCandidateFingerprint = useMemo(
+    () =>
+      sessionSnapshot.candidates
+        .map(
+          (candidate) =>
+            `${candidate.session.id}:${candidate.lastActivityAt}:${candidate.latestRun?.status ?? ""}`,
+        )
+        .join("|"),
+    [sessionSnapshot.candidates],
+  );
 
-  if (state.bootstrap !== "READY" || sessionManager === undefined) {
+  useEffect(() => {
+    if (
+      workspaceManager === undefined ||
+      selectedWorkspace === undefined ||
+      sessionSnapshot.status !== "READY" ||
+      workspaceState.status !== "READY"
+    ) {
+      return;
+    }
+    void workspaceManager.loadWorkspaceSessions(selectedWorkspace.id);
+  }, [
+    selectedWorkspace?.id,
+    sessionCandidateFingerprint,
+    sessionSnapshot.status,
+    workspaceManager,
+    workspaceState.status,
+  ]);
+
+  useEffect(() => {
+    const pending = pendingDraftWorkspaceId.current;
+    if (
+      pending === undefined ||
+      selectedWorkspace?.id !== pending ||
+      sessionManager === undefined ||
+      sessionSnapshot.status !== "READY"
+    ) {
+      return;
+    }
+    pendingDraftWorkspaceId.current = undefined;
+    sessionManager.beginDraft();
+  }, [selectedWorkspace?.id, sessionManager, sessionSnapshot.status]);
+
+  if (state.bootstrap !== "READY" || workspaceManager === undefined) {
     return renderHostBootstrap(state);
   }
-  return renderSessionApp({
-    manager: sessionManager,
-    snapshot: sessionSnapshot,
+
+  const closeSidebar = () => setSidebarOpen(false);
+  const selectedWorkspaceId = selectedWorkspace?.id;
+  const onSelectWorkspace = (workspaceId: WorkspaceId) => {
+    setWorkspaceActionError(undefined);
+    void workspaceManager.selectWorkspace(workspaceId);
+    closeSidebar();
+  };
+  const onNewSession = (workspaceId: WorkspaceId) => {
+    if (workspaceId !== selectedWorkspaceId) {
+      pendingDraftWorkspaceId.current = workspaceId;
+      void workspaceManager.selectWorkspace(workspaceId);
+    } else {
+      sessionManager?.beginDraft();
+    }
+    closeSidebar();
+  };
+  const onSelectSession = (workspaceId: WorkspaceId, sessionId: SessionId) => {
+    pendingDraftWorkspaceId.current = undefined;
+    if (workspaceId !== selectedWorkspaceId) {
+      void workspaceManager.selectWorkspace(workspaceId);
+    } else {
+      void sessionManager?.selectSession(sessionId);
+    }
+    closeSidebar();
+  };
+  const onForgetWorkspace = (workspaceId: WorkspaceId) => {
+    const target = workspaceState.workspaces.find((workspace) => workspace.id === workspaceId);
+    if (
+      typeof window !== "undefined" &&
+      target !== undefined &&
+      !window.confirm(`从 ${target.displayName} 中移除？这不会删除磁盘文件。`)
+    ) {
+      return;
+    }
+    setWorkspaceActionError(undefined);
+    void workspaceManager.forgetWorkspace(workspaceId).catch(() => {
+      const error = workspaceManager.getSnapshot().error;
+      setWorkspaceActionError(error?.message ?? "工作区移除失败。");
+    });
+  };
+  const onAddWorkspace = () => {
+    setWorkspaceActionError(undefined);
+    setWorkspacePath("");
+    setWorkspacePickerBusy(false);
+    setWorkspaceDialogOpen(true);
+  };
+  const onPickWorkspaceDirectory = async () => {
+    setWorkspaceActionError(undefined);
+    setWorkspacePickerBusy(true);
+    try {
+      const result = await workspaceManager.pickWorkspaceDirectory();
+      if (result.status === "SELECTED") {
+        setWorkspacePath(result.path);
+      } else if (result.status === "TIMEOUT") {
+        setWorkspaceActionError("文件夹选择器等待超时，请重试。");
+      } else if (result.status === "UNAVAILABLE") {
+        setWorkspaceActionError("本机文件夹选择器暂不可用，请检查本地 Caelush 服务。");
+      }
+    } catch {
+      setWorkspaceActionError("无法打开本机文件夹选择器，请稍后重试。");
+    } finally {
+      setWorkspacePickerBusy(false);
+    }
+  };
+  const onRegisterWorkspace = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const path = workspacePath.trim();
+    if (path.length === 0) {
+      setWorkspaceActionError("请先选择一个本机文件夹。");
+      return;
+    }
+    try {
+      const created = await workspaceManager.registerWorkspace(path);
+      pendingDraftWorkspaceId.current = created.id;
+      setWorkspaceDialogOpen(false);
+      setWorkspacePath("");
+      setWorkspaceActionError(undefined);
+    } catch {
+      setWorkspaceActionError(workspaceManager.getSnapshot().error?.message ?? "工作区注册失败。");
+    }
+  };
+
+  return renderWorkspaceApp({
     host: state,
+    workspaceState,
+    selectedWorkspace,
+    sessionManager,
+    snapshot: sessionSnapshot,
     sidebarOpen,
+    workspaceDialogOpen,
+    workspacePath,
+    workspacePickerBusy,
+    workspaceActionError,
     onToggleSidebar: () => setSidebarOpen((open) => !open),
-    onCloseSidebar: () => setSidebarOpen(false),
+    onCloseSidebar: closeSidebar,
+    onToggleWorkspace: (workspaceId) => workspaceManager.toggleWorkspaceExpanded(workspaceId),
+    onSelectWorkspace,
+    onNewSession,
+    onSelectSession,
+    onAddWorkspace,
+    onForgetWorkspace,
+    onCloseWorkspaceDialog: () => setWorkspaceDialogOpen(false),
+    onPickWorkspaceDirectory,
+    onRegisterWorkspace,
   });
 }
 
-function renderSessionApp(input: {
-  readonly manager: WebSessionManager;
-  readonly snapshot: WebSessionSnapshot;
+function renderWorkspaceApp(input: {
   readonly host: WebHostState;
+  readonly workspaceState: WorkspaceManagerState;
+  readonly selectedWorkspace?: WorkspaceRecord | undefined;
+  readonly sessionManager?: WebSessionManager | undefined;
+  readonly snapshot: WebSessionSnapshot;
   readonly sidebarOpen: boolean;
+  readonly workspaceDialogOpen: boolean;
+  readonly workspacePath: string;
+  readonly workspacePickerBusy: boolean;
+  readonly workspaceActionError?: string | undefined;
   readonly onToggleSidebar: () => void;
   readonly onCloseSidebar: () => void;
+  readonly onToggleWorkspace: (workspaceId: WorkspaceId) => void;
+  readonly onSelectWorkspace: (workspaceId: WorkspaceId) => void;
+  readonly onNewSession: (workspaceId: WorkspaceId) => void;
+  readonly onSelectSession: (workspaceId: WorkspaceId, sessionId: SessionId) => void;
+  readonly onAddWorkspace: () => void;
+  readonly onForgetWorkspace: (workspaceId: WorkspaceId) => void;
+  readonly onCloseWorkspaceDialog: () => void;
+  readonly onPickWorkspaceDirectory: () => void;
+  readonly onRegisterWorkspace: (event: FormEvent<HTMLFormElement>) => void;
 }): ReactElement {
-  const { manager, snapshot, host } = input;
+  const { snapshot, selectedWorkspace } = input;
   const selectedCandidate = snapshot.candidates.find(
     (candidate) => candidate.session.id === snapshot.selectedSessionId,
   );
   const title = snapshot.isDraft
     ? "新会话"
     : selectedCandidate !== undefined
-      ? sessionDisplayTitle(selectedCandidate)
+      ? derivePromptTitle(
+          selectedCandidate.latestRun?.goal ?? selectedCandidate.session.title ?? "新会话",
+        )
       : snapshot.selectedSession?.title !== undefined
         ? derivePromptTitle(snapshot.selectedSession.title)
         : "选择一个会话";
-  const canInteract = snapshot.status === "READY" && snapshot.activeRuns.length === 0;
   const composerDisabled =
     !snapshot.composerEnabled ||
     snapshot.controlMode === "CANCELLING" ||
     snapshot.controlMode === "RECOVERY_PICKER" ||
     snapshot.controlMode === "PENDING_RUN_CONFIRMATION";
-  const onNewSession = () => manager.beginDraft();
-  const onSelectSession = (sessionId: SessionId) => {
-    void manager.selectSession(sessionId);
-  };
-  const onSubmit = (prompt: string) => manager.submitPrompt(prompt);
+  const hasWorkspace = selectedWorkspace !== undefined && input.sessionManager !== undefined;
 
   return createElement(
     "main",
     { className: "web-app-shell" },
     createElement(
-      "header",
-      { className: "web-topbar" },
-      createElement(
-        "button",
-        {
-          type: "button",
-          className: "sidebar-toggle-button",
-          onClick: input.onToggleSidebar,
-          "aria-controls": "caelush-session-sidebar",
-          "aria-expanded": input.sidebarOpen,
-          "aria-label": input.sidebarOpen ? "关闭会话栏" : "打开会话栏",
-        },
-        "≡",
-      ),
-      createElement(
-        "div",
-        { className: "brand-lockup" },
-        createElement("span", { className: "brand-symbol", "aria-hidden": "true" }, "C"),
-        createElement("span", { className: "brand-name" }, "Caelush"),
-      ),
-      createElement(
-        "div",
-        { className: "topbar-workspace" },
-        createElement("span", { className: "topbar-workspace-label" }, "工作区"),
-        createElement("code", null, host.workspace?.path ?? ""),
-      ),
-      createElement(
-        "div",
-        {
-          className: `connection-summary connection-summary--${snapshot.transportState.toLowerCase()}`,
-          role: "status",
-        },
-        createElement("span", { className: "connection-dot", "aria-hidden": "true" }),
-        createElement("span", null, connectionLabel(snapshot.transportState)),
-      ),
+      "button",
+      {
+        type: "button",
+        className: "sidebar-toggle-button",
+        onClick: input.onToggleSidebar,
+        "aria-controls": "caelush-workspace-sidebar",
+        "aria-expanded": input.sidebarOpen,
+        "aria-label": input.sidebarOpen ? "关闭项目栏" : "打开项目栏",
+      },
+      createElement(PanelLeft, { size: 18, strokeWidth: 2.1, "aria-hidden": true }),
     ),
     input.sidebarOpen
       ? createElement("button", {
           type: "button",
           className: "sidebar-backdrop",
           onClick: input.onCloseSidebar,
-          "aria-label": "关闭会话栏",
+          "aria-label": "关闭项目栏",
         })
       : null,
     createElement(
       "div",
       { className: "workspace-frame" },
-      createElement(SessionSidebar, {
-        candidates: snapshot.candidates,
+      createElement(WorkspaceSidebar, {
+        workspaces: input.workspaceState.workspaces,
+        selectedWorkspaceId: input.workspaceState.selectedWorkspaceId,
+        expandedWorkspaceIds: input.workspaceState.expandedWorkspaceIds,
+        sessionSummaries: input.workspaceState.sessionSummaries,
         selectedSessionId: snapshot.selectedSessionId,
         isDraft: snapshot.isDraft,
-        canInteract,
+        canNavigate: input.workspaceState.status === "READY",
         isOpen: input.sidebarOpen,
-        onNewSession: () => {
-          onNewSession();
-          input.onCloseSidebar();
-        },
-        onSelectSession: (sessionId) => {
-          onSelectSession(sessionId);
-          input.onCloseSidebar();
-        },
-        onClose: input.onCloseSidebar,
+        onToggleWorkspace: input.onToggleWorkspace,
+        onSelectWorkspace: input.onSelectWorkspace,
+        onNewSession: input.onNewSession,
+        onSelectSession: input.onSelectSession,
+        onAddWorkspace: input.onAddWorkspace,
+        onForgetWorkspace: input.onForgetWorkspace,
       }),
       createElement(
         "div",
         { className: "workspace-column" },
-        createElement(
-          "div",
-          { className: "workspace-notices" },
-          snapshot.transportState === "CONNECTED"
-            ? null
-            : createElement(ReconnectBanner, {
-                state: snapshot.transportState,
-                attempt: snapshot.transportAttempt,
-                onReconnect: () => manager.reconnectActiveRun(),
+        input.workspaceActionError === undefined
+          ? null
+          : createElement(
+              "p",
+              { className: "workspace-action-error", role: "alert" },
+              input.workspaceActionError,
+            ),
+        hasWorkspace
+          ? createElement(
+              "div",
+              { className: "workspace-notices" },
+              snapshot.transportState === "CONNECTED"
+                ? null
+                : createElement(ReconnectBanner, {
+                    state: snapshot.transportState,
+                    attempt: snapshot.transportAttempt,
+                    onReconnect: () => input.sessionManager?.reconnectActiveRun(),
+                  }),
+            )
+          : null,
+        hasWorkspace
+          ? createElement(SessionWorkspace, {
+              title,
+              activeRun: snapshot.activeRun,
+              controlMode: snapshot.controlMode,
+              approvals: snapshot.approvalState?.requests,
+              recoveryRuns: snapshot.activeRuns.map((run) => ({
+                id: run.id,
+                goal: run.goal,
+                status: run.status,
+                createdAt: run.createdAt,
+              })),
+              history: snapshot.history,
+              timeline: snapshot.timeline,
+              liveActivity: snapshot.liveActivity,
+              composer: createElement(PromptComposer, {
+                disabled: composerDisabled,
+                submission: snapshot.submission,
+                error: snapshot.error,
+                contextUsage: snapshot.contextUsage ?? null,
+                onSubmit: async (prompt) =>
+                  (await input.sessionManager?.submitPrompt(prompt)) ?? false,
               }),
-        ),
-        createElement(SessionWorkspace, {
-          title,
-          activeRun: snapshot.activeRun,
-          controlMode: snapshot.controlMode,
-          approvals: snapshot.approvalState?.requests,
-          recoveryRuns: snapshot.activeRuns.map((run) => ({
-            id: run.id,
-            goal: run.goal,
-            status: run.status,
-            createdAt: run.createdAt,
-          })),
-          history: snapshot.history,
-          timeline: snapshot.timeline,
-          liveActivity: snapshot.liveActivity,
-          composer: createElement(PromptComposer, {
-            disabled: composerDisabled,
-            submission: snapshot.submission,
-            error: snapshot.error,
-            contextUsage: snapshot.contextUsage ?? null,
-            onSubmit,
-          }),
-          onCancel: () => manager.cancelRun(),
-          onContinueResource: () => manager.continueResourceGuard(),
-          onResolveApproval: (approvalId, resolution) =>
-            manager.resolveApproval(approvalId, resolution),
-          onSelectRecoveryRun: (runId) => manager.selectRecoveryRun(runId),
-          onConfirmPendingRun: (runId) => manager.confirmPendingRun(runId),
-        }),
+              onCancel: async () => (await input.sessionManager?.cancelRun()) ?? false,
+              onContinueResource: async () =>
+                (await input.sessionManager?.continueResourceGuard()) ?? false,
+              onResolveApproval: async (approvalId, resolution) =>
+                (await input.sessionManager?.resolveApproval(approvalId, resolution)) ?? false,
+              onSelectRecoveryRun: async (runId) =>
+                (await input.sessionManager?.selectRecoveryRun(runId)) ?? false,
+              onConfirmPendingRun: async (runId) =>
+                (await input.sessionManager?.confirmPendingRun(runId)) ?? false,
+            })
+          : createElement(WorkspaceEmptyState, {
+              hasWorkspaces: input.workspaceState.workspaces.length > 0,
+              onAddWorkspace: input.onAddWorkspace,
+            }),
       ),
     ),
+    input.workspaceDialogOpen
+      ? createElement(WorkspaceDialog, {
+          path: input.workspacePath,
+          isPicking: input.workspacePickerBusy,
+          error: input.workspaceActionError,
+          onClose: input.onCloseWorkspaceDialog,
+          onPick: input.onPickWorkspaceDirectory,
+          onSubmit: input.onRegisterWorkspace,
+        })
+      : null,
   );
-}
-
-function connectionLabel(state: WebSessionSnapshot["transportState"]): string {
-  switch (state) {
-    case "CONNECTED":
-      return "已连接";
-    case "RECONNECTING":
-      return "重连中";
-    case "DISCONNECTED":
-      return "已断开";
-  }
 }
 
 function renderHostBootstrap(state: WebHostState): ReactElement {
@@ -283,23 +502,15 @@ function renderHostBootstrap(state: WebHostState): ReactElement {
         createElement("span", { className: "host-status-dot", "aria-hidden": "true" }),
         createElement("span", null, statusLabel(state)),
       ),
-      state.workspace === undefined
+      state.info === undefined
         ? null
         : createElement(
             "dl",
             { className: "host-details" },
-            createElement("dt", null, "工作区"),
-            createElement("dd", null, state.workspace.path),
-            state.info === undefined
-              ? null
-              : createElement(
-                  "div",
-                  { className: "host-meta" },
-                  createElement("dt", null, "服务版本"),
-                  createElement("dd", null, state.info.daemonVersion),
-                  createElement("dt", null, "协议版本"),
-                  createElement("dd", null, `v${state.info.protocolVersion}`),
-                ),
+            createElement("dt", null, "服务版本"),
+            createElement("dd", null, state.info.daemonVersion),
+            createElement("dt", null, "协议版本"),
+            createElement("dd", null, `v${state.info.protocolVersion}`),
           ),
       state.error === undefined
         ? null

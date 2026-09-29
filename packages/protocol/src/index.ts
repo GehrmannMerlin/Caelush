@@ -76,8 +76,8 @@ export { ModelRefSchema } from "./model.js";
 export type { ModelRef } from "./model.js";
 export { RuntimeRefSchema } from "./runtime.js";
 export type { RuntimeRef } from "./runtime.js";
-export { WorkspaceRefSchema } from "./workspace.js";
-export type { WorkspaceRef } from "./workspace.js";
+export { WorkspaceRecordSchema, WorkspaceRefSchema, WorkspaceSummarySchema } from "./workspace.js";
+export type { WorkspaceRecord, WorkspaceRef, WorkspaceSummary } from "./workspace.js";
 export { ToolInvocationSchema, ToolInvocationStatusSchema, ToolNameSchema } from "./tool.js";
 export type { ToolInvocation, ToolInvocationStatus, ToolName } from "./tool.js";
 export {
@@ -264,6 +264,7 @@ export {
   ClientModelSelectionSchema,
   CreateRunRequestSchema,
   CreateSessionRequestSchema,
+  CreateWorkspaceRequestSchema,
   DaemonInfoSchema,
   DefaultRunConfigurationSchema,
   EventStreamQuerySchema,
@@ -275,6 +276,12 @@ export {
   RunListResponseSchema,
   SessionListQuerySchema,
   SessionListResponseSchema,
+  WorkspaceIdParamSchema,
+  WorkspaceListQuerySchema,
+  WorkspaceListResponseSchema,
+  WorkspaceDirectoryPickerResponseSchema,
+  WorkspaceSessionListResponseSchema,
+  WorkspaceSessionSummarySchema,
   ContextUsagePressureStateSchema,
   ContextUsageProjectionSchema,
   ContextUsageResponseSchema,
@@ -301,6 +308,7 @@ export type {
   ClientModelSelection,
   CreateRunRequest,
   CreateSessionRequest,
+  CreateWorkspaceRequest,
   DaemonCapabilities,
   DaemonInfo,
   DefaultRunConfiguration,
@@ -313,6 +321,11 @@ export type {
   RunListResponse,
   SessionListQuery,
   SessionListResponse,
+  WorkspaceListQuery,
+  WorkspaceListResponse,
+  WorkspaceDirectoryPickerResponse,
+  WorkspaceSessionListResponse,
+  WorkspaceSessionSummary,
   ContextUsageProjection,
   ContextUsageResponse,
   AssistantTranscriptEntry,

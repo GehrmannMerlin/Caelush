@@ -139,11 +139,9 @@ describe("Web Host bootstrap model", () => {
     });
   });
 
-  it("rejects missing and malformed launch contexts before network access", async () => {
+  it("allows an empty launch context while still rejecting malformed JSON", async () => {
     const getHealth = vi.fn(async () => health);
-    await expect(parseWebLaunchContext(undefined)).rejects.toMatchObject({
-      code: "WORKSPACE_MISSING",
-    });
+    await expect(parseWebLaunchContext(undefined)).resolves.toEqual({});
     await expect(parseWebLaunchContext("not-json")).rejects.toMatchObject({
       code: "BOOTSTRAP_INVALID",
     });
@@ -152,8 +150,23 @@ describe("Web Host bootstrap model", () => {
       launchContext: undefined,
       client: clientWith({ getHealth }),
     });
-    expect(state.bootstrap).toBe("WORKSPACE_MISSING");
-    expect(getHealth).not.toHaveBeenCalled();
+    expect(state).toMatchObject({
+      bootstrap: "READY",
+      connection: "CONNECTED",
+      health,
+      info,
+    });
+    expect(getHealth).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an optional query workspace as a selection hint", async () => {
+    const state = await bootstrapWebHost({
+      launchContext: undefined,
+      initialWorkspaceId: workspace.id,
+      client: clientWith({}),
+    });
+
+    expect(state).toMatchObject({ bootstrap: "READY", initialWorkspaceId: workspace.id });
   });
 
   it("projects unknown errors to a fixed safe Web error", () => {

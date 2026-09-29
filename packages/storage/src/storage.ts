@@ -70,8 +70,13 @@ import {
   SqliteContextRuntimeStateRepository,
   type ContextRuntimeStateRepository,
 } from "./context-runtime-state-repository.js";
+import {
+  SqliteWorkspaceRepository,
+  type WorkspaceRepository,
+} from "./repositories/workspace-repository.js";
 
 export interface CaelushStorage {
+  readonly workspaces: WorkspaceRepository;
   readonly sessions: SessionRepository;
   readonly runs: RunRepository;
   readonly steps: StepRepository;
@@ -122,6 +127,7 @@ export async function openCaelushStorage(options: {
     await migrateCaelushDatabase(database);
     const eventStore = new SqliteDurableEventStore(database);
     return {
+      workspaces: new SqliteWorkspaceRepository(database),
       sessions: new SqliteSessionRepository(database),
       runs: new SqliteRunRepository(database),
       steps: new SqliteStepRepository(database),

@@ -7,6 +7,7 @@ import {
   RunLimitsSchema,
   RunListQuerySchema,
   SessionListQuerySchema,
+  WorkspaceDirectoryPickerResponseSchema,
   WorkspaceRefSchema,
   ModelRefSchema,
   RuntimeRefSchema,
@@ -93,5 +94,26 @@ describe("Protocol API contracts", () => {
     expect(WorkspaceRefSchema).toBeDefined();
     expect(ModelRefSchema).toBeDefined();
     expect(RuntimeRefSchema).toBeDefined();
+  });
+
+  it("represents selected, cancelled, and unavailable native folder picker outcomes", () => {
+    expect(
+      WorkspaceDirectoryPickerResponseSchema.parse({
+        status: "SELECTED",
+        path: "D:\\Develop\\Caelush",
+      }),
+    ).toEqual({ status: "SELECTED", path: "D:\\Develop\\Caelush" });
+    expect(WorkspaceDirectoryPickerResponseSchema.parse({ status: "CANCELLED" })).toEqual({
+      status: "CANCELLED",
+    });
+    expect(WorkspaceDirectoryPickerResponseSchema.parse({ status: "UNAVAILABLE" })).toEqual({
+      status: "UNAVAILABLE",
+    });
+    expect(WorkspaceDirectoryPickerResponseSchema.parse({ status: "TIMEOUT" })).toEqual({
+      status: "TIMEOUT",
+    });
+    expect(WorkspaceDirectoryPickerResponseSchema.safeParse({ status: "SELECTED" }).success).toBe(
+      false,
+    );
   });
 });

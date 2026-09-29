@@ -20,6 +20,8 @@ import {
 } from "../execution/run-execution-supervisor.js";
 import { DaemonModelConfigurationError } from "../providers/model-canonicalizer.js";
 import { EventCursorAheadError } from "../events/run-event-hub.js";
+import { WorkspacePathError } from "../workspaces/workspace-identity.js";
+import { ActiveRunConflictError, WorkspaceOwnershipError } from "../workspaces/workspace-errors.js";
 
 export class InvalidEventCursorError extends Error {
   constructor() {
@@ -82,6 +84,23 @@ function isEventCursorValidationError(error: unknown): boolean {
 }
 
 function mapError(error: unknown): MappedError {
+  if (error instanceof WorkspacePathError) {
+    return {
+      statusCode: 400,
+      code: "INVALID_REQUEST",
+      message: "The workspace path is invalid.",
+    };
+  }
+  if (error instanceof WorkspaceOwnershipError) {
+    return { statusCode: 400, code: "INVALID_REQUEST", message: "The Workspace ownership is invalid." };
+  }
+  if (error instanceof ActiveRunConflictError) {
+    return {
+      statusCode: 409,
+      code: "ACTIVE_RUN_CONFLICT",
+      message: "The Workspace has an active Run and cannot be forgotten.",
+    };
+  }
   if (error instanceof LocalRequestRejectedError) {
     return { statusCode: 403, code: "INVALID_REQUEST", message: "Request is not allowed." };
   }

@@ -49,6 +49,10 @@ export type {
 export { decodeProtocol, encodeProtocol } from "./codec.js";
 export type { ProtocolCodecContext, ProtocolSchema } from "./codec.js";
 export type { SessionListOptions, SessionRepository } from "./repositories/session-repository.js";
+export {
+  SqliteWorkspaceRepository,
+  type WorkspaceRepository,
+} from "./repositories/workspace-repository.js";
 export type {
   RecoverableRunQuery,
   RunListOptions,

@@ -64,3 +64,21 @@ export {
   ContextUsageResponseSchema,
 } from "./context-usage.js";
 export type { ContextUsageProjection, ContextUsageResponse } from "./context-usage.js";
+export {
+  CreateWorkspaceRequestSchema,
+  WorkspaceIdParamSchema,
+  WorkspaceListQuerySchema,
+  WorkspaceListResponseSchema,
+  WorkspaceRecordSchema,
+  WorkspaceDirectoryPickerResponseSchema,
+  WorkspaceSessionListResponseSchema,
+  WorkspaceSessionSummarySchema,
+} from "./workspace.js";
+export type {
+  CreateWorkspaceRequest,
+  WorkspaceListQuery,
+  WorkspaceListResponse,
+  WorkspaceDirectoryPickerResponse,
+  WorkspaceSessionListResponse,
+  WorkspaceSessionSummary,
+} from "./workspace.js";

@@ -15,6 +15,7 @@ import {
   type RunActionResponse,
   type SessionTranscriptResponse,
   type TranscriptEntry,
+  type WorkspaceSessionSummary,
   type WorkspaceRef,
 } from "@caelush/protocol";
 import type { Timer, WatchRunEventsOptions } from "@caelush/client";
@@ -484,6 +485,35 @@ describe("WebSessionManager", () => {
     manager.dispose();
   });
 
+  it("allows navigation away from an active Run without cancelling it", async () => {
+    const activeSession = makeSession({ defaultWorkspace: workspace, workspaceId: workspace.id });
+    const otherSession = makeSession({ defaultWorkspace: workspace, workspaceId: workspace.id });
+    const activeRun = makeRun({ sessionId: activeSession.id, status: "RUNNING" });
+    const summaries: readonly WorkspaceSessionSummary[] = [
+      { session: activeSession, latestRun: activeRun, lastActivityAt: 2 },
+      { session: otherSession, lastActivityAt: 1 },
+    ];
+    const client = makeClient({
+      latestRuns: new Map([[activeSession.id, [activeRun]]]),
+    });
+    client.listWorkspaceSessions = vi.fn(async () => ({ items: summaries }));
+    client.listRuns.mockImplementation(async (sessionId: string) => ({
+      items: sessionId === activeSession.id ? [activeRun] : [],
+    }));
+    client.cancelRun.mockResolvedValue(actionResponse(activeRun, activeRun.id));
+
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+    await manager.loadSessions();
+    await expect(manager.selectSession(activeSession.id)).resolves.toBe(true);
+    await expect(manager.selectSession(otherSession.id)).resolves.toBe(true);
+
+    expect(manager.getSnapshot().selectedSessionId).toBe(otherSession.id);
+    expect(client.cancelRun).not.toHaveBeenCalled();
+    expect(client.listSessions).not.toHaveBeenCalled();
+    expect(client.listWorkspaceSessions).toHaveBeenCalledTimes(1);
+    manager.dispose();
+  });
+
   it("fails closed when a Session has multiple non-terminal Runs", async () => {
     const session = makeSession({ defaultWorkspace: workspace });
     const runs = [
@@ -677,6 +707,7 @@ function makeClient(
     }),
     watchEvents: options.watchEvents ?? [],
     getRunContextUsage: vi.fn(async () => (await options.contextUsage) ?? null),
+    cancelRun: vi.fn(),
   } as unknown as WebSessionClient & {
     readonly createSession: ReturnType<typeof vi.fn>;
     readonly createRun: ReturnType<typeof vi.fn>;
@@ -686,6 +717,7 @@ function makeClient(
     readonly watchRunEvents: ReturnType<typeof vi.fn>;
     readonly watchEvents: readonly PublicRunEvent[];
     readonly getRunContextUsage: ReturnType<typeof vi.fn>;
+    readonly cancelRun: ReturnType<typeof vi.fn>;
   };
   return client;
 }

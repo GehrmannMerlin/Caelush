@@ -1,8 +1,9 @@
 import { createElement, type ReactElement } from "react";
 import type { SessionCandidate } from "@caelush/client";
 import type { SessionId } from "@caelush/protocol";
+import { Plus } from "lucide-react";
 import { derivePromptTitle } from "../application/prompt.js";
-import { runStatusClass, runStatusGlyph, runStatusLabel } from "./run-status.js";
+import { RunStatusIcon, runStatusClass, runStatusLabel } from "./run-status.js";
 
 export interface SessionSidebarProps {
   readonly candidates: readonly SessionCandidate[];
@@ -40,7 +41,7 @@ export function SessionSidebar(props: SessionSidebarProps): ReactElement {
               "aria-label": runStatusLabel("PENDING"),
               title: runStatusLabel("PENDING"),
             },
-            runStatusGlyph("PENDING"),
+            createElement(RunStatusIcon, { status: "PENDING" }),
           ),
           createElement("span", { className: "session-list-title" }, "新会话"),
         ),
@@ -78,8 +79,8 @@ export function SessionSidebar(props: SessionSidebarProps): ReactElement {
           onClick: props.onNewSession,
           disabled: !props.canInteract,
         },
-        createElement("span", { "aria-hidden": "true" }, "+"),
-        " 新建会话",
+        createElement(Plus, { size: 14, strokeWidth: 2.4, "aria-hidden": true }),
+        createElement("span", null, "新建会话"),
       ),
     ),
     createElement(
@@ -110,7 +111,7 @@ export function SessionSidebar(props: SessionSidebarProps): ReactElement {
                 "aria-label": runStatusLabel(status),
                 title: runStatusLabel(status),
               },
-              runStatusGlyph(status),
+              createElement(RunStatusIcon, { status }),
             ),
             createElement(
               "span",

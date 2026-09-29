@@ -53,7 +53,37 @@ function buildApp(fixture: { readonly root: string; readonly workspace: string }
   });
 }
 
+function buildAppWithoutWorkspace(fixture: { readonly root: string }) {
+  return buildDaemonApp({
+    sessions: {} as never,
+    runs: {} as never,
+    eventHub: { watch: async function* () {} } as never,
+    config: { host: "127.0.0.1", port: 43120, sseHeartbeatIntervalMs: 15_000 },
+    info,
+    web: { buildRoot: fixture.root },
+  });
+}
+
 describe("daemon production Web static host", () => {
+  it("serves a registry-owned host without embedding a fixed workspace", async () => {
+    const fixture = await createWebFixture();
+    const app = buildAppWithoutWorkspace(fixture);
+    const response = await app.inject({
+      method: "GET",
+      url: "/",
+      headers: { host: "127.0.0.1" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain("{}");
+    expect(response.body).not.toContain('"workspace"');
+    expect(response.body).not.toContain("__CAELUSH_BOOTSTRAP__");
+
+    await app.close();
+    await rm(fixture.root, { recursive: true, force: true });
+    await rm(fixture.workspace, { recursive: true, force: true });
+  });
+
   it("serves index with launch context and browser security headers", async () => {
     const fixture = await createWebFixture();
     const app = buildApp(fixture);

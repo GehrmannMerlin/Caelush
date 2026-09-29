@@ -6,6 +6,7 @@ import {
   type KeyboardEvent,
   type ReactElement,
 } from "react";
+import { LoaderCircle, Send } from "lucide-react";
 import type { WebSessionError, WebSubmissionState } from "../application/session-manager.js";
 import type { ContextUsageProjection } from "@caelush/protocol";
 import { ContextUsageRing } from "./context-usage-ring.js";
@@ -65,10 +66,19 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
         "button",
         {
           type: "submit",
-          className: "prompt-submit-button",
+          className: "prompt-submit-button prompt-submit-button--icon",
           disabled: props.disabled,
+          "aria-label": submissionLabel(props.submission),
+          title: submissionLabel(props.submission),
         },
-        submissionLabel(props.submission),
+        props.submission === "IDLE"
+          ? createElement(Send, { size: 17, strokeWidth: 2.2, "aria-hidden": true })
+          : createElement(LoaderCircle, {
+              className: "prompt-submit-spinner",
+              size: 17,
+              strokeWidth: 2.2,
+              "aria-hidden": true,
+            }),
       ),
     ),
     props.error === undefined
@@ -88,6 +98,6 @@ function submissionLabel(submission: WebSubmissionState): string {
     case "ACTIVE":
       return "运行中";
     case "IDLE":
-      return "运行 →";
+      return "发送任务";
   }
 }

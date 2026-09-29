@@ -2,11 +2,15 @@ import { createElement, useState, type ReactElement } from "react";
 import type { ContextUsageProjection } from "@caelush/protocol";
 import { ContextInspector } from "./context-inspector.js";
 
+function clampRatio(value: number): number {
+  return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
+}
+
 export function ContextUsageRing(props: {
   readonly usage?: ContextUsageProjection | null;
 }): ReactElement {
   const [open, setOpen] = useState(false);
-  const ratio = props.usage?.usedRatio ?? 0;
+  const ratio = clampRatio(props.usage?.usedRatio ?? 0);
   const label =
     props.usage == null
       ? "工作上下文用量：暂无数据"
@@ -29,13 +33,13 @@ export function ContextUsageRing(props: {
       },
       createElement(
         "svg",
-        { className: "context-usage-ring", viewBox: "0 0 14 14", "aria-hidden": "true" },
-        createElement("circle", { className: "context-usage-ring-track", cx: 7, cy: 7, r: 5 }),
+        { className: "context-usage-ring", viewBox: "0 0 18 18", "aria-hidden": "true" },
+        createElement("circle", { className: "context-usage-ring-track", cx: 9, cy: 9, r: 7 }),
         createElement("circle", {
           className: `context-usage-ring-progress context-usage-ring-progress--${props.usage?.pressureState ?? "EMPTY"}`,
-          cx: 7,
-          cy: 7,
-          r: 5,
+          cx: 9,
+          cy: 9,
+          r: 7,
           pathLength: 1,
           strokeDasharray: 1,
           strokeDashoffset: 1 - ratio,

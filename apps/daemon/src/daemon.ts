@@ -33,6 +33,15 @@ import type { DaemonModelProviderConfig } from "./providers/model-canonicalizer.
 import type { WebStaticHostOptions } from "./web/static-host.js";
 import type { SubscriberQueuePolicy } from "./events/subscriber-queue.js";
 import { DefaultPublicEventProjector } from "./events/public-event-projector.js";
+import { WorkspaceService } from "./workspaces/workspace-service.js";
+import {
+  createNativeWorkspaceDirectoryPicker,
+  type WorkspaceDirectoryPicker,
+} from "./workspaces/workspace-picker.js";
+import {
+  backfillSessionWorkspaceOwnership,
+  type WorkspaceBackfillSummary,
+} from "./workspaces/workspace-backfill.js";
 
 export interface DaemonOptions {
   readonly databasePath: string;
@@ -47,6 +56,10 @@ export interface DaemonOptions {
   readonly modelSources?: readonly ModelDescriptorSourcePort[];
   readonly adapterOverrides?: readonly ApiAdapter[];
   readonly web?: WebStaticHostOptions;
+  /** Compatibility input for the first Workspace registry record. */
+  readonly workspacePath?: string;
+  /** Host adapter for opening a native directory picker. */
+  readonly workspacePicker?: WorkspaceDirectoryPicker;
   /** Typed host/test seam for Context Contributions; no HTTP plugin registration is implied. */
   readonly contextContributionHooks?: readonly ContextContributionRegistration[];
   /** Typed host/test seam for pre-dispatch Tool Guard evaluation. */
@@ -66,6 +79,7 @@ export interface DaemonHandle {
    * unless the next generation asks. This is the evidence that it asked, and what happened.
    */
   readonly startupReconciliation?: StartupReconciliationSummary;
+  readonly workspaceBackfill?: WorkspaceBackfillSummary;
   close(): Promise<void>;
 }
 
@@ -137,6 +151,26 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       }),
     }),
   });
+  const workspaceService = new WorkspaceService({
+    repository: storage.workspaces,
+    sessions: storage.sessions,
+    runs: storage.runs,
+  });
+  let workspaceBackfill: WorkspaceBackfillSummary;
+  try {
+    const compatibilityPath = options.workspacePath?.trim() || options.web?.workspace?.path;
+    if (compatibilityPath !== undefined && compatibilityPath.length > 0) {
+      await workspaceService.registerWorkspace({ path: compatibilityPath });
+    }
+    workspaceBackfill = await backfillSessionWorkspaceOwnership({
+      sessions: storage.sessions,
+      runs: storage.runs,
+      workspaceService,
+    });
+  } catch (error) {
+    await storage.close().catch(() => undefined);
+    throw error;
+  }
   let composition: DaemonComposition;
   try {
     composition = await composeDaemon({
@@ -181,6 +215,9 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     app = buildDaemonApp({
       sessions: storage.sessions,
       runs: storage.runs,
+      workspaces: storage.workspaces,
+      workspaceService,
+      workspacePicker: options.workspacePicker ?? createNativeWorkspaceDirectoryPicker(),
       eventHub: composition.eventHub,
       publicEventProjector: new DefaultPublicEventProjector(),
       activeStreams,
@@ -253,6 +290,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
 
   return {
     url,
+    workspaceBackfill,
     ...(startupReconciliation === undefined ? {} : { startupReconciliation }),
     close: () => {
       closePromise ??= (async () => {

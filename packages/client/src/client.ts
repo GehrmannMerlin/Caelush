@@ -8,6 +8,7 @@ import {
   ContextUsageResponseSchema,
   CreateRunRequestSchema,
   CreateSessionRequestSchema,
+  CreateWorkspaceRequestSchema,
   DaemonInfoSchema,
   HealthResponseSchema,
   RunActionResponseSchema,
@@ -17,6 +18,11 @@ import {
   SessionListResponseSchema,
   SessionTranscriptQuerySchema,
   SessionTranscriptResponseSchema,
+  WorkspaceListResponseSchema,
+  WorkspaceDirectoryPickerResponseSchema,
+  WorkspaceRecordSchema,
+  WorkspaceSessionListResponseSchema,
+  WorkspaceIdSchema,
   type PublicRunEvent,
   type ApiErrorCode,
   type ApprovalListResponse,
@@ -26,6 +32,7 @@ import {
   type ContextUsageResponse,
   type CreateRunRequest,
   type CreateSessionRequest,
+  type CreateWorkspaceRequest,
   type DaemonInfo,
   type HealthResponse,
   type RunActionResponse,
@@ -36,6 +43,11 @@ import {
   type SessionListResponse,
   type SessionTranscriptQuery,
   type SessionTranscriptResponse,
+  type WorkspaceId,
+  type WorkspaceListResponse,
+  type WorkspaceDirectoryPickerResponse,
+  type WorkspaceRecord,
+  type WorkspaceSessionListResponse,
 } from "@caelush/protocol";
 import { ApprovalRequestIdSchema } from "@caelush/protocol";
 
@@ -116,6 +128,84 @@ export class CaelushClient {
       throw new CaelushProtocolCompatibilityError();
     }
     throw new CaelushClientProtocolError("Daemon returned an invalid info response.");
+  }
+
+  async listWorkspaces(options: CaelushClientRequestOptions = {}): Promise<WorkspaceListResponse> {
+    return this.request(
+      "/api/v1/workspaces",
+      { method: "GET" },
+      WorkspaceListResponseSchema,
+      [200],
+      options,
+    );
+  }
+
+  async pickWorkspaceDirectory(
+    options: CaelushClientRequestOptions = {},
+  ): Promise<WorkspaceDirectoryPickerResponse> {
+    return this.request(
+      "/api/v1/workspaces/pick",
+      { method: "POST" },
+      WorkspaceDirectoryPickerResponseSchema,
+      [200],
+      options,
+    );
+  }
+
+  async createWorkspace(
+    input: CreateWorkspaceRequest,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<WorkspaceRecord> {
+    const body = CreateWorkspaceRequestSchema.parse(input);
+    return this.request(
+      "/api/v1/workspaces",
+      jsonRequest("POST", body),
+      WorkspaceRecordSchema,
+      [200, 201],
+      options,
+    );
+  }
+
+  async getWorkspace(
+    workspaceId: WorkspaceId,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<WorkspaceRecord> {
+    const parsedWorkspaceId = WorkspaceIdSchema.parse(workspaceId);
+    return this.request(
+      `/api/v1/workspaces/${encodeURIComponent(parsedWorkspaceId)}`,
+      { method: "GET" },
+      WorkspaceRecordSchema,
+      [200],
+      options,
+    );
+  }
+
+  async deleteWorkspace(
+    workspaceId: WorkspaceId,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<void> {
+    const parsedWorkspaceId = WorkspaceIdSchema.parse(workspaceId);
+    await this.requestRaw(
+      `/api/v1/workspaces/${encodeURIComponent(parsedWorkspaceId)}`,
+      { method: "DELETE" },
+      [204],
+      options,
+      false,
+    );
+  }
+
+  async listWorkspaceSessions(
+    workspaceId: WorkspaceId,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<WorkspaceSessionListResponse> {
+    const parsedWorkspaceId = WorkspaceIdSchema.parse(workspaceId);
+    return this.request(
+      `/api/v1/workspaces/${encodeURIComponent(parsedWorkspaceId)}/sessions`,
+      { method: "GET" },
+      WorkspaceSessionListResponseSchema,
+      [200],
+      options,
+    );
   }
 
   async createSession(
@@ -357,6 +447,7 @@ export class CaelushClient {
     init: RequestInit,
     statuses: readonly number[],
     options: CaelushClientRequestOptions,
+    expectJson = true,
   ): Promise<unknown> {
     let response: Response;
     try {
@@ -376,6 +467,7 @@ export class CaelushClient {
       );
     }
     if (!statuses.includes(response.status)) throw await this.httpError(response);
+    if (!expectJson) return undefined;
     try {
       return await response.json();
     } catch {

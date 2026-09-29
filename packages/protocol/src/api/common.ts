@@ -8,6 +8,7 @@ export const ApiErrorCodeSchema = z.enum([
   "NOT_FOUND",
   "CONFLICT",
   "MODEL_PROVIDER_UNAVAILABLE",
+  "ACTIVE_RUN_CONFLICT",
   "STORAGE_ERROR",
   "INTERNAL_ERROR",
 ]);

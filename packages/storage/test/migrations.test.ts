@@ -138,10 +138,11 @@ describe("committed storage migrations", () => {
         "verification_checks",
         "verification_evidence",
         "verification_plans",
+        "workspaces",
       ]);
-      // Phase 5F adds the final Message V2 physical schema after the thirteen historical migrations.
+      // Phase 5F and the Workspace Registry add the final two published migrations.
       expect(sqlite.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get()).toEqual({
-        count: 14,
+        count: 16,
       });
 
       // The final schema contains only the durable Message V2 envelope and payload.

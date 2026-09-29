@@ -40,7 +40,6 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
     createElement(
       "header",
       { className: "session-workspace-header" },
-      createElement("p", { className: "workspace-kicker" }, "当前会话"),
       createElement("h1", { id: "session-workspace-title" }, props.title),
       props.activeRun === undefined
         ? null
@@ -54,113 +53,137 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
             createElement("span", null, runStatusLabel(props.activeRun.status)),
           ),
     ),
-    props.approvals?.map((approval) =>
-      createElement(ApprovalCard, {
-        key: approval.id,
-        approval,
-        onResolve: props.onResolveApproval ?? (() => undefined),
-      }),
-    ),
-    (props.controlMode === "RECOVERY_PICKER" || props.controlMode === "PENDING_RUN_CONFIRMATION") &&
-      props.recoveryRuns !== undefined
-      ? createElement(RecoveryPanel, {
-          mode: props.controlMode,
-          runs: props.recoveryRuns,
-          onSelectRun: props.onSelectRecoveryRun ?? (() => undefined),
-          onConfirmPending: props.onConfirmPendingRun ?? (() => undefined),
-        })
-      : null,
     createElement(
       "div",
-      { className: "conversation-history", "aria-live": "polite" },
-      props.history.length === 0
+      { className: "session-scroll" },
+      props.approvals?.map((approval) =>
+        createElement(ApprovalCard, {
+          key: approval.id,
+          approval,
+          onResolve: props.onResolveApproval ?? (() => undefined),
+        }),
+      ),
+      (props.controlMode === "RECOVERY_PICKER" ||
+        props.controlMode === "PENDING_RUN_CONFIRMATION") &&
+        props.recoveryRuns !== undefined
+        ? createElement(RecoveryPanel, {
+            mode: props.controlMode,
+            runs: props.recoveryRuns,
+            onSelectRun: props.onSelectRecoveryRun ?? (() => undefined),
+            onConfirmPending: props.onConfirmPendingRun ?? (() => undefined),
+          })
+        : null,
+      createElement(
+        "div",
+        { className: "conversation-history", "aria-live": "polite" },
+        props.history.length === 0
+          ? createElement(
+              "div",
+              { className: "conversation-empty" },
+              createElement("p", null, "在这个会话中输入第一条任务。"),
+            )
+          : props.history.map((entry) =>
+              createElement(
+                "article",
+                {
+                  className: `conversation-entry conversation-entry--${entry.kind.toLowerCase()}${
+                    entry.kind === "RUN_TERMINAL" ? " conversation-entry--report" : ""
+                  }`,
+                  key: entry.id,
+                },
+                createElement("p", { className: "conversation-author" }, historyAuthor(entry.kind)),
+                createElement(
+                  "p",
+                  {
+                    className:
+                      entry.kind === "USER"
+                        ? "conversation-bubble conversation-bubble--user"
+                        : entry.kind === "RUN_TERMINAL"
+                          ? "conversation-text conversation-report-text"
+                          : "conversation-text",
+                  },
+                  entry.text,
+                ),
+              ),
+            ),
+      ),
+      props.history.length === 0 && props.activeRun === undefined
+        ? null
+        : createElement(Timeline, {
+            timeline: props.timeline,
+            liveActivity: props.liveActivity,
+            isActive: props.activeRun !== undefined && isActiveRun(props.activeRun.status),
+          }),
+      props.activeRun !== undefined &&
+        (props.onCancel !== undefined || props.onContinueResource !== undefined)
         ? createElement(
             "div",
-            { className: "conversation-empty" },
-            createElement("p", null, "在这个会话中输入第一条任务。"),
-          )
-        : props.history.map((entry) =>
+            { className: "run-action-tray", role: "status" },
             createElement(
-              "article",
-              {
-                className: `conversation-entry conversation-entry--${entry.kind.toLowerCase()}`,
-                key: entry.id,
-              },
-              createElement("p", { className: "conversation-author" }, historyAuthor(entry.kind)),
-              createElement("p", { className: "conversation-text" }, entry.text),
+              "span",
+              { className: "run-action-label" },
+              props.controlMode === "CANCELLING"
+                ? "正在取消任务……"
+                : props.controlMode === "RESOURCE_GUARD"
+                  ? "任务需要资源决策"
+                  : "Caelush 正在执行任务……",
             ),
-          ),
-    ),
-    createElement(Timeline, { timeline: props.timeline, liveActivity: props.liveActivity }),
-    props.activeRun !== undefined &&
-      (props.onCancel !== undefined || props.onContinueResource !== undefined)
-      ? createElement(
-          "div",
-          { className: "run-action-tray", role: "status" },
-          createElement(
-            "span",
-            { className: "run-action-label" },
             props.controlMode === "CANCELLING"
-              ? "正在取消任务……"
-              : props.controlMode === "RESOURCE_GUARD"
-                ? "任务需要资源决策"
-                : "Caelush 正在执行任务……",
-          ),
-          props.controlMode === "CANCELLING"
-            ? createElement(
-                "button",
-                { type: "button", className: "cancel-button", disabled: true },
-                "正在取消",
-              )
-            : props.controlMode === "RESOURCE_GUARD"
               ? createElement(
-                  "div",
-                  { className: "resource-guard-card", role: "alert" },
-                  createElement("span", null, "检测到重复或低进展路径。"),
-                  props.timeline.resourceGuard === undefined
-                    ? null
-                    : createElement(
-                        "div",
-                        { className: "resource-guard-details" },
-                        createElement(
-                          "span",
-                          null,
-                          `已重新规划：${props.timeline.resourceGuard.replanCount} 次`,
-                        ),
-                        createElement(
-                          "span",
-                          null,
-                          `本阶段已请求工具：${props.timeline.resourceGuard.requestedToolCalls} 次`,
-                        ),
-                      ),
-                  props.onContinueResource === undefined
-                    ? null
-                    : createElement(
-                        "button",
-                        {
-                          type: "button",
-                          className: "continue-button",
-                          onClick: props.onContinueResource,
-                        },
-                        "继续任务",
-                      ),
-                  props.onCancel === undefined
-                    ? null
-                    : createElement(
-                        "button",
-                        { type: "button", className: "cancel-button", onClick: props.onCancel },
-                        "取消任务",
-                      ),
+                  "button",
+                  { type: "button", className: "cancel-button", disabled: true },
+                  "正在取消",
                 )
-              : canShowCancel(props.activeRun.status)
+              : props.controlMode === "RESOURCE_GUARD"
                 ? createElement(
-                    "button",
-                    { type: "button", className: "cancel-button", onClick: props.onCancel },
-                    "取消任务",
+                    "div",
+                    { className: "resource-guard-card", role: "alert" },
+                    createElement("span", null, "检测到重复或低进展路径。"),
+                    props.timeline.resourceGuard === undefined
+                      ? null
+                      : createElement(
+                          "div",
+                          { className: "resource-guard-details" },
+                          createElement(
+                            "span",
+                            null,
+                            `已重新规划：${props.timeline.resourceGuard.replanCount} 次`,
+                          ),
+                          createElement(
+                            "span",
+                            null,
+                            `本阶段已请求工具：${props.timeline.resourceGuard.requestedToolCalls} 次`,
+                          ),
+                        ),
+                    props.onContinueResource === undefined
+                      ? null
+                      : createElement(
+                          "button",
+                          {
+                            type: "button",
+                            className: "continue-button",
+                            onClick: props.onContinueResource,
+                          },
+                          "继续任务",
+                        ),
+                    props.onCancel === undefined
+                      ? null
+                      : createElement(
+                          "button",
+                          { type: "button", className: "cancel-button", onClick: props.onCancel },
+                          "取消任务",
+                        ),
                   )
-                : null,
-        )
-      : null,
+                : canShowCancel(props.activeRun.status)
+                  ? createElement(
+                      "button",
+                      { type: "button", className: "cancel-button", onClick: props.onCancel },
+                      "取消任务",
+                    )
+                  : null,
+          )
+        : null,
+    ),
     props.composer,
   );
 }
@@ -180,6 +203,16 @@ function historyAuthor(kind: TranscriptEntry["kind"]): string {
     case "CUSTOM":
       return "Caelush";
     case "RUN_TERMINAL":
-      return "任务状态";
+      return "任务结束报告";
   }
+}
+
+function isActiveRun(status: ClientAgentRun["status"]): boolean {
+  return (
+    status === "PENDING" ||
+    status === "RUNNING" ||
+    status === "WAITING_APPROVAL" ||
+    status === "WAITING_RESOURCE" ||
+    status === "VERIFYING"
+  );
 }

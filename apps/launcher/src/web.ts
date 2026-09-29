@@ -39,8 +39,18 @@ export async function runWebHost(options: WebHostOptions = {}): Promise<ProductE
   };
   try {
     const daemon = await (options.ensureDaemon ?? ensureDaemon)({ environment });
-    writeStdout(`${daemon.url}/\n`);
-    (options.openUrl ?? openUrlInBrowser)(`${daemon.url}/`);
+    let workspace;
+    try {
+      workspace = await daemon.client.createWorkspace({ path: workspacePath });
+    } catch {
+      throw new DaemonBootstrapError(
+        "UNREACHABLE",
+        "Caelush could not register the current workspace with the local Agent service.",
+      );
+    }
+    const url = `${daemon.url}/?workspace=${encodeURIComponent(workspace.id)}`;
+    writeStdout(`${url}\n`);
+    (options.openUrl ?? openUrlInBrowser)(url);
     return EXIT_CODES.SUCCESS;
   } catch (error) {
     const message =

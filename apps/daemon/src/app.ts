@@ -6,7 +6,7 @@ import {
   type ZodTypeProvider,
 } from "fastify-type-provider-zod";
 import type { DaemonInfo } from "@caelush/protocol";
-import type { SessionRepository, RunRepository } from "@caelush/storage";
+import type { SessionRepository, RunRepository, WorkspaceRepository } from "@caelush/storage";
 import type { DaemonConfig } from "./config.js";
 import type { DaemonModelCanonicalizer } from "./providers/model-canonicalizer.js";
 import { registerErrorHandling } from "./transport/error-handler.js";
@@ -24,10 +24,16 @@ import { registerWebStaticHost, type WebStaticHostOptions } from "./web/static-h
 import type { RunEventHub } from "./events/run-event-hub.js";
 import { DefaultPublicEventProjector } from "./events/public-event-projector.js";
 import type { PublicEventProjector } from "./events/public-event-projector.js";
+import { registerWorkspaceRoutes } from "./routes/workspaces.js";
+import { WorkspaceService } from "./workspaces/workspace-service.js";
+import type { WorkspaceDirectoryPicker } from "./workspaces/workspace-picker.js";
 
 export interface DaemonDependencies {
   readonly sessions: SessionRepository;
   readonly runs: RunRepository;
+  readonly workspaces?: WorkspaceRepository;
+  readonly workspaceService?: WorkspaceService;
+  readonly workspacePicker?: WorkspaceDirectoryPicker;
   readonly eventHub: Pick<RunEventHub, "watch">;
   readonly publicEventProjector?: PublicEventProjector;
   readonly config: DaemonConfig;
@@ -49,6 +55,15 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
   registerErrorHandling(app);
   registerHealthRoute(app);
   if (dependencies.info !== undefined) registerInfoRoute(app, dependencies.info);
+  if (dependencies.workspaceService !== undefined) {
+    registerWorkspaceRoutes(app, dependencies.workspaceService, {
+      sessions: dependencies.sessions,
+      runs: dependencies.runs,
+      ...(dependencies.workspacePicker === undefined
+        ? {}
+        : { workspacePicker: dependencies.workspacePicker }),
+    });
+  }
   registerSessionRoutes(
     app,
     new SessionService({
@@ -56,6 +71,9 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
       ...(dependencies.modelCanonicalizer === undefined
         ? {}
         : { modelCanonicalizer: dependencies.modelCanonicalizer }),
+      ...(dependencies.workspaceService === undefined
+        ? {}
+        : { workspaceService: dependencies.workspaceService }),
     }),
     dependencies.transcript === undefined ? {} : { transcript: dependencies.transcript },
   );
@@ -67,6 +85,9 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
       ...(dependencies.modelCanonicalizer === undefined
         ? {}
         : { modelCanonicalizer: dependencies.modelCanonicalizer }),
+      ...(dependencies.workspaceService === undefined
+        ? {}
+        : { workspaceService: dependencies.workspaceService }),
     }),
   );
   if (dependencies.execution !== undefined) registerExecutionRoutes(app, dependencies.execution);

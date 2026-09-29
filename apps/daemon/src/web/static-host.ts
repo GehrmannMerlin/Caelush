@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { extname, relative, resolve, sep } from "node:path";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { WorkspaceRefSchema, type WorkspaceRef } from "@caelush/protocol";
+import { WorkspaceRefSchema, type WorkspaceId, type WorkspaceRef } from "@caelush/protocol";
 
 const BOOTSTRAP_MARKER = "__CAELUSH_BOOTSTRAP__";
 const CSP =
@@ -9,13 +9,16 @@ const CSP =
 
 export interface WebStaticHostOptions {
   readonly buildRoot: string;
-  readonly workspace: WorkspaceRef;
+  /** @deprecated Compatibility hint only; the Web client owns selection via the Registry API. */
+  readonly workspace?: WorkspaceRef;
+  readonly initialWorkspaceId?: WorkspaceId;
 }
 
 interface PreparedStaticHost {
   readonly root: string;
   readonly indexHtml: string;
-  readonly workspace: WorkspaceRef;
+  readonly workspace?: WorkspaceRef;
+  readonly initialWorkspaceId?: WorkspaceId;
 }
 
 export function registerWebStaticHost(app: FastifyInstance, options: WebStaticHostOptions): void {
@@ -45,11 +48,21 @@ function prepareStaticHost(options: WebStaticHostOptions): PreparedStaticHost {
   if (!indexHtml.includes(BOOTSTRAP_MARKER)) {
     throw new Error("The Web index asset is missing its launch context marker.");
   }
-  return { root, indexHtml, workspace: WorkspaceRefSchema.parse(options.workspace) };
+  return {
+    root,
+    indexHtml,
+    ...(options.workspace === undefined ? {} : { workspace: WorkspaceRefSchema.parse(options.workspace) }),
+    ...(options.initialWorkspaceId === undefined ? {} : { initialWorkspaceId: options.initialWorkspaceId }),
+  };
 }
 
 function sendIndex(reply: FastifyReply, host: PreparedStaticHost): FastifyReply {
-  const launchContext = escapeJsonForHtml(JSON.stringify({ workspace: host.workspace }));
+  const launchContext = escapeJsonForHtml(
+    JSON.stringify({
+      ...(host.initialWorkspaceId === undefined ? {} : { initialWorkspaceId: host.initialWorkspaceId }),
+      ...(host.workspace === undefined ? {} : { workspace: host.workspace }),
+    }),
+  );
   const body = host.indexHtml.replace(BOOTSTRAP_MARKER, launchContext);
   return applySecurityHeaders(reply)
     .header("cache-control", "no-cache")

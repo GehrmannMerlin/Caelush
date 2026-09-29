@@ -32,6 +32,26 @@ export { daemonEntryPath } from "./entry.js";
 export { resolveProductPaths } from "./product-paths.js";
 export type { ProductPathEnvironment, ProductPathOptions, ProductPaths } from "./product-paths.js";
 export { DAEMON_VERSION } from "./version.js";
+export { WorkspacePathError, WorkspaceService } from "./workspaces/workspace-service.js";
+export {
+  createNativeWorkspaceDirectoryPicker,
+  createWindowsWorkspaceDirectoryPicker,
+} from "./workspaces/workspace-picker.js";
+export type {
+  WorkspaceDirectoryPicker,
+  WorkspacePickerProcess,
+  WorkspacePickerProcessOptions,
+} from "./workspaces/workspace-picker.js";
+export { ActiveRunConflictError, WorkspaceOwnershipError } from "./workspaces/workspace-errors.js";
+export type {
+  WorkspaceRegistration,
+  WorkspaceServiceOptions,
+} from "./workspaces/workspace-service.js";
+export { backfillSessionWorkspaceOwnership } from "./workspaces/workspace-backfill.js";
+export type {
+  WorkspaceBackfillOptions,
+  WorkspaceBackfillSummary,
+} from "./workspaces/workspace-backfill.js";
 export { registerWebStaticHost } from "./web/static-host.js";
 export type { WebStaticHostOptions } from "./web/static-host.js";
 export {

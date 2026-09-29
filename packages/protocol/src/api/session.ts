@@ -1,12 +1,14 @@
 import { z } from "zod";
 import { JsonObjectSchema } from "../primitives/json.js";
 import { WorkspaceRefSchema } from "../workspace.js";
+import { WorkspaceIdSchema } from "../primitives/ids.js";
 import { ClientModelSelectionSchema } from "./model-selection.js";
 import { ClientAgentSessionSchema } from "./public-entities.js";
 
 export const CreateSessionRequestSchema = z
   .object({
     title: z.string().min(1).optional(),
+    workspaceId: WorkspaceIdSchema.optional(),
     defaultWorkspace: WorkspaceRefSchema.optional(),
     defaultModel: ClientModelSelectionSchema.optional(),
     metadata: JsonObjectSchema.optional(),

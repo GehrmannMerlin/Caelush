@@ -1,4 +1,9 @@
-import { AgentSessionSchema, type AgentSession, type SessionId } from "@caelush/protocol";
+import {
+  AgentSessionSchema,
+  type AgentSession,
+  type SessionId,
+  type WorkspaceId,
+} from "@caelush/protocol";
 import type { CaelushDatabase } from "../database.js";
 import { decodeProtocol, encodeProtocol } from "../codec.js";
 import {
@@ -13,6 +18,7 @@ interface SessionRow {
   protocol_version: number;
   created_at_ms: number;
   updated_at_ms: number;
+  workspace_id: string | null;
   data_json: string;
 }
 
@@ -25,6 +31,7 @@ export interface SessionRepository {
   get(id: SessionId): Promise<AgentSession | null>;
   update(session: AgentSession): Promise<void>;
   list(options?: SessionListOptions): Promise<AgentSession[]>;
+  listByWorkspace(workspaceId: WorkspaceId, options?: SessionListOptions): Promise<AgentSession[]>;
 }
 
 function decodeSession(row: SessionRow): AgentSession {
@@ -38,6 +45,7 @@ function decodeSession(row: SessionRow): AgentSession {
     session.id !== row.id ||
     session.createdAt !== row.created_at_ms ||
     session.updatedAt !== row.updated_at_ms ||
+    (session.workspaceId ?? null) !== row.workspace_id ||
     row.protocol_version !== 1
   ) {
     throw new StorageDecodeError("AgentSession", row.id, "agent_sessions");
@@ -69,10 +77,17 @@ export class SqliteSessionRepository implements SessionRepository {
       this.database.client
         .prepare(
           `INSERT INTO agent_sessions
-            (id, protocol_version, created_at_ms, updated_at_ms, data_json)
-           VALUES (?, ?, ?, ?, ?)`,
+            (id, protocol_version, created_at_ms, updated_at_ms, workspace_id, data_json)
+           VALUES (?, ?, ?, ?, ?, ?)`,
         )
-        .run(session.id, 1, session.createdAt, session.updatedAt, dataJson);
+        .run(
+          session.id,
+          1,
+          session.createdAt,
+          session.updatedAt,
+          session.workspaceId ?? null,
+          dataJson,
+        );
     } catch (error) {
       mapRepositoryError(error, "insert", session.id);
     }
@@ -81,7 +96,7 @@ export class SqliteSessionRepository implements SessionRepository {
   async get(id: SessionId): Promise<AgentSession | null> {
     const row = this.database.client
       .prepare(
-        `SELECT id, protocol_version, created_at_ms, updated_at_ms, data_json
+        `SELECT id, protocol_version, created_at_ms, updated_at_ms, workspace_id, data_json
          FROM agent_sessions WHERE id = ?`,
       )
       .get(id) as SessionRow | undefined;
@@ -98,10 +113,17 @@ export class SqliteSessionRepository implements SessionRepository {
     const result = this.database.client
       .prepare(
         `UPDATE agent_sessions
-         SET protocol_version = ?, created_at_ms = ?, updated_at_ms = ?, data_json = ?
+         SET protocol_version = ?, created_at_ms = ?, updated_at_ms = ?, workspace_id = ?, data_json = ?
          WHERE id = ?`,
       )
-      .run(1, session.createdAt, session.updatedAt, dataJson, session.id);
+      .run(
+        1,
+        session.createdAt,
+        session.updatedAt,
+        session.workspaceId ?? null,
+        dataJson,
+        session.id,
+      );
 
     if (result.changes === 0) {
       throw new StorageNotFoundError("AgentSession", session.id);
@@ -114,17 +136,36 @@ export class SqliteSessionRepository implements SessionRepository {
       limit === undefined
         ? this.database.client
             .prepare(
-              `SELECT id, protocol_version, created_at_ms, updated_at_ms, data_json
+              `SELECT id, protocol_version, created_at_ms, updated_at_ms, workspace_id, data_json
            FROM agent_sessions ORDER BY updated_at_ms DESC, id ASC`,
             )
             .all()
         : this.database.client
             .prepare(
-              `SELECT id, protocol_version, created_at_ms, updated_at_ms, data_json
+              `SELECT id, protocol_version, created_at_ms, updated_at_ms, workspace_id, data_json
            FROM agent_sessions ORDER BY updated_at_ms DESC, id ASC LIMIT ?`,
             )
             .all(limit);
 
+    return (rows as unknown as SessionRow[]).map(decodeSession);
+  }
+
+  async listByWorkspace(
+    workspaceId: WorkspaceId,
+    options: SessionListOptions = {},
+  ): Promise<AgentSession[]> {
+    const params: Array<string | number> = [workspaceId];
+    let limit = "";
+    if (options.limit !== undefined) {
+      limit = " LIMIT ?";
+      params.push(Math.max(0, Math.floor(options.limit)));
+    }
+    const rows = this.database.client
+      .prepare(
+        `SELECT id, protocol_version, created_at_ms, updated_at_ms, workspace_id, data_json
+         FROM agent_sessions WHERE workspace_id = ? ORDER BY updated_at_ms DESC, id ASC${limit}`,
+      )
+      .all(...params);
     return (rows as unknown as SessionRow[]).map(decodeSession);
   }
 }

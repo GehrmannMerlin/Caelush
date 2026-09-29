@@ -42,6 +42,7 @@ import type {
   SessionId,
   SessionTranscriptResponse,
   WorkspaceRef,
+  WorkspaceSessionSummary,
   ContextUsageProjection,
 } from "@caelush/protocol";
 import { derivePromptTitle, validatePrompt, type PromptError } from "./prompt.js";
@@ -49,6 +50,9 @@ import type { WebHostClient } from "../host/bootstrap.js";
 import { SessionSelectionStore } from "./session-persistence.js";
 
 export interface WebSessionClient extends SessionCandidateClient, WebHostClient {
+  listWorkspaceSessions?(workspaceId: WorkspaceRef["id"]): Promise<{
+    readonly items: readonly WorkspaceSessionSummary[];
+  }>;
   createSession(input: CreateSessionRequest): Promise<ClientAgentSession>;
   createRun(sessionId: SessionId, input: CreateRunRequest): Promise<ClientAgentRun>;
   getRun(runId: RunId): Promise<ClientAgentRun>;
@@ -204,10 +208,10 @@ export class WebSessionManager {
     if (this.disposed) return;
     this.publish({ status: "LOADING", error: undefined });
     try {
-      const candidates = await listMatchingSessionCandidates(
-        this.options.client,
-        this.options.workspace.path,
-      );
+      const candidates =
+        this.options.client.listWorkspaceSessions === undefined
+          ? await listMatchingSessionCandidates(this.options.client, this.options.workspace.path)
+          : await this.listWorkspaceSessionCandidates();
       const selectionStore = this.options.selectionStore;
       selectionStore?.setCandidates(
         this.options.workspace.id,
@@ -229,7 +233,7 @@ export class WebSessionManager {
   }
 
   beginDraft(): void {
-    if (this.disposed || this.hasActiveRun() || this.snapshot.submission !== "IDLE") return;
+    if (this.disposed || this.snapshot.submission !== "IDLE") return;
     this.cancelActiveLifecycle();
     this.clearApprovals();
     this.publish({
@@ -252,36 +256,39 @@ export class WebSessionManager {
   }
 
   async selectSession(sessionId: SessionId): Promise<boolean> {
-    if (this.disposed || this.hasActiveRun() || this.snapshot.submission !== "IDLE") return false;
+    if (this.disposed || this.snapshot.submission !== "IDLE") return false;
     const candidate = this.snapshot.candidates.find((item) => item.session.id === sessionId);
     if (candidate === undefined) return false;
 
+    // Navigation only aborts the browser observer for the previous Run. The
+    // daemon-owned Run continues independently of the selected Web Session.
+    this.cancelActiveLifecycle();
     this.clearApprovals();
     this.publish({ status: "LOADING", error: undefined });
     try {
       const runs = (await this.options.client.listRuns(sessionId, { limit: 100 })).items;
-      const workspaceResult = resolveSessionWorkspace(
-        candidate.session,
-        runs,
-        this.options.workspace.path,
-      );
-      if ("error" in workspaceResult) {
-        this.publish({
-          status: "ERROR",
-          selectedSession: candidate.session,
-          selectedSessionId: candidate.session.id,
+      if (this.options.client.listWorkspaceSessions === undefined) {
+        const workspaceResult = resolveSessionWorkspace(
+          candidate.session,
           runs,
-          history: await this.loadSessionTranscript(sessionId),
-          activeRuns: [],
-          activeRun: undefined,
-          timeline: createInitialTimelineState(),
-          liveActivity: createInitialLiveActivityState(),
-          contextUsage: null,
-          isDraft: false,
-          composerEnabled: false,
-          error: sessionError("SESSION_SELECTION_FAILED"),
-        });
-        return false;
+          this.options.workspace.path,
+        );
+        if ("error" in workspaceResult) {
+          this.publish({
+            status: "ERROR",
+            selectedSession: candidate.session,
+            selectedSessionId: candidate.session.id,
+            runs,
+            history: await this.loadSessionTranscript(sessionId),
+            activeRuns: [],
+            activeRun: undefined,
+            contextUsage: null,
+            isDraft: false,
+            composerEnabled: false,
+            error: sessionError("SESSION_SELECTION_FAILED"),
+          });
+          return false;
+        }
       }
       this.options.selectionStore?.write(this.options.workspace.id, sessionId);
       return this.applySelectedSession(candidate.session, runs);
@@ -324,12 +331,21 @@ export class WebSessionManager {
     let session = this.snapshot.selectedSession;
     try {
       if (session === undefined) {
-        session = await this.options.client.createSession({
-          title: derivePromptTitle(goal),
-          defaultWorkspace: this.options.workspace,
-          defaultModel: model,
-          metadata: {},
-        });
+        session = await this.options.client.createSession(
+          this.options.client.listWorkspaceSessions === undefined
+            ? {
+                title: derivePromptTitle(goal),
+                defaultWorkspace: this.options.workspace,
+                defaultModel: model,
+                metadata: {},
+              }
+            : {
+                title: derivePromptTitle(goal),
+                workspaceId: this.options.workspace.id,
+                defaultModel: model,
+                metadata: {},
+              },
+        );
         this.publish({
           candidates: this.upsertCandidate(session),
           selectedSession: session,
@@ -624,6 +640,17 @@ export class WebSessionManager {
       return reconcileSessionTranscript(response.items, optimistic);
     }
     throw new CaelushProtocolCompatibilityError();
+  }
+
+  private async listWorkspaceSessionCandidates(): Promise<readonly SessionCandidate[]> {
+    const listWorkspaceSessions = this.options.client.listWorkspaceSessions;
+    if (listWorkspaceSessions === undefined) return [];
+    const response = await listWorkspaceSessions.call(this.options.client, this.options.workspace.id);
+    return response.items.map((summary) => ({
+      session: summary.session,
+      ...(summary.latestRun === undefined ? {} : { latestRun: summary.latestRun }),
+      lastActivityAt: summary.lastActivityAt,
+    }));
   }
 
   private optimisticTranscriptEntries(): readonly TranscriptEntry[] {

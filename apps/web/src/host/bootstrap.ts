@@ -2,16 +2,19 @@ import { CaelushProtocolCompatibilityError, type CaelushClient } from "@caelush/
 import {
   DaemonInfoSchema,
   HealthResponseSchema,
+  WorkspaceIdSchema,
   WorkspaceRefSchema,
   type DaemonInfo,
   type HealthResponse,
+  type WorkspaceId,
   type WorkspaceRef,
 } from "@caelush/protocol";
 import { z } from "zod";
 
 const WebLaunchContextSchema = z
   .object({
-    workspace: WorkspaceRefSchema,
+    initialWorkspaceId: WorkspaceIdSchema.optional(),
+    workspace: WorkspaceRefSchema.optional(),
   })
   .strict();
 
@@ -40,7 +43,9 @@ export interface WebHostState {
   readonly connection: WebConnectionState;
   readonly health?: HealthResponse;
   readonly info?: DaemonInfo;
-  readonly workspace?: WorkspaceRef;
+  readonly initialWorkspaceId?: WorkspaceId | undefined;
+  /** @deprecated Compatibility hint for older static hosts; not an authority. */
+  readonly workspace?: WorkspaceRef | undefined;
   readonly error?: SafeWebError;
 }
 
@@ -55,7 +60,7 @@ export function createInitialWebHostState(): WebHostState {
 
 export async function parseWebLaunchContext(value: unknown): Promise<WebLaunchContext> {
   if (value === undefined || value === null || value === "") {
-    throw new WebBootstrapInputError("WORKSPACE_MISSING");
+    return {};
   }
 
   let candidate: unknown = value;
@@ -73,12 +78,16 @@ export async function parseWebLaunchContext(value: unknown): Promise<WebLaunchCo
 
 export async function bootstrapWebHost(input: {
   readonly client: WebHostClient | CaelushClient;
-  readonly launchContext: unknown;
+  readonly launchContext?: unknown | undefined;
+  readonly initialWorkspaceId?: WorkspaceId | undefined;
   readonly onState?: (state: WebHostState) => void;
 }): Promise<WebHostState> {
   let launchContext: WebLaunchContext;
   try {
     launchContext = await parseWebLaunchContext(input.launchContext);
+    if (input.initialWorkspaceId !== undefined) {
+      launchContext = { ...launchContext, initialWorkspaceId: input.initialWorkspaceId };
+    }
   } catch (error) {
     const safeError = toSafeWebError(error);
     return publish(input, {
@@ -92,6 +101,7 @@ export async function bootstrapWebHost(input: {
     input.onState?.({
       bootstrap: "CONNECTING",
       connection: "CONNECTING",
+      initialWorkspaceId: launchContext.initialWorkspaceId,
       workspace: launchContext.workspace,
     });
     const health = await input.client.getHealth();
@@ -101,6 +111,7 @@ export async function bootstrapWebHost(input: {
       bootstrap: "CHECKING_PROTOCOL",
       connection: "CONNECTING",
       health,
+      initialWorkspaceId: launchContext.initialWorkspaceId,
       workspace: launchContext.workspace,
     });
     const info = await input.client.getInfo();
@@ -110,6 +121,7 @@ export async function bootstrapWebHost(input: {
       connection: "CONNECTED",
       health,
       info,
+      initialWorkspaceId: launchContext.initialWorkspaceId,
       workspace: launchContext.workspace,
     });
   } catch (error) {
@@ -117,6 +129,7 @@ export async function bootstrapWebHost(input: {
     return publish(input, {
       bootstrap: safeError.code,
       connection: safeError.code === "PROTOCOL_INCOMPATIBLE" ? "INCOMPATIBLE" : "DISCONNECTED",
+      initialWorkspaceId: launchContext.initialWorkspaceId,
       workspace: launchContext.workspace,
       error: safeError,
     });
@@ -156,13 +169,14 @@ function isCompatibleInfo(value: DaemonInfo): boolean {
   return DaemonInfoSchema.safeParse(value).success;
 }
 
-function incompatibleState(workspace: WebLaunchContext, health: HealthResponse): WebHostState {
+function incompatibleState(launchContext: WebLaunchContext, health: HealthResponse): WebHostState {
   const error = safeError("PROTOCOL_INCOMPATIBLE");
   return {
     bootstrap: "PROTOCOL_INCOMPATIBLE",
     connection: "INCOMPATIBLE",
     health,
-    workspace: workspace.workspace,
+    initialWorkspaceId: launchContext.initialWorkspaceId,
+    workspace: launchContext.workspace,
     error,
   };
 }

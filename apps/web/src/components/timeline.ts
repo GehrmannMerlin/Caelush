@@ -9,6 +9,16 @@ import type {
   LiveActivityState,
 } from "@caelush/client";
 import {
+  Check,
+  ChevronDown,
+  CircleAlert,
+  CircleDot,
+  CircleX,
+  Minus,
+  RefreshCw,
+  TriangleAlert,
+} from "lucide-react";
+import {
   isNearTimelineBottom,
   timelineActivityCount,
   timelineActivityDelta,
@@ -30,6 +40,7 @@ const MAX_PUBLIC_ID_LENGTH = 128;
 export interface TimelineProps {
   readonly timeline: TimelineState;
   readonly liveActivity?: LiveActivityState | undefined;
+  readonly isActive?: boolean | undefined;
 }
 
 export function Timeline(props: TimelineProps): ReactElement {
@@ -46,6 +57,18 @@ export function Timeline(props: TimelineProps): ReactElement {
   const seenActivityCount = useRef(activityCount);
   const [following, setFollowing] = useState(true);
   const [newActivityCount, setNewActivityCount] = useState(0);
+  const [expanded, setExpanded] = useState(props.isActive === true);
+  const wasActive = useRef(props.isActive === true);
+
+  useEffect(() => {
+    const activeNow = props.isActive === true;
+    if (activeNow) {
+      setExpanded(true);
+    } else if (wasActive.current) {
+      setExpanded(false);
+    }
+    wasActive.current = activeNow;
+  }, [props.isActive]);
 
   const alignToLatest = useCallback(() => {
     const region = regionRef.current;
@@ -90,118 +113,148 @@ export function Timeline(props: TimelineProps): ReactElement {
   }, [activityCount, alignToLatest]);
 
   return createElement(
-    "section",
-    { className: "timeline", "aria-labelledby": "timeline-title" },
+    "details",
+    {
+      className: "timeline",
+      open: expanded,
+      onToggle: (event) => setExpanded((event.currentTarget as HTMLDetailsElement).open),
+      "aria-labelledby": "timeline-title",
+    },
     createElement(
-      "header",
-      { className: "timeline-header" },
-      createElement("p", { className: "timeline-kicker" }, "任务活动"),
-      createElement("h2", { id: "timeline-title" }, "执行过程"),
+      "summary",
+      { className: "timeline-summary" },
+      createElement(
+        "span",
+        { className: "timeline-summary-copy" },
+        createElement("span", { className: "timeline-kicker" }, "任务活动"),
+        createElement(
+          "span",
+          { id: "timeline-title", className: "timeline-summary-title" },
+          "执行过程",
+        ),
+      ),
+      createElement(
+        "span",
+        { className: "timeline-summary-status" },
+        timelineSummary(props.isActive === true, active.length, settled.length),
+      ),
+      createElement(ChevronDown, {
+        className: "timeline-summary-chevron",
+        size: 17,
+        strokeWidth: 2.1,
+        "aria-hidden": true,
+      }),
     ),
     createElement(
       "div",
-      { className: "timeline-feed" },
+      { className: "timeline-body" },
       createElement(
         "div",
         {
-          className: "timeline-scroll-region",
-          ref: regionRef,
-          onScroll: handleScroll,
-          tabIndex: 0,
-          "aria-label": "任务活动流",
+          className: "timeline-feed",
         },
-        activityCount === 0
-          ? createElement("p", { className: "timeline-empty" }, "等待任务活动。")
-          : null,
-        props.timeline.currentPlan.length === 0
-          ? null
-          : createElement(
-              "section",
-              { className: "timeline-plan", "aria-label": "任务计划" },
-              createElement("h3", null, "任务计划"),
-              createElement(
-                "ol",
-                { className: "timeline-plan-list" },
-                props.timeline.currentPlan.map(renderPlanItem),
-              ),
-            ),
-        active.length === 0
-          ? null
-          : createElement(
-              "ol",
-              { className: "timeline-list timeline-list--active", "aria-label": "进行中的活动" },
-              active.map((entry) => renderEntry(entry, "active")),
-            ),
-        settled.length === 0
-          ? null
-          : createElement(
-              "ol",
-              { className: "timeline-list", "aria-label": "已完成的活动" },
-              settled.map((entry) => renderEntry(entry, "settled")),
-            ),
-        props.timeline.retries.length === 0
-          ? null
-          : createElement(
-              "section",
-              { className: "timeline-retries", "aria-label": "重试活动" },
-              createElement("h3", null, "重试活动"),
-              createElement(
-                "ul",
-                { className: "timeline-retry-list" },
-                props.timeline.retries.map(renderRetry),
-              ),
-            ),
-        props.timeline.resourceGuard === undefined
-          ? null
-          : renderResourceGuard(props.timeline.resourceGuard),
-        liveActivities.length === 0
-          ? null
-          : createElement(
-              "section",
-              { className: "timeline-live-activity", "aria-label": "实时输出" },
-              createElement("h3", null, "实时输出"),
-              createElement(
-                "ul",
-                null,
-                liveActivities.map((activity) =>
-                  createElement(
-                    "li",
-                    { key: activity.id },
-                    `${liveActivityLabel(activity.kind)}: ${activity.text}${
-                      activity.status === "SETTLED" ? " · 已收敛" : ""
-                    }`,
-                  ),
-                ),
-              ),
-            ),
-        props.timeline.verification.length === 0
-          ? null
-          : createElement(
-              "section",
-              { className: "timeline-verification", "aria-label": "验证" },
-              createElement("h3", null, "验证"),
-              props.timeline.verification.map((group) =>
+        createElement(
+          "div",
+          {
+            className: "timeline-scroll-region",
+            ref: regionRef,
+            onScroll: handleScroll,
+            tabIndex: 0,
+            "aria-label": "任务活动流",
+          },
+          activityCount === 0
+            ? createElement("p", { className: "timeline-empty" }, "等待任务活动。")
+            : null,
+          props.timeline.currentPlan.length === 0
+            ? null
+            : createElement(
+                "section",
+                { className: "timeline-plan", "aria-label": "任务计划" },
+                createElement("h3", null, "任务计划"),
                 createElement(
-                  "section",
-                  { className: "timeline-verification-group", key: group.id },
-                  createElement(
-                    "p",
-                    { className: "timeline-verification-status" },
-                    group.label,
-                    " · ",
-                    statusLabel(group.status),
-                  ),
-                  renderPublicId("计划 ID", group.planId),
-                  group.checks.length === 0
-                    ? null
-                    : createElement(
-                        "ol",
-                        { className: "timeline-check-list" },
-                        group.checks.map(renderVerificationCheck),
-                      ),
+                  "ol",
+                  { className: "timeline-plan-list" },
+                  props.timeline.currentPlan.map(renderPlanItem),
                 ),
               ),
-            ),
+          active.length === 0
+            ? null
+            : createElement(
+                "ol",
+                { className: "timeline-list timeline-list--active", "aria-label": "进行中的活动" },
+                active.map((entry) => renderEntry(entry, "active")),
+              ),
+          settled.length === 0
+            ? null
+            : createElement(
+                "ol",
+                { className: "timeline-list", "aria-label": "已完成的活动" },
+                settled.map((entry) => renderEntry(entry, "settled")),
+              ),
+          props.timeline.retries.length === 0
+            ? null
+            : createElement(
+                "section",
+                { className: "timeline-retries", "aria-label": "重试活动" },
+                createElement("h3", null, "重试活动"),
+                createElement(
+                  "ul",
+                  { className: "timeline-retry-list" },
+                  props.timeline.retries.map(renderRetry),
+                ),
+              ),
+          props.timeline.resourceGuard === undefined
+            ? null
+            : renderResourceGuard(props.timeline.resourceGuard),
+          liveActivities.length === 0
+            ? null
+            : createElement(
+                "section",
+                { className: "timeline-live-activity", "aria-label": "实时输出" },
+                createElement("h3", null, "实时输出"),
+                createElement(
+                  "ul",
+                  null,
+                  liveActivities.map((activity) =>
+                    createElement(
+                      "li",
+                      { key: activity.id },
+                      `${liveActivityLabel(activity.kind)}: ${activity.text}${
+                        activity.status === "SETTLED" ? " · 已收敛" : ""
+                      }`,
+                    ),
+                  ),
+                ),
+              ),
+          props.timeline.verification.length === 0
+            ? null
+            : createElement(
+                "section",
+                { className: "timeline-verification", "aria-label": "验证" },
+                createElement("h3", null, "验证"),
+                props.timeline.verification.map((group) =>
+                  createElement(
+                    "section",
+                    { className: "timeline-verification-group", key: group.id },
+                    createElement(
+                      "p",
+                      { className: "timeline-verification-status" },
+                      group.label,
+                      " · ",
+                      statusLabel(group.status),
+                    ),
+                    renderPublicId("计划 ID", group.planId),
+                    group.checks.length === 0
+                      ? null
+                      : createElement(
+                          "ol",
+                          { className: "timeline-check-list" },
+                          group.checks.map(renderVerificationCheck),
+                        ),
+                  ),
+                ),
+              ),
+        ),
       ),
       newActivityCount === 0
         ? null
@@ -248,7 +301,11 @@ function renderRetry(retry: TimelineRetry): ReactElement {
   return createElement(
     "li",
     { className: `timeline-retry timeline-retry--${retry.status.toLowerCase()}`, key: retry.id },
-    createElement("span", { className: "timeline-entry-mark", "aria-hidden": "true" }, "●"),
+    createElement(
+      "span",
+      { className: "timeline-entry-mark", "aria-hidden": "true" },
+      createElement(RefreshCw, { size: 14, strokeWidth: 2.1 }),
+    ),
     createElement(
       "span",
       { className: "timeline-retry-text" },
@@ -269,19 +326,25 @@ function renderResourceGuard(guard: TimelineResourceGuard): ReactElement {
   );
 }
 
-function planMark(status: TimelineState["currentPlan"][number]["status"]): string {
+function planMark(status: TimelineState["currentPlan"][number]["status"]): ReactElement {
   switch (status) {
     case "COMPLETED":
-      return "✓";
+      return createElement(Check, { size: 14, strokeWidth: 2.1, "aria-hidden": true });
     case "IN_PROGRESS":
-      return "●";
+      return createElement(CircleDot, { size: 14, strokeWidth: 2.1, "aria-hidden": true });
     case "FAILED":
-      return "!";
+      return createElement(CircleAlert, { size: 14, strokeWidth: 2.1, "aria-hidden": true });
     case "SKIPPED":
-      return "–";
+      return createElement(Minus, { size: 14, strokeWidth: 2.1, "aria-hidden": true });
     case "PENDING":
-      return "○";
+      return createElement(CircleDot, { size: 14, strokeWidth: 1.7, "aria-hidden": true });
   }
+}
+
+function timelineSummary(isActive: boolean, activeCount: number, settledCount: number): string {
+  if (isActive) return activeCount > 0 ? `${activeCount} 项活动进行中` : "正在启动";
+  if (settledCount > 0) return `${settledCount} 项活动已完成`;
+  return "等待任务活动";
 }
 
 function planStatusLabel(status: TimelineState["currentPlan"][number]["status"]): string {
@@ -327,7 +390,11 @@ function renderEntry(entry: TimelineEntry, phase: "active" | "settled"): ReactEl
     createElement(
       "span",
       { className: "timeline-entry-mark", "aria-hidden": "true" },
-      phase === "active" ? "●" : failed ? "!" : "✓",
+      phase === "active"
+        ? createElement(CircleDot, { size: 14, strokeWidth: 2.1 })
+        : failed
+          ? createElement(TriangleAlert, { size: 14, strokeWidth: 2.1 })
+          : createElement(Check, { size: 14, strokeWidth: 2.1 }),
     ),
     createElement(
       "div",
@@ -418,8 +485,14 @@ function boundedPublicId(value: string): string {
     : `${value.slice(0, MAX_PUBLIC_ID_LENGTH - 1)}…`;
 }
 
-function checkMark(status: TimelineEntryStatus): string {
-  return status === "RUNNING" || status === "PENDING" ? "●" : isFailure(status) ? "!" : "✓";
+function checkMark(status: TimelineEntryStatus): ReactElement {
+  if (status === "RUNNING" || status === "PENDING") {
+    return createElement(CircleDot, { size: 14, strokeWidth: 2.1, "aria-hidden": true });
+  }
+  if (isFailure(status)) {
+    return createElement(CircleX, { size: 14, strokeWidth: 2.1, "aria-hidden": true });
+  }
+  return createElement(Check, { size: 14, strokeWidth: 2.1, "aria-hidden": true });
 }
 
 function isFailure(status: TimelineEntryStatus): boolean {

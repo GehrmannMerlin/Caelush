@@ -67,13 +67,13 @@ describe("Web presentation", () => {
   });
 
   it.each([
-    ["RUNNING", "运行中", "●"],
-    ["WAITING_APPROVAL", "等待审批", "!"],
-    ["COMPLETED", "已完成", "✓"],
-    ["FAILED", "失败", "×"],
+    ["RUNNING", "运行中"],
+    ["WAITING_APPROVAL", "等待审批"],
+    ["COMPLETED", "已完成"],
+    ["FAILED", "失败"],
   ] as const)(
-    "renders %s as an accessible icon without a visible status subtitle",
-    (status, label, glyph) => {
+    "renders %s as an accessible open-source SVG icon without a visible status subtitle",
+    (status, label) => {
       const session = {
         id: createSessionId(),
         defaultWorkspace: workspace,
@@ -100,7 +100,7 @@ describe("Web presentation", () => {
 
       expect(html).toContain(`class="session-status-icon`);
       expect(html).toContain(`aria-label="${label}"`);
-      expect(html).toContain(`>${glyph}</span>`);
+      expect(html).toContain("<svg");
       expect(html).not.toContain(`>${label}<`);
     },
   );
@@ -130,7 +130,7 @@ describe("Web presentation", () => {
     expect(html).not.toContain("Terminal");
   });
 
-  it("renders a text-only prompt composer", () => {
+  it("renders an icon-only send control inside the prompt composer", () => {
     const html = renderToStaticMarkup(
       <PromptComposer
         disabled={false}
@@ -141,9 +141,39 @@ describe("Web presentation", () => {
     );
 
     expect(html).toContain("输入任务");
-    expect(html).toContain("运行");
+    expect(html).toContain('aria-label="发送任务"');
+    expect(html).toContain("prompt-submit-button--icon");
+    expect(html).toContain("<svg");
+    expect(html).not.toContain("运行 →");
     expect(html).not.toContain("附件");
     expect(html).not.toContain("@引用");
+  });
+
+  it("renders user messages as right-aligned bubble content", () => {
+    const html = renderToStaticMarkup(
+      <SessionWorkspace
+        title="认证修复"
+        history={[{ id: "history-1", kind: "USER", text: "修复登录" }]}
+        timeline={createInitialTimelineState()}
+        composer={<div>COMPOSER_MARKER</div>}
+      />,
+    );
+
+    expect(html).toContain('class="conversation-bubble conversation-bubble--user"');
+    expect(html).toContain("修复登录");
+  });
+
+  it("does not show an empty execution process before the first task", () => {
+    const html = renderToStaticMarkup(
+      <SessionWorkspace
+        title="新会话"
+        history={[]}
+        timeline={createInitialTimelineState()}
+        composer={<div>COMPOSER_MARKER</div>}
+      />,
+    );
+
+    expect(html).not.toContain("执行过程");
   });
 
   it("places the projected timeline after history and before the composer", () => {
@@ -158,5 +188,19 @@ describe("Web presentation", () => {
 
     expect(html.indexOf("修复登录")).toBeLessThan(html.indexOf("执行过程"));
     expect(html.indexOf("执行过程")).toBeLessThan(html.indexOf("COMPOSER_MARKER"));
+  });
+
+  it("keeps conversation content inside its own scroll region", () => {
+    const html = renderToStaticMarkup(
+      <SessionWorkspace
+        title="长上下文"
+        history={[{ id: "history-1", kind: "USER", text: "检查项目" }]}
+        timeline={createInitialTimelineState()}
+        composer={<div>COMPOSER_MARKER</div>}
+      />,
+    );
+
+    expect(html).toContain('class="session-scroll"');
+    expect(html.indexOf('class="session-scroll"')).toBeLessThan(html.indexOf("COMPOSER_MARKER"));
   });
 });

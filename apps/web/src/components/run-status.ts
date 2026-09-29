@@ -1,3 +1,14 @@
+import { createElement, type ReactElement } from "react";
+import {
+  CircleAlert,
+  CircleCheck,
+  CircleDot,
+  CircleX,
+  Clock3,
+  LoaderCircle,
+  ListChecks,
+  type LucideIcon,
+} from "lucide-react";
 import type { RunStatus } from "@caelush/protocol";
 
 export function runStatusLabel(status: RunStatus): string {
@@ -21,19 +32,40 @@ export function runStatusClass(status: RunStatus): string {
   return `run-status--${status.toLowerCase()}`;
 }
 
-export function runStatusGlyph(status: RunStatus): string {
-  const glyphs: Record<RunStatus, string> = {
-    PENDING: "○",
-    RUNNING: "●",
-    WAITING_APPROVAL: "!",
-    WAITING_RESOURCE: "◫",
-    VERIFYING: "◌",
-    COMPLETED: "✓",
-    FAILED: "×",
-    CANCELLED: "⊘",
-    TIMEOUT: "⌁",
-    MAX_STEPS_REACHED: "≡",
-    BUDGET_EXCEEDED: "!",
-  };
-  return glyphs[status];
+export function runStatusIcon(status: RunStatus): LucideIcon {
+  switch (status) {
+    case "PENDING":
+      return CircleDot;
+    case "RUNNING":
+      return LoaderCircle;
+    case "WAITING_APPROVAL":
+      return CircleAlert;
+    case "WAITING_RESOURCE":
+      return Clock3;
+    case "VERIFYING":
+      return LoaderCircle;
+    case "COMPLETED":
+      return CircleCheck;
+    case "FAILED":
+    case "CANCELLED":
+    case "TIMEOUT":
+      return CircleX;
+    case "MAX_STEPS_REACHED":
+      return ListChecks;
+    case "BUDGET_EXCEEDED":
+      return CircleAlert;
+  }
+}
+
+export function RunStatusIcon(props: {
+  readonly status: RunStatus;
+  readonly size?: number;
+}): ReactElement {
+  const Icon = runStatusIcon(props.status);
+  return createElement(Icon, {
+    size: props.size ?? 16,
+    strokeWidth: 2.15,
+    "aria-hidden": true,
+    focusable: false,
+  });
 }
