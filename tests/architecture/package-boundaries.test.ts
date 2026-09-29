@@ -198,6 +198,7 @@ describe("package boundaries", () => {
       .map(({ relativePath }) => relativePath);
     expect(childProcessImports).toEqual([
       "packages/runtime/src/exec/pipe-process-adapter.ts",
+      "packages/runtime/src/exec/process-tree.ts",
       "packages/runtime/src/git/git-runner.ts",
       "packages/runtime/src/search/ripgrep-runner.ts",
     ]);

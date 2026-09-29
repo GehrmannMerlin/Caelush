@@ -199,6 +199,9 @@ function retryRunningCheck(
     skipReason: _skipReason,
     ...base
   } = check;
+  void _previousStartedAt;
+  void _finishedAt;
+  void _skipReason;
   return { ...base, status: "RUNNING", startedAt };
 }
 

@@ -367,16 +367,20 @@ const TERMINATION_CONFIRMATION_TIMEOUT_MS = 10_000;
 function awaitAdapterExit(adapter: ManagedProcessAdapter): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     let settled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let unsubscribe: (() => void) | undefined;
+    const resources: {
+      timer?: ReturnType<typeof setTimeout>;
+      unsubscribe?: () => void;
+    } = {};
     const finish = (confirmed: boolean): void => {
       if (settled) return;
       settled = true;
-      if (timer !== undefined) clearTimeout(timer);
-      unsubscribe?.();
+      if (resources.timer !== undefined) clearTimeout(resources.timer);
+      resources.unsubscribe?.();
       resolve(confirmed);
     };
-    unsubscribe = adapter.onExit(() => finish(true));
-    timer = setTimeout(() => finish(false), TERMINATION_CONFIRMATION_TIMEOUT_MS);
+    resources.timer = setTimeout(() => finish(false), TERMINATION_CONFIRMATION_TIMEOUT_MS);
+    const unsubscribe = adapter.onExit(() => finish(true));
+    resources.unsubscribe = unsubscribe;
+    if (settled) unsubscribe();
   });
 }

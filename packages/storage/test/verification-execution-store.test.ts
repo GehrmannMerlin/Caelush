@@ -217,6 +217,8 @@ describe("atomic verification execution persistence", () => {
     expect(errored.check.status).toBe("ERROR");
 
     const { finishedAt: _finishedAt, skipReason: _skipReason, ...retryBase } = errored.check;
+    void _finishedAt;
+    void _skipReason;
     const retried = await storage.verificationExecution.startCheck({
       runId: value.runId,
       sessionId: session.id,

@@ -83,7 +83,7 @@ function analyzeSegment(
     return { classifications, wrapperDepth: depth };
   }
   const executable = basename(tokens[0] ?? "");
-  if (isShellWrapper(executable, tokens, platform)) {
+  if (isShellWrapper(executable, tokens)) {
     // The body grammar follows the *wrapper* shell, not the host shell, and the body flag set is
     // read from that same grammar — `powershell -Command "..."` hosted by a POSIX shell is a
     // PowerShell body, so its `-Command` flag is a flag and not an unmatchable POSIX `-c`.
@@ -200,7 +200,6 @@ function tokenize(command: string, platform: CommandPlatform): TokenizedCommand 
 function isShellWrapper(
   executable: string,
   tokens: readonly string[],
-  _platform: CommandPlatform,
 ): boolean {
   const name = executable.toLowerCase();
   const flags = tokens.map((token) => token.toLowerCase());
