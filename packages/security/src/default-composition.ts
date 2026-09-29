@@ -249,7 +249,7 @@ export function assertDefaultBuiltinSecurityCoverage(
 /**
  * A Tool's Coding security metadata must describe a real executable Tool.
  *
- * `runtimeKinds` is the one structured runtime requirement the current default nine all declare, and
+ * `runtimeKinds` is the one structured runtime requirement the current default ten all declare, and
  * it must include `local`: a Tool offered to a local host that cannot say it runs locally is a
  * metadata defect, not an exotic configuration.
  */

@@ -198,6 +198,20 @@ export function projectWriteStdinSecurityFacts(args: Readonly<JsonObject>): Tool
   };
 }
 
+export function projectStopProcessSecurityFacts(args: Readonly<JsonObject>): ToolSecurityFacts {
+  if (typeof args.session_id !== "string" || args.session_id.length === 0) {
+    throw new ToolSecurityFactsProjectionError("The session_id argument is invalid.");
+  }
+  return {
+    resourceAccesses: [],
+    secretScanInputs: [],
+    structuralPreview: {
+      kind: "PROCESS_TERMINATION",
+      sessionId: args.session_id,
+    },
+  };
+}
+
 export function projectGitStatusSecurityFacts(args: Readonly<JsonObject>): ToolSecurityFacts {
   const path = args.path === undefined ? "." : pathOf(args.path, "path");
   return {

@@ -9,6 +9,7 @@ import {
   createReadFileTool,
   createSearchTextTool,
   createWriteStdinTool,
+  createStopProcessTool,
   DEFAULT_CODING_TOOL_ORDER,
   projectApplyPatchSecurityFacts,
   projectExecCommandSecurityFacts,
@@ -74,7 +75,7 @@ const RESOLVER = createLocalRuntimeResolver(new LocalRuntime());
 
 const WORKSPACE = { id: createWorkspaceId(), path: "/workspace" };
 
-/** The one Operations bundle the nine default Tools are built from. */
+/** The one Operations bundle the ten default Tools are built from. */
 function defaultOperations() {
   const readOnly = readOnlyFake({ read: async () => readFileAnswer() }).operations;
   const process = processFake({ execute: async () => ({}), interact: async () => ({}) });
@@ -210,7 +211,7 @@ describe("approval identity fidelity", () => {
     });
   }
 
-  it("is deterministic for all nine Tools across every policy pair", () => {
+  it("is deterministic for all ten Tools across every policy pair", () => {
     // ```text
     // same prepared args + same metadata + same context  →  byte-identical key
     // ```
@@ -248,7 +249,7 @@ describe("approval identity fidelity", () => {
         }
       }
     }
-    expect(compared).toBe(81);
+    expect(compared).toBe(90);
   });
 
   it("is order-insensitive over capabilities", () => {
@@ -474,7 +475,7 @@ describe("effects fidelity", () => {
 });
 
 describe("default Tool set fidelity", () => {
-  it("produces the nine Tools in the frozen order, from the one declaration", () => {
+  it("produces the ten Tools in the frozen order, from the one declaration", () => {
     const definitions = createDefaultCodingTools(defaultOperations());
 
     expect(definitions.map((definition) => definition.tool.name)).toEqual([
@@ -490,7 +491,7 @@ describe("default Tool set fidelity", () => {
     }
   });
 
-  it("keeps the documented risk level, capabilities and runtime requirements for all nine", () => {
+  it("keeps the documented risk level, capabilities and runtime requirements for all ten", () => {
     // The security envelope of the default product, asserted as a table rather than derived. A change
     // to any cell is a security change and has to be an explicit one.
     const definitions = createDefaultCodingTools(defaultOperations());
@@ -513,6 +514,11 @@ describe("default Tool set fidelity", () => {
         ["SHELL_EXEC", "PROCESS_START", "PROCESS_KILL"],
         { runtimeKinds: ["local"] },
       ],
+      // `stop_process` terminates a managed session and nothing else, so `PROCESS_KILL` is the whole
+      // capability it needs. It deliberately does not carry `SHELL_EXEC` or `PROCESS_START`: it can
+      // never start a process and never runs a command, and a capability it cannot exercise would only
+      // widen its approval identity.
+      ["stop_process", "CRITICAL", ["PROCESS_KILL"], { runtimeKinds: ["local"] }],
       ["git_status", "LOW", ["GIT_READ"], { runtimeKinds: ["local"] }],
       ["git_diff", "LOW", ["GIT_READ"], { runtimeKinds: ["local"] }],
     ];
@@ -531,7 +537,7 @@ describe("default Tool set fidelity", () => {
     }
   });
 
-  it("keeps apply_patch, exec_command and write_stdin carrying their effect projectors", () => {
+  it("keeps apply_patch, exec_command, write_stdin and stop_process carrying their effect projectors", () => {
     const definitions = createDefaultCodingTools(defaultOperations());
     const byName = new Map(
       definitions.map((definition) => [definition.tool.name, definition] as const),
@@ -543,6 +549,7 @@ describe("default Tool set fidelity", () => {
     expect(byName.get("apply_patch")?.effectProjector).toBeDefined();
     expect(byName.get("exec_command")?.effectProjector).toBeDefined();
     expect(byName.get("write_stdin")?.effectProjector).toBeDefined();
+    expect(byName.get("stop_process")?.effectProjector).toBeDefined();
     expect(byName.get("list_directory")?.effectProjector).toBeUndefined();
     expect(byName.get("find_files")?.effectProjector).toBeUndefined();
     expect(byName.get("search_text")?.effectProjector).toBeUndefined();
@@ -550,7 +557,7 @@ describe("default Tool set fidelity", () => {
     expect(byName.get("git_diff")?.effectProjector).toBeUndefined();
   });
 
-  it("carries a security-facts projector for every one of the nine", () => {
+  it("carries a security-facts projector for every one of the ten", () => {
     // The Security gate is handed a Tool's facts; a Tool without a projector would be opaque to the
     // input-aware policy, which is the one outcome that must never happen for a default Tool.
     for (const definition of createDefaultCodingTools(defaultOperations())) {
@@ -558,7 +565,7 @@ describe("default Tool set fidelity", () => {
     }
   });
 
-  it("carries the canonical prompt snippet for every one of the nine", () => {
+  it("carries the canonical prompt snippet for every one of the ten", () => {
     // Usage guidance is delivered through Context from `promptSnippet`, never appended to a description.
     for (const name of DEFAULT_CODING_TOOL_ORDER) {
       const snippet = promptSnippetFor(name);
@@ -567,7 +574,7 @@ describe("default Tool set fidelity", () => {
     }
   });
 
-  it("does not append guidance to the nine default descriptions", () => {
+  it("does not append guidance to the ten default descriptions", () => {
     for (const definition of createDefaultCodingTools(defaultOperations())) {
       expect(definition.tool.description, definition.tool.name).not.toContain("Purpose:");
       expect(definition.tool.description, definition.tool.name).not.toContain("Safety:");
@@ -611,7 +618,7 @@ describe("Coding Tool execution fidelity", () => {
     });
   });
 
-  it("constructs every one of the nine Tools", () => {
+  it("constructs every one of the ten Tools", () => {
     const readOnly = readOnlyFake({ read: async () => readFileAnswer() }).operations;
     const process = processFake({ execute: async () => ({}), interact: async () => ({}) });
     const git = gitFake({ status: async () => ({}) }).operations;
@@ -625,6 +632,7 @@ describe("Coding Tool execution fidelity", () => {
     ).toBe("apply_patch");
     expect(createExecCommandTool(process.exec).tool.name).toBe("exec_command");
     expect(createWriteStdinTool(process.process).tool.name).toBe("write_stdin");
+    expect(createStopProcessTool(process.process).tool.name).toBe("stop_process");
     expect(createGitStatusTool(git).tool.name).toBe("git_status");
     expect(createGitDiffTool(git).tool.name).toBe("git_diff");
   });
@@ -634,9 +642,9 @@ describe("Coding Tool execution fidelity", () => {
     const definitions: readonly CodingToolDefinition[] =
       createDefaultCodingTools(defaultOperations());
     const tools = new Set(definitions.map((definition) => definition.tool));
-    expect(tools.size).toBe(9);
+    expect(tools.size).toBe(10);
     const schemas = new Set(definitions.map((definition) => definition.tool.inputSchema));
-    expect(schemas.size).toBe(9);
+    expect(schemas.size).toBe(10);
   });
 
   it("reports a Runtime failure as a model-recoverable Tool error", async () => {

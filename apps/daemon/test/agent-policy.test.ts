@@ -18,6 +18,8 @@ describe("default Core Agent Policy", () => {
       "list_directory for immediate children",
       "exec_command for tests",
       "write_stdin only for a session",
+      "stop_process to end a long-running session",
+      "never use it to terminate a process with taskkill",
       "Stop when",
       "blockers",
       "chain-of-thought",

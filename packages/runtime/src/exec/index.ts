@@ -24,6 +24,7 @@ export type {
   RuntimeExecResult,
   RuntimeExecService,
   RuntimeProcessInteractionRequest,
+  RuntimeProcessTerminationRequest,
   ShellLaunch,
 } from "./contracts.js";
 export {
@@ -46,6 +47,8 @@ export { createPtyProcessAdapter } from "./pty-process-adapter.js";
 export type { PtyProcessAdapterOptions } from "./pty-process-adapter.js";
 export { LocalProcessManager } from "./process-manager.js";
 export type { LocalProcessManagerOptions } from "./process-manager.js";
+export { terminateProcessTree } from "./process-tree.js";
+export type { ProcessTreeOptions, ProcessTreeOutcome, TerminableProcess } from "./process-tree.js";
 export {
   createAgentProcessEnvironment,
   createStructuredHelperEnvironment,

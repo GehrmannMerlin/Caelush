@@ -70,7 +70,7 @@ import { RunEventHub } from "../src/events/run-event-hub.js";
  *
  * The transport is the only stub: a `fetch` that answers with real SSE. Everything else — gateway,
  * model catalog, provider registry, stream validator, turn assembler, the canonical Tool registry over
- * the nine Coding Tools, the real Security gate and result sanitizer, the durable Tool execution
+ * the ten Coding Tools, the real Security gate and result sanitizer, the durable Tool execution
  * coordinator, the Tool batch and the durable settlement — is the production implementation.
  *
  * Phase 4F retired the legacy `ToolDispatcher` this test used to compose. The wiring below mirrors
@@ -289,7 +289,7 @@ describe("real provider Tool Call round trip", () => {
      * The production Tool composition.
      *
      * ```text
-     * Runtime Operations adapters      → the nine Coding Tool definitions
+     * Runtime Operations adapters      → the ten Coding Tool definitions
      * DefaultAgentToolRegistryBuilder  → the canonical AgentToolRegistry
      * CodingToolCatalogBuilder         → the Coding overlay, aligned to that registry
      * createDefaultV1ToolExecutionSecurity → the real gate, result sanitizer and presentation

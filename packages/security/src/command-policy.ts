@@ -84,18 +84,22 @@ function analyzeSegment(
   }
   const executable = basename(tokens[0] ?? "");
   if (isShellWrapper(executable, tokens, platform)) {
-    const body = wrapperBody(tokens, platform);
+    // The body grammar follows the *wrapper* shell, not the host shell, and the body flag set is
+    // read from that same grammar — `powershell -Command "..."` hosted by a POSIX shell is a
+    // PowerShell body, so its `-Command` flag is a flag and not an unmatchable POSIX `-c`.
+    const nestedPlatform = wrapperPlatform(executable, platform);
+    const body = wrapperBody(tokens, nestedPlatform);
     const nextDepth = depth + 1;
     if (nextDepth > MAX_COMMAND_WRAPPER_DEPTH || body === undefined) {
       classifications.add("OPAQUE_DYNAMIC");
       return { classifications, wrapperDepth: nextDepth };
     }
-    const nested = analyzeText(body, wrapperPlatform(executable, platform), nextDepth);
+    const nested = analyzeText(body, nestedPlatform, nextDepth);
     for (const classification of nested.classifications) classifications.add(classification);
     return { classifications, wrapperDepth: nested.wrapperDepth };
   }
 
-  const command = executable.toLowerCase();
+  const command = executableName(tokens[0] ?? "");
   if (command === "env") {
     const nested = analyzeText(tokens.slice(skipEnvPrefix(tokens)).join(" "), platform, depth);
     for (const classification of nested.classifications) classifications.add(classification);
@@ -114,7 +118,8 @@ function analyzeSegment(
   ) {
     classifications.add("PRIVILEGE_ESCALATION");
   }
-  if (isSystemDestructive(command, tokens)) classifications.add("SYSTEM_DESTRUCTIVE");
+  if (isSystemDestructive(command, tokens, tokens[0] ?? ""))
+    classifications.add("SYSTEM_DESTRUCTIVE");
   else if (isDestructive(command, tokens, platform)) classifications.add("DESTRUCTIVE_LOCAL");
 
   if (command === "git") classifyGit(tokens, classifications);
@@ -183,25 +188,26 @@ function tokenize(command: string, platform: CommandPlatform): TokenizedCommand 
   return { segments, opaque: false };
 }
 
+/**
+ * Whether a segment launches another shell whose body must also be analyzed.
+ *
+ * A nested shell is a wrapper wherever it appears, not only on its native platform: a POSIX host
+ * can run `powershell -Command "..."` and any host can run `cmd /c "..."`, and recognizing the
+ * wrapper only on its home platform would leave the body unanalysed exactly when the host shell
+ * differs from the body shell. `wrapperPlatform` still decides which grammar the body is parsed
+ * with, so widening recognition does not widen interpretation.
+ */
 function isShellWrapper(
   executable: string,
   tokens: readonly string[],
-  platform: CommandPlatform,
+  _platform: CommandPlatform,
 ): boolean {
   const name = executable.toLowerCase();
-  if (platform === "POSIX_SH" && ["sh", "bash", "zsh"].includes(name)) {
-    return tokens.some((token) => token === "-c" || token === "-lc");
-  }
-  if (platform === "POWERSHELL" && ["powershell", "pwsh"].includes(name)) {
-    return tokens.some(
-      (token) => token.toLowerCase() === "-command" || token.toLowerCase() === "-c",
-    );
-  }
-  return (
-    platform === "CMD" &&
-    ["cmd", "cmd.exe"].includes(name) &&
-    tokens.some((token) => token.toLowerCase() === "/c")
-  );
+  const flags = tokens.map((token) => token.toLowerCase());
+  if (["sh", "bash", "zsh"].includes(name)) return flags.some((flag) => ["-c", "-lc"].includes(flag));
+  if (["powershell", "pwsh"].includes(name))
+    return flags.some((flag) => ["-command", "-c"].includes(flag));
+  return ["cmd", "cmd.exe"].includes(name) && flags.includes("/c");
 }
 
 function wrapperBody(tokens: readonly string[], platform: CommandPlatform): string | undefined {
@@ -221,7 +227,8 @@ function wrapperPlatform(executable: string, current: CommandPlatform): CommandP
   const name = executable.toLowerCase();
   if (["powershell", "pwsh"].includes(name)) return "POWERSHELL";
   if (["cmd", "cmd.exe"].includes(name)) return "CMD";
-  return current === "POWERSHELL" ? "POWERSHELL" : "POSIX_SH";
+  if (["sh", "bash", "zsh"].includes(name)) return "POSIX_SH";
+  return current;
 }
 
 function containsDynamicSyntax(tokens: readonly string[], platform: CommandPlatform): boolean {
@@ -276,13 +283,63 @@ function isRemoteMutation(command: string, tokens: readonly string[]): boolean {
   return command === "docker" && tokens[1]?.toLowerCase() === "push";
 }
 
-function isSystemDestructive(command: string, tokens: readonly string[]): boolean {
+/**
+ * Host-process terminating executables.
+ *
+ * ```text
+ * taskkill      Windows image/PID termination
+ * stop-process  PowerShell cmdlet; `spps` is its own documented alias
+ * pkill         POSIX match-and-kill
+ * killall       POSIX name-and-kill
+ * kill          POSIX signal delivery / PowerShell's alias for Stop-Process
+ * ```
+ *
+ * A shell command cannot prove that the pid, image name or pattern it names resolves to a process
+ * the *current Run* owns. The Runtime already holds that proof as `sessionId` + `ownerRunId`, so a
+ * shell-level kill is always an ownership bypass rather than an ordinary command. These therefore
+ * reuse the existing `SYSTEM_DESTRUCTIVE` classification, whose input-policy outcome is an
+ * unconditional DENY — not an approval prompt, because no human approval can turn an unprovable
+ * ownership claim into a provable one.
+ *
+ * No pid lists, image-name exceptions or daemon-pid allow-lists belong here: an exception list is
+ * itself the bypass.
+ */
+const HOST_PROCESS_TERMINATION_EXECUTABLES: ReadonlySet<string> = new Set([
+  "taskkill",
+  "stop-process",
+  "spps",
+  "pkill",
+  "killall",
+  "kill",
+]);
+
+function isSystemDestructive(
+  command: string,
+  tokens: readonly string[],
+  executableToken: string,
+): boolean {
   if (["shutdown", "reboot", "poweroff", "halt", "mkfs"].includes(command)) return true;
   if (command === "diskpart" && tokens.some((token) => token.toLowerCase() === "clean"))
     return true;
   if (command === "dd" && tokens.some((token) => /^of=\/dev\//i.test(token))) return true;
+  if (isHostProcessTermination(command, executableToken)) return true;
   if (command !== "rm" || !hasRecursive(tokens)) return false;
   return tokens.some((token) => ["/", "/*", "~"].includes(token));
+}
+
+/**
+ * Whether the segment invokes a host-process terminating executable.
+ *
+ * The invocation must be **bare**: `./scripts/kill` and `node tools/killall.js` name workspace
+ * files, not the host's process-termination binary, and denying them would be a false positive on
+ * ordinary user code. A path separator in the executable token is that distinction.
+ */
+function isHostProcessTermination(command: string, executableToken: string): boolean {
+  return (
+    HOST_PROCESS_TERMINATION_EXECUTABLES.has(command) &&
+    !executableToken.includes("/") &&
+    !executableToken.includes("\\")
+  );
 }
 
 function isDestructive(
@@ -325,6 +382,18 @@ function skipEnvPrefix(tokens: readonly string[]): number {
 
 function basename(value: string): string {
   return value.replaceAll("\\", "/").slice(value.replaceAll("\\", "/").lastIndexOf("/") + 1);
+}
+
+/**
+ * The comparable executable name of one token: basename, lowercased, with a Windows `.exe`
+ * suffix folded away so `taskkill.exe` and `taskkill` are the same command.
+ *
+ * Only `.exe` is folded. `.cmd` / `.bat` / `.js` stay significant, because those names are
+ * overwhelmingly workspace scripts rather than host binaries.
+ */
+function executableName(token: string): string {
+  const name = basename(token).toLowerCase();
+  return name.endsWith(".exe") ? name.slice(0, -4) : name;
 }
 
 function orderClassifications(

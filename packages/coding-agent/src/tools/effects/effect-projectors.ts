@@ -164,6 +164,24 @@ export function projectStdinEffects(input: ToolEffectProjectorInput): readonly T
   ];
 }
 
+/**
+ * `stop_process` → `PROCESS_STOPPED` for the session the Tool terminated.
+ *
+ * The session id is taken from the *arguments*, not from the result details, so the effect can only
+ * ever name the session the model was allowed to target — a result that reported a different session
+ * could not smuggle it into `activeProcesses`. Only a confirmed termination produces the effect: an
+ * error or an uncertain outcome leaves `activeProcesses` untouched rather than guessing that a
+ * process died.
+ */
+export function projectStopProcessEffects(input: ToolEffectProjectorInput): readonly ToolEffect[] {
+  const sessionId = input.request.args.session_id;
+  const details = input.result.details as { readonly status?: unknown };
+  if (input.result.isError || details.status !== "EXITED" || typeof sessionId !== "string") {
+    return [];
+  }
+  return [{ type: "PROCESS_STOPPED", sessionId, status: "KILLED" as const }];
+}
+
 function terminalFields(details: { readonly exitCode?: unknown; readonly signal?: unknown }): {
   readonly exitCode?: number;
   readonly signal?: string;

@@ -39,7 +39,7 @@ only a bounded presentation stream/chunk. It is emitted after the result has
 passed the existing result sanitizer and before the terminal Tool event is
 committed. There is no raw-output event channel and no new Protocol version.
 
-The nine built-in labels are:
+The ten built-in labels are:
 
 | Tool             | User-facing label     |
 | ---------------- | --------------------- |
@@ -50,6 +50,7 @@ The nine built-in labels are:
 | `apply_patch`    | Edit files            |
 | `exec_command`   | Run command           |
 | `write_stdin`    | Interact with process |
+| `stop_process`   | Stop process          |
 | `git_status`     | Check Git status      |
 | `git_diff`       | Inspect Git diff      |
 

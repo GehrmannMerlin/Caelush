@@ -8,6 +8,7 @@ describe("@caelush/runtime exec public API", () => {
     expect(runtime.LocalShellResolver).toBeDefined();
     expect(runtime.TerminalOutputDecoder).toBeDefined();
     expect(runtime.HeadTailOutputBuffer).toBeDefined();
+    expect(runtime.terminateProcessTree).toBeDefined();
     expect(runtime.MAX_EXEC_MODEL_OUTPUT_BYTES).toBe(48 * 1024);
   });
 });

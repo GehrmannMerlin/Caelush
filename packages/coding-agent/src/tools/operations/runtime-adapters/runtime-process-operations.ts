@@ -8,13 +8,20 @@ import { resolveRuntimeWorkspace } from "./resolve-runtime-workspace.js";
  * The Runtime implementation of `ExecOperations` and `ProcessOperations`.
  *
  * ```text
- * execute()   start a command, binding the process to its owner Run
- * interact()  write to, or poll, a process this Run owns
+ * execute()    start a command, binding the process to its owner Run
+ * interact()   write to, or poll, a process this Run owns
+ * terminate()  stop one managed session this Run owns
  * ```
  *
  * Both return the Runtime's exec result projected onto a `JsonObject`, which is what the frozen
  * contracts specify: the Runtime's exec result schema is still evolving, and the boundary frozen here is
  * the capability rather than the result vocabulary.
+ *
+ * ## Ownership is the Runtime's answer, not this adapter's
+ *
+ * Every request carries the caller's `ownerRunId` straight through. The adapter never inspects a
+ * session id, never compares owners and never guesses: a session handle is opaque, so only the Runtime
+ * can decide whether it belongs to the calling Run.
  *
  * ## `onOutput` is a neutral live callback
  *
@@ -81,6 +88,15 @@ export function createRuntimeProcessOperations(
           : {
               onOutput: (event: ProcessOutputEvent) => input.onOutput?.(event.stream, event.text),
             }),
+      });
+      return toJsonObject(result);
+    },
+
+    async terminate(input) {
+      const scope = await resolveRuntimeWorkspace(resolver, input.environment);
+      const result = await scope.exec.terminate({
+        ownerRunId: input.ownerRunId,
+        sessionId: input.sessionId,
       });
       return toJsonObject(result);
     },

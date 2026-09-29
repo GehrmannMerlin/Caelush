@@ -112,7 +112,7 @@ describe("package boundaries", () => {
       "ajv",
     ]);
 
-    // The Coding Tool product layer owns the nine builtins, their narrow Operations ports and Runtime
+    // The Coding Tool product layer owns the ten builtins, their narrow Operations ports and Runtime
     // adapters, the Coding security facts, the approval identity, the Coding effects and the prompt
     // snippets. It is the one Tool package that may reach Runtime, and the edge stays one-way.
     const codingManifest = await readManifest("packages/coding-agent/package.json");

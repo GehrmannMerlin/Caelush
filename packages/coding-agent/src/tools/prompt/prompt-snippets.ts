@@ -99,9 +99,9 @@ const SNIPPET_SOURCE: Readonly<Record<string, SnippetSource>> = {
     purpose: "Run command.",
     whenToUse: "Tests/builds/installs/services.",
     whenNotToUse: "Read/list/search.",
-    argumentNotes: "cmd and relative workdir.",
+    argumentNotes: "cmd and relative workdir; keep session_id of a long-running process.",
     sideEffects: "process/state/network.",
-    safety: "Gate/approval for risk.",
+    safety: "Gate/approval for risk; stop long-running processes with stop_process.",
     resultHandling: "Output + exit status.",
   },
   write_stdin: {
@@ -112,6 +112,15 @@ const SNIPPET_SOURCE: Readonly<Record<string, SnippetSource>> = {
     sideEffects: "May write stdin.",
     safety: "Same-Run session ownership.",
     resultHandling: "Status + exit.",
+  },
+  stop_process: {
+    purpose: "Stop managed process.",
+    whenToUse: "End a long-running process exec_command started.",
+    whenNotToUse: "Never taskkill/pkill/killall/Stop-Process/kill.",
+    argumentNotes: "Exact session_id from exec_command; no pid or name.",
+    sideEffects: "Terminates that one session.",
+    safety: "Runtime allows only a same-Run owned session.",
+    resultHandling: "EXITED/KILLED status.",
   },
   git_status: {
     purpose: "Read Git status.",
@@ -160,6 +169,10 @@ export const EXEC_COMMAND_PROMPT_SNIPPET = renderSnippet(
   SNIPPET_SOURCE.exec_command!,
 );
 export const WRITE_STDIN_PROMPT_SNIPPET = renderSnippet("write_stdin", SNIPPET_SOURCE.write_stdin!);
+export const STOP_PROCESS_PROMPT_SNIPPET = renderSnippet(
+  "stop_process",
+  SNIPPET_SOURCE.stop_process!,
+);
 export const GIT_STATUS_PROMPT_SNIPPET = renderSnippet("git_status", SNIPPET_SOURCE.git_status!);
 export const GIT_DIFF_PROMPT_SNIPPET = renderSnippet("git_diff", SNIPPET_SOURCE.git_diff!);
 
@@ -172,6 +185,7 @@ export const CODING_TOOL_PROMPT_SNIPPETS: Readonly<Record<string, string>> = Obj
   apply_patch: APPLY_PATCH_PROMPT_SNIPPET,
   exec_command: EXEC_COMMAND_PROMPT_SNIPPET,
   write_stdin: WRITE_STDIN_PROMPT_SNIPPET,
+  stop_process: STOP_PROCESS_PROMPT_SNIPPET,
   git_status: GIT_STATUS_PROMPT_SNIPPET,
   git_diff: GIT_DIFF_PROMPT_SNIPPET,
 });

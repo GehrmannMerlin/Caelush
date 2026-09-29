@@ -205,8 +205,8 @@ export const DEFAULT_CORE_AGENT_POLICY = [
   "Use the active workspace as the only path root; use '.' when referring to its root.",
   "Inspect relevant files and gather evidence before making claims or changes.",
   "Use the native tool that matches the task; do not use mutation tools for read-only work.",
-  "Tool selection: use list_directory for immediate children, find_files for unknown paths, search_text for content search, read_file for known text files, git_status and git_diff for Git evidence, apply_patch for requested file changes, exec_command for tests/build/install/service commands, and write_stdin only for a session returned by exec_command.",
-  "Do not use exec_command to read files, list directories, or search code when a native Tool is sufficient.",
+  "Tool selection: use list_directory for immediate children, find_files for unknown paths, search_text for content search, read_file for known text files, git_status and git_diff for Git evidence, apply_patch for requested file changes, exec_command for tests/build/install/service commands, write_stdin only for a session returned by exec_command, and stop_process to end a long-running session by its exact session_id.",
+  "Do not use exec_command to read files, list directories, or search code when a native Tool is sufficient, and never use it to terminate a process with taskkill, Stop-Process, pkill, killall or kill.",
   "Treat Tool errors as observations: correct recoverable inputs, avoid repeating an unchanged failure, and do not call an inapplicable tool.",
   "After a mutation, inspect the resulting files and relevant diff before claiming success.",
   "Stop when the requested evidence is sufficient; report blockers and uncertainty plainly.",
@@ -271,7 +271,7 @@ export interface DaemonCompositionOptions {
     event: import("./providers/model-wire-diagnostic.js").ModelWireDiagnosticEvent,
   ) => void;
   /**
-   * The Coding Tool definitions this host composed, when it does not want the default nine.
+   * The Coding Tool definitions this host composed, when it does not want the default ten.
    *
    * The same value reaches the registry and the Coding catalog, so the executable Tool set and its
    * overlay are always two views of one derivation. Phase 4F narrowed this from the legacy
@@ -546,11 +546,11 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
    * ```text
    * RuntimeResolver
    *   → the four Runtime Operations adapters     @caelush/coding-agent
-   *   → createDefaultCodingTools(...)            the nine Coding Tool definitions
+   *   → createDefaultCodingTools(...)            the ten Coding Tool definitions
    *   → ToolRegistryBuilder                      the canonical AgentToolRegistry
    * ```
    *
-   * The default nine Tools now **originate in `@caelush/coding-agent`**. The legacy package's
+   * The default ten Tools now **originate in `@caelush/coding-agent`**. The legacy package's
    * `createDefaultBuiltinToolRegistrations` is no longer called here: it survives as a compatibility
    * facade for its own callers and for its tests, and every registration it builds delegates to these
    * same Coding factories. Production does not go through it, so there is exactly one place the

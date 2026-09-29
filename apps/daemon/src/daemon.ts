@@ -24,6 +24,10 @@ import {
 import { buildDaemonApp } from "./app.js";
 import { assertLoopbackDaemonHost, createDaemonConfig, type DaemonConfig } from "./config.js";
 import { composeDaemon, type DaemonComposition } from "./daemon-composition.js";
+import {
+  reconcileStaleRuns,
+  type StartupReconciliationSummary,
+} from "./execution/run-startup-reconciliation.js";
 import { SessionTranscriptService } from "./services/session-transcript-service.js";
 import type { DaemonModelProviderConfig } from "./providers/model-canonicalizer.js";
 import type { WebStaticHostOptions } from "./web/static-host.js";
@@ -55,6 +59,13 @@ export interface DaemonOptions {
 
 export interface DaemonHandle {
   readonly url: string;
+  /**
+   * What the fresh-daemon stale-Run reconciliation pass found and scheduled.
+   *
+   * A previous generation that died without settling its Runs leaves them non-terminal forever
+   * unless the next generation asks. This is the evidence that it asked, and what happened.
+   */
+  readonly startupReconciliation?: StartupReconciliationSummary;
   close(): Promise<void>;
 }
 
@@ -84,7 +95,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
    *   → createDefaultCodingTools(...)   @caelush/coding-agent
    * ```
    *
-   * Phase 4E made the Coding product layer the production source for the nine defaults. The legacy
+   * Phase 4E made the Coding product layer the production source for the ten defaults. The legacy
    * `createDefaultBuiltinToolRegistrations` — which this function used to call — is no longer part of
    * the production path: it survives as a compatibility facade over the same Coding factories until
    * Phase 4F, and the composition root registers these definitions directly.
@@ -212,8 +223,37 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
   const url = `http://${config.host}:${address.port}`;
   let closePromise: Promise<void> | undefined;
 
+  /**
+   * Reconcile whatever the previous daemon generation left non-terminal.
+   *
+   * ```text
+   * storage/runtime/controller/supervisor composed  →  done above
+   * control plane listening                         →  done above
+   * enumerate stale non-terminal Runs               →  listRecoverable
+   * hand each to the existing recovery authority     →  supervisor.recover
+   * ```
+   *
+   * It runs *after* the control plane is up so a recovery that needs the daemon to be observable has
+   * one, and it is fully failure-isolated: a storage read that fails, or one Run that cannot be
+   * scheduled, is reported and never prevents the daemon from serving. Reconciliation schedules
+   * background work and returns; it never awaits a Run to completion here.
+   */
+  let startupReconciliation: StartupReconciliationSummary | undefined;
+  try {
+    startupReconciliation = await reconcileStaleRuns({
+      runs: storage.runs,
+      supervisor: composition.supervisor,
+      ...(options.logger === true ? { logger: safeSupervisorLogger } : {}),
+    });
+  } catch (error) {
+    if (options.logger === true) {
+      console.error("Caelush startup Run reconciliation could not be enumerated.", error);
+    }
+  }
+
   return {
     url,
+    ...(startupReconciliation === undefined ? {} : { startupReconciliation }),
     close: () => {
       closePromise ??= (async () => {
         for (const controller of activeStreams) controller.abort();

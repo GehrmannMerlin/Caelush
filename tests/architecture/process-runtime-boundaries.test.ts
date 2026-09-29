@@ -15,7 +15,7 @@ async function sourceTree(relativeRoot: string): Promise<string> {
 describe("Phase 8C process runtime boundaries", () => {
   it("keeps spawning inside runtime adapters and below the Tool layer", async () => {
     const runtime = await sourceTree("packages/runtime/src");
-    // Phase 4F deleted `@caelush/tools`; the Coding Tool product layer that owns the nine builtins and
+    // Phase 4F deleted `@caelush/tools`; the Coding Tool product layer that owns the ten builtins and
     // their Runtime adapters is `@caelush/coding-agent` now, so that is the Tool layer this guard
     // reads.
     expect(await pathExists(retiredLegacyToolPackage.directory)).toBe(false);

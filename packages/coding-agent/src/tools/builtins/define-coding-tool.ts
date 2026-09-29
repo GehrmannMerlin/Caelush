@@ -9,7 +9,7 @@ import type { AgentTool } from "@caelush/agent";
  * ```
  *
  * Every Coding builtin is an `AgentTool` with the same five invariants, and this is where they are
- * stated once rather than nine times:
+ * stated once rather than ten times:
  *
  * ```text
  * executionMode is SEQUENTIAL   the first migration wave schedules every batch sequentially; a Tool
@@ -45,7 +45,7 @@ export interface CodingToolDefinitionInput {
  * Build the canonical executable Tool for one Coding builtin.
  *
  * The result is frozen, sequential and schema-complete, so every consumer — the registry, the Preparer,
- * the executor — sees exactly the same contract shape for all nine Tools.
+ * the executor — sees exactly the same contract shape for all ten Tools.
  */
 export function defineCodingTool(input: CodingToolDefinitionInput): AgentTool {
   return Object.freeze({

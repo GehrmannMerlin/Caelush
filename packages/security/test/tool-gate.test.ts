@@ -164,3 +164,72 @@ describe("Caelush Tool execution Gate", () => {
     expect(decision).toMatchObject({ kind: "DENY", reasonCode: "SECURITY_FACTS_UNAVAILABLE" });
   });
 });
+
+/**
+ * The process-safety boundary, at the gate a Tool call actually passes through.
+ *
+ * A shell-level process kill cannot prove ownership of the process it targets, so it is never an
+ * approval question: `exec_command` must be denied outright. The DENY must hold under *every*
+ * approval policy, including the permissive one, because an approval prompt would imply a human can
+ * supply the ownership proof the command cannot carry.
+ */
+describe("Caelush Tool execution Gate — host-process termination", () => {
+  const execInvocation = {
+    ...invocation,
+    toolName: "exec_command" as const,
+    riskLevel: "CRITICAL" as const,
+    args: { cmd: "taskkill /F /IM node.exe" },
+  };
+  const execDefinition = {
+    name: "exec_command" as const,
+    riskLevel: "CRITICAL" as const,
+    requiredCapabilities: ["SHELL_EXEC", "PROCESS_START"] as const,
+    runtimeRequirements: { runtimeKinds: ["local"] },
+  };
+
+  function commandFacts(command: string) {
+    return {
+      resourceAccesses: [],
+      shellCommand: { command, workdir: ".", tty: false },
+      secretScanInputs: [{ kind: "COMMAND", text: command }],
+    };
+  }
+
+  it.each([
+    "taskkill /F /IM node.exe",
+    "taskkill /PID 1234 /F",
+    "Stop-Process -Name node -Force",
+    'powershell -Command "Stop-Process -Name node -Force"',
+    "pkill -f node",
+    "killall node",
+    "kill -9 1234",
+  ])("denies %s under the permissive DANGEROUS_ONLY policy", async (command) => {
+    const decision = await new CaelushToolExecutionGate().decide({
+      invocation: { ...execInvocation, args: { cmd: command } },
+      toolName: execDefinition.name,
+      definition: execDefinition,
+      securityContext: { permissionProfile: "FULL_ACCESS", approvalPolicy: "DANGEROUS_ONLY" },
+      securityFacts: commandFacts(command),
+    });
+
+    expect(decision).toMatchObject({
+      kind: "DENY",
+      reasonCode: "SYSTEM_DESTRUCTIVE_COMMAND_DENIED",
+    });
+  });
+
+  it("keeps an ordinary build or test command out of the destructive path", async () => {
+    for (const command of ["npm test", "pnpm build", "node server.js", "git status"]) {
+      const decision = await new CaelushToolExecutionGate().decide({
+        invocation: { ...execInvocation, args: { cmd: command } },
+        toolName: execDefinition.name,
+        definition: execDefinition,
+        securityContext: { permissionProfile: "FULL_ACCESS", approvalPolicy: "DANGEROUS_ONLY" },
+        securityFacts: commandFacts(command),
+      });
+
+      expect(decision.reasonCode, command).not.toBe("SYSTEM_DESTRUCTIVE_COMMAND_DENIED");
+      expect(JSON.stringify(decision.safeAction ?? {}), command).not.toContain("SYSTEM_DESTRUCTIVE");
+    }
+  });
+});

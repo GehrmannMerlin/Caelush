@@ -30,7 +30,7 @@ import { createCodingToolComposition } from "./support/coding-tool-composition.j
  * `apps/daemon/src/daemon-composition.ts` composes exactly these values and passes the first two to
  * `createToolResultPipeline` and `createToolInvocationExecutor`. What this file proves is the part a
  * composition test can prove without dispatching anything: the real Security implementations sit
- * behind the canonical Agent ports and still redact what they always redacted, and the default nine
+ * behind the canonical Agent ports and still redact what they always redacted, and the default ten
  * Tools reach the canonical registry unchanged.
  *
  * Phase 4F deleted the legacy `createV1SecureToolDispatcher` this file used to inspect. Every
@@ -47,6 +47,7 @@ const EXPECTED_DEFAULT_TOOL_ORDER = [
   "apply_patch",
   "exec_command",
   "write_stdin",
+  "stop_process",
   "git_status",
   "git_diff",
 ];
@@ -144,13 +145,13 @@ describe("production secure Tool result composition", () => {
     expect(sanitized).toEqual({ kind: "PROGRESS", message: "halfway", completed: 1, total: 2 });
   });
 
-  it("composes the nine defaults through the canonical registry unchanged", () => {
+  it("composes the ten defaults through the canonical registry unchanged", () => {
     const { registry } = createCodingToolComposition();
 
     expect(registry.names()).toEqual(EXPECTED_DEFAULT_TOOL_ORDER);
     // The frozen order is the Coding product layer's own declaration, and the registry preserves it.
     expect(registry.names()).toEqual([...DEFAULT_CODING_TOOL_ORDER]);
-    expect(registry.size).toBe(9);
+    expect(registry.size).toBe(10);
     // Names, order and schemas are untouched by this round.
     expect(registry.modelSpecs().map((spec) => spec.name)).toEqual(registry.names());
     for (const name of registry.names()) {

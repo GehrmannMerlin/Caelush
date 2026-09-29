@@ -60,10 +60,11 @@ describe("daemon production composition", () => {
       "apply_patch",
       "exec_command",
       "write_stdin",
+      "stop_process",
       "git_status",
       "git_diff",
     ]);
-    // Phase 4E moved usage guidance out of the provider-visible tool catalog: the nine defaults carry
+    // Phase 4E moved usage guidance out of the provider-visible tool catalog: the ten defaults carry
     // no guidance folded into a description, because their guidance travels as a Coding `promptSnippet`
     // through the budgeted Context path. Phase 4F removed the legacy `modelGuidance` accessor with the
     // package that declared it, so the assertion is now the structural one: every model spec is exactly
@@ -144,12 +145,13 @@ describe("daemon production composition", () => {
       "apply_patch",
       "exec_command",
       "write_stdin",
+      "stop_process",
     ]);
     expect(composition.toolTurn.modelSpecs().map((tool) => tool.name)).toEqual(
       composition.toolRegistry.names(),
     );
     // Filtering is aligned across every view: the registry, the model catalog the Tool turn publishes
-    // and the Coding catalog all describe the same seven active Tools. Phase 4F made that one
+    // and the Coding catalog all describe the same eight active Tools. Phase 4F made that one
     // derivation — the reduced *definition* list builds all three — rather than a registry the catalog
     // was then filtered against.
     for (const spec of composition.toolTurn.modelSpecs()) {

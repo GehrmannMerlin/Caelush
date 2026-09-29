@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
  * Phase 4E — the Coding Tool product layer authority guard.
  *
  * ```text
- * @caelush/coding-agent   the nine Coding builtin business implementations
+ * @caelush/coding-agent   the ten Coding builtin business implementations
  * @caelush/agent          the general Agent Tool Kernel they are built on
  * apps/daemon             composes the target layer
  * ```
@@ -14,7 +14,7 @@ import { describe, expect, it } from "vitest";
  * The round's completion gate names two conditions that must hold *together*:
  *
  * ```text
- * the nine builtins are target-owned
+ * the ten builtins are target-owned
  * there is no second business implementation of any of them
  * ```
  *
@@ -103,7 +103,7 @@ async function sourceFilesUnder(relativeDir: string): Promise<readonly string[]>
   );
 }
 
-const NINE = [
+const TEN = [
   "read_file",
   "list_directory",
   "find_files",
@@ -111,15 +111,16 @@ const NINE = [
   "apply_patch",
   "exec_command",
   "write_stdin",
+  "stop_process",
   "git_status",
   "git_diff",
 ] as const;
 
 describe("Phase 4E guard — builtin ownership", () => {
-  it("declares all nine builtins in @caelush/coding-agent, one file each", async () => {
+  it("declares all ten builtins in @caelush/coding-agent, one file each", async () => {
     const files = await filesUnder("packages/coding-agent/src/tools/builtins");
 
-    for (const name of NINE) {
+    for (const name of TEN) {
       const file = files.find(
         (entry) => path.basename(entry) === `${name.replaceAll("_", "-")}.ts`,
       );
@@ -130,22 +131,22 @@ describe("Phase 4E guard — builtin ownership", () => {
       expect(text, name).toContain("defineCodingTool({");
     }
 
-    // And the default set composes exactly those nine, in the frozen order.
+    // And the default set composes exactly those ten, in the frozen order.
     const defaultTools = code(
       await read("packages/coding-agent/src/tools/builtins/default-tools.ts"),
     );
     const order = [...defaultTools.matchAll(/^\s{2}"([a-z_]+)",$/gm)].map((match) => match[1]);
-    expect(order).toEqual([...NINE]);
+    expect(order).toEqual([...TEN]);
   });
 
-  it("declares the nine builtins in exactly one place in production source", async () => {
+  it("declares the ten builtins in exactly one place in production source", async () => {
     // Which package declares each Tool's provider-visible name, and how many times. Tests are excluded:
     // a fixture may construct a Tool, and that is not a second implementation of a Coding builtin.
-    const declarations = new Map<string, string[]>(NINE.map((name) => [name, []]));
+    const declarations = new Map<string, string[]>(TEN.map((name) => [name, []]));
     for (const file of await allSourceFiles()) {
       if (file.includes("/test/")) continue;
       const text = code(await read(file));
-      for (const name of NINE) {
+      for (const name of TEN) {
         if (text.includes(`name: "${name}"`)) declarations.get(name)!.push(file);
       }
     }
@@ -156,12 +157,12 @@ describe("Phase 4E guard — builtin ownership", () => {
       ]);
     }
 
-    // And the default set composes exactly those nine, in the frozen order.
+    // And the default set composes exactly those ten, in the frozen order.
     const defaultTools = code(
       await read("packages/coding-agent/src/tools/builtins/default-tools.ts"),
     );
     const order = [...defaultTools.matchAll(/^\s{2}"([a-z_]+)",$/gm)].map((match) => match[1]);
-    expect(order).toEqual([...NINE]);
+    expect(order).toEqual([...TEN]);
   });
 
   it("has no second business implementation of any builtin", async () => {
@@ -174,14 +175,14 @@ describe("Phase 4E guard — builtin ownership", () => {
       if (file.startsWith(`${ownerDir}/`)) continue;
 
       const text = code(await read(file));
-      for (const name of NINE) {
+      for (const name of TEN) {
         if (!text.includes(`name: "${name}"`)) continue;
         expect(file, `${name} redeclared`).toBe(ownerDir);
       }
     }
   });
 
-  it("declares each of the nine Coding factories exactly once", async () => {
+  it("declares each of the ten Coding factories exactly once", async () => {
     const expected: readonly (readonly [string, string])[] = [
       ["createReadFileTool", "read-file.ts"],
       ["createListDirectoryTool", "list-directory.ts"],
@@ -240,7 +241,7 @@ describe("Phase 4E guard — builtin ownership", () => {
   });
 });
 
-/** The one directory the nine Coding builtin modules live in, with forward slashes. */
+/** The one directory the ten Coding builtin modules live in, with forward slashes. */
 function ownerDirPath(): string {
   return "packages/coding-agent/src/tools/builtins";
 }

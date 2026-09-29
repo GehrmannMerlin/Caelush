@@ -27,6 +27,7 @@ const TOOL_LABELS: Readonly<Record<string, string>> = Object.freeze({
   apply_patch: "Edit files",
   exec_command: "Run command",
   write_stdin: "Interact with process",
+  stop_process: "Stop process",
   git_status: "Check Git status",
   git_diff: "Review Git diff",
 });
@@ -124,6 +125,8 @@ export class CaelushToolPresentation implements ToolPresentationPort {
         return this.presentShellCommand({ invocation });
       case "write_stdin":
         return "Interact with a managed process";
+      case "stop_process":
+        return "Stop a managed process session";
       case "git_status":
         return "Inspect workspace Git status";
       case "git_diff":
@@ -148,7 +151,11 @@ export class CaelushToolPresentation implements ToolPresentationPort {
       return changes === undefined ? "Patch applied" : `Patch applied (${changes} file changes)`;
     }
     if (result.isError) return "Tool reported a recoverable error";
-    if (invocation.toolName === "exec_command" || invocation.toolName === "write_stdin") {
+    if (
+      invocation.toolName === "exec_command" ||
+      invocation.toolName === "write_stdin" ||
+      invocation.toolName === "stop_process"
+    ) {
       const status = result.details.status;
       return typeof status === "string" ? `Process ${status.toLowerCase()}` : "Process result";
     }

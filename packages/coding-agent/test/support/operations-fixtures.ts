@@ -306,16 +306,32 @@ export function patchFake(apply: PatchOperations["apply"]): {
   };
 }
 
-/** A fake process family: `exec_command` and `write_stdin` are two ports over one Runtime service. */
+/**
+ * A fake process family: `exec_command`, `write_stdin` and `stop_process` are three ports over one
+ * Runtime service.
+ *
+ * `terminate` defaults to an empty result rather than being required, so a suite that only exercises
+ * the start/observe half of the lifecycle does not have to invent an answer — and every call is still
+ * recorded in `calls.terminate`, so a suite that cares can assert on it.
+ */
 export function processFake(answers: {
   execute: ExecOperations["execute"];
   interact: ProcessOperations["interact"];
+  terminate?: ProcessOperations["terminate"];
 }): {
   readonly exec: ExecOperations;
   readonly process: ProcessOperations;
-  readonly calls: { readonly execute: unknown[]; readonly interact: unknown[] };
+  readonly calls: {
+    readonly execute: unknown[];
+    readonly interact: unknown[];
+    readonly terminate: unknown[];
+  };
 } {
-  const calls = { execute: [] as unknown[], interact: [] as unknown[] };
+  const calls = {
+    execute: [] as unknown[],
+    interact: [] as unknown[],
+    terminate: [] as unknown[],
+  };
   return {
     exec: {
       async execute(input) {
@@ -327,6 +343,10 @@ export function processFake(answers: {
       async interact(input) {
         calls.interact.push(input);
         return await answers.interact(input);
+      },
+      async terminate(input) {
+        calls.terminate.push(input);
+        return await (answers.terminate?.(input) ?? Promise.resolve({}));
       },
     },
     calls,

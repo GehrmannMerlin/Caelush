@@ -1,4 +1,5 @@
 import { RuntimeExecError } from "./errors.js";
+import { terminateProcessTree } from "./process-tree.js";
 import { TerminalOutputSanitizer } from "./terminal-output.js";
 import type {
   ManagedProcessAdapter,
@@ -37,6 +38,7 @@ export async function createPtyProcessAdapter(
 }
 
 interface PtyLike {
+  readonly pid?: number;
   onData(listener: (data: string) => void): { dispose(): void };
   onExit(listener: (event: { exitCode: number; signal?: number }) => void): { dispose(): void };
   write(data: string): void;
@@ -109,7 +111,15 @@ class PtyProcessAdapter implements ManagedProcessAdapter {
     if (this.closed) return;
     this.closed = true;
     try {
-      this.child.kill();
+      // A pty session is often a wrapper too (`npm run dev`), so end its descendants with it — see
+      // `terminateProcessTree`.
+      await terminateProcessTree({
+        pid: this.child.pid,
+        kill: () => {
+          this.child.kill();
+          return true;
+        },
+      });
     } catch {
       // Runtime shutdown is best effort.
     }

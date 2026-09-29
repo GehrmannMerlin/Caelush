@@ -18,8 +18,13 @@ const POSIX_COMPATIBLE_NAMES = new Set([
 
 const WINDOWS_COMPATIBLE_NAMES = new Set([
   "PATH",
+  // System-location variables. `SYSTEMROOT`/`WINDIR` locate the OS, and `SYSTEMDRIVE` is required by the
+  // .NET runtime to expand registry values such as `%SystemDrive%\ProgramData\...`. When it is absent the
+  // token is left unexpanded and resolves RELATIVE to the child's working directory, which silently
+  // materialises a literal `%SystemDrive%` directory inside the workspace.
   "SYSTEMROOT",
   "WINDIR",
+  "SYSTEMDRIVE",
   "COMSPEC",
   "PATHEXT",
   "TEMP",

@@ -3,7 +3,7 @@
  *
  * ```text
  * @caelush/agent          AgentTool, AgentToolRegistry, ToolCallPreparer, canonical Tool pipeline
- * @caelush/coding-agent   the nine Coding builtins, their narrow Operations ports, Runtime adapters,
+ * @caelush/coding-agent   the ten Coding builtins, their narrow Operations ports, Runtime adapters,
  *                         security metadata and facts, approval identity, effects, presentation and
  *                         prompt snippets
  * ```
@@ -87,7 +87,7 @@ export type {
   CodingToolPathKind,
 } from "./operations/coding-read-only-operations.js";
 
-/* The nine builtins and the default set. */
+/* The ten builtins and the default set. */
 export { createReadFileTool, readFileInputSchema } from "./builtins/read-file.js";
 export { createListDirectoryTool, listDirectoryInputSchema } from "./builtins/list-directory.js";
 export { createFindFilesTool, findFilesInputSchema } from "./builtins/find-files.js";
@@ -95,6 +95,7 @@ export { createSearchTextTool, searchTextInputSchema } from "./builtins/search-t
 export { createApplyPatchTool, applyPatchInputSchema } from "./builtins/apply-patch.js";
 export { createExecCommandTool, execCommandInputSchema } from "./builtins/exec-command.js";
 export { createWriteStdinTool, writeStdinInputSchema } from "./builtins/write-stdin.js";
+export { createStopProcessTool, stopProcessInputSchema } from "./builtins/stop-process.js";
 export { createGitStatusTool, gitStatusInputSchema } from "./builtins/git-status.js";
 export { createGitDiffTool, gitDiffInputSchema } from "./builtins/git-diff.js";
 export {
@@ -151,6 +152,7 @@ export {
   projectListDirectorySecurityFacts,
   projectReadFileSecurityFacts,
   projectSearchTextSecurityFacts,
+  projectStopProcessSecurityFacts,
   projectWriteStdinSecurityFacts,
   ToolSecurityFactsProjectionError,
 } from "./security/security-facts.js";
@@ -207,6 +209,7 @@ export {
   projectPatchEffects,
   projectReadFileEffect,
   projectStdinEffects,
+  projectStopProcessEffects,
 } from "./effects/effect-projectors.js";
 export type { ToolEffectProjector, ToolEffectProjectorInput } from "./effects/effect-projectors.js";
 export { applyToolEffectsToAgentState } from "./effects/state-projector.js";
@@ -229,5 +232,6 @@ export type {
   promptSnippetFor,
   READ_FILE_PROMPT_SNIPPET,
   SEARCH_TEXT_PROMPT_SNIPPET,
+  STOP_PROCESS_PROMPT_SNIPPET,
   WRITE_STDIN_PROMPT_SNIPPET,
 } from "./prompt/prompt-snippets.js";

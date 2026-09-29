@@ -8,6 +8,7 @@ import {
   type ProcessAdapterFactory,
   type RuntimeExecResult,
   type RuntimeProcessInteractionRequest,
+  type RuntimeProcessTerminationRequest,
 } from "./contracts.js";
 import type { RunId } from "@caelush/protocol";
 import {
@@ -162,6 +163,66 @@ export class LocalProcessManager {
     await Promise.all(entries.map((entry) => entry.adapter.close()));
   }
 
+  /**
+   * Terminate exactly one managed session this Run owns.
+   *
+   * ```text
+   * lookup(sessionId, ownerRunId)     the ownership authority; a foreign session is not-found
+   * adapter.close()                   the actual termination
+   * adapter exit observation          the proof that the process really ended
+   * ```
+   *
+   * ## One session, never a run-wide sweep
+   *
+   * `cancelOwnedByRun` stops *every* process the Run owns, which is the right answer when a Run is
+   * being cancelled and the wrong one when a model asks to stop the dev server it just started. This
+   * method therefore never touches a sibling session: stopping session A leaves session B running.
+   *
+   * ## The outcome is proven, not assumed
+   *
+   * `close()` is only a request to terminate. The method waits for the adapter's own exit
+   * observation before it reports `EXITED / KILLED`, so a caller that reads the result knows the OS
+   * process ended rather than merely that a signal was sent. If termination cannot be confirmed
+   * within the bound, the answer is `RuntimeProcessUncertainError` — deliberately *not* a plain
+   * failure the model would be invited to retry, because a retry cannot make an unknown outcome
+   * known.
+   *
+   * A session that is already terminal, that never existed, or that belongs to another Run all fail
+   * as `PROCESS_SESSION_NOT_FOUND`: a foreign session's owner is never disclosed.
+   */
+  async terminateOwnedSession(
+    request: RuntimeProcessTerminationRequest,
+  ): Promise<RuntimeExecResult> {
+    const entry = this.lookup(request.sessionId, request.ownerRunId);
+    const snapshot = entry.output.drain();
+    entry.totalOmittedBytes += snapshot.omittedBytes;
+    if (isManagedProcessTerminal(entry.state)) {
+      this.entries.delete(entry.id);
+      throw new RuntimeExecError("PROCESS_SESSION_NOT_FOUND");
+    }
+    const confirmation = awaitAdapterExit(entry.adapter);
+    try {
+      await entry.adapter.close();
+    } catch {
+      throw new RuntimeProcessUncertainError();
+    }
+    if (!(await confirmation)) throw new RuntimeProcessUncertainError();
+    entry.state = "EXITED";
+    entry.signal = "KILLED";
+    this.entries.delete(entry.id);
+    this.notify(entry);
+    return {
+      status: "EXITED",
+      output: snapshot.text,
+      ...(entry.exitCode === undefined ? {} : { exitCode: entry.exitCode }),
+      signal: "KILLED",
+      totalOutputBytes: entry.totalOutputBytes,
+      omittedBytes: entry.totalOmittedBytes,
+      tty: entry.tty,
+      durationMs: Math.max(0, Date.now() - entry.startedAtMs),
+    };
+  }
+
   async cancelOwnedByRun(ownerRunId: RunId): Promise<{
     readonly runId: RunId;
     readonly stoppedProcessIds: readonly string[];
@@ -284,5 +345,38 @@ function attachLiveOutput(
     } catch {
       // Presentation observers are not allowed to change Runtime execution semantics.
     }
+  });
+}
+
+/**
+ * How long a termination waits for the adapter to observe the process exit.
+ *
+ * This is not a yield and not a timeout on the *request*: it bounds how long the Runtime will keep a
+ * termination unresolved before it stops pretending it can prove an outcome. Ten seconds is far
+ * beyond a local `close()` on any supported platform, so the only way to reach it is a process that
+ * genuinely refused to die — which is exactly the case that must not be reported as success.
+ */
+const TERMINATION_CONFIRMATION_TIMEOUT_MS = 10_000;
+
+/**
+ * Resolve `true` when the adapter observes the managed process exit, `false` when the bound expires.
+ *
+ * The subscription is taken before `close()` is called, and `onExit` replays an exit that already
+ * happened, so the wait never races the termination it is confirming.
+ */
+function awaitAdapterExit(adapter: ManagedProcessAdapter): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let unsubscribe: (() => void) | undefined;
+    const finish = (confirmed: boolean): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      unsubscribe?.();
+      resolve(confirmed);
+    };
+    unsubscribe = adapter.onExit(() => finish(true));
+    timer = setTimeout(() => finish(false), TERMINATION_CONFIRMATION_TIMEOUT_MS);
   });
 }

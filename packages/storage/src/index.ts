@@ -49,7 +49,15 @@ export type {
 export { decodeProtocol, encodeProtocol } from "./codec.js";
 export type { ProtocolCodecContext, ProtocolSchema } from "./codec.js";
 export type { SessionListOptions, SessionRepository } from "./repositories/session-repository.js";
-export type { RunListOptions, RunRepository } from "./repositories/run-repository.js";
+export type {
+  RecoverableRunQuery,
+  RunListOptions,
+  RunRepository,
+} from "./repositories/run-repository.js";
+export {
+  RECOVERABLE_RUN_DEFAULT_LIMIT,
+  RECOVERABLE_RUN_STATUSES,
+} from "./repositories/run-repository.js";
 export type { StepRepository } from "./repositories/step-repository.js";
 export type { RunStateRepository } from "./repositories/run-state-repository.js";
 /* The final Message System V2 storage authority. */

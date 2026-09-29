@@ -33,7 +33,7 @@ import { canonicalJsonString, type ToolSecurityContext } from "@caelush/agent";
  * sorting is the same, the canonical JSON encoding is the same — one shared implementation of canonical
  * encoding, imported from `@caelush/agent` rather than reimplemented — and therefore the digest is the
  * same. A compatibility test compares this function against the legacy algorithm for representative
- * arguments of all nine builtins.
+ * arguments of all ten builtins.
  *
  * ## Raw arguments never enter it
  *

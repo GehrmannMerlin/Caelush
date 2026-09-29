@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createAgentProcessEnvironment, createStructuredHelperEnvironment } from "../src/index.js";
+import {
+  createAgentProcessEnvironment,
+  createStructuredHelperEnvironment,
+  isCredentialBearingEnvironmentVariable,
+} from "../src/index.js";
 
 describe("child process environment policy", () => {
   it("keeps compatible variables and removes credentials/injection variables", () => {
@@ -44,6 +48,7 @@ describe("child process environment policy", () => {
       {
         Path: "C:\\Windows\\System32",
         SystemRoot: "C:\\Windows",
+        SystemDrive: "C:",
         TEMP: "C:\\Temp",
         USERPROFILE: "C:\\Users\\test",
         openai_api_key: "CAELUSH_HOST_SECRET_9D",
@@ -56,12 +61,28 @@ describe("child process environment policy", () => {
     expect(result).toMatchObject({
       Path: "C:\\Windows\\System32",
       SystemRoot: "C:\\Windows",
+      SystemDrive: "C:",
       TEMP: "C:\\Temp",
       USERPROFILE: "C:\\Users\\test",
     });
     expect(Object.keys(result).map((key) => key.toUpperCase())).not.toContain("OPENAI_API_KEY");
     expect(Object.keys(result).map((key) => key.toUpperCase())).not.toContain("NODE_OPTIONS");
     expect(Object.keys(result).map((key) => key.toUpperCase())).not.toContain("SSH_AUTH_SOCK");
+  });
+
+  it("keeps the Windows system-location variables a child runtime needs to expand %VAR% paths", () => {
+    // Regression: dropping `SYSTEMDRIVE` made a .NET-hosted child (PowerShell) leave the registry value
+    // `%SystemDrive%\ProgramData\Microsoft\Windows\Caches` unexpanded, so it resolved RELATIVE to the
+    // working directory and created a literal `%SystemDrive%` directory inside the workspace.
+    const result = createAgentProcessEnvironment(
+      { SYSTEMROOT: "C:\\Windows", WINDIR: "C:\\Windows", SYSTEMDRIVE: "C:", Path: "C:\\" },
+      "win32",
+    );
+
+    expect(result.SYSTEMDRIVE).toBe("C:");
+    expect(result.SYSTEMROOT).toBe("C:\\Windows");
+    expect(result.WINDIR).toBe("C:\\Windows");
+    expect(isCredentialBearingEnvironmentVariable("SYSTEMDRIVE")).toBe(false);
   });
 
   it("uses an even smaller structured-helper environment and removes rg configuration", () => {

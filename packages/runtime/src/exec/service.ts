@@ -17,6 +17,7 @@ import {
   type RuntimeExecResult,
   type RuntimeExecService,
   type RuntimeProcessInteractionRequest,
+  type RuntimeProcessTerminationRequest,
 } from "./contracts.js";
 import { RuntimeExecError } from "./errors.js";
 import { LocalProcessManager } from "./process-manager.js";
@@ -82,6 +83,17 @@ export class LocalRuntimeExecService implements RuntimeExecService {
     }
     validateYield(request.yieldTimeMs);
     return this.options.processManager.interact(request);
+  }
+
+  /**
+   * Terminate one owned managed session.
+   *
+   * No workspace resolution and no command validation apply: the request names an opaque session the
+   * Runtime itself minted, so the only validation that exists is the ownership lookup inside the
+   * process manager.
+   */
+  async terminate(request: RuntimeProcessTerminationRequest): Promise<RuntimeExecResult> {
+    return this.options.processManager.terminateOwnedSession(request);
   }
 
   async cancelOwnedByRun(ownerRunId: RuntimeExecRequest["ownerRunId"]) {

@@ -160,7 +160,7 @@ async function declarationHolders(declaration: string): Promise<readonly string[
   return holders.sort();
 }
 
-const NINE = [
+const TEN = [
   "read_file",
   "list_directory",
   "find_files",
@@ -168,6 +168,7 @@ const NINE = [
   "apply_patch",
   "exec_command",
   "write_stdin",
+  "stop_process",
   "git_status",
   "git_diff",
 ] as const;
@@ -323,8 +324,8 @@ describe("Phase 4F guard — one authority per responsibility", () => {
     }
   });
 
-  it("declares the nine Coding builtins exactly once, in @caelush/coding-agent", async () => {
-    for (const name of NINE) {
+  it("declares the ten Coding builtins exactly once, in @caelush/coding-agent", async () => {
+    for (const name of TEN) {
       const holders = await declarationHolders(`name: "${name}"`);
       expect(holders, name).toEqual([
         `packages/coding-agent/src/tools/builtins/${name.replaceAll("_", "-")}.ts`,

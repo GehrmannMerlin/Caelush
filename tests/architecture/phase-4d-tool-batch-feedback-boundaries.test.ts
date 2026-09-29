@@ -712,7 +712,7 @@ describe("Phase 4D frozen contracts and phase boundaries", () => {
     expect(executable(`${BATCH}batch-coordinator.ts`)).not.toContain("commit(");
   });
 
-  it("leaves the nine builtins and the Operations migration where Phase 4E put them", () => {
+  it("leaves the ten builtins and the Operations migration where Phase 4E put them", () => {
     /**
      * Phase 4D asserted assertions 27 and 28 against the *4C* state:
      *
@@ -727,7 +727,7 @@ describe("Phase 4D frozen contracts and phase boundaries", () => {
      * required to reach.
      *
      * ```text
-     * the nine builtins are owned by @caelush/coding-agent
+     * the ten builtins are owned by @caelush/coding-agent
      * the eight Operations interfaces exist, in @caelush/coding-agent
      * ```
      *
@@ -742,10 +742,11 @@ describe("Phase 4D frozen contracts and phase boundaries", () => {
       "apply_patch",
       "exec_command",
       "write_stdin",
+      "stop_process",
       "git_status",
       "git_diff",
     ];
-    // 27. The nine builtins are now Coding-owned: their authoritative factories live in the Coding layer.
+    // 27. The ten builtins are now Coding-owned: their authoritative factories live in the Coding layer.
     const codingBuiltins = "packages/coding-agent/src/tools/builtins/";
     const codingDefaultTools = executable(`${codingBuiltins}default-tools.ts`);
     for (const name of builtinNames) {

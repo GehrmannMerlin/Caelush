@@ -17,8 +17,8 @@
  * product authority**:
  *
  * ```text
- * the nine Coding builtins              read_file · list_directory · find_files · search_text
- *                                       apply_patch · exec_command · write_stdin
+ * the ten Coding builtins              read_file · list_directory · find_files · search_text
+ *                                       apply_patch · exec_command · write_stdin · stop_process
  *                                       git_status · git_diff
  * the default order and composition     DEFAULT_CODING_TOOL_ORDER · createDefaultCodingTools
  * the narrow Operations ports           ReadFileOperations … GitOperations
@@ -145,6 +145,7 @@ export {
   createRuntimeProgressSignalProjector,
   createRuntimeReadOnlyOperations,
   createSearchTextTool,
+  createStopProcessTool,
   createWriteStdinTool,
   decodeCodingToolEffects,
   DEFAULT_CODING_APPROVAL_SCOPE,
@@ -190,6 +191,8 @@ export {
   projectReadFileSecurityFacts,
   projectSearchTextSecurityFacts,
   projectStdinEffects,
+  projectStopProcessEffects,
+  projectStopProcessSecurityFacts,
   projectWriteStdinSecurityFacts,
   promptSnippetFor,
   READ_FILE_DEFAULT_LIMIT,
@@ -204,6 +207,7 @@ export {
   SEARCH_TEXT_DEFAULT_LIMIT,
   SEARCH_TEXT_MAX_LIMIT,
   SEARCH_TEXT_PROMPT_SNIPPET,
+  STOP_PROCESS_PROMPT_SNIPPET,
   successResult,
   toCanonicalToolResultLimits,
   toolEffectsToEvents,

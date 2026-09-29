@@ -22,11 +22,11 @@ import {
 const identityTerminalSanitizer = (value: string): string => value;
 
 /**
- * The nine default Coding Tools' Operations, built from one Runtime resolver.
+ * The ten default Coding Tools' Operations, built from one Runtime resolver.
  *
  * The audit is about *Security metadata coverage*, not about execution: every port here is the real
  * Runtime adapter, and none of them is called while the catalog is audited. Composing them this way is
- * what makes the audited registry the production one — a hand-written nine-Tool stub could claim a
+ * what makes the audited registry the production one — a hand-written ten-Tool stub could claim a
  * coverage the real default catalog does not have.
  */
 function defaultCodingOperations(resolver: RuntimeResolver): DefaultCodingToolOperations {
@@ -75,7 +75,7 @@ describe("default V1 security composition", () => {
     const registry = buildRegistry(definitions);
     const catalog = buildCatalog(registry, definitions);
 
-    // The audited catalogue is the real one: the nine default Tools, in the frozen order.
+    // The audited catalogue is the real one: the ten default Tools, in the frozen order.
     expect(registry.modelSpecs().map((spec) => spec.name)).toEqual([...DEFAULT_CODING_TOOL_ORDER]);
     expect(catalog.size).toBe(DEFAULT_CODING_TOOL_ORDER.length);
 

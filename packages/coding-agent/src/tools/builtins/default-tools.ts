@@ -16,6 +16,7 @@ import { createGitStatusTool } from "./git-status.js";
 import { createListDirectoryTool } from "./list-directory.js";
 import { createReadFileTool } from "./read-file.js";
 import { createSearchTextTool } from "./search-text.js";
+import { createStopProcessTool } from "./stop-process.js";
 import { createWriteStdinTool } from "./write-stdin.js";
 
 /**
@@ -23,7 +24,7 @@ import { createWriteStdinTool } from "./write-stdin.js";
  *
  * ```text
  * 1  read_file        2  list_directory   3  find_files     4  search_text   5  apply_patch
- * 6  exec_command     7  write_stdin       8  git_status     9  git_diff
+ * 6  exec_command     7  write_stdin       8  stop_process   9  git_status   10  git_diff
  * ```
  *
  * ## The order is frozen
@@ -47,7 +48,15 @@ import { createWriteStdinTool } from "./write-stdin.js";
  * host handle. A composition root supplies the adapters; this module supplies the product.
  */
 
-/** The nine default Coding Tools, in their frozen order. */
+/**
+ * The ten default Coding Tools, in their frozen order.
+ *
+ * `stop_process` sits inside the process family, directly after `write_stdin`. That placement is not
+ * cosmetic: the three process Tools are the start / observe / end triple of one lifecycle, and a model
+ * that reads the catalog in order meets them together. It is declared here rather than appended later
+ * because this array *is* the derivation — appending to a built registry would leave the registry, the
+ * Coding catalog and the model specs describing different sets.
+ */
 export const DEFAULT_CODING_TOOL_ORDER = Object.freeze([
   "read_file",
   "list_directory",
@@ -56,11 +65,12 @@ export const DEFAULT_CODING_TOOL_ORDER = Object.freeze([
   "apply_patch",
   "exec_command",
   "write_stdin",
+  "stop_process",
   "git_status",
   "git_diff",
 ] as const satisfies readonly ToolName[]);
 
-/** The Operations the default nine need, one port per capability family. */
+/** The Operations the default ten need, one port per capability family. */
 export interface DefaultCodingToolOperations {
   /**
    * The read-file probe port.
@@ -88,7 +98,7 @@ export interface DefaultCodingToolOperations {
 }
 
 /**
- * Build the nine default Coding Tool definitions, in the frozen order.
+ * Build the ten default Coding Tool definitions, in the frozen order.
  *
  * The returned array is frozen, and so is each definition and each `AgentTool` inside it: a caller that
  * kept a reference cannot reorder the catalog or mutate a schema out from under a built registry.
@@ -104,6 +114,7 @@ export function createDefaultCodingTools(
     createApplyPatchTool(operations.patch),
     createExecCommandTool(operations.exec),
     createWriteStdinTool(operations.process),
+    createStopProcessTool(operations.process),
     createGitStatusTool(operations.git),
     createGitDiffTool(operations.git),
   ]);
@@ -116,7 +127,7 @@ export const GIT_TOOL_NAMES = Object.freeze(["git_status", "git_diff"] as const)
  * What a host knows about Git for the workspace it is composing Tools for.
  *
  * ```text
- * AVAILABLE     a repository was proven to work; the nine-Tool default is offered
+ * AVAILABLE     a repository was proven to work; the ten-Tool default is offered
  * UNAVAILABLE   no repository, or Git does not work here; the Git Tools are not offered
  * UNKNOWN       the host could not prove it; treated exactly like UNAVAILABLE
  * ```
@@ -128,7 +139,7 @@ export const GIT_TOOL_NAMES = Object.freeze(["git_status", "git_diff"] as const)
 export type GitToolAvailability = "AVAILABLE" | "UNAVAILABLE" | "UNKNOWN";
 
 /**
- * The default nine minus the Git Tools, for a host whose Git availability is not `AVAILABLE`.
+ * The default ten minus the Git Tools, for a host whose Git availability is not `AVAILABLE`.
  *
  * Git exposure fails closed: `UNKNOWN` is treated exactly like `UNAVAILABLE`, because a host that cannot
  * prove Git works must not offer a model a Tool that will fail. Returning the reduced *definition* list

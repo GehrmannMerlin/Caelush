@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { TerminalOutputDecoder } from "./terminal-output.js";
+import { terminateProcessTree } from "./process-tree.js";
 import type {
   ManagedProcessAdapter,
   ProcessExit,
@@ -102,7 +103,9 @@ class PipeProcessAdapter implements ManagedProcessAdapter {
     if (this.closed) return;
     this.closed = true;
     this.child.stdin.destroy();
-    if (this.child.exitCode === null && !this.child.killed) this.child.kill();
+    // The shell this adapter holds is usually a *wrapper* for the real work (`npm run …`), so ending the
+    // session means ending its descendants too — see `terminateProcessTree`.
+    if (this.child.exitCode === null && !this.child.killed) await terminateProcessTree(this.child);
   }
 
   private emitOutput(event: ProcessOutputEvent): void {

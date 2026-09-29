@@ -10,6 +10,7 @@ import {
   type RuntimeExecResult,
   type RuntimeExecService,
   type RuntimeProcessInteractionRequest,
+  type RuntimeProcessTerminationRequest,
 } from "../src/index.js";
 import type { RunId } from "@caelush/protocol";
 
@@ -27,6 +28,11 @@ describe("runtime exec contracts", () => {
       chars: "",
       yieldTimeMs: 5000,
     };
+    // Termination names one owned session and nothing else: no pid, no image name, no wildcard.
+    const termination: RuntimeProcessTerminationRequest = {
+      ownerRunId: request.ownerRunId,
+      sessionId: interaction.sessionId,
+    };
     const result: RuntimeExecResult = {
       status: "EXITED",
       output: "ready",
@@ -38,13 +44,16 @@ describe("runtime exec contracts", () => {
       execute: async () => result,
       executeArgv: async () => result,
       interact: async () => result,
+      terminate: async () => result,
     };
 
-    expect(JSON.parse(JSON.stringify({ request, interaction, result }))).toEqual({
+    expect(JSON.parse(JSON.stringify({ request, interaction, termination, result }))).toEqual({
       request,
       interaction,
+      termination,
       result,
     });
+    expect(Object.keys(termination).sort()).toEqual(["ownerRunId", "sessionId"]);
     expect(service).toBeDefined();
   });
 

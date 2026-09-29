@@ -4,8 +4,9 @@ import {
   StorageError,
   StorageNotFoundError,
 } from "@caelush/storage";
+import fastify from "fastify";
 import { describe, expect, it } from "vitest";
-import { toApiErrorResponse } from "../src/transport/error-handler.js";
+import { registerErrorHandling, toApiErrorResponse } from "../src/transport/error-handler.js";
 import { EventCursorAheadError } from "../src/events/run-event-hub.js";
 
 describe("daemon error mapping", () => {
@@ -53,5 +54,84 @@ describe("daemon error mapping", () => {
     );
     expect(mapped.statusCode).toBe(409);
     expect(mapped.body.error.code).toBe("EVENT_CURSOR_AHEAD");
+  });
+
+  /**
+   * A malformed request is a 400, not the anonymous 500.
+   *
+   * Fastify's request-parsing failures carry their own `statusCode` and no product error class, so they
+   * used to fall through every branch to `500 INTERNAL_ERROR "An internal error occurred."` — the one
+   * answer an operator cannot act on and a client cannot correct. The reproduction that matters is the
+   * real HTTP surface: a bodyless action POST that still advertises `application/json`.
+   */
+  it.each([
+    [
+      'FST_ERR_CTP_EMPTY_JSON_BODY (400)',
+      {
+        code: "FST_ERR_CTP_EMPTY_JSON_BODY",
+        statusCode: 400,
+        message: "Body cannot be empty when content-type is set to 'application/json'",
+      },
+    ],
+    [
+      "FST_ERR_CTP_INVALID_MEDIA_TYPE (415)",
+      {
+        code: "FST_ERR_CTP_INVALID_MEDIA_TYPE",
+        statusCode: 415,
+        message: "Unsupported Media Type: text/secrecy",
+      },
+    ],
+    [
+      "FST_ERR_CTP_BODY_TOO_LARGE (413)",
+      { code: "FST_ERR_CTP_BODY_TOO_LARGE", statusCode: 413, message: "Request body is too large" },
+    ],
+  ])("maps a framework client error %s to 400 INVALID_REQUEST", (_label, error) => {
+    const mapped = toApiErrorResponse(error, "req-1000");
+    expect(mapped.statusCode).toBe(400);
+    expect(mapped.body.error.code).toBe("INVALID_REQUEST");
+    expect(mapped.body.error.message).toBe("The request is invalid.");
+    // The framework's own message can quote the offending body, so it must never be echoed back.
+    expect(JSON.stringify(mapped.body)).not.toContain("Body cannot be empty");
+    expect(JSON.stringify(mapped.body)).not.toContain("Unsupported Media Type");
+    expect(JSON.stringify(mapped.body)).not.toContain("too large");
+  });
+
+  it.each([
+    ["a genuine server fault carrying 500", { statusCode: 500, message: "serializer exploded" }],
+    ["a status outside the client range", { statusCode: 200, message: "nonsense status" }],
+    ["a fractional status", { statusCode: 400.5, message: "nonsense status" }],
+    ["a non-numeric status", { statusCode: "400", message: "nonsense status" }],
+  ])("does not claim %s as a client error", (_label, error) => {
+    const mapped = toApiErrorResponse(error, "req-1001");
+    expect(mapped.statusCode).toBe(500);
+    expect(mapped.body.error.code).toBe("INTERNAL_ERROR");
+  });
+
+  it("answers a bodyless application/json action POST as 400, never as an anonymous 500", async () => {
+    const app = fastify();
+    registerErrorHandling(app);
+    app.post("/api/v1/runs/:runId/recover", async () => ({ ok: true }));
+    await app.ready();
+    try {
+      const malformed = await app.inject({
+        method: "POST",
+        url: "/api/v1/runs/run_x/recover",
+        headers: { "content-type": "application/json", accept: "application/json" },
+      });
+      expect(malformed.statusCode).toBe(400);
+      expect(malformed.json().error.code).toBe("INVALID_REQUEST");
+
+      // The supported shapes for a bodyless action stay successful: no content type at all, and an
+      // explicit empty object. The defect was the classification, not the route.
+      for (const request of [
+        { method: "POST" as const, url: "/api/v1/runs/run_x/recover", headers: { accept: "application/json" } },
+        { method: "POST" as const, url: "/api/v1/runs/run_x/recover", payload: {} },
+      ]) {
+        const accepted = await app.inject(request);
+        expect(accepted.statusCode).toBe(200);
+      }
+    } finally {
+      await app.close();
+    }
   });
 });

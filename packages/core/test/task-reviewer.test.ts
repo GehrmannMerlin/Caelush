@@ -11,7 +11,7 @@ import {
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import { TaskAcceptanceReviewer } from "../src/index.js";
-import type { RunBudgetPort } from "../src/budget-ports.js";
+import type { RunBudgetPort, RunLLMBudgetAdmissionInput } from "../src/budget-ports.js";
 import { buildTaskReviewBundle } from "@caelush/verification";
 import { fakeModelTurnExecutor } from "./support/fake-model-turn-executor.js";
 
@@ -58,24 +58,50 @@ function fixture() {
   return { run, bundle };
 }
 
-function budget() {
+/**
+ * A complete, structurally-typed budget port.
+ *
+ * It is a real `RunBudgetPort`, not a partial object behind a cast: the reviewer is exercised against
+ * the same contract production uses, and every required method is implemented so a test never has to
+ * reach for `as unknown as` to satisfy the compiler.
+ */
+interface BudgetSpy extends RunBudgetPort {
+  /** Every admission and settlement the reviewer performed, in order. */
+  readonly calls: string[];
+}
+
+function budget(
+  hooks: {
+    readonly onAdmission?: (admission: RunLLMBudgetAdmissionInput) => void;
+    readonly claimOwner?: (ownerId: string) => void;
+  } = {},
+): BudgetSpy {
   const calls: string[] = [];
-  const value = {
+  return {
     calls,
-    async admitVerificationLLM(
-      input: Parameters<NonNullable<RunBudgetPort["admitVerificationLLM"]>>[0],
-    ) {
-      calls.push(`admit:${input.ownerId}`);
-      return { kind: "ALLOWED" as const };
+    async admitLLM() {
+      // The Run path's admission, never the reviewer's. Reaching it would mean the reviewer charged a
+      // Step budget instead of a verification budget.
+      calls.push("admitLLM");
+      return { kind: "ALLOWED" };
     },
-    async settleVerificationLLM(
-      input: Parameters<NonNullable<RunBudgetPort["settleVerificationLLM"]>>[0],
-    ) {
+    async settleLLM() {
+      calls.push("settleLLM");
+    },
+    async admitVerificationLLM(input) {
+      hooks.claimOwner?.(input.ownerId);
+      calls.push(`admit:${input.ownerId}`);
+      hooks.onAdmission?.(input.admission);
+      return { kind: "ALLOWED" };
+    },
+    async settleVerificationLLM(input) {
       calls.push(`settle:${input.ownerId}`);
-      return { kind: "SETTLED" as const };
+      return { kind: "SETTLED" };
+    },
+    async markVerificationLLMConservative(input) {
+      calls.push(`conservative:${input.ownerId}`);
     },
   };
-  return value as unknown as RunBudgetPort;
 }
 
 function turn(
@@ -131,15 +157,13 @@ describe("TaskAcceptanceReviewer", () => {
         requests.push(request);
         return turn('{"verdict":"PASS","summary":"The evidence supports the goal."}');
       }),
-      budget: {
-        async admitVerificationLLM(input) {
-          configuredOutputTokens.push(input.admission.configuredMaxOutputTokens);
-          return { kind: "ALLOWED" as const };
+      budget: budget({
+        onAdmission: (admission) => {
+          if (admission.configuredMaxOutputTokens !== undefined) {
+            configuredOutputTokens.push(admission.configuredMaxOutputTokens);
+          }
         },
-        async settleVerificationLLM() {
-          return { kind: "SETTLED" as const };
-        },
-      } as unknown as RunBudgetPort,
+      }),
       clock: { now: () => createTimestampMs(50) },
     });
 
@@ -234,21 +258,16 @@ describe("TaskAcceptanceReviewer", () => {
     const modelTurns = fakeModelTurnExecutor(async (_request, _signal, callIndex) =>
       turn(responses[callIndex] ?? "not-json"),
     );
-    const durableBudget = {
-      async admitVerificationLLM(
-        input: Parameters<NonNullable<RunBudgetPort["admitVerificationLLM"]>>[0],
-      ) {
-        if (ownerIds.includes(input.ownerId))
+    // A durable budget owner is claimed exactly once per review invocation: a second admission with
+    // the same owner is a protocol violation, so the fake fails loudly instead of silently reusing it.
+    const durableBudget = budget({
+      claimOwner: (ownerId) => {
+        if (ownerIds.includes(ownerId)) {
           throw new Error("duplicate verification budget owner");
-        ownerIds.push(input.ownerId);
-        return { kind: "ALLOWED" as const };
+        }
+        ownerIds.push(ownerId);
       },
-      async settleVerificationLLM(
-        _input: Parameters<NonNullable<RunBudgetPort["settleVerificationLLM"]>>[0],
-      ) {
-        return { kind: "SETTLED" as const };
-      },
-    } as unknown as RunBudgetPort;
+    });
     const reviewer = new TaskAcceptanceReviewer({
       modelTurns,
       budget: durableBudget,
