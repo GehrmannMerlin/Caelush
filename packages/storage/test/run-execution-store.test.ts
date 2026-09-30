@@ -112,6 +112,7 @@ describe("SqliteRunExecutionStore", () => {
       ...scope,
       sourceStepId: step.id,
       source: modelMessageSource("llm_fixture"),
+      phase: "COMMENTARY",
       content: [
         agentAssistantToolCallPart({
           toolCallId: "call_a",
@@ -130,6 +131,7 @@ describe("SqliteRunExecutionStore", () => {
       ...scope,
       sourceStepId: step.id,
       source: modelMessageSource("llm_fixture_2"),
+      phase: "FINAL_ANSWER",
       content: [agentTextPart("this must roll back")],
       model: {
         kind: "MODEL_TURN",

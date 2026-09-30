@@ -186,6 +186,7 @@ function durableRecords(runs: readonly AgentRun[]): readonly AgentMessageRecord[
         sessionId: run.sessionId,
         conversationTurnId: turns.forRun(run.id),
         source: modelMessageSource("llm_fixture" as never),
+        phase: "FINAL_ANSWER",
         content: [agentAssistantTextPart(run.finalResult.text)],
         model: {
           kind: "MODEL_TURN",

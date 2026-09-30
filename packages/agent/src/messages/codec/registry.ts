@@ -187,33 +187,36 @@ export function createAgentMessageCodecRegistry(options: {
    */
   readonly projectionVersionOf?: AgentMessageProjectionVersionResolver | undefined;
 }): AgentMessageCodecRegistry {
-  const byType = new Map<string, Map<AgentMessageSchemaVersion, AgentMessageCodec>>();
+  const byType = new Map<string, AgentMessageCodec[]>();
   for (const codec of options.codecs) {
     assertValidVersion(codec);
-    let versions = byType.get(codec.type);
-    if (versions === undefined) {
-      versions = new Map<AgentMessageSchemaVersion, AgentMessageCodec>();
-      byType.set(codec.type, versions);
+    let codecs = byType.get(codec.type);
+    if (codecs === undefined) {
+      codecs = [];
+      byType.set(codec.type, codecs);
     }
-    if (versions.has(codec.currentVersion)) {
+    if (codecs.some((candidate) => candidate.currentVersion === codec.currentVersion)) {
       throw new AgentMessageCodecRegistryError("DUPLICATE_CODEC", codec.type);
     }
-    versions.set(codec.currentVersion, codec);
+    codecs.push(codec);
   }
 
   const projectionVersionOf = options.projectionVersionOf;
 
   return {
     has(type: string, version: AgentMessageSchemaVersion): boolean {
-      return byType.get(type)?.has(version) ?? false;
+      return byType.get(type)?.some((codec) => supportsVersion(codec, version)) ?? false;
     },
 
     get(type: string, version: AgentMessageSchemaVersion): AgentMessageCodec | undefined {
-      return byType.get(type)?.get(version);
+      return byType.get(type)?.find((codec) => supportsVersion(codec, version));
     },
 
     encode(message: AgentMessage): AgentMessageDraft {
-      const codec = byType.get(message.type)?.get(currentVersionOf(byType, message.type));
+      const codecs = byType.get(message.type);
+      const codec = codecs?.find(
+        (candidate) => candidate.currentVersion === currentVersionOf(byType, message.type),
+      );
       if (codec === undefined) {
         throw new AgentMessageCodecRegistryError("UNKNOWN_MESSAGE_TYPE", message.type);
       }
@@ -243,7 +246,9 @@ export function createAgentMessageCodecRegistry(options: {
     },
 
     decode(record: AgentMessageRecord): AgentMessage {
-      const codec = byType.get(record.messageType)?.get(record.schemaVersion);
+      const codec = byType
+        .get(record.messageType)
+        ?.find((candidate) => supportsVersion(candidate, record.schemaVersion));
       if (codec === undefined) {
         // Two distinct refusals, because a caller may want to preserve the record for
         // opposite reasons: an unknown *type* means this build has no idea what it is,
@@ -264,16 +269,16 @@ export function createAgentMessageCodecRegistry(options: {
 
 /** The version `encode` writes: the newest one registered for the type. */
 function currentVersionOf(
-  byType: ReadonlyMap<string, ReadonlyMap<AgentMessageSchemaVersion, AgentMessageCodec>>,
+  byType: ReadonlyMap<string, readonly AgentMessageCodec[]>,
   type: string,
 ): AgentMessageSchemaVersion {
-  const versions = byType.get(type);
-  if (versions === undefined) {
+  const codecs = byType.get(type);
+  if (codecs === undefined) {
     throw new AgentMessageCodecRegistryError("UNKNOWN_MESSAGE_TYPE", type);
   }
   let newest: AgentMessageSchemaVersion | undefined;
-  for (const version of versions.keys()) {
-    if (newest === undefined || version > newest) newest = version;
+  for (const codec of codecs) {
+    if (newest === undefined || codec.currentVersion > newest) newest = codec.currentVersion;
   }
   if (newest === undefined) {
     throw new AgentMessageCodecRegistryError("UNKNOWN_MESSAGE_TYPE", type);
@@ -285,6 +290,10 @@ function assertValidVersion(codec: AgentMessageCodec): void {
   if (!Number.isSafeInteger(codec.currentVersion) || codec.currentVersion < 1) {
     throw new AgentMessageCodecRegistryError("INVALID_VERSION", codec.type);
   }
+}
+
+function supportsVersion(codec: AgentMessageCodec, version: AgentMessageSchemaVersion): boolean {
+  return version === codec.currentVersion || codec.canDecode(version);
 }
 
 /**

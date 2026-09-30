@@ -74,6 +74,7 @@ export function createAssistantMessageAppend(
     conversationTurnId: authority.turns.forRun(run.id),
     sourceStepId,
     source: modelMessageSource(modelTurn.callId),
+    phase: "UNKNOWN",
     content: assistantContent(modelTurn),
     model: {
       kind: "MODEL_TURN",

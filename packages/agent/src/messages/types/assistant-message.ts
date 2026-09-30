@@ -1,5 +1,5 @@
 import type { AIFinishReason, AIProviderOpaqueState, ModelRef, ModelUsage } from "@caelush/ai";
-import type { StepId } from "@caelush/protocol";
+import type { AssistantMessagePhase, StepId } from "@caelush/protocol";
 
 import type { AgentAssistantContentPart } from "./content.js";
 import { assertAgentAssistantContent } from "./content.js";
@@ -73,6 +73,9 @@ export type AgentAssistantModelProvenance =
 export interface AgentAssistantMessage extends AgentMessageBase {
   readonly type: "ASSISTANT";
 
+  /** User-visible intent of the assistant turn; legacy records use UNKNOWN. */
+  readonly phase: AssistantMessagePhase;
+
   readonly content: readonly AgentAssistantContentPart[];
 
   readonly model: AgentAssistantModelProvenance;
@@ -85,14 +88,25 @@ export function createAgentAssistantMessage(
   base: AgentMessageBase,
   content: readonly AgentAssistantContentPart[],
   model: AgentAssistantModelProvenance,
+  phase: AssistantMessagePhase,
   providerState?: AIProviderOpaqueState | undefined,
 ): AgentAssistantMessage {
   assertAgentAssistantContent(content);
+  assertAssistantMessagePhase(phase);
   return Object.freeze({
     ...base,
     type: "ASSISTANT" as const,
+    phase,
     content: Object.freeze([...content]),
     model: Object.freeze({ ...model }),
     ...(providerState === undefined ? {} : { providerState }),
   });
+}
+
+function assertAssistantMessagePhase(value: AssistantMessagePhase): void {
+  if (value !== "COMMENTARY" && value !== "FINAL_ANSWER" && value !== "UNKNOWN") {
+    throw new TypeError(
+      "Agent assistant message phase must be COMMENTARY, FINAL_ANSWER, or UNKNOWN.",
+    );
+  }
 }

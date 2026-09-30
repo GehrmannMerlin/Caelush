@@ -327,7 +327,27 @@ describe("Phase 5A assistant message", () => {
   it("accepts text only", () => {
     const message = assistantMessage({ text: "thinking" }).message;
     expect(message.type).toBe("ASSISTANT");
+    expect(message.phase).toBe("COMMENTARY");
     expect(message.content).toEqual([{ type: "TEXT", text: "thinking" }]);
+  });
+
+  it("preserves an explicit final-answer phase", () => {
+    const message = factoryInstance().createAssistant({
+      runId: RUN_ID as never,
+      sessionId: SESSION_ID as never,
+      conversationTurnId: turnIdFor(),
+      source: modelMessageSource("llm_1"),
+      phase: "FINAL_ANSWER",
+      content: [agentAssistantTextPart("done")],
+      model: {
+        kind: "MODEL_TURN",
+        callId: "llm_1",
+        model: { provider: "p", model: "m" },
+        finishReason: "STOP",
+      },
+    });
+    expect(message.phase).toBe("FINAL_ANSWER");
+    expect(Object.isFrozen(message)).toBe(true);
   });
 
   it("accepts tool calls only", () => {
@@ -354,6 +374,7 @@ describe("Phase 5A assistant message", () => {
         sessionId: SESSION_ID as never,
         conversationTurnId: turnIdFor(),
         source: modelMessageSource("llm_1"),
+        phase: "COMMENTARY",
         content: [
           agentAssistantToolCallPart({ toolCallId: "call_1", toolName: "a", input: {} }),
           agentAssistantToolCallPart({ toolCallId: "call_1", toolName: "b", input: {} }),
@@ -375,6 +396,7 @@ describe("Phase 5A assistant message", () => {
         sessionId: SESSION_ID as never,
         conversationTurnId: turnIdFor(),
         source: modelMessageSource("llm_1"),
+        phase: "COMMENTARY",
         content: [],
         model: {
           kind: "MODEL_TURN",
@@ -403,6 +425,7 @@ describe("Phase 5A assistant message", () => {
         sessionId: SESSION_ID as never,
         conversationTurnId: turnIdFor(),
         source: modelMessageSource("llm_1"),
+        phase: "COMMENTARY",
         content: [agentAssistantTextPart("migrated")],
         // The factory's input type excludes this arm; the cast models a caller that
         // bypassed the type system from decoded JSON.

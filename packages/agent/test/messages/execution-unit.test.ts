@@ -357,6 +357,7 @@ describe("Phase 5A ExecutionUnit — determinism", () => {
         sessionId: SESSION_ID as never,
         conversationTurnId: turnIdFor(),
         source: { kind: "MODEL", callId: "llm_x" },
+        phase: "COMMENTARY",
         content: [{ type: "TOOL_CALL", toolCallId: "call_1", toolName: "tool_0", input: {} }],
         model: {
           kind: "MODEL_TURN",

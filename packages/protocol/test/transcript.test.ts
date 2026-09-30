@@ -1,4 +1,5 @@
 import {
+  AssistantMessagePhaseSchema,
   SessionTranscriptQuerySchema,
   SessionTranscriptResponseSchema,
   TranscriptEntrySchema,
@@ -16,7 +17,13 @@ describe("Phase 5E transcript protocol", () => {
   it("parses every public transcript entry variant and rejects unknown fields", () => {
     const entries = [
       { ...envelope, kind: "USER", text: "hello", attachments: [{ artifactId: "art_1" }] },
-      { ...envelope, id: `${envelope.id}-assistant`, kind: "ASSISTANT", text: "hi" },
+      {
+        ...envelope,
+        id: `${envelope.id}-assistant`,
+        kind: "ASSISTANT",
+        phase: "COMMENTARY",
+        text: "hi",
+      },
       {
         ...envelope,
         id: `${envelope.id}-tool`,
@@ -53,6 +60,23 @@ describe("Phase 5E transcript protocol", () => {
     ).toBe(false);
   });
 
+  it("accepts the provider-neutral assistant phase vocabulary and defaults legacy entries", () => {
+    for (const phase of ["COMMENTARY", "FINAL_ANSWER", "UNKNOWN"] as const) {
+      expect(AssistantMessagePhaseSchema.parse(phase)).toBe(phase);
+    }
+    expect(
+      TranscriptEntrySchema.parse({ ...envelope, kind: "ASSISTANT", text: "legacy" }),
+    ).toMatchObject({ kind: "ASSISTANT", phase: "UNKNOWN" });
+    expect(
+      TranscriptEntrySchema.safeParse({
+        ...envelope,
+        kind: "ASSISTANT",
+        text: "bad",
+        phase: "PRIVATE_CHAIN_OF_THOUGHT",
+      }).success,
+    ).toBe(false);
+  });
+
   it("applies bounded pagination defaults and validates response envelopes", () => {
     expect(SessionTranscriptQuerySchema.parse({})).toEqual({ limit: 50 });
     expect(SessionTranscriptQuerySchema.parse({ limit: 10, cursor: "cursor_1" })).toEqual({
@@ -61,7 +85,7 @@ describe("Phase 5E transcript protocol", () => {
     });
 
     const response = SessionTranscriptResponseSchema.parse({
-      items: [{ ...envelope, kind: "ASSISTANT", text: "hello" }],
+      items: [{ ...envelope, kind: "ASSISTANT", phase: "FINAL_ANSWER", text: "hello" }],
       nextCursor: "cursor_2",
     });
     expect(response.nextCursor).toBe("cursor_2");

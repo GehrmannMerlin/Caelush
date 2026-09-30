@@ -185,6 +185,7 @@ export {
 export type { AgentMessageCodec, AgentMessageCodecErrorReason } from "./codec/codec.js";
 
 export {
+  AGENT_ASSISTANT_MESSAGE_CODEC_V2,
   AGENT_ASSISTANT_MESSAGE_CODEC_V1,
   AGENT_TOOL_RESULT_MESSAGE_CODEC_V1,
   AGENT_USER_MESSAGE_CODEC_V1,

@@ -6,6 +6,10 @@ import { TimestampMsSchema } from "../primitives/time.js";
 
 const transcriptTextSchema = z.string();
 
+/** Provider-neutral intent of an assistant message in a durable conversation. */
+export const AssistantMessagePhaseSchema = z.enum(["COMMENTARY", "FINAL_ANSWER", "UNKNOWN"]);
+export type AssistantMessagePhase = z.infer<typeof AssistantMessagePhaseSchema>;
+
 export const TranscriptAttachmentRefSchema = z
   .object({
     artifactId: z.string().min(1),
@@ -34,6 +38,7 @@ export type UserTranscriptEntry = z.infer<typeof UserTranscriptEntrySchema>;
 
 export const AssistantTranscriptEntrySchema = TranscriptEntryBaseSchema.extend({
   kind: z.literal("ASSISTANT"),
+  phase: AssistantMessagePhaseSchema.default("UNKNOWN"),
   text: transcriptTextSchema,
 }).strict();
 export type AssistantTranscriptEntry = z.infer<typeof AssistantTranscriptEntrySchema>;

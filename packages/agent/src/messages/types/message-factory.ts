@@ -1,5 +1,11 @@
 import type { AIFinishReason, AIProviderOpaqueState, ModelRef, ModelUsage } from "@caelush/ai";
-import type { RunId, SessionId, StepId, TimestampMs } from "@caelush/protocol";
+import type {
+  AssistantMessagePhase,
+  RunId,
+  SessionId,
+  StepId,
+  TimestampMs,
+} from "@caelush/protocol";
 
 import type { AgentMessageSource } from "./source.js";
 import {
@@ -87,6 +93,9 @@ export interface CreateAgentUserMessageInput extends AgentMessageScope {
 
 export interface CreateAgentAssistantMessageInput extends AgentMessageScope {
   readonly source: AgentMessageSource;
+
+  /** Explicit intent for a newly created assistant message. */
+  readonly phase: AssistantMessagePhase;
 
   readonly content: readonly AgentAssistantContentPart[];
 
@@ -218,6 +227,7 @@ export function createAgentMessageFactory(
           finishReason: input.model.finishReason,
           ...(input.model.usage === undefined ? {} : { usage: input.model.usage }),
         },
+        input.phase,
         input.providerState,
       );
     },

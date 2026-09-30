@@ -61,10 +61,9 @@ export function createLegacyFacadeConversation(input: {
     now: () => input.run.createdAt,
     turns,
   });
-  const aiMessages = [...input.history, ...input.appendPrefix]
-    .filter(
-      (message): message is Exclude<AIMessage, { role: "system" }> => message.role !== "system",
-    );
+  const aiMessages = [...input.history, ...input.appendPrefix].filter(
+    (message): message is Exclude<AIMessage, { role: "system" }> => message.role !== "system",
+  );
   const messages: StoredAgentMessage[] = [];
   let sequence = 1;
   for (const [index, message] of aiMessages.entries()) {
@@ -145,6 +144,7 @@ function createStoredMessage(
         sessionId: run.sessionId,
         conversationTurnId: turn,
         source: modelMessageSource(`legacy_facade_${String(index)}`),
+        phase: "UNKNOWN",
         ...(sourceStepId === undefined ? {} : { sourceStepId }),
         content: message.content.map((part) =>
           part.type === "text"

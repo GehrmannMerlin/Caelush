@@ -69,15 +69,15 @@ function recordFor(
 }
 
 describe("Phase 5A codec — three standard codecs exist and declare their identity", () => {
-  it("registers one codec per canonical type at version 1", () => {
+  it("registers one codec per canonical type and exposes assistant v2 with v1 decoding", () => {
     expect(STANDARD_AGENT_MESSAGE_CODECS).toHaveLength(3);
     expect(AGENT_USER_MESSAGE_CODEC_V1.type).toBe("USER");
     expect(AGENT_ASSISTANT_MESSAGE_CODEC_V1.type).toBe("ASSISTANT");
     expect(AGENT_TOOL_RESULT_MESSAGE_CODEC_V1.type).toBe("TOOL_RESULT");
     for (const codec of STANDARD_AGENT_MESSAGE_CODECS) {
-      expect(codec.currentVersion).toBe(1);
-      expect(codec.canDecode(1)).toBe(true);
-      expect(codec.canDecode(2)).toBe(false);
+      expect(codec.currentVersion).toBe(codec.type === "ASSISTANT" ? 2 : 1);
+      expect(codec.canDecode(1)).toBe(codec.type === "ASSISTANT" || codec.type !== "ASSISTANT");
+      expect(codec.canDecode(2)).toBe(codec.type === "ASSISTANT");
       expect(codec.canDecode(0)).toBe(false);
     }
   });
@@ -141,19 +141,37 @@ describe("Phase 5A codec — ASSISTANT round trip", () => {
     }).message;
 
     const draft = AGENT_ASSISTANT_MESSAGE_CODEC_V1.encode(original);
-    const decoded = AGENT_ASSISTANT_MESSAGE_CODEC_V1.decode(recordFor(original, draft));
+    const decoded = AGENT_ASSISTANT_MESSAGE_CODEC_V1.decode(
+      recordFor(original, draft, { schemaVersion: 2 }),
+    );
 
     expect(decoded.content).toEqual(original.content);
     expect(decoded.content.map((part) => part.type)).toEqual(["TEXT", "TOOL_CALL", "TOOL_CALL"]);
     expect(decoded.model).toEqual(original.model);
     expect(decoded.providerState).toEqual(original.providerState);
     expect(decoded).toEqual(original);
+    expect(draft["phase"]).toBe("COMMENTARY");
+  });
+
+  it("decodes canonical v1 data as UNKNOWN and refuses a malformed v2 phase", () => {
+    const original = rawAssistantMessage([{ type: "TEXT", text: "legacy" }]);
+    const v2Data = AGENT_ASSISTANT_MESSAGE_CODEC_V1.encode(original);
+    const { phase: _phase, ...v1Data } = v2Data as typeof v2Data & { phase: string };
+    const decodedLegacy = AGENT_ASSISTANT_MESSAGE_CODEC_V1.decode(
+      recordFor(original, v1Data, { schemaVersion: 1 }),
+    );
+    expect(decodedLegacy.phase).toBe("UNKNOWN");
+    expect(() =>
+      AGENT_ASSISTANT_MESSAGE_CODEC_V1.decode(
+        recordFor(original, { ...v2Data, phase: "NOT_A_PHASE" }, { schemaVersion: 2 }),
+      ),
+    ).toThrow(AgentMessageCodecError);
   });
 
   it("omits providerState rather than writing null when there is none", () => {
     const message = assistantMessage({ text: "hi" }).message;
     const data = AGENT_ASSISTANT_MESSAGE_CODEC_V1.encode(message);
-    expect(Object.keys(data).sort()).toEqual(["content", "model"]);
+    expect(Object.keys(data).sort()).toEqual(["content", "model", "phase"]);
     expect(data["providerState"]).toBeUndefined();
     const decoded = AGENT_ASSISTANT_MESSAGE_CODEC_V1.decode(recordFor(message, data));
     expect("providerState" in decoded).toBe(false);
@@ -171,7 +189,9 @@ describe("Phase 5A codec — ASSISTANT round trip", () => {
         sourceStepId: "stp_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e01",
       },
     };
-    const decoded = AGENT_ASSISTANT_MESSAGE_CODEC_V1.decode(recordFor(original, legacyData));
+    const decoded = AGENT_ASSISTANT_MESSAGE_CODEC_V1.decode(
+      recordFor(original, legacyData, { schemaVersion: 2 }),
+    );
     expect(decoded.model).toEqual({
       kind: "LEGACY_MODEL_TURN",
       sourceStepId: "stp_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e01",

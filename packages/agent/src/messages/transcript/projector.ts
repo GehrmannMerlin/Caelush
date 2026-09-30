@@ -68,6 +68,7 @@ function projectAssistant(
         {
           ...transcriptEnvelope(message),
           kind: "ASSISTANT",
+          phase: message.phase,
           text,
         },
       ];

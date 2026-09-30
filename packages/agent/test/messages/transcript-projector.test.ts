@@ -31,6 +31,7 @@ describe("Phase 5E transcript projectors", () => {
         conversationTurnId: assistant.message.conversationTurnId,
         createdAt: assistant.message.createdAt,
         kind: "ASSISTANT",
+        phase: "COMMENTARY",
         text: "answer",
       },
     ]);

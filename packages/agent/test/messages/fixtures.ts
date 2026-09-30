@@ -192,6 +192,7 @@ export function assistantMessage(
     readonly callId?: string;
     readonly sequence?: number;
     readonly modelVisible?: boolean;
+    readonly phase?: AgentAssistantMessage["phase"];
     readonly providerState?: AgentAssistantMessage["providerState"];
   } = {},
 ): StoredAgentMessage<AgentAssistantMessage> {
@@ -206,6 +207,7 @@ export function assistantMessage(
     conversationTurnId,
     sourceStepId: "stp_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e02" as never,
     source: modelMessageSource(options.callId ?? "llm_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e03"),
+    phase: options.phase ?? "COMMENTARY",
     content: [
       ...(options.text === undefined ? [] : [agentAssistantTextPart(options.text)]),
       ...toolCalls.map((toolCallId, index) =>
@@ -367,6 +369,7 @@ export function rawAssistantMessage(
     }),
     content,
     { kind: "MODEL_TURN", callId: "llm_fixture", model: MODEL, finishReason: FINISH_REASON },
+    "COMMENTARY",
     providerState,
   );
 }

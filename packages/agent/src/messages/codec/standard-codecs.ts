@@ -7,7 +7,14 @@ import type {
   ModelRef,
   ModelUsage,
 } from "@caelush/ai";
-import type { ObservationId, RunId, SessionId, StepId, TimestampMs } from "@caelush/protocol";
+import type {
+  AssistantMessagePhase,
+  ObservationId,
+  RunId,
+  SessionId,
+  StepId,
+  TimestampMs,
+} from "@caelush/protocol";
 
 import type { AgentUserContentPart } from "../types/content.js";
 import type { AgentAssistantContentPart } from "../types/content.js";
@@ -43,7 +50,7 @@ import { AgentMessageCodecError } from "./codec.js";
  *
  * ```text
  * USER v1          data = { content }
- * ASSISTANT v1     data = { content, model, providerState? }
+ * ASSISTANT v2     data = { content, phase, model, providerState? }
  * TOOL_RESULT v1   data = { toolCallId, toolName, observation, isError, projectedContent, projection }
  * ```
  *
@@ -92,15 +99,16 @@ export const AGENT_USER_MESSAGE_CODEC_V1: AgentMessageCodec<AgentUserMessage> = 
 /* ---------------------------------------------------------------------------- ASSISTANT */
 
 /** The canonical `ASSISTANT` codec. */
-export const AGENT_ASSISTANT_MESSAGE_CODEC_V1: AgentMessageCodec<AgentAssistantMessage> = {
+export const AGENT_ASSISTANT_MESSAGE_CODEC_V2: AgentMessageCodec<AgentAssistantMessage> = {
   type: "ASSISTANT",
-  currentVersion: 1,
+  currentVersion: 2,
   canDecode(version: AgentMessageSchemaVersion): boolean {
-    return version === 1;
+    return version === 1 || version === 2;
   },
   encode(message: AgentAssistantMessage): JsonObject {
     return {
       content: message.content.map(encodeAssistantContentPart),
+      phase: message.phase,
       model: encodeModelProvenance(message.model),
       // Absent, never `null`: a provider state that does not exist must not become a
       // present-but-empty field that a later reader has to special-case.
@@ -110,13 +118,25 @@ export const AGENT_ASSISTANT_MESSAGE_CODEC_V1: AgentMessageCodec<AgentAssistantM
     };
   },
   decode(record: AgentMessageRecord): AgentAssistantMessage {
-    const base = decodeEnvelope(record, "ASSISTANT", 1);
+    if (record.schemaVersion !== 1 && record.schemaVersion !== 2) {
+      throw new AgentMessageCodecError(
+        "UNSUPPORTED_SCHEMA_VERSION",
+        "ASSISTANT",
+        record.schemaVersion,
+      );
+    }
+    const base = decodeEnvelope(record, "ASSISTANT", record.schemaVersion);
     const content = decodeAssistantContent(record.data);
+    const phase =
+      record.schemaVersion === 1 ? "UNKNOWN" : decodeAssistantPhase(record.data["phase"]);
     const model = decodeModelProvenance(record.data["model"], record);
     const providerState = decodeProviderState(record.data["providerState"]);
-    return createAgentAssistantMessage(base, content, model, providerState);
+    return createAgentAssistantMessage(base, content, model, phase, providerState);
   },
 };
+
+/** @deprecated Use the canonical assistant codec name; it still reads historical v1 rows. */
+export const AGENT_ASSISTANT_MESSAGE_CODEC_V1 = AGENT_ASSISTANT_MESSAGE_CODEC_V2;
 
 /* -------------------------------------------------------------------------- TOOL_RESULT */
 
@@ -160,7 +180,7 @@ export const AGENT_TOOL_RESULT_MESSAGE_CODEC_V1: AgentMessageCodec<AgentToolResu
 /** The three standard codecs, in canonical order. */
 export const STANDARD_AGENT_MESSAGE_CODECS = [
   AGENT_USER_MESSAGE_CODEC_V1,
-  AGENT_ASSISTANT_MESSAGE_CODEC_V1,
+  AGENT_ASSISTANT_MESSAGE_CODEC_V2,
   AGENT_TOOL_RESULT_MESSAGE_CODEC_V1,
 ] as const;
 
@@ -343,6 +363,11 @@ function decodeAssistantContent(data: JsonObject): readonly AgentAssistantConten
     }
     throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT");
   });
+}
+
+function decodeAssistantPhase(value: unknown): AssistantMessagePhase {
+  if (value === "COMMENTARY" || value === "FINAL_ANSWER" || value === "UNKNOWN") return value;
+  throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT");
 }
 
 function encodeModelProvenance(model: AgentAssistantModelProvenance): JsonValue {

@@ -63,6 +63,7 @@ export type {
 export { HealthResponseSchema } from "./health.js";
 export type { HealthResponse } from "./health.js";
 export {
+  AssistantMessagePhaseSchema,
   AssistantTranscriptEntrySchema,
   CustomTranscriptEntrySchema,
   RunTerminalTranscriptEntrySchema,
@@ -75,6 +76,7 @@ export {
   UserTranscriptEntrySchema,
 } from "./transcript.js";
 export type {
+  AssistantMessagePhase,
   AssistantTranscriptEntry,
   CustomTranscriptEntry,
   RunTerminalTranscriptEntry,

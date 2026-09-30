@@ -97,6 +97,7 @@ describe("Phase 5A independent use — the whole Message Domain with no host", (
       conversationTurnId,
       sourceStepId: STEP_ID as never,
       source: { kind: "MODEL", callId: "llm_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9e" },
+      phase: "COMMENTARY",
       content: [{ type: "TEXT", text: "let me check" }],
       model: {
         kind: "MODEL_TURN",
@@ -247,6 +248,7 @@ describe("Phase 5A independent use — the whole Message Domain with no host", (
       sessionId: SESSION_ID as never,
       conversationTurnId,
       source: { kind: "MODEL", callId: "llm_tool_turn" },
+      phase: "COMMENTARY",
       content: [
         {
           type: "TOOL_CALL",
@@ -298,7 +300,7 @@ describe("Phase 5A independent use — the whole Message Domain with no host", (
     // `encode` returns a *draft*: the versioned `data` payload plus the versions to store.
     // The envelope is supplied by whoever owns the ledger — here, the test.
     expect(assistantDraft.message).not.toHaveProperty("messageId");
-    expect(assistantDraft.schemaVersion).toBe(1);
+    expect(assistantDraft.schemaVersion).toBe(2);
 
     const recordFor = (
       message: AgentAssistantMessage | AgentToolResultMessage,
@@ -312,7 +314,7 @@ describe("Phase 5A independent use — the whole Message Domain with no host", (
         sequence,
         conversationTurnId: message.conversationTurnId,
         messageType: message.type,
-        schemaVersion: 1,
+        schemaVersion: message.type === "ASSISTANT" ? 2 : 1,
         modelProjectionVersion: 1,
         createdAt: message.createdAt,
         source: message.source,
