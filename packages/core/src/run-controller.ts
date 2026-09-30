@@ -2064,6 +2064,7 @@ export class RunController {
                 current.run,
                 result.turn.stepId,
                 result.modelTurn,
+                "COMMENTARY",
               ),
             ],
           }
@@ -2285,6 +2286,7 @@ export class RunController {
           current.run,
           result.turn.stepId,
           result.modelTurn,
+          "FINAL_ANSWER",
         ),
       ],
       events: [

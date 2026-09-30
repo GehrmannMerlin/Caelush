@@ -299,6 +299,7 @@ function openToolTurn(run: ReturnType<typeof makeRun>) {
     run,
     ORIGINAL_TOOL_STEP,
     PENDING_DECISION.modelTurn,
+    "COMMENTARY",
   ).draft;
   const result = createExternalToolResultMessageAppend(
     messages,

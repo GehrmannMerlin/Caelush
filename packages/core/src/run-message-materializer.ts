@@ -24,7 +24,7 @@ import {
 } from "@caelush/agent";
 import type { AIToolResultMessage } from "@caelush/ai";
 import type { ToolObservationPolicySnapshot } from "@caelush/agent";
-import type { AgentRun, StepId } from "@caelush/protocol";
+import type { AgentRun, AssistantMessagePhase, StepId } from "@caelush/protocol";
 
 import type { RunAgentMessageProjection } from "./run-agent-history.js";
 import type { RunExecutionMessageAppend } from "./run-execution-store.js";
@@ -67,6 +67,7 @@ export function createAssistantMessageAppend(
   run: AgentRun,
   sourceStepId: StepId,
   modelTurn: AgentModelTurn,
+  phase: AssistantMessagePhase,
 ): RunExecutionMessageAppend {
   const message = authority.factory.createAssistant({
     runId: run.id,
@@ -74,7 +75,7 @@ export function createAssistantMessageAppend(
     conversationTurnId: authority.turns.forRun(run.id),
     sourceStepId,
     source: modelMessageSource(modelTurn.callId),
-    phase: "UNKNOWN",
+    phase,
     content: assistantContent(modelTurn),
     model: {
       kind: "MODEL_TURN",
