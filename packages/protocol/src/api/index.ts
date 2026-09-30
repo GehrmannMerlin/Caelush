@@ -1,7 +1,45 @@
 export { ApiErrorCodeSchema, ApiErrorResponseSchema, ApiErrorSchema } from "./common.js";
 export type { ApiError, ApiErrorCode, ApiErrorResponse } from "./common.js";
-export { ClientModelSelectionSchema } from "./model-selection.js";
-export type { ClientModelSelection } from "./model-selection.js";
+export {
+  ClientModelSelectionSchema,
+  ClientModelSelectionWithReasoningSchema,
+  ReasoningLevelSchema,
+} from "./model-selection.js";
+export type {
+  ClientModelSelection,
+  ClientModelSelectionWithReasoning,
+  ReasoningLevel,
+} from "./model-selection.js";
+export {
+  AIDefaultSelectionResponseSchema,
+  AIModelDirectoryResponseSchema,
+  AIProviderConnectionResponseSchema,
+  AIProvidersResponseSchema,
+  ConnectProviderRequestSchema,
+  CredentialSourceSchema,
+  ModelAvailabilitySchema,
+  ModelViewSchema,
+  ProviderDiscoveryStateSchema,
+  ProviderViewSchema,
+  ReasoningOptionViewSchema,
+  ReasoningPresentationSchema,
+  UpdateAISelectionRequestSchema,
+} from "./ai-configuration.js";
+export type {
+  AIDefaultSelectionResponse,
+  AIModelDirectoryResponse,
+  AIProviderConnectionResponse,
+  AIProvidersResponse,
+  ConnectProviderRequest,
+  CredentialSource,
+  ModelAvailability,
+  ModelView,
+  ProviderDiscoveryState,
+  ProviderView,
+  ReasoningOptionView,
+  ReasoningPresentation,
+  UpdateAISelectionRequest,
+} from "./ai-configuration.js";
 export { ClientAgentRunSchema, ClientAgentSessionSchema } from "./public-entities.js";
 export type { ClientAgentRun, ClientAgentSession } from "./public-entities.js";
 export { DaemonInfoSchema, DefaultRunConfigurationSchema } from "./daemon-info.js";
@@ -53,7 +91,13 @@ export {
   SessionListQuerySchema,
   SessionListResponseSchema,
 } from "./session.js";
-export type { CreateSessionRequest, SessionListQuery, SessionListResponse } from "./session.js";
+export type {
+  CreateSessionRequest,
+  SessionListQuery,
+  SessionListResponse,
+  UpdateSessionModelSelectionRequest,
+} from "./session.js";
+export { UpdateSessionModelSelectionRequestSchema } from "./session.js";
 export { CreateRunRequestSchema, RunListQuerySchema, RunListResponseSchema } from "./run.js";
 export type { CreateRunRequest, RunListQuery, RunListResponse } from "./run.js";
 export { EventStreamQuerySchema } from "./event-stream.js";

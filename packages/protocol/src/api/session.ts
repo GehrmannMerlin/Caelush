@@ -2,7 +2,7 @@ import { z } from "zod";
 import { JsonObjectSchema } from "../primitives/json.js";
 import { WorkspaceRefSchema } from "../workspace.js";
 import { WorkspaceIdSchema } from "../primitives/ids.js";
-import { ClientModelSelectionSchema } from "./model-selection.js";
+import { ClientModelSelectionSchema, ReasoningLevelSchema } from "./model-selection.js";
 import { ClientAgentSessionSchema } from "./public-entities.js";
 
 export const CreateSessionRequestSchema = z
@@ -11,6 +11,7 @@ export const CreateSessionRequestSchema = z
     workspaceId: WorkspaceIdSchema.optional(),
     defaultWorkspace: WorkspaceRefSchema.optional(),
     defaultModel: ClientModelSelectionSchema.optional(),
+    defaultReasoningLevel: ReasoningLevelSchema.optional(),
     metadata: JsonObjectSchema.optional(),
   })
   .strict();
@@ -29,3 +30,13 @@ export const SessionListResponseSchema = z
   })
   .strict();
 export type SessionListResponse = z.infer<typeof SessionListResponseSchema>;
+
+export const UpdateSessionModelSelectionRequestSchema = z
+  .object({
+    defaultModel: ClientModelSelectionSchema,
+    defaultReasoningLevel: ReasoningLevelSchema.optional(),
+  })
+  .strict();
+export type UpdateSessionModelSelectionRequest = z.infer<
+  typeof UpdateSessionModelSelectionRequestSchema
+>;

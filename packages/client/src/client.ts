@@ -2,6 +2,11 @@ import {
   PublicRunEventSchema,
   ApprovalListResponseSchema,
   ApprovalResolutionRequestSchema,
+  AIModelDirectoryResponseSchema,
+  AIProviderConnectionResponseSchema,
+  AIProvidersResponseSchema,
+  AIDefaultSelectionResponseSchema,
+  ConnectProviderRequestSchema,
   ApiErrorResponseSchema,
   ClientAgentRunSchema,
   ClientAgentSessionSchema,
@@ -18,6 +23,8 @@ import {
   SessionListResponseSchema,
   SessionTranscriptQuerySchema,
   SessionTranscriptResponseSchema,
+  UpdateAISelectionRequestSchema,
+  UpdateSessionModelSelectionRequestSchema,
   WorkspaceListResponseSchema,
   WorkspaceDirectoryPickerResponseSchema,
   WorkspaceRecordSchema,
@@ -27,6 +34,11 @@ import {
   type ApiErrorCode,
   type ApprovalListResponse,
   type ApprovalResolutionRequest,
+  type AIModelDirectoryResponse,
+  type AIProviderConnectionResponse,
+  type AIProvidersResponse,
+  type AIDefaultSelectionResponse,
+  type ConnectProviderRequest,
   type ClientAgentRun,
   type ClientAgentSession,
   type ContextUsageResponse,
@@ -43,6 +55,8 @@ import {
   type SessionListResponse,
   type SessionTranscriptQuery,
   type SessionTranscriptResponse,
+  type UpdateAISelectionRequest,
+  type UpdateSessionModelSelectionRequest,
   type WorkspaceId,
   type WorkspaceListResponse,
   type WorkspaceDirectoryPickerResponse,
@@ -243,6 +257,99 @@ export class CaelushClient {
     return this.request(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
       { method: "GET" },
+      ClientAgentSessionSchema,
+      [200],
+      options,
+    );
+  }
+
+  async listAIProviders(options: CaelushClientRequestOptions = {}): Promise<AIProvidersResponse> {
+    return this.request(
+      "/api/v1/ai/providers",
+      { method: "GET" },
+      AIProvidersResponseSchema,
+      [200],
+      options,
+    );
+  }
+
+  async getAIModelDirectory(
+    providerId?: string,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<AIModelDirectoryResponse> {
+    const suffix = providerId === undefined ? "" : `?provider=${encodeURIComponent(providerId)}`;
+    return this.request(
+      `/api/v1/ai/models${suffix}`,
+      { method: "GET" },
+      AIModelDirectoryResponseSchema,
+      [200],
+      options,
+    );
+  }
+
+  async connectAIProvider(
+    providerId: string,
+    input: ConnectProviderRequest,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<AIProviderConnectionResponse> {
+    const body = ConnectProviderRequestSchema.parse(input);
+    return this.request(
+      `/api/v1/ai/providers/${encodeURIComponent(providerId)}/connect`,
+      jsonRequest("POST", body),
+      AIProviderConnectionResponseSchema,
+      [200],
+      options,
+    );
+  }
+
+  async disconnectAIProvider(
+    providerId: string,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<void> {
+    await this.requestRaw(
+      `/api/v1/ai/providers/${encodeURIComponent(providerId)}/credential`,
+      { method: "DELETE" },
+      [204],
+      options,
+      false,
+    );
+  }
+
+  async getDefaultAISelection(
+    options: CaelushClientRequestOptions = {},
+  ): Promise<AIDefaultSelectionResponse> {
+    return this.request(
+      "/api/v1/ai/default-selection",
+      { method: "GET" },
+      AIDefaultSelectionResponseSchema,
+      [200],
+      options,
+    );
+  }
+
+  async setDefaultAISelection(
+    input: UpdateAISelectionRequest,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<AIDefaultSelectionResponse> {
+    const body = UpdateAISelectionRequestSchema.parse(input);
+    return this.request(
+      "/api/v1/ai/default-selection",
+      jsonRequest("PUT", body),
+      AIDefaultSelectionResponseSchema,
+      [200],
+      options,
+    );
+  }
+
+  async updateSessionModelSelection(
+    sessionId: SessionId,
+    input: UpdateSessionModelSelectionRequest,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<ClientAgentSession> {
+    const body = UpdateSessionModelSelectionRequestSchema.parse(input);
+    return this.request(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/model-selection`,
+      jsonRequest("PUT", body),
       ClientAgentSessionSchema,
       [200],
       options,
@@ -665,6 +772,6 @@ function validateCursor(value: number | undefined): number | undefined {
   return value;
 }
 
-function jsonRequest(method: "POST", body: unknown): RequestInit {
+function jsonRequest(method: "POST" | "PUT", body: unknown): RequestInit {
   return { method, body: JSON.stringify(body) };
 }

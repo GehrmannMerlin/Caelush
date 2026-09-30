@@ -16,6 +16,8 @@ export interface PromptComposerProps {
   readonly submission: WebSubmissionState;
   readonly error?: WebSessionError | undefined;
   readonly contextUsage?: ContextUsageProjection | null;
+  readonly modelReady?: boolean;
+  readonly modelPicker?: ReactElement;
   readonly onSubmit: (prompt: string) => Promise<boolean>;
 }
 
@@ -30,10 +32,10 @@ export function shouldSubmitPrompt(event: {
 export function PromptComposer(props: PromptComposerProps): ReactElement {
   const [value, setValue] = useState("");
   const submit = useCallback(async () => {
-    if (props.disabled) return;
+    if (props.disabled || props.modelReady === false) return;
     const accepted = await props.onSubmit(value);
     if (accepted) setValue("");
-  }, [props.disabled, props.onSubmit, value]);
+  }, [props.disabled, props.modelReady, props.onSubmit, value]);
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     void submit();
@@ -62,12 +64,13 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
       { className: "prompt-composer-footer" },
       createElement(ContextUsageRing, { usage: props.contextUsage ?? null }),
       createElement("span", { className: "prompt-hint" }, "Enter 发送 · Shift + Enter 换行"),
+      props.modelPicker ?? null,
       createElement(
         "button",
         {
           type: "submit",
           className: "prompt-submit-button prompt-submit-button--icon",
-          disabled: props.disabled,
+          disabled: props.disabled || props.modelReady === false,
           "aria-label": submissionLabel(props.submission),
           title: submissionLabel(props.submission),
         },

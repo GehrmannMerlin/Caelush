@@ -5,14 +5,15 @@ import { RunStatusSchema } from "../run.js";
 import { RuntimeRefSchema } from "../runtime.js";
 import { WorkspaceRefSchema } from "../workspace.js";
 import { ClientAgentRunSchema } from "./public-entities.js";
-import { ClientModelSelectionSchema } from "./model-selection.js";
+import { ClientModelSelectionSchema, ReasoningLevelSchema } from "./model-selection.js";
 import { RunResourcePolicySchema } from "../resource-policy.js";
 
 export const CreateRunRequestSchema = z
   .object({
     goal: z.string().min(1),
     workspace: WorkspaceRefSchema,
-    model: ClientModelSelectionSchema,
+    model: ClientModelSelectionSchema.optional(),
+    reasoningLevel: ReasoningLevelSchema.optional(),
     runtime: RuntimeRefSchema,
     permissionProfile: PermissionProfileSchema,
     approvalPolicy: ApprovalPolicySchema,

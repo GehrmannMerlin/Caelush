@@ -13,6 +13,7 @@ import { runStatusClass, runStatusLabel } from "./run-status.js";
 import { Timeline } from "./timeline.js";
 import { ApprovalCard } from "./approval-card.js";
 import { RecoveryPanel, type RecoveryRunView } from "./recovery-panel.js";
+import caelushLogo from "../assets/logo/caelush-logo.png";
 
 export interface SessionWorkspaceProps {
   readonly title: string;
@@ -34,25 +35,38 @@ export interface SessionWorkspaceProps {
 }
 
 export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
+  const isPristineSession =
+    props.history.length === 0 &&
+    props.activeRun === undefined &&
+    (props.approvals?.length ?? 0) === 0 &&
+    !hasRecoveryControl(props);
+
   return createElement(
     "section",
-    { className: "session-workspace", "aria-labelledby": "session-workspace-title" },
-    createElement(
-      "header",
-      { className: "session-workspace-header" },
-      createElement("h1", { id: "session-workspace-title" }, props.title),
-      props.activeRun === undefined
-        ? null
-        : createElement(
-            "div",
-            {
-              className: `active-run-status ${runStatusClass(props.activeRun.status)}`,
-              role: "status",
-            },
-            createElement("span", { className: "status-pulse", "aria-hidden": "true" }),
-            createElement("span", null, runStatusLabel(props.activeRun.status)),
-          ),
-    ),
+    {
+      className: `session-workspace${isPristineSession ? " session-workspace--empty" : ""}`,
+      ...(isPristineSession
+        ? { "aria-label": "新会话" }
+        : { "aria-labelledby": "session-workspace-title" }),
+    },
+    isPristineSession
+      ? null
+      : createElement(
+          "header",
+          { className: "session-workspace-header" },
+          createElement("h1", { id: "session-workspace-title" }, props.title),
+          props.activeRun === undefined
+            ? null
+            : createElement(
+                "div",
+                {
+                  className: `active-run-status ${runStatusClass(props.activeRun.status)}`,
+                  role: "status",
+                },
+                createElement("span", { className: "status-pulse", "aria-hidden": "true" }),
+                createElement("span", null, runStatusLabel(props.activeRun.status)),
+              ),
+        ),
     createElement(
       "div",
       { className: "session-scroll" },
@@ -75,12 +89,16 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
         : null,
       createElement(
         "div",
-        { className: "conversation-history", "aria-live": "polite" },
-        props.history.length === 0
+        {
+          className: `conversation-history${isPristineSession ? " conversation-history--empty" : ""}`,
+          "aria-live": "polite",
+        },
+        isPristineSession
           ? createElement(
               "div",
-              { className: "conversation-empty" },
-              createElement("p", null, "在这个会话中输入第一条任务。"),
+              { className: "conversation-welcome" },
+              createElement("img", { src: caelushLogo, alt: "Caelush" }),
+              createElement("p", null, "保持对未知的探索热情"),
             )
           : props.history.map((entry) =>
               createElement(
@@ -191,6 +209,13 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
         : null,
     ),
     props.composer,
+  );
+}
+
+function hasRecoveryControl(props: SessionWorkspaceProps): boolean {
+  return (
+    (props.controlMode === "RECOVERY_PICKER" || props.controlMode === "PENDING_RUN_CONFIRMATION") &&
+    (props.recoveryRuns?.length ?? 0) > 0
   );
 }
 

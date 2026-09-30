@@ -18,9 +18,19 @@ import { createLocalProjectInspector } from "@caelush/coding-agent";
 import { createAIError, createAISubsystem } from "@caelush/ai";
 import {
   createDaemonApiAdapters,
-  toAIProviderBinding,
   toModelDescriptorSources,
 } from "./providers/legacy-ai-configuration.js";
+import {
+  createRuntimeProviderCredentialAuthority,
+  type RuntimeProviderCredentialAuthority,
+} from "./providers/credential-authority.js";
+import {
+  createProviderPresetRegistry,
+  toProviderPresetBinding,
+  type ProviderPresetRegistry,
+} from "./providers/provider-presets.js";
+import { createCuratedModelDescriptorSources } from "./providers/curated-model-metadata.js";
+import { RuntimeModelDirectoryService } from "./providers/model-directory.js";
 import { CatalogModelCanonicalizer } from "./providers/model-canonicalizer.js";
 import {
   createModelWireDiagnostic,
@@ -257,6 +267,10 @@ export interface DaemonCompositionOptions {
   readonly eventQueuePolicy?: SubscriberQueuePolicy;
   readonly providers?: readonly DaemonModelProviderConfig[];
   readonly defaultModel?: ClientModelSelection;
+  /** Environment is read on every credential resolution; it is never serialized. */
+  readonly environment?: Readonly<Record<string, string | undefined>>;
+  /** Optional host/test authority; production composes the SQLite-backed authority below. */
+  readonly credentialAuthority?: RuntimeProviderCredentialAuthority;
   /** AI-native composition seams for tests and hosts. */
   readonly providerBindings?: readonly import("@caelush/ai").AIProviderBinding[];
   readonly modelSources?: readonly ModelDescriptorSourcePort[];
@@ -303,6 +317,9 @@ export interface DaemonComposition {
   readonly runtimeResolver: ReturnType<typeof createLocalRuntimeResolver>;
   /** The V2 AI subsystem: the single model invocation authority. */
   readonly ai: AISubsystem;
+  readonly credentialAuthority: RuntimeProviderCredentialAuthority;
+  readonly providerPresets: ProviderPresetRegistry;
+  readonly modelDirectory: RuntimeModelDirectoryService;
   /** The frozen V2 model turn executor. One gateway invocation per `execute()`. */
   readonly modelTurnExecutor: ReturnType<typeof createModelTurnExecutor>;
   /**
@@ -368,6 +385,20 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     throw new Error("Daemon composition requires a RunEventNotifierPort.");
   }
   const providers = [...(options.providers ?? [])];
+  const startupCredentials = new Map(
+    providers.flatMap((provider) =>
+      provider.apiKey === undefined ? [] : [[provider.provider, provider.apiKey] as const],
+    ),
+  );
+  const credentialAuthority =
+    options.credentialAuthority ??
+    createRuntimeProviderCredentialAuthority({
+      repository: options.storage.providerCredentials,
+      environment: options.environment ?? process.env,
+      startupCredentials,
+    });
+  const providerPresets = createProviderPresetRegistry(providers);
+  const curatedSources = createCuratedModelDescriptorSources(providerPresets.list());
   const clock = options.clock ?? { now: () => createTimestampMs(Date.now()) };
   const contextContributionPipelineId = "context-contribution";
   const contributionPipeline =
@@ -417,9 +448,24 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
   const runtime = options.runtime ?? new LocalRuntime();
   const runtimeResolver = createLocalRuntimeResolver(runtime);
   const ai = createAISubsystem({
-    modelSources: [...providers.flatMap(toModelDescriptorSources), ...(options.modelSources ?? [])],
-    providers: [...providers.map(toAIProviderBinding), ...(options.providerBindings ?? [])],
+    modelSources: [
+      curatedSources.curated,
+      ...providers.flatMap(toModelDescriptorSources),
+      curatedSources.fallback,
+      ...(options.modelSources ?? []),
+    ],
+    providers: [
+      ...providerPresets
+        .list()
+        .map((preset) => toProviderPresetBinding(preset, credentialAuthority)),
+      ...(options.providerBindings ?? []),
+    ],
     adapters: [...createDaemonApiAdapters(), ...(options.adapterOverrides ?? [])],
+  });
+  const modelDirectory = new RuntimeModelDirectoryService({
+    presets: providerPresets,
+    credentials: credentialAuthority,
+    models: ai.models,
   });
   // The diagnostic is a transparent decorator over the frozen gateway: the AI core
   // contract gains no debug callback, and nothing here can observe an endpoint, a
@@ -877,7 +923,16 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
         config: {
           baseSystemPrompt: config.baseSystemPrompt,
           tools: activeToolRegistry.modelSpecs(),
-          ...(config.modelSettings === undefined ? {} : { modelSettings: config.modelSettings }),
+          ...(config.modelSettings === undefined && run.reasoningLevel === undefined
+            ? {}
+            : {
+                modelSettings: {
+                  ...(config.modelSettings === undefined ? {} : config.modelSettings),
+                  ...(run.reasoningLevel === undefined
+                    ? {}
+                    : { reasoning: { level: run.reasoningLevel } }),
+                },
+              }),
           ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
           ...(config.explicitPaths === undefined ? {} : { explicitPaths: config.explicitPaths }),
         },
@@ -985,7 +1040,12 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       sessionTranscript: true,
     },
     runtimeKinds: ["local"],
-    configuredProviders: ai.providers.list().map((provider) => provider.id),
+    // Compatibility snapshot only. Dynamic provider connection state belongs to
+    // the AI control-plane service and is intentionally not inferred from this.
+    configuredProviders: [
+      ...providers.map((provider) => provider.provider),
+      ...(options.providerBindings ?? []).map((provider) => provider.id),
+    ].filter((provider, index, all) => all.indexOf(provider) === index),
     ...(options.defaultModel === undefined ? {} : { defaultModel: options.defaultModel }),
     defaultRunConfiguration: DEFAULT_RUN_CONFIGURATION,
   });
@@ -998,6 +1058,9 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     runtime,
     runtimeResolver,
     ai,
+    credentialAuthority,
+    providerPresets,
+    modelDirectory,
     modelTurnExecutor,
     verificationModelTurns,
     toolRegistry: activeToolRegistry,
@@ -1249,9 +1312,7 @@ function createDurableToolObservationPort(
         projected.push({
           observation,
           ...(invocation === undefined ? {} : { toolName: invocation.toolName }),
-          ...(invocation === undefined
-            ? {}
-            : { invocationStatus: invocation.status }),
+          ...(invocation === undefined ? {} : { invocationStatus: invocation.status }),
         });
       }
       return projected;
@@ -1353,6 +1414,8 @@ function safeModelSettings(request: AIModelRequest): Record<string, string | num
   }
   if (request.settings?.temperature !== undefined)
     settings["temperature"] = request.settings.temperature;
+  if (request.settings?.reasoning !== undefined)
+    settings["reasoning"] = request.settings.reasoning.level;
   if (request.toolChoice !== undefined) settings["toolChoice"] = request.toolChoice.type;
   return settings;
 }

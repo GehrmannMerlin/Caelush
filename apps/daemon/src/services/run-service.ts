@@ -6,6 +6,7 @@ import {
   normalizeCreateRunResourcePolicy,
   type AgentRun,
   type CreateRunRequest,
+  type ClientModelSelection,
   type ModelRef,
   type RunId,
   type RunListQuery,
@@ -17,6 +18,7 @@ import type { DaemonModelCanonicalizer } from "../providers/model-canonicalizer.
 import { canonicalizeWorkspacePath } from "../workspaces/workspace-identity.js";
 import { WorkspaceOwnershipError } from "../workspaces/workspace-errors.js";
 import type { WorkspaceService } from "../workspaces/workspace-service.js";
+import { ModelSelectionError } from "../providers/model-directory.js";
 
 export interface RunServiceOptions {
   readonly sessions: SessionRepository;
@@ -25,6 +27,14 @@ export interface RunServiceOptions {
   readonly createId?: typeof createRunId;
   readonly modelCanonicalizer?: DaemonModelCanonicalizer;
   readonly workspaceService?: WorkspaceService;
+  readonly validateSelection?: (
+    selection: {
+      readonly provider: string;
+      readonly model: string;
+      readonly reasoningLevel?: import("@caelush/protocol").ReasoningLevel;
+    },
+    context?: { readonly explicitModel: boolean },
+  ) => Promise<void>;
 }
 
 export class RunService {
@@ -42,8 +52,34 @@ export class RunService {
 
   async createRun(sessionId: SessionId, input: CreateRunRequest): Promise<AgentRun> {
     const session = await this.requireSession(sessionId);
-    const workspace = await this.resolveWorkspace(session, input.workspace);
     const resourcePolicy = normalizeCreateRunResourcePolicy(input);
+    const modelSelection: ClientModelSelection | undefined =
+      input.model ??
+      (session.defaultModel === undefined
+        ? undefined
+        : { provider: session.defaultModel.provider, model: session.defaultModel.model });
+    if (modelSelection === undefined) {
+      throw new ModelSelectionError("NO_MODEL_SELECTED", "No model is selected for this Run.");
+    }
+    const sessionModelMatchesRequest =
+      input.model === undefined ||
+      (session.defaultModel !== undefined &&
+        session.defaultModel.provider === input.model.provider &&
+        session.defaultModel.model === input.model.model);
+    const reasoningLevel =
+      input.reasoningLevel ??
+      (sessionModelMatchesRequest ? session.defaultReasoningLevel : undefined);
+    if (this.options.validateSelection !== undefined) {
+      await this.options.validateSelection(
+        {
+          provider: modelSelection.provider,
+          model: modelSelection.model,
+          ...(reasoningLevel === undefined ? {} : { reasoningLevel }),
+        },
+        { explicitModel: input.model !== undefined },
+      );
+    }
+    const workspace = await this.resolveWorkspace(session, input.workspace);
     const run = AgentRunSchema.parse({
       id: this.createId(),
       sessionId,
@@ -51,7 +87,8 @@ export class RunService {
       workspace,
       limits: input.limits ?? compatibilityLimitsForResourcePolicy(resourcePolicy),
       resourcePolicy,
-      model: this.modelCanonicalizer.canonicalize(input.model),
+      model: this.modelCanonicalizer.canonicalize(modelSelection),
+      ...(reasoningLevel === undefined ? {} : { reasoningLevel }),
       status: "PENDING",
       createdAt: this.now(),
     });

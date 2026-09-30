@@ -71,7 +71,7 @@ async function runToCompletion(
   });
   const run = await client.createRun(session.id, {
     goal,
-    workspace: { id: createWorkspaceId(), path: workspacePath },
+    workspace: session.defaultWorkspace ?? { id: createWorkspaceId(), path: workspacePath },
     model: { provider, model },
     runtime: { id: "local", kind: "local" },
     permissionProfile: "PROJECT_ACCESS",

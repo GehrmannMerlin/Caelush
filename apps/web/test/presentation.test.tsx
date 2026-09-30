@@ -1,9 +1,13 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { createSessionId, createWorkspaceId, type WorkspaceRef } from "@caelush/protocol";
 import { SessionSidebar, sessionDisplayTitle } from "../src/components/session-sidebar.js";
 import { PromptComposer, shouldSubmitPrompt } from "../src/components/prompt-composer.js";
+import { SettingsSurface } from "../src/components/settings-surface.js";
 import { createInitialTimelineState, type SessionCandidate } from "@caelush/client";
+import type { ProviderView } from "@caelush/protocol";
 import { SessionWorkspace } from "../src/components/session-workspace.js";
 
 const workspace: WorkspaceRef = {
@@ -149,6 +153,75 @@ describe("Web presentation", () => {
     expect(html).not.toContain("@引用");
   });
 
+  it("keeps the prompt editable and the model control available before a model is selected", () => {
+    const html = renderToStaticMarkup(
+      <PromptComposer
+        disabled={false}
+        modelReady={false}
+        submission="IDLE"
+        modelPicker={<button type="button">配置模型</button>}
+        onSubmit={vi.fn(async () => true)}
+      />,
+    );
+
+    expect(html).toContain("配置模型");
+    expect(html).not.toMatch(/<textarea[^>]*disabled/);
+    expect(html).toMatch(
+      /<button[^>]*class="prompt-submit-button prompt-submit-button--icon"[^>]*disabled/,
+    );
+  });
+
+  it("keeps model selection immediately before the send control", () => {
+    const html = renderToStaticMarkup(
+      <PromptComposer
+        disabled={false}
+        modelReady={true}
+        submission="IDLE"
+        modelPicker={<button type="button">MODEL_PICKER</button>}
+        onSubmit={vi.fn(async () => true)}
+      />,
+    );
+
+    expect(html.indexOf("prompt-hint")).toBeLessThan(html.indexOf("MODEL_PICKER"));
+    expect(html.indexOf("MODEL_PICKER")).toBeLessThan(html.indexOf('aria-label="发送任务"'));
+  });
+
+  it("renders Settings as one modal panel with the provider chooser inside it", () => {
+    const provider: ProviderView = {
+      id: "deepseek",
+      displayName: "DeepSeek",
+      credentialConfigured: false,
+      credentialSource: "NONE",
+      credentialWritable: true,
+      discoveryState: "NOT_CONFIGURED",
+    };
+    const html = renderToStaticMarkup(
+      <SettingsSurface
+        providers={[provider]}
+        models={[]}
+        onClose={vi.fn()}
+        onConnect={vi.fn(async () => true)}
+        onDisconnect={vi.fn(async () => true)}
+      />,
+    );
+
+    expect(html).toContain('class="settings-surface-panel"');
+    expect(html).toContain("模型与 API");
+    expect(html).toContain("DeepSeek");
+  });
+
+  it("keeps the sidebar Settings control readable with black text and icon", () => {
+    const styles = readFileSync(
+      fileURLToPath(new URL("../src/styles.css", import.meta.url)),
+      "utf8",
+    );
+    const finalSettingsRule = styles.slice(
+      styles.lastIndexOf(".workspace-sidebar .workspace-settings-button"),
+    );
+
+    expect(finalSettingsRule).toMatch(/color:\s*#111827/);
+  });
+
   it("renders user messages as right-aligned bubble content", () => {
     const html = renderToStaticMarkup(
       <SessionWorkspace
@@ -191,6 +264,38 @@ describe("Web presentation", () => {
     );
 
     expect(html).not.toContain("执行过程");
+  });
+
+  it("renders a centered branded welcome state for a pristine session", () => {
+    const html = renderToStaticMarkup(
+      <SessionWorkspace
+        title="新会话"
+        history={[]}
+        timeline={createInitialTimelineState()}
+        composer={<div>COMPOSER_MARKER</div>}
+      />,
+    );
+
+    expect(html).toContain('class="conversation-welcome"');
+    expect(html).toContain('alt="Caelush"');
+    expect(html).toContain("保持对未知的探索热情");
+    expect(html).not.toContain("在这个会话中输入第一条任务。");
+    expect(html).not.toContain('id="session-workspace-title"');
+  });
+
+  it("keeps the session title once a conversation has started", () => {
+    const html = renderToStaticMarkup(
+      <SessionWorkspace
+        title="认证修复"
+        history={[{ id: "history-user", kind: "USER", text: "修复登录" }]}
+        timeline={createInitialTimelineState()}
+        composer={<div>COMPOSER_MARKER</div>}
+      />,
+    );
+
+    expect(html).toContain('id="session-workspace-title"');
+    expect(html).toContain("认证修复");
+    expect(html).not.toContain("保持对未知的探索热情");
   });
 
   it("places the projected timeline after history and before the composer", () => {

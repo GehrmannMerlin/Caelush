@@ -36,6 +36,8 @@ import { ReconnectBanner } from "./components/reconnect-banner.js";
 import { WorkspaceSidebar } from "./components/workspace-sidebar.js";
 import { WorkspaceEmptyState } from "./components/workspace-empty-state.js";
 import { WorkspaceDialog } from "./components/workspace-dialog.js";
+import { ModelPicker } from "./components/model-picker.js";
+import { SettingsSurface } from "./components/settings-surface.js";
 
 const sessionSelectionStore = new SessionSelectionStore();
 const workspaceSelectionStore = new WorkspaceSelectionStore();
@@ -73,6 +75,7 @@ export function WebHostApp(props: {
   const [workspacePath, setWorkspacePath] = useState("");
   const [workspacePickerBusy, setWorkspacePickerBusy] = useState(false);
   const [workspaceActionError, setWorkspaceActionError] = useState<string | undefined>();
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const pendingDraftWorkspaceId = useRef<WorkspaceId | undefined>(undefined);
 
   useEffect(() => {
@@ -316,6 +319,12 @@ export function WebHostApp(props: {
     onCloseWorkspaceDialog: () => setWorkspaceDialogOpen(false),
     onPickWorkspaceDirectory,
     onRegisterWorkspace,
+    settingsOpen,
+    onOpenSettings: () => {
+      setSettingsOpen(true);
+      setSidebarOpen(false);
+    },
+    onCloseSettings: () => setSettingsOpen(false),
   });
 }
 
@@ -341,6 +350,9 @@ function renderWorkspaceApp(input: {
   readonly onCloseWorkspaceDialog: () => void;
   readonly onPickWorkspaceDirectory: () => void;
   readonly onRegisterWorkspace: (event: FormEvent<HTMLFormElement>) => void;
+  readonly settingsOpen: boolean;
+  readonly onOpenSettings: () => void;
+  readonly onCloseSettings: () => void;
 }): ReactElement {
   const { snapshot, selectedWorkspace } = input;
   const selectedCandidate = snapshot.candidates.find(
@@ -355,12 +367,15 @@ function renderWorkspaceApp(input: {
       : snapshot.selectedSession?.title !== undefined
         ? derivePromptTitle(snapshot.selectedSession.title)
         : "选择一个会话";
-  const composerDisabled =
-    !snapshot.composerEnabled ||
-    snapshot.controlMode === "CANCELLING" ||
-    snapshot.controlMode === "RECOVERY_PICKER" ||
-    snapshot.controlMode === "PENDING_RUN_CONFIRMATION";
+  const composerInteractionDisabled = shouldDisableComposerInteraction(snapshot);
   const hasWorkspace = selectedWorkspace !== undefined && input.sessionManager !== undefined;
+  const modelSelection = snapshot.modelSelection ?? snapshot.defaultSelection;
+  const modelReady =
+    modelSelection !== undefined &&
+    (snapshot.modelDirectory === undefined ||
+      snapshot.modelDirectory.some(
+        (model) => model.provider === modelSelection.provider && model.id === modelSelection.model,
+      ));
 
   return createElement(
     "main",
@@ -403,6 +418,7 @@ function renderWorkspaceApp(input: {
         onSelectSession: input.onSelectSession,
         onAddWorkspace: input.onAddWorkspace,
         onForgetWorkspace: input.onForgetWorkspace,
+        onOpenSettings: input.onOpenSettings,
       }),
       createElement(
         "div",
@@ -443,7 +459,16 @@ function renderWorkspaceApp(input: {
               timeline: snapshot.timeline,
               liveActivity: snapshot.liveActivity,
               composer: createElement(PromptComposer, {
-                disabled: composerDisabled,
+                disabled: composerInteractionDisabled,
+                modelReady,
+                modelPicker: createElement(ModelPicker, {
+                  providers: snapshot.aiProviders ?? [],
+                  models: snapshot.modelDirectory ?? [],
+                  selection: modelSelection,
+                  disabled: composerInteractionDisabled,
+                  onSelect: (selection) => void input.sessionManager?.selectModel(selection),
+                  onOpenSettings: input.onOpenSettings,
+                }),
                 submission: snapshot.submission,
                 error: snapshot.error,
                 contextUsage: snapshot.contextUsage ?? null,
@@ -476,6 +501,30 @@ function renderWorkspaceApp(input: {
           onSubmit: input.onRegisterWorkspace,
         })
       : null,
+    input.settingsOpen
+      ? createElement(SettingsSurface, {
+          providers: snapshot.aiProviders ?? [],
+          models: snapshot.modelDirectory ?? [],
+          onClose: input.onCloseSettings,
+          onConnect: (providerId, apiKey) =>
+            input.sessionManager?.connectProvider(providerId, apiKey) ?? Promise.resolve(false),
+          onDisconnect: (providerId) =>
+            input.sessionManager?.disconnectProvider(providerId) ?? Promise.resolve(false),
+        })
+      : null,
+  );
+}
+
+export function shouldDisableComposerInteraction(
+  snapshot: Pick<WebSessionSnapshot, "status" | "submission" | "activeRun" | "controlMode">,
+): boolean {
+  return (
+    snapshot.status !== "READY" ||
+    snapshot.submission !== "IDLE" ||
+    snapshot.activeRun !== undefined ||
+    snapshot.controlMode === "CANCELLING" ||
+    snapshot.controlMode === "RECOVERY_PICKER" ||
+    snapshot.controlMode === "PENDING_RUN_CONFIRMATION"
   );
 }
 

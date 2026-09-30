@@ -27,6 +27,8 @@ import type { PublicEventProjector } from "./events/public-event-projector.js";
 import { registerWorkspaceRoutes } from "./routes/workspaces.js";
 import { WorkspaceService } from "./workspaces/workspace-service.js";
 import type { WorkspaceDirectoryPicker } from "./workspaces/workspace-picker.js";
+import { registerAIRoutes } from "./routes/ai.js";
+import { AIConfigurationService } from "./services/ai-configuration-service.js";
 
 export interface DaemonDependencies {
   readonly sessions: SessionRepository;
@@ -44,6 +46,7 @@ export interface DaemonDependencies {
   readonly transcript?: SessionTranscriptService;
   readonly logger?: boolean;
   readonly web?: WebStaticHostOptions;
+  readonly aiConfiguration?: AIConfigurationService;
 }
 
 export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstance {
@@ -64,19 +67,28 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
         : { workspacePicker: dependencies.workspacePicker }),
     });
   }
-  registerSessionRoutes(
-    app,
-    new SessionService({
-      repository: dependencies.sessions,
-      ...(dependencies.modelCanonicalizer === undefined
-        ? {}
-        : { modelCanonicalizer: dependencies.modelCanonicalizer }),
-      ...(dependencies.workspaceService === undefined
-        ? {}
-        : { workspaceService: dependencies.workspaceService }),
-    }),
-    dependencies.transcript === undefined ? {} : { transcript: dependencies.transcript },
-  );
+  const sessionService = new SessionService({
+    repository: dependencies.sessions,
+    ...(dependencies.modelCanonicalizer === undefined
+      ? {}
+      : { modelCanonicalizer: dependencies.modelCanonicalizer }),
+    ...(dependencies.workspaceService === undefined
+      ? {}
+      : { workspaceService: dependencies.workspaceService }),
+    ...(dependencies.aiConfiguration === undefined
+      ? {}
+      : {
+          defaultSelection: () => dependencies.aiConfiguration!.getNewSessionSelection(),
+          validateSelection: (selection) =>
+            dependencies.aiConfiguration!.validateSelection(selection),
+        }),
+  });
+  registerSessionRoutes(app, sessionService, {
+    ...(dependencies.transcript === undefined ? {} : { transcript: dependencies.transcript }),
+    ...(dependencies.aiConfiguration === undefined
+      ? {}
+      : { aiConfiguration: dependencies.aiConfiguration }),
+  });
   registerRunRoutes(
     app,
     new RunService({
@@ -88,8 +100,17 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
       ...(dependencies.workspaceService === undefined
         ? {}
         : { workspaceService: dependencies.workspaceService }),
+      ...(dependencies.aiConfiguration === undefined
+        ? {}
+        : {
+            validateSelection: (selection, context) =>
+              dependencies.aiConfiguration!.validateRunSelection(selection, context),
+          }),
     }),
   );
+  if (dependencies.aiConfiguration !== undefined) {
+    registerAIRoutes(app, dependencies.aiConfiguration);
+  }
   if (dependencies.execution !== undefined) registerExecutionRoutes(app, dependencies.execution);
   if (dependencies.web !== undefined) registerWebStaticHost(app, dependencies.web);
   app.after(() => {

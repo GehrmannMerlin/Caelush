@@ -134,8 +134,13 @@ export interface ContextProviderInput {
 export function toAIModelSettings(settings: {
   readonly maxOutputTokens?: number;
   readonly temperature?: number;
+  readonly reasoning?: AIModelSettings["reasoning"];
 }): AIModelSettings | undefined {
-  if (settings.maxOutputTokens === undefined && settings.temperature === undefined) {
+  if (
+    settings.maxOutputTokens === undefined &&
+    settings.temperature === undefined &&
+    settings.reasoning === undefined
+  ) {
     return undefined;
   }
   return {
@@ -143,5 +148,6 @@ export function toAIModelSettings(settings: {
       ? {}
       : { maxOutputTokens: settings.maxOutputTokens }),
     ...(settings.temperature === undefined ? {} : { temperature: settings.temperature }),
+    ...(settings.reasoning === undefined ? {} : { reasoning: settings.reasoning }),
   };
 }

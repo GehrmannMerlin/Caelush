@@ -33,6 +33,7 @@ import type {
   ApprovalResolution,
   ClientAgentRun,
   ClientAgentSession,
+  ClientModelSelectionWithReasoning,
   CreateRunRequest,
   CreateSessionRequest,
   DaemonInfo,
@@ -44,6 +45,11 @@ import type {
   WorkspaceRef,
   WorkspaceSessionSummary,
   ContextUsageProjection,
+  AIModelDirectoryResponse,
+  AIProvidersResponse,
+  ConnectProviderRequest,
+  UpdateAISelectionRequest,
+  UpdateSessionModelSelectionRequest,
 } from "@caelush/protocol";
 import { derivePromptTitle, validatePrompt, type PromptError } from "./prompt.js";
 import type { WebHostClient } from "../host/bootstrap.js";
@@ -55,6 +61,18 @@ export interface WebSessionClient extends SessionCandidateClient, WebHostClient 
   }>;
   createSession(input: CreateSessionRequest): Promise<ClientAgentSession>;
   createRun(sessionId: SessionId, input: CreateRunRequest): Promise<ClientAgentRun>;
+  listAIProviders?(): Promise<AIProvidersResponse>;
+  getAIModelDirectory?(providerId?: string): Promise<AIModelDirectoryResponse>;
+  getDefaultAISelection?(): Promise<{ selection?: ClientModelSelectionWithReasoning | undefined }>;
+  setDefaultAISelection?(input: UpdateAISelectionRequest): Promise<{
+    selection?: ClientModelSelectionWithReasoning | undefined;
+  }>;
+  connectAIProvider?(providerId: string, input: ConnectProviderRequest): Promise<unknown>;
+  disconnectAIProvider?(providerId: string): Promise<void>;
+  updateSessionModelSelection?(
+    sessionId: SessionId,
+    input: UpdateSessionModelSelectionRequest,
+  ): Promise<ClientAgentSession>;
   getRun(runId: RunId): Promise<ClientAgentRun>;
   getSessionTranscript?(
     sessionId: SessionId,
@@ -124,6 +142,10 @@ export interface WebSessionSnapshot {
   readonly timeline: TimelineState;
   readonly liveActivity: LiveActivityState;
   readonly contextUsage?: ContextUsageProjection | null;
+  readonly aiProviders?: AIProvidersResponse["providers"];
+  readonly modelDirectory?: AIModelDirectoryResponse["models"];
+  readonly defaultSelection?: ClientModelSelectionWithReasoning;
+  readonly modelSelection?: ClientModelSelectionWithReasoning;
   readonly isDraft: boolean;
   readonly composerEnabled: boolean;
   readonly submission: WebSubmissionState;
@@ -143,6 +165,8 @@ type WebSessionSnapshotPatch = Partial<
     | "activeRun"
     | "approvalState"
     | "error"
+    | "defaultSelection"
+    | "modelSelection"
     | "transportAttempt"
   >
 > & {
@@ -151,6 +175,8 @@ type WebSessionSnapshotPatch = Partial<
   readonly activeRun?: ClientAgentRun | undefined;
   readonly approvalState?: WebApprovalState | undefined;
   readonly error?: WebSessionError | undefined;
+  readonly defaultSelection?: ClientModelSelectionWithReasoning | undefined;
+  readonly modelSelection?: ClientModelSelectionWithReasoning | undefined;
   readonly transportAttempt?: number | undefined;
 };
 
@@ -208,6 +234,7 @@ export class WebSessionManager {
     if (this.disposed) return;
     this.publish({ status: "LOADING", error: undefined });
     try {
+      await this.loadAIControl();
       const candidates =
         this.options.client.listWorkspaceSessions === undefined
           ? await listMatchingSessionCandidates(this.options.client, this.options.workspace.path)
@@ -236,10 +263,13 @@ export class WebSessionManager {
     if (this.disposed || this.snapshot.submission !== "IDLE") return;
     this.cancelActiveLifecycle();
     this.clearApprovals();
+    const defaultSelection = this.snapshot.defaultSelection ?? this.options.info.defaultModel;
     this.publish({
       status: "READY",
       selectedSession: undefined,
       selectedSessionId: undefined,
+      defaultSelection,
+      modelSelection: defaultSelection,
       runs: [],
       history: [],
       activeRuns: [],
@@ -320,11 +350,12 @@ export class WebSessionManager {
       return false;
     }
 
-    const model = this.snapshot.selectedSession?.defaultModel ?? this.options.info.defaultModel;
-    if (model === undefined) {
+    const selection = this.currentModelSelection();
+    if (selection === undefined || !this.isSelectionAvailable(selection)) {
       this.publish({ error: sessionError("DEFAULT_MODEL_UNAVAILABLE") });
       return false;
     }
+    const model = { provider: selection.provider, model: selection.model };
 
     const goal = validation.value;
     this.publish({ submission: "SUBMITTING", error: undefined });
@@ -337,12 +368,18 @@ export class WebSessionManager {
                 title: derivePromptTitle(goal),
                 defaultWorkspace: this.options.workspace,
                 defaultModel: model,
+                ...(selection.reasoningLevel === undefined
+                  ? {}
+                  : { defaultReasoningLevel: selection.reasoningLevel }),
                 metadata: {},
               }
             : {
                 title: derivePromptTitle(goal),
                 workspaceId: this.options.workspace.id,
                 defaultModel: model,
+                ...(selection.reasoningLevel === undefined
+                  ? {}
+                  : { defaultReasoningLevel: selection.reasoningLevel }),
                 metadata: {},
               },
         );
@@ -359,6 +396,9 @@ export class WebSessionManager {
         goal,
         workspace: this.options.workspace,
         model,
+        ...(selection.reasoningLevel === undefined
+          ? {}
+          : { reasoningLevel: selection.reasoningLevel }),
         ...this.options.info.defaultRunConfiguration,
       });
       const runs = [...this.snapshot.runs, run];
@@ -417,6 +457,129 @@ export class WebSessionManager {
       });
       return false;
     }
+  }
+
+  async selectModel(selection: ClientModelSelectionWithReasoning): Promise<boolean> {
+    if (this.disposed || this.hasActiveRun()) return false;
+    try {
+      if (
+        this.snapshot.selectedSession !== undefined &&
+        this.options.client.updateSessionModelSelection !== undefined
+      ) {
+        const updated = await this.options.client.updateSessionModelSelection(
+          this.snapshot.selectedSession.id,
+          {
+            defaultModel: { provider: selection.provider, model: selection.model },
+            ...(selection.reasoningLevel === undefined
+              ? {}
+              : { defaultReasoningLevel: selection.reasoningLevel }),
+          },
+        );
+        this.publish({
+          selectedSession: updated,
+          modelSelection: selection,
+          candidates: this.upsertCandidate(updated),
+          error: undefined,
+        });
+        return true;
+      }
+      if (this.options.client.setDefaultAISelection !== undefined) {
+        const response = await this.options.client.setDefaultAISelection(selection);
+        if (response.selection === undefined) return false;
+        this.publish({
+          defaultSelection: response.selection,
+          modelSelection: response.selection,
+          error: undefined,
+        });
+        return true;
+      }
+      this.publish({ modelSelection: selection, error: undefined });
+      return true;
+    } catch {
+      this.publish({ error: sessionError("DEFAULT_MODEL_UNAVAILABLE") });
+      return false;
+    }
+  }
+
+  async connectProvider(providerId: string, apiKey: string): Promise<boolean> {
+    if (this.options.client.connectAIProvider === undefined) return false;
+    try {
+      await this.options.client.connectAIProvider(providerId, { apiKey });
+      await this.loadAIControl();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async disconnectProvider(providerId: string): Promise<boolean> {
+    if (this.options.client.disconnectAIProvider === undefined) return false;
+    try {
+      await this.options.client.disconnectAIProvider(providerId);
+      await this.loadAIControl();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async loadAIControl(): Promise<void> {
+    const client = this.options.client;
+    if (
+      client.listAIProviders === undefined ||
+      client.getAIModelDirectory === undefined ||
+      client.getDefaultAISelection === undefined
+    ) {
+      if (this.options.info.defaultModel !== undefined) {
+        const fallback = this.options.info.defaultModel;
+        this.publish({ defaultSelection: fallback, modelSelection: fallback });
+      }
+      return;
+    }
+    try {
+      const [providers, directory, defaultResponse] = await Promise.all([
+        client.listAIProviders(),
+        client.getAIModelDirectory(),
+        client.getDefaultAISelection(),
+      ]);
+      this.publish({
+        aiProviders: providers.providers,
+        modelDirectory: directory.models,
+        ...(defaultResponse.selection === undefined
+          ? { defaultSelection: undefined, modelSelection: undefined }
+          : {
+              defaultSelection: defaultResponse.selection,
+              modelSelection: defaultResponse.selection,
+            }),
+      });
+    } catch {
+      // An older daemon remains usable through its compatibility info snapshot.
+      if (this.options.info.defaultModel !== undefined) {
+        const fallback = this.options.info.defaultModel;
+        this.publish({ defaultSelection: fallback, modelSelection: fallback });
+      }
+    }
+  }
+
+  private currentModelSelection(): ClientModelSelectionWithReasoning | undefined {
+    const session = this.snapshot.selectedSession;
+    if (session?.defaultModel !== undefined) {
+      return session.defaultReasoningLevel === undefined
+        ? { provider: session.defaultModel.provider, model: session.defaultModel.model }
+        : {
+            provider: session.defaultModel.provider,
+            model: session.defaultModel.model,
+            reasoningLevel: session.defaultReasoningLevel,
+          };
+    }
+    return this.snapshot.modelSelection ?? this.snapshot.defaultSelection;
+  }
+
+  private isSelectionAvailable(selection: ClientModelSelectionWithReasoning): boolean {
+    if (this.snapshot.modelDirectory === undefined) return true;
+    return this.snapshot.modelDirectory.some(
+      (model) => model.provider === selection.provider && model.id === selection.model,
+    );
   }
 
   async refreshApprovals(runId: RunId): Promise<void> {
@@ -645,7 +808,10 @@ export class WebSessionManager {
   private async listWorkspaceSessionCandidates(): Promise<readonly SessionCandidate[]> {
     const listWorkspaceSessions = this.options.client.listWorkspaceSessions;
     if (listWorkspaceSessions === undefined) return [];
-    const response = await listWorkspaceSessions.call(this.options.client, this.options.workspace.id);
+    const response = await listWorkspaceSessions.call(
+      this.options.client,
+      this.options.workspace.id,
+    );
     return response.items.map((summary) => ({
       session: summary.session,
       ...(summary.latestRun === undefined ? {} : { latestRun: summary.latestRun }),
@@ -678,6 +844,16 @@ export class WebSessionManager {
         activeRuns.length === 1 ? activeRuns[0]?.id : undefined,
       ),
       contextUsage: null,
+      modelSelection:
+        session.defaultModel === undefined
+          ? undefined
+          : {
+              provider: session.defaultModel.provider,
+              model: session.defaultModel.model,
+              ...(session.defaultReasoningLevel === undefined
+                ? {}
+                : { reasoningLevel: session.defaultReasoningLevel }),
+            },
       isDraft: false,
       composerEnabled: activeRuns.length === 0,
       submission: "IDLE",

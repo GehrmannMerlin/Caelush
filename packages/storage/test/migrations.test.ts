@@ -27,7 +27,9 @@ afterEach(async () => {
 
 describe("committed storage migrations", () => {
   it("builds the final Message V2 agent_messages schema on a fresh database", async () => {
-    const directory = await mkdtemp(path.join(os.tmpdir(), "caelush-storage-final-message-schema-"));
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "caelush-storage-final-message-schema-"),
+    );
     temporaryDirectories.push(directory);
     const databasePath = path.join(directory, "caelush.db");
 
@@ -56,7 +58,10 @@ describe("committed storage migrations", () => {
         "audience_json",
         "data_json",
       ]);
-      expect(columns.find(({ name }) => name === "message_id")).toMatchObject({ pk: 1, notnull: 1 });
+      expect(columns.find(({ name }) => name === "message_id")).toMatchObject({
+        pk: 1,
+        notnull: 1,
+      });
       expect(columns.map(({ name }) => name)).not.toEqual(
         expect.arrayContaining(["role", "protocol_version", "v2_data_json"]),
       );
@@ -124,6 +129,8 @@ describe("committed storage migrations", () => {
         "agent_sessions",
         "agent_state_snapshots",
         "agent_steps",
+        "ai_default_selections",
+        "ai_provider_credentials",
         "approval_requests",
         "context_artifacts",
         "context_checkpoints",
@@ -140,9 +147,10 @@ describe("committed storage migrations", () => {
         "verification_plans",
         "workspaces",
       ]);
-      // Phase 5F and the Workspace Registry add the final two published migrations.
+      // Phase 5F, the Workspace Registry, and Runtime AI Management are all represented in the
+      // published migration ledger.
       expect(sqlite.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get()).toEqual({
-        count: 16,
+        count: 17,
       });
 
       // The final schema contains only the durable Message V2 envelope and payload.
@@ -224,7 +232,9 @@ describe("committed storage migrations", () => {
       });
 
       expect(
-        database.client.prepare("SELECT COUNT(*) AS count FROM agent_messages WHERE v2_data_json IS NULL").get(),
+        database.client
+          .prepare("SELECT COUNT(*) AS count FROM agent_messages WHERE v2_data_json IS NULL")
+          .get(),
       ).toEqual({ count: 3 });
 
       finalizeAgentMessages(database, migrationsFolder);
@@ -241,9 +251,9 @@ describe("committed storage migrations", () => {
       expect(database.client.prepare("PRAGMA table_info('agent_messages')").all()).not.toEqual(
         expect.arrayContaining([expect.objectContaining({ name: "v2_data_json" })]),
       );
-      expect(
-        database.client.prepare("SELECT COUNT(*) AS count FROM agent_messages").get(),
-      ).toEqual({ count: 3 });
+      expect(database.client.prepare("SELECT COUNT(*) AS count FROM agent_messages").get()).toEqual(
+        { count: 3 },
+      );
     } finally {
       database.close();
     }
@@ -277,7 +287,9 @@ describe("committed storage migrations", () => {
       });
       expect(partial).toMatchObject({ migrated: 1, unsupported: 1, failed: 0 });
 
-      expect(() => finalizeAgentMessages(database, migrationsFolder)).toThrow(StorageMigrationError);
+      expect(() => finalizeAgentMessages(database, migrationsFolder)).toThrow(
+        StorageMigrationError,
+      );
       expect(database.client.prepare("PRAGMA table_info('agent_messages')").all()).toEqual(
         expect.arrayContaining([expect.objectContaining({ name: "v2_data_json" })]),
       );
@@ -288,13 +300,17 @@ describe("committed storage migrations", () => {
       ).toEqual({ count: 0 });
 
       database.client
-        .prepare("UPDATE agent_messages SET role = ?, data_json = ? WHERE run_id = ? AND sequence = ?")
+        .prepare(
+          "UPDATE agent_messages SET role = ?, data_json = ? WHERE run_id = ? AND sequence = ?",
+        )
         .run("user", JSON.stringify({ role: "user", content: "repaired" }), "run_repair", 2);
       finalizeAgentMessages(database, migrationsFolder);
       expect(database.client.prepare("PRAGMA table_info('agent_messages')").all()).not.toEqual(
         expect.arrayContaining([expect.objectContaining({ name: "v2_data_json" })]),
       );
-      expect(database.client.prepare("SELECT data_json FROM agent_messages WHERE sequence = 2").get()).toMatchObject({
+      expect(
+        database.client.prepare("SELECT data_json FROM agent_messages WHERE sequence = 2").get(),
+      ).toMatchObject({
         data_json: expect.stringContaining("repaired"),
       });
     } finally {

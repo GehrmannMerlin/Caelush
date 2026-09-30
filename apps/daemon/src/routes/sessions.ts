@@ -5,19 +5,25 @@ import {
   SessionListResponseSchema,
   SessionTranscriptQuerySchema,
   SessionTranscriptResponseSchema,
+  UpdateSessionModelSelectionRequestSchema,
   type CreateSessionRequest,
   type SessionListQuery,
   type SessionTranscriptQuery,
+  type UpdateSessionModelSelectionRequest,
 } from "@caelush/protocol";
 import type { FastifyInstance } from "fastify";
 import { SessionService } from "../services/session-service.js";
 import { SessionTranscriptService } from "../services/session-transcript-service.js";
 import { toClientAgentSession } from "../services/public-projection.js";
+import { AIConfigurationService } from "../services/ai-configuration-service.js";
 
 export function registerSessionRoutes(
   app: FastifyInstance,
   service: SessionService,
-  dependencies: { readonly transcript?: SessionTranscriptService } = {},
+  dependencies: {
+    readonly transcript?: SessionTranscriptService;
+    readonly aiConfiguration?: AIConfigurationService;
+  } = {},
 ): void {
   app.post(
     "/api/v1/sessions",
@@ -38,6 +44,26 @@ export function registerSessionRoutes(
       return { items: (await service.listSessions(query.limit)).map(toClientAgentSession) };
     },
   );
+
+  if (dependencies.aiConfiguration !== undefined) {
+    app.put(
+      "/api/v1/sessions/:sessionId/model-selection",
+      {
+        schema: {
+          body: UpdateSessionModelSelectionRequestSchema,
+          response: { 200: ClientAgentSessionSchema },
+        },
+      },
+      async (request) => {
+        const { sessionId } = request.params as { sessionId: string };
+        const updated = await dependencies.aiConfiguration!.updateSessionSelection(
+          sessionId as never,
+          request.body as UpdateSessionModelSelectionRequest,
+        );
+        return toClientAgentSession(updated);
+      },
+    );
+  }
 
   app.get(
     "/api/v1/sessions/:sessionId",

@@ -13,6 +13,10 @@ import type {
   ModelDescriptorSourcePort,
 } from "@caelush/ai";
 import type { DaemonModelProviderConfig } from "./model-canonicalizer.js";
+import {
+  createRuntimeProviderCredentialResolver,
+  type RuntimeProviderCredentialAuthority,
+} from "./credential-authority.js";
 
 /**
  * The transitional legacy-AI configuration adapter.
@@ -36,7 +40,10 @@ export const LEGACY_FALLBACK_CONTEXT_WINDOW_TOKENS = 16_000;
 export const LEGACY_FALLBACK_MAX_OUTPUT_TOKENS = 4_096;
 
 /** Project one legacy provider configuration onto an AI provider binding. */
-export function toAIProviderBinding(config: DaemonModelProviderConfig): AIProviderBinding {
+export function toAIProviderBinding(
+  config: DaemonModelProviderConfig,
+  credentials: RuntimeProviderCredentialAuthority,
+): AIProviderBinding {
   return {
     id: config.provider,
     endpoint: config.baseUrl,
@@ -46,7 +53,7 @@ export function toAIProviderBinding(config: DaemonModelProviderConfig): AIProvid
     // allowlist restricted it, so a legacy deployment keeps exactly that behaviour.
     allowUnknownModels: true,
     credentials: {
-      resolve: () => Promise.resolve(config.apiKey === undefined ? {} : { apiKey: config.apiKey }),
+      ...createRuntimeProviderCredentialResolver(credentials, config.provider),
     },
     ...(config.headers === undefined ? {} : { headers: config.headers }),
     ...(config.queryParams === undefined ? {} : { queryParams: config.queryParams }),

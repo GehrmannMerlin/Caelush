@@ -5,6 +5,7 @@ import { SessionIdSchema } from "./primitives/ids.js";
 import { TimestampMsSchema } from "./primitives/time.js";
 import { WorkspaceRefSchema } from "./workspace.js";
 import { WorkspaceIdSchema } from "./primitives/ids.js";
+import { ReasoningLevelSchema } from "./api/model-selection.js";
 
 export const AgentSessionSchema = z
   .object({
@@ -13,6 +14,7 @@ export const AgentSessionSchema = z
     title: z.string().min(1).optional(),
     defaultWorkspace: WorkspaceRefSchema.optional(),
     defaultModel: ModelRefSchema.optional(),
+    defaultReasoningLevel: ReasoningLevelSchema.optional(),
     createdAt: TimestampMsSchema,
     updatedAt: TimestampMsSchema,
     metadata: JsonObjectSchema,

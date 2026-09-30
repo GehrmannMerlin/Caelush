@@ -78,7 +78,11 @@ describe("daemon production composition", () => {
     expect(composition.toolRegistry).not.toHaveProperty("modelGuidance");
     // Phase 2C: provider authority is the AI subsystem registry, not a legacy registry.
     expect(composition.ai.providers.list().map((provider) => provider.id)).toEqual([
+      "anthropic",
+      "deepseek",
+      "openai",
       "openai-compatible",
+      "openrouter",
     ]);
     // The legacy environment value states no per-model profile, so the catalog holds
     // no enumerable descriptor set; a fallback source describes whatever ref it is

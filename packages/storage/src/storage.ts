@@ -74,9 +74,19 @@ import {
   SqliteWorkspaceRepository,
   type WorkspaceRepository,
 } from "./repositories/workspace-repository.js";
+import {
+  SqliteProviderCredentialRepository,
+  type ProviderCredentialRepository,
+} from "./repositories/provider-credential-repository.js";
+import {
+  SqliteAISelectionRepository,
+  type AISelectionRepository,
+} from "./repositories/ai-selection-repository.js";
 
 export interface CaelushStorage {
   readonly workspaces: WorkspaceRepository;
+  readonly providerCredentials: ProviderCredentialRepository;
+  readonly aiSelections: AISelectionRepository;
   readonly sessions: SessionRepository;
   readonly runs: RunRepository;
   readonly steps: StepRepository;
@@ -128,6 +138,8 @@ export async function openCaelushStorage(options: {
     const eventStore = new SqliteDurableEventStore(database);
     return {
       workspaces: new SqliteWorkspaceRepository(database),
+      providerCredentials: new SqliteProviderCredentialRepository(database),
+      aiSelections: new SqliteAISelectionRepository(database),
       sessions: new SqliteSessionRepository(database),
       runs: new SqliteRunRepository(database),
       steps: new SqliteStepRepository(database),

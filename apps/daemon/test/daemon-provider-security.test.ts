@@ -70,7 +70,7 @@ describe("daemon provider and public model boundary", () => {
 
     const baseRun = {
       goal: "inspect",
-      workspace: { id: createWorkspaceId(), path: directory },
+      workspace: session.defaultWorkspace ?? { id: createWorkspaceId(), path: directory },
       runtime: { id: "local", kind: "local" as const },
       permissionProfile: "PROJECT_ACCESS" as const,
       approvalPolicy: "NEVER_ASK" as const,

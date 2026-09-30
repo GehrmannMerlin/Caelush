@@ -3,6 +3,7 @@ import {
   createSessionId,
   type AgentSession,
   type CreateSessionRequest,
+  type ClientModelSelectionWithReasoning,
   type ModelRef,
   type SessionId,
 } from "@caelush/protocol";
@@ -12,6 +13,7 @@ import type { DaemonModelCanonicalizer } from "../providers/model-canonicalizer.
 import { canonicalizeWorkspacePath } from "../workspaces/workspace-identity.js";
 import { WorkspaceOwnershipError } from "../workspaces/workspace-errors.js";
 import type { WorkspaceService } from "../workspaces/workspace-service.js";
+import { ModelSelectionError } from "../providers/model-directory.js";
 
 export interface SessionServiceOptions {
   readonly repository: SessionRepository;
@@ -19,6 +21,12 @@ export interface SessionServiceOptions {
   readonly createId?: typeof createSessionId;
   readonly modelCanonicalizer?: DaemonModelCanonicalizer;
   readonly workspaceService?: WorkspaceService;
+  readonly defaultSelection?: () => Promise<ClientModelSelectionWithReasoning | undefined>;
+  readonly validateSelection?: (selection: {
+    readonly provider: string;
+    readonly model: string;
+    readonly reasoningLevel?: import("@caelush/protocol").ReasoningLevel;
+  }) => Promise<void>;
 }
 
 export class SessionService {
@@ -50,7 +58,9 @@ export class SessionService {
             throw new WorkspaceOwnershipError("The requested Workspace path is invalid.");
           }
           if (defaultWorkspace.id !== canonicalRef.id || requestedPath !== canonicalRef.path) {
-            throw new WorkspaceOwnershipError("The requested Workspace does not match the Registry.");
+            throw new WorkspaceOwnershipError(
+              "The requested Workspace does not match the Registry.",
+            );
           }
         }
         defaultWorkspace = canonicalRef;
@@ -64,14 +74,37 @@ export class SessionService {
         throw new WorkspaceOwnershipError();
       }
     }
+    let defaultModel = input.defaultModel;
+    let defaultReasoningLevel = input.defaultReasoningLevel;
+    if (defaultModel === undefined && defaultReasoningLevel !== undefined) {
+      throw new ModelSelectionError(
+        "MODEL_UNAVAILABLE",
+        "A reasoning level requires a selected model.",
+      );
+    }
+    if (defaultModel === undefined && this.options.defaultSelection !== undefined) {
+      const selection = await this.options.defaultSelection();
+      if (selection !== undefined) {
+        defaultModel = { provider: selection.provider, model: selection.model };
+        defaultReasoningLevel = selection.reasoningLevel;
+      }
+    }
+    if (defaultModel !== undefined && this.options.validateSelection !== undefined) {
+      await this.options.validateSelection({
+        provider: defaultModel.provider,
+        model: defaultModel.model,
+        ...(defaultReasoningLevel === undefined ? {} : { reasoningLevel: defaultReasoningLevel }),
+      });
+    }
     const session = AgentSessionSchema.parse({
       id: this.createId(),
       ...(workspaceId === undefined ? {} : { workspaceId }),
       ...(input.title === undefined ? {} : { title: input.title }),
       ...(defaultWorkspace === undefined ? {} : { defaultWorkspace }),
-      ...(input.defaultModel === undefined
+      ...(defaultModel === undefined
         ? {}
-        : { defaultModel: this.modelCanonicalizer.canonicalize(input.defaultModel) }),
+        : { defaultModel: this.modelCanonicalizer.canonicalize(defaultModel) }),
+      ...(defaultReasoningLevel === undefined ? {} : { defaultReasoningLevel }),
       createdAt: timestamp,
       updatedAt: timestamp,
       metadata: input.metadata ?? {},

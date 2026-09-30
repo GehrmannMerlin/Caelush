@@ -1,5 +1,15 @@
 export { openCaelushStorage } from "./storage.js";
 export type { CaelushStorage } from "./storage.js";
+export {
+  SqliteProviderCredentialRepository,
+  type ProviderCredentialRepository,
+  type ProviderCredentialSource,
+  type ProviderCredentialStatus,
+} from "./repositories/provider-credential-repository.js";
+export {
+  SqliteAISelectionRepository,
+  type AISelectionRepository,
+} from "./repositories/ai-selection-repository.js";
 export { getCaelushMigrationsFolder, migrateCaelushDatabase } from "./migrate.js";
 export {
   BudgetLedgerInvariantError,

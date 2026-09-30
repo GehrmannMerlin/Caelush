@@ -13,6 +13,7 @@ import {
   FolderKanban,
   FolderOpen,
   Plus,
+  Settings,
   X,
 } from "lucide-react";
 import { derivePromptTitle } from "../application/prompt.js";
@@ -34,6 +35,7 @@ export interface WorkspaceSidebarProps {
   readonly onSelectSession: (workspaceId: WorkspaceId, sessionId: SessionId) => void;
   readonly onAddWorkspace: () => void;
   readonly onForgetWorkspace: (workspaceId: WorkspaceId) => void;
+  readonly onOpenSettings?: () => void;
 }
 
 export function WorkspaceSidebar(props: WorkspaceSidebarProps): ReactElement {
@@ -77,6 +79,20 @@ export function WorkspaceSidebar(props: WorkspaceSidebarProps): ReactElement {
       "ol",
       { className: "workspace-list" },
       props.workspaces.map((workspace) => renderWorkspace(props, workspace)),
+    ),
+    createElement(
+      "div",
+      { className: "workspace-sidebar-footer" },
+      createElement(
+        "button",
+        {
+          type: "button",
+          className: "workspace-settings-button",
+          onClick: () => props.onOpenSettings?.(),
+        },
+        createElement(Settings, { size: 16, strokeWidth: 2.1, "aria-hidden": true }),
+        createElement("span", null, "设置"),
+      ),
     ),
   );
 }

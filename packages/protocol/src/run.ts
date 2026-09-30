@@ -8,6 +8,7 @@ import { RunLimitsSchema } from "./limits.js";
 import { RunResourcePolicySchema } from "./resource-policy.js";
 import { RuntimeRefSchema } from "./runtime.js";
 import { WorkspaceRefSchema } from "./workspace.js";
+import { ReasoningLevelSchema } from "./api/model-selection.js";
 
 export const RunStatusSchema = z.enum([
   "PENDING",
@@ -32,6 +33,7 @@ export const AgentRunSchema = z
     status: RunStatusSchema,
     workspace: WorkspaceRefSchema,
     model: ModelRefSchema,
+    reasoningLevel: ReasoningLevelSchema.optional(),
     runtime: RuntimeRefSchema,
     permissionProfile: PermissionProfileSchema,
     approvalPolicy: ApprovalPolicySchema,

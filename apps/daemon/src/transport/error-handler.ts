@@ -22,6 +22,8 @@ import { DaemonModelConfigurationError } from "../providers/model-canonicalizer.
 import { EventCursorAheadError } from "../events/run-event-hub.js";
 import { WorkspacePathError } from "../workspaces/workspace-identity.js";
 import { ActiveRunConflictError, WorkspaceOwnershipError } from "../workspaces/workspace-errors.js";
+import { EnvironmentCredentialReadOnlyError } from "../providers/credential-authority.js";
+import { ModelDiscoveryError, ModelSelectionError } from "../providers/model-directory.js";
 
 export class InvalidEventCursorError extends Error {
   constructor() {
@@ -65,7 +67,8 @@ function clientErrorStatus(error: unknown): number | undefined {
   if (!isRecord(error)) return undefined;
   const statusCode = error.statusCode;
   if (typeof statusCode !== "number" || !Number.isInteger(statusCode)) return undefined;
-  if (statusCode < CLIENT_ERROR_STATUS_MIN || statusCode > CLIENT_ERROR_STATUS_MAX) return undefined;
+  if (statusCode < CLIENT_ERROR_STATUS_MIN || statusCode > CLIENT_ERROR_STATUS_MAX)
+    return undefined;
   return statusCode;
 }
 
@@ -92,7 +95,11 @@ function mapError(error: unknown): MappedError {
     };
   }
   if (error instanceof WorkspaceOwnershipError) {
-    return { statusCode: 400, code: "INVALID_REQUEST", message: "The Workspace ownership is invalid." };
+    return {
+      statusCode: 400,
+      code: "INVALID_REQUEST",
+      message: "The Workspace ownership is invalid.",
+    };
   }
   if (error instanceof ActiveRunConflictError) {
     return {
@@ -144,6 +151,31 @@ function mapError(error: unknown): MappedError {
       code: "MODEL_PROVIDER_UNAVAILABLE",
       message: "The requested model provider or model is unavailable.",
     };
+  }
+  if (error instanceof EnvironmentCredentialReadOnlyError) {
+    return {
+      statusCode: 409,
+      code: "ENVIRONMENT_CREDENTIAL_READ_ONLY",
+      message: "This provider credential is supplied by the environment and is read-only.",
+    };
+  }
+  if (error instanceof ModelDiscoveryError) {
+    if (error.code === "AI_AUTHENTICATION") {
+      return { statusCode: 401, code: "AI_AUTHENTICATION", message: error.message };
+    }
+    return { statusCode: 502, code: "AI_PROVIDER_UNAVAILABLE", message: error.message };
+  }
+  if (error instanceof ModelSelectionError) {
+    switch (error.kind) {
+      case "PROVIDER_UNAVAILABLE":
+        return { statusCode: 409, code: "MODEL_PROVIDER_UNAVAILABLE", message: error.message };
+      case "REASONING_UNSUPPORTED":
+        return { statusCode: 409, code: "AI_REASONING_UNSUPPORTED", message: error.message };
+      case "NO_MODEL_SELECTED":
+        return { statusCode: 409, code: "NO_MODEL_SELECTED", message: error.message };
+      case "MODEL_UNAVAILABLE":
+        return { statusCode: 409, code: "AI_MODEL_UNAVAILABLE", message: error.message };
+    }
   }
   if (
     error instanceof RunControllerBusyError ||

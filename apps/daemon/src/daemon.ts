@@ -29,6 +29,7 @@ import {
   type StartupReconciliationSummary,
 } from "./execution/run-startup-reconciliation.js";
 import { SessionTranscriptService } from "./services/session-transcript-service.js";
+import { AIConfigurationService } from "./services/ai-configuration-service.js";
 import type { DaemonModelProviderConfig } from "./providers/model-canonicalizer.js";
 import type { WebStaticHostOptions } from "./web/static-host.js";
 import type { SubscriberQueuePolicy } from "./events/subscriber-queue.js";
@@ -52,6 +53,7 @@ export interface DaemonOptions {
   readonly logger?: boolean;
   readonly providers?: readonly DaemonModelProviderConfig[];
   readonly defaultModel?: ClientModelSelection;
+  readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly providerBindings?: readonly AIProviderBinding[];
   readonly modelSources?: readonly ModelDescriptorSourcePort[];
   readonly adapterOverrides?: readonly ApiAdapter[];
@@ -179,6 +181,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       runtime,
       ...(options.providers === undefined ? {} : { providers: options.providers }),
       ...(options.defaultModel === undefined ? {} : { defaultModel: options.defaultModel }),
+      ...(options.environment === undefined ? {} : { environment: options.environment }),
       ...(options.providerBindings === undefined
         ? {}
         : { providerBindings: options.providerBindings }),
@@ -207,6 +210,24 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     throw error;
   }
   const activeStreams = new Set<AbortController>();
+  const aiConfiguration = new AIConfigurationService({
+    presets: composition.providerPresets,
+    compatibilityProviderIds: new Set(options.providerBindings?.map((binding) => binding.id)),
+    credentials: composition.credentialAuthority,
+    directory: composition.modelDirectory,
+    selections: storage.aiSelections,
+    sessions: storage.sessions,
+    modelCanonicalizer: composition.modelCanonicalizer,
+  });
+  // Migrate an explicitly configured legacy startup default into the durable
+  // preference authority once. Runtime Web changes then read/write SQLite and
+  // no longer depend on the DaemonInfo compatibility snapshot.
+  if (
+    options.defaultModel !== undefined &&
+    (await storage.aiSelections.getDefault()) === undefined
+  ) {
+    await storage.aiSelections.setDefault(options.defaultModel);
+  }
   let app: Awaited<ReturnType<typeof buildDaemonApp>>;
   try {
     if (composition.eventHub === undefined) {
@@ -225,6 +246,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       execution: composition,
       info: composition.info,
       modelCanonicalizer: composition.modelCanonicalizer,
+      aiConfiguration,
       transcript: new SessionTranscriptService({
         sessions: storage.sessions,
         runs: storage.runs,

@@ -16,6 +16,29 @@ export const workspaces = sqliteTable(
   ],
 );
 
+/**
+ * The local credential authority's private record.
+ *
+ * This table is intentionally not a Protocol entity and is never encoded into a
+ * model, Session, Run, Event or public DTO. Runtime code may resolve the secret
+ * through the repository's narrow `resolve` method, while `describe` only returns
+ * safe connection state.
+ */
+export const aiProviderCredentials = sqliteTable("ai_provider_credentials", {
+  providerId: text("provider_id").primaryKey(),
+  secretValue: text("secret_value").notNull(),
+  createdAtMs: integer("created_at_ms").notNull(),
+  updatedAtMs: integer("updated_at_ms").notNull(),
+});
+
+export const aiDefaultSelections = sqliteTable("ai_default_selections", {
+  id: text("id").primaryKey(),
+  providerId: text("provider_id").notNull(),
+  modelId: text("model_id").notNull(),
+  reasoningLevel: text("reasoning_level"),
+  updatedAtMs: integer("updated_at_ms").notNull(),
+});
+
 export const agentSessions = sqliteTable("agent_sessions", {
   id: text("id").primaryKey(),
   protocolVersion: integer("protocol_version").notNull(),
@@ -458,6 +481,8 @@ export const verificationEvidence = sqliteTable(
 
 export const storageSchema = {
   workspaces,
+  aiProviderCredentials,
+  aiDefaultSelections,
   agentSessions,
   agentRuns,
   runCancellationRequests,

@@ -70,6 +70,35 @@ export type {
   DaemonCompositionOptions,
 } from "./daemon-composition.js";
 export {
+  EnvironmentCredentialReadOnlyError,
+  createRuntimeProviderCredentialAuthority,
+  createRuntimeProviderCredentialResolver,
+} from "./providers/credential-authority.js";
+export type {
+  RuntimeProviderCredentialAuthority,
+  RuntimeProviderCredentialAuthorityOptions,
+  RuntimeProviderCredentialStatus,
+} from "./providers/credential-authority.js";
+export {
+  ProviderPresetRegistry,
+  createProviderPresetRegistry,
+  listBuiltinProviderPresets,
+  toProviderPresetBinding,
+} from "./providers/provider-presets.js";
+export type {
+  ProviderCredentialTransport,
+  ProviderDiscoveryDialect,
+  ProviderPreset,
+} from "./providers/provider-presets.js";
+export {
+  ModelDiscoveryError,
+  ModelSelectionError,
+  RuntimeModelDirectoryService,
+} from "./providers/model-directory.js";
+export type { RuntimeModelDirectoryServiceOptions } from "./providers/model-directory.js";
+export { AIConfigurationService } from "./services/ai-configuration-service.js";
+export type { AIConfigurationServiceOptions } from "./services/ai-configuration-service.js";
+export {
   CatalogModelCanonicalizer,
   DaemonModelConfigurationError,
   toClientModelSelection,
