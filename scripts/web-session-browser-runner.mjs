@@ -66,7 +66,7 @@ const assertViewportSplitLayout = async () => {
       sidebarOverflowY: sidebarStyle.overflowY,
       sidebarBackgroundImage: sidebarStyle.backgroundImage,
       sessionOverflowY: sessionScrollStyle.overflowY,
-      columnOverflow: columnStyle.overflow,
+      columnOverflowY: columnStyle.overflowY,
       addWorkspaceButtonWidth: addWorkspaceButton.getBoundingClientRect().width,
       workspaceCardWidth: workspaceCard.getBoundingClientRect().width,
       addWorkspaceButtonTextAlign: addWorkspaceButtonStyle.textAlign,
@@ -80,8 +80,10 @@ const assertViewportSplitLayout = async () => {
     throw new Error("page-level vertical scroll leaked outside the panels");
   if (layout.sidebarPosition !== "fixed") throw new Error("sidebar is not fixed");
   if (layout.sidebarOverflowY !== "auto") throw new Error("sidebar does not own vertical scroll");
-  if (layout.sessionOverflowY !== "auto") throw new Error("session does not own vertical scroll");
-  if (layout.columnOverflow !== "hidden") throw new Error("workspace column leaks scroll");
+  if (layout.sessionOverflowY !== "visible")
+    throw new Error("session scroll region should defer vertical scroll to the workspace rail");
+  if (layout.columnOverflowY !== "auto")
+    throw new Error("workspace column does not own the primary vertical scroll");
   if (layout.sidebarBackgroundImage !== "none") throw new Error("sidebar uses a gradient");
   if (Math.abs(layout.addWorkspaceButtonWidth - layout.workspaceCardWidth) > 1)
     throw new Error(
@@ -105,7 +107,8 @@ const postJson = async (path, payload) => {
 
 try {
   await page.goto(url, { waitUntil: "domcontentloaded" });
-  await waitVisible(page.locator("#session-workspace-title"));
+  await waitVisible(page.locator(".workspace-sidebar"));
+  await waitVisible(page.locator(".session-scroll"));
   await assertViewportSplitLayout();
   await startNewSession();
   const composer = page.locator("textarea.prompt-input");

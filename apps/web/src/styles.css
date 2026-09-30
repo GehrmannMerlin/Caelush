@@ -4519,7 +4519,7 @@ details:focus-visible {
   }
 }
 
-/* Final viewport split overrides. Keep the two scroll regions independent. */
+/* Final viewport split overrides. Keep the primary rail and nested detail scroll regions independent. */
 html,
 body,
 #root {
@@ -4666,7 +4666,12 @@ body {
   min-height: 0;
   margin-left: var(--web-sidebar-width);
   flex-direction: column;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-color: var(--web-line-strong) transparent;
+  scrollbar-width: thin;
   background: #fff;
 }
 
@@ -4679,11 +4684,11 @@ body {
 .session-workspace {
   display: flex;
   width: 100%;
-  height: 100%;
-  min-height: 0;
-  flex: 1 1 auto;
+  height: auto;
+  min-height: 100dvh;
+  flex: 0 0 auto;
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
   margin: 0;
   padding: 28px 0 12px;
 }
@@ -4702,16 +4707,14 @@ body {
 
 .session-scroll {
   display: flex;
-  min-height: 0;
-  flex: 1 1 auto;
+  min-height: auto;
+  flex: 0 0 auto;
   flex-direction: column;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable;
+  overflow-x: visible;
+  overflow-y: visible;
+  overscroll-behavior: auto;
+  scrollbar-gutter: auto;
   padding: 26px 0 20px;
-  scrollbar-color: var(--web-line-strong) transparent;
-  scrollbar-width: thin;
 }
 
 .conversation-history {
@@ -4719,9 +4722,9 @@ body {
 }
 
 .prompt-composer {
-  position: relative;
+  position: sticky;
   right: auto;
-  bottom: auto;
+  bottom: 0;
   z-index: 5;
   flex: 0 0 auto;
   padding: 16px 0 14px;
@@ -4812,7 +4815,8 @@ body {
     width: 100%;
     height: 100%;
     margin-left: 0;
-    overflow: hidden;
+    overflow-x: hidden;
+    overflow-y: auto;
   }
 
   .workspace-notices,
@@ -4827,7 +4831,8 @@ body {
   }
 
   .session-scroll {
-    overflow-y: auto;
+    overflow-x: visible;
+    overflow-y: visible;
     padding-top: 22px;
   }
 }
@@ -4999,7 +5004,10 @@ body {
 
 /* Give a pristine session a quiet branded landing state without hiding active context. */
 .session-workspace--empty .session-scroll {
-  overflow-y: auto;
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: visible;
   padding-top: 0;
   padding-bottom: 0;
 }

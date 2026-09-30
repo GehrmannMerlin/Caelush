@@ -24,13 +24,31 @@ describe("responsive workspace layout", () => {
     expect(appSource).toContain('className: "sidebar-toggle-button"');
   });
 
-  it("locks the app shell to the viewport and gives each panel its own scroll boundary", () => {
+  it("locks the app shell to the viewport and gives each panel its intended scroll boundary", () => {
     expect(lastCssRule(".web-app-shell")).toMatch(/height:\s*100dvh/);
     expect(lastCssRule(".web-app-shell")).toContain("overflow: hidden");
     expect(lastCssRule(".workspace-sidebar")).toContain("position: fixed");
     expect(lastCssRule(".workspace-sidebar")).toContain("overflow-y: auto");
-    expect(lastCssRule(".workspace-column")).toContain("overflow: hidden");
-    expect(lastCssRule(".session-scroll")).toContain("overflow-y: auto");
+    expect(lastCssRule(".workspace-column")).toContain("overflow-y: auto");
+    expect(lastCssRule(".session-scroll")).toContain("overflow: visible");
+  });
+
+  it("puts the primary conversation scrollbar on the workspace edge", () => {
+    const viewportOverrides = styles.slice(styles.lastIndexOf("/* Final viewport split overrides"));
+
+    expect(viewportOverrides).toMatch(
+      /\.workspace-column\s*\{[\s\S]*?overflow-x:\s*hidden;[\s\S]*?overflow-y:\s*auto;[\s\S]*?scrollbar-gutter:\s*stable;/,
+    );
+    expect(viewportOverrides).toMatch(
+      /\.session-scroll\s*\{[\s\S]*?overflow-x:\s*visible;[\s\S]*?overflow-y:\s*visible;/,
+    );
+    expect(viewportOverrides).toMatch(
+      /\.prompt-composer\s*\{[\s\S]*?position:\s*sticky;[\s\S]*?bottom:\s*0;/,
+    );
+    const mobileSessionScrollRule = viewportOverrides.slice(
+      viewportOverrides.lastIndexOf(".session-scroll {"),
+    );
+    expect(mobileSessionScrollRule).not.toContain("overflow-y: auto");
   });
 
   it("keeps sidebar labels high-contrast and makes the add-workspace action full width", () => {
