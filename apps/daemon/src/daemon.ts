@@ -29,6 +29,7 @@ import {
   type StartupReconciliationSummary,
 } from "./execution/run-startup-reconciliation.js";
 import { SessionTranscriptService } from "./services/session-transcript-service.js";
+import { SessionPresentationService } from "./services/session-presentation-service.js";
 import { AIConfigurationService } from "./services/ai-configuration-service.js";
 import type { DaemonModelProviderConfig } from "./providers/model-canonicalizer.js";
 import type { WebStaticHostOptions } from "./web/static-host.js";
@@ -253,6 +254,16 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         messageRecords: storage.messageRecords,
         codecs: composition.messages.codecs,
         transcriptProjectors: composition.transcriptProjectors,
+      }),
+      presentation: new SessionPresentationService({
+        sessions: storage.sessions,
+        runs: storage.runs,
+        messageRecords: storage.messageRecords,
+        codecs: composition.messages.codecs,
+        toolInvocations: storage.toolInvocations,
+        observations: storage.observations,
+        eventReader: storage.eventReader,
+        toolPresentation: composition.toolPresentation,
       }),
       ...(options.logger === undefined ? {} : { logger: options.logger }),
       ...(options.web === undefined ? {} : { web: options.web }),

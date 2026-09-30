@@ -62,6 +62,7 @@ import type {
   ContextContributionRegistration,
   ContextUsageSnapshot,
   RunEventNotifierPort,
+  ToolPresentationPort,
 } from "@caelush/agent";
 import type {
   AISubsystem,
@@ -347,6 +348,8 @@ export interface DaemonComposition {
    * value because they are one pipeline, and exactly one of each exists per daemon.
    */
   readonly toolTurn: ToolTurnPipeline;
+  /** Safe Chinese presentation shared by durable and live Tool surfaces. */
+  readonly toolPresentation: ToolPresentationPort;
   readonly messages: RunMessageAuthority;
   readonly transcriptProjectors: import("@caelush/agent").AgentMessageTranscriptProjectorRegistry;
   readonly contextUsage: {
@@ -1038,6 +1041,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       approvals: true,
       sseReplay: true,
       sessionTranscript: true,
+      sessionTurnPresentation: true,
     },
     runtimeKinds: ["local"],
     // Compatibility snapshot only. Dynamic provider connection state belongs to
@@ -1065,6 +1069,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     verificationModelTurns,
     toolRegistry: activeToolRegistry,
     toolTurn,
+    toolPresentation: toolSecurity.presentation,
     messages,
     transcriptProjectors,
     contextUsage: {

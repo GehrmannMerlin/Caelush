@@ -15,6 +15,7 @@ import { registerHealthRoute } from "./routes/health.js";
 import { registerSessionRoutes } from "./routes/sessions.js";
 import { SessionService } from "./services/session-service.js";
 import { SessionTranscriptService } from "./services/session-transcript-service.js";
+import { SessionPresentationService } from "./services/session-presentation-service.js";
 import { registerRunRoutes } from "./routes/runs.js";
 import { RunService } from "./services/run-service.js";
 import { registerEventStreamRoute } from "./routes/events.js";
@@ -44,6 +45,7 @@ export interface DaemonDependencies {
   readonly info?: DaemonInfo;
   readonly modelCanonicalizer?: DaemonModelCanonicalizer;
   readonly transcript?: SessionTranscriptService;
+  readonly presentation?: SessionPresentationService;
   readonly logger?: boolean;
   readonly web?: WebStaticHostOptions;
   readonly aiConfiguration?: AIConfigurationService;
@@ -85,6 +87,7 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
   });
   registerSessionRoutes(app, sessionService, {
     ...(dependencies.transcript === undefined ? {} : { transcript: dependencies.transcript }),
+    ...(dependencies.presentation === undefined ? {} : { presentation: dependencies.presentation }),
     ...(dependencies.aiConfiguration === undefined
       ? {}
       : { aiConfiguration: dependencies.aiConfiguration }),

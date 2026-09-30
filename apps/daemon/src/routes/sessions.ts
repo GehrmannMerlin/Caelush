@@ -3,17 +3,21 @@ import {
   CreateSessionRequestSchema,
   SessionListQuerySchema,
   SessionListResponseSchema,
+  SessionTurnPresentationQuerySchema,
+  SessionTurnPresentationResponseSchema,
   SessionTranscriptQuerySchema,
   SessionTranscriptResponseSchema,
   UpdateSessionModelSelectionRequestSchema,
   type CreateSessionRequest,
   type SessionListQuery,
+  type SessionTurnPresentationQuery,
   type SessionTranscriptQuery,
   type UpdateSessionModelSelectionRequest,
 } from "@caelush/protocol";
 import type { FastifyInstance } from "fastify";
 import { SessionService } from "../services/session-service.js";
 import { SessionTranscriptService } from "../services/session-transcript-service.js";
+import { SessionPresentationService } from "../services/session-presentation-service.js";
 import { toClientAgentSession } from "../services/public-projection.js";
 import { AIConfigurationService } from "../services/ai-configuration-service.js";
 
@@ -22,6 +26,7 @@ export function registerSessionRoutes(
   service: SessionService,
   dependencies: {
     readonly transcript?: SessionTranscriptService;
+    readonly presentation?: SessionPresentationService;
     readonly aiConfiguration?: AIConfigurationService;
   } = {},
 ): void {
@@ -87,6 +92,23 @@ export function registerSessionRoutes(
         const { sessionId } = request.params as { sessionId: string };
         const query = request.query as SessionTranscriptQuery;
         return dependencies.transcript!.getTranscript(sessionId as never, query);
+      },
+    );
+  }
+
+  if (dependencies.presentation !== undefined) {
+    app.get(
+      "/api/v1/sessions/:sessionId/presentation",
+      {
+        schema: {
+          querystring: SessionTurnPresentationQuerySchema,
+          response: { 200: SessionTurnPresentationResponseSchema },
+        },
+      },
+      async (request) => {
+        const { sessionId } = request.params as { sessionId: string };
+        const query = request.query as SessionTurnPresentationQuery;
+        return dependencies.presentation!.getPresentation(sessionId as never, query);
       },
     );
   }

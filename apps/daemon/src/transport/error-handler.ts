@@ -24,6 +24,7 @@ import { WorkspacePathError } from "../workspaces/workspace-identity.js";
 import { ActiveRunConflictError, WorkspaceOwnershipError } from "../workspaces/workspace-errors.js";
 import { EnvironmentCredentialReadOnlyError } from "../providers/credential-authority.js";
 import { ModelDiscoveryError, ModelSelectionError } from "../providers/model-directory.js";
+import { SessionPresentationCursorError } from "../services/session-presentation-service.js";
 
 export class InvalidEventCursorError extends Error {
   constructor() {
@@ -116,6 +117,13 @@ function mapError(error: unknown): MappedError {
       statusCode: 400,
       code: "INVALID_EVENT_CURSOR",
       message: "The event cursor is invalid.",
+    };
+  }
+  if (error instanceof SessionPresentationCursorError) {
+    return {
+      statusCode: 400,
+      code: "INVALID_REQUEST",
+      message: "The session presentation cursor is invalid.",
     };
   }
   if (error instanceof EventCursorAheadError) {
