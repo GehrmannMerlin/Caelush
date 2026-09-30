@@ -33,6 +33,7 @@ export class LocalGitRunner implements GitRunner {
             GIT_SEQUENCE_EDITOR: ":",
           },
           stdio: ["ignore", "pipe", "pipe"],
+          windowsHide: true,
         });
       } catch {
         reject(new RuntimeGitError("GIT_UNAVAILABLE"));

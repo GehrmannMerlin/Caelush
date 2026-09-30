@@ -136,7 +136,7 @@ describe("daemon discovery", () => {
     expect(spawn).toHaveBeenCalledWith(
       process.execPath,
       ["C:/bundle/daemon/dist/main.js"],
-      expect.objectContaining({ detached: true }),
+      expect.objectContaining({ detached: true, windowsHide: true }),
     );
     expect(child.unref).toHaveBeenCalledOnce();
     const lockPath = join(root, "run", "daemon-start.lock", "metadata.json");

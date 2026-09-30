@@ -225,6 +225,7 @@ async function spawnDetachedDaemon(input: {
   try {
     const spawnOptions: SpawnOptions = {
       detached: true,
+      windowsHide: true,
       stdio: ["ignore", logFd, logFd],
       env: { ...input.environment },
     };

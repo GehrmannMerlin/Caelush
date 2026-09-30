@@ -126,6 +126,7 @@ export async function createPipeProcessAdapter(
       cwd: options.cwd,
       env: { ...options.env },
       shell: false,
+      windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
     });
   } catch (error) {

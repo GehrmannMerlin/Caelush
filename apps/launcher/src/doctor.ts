@@ -204,7 +204,9 @@ export function formatDoctorReport(result: DoctorResult): string {
 async function defaultExecutableCheck(executable: "git" | "rg"): Promise<boolean> {
   const { execFile } = await import("node:child_process");
   return new Promise((resolve) => {
-    execFile(executable, ["--version"], { shell: false }, (error) => resolve(error === null));
+    execFile(executable, ["--version"], { shell: false, windowsHide: true }, (error) =>
+      resolve(error === null),
+    );
   });
 }
 

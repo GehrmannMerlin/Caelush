@@ -71,7 +71,12 @@ function openUrlInBrowser(url: string): void {
         : "xdg-open";
   const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
   try {
-    const child = spawn(command, args, { detached: true, shell: false, stdio: "ignore" });
+    const child = spawn(command, args, {
+      detached: true,
+      shell: false,
+      stdio: "ignore",
+      windowsHide: true,
+    });
     child.on("error", () => undefined);
     child.unref();
   } catch {
