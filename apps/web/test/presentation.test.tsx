@@ -9,6 +9,7 @@ import { SettingsSurface } from "../src/components/settings-surface.js";
 import { createInitialTimelineState, type SessionCandidate } from "@caelush/client";
 import type { ProviderView } from "@caelush/protocol";
 import { SessionWorkspace } from "../src/components/session-workspace.js";
+import { hasScrollableSessionContent } from "../src/app.js";
 
 const workspace: WorkspaceRef = {
   id: createWorkspaceId(),
@@ -16,6 +17,30 @@ const workspace: WorkspaceRef = {
 };
 
 describe("Web presentation", () => {
+  it("locks the workspace rail until a session has visible conversation content", () => {
+    expect(
+      hasScrollableSessionContent({
+        history: [],
+        turnPresentation: undefined,
+        activeRun: undefined,
+        activeRuns: [],
+        approvalState: undefined,
+        controlMode: "NONE",
+      }),
+    ).toBe(false);
+
+    expect(
+      hasScrollableSessionContent({
+        history: [{ id: "history-1", kind: "USER", text: "检查项目" }],
+        turnPresentation: undefined,
+        activeRun: undefined,
+        activeRuns: [],
+        approvalState: undefined,
+        controlMode: "NONE",
+      }),
+    ).toBe(true);
+  });
+
   it("maps keyboard input so Enter submits and Shift+Enter stays multiline", () => {
     expect(shouldSubmitPrompt({ key: "Enter", shiftKey: false })).toBe(true);
     expect(shouldSubmitPrompt({ key: "Enter", shiftKey: true })).toBe(false);

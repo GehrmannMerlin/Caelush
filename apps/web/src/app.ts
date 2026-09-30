@@ -370,6 +370,10 @@ function renderWorkspaceApp(input: {
         : "选择一个会话";
   const composerInteractionDisabled = shouldDisableComposerInteraction(snapshot);
   const hasWorkspace = selectedWorkspace !== undefined && input.sessionManager !== undefined;
+  const workspaceColumnClass =
+    hasWorkspace && hasScrollableSessionContent(snapshot)
+      ? "workspace-column"
+      : "workspace-column workspace-column--static";
   const modelSelection = snapshot.modelSelection ?? snapshot.defaultSelection;
   const modelReady =
     modelSelection !== undefined &&
@@ -423,7 +427,7 @@ function renderWorkspaceApp(input: {
       }),
       createElement(
         "div",
-        { className: "workspace-column" },
+        { className: workspaceColumnClass },
         input.workspaceActionError === undefined
           ? null
           : createElement(
@@ -527,6 +531,21 @@ export function shouldDisableComposerInteraction(
     snapshot.controlMode === "CANCELLING" ||
     snapshot.controlMode === "RECOVERY_PICKER" ||
     snapshot.controlMode === "PENDING_RUN_CONFIRMATION"
+  );
+}
+
+export function hasScrollableSessionContent(
+  snapshot: Pick<
+    WebSessionSnapshot,
+    "history" | "turnPresentation" | "activeRun" | "activeRuns" | "approvalState" | "controlMode"
+  >,
+): boolean {
+  return (
+    snapshot.history.length > 0 ||
+    (snapshot.turnPresentation?.items.length ?? 0) > 0 ||
+    snapshot.activeRun !== undefined ||
+    snapshot.activeRuns.length > 0 ||
+    (snapshot.approvalState?.requests.length ?? 0) > 0
   );
 }
 

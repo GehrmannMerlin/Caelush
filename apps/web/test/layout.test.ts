@@ -51,6 +51,36 @@ describe("responsive workspace layout", () => {
     expect(mobileSessionScrollRule).not.toContain("overflow-y: auto");
   });
 
+  it("locks the viewport rail for pristine sessions without removing the rail for active content", () => {
+    const viewportOverrides = styles.slice(styles.lastIndexOf("/* Final viewport split overrides"));
+
+    expect(appSource).toContain("workspace-column workspace-column--static");
+    expect(viewportOverrides).toMatch(
+      /\.workspace-column--static\s*\{[\s\S]*?overflow-y:\s*hidden;[\s\S]*?scrollbar-gutter:\s*auto;/,
+    );
+    expect(viewportOverrides).toContain(".workspace-notices:empty");
+    expect(viewportOverrides).toMatch(/\.workspace-notices:empty\s*\{[\s\S]*?display:\s*none;/);
+  });
+
+  it("keeps the composer anchored to the viewport after content grows", () => {
+    const viewportOverrides = styles.slice(styles.lastIndexOf("/* Final viewport split overrides"));
+
+    expect(viewportOverrides).toMatch(
+      /\.prompt-composer\s*\{[\s\S]*?position:\s*sticky;[\s\S]*?bottom:\s*0;[\s\S]*?margin-top:\s*auto;/,
+    );
+  });
+
+  it("renders the execution feed inline and leaves the page as its scroll owner", () => {
+    const inlineFeedOverrides = styles.slice(styles.lastIndexOf("/* Inline execution feed"));
+
+    expect(inlineFeedOverrides).toMatch(
+      /\.turn-presentation-process\s*\{[\s\S]*?border:\s*0;[\s\S]*?background:\s*transparent;[\s\S]*?box-shadow:\s*none;/,
+    );
+    expect(inlineFeedOverrides).toMatch(
+      /\.turn-presentation-body\s*\{[\s\S]*?max-height:\s*none;[\s\S]*?overflow:\s*visible;/,
+    );
+  });
+
   it("keeps sidebar labels high-contrast and makes the add-workspace action full width", () => {
     expect(lastCssRule(".workspace-sidebar")).toContain("color: #111827");
     expect(lastCssRule(".workspace-add-button")).toContain("width: 100%");

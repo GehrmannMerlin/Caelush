@@ -5012,6 +5012,47 @@ body {
   padding-bottom: 0;
 }
 
+/* Keep the empty landing state fixed while preserving the right-edge rail for real turns. */
+.workspace-column--static {
+  overflow-y: hidden;
+  scrollbar-gutter: auto;
+}
+
+.workspace-notices:empty {
+  display: none;
+}
+
+/* The composer stays at the viewport floor when the conversation is shorter than the screen. */
+.prompt-composer {
+  margin-top: auto;
+}
+
+/* Inline execution feed: the page owns scrolling, while the details element remains collapsible. */
+.turn-presentation-feed {
+  width: 100%;
+  margin: 0;
+}
+
+.turn-presentation-process {
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.turn-presentation-summary {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--web-line);
+}
+
+.turn-presentation-body {
+  max-height: none;
+  overflow: visible;
+  padding: 12px 0 4px;
+  border-top: 0;
+}
+
 .session-workspace--empty .conversation-history--empty {
   display: flex;
   min-height: 0;
