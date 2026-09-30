@@ -63,6 +63,30 @@ export type {
 export { HealthResponseSchema } from "./health.js";
 export type { HealthResponse } from "./health.js";
 export {
+  AssistantPresentationItemSchema,
+  PresentationSafeFactSchema,
+  RunPresentationSummaryItemSchema,
+  SessionTurnPresentationQuerySchema,
+  SessionTurnPresentationResponseSchema,
+  ToolPresentationItemSchema,
+  TurnPresentationItemSchema,
+  TurnPresentationItemStatusSchema,
+  UserPresentationItemSchema,
+  VerificationPresentationItemSchema,
+} from "./session-presentation.js";
+export type {
+  AssistantPresentationItem,
+  PresentationSafeFact,
+  RunPresentationSummaryItem,
+  SessionTurnPresentationQuery,
+  SessionTurnPresentationResponse,
+  ToolPresentationItem,
+  TurnPresentationItem,
+  TurnPresentationItemStatus,
+  UserPresentationItem,
+  VerificationPresentationItem,
+} from "./session-presentation.js";
+export {
   AssistantMessagePhaseSchema,
   AssistantTranscriptEntrySchema,
   CustomTranscriptEntrySchema,

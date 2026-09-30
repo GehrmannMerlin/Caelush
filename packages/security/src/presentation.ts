@@ -11,7 +11,7 @@ import { CaelushToolResultSanitizer } from "./tool-result-sanitizer.js";
 
 const MAX_PRESENTATION_BYTES = 8 * 1024;
 const MAX_COMMAND_BYTES = 4 * 1024;
-const REDACTED_PATH = "[sensitive path]";
+const REDACTED_PATH = "[敏感路径]";
 
 export type TerminalOutputSanitizer = (value: string) => string;
 
@@ -20,16 +20,16 @@ export interface CaelushToolPresentationOptions {
 }
 
 const TOOL_LABELS: Readonly<Record<string, string>> = Object.freeze({
-  read_file: "Read file",
-  list_directory: "List directory",
-  find_files: "Find files",
-  search_text: "Search text",
-  apply_patch: "Edit files",
-  exec_command: "Run command",
-  write_stdin: "Interact with process",
-  stop_process: "Stop process",
-  git_status: "Check Git status",
-  git_diff: "Review Git diff",
+  read_file: "读取文件",
+  list_directory: "浏览目录",
+  find_files: "查找文件",
+  search_text: "搜索文本",
+  apply_patch: "编辑文件",
+  exec_command: "执行命令",
+  write_stdin: "与进程交互",
+  stop_process: "停止进程",
+  git_status: "查看 Git 状态",
+  git_diff: "查看 Git 差异",
 });
 
 export class CaelushToolPresentation implements ToolPresentationPort {
@@ -39,11 +39,11 @@ export class CaelushToolPresentation implements ToolPresentationPort {
 
   presentInvocation(input: { readonly invocation: ToolInvocation }): ToolInvocationPresentation {
     const { invocation } = input;
-    const title = TOOL_LABELS[invocation.toolName] ?? "Use tool";
+    const title = TOOL_LABELS[invocation.toolName] ?? "使用工具";
     try {
       return { title, summary: this.invocationSummary(invocation) };
     } catch {
-      return { title, summary: "Tool requested" };
+      return { title, summary: "请求使用工具" };
     }
   }
 
@@ -51,8 +51,8 @@ export class CaelushToolPresentation implements ToolPresentationPort {
     readonly invocation: ToolInvocation;
     readonly result?: AgentToolExecutionResult;
   }): ToolResultPresentation {
-    const title = TOOL_LABELS[input.invocation.toolName] ?? "Use tool";
-    if (input.result === undefined) return { title, summary: "Tool finished" };
+    const title = TOOL_LABELS[input.invocation.toolName] ?? "使用工具";
+    if (input.result === undefined) return { title, summary: "工具已完成" };
     try {
       const safe = this.resultSanitizer.sanitize({
         toolName: input.invocation.toolName,
@@ -71,8 +71,8 @@ export class CaelushToolPresentation implements ToolPresentationPort {
             stream: "stdout",
             chunk:
               input.invocation.toolName === "read_file"
-                ? "File content omitted from timeline."
-                : "Patch details omitted from timeline.",
+                ? "文件内容已从过程视图中省略。"
+                : "补丁详情已从过程视图中省略。",
           },
         };
       }
@@ -87,24 +87,24 @@ export class CaelushToolPresentation implements ToolPresentationPort {
         ...(chunk.length === 0 ? {} : { output: { stream: "stdout" as const, chunk } }),
       };
     } catch {
-      return { title, summary: "Tool result available" };
+      return { title, summary: "工具结果可用" };
     }
   }
 
   presentShellCommand(input: { readonly invocation: ToolInvocation }): string {
-    if (input.invocation.toolName !== "exec_command") return "Run command";
+    if (input.invocation.toolName !== "exec_command") return "执行命令";
     try {
       const command = input.invocation.args.cmd;
-      if (typeof command !== "string" || command.length === 0) return "Run command";
+      if (typeof command !== "string" || command.length === 0) return "执行命令";
       return (
         boundTerminal(
           redactText(command),
           MAX_COMMAND_BYTES,
           this.options.terminalOutputSanitizer,
-        ) || "Run command"
+        ) || "执行命令"
       );
     } catch {
-      return "Run command";
+      return "执行命令";
     }
   }
 
@@ -112,27 +112,27 @@ export class CaelushToolPresentation implements ToolPresentationPort {
     const args = invocation.args;
     switch (invocation.toolName) {
       case "read_file":
-        return `Read ${safePath(args.path)}`;
+        return `读取 ${safePath(args.path)}`;
       case "list_directory":
-        return `List ${safePath(args.path)}`;
+        return `浏览目录 ${safePath(args.path)}`;
       case "find_files":
-        return `Find files in ${safePath(args.path)}`;
+        return `在 ${safePath(args.path)} 中查找文件`;
       case "search_text":
-        return `Search ${safePath(args.path)}`;
+        return `搜索 ${safePath(args.path)}`;
       case "apply_patch":
-        return "Apply a verified workspace patch";
+        return "应用已验证的工作区补丁";
       case "exec_command":
         return this.presentShellCommand({ invocation });
       case "write_stdin":
-        return "Interact with a managed process";
+        return "与受控进程交互";
       case "stop_process":
-        return "Stop a managed process session";
+        return "停止受控进程会话";
       case "git_status":
-        return "Inspect workspace Git status";
+        return "查看工作区 Git 状态";
       case "git_diff":
-        return `Review Git diff${args.path === undefined ? "" : ` for ${safePath(args.path)}`}`;
+        return `查看 Git 差异${args.path === undefined ? "" : `：${safePath(args.path)}`}`;
       default:
-        return "Tool requested";
+        return "请求使用工具";
     }
   }
 
@@ -142,24 +142,24 @@ export class CaelushToolPresentation implements ToolPresentationPort {
       const path = safePath(args.path);
       const lines =
         typeof result.details.linesReturned === "number" ? result.details.linesReturned : undefined;
-      return lines === undefined ? `Read file ${path}` : `Read file ${path} (${lines} lines)`;
+      return lines === undefined ? `读取文件 ${path}` : `读取文件 ${path}（${lines} 行）`;
     }
     if (invocation.toolName === "apply_patch") {
       const changes = Array.isArray(result.details.changes)
         ? result.details.changes.length
         : undefined;
-      return changes === undefined ? "Patch applied" : `Patch applied (${changes} file changes)`;
+      return changes === undefined ? "补丁已应用" : `补丁已应用（修改 ${changes} 个文件）`;
     }
-    if (result.isError) return "Tool reported a recoverable error";
+    if (result.isError) return "工具报告可恢复错误";
     if (
       invocation.toolName === "exec_command" ||
       invocation.toolName === "write_stdin" ||
       invocation.toolName === "stop_process"
     ) {
       const status = result.details.status;
-      return typeof status === "string" ? `Process ${status.toLowerCase()}` : "Process result";
+      return typeof status === "string" ? `进程${translateProcessStatus(status)}` : "进程结果";
     }
-    return `${TOOL_LABELS[invocation.toolName] ?? "Tool"} completed`;
+    return `${TOOL_LABELS[invocation.toolName] ?? "工具"}已完成`;
   }
 }
 
@@ -174,11 +174,32 @@ function boundTerminal(value: string, maxBytes: number, sanitize: TerminalOutput
   const sanitized = sanitize(value);
   const bytes = Buffer.from(sanitized, "utf8");
   if (bytes.byteLength <= maxBytes) return sanitized;
-  const marker = "\n… output truncated …\n";
+  const marker = "\n… 输出过长，已截断 …\n";
   const markerBytes = Buffer.byteLength(marker, "utf8");
   const headBytes = Math.max(0, Math.floor((maxBytes - markerBytes) / 2));
   const tailBytes = Math.max(0, maxBytes - markerBytes - headBytes);
   return `${bytes.subarray(0, headBytes).toString("utf8")}${marker}${bytes
     .subarray(bytes.byteLength - tailBytes)
     .toString("utf8")}`;
+}
+
+function translateProcessStatus(status: string): string {
+  switch (status) {
+    case "REQUESTED":
+      return "已请求";
+    case "WAITING_APPROVAL":
+      return "等待批准";
+    case "WAITING_RESOURCE":
+      return "等待资源";
+    case "RUNNING":
+      return "运行中";
+    case "COMPLETED":
+      return "已完成";
+    case "FAILED":
+      return "失败";
+    case "CANCELLED":
+      return "已取消";
+    default:
+      return "状态未知";
+  }
 }

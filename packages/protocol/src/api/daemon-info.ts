@@ -28,6 +28,7 @@ const DaemonCapabilitiesSchema = z
     approvals: z.literal(true),
     sseReplay: z.literal(true),
     sessionTranscript: z.literal(true).optional(),
+    sessionTurnPresentation: z.literal(true).optional(),
   })
   .strict();
 

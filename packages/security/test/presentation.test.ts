@@ -54,7 +54,8 @@ describe("Security Tool presentation", () => {
       }),
     });
 
-    expect(value.title).toBe("Interact with process");
+    expect(value.title).toBe("与进程交互");
+    expect(value.summary).toContain("进程");
     expect(value.summary).not.toContain("real-value");
     expect(value.summary).not.toContain("password");
   });
@@ -71,9 +72,22 @@ describe("Security Tool presentation", () => {
       },
     });
 
-    expect(value.title).toBe("Read file");
-    expect(value.summary).toContain("Read file");
+    expect(value.title).toBe("读取文件");
+    expect(value.summary).toContain("读取文件");
     expect(value.output?.chunk).not.toContain("real-value");
     expect(Buffer.byteLength(value.output?.chunk ?? "", "utf8")).toBeLessThanOrEqual(8192);
+  });
+
+  it("uses Chinese system-owned Tool labels while preserving user commands and paths", () => {
+    const presentation = new CaelushToolPresentation({
+      terminalOutputSanitizer: identityTerminalSanitizer,
+    });
+    const value = presentation.presentInvocation({
+      invocation: invocation("read_file", { path: "src/index.ts" }),
+    });
+
+    expect(value.title).toBe("读取文件");
+    expect(value.summary).toContain("src/index.ts");
+    expect(value.summary).not.toContain("Read");
   });
 });
