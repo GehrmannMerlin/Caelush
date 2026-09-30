@@ -5,6 +5,7 @@ import {
   type ApprovalOptionKind,
   type ApprovalView,
 } from "@caelush/client";
+import { approvalRiskLabel } from "../presentation/status-labels.js";
 
 export interface ApprovalCardProps {
   readonly approval: ApprovalView;
@@ -36,7 +37,7 @@ export function ApprovalCard({ approval, onResolve }: ApprovalCardProps): ReactE
       "dl",
       { className: "approval-details" },
       createElement("dt", null, "风险"),
-      createElement("dd", null, approval.riskLevel),
+      createElement("dd", null, approvalRiskLabel(approval.riskLevel)),
       createElement("dt", null, "原因"),
       createElement("dd", null, approval.reason),
       createElement("dt", null, "动作"),

@@ -565,6 +565,7 @@ describe("Phase 2C package edges", () => {
         // recorded growth of one phase, not a relaxation of the rule.
         "AGENT_ASSISTANT_MESSAGE_AUDIENCE",
         "AGENT_ASSISTANT_MESSAGE_CODEC_V1",
+        "AGENT_ASSISTANT_MESSAGE_CODEC_V2",
         "AGENT_ASSISTANT_MESSAGE_PROJECTOR_V1",
         "AGENT_ATTACHMENT_MARKER_VERSION",
         "AGENT_CONTENT_PART_TYPES",

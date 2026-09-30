@@ -44,7 +44,7 @@ describe("Web control presentation", () => {
     );
 
     expect(html).toContain("需要审批");
-    expect(html).toContain("HIGH");
+    expect(html).toContain("高风险");
     expect(html).toContain("该动作会修改项目文件");
     expect(html).toContain("应用经过验证的补丁");
     expect(html).toContain("apply_patch");

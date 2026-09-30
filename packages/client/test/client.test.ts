@@ -80,6 +80,51 @@ describe("CaelushClient", () => {
     );
   });
 
+  it("loads the ordered Session Turn Presentation snapshot", async () => {
+    const runId = createRunId();
+    const requests: Request[] = [];
+    const client = new CaelushClient({
+      baseUrl: "http://daemon.test",
+      fetch: async (input, init) => {
+        requests.push(new Request(input, init));
+        return new Response(
+          JSON.stringify({
+            capabilityVersion: 1,
+            highWatermark: 4,
+            items: [
+              {
+                id: "assistant-1",
+                runId,
+                conversationTurnId: "turn-1",
+                ordinal: 0,
+                status: "COMPLETED",
+                createdAt: 1,
+                kind: "ASSISTANT",
+                phase: "COMMENTARY",
+                text: "先检查文件。",
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      },
+    });
+
+    await expect(
+      client.getSessionTurnPresentation("ses_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9b" as never, {
+        runId,
+        limit: 10,
+        cursor: "0",
+      }),
+    ).resolves.toMatchObject({
+      highWatermark: 4,
+      items: [{ kind: "ASSISTANT", phase: "COMMENTARY" }],
+    });
+    expect(requests[0]?.url).toBe(
+      `http://daemon.test/api/v1/sessions/ses_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9b/presentation?limit=10&runId=${encodeURIComponent(runId)}&cursor=0`,
+    );
+  });
+
   it("binds the ambient browser fetch before invoking it", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = function (this: typeof globalThis) {

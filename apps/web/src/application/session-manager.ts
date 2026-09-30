@@ -42,6 +42,8 @@ import type {
   RunStatus,
   SessionId,
   SessionTranscriptResponse,
+  SessionTurnPresentationResponse,
+  TurnPresentationItem,
   WorkspaceRef,
   WorkspaceSessionSummary,
   ContextUsageProjection,
@@ -78,6 +80,10 @@ export interface WebSessionClient extends SessionCandidateClient, WebHostClient 
     sessionId: SessionId,
     query?: { readonly limit?: number; readonly cursor?: string },
   ): Promise<SessionTranscriptResponse>;
+  getSessionTurnPresentation?(
+    sessionId: SessionId,
+    query?: { readonly runId?: RunId; readonly limit?: number; readonly cursor?: string },
+  ): Promise<SessionTurnPresentationResponse>;
   listPendingApprovals(
     runId: RunId,
   ): Promise<{ readonly items: readonly import("@caelush/protocol").ApprovalRequest[] }>;
@@ -137,6 +143,7 @@ export interface WebSessionSnapshot {
   readonly selectedSessionId?: SessionId;
   readonly runs: readonly ClientAgentRun[];
   readonly history: readonly TranscriptEntry[];
+  readonly turnPresentation?: SessionTurnPresentationResponse | undefined;
   readonly activeRuns: readonly ClientAgentRun[];
   readonly activeRun?: ClientAgentRun;
   readonly timeline: TimelineState;
@@ -209,6 +216,7 @@ export class WebSessionManager {
   private contextUsageRefreshGeneration = 0;
   private contextUsageRefreshTimer: TimerHandle | undefined;
   private contextUsageRefreshRunId: RunId | undefined;
+  private turnPresentationRefreshGeneration = 0;
   private disposed = false;
 
   constructor(
@@ -272,6 +280,7 @@ export class WebSessionManager {
       modelSelection: defaultSelection,
       runs: [],
       history: [],
+      turnPresentation: undefined,
       activeRuns: [],
       activeRun: undefined,
       timeline: createInitialTimelineState(),
@@ -310,6 +319,7 @@ export class WebSessionManager {
             selectedSessionId: candidate.session.id,
             runs,
             history: await this.loadSessionTranscript(sessionId),
+            turnPresentation: await this.loadSessionTurnPresentation(sessionId),
             activeRuns: [],
             activeRun: undefined,
             contextUsage: null,
@@ -329,6 +339,7 @@ export class WebSessionManager {
         selectedSessionId: candidate.session.id,
         runs: [],
         history: [],
+        turnPresentation: undefined,
         activeRuns: [],
         activeRun: undefined,
         timeline: createInitialTimelineState(),
@@ -410,11 +421,15 @@ export class WebSessionManager {
         kind: "USER",
         text: goal,
       };
+      const optimisticPresentation = optimisticPresentationUser(run, goal);
       this.publish({
         candidates: this.upsertCandidate(session, run),
         status: "READY",
         runs,
         history: await this.loadSessionTranscript(session.id, [optimisticUser]),
+        turnPresentation: await this.loadSessionTurnPresentation(session.id, [
+          optimisticPresentation,
+        ]),
         activeRuns: [run],
         activeRun: run,
         timeline: createInitialTimelineState(run.id),
@@ -805,6 +820,21 @@ export class WebSessionManager {
     throw new CaelushProtocolCompatibilityError();
   }
 
+  private async loadSessionTurnPresentation(
+    sessionId: SessionId,
+    optimistic: readonly TurnPresentationItem[] = [],
+  ): Promise<SessionTurnPresentationResponse | undefined> {
+    const getPresentation = this.options.client.getSessionTurnPresentation;
+    if (
+      this.options.info.capabilities.sessionTurnPresentation !== true ||
+      getPresentation === undefined
+    ) {
+      return undefined;
+    }
+    const response = await getPresentation.call(this.options.client, sessionId, { limit: 100 });
+    return reconcileTurnPresentation(response, optimistic);
+  }
+
   private async listWorkspaceSessionCandidates(): Promise<readonly SessionCandidate[]> {
     const listWorkspaceSessions = this.options.client.listWorkspaceSessions;
     if (listWorkspaceSessions === undefined) return [];
@@ -837,6 +867,7 @@ export class WebSessionManager {
       selectedSessionId: session.id,
       runs,
       history: await this.loadSessionTranscript(session.id),
+      turnPresentation: await this.loadSessionTurnPresentation(session.id),
       activeRuns,
       activeRun: activeRuns.length === 1 ? activeRuns[0] : undefined,
       timeline: createInitialTimelineState(activeRuns.length === 1 ? activeRuns[0]?.id : undefined),
@@ -943,6 +974,9 @@ export class WebSessionManager {
         const liveActivity = reduceLiveActivityEvent(this.snapshot.liveActivity, event);
         const timeline = reduceTimelineEvent(this.snapshot.timeline, event);
         this.publish({ timeline, liveActivity });
+        if (event.durability.kind === "DURABLE") {
+          void this.refreshTurnPresentation(active, generation);
+        }
         if (timeline.error !== undefined) {
           this.handleTerminalStreamError(active, generation);
           return;
@@ -987,6 +1021,34 @@ export class WebSessionManager {
     if (!recoverOnOpen || active.recoveryAdmitted || active.recoveryRevoked) return;
     active.recoveryAdmitted = true;
     void this.admitRecovery(active, generation);
+  }
+
+  private async refreshTurnPresentation(
+    active: ActiveLifecycle,
+    generation: number,
+  ): Promise<void> {
+    const getPresentation = this.options.client.getSessionTurnPresentation;
+    if (
+      getPresentation === undefined ||
+      this.options.info.capabilities.sessionTurnPresentation !== true
+    ) {
+      return;
+    }
+    try {
+      const refreshGeneration = ++this.turnPresentationRefreshGeneration;
+      const response = await getPresentation.call(this.options.client, active.run.sessionId, {
+        limit: 100,
+      });
+      if (
+        !this.isCurrentStream(active, generation) ||
+        refreshGeneration !== this.turnPresentationRefreshGeneration
+      )
+        return;
+      this.publish({ turnPresentation: response });
+    } catch {
+      // The durable timeline remains authoritative if the optional read-model refresh races a
+      // reconnect or an older daemon. It must never interrupt Run control.
+    }
   }
 
   private async admitRecovery(active: ActiveLifecycle, generation: number): Promise<void> {
@@ -1064,6 +1126,7 @@ export class WebSessionManager {
           run.sessionId,
           this.optimisticTranscriptEntries(),
         ),
+        turnPresentation: await this.loadSessionTurnPresentation(run.sessionId),
         activeRuns,
         activeRun,
         timeline:
@@ -1223,6 +1286,7 @@ export class WebSessionManager {
         : this.snapshot.candidates,
       runs,
       history: await this.loadSessionTranscript(run.sessionId, this.optimisticTranscriptEntries()),
+      turnPresentation: await this.loadSessionTurnPresentation(run.sessionId),
       activeRuns,
       activeRun,
       timeline:
@@ -1383,6 +1447,7 @@ function initialSnapshot(): WebSessionSnapshot {
     candidates: [],
     runs: [],
     history: [],
+    turnPresentation: undefined,
     activeRuns: [],
     timeline: createInitialTimelineState(),
     liveActivity: createInitialLiveActivityState(),
@@ -1393,6 +1458,41 @@ function initialSnapshot(): WebSessionSnapshot {
     transportState: "CONNECTED",
     controlMode: "NONE",
   };
+}
+
+function optimisticPresentationUser(run: ClientAgentRun, text: string): TurnPresentationItem {
+  return {
+    id: `optimistic:presentation:user:${run.id}`,
+    runId: run.id,
+    conversationTurnId: run.id,
+    ordinal: 0,
+    status: "COMPLETED",
+    createdAt: run.createdAt,
+    kind: "USER",
+    text,
+  };
+}
+
+function reconcileTurnPresentation(
+  response: SessionTurnPresentationResponse,
+  optimistic: readonly TurnPresentationItem[],
+): SessionTurnPresentationResponse {
+  if (optimistic.length === 0) return response;
+  const canonical = response.items;
+  const additions = optimistic.filter(
+    (candidate) =>
+      !canonical.some(
+        (item) =>
+          item.kind === candidate.kind &&
+          item.runId === candidate.runId &&
+          (item.kind !== "USER" || (candidate.kind === "USER" && item.text === candidate.text)),
+      ),
+  );
+  if (additions.length === 0) return response;
+  const items = [...canonical, ...additions]
+    .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))
+    .map((item, ordinal) => ({ ...item, ordinal }));
+  return { ...response, items };
 }
 
 const systemWebTimer: Timer = {

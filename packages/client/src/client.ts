@@ -23,6 +23,8 @@ import {
   SessionListResponseSchema,
   SessionTranscriptQuerySchema,
   SessionTranscriptResponseSchema,
+  SessionTurnPresentationQuerySchema,
+  SessionTurnPresentationResponseSchema,
   UpdateAISelectionRequestSchema,
   UpdateSessionModelSelectionRequestSchema,
   WorkspaceListResponseSchema,
@@ -55,6 +57,8 @@ import {
   type SessionListResponse,
   type SessionTranscriptQuery,
   type SessionTranscriptResponse,
+  type SessionTurnPresentationQuery,
+  type SessionTurnPresentationResponse,
   type UpdateAISelectionRequest,
   type UpdateSessionModelSelectionRequest,
   type WorkspaceId,
@@ -368,6 +372,24 @@ export class CaelushClient {
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/transcript?limit=${encodeURIComponent(String(parsed.limit))}${cursor}`,
       { method: "GET" },
       SessionTranscriptResponseSchema,
+      [200],
+      options,
+    );
+  }
+
+  async getSessionTurnPresentation(
+    sessionId: SessionId,
+    query: Partial<SessionTurnPresentationQuery> = {},
+    options: CaelushClientRequestOptions = {},
+  ): Promise<SessionTurnPresentationResponse> {
+    const parsed = SessionTurnPresentationQuerySchema.parse(query);
+    const runId = parsed.runId === undefined ? "" : `&runId=${encodeURIComponent(parsed.runId)}`;
+    const cursor =
+      parsed.cursor === undefined ? "" : `&cursor=${encodeURIComponent(parsed.cursor)}`;
+    return this.request(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/presentation?limit=${encodeURIComponent(String(parsed.limit))}${runId}${cursor}`,
+      { method: "GET" },
+      SessionTurnPresentationResponseSchema,
       [200],
       options,
     );

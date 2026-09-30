@@ -14,6 +14,7 @@ import {
   type DaemonInfo,
   type RunActionResponse,
   type SessionTranscriptResponse,
+  type SessionTurnPresentationResponse,
   type TranscriptEntry,
   type WorkspaceSessionSummary,
   type WorkspaceRef,
@@ -172,6 +173,47 @@ describe("WebSessionManager", () => {
 
     expect(client.getSessionTranscript).toHaveBeenCalled();
     expect(manager.getSnapshot().history).toEqual([durableUser]);
+    manager.dispose();
+  });
+
+  it("loads the ordered turn presentation when the daemon advertises the capability", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const run = makeCompletedRun(makeRun({ sessionId: session.id }));
+    const presentation: SessionTurnPresentationResponse = {
+      capabilityVersion: 1,
+      highWatermark: 4,
+      items: [
+        {
+          id: "presentation:assistant",
+          runId: run.id,
+          conversationTurnId: run.id,
+          ordinal: 0,
+          status: "COMPLETED",
+          createdAt: run.finishedAt ?? run.createdAt,
+          kind: "ASSISTANT",
+          phase: "FINAL_ANSWER",
+          text: "已完成检查。",
+        },
+      ],
+    };
+    const client = makeClient({
+      sessions: [session],
+      latestRuns: new Map([[session.id, [run]]]),
+      turnPresentationResponse: presentation,
+    });
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      info: makeInfo({
+        capabilities: { ...makeInfo().capabilities, sessionTurnPresentation: true },
+      }),
+    });
+
+    await manager.loadSessions();
+    await expect(manager.selectSession(session.id)).resolves.toBe(true);
+
+    expect(client.getSessionTurnPresentation).toHaveBeenCalledWith(session.id, { limit: 100 });
+    expect(manager.getSnapshot().turnPresentation).toEqual(presentation);
     manager.dispose();
   });
 
@@ -664,6 +706,7 @@ function makeClient(
     watchEvents?: readonly PublicRunEvent[];
     refreshedRuns?: readonly ClientAgentRun[];
     transcriptResponse?: SessionTranscriptResponse;
+    turnPresentationResponse?: SessionTurnPresentationResponse;
     contextUsage?: ContextUsageProjection | Promise<ContextUsageProjection | null> | null;
   } = {},
 ): WebSessionClient & {
@@ -672,6 +715,7 @@ function makeClient(
   readonly startRun: ReturnType<typeof vi.fn>;
   readonly getRun: ReturnType<typeof vi.fn>;
   readonly getSessionTranscript: ReturnType<typeof vi.fn>;
+  readonly getSessionTurnPresentation: ReturnType<typeof vi.fn>;
   readonly watchRunEvents: ReturnType<typeof vi.fn>;
   readonly watchEvents: readonly PublicRunEvent[];
   readonly getRunContextUsage: ReturnType<typeof vi.fn>;
@@ -698,6 +742,10 @@ function makeClient(
       async () => options.refreshedRuns?.at(-1) ?? options.createRunResult ?? makeRun(),
     ),
     getSessionTranscript: vi.fn(async () => options.transcriptResponse ?? { items: [] }),
+    getSessionTurnPresentation: vi.fn(
+      async () =>
+        options.turnPresentationResponse ?? { capabilityVersion: 1, items: [], highWatermark: 0 },
+    ),
     startRun: vi.fn(async (runId: string) =>
       actionResponse(options.createRunResult ?? makeRun(), runId),
     ),
@@ -714,6 +762,7 @@ function makeClient(
     readonly startRun: ReturnType<typeof vi.fn>;
     readonly getRun: ReturnType<typeof vi.fn>;
     readonly getSessionTranscript: ReturnType<typeof vi.fn>;
+    readonly getSessionTurnPresentation: ReturnType<typeof vi.fn>;
     readonly watchRunEvents: ReturnType<typeof vi.fn>;
     readonly watchEvents: readonly PublicRunEvent[];
     readonly getRunContextUsage: ReturnType<typeof vi.fn>;

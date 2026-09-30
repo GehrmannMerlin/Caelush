@@ -76,7 +76,7 @@ describe("Phase 5A codec — three standard codecs exist and declare their ident
     expect(AGENT_TOOL_RESULT_MESSAGE_CODEC_V1.type).toBe("TOOL_RESULT");
     for (const codec of STANDARD_AGENT_MESSAGE_CODECS) {
       expect(codec.currentVersion).toBe(codec.type === "ASSISTANT" ? 2 : 1);
-      expect(codec.canDecode(1)).toBe(codec.type === "ASSISTANT" || codec.type !== "ASSISTANT");
+      expect(codec.canDecode(1)).toBe(true);
       expect(codec.canDecode(2)).toBe(codec.type === "ASSISTANT");
       expect(codec.canDecode(0)).toBe(false);
     }
@@ -156,7 +156,8 @@ describe("Phase 5A codec — ASSISTANT round trip", () => {
   it("decodes canonical v1 data as UNKNOWN and refuses a malformed v2 phase", () => {
     const original = rawAssistantMessage([{ type: "TEXT", text: "legacy" }]);
     const v2Data = AGENT_ASSISTANT_MESSAGE_CODEC_V1.encode(original);
-    const { phase: _phase, ...v1Data } = v2Data as typeof v2Data & { phase: string };
+    const v1Data = { ...v2Data };
+    delete v1Data.phase;
     const decodedLegacy = AGENT_ASSISTANT_MESSAGE_CODEC_V1.decode(
       recordFor(original, v1Data, { schemaVersion: 1 }),
     );

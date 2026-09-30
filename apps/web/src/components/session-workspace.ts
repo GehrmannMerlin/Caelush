@@ -8,9 +8,11 @@ import {
 } from "@caelush/client";
 import type { ApprovalResolution, RunId } from "@caelush/protocol";
 import type { ApprovalView } from "@caelush/client";
+import type { SessionTurnPresentationResponse } from "@caelush/protocol";
 import type { WebControlMode } from "../application/session-manager.js";
 import { runStatusClass, runStatusLabel } from "./run-status.js";
 import { Timeline } from "./timeline.js";
+import { TurnPresentationFeed } from "./turn-presentation-feed.js";
 import { ApprovalCard } from "./approval-card.js";
 import { RecoveryPanel, type RecoveryRunView } from "./recovery-panel.js";
 import caelushLogo from "../assets/logo/caelush-logo.png";
@@ -19,6 +21,7 @@ export interface SessionWorkspaceProps {
   readonly title: string;
   readonly activeRun?: ClientAgentRun | undefined;
   readonly history: readonly TranscriptEntry[];
+  readonly turnPresentation?: SessionTurnPresentationResponse | undefined;
   readonly timeline: TimelineState;
   readonly liveActivity?: LiveActivityState;
   readonly composer: ReactElement;
@@ -37,6 +40,7 @@ export interface SessionWorkspaceProps {
 export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
   const isPristineSession =
     props.history.length === 0 &&
+    (props.turnPresentation?.items.length ?? 0) === 0 &&
     props.activeRun === undefined &&
     (props.approvals?.length ?? 0) === 0 &&
     !hasRecoveryControl(props);
@@ -93,51 +97,60 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
           className: `conversation-history${isPristineSession ? " conversation-history--empty" : ""}`,
           "aria-live": "polite",
         },
-        isPristineSession
-          ? createElement(
-              "div",
-              { className: "conversation-welcome" },
-              createElement("img", { src: caelushLogo, alt: "Caelush" }),
-              createElement("p", null, "保持对未知的探索热情"),
-            )
-          : props.history.map((entry) =>
-              createElement(
-                "article",
-                {
-                  className: `conversation-entry conversation-entry--${entry.kind.toLowerCase()}${
-                    entry.kind === "RUN_TERMINAL" ? " conversation-entry--report" : ""
-                  }`,
-                  key: entry.id,
-                },
-                entry.kind === "USER"
-                  ? null
-                  : createElement(
-                      "p",
-                      { className: "conversation-author" },
-                      historyAuthor(entry.kind),
-                    ),
+        props.turnPresentation !== undefined
+          ? createElement(TurnPresentationFeed, {
+              presentation: props.turnPresentation,
+              liveActivity: props.liveActivity,
+              timeline: props.timeline,
+              isActive: props.activeRun !== undefined && isActiveRun(props.activeRun.status),
+            })
+          : isPristineSession
+            ? createElement(
+                "div",
+                { className: "conversation-welcome" },
+                createElement("img", { src: caelushLogo, alt: "Caelush" }),
+                createElement("p", null, "保持对未知的探索热情"),
+              )
+            : props.history.map((entry) =>
                 createElement(
-                  "p",
+                  "article",
                   {
-                    className:
-                      entry.kind === "USER"
-                        ? "conversation-bubble conversation-bubble--user"
-                        : entry.kind === "RUN_TERMINAL"
-                          ? "conversation-text conversation-report-text"
-                          : "conversation-text",
+                    className: `conversation-entry conversation-entry--${entry.kind.toLowerCase()}${
+                      entry.kind === "RUN_TERMINAL" ? " conversation-entry--report" : ""
+                    }`,
+                    key: entry.id,
                   },
-                  entry.text,
+                  entry.kind === "USER"
+                    ? null
+                    : createElement(
+                        "p",
+                        { className: "conversation-author" },
+                        historyAuthor(entry.kind),
+                      ),
+                  createElement(
+                    "p",
+                    {
+                      className:
+                        entry.kind === "USER"
+                          ? "conversation-bubble conversation-bubble--user"
+                          : entry.kind === "RUN_TERMINAL"
+                            ? "conversation-text conversation-report-text"
+                            : "conversation-text",
+                    },
+                    entry.text,
+                  ),
                 ),
               ),
-            ),
       ),
-      props.history.length === 0 && props.activeRun === undefined
+      props.turnPresentation !== undefined
         ? null
-        : createElement(Timeline, {
-            timeline: props.timeline,
-            liveActivity: props.liveActivity,
-            isActive: props.activeRun !== undefined && isActiveRun(props.activeRun.status),
-          }),
+        : props.history.length === 0 && props.activeRun === undefined
+          ? null
+          : createElement(Timeline, {
+              timeline: props.timeline,
+              liveActivity: props.liveActivity,
+              isActive: props.activeRun !== undefined && isActiveRun(props.activeRun.status),
+            }),
       props.activeRun !== undefined &&
         (props.onCancel !== undefined || props.onContinueResource !== undefined)
         ? createElement(

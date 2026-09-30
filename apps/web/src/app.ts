@@ -47,6 +47,7 @@ const EMPTY_SESSION_SNAPSHOT: WebSessionSnapshot = {
   candidates: [],
   runs: [],
   history: [],
+  turnPresentation: undefined,
   activeRuns: [],
   timeline: createInitialTimelineState(),
   liveActivity: createInitialLiveActivityState(),
@@ -456,6 +457,7 @@ function renderWorkspaceApp(input: {
                 createdAt: run.createdAt,
               })),
               history: snapshot.history,
+              turnPresentation: snapshot.turnPresentation,
               timeline: snapshot.timeline,
               liveActivity: snapshot.liveActivity,
               composer: createElement(PromptComposer, {

@@ -351,6 +351,7 @@ describe("Phase 5A guard — package boundaries (freeze §150, §151)", () => {
       "apps/daemon/src/context/v2-context-composition.ts",
       "apps/daemon/src/services/session-conversation-context.ts",
       "apps/daemon/src/services/session-transcript-service.ts",
+      "apps/daemon/src/services/session-presentation-service.ts",
       "packages/agent/src/run/ports/run-execution-store.ts",
       "packages/core/src/run-agent-history.ts",
       "packages/core/src/run-message-materializer.ts",

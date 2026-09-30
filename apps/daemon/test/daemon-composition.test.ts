@@ -100,6 +100,7 @@ describe("daemon production composition", () => {
         cancellation: true,
         approvals: true,
         sessionTranscript: true,
+        sessionTurnPresentation: true,
         sseReplay: true,
       },
       runtimeKinds: ["local"],

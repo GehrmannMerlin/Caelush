@@ -219,8 +219,8 @@ export function Timeline(props: TimelineProps): ReactElement {
                     createElement(
                       "li",
                       { key: activity.id },
-                      `${liveActivityLabel(activity.kind)}: ${activity.text}${
-                        activity.status === "SETTLED" ? " · 已收敛" : ""
+                      `${liveActivityLabel(activity.kind)}：${activity.text}${
+                        activity.status === "SETTLED" ? " · 已完成" : ""
                       }`,
                     ),
                   ),
@@ -365,7 +365,7 @@ function planStatusLabel(status: TimelineState["currentPlan"][number]["status"])
 function liveActivityLabel(kind: LiveActivityState["activities"][number]["kind"]): string {
   switch (kind) {
     case "MODEL_TEXT":
-      return "回答";
+      return "助手输出";
     case "MODEL_REASONING":
       return "推理摘要";
     case "MODEL_TOOL_CALL":

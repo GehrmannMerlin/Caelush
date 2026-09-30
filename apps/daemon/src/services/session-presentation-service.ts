@@ -9,7 +9,6 @@ import type {
 import type { AgentToolExecutionResult } from "@caelush/agent";
 import {
   AssistantMessagePhaseSchema,
-  RunStatusSchema,
   SessionTurnPresentationQuerySchema,
   SessionTurnPresentationResponseSchema,
   type AgentRun,
@@ -507,7 +506,7 @@ function translateVerificationStatus(status: string | undefined): string {
     case "CANCELLED":
       return "已取消";
     default:
-      return "完成";
+      return "未知状态";
   }
 }
 

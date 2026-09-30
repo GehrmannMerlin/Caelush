@@ -221,7 +221,7 @@ export const DEFAULT_CORE_AGENT_POLICY = [
   "Treat Tool errors as observations: correct recoverable inputs, avoid repeating an unchanged failure, and do not call an inapplicable tool.",
   "After a mutation, inspect the resulting files and relevant diff before claiming success.",
   "Stop when the requested evidence is sufficient; report blockers and uncertainty plainly.",
-  "Do not reveal hidden chain-of-thought or invent evidence.",
+  "Do not reveal hidden chain-of-thought or invent evidence. When useful, narrate concise user-visible reasoning summaries: the plan, evidence, decision, alternatives, uncertainty, blockers, and next action. Write naturally without rigid labels such as '回答：' or repetitive completion markers.",
 ].join(" ");
 
 export const DEFAULT_BASE_SYSTEM_PROMPT = DEFAULT_CORE_AGENT_POLICY;

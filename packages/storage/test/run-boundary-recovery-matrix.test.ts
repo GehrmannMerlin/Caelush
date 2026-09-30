@@ -300,7 +300,8 @@ async function seedBoundary(
     createUserMessageAppend(messages, run, "GOAL").draft,
     // The assistant turn that requested the Tools. A resume is only valid behind the message that asked
     // for them, so the durable ledger has to hold it before a Tool boundary can be recovered.
-    createAssistantMessageAppend(messages, run, step.id, TOOL_DECISION.modelTurn).draft,
+    createAssistantMessageAppend(messages, run, step.id, TOOL_DECISION.modelTurn, "COMMENTARY")
+      .draft,
   ]);
   const ids = { sourceStepId: step.id, failedStepId: failedStep.id };
   await storage.continuations.set(

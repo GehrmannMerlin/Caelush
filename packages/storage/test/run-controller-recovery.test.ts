@@ -234,22 +234,28 @@ describe("RunController recovery", () => {
     const messages = testRunMessageAuthority();
     await storage.messageRecords.append(pending.id, [
       createUserMessageAppend(messages, pending, "GOAL").draft,
-      createAssistantMessageAppend(messages, pending, step.id, {
-        callId: createLLMCallId(),
-        model: pending.model,
-        finishReason: "TOOL_CALLS",
-        assistantMessage: {
-          role: "assistant",
-          content: [
-            {
-              type: "tool-call",
-              toolCallId: "call_a",
-              toolName: "read_file",
-              input: { path: "a" },
-            },
-          ],
+      createAssistantMessageAppend(
+        messages,
+        pending,
+        step.id,
+        {
+          callId: createLLMCallId(),
+          model: pending.model,
+          finishReason: "TOOL_CALLS",
+          assistantMessage: {
+            role: "assistant",
+            content: [
+              {
+                type: "tool-call",
+                toolCallId: "call_a",
+                toolName: "read_file",
+                input: { path: "a" },
+              },
+            ],
+          },
         },
-      }).draft,
+        "COMMENTARY",
+      ).draft,
     ]);
     await storage.continuations.set(
       pending.id,

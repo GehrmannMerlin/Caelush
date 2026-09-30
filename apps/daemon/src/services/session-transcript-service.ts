@@ -139,7 +139,15 @@ function terminalEntry(run: AgentRun) {
     status: run.status,
     text:
       run.status === "COMPLETED"
-        ? "Run completed without a verified final result."
-        : `Run ended with status ${run.status}.`,
+        ? "任务已完成，但没有可验证的最终答复。"
+        : run.status === "CANCELLED"
+          ? "任务已取消。"
+          : run.status === "TIMEOUT"
+            ? "任务因超时结束。"
+            : run.status === "MAX_STEPS_REACHED"
+              ? "任务达到最大步骤数后结束。"
+              : run.status === "BUDGET_EXCEEDED"
+                ? "任务因资源预算耗尽结束。"
+                : "任务执行失败。",
   };
 }

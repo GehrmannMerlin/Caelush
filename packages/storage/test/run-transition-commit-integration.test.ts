@@ -191,7 +191,7 @@ async function commitPlanned(
       ? {
           ...planned,
           messagesToAppend: [
-            createAssistantMessageAppend(messages, run, STEP_ID, MODEL_TURN as never),
+            createAssistantMessageAppend(messages, run, STEP_ID, MODEL_TURN as never, "COMMENTARY"),
           ],
         }
       : planned;

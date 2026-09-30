@@ -162,12 +162,18 @@ describe("SqliteRunExecutionStore canonical/durable compatibility", () => {
         },
       ],
       messagesToAppend: [
-        createAssistantMessageAppend(messages, run, step.id, {
-          callId: CALL_ID as never,
-          model: run.model,
-          finishReason: "STOP",
-          assistantMessage: { role: "assistant", content: [{ type: "text", text: "done" }] },
-        }),
+        createAssistantMessageAppend(
+          messages,
+          run,
+          step.id,
+          {
+            callId: CALL_ID as never,
+            model: run.model,
+            finishReason: "STOP",
+            assistantMessage: { role: "assistant", content: [{ type: "text", text: "done" }] },
+          },
+          "FINAL_ANSWER",
+        ),
       ],
       events: [event(run.id, session.id, 120)],
     });
@@ -192,12 +198,18 @@ describe("SqliteRunExecutionStore canonical/durable compatibility", () => {
       stepWrites: [{ operation: "INSERT", step }],
       messagesToAppend: [
         createUserMessageAppend(messages, run, "GOAL"),
-        createAssistantMessageAppend(messages, run, step.id, {
-          callId: CALL_ID as never,
-          model: run.model,
-          finishReason: "TOOL_CALLS",
-          assistantMessage: assistant,
-        }),
+        createAssistantMessageAppend(
+          messages,
+          run,
+          step.id,
+          {
+            callId: CALL_ID as never,
+            model: run.model,
+            finishReason: "TOOL_CALLS",
+            assistantMessage: assistant,
+          },
+          "COMMENTARY",
+        ),
         createExternalToolResultMessageAppend(
           messages,
           run,

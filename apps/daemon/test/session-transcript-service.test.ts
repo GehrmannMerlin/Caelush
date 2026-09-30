@@ -124,7 +124,7 @@ describe("Phase 5E Session Transcript Service", () => {
     expect(response.items[1]).toMatchObject({
       id: `${runId}:transcript:terminal`,
       status: "COMPLETED",
-      text: "Run completed without a verified final result.",
+      text: "任务已完成，但没有可验证的最终答复。",
     });
   });
 
