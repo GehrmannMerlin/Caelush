@@ -8,6 +8,13 @@ import type {
 
 export const DEFAULT_PERMISSION_PRESET_ID: SelectablePermissionPresetId = "WORKSPACE_WRITE";
 
+const PERMISSION_PRESET_DISPLAY_NAMES: Readonly<Record<SelectablePermissionPresetId, string>> =
+  Object.freeze({
+    VIEW_ONLY: "仅可查看",
+    WORKSPACE_WRITE: "工作区内修改",
+    FULL_ACCESS: "完全权限",
+  });
+
 export type PermissionPresetAvailability = "AVAILABLE" | "PREPARATION_REQUIRED" | "UNAVAILABLE";
 
 export interface PermissionPresetViewModel {
@@ -21,6 +28,10 @@ export interface PermissionPresetViewModel {
   readonly sandboxEnforcement: "HARD" | "PARTIAL" | "NONE";
 }
 
+export function permissionPresetDisplayName(id: SelectablePermissionPresetId): string {
+  return PERMISSION_PRESET_DISPLAY_NAMES[id];
+}
+
 export function projectPermissionPresetViewModels(
   capabilities: SecurityCapabilitiesResponse,
   workspaceCapabilities: WorkspaceSecurityCapabilitiesResponse,
@@ -31,7 +42,7 @@ export function projectPermissionPresetViewModels(
     return Object.freeze({
       id: descriptor.id,
       version: descriptor.version,
-      displayName: descriptor.displayName,
+      displayName: permissionPresetDisplayName(descriptor.id),
       description: descriptor.description,
       status: availability?.status ?? "UNAVAILABLE",
       ...(availability?.reasonCode === undefined ? {} : { reasonCode: availability.reasonCode }),
@@ -46,15 +57,22 @@ export function choosePermissionPreset(
   presets: readonly PermissionPresetViewModel[],
   requestedId?: SelectablePermissionPresetId,
 ): PermissionPresetSelection | undefined {
-  const candidate = presets.find(
-    (preset) => preset.id === (requestedId ?? DEFAULT_PERMISSION_PRESET_ID),
+  const autoSelectable = presets.filter(
+    (preset) => preset.status === "AVAILABLE" && !preset.requiresConfirmation,
   );
-  if (candidate === undefined || candidate.status !== "AVAILABLE") return undefined;
+  const preferredIds = [requestedId, DEFAULT_PERMISSION_PRESET_ID].filter(
+    (id): id is SelectablePermissionPresetId => id !== undefined,
+  );
+  const candidate =
+    preferredIds
+      .map((id) => autoSelectable.find((preset) => preset.id === id))
+      .find((preset) => preset !== undefined) ?? autoSelectable[0];
+  if (candidate === undefined) return undefined;
   return { id: candidate.id, expectedVersion: candidate.version };
 }
 
 export function permissionPresetLabel(preset: PermissionPresetViewModel | undefined): string {
-  return preset?.displayName ?? "未选择权限";
+  return preset === undefined ? "未选择权限" : permissionPresetDisplayName(preset.id);
 }
 
 export function permissionPresetStatusLabel(preset: PermissionPresetViewModel): string {
