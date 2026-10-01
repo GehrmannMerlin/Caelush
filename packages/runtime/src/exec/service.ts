@@ -24,9 +24,12 @@ import {
 import { RuntimeExecError } from "./errors.js";
 import { LocalProcessManager } from "./process-manager.js";
 import { LocalShellResolver } from "./shell-resolver.js";
-import { RuntimePathTypeError } from "../runtime-errors.js";
+import { RuntimeAuthorizationError, RuntimePathTypeError } from "../runtime-errors.js";
 import { createAgentProcessEnvironment } from "./environment-policy.js";
-import { assertAuthorizedRuntimeExecution } from "../security/runtime-boundary.js";
+import {
+  assertAuthorizedRuntimeExecution,
+  type AuthorizedRuntimeExecution,
+} from "../security/runtime-boundary.js";
 
 export interface LocalRuntimeExecServiceOptions {
   readonly pathResolver: WorkspacePathResolver;
@@ -34,6 +37,8 @@ export interface LocalRuntimeExecServiceOptions {
   readonly shellResolver?: LocalShellResolver;
   readonly env?: NodeJS.ProcessEnv;
   readonly platform?: NodeJS.Platform;
+  readonly authorization?: AuthorizedRuntimeExecution;
+  readonly requireAuthorization?: boolean;
 }
 
 export class LocalRuntimeExecService implements RuntimeExecService {
@@ -49,6 +54,9 @@ export class LocalRuntimeExecService implements RuntimeExecService {
     validateCommand(request.command);
     const cwd = await this.resolveWorkdir(request.workdir);
     validateYield(request.yieldTimeMs);
+    if (this.options.requireAuthorization === true && this.options.authorization === undefined) {
+      throw new RuntimeAuthorizationError();
+    }
     return this.options.processManager.start({
       ...request,
       cwd,
@@ -57,6 +65,9 @@ export class LocalRuntimeExecService implements RuntimeExecService {
         request.tty,
       ),
       launch: this.shellResolver.resolve(request.command),
+      ...(this.options.authorization === undefined
+        ? {}
+        : { authorization: this.options.authorization }),
     });
   }
 
@@ -80,6 +91,9 @@ export class LocalRuntimeExecService implements RuntimeExecService {
     validateArgv(request.executable, request.args);
     const cwd = await this.resolveWorkdir(request.workdir);
     validateYield(request.yieldTimeMs);
+    if (this.options.requireAuthorization === true && this.options.authorization === undefined) {
+      throw new RuntimeAuthorizationError();
+    }
     return this.options.processManager.start({
       ownerRunId: request.ownerRunId,
       ...(request.signal === undefined ? {} : { signal: request.signal }),
@@ -93,6 +107,9 @@ export class LocalRuntimeExecService implements RuntimeExecService {
         false,
       ),
       launch: { executable: request.executable, args: [...request.args] },
+      ...(this.options.authorization === undefined
+        ? {}
+        : { authorization: this.options.authorization }),
     });
   }
 

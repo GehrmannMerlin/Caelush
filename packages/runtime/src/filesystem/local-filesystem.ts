@@ -28,11 +28,21 @@ function kind(stats: {
   return "OTHER";
 }
 
+function identity(stats: { readonly dev?: number; readonly ino?: number }): string | undefined {
+  if (typeof stats.dev !== "number" || typeof stats.ino !== "number") return undefined;
+  return `${stats.dev}:${stats.ino}`;
+}
+
 export class LocalRuntimeFileSystem implements RuntimeFileSystem {
   async getMetadata(absolutePath: string): Promise<RuntimeFileMetadata | null> {
     try {
       const stats = await lstat(absolutePath);
-      return { kind: kind(stats), ...(stats.isFile() ? { sizeBytes: stats.size } : {}) };
+      const fileIdentity = identity(stats);
+      return {
+        kind: kind(stats),
+        ...(stats.isFile() ? { sizeBytes: stats.size } : {}),
+        ...(fileIdentity === undefined ? {} : { identity: fileIdentity }),
+      };
     } catch (error) {
       if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
       throw new RuntimePathNotFoundError("path metadata could not be read", { cause: error });
@@ -59,7 +69,13 @@ export class LocalRuntimeFileSystem implements RuntimeFileSystem {
     } catch (error) {
       throw new RuntimeFileReadError("file fingerprint could not be read", { cause: error });
     }
-    return { kind: "FILE", sizeBytes: stats.size, sha256: hash.digest("hex") };
+    const fileIdentity = identity(stats);
+    return {
+      kind: "FILE",
+      sizeBytes: stats.size,
+      sha256: hash.digest("hex"),
+      ...(fileIdentity === undefined ? {} : { identity: fileIdentity }),
+    };
   }
 
   async realpath(absolutePath: string): Promise<string> {

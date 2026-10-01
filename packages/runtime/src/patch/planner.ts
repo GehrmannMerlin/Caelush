@@ -17,10 +17,11 @@ export interface PatchPreparationContext {
   readonly filesystem: PatchMutationFileSystem;
 }
 
-function version(bytes: Uint8Array): FileVersion {
+function version(bytes: Uint8Array, identity?: string): FileVersion {
   return {
     sha256: createHash("sha256").update(bytes).digest("hex"),
     sizeBytes: bytes.byteLength,
+    ...(identity === undefined ? {} : { identity }),
   };
 }
 
@@ -101,7 +102,7 @@ export async function preparePatch(
     }
 
     const source = await sourceFile(context.pathResolver, context.filesystem, operation.path);
-    const beforeVersion = version(source.bytes);
+    const beforeVersion = version(source.bytes, source.resolved.metadata?.identity);
     if (operation.kind === "DELETE") {
       const decoded = decodePatchText(operation.path, source.bytes);
       changes.push({

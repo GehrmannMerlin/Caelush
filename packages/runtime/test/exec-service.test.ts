@@ -141,4 +141,37 @@ describe("LocalRuntime exec service", () => {
       await rm(parent, { recursive: true, force: true });
     }
   });
+
+  it("fails closed when a policy-bound workspace has no process authorization", async () => {
+    const parent = await mkdtemp(path.join(os.tmpdir(), "caelush-exec-policy-bound-"));
+    let runtime: LocalRuntime | undefined;
+    try {
+      runtime = new LocalRuntime();
+      const workspaceId = createWorkspaceId();
+      const policy = createRuntimeProcessPolicy({
+        runId: "run_policy_bound" as never,
+        workspaceId,
+        workspaceRoot: parent,
+        filesystemBoundary: "HOST_USER_SCOPE",
+        processBoundary: "UNRESTRICTED",
+        requiredEnforcement: "HARD_SAFETY_ONLY",
+      });
+      const scope = await runtime.openWorkspace(
+        { id: workspaceId, path: parent },
+        { filesystemPolicy: policy.filesystem },
+      );
+
+      await expect(
+        scope.exec.execute({
+          ownerRunId: "run_policy_bound" as never,
+          command: `${process.execPath} -e "process.stdout.write('must-not-spawn')"`,
+          tty: false,
+          yieldTimeMs: 5000,
+        }),
+      ).rejects.toMatchObject({ code: "RUNTIME_AUTHORIZATION_REQUIRED" });
+    } finally {
+      await runtime?.dispose();
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
 });

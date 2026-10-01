@@ -1,8 +1,8 @@
 import fastGlob from "fast-glob";
-import { PROJECT_HARD_EXCLUDED_GLOBS } from "@caelush/shared";
 import { RuntimeDiscoveryError } from "../runtime-errors.js";
+import { RUNTIME_PROJECT_HARD_EXCLUDED_GLOBS } from "../project-exclusions.js";
 
-export const RUNTIME_PROJECT_HARD_EXCLUDED_GLOBS = PROJECT_HARD_EXCLUDED_GLOBS;
+export { RUNTIME_PROJECT_HARD_EXCLUDED_GLOBS } from "../project-exclusions.js";
 
 export interface RuntimeFileDiscoveryRequest {
   readonly cwd: string;
@@ -29,7 +29,7 @@ export class LocalRuntimeFileDiscovery implements RuntimeFileDiscovery {
         unique: true,
         absolute: false,
         dot: true,
-        ignore: PROJECT_HARD_EXCLUDED_GLOBS,
+        ignore: RUNTIME_PROJECT_HARD_EXCLUDED_GLOBS,
         suppressErrors: false,
         ...(request.limit < Number.MAX_SAFE_INTEGER ? { limit: request.limit + 1 } : {}),
       });

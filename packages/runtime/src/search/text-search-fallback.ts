@@ -3,7 +3,7 @@ import path from "node:path";
 import { TextDecoder } from "node:util";
 import fastGlob from "fast-glob";
 import { RuntimeSearchError } from "../runtime-errors.js";
-import { RUNTIME_PROJECT_HARD_EXCLUDED_GLOBS } from "../discovery/file-discovery.js";
+import { RUNTIME_PROJECT_HARD_EXCLUDED_GLOBS } from "../project-exclusions.js";
 import type {
   RuntimeTextSearch,
   RuntimeTextSearchRequest,
@@ -43,7 +43,12 @@ export class LocalTextSearchFallback implements RuntimeTextSearch {
       if (!isInside(root, absoluteFile)) {
         throw new RuntimeSearchError("fallback search returned a path outside its root");
       }
-      const read = await readBoundedText(absoluteFile, request.signal);
+      const target =
+        request.resolveTarget === undefined
+          ? { canonicalPath: absoluteFile, kind: "FILE" }
+          : await request.resolveTarget(absoluteFile);
+      if (target.kind !== "FILE") continue;
+      const read = await readBoundedText(target.canonicalPath, request.signal);
       truncated = truncated || read.truncated;
       if (read.text === undefined) continue;
       const lines = read.text.split(/\n/u);

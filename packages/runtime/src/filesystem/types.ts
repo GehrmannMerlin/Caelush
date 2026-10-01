@@ -3,12 +3,15 @@ export type RuntimeFileKind = "FILE" | "DIRECTORY" | "SYMLINK" | "OTHER" | "MISS
 export interface RuntimeFileMetadata {
   readonly kind: RuntimeFileKind;
   readonly sizeBytes?: number;
+  /** Stable lstat identity used to reject replacement races before mutation. */
+  readonly identity?: string;
 }
 
 export interface RuntimeFileFingerprint {
   readonly kind: RuntimeFileKind;
   readonly sizeBytes?: number;
   readonly sha256?: string;
+  readonly identity?: string;
 }
 
 export interface RuntimeDirectoryEntry {

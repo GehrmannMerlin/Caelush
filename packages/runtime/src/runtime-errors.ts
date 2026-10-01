@@ -2,6 +2,8 @@ export type RuntimeErrorCode =
   | "UNSUPPORTED_RUNTIME"
   | "WORKSPACE_ERROR"
   | "PATH_OUTSIDE_WORKSPACE"
+  | "FILESYSTEM_ACCESS_DENIED"
+  | "PROTECTED_ROOT_MUTATION"
   | "PATH_NOT_FOUND"
   | "SYMLINK_MUTATION_NOT_ALLOWED"
   | "PATH_TYPE_ERROR"
@@ -81,6 +83,18 @@ export class RuntimeWorkspaceError extends RuntimeError {
 export class RuntimeBoundaryError extends RuntimeError {
   constructor(message: string) {
     super("PATH_OUTSIDE_WORKSPACE", message);
+  }
+}
+
+export class RuntimeFilesystemAccessDeniedError extends RuntimeError {
+  constructor(message = "The active filesystem policy does not allow this operation.") {
+    super("FILESYSTEM_ACCESS_DENIED", message);
+  }
+}
+
+export class RuntimeProtectedRootMutationError extends RuntimeError {
+  constructor(message = "The target is a protected host root and cannot be mutated.") {
+    super("PROTECTED_ROOT_MUTATION", message);
   }
 }
 

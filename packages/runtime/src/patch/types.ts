@@ -40,6 +40,7 @@ export interface PatchDocument {
 export interface FileVersion {
   readonly sha256: string;
   readonly sizeBytes: number;
+  readonly identity?: string;
 }
 
 export interface PreparedChange {

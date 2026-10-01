@@ -4,6 +4,8 @@ export {
   RuntimeUnsupportedError,
   RuntimeWorkspaceError,
   RuntimeBoundaryError,
+  RuntimeFilesystemAccessDeniedError,
+  RuntimeProtectedRootMutationError,
   RuntimePathNotFoundError,
   RuntimePathTypeError,
   RuntimeBinaryFileError,
@@ -30,16 +32,20 @@ export {
 } from "./runtime-ref.js";
 export type { RuntimeResolver } from "./runtime-ref.js";
 export type { Runtime } from "./runtime.js";
+export type { RuntimeWorkspaceOpenOptions } from "./runtime.js";
 export type { RuntimeWorkspaceScope } from "./workspace-scope.js";
 export {
   assertAuthorizedRuntimeExecution,
+  assertRuntimeFilesystemBoundary,
   assertRuntimeWorkspaceBoundary,
+  createRuntimeFilesystemPolicy,
   createAuthorizedRuntimeExecution,
   createRuntimeProcessPolicy,
 } from "./security/runtime-boundary.js";
 export type {
   AuthorizedRuntimeExecution,
   RuntimeFilesystemPolicy,
+  RuntimeFilesystemPolicyInput,
   RuntimeProcessPolicy,
   RuntimeProcessPolicyInput,
 } from "./security/runtime-boundary.js";
@@ -101,6 +107,13 @@ export {
   type ResolvedLexicalPath,
 } from "./workspace-path.js";
 export type {
+  FilesystemTargetIndirection,
+  FilesystemTargetRelation,
+  ResolveFilesystemTargetInput,
+  ResolvedFilesystemTarget,
+  RuntimeFilesystemOperation,
+} from "./workspace-path.js";
+export type {
   RuntimeDirectoryEntry,
   RuntimeFileKind,
   RuntimeFileMetadata,
@@ -109,6 +122,10 @@ export type {
   RuntimeTextRead,
 } from "./filesystem/types.js";
 export { LocalRuntimeFileSystem } from "./filesystem/local-filesystem.js";
+export {
+  PolicyAwareRuntimeFileSystem,
+  createPolicyAwarePatchMutationFileSystem,
+} from "./filesystem/policy-aware-filesystem.js";
 export { RuntimePatchError, RuntimePatchUncertainError } from "./patch/errors.js";
 export type { RuntimePatchService } from "./patch/service.js";
 export { parsePatch } from "./patch/parser.js";

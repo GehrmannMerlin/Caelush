@@ -18,13 +18,12 @@ function invalid(): never {
 function patchPath(raw: string): string {
   const value = raw.replaceAll("\\", "/");
   const segments = value.split("/");
+  const absolute = value.startsWith("/") || /^[A-Za-z]:\//.test(value);
   if (
     value.length === 0 ||
     value.includes("\0") ||
-    value.startsWith("/") ||
-    value.startsWith("//") ||
-    /^[A-Za-z]:\//.test(value) ||
-    segments.some((segment) => segment === ".." || segment.length === 0)
+    segments.some((segment) => segment === "..") ||
+    (!absolute && segments.some((segment) => segment.length === 0))
   ) {
     invalid();
   }

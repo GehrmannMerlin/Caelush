@@ -96,6 +96,30 @@ describe("LocalTextSearchFallback", () => {
     ).resolves.toMatchObject({ matches: [{ path: "fixture.ts", line: 1, text: "needle" }] });
   });
 
+  it("does not spawn an unbound ripgrep helper when the process boundary is required", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "caelush-runtime-search-boundary-"));
+    temporaryDirectories.push(root);
+    await writeFile(path.join(root, "fixture.ts"), "needle\n", "utf8");
+    let spawnCalls = 0;
+    const runner = new LocalRipgrepRunner({
+      spawn: (() => {
+        spawnCalls += 1;
+        throw new Error("unbound helper must not spawn");
+      }) as typeof import("node:child_process").spawn,
+    });
+
+    await expect(
+      runner.search({
+        cwd: root,
+        pattern: "needle",
+        limit: 1,
+        requireProcessBoundary: true,
+        resolveTarget: async (absolutePath) => ({ canonicalPath: absolutePath, kind: "FILE" }),
+      }),
+    ).resolves.toMatchObject({ matches: [{ path: "fixture.ts", line: 1, text: "needle" }] });
+    expect(spawnCalls).toBe(0);
+  });
+
   it("does not let the child close event override an asynchronous missing-rg fallback", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "caelush-runtime-search-async-runner-"));
     temporaryDirectories.push(root);

@@ -96,6 +96,20 @@ describe("parsePatch", () => {
     expect(document.operations[0]).toMatchObject({ path: "file.txt" });
   });
 
+  it("preserves absolute targets for the policy-aware Full Access resolver", () => {
+    const document = parsePatch(
+      [
+        "*** Begin Patch",
+        "*** Update File: C:/Users/test/external.txt",
+        "@@",
+        "-old",
+        "+new",
+        "*** End Patch",
+      ].join("\n"),
+    );
+    expect(document.operations[0]).toMatchObject({ path: "C:/Users/test/external.txt" });
+  });
+
   it("enforces patch byte and operation budgets", () => {
     expect(() => parsePatch("x".repeat(256 * 1024 + 1))).toThrowError(
       expect.objectContaining({ code: "PATCH_TOO_LARGE" }),

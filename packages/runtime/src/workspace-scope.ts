@@ -1,4 +1,8 @@
 import type { WorkspaceRef } from "@caelush/protocol";
+import type {
+  AuthorizedRuntimeExecution,
+  RuntimeFilesystemPolicy,
+} from "./security/runtime-boundary.js";
 import type { RuntimeFileDiscovery } from "./discovery/file-discovery.js";
 import type { RuntimeFileSystem } from "./filesystem/types.js";
 import type { RuntimeTextSearch } from "./search/text-search.js";
@@ -11,6 +15,8 @@ export interface RuntimeWorkspaceScope {
   readonly workspace: WorkspaceRef;
   readonly logicalRoot: string;
   readonly realRoot: string;
+  readonly filesystemPolicy: RuntimeFilesystemPolicy;
+  readonly processAuthorization?: AuthorizedRuntimeExecution;
   readonly pathResolver: WorkspacePathResolver;
   readonly filesystem: RuntimeFileSystem;
   readonly discovery: RuntimeFileDiscovery;

@@ -19,7 +19,13 @@ function fileVersion(bytes: Uint8Array): FileVersion {
 }
 
 function sameVersion(left: FileVersion | undefined, right: FileVersion): boolean {
-  return left?.sizeBytes === right.sizeBytes && left.sha256 === right.sha256;
+  return (
+    left?.sizeBytes === right.sizeBytes &&
+    left.sha256 === right.sha256 &&
+    (left.identity === undefined ||
+      right.identity === undefined ||
+      left.identity === right.identity)
+  );
 }
 
 function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
@@ -35,6 +41,12 @@ async function guardSource(
   }
   const metadata = await filesystem.getMetadata(change.source.absolutePath);
   if (metadata?.kind !== "FILE") throw new RuntimePatchError("PATCH_STALE");
+  if (
+    change.beforeVersion.identity !== undefined &&
+    metadata.identity !== change.beforeVersion.identity
+  ) {
+    throw new RuntimePatchError("PATCH_STALE");
+  }
   if (metadata.sizeBytes !== change.beforeVersion.sizeBytes) {
     throw new RuntimePatchError("PATCH_STALE");
   }
@@ -141,9 +153,14 @@ export function createLocalPatchMutationFileSystem(
     async getMetadata(absolutePath) {
       try {
         const stats = await lstat(absolutePath);
+        const fileIdentity =
+          typeof stats.dev === "number" && typeof stats.ino === "number"
+            ? `${stats.dev}:${stats.ino}`
+            : undefined;
         return {
           kind: localKind(stats),
           ...(stats.isFile() ? { sizeBytes: stats.size } : {}),
+          ...(fileIdentity === undefined ? {} : { identity: fileIdentity }),
         };
       } catch (error) {
         if (filesystemErrorCode(error) === "ENOENT") return null;

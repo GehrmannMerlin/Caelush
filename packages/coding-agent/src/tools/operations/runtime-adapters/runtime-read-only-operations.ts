@@ -188,6 +188,18 @@ export function createRuntimeReadOnlyOperations(
       pattern: input.pattern,
       ...(input.include === undefined ? {} : { include: input.include }),
       limit: input.limit + 1,
+      requireProcessBoundary: true,
+      resolveTarget: async (absolutePath) => {
+        const target = await scope.pathResolver.resolveFilesystemTarget({
+          path: absolutePath,
+          policy: scope.filesystemPolicy,
+          operation: "SEARCH",
+        });
+        return {
+          canonicalPath: target.canonicalPath,
+          kind: target.targetKind,
+        };
+      },
     });
     const matches: JsonObjectLike[] = [];
     for (const match of result.matches.slice(0, input.limit)) {

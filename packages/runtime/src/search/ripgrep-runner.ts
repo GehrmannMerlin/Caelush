@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { PROJECT_HARD_EXCLUDED_GLOBS } from "@caelush/shared";
 import {
   RuntimeInvariantError,
   RuntimeSearchError,
@@ -14,6 +13,7 @@ import type {
 import { LocalTextSearchFallback } from "./text-search-fallback.js";
 import process from "node:process";
 import { createStructuredHelperEnvironment } from "../exec/environment-policy.js";
+import { RUNTIME_PROJECT_HARD_EXCLUDED_GLOBS } from "../project-exclusions.js";
 
 export const RIPGREP_EXECUTABLE = "rg";
 export const MAX_RG_STDOUT_BYTES = 1024 * 1024;
@@ -39,8 +39,12 @@ export class LocalRipgrepRunner implements RuntimeTextSearch {
   }
 
   async search(request: RuntimeTextSearchRequest): Promise<RuntimeTextSearchResult> {
+    if (request.requireProcessBoundary === true) {
+      return this.fallback.search(request);
+    }
     const args = ["--no-config", "--json", "--line-number", "--color=never"];
-    for (const exclusion of PROJECT_HARD_EXCLUDED_GLOBS) args.push("--glob", `!${exclusion}`);
+    for (const exclusion of RUNTIME_PROJECT_HARD_EXCLUDED_GLOBS)
+      args.push("--glob", `!${exclusion}`);
     if (request.include !== undefined) args.push("--glob", request.include);
     args.push("--", request.pattern, ".");
 

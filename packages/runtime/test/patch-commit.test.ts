@@ -18,9 +18,14 @@ function version(value: string) {
 
 function fakeFilesystem(
   initial: Record<string, string>,
-  options: { failOn?: number; corruptRollback?: boolean } = {},
+  options: {
+    failOn?: number;
+    corruptRollback?: boolean;
+    identities?: Record<string, string>;
+  } = {},
 ) {
   const files = new Map(Object.entries(initial).map(([file, value]) => [file, bytes(value)]));
+  const identities = new Map(Object.entries(options.identities ?? {}));
   const directories = new Set(Object.keys(initial).map((file) => path.dirname(file)));
   directories.add("C:\\workspace");
   let mutations = 0;
@@ -35,7 +40,13 @@ function fakeFilesystem(
       return new Uint8Array(value);
     },
     async getMetadata(file) {
-      if (files.has(file)) return { kind: "FILE", sizeBytes: files.get(file)!.byteLength };
+      if (files.has(file)) {
+        return {
+          kind: "FILE",
+          sizeBytes: files.get(file)!.byteLength,
+          ...(identities.get(file) === undefined ? {} : { identity: identities.get(file) }),
+        };
+      }
       if (directories.has(file)) return { kind: "DIRECTORY" };
       return null;
     },
@@ -64,14 +75,26 @@ function fakeFilesystem(
       directories.delete(directory);
     },
   };
-  return { files, filesystem, getMutations: () => mutations };
+  return { files, identities, filesystem, getMutations: () => mutations };
 }
 
-function resolved(absolutePath: string, kind: "FILE" | "DIRECTORY" | null, sizeBytes?: number) {
+function resolved(
+  absolutePath: string,
+  kind: "FILE" | "DIRECTORY" | null,
+  sizeBytes?: number,
+  identity?: string,
+) {
   return {
     absolutePath,
     relativePath: path.basename(absolutePath),
-    metadata: kind === null ? null : { kind, ...(sizeBytes === undefined ? {} : { sizeBytes }) },
+    metadata:
+      kind === null
+        ? null
+        : {
+            kind,
+            ...(sizeBytes === undefined ? {} : { sizeBytes }),
+            ...(identity === undefined ? {} : { identity }),
+          },
   } as const;
 }
 
@@ -188,5 +211,31 @@ describe("commitPatch", () => {
       changeCount: 1,
       changes: [{ kind: "ADD", path: "a.txt", additions: 1, deletions: 0 }],
     });
+  });
+
+  it("rejects a target whose filesystem identity changed after preparation", async () => {
+    const a = path.join("C:\\workspace", "a.txt");
+    const fake = fakeFilesystem({ [a]: "a" }, { identities: { [a]: "identity-before" } });
+    const prepared: PreparedPatch = {
+      preparedBytes: 1,
+      changes: [
+        {
+          operation: { kind: "UPDATE", path: "a.txt", hunks: [] },
+          source: resolved(a, "FILE", 1, "identity-before"),
+          beforeBytes: bytes("a"),
+          afterBytes: bytes("A"),
+          beforeVersion: { ...version("a"), identity: "identity-before" },
+          afterVersion: version("A"),
+          additions: 1,
+          deletions: 1,
+        },
+      ],
+    };
+    fake.identities.set(a, "identity-after");
+
+    await expect(commitPatch(prepared, fake.filesystem)).rejects.toThrowError(
+      expect.objectContaining({ code: "PATCH_STALE" }),
+    );
+    expect(fake.getMutations()).toBe(0);
   });
 });
