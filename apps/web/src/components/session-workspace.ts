@@ -70,6 +70,13 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
                 },
                 createElement("span", { className: "status-pulse", "aria-hidden": "true" }),
                 createElement("span", null, runStatusLabel(props.activeRun.status)),
+                props.activeRun.securityPolicy?.preset === undefined
+                  ? null
+                  : createElement(
+                      "span",
+                      { className: "active-run-permission" },
+                      `权限：${runPermissionLabel(props.activeRun.securityPolicy.preset.id)}`,
+                    ),
               ),
         ),
     createElement(
@@ -279,4 +286,19 @@ function isActiveRun(status: ClientAgentRun["status"]): boolean {
     status === "WAITING_RESOURCE" ||
     status === "VERIFYING"
   );
+}
+
+function runPermissionLabel(
+  id: NonNullable<ClientAgentRun["securityPolicy"]>["preset"]["id"],
+): string {
+  switch (id) {
+    case "VIEW_ONLY":
+      return "仅可查看";
+    case "WORKSPACE_WRITE":
+      return "工作区内修改";
+    case "FULL_ACCESS":
+      return "完全权限";
+    case "LEGACY_CUSTOM":
+      return "历史策略";
+  }
 }

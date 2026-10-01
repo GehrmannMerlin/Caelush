@@ -141,6 +141,15 @@ export function App({ controller, writeMessage = defaultWriteMessage }: AppProps
       {state.fatalError === undefined ? (
         <Composer
           enabled={state.composerEnabled}
+          permissionLabel={
+            state.selectedPreset?.id === "VIEW_ONLY"
+              ? "仅可查看"
+              : state.selectedPreset?.id === "WORKSPACE_WRITE"
+                ? "工作区内修改"
+                : state.selectedPreset?.id === "FULL_ACCESS"
+                  ? "完全权限"
+                  : undefined
+          }
           onSubmit={(value) => controller.submitPrompt(value)}
         />
       ) : (

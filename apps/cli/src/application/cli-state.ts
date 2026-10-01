@@ -6,6 +6,8 @@ import type {
   RunStatus,
   TranscriptEntry,
   WorkspaceRef,
+  PermissionPresetDescriptor,
+  PermissionPresetSelection,
 } from "@caelush/protocol";
 import { createInitialLiveActivityState, type LiveActivityState } from "@caelush/client";
 import type { CliApprovalState, CliControlMode, CliTransportState } from "./cli-control.js";
@@ -55,6 +57,11 @@ export interface CliActiveRun {
   readonly status: RunStatus;
 }
 
+export interface CliPermissionPresetView extends PermissionPresetDescriptor {
+  readonly status: "AVAILABLE" | "PREPARATION_REQUIRED" | "UNAVAILABLE";
+  readonly reasonCode?: string;
+}
+
 export interface CliViewState {
   readonly bootstrap: CliBootstrapState;
   readonly transportState: CliTransportState;
@@ -72,6 +79,9 @@ export interface CliViewState {
   readonly timeline: CliTimelineState;
   readonly liveActivity: LiveActivityState;
   readonly activeRun?: CliActiveRun;
+  readonly availablePermissionPresets: readonly CliPermissionPresetView[];
+  readonly selectedPreset?: PermissionPresetSelection;
+  readonly approvalChannelAvailable: boolean;
   readonly composerEnabled: boolean;
   readonly activity: CliActivity;
   readonly notice?: string;
@@ -94,6 +104,8 @@ export function createInitialCliState(): CliViewState {
     displayHistory: [],
     timeline: createInitialCliTimelineState(),
     liveActivity: createInitialLiveActivityState(),
+    availablePermissionPresets: [],
+    approvalChannelAvailable: true,
     composerEnabled: false,
     activity: "Starting",
   };

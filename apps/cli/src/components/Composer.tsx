@@ -4,9 +4,11 @@ import { useState } from "react";
 
 export function Composer({
   enabled,
+  permissionLabel,
   onSubmit,
 }: {
   readonly enabled: boolean;
+  readonly permissionLabel?: string | undefined;
   readonly onSubmit: (value: string) => Promise<boolean>;
 }) {
   const [value, setValue] = useState("");
@@ -16,6 +18,7 @@ export function Composer({
   return (
     <Box>
       <Text color={enabled ? "green" : "gray"}>{enabled ? "> " : "- "}</Text>
+      {permissionLabel === undefined ? null : <Text color="gray">[{permissionLabel}] </Text>}
       <TextInput value={value} onChange={setValue} onSubmit={submit} focus={enabled} />
     </Box>
   );

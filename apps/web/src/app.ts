@@ -31,15 +31,20 @@ import {
 import { derivePromptTitle } from "./application/prompt.js";
 import { PromptComposer } from "./components/prompt-composer.js";
 import { SessionWorkspace } from "./components/session-workspace.js";
-import { SessionSelectionStore } from "./application/session-persistence.js";
+import {
+  PermissionPresetSelectionStore,
+  SessionSelectionStore,
+} from "./application/session-persistence.js";
 import { ReconnectBanner } from "./components/reconnect-banner.js";
 import { WorkspaceSidebar } from "./components/workspace-sidebar.js";
 import { WorkspaceEmptyState } from "./components/workspace-empty-state.js";
 import { WorkspaceDialog } from "./components/workspace-dialog.js";
 import { ModelPicker } from "./components/model-picker.js";
 import { SettingsSurface } from "./components/settings-surface.js";
+import { PermissionSelector } from "./components/permission-selector.js";
 
 const sessionSelectionStore = new SessionSelectionStore();
+const permissionPresetSelectionStore = new PermissionPresetSelectionStore();
 const workspaceSelectionStore = new WorkspaceSelectionStore();
 
 const EMPTY_SESSION_SNAPSHOT: WebSessionSnapshot = {
@@ -51,6 +56,7 @@ const EMPTY_SESSION_SNAPSHOT: WebSessionSnapshot = {
   activeRuns: [],
   timeline: createInitialTimelineState(),
   liveActivity: createInitialLiveActivityState(),
+  availablePresets: [],
   isDraft: false,
   composerEnabled: false,
   submission: "IDLE",
@@ -147,6 +153,7 @@ export function WebHostApp(props: {
       info: state.info,
       workspace: selectedWorkspaceRef,
       selectionStore: sessionSelectionStore,
+      permissionPresetStore: permissionPresetSelectionStore,
     });
   }, [props.client, selectedWorkspaceRef, state.bootstrap, state.info]);
 
@@ -474,6 +481,16 @@ function renderWorkspaceApp(input: {
                   disabled: composerInteractionDisabled,
                   onSelect: (selection) => void input.sessionManager?.selectModel(selection),
                   onOpenSettings: input.onOpenSettings,
+                }),
+                permissionSelector: createElement(PermissionSelector, {
+                  presets: snapshot.availablePresets,
+                  selected: snapshot.selectedPreset,
+                  disabled: composerInteractionDisabled || snapshot.activeRun !== undefined,
+                  error: snapshot.permissionPresetError,
+                  onSelect: (selection) =>
+                    void input.sessionManager?.selectPermissionPreset(selection),
+                  onPrepare: async (selection) =>
+                    (await input.sessionManager?.preparePermissionPreset(selection)) ?? false,
                 }),
                 submission: snapshot.submission,
                 error: snapshot.error,

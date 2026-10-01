@@ -17,6 +17,9 @@ import {
   DaemonInfoSchema,
   HealthResponseSchema,
   RunActionResponseSchema,
+  SecurityCapabilitiesResponseSchema,
+  SecurityPreparationRequestSchema,
+  SecurityPreparationResponseSchema,
   RunListQuerySchema,
   RunListResponseSchema,
   SessionListQuerySchema,
@@ -30,6 +33,7 @@ import {
   WorkspaceListResponseSchema,
   WorkspaceDirectoryPickerResponseSchema,
   WorkspaceRecordSchema,
+  WorkspaceSecurityCapabilitiesResponseSchema,
   WorkspaceSessionListResponseSchema,
   WorkspaceIdSchema,
   type PublicRunEvent,
@@ -65,7 +69,11 @@ import {
   type WorkspaceListResponse,
   type WorkspaceDirectoryPickerResponse,
   type WorkspaceRecord,
+  type WorkspaceSecurityCapabilitiesResponse,
   type WorkspaceSessionListResponse,
+  type SecurityCapabilitiesResponse,
+  type SecurityPreparationResponse,
+  type PermissionPresetSelection,
 } from "@caelush/protocol";
 import { ApprovalRequestIdSchema } from "@caelush/protocol";
 
@@ -193,6 +201,48 @@ export class CaelushClient {
       `/api/v1/workspaces/${encodeURIComponent(parsedWorkspaceId)}`,
       { method: "GET" },
       WorkspaceRecordSchema,
+      [200],
+      options,
+    );
+  }
+
+  async getSecurityCapabilities(
+    options: CaelushClientRequestOptions = {},
+  ): Promise<SecurityCapabilitiesResponse> {
+    return this.request(
+      "/api/v1/security/capabilities",
+      { method: "GET" },
+      SecurityCapabilitiesResponseSchema,
+      [200],
+      options,
+    );
+  }
+
+  async getWorkspaceSecurityCapabilities(
+    workspaceId: WorkspaceId,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<WorkspaceSecurityCapabilitiesResponse> {
+    const parsedWorkspaceId = WorkspaceIdSchema.parse(workspaceId);
+    return this.request(
+      `/api/v1/workspaces/${encodeURIComponent(parsedWorkspaceId)}/security/capabilities`,
+      { method: "GET" },
+      WorkspaceSecurityCapabilitiesResponseSchema,
+      [200],
+      options,
+    );
+  }
+
+  async prepareWorkspaceSecurity(
+    workspaceId: WorkspaceId,
+    preset: PermissionPresetSelection,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<SecurityPreparationResponse> {
+    const parsedWorkspaceId = WorkspaceIdSchema.parse(workspaceId);
+    const body = SecurityPreparationRequestSchema.parse({ preset });
+    return this.request(
+      `/api/v1/workspaces/${encodeURIComponent(parsedWorkspaceId)}/security/prepare`,
+      jsonRequest("POST", body),
+      SecurityPreparationResponseSchema,
       [200],
       options,
     );

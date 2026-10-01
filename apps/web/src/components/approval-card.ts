@@ -42,6 +42,8 @@ export function ApprovalCard({ approval, onResolve }: ApprovalCardProps): ReactE
       createElement("dd", null, approval.reason),
       createElement("dt", null, "动作"),
       createElement("dd", null, approval.summary ?? approval.toolName ?? "未命名动作"),
+      createElement("dt", null, "授权范围"),
+      createElement("dd", null, approval.scope === "RUN" ? "可选择本次运行" : "仅本次动作"),
       approval.toolName === undefined ? null : createElement("dt", null, "工具"),
       approval.toolName === undefined ? null : createElement("dd", null, approval.toolName),
     ),

@@ -75,7 +75,9 @@ describe("CliConversationController", () => {
     expect(createRunInput).toMatchObject({
       workspace,
       model: session.defaultModel ?? makeInfo().defaultModel,
-      ...defaultRunConfiguration,
+      runtime: defaultRunConfiguration.runtime,
+      preset: { id: "WORKSPACE_WRITE", expectedVersion: 1 },
+      limits: defaultRunConfiguration.limits,
     });
     controller.dispose();
   });
@@ -152,7 +154,9 @@ describe("CliConversationController", () => {
           goal: "the first prompt",
           workspace: { path: "C:\\workspace\\project" },
           model: { provider: "fixture", model: "fixture-model" },
-          ...defaultRunConfiguration,
+          runtime: defaultRunConfiguration.runtime,
+          preset: { id: "WORKSPACE_WRITE", expectedVersion: 1 },
+          limits: defaultRunConfiguration.limits,
         });
         return run;
       },

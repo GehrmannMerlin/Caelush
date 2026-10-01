@@ -22,6 +22,9 @@ import type {
   TranscriptEntry,
   WorkspaceRef,
   ContextUsageProjection,
+  PermissionPresetSelection,
+  SecurityCapabilitiesResponse,
+  WorkspaceSecurityCapabilitiesResponse,
 } from "@caelush/protocol";
 import { createRunId, createTimestampMs, createWorkspaceId } from "@caelush/protocol";
 import { CaelushProtocolCompatibilityError, createInitialLiveActivityState } from "@caelush/client";
@@ -31,6 +34,7 @@ import { projectPublicRunEvent } from "./event-projector.js";
 import {
   createInitialCliState,
   type CliActivity,
+  type CliPermissionPresetView,
   type CliStateListener,
   type CliViewState,
 } from "./cli-state.js";
@@ -58,6 +62,18 @@ const systemCliTimer: CliTimer = {
 export interface CliDaemonClient {
   getHealth(options?: { readonly signal?: AbortSignal }): Promise<HealthResponse>;
   getInfo(options?: { readonly signal?: AbortSignal }): Promise<DaemonInfo>;
+  getSecurityCapabilities?(options?: {
+    readonly signal?: AbortSignal;
+  }): Promise<SecurityCapabilitiesResponse>;
+  getWorkspaceSecurityCapabilities?(
+    workspaceId: import("@caelush/protocol").WorkspaceId,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<WorkspaceSecurityCapabilitiesResponse>;
+  prepareWorkspaceSecurity?(
+    workspaceId: import("@caelush/protocol").WorkspaceId,
+    preset: PermissionPresetSelection,
+    options?: { readonly signal?: AbortSignal },
+  ): Promise<import("@caelush/protocol").SecurityPreparationResponse>;
   createSession(
     input: CreateSessionRequest,
     options?: { readonly signal?: AbortSignal },
@@ -116,6 +132,7 @@ export interface CliConversationControllerOptions {
   readonly launchIntent?: LaunchIntent;
   readonly timer?: CliTimer;
   readonly onUserVisibleEvent?: (event: PublicRunEvent) => void;
+  readonly approvalChannelAvailable?: boolean;
 }
 
 interface ActiveRun {
@@ -145,6 +162,8 @@ export class CliConversationController {
   private readonly reconnectScheduler: CliReconnectScheduler;
   private historySequence = 0;
   private disposed = false;
+  private selectedPresetApprovalPolicy:
+    "ALWAYS_ASK" | "ON_BOUNDARY" | "DANGEROUS_ONLY" | "NEVER_ASK" | undefined;
 
   constructor(private readonly options: CliConversationControllerOptions) {
     this.currentWorkspacePath = resolve(options.workspacePath);
@@ -207,7 +226,14 @@ export class CliConversationController {
         goal,
         workspace,
         model: session.defaultModel ?? info.defaultModel!,
-        ...info.defaultRunConfiguration,
+        runtime: info.defaultRunConfiguration.runtime,
+        preset: this.state.selectedPreset ?? {
+          id: "WORKSPACE_WRITE",
+          expectedVersion: 1,
+        },
+        ...(info.defaultRunConfiguration.limits === undefined
+          ? { resourcePolicy: info.defaultRunConfiguration.resourcePolicy! }
+          : { limits: info.defaultRunConfiguration.limits }),
       });
     } catch (error) {
       this.submissionInFlight = false;
@@ -216,6 +242,10 @@ export class CliConversationController {
     }
 
     this.submissionInFlight = false;
+    const boundPreset =
+      run.securityPolicy === undefined || run.securityPolicy.preset.id === "LEGACY_CUSTOM"
+        ? this.state.selectedPreset
+        : { id: run.securityPolicy.preset.id, expectedVersion: run.securityPolicy.preset.version };
     this.publish({
       ...this.state,
       displayHistory: this.state.displayHistory.map((entry) =>
@@ -226,6 +256,7 @@ export class CliConversationController {
       timeline: createInitialCliTimelineState(run.id),
       liveActivity: createInitialLiveActivityState(run.id),
       activeRun: { runId: run.id, status: run.status },
+      ...(boundPreset === undefined ? {} : { selectedPreset: boundPreset }),
       composerEnabled: false,
       activity: "Preparing",
     });
@@ -598,6 +629,7 @@ export class CliConversationController {
         : { workspace: workspaceOverride };
     if ("error" in workspaceResult) throw new CliResumeError(workspaceResult.error);
     this.workspace = workspaceResult.workspace;
+    await this.loadPermissionPresets(this.state.daemonInfo!);
 
     const activeRuns = nonTerminalRuns(runs);
     const displayHistory = await this.loadSessionTranscript(session.id);
@@ -605,6 +637,11 @@ export class CliConversationController {
       ...this.state,
       bootstrap: "READY",
       workspace: this.workspace,
+      availablePermissionPresets: this.state.availablePermissionPresets,
+      ...(this.state.selectedPreset === undefined
+        ? {}
+        : { selectedPreset: this.state.selectedPreset }),
+      approvalChannelAvailable: this.state.approvalChannelAvailable,
       session,
       displayHistory,
       sessionCandidates: [],
@@ -671,6 +708,96 @@ export class CliConversationController {
       return;
     }
     this.attachActiveRun(run, true);
+  }
+
+  private async loadPermissionPresets(info: DaemonInfo): Promise<void> {
+    const approvalChannelAvailable = this.options.approvalChannelAvailable ?? true;
+    const getGlobal = this.options.client.getSecurityCapabilities;
+    const getWorkspace = this.options.client.getWorkspaceSecurityCapabilities;
+    if (getGlobal === undefined || getWorkspace === undefined) {
+      if (!approvalChannelAvailable) {
+        throw new CliPermissionError(
+          "This non-interactive CLI session cannot verify a safe permission preset or provide an approval channel.",
+        );
+      }
+      const fallbackId = info.defaultRunConfiguration.defaultPreset ?? "WORKSPACE_WRITE";
+      const safeFallback =
+        fallbackId === "FULL_ACCESS" || fallbackId === "LEGACY_CUSTOM"
+          ? "WORKSPACE_WRITE"
+          : fallbackId;
+      this.selectedPresetApprovalPolicy = undefined;
+      this.publish({
+        ...this.state,
+        selectedPreset: { id: safeFallback, expectedVersion: 1 },
+        availablePermissionPresets: [],
+        approvalChannelAvailable,
+      });
+      return;
+    }
+
+    try {
+      const capabilities = await getGlobal.call(this.options.client);
+      let workspaceCapabilities = await getWorkspace.call(this.options.client, this.workspace!.id);
+      const requestedId =
+        this.options.launchIntent?.permissionPresetId ??
+        info.defaultRunConfiguration.defaultPreset ??
+        "WORKSPACE_WRITE";
+      const descriptor = capabilities.presets.find((preset) => preset.id === requestedId);
+      if (descriptor === undefined)
+        throw new CliPermissionError("Requested permission is unknown.");
+      let availability = workspaceCapabilities.presets.find((preset) => preset.id === requestedId);
+      if (availability?.status === "PREPARATION_REQUIRED") {
+        const prepare = this.options.client.prepareWorkspaceSecurity;
+        if (prepare === undefined) {
+          throw new CliPermissionError("The selected workspace requires security preparation.");
+        }
+        const prepared = await prepare.call(this.options.client, this.workspace!.id, {
+          id: descriptor.id,
+          expectedVersion: descriptor.version,
+        });
+        if (prepared.status !== "READY" && prepared.status !== "PREPARED") {
+          throw new CliPermissionError("Workspace security preparation was not completed.");
+        }
+        workspaceCapabilities = await getWorkspace.call(this.options.client, this.workspace!.id);
+        availability = workspaceCapabilities.presets.find((preset) => preset.id === requestedId);
+      }
+      if (
+        availability === undefined ||
+        availability.version !== descriptor.version ||
+        availability.status !== "AVAILABLE"
+      ) {
+        throw new CliPermissionError(
+          `Permission preset ${descriptor.displayName} is unavailable on this host.`,
+        );
+      }
+      if (!approvalChannelAvailable && descriptor.approvalPolicy !== "NEVER_ASK") {
+        throw new CliPermissionError(
+          "This non-interactive CLI session has no approval channel; choose --permission full-access explicitly or use a TTY.",
+        );
+      }
+      const views: readonly CliPermissionPresetView[] = capabilities.presets.map((candidate) => {
+        const candidateAvailability = workspaceCapabilities.presets.find(
+          (item) => item.id === candidate.id,
+        );
+        return {
+          ...candidate,
+          status: candidateAvailability?.status ?? "UNAVAILABLE",
+          ...(candidateAvailability?.reasonCode === undefined
+            ? {}
+            : { reasonCode: candidateAvailability.reasonCode }),
+        };
+      });
+      this.selectedPresetApprovalPolicy = descriptor.approvalPolicy;
+      this.publish({
+        ...this.state,
+        availablePermissionPresets: views,
+        selectedPreset: { id: descriptor.id, expectedVersion: descriptor.version },
+        approvalChannelAvailable,
+      });
+    } catch (error) {
+      if (error instanceof CliPermissionError) throw error;
+      throw new CliPermissionError("Permission capabilities could not be verified.");
+    }
   }
 
   private addApproval(approval: Parameters<typeof createApprovalView>[0]): void {
@@ -916,7 +1043,9 @@ export class CliConversationController {
       composerEnabled: false,
       activity: "Terminal error",
       fatalError:
-        error instanceof CliConfigurationError || error instanceof CliResumeError
+        error instanceof CliConfigurationError ||
+        error instanceof CliResumeError ||
+        error instanceof CliPermissionError
           ? error.message
           : toSafeCliError(error),
     });
@@ -926,6 +1055,9 @@ export class CliConversationController {
     if (this.disposed || this.state.bootstrap !== "READY") return false;
     if (this.state.session === undefined || this.state.daemonInfo === undefined) return false;
     if (this.activeRun !== undefined || this.submissionInFlight) return false;
+    if (!this.state.approvalChannelAvailable && this.selectedPresetApprovalPolicy !== "NEVER_ASK") {
+      return false;
+    }
     return goal.length > 0 && new TextEncoder().encode(goal).byteLength <= MAX_CLI_PROMPT_BYTES;
   }
 
@@ -1128,6 +1260,13 @@ class CliResumeError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "CliResumeError";
+  }
+}
+
+class CliPermissionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CliPermissionError";
   }
 }
 

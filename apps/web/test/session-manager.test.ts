@@ -103,8 +103,12 @@ describe("WebSessionManager", () => {
         goal: "repair login",
         workspace,
         model: { provider: "fixture", model: "fixture-model" },
-        ...makeInfo().defaultRunConfiguration,
+        runtime: makeInfo().defaultRunConfiguration.runtime,
+        preset: { id: "WORKSPACE_WRITE", expectedVersion: 1 },
+        limits: makeInfo().defaultRunConfiguration.limits,
       });
+      expect(input).not.toHaveProperty("permissionProfile");
+      expect(input).not.toHaveProperty("approvalPolicy");
       return pendingRun;
     });
     client.watchRunEvents.mockImplementation(async function* (_runId, options) {

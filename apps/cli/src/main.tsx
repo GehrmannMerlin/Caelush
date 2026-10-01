@@ -15,6 +15,7 @@ export interface CliMainOptions {
   readonly argv?: readonly string[];
   readonly writeMessage?: (message: string) => void;
   readonly launchIntent?: LaunchIntent;
+  readonly approvalChannelAvailable?: boolean;
   readonly renderApplication?: (controller: CliConversationController) => CliApplication;
 }
 
@@ -40,6 +41,9 @@ export async function main(options: CliMainOptions = {}): Promise<number> {
     client: options.client ?? createDaemonClient(),
     workspacePath: options.workspacePath ?? process.cwd(),
     launchIntent,
+    approvalChannelAvailable:
+      options.approvalChannelAvailable ??
+      (process.stdin.isTTY === true && process.stdout.isTTY === true),
   });
   const application =
     options.renderApplication?.(controller) ??

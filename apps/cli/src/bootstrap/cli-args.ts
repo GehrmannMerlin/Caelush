@@ -1,10 +1,22 @@
-import { SessionIdSchema, type SessionId } from "@caelush/protocol";
+import {
+  SelectablePermissionPresetIdSchema,
+  SessionIdSchema,
+  type SelectablePermissionPresetId,
+  type SessionId,
+} from "@caelush/protocol";
+
+export interface PermissionPresetLaunchOption {
+  readonly permissionPresetId?: SelectablePermissionPresetId;
+}
 
 export type LaunchIntent =
-  | { readonly kind: "NEW" }
-  | { readonly kind: "CONTINUE" }
-  | { readonly kind: "RESUME_PICKER" }
-  | { readonly kind: "RESUME_EXACT"; readonly sessionId: SessionId };
+  | ({ readonly kind: "NEW" } & PermissionPresetLaunchOption)
+  | ({ readonly kind: "CONTINUE" } & PermissionPresetLaunchOption)
+  | ({ readonly kind: "RESUME_PICKER" } & PermissionPresetLaunchOption)
+  | ({
+      readonly kind: "RESUME_EXACT";
+      readonly sessionId: SessionId;
+    } & PermissionPresetLaunchOption);
 
 export type PrintOutputFormat = "text" | "json" | "stream-json";
 
@@ -34,6 +46,8 @@ export function parseCliArgs(argv: readonly string[]): CliCommand {
   let promptSet = false;
   let outputFormat: PrintOutputFormat = "text";
   let outputFormatSet = false;
+  let permissionPresetId: SelectablePermissionPresetId | undefined;
+  let permissionPresetSet = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -82,6 +96,15 @@ export function parseCliArgs(argv: readonly string[]): CliCommand {
       index += 1;
       continue;
     }
+    if (token === "--permission" || token === "--preset") {
+      if (permissionPresetSet) throw new CliArgsError();
+      const candidate = argv[index + 1];
+      if (candidate === undefined || candidate.startsWith("-")) throw new CliArgsError();
+      permissionPresetId = parsePermissionPresetId(candidate);
+      permissionPresetSet = true;
+      index += 1;
+      continue;
+    }
     if (!token.startsWith("-") && print && !promptSet) {
       prompt = token;
       promptSet = true;
@@ -91,14 +114,34 @@ export function parseCliArgs(argv: readonly string[]): CliCommand {
   }
 
   if (!print && outputFormatSet) throw new CliArgsError();
+  const selectedLaunchIntent =
+    permissionPresetId === undefined ? launchIntent : { ...launchIntent, permissionPresetId };
   if (print) {
-    if (launchIntent.kind === "RESUME_PICKER") throw new CliArgsError();
+    if (selectedLaunchIntent.kind === "RESUME_PICKER") throw new CliArgsError();
     return {
       kind: "PRINT",
       ...(prompt === undefined ? {} : { prompt }),
       outputFormat,
-      launchIntent,
+      launchIntent: selectedLaunchIntent,
     };
   }
-  return launchIntent;
+  return selectedLaunchIntent;
+}
+
+function parsePermissionPresetId(value: string): SelectablePermissionPresetId {
+  const normalized = value.trim().toLowerCase();
+  const aliases: Readonly<Record<string, SelectablePermissionPresetId>> = {
+    "view-only": "VIEW_ONLY",
+    readonly: "VIEW_ONLY",
+    view_only: "VIEW_ONLY",
+    "workspace-write": "WORKSPACE_WRITE",
+    workspace_write: "WORKSPACE_WRITE",
+    "full-access": "FULL_ACCESS",
+    full_access: "FULL_ACCESS",
+  };
+  const alias = aliases[normalized];
+  if (alias !== undefined) return alias;
+  const parsed = SelectablePermissionPresetIdSchema.safeParse(value);
+  if (parsed.success) return parsed.data;
+  throw new CliArgsError("Permission must be view-only, workspace-write, or full-access.");
 }

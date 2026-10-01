@@ -18,6 +18,8 @@ describe("CLI application state", () => {
       sessionSelectionIndex: 0,
       recoveryCandidates: [],
       recoverySelectionIndex: 0,
+      availablePermissionPresets: [],
+      approvalChannelAvailable: true,
       composerEnabled: false,
       activity: "Starting",
     });

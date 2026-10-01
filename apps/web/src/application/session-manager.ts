@@ -53,10 +53,21 @@ import type {
   ConnectProviderRequest,
   UpdateAISelectionRequest,
   UpdateSessionModelSelectionRequest,
+  PermissionPresetSelection,
+  SecurityCapabilitiesResponse,
+  SecurityPreparationResponse,
+  WorkspaceSecurityCapabilitiesResponse,
 } from "@caelush/protocol";
 import { derivePromptTitle, validatePrompt, type PromptError } from "./prompt.js";
 import type { WebHostClient } from "../host/bootstrap.js";
-import { SessionSelectionStore } from "./session-persistence.js";
+import { PermissionPresetSelectionStore, SessionSelectionStore } from "./session-persistence.js";
+import {
+  choosePermissionPreset,
+  DEFAULT_PERMISSION_PRESET_ID,
+  projectPermissionPresetViewModels,
+  runPermissionPreset,
+  type PermissionPresetViewModel,
+} from "./permission-presets.js";
 
 export interface WebSessionClient extends SessionCandidateClient, WebHostClient {
   listWorkspaceSessions?(workspaceId: WorkspaceRef["id"]): Promise<{
@@ -64,6 +75,14 @@ export interface WebSessionClient extends SessionCandidateClient, WebHostClient 
   }>;
   createSession(input: CreateSessionRequest): Promise<ClientAgentSession>;
   createRun(sessionId: SessionId, input: CreateRunRequest): Promise<ClientAgentRun>;
+  getSecurityCapabilities?(): Promise<SecurityCapabilitiesResponse>;
+  getWorkspaceSecurityCapabilities?(
+    workspaceId: WorkspaceRef["id"],
+  ): Promise<WorkspaceSecurityCapabilitiesResponse>;
+  prepareWorkspaceSecurity?(
+    workspaceId: WorkspaceRef["id"],
+    preset: PermissionPresetSelection,
+  ): Promise<SecurityPreparationResponse>;
   listAIProviders?(): Promise<AIProvidersResponse>;
   getAIModelDirectory?(providerId?: string): Promise<AIModelDirectoryResponse>;
   getDefaultAISelection?(): Promise<{ selection?: ClientModelSelectionWithReasoning | undefined }>;
@@ -129,6 +148,9 @@ export type WebSessionErrorCode =
   | "RUN_RECONNECT_EXHAUSTED"
   | "RUN_REFRESH_FAILED"
   | "DEFAULT_MODEL_UNAVAILABLE"
+  | "PERMISSION_CAPABILITIES_FAILED"
+  | "PERMISSION_PRESET_UNAVAILABLE"
+  | "PERMISSION_PREPARATION_FAILED"
   | "PROMPT_REQUIRED"
   | "PROMPT_TOO_LARGE";
 
@@ -152,6 +174,10 @@ export interface WebSessionSnapshot {
   readonly contextUsage?: ContextUsageProjection | null;
   readonly aiProviders?: AIProvidersResponse["providers"];
   readonly modelDirectory?: AIModelDirectoryResponse["models"];
+  readonly permissionCapabilities?: SecurityCapabilitiesResponse | undefined;
+  readonly availablePresets: readonly PermissionPresetViewModel[];
+  readonly selectedPreset?: PermissionPresetSelection;
+  readonly permissionPresetError?: string;
   readonly defaultSelection?: ClientModelSelectionWithReasoning;
   readonly modelSelection?: ClientModelSelectionWithReasoning;
   readonly isDraft: boolean;
@@ -175,6 +201,8 @@ type WebSessionSnapshotPatch = Partial<
     | "error"
     | "defaultSelection"
     | "modelSelection"
+    | "selectedPreset"
+    | "permissionPresetError"
     | "transportAttempt"
   >
 > & {
@@ -185,6 +213,8 @@ type WebSessionSnapshotPatch = Partial<
   readonly error?: WebSessionError | undefined;
   readonly defaultSelection?: ClientModelSelectionWithReasoning | undefined;
   readonly modelSelection?: ClientModelSelectionWithReasoning | undefined;
+  readonly selectedPreset?: PermissionPresetSelection | undefined;
+  readonly permissionPresetError?: string | undefined;
   readonly transportAttempt?: number | undefined;
 };
 
@@ -227,6 +257,7 @@ export class WebSessionManager {
       readonly info: DaemonInfo;
       readonly timer?: Timer;
       readonly selectionStore?: SessionSelectionStore;
+      readonly permissionPresetStore?: PermissionPresetSelectionStore;
     },
   ) {}
 
@@ -244,6 +275,7 @@ export class WebSessionManager {
     this.publish({ status: "LOADING", error: undefined });
     try {
       await this.loadAIControl();
+      await this.loadPermissionPresets();
       const candidates =
         this.options.client.listWorkspaceSessions === undefined
           ? await listMatchingSessionCandidates(this.options.client, this.options.workspace.path)
@@ -273,12 +305,14 @@ export class WebSessionManager {
     this.cancelActiveLifecycle();
     this.clearApprovals();
     const defaultSelection = this.snapshot.defaultSelection ?? this.options.info.defaultModel;
+    const selectedPreset = this.currentPermissionPreset();
     this.publish({
       status: "READY",
       selectedSession: undefined,
       selectedSessionId: undefined,
       defaultSelection,
       modelSelection: defaultSelection,
+      ...(selectedPreset === undefined ? {} : { selectedPreset }),
       runs: [],
       history: [],
       turnPresentation: undefined,
@@ -368,6 +402,11 @@ export class WebSessionManager {
       return false;
     }
     const model = { provider: selection.provider, model: selection.model };
+    const permissionPreset = this.currentPermissionPreset();
+    if (permissionPreset === undefined) {
+      this.publish({ error: sessionError("PERMISSION_CAPABILITIES_FAILED") });
+      return false;
+    }
 
     const goal = validation.value;
     this.publish({ submission: "SUBMITTING", error: undefined });
@@ -404,15 +443,21 @@ export class WebSessionManager {
         });
       }
 
+      const defaultRunConfiguration = this.options.info.defaultRunConfiguration;
       const run = await this.options.client.createRun(session.id, {
         goal,
         workspace: this.options.workspace,
         model,
+        runtime: defaultRunConfiguration.runtime,
+        preset: permissionPreset,
         ...(selection.reasoningLevel === undefined
           ? {}
           : { reasoningLevel: selection.reasoningLevel }),
-        ...this.options.info.defaultRunConfiguration,
+        ...(defaultRunConfiguration.limits === undefined
+          ? { resourcePolicy: defaultRunConfiguration.resourcePolicy! }
+          : { limits: defaultRunConfiguration.limits }),
       });
+      const boundPreset = runPermissionPreset(run) ?? permissionPreset;
       const runs = [...this.snapshot.runs, run];
       const optimisticUser: TranscriptEntry = {
         id: `optimistic:user:${run.id}`,
@@ -436,6 +481,8 @@ export class WebSessionManager {
         timeline: createInitialTimelineState(run.id),
         liveActivity: createInitialLiveActivityState(run.id),
         contextUsage: null,
+        selectedPreset: boundPreset,
+        permissionPresetError: undefined,
         isDraft: false,
         composerEnabled: false,
         submission: "RUN_CREATED",
@@ -577,6 +624,113 @@ export class WebSessionManager {
     }
   }
 
+  async selectPermissionPreset(selection: PermissionPresetSelection): Promise<boolean> {
+    if (this.disposed || this.hasActiveRun() || this.snapshot.submission !== "IDLE") return false;
+    const preset = this.snapshot.availablePresets.find(
+      (candidate) => candidate.id === selection.id,
+    );
+    if (
+      preset === undefined ||
+      preset.version !== selection.expectedVersion ||
+      preset.status !== "AVAILABLE"
+    ) {
+      this.publish({ error: sessionError("PERMISSION_PRESET_UNAVAILABLE") });
+      return false;
+    }
+    this.options.permissionPresetStore?.write(this.options.workspace.id, selection);
+    this.publish({ selectedPreset: selection, permissionPresetError: undefined, error: undefined });
+    return true;
+  }
+
+  async preparePermissionPreset(selection: PermissionPresetSelection): Promise<boolean> {
+    if (this.disposed || this.hasActiveRun()) return false;
+    const prepare = this.options.client.prepareWorkspaceSecurity;
+    if (prepare === undefined) {
+      this.publish({ error: sessionError("PERMISSION_PREPARATION_FAILED") });
+      return false;
+    }
+    try {
+      this.options.permissionPresetStore?.write(this.options.workspace.id, selection);
+      const response = await prepare.call(
+        this.options.client,
+        this.options.workspace.id,
+        selection,
+      );
+      if (response.status !== "READY" && response.status !== "PREPARED") {
+        this.publish({ error: sessionError("PERMISSION_PREPARATION_FAILED") });
+        return false;
+      }
+      await this.loadPermissionPresets();
+      return this.snapshot.selectedPreset?.id === selection.id;
+    } catch {
+      this.publish({ error: sessionError("PERMISSION_PREPARATION_FAILED") });
+      return false;
+    }
+  }
+
+  private async loadPermissionPresets(): Promise<void> {
+    const getGlobal = this.options.client.getSecurityCapabilities;
+    const getWorkspace = this.options.client.getWorkspaceSecurityCapabilities;
+    if (getGlobal === undefined || getWorkspace === undefined) {
+      // Compatibility clients do not know the capability endpoint. They may retain the safe
+      // Workspace Write default, but they can never synthesize or silently select Full Access.
+      const fallbackId =
+        this.options.info.defaultRunConfiguration.defaultPreset ?? DEFAULT_PERMISSION_PRESET_ID;
+      const safeFallback =
+        fallbackId === "FULL_ACCESS" || fallbackId === "LEGACY_CUSTOM"
+          ? DEFAULT_PERMISSION_PRESET_ID
+          : fallbackId;
+      this.publish({
+        selectedPreset: { id: safeFallback, expectedVersion: 1 },
+        availablePresets: [],
+        permissionPresetError: undefined,
+      });
+      return;
+    }
+    try {
+      const [capabilities, workspaceCapabilities] = await Promise.all([
+        getGlobal.call(this.options.client),
+        getWorkspace.call(this.options.client, this.options.workspace.id),
+      ]);
+      const availablePresets = projectPermissionPresetViewModels(
+        capabilities,
+        workspaceCapabilities,
+      );
+      const persisted = this.options.permissionPresetStore?.read(this.options.workspace.id);
+      const configuredId =
+        persisted?.id ??
+        this.options.info.defaultRunConfiguration.defaultPreset ??
+        capabilities.defaultPreset;
+      const requestedId =
+        configuredId === "LEGACY_CUSTOM" ? capabilities.defaultPreset : configuredId;
+      const selectedPreset =
+        persisted !== undefined &&
+        persisted.expectedVersion ===
+          availablePresets.find((preset) => preset.id === persisted.id)?.version
+          ? choosePermissionPreset(availablePresets, persisted.id)
+          : choosePermissionPreset(availablePresets, requestedId);
+      this.publish({
+        permissionCapabilities: capabilities,
+        availablePresets,
+        selectedPreset,
+        permissionPresetError:
+          selectedPreset === undefined
+            ? sessionError("PERMISSION_PRESET_UNAVAILABLE").message
+            : undefined,
+        error:
+          selectedPreset === undefined ? sessionError("PERMISSION_PRESET_UNAVAILABLE") : undefined,
+      });
+    } catch {
+      this.publish({
+        permissionCapabilities: undefined,
+        availablePresets: [],
+        selectedPreset: undefined,
+        permissionPresetError: sessionError("PERMISSION_CAPABILITIES_FAILED").message,
+        error: sessionError("PERMISSION_CAPABILITIES_FAILED"),
+      });
+    }
+  }
+
   private currentModelSelection(): ClientModelSelectionWithReasoning | undefined {
     const session = this.snapshot.selectedSession;
     if (session?.defaultModel !== undefined) {
@@ -589,6 +743,22 @@ export class WebSessionManager {
           };
     }
     return this.snapshot.modelSelection ?? this.snapshot.defaultSelection;
+  }
+
+  private currentPermissionPreset(): PermissionPresetSelection | undefined {
+    if (this.options.client.getSecurityCapabilities === undefined) {
+      if (this.snapshot.selectedPreset !== undefined) return this.snapshot.selectedPreset;
+      const configured =
+        this.options.info.defaultRunConfiguration.defaultPreset ?? DEFAULT_PERMISSION_PRESET_ID;
+      return {
+        id:
+          configured === "FULL_ACCESS" || configured === "LEGACY_CUSTOM"
+            ? DEFAULT_PERMISSION_PRESET_ID
+            : configured,
+        expectedVersion: 1,
+      };
+    }
+    return this.snapshot.selectedPreset;
   }
 
   private isSelectionAvailable(selection: ClientModelSelectionWithReasoning): boolean {
@@ -899,6 +1069,9 @@ export class WebSessionManager {
       turnPresentation: await this.loadSessionTurnPresentation(session.id),
       activeRuns,
       activeRun: activeRuns.length === 1 ? activeRuns[0] : undefined,
+      selectedPreset:
+        (activeRuns.length === 1 ? runPermissionPreset(activeRuns[0]) : undefined) ??
+        this.snapshot.selectedPreset,
       timeline: createInitialTimelineState(activeRuns.length === 1 ? activeRuns[0]?.id : undefined),
       liveActivity: createInitialLiveActivityState(
         activeRuns.length === 1 ? activeRuns[0]?.id : undefined,
@@ -1504,6 +1677,7 @@ function initialSnapshot(): WebSessionSnapshot {
     timeline: createInitialTimelineState(),
     liveActivity: createInitialLiveActivityState(),
     contextUsage: null,
+    availablePresets: [],
     isDraft: false,
     composerEnabled: false,
     submission: "IDLE",
@@ -1663,6 +1837,9 @@ function sessionError(code: WebSessionErrorCode): WebSessionError {
     RUN_RECONNECT_EXHAUSTED: "任务执行连接已断开。请手动重新连接。",
     RUN_REFRESH_FAILED: "无法刷新任务状态。",
     DEFAULT_MODEL_UNAVAILABLE: "当前 daemon 未配置默认模型，无法开始任务。",
+    PERMISSION_CAPABILITIES_FAILED: "无法确认当前主机的权限能力，已阻止创建任务。",
+    PERMISSION_PRESET_UNAVAILABLE: "所选 Agent 权限当前不可用，已阻止创建任务。",
+    PERMISSION_PREPARATION_FAILED: "工作区权限准备失败，已阻止创建任务。",
     PROMPT_REQUIRED: "请输入任务内容。",
     PROMPT_TOO_LARGE: "任务内容不能超过 32 KiB。",
   };

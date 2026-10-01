@@ -18,6 +18,7 @@ export interface PromptComposerProps {
   readonly contextUsage?: ContextUsageProjection | null;
   readonly modelReady?: boolean;
   readonly modelPicker?: ReactElement;
+  readonly permissionSelector?: ReactElement;
   readonly onSubmit: (prompt: string) => Promise<boolean>;
 }
 
@@ -64,6 +65,7 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
       { className: "prompt-composer-footer" },
       createElement(ContextUsageRing, { usage: props.contextUsage ?? null }),
       createElement("span", { className: "prompt-hint" }, "Enter 发送 · Shift + Enter 换行"),
+      props.permissionSelector ?? null,
       props.modelPicker ?? null,
       createElement(
         "button",

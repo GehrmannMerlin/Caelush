@@ -1,4 +1,10 @@
-import { SessionIdSchema, type SessionId, type WorkspaceId } from "@caelush/protocol";
+import {
+  PermissionPresetSelectionSchema,
+  SessionIdSchema,
+  type PermissionPresetSelection,
+  type SessionId,
+  type WorkspaceId,
+} from "@caelush/protocol";
 
 export interface SessionSelectionStorage {
   getItem(key: string): string | null;
@@ -51,8 +57,48 @@ export class SessionSelectionStore {
   }
 }
 
+/** Persists only the server-owned preset identity, never its expanded policy fields. */
+export class PermissionPresetSelectionStore {
+  constructor(private readonly storage: StorageLike = browserStorage()) {}
+
+  read(workspaceId: WorkspaceId): PermissionPresetSelection | undefined {
+    const raw = get(this.storage, permissionKey(workspaceId));
+    if (raw === null) return undefined;
+    let value: unknown;
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      this.clear(workspaceId);
+      return undefined;
+    }
+    const parsed = PermissionPresetSelectionSchema.safeParse(value);
+    if (!parsed.success) {
+      this.clear(workspaceId);
+      return undefined;
+    }
+    return parsed.data;
+  }
+
+  write(workspaceId: WorkspaceId, selection: PermissionPresetSelection): void {
+    const parsed = PermissionPresetSelectionSchema.safeParse(selection);
+    if (!parsed.success) {
+      this.clear(workspaceId);
+      return;
+    }
+    set(this.storage, permissionKey(workspaceId), JSON.stringify(parsed.data));
+  }
+
+  clear(workspaceId: WorkspaceId): void {
+    remove(this.storage, permissionKey(workspaceId));
+  }
+}
+
 function key(workspaceId: WorkspaceId): string {
   return `caelush:selected-session:${workspaceId}`;
+}
+
+function permissionKey(workspaceId: WorkspaceId): string {
+  return `caelush:selected-permission-preset:${workspaceId}`;
 }
 
 function browserStorage(): SessionSelectionStorage {
