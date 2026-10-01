@@ -1,5 +1,6 @@
 import {
   AgentRunSchema,
+  computeSecurityPolicyDigest,
   createRunId,
   createSessionId,
   createTimestampMs,
@@ -18,10 +19,26 @@ const run = AgentRunSchema.parse({
   model: { provider: "fixture", model: "fixture-model" },
   runtime: { id: "local", kind: "fixture" },
   permissionProfile: "PROJECT_ACCESS",
-  approvalPolicy: "DANGEROUS_ONLY",
+  approvalPolicy: "ON_BOUNDARY",
   limits: { maxSteps: 2, maxToolCalls: 2, timeoutMs: 1000 },
   createdAt: createTimestampMs(1),
   startedAt: createTimestampMs(2),
+  securityPolicy: (() => {
+    const policy = {
+      schemaVersion: 1 as const,
+      preset: { id: "WORKSPACE_WRITE" as const, version: 1 },
+      permissionProfile: "PROJECT_ACCESS" as const,
+      approvalPolicy: "ON_BOUNDARY" as const,
+      filesystemBoundary: "WORKSPACE_READ_WRITE" as const,
+      processBoundary: "WORKSPACE_WRITE" as const,
+      requiredEnforcement: "OS_RESTRICTED" as const,
+      hardSafetyPolicyVersion: "hard-safety@1",
+      commandPolicyVersion: "command-policy@1",
+      secretPolicyVersion: "secret-policy@1",
+      createdAt: new Date(1).toISOString(),
+    };
+    return { ...policy, policyDigest: computeSecurityPolicyDigest(policy) };
+  })(),
 });
 
 const state = {
@@ -33,7 +50,7 @@ describe("RunController security authority", () => {
   it("derives ToolSecurityContext from the durable Run policy", () => {
     expect(createToolSecurityContext(run, state)).toEqual({
       permissionProfile: "PROJECT_ACCESS",
-      approvalPolicy: "DANGEROUS_ONLY",
+      approvalPolicy: "ON_BOUNDARY",
     });
   });
 

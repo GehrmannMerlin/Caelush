@@ -15,7 +15,7 @@ import {
 } from "@caelush/core";
 import type { AgentMessageRecord, AgentMessageRecordDraft } from "@caelush/agent";
 import {
-  AgentRunSchema,
+  CurrentAgentRunSchema,
   AgentStateSchema,
   AgentStepSchema,
   VerificationPlanSchema,
@@ -116,7 +116,7 @@ function recordFromDraft(
 }
 
 function writeRun(client: CaelushDatabase["client"], run: RunExecutionCommitView["run"]): void {
-  const parsed = AgentRunSchema.parse(run);
+  const parsed = CurrentAgentRunSchema.parse(run);
   const result = client
     .prepare(
       `UPDATE agent_runs SET session_id = ?, protocol_version = ?, status = ?, created_at_ms = ?,
@@ -129,7 +129,7 @@ function writeRun(client: CaelushDatabase["client"], run: RunExecutionCommitView
       parsed.createdAt,
       parsed.startedAt ?? null,
       parsed.finishedAt ?? null,
-      encodeProtocol(AgentRunSchema, parsed, {
+      encodeProtocol(CurrentAgentRunSchema, parsed, {
         entityType: "AgentRun",
         entityId: parsed.id,
         table: "agent_runs",
@@ -364,7 +364,7 @@ export class SqliteRunExecutionStore
     command: RunVerifiedCompletionCommit,
   ): Promise<RunExecutionCommitResult> {
     const parsedResult = VerifiedRunFinalResultSchema.parse(command.finalResult);
-    const parsedRun = AgentRunSchema.parse({ ...command.run, finalResult: parsedResult });
+    const parsedRun = CurrentAgentRunSchema.parse({ ...command.run, finalResult: parsedResult });
     if (parsedRun.status !== "COMPLETED" || command.state.status !== "COMPLETED") {
       throw new RunExecutionInvariantError(
         "verified completion must settle Run and State to COMPLETED",
@@ -450,7 +450,7 @@ export class SqliteRunExecutionStore
     command: RunCandidateBoundaryCommit,
   ): Promise<RunExecutionCommitResult> {
     const plan = VerificationPlanSchema.parse(command.verificationPlan);
-    const parsedRun = AgentRunSchema.parse(command.run);
+    const parsedRun = CurrentAgentRunSchema.parse(command.run);
     if (parsedRun.status !== "VERIFYING" || command.state.status !== "VERIFYING") {
       throw new RunExecutionInvariantError(
         "a candidate boundary must settle Run and State to VERIFYING",

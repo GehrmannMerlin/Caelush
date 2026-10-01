@@ -4,6 +4,7 @@ import {
   createStepId,
   createTimestampMs,
   createWorkspaceId,
+  computeSecurityPolicyDigest,
 } from "@caelush/protocol";
 import type {
   AgentRun,
@@ -27,6 +28,19 @@ export function makeRun(
   sessionId: AgentSession["id"],
   overrides: Partial<AgentRun> = {},
 ): AgentRun {
+  const securityPolicy = {
+    schemaVersion: 1 as const,
+    preset: { id: "VIEW_ONLY" as const, version: 1 },
+    permissionProfile: "READ_ONLY" as const,
+    approvalPolicy: "ON_BOUNDARY" as const,
+    filesystemBoundary: "WORKSPACE_READ_ONLY" as const,
+    processBoundary: "READ_ONLY" as const,
+    requiredEnforcement: "OS_RESTRICTED" as const,
+    hardSafetyPolicyVersion: "hard-safety@1",
+    commandPolicyVersion: "command-policy@1",
+    secretPolicyVersion: "secret-policy@1",
+    createdAt: new Date(100).toISOString(),
+  };
   return {
     id: createRunId(),
     sessionId,
@@ -36,9 +50,13 @@ export function makeRun(
     model: { provider: "test", model: "test-model" },
     runtime: { id: "local", kind: "test" },
     permissionProfile: "READ_ONLY",
-    approvalPolicy: "ALWAYS_ASK",
+    approvalPolicy: "ON_BOUNDARY",
     limits: { maxSteps: 10, maxToolCalls: 10, timeoutMs: 1000 },
     createdAt: createTimestampMs(100),
+    securityPolicy: {
+      ...securityPolicy,
+      policyDigest: computeSecurityPolicyDigest(securityPolicy),
+    },
     ...overrides,
   };
 }

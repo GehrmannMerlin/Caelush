@@ -59,6 +59,7 @@ export {
   ProcessBoundarySchema,
   RequiredEnforcementSchema,
   RiskLevelSchema,
+  SelectablePermissionPresetIdSchema,
 } from "./policy.js";
 export type {
   ApprovalPolicy,
@@ -69,6 +70,7 @@ export type {
   ProcessBoundary,
   RequiredEnforcement,
   RiskLevel,
+  SelectablePermissionPresetId,
 } from "./policy.js";
 export {
   RunSecurityPolicySnapshotV1Schema,

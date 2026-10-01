@@ -4,8 +4,21 @@ export const PermissionProfileSchema = z.enum(["READ_ONLY", "PROJECT_ACCESS", "F
 export type PermissionProfile = z.infer<typeof PermissionProfileSchema>;
 
 /** Product-level permission presets. Low-level policy composition is not client-selectable. */
-export const PermissionPresetIdSchema = z.enum(["VIEW_ONLY", "WORKSPACE_WRITE", "FULL_ACCESS"]);
+export const PermissionPresetIdSchema = z.enum([
+  "VIEW_ONLY",
+  "WORKSPACE_WRITE",
+  "FULL_ACCESS",
+  "LEGACY_CUSTOM",
+]);
 export type PermissionPresetId = z.infer<typeof PermissionPresetIdSchema>;
+
+/** New Run creation may select only the three supported product presets. */
+export const SelectablePermissionPresetIdSchema = z.enum([
+  "VIEW_ONLY",
+  "WORKSPACE_WRITE",
+  "FULL_ACCESS",
+]);
+export type SelectablePermissionPresetId = z.infer<typeof SelectablePermissionPresetIdSchema>;
 
 export const ProcessBoundarySchema = z.enum(["READ_ONLY", "WORKSPACE_WRITE", "UNRESTRICTED"]);
 export type ProcessBoundary = z.infer<typeof ProcessBoundarySchema>;

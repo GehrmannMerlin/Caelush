@@ -2,6 +2,7 @@ import type { ToolSecurityContext } from "@caelush/agent";
 import type { AgentRun, AgentState } from "@caelush/protocol";
 
 import { RunControllerInvariantError } from "./run-controller-errors.js";
+import { createRunSecurityContext } from "./run-security-context.js";
 
 /**
  * Project one Run's durable security policy onto the Tool Layer's security context.
@@ -26,14 +27,15 @@ export function createToolSecurityContext(
   run: AgentRun,
   state: Pick<AgentState, "permissionProfile" | "approvalPolicy">,
 ): ToolSecurityContext {
+  const security = createRunSecurityContext(run.securityPolicy);
   if (
-    run.permissionProfile !== state.permissionProfile ||
-    run.approvalPolicy !== state.approvalPolicy
+    security.permissionProfile !== state.permissionProfile ||
+    security.approvalPolicy !== state.approvalPolicy
   ) {
     throw new RunControllerInvariantError("Run security policy does not match AgentState policy.");
   }
   return Object.freeze({
-    permissionProfile: run.permissionProfile,
-    approvalPolicy: run.approvalPolicy,
+    permissionProfile: security.permissionProfile,
+    approvalPolicy: security.approvalPolicy,
   });
 }

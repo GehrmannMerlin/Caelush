@@ -39,3 +39,20 @@ export class StorageMigrationError extends StorageError {
     this.name = "StorageMigrationError";
   }
 }
+
+export type StorageSecurityPolicyErrorReason =
+  "MISSING" | "MALFORMED" | "DIGEST_MISMATCH" | "LEGACY_CUSTOM";
+
+export class StorageSecurityPolicyError extends StorageError {
+  readonly reason: StorageSecurityPolicyErrorReason;
+
+  constructor(
+    reason: StorageSecurityPolicyErrorReason,
+    message: string,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "StorageSecurityPolicyError";
+    this.reason = reason;
+  }
+}

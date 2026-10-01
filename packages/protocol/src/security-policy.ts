@@ -6,12 +6,13 @@ import {
   PermissionProfileSchema,
   ProcessBoundarySchema,
   RequiredEnforcementSchema,
+  SelectablePermissionPresetIdSchema,
 } from "./policy.js";
 import { WorkspaceIdSchema } from "./primitives/ids.js";
 
 export const PermissionPresetSelectionSchema = z
   .object({
-    id: PermissionPresetIdSchema,
+    id: SelectablePermissionPresetIdSchema,
     expectedVersion: z.number().int().positive().safe(),
   })
   .strict();
@@ -19,7 +20,7 @@ export type PermissionPresetSelection = z.infer<typeof PermissionPresetSelection
 
 export const PermissionPresetDescriptorSchema = z
   .object({
-    id: PermissionPresetIdSchema,
+    id: SelectablePermissionPresetIdSchema,
     version: z.number().int().positive().safe(),
     displayName: z.string().min(1),
     description: z.string().min(1),
@@ -35,7 +36,7 @@ export type PermissionPresetDescriptor = z.infer<typeof PermissionPresetDescript
 
 const SecurityPolicyPresetAvailabilitySchema = z
   .object({
-    id: PermissionPresetIdSchema,
+    id: SelectablePermissionPresetIdSchema,
     version: z.number().int().positive().safe(),
     status: z.enum(["AVAILABLE", "PREPARATION_REQUIRED", "UNAVAILABLE"]),
     reasonCode: z.string().min(1).optional(),
@@ -58,7 +59,7 @@ export const SecurityCapabilitiesResponseSchema = z
   .object({
     schemaVersion: z.literal(1),
     presets: z.array(PermissionPresetDescriptorSchema).min(1),
-    defaultPreset: PermissionPresetIdSchema,
+    defaultPreset: SelectablePermissionPresetIdSchema,
     processSandbox: ProcessSandboxCapabilitySchema,
     ttySupported: z.boolean(),
     workspacePreparationSupported: z.boolean(),

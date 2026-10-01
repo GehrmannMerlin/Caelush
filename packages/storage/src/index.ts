@@ -135,3 +135,10 @@ export {
   type ContextRuntimeState,
   type ContextRuntimeStateRepository,
 } from "./context-runtime-state-repository.js";
+export {
+  finalizeRunSecurityPolicies,
+  migrateLegacyRunSecurityPolicy,
+  verifyRunSecurityPolicySnapshot,
+} from "./security-policy-migration.js";
+export type { LegacyRunSecurityPolicyRow } from "./security-policy-migration.js";
+export { StorageSecurityPolicyError, type StorageSecurityPolicyErrorReason } from "./errors.js";

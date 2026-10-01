@@ -1,5 +1,5 @@
 import {
-  AgentRunSchema,
+  CurrentAgentRunSchema,
   type AgentRun,
   type RunId,
   type RunStatus,
@@ -90,7 +90,7 @@ function matchesOptional(actual: number | undefined, stored: number | null): boo
 }
 
 function decodeRun(row: RunRow): AgentRun {
-  const run = decodeProtocol(AgentRunSchema, row.data_json, {
+  const run = decodeProtocol(CurrentAgentRunSchema, row.data_json, {
     entityType: "AgentRun",
     entityId: row.id,
     table: "agent_runs",
@@ -128,7 +128,8 @@ export class SqliteRunRepository implements RunRepository {
   constructor(private readonly database: CaelushDatabase) {}
 
   async insert(run: AgentRun): Promise<void> {
-    const dataJson = encodeProtocol(AgentRunSchema, run, {
+    const currentRun = CurrentAgentRunSchema.parse(run);
+    const dataJson = encodeProtocol(CurrentAgentRunSchema, currentRun, {
       entityType: "AgentRun",
       entityId: run.id,
       table: "agent_runs",
@@ -142,13 +143,13 @@ export class SqliteRunRepository implements RunRepository {
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
-          run.id,
-          run.sessionId,
+          currentRun.id,
+          currentRun.sessionId,
           1,
-          run.status,
-          run.createdAt,
-          nullableTimestamp(run.startedAt),
-          nullableTimestamp(run.finishedAt),
+          currentRun.status,
+          currentRun.createdAt,
+          nullableTimestamp(currentRun.startedAt),
+          nullableTimestamp(currentRun.finishedAt),
           dataJson,
         );
     } catch (error) {
@@ -174,7 +175,8 @@ export class SqliteRunRepository implements RunRepository {
   }
 
   async update(run: AgentRun): Promise<void> {
-    const dataJson = encodeProtocol(AgentRunSchema, run, {
+    const currentRun = CurrentAgentRunSchema.parse(run);
+    const dataJson = encodeProtocol(CurrentAgentRunSchema, currentRun, {
       entityType: "AgentRun",
       entityId: run.id,
       table: "agent_runs",
@@ -185,14 +187,14 @@ export class SqliteRunRepository implements RunRepository {
           started_at_ms = ?, finished_at_ms = ?, data_json = ? WHERE id = ?`,
       )
       .run(
-        run.sessionId,
+        currentRun.sessionId,
         1,
-        run.status,
-        run.createdAt,
-        nullableTimestamp(run.startedAt),
-        nullableTimestamp(run.finishedAt),
+        currentRun.status,
+        currentRun.createdAt,
+        nullableTimestamp(currentRun.startedAt),
+        nullableTimestamp(currentRun.finishedAt),
         dataJson,
-        run.id,
+        currentRun.id,
       );
 
     if (result.changes === 0) {

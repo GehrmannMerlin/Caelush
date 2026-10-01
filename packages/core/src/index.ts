@@ -178,6 +178,8 @@ export type {
 } from "./run-tool-effect-settlement.js";
 /** The one projection of a Run's durable security policy onto the Tool Layer. */
 export { createToolSecurityContext } from "./tool-security-context.js";
+export { createRunSecurityContext, RunSecurityContextError } from "./run-security-context.js";
+export type { RunSecurityContext } from "./run-security-context.js";
 /**
  * Where a Tool result's raw output pointer is resolved from.
  *
