@@ -1,4 +1,5 @@
 import type { RunId } from "@caelush/protocol";
+import type { AuthorizedRuntimeExecution } from "../security/runtime-boundary.js";
 
 export const MAX_EXEC_COMMAND_BYTES = 64 * 1024;
 export const MAX_EXEC_ARG_COUNT = 128;
@@ -34,6 +35,14 @@ export interface RuntimeArgvExecRequest {
   readonly yieldTimeMs: number;
   /** Neutral live output observation; Runtime does not interpret or persist the event. */
   readonly onOutput?: (event: ProcessOutputEvent) => void;
+}
+
+export interface AuthorizedRuntimeExecRequest extends RuntimeExecRequest {
+  readonly authorization: AuthorizedRuntimeExecution;
+}
+
+export interface AuthorizedRuntimeArgvExecRequest extends RuntimeArgvExecRequest {
+  readonly authorization: AuthorizedRuntimeExecution;
 }
 
 export interface RuntimeProcessInteractionRequest {
@@ -117,11 +126,14 @@ export interface ManagedProcessStartRequest extends RuntimeExecRequest {
   readonly launch: ShellLaunch;
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
+  readonly authorization?: AuthorizedRuntimeExecution;
 }
 
 export interface RuntimeExecService {
   execute(request: RuntimeExecRequest): Promise<RuntimeExecResult>;
   executeArgv(request: RuntimeArgvExecRequest): Promise<RuntimeExecResult>;
+  executeAuthorized(request: AuthorizedRuntimeExecRequest): Promise<RuntimeExecResult>;
+  executeArgvAuthorized(request: AuthorizedRuntimeArgvExecRequest): Promise<RuntimeExecResult>;
   interact(request: RuntimeProcessInteractionRequest): Promise<RuntimeExecResult>;
   /**
    * Terminate one owned managed session.

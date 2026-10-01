@@ -16,10 +16,12 @@ import {
   RuntimeProcessStaleSessionError,
   RuntimeProcessUncertainError,
 } from "./errors.js";
+import { RuntimeSandboxError } from "../runtime-errors.js";
 import { createPipeProcessAdapter } from "./pipe-process-adapter.js";
 import { createPtyProcessAdapter } from "./pty-process-adapter.js";
 import { HeadTailOutputBuffer } from "./output-buffer.js";
 import { isManagedProcessTerminal, type ManagedProcessState } from "./process-state.js";
+import { assertAuthorizedRuntimeExecution } from "../security/runtime-boundary.js";
 
 export interface LocalProcessManagerOptions {
   readonly generationId?: string;
@@ -73,13 +75,26 @@ export class LocalProcessManager {
       (entry) => !isManagedProcessTerminal(entry.state),
     ).length;
     if (activeCount >= this.maxProcesses) throw new RuntimeExecError("PROCESS_LIMIT_REACHED");
-    const factory = request.tty ? this.ptyFactory : this.pipeFactory;
-    const adapter = await factory.create({
-      launch: request.launch,
-      cwd: request.cwd,
-      env: request.env,
-      tty: request.tty,
-    });
+    let adapter: ManagedProcessAdapter;
+    if (request.authorization !== undefined) {
+      assertAuthorizedRuntimeExecution(request.authorization, request.ownerRunId, request.cwd);
+      assertProviderMatchesPolicy(request.authorization);
+      adapter = await request.authorization.provider.create({
+        launch: request.launch,
+        cwd: request.cwd,
+        env: request.env,
+        tty: request.tty,
+        policy: request.authorization.policy,
+      });
+    } else {
+      const factory = request.tty ? this.ptyFactory : this.pipeFactory;
+      adapter = await factory.create({
+        launch: request.launch,
+        cwd: request.cwd,
+        env: request.env,
+        tty: request.tty,
+      });
+    }
     const sequence = ++this.sequence;
     const id = this.sessionIdFactory(this.runtimeGenerationId, sequence);
     const entry: ProcessEntry = {
@@ -331,6 +346,30 @@ export class LocalProcessManager {
     };
     if (entry.state === "EXITED") this.entries.delete(entry.id);
     return result;
+  }
+}
+
+function assertProviderMatchesPolicy(
+  authorization: NonNullable<ManagedProcessStartRequest["authorization"]>,
+): void {
+  if (authorization.policy.requiredEnforcement === "OS_RESTRICTED") {
+    if (
+      authorization.policy.processBoundary === "UNRESTRICTED" ||
+      authorization.provider.kind !== "RESTRICTED" ||
+      authorization.provider.enforcement === "NONE"
+    ) {
+      throw new RuntimeSandboxError("Restricted execution cannot use an unrestricted provider.");
+    }
+    return;
+  }
+  if (
+    authorization.policy.requiredEnforcement === "HARD_SAFETY_ONLY" &&
+    (authorization.policy.processBoundary !== "UNRESTRICTED" ||
+      authorization.provider.kind !== "UNRESTRICTED")
+  ) {
+    throw new RuntimeSandboxError(
+      "Full Access execution requires its explicit unrestricted provider.",
+    );
   }
 }
 

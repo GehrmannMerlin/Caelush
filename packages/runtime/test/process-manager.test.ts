@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { LocalProcessManager } from "../src/index.js";
+import {
+  LocalProcessManager,
+  createAuthorizedRuntimeExecution,
+  createRuntimeProcessPolicy,
+} from "../src/index.js";
 
 const launch = (script: string) => ({ executable: process.execPath, args: ["-e", script] });
 const base = (command: string, ownerRunId = "run_a" as never) => ({
@@ -154,6 +158,42 @@ describe("LocalProcessManager", () => {
 
     expect(result).toMatchObject({ status: "EXITED", signal: "KILLED" });
     expect(manager.size).toBe(0);
+    await manager.dispose();
+  });
+
+  it("rejects an authorization object belonging to another Run before spawning", async () => {
+    const manager = new LocalProcessManager({ generationId: "authorization-owner" });
+    let createCalled = false;
+    const provider = {
+      id: "unrestricted-test",
+      kind: "UNRESTRICTED" as const,
+      enforcement: "NONE" as const,
+      create: async () => {
+        createCalled = true;
+        throw new Error("must not spawn");
+      },
+    };
+    const policy = createRuntimeProcessPolicy({
+      runId: "run_b" as never,
+      workspaceId: "workspace_authorization" as never,
+      workspaceRoot: process.cwd(),
+      filesystemBoundary: "HOST_USER_SCOPE",
+      processBoundary: "UNRESTRICTED",
+      requiredEnforcement: "HARD_SAFETY_ONLY",
+    });
+    const authorization = createAuthorizedRuntimeExecution({
+      policy,
+      provider,
+      authorizationNonce: "authorization-owner-nonce-1",
+    });
+
+    await expect(
+      manager.start({
+        ...base("setTimeout(() => {}, 10000)", "run_a" as never),
+        authorization,
+      }),
+    ).rejects.toMatchObject({ code: "RUNTIME_AUTHORIZATION_REQUIRED" });
+    expect(createCalled).toBe(false);
     await manager.dispose();
   });
 });

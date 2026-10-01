@@ -16,6 +16,11 @@ export {
   RuntimeSearchError,
   RuntimeInvariantError,
   RuntimeGitError,
+  RuntimeAuthorizationError,
+  RuntimeWorkspaceBoundaryMismatchError,
+  RuntimeSandboxError,
+  RuntimeSandboxProtocolError,
+  RuntimePrivateTempError,
 } from "./runtime-errors.js";
 export type { RuntimeErrorCode } from "./runtime-errors.js";
 export {
@@ -26,6 +31,49 @@ export {
 export type { RuntimeResolver } from "./runtime-ref.js";
 export type { Runtime } from "./runtime.js";
 export type { RuntimeWorkspaceScope } from "./workspace-scope.js";
+export {
+  assertAuthorizedRuntimeExecution,
+  assertRuntimeWorkspaceBoundary,
+  createAuthorizedRuntimeExecution,
+  createRuntimeProcessPolicy,
+} from "./security/runtime-boundary.js";
+export type {
+  AuthorizedRuntimeExecution,
+  RuntimeFilesystemPolicy,
+  RuntimeProcessPolicy,
+  RuntimeProcessPolicyInput,
+} from "./security/runtime-boundary.js";
+export {
+  SANDBOX_CONTROL_PROTOCOL_VERSION,
+  MAX_SANDBOX_CONTROL_MESSAGE_BYTES,
+  acceptSandboxReady,
+  createSandboxHello,
+  decodeSandboxControlMessage,
+  encodeSandboxControlMessage,
+  validateSandboxControlMessage,
+} from "./sandbox/control-protocol.js";
+export type {
+  SandboxControlMessage,
+  SandboxErrorMessage,
+  SandboxHelloMessage,
+  SandboxReadyMessage,
+} from "./sandbox/control-protocol.js";
+export { selectProcessSandbox } from "./sandbox/provider-selection.js";
+export { createUnrestrictedProcessSandboxProvider } from "./sandbox/unrestricted-provider.js";
+export type {
+  ProcessSandboxFactory,
+  ProcessSandboxKind,
+  ProcessSandboxProbe,
+  ProcessSandboxProvider,
+  SandboxedSpawnSpec,
+  SandboxEnforcement,
+} from "./sandbox/contracts.js";
+export {
+  cleanupPrivateRunTemp,
+  cleanupStalePrivateRunTemps,
+  createPrivateRunTemp,
+} from "./sandbox/private-temp.js";
+export type { PrivateRunTemp, PrivateRunTempOptions } from "./sandbox/private-temp.js";
 export {
   MAX_WORKSPACE_PATH_BYTES,
   WorkspacePathResolver,

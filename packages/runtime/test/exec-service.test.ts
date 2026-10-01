@@ -2,7 +2,14 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { LocalRuntime, RuntimeBoundaryError, RuntimePathTypeError } from "../src/index.js";
+import {
+  LocalRuntime,
+  RuntimeBoundaryError,
+  RuntimePathTypeError,
+  createAuthorizedRuntimeExecution,
+  createRuntimeProcessPolicy,
+  createUnrestrictedProcessSandboxProvider,
+} from "../src/index.js";
 import { createWorkspaceId } from "@caelush/protocol";
 
 describe("LocalRuntime exec service", () => {
@@ -95,6 +102,41 @@ describe("LocalRuntime exec service", () => {
     } finally {
       if (previous === undefined) delete process.env[secretName];
       else process.env[secretName] = previous;
+      await runtime?.dispose();
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("requires an explicit Run authorization object for the authorized execution path", async () => {
+    const parent = await mkdtemp(path.join(os.tmpdir(), "caelush-exec-authorized-"));
+    let runtime: LocalRuntime | undefined;
+    try {
+      runtime = new LocalRuntime();
+      const scope = await runtime.openWorkspace({ id: createWorkspaceId(), path: parent });
+      const ownerRunId = "run_authorized_exec" as never;
+      const policy = createRuntimeProcessPolicy({
+        runId: ownerRunId,
+        workspaceId: scope.workspace.id,
+        workspaceRoot: scope.logicalRoot,
+        filesystemBoundary: "HOST_USER_SCOPE",
+        processBoundary: "UNRESTRICTED",
+        requiredEnforcement: "HARD_SAFETY_ONLY",
+      });
+      const authorization = createAuthorizedRuntimeExecution({
+        policy,
+        provider: createUnrestrictedProcessSandboxProvider(),
+        authorizationNonce: "authorized-exec-nonce-1",
+      });
+      await expect(
+        scope.exec.executeAuthorized({
+          ownerRunId,
+          authorization,
+          command: `${process.execPath} -e "process.stdout.write('authorized')"`,
+          tty: false,
+          yieldTimeMs: 5000,
+        }),
+      ).resolves.toMatchObject({ status: "EXITED", output: "authorized" });
+    } finally {
       await runtime?.dispose();
       await rm(parent, { recursive: true, force: true });
     }

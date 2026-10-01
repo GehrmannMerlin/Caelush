@@ -43,6 +43,8 @@ describe("runtime exec contracts", () => {
     const service: RuntimeExecService = {
       execute: async () => result,
       executeArgv: async () => result,
+      executeAuthorized: async () => result,
+      executeArgvAuthorized: async () => result,
       interact: async () => result,
       terminate: async () => result,
     };

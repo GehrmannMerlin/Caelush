@@ -49,7 +49,12 @@ export type RuntimeErrorCode =
   | "INVALID_GIT_PATH"
   | "INVALID_GIT_SCOPE"
   | "GIT_COMMAND_FAILED"
-  | "GIT_UNSUPPORTED_PATH_ENCODING";
+  | "GIT_UNSUPPORTED_PATH_ENCODING"
+  | "RUNTIME_AUTHORIZATION_REQUIRED"
+  | "WORKSPACE_BOUNDARY_MISMATCH"
+  | "SANDBOX_UNAVAILABLE"
+  | "SANDBOX_PROTOCOL_ERROR"
+  | "PRIVATE_TEMP_INVALID";
 
 export class RuntimeError extends Error {
   readonly code: RuntimeErrorCode;
@@ -142,6 +147,36 @@ export class RuntimeSearchError extends RuntimeError {
 export class RuntimeInvariantError extends RuntimeError {
   constructor(message: string) {
     super("RUNTIME_INVARIANT", message);
+  }
+}
+
+export class RuntimeAuthorizationError extends RuntimeError {
+  constructor(message = "Runtime execution requires an explicit authorization object.") {
+    super("RUNTIME_AUTHORIZATION_REQUIRED", message);
+  }
+}
+
+export class RuntimeWorkspaceBoundaryMismatchError extends RuntimeError {
+  constructor(message = "The requested path is outside the authorized workspace boundary.") {
+    super("WORKSPACE_BOUNDARY_MISMATCH", message);
+  }
+}
+
+export class RuntimeSandboxError extends RuntimeError {
+  constructor(message = "No suitable process sandbox provider is available.") {
+    super("SANDBOX_UNAVAILABLE", message);
+  }
+}
+
+export class RuntimeSandboxProtocolError extends RuntimeError {
+  constructor(message = "The sandbox control protocol message is invalid.") {
+    super("SANDBOX_PROTOCOL_ERROR", message);
+  }
+}
+
+export class RuntimePrivateTempError extends RuntimeError {
+  constructor(message = "The private Run temp directory marker is invalid.") {
+    super("PRIVATE_TEMP_INVALID", message);
   }
 }
 

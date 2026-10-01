@@ -14,6 +14,8 @@ import {
   MIN_EXEC_YIELD_TIME_MS,
   type RuntimeExecRequest,
   type RuntimeArgvExecRequest,
+  type AuthorizedRuntimeExecRequest,
+  type AuthorizedRuntimeArgvExecRequest,
   type RuntimeExecResult,
   type RuntimeExecService,
   type RuntimeProcessInteractionRequest,
@@ -24,6 +26,7 @@ import { LocalProcessManager } from "./process-manager.js";
 import { LocalShellResolver } from "./shell-resolver.js";
 import { RuntimePathTypeError } from "../runtime-errors.js";
 import { createAgentProcessEnvironment } from "./environment-policy.js";
+import { assertAuthorizedRuntimeExecution } from "../security/runtime-boundary.js";
 
 export interface LocalRuntimeExecServiceOptions {
   readonly pathResolver: WorkspacePathResolver;
@@ -57,6 +60,22 @@ export class LocalRuntimeExecService implements RuntimeExecService {
     });
   }
 
+  async executeAuthorized(request: AuthorizedRuntimeExecRequest): Promise<RuntimeExecResult> {
+    validateCommand(request.command);
+    const cwd = await this.resolveWorkdir(request.workdir);
+    validateYield(request.yieldTimeMs);
+    assertAuthorizedRuntimeExecution(request.authorization, request.ownerRunId, cwd);
+    return this.options.processManager.start({
+      ...request,
+      cwd,
+      env: executionEnvironment(
+        createAgentProcessEnvironment(this.env, this.options.platform ?? process.platform),
+        request.tty,
+      ),
+      launch: this.shellResolver.resolve(request.command),
+    });
+  }
+
   async executeArgv(request: RuntimeArgvExecRequest): Promise<RuntimeExecResult> {
     validateArgv(request.executable, request.args);
     const cwd = await this.resolveWorkdir(request.workdir);
@@ -74,6 +93,30 @@ export class LocalRuntimeExecService implements RuntimeExecService {
         false,
       ),
       launch: { executable: request.executable, args: [...request.args] },
+    });
+  }
+
+  async executeArgvAuthorized(
+    request: AuthorizedRuntimeArgvExecRequest,
+  ): Promise<RuntimeExecResult> {
+    validateArgv(request.executable, request.args);
+    const cwd = await this.resolveWorkdir(request.workdir);
+    validateYield(request.yieldTimeMs);
+    assertAuthorizedRuntimeExecution(request.authorization, request.ownerRunId, cwd);
+    return this.options.processManager.start({
+      ownerRunId: request.ownerRunId,
+      ...(request.signal === undefined ? {} : { signal: request.signal }),
+      command: request.executable,
+      tty: false,
+      yieldTimeMs: request.yieldTimeMs,
+      ...(request.onOutput === undefined ? {} : { onOutput: request.onOutput }),
+      cwd,
+      env: executionEnvironment(
+        createAgentProcessEnvironment(this.env, this.options.platform ?? process.platform),
+        false,
+      ),
+      launch: { executable: request.executable, args: [...request.args] },
+      authorization: request.authorization,
     });
   }
 

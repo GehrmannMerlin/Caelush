@@ -16,6 +16,8 @@ export {
 export type {
   ManagedProcessAdapter,
   ManagedProcessStartRequest,
+  AuthorizedRuntimeExecRequest,
+  AuthorizedRuntimeArgvExecRequest,
   ProcessAdapterFactory,
   ProcessExit,
   ProcessOutputEvent,
