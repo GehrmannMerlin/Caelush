@@ -186,7 +186,8 @@ export class AIConfigurationService {
     });
     const session = await this.options.sessions.get(sessionId);
     if (session === null) throw new StorageNotFoundError("AgentSession", sessionId);
-    const { defaultReasoningLevel: _previousReasoningLevel, ...sessionWithoutReasoning } = session;
+    const sessionWithoutReasoning = { ...session };
+    delete sessionWithoutReasoning.defaultReasoningLevel;
     const updated =
       input.defaultReasoningLevel === undefined
         ? {

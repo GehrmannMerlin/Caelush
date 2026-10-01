@@ -5,7 +5,7 @@ import type {
   ModelReasoningProfile,
 } from "@caelush/ai";
 import type { ReasoningLevel } from "@caelush/ai";
-import type { ModelView, ReasoningPresentation } from "@caelush/protocol";
+import type { ReasoningPresentation } from "@caelush/protocol";
 import type { ProviderPreset } from "./provider-presets.js";
 
 interface CuratedModelRecord {

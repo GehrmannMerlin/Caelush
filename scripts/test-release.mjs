@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import process from "node:process";
 import { URL, fileURLToPath } from "node:url";
 import { validateReleaseManifest } from "./build-release.mjs";
 
@@ -41,7 +42,7 @@ export function verifyChecksums(artifactPath, entries, checksums) {
     .split(/\r?\n/)
     .filter(Boolean)
     .map((line) => {
-      const match = /^(?<hash>[0-9a-f]{64})  (?<path>.+)$/.exec(line);
+      const match = /^(?<hash>[0-9a-f]{64})\x20{2}(?<path>.+)$/.exec(line);
       if (match === null) throw new Error("Invalid release checksum record.");
       return { hash: match.groups.hash, path: match.groups.path };
     });

@@ -58,6 +58,7 @@ const PRESET_CATALOG: readonly PermissionPresetTemplate[] = Object.freeze([
 export function getPermissionPresetCatalog(
   _hostConstraints?: PermissionPresetHostConstraints,
 ): readonly PermissionPresetTemplate[] {
+  void _hostConstraints;
   // Availability is reported separately by the daemon. Returning a stable catalog here prevents
   // a host probe from changing the policy composition that a client can request.
   return PRESET_CATALOG;

@@ -242,7 +242,7 @@ export class RuntimeModelDirectoryService {
         headers,
         ...(signal === undefined ? {} : { signal }),
       });
-    } catch (error) {
+    } catch {
       if (signal?.aborted) {
         throw new ModelDiscoveryError(providerId, "AI_NETWORK", "Model discovery was cancelled.");
       }

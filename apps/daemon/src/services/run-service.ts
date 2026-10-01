@@ -118,8 +118,8 @@ export class RunService {
       );
     }
     const workspace = await this.resolveWorkspace(session, input.workspace);
-    const securityPolicy = await this.resolveSecurityPolicy(workspace.id, input.preset);
-    const { preset: _preset, ...clientFields } = input;
+    const { preset, ...clientFields } = input;
+    const securityPolicy = await this.resolveSecurityPolicy(workspace.id, preset);
     const run = AgentRunSchema.parse({
       id: this.createId(),
       sessionId,

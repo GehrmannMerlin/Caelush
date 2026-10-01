@@ -1,13 +1,16 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createWorkspaceId, type WorkspaceRecord } from "@caelush/protocol";
+import { createTimestampMs, createWorkspaceId, type WorkspaceRecord } from "@caelush/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { openCaelushDatabase } from "../src/database.js";
 import { migrateCaelushDatabase } from "../src/migrate.js";
 import { SqliteWorkspaceRepository } from "../src/repositories/workspace-repository.js";
 
-const resources: Array<{ readonly database: Awaited<ReturnType<typeof openCaelushDatabase>>; readonly root: string }> = [];
+const resources: Array<{
+  readonly database: Awaited<ReturnType<typeof openCaelushDatabase>>;
+  readonly root: string;
+}> = [];
 
 afterEach(async () => {
   for (const resource of resources.splice(0)) {
@@ -31,9 +34,9 @@ function record(path: string, lastOpenedAt: number): WorkspaceRecord {
     id,
     canonicalPath: path,
     displayName: path.split(/[\\/]/).at(-1) ?? path,
-    createdAt: 1,
-    updatedAt: lastOpenedAt,
-    lastOpenedAt,
+    createdAt: createTimestampMs(1),
+    updatedAt: createTimestampMs(lastOpenedAt),
+    lastOpenedAt: createTimestampMs(lastOpenedAt),
   };
 }
 
@@ -62,6 +65,8 @@ describe("WorkspaceRepository", () => {
     await repository.remove(workspace.id);
 
     expect(await repository.getById(workspace.id)).toBeNull();
-    await expect(import("node:fs/promises").then(({ access }) => access(marker))).resolves.toBeUndefined();
+    await expect(
+      import("node:fs/promises").then(({ access }) => access(marker)),
+    ).resolves.toBeUndefined();
   });
 });

@@ -28,6 +28,7 @@ const spec = (): SandboxedSpawnSpec => ({
     filesystem: {
       workspaceId: "workspace_platform" as never,
       workspaceRoot: "C:\\workspace",
+      hostUserRoot: "C:\\workspace",
       boundary: "WORKSPACE_READ_WRITE",
       protectedRoots: ["C:\\workspace"],
     },
@@ -47,7 +48,7 @@ describe("platform process sandbox Providers", () => {
     for (const provider of providers) {
       expect(provider.kind).toBe("RESTRICTED");
       await expect(provider.create(spec())).rejects.toMatchObject({ code: "SANDBOX_UNAVAILABLE" });
-      await expect(provider.probe()).resolves.toMatchObject({ available: false });
+      await expect(provider.probe!()).resolves.toMatchObject({ available: false });
     }
   });
 
@@ -62,7 +63,7 @@ describe("platform process sandbox Providers", () => {
     });
     await expect(provider.create(spec())).resolves.toBeDefined();
     expect(observed?.policy.processBoundary).toBe("WORKSPACE_WRITE");
-    await expect(provider.probe()).resolves.toMatchObject({
+    await expect(provider.probe!()).resolves.toMatchObject({
       available: true,
       enforcement: "PARTIAL",
     });

@@ -4,7 +4,12 @@ import { describe, expect, it } from "vitest";
 
 import { createLocalCodingContextPorts } from "@caelush/coding-agent";
 import type { WorkspaceRef } from "@caelush/protocol";
-import { RuntimeGitError, type Runtime, type RuntimeWorkspaceScope } from "@caelush/runtime";
+import {
+  RuntimeGitError,
+  createRuntimeFilesystemPolicy,
+  type Runtime,
+  type RuntimeWorkspaceScope,
+} from "@caelush/runtime";
 
 const ROOT = path.resolve("C:/caelush-phase-7f-workspace");
 const WORKSPACE: WorkspaceRef = {
@@ -164,6 +169,12 @@ function fakeScope(content: Readonly<Record<string, string>>): RuntimeWorkspaceS
     workspace: WORKSPACE,
     logicalRoot: ROOT,
     realRoot: ROOT,
+    filesystemPolicy: createRuntimeFilesystemPolicy({
+      workspaceId: WORKSPACE.id,
+      workspaceRoot: ROOT,
+      hostUserRoot: ROOT,
+      boundary: "WORKSPACE_READ_WRITE",
+    }),
     pathResolver: pathResolver as RuntimeWorkspaceScope["pathResolver"],
     filesystem,
     discovery: {

@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createSessionId, createWorkspaceId } from "@caelush/protocol";
+import { createSessionId, createTimestampMs, createWorkspaceId } from "@caelush/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { openCaelushStorage, type CaelushStorage } from "../src/index.js";
 
@@ -24,8 +24,8 @@ describe("durable Session Workspace ownership", () => {
       id: createSessionId(),
       workspaceId,
       defaultWorkspace: { id: workspaceId, path: "D:/workspace" },
-      createdAt: 1,
-      updatedAt: 1,
+      createdAt: createTimestampMs(1),
+      updatedAt: createTimestampMs(1),
       metadata: {},
     };
 

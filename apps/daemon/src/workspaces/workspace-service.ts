@@ -16,7 +16,6 @@ import {
   canonicalizeWorkspacePath,
   createStableWorkspaceId,
   displayNameForWorkspacePath,
-  WorkspacePathError,
 } from "./workspace-identity.js";
 import { ActiveRunConflictError } from "./workspace-errors.js";
 

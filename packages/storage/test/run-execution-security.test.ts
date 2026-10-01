@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createTimestampMs } from "@caelush/protocol";
 import { openCaelushStorage } from "../src/index.js";
 import { makeRun, makeSession } from "./support/fixtures.js";
 
@@ -13,7 +14,7 @@ describe("Run execution security policy persistence", () => {
 
       const before = (await storage.runs.get(run.id))?.securityPolicy;
       if (before === undefined) throw new Error("fixture did not contain a security policy");
-      await storage.runs.update({ ...run, status: "RUNNING", startedAt: 200 });
+      await storage.runs.update({ ...run, status: "RUNNING", startedAt: createTimestampMs(200) });
       const after = (await storage.runs.get(run.id))?.securityPolicy;
 
       expect(after).toEqual(before);

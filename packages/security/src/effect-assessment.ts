@@ -80,9 +80,15 @@ export function assessCommandEffect(input: AssessCommandEffectInput): CommandEff
   const executableToken = tokens[0] ?? "";
   const executable = executableName(executableToken);
   const taintIds = sanitizeTaintIds(input.secretTaintIds ?? []);
+  // A dynamic argument makes the rest of the command opaque, but it must not erase a conservative
+  // network fact. In particular, `curl ... "$SECRET"` must still hit the hard secret-exfiltration
+  // rule instead of becoming an ordinary opaque/approval decision under Full Access.
   const mayAccessNetwork =
-    classifications.includes("NETWORK_ACCESS") || classifications.includes("REMOTE_MUTATION");
-  const remoteMutation = classifications.includes("REMOTE_MUTATION");
+    classifications.includes("NETWORK_ACCESS") ||
+    classifications.includes("REMOTE_MUTATION") ||
+    hasLikelyNetworkCommand(input.command, executable, tokens);
+  const remoteMutation =
+    classifications.includes("REMOTE_MUTATION") || hasLikelyRemoteMutation(executable, tokens);
   const deletes = assessDeletes(input, tokens, executable, classifications, opaque);
   const writes = assessWrites(input, tokens, executable, classifications, opaque);
   const reads = assessReads(tokens, executable, opaque);
@@ -99,7 +105,7 @@ export function assessCommandEffect(input: AssessCommandEffectInput): CommandEff
     }),
     process: Object.freeze({
       spawnsChildren: isLikelyProcessCommand(executable),
-      longRunning: /(server|watch|daemon|serve|tail|sleep)/i.test(input.command),
+      longRunning: /\b(server|watch|daemon|serve|tail|sleep)\b/i.test(input.command),
       targetsManagedProcessIds: Object.freeze([]),
       targetsUnmanagedProcesses: isUnmanagedProcessTermination(executable, input.command),
     }),
@@ -121,8 +127,8 @@ export function assessCommandEffect(input: AssessCommandEffectInput): CommandEff
         input.command,
         classifications,
       ),
-      serviceMutation: isServiceMutation(executable, input.command, classifications),
-      securityPolicyMutation: isSecurityPolicyMutation(executable, input.command, classifications),
+      serviceMutation: isServiceMutation(executable, input.command),
+      securityPolicyMutation: isSecurityPolicyMutation(executable, input.command),
       rawDeviceAccess: isRawDeviceAccess(executable, input.command, classifications),
     }),
     secrets: Object.freeze({
@@ -179,7 +185,7 @@ function assessDeletes(
     const path = unquote(target);
     return {
       path,
-      relation: classifyPathRelation(path, input.workdir),
+      relation: classifyPathRelation(path),
       exact: !hasGlob(path),
       recursive,
       resolution: hasGlob(path) ? "BOUNDED_GLOB" : "EXACT",
@@ -215,13 +221,13 @@ function assessWrites(
     const target = candidates.at(-1);
     if (target !== undefined) {
       const path = unquote(target);
-      return [{ path, relation: classifyPathRelation(path, input.workdir), exact: !hasGlob(path) }];
+      return [{ path, relation: classifyPathRelation(path), exact: !hasGlob(path) }];
     }
   }
   const redirection = /(?:^|\s)(?:>>|>)(?:\s*)([^\s;|&]+)/.exec(input.command);
   if (redirection?.[1] !== undefined) {
     const path = unquote(redirection[1]);
-    return [{ path, relation: classifyPathRelation(path, input.workdir), exact: !hasGlob(path) }];
+    return [{ path, relation: classifyPathRelation(path), exact: !hasGlob(path) }];
   }
   return [];
 }
@@ -238,13 +244,13 @@ function assessReads(
     const target = tokens.find((token, index) => index > 0 && !isOption(token));
     if (target !== undefined) {
       const path = unquote(target);
-      return [{ path, relation: classifyPathRelation(path, "."), exact: !hasGlob(path) }];
+      return [{ path, relation: classifyPathRelation(path), exact: !hasGlob(path) }];
     }
   }
   return [];
 }
 
-function classifyPathRelation(path: string, _workdir: string): EffectPathRelation {
+function classifyPathRelation(path: string): EffectPathRelation {
   const normalized = path.replaceAll("\\", "/").trim();
   if (["/", "/*", "~", ".", "./", "C:", "C:/", "C:\\", "\\"].includes(normalized)) {
     return normalized === "." || normalized === "./" ? "WORKSPACE" : "PROTECTED_ROOT";
@@ -267,7 +273,14 @@ function isOption(token: string): boolean {
 }
 
 function hasGlob(value: string): boolean {
-  return /[*?\[\]{}]/.test(value);
+  return (
+    value.includes("*") ||
+    value.includes("?") ||
+    value.includes("[") ||
+    value.includes("]") ||
+    value.includes("{") ||
+    value.includes("}")
+  );
 }
 
 function tokenizeArguments(command: string): readonly string[] {
@@ -348,22 +361,14 @@ function isDiskOrPartitionMutation(
   );
 }
 
-function isServiceMutation(
-  executable: string,
-  command: string,
-  _classifications: readonly CommandClassification[],
-): boolean {
+function isServiceMutation(executable: string, command: string): boolean {
   return (
     ["systemctl", "service", "sc", "launchctl"].includes(executable) &&
     /\b(start|stop|restart|enable|disable|create|delete|config|load|unload)\b/i.test(command)
   );
 }
 
-function isSecurityPolicyMutation(
-  executable: string,
-  command: string,
-  _classifications: readonly CommandClassification[],
-): boolean {
+function isSecurityPolicyMutation(executable: string, command: string): boolean {
   return (
     ["secedit", "auditpol", "setfacl", "icacls", "chmod", "chown"].includes(executable) ||
     /\b(set-executionpolicy|set-policy|netsh\s+advfirewall)\b/i.test(command)
@@ -393,4 +398,33 @@ function isInterpreter(executable: string): boolean {
   return ["sh", "bash", "zsh", "cmd", "powershell", "pwsh", "node", "python", "python3"].includes(
     executable,
   );
+}
+
+function hasLikelyNetworkCommand(
+  command: string,
+  executable: string,
+  tokens: readonly string[],
+): boolean {
+  if (["curl", "wget", "ssh", "scp", "sftp"].includes(executable)) return true;
+  if (
+    ["npm", "pnpm", "yarn"].includes(executable) &&
+    ["install", "add", "i", "publish"].includes(tokens[1]?.toLowerCase() ?? "")
+  ) {
+    return true;
+  }
+  if (
+    executable === "git" &&
+    ["clone", "fetch", "pull", "push"].includes(tokens[1]?.toLowerCase() ?? "")
+  ) {
+    return true;
+  }
+  return /(?:^|[\s"';&|])(?:curl|wget|ssh|scp|sftp|npm|pnpm|yarn)\b/i.test(command);
+}
+
+function hasLikelyRemoteMutation(executable: string, tokens: readonly string[]): boolean {
+  if (["npm", "pnpm", "yarn"].includes(executable) && tokens[1]?.toLowerCase() === "publish") {
+    return true;
+  }
+  if (executable === "git" && tokens[1]?.toLowerCase() === "push") return true;
+  return executable === "twine" && tokens[1]?.toLowerCase() === "upload";
 }

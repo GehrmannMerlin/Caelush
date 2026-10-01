@@ -27,7 +27,9 @@ describe("sandbox control protocol", () => {
     expect(() => acceptSandboxReady({ ...ready, nonce: "nonce-control-2" }, hello)).toThrow(
       /nonce/i,
     );
-    expect(() => acceptSandboxReady({ ...ready, protocolVersion: 99 }, hello)).toThrow(/version/i);
+    expect(() => acceptSandboxReady({ ...ready, protocolVersion: 99 as never }, hello)).toThrow(
+      /version/i,
+    );
   });
 
   it("rejects oversized or malformed control messages before they become READY", () => {

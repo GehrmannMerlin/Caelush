@@ -229,7 +229,8 @@ function sha256Hex(input: string): string {
 }
 
 export function canonicalSecurityPolicyJson(input: SecurityPolicyDigestInput): string {
-  const { policyDigest: _ignored, ...withoutDigest } = input;
+  const withoutDigest = { ...input };
+  delete withoutDigest.policyDigest;
   return canonicalJson(withoutDigest);
 }
 

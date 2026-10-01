@@ -41,10 +41,11 @@ function fakeFilesystem(
     },
     async getMetadata(file) {
       if (files.has(file)) {
+        const identity = identities.get(file);
         return {
           kind: "FILE",
           sizeBytes: files.get(file)!.byteLength,
-          ...(identities.get(file) === undefined ? {} : { identity: identities.get(file) }),
+          ...(identity === undefined ? {} : { identity }),
         };
       }
       if (directories.has(file)) return { kind: "DIRECTORY" };

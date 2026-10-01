@@ -8,6 +8,7 @@ import {
   hashSandboxRunnerFile,
   validateSandboxRunnerManifest,
   writeSandboxRunnerManifest,
+  // @ts-expect-error The release helper is a checked-in JavaScript build script without a declaration file.
 } from "../../../scripts/build-sandbox-runner.mjs";
 
 describe("sandbox runner artifact manifest", () => {

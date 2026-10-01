@@ -1,7 +1,6 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createRunId, createWorkspaceId } from "@caelush/protocol";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildDaemonApp } from "../src/index.js";
@@ -197,11 +196,15 @@ describe("Session workspace ownership", () => {
       headers: { host: "127.0.0.1" },
     });
     expect(removed.statusCode).toBe(204);
-    expect((await app.inject({
-      method: "GET",
-      url: `/api/v1/sessions/${first.json().id}`,
-      headers: { host: "127.0.0.1" },
-    })).statusCode).toBe(200);
+    expect(
+      (
+        await app.inject({
+          method: "GET",
+          url: `/api/v1/sessions/${first.json().id}`,
+          headers: { host: "127.0.0.1" },
+        })
+      ).statusCode,
+    ).toBe(200);
     await app.close();
   });
 });
