@@ -1,5 +1,5 @@
 import type { JsonObject } from "@caelush/ai";
-import type { ToolExecutionEnvironment } from "@caelush/agent";
+import type { ToolExecutionEnvironment, ToolSecurityContext } from "@caelush/agent";
 import {
   RuntimeInvalidRangeError,
   RuntimeInvariantError,
@@ -104,13 +104,16 @@ export function createRuntimeReadOnlyOperations(
   /** The shared directory read: resolve, kind-check and list, with no windowing applied. */
   async function readDirectory(input: {
     readonly environment: ToolExecutionEnvironment;
+    readonly securityContext?: ToolSecurityContext | undefined;
     readonly path: string;
   }): Promise<{
     readonly path: string;
     readonly kind: CodingToolPathKind | "MISSING";
     readonly entries: readonly JsonObject[];
   }> {
-    const scope = await resolveRuntimeWorkspace(resolver, input.environment);
+    const scope = await resolveRuntimeWorkspace(resolver, input.environment, {
+      securityContext: input.securityContext,
+    });
     // A symlinked directory is inspected through its real target, so the kind check answers about
     // the thing the caller will actually read.
     const { resolved, kind } = await resolveKind(scope, input.path);
@@ -131,6 +134,7 @@ export function createRuntimeReadOnlyOperations(
   /** The shared file discovery: resolve the root, discover, then re-resolve each candidate. */
   async function discoverFiles(input: {
     readonly environment: ToolExecutionEnvironment;
+    readonly securityContext?: ToolSecurityContext | undefined;
     readonly pattern: string;
     readonly path?: string;
     readonly limit: number;
@@ -139,7 +143,9 @@ export function createRuntimeReadOnlyOperations(
     readonly files: readonly string[];
     readonly truncated: boolean;
   }> {
-    const scope = await resolveRuntimeWorkspace(resolver, input.environment);
+    const scope = await resolveRuntimeWorkspace(resolver, input.environment, {
+      securityContext: input.securityContext,
+    });
     const resolved = await scope.pathResolver.resolveExisting(input.path ?? ".");
     if (resolved.kind !== "DIRECTORY") {
       throw new RuntimeInvalidRangeError("search path is not a directory");
@@ -163,6 +169,7 @@ export function createRuntimeReadOnlyOperations(
   /** The shared text search: resolve the root, search with the include glob, verify every match. */
   async function searchTree(input: {
     readonly environment: ToolExecutionEnvironment;
+    readonly securityContext?: ToolSecurityContext | undefined;
     readonly pattern: string;
     readonly path?: string;
     readonly include?: string;
@@ -173,7 +180,9 @@ export function createRuntimeReadOnlyOperations(
     readonly matches: readonly JsonObject[];
     readonly truncated: boolean;
   }> {
-    const scope = await resolveRuntimeWorkspace(resolver, input.environment);
+    const scope = await resolveRuntimeWorkspace(resolver, input.environment, {
+      securityContext: input.securityContext,
+    });
     const resolved = await scope.pathResolver.resolveExisting(input.path ?? ".");
     if (resolved.kind !== "DIRECTORY") {
       throw new RuntimePathTypeError("path is not a directory");
@@ -235,7 +244,9 @@ export function createRuntimeReadOnlyOperations(
   async function readFile(
     input: Parameters<CodingReadOnlyOperations["readFileWithKind"]>[0],
   ): ReturnType<CodingReadOnlyOperations["readFileWithKind"]> {
-    const scope = await resolveRuntimeWorkspace(resolver, input.environment);
+    const scope = await resolveRuntimeWorkspace(resolver, input.environment, {
+      securityContext: input.securityContext,
+    });
     const { resolved, kind } = await resolveKind(scope, input.path);
     if (kind !== "FILE") return { path: resolved.relativePath, kind };
     const read = await scope.filesystem.readTextFile(resolved.absolutePath, {

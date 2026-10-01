@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import type { JsonObject } from "@caelush/ai";
+import { canonicalJsonString } from "@caelush/agent";
 import { inspectPatchTargets } from "@caelush/runtime";
 
 /**
@@ -54,6 +56,75 @@ export interface ToolSecurityFacts {
   readonly secretScanInputs: readonly ToolSecretScanInput[];
   readonly structuralPreview?: JsonObject;
   readonly opaqueInput?: boolean;
+}
+
+/** Host-internal identity material used to bind an approval to one prepared effect. */
+export interface ToolSecurityEffectIdentity {
+  readonly effectDigest: string;
+  readonly executableIdentity: string;
+}
+
+/**
+ * Hash the bounded, prepared effect facts without carrying their raw values into the identity.
+ *
+ * The digest is deliberately host-internal. It is not an approval presentation field, a durable
+ * policy field, or a model-visible fact. Hashing command text, paths, and scan input text here keeps
+ * approval reuse exact while ensuring the only value that crosses the durable identity boundary is a
+ * fixed-width digest. The executable identity is kept separately so diagnostics and key migrations can
+ * distinguish a changed executable from a changed argument/effect set without storing either.
+ */
+export function computeToolSecurityEffectIdentity(
+  facts: ToolSecurityFacts,
+): ToolSecurityEffectIdentity {
+  const shellCommand = facts.shellCommand;
+  const identity = {
+    resourceAccesses: [...facts.resourceAccesses]
+      .map((access) => ({ operation: access.operation, path: access.path }))
+      .sort((left, right) =>
+        `${left.operation}:${left.path}`.localeCompare(`${right.operation}:${right.path}`),
+      ),
+    ...(shellCommand === undefined
+      ? {}
+      : {
+          shellCommand: {
+            commandDigest: digestText(shellCommand.command),
+            workdir: shellCommand.workdir,
+            tty: shellCommand.tty,
+          },
+        }),
+    secretScanInputs: [...facts.secretScanInputs]
+      .map((input) => ({ kind: input.kind, textDigest: digestText(input.text) }))
+      .sort((left, right) =>
+        `${left.kind}:${left.textDigest}`.localeCompare(`${right.kind}:${right.textDigest}`),
+      ),
+    ...(facts.structuralPreview === undefined
+      ? {}
+      : { structuralPreviewDigest: digestText(canonicalJsonString(facts.structuralPreview)) }),
+    opaqueInput: facts.opaqueInput === true,
+  };
+  return Object.freeze({
+    effectDigest: digestText(canonicalJsonString(identity)),
+    executableIdentity: executableIdentityOf(shellCommand?.command, facts.structuralPreview),
+  });
+}
+
+function digestText(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function executableIdentityOf(
+  command: string | undefined,
+  preview: JsonObject | undefined,
+): string {
+  if (command === undefined) {
+    const kind = preview?.kind;
+    return typeof kind === "string" && kind.length > 0 ? `STRUCTURAL:${kind}` : "NONE";
+  }
+  const token = command.trim().match(/^(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s]+)/)?.[0];
+  if (token === undefined) return "OPAQUE";
+  const unquoted = token.replace(/^['"]/, "").replace(/['"]$/, "").replaceAll("\\", "/");
+  const basename = unquoted.slice(unquoted.lastIndexOf("/") + 1).toLowerCase();
+  return basename.endsWith(".exe") ? basename.slice(0, -4) : basename;
 }
 
 /** A pure projection from prepared arguments to the facts a Security implementation analyzes. */

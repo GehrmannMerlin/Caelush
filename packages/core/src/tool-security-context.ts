@@ -37,5 +37,13 @@ export function createToolSecurityContext(
   return Object.freeze({
     permissionProfile: security.permissionProfile,
     approvalPolicy: security.approvalPolicy,
+    securityPolicy: Object.freeze({
+      presetId: security.presetId,
+      presetVersion: security.presetVersion,
+      policyDigest: security.policyDigest,
+      filesystemBoundary: security.filesystemBoundary,
+      processBoundary: security.processBoundary,
+      requiredEnforcement: security.requiredEnforcement,
+    }),
   });
 }

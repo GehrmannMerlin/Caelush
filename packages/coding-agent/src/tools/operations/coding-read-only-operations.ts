@@ -1,5 +1,5 @@
 import type { JsonObject } from "@caelush/ai";
-import type { ToolExecutionEnvironment } from "@caelush/agent";
+import type { ToolExecutionEnvironment, ToolSecurityContext } from "@caelush/agent";
 
 import type {
   FindFilesOperations,
@@ -59,6 +59,7 @@ export interface CodingReadOnlyOperations
    */
   readFileWithKind(input: {
     readonly environment: ToolExecutionEnvironment;
+    readonly securityContext?: ToolSecurityContext | undefined;
     readonly path: string;
     readonly offset: number;
     readonly limit: number;
@@ -86,6 +87,7 @@ export interface CodingReadOnlyOperations
    */
   listDirectoryWithKind(input: {
     readonly environment: ToolExecutionEnvironment;
+    readonly securityContext?: ToolSecurityContext | undefined;
     readonly path: string;
     readonly limit: number;
     readonly signal: AbortSignal;
@@ -104,6 +106,7 @@ export interface CodingReadOnlyOperations
    */
   listWithProbe(input: {
     readonly environment: ToolExecutionEnvironment;
+    readonly securityContext?: ToolSecurityContext | undefined;
     readonly path: string;
     readonly limit: number;
     readonly signal: AbortSignal;
@@ -118,6 +121,7 @@ export interface CodingReadOnlyOperations
    */
   findWithRoot(input: {
     readonly environment: ToolExecutionEnvironment;
+    readonly securityContext?: ToolSecurityContext | undefined;
     readonly pattern: string;
     readonly path?: string;
     readonly limit: number;
@@ -135,6 +139,7 @@ export interface CodingReadOnlyOperations
    */
   searchWithRoot(input: {
     readonly environment: ToolExecutionEnvironment;
+    readonly securityContext?: ToolSecurityContext | undefined;
     readonly pattern: string;
     readonly path?: string;
     readonly include?: string;

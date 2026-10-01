@@ -1,5 +1,5 @@
 import type { JsonObject } from "@caelush/ai";
-import type { ToolExecutionEnvironment } from "@caelush/agent";
+import type { ToolExecutionEnvironment, ToolSecurityContext } from "@caelush/agent";
 
 /**
  * List one workspace directory's children.
@@ -38,6 +38,7 @@ import type { ToolExecutionEnvironment } from "@caelush/agent";
 export interface ListDirectoryOperations {
   list(input: {
     readonly environment: ToolExecutionEnvironment;
+    readonly securityContext?: ToolSecurityContext | undefined;
 
     readonly path: string;
 

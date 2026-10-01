@@ -28,7 +28,9 @@ import { resolveRuntimeWorkspace } from "./resolve-runtime-workspace.js";
 export function createRuntimePatchOperations(resolver: RuntimeResolver): PatchOperations {
   return {
     async apply(input) {
-      const scope = await resolveRuntimeWorkspace(resolver, input.environment);
+      const scope = await resolveRuntimeWorkspace(resolver, input.environment, {
+        securityContext: input.securityContext,
+      });
       const result = await scope.patch.apply({ patch: input.patch, signal: input.signal });
       return {
         changeCount: result.changeCount,

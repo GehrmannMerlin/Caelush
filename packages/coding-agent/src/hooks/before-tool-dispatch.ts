@@ -11,6 +11,7 @@ import {
   type ControlHookReceipt,
   type ControlHookRegistration,
   type ControlHookRegistry,
+  type ToolSecurityPolicyReference,
   type ToolGateMetadata,
   type ToolGateSecurityFacts,
 } from "@caelush/agent";
@@ -74,6 +75,7 @@ export interface ToolGuardProjectionInput {
   readonly definition: ToolGateMetadata;
   readonly runtimeKind: string;
   readonly securityFacts?: ToolGateSecurityFacts;
+  readonly securityPolicy?: ToolSecurityPolicyReference;
 }
 
 /** Project Security facts into the deliberately small, non-sensitive Guard view. */
@@ -98,6 +100,18 @@ export function projectSafeToolGuardFacts(input: ToolGuardProjectionInput): Json
     secretScanCount: facts?.secretScanInputs.length ?? 0,
     secretScanKinds: [...(secretScanKinds ?? [])],
     opaqueInput: facts?.opaqueInput === true,
+    ...(input.securityPolicy === undefined
+      ? {}
+      : {
+          securityPolicy: {
+            presetId: input.securityPolicy.presetId,
+            presetVersion: input.securityPolicy.presetVersion,
+            policyDigest: input.securityPolicy.policyDigest,
+            filesystemBoundary: input.securityPolicy.filesystemBoundary,
+            processBoundary: input.securityPolicy.processBoundary,
+            requiredEnforcement: input.securityPolicy.requiredEnforcement,
+          },
+        }),
     ...(typeof structuralKind === "string" && Buffer.byteLength(structuralKind, "utf8") <= 128
       ? { structuralKind }
       : {}),

@@ -4,6 +4,7 @@ import type { PreparedToolCall } from "../call/tool-call-preparer.js";
 import type { AgentToolResult } from "../types/tool-result.js";
 import type { ToolExecutionEnvironment } from "../types/execution-environment.js";
 import type { ToolExecutionIdentity } from "../types/execution-identity.js";
+import type { ToolSecurityContext } from "../admission/security-context.js";
 import { ToolExecutionInfrastructureError } from "../types/errors.js";
 import type { ToolExecutionUpdate, ToolExecutionUpdateSink } from "../types/tool-update.js";
 import {
@@ -69,6 +70,7 @@ export interface ToolInvocationExecutor {
     readonly call: PreparedToolCall;
     readonly identity: ToolExecutionIdentity;
     readonly environment: ToolExecutionEnvironment;
+    readonly securityContext?: ToolSecurityContext | undefined;
     readonly signal: AbortSignal;
   }): Promise<AgentToolResult>;
 }
@@ -122,6 +124,9 @@ export function createToolInvocationExecutor(
           identity: input.identity,
           args: input.call.args,
           environment: input.environment,
+          ...(input.securityContext === undefined
+            ? {}
+            : { securityContext: input.securityContext }),
           signal: input.signal,
           updates: updater.sink,
         });

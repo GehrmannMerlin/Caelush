@@ -1,5 +1,5 @@
 import type { JsonObject } from "@caelush/ai";
-import type { ToolExecutionEnvironment } from "@caelush/agent";
+import type { ToolExecutionEnvironment, ToolSecurityContext } from "@caelush/agent";
 
 /**
  * Apply one verified patch document.
@@ -33,6 +33,7 @@ import type { ToolExecutionEnvironment } from "@caelush/agent";
 export interface PatchOperations {
   apply(input: {
     readonly environment: ToolExecutionEnvironment;
+    readonly securityContext?: ToolSecurityContext | undefined;
 
     readonly patch: string;
 

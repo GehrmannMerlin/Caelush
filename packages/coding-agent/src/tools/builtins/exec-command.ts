@@ -120,6 +120,9 @@ export function createExecCommandTool(operations: ExecOperations): CodingToolDef
       try {
         const result = await operations.execute({
           environment: input.environment,
+          ...(input.securityContext === undefined
+            ? {}
+            : { securityContext: input.securityContext }),
           ownerRunId: input.identity.runId,
           command: args.cmd,
           ...(args.workdir === undefined ? {} : { workdir: args.workdir }),

@@ -3,6 +3,7 @@ import type { JsonObject } from "@caelush/ai";
 import type { ToolExecutionEnvironment } from "./execution-environment.js";
 import type { ToolExecutionIdentity } from "./execution-identity.js";
 import type { ToolExecutionUpdateSink } from "./tool-update.js";
+import type { ToolSecurityContext } from "../admission/security-context.js";
 
 /**
  * Everything a Tool execution receives.
@@ -35,6 +36,8 @@ export interface AgentToolExecutionInput<TArgs extends JsonObject = JsonObject> 
   readonly identity: ToolExecutionIdentity;
   readonly args: TArgs;
   readonly environment: ToolExecutionEnvironment;
+  /** The immutable Run policy reference, when this Tool is executed from a policy-bound Run. */
+  readonly securityContext?: ToolSecurityContext | undefined;
   /** Required by contract. Run cancellation reaches the Runtime operation through this value. */
   readonly signal: AbortSignal;
   /** Required by contract. Transient progress only; it never becomes durable truth. */

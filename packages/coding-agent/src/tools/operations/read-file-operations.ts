@@ -1,4 +1,4 @@
-import type { ToolExecutionEnvironment } from "@caelush/agent";
+import type { ToolExecutionEnvironment, ToolSecurityContext } from "@caelush/agent";
 
 /**
  * Read bounded UTF-8 text from one workspace file.
@@ -42,6 +42,7 @@ import type { ToolExecutionEnvironment } from "@caelush/agent";
 export interface ReadFileOperations {
   read(input: {
     readonly environment: ToolExecutionEnvironment;
+    readonly securityContext?: ToolSecurityContext | undefined;
 
     readonly path: string;
 

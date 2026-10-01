@@ -85,6 +85,9 @@ export function createStopProcessTool(operations: ProcessOperations): CodingTool
       try {
         const result = await operations.terminate({
           environment: input.environment,
+          ...(input.securityContext === undefined
+            ? {}
+            : { securityContext: input.securityContext }),
           ownerRunId: input.identity.runId,
           sessionId: args.session_id,
         });
@@ -118,10 +121,7 @@ export function createStopProcessTool(operations: ProcessOperations): CodingTool
 }
 
 /** Project one Runtime termination result onto the Tool's model-facing result. */
-function resultToToolResult(
-  result: Record<string, unknown>,
-  sessionId: string,
-): AgentToolResult {
+function resultToToolResult(result: Record<string, unknown>, sessionId: string): AgentToolResult {
   const status = result.status;
   const exitCode = typeof result.exitCode === "number" ? result.exitCode : undefined;
   const signal = typeof result.signal === "string" ? result.signal : undefined;

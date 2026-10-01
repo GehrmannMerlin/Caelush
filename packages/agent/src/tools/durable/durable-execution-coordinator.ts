@@ -552,6 +552,7 @@ export function createDurableToolExecutionCoordinator(
         call: execution.call,
         identity,
         environment: execution.environment,
+        securityContext: execution.securityContext,
         signal: execution.signal,
       });
     } catch (error) {

@@ -121,6 +121,7 @@ export type {
   RunExecutionSupervisorResult,
 } from "./execution/run-execution-supervisor.js";
 export {
+  createRunBoundVerificationExecution,
   createRuntimeGitVerificationPort,
   createRuntimeWorkspaceVerificationPort,
 } from "./verification-runtime-adapters.js";

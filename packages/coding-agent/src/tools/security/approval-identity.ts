@@ -50,13 +50,44 @@ export interface CodingToolApprovalIdentityInput {
   };
   readonly args: JsonObject;
   /** The Run's validated authorization context. It comes from durable state, never from arguments. */
-  readonly securityContext: Pick<ToolSecurityContext, "permissionProfile" | "approvalPolicy">;
+  readonly securityContext: Pick<
+    ToolSecurityContext,
+    "permissionProfile" | "approvalPolicy" | "securityPolicy"
+  >;
+  /** A digest of the prepared, host-private effect facts for the exact call. */
+  readonly effectDigest?: string | undefined;
+  /** A normalized executable identity, never a raw command or argument string. */
+  readonly executableIdentity?: string | undefined;
   /** Present only when a Guard added an approval restriction; absent preserves the legacy key. */
   readonly guardDecisionFingerprint?: string | undefined;
 }
 
 /** Host-internal identity for an exact security decision; never expose this as a model field. */
 export function computeCodingToolApprovalKey(input: CodingToolApprovalIdentityInput): string {
+  const hasV2Identity =
+    input.securityContext.securityPolicy !== undefined ||
+    input.effectDigest !== undefined ||
+    input.executableIdentity !== undefined;
+  const v2Identity = hasV2Identity
+    ? {
+        ...(input.securityContext.securityPolicy === undefined
+          ? {}
+          : {
+              securityPolicy: {
+                presetId: input.securityContext.securityPolicy.presetId,
+                presetVersion: input.securityContext.securityPolicy.presetVersion,
+                policyDigest: input.securityContext.securityPolicy.policyDigest,
+                filesystemBoundary: input.securityContext.securityPolicy.filesystemBoundary,
+                processBoundary: input.securityContext.securityPolicy.processBoundary,
+                requiredEnforcement: input.securityContext.securityPolicy.requiredEnforcement,
+              },
+            }),
+        ...(input.effectDigest === undefined ? {} : { effectDigest: input.effectDigest }),
+        ...(input.executableIdentity === undefined
+          ? {}
+          : { executableIdentity: input.executableIdentity }),
+      }
+    : {};
   const identity = {
     toolName: input.toolName,
     args: input.args,
@@ -65,6 +96,7 @@ export function computeCodingToolApprovalKey(input: CodingToolApprovalIdentityIn
     runtimeRequirements: input.security.runtimeRequirements,
     permissionProfile: input.securityContext.permissionProfile,
     approvalPolicy: input.securityContext.approvalPolicy,
+    ...v2Identity,
     ...(input.guardDecisionFingerprint === undefined
       ? {}
       : { guardDecisionFingerprint: input.guardDecisionFingerprint }),

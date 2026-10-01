@@ -66,14 +66,17 @@ export {
   createRuntimeGitOperations,
   createRuntimePatchOperations,
   createRuntimeProcessOperations,
+  createDefaultRuntimeProcessAuthorization,
   createRuntimeReadOnlyOperations,
   READ_FILE_MAX_BYTES,
   resolveRuntimeWorkspace,
 } from "./operations/runtime-adapters/index.js";
 export type {
+  RuntimeProcessOperationsOptions,
   RuntimeOperationsAll,
   RuntimeOperationsProcess,
   RuntimeOperationsReadOnly,
+  RuntimeWorkspaceResolutionOptions,
 } from "./operations/runtime-adapters/index.js";
 export type { RuntimeReadOnlyOperations } from "./operations/runtime-adapters/runtime-read-only-operations.js";
 export { createRuntimeProgressSignalProjector } from "./runtime-progress-signal-projector.js";
@@ -155,6 +158,7 @@ export {
   projectStopProcessSecurityFacts,
   projectWriteStdinSecurityFacts,
   ToolSecurityFactsProjectionError,
+  computeToolSecurityEffectIdentity,
 } from "./security/security-facts.js";
 export type {
   ToolResourceAccess,
@@ -162,6 +166,7 @@ export type {
   ToolSecretScanInput,
   ToolSecurityFacts,
   ToolSecurityFactsProjector,
+  ToolSecurityEffectIdentity,
   ToolShellCommandFact,
 } from "./security/security-facts.js";
 export { computeCodingToolApprovalKey } from "./security/approval-identity.js";

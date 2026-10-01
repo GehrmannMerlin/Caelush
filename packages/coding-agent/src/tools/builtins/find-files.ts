@@ -101,6 +101,9 @@ export function createFindFilesTool(
       try {
         const found = await operations.findWithRoot({
           environment: input.environment,
+          ...(input.securityContext === undefined
+            ? {}
+            : { securityContext: input.securityContext }),
           pattern,
           path: searchPath,
           limit,

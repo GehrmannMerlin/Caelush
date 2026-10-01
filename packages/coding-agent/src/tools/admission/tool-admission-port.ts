@@ -18,6 +18,10 @@ import {
 } from "@caelush/agent";
 
 import { computeCodingToolApprovalKey } from "../security/approval-identity.js";
+import {
+  computeToolSecurityEffectIdentity,
+  type ToolSecurityFacts,
+} from "../security/security-facts.js";
 import type { CodingToolDefinition } from "../coding-tool-definition.js";
 import type { CodingToolCatalog } from "../coding-tool-catalog.js";
 import {
@@ -153,7 +157,7 @@ export function createCodingToolAdmissionPort(
       } catch {
         // Diagnostics are strictly best effort and must never alter admission semantics.
       }
-      return translateDecision(decision, request, metadata, options, guard);
+      return translateDecision(decision, request, metadata, options, guard, facts);
     },
   };
 }
@@ -373,6 +377,7 @@ function translateDecision(
   metadata: ToolGateMetadata,
   options: CodingToolAdmissionPortOptions,
   guard?: ToolGuardPipelineResult,
+  facts?: ToolGateSecurityFacts,
 ): ToolPolicyDecision {
   if (guard?.decision.kind === "BLOCK") return guardDeniedFeedback(guard.decision);
   if (decision.kind === "DENY") {
@@ -395,6 +400,9 @@ function translateDecision(
       // boundary, and the value is hashed exactly as it arrives.
       args: request.args as never,
       securityContext: request.securityContext,
+      ...(request.securityContext.securityPolicy === undefined || facts === undefined
+        ? {}
+        : computeToolSecurityEffectIdentity(facts as unknown as ToolSecurityFacts)),
       ...(guardApproval === undefined || guard?.approvalFingerprint === undefined
         ? {}
         : { guardDecisionFingerprint: guard.approvalFingerprint }),
@@ -441,6 +449,9 @@ async function evaluateGuard(
     safeFacts: projectSafeToolGuardFacts({
       definition: metadata,
       runtimeKind: request.environment.runtime.kind,
+      ...(request.securityContext.securityPolicy === undefined
+        ? {}
+        : { securityPolicy: request.securityContext.securityPolicy }),
       ...(facts === undefined ? {} : { securityFacts: facts }),
     }),
   };

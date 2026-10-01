@@ -1,4 +1,4 @@
-import type { ToolExecutionEnvironment } from "@caelush/agent";
+import type { ToolExecutionEnvironment, ToolSecurityContext } from "@caelush/agent";
 
 /**
  * Discover workspace files by glob.
@@ -27,6 +27,7 @@ import type { ToolExecutionEnvironment } from "@caelush/agent";
 export interface FindFilesOperations {
   find(input: {
     readonly environment: ToolExecutionEnvironment;
+    readonly securityContext?: ToolSecurityContext | undefined;
 
     readonly pattern: string;
 

@@ -1,5 +1,5 @@
 import type { JsonObject } from "@caelush/ai";
-import type { ToolExecutionEnvironment } from "@caelush/agent";
+import type { ToolExecutionEnvironment, ToolSecurityContext } from "@caelush/agent";
 
 /**
  * Search text across a workspace tree.
@@ -51,6 +51,7 @@ import type { ToolExecutionEnvironment } from "@caelush/agent";
 export interface SearchTextOperations {
   search(input: {
     readonly environment: ToolExecutionEnvironment;
+    readonly securityContext?: ToolSecurityContext | undefined;
 
     readonly pattern: string;
 

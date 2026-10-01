@@ -149,6 +149,9 @@ export function createSearchTextTool(
       try {
         const result = await operations.search({
           environment: input.environment,
+          ...(input.securityContext === undefined
+            ? {}
+            : { securityContext: input.securityContext }),
           pattern: args.pattern,
           path: searchPath,
           ...(include === undefined ? {} : { include }),

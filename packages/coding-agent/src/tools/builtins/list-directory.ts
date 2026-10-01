@@ -104,6 +104,9 @@ export function createListDirectoryTool(
         // stay distinguishable without this Tool importing the Runtime's error vocabulary.
         const listed = await operations.listDirectoryWithKind({
           environment: input.environment,
+          ...(input.securityContext === undefined
+            ? {}
+            : { securityContext: input.securityContext }),
           path: args.path,
           limit: offset - 1 + limit + 1,
           signal: input.signal,

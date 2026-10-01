@@ -12,6 +12,7 @@ import type {
   ToolExecutionGatePort,
   ToolPolicyDecision,
 } from "@caelush/agent";
+import { CaelushToolExecutionGate } from "@caelush/security";
 
 const request: ToolAdmissionRequest = {
   identity: {
@@ -81,6 +82,153 @@ function build(
 }
 
 describe("Phase 6G Coding admission Guard integration", () => {
+  it("exposes only bounded policy-safe facts to Guard hooks", async () => {
+    let observed: Record<string, unknown> | undefined;
+    const port = createCodingToolAdmissionPort({
+      gate: {
+        async decide() {
+          return { kind: "ALLOW" as const };
+        },
+      },
+      registry: { resolve: () => ({ tool: { name: "exec_command" } }) as never },
+      catalog: { get: () => catalogEntry },
+      guard: createToolGuardPipeline({
+        registrations: [
+          {
+            id: "facts" as never,
+            priority: 1,
+            criticality: "REQUIRED",
+            timeoutMs: 100,
+            hook: {
+              evaluate: async (input) => {
+                observed = input.safeFacts;
+                return { kind: "PASS" as const };
+              },
+            },
+          },
+        ],
+      }),
+    });
+
+    await port.evaluate(
+      {
+        ...request,
+        securityContext: {
+          ...request.securityContext,
+          permissionProfile: "FULL_ACCESS",
+          approvalPolicy: "NEVER_ASK",
+          securityPolicy: {
+            presetId: "FULL_ACCESS",
+            presetVersion: 1,
+            policyDigest: "a".repeat(64),
+            filesystemBoundary: "HOST_USER_SCOPE",
+            processBoundary: "UNRESTRICTED",
+            requiredEnforcement: "HARD_SAFETY_ONLY",
+          },
+        },
+      },
+      { mode: "EXECUTE", signal: new AbortController().signal },
+    );
+
+    expect(observed).toMatchObject({
+      securityPolicy: {
+        presetId: "FULL_ACCESS",
+        filesystemBoundary: "HOST_USER_SCOPE",
+        processBoundary: "UNRESTRICTED",
+      },
+    });
+    expect(JSON.stringify(observed)).not.toContain("echo hello");
+  });
+
+  it("allows ordinary Full Access publishing without an approval decision", async () => {
+    const gate = new CaelushToolExecutionGate();
+    const decision = await gate.decide({
+      invocation: {
+        id: request.identity.invocationId,
+        runId: request.identity.runId,
+        stepId: request.identity.sourceStepId,
+        toolName: request.toolName,
+        externalCallId: request.identity.externalCallId,
+        args: { cmd: "npm publish", workdir: ".", tty: false },
+        riskLevel: "HIGH",
+        status: "REQUESTED",
+        createdAt: 0 as never,
+      },
+      toolName: request.toolName,
+      definition: {
+        name: request.toolName,
+        riskLevel: "HIGH",
+        requiredCapabilities: ["SHELL_EXEC", "PROCESS_START"],
+        runtimeRequirements: { runtimeKinds: ["local"] },
+      },
+      securityContext: {
+        permissionProfile: "FULL_ACCESS",
+        approvalPolicy: "NEVER_ASK",
+        securityPolicy: {
+          presetId: "FULL_ACCESS",
+          presetVersion: 1,
+          policyDigest: "a".repeat(64),
+          filesystemBoundary: "HOST_USER_SCOPE",
+          processBoundary: "UNRESTRICTED",
+          requiredEnforcement: "HARD_SAFETY_ONLY",
+        },
+      },
+      runtimeKind: "local",
+      securityFacts: {
+        resourceAccesses: [],
+        secretScanInputs: [{ kind: "COMMAND", text: "npm publish" }],
+        shellCommand: { command: "npm publish", workdir: ".", tty: false },
+      },
+    });
+
+    expect(decision).toMatchObject({ kind: "ALLOW" });
+  });
+
+  it("hard-denies power control before any approval can be created", async () => {
+    const gate = new CaelushToolExecutionGate();
+    const decision = await gate.decide({
+      invocation: {
+        id: request.identity.invocationId,
+        runId: request.identity.runId,
+        stepId: request.identity.sourceStepId,
+        toolName: request.toolName,
+        externalCallId: request.identity.externalCallId,
+        args: { cmd: "shutdown now", workdir: ".", tty: false },
+        riskLevel: "HIGH",
+        status: "REQUESTED",
+        createdAt: 0 as never,
+      },
+      toolName: request.toolName,
+      definition: {
+        name: request.toolName,
+        riskLevel: "HIGH",
+        requiredCapabilities: ["SHELL_EXEC", "PROCESS_START"],
+        runtimeRequirements: { runtimeKinds: ["local"] },
+      },
+      securityContext: {
+        permissionProfile: "FULL_ACCESS",
+        approvalPolicy: "NEVER_ASK",
+        securityPolicy: {
+          presetId: "FULL_ACCESS",
+          presetVersion: 1,
+          policyDigest: "a".repeat(64),
+          filesystemBoundary: "HOST_USER_SCOPE",
+          processBoundary: "UNRESTRICTED",
+          requiredEnforcement: "HARD_SAFETY_ONLY",
+        },
+      },
+      runtimeKind: "local",
+      securityFacts: {
+        resourceAccesses: [],
+        secretScanInputs: [{ kind: "COMMAND", text: "shutdown now" }],
+        shellCommand: { command: "shutdown now", workdir: ".", tty: false },
+      },
+    });
+
+    expect(decision).toMatchObject({ kind: "DENY" });
+    expect(decision.kind === "DENY" ? decision.reasonCode : undefined).toBe("POWER_CONTROL_DENIED");
+  });
+
   it("turns a Guard BLOCK into safe denial without skipping Core Security", async () => {
     let coreCalls = 0;
     const gate: ToolExecutionGatePort = {

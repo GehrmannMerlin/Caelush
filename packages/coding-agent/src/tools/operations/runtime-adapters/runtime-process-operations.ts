@@ -1,8 +1,18 @@
 import type { JsonObject } from "@caelush/ai";
-import type { ProcessOutputEvent, RuntimeExecResult, RuntimeResolver } from "@caelush/runtime";
+import type { ToolSecurityContext } from "@caelush/agent";
+import type { RunId } from "@caelush/protocol";
+import type {
+  AuthorizedRuntimeExecution,
+  ProcessOutputEvent,
+  RuntimeExecResult,
+  RuntimeResolver,
+} from "@caelush/runtime";
 
 import type { ExecOperations, ProcessOperations } from "../operations.js";
-import { resolveRuntimeWorkspace } from "./resolve-runtime-workspace.js";
+import {
+  createDefaultRuntimeProcessAuthorization,
+  resolveRuntimeWorkspace,
+} from "./resolve-runtime-workspace.js";
 
 /**
  * The Runtime implementation of `ExecOperations` and `ProcessOperations`.
@@ -53,12 +63,34 @@ function toJsonObject(result: RuntimeExecResult): JsonObject {
   };
 }
 
+export interface RuntimeProcessOperationsOptions {
+  readonly authorizationResolver?: (input: {
+    readonly ownerRunId: RunId;
+    readonly environment: import("@caelush/agent").ToolExecutionEnvironment;
+    readonly securityContext?: ToolSecurityContext | undefined;
+  }) => Promise<AuthorizedRuntimeExecution | undefined> | AuthorizedRuntimeExecution | undefined;
+}
+
 export function createRuntimeProcessOperations(
   resolver: RuntimeResolver,
+  options: RuntimeProcessOperationsOptions = {},
 ): ExecOperations & ProcessOperations {
+  const authorizationFor = async (input: {
+    readonly ownerRunId: RunId;
+    readonly environment: import("@caelush/agent").ToolExecutionEnvironment;
+    readonly securityContext?: ToolSecurityContext | undefined;
+  }): Promise<AuthorizedRuntimeExecution | undefined> =>
+    options.authorizationResolver === undefined
+      ? createDefaultRuntimeProcessAuthorization(input)
+      : await options.authorizationResolver(input);
+
   return {
     async execute(input) {
-      const scope = await resolveRuntimeWorkspace(resolver, input.environment);
+      const authorization = await authorizationFor(input);
+      const scope = await resolveRuntimeWorkspace(resolver, input.environment, {
+        securityContext: input.securityContext,
+        processAuthorization: authorization,
+      });
       const result = await scope.exec.execute({
         ownerRunId: input.ownerRunId,
         signal: input.signal,
@@ -76,7 +108,11 @@ export function createRuntimeProcessOperations(
     },
 
     async interact(input) {
-      const scope = await resolveRuntimeWorkspace(resolver, input.environment);
+      const authorization = await authorizationFor(input);
+      const scope = await resolveRuntimeWorkspace(resolver, input.environment, {
+        securityContext: input.securityContext,
+        processAuthorization: authorization,
+      });
       const result = await scope.exec.interact({
         ownerRunId: input.ownerRunId,
         signal: input.signal,
@@ -93,7 +129,11 @@ export function createRuntimeProcessOperations(
     },
 
     async terminate(input) {
-      const scope = await resolveRuntimeWorkspace(resolver, input.environment);
+      const authorization = await authorizationFor(input);
+      const scope = await resolveRuntimeWorkspace(resolver, input.environment, {
+        securityContext: input.securityContext,
+        processAuthorization: authorization,
+      });
       const result = await scope.exec.terminate({
         ownerRunId: input.ownerRunId,
         sessionId: input.sessionId,

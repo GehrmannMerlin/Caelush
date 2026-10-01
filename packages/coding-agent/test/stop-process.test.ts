@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ENVIRONMENT,
+  FULL_SECURITY_CONTEXT,
   executionInput,
   processFake,
   testSignal,
@@ -82,12 +83,27 @@ describe("stop_process target builtin", () => {
     const { tool, fake } = toolWith(terminated({ status: "EXITED", sessionId: "s1" }));
     const signal = testSignal();
 
-    await tool.execute(executionInput({ session_id: "s1" }, { runId: "run_owner", signal }));
+    await tool.execute(
+      executionInput(
+        { session_id: "s1" },
+        { runId: "run_owner", signal, securityContext: FULL_SECURITY_CONTEXT },
+      ),
+    );
 
     const call = fake.calls.terminate[0] as Record<string, unknown>;
-    expect(call).toMatchObject({ environment: ENVIRONMENT, ownerRunId: "run_owner", sessionId: "s1" });
+    expect(call).toMatchObject({
+      environment: ENVIRONMENT,
+      ownerRunId: "run_owner",
+      sessionId: "s1",
+      securityContext: FULL_SECURITY_CONTEXT,
+    });
     // The exact key set is the contract: no pid, no image name, no wildcard, no `all`.
-    expect(Object.keys(call).sort()).toEqual(["environment", "ownerRunId", "sessionId"]);
+    expect(Object.keys(call).sort()).toEqual([
+      "environment",
+      "ownerRunId",
+      "securityContext",
+      "sessionId",
+    ]);
   });
 
   it("ignores a model-supplied owner, pid or image name instead of trusting it", async () => {

@@ -106,6 +106,9 @@ export function createWriteStdinTool(operations: ProcessOperations): CodingToolD
       try {
         const result = await operations.interact({
           environment: input.environment,
+          ...(input.securityContext === undefined
+            ? {}
+            : { securityContext: input.securityContext }),
           ownerRunId: input.identity.runId,
           sessionId: args.session_id,
           chars,

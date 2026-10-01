@@ -189,6 +189,7 @@ export {
 } from "./admission/security-context.js";
 export type {
   ToolSecurityContext,
+  ToolSecurityPolicyReference,
   ToolSecurityContextErrorReason,
 } from "./admission/security-context.js";
 export {

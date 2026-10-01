@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ENVIRONMENT,
+  FULL_SECURITY_CONTEXT,
   executionInput,
   processFake,
   testSignal,
@@ -72,7 +73,9 @@ describe("write_stdin target builtin", () => {
     const { tool, fake } = toolWith(interacted({ status: "RUNNING", sessionId: "s1" }));
     const signal = testSignal();
 
-    await tool.execute(executionInput({ session_id: "s1" }, { signal }));
+    await tool.execute(
+      executionInput({ session_id: "s1" }, { signal, securityContext: FULL_SECURITY_CONTEXT }),
+    );
 
     const call = fake.calls.interact[0] as Record<string, unknown>;
     expect(call).toMatchObject({
@@ -80,6 +83,7 @@ describe("write_stdin target builtin", () => {
       sessionId: "s1",
       chars: "",
       signal,
+      securityContext: FULL_SECURITY_CONTEXT,
     });
     // A poll waits the longer default so an idle process gets a real chance to produce output.
     expect(call["yieldTimeMs"]).toBe(5000);

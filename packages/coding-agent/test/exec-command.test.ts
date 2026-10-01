@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ENVIRONMENT,
+  FULL_SECURITY_CONTEXT,
   executionInput,
   processFake,
   testSignal,
@@ -94,7 +95,7 @@ describe("exec_command target builtin", () => {
     await tool.execute(
       executionInput(
         { cmd: "echo hi", workdir: "src", tty: true, yield_time_ms: 3000 },
-        { signal },
+        { signal, securityContext: FULL_SECURITY_CONTEXT },
       ),
     );
 
@@ -106,6 +107,7 @@ describe("exec_command target builtin", () => {
       tty: true,
       yieldTimeMs: 3000,
       signal,
+      securityContext: FULL_SECURITY_CONTEXT,
     });
     expect(typeof call["ownerRunId"]).toBe("string");
     expect(typeof call["onOutput"]).toBe("function");

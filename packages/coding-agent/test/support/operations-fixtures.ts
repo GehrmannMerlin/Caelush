@@ -1,4 +1,8 @@
-import type { AgentToolExecutionInput, ToolExecutionEnvironment } from "@caelush/agent";
+import type {
+  AgentToolExecutionInput,
+  ToolExecutionEnvironment,
+  ToolSecurityContext,
+} from "@caelush/agent";
 import type {
   ExecOperations,
   GitOperations,
@@ -39,6 +43,19 @@ export const ENVIRONMENT: ToolExecutionEnvironment = Object.freeze({
   runtime: Object.freeze({ id: "local", kind: "local" }),
 });
 
+export const FULL_SECURITY_CONTEXT: ToolSecurityContext = Object.freeze({
+  permissionProfile: "FULL_ACCESS",
+  approvalPolicy: "NEVER_ASK",
+  securityPolicy: Object.freeze({
+    presetId: "FULL_ACCESS",
+    presetVersion: 1,
+    policyDigest: "a".repeat(64),
+    filesystemBoundary: "HOST_USER_SCOPE",
+    processBoundary: "UNRESTRICTED",
+    requiredEnforcement: "HARD_SAFETY_ONLY",
+  }),
+});
+
 /** A signal a test controls, so cancellation forwarding is observable rather than assumed. */
 export function testSignal(): AbortSignal {
   return new AbortController().signal;
@@ -63,6 +80,7 @@ export function executionInput(
     readonly environment?: ToolExecutionEnvironment;
     readonly publish?: (update: unknown) => void;
     readonly runId?: string;
+    readonly securityContext?: ToolSecurityContext;
   } = {},
 ): AgentToolExecutionInput {
   return {
@@ -75,6 +93,9 @@ export function executionInput(
     },
     args: args(value),
     environment: overrides.environment ?? ENVIRONMENT,
+    ...(overrides.securityContext === undefined
+      ? {}
+      : { securityContext: overrides.securityContext }),
     signal: overrides.signal ?? testSignal(),
     updates: { publish: (update) => overrides.publish?.(update) },
   };

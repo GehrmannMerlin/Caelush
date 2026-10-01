@@ -40,12 +40,19 @@ import type {
 
 export { createRuntimeGitOperations } from "./runtime-git-operations.js";
 export { createRuntimePatchOperations } from "./runtime-patch-operations.js";
-export { createRuntimeProcessOperations } from "./runtime-process-operations.js";
+export {
+  createRuntimeProcessOperations,
+  type RuntimeProcessOperationsOptions,
+} from "./runtime-process-operations.js";
 export {
   createRuntimeReadOnlyOperations,
   READ_FILE_MAX_BYTES,
 } from "./runtime-read-only-operations.js";
-export { resolveRuntimeWorkspace } from "./resolve-runtime-workspace.js";
+export {
+  createDefaultRuntimeProcessAuthorization,
+  resolveRuntimeWorkspace,
+  type RuntimeWorkspaceResolutionOptions,
+} from "./resolve-runtime-workspace.js";
 export type { RuntimeReadOnlyOperations } from "./runtime-read-only-operations.js";
 
 /** The read-only family, named so a consumer can type the shared adapter's return. */

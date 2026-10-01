@@ -15,12 +15,14 @@ import type {
 } from "./tool-gate-types.js";
 import { SecurityPolicyInvariantError } from "./errors.js";
 import { evaluateSecurityPolicy } from "./evaluator.js";
+import { evaluateSecurityDecision } from "./evaluator.js";
 import { combineSecurityDecisions, type SecurityDecision } from "./decision.js";
 import { evaluateInputSecurityPolicy } from "./input-policy.js";
-import { redactJson, redactText } from "./secret-redaction.js";
+import { redactJson, redactText, detectSecrets } from "./secret-redaction.js";
 import { isValidWorkspaceFactPath, normalizeWorkspaceFactPath } from "./sensitive-path.js";
 import { evaluateLogicalSandboxAdmission } from "./logical-sandbox.js";
 import { classifyExecutionContainment } from "./containment.js";
+import { assessCommandEffect, type CommandEffectAssessment } from "./effect-assessment.js";
 
 export class CaelushToolExecutionGate implements ToolExecutionGatePort {
   async decide(input: ToolExecutionGateInput): Promise<ToolExecutionGateDecision> {
@@ -43,6 +45,12 @@ export class CaelushToolExecutionGate implements ToolExecutionGatePort {
     try {
       assertToolSecurityContext(input.securityContext);
     } catch {
+      throw new SecurityPolicyInvariantError();
+    }
+    if (
+      input.securityContext.securityPolicy !== undefined &&
+      !isAlignedPolicyContext(input.securityContext)
+    ) {
       throw new SecurityPolicyInvariantError();
     }
     if (
@@ -79,6 +87,15 @@ export class CaelushToolExecutionGate implements ToolExecutionGatePort {
     if (facts === undefined) {
       return { kind: "DENY", reasonCode: "SECURITY_FACTS_UNAVAILABLE" };
     }
+    if (input.securityContext.securityPolicy !== undefined) {
+      const effect =
+        facts.shellCommand === undefined
+          ? undefined
+          : assessShellCommandEffect(facts.shellCommand, facts.secretScanInputs);
+      const policyDecision = evaluatePolicySnapshotBoundFacts(input, definition, facts, effect);
+      const safeAction = createSafeAction(facts, effect?.classifications, admission.containment);
+      return safeAction === undefined ? policyDecision : { ...policyDecision, safeAction };
+    }
     const assessment = evaluateInputSecurityPolicy(facts, {
       permissionProfile: input.securityContext.permissionProfile,
       approvalPolicy: input.securityContext.approvalPolicy,
@@ -99,6 +116,195 @@ export class CaelushToolExecutionGate implements ToolExecutionGatePort {
     );
     return safeAction === undefined ? effective : { ...effective, safeAction };
   }
+}
+
+function isAlignedPolicyContext(input: ToolExecutionGateInput["securityContext"]): boolean {
+  const policy = input.securityPolicy;
+  if (policy === undefined) return true;
+  const expected =
+    policy.presetId === "VIEW_ONLY"
+      ? {
+          permissionProfile: "READ_ONLY",
+          approvalPolicy: "ON_BOUNDARY",
+          filesystemBoundary: "WORKSPACE_READ_ONLY",
+          processBoundary: "READ_ONLY",
+          requiredEnforcement: "OS_RESTRICTED",
+        }
+      : policy.presetId === "WORKSPACE_WRITE"
+        ? {
+            permissionProfile: "PROJECT_ACCESS",
+            approvalPolicy: "ON_BOUNDARY",
+            filesystemBoundary: "WORKSPACE_READ_WRITE",
+            processBoundary: "WORKSPACE_WRITE",
+            requiredEnforcement: "OS_RESTRICTED",
+          }
+        : policy.presetId === "FULL_ACCESS"
+          ? {
+              permissionProfile: "FULL_ACCESS",
+              approvalPolicy: "NEVER_ASK",
+              filesystemBoundary: "HOST_USER_SCOPE",
+              processBoundary: "UNRESTRICTED",
+              requiredEnforcement: "HARD_SAFETY_ONLY",
+            }
+          : undefined;
+  return (
+    expected !== undefined &&
+    input.permissionProfile === expected.permissionProfile &&
+    input.approvalPolicy === expected.approvalPolicy &&
+    policy.filesystemBoundary === expected.filesystemBoundary &&
+    policy.processBoundary === expected.processBoundary &&
+    policy.requiredEnforcement === expected.requiredEnforcement
+  );
+}
+
+function evaluatePolicySnapshotBoundFacts(
+  input: ToolExecutionGateInput,
+  definition: ToolDefinitionMetadata,
+  facts: NonNullable<ToolExecutionGateInput["securityFacts"]>,
+  effect: CommandEffectAssessment | undefined,
+): SecurityDecision {
+  const policy = input.securityContext.securityPolicy!;
+  if (facts.shellCommand !== undefined) {
+    return evaluateSecurityDecision({
+      permissionProfile: input.securityContext.permissionProfile,
+      approvalPolicy: input.securityContext.approvalPolicy,
+      riskLevel: definition.riskLevel,
+      requiredCapabilities: definition.requiredCapabilities,
+      effect: effect ?? assessShellCommandEffect(facts.shellCommand, facts.secretScanInputs),
+      filesystemBoundary: policy.filesystemBoundary,
+      processBoundary: policy.processBoundary,
+    });
+  }
+  if (facts.opaqueInput === true) {
+    return evaluateSecurityDecision({
+      permissionProfile: input.securityContext.permissionProfile,
+      approvalPolicy: input.securityContext.approvalPolicy,
+      riskLevel: definition.riskLevel,
+      requiredCapabilities: definition.requiredCapabilities,
+      approvalRequired: true,
+      filesystemBoundary: policy.filesystemBoundary,
+      processBoundary: policy.processBoundary,
+    });
+  }
+  return evaluateSecurityPolicy({
+    permissionProfile: input.securityContext.permissionProfile,
+    approvalPolicy: input.securityContext.approvalPolicy,
+    riskLevel: definition.riskLevel,
+    requiredCapabilities: definition.requiredCapabilities,
+  });
+}
+
+function assessShellCommandEffect(
+  shell: NonNullable<NonNullable<ToolExecutionGateInput["securityFacts"]>["shellCommand"]>,
+  secretInputs: readonly { readonly text: string }[],
+): CommandEffectAssessment {
+  const secretTaintIds = secretInputs.some((input) => detectSecrets(input.text).count > 0)
+    ? ["secret-scan"]
+    : [];
+  const assessments = (["POSIX_SH", "POWERSHELL", "CMD"] as const).map((platform) =>
+    assessCommandEffect({
+      command: shell.command,
+      platform,
+      workdir: shell.workdir,
+      tty: shell.tty,
+      secretTaintIds,
+    }),
+  );
+  return mergeCommandEffects(assessments);
+}
+
+function mergeCommandEffects(
+  assessments: readonly CommandEffectAssessment[],
+): CommandEffectAssessment {
+  const first = assessments[0]!;
+  const uniquePathFacts = <T extends { readonly path: string }>(values: readonly T[]): T[] => {
+    const seen = new Set<string>();
+    return values.filter((value) => {
+      const key = JSON.stringify(value);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+  const classifications = [
+    ...new Set(assessments.flatMap((assessment) => assessment.classifications ?? [])),
+  ];
+  const taintIds = [
+    ...new Set(assessments.flatMap((assessment) => assessment.secrets.detectedTaintIds)),
+  ];
+  return Object.freeze({
+    confidence: assessments.some((assessment) => assessment.confidence === "OPAQUE")
+      ? "OPAQUE"
+      : assessments.some((assessment) => assessment.confidence === "PARTIAL")
+        ? "PARTIAL"
+        : "EXACT",
+    filesystem: Object.freeze({
+      reads: Object.freeze(
+        uniquePathFacts(assessments.flatMap((assessment) => assessment.filesystem.reads)),
+      ),
+      writes: Object.freeze(
+        uniquePathFacts(assessments.flatMap((assessment) => assessment.filesystem.writes)),
+      ),
+      deletes: Object.freeze(
+        uniquePathFacts(assessments.flatMap((assessment) => assessment.filesystem.deletes)),
+      ),
+      unknownTargets: assessments.some((assessment) => assessment.filesystem.unknownTargets),
+    }),
+    process: Object.freeze({
+      spawnsChildren: assessments.some((assessment) => assessment.process.spawnsChildren),
+      longRunning: assessments.some((assessment) => assessment.process.longRunning),
+      targetsManagedProcessIds: Object.freeze([
+        ...new Set(
+          assessments.flatMap((assessment) => assessment.process.targetsManagedProcessIds),
+        ),
+      ]),
+      targetsUnmanagedProcesses: assessments.some(
+        (assessment) => assessment.process.targetsUnmanagedProcesses,
+      ),
+    }),
+    network: Object.freeze({
+      mayAccessNetwork: assessments.some((assessment) => assessment.network.mayAccessNetwork),
+      knownDestinations: Object.freeze([
+        ...new Set(assessments.flatMap((assessment) => assessment.network.knownDestinations)),
+      ]),
+      remoteMutation: assessments.some((assessment) => assessment.network.remoteMutation),
+    }),
+    privilege: Object.freeze({
+      requestsElevation: assessments.some((assessment) => assessment.privilege.requestsElevation),
+      modifiesIdentityOrPermissions: assessments.some(
+        (assessment) => assessment.privilege.modifiesIdentityOrPermissions,
+      ),
+    }),
+    system: Object.freeze({
+      powerControl: assessments.some((assessment) => assessment.system.powerControl),
+      diskOrPartitionMutation: assessments.some(
+        (assessment) => assessment.system.diskOrPartitionMutation,
+      ),
+      serviceMutation: assessments.some((assessment) => assessment.system.serviceMutation),
+      securityPolicyMutation: assessments.some(
+        (assessment) => assessment.system.securityPolicyMutation,
+      ),
+      rawDeviceAccess: assessments.some((assessment) => assessment.system.rawDeviceAccess),
+    }),
+    secrets: Object.freeze({
+      readsKnownSecretMaterial: assessments.some(
+        (assessment) => assessment.secrets.readsKnownSecretMaterial,
+      ),
+      sendsDataToNetwork: assessments.some((assessment) => assessment.secrets.sendsDataToNetwork),
+      detectedTaintIds: Object.freeze(taintIds),
+    }),
+    execution: Object.freeze({
+      ...(first.execution.executablePath === undefined
+        ? {}
+        : { executablePath: first.execution.executablePath }),
+      ...(first.execution.interpreter === undefined
+        ? {}
+        : { interpreter: first.execution.interpreter }),
+      dynamicEvaluation: assessments.some((assessment) => assessment.execution.dynamicEvaluation),
+      opaqueBinary: assessments.some((assessment) => assessment.execution.opaqueBinary),
+    }),
+    classifications: Object.freeze(classifications),
+  });
 }
 
 function normalizeSecurityFacts(

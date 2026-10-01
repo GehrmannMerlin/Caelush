@@ -103,6 +103,9 @@ export function createApplyPatchTool(operations: PatchOperations): CodingToolDef
       try {
         const result = await operations.apply({
           environment: input.environment,
+          ...(input.securityContext === undefined
+            ? {}
+            : { securityContext: input.securityContext }),
           patch,
           signal: input.signal,
         });

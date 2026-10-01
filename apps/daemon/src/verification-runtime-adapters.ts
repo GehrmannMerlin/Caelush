@@ -1,8 +1,15 @@
+import { createRunSecurityContext } from "@caelush/core";
+import type { AgentRun, RunId } from "@caelush/protocol";
 import {
   RuntimeBinaryFileError,
   RuntimeBoundaryError,
   RuntimePathNotFoundError,
   RuntimeGitError,
+  RuntimeSandboxError,
+  createAuthorizedRuntimeExecution,
+  createRuntimeProcessPolicy,
+  createUnrestrictedProcessSandboxProvider,
+  type LocalRuntime,
   type RuntimeWorkspaceScope,
 } from "@caelush/runtime";
 import { classifySensitivePath, verificationEvidenceSanitizer } from "@caelush/security";
@@ -14,6 +21,9 @@ import type {
   WorkspaceInspectionFacts,
   WorkspacePathObservation,
   WorkspaceVerificationPort,
+  VerificationCommandExecutionPort,
+  VerificationRuntimeArgvRequest,
+  VerificationRuntimeProcessInteractionRequest,
 } from "@caelush/verification";
 import {
   MAX_WORKSPACE_ARTIFACT_FILE_BYTES,
@@ -88,6 +98,76 @@ export function createRuntimeWorkspaceVerificationPort(
       return facts;
     },
   };
+}
+
+/**
+ * Bind verification's argv execution to the persisted Run security snapshot.
+ *
+ * Verification is not a privileged side door around Tool admission. It is a host-owned execution
+ * client, so it uses the same Runtime authorization object as a process Tool: the Run snapshot is
+ * verified, the workspace policy is rebuilt from the model-free workspace locator, and the Runtime's
+ * authorized argv entry point is the only method used for a new process. Restricted Runs fail closed
+ * until the daemon's probed restricted-provider capability is available; they never fall back to an
+ * ordinary spawn.
+ */
+export function createRunBoundVerificationExecution(
+  runtime: LocalRuntime,
+  runs: Pick<{ get(runId: RunId): Promise<AgentRun | null> }, "get">,
+): VerificationCommandExecutionPort {
+  return {
+    async executeArgv(input: VerificationRuntimeArgvRequest) {
+      const { scope, authorization } = await openAuthorizedVerificationScope(
+        runtime,
+        runs,
+        input.ownerRunId,
+      );
+      return scope.exec.executeArgvAuthorized({ ...input, authorization });
+    },
+    async interact(input: VerificationRuntimeProcessInteractionRequest) {
+      const { scope } = await openAuthorizedVerificationScope(runtime, runs, input.ownerRunId);
+      return scope.exec.interact(input);
+    },
+  };
+}
+
+async function openAuthorizedVerificationScope(
+  runtime: LocalRuntime,
+  runs: Pick<{ get(runId: RunId): Promise<AgentRun | null> }, "get">,
+  ownerRunId: RunId,
+): Promise<{
+  readonly scope: RuntimeWorkspaceScope;
+  readonly authorization: import("@caelush/runtime").AuthorizedRuntimeExecution;
+}> {
+  const run = await runs.get(ownerRunId);
+  if (run === null) throw new RuntimeSandboxError("Verification Run is unavailable.");
+  const security = createRunSecurityContext(run.securityPolicy);
+  if (
+    security.processBoundary !== "UNRESTRICTED" ||
+    security.filesystemBoundary !== "HOST_USER_SCOPE" ||
+    security.requiredEnforcement !== "HARD_SAFETY_ONLY"
+  ) {
+    throw new RuntimeSandboxError(
+      "The required restricted verification process sandbox is unavailable.",
+    );
+  }
+  const policy = createRuntimeProcessPolicy({
+    runId: run.id,
+    workspaceId: run.workspace.id,
+    workspaceRoot: run.workspace.path,
+    filesystemBoundary: security.filesystemBoundary,
+    processBoundary: security.processBoundary,
+    requiredEnforcement: security.requiredEnforcement,
+  });
+  const authorization = createAuthorizedRuntimeExecution({
+    policy,
+    provider: createUnrestrictedProcessSandboxProvider(),
+    authorizationNonce: `${run.id}:${security.policyDigest}:verification`,
+  });
+  const scope = await runtime.openWorkspace(run.workspace, {
+    filesystemPolicy: policy.filesystem,
+    processAuthorization: authorization,
+  });
+  return { scope, authorization };
 }
 
 async function inspectArtifact(input: {

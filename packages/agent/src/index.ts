@@ -838,6 +838,7 @@ export type {
   ToolSchemaIssue,
   ToolSchemaValidationResult,
   ToolSecurityContext,
+  ToolSecurityPolicyReference,
   ToolSecurityContextErrorReason,
   ToolSettlementCoordinator,
   ToolSettlementCoordinatorOptions,

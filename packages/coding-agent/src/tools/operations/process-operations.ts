@@ -1,6 +1,6 @@
 import type { JsonObject } from "@caelush/ai";
 import type { RunId } from "@caelush/protocol";
-import type { ToolExecutionEnvironment } from "@caelush/agent";
+import type { ToolExecutionEnvironment, ToolSecurityContext } from "@caelush/agent";
 
 /**
  * Write to, or poll, a running process.
@@ -42,6 +42,7 @@ import type { ToolExecutionEnvironment } from "@caelush/agent";
 export interface ProcessOperations {
   interact(input: {
     readonly environment: ToolExecutionEnvironment;
+    readonly securityContext?: ToolSecurityContext | undefined;
 
     readonly ownerRunId: RunId;
 
@@ -88,6 +89,7 @@ export interface ProcessOperations {
    */
   terminate(input: {
     readonly environment: ToolExecutionEnvironment;
+    readonly securityContext?: ToolSecurityContext | undefined;
 
     readonly ownerRunId: RunId;
 

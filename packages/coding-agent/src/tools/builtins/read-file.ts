@@ -95,6 +95,9 @@ export function createReadFileTool(operations: ReadFileProbeOperations): CodingT
         // code: a Tool may not import the Runtime's error vocabulary to interpret a path kind.
         const read = await operations.readFileWithKind({
           environment: input.environment,
+          ...(input.securityContext === undefined
+            ? {}
+            : { securityContext: input.securityContext }),
           path: args.path,
           offset,
           limit: limit,

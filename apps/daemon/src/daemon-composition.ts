@@ -90,18 +90,12 @@ import {
   type TimestampMs,
   type ContextUsageProjection,
 } from "@caelush/protocol";
-import {
-  LocalRuntime,
-  createLocalRuntimeResolver,
-  sanitizeTerminalOutput,
-  type RuntimeWorkspaceScope,
-} from "@caelush/runtime";
+import { LocalRuntime, createLocalRuntimeResolver, sanitizeTerminalOutput } from "@caelush/runtime";
 import {
   DefaultVerificationPlanner,
   ProjectCheckResolverRegistry,
   VerificationRunner,
   createVerificationRepairPolicy,
-  type VerificationCommandExecutionPort,
   type VerificationGitPort,
   type VerificationToolObservationInput,
   type WorkspaceVerificationPort,
@@ -166,6 +160,7 @@ import {
 import { createSqliteToolBudgetAdmission, type CaelushStorage } from "@caelush/storage";
 
 import {
+  createRunBoundVerificationExecution,
   createRuntimeGitVerificationPort,
   createRuntimeWorkspaceVerificationPort,
 } from "./verification-runtime-adapters.js";
@@ -1264,26 +1259,6 @@ function createActiveCodingCatalog(
  * compiled into a Tool definition — it carries no workspace path, no secret and no live value — and
  * marking it otherwise would make the renderer drop it.
  */
-function createRunBoundVerificationExecution(
-  runtime: LocalRuntime,
-  runs: Pick<CaelushStorage["runs"], "get">,
-): VerificationCommandExecutionPort {
-  return {
-    async executeArgv(input: Parameters<RuntimeWorkspaceScope["exec"]["executeArgv"]>[0]) {
-      const run = await runs.get(input.ownerRunId);
-      if (run === null) throw new Error("verification Run is unavailable");
-      const scope = await runtime.openWorkspace(run.workspace);
-      return scope.exec.executeArgv(input);
-    },
-    async interact(input: Parameters<RuntimeWorkspaceScope["exec"]["interact"]>[0]) {
-      const run = await runs.get(input.ownerRunId);
-      if (run === null) throw new Error("verification Run is unavailable");
-      const scope = await runtime.openWorkspace(run.workspace);
-      return scope.exec.interact(input);
-    },
-  };
-}
-
 function createRunBoundVerificationWorkspace(runtime: LocalRuntime): WorkspaceVerificationPort {
   return {
     async inspect(input) {

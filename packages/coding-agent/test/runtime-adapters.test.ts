@@ -4,6 +4,7 @@ import path from "node:path";
 import type { ToolExecutionEnvironment } from "@caelush/agent";
 import {
   createRuntimeGitOperations,
+  createRuntimeProcessOperations,
   createRuntimeReadOnlyOperations,
   createSearchTextTool,
   type RuntimeReadOnlyOperations,
@@ -20,6 +21,7 @@ import {
   createToolInvocationId,
   createWorkspaceId,
 } from "@caelush/protocol";
+import { FULL_SECURITY_CONTEXT } from "./support/operations-fixtures.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /**
@@ -107,6 +109,57 @@ async function ripgrepWorks(): Promise<boolean> {
 }
 
 describe("search_text Runtime adapter", () => {
+  it("opens a policy-bound process scope with the authorized Full Access provider", async () => {
+    const seen: { options?: unknown; request?: unknown } = {};
+    const scope = {
+      exec: {
+        execute: async (request: unknown) => {
+          seen.request = request;
+          return { status: "EXITED", output: "", totalOutputBytes: 0, omittedBytes: 0 };
+        },
+        interact: async () => ({
+          status: "EXITED",
+          output: "",
+          totalOutputBytes: 0,
+          omittedBytes: 0,
+        }),
+        terminate: async () => ({
+          status: "EXITED",
+          output: "",
+          totalOutputBytes: 0,
+          omittedBytes: 0,
+        }),
+      },
+    } as never;
+    const operations = createRuntimeProcessOperations({
+      resolve: () => ({
+        openWorkspace: async (_workspace: unknown, options: unknown) => {
+          seen.options = options;
+          return scope;
+        },
+      }),
+    } as never);
+
+    await operations.execute({
+      environment,
+      securityContext: FULL_SECURITY_CONTEXT,
+      ownerRunId: createRunId(),
+      command: "npm test",
+      tty: false,
+      yieldTimeMs: 250,
+      signal: signal(),
+    });
+
+    expect(seen.options).toMatchObject({
+      filesystemPolicy: { boundary: "HOST_USER_SCOPE" },
+      processAuthorization: {
+        provider: { id: "unrestricted", kind: "UNRESTRICTED" },
+        policy: { processBoundary: "UNRESTRICTED" },
+      },
+    });
+    expect(seen.request).toMatchObject({ ownerRunId: expect.any(String), command: "npm test" });
+  });
+
   it("applies include as a Runtime pre-filter, before truncation (the errata counter-example)", async () => {
     if (!(await ripgrepWorks())) return;
     const tool = createSearchTextTool(readOnly).tool;

@@ -1,6 +1,6 @@
 import type { JsonObject } from "@caelush/ai";
 import type { RunId } from "@caelush/protocol";
-import type { ToolExecutionEnvironment } from "@caelush/agent";
+import type { ToolExecutionEnvironment, ToolSecurityContext } from "@caelush/agent";
 
 /**
  * Start a command.
@@ -50,6 +50,7 @@ import type { ToolExecutionEnvironment } from "@caelush/agent";
 export interface ExecOperations {
   execute(input: {
     readonly environment: ToolExecutionEnvironment;
+    readonly securityContext?: ToolSecurityContext | undefined;
 
     readonly ownerRunId: RunId;
 
