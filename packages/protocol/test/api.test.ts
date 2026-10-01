@@ -1,9 +1,7 @@
 import {
-  ApprovalPolicySchema,
   CreateRunRequestSchema,
   CreateSessionRequestSchema,
   EventStreamQuerySchema,
-  PermissionProfileSchema,
   RunLimitsSchema,
   RunListQuerySchema,
   SessionListQuerySchema,
@@ -49,8 +47,7 @@ describe("Protocol API contracts", () => {
         workspace,
         model,
         runtime,
-        permissionProfile: PermissionProfileSchema.parse("READ_ONLY"),
-        approvalPolicy: ApprovalPolicySchema.parse("ALWAYS_ASK"),
+        preset: { id: "WORKSPACE_WRITE", expectedVersion: 1 },
         limits: RunLimitsSchema.parse(limits),
       }),
     ).toMatchObject({ goal: "Do work", workspace, model, runtime, limits });
@@ -66,6 +63,17 @@ describe("Protocol API contracts", () => {
         workspace,
         model,
         runtime,
+        preset: { id: "WORKSPACE_WRITE", expectedVersion: 1 },
+        limits,
+      }).success,
+    ).toBe(false);
+    expect(
+      CreateRunRequestSchema.safeParse({
+        goal: "Do work",
+        workspace,
+        model,
+        runtime,
+        preset: { id: "WORKSPACE_WRITE", expectedVersion: 1 },
         permissionProfile: "READ_ONLY",
         approvalPolicy: "ALWAYS_ASK",
         limits,

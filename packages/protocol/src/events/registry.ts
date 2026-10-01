@@ -5,6 +5,7 @@ import { ApprovalRequestedEventSchema, ApprovalResolvedEventSchema } from "./app
 import { BudgetExceededEventSchema } from "./budget.js";
 import { ConversationMessageCommittedEventSchema } from "./conversation.js";
 import { ContextCompactionCompletedEventSchema } from "./context.js";
+import { RunSecurityPolicyBoundEventSchema } from "./security-policy.js";
 import { ErrorEventSchema } from "./error.js";
 import {
   FileCreatedEventSchema,
@@ -89,6 +90,7 @@ type RegisteredSchema = z.ZodTypeAny;
 
 const registeredSchemas: ReadonlyMap<string, RegisteredSchema> = new Map<string, RegisteredSchema>([
   ["run.started\u00001", RunStartedEventSchema],
+  ["run.security_policy.bound\u00001", RunSecurityPolicyBoundEventSchema],
   ["run.timed_out\u00001", RunTimedOutEventSchema],
   ["run.completed\u00001", RunCompletedEventSchema],
   ["run.failed\u00001", RunFailedEventSchema],

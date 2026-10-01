@@ -4,10 +4,12 @@ import { RunLimitsSchema } from "../limits.js";
 import { RunResourcePolicySchema } from "../resource-policy.js";
 import { RuntimeRefSchema } from "../runtime.js";
 import { ClientModelSelectionSchema } from "./model-selection.js";
+import { PermissionPresetIdSchema } from "../policy.js";
 
 export const DefaultRunConfigurationSchema = z
   .object({
     runtime: RuntimeRefSchema,
+    defaultPreset: PermissionPresetIdSchema.optional(),
     permissionProfile: PermissionProfileSchema,
     approvalPolicy: ApprovalPolicySchema,
     limits: RunLimitsSchema.optional(),

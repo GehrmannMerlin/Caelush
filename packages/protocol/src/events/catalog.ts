@@ -43,6 +43,7 @@ function transient(
  */
 export const RUN_EVENT_TYPE_CATALOG: readonly RunEventTypeDefinition[] = Object.freeze([
   durable("run.started"),
+  durable("run.security_policy.bound"),
   durable("run.timed_out"),
   durable("run.completed"),
   durable("run.failed"),

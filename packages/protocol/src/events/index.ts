@@ -64,6 +64,7 @@ import { ResourceGuardEventSchema } from "./resource.js";
 import { createPublicRunEventSchema, type PublicRunEventFrom } from "./public.js";
 import { ConversationMessageCommittedEventSchema } from "./conversation.js";
 import { ContextCompactionCompletedEventSchema } from "./context.js";
+import { RunSecurityPolicyBoundEventSchema } from "./security-policy.js";
 
 export {
   CoalescibleTransientEventMetaSchema,
@@ -119,6 +120,8 @@ export { ConversationMessageCommittedEventSchema } from "./conversation.js";
 export type { ConversationMessageCommittedEvent } from "./conversation.js";
 export { ContextCompactionCompletedEventSchema } from "./context.js";
 export type { ContextCompactionCompletedEvent } from "./context.js";
+export { RunSecurityPolicyBoundEventSchema } from "./security-policy.js";
+export type { RunSecurityPolicyBoundEvent } from "./security-policy.js";
 export { createPublicRunEventSchema } from "./public.js";
 export type { PublicRunEventFrom } from "./public.js";
 export {
@@ -147,6 +150,7 @@ export {
 // version-aware static registry instead of Zod's single-discriminator optimization.
 const currentRunEventSchema = z.union([
   RunStartedEventSchema,
+  RunSecurityPolicyBoundEventSchema,
   RunTimedOutEventSchema,
   RunCompletedEventSchema,
   RunFailedEventSchema,

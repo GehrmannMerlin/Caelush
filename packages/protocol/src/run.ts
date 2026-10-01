@@ -9,6 +9,7 @@ import { RunResourcePolicySchema } from "./resource-policy.js";
 import { RuntimeRefSchema } from "./runtime.js";
 import { WorkspaceRefSchema } from "./workspace.js";
 import { ReasoningLevelSchema } from "./api/model-selection.js";
+import { RunSecurityPolicySnapshotV1Schema } from "./security-policy.js";
 
 export const RunStatusSchema = z.enum([
   "PENDING",
@@ -35,6 +36,8 @@ export const AgentRunSchema = z
     model: ModelRefSchema,
     reasoningLevel: ReasoningLevelSchema.optional(),
     runtime: RuntimeRefSchema,
+    /** Optional only while legacy persisted Runs are decoded during migration. */
+    securityPolicy: RunSecurityPolicySnapshotV1Schema.optional(),
     permissionProfile: PermissionProfileSchema,
     approvalPolicy: ApprovalPolicySchema,
     limits: RunLimitsSchema,
@@ -47,3 +50,9 @@ export const AgentRunSchema = z
   })
   .strict();
 export type AgentRun = z.infer<typeof AgentRunSchema>;
+
+/** New Run writes must use the immutable policy-bound shape; legacy decoding stays migration-only. */
+export const CurrentAgentRunSchema = AgentRunSchema.extend({
+  securityPolicy: RunSecurityPolicySnapshotV1Schema,
+});
+export type CurrentAgentRun = z.infer<typeof CurrentAgentRunSchema>;

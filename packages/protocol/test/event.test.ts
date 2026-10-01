@@ -485,4 +485,53 @@ describe("protocol AgentEvent", () => {
     expect(JSON.stringify(parsed)).not.toContain("startedAt");
     expect(JSON.stringify(parsed)).not.toContain("finishedAt");
   });
+
+  it("registers and parses the metadata-only security policy binding event", () => {
+    const eventSchema = getSchema("AgentEventSchema");
+    const createEventId = getFactory("createEventId");
+    const createRunId = getFactory("createRunId");
+    const createSessionId = getFactory("createSessionId");
+    const catalog = (protocol as Record<string, unknown>).RUN_EVENT_TYPE_CATALOG as
+      readonly { type: string; schemaVersion: number; delivery: unknown }[] | undefined;
+    if (
+      eventSchema === undefined ||
+      createEventId === undefined ||
+      createRunId === undefined ||
+      createSessionId === undefined ||
+      catalog === undefined
+    ) {
+      return;
+    }
+
+    expect(catalog.find(({ type }) => type === "run.security_policy.bound")).toMatchObject({
+      type: "run.security_policy.bound",
+      schemaVersion: 1,
+      delivery: { kind: "DURABLE" },
+    });
+    expect(
+      eventSchema.parse({
+        eventId: createEventId(),
+        schemaVersion: 1,
+        runId: createRunId(),
+        sessionId: createSessionId(),
+        type: "run.security_policy.bound",
+        timestamp: 1_700_000_000_000,
+        visibility: "USER_VISIBLE",
+        durability: { kind: "DURABLE", version: 1, sequence: 1 },
+        payload: {
+          policySchemaVersion: 1,
+          preset: { id: "WORKSPACE_WRITE", version: 1 },
+          permissionProfile: "PROJECT_ACCESS",
+          approvalPolicy: "ON_BOUNDARY",
+          filesystemBoundary: "WORKSPACE_READ_WRITE",
+          processBoundary: "WORKSPACE_WRITE",
+          requiredEnforcement: "OS_RESTRICTED",
+          hardSafetyPolicyVersion: "hard-safety@1",
+          commandPolicyVersion: "command-policy@1",
+          secretPolicyVersion: "secret-policy@1",
+          policyDigest: "a".repeat(64),
+        },
+      }),
+    ).toMatchObject({ type: "run.security_policy.bound" });
+  });
 });

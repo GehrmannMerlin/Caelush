@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { ApprovalPolicySchema, PermissionProfileSchema } from "../policy.js";
 import { RunLimitsSchema } from "../limits.js";
 import { RunStatusSchema } from "../run.js";
 import { RuntimeRefSchema } from "../runtime.js";
@@ -7,6 +6,7 @@ import { WorkspaceRefSchema } from "../workspace.js";
 import { ClientAgentRunSchema } from "./public-entities.js";
 import { ClientModelSelectionSchema, ReasoningLevelSchema } from "./model-selection.js";
 import { RunResourcePolicySchema } from "../resource-policy.js";
+import { PermissionPresetSelectionSchema } from "../security-policy.js";
 
 export const CreateRunRequestSchema = z
   .object({
@@ -15,8 +15,7 @@ export const CreateRunRequestSchema = z
     model: ClientModelSelectionSchema.optional(),
     reasoningLevel: ReasoningLevelSchema.optional(),
     runtime: RuntimeRefSchema,
-    permissionProfile: PermissionProfileSchema,
-    approvalPolicy: ApprovalPolicySchema,
+    preset: PermissionPresetSelectionSchema,
     limits: RunLimitsSchema.optional(),
     resourcePolicy: RunResourcePolicySchema.optional(),
   })

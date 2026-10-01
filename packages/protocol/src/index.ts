@@ -53,10 +53,30 @@ export type { AgentError, AgentErrorCode, AgentErrorPhase } from "./error.js";
 export {
   ApprovalPolicySchema,
   CapabilitySchema,
+  FilesystemBoundarySchema,
+  PermissionPresetIdSchema,
   PermissionProfileSchema,
+  ProcessBoundarySchema,
+  RequiredEnforcementSchema,
   RiskLevelSchema,
 } from "./policy.js";
-export type { ApprovalPolicy, Capability, PermissionProfile, RiskLevel } from "./policy.js";
+export type {
+  ApprovalPolicy,
+  Capability,
+  FilesystemBoundary,
+  PermissionPresetId,
+  PermissionProfile,
+  ProcessBoundary,
+  RequiredEnforcement,
+  RiskLevel,
+} from "./policy.js";
+export {
+  RunSecurityPolicySnapshotV1Schema,
+  canonicalSecurityPolicyJson,
+  computeSecurityPolicyDigest,
+  verifySecurityPolicyDigest,
+} from "./security-policy.js";
+export type { RunSecurityPolicySnapshotV1, SecurityPolicyDigestInput } from "./security-policy.js";
 export { RunLimitsSchema } from "./limits.js";
 export { isSafePositiveMicroUsd } from "./limits.js";
 export type { RunLimits } from "./limits.js";
@@ -172,6 +192,7 @@ export type { UsageState } from "./usage.js";
 export {
   AgentEventSchema,
   ConversationMessageCommittedEventSchema,
+  RunSecurityPolicyBoundEventSchema,
   CoalescibleTransientEventMetaSchema,
   DurableEventSchema,
   DurableRunEventMetaSchema,
@@ -205,6 +226,7 @@ export {
 export type {
   AgentEvent,
   ConversationMessageCommittedEvent,
+  RunSecurityPolicyBoundEvent,
   CoalescibleTransientEventMeta,
   DurableEvent,
   DurableRunEvent,
@@ -244,8 +266,8 @@ export type { RunTimedOutEvent } from "./events/index.js";
 export type { VerificationPlannedEvent } from "./events/verification.js";
 export { AgentSessionSchema } from "./session.js";
 export type { AgentSession } from "./session.js";
-export { AgentRunSchema, RunStatusSchema } from "./run.js";
-export type { AgentRun, RunStatus } from "./run.js";
+export { AgentRunSchema, CurrentAgentRunSchema, RunStatusSchema } from "./run.js";
+export type { AgentRun, CurrentAgentRun, RunStatus } from "./run.js";
 export { RunCancellationCauseSchema, RunCancellationIntentSchema } from "./cancellation.js";
 export type { RunCancellationCause, RunCancellationIntent } from "./cancellation.js";
 export { AgentStepSchema, StepStatusSchema } from "./step.js";
@@ -278,6 +300,11 @@ export {
   ReasoningPresentationSchema,
   UpdateAISelectionRequestSchema,
   CreateRunRequestSchema,
+  PermissionPresetDescriptorSchema,
+  PermissionPresetSelectionSchema,
+  SecurityCapabilitiesResponseSchema,
+  SecurityPreparationRequestSchema,
+  SecurityPreparationResponseSchema,
   CreateSessionRequestSchema,
   UpdateSessionModelSelectionRequestSchema,
   CreateWorkspaceRequestSchema,
@@ -298,6 +325,8 @@ export {
   WorkspaceDirectoryPickerResponseSchema,
   WorkspaceSessionListResponseSchema,
   WorkspaceSessionSummarySchema,
+  WorkspaceSecurityCapabilitiesRequestSchema,
+  WorkspaceSecurityCapabilitiesResponseSchema,
   AssistantMessagePhaseSchema,
   AssistantPresentationItemSchema,
   ContextUsagePressureStateSchema,
@@ -349,6 +378,11 @@ export type {
   ReasoningPresentation,
   UpdateAISelectionRequest,
   CreateRunRequest,
+  PermissionPresetDescriptor,
+  PermissionPresetSelection,
+  SecurityCapabilitiesResponse,
+  SecurityPreparationRequest,
+  SecurityPreparationResponse,
   CreateSessionRequest,
   UpdateSessionModelSelectionRequest,
   CreateWorkspaceRequest,
@@ -369,6 +403,8 @@ export type {
   WorkspaceDirectoryPickerResponse,
   WorkspaceSessionListResponse,
   WorkspaceSessionSummary,
+  WorkspaceSecurityCapabilitiesRequest,
+  WorkspaceSecurityCapabilitiesResponse,
   AssistantMessagePhase,
   AssistantPresentationItem,
   ContextUsageProjection,

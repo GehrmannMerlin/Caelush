@@ -126,6 +126,24 @@ export type {
 export { UpdateSessionModelSelectionRequestSchema } from "./session.js";
 export { CreateRunRequestSchema, RunListQuerySchema, RunListResponseSchema } from "./run.js";
 export type { CreateRunRequest, RunListQuery, RunListResponse } from "./run.js";
+export {
+  PermissionPresetDescriptorSchema,
+  PermissionPresetSelectionSchema,
+  SecurityCapabilitiesResponseSchema,
+  SecurityPreparationRequestSchema,
+  SecurityPreparationResponseSchema,
+  WorkspaceSecurityCapabilitiesRequestSchema,
+  WorkspaceSecurityCapabilitiesResponseSchema,
+} from "./security.js";
+export type {
+  PermissionPresetDescriptor,
+  PermissionPresetSelection,
+  SecurityCapabilitiesResponse,
+  SecurityPreparationRequest,
+  SecurityPreparationResponse,
+  WorkspaceSecurityCapabilitiesRequest,
+  WorkspaceSecurityCapabilitiesResponse,
+} from "./security.js";
 export { EventStreamQuerySchema } from "./event-stream.js";
 export type { EventStreamQuery } from "./event-stream.js";
 export {
