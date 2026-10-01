@@ -85,14 +85,24 @@ function capabilities(): SecurityCapabilitiesResponse {
   };
 }
 
-function workspaceCapabilities(): WorkspaceSecurityCapabilitiesResponse {
+type PresetStatus = "AVAILABLE" | "PREPARATION_REQUIRED" | "UNAVAILABLE";
+
+function workspaceCapabilities(
+  statuses: Partial<
+    Readonly<Record<"VIEW_ONLY" | "WORKSPACE_WRITE" | "FULL_ACCESS", PresetStatus>>
+  > = {},
+): WorkspaceSecurityCapabilitiesResponse {
   return {
     schemaVersion: 1,
     workspaceId: workspace.id,
     presets: [
-      { id: "VIEW_ONLY", version: 1, status: "AVAILABLE" },
-      { id: "WORKSPACE_WRITE", version: 1, status: "AVAILABLE" },
-      { id: "FULL_ACCESS", version: 1, status: "AVAILABLE" },
+      { id: "VIEW_ONLY", version: 1, status: statuses.VIEW_ONLY ?? "AVAILABLE" },
+      {
+        id: "WORKSPACE_WRITE",
+        version: 1,
+        status: statuses.WORKSPACE_WRITE ?? "AVAILABLE",
+      },
+      { id: "FULL_ACCESS", version: 1, status: statuses.FULL_ACCESS ?? "AVAILABLE" },
     ],
     preparation: { supported: false, status: "NOT_REQUIRED" },
   };
@@ -168,7 +178,67 @@ describe("WebSessionManager permission lifecycle", () => {
 
     expect(manager.getSnapshot().selectedPreset).toBeUndefined();
     expect(await manager.submitPrompt("inspect safely")).toBe(false);
+    expect(manager.getSnapshot().error?.code).toBe("PERMISSION_CAPABILITIES_FAILED");
     expect(createSession).not.toHaveBeenCalled();
+    manager.dispose();
+  });
+
+  it("falls back to View Only when the configured Workspace Write preset is unavailable", async () => {
+    const client = baseClient({
+      getSecurityCapabilities: vi.fn(async () => capabilities()),
+      getWorkspaceSecurityCapabilities: vi.fn(async () =>
+        workspaceCapabilities({ WORKSPACE_WRITE: "UNAVAILABLE" }),
+      ),
+    });
+    const manager = new WebSessionManager({ client, workspace, info: info() });
+
+    await manager.loadSessions();
+    manager.beginDraft();
+
+    expect(manager.getSnapshot().selectedPreset).toEqual({
+      id: "VIEW_ONLY",
+      expectedVersion: 1,
+    });
+    manager.dispose();
+  });
+
+  it("does not automatically select Full Access when it is the only available preset", async () => {
+    const client = baseClient({
+      getSecurityCapabilities: vi.fn(async () => capabilities()),
+      getWorkspaceSecurityCapabilities: vi.fn(async () =>
+        workspaceCapabilities({ VIEW_ONLY: "UNAVAILABLE", WORKSPACE_WRITE: "UNAVAILABLE" }),
+      ),
+    });
+    const manager = new WebSessionManager({ client, workspace, info: info() });
+
+    await manager.loadSessions();
+    manager.beginDraft();
+
+    expect(manager.getSnapshot().selectedPreset).toBeUndefined();
+    expect(manager.getSnapshot().permissionCapabilities).toBeDefined();
+    manager.dispose();
+  });
+
+  it("reports preset unavailability and creates nothing after a successful empty capability load", async () => {
+    const createSession = vi.fn();
+    const createRun = vi.fn();
+    const client = baseClient({
+      createSession,
+      createRun,
+      getSecurityCapabilities: vi.fn(async () => capabilities()),
+      getWorkspaceSecurityCapabilities: vi.fn(async () =>
+        workspaceCapabilities({ VIEW_ONLY: "UNAVAILABLE", WORKSPACE_WRITE: "UNAVAILABLE" }),
+      ),
+    });
+    const manager = new WebSessionManager({ client, workspace, info: info() });
+
+    await manager.loadSessions();
+    manager.beginDraft();
+
+    await expect(manager.submitPrompt("inspect with an explicit permission")).resolves.toBe(false);
+    expect(manager.getSnapshot().error?.code).toBe("PERMISSION_PRESET_UNAVAILABLE");
+    expect(createSession).not.toHaveBeenCalled();
+    expect(createRun).not.toHaveBeenCalled();
     manager.dispose();
   });
 

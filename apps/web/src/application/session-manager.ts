@@ -404,7 +404,13 @@ export class WebSessionManager {
     const model = { provider: selection.provider, model: selection.model };
     const permissionPreset = this.currentPermissionPreset();
     if (permissionPreset === undefined) {
-      this.publish({ error: sessionError("PERMISSION_CAPABILITIES_FAILED") });
+      this.publish({
+        error: sessionError(
+          this.snapshot.permissionCapabilities === undefined
+            ? "PERMISSION_CAPABILITIES_FAILED"
+            : "PERMISSION_PRESET_UNAVAILABLE",
+        ),
+      });
       return false;
     }
 
