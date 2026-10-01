@@ -237,6 +237,7 @@ describe("WebSessionManager permission lifecycle", () => {
 
     await expect(manager.submitPrompt("inspect with an explicit permission")).resolves.toBe(false);
     expect(manager.getSnapshot().error?.code).toBe("PERMISSION_PRESET_UNAVAILABLE");
+    expect(manager.getSnapshot().error?.message).toBe("所选权限当前不可用，已阻止创建任务。");
     expect(createSession).not.toHaveBeenCalled();
     expect(createRun).not.toHaveBeenCalled();
     manager.dispose();

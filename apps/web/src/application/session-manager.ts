@@ -1844,7 +1844,7 @@ function sessionError(code: WebSessionErrorCode): WebSessionError {
     RUN_REFRESH_FAILED: "无法刷新任务状态。",
     DEFAULT_MODEL_UNAVAILABLE: "当前 daemon 未配置默认模型，无法开始任务。",
     PERMISSION_CAPABILITIES_FAILED: "无法确认当前主机的权限能力，已阻止创建任务。",
-    PERMISSION_PRESET_UNAVAILABLE: "所选 Agent 权限当前不可用，已阻止创建任务。",
+    PERMISSION_PRESET_UNAVAILABLE: "所选权限当前不可用，已阻止创建任务。",
     PERMISSION_PREPARATION_FAILED: "工作区权限准备失败，已阻止创建任务。",
     PROMPT_REQUIRED: "请输入任务内容。",
     PROMPT_TOO_LARGE: "任务内容不能超过 32 KiB。",
