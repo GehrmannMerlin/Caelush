@@ -2,6 +2,7 @@ import {
   AgentRunSchema,
   type AgentSession,
   compatibilityLimitsForResourcePolicy,
+  createEventId,
   createRunId,
   normalizeCreateRunResourcePolicy,
   type AgentRun,
@@ -13,12 +14,39 @@ import {
   type WorkspaceRef,
   type SessionId,
 } from "@caelush/protocol";
+import {
+  createRunEventFactory,
+  type DurableRunEvent,
+  type RunEventFactory,
+  type RunEventNotifierPort,
+} from "@caelush/agent";
+import { expandPermissionPreset } from "@caelush/security";
 import { StorageNotFoundError, type RunRepository, type SessionRepository } from "@caelush/storage";
+import type {
+  PermissionPresetSelection,
+  WorkspaceSecurityCapabilitiesResponse,
+} from "@caelush/protocol";
 import type { DaemonModelCanonicalizer } from "../providers/model-canonicalizer.js";
 import { canonicalizeWorkspacePath } from "../workspaces/workspace-identity.js";
 import { WorkspaceOwnershipError } from "../workspaces/workspace-errors.js";
 import type { WorkspaceService } from "../workspaces/workspace-service.js";
 import { ModelSelectionError } from "../providers/model-directory.js";
+import type { SecurityCapabilityService } from "./security-capability-service.js";
+
+export class SecurityPolicyRequestError extends Error {
+  constructor(
+    readonly reason:
+      | "CAPABILITY_UNAVAILABLE"
+      | "PRESET_NOT_AVAILABLE"
+      | "PREPARATION_REQUIRED"
+      | "PRESET_VERSION_MISMATCH"
+      | "PERSISTENCE_UNAVAILABLE",
+    message: string,
+  ) {
+    super(message);
+    this.name = "SecurityPolicyRequestError";
+  }
+}
 
 export interface RunServiceOptions {
   readonly sessions: SessionRepository;
@@ -27,6 +55,10 @@ export interface RunServiceOptions {
   readonly createId?: typeof createRunId;
   readonly modelCanonicalizer?: DaemonModelCanonicalizer;
   readonly workspaceService?: WorkspaceService;
+  readonly securityCapabilityService?: Pick<SecurityCapabilityService, "getWorkspaceCapabilities">;
+  readonly eventNotifier?: Pick<RunEventNotifierPort, "notifyCommitted">;
+  readonly eventFactory?: RunEventFactory;
+  readonly eventIdFactory?: { readonly create: () => import("@caelush/protocol").EventId };
   readonly validateSelection?: (
     selection: {
       readonly provider: string;
@@ -41,6 +73,10 @@ export class RunService {
   private readonly now: () => number;
   private readonly createId: typeof createRunId;
   private readonly modelCanonicalizer: DaemonModelCanonicalizer;
+  private readonly eventFactory: RunEventFactory;
+  private readonly eventIdFactory: {
+    readonly create: () => import("@caelush/protocol").EventId;
+  };
 
   constructor(private readonly options: RunServiceOptions) {
     this.now = options.now ?? Date.now;
@@ -48,6 +84,8 @@ export class RunService {
     this.modelCanonicalizer = options.modelCanonicalizer ?? {
       canonicalize: (selection): ModelRef => ({ ...selection }),
     };
+    this.eventFactory = options.eventFactory ?? createRunEventFactory();
+    this.eventIdFactory = options.eventIdFactory ?? { create: createEventId };
   }
 
   async createRun(sessionId: SessionId, input: CreateRunRequest): Promise<AgentRun> {
@@ -80,19 +118,42 @@ export class RunService {
       );
     }
     const workspace = await this.resolveWorkspace(session, input.workspace);
+    const securityPolicy = await this.resolveSecurityPolicy(workspace.id, input.preset);
+    const { preset: _preset, ...clientFields } = input;
     const run = AgentRunSchema.parse({
       id: this.createId(),
       sessionId,
-      ...input,
+      ...clientFields,
       workspace,
       limits: input.limits ?? compatibilityLimitsForResourcePolicy(resourcePolicy),
       resourcePolicy,
       model: this.modelCanonicalizer.canonicalize(modelSelection),
+      securityPolicy,
+      permissionProfile: securityPolicy.permissionProfile,
+      approvalPolicy: securityPolicy.approvalPolicy,
       ...(reasoningLevel === undefined ? {} : { reasoningLevel }),
       status: "PENDING",
       createdAt: this.now(),
     });
-    await this.options.runs.insert(run);
+    const policyEvent = this.eventFactory.runSecurityPolicyBound(
+      run,
+      securityPolicy,
+      this.eventIdFactory.create(),
+      run.createdAt,
+    );
+    if (this.options.runs.insertWithEvents === undefined) {
+      throw new SecurityPolicyRequestError(
+        "PERSISTENCE_UNAVAILABLE",
+        "Atomic Run security policy persistence is unavailable; the Run was not created.",
+      );
+    }
+    const committedEvents: readonly DurableRunEvent[] = await this.options.runs.insertWithEvents(
+      run,
+      [policyEvent],
+    );
+    if (committedEvents.length > 0) {
+      this.options.eventNotifier?.notifyCommitted(committedEvents);
+    }
     return run;
   }
 
@@ -138,5 +199,51 @@ export class RunService {
       throw new WorkspaceOwnershipError("The requested Run Workspace does not match its Session.");
     }
     return this.options.workspaceService.toWorkspaceRef(workspace);
+  }
+
+  private async resolveSecurityPolicy(
+    workspaceId: WorkspaceRef["id"],
+    selection: PermissionPresetSelection,
+  ) {
+    if (this.options.securityCapabilityService === undefined) {
+      throw new SecurityPolicyRequestError(
+        "CAPABILITY_UNAVAILABLE",
+        "Security capabilities are unavailable; the Run cannot be created safely.",
+      );
+    }
+    let capabilities: WorkspaceSecurityCapabilitiesResponse;
+    try {
+      capabilities =
+        await this.options.securityCapabilityService.getWorkspaceCapabilities(workspaceId);
+    } catch {
+      throw new SecurityPolicyRequestError(
+        "CAPABILITY_UNAVAILABLE",
+        "Security capabilities are unavailable; the Run cannot be created safely.",
+      );
+    }
+    const availability = capabilities.presets.find((preset) => preset.id === selection.id);
+    if (availability === undefined || availability.version !== selection.expectedVersion) {
+      throw new SecurityPolicyRequestError(
+        "PRESET_VERSION_MISMATCH",
+        "The selected permission preset is stale or unavailable.",
+      );
+    }
+    if (availability.status === "PREPARATION_REQUIRED") {
+      throw new SecurityPolicyRequestError(
+        "PREPARATION_REQUIRED",
+        "The selected workspace requires security preparation before this Run can start.",
+      );
+    }
+    if (availability.status !== "AVAILABLE") {
+      throw new SecurityPolicyRequestError(
+        "PRESET_NOT_AVAILABLE",
+        "The selected permission preset is unavailable on this host.",
+      );
+    }
+    return expandPermissionPreset({
+      presetId: selection.id,
+      expectedVersion: selection.expectedVersion,
+      createdAt: new Date(this.now()).toISOString(),
+    });
   }
 }

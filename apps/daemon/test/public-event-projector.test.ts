@@ -187,6 +187,19 @@ describe("DefaultPublicEventProjector", () => {
     const ids = commonIds();
     const payloads: Record<string, unknown> = {
       "run.started": { goal: "goal" },
+      "run.security_policy.bound": {
+        policySchemaVersion: 1,
+        preset: { id: "WORKSPACE_WRITE", version: 1 },
+        permissionProfile: "PROJECT_ACCESS",
+        approvalPolicy: "ON_BOUNDARY",
+        filesystemBoundary: "WORKSPACE_READ_WRITE",
+        processBoundary: "WORKSPACE_WRITE",
+        requiredEnforcement: "OS_RESTRICTED",
+        hardSafetyPolicyVersion: "hard-safety@1",
+        commandPolicyVersion: "command-policy@1",
+        secretPolicyVersion: "secret-policy@1",
+        policyDigest: "a".repeat(64),
+      },
       "run.timed_out": { deadlineAt: 1_700_000_000_001 },
       "run.completed": { result: { answer: "done" } },
       "run.failed": errorPayload(),

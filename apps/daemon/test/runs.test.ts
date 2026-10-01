@@ -5,6 +5,7 @@ import { createWorkspaceId } from "@caelush/protocol";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildDaemonApp } from "../src/index.js";
+import { SecurityCapabilityService } from "../src/services/security-capability-service.js";
 
 let storage: CaelushStorage | undefined;
 let directory: string | undefined;
@@ -23,6 +24,18 @@ async function makeApp() {
     sessions: storage.sessions,
     runs: storage.runs,
     eventHub: { watch: async function* () {} } as never,
+    eventNotifier: { notifyCommitted: () => undefined },
+    securityCapabilityService: new SecurityCapabilityService({
+      processSandboxProviders: [
+        {
+          id: "fixture-restricted",
+          kind: "RESTRICTED",
+          enforcement: "HARD",
+          create: async () => ({}) as never,
+          probe: async () => ({ available: true, enforcement: "HARD" }),
+        },
+      ],
+    }),
     config: { host: "127.0.0.1", port: 43120, sseHeartbeatIntervalMs: 15_000 },
   });
   return { app };
@@ -33,8 +46,7 @@ const runInput = {
   workspace: { id: createWorkspaceId(), path: "C:/workspace" },
   model: { provider: "test", model: "test-model" },
   runtime: { id: "local", kind: "test" },
-  permissionProfile: "READ_ONLY",
-  approvalPolicy: "ALWAYS_ASK",
+  preset: { id: "WORKSPACE_WRITE", expectedVersion: 1 },
   limits: { maxSteps: 10, maxToolCalls: 10, timeoutMs: 1000 },
 };
 
@@ -64,7 +76,8 @@ describe("run API", () => {
     const run = response.json();
     expect(run).toMatchObject({ sessionId: session.id, goal: runInput.goal, status: "PENDING" });
     expect(run.id).toMatch(/^run_/);
-    await expect(storage?.eventReader.latestSequence(run.id)).resolves.toBe(0);
+    expect(run.securityPolicy.preset).toEqual({ id: "WORKSPACE_WRITE", version: 1 });
+    await expect(storage?.eventReader.latestSequence(run.id)).resolves.toBe(1);
     await app.close();
   });
 

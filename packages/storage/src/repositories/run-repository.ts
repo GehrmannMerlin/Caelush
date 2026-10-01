@@ -13,6 +13,8 @@ import {
   StorageError,
   StorageNotFoundError,
 } from "../errors.js";
+import type { DurableRunEvent, DurableRunEventDraft } from "@caelush/agent";
+import { appendDurableEventsInTransaction } from "../events/sqlite-durable-event-store.js";
 
 interface RunRow {
   id: string;
@@ -71,6 +73,11 @@ export interface RecoverableRunQuery {
 
 export interface RunRepository {
   insert(run: AgentRun): Promise<void>;
+  /** Atomically persist a fresh Run and its creation-bound durable event drafts. */
+  insertWithEvents?(
+    run: AgentRun,
+    events: readonly DurableRunEventDraft[],
+  ): Promise<readonly DurableRunEvent[]>;
   get(id: RunId): Promise<AgentRun | null>;
   update(run: AgentRun): Promise<void>;
   listBySession(sessionId: SessionId, options?: RunListOptions): Promise<AgentRun[]>;
@@ -153,6 +160,54 @@ export class SqliteRunRepository implements RunRepository {
           dataJson,
         );
     } catch (error) {
+      mapRepositoryError(error, "insert", run.id);
+    }
+  }
+
+  async insertWithEvents(
+    run: AgentRun,
+    events: readonly DurableRunEventDraft[],
+  ): Promise<readonly DurableRunEvent[]> {
+    const currentRun = CurrentAgentRunSchema.parse(run);
+    const dataJson = encodeProtocol(CurrentAgentRunSchema, currentRun, {
+      entityType: "AgentRun",
+      entityId: run.id,
+      table: "agent_runs",
+    });
+    if (events.some((event) => event.runId !== run.id)) {
+      throw new StorageError(`Unable to insert AgentRun ${run.id}: event belongs to another Run`);
+    }
+
+    const client = this.database.client;
+    client.exec("BEGIN IMMEDIATE");
+    try {
+      client
+        .prepare(
+          `INSERT INTO agent_runs
+            (id, session_id, protocol_version, status, created_at_ms, started_at_ms, finished_at_ms, data_json)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          currentRun.id,
+          currentRun.sessionId,
+          1,
+          currentRun.status,
+          currentRun.createdAt,
+          nullableTimestamp(currentRun.startedAt),
+          nullableTimestamp(currentRun.finishedAt),
+          dataJson,
+        );
+      const committed = appendDurableEventsInTransaction(client, events);
+      client.exec("COMMIT");
+      return committed;
+    } catch (error) {
+      try {
+        client.exec("ROLLBACK");
+      } catch {
+        throw new StorageError(`Unable to insert AgentRun ${run.id} after transaction failure`, {
+          cause: error,
+        });
+      }
       mapRepositoryError(error, "insert", run.id);
     }
   }

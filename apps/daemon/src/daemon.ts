@@ -7,7 +7,11 @@ import type {
 } from "@caelush/coding-agent";
 import type { ClientModelSelection } from "@caelush/protocol";
 import { openCaelushStorage, toHostToolEffectsPort } from "@caelush/storage";
-import { createLocalRuntimeResolver, LocalRuntime } from "@caelush/runtime";
+import {
+  createLocalRuntimeResolver,
+  LocalRuntime,
+  type ProcessSandboxProvider,
+} from "@caelush/runtime";
 import {
   applyToolEffectsToAgentState,
   createCodingToolSettlementExtensionDecoder,
@@ -36,6 +40,7 @@ import type { WebStaticHostOptions } from "./web/static-host.js";
 import type { SubscriberQueuePolicy } from "./events/subscriber-queue.js";
 import { DefaultPublicEventProjector } from "./events/public-event-projector.js";
 import { WorkspaceService } from "./workspaces/workspace-service.js";
+import type { WorkspacePreparationPort } from "./services/security-capability-service.js";
 import {
   createNativeWorkspaceDirectoryPicker,
   type WorkspaceDirectoryPicker,
@@ -71,6 +76,10 @@ export interface DaemonOptions {
   readonly toolFeedbackContributionHooks?: readonly ToolFeedbackContributionRegistration[];
   readonly toolFeedbackContributionBudget?: Partial<ToolFeedbackContributionBudget>;
   readonly toolExposure?: GitToolAvailability;
+  readonly processSandboxProviders?: readonly ProcessSandboxProvider[];
+  readonly fullAccessAvailable?: boolean;
+  readonly ttySupported?: boolean;
+  readonly workspacePreparation?: WorkspacePreparationPort;
 }
 
 export interface DaemonHandle {
@@ -193,6 +202,16 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       ...(options.logger === true ? { logger: safeSupervisorLogger } : {}),
       toolRegistrations: exposedToolRegistrations,
       ...(options.toolExposure === undefined ? {} : { toolExposure: options.toolExposure }),
+      ...(options.processSandboxProviders === undefined
+        ? {}
+        : { processSandboxProviders: options.processSandboxProviders }),
+      ...(options.fullAccessAvailable === undefined
+        ? {}
+        : { fullAccessAvailable: options.fullAccessAvailable }),
+      ...(options.ttySupported === undefined ? {} : { ttySupported: options.ttySupported }),
+      ...(options.workspacePreparation === undefined
+        ? {}
+        : { workspacePreparation: options.workspacePreparation }),
       ...(options.contextContributionHooks === undefined
         ? {}
         : { contextContributionHooks: options.contextContributionHooks }),
@@ -241,6 +260,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       workspaceService,
       workspacePicker: options.workspacePicker ?? createNativeWorkspaceDirectoryPicker(),
       eventHub: composition.eventHub,
+      eventNotifier: composition.events,
       publicEventProjector: new DefaultPublicEventProjector(),
       activeStreams,
       config,
@@ -248,6 +268,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       info: composition.info,
       modelCanonicalizer: composition.modelCanonicalizer,
       aiConfiguration,
+      securityCapabilityService: composition.securityCapabilityService,
       transcript: new SessionTranscriptService({
         sessions: storage.sessions,
         runs: storage.runs,

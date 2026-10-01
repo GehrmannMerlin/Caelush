@@ -99,6 +99,16 @@ export type { RuntimeModelDirectoryServiceOptions } from "./providers/model-dire
 export { AIConfigurationService } from "./services/ai-configuration-service.js";
 export type { AIConfigurationServiceOptions } from "./services/ai-configuration-service.js";
 export {
+  SecurityCapabilityService,
+  type RunSecurityRuntimeFacts,
+  type SecurityCapabilityServiceOptions,
+  type WorkspacePreparationPort,
+} from "./services/security-capability-service.js";
+export {
+  RunSecurityPromptProjector,
+  type SystemContextBlock,
+} from "./services/run-security-prompt-projector.js";
+export {
   CatalogModelCanonicalizer,
   DaemonModelConfigurationError,
   toClientModelSelection,

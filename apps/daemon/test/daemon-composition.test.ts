@@ -108,6 +108,7 @@ describe("daemon production composition", () => {
       defaultModel: { provider: "openai-compatible", model: "fixture-model" },
       defaultRunConfiguration: {
         runtime: { id: "local", kind: "local" },
+        defaultPreset: "WORKSPACE_WRITE",
         permissionProfile: "PROJECT_ACCESS",
         approvalPolicy: "DANGEROUS_ONLY",
         resourcePolicy: {

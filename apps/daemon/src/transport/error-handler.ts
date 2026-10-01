@@ -25,6 +25,7 @@ import { ActiveRunConflictError, WorkspaceOwnershipError } from "../workspaces/w
 import { EnvironmentCredentialReadOnlyError } from "../providers/credential-authority.js";
 import { ModelDiscoveryError, ModelSelectionError } from "../providers/model-directory.js";
 import { SessionPresentationCursorError } from "../services/session-presentation-service.js";
+import { SecurityPolicyRequestError } from "../services/run-service.js";
 
 export class InvalidEventCursorError extends Error {
   constructor() {
@@ -184,6 +185,18 @@ function mapError(error: unknown): MappedError {
       case "MODEL_UNAVAILABLE":
         return { statusCode: 409, code: "AI_MODEL_UNAVAILABLE", message: error.message };
     }
+  }
+  if (error instanceof SecurityPolicyRequestError) {
+    return {
+      statusCode:
+        error.reason === "CAPABILITY_UNAVAILABLE"
+          ? 503
+          : error.reason === "PERSISTENCE_UNAVAILABLE"
+            ? 500
+            : 409,
+      code: error.reason === "PERSISTENCE_UNAVAILABLE" ? "INTERNAL_ERROR" : "CONFLICT",
+      message: error.message,
+    };
   }
   if (
     error instanceof RunControllerBusyError ||

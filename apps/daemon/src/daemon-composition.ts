@@ -90,7 +90,16 @@ import {
   type TimestampMs,
   type ContextUsageProjection,
 } from "@caelush/protocol";
-import { LocalRuntime, createLocalRuntimeResolver, sanitizeTerminalOutput } from "@caelush/runtime";
+import {
+  LocalRuntime,
+  createLocalRuntimeResolver,
+  createLinuxBubblewrapProvider,
+  createLinuxLandlockProvider,
+  createMacSeatbeltProvider,
+  createWindowsAclRestrictedTokenProvider,
+  sanitizeTerminalOutput,
+  type ProcessSandboxProvider,
+} from "@caelush/runtime";
 import {
   DefaultVerificationPlanner,
   ProjectCheckResolverRegistry,
@@ -158,6 +167,11 @@ import {
   verificationEvidenceSanitizer,
 } from "@caelush/security";
 import { createSqliteToolBudgetAdmission, type CaelushStorage } from "@caelush/storage";
+import {
+  SecurityCapabilityService,
+  type WorkspacePreparationPort,
+} from "./services/security-capability-service.js";
+import { RunSecurityPromptProjector } from "./services/run-security-prompt-projector.js";
 
 import {
   createRunBoundVerificationExecution,
@@ -237,6 +251,7 @@ export const DEFAULT_ADAPTIVE_RESOURCE_POLICY = Object.freeze({
 
 export const DEFAULT_RUN_CONFIGURATION = Object.freeze({
   runtime: Object.freeze({ id: "local", kind: "local" }),
+  defaultPreset: "WORKSPACE_WRITE",
   permissionProfile: "PROJECT_ACCESS",
   approvalPolicy: "DANGEROUS_ONLY",
   resourcePolicy: DEFAULT_ADAPTIVE_RESOURCE_POLICY,
@@ -274,6 +289,10 @@ export interface DaemonCompositionOptions {
   /** Capability discovered for the selected workspace; unknown hides Git tools. */
   readonly toolExposure?: GitToolAvailability;
   readonly runtime?: LocalRuntime;
+  readonly processSandboxProviders?: readonly ProcessSandboxProvider[];
+  readonly fullAccessAvailable?: boolean;
+  readonly ttySupported?: boolean;
+  readonly workspacePreparation?: WorkspacePreparationPort;
   readonly clock?: DaemonClock;
   readonly logger?: RunExecutionSupervisorLogger;
   readonly configResolver?: RunExecutionConfigResolver;
@@ -365,6 +384,8 @@ export interface DaemonComposition {
   ) => DaemonTurnIdentity;
   readonly approvals: Pick<CaelushStorage["approvals"], "listPendingByRun">;
   readonly modelCanonicalizer: DaemonModelCanonicalizer;
+  readonly securityCapabilityService: SecurityCapabilityService;
+  readonly runSecurityPromptProjector: RunSecurityPromptProjector;
   readonly info: DaemonInfo;
   dispose(): Promise<void>;
 }
@@ -445,6 +466,17 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     });
   const runtime = options.runtime ?? new LocalRuntime();
   const runtimeResolver = createLocalRuntimeResolver(runtime);
+  const securityCapabilityService = new SecurityCapabilityService({
+    processSandboxProviders: options.processSandboxProviders ?? defaultProcessSandboxProviders(),
+    ...(options.fullAccessAvailable === undefined
+      ? {}
+      : { fullAccessAvailable: options.fullAccessAvailable }),
+    ...(options.ttySupported === undefined ? {} : { ttySupported: options.ttySupported }),
+    ...(options.workspacePreparation === undefined
+      ? {}
+      : { workspacePreparation: options.workspacePreparation }),
+  });
+  const runSecurityPromptProjector = new RunSecurityPromptProjector();
   const ai = createAISubsystem({
     modelSources: [
       curatedSources.curated,
@@ -917,9 +949,18 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
   const agentExecution: RunAgentExecutionContextFactory = {
     async resolve(run) {
       const config = await executionConfigResolver.resolve(run);
+      const securityPrompt =
+        run.securityPolicy === undefined
+          ? undefined
+          : runSecurityPromptProjector.project(
+              run.securityPolicy,
+              await securityCapabilityService.getRuntimeFacts(),
+            );
       return createRunAgentExecutionContext({
         config: {
-          baseSystemPrompt: config.baseSystemPrompt,
+          baseSystemPrompt: [config.baseSystemPrompt, securityPrompt?.text]
+            .filter((value): value is string => value !== undefined)
+            .join("\n\n"),
           tools: activeToolRegistry.modelSpecs(),
           ...(config.modelSettings === undefined && run.reasoningLevel === undefined
             ? {}
@@ -1078,6 +1119,8 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     resolveTurnIdentity,
     approvals: options.storage.approvals,
     modelCanonicalizer,
+    securityCapabilityService,
+    runSecurityPromptProjector,
     info,
     dispose: async () => {
       if (disposed) return;
@@ -1091,6 +1134,19 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       await runtime.dispose();
     },
   };
+}
+
+function defaultProcessSandboxProviders(): readonly ProcessSandboxProvider[] {
+  switch (process.platform) {
+    case "win32":
+      return [createWindowsAclRestrictedTokenProvider()];
+    case "linux":
+      return [createLinuxLandlockProvider(), createLinuxBubblewrapProvider()];
+    case "darwin":
+      return [createMacSeatbeltProvider()];
+    default:
+      return [];
+  }
 }
 
 function projectV2ContextUsage(input: ContextUsageSnapshot) {

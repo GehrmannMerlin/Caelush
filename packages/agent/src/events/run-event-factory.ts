@@ -4,6 +4,7 @@ import type {
   AgentState,
   AgentStep,
   EventId,
+  RunSecurityPolicySnapshotV1,
   TimestampMs,
   VerificationCheckId,
   VerificationPlan,
@@ -28,6 +29,12 @@ export interface MaxStepsReachedOutcome {
  */
 export interface RunEventFactory {
   runStarted(run: AgentRun, eventId: EventId, timestamp: TimestampMs): DurableEventDraft;
+  runSecurityPolicyBound(
+    run: AgentRun,
+    policy: RunSecurityPolicySnapshotV1,
+    eventId: EventId,
+    timestamp: TimestampMs,
+  ): DurableEventDraft;
   statusChanged(
     run: AgentRun,
     from: AgentRun["status"],
@@ -195,6 +202,23 @@ export function createRunEventFactory(): RunEventFactory {
       ...base(run, eventId, timestamp),
       type: "run.started",
       payload: { goal: run.goal },
+    }),
+    runSecurityPolicyBound: (run, policy, eventId, timestamp) => ({
+      ...base(run, eventId, timestamp),
+      type: "run.security_policy.bound",
+      payload: {
+        policySchemaVersion: policy.schemaVersion,
+        preset: policy.preset,
+        permissionProfile: policy.permissionProfile,
+        approvalPolicy: policy.approvalPolicy,
+        filesystemBoundary: policy.filesystemBoundary,
+        processBoundary: policy.processBoundary,
+        requiredEnforcement: policy.requiredEnforcement,
+        hardSafetyPolicyVersion: policy.hardSafetyPolicyVersion,
+        commandPolicyVersion: policy.commandPolicyVersion,
+        secretPolicyVersion: policy.secretPolicyVersion,
+        policyDigest: policy.policyDigest,
+      },
     }),
     statusChanged: (run, from, to, eventId, timestamp) => ({
       ...base(run, eventId, timestamp),

@@ -10,6 +10,7 @@ import {
   createToolInvocationId,
   createWorkspaceId,
 } from "@caelush/protocol";
+import { expandPermissionPreset } from "@caelush/security";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildDaemonApp } from "../src/index.js";
@@ -56,7 +57,12 @@ async function makeServer() {
     model: { provider: "test", model: "test-model" },
     runtime: { id: "local", kind: "test" },
     permissionProfile: "READ_ONLY",
-    approvalPolicy: "ALWAYS_ASK",
+    approvalPolicy: "ON_BOUNDARY",
+    securityPolicy: expandPermissionPreset({
+      presetId: "VIEW_ONLY",
+      expectedVersion: 1,
+      createdAt: new Date(1_700_000_000_000).toISOString(),
+    }),
     limits: { maxSteps: 10, maxToolCalls: 10, timeoutMs: 1000 },
     createdAt: 1_700_000_000_000,
   });

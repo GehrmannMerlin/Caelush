@@ -42,6 +42,30 @@ export class DefaultPublicEventProjector implements PublicEventProjector {
       case "run.started":
         payload = { goal: nonEmptyText(event.payload.goal, "Run") };
         break;
+      case "run.security_policy.bound":
+        payload = {
+          policySchemaVersion: event.payload.policySchemaVersion,
+          preset: event.payload.preset,
+          permissionProfile: event.payload.permissionProfile,
+          approvalPolicy: event.payload.approvalPolicy,
+          filesystemBoundary: event.payload.filesystemBoundary,
+          processBoundary: event.payload.processBoundary,
+          requiredEnforcement: event.payload.requiredEnforcement,
+          hardSafetyPolicyVersion: boundedText(
+            event.payload.hardSafetyPolicyVersion,
+            PUBLIC_EVENT_TEXT_BYTES,
+          ),
+          commandPolicyVersion: boundedText(
+            event.payload.commandPolicyVersion,
+            PUBLIC_EVENT_TEXT_BYTES,
+          ),
+          secretPolicyVersion: boundedText(
+            event.payload.secretPolicyVersion,
+            PUBLIC_EVENT_TEXT_BYTES,
+          ),
+          policyDigest: event.payload.policyDigest,
+        };
+        break;
       case "run.timed_out":
         payload = { deadlineAt: event.payload.deadlineAt };
         break;

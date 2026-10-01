@@ -21,6 +21,7 @@ export {
 export type {
   PermissionPresetSelection,
   PermissionPresetDescriptor,
+  SecurityPolicyPresetAvailability,
   SecurityCapabilitiesResponse,
   SecurityPreparationRequest,
   SecurityPreparationResponse,

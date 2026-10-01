@@ -382,6 +382,7 @@ export type {
   CreateRunRequest,
   PermissionPresetDescriptor,
   PermissionPresetSelection,
+  SecurityPolicyPresetAvailability,
   SecurityCapabilitiesResponse,
   SecurityPreparationRequest,
   SecurityPreparationResponse,

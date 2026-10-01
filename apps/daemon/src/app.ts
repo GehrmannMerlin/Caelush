@@ -23,6 +23,7 @@ import { registerExecutionRoutes, type DaemonExecutionSurface } from "./routes/e
 import { registerInfoRoute } from "./routes/info.js";
 import { registerWebStaticHost, type WebStaticHostOptions } from "./web/static-host.js";
 import type { RunEventHub } from "./events/run-event-hub.js";
+import type { RunEventNotifierPort } from "@caelush/agent";
 import { DefaultPublicEventProjector } from "./events/public-event-projector.js";
 import type { PublicEventProjector } from "./events/public-event-projector.js";
 import { registerWorkspaceRoutes } from "./routes/workspaces.js";
@@ -30,6 +31,8 @@ import { WorkspaceService } from "./workspaces/workspace-service.js";
 import type { WorkspaceDirectoryPicker } from "./workspaces/workspace-picker.js";
 import { registerAIRoutes } from "./routes/ai.js";
 import { AIConfigurationService } from "./services/ai-configuration-service.js";
+import type { SecurityCapabilityService } from "./services/security-capability-service.js";
+import { registerSecurityRoutes } from "./routes/security.js";
 
 export interface DaemonDependencies {
   readonly sessions: SessionRepository;
@@ -38,6 +41,7 @@ export interface DaemonDependencies {
   readonly workspaceService?: WorkspaceService;
   readonly workspacePicker?: WorkspaceDirectoryPicker;
   readonly eventHub: Pick<RunEventHub, "watch">;
+  readonly eventNotifier?: Pick<RunEventNotifierPort, "notifyCommitted">;
   readonly publicEventProjector?: PublicEventProjector;
   readonly config: DaemonConfig;
   readonly activeStreams?: Set<AbortController>;
@@ -49,6 +53,7 @@ export interface DaemonDependencies {
   readonly logger?: boolean;
   readonly web?: WebStaticHostOptions;
   readonly aiConfiguration?: AIConfigurationService;
+  readonly securityCapabilityService?: SecurityCapabilityService;
 }
 
 export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstance {
@@ -60,6 +65,13 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
   registerErrorHandling(app);
   registerHealthRoute(app);
   if (dependencies.info !== undefined) registerInfoRoute(app, dependencies.info);
+  if (dependencies.securityCapabilityService !== undefined) {
+    registerSecurityRoutes(app, dependencies.securityCapabilityService, {
+      ...(dependencies.workspaceService === undefined
+        ? {}
+        : { workspaceService: dependencies.workspaceService }),
+    });
+  }
   if (dependencies.workspaceService !== undefined) {
     registerWorkspaceRoutes(app, dependencies.workspaceService, {
       sessions: dependencies.sessions,
@@ -109,6 +121,12 @@ export function buildDaemonApp(dependencies: DaemonDependencies): FastifyInstanc
             validateSelection: (selection, context) =>
               dependencies.aiConfiguration!.validateRunSelection(selection, context),
           }),
+      ...(dependencies.securityCapabilityService === undefined
+        ? {}
+        : { securityCapabilityService: dependencies.securityCapabilityService }),
+      ...(dependencies.eventNotifier === undefined
+        ? {}
+        : { eventNotifier: dependencies.eventNotifier }),
     }),
   );
   if (dependencies.aiConfiguration !== undefined) {
