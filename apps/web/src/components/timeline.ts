@@ -219,9 +219,9 @@ export function Timeline(props: TimelineProps): ReactElement {
                     createElement(
                       "li",
                       { key: activity.id },
-                      `${liveActivityLabel(activity.kind)}：${activity.text}${
-                        activity.status === "SETTLED" ? " · 已完成" : ""
-                      }`,
+                      `${liveActivityLabel(activity.kind)}：${activity.text} · ${liveActivityStatusLabel(
+                        activity.status,
+                      )}`,
                     ),
                   ),
                 ),
@@ -376,6 +376,21 @@ function liveActivityLabel(kind: LiveActivityState["activities"][number]["kind"]
       return "Shell 输出";
     case "PROCESS_OUTPUT":
       return "进程输出";
+  }
+}
+
+function liveActivityStatusLabel(
+  status: LiveActivityState["activities"][number]["status"],
+): string {
+  switch (status) {
+    case "ACTIVE":
+      return "执行中";
+    case "COMPLETED":
+      return "已完成";
+    case "FAILED":
+      return "失败";
+    case "CANCELLED":
+      return "已取消";
   }
 }
 

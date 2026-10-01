@@ -1132,6 +1132,26 @@ textarea:disabled {
   align-items: flex-start;
 }
 
+.turn-presentation-live-mark {
+  display: grid;
+  flex: 0 0 14px;
+  place-items: center;
+  min-height: 18px;
+  color: #3d8de0;
+}
+
+.turn-presentation-live-item--completed .turn-presentation-live-mark {
+  color: #2f876b;
+}
+
+.turn-presentation-live-item--failed .turn-presentation-live-mark {
+  color: #c45e68;
+}
+
+.turn-presentation-live-item--cancelled .turn-presentation-live-mark {
+  color: #8a7186;
+}
+
 .turn-presentation-spinner {
   flex: 0 0 auto;
   margin-top: 2px;
@@ -2573,6 +2593,10 @@ body {
   color: #fff;
   font-size: 0.78rem;
   font-weight: 750;
+}
+
+.workspace-empty-selection {
+  width: 100%;
 }
 
 .workspace-action-error {
@@ -5046,11 +5070,197 @@ body {
   border-bottom: 1px solid var(--web-line);
 }
 
+.turn-presentation-summary-copy {
+  align-items: flex-start;
+  gap: 0;
+}
+
+.turn-presentation-logo {
+  display: block;
+  width: auto;
+  height: 1.75rem;
+  max-width: min(100%, 9rem);
+  object-fit: contain;
+  object-position: left center;
+}
+
 .turn-presentation-body {
   max-height: none;
   overflow: visible;
   padding: 12px 0 4px;
   border-top: 0;
+}
+
+/* Fixed approval overlay keeps required decisions available while the session scrolls. */
+.approval-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: clamp(16px, 4vw, 40px);
+  background: rgb(255 255 255 / 72%);
+  pointer-events: none;
+}
+
+.approval-stack {
+  display: grid;
+  width: min(100%, 680px);
+  max-height: 100%;
+  place-items: center;
+  isolation: isolate;
+  pointer-events: none;
+}
+
+.approval-stack-item {
+  grid-area: 1 / 1;
+  width: 100%;
+  min-width: 0;
+  pointer-events: none;
+  transition:
+    transform 180ms ease,
+    opacity 180ms ease;
+}
+
+.approval-stack-item:nth-child(1) {
+  z-index: 3;
+  transform: translateY(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.approval-stack-item:nth-child(2) {
+  z-index: 2;
+  transform: translateY(16px) scale(0.965);
+  opacity: 0.82;
+}
+
+.approval-stack-item:nth-child(n + 3) {
+  z-index: 1;
+  transform: translateY(32px) scale(0.93);
+  opacity: 0.62;
+}
+
+.approval-overlay .approval-card {
+  width: 100%;
+  max-height: min(calc(100dvh - 48px), 520px);
+  overflow-y: auto;
+  margin: 0;
+  padding: 24px 26px;
+  border: 1px solid #cbdcf0;
+  border-left: 0;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow:
+    0 18px 48px rgb(32 78 132 / 18%),
+    0 4px 12px rgb(32 78 132 / 8%);
+  color: var(--web-ink);
+}
+
+.approval-overlay .approval-card h2 {
+  color: var(--web-blue-800);
+  font-size: 1.05rem;
+}
+
+.approval-overlay .approval-kicker {
+  color: var(--web-blue-600);
+}
+
+.approval-overlay .approval-details {
+  color: var(--web-ink);
+}
+
+.approval-overlay .approval-details dt {
+  color: var(--web-blue-700);
+}
+
+.approval-overlay .approval-capabilities li {
+  padding: 7px 9px;
+  border: 1px solid #e0ebf7;
+  border-radius: 7px;
+  background: #f6faff;
+  color: var(--web-blue-800);
+}
+
+.approval-overlay .approval-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.approval-overlay .approval-action {
+  min-height: 38px;
+  padding: 8px 14px;
+  border: 1px solid #c5d9ef;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--web-blue-700);
+  font-size: 0.78rem;
+  transition:
+    border-color 140ms ease,
+    background 140ms ease,
+    color 140ms ease;
+}
+
+.approval-overlay .approval-action:hover,
+.approval-overlay .approval-action:focus-visible {
+  border-color: var(--web-blue-600);
+  background: #eef6ff;
+  color: var(--web-blue-800);
+}
+
+.approval-overlay .approval-action--approve_once {
+  border-color: var(--web-blue-600);
+  background: var(--web-blue-600);
+  color: #fff;
+}
+
+.approval-overlay .approval-action--approve_once:hover,
+.approval-overlay .approval-action--approve_once:focus-visible {
+  border-color: var(--web-blue-700);
+  background: var(--web-blue-700);
+  color: #fff;
+}
+
+.approval-overlay .approval-action--approve_run {
+  border-color: var(--web-blue-600);
+  color: var(--web-blue-700);
+}
+
+.approval-overlay .approval-action--reject {
+  border-color: #efcaca;
+  background: #fff;
+  color: #c44747;
+}
+
+.approval-overlay .approval-action--reject:hover,
+.approval-overlay .approval-action--reject:focus-visible {
+  border-color: #e2a1a1;
+  background: #fff6f6;
+  color: #a83333;
+}
+
+@media (max-width: 720px) {
+  .approval-overlay {
+    padding: 16px;
+  }
+
+  .approval-stack {
+    width: 100%;
+  }
+
+  .approval-overlay .approval-card {
+    max-height: calc(100dvh - 32px);
+    padding: 20px 18px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .approval-stack-item,
+  .approval-overlay .approval-action {
+    transition: none;
+  }
 }
 
 .session-workspace--empty .conversation-history--empty {
@@ -5111,5 +5321,94 @@ body {
   .conversation-welcome p {
     animation: none;
     transition: none;
+  }
+}
+
+/* Match the pristine session welcome screen when no workspace is registered. */
+.workspace-empty-state--no-workspace {
+  display: flex;
+  width: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 40px 24px;
+  text-align: center;
+}
+
+.workspace-empty-welcome {
+  display: flex;
+  width: min(100%, 360px);
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+}
+
+.workspace-empty-logo {
+  display: block;
+  width: clamp(190px, 23vw, 280px);
+  height: auto;
+}
+
+.workspace-empty-slogan {
+  margin: 18px 0 0;
+  color: #0b3b91;
+  font-family: "Avenir Next", "Trebuchet MS", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  font-size: clamp(0.95rem, 1.4vw, 1.1rem);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  line-height: 1.6;
+}
+
+.workspace-empty-state--no-workspace .workspace-empty-action {
+  min-height: 36px;
+  margin-top: 22px;
+  padding: 9px 16px;
+  border: 1px solid var(--web-blue-600);
+  border-radius: 9px;
+  background: var(--web-blue-600);
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 5px 12px rgb(37 99 235 / 16%);
+}
+
+.workspace-empty-state--no-workspace .workspace-empty-action:hover,
+.workspace-empty-state--no-workspace .workspace-empty-action:focus-visible {
+  border-color: var(--web-blue-800);
+  background: var(--web-blue-800);
+}
+
+.workspace-empty-state--no-workspace .workspace-empty-action:focus-visible {
+  outline: 3px solid rgb(37 99 235 / 24%);
+  outline-offset: 2px;
+}
+
+.workspace-empty-state--no-workspace .workspace-empty-action:active {
+  border-color: var(--web-blue-900);
+  background: var(--web-blue-900);
+}
+
+@media (max-width: 720px) {
+  .workspace-empty-state--no-workspace {
+    padding: 28px 16px;
+  }
+
+  .workspace-empty-welcome {
+    width: min(100%, 300px);
+  }
+
+  .workspace-empty-logo {
+    width: clamp(174px, 56vw, 230px);
+  }
+
+  .workspace-empty-slogan {
+    margin-top: 16px;
+    font-size: 0.94rem;
+    letter-spacing: 0.06em;
+  }
+
+  .workspace-empty-state--no-workspace .workspace-empty-action {
+    margin-top: 18px;
   }
 }

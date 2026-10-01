@@ -5,7 +5,15 @@ import type {
   SessionTurnPresentationResponse,
   TurnPresentationItem,
 } from "@caelush/protocol";
-import { Check, ChevronDown, CircleAlert, CircleDot, CircleX, LoaderCircle } from "lucide-react";
+import {
+  ChevronDown,
+  CircleAlert,
+  CircleCheck,
+  CircleMinus,
+  CircleX,
+  LoaderCircle,
+} from "lucide-react";
+import caelushLogo from "../assets/logo/caelush-logo.png";
 
 export interface TurnPresentationFeedProps {
   readonly presentation: SessionTurnPresentationResponse;
@@ -76,8 +84,11 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
             createElement(
               "span",
               { className: "turn-presentation-summary-copy" },
-              createElement("span", { className: "turn-presentation-kicker" }, "任务活动"),
-              createElement("span", { className: "turn-presentation-title" }, "执行过程"),
+              createElement("img", {
+                className: "turn-presentation-logo",
+                src: caelushLogo,
+                alt: "Caelush",
+              }),
             ),
             createElement(
               "span",
@@ -106,12 +117,18 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
                   liveActivities.map((activity) =>
                     createElement(
                       "div",
-                      { className: "turn-presentation-live-item", key: activity.id },
-                      createElement(LoaderCircle, {
-                        size: 14,
-                        className: "turn-presentation-spinner",
-                        "aria-hidden": true,
-                      }),
+                      {
+                        className: `turn-presentation-live-item turn-presentation-live-item--${activity.status.toLowerCase()}`,
+                        key: activity.id,
+                      },
+                      createElement(
+                        "span",
+                        {
+                          className: "turn-presentation-live-mark",
+                          "aria-label": `状态：${liveActivityStatusLabel(activity.status)}`,
+                        },
+                        renderLiveActivityStatusIcon(activity.status),
+                      ),
                       createElement(
                         "span",
                         null,
@@ -172,11 +189,7 @@ function renderItem(item: TurnPresentationItem): ReactElement {
         createElement(
           "span",
           { className: "turn-presentation-mark", "aria-hidden": true },
-          item.status === "FAILED"
-            ? createElement(CircleX, { size: 15 })
-            : item.status === "STREAMING"
-              ? createElement(CircleDot, { size: 15 })
-              : createElement(Check, { size: 15 }),
+          renderPresentationStatusIcon(item.status),
         ),
         createElement(
           "div",
@@ -209,11 +222,7 @@ function renderItem(item: TurnPresentationItem): ReactElement {
         createElement(
           "span",
           { className: "turn-presentation-mark", "aria-hidden": true },
-          item.status === "FAILED"
-            ? createElement(CircleAlert, { size: 15 })
-            : item.status === "STREAMING"
-              ? createElement(CircleDot, { size: 15 })
-              : createElement(Check, { size: 15 }),
+          renderPresentationStatusIcon(item.status, true),
         ),
         createElement(
           "div",
@@ -268,6 +277,60 @@ function liveActivityLabel(kind: string): string {
       return "进程输出";
     default:
       return "助手消息";
+  }
+}
+
+function liveActivityStatusLabel(
+  status: NonNullable<TurnPresentationFeedProps["liveActivity"]>["activities"][number]["status"],
+): string {
+  switch (status) {
+    case "ACTIVE":
+      return "进行中";
+    case "COMPLETED":
+      return "已完成";
+    case "FAILED":
+      return "失败";
+    case "CANCELLED":
+      return "已取消";
+  }
+}
+
+function renderLiveActivityStatusIcon(
+  status: NonNullable<TurnPresentationFeedProps["liveActivity"]>["activities"][number]["status"],
+): ReactElement {
+  switch (status) {
+    case "ACTIVE":
+      return createElement(LoaderCircle, {
+        size: 14,
+        className: "turn-presentation-spinner",
+        "aria-hidden": true,
+      });
+    case "COMPLETED":
+      return createElement(CircleCheck, { size: 14, "aria-hidden": true });
+    case "FAILED":
+      return createElement(CircleX, { size: 14, "aria-hidden": true });
+    case "CANCELLED":
+      return createElement(CircleMinus, { size: 14, "aria-hidden": true });
+  }
+}
+
+function renderPresentationStatusIcon(
+  status: TurnPresentationItem["status"],
+  warning = false,
+): ReactElement {
+  switch (status) {
+    case "STREAMING":
+      return createElement(LoaderCircle, {
+        size: 15,
+        className: "turn-presentation-spinner",
+        "aria-hidden": true,
+      });
+    case "COMPLETED":
+      return createElement(CircleCheck, { size: 15, "aria-hidden": true });
+    case "FAILED":
+      return createElement(warning ? CircleAlert : CircleX, { size: 15, "aria-hidden": true });
+    case "CANCELLED":
+      return createElement(CircleMinus, { size: 15, "aria-hidden": true });
   }
 }
 

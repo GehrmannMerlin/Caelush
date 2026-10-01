@@ -11,6 +11,7 @@ import {
   isTerminalRunStatus,
   listMatchingSessionCandidates,
   nonTerminalRuns,
+  pruneProjectedLiveActivities,
   reconcileSessionTranscript,
   reduceLiveActivityEvent,
   reduceTimelineEvent,
@@ -812,10 +813,18 @@ export class WebSessionManager {
   ): Promise<readonly TranscriptEntry[]> {
     const getSessionTranscript = this.options.client.getSessionTranscript;
     if (this.options.info.capabilities.sessionTranscript === true && getSessionTranscript) {
-      const response = await getSessionTranscript.call(this.options.client, sessionId, {
-        limit: 100,
-      });
-      return reconcileSessionTranscript(response.items, optimistic);
+      const items: TranscriptEntry[] = [];
+      const seenCursors = new Set<string>();
+      let cursor: string | undefined;
+      do {
+        const response = await getSessionTranscript.call(this.options.client, sessionId, {
+          limit: 100,
+          ...(cursor === undefined ? {} : { cursor }),
+        });
+        items.push(...response.items);
+        cursor = nextPageCursor(response.nextCursor, seenCursors);
+      } while (cursor !== undefined);
+      return reconcileSessionTranscript(items, optimistic);
     }
     throw new CaelushProtocolCompatibilityError();
   }
@@ -831,8 +840,27 @@ export class WebSessionManager {
     ) {
       return undefined;
     }
-    const response = await getPresentation.call(this.options.client, sessionId, { limit: 100 });
-    return reconcileTurnPresentation(response, optimistic);
+    const items: TurnPresentationItem[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    let highWatermark = 0;
+    do {
+      const response = await getPresentation.call(this.options.client, sessionId, {
+        limit: 100,
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      items.push(...response.items);
+      highWatermark = Math.max(highWatermark, response.highWatermark);
+      cursor = nextPageCursor(response.nextCursor, seenCursors);
+    } while (cursor !== undefined);
+    return reconcileTurnPresentation(
+      {
+        capabilityVersion: 1,
+        items,
+        highWatermark,
+      },
+      optimistic,
+    );
   }
 
   private async listWorkspaceSessionCandidates(): Promise<readonly SessionCandidate[]> {
@@ -860,6 +888,7 @@ export class WebSessionManager {
     runs: readonly ClientAgentRun[],
   ): Promise<boolean> {
     const activeRuns = nonTerminalRuns(runs);
+    const contextUsageRun = selectContextUsageRun(runs, activeRuns);
     this.clearApprovals();
     this.publish({
       status: "READY",
@@ -899,6 +928,8 @@ export class WebSessionManager {
     if (activeRuns.length === 1 && activeRuns[0] !== undefined) {
       await this.prepareRecoveryRun(activeRuns[0]);
       this.scheduleContextUsageRefresh(activeRuns[0].id);
+    } else if (contextUsageRun !== undefined) {
+      void this.refreshContextUsage(contextUsageRun.id);
     }
     return true;
   }
@@ -1027,24 +1058,23 @@ export class WebSessionManager {
     active: ActiveLifecycle,
     generation: number,
   ): Promise<void> {
-    const getPresentation = this.options.client.getSessionTurnPresentation;
-    if (
-      getPresentation === undefined ||
-      this.options.info.capabilities.sessionTurnPresentation !== true
-    ) {
-      return;
-    }
+    if (this.options.info.capabilities.sessionTurnPresentation !== true) return;
     try {
       const refreshGeneration = ++this.turnPresentationRefreshGeneration;
-      const response = await getPresentation.call(this.options.client, active.run.sessionId, {
-        limit: 100,
-      });
+      const response = await this.loadSessionTurnPresentation(active.run.sessionId);
       if (
+        response === undefined ||
         !this.isCurrentStream(active, generation) ||
         refreshGeneration !== this.turnPresentationRefreshGeneration
       )
         return;
-      this.publish({ turnPresentation: response });
+      this.publish({
+        turnPresentation: response,
+        liveActivity: pruneProjectedLiveActivities(
+          this.snapshot.liveActivity,
+          response.highWatermark,
+        ),
+      });
     } catch {
       // The durable timeline remains authoritative if the optional read-model refresh races a
       // reconnect or an older daemon. It must never interrupt Run control.
@@ -1116,17 +1146,26 @@ export class WebSessionManager {
       this.clearApprovals();
       const activeRuns = nonTerminalRuns(runs);
       const activeRun = activeRuns.length === 1 ? activeRuns[0] : undefined;
+      const history = await this.loadSessionTranscript(
+        run.sessionId,
+        this.optimisticTranscriptEntries(),
+      );
+      const turnPresentation = await this.loadSessionTurnPresentation(run.sessionId);
+      const retainedLiveActivity =
+        turnPresentation === undefined
+          ? this.snapshot.liveActivity
+          : pruneProjectedLiveActivities(
+              this.snapshot.liveActivity,
+              turnPresentation.highWatermark,
+            );
       this.publish({
         candidates: this.snapshot.selectedSession
           ? this.upsertCandidate(this.snapshot.selectedSession, latestRun(runs))
           : this.snapshot.candidates,
         status: "READY",
         runs,
-        history: await this.loadSessionTranscript(
-          run.sessionId,
-          this.optimisticTranscriptEntries(),
-        ),
-        turnPresentation: await this.loadSessionTurnPresentation(run.sessionId),
+        history,
+        turnPresentation,
         activeRuns,
         activeRun,
         timeline:
@@ -1140,7 +1179,7 @@ export class WebSessionManager {
             ? createInitialLiveActivityState(activeRun.id)
             : activeRuns.length > 1
               ? createInitialLiveActivityState()
-              : this.snapshot.liveActivity,
+              : retainedLiveActivity,
         composerEnabled: activeRuns.length === 0,
         submission: "IDLE",
         approvalState: undefined,
@@ -1214,7 +1253,7 @@ export class WebSessionManager {
       if (
         this.disposed ||
         this.contextUsageRefreshGeneration !== generation ||
-        this.snapshot.activeRun?.id !== runId
+        this.currentContextUsageRunId() !== runId
       )
         return;
       this.publish({ contextUsage: usage ?? null });
@@ -1280,13 +1319,22 @@ export class WebSessionManager {
     const activeRuns = nonTerminalRuns(runs);
     const activeRun = activeRuns.length === 1 ? activeRuns[0] : undefined;
     this.clearApprovals();
+    const history = await this.loadSessionTranscript(
+      run.sessionId,
+      this.optimisticTranscriptEntries(),
+    );
+    const turnPresentation = await this.loadSessionTurnPresentation(run.sessionId);
+    const retainedLiveActivity =
+      turnPresentation === undefined
+        ? this.snapshot.liveActivity
+        : pruneProjectedLiveActivities(this.snapshot.liveActivity, turnPresentation.highWatermark);
     this.publish({
       candidates: this.snapshot.selectedSession
         ? this.upsertCandidate(this.snapshot.selectedSession, latestRun(runs))
         : this.snapshot.candidates,
       runs,
-      history: await this.loadSessionTranscript(run.sessionId, this.optimisticTranscriptEntries()),
-      turnPresentation: await this.loadSessionTurnPresentation(run.sessionId),
+      history,
+      turnPresentation,
       activeRuns,
       activeRun,
       timeline:
@@ -1300,7 +1348,7 @@ export class WebSessionManager {
           ? createInitialLiveActivityState(activeRun.id)
           : activeRuns.length > 1
             ? createInitialLiveActivityState()
-            : this.snapshot.liveActivity,
+            : retainedLiveActivity,
       composerEnabled: activeRuns.length === 0,
       submission: "IDLE",
       approvalState: undefined,
@@ -1415,6 +1463,10 @@ export class WebSessionManager {
     this.contextUsageRefreshRunId = undefined;
   }
 
+  private currentContextUsageRunId(): RunId | undefined {
+    return selectContextUsageRun(this.snapshot.runs, this.snapshot.activeRuns)?.id;
+  }
+
   private hasActiveRun(): boolean {
     return this.snapshot.activeRuns.length > 0;
   }
@@ -1495,6 +1547,16 @@ function reconcileTurnPresentation(
   return { ...response, items };
 }
 
+function nextPageCursor(
+  nextCursor: string | undefined,
+  seenCursors: Set<string>,
+): string | undefined {
+  if (nextCursor === undefined) return undefined;
+  if (seenCursors.has(nextCursor)) throw new CaelushProtocolCompatibilityError();
+  seenCursors.add(nextCursor);
+  return nextCursor;
+}
+
 const systemWebTimer: Timer = {
   schedule(delayMs, callback) {
     const timeout = setTimeout(callback, delayMs);
@@ -1552,6 +1614,14 @@ function latestRun(runs: readonly ClientAgentRun[]): ClientAgentRun | undefined 
     if (left.createdAt !== right.createdAt) return right.createdAt - left.createdAt;
     return left.id < right.id ? 1 : left.id > right.id ? -1 : 0;
   })[0];
+}
+
+function selectContextUsageRun(
+  runs: readonly ClientAgentRun[],
+  activeRuns: readonly ClientAgentRun[],
+): ClientAgentRun | undefined {
+  if (activeRuns.length > 1) return undefined;
+  return activeRuns[0] ?? latestRun(runs);
 }
 
 function upsertConfirmedTerminalRun(

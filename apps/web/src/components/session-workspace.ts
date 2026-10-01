@@ -38,11 +38,12 @@ export interface SessionWorkspaceProps {
 }
 
 export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
+  const approvals = props.approvals ?? [];
   const isPristineSession =
     props.history.length === 0 &&
     (props.turnPresentation?.items.length ?? 0) === 0 &&
     props.activeRun === undefined &&
-    (props.approvals?.length ?? 0) === 0 &&
+    approvals.length === 0 &&
     !hasRecoveryControl(props);
 
   return createElement(
@@ -74,13 +75,6 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
     createElement(
       "div",
       { className: "session-scroll" },
-      props.approvals?.map((approval) =>
-        createElement(ApprovalCard, {
-          key: approval.id,
-          approval,
-          onResolve: props.onResolveApproval ?? (() => undefined),
-        }),
-      ),
       (props.controlMode === "RECOVERY_PICKER" ||
         props.controlMode === "PENDING_RUN_CONFIRMATION") &&
         props.recoveryRuns !== undefined
@@ -221,6 +215,32 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
           )
         : null,
     ),
+    approvals.length === 0
+      ? null
+      : createElement(
+          "div",
+          {
+            className: "approval-overlay",
+            role: "dialog",
+            "aria-modal": true,
+            "aria-label":
+              approvals.length === 1 ? "待审批操作" : `待审批操作，共 ${approvals.length} 项`,
+          },
+          createElement(
+            "div",
+            { className: "approval-stack", "aria-live": "assertive" },
+            approvals.map((approval) =>
+              createElement(
+                "div",
+                { className: "approval-stack-item", key: approval.id },
+                createElement(ApprovalCard, {
+                  approval,
+                  onResolve: props.onResolveApproval ?? (() => undefined),
+                }),
+              ),
+            ),
+          ),
+        ),
     props.composer,
   );
 }

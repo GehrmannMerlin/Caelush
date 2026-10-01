@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { createInitialLiveActivityState } from "@caelush/client";
 import { createRunId, type SessionTurnPresentationResponse } from "@caelush/protocol";
 
 import { TurnPresentationFeed } from "../src/components/turn-presentation-feed.js";
@@ -95,5 +96,91 @@ describe("TurnPresentationFeed", () => {
     expect(html.indexOf("执行过程")).toBeLessThan(html.indexOf("任务结束报告"));
     expect(html.indexOf("任务结束报告")).toBeLessThan(html.indexOf("检查完成，项目结构正常"));
     expect(html).toContain("任务已完成");
+  });
+
+  it("uses the Caelush logo as the process title without the redundant activity kicker", () => {
+    const html = renderToStaticMarkup(
+      <TurnPresentationFeed presentation={presentation()} isActive={false} />,
+    );
+
+    expect(html).toContain('class="turn-presentation-logo"');
+    expect(html).toContain('alt="Caelush"');
+    expect(html).not.toContain("任务活动");
+    expect(html).not.toContain('class="turn-presentation-kicker"');
+    expect(html).not.toContain(">执行过程<");
+  });
+
+  it("uses the open-source circular success icon for completed durable Tool rows", () => {
+    const html = renderToStaticMarkup(
+      <TurnPresentationFeed presentation={presentation()} isActive={false} />,
+    );
+
+    expect(html).toContain("lucide-circle-check");
+    expect(html).not.toContain(
+      'turn-presentation-item--completed"><span class="turn-presentation-mark"><svg class="lucide lucide-check',
+    );
+  });
+
+  it("spins only active live rows and renders explicit completed, failed, and cancelled outcomes", () => {
+    const initial = createInitialLiveActivityState(runId);
+    const common = {
+      streamSequence: 1,
+      runId,
+      stepId: "step-1",
+    };
+    const liveActivity = {
+      ...initial,
+      activities: [
+        {
+          ...common,
+          id: "live-active",
+          kind: "MODEL_TEXT" as const,
+          status: "ACTIVE" as const,
+          text: "正在生成",
+          streamKey: "model:active",
+        },
+        {
+          ...common,
+          id: "live-completed",
+          kind: "MODEL_TOOL_CALL" as const,
+          status: "COMPLETED" as const,
+          text: "读取文件",
+          streamKey: "tool:completed",
+        },
+        {
+          ...common,
+          id: "live-failed",
+          kind: "TOOL_OUTPUT" as const,
+          status: "FAILED" as const,
+          text: "执行失败",
+          streamKey: "tool:failed",
+        },
+        {
+          ...common,
+          id: "live-cancelled",
+          kind: "PROCESS_OUTPUT" as const,
+          status: "CANCELLED" as const,
+          text: "用户取消",
+          streamKey: "process:cancelled",
+        },
+      ],
+    };
+
+    const html = renderToStaticMarkup(
+      <TurnPresentationFeed
+        presentation={{ capabilityVersion: 1, highWatermark: 0, items: [] }}
+        liveActivity={liveActivity}
+        isActive
+      />,
+    );
+
+    expect(html.match(/turn-presentation-spinner/g)).toHaveLength(1);
+    expect(html).toContain('aria-label="状态：进行中"');
+    expect(html).toContain('aria-label="状态：已完成"');
+    expect(html).toContain('aria-label="状态：失败"');
+    expect(html).toContain('aria-label="状态：已取消"');
+    expect(html).toContain("lucide-circle-check");
+    expect(html).toContain("lucide-circle-x");
+    expect(html).toContain("lucide-circle-minus");
   });
 });

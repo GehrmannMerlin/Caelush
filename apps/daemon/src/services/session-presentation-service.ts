@@ -192,17 +192,42 @@ export class SessionPresentationService {
     }
 
     const turnId = firstConversationTurnId(records) ?? `${run.id}:turn`;
+    const verificationItems = new Map<string, PositionedItem>();
+    const pendingGeneralVerificationKeys: string[] = [];
+    let generalVerificationIndex = 0;
     for (const event of history.events) {
       if (!VERIFICATION_EVENT_TYPES.has(event.type)) continue;
       const sequence = durableSequence(event);
-      const item = this.projectVerification(event, run, turnId);
+      const lifecycleKey = verificationLifecycleKey(
+        event,
+        pendingGeneralVerificationKeys,
+        () => `general:${generalVerificationIndex++}`,
+      );
+      const item = this.projectVerification(event, run, turnId, lifecycleKey);
       if (item === undefined) continue;
-      positioned.push({
-        item,
-        ...(sequence === undefined ? {} : { sequenceHint: sequence }),
-        createdAt: Number(event.timestamp),
-        stableId: item.id,
+      const existing = verificationItems.get(lifecycleKey);
+      const createdAt = existing?.createdAt ?? Number(event.timestamp);
+      const stableItem: VerificationPresentationItem = {
+        ...item,
+        createdAt: existing?.item.createdAt ?? item.createdAt,
+      };
+      verificationItems.set(lifecycleKey, {
+        item: stableItem,
+        ...(existing?.sequenceHint !== undefined
+          ? { sequenceHint: existing.sequenceHint }
+          : sequence === undefined
+            ? {}
+            : { sequenceHint: sequence }),
+        createdAt,
+        stableId: stableItem.id,
       });
+    }
+    for (const entry of verificationItems.values()) {
+      positioned.push(
+        TERMINAL_RUN_STATUSES.has(run.status) && entry.item.status === "STREAMING"
+          ? settleIncompleteVerification(entry, run.status)
+          : entry,
+      );
     }
 
     if (TERMINAL_RUN_STATUSES.has(run.status)) {
@@ -280,15 +305,19 @@ export class SessionPresentationService {
     event: DurableRunEvent,
     run: AgentRun,
     turnId: string,
+    lifecycleKey: string,
   ): VerificationPresentationItem | undefined {
     const payload = eventPayload(event);
     if (payload === undefined) return undefined;
     const verificationId =
-      stringValue(payload.checkId) ?? stringValue(payload.planId) ?? `${run.id}:${event.type}`;
+      stringValue(payload.checkId) ??
+      stringValue(payload.planId) ??
+      stringValue(payload.failedPlanId) ??
+      `${run.id}:${event.type}`;
     const status = verificationItemStatus(event.type, payload);
     const copy = verificationCopy(event.type, payload);
     return {
-      id: `${event.eventId}:presentation`,
+      id: `${run.id}:presentation:verification:${lifecycleKey}`,
       runId: run.id,
       conversationTurnId: turnId,
       ordinal: 0,
@@ -441,6 +470,48 @@ function runSummaryText(status: RunStatus, records: readonly AgentMessageRecord[
   return "任务执行失败";
 }
 
+function verificationLifecycleKey(
+  event: DurableRunEvent,
+  pendingGeneralKeys: string[],
+  nextGeneralKey: () => string,
+): string {
+  const payload = eventPayload(event) ?? {};
+  const planId = stringValue(payload.planId) ?? stringValue(payload.failedPlanId) ?? event.eventId;
+  if (event.type === "verification.started") {
+    const key = nextGeneralKey();
+    pendingGeneralKeys.push(key);
+    return key;
+  }
+  if (event.type === "verification.completed") {
+    return pendingGeneralKeys.shift() ?? `general-completed:${event.eventId}`;
+  }
+  if (
+    event.type === "verification.check.started" ||
+    event.type === "verification.check.completed"
+  ) {
+    return `check:${stringValue(payload.checkId) ?? event.eventId}`;
+  }
+  if (event.type === "verification.planned") return `plan:${planId}`;
+  if (event.type === "verification.finalized") return `final:${planId}`;
+  if (event.type === "verification.repair.started") {
+    return `repair:${planId}:${numberValue(payload.repairCycle) ?? event.eventId}`;
+  }
+  if (event.type === "verification.repair.limit_reached") return `repair-limit:${planId}`;
+  return `${event.type}:${event.eventId}`;
+}
+
+function settleIncompleteVerification(entry: PositionedItem, runStatus: RunStatus): PositionedItem {
+  if (entry.item.kind !== "VERIFICATION") return entry;
+  return {
+    ...entry,
+    item: {
+      ...entry.item,
+      status: runStatus === "CANCELLED" ? "CANCELLED" : "FAILED",
+      summary: `${entry.item.summary}（任务结束前未记录完成状态）`,
+    },
+  };
+}
+
 function verificationItemStatus(
   type: string,
   payload: Record<string, unknown>,
@@ -448,12 +519,7 @@ function verificationItemStatus(
   const status = stringValue(payload.status) ?? stringValue(payload.outcome);
   if (status === "CANCELLED") return "CANCELLED";
   if (status === "FAILED" || status === "ERROR") return "FAILED";
-  if (
-    type.endsWith(".started") ||
-    type === "verification.planned" ||
-    type === "verification.repair.started"
-  )
-    return "STREAMING";
+  if (type.endsWith(".started") || type === "verification.repair.started") return "STREAMING";
   return "COMPLETED";
 }
 

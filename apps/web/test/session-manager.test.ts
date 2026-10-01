@@ -217,6 +217,93 @@ describe("WebSessionManager", () => {
     manager.dispose();
   });
 
+  it("loads every ordered turn-presentation page so long tasks remain complete after navigation", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const run = makeCompletedRun(makeRun({ sessionId: session.id }));
+    const firstItem = {
+      id: "presentation:user",
+      runId: run.id,
+      conversationTurnId: run.id,
+      ordinal: 0,
+      status: "COMPLETED" as const,
+      createdAt: run.createdAt,
+      kind: "USER" as const,
+      text: "检查项目",
+    };
+    const secondItem = {
+      id: "presentation:assistant",
+      runId: run.id,
+      conversationTurnId: run.id,
+      ordinal: 1,
+      status: "COMPLETED" as const,
+      createdAt: run.finishedAt ?? run.createdAt,
+      kind: "ASSISTANT" as const,
+      phase: "FINAL_ANSWER" as const,
+      text: "已完成检查。",
+    };
+    const client = makeClient({
+      sessions: [session],
+      latestRuns: new Map([[session.id, [run]]]),
+    });
+    client.getSessionTurnPresentation.mockImplementation(async (_sessionId, query) =>
+      query?.cursor === "1"
+        ? { capabilityVersion: 1, highWatermark: 8, items: [secondItem] }
+        : {
+            capabilityVersion: 1,
+            highWatermark: 8,
+            items: [firstItem],
+            nextCursor: "1",
+          },
+    );
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      info: makeInfo({
+        capabilities: { ...makeInfo().capabilities, sessionTurnPresentation: true },
+      }),
+    });
+
+    await manager.loadSessions();
+    await expect(manager.selectSession(session.id)).resolves.toBe(true);
+
+    expect(client.getSessionTurnPresentation).toHaveBeenNthCalledWith(1, session.id, {
+      limit: 100,
+    });
+    expect(client.getSessionTurnPresentation).toHaveBeenNthCalledWith(2, session.id, {
+      limit: 100,
+      cursor: "1",
+    });
+    expect(manager.getSnapshot().turnPresentation?.items).toEqual([firstItem, secondItem]);
+    expect(manager.getSnapshot().turnPresentation?.nextCursor).toBeUndefined();
+    manager.dispose();
+  });
+
+  it("loads every transcript page for the compatibility view", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const run = makeCompletedRun(makeRun({ sessionId: session.id }));
+    const firstItem = userTranscript(run, "检查项目");
+    const secondItem = assistantTranscript(run, "已完成检查");
+    const client = makeClient({
+      sessions: [session],
+      latestRuns: new Map([[session.id, [run]]]),
+    });
+    client.getSessionTranscript.mockImplementation(async (_sessionId, query) =>
+      query?.cursor === "1" ? { items: [secondItem] } : { items: [firstItem], nextCursor: "1" },
+    );
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+
+    await manager.loadSessions();
+    await expect(manager.selectSession(session.id)).resolves.toBe(true);
+
+    expect(client.getSessionTranscript).toHaveBeenNthCalledWith(1, session.id, { limit: 100 });
+    expect(client.getSessionTranscript).toHaveBeenNthCalledWith(2, session.id, {
+      limit: 100,
+      cursor: "1",
+    });
+    expect(manager.getSnapshot().history).toEqual([firstItem, secondItem]);
+    manager.dispose();
+  });
+
   it("keeps empty Timeline state for bootstrap, draft, and a selected completed Session", async () => {
     const session = makeSession({ defaultWorkspace: workspace });
     const completedRun = makeCompletedRun(makeRun({ sessionId: session.id }));
@@ -311,6 +398,49 @@ describe("WebSessionManager", () => {
       retries: [],
       verification: [],
     });
+    manager.dispose();
+  });
+
+  it("removes settled transient duplicates after the durable presentation catches up", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const pendingRun = makeRun({ sessionId: session.id, goal: "persist the execution feed" });
+    const completedRun = makeCompletedRun(pendingRun);
+    const terminalEvent = {
+      type: "run.completed",
+      eventId: "evt_00000000-0000-7000-8000-000000000012",
+      schemaVersion: 1,
+      runId: pendingRun.id,
+      sessionId: pendingRun.sessionId,
+      timestamp: 2,
+      visibility: "USER_VISIBLE",
+      durability: { kind: "DURABLE", version: 1, sequence: 2 },
+      payload: { result: { status: "COMPLETED" } },
+    } as PublicRunEvent;
+    const client = makeClient({
+      createSessionResult: session,
+      createRunResult: pendingRun,
+      watchEvents: [reasoningEvent(pendingRun, "temporary live copy"), terminalEvent],
+      turnPresentationResponse: { capabilityVersion: 1, items: [], highWatermark: 2 },
+    });
+    client.getRun.mockResolvedValue(completedRun);
+    client.listRuns.mockResolvedValue({ items: [completedRun] });
+    client.startRun.mockResolvedValue(
+      actionResponse(makeRun({ ...pendingRun, status: "RUNNING" }), pendingRun.id),
+    );
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      info: makeInfo({
+        capabilities: { ...makeInfo().capabilities, sessionTurnPresentation: true },
+      }),
+    });
+
+    manager.beginDraft();
+    await expect(manager.submitPrompt("persist the execution feed")).resolves.toBe(true);
+    await waitFor(() => manager.getSnapshot().submission === "IDLE");
+
+    expect(manager.getSnapshot().turnPresentation?.highWatermark).toBe(2);
+    expect(manager.getSnapshot().liveActivity.activities).toEqual([]);
     manager.dispose();
   });
 
@@ -637,6 +767,89 @@ describe("WebSessionManager", () => {
     manager.dispose();
   });
 
+  it("restores persisted context usage whenever a completed Session is selected again", async () => {
+    const firstSession = makeSession({ defaultWorkspace: workspace });
+    const secondSession = makeSession({ defaultWorkspace: workspace });
+    const firstRun = makeCompletedRun(
+      makeRun({ sessionId: firstSession.id, createdAt: 1, goal: "first completed task" }),
+    );
+    const secondRun = makeCompletedRun(
+      makeRun({ sessionId: secondSession.id, createdAt: 2, goal: "second completed task" }),
+    );
+    const firstUsage = makeContextUsage(firstRun, 320);
+    const secondUsage = makeContextUsage(secondRun, 640);
+    const client = makeClient({
+      sessions: [firstSession, secondSession],
+      latestRuns: new Map([
+        [firstSession.id, [firstRun]],
+        [secondSession.id, [secondRun]],
+      ]),
+    });
+    client.getRunContextUsage.mockImplementation(async (runId) => {
+      if (runId === firstRun.id) return firstUsage;
+      if (runId === secondRun.id) return secondUsage;
+      return null;
+    });
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+
+    await manager.loadSessions();
+    await expect(manager.selectSession(firstSession.id)).resolves.toBe(true);
+    await waitFor(() => manager.getSnapshot().contextUsage?.runId === firstRun.id);
+    expect(manager.getSnapshot().contextUsage).toEqual(firstUsage);
+
+    await expect(manager.selectSession(secondSession.id)).resolves.toBe(true);
+    await waitFor(() => manager.getSnapshot().contextUsage?.runId === secondRun.id);
+    expect(manager.getSnapshot().contextUsage).toEqual(secondUsage);
+
+    await expect(manager.selectSession(firstSession.id)).resolves.toBe(true);
+    await waitFor(() => manager.getSnapshot().contextUsage?.runId === firstRun.id);
+    expect(manager.getSnapshot().contextUsage).toEqual(firstUsage);
+    expect(client.getRunContextUsage.mock.calls.map(([runId]) => runId)).toEqual([
+      firstRun.id,
+      secondRun.id,
+      firstRun.id,
+    ]);
+    manager.dispose();
+  });
+
+  it("does not let a delayed completed-Session usage response overwrite the newly selected Session", async () => {
+    const firstSession = makeSession({ defaultWorkspace: workspace });
+    const secondSession = makeSession({ defaultWorkspace: workspace });
+    const firstRun = makeCompletedRun(makeRun({ sessionId: firstSession.id, createdAt: 1 }));
+    const secondRun = makeCompletedRun(makeRun({ sessionId: secondSession.id, createdAt: 2 }));
+    const firstUsage = makeContextUsage(firstRun, 320);
+    const secondUsage = makeContextUsage(secondRun, 640);
+    let resolveFirstUsage: ((usage: ContextUsageProjection) => void) | undefined;
+    const client = makeClient({
+      sessions: [firstSession, secondSession],
+      latestRuns: new Map([
+        [firstSession.id, [firstRun]],
+        [secondSession.id, [secondRun]],
+      ]),
+    });
+    client.getRunContextUsage.mockImplementation((runId) => {
+      if (runId === firstRun.id) {
+        return new Promise<ContextUsageProjection>((resolve) => {
+          resolveFirstUsage = resolve;
+        });
+      }
+      return Promise.resolve(secondUsage);
+    });
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+
+    await manager.loadSessions();
+    await expect(manager.selectSession(firstSession.id)).resolves.toBe(true);
+    await waitFor(() => client.getRunContextUsage.mock.calls.length === 1);
+    await expect(manager.selectSession(secondSession.id)).resolves.toBe(true);
+    await waitFor(() => manager.getSnapshot().contextUsage?.runId === secondRun.id);
+
+    resolveFirstUsage?.(firstUsage);
+    await Promise.resolve();
+
+    expect(manager.getSnapshot().contextUsage).toEqual(secondUsage);
+    manager.dispose();
+  });
+
   it("throttles context usage refreshes after public lifecycle activity", async () => {
     const session = makeSession({ defaultWorkspace: workspace });
     const pendingRun = makeRun({ sessionId: session.id });
@@ -870,6 +1083,43 @@ function makeCompletedRun(run: ClientAgentRun): ClientAgentRun {
       },
     },
   });
+}
+
+function makeContextUsage(
+  run: ClientAgentRun,
+  estimatedInputTokens: number,
+): ContextUsageProjection {
+  const effectiveInputLimitTokens = 800;
+  return {
+    runId: run.id,
+    providerId: run.model.provider,
+    modelId: run.model.model,
+    profileSource: "CONFIGURATION",
+    contextWindowTokens: 1_000,
+    rawContextWindowTokens: 1_000,
+    effectiveInputLimitTokens,
+    estimatedInputTokens,
+    usedRatio: estimatedInputTokens / effectiveInputLimitTokens,
+    remainingTokens: effectiveInputLimitTokens - estimatedInputTokens,
+    pressureState: "NORMAL",
+    compactionCount: 0,
+    lastBuildAt: 3,
+    lastRecoveryStages: [],
+    breakdown: {
+      pinned: 20,
+      checkpoint: 0,
+      recentTail: estimatedInputTokens - 20,
+      project: 0,
+      files: 0,
+      toolObservations: 0,
+      memory: 0,
+      systemTokens: 20,
+      currentTurnTokens: estimatedInputTokens - 20,
+      mandatoryTokens: 20,
+    },
+    updatedAt: 3,
+    lastBuildStatus: "SUCCESS",
+  };
 }
 
 function lifecycleEvent(type: string, run: ClientAgentRun): PublicRunEvent {

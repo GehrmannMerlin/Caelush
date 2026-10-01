@@ -49,12 +49,27 @@ export function ActiveTimeline({
       {liveActivity.activities.map((activity) => (
         <Text key={activity.id}>
           • {liveActivityLabel(activity.kind)}: {activity.text}
-          {activity.status === "SETTLED" ? " · settled" : ""}
+          {` · ${liveActivityStatusLabel(activity.status)}`}
         </Text>
       ))}
       {timeline.error === undefined ? null : <Text color="yellow">• {timeline.error}</Text>}
     </Box>
   );
+}
+
+function liveActivityStatusLabel(
+  status: LiveActivityState["activities"][number]["status"],
+): string {
+  switch (status) {
+    case "ACTIVE":
+      return "active";
+    case "COMPLETED":
+      return "completed";
+    case "FAILED":
+      return "failed";
+    case "CANCELLED":
+      return "cancelled";
+  }
 }
 
 function liveActivityLabel(kind: LiveActivityState["activities"][number]["kind"]): string {

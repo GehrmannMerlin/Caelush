@@ -7,6 +7,8 @@ import {
   createStepId,
   createTimestampMs,
   createToolInvocationId,
+  createVerificationCheckId,
+  createVerificationPlanId,
   createWorkspaceId,
   type DurableRunEvent,
   type ToolPresentationItem,
@@ -219,5 +221,59 @@ describe("SessionPresentationService", () => {
     expect(tool.preview).toBe("安全预览");
     expect(JSON.stringify(tool)).not.toContain("must-not-leak");
     expect(response.items[4]).toMatchObject({ kind: "RUN_SUMMARY", runStatus: "COMPLETED" });
+  });
+
+  it("merges verification lifecycle pairs and leaves no streaming rows for a terminal Run", async () => {
+    const planId = createVerificationPlanId();
+    const checkId = createVerificationCheckId();
+    const events = [
+      event(1, "verification.planned", { planId, checkCount: 1 }),
+      event(2, "verification.check.started", { planId, checkId }),
+      event(3, "verification.check.completed", {
+        planId,
+        checkId,
+        status: "PASSED",
+        evidenceIds: ["evidence-safe"],
+      }),
+      event(4, "verification.finalized", { planId, outcome: "PASSED" }),
+    ];
+    const service = new SessionPresentationService({
+      sessions: { get: async () => ({ id: SESSION_ID }) as never },
+      runs: { listBySession: async () => [RUN] },
+      messageRecords: { listBySession: async () => [] },
+      codecs,
+      toolInvocations: { listByRun: async () => [] },
+      observations: { listByRun: async () => [] },
+      eventReader: {
+        latestSequence: async () => 4,
+        replay: async () => events,
+      },
+      toolPresentation: {
+        presentInvocation: () => ({ title: "使用工具", summary: "工具调用" }),
+        presentResult: () => ({ title: "使用工具", summary: "工具结果" }),
+        presentShellCommand: () => "执行命令",
+      },
+    });
+
+    const response = await service.getPresentation(SESSION_ID, {});
+    const verification = response.items.filter((item) => item.kind === "VERIFICATION");
+    expect(verification).toHaveLength(3);
+    expect(verification).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          verificationId: planId,
+          title: "验证计划",
+          status: "COMPLETED",
+        }),
+        expect.objectContaining({
+          verificationId: checkId,
+          title: "验证检查",
+          summary: "检查通过",
+          status: "COMPLETED",
+        }),
+        expect.objectContaining({ title: "验证定稿", status: "COMPLETED" }),
+      ]),
+    );
+    expect(verification.some((item) => item.status === "STREAMING")).toBe(false);
   });
 });

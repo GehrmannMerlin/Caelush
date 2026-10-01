@@ -7,7 +7,7 @@ export type LiveActivityKind =
   | "TOOL_OUTPUT"
   | "SHELL_OUTPUT"
   | "PROCESS_OUTPUT";
-export type LiveActivityStatus = "ACTIVE" | "SETTLED";
+export type LiveActivityStatus = "ACTIVE" | "COMPLETED" | "FAILED" | "CANCELLED";
 
 export interface LiveActivity {
   readonly id: string;
@@ -17,6 +17,7 @@ export interface LiveActivity {
   readonly streamKey: string;
   readonly streamSequence: number;
   readonly runId: RunId;
+  readonly settledAtSequence?: number;
   readonly stepId?: string;
   readonly invocationId?: string;
   readonly processId?: string;
@@ -101,7 +102,10 @@ export function reduceLiveActivityEvent(
         ? {}
         : {
             text: appendBounded(existing.text, activity.text, state.maxTextBytes),
-            status: existing.status === "SETTLED" ? "SETTLED" : activity.status,
+            status: existing.status === "ACTIVE" ? activity.status : existing.status,
+            ...(existing.settledAtSequence === undefined
+              ? {}
+              : { settledAtSequence: existing.settledAtSequence }),
           }),
     };
     const activities = [
@@ -131,6 +135,24 @@ export function reduceLiveActivityEvent(
     lastDurableSequence: sequence,
     terminal: settled.terminal || state.terminal,
   };
+}
+
+/**
+ * Remove transient rows only after the durable presentation read model has advanced far enough to
+ * cover the event that settled them. Active rows and terminal rows beyond the read-model watermark
+ * remain visible.
+ */
+export function pruneProjectedLiveActivities(
+  state: LiveActivityState,
+  presentationHighWatermark: number,
+): LiveActivityState {
+  const activities = state.activities.filter(
+    (activity) =>
+      activity.status === "ACTIVE" ||
+      activity.settledAtSequence === undefined ||
+      activity.settledAtSequence > presentationHighWatermark,
+  );
+  return activities.length === state.activities.length ? state : { ...state, activities };
 }
 
 function activityFromTransient(event: TransientLiveEvent): LiveActivity | null {
@@ -198,35 +220,68 @@ function settleForDurableEvent(
   event: DurableLiveEvent,
 ): { readonly activities: readonly LiveActivity[]; readonly terminal: boolean } {
   let predicate: ((activity: LiveActivity) => boolean) | undefined;
+  let status: Exclude<LiveActivityStatus, "ACTIVE"> | undefined;
   let terminal = false;
   switch (event.type) {
     case "tool.completed":
+      predicate = (activity) => activity.invocationId === event.payload.invocationId;
+      status = "COMPLETED";
+      break;
     case "tool.failed":
       predicate = (activity) => activity.invocationId === event.payload.invocationId;
+      status = "FAILED";
       break;
     case "shell.completed":
       predicate = (activity) => activity.invocationId === event.payload.invocationId;
+      status =
+        event.payload.exitCode === 0
+          ? "COMPLETED"
+          : event.payload.signal === undefined
+            ? "FAILED"
+            : "CANCELLED";
       break;
     case "process.stopped":
       predicate = (activity) => activity.processId === event.payload.processId;
+      status =
+        event.payload.status === "EXITED"
+          ? "COMPLETED"
+          : event.payload.status === "KILLED"
+            ? "CANCELLED"
+            : "FAILED";
       break;
     case "llm.completed":
+      predicate = (activity) => event.stepId !== undefined && activity.stepId === event.stepId;
+      status = "COMPLETED";
+      break;
     case "llm.failed":
       predicate = (activity) => event.stepId !== undefined && activity.stepId === event.stepId;
+      status = "FAILED";
       break;
     case "run.completed":
-    case "run.failed":
-    case "run.cancelled":
-    case "run.timed_out":
       terminal = true;
       predicate = () => true;
+      status = "COMPLETED";
+      break;
+    case "run.failed":
+    case "run.timed_out":
+    case "budget.exceeded":
+      terminal = true;
+      predicate = () => true;
+      status = "FAILED";
+      break;
+    case "run.cancelled":
+      terminal = true;
+      predicate = () => true;
+      status = "CANCELLED";
       break;
     default:
       return { activities, terminal: false };
   }
   return {
     activities: activities.map((activity) =>
-      predicate?.(activity) ? { ...activity, status: "SETTLED" } : activity,
+      predicate?.(activity) && activity.status === "ACTIVE" && status !== undefined
+        ? { ...activity, status, settledAtSequence: event.durability.sequence }
+        : activity,
     ),
     terminal,
   };

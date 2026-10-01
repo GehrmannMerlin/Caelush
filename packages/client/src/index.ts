@@ -30,7 +30,11 @@ export type {
   SessionCandidateClient,
   TranscriptEntry,
 } from "./session-projection.js";
-export { createInitialLiveActivityState, reduceLiveActivityEvent } from "./live-activity.js";
+export {
+  createInitialLiveActivityState,
+  pruneProjectedLiveActivities,
+  reduceLiveActivityEvent,
+} from "./live-activity.js";
 export type {
   LiveActivity,
   LiveActivityKind,

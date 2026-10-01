@@ -45,9 +45,10 @@ describe("responsive workspace layout", () => {
     expect(viewportOverrides).toMatch(
       /\.prompt-composer\s*\{[\s\S]*?position:\s*sticky;[\s\S]*?bottom:\s*0;/,
     );
-    const mobileSessionScrollRule = viewportOverrides.slice(
-      viewportOverrides.lastIndexOf(".session-scroll {"),
-    );
+    const mobileSessionScrollRule =
+      [...viewportOverrides.matchAll(/(?:^|\n)\s*\.session-scroll\s*\{[\s\S]*?\n\s*\}/g)].at(
+        -1,
+      )?.[0] ?? "";
     expect(mobileSessionScrollRule).not.toContain("overflow-y: auto");
   });
 
@@ -126,5 +127,27 @@ describe("responsive workspace layout", () => {
     expect(brandOverride).toContain(".workspace-sidebar-logo {");
     expect(brandOverride).toContain("max-width: 100%");
     expect(brandOverride).toContain("object-fit: contain");
+  });
+
+  it("keeps approval prompts centered, layered, blue-white, and removes the accent rail", () => {
+    const approvalOverride = styles.slice(styles.lastIndexOf("/* Fixed approval overlay"));
+    const inlineFeedOverride = styles.slice(styles.lastIndexOf("/* Inline execution feed"));
+
+    expect(approvalOverride).toMatch(
+      /\.approval-overlay\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?inset:\s*0;[\s\S]*?z-index:/,
+    );
+    expect(approvalOverride).toMatch(
+      /\.approval-stack\s*\{[\s\S]*?display:\s*grid;[\s\S]*?place-items:\s*center;/,
+    );
+    expect(approvalOverride).toMatch(
+      /\.approval-overlay \.approval-card\s*\{[\s\S]*?background:\s*#fff;/,
+    );
+    expect(approvalOverride).toMatch(
+      /\.approval-overlay \.approval-card\s*\{[\s\S]*?border-left:\s*0;/,
+    );
+    expect(approvalOverride).toContain(".approval-action--reject");
+    expect(inlineFeedOverride).toMatch(
+      /\.turn-presentation-logo\s*\{[\s\S]*?width:\s*auto;[\s\S]*?height:\s*1\.75rem;/,
+    );
   });
 });

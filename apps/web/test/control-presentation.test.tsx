@@ -71,6 +71,30 @@ describe("Web control presentation", () => {
     expect(onceHtml).not.toContain("本次运行内允许");
   });
 
+  it("renders pending approvals in a fixed layered dialog outside the scrollable session content", () => {
+    const secondApproval = { ...approval, id: "approval-2", title: "需要批准执行命令" };
+    const html = renderToStaticMarkup(
+      <SessionWorkspace
+        title="控制台"
+        activeRun={{ id: "run-1", status: "WAITING_APPROVAL" } as never}
+        history={[]}
+        timeline={createInitialTimelineState()}
+        approvals={[approval, secondApproval]}
+        onResolveApproval={vi.fn(async () => true)}
+        composer={<div>COMPOSER_MARKER</div>}
+      />,
+    );
+
+    expect(html).toContain('class="approval-overlay"');
+    expect(html).toContain('role="dialog"');
+    expect(html).toContain('aria-modal="true"');
+    expect((html.match(/class="approval-stack-item/g) ?? []).length).toBe(2);
+    expect(html.indexOf('class="approval-overlay"')).toBeGreaterThan(
+      html.indexOf('class="session-scroll"'),
+    );
+    expect(html).toContain('class="approval-action approval-action--reject"');
+  });
+
   it("uses the shared resolution helper result when an approval option is clicked", () => {
     const onResolve = vi.fn(() => true);
     const element = ApprovalCard({ approval, onResolve });
