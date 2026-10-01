@@ -69,9 +69,7 @@ describe("PermissionSelector", () => {
 
     expect(html).toContain('<option value="" selected="">请选择权限</option>');
     expect(html).toContain('<option value="VIEW_ONLY" disabled="">仅可查看</option>');
-    expect(html).toContain(
-      '<option value="WORKSPACE_WRITE" disabled="">工作区内修改</option>',
-    );
+    expect(html).toContain('<option value="WORKSPACE_WRITE" disabled="">工作区内修改</option>');
     expect(html).not.toContain('<option value="FULL_ACCESS" selected="">');
   });
 
