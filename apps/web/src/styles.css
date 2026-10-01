@@ -1529,29 +1529,40 @@ body {
 
 .permission-selector {
   position: relative;
-  display: inline-grid;
-  min-width: 190px;
-  gap: 3px;
-  color: #1f2937;
-}
-
-.permission-selector-label {
-  color: #52656d;
-  font-size: 0.68rem;
-  font-weight: 750;
-  letter-spacing: 0.04em;
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  color: var(--web-muted);
 }
 
 .permission-selector-select {
-  min-height: 30px;
-  padding: 4px 26px 4px 8px;
-  border: 1px solid #c9d9d4;
-  border-radius: 8px;
-  background: #fff;
-  color: #16352f;
+  min-height: 34px;
+  min-width: 128px;
+  padding: 6px 28px 6px 9px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--web-muted);
   cursor: pointer;
-  font-size: 0.75rem;
-  font-weight: 700;
+  font-size: 0.76rem;
+  font-weight: 650;
+  transition:
+    color 150ms ease,
+    background-color 150ms ease,
+    border-color 150ms ease;
+}
+
+.permission-selector-select[data-empty="true"] {
+  color: #7a8896;
+  font-weight: 600;
+}
+
+.permission-selector-select:hover:not(:disabled),
+.permission-selector-select:focus-visible {
+  border-color: var(--web-line-strong);
+  background: #fff;
+  color: var(--web-ink-strong);
+  outline: none;
 }
 
 .permission-selector-select:disabled {
@@ -1559,7 +1570,6 @@ body {
   opacity: 0.62;
 }
 
-.permission-selector-description,
 .permission-selector-error {
   max-width: 270px;
   margin: 0;
@@ -1647,6 +1657,10 @@ body {
   .permission-selector {
     width: 100%;
     min-width: 0;
+  }
+
+  .permission-selector-select {
+    width: 100%;
   }
 
   .permission-selector-confirmation {

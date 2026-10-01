@@ -34,7 +34,7 @@ const presets: readonly PermissionPresetViewModel[] = [
 ];
 
 describe("PermissionSelector", () => {
-  it("renders all server-provided options and partial enforcement wording", () => {
+  it("renders concise Chinese permission names without status suffixes", () => {
     const html = renderToStaticMarkup(
       <PermissionSelector
         presets={presets}
@@ -47,7 +47,57 @@ describe("PermissionSelector", () => {
     expect(html).toContain("仅可查看");
     expect(html).toContain("工作区内修改");
     expect(html).toContain("完全权限");
-    expect(html).toContain("部分受限执行");
+    expect(html).not.toContain("部分受限执行");
+    expect(html).not.toContain("已启用");
+    expect(html).not.toContain("Agent 权限");
+    expect(html).toContain('aria-label="选择权限"');
+  });
+
+  it("renders an explicit empty option when no permission is selected", () => {
+    const html = renderToStaticMarkup(
+      <PermissionSelector
+        presets={[
+          { ...presets[0]!, status: "UNAVAILABLE" },
+          { ...presets[1]!, status: "PREPARATION_REQUIRED" },
+          presets[2]!,
+        ]}
+        selected={undefined}
+        disabled={false}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain('<option value="" selected="">请选择权限</option>');
+    expect(html).toContain('<option value="VIEW_ONLY" disabled="">仅可查看</option>');
+    expect(html).toContain(
+      '<option value="WORKSPACE_WRITE" disabled="">工作区内修改</option>',
+    );
+    expect(html).not.toContain('<option value="FULL_ACCESS" selected="">');
+  });
+
+  it("keeps the only-Full-Access state empty until confirmation is deliberately opened", () => {
+    const onlyFullAccess = [presets[2]!] as const;
+    const initialHtml = renderToStaticMarkup(
+      <PermissionSelector
+        presets={onlyFullAccess}
+        selected={undefined}
+        disabled={false}
+        onSelect={vi.fn()}
+      />,
+    );
+    const confirmationHtml = renderToStaticMarkup(
+      <PermissionSelector
+        presets={onlyFullAccess}
+        selected={{ id: "FULL_ACCESS", expectedVersion: 1 }}
+        disabled={false}
+        onSelect={vi.fn()}
+        confirmationOpen
+      />,
+    );
+
+    expect(initialHtml).toContain('<option value="" selected="">请选择权限</option>');
+    expect(initialHtml).not.toContain("确认使用完全权限");
+    expect(confirmationHtml).toContain("确认使用完全权限");
   });
 
   it("shows an explicit Full Access confirmation action", () => {

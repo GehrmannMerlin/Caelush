@@ -2,7 +2,7 @@ import { useState, type ChangeEvent, type ReactElement } from "react";
 import type { PermissionPresetSelection } from "@caelush/protocol";
 import {
   fullAccessConfirmationCopy,
-  permissionPresetStatusLabel,
+  permissionPresetDisplayName,
   type PermissionPresetViewModel,
 } from "../application/permission-presets.js";
 
@@ -24,7 +24,6 @@ export function PermissionSelector(props: PermissionSelectorProps): ReactElement
   const [pendingConfirmation, setPendingConfirmation] = useState<
     PermissionPresetSelection | undefined
   >(initialConfirmation);
-  const selectedPreset = props.presets.find((preset) => preset.id === props.selected?.id);
   const selectedValue = props.selected?.id ?? "";
 
   const handleChange = (event: ChangeEvent<HTMLSelectElement>) => {
@@ -49,33 +48,30 @@ export function PermissionSelector(props: PermissionSelectorProps): ReactElement
 
   return (
     <div className="permission-selector">
-      <label className="permission-selector-label" htmlFor="permission-preset-select">
-        Agent 权限
-      </label>
       <select
         id="permission-preset-select"
         className="permission-selector-select"
         value={selectedValue}
         disabled={props.disabled || props.presets.length === 0}
         onChange={handleChange}
-        aria-label="Agent 权限"
+        aria-label="选择权限"
+        data-empty={selectedValue === "" ? "true" : undefined}
       >
-        {props.presets.length === 0 ? <option value="">权限能力不可用</option> : null}
+        {props.presets.length === 0 ? (
+          <option value="">权限能力不可用</option>
+        ) : selectedValue === "" ? (
+          <option value="">请选择权限</option>
+        ) : null}
         {props.presets.map((preset) => (
           <option
             key={`${preset.id}@${preset.version}`}
             value={preset.id}
             disabled={preset.status !== "AVAILABLE"}
           >
-            {preset.displayName} · {permissionPresetStatusLabel(preset)}
+            {permissionPresetDisplayName(preset.id)}
           </option>
         ))}
       </select>
-      {selectedPreset === undefined ? null : (
-        <p className="permission-selector-description">
-          {selectedPreset.description} · {permissionPresetStatusLabel(selectedPreset)}
-        </p>
-      )}
       {props.presets
         .filter((preset) => preset.status === "PREPARATION_REQUIRED")
         .map((preset) => (
@@ -88,7 +84,7 @@ export function PermissionSelector(props: PermissionSelectorProps): ReactElement
               void props.onPrepare?.({ id: preset.id, expectedVersion: preset.version })
             }
           >
-            准备{preset.displayName}
+            准备{permissionPresetDisplayName(preset.id)}
           </button>
         ))}
       {props.error === undefined ? null : (
