@@ -15,6 +15,7 @@ export interface SandboxedSpawnSpec {
   readonly env: NodeJS.ProcessEnv;
   readonly tty: boolean;
   readonly policy: RuntimeProcessPolicy;
+  readonly authorizationNonce: string;
   readonly controlHello?: SandboxControlMessage;
 }
 
@@ -23,6 +24,13 @@ export interface ProcessSandboxProvider {
   readonly kind: ProcessSandboxKind;
   readonly enforcement: SandboxEnforcement;
   create(input: SandboxedSpawnSpec): Promise<ManagedProcessAdapter>;
+  readonly probe?: () => Promise<SandboxProbeResult>;
+}
+
+export interface SandboxProbeResult {
+  readonly available: boolean;
+  readonly enforcement: SandboxEnforcement;
+  readonly reasonCode?: string;
 }
 
 export interface ProcessSandboxProbe {

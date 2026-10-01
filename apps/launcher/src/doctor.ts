@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { CaelushClient } from "@caelush/client";
 import { checkNodePtyLoadability, inspectMigrationAssets } from "@caelush/daemon/diagnostics";
 import { resolveProductPaths, type ProductPaths } from "@caelush/daemon/paths";
@@ -36,6 +38,10 @@ export interface DoctorOptions {
   readonly nodePtyCheck?: () => Promise<{ readonly available: boolean }>;
   readonly migrationCheck?: () => { readonly available: boolean; readonly migrationCount: number };
   readonly executableCheck?: (executable: "git" | "rg") => Promise<boolean>;
+  readonly sandboxRunnerCheck?: () => Promise<{
+    readonly available: boolean;
+    readonly reasonCode?: string;
+  }>;
 }
 
 export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResult> {
@@ -144,6 +150,16 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
     status: pty.available ? "PASS" : "FAIL",
     detail: pty.available ? "loadable" : "not loadable",
   });
+  const sandboxRunner = await (
+    options.sandboxRunnerCheck ?? (() => defaultSandboxRunnerCheck(environment, platform, arch))
+  )();
+  checks.push({
+    name: "Restricted execution Provider",
+    status: sandboxRunner.available ? "PASS" : "WARN",
+    detail: sandboxRunner.available
+      ? "native runner verified"
+      : (sandboxRunner.reasonCode ?? "unavailable"),
+  });
   const migrations = (options.migrationCheck ?? inspectMigrationAssets)();
   checks.push({
     name: "migration assets",
@@ -208,6 +224,46 @@ async function defaultExecutableCheck(executable: "git" | "rg"): Promise<boolean
       resolve(error === null),
     );
   });
+}
+
+async function defaultSandboxRunnerCheck(
+  environment: Readonly<Record<string, string | undefined>>,
+  platform: NodeJS.Platform,
+  arch: string,
+): Promise<{ readonly available: boolean; readonly reasonCode?: string }> {
+  const runnerPath = environment.CAELUSH_SANDBOX_RUNNER_PATH;
+  if (runnerPath === undefined || runnerPath.length === 0) {
+    return { available: false, reasonCode: "RUNNER_ARTIFACT_MISSING" };
+  }
+  const manifestPath =
+    environment.CAELUSH_SANDBOX_RUNNER_MANIFEST ?? join(dirname(runnerPath), "manifest.json");
+  try {
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as Record<string, unknown>;
+    const expectedPlatform =
+      platform === "win32" ? "windows" : platform === "darwin" ? "macos" : platform;
+    if (
+      manifest.product !== "caelush" ||
+      manifest.schemaVersion !== 1 ||
+      manifest.controlProtocolVersion !== 1 ||
+      manifest.platform !== expectedPlatform ||
+      manifest.arch !== arch ||
+      manifest.executableName !== basename(runnerPath) ||
+      typeof manifest.sha256 !== "string" ||
+      !/^[0-9a-f]{64}$/.test(manifest.sha256) ||
+      !Array.isArray(manifest.providers) ||
+      manifest.providers.length === 0
+    ) {
+      return { available: false, reasonCode: "RUNNER_MANIFEST_INVALID" };
+    }
+    const digest = createHash("sha256")
+      .update(await readFile(runnerPath))
+      .digest("hex");
+    return digest === manifest.sha256
+      ? { available: true }
+      : { available: false, reasonCode: "RUNNER_HASH_MISMATCH" };
+  } catch {
+    return { available: false, reasonCode: "RUNNER_ARTIFACT_MISSING" };
+  }
 }
 
 function safeDaemonUrl(value: string): string {

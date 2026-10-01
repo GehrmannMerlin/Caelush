@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { DaemonInfo, HealthResponse } from "@caelush/protocol";
 import { resolveProductPaths } from "@caelush/daemon/paths";
 import { formatDoctorReport, runDoctor, type DoctorOptions } from "../src/doctor.js";
@@ -154,5 +158,54 @@ describe("doctor", () => {
       }),
     );
     expect(formatDoctorReport(result)).toContain("[WARN] daemon reachable: not reachable");
+  });
+
+  it("verifies the restricted runner manifest and binary hash", async () => {
+    const root = await mkdtemp(join(tmpdir(), "caelush-doctor-sandbox-runner-"));
+    try {
+      const runnerPath = join(root, "caelush-sandbox-runner.exe");
+      const runnerBytes = "runner-fixture";
+      await writeFile(runnerPath, runnerBytes, "utf8");
+      const hash = createHash("sha256").update(runnerBytes).digest("hex");
+      const environment = {
+        ...options().environment,
+        CAELUSH_SANDBOX_RUNNER_PATH: runnerPath,
+        CAELUSH_SANDBOX_RUNNER_MANIFEST: join(root, "manifest.json"),
+      };
+      await writeFile(
+        join(root, "manifest.json"),
+        JSON.stringify({
+          product: "caelush",
+          schemaVersion: 1,
+          controlProtocolVersion: 1,
+          platform: "windows",
+          arch: "x64",
+          executableName: "caelush-sandbox-runner.exe",
+          sha256: hash,
+          providers: ["windows-acl-restricted-token"],
+        }),
+        "utf8",
+      );
+      const result = await runDoctor(options({ environment }));
+      expect(result.checks.find((check) => check.name === "Restricted execution Provider")).toEqual(
+        {
+          name: "Restricted execution Provider",
+          status: "PASS",
+          detail: "native runner verified",
+        },
+      );
+
+      await writeFile(runnerPath, "tampered-runner", "utf8");
+      const tampered = await runDoctor(options({ environment }));
+      expect(
+        tampered.checks.find((check) => check.name === "Restricted execution Provider"),
+      ).toEqual({
+        name: "Restricted execution Provider",
+        status: "WARN",
+        detail: "RUNNER_HASH_MISMATCH",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

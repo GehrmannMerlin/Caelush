@@ -65,9 +65,28 @@ export type {
   ProcessSandboxKind,
   ProcessSandboxProbe,
   ProcessSandboxProvider,
+  SandboxProbeResult,
   SandboxedSpawnSpec,
   SandboxEnforcement,
 } from "./sandbox/contracts.js";
+export {
+  createLinuxBubblewrapProvider,
+  createLinuxLandlockProvider,
+  LinuxBubblewrapProvider,
+  LinuxLandlockProvider,
+} from "./sandbox/linux-provider.js";
+export type { LinuxSandboxProviderOptions } from "./sandbox/linux-provider.js";
+export { createMacSeatbeltProvider, MacSeatbeltProvider } from "./sandbox/macos-provider.js";
+export type { MacSeatbeltProviderOptions } from "./sandbox/macos-provider.js";
+export {
+  createWindowsAclRestrictedTokenProvider,
+  WindowsAclRestrictedTokenProvider,
+} from "./sandbox/windows-provider.js";
+export type { WindowsAclRestrictedTokenProviderOptions } from "./sandbox/windows-provider.js";
+export type {
+  NativeRunnerProviderOptions,
+  NativeSandboxRunnerManifest,
+} from "./sandbox/native-runner-provider.js";
 export {
   cleanupPrivateRunTemp,
   cleanupStalePrivateRunTemps,

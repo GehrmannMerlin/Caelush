@@ -85,6 +85,7 @@ export class LocalProcessManager {
         env: request.env,
         tty: request.tty,
         policy: request.authorization.policy,
+        authorizationNonce: request.authorization.authorizationNonce,
       });
     } else {
       const factory = request.tty ? this.ptyFactory : this.pipeFactory;

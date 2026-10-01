@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import process from "node:process";
 import { join, relative, resolve } from "node:path";
 import { URL, fileURLToPath } from "node:url";
+import { buildSandboxRunner } from "./build-sandbox-runner.mjs";
 
 const REPOSITORY_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const NODE_RANGE = ">=24.0.0 <25.0.0";
@@ -94,6 +95,14 @@ export async function buildRelease(options = {}) {
     await rewritePackageManifests(deployDirectory, workspaceVersions);
     await removePnpmBuildMetadata(deployDirectory);
     await assertPortableArtifact(deployDirectory, workspaceVersions);
+    let sandboxRunnerStatus = "UNAVAILABLE";
+    if (options.buildSandboxRunner === true) {
+      await buildSandboxRunner({
+        repositoryRoot,
+        outputDirectory: join(deployDirectory, "sandbox-runner"),
+      });
+      sandboxRunnerStatus = "PACKAGED";
+    }
 
     const launcherManifest = JSON.parse(
       await readFile(join(deployDirectory, "package.json"), "utf8"),
@@ -107,6 +116,7 @@ export async function buildRelease(options = {}) {
       nodeRange: NODE_RANGE,
       createdAt: new Date().toISOString(),
       protocolVersion: 1,
+      sandboxRunner: sandboxRunnerStatus,
     };
     await writeFile(
       join(deployDirectory, "manifest.json"),
