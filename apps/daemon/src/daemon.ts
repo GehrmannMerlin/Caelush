@@ -41,6 +41,7 @@ import type { SubscriberQueuePolicy } from "./events/subscriber-queue.js";
 import { DefaultPublicEventProjector } from "./events/public-event-projector.js";
 import { WorkspaceService } from "./workspaces/workspace-service.js";
 import type { WorkspacePreparationPort } from "./services/security-capability-service.js";
+import type { SecurityFeatureGates } from "./services/security-feature-gates.js";
 import {
   createNativeWorkspaceDirectoryPicker,
   type WorkspaceDirectoryPicker,
@@ -80,6 +81,7 @@ export interface DaemonOptions {
   readonly fullAccessAvailable?: boolean;
   readonly ttySupported?: boolean;
   readonly workspacePreparation?: WorkspacePreparationPort;
+  readonly featureGates?: SecurityFeatureGates;
 }
 
 export interface DaemonHandle {
@@ -212,6 +214,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       ...(options.workspacePreparation === undefined
         ? {}
         : { workspacePreparation: options.workspacePreparation }),
+      ...(options.featureGates === undefined ? {} : { featureGates: options.featureGates }),
       ...(options.contextContributionHooks === undefined
         ? {}
         : { contextContributionHooks: options.contextContributionHooks }),

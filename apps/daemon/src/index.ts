@@ -105,6 +105,15 @@ export {
   type WorkspacePreparationPort,
 } from "./services/security-capability-service.js";
 export {
+  inspectSecurityFeatureGates,
+  resolveSecurityFeatureGates,
+  SECURITY_FEATURE_GATE_ENVIRONMENT_KEYS,
+} from "./services/security-feature-gates.js";
+export type {
+  SecurityFeatureGateInspection,
+  SecurityFeatureGates,
+} from "./services/security-feature-gates.js";
+export {
   RunSecurityPromptProjector,
   type SystemContextBlock,
 } from "./services/run-security-prompt-projector.js";

@@ -172,6 +172,10 @@ import {
   type WorkspacePreparationPort,
 } from "./services/security-capability-service.js";
 import { RunSecurityPromptProjector } from "./services/run-security-prompt-projector.js";
+import {
+  resolveSecurityFeatureGates,
+  type SecurityFeatureGates,
+} from "./services/security-feature-gates.js";
 
 import {
   createRunBoundVerificationExecution,
@@ -293,6 +297,7 @@ export interface DaemonCompositionOptions {
   readonly fullAccessAvailable?: boolean;
   readonly ttySupported?: boolean;
   readonly workspacePreparation?: WorkspacePreparationPort;
+  readonly featureGates?: SecurityFeatureGates;
   readonly clock?: DaemonClock;
   readonly logger?: RunExecutionSupervisorLogger;
   readonly configResolver?: RunExecutionConfigResolver;
@@ -475,6 +480,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     ...(options.workspacePreparation === undefined
       ? {}
       : { workspacePreparation: options.workspacePreparation }),
+    featureGates: options.featureGates ?? resolveSecurityFeatureGates(options.environment),
   });
   const runSecurityPromptProjector = new RunSecurityPromptProjector();
   const ai = createAISubsystem({

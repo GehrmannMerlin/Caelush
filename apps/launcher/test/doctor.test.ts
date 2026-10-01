@@ -208,4 +208,47 @@ describe("doctor", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it("reports host feature gates without enabling an affected capability by fallback", async () => {
+    const result = await runDoctor(
+      options({
+        environment: {
+          CAELUSH_FEATURE_PERMISSION_PRESETS_V1: "1",
+          CAELUSH_FEATURE_RUNTIME_SANDBOX_V1: "0",
+          CAELUSH_FEATURE_FULL_ACCESS_V1: "invalid",
+        },
+      }),
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(formatDoctorReport(result)).toContain(
+      "[PASS] Feature gate permissionPresetsV1: enabled",
+    );
+    expect(formatDoctorReport(result)).toContain(
+      "[WARN] Feature gate runtimeSandboxV1: disabled by host configuration",
+    );
+    expect(formatDoctorReport(result)).toContain(
+      "[WARN] Feature gate fullAccessV1: disabled because its host value is invalid",
+    );
+  });
+
+  it("reports an unsupported workspace filesystem and failed Runner probe without enabling fallback", async () => {
+    const result = await runDoctor(
+      options({
+        workspaceFilesystemCheck: () => ({
+          available: false,
+          reasonCode: "WORKSPACE_FILESYSTEM_UNSUPPORTED",
+        }),
+        sandboxRunnerCheck: async () => ({
+          available: false,
+          reasonCode: "RUNNER_PROBE_FAILED",
+        }),
+      }),
+    );
+
+    expect(result.exitCode).toBe(0);
+    const output = formatDoctorReport(result);
+    expect(output).toContain("[WARN] workspace filesystem: WORKSPACE_FILESYSTEM_UNSUPPORTED");
+    expect(output).toContain("[WARN] Restricted execution Provider: RUNNER_PROBE_FAILED");
+  });
 });

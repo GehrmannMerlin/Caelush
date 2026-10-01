@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { CaelushClient } from "@caelush/client";
 import { checkNodePtyLoadability, inspectMigrationAssets } from "@caelush/daemon/diagnostics";
+import { inspectSecurityFeatureGates } from "@caelush/daemon";
 import { resolveProductPaths, type ProductPaths } from "@caelush/daemon/paths";
 import type { DaemonInfo } from "@caelush/protocol";
 import type { DaemonProbeClient } from "./daemon-discovery.js";
@@ -42,6 +43,10 @@ export interface DoctorOptions {
     readonly available: boolean;
     readonly reasonCode?: string;
   }>;
+  readonly workspaceFilesystemCheck?: () => {
+    readonly available: boolean;
+    readonly reasonCode?: string;
+  };
 }
 
 export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResult> {
@@ -62,6 +67,20 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
     status: isSupportedPlatform(platform, arch) ? "PASS" : "FAIL",
     detail: currentPlatformLabel(platform, arch),
   });
+  const featureGates = inspectSecurityFeatureGates(environment);
+  for (const key of ["permissionPresetsV1", "runtimeSandboxV1", "fullAccessV1"] as const) {
+    const enabled = featureGates.gates[key];
+    const invalid = featureGates.invalid.includes(key);
+    checks.push({
+      name: `Feature gate ${key}`,
+      status: enabled ? "PASS" : "WARN",
+      detail: enabled
+        ? "enabled"
+        : invalid
+          ? "disabled because its host value is invalid"
+          : "disabled by host configuration",
+    });
+  }
   checks.push({
     name: "TTY",
     status: options.stdinIsTTY === true && options.stdoutIsTTY === true ? "PASS" : "WARN",
@@ -72,6 +91,17 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
     status:
       options.workspacePath !== undefined && existsSync(options.workspacePath) ? "PASS" : "FAIL",
     detail: options.workspacePath ?? "unavailable",
+  });
+  const workspaceFilesystem = (
+    options.workspaceFilesystemCheck ??
+    (() => defaultWorkspaceFilesystemCheck(options.workspacePath))
+  )();
+  checks.push({
+    name: "workspace filesystem",
+    status: workspaceFilesystem.available ? "PASS" : "WARN",
+    detail: workspaceFilesystem.available
+      ? "supported"
+      : (workspaceFilesystem.reasonCode ?? "WORKSPACE_FILESYSTEM_UNSUPPORTED"),
   });
   const daemonUrl = environment.CAELUSH_DAEMON_URL?.trim() || DEFAULT_DAEMON_URL;
   checks.push({ name: "daemon URL", status: "PASS", detail: safeDaemonUrl(daemonUrl) });
@@ -231,6 +261,11 @@ async function defaultSandboxRunnerCheck(
   platform: NodeJS.Platform,
   arch: string,
 ): Promise<{ readonly available: boolean; readonly reasonCode?: string }> {
+  const expectedPlatform =
+    platform === "win32" ? "windows" : platform === "darwin" ? "macos" : platform;
+  if (!new Set(["windows", "linux", "macos"]).has(expectedPlatform)) {
+    return { available: false, reasonCode: "RUNNER_PLATFORM_UNSUPPORTED" };
+  }
   const runnerPath = environment.CAELUSH_SANDBOX_RUNNER_PATH;
   if (runnerPath === undefined || runnerPath.length === 0) {
     return { available: false, reasonCode: "RUNNER_ARTIFACT_MISSING" };
@@ -239,8 +274,11 @@ async function defaultSandboxRunnerCheck(
     environment.CAELUSH_SANDBOX_RUNNER_MANIFEST ?? join(dirname(runnerPath), "manifest.json");
   try {
     const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as Record<string, unknown>;
-    const expectedPlatform =
-      platform === "win32" ? "windows" : platform === "darwin" ? "macos" : platform;
+    const platformProviders: Readonly<Record<string, ReadonlySet<string>>> = {
+      windows: new Set(["windows-acl-restricted-token"]),
+      linux: new Set(["linux-landlock", "linux-bubblewrap"]),
+      macos: new Set(["macos-seatbelt"]),
+    };
     if (
       manifest.product !== "caelush" ||
       manifest.schemaVersion !== 1 ||
@@ -254,6 +292,15 @@ async function defaultSandboxRunnerCheck(
       manifest.providers.length === 0
     ) {
       return { available: false, reasonCode: "RUNNER_MANIFEST_INVALID" };
+    }
+    if (
+      manifest.providers.some(
+        (provider) =>
+          typeof provider !== "string" ||
+          !(platformProviders[expectedPlatform]?.has(provider) ?? false),
+      )
+    ) {
+      return { available: false, reasonCode: "RUNNER_BACKEND_MISSING" };
     }
     const digest = createHash("sha256")
       .update(await readFile(runnerPath))
@@ -272,5 +319,21 @@ function safeDaemonUrl(value: string): string {
     return `${parsed.protocol}//${parsed.host}${parsed.pathname === "/" ? "" : parsed.pathname}`;
   } catch {
     return "invalid URL";
+  }
+}
+
+function defaultWorkspaceFilesystemCheck(workspacePath: string | undefined): {
+  readonly available: boolean;
+  readonly reasonCode?: string;
+} {
+  if (workspacePath === undefined || !existsSync(workspacePath)) {
+    return { available: false, reasonCode: "WORKSPACE_UNAVAILABLE" };
+  }
+  try {
+    return statSync(workspacePath).isDirectory()
+      ? { available: true }
+      : { available: false, reasonCode: "WORKSPACE_NOT_DIRECTORY" };
+  } catch {
+    return { available: false, reasonCode: "WORKSPACE_FILESYSTEM_UNSUPPORTED" };
   }
 }

@@ -15,12 +15,100 @@ import { tmpdir } from "node:os";
 import process from "node:process";
 import { join, relative, resolve } from "node:path";
 import { URL, fileURLToPath } from "node:url";
-import { buildSandboxRunner } from "./build-sandbox-runner.mjs";
+import { buildSandboxRunner, validateSandboxRunnerManifest } from "./build-sandbox-runner.mjs";
 
 const REPOSITORY_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const NODE_RANGE = ">=24.0.0 <25.0.0";
 const RETIRED_TOOL_PACKAGE = ["@caelush", "tools"].join("/");
 const RETIRED_TOOL_ARTIFACT_PATH = ["node_modules", "@caelush", "tools"].join("/");
+export const RELEASE_MANIFEST_SCHEMA_VERSION = 1;
+
+export function createReleaseManifest(input) {
+  const sandboxRunner = input.sandboxRunner ?? "UNAVAILABLE";
+  const featureGates = {
+    permissionPresetsV1: input.featureGates?.permissionPresetsV1 ?? true,
+    runtimeSandboxV1: input.featureGates?.runtimeSandboxV1 ?? sandboxRunner === "PACKAGED",
+    fullAccessV1: input.featureGates?.fullAccessV1 ?? true,
+  };
+  if (featureGates.runtimeSandboxV1 && sandboxRunner !== "PACKAGED") {
+    throw new Error("runtimeSandboxV1 requires a packaged sandbox runner");
+  }
+  return validateReleaseManifest({
+    schemaVersion: RELEASE_MANIFEST_SCHEMA_VERSION,
+    product: "caelush",
+    version: input.version,
+    platform: input.platform,
+    arch: input.arch,
+    nodeRange: input.nodeRange ?? NODE_RANGE,
+    createdAt: input.createdAt ?? new Date().toISOString(),
+    protocolVersion: 1,
+    sandboxRunner,
+    featureGates,
+    ...(input.sandboxRunnerManifest === undefined
+      ? {}
+      : { sandboxRunnerManifest: input.sandboxRunnerManifest }),
+  });
+}
+
+export function validateReleaseManifest(input) {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error("Invalid release manifest.");
+  }
+  const manifest = input;
+  if (
+    manifest.schemaVersion !== RELEASE_MANIFEST_SCHEMA_VERSION ||
+    manifest.product !== "caelush" ||
+    typeof manifest.version !== "string" ||
+    manifest.version.length === 0 ||
+    typeof manifest.platform !== "string" ||
+    typeof manifest.arch !== "string" ||
+    typeof manifest.nodeRange !== "string" ||
+    typeof manifest.createdAt !== "string" ||
+    manifest.protocolVersion !== 1 ||
+    (manifest.sandboxRunner !== "PACKAGED" && manifest.sandboxRunner !== "UNAVAILABLE") ||
+    manifest.featureGates === null ||
+    typeof manifest.featureGates !== "object"
+  ) {
+    throw new Error("Invalid release manifest metadata.");
+  }
+  const featureGates = manifest.featureGates;
+  if (
+    typeof featureGates.permissionPresetsV1 !== "boolean" ||
+    typeof featureGates.runtimeSandboxV1 !== "boolean" ||
+    typeof featureGates.fullAccessV1 !== "boolean"
+  ) {
+    throw new Error("Invalid release feature gates.");
+  }
+  if (featureGates.runtimeSandboxV1 && manifest.sandboxRunner !== "PACKAGED") {
+    throw new Error("runtimeSandboxV1 requires a packaged sandbox runner.");
+  }
+  if (manifest.sandboxRunner === "PACKAGED") {
+    try {
+      validateSandboxRunnerManifest(manifest.sandboxRunnerManifest);
+    } catch (error) {
+      throw new Error("Packaged release requires a valid sandbox runner manifest.", {
+        cause: error,
+      });
+    }
+  } else if (manifest.sandboxRunnerManifest !== undefined) {
+    throw new Error("Unavailable release cannot include a sandbox runner manifest.");
+  }
+  return Object.freeze({
+    schemaVersion: RELEASE_MANIFEST_SCHEMA_VERSION,
+    product: "caelush",
+    version: manifest.version,
+    platform: manifest.platform,
+    arch: manifest.arch,
+    nodeRange: manifest.nodeRange,
+    createdAt: manifest.createdAt,
+    protocolVersion: 1,
+    sandboxRunner: manifest.sandboxRunner,
+    featureGates: Object.freeze({ ...featureGates }),
+    ...(manifest.sandboxRunnerManifest === undefined
+      ? {}
+      : { sandboxRunnerManifest: Object.freeze({ ...manifest.sandboxRunnerManifest }) }),
+  });
+}
 
 export function getPlatformArtifactName(version, platform = process.platform, arch = process.arch) {
   const platformName =
@@ -96,28 +184,28 @@ export async function buildRelease(options = {}) {
     await removePnpmBuildMetadata(deployDirectory);
     await assertPortableArtifact(deployDirectory, workspaceVersions);
     let sandboxRunnerStatus = "UNAVAILABLE";
+    let sandboxRunnerManifest;
     if (options.buildSandboxRunner === true) {
-      await buildSandboxRunner({
+      const runner = await buildSandboxRunner({
         repositoryRoot,
         outputDirectory: join(deployDirectory, "sandbox-runner"),
       });
       sandboxRunnerStatus = "PACKAGED";
+      sandboxRunnerManifest = runner.manifest;
     }
 
     const launcherManifest = JSON.parse(
       await readFile(join(deployDirectory, "package.json"), "utf8"),
     );
     const version = launcherManifest.version;
-    const manifest = {
-      product: "caelush",
+    const manifest = createReleaseManifest({
       version,
       platform: platformName(process.platform),
       arch: process.arch,
-      nodeRange: NODE_RANGE,
-      createdAt: new Date().toISOString(),
-      protocolVersion: 1,
       sandboxRunner: sandboxRunnerStatus,
-    };
+      ...(sandboxRunnerManifest === undefined ? {} : { sandboxRunnerManifest }),
+      ...(options.featureGates === undefined ? {} : { featureGates: options.featureGates }),
+    });
     await writeFile(
       join(deployDirectory, "manifest.json"),
       `${JSON.stringify(manifest, null, 2)}\n`,

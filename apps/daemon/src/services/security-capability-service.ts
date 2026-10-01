@@ -16,6 +16,7 @@ import type {
   ProcessSandboxProbe,
   SandboxEnforcement,
 } from "@caelush/runtime";
+import type { SecurityFeatureGates } from "./security-feature-gates.js";
 
 export interface WorkspacePreparationPort {
   readonly supported: boolean;
@@ -35,6 +36,7 @@ export interface SecurityCapabilityServiceOptions {
   readonly fullAccessAvailable?: boolean;
   readonly ttySupported?: boolean;
   readonly workspacePreparation?: WorkspacePreparationPort;
+  readonly featureGates?: SecurityFeatureGates;
 }
 
 export interface RunSecurityRuntimeFacts {
@@ -60,6 +62,7 @@ export class SecurityCapabilityService {
   private readonly fullAccessAvailable: boolean;
   private readonly ttySupported: boolean;
   private readonly workspacePreparation: WorkspacePreparationPort | undefined;
+  private readonly featureGates: SecurityFeatureGates;
   private probesPromise: Promise<readonly ProcessSandboxProbe[]> | undefined;
 
   constructor(options: SecurityCapabilityServiceOptions = {}) {
@@ -72,6 +75,11 @@ export class SecurityCapabilityService {
     this.fullAccessAvailable = options.fullAccessAvailable ?? true;
     this.ttySupported = options.ttySupported ?? false;
     this.workspacePreparation = options.workspacePreparation;
+    this.featureGates = options.featureGates ?? {
+      permissionPresetsV1: true,
+      runtimeSandboxV1: true,
+      fullAccessV1: true,
+    };
   }
 
   async getGlobalCapabilities(): Promise<SecurityCapabilitiesResponse> {
@@ -105,15 +113,33 @@ export class SecurityCapabilityService {
     );
     const availability = await Promise.all(
       this.catalog.map(async (preset): Promise<SecurityPolicyPresetAvailability> => {
+        if (!this.featureGates.permissionPresetsV1) {
+          return {
+            id: preset.id,
+            version: preset.version,
+            status: "UNAVAILABLE",
+            reasonCode: "PERMISSION_PRESETS_DISABLED",
+          };
+        }
         if (preset.id === "FULL_ACCESS") {
-          return this.fullAccessAvailable
+          return this.fullAccessAvailable && this.featureGates.fullAccessV1
             ? { id: preset.id, version: preset.version, status: "AVAILABLE" }
             : {
                 id: preset.id,
                 version: preset.version,
                 status: "UNAVAILABLE",
-                reasonCode: "FULL_ACCESS_DISABLED",
+                reasonCode: this.featureGates.fullAccessV1
+                  ? "FULL_ACCESS_DISABLED"
+                  : "FULL_ACCESS_FEATURE_DISABLED",
               };
+        }
+        if (!this.featureGates.runtimeSandboxV1) {
+          return {
+            id: preset.id,
+            version: preset.version,
+            status: "UNAVAILABLE",
+            reasonCode: "RUNTIME_SANDBOX_DISABLED",
+          };
         }
         if (sandbox.status !== "AVAILABLE" || sandbox.enforcement === "NONE") {
           return {
@@ -216,6 +242,16 @@ export class SecurityCapabilityService {
     readonly provider: string;
     readonly reasonCode?: string;
   }> {
+    if (!this.featureGates.runtimeSandboxV1) {
+      return this.fullAccessAvailable && this.featureGates.fullAccessV1
+        ? { status: "AVAILABLE", enforcement: "NONE", provider: "unrestricted" }
+        : {
+            status: "UNAVAILABLE",
+            enforcement: "NONE",
+            provider: "disabled",
+            reasonCode: "RUNTIME_SANDBOX_DISABLED",
+          };
+    }
     const probes = await this.probes();
     const available = probes
       .filter(

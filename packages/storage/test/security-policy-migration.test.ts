@@ -9,13 +9,14 @@ import {
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import {
+  assertFinalizedRunSecurityPolicies,
   finalizeRunSecurityPolicies,
   migrateLegacyRunSecurityPolicy,
   verifyRunSecurityPolicySnapshot,
 } from "../src/security-policy-migration.js";
 import { openCaelushDatabase } from "../src/database.js";
 import { migrateCaelushDatabase } from "../src/migrate.js";
-import { StorageSecurityPolicyError } from "../src/errors.js";
+import { StorageMigrationError, StorageSecurityPolicyError } from "../src/errors.js";
 import { legacySecurityPolicyFixtures } from "./security-policy-fixtures.js";
 
 function legacyRun(
@@ -122,6 +123,12 @@ describe("Run security policy migration", () => {
 
       expect(JSON.parse(first.data_json).securityPolicy.preset.id).toBe("VIEW_ONLY");
       expect(second.data_json).toBe(first.data_json);
+      expect(() => assertFinalizedRunSecurityPolicies(database)).not.toThrow();
+
+      database.client
+        .prepare("UPDATE agent_runs SET data_json = ? WHERE id = ?")
+        .run(JSON.stringify(legacy), legacy.id);
+      expect(() => assertFinalizedRunSecurityPolicies(database)).toThrow(StorageMigrationError);
     } finally {
       database.close();
     }

@@ -98,4 +98,31 @@ describe("security capability routes", () => {
     ).toMatchObject({ status: "UNAVAILABLE", reasonCode: "RUNNER_HASH_MISMATCH" });
     await app.close();
   });
+
+  it("disables only the capabilities selected by host rollout gates", async () => {
+    const service = new SecurityCapabilityService({
+      processSandboxProviders: [provider],
+      fullAccessAvailable: true,
+      featureGates: {
+        permissionPresetsV1: true,
+        runtimeSandboxV1: false,
+        fullAccessV1: true,
+      },
+    });
+    const response = await service.getWorkspaceCapabilities(
+      "wsp_00000000-0000-7000-8000-000000000000" as never,
+    );
+
+    expect(response.presets.find((preset) => preset.id === "VIEW_ONLY")).toMatchObject({
+      status: "UNAVAILABLE",
+      reasonCode: "RUNTIME_SANDBOX_DISABLED",
+    });
+    expect(response.presets.find((preset) => preset.id === "WORKSPACE_WRITE")).toMatchObject({
+      status: "UNAVAILABLE",
+      reasonCode: "RUNTIME_SANDBOX_DISABLED",
+    });
+    expect(response.presets.find((preset) => preset.id === "FULL_ACCESS")).toMatchObject({
+      status: "AVAILABLE",
+    });
+  });
 });

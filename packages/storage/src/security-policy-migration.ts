@@ -150,6 +150,48 @@ export function migrateLegacyRunSecurityPolicy(input: LegacyRunSecurityPolicyRow
   return { ...run, securityPolicy: createSnapshot(run) };
 }
 
+/**
+ * Recovery-point assertion used after the finalizer and by doctor/migration tests.
+ * Every persisted Run must be readable by the current immutable-policy reader before Storage opens
+ * its repositories; missing or malformed snapshots are an incompatible database state, not a
+ * reason to silently reconstruct policy from current defaults.
+ */
+export function assertFinalizedRunSecurityPolicies(database: CaelushDatabase): void {
+  const rows = database.client
+    .prepare("SELECT id, data_json FROM agent_runs ORDER BY id ASC")
+    .all() as Array<{ id: string; data_json: string }>;
+  for (const row of rows) {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(row.data_json) as unknown;
+    } catch (error) {
+      throw new StorageMigrationError(`Run security policy JSON is malformed for ${row.id}`, {
+        cause: error,
+      });
+    }
+    let run: AgentRun;
+    try {
+      run = AgentRunSchema.parse(raw);
+    } catch (error) {
+      throw new StorageMigrationError(`Run security policy row is incompatible for ${row.id}`, {
+        cause: error,
+      });
+    }
+    if (run.id !== row.id || run.securityPolicy === undefined) {
+      throw new StorageMigrationError(
+        `Run security policy finalization is incomplete for ${row.id}`,
+      );
+    }
+    try {
+      verifyRunSecurityPolicySnapshot(run.securityPolicy);
+    } catch (error) {
+      throw new StorageMigrationError(`Run security policy verification failed for ${row.id}`, {
+        cause: error,
+      });
+    }
+  }
+}
+
 /** Finalize every old `agent_runs.data_json` row exactly once after published migrations. */
 export function finalizeRunSecurityPolicies(database: CaelushDatabase): void {
   const rows = database.client
@@ -185,6 +227,7 @@ export function finalizeRunSecurityPolicies(database: CaelushDatabase): void {
         .prepare("UPDATE agent_runs SET data_json = ? WHERE id = ?")
         .run(JSON.stringify(migrated), row.id);
     }
+    assertFinalizedRunSecurityPolicies(database);
     client.exec("COMMIT");
   } catch (error) {
     try {
