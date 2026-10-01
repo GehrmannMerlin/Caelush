@@ -1,42 +1,63 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { readdir } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { join, relative, resolve } from "node:path";
 import process from "node:process";
 import { URL, fileURLToPath } from "node:url";
 import { validateReleaseManifest } from "./build-release.mjs";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const releaseDirectory = join(repositoryRoot, "release-artifacts");
+const MAX_TAR_INSPECTION_BYTES = 128 * 1024 * 1024;
 
 export function inspectReleaseArtifact(artifactPath) {
-  const releaseManifest = JSON.parse(readTarText(artifactPath, "manifest.json"));
-  validateReleaseManifest(releaseManifest);
-  const entries = listTarEntries(artifactPath);
-  verifyChecksums(artifactPath, entries, readTarText(artifactPath, "checksums.sha256"));
-  const manifestChecksum = readTarText(artifactPath, "manifest.sha256").trim().split(/\s+/)[0];
-  const actualManifestChecksum = createHash("sha256")
-    .update(readTarBuffer(artifactPath, "manifest.json"))
-    .digest("hex");
-  if (manifestChecksum !== actualManifestChecksum) {
-    throw new Error("Release manifest checksum mismatch.");
-  }
+  const inspectionDirectory = mkdtempSync(join(tmpdir(), "caelush-release-inspect-"));
+  try {
+    extractReleaseArtifact(artifactPath, inspectionDirectory);
+    const releaseManifest = JSON.parse(readExtractedText(inspectionDirectory, "manifest.json"));
+    validateReleaseManifest(releaseManifest);
+    const entries = listExtractedEntries(inspectionDirectory);
+    verifyChecksumRecords(
+      (path) => readExtractedBuffer(inspectionDirectory, path),
+      entries,
+      readExtractedText(inspectionDirectory, "checksums.sha256"),
+    );
+    const manifestChecksum = readExtractedText(inspectionDirectory, "manifest.sha256")
+      .trim()
+      .split(/\s+/)[0];
+    const actualManifestChecksum = createHash("sha256")
+      .update(readExtractedBuffer(inspectionDirectory, "manifest.json"))
+      .digest("hex");
+    if (manifestChecksum !== actualManifestChecksum) {
+      throw new Error("Release manifest checksum mismatch.");
+    }
 
-  if (releaseManifest.sandboxRunner === "PACKAGED") {
-    const runnerManifestPath = "sandbox-runner/manifest.json";
-    if (!entries.has(runnerManifestPath)) {
-      throw new Error("Release claims a packaged sandbox runner but its manifest is missing.");
+    if (releaseManifest.sandboxRunner === "PACKAGED") {
+      const runnerManifestPath = "sandbox-runner/manifest.json";
+      if (!entries.has(runnerManifestPath)) {
+        throw new Error("Release claims a packaged sandbox runner but its manifest is missing.");
+      }
+      const sandboxManifest = JSON.parse(
+        readExtractedText(inspectionDirectory, runnerManifestPath),
+      );
+      const runnerEntry = `sandbox-runner/${sandboxManifest.executableName}`;
+      if (!entries.has(runnerEntry)) {
+        throw new Error("Release sandbox manifest names an executable that is not packaged.");
+      }
     }
-    const sandboxManifest = JSON.parse(readTarText(artifactPath, runnerManifestPath));
-    const runnerEntry = `sandbox-runner/${sandboxManifest.executableName}`;
-    if (!entries.has(runnerEntry)) {
-      throw new Error("Release sandbox manifest names an executable that is not packaged.");
-    }
+    return releaseManifest;
+  } finally {
+    rmSync(inspectionDirectory, { recursive: true, force: true });
   }
-  return releaseManifest;
 }
 
 export function verifyChecksums(artifactPath, entries, checksums) {
+  verifyChecksumRecords((path) => readTarBuffer(artifactPath, path), entries, checksums);
+}
+
+function verifyChecksumRecords(readBuffer, entries, checksums) {
   const records = checksums
     .trim()
     .split(/\r?\n/)
@@ -51,38 +72,56 @@ export function verifyChecksums(artifactPath, entries, checksums) {
     if (!entries.has(record.path)) {
       throw new Error(`Release checksum entry is not packaged: ${record.path}`);
     }
-    const actual = createHash("sha256")
-      .update(readTarBuffer(artifactPath, record.path))
-      .digest("hex");
+    const actual = createHash("sha256").update(readBuffer(record.path)).digest("hex");
     if (actual !== record.hash) throw new Error(`Release checksum mismatch: ${record.path}`);
   }
-}
-
-function readTarText(artifactPath, path) {
-  return readTarBuffer(artifactPath, path).toString("utf8");
 }
 
 function readTarBuffer(artifactPath, path) {
   const result = spawnSync("tar", ["-xOzf", artifactPath, `./${path}`], {
     encoding: null,
+    maxBuffer: MAX_TAR_INSPECTION_BYTES,
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (result.status !== 0) throw new Error(`Unable to inspect release entry: ${path}`);
   return result.stdout;
 }
 
-function listTarEntries(artifactPath) {
-  const result = spawnSync("tar", ["-tzf", artifactPath], {
+function extractReleaseArtifact(artifactPath, inspectionDirectory) {
+  const result = spawnSync("tar", ["-xzf", artifactPath, "-C", inspectionDirectory], {
     encoding: "utf8",
+    maxBuffer: MAX_TAR_INSPECTION_BYTES,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  if (result.status !== 0) throw new Error(`Unable to list release archive: ${result.stderr}`);
-  return new Set(
-    result.stdout
-      .split(/\r?\n/)
-      .map((entry) => entry.replace(/^\.\//, ""))
-      .filter(Boolean),
-  );
+  if (result.status !== 0) {
+    throw new Error(
+      `Unable to extract release archive: ${result.error?.message ?? result.stderr.trim()}`,
+    );
+  }
+}
+
+function readExtractedText(directory, path) {
+  return readExtractedBuffer(directory, path).toString("utf8");
+}
+
+function readExtractedBuffer(directory, path) {
+  return readFileSync(join(directory, ...path.split("/")));
+}
+
+function listExtractedEntries(directory) {
+  const entries = new Set();
+  const visit = (currentDirectory) => {
+    for (const entry of readdirSync(currentDirectory, { withFileTypes: true })) {
+      const entryPath = join(currentDirectory, entry.name);
+      if (entry.isDirectory()) {
+        visit(entryPath);
+        continue;
+      }
+      entries.add(relative(directory, entryPath).replaceAll("\\", "/"));
+    }
+  };
+  visit(directory);
+  return entries;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

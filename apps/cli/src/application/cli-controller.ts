@@ -581,7 +581,9 @@ export class CliConversationController {
         defaultModel: info.defaultModel,
         metadata: {},
       });
-      await this.enterSession(session, [], this.workspace);
+      const canonicalWorkspace = session.defaultWorkspace ?? this.workspace;
+      this.workspace = canonicalWorkspace;
+      await this.enterSession(session, [], canonicalWorkspace);
       return;
     }
 

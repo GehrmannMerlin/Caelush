@@ -11,7 +11,9 @@ import {
   type DefaultRunConfiguration,
   type HealthResponse,
   type RunListResponse,
+  type SecurityCapabilitiesResponse,
   type SessionListResponse,
+  type WorkspaceSecurityCapabilitiesResponse,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import { CaelushClientProtocolError } from "@caelush/client";
@@ -141,6 +143,58 @@ describe("CliConversationController", () => {
       composerEnabled: true,
       activity: "Ready",
     });
+  });
+
+  it("uses the canonical WorkspaceRef returned by Session creation for capability checks", async () => {
+    const canonicalWorkspace = {
+      id: createWorkspaceId(),
+      path: "C:\\workspace\\canonical-project",
+    };
+    const session = { ...makeSession(), defaultWorkspace: canonicalWorkspace };
+    const capabilities = {
+      schemaVersion: 1,
+      defaultPreset: "WORKSPACE_WRITE",
+      presets: [
+        {
+          id: "WORKSPACE_WRITE",
+          version: 1,
+          displayName: "Workspace write",
+          description: "Modify files in the workspace.",
+          permissionProfile: "PROJECT_ACCESS",
+          approvalPolicy: "ON_BOUNDARY",
+          filesystemBoundary: "WORKSPACE_READ_WRITE",
+          processBoundary: "WORKSPACE_WRITE",
+          requiredEnforcement: "OS_RESTRICTED",
+          requiresConfirmation: false,
+        },
+      ],
+      processSandbox: { status: "AVAILABLE", enforcement: "HARD", provider: "fixture" },
+      ttySupported: false,
+      workspacePreparationSupported: false,
+    } satisfies SecurityCapabilitiesResponse;
+    const client = makeClient({
+      createSession: async () => session,
+      getSecurityCapabilities: async () => capabilities,
+      getWorkspaceSecurityCapabilities: async (workspaceId) => {
+        expect(workspaceId).toBe(canonicalWorkspace.id);
+        return {
+          schemaVersion: 1,
+          workspaceId: canonicalWorkspace.id,
+          presets: [{ id: "WORKSPACE_WRITE", version: 1, status: "AVAILABLE" }],
+          preparation: { supported: false, status: "NOT_REQUIRED" },
+        } satisfies WorkspaceSecurityCapabilitiesResponse;
+      },
+    });
+    const controller = new CliConversationController({
+      client,
+      workspacePath: "C:\\workspace\\project",
+    });
+
+    await controller.bootstrap();
+
+    expect(controller.getState().bootstrap).toBe("READY");
+    expect(controller.getState().workspace).toEqual(canonicalWorkspace);
+    controller.dispose();
   });
 
   it("creates one guarded Run and starts the watch before startRun", async () => {

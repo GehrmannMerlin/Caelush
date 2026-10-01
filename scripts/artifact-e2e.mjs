@@ -30,6 +30,13 @@ if (extraction.status !== 0) {
 
 const manifest = JSON.parse(await readFile(join(bundleDirectory, "manifest.json"), "utf8"));
 const binPath = join(bundleDirectory, "bin", "caelush");
+const useRestrictedPermission = manifest.featureGates.runtimeSandboxV1 === true;
+if (!useRestrictedPermission && manifest.featureGates.fullAccessV1 !== true) {
+  throw new Error("Release smoke requires either a runtime sandbox or Full Access capability.");
+}
+const permissionArgs = useRestrictedPermission ? [] : ["--permission", "full-access"];
+const runConfiguredLauncher = (args, options) =>
+  runLauncher(binPath, [...args, ...permissionArgs], options);
 const provider = await startFakeProvider();
 const hostFetch = globalThis.fetch.bind(globalThis);
 const secret = "PHASE12E_SECRET_SENTINEL";
@@ -40,6 +47,13 @@ const environment = {
   CAELUSH_PROVIDER_BASE_URL: provider.url,
   CAELUSH_PROVIDER_API_KEY: secret,
   CAELUSH_PROVIDER_ALLOWED_MODELS: "fixture-model",
+  CAELUSH_PROVIDER_MODEL_PROFILES: JSON.stringify({
+    "fixture-model": {
+      contextWindowTokens: 32_000,
+      maxOutputTokens: 16_384,
+      recommendedOutputReserveTokens: 1_024,
+    },
+  }),
   CAELUSH_DEFAULT_PROVIDER: "openai-compatible",
   CAELUSH_DEFAULT_MODEL: "fixture-model",
 };
@@ -230,19 +244,23 @@ try {
   assert(!doctor.stdout.includes(secret), "doctor leaked the provider secret");
 
   const initialDaemonCount = await countArtifactDaemons(bundleDirectory);
-  const single = await runLauncher(binPath, ["-p", "Reply exactly PACKAGE_OK"], {
-    cwd: workspaceDirectory,
-    env: environment,
-  });
+  const single = await runConfiguredLauncher(
+    ["-p", "Reply exactly PACKAGE_OK", "--output-format", "json"],
+    {
+      cwd: workspaceDirectory,
+      env: environment,
+    },
+  );
+  const singleResult = JSON.parse(single.stdout);
   assert(
-    single.exitCode === 0,
+    single.exitCode === 0 && singleResult.success === true,
     `single-command artifact E2E failed: stdout=${single.stdout}; stderr=${single.stderr}`,
   );
-  assert(single.stdout.trim() === "PACKAGE_OK", "single-command output was not exact");
+  assert(singleResult.finalText === "PACKAGE_OK", "single-command output was not exact");
   const reusedDaemonCount = await countArtifactDaemons(bundleDirectory);
   assert(reusedDaemonCount === initialDaemonCount + 1, "single-command did not start one daemon");
 
-  const reused = await runLauncher(binPath, ["-p", "Reply exactly REUSE_OK"], {
+  const reused = await runConfiguredLauncher(["-p", "Reply exactly REUSE_OK"], {
     cwd: workspaceDirectory,
     env: environment,
   });
@@ -257,7 +275,7 @@ try {
   const pipeWorkspace = join(testRoot, "pipe-workspace");
   await mkdir(pipeHome, { recursive: true });
   await mkdir(pipeWorkspace, { recursive: true });
-  const piped = await runLauncher(binPath, ["-p"], {
+  const piped = await runConfiguredLauncher(["-p"], {
     cwd: pipeWorkspace,
     env: { ...environment, CAELUSH_HOME: pipeHome },
     input: "Reply exactly PIPE_OK\n",
@@ -270,12 +288,12 @@ try {
   await mkdir(continueHome, { recursive: true });
   await mkdir(continueWorkspace, { recursive: true });
   const continueEnvironment = { ...environment, CAELUSH_HOME: continueHome };
-  const remembered = await runLauncher(binPath, ["-p", "Remember marker PACKAGED-ORANGE-912"], {
+  const remembered = await runConfiguredLauncher(["-p", "Remember marker PACKAGED-ORANGE-912"], {
     cwd: continueWorkspace,
     env: continueEnvironment,
   });
   assert(remembered.exitCode === 0, `packaged Session seed failed: ${remembered.stderr}`);
-  const continued = await runLauncher(binPath, ["-c", "-p", "What marker did I mention?"], {
+  const continued = await runConfiguredLauncher(["-c", "-p", "What marker did I mention?"], {
     cwd: continueWorkspace,
     env: continueEnvironment,
   });
@@ -291,11 +309,11 @@ try {
   await mkdir(parallelWorkspaceA, { recursive: true });
   await mkdir(parallelWorkspaceB, { recursive: true });
   const parallelResults = await Promise.all([
-    runLauncher(binPath, ["-p", "read fixture file", "--output-format", "json"], {
+    runConfiguredLauncher(["-p", "read fixture file", "--output-format", "json"], {
       cwd: parallelWorkspaceA,
       env: { ...environment, CAELUSH_HOME: parallelHome },
     }),
-    runLauncher(binPath, ["-p", "read fixture file again", "--output-format", "json"], {
+    runConfiguredLauncher(["-p", "read fixture file again", "--output-format", "json"], {
       cwd: parallelWorkspaceB,
       env: { ...environment, CAELUSH_HOME: parallelHome },
     }),
@@ -324,36 +342,41 @@ try {
   await mkdir(patchWorkspace, { recursive: true });
   await writeFile(join(patchWorkspace, "fixture.txt"), "before patch\n", "utf8");
   const patchEnvironment = { ...environment, CAELUSH_HOME: patchHome };
-  const patchRequest = await runLauncher(
-    binPath,
+  const patchRequest = await runConfiguredLauncher(
     ["-p", "patch fixture", "--output-format", "json"],
     { cwd: patchWorkspace, env: patchEnvironment },
   );
-  assert(patchRequest.exitCode === 5, "protected file mutation did not stop at approval");
   const patchResult = JSON.parse(patchRequest.stdout);
-  assert(patchResult.requiresApproval === true, "approval result did not identify the boundary");
-  assert(typeof patchResult.runId === "string", "approval result did not expose a safe run id");
-  const clientModule = pathToFileURL(
-    join(bundleDirectory, "node_modules", "@caelush", "client", "dist", "index.js"),
-  ).href;
-  const packagedClient = await import(clientModule);
-  const patchClient = new packagedClient.CaelushClient({
-    baseUrl: "http://127.0.0.1:43120",
-  });
-  const pendingApproval = await waitForPendingApproval(patchClient, patchResult.runId);
-  await patchClient.resolveApproval(patchResult.runId, pendingApproval.id, {
-    action: "APPROVE",
-    scope: "ONCE",
-  });
-  const patchedRun = await waitForTerminalRun(patchClient, patchResult.runId);
-  assert(patchedRun.status === "COMPLETED", "approved artifact patch did not complete");
+  if (useRestrictedPermission) {
+    assert(patchRequest.exitCode === 5, "protected file mutation did not stop at approval");
+    assert(patchResult.requiresApproval === true, "approval result did not identify the boundary");
+    assert(typeof patchResult.runId === "string", "approval result did not expose a safe run id");
+    const clientModule = pathToFileURL(
+      join(bundleDirectory, "node_modules", "@caelush", "client", "dist", "index.js"),
+    ).href;
+    const packagedClient = await import(clientModule);
+    const patchClient = new packagedClient.CaelushClient({
+      baseUrl: "http://127.0.0.1:43120",
+    });
+    const pendingApproval = await waitForPendingApproval(patchClient, patchResult.runId);
+    await patchClient.resolveApproval(patchResult.runId, pendingApproval.id, {
+      action: "APPROVE",
+      scope: "ONCE",
+    });
+    const patchedRun = await waitForTerminalRun(patchClient, patchResult.runId);
+    assert(patchedRun.status === "COMPLETED", "approved artifact patch did not complete");
+  } else {
+    assert(
+      patchRequest.exitCode === 0 && patchResult.success === true,
+      `Full Access artifact patch failed: ${patchRequest.stderr}`,
+    );
+  }
   assert(
     (await readFile(join(patchWorkspace, "fixture.txt"), "utf8")) === "after patch\n",
-    "approved artifact patch did not mutate the workspace",
+    "artifact patch did not mutate the workspace",
   );
 
-  const stream = await runLauncher(
-    binPath,
+  const stream = await runConfiguredLauncher(
     ["-p", "stream fixture", "--output-format", "stream-json"],
     {
       cwd: workspaceDirectory,
@@ -621,7 +644,7 @@ function probeDescriptor(provider, model, api) {
   return {
     ref: { provider, model },
     api,
-    limits: { contextWindowTokens: 32_000, maxOutputTokens: 4_096 },
+    limits: { contextWindowTokens: 32_000, maxOutputTokens: 16_384 },
     capabilities: {
       streaming: "SUPPORTED",
       toolCalling: "SUPPORTED",
