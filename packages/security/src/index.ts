@@ -3,11 +3,17 @@ export { classifyExecutionContainment, requiresUnconfinedProcess } from "./conta
 export type { ExecutionContainment } from "./containment.js";
 export { evaluateLogicalSandboxAdmission } from "./logical-sandbox.js";
 export type { LogicalSandboxAdmission, LogicalSandboxAdmissionInput } from "./logical-sandbox.js";
-export { evaluateSecurityPolicy, securityPolicyEvaluator } from "./evaluator.js";
+export {
+  evaluateSecurityDecision,
+  evaluateSecurityPolicy,
+  securityPolicyEvaluator,
+} from "./evaluator.js";
 export { combineSecurityDecisions } from "./decision.js";
 export type {
   SecurityDecision,
   SecurityDecisionCode,
+  SecurityDecisionContext,
+  SecurityDecisionInput,
   SecurityPolicyEvaluator,
   SecurityPolicyInput,
 } from "./decision.js";
@@ -93,6 +99,35 @@ export type {
   CommandPolicyAnalysis,
   CommandPolicyInput,
 } from "./command-policy.js";
+export {
+  assertPermissionPresetDescriptor,
+  expandPermissionPreset,
+  getPermissionPresetCatalog,
+} from "./preset-catalog.js";
+export type {
+  ExpandPermissionPresetInput,
+  PermissionPresetHostConstraints,
+  PermissionPresetTemplate,
+} from "./preset-catalog.js";
+export { computePolicyDigest, verifyPolicyDigest } from "./policy-digest.js";
+export { assessCommandEffect } from "./effect-assessment.js";
+export type {
+  AssessCommandEffectInput,
+  CommandEffectAssessment,
+  EffectConfidence,
+  EffectDeleteFact,
+  EffectPathFact,
+  EffectPathRelation,
+  RecursiveDeleteResolution,
+} from "./effect-assessment.js";
+export { evaluateHardSafety } from "./hard-safety-policy.js";
+export type { HardSafetyDecision, HardSafetyReasonCode } from "./hard-safety-policy.js";
+export { classifyRecursiveDelete } from "./recursive-delete-policy.js";
+export type {
+  RecursiveDeleteAssessment,
+  RecursiveDeleteEffect,
+  RecursiveDeleteReasonCode,
+} from "./recursive-delete-policy.js";
 export {
   assessVerificationCommand,
   verificationEvidenceSanitizer,

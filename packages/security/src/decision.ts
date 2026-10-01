@@ -1,10 +1,13 @@
 import type {
   ApprovalPolicy,
   Capability,
+  FilesystemBoundary,
   JsonObject,
   PermissionProfile,
+  ProcessBoundary,
   RiskLevel,
 } from "@caelush/protocol";
+import type { CommandEffectAssessment } from "./effect-assessment.js";
 
 export type SecurityDecisionCode =
   | "ALLOWED_BY_POLICY"
@@ -29,7 +32,19 @@ export type SecurityDecisionCode =
   | "OPAQUE_INPUT_BLOCKED_WITHOUT_APPROVAL"
   | "SECRET_BEARING_INPUT_REQUIRES_REVIEW"
   | "SECRET_BEARING_INPUT_BLOCKED_WITHOUT_APPROVAL"
-  | "SYSTEM_DESTRUCTIVE_COMMAND_DENIED";
+  | "SYSTEM_DESTRUCTIVE_COMMAND_DENIED"
+  | "POWER_CONTROL_DENIED"
+  | "DISK_PARTITION_MUTATION_DENIED"
+  | "RAW_DEVICE_DENIED"
+  | "SYSTEM_POLICY_MUTATION_DENIED"
+  | "PRIVILEGE_ESCALATION_DENIED"
+  | "UNMANAGED_PROCESS_TERMINATION_DENIED"
+  | "SECRET_EXFILTRATION_DENIED"
+  | "RECURSIVE_DELETE_UNRESOLVED"
+  | "PROTECTED_ROOT_MUTATION"
+  | "APPROVAL_REQUIRED_BUT_NEVER_ASK"
+  | "PRESET_BOUNDARY_DENIED"
+  | "PRESET_BOUNDARY_REQUIRES_REVIEW";
 
 export type SecurityDecision =
   | {
@@ -51,7 +66,18 @@ export type SecurityDecision =
         | "OPAQUE_COMMAND_BLOCKED_WITHOUT_APPROVAL"
         | "OPAQUE_INPUT_BLOCKED_WITHOUT_APPROVAL"
         | "SECRET_BEARING_INPUT_BLOCKED_WITHOUT_APPROVAL"
-        | "SYSTEM_DESTRUCTIVE_COMMAND_DENIED";
+        | "SYSTEM_DESTRUCTIVE_COMMAND_DENIED"
+        | "POWER_CONTROL_DENIED"
+        | "DISK_PARTITION_MUTATION_DENIED"
+        | "RAW_DEVICE_DENIED"
+        | "SYSTEM_POLICY_MUTATION_DENIED"
+        | "PRIVILEGE_ESCALATION_DENIED"
+        | "UNMANAGED_PROCESS_TERMINATION_DENIED"
+        | "SECRET_EXFILTRATION_DENIED"
+        | "RECURSIVE_DELETE_UNRESOLVED"
+        | "PROTECTED_ROOT_MUTATION"
+        | "APPROVAL_REQUIRED_BUT_NEVER_ASK"
+        | "PRESET_BOUNDARY_DENIED";
       readonly safeReason: string;
       readonly safeAction?: JsonObject;
     }
@@ -68,7 +94,8 @@ export type SecurityDecision =
         | "PRIVILEGED_COMMAND_REQUIRES_REVIEW"
         | "OPAQUE_COMMAND_REQUIRES_REVIEW"
         | "OPAQUE_INPUT_REQUIRES_REVIEW"
-        | "SECRET_BEARING_INPUT_REQUIRES_REVIEW";
+        | "SECRET_BEARING_INPUT_REQUIRES_REVIEW"
+        | "PRESET_BOUNDARY_REQUIRES_REVIEW";
       readonly safeReason: string;
       readonly safeAction?: JsonObject;
     };
@@ -79,6 +106,15 @@ export interface SecurityPolicyInput {
   readonly riskLevel: RiskLevel;
   readonly requiredCapabilities: readonly Capability[];
 }
+
+export interface SecurityDecisionInput extends SecurityPolicyInput {
+  readonly effect?: CommandEffectAssessment;
+  readonly approvalRequired?: boolean;
+  readonly filesystemBoundary?: FilesystemBoundary;
+  readonly processBoundary?: ProcessBoundary;
+}
+
+export type SecurityDecisionContext = SecurityDecisionInput;
 
 export interface SecurityPolicyEvaluator {
   evaluate(input: SecurityPolicyInput): SecurityDecision;

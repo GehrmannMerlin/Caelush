@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   evaluateSecurityPolicy,
+  evaluateSecurityDecision,
+  assessCommandEffect,
   type SecurityPolicyInput,
   type SecurityDecision,
 } from "../src/index.js";
@@ -98,6 +100,107 @@ describe("security policy decision matrix", () => {
       "ALLOW",
       "ALLOWED_BY_POLICY",
     );
+  });
+
+  it("allows Workspace Write structured edits without an approval wait", () => {
+    expect(
+      evaluateSecurityDecision({
+        ...input("PROJECT_ACCESS", "ON_BOUNDARY", "LOW", ["FS_WRITE"]),
+        effect: {
+          confidence: "EXACT",
+          filesystem: {
+            reads: [],
+            writes: [{ path: "src/app.ts", relation: "WORKSPACE", exact: true }],
+            deletes: [],
+            unknownTargets: false,
+          },
+          process: {
+            spawnsChildren: false,
+            longRunning: false,
+            targetsManagedProcessIds: [],
+            targetsUnmanagedProcesses: false,
+          },
+          network: { mayAccessNetwork: false, knownDestinations: [], remoteMutation: false },
+          privilege: { requestsElevation: false, modifiesIdentityOrPermissions: false },
+          system: {
+            powerControl: false,
+            diskOrPartitionMutation: false,
+            serviceMutation: false,
+            securityPolicyMutation: false,
+            rawDeviceAccess: false,
+          },
+          secrets: {
+            readsKnownSecretMaterial: false,
+            sendsDataToNetwork: false,
+            detectedTaintIds: [],
+          },
+          execution: { dynamicEvaluation: false, opaqueBinary: false },
+        },
+      }),
+    ).toMatchObject({ kind: "ALLOW", reasonCode: "ALLOWED_BY_POLICY" });
+  });
+
+  it("allows Full Access network/publish effects after hard-safety review", () => {
+    expect(
+      evaluateSecurityDecision({
+        ...input("FULL_ACCESS", "NEVER_ASK", "LOW", ["SHELL_EXEC", "WEB_FETCH"]),
+        effect: assessCommandEffect({
+          command: "npm publish",
+          platform: "POSIX_SH",
+          workdir: ".",
+          tty: false,
+        }),
+      }),
+    ).toMatchObject({ kind: "ALLOW", reasonCode: "ALLOWED_BY_POLICY" });
+  });
+
+  it("denies an approval-required effect under NEVER_ASK instead of auto-allowing it", () => {
+    expect(
+      evaluateSecurityDecision({
+        ...input("FULL_ACCESS", "NEVER_ASK", "LOW", ["FS_WRITE"]),
+        approvalRequired: true,
+      }),
+    ).toMatchObject({ kind: "DENY", reasonCode: "APPROVAL_REQUIRED_BUT_NEVER_ASK" });
+  });
+
+  it("denies hard safety effects in every product profile", () => {
+    for (const permissionProfile of ["READ_ONLY", "PROJECT_ACCESS", "FULL_ACCESS"] as const) {
+      expect(
+        evaluateSecurityDecision({
+          ...input(
+            permissionProfile,
+            permissionProfile === "FULL_ACCESS" ? "NEVER_ASK" : "ON_BOUNDARY",
+            "LOW",
+            ["FS_READ"],
+          ),
+          effect: {
+            confidence: "EXACT",
+            filesystem: { reads: [], writes: [], deletes: [], unknownTargets: false },
+            process: {
+              spawnsChildren: false,
+              longRunning: false,
+              targetsManagedProcessIds: [],
+              targetsUnmanagedProcesses: false,
+            },
+            network: { mayAccessNetwork: false, knownDestinations: [], remoteMutation: false },
+            privilege: { requestsElevation: false, modifiesIdentityOrPermissions: false },
+            system: {
+              powerControl: true,
+              diskOrPartitionMutation: false,
+              serviceMutation: false,
+              securityPolicyMutation: false,
+              rawDeviceAccess: false,
+            },
+            secrets: {
+              readsKnownSecretMaterial: false,
+              sendsDataToNetwork: false,
+              detectedTaintIds: [],
+            },
+            execution: { dynamicEvaluation: false, opaqueBinary: false },
+          },
+        }),
+      ).toMatchObject({ kind: "DENY" });
+    }
   });
 
   it("evaluates unknown future metadata without Tool-name allowlists", () => {
