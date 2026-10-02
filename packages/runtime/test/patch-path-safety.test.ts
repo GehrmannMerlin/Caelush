@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -28,13 +28,24 @@ describe("mutation path boundaries", () => {
     await mkdir(outside);
     await writeFile(path.join(workspace, "src", "file.txt"), "content");
     await writeFile(path.join(outside, "secret.txt"), "secret");
+    const linkedDir = path.join(workspace, "linked-dir");
+    const linkedFile = path.join(workspace, "linked-file.txt");
     try {
-      await symlink(path.join(workspace, "src"), path.join(workspace, "linked-dir"));
-      await symlink(path.join(outside, "secret.txt"), path.join(workspace, "linked-file.txt"));
+      await symlink(path.join(workspace, "src"), linkedDir);
+      await symlink(path.join(outside, "secret.txt"), linkedFile);
     } catch (error) {
       skip(
         `symlink creation unavailable: ${error instanceof Error ? error.message : String(error)}`,
       );
+    }
+    // A resolved `symlink()` is not evidence that a link exists. A host without the privilege, or a
+    // sandbox that emulates links, can report success while materialising an ordinary entry; the
+    // assertions below would then be measuring a plain file and reporting a boundary defect that is
+    // not there. Measure the precondition instead of assuming it.
+    const linksAreReal =
+      (await lstat(linkedDir)).isSymbolicLink() && (await lstat(linkedFile)).isSymbolicLink();
+    if (!linksAreReal) {
+      skip("the host reported success but produced no symbolic link (readlink would fail)");
     }
     const scope = await new LocalRuntime().openWorkspace({
       id: createWorkspaceId(),

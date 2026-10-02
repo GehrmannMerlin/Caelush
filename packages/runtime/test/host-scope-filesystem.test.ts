@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -194,12 +194,19 @@ describe("policy-aware host filesystem scope", () => {
     skip,
   }) => {
     const { parent, workspace, outside } = await fixture();
+    const linkPath = path.join(workspace, "external-link.txt");
     try {
-      await symlink(path.join(outside, "external.txt"), path.join(workspace, "external-link.txt"));
+      await symlink(path.join(outside, "external.txt"), linkPath);
     } catch (error) {
       skip(
         `symlink creation unavailable: ${error instanceof Error ? error.message : String(error)}`,
       );
+    }
+    // A resolved `symlink()` is not evidence that a link exists: a host without the privilege, or a
+    // sandbox that emulates links, can report success while materialising an ordinary entry, and every
+    // assertion below then measures a plain file. Measure the precondition instead of assuming it.
+    if (!(await lstat(linkPath)).isSymbolicLink()) {
+      skip("the host reported success but produced no symbolic link (readlink would fail)");
     }
     const workspaceId = createWorkspaceId();
     const runtime = new LocalRuntime();
