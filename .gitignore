@@ -5,6 +5,7 @@ coverage/
 .turbo/
 .worktrees/
 release-artifacts/
+/native/sandbox-runner/target/
 test-results/
 *.tsbuildinfo
 .env
