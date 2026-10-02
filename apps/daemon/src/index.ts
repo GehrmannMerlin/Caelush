@@ -29,6 +29,16 @@ export type { DaemonConfig, DaemonProviderStartupConfiguration } from "./config.
 export { startDaemon } from "./daemon.js";
 export type { DaemonHandle, DaemonOptions } from "./daemon.js";
 export { daemonEntryPath } from "./entry.js";
+export {
+  SANDBOX_RUNNER_DIRECTORY_NAME,
+  SANDBOX_RUNNER_MANIFEST_ENVIRONMENT_KEY,
+  SANDBOX_RUNNER_PATH_ENVIRONMENT_KEY,
+  resolveSandboxRunnerArtifact,
+} from "./sandbox-runner-host.js";
+export type {
+  SandboxRunnerResolution,
+  SandboxRunnerResolutionInput,
+} from "./sandbox-runner-host.js";
 export { resolveProductPaths } from "./product-paths.js";
 export type { ProductPathEnvironment, ProductPathOptions, ProductPaths } from "./product-paths.js";
 export { DAEMON_VERSION } from "./version.js";
