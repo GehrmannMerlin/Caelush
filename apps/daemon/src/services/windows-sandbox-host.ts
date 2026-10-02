@@ -4,6 +4,7 @@ import {
   type NativeWorkspaceSandboxController,
   type ProcessSandboxProvider,
   type ResolvedSandboxRunnerArtifact,
+  type SandboxRunnerArtifactReasonCode,
 } from "@caelush/runtime";
 import type {
   PermissionPresetDescriptor,
@@ -12,6 +13,7 @@ import type {
   WorkspaceRecord,
 } from "@caelush/protocol";
 import { StorageNotFoundError } from "@caelush/storage";
+import type { SandboxRunnerResolution } from "../sandbox-runner-host.js";
 import type { WorkspaceService } from "../workspaces/workspace-service.js";
 import type { WorkspacePreparationPort } from "./security-capability-service.js";
 
@@ -35,6 +37,11 @@ import type { WorkspacePreparationPort } from "./security-capability-service.js"
  * `WorkspaceService.requireWorkspace()` immediately before it touches the filesystem, so a removed
  * workspace, a re-registered ID or a path changed after registration can never prepare a stale
  * location.
+ *
+ * The host takes the **resolution outcome** rather than an optional artifact, because the two real
+ * states are "a verified artifact exists" and "none does, and here is the bounded reason". Reporting
+ * a generic unavailability for a manifest that failed verification would discard the one fact an
+ * operator needs, so the reason travels with the absence.
  */
 
 export const WINDOWS_SANDBOX_PROVIDER_ID = "windows-acl-restricted-token";
@@ -45,24 +52,27 @@ export const WORKSPACE_NOT_FOUND_REASON = "WORKSPACE_NOT_FOUND";
 export const WORKSPACE_PREPARATION_UNAVAILABLE_REASON = "WORKSPACE_PREPARATION_UNAVAILABLE";
 
 export interface WindowsSandboxHost {
-  /** Exactly zero or one restricted Provider. Empty on a non-Windows host. */
+  /** Exactly one restricted Provider when a Runner was verified; empty when none was. */
   readonly providers: readonly ProcessSandboxProvider[];
-  /** Exactly one preparation port; it reports `supported: false` when no Runner was packaged. */
+  /** Exactly one preparation port; it reports `supported: false` when no Runner was verified. */
   readonly workspacePreparation: WorkspacePreparationPort;
+  /** Present only when no Runner was verified: why restricted execution is unavailable. */
+  readonly restrictedUnavailableReason?: SandboxRunnerArtifactReasonCode;
 }
 
 export interface WindowsSandboxHostOptions {
-  readonly artifact: ResolvedSandboxRunnerArtifact | undefined;
+  /** The startup resolution outcome. The host never re-reads the environment and never re-hashes. */
+  readonly resolution: SandboxRunnerResolution;
   /** The workspace identity authority. Only `requireWorkspace` is used. */
   readonly workspaceService: Pick<WorkspaceService, "requireWorkspace">;
   readonly platform?: NodeJS.Platform;
   /** Host/test seam: build the one Runtime controller without touching a real Runner. */
   readonly createController?: (input: {
-    readonly artifact: ResolvedSandboxRunnerArtifact | undefined;
+    readonly artifact: ResolvedSandboxRunnerArtifact;
   }) => NativeWorkspaceSandboxController;
   /** Host/test seam: build the one restricted Provider from the same controller. */
   readonly createProvider?: (input: {
-    readonly artifact: ResolvedSandboxRunnerArtifact | undefined;
+    readonly artifact: ResolvedSandboxRunnerArtifact;
     readonly workspaceController: NativeWorkspaceSandboxController;
     readonly platform: NodeJS.Platform;
   }) => ProcessSandboxProvider;
@@ -70,15 +80,18 @@ export interface WindowsSandboxHostOptions {
 
 export function createWindowsSandboxHost(options: WindowsSandboxHostOptions): WindowsSandboxHost {
   const platform = options.platform ?? process.platform;
-  if (platform !== "win32") {
+  const artifact = options.resolution.available ? options.resolution.artifact : undefined;
+  if (platform !== "win32" || artifact === undefined) {
     return Object.freeze({
       providers: Object.freeze([] as readonly ProcessSandboxProvider[]),
       workspacePreparation: unsupportedWorkspacePreparation(),
+      restrictedUnavailableReason:
+        options.resolution.available === false
+          ? options.resolution.reasonCode
+          : "RUNNER_PLATFORM_UNSUPPORTED",
     });
   }
 
-  const artifact = options.artifact;
-  const supported = artifact !== undefined;
   const workspaceController = (options.createController ?? defaultWorkspaceController)({
     artifact,
   });
@@ -95,7 +108,7 @@ export function createWindowsSandboxHost(options: WindowsSandboxHostOptions): Wi
 
   function createWorkspacePreparation(): WorkspacePreparationPort {
     return {
-      supported,
+      supported: true,
       async getStatus(workspaceId: WorkspaceId, preset: PermissionPresetDescriptor) {
         const workspace = await resolveWorkspace(options.workspaceService, workspaceId);
         if (workspace === undefined) return "UNAVAILABLE";
@@ -105,9 +118,6 @@ export function createWindowsSandboxHost(options: WindowsSandboxHostOptions): Wi
         return "UNAVAILABLE";
       },
       async prepare(workspaceId: WorkspaceId, selection: PermissionPresetSelection) {
-        if (!supported) {
-          return { status: "UNAVAILABLE", reasonCode: SANDBOX_RUNNER_UNAVAILABLE_REASON };
-        }
         const workspace = await resolveWorkspace(options.workspaceService, workspaceId);
         if (workspace === undefined) {
           return { status: "FAILED", reasonCode: WORKSPACE_NOT_FOUND_REASON };
@@ -122,16 +132,16 @@ export function createWindowsSandboxHost(options: WindowsSandboxHostOptions): Wi
 }
 
 function defaultWorkspaceController(input: {
-  readonly artifact: ResolvedSandboxRunnerArtifact | undefined;
+  readonly artifact: ResolvedSandboxRunnerArtifact;
 }): NativeWorkspaceSandboxController {
   return createNativeWorkspaceSandboxController({
     providerId: WINDOWS_SANDBOX_PROVIDER_ID,
-    ...(input.artifact === undefined ? {} : { runnerPath: input.artifact.runnerPath }),
+    runnerPath: input.artifact.runnerPath,
   });
 }
 
 function defaultRestrictedProvider(input: {
-  readonly artifact: ResolvedSandboxRunnerArtifact | undefined;
+  readonly artifact: ResolvedSandboxRunnerArtifact;
   readonly workspaceController: NativeWorkspaceSandboxController;
   readonly platform: NodeJS.Platform;
 }): ProcessSandboxProvider {
@@ -140,13 +150,9 @@ function defaultRestrictedProvider(input: {
     // The same controller the preparation port uses, so a private Run temp created per Run and the
     // ACL work that gates it are one Runtime object rather than two independent constructions.
     workspaceController: input.workspaceController,
-    ...(input.artifact === undefined
-      ? {}
-      : {
-          runnerPath: input.artifact.runnerPath,
-          manifestPath: input.artifact.manifestPath,
-          manifest: input.artifact.manifest,
-        }),
+    runnerPath: input.artifact.runnerPath,
+    manifestPath: input.artifact.manifestPath,
+    manifest: input.artifact.manifest,
   });
 }
 

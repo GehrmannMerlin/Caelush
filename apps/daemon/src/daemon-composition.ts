@@ -297,6 +297,8 @@ export interface DaemonCompositionOptions {
   readonly fullAccessAvailable?: boolean;
   readonly ttySupported?: boolean;
   readonly workspacePreparation?: WorkspacePreparationPort;
+  /** Bounded reason restricted execution is unavailable, decided once at startup. */
+  readonly restrictedUnavailableReason?: string;
   readonly featureGates?: SecurityFeatureGates;
   readonly clock?: DaemonClock;
   readonly logger?: RunExecutionSupervisorLogger;
@@ -480,6 +482,9 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     ...(options.workspacePreparation === undefined
       ? {}
       : { workspacePreparation: options.workspacePreparation }),
+    ...(options.restrictedUnavailableReason === undefined
+      ? {}
+      : { restrictedUnavailableReason: options.restrictedUnavailableReason }),
     featureGates: options.featureGates ?? resolveSecurityFeatureGates(options.environment),
   });
   const runSecurityPromptProjector = new RunSecurityPromptProjector();

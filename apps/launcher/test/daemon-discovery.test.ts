@@ -143,4 +143,56 @@ describe("daemon discovery", () => {
     expect(existsSync(lockPath)).toBe(false);
     expect(readFileSync(join(root, "logs", "daemon.log"), "utf8")).not.toContain("API_KEY");
   });
+
+  it("forwards the packaged sandbox Runner environment to the daemon it spawns", async () => {
+    const root = await mkdtemp(join(tmpdir(), "caelush-launcher-sandbox-"));
+    createdDirectories.push(root);
+    let healthy = false;
+    const child: SpawnedDaemon = {
+      pid: 1234,
+      exitCode: undefined,
+      unref: vi.fn(),
+      once: vi.fn(),
+    };
+    const spawn = vi.fn(() => {
+      healthy = true;
+      return child;
+    });
+    const entryPath = "C:/bundle/node_modules/@caelush/daemon/dist/main.js";
+
+    await ensureDaemon({
+      productPaths: resolveProductPaths({ environment: { CAELUSH_HOME: root } }),
+      clientFactory: () =>
+        createProbeClient(async () => {
+          if (!healthy) throw new Error("connection refused");
+          return health;
+        }),
+      spawn,
+      daemonEntryPath: entryPath,
+      delay: async () => undefined,
+      environment: {
+        CAELUSH_HOME: root,
+        CAELUSH_SANDBOX_RUNNER_PATH: "C:/bundle/sandbox-runner/caelush-sandbox-runner.exe",
+        CAELUSH_SANDBOX_RUNNER_MANIFEST: "C:/bundle/sandbox-runner/manifest.json",
+      },
+    });
+
+    // A launcher-spawned daemon must see the same sandbox keys a direct start sees, because the
+    // daemon resolves the packaged Runner from its own environment and its own module path. If the
+    // launcher dropped these, a spawned daemon would silently lose restricted execution.
+    expect(spawn).toHaveBeenCalledWith(
+      process.execPath,
+      [entryPath],
+      expect.objectContaining({ detached: true, windowsHide: true }),
+    );
+    const spawnOptions = spawn.mock.calls[0]?.[2] as {
+      readonly env: Readonly<Record<string, string | undefined>>;
+    };
+    expect(spawnOptions.env.CAELUSH_SANDBOX_RUNNER_PATH).toBe(
+      "C:/bundle/sandbox-runner/caelush-sandbox-runner.exe",
+    );
+    expect(spawnOptions.env.CAELUSH_SANDBOX_RUNNER_MANIFEST).toBe(
+      "C:/bundle/sandbox-runner/manifest.json",
+    );
+  });
 });

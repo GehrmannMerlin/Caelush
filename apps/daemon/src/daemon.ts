@@ -11,7 +11,6 @@ import {
   createLocalRuntimeResolver,
   LocalRuntime,
   type ProcessSandboxProvider,
-  type ResolvedSandboxRunnerArtifact,
 } from "@caelush/runtime";
 import {
   applyToolEffectsToAgentState,
@@ -33,6 +32,11 @@ import {
   defaultProcessSandboxProviders,
   type DaemonComposition,
 } from "./daemon-composition.js";
+import { daemonEntryPath } from "./entry.js";
+import {
+  resolveSandboxRunnerArtifact,
+  type SandboxRunnerResolution,
+} from "./sandbox-runner-host.js";
 import {
   reconcileStaleRuns,
   type StartupReconciliationSummary,
@@ -85,14 +89,16 @@ export interface DaemonOptions {
   readonly toolExposure?: GitToolAvailability;
   readonly processSandboxProviders?: readonly ProcessSandboxProvider[];
   /**
-   * The verified Windows Runner artifact this daemon generation runs under, when one was resolved.
+   * The packaged-Runner resolution this daemon generation runs under, when already known.
    *
-   * A typed seam rather than an environment read: the startup path resolves the artifact exactly once
-   * and hands the result here, so no lower layer re-reads `CAELUSH_SANDBOX_RUNNER_*` and a test can
-   * inject an artifact without a packaged bundle. `undefined` is a real state — the daemon still
-   * starts, and the restricted presets report a bounded unavailability reason.
+   * A typed seam rather than an environment read: the startup path resolves once and hands the whole
+   * outcome here, so no lower layer re-reads `CAELUSH_SANDBOX_RUNNER_*`, a test can inject an outcome
+   * without a packaged bundle, and the bounded failure reason survives all the way to the API.
+   * `{ available: false }` is a real state — the daemon still starts and reports it.
    */
-  readonly windowsSandboxArtifact?: ResolvedSandboxRunnerArtifact;
+  readonly windowsSandboxResolution?: SandboxRunnerResolution;
+  /** Bounded reason restricted execution is unavailable, when the caller already knows it. */
+  readonly restrictedUnavailableReason?: string;
   readonly fullAccessAvailable?: boolean;
   readonly ttySupported?: boolean;
   readonly workspacePreparation?: WorkspacePreparationPort;
@@ -201,11 +207,35 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     throw error;
   }
   /**
+   * The environment this daemon generation runs under.
+   *
+   * `process.env` for a direct start; a launcher forwards its own environment to the spawned child,
+   * so both paths read the same keys and the same artifact is resolved either way.
+   */
+  const environment = options.environment ?? process.env;
+  /**
+   * Resolve the packaged Runner artifact **exactly once** per daemon generation.
+   *
+   * ```text
+   * CAELUSH_SANDBOX_RUNNER_PATH / _MANIFEST     explicit development or diagnostic override
+   *        ↓ otherwise
+   * <bundle>/sandbox-runner/<exe> + manifest.json   the fixed release-relative layout, anchored on
+   *                                                 this module's own path so the answer does not
+   *                                                 depend on how the daemon was spawned
+   * ```
+   *
+   * Resolution is bounded, is verified through the shared `@caelush/runtime` verifier, and never
+   * prevents startup: an absent or invalid artifact is a real state the capability service reports.
+   * The result is a typed option passed down, so no lower layer re-reads these keys.
+   */
+  const windowsSandboxResolution =
+    options.windowsSandboxResolution ?? (await resolveWindowsSandboxRunner(environment));
+  /**
    * The restricted-execution host, composed once — and only when the caller injected neither half.
    *
    * ```text
    * caller injected providers or preparation   → the host is not built; the injection wins
-   * Windows, nothing injected                  → one Provider + one preparation port
+   * Windows, nothing injected                  → at most one Provider + one preparation port
    * every other host, nothing injected          → the platform defaults below
    * ```
    *
@@ -217,17 +247,25 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     options.processSandboxProviders === undefined &&
     options.workspacePreparation === undefined
       ? createWindowsSandboxHost({
-          artifact: options.windowsSandboxArtifact,
+          resolution: windowsSandboxResolution,
           workspaceService,
         })
       : undefined;
   const processSandboxProviders =
     options.processSandboxProviders ??
-    (windowsSandboxHost !== undefined && windowsSandboxHost.providers.length > 0
-      ? windowsSandboxHost.providers
-      : defaultProcessSandboxProviders());
+    windowsSandboxHost?.providers ??
+    defaultProcessSandboxProviders();
   const workspacePreparation =
     options.workspacePreparation ?? windowsSandboxHost?.workspacePreparation;
+  /**
+   * The bounded reason restricted execution is unavailable, when the host knows one.
+   *
+   * Carried separately from the provider list because a `PROCESS_SANDBOX` capability with no
+   * restricted Provider must still say *why* — `RUNNER_HASH_MISMATCH` and `RUNNER_ARTIFACT_MISSING`
+   * are different operator problems, and the resolution above already distinguished them.
+   */
+  const restrictedUnavailableReason =
+    options.restrictedUnavailableReason ?? windowsSandboxHost?.restrictedUnavailableReason;
   let composition: DaemonComposition;
   try {
     composition = await composeDaemon({
@@ -253,6 +291,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         : { fullAccessAvailable: options.fullAccessAvailable }),
       ...(options.ttySupported === undefined ? {} : { ttySupported: options.ttySupported }),
       ...(workspacePreparation === undefined ? {} : { workspacePreparation }),
+      ...(restrictedUnavailableReason === undefined ? {} : { restrictedUnavailableReason }),
       ...(options.featureGates === undefined ? {} : { featureGates: options.featureGates }),
       ...(options.contextContributionHooks === undefined
         ? {}
@@ -398,6 +437,26 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       return closePromise;
     },
   };
+}
+
+/**
+ * Resolve the packaged Runner outcome for the current host.
+ *
+ * Anchored on `daemonEntryPath` — this module's own `main.js` — rather than on `argv` or the working
+ * directory, so a daemon started directly and a daemon spawned by the launcher resolve the same fixed
+ * location. Only Windows composes a restricted Provider today, so other hosts skip the lookup
+ * entirely and keep the platform default from `defaultProcessSandboxProviders()`.
+ *
+ * The **whole outcome** is returned, not just a successful artifact: the bounded reason for an absent
+ * or invalid Runner is the fact the capability service must report.
+ */
+async function resolveWindowsSandboxRunner(
+  environment: Readonly<Record<string, string | undefined>>,
+): Promise<SandboxRunnerResolution> {
+  if (process.platform !== "win32") {
+    return { available: false, reasonCode: "RUNNER_PLATFORM_UNSUPPORTED" };
+  }
+  return resolveSandboxRunnerArtifact({ environment, daemonEntryPath });
 }
 
 /**

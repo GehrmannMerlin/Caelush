@@ -7,6 +7,7 @@ import type {
   ResolvedSandboxRunnerArtifact,
 } from "@caelush/runtime";
 import type { WorkspaceId, WorkspaceRecord } from "@caelush/protocol";
+import type { SandboxRunnerResolution } from "../src/sandbox-runner-host.js";
 import {
   WINDOWS_SANDBOX_PROVIDER_ID,
   createWindowsSandboxHost,
@@ -55,6 +56,16 @@ function artifact(): ResolvedSandboxRunnerArtifact {
   };
 }
 
+function resolved(): SandboxRunnerResolution {
+  return { available: true, artifact: artifact() };
+}
+
+function unavailable(
+  reasonCode: "RUNNER_ARTIFACT_MISSING" | "RUNNER_MANIFEST_INVALID" | "RUNNER_HASH_MISMATCH",
+): SandboxRunnerResolution {
+  return { available: false, reasonCode };
+}
+
 function fakeController(overrides: Partial<NativeWorkspaceSandboxController> = {}) {
   const calls: Array<{ operation: string; workspaceRoot: string; presetId: string }> = [];
   const controller: NativeWorkspaceSandboxController = {
@@ -89,7 +100,7 @@ describe("windows sandbox host adapter", () => {
   it("composes exactly one restricted provider and one preparation port", () => {
     const { controller } = fakeController();
     const host = createWindowsSandboxHost({
-      artifact: artifact(),
+      resolution: resolved(),
       workspaceService: workspaceServiceResolving(),
       platform: "win32",
       createController: () => controller,
@@ -99,13 +110,14 @@ describe("windows sandbox host adapter", () => {
     expect(host.providers[0]?.id).toBe(WINDOWS_SANDBOX_PROVIDER_ID);
     expect(host.providers[0]?.kind).toBe("RESTRICTED");
     expect(host.workspacePreparation.supported).toBe(true);
+    expect(host.restrictedUnavailableReason).toBeUndefined();
   });
 
   it("resolves the workspace root through the workspace authority on every read", async () => {
     const { controller, calls } = fakeController();
     const workspaceService = workspaceServiceResolving();
     const host = createWindowsSandboxHost({
-      artifact: artifact(),
+      resolution: resolved(),
       workspaceService,
       platform: "win32",
       createController: () => controller,
@@ -128,7 +140,7 @@ describe("windows sandbox host adapter", () => {
   it("never prepares a stale path for a workspace that no longer exists", async () => {
     const { controller, calls } = fakeController();
     const host = createWindowsSandboxHost({
-      artifact: artifact(),
+      resolution: resolved(),
       workspaceService: workspaceServiceMissing(),
       platform: "win32",
       createController: () => controller,
@@ -145,17 +157,18 @@ describe("windows sandbox host adapter", () => {
     expect(calls).toEqual([]);
   });
 
-  it("stays unavailable without an artifact but still starts with one bounded provider", async () => {
-    const { controller } = fakeController();
+  it("advertises no restricted provider and keeps the bounded reason without an artifact", async () => {
     const host = createWindowsSandboxHost({
-      artifact: undefined,
+      resolution: unavailable("RUNNER_MANIFEST_INVALID"),
       workspaceService: workspaceServiceResolving(),
       platform: "win32",
-      createController: () => controller,
     });
 
-    expect(host.providers).toHaveLength(1);
+    // There is no working restricted execution, so there is no restricted Provider to offer — and the
+    // reason the startup resolution produced is preserved rather than flattened.
+    expect(host.providers).toEqual([]);
     expect(host.workspacePreparation.supported).toBe(false);
+    expect(host.restrictedUnavailableReason).toBe("RUNNER_MANIFEST_INVALID");
     expect(
       await host.workspacePreparation.prepare(workspaceId, {
         id: "WORKSPACE_WRITE",
@@ -164,28 +177,27 @@ describe("windows sandbox host adapter", () => {
     ).toMatchObject({ status: "UNAVAILABLE", reasonCode: "SANDBOX_RUNNER_UNAVAILABLE" });
   });
 
-  it.skipIf(process.platform !== "win32")(
-    "reports a bounded reason instead of an ordinary-spawn fallback without an artifact",
-    async () => {
+  it("preserves each bounded resolution reason verbatim", () => {
+    for (const reasonCode of [
+      "RUNNER_ARTIFACT_MISSING",
+      "RUNNER_MANIFEST_INVALID",
+      "RUNNER_HASH_MISMATCH",
+    ] as const) {
       const host = createWindowsSandboxHost({
-        artifact: undefined,
+        resolution: unavailable(reasonCode),
         workspaceService: workspaceServiceResolving(),
         platform: "win32",
       });
-
-      const probe = await host.providers[0]!.probe!();
-      expect(probe.available).toBe(false);
-      expect(probe.enforcement).toBe("NONE");
-      expect(probe.reasonCode).toBe("RUNNER_ARTIFACT_MISSING");
-    },
-  );
+      expect(host.restrictedUnavailableReason, reasonCode).toBe(reasonCode);
+    }
+  });
 
   it("uses the injected provider override instead of the production composition", () => {
     const { controller } = fakeController();
     const injected = providerFixture("injected-windows-provider");
     const createProvider = vi.fn(() => injected);
     const host = createWindowsSandboxHost({
-      artifact: artifact(),
+      resolution: resolved(),
       workspaceService: workspaceServiceResolving(),
       platform: "win32",
       createController: () => controller,
@@ -200,12 +212,13 @@ describe("windows sandbox host adapter", () => {
 
   it("composes no Windows provider on a host that is not Windows", () => {
     const host = createWindowsSandboxHost({
-      artifact: artifact(),
+      resolution: resolved(),
       workspaceService: workspaceServiceResolving(),
       platform: "linux",
     });
 
     expect(host.providers).toEqual([]);
     expect(host.workspacePreparation.supported).toBe(false);
+    expect(host.restrictedUnavailableReason).toBe("RUNNER_PLATFORM_UNSUPPORTED");
   });
 });

@@ -37,6 +37,15 @@ export interface SecurityCapabilityServiceOptions {
   readonly ttySupported?: boolean;
   readonly workspacePreparation?: WorkspacePreparationPort;
   readonly featureGates?: SecurityFeatureGates;
+  /**
+   * Why restricted execution is unavailable, when the startup path already knows.
+   *
+   * The packaged-Runner resolution produced one bounded reason before this service existed; without
+   * this input that reason would be replaced by a generic one, losing the fact an operator needs.
+   * It is used only when no restricted Provider is available at all, so a live probe failure — which
+   * is newer information — always wins.
+   */
+  readonly restrictedUnavailableReason?: string;
 }
 
 export interface RunSecurityRuntimeFacts {
@@ -67,6 +76,7 @@ export class SecurityCapabilityService {
   private readonly ttySupported: boolean;
   private readonly workspacePreparation: WorkspacePreparationPort | undefined;
   private readonly featureGates: SecurityFeatureGates;
+  private readonly restrictedUnavailableReason: string | undefined;
   private probesPromise: Promise<readonly ProcessSandboxProbe[]> | undefined;
 
   constructor(options: SecurityCapabilityServiceOptions = {}) {
@@ -79,6 +89,7 @@ export class SecurityCapabilityService {
     this.fullAccessAvailable = options.fullAccessAvailable ?? true;
     this.ttySupported = options.ttySupported ?? false;
     this.workspacePreparation = options.workspacePreparation;
+    this.restrictedUnavailableReason = options.restrictedUnavailableReason;
     this.featureGates = options.featureGates ?? {
       permissionPresetsV1: true,
       runtimeSandboxV1: true,
@@ -285,11 +296,12 @@ export class SecurityCapabilityService {
      * never a process-sandbox capability.
      */
     const failed = probes.find((probe) => !probe.available && probe.reasonCode !== undefined);
+    const reasonCode = failed?.reasonCode ?? this.restrictedUnavailableReason;
     return {
       status: "UNAVAILABLE",
       enforcement: "NONE",
       provider: failed?.provider.id ?? "none",
-      ...(failed?.reasonCode === undefined ? {} : { reasonCode: failed.reasonCode }),
+      ...(reasonCode === undefined ? {} : { reasonCode }),
     };
   }
 

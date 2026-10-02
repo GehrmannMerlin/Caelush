@@ -1,15 +1,23 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
-import { afterEach, describe, expect, it } from "vitest";
+import type { ProcessSandboxProvider } from "@caelush/runtime";
+import type { SecurityCapabilitiesResponse } from "@caelush/protocol";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { composeDaemon, type DaemonComposition } from "../src/daemon-composition.js";
+import { startDaemon, type DaemonHandle, type DaemonOptions } from "../src/daemon.js";
 
 let directory: string | undefined;
 let storage: CaelushStorage | undefined;
 let composition: DaemonComposition | undefined;
+const startedDaemons: DaemonHandle[] = [];
 
 afterEach(async () => {
+  await Promise.all(
+    startedDaemons.splice(0).map((daemon) => daemon.close().catch(() => undefined)),
+  );
   await composition?.dispose().catch(() => undefined);
   await storage?.close().catch(() => undefined);
   if (directory !== undefined) await rm(directory, { recursive: true, force: true });
@@ -166,4 +174,158 @@ describe("daemon production composition", () => {
     expect(composition.toolRegistry.names()).not.toContain("git_status");
     expect(composition.toolRegistry.names()).not.toContain("git_diff");
   });
+});
+
+async function startFixtureDaemon(
+  options: Omit<DaemonOptions, "databasePath"> = {},
+): Promise<DaemonHandle> {
+  directory = await mkdtemp(join(tmpdir(), "caelush-startup-"));
+  const daemon = await startDaemon({
+    ...options,
+    databasePath: join(directory, "caelush.db"),
+    port: options.port ?? 0,
+  });
+  startedDaemons.push(daemon);
+  return daemon;
+}
+
+async function readGlobalCapabilities(daemon: DaemonHandle): Promise<SecurityCapabilitiesResponse> {
+  const response = await fetch(`${daemon.url}/api/v1/security/capabilities`);
+  expect(response.status).toBe(200);
+  return (await response.json()) as SecurityCapabilitiesResponse;
+}
+
+function restrictedProvider(): ProcessSandboxProvider {
+  return {
+    id: "fixture-restricted",
+    kind: "RESTRICTED",
+    enforcement: "PARTIAL",
+    create: vi.fn(),
+    probe: vi.fn(async () => ({ available: true, enforcement: "PARTIAL" as const })),
+  };
+}
+
+const absentRunnerPath = join(tmpdir(), "caelush-absent-runner", "caelush-sandbox-runner.exe");
+
+describe("daemon startup sandbox wiring", () => {
+  it("starts and reports a bounded reason when no packaged Runner resolves", async () => {
+    const daemon = await startFixtureDaemon({
+      environment: { CAELUSH_SANDBOX_RUNNER_PATH: absentRunnerPath },
+    });
+
+    const capabilities = await readGlobalCapabilities(daemon);
+
+    // A missing Runner must not prevent startup, and it must not be reported as a plain spawn.
+    expect(capabilities.processSandbox).toMatchObject({
+      status: "UNAVAILABLE",
+      enforcement: "NONE",
+    });
+    expect(capabilities.processSandbox.reasonCode).toBe("RUNNER_ARTIFACT_MISSING");
+    expect(capabilities.workspacePreparationSupported).toBe(false);
+  });
+
+  it("reads the ambient environment a direct daemon start receives", async () => {
+    const root = await mkdtemp(join(tmpdir(), "caelush-env-runner-"));
+    const previous = process.env.CAELUSH_SANDBOX_RUNNER_PATH;
+    try {
+      await writeFile(join(root, "caelush-sandbox-runner.exe"), "not-a-runner", "utf8");
+      await writeFile(join(root, "manifest.json"), "{ this is not json", "utf8");
+      process.env.CAELUSH_SANDBOX_RUNNER_PATH = join(root, "caelush-sandbox-runner.exe");
+
+      // No explicit `environment`: the startup path must fall back to `process.env`, which is what a
+      // launcher-spawned daemon actually receives.
+      const daemon = await startFixtureDaemon();
+      const capabilities = await readGlobalCapabilities(daemon);
+
+      // Only the override path can produce this reason, so the ambient environment was consumed.
+      expect(capabilities.processSandbox.reasonCode).toBe("RUNNER_MANIFEST_INVALID");
+    } finally {
+      if (previous === undefined) delete process.env.CAELUSH_SANDBOX_RUNNER_PATH;
+      else process.env.CAELUSH_SANDBOX_RUNNER_PATH = previous;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers an injected provider seam over host discovery", async () => {
+    const daemon = await startFixtureDaemon({
+      processSandboxProviders: [restrictedProvider()],
+      environment: { CAELUSH_SANDBOX_RUNNER_PATH: absentRunnerPath },
+    });
+
+    const capabilities = await readGlobalCapabilities(daemon);
+
+    expect(capabilities.processSandbox).toMatchObject({
+      status: "AVAILABLE",
+      enforcement: "PARTIAL",
+      provider: "fixture-restricted",
+    });
+    expect(capabilities.processSandbox.reasonCode).toBeUndefined();
+    expect(capabilities.workspacePreparationSupported).toBe(false);
+  });
+
+  it("honours an injected preparation port alongside an injected provider", async () => {
+    const daemon = await startFixtureDaemon({
+      processSandboxProviders: [restrictedProvider()],
+      workspacePreparation: {
+        supported: true,
+        getStatus: async (_workspaceId, preset) =>
+          preset.id === "VIEW_ONLY" ? "READY" : "REQUIRED",
+        prepare: async () => ({ status: "READY" as const }),
+      },
+    });
+
+    expect((await readGlobalCapabilities(daemon)).workspacePreparationSupported).toBe(true);
+  });
+
+  it("honours an injected resolution outcome without touching host discovery", async () => {
+    const daemon = await startFixtureDaemon({
+      windowsSandboxResolution: { available: false, reasonCode: "RUNNER_HASH_MISMATCH" },
+    });
+
+    // The injected outcome wins over the ambient environment, and its bounded reason is what the API
+    // reports — not a generic unavailability.
+    expect((await readGlobalCapabilities(daemon)).processSandbox).toMatchObject({
+      status: "UNAVAILABLE",
+      enforcement: "NONE",
+      reasonCode: "RUNNER_HASH_MISMATCH",
+    });
+  });
+
+  it.skipIf(process.platform !== "win32")(
+    "verifies a development override before it is advertised",
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), "caelush-override-runner-"));
+      try {
+        const runnerPath = join(root, "caelush-sandbox-runner.exe");
+        const bytes = Buffer.from("caelush-fixture-runner", "utf8");
+        await writeFile(runnerPath, bytes);
+        await writeFile(
+          join(root, "manifest.json"),
+          JSON.stringify({
+            schemaVersion: 1,
+            product: "caelush",
+            controlProtocolVersion: 1,
+            platform: "windows",
+            arch: process.arch,
+            executableName: "caelush-sandbox-runner.exe",
+            sha256: createHash("sha256").update(bytes).digest("hex"),
+            providers: ["windows-acl-restricted-token"],
+          }),
+          "utf8",
+        );
+
+        const daemon = await startFixtureDaemon({
+          environment: { CAELUSH_SANDBOX_RUNNER_PATH: runnerPath },
+        });
+        const capabilities = await readGlobalCapabilities(daemon);
+
+        // The manifest identity and the SHA-256 were accepted — a mismatch would have produced
+        // RUNNER_MANIFEST_INVALID or RUNNER_HASH_MISMATCH instead. Only the bounded functional probe
+        // fails, which is the strongest signal reachable without a real Runner.
+        expect(capabilities.processSandbox.reasonCode).toBe("RUNNER_FUNCTIONAL_PROBE_FAILED");
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 });

@@ -20,6 +20,10 @@ export async function main(): Promise<void> {
     const compatibilityWorkspacePath = process.env.CAELUSH_WORKSPACE_PATH?.trim();
     daemon = await startDaemon({
       databasePath,
+      // One environment for the whole startup path: the rollout feature gates and the packaged
+      // sandbox-Runner discovery both read this object, and a launcher forwards its own environment
+      // to the child, so a spawned daemon resolves the same fixed artifact as a direct start.
+      environment: process.env,
       ...readProviderConfiguration(process.env),
       ...(compatibilityWorkspacePath === undefined || compatibilityWorkspacePath.length === 0
         ? {}
