@@ -35,6 +35,8 @@ pub enum SandboxError {
     AclBuild,
     AclApply,
     AclPathLock,
+    WorkspaceGrantMissing,
+    WorkspaceCwdBoundary,
 }
 
 impl SandboxError {
@@ -73,6 +75,8 @@ impl SandboxError {
             Self::AclBuild => "WINDOWS_ACL_BUILD_FAILED",
             Self::AclApply => "WINDOWS_ACL_APPLY_FAILED",
             Self::AclPathLock => "WINDOWS_ACL_PATH_LOCK_FAILED",
+            Self::WorkspaceGrantMissing => "WINDOWS_WORKSPACE_GRANT_MISSING",
+            Self::WorkspaceCwdBoundary => "WINDOWS_WORKSPACE_CWD_BOUNDARY_INVALID",
         }
     }
 }

@@ -1,3 +1,4 @@
+use super::acl;
 use super::error::SandboxError;
 use super::handle::OwnedHandle;
 use super::job::JobObject;
@@ -6,7 +7,7 @@ use crate::platform::windows::command_line::build_command_line;
 use std::ffi::OsString;
 use std::mem::{size_of, size_of_val};
 use std::os::windows::ffi::OsStrExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
 use windows_sys::Win32::Foundation::{
     DuplicateHandle, GetLastError, DUPLICATE_SAME_ACCESS, ERROR_INSUFFICIENT_BUFFER, HANDLE,
@@ -94,6 +95,7 @@ pub fn spawn_with<B: RestrictedProcessBackend>(
 pub struct RestrictedProcess {
     process: OwnedHandle,
     _job: JobObject,
+    temp_grant: Option<TempGrantCleanup>,
 }
 
 impl RestrictedProcess {
@@ -112,11 +114,71 @@ impl RestrictedProcess {
             environment,
         };
         let (process, job) = spawn_with(&backend)?;
-        Ok(Self { process, _job: job })
+        Ok(Self {
+            process,
+            _job: job,
+            temp_grant: None,
+        })
+    }
+
+    pub fn spawn_with_temp_grant(
+        token: &RestrictedToken,
+        program: &str,
+        args: &[String],
+        cwd: &Path,
+        environment: &[(OsString, OsString)],
+        temp_path: PathBuf,
+        temp_sid: String,
+    ) -> Result<Self, SandboxError> {
+        let mut process = Self::spawn(token, program, args, cwd, environment)?;
+        process.temp_grant = Some(TempGrantCleanup {
+            path: temp_path,
+            sid: temp_sid,
+            armed: true,
+        });
+        Ok(process)
     }
 
     pub fn wait(&mut self) -> Result<u32, SandboxError> {
-        wait_for_process(&self.process)
+        let wait_result = wait_for_process(&self.process);
+        let cleanup_result = self.cleanup_temp_grant();
+        match (wait_result, cleanup_result) {
+            (Err(error), _) => Err(error),
+            (Ok(code), Ok(())) => Ok(code),
+            (Ok(_), Err(error)) => Err(error),
+        }
+    }
+
+    fn cleanup_temp_grant(&mut self) -> Result<(), SandboxError> {
+        if let Some(cleanup) = self.temp_grant.as_mut() {
+            cleanup.revoke()?;
+            self.temp_grant = None;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct TempGrantCleanup {
+    path: PathBuf,
+    sid: String,
+    armed: bool,
+}
+
+impl TempGrantCleanup {
+    fn revoke(&mut self) -> Result<(), SandboxError> {
+        if !self.armed {
+            return Ok(());
+        }
+        acl::revoke_write_grant(&self.path, &self.sid)?;
+        self.armed = false;
+        Ok(())
+    }
+}
+
+impl Drop for TempGrantCleanup {
+    fn drop(&mut self) {
+        let _ = self.revoke();
     }
 }
 

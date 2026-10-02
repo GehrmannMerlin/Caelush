@@ -9,6 +9,8 @@ use std::process::exit;
 #[derive(Debug, PartialEq, Eq)]
 enum Operation {
     Run(RunConfig),
+    WorkspaceStatus(PathBuf),
+    WorkspacePrepare(PathBuf),
     TransportProbe,
 }
 
@@ -17,6 +19,8 @@ struct RunConfig {
     mode: platform::windows_mode::WindowsSandboxMode,
     workspace_root: PathBuf,
     cwd: PathBuf,
+    private_temp: Option<PathBuf>,
+    temp_marker_id: Option<String>,
     program: String,
     args: Vec<String>,
 }
@@ -49,6 +53,28 @@ fn execute(config: &Config) -> Result<i32, String> {
         Operation::TransportProbe => {
             write_ready(config, "NONE").map_err(|_| "CONTROL_WRITE_FAILED".to_string())?;
             Ok(0)
+        }
+        Operation::WorkspaceStatus(workspace_root) => {
+            #[cfg(target_os = "windows")]
+            {
+                let status = platform::windows::workspace_status(workspace_root)?;
+                write_workspace_status(config, status)
+                    .map_err(|_| "CONTROL_WRITE_FAILED".to_string())?;
+                return Ok(0);
+            }
+            #[allow(unreachable_code)]
+            Err("UNSUPPORTED_PLATFORM".to_string())
+        }
+        Operation::WorkspacePrepare(workspace_root) => {
+            #[cfg(target_os = "windows")]
+            {
+                let change = platform::windows::workspace_prepare(workspace_root)?;
+                write_workspace_prepared(config, change)
+                    .map_err(|_| "CONTROL_WRITE_FAILED".to_string())?;
+                return Ok(0);
+            }
+            #[allow(unreachable_code)]
+            Err("UNSUPPORTED_PLATFORM".to_string())
         }
         Operation::Run(run) => {
             let mut child = spawn_target(config, run)?;
@@ -92,14 +118,33 @@ fn spawn_target(config: &Config, run: &RunConfig) -> Result<TargetProcess, Strin
     }
     #[cfg(target_os = "windows")]
     {
-        return platform::windows::spawn_restricted(
-            &config.provider,
-            run.mode,
-            &run.workspace_root,
-            &run.cwd,
-            &run.program,
-            &run.args,
-        );
+        return match run.mode {
+            platform::windows_mode::WindowsSandboxMode::ReadOnly => {
+                platform::windows::spawn_restricted(
+                    &config.provider,
+                    run.mode,
+                    &run.workspace_root,
+                    &run.cwd,
+                    &run.program,
+                    &run.args,
+                )
+            }
+            platform::windows_mode::WindowsSandboxMode::WorkspaceWrite => {
+                platform::windows::spawn_workspace_write_restricted(
+                    &config.provider,
+                    &run.workspace_root,
+                    &run.cwd,
+                    run.private_temp
+                        .as_deref()
+                        .ok_or_else(|| "MISSING_PRIVATE_TEMP".to_string())?,
+                    run.temp_marker_id
+                        .as_deref()
+                        .ok_or_else(|| "MISSING_TEMP_MARKER".to_string())?,
+                    &run.program,
+                    &run.args,
+                )
+            }
+        };
     }
     #[allow(unreachable_code)]
     Err("UNSUPPORTED_PLATFORM".to_string())
@@ -125,6 +170,8 @@ fn parse_args(args: Vec<String>) -> Result<Config, String> {
     let mut boundary_fingerprint = None;
     let mut workspace_root = None;
     let mut cwd = None;
+    let mut private_temp = None;
+    let mut temp_marker_id = None;
     let mut program = None;
     let mut payload_args = None;
     let mut index = 0;
@@ -150,6 +197,10 @@ fn parse_args(args: Vec<String>) -> Result<Config, String> {
                 set_once(&mut workspace_root, PathBuf::from(next(&args, &mut index)?))?
             }
             "--cwd" => set_once(&mut cwd, PathBuf::from(next(&args, &mut index)?))?,
+            "--private-temp" => {
+                set_once(&mut private_temp, PathBuf::from(next(&args, &mut index)?))?
+            }
+            "--temp-marker-id" => set_once(&mut temp_marker_id, next(&args, &mut index)?)?,
             "--program" => set_once(&mut program, next(&args, &mut index)?)?,
             "--" => {
                 payload_args = Some(args[index + 1..].to_vec());
@@ -160,21 +211,49 @@ fn parse_args(args: Vec<String>) -> Result<Config, String> {
         index += 1;
     }
 
-    let operation = match operation
-        .ok_or_else(|| "MISSING_OPERATION".to_string())?
-        .as_str()
-    {
+    let operation_name = operation.ok_or_else(|| "MISSING_OPERATION".to_string())?;
+    let operation = match operation_name.as_str() {
         "run" => {
             let args = payload_args.ok_or_else(|| "MISSING_ARGUMENT_SEPARATOR".to_string())?;
+            let mode = platform::windows_mode::WindowsSandboxMode::parse(
+                &mode.ok_or_else(|| "MISSING_MODE".to_string())?,
+            )?;
+            if mode == platform::windows_mode::WindowsSandboxMode::WorkspaceWrite {
+                if private_temp.is_none() {
+                    return Err("MISSING_PRIVATE_TEMP".to_string());
+                }
+                if temp_marker_id.is_none() {
+                    return Err("MISSING_TEMP_MARKER".to_string());
+                }
+            } else if private_temp.is_some() || temp_marker_id.is_some() {
+                return Err("INVALID_PRIVATE_TEMP".to_string());
+            }
             Operation::Run(RunConfig {
-                mode: platform::windows_mode::WindowsSandboxMode::parse(
-                    &mode.ok_or_else(|| "MISSING_MODE".to_string())?,
-                )?,
+                mode,
                 workspace_root: workspace_root.ok_or_else(|| "MISSING_WORKSPACE".to_string())?,
                 cwd: cwd.ok_or_else(|| "MISSING_CWD".to_string())?,
+                private_temp,
+                temp_marker_id,
                 program: program.ok_or_else(|| "MISSING_PROGRAM".to_string())?,
                 args,
             })
+        }
+        "workspace-status" | "workspace-prepare" => {
+            if mode.is_some()
+                || cwd.is_some()
+                || program.is_some()
+                || payload_args.is_some()
+                || private_temp.is_some()
+                || temp_marker_id.is_some()
+            {
+                return Err("INVALID_WORKSPACE_OPERATION_ARGUMENT".to_string());
+            }
+            let workspace_root = workspace_root.ok_or_else(|| "MISSING_WORKSPACE".to_string())?;
+            if operation_name == "workspace-status" {
+                Operation::WorkspaceStatus(workspace_root)
+            } else {
+                Operation::WorkspacePrepare(workspace_root)
+            }
         }
         "transport-probe" => {
             if workspace_root.is_some()
@@ -182,6 +261,8 @@ fn parse_args(args: Vec<String>) -> Result<Config, String> {
                 || program.is_some()
                 || mode.is_some()
                 || payload_args.is_some()
+                || private_temp.is_some()
+                || temp_marker_id.is_some()
             {
                 return Err("INVALID_PROBE_ARGUMENT".to_string());
             }
@@ -227,6 +308,46 @@ fn write_ready(config: &Config, enforcement: &str) -> std::io::Result<()> {
             &config.provider,
             &config.boundary_fingerprint,
             enforcement,
+        ),
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn write_workspace_status(
+    config: &Config,
+    status: platform::windows::GrantStatus,
+) -> std::io::Result<()> {
+    control::write_message(
+        config,
+        &protocol::workspace_status(
+            &config.nonce,
+            &config.provider,
+            &config.boundary_fingerprint,
+            match status {
+                platform::windows::GrantStatus::Ready => "READY",
+                platform::windows::GrantStatus::Missing => "MISSING",
+            },
+        ),
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn write_workspace_prepared(
+    config: &Config,
+    change: platform::windows::GrantChange,
+) -> std::io::Result<()> {
+    control::write_message(
+        config,
+        &protocol::workspace_prepared(
+            &config.nonce,
+            &config.provider,
+            &config.boundary_fingerprint,
+            match change {
+                platform::windows::GrantChange::Added => "ADDED",
+                platform::windows::GrantChange::Unchanged => "UNCHANGED",
+                platform::windows::GrantChange::Removed
+                | platform::windows::GrantChange::NotFound => "INVALID",
+            },
         ),
     )
 }
@@ -310,7 +431,47 @@ mod tests {
     fn accepts_workspace_write_as_a_known_but_separate_mode() {
         let mut args = run_args();
         args[7] = "workspace-write".to_string();
+        args.splice(
+            18..18,
+            [
+                "--private-temp".to_string(),
+                r"C:\private-temp".to_string(),
+                "--temp-marker-id".to_string(),
+                "marker-123".to_string(),
+            ],
+        );
         assert!(parse_args(args).is_ok());
+    }
+
+    #[test]
+    fn requires_a_private_temp_and_marker_for_workspace_write() {
+        let mut args = run_args();
+        args[7] = "workspace-write".to_string();
+        assert_eq!(
+            parse_args(args).err().as_deref(),
+            Some("MISSING_PRIVATE_TEMP")
+        );
+    }
+
+    #[test]
+    fn parses_explicit_workspace_acl_operations_without_a_payload() {
+        for operation in ["workspace-status", "workspace-prepare"] {
+            let args = vec![
+                "--operation".to_string(),
+                operation.to_string(),
+                "--control-pipe".to_string(),
+                r"\\.\pipe\caelush-sandbox-test".to_string(),
+                "--provider".to_string(),
+                "windows-acl-restricted-token".to_string(),
+                "--nonce".to_string(),
+                "runner-test-nonce".to_string(),
+                "--boundary-fingerprint".to_string(),
+                "runner-test-boundary".to_string(),
+                "--workspace-root".to_string(),
+                r"C:\workspace".to_string(),
+            ];
+            assert!(parse_args(args).is_ok(), "{operation} should parse");
+        }
     }
 
     #[cfg(windows)]

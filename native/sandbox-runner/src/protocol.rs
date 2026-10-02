@@ -2,7 +2,12 @@ use std::io::{self, Write};
 
 pub const PROTOCOL_VERSION: u32 = 1;
 
-pub fn ready(nonce: &str, provider_id: &str, boundary_fingerprint: &str, enforcement: &str) -> String {
+pub fn ready(
+    nonce: &str,
+    provider_id: &str,
+    boundary_fingerprint: &str,
+    enforcement: &str,
+) -> String {
     format!(
         "{{\"type\":\"READY\",\"protocolVersion\":{},\"nonce\":\"{}\",\"providerId\":\"{}\",\"boundaryFingerprint\":\"{}\",\"enforcement\":\"{}\"}}\n",
         PROTOCOL_VERSION,
@@ -19,6 +24,38 @@ pub fn error(nonce: &str, code: &str) -> String {
         PROTOCOL_VERSION,
         escape(nonce),
         escape(code),
+    )
+}
+
+pub fn workspace_status(
+    nonce: &str,
+    provider_id: &str,
+    boundary_fingerprint: &str,
+    status: &str,
+) -> String {
+    format!(
+        "{{\"type\":\"WORKSPACE_STATUS\",\"protocolVersion\":{},\"nonce\":\"{}\",\"providerId\":\"{}\",\"boundaryFingerprint\":\"{}\",\"status\":\"{}\"}}\n",
+        PROTOCOL_VERSION,
+        escape(nonce),
+        escape(provider_id),
+        escape(boundary_fingerprint),
+        escape(status),
+    )
+}
+
+pub fn workspace_prepared(
+    nonce: &str,
+    provider_id: &str,
+    boundary_fingerprint: &str,
+    change: &str,
+) -> String {
+    format!(
+        "{{\"type\":\"WORKSPACE_PREPARED\",\"protocolVersion\":{},\"nonce\":\"{}\",\"providerId\":\"{}\",\"boundaryFingerprint\":\"{}\",\"change\":\"{}\"}}\n",
+        PROTOCOL_VERSION,
+        escape(nonce),
+        escape(provider_id),
+        escape(boundary_fingerprint),
+        escape(change),
     )
 }
 

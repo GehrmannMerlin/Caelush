@@ -8,7 +8,7 @@ use windows_sys::Win32::Foundation::{
     GetLastError, ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, HANDLE,
 };
 use windows_sys::Win32::Security::Authorization::{
-    SetEntriesInAclW, EXPLICIT_ACCESS_W, GRANT_ACCESS, TRUSTEE_IS_SID, TRUSTEE_IS_WELL_KNOWN_GROUP,
+    SetEntriesInAclW, EXPLICIT_ACCESS_W, GRANT_ACCESS, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN,
     TRUSTEE_W,
 };
 use windows_sys::Win32::Security::{
@@ -31,8 +31,7 @@ pub trait TokenBackend {
     fn create_restricted_token(
         &self,
         token: &Self::Handle,
-        logon_sid: &Self::Sid,
-        everyone_sid: &Self::Sid,
+        restricting_sids: &[&Self::Sid],
     ) -> Result<Self::Handle, SandboxError>;
     fn set_low_integrity(
         &self,
@@ -42,7 +41,7 @@ pub trait TokenBackend {
     fn create_default_dacl(
         &self,
         token: &Self::Handle,
-        restricting_sid: &Self::Sid,
+        restricting_sids: &[&Self::Sid],
     ) -> Result<Self::Acl, SandboxError>;
     fn set_default_dacl(&self, token: &Self::Handle, acl: &Self::Acl) -> Result<(), SandboxError>;
 }
@@ -52,10 +51,25 @@ pub fn create_read_only_with<B: TokenBackend>(backend: &B) -> Result<B::Handle, 
     let logon_sid = backend.logon_sid(&current_token)?;
     let everyone_sid = backend.known_sid(KnownSid::Everyone)?;
     let low_sid = backend.known_sid(KnownSid::LowIntegrity)?;
-    let restricted_token =
-        backend.create_restricted_token(&current_token, &logon_sid, &everyone_sid)?;
+    let restricted_sids = [&logon_sid, &everyone_sid];
+    let restricted_token = backend.create_restricted_token(&current_token, &restricted_sids)?;
     backend.set_low_integrity(&restricted_token, &low_sid)?;
-    let default_dacl = backend.create_default_dacl(&restricted_token, &everyone_sid)?;
+    let default_dacl = backend.create_default_dacl(&restricted_token, &[&everyone_sid])?;
+    backend.set_default_dacl(&restricted_token, &default_dacl)?;
+    Ok(restricted_token)
+}
+
+pub fn create_workspace_write_with<B: TokenBackend>(
+    backend: &B,
+    workspace_sid: &B::Sid,
+    private_temp_sid: &B::Sid,
+) -> Result<B::Handle, SandboxError> {
+    let current_token = backend.open_current_token()?;
+    let low_sid = backend.known_sid(KnownSid::LowIntegrity)?;
+    let restricted_sids = [workspace_sid, private_temp_sid];
+    let restricted_token = backend.create_restricted_token(&current_token, &restricted_sids)?;
+    backend.set_low_integrity(&restricted_token, &low_sid)?;
+    let default_dacl = backend.create_default_dacl(&restricted_token, &restricted_sids)?;
     backend.set_default_dacl(&restricted_token, &default_dacl)?;
     Ok(restricted_token)
 }
@@ -66,6 +80,18 @@ pub struct RestrictedToken(OwnedHandle);
 impl RestrictedToken {
     pub fn create_read_only() -> Result<Self, SandboxError> {
         create_read_only_with(&Win32TokenBackend).map(Self)
+    }
+
+    pub fn create_workspace_write(
+        workspace_sid: &str,
+        private_temp_sid: &str,
+    ) -> Result<Self, SandboxError> {
+        if workspace_sid == private_temp_sid {
+            return Err(SandboxError::CapabilitySidParse);
+        }
+        let workspace_sid = OwnedSid::from_string(workspace_sid)?;
+        let private_temp_sid = OwnedSid::from_string(private_temp_sid)?;
+        create_workspace_write_with(&Win32TokenBackend, &workspace_sid, &private_temp_sid).map(Self)
     }
 
     pub fn as_raw(&self) -> HANDLE {
@@ -110,19 +136,18 @@ impl TokenBackend for Win32TokenBackend {
     fn create_restricted_token(
         &self,
         token: &Self::Handle,
-        logon_sid: &Self::Sid,
-        everyone_sid: &Self::Sid,
+        restricting_sids: &[&Self::Sid],
     ) -> Result<Self::Handle, SandboxError> {
-        let restricting_sids = [
-            SID_AND_ATTRIBUTES {
-                Sid: logon_sid.as_psid(),
+        if restricting_sids.is_empty() {
+            return Err(SandboxError::RestrictedTokenCreate);
+        }
+        let restricting_sids = restricting_sids
+            .iter()
+            .map(|sid| SID_AND_ATTRIBUTES {
+                Sid: sid.as_psid(),
                 Attributes: 0,
-            },
-            SID_AND_ATTRIBUTES {
-                Sid: everyone_sid.as_psid(),
-                Attributes: 0,
-            },
-        ];
+            })
+            .collect::<Vec<_>>();
         let mut raw = null_mut();
         let created = unsafe {
             CreateRestrictedToken(
@@ -178,7 +203,7 @@ impl TokenBackend for Win32TokenBackend {
     fn create_default_dacl(
         &self,
         token: &Self::Handle,
-        restricting_sid: &Self::Sid,
+        restricting_sids: &[&Self::Sid],
     ) -> Result<Self::Acl, SandboxError> {
         let existing = query_default_dacl(token)?;
         let information = existing.as_ptr().cast::<TOKEN_DEFAULT_DACL>();
@@ -186,7 +211,13 @@ impl TokenBackend for Win32TokenBackend {
         if old_acl.is_null() {
             return Err(SandboxError::DefaultDaclCreate);
         }
-        let entries = [explicit_access(restricting_sid)];
+        if restricting_sids.is_empty() {
+            return Err(SandboxError::DefaultDaclCreate);
+        }
+        let entries = restricting_sids
+            .iter()
+            .map(|sid| explicit_access(sid))
+            .collect::<Vec<_>>();
         let mut acl = null_mut();
         let status =
             unsafe { SetEntriesInAclW(entries.len() as u32, entries.as_ptr(), old_acl, &mut acl) };
@@ -226,7 +257,7 @@ fn explicit_access(sid: &OwnedSid) -> EXPLICIT_ACCESS_W {
             pMultipleTrustee: null_mut(),
             MultipleTrusteeOperation: 0,
             TrusteeForm: TRUSTEE_IS_SID,
-            TrusteeType: TRUSTEE_IS_WELL_KNOWN_GROUP,
+            TrusteeType: TRUSTEE_IS_UNKNOWN,
             ptstrName: sid.as_psid().cast(),
         },
     }
@@ -280,7 +311,10 @@ fn drop_local_if_present(raw: *mut ACL) {
 
 #[cfg(test)]
 mod tests {
-    use super::{create_read_only_with, KnownSid, RestrictedToken, SandboxError, TokenBackend};
+    use super::{
+        create_read_only_with, create_workspace_write_with, KnownSid, RestrictedToken,
+        SandboxError, TokenBackend,
+    };
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -374,12 +408,21 @@ mod tests {
         fn create_restricted_token(
             &self,
             _token: &Self::Handle,
-            logon_sid: &Self::Sid,
-            everyone_sid: &Self::Sid,
+            restricting_sids: &[&Self::Sid],
         ) -> Result<Self::Handle, SandboxError> {
-            self.calls.borrow_mut().push("create-restricted-token");
-            assert_eq!(logon_sid.name, "logon-sid");
-            assert_eq!(everyone_sid.name, "everyone-sid");
+            if restricting_sids
+                .first()
+                .map(|sid| sid.name == "workspace-capability")
+                .unwrap_or(false)
+            {
+                self.calls
+                    .borrow_mut()
+                    .push("create-workspace-restricted-token");
+            } else {
+                self.calls.borrow_mut().push("create-restricted-token");
+                assert_eq!(restricting_sids[0].name, "logon-sid");
+                assert_eq!(restricting_sids[1].name, "everyone-sid");
+            }
             match self.failure {
                 Some(Failure::RestrictedToken) => Err(SandboxError::RestrictedTokenCreate),
                 Some(Failure::RestrictedTokenNull) => Err(SandboxError::RestrictedTokenNull),
@@ -402,10 +445,14 @@ mod tests {
         fn create_default_dacl(
             &self,
             _token: &Self::Handle,
-            restricting_sid: &Self::Sid,
+            restricting_sids: &[&Self::Sid],
         ) -> Result<Self::Acl, SandboxError> {
             self.calls.borrow_mut().push("create-default-dacl");
-            assert_eq!(restricting_sid.name, "everyone-sid");
+            assert!(!restricting_sids.is_empty());
+            if restricting_sids[0].name != "everyone-sid" {
+                assert_eq!(restricting_sids[0].name, "workspace-capability");
+                assert_eq!(restricting_sids[1].name, "private-temp-capability");
+            }
             if self.failure == Some(Failure::DefaultDaclCreate) {
                 return Err(SandboxError::DefaultDaclCreate);
             }
@@ -532,5 +579,28 @@ mod tests {
                 "restricted-token",
             ]
         );
+    }
+
+    #[test]
+    fn workspace_write_uses_only_the_workspace_and_temp_capabilities() {
+        let backend = MockBackend::new(None);
+        let workspace = backend.resource("workspace-capability");
+        let private_temp = backend.resource("private-temp-capability");
+
+        let token = create_workspace_write_with(&backend, &workspace, &private_temp)
+            .expect("workspace-write token should build");
+
+        assert_eq!(
+            backend.calls.into_inner(),
+            [
+                "open-current-token",
+                "create-low-sid",
+                "create-workspace-restricted-token",
+                "set-low-integrity",
+                "create-default-dacl",
+                "set-default-dacl",
+            ]
+        );
+        drop(token);
     }
 }
