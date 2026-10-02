@@ -1,10 +1,114 @@
 #![cfg(windows)]
 
-use caelush_sandbox_runner::platform::windows::spawn_restricted;
+mod support;
+
+use caelush_sandbox_runner::platform::windows::{
+    spawn_restricted, workspace_status, GrantStatus,
+};
 use caelush_sandbox_runner::platform::windows_mode::WindowsSandboxMode;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use support::{
+    assert_matrix_is_fully_encoded, command_interpreter, control_failures, failures, observe_column,
+    probe_arguments, render, write_probe_script, FixtureRoot, MatrixMode, PROVIDER,
+    READ_ONLY_COLUMNS, ROWS,
+};
+
+/// The whole `VIEW_ONLY` matrix, measured on real Windows security primitives.
+///
+/// The documented boundary this encodes is `VIEW_ONLY` reads successfully and every test write
+/// operation fails, at every path. `private_temp` and `second_run_temp` are absent because the mode
+/// is granted no per-Run temp at all; `support::read_only_column_exclusion` records that reason so
+/// the omission cannot silently become a skip.
+#[test]
+fn read_only_permission_matrix_matches_the_documented_boundary() {
+    assert_matrix_is_fully_encoded();
+
+    let mut root = FixtureRoot::new("read-only-matrix");
+    let workspace = root.dir("workspace");
+    let sibling = root.dir("sibling");
+    let ambient = root.external_dir("ambient-read-only");
+    let parent = root.path().to_path_buf();
+
+    let columns: Vec<(&'static str, PathBuf)> = vec![
+        ("workspace", workspace.clone()),
+        ("parent", parent),
+        ("sibling", sibling),
+        ("ambient_temp", ambient),
+    ];
+    assert_eq!(
+        columns
+            .iter()
+            .map(|(column, _)| *column)
+            .collect::<Vec<_>>(),
+        READ_ONLY_COLUMNS.to_vec(),
+        "the measured columns must be exactly the ones the mode has"
+    );
+
+    write_probe_script(&workspace);
+
+    // A matrix is worthless if the payload cannot perform its rows when nothing restricts it.
+    // This runs first, so a broken probe or a mis-encoded fixture path is reported as a harness
+    // defect instead of being dressed up as a wall of sandbox denials.
+    let control = control_failures(&workspace, &columns);
+    assert!(
+        control.is_empty(),
+        "harness control failed, so no denial below can be attributed to the sandbox:\n{}",
+        control.join("\n")
+    );
+    println!(
+        "harness control: {} rows x {} columns ran unrestricted and succeeded, so every denial in \
+         the matrix below is attributable to the restricted token",
+        ROWS.len(),
+        columns.len()
+    );
+
+    assert_eq!(
+        workspace_status(&workspace).expect("workspace status should be readable"),
+        GrantStatus::Missing,
+        "VIEW_ONLY must start from a workspace that was never prepared"
+    );
+
+    let program = command_interpreter();
+    let mut cells = Vec::new();
+    for (column, directory) in columns.iter() {
+        let column = *column;
+        let spawn = |row: &'static str, target: &Path| -> i32 {
+            let mut child = spawn_restricted(
+                PROVIDER,
+                WindowsSandboxMode::ReadOnly,
+                &workspace,
+                &workspace,
+                &program,
+                &probe_arguments(row, target),
+            )
+            .expect("read-only probe should start");
+            child.wait().expect("read-only probe should complete") as i32
+        };
+        cells.extend(observe_column(MatrixMode::ReadOnly, column, directory, spawn));
+    }
+
+    println!("{}", render(MatrixMode::ReadOnly, &cells));
+    let mismatches = failures(&cells);
+    assert!(
+        mismatches.is_empty(),
+        "read-only matrix does not match the documented boundary:\n{}",
+        mismatches.join("\n")
+    );
+
+    assert_eq!(
+        workspace_status(&workspace).expect("workspace status should be readable"),
+        GrantStatus::Missing,
+        "running the whole read-only matrix must not leave a capability ACE behind"
+    );
+    for (column, directory) in &columns {
+        assert!(
+            directory.exists(),
+            "column {column} vanished during the matrix"
+        );
+    }
+}
 
 #[test]
 fn real_read_only_child_reads_but_cannot_mutate_workspace_files() {
