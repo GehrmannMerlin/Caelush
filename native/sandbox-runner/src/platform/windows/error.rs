@@ -22,6 +22,13 @@ pub enum SandboxError {
     ProcessWait,
     ExitCodeQuery,
     UnsupportedMode,
+    CapabilitySidInput,
+    CapabilitySidHash,
+    PathBoundaryInvalid,
+    PathBoundaryOverlap,
+    PathBoundaryReparse,
+    PathBoundaryIdentityChanged,
+    PathBoundaryUnsupportedRoot,
 }
 
 impl SandboxError {
@@ -47,6 +54,13 @@ impl SandboxError {
             Self::ProcessWait => "WINDOWS_PROCESS_WAIT_FAILED",
             Self::ExitCodeQuery => "WINDOWS_EXIT_CODE_QUERY_FAILED",
             Self::UnsupportedMode => "WINDOWS_SANDBOX_MODE_UNAVAILABLE",
+            Self::CapabilitySidInput => "WINDOWS_CAPABILITY_SID_INPUT_INVALID",
+            Self::CapabilitySidHash => "WINDOWS_CAPABILITY_SID_HASH_FAILED",
+            Self::PathBoundaryInvalid => "WINDOWS_PATH_BOUNDARY_INVALID",
+            Self::PathBoundaryOverlap => "WINDOWS_PATH_BOUNDARY_OVERLAP",
+            Self::PathBoundaryReparse => "WINDOWS_PATH_BOUNDARY_REPARSE_UNSUPPORTED",
+            Self::PathBoundaryIdentityChanged => "WINDOWS_PATH_BOUNDARY_IDENTITY_CHANGED",
+            Self::PathBoundaryUnsupportedRoot => "WINDOWS_PATH_BOUNDARY_ROOT_UNSUPPORTED",
         }
     }
 }
