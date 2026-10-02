@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CaelushClient } from "@caelush/client";
 import type { AIAdapterEvent, ApiAdapter, ApiAdapterStreamInput } from "@caelush/ai";
-import { createWorkspaceId } from "@caelush/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { startDaemon } from "../../daemon/src/index.js";
 import { WebSessionManager } from "../src/application/session-manager.js";
@@ -16,6 +15,7 @@ import {
 } from "./support/ai-fixture.js";
 
 let directory: string | undefined;
+let outsideDirectory: string | undefined;
 let daemon: { close(): Promise<void>; url: string } | undefined;
 let manager: WebSessionManager | undefined;
 
@@ -26,30 +26,59 @@ afterEach(async () => {
   manager = undefined;
   daemon = undefined;
   directory = undefined;
+  outsideDirectory = undefined;
 });
 
 describe("Phase 13D real Web control integration", () => {
+  /**
+   * The approval card is only reachable from a preset whose boundary the call crosses.
+   *
+   * A file Tool never evaluates an effect at admission, so an *in-workspace* `apply_patch` under a write
+   * preset is a plain `ALLOW` with no card; under View Only it is a terminal refusal for a missing
+   * capability, which is also not a card. What `ON_BOUNDARY` reviews is an input the fact projector
+   * cannot describe - a `..` path segment - so both scenarios below drive an **escaping** patch under
+   * `WORKSPACE_WRITE`. Approving it is a review, not a bypass: the parser refuses the same path again at
+   * execution, which is why the assertion is on the file outside the workspace staying byte-identical.
+   */
   it("approves once through the real Web manager and resumes the waiting Tool", async () => {
     const workspacePath = await makeWorkspace();
+    const preparation = { prepared: false };
     const provider = new ApprovalProvider();
     daemon = await startDaemon({
       databasePath: join(workspacePath, "caelush.db"),
       port: 0,
       sseHeartbeatIntervalMs: 0,
+      workspacePath,
+      processSandboxProviders: [restrictedProvider],
+      fullAccessAvailable: true,
+      workspacePreparation: {
+        supported: true,
+        getStatus: async (_workspaceId, preset) =>
+          preset.id === "VIEW_ONLY" || preparation.prepared ? "READY" : "REQUIRED",
+        prepare: async () => {
+          preparation.prepared = true;
+          return { status: "READY" as const };
+        },
+      },
       providerBindings: [fixtureBinding()],
       modelSources: [fixtureModelSource()],
       adapterOverrides: [provider],
       defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
       logger: false,
     });
-    const client = new CaelushClient({ baseUrl: daemon.url });
+    const client = withoutAIControlPlane(new CaelushClient({ baseUrl: daemon.url }));
+    const registered = (await client.listWorkspaces()).items[0]!;
     manager = new WebSessionManager({
       client,
-      workspace: { id: createWorkspaceId(), path: workspacePath },
+      workspace: { id: registered.id, path: registered.canonicalPath },
       info: await client.getInfo(),
     });
 
+    await manager.loadSessions();
     manager.beginDraft();
+    await expect(
+      manager.preparePermissionPreset({ id: "WORKSPACE_WRITE", expectedVersion: 1 }),
+    ).resolves.toBe(true);
     await expect(manager.submitPrompt("approve the fixture patch")).resolves.toBe(true);
     await waitFor(() => manager?.getSnapshot().approvalState?.requests.length === 1);
     const approval = manager.getSnapshot().approvalState?.requests[0];
@@ -66,36 +95,56 @@ describe("Phase 13D real Web control integration", () => {
       manager.resolveApproval(approval!.id, { action: "APPROVE", scope: "ONCE" }),
     ).resolves.toBe(true);
     await waitFor(() => manager?.getSnapshot().activeRun === undefined);
-    expect(await readFile(join(workspacePath, "README.md"), "utf8")).toBe("after\n");
+    expect(await readFile(outsideSentinel(), "utf8")).toBe("outside\n");
+    expect(await readFile(join(workspacePath, "README.md"), "utf8")).toBe("before\n");
     expect(provider.toolCalls).toBe(1);
   }, 20_000);
 
   it("rejects through the real Web manager without invoking the Tool", async () => {
     const workspacePath = await makeWorkspace();
+    const preparation = { prepared: false };
     const provider = new ApprovalProvider();
     daemon = await startDaemon({
       databasePath: join(workspacePath, "caelush.db"),
       port: 0,
       sseHeartbeatIntervalMs: 0,
+      workspacePath,
+      processSandboxProviders: [restrictedProvider],
+      fullAccessAvailable: true,
+      workspacePreparation: {
+        supported: true,
+        getStatus: async (_workspaceId, preset) =>
+          preset.id === "VIEW_ONLY" || preparation.prepared ? "READY" : "REQUIRED",
+        prepare: async () => {
+          preparation.prepared = true;
+          return { status: "READY" as const };
+        },
+      },
       providerBindings: [fixtureBinding()],
       modelSources: [fixtureModelSource()],
       adapterOverrides: [provider],
       defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
       logger: false,
     });
-    const client = new CaelushClient({ baseUrl: daemon.url });
+    const client = withoutAIControlPlane(new CaelushClient({ baseUrl: daemon.url }));
+    const registered = (await client.listWorkspaces()).items[0]!;
     manager = new WebSessionManager({
       client,
-      workspace: { id: createWorkspaceId(), path: workspacePath },
+      workspace: { id: registered.id, path: registered.canonicalPath },
       info: await client.getInfo(),
     });
 
+    await manager.loadSessions();
     manager.beginDraft();
+    await expect(
+      manager.preparePermissionPreset({ id: "WORKSPACE_WRITE", expectedVersion: 1 }),
+    ).resolves.toBe(true);
     await expect(manager.submitPrompt("reject the fixture patch")).resolves.toBe(true);
     await waitFor(() => manager?.getSnapshot().approvalState?.requests.length === 1);
     const approval = manager.getSnapshot().approvalState?.requests[0];
     await expect(manager.resolveApproval(approval!.id, { action: "REJECT" })).resolves.toBe(true);
     await waitFor(() => manager?.getSnapshot().activeRun === undefined);
+    expect(await readFile(outsideSentinel(), "utf8")).toBe("outside\n");
     expect(await readFile(join(workspacePath, "README.md"), "utf8")).toBe("before\n");
     expect(provider.toolCalls).toBe(1);
   }, 20_000);
@@ -279,7 +328,10 @@ class ApprovalProvider implements ApiAdapter {
         id: "patch-once",
         name: "apply_patch",
         input: {
-          patch: "*** Begin Patch\n*** Update File: README.md\n@@\n-before\n+after\n*** End Patch",
+          // The `..` segment is what makes this observable: the fact projector cannot describe it, so the
+          // admission port reports `opaqueInput` and an ON_BOUNDARY preset must ask for review.
+          patch:
+            "*** Begin Patch\n*** Update File: ../outside/secret.txt\n@@\n-outside\n+escaped\n*** End Patch",
         },
       },
     };
@@ -293,11 +345,49 @@ class ApprovalProvider implements ApiAdapter {
 }
 
 async function makeWorkspace(): Promise<string> {
-  const path = await mkdtemp(join(tmpdir(), "caelush-phase-13d-web-"));
-  directory = path;
+  const parent = await mkdtemp(join(tmpdir(), "caelush-phase-13d-web-"));
+  directory = parent;
+  const path = join(parent, "workspace");
   await mkdir(path, { recursive: true });
   await writeFile(join(path, "README.md"), "before\n", "utf8");
+  // A target *outside* the registered workspace, so an escaping patch has something real to fail to
+  // reach. The assertions below read this file, not the workspace, because that is the file an approved
+  // boundary-crossing patch must still not touch.
+  outsideDirectory = join(parent, "outside");
+  await mkdir(outsideDirectory, { recursive: true });
+  await writeFile(join(outsideDirectory, "secret.txt"), "outside\n", "utf8");
   return path;
+}
+
+/** The registered workspace's outside sentinel, as the suite's escaping patch addresses it. */
+function outsideSentinel(): string {
+  return join(outsideDirectory!, "secret.txt");
+}
+
+/**
+ * The real client, with the AI control-plane reads hidden.
+ *
+ * The fixture provider is an injected `ApiAdapter` with no discovery endpoint, so the Daemon's model
+ * directory comes back empty and the manager refuses to submit (`DEFAULT_MODEL_UNAVAILABLE`). That
+ * surface is not what these tests are about, and the manager documents this exact fallback - "an older
+ * daemon remains usable through its compatibility info snapshot" - so the fixture takes it deliberately
+ * instead of stubbing the model layer. Everything else stays real: the Daemon, the routes, the patch
+ * admission port, and the approval machinery.
+ */
+function withoutAIControlPlane(client: CaelushClient): CaelushClient {
+  return new Proxy(client, {
+    get(target, property, receiver) {
+      if (
+        property === "listAIProviders" ||
+        property === "getAIModelDirectory" ||
+        property === "getDefaultAISelection"
+      ) {
+        return undefined;
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {

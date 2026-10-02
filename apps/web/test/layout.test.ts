@@ -25,12 +25,26 @@ describe("responsive workspace layout", () => {
   });
 
   it("locks the app shell to the viewport and gives each panel its intended scroll boundary", () => {
-    expect(lastCssRule(".web-app-shell")).toMatch(/height:\s*100dvh/);
-    expect(lastCssRule(".web-app-shell")).toContain("overflow: hidden");
-    expect(lastCssRule(".workspace-sidebar")).toContain("position: fixed");
-    expect(lastCssRule(".workspace-sidebar")).toContain("overflow-y: auto");
-    expect(lastCssRule(".workspace-column")).toContain("overflow-y: auto");
-    expect(lastCssRule(".session-scroll")).toContain("overflow: visible");
+    // Scoped to the shell block rather than `lastCssRule`. The last textual occurrence of a selector is
+    // no longer the shell rule: `.workspace-column` is re-declared inside the 720px media query further
+    // down, and the last `.session-scroll {` belongs to the `.session-workspace--empty` compound. A
+    // last-match lookup therefore measured a responsive override while reading as though it had checked
+    // the desktop shell, and passed only because those overrides repeat the same values.
+    const start = styles.lastIndexOf("/* Final viewport split overrides");
+    const shell = styles.slice(start, styles.indexOf("@media", start));
+
+    expect(shell).toMatch(
+      /\.web-app-shell\s*\{[\s\S]*?height:\s*100dvh;[\s\S]*?overflow:\s*hidden;/,
+    );
+    expect(shell).toMatch(
+      /\.workspace-sidebar\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?overflow-y:\s*auto;/,
+    );
+    expect(shell).toMatch(
+      /\.workspace-column\s*\{[\s\S]*?overflow-x:\s*hidden;[\s\S]*?overflow-y:\s*auto;/,
+    );
+    expect(shell).toMatch(
+      /\.session-scroll\s*\{[\s\S]*?overflow-x:\s*visible;[\s\S]*?overflow-y:\s*visible;/,
+    );
   });
 
   it("puts the primary conversation scrollbar on the workspace edge", () => {

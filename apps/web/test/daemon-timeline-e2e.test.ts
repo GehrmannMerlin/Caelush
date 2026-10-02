@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CaelushClient } from "@caelush/client";
 import type { AIAdapterEvent, ApiAdapter, ApiAdapterStreamInput } from "@caelush/ai";
-import { createWorkspaceId } from "@caelush/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { startDaemon } from "../../daemon/src/index.js";
 import { WebSessionManager } from "../src/application/session-manager.js";
@@ -28,6 +27,41 @@ afterEach(async () => {
   directory = undefined;
 });
 
+/**
+ * The real client, with the AI control-plane reads hidden.
+ *
+ * The fixture provider is an injected `ApiAdapter` with no discovery endpoint, so the Daemon's model
+ * directory comes back empty and the manager refuses to submit (`DEFAULT_MODEL_UNAVAILABLE`). That
+ * surface is not what this test is about, and the manager documents this exact fallback - "an older
+ * daemon remains usable through its compatibility info snapshot" - so the fixture takes it deliberately
+ * instead of stubbing the model layer. Everything else stays real: the Daemon, the routes, the Run, and
+ * the timeline projection under assertion.
+ */
+function withoutAIControlPlane(client: CaelushClient): CaelushClient {
+  return new Proxy(client, {
+    get(target, property, receiver) {
+      if (
+        property === "listAIProviders" ||
+        property === "getAIModelDirectory" ||
+        property === "getDefaultAISelection"
+      ) {
+        return undefined;
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+/** The packaged Runner as a real host would report it, so the Daemon can offer a selectable preset. */
+const timelineSandboxProvider = {
+  id: "fixture-restricted",
+  kind: "RESTRICTED" as const,
+  enforcement: "HARD" as const,
+  create: async () => ({}) as never,
+  probe: async () => ({ available: true, enforcement: "HARD" as const }),
+};
+
 describe("real daemon to Web timeline E2E", () => {
   it("projects real Tool, File, and Verification activity through the browser session manager", async () => {
     const workspacePath = await makeWorkspace();
@@ -36,16 +70,25 @@ describe("real daemon to Web timeline E2E", () => {
       databasePath: join(workspacePath, "caelush.db"),
       port: 0,
       sseHeartbeatIntervalMs: 0,
+      workspacePath,
+      processSandboxProviders: [timelineSandboxProvider],
+      fullAccessAvailable: true,
+      workspacePreparation: {
+        supported: true,
+        getStatus: async () => "READY" as const,
+        prepare: async () => ({ status: "READY" as const }),
+      },
       providerBindings: [fixtureBinding()],
       modelSources: [fixtureModelSource()],
       adapterOverrides: [provider],
       defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
       logger: false,
     });
-    const client = new CaelushClient({ baseUrl: daemon.url });
+    const client = withoutAIControlPlane(new CaelushClient({ baseUrl: daemon.url }));
+    const registered = (await client.listWorkspaces()).items[0]!;
     manager = new WebSessionManager({
       client,
-      workspace: { id: createWorkspaceId(), path: workspacePath },
+      workspace: { id: registered.id, path: registered.canonicalPath },
       info: await client.getInfo(),
     });
 
