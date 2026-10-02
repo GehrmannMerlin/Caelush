@@ -1,26 +1,18 @@
-import { createHash } from "node:crypto";
-import { access, readFile } from "node:fs/promises";
-import { constants } from "node:fs";
 import type {
   SandboxedSpawnSpec,
   ProcessSandboxProvider,
-  SandboxProbeResult,
   SandboxEnforcement,
 } from "./contracts.js";
 import { RuntimeExecError } from "../exec/errors.js";
 import { RuntimeSandboxError } from "../runtime-errors.js";
 import { createNativeRunnerProcessAdapter } from "./native-runner-adapter.js";
+import {
+  probeNativeSandboxRunner,
+  verifyNativeSandboxRunnerArtifact,
+  type NativeSandboxRunnerManifest,
+} from "./native-runner-probe.js";
 
-export interface NativeSandboxRunnerManifest {
-  readonly schemaVersion: 1;
-  readonly product: "caelush";
-  readonly controlProtocolVersion: 1;
-  readonly platform: "windows" | "linux" | "macos";
-  readonly arch: string;
-  readonly executableName: string;
-  readonly sha256: string;
-  readonly providers: readonly string[];
-}
+export type { NativeSandboxRunnerManifest } from "./native-runner-probe.js";
 
 export interface NativeRunnerProviderOptions {
   readonly platform?: NodeJS.Platform;
@@ -49,11 +41,8 @@ export function createNativeRunnerProvider(input: {
         throw new RuntimeSandboxError("The platform Provider does not match this host.");
       }
       if (options.adapterFactory !== undefined) return options.adapterFactory(spec);
-      const artifact = await verifyRunnerArtifact(
-        input.id,
-        input.platform,
-        input.enforcement,
-        options,
+      const artifact = await verifyNativeSandboxRunnerArtifact(
+        nativeRunnerProbeInput(input, options),
       );
       if (!artifact.available || options.runnerPath === undefined) {
         throw new RuntimeSandboxError("The required native sandbox runner is unavailable.");
@@ -71,48 +60,29 @@ export function createNativeRunnerProvider(input: {
       if (options.adapterFactory !== undefined) {
         return { available: true, enforcement: input.enforcement };
       }
-      return verifyRunnerArtifact(input.id, input.platform, input.enforcement, options);
+      return probeNativeSandboxRunner(nativeRunnerProbeInput(input, options));
     },
   };
   return Object.freeze(provider);
 }
 
-async function verifyRunnerArtifact(
-  providerId: string,
-  platform: "windows" | "linux" | "macos",
-  enforcement: SandboxEnforcement,
+function nativeRunnerProbeInput(
+  input: {
+    readonly id: string;
+    readonly platform: "windows" | "linux" | "macos";
+    readonly enforcement: SandboxEnforcement;
+  },
   options: NativeRunnerProviderOptions,
-): Promise<SandboxProbeResult> {
-  if (platformName(options.platform ?? process.platform) !== platform) {
-    return { available: false, enforcement: "NONE", reasonCode: "UNSUPPORTED_PLATFORM" };
-  }
-  if (options.runnerPath === undefined || options.manifest === undefined) {
-    return { available: false, enforcement: "NONE", reasonCode: "RUNNER_ARTIFACT_MISSING" };
-  }
-  if (
-    options.manifest.product !== "caelush" ||
-    options.manifest.schemaVersion !== 1 ||
-    options.manifest.controlProtocolVersion !== 1 ||
-    options.manifest.platform !== platform ||
-    options.manifest.arch !== (options.arch ?? process.arch) ||
-    options.manifest.executableName !== basename(options.runnerPath) ||
-    !options.manifest.providers.includes(providerId) ||
-    !/^[0-9a-f]{64}$/.test(options.manifest.sha256)
-  ) {
-    return { available: false, enforcement: "NONE", reasonCode: "RUNNER_MANIFEST_INVALID" };
-  }
-  try {
-    await access(options.runnerPath, constants.X_OK);
-    const digest = createHash("sha256")
-      .update(await readFile(options.runnerPath))
-      .digest("hex");
-    if (digest !== options.manifest.sha256) {
-      return { available: false, enforcement: "NONE", reasonCode: "RUNNER_HASH_MISMATCH" };
-    }
-  } catch {
-    return { available: false, enforcement: "NONE", reasonCode: "RUNNER_ARTIFACT_MISSING" };
-  }
-  return { available: true, enforcement };
+) {
+  return {
+    providerId: input.id,
+    targetPlatform: input.platform,
+    enforcement: input.enforcement,
+    ...(options.platform === undefined ? {} : { hostPlatform: options.platform }),
+    ...(options.arch === undefined ? {} : { arch: options.arch }),
+    ...(options.runnerPath === undefined ? {} : { runnerPath: options.runnerPath }),
+    ...(options.manifest === undefined ? {} : { manifest: options.manifest }),
+  };
 }
 
 function platformName(platform: NodeJS.Platform): "windows" | "linux" | "macos" | "other" {
@@ -120,8 +90,4 @@ function platformName(platform: NodeJS.Platform): "windows" | "linux" | "macos" 
   if (platform === "linux") return "linux";
   if (platform === "darwin") return "macos";
   return "other";
-}
-
-function basename(value: string): string {
-  return value.replaceAll("\\", "/").slice(value.replaceAll("\\", "/").lastIndexOf("/") + 1);
 }

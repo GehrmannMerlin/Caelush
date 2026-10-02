@@ -34,6 +34,7 @@ export async function createNativeRunnerProcessAdapter(input: {
   readonly runnerPath: string;
   readonly providerId: string;
   readonly spec: SandboxedSpawnSpec;
+  readonly readyTimeoutMs?: number;
 }): Promise<ManagedProcessAdapter> {
   if (input.spec.tty) throw new RuntimeExecError("PTY_UNAVAILABLE");
   const boundaryFingerprint = createHash("sha256")
@@ -52,7 +53,10 @@ export async function createNativeRunnerProcessAdapter(input: {
     providerId: input.providerId,
     boundaryFingerprint,
   });
-  const controlTransport = await createSandboxControlTransport({ hello });
+  const controlTransport = await createSandboxControlTransport({
+    hello,
+    ...(input.readyTimeoutMs === undefined ? {} : { timeoutMs: input.readyTimeoutMs }),
+  });
   const args = [
     "--operation",
     "run",

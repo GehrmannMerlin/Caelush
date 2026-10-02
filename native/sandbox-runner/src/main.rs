@@ -1,7 +1,7 @@
 mod control;
-mod platform;
 mod protocol;
 
+use caelush_sandbox_runner::platform;
 use std::env;
 use std::path::PathBuf;
 use std::process::exit;

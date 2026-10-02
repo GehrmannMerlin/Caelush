@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -152,6 +152,25 @@ describeWindows("native Windows Runner control handshake", () => {
         spec: sandboxedSpec(),
       }),
     ).rejects.toThrow(/expected READY/i);
+  });
+
+  it("does not start the payload when the requested mode is not implemented", async () => {
+    const sentinel = join(temporaryDirectory, "workspace-write-payload-started.txt");
+    const input = sandboxedSpec();
+    await expect(
+      createNativeRunnerProcessAdapter({
+        runnerPath,
+        providerId: "windows-acl-restricted-token",
+        spec: {
+          ...input,
+          launch: {
+            executable: process.env.ComSpec ?? "cmd.exe",
+            args: ["/d", "/s", "/c", `type nul > "${sentinel}"`],
+          },
+        },
+      }),
+    ).rejects.toThrow(/expected READY/i);
+    await expect(access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("starts a real read-only restricted child only after the Runner proves READY", async () => {
