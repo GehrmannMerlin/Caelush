@@ -2,7 +2,7 @@
 mod tests {
     use super::{merge_exact_grant, AccessGrantEntry, GrantChange, WRITE_GRANT_INHERITANCE};
 
-    const CAPABILITY_SID: &str = "S-1-15-3-101-202-303-404";
+    const CAPABILITY_SID: &str = "S-1-4-101-202-303-404";
     const CUSTOM_SID: &str = "S-1-5-21-100-200-300-400";
 
     fn capability_entry() -> AccessGrantEntry {
@@ -70,23 +70,34 @@ use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, GetNamedSecurityInfoW, SetNamedSecurityInfoW, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    AddAce, EqualSid, GetAce, GetAclInformation, InitializeAcl, ACCESS_ALLOWED_ACE, ACE_HEADER,
-    ACL, ACL_REVISION_DS, ACL_SIZE_INFORMATION, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION,
-    LABEL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE, SYSTEM_MANDATORY_LABEL_ACE,
+    AddAce, EqualSid, GetAce, GetAclInformation, InitializeAcl, ACCESS_ALLOWED_ACE,
+    ACCESS_DENIED_ACE, ACE_HEADER, ACL, ACL_REVISION_DS, ACL_SIZE_INFORMATION,
+    CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, LABEL_SECURITY_INFORMATION,
+    OBJECT_INHERIT_ACE, SYSTEM_MANDATORY_LABEL_ACE,
 };
 use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
 use windows_sys::Win32::System::SystemServices::{
-    ACCESS_ALLOWED_ACE_TYPE, SYSTEM_MANDATORY_LABEL_ACE_TYPE, SYSTEM_MANDATORY_LABEL_NO_WRITE_UP,
+    ACCESS_ALLOWED_ACE_TYPE, ACCESS_DENIED_ACE_TYPE, SYSTEM_MANDATORY_LABEL_ACE_TYPE,
+    SYSTEM_MANDATORY_LABEL_NO_WRITE_UP,
 };
 
 pub const WORKSPACE_WRITE_MASK: u32 = FILE_ALL_ACCESS;
 pub const WRITE_GRANT_INHERITANCE: u32 = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
+const FILE_DELETE_CHILD_MASK: u32 = 0x0000_0040;
+const AMBIENT_DELETE_DENY_INHERITANCE: u32 = CONTAINER_INHERIT_ACE;
+const LOW_LABEL_INHERITANCE: u32 = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccessGrantEntry {
     pub sid: String,
     pub mask: u32,
     pub inheritance: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AccessDenyEntry {
+    mask: u32,
+    inheritance: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,6 +114,7 @@ pub enum GrantStatus {
     Missing,
 }
 
+#[cfg(test)]
 pub fn merge_exact_grant(
     entries: &[AccessGrantEntry],
     desired: AccessGrantEntry,
@@ -115,6 +127,7 @@ pub fn merge_exact_grant(
     (merged, GrantChange::Added)
 }
 
+#[cfg(test)]
 pub fn revoke_exact_grant(
     entries: &[AccessGrantEntry],
     desired: &AccessGrantEntry,
@@ -146,8 +159,11 @@ pub fn inspect_write_grant(path: &Path, capability_sid: &str) -> Result<GrantSta
     let target = OwnedSid::from_string(capability_sid)?;
     let security = read_security(path)?;
     let desired = desired_grant(capability_sid);
+    let everyone_sid = OwnedSid::known(KnownSid::Everyone)?;
+    let desired_deny = desired_ambient_delete_deny();
     let low_sid = low_integrity_sid()?;
     let ready = acl_has_exact_grant(security.dacl, target.as_psid(), &desired)?
+        && acl_has_exact_deny(security.dacl, everyone_sid.as_psid(), &desired_deny)?
         && sacl_has_low_write_barrier(security.sacl, low_sid.as_psid())?;
     Ok(if ready {
         GrantStatus::Ready
@@ -171,21 +187,26 @@ fn ensure_write_grant_locked(
     capability_sid: &str,
 ) -> Result<GrantChange, SandboxError> {
     let target = OwnedSid::from_string(capability_sid)?;
+    let everyone_sid = OwnedSid::known(KnownSid::Everyone)?;
     let low_sid = low_integrity_sid()?;
     let security = read_security(path)?;
     let desired = desired_grant(capability_sid);
+    let desired_deny = desired_ambient_delete_deny();
     let grant_ready = acl_has_exact_grant(security.dacl, target.as_psid(), &desired)?;
+    let deny_ready = acl_has_exact_deny(security.dacl, everyone_sid.as_psid(), &desired_deny)?;
     let label_ready = sacl_has_low_write_barrier(security.sacl, low_sid.as_psid())?;
-    if grant_ready && label_ready {
+    if grant_ready && deny_ready && label_ready {
         return Ok(GrantChange::Unchanged);
     }
 
-    let dacl = if grant_ready {
+    let dacl = if grant_ready && deny_ready {
         None
     } else {
         Some(build_dacl(
             security.dacl,
-            Some((target.as_psid(), &desired)),
+            (!grant_ready).then_some((target.as_psid(), &desired)),
+            (!deny_ready).then_some((everyone_sid.as_psid(), &desired_deny)),
+            None,
             None,
         )?)
     };
@@ -203,15 +224,36 @@ fn revoke_write_grant_locked(
     capability_sid: &str,
 ) -> Result<GrantChange, SandboxError> {
     let target = OwnedSid::from_string(capability_sid)?;
+    let everyone_sid = OwnedSid::known(KnownSid::Everyone)?;
     let low_sid = low_integrity_sid()?;
     let security = read_security(path)?;
     let desired = desired_grant(capability_sid);
+    let desired_deny = desired_ambient_delete_deny();
     if !acl_has_exact_grant(security.dacl, target.as_psid(), &desired)? {
         return Ok(GrantChange::NotFound);
     }
 
-    let dacl = build_dacl(security.dacl, None, Some((target.as_psid(), &desired)))?;
-    let product_grant_remains = dacl_has_product_grant(dacl.as_ptr())?;
+    let grant_removed_dacl = build_dacl(
+        security.dacl,
+        None,
+        None,
+        Some((target.as_psid(), &desired)),
+        None,
+    )?;
+    let product_grant_remains = dacl_has_product_grant(grant_removed_dacl.as_ptr())?;
+    let deny_present = acl_has_exact_deny(security.dacl, everyone_sid.as_psid(), &desired_deny)?;
+    let remove_shared_deny = !product_grant_remains && deny_present;
+    let dacl = if remove_shared_deny {
+        build_dacl(
+            security.dacl,
+            None,
+            None,
+            Some((target.as_psid(), &desired)),
+            Some((everyone_sid.as_psid(), &desired_deny)),
+        )?
+    } else {
+        grant_removed_dacl
+    };
     let sacl = if product_grant_remains {
         None
     } else if sacl_has_low_write_barrier(security.sacl, low_sid.as_psid())? {
@@ -228,6 +270,13 @@ fn desired_grant(sid: &str) -> AccessGrantEntry {
         sid: sid.to_string(),
         mask: WORKSPACE_WRITE_MASK,
         inheritance: WRITE_GRANT_INHERITANCE,
+    }
+}
+
+fn desired_ambient_delete_deny() -> AccessDenyEntry {
+    AccessDenyEntry {
+        mask: FILE_DELETE_CHILD_MASK,
+        inheritance: AMBIENT_DELETE_DENY_INHERITANCE,
     }
 }
 
@@ -341,6 +390,26 @@ fn acl_has_exact_grant(
     })
 }
 
+fn acl_has_exact_deny(
+    acl: *const ACL,
+    target_sid: windows_sys::Win32::Security::PSID,
+    desired: &AccessDenyEntry,
+) -> Result<bool, SandboxError> {
+    for_each_ace(acl, |header, raw| {
+        if header.AceType != ACCESS_DENIED_ACE_TYPE as u8 {
+            return Ok(false);
+        }
+        let ace = unsafe { &*raw.cast::<ACCESS_DENIED_ACE>() };
+        let sid = std::ptr::addr_of!(ace.SidStart)
+            .cast::<u8>()
+            .cast_mut()
+            .cast();
+        Ok(ace.Mask == desired.mask
+            && header.AceFlags as u32 == desired.inheritance
+            && unsafe { EqualSid(sid, target_sid) != 0 })
+    })
+}
+
 fn dacl_has_product_grant(acl: *const ACL) -> Result<bool, SandboxError> {
     for_each_ace(acl, |header, raw| {
         if header.AceType != ACCESS_ALLOWED_ACE_TYPE as u8 {
@@ -373,7 +442,7 @@ fn sid_is_product_capability(sid: windows_sys::Win32::Security::PSID) -> bool {
         String::from_utf16_lossy(std::slice::from_raw_parts(string_sid, length))
     };
     drop_local_string_sid(string_sid);
-    value.starts_with("S-1-15-3-")
+    value.starts_with("S-1-4-") || value.starts_with("S-1-15-3-")
 }
 
 fn sacl_has_low_write_barrier(
@@ -389,10 +458,9 @@ fn sacl_has_low_write_barrier(
             .cast::<u8>()
             .cast_mut()
             .cast();
-        Ok(
-            ace.Mask == SYSTEM_MANDATORY_LABEL_NO_WRITE_UP
-                && unsafe { EqualSid(sid, low_sid) != 0 },
-        )
+        Ok(ace.Mask == SYSTEM_MANDATORY_LABEL_NO_WRITE_UP
+            && header.AceFlags as u32 == LOW_LABEL_INHERITANCE
+            && unsafe { EqualSid(sid, low_sid) != 0 })
     })
 }
 
@@ -461,8 +529,10 @@ impl AclBuffer {
 
 fn build_dacl(
     old: *const ACL,
-    add: Option<(windows_sys::Win32::Security::PSID, &AccessGrantEntry)>,
-    remove: Option<(windows_sys::Win32::Security::PSID, &AccessGrantEntry)>,
+    add_grant: Option<(windows_sys::Win32::Security::PSID, &AccessGrantEntry)>,
+    add_deny: Option<(windows_sys::Win32::Security::PSID, &AccessDenyEntry)>,
+    remove_grant: Option<(windows_sys::Win32::Security::PSID, &AccessGrantEntry)>,
+    remove_deny: Option<(windows_sys::Win32::Security::PSID, &AccessDenyEntry)>,
 ) -> Result<AclBuffer, SandboxError> {
     let old_size = if old.is_null() {
         size_of::<ACL>()
@@ -473,14 +543,21 @@ fn build_dacl(
         }
         size
     };
-    let additional = if let Some((sid, _)) = add {
-        aligned_ace_size(8 + sid_length(sid)?)
-    } else {
-        0
-    };
+    let additional = add_grant
+        .map(|(sid, _)| sid_length(sid).map(|length| aligned_ace_size(8 + length)))
+        .transpose()?
+        .unwrap_or(0)
+        + add_deny
+            .map(|(sid, _)| sid_length(sid).map(|length| aligned_ace_size(8 + length)))
+            .transpose()?
+            .unwrap_or(0);
     let mut buffer = AclBuffer::new(old_size + additional + 8)?;
-    append_filtered_aces(&mut buffer, old, remove)?;
-    if let Some((sid, desired)) = add {
+    append_filtered_aces(&mut buffer, old, remove_grant, remove_deny)?;
+    if let Some((sid, desired)) = add_deny {
+        let ace = access_denied_ace(sid, desired)?;
+        append_ace(&mut buffer, ace.as_ptr().cast(), ace.len())?;
+    }
+    if let Some((sid, desired)) = add_grant {
         let ace = access_allowed_ace(sid, desired)?;
         append_ace(&mut buffer, ace.as_ptr().cast(), ace.len())?;
     }
@@ -509,12 +586,28 @@ fn remove_low_integrity_sacl(old: *const ACL) -> Result<AclBuffer, SandboxError>
 fn append_filtered_aces(
     destination: &mut AclBuffer,
     old: *const ACL,
-    remove: Option<(windows_sys::Win32::Security::PSID, &AccessGrantEntry)>,
+    remove_grant: Option<(windows_sys::Win32::Security::PSID, &AccessGrantEntry)>,
+    remove_deny: Option<(windows_sys::Win32::Security::PSID, &AccessDenyEntry)>,
 ) -> Result<(), SandboxError> {
     append_aces(destination, old, |header, raw| {
-        if let Some((sid, desired)) = remove {
+        if let Some((sid, desired)) = remove_grant {
             if header.AceType == ACCESS_ALLOWED_ACE_TYPE as u8 {
                 let ace = unsafe { &*raw.cast::<ACCESS_ALLOWED_ACE>() };
+                let entry_sid = std::ptr::addr_of!(ace.SidStart)
+                    .cast::<u8>()
+                    .cast_mut()
+                    .cast();
+                if ace.Mask == desired.mask
+                    && header.AceFlags as u32 == desired.inheritance
+                    && unsafe { EqualSid(entry_sid, sid) != 0 }
+                {
+                    return Ok(false);
+                }
+            }
+        }
+        if let Some((sid, desired)) = remove_deny {
+            if header.AceType == ACCESS_DENIED_ACE_TYPE as u8 {
+                let ace = unsafe { &*raw.cast::<ACCESS_DENIED_ACE>() };
                 let entry_sid = std::ptr::addr_of!(ace.SidStart)
                     .cast::<u8>()
                     .cast_mut()
@@ -602,6 +695,29 @@ fn access_allowed_ace(
     Ok(bytes)
 }
 
+fn access_denied_ace(
+    sid: windows_sys::Win32::Security::PSID,
+    desired: &AccessDenyEntry,
+) -> Result<Vec<u8>, SandboxError> {
+    let length = aligned_ace_size(8 + sid_length(sid)?);
+    let mut bytes = vec![0u8; length];
+    let ace = bytes.as_mut_ptr().cast::<ACCESS_DENIED_ACE>();
+    unsafe {
+        (*ace).Header = ACE_HEADER {
+            AceType: ACCESS_DENIED_ACE_TYPE as u8,
+            AceFlags: desired.inheritance as u8,
+            AceSize: length as u16,
+        };
+        (*ace).Mask = desired.mask;
+        std::ptr::copy_nonoverlapping(
+            sid.cast::<u8>(),
+            std::ptr::addr_of_mut!((*ace).SidStart).cast::<u8>(),
+            sid_length(sid)?,
+        );
+    }
+    Ok(bytes)
+}
+
 fn mandatory_label_ace(
     low_sid: windows_sys::Win32::Security::PSID,
 ) -> Result<Vec<u8>, SandboxError> {
@@ -611,7 +727,7 @@ fn mandatory_label_ace(
     unsafe {
         (*ace).Header = ACE_HEADER {
             AceType: SYSTEM_MANDATORY_LABEL_ACE_TYPE as u8,
-            AceFlags: 0,
+            AceFlags: LOW_LABEL_INHERITANCE as u8,
             AceSize: length as u16,
         };
         (*ace).Mask = SYSTEM_MANDATORY_LABEL_NO_WRITE_UP;
@@ -745,7 +861,7 @@ mod integration_tests {
     fn refuses_to_mutate_a_missing_path() {
         let directory = TempDirectory::new();
         let missing = directory.path().join("missing");
-        let sid = "S-1-15-3-101-202-303-404";
+        let sid = "S-1-4-101-202-303-404";
 
         assert_eq!(
             ensure_write_grant(&missing, sid).err(),

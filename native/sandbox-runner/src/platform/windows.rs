@@ -1,5 +1,6 @@
 use std::ffi::OsString;
 use std::fs;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
 
 mod acl;
@@ -19,7 +20,7 @@ pub use acl::{GrantChange, GrantStatus};
 pub use process::RestrictedProcess;
 
 /// VIEW_ONLY uses a Low-integrity write-restricted token and a kill-on-close Job Object.
-/// WORKSPACE_WRITE remains fail-closed until its capability-SID ACL preparation is implemented;
+/// WORKSPACE_WRITE uses capability-SID ACL preparation and a per-Run private-temp grant;
 /// neither mode may silently call CreateProcess as an unrestricted fallback.
 pub fn spawn_restricted(
     _provider: &str,
@@ -113,7 +114,25 @@ fn validate_cwd(
     if !canonical.starts_with(workspace) && !canonical.starts_with(temp) {
         return Err(error::SandboxError::WorkspaceCwdBoundary.to_string());
     }
-    Ok(canonical)
+    Ok(process_current_directory(&canonical))
+}
+
+fn process_current_directory(path: &Path) -> std::path::PathBuf {
+    let wide = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    let extended_prefix = ['\\' as u16, '\\' as u16, '?' as u16, '\\' as u16];
+    if !wide.starts_with(&extended_prefix) {
+        return path.to_path_buf();
+    }
+
+    let unc_prefix = ['U' as u16, 'N' as u16, 'C' as u16, '\\' as u16];
+    let normal = if wide[4..].starts_with(&unc_prefix) {
+        let mut normal = vec!['\\' as u16, '\\' as u16];
+        normal.extend_from_slice(&wide[8..]);
+        normal
+    } else {
+        wide[4..].to_vec()
+    };
+    std::path::PathBuf::from(OsString::from_wide(&normal))
 }
 
 fn workspace_environment(temp: &Path) -> Vec<(OsString, OsString)> {
@@ -123,7 +142,7 @@ fn workspace_environment(temp: &Path) -> Vec<(OsString, OsString)> {
             !name.eq_ignore_ascii_case("TMP") && !name.eq_ignore_ascii_case("TEMP")
         })
         .collect::<Vec<_>>();
-    let temp = temp.as_os_str().to_os_string();
+    let temp = process_current_directory(temp).as_os_str().to_os_string();
     environment.push((OsString::from("TMP"), temp.clone()));
     environment.push((OsString::from("TEMP"), temp));
     environment

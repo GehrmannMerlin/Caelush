@@ -65,11 +65,18 @@ pub fn create_workspace_write_with<B: TokenBackend>(
     private_temp_sid: &B::Sid,
 ) -> Result<B::Handle, SandboxError> {
     let current_token = backend.open_current_token()?;
+    let logon_sid = backend.logon_sid(&current_token)?;
+    let everyone_sid = backend.known_sid(KnownSid::Everyone)?;
     let low_sid = backend.known_sid(KnownSid::LowIntegrity)?;
-    let restricted_sids = [workspace_sid, private_temp_sid];
+    // WRITE_RESTRICTED tokens still perform a second SID-based access check
+    // while loading DLLs and initializing CNG/desktop objects.  Keep the
+    // same ambient keep-alive SIDs as the read-only token, then append the
+    // product capabilities that authorize workspace/temp writes.
+    let restricted_sids = [workspace_sid, private_temp_sid, &logon_sid, &everyone_sid];
     let restricted_token = backend.create_restricted_token(&current_token, &restricted_sids)?;
     backend.set_low_integrity(&restricted_token, &low_sid)?;
-    let default_dacl = backend.create_default_dacl(&restricted_token, &restricted_sids)?;
+    let default_dacl =
+        backend.create_default_dacl(&restricted_token, &[workspace_sid, private_temp_sid])?;
     backend.set_default_dacl(&restricted_token, &default_dacl)?;
     Ok(restricted_token)
 }
@@ -418,6 +425,11 @@ mod tests {
                 self.calls
                     .borrow_mut()
                     .push("create-workspace-restricted-token");
+                assert_eq!(restricting_sids.len(), 4);
+                assert_eq!(restricting_sids[0].name, "workspace-capability");
+                assert_eq!(restricting_sids[1].name, "private-temp-capability");
+                assert_eq!(restricting_sids[2].name, "logon-sid");
+                assert_eq!(restricting_sids[3].name, "everyone-sid");
             } else {
                 self.calls.borrow_mut().push("create-restricted-token");
                 assert_eq!(restricting_sids[0].name, "logon-sid");
@@ -452,6 +464,7 @@ mod tests {
             if restricting_sids[0].name != "everyone-sid" {
                 assert_eq!(restricting_sids[0].name, "workspace-capability");
                 assert_eq!(restricting_sids[1].name, "private-temp-capability");
+                assert_eq!(restricting_sids.len(), 2);
             }
             if self.failure == Some(Failure::DefaultDaclCreate) {
                 return Err(SandboxError::DefaultDaclCreate);
@@ -582,7 +595,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_write_uses_only_the_workspace_and_temp_capabilities() {
+    fn workspace_write_keeps_alive_the_host_and_adds_workspace_capabilities() {
         let backend = MockBackend::new(None);
         let workspace = backend.resource("workspace-capability");
         let private_temp = backend.resource("private-temp-capability");
@@ -594,6 +607,8 @@ mod tests {
             backend.calls.into_inner(),
             [
                 "open-current-token",
+                "find-logon-sid",
+                "create-everyone-sid",
                 "create-low-sid",
                 "create-workspace-restricted-token",
                 "set-low-integrity",

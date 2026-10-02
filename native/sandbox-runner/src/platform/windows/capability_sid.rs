@@ -6,7 +6,7 @@ use windows_sys::Win32::Security::Cryptography::{
     BCRYPT_HASH_HANDLE, BCRYPT_HASH_LENGTH, BCRYPT_OBJECT_LENGTH, BCRYPT_SHA256_ALGORITHM,
 };
 
-const CAPABILITY_IDENTIFIER_AUTHORITY: &str = "S-1-15-3";
+const CAPABILITY_IDENTIFIER_AUTHORITY: &str = "S-1-4";
 const WORKSPACE_DOMAIN: &str = "caelush.workspace-write.v1";
 const TEMP_DOMAIN: &str = "caelush.private-temp.v1";
 
@@ -167,11 +167,7 @@ mod tests {
 
     fn is_capability_sid(value: &str) -> bool {
         let mut parts = value.split('-');
-        if parts.next() != Some("S")
-            || parts.next() != Some("1")
-            || parts.next() != Some("15")
-            || parts.next() != Some("3")
-        {
+        if parts.next() != Some("S") || parts.next() != Some("1") || parts.next() != Some("4") {
             return false;
         }
         let subauthorities: Vec<_> = parts.collect();
