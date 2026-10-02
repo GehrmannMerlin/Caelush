@@ -1,10 +1,12 @@
-import { createHash } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { CaelushClient } from "@caelush/client";
 import { checkNodePtyLoadability, inspectMigrationAssets } from "@caelush/daemon/diagnostics";
-import { inspectSecurityFeatureGates } from "@caelush/daemon";
+import {
+  daemonEntryPath as packagedDaemonEntryPath,
+  inspectSecurityFeatureGates,
+  resolveSandboxRunnerArtifact,
+} from "@caelush/daemon";
 import { resolveProductPaths, type ProductPaths } from "@caelush/daemon/paths";
 import type { DaemonInfo } from "@caelush/protocol";
 import type { DaemonProbeClient } from "./daemon-discovery.js";
@@ -35,6 +37,12 @@ export interface DoctorOptions {
   readonly stdinIsTTY?: boolean;
   readonly stdoutIsTTY?: boolean;
   readonly workspacePath?: string;
+  /**
+   * Overrides the packaged daemon entry point that anchors release-relative Runner
+   * discovery. Production callers leave this unset so doctor resolves the same artifact
+   * the daemon will use.
+   */
+  readonly daemonEntryPath?: string;
   readonly probeClient?: DaemonProbeClient;
   readonly nodePtyCheck?: () => Promise<{ readonly available: boolean }>;
   readonly migrationCheck?: () => { readonly available: boolean; readonly migrationCount: number };
@@ -181,7 +189,14 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
     detail: pty.available ? "loadable" : "not loadable",
   });
   const sandboxRunner = await (
-    options.sandboxRunnerCheck ?? (() => defaultSandboxRunnerCheck(environment, platform, arch))
+    options.sandboxRunnerCheck ??
+    (() =>
+      defaultSandboxRunnerCheck(
+        environment,
+        platform,
+        arch,
+        options.daemonEntryPath ?? packagedDaemonEntryPath,
+      ))
   )();
   checks.push({
     name: "Restricted execution Provider",
@@ -256,58 +271,26 @@ async function defaultExecutableCheck(executable: "git" | "rg"): Promise<boolean
   });
 }
 
+/**
+ * Consumes the daemon's public bounded Runner resolver so doctor and the daemon always
+ * report the same artifact fact. Doctor never re-implements manifest or hash parsing.
+ */
 async function defaultSandboxRunnerCheck(
   environment: Readonly<Record<string, string | undefined>>,
   platform: NodeJS.Platform,
   arch: string,
+  daemonEntry: string,
 ): Promise<{ readonly available: boolean; readonly reasonCode?: string }> {
-  const expectedPlatform =
-    platform === "win32" ? "windows" : platform === "darwin" ? "macos" : platform;
-  if (!new Set(["windows", "linux", "macos"]).has(expectedPlatform)) {
-    return { available: false, reasonCode: "RUNNER_PLATFORM_UNSUPPORTED" };
-  }
-  const runnerPath = environment.CAELUSH_SANDBOX_RUNNER_PATH;
-  if (runnerPath === undefined || runnerPath.length === 0) {
-    return { available: false, reasonCode: "RUNNER_ARTIFACT_MISSING" };
-  }
-  const manifestPath =
-    environment.CAELUSH_SANDBOX_RUNNER_MANIFEST ?? join(dirname(runnerPath), "manifest.json");
   try {
-    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as Record<string, unknown>;
-    const platformProviders: Readonly<Record<string, ReadonlySet<string>>> = {
-      windows: new Set(["windows-acl-restricted-token"]),
-      linux: new Set(["linux-landlock", "linux-bubblewrap"]),
-      macos: new Set(["macos-seatbelt"]),
-    };
-    if (
-      manifest.product !== "caelush" ||
-      manifest.schemaVersion !== 1 ||
-      manifest.controlProtocolVersion !== 1 ||
-      manifest.platform !== expectedPlatform ||
-      manifest.arch !== arch ||
-      manifest.executableName !== basename(runnerPath) ||
-      typeof manifest.sha256 !== "string" ||
-      !/^[0-9a-f]{64}$/.test(manifest.sha256) ||
-      !Array.isArray(manifest.providers) ||
-      manifest.providers.length === 0
-    ) {
-      return { available: false, reasonCode: "RUNNER_MANIFEST_INVALID" };
-    }
-    if (
-      manifest.providers.some(
-        (provider) =>
-          typeof provider !== "string" ||
-          !(platformProviders[expectedPlatform]?.has(provider) ?? false),
-      )
-    ) {
-      return { available: false, reasonCode: "RUNNER_BACKEND_MISSING" };
-    }
-    const digest = createHash("sha256")
-      .update(await readFile(runnerPath))
-      .digest("hex");
-    return digest === manifest.sha256
+    const resolution = await resolveSandboxRunnerArtifact({
+      environment,
+      daemonEntryPath: daemonEntry,
+      platform,
+      arch,
+    });
+    return resolution.available
       ? { available: true }
-      : { available: false, reasonCode: "RUNNER_HASH_MISMATCH" };
+      : { available: false, reasonCode: resolution.reasonCode };
   } catch {
     return { available: false, reasonCode: "RUNNER_ARTIFACT_MISSING" };
   }

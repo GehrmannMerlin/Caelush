@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DaemonInfo, HealthResponse } from "@caelush/protocol";
@@ -252,3 +252,158 @@ describe("doctor", () => {
     expect(output).toContain("[WARN] Restricted execution Provider: RUNNER_PROBE_FAILED");
   });
 });
+
+describe("doctor sandbox runner discovery", () => {
+  const providerCheckName = "Restricted execution Provider";
+
+  it("verifies the packaged Runner with no sandbox environment override", async () => {
+    const bundleRoot = await mkdtemp(join(tmpdir(), "caelush-doctor-packaged-"));
+    try {
+      const daemonEntryPath = await writeDaemonEntry(bundleRoot);
+      await writePackagedRunner(bundleRoot, { platform: "windows", arch: "x64" });
+
+      const result = await runDoctor(options({ daemonEntryPath, environment: {} }));
+
+      expect(result.exitCode).toBe(0);
+      expect(result.checks.find((check) => check.name === providerCheckName)).toEqual({
+        name: providerCheckName,
+        status: "PASS",
+        detail: "native runner verified",
+      });
+    } finally {
+      await rm(bundleRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves one bounded reason code per resolver failure", async () => {
+    const bundleRoot = await mkdtemp(join(tmpdir(), "caelush-doctor-reasons-"));
+    const overrideRoot = await mkdtemp(join(tmpdir(), "caelush-doctor-override-"));
+    try {
+      const daemonEntryPath = await writeDaemonEntry(bundleRoot);
+      const packaged = await writePackagedRunner(bundleRoot, {
+        platform: "windows",
+        arch: "x64",
+      });
+
+      const cases: Array<{
+        readonly name: string;
+        readonly environment: Readonly<Record<string, string | undefined>>;
+        readonly arch?: string;
+        readonly prepare?: () => Promise<void>;
+        readonly reasonCode: string;
+      }> = [
+        {
+          name: "invalid manifest",
+          environment: {},
+          reasonCode: "RUNNER_MANIFEST_INVALID",
+          prepare: async () => {
+            await writeFile(packaged.manifestPath, "not-json", "utf8");
+          },
+        },
+        {
+          name: "unknown provider backend",
+          environment: {},
+          reasonCode: "RUNNER_BACKEND_MISSING",
+          prepare: async () => {
+            await writeFile(
+              packaged.manifestPath,
+              JSON.stringify({
+                ...packaged.manifest,
+                providers: ["unrelated-backend"],
+              }),
+              "utf8",
+            );
+          },
+        },
+        {
+          name: "hash mismatch",
+          environment: {},
+          reasonCode: "RUNNER_HASH_MISMATCH",
+          prepare: async () => {
+            await writePackagedRunner(bundleRoot, { platform: "windows", arch: "x64" });
+            await writeFile(packaged.runnerPath, "tampered-runner", "utf8");
+          },
+        },
+        {
+          name: "traversal-like development override",
+          environment: {
+            CAELUSH_SANDBOX_RUNNER_PATH: join(overrideRoot, "..", "..", "evil.exe"),
+          },
+          reasonCode: "RUNNER_ARTIFACT_MISSING",
+        },
+        {
+          name: "missing packaged runner",
+          environment: {},
+          reasonCode: "RUNNER_ARTIFACT_MISSING",
+          prepare: async () => {
+            await rm(join(bundleRoot, "sandbox-runner"), { recursive: true, force: true });
+          },
+        },
+      ];
+
+      for (const testCase of cases) {
+        await testCase.prepare?.();
+        const result = await runDoctor(
+          options({
+            daemonEntryPath,
+            environment: testCase.environment,
+            ...(testCase.arch === undefined ? {} : { arch: testCase.arch }),
+          }),
+        );
+        expect(result.exitCode, testCase.name).toBe(0);
+        expect(
+          result.checks.find((check) => check.name === providerCheckName),
+          testCase.name,
+        ).toEqual({
+          name: providerCheckName,
+          status: "WARN",
+          detail: testCase.reasonCode,
+        });
+      }
+    } finally {
+      await rm(bundleRoot, { recursive: true, force: true });
+      await rm(overrideRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+async function writeDaemonEntry(bundleRoot: string): Promise<string> {
+  const daemonEntryPath = join(bundleRoot, "node_modules", "@caelush", "daemon", "dist", "main.js");
+  await mkdir(join(bundleRoot, "node_modules", "@caelush", "daemon", "dist"), { recursive: true });
+  await writeFile(daemonEntryPath, "", "utf8");
+  return daemonEntryPath;
+}
+
+async function writePackagedRunner(
+  bundleRoot: string,
+  input: { readonly platform: "windows" | "linux" | "macos"; readonly arch: string },
+): Promise<{
+  readonly runnerPath: string;
+  readonly manifestPath: string;
+  readonly manifest: Record<string, unknown>;
+}> {
+  const directory = join(bundleRoot, "sandbox-runner");
+  await mkdir(directory, { recursive: true });
+  const executableName =
+    input.platform === "windows" ? "caelush-sandbox-runner.exe" : "caelush-sandbox-runner";
+  const runnerPath = join(directory, executableName);
+  const manifestPath = join(directory, "manifest.json");
+  await writeFile(runnerPath, "runner-fixture", "utf8");
+  const manifest = {
+    schemaVersion: 1,
+    product: "caelush",
+    controlProtocolVersion: 1,
+    platform: input.platform,
+    arch: input.arch,
+    executableName,
+    sha256: createHash("sha256").update("runner-fixture").digest("hex"),
+    providers:
+      input.platform === "windows"
+        ? ["windows-acl-restricted-token"]
+        : input.platform === "linux"
+          ? ["linux-landlock"]
+          : ["macos-seatbelt"],
+  };
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  return { runnerPath, manifestPath, manifest };
+}
