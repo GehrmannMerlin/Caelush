@@ -4,7 +4,7 @@ import { TerminalOutputDecoder } from "../exec/terminal-output.js";
 import { terminateProcessTree } from "../exec/process-tree.js";
 import type { ManagedProcessAdapter, ProcessExit, ProcessOutputEvent } from "../exec/contracts.js";
 import { RuntimeExecError } from "../exec/errors.js";
-import { RuntimeSandboxError } from "../runtime-errors.js";
+import { RuntimeSandboxError, RuntimeSandboxProtocolError } from "../runtime-errors.js";
 import { createSandboxHello } from "./control-protocol.js";
 import { createSandboxControlTransport } from "./control-transport.js";
 import type { SandboxedSpawnSpec } from "./contracts.js";
@@ -73,7 +73,7 @@ export async function createNativeRunnerProcessAdapter(input: {
   try {
     await controlTransport.waitForReady(child, hello);
   } catch (error) {
-    throw error instanceof RuntimeSandboxError
+    throw error instanceof RuntimeSandboxError || error instanceof RuntimeSandboxProtocolError
       ? error
       : new RuntimeSandboxError("The native sandbox runner did not prove its boundary.");
   }

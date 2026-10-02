@@ -36,4 +36,22 @@ describe("sandbox control protocol", () => {
     expect(() => decodeSandboxControlMessage("READY\n")).toThrow(/protocol/i);
     expect(() => decodeSandboxControlMessage("x".repeat(70_000))).toThrow(/size/i);
   });
+
+  it("decodes a nonce-bound ERROR without requiring READY-only fields", () => {
+    const decoded = decodeSandboxControlMessage(
+      JSON.stringify({
+        type: "ERROR",
+        protocolVersion: SANDBOX_CONTROL_PROTOCOL_VERSION,
+        nonce: "nonce-control-error-1",
+        code: "WINDOWS_RESTRICTED_TOKEN_BACKEND_UNAVAILABLE",
+      }),
+    );
+
+    expect(decoded).toEqual({
+      type: "ERROR",
+      protocolVersion: SANDBOX_CONTROL_PROTOCOL_VERSION,
+      nonce: "nonce-control-error-1",
+      code: "WINDOWS_RESTRICTED_TOKEN_BACKEND_UNAVAILABLE",
+    });
+  });
 });

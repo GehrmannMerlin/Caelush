@@ -102,17 +102,16 @@ export function validateSandboxControlMessage(
   if (value.protocolVersion !== SANDBOX_CONTROL_PROTOCOL_VERSION) {
     throw new RuntimeSandboxProtocolError("Sandbox control protocol version is invalid.");
   }
-  if (
-    typeof value.nonce !== "string" ||
-    value.nonce.length < 8 ||
-    value.nonce.length > 256 ||
-    typeof value.providerId !== "string" ||
-    value.providerId.length === 0
-  ) {
+  if (typeof value.nonce !== "string" || value.nonce.length < 8 || value.nonce.length > 256) {
     throw new RuntimeSandboxProtocolError("Sandbox control protocol fields are invalid.");
   }
   if (value.type === "HELLO" || value.type === "READY") {
-    if (typeof value.boundaryFingerprint !== "string" || value.boundaryFingerprint.length === 0) {
+    if (
+      typeof value.providerId !== "string" ||
+      value.providerId.length === 0 ||
+      typeof value.boundaryFingerprint !== "string" ||
+      value.boundaryFingerprint.length === 0
+    ) {
       throw new RuntimeSandboxProtocolError("Sandbox control boundary fingerprint is invalid.");
     }
   }
