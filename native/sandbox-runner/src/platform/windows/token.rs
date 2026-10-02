@@ -61,7 +61,6 @@ pub fn create_read_only_with<B: TokenBackend>(backend: &B) -> Result<B::Handle, 
 }
 
 #[derive(Debug)]
-#[allow(dead_code)] // The raw token handle is consumed by restricted process creation in Task 3.
 pub struct RestrictedToken(OwnedHandle);
 
 impl RestrictedToken {
@@ -69,7 +68,6 @@ impl RestrictedToken {
         create_read_only_with(&Win32TokenBackend).map(Self)
     }
 
-    #[allow(dead_code)] // The raw token handle is consumed by restricted process creation in Task 3.
     pub fn as_raw(&self) -> HANDLE {
         self.0.as_raw()
     }

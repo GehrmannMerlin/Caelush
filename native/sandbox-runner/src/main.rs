@@ -58,13 +58,18 @@ fn execute(config: &Config) -> Result<i32, String> {
                 "HARD"
             };
             write_ready(config, enforcement).map_err(|_| "CONTROL_WRITE_FAILED".to_string())?;
-            let status = child.wait().map_err(|_| "CHILD_WAIT_FAILED".to_string())?;
-            Ok(status.code().unwrap_or(1))
+            let status = wait_target(&mut child)?;
+            Ok(status as i32)
         }
     }
 }
 
-fn spawn_target(config: &Config, run: &RunConfig) -> Result<std::process::Child, String> {
+#[cfg(target_os = "windows")]
+type TargetProcess = platform::windows::RestrictedProcess;
+#[cfg(not(target_os = "windows"))]
+type TargetProcess = std::process::Child;
+
+fn spawn_target(config: &Config, run: &RunConfig) -> Result<TargetProcess, String> {
     #[cfg(target_os = "linux")]
     {
         return platform::linux::spawn_restricted(
@@ -98,6 +103,17 @@ fn spawn_target(config: &Config, run: &RunConfig) -> Result<std::process::Child,
     }
     #[allow(unreachable_code)]
     Err("UNSUPPORTED_PLATFORM".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn wait_target(child: &mut TargetProcess) -> Result<u32, String> {
+    child.wait().map_err(|error| error.to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn wait_target(child: &mut TargetProcess) -> Result<u32, String> {
+    let status = child.wait().map_err(|_| "CHILD_WAIT_FAILED".to_string())?;
+    Ok(status.code().unwrap_or(1) as u32)
 }
 
 fn parse_args(args: Vec<String>) -> Result<Config, String> {

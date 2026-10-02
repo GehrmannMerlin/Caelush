@@ -11,6 +11,16 @@ pub enum SandboxError {
     LowIntegritySet,
     DefaultDaclCreate,
     DefaultDaclSet,
+    CommandLineBuild,
+    EnvironmentBuild,
+    StandardHandlePrepare,
+    JobCreate,
+    JobConfigure,
+    RestrictedProcessCreate,
+    JobAssign,
+    ThreadResume,
+    ProcessWait,
+    ExitCodeQuery,
     UnsupportedMode,
 }
 
@@ -26,6 +36,16 @@ impl SandboxError {
             Self::LowIntegritySet => "WINDOWS_LOW_INTEGRITY_SET_FAILED",
             Self::DefaultDaclCreate => "WINDOWS_DEFAULT_DACL_CREATE_FAILED",
             Self::DefaultDaclSet => "WINDOWS_DEFAULT_DACL_SET_FAILED",
+            Self::CommandLineBuild => "WINDOWS_COMMAND_LINE_BUILD_FAILED",
+            Self::EnvironmentBuild => "WINDOWS_ENVIRONMENT_BUILD_FAILED",
+            Self::StandardHandlePrepare => "WINDOWS_STANDARD_HANDLE_PREPARE_FAILED",
+            Self::JobCreate => "WINDOWS_JOB_CREATE_FAILED",
+            Self::JobConfigure => "WINDOWS_JOB_CONFIGURE_FAILED",
+            Self::RestrictedProcessCreate => "WINDOWS_RESTRICTED_PROCESS_CREATE_FAILED",
+            Self::JobAssign => "WINDOWS_JOB_ASSIGN_FAILED",
+            Self::ThreadResume => "WINDOWS_THREAD_RESUME_FAILED",
+            Self::ProcessWait => "WINDOWS_PROCESS_WAIT_FAILED",
+            Self::ExitCodeQuery => "WINDOWS_EXIT_CODE_QUERY_FAILED",
             Self::UnsupportedMode => "WINDOWS_SANDBOX_MODE_UNAVAILABLE",
         }
     }

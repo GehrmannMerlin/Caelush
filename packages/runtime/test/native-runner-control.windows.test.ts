@@ -153,6 +153,24 @@ describeWindows("native Windows Runner control handshake", () => {
       }),
     ).rejects.toThrow(/expected READY/i);
   });
+
+  it("starts a real read-only restricted child only after the Runner proves READY", async () => {
+    const adapter = await createNativeRunnerProcessAdapter({
+      runnerPath,
+      providerId: "windows-acl-restricted-token",
+      spec: readOnlySpec(),
+    });
+    const output: string[] = [];
+    adapter.onOutput((event) => output.push(event.text));
+    const exit = await new Promise<{ readonly exitCode?: number; readonly signal?: string }>(
+      (resolve, reject) => {
+        adapter.onError(reject);
+        adapter.onExit(resolve);
+      },
+    );
+    expect(output.join("")).toContain("restricted-child-ready");
+    expect(exit).toMatchObject({ exitCode: 37 });
+  });
 });
 
 const connectAndWriteScript = String.raw`
@@ -212,6 +230,27 @@ function sandboxedSpec(): SandboxedSpawnSpec {
       },
       processBoundary: "WORKSPACE_WRITE",
       requiredEnforcement: "OS_RESTRICTED",
+    },
+  };
+}
+
+function readOnlySpec(): SandboxedSpawnSpec {
+  const base = sandboxedSpec();
+  return {
+    ...base,
+    launch: {
+      executable: process.env.ComSpec ?? "cmd.exe",
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        "echo restricted-child-ready & ping -n 2 127.0.0.1 >nul & exit /b 37",
+      ],
+    },
+    policy: {
+      ...base.policy,
+      filesystem: { ...base.policy.filesystem, boundary: "WORKSPACE_READ_ONLY" },
+      processBoundary: "READ_ONLY",
     },
   };
 }

@@ -1,30 +1,34 @@
 use std::path::Path;
-use std::process::Child;
 
+mod command_line;
 mod error;
 mod handle;
+mod job;
+mod process;
 mod sid;
 mod token;
 
 pub use super::windows_mode::WindowsSandboxMode;
+pub use process::RestrictedProcess;
 
-/// Windows is intentionally fail-closed until the release build links the audited native
-/// restricted-token implementation. This module is the platform seam for CreateRestrictedToken,
-/// Low Integrity, capability-SID ACL preparation, and Job Object kill-on-close; it must never
-/// silently call CreateProcess as an unrestricted fallback.
+/// VIEW_ONLY uses a Low-integrity write-restricted token and a kill-on-close Job Object.
+/// WORKSPACE_WRITE remains fail-closed until its capability-SID ACL preparation is implemented;
+/// neither mode may silently call CreateProcess as an unrestricted fallback.
 pub fn spawn_restricted(
     _provider: &str,
     mode: WindowsSandboxMode,
     _workspace_root: &Path,
-    _cwd: &Path,
-    _program: &str,
-    _args: &[String],
-) -> Result<Child, String> {
+    cwd: &Path,
+    program: &str,
+    args: &[String],
+) -> Result<RestrictedProcess, String> {
     match mode {
         WindowsSandboxMode::ReadOnly => {
-            let _token =
+            let token =
                 token::RestrictedToken::create_read_only().map_err(|error| error.to_string())?;
-            Err("WINDOWS_RESTRICTED_PROCESS_BACKEND_UNAVAILABLE".to_string())
+            let environment = std::env::vars_os().collect::<Vec<_>>();
+            RestrictedProcess::spawn(&token, program, args, cwd, &environment)
+                .map_err(|error| error.to_string())
         }
         WindowsSandboxMode::WorkspaceWrite => Err(error::SandboxError::UnsupportedMode.to_string()),
     }
