@@ -5,12 +5,16 @@ import { Readable } from "node:stream";
 import { terminateProcessTree } from "../exec/process-tree.js";
 import { RuntimeSandboxError, RuntimeSandboxProtocolError } from "../runtime-errors.js";
 import {
+  acceptSandboxWorkspacePrepared,
+  acceptSandboxWorkspaceStatus,
   acceptSandboxReady,
   decodeSandboxControlMessage,
   encodeSandboxControlMessage,
   MAX_SANDBOX_CONTROL_MESSAGE_BYTES,
   type SandboxHelloMessage,
   type SandboxReadyMessage,
+  type SandboxWorkspacePreparedMessage,
+  type SandboxWorkspaceStatusMessage,
 } from "./control-protocol.js";
 
 export const DEFAULT_SANDBOX_READY_TIMEOUT_MS = 5_000;
@@ -18,6 +22,14 @@ export const DEFAULT_SANDBOX_READY_TIMEOUT_MS = 5_000;
 export interface SandboxControlTransport {
   readonly runnerArgs: readonly string[];
   waitForReady(child: ChildProcess, hello: SandboxHelloMessage): Promise<SandboxReadyMessage>;
+  waitForWorkspaceStatus(
+    child: ChildProcess,
+    hello: SandboxHelloMessage,
+  ): Promise<SandboxWorkspaceStatusMessage>;
+  waitForWorkspacePrepared(
+    child: ChildProcess,
+    hello: SandboxHelloMessage,
+  ): Promise<SandboxWorkspacePreparedMessage>;
   close(): Promise<void>;
 }
 
@@ -58,6 +70,40 @@ function createUnixControlTransport(timeoutMs: number): SandboxControlTransport 
       control = candidate;
       return waitForReadyMessage(child, Promise.resolve(candidate), hello, timeoutMs, close);
     },
+    waitForWorkspaceStatus: async (child, hello) => {
+      const candidate = child.stdio[3];
+      if (!(candidate instanceof Readable)) {
+        await failClosed(child, close);
+        throw new RuntimeSandboxError(
+          "The native sandbox runner did not provide a control channel.",
+        );
+      }
+      control = candidate;
+      return waitForWorkspaceStatusMessage(
+        child,
+        Promise.resolve(candidate),
+        hello,
+        timeoutMs,
+        close,
+      );
+    },
+    waitForWorkspacePrepared: async (child, hello) => {
+      const candidate = child.stdio[3];
+      if (!(candidate instanceof Readable)) {
+        await failClosed(child, close);
+        throw new RuntimeSandboxError(
+          "The native sandbox runner did not provide a control channel.",
+        );
+      }
+      control = candidate;
+      return waitForWorkspacePreparedMessage(
+        child,
+        Promise.resolve(candidate),
+        hello,
+        timeoutMs,
+        close,
+      );
+    },
     close,
   };
 }
@@ -89,6 +135,10 @@ async function createWindowsControlTransport(timeoutMs: number): Promise<Sandbox
   return {
     runnerArgs: Object.freeze(["--control-pipe", pipeName]),
     waitForReady: (child, hello) => waitForReadyMessage(child, connection, hello, timeoutMs, close),
+    waitForWorkspaceStatus: (child, hello) =>
+      waitForWorkspaceStatusMessage(child, connection, hello, timeoutMs, close),
+    waitForWorkspacePrepared: (child, hello) =>
+      waitForWorkspacePreparedMessage(child, connection, hello, timeoutMs, close),
     close,
   };
 }
@@ -123,7 +173,59 @@ function waitForReadyMessage(
   timeoutMs: number,
   closeTransport: () => Promise<void>,
 ): Promise<SandboxReadyMessage> {
-  return new Promise<SandboxReadyMessage>((resolve, reject) => {
+  return waitForExpectedMessage(
+    child,
+    controlPromise,
+    hello,
+    timeoutMs,
+    closeTransport,
+    (message) => acceptSandboxReady(message, hello),
+  );
+}
+
+function waitForWorkspaceStatusMessage(
+  child: ChildProcess,
+  controlPromise: Promise<Readable>,
+  hello: SandboxHelloMessage,
+  timeoutMs: number,
+  closeTransport: () => Promise<void>,
+): Promise<SandboxWorkspaceStatusMessage> {
+  return waitForExpectedMessage(
+    child,
+    controlPromise,
+    hello,
+    timeoutMs,
+    closeTransport,
+    (message) => acceptSandboxWorkspaceStatus(message, hello),
+  );
+}
+
+function waitForWorkspacePreparedMessage(
+  child: ChildProcess,
+  controlPromise: Promise<Readable>,
+  hello: SandboxHelloMessage,
+  timeoutMs: number,
+  closeTransport: () => Promise<void>,
+): Promise<SandboxWorkspacePreparedMessage> {
+  return waitForExpectedMessage(
+    child,
+    controlPromise,
+    hello,
+    timeoutMs,
+    closeTransport,
+    (message) => acceptSandboxWorkspacePrepared(message, hello),
+  );
+}
+
+function waitForExpectedMessage<TMessage>(
+  child: ChildProcess,
+  controlPromise: Promise<Readable>,
+  hello: SandboxHelloMessage,
+  timeoutMs: number,
+  closeTransport: () => Promise<void>,
+  accept: (message: import("./control-protocol.js").SandboxControlMessage) => TMessage,
+): Promise<TMessage> {
+  return new Promise<TMessage>((resolve, reject) => {
     let settled = false;
     let control: Readable | undefined;
     let buffer = Buffer.alloc(0);
@@ -137,11 +239,11 @@ function waitForReadyMessage(
       control?.removeListener("end", onControlEnd);
       control?.removeListener("close", onControlEnd);
     };
-    const succeed = (ready: SandboxReadyMessage): void => {
+    const succeed = (message: TMessage): void => {
       if (settled) return;
       settled = true;
       removeListeners();
-      void closeTransport().then(() => resolve(ready), reject);
+      void closeTransport().then(() => resolve(message), reject);
     };
     const fail = (error: unknown): void => {
       if (settled) return;
@@ -170,7 +272,7 @@ function waitForReadyMessage(
         return;
       }
       try {
-        succeed(acceptSandboxReady(decodeSandboxControlMessage(line), hello));
+        succeed(accept(decodeSandboxControlMessage(line)));
       } catch (error) {
         fail(error);
       }

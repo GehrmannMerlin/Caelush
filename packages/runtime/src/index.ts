@@ -52,7 +52,10 @@ export type {
 export {
   SANDBOX_CONTROL_PROTOCOL_VERSION,
   MAX_SANDBOX_CONTROL_MESSAGE_BYTES,
+  acceptSandboxMessage,
   acceptSandboxReady,
+  acceptSandboxWorkspacePrepared,
+  acceptSandboxWorkspaceStatus,
   createSandboxHello,
   decodeSandboxControlMessage,
   encodeSandboxControlMessage,
@@ -68,6 +71,8 @@ export type {
   SandboxErrorMessage,
   SandboxHelloMessage,
   SandboxReadyMessage,
+  SandboxWorkspacePreparedMessage,
+  SandboxWorkspaceStatusMessage,
 } from "./sandbox/control-protocol.js";
 export { selectProcessSandbox } from "./sandbox/provider-selection.js";
 export { createUnrestrictedProcessSandboxProvider } from "./sandbox/unrestricted-provider.js";
@@ -98,6 +103,15 @@ export type {
   NativeRunnerProviderOptions,
   NativeSandboxRunnerManifest,
 } from "./sandbox/native-runner-provider.js";
+export { createNativeWorkspaceSandboxController } from "./sandbox/native-workspace-controller.js";
+export type {
+  NativeWorkspaceRunnerInvoker,
+  NativeWorkspaceRunnerOperation,
+  NativeWorkspaceRunnerResult,
+  NativeWorkspaceSandboxController,
+  NativeWorkspaceSandboxControllerOptions,
+  NativeWorkspaceSandboxStatus,
+} from "./sandbox/native-workspace-controller.js";
 export {
   cleanupPrivateRunTemp,
   cleanupStalePrivateRunTemps,

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   SANDBOX_CONTROL_PROTOCOL_VERSION,
   acceptSandboxReady,
+  acceptSandboxWorkspacePrepared,
+  acceptSandboxWorkspaceStatus,
   createSandboxHello,
   decodeSandboxControlMessage,
   encodeSandboxControlMessage,
@@ -53,5 +55,49 @@ describe("sandbox control protocol", () => {
       nonce: "nonce-control-error-1",
       code: "WINDOWS_RESTRICTED_TOKEN_BACKEND_UNAVAILABLE",
     });
+  });
+
+  it("accepts workspace status and preparation results with the same boundary tuple", () => {
+    const hello = createSandboxHello({
+      nonce: "nonce-workspace-control-1",
+      providerId: "fake-restricted",
+      boundaryFingerprint: "workspace-boundary-fingerprint-1",
+    });
+    const status = decodeSandboxControlMessage(
+      JSON.stringify({
+        type: "WORKSPACE_STATUS",
+        protocolVersion: SANDBOX_CONTROL_PROTOCOL_VERSION,
+        nonce: hello.nonce,
+        providerId: hello.providerId,
+        boundaryFingerprint: hello.boundaryFingerprint,
+        status: "MISSING",
+      }),
+    );
+    const prepared = decodeSandboxControlMessage(
+      JSON.stringify({
+        type: "WORKSPACE_PREPARED",
+        protocolVersion: SANDBOX_CONTROL_PROTOCOL_VERSION,
+        nonce: hello.nonce,
+        providerId: hello.providerId,
+        boundaryFingerprint: hello.boundaryFingerprint,
+        change: "ADDED",
+      }),
+    );
+
+    expect(acceptSandboxWorkspaceStatus(status, hello)).toMatchObject({ status: "MISSING" });
+    expect(acceptSandboxWorkspacePrepared(prepared, hello)).toMatchObject({ change: "ADDED" });
+    expect(() =>
+      acceptSandboxWorkspaceStatus(
+        {
+          type: "WORKSPACE_STATUS",
+          protocolVersion: SANDBOX_CONTROL_PROTOCOL_VERSION,
+          nonce: hello.nonce,
+          providerId: hello.providerId,
+          boundaryFingerprint: "wrong",
+          status: "MISSING",
+        },
+        hello,
+      ),
+    ).toThrow(/boundary/i);
   });
 });

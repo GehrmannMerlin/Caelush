@@ -27,6 +27,26 @@ const readyLine = (expected: ReturnType<typeof hello>) =>
     enforcement: "NONE",
   })}\n`;
 
+const workspaceStatusLine = (expected: ReturnType<typeof hello>) =>
+  `${encodeSandboxControlMessage({
+    type: "WORKSPACE_STATUS",
+    protocolVersion: SANDBOX_CONTROL_PROTOCOL_VERSION,
+    nonce: expected.nonce,
+    providerId: expected.providerId,
+    boundaryFingerprint: expected.boundaryFingerprint,
+    status: "MISSING",
+  })}\n`;
+
+const workspacePreparedLine = (expected: ReturnType<typeof hello>) =>
+  `${encodeSandboxControlMessage({
+    type: "WORKSPACE_PREPARED",
+    protocolVersion: SANDBOX_CONTROL_PROTOCOL_VERSION,
+    nonce: expected.nonce,
+    providerId: expected.providerId,
+    boundaryFingerprint: expected.boundaryFingerprint,
+    change: "UNCHANGED",
+  })}\n`;
+
 class FakeChild extends EventEmitter {
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
@@ -66,6 +86,41 @@ describe("sandbox control transport", () => {
     await expect(waiting).resolves.toMatchObject({ type: "READY", enforcement: "NONE" });
     expect(child.killed).toBe(false);
     await transport.close();
+  });
+
+  it("accepts workspace status and preparation messages only from the Unix control stream", async () => {
+    const expected = hello();
+    const statusChild = new FakeChild();
+    const statusTransport = await createSandboxControlTransport({
+      platform: "linux",
+      hello: expected,
+    });
+    const statusWaiting = statusTransport.waitForWorkspaceStatus(
+      statusChild.asChildProcess(),
+      expected,
+    );
+    statusChild.control.end(workspaceStatusLine(expected));
+    await expect(statusWaiting).resolves.toMatchObject({
+      type: "WORKSPACE_STATUS",
+      status: "MISSING",
+    });
+    await statusTransport.close();
+
+    const preparedChild = new FakeChild();
+    const preparedTransport = await createSandboxControlTransport({
+      platform: "linux",
+      hello: expected,
+    });
+    const preparedWaiting = preparedTransport.waitForWorkspacePrepared(
+      preparedChild.asChildProcess(),
+      expected,
+    );
+    preparedChild.control.end(workspacePreparedLine(expected));
+    await expect(preparedWaiting).resolves.toMatchObject({
+      type: "WORKSPACE_PREPARED",
+      change: "UNCHANGED",
+    });
+    await preparedTransport.close();
   });
 
   it("times out at the 5,000 ms default and terminates the Runner", async () => {

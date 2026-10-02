@@ -11,6 +11,7 @@ import {
   type SandboxedSpawnSpec,
 } from "../src/index.js";
 import { createNativeRunnerProcessAdapter } from "../src/sandbox/native-runner-adapter.js";
+import type { PrivateRunTemp } from "../src/sandbox/private-temp.js";
 import {
   buildSandboxRunner,
   // @ts-expect-error The release helper is a checked-in JavaScript build script without a declaration file.
@@ -150,6 +151,7 @@ describeWindows("native Windows Runner control handshake", () => {
         runnerPath,
         providerId: "windows-acl-restricted-token",
         spec: sandboxedSpec(),
+        privateRunTemp: missingPrivateTemp(),
       }),
     ).rejects.toThrow(/expected READY/i);
   });
@@ -168,6 +170,7 @@ describeWindows("native Windows Runner control handshake", () => {
             args: ["/d", "/s", "/c", `type nul > "${sentinel}"`],
           },
         },
+        privateRunTemp: missingPrivateTemp(),
       }),
     ).rejects.toThrow(/expected READY/i);
     await expect(access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
@@ -271,5 +274,15 @@ function readOnlySpec(): SandboxedSpawnSpec {
       filesystem: { ...base.policy.filesystem, boundary: "WORKSPACE_READ_ONLY" },
       processBoundary: "READ_ONLY",
     },
+  };
+}
+
+function missingPrivateTemp(): PrivateRunTemp {
+  const root = join(process.cwd(), ".caelush-missing-private-temp");
+  return {
+    root,
+    markerPath: join(root, ".caelush-private-temp.json"),
+    runId: "run_native_runner_control" as never,
+    markerId: "missing-private-temp-marker",
   };
 }

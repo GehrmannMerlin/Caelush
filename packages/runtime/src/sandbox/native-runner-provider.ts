@@ -3,9 +3,19 @@ import type {
   ProcessSandboxProvider,
   SandboxEnforcement,
 } from "./contracts.js";
+import type { ManagedProcessAdapter } from "../exec/contracts.js";
 import { RuntimeExecError } from "../exec/errors.js";
 import { RuntimeSandboxError } from "../runtime-errors.js";
-import { createNativeRunnerProcessAdapter } from "./native-runner-adapter.js";
+import {
+  createNativeRunnerProcessAdapter,
+  modeForPolicy,
+  withNativeRunnerCleanup,
+} from "./native-runner-adapter.js";
+import {
+  createNativeWorkspaceSandboxController,
+  type NativeWorkspaceSandboxController,
+} from "./native-workspace-controller.js";
+import type { PrivateRunTemp } from "./private-temp.js";
 import {
   probeNativeSandboxRunner,
   verifyNativeSandboxRunnerArtifact,
@@ -19,9 +29,13 @@ export interface NativeRunnerProviderOptions {
   readonly arch?: string;
   readonly runnerPath?: string;
   readonly manifest?: NativeSandboxRunnerManifest;
+  readonly readyTimeoutMs?: number;
+  readonly privateTempBaseDirectory?: string;
+  readonly workspaceController?: NativeWorkspaceSandboxController;
   readonly adapterFactory?: (
     input: SandboxedSpawnSpec,
-  ) => Promise<import("../exec/contracts.js").ManagedProcessAdapter>;
+    privateRunTemp?: PrivateRunTemp,
+  ) => Promise<ManagedProcessAdapter>;
 }
 
 export function createNativeRunnerProvider(input: {
@@ -31,6 +45,20 @@ export function createNativeRunnerProvider(input: {
   readonly options?: NativeRunnerProviderOptions;
 }): ProcessSandboxProvider {
   const options = input.options ?? {};
+  const workspaceController =
+    options.workspaceController ??
+    (options.adapterFactory === undefined && input.platform === "windows"
+      ? createNativeWorkspaceSandboxController({
+          providerId: input.id,
+          ...(options.runnerPath === undefined ? {} : { runnerPath: options.runnerPath }),
+          ...(options.readyTimeoutMs === undefined
+            ? {}
+            : { readyTimeoutMs: options.readyTimeoutMs }),
+          ...(options.privateTempBaseDirectory === undefined
+            ? {}
+            : { privateTempBaseDirectory: options.privateTempBaseDirectory }),
+        })
+      : undefined);
   const provider: ProcessSandboxProvider = {
     id: input.id,
     kind: "RESTRICTED",
@@ -40,18 +68,44 @@ export function createNativeRunnerProvider(input: {
       if (platformName(options.platform ?? process.platform) !== input.platform) {
         throw new RuntimeSandboxError("The platform Provider does not match this host.");
       }
-      if (options.adapterFactory !== undefined) return options.adapterFactory(spec);
-      const artifact = await verifyNativeSandboxRunnerArtifact(
-        nativeRunnerProbeInput(input, options),
-      );
-      if (!artifact.available || options.runnerPath === undefined) {
-        throw new RuntimeSandboxError("The required native sandbox runner is unavailable.");
+      const mode = modeForPolicy(spec.policy);
+      if (options.adapterFactory === undefined) {
+        const artifact = await verifyNativeSandboxRunnerArtifact(
+          nativeRunnerProbeInput(input, options),
+        );
+        if (!artifact.available || options.runnerPath === undefined) {
+          throw new RuntimeSandboxError("The required native sandbox runner is unavailable.");
+        }
       }
-      return createNativeRunnerProcessAdapter({
-        runnerPath: options.runnerPath,
-        providerId: input.id,
-        spec,
-      });
+      const privateRunTemp =
+        input.platform === "windows" &&
+        mode === "workspace-write" &&
+        workspaceController !== undefined
+          ? await workspaceController.createRunTemp(spec.policy.runId)
+          : undefined;
+      try {
+        const adapter =
+          options.adapterFactory === undefined
+            ? await createNativeRunnerProcessAdapter({
+                runnerPath: options.runnerPath!,
+                providerId: input.id,
+                spec,
+                ...(options.readyTimeoutMs === undefined
+                  ? {}
+                  : { readyTimeoutMs: options.readyTimeoutMs }),
+                ...(privateRunTemp === undefined ? {} : { privateRunTemp }),
+              })
+            : await options.adapterFactory(spec, privateRunTemp);
+        if (privateRunTemp === undefined || workspaceController === undefined) return adapter;
+        return withNativeRunnerCleanup(adapter, () =>
+          workspaceController.cleanupRunTemp(privateRunTemp),
+        );
+      } catch (error) {
+        if (privateRunTemp !== undefined && workspaceController !== undefined) {
+          await workspaceController.cleanupRunTemp(privateRunTemp).catch(() => undefined);
+        }
+        throw error;
+      }
     },
     probe: async () => {
       if (platformName(options.platform ?? process.platform) !== input.platform) {

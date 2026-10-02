@@ -27,7 +27,30 @@ export interface SandboxErrorMessage {
   readonly code: string;
 }
 
-export type SandboxControlMessage = SandboxHelloMessage | SandboxReadyMessage | SandboxErrorMessage;
+export interface SandboxWorkspaceStatusMessage {
+  readonly type: "WORKSPACE_STATUS";
+  readonly protocolVersion: typeof SANDBOX_CONTROL_PROTOCOL_VERSION;
+  readonly nonce: string;
+  readonly providerId: string;
+  readonly boundaryFingerprint: string;
+  readonly status: "READY" | "MISSING";
+}
+
+export interface SandboxWorkspacePreparedMessage {
+  readonly type: "WORKSPACE_PREPARED";
+  readonly protocolVersion: typeof SANDBOX_CONTROL_PROTOCOL_VERSION;
+  readonly nonce: string;
+  readonly providerId: string;
+  readonly boundaryFingerprint: string;
+  readonly change: "ADDED" | "UNCHANGED";
+}
+
+export type SandboxControlMessage =
+  | SandboxHelloMessage
+  | SandboxReadyMessage
+  | SandboxErrorMessage
+  | SandboxWorkspaceStatusMessage
+  | SandboxWorkspacePreparedMessage;
 
 export function createSandboxHello(input: {
   readonly nonce: string;
@@ -73,10 +96,41 @@ export function acceptSandboxReady(
   message: SandboxControlMessage,
   expected: SandboxHelloMessage,
 ): SandboxReadyMessage {
-  validateSandboxControlMessage(message);
-  if (message.type !== "READY") {
+  const accepted = acceptSandboxMessage(message, expected);
+  if (accepted.type !== "READY") {
     throw new RuntimeSandboxProtocolError("Sandbox control protocol expected READY.");
   }
+  return accepted;
+}
+
+export function acceptSandboxWorkspaceStatus(
+  message: SandboxControlMessage,
+  expected: SandboxHelloMessage,
+): SandboxWorkspaceStatusMessage {
+  const accepted = acceptSandboxMessage(message, expected);
+  if (accepted.type !== "WORKSPACE_STATUS") {
+    throw new RuntimeSandboxProtocolError("Sandbox control protocol expected WORKSPACE_STATUS.");
+  }
+  return accepted;
+}
+
+export function acceptSandboxWorkspacePrepared(
+  message: SandboxControlMessage,
+  expected: SandboxHelloMessage,
+): SandboxWorkspacePreparedMessage {
+  const accepted = acceptSandboxMessage(message, expected);
+  if (accepted.type !== "WORKSPACE_PREPARED") {
+    throw new RuntimeSandboxProtocolError("Sandbox control protocol expected WORKSPACE_PREPARED.");
+  }
+  return accepted;
+}
+
+export function acceptSandboxMessage(
+  message: SandboxControlMessage,
+  expected: SandboxHelloMessage,
+): SandboxControlMessage {
+  validateSandboxControlMessage(message);
+  if (message.type === "ERROR") return message;
   if (message.protocolVersion !== expected.protocolVersion) {
     throw new RuntimeSandboxProtocolError("Sandbox control protocol version mismatch.");
   }
@@ -105,7 +159,12 @@ export function validateSandboxControlMessage(
   if (typeof value.nonce !== "string" || value.nonce.length < 8 || value.nonce.length > 256) {
     throw new RuntimeSandboxProtocolError("Sandbox control protocol fields are invalid.");
   }
-  if (value.type === "HELLO" || value.type === "READY") {
+  if (
+    value.type === "HELLO" ||
+    value.type === "READY" ||
+    value.type === "WORKSPACE_STATUS" ||
+    value.type === "WORKSPACE_PREPARED"
+  ) {
     if (
       typeof value.providerId !== "string" ||
       value.providerId.length === 0 ||
@@ -121,7 +180,20 @@ export function validateSandboxControlMessage(
   if (value.type === "ERROR" && (typeof value.code !== "string" || value.code.length === 0)) {
     throw new RuntimeSandboxProtocolError("Sandbox control error code is invalid.");
   }
-  if (!["HELLO", "READY", "ERROR"].includes(String(value.type))) {
+  if (value.type === "WORKSPACE_STATUS" && !["READY", "MISSING"].includes(String(value.status))) {
+    throw new RuntimeSandboxProtocolError("Sandbox workspace status is invalid.");
+  }
+  if (
+    value.type === "WORKSPACE_PREPARED" &&
+    !["ADDED", "UNCHANGED"].includes(String(value.change))
+  ) {
+    throw new RuntimeSandboxProtocolError("Sandbox workspace preparation result is invalid.");
+  }
+  if (
+    !["HELLO", "READY", "ERROR", "WORKSPACE_STATUS", "WORKSPACE_PREPARED"].includes(
+      String(value.type),
+    )
+  ) {
     throw new RuntimeSandboxProtocolError("Sandbox control message type is invalid.");
   }
 }

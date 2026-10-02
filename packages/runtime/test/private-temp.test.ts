@@ -34,4 +34,19 @@ describe("private Run temp directories", () => {
       await rm(base, { recursive: true, force: true });
     }
   });
+
+  it("refuses cleanup when the marker belongs to another Run", async () => {
+    const base = await mkdtemp(path.join(os.tmpdir(), "caelush-private-temp-mismatch-"));
+    try {
+      const temp = await createPrivateRunTemp("run_marker_owner" as never, {
+        baseDirectory: base,
+      });
+      await expect(
+        cleanupPrivateRunTemp({ ...temp, markerId: "another-marker" }),
+      ).rejects.toMatchObject({ code: "PRIVATE_TEMP_INVALID" });
+      await expect(access(temp.root)).resolves.toBeUndefined();
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
 });
