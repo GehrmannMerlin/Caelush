@@ -27,6 +27,36 @@ Win32              restricted token + capability-SID ACEs + kill-on-close Job Ob
 Supported: Windows on NTFS. The workspace root and the private temp root are both validated before
 use and both must be NTFS-backed directories reachable through a stable file identity.
 
+## What is wired today
+
+```text
+workspace-status / workspace-prepare   invoked by the Daemon       Runner reached
+restricted process spawn               not bound by the Daemon     Runner not reached
+```
+
+Two properties hold at once and must not be read into each other:
+
+- **Preparation is wired.** The Daemon's `WorkspacePreparationPort` invokes the packaged Runner for
+  `workspace-status` and `workspace-prepare`, which is what installs the standing workspace ACE and
+  produces the `READY` / `REQUIRED` / `UNAVAILABLE` state the settings screen shows.
+- **Restricted execution is not.** The Daemon composes its `exec` / `process` ports with no process
+  authorization bound (`createRuntimeProcessOperations(runtimeResolver)` and no second argument), so a
+  Run under `VIEW_ONLY` or `WORKSPACE_WRITE` reaches the Runtime with no restricted authorization and the
+  Runtime **refuses** it with `RuntimeAuthorizationError` rather than ordinary-spawning. The restricted
+  token and Job Object path is therefore not entered by a Run in the shipped product: under the two
+  restricted presets a process Tool fails closed instead of running sandboxed.
+
+The process-preset half of a Run's authority is enforced by the policy layer above the Runtime today.
+The native enforcement below - restricted token, capability-SID ACEs, kill-on-close Job Object - is
+complete and measured as a **component**, and is the substrate the process path is meant to be bound to.
+Binding it is deliberately a separate task: it would *add* execution authority where the operation is
+currently refused, which this work explicitly does not do.
+
+Refused is not the same as safe, and the property that matters is that no restricted path starts an
+unrestricted payload. `packages/coding-agent/test/runtime-adapters.test.ts` pins exactly that: the
+restricted context is refused **and** the payload's sentinel never appears, while the Full Access control
+running the same payload does write its sentinel.
+
 ## Presets
 
 | Preset            | Token                              | Filesystem                                            | Approval                   |
@@ -90,6 +120,18 @@ The private temp grant is created with the same three-entry shape and is scoped 
 The Runner holds the payload in a Job Object configured kill-on-close, so the whole tree - child and
 grandchild - dies with the Runner whether the Run ended normally, was cancelled, or the Runner
 itself failed after `READY`. The private temp directory is then removed by the Runtime.
+
+Two limits to that cleanup, both pinned by tests rather than left implicit:
+
+- The ownership marker (`.caelush-private-temp.json`) lives **inside** the directory the payload is
+  granted `FILE_ALL_ACCESS` on. A payload that deletes or corrupts it makes both the per-Run cleanup and
+  the stale sweep refuse, because neither can then verify ownership. The residue is the directory and
+  the ACE held by that Run's capability SID - and that SID is derived from a random per-Run marker id, so
+  this is unreclaimable litter, not a widening of authority. Pinned by
+  `packages/runtime/test/private-temp.test.ts`.
+- `cleanupStalePrivateRunTemps` exists and is tested, but **no production path calls it**. A Daemon
+  killed hard while a Run is alive therefore leaves the directory and its per-Run ACE behind, and the
+  next start does not reclaim them. Wiring the sweep into Daemon startup is a separate task.
 
 ## Path validation
 
@@ -163,6 +205,21 @@ The last two rows are read together on purpose. The product does not hide proces
 a process namespace: a sandboxed process is an ordinary member of the host's process list. That the
 restricted child cannot itself run `tasklist` is a consequence of the token's rights, not an attempt
 at hiding, and it is pinned because it is also evidence that the token really is restricted.
+
+## Known hardening backlog
+
+Not defects that change what a preset prevents today. Recorded, with the test or the code that pins
+each, so they are not rediscovered as new findings.
+
+| Item                                                                                          | What it is today                                                                                       | What hardening would need                                                       |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
+| `CAELUSH_SANDBOX_RUNNER_PATH` / `_MANIFEST` accept any absolute path, and the artifact hash is checked against the manifest sitting beside the binary | a development/diagnostic override; reaching it means controlling the Daemon's own environment (i.e. its launch) | an out-of-band trust anchor (signing) if that environment is ever not trusted   |
+| Validation and the ACE apply are keyed on the path name, not on a held directory handle        | a narrow TOCTOU window; winning it needs write rights on the parent plus timing                          | holding the handle open from validation through the ACL write                   |
+| `sid_is_product_capability` accepts any `S-1-4-*` / `S-1-15-3-*` ACE with the grant's exact mask and inheritance | an unrelated such ACE keeps the shared Low-integrity SACL and Everyone deny after revoke                 | match the product SID list, not the authority prefix                            |
+| A legacy two-field `ToolSecurityContext` carries no policy, so its scope ordinary-spawns        | not reachable: the Daemon always derives the three-field context from the persisted policy snapshot      | an explicit "policy-bound" flag on the Runtime scope, not inference from presence |
+
+The last row is characterised by `packages/coding-agent/test/runtime-adapters.test.ts` so the fail-open
+is visible in a test rather than assumed safe.
 
 ## Not in scope
 
