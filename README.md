@@ -1,377 +1,198 @@
 <div align="center">
 
+<img src="./apps/web/src/assets/logo/caelush-logo.png" alt="Caelush" width="520" />
+
 # Caelush
 
-**A local-first, durable coding-agent runtime with a shared CLI/Web kernel.**
+**本地优先、可恢复、可验证的编程 Agent**
 
-Build coding agents around durable Runs, explicit Tool boundaries, replaceable
-Runtime execution, recovery, security policy, and verification.
+让 AI 在你的项目中理解代码、修改文件、执行命令并验证结果，<br />
+同时由一套共享内核统一管理 Web、CLI、权限、持久化与任务恢复。
+
+[![GitHub stars](https://img.shields.io/github/stars/GehrmannMerlin/Caelush?style=flat-square&logo=github)](https://github.com/GehrmannMerlin/Caelush/stargazers)
+[![GitHub last commit](https://img.shields.io/github/last-commit/GehrmannMerlin/Caelush?style=flat-square&logo=github)](https://github.com/GehrmannMerlin/Caelush/commits/main)
+[![Node.js 24](https://img.shields.io/badge/Node.js-24.x-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-6.x-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Status](https://img.shields.io/badge/status-early%20development-f59e0b?style=flat-square)](#项目状态)
+
+[快速开始](#快速开始) · [核心能力](#核心能力) · [Agent 内核](#agent-内核) · [系统架构](#系统架构) · [参与开发](#参与开发)
 
 </div>
 
-Caelush is a TypeScript/Node.js monorepo for a local coding-agent runtime. It
-is designed around one shared Agent Kernel: CLI, Web, and future hosts are
-clients of the same execution authority rather than separate Agent
-implementations.
+> [!IMPORTANT]
+> Caelush 目前处于早期开发阶段，面向架构验证、产品迭代和本地开发使用。配置格式、运行方式和部分公开接口仍可能发生不兼容变化。
 
-The planned Architecture V2 refactor through Phase 8F is complete. The Message System
-migration through Phase 5F is complete: the daemon owns the server-side
-Transcript projection, CLI/Web consume the Protocol Transcript, and the final
-durable Message V2 schema is now the only runtime storage shape.
-The Event System migration is complete through Phase 6H. The canonical RunEvent
-domain, daemon-owned asynchronous RunEventHub, bounded replay/live delivery,
-public projection, authoritative durable-event transactions, and transient
-signal/streaming cutover are now in place. Durable events are written only
-inside the authoritative Run or Tool transaction and are notified to the
-RunEventHub only after commit. Live model, Tool, and Runtime progress travels
-through non-persistent `TransientRunEvent` signals, while lifecycle truth remains
-durable and replayable. Phase 6F adds the generic Agent Control Hook registry
-and runner, bounded Context Contributions, safe Context projection, and the
-daemon-to-Core composition path. Phase 6G adds the Coding-owned Tool Guard and
-Tool Feedback control pipelines while preserving Core Security, durable Tool
-observations, and the existing model-feedback authority. Phase 6H retires the
-transitional Events package and leaves the daemon RunEventHub, Protocol
-contracts, Agent ports, and Storage reader as the only canonical Event V2
-surfaces.
+## Caelush 是什么
 
-Coding Tool prompt snippets follow the native Context V2 path:
+Caelush 是一个运行在本地的编程 Agent。你可以用自然语言描述开发任务，它会围绕当前工作区读取和搜索代码、生成补丁、执行命令、观察进程输出，并根据验证结果继续工作。
 
-```text
-Coding Tool prompt snippets
-  → Coding Agent native ContextSourceProvider
-  → Agent V2 Context
-  → one system context
-```
+它不只是一个把大模型接到终端上的聊天界面。Caelush 更关注编程 Agent 在真实工程中长期运行时必须解决的问题：
 
-They are active-run synthetic Context, not Tool descriptions and not durable
-conversation history.
+- 一次任务由谁负责推进，状态如何变化；
+- 工具调用如何校验、授权、执行和记录；
+- 页面刷新或客户端断开后，任务能否继续恢复；
+- 实时输出和持久事实如何分离；
+- 模型声称“已经完成”时，系统如何通过证据进行验证；
+- Web、CLI 和未来宿主如何共享同一套执行语义。
 
-## What Caelush provides
+为此，Caelush 将 Agent 能力组织成一个可组合的本地运行时：本地 Daemon 是唯一的执行入口，Web 与 CLI 都是它的客户端；Agent Kernel 负责任务决策，Runtime 负责真正访问文件和进程，Security 负责权限判断，Storage 保存可恢复状态，Verification 判断任务是否具备完成条件。
 
-- A durable Session/Run lifecycle with explicit state transitions and recovery
-  boundaries.
-- A provider-neutral AI layer with one gateway-owned model-turn boundary.
-- A shared Agent Kernel for CLI, Web, and future hosts.
-- A single immutable Tool catalog and Dispatcher path for schema validation,
-  security admission, execution, observation, and settlement.
-- A replaceable local Runtime for workspace-relative filesystem access, verified
-  patching, managed shell/process sessions, and read-only Git operations.
-- Separate Security and Runtime boundaries for permissions, approvals,
-  capability policy, command policy, secret-safe presentation, and containment.
-- Durable events with ordered replay and live watching for host projections.
-- Verification and Completion Authority so a model's final text is a candidate,
-  not proof that a task is complete.
+## 你可以用它做什么
 
-## Why this architecture
+Caelush 面向现有代码仓库和本地开发流程，适合处理这类任务：
 
-Coding agents combine model calls, context, tools, local processes, user
-approval, persistence, and UI state. If those responsibilities are placed in
-one application service, the result is difficult to test, recover, or replace.
+- 阅读项目结构，定位某个功能或错误的实现位置；
+- 跨文件修改代码，补充测试并修复编译、类型或测试失败；
+- 搜索文本、文件和 Git 差异，收集完成任务所需的上下文；
+- 执行构建、测试、Lint、格式化和其他开发命令；
+- 观察长时间运行的命令，并在后续步骤中继续读取输出；
+- 在操作需要更高权限时请求用户确认；
+- 保存会话和任务状态，在客户端重连后继续查看和恢复；
+- 通过 Web 页面或终端界面使用同一个 Agent。
 
-Caelush keeps the authority graph explicit:
+## 核心能力
 
-```text
-CLI / Web / future hosts
-            │
-            ▼
-Local daemon — the only production composition root
-            │
-            ├── Agent Kernel + RunController
-            ├── AI + Context + Coding Agent
-            ├── Security + replaceable Runtime
-            ├── SQLite Storage + ordered Events
-            └── Verification + Completion Authority
-```
+### 共享的 Web 与 CLI 体验
 
-The daemon owns execution. The CLI and Web render safe Protocol projections
-and the migration-compatible AgentEvent/RunEvent stream. They do not construct
-their own AgentLoop, invoke a provider directly, or execute local Tools.
+Caelush 同时提供浏览器端和终端端。两者通过统一 Client/Protocol 访问本地 Daemon，共享会话、Run、工具调用、审批、事件和上下文使用情况，不会各自构造一套 Agent Loop。
 
-## Architecture at a glance
+### 项目级代码操作
 
-The current high-level architecture is documented in
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). It is based on the current
-package manifests, production composition, source contracts, architecture
-guards, and tests.
+内置 Coding Tool 覆盖文件读取、目录浏览、文件查找、文本搜索、补丁修改、命令执行、持续进程交互以及只读 Git 信息。工具定义与执行处理器来自同一个不可变目录，避免模型看到的工具和真正可执行的工具发生漂移。
+
+### 可恢复的 Session 与 Run
+
+对话消息、Run 状态、Step、工具调用、工具观察和持久事件写入本地 SQLite。创建任务、开始执行、等待审批、恢复运行和最终完成都有明确的状态边界。客户端断开不会被解释为任务事实消失。
+
+### 实时进度与持久事实分离
+
+生命周期变化以可重放的持久事件保存；模型流式文本、命令输出和进程进度则作为有界的瞬态信号实时传输。这样既能在界面中看到正在发生的工作，也不会让无限增长的终端输出污染持久历史。
+
+### 权限、审批与安全策略
+
+Security 在工具执行前评估权限档位、能力、路径、命令和审批要求；Runtime 负责实际的工作区约束和进程执行。两者职责分离，权限判断不会隐藏在某个具体工具或前端组件中。
+
+### Provider 中立的模型边界
+
+模型调用统一经过 AI Gateway。当前内置 OpenAI、DeepSeek、OpenRouter 与 Anthropic Provider 预设，也可以通过兼容配置接入其他 OpenAI-compatible 服务。Provider 凭据只由 Daemon 运行时读取，不通过 Web 或 CLI 请求传递。
+
+### 验证驱动的完成判定
+
+模型给出的最终回答只是“完成候选”，不是任务已经完成的证据。Verification 收集有界的工作区、Git 和命令证据，最终只有 Core/RunController 拥有把 Run 转为 `COMPLETED` 的权限。
+
+## Agent 内核
+
+Caelush 的核心不是某个页面或命令行入口，而是一套由多个明确边界协作组成的 Agent Kernel。
 
 ```text
-Host
-  ↓ HTTP / SSE through @caelush/client
-Daemon
-  ↓ dependency injection
-Core / Agent Kernel
-  ├── one model turn → AI gateway → provider adapter
-  ├── Tool decision → Registry → Security gate → Dispatcher → Runtime
-  ├── durable records/events → authoritative SQLite transactions
-  ├── committed/live RunEvents → daemon RunEventHub → SSE/host observation
-  └── final candidate → Verification → Completion Authority
+用户任务
+  │
+  ▼
+RunController ──────── 管理 Run 生命周期、恢复边界与完成权限
+  │
+  ▼
+Agent Loop ─────────── 决定下一次模型调用或工具调用
+  │
+  ├── Context ──────── 组织对话、项目指令、相关文件与预算
+  ├── AI Gateway ───── 连接模型并保持单一模型回合边界
+  ├── Tool Dispatcher  校验、授权、执行、观察并结算工具调用
+  ├── RunEvent ─────── 保存生命周期事实并投射实时进度
+  └── Verification ─── 用证据判断任务是否真正满足完成条件
 ```
 
-### Phase 6 Event domain, observation, and durable authority
+### RunController：任务状态的唯一权威
 
-Phase 6A established the canonical event vocabulary, Phase 6B adds the
-daemon-owned observation runtime, Phase 6C projects safe public events, and
-Phase 6D makes authoritative Run and Tool transactions the only durable-event
-writers:
+RunController 管理任务从创建、执行、等待审批、恢复到结束的状态变化。调用者不能绕过状态机自行把任务标记为完成，也不能在副作用边界未知时静默重试工具。
+
+### Context：把有限的模型窗口留给真正重要的信息
+
+Context 将持久对话、项目规则、相关文件、工具反馈和受控的上下文贡献统一映射到一次模型回合。选择过程记录被选中和被丢弃的消息，并在上下文压力上升时使用明确的压缩与恢复边界，而不是随意改写历史记录。
+
+### Tool Dispatcher：所有工具共用一条执行链
+
+每次工具调用都经过同一条生命周期：参数准备、Schema 校验、Guard、Security 判定、必要的人工审批、Runtime 执行、Observation 持久化以及模型可见反馈。工具处理器不会直接成为权限系统或持久化系统的第二入口。
+
+### RunEvent：既能实时观察，也能可靠重放
+
+持久 RunEvent 与其描述的 Run/Tool 真相在同一事务中提交，提交后才通知观察者。Daemon 的 RunEventHub 负责有界队列、独立观察者、重放与实时桥接；慢客户端不会阻塞 Agent 的生产者调用栈。
+
+### Completion Authority：防止“口头完成”
+
+Agent 最终输出需要经过验证和当前 Run 的完成守卫。只有证据与状态都满足要求，RunController 才会提交最终完成状态。这使“模型认为做完了”和“系统确认做完了”成为两个不同概念。
+
+## 系统架构
+
+Caelush 采用 TypeScript/Node.js Monorepo。生产环境只有一个组合根：`apps/daemon`。
 
 ```text
-@caelush/protocol
-  RunEvent / DurableRunEvent / TransientRunEvent
-  version-aware static schema registry + event catalog
-          │
-          └── @caelush/agent
-                DurableRunEventDraft
-                RunEventNotifierPort
-                DurableRunEventReaderPort
-
-@caelush/storage
-  read-only durable reader with throughSequence
-          │
-          ▼
-apps/daemon
-  RunEventHub
-    bounded per-subscriber queues
-    independent observer workers
-    fixed-high-watermark replay/live bridge
-          │
-          └── SSE route observation (external shape unchanged)
+┌─────────────────────────────────────────────────────────────┐
+│                          用户入口                           │
+│                 Web / CLI / future hosts                   │
+└────────────────────────────┬────────────────────────────────┘
+                             │ HTTP + SSE
+                             ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Local Daemon                             │
+│              唯一生产组合根与执行入口                       │
+├─────────────────────────────────────────────────────────────┤
+│ Agent Kernel │ Core │ Context │ Coding Agent │ AI Gateway   │
+├─────────────────────────────────────────────────────────────┤
+│ Security     │ Runtime       │ Verification  │ RunEventHub  │
+├─────────────────────────────────────────────────────────────┤
+│                SQLite Storage + Protocol                    │
+└─────────────────────────────────────────────────────────────┘
+                             │
+                             ▼
+                  本地工作区 / Git / 子进程
 ```
 
-`AgentEvent` remains a deprecated compatibility name while v1 event fixtures
-continue to decode, including historical durable output events and the old
-empty ephemeral metadata shape. New canonical transient metadata requires its
-delivery class and stream identity. Durable sequence allocation remains a
-Storage transaction responsibility. `RunExecutionStore` and
-`ToolExecutionStore` commit durable event drafts together with the truth they
-describe; `RunEventNotifierPort.notifyCommitted` receives only post-commit
-events. There is no standalone Events package or second durable writer.
+这套结构遵循几个核心原则：
 
-Phase 6B makes the daemon observation plane producer-nonblocking and bounded:
-durable and ordered-transient overflow closes a slow subscription, while
-coalescible transient signals use same-stream latest-wins replacement. Replay
-subscribes before reading a fixed high watermark, rejects a cursor ahead of the
-watermark, deduplicates buffered durable events, and discards catch-up
-transients. Phase 6H removes the transitional observation package; historical
-Protocol compatibility remains available for decoding and replaying existing
-event data.
+- **单一执行权威**：Daemon 负责组合和驱动生产运行，Web/CLI 只消费安全的 Protocol 投影。
+- **应用依赖包**：`apps/*` 可以组合 `packages/*`，基础包不反向依赖应用内部实现。
+- **持久化优先**：先提交状态和事件，再通知实时订阅者。
+- **工具执行单通道**：模型不能绕过 Dispatcher 直接调用 Runtime。
+- **安全与执行分离**：Security 做判断，Runtime 做执行。
+- **协议保持 JSON-safe**：跨进程数据不泄露 Provider SDK、数据库行或 Runtime 对象。
+- **失败时保守处理**：恢复边界、历史投影或副作用状态不确定时，系统选择 fail closed。
 
-### Phase 6E transient signal and streaming cutover
+更完整的包职责、依赖方向和状态模型请参阅 [架构文档](./docs/ARCHITECTURE.md)。
 
-Phase 6E keeps live progress separate from durable lifecycle truth:
+## 权限与安全
 
-```text
-AIStreamEvent
-  → Agent ModelStreamSignalProjector
-  → RunEventNotifierPort.emitTransient
-  → daemon RunEventHub → public projection → SSE → client Live Activity
+Web 端提供三档面向用户的权限配置：
 
-Runtime progress
-  → Coding Agent RuntimeProgressSignalProjector
-  → bounded Security sanitization
-  → RunEventNotifierPort.emitTransient
-```
+| 权限             | 预期用途                   | 能力边界                                   |
+| ---------------- | -------------------------- | ------------------------------------------ |
+| **仅可查看**     | 阅读、搜索和分析项目       | 不允许修改工作区文件                       |
+| **工作区内修改** | 常规开发任务               | 允许在当前工作区内修改，但限制工作区外写入 |
+| **完全权限**     | 明确需要主机用户权限的任务 | 可以按当前主机用户范围访问文件、进程和网络 |
 
-Historical `tool.output`, `shell.output`, and `process.output` v1 events remain
-durable and replayable. Their v2 counterparts are ordered, bounded transient
-signals: they live in memory, are not persisted or replayed, and do not receive
-an SSE id. CLI and Web keep these signals in bounded Live Activity state while
-durable events continue to drive the Timeline.
+> [!WARNING]
+> “完全权限”意味着 Agent 执行的命令可能对你的主机环境产生真实影响。请只在理解任务内容和模型行为时启用。
 
-### Phase 6F Control Hooks and Context Contributions
+Caelush 正在完善 Windows 原生受限执行能力。当前权限模型包含 Security 策略、工作区边界、审批和 Runner 约束，但它不应被理解为适用于所有操作系统、命令和子进程的绝对安全沙箱。实际可用档位由 Daemon 探测到的主机能力决定；无法确认的受限能力会保守地标记为不可用。
 
-Phase 6F adds a host-neutral control plane without creating a second Agent or
-Run state machine:
+## 快速开始
 
-```text
-daemon composition root
-  → immutable Agent ControlHookRegistry
-  → serial, cancellable ControlHookRunner
-  → bounded ContextContributionPipeline
-  → Core adapter
-  → Context projection / redaction / budget assembly
-  → one model-turn request
-```
+### 环境要求
 
-The Agent package owns only generic hook contracts, deterministic ordering,
-timeouts, cancellation, reentrancy protection, safe receipts, and bounded
-contribution validation. It does not import Context, Storage, Runtime,
-Security, Core, or provider SDK types. Core is the integration boundary: it
-maps validated contributions into Context items, rejects unsafe or malformed
-snapshot artifacts, and persists only `SNAPSHOT` contributions through the
-existing Context artifact repository before the model turn. The daemon builds
-an empty immutable registry by default and accepts typed host registrations;
-it remains the only production composition root.
+- Node.js `24.x`
+- pnpm `11.x`
+- 一个可用的模型 Provider 和 API Key
 
-Contribution text is rendered in a dedicated `<context_contributions>` system
-block and passes through the existing Context budget. Secret redaction,
-host-path rejection, UTF-8 bounds, and post-redaction token measurement happen
-before provider input. Hook output is never copied into durable conversation
-history, public events, or provider-native message types.
+### 1. 获取并构建项目
 
-Run recovery is distinct from Context preparation: `EXECUTE`/`RECOVER` is the
-durable Run directive, while `NORMAL`/`FORCED_RECOVERY` is an internal Context
-preparation mode. Recovery reuses a validated snapshot artifact and fails
-closed when the required artifact is missing or corrupt; it never reruns a
-non-replayable Hook. Qualified `RECOMPUTE` behavior remains an explicit host
-policy and is not an implicit recovery fallback. Hook failures, timeouts,
-cancellation, and oversized output follow the registered required/optional
-policy and cannot bypass Completion Authority.
-
-### Phase 6G Tool Guard and Tool Feedback control pipelines
-
-Phase 6G extends the same immutable startup composition model to Tool control:
-
-```text
-prepared Tool args
-  → safe Coding Guard projection
-  → awaited BeforeToolDispatch pipeline
-  → Core Security gate and existing admission/approval authority
-  → durable Tool execution and ToolObservation
-  → built-in ModelToolFeedbackProjector
-  → observation-backed Tool Feedback contributions
-  → ToolResultBatchNormalizer
-  → durable AgentToolResultMessage and the next model turn
-```
-
-Guard hooks receive no raw arguments or raw Security facts. Their
-`argsFingerprint` is SHA-256 over prepared canonical arguments, and `safeFacts`
-is an explicit bounded projection. Guard decisions can only strengthen the
-Core decision (`PASS < REQUIRE_APPROVAL < BLOCK`); Core Security still runs for
-non-blocking Guard results. Guard approval restrictions are folded into the
-existing opaque approval identity, while an empty or PASS-only Guard keeps the
-legacy key byte-for-byte compatible. Fresh `REQUESTED` recovery evaluates in
-`EXECUTE`, approved `WAITING_APPROVAL` recovery re-enters admission in
-`RECOVER`, and `RUNNING` invocations are never redispatched.
-
-Tool Feedback hooks run only for real `OBSERVATION` outcomes, after the
-built-in, bounded projector. Rejected, skipped, synthetic, external, and
-legacy results retain their built-in content. Hook contributions have an
-independent byte/count budget, are sanitized by the daemon's existing secret
-and terminal-output safeguards, and may change only model-visible content;
-Tool identity, observation provenance, durable Tool truth, and effects remain
-unchanged. Required contribution failures stop the current Run through the
-existing Tool infrastructure-failure path; optional failures are skipped.
-The final projection fingerprint is recomputed before the message is
-materialized. No Hook receipt is a RunEvent, and no runtime Hook registry or
-HTTP plugin API is introduced.
-
-### Phase 6H Event package retirement
-
-Phase 6H completes the Event System V2 cutover. The legacy `@caelush/events`
-workspace package, its manifest and lockfile edges, and its production
-EventBus implementation are retired. Canonical ownership is explicit:
-Protocol owns RunEvent schemas and historical compatibility aliases, Agent owns
-event drafts and ports, Storage owns durable event persistence and read-only
-replay, and the daemon owns the RunEventHub and public projection. The permanent
-architecture tombstone prevents a second Events package or EventBus runtime from
-being reintroduced.
-
-### Durable conversation
-
-Phase 5D makes the durable conversation the production Context and replay
-input at the Run execution boundary:
-
-```text
-AgentMessageFactory
-  → AgentMessageRecordDraft
-  → atomic RunExecutionStore commit
-  → SQLite durable record
-```
-
-The production ledger contains user, assistant, and normalized Tool-result
-records. System prompts, project instructions, relevant-file context, and
-other synthetic model input are assembled for a turn but are not written as
-ordinary conversation history. The production input path is:
-
-```text
-AgentMessageRecord[]
-  → AgentConversationSnapshot
-  → AgentConversationValidator
-  → ConversationSelector
-  → AgentMessageProjectorRegistry
-  → PreparedModelContext
-  → AIMessage[]
-  → ModelTurnExecutor
-```
-
-`AgentTurnInput` carries durable message IDs and execution-unit references, not
-provider-shaped AI message arrays. Historical Tool messages replay their
-stored projection and projection version; a missing model-visible codec or
-projector fails closed. Selection reports selected/dropped IDs, token estimate,
-and compaction pressure without rewriting or deleting durable records.
-
-The normal client path is `GET /api/v1/sessions/:sessionId/transcript`. The
-Phase 5F finalizer deterministically backfills historical rows, fails closed on
-unsupported or ambiguous legacy data, verifies that no legacy-only rows remain,
-and atomically rebuilds `agent_messages` to the final Message V2 schema. The
-legacy parser and transitional migration remain only as migration history; the
-runtime has no legacy conversation reader, dual-read path, or `@caelush/llm`
-package.
-
-The public conversation surfaces are deliberately separate:
-
-```text
-AgentMessageRecord[] → AgentMessage → AI projector → model input
-AgentMessageRecord[] → AgentMessage → Transcript projector → Protocol TranscriptEntry[]
-AgentEvent[]         → CLI/Web event reducer → Timeline
-```
-
-Transcript projection is audience-controlled: standard Tool results remain
-model-visible but are not transcript-visible by default. Unknown historical
-transcript-visible message types degrade to a fixed safe placeholder rather
-than exposing stored payloads.
-
-Each durable conversation append also produces one lightweight
-`conversation.message.committed` event containing only the message ID,
-conversation-turn ID, and message type. It is a commit notification fact, not
-a copy of `AgentMessageRecord` content; the record and event are committed in
-the same authoritative transaction.
-
-## Coding Tool surface
-
-The current built-in coding catalog is composed by
-`@caelush/coding-agent` and executed through the shared Tool pipeline:
-
-```text
-read_file       list_directory    find_files       search_text
-apply_patch     exec_command      write_stdin
-git_status      git_diff
-```
-
-Tool definitions are data-only. The registry derives the model catalog and
-runtime resolution from the same registrations. The Dispatcher persists the
-invocation lifecycle before the handler runs, and uncertain side effects fail
-closed rather than being silently retried.
-
-## Security and verification boundaries
-
-Security policy and Runtime execution are separate concerns. The local Runtime
-enforces workspace containment, bounded I/O, patch guards, process/session
-ownership, and read-only Git behavior. Security evaluates capabilities,
-permission profiles, approval policy, sensitive paths, command policy, and
-secret-safe output. The current local boundary is a logical policy boundary,
-not an OS-level hard sandbox.
-
-Verification collects bounded evidence and checks the candidate against the
-workspace and, where applicable, Git freshness. Only Core/RunController owns
-the final `COMPLETED` transition.
-
-## Quick start
-
-Requirements:
-
-- Node.js 24.x
-- pnpm 11.x
-
-```bash
+```powershell
 git clone https://github.com/GehrmannMerlin/Caelush.git
-cd Caelush
+Set-Location Caelush
 pnpm install --frozen-lockfile
 pnpm build
 ```
 
-Configure a provider in the daemon environment. Provider credentials remain on
-the daemon host and are never passed through CLI/Web request payloads.
+### 2. 配置模型
+
+下面以 OpenAI-compatible 服务为例。请根据实际 Provider 修改地址、密钥和模型名：
 
 ```powershell
 $env:CAELUSH_PROVIDER_ID = "openai-compatible"
@@ -381,99 +202,120 @@ $env:CAELUSH_DEFAULT_PROVIDER = "openai-compatible"
 $env:CAELUSH_DEFAULT_MODEL = "<your-model>"
 ```
 
-Start the local service in one terminal:
+凭据由本地 Daemon 读取，不会出现在 Web/CLI 的任务请求中。请不要把真实密钥提交到仓库。
 
-```bash
-pnpm --filter @caelush/daemon start
+### 3. 启动 Web
+
+从源码仓库运行：
+
+```powershell
+node apps/launcher/bin/caelush web
 ```
 
-Then start the terminal client in another:
+Launcher 会解析已经构建的 Web 资源，启动或复用本地 Daemon，并在浏览器中打开 Caelush。
 
-```bash
+### 4. 启动 CLI
+
+```powershell
+node apps/launcher/bin/caelush
+```
+
+常用命令：
+
+```powershell
+# 继续最近一次会话
+node apps/launcher/bin/caelush --continue
+
+# 选择并恢复历史会话
+node apps/launcher/bin/caelush --resume
+
+# 非交互执行一次任务
+node apps/launcher/bin/caelush --print "分析当前项目并说明测试入口"
+
+# 检查本地运行环境
+node apps/launcher/bin/caelush doctor
+```
+
+安装正式产品包后，可以直接使用等价的 `caelush` 命令。
+
+### 分别启动 Daemon 与 CLI
+
+开发和调试时，也可以手动启动各个宿主：
+
+```powershell
+# 终端 1
+pnpm --filter @caelush/daemon start
+
+# 终端 2
 pnpm --filter @caelush/cli start
 ```
 
-The daemon uses the current working directory as the default workspace. Set
-`CAELUSH_WORKSPACE_PATH` when the service should operate on a different
-workspace. `CAELUSH_DAEMON_URL` selects a non-default daemon endpoint for a
-client host.
+常用环境变量：
 
-The Web package can be built with:
+| 变量                        | 作用                                       |
+| --------------------------- | ------------------------------------------ |
+| `CAELUSH_WORKSPACE_PATH`    | 指定 Daemon 操作的工作区；默认使用当前目录 |
+| `CAELUSH_DAEMON_URL`        | 让客户端连接非默认 Daemon 地址             |
+| `CAELUSH_WEB_BUILD_ROOT`    | 指定非标准位置的 Web 构建产物              |
+| `CAELUSH_PROVIDER_ID`       | Provider 标识                              |
+| `CAELUSH_PROVIDER_BASE_URL` | Provider API 地址                          |
+| `CAELUSH_PROVIDER_API_KEY`  | Provider 凭据                              |
+| `CAELUSH_DEFAULT_PROVIDER`  | 默认 Provider                              |
+| `CAELUSH_DEFAULT_MODEL`     | 默认模型                                   |
 
-```bash
-pnpm --filter @caelush/web build
-```
+## 内置 Coding Tools
 
-After the repository build (`pnpm build`) or the Web-only build above, start
-the production browser host with:
+| 工具             | 作用                       |
+| ---------------- | -------------------------- |
+| `read_file`      | 在大小和路径约束内读取文件 |
+| `list_directory` | 浏览工作区目录             |
+| `find_files`     | 按模式查找文件             |
+| `search_text`    | 在工作区搜索文本           |
+| `apply_patch`    | 通过可校验补丁修改文件     |
+| `exec_command`   | 启动受管理的命令或进程     |
+| `write_stdin`    | 与已启动的进程会话交互     |
+| `git_status`     | 读取当前 Git 状态          |
+| `git_diff`       | 读取 Git 差异              |
 
-```bash
-caelush web
-```
+所有工具都会通过统一的 Registry、Security Gate、Dispatcher 和 Observation 生命周期。工具定义本身只包含模型可见的数据，不携带执行器、凭据或 Runtime 对象。
 
-The launcher resolves the built Web bundle, starts or reuses the local daemon,
-passes the current workspace through `CAELUSH_WORKSPACE_PATH`, and opens the
-daemon's static Web host in the browser. Set `CAELUSH_WEB_BUILD_ROOT` when the
-bundle lives outside the standard build location.
-
-## Host behavior
-
-The production host layers are deliberately thin:
-
-- The daemon is the Local Agent Service and the only composition root.
-- The launcher handles local discovery, startup leases, diagnostics, and
-  process hand-off.
-- The CLI provides interactive prompts, Session selection, Run recovery,
-  approvals, and a bounded live timeline.
-- The Web client consumes the same Session, Run, context-usage, and event
-  projections.
-- `Ctrl+D` detaches the CLI host; it does not erase durable Session or Run
-  state.
-
-The CLI timeline keeps settled history in `displayHistory` and renders
-`WAITING_APPROVAL` as a control state. Transport recovery uses durable event
-`afterSequence` cursors; presentation code does not invent execution facts.
-
-## Repository structure
+## 项目结构
 
 ```text
 Caelush/
 ├── apps/
-│   ├── daemon/       Local Agent Service and composition root
-│   ├── cli/          Ink terminal client
-│   ├── launcher/     Product startup and daemon discovery
-│   └── web/          React/Vite browser client
+│   ├── daemon/          本地 Agent 服务与唯一生产组合根
+│   ├── launcher/        产品启动、Daemon 发现与环境诊断
+│   ├── web/             React/Vite 浏览器客户端
+│   └── cli/             Ink 终端客户端
 ├── packages/
-│   ├── agent/        General Agent Kernel and Tool orchestration
-│   ├── ai/           Provider-neutral AI domain and gateway
-│   ├── client/       HTTP/SSE client and host projections
-│   ├── coding-agent/ Coding Tools and coding composition
-│   ├── core/         Run lifecycle and Completion Authority
-│   ├── memory/       Memory records and store contracts
-│   ├── observability/Observability package boundary
-│   ├── protocol/     Stable JSON-safe cross-package contracts
-│   ├── runtime/      Local execution substrate
-│   ├── security/     Policy, approval, and secret-safe presentation
-│   ├── shared/       Small dependency-free utilities
-│   ├── storage/      SQLite repositories and durable adapters
-│   └── verification/ Evidence and completion checks
-├── docs/
-│   └── ARCHITECTURE.md
-├── scripts/          Architecture, release, and integration checks
-├── tests/            Architecture guards and integration tests
-├── AGENTS.md         Repository coding-agent contract
-├── package.json
-├── pnpm-lock.yaml
-└── pnpm-workspace.yaml
+│   ├── agent/           Agent Kernel、Tool 编排与控制 Hook
+│   ├── ai/              Provider 中立的模型领域与 Gateway
+│   ├── client/          HTTP/SSE 客户端与宿主投影
+│   ├── coding-agent/    内置 Coding Tools 与执行适配
+│   ├── core/            Run 生命周期与 Completion Authority
+│   ├── memory/          Memory 记录与存储接口
+│   ├── observability/   可观测性边界
+│   ├── protocol/        稳定、JSON-safe 的跨进程协议
+│   ├── runtime/         文件、补丁、命令、进程和 Git 执行底座
+│   ├── security/        权限、审批、命令与路径策略
+│   ├── shared/          无业务依赖的共享工具
+│   ├── storage/         SQLite、迁移、Repository 与持久适配器
+│   └── verification/    证据收集与完成验证
+├── native/
+│   └── sandbox-runner/  Windows 原生受限进程 Runner
+├── docs/                架构和专题设计文档
+├── scripts/             构建、发布、架构与集成检查
+├── tests/               架构守卫和跨包集成测试
+├── AGENTS.md            仓库级开发与架构约束
+└── README.md
 ```
 
-Cross-package production imports use public package entry points. The
-architecture gates reject private `src` imports, reverse app dependencies, and
-other boundary violations.
+## 开发与质量检查
 
-## Development
+常用命令：
 
-```bash
+```powershell
 pnpm build
 pnpm typecheck
 pnpm test
@@ -483,62 +325,59 @@ pnpm check:architecture:ci
 pnpm check
 ```
 
-`pnpm check` is the full repository check and includes build, typecheck, lint,
-tests, and formatting. For a documentation-only change, start with
-`pnpm check:architecture:ci`, targeted tests, `git diff --check`, and the
-relevant Prettier check.
+`pnpm check` 是完整仓库检查。修改包边界、依赖方向或生产组合时，至少运行 `pnpm check:architecture:ci`。
 
-## Architecture V2 status
+项目坚持以下开发约束：
 
-The repository also records the completed host-boundary work that remains relevant to the current
-runtime: Phase 9C sanitizer injection, Phase 9D — V1 Security Integration, Phase 11B — Verification Execution: **COMPLETED**, and Phase 11D — Completion Authority & Finalization: **COMPLETED**.
+- 行为变更先添加或更新聚焦测试，再编写最小实现；
+- 跨包导入必须使用公开入口，不允许导入其他包的私有 `src` 路径；
+- 不建立第二套 Agent Loop、Tool Catalog、Runtime API 或事件写入通道；
+- 不把凭据、隐藏推理、原始 Provider 流或无限输出写入公共协议；
+- 所有影响任务完成状态的逻辑必须经过 RunController 和 Completion Authority。
 
-| Migration boundary                                      | Status   |
-| ------------------------------------------------------- | -------- |
-| Phase 1 — architecture foundation and public boundaries | Complete |
-| Phase 2 — AI domain and provider migration              | Complete |
-| Phase 3 — Agent Kernel and durable Run boundaries       | Complete |
-| Phase 4 — Tool System and Coding Agent composition      | Complete |
-| Phase 5A — Message domain foundation                    | Complete |
-| Phase 5B — Message storage foundation                   | Complete |
-| Phase 5C — durable conversation runtime cutover         | Complete |
-| Phase 5D — Context & replay cutover                     | Complete |
-| Phase 5E — transcript/client projection migration       | COMPLETE |
-| Phase 5F — legacy Message V2 retirement                 | COMPLETE |
-| Phase 6A — Event domain and Protocol foundation         | COMPLETE |
-| Phase 6B — RunEventHub, replay, and backpressure        | COMPLETE |
-| Phase 6C — Public projection, SSE, and client cutover   | COMPLETE |
-| Phase 6D — Durable event authority and writer cutover   | COMPLETE |
-| Phase 6E — Transient signal and streaming cutover       | COMPLETE |
-| Phase 6F — Control Hooks and Context Contributions      | COMPLETE |
-| Phase 6G — Tool Guard and Tool Feedback control         | COMPLETE |
-| Phase 6H — Legacy Event package retirement              | COMPLETE |
-| Phase 6 — Event System V2                               | COMPLETE |
-| Phase 7 — Context Engineering V2                        | COMPLETE |
-| Phase 8 — Context Compaction V2                         | COMPLETE |
+完整约束请阅读 [AGENTS.md](./AGENTS.md)，系统真实架构请阅读 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)。
 
-The status table records the completed Architecture V2 migration boundaries
-through Phase 8F. This does not claim that unrelated future product capabilities
-have begun or that the Caelush product is feature complete.
+## 项目状态
 
-## Current limitations and roadmap
+Caelush 当前处于早期开发阶段，已经具备：
 
-Caelush is not presented as a frozen public SDK or a universal sandbox. The
-following remain future boundaries or explicit limitations:
+- 共享的 Web/CLI Agent Kernel；
+- 持久 Session、Run、Conversation、Tool 与 Event 基础；
+- 本地 Coding Tool、命令和进程执行；
+- 实时观察、断线重连和持久事件重放；
+- 权限策略、审批流程与三档权限界面；
+- Context 选择、压缩和恢复机制；
+- Verification 与 Completion Authority；
+- Windows 原生受限 Runner 的基础实现。
 
-- Production MCP integration, Skills, Browser Agent, Computer Use, and Web
-  Search.
-- Multi-Agent/Sub-Agent orchestration and true parallel Tool execution.
-- OS-level hard sandboxing and universal process-tree termination.
-- A stabilized public SDK and compatibility promise across releases.
+仍在完善或尚未进入稳定支持范围的能力包括：
 
-Future work must preserve the shared Kernel, daemon composition root, durable
-first ordering, Protocol-only public contracts, and verification-gated
-completion model.
+- Windows 三档权限从发布构件到 Daemon、API、Web 和真实执行的完整产品闭环；
+- 面向所有平台的强隔离沙箱和通用进程树约束；
+- MCP、Skills、Browser Agent、Computer Use 与 Web Search；
+- Multi-Agent/Sub-Agent 编排和真正的并行 Tool 执行；
+- 稳定的公共 SDK、版本兼容承诺和正式发布安装流程。
 
-## Documentation
+README 只描述当前产品能力和稳定边界。详细的内部演进历史保留在架构文档和 Git 记录中。
 
-Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the current system
-truth. `AGENTS.md` contains the repository development contract. Temporary
-plans, task reports, blocked evidence, and coding-session notes are not part of
-the public documentation surface.
+## 参与开发
+
+欢迎通过 [Issues](https://github.com/GehrmannMerlin/Caelush/issues) 报告问题、讨论需求，或提交 Pull Request。
+
+开始贡献前，请先：
+
+1. 阅读 [AGENTS.md](./AGENTS.md) 中的架构与开发合同；
+2. 阅读 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) 了解当前权威边界；
+3. 为行为变化添加聚焦测试；
+4. 运行与改动范围相匹配的检查；
+5. 在提交前检查 `git status`、`git diff --check` 和完整差异。
+
+如果你正在设计新的宿主、Provider、Tool、Runtime 或存储适配器，请优先扩展现有公开边界，而不是在应用层复制一套 Agent 实现。
+
+---
+
+<div align="center">
+
+**Caelush — 让编程 Agent 的执行过程可理解、可恢复、可控制、可验证。**
+
+</div>
