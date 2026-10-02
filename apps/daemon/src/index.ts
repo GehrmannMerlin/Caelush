@@ -71,7 +71,7 @@ export {
 } from "./web/workspace-launch-context.js";
 export { checkNodePtyLoadability, inspectMigrationAssets } from "./diagnostics.js";
 export type { MigrationAssetInspection, NodePtyLoadability } from "./diagnostics.js";
-export { composeDaemon } from "./daemon-composition.js";
+export { composeDaemon, defaultProcessSandboxProviders } from "./daemon-composition.js";
 export { MemoryExtractionWorker } from "./memory/memory-extraction-worker.js";
 export type { MemoryExtractionWorkerOptions } from "./memory/memory-extraction-worker.js";
 export type {
@@ -114,6 +114,17 @@ export {
   type SecurityCapabilityServiceOptions,
   type WorkspacePreparationPort,
 } from "./services/security-capability-service.js";
+export {
+  SANDBOX_RUNNER_UNAVAILABLE_REASON,
+  WINDOWS_SANDBOX_PROVIDER_ID,
+  WORKSPACE_NOT_FOUND_REASON,
+  WORKSPACE_PREPARATION_UNAVAILABLE_REASON,
+  createWindowsSandboxHost,
+} from "./services/windows-sandbox-host.js";
+export type {
+  WindowsSandboxHost,
+  WindowsSandboxHostOptions,
+} from "./services/windows-sandbox-host.js";
 export {
   inspectSecurityFeatureGates,
   resolveSecurityFeatureGates,

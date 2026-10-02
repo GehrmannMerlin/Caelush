@@ -1142,7 +1142,15 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
   };
 }
 
-function defaultProcessSandboxProviders(): readonly ProcessSandboxProvider[] {
+/**
+ * The platform default restricted-provider set.
+ *
+ * Exported because the startup path (`apps/daemon/src/daemon.ts`) and the composition fallback must
+ * agree on one platform switch. On Windows the startup path replaces this set with the verified
+ * artifact host — `createWindowsSandboxHost` — and this function remains the authority for a host
+ * where no packaged Runner applies.
+ */
+export function defaultProcessSandboxProviders(): readonly ProcessSandboxProvider[] {
   switch (process.platform) {
     case "win32":
       return [createWindowsAclRestrictedTokenProvider()];

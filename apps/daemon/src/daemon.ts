@@ -11,6 +11,7 @@ import {
   createLocalRuntimeResolver,
   LocalRuntime,
   type ProcessSandboxProvider,
+  type ResolvedSandboxRunnerArtifact,
 } from "@caelush/runtime";
 import {
   applyToolEffectsToAgentState,
@@ -27,7 +28,11 @@ import {
 } from "@caelush/coding-agent";
 import { buildDaemonApp } from "./app.js";
 import { assertLoopbackDaemonHost, createDaemonConfig, type DaemonConfig } from "./config.js";
-import { composeDaemon, type DaemonComposition } from "./daemon-composition.js";
+import {
+  composeDaemon,
+  defaultProcessSandboxProviders,
+  type DaemonComposition,
+} from "./daemon-composition.js";
 import {
   reconcileStaleRuns,
   type StartupReconciliationSummary,
@@ -42,6 +47,7 @@ import { DefaultPublicEventProjector } from "./events/public-event-projector.js"
 import { WorkspaceService } from "./workspaces/workspace-service.js";
 import type { WorkspacePreparationPort } from "./services/security-capability-service.js";
 import type { SecurityFeatureGates } from "./services/security-feature-gates.js";
+import { createWindowsSandboxHost } from "./services/windows-sandbox-host.js";
 import {
   createNativeWorkspaceDirectoryPicker,
   type WorkspaceDirectoryPicker,
@@ -78,6 +84,15 @@ export interface DaemonOptions {
   readonly toolFeedbackContributionBudget?: Partial<ToolFeedbackContributionBudget>;
   readonly toolExposure?: GitToolAvailability;
   readonly processSandboxProviders?: readonly ProcessSandboxProvider[];
+  /**
+   * The verified Windows Runner artifact this daemon generation runs under, when one was resolved.
+   *
+   * A typed seam rather than an environment read: the startup path resolves the artifact exactly once
+   * and hands the result here, so no lower layer re-reads `CAELUSH_SANDBOX_RUNNER_*` and a test can
+   * inject an artifact without a packaged bundle. `undefined` is a real state — the daemon still
+   * starts, and the restricted presets report a bounded unavailability reason.
+   */
+  readonly windowsSandboxArtifact?: ResolvedSandboxRunnerArtifact;
   readonly fullAccessAvailable?: boolean;
   readonly ttySupported?: boolean;
   readonly workspacePreparation?: WorkspacePreparationPort;
@@ -185,6 +200,34 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     await storage.close().catch(() => undefined);
     throw error;
   }
+  /**
+   * The restricted-execution host, composed once — and only when the caller injected neither half.
+   *
+   * ```text
+   * caller injected providers or preparation   → the host is not built; the injection wins
+   * Windows, nothing injected                  → one Provider + one preparation port
+   * every other host, nothing injected          → the platform defaults below
+   * ```
+   *
+   * The host is built *after* the workspace registry exists because its preparation port resolves
+   * every workspace ID through `WorkspaceService.requireWorkspace()` at call time.
+   */
+  const windowsSandboxHost =
+    process.platform === "win32" &&
+    options.processSandboxProviders === undefined &&
+    options.workspacePreparation === undefined
+      ? createWindowsSandboxHost({
+          artifact: options.windowsSandboxArtifact,
+          workspaceService,
+        })
+      : undefined;
+  const processSandboxProviders =
+    options.processSandboxProviders ??
+    (windowsSandboxHost !== undefined && windowsSandboxHost.providers.length > 0
+      ? windowsSandboxHost.providers
+      : defaultProcessSandboxProviders());
+  const workspacePreparation =
+    options.workspacePreparation ?? windowsSandboxHost?.workspacePreparation;
   let composition: DaemonComposition;
   try {
     composition = await composeDaemon({
@@ -204,16 +247,12 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
       ...(options.logger === true ? { logger: safeSupervisorLogger } : {}),
       toolRegistrations: exposedToolRegistrations,
       ...(options.toolExposure === undefined ? {} : { toolExposure: options.toolExposure }),
-      ...(options.processSandboxProviders === undefined
-        ? {}
-        : { processSandboxProviders: options.processSandboxProviders }),
+      processSandboxProviders,
       ...(options.fullAccessAvailable === undefined
         ? {}
         : { fullAccessAvailable: options.fullAccessAvailable }),
       ...(options.ttySupported === undefined ? {} : { ttySupported: options.ttySupported }),
-      ...(options.workspacePreparation === undefined
-        ? {}
-        : { workspacePreparation: options.workspacePreparation }),
+      ...(workspacePreparation === undefined ? {} : { workspacePreparation }),
       ...(options.featureGates === undefined ? {} : { featureGates: options.featureGates }),
       ...(options.contextContributionHooks === undefined
         ? {}
