@@ -9,6 +9,7 @@ import { URL, fileURLToPath } from "node:url";
 import {
   SANDBOX_RUNNER_DIRECTORY_NAME,
   SANDBOX_RUNNER_MANIFEST_FILENAME,
+  validateSandboxRunnerManifest,
 } from "./build-sandbox-runner.mjs";
 import { validateReleaseManifest } from "./build-release.mjs";
 
@@ -65,6 +66,17 @@ export function verifyPackagedSandboxRunner({ entries, readBuffer, sandboxManife
   if (!entries.has(manifestRelativePath)) {
     throw new Error("Release claims a packaged sandbox runner but its manifest is missing.");
   }
+  const packagedManifest = readPackagedSandboxRunnerManifest(readBuffer, manifestRelativePath);
+  if (
+    packagedManifest.sha256 !== sandboxManifest.sha256 ||
+    packagedManifest.executableName !== sandboxManifest.executableName ||
+    packagedManifest.platform !== sandboxManifest.platform ||
+    packagedManifest.arch !== sandboxManifest.arch
+  ) {
+    throw new Error(
+      "Packaged sandbox runner manifest disagrees with the release manifest it ships with.",
+    );
+  }
   const measured = createHash("sha256").update(readBuffer(runnerRelativePath)).digest("hex");
   if (measured !== sandboxManifest.sha256) {
     throw new Error("Packaged sandbox runner hash does not match its manifest.");
@@ -74,6 +86,25 @@ export function verifyPackagedSandboxRunner({ entries, readBuffer, sandboxManife
     if (!covered.has(required)) {
       throw new Error(`Release checksums do not cover the packaged sandbox runner: ${required}`);
     }
+  }
+}
+
+/**
+ * The bundle's own `sandbox-runner/manifest.json` must be a valid manifest that agrees with the
+ * release manifest. Without this cross-check a bundle could carry a structurally valid manifest
+ * that describes a different Runner than the release advertises.
+ */
+function readPackagedSandboxRunnerManifest(readBuffer, manifestRelativePath) {
+  let parsed;
+  try {
+    parsed = JSON.parse(readBuffer(manifestRelativePath).toString("utf8"));
+  } catch (error) {
+    throw new Error("Packaged sandbox runner manifest is not valid JSON.", { cause: error });
+  }
+  try {
+    return validateSandboxRunnerManifest(parsed);
+  } catch (error) {
+    throw new Error("Packaged sandbox runner manifest is not a valid manifest.", { cause: error });
   }
 }
 

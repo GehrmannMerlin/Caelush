@@ -180,6 +180,38 @@ describe("packaged sandbox runner integrity", () => {
     ).toThrow(/not packaged/i);
   });
 
+  it("fails closed when the extracted Runner manifest disagrees with the release manifest", () => {
+    const manifest = sandboxManifest(hash(runnerBytes));
+    const divergent = { ...manifest, sha256: hash(changedRunnerBytes) };
+    expect(() =>
+      verifyPackagedSandboxRunner({
+        entries: new Set([runnerRelativePath, manifestRelativePath]),
+        readBuffer: (path) =>
+          path === runnerRelativePath ? runnerBytes : Buffer.from(JSON.stringify(divergent)),
+        sandboxManifest: manifest,
+        checksums: checksumRecordsFor(manifest, (path) =>
+          path === runnerRelativePath ? runnerBytes : Buffer.from(JSON.stringify(divergent)),
+        ),
+      }),
+    ).toThrow(/manifest/i);
+  });
+
+  it("fails closed when the extracted Runner manifest is structurally invalid", () => {
+    const manifest = sandboxManifest(hash(runnerBytes));
+    const invalid = { ...manifest, providers: [] };
+    expect(() =>
+      verifyPackagedSandboxRunner({
+        entries: new Set([runnerRelativePath, manifestRelativePath]),
+        readBuffer: (path) =>
+          path === runnerRelativePath ? runnerBytes : Buffer.from(JSON.stringify(invalid)),
+        sandboxManifest: manifest,
+        checksums: checksumRecordsFor(manifest, (path) =>
+          path === runnerRelativePath ? runnerBytes : Buffer.from(JSON.stringify(invalid)),
+        ),
+      }),
+    ).toThrow(/manifest/i);
+  });
+
   function sandboxManifest(sha256: string) {
     return {
       schemaVersion: 1 as const,

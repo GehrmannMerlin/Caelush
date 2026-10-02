@@ -1,12 +1,17 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { createServer } from "node:http";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { clearTimeout, setTimeout } from "node:timers";
 import { join, resolve } from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import {
+  SANDBOX_RUNNER_DIRECTORY_NAME,
+  SANDBOX_RUNNER_MANIFEST_FILENAME,
+} from "./build-sandbox-runner.mjs";
 
 const artifactPath = resolve(process.argv[2] ?? "");
 if (!artifactPath) throw new Error("Usage: node scripts/artifact-e2e.mjs <artifact.tgz>");
@@ -22,15 +27,24 @@ await writeFile(join(workspaceDirectory, "fixture.txt"), "artifact fixture\n", "
 await stopStaleArtifactDaemons();
 
 const extraction = spawnSync("tar", ["-xzf", artifactPath, "-C", bundleDirectory], {
-  stdio: "pipe",
+  // `tar -xzf` never reads stdin; do not hand the archiver a stdin pipe.
+  stdio: ["ignore", "pipe", "pipe"],
 });
 if (extraction.status !== 0) {
   throw new Error(`Unable to extract the artifact: ${extraction.stderr.toString("utf8")}`);
 }
 
 const manifest = JSON.parse(await readFile(join(bundleDirectory, "manifest.json"), "utf8"));
+const packagedSandboxRunner = await inspectPackagedSandboxRunner(manifest);
 const binPath = join(bundleDirectory, "bin", "caelush");
-const useRestrictedPermission = manifest.featureGates.runtimeSandboxV1 === true;
+// `runtimeSandboxV1` is an artifact fact: this bundle ships a verified Runner. It is not a claim
+// that the Daemon already serves the restricted presets — that composition is Phase 6, and until it
+// lands the Daemon must report restricted presets unavailable rather than degrading to an
+// unrestricted spawn. This smoke therefore drives its Runs through the explicitly confirmed Full
+// Access capability, and proves the bundled Runner through `doctor`, the packaged manifests, the
+// archive checksum records, and the tamper probe. Set CAELUSH_ARTIFACT_RESTRICTED_RUN=1 to exercise
+// the restricted path once the Daemon composition exists.
+const useRestrictedPermission = process.env.CAELUSH_ARTIFACT_RESTRICTED_RUN === "1";
 if (!useRestrictedPermission && manifest.featureGates.fullAccessV1 !== true) {
   throw new Error("Release smoke requires either a runtime sandbox or Full Access capability.");
 }
@@ -58,6 +72,10 @@ const environment = {
   CAELUSH_DEFAULT_MODEL: "fixture-model",
 };
 delete environment.CAELUSH_DAEMON_URL;
+// The packaged bundle must satisfy discovery on its own. Remove any development or
+// diagnostic Runner override so neither the source tree nor this shell can satisfy it.
+delete environment.CAELUSH_SANDBOX_RUNNER_PATH;
+delete environment.CAELUSH_SANDBOX_RUNNER_MANIFEST;
 
 try {
   const providerProbe = await hostFetch(`${provider.url}/chat/completions`, {
@@ -242,6 +260,16 @@ try {
   assert(doctor.exitCode === 0, `packaged doctor failed: ${doctor.stdout}\n${doctor.stderr}`);
   assert(doctor.stdout.includes("Provider configured: yes"), "doctor missed public provider state");
   assert(!doctor.stdout.includes(secret), "doctor leaked the provider secret");
+  if (packagedSandboxRunner !== undefined) {
+    assert(
+      doctor.stdout.includes("Restricted execution Provider: native runner verified"),
+      `packaged doctor did not verify the bundled Runner without an environment override: ${doctor.stdout}`,
+    );
+    await assertTamperedRunnerFailsClosed({
+      sandboxManifest: packagedSandboxRunner.sandboxManifest,
+      environment,
+    });
+  }
 
   const initialDaemonCount = await countArtifactDaemons(bundleDirectory);
   const single = await runConfiguredLauncher(
@@ -435,6 +463,33 @@ try {
   } finally {
     await customDaemon.close();
   }
+
+  // Fail-closed proof for this phase boundary. The artifact ships a verified Runner, but the Daemon
+  // restricted-preset composition is not wired yet, so the default restricted preset is reported
+  // unavailable. Silently degrading to an unrestricted spawn here would be a security regression,
+  // so the packaged product must refuse the Run and must never reach the model.
+  const restrictedRefusal = await runLauncher(
+    binPath,
+    ["-p", "Reply exactly SHOULD_NOT_RUN", "--output-format", "json"],
+    {
+      cwd: workspaceDirectory,
+      env: { ...environment, CAELUSH_HOME: join(testRoot, "restricted-home") },
+    },
+  );
+  const refusal = JSON.parse(restrictedRefusal.stdout);
+  assert(
+    refusal.success === false && refusal.errorCode === "BOOTSTRAP_FAILURE",
+    `packaged restricted default did not fail closed: ${restrictedRefusal.stdout}${restrictedRefusal.stderr}`,
+  );
+  assert(
+    typeof refusal.exitReason === "string" &&
+      refusal.exitReason.includes("unavailable on this host"),
+    `packaged restricted default did not report the host limitation: ${restrictedRefusal.stdout}`,
+  );
+  assert(
+    !provider.requests.some((request) => JSON.stringify(request).includes("SHOULD_NOT_RUN")),
+    "packaged restricted default degraded to an unrestricted spawn",
+  );
 
   const database = join(homeDirectory, "caelush.db");
   assert((await stat(database)).isFile(), "packaged daemon did not create the SQLite database");
@@ -794,15 +849,27 @@ async function runPackagedPty(runtimeModule, protocolModule, workspace) {
     `const { createRunId, createWorkspaceId } = await import(${JSON.stringify(protocolModule)});`,
     "const runtime = new LocalRuntime();",
     `const scope = await runtime.openWorkspace({ id: createWorkspaceId(), path: ${JSON.stringify(workspace)} });`,
-    'const result = await scope.exec.execute({ ownerRunId: createRunId(), command: "echo artifact-pty", tty: true, yieldTimeMs: 2000 });',
-    'if (result.status !== "EXITED" || !result.output.includes("artifact-pty")) process.exit(1);',
+    "const ownerRunId = createRunId();",
+    'const result = await scope.exec.execute({ ownerRunId, command: "echo artifact-pty", tty: true, yieldTimeMs: 2000 });',
+    'if (!result.output.includes("artifact-pty")) process.exit(1);',
+    // A ConPTY exit can land just after the yield deadline, so a single yield races the exit event.
+    // Drain the session to its terminal state instead of demanding one race-free observation.
+    'if (result.status === "RUNNING") {',
+    "  if (result.sessionId === undefined) process.exit(1);",
+    '  const settled = await scope.exec.interact({ ownerRunId, sessionId: result.sessionId, chars: "", yieldTimeMs: 5000 });',
+    '  if (settled.status !== "EXITED" || settled.exitCode !== 0) process.exit(1);',
+    "}",
+    "if (result.exitCode !== undefined && result.exitCode !== 0) process.exit(1);",
     "process.exit(0);",
   ].join("\n");
   const result = await run(process.execPath, ["--input-type=module", "-e", source], {
     cwd: workspace,
     env: process.env,
   });
-  assert(result.exitCode === 0, "packaged PTY smoke failed.");
+  assert(
+    result.exitCode === 0,
+    `packaged PTY smoke failed: stdout=${result.stdout}; stderr=${result.stderr}`,
+  );
 }
 
 function runLauncher(binPath, args, options) {
@@ -847,23 +914,24 @@ async function countArtifactDaemons(bundleDirectory) {
   if (process.platform === "win32") {
     const escaped = needle.replaceAll("'", "''");
     const script = `$needle='${escaped}'; (Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.CommandLine -like "*$needle*" } | Measure-Object).Count`;
-    try {
-      return Number.parseInt(
-        execFileSync("powershell.exe", ["-NoProfile", "-Command", script], {
-          encoding: "utf8",
-        }).trim(),
-        10,
-      );
-    } catch {
-      return 0;
+    const output = execFileSync("powershell.exe", ["-NoProfile", "-Command", script], {
+      encoding: "utf8",
+      // A process query never reads stdin; not handing it a stdin pipe also works on hosts that
+      // cannot duplicate an unusual parent stdin handle.
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const count = Number.parseInt(output.trim(), 10);
+    // A broken counter must not silently satisfy the `=== 0` assertions below.
+    if (!Number.isSafeInteger(count)) {
+      throw new Error(`Unable to count packaged daemons: ${JSON.stringify(output.trim())}`);
     }
+    return count;
   }
-  try {
-    const processes = execFileSync("ps", ["-eo", "args="], { encoding: "utf8" });
-    return processes.split("\n").filter((line) => line.includes(needle)).length;
-  } catch {
-    return 0;
-  }
+  const processes = execFileSync("ps", ["-eo", "args="], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  return processes.split("\n").filter((line) => line.includes(needle)).length;
 }
 
 async function waitForPendingApproval(client, runId) {
@@ -933,6 +1001,119 @@ async function stopArtifactDaemons(bundleDirectory) {
     }
   } catch {
     /* Best-effort cleanup for the host process. */
+  }
+}
+
+/**
+ * A release that advertises `runtimeSandboxV1` must actually carry the Runner it claims.
+ *
+ * This runs against the extracted bundle with every sandbox environment override removed, so
+ * neither the source checkout nor this shell can satisfy the assertions. Presence, the packaged
+ * manifest, the release manifest, the Runner bytes, and the archive checksum records must all
+ * agree before the smoke treats the artifact as sandbox-capable.
+ */
+async function inspectPackagedSandboxRunner(releaseManifest) {
+  if (releaseManifest.featureGates?.runtimeSandboxV1 === true) {
+    assert(
+      releaseManifest.sandboxRunner === "PACKAGED",
+      "release advertises runtimeSandboxV1 but does not declare a packaged sandbox runner",
+    );
+  }
+  if (releaseManifest.sandboxRunner !== "PACKAGED") return undefined;
+
+  const runnerDirectory = join(bundleDirectory, SANDBOX_RUNNER_DIRECTORY_NAME);
+  const sandboxManifestPath = join(runnerDirectory, SANDBOX_RUNNER_MANIFEST_FILENAME);
+  assert(
+    await fileExists(sandboxManifestPath),
+    `packaged sandbox runner manifest is missing: ${sandboxManifestPath}`,
+  );
+  const sandboxManifest = JSON.parse(await readFile(sandboxManifestPath, "utf8"));
+  assert(
+    sandboxManifest.sha256 === releaseManifest.sandboxRunnerManifest?.sha256,
+    "release manifest and packaged sandbox manifest disagree on the runner hash",
+  );
+  const runnerPath = join(runnerDirectory, sandboxManifest.executableName);
+  assert(await fileExists(runnerPath), `packaged sandbox runner is missing: ${runnerPath}`);
+  const measured = createHash("sha256")
+    .update(await readFile(runnerPath))
+    .digest("hex");
+  assert(
+    measured === sandboxManifest.sha256,
+    "packaged sandbox runner bytes do not match the packaged manifest hash",
+  );
+
+  const coverage = await readChecksumCoverage();
+  const runnerEntry = `${SANDBOX_RUNNER_DIRECTORY_NAME}/${sandboxManifest.executableName}`;
+  const manifestEntry = `${SANDBOX_RUNNER_DIRECTORY_NAME}/${SANDBOX_RUNNER_MANIFEST_FILENAME}`;
+  for (const required of [runnerEntry, manifestEntry]) {
+    assert(
+      coverage.has(required),
+      `archive checksums do not cover the packaged runner: ${required}`,
+    );
+  }
+  assert(
+    coverage.get(runnerEntry) === sandboxManifest.sha256,
+    "archive checksum disagrees with the packaged sandbox runner hash",
+  );
+  return { sandboxManifest, runnerPath, sandboxManifestPath };
+}
+
+async function readChecksumCoverage() {
+  const checksums = await readFile(join(bundleDirectory, "checksums.sha256"), "utf8");
+  const coverage = new Map();
+  for (const line of checksums.trim().split(/\r?\n/)) {
+    if (line === "") continue;
+    const match = /^(?<hash>[0-9a-f]{64})\x20{2}(?<path>.+)$/.exec(line);
+    if (match === null) throw new Error("Invalid release checksum record in the extracted bundle.");
+    coverage.set(match.groups.path, match.groups.hash);
+  }
+  return coverage;
+}
+
+/**
+ * A tampered Runner must fail closed.
+ *
+ * The extracted bundle is copied so the pristine artifact keeps serving the remaining smoke
+ * steps, then exactly one byte of the packaged Runner is flipped. The shipped doctor must stop
+ * reporting the Runner as verified and must surface the bounded hash-mismatch reason code instead
+ * of silently falling back to an unrestricted host probe.
+ */
+async function assertTamperedRunnerFailsClosed({ sandboxManifest, environment }) {
+  const tamperedBundle = join(testRoot, "tampered-bundle");
+  await cp(bundleDirectory, tamperedBundle, { recursive: true });
+  const tamperedRunnerPath = join(
+    tamperedBundle,
+    SANDBOX_RUNNER_DIRECTORY_NAME,
+    sandboxManifest.executableName,
+  );
+  const original = await readFile(tamperedRunnerPath);
+  assert(original.length > 0, "packaged sandbox runner is empty");
+  const tampered = Buffer.from(original);
+  // Flip one bit of the final byte: the image stays loadable, so only the advertised hash
+  // changes. That isolates artifact-identity checking from binary corruption.
+  tampered[tampered.length - 1] ^= 0x01;
+  assert(!tampered.equals(original), "tamper probe did not change the packaged runner bytes");
+  await writeFile(tamperedRunnerPath, tampered);
+
+  const tamperedDoctor = await runLauncher(join(tamperedBundle, "bin", "caelush"), ["doctor"], {
+    cwd: workspaceDirectory,
+    env: environment,
+  });
+  assert(
+    !tamperedDoctor.stdout.includes("Restricted execution Provider: native runner verified"),
+    `tampered packaged runner was still reported as verified: ${tamperedDoctor.stdout}`,
+  );
+  assert(
+    tamperedDoctor.stdout.includes("Restricted execution Provider: RUNNER_HASH_MISMATCH"),
+    `tampered packaged runner did not fail closed with a bounded reason code: ${tamperedDoctor.stdout}`,
+  );
+}
+
+async function fileExists(path) {
+  try {
+    return (await stat(path)).isFile();
+  } catch {
+    return false;
   }
 }
 
