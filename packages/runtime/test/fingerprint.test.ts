@@ -1,4 +1,4 @@
-import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -52,6 +52,13 @@ describe("LocalRuntimeFileSystem.fingerprint", () => {
       skip(
         `symlink creation unavailable: ${error instanceof Error ? error.message : String(error)}`,
       );
+    }
+    // A resolved `symlink()` is not evidence that a link exists: a host without the privilege, or a
+    // sandbox that emulates links, can report success while materialising an ordinary entry, and the
+    // SYMLINK assertion below would then be measuring a plain file. Measure the precondition instead
+    // of assuming it (Finding N5, the remedy Task 5 applied to the other two fixtures).
+    if (!(await lstat(link)).isSymbolicLink()) {
+      skip("the host reported success but produced no symbolic link (readlink would fail)");
     }
 
     const fileSystem = new LocalRuntimeFileSystem();
