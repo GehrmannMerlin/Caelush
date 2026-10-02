@@ -7,6 +7,8 @@ mod acl;
 mod capability_sid;
 mod command_line;
 mod error;
+#[cfg(feature = "test-fault-injection")]
+mod faults;
 mod handle;
 mod job;
 mod path_boundary;
@@ -18,6 +20,28 @@ mod token;
 pub use super::windows_mode::WindowsSandboxMode;
 pub use acl::{GrantChange, GrantStatus};
 pub use process::RestrictedProcess;
+
+/// Arms the test-only fault stage named by the environment. Compiled only into a
+/// `test-fault-injection` build; see the `faults` module for why this is a build-time gate rather
+/// than a switch.
+#[cfg(feature = "test-fault-injection")]
+pub fn arm_fault_from_environment() -> Result<(), String> {
+    faults::arm_from_environment()
+}
+
+/// Fails if the armed test-only fault stage is reached here. Compiled only into a
+/// `test-fault-injection` build.
+#[cfg(feature = "test-fault-injection")]
+pub fn fault_check_ready() -> Result<(), String> {
+    faults::check(faults::FaultStage::Ready).map_err(|error| error.to_string())
+}
+
+/// Fails if the armed test-only fault stage is reached here. Compiled only into a
+/// `test-fault-injection` build.
+#[cfg(feature = "test-fault-injection")]
+pub fn fault_check_child_start() -> Result<(), String> {
+    faults::check(faults::FaultStage::ChildStart).map_err(|error| error.to_string())
+}
 
 /// VIEW_ONLY uses a Low-integrity write-restricted token and a kill-on-close Job Object.
 /// WORKSPACE_WRITE uses capability-SID ACL preparation and a per-Run private-temp grant;
@@ -32,8 +56,12 @@ pub fn spawn_restricted(
 ) -> Result<RestrictedProcess, String> {
     match mode {
         WindowsSandboxMode::ReadOnly => {
+            #[cfg(feature = "test-fault-injection")]
+            faults::check(faults::FaultStage::BeforeTokenCreate).map_err(|error| error.to_string())?;
             let token =
                 token::RestrictedToken::create_read_only().map_err(|error| error.to_string())?;
+            #[cfg(feature = "test-fault-injection")]
+            faults::check(faults::FaultStage::AfterTokenCreate).map_err(|error| error.to_string())?;
             let environment = std::env::vars_os().collect::<Vec<_>>();
             RestrictedProcess::spawn(&token, program, args, cwd, &environment)
                 .map_err(|error| error.to_string())
@@ -80,10 +108,23 @@ pub fn spawn_workspace_write_restricted(
     {
         return Err(error::SandboxError::WorkspaceGrantMissing.to_string());
     }
+    // Injected after the workspace grant is confirmed, so a fault here leaves the standing
+    // workspace ACE exactly as preparation made it.
+    #[cfg(feature = "test-fault-injection")]
+    faults::check(faults::FaultStage::WorkspaceGrant).map_err(|error| error.to_string())?;
     let cwd = validate_cwd(cwd, &boundary)?;
+    #[cfg(feature = "test-fault-injection")]
+    faults::check(faults::FaultStage::BeforeTokenCreate).map_err(|error| error.to_string())?;
     let token = token::RestrictedToken::create_workspace_write(&workspace_sid, &temp_sid)
         .map_err(|error| error.to_string())?;
+    #[cfg(feature = "test-fault-injection")]
+    faults::check(faults::FaultStage::AfterTokenCreate).map_err(|error| error.to_string())?;
     let temp = &boundary.temp.as_ref().expect("validated temp").path;
+    // Injected before the temp ACE exists, so "the temp grant step failed" cannot leave a grant
+    // behind. Failures *after* the ACE exists are covered by the process-side stages, which run
+    // through the revoke path below.
+    #[cfg(feature = "test-fault-injection")]
+    faults::check(faults::FaultStage::TempGrant).map_err(|error| error.to_string())?;
     acl::ensure_write_grant(temp, &temp_sid).map_err(|error| error.to_string())?;
     let environment = workspace_environment(temp);
     match RestrictedProcess::spawn_with_temp_grant(

@@ -102,8 +102,15 @@ async function proveWindowsReadOnlyConfinement(input: {
   const renamed = join(root, "renamed.txt");
   const script = join(root, "probe.cmd");
   const originalReadable = "caelush-read-only-probe\r\n";
+  const authorizationNonce = `native-runner-functional-probe-${randomUUID()}`;
+  // A positive control. Every other assertion here is of the form "this fixture is unchanged", so a
+  // Runner that never started the payload — or started something other than this script — would
+  // satisfy all of them and be reported as AVAILABLE. The payload therefore has to prove it ran by
+  // printing a per-Run marker that nothing else can produce.
+  const ranMarker = `caelush-functional-probe-ran-${randomUUID()}`;
   const deadline = Date.now() + input.timeoutMs;
   let adapter: ManagedProcessAdapter | undefined;
+  let stopOutput = (): void => undefined;
 
   try {
     await Promise.all([
@@ -114,6 +121,7 @@ async function proveWindowsReadOnlyConfinement(input: {
         script,
         [
           "@echo off",
+          `echo ${ranMarker}`,
           'type "readable.txt" >nul 2>nul || exit /b 20',
           '2>nul >"created.txt" echo unexpected',
           '2>nul >>"readable.txt" echo unexpected',
@@ -139,7 +147,7 @@ async function proveWindowsReadOnlyConfinement(input: {
         cwd: root,
         env: { ...process.env },
         tty: false,
-        authorizationNonce: `native-runner-functional-probe-${randomUUID()}`,
+        authorizationNonce,
         policy: {
           runId: "run_native_runner_functional_probe" as never,
           filesystem: {
@@ -154,9 +162,16 @@ async function proveWindowsReadOnlyConfinement(input: {
         },
       },
     });
+    const output: string[] = [];
+    stopOutput = adapter.onOutput((event) => output.push(event.text));
     const exit = await waitForExit(adapter, remainingTime(deadline));
+    stopOutput();
+    stopOutput = (): void => undefined;
     if (exit.exitCode !== 0 || exit.signal !== undefined) {
       throw new Error("Restricted probe child did not complete.");
+    }
+    if (!output.join("").includes(ranMarker)) {
+      throw new Error("Restricted probe payload never proved that it ran.");
     }
 
     const [readableAfter, deleteAfter, renameAfter, createdAfter, renamedAfter] = await Promise.all(
@@ -178,6 +193,7 @@ async function proveWindowsReadOnlyConfinement(input: {
       throw new Error("Restricted probe observed a forbidden mutation.");
     }
   } finally {
+    stopOutput();
     await adapter?.close().catch(() => undefined);
     await rm(root, { recursive: true, force: true });
   }

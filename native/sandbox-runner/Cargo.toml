@@ -4,6 +4,13 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+[features]
+# Test-only fault injection for the Windows restricted-spawn sequence. The release build
+# (`scripts/build-sandbox-runner.mjs` and the release pipeline) never enables it, so the shipped
+# Runner contains neither the hook call sites nor the environment reader — see
+# `packages/runtime/test/windows-sandbox-faults.e2e.test.ts`, which asserts that directly.
+test-fault-injection = []
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = [
   "Win32_Foundation",

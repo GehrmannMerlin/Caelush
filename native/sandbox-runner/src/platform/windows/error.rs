@@ -37,6 +37,10 @@ pub enum SandboxError {
     AclPathLock,
     WorkspaceGrantMissing,
     WorkspaceCwdBoundary,
+    /// Test-only. Exists only in a `test-fault-injection` build, so the shipped Runner has neither
+    /// this variant nor its code string.
+    #[cfg(feature = "test-fault-injection")]
+    FaultInjected,
 }
 
 impl SandboxError {
@@ -77,6 +81,8 @@ impl SandboxError {
             Self::AclPathLock => "WINDOWS_ACL_PATH_LOCK_FAILED",
             Self::WorkspaceGrantMissing => "WINDOWS_WORKSPACE_GRANT_MISSING",
             Self::WorkspaceCwdBoundary => "WINDOWS_WORKSPACE_CWD_BOUNDARY_INVALID",
+            #[cfg(feature = "test-fault-injection")]
+            Self::FaultInjected => "WINDOWS_SANDBOX_FAULT_INJECTED",
         }
     }
 }

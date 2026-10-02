@@ -83,9 +83,22 @@ pub trait RestrictedProcessBackend {
 pub fn spawn_with<B: RestrictedProcessBackend>(
     backend: &B,
 ) -> Result<(B::Running, B::Job), SandboxError> {
+    // The whole create/assign/resume sequence lives here, so every fault stage that has to release
+    // an already-created resource is injected inside it and therefore flows through the ordinary
+    // `?`-driven cleanup: a fault before `assign_job` drops — and therefore terminates — the
+    // suspended process, and a fault before `resume` does the same, exactly as a real Win32 failure
+    // would. See `src/platform/windows/faults.rs` for why this is build-gated.
+    #[cfg(feature = "test-fault-injection")]
+    super::faults::check(super::faults::FaultStage::JobCreate)?;
     let job = backend.create_job()?;
+    #[cfg(feature = "test-fault-injection")]
+    super::faults::check(super::faults::FaultStage::JobConfigure)?;
     backend.configure_job(&job)?;
+    #[cfg(feature = "test-fault-injection")]
+    super::faults::check(super::faults::FaultStage::ProcessCreate)?;
     let suspended = backend.create_suspended()?;
+    #[cfg(feature = "test-fault-injection")]
+    super::faults::check(super::faults::FaultStage::JobAssign)?;
     backend.assign_job(&job, &suspended)?;
     let running = backend.resume(suspended)?;
     Ok((running, job))

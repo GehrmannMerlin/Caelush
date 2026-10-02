@@ -49,6 +49,11 @@ fn main() {
 }
 
 fn execute(config: &Config) -> Result<i32, String> {
+    // Test-only. Compiled only into a `test-fault-injection` build, and reported through the
+    // ordinary bounded error channel so an unknown stage name surfaces as a protocol error rather
+    // than as a silent no-op.
+    #[cfg(all(feature = "test-fault-injection", target_os = "windows"))]
+    platform::windows::arm_fault_from_environment()?;
     match &config.operation {
         Operation::TransportProbe => {
             write_ready(config, "NONE").map_err(|_| "CONTROL_WRITE_FAILED".to_string())?;
@@ -83,7 +88,16 @@ fn execute(config: &Config) -> Result<i32, String> {
             } else {
                 "HARD"
             };
+            // Injected after the target process exists and is running but before READY is sent, so
+            // the failure has a live process tree to release. Returning here drops `child`, which
+            // closes the kill-on-close Job Object and terminates the tree.
+            #[cfg(all(feature = "test-fault-injection", target_os = "windows"))]
+            platform::windows::fault_check_ready()?;
             write_ready(config, enforcement).map_err(|_| "CONTROL_WRITE_FAILED".to_string())?;
+            // Injected after READY, i.e. while the payload is running, to prove that the Runner's
+            // own termination still tears the tree down.
+            #[cfg(all(feature = "test-fault-injection", target_os = "windows"))]
+            platform::windows::fault_check_child_start()?;
             let status = wait_target(&mut child)?;
             Ok(status as i32)
         }
