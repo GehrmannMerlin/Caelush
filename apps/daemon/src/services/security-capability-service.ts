@@ -51,10 +51,14 @@ const RESTRICTED_PRESET_IDS = new Set(["VIEW_ONLY", "WORKSPACE_WRITE"]);
 /**
  * Host capability authority for the security selector.
  *
- * The service reports only verified provider probes. In particular, an unavailable restricted
- * provider is never represented as an ordinary-spawn fallback. Full Access is intentionally
- * represented by the explicit unrestricted adapter because that mode's product contract is host
- * user scope plus hard-safety checks, not a restricted sandbox.
+ * The service reports only verified provider probes. `processSandbox` is a statement about
+ * **restricted execution** — and only that. An unavailable restricted Provider is reported as
+ * `UNAVAILABLE/NONE` with the best bounded probe reason; it is never represented as an ordinary-spawn
+ * fallback, and Full Access availability is never allowed to turn it into `AVAILABLE`.
+ *
+ * Full Access is a separate, independently derived preset fact: it is available when the host says so
+ * and the rollout gate allows it, and its product contract is host-user scope plus hard-safety checks
+ * rather than a restricted sandbox. `processSandbox` therefore never describes Full Access.
  */
 export class SecurityCapabilityService {
   private readonly catalog: readonly PermissionPresetDescriptor[];
@@ -243,14 +247,12 @@ export class SecurityCapabilityService {
     readonly reasonCode?: string;
   }> {
     if (!this.featureGates.runtimeSandboxV1) {
-      return this.fullAccessAvailable && this.featureGates.fullAccessV1
-        ? { status: "AVAILABLE", enforcement: "NONE", provider: "unrestricted" }
-        : {
-            status: "UNAVAILABLE",
-            enforcement: "NONE",
-            provider: "disabled",
-            reasonCode: "RUNTIME_SANDBOX_DISABLED",
-          };
+      return {
+        status: "UNAVAILABLE",
+        enforcement: "NONE",
+        provider: "disabled",
+        reasonCode: "RUNTIME_SANDBOX_DISABLED",
+      };
     }
     const probes = await this.probes();
     const available = probes
@@ -272,9 +274,16 @@ export class SecurityCapabilityService {
         provider: selected.provider.id,
       };
     }
-    if (this.fullAccessAvailable) {
-      return { status: "AVAILABLE", enforcement: "NONE", provider: "unrestricted" };
-    }
+    /**
+     * No restricted Provider works, so restricted execution is unavailable — and Full Access
+     * availability must not be used to manufacture an `AVAILABLE` result here.
+     *
+     * This is the one place the old behaviour was wrong: a host with Full Access enabled but no
+     * working restricted Provider used to report `processSandbox: AVAILABLE/NONE/unrestricted`,
+     * which told every consumer that restricted execution was available when nothing restricted
+     * existed. Full Access is a *preset* fact derived independently in `getWorkspaceCapabilities`,
+     * never a process-sandbox capability.
+     */
     const failed = probes.find((probe) => !probe.available && probe.reasonCode !== undefined);
     return {
       status: "UNAVAILABLE",
