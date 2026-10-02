@@ -49,7 +49,7 @@ Two properties hold at once and must not be read into each other:
 The process-preset half of a Run's authority is enforced by the policy layer above the Runtime today.
 The native enforcement below - restricted token, capability-SID ACEs, kill-on-close Job Object - is
 complete and measured as a **component**, and is the substrate the process path is meant to be bound to.
-Binding it is deliberately a separate task: it would *add* execution authority where the operation is
+Binding it is deliberately a separate task: it would _add_ execution authority where the operation is
 currently refused, which this work explicitly does not do.
 
 Refused is not the same as safe, and the property that matters is that no restricted path starts an
@@ -211,12 +211,12 @@ at hiding, and it is pinned because it is also evidence that the token really is
 Not defects that change what a preset prevents today. Recorded, with the test or the code that pins
 each, so they are not rediscovered as new findings.
 
-| Item                                                                                          | What it is today                                                                                       | What hardening would need                                                       |
-| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
-| `CAELUSH_SANDBOX_RUNNER_PATH` / `_MANIFEST` accept any absolute path, and the artifact hash is checked against the manifest sitting beside the binary | a development/diagnostic override; reaching it means controlling the Daemon's own environment (i.e. its launch) | an out-of-band trust anchor (signing) if that environment is ever not trusted   |
-| Validation and the ACE apply are keyed on the path name, not on a held directory handle        | a narrow TOCTOU window; winning it needs write rights on the parent plus timing                          | holding the handle open from validation through the ACL write                   |
-| `sid_is_product_capability` accepts any `S-1-4-*` / `S-1-15-3-*` ACE with the grant's exact mask and inheritance | an unrelated such ACE keeps the shared Low-integrity SACL and Everyone deny after revoke                 | match the product SID list, not the authority prefix                            |
-| A legacy two-field `ToolSecurityContext` carries no policy, so its scope ordinary-spawns        | not reachable: the Daemon always derives the three-field context from the persisted policy snapshot      | an explicit "policy-bound" flag on the Runtime scope, not inference from presence |
+| Item                                                                                                                                                  | What it is today                                                                                                | What hardening would need                                                         |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `CAELUSH_SANDBOX_RUNNER_PATH` / `_MANIFEST` accept any absolute path, and the artifact hash is checked against the manifest sitting beside the binary | a development/diagnostic override; reaching it means controlling the Daemon's own environment (i.e. its launch) | an out-of-band trust anchor (signing) if that environment is ever not trusted     |
+| Validation and the ACE apply are keyed on the path name, not on a held directory handle                                                               | a narrow TOCTOU window; winning it needs write rights on the parent plus timing                                 | holding the handle open from validation through the ACL write                     |
+| `sid_is_product_capability` accepts any `S-1-4-*` / `S-1-15-3-*` ACE with the grant's exact mask and inheritance                                      | an unrelated such ACE keeps the shared Low-integrity SACL and Everyone deny after revoke                        | match the product SID list, not the authority prefix                              |
+| A legacy two-field `ToolSecurityContext` carries no policy, so its scope ordinary-spawns                                                              | not reachable: the Daemon always derives the three-field context from the persisted policy snapshot             | an explicit "policy-bound" flag on the Runtime scope, not inference from presence |
 
 The last row is characterised by `packages/coding-agent/test/runtime-adapters.test.ts` so the fail-open
 is visible in a test rather than assumed safe.

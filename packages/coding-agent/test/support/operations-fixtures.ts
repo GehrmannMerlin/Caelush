@@ -77,7 +77,8 @@ export const RESTRICTED_SECURITY_CONTEXT: ToolSecurityContext = Object.freeze({
   }),
 });
 
-/** A signal a test controls, so cancellation forwarding is observable rather than assumed. */export function testSignal(): AbortSignal {
+/** A signal a test controls, so cancellation forwarding is observable rather than assumed. */
+export function testSignal(): AbortSignal {
   return new AbortController().signal;
 }
 

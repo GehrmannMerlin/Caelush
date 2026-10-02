@@ -22,7 +22,10 @@ import {
   createToolInvocationId,
   createWorkspaceId,
 } from "@caelush/protocol";
-import { FULL_SECURITY_CONTEXT, RESTRICTED_SECURITY_CONTEXT } from "./support/operations-fixtures.js";
+import {
+  FULL_SECURITY_CONTEXT,
+  RESTRICTED_SECURITY_CONTEXT,
+} from "./support/operations-fixtures.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /**
