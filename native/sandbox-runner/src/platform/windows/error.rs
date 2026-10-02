@@ -24,11 +24,17 @@ pub enum SandboxError {
     UnsupportedMode,
     CapabilitySidInput,
     CapabilitySidHash,
+    CapabilitySidParse,
     PathBoundaryInvalid,
     PathBoundaryOverlap,
     PathBoundaryReparse,
     PathBoundaryIdentityChanged,
     PathBoundaryUnsupportedRoot,
+    AclRead,
+    AclSid,
+    AclBuild,
+    AclApply,
+    AclPathLock,
 }
 
 impl SandboxError {
@@ -56,11 +62,17 @@ impl SandboxError {
             Self::UnsupportedMode => "WINDOWS_SANDBOX_MODE_UNAVAILABLE",
             Self::CapabilitySidInput => "WINDOWS_CAPABILITY_SID_INPUT_INVALID",
             Self::CapabilitySidHash => "WINDOWS_CAPABILITY_SID_HASH_FAILED",
+            Self::CapabilitySidParse => "WINDOWS_CAPABILITY_SID_PARSE_FAILED",
             Self::PathBoundaryInvalid => "WINDOWS_PATH_BOUNDARY_INVALID",
             Self::PathBoundaryOverlap => "WINDOWS_PATH_BOUNDARY_OVERLAP",
             Self::PathBoundaryReparse => "WINDOWS_PATH_BOUNDARY_REPARSE_UNSUPPORTED",
             Self::PathBoundaryIdentityChanged => "WINDOWS_PATH_BOUNDARY_IDENTITY_CHANGED",
             Self::PathBoundaryUnsupportedRoot => "WINDOWS_PATH_BOUNDARY_ROOT_UNSUPPORTED",
+            Self::AclRead => "WINDOWS_ACL_READ_FAILED",
+            Self::AclSid => "WINDOWS_ACL_SID_FAILED",
+            Self::AclBuild => "WINDOWS_ACL_BUILD_FAILED",
+            Self::AclApply => "WINDOWS_ACL_APPLY_FAILED",
+            Self::AclPathLock => "WINDOWS_ACL_PATH_LOCK_FAILED",
         }
     }
 }

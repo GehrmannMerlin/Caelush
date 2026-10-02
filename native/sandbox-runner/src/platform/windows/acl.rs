@@ -1,0 +1,755 @@
+#[cfg(test)]
+mod tests {
+    use super::{merge_exact_grant, AccessGrantEntry, GrantChange, WRITE_GRANT_INHERITANCE};
+
+    const CAPABILITY_SID: &str = "S-1-15-3-101-202-303-404";
+    const CUSTOM_SID: &str = "S-1-5-21-100-200-300-400";
+
+    fn capability_entry() -> AccessGrantEntry {
+        AccessGrantEntry {
+            sid: CAPABILITY_SID.to_string(),
+            mask: super::WORKSPACE_WRITE_MASK,
+            inheritance: WRITE_GRANT_INHERITANCE,
+        }
+    }
+
+    #[test]
+    fn exact_grant_is_added_without_replacing_user_entries() {
+        let custom = AccessGrantEntry {
+            sid: CUSTOM_SID.to_string(),
+            mask: 0x0000_0001,
+            inheritance: 0,
+        };
+
+        let (merged, change) = merge_exact_grant(std::slice::from_ref(&custom), capability_entry());
+
+        assert_eq!(change, GrantChange::Added);
+        assert_eq!(merged.len(), 2);
+        assert!(merged.contains(&custom));
+        assert!(merged.iter().any(|entry| entry.sid == CAPABILITY_SID));
+    }
+
+    #[test]
+    fn repeated_prepare_is_idempotent() {
+        let desired = capability_entry();
+        let (once, first_change) = merge_exact_grant(&[], desired.clone());
+        let (twice, second_change) = merge_exact_grant(&once, desired);
+
+        assert_eq!(first_change, GrantChange::Added);
+        assert_eq!(second_change, GrantChange::Unchanged);
+        assert_eq!(once, twice);
+    }
+
+    #[test]
+    fn revoke_removes_only_the_exact_product_grant() {
+        let desired = capability_entry();
+        let custom_same_sid = AccessGrantEntry {
+            sid: CAPABILITY_SID.to_string(),
+            mask: 0x0000_0001,
+            inheritance: 0,
+        };
+        let entries = vec![desired.clone(), custom_same_sid.clone()];
+
+        let (remaining, change) = super::revoke_exact_grant(&entries, &desired);
+
+        assert_eq!(change, GrantChange::Removed);
+        assert_eq!(remaining, vec![custom_same_sid]);
+    }
+}
+use super::error::SandboxError;
+use super::handle::OwnedLocal;
+use super::path_lock::PathLockRegistry;
+use super::sid::{KnownSid, OwnedSid};
+use std::mem::size_of;
+use std::os::windows::ffi::OsStrExt;
+use std::path::Path;
+use std::ptr::{null, null_mut};
+use std::sync::OnceLock;
+use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS};
+use windows_sys::Win32::Security::Authorization::{
+    ConvertSidToStringSidW, GetNamedSecurityInfoW, SetNamedSecurityInfoW, SE_FILE_OBJECT,
+};
+use windows_sys::Win32::Security::{
+    AddAce, EqualSid, GetAce, GetAclInformation, InitializeAcl, ACCESS_ALLOWED_ACE, ACE_HEADER,
+    ACL, ACL_REVISION_DS, ACL_SIZE_INFORMATION, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION,
+    LABEL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE, SYSTEM_MANDATORY_LABEL_ACE,
+};
+use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+use windows_sys::Win32::System::SystemServices::{
+    ACCESS_ALLOWED_ACE_TYPE, SYSTEM_MANDATORY_LABEL_ACE_TYPE, SYSTEM_MANDATORY_LABEL_NO_WRITE_UP,
+};
+
+pub const WORKSPACE_WRITE_MASK: u32 = FILE_ALL_ACCESS;
+pub const WRITE_GRANT_INHERITANCE: u32 = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccessGrantEntry {
+    pub sid: String,
+    pub mask: u32,
+    pub inheritance: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GrantChange {
+    Added,
+    Unchanged,
+    Removed,
+    NotFound,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GrantStatus {
+    Ready,
+    Missing,
+}
+
+pub fn merge_exact_grant(
+    entries: &[AccessGrantEntry],
+    desired: AccessGrantEntry,
+) -> (Vec<AccessGrantEntry>, GrantChange) {
+    if entries.iter().any(|entry| entry == &desired) {
+        return (entries.to_vec(), GrantChange::Unchanged);
+    }
+    let mut merged = entries.to_vec();
+    merged.push(desired);
+    (merged, GrantChange::Added)
+}
+
+pub fn revoke_exact_grant(
+    entries: &[AccessGrantEntry],
+    desired: &AccessGrantEntry,
+) -> (Vec<AccessGrantEntry>, GrantChange) {
+    let mut removed = false;
+    let remaining = entries
+        .iter()
+        .filter(|entry| {
+            if *entry == desired {
+                removed = true;
+                false
+            } else {
+                true
+            }
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    (
+        remaining,
+        if removed {
+            GrantChange::Removed
+        } else {
+            GrantChange::NotFound
+        },
+    )
+}
+
+pub fn inspect_write_grant(path: &Path, capability_sid: &str) -> Result<GrantStatus, SandboxError> {
+    let target = OwnedSid::from_string(capability_sid)?;
+    let security = read_security(path)?;
+    let desired = desired_grant(capability_sid);
+    let low_sid = low_integrity_sid()?;
+    let ready = acl_has_exact_grant(security.dacl, target.as_psid(), &desired)?
+        && sacl_has_low_write_barrier(security.sacl, low_sid.as_psid())?;
+    Ok(if ready {
+        GrantStatus::Ready
+    } else {
+        GrantStatus::Missing
+    })
+}
+
+pub fn ensure_write_grant(path: &Path, capability_sid: &str) -> Result<GrantChange, SandboxError> {
+    let registry = acl_path_locks();
+    registry.with_lock(path, || ensure_write_grant_locked(path, capability_sid))
+}
+
+pub fn revoke_write_grant(path: &Path, capability_sid: &str) -> Result<GrantChange, SandboxError> {
+    let registry = acl_path_locks();
+    registry.with_lock(path, || revoke_write_grant_locked(path, capability_sid))
+}
+
+fn ensure_write_grant_locked(
+    path: &Path,
+    capability_sid: &str,
+) -> Result<GrantChange, SandboxError> {
+    let target = OwnedSid::from_string(capability_sid)?;
+    let low_sid = low_integrity_sid()?;
+    let security = read_security(path)?;
+    let desired = desired_grant(capability_sid);
+    let grant_ready = acl_has_exact_grant(security.dacl, target.as_psid(), &desired)?;
+    let label_ready = sacl_has_low_write_barrier(security.sacl, low_sid.as_psid())?;
+    if grant_ready && label_ready {
+        return Ok(GrantChange::Unchanged);
+    }
+
+    let dacl = if grant_ready {
+        None
+    } else {
+        Some(build_dacl(
+            security.dacl,
+            Some((target.as_psid(), &desired)),
+            None,
+        )?)
+    };
+    let sacl = if label_ready {
+        None
+    } else {
+        Some(build_low_integrity_sacl(security.sacl, low_sid.as_psid())?)
+    };
+    apply_security(path, dacl.as_ref(), sacl.as_ref())?;
+    Ok(GrantChange::Added)
+}
+
+fn revoke_write_grant_locked(
+    path: &Path,
+    capability_sid: &str,
+) -> Result<GrantChange, SandboxError> {
+    let target = OwnedSid::from_string(capability_sid)?;
+    let low_sid = low_integrity_sid()?;
+    let security = read_security(path)?;
+    let desired = desired_grant(capability_sid);
+    if !acl_has_exact_grant(security.dacl, target.as_psid(), &desired)? {
+        return Ok(GrantChange::NotFound);
+    }
+
+    let dacl = build_dacl(security.dacl, None, Some((target.as_psid(), &desired)))?;
+    let product_grant_remains = dacl_has_product_grant(dacl.as_ptr())?;
+    let sacl = if product_grant_remains {
+        None
+    } else if sacl_has_low_write_barrier(security.sacl, low_sid.as_psid())? {
+        Some(remove_low_integrity_sacl(security.sacl)?)
+    } else {
+        None
+    };
+    apply_security(path, Some(&dacl), sacl.as_ref())?;
+    Ok(GrantChange::Removed)
+}
+
+fn desired_grant(sid: &str) -> AccessGrantEntry {
+    AccessGrantEntry {
+        sid: sid.to_string(),
+        mask: WORKSPACE_WRITE_MASK,
+        inheritance: WRITE_GRANT_INHERITANCE,
+    }
+}
+
+fn acl_path_locks() -> &'static PathLockRegistry {
+    static REGISTRY: OnceLock<PathLockRegistry> = OnceLock::new();
+    REGISTRY.get_or_init(PathLockRegistry::default)
+}
+
+struct SecuritySnapshot {
+    _descriptor: OwnedLocal<u8>,
+    dacl: *mut ACL,
+    sacl: *mut ACL,
+}
+
+fn read_security(path: &Path) -> Result<SecuritySnapshot, SandboxError> {
+    let wide = path
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let mut dacl = null_mut();
+    let mut sacl = null_mut();
+    let mut descriptor = null_mut();
+    let status = unsafe {
+        GetNamedSecurityInfoW(
+            wide.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            &mut dacl,
+            &mut sacl,
+            &mut descriptor,
+        )
+    };
+    if status != ERROR_SUCCESS || descriptor.is_null() {
+        drop_local_security_descriptor(descriptor);
+        return Err(SandboxError::AclRead);
+    }
+    let descriptor =
+        unsafe { OwnedLocal::<u8>::from_raw(descriptor.cast(), SandboxError::AclRead.code()) }
+            .map_err(|_| SandboxError::AclRead)?;
+    Ok(SecuritySnapshot {
+        _descriptor: descriptor,
+        dacl,
+        sacl,
+    })
+}
+
+fn apply_security(
+    path: &Path,
+    dacl: Option<&AclBuffer>,
+    sacl: Option<&AclBuffer>,
+) -> Result<(), SandboxError> {
+    let wide = path
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let mut security_info = 0u32;
+    let dacl_pointer = if let Some(dacl) = dacl {
+        security_info |= DACL_SECURITY_INFORMATION;
+        dacl.as_ptr()
+    } else {
+        null()
+    };
+    let sacl_pointer = if let Some(sacl) = sacl {
+        security_info |= LABEL_SECURITY_INFORMATION;
+        sacl.as_ptr()
+    } else {
+        null()
+    };
+    let status = unsafe {
+        SetNamedSecurityInfoW(
+            wide.as_ptr(),
+            SE_FILE_OBJECT,
+            security_info,
+            null_mut(),
+            null_mut(),
+            dacl_pointer,
+            sacl_pointer,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return Err(SandboxError::AclApply);
+    }
+    Ok(())
+}
+
+fn low_integrity_sid() -> Result<OwnedSid, SandboxError> {
+    OwnedSid::known(KnownSid::LowIntegrity)
+}
+
+fn acl_has_exact_grant(
+    acl: *const ACL,
+    target_sid: windows_sys::Win32::Security::PSID,
+    desired: &AccessGrantEntry,
+) -> Result<bool, SandboxError> {
+    for_each_ace(acl, |header, raw| {
+        if header.AceType != ACCESS_ALLOWED_ACE_TYPE as u8 {
+            return Ok(false);
+        }
+        let ace = unsafe { &*raw.cast::<ACCESS_ALLOWED_ACE>() };
+        let sid = std::ptr::addr_of!(ace.SidStart)
+            .cast::<u8>()
+            .cast_mut()
+            .cast();
+        Ok(ace.Mask == desired.mask
+            && header.AceFlags as u32 == desired.inheritance
+            && unsafe { EqualSid(sid, target_sid) != 0 })
+    })
+}
+
+fn dacl_has_product_grant(acl: *const ACL) -> Result<bool, SandboxError> {
+    for_each_ace(acl, |header, raw| {
+        if header.AceType != ACCESS_ALLOWED_ACE_TYPE as u8 {
+            return Ok(false);
+        }
+        let ace = unsafe { &*raw.cast::<ACCESS_ALLOWED_ACE>() };
+        if ace.Mask != WORKSPACE_WRITE_MASK || header.AceFlags as u32 != WRITE_GRANT_INHERITANCE {
+            return Ok(false);
+        }
+        let sid = std::ptr::addr_of!(ace.SidStart)
+            .cast::<u8>()
+            .cast_mut()
+            .cast();
+        Ok(sid_is_product_capability(sid))
+    })
+}
+
+fn sid_is_product_capability(sid: windows_sys::Win32::Security::PSID) -> bool {
+    let mut string_sid = null_mut();
+    let converted = unsafe { ConvertSidToStringSidW(sid, &mut string_sid) };
+    if converted == 0 || string_sid.is_null() {
+        drop_local_string_sid(string_sid);
+        return false;
+    }
+    let value = unsafe {
+        let mut length = 0usize;
+        while *string_sid.add(length) != 0 {
+            length += 1;
+        }
+        String::from_utf16_lossy(std::slice::from_raw_parts(string_sid, length))
+    };
+    drop_local_string_sid(string_sid);
+    value.starts_with("S-1-15-3-")
+}
+
+fn sacl_has_low_write_barrier(
+    acl: *const ACL,
+    low_sid: windows_sys::Win32::Security::PSID,
+) -> Result<bool, SandboxError> {
+    for_each_ace(acl, |header, raw| {
+        if header.AceType != SYSTEM_MANDATORY_LABEL_ACE_TYPE as u8 {
+            return Ok(false);
+        }
+        let ace = unsafe { &*raw.cast::<SYSTEM_MANDATORY_LABEL_ACE>() };
+        let sid = std::ptr::addr_of!(ace.SidStart)
+            .cast::<u8>()
+            .cast_mut()
+            .cast();
+        Ok(
+            ace.Mask == SYSTEM_MANDATORY_LABEL_NO_WRITE_UP
+                && unsafe { EqualSid(sid, low_sid) != 0 },
+        )
+    })
+}
+
+fn for_each_ace(
+    acl: *const ACL,
+    mut callback: impl FnMut(&ACE_HEADER, *mut core::ffi::c_void) -> Result<bool, SandboxError>,
+) -> Result<bool, SandboxError> {
+    if acl.is_null() {
+        return Ok(false);
+    }
+    let information = acl_information(acl)?;
+    for index in 0..information.AceCount {
+        let mut raw = null_mut();
+        if unsafe { GetAce(acl, index, &mut raw) } == 0 || raw.is_null() {
+            return Err(SandboxError::AclRead);
+        }
+        let header = unsafe { &*raw.cast::<ACE_HEADER>() };
+        if callback(header, raw)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn acl_information(acl: *const ACL) -> Result<ACL_SIZE_INFORMATION, SandboxError> {
+    let mut information = ACL_SIZE_INFORMATION::default();
+    let queried = unsafe {
+        GetAclInformation(
+            acl,
+            (&mut information as *mut ACL_SIZE_INFORMATION).cast(),
+            size_of::<ACL_SIZE_INFORMATION>() as u32,
+            windows_sys::Win32::Security::AclSizeInformation,
+        )
+    };
+    if queried == 0 {
+        return Err(SandboxError::AclRead);
+    }
+    Ok(information)
+}
+
+struct AclBuffer {
+    data: Vec<u8>,
+}
+
+impl AclBuffer {
+    fn new(size: usize) -> Result<Self, SandboxError> {
+        let size = size.max(size_of::<ACL>() + 8);
+        if size > u16::MAX as usize {
+            return Err(SandboxError::AclBuild);
+        }
+        let mut data = vec![0u8; size];
+        if unsafe { InitializeAcl(data.as_mut_ptr().cast(), size as u32, ACL_REVISION_DS) } == 0 {
+            return Err(SandboxError::AclBuild);
+        }
+        Ok(Self { data })
+    }
+
+    fn as_ptr(&self) -> *const ACL {
+        self.data.as_ptr().cast()
+    }
+
+    fn as_mut_ptr(&mut self) -> *mut ACL {
+        self.data.as_mut_ptr().cast()
+    }
+}
+
+fn build_dacl(
+    old: *const ACL,
+    add: Option<(windows_sys::Win32::Security::PSID, &AccessGrantEntry)>,
+    remove: Option<(windows_sys::Win32::Security::PSID, &AccessGrantEntry)>,
+) -> Result<AclBuffer, SandboxError> {
+    let old_size = if old.is_null() {
+        size_of::<ACL>()
+    } else {
+        let size = unsafe { (*old).AclSize } as usize;
+        if size < size_of::<ACL>() {
+            return Err(SandboxError::AclRead);
+        }
+        size
+    };
+    let additional = if let Some((sid, _)) = add {
+        aligned_ace_size(8 + sid_length(sid)?)
+    } else {
+        0
+    };
+    let mut buffer = AclBuffer::new(old_size + additional + 8)?;
+    append_filtered_aces(&mut buffer, old, remove)?;
+    if let Some((sid, desired)) = add {
+        let ace = access_allowed_ace(sid, desired)?;
+        append_ace(&mut buffer, ace.as_ptr().cast(), ace.len())?;
+    }
+    Ok(buffer)
+}
+
+fn build_low_integrity_sacl(
+    old: *const ACL,
+    low_sid: windows_sys::Win32::Security::PSID,
+) -> Result<AclBuffer, SandboxError> {
+    let old_size = acl_size_or_header(old)?;
+    let additional = aligned_ace_size(8 + sid_length(low_sid)?);
+    let mut buffer = AclBuffer::new(old_size + additional + 8)?;
+    append_non_label_aces(&mut buffer, old)?;
+    let ace = mandatory_label_ace(low_sid)?;
+    append_ace(&mut buffer, ace.as_ptr().cast(), ace.len())?;
+    Ok(buffer)
+}
+
+fn remove_low_integrity_sacl(old: *const ACL) -> Result<AclBuffer, SandboxError> {
+    let mut buffer = AclBuffer::new(acl_size_or_header(old)? + 8)?;
+    append_non_label_aces(&mut buffer, old)?;
+    Ok(buffer)
+}
+
+fn append_filtered_aces(
+    destination: &mut AclBuffer,
+    old: *const ACL,
+    remove: Option<(windows_sys::Win32::Security::PSID, &AccessGrantEntry)>,
+) -> Result<(), SandboxError> {
+    append_aces(destination, old, |header, raw| {
+        if let Some((sid, desired)) = remove {
+            if header.AceType == ACCESS_ALLOWED_ACE_TYPE as u8 {
+                let ace = unsafe { &*raw.cast::<ACCESS_ALLOWED_ACE>() };
+                let entry_sid = std::ptr::addr_of!(ace.SidStart)
+                    .cast::<u8>()
+                    .cast_mut()
+                    .cast();
+                if ace.Mask == desired.mask
+                    && header.AceFlags as u32 == desired.inheritance
+                    && unsafe { EqualSid(entry_sid, sid) != 0 }
+                {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    })
+}
+
+fn append_non_label_aces(destination: &mut AclBuffer, old: *const ACL) -> Result<(), SandboxError> {
+    append_aces(destination, old, |header, _| {
+        Ok(header.AceType != SYSTEM_MANDATORY_LABEL_ACE_TYPE as u8)
+    })
+}
+
+fn append_aces(
+    destination: &mut AclBuffer,
+    old: *const ACL,
+    keep: impl Fn(&ACE_HEADER, *mut core::ffi::c_void) -> Result<bool, SandboxError>,
+) -> Result<(), SandboxError> {
+    if old.is_null() {
+        return Ok(());
+    }
+    let information = acl_information(old)?;
+    for index in 0..information.AceCount {
+        let mut raw = null_mut();
+        if unsafe { GetAce(old, index, &mut raw) } == 0 || raw.is_null() {
+            return Err(SandboxError::AclRead);
+        }
+        let header = unsafe { &*raw.cast::<ACE_HEADER>() };
+        if keep(header, raw)? {
+            append_ace(destination, raw, header.AceSize as usize)?;
+        }
+    }
+    Ok(())
+}
+
+fn append_ace(
+    destination: &mut AclBuffer,
+    ace: *const core::ffi::c_void,
+    length: usize,
+) -> Result<(), SandboxError> {
+    if unsafe {
+        AddAce(
+            destination.as_mut_ptr(),
+            ACL_REVISION_DS,
+            u32::MAX,
+            ace,
+            length as u32,
+        )
+    } == 0
+    {
+        return Err(SandboxError::AclBuild);
+    }
+    Ok(())
+}
+
+fn access_allowed_ace(
+    sid: windows_sys::Win32::Security::PSID,
+    desired: &AccessGrantEntry,
+) -> Result<Vec<u8>, SandboxError> {
+    let length = aligned_ace_size(8 + sid_length(sid)?);
+    let mut bytes = vec![0u8; length];
+    let ace = bytes.as_mut_ptr().cast::<ACCESS_ALLOWED_ACE>();
+    unsafe {
+        (*ace).Header = ACE_HEADER {
+            AceType: ACCESS_ALLOWED_ACE_TYPE as u8,
+            AceFlags: desired.inheritance as u8,
+            AceSize: length as u16,
+        };
+        (*ace).Mask = desired.mask;
+        std::ptr::copy_nonoverlapping(
+            sid.cast::<u8>(),
+            std::ptr::addr_of_mut!((*ace).SidStart).cast::<u8>(),
+            sid_length(sid)?,
+        );
+    }
+    Ok(bytes)
+}
+
+fn mandatory_label_ace(
+    low_sid: windows_sys::Win32::Security::PSID,
+) -> Result<Vec<u8>, SandboxError> {
+    let length = aligned_ace_size(8 + sid_length(low_sid)?);
+    let mut bytes = vec![0u8; length];
+    let ace = bytes.as_mut_ptr().cast::<SYSTEM_MANDATORY_LABEL_ACE>();
+    unsafe {
+        (*ace).Header = ACE_HEADER {
+            AceType: SYSTEM_MANDATORY_LABEL_ACE_TYPE as u8,
+            AceFlags: 0,
+            AceSize: length as u16,
+        };
+        (*ace).Mask = SYSTEM_MANDATORY_LABEL_NO_WRITE_UP;
+        std::ptr::copy_nonoverlapping(
+            low_sid.cast::<u8>(),
+            std::ptr::addr_of_mut!((*ace).SidStart).cast::<u8>(),
+            sid_length(low_sid)?,
+        );
+    }
+    Ok(bytes)
+}
+
+fn sid_length(sid: windows_sys::Win32::Security::PSID) -> Result<usize, SandboxError> {
+    if sid.is_null() {
+        return Err(SandboxError::AclSid);
+    }
+    let length = unsafe { windows_sys::Win32::Security::GetLengthSid(sid) } as usize;
+    if length == 0 {
+        return Err(SandboxError::AclSid);
+    }
+    Ok(length)
+}
+
+fn aligned_ace_size(size: usize) -> usize {
+    (size + 3) & !3
+}
+
+fn acl_size_or_header(acl: *const ACL) -> Result<usize, SandboxError> {
+    if acl.is_null() {
+        return Ok(size_of::<ACL>());
+    }
+    let size = unsafe { (*acl).AclSize } as usize;
+    if size < size_of::<ACL>() {
+        return Err(SandboxError::AclRead);
+    }
+    Ok(size)
+}
+
+fn drop_local_security_descriptor(pointer: windows_sys::Win32::Security::PSECURITY_DESCRIPTOR) {
+    if !pointer.is_null() {
+        unsafe {
+            LocalFree(pointer.cast());
+        }
+    }
+}
+
+fn drop_local_string_sid(pointer: windows_sys::core::PWSTR) {
+    if !pointer.is_null() {
+        unsafe {
+            LocalFree(pointer.cast());
+        }
+    }
+}
+
+#[cfg(test)]
+mod integration_tests {
+    use super::{
+        ensure_write_grant, inspect_write_grant, revoke_write_grant, GrantChange, GrantStatus,
+    };
+    use crate::platform::windows::capability_sid::workspace_capability_sid;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TempDirectory(PathBuf);
+
+    impl TempDirectory {
+        fn new() -> Self {
+            let suffix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock should be after epoch")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("caelush-acl-test-{suffix}"));
+            fs::create_dir(&path).expect("test directory should be created");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn real_acl_prepare_status_and_revoke_are_idempotent() {
+        let directory = TempDirectory::new();
+        let canonical = directory
+            .path()
+            .canonicalize()
+            .expect("test path should canonicalize");
+        let sid = workspace_capability_sid(&canonical.to_string_lossy())
+            .expect("workspace capability SID should derive");
+
+        assert_eq!(
+            inspect_write_grant(directory.path(), &sid).expect("ACL should be inspectable"),
+            GrantStatus::Missing
+        );
+        assert_eq!(
+            ensure_write_grant(directory.path(), &sid).expect("ACL should be prepared"),
+            GrantChange::Added
+        );
+        assert_eq!(
+            inspect_write_grant(directory.path(), &sid)
+                .expect("prepared ACL should be inspectable"),
+            GrantStatus::Ready
+        );
+        assert_eq!(
+            ensure_write_grant(directory.path(), &sid).expect("repeated prepare should succeed"),
+            GrantChange::Unchanged
+        );
+        assert_eq!(
+            revoke_write_grant(directory.path(), &sid).expect("ACL should be revoked"),
+            GrantChange::Removed
+        );
+        assert_eq!(
+            revoke_write_grant(directory.path(), &sid).expect("repeated revoke should succeed"),
+            GrantChange::NotFound
+        );
+        assert_eq!(
+            inspect_write_grant(directory.path(), &sid).expect("revoked ACL should be inspectable"),
+            GrantStatus::Missing
+        );
+    }
+
+    #[test]
+    fn refuses_to_mutate_a_missing_path() {
+        let directory = TempDirectory::new();
+        let missing = directory.path().join("missing");
+        let sid = "S-1-15-3-101-202-303-404";
+
+        assert_eq!(
+            ensure_write_grant(&missing, sid).err(),
+            Some(crate::platform::windows::error::SandboxError::AclRead)
+        );
+    }
+}

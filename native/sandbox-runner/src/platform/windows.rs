@@ -1,13 +1,17 @@
 use std::path::Path;
 
-mod command_line;
+#[allow(dead_code)]
+mod acl;
 #[allow(dead_code)]
 mod capability_sid;
+mod command_line;
 mod error;
 mod handle;
 mod job;
 #[allow(dead_code)]
 mod path_boundary;
+#[allow(dead_code)]
+mod path_lock;
 mod process;
 mod sid;
 mod token;

@@ -1,8 +1,10 @@
 use super::error::SandboxError;
-use super::handle::OwnedHandle;
+use super::handle::{OwnedHandle, OwnedLocal};
 use std::mem::{size_of, size_of_val};
+use std::os::windows::ffi::OsStrExt;
 use std::ptr::null_mut;
 use windows_sys::Win32::Foundation::{GetLastError, ERROR_INSUFFICIENT_BUFFER};
+use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
 use windows_sys::Win32::Security::{
     CreateWellKnownSid, GetLengthSid, GetTokenInformation, IsValidSid, TokenGroups, WinLowLabelSid,
     WinWorldSid, PSID, SECURITY_MAX_SID_SIZE, SID_AND_ATTRIBUTES, TOKEN_GROUPS,
@@ -22,6 +24,23 @@ pub struct OwnedSid {
 }
 
 impl OwnedSid {
+    pub fn from_string(value: &str) -> Result<Self, SandboxError> {
+        let mut wide = std::ffi::OsStr::new(value)
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<_>>();
+        let mut raw = null_mut();
+        let converted = unsafe { ConvertStringSidToSidW(wide.as_mut_ptr(), &mut raw) };
+        if converted == 0 || raw.is_null() {
+            return Err(SandboxError::CapabilitySidParse);
+        }
+        let owned = unsafe {
+            OwnedLocal::<u8>::from_raw(raw.cast(), SandboxError::CapabilitySidParse.code())
+        }
+        .map_err(|_| SandboxError::CapabilitySidParse)?;
+        Self::copy_from(raw).inspect_err(|_| drop(owned))
+    }
+
     pub fn known(kind: KnownSid) -> Result<Self, SandboxError> {
         let mut bytes = vec![0u8; SECURITY_MAX_SID_SIZE as usize];
         let mut length = bytes.len() as u32;
