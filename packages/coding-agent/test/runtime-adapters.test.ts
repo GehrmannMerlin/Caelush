@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ToolExecutionEnvironment } from "@caelush/agent";
@@ -12,6 +12,7 @@ import {
 import {
   LocalRuntime,
   createLocalRuntimeResolver,
+  RuntimeAuthorizationError,
   RuntimePathTypeError,
   RuntimeSearchUnavailableError,
 } from "@caelush/runtime";
@@ -21,7 +22,7 @@ import {
   createToolInvocationId,
   createWorkspaceId,
 } from "@caelush/protocol";
-import { FULL_SECURITY_CONTEXT } from "./support/operations-fixtures.js";
+import { FULL_SECURITY_CONTEXT, RESTRICTED_SECURITY_CONTEXT } from "./support/operations-fixtures.js";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 /**
@@ -158,6 +159,115 @@ describe("search_text Runtime adapter", () => {
       },
     });
     expect(seen.request).toMatchObject({ ownerRunId: expect.any(String), command: "npm test" });
+  });
+
+  /**
+   * SEC-1, from Phase 7 Task 5 Step 6's independent security review.
+   *
+   * The daemon builds its `exec`/`process` ports exactly as this adapter is built here — with a
+   * `RuntimeResolver` and **no** `authorizationResolver` — so a restricted Run reaches the Runtime with
+   * no bound process authorization. The Runtime must then refuse, never ordinary-spawn: an unrestricted
+   * payload launched on behalf of a restricted preset is the one failure the permission model exists to
+   * prevent.
+   *
+   * The sentinel is the decisive half. A rejection alone could be an unrelated pre-flight error; a
+   * rejection *and* a payload that never ran is the property being pinned.
+   */
+  it("refuses a restricted preset instead of ordinary-spawning, and the payload never runs", async () => {
+    const directory = path.join(parent, "restricted-exec");
+    await mkdir(directory, { recursive: true });
+    const sentinel = path.join(directory, "spawned.txt");
+    const runtime = new LocalRuntime();
+    try {
+      const operations = createRuntimeProcessOperations(createLocalRuntimeResolver(runtime));
+      await expect(
+        operations.execute({
+          environment: {
+            workspace: { id: createWorkspaceId(), path: directory },
+            runtime: { id: "local", kind: "local" },
+          },
+          securityContext: RESTRICTED_SECURITY_CONTEXT,
+          ownerRunId: createRunId(),
+          command: "echo spawned > spawned.txt",
+          tty: false,
+          yieldTimeMs: 250,
+          signal: signal(),
+        }),
+      ).rejects.toBeInstanceOf(RuntimeAuthorizationError);
+      await expect(access(sentinel)).rejects.toThrow();
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  /**
+   * The control for the case above: the same payload through the same adapter shape, under Full Access,
+   * really does run and write its sentinel. Without it, "the sentinel is absent" would also be
+   * satisfied by a command that cannot run at all.
+   */
+  it("runs the same payload once Full Access binds an explicit authorization", async () => {
+    const directory = path.join(parent, "full-access-exec");
+    await mkdir(directory, { recursive: true });
+    const sentinel = path.join(directory, "spawned.txt");
+    const runtime = new LocalRuntime();
+    try {
+      const operations = createRuntimeProcessOperations(createLocalRuntimeResolver(runtime));
+      const result = await operations.execute({
+        environment: {
+          workspace: { id: createWorkspaceId(), path: directory },
+          runtime: { id: "local", kind: "local" },
+        },
+        securityContext: FULL_SECURITY_CONTEXT,
+        ownerRunId: createRunId(),
+        command: "echo spawned > spawned.txt",
+        tty: false,
+        yieldTimeMs: 5_000,
+        signal: signal(),
+      });
+      expect(result).toMatchObject({ status: expect.any(String) });
+      await expect(access(sentinel)).resolves.toBeUndefined();
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  /**
+   * SEC-2, from Phase 7 Task 5 Step 6's independent security review — the other half of the SEC-1 pin.
+   *
+   * The refusal above is *policy-driven*, not hard-coded: it comes from `securityPolicy` being present
+   * and restricted. The `ToolSecurityContext` contract still permits a legacy **two-field** context with
+   * no policy reference at all, and that context opens a scope with neither a filesystem policy nor a
+   * process authorization, so `requireAuthorization` is false and the Runtime ordinary-spawns.
+   *
+   * This is characterised rather than fixed: the daemon always builds the three-field context from the
+   * persisted policy snapshot (`createRunSecurityContext(run.securityPolicy)`), so the legacy shape is
+   * not reachable through today's composition. It is pinned so that if a future path ever builds a
+   * two-field context for a restricted Run, the fail-open is visible here instead of assumed safe.
+   */
+  it("ordinary-spawns for the legacy two-field context, which carries no policy to enforce", async () => {
+    const directory = path.join(parent, "legacy-context-exec");
+    await mkdir(directory, { recursive: true });
+    const sentinel = path.join(directory, "spawned.txt");
+    const runtime = new LocalRuntime();
+    try {
+      const operations = createRuntimeProcessOperations(createLocalRuntimeResolver(runtime));
+      const result = await operations.execute({
+        environment: {
+          workspace: { id: createWorkspaceId(), path: directory },
+          runtime: { id: "local", kind: "local" },
+        },
+        securityContext: { permissionProfile: "PROJECT_ACCESS", approvalPolicy: "ON_BOUNDARY" },
+        ownerRunId: createRunId(),
+        command: "echo spawned > spawned.txt",
+        tty: false,
+        yieldTimeMs: 5_000,
+        signal: signal(),
+      });
+      expect(result).toMatchObject({ status: expect.any(String) });
+      await expect(access(sentinel)).resolves.toBeUndefined();
+    } finally {
+      await runtime.dispose();
+    }
   });
 
   it("applies include as a Runtime pre-filter, before truncation (the errata counter-example)", async () => {

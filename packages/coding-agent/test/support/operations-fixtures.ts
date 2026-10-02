@@ -56,8 +56,28 @@ export const FULL_SECURITY_CONTEXT: ToolSecurityContext = Object.freeze({
   }),
 });
 
-/** A signal a test controls, so cancellation forwarding is observable rather than assumed. */
-export function testSignal(): AbortSignal {
+/**
+ * The restricted counterpart of `FULL_SECURITY_CONTEXT`, bound to the project-write preset.
+ *
+ * A restricted Run is policy-bound: `requiredEnforcement` is `OS_RESTRICTED`, so the Runtime refuses to
+ * ordinary-spawn from its scope unless an explicit restricted authorization is bound. A test that only
+ * ever builds the Full Access context cannot see that refusal at all, which is why the restricted shape
+ * lives here rather than being inlined by the one suite that needs it.
+ */
+export const RESTRICTED_SECURITY_CONTEXT: ToolSecurityContext = Object.freeze({
+  permissionProfile: "PROJECT_ACCESS",
+  approvalPolicy: "ON_BOUNDARY",
+  securityPolicy: Object.freeze({
+    presetId: "WORKSPACE_WRITE",
+    presetVersion: 1,
+    policyDigest: "b".repeat(64),
+    filesystemBoundary: "WORKSPACE_READ_WRITE",
+    processBoundary: "WORKSPACE_WRITE",
+    requiredEnforcement: "OS_RESTRICTED",
+  }),
+});
+
+/** A signal a test controls, so cancellation forwarding is observable rather than assumed. */export function testSignal(): AbortSignal {
   return new AbortController().signal;
 }
 

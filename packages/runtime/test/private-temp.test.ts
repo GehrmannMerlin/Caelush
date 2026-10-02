@@ -49,4 +49,37 @@ describe("private Run temp directories", () => {
       await rm(base, { recursive: true, force: true });
     }
   });
+
+  /**
+   * SEC-3, from Phase 7 Task 5 Step 6's independent security review.
+   *
+   * The marker is what makes cleanup safe, and it lives *inside* the directory the sandboxed payload is
+   * granted: the Windows Runner applies `FILE_ALL_ACCESS` to this root before the child starts. A
+   * payload can therefore delete or corrupt `.caelush-private-temp.json`, after which neither the
+   * per-Run cleanup nor the stale sweep reclaims the directory — `assertPrivateTempMarker` cannot verify
+   * ownership, and `cleanupStalePrivateRunTemps` skips a directory whose marker it cannot read.
+   *
+   * The consequence is bounded but real: the directory, and the ACE the per-Run capability SID holds on
+   * it, are not reclaimed. The SID is derived from a random per-Run marker id, so this is resource
+   * litter rather than a widening of authority. Pinned here so the limitation is visible and cannot
+   * silently worsen — for example by a change that deletes an unmarked `caelush-run-*` directory on a
+   * name match alone.
+   */
+  it("refuses both cleanups once the payload has destroyed the ownership marker", async () => {
+    const base = await mkdtemp(path.join(os.tmpdir(), "caelush-private-temp-evasion-"));
+    try {
+      const temp = await createPrivateRunTemp("run_marker_evasion" as never, {
+        baseDirectory: base,
+      });
+      await rm(temp.markerPath, { force: true });
+      await expect(cleanupPrivateRunTemp(temp)).rejects.toMatchObject({
+        code: "PRIVATE_TEMP_INVALID",
+      });
+      await expect(access(temp.root)).resolves.toBeUndefined();
+      await cleanupStalePrivateRunTemps({ baseDirectory: base, maxAgeMs: 0 });
+      await expect(access(temp.root)).resolves.toBeUndefined();
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  });
 });
