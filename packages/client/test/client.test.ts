@@ -5,6 +5,7 @@ import {
   createRunId,
   createSessionId,
   createToolInvocationId,
+  createWorkspaceId,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import {
@@ -436,5 +437,130 @@ describe("CaelushClient", () => {
     const next = iterator.next();
     controller.abort();
     await expect(next).resolves.toMatchObject({ done: true });
+  });
+});
+
+describe("CaelushClient workspace security preparation", () => {
+  const PREPARE_SUFFIX = "/security/prepare";
+
+  function capabilitiesPayload(workspaceId: string, prepared: boolean) {
+    return {
+      schemaVersion: 1,
+      workspaceId,
+      presets: [
+        { id: "VIEW_ONLY", version: 1, status: "AVAILABLE" },
+        prepared
+          ? { id: "WORKSPACE_WRITE", version: 1, status: "AVAILABLE" }
+          : {
+              id: "WORKSPACE_WRITE",
+              version: 1,
+              status: "PREPARATION_REQUIRED",
+              reasonCode: "WORKSPACE_PREPARATION_REQUIRED",
+            },
+        { id: "FULL_ACCESS", version: 1, status: "AVAILABLE" },
+      ],
+      preparation: prepared
+        ? { supported: true, status: "READY" }
+        : { supported: true, status: "REQUIRED", reasonCode: "WORKSPACE_PREPARATION_REQUIRED" },
+    };
+  }
+
+  it("drives the prepare-then-reload contract the permission selector depends on", async () => {
+    const workspaceId = createWorkspaceId();
+    const requests: Request[] = [];
+    let prepared = false;
+    const client = new CaelushClient({
+      baseUrl: "http://daemon.test",
+      fetch: async (input, init) => {
+        const request = new Request(input, init);
+        requests.push(request);
+        if (request.url.endsWith(PREPARE_SUFFIX)) {
+          prepared = true;
+          return new Response(
+            JSON.stringify({
+              schemaVersion: 1,
+              workspaceId,
+              preset: { id: "WORKSPACE_WRITE", expectedVersion: 1 },
+              status: "READY",
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response(JSON.stringify(capabilitiesPayload(workspaceId, prepared)), {
+          status: 200,
+        });
+      },
+    });
+
+    const before = await client.getWorkspaceSecurityCapabilities(workspaceId);
+    expect(before.preparation).toMatchObject({ supported: true, status: "REQUIRED" });
+    expect(before.presets.find((preset) => preset.id === "WORKSPACE_WRITE")).toMatchObject({
+      status: "PREPARATION_REQUIRED",
+      reasonCode: "WORKSPACE_PREPARATION_REQUIRED",
+    });
+
+    const preparation = await client.prepareWorkspaceSecurity(workspaceId, {
+      id: "WORKSPACE_WRITE",
+      expectedVersion: 1,
+    });
+    expect(preparation).toMatchObject({
+      workspaceId,
+      preset: { id: "WORKSPACE_WRITE", expectedVersion: 1 },
+      status: "READY",
+    });
+
+    // The reload is the whole point: selection must not be re-derived from a stale capability read.
+    const after = await client.getWorkspaceSecurityCapabilities(workspaceId);
+    expect(after.preparation).toMatchObject({ supported: true, status: "READY" });
+    expect(after.presets.find((preset) => preset.id === "WORKSPACE_WRITE")?.status).toBe(
+      "AVAILABLE",
+    );
+
+    expect(requests.map((request) => `${request.method} ${request.url}`)).toEqual([
+      `GET http://daemon.test/api/v1/workspaces/${workspaceId}/security/capabilities`,
+      `POST http://daemon.test/api/v1/workspaces/${workspaceId}/security/prepare`,
+      `GET http://daemon.test/api/v1/workspaces/${workspaceId}/security/capabilities`,
+    ]);
+  });
+
+  it("surfaces a stale prepare verdict as data and an unknown workspace as an HTTP error", async () => {
+    const workspaceId = createWorkspaceId();
+    const client = new CaelushClient({
+      baseUrl: "http://daemon.test",
+      fetch: async (input, init) => {
+        const request = new Request(input, init);
+        if (request.url.endsWith(PREPARE_SUFFIX)) {
+          return new Response(
+            JSON.stringify({
+              schemaVersion: 1,
+              workspaceId,
+              preset: { id: "WORKSPACE_WRITE", expectedVersion: 2 },
+              status: "FAILED",
+              reasonCode: "PRESET_VERSION_MISMATCH",
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: "NOT_FOUND",
+              message: "Requested resource was not found.",
+              requestId: "1",
+            },
+          }),
+          { status: 404 },
+        );
+      },
+    });
+
+    // A refused preparation is a normal verdict the caller must render, never a thrown exception.
+    await expect(
+      client.prepareWorkspaceSecurity(workspaceId, { id: "WORKSPACE_WRITE", expectedVersion: 2 }),
+    ).resolves.toMatchObject({ status: "FAILED", reasonCode: "PRESET_VERSION_MISMATCH" });
+
+    await expect(client.getWorkspaceSecurityCapabilities(workspaceId)).rejects.toBeInstanceOf(
+      CaelushClientHttpError,
+    );
   });
 });

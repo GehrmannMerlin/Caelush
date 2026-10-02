@@ -11,28 +11,36 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 import { buildDaemonApp } from "../src/index.js";
 import { SecurityCapabilityService } from "../src/services/security-capability-service.js";
+import {
+  HOST_HEADERS,
+  JSON_HEADERS,
+  createSession,
+  prepareHarness,
+  restrictedProvider,
+  runPayload,
+  trackFixtures,
+} from "./support/permission-flow-fixture.js";
 
 let directory: string | undefined;
 let storage: CaelushStorage | undefined;
 let app: ReturnType<typeof buildDaemonApp> | undefined;
-
-const restrictedProvider = {
-  id: "fixture-restricted",
-  kind: "RESTRICTED" as const,
-  enforcement: "HARD" as const,
-  create: async () => ({}) as never,
-  probe: async () => ({ available: true, enforcement: "HARD" as const }),
-};
+const fixtures = trackFixtures();
 
 afterEach(async () => {
   await app?.close().catch(() => undefined);
   await storage?.close().catch(() => undefined);
   if (directory !== undefined) await rm(directory, { recursive: true, force: true });
+  await fixtures.closeAll();
   app = undefined;
   storage = undefined;
   directory = undefined;
 });
 
+/**
+ * The legacy unregistered-Workspace composition: a Daemon with no `WorkspaceService`, which is what
+ * the pre-registry public paths still allow. The registered composition used by the prepared flow
+ * lives in the shared fixture.
+ */
 async function makeApp(existingStorage?: CaelushStorage) {
   if (existingStorage === undefined) {
     directory = await mkdtemp(join(tmpdir(), "caelush-permission-e2e-"));
@@ -54,31 +62,6 @@ async function makeApp(existingStorage?: CaelushStorage) {
   return app;
 }
 
-async function createSession(currentApp: ReturnType<typeof buildDaemonApp>) {
-  const response = await currentApp.inject({
-    method: "POST",
-    url: "/api/v1/sessions",
-    headers: { host: "127.0.0.1", "content-type": "application/json" },
-    payload: {},
-  });
-  expect(response.statusCode).toBe(201);
-  return response.json() as { id: string };
-}
-
-function runPayload(
-  workspace: WorkspaceRef,
-  preset: "VIEW_ONLY" | "WORKSPACE_WRITE" | "FULL_ACCESS",
-) {
-  return {
-    goal: `Exercise ${preset}`,
-    workspace,
-    model: { provider: "test", model: "test-model" },
-    runtime: { id: "local", kind: "test" },
-    preset: { id: preset, expectedVersion: 1 },
-    limits: { maxSteps: 3, maxToolCalls: 3, timeoutMs: 1_000 },
-  };
-}
-
 describe("permission preset public paths", () => {
   it("advertises exact product mappings and binds each selection to a pending Run", async () => {
     const currentApp = await makeApp();
@@ -90,7 +73,7 @@ describe("permission preset public paths", () => {
     const capabilities = await currentApp.inject({
       method: "GET",
       url: `/api/v1/workspaces/${workspace.id}/security/capabilities`,
-      headers: { host: "127.0.0.1" },
+      headers: HOST_HEADERS,
     });
 
     expect(capabilities.statusCode).toBe(200);
@@ -140,7 +123,7 @@ describe("permission preset public paths", () => {
       const response = await currentApp.inject({
         method: "POST",
         url: `/api/v1/sessions/${session.id}/runs`,
-        headers: { host: "127.0.0.1", "content-type": "application/json" },
+        headers: JSON_HEADERS,
         payload: runPayload(workspace, preset),
       });
       expect(response.statusCode).toBe(201);
@@ -166,7 +149,7 @@ describe("permission preset public paths", () => {
       const response = await currentApp.inject({
         method: "POST",
         url: `/api/v1/sessions/${session.id}/runs`,
-        headers: { host: "127.0.0.1", "content-type": "application/json" },
+        headers: JSON_HEADERS,
         payload: runPayload(workspace, preset),
       });
       expect(response.statusCode).toBe(201);
@@ -257,7 +240,7 @@ describe("permission preset public paths", () => {
     const created = await currentApp.inject({
       method: "POST",
       url: `/api/v1/sessions/${session.id}/runs`,
-      headers: { host: "127.0.0.1", "content-type": "application/json" },
+      headers: JSON_HEADERS,
       payload: runPayload(workspace, "FULL_ACCESS"),
     });
     expect(created.statusCode).toBe(201);
@@ -272,7 +255,7 @@ describe("permission preset public paths", () => {
     const recovered = await restartedApp.inject({
       method: "GET",
       url: `/api/v1/runs/${beforeRestart.id}`,
-      headers: { host: "127.0.0.1" },
+      headers: HOST_HEADERS,
     });
 
     expect(recovered.statusCode).toBe(200);
@@ -291,3 +274,92 @@ function updatePatch(filePath: string, before: string, after: string): string {
     "*** End Patch",
   ].join("\n");
 }
+
+describe("prepared Windows permission flow", () => {
+  it("refuses a Run until the workspace is prepared, then accepts it after prepare", async () => {
+    const harness = prepareHarness();
+    const { app: currentApp, workspace } = await fixtures.create({
+      workspacePreparation: harness.port,
+    });
+    // A workspace-bound daemon requires the session to name its workspace; that is the point of the
+    // prepared flow, so the harness creates the session the way the Web client does.
+    const session = await createSession(currentApp, { workspaceId: workspace.id });
+    const capabilitiesUrl = `/api/v1/workspaces/${workspace.id}/security/capabilities`;
+
+    const before = await currentApp.inject({
+      method: "GET",
+      url: capabilitiesUrl,
+      headers: HOST_HEADERS,
+    });
+    expect(before.statusCode).toBe(200);
+    // Read-only needs no preparation, workspace-write does, and Full Access stays independent.
+    expect(before.json().presets).toMatchObject([
+      { id: "VIEW_ONLY", version: 1, status: "AVAILABLE" },
+      {
+        id: "WORKSPACE_WRITE",
+        version: 1,
+        status: "PREPARATION_REQUIRED",
+        reasonCode: "WORKSPACE_PREPARATION_REQUIRED",
+      },
+      { id: "FULL_ACCESS", version: 1, status: "AVAILABLE" },
+    ]);
+    expect(before.json().preparation).toMatchObject({ supported: true, status: "REQUIRED" });
+
+    // The server is authoritative: a client that skips the disabled state cannot create the Run.
+    const tooEarly = await currentApp.inject({
+      method: "POST",
+      url: `/api/v1/sessions/${session.id}/runs`,
+      headers: JSON_HEADERS,
+      payload: runPayload(workspace, "WORKSPACE_WRITE"),
+    });
+    expect(tooEarly.statusCode).toBe(409);
+    expect(tooEarly.json().error).toMatchObject({ code: "CONFLICT" });
+    expect(tooEarly.json().error.message).toMatch(/preparation/i);
+
+    // Read-only is already usable and is not blocked by the workspace-write requirement.
+    const viewRun = await currentApp.inject({
+      method: "POST",
+      url: `/api/v1/sessions/${session.id}/runs`,
+      headers: JSON_HEADERS,
+      payload: runPayload(workspace, "VIEW_ONLY"),
+    });
+    expect(viewRun.statusCode).toBe(201);
+
+    const preparation = await currentApp.inject({
+      method: "POST",
+      url: `/api/v1/workspaces/${workspace.id}/security/prepare`,
+      headers: JSON_HEADERS,
+      payload: { preset: { id: "WORKSPACE_WRITE", expectedVersion: 1 } },
+    });
+    expect(preparation.statusCode).toBe(200);
+    expect(preparation.json()).toMatchObject({
+      workspaceId: workspace.id,
+      preset: { id: "WORKSPACE_WRITE", expectedVersion: 1 },
+      status: "READY",
+    });
+
+    const after = await currentApp.inject({
+      method: "GET",
+      url: capabilitiesUrl,
+      headers: HOST_HEADERS,
+    });
+    expect(after.json().presets).toMatchObject([
+      { id: "VIEW_ONLY", version: 1, status: "AVAILABLE" },
+      { id: "WORKSPACE_WRITE", version: 1, status: "AVAILABLE" },
+      { id: "FULL_ACCESS", version: 1, status: "AVAILABLE" },
+    ]);
+    expect(after.json().preparation).toMatchObject({ supported: true, status: "READY" });
+
+    const created = await currentApp.inject({
+      method: "POST",
+      url: `/api/v1/sessions/${session.id}/runs`,
+      headers: JSON_HEADERS,
+      payload: runPayload(workspace, "WORKSPACE_WRITE"),
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json()).toMatchObject({
+      status: "PENDING",
+      securityPolicy: { preset: { id: "WORKSPACE_WRITE", version: 1 } },
+    });
+  });
+});
