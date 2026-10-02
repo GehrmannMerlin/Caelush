@@ -103,6 +103,25 @@ export type {
   NativeRunnerProviderOptions,
   NativeSandboxRunnerManifest,
 } from "./sandbox/native-runner-provider.js";
+export {
+  DEFAULT_SANDBOX_RUNNER_MANIFEST_FILENAME,
+  POSIX_SANDBOX_RUNNER_EXECUTABLE,
+  SANDBOX_RUNNER_MANIFEST_SCHEMA_VERSION,
+  SANDBOX_RUNNER_PLATFORM_PROVIDERS,
+  SandboxRunnerArtifactError,
+  WINDOWS_SANDBOX_RUNNER_EXECUTABLE,
+  defaultSandboxRunnerExecutableName,
+  loadAndVerifySandboxRunnerArtifact,
+  sandboxRunnerPlatformName,
+  validateSandboxRunnerManifest,
+} from "./sandbox/runner-artifact.js";
+export type {
+  LoadSandboxRunnerArtifactInput,
+  ResolvedSandboxRunnerArtifact,
+  SandboxRunnerArtifactReasonCode,
+  SandboxRunnerManifest,
+  SandboxRunnerPlatform,
+} from "./sandbox/runner-artifact.js";
 export { createNativeWorkspaceSandboxController } from "./sandbox/native-workspace-controller.js";
 export type {
   NativeWorkspaceRunnerInvoker,

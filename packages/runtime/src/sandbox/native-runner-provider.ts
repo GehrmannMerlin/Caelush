@@ -19,16 +19,17 @@ import type { PrivateRunTemp } from "./private-temp.js";
 import {
   probeNativeSandboxRunner,
   verifyNativeSandboxRunnerArtifact,
-  type NativeSandboxRunnerManifest,
 } from "./native-runner-probe.js";
+import type { SandboxRunnerManifest } from "./runner-artifact.js";
 
-export type { NativeSandboxRunnerManifest } from "./native-runner-probe.js";
+export type { SandboxRunnerManifest as NativeSandboxRunnerManifest } from "./runner-artifact.js";
 
 export interface NativeRunnerProviderOptions {
   readonly platform?: NodeJS.Platform;
   readonly arch?: string;
   readonly runnerPath?: string;
-  readonly manifest?: NativeSandboxRunnerManifest;
+  readonly manifestPath?: string;
+  readonly manifest?: SandboxRunnerManifest;
   readonly readyTimeoutMs?: number;
   readonly privateTempBaseDirectory?: string;
   readonly workspaceController?: NativeWorkspaceSandboxController;
@@ -135,6 +136,7 @@ function nativeRunnerProbeInput(
     ...(options.platform === undefined ? {} : { hostPlatform: options.platform }),
     ...(options.arch === undefined ? {} : { arch: options.arch }),
     ...(options.runnerPath === undefined ? {} : { runnerPath: options.runnerPath }),
+    ...(options.manifestPath === undefined ? {} : { manifestPath: options.manifestPath }),
     ...(options.manifest === undefined ? {} : { manifest: options.manifest }),
   };
 }
