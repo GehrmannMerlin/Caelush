@@ -1,7 +1,10 @@
 use std::path::Path;
 use std::process::Child;
 
+mod error;
 mod handle;
+mod sid;
+mod token;
 
 pub use super::windows_mode::WindowsSandboxMode;
 
@@ -17,6 +20,12 @@ pub fn spawn_restricted(
     _program: &str,
     _args: &[String],
 ) -> Result<Child, String> {
-    let _ = mode;
-    Err("WINDOWS_RESTRICTED_TOKEN_BACKEND_UNAVAILABLE".to_string())
+    match mode {
+        WindowsSandboxMode::ReadOnly => {
+            let _token =
+                token::RestrictedToken::create_read_only().map_err(|error| error.to_string())?;
+            Err("WINDOWS_RESTRICTED_PROCESS_BACKEND_UNAVAILABLE".to_string())
+        }
+        WindowsSandboxMode::WorkspaceWrite => Err(error::SandboxError::UnsupportedMode.to_string()),
+    }
 }

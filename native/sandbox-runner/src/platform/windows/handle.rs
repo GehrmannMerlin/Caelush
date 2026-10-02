@@ -1,4 +1,3 @@
-use std::ptr::null_mut;
 use windows_sys::Win32::Foundation::{
     CloseHandle, LocalFree, HANDLE, HLOCAL, INVALID_HANDLE_VALUE,
 };
@@ -8,7 +7,7 @@ pub struct OwnedHandle(HANDLE);
 
 impl OwnedHandle {
     pub unsafe fn from_raw(handle: HANDLE, error_code: &'static str) -> Result<Self, String> {
-        if handle == null_mut() || handle == INVALID_HANDLE_VALUE {
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
             return Err(error_code.to_string());
         }
         Ok(Self(handle))
