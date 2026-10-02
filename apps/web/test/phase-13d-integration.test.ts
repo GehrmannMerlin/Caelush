@@ -102,6 +102,144 @@ describe("Phase 13D real Web control integration", () => {
 });
 
 /**
+ * The permission selector against the real Daemon, not a stubbed client.
+ *
+ * The unit tests prove the manager's own logic. This proves the *shape*: that the production
+ * composition serves `PREPARATION_REQUIRED` for a registered workspace, that preparing it through
+ * the public route actually changes what the next capability read returns, and that the manager
+ * reload — not the pre-preparation read — is what the selection follows.
+ */
+describe("Real Web permission preparation integration", () => {
+  it("prepares a registered workspace through the real API and then selects it", async () => {
+    const workspacePath = await makeWorkspace();
+    const preparation = { prepared: false };
+    daemon = await startDaemon({
+      databasePath: join(workspacePath, "caelush.db"),
+      port: 0,
+      sseHeartbeatIntervalMs: 0,
+      workspacePath,
+      processSandboxProviders: [restrictedProvider],
+      fullAccessAvailable: true,
+      workspacePreparation: {
+        supported: true,
+        getStatus: async (_workspaceId, preset) =>
+          preset.id === "VIEW_ONLY" || preparation.prepared ? "READY" : "REQUIRED",
+        prepare: async () => {
+          preparation.prepared = true;
+          return { status: "READY" as const };
+        },
+      },
+      providerBindings: [fixtureBinding()],
+      modelSources: [fixtureModelSource()],
+      adapterOverrides: [new ApprovalProvider()],
+      defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
+      logger: false,
+    });
+    const client = new CaelushClient({ baseUrl: daemon.url });
+    const registered = (await client.listWorkspaces()).items[0]!;
+    // The Registry canonicalizes: lower-cased, forward-slashed. The manager must use *that* path.
+    expect(registered.canonicalPath.toLowerCase()).toBe(
+      workspacePath.replaceAll("\\", "/").toLowerCase(),
+    );
+    manager = new WebSessionManager({
+      client,
+      workspace: { id: registered.id, path: registered.canonicalPath },
+      info: await client.getInfo(),
+    });
+
+    await manager.loadSessions();
+    manager.beginDraft();
+
+    // The daemon is the authority for all three states, and View Only is usable immediately.
+    expect(manager.getSnapshot().availablePresets).toMatchObject([
+      { id: "VIEW_ONLY", status: "AVAILABLE" },
+      { id: "WORKSPACE_WRITE", status: "PREPARATION_REQUIRED" },
+      { id: "FULL_ACCESS", status: "AVAILABLE" },
+    ]);
+    expect(manager.getSnapshot().selectedPreset).toEqual({ id: "VIEW_ONLY", expectedVersion: 1 });
+
+    await expect(
+      manager.preparePermissionPreset({ id: "WORKSPACE_WRITE", expectedVersion: 1 }),
+    ).resolves.toBe(true);
+    expect(manager.getSnapshot().selectedPreset).toEqual({
+      id: "WORKSPACE_WRITE",
+      expectedVersion: 1,
+    });
+
+    // Independent of the manager, the public route now reports the prepared state.
+    const capabilities = await client.getWorkspaceSecurityCapabilities(registered.id);
+    expect(capabilities.preparation).toMatchObject({ supported: true, status: "READY" });
+    expect(capabilities.presets).toMatchObject([
+      { id: "VIEW_ONLY", status: "AVAILABLE" },
+      { id: "WORKSPACE_WRITE", status: "AVAILABLE" },
+      { id: "FULL_ACCESS", status: "AVAILABLE" },
+    ]);
+  }, 20_000);
+
+  it("reports a refused preparation through the real API without changing the selection", async () => {
+    const workspacePath = await makeWorkspace();
+    daemon = await startDaemon({
+      databasePath: join(workspacePath, "caelush.db"),
+      port: 0,
+      sseHeartbeatIntervalMs: 0,
+      workspacePath,
+      processSandboxProviders: [restrictedProvider],
+      fullAccessAvailable: true,
+      workspacePreparation: {
+        supported: true,
+        // Read-only never needs preparation, so the refusal is scoped to the write preset.
+        getStatus: async (_workspaceId, preset) =>
+          preset.id === "VIEW_ONLY" ? "READY" : "REQUIRED",
+        // A real host can refuse: the port answers with a verdict, not a throw.
+        prepare: async () => ({
+          status: "FAILED" as const,
+          reasonCode: "WORKSPACE_PREPARATION_FAILED",
+        }),
+      },
+      providerBindings: [fixtureBinding()],
+      modelSources: [fixtureModelSource()],
+      adapterOverrides: [new ApprovalProvider()],
+      defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
+      logger: false,
+    });
+    const client = new CaelushClient({ baseUrl: daemon.url });
+    const registered = (await client.listWorkspaces()).items[0]!;
+    manager = new WebSessionManager({
+      client,
+      workspace: { id: registered.id, path: registered.canonicalPath },
+      info: await client.getInfo(),
+    });
+
+    await manager.loadSessions();
+    manager.beginDraft();
+    const before = manager.getSnapshot().selectedPreset;
+
+    await expect(
+      manager.preparePermissionPreset({ id: "WORKSPACE_WRITE", expectedVersion: 1 }),
+    ).resolves.toBe(false);
+    expect(manager.getSnapshot().error?.code).toBe("PERMISSION_PREPARATION_FAILED");
+    expect(manager.getSnapshot().selectedPreset).toEqual(before);
+
+    // The workspace is still unprepared, so nothing about the host state was overstated.
+    const capabilities = await client.getWorkspaceSecurityCapabilities(registered.id);
+    expect(capabilities.presets).toMatchObject([
+      { id: "VIEW_ONLY", status: "AVAILABLE" },
+      { id: "WORKSPACE_WRITE", status: "PREPARATION_REQUIRED" },
+      { id: "FULL_ACCESS", status: "AVAILABLE" },
+    ]);
+  }, 20_000);
+});
+
+/** The packaged Runner as a real host would report it: present and probing available. */
+const restrictedProvider = {
+  id: "fixture-restricted",
+  kind: "RESTRICTED" as const,
+  enforcement: "HARD" as const,
+  create: async () => ({}) as never,
+  probe: async () => ({ available: true, enforcement: "HARD" as const }),
+};
+
+/**
  * Phase 2C: a fixture adapter is a *dialect*, not a vendor.
  *
  * The class registers the shared `FIXTURE_API` id and implements the AI core's

@@ -56,6 +56,7 @@ import type {
   PermissionPresetSelection,
   SecurityCapabilitiesResponse,
   SecurityPreparationResponse,
+  SelectablePermissionPresetId,
   WorkspaceSecurityCapabilitiesResponse,
 } from "@caelush/protocol";
 import { derivePromptTitle, validatePrompt, type PromptError } from "./prompt.js";
@@ -656,7 +657,6 @@ export class WebSessionManager {
       return false;
     }
     try {
-      this.options.permissionPresetStore?.write(this.options.workspace.id, selection);
       const response = await prepare.call(
         this.options.client,
         this.options.workspace.id,
@@ -666,7 +666,17 @@ export class WebSessionManager {
         this.publish({ error: sessionError("PERMISSION_PREPARATION_FAILED") });
         return false;
       }
-      await this.loadPermissionPresets();
+      /**
+       * Only a preparation the host accepted may become the persisted preference.
+       *
+       * Persisting before the outcome made a refused preparation still replace the user's stored
+       * choice with a preset this workspace cannot use, so the next load silently fell back to
+       * read-only and the user's actual selection was lost.
+       */
+      this.options.permissionPresetStore?.write(this.options.workspace.id, selection);
+      // The prepared preset is named explicitly: the reload must select *it*, not re-derive a
+      // choice from whatever happened to be persisted before.
+      await this.loadPermissionPresets(selection.id);
       return this.snapshot.selectedPreset?.id === selection.id;
     } catch {
       this.publish({ error: sessionError("PERMISSION_PREPARATION_FAILED") });
@@ -674,7 +684,7 @@ export class WebSessionManager {
     }
   }
 
-  private async loadPermissionPresets(): Promise<void> {
+  private async loadPermissionPresets(preferredId?: SelectablePermissionPresetId): Promise<void> {
     const getGlobal = this.options.client.getSecurityCapabilities;
     const getWorkspace = this.options.client.getWorkspaceSecurityCapabilities;
     if (getGlobal === undefined || getWorkspace === undefined) {
@@ -710,11 +720,16 @@ export class WebSessionManager {
       const requestedId =
         configuredId === "LEGACY_CUSTOM" ? capabilities.defaultPreset : configuredId;
       const selectedPreset =
-        persisted !== undefined &&
-        persisted.expectedVersion ===
-          availablePresets.find((preset) => preset.id === persisted.id)?.version
-          ? choosePermissionPreset(availablePresets, persisted.id)
-          : choosePermissionPreset(availablePresets, requestedId);
+        preferredId !== undefined
+          ? // An explicit preference (a preparation the host just accepted) always wins. It still
+            // cannot select Full Access implicitly, because `choosePermissionPreset` excludes any
+            // preset that requires confirmation.
+            choosePermissionPreset(availablePresets, preferredId)
+          : persisted !== undefined &&
+              persisted.expectedVersion ===
+                availablePresets.find((preset) => preset.id === persisted.id)?.version
+            ? choosePermissionPreset(availablePresets, persisted.id)
+            : choosePermissionPreset(availablePresets, requestedId);
       this.publish({
         permissionCapabilities: capabilities,
         availablePresets,

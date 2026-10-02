@@ -33,6 +33,33 @@ import { createWorkspaceRef, startDaemon } from "../apps/daemon/dist/index.js";
 const FIXTURE_PROVIDER_ID = "browser-fixture";
 const FIXTURE_MODEL_ID = "browser-fixture-model";
 
+/**
+ * The sandbox Runner as a host with a working packaged artifact reports it.
+ *
+ * ```text
+ * BEFORE  no restricted Provider  →  restricted presets synthesized from Full Access availability
+ * AFTER   no restricted Provider  →  processSandbox UNAVAILABLE, no auto-selectable preset
+ * ```
+ *
+ * `SecurityCapabilityService` now reports restricted capability truthfully, and Full Access
+ * availability is never used to manufacture it. That makes this composition load-bearing for the
+ * smoke rather than cosmetic: with no restricted Provider, **neither** View Only nor Workspace Write
+ * is `AVAILABLE`, `choosePermissionPreset` finds nothing auto-selectable, and the Web composer
+ * refuses every prompt before a browser is even launched. This fixture is what "a host with a working
+ * Runner" looks like — it probes available with a real enforcement mode.
+ *
+ * It is a fixture, not a sandbox: `create` throws, because the smoke never runs a restricted process.
+ */
+const fixtureSandboxProvider = {
+  id: "browser-fixture-runner",
+  kind: "RESTRICTED",
+  enforcement: "HARD",
+  create: async () => {
+    throw new Error("The browser smoke never executes a restricted process.");
+  },
+  probe: async () => ({ available: true, enforcement: "HARD" }),
+};
+
 async function startFakeModelServer() {
   const server = createServer((request, response) => {
     void handleModelRequest(request, response);
@@ -222,9 +249,11 @@ try {
       },
     ],
     defaultModel: { provider: FIXTURE_PROVIDER_ID, model: FIXTURE_MODEL_ID },
+    processSandboxProviders: [fixtureSandboxProvider],
     web: { buildRoot: resolve(process.cwd(), "apps", "web", "dist"), workspace },
   });
   await assertModelConfigured(daemon.url);
+  await assertPermissionsUsable(daemon.url);
   await writeFile(join(directory, "fixture.txt"), "browser fixture\n", "utf8");
   await rm(browserArtifacts, { recursive: true, force: true });
   const result = await runBrowserSmoke(daemon.url + "/", browserArtifacts, workspace);
@@ -259,6 +288,49 @@ async function assertModelConfigured(url) {
       `The fixture provider ${FIXTURE_PROVIDER_ID} is not composed; configured: ${JSON.stringify(configured)}.`,
     );
   }
+}
+
+/**
+ * Fail fast when the permission selector has nothing it may auto-select.
+ *
+ * The Web composer refuses every prompt while no preset is selected, and a preset is only selected
+ * when it is `AVAILABLE` and does not require confirmation — Full Access never qualifies. So this is
+ * the precondition for the whole browser flow, and asserting it here names the real cause instead of
+ * letting it surface as a browser timeout on the first prompt.
+ */
+async function assertPermissionsUsable(url) {
+  const workspacesResponse = await fetch(new URL("/api/v1/workspaces", url));
+  if (!workspacesResponse.ok) {
+    throw new Error(`The workspace route answered HTTP ${workspacesResponse.status}.`);
+  }
+  const workspaces = await workspacesResponse.json();
+  const workspaceId = workspaces?.items?.[0]?.id;
+  if (typeof workspaceId !== "string") {
+    throw new Error("The browser fixture workspace was not registered.");
+  }
+  const capabilitiesResponse = await fetch(
+    new URL(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/security/capabilities`, url),
+  );
+  if (!capabilitiesResponse.ok) {
+    throw new Error(`The workspace capability route answered HTTP ${capabilitiesResponse.status}.`);
+  }
+  const capabilities = await capabilitiesResponse.json();
+  const statuses = Object.fromEntries(
+    (capabilities?.presets ?? []).map((preset) => [preset.id, preset.status]),
+  );
+  const expected = {
+    VIEW_ONLY: "AVAILABLE",
+    WORKSPACE_WRITE: "AVAILABLE",
+    FULL_ACCESS: "AVAILABLE",
+  };
+  for (const [id, status] of Object.entries(expected)) {
+    if (statuses[id] !== status) {
+      throw new Error(
+        `The browser smoke needs ${id} to be ${status}; the daemon reported ${JSON.stringify(statuses)}.`,
+      );
+    }
+  }
+  console.log(`[browser-smoke] workspace permissions: ${JSON.stringify(statuses)}`);
 }
 
 function runBrowserSmoke(url, artifactDirectory, workspaceRef) {

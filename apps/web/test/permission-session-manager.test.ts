@@ -9,6 +9,7 @@ import {
 } from "@caelush/protocol";
 import { describe, expect, it, vi } from "vitest";
 import { WebSessionManager, type WebSessionClient } from "../src/application/session-manager.js";
+import { PermissionPresetSelectionStore } from "../src/application/session-persistence.js";
 
 const workspace = { id: createWorkspaceId(), path: "C:\\workspace\\project" } as const;
 
@@ -91,6 +92,10 @@ function workspaceCapabilities(
   statuses: Partial<
     Readonly<Record<"VIEW_ONLY" | "WORKSPACE_WRITE" | "FULL_ACCESS", PresetStatus>>
   > = {},
+  preparation: WorkspaceSecurityCapabilitiesResponse["preparation"] = {
+    supported: false,
+    status: "NOT_REQUIRED",
+  },
 ): WorkspaceSecurityCapabilitiesResponse {
   return {
     schemaVersion: 1,
@@ -104,7 +109,7 @@ function workspaceCapabilities(
       },
       { id: "FULL_ACCESS", version: 1, status: statuses.FULL_ACCESS ?? "AVAILABLE" },
     ],
-    preparation: { supported: false, status: "NOT_REQUIRED" },
+    preparation,
   };
 }
 
@@ -282,6 +287,94 @@ describe("WebSessionManager permission lifecycle", () => {
     expect(await manager.selectPermissionPreset({ id: "FULL_ACCESS", expectedVersion: 1 })).toBe(
       false,
     );
+    manager.dispose();
+  });
+});
+
+describe("WebSessionManager workspace preparation", () => {
+  const REQUIRED_PREPARATION = {
+    supported: true,
+    status: "REQUIRED",
+    reasonCode: "WORKSPACE_PREPARATION_REQUIRED",
+  } as const;
+
+  it("selects the prepared preset only after reloading workspace capabilities", async () => {
+    const getWorkspaceSecurityCapabilities = vi
+      .fn()
+      .mockResolvedValueOnce(
+        workspaceCapabilities({ WORKSPACE_WRITE: "PREPARATION_REQUIRED" }, REQUIRED_PREPARATION),
+      )
+      .mockResolvedValue(workspaceCapabilities());
+    const prepareWorkspaceSecurity = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      workspaceId: workspace.id,
+      preset: { id: "WORKSPACE_WRITE" as const, expectedVersion: 1 },
+      status: "READY" as const,
+    }));
+    const client = baseClient({
+      getSecurityCapabilities: vi.fn(async () => capabilities()),
+      getWorkspaceSecurityCapabilities,
+      prepareWorkspaceSecurity,
+    });
+    const manager = new WebSessionManager({ client, workspace, info: info() });
+
+    await manager.loadSessions();
+    manager.beginDraft();
+    // While preparation is outstanding the workspace cannot honour Workspace Write, so the Run
+    // would use read-only and the user must ask for preparation explicitly.
+    expect(manager.getSnapshot().selectedPreset).toEqual({ id: "VIEW_ONLY", expectedVersion: 1 });
+
+    await expect(
+      manager.preparePermissionPreset({ id: "WORKSPACE_WRITE", expectedVersion: 1 }),
+    ).resolves.toBe(true);
+
+    expect(prepareWorkspaceSecurity).toHaveBeenCalledWith(workspace.id, {
+      id: "WORKSPACE_WRITE",
+      expectedVersion: 1,
+    });
+    // The reload is the whole contract: selection must never come from the pre-preparation read.
+    expect(getWorkspaceSecurityCapabilities).toHaveBeenCalledTimes(2);
+    expect(manager.getSnapshot().selectedPreset).toEqual({
+      id: "WORKSPACE_WRITE",
+      expectedVersion: 1,
+    });
+    manager.dispose();
+  });
+
+  it("does not persist or select a preset whose preparation the host refused", async () => {
+    const store = new PermissionPresetSelectionStore(new Map());
+    const prepareWorkspaceSecurity = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      workspaceId: workspace.id,
+      preset: { id: "WORKSPACE_WRITE" as const, expectedVersion: 1 },
+      status: "FAILED" as const,
+      reasonCode: "PRESET_VERSION_MISMATCH",
+    }));
+    const client = baseClient({
+      getSecurityCapabilities: vi.fn(async () => capabilities()),
+      getWorkspaceSecurityCapabilities: vi.fn(async () =>
+        workspaceCapabilities({ WORKSPACE_WRITE: "PREPARATION_REQUIRED" }, REQUIRED_PREPARATION),
+      ),
+      prepareWorkspaceSecurity,
+    });
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      info: info(),
+      permissionPresetStore: store,
+    });
+
+    await manager.loadSessions();
+    manager.beginDraft();
+
+    await expect(
+      manager.preparePermissionPreset({ id: "WORKSPACE_WRITE", expectedVersion: 1 }),
+    ).resolves.toBe(false);
+    expect(manager.getSnapshot().error?.code).toBe("PERMISSION_PREPARATION_FAILED");
+    expect(manager.getSnapshot().selectedPreset).toEqual({ id: "VIEW_ONLY", expectedVersion: 1 });
+    // A refused preparation must not leave a persisted preference for a preset this workspace
+    // cannot use; that would silently discard the user's actual choice on the next load.
+    expect(store.read(workspace.id)).toBeUndefined();
     manager.dispose();
   });
 });
