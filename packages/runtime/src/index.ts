@@ -58,6 +58,11 @@ export {
   encodeSandboxControlMessage,
   validateSandboxControlMessage,
 } from "./sandbox/control-protocol.js";
+export {
+  DEFAULT_SANDBOX_READY_TIMEOUT_MS,
+  createSandboxControlTransport,
+} from "./sandbox/control-transport.js";
+export type { SandboxControlTransport } from "./sandbox/control-transport.js";
 export type {
   SandboxControlMessage,
   SandboxErrorMessage,

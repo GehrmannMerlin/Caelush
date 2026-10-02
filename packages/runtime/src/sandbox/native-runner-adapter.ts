@@ -1,19 +1,12 @@
 import { createHash } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
-import { Readable } from "node:stream";
 import { TerminalOutputDecoder } from "../exec/terminal-output.js";
 import { terminateProcessTree } from "../exec/process-tree.js";
 import type { ManagedProcessAdapter, ProcessExit, ProcessOutputEvent } from "../exec/contracts.js";
 import { RuntimeExecError } from "../exec/errors.js";
-import { RuntimeSandboxError, RuntimeSandboxProtocolError } from "../runtime-errors.js";
-import {
-  acceptSandboxReady,
-  createSandboxHello,
-  decodeSandboxControlMessage,
-  encodeSandboxControlMessage,
-  MAX_SANDBOX_CONTROL_MESSAGE_BYTES,
-  type SandboxHelloMessage,
-} from "./control-protocol.js";
+import { RuntimeSandboxError } from "../runtime-errors.js";
+import { createSandboxHello } from "./control-protocol.js";
+import { createSandboxControlTransport } from "./control-transport.js";
 import type { SandboxedSpawnSpec } from "./contracts.js";
 
 export async function createNativeRunnerProcessAdapter(input: {
@@ -38,7 +31,11 @@ export async function createNativeRunnerProcessAdapter(input: {
     providerId: input.providerId,
     boundaryFingerprint,
   });
+  const controlTransport = await createSandboxControlTransport({ hello });
   const args = [
+    "--operation",
+    "run",
+    ...controlTransport.runnerArgs,
     "--provider",
     input.providerId,
     "--nonce",
@@ -61,28 +58,24 @@ export async function createNativeRunnerProcessAdapter(input: {
       env: { ...input.spec.env },
       shell: false,
       windowsHide: true,
-      stdio: ["pipe", "pipe", "pipe", "pipe"],
+      stdio:
+        process.platform === "win32" ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe", "pipe"],
     });
   } catch {
+    await controlTransport.close();
     throw new RuntimeSandboxError("The native sandbox runner could not be started.");
   }
-  const control = child.stdio[3];
-  if (!(control instanceof Readable) || child.stdin === null) {
-    child.kill();
+  if (child.stdin === null) {
+    await controlTransport.close();
+    await terminateProcessTree({ pid: child.pid, kill: () => child.kill() });
     throw new RuntimeSandboxError("The native sandbox runner did not provide a control channel.");
   }
   try {
-    await waitForReady(child, control, hello);
+    await controlTransport.waitForReady(child, hello);
   } catch (error) {
-    try {
-      child.kill();
-    } catch {
-      // The runner may already have exited.
-    }
-    if (error instanceof RuntimeSandboxProtocolError || error instanceof RuntimeSandboxError) {
-      throw error;
-    }
-    throw new RuntimeSandboxError("The native sandbox runner did not prove its boundary.");
+    throw error instanceof RuntimeSandboxError
+      ? error
+      : new RuntimeSandboxError("The native sandbox runner did not prove its boundary.");
   }
   return new NativeRunnerProcessAdapter(child, input.spec.tty);
 }
@@ -197,59 +190,4 @@ class NativeRunnerProcessAdapter implements ManagedProcessAdapter {
     }
     for (const listener of this.outputListeners) listener(event);
   }
-}
-
-async function waitForReady(
-  child: ChildProcess,
-  control: Readable,
-  hello: SandboxHelloMessage,
-): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    let buffer = "";
-    let settled = false;
-    const finish = (error?: unknown): void => {
-      if (settled) return;
-      settled = true;
-      control.removeListener("data", onData);
-      child.removeListener("error", onError);
-      child.removeListener("close", onClose);
-      if (error === undefined) resolve();
-      else reject(error);
-    };
-    const onData = (chunk: Buffer): void => {
-      buffer += chunk.toString("utf8");
-      if (Buffer.byteLength(buffer, "utf8") > MAX_SANDBOX_CONTROL_MESSAGE_BYTES) {
-        finish(new RuntimeSandboxProtocolError("Sandbox control channel exceeded its size limit."));
-        return;
-      }
-      let newline = buffer.indexOf("\n");
-      while (newline >= 0) {
-        const line = buffer.slice(0, newline).trim();
-        buffer = buffer.slice(newline + 1);
-        if (line.length > 0) {
-          try {
-            const message = decodeSandboxControlMessage(line);
-            acceptSandboxReady(message, hello);
-            finish();
-            return;
-          } catch (error) {
-            finish(error);
-            return;
-          }
-        }
-        newline = buffer.indexOf("\n");
-      }
-    };
-    const onError = (): void =>
-      finish(new RuntimeSandboxError("The native sandbox runner failed before READY."));
-    const onClose = (): void =>
-      finish(new RuntimeSandboxError("The native sandbox runner exited before READY."));
-    control.on("data", onData);
-    child.once("error", onError);
-    child.once("close", onClose);
-    // The runner receives no READY authority from user stdout/stderr; the HELLO is only used to
-    // derive the expected tuple. Keeping this call here also makes malformed expected messages fail
-    // before the process is accepted by a Provider.
-    encodeSandboxControlMessage(hello);
-  });
 }
