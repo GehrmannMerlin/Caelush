@@ -4,3 +4,5 @@ pub mod linux;
 pub mod macos;
 #[cfg(target_os = "windows")]
 pub mod windows;
+#[path = "windows/mode.rs"]
+pub mod windows_mode;

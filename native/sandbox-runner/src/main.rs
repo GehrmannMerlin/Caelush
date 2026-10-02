@@ -14,6 +14,7 @@ enum Operation {
 
 #[derive(Debug, PartialEq, Eq)]
 struct RunConfig {
+    mode: platform::windows_mode::WindowsSandboxMode,
     workspace_root: PathBuf,
     cwd: PathBuf,
     program: String,
@@ -88,6 +89,7 @@ fn spawn_target(config: &Config, run: &RunConfig) -> Result<std::process::Child,
     {
         return platform::windows::spawn_restricted(
             &config.provider,
+            run.mode,
             &run.workspace_root,
             &run.cwd,
             &run.program,
@@ -102,6 +104,7 @@ fn parse_args(args: Vec<String>) -> Result<Config, String> {
     let mut operation = None;
     let mut control_pipe = None;
     let mut provider = None;
+    let mut mode = None;
     let mut nonce = None;
     let mut boundary_fingerprint = None;
     let mut workspace_root = None;
@@ -122,6 +125,7 @@ fn parse_args(args: Vec<String>) -> Result<Config, String> {
                 set_once(&mut control_pipe, PathBuf::from(next(&args, &mut index)?))?
             }
             "--provider" => set_once(&mut provider, next(&args, &mut index)?)?,
+            "--mode" => set_once(&mut mode, next(&args, &mut index)?)?,
             "--nonce" => set_once(&mut nonce, next(&args, &mut index)?)?,
             "--boundary-fingerprint" => {
                 set_once(&mut boundary_fingerprint, next(&args, &mut index)?)?
@@ -147,6 +151,9 @@ fn parse_args(args: Vec<String>) -> Result<Config, String> {
         "run" => {
             let args = payload_args.ok_or_else(|| "MISSING_ARGUMENT_SEPARATOR".to_string())?;
             Operation::Run(RunConfig {
+                mode: platform::windows_mode::WindowsSandboxMode::parse(
+                    &mode.ok_or_else(|| "MISSING_MODE".to_string())?,
+                )?,
                 workspace_root: workspace_root.ok_or_else(|| "MISSING_WORKSPACE".to_string())?,
                 cwd: cwd.ok_or_else(|| "MISSING_CWD".to_string())?,
                 program: program.ok_or_else(|| "MISSING_PROGRAM".to_string())?,
@@ -157,6 +164,7 @@ fn parse_args(args: Vec<String>) -> Result<Config, String> {
             if workspace_root.is_some()
                 || cwd.is_some()
                 || program.is_some()
+                || mode.is_some()
                 || payload_args.is_some()
             {
                 return Err("INVALID_PROBE_ARGUMENT".to_string());
@@ -223,6 +231,8 @@ mod tests {
             r"\\.\pipe\caelush-sandbox-test",
             "--provider",
             "windows-acl-restricted-token",
+            "--mode",
+            "read-only",
             "--nonce",
             "runner-test-nonce",
             "--boundary-fingerprint",
@@ -264,6 +274,27 @@ mod tests {
         let mut args = run_args();
         args[1] = "escape".to_string();
         assert_eq!(parse_args(args).err().as_deref(), Some("UNKNOWN_OPERATION"));
+    }
+
+    #[test]
+    fn rejects_missing_run_mode() {
+        let mut args = run_args();
+        args.drain(6..8);
+        assert_eq!(parse_args(args).err().as_deref(), Some("MISSING_MODE"));
+    }
+
+    #[test]
+    fn rejects_unknown_run_mode() {
+        let mut args = run_args();
+        args[7] = "host-user".to_string();
+        assert_eq!(parse_args(args).err().as_deref(), Some("UNKNOWN_MODE"));
+    }
+
+    #[test]
+    fn accepts_workspace_write_as_a_known_but_separate_mode() {
+        let mut args = run_args();
+        args[7] = "workspace-write".to_string();
+        assert!(parse_args(args).is_ok());
     }
 
     #[cfg(windows)]

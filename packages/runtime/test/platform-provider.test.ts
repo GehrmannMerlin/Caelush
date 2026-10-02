@@ -6,6 +6,7 @@ import {
   createWindowsAclRestrictedTokenProvider,
 } from "../src/index.js";
 import type { ManagedProcessAdapter, SandboxedSpawnSpec } from "../src/index.js";
+import { modeForPolicy } from "../src/sandbox/native-runner-adapter.js";
 
 const fakeAdapter = (): ManagedProcessAdapter => ({
   tty: false,
@@ -38,6 +39,41 @@ const spec = (): SandboxedSpawnSpec => ({
 });
 
 describe("platform process sandbox Providers", () => {
+  it("maps only the two canonical restricted policy tuples to native Runner modes", () => {
+    expect(
+      modeForPolicy({
+        ...spec().policy,
+        filesystem: { ...spec().policy.filesystem, boundary: "WORKSPACE_READ_ONLY" },
+        processBoundary: "READ_ONLY",
+      }),
+    ).toBe("read-only");
+    expect(modeForPolicy(spec().policy)).toBe("workspace-write");
+  });
+
+  it("rejects inconsistent or unrestricted policy tuples instead of weakening them", () => {
+    const policy = spec().policy;
+    expect(() =>
+      modeForPolicy({
+        ...policy,
+        filesystem: { ...policy.filesystem, boundary: "WORKSPACE_READ_ONLY" },
+      }),
+    ).toThrow(/policy/i);
+    expect(() =>
+      modeForPolicy({
+        ...policy,
+        processBoundary: "READ_ONLY",
+      }),
+    ).toThrow(/policy/i);
+    expect(() =>
+      modeForPolicy({
+        ...policy,
+        filesystem: { ...policy.filesystem, boundary: "HOST_USER_SCOPE" },
+        processBoundary: "UNRESTRICTED",
+        requiredEnforcement: "HARD_SAFETY_ONLY",
+      }),
+    ).toThrow(/policy/i);
+  });
+
   it("reports restricted capability without silently ordinary-spawning when the native runner is absent", async () => {
     const providers = [
       createWindowsAclRestrictedTokenProvider({ platform: "win32" }),

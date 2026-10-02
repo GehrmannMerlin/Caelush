@@ -8,6 +8,27 @@ import { RuntimeSandboxError, RuntimeSandboxProtocolError } from "../runtime-err
 import { createSandboxHello } from "./control-protocol.js";
 import { createSandboxControlTransport } from "./control-transport.js";
 import type { SandboxedSpawnSpec } from "./contracts.js";
+import type { RuntimeProcessPolicy } from "../security/runtime-boundary.js";
+
+export type NativeWindowsSandboxMode = "read-only" | "workspace-write";
+
+export function modeForPolicy(policy: RuntimeProcessPolicy): NativeWindowsSandboxMode {
+  if (
+    policy.requiredEnforcement === "OS_RESTRICTED" &&
+    policy.processBoundary === "READ_ONLY" &&
+    policy.filesystem.boundary === "WORKSPACE_READ_ONLY"
+  ) {
+    return "read-only";
+  }
+  if (
+    policy.requiredEnforcement === "OS_RESTRICTED" &&
+    policy.processBoundary === "WORKSPACE_WRITE" &&
+    policy.filesystem.boundary === "WORKSPACE_READ_WRITE"
+  ) {
+    return "workspace-write";
+  }
+  throw new RuntimeSandboxError("The native sandbox policy tuple is inconsistent.");
+}
 
 export async function createNativeRunnerProcessAdapter(input: {
   readonly runnerPath: string;
@@ -38,6 +59,8 @@ export async function createNativeRunnerProcessAdapter(input: {
     ...controlTransport.runnerArgs,
     "--provider",
     input.providerId,
+    "--mode",
+    modeForPolicy(input.spec.policy),
     "--nonce",
     hello.nonce,
     "--boundary-fingerprint",
