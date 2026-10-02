@@ -6,6 +6,10 @@ import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import process from "node:process";
 import { URL, fileURLToPath } from "node:url";
+import {
+  SANDBOX_RUNNER_DIRECTORY_NAME,
+  SANDBOX_RUNNER_MANIFEST_FILENAME,
+} from "./build-sandbox-runner.mjs";
 import { validateReleaseManifest } from "./build-release.mjs";
 
 const repositoryRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -35,21 +39,41 @@ export function inspectReleaseArtifact(artifactPath) {
     }
 
     if (releaseManifest.sandboxRunner === "PACKAGED") {
-      const runnerManifestPath = "sandbox-runner/manifest.json";
-      if (!entries.has(runnerManifestPath)) {
-        throw new Error("Release claims a packaged sandbox runner but its manifest is missing.");
-      }
-      const sandboxManifest = JSON.parse(
-        readExtractedText(inspectionDirectory, runnerManifestPath),
-      );
-      const runnerEntry = `sandbox-runner/${sandboxManifest.executableName}`;
-      if (!entries.has(runnerEntry)) {
-        throw new Error("Release sandbox manifest names an executable that is not packaged.");
-      }
+      verifyPackagedSandboxRunner({
+        entries,
+        readBuffer: (path) => readExtractedBuffer(inspectionDirectory, path),
+        sandboxManifest: releaseManifest.sandboxRunnerManifest,
+        checksums: readExtractedText(inspectionDirectory, "checksums.sha256"),
+      });
     }
     return releaseManifest;
   } finally {
     rmSync(inspectionDirectory, { recursive: true, force: true });
+  }
+}
+
+/**
+ * The packaged Runner is only trustworthy when it is present, byte-identical to the hash
+ * the release manifest advertises, and covered by the archive checksum records.
+ */
+export function verifyPackagedSandboxRunner({ entries, readBuffer, sandboxManifest, checksums }) {
+  const runnerRelativePath = `${SANDBOX_RUNNER_DIRECTORY_NAME}/${sandboxManifest.executableName}`;
+  const manifestRelativePath = `${SANDBOX_RUNNER_DIRECTORY_NAME}/${SANDBOX_RUNNER_MANIFEST_FILENAME}`;
+  if (!entries.has(runnerRelativePath)) {
+    throw new Error("Release sandbox manifest names an executable that is not packaged.");
+  }
+  if (!entries.has(manifestRelativePath)) {
+    throw new Error("Release claims a packaged sandbox runner but its manifest is missing.");
+  }
+  const measured = createHash("sha256").update(readBuffer(runnerRelativePath)).digest("hex");
+  if (measured !== sandboxManifest.sha256) {
+    throw new Error("Packaged sandbox runner hash does not match its manifest.");
+  }
+  const covered = new Set(parseChecksumRecords(checksums).map((record) => record.path));
+  for (const required of [runnerRelativePath, manifestRelativePath]) {
+    if (!covered.has(required)) {
+      throw new Error(`Release checksums do not cover the packaged sandbox runner: ${required}`);
+    }
   }
 }
 
@@ -58,15 +82,7 @@ export function verifyChecksums(artifactPath, entries, checksums) {
 }
 
 function verifyChecksumRecords(readBuffer, entries, checksums) {
-  const records = checksums
-    .trim()
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((line) => {
-      const match = /^(?<hash>[0-9a-f]{64})\x20{2}(?<path>.+)$/.exec(line);
-      if (match === null) throw new Error("Invalid release checksum record.");
-      return { hash: match.groups.hash, path: match.groups.path };
-    });
+  const records = parseChecksumRecords(checksums);
   if (records.length === 0) throw new Error("Release checksum manifest is empty.");
   for (const record of records) {
     if (!entries.has(record.path)) {
@@ -75,6 +91,18 @@ function verifyChecksumRecords(readBuffer, entries, checksums) {
     const actual = createHash("sha256").update(readBuffer(record.path)).digest("hex");
     if (actual !== record.hash) throw new Error(`Release checksum mismatch: ${record.path}`);
   }
+}
+
+function parseChecksumRecords(checksums) {
+  return checksums
+    .trim()
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => {
+      const match = /^(?<hash>[0-9a-f]{64})\x20{2}(?<path>.+)$/.exec(line);
+      if (match === null) throw new Error("Invalid release checksum record.");
+      return { hash: match.groups.hash, path: match.groups.path };
+    });
 }
 
 function readTarBuffer(artifactPath, path) {

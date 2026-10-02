@@ -5,7 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createReleaseManifest } from "./build-release.mjs";
-import { inspectReleaseArtifact, verifyChecksums } from "./test-release.mjs";
+import { SANDBOX_RUNNER_DIRECTORY_NAME } from "./build-sandbox-runner.mjs";
+import {
+  inspectReleaseArtifact,
+  verifyChecksums,
+  verifyPackagedSandboxRunner,
+} from "./test-release.mjs";
 
 const temporaryDirectories: string[] = [];
 
@@ -51,6 +56,7 @@ describe("release integrity checks", () => {
       ],
       {
         encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
       },
     );
     expect(result.status).toBe(0);
@@ -99,7 +105,7 @@ describe("release integrity checks", () => {
         "checksums.sha256",
         "manifest.sha256",
       ],
-      { encoding: "utf8" },
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     );
     expect(result.status).toBe(0);
 
@@ -113,3 +119,97 @@ describe("release integrity checks", () => {
 function hash(value: Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
+
+describe("packaged sandbox runner integrity", () => {
+  const runnerBytes = Buffer.from("runner-fixture\n");
+  const changedRunnerBytes = Buffer.from("tampered-runner\n");
+  const runnerRelativePath = `${SANDBOX_RUNNER_DIRECTORY_NAME}/caelush-sandbox-runner.exe`;
+  const manifestRelativePath = `${SANDBOX_RUNNER_DIRECTORY_NAME}/manifest.json`;
+
+  it("accepts a packaged Runner whose bytes and checksum records agree", () => {
+    const manifest = sandboxManifest(hash(runnerBytes));
+    const readBuffer = bufferFor(manifest);
+    expect(() =>
+      verifyPackagedSandboxRunner({
+        entries: new Set([runnerRelativePath, manifestRelativePath]),
+        readBuffer,
+        sandboxManifest: manifest,
+        checksums: checksumRecordsFor(manifest, readBuffer),
+      }),
+    ).not.toThrow();
+  });
+
+  it("fails closed when the packaged Runner bytes no longer match the manifest", () => {
+    const manifest = sandboxManifest(hash(Buffer.from("original-runner\n")));
+    const readBuffer = bufferFor(manifest);
+    expect(() =>
+      verifyPackagedSandboxRunner({
+        entries: new Set([runnerRelativePath, manifestRelativePath]),
+        readBuffer,
+        sandboxManifest: manifest,
+        checksums: checksumRecordsFor(manifest, readBuffer),
+      }),
+    ).toThrow(/hash/i);
+  });
+
+  it("fails closed when the release checksums do not cover the Runner or its manifest", () => {
+    const manifest = sandboxManifest(hash(runnerBytes));
+    const readBuffer = bufferFor(manifest);
+    for (const omitted of [runnerRelativePath, manifestRelativePath]) {
+      expect(() =>
+        verifyPackagedSandboxRunner({
+          entries: new Set([runnerRelativePath, manifestRelativePath]),
+          readBuffer,
+          sandboxManifest: manifest,
+          checksums: checksumRecordsFor(manifest, readBuffer, omitted),
+        }),
+      ).toThrow(/checksum/i);
+    }
+  });
+
+  it("fails closed when the manifest names an executable that is not packaged", () => {
+    const manifest = sandboxManifest(hash(runnerBytes));
+    const readBuffer = bufferFor(manifest);
+    expect(() =>
+      verifyPackagedSandboxRunner({
+        entries: new Set([manifestRelativePath]),
+        readBuffer,
+        sandboxManifest: manifest,
+        checksums: checksumRecordsFor(manifest, readBuffer),
+      }),
+    ).toThrow(/not packaged/i);
+  });
+
+  function sandboxManifest(sha256: string) {
+    return {
+      schemaVersion: 1 as const,
+      product: "caelush" as const,
+      controlProtocolVersion: 1 as const,
+      platform: "windows" as const,
+      arch: "x64",
+      executableName: "caelush-sandbox-runner.exe",
+      sha256,
+      providers: ["windows-acl-restricted-token"],
+    };
+  }
+
+  function bufferFor(manifest: ReturnType<typeof sandboxManifest>) {
+    return (path: string) =>
+      path === runnerRelativePath ? runnerBytes : Buffer.from(JSON.stringify(manifest));
+  }
+
+  function checksumRecordsFor(
+    manifest: ReturnType<typeof sandboxManifest>,
+    readBuffer: (path: string) => Buffer,
+    omitted?: string,
+  ): string {
+    return [runnerRelativePath, manifestRelativePath]
+      .filter((path) => path !== omitted)
+      .map((path) => `${hash(readBuffer(path))}  ${path}\n`)
+      .join("");
+  }
+
+  it("keeps the packaged Runner bytes distinct from the tampered fixture", () => {
+    expect(hash(runnerBytes)).not.toBe(hash(changedRunnerBytes));
+  });
+});

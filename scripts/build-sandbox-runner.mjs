@@ -7,6 +7,8 @@ import { fileURLToPath, URL } from "node:url";
 
 export const SANDBOX_RUNNER_MANIFEST_VERSION = 1;
 export const SANDBOX_CONTROL_PROTOCOL_VERSION = 1;
+export const SANDBOX_RUNNER_DIRECTORY_NAME = "sandbox-runner";
+export const SANDBOX_RUNNER_MANIFEST_FILENAME = "manifest.json";
 
 const REPOSITORY_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const PLATFORM_NAMES = new Set(["windows", "linux", "macos"]);
@@ -83,6 +85,20 @@ export async function writeSandboxRunnerManifest(filePath, manifest) {
   await writeFile(filePath, `${JSON.stringify(validated, null, 2)}\n`, "utf8");
 }
 
+/**
+ * Re-reads the packaged Runner and proves it still matches the manifest hash that the
+ * release manifest will advertise. A copy/archive step that corrupts the binary must
+ * fail closed instead of publishing a package that claims restricted sandbox support.
+ */
+export async function verifySandboxRunnerPackage(input) {
+  const manifest = validateSandboxRunnerManifest(input.manifest);
+  const digest = await hashSandboxRunnerFile(input.runnerPath);
+  if (digest !== manifest.sha256) {
+    throw new Error("SANDBOX_RUNNER_HASH_MISMATCH");
+  }
+  return digest;
+}
+
 export async function buildSandboxRunner(options = {}) {
   const repositoryRoot = resolve(options.repositoryRoot ?? REPOSITORY_ROOT);
   const outputDirectory = resolve(
@@ -100,7 +116,9 @@ export async function buildSandboxRunner(options = {}) {
   if (options.runCargo !== false) {
     const result = spawnSync(cargo, ["build", "--release", "--manifest-path", manifestPath], {
       cwd: repositoryRoot,
-      stdio: "pipe",
+      // `cargo build` never reads stdin; do not hand it a stdin pipe so the build also
+      // works on hosts that cannot duplicate an unusual parent stdin handle.
+      stdio: ["ignore", "pipe", "pipe"],
       encoding: "utf8",
     });
     if (result.error !== undefined || result.status !== 0) {
@@ -117,10 +135,13 @@ export async function buildSandboxRunner(options = {}) {
     sha256: await hashSandboxRunnerFile(destination),
     providers: providersForPlatform(platform),
   });
-  await writeSandboxRunnerManifest(join(outputDirectory, "manifest.json"), manifest);
+  await writeSandboxRunnerManifest(
+    join(outputDirectory, SANDBOX_RUNNER_MANIFEST_FILENAME),
+    manifest,
+  );
   return {
     binaryPath: destination,
-    manifestPath: join(outputDirectory, "manifest.json"),
+    manifestPath: join(outputDirectory, SANDBOX_RUNNER_MANIFEST_FILENAME),
     manifest,
   };
 }

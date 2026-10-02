@@ -15,13 +15,31 @@ import { tmpdir } from "node:os";
 import process from "node:process";
 import { join, relative, resolve } from "node:path";
 import { URL, fileURLToPath } from "node:url";
-import { buildSandboxRunner, validateSandboxRunnerManifest } from "./build-sandbox-runner.mjs";
+import {
+  SANDBOX_RUNNER_DIRECTORY_NAME,
+  buildSandboxRunner,
+  validateSandboxRunnerManifest,
+  verifySandboxRunnerPackage,
+} from "./build-sandbox-runner.mjs";
 
 const REPOSITORY_ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const NODE_RANGE = ">=24.0.0 <25.0.0";
 const RETIRED_TOOL_PACKAGE = ["@caelush", "tools"].join("/");
 const RETIRED_TOOL_ARTIFACT_PATH = ["node_modules", "@caelush", "tools"].join("/");
 export const RELEASE_MANIFEST_SCHEMA_VERSION = 1;
+
+/** Upper bound for the packaged Runner transport/functional smoke. */
+export const SANDBOX_RUNNER_RELEASE_SMOKE_TIMEOUT_MS = 20_000;
+
+/**
+ * A Windows release packages the Runner by default so that installation needs no manual
+ * Runner path; every other platform keeps the previous explicit-opt-in behavior.
+ */
+export function resolveSandboxRunnerBuildDecision(options = {}, platform = process.platform) {
+  if (options.buildSandboxRunner === false) return false;
+  if (options.buildSandboxRunner === true) return true;
+  return platformName(platform) === "windows";
+}
 
 export function createReleaseManifest(input) {
   const sandboxRunner = input.sandboxRunner ?? "UNAVAILABLE";
@@ -143,6 +161,8 @@ export async function buildRelease(options = {}) {
   const outputDirectory = resolve(
     options.outputDirectory ?? join(repositoryRoot, "release-artifacts"),
   );
+  const platform = options.platform ?? process.platform;
+  const arch = options.arch ?? process.arch;
   const runCommands = options.runCommands ?? true;
   if (runCommands) {
     await cleanWorkspaceBuildOutputs(repositoryRoot);
@@ -185,10 +205,22 @@ export async function buildRelease(options = {}) {
     await assertPortableArtifact(deployDirectory, workspaceVersions);
     let sandboxRunnerStatus = "UNAVAILABLE";
     let sandboxRunnerManifest;
-    if (options.buildSandboxRunner === true) {
-      const runner = await buildSandboxRunner({
+    if (resolveSandboxRunnerBuildDecision(options, platform)) {
+      const runner = await packageSandboxRunnerForRelease({
         repositoryRoot,
-        outputDirectory: join(deployDirectory, "sandbox-runner"),
+        deployDirectory,
+        platform,
+        arch,
+        ...(options.sandboxRunnerBinaryPath === undefined
+          ? {}
+          : { binaryPath: options.sandboxRunnerBinaryPath }),
+        ...(options.sandboxRunnerCargo === undefined ? {} : { cargo: options.sandboxRunnerCargo }),
+        ...(options.sandboxRunnerRunCargo === undefined
+          ? {}
+          : { runCargo: options.sandboxRunnerRunCargo }),
+        ...(options.verifySandboxRunner === undefined
+          ? {}
+          : { verify: options.verifySandboxRunner }),
       });
       sandboxRunnerStatus = "PACKAGED";
       sandboxRunnerManifest = runner.manifest;
@@ -200,8 +232,8 @@ export async function buildRelease(options = {}) {
     const version = launcherManifest.version;
     const manifest = createReleaseManifest({
       version,
-      platform: platformName(process.platform),
-      arch: process.arch,
+      platform: platformName(platform),
+      arch,
       sandboxRunner: sandboxRunnerStatus,
       ...(sandboxRunnerManifest === undefined ? {} : { sandboxRunnerManifest }),
       ...(options.featureGates === undefined ? {} : { featureGates: options.featureGates }),
@@ -212,7 +244,7 @@ export async function buildRelease(options = {}) {
     );
     await writeChecksums(deployDirectory);
 
-    const artifactName = getPlatformArtifactName(version);
+    const artifactName = getPlatformArtifactName(version, platform, arch);
     const bundleDirectory = join(outputDirectory, artifactName.slice(0, -4));
     await rm(bundleDirectory, { recursive: true, force: true });
     await mkdir(outputDirectory, { recursive: true });
@@ -220,7 +252,10 @@ export async function buildRelease(options = {}) {
     const archivePath = join(outputDirectory, artifactName);
     const archiveResult = spawnSync("tar", ["-czf", archivePath, "-C", bundleDirectory, "."], {
       cwd: repositoryRoot,
-      stdio: "pipe",
+      // `tar` never reads stdin for this invocation, so give it no stdin handle at all.
+      // Handing an archiver a pipe is unnecessary and breaks hosts whose parent stdin
+      // handle cannot be duplicated into a synchronous child.
+      stdio: ["ignore", "pipe", "pipe"],
     });
     if (archiveResult.status !== 0) {
       throw new Error("Unable to create the Caelush release archive with tar.");
@@ -228,6 +263,53 @@ export async function buildRelease(options = {}) {
     return { artifactName, archivePath, bundleDirectory, manifest };
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Places the Runner and its manifest in the fixed release-relative directory, re-verifies
+ * the packaged bytes against the manifest hash, then runs a bounded transport/functional
+ * smoke. Any failure aborts the release instead of publishing a partial package.
+ */
+export async function packageSandboxRunnerForRelease(input) {
+  const platform = input.platform ?? process.platform;
+  const arch = input.arch ?? process.arch;
+  const runner = await buildSandboxRunner({
+    repositoryRoot: input.repositoryRoot,
+    outputDirectory: join(input.deployDirectory, SANDBOX_RUNNER_DIRECTORY_NAME),
+    platform,
+    arch,
+    ...(input.binaryPath === undefined ? {} : { binaryPath: input.binaryPath }),
+    ...(input.cargo === undefined ? {} : { cargo: input.cargo }),
+    ...(input.runCargo === undefined ? {} : { runCargo: input.runCargo }),
+  });
+  await verifySandboxRunnerPackage({ runnerPath: runner.binaryPath, manifest: runner.manifest });
+  await (input.verify ?? defaultVerifyPackagedSandboxRunner)({
+    runnerPath: runner.binaryPath,
+    manifestPath: runner.manifestPath,
+    manifest: runner.manifest,
+    targetPlatform: platformName(platform),
+    hostPlatform: platform,
+    arch,
+  });
+  return runner;
+}
+
+async function defaultVerifyPackagedSandboxRunner(input) {
+  const runtime = await import("@caelush/runtime");
+  const provider = runtime.createWindowsAclRestrictedTokenProvider({
+    runnerPath: input.runnerPath,
+    manifest: input.manifest,
+    platform: input.hostPlatform,
+    arch: input.arch,
+    readyTimeoutMs: SANDBOX_RUNNER_RELEASE_SMOKE_TIMEOUT_MS,
+  });
+  if (provider.probe === undefined) {
+    throw new Error("SANDBOX_RUNNER_FUNCTIONAL_PROBE_FAILED:MISSING_PROBE");
+  }
+  const result = await provider.probe();
+  if (!result.available) {
+    throw new Error(`SANDBOX_RUNNER_FUNCTIONAL_PROBE_FAILED:${result.reasonCode ?? "UNKNOWN"}`);
   }
 }
 
@@ -560,7 +642,7 @@ async function collectEntries(directory) {
   return paths;
 }
 
-async function writeChecksums(directory) {
+export async function writeChecksums(directory) {
   const files = (await collectEntries(directory)).filter(
     (path) => !path.endsWith("checksums.sha256") && !path.endsWith("manifest.sha256"),
   );
