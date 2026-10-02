@@ -37,20 +37,26 @@ if (extraction.status !== 0) {
 const manifest = JSON.parse(await readFile(join(bundleDirectory, "manifest.json"), "utf8"));
 const packagedSandboxRunner = await inspectPackagedSandboxRunner(manifest);
 const binPath = join(bundleDirectory, "bin", "caelush");
-// `runtimeSandboxV1` is an artifact fact: this bundle ships a verified Runner. It is not a claim
-// that the Daemon already serves the restricted presets — that composition is Phase 6, and until it
-// lands the Daemon must report restricted presets unavailable rather than degrading to an
-// unrestricted spawn. This smoke therefore drives its Runs through the explicitly confirmed Full
-// Access capability, and proves the bundled Runner through `doctor`, the packaged manifests, the
-// archive checksum records, and the tamper probe. Set CAELUSH_ARTIFACT_RESTRICTED_RUN=1 to exercise
-// the restricted path once the Daemon composition exists.
-const useRestrictedPermission = process.env.CAELUSH_ARTIFACT_RESTRICTED_RUN === "1";
-if (!useRestrictedPermission && manifest.featureGates.fullAccessV1 !== true) {
-  throw new Error("Release smoke requires either a runtime sandbox or Full Access capability.");
+// The packaged Daemon's own default port, the same one the packaged client already targets. Declared
+// here rather than beside its helper because the main flow runs before the helper section is reached.
+const PACKAGED_DAEMON_URL = "http://127.0.0.1:43120";
+// The Daemon composes the packaged Runner host now, so a fresh workspace is `VIEW_ONLY: AVAILABLE`
+// and `WORKSPACE_WRITE: PREPARATION_REQUIRED` rather than a refused preset. That splits this smoke
+// into two jobs that need different Runs.
+//
+// The general product scenarios below — provider dialects, packaged PTY, streaming, daemon reuse,
+// parallel startup, cancellation and recovery — are about the product, not the sandbox. They run
+// through the explicitly selected Full Access capability, the one preset that never waits for an
+// approval a non-interactive launcher cannot give. The restricted presets are exercised on their own
+// in `assertRestrictedSandbox` below, which is where preparation, the refused write and restart
+// consistency are actually asserted. The bundled Runner is separately proven through `doctor`, the
+// packaged manifests, the archive checksum records and the tamper probe.
+if (manifest.featureGates.fullAccessV1 !== true) {
+  throw new Error("Release smoke requires the Full Access capability for its general scenarios.");
 }
-const permissionArgs = useRestrictedPermission ? [] : ["--permission", "full-access"];
+const fullAccessArgs = ["--permission", "full-access"];
 const runConfiguredLauncher = (args, options) =>
-  runLauncher(binPath, [...args, ...permissionArgs], options);
+  runLauncher(binPath, [...args, ...fullAccessArgs], options);
 const provider = await startFakeProvider();
 const hostFetch = globalThis.fetch.bind(globalThis);
 const secret = "PHASE12E_SECRET_SENTINEL";
@@ -375,30 +381,10 @@ try {
     { cwd: patchWorkspace, env: patchEnvironment },
   );
   const patchResult = JSON.parse(patchRequest.stdout);
-  if (useRestrictedPermission) {
-    assert(patchRequest.exitCode === 5, "protected file mutation did not stop at approval");
-    assert(patchResult.requiresApproval === true, "approval result did not identify the boundary");
-    assert(typeof patchResult.runId === "string", "approval result did not expose a safe run id");
-    const clientModule = pathToFileURL(
-      join(bundleDirectory, "node_modules", "@caelush", "client", "dist", "index.js"),
-    ).href;
-    const packagedClient = await import(clientModule);
-    const patchClient = new packagedClient.CaelushClient({
-      baseUrl: "http://127.0.0.1:43120",
-    });
-    const pendingApproval = await waitForPendingApproval(patchClient, patchResult.runId);
-    await patchClient.resolveApproval(patchResult.runId, pendingApproval.id, {
-      action: "APPROVE",
-      scope: "ONCE",
-    });
-    const patchedRun = await waitForTerminalRun(patchClient, patchResult.runId);
-    assert(patchedRun.status === "COMPLETED", "approved artifact patch did not complete");
-  } else {
-    assert(
-      patchRequest.exitCode === 0 && patchResult.success === true,
-      `Full Access artifact patch failed: ${patchRequest.stderr}`,
-    );
-  }
+  assert(
+    patchRequest.exitCode === 0 && patchResult.success === true,
+    `Full Access artifact patch failed: ${patchRequest.stderr}`,
+  );
   assert(
     (await readFile(join(patchWorkspace, "fixture.txt"), "utf8")) === "after patch\n",
     "artifact patch did not mutate the workspace",
@@ -464,32 +450,27 @@ try {
     await customDaemon.close();
   }
 
-  // Fail-closed proof for this phase boundary. The artifact ships a verified Runner, but the Daemon
-  // restricted-preset composition is not wired yet, so the default restricted preset is reported
-  // unavailable. Silently degrading to an unrestricted spawn here would be a security regression,
-  // so the packaged product must refuse the Run and must never reach the model.
-  const restrictedRefusal = await runLauncher(
-    binPath,
-    ["-p", "Reply exactly SHOULD_NOT_RUN", "--output-format", "json"],
-    {
-      cwd: workspaceDirectory,
-      env: { ...environment, CAELUSH_HOME: join(testRoot, "restricted-home") },
-    },
-  );
-  const refusal = JSON.parse(restrictedRefusal.stdout);
-  assert(
-    refusal.success === false && refusal.errorCode === "BOOTSTRAP_FAILURE",
-    `packaged restricted default did not fail closed: ${restrictedRefusal.stdout}${restrictedRefusal.stderr}`,
-  );
-  assert(
-    typeof refusal.exitReason === "string" &&
-      refusal.exitReason.includes("unavailable on this host"),
-    `packaged restricted default did not report the host limitation: ${restrictedRefusal.stdout}`,
-  );
-  assert(
-    !provider.requests.some((request) => JSON.stringify(request).includes("SHOULD_NOT_RUN")),
-    "packaged restricted default degraded to an unrestricted spawn",
-  );
+  // The restricted presets, end to end through the packaged Daemon: capability query, preparation,
+  // a refused write, a confined write, and a restart that must not lose either the capability facts
+  // or the standing workspace grant.
+  //
+  // Gated on the artifact declaring a packaged Runner, because that is the artifact-level fact the
+  // restricted composition depends on. A packaged-Runner bundle smoked on another platform is a
+  // mismatch worth failing loudly rather than quietly skipping, and a bundle with no Runner has no
+  // restricted composition to prove — so the skip is printed instead of being silent, and on the
+  // Windows host this pairs with the packaged-Runner smoke always runs.
+  if (packagedSandboxRunner !== undefined && process.platform !== "win32") {
+    throw new Error(
+      `the artifact packages a ${packagedSandboxRunner.sandboxManifest.platform}/${packagedSandboxRunner.sandboxManifest.arch} sandbox Runner but the smoke is running on ${process.platform}`,
+    );
+  }
+  if (packagedSandboxRunner === undefined) {
+    process.stdout.write(
+      "artifact-e2e: the release declares no packaged sandbox runner, so the restricted-permission proof does not apply\n",
+    );
+  } else {
+    await assertRestrictedSandbox({ binPath, bundleDirectory, testRoot, environment, provider });
+  }
 
   const database = join(homeDirectory, "caelush.db");
   assert((await stat(database)).isFile(), "packaged daemon did not create the SQLite database");
@@ -934,26 +915,319 @@ async function countArtifactDaemons(bundleDirectory) {
   return processes.split("\n").filter((line) => line.includes(needle)).length;
 }
 
-async function waitForPendingApproval(client, runId) {
-  const deadline = Date.now() + 10_000;
-  while (Date.now() < deadline) {
-    const response = await client.listPendingApprovals(runId);
-    const approval = response.items[0];
-    if (approval !== undefined) return approval;
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
-  }
-  throw new Error("Timed out waiting for packaged approval.");
-}
+/**
+ * The restricted presets, exercised through the extracted artifact alone.
+ *
+ * ```text
+ * Step 1  VIEW_ONLY            a write crosses the boundary -> approval, then the OS still refuses it
+ * Step 2  WORKSPACE_WRITE      prepared first, so the write lands -- inside the workspace and nowhere else
+ * Step 3  restart              capability facts and the standing workspace grant must agree afterwards
+ * ```
+ *
+ * Every fact this proves comes from the packaged Daemon over its own API, so a source-tree dependency
+ * cannot make it pass.
+ *
+ * The Runs go through the API rather than `caelush -p` on purpose. Both restricted presets carry an
+ * `ON_BOUNDARY` approval policy, and the CLI refuses every preset that is not `NEVER_ASK` when it has
+ * no approval channel ("This non-interactive CLI session has no approval channel; choose --permission
+ * full-access explicitly or use a TTY"). A restricted Run therefore cannot be launched through `-p`
+ * at all, and an approval could never be answered if it were. Driving the Daemon directly is also
+ * what makes Step 1 meaningful: the approval is granted deliberately, so the fixture staying
+ * unchanged cannot be explained by the Run merely waiting for a human.
+ *
+ * The workspace starts unprepared on purpose: on a real Windows host `VIEW_ONLY` is `READY` without
+ * any grant while `WORKSPACE_WRITE` reports `PREPARATION_REQUIRED`, and that asymmetry is what makes
+ * Step 2 a preparation test rather than a formality.
+ */
+async function assertRestrictedSandbox({
+  binPath,
+  bundleDirectory,
+  testRoot,
+  environment,
+  provider,
+}) {
+  const home = join(testRoot, "restricted-home");
+  const workspace = join(testRoot, "restricted-workspace");
+  const fixturePath = join(workspace, "fixture.txt");
+  const outsideSentinel = join(testRoot, "restricted-outside.txt");
+  const homeSentinel = join(home, "home-sentinel.txt");
+  const outsideContent = "outside sentinel\n";
+  const homeContent = "home sentinel\n";
+  const model = { provider: "openai-compatible", model: "fixture-model" };
+  await mkdir(home, { recursive: true });
+  await mkdir(workspace, { recursive: true });
+  await writeFile(fixturePath, "before patch\n", "utf8");
+  await writeFile(outsideSentinel, outsideContent, "utf8");
+  await writeFile(homeSentinel, homeContent, "utf8");
+  const env = { ...environment, CAELUSH_HOME: home };
 
-async function waitForTerminalRun(client, runId) {
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    const run = await client.getRun(runId);
-    if (["COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "BUDGET_EXCEEDED"].includes(run.status))
-      return run;
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
-  }
-  throw new Error("Timed out waiting for packaged run settlement.");
+  const { CaelushClient } = await import(
+    pathToFileURL(join(bundleDirectory, "node_modules", "@caelush", "client", "dist", "index.js"))
+      .href
+  );
+
+  /**
+   * Bring the Daemon up from the workspace under test.
+   *
+   * Full Access is used only to *start* the packaged product: it is the one preset the CLI can launch
+   * without an approval channel, and this call is about getting a Daemon listening, not about
+   * exercising the sandbox. The workspace it registers is the one every restricted Run below uses.
+   */
+  const bootDaemon = async (prompt) => {
+    const boot = await runLauncher(
+      binPath,
+      ["-p", prompt, "--output-format", "json", "--permission", "full-access"],
+      { cwd: workspace, env },
+    );
+    assert(
+      boot.exitCode === 0 && JSON.parse(boot.stdout).success === true,
+      `packaged Daemon did not come up: stdout=${boot.stdout}; stderr=${boot.stderr}`,
+    );
+  };
+  await bootDaemon("Reply exactly PACKAGE_OK");
+
+  const client = new CaelushClient({ baseUrl: PACKAGED_DAEMON_URL });
+
+  /**
+   * The registered workspace, via the registry's own canonicalization.
+   *
+   * The registry lower-cases and forward-slashes the path, so comparing raw strings would fail on a
+   * Windows temp path whose drive letter or directory case came back differently.
+   */
+  const registerWorkspace = async () => {
+    const normalize = (value) => resolve(String(value)).replaceAll("\\", "/").toLowerCase();
+    const items = (await client.listWorkspaces()).items;
+    const found = items.find((item) => normalize(item.canonicalPath) === normalize(workspace));
+    assert(
+      found !== undefined,
+      `the packaged Daemon did not register the restricted workspace: ${JSON.stringify(items)}`,
+    );
+    return { id: found.id, path: found.canonicalPath };
+  };
+  const statusesOf = (capabilities) =>
+    Object.fromEntries(capabilities.presets.map((preset) => [preset.id, preset.status]));
+
+  /** Create and start one Run at an explicit preset. */
+  const startRunAt = async (ref, presetId, goal) => {
+    const session = await client.createSession({
+      title: goal,
+      defaultWorkspace: ref,
+      defaultModel: model,
+      metadata: {},
+    });
+    const run = await client.createRun(session.id, {
+      goal,
+      workspace: ref,
+      model,
+      runtime: { id: "local", kind: "local" },
+      preset: { id: presetId, expectedVersion: 1 },
+      limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 120_000 },
+    });
+    await client.startRun(run.id);
+    return run;
+  };
+
+  /**
+   * Settle a Run and fail if it ever asks for an approval.
+   *
+   * Measured, not assumed: neither preset stops for a human here. The Daemon decides the
+   * boundary-crossing write itself, so an approval appearing would be a policy change (or a
+   * regression that turns an automatic refusal into a prompt nobody can answer), and either way the
+   * gate should say so rather than quietly answer it and move on.
+   */
+  const settleWithoutApprovals = async (runId, deadlineMs = 30_000) => {
+    const deadline = Date.now() + deadlineMs;
+    for (;;) {
+      const pending = (await client.listPendingApprovals(runId)).items;
+      assert(
+        pending.length === 0,
+        `a restricted Run asked for ${pending.length} approval(s) instead of deciding the boundary itself: ${JSON.stringify(pending.map((item) => item.id))}`,
+      );
+      const run = await client.getRun(runId);
+      if (["COMPLETED", "FAILED", "CANCELLED", "TIMEOUT", "BUDGET_EXCEEDED"].includes(run.status))
+        return run;
+      if (Date.now() > deadline)
+        throw new Error(`Run ${runId} did not settle; last status ${run.status}`);
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 100));
+    }
+  };
+
+  /**
+   * How many model turns carried a tool result.
+   *
+   * This is what keeps Step 1 from being vacuous. "The fixture did not change" is also true of a Run
+   * whose model never asked for a write at all, so the gate additionally requires that the write
+   * actually reached the tool layer and came back with a result.
+   */
+  const toolTurns = (requests) =>
+    requests.filter((request) =>
+      (request.messages ?? []).some((message) => message?.role === "tool"),
+    ).length;
+
+  // The artifact must serve a restricted Provider from its own bundled Runner. A release that
+  // advertises the gate but composes no provider would report UNAVAILABLE here.
+  const global = await client.getSecurityCapabilities();
+  assert(
+    global.processSandbox?.status === "AVAILABLE",
+    `packaged Daemon did not serve a restricted Provider: ${JSON.stringify(global.processSandbox)}`,
+  );
+  assert(
+    global.processSandbox.enforcement !== "NONE",
+    `packaged Daemon reported no enforcement: ${JSON.stringify(global.processSandbox)}`,
+  );
+  assert(
+    global.workspacePreparationSupported === true,
+    "packaged Daemon did not report a workspace preparation port",
+  );
+
+  const ref = await registerWorkspace();
+  const unprepared = await client.getWorkspaceSecurityCapabilities(ref.id);
+  const unpreparedStatuses = statusesOf(unprepared);
+  assert(
+    unpreparedStatuses.VIEW_ONLY === "AVAILABLE",
+    `an unprepared workspace must still allow VIEW_ONLY: ${JSON.stringify(unpreparedStatuses)}`,
+  );
+  assert(
+    unpreparedStatuses.WORKSPACE_WRITE === "PREPARATION_REQUIRED",
+    `an unprepared workspace must require preparation for WORKSPACE_WRITE: ${JSON.stringify(unpreparedStatuses)}`,
+  );
+  assert(
+    unpreparedStatuses.FULL_ACCESS === "AVAILABLE",
+    `the packaged artifact must offer FULL_ACCESS: ${JSON.stringify(unpreparedStatuses)}`,
+  );
+  assert(
+    unprepared.preparation?.status === "REQUIRED",
+    `an unprepared workspace must report the requirement: ${JSON.stringify(unprepared.preparation)}`,
+  );
+
+  // --- Step 1: a VIEW_ONLY write must not land. --------------------------------------------------
+  //
+  // The Daemon refuses the write itself and the Run still completes, so this does not wait for an
+  // approval: it asserts that none is needed. What makes the unchanged fixture meaningful is the
+  // differential — the *identical* goal writes the *identical* file under WORKSPACE_WRITE in Step 2 —
+  // plus the tool-turn guard below, which excludes a Run whose model never asked for a write.
+  const viewOnlyRequests = provider.requests.length;
+  const viewOnlyFixture = await readFile(fixturePath, "utf8");
+  const viewOnly = await startRunAt(ref, "VIEW_ONLY", "patch fixture");
+  const viewOnlyRun = await settleWithoutApprovals(viewOnly.id);
+  assert(
+    (await readFile(fixturePath, "utf8")) === viewOnlyFixture,
+    `a VIEW_ONLY Run mutated the workspace (run settled ${viewOnlyRun.status})`,
+  );
+  assert(
+    viewOnlyRun.securityPolicy?.preset?.id === "VIEW_ONLY",
+    `the packaged Run carried the wrong preset: ${JSON.stringify(viewOnlyRun.securityPolicy?.preset)}`,
+  );
+  assert(
+    toolTurns(provider.requests.slice(viewOnlyRequests)) >= 1,
+    "the VIEW_ONLY Run never carried a tool result, so the write was never attempted",
+  );
+
+  // --- Step 2: once prepared, a WORKSPACE_WRITE mutation must land -- and stay inside. ----------
+  const prepared = await client.prepareWorkspaceSecurity(ref.id, {
+    id: "WORKSPACE_WRITE",
+    expectedVersion: 1,
+  });
+  assert(
+    prepared.status === "READY",
+    `packaged preparation did not become READY: ${JSON.stringify(prepared)}`,
+  );
+  const ready = await client.getWorkspaceSecurityCapabilities(ref.id);
+  const readyStatuses = statusesOf(ready);
+  assert(
+    readyStatuses.WORKSPACE_WRITE === "AVAILABLE",
+    `a prepared workspace must allow WORKSPACE_WRITE: ${JSON.stringify(readyStatuses)}`,
+  );
+  assert(
+    ready.preparation?.status === "READY",
+    `a prepared workspace must report readiness: ${JSON.stringify(ready.preparation)}`,
+  );
+
+  const workspaceWriteRequests = provider.requests.length;
+  const workspaceWrite = await startRunAt(ref, "WORKSPACE_WRITE", "patch fixture");
+  const workspaceWriteRun = await settleWithoutApprovals(workspaceWrite.id);
+  assert(
+    workspaceWriteRun.status === "COMPLETED",
+    `a prepared WORKSPACE_WRITE Run did not complete: ${JSON.stringify({ status: workspaceWriteRun.status, exitReason: workspaceWriteRun.exitReason })}`,
+  );
+  assert(
+    (await readFile(fixturePath, "utf8")) === "after patch\n",
+    "a prepared WORKSPACE_WRITE Run did not mutate the workspace",
+  );
+  assert(
+    toolTurns(provider.requests.slice(workspaceWriteRequests)) >= 1,
+    "the WORKSPACE_WRITE Run never carried a tool result, so the write was never attempted",
+  );
+  assert(
+    workspaceWriteRun.securityPolicy?.preset?.id === "WORKSPACE_WRITE",
+    `the packaged Run carried the wrong preset: ${JSON.stringify(workspaceWriteRun.securityPolicy?.preset)}`,
+  );
+  // The positive result above is only half the claim. The other half is that the write reached the
+  // workspace and nothing else: the sentinels sit outside it, one in the parent directory and one in
+  // the Daemon home, and neither may move.
+  assert(
+    (await readFile(outsideSentinel, "utf8")) === outsideContent,
+    "the packaged mutation escaped the workspace boundary",
+  );
+  assert(
+    (await readFile(homeSentinel, "utf8")) === homeContent,
+    "the packaged mutation wrote into the Daemon home",
+  );
+
+  // --- Step 3: restart. Capability facts and the standing grant must both survive. --------------
+  const sandboxBefore = await client.getSecurityCapabilities();
+  const capabilitiesBefore = await client.getWorkspaceSecurityCapabilities(ref.id);
+  await stopArtifactDaemons(bundleDirectory);
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
+
+  // Re-seed the fixture so the post-restart Run is a fresh, independent mutation rather than a repeat
+  // of the one that already landed. Its success is what shows the grant is still *usable*, not merely
+  // still reported.
+  await writeFile(fixturePath, "before patch\n", "utf8");
+  await bootDaemon("Reply exactly PACKAGE_OK");
+  const refAfterRestart = await registerWorkspace();
+  assert(
+    refAfterRestart.id === ref.id,
+    `the workspace identity changed across the restart: before=${ref.id}; after=${refAfterRestart.id}`,
+  );
+  const afterRestart = await startRunAt(refAfterRestart, "WORKSPACE_WRITE", "patch fixture");
+  const afterRestartRun = await settleWithoutApprovals(afterRestart.id);
+  assert(
+    afterRestartRun.status === "COMPLETED",
+    `a WORKSPACE_WRITE Run failed after the Daemon restart, so the standing grant was lost: ${JSON.stringify({ status: afterRestartRun.status, exitReason: afterRestartRun.exitReason })}`,
+  );
+  assert(
+    (await readFile(fixturePath, "utf8")) === "after patch\n",
+    "a post-restart WORKSPACE_WRITE Run did not mutate the workspace",
+  );
+
+  const sandboxAfter = await client.getSecurityCapabilities();
+  assert(
+    JSON.stringify(sandboxAfter.processSandbox) === JSON.stringify(sandboxBefore.processSandbox),
+    `the sandbox capability changed across the restart: before=${JSON.stringify(sandboxBefore.processSandbox)}; after=${JSON.stringify(sandboxAfter.processSandbox)}`,
+  );
+  assert(
+    sandboxAfter.defaultPreset === sandboxBefore.defaultPreset,
+    `the default preset changed across the restart: before=${sandboxBefore.defaultPreset}; after=${sandboxAfter.defaultPreset}`,
+  );
+  const capabilitiesAfter = await client.getWorkspaceSecurityCapabilities(refAfterRestart.id);
+  assert(
+    JSON.stringify(statusesOf(capabilitiesAfter)) ===
+      JSON.stringify(statusesOf(capabilitiesBefore)),
+    `workspace preset availability changed across the restart: before=${JSON.stringify(statusesOf(capabilitiesBefore))}; after=${JSON.stringify(statusesOf(capabilitiesAfter))}`,
+  );
+  assert(
+    capabilitiesAfter.preparation?.status === "READY",
+    `the standing workspace grant did not survive the restart: ${JSON.stringify(capabilitiesAfter.preparation)}`,
+  );
+
+  process.stdout.write(
+    `artifact-e2e restricted sandbox: ${JSON.stringify({
+      sandbox: sandboxAfter.processSandbox,
+      unprepared: unpreparedStatuses,
+      prepared: statusesOf(capabilitiesAfter),
+    })}\n`,
+  );
 }
 
 async function stopStaleArtifactDaemons() {

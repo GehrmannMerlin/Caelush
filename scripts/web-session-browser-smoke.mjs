@@ -60,6 +60,40 @@ const fixtureSandboxProvider = {
   probe: async () => ({ available: true, enforcement: "HARD" }),
 };
 
+/**
+ * The workspace preparation port as a real Windows host reports it.
+ *
+ * ```text
+ * VIEW_ONLY        READY          no grant to hand out: the read-only token needs none
+ * WORKSPACE_WRITE  REQUIRED  →    READY once `prepare()` accepted it
+ * ```
+ *
+ * This asymmetry is the whole reason the browser flow is worth asserting. A host that reported every
+ * preset `AVAILABLE` would never render the preparation affordance, so the smoke could not tell a
+ * working `PREPARATION_REQUIRED` path from one that had been silently broken — and neither could a
+ * user, because the composer would just preselect a preset the workspace cannot actually use.
+ *
+ * It mirrors `NativeWorkspaceSandboxController.getStatus` (`VIEW_ONLY` short-circuits to `READY`,
+ * `FULL_ACCESS` is not a restricted preset) without touching a Runner, exactly as the provider above
+ * mirrors a probe. State is per Daemon instance, which is what lets the smoke prepare once and then
+ * run every later scenario on the prepared workspace.
+ */
+function createFixtureWorkspacePreparation() {
+  const prepared = new Set();
+  return {
+    supported: true,
+    async getStatus(_workspaceId, preset) {
+      if (preset.id === "VIEW_ONLY") return "READY";
+      if (preset.id === "FULL_ACCESS") return "UNAVAILABLE";
+      return prepared.has(preset.id) ? "READY" : "REQUIRED";
+    },
+    async prepare(_workspaceId, selection) {
+      prepared.add(selection.id);
+      return { status: "READY" };
+    },
+  };
+}
+
 async function startFakeModelServer() {
   const server = createServer((request, response) => {
     void handleModelRequest(request, response);
@@ -87,6 +121,19 @@ async function startFakeModelServer() {
 }
 
 async function handleModelRequest(request, response) {
+  // The Web composer only offers models the daemon has *discovered*: `/api/v1/ai/models` is a catalog
+  // view, not a view of the static `allowedModels` list. `discoveryPath()` maps a `/v1` endpoint to the
+  // relative `models` path, so a provider must answer `GET /v1/models` or the directory stays empty and
+  // the composer never leaves its disabled state — no prompt can ever be submitted.
+  if (request.method === "GET" && request.url === "/v1/models") {
+    const body = JSON.stringify({
+      object: "list",
+      data: [{ id: FIXTURE_MODEL_ID, object: "model", owned_by: FIXTURE_PROVIDER_ID }],
+    });
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(body);
+    return;
+  }
   if (request.method !== "POST" || request.url !== "/v1/chat/completions") {
     response.writeHead(404).end();
     return;
@@ -128,10 +175,7 @@ async function handleModelRequest(request, response) {
     );
     return;
   }
-  if (
-    (promptText.includes("apply browser patch") || promptText.includes("reject browser patch")) &&
-    !hasToolResult
-  ) {
+  if (promptText.includes("apply browser patch") && !hasToolResult) {
     writeSse(
       response,
       toolCallChunks(
@@ -141,6 +185,28 @@ async function handleModelRequest(request, response) {
             "*** Begin Patch\n*** Update File: fixture.txt\n@@\n-browser fixture\n+patched browser fixture\n*** End Patch",
         },
         "browser-patch-fixture",
+      ),
+    );
+    return;
+  }
+  // The approval scenarios need an action the gate cannot describe. A `..` segment is an escaping
+  // path: `patchPath` refuses it, so `projectApplyPatchSecurityFacts` throws and the admission port
+  // reports `opaqueInput`, which `ON_BOUNDARY` answers with a review request. Approving it still does
+  // not let the write escape — the same parser refuses it again at execution — which is what makes the
+  // boundary assertion below meaningful rather than decorative.
+  if (
+    (promptText.includes("review browser patch") || promptText.includes("reject browser patch")) &&
+    !hasToolResult
+  ) {
+    writeSse(
+      response,
+      toolCallChunks(
+        "apply_patch",
+        {
+          patch:
+            "*** Begin Patch\n*** Update File: ../caelush-web-browser-outside.txt\n@@\n-outside fixture\n+escaped fixture\n*** End Patch",
+        },
+        "browser-outside-patch",
       ),
     );
     return;
@@ -222,9 +288,14 @@ function toolCallChunks(name, input, toolCallId) {
 
 const directory = await mkdtemp(join(tmpdir(), "caelush-web-browser-"));
 const workspace = createWorkspaceRef(directory);
+// The workspace's parent, i.e. just outside the boundary. The escaping-patch scenarios target this
+// file and the smoke asserts it is byte-identical afterwards: an approval is a review, not a way out.
+const outsideFixture = resolve(directory, "..", "caelush-web-browser-outside.txt");
+const outsideFixtureContent = "outside fixture\n";
 const browserArtifacts = join(process.cwd(), "test-results", "web-session-browser-smoke");
 const browserRunner = resolve(process.cwd(), "scripts", "web-session-browser-runner.mjs");
 const fakeProvider = await startFakeModelServer();
+await writeFile(outsideFixture, outsideFixtureContent, "utf8");
 let daemon;
 try {
   // The session/run creation chain is proven reachable *before* a browser is launched: if the provider
@@ -250,6 +321,10 @@ try {
     ],
     defaultModel: { provider: FIXTURE_PROVIDER_ID, model: FIXTURE_MODEL_ID },
     processSandboxProviders: [fixtureSandboxProvider],
+    // Injected explicitly because the packaged Windows host is only built when *both* the providers
+    // and the preparation port are absent. Supplying only the provider would leave the composition
+    // with no preparation authority at all, and a registered workspace would look fully prepared.
+    workspacePreparation: createFixtureWorkspacePreparation(),
     web: { buildRoot: resolve(process.cwd(), "apps", "web", "dist"), workspace },
   });
   await assertModelConfigured(daemon.url);
@@ -262,6 +337,15 @@ try {
     if (fixture !== "patched browser fixture\n") {
       throw new Error("Browser approval flow did not persist the verified patch.");
     }
+    const outside = await readFile(outsideFixture, "utf8");
+    if (outside !== outsideFixtureContent) {
+      throw new Error(
+        `The reviewed patch escaped the workspace: ${JSON.stringify(outside)} instead of ${JSON.stringify(outsideFixtureContent)}.`,
+      );
+    }
+    process.stdout.write(
+      `[browser-smoke] in-workspace patch persisted, reviewed escape blocked: fixture=${JSON.stringify(fixture)} outside=${JSON.stringify(outside)}\n`,
+    );
   }
   if (result !== 0) process.exitCode = result;
 } finally {
@@ -270,13 +354,21 @@ try {
   await daemon?.close().catch(() => undefined);
   await fakeProvider.close();
   await rm(directory, { recursive: true, force: true });
+  await rm(outsideFixture, { force: true });
 }
 
 /**
- * Fail fast when the fixture provider is not actually composed.
+ * Fail fast when the fixture provider is not actually composed, or its models are undiscoverable.
  *
  * `providerOverrides` used to be silently ignored, and the smoke died several steps later inside a
  * browser timeout. Asking the daemon which providers it configured turns that into one clear error.
+ *
+ * The directory check is the same idea one level deeper. A provider can be configured and still
+ * publish no models — discovery is what fills the directory, and a provider whose discovery fails is
+ * omitted from `/api/v1/ai/models` while its failure is reported separately. That used to surface only
+ * as a disabled composer in the browser, because the model picker renders an unknown selection as
+ * `provider/model · 不可用` and the submit button waits for a directory that matches. Naming the
+ * daemon's own answer here is what makes the cause obvious.
  */
 async function assertModelConfigured(url) {
   const response = await fetch(new URL("/api/v1/info", url));
@@ -288,6 +380,44 @@ async function assertModelConfigured(url) {
       `The fixture provider ${FIXTURE_PROVIDER_ID} is not composed; configured: ${JSON.stringify(configured)}.`,
     );
   }
+
+  const providersResponse = await fetch(new URL("/api/v1/ai/providers", url));
+  if (!providersResponse.ok) {
+    throw new Error(`The AI providers route answered HTTP ${providersResponse.status}.`);
+  }
+  const providers = await providersResponse.json();
+  const fixtureProvider = (providers?.providers ?? []).find(
+    (provider) => provider.id === FIXTURE_PROVIDER_ID,
+  );
+  if (fixtureProvider === undefined) {
+    throw new Error(
+      `The fixture provider ${FIXTURE_PROVIDER_ID} is missing from the provider list: ${JSON.stringify(providers)}.`,
+    );
+  }
+  if (fixtureProvider.credentialConfigured !== true) {
+    throw new Error(
+      `The fixture provider ${FIXTURE_PROVIDER_ID} has no usable credential, so its models cannot be discovered: ${JSON.stringify(fixtureProvider)}.`,
+    );
+  }
+
+  const modelsResponse = await fetch(new URL("/api/v1/ai/models", url));
+  if (!modelsResponse.ok) {
+    throw new Error(`The AI model directory route answered HTTP ${modelsResponse.status}.`);
+  }
+  const directory = await modelsResponse.json();
+  const fixtureModel = (directory?.models ?? []).find(
+    (model) => model.provider === FIXTURE_PROVIDER_ID && model.id === FIXTURE_MODEL_ID,
+  );
+  if (fixtureModel === undefined) {
+    throw new Error(
+      `The fixture model ${FIXTURE_PROVIDER_ID}/${FIXTURE_MODEL_ID} is not in the daemon's model directory, so the composer can never enable: ${JSON.stringify(directory)}; provider=${JSON.stringify(fixtureProvider)}.`,
+    );
+  }
+  if (fixtureModel.availability !== "AVAILABLE") {
+    throw new Error(
+      `The fixture model ${FIXTURE_MODEL_ID} is not AVAILABLE: ${JSON.stringify(fixtureModel)}.`,
+    );
+  }
 }
 
 /**
@@ -297,6 +427,10 @@ async function assertModelConfigured(url) {
  * when it is `AVAILABLE` and does not require confirmation — Full Access never qualifies. So this is
  * the precondition for the whole browser flow, and asserting it here names the real cause instead of
  * letting it surface as a browser timeout on the first prompt.
+ *
+ * The expected statuses are the *unprepared* ones on purpose. `WORKSPACE_WRITE` is
+ * `PREPARATION_REQUIRED` until the browser prepares it, which is what the runner then asserts;
+ * expecting `AVAILABLE` here would have hidden the entire preparation path.
  */
 async function assertPermissionsUsable(url) {
   const workspacesResponse = await fetch(new URL("/api/v1/workspaces", url));
@@ -320,7 +454,7 @@ async function assertPermissionsUsable(url) {
   );
   const expected = {
     VIEW_ONLY: "AVAILABLE",
-    WORKSPACE_WRITE: "AVAILABLE",
+    WORKSPACE_WRITE: "PREPARATION_REQUIRED",
     FULL_ACCESS: "AVAILABLE",
   };
   for (const [id, status] of Object.entries(expected)) {
@@ -330,7 +464,14 @@ async function assertPermissionsUsable(url) {
       );
     }
   }
-  console.log(`[browser-smoke] workspace permissions: ${JSON.stringify(statuses)}`);
+  if (capabilities?.preparation?.status !== "REQUIRED") {
+    throw new Error(
+      `The browser smoke needs an unprepared workspace; the daemon reported ${JSON.stringify(capabilities?.preparation)}.`,
+    );
+  }
+  // `console` is not in this file's declared globals and eslint's recommended set flags it as
+  // `no-undef`; the explicit stream keeps the diagnostic without the lint error.
+  process.stdout.write(`[browser-smoke] workspace permissions: ${JSON.stringify(statuses)}\n`);
 }
 
 function runBrowserSmoke(url, artifactDirectory, workspaceRef) {

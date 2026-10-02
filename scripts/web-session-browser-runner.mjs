@@ -13,6 +13,14 @@ const context = await browser.newContext();
 await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
 const page = await context.newPage();
 const waitVisible = (locator, timeout = 15_000) => locator.waitFor({ state: "visible", timeout });
+const waitUntil = async (predicate, description, timeout = 15_000) => {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    if (await predicate()) return;
+    if (Date.now() > deadline) throw new Error("timed out waiting for " + description);
+    await page.waitForTimeout(100);
+  }
+};
 const exactText = (value) => page.getByText(value, { exact: true });
 const startNewSession = async () => {
   const newSessionButton = page.locator("button.workspace-new-session-button").first();
@@ -33,13 +41,49 @@ const startNewSession = async () => {
 const selectSession = async (title) => {
   await page.locator("button.workspace-session-item").filter({ hasText: title }).click();
 };
-const openTimeline = async () => {
-  const timeline = page.locator("details.timeline");
-  if ((await timeline.count()) !== 0 && (await timeline.getAttribute("open")) === null) {
-    await timeline.locator("summary").click();
+/**
+ * Expand the execution-process disclosure and keep it open.
+ *
+ * ```text
+ * details.timeline                     legacy <Timeline>; NOT rendered once a turn presentation exists
+ * details.turn-presentation-process    the disclosure a user actually sees
+ * ```
+ *
+ * `session-workspace.ts` renders exactly one of the two and prefers `TurnPresentationFeed`, so a
+ * selector aimed at `details.timeline` matched nothing and this step silently did *nothing* — the
+ * failure only appeared 15 s later as a missing entry. The presentation disclosure also
+ * auto-collapses on the active→settled transition (`expanded` tracks `isActive`), so an expansion
+ * issued while the Run is still settling is undone a moment later. Retrying until the body stays
+ * visible absorbs both: a disclosure that is genuinely broken still throws here.
+ */
+const openProcessDisclosure = async () => {
+  const disclosure = page.locator("details.turn-presentation-process").first();
+  await waitVisible(disclosure);
+  const body = disclosure.locator(".turn-presentation-body");
+  const deadline = Date.now() + 15_000;
+  for (;;) {
+    if (await body.isVisible()) return;
+    if (Date.now() > deadline)
+      throw new Error("the execution-process disclosure never stayed open");
+    await disclosure.locator("summary").click();
+    await page.waitForTimeout(150);
   }
 };
-const assertViewportSplitLayout = async () => {
+/**
+ * The split layout, in the state it is actually in.
+ *
+ * ```text
+ * empty landing (no session content)   workspace-column--static  overflow-y hidden, no rail
+ * a session with turns or a live Run   workspace-column         overflow-y auto,   stable rail
+ * ```
+ *
+ * `f13566a` introduced the two-state column and did not update this check, so it kept demanding
+ * `overflow-y: auto` from a landing page that is deliberately fixed. Asserting whichever state the
+ * page is in would be circular, so the caller states which one it expects and both halves are
+ * checked: the modifier and the computed style must agree with it.
+ */
+const assertViewportSplitLayout = async (options = {}) => {
+  const scrollable = options.scrollable ?? false;
   const layout = await page.evaluate(() => {
     const sidebar = document.querySelector(".workspace-sidebar");
     const sessionScroll = document.querySelector(".session-scroll");
@@ -66,7 +110,9 @@ const assertViewportSplitLayout = async () => {
       sidebarOverflowY: sidebarStyle.overflowY,
       sidebarBackgroundImage: sidebarStyle.backgroundImage,
       sessionOverflowY: sessionScrollStyle.overflowY,
+      columnClass: workspaceColumn.className,
       columnOverflowY: columnStyle.overflowY,
+      columnScrollbarGutter: columnStyle.scrollbarGutter,
       addWorkspaceButtonWidth: addWorkspaceButton.getBoundingClientRect().width,
       workspaceCardWidth: workspaceCard.getBoundingClientRect().width,
       addWorkspaceButtonTextAlign: addWorkspaceButtonStyle.textAlign,
@@ -75,15 +121,19 @@ const assertViewportSplitLayout = async () => {
   });
   if (layout.topbarCount !== 0) throw new Error("desktop top navigation still exists");
   if (!layout.brandInSidebar) throw new Error("Agent brand is not inside the sidebar");
-  if (layout.bodyOverflow !== "hidden") throw new Error("body scroll is not locked");
+  if (layout.bodyOverflow !== "hidden")
+    throw new Error("body scroll is not locked, observed " + layout.bodyOverflow);
   if (!layout.documentFitsViewport || !layout.bodyFitsViewport)
     throw new Error("page-level vertical scroll leaked outside the panels");
-  if (layout.sidebarPosition !== "fixed") throw new Error("sidebar is not fixed");
-  if (layout.sidebarOverflowY !== "auto") throw new Error("sidebar does not own vertical scroll");
+  if (layout.sidebarPosition !== "fixed")
+    throw new Error("sidebar is not fixed, observed " + layout.sidebarPosition);
+  if (layout.sidebarOverflowY !== "auto")
+    throw new Error("sidebar does not own vertical scroll, observed " + layout.sidebarOverflowY);
   if (layout.sessionOverflowY !== "visible")
-    throw new Error("session scroll region should defer vertical scroll to the workspace rail");
-  if (layout.columnOverflowY !== "auto")
-    throw new Error("workspace column does not own the primary vertical scroll");
+    throw new Error(
+      "session scroll region should defer vertical scroll to the workspace rail, observed " +
+        layout.sessionOverflowY,
+    );
   if (layout.sidebarBackgroundImage !== "none") throw new Error("sidebar uses a gradient");
   if (Math.abs(layout.addWorkspaceButtonWidth - layout.workspaceCardWidth) > 1)
     throw new Error(
@@ -93,6 +143,23 @@ const assertViewportSplitLayout = async () => {
     throw new Error("add workspace button text is not centered");
   if (layout.addWorkspaceButtonColor !== "rgb(17, 24, 39)")
     throw new Error("sidebar action text is not high contrast");
+
+  const observed = `${layout.columnClass} overflow-y=${layout.columnOverflowY} gutter=${layout.columnScrollbarGutter}`;
+  if (scrollable) {
+    if (layout.columnClass.includes("workspace-column--static"))
+      throw new Error("a session with content kept the static column modifier: " + observed);
+    if (layout.columnOverflowY !== "auto")
+      throw new Error("workspace column does not own the primary vertical scroll: " + observed);
+    if (layout.columnScrollbarGutter !== "stable")
+      throw new Error("workspace column does not reserve the right-edge rail: " + observed);
+  } else {
+    if (!layout.columnClass.includes("workspace-column--static"))
+      throw new Error("the empty landing state dropped the static column modifier: " + observed);
+    if (layout.columnOverflowY !== "hidden")
+      throw new Error("the empty landing state still scrolls its column: " + observed);
+    if (layout.columnScrollbarGutter !== "auto")
+      throw new Error("the empty landing state still reserves a rail: " + observed);
+  }
 };
 const postJson = async (path, payload) => {
   const response = await fetch(new URL(path, url), {
@@ -104,20 +171,212 @@ const postJson = async (path, payload) => {
     throw new Error("HTTP " + response.status + " from " + path + ": " + (await response.text()));
   return response.json();
 };
+const getJson = async (path) => {
+  const response = await fetch(new URL(path, url));
+  if (!response.ok)
+    throw new Error("HTTP " + response.status + " from " + path + ": " + (await response.text()));
+  return response.json();
+};
+
+/**
+ * The three permission choices, asserted as the browser actually renders them.
+ *
+ * ```text
+ * unprepared workspace   VIEW_ONLY selected      WORKSPACE_WRITE offers 准备工作区内修改
+ * after preparation      WORKSPACE_WRITE selected, the affordance is gone
+ * FULL_ACCESS            never applied until 确认使用完全权限 is pressed
+ * ```
+ *
+ * The labels are asserted in Chinese because that is what a user reads, and the values because the
+ * value is what reaches the Daemon: a label that matches while the value does not would still submit
+ * the wrong preset. The preparation step is asserted through its affordance rather than a status
+ * caption — the caption helpers exist in the application layer but no component renders one, so a
+ * caption assertion would pass against a UI that never shows it.
+ */
+const assertPermissionSelector = async () => {
+  await waitVisible(page.locator(".permission-selector"));
+  const select = page.locator("select.permission-selector-select");
+  await waitVisible(select);
+  // The selector renders before the capability read settles, and an empty preset list would fail the
+  // three-choices assertion below for a reason that has nothing to do with the choices.
+  await waitUntil(
+    async () => (await select.locator("option").count()) === 3,
+    "the three permission choices to load",
+  );
+  if ((await select.getAttribute("aria-label")) !== "选择权限")
+    throw new Error("the permission selector is not labelled 选择权限");
+
+  const options = await select
+    .locator("option")
+    .evaluateAll((elements) =>
+      elements.map((element) => ({ value: element.value, label: element.textContent ?? "" })),
+    );
+  const expectedOptions = [
+    { value: "VIEW_ONLY", label: "仅可查看" },
+    { value: "WORKSPACE_WRITE", label: "工作区内修改" },
+    { value: "FULL_ACCESS", label: "完全权限" },
+  ];
+  if (JSON.stringify(options) !== JSON.stringify(expectedOptions))
+    throw new Error("the permission choices changed: " + JSON.stringify(options));
+
+  const selected = await select.inputValue();
+  if (selected !== "VIEW_ONLY")
+    throw new Error("an unprepared workspace selected " + selected + " instead of 仅可查看");
+
+  // `PREPARATION_REQUIRED` has exactly one affordance, and it names the preset it prepares.
+  const prepare = page.locator("button.permission-selector-prepare");
+  await waitVisible(prepare);
+  const prepareLabel = (await prepare.innerText()).trim();
+  if (prepareLabel !== "准备工作区内修改")
+    throw new Error("the preparation affordance is mislabelled: " + prepareLabel);
+  await prepare.click();
+  await page
+    .locator("button.permission-selector-prepare")
+    .waitFor({ state: "detached", timeout: 15_000 });
+  const afterPrepare = await select.inputValue();
+  if (afterPrepare !== "WORKSPACE_WRITE")
+    throw new Error("preparing 工作区内修改 selected " + afterPrepare + " instead of it");
+
+  // Full Access is the only preset gated behind an explicit confirmation, so the gate itself is the
+  // assertion: the value must not move until the confirming button is pressed.
+  await select.selectOption("FULL_ACCESS");
+  const dialog = page.locator(".permission-selector-confirmation");
+  await waitVisible(dialog);
+  const heading = (await dialog.locator("h2").innerText()).trim();
+  if (heading !== "确认完全权限")
+    throw new Error("the Full Access confirmation heading changed: " + heading);
+  const copy = (await dialog.locator("p").allInnerTexts()).map((line) => line.trim());
+  const expectedCopy = [
+    "完全权限会让 Agent 使用主机用户范围执行文件、进程和网络操作。",
+    "硬安全规则仍然有效；权限不足的动作会被拒绝，不会自动批准。",
+    "不透明的第三方二进制仍可能隐藏文件读取或网络外传。",
+  ];
+  if (JSON.stringify(copy) !== JSON.stringify(expectedCopy))
+    throw new Error("the Full Access confirmation copy changed: " + JSON.stringify(copy));
+  const unconfirmed = await select.inputValue();
+  if (unconfirmed !== "WORKSPACE_WRITE")
+    throw new Error("选择完全权限 was applied as " + unconfirmed + " before it was confirmed");
+  await dialog.locator("button", { hasText: "确认使用完全权限" }).click();
+  await page
+    .locator(".permission-selector-confirmation")
+    .waitFor({ state: "detached", timeout: 15_000 });
+  const confirmed = await select.inputValue();
+  if (confirmed !== "FULL_ACCESS")
+    throw new Error("confirming 完全权限 selected " + confirmed + " instead of it");
+
+  // Leave the composer on 工作区内修改 so every scenario below runs against the workspace boundary.
+  await select.selectOption("WORKSPACE_WRITE");
+  const restored = await select.inputValue();
+  if (restored !== "WORKSPACE_WRITE")
+    throw new Error("could not restore 工作区内修改 after the Full Access check: " + restored);
+};
+
+/**
+ * Type a prompt and submit it, waiting for the composer to accept one.
+ *
+ * The submit button stays disabled until the model directory has resolved to a selection the Daemon
+ * advertises, so clicking straight after a reload is a race. When it never settles, the diagnostic
+ * names what the composer was actually waiting on rather than leaving a bare "element is not enabled".
+ */
+const submitPrompt = async (text) => {
+  await page.locator("textarea.prompt-input").fill(text);
+  const submit = page.locator("button.prompt-submit-button");
+  const deadline = Date.now() + 15_000;
+  let enabled = await submit.isEnabled();
+  while (!enabled && Date.now() < deadline) {
+    await page.waitForTimeout(100);
+    enabled = await submit.isEnabled();
+  }
+  if (!enabled) {
+    const model = (
+      await page
+        .locator(".model-picker-trigger")
+        .first()
+        .innerText()
+        .catch(() => "(no model picker)")
+    ).trim();
+    const emptyMenu = await page.locator(".model-picker-empty").count();
+    const preset = await page
+      .locator("select.permission-selector-select")
+      .inputValue()
+      .catch(() => "(no selector)");
+    const error = (
+      await page
+        .locator(".web-error")
+        .first()
+        .innerText()
+        .catch(() => "(no error)")
+    ).trim();
+    throw new Error(
+      "the composer never accepted " +
+        JSON.stringify(text) +
+        "; model=" +
+        JSON.stringify(model) +
+        " emptyModelMenu=" +
+        emptyMenu +
+        " preset=" +
+        preset +
+        " error=" +
+        JSON.stringify(error),
+    );
+  }
+  await submit.click();
+};
+
+/**
+ * The preset the composer actually submitted, read back from the Run it created.
+ *
+ * The selector proves what the browser displayed and held; only the persisted Run proves what crossed
+ * the wire. Sessions are matched on their title the same way the sidebar matches them, because the
+ * title is derived from the prompt rather than set to an exact value.
+ */
+const assertSubmittedPreset = async (promptText, expectedId) => {
+  const sessions = await getJson("/api/v1/sessions");
+  const session = (sessions.items ?? []).find((item) =>
+    String(item.title ?? "").includes(promptText),
+  );
+  if (session === undefined)
+    throw new Error("the browser session for " + promptText + " was not persisted");
+  const runs = await getJson("/api/v1/sessions/" + session.id + "/runs");
+  const run = (runs.items ?? [])[0];
+  if (run === undefined)
+    throw new Error("the browser session for " + promptText + " created no Run");
+  const actual = run.securityPolicy?.preset?.id;
+  if (actual !== expectedId)
+    throw new Error(
+      "the composer submitted " + promptText + " under " + actual + " instead of " + expectedId,
+    );
+};
 
 try {
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await waitVisible(page.locator(".workspace-sidebar"));
   await waitVisible(page.locator(".session-scroll"));
-  await assertViewportSplitLayout();
+  // Nothing is selected yet, so this is the empty landing state: the column is deliberately fixed.
+  await assertViewportSplitLayout({ scrollable: false });
   await startNewSession();
-  const composer = page.locator("textarea.prompt-input");
-  await composer.fill("read browser fixture");
-  await page.locator("button.prompt-submit-button").click();
+  await assertPermissionSelector();
+  await submitPrompt("read browser fixture");
   await waitVisible(exactText("Verified browser result."));
-  await openTimeline();
-  await waitVisible(page.locator(".timeline-entry-title").filter({ hasText: "读取文件" }));
-  await waitVisible(page.locator(".timeline-entry-path").filter({ hasText: "fixture.txt" }));
+  await assertSubmittedPreset("read browser fixture", "WORKSPACE_WRITE");
+  // The disclosure auto-collapses the instant the Run settles, so the settled report is the signal
+  // that the collapse has already happened and the expansion below will stick.
+  await waitVisible(
+    page.locator(".turn-presentation-final-title").filter({ hasText: "任务已完成" }),
+  );
+  await openProcessDisclosure();
+  // The presentation feed replaces the legacy timeline: a finished Tool is an item, and the path it
+  // touched belongs to that item's own summary text rather than to its own element.
+  await waitVisible(
+    page
+      .locator(".turn-presentation-item--tool .turn-presentation-item-label")
+      .filter({ hasText: "读取文件" }),
+  );
+  await waitVisible(
+    page
+      .locator(".turn-presentation-item--tool .turn-presentation-item-text")
+      .filter({ hasText: "fixture.txt" }),
+  );
   if ((await page.locator(".session-list-meta").count()) !== 0)
     throw new Error("status subtitle leaked");
   if ((await page.locator(".session-status-icon").count()) < 1)
@@ -128,18 +387,31 @@ try {
   await page.reload({ waitUntil: "domcontentloaded" });
   await selectSession("read browser fixture");
   await waitVisible(exactText("Verified browser result."));
+
+  // In-workspace work does not cross the boundary, so 工作区内修改 must not interrupt it with a review.
+  // This is the negative half of the approval contract and the reason the scenarios below need an
+  // action the gate genuinely cannot describe.
   await startNewSession();
-  await composer.fill("apply browser patch");
-  await page.locator("button.prompt-submit-button").click();
-  await waitVisible(exactText("需要审批"));
-  await page.reload({ waitUntil: "domcontentloaded" });
-  await selectSession("apply browser patch");
-  await waitVisible(page.locator(".approval-card"));
-  await page.locator("button.approval-action--approve_once").click();
+  await submitPrompt("apply browser patch");
   await waitVisible(exactText("Verified browser result.").last());
-  await openTimeline();
-  await waitVisible(page.locator(".timeline-entry-title").filter({ hasText: "修改文件" }).last());
-  await waitVisible(exactText("Verification passed.").last());
+  if ((await page.locator(".approval-card").count()) !== 0) {
+    throw new Error("an in-workspace patch under 工作区内修改 was gated behind an approval");
+  }
+  await waitVisible(
+    page.locator(".turn-presentation-final-title").filter({ hasText: "任务已完成" }),
+  );
+  await openProcessDisclosure();
+  // `apply_patch` is labelled 编辑文件 by the Tool presentation the Daemon projects (the legacy web
+  // timeline had its own 修改文件 label, which is what this assertion used to look for).
+  await waitVisible(
+    page
+      .locator(".turn-presentation-item--tool .turn-presentation-item-label")
+      .filter({ hasText: "编辑文件" })
+      .last(),
+  );
+  // The review a completed Run goes through is a verification item, not the legacy timeline's
+  // free-text "Verification passed." row.
+  await waitVisible(page.locator(".turn-presentation-item--verification").last());
   await waitVisible(
     page
       .locator("button.workspace-session-item")
@@ -147,10 +419,40 @@ try {
       .locator('.session-status-icon[aria-label="已完成"]'),
   );
 
+  // An escaping patch cannot be described by the facts projector, so `ON_BOUNDARY` answers it with a
+  // review request — and the card has to survive a reload, because it is the durable Run's state and
+  // not page state. Approving it resumes the Run, and the workspace boundary still refuses the write.
   await startNewSession();
-  await composer.fill("reject browser patch");
-  await page.locator("button.prompt-submit-button").click();
+  await submitPrompt("review browser patch");
   await waitVisible(exactText("需要审批"));
+  await waitVisible(page.locator(".approval-card"));
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await selectSession("review browser patch");
+  await waitVisible(page.locator(".approval-card"));
+  await page.locator("button.approval-action--approve_once").click();
+  await page.locator(".approval-card").waitFor({ state: "detached", timeout: 15_000 });
+  await waitVisible(exactText("Verified browser result.").last());
+  await waitVisible(
+    page.locator(".turn-presentation-final-title").filter({ hasText: "任务已完成" }),
+  );
+  await openProcessDisclosure();
+  await waitVisible(
+    page
+      .locator(".turn-presentation-item--tool.turn-presentation-item--failed")
+      .filter({ hasText: "编辑文件" })
+      .last(),
+  );
+  await waitVisible(
+    page
+      .locator("button.workspace-session-item")
+      .filter({ hasText: "review browser patch" })
+      .locator('.session-status-icon[aria-label="已完成"]'),
+  );
+
+  await startNewSession();
+  await submitPrompt("reject browser patch");
+  await waitVisible(exactText("需要审批"));
+  await waitVisible(page.locator(".approval-card"));
   await page.locator("button.approval-action--reject").click();
   await exactText("需要审批").waitFor({ state: "hidden", timeout: 15_000 });
   await waitVisible(exactText("Verified browser result.").last());
@@ -162,8 +464,7 @@ try {
   );
 
   await startNewSession();
-  await composer.fill("cancel browser task");
-  await page.locator("button.prompt-submit-button").click();
+  await submitPrompt("cancel browser task");
   await waitVisible(page.locator("button.cancel-button"));
   await page.locator("button.cancel-button").click();
   await waitVisible(page.locator('.session-status-icon[aria-label="已取消"]').last());
@@ -179,15 +480,23 @@ try {
     workspace,
     model: { provider: "browser-fixture", model: "browser-fixture-model" },
     runtime: { id: "local", kind: "local" },
-    permissionProfile: "PROJECT_ACCESS",
-    approvalPolicy: "DANGEROUS_ONLY",
+    // The Run contract is preset-based. `permissionProfile` and `approvalPolicy` are not accepted by
+    // `CreateRunRequestSchema` (it is strict and requires `preset`), so sending them answered HTTP 400
+    // and the whole reconnect scenario never started.
+    preset: { id: "WORKSPACE_WRITE", expectedVersion: 1 },
     limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 120_000 },
   });
   await postJson("/api/v1/runs/" + reconnectRun.id + "/start", {});
   await page.reload({ waitUntil: "domcontentloaded" });
   await selectSession("reconnect browser task");
   await waitVisible(page.locator("button.cancel-button"));
-  await waitVisible(page.locator(".timeline-entry-title").filter({ hasText: "Model" }));
+  // A live Run keeps its process disclosure expanded and reports the active state. That is the
+  // presentation feed's equivalent of the legacy timeline's per-entry "Model" row, which no longer
+  // exists now that the feed owns the execution view.
+  await waitVisible(
+    page.locator(".turn-presentation-summary-status").filter({ hasText: /正在执行|进行中/ }),
+  );
+  await waitVisible(page.locator(".turn-presentation-body"));
   await page.locator("button.cancel-button").click();
   await waitVisible(page.locator('.session-status-icon[aria-label="已取消"]').last());
 
@@ -202,8 +511,7 @@ try {
     workspace,
     model: { provider: "browser-fixture", model: "browser-fixture-model" },
     runtime: { id: "local", kind: "local" },
-    permissionProfile: "PROJECT_ACCESS",
-    approvalPolicy: "DANGEROUS_ONLY",
+    preset: { id: "WORKSPACE_WRITE", expectedVersion: 1 },
     limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 120_000 },
   });
   await page.reload({ waitUntil: "domcontentloaded" });
@@ -219,7 +527,8 @@ try {
   );
 
   await page.setViewportSize({ width: 375, height: 812 });
-  await assertViewportSplitLayout();
+  // Every scenario above left turns behind, so the column must own the rail again.
+  await assertViewportSplitLayout({ scrollable: true });
   await page.locator(".sidebar-toggle-button").click();
   if ((await page.locator(".sidebar-toggle-button").getAttribute("aria-expanded")) !== "true")
     throw new Error("sidebar did not open");
@@ -262,6 +571,15 @@ try {
   await mkdir(artifactDirectory, { recursive: true });
   await page.screenshot({ path: artifactDirectory + "/failure.png", fullPage: true });
   await context.tracing.stop({ path: artifactDirectory + "/failure.zip" });
+  // The execution view is the fastest way to see what the page actually rendered: the selectors above
+  // describe a markup that only exists once a turn presentation has loaded, and a missing item is far
+  // easier to diagnose from its text than from a bare "element not visible".
+  const feed = await page
+    .locator(".turn-presentation-feed")
+    .first()
+    .innerText()
+    .catch(() => "(no turn presentation feed)");
+  process.stdout.write("[browser-runner] execution view at failure:\n" + feed + "\n");
   throw error;
 }
 await context.tracing.stop();
