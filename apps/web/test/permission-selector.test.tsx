@@ -68,8 +68,10 @@ describe("PermissionSelector", () => {
     );
 
     expect(html).toContain('<option value="" selected="">请选择权限</option>');
-    expect(html).toContain('<option value="VIEW_ONLY" disabled="">仅可查看</option>');
-    expect(html).toContain('<option value="WORKSPACE_WRITE" disabled="">工作区内修改</option>');
+    expect(html).toContain('<option value="VIEW_ONLY" disabled="">仅可查看（不可用）</option>');
+    expect(html).toContain(
+      '<option value="WORKSPACE_WRITE" disabled="">工作区内修改（待准备）</option>',
+    );
     expect(html).not.toContain('<option value="FULL_ACCESS" selected="">');
   });
 
@@ -98,6 +100,48 @@ describe("PermissionSelector", () => {
     expect(confirmationHtml).toContain("确认使用完全权限");
   });
 
+  it("explains why restricted presets are unavailable instead of silently disabling them", () => {
+    const html = renderToStaticMarkup(
+      <PermissionSelector
+        presets={[
+          { ...presets[0]!, status: "UNAVAILABLE", reasonCode: "RUNNER_ARTIFACT_MISSING" },
+          { ...presets[1]!, status: "UNAVAILABLE", reasonCode: "RUNNER_ARTIFACT_MISSING" },
+          presets[2]!,
+        ]}
+        selected={{ id: "FULL_ACCESS", expectedVersion: 1 }}
+        disabled={false}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain('<option value="VIEW_ONLY" disabled="">仅可查看（不可用）</option>');
+    expect(html).toContain(
+      '<option value="WORKSPACE_WRITE" disabled="">工作区内修改（不可用）</option>',
+    );
+    expect(html).toContain("仅可查看不可用：未加载 Windows 安全组件");
+    expect(html).toContain("工作区内修改不可用：未加载 Windows 安全组件");
+    expect(html).toContain("未加载 Windows 安全组件");
+  });
+
+  it("keeps each unavailable permission paired with its own reason", () => {
+    const html = renderToStaticMarkup(
+      <PermissionSelector
+        presets={[
+          { ...presets[0]!, status: "UNAVAILABLE", reasonCode: "RUNNER_FUNCTIONAL_PROBE_FAILED" },
+          { ...presets[1]!, status: "UNAVAILABLE", reasonCode: "PERMISSION_PRESETS_DISABLED" },
+          { ...presets[2]!, status: "UNAVAILABLE", reasonCode: "FULL_ACCESS_DISABLED" },
+        ]}
+        selected={undefined}
+        disabled={false}
+        onSelect={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("仅可查看不可用：Windows 安全组件自检失败");
+    expect(html).toContain("工作区内修改不可用：权限预设功能已关闭");
+    expect(html).toContain("完全权限不可用：完全权限已关闭");
+  });
+
   it("shows an explicit Full Access confirmation action", () => {
     const html = renderToStaticMarkup(
       <PermissionSelector
@@ -112,5 +156,28 @@ describe("PermissionSelector", () => {
     expect(html).toContain("完全权限会让 Agent 使用主机用户范围");
     expect(html).toContain("确认使用完全权限");
     expect(html).toContain("取消");
+  });
+
+  it("shows the effective permission separately and marks workspace preparation as pending", () => {
+    const html = renderToStaticMarkup(
+      <PermissionSelector
+        presets={[presets[0]!, { ...presets[1]!, status: "PREPARATION_REQUIRED" }, presets[2]!]}
+        selected={{ id: "WORKSPACE_WRITE", expectedVersion: 1 }}
+        active={{ id: "VIEW_ONLY", expectedVersion: 1 }}
+        preparing={{ id: "WORKSPACE_WRITE", expectedVersion: 1 }}
+        disabled={false}
+        onSelect={vi.fn()}
+        onPrepare={vi.fn()}
+      />,
+    );
+
+    expect(html).toContain("当前实际用于新任务：仅可查看");
+    expect(html).toContain("请求的工作区内修改尚未生效");
+    expect(html).toContain(
+      '<option value="WORKSPACE_WRITE" disabled="" selected="">工作区内修改（待准备）</option>',
+    );
+    expect(html).toContain(
+      '<button type="button" class="permission-selector-prepare" disabled="">准备中…</button>',
+    );
   });
 });

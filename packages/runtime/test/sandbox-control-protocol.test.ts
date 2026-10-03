@@ -57,6 +57,42 @@ describe("sandbox control protocol", () => {
     });
   });
 
+  it("rejects an ERROR frame whose nonce does not match the request", () => {
+    const hello = createSandboxHello({
+      nonce: "nonce-workspace-error-1",
+      providerId: "fake-restricted",
+      boundaryFingerprint: "workspace-error-boundary-1",
+    });
+    const error = decodeSandboxControlMessage(
+      JSON.stringify({
+        type: "ERROR",
+        protocolVersion: SANDBOX_CONTROL_PROTOCOL_VERSION,
+        nonce: "nonce-workspace-error-2",
+        code: "WINDOWS_ACL_APPLY_FAILED",
+      }),
+    );
+
+    expect(() => acceptSandboxWorkspacePrepared(error, hello)).toThrow(/nonce/i);
+  });
+
+  it("preserves the bounded Runner reason when workspace preparation fails", () => {
+    const hello = createSandboxHello({
+      nonce: "nonce-workspace-error-3",
+      providerId: "fake-restricted",
+      boundaryFingerprint: "workspace-error-boundary-2",
+    });
+    const error = decodeSandboxControlMessage(
+      JSON.stringify({
+        type: "ERROR",
+        protocolVersion: SANDBOX_CONTROL_PROTOCOL_VERSION,
+        nonce: hello.nonce,
+        code: "WINDOWS_ACL_APPLY_FAILED",
+      }),
+    );
+
+    expect(() => acceptSandboxWorkspacePrepared(error, hello)).toThrow(/WINDOWS_ACL_APPLY_FAILED/);
+  });
+
   it("accepts workspace status and preparation results with the same boundary tuple", () => {
     const hello = createSandboxHello({
       nonce: "nonce-workspace-control-1",

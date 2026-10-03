@@ -7,22 +7,11 @@ import type {
 } from "@caelush/coding-agent";
 import type { ClientModelSelection } from "@caelush/protocol";
 import { openCaelushStorage, toHostToolEffectsPort } from "@caelush/storage";
-import {
-  createLocalRuntimeResolver,
-  LocalRuntime,
-  type ProcessSandboxProvider,
-} from "@caelush/runtime";
+import { LocalRuntime, type ProcessSandboxProvider } from "@caelush/runtime";
 import {
   applyToolEffectsToAgentState,
   createCodingToolSettlementExtensionDecoder,
-  createDefaultCodingTools,
-  createRuntimeGitOperations,
-  createRuntimePatchOperations,
-  createRuntimeProcessOperations,
-  createRuntimeReadOnlyOperations,
   effectsChangeAgentState,
-  withoutGitTools,
-  type DefaultCodingToolOperations,
   type GitToolAvailability,
 } from "@caelush/coding-agent";
 import { buildDaemonApp } from "./app.js";
@@ -136,31 +125,20 @@ function resolveConfig(options: DaemonOptions): DaemonConfig {
 export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle> {
   const config = resolveConfig(options);
   /**
-   * The default Coding Tool set, built before the composition root composes anything.
+   * The one Runtime instance this daemon generation owns.
    *
    * ```text
-   * RuntimeResolver
-   *   → the Runtime Operations adapters
-   *   → createDefaultCodingTools(...)   @caelush/coding-agent
+   * Windows sandbox host + Provider probes
+   *   → composeDaemon(...)
+   *       → Runtime Operations authorization resolver
+   *       → the default Coding Tool definitions
    * ```
    *
-   * Phase 4E made the Coding product layer the production source for the ten defaults. The legacy
-   * `createDefaultBuiltinToolRegistrations` — which this function used to call — is no longer part of
-   * the production path: it survives as a compatibility facade over the same Coding factories until
-   * Phase 4F, and the composition root registers these definitions directly.
-   *
-   * The set is built here, once per daemon start, and the same value reaches `composeDaemon`, so the
-   * registry, the Coding catalog and the model catalog are three views of one derivation.
+   * Tool construction must wait until `composeDaemon` owns the provider probe authority. Building the
+   * definitions here would freeze process adapters without the restricted authorization resolver and
+   * make capability reporting disagree with actual Tool execution.
    */
   const runtime = new LocalRuntime();
-  const runtimeResolver = createLocalRuntimeResolver(runtime);
-  const defaultToolRegistrations = createDefaultCodingTools(
-    daemonCodingOperations(runtimeResolver),
-  );
-  const exposedToolRegistrations =
-    options.toolExposure === undefined || options.toolExposure === "AVAILABLE"
-      ? defaultToolRegistrations
-      : withoutGitTools(defaultToolRegistrations);
 
   /**
    * The Tool settlement compatibility boundary, built once per daemon start.
@@ -283,7 +261,6 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         ? {}
         : { adapterOverrides: options.adapterOverrides }),
       ...(options.logger === true ? { logger: safeSupervisorLogger } : {}),
-      toolRegistrations: exposedToolRegistrations,
       ...(options.toolExposure === undefined ? {} : { toolExposure: options.toolExposure }),
       processSandboxProviders,
       ...(options.fullAccessAvailable === undefined
@@ -457,27 +434,6 @@ async function resolveWindowsSandboxRunner(
     return { available: false, reasonCode: "RUNNER_PLATFORM_UNSUPPORTED" };
   }
   return resolveSandboxRunnerArtifact({ environment, daemonEntryPath });
-}
-
-/**
- * The four Runtime Operations adapters, as the one bundle `createDefaultCodingTools` expects.
- *
- * Built here rather than in the composition root because the daemon must hand `composeDaemon` the
- * *definitions* it built this set from — one derivation, three views (the registry, the Coding catalog
- * and the model catalog) rather than three independent constructions.
- */
-function daemonCodingOperations(
-  runtimeResolver: ReturnType<typeof createLocalRuntimeResolver>,
-): DefaultCodingToolOperations {
-  const readOnly = createRuntimeReadOnlyOperations(runtimeResolver);
-  return {
-    readFile: readOnly,
-    readOnly,
-    patch: createRuntimePatchOperations(runtimeResolver),
-    exec: createRuntimeProcessOperations(runtimeResolver),
-    process: createRuntimeProcessOperations(runtimeResolver),
-    git: createRuntimeGitOperations(runtimeResolver),
-  };
 }
 
 const safeSupervisorLogger = {

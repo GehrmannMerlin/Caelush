@@ -21,6 +21,7 @@ export {
   RuntimeAuthorizationError,
   RuntimeWorkspaceBoundaryMismatchError,
   RuntimeSandboxError,
+  RuntimeSandboxOperationError,
   RuntimeSandboxProtocolError,
   RuntimePrivateTempError,
 } from "./runtime-errors.js";
@@ -129,6 +130,7 @@ export type {
   NativeWorkspaceRunnerResult,
   NativeWorkspaceSandboxController,
   NativeWorkspaceSandboxControllerOptions,
+  NativeWorkspacePreparationResult,
   NativeWorkspaceSandboxStatus,
 } from "./sandbox/native-workspace-controller.js";
 export {

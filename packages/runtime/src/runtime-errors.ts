@@ -182,6 +182,16 @@ export class RuntimeSandboxError extends RuntimeError {
   }
 }
 
+/** A Runner-reported, protocol-validated operation failure with a bounded public reason code. */
+export class RuntimeSandboxOperationError extends RuntimeSandboxError {
+  readonly reasonCode: string;
+
+  constructor(reasonCode: string) {
+    super(reasonCode);
+    this.reasonCode = reasonCode;
+  }
+}
+
 export class RuntimeSandboxProtocolError extends RuntimeError {
   constructor(message = "The sandbox control protocol message is invalid.") {
     super("SANDBOX_PROTOCOL_ERROR", message);

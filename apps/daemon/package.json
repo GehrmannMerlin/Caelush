@@ -31,7 +31,7 @@
   "scripts": {
     "build": "tsc --build",
     "typecheck": "tsc --noEmit",
-    "start": "node dist/main.js"
+    "start": "node ../../scripts/start-daemon-dev.mjs"
   },
   "dependencies": {
     "@caelush/agent": "workspace:*",

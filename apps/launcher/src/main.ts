@@ -2,7 +2,11 @@ import { pathToFileURL } from "node:url";
 import { CaelushClient } from "@caelush/client";
 import { formatDoctorReport, runDoctor } from "./doctor.js";
 import { EXIT_CODES, type ProductExitCode } from "./exit-codes.js";
-import { DaemonBootstrapError, ensureDaemon } from "./daemon-discovery.js";
+import {
+  DaemonBootstrapError,
+  ensureDaemon,
+  type DaemonEnvironmentPreparer,
+} from "./daemon-discovery.js";
 import { HELP_TEXT } from "./help.js";
 import { nodeVersionInRange } from "./platform.js";
 import { hasInteractiveTerminal, INTERACTIVE_TTY_ERROR } from "./tty.js";
@@ -19,6 +23,7 @@ export interface LauncherIo {
   readonly environment?: Readonly<Record<string, string | undefined>>;
   readonly workspacePath?: string;
   readonly stdin?: AsyncIterable<Uint8Array | string>;
+  readonly prepareDaemonEnvironment?: DaemonEnvironmentPreparer;
 }
 
 export function runStaticCommand(argv: readonly string[]): ProductExitCode | undefined {
@@ -69,6 +74,9 @@ export async function main(options: LauncherIo = {}): Promise<ProductExitCode> {
       ...(options.workspacePath === undefined ? {} : { workspacePath: options.workspacePath }),
       writeStdout,
       writeStderr,
+      ...(options.prepareDaemonEnvironment === undefined
+        ? {}
+        : { prepareDaemonEnvironment: options.prepareDaemonEnvironment }),
     });
   }
   if (!nodeVersionInRange(options.nodeVersion ?? process.versions.node)) {
@@ -98,9 +106,12 @@ export async function main(options: LauncherIo = {}): Promise<ProductExitCode> {
   }
   let daemon;
   try {
-    daemon = await ensureDaemon(
-      options.environment === undefined ? {} : { environment: options.environment },
-    );
+    daemon = await ensureDaemon({
+      ...(options.environment === undefined ? {} : { environment: options.environment }),
+      ...(options.prepareDaemonEnvironment === undefined
+        ? {}
+        : { prepareEnvironment: options.prepareDaemonEnvironment }),
+    });
   } catch (error) {
     const message =
       error instanceof DaemonBootstrapError

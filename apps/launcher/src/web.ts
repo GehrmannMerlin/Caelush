@@ -6,6 +6,7 @@ import {
   DaemonBootstrapError,
   ensureDaemon,
   type DaemonDiscoveryResult,
+  type DaemonEnvironmentPreparer,
   type EnsureDaemonOptions,
 } from "./daemon-discovery.js";
 import { EXIT_CODES, type ProductExitCode } from "./exit-codes.js";
@@ -18,6 +19,7 @@ export interface WebHostOptions {
   readonly openUrl?: (url: string) => void;
   readonly writeStdout?: (text: string) => void;
   readonly writeStderr?: (text: string) => void;
+  readonly prepareDaemonEnvironment?: DaemonEnvironmentPreparer;
 }
 
 export async function runWebHost(options: WebHostOptions = {}): Promise<ProductExitCode> {
@@ -38,7 +40,12 @@ export async function runWebHost(options: WebHostOptions = {}): Promise<ProductE
     CAELUSH_WEB_BUILD_ROOT: webBuildRoot,
   };
   try {
-    const daemon = await (options.ensureDaemon ?? ensureDaemon)({ environment });
+    const daemon = await (options.ensureDaemon ?? ensureDaemon)({
+      environment,
+      ...(options.prepareDaemonEnvironment === undefined
+        ? {}
+        : { prepareEnvironment: options.prepareDaemonEnvironment }),
+    });
     let workspace;
     try {
       workspace = await daemon.client.createWorkspace({ path: workspacePath });

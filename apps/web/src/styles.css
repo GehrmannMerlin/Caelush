@@ -1578,6 +1578,27 @@ body {
   line-height: 1.35;
 }
 
+.permission-selector-notice {
+  max-width: 330px;
+  margin: 0;
+  color: #8a6417;
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.permission-selector {
+  gap: 6px;
+}
+
+.permission-selector-effective {
+  flex: 0 1 190px;
+  max-width: 190px;
+  margin: 0;
+  color: #617087;
+  font-size: 0.64rem;
+  line-height: 1.25;
+}
+
 .permission-selector-error {
   color: #b42318;
 }
@@ -1592,6 +1613,11 @@ body {
   cursor: pointer;
   font-size: 0.68rem;
   font-weight: 700;
+}
+
+.permission-selector-prepare:disabled {
+  cursor: wait;
+  opacity: 0.72;
 }
 
 .permission-selector-confirmation {

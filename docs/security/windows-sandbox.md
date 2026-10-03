@@ -27,35 +27,66 @@ Win32              restricted token + capability-SID ACEs + kill-on-close Job Ob
 Supported: Windows on NTFS. The workspace root and the private temp root are both validated before
 use and both must be NTFS-backed directories reachable through a stable file identity.
 
-## What is wired today
+## Runner entry points
+
+Both workspace preparation and restricted process execution reach the verified Runner; the details
+of the daemon-owned Runtime authorization path follow below.
 
 ```text
 workspace-status / workspace-prepare   invoked by the Daemon       Runner reached
-restricted process spawn               not bound by the Daemon     Runner not reached
+restricted process spawn               authorized by the Daemon    Runner reached
 ```
 
-Two properties hold at once and must not be read into each other:
+## Runtime authorization
 
-- **Preparation is wired.** The Daemon's `WorkspacePreparationPort` invokes the packaged Runner for
-  `workspace-status` and `workspace-prepare`, which is what installs the standing workspace ACE and
-  produces the `READY` / `REQUIRED` / `UNAVAILABLE` state the settings screen shows.
-- **Restricted execution is not.** The Daemon composes its `exec` / `process` ports with no process
-  authorization bound (`createRuntimeProcessOperations(runtimeResolver)` and no second argument), so a
-  Run under `VIEW_ONLY` or `WORKSPACE_WRITE` reaches the Runtime with no restricted authorization and the
-  Runtime **refuses** it with `RuntimeAuthorizationError` rather than ordinary-spawning. The restricted
-  token and Job Object path is therefore not entered by a Run in the shipped product: under the two
-  restricted presets a process Tool fails closed instead of running sandboxed.
+| Path                           | Current status                                                       |
+| ------------------------------ | -------------------------------------------------------------------- |
+| workspace status / preparation | Daemon calls the verified Runner                                     |
+| restricted process execution   | Daemon resolves an authorized Runtime execution through the provider |
+| FULL_ACCESS process execution  | separate unrestricted provider, subject to the persisted policy      |
 
-The process-preset half of a Run's authority is enforced by the policy layer above the Runtime today.
-The native enforcement below - restricted token, capability-SID ACEs, kill-on-close Job Object - is
-complete and measured as a **component**, and is the substrate the process path is meant to be bound to.
-Binding it is deliberately a separate task: it would _add_ execution authority where the operation is
-currently refused, which this work explicitly does not do.
+The daemon composition creates one Windows sandbox host. Its single verified Runner artifact is
+used to create both the workspace-preparation controller and the restricted process provider.
+SecurityCapabilityService reports provider availability from cached probes and uses those same
+probes for provider selection. Before a process Tool runs, the authorization resolver reads the
+Run's persisted security policy, maps it to a RuntimeProcessPolicy, selects a provider, and creates
+the existing AuthorizedRuntimeExecution. UI preset text is not execution authority. A missing or
+incapable provider fails closed; restricted execution is not silently changed to Full Access.
 
-Refused is not the same as safe, and the property that matters is that no restricted path starts an
-unrestricted payload. `packages/coding-agent/test/runtime-adapters.test.ts` pins exactly that: the
-restricted context is refused **and** the payload's sentinel never appears, while the Full Access control
-running the same payload does write its sentinel.
+Workspace preparation and process authorization are related but distinct: successful workspace
+preparation does not by itself prove every requested process policy is supported. In particular,
+READ_ONLY can run only if a provider explicitly supports that stricter policy; it must not be
+weakened to WORKSPACE_WRITE. Capability reporting and Runtime provider selection use the same
+daemon-owned service and provider set, rather than separate UI and execution registries.
+
+## Runner/workspace separation
+
+The Runner is execution infrastructure; the workspace is the object whose security descriptor is
+being changed. Never place the Runner in a workspace that may be prepared:
+
+- the Runner path must not equal or be below the workspace root;
+- the workspace must not contain the Runner or its manifest.
+
+Workspace DACL inheritance and the Low mandatory-integrity label apply to descendants. Co-locating
+the helper with the target puts part of the control infrastructure inside the security boundary it
+is responsible for preparing, potentially affecting its launch, replacement, or control operation.
+The invariant is separation, not repeated ACL editing of the Runner.
+
+The development helper currently defaults to
+<CAELUSH_HOME>/runtime/sandbox-runner/windows-<arch>/ (or
+%USERPROFILE%/.caelush/runtime/sandbox-runner/windows-<arch>/ when CAELUSH_HOME is unset). It
+refuses a Runner binary or manifest inside the source repository. Release resolution uses the
+fixed application bundle. Both paths retain manifest validation and SHA-256 verification; moving
+a development artifact outside the checkout does not weaken artifact verification. The current
+development path does not yet include the artifact hash as a directory component.
+
+**Important enforcement gap:** the development helper checks overlap with the source repository,
+not with every workspace registered later. The native Runner currently validates the workspace
+against the per-Run temp directory, but does not compare the selected workspace with its own
+executable or manifest. Arbitrary workspace/Runner overlap is therefore not yet rejected
+end-to-end, even though it is a required security invariant. Until that runtime check is
+implemented, keep CAELUSH_HOME and the application installation outside every workspace that may
+be prepared; do not interpret READY as proof that this overlap was checked.
 
 ## Presets
 
@@ -88,18 +119,35 @@ canonical path is what makes the grant workspace-specific: two workspaces never 
 
 ## Standing workspace ACE
 
-Preparation (`workspace-prepare`) merges exactly three entries into the workspace DACL:
+Preparation (workspace-prepare) manages the workspace DACL and SACL separately:
 
-| Entry                                       | Mask                | Inheritance        |
-| ------------------------------------------- | ------------------- | ------------------ |
-| allow, workspace capability SID             | `FILE_ALL_ACCESS`   | object + container |
-| deny, Everyone                              | `FILE_DELETE_CHILD` | container          |
-| mandatory label, Low integrity, no-write-up | -                   | object + container |
+| Security descriptor | Entry                                       | Mask              | Inheritance        |
+| ------------------- | ------------------------------------------- | ----------------- | ------------------ |
+| DACL                | allow, workspace capability SID             | FILE_ALL_ACCESS   | object + container |
+| DACL                | deny, Everyone                              | FILE_DELETE_CHILD | container          |
+| SACL                | mandatory label, Low integrity, no-write-up | -                 | object + container |
 
-The merge is additive: existing user and system entries are preserved, and repeated preparation is
-idempotent (`ADDED` once, `UNCHANGED` afterwards). The `FILE_DELETE_CHILD` deny is what stops the
-workspace directory itself from being deleted or replaced through its parent by anything holding
-delete rights there.
+Existing user and system entries are preserved; this operation does not change the owner or the
+parent directory's ACL, and it does not grant the current user Full Control. Preparation reads the
+current DACL and SACL first. If the exact allow ACE, deny ACE, and integrity label are already
+present, it returns UNCHANGED without writing. Otherwise it builds the required descriptor
+changes, applies the mandatory label (SACL) and DACL as separate Win32 operations, then reads the
+security state again and verifies the postcondition before reporting success. The
+FILE_DELETE_CHILD deny is what stops the workspace directory itself from being deleted or replaced
+through its parent by anything holding delete rights there.
+
+For a first-time label change, the Runner preflights the workspace with
+CreateFileW(..., WRITE_OWNER, ...). The caller also needs sufficient access to apply the DACL
+change. An inherited Modify grant commonly does not include WRITE_OWNER; in that case preparation
+returns the bounded code WINDOWS_WORKSPACE_WRITE_OWNER_REQUIRED, rather than taking ownership,
+elevating itself, or widening the user's ACL. Existing owner and ACLs remain untouched.
+
+The writes are phased, not an atomic transaction across the two security-information classes. The
+label is written before the DACL so a label-permission failure cannot leave a newly exposed
+capability grant. If a later DACL write or postcondition check fails after the label was written,
+the security descriptor may be partially prepared; the operation reports failure and never reports
+READY. There is no automatic rollback. A later prepare re-reads actual state and may complete the
+missing phase if the required permissions are then available.
 
 This ACE is a **standing** grant. It is not created per Run and not removed when a Run ends; a Run
 only _inspects_ it and refuses to start with `WINDOWS_WORKSPACE_GRANT_MISSING` if it is absent. It
@@ -179,9 +227,17 @@ WINDOWS_PATH_BOUNDARY_OVERLAP         WINDOWS_PATH_BOUNDARY_REPARSE_UNSUPPORTED
 WINDOWS_PATH_BOUNDARY_IDENTITY_CHANGED    WINDOWS_PATH_BOUNDARY_ROOT_UNSUPPORTED
 WINDOWS_ACL_READ_FAILED               WINDOWS_ACL_SID_FAILED
 WINDOWS_ACL_BUILD_FAILED              WINDOWS_ACL_APPLY_FAILED
+WINDOWS_DACL_APPLY_FAILED             WINDOWS_INTEGRITY_LABEL_APPLY_FAILED
+WINDOWS_WORKSPACE_WRITE_OWNER_REQUIRED
+WINDOWS_WORKSPACE_SECURITY_POSTCONDITION_FAILED
 WINDOWS_ACL_PATH_LOCK_FAILED          WINDOWS_WORKSPACE_GRANT_MISSING
 WINDOWS_WORKSPACE_CWD_BOUNDARY_INVALID
 ```
+
+Runner artifact failures also use bounded codes such as RUNNER_ARTIFACT_MISSING,
+RUNNER_MANIFEST_INVALID, RUNNER_HASH_MISMATCH, and RUNNER_BACKEND_MISSING. These codes are
+suitable for diagnosis and localized guidance; native exception text and absolute workspace paths
+are not part of the public error.
 
 ## Enforcement boundaries
 
@@ -206,14 +262,16 @@ a process namespace: a sandboxed process is an ordinary member of the host's pro
 restricted child cannot itself run `tasklist` is a consequence of the token's rights, not an attempt
 at hiding, and it is pinned because it is also evidence that the token really is restricted.
 
-## Known hardening backlog
+## Known hardening backlog and enforcement gaps
 
-Not defects that change what a preset prevents today. Recorded, with the test or the code that pins
-each, so they are not rediscovered as new findings.
+These are explicit limits, not guarantees. Runner/workspace overlap is an enforcement gap that
+must be closed before arbitrary workspace paths can be treated as protected by this invariant.
 
 | Item                                                                                                                                                  | What it is today                                                                                                | What hardening would need                                                         |
 | ----------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | `CAELUSH_SANDBOX_RUNNER_PATH` / `_MANIFEST` accept any absolute path, and the artifact hash is checked against the manifest sitting beside the binary | a development/diagnostic override; reaching it means controlling the Daemon's own environment (i.e. its launch) | an out-of-band trust anchor (signing) if that environment is ever not trusted     |
+| Runner/workspace path separation is not checked for every registered workspace                                                                        | dev startup rejects artifacts inside the checkout; native validation currently checks workspace vs temp only    | reject equality and either containment direction before preparation and execution |
+| Development Runner directory does not include its artifact hash                                                                                       | manifest SHA-256 is still verified; the versioned output location may be replaced by a later build              | place each artifact under a platform/arch/hash-specific immutable directory       |
 | Validation and the ACE apply are keyed on the path name, not on a held directory handle                                                               | a narrow TOCTOU window; winning it needs write rights on the parent plus timing                                 | holding the handle open from validation through the ACL write                     |
 | `sid_is_product_capability` accepts any `S-1-4-*` / `S-1-15-3-*` ACE with the grant's exact mask and inheritance                                      | an unrelated such ACE keeps the shared Low-integrity SACL and Everyone deny after revoke                        | match the product SID list, not the authority prefix                              |
 | A legacy two-field `ToolSecurityContext` carries no policy, so its scope ordinary-spawns                                                              | not reachable: the Daemon always derives the three-field context from the persisted policy snapshot             | an explicit "policy-bound" flag on the Runtime scope, not inference from presence |

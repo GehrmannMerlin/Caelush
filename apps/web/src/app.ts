@@ -484,7 +484,9 @@ function renderWorkspaceApp(input: {
                 }),
                 permissionSelector: createElement(PermissionSelector, {
                   presets: snapshot.availablePresets,
-                  selected: snapshot.selectedPreset,
+                  selected: snapshot.requestedPreset ?? snapshot.selectedPreset,
+                  active: snapshot.selectedPreset,
+                  preparing: snapshot.preparingPreset,
                   disabled: composerInteractionDisabled || snapshot.activeRun !== undefined,
                   error: snapshot.permissionPresetError,
                   onSelect: (selection) =>
@@ -539,11 +541,15 @@ function renderWorkspaceApp(input: {
 }
 
 export function shouldDisableComposerInteraction(
-  snapshot: Pick<WebSessionSnapshot, "status" | "submission" | "activeRun" | "controlMode">,
+  snapshot: Pick<
+    WebSessionSnapshot,
+    "status" | "submission" | "activeRun" | "controlMode" | "preparingPreset"
+  >,
 ): boolean {
   return (
     snapshot.status !== "READY" ||
     snapshot.submission !== "IDLE" ||
+    snapshot.preparingPreset !== undefined ||
     snapshot.activeRun !== undefined ||
     snapshot.controlMode === "CANCELLING" ||
     snapshot.controlMode === "RECOVERY_PICKER" ||

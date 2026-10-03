@@ -8,6 +8,7 @@ import type {
 import {
   createNativeWorkspaceSandboxController,
   createWindowsAclRestrictedTokenProvider,
+  RuntimeSandboxOperationError,
   type NativeWorkspaceSandboxController,
   type NativeWorkspaceRunnerResult,
 } from "../src/index.js";
@@ -52,6 +53,20 @@ describe("native workspace sandbox controller", () => {
     expect(runnerInvoker).toHaveBeenCalledWith({
       operation: "workspace-status",
       workspaceRoot: WORKSPACE_ROOT,
+    });
+  });
+
+  it("preserves a bounded Runner reason when workspace preparation fails", async () => {
+    const controller = createNativeWorkspaceSandboxController({
+      runnerInvoker: async () => {
+        throw new RuntimeSandboxOperationError("WINDOWS_ACL_APPLY_FAILED");
+      },
+    });
+
+    const result: unknown = await controller.prepare(WORKSPACE_ROOT, "WORKSPACE_WRITE");
+    expect(result).toEqual({
+      status: "FAILED",
+      reasonCode: "WINDOWS_ACL_APPLY_FAILED",
     });
   });
 });

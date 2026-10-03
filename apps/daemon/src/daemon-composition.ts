@@ -92,11 +92,13 @@ import {
 } from "@caelush/protocol";
 import {
   LocalRuntime,
+  createAuthorizedRuntimeExecution,
   createLocalRuntimeResolver,
   createLinuxBubblewrapProvider,
   createLinuxLandlockProvider,
   createMacSeatbeltProvider,
   createWindowsAclRestrictedTokenProvider,
+  createRuntimeProcessPolicy,
   sanitizeTerminalOutput,
   type ProcessSandboxProvider,
 } from "@caelush/runtime";
@@ -649,7 +651,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
    * same active set.
    */
   const defaultCodingTools = defaultCodingToolSet(
-    defaultCodingOperations(runtimeResolver),
+    defaultCodingOperations(runtimeResolver, securityCapabilityService),
     options.toolExposure ?? "AVAILABLE",
   );
   const activeToolRegistry = buildToolRegistry(options.toolRegistrations ?? defaultCodingTools);
@@ -1235,14 +1237,35 @@ function projectV2ContextUsage(input: ContextUsageSnapshot) {
  */
 function defaultCodingOperations(
   runtimeResolver: ReturnType<typeof createLocalRuntimeResolver>,
+  securityCapabilityService: SecurityCapabilityService,
 ): DefaultCodingToolOperations {
   const readOnly = createRuntimeReadOnlyOperations(runtimeResolver);
+  const process = createRuntimeProcessOperations(runtimeResolver, {
+    authorizationResolver: async ({ ownerRunId, environment, securityContext }) => {
+      const reference = securityContext?.securityPolicy;
+      if (reference === undefined) return undefined;
+      const policy = createRuntimeProcessPolicy({
+        runId: ownerRunId,
+        workspaceId: environment.workspace.id,
+        workspaceRoot: environment.workspace.path,
+        filesystemBoundary: reference.filesystemBoundary,
+        processBoundary: reference.processBoundary,
+        requiredEnforcement: reference.requiredEnforcement,
+      });
+      const provider = await securityCapabilityService.selectRuntimeProcessProvider(policy);
+      return createAuthorizedRuntimeExecution({
+        policy,
+        provider,
+        authorizationNonce: `${ownerRunId}:${reference.policyDigest}:tool`,
+      });
+    },
+  });
   return {
     readFile: readOnly,
     readOnly,
     patch: createRuntimePatchOperations(runtimeResolver),
-    exec: createRuntimeProcessOperations(runtimeResolver),
-    process: createRuntimeProcessOperations(runtimeResolver),
+    exec: process,
+    process,
     git: createRuntimeGitOperations(runtimeResolver),
   };
 }

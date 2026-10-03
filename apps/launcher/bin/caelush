@@ -1,5 +1,46 @@
 #!/usr/bin/env node
-import { main } from "../dist/index.js";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+import process from "node:process";
+import { fileURLToPath } from "node:url";
 
-const exitCode = await main();
+const argv = process.argv.slice(2);
+const staticOnly = argv.length === 1 && ["--help", "-h", "--version", "-V"].includes(argv[0]);
+const repositoryRoot = new URL("../../../", import.meta.url);
+const developmentRunnerHelper = new URL("scripts/build-sandbox-runner.mjs", repositoryRoot);
+const expectedSourceEntry = new URL("apps/launcher/bin/caelush", repositoryRoot);
+const developmentCheckout =
+  resolve(fileURLToPath(import.meta.url)) === resolve(fileURLToPath(expectedSourceEntry)) &&
+  existsSync(fileURLToPath(developmentRunnerHelper));
+let environment = process.env;
+let prepareDaemonEnvironment;
+
+if (developmentCheckout && !staticOnly) {
+  const { prepareDevelopmentSandboxRunner } = await import(developmentRunnerHelper.href);
+  if (argv.length === 1 && argv[0] === "doctor") {
+    const prepared = await prepareDevelopmentSandboxRunner({
+      environment,
+      buildIfMissing: false,
+    });
+    environment = prepared.environment;
+  } else {
+    prepareDaemonEnvironment = async (daemonEnvironment) => {
+      const prepared = await prepareDevelopmentSandboxRunner({ environment: daemonEnvironment });
+      if (prepared.status === "UNAVAILABLE") {
+        process.stderr.write(
+          "Caelush could not prepare the Windows security component; the new daemon will start without restricted permissions.\n",
+        );
+      }
+      return prepared.environment;
+    };
+  }
+}
+
+const { main } = await import("../dist/index.js");
+
+const exitCode = await main({
+  argv,
+  environment,
+  ...(prepareDaemonEnvironment === undefined ? {} : { prepareDaemonEnvironment }),
+});
 process.exitCode = exitCode;

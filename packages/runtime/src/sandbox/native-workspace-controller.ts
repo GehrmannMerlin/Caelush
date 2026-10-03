@@ -3,7 +3,11 @@ import { spawn, type ChildProcess } from "node:child_process";
 import type { RunId, SelectablePermissionPresetId } from "@caelush/protocol";
 import type { ProcessExit } from "../exec/contracts.js";
 import { terminateProcessTree } from "../exec/process-tree.js";
-import { RuntimeSandboxError, RuntimeSandboxProtocolError } from "../runtime-errors.js";
+import {
+  RuntimeSandboxError,
+  RuntimeSandboxOperationError,
+  RuntimeSandboxProtocolError,
+} from "../runtime-errors.js";
 import {
   acceptSandboxWorkspacePrepared,
   acceptSandboxWorkspaceStatus,
@@ -21,6 +25,8 @@ import {
 } from "./private-temp.js";
 
 export type NativeWorkspaceSandboxStatus = "READY" | "REQUIRED" | "UNAVAILABLE";
+export type NativeWorkspacePreparationResult =
+  "READY" | "UNAVAILABLE" | { readonly status: "FAILED"; readonly reasonCode: string };
 export type NativeWorkspaceRunnerOperation = "workspace-status" | "workspace-prepare";
 
 export type NativeWorkspaceRunnerResult =
@@ -41,7 +47,7 @@ export interface NativeWorkspaceSandboxController {
   prepare(
     workspaceRoot: string,
     presetId: SelectablePermissionPresetId,
-  ): Promise<NativeWorkspaceSandboxStatus>;
+  ): Promise<NativeWorkspacePreparationResult>;
   createRunTemp(runId: RunId): Promise<PrivateRunTemp>;
   cleanupRunTemp(temp: PrivateRunTemp): Promise<void>;
 }
@@ -93,7 +99,7 @@ export function createNativeWorkspaceSandboxController(
     prepare: async (
       workspaceRoot: string,
       presetId: SelectablePermissionPresetId,
-    ): Promise<NativeWorkspaceSandboxStatus> => {
+    ): Promise<NativeWorkspacePreparationResult> => {
       if (presetId === "VIEW_ONLY") return "READY";
       if (presetId === "FULL_ACCESS") return "UNAVAILABLE";
       try {
@@ -102,7 +108,10 @@ export function createNativeWorkspaceSandboxController(
           workspaceRoot,
         });
         return result.status === "ADDED" || result.status === "UNCHANGED" ? "READY" : "UNAVAILABLE";
-      } catch {
+      } catch (error) {
+        if (error instanceof RuntimeSandboxOperationError) {
+          return { status: "FAILED", reasonCode: error.reasonCode };
+        }
         return "UNAVAILABLE";
       }
     },

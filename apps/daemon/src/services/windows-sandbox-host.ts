@@ -123,9 +123,9 @@ export function createWindowsSandboxHost(options: WindowsSandboxHostOptions): Wi
           return { status: "FAILED", reasonCode: WORKSPACE_NOT_FOUND_REASON };
         }
         const status = await workspaceController.prepare(workspace.canonicalPath, selection.id);
-        return status === "READY"
-          ? { status: "READY" }
-          : { status: "UNAVAILABLE", reasonCode: WORKSPACE_PREPARATION_UNAVAILABLE_REASON };
+        if (status === "READY") return { status: "READY" };
+        if (typeof status === "object") return status;
+        return { status: "UNAVAILABLE", reasonCode: WORKSPACE_PREPARATION_UNAVAILABLE_REASON };
       },
     };
   }

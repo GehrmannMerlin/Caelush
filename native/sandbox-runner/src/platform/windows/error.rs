@@ -34,7 +34,11 @@ pub enum SandboxError {
     AclSid,
     AclBuild,
     AclApply,
+    AclDaclApply,
+    AclLabelApply,
     AclPathLock,
+    WorkspaceWriteOwnerRequired,
+    WorkspaceSecurityPostcondition,
     WorkspaceGrantMissing,
     WorkspaceCwdBoundary,
     /// Test-only. Exists only in a `test-fault-injection` build, so the shipped Runner has neither
@@ -78,7 +82,13 @@ impl SandboxError {
             Self::AclSid => "WINDOWS_ACL_SID_FAILED",
             Self::AclBuild => "WINDOWS_ACL_BUILD_FAILED",
             Self::AclApply => "WINDOWS_ACL_APPLY_FAILED",
+            Self::AclDaclApply => "WINDOWS_DACL_APPLY_FAILED",
+            Self::AclLabelApply => "WINDOWS_INTEGRITY_LABEL_APPLY_FAILED",
             Self::AclPathLock => "WINDOWS_ACL_PATH_LOCK_FAILED",
+            Self::WorkspaceWriteOwnerRequired => "WINDOWS_WORKSPACE_WRITE_OWNER_REQUIRED",
+            Self::WorkspaceSecurityPostcondition => {
+                "WINDOWS_WORKSPACE_SECURITY_POSTCONDITION_FAILED"
+            }
             Self::WorkspaceGrantMissing => "WINDOWS_WORKSPACE_GRANT_MISSING",
             Self::WorkspaceCwdBoundary => "WINDOWS_WORKSPACE_CWD_BOUNDARY_INVALID",
             #[cfg(feature = "test-fault-injection")]

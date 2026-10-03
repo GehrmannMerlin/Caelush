@@ -47,6 +47,14 @@ const workspacePreparedLine = (expected: ReturnType<typeof hello>) =>
     change: "UNCHANGED",
   })}\n`;
 
+const errorLine = (expected: ReturnType<typeof hello>, code: string) =>
+  `${encodeSandboxControlMessage({
+    type: "ERROR",
+    protocolVersion: SANDBOX_CONTROL_PROTOCOL_VERSION,
+    nonce: expected.nonce,
+    code,
+  })}\n`;
+
 class FakeChild extends EventEmitter {
   readonly stdout = new PassThrough();
   readonly stderr = new PassThrough();
@@ -121,6 +129,23 @@ describe("sandbox control transport", () => {
       change: "UNCHANGED",
     });
     await preparedTransport.close();
+  });
+
+  it("preserves a bounded workspace preparation error and terminates the Runner", async () => {
+    const expected = hello();
+    const child = new FakeChild();
+    const transport = await createSandboxControlTransport({
+      platform: "linux",
+      hello: expected,
+    });
+    const waiting = transport.waitForWorkspacePrepared(child.asChildProcess(), expected);
+    child.control.end(errorLine(expected, "WINDOWS_WORKSPACE_WRITE_OWNER_REQUIRED"));
+
+    await expect(waiting).rejects.toMatchObject({
+      reasonCode: "WINDOWS_WORKSPACE_WRITE_OWNER_REQUIRED",
+    });
+    expect(child.killed).toBe(true);
+    await transport.close();
   });
 
   it("times out at the 5,000 ms default and terminates the Runner", async () => {

@@ -2,9 +2,22 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ToolSecurityContext } from "@caelush/agent";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
-import type { ProcessSandboxProvider } from "@caelush/runtime";
-import type { SecurityCapabilitiesResponse } from "@caelush/protocol";
+import type {
+  ManagedProcessAdapter,
+  ProcessExit,
+  ProcessOutputEvent,
+  ProcessSandboxProvider,
+} from "@caelush/runtime";
+import {
+  createRunId,
+  createSessionId,
+  createStepId,
+  createToolInvocationId,
+  createWorkspaceId,
+  type SecurityCapabilitiesResponse,
+} from "@caelush/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { composeDaemon, type DaemonComposition } from "../src/daemon-composition.js";
 import { startDaemon, type DaemonHandle, type DaemonOptions } from "../src/daemon.js";
@@ -27,6 +40,13 @@ afterEach(async () => {
 });
 
 describe("daemon production composition", () => {
+  it("leaves default Tool construction to the provider-aware composition root", async () => {
+    const source = await readFile(new URL("../src/daemon.ts", import.meta.url), "utf8");
+
+    expect(source).not.toContain("createDefaultCodingTools(");
+    expect(source).not.toContain("daemonCodingOperations(");
+  });
+
   it("does not enqueue memory extraction jobs without a production extractor", async () => {
     const source = await readFile(new URL("../src/daemon-composition.ts", import.meta.url), "utf8");
 
@@ -174,6 +194,63 @@ describe("daemon production composition", () => {
     expect(composition.toolRegistry.names()).not.toContain("git_status");
     expect(composition.toolRegistry.names()).not.toContain("git_diff");
   });
+
+  it("uses the same available restricted provider for Workspace Write Tool execution", async () => {
+    directory = await mkdtemp(join(tmpdir(), "caelush-composition-restricted-"));
+    storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
+    const { provider, create } = executableRestrictedProvider();
+    composition = await composeDaemon({ storage, processSandboxProviders: [provider] });
+    await expect(
+      composition.securityCapabilityService.getGlobalCapabilities(),
+    ).resolves.toMatchObject({
+      processSandbox: {
+        status: "AVAILABLE",
+        provider: "fixture-executable-restricted",
+      },
+    });
+    const tool = composition.toolRegistry.resolve("exec_command");
+    if (tool === undefined) throw new Error("exec_command must be registered");
+    const runId = createRunId();
+    const securityContext: ToolSecurityContext = {
+      permissionProfile: "PROJECT_ACCESS",
+      approvalPolicy: "ON_BOUNDARY",
+      securityPolicy: {
+        presetId: "WORKSPACE_WRITE",
+        presetVersion: 1,
+        policyDigest: "b".repeat(64),
+        filesystemBoundary: "WORKSPACE_READ_WRITE",
+        processBoundary: "WORKSPACE_WRITE",
+        requiredEnforcement: "OS_RESTRICTED",
+      },
+    };
+
+    const result = await tool.tool.execute({
+      identity: {
+        runId,
+        sessionId: createSessionId(),
+        sourceStepId: createStepId(),
+        invocationId: createToolInvocationId(),
+        externalCallId: "call-restricted-provider",
+      },
+      args: { cmd: "echo restricted", tty: false, yield_time_ms: 250 },
+      environment: {
+        workspace: { id: createWorkspaceId(), path: directory },
+        runtime: { id: "local", kind: "local" },
+      },
+      securityContext,
+      signal: new AbortController().signal,
+      updates: { publish() {} },
+    });
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create.mock.calls[0]?.[0]).toMatchObject({
+      policy: {
+        processBoundary: "WORKSPACE_WRITE",
+        requiredEnforcement: "OS_RESTRICTED",
+      },
+    });
+    expect(result.isError).toBe(false);
+  });
 });
 
 async function startFixtureDaemon(
@@ -202,6 +279,61 @@ function restrictedProvider(): ProcessSandboxProvider {
     enforcement: "PARTIAL",
     create: vi.fn(),
     probe: vi.fn(async () => ({ available: true, enforcement: "PARTIAL" as const })),
+  };
+}
+
+function executableRestrictedProvider(): {
+  readonly provider: ProcessSandboxProvider;
+  readonly create: ReturnType<typeof vi.fn>;
+} {
+  const create = vi.fn(async () => completedProcessAdapter());
+  return {
+    create,
+    provider: {
+      id: "fixture-executable-restricted",
+      kind: "RESTRICTED",
+      enforcement: "PARTIAL",
+      create,
+      probe: vi.fn(async () => ({ available: true, enforcement: "PARTIAL" as const })),
+    },
+  };
+}
+
+function completedProcessAdapter(): ManagedProcessAdapter {
+  const startListeners = new Set<() => void>();
+  const outputListeners = new Set<(event: ProcessOutputEvent) => void>();
+  const exitListeners = new Set<(exit: ProcessExit) => void>();
+  const errorListeners = new Set<(error: unknown) => void>();
+  let scheduled = false;
+  const scheduleCompletion = (): void => {
+    if (scheduled) return;
+    scheduled = true;
+    setImmediate(() => {
+      for (const listener of startListeners) listener();
+      for (const listener of exitListeners) listener({ exitCode: 0 });
+    });
+  };
+  return {
+    tty: false,
+    onStart(listener) {
+      startListeners.add(listener);
+      scheduleCompletion();
+      return () => startListeners.delete(listener);
+    },
+    onOutput(listener) {
+      outputListeners.add(listener);
+      return () => outputListeners.delete(listener);
+    },
+    onExit(listener) {
+      exitListeners.add(listener);
+      return () => exitListeners.delete(listener);
+    },
+    onError(listener) {
+      errorListeners.add(listener);
+      return () => errorListeners.delete(listener);
+    },
+    async write() {},
+    async close() {},
   };
 }
 

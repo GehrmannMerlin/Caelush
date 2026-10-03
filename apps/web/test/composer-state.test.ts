@@ -23,4 +23,16 @@ describe("web composer interaction state", () => {
       }),
     ).toBe(true);
   });
+
+  it("locks the composer while a permission change is being prepared", () => {
+    expect(
+      shouldDisableComposerInteraction({
+        status: "READY",
+        submission: "IDLE",
+        activeRun: undefined,
+        controlMode: "NONE",
+        preparingPreset: { id: "WORKSPACE_WRITE", expectedVersion: 1 },
+      }),
+    ).toBe(true);
+  });
 });

@@ -4,6 +4,7 @@ import {
   createRunId,
   createSessionId,
   createWorkspaceId,
+  type SecurityPreparationResponse,
   type SecurityCapabilitiesResponse,
   type WorkspaceSecurityCapabilitiesResponse,
 } from "@caelush/protocol";
@@ -204,6 +205,10 @@ describe("WebSessionManager permission lifecycle", () => {
       id: "VIEW_ONLY",
       expectedVersion: 1,
     });
+    expect(manager.getSnapshot().requestedPreset).toEqual({
+      id: "WORKSPACE_WRITE",
+      expectedVersion: 1,
+    });
     manager.dispose();
   });
 
@@ -375,6 +380,181 @@ describe("WebSessionManager workspace preparation", () => {
     // A refused preparation must not leave a persisted preference for a preset this workspace
     // cannot use; that would silently discard the user's actual choice on the next load.
     expect(store.read(workspace.id)).toBeUndefined();
+    manager.dispose();
+  });
+
+  it("requires capability readback before persisting a prepared permission", async () => {
+    const store = new PermissionPresetSelectionStore(new Map());
+    const getWorkspaceSecurityCapabilities = vi
+      .fn()
+      .mockResolvedValue(
+        workspaceCapabilities({ WORKSPACE_WRITE: "PREPARATION_REQUIRED" }, REQUIRED_PREPARATION),
+      );
+    const prepareWorkspaceSecurity = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      workspaceId: workspace.id,
+      preset: { id: "WORKSPACE_WRITE" as const, expectedVersion: 1 },
+      status: "READY" as const,
+    }));
+    const client = baseClient({
+      getSecurityCapabilities: vi.fn(async () => capabilities()),
+      getWorkspaceSecurityCapabilities,
+      prepareWorkspaceSecurity,
+    });
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      info: info(),
+      permissionPresetStore: store,
+    });
+
+    await manager.loadSessions();
+    manager.beginDraft();
+    await expect(
+      manager.preparePermissionPreset({ id: "WORKSPACE_WRITE", expectedVersion: 1 }),
+    ).resolves.toBe(false);
+
+    expect(getWorkspaceSecurityCapabilities).toHaveBeenCalledTimes(2);
+    expect(manager.getSnapshot().selectedPreset).toEqual({ id: "VIEW_ONLY", expectedVersion: 1 });
+    expect(manager.getSnapshot().error?.reasonCode).toBe("WORKSPACE_PREPARATION_NOT_CONFIRMED");
+    expect(store.read(workspace.id)).toBeUndefined();
+    manager.dispose();
+  });
+
+  it("rejects a preparation acknowledgement for a different workspace permission", async () => {
+    const store = new PermissionPresetSelectionStore(new Map());
+    const prepareWorkspaceSecurity = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      workspaceId: workspace.id,
+      preset: { id: "VIEW_ONLY" as const, expectedVersion: 1 },
+      status: "READY" as const,
+    }));
+    const client = baseClient({
+      getSecurityCapabilities: vi.fn(async () => capabilities()),
+      getWorkspaceSecurityCapabilities: vi.fn(async () =>
+        workspaceCapabilities({ WORKSPACE_WRITE: "PREPARATION_REQUIRED" }, REQUIRED_PREPARATION),
+      ),
+      prepareWorkspaceSecurity,
+    });
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      info: info(),
+      permissionPresetStore: store,
+    });
+
+    await manager.loadSessions();
+    manager.beginDraft();
+    await expect(
+      manager.preparePermissionPreset({ id: "WORKSPACE_WRITE", expectedVersion: 1 }),
+    ).resolves.toBe(false);
+
+    expect(manager.getSnapshot().selectedPreset).toEqual({ id: "VIEW_ONLY", expectedVersion: 1 });
+    expect(manager.getSnapshot().error?.reasonCode).toBe("WORKSPACE_PREPARATION_RESPONSE_MISMATCH");
+    expect(store.read(workspace.id)).toBeUndefined();
+    manager.dispose();
+  });
+
+  it("keeps the requested preset distinct from the active preset after preparation fails", async () => {
+    const prepareWorkspaceSecurity = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      workspaceId: workspace.id,
+      preset: { id: "WORKSPACE_WRITE" as const, expectedVersion: 1 },
+      status: "FAILED" as const,
+      reasonCode: "WINDOWS_ACL_APPLY_FAILED",
+    }));
+    const client = baseClient({
+      getSecurityCapabilities: vi.fn(async () => capabilities()),
+      getWorkspaceSecurityCapabilities: vi.fn(async () =>
+        workspaceCapabilities({ WORKSPACE_WRITE: "PREPARATION_REQUIRED" }, REQUIRED_PREPARATION),
+      ),
+      prepareWorkspaceSecurity,
+    });
+    const manager = new WebSessionManager({ client, workspace, info: info() });
+
+    await manager.loadSessions();
+    manager.beginDraft();
+    await manager.preparePermissionPreset({ id: "WORKSPACE_WRITE", expectedVersion: 1 });
+
+    const snapshot = manager.getSnapshot();
+    expect(snapshot.requestedPreset).toEqual({ id: "WORKSPACE_WRITE", expectedVersion: 1 });
+    expect(snapshot.selectedPreset).toEqual({ id: "VIEW_ONLY", expectedVersion: 1 });
+    manager.dispose();
+  });
+
+  it("exposes the daemon's bounded reason for a failed workspace preparation", async () => {
+    const prepareWorkspaceSecurity = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      workspaceId: workspace.id,
+      preset: { id: "WORKSPACE_WRITE" as const, expectedVersion: 1 },
+      status: "FAILED" as const,
+      reasonCode: "WINDOWS_ACL_APPLY_FAILED",
+    }));
+    const client = baseClient({
+      getSecurityCapabilities: vi.fn(async () => capabilities()),
+      getWorkspaceSecurityCapabilities: vi.fn(async () =>
+        workspaceCapabilities({ WORKSPACE_WRITE: "PREPARATION_REQUIRED" }, REQUIRED_PREPARATION),
+      ),
+      prepareWorkspaceSecurity,
+    });
+    const manager = new WebSessionManager({ client, workspace, info: info() });
+
+    await manager.loadSessions();
+    manager.beginDraft();
+    await manager.preparePermissionPreset({ id: "WORKSPACE_WRITE", expectedVersion: 1 });
+
+    const error = manager.getSnapshot().error;
+    expect(error).toMatchObject({
+      code: "PERMISSION_PREPARATION_FAILED",
+      reasonCode: "WINDOWS_ACL_APPLY_FAILED",
+      message: "工作区权限准备失败：Windows 未能应用工作区访问控制设置。当前实际权限保持不变。",
+    });
+    manager.dispose();
+  });
+
+  it("publishes the requested and preparing presets while host preparation is pending", async () => {
+    let resolvePreparation: ((response: SecurityPreparationResponse) => void) | undefined;
+    const createSession = vi.fn();
+    const prepareWorkspaceSecurity = vi.fn(
+      () =>
+        new Promise<SecurityPreparationResponse>((resolve) => {
+          resolvePreparation = resolve;
+        }),
+    );
+    const client = baseClient({
+      createSession,
+      getSecurityCapabilities: vi.fn(async () => capabilities()),
+      getWorkspaceSecurityCapabilities: vi.fn(async () =>
+        workspaceCapabilities({ WORKSPACE_WRITE: "PREPARATION_REQUIRED" }, REQUIRED_PREPARATION),
+      ),
+      prepareWorkspaceSecurity,
+    });
+    const manager = new WebSessionManager({ client, workspace, info: info() });
+
+    await manager.loadSessions();
+    manager.beginDraft();
+    const preparation = manager.preparePermissionPreset({
+      id: "WORKSPACE_WRITE",
+      expectedVersion: 1,
+    });
+
+    expect(manager.getSnapshot()).toMatchObject({
+      requestedPreset: { id: "WORKSPACE_WRITE", expectedVersion: 1 },
+      preparingPreset: { id: "WORKSPACE_WRITE", expectedVersion: 1 },
+      selectedPreset: { id: "VIEW_ONLY", expectedVersion: 1 },
+    });
+    await expect(manager.submitPrompt("run while preparation is pending")).resolves.toBe(false);
+    expect(createSession).not.toHaveBeenCalled();
+
+    resolvePreparation?.({
+      schemaVersion: 1,
+      workspaceId: workspace.id,
+      preset: { id: "WORKSPACE_WRITE", expectedVersion: 1 },
+      status: "FAILED",
+      reasonCode: "WINDOWS_ACL_APPLY_FAILED",
+    });
+    await expect(preparation).resolves.toBe(false);
+    expect(manager.getSnapshot().preparingPreset).toBeUndefined();
     manager.dispose();
   });
 });

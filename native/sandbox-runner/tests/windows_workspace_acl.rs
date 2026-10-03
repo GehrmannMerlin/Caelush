@@ -5,6 +5,7 @@ use caelush_sandbox_runner::platform::windows::{
 };
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
@@ -28,6 +29,27 @@ fn explicit_workspace_prepare_changes_status_without_starting_a_payload() {
     assert_eq!(
         workspace_prepare(&workspace).expect("repeated workspace prepare should succeed"),
         GrantChange::Unchanged
+    );
+}
+
+#[test]
+fn workspace_prepare_reports_missing_write_owner_before_mutating_the_dacl() {
+    let root = TemporaryRoot::new("prepare-write-owner");
+    let workspace = root.path.join("workspace");
+    fs::create_dir(&workspace).expect("workspace should be created");
+    restrict_current_user_to_modify(&workspace);
+
+    let error = workspace_prepare(&workspace)
+        .expect_err("workspace preparation should require WRITE_OWNER for its integrity label");
+    let status_after_failure =
+        workspace_status(&workspace).expect("failed preparation should remain inspectable");
+    restore_inheritance(&workspace);
+
+    assert_eq!(error, "WINDOWS_WORKSPACE_WRITE_OWNER_REQUIRED");
+    assert_eq!(
+        status_after_failure,
+        GrantStatus::Missing,
+        "preflight failure must happen before the standing capability grant is written"
     );
 }
 
@@ -75,11 +97,18 @@ impl TemporaryRoot {
             .duration_since(UNIX_EPOCH)
             .expect("clock should follow the epoch")
             .as_nanos();
-        let path = std::env::temp_dir().join(format!(
+        let test_temp = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/test-temp");
+        fs::create_dir_all(&test_temp).expect("test temp parent should be created");
+        let path = test_temp.join(format!(
             "caelush-sandbox-runner-{label}-{}-{suffix}",
             std::process::id()
         ));
-        fs::create_dir(&path).expect("temporary root should be created");
+        fs::create_dir(&path).unwrap_or_else(|error| {
+            panic!(
+                "temporary root {} should be created: {error}",
+                path.display()
+            )
+        });
         Self { path }
     }
 }
@@ -94,4 +123,34 @@ impl Drop for TemporaryRoot {
 
 fn remove_tree(path: &Path) {
     fs::remove_dir_all(path).expect("temporary root should be removable");
+}
+
+fn restrict_current_user_to_modify(path: &Path) {
+    let whoami = Command::new("whoami")
+        .args(["/user", "/fo", "csv", "/nh"])
+        .output()
+        .expect("whoami should identify the current Windows principal");
+    assert!(whoami.status.success(), "whoami should succeed");
+    let output = String::from_utf8_lossy(&whoami.stdout);
+    let sid = output
+        .split(|character: char| character == '"' || character == ',' || character.is_whitespace())
+        .find(|field| field.starts_with("S-1-"))
+        .expect("whoami should return the current principal SID");
+    let grant = format!("*{sid}:(OI)(CI)(M)");
+    let status = Command::new("icacls")
+        .arg(path)
+        .args(["/inheritance:r", "/grant:r"])
+        .arg(grant)
+        .status()
+        .expect("icacls should configure the temporary fixture");
+    assert!(status.success(), "icacls should grant only Modify");
+}
+
+fn restore_inheritance(path: &Path) {
+    let status = Command::new("icacls")
+        .arg(path)
+        .arg("/inheritance:e")
+        .status()
+        .expect("icacls should restore fixture inheritance");
+    assert!(status.success(), "fixture inheritance should be restored");
 }

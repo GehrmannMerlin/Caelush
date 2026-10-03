@@ -157,6 +157,31 @@ describe("windows sandbox host adapter", () => {
     expect(calls).toEqual([]);
   });
 
+  it("preserves the bounded workspace preparation reason from the Runtime controller", async () => {
+    const { controller } = fakeController({
+      prepare: vi.fn(async () => ({
+        status: "FAILED",
+        reasonCode: "WINDOWS_ACL_APPLY_FAILED",
+      })) as never,
+    });
+    const host = createWindowsSandboxHost({
+      resolution: resolved(),
+      workspaceService: workspaceServiceResolving(),
+      platform: "win32",
+      createController: () => controller,
+    });
+
+    await expect(
+      host.workspacePreparation.prepare(workspaceId, {
+        id: "WORKSPACE_WRITE",
+        expectedVersion: presetById.get("WORKSPACE_WRITE")!.version,
+      }),
+    ).resolves.toEqual({
+      status: "FAILED",
+      reasonCode: "WINDOWS_ACL_APPLY_FAILED",
+    });
+  });
+
   it("advertises no restricted provider and keeps the bounded reason without an artifact", async () => {
     const host = createWindowsSandboxHost({
       resolution: unavailable("RUNNER_MANIFEST_INVALID"),

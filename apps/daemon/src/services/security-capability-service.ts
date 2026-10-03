@@ -14,8 +14,10 @@ import { getPermissionPresetCatalog, type PermissionPresetTemplate } from "@cael
 import type {
   ProcessSandboxProvider,
   ProcessSandboxProbe,
+  RuntimeProcessPolicy,
   SandboxEnforcement,
 } from "@caelush/runtime";
+import { selectProcessSandbox } from "@caelush/runtime";
 import type { SecurityFeatureGates } from "./security-feature-gates.js";
 
 export interface WorkspacePreparationPort {
@@ -249,6 +251,13 @@ export class SecurityCapabilityService {
       enforcement: sandbox.enforcement,
       ttySupported: this.ttySupported,
     };
+  }
+
+  /** Select execution from the same cached probes that back the advertised capability. */
+  async selectRuntimeProcessProvider(
+    policy: RuntimeProcessPolicy,
+  ): Promise<ProcessSandboxProvider> {
+    return selectProcessSandbox(policy, await this.probes());
   }
 
   private async selectSandboxCapability(): Promise<{

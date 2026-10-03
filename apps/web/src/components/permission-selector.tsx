@@ -3,12 +3,16 @@ import type { PermissionPresetSelection } from "@caelush/protocol";
 import {
   fullAccessConfirmationCopy,
   permissionPresetDisplayName,
+  permissionPresetUnavailableReason,
   type PermissionPresetViewModel,
 } from "../application/permission-presets.js";
 
 export interface PermissionSelectorProps {
   readonly presets: readonly PermissionPresetViewModel[];
+  /** User intent; it can be waiting for preparation while a safer preset remains effective. */
   readonly selected?: PermissionPresetSelection | undefined;
+  readonly active?: PermissionPresetSelection | undefined;
+  readonly preparing?: PermissionPresetSelection | undefined;
   readonly disabled: boolean;
   readonly error?: string | undefined;
   readonly confirmationOpen?: boolean;
@@ -25,6 +29,16 @@ export function PermissionSelector(props: PermissionSelectorProps): ReactElement
     PermissionPresetSelection | undefined
   >(initialConfirmation);
   const selectedValue = props.selected?.id ?? "";
+  const unavailablePresets = props.presets.filter((preset) => preset.status === "UNAVAILABLE");
+  const effectivePermissionStatus = `当前实际用于新任务：${
+    props.active === undefined
+      ? "未选择（无法创建任务）"
+      : permissionPresetDisplayName(props.active.id)
+  }${
+    props.selected !== undefined && props.selected.id !== props.active?.id
+      ? `；请求的${permissionPresetDisplayName(props.selected.id)}尚未生效`
+      : ""
+  }`;
 
   const handleChange = (event: ChangeEvent<HTMLSelectElement>) => {
     const preset = props.presets.find((item) => item.id === event.currentTarget.value);
@@ -69,9 +83,30 @@ export function PermissionSelector(props: PermissionSelectorProps): ReactElement
             disabled={preset.status !== "AVAILABLE"}
           >
             {permissionPresetDisplayName(preset.id)}
+            {preset.status === "UNAVAILABLE" ? "（不可用）" : ""}
+            {preset.status === "PREPARATION_REQUIRED" ? "（待准备）" : ""}
           </option>
         ))}
       </select>
+      <p
+        className="permission-selector-effective"
+        role="status"
+        aria-live="polite"
+        title={effectivePermissionStatus}
+      >
+        {effectivePermissionStatus}
+      </p>
+      {unavailablePresets.length === 0 ? null : (
+        <p className="permission-selector-notice" role="status">
+          {unavailablePresets
+            .map(
+              (preset) =>
+                `${permissionPresetDisplayName(preset.id)}不可用：${permissionPresetUnavailableReason(preset.reasonCode)}`,
+            )
+            .join("；")}
+          。
+        </p>
+      )}
       {props.presets
         .filter((preset) => preset.status === "PREPARATION_REQUIRED")
         .map((preset) => (
@@ -79,12 +114,19 @@ export function PermissionSelector(props: PermissionSelectorProps): ReactElement
             key={`prepare-${preset.id}`}
             type="button"
             className="permission-selector-prepare"
-            disabled={props.disabled || props.onPrepare === undefined}
+            disabled={
+              props.disabled ||
+              props.onPrepare === undefined ||
+              (props.preparing?.id === preset.id &&
+                props.preparing.expectedVersion === preset.version)
+            }
             onClick={() =>
               void props.onPrepare?.({ id: preset.id, expectedVersion: preset.version })
             }
           >
-            准备{permissionPresetDisplayName(preset.id)}
+            {props.preparing?.id === preset.id && props.preparing.expectedVersion === preset.version
+              ? "准备中…"
+              : `准备${permissionPresetDisplayName(preset.id)}`}
           </button>
         ))}
       {props.error === undefined ? null : (

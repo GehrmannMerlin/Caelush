@@ -60,16 +60,19 @@ describe("daemon discovery", () => {
     const root = await mkdtemp(join(tmpdir(), "caelush-launcher-external-"));
     createdDirectories.push(root);
     const spawn = vi.fn();
+    const prepareEnvironment = vi.fn();
     const result = await ensureDaemon({
       environment: { CAELUSH_DAEMON_URL: "http://external.example:43120" },
       productPaths: resolveProductPaths({ environment: { CAELUSH_HOME: root } }),
       clientFactory: () => createProbeClient(async () => health),
       spawn,
+      prepareEnvironment,
     });
 
     expect(result.mode).toBe("EXTERNAL");
     expect(result.url).toBe("http://external.example:43120");
     expect(spawn).not.toHaveBeenCalled();
+    expect(prepareEnvironment).not.toHaveBeenCalled();
     expect(existsSync(join(root, "run"))).toBe(false);
     expect(existsSync(join(root, "logs"))).toBe(false);
   });
@@ -78,14 +81,17 @@ describe("daemon discovery", () => {
     const root = await mkdtemp(join(tmpdir(), "caelush-launcher-reuse-"));
     createdDirectories.push(root);
     const spawn = vi.fn();
+    const prepareEnvironment = vi.fn();
     const result = await ensureDaemon({
       productPaths: resolveProductPaths({ environment: { CAELUSH_HOME: root } }),
       clientFactory: () => createProbeClient(async () => health),
       spawn,
+      prepareEnvironment,
     });
 
     expect(result.mode).toBe("LOCAL_REUSED");
     expect(spawn).not.toHaveBeenCalled();
+    expect(prepareEnvironment).not.toHaveBeenCalled();
   });
 
   it("fails safely when a local daemon is reachable but has another product version", async () => {
@@ -194,5 +200,51 @@ describe("daemon discovery", () => {
     expect(spawnOptions.env.CAELUSH_SANDBOX_RUNNER_MANIFEST).toBe(
       "C:/bundle/sandbox-runner/manifest.json",
     );
+  });
+
+  it("prepares the Runner only after winning the lease for a new local daemon", async () => {
+    const root = await mkdtemp(join(tmpdir(), "caelush-launcher-prepare-"));
+    createdDirectories.push(root);
+    let healthy = false;
+    const child: SpawnedDaemon = {
+      pid: 1234,
+      exitCode: undefined,
+      unref: vi.fn(),
+    };
+    const spawn = vi.fn(() => {
+      healthy = true;
+      return child;
+    });
+    let currentTime = 0;
+    const prepareEnvironment = vi.fn(async (environment) => {
+      currentTime += 12_000;
+      return {
+        ...environment,
+        CAELUSH_SANDBOX_RUNNER_PATH: "C:/prepared/runner.exe",
+        CAELUSH_SANDBOX_RUNNER_MANIFEST: "C:/prepared/manifest.json",
+      };
+    });
+
+    await ensureDaemon({
+      environment: { CAELUSH_HOME: root },
+      productPaths: resolveProductPaths({ environment: { CAELUSH_HOME: root } }),
+      clientFactory: () =>
+        createProbeClient(async () => {
+          if (!healthy) throw new Error("connection refused");
+          return health;
+        }),
+      spawn,
+      prepareEnvironment,
+      daemonEntryPath: "C:/source/apps/daemon/dist/main.js",
+      delay: async () => undefined,
+      now: () => currentTime,
+    });
+
+    expect(prepareEnvironment).toHaveBeenCalledOnce();
+    const spawnOptions = spawn.mock.calls[0]?.[2] as {
+      readonly env: Readonly<Record<string, string | undefined>>;
+    };
+    expect(spawnOptions.env.CAELUSH_SANDBOX_RUNNER_PATH).toBe("C:/prepared/runner.exe");
+    expect(spawnOptions.env.CAELUSH_SANDBOX_RUNNER_MANIFEST).toBe("C:/prepared/manifest.json");
   });
 });

@@ -65,7 +65,10 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::ptr::{null, null_mut};
 use std::sync::OnceLock;
-use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, GetLastError, LocalFree, ERROR_ACCESS_DENIED, ERROR_PRIVILEGE_NOT_HELD,
+    ERROR_SUCCESS, INVALID_HANDLE_VALUE,
+};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, GetNamedSecurityInfoW, SetNamedSecurityInfoW, SE_FILE_OBJECT,
 };
@@ -75,7 +78,10 @@ use windows_sys::Win32::Security::{
     CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, LABEL_SECURITY_INFORMATION,
     OBJECT_INHERIT_ACE, SYSTEM_MANDATORY_LABEL_ACE,
 };
-use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateFileW, FILE_ALL_ACCESS, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, OPEN_EXISTING, WRITE_OWNER,
+};
 use windows_sys::Win32::System::SystemServices::{
     ACCESS_ALLOWED_ACE_TYPE, ACCESS_DENIED_ACE_TYPE, SYSTEM_MANDATORY_LABEL_ACE_TYPE,
     SYSTEM_MANDATORY_LABEL_NO_WRITE_UP,
@@ -215,7 +221,21 @@ fn ensure_write_grant_locked(
     } else {
         Some(build_low_integrity_sacl(security.sacl, low_sid.as_psid())?)
     };
-    apply_security(path, dacl.as_ref(), sacl.as_ref())?;
+    if sacl.is_some() {
+        require_write_owner(path)?;
+    }
+    // Install the integrity barrier before exposing the capability grant. Each phase is
+    // independently idempotent, and the WRITE_OWNER preflight prevents the common half-written
+    // state where the DACL changed but the mandatory label could not be written.
+    if let Some(sacl) = sacl.as_ref() {
+        apply_label(path, sacl)?;
+    }
+    if let Some(dacl) = dacl.as_ref() {
+        apply_dacl(path, dacl)?;
+    }
+    if inspect_write_grant(path, capability_sid)? != GrantStatus::Ready {
+        return Err(SandboxError::WorkspaceSecurityPostcondition);
+    }
     Ok(GrantChange::Added)
 }
 
@@ -261,7 +281,13 @@ fn revoke_write_grant_locked(
     } else {
         None
     };
-    apply_security(path, Some(&dacl), sacl.as_ref())?;
+    if sacl.is_some() {
+        require_write_owner(path)?;
+    }
+    apply_dacl(path, &dacl)?;
+    if let Some(sacl) = sacl.as_ref() {
+        apply_label(path, sacl)?;
+    }
     Ok(GrantChange::Removed)
 }
 
@@ -326,44 +352,85 @@ fn read_security(path: &Path) -> Result<SecuritySnapshot, SandboxError> {
     })
 }
 
-fn apply_security(
-    path: &Path,
-    dacl: Option<&AclBuffer>,
-    sacl: Option<&AclBuffer>,
-) -> Result<(), SandboxError> {
+fn apply_dacl(path: &Path, dacl: &AclBuffer) -> Result<(), SandboxError> {
     let wide = path
         .as_os_str()
         .encode_wide()
         .chain(Some(0))
         .collect::<Vec<_>>();
-    let mut security_info = 0u32;
-    let dacl_pointer = if let Some(dacl) = dacl {
-        security_info |= DACL_SECURITY_INFORMATION;
-        dacl.as_ptr()
-    } else {
-        null()
-    };
-    let sacl_pointer = if let Some(sacl) = sacl {
-        security_info |= LABEL_SECURITY_INFORMATION;
-        sacl.as_ptr()
-    } else {
-        null()
-    };
     let status = unsafe {
         SetNamedSecurityInfoW(
             wide.as_ptr(),
             SE_FILE_OBJECT,
-            security_info,
+            DACL_SECURITY_INFORMATION,
             null_mut(),
             null_mut(),
-            dacl_pointer,
-            sacl_pointer,
+            dacl.as_ptr(),
+            null(),
         )
     };
     if status != ERROR_SUCCESS {
-        return Err(SandboxError::AclApply);
+        return Err(SandboxError::AclDaclApply);
     }
     Ok(())
+}
+
+fn apply_label(path: &Path, sacl: &AclBuffer) -> Result<(), SandboxError> {
+    let wide = wide_path(path);
+    let status = unsafe {
+        SetNamedSecurityInfoW(
+            wide.as_ptr(),
+            SE_FILE_OBJECT,
+            LABEL_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            null(),
+            sacl.as_ptr(),
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return Err(
+            if status == ERROR_ACCESS_DENIED || status == ERROR_PRIVILEGE_NOT_HELD {
+                SandboxError::WorkspaceWriteOwnerRequired
+            } else {
+                SandboxError::AclLabelApply
+            },
+        );
+    }
+    Ok(())
+}
+
+fn require_write_owner(path: &Path) -> Result<(), SandboxError> {
+    let wide = wide_path(path);
+    let handle = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            WRITE_OWNER,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS,
+            null_mut(),
+        )
+    };
+    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+        let error = unsafe { GetLastError() };
+        return Err(
+            if error == ERROR_ACCESS_DENIED || error == ERROR_PRIVILEGE_NOT_HELD {
+                SandboxError::WorkspaceWriteOwnerRequired
+            } else {
+                SandboxError::AclLabelApply
+            },
+        );
+    }
+    unsafe {
+        CloseHandle(handle);
+    }
+    Ok(())
+}
+
+fn wide_path(path: &Path) -> Vec<u16> {
+    path.as_os_str().encode_wide().chain(Some(0)).collect()
 }
 
 fn low_integrity_sid() -> Result<OwnedSid, SandboxError> {
@@ -800,7 +867,9 @@ mod integration_tests {
                 .duration_since(UNIX_EPOCH)
                 .expect("clock should be after epoch")
                 .as_nanos();
-            let path = std::env::temp_dir().join(format!("caelush-acl-test-{suffix}"));
+            let test_temp = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/test-temp");
+            fs::create_dir_all(&test_temp).expect("test temp parent should be created");
+            let path = test_temp.join(format!("caelush-acl-test-{suffix}"));
             fs::create_dir(&path).expect("test directory should be created");
             Self(path)
         }

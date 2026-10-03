@@ -12,6 +12,7 @@ import { PRODUCT_VERSION } from "./version.js";
 import { closeDaemonLog, openDaemonLog } from "./logs.js";
 import {
   isStartupLeaseExpired,
+  STARTUP_LEASE_TTL_MS,
   tryAcquireStartupLease,
   type StartupLease,
 } from "./startup-lease.js";
@@ -62,7 +63,12 @@ export interface EnsureDaemonOptions {
   readonly now?: () => number;
   readonly startupTimeoutMs?: number;
   readonly pollMs?: number;
+  readonly prepareEnvironment?: DaemonEnvironmentPreparer;
 }
+
+export type DaemonEnvironmentPreparer = (
+  environment: Readonly<Record<string, string | undefined>>,
+) => Promise<Readonly<Record<string, string | undefined>>>;
 
 interface ProbeResult {
   readonly kind: "HEALTHY" | "UNREACHABLE" | "INCOMPATIBLE";
@@ -115,10 +121,11 @@ export async function ensureDaemon(
   const delay =
     options.delay ??
     ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
-  const deadline = now() + (options.startupTimeoutMs ?? DAEMON_STARTUP_TIMEOUT_MS);
+  const startupTimeoutMs = options.startupTimeoutMs ?? DAEMON_STARTUP_TIMEOUT_MS;
+  const leaseAcquisitionDeadline = now() + startupTimeoutMs;
   let lease: StartupLease | undefined;
 
-  while (now() < deadline) {
+  while (now() < leaseAcquisitionDeadline) {
     lease = await tryAcquireStartupLease({
       directory: paths.startupLockDirectory,
       version: productVersion,
@@ -137,19 +144,48 @@ export async function ensureDaemon(
       await removeExpiredLease(paths.startupLockDirectory);
       continue;
     }
-    await delay(Math.min(options.pollMs ?? DAEMON_STARTUP_POLL_MS, Math.max(1, deadline - now())));
+    await delay(
+      Math.min(
+        options.pollMs ?? DAEMON_STARTUP_POLL_MS,
+        Math.max(1, leaseAcquisitionDeadline - now()),
+      ),
+    );
   }
 
   if (lease === undefined)
     throw new DaemonBootstrapError("STARTUP_TIMEOUT", startupFailureMessage());
+  let leaseHealthy = true;
+  let pendingRenewal = Promise.resolve();
+  const heartbeat = setInterval(
+    () => {
+      pendingRenewal = pendingRenewal
+        .then(async () => {
+          if (!(await lease.renew())) leaseHealthy = false;
+        })
+        .catch(() => {
+          leaseHealthy = false;
+        });
+    },
+    Math.max(1_000, Math.floor(STARTUP_LEASE_TTL_MS / 3)),
+  );
+  heartbeat.unref();
   try {
+    const spawnEnvironment =
+      options.prepareEnvironment === undefined
+        ? environment
+        : await options.prepareEnvironment(environment);
+    await pendingRenewal;
+    if (!leaseHealthy || !(await lease.renew())) {
+      throw new DaemonBootstrapError("STARTUP_TIMEOUT", startupFailureMessage());
+    }
+    const startupDeadline = now() + startupTimeoutMs;
     const child = await spawnDetachedDaemon({
       entryPath: options.daemonEntryPath ?? daemonEntryPath,
       logPath: paths.daemonLogPath,
       spawn: options.spawn ?? systemSpawn,
-      environment,
+      environment: spawnEnvironment,
     });
-    while (now() < deadline) {
+    while (now() < startupDeadline) {
       const startedProbe = await probe(client, productVersion, false);
       if (startedProbe.kind === "HEALTHY" && startedProbe.info !== undefined) {
         return { mode: "LOCAL_STARTED", url, client, info: startedProbe.info };
@@ -165,11 +201,13 @@ export async function ensureDaemon(
         throw new DaemonBootstrapError("UNKNOWN_PORT_OWNER", startupFailureMessage());
       }
       await delay(
-        Math.min(options.pollMs ?? DAEMON_STARTUP_POLL_MS, Math.max(1, deadline - now())),
+        Math.min(options.pollMs ?? DAEMON_STARTUP_POLL_MS, Math.max(1, startupDeadline - now())),
       );
     }
     throw new DaemonBootstrapError("STARTUP_TIMEOUT", startupFailureMessage());
   } finally {
+    clearInterval(heartbeat);
+    await pendingRenewal;
     await lease.release();
   }
 }

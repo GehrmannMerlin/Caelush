@@ -1,4 +1,4 @@
-import { RuntimeSandboxProtocolError } from "../runtime-errors.js";
+import { RuntimeSandboxOperationError, RuntimeSandboxProtocolError } from "../runtime-errors.js";
 
 export const SANDBOX_CONTROL_PROTOCOL_VERSION = 1 as const;
 export const MAX_SANDBOX_CONTROL_MESSAGE_BYTES = 64 * 1024;
@@ -130,12 +130,14 @@ export function acceptSandboxMessage(
   expected: SandboxHelloMessage,
 ): SandboxControlMessage {
   validateSandboxControlMessage(message);
-  if (message.type === "ERROR") return message;
   if (message.protocolVersion !== expected.protocolVersion) {
     throw new RuntimeSandboxProtocolError("Sandbox control protocol version mismatch.");
   }
   if (message.nonce !== expected.nonce) {
     throw new RuntimeSandboxProtocolError("Sandbox control nonce mismatch.");
+  }
+  if (message.type === "ERROR") {
+    throw new RuntimeSandboxOperationError(message.code);
   }
   if (message.providerId !== expected.providerId) {
     throw new RuntimeSandboxProtocolError("Sandbox control provider mismatch.");
@@ -177,7 +179,10 @@ export function validateSandboxControlMessage(
   if (value.type === "READY" && !["HARD", "PARTIAL", "NONE"].includes(String(value.enforcement))) {
     throw new RuntimeSandboxProtocolError("Sandbox control enforcement is invalid.");
   }
-  if (value.type === "ERROR" && (typeof value.code !== "string" || value.code.length === 0)) {
+  if (
+    value.type === "ERROR" &&
+    (typeof value.code !== "string" || !/^[A-Z][A-Z0-9_]{0,127}$/.test(value.code))
+  ) {
     throw new RuntimeSandboxProtocolError("Sandbox control error code is invalid.");
   }
   if (value.type === "WORKSPACE_STATUS" && !["READY", "MISSING"].includes(String(value.status))) {

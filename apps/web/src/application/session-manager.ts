@@ -65,6 +65,7 @@ import { PermissionPresetSelectionStore, SessionSelectionStore } from "./session
 import {
   choosePermissionPreset,
   DEFAULT_PERMISSION_PRESET_ID,
+  permissionPresetUnavailableReason,
   projectPermissionPresetViewModels,
   runPermissionPreset,
   type PermissionPresetViewModel,
@@ -158,6 +159,7 @@ export type WebSessionErrorCode =
 export interface WebSessionError {
   readonly code: WebSessionErrorCode;
   readonly message: string;
+  readonly reasonCode?: string;
 }
 
 export interface WebSessionSnapshot {
@@ -177,7 +179,11 @@ export interface WebSessionSnapshot {
   readonly modelDirectory?: AIModelDirectoryResponse["models"];
   readonly permissionCapabilities?: SecurityCapabilitiesResponse | undefined;
   readonly availablePresets: readonly PermissionPresetViewModel[];
+  /** The user's permission intent, which may differ from what is currently safe to execute. */
+  readonly requestedPreset?: PermissionPresetSelection;
+  /** The permission which will be sent with a newly-created Run. */
   readonly selectedPreset?: PermissionPresetSelection;
+  readonly preparingPreset?: PermissionPresetSelection;
   readonly permissionPresetError?: string;
   readonly defaultSelection?: ClientModelSelectionWithReasoning;
   readonly modelSelection?: ClientModelSelectionWithReasoning;
@@ -203,6 +209,8 @@ type WebSessionSnapshotPatch = Partial<
     | "defaultSelection"
     | "modelSelection"
     | "selectedPreset"
+    | "requestedPreset"
+    | "preparingPreset"
     | "permissionPresetError"
     | "transportAttempt"
   >
@@ -215,6 +223,8 @@ type WebSessionSnapshotPatch = Partial<
   readonly defaultSelection?: ClientModelSelectionWithReasoning | undefined;
   readonly modelSelection?: ClientModelSelectionWithReasoning | undefined;
   readonly selectedPreset?: PermissionPresetSelection | undefined;
+  readonly requestedPreset?: PermissionPresetSelection | undefined;
+  readonly preparingPreset?: PermissionPresetSelection | undefined;
   readonly permissionPresetError?: string | undefined;
   readonly transportAttempt?: number | undefined;
 };
@@ -302,7 +312,12 @@ export class WebSessionManager {
   }
 
   beginDraft(): void {
-    if (this.disposed || this.snapshot.submission !== "IDLE") return;
+    if (
+      this.disposed ||
+      this.snapshot.submission !== "IDLE" ||
+      this.snapshot.preparingPreset !== undefined
+    )
+      return;
     this.cancelActiveLifecycle();
     this.clearApprovals();
     const defaultSelection = this.snapshot.defaultSelection ?? this.options.info.defaultModel;
@@ -331,7 +346,12 @@ export class WebSessionManager {
   }
 
   async selectSession(sessionId: SessionId): Promise<boolean> {
-    if (this.disposed || this.snapshot.submission !== "IDLE") return false;
+    if (
+      this.disposed ||
+      this.snapshot.submission !== "IDLE" ||
+      this.snapshot.preparingPreset !== undefined
+    )
+      return false;
     const candidate = this.snapshot.candidates.find((item) => item.session.id === sessionId);
     if (candidate === undefined) return false;
 
@@ -390,7 +410,13 @@ export class WebSessionManager {
   }
 
   async submitPrompt(prompt: string): Promise<boolean> {
-    if (this.disposed || this.hasActiveRun() || this.snapshot.submission !== "IDLE") return false;
+    if (
+      this.disposed ||
+      this.hasActiveRun() ||
+      this.snapshot.submission !== "IDLE" ||
+      this.snapshot.preparingPreset !== undefined
+    )
+      return false;
     const validation = validatePrompt(prompt);
     if (!validation.ok) {
       this.publish({ error: promptError(validation.error) });
@@ -632,7 +658,13 @@ export class WebSessionManager {
   }
 
   async selectPermissionPreset(selection: PermissionPresetSelection): Promise<boolean> {
-    if (this.disposed || this.hasActiveRun() || this.snapshot.submission !== "IDLE") return false;
+    if (
+      this.disposed ||
+      this.hasActiveRun() ||
+      this.snapshot.submission !== "IDLE" ||
+      this.snapshot.preparingPreset !== undefined
+    )
+      return false;
     const preset = this.snapshot.availablePresets.find(
       (candidate) => candidate.id === selection.id,
     );
@@ -645,15 +677,45 @@ export class WebSessionManager {
       return false;
     }
     this.options.permissionPresetStore?.write(this.options.workspace.id, selection);
-    this.publish({ selectedPreset: selection, permissionPresetError: undefined, error: undefined });
+    this.publish({
+      requestedPreset: selection,
+      selectedPreset: selection,
+      permissionPresetError: undefined,
+      error: undefined,
+    });
     return true;
   }
 
   async preparePermissionPreset(selection: PermissionPresetSelection): Promise<boolean> {
-    if (this.disposed || this.hasActiveRun()) return false;
+    if (
+      this.disposed ||
+      this.hasActiveRun() ||
+      this.snapshot.submission !== "IDLE" ||
+      this.snapshot.preparingPreset !== undefined
+    )
+      return false;
+    const preset = this.snapshot.availablePresets.find(
+      (candidate) => candidate.id === selection.id,
+    );
+    if (
+      preset === undefined ||
+      preset.version !== selection.expectedVersion ||
+      preset.status !== "PREPARATION_REQUIRED"
+    ) {
+      this.publish({ error: sessionError("PERMISSION_PRESET_UNAVAILABLE") });
+      return false;
+    }
+
+    this.publish({
+      requestedPreset: selection,
+      preparingPreset: selection,
+      permissionPresetError: undefined,
+      error: undefined,
+    });
     const prepare = this.options.client.prepareWorkspaceSecurity;
     if (prepare === undefined) {
-      this.publish({ error: sessionError("PERMISSION_PREPARATION_FAILED") });
+      const error = permissionPreparationError();
+      this.publish({ preparingPreset: undefined, error });
       return false;
     }
     try {
@@ -662,25 +724,46 @@ export class WebSessionManager {
         this.options.workspace.id,
         selection,
       );
-      if (response.status !== "READY" && response.status !== "PREPARED") {
-        this.publish({ error: sessionError("PERMISSION_PREPARATION_FAILED") });
+      if (
+        response.workspaceId !== this.options.workspace.id ||
+        response.preset.id !== selection.id ||
+        response.preset.expectedVersion !== selection.expectedVersion
+      ) {
+        const error = permissionPreparationError("WORKSPACE_PREPARATION_RESPONSE_MISMATCH");
+        this.publish({ error });
         return false;
       }
-      /**
-       * Only a preparation the host accepted may become the persisted preference.
-       *
-       * Persisting before the outcome made a refused preparation still replace the user's stored
-       * choice with a preset this workspace cannot use, so the next load silently fell back to
-       * read-only and the user's actual selection was lost.
-       */
-      this.options.permissionPresetStore?.write(this.options.workspace.id, selection);
+      if (response.status !== "READY" && response.status !== "PREPARED") {
+        const error = permissionPreparationError(response.reasonCode);
+        this.publish({ error });
+        return false;
+      }
       // The prepared preset is named explicitly: the reload must select *it*, not re-derive a
-      // choice from whatever happened to be persisted before.
+      // choice from whatever happened to be persisted before. The capability read—not the
+      // preparation acknowledgement—is authoritative for whether the permission is usable.
       await this.loadPermissionPresets(selection.id);
-      return this.snapshot.selectedPreset?.id === selection.id;
+      if (this.disposed) return false;
+      if (
+        this.snapshot.selectedPreset?.id !== selection.id ||
+        this.snapshot.selectedPreset.expectedVersion !== selection.expectedVersion
+      ) {
+        const error = permissionPreparationError("WORKSPACE_PREPARATION_NOT_CONFIRMED");
+        this.publish({ error });
+        return false;
+      }
+      this.options.permissionPresetStore?.write(this.options.workspace.id, selection);
+      this.publish({
+        requestedPreset: selection,
+        permissionPresetError: undefined,
+        error: undefined,
+      });
+      return true;
     } catch {
-      this.publish({ error: sessionError("PERMISSION_PREPARATION_FAILED") });
+      const error = permissionPreparationError();
+      this.publish({ error });
       return false;
+    } finally {
+      this.publish({ preparingPreset: undefined });
     }
   }
 
@@ -697,6 +780,7 @@ export class WebSessionManager {
           ? DEFAULT_PERMISSION_PRESET_ID
           : fallbackId;
       this.publish({
+        requestedPreset: { id: safeFallback, expectedVersion: 1 },
         selectedPreset: { id: safeFallback, expectedVersion: 1 },
         availablePresets: [],
         permissionPresetError: undefined,
@@ -719,6 +803,7 @@ export class WebSessionManager {
         capabilities.defaultPreset;
       const requestedId =
         configuredId === "LEGACY_CUSTOM" ? capabilities.defaultPreset : configuredId;
+      const requestedCandidate = availablePresets.find((preset) => preset.id === requestedId);
       const selectedPreset =
         preferredId !== undefined
           ? // An explicit preference (a preparation the host just accepted) always wins. It still
@@ -730,9 +815,15 @@ export class WebSessionManager {
                 availablePresets.find((preset) => preset.id === persisted.id)?.version
             ? choosePermissionPreset(availablePresets, persisted.id)
             : choosePermissionPreset(availablePresets, requestedId);
+      const requestedPreset =
+        requestedCandidate === undefined ||
+        (requestedCandidate.requiresConfirmation && preferredId === undefined)
+          ? selectedPreset
+          : { id: requestedCandidate.id, expectedVersion: requestedCandidate.version };
       this.publish({
         permissionCapabilities: capabilities,
         availablePresets,
+        requestedPreset,
         selectedPreset,
         permissionPresetError:
           selectedPreset === undefined
@@ -745,6 +836,7 @@ export class WebSessionManager {
       this.publish({
         permissionCapabilities: undefined,
         availablePresets: [],
+        requestedPreset: undefined,
         selectedPreset: undefined,
         permissionPresetError: sessionError("PERMISSION_CAPABILITIES_FAILED").message,
         error: sessionError("PERMISSION_CAPABILITIES_FAILED"),
@@ -1865,4 +1957,16 @@ function sessionError(code: WebSessionErrorCode): WebSessionError {
     PROMPT_TOO_LARGE: "任务内容不能超过 32 KiB。",
   };
   return { code, message: messages[code] };
+}
+
+function permissionPreparationError(reasonCode?: string): WebSessionError {
+  const boundedReasonCode =
+    reasonCode !== undefined && /^[A-Z0-9_]{1,96}$/.test(reasonCode) ? reasonCode : undefined;
+  if (boundedReasonCode === undefined) return sessionError("PERMISSION_PREPARATION_FAILED");
+  const reason = permissionPresetUnavailableReason(boundedReasonCode);
+  return {
+    code: "PERMISSION_PREPARATION_FAILED",
+    reasonCode: boundedReasonCode,
+    message: `工作区权限准备失败：${reason}。当前实际权限保持不变。`,
+  };
 }
