@@ -385,6 +385,7 @@ describe("TurnPresentationFeed", () => {
   });
 
   it("keeps a completed summary when no durable final answer exists", () => {
+    const initial = createInitialLiveActivityState(runId);
     const html = renderToStaticMarkup(
       <TurnPresentationFeed
         presentation={{
@@ -404,9 +405,25 @@ describe("TurnPresentationFeed", () => {
             },
           ],
         }}
+        liveActivity={{
+          ...initial,
+          activities: [
+            {
+              id: "completed-draft",
+              kind: "MODEL_TEXT",
+              status: "COMPLETED",
+              text: "完成摘要之后的答复草稿",
+              streamKey: "model:completed-without-final",
+              streamSequence: 1,
+              runId,
+              stepId: "step-completed-without-final",
+            },
+          ],
+        }}
       />,
     );
     expect(html).toContain("任务结束报告");
     expect(html).toContain("完成但无最终答复");
+    expect(html).toContain("完成摘要之后的答复草稿");
   });
 });

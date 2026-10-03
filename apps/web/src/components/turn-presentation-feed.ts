@@ -45,15 +45,17 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
   const finalAnswers = durableAssistantItems.filter(
     (item) => item.kind === "ASSISTANT" && item.phase === "FINAL_ANSWER",
   );
-  const terminalRunIds = new Set(
-    props.presentation.items.flatMap((item) => (item.kind === "RUN_SUMMARY" ? [item.runId] : [])),
+  const unsuccessfulTerminalRunIds = new Set(
+    props.presentation.items.flatMap((item) =>
+      item.kind === "RUN_SUMMARY" && item.runStatus !== "COMPLETED" ? [item.runId] : [],
+    ),
   );
   const modelDrafts = liveActivities.filter(
     (activity) =>
       activity.kind === "MODEL_TEXT" &&
       (activity.status === "ACTIVE" || activity.status === "COMPLETED") &&
-      props.liveActivity?.terminal !== true &&
-      !terminalRunIds.has(activity.runId) &&
+      !(props.liveActivity?.terminal === true && activity.status === "ACTIVE") &&
+      !unsuccessfulTerminalRunIds.has(activity.runId) &&
       !settledStepKeys.has(`${activity.runId}:${activity.stepId ?? ""}`),
   );
   const summaries = props.presentation.items.filter((item) => {
