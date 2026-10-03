@@ -15,11 +15,16 @@ import {
   type RunActionResponse,
   type SessionTranscriptResponse,
   type SessionTurnPresentationResponse,
+  type SessionTurnPresentationResponseV2,
   type TranscriptEntry,
   type WorkspaceSessionSummary,
   type WorkspaceRef,
 } from "@caelush/protocol";
-import type { Timer, WatchRunEventsOptions } from "@caelush/client";
+import {
+  CaelushProtocolCompatibilityError,
+  type Timer,
+  type WatchRunEventsOptions,
+} from "@caelush/client";
 import { describe, expect, it, vi } from "vitest";
 import { WebSessionManager, type WebSessionClient } from "../src/application/session-manager.js";
 
@@ -279,6 +284,129 @@ describe("WebSessionManager", () => {
     });
     expect(manager.getSnapshot().turnPresentation?.items).toEqual([firstItem, secondItem]);
     expect(manager.getSnapshot().turnPresentation?.nextCursor).toBeUndefined();
+    manager.dispose();
+  });
+
+  it("preserves v2 across every turn presentation page", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const run = makeCompletedRun(makeRun({ sessionId: session.id }));
+    const firstItem = {
+      id: "presentation:user-v2",
+      runId: run.id,
+      conversationTurnId: run.id,
+      ordinal: 0,
+      status: "COMPLETED" as const,
+      createdAt: run.createdAt,
+      kind: "USER" as const,
+      text: "检查项目",
+    };
+    const secondItem = {
+      id: "presentation:assistant-v2",
+      runId: run.id,
+      conversationTurnId: run.id,
+      ordinal: 1,
+      status: "COMPLETED" as const,
+      createdAt: run.finishedAt ?? run.createdAt,
+      kind: "ASSISTANT" as const,
+      phase: "FINAL_ANSWER" as const,
+      sourceStepId: createStepId(),
+      text: "已完成检查。",
+    };
+    const client = makeClient({
+      sessions: [session],
+      latestRuns: new Map([[session.id, [run]]]),
+    });
+    client.getSessionTurnPresentation.mockImplementation(async (_sessionId, query) =>
+      query?.cursor === "1"
+        ? { capabilityVersion: 2, highWatermark: 8, items: [secondItem] }
+        : {
+            capabilityVersion: 2,
+            highWatermark: 8,
+            items: [firstItem],
+            nextCursor: "1",
+          },
+    );
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      info: makeInfo({
+        capabilities: { ...makeInfo().capabilities, sessionTurnPresentation: true },
+      }),
+    });
+
+    await manager.loadSessions();
+    await expect(manager.selectSession(session.id)).resolves.toBe(true);
+
+    expect(manager.getSnapshot().turnPresentation).toEqual({
+      capabilityVersion: 2,
+      items: [firstItem, secondItem],
+      highWatermark: 8,
+    } satisfies SessionTurnPresentationResponseV2);
+    expect(manager.getSnapshot().turnPresentation?.items[1]).toMatchObject({
+      sourceStepId: secondItem.sourceStepId,
+    });
+    manager.dispose();
+  });
+
+  it("rejects mixed turn presentation page versions without publishing partial data", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const run = makeCompletedRun(makeRun({ sessionId: session.id }));
+    const firstItem = {
+      id: "presentation:user-v1",
+      runId: run.id,
+      conversationTurnId: run.id,
+      ordinal: 0,
+      status: "COMPLETED" as const,
+      createdAt: run.createdAt,
+      kind: "USER" as const,
+      text: "检查项目",
+    };
+    const secondItem = {
+      id: "presentation:assistant-v2",
+      runId: run.id,
+      conversationTurnId: run.id,
+      ordinal: 1,
+      status: "COMPLETED" as const,
+      createdAt: run.finishedAt ?? run.createdAt,
+      kind: "ASSISTANT" as const,
+      phase: "FINAL_ANSWER" as const,
+      sourceStepId: createStepId(),
+      text: "已完成检查。",
+    };
+    const client = makeClient({
+      sessions: [session],
+      latestRuns: new Map([[session.id, [run]]]),
+    });
+    client.getSessionTurnPresentation.mockImplementation(async (_sessionId, query) =>
+      query?.cursor === "1"
+        ? { capabilityVersion: 2, highWatermark: 8, items: [secondItem] }
+        : {
+            capabilityVersion: 1,
+            highWatermark: 8,
+            items: [firstItem],
+            nextCursor: "1",
+          },
+    );
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      info: makeInfo({
+        capabilities: { ...makeInfo().capabilities, sessionTurnPresentation: true },
+      }),
+    });
+
+    await manager.loadSessions();
+    await expect(
+      (
+        manager as unknown as {
+          loadSessionTurnPresentation(sessionId: typeof session.id): Promise<unknown>;
+        }
+      ).loadSessionTurnPresentation(session.id),
+    ).rejects.toBeInstanceOf(CaelushProtocolCompatibilityError);
+    await expect(manager.selectSession(session.id)).resolves.toBe(false);
+
+    expect(manager.getSnapshot().status).toBe("ERROR");
+    expect(manager.getSnapshot().turnPresentation).toBeUndefined();
     manager.dispose();
   });
 

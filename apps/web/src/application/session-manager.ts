@@ -387,7 +387,7 @@ export class WebSessionManager {
         }
       }
       this.options.selectionStore?.write(this.options.workspace.id, sessionId);
-      return this.applySelectedSession(candidate.session, runs);
+      return await this.applySelectedSession(candidate.session, runs);
     } catch {
       this.publish({
         status: "ERROR",
@@ -1130,18 +1130,23 @@ export class WebSessionManager {
     const seenCursors = new Set<string>();
     let cursor: string | undefined;
     let highWatermark = 0;
+    let capabilityVersion: 1 | 2 | undefined;
     do {
       const response = await getPresentation.call(this.options.client, sessionId, {
         limit: 100,
         ...(cursor === undefined ? {} : { cursor }),
       });
+      if (capabilityVersion !== undefined && response.capabilityVersion !== capabilityVersion) {
+        throw new CaelushProtocolCompatibilityError();
+      }
+      capabilityVersion ??= response.capabilityVersion;
       items.push(...response.items);
       highWatermark = Math.max(highWatermark, response.highWatermark);
       cursor = nextPageCursor(response.nextCursor, seenCursors);
     } while (cursor !== undefined);
     return reconcileTurnPresentation(
       {
-        capabilityVersion: 1,
+        capabilityVersion: capabilityVersion ?? 1,
         items,
         highWatermark,
       },
