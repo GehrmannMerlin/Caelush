@@ -325,9 +325,10 @@ describe("WebSessionManager workspace preparation", () => {
 
     await manager.loadSessions();
     manager.beginDraft();
-    // While preparation is outstanding the workspace cannot honour Workspace Write, so the Run
-    // would use read-only and the user must ask for preparation explicitly.
+    // An unprepared default cannot become the selected permission until the user explicitly
+    // chooses it and workspace capabilities confirm preparation.
     expect(manager.getSnapshot().selectedPreset).toEqual({ id: "VIEW_ONLY", expectedVersion: 1 });
+    expect(manager.getSnapshot().requestedPreset).toEqual({ id: "VIEW_ONLY", expectedVersion: 1 });
 
     await expect(
       manager.preparePermissionPreset({ id: "WORKSPACE_WRITE", expectedVersion: 1 }),
@@ -455,7 +456,7 @@ describe("WebSessionManager workspace preparation", () => {
     manager.dispose();
   });
 
-  it("keeps the requested preset distinct from the active preset after preparation fails", async () => {
+  it("restores the active preset selection after preparation fails", async () => {
     const prepareWorkspaceSecurity = vi.fn(async () => ({
       schemaVersion: 1 as const,
       workspaceId: workspace.id,
@@ -477,7 +478,7 @@ describe("WebSessionManager workspace preparation", () => {
     await manager.preparePermissionPreset({ id: "WORKSPACE_WRITE", expectedVersion: 1 });
 
     const snapshot = manager.getSnapshot();
-    expect(snapshot.requestedPreset).toEqual({ id: "WORKSPACE_WRITE", expectedVersion: 1 });
+    expect(snapshot.requestedPreset).toEqual({ id: "VIEW_ONLY", expectedVersion: 1 });
     expect(snapshot.selectedPreset).toEqual({ id: "VIEW_ONLY", expectedVersion: 1 });
     manager.dispose();
   });
@@ -507,7 +508,7 @@ describe("WebSessionManager workspace preparation", () => {
     expect(error).toMatchObject({
       code: "PERMISSION_PREPARATION_FAILED",
       reasonCode: "WINDOWS_ACL_APPLY_FAILED",
-      message: "工作区权限准备失败：Windows 未能应用工作区访问控制设置。当前实际权限保持不变。",
+      message: "工作区准备失败：Windows 未能应用工作区访问控制设置。",
     });
     manager.dispose();
   });

@@ -53,7 +53,7 @@ describe("PermissionSelector", () => {
     expect(html).toContain('aria-label="选择权限"');
   });
 
-  it("renders an explicit empty option when no permission is selected", () => {
+  it("renders unprepared workspace write as selectable and visually muted", () => {
     const html = renderToStaticMarkup(
       <PermissionSelector
         presets={[
@@ -70,8 +70,10 @@ describe("PermissionSelector", () => {
     expect(html).toContain('<option value="" selected="">请选择权限</option>');
     expect(html).toContain('<option value="VIEW_ONLY" disabled="">仅可查看（不可用）</option>');
     expect(html).toContain(
-      '<option value="WORKSPACE_WRITE" disabled="">工作区内修改（待准备）</option>',
+      '<option value="WORKSPACE_WRITE" class="permission-selector-option--preparation-required">工作区内修改</option>',
     );
+    expect(html).not.toContain("工作区内修改（待准备）");
+    expect(html).not.toContain("permission-selector-prepare");
     expect(html).not.toContain('<option value="FULL_ACCESS" selected="">');
   });
 
@@ -158,12 +160,11 @@ describe("PermissionSelector", () => {
     expect(html).toContain("取消");
   });
 
-  it("shows the effective permission separately and marks workspace preparation as pending", () => {
+  it("keeps the permission selector compact while workspace preparation runs", () => {
     const html = renderToStaticMarkup(
       <PermissionSelector
         presets={[presets[0]!, { ...presets[1]!, status: "PREPARATION_REQUIRED" }, presets[2]!]}
-        selected={{ id: "WORKSPACE_WRITE", expectedVersion: 1 }}
-        active={{ id: "VIEW_ONLY", expectedVersion: 1 }}
+        selected={{ id: "VIEW_ONLY", expectedVersion: 1 }}
         preparing={{ id: "WORKSPACE_WRITE", expectedVersion: 1 }}
         disabled={false}
         onSelect={vi.fn()}
@@ -171,13 +172,15 @@ describe("PermissionSelector", () => {
       />,
     );
 
-    expect(html).toContain("当前实际用于新任务：仅可查看");
-    expect(html).toContain("请求的工作区内修改尚未生效");
+    expect(html).toContain('<option value="VIEW_ONLY" selected="">仅可查看</option>');
     expect(html).toContain(
-      '<option value="WORKSPACE_WRITE" disabled="" selected="">工作区内修改（待准备）</option>',
+      '<option value="WORKSPACE_WRITE" class="permission-selector-option--preparation-required">工作区内修改</option>',
     );
-    expect(html).toContain(
-      '<button type="button" class="permission-selector-prepare" disabled="">准备中…</button>',
-    );
+    expect(html).toContain('aria-busy="true"');
+    expect(html).not.toContain("当前实际用于新任务");
+    expect(html).not.toContain("请求的工作区内修改尚未生效");
+    expect(html).not.toContain("（待准备）");
+    expect(html).not.toContain("准备工作区修改");
+    expect(html).not.toContain("permission-selector-prepare");
   });
 });

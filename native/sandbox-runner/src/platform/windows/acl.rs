@@ -76,7 +76,7 @@ use windows_sys::Win32::Security::{
     AddAce, EqualSid, GetAce, GetAclInformation, InitializeAcl, ACCESS_ALLOWED_ACE,
     ACCESS_DENIED_ACE, ACE_HEADER, ACL, ACL_REVISION_DS, ACL_SIZE_INFORMATION,
     CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, LABEL_SECURITY_INFORMATION,
-    OBJECT_INHERIT_ACE, SYSTEM_MANDATORY_LABEL_ACE,
+    OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION, SYSTEM_MANDATORY_LABEL_ACE,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_ALL_ACCESS, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ,
@@ -205,36 +205,80 @@ fn ensure_write_grant_locked(
         return Ok(GrantChange::Unchanged);
     }
 
-    let dacl = if grant_ready && deny_ready {
-        None
-    } else {
-        Some(build_dacl(
-            security.dacl,
-            (!grant_ready).then_some((target.as_psid(), &desired)),
-            (!deny_ready).then_some((everyone_sid.as_psid(), &desired_deny)),
-            None,
-            None,
-        )?)
-    };
+    // Always build the final DACL when anything is missing. If the integrity label needs repair,
+    // this also gives us the original product DACL to restore after the temporary owner grant.
+    let dacl = build_dacl(
+        security.dacl,
+        (!grant_ready).then_some((target.as_psid(), &desired)),
+        (!deny_ready).then_some((everyone_sid.as_psid(), &desired_deny)),
+        None,
+        None,
+    )?;
     let sacl = if label_ready {
         None
     } else {
         Some(build_low_integrity_sacl(security.sacl, low_sid.as_psid())?)
     };
-    if sacl.is_some() {
-        require_write_owner(path)?;
-    }
-    // Install the integrity barrier before exposing the capability grant. Each phase is
-    // independently idempotent, and the WRITE_OWNER preflight prevents the common half-written
-    // state where the DACL changed but the mandatory label could not be written.
+
+    // The directory owner has implicit WRITE_DAC, but Windows requires WRITE_OWNER when setting
+    // LABEL_SECURITY_INFORMATION. Give only the descriptor owner a non-inheriting WRITE_OWNER
+    // ACE for this directory while applying the SACL, then replace it with `dacl` below.
+    let temporary_owner_dacl = if sacl.is_some() {
+        match require_write_owner(path) {
+            Ok(()) => None,
+            Err(SandboxError::WorkspaceWriteOwnerRequired) => {
+                if security.owner.is_null() {
+                    return Err(SandboxError::AclRead);
+                }
+                let owner = AccessGrantEntry {
+                    sid: sid_to_string(security.owner)?,
+                    mask: WRITE_OWNER,
+                    inheritance: 0,
+                };
+                let temporary = build_dacl(
+                    security.dacl,
+                    Some((security.owner, &owner)),
+                    None,
+                    None,
+                    None,
+                )?;
+                if let Err(error) = apply_dacl(path, &temporary) {
+                    return rollback_dacl(path, &security, error);
+                }
+                if let Err(error) = require_write_owner(path) {
+                    return rollback_dacl(path, &security, error);
+                }
+                Some(temporary)
+            }
+            Err(error) => return Err(error),
+        }
+    } else {
+        None
+    };
+
+    // Install the integrity barrier before exposing a newly added capability grant.
     if let Some(sacl) = sacl.as_ref() {
-        apply_label(path, sacl)?;
+        if let Err(error) = apply_label(path, sacl) {
+            return rollback_security(path, &security, error);
+        }
     }
-    if let Some(dacl) = dacl.as_ref() {
-        apply_dacl(path, dacl)?;
+    if let Err(error) = apply_dacl(path, &dacl) {
+        return if temporary_owner_dacl.is_some() || sacl.is_some() {
+            rollback_security(path, &security, error)
+        } else {
+            Err(error)
+        };
     }
-    if inspect_write_grant(path, capability_sid)? != GrantStatus::Ready {
-        return Err(SandboxError::WorkspaceSecurityPostcondition);
+    match inspect_write_grant(path, capability_sid) {
+        Ok(GrantStatus::Ready) => {}
+        Ok(GrantStatus::Missing) => {
+            return rollback_security(
+                path,
+                &security,
+                SandboxError::WorkspaceSecurityPostcondition,
+            )
+        }
+        Err(error) => return rollback_security(path, &security, error),
     }
     Ok(GrantChange::Added)
 }
@@ -313,6 +357,7 @@ fn acl_path_locks() -> &'static PathLockRegistry {
 
 struct SecuritySnapshot {
     _descriptor: OwnedLocal<u8>,
+    owner: windows_sys::Win32::Security::PSID,
     dacl: *mut ACL,
     sacl: *mut ACL,
 }
@@ -323,6 +368,7 @@ fn read_security(path: &Path) -> Result<SecuritySnapshot, SandboxError> {
         .encode_wide()
         .chain(Some(0))
         .collect::<Vec<_>>();
+    let mut owner = null_mut();
     let mut dacl = null_mut();
     let mut sacl = null_mut();
     let mut descriptor = null_mut();
@@ -330,8 +376,8 @@ fn read_security(path: &Path) -> Result<SecuritySnapshot, SandboxError> {
         GetNamedSecurityInfoW(
             wide.as_ptr(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION,
-            null_mut(),
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION,
+            &mut owner,
             null_mut(),
             &mut dacl,
             &mut sacl,
@@ -347,12 +393,17 @@ fn read_security(path: &Path) -> Result<SecuritySnapshot, SandboxError> {
             .map_err(|_| SandboxError::AclRead)?;
     Ok(SecuritySnapshot {
         _descriptor: descriptor,
+        owner,
         dacl,
         sacl,
     })
 }
 
 fn apply_dacl(path: &Path, dacl: &AclBuffer) -> Result<(), SandboxError> {
+    apply_dacl_ptr(path, dacl.as_ptr())
+}
+
+fn apply_dacl_ptr(path: &Path, dacl: *const ACL) -> Result<(), SandboxError> {
     let wide = path
         .as_os_str()
         .encode_wide()
@@ -365,7 +416,7 @@ fn apply_dacl(path: &Path, dacl: &AclBuffer) -> Result<(), SandboxError> {
             DACL_SECURITY_INFORMATION,
             null_mut(),
             null_mut(),
-            dacl.as_ptr(),
+            dacl,
             null(),
         )
     };
@@ -376,6 +427,10 @@ fn apply_dacl(path: &Path, dacl: &AclBuffer) -> Result<(), SandboxError> {
 }
 
 fn apply_label(path: &Path, sacl: &AclBuffer) -> Result<(), SandboxError> {
+    apply_label_ptr(path, sacl.as_ptr())
+}
+
+fn apply_label_ptr(path: &Path, sacl: *const ACL) -> Result<(), SandboxError> {
     let wide = wide_path(path);
     let status = unsafe {
         SetNamedSecurityInfoW(
@@ -385,7 +440,7 @@ fn apply_label(path: &Path, sacl: &AclBuffer) -> Result<(), SandboxError> {
             null_mut(),
             null_mut(),
             null(),
-            sacl.as_ptr(),
+            sacl,
         )
     };
     if status != ERROR_SUCCESS {
@@ -398,6 +453,64 @@ fn apply_label(path: &Path, sacl: &AclBuffer) -> Result<(), SandboxError> {
         );
     }
     Ok(())
+}
+
+fn rollback_dacl(
+    path: &Path,
+    security: &SecuritySnapshot,
+    original_error: SandboxError,
+) -> Result<GrantChange, SandboxError> {
+    if apply_dacl_ptr(path, security.dacl).is_err() {
+        return Err(SandboxError::WorkspaceSecurityPostcondition);
+    }
+    Err(original_error)
+}
+
+fn rollback_security(
+    path: &Path,
+    security: &SecuritySnapshot,
+    original_error: SandboxError,
+) -> Result<GrantChange, SandboxError> {
+    match require_write_owner(path) {
+        Ok(()) => {}
+        Err(SandboxError::WorkspaceWriteOwnerRequired) if !security.owner.is_null() => {
+            let current = match read_security(path) {
+                Ok(current) => current,
+                Err(_) => return Err(SandboxError::WorkspaceSecurityPostcondition),
+            };
+            let owner_grant = match sid_to_string(security.owner) {
+                Ok(sid) => AccessGrantEntry {
+                    sid,
+                    mask: WRITE_OWNER,
+                    inheritance: 0,
+                },
+                Err(_) => return Err(SandboxError::WorkspaceSecurityPostcondition),
+            };
+            let temporary = match build_dacl(
+                current.dacl,
+                Some((security.owner, &owner_grant)),
+                None,
+                None,
+                None,
+            ) {
+                Ok(temporary) => temporary,
+                Err(_) => return Err(SandboxError::WorkspaceSecurityPostcondition),
+            };
+            if apply_dacl(path, &temporary).is_err() || require_write_owner(path).is_err() {
+                let _ = apply_dacl_ptr(path, security.dacl);
+                return Err(SandboxError::WorkspaceSecurityPostcondition);
+            }
+        }
+        Err(_) => return Err(SandboxError::WorkspaceSecurityPostcondition),
+    }
+
+    let label_restored = apply_label_ptr(path, security.sacl).is_ok();
+    let dacl_restored = apply_dacl_ptr(path, security.dacl).is_ok();
+    if label_restored && dacl_restored {
+        Err(original_error)
+    } else {
+        Err(SandboxError::WorkspaceSecurityPostcondition)
+    }
 }
 
 fn require_write_owner(path: &Path) -> Result<(), SandboxError> {
@@ -431,6 +544,26 @@ fn require_write_owner(path: &Path) -> Result<(), SandboxError> {
 
 fn wide_path(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain(Some(0)).collect()
+}
+
+fn sid_to_string(sid: windows_sys::Win32::Security::PSID) -> Result<String, SandboxError> {
+    let mut string_sid = null_mut();
+    if unsafe { ConvertSidToStringSidW(sid, &mut string_sid) } == 0 || string_sid.is_null() {
+        drop_local_string_sid(string_sid);
+        return Err(SandboxError::AclSid);
+    }
+    let owned = unsafe { OwnedLocal::<u16>::from_raw(string_sid, SandboxError::AclSid.code()) }
+        .map_err(|_| SandboxError::AclSid)?;
+    let mut length = 0usize;
+    unsafe {
+        while *owned.as_ptr().add(length) != 0 {
+            length += 1;
+        }
+        Ok(String::from_utf16_lossy(std::slice::from_raw_parts(
+            owned.as_ptr(),
+            length,
+        )))
+    }
 }
 
 fn low_integrity_sid() -> Result<OwnedSid, SandboxError> {

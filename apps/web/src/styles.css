@@ -1570,6 +1570,10 @@ body {
   opacity: 0.62;
 }
 
+.permission-selector-select option.permission-selector-option--preparation-required {
+  color: #98a39c;
+}
+
 .permission-selector-error {
   max-width: 270px;
   margin: 0;
@@ -1590,34 +1594,8 @@ body {
   gap: 6px;
 }
 
-.permission-selector-effective {
-  flex: 0 1 190px;
-  max-width: 190px;
-  margin: 0;
-  color: #617087;
-  font-size: 0.64rem;
-  line-height: 1.25;
-}
-
 .permission-selector-error {
   color: #b42318;
-}
-
-.permission-selector-prepare {
-  width: fit-content;
-  padding: 3px 7px;
-  border: 1px solid #b5cfc4;
-  border-radius: 6px;
-  background: #f7fbf9;
-  color: #1f6b52;
-  cursor: pointer;
-  font-size: 0.68rem;
-  font-weight: 700;
-}
-
-.permission-selector-prepare:disabled {
-  cursor: wait;
-  opacity: 0.72;
 }
 
 .permission-selector-confirmation {

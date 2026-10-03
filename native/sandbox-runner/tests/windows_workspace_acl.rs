@@ -4,9 +4,15 @@ use caelush_sandbox_runner::platform::windows::{
     spawn_workspace_write_restricted, workspace_prepare, workspace_status, GrantChange, GrantStatus,
 };
 use std::fs;
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Storage::FileSystem::{
+    CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    OPEN_EXISTING, WRITE_OWNER,
+};
 
 #[test]
 fn explicit_workspace_prepare_changes_status_without_starting_a_payload() {
@@ -33,23 +39,25 @@ fn explicit_workspace_prepare_changes_status_without_starting_a_payload() {
 }
 
 #[test]
-fn workspace_prepare_reports_missing_write_owner_before_mutating_the_dacl() {
+fn workspace_prepare_uses_owner_dacl_authority_and_removes_temporary_write_owner() {
     let root = TemporaryRoot::new("prepare-write-owner");
     let workspace = root.path.join("workspace");
     fs::create_dir(&workspace).expect("workspace should be created");
     restrict_current_user_to_modify(&workspace);
 
-    let error = workspace_prepare(&workspace)
-        .expect_err("workspace preparation should require WRITE_OWNER for its integrity label");
-    let status_after_failure =
-        workspace_status(&workspace).expect("failed preparation should remain inspectable");
+    assert_eq!(
+        workspace_prepare(&workspace).expect("owner should prepare an owned workspace"),
+        GrantChange::Added
+    );
+    let status_after_prepare =
+        workspace_status(&workspace).expect("prepared workspace should remain inspectable");
+    assert_write_owner_is_not_retained(&workspace);
     restore_inheritance(&workspace);
 
-    assert_eq!(error, "WINDOWS_WORKSPACE_WRITE_OWNER_REQUIRED");
     assert_eq!(
-        status_after_failure,
-        GrantStatus::Missing,
-        "preflight failure must happen before the standing capability grant is written"
+        status_after_prepare,
+        GrantStatus::Ready,
+        "the final capability DACL and integrity label must both be present"
     );
 }
 
@@ -153,4 +161,32 @@ fn restore_inheritance(path: &Path) {
         .status()
         .expect("icacls should restore fixture inheritance");
     assert!(status.success(), "fixture inheritance should be restored");
+}
+
+fn assert_write_owner_is_not_retained(path: &Path) {
+    let wide = path
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let handle = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            WRITE_OWNER,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS,
+            std::ptr::null_mut(),
+        )
+    };
+    if !handle.is_null() && handle != INVALID_HANDLE_VALUE {
+        unsafe { CloseHandle(handle) };
+        panic!("temporary WRITE_OWNER access must not remain in the workspace DACL");
+    }
+    assert_eq!(
+        unsafe { GetLastError() },
+        windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED,
+        "WRITE_OWNER should be denied after preparation"
+    );
 }

@@ -712,11 +712,17 @@ export class WebSessionManager {
       permissionPresetError: undefined,
       error: undefined,
     });
+    const failPreparation = (error: WebSessionError): false => {
+      this.publish({
+        requestedPreset: this.snapshot.selectedPreset,
+        error,
+      });
+      return false;
+    };
     const prepare = this.options.client.prepareWorkspaceSecurity;
     if (prepare === undefined) {
       const error = permissionPreparationError();
-      this.publish({ preparingPreset: undefined, error });
-      return false;
+      return failPreparation(error);
     }
     try {
       const response = await prepare.call(
@@ -730,13 +736,11 @@ export class WebSessionManager {
         response.preset.expectedVersion !== selection.expectedVersion
       ) {
         const error = permissionPreparationError("WORKSPACE_PREPARATION_RESPONSE_MISMATCH");
-        this.publish({ error });
-        return false;
+        return failPreparation(error);
       }
       if (response.status !== "READY" && response.status !== "PREPARED") {
         const error = permissionPreparationError(response.reasonCode);
-        this.publish({ error });
-        return false;
+        return failPreparation(error);
       }
       // The prepared preset is named explicitly: the reload must select *it*, not re-derive a
       // choice from whatever happened to be persisted before. The capability read—not the
@@ -748,8 +752,7 @@ export class WebSessionManager {
         this.snapshot.selectedPreset.expectedVersion !== selection.expectedVersion
       ) {
         const error = permissionPreparationError("WORKSPACE_PREPARATION_NOT_CONFIRMED");
-        this.publish({ error });
-        return false;
+        return failPreparation(error);
       }
       this.options.permissionPresetStore?.write(this.options.workspace.id, selection);
       this.publish({
@@ -760,8 +763,7 @@ export class WebSessionManager {
       return true;
     } catch {
       const error = permissionPreparationError();
-      this.publish({ error });
-      return false;
+      return failPreparation(error);
     } finally {
       this.publish({ preparingPreset: undefined });
     }
@@ -817,6 +819,7 @@ export class WebSessionManager {
             : choosePermissionPreset(availablePresets, requestedId);
       const requestedPreset =
         requestedCandidate === undefined ||
+        requestedCandidate.status === "PREPARATION_REQUIRED" ||
         (requestedCandidate.requiresConfirmation && preferredId === undefined)
           ? selectedPreset
           : { id: requestedCandidate.id, expectedVersion: requestedCandidate.version };
@@ -1952,7 +1955,7 @@ function sessionError(code: WebSessionErrorCode): WebSessionError {
     DEFAULT_MODEL_UNAVAILABLE: "当前 daemon 未配置默认模型，无法开始任务。",
     PERMISSION_CAPABILITIES_FAILED: "无法确认当前主机的权限能力，已阻止创建任务。",
     PERMISSION_PRESET_UNAVAILABLE: "所选权限当前不可用，已阻止创建任务。",
-    PERMISSION_PREPARATION_FAILED: "工作区权限准备失败，已阻止创建任务。",
+    PERMISSION_PREPARATION_FAILED: "工作区准备失败，已阻止创建任务。",
     PROMPT_REQUIRED: "请输入任务内容。",
     PROMPT_TOO_LARGE: "任务内容不能超过 32 KiB。",
   };
@@ -1967,6 +1970,6 @@ function permissionPreparationError(reasonCode?: string): WebSessionError {
   return {
     code: "PERMISSION_PREPARATION_FAILED",
     reasonCode: boundedReasonCode,
-    message: `工作区权限准备失败：${reason}。当前实际权限保持不变。`,
+    message: `工作区准备失败：${reason}。`,
   };
 }

@@ -484,8 +484,10 @@ function renderWorkspaceApp(input: {
                 }),
                 permissionSelector: createElement(PermissionSelector, {
                   presets: snapshot.availablePresets,
-                  selected: snapshot.requestedPreset ?? snapshot.selectedPreset,
-                  active: snapshot.selectedPreset,
+                  selected:
+                    snapshot.preparingPreset === undefined
+                      ? (snapshot.requestedPreset ?? snapshot.selectedPreset)
+                      : snapshot.selectedPreset,
                   preparing: snapshot.preparingPreset,
                   disabled: composerInteractionDisabled || snapshot.activeRun !== undefined,
                   error: snapshot.permissionPresetError,

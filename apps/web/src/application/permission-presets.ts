@@ -145,7 +145,7 @@ export function permissionPresetUnavailableReason(reasonCode: string | undefined
     case "PRESET_VERSION_MISMATCH":
       return "权限预设版本已变化，请刷新后重试";
     case "WINDOWS_WORKSPACE_WRITE_OWNER_REQUIRED":
-      return "当前用户缺少设置工作区安全权限所需的所有者权限";
+      return "无权调整工作区安全设置";
     case "WINDOWS_ACL_APPLY_FAILED":
       return "Windows 未能应用工作区访问控制设置";
     case "WINDOWS_DACL_APPLY_FAILED":
