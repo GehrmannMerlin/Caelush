@@ -426,4 +426,106 @@ describe("TurnPresentationFeed", () => {
     expect(html).toContain("完成但无最终答复");
     expect(html).toContain("完成摘要之后的答复草稿");
   });
+
+  it("renders durable final answers and live drafts as safe Markdown", () => {
+    const initial = createInitialLiveActivityState(runId);
+    const markdown = [
+      "## 结果",
+      "",
+      "已修改 `apps/web/src/file.ts`。访问 https://example.com/docs 后继续。",
+      "",
+      "- 第一项",
+      "- [外部链接](https://example.com)",
+      "",
+      "> 引用说明",
+      "",
+      "| 项目 | 状态 |",
+      "| --- | --- |",
+      "| 构建 | 通过 |",
+      "",
+      "```ts",
+      "const answer = true;",
+      "```",
+    ].join("\n");
+    const html = renderToStaticMarkup(
+      <TurnPresentationFeed
+        presentation={{
+          ...presentation(),
+          items: presentation().items.map((item) =>
+            item.id === "assistant:final" && item.kind === "ASSISTANT"
+              ? { ...item, text: markdown }
+              : item,
+          ),
+        }}
+        liveActivity={{
+          ...initial,
+          activities: [
+            {
+              id: "markdown-draft",
+              kind: "MODEL_TEXT",
+              status: "ACTIVE",
+              text: "### 草稿\n\n运行 `pnpm build`。",
+              streamKey: "model:markdown",
+              streamSequence: 1,
+              runId,
+              stepId: "step-draft",
+            },
+          ],
+        }}
+      />,
+    );
+    const reply =
+      html.match(/<section class="turn-presentation-final"[\s\S]*?<\/section>/u)?.[0] ?? "";
+    const process =
+      html.match(/<details class="turn-presentation-process"[\s\S]*?<\/details>/u)?.[0] ?? "";
+
+    expect(reply).toContain("<h2>结果</h2>");
+    expect(reply).toContain("<ul>");
+    expect(reply).toContain("<blockquote>");
+    expect(reply).toContain("<table>");
+    expect(reply).toContain(
+      '<a href="https://example.com" target="_blank" rel="noopener noreferrer">外部链接</a>',
+    );
+    expect(reply).toContain('target="_blank"');
+    expect(reply).toContain('rel="noopener noreferrer"');
+    expect(reply).toContain('<a href="https://example.com/docs"');
+    expect(reply).toContain("<code>apps/web/src/file.ts</code>");
+    expect(reply).toContain('<pre><code class="language-ts">const answer = true;\n</code></pre>');
+    expect(reply).toContain("<h3>草稿</h3>");
+    expect(reply).toContain("<code>pnpm build</code>");
+    expect(process).toContain("读取 src/index.ts");
+    expect(process).toContain('class="turn-presentation-preview">安全预览</pre>');
+    expect(process).not.toContain("<h2>");
+  });
+
+  it("keeps raw HTML inert and does not create links for unsafe protocols", () => {
+    const html = renderToStaticMarkup(
+      <TurnPresentationFeed
+        presentation={{
+          capabilityVersion: 1,
+          highWatermark: 1,
+          items: [
+            {
+              id: "unsafe-final",
+              runId,
+              conversationTurnId: "turn-unsafe",
+              ordinal: 0,
+              status: "COMPLETED",
+              createdAt: 1,
+              kind: "ASSISTANT",
+              phase: "FINAL_ANSWER",
+              text: '<img src=x onerror="alert(1)"> [危险](javascript:alert%281%29)',
+            },
+          ],
+        }}
+      />,
+    );
+    const reply =
+      html.match(/<section class="turn-presentation-final"[\s\S]*?<\/section>/u)?.[0] ?? "";
+
+    expect(reply).not.toContain("<img");
+    expect(reply).toContain("&lt;img src=x onerror=&quot;alert(1)&quot;&gt;");
+    expect(reply).not.toContain('href="javascript:');
+    expect(reply).toContain("危险");
+  });
 });

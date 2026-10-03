@@ -1032,6 +1032,99 @@ textarea:disabled {
   color: #1e5b96;
 }
 
+.assistant-markdown {
+  min-width: 0;
+  color: inherit;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.assistant-markdown > :first-child {
+  margin-top: 0;
+}
+
+.assistant-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.assistant-markdown :is(h1, h2, h3, h4, h5, h6) {
+  margin: 1.1em 0 0.45em;
+  color: var(--web-ink, #17231f);
+  line-height: 1.3;
+}
+
+.assistant-markdown p,
+.assistant-markdown ul,
+.assistant-markdown ol,
+.assistant-markdown blockquote,
+.assistant-markdown table,
+.assistant-markdown pre {
+  margin: 0.75em 0;
+}
+
+.assistant-markdown ul,
+.assistant-markdown ol {
+  padding-left: 1.5em;
+}
+
+.assistant-markdown blockquote {
+  padding: 0.1em 0 0.1em 0.9em;
+  border-left: 3px solid var(--web-line, #d8e1dc);
+  color: var(--web-muted, #64756d);
+}
+
+.assistant-markdown a {
+  color: var(--web-accent, #17664e);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.16em;
+}
+
+.assistant-markdown :not(pre) > code {
+  padding: 0.12em 0.38em;
+  border: 1px solid var(--web-line, #d8e1dc);
+  border-radius: 0.35em;
+  background: var(--web-surface-soft, #f5f8f6);
+  color: var(--web-ink, #17231f);
+  font-size: 0.9em;
+  overflow-wrap: anywhere;
+}
+
+.assistant-markdown pre {
+  max-width: 100%;
+  overflow: auto;
+  padding: 0.85em 1em;
+  border: 1px solid var(--web-line, #d8e1dc);
+  border-radius: 0.65em;
+  background: var(--web-surface-soft, #f5f8f6);
+  color: var(--web-ink, #17231f);
+  line-height: 1.55;
+}
+
+.assistant-markdown pre code {
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.9em;
+}
+
+.assistant-markdown table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.assistant-markdown th,
+.assistant-markdown td {
+  padding: 0.4em 0.65em;
+  border: 1px solid var(--web-line, #d8e1dc);
+  text-align: left;
+}
+
+.assistant-markdown th {
+  background: var(--web-surface-soft, #f5f8f6);
+}
+
 .turn-presentation-item--final_answer {
   border-top: 1px solid #e5edf5;
   padding-top: 16px;

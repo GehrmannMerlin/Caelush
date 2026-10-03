@@ -14,6 +14,7 @@ import {
   LoaderCircle,
 } from "lucide-react";
 import caelushLogo from "../assets/logo/caelush-logo.png";
+import { AssistantMarkdown } from "./assistant-markdown.js";
 
 export interface TurnPresentationFeedProps {
   readonly presentation: SessionTurnPresentationResponse;
@@ -199,7 +200,7 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
                 key: activity.id,
               },
               createElement("p", { className: "turn-presentation-item-label" }, "最终答复"),
-              createElement("p", { className: "turn-presentation-item-text" }, activity.text),
+              createElement(AssistantMarkdown, null, activity.text),
             ),
           ),
         ),
@@ -226,7 +227,9 @@ function renderItem(item: TurnPresentationItem): ReactElement {
           { className: "turn-presentation-item-label" },
           assistantLabel(item.phase),
         ),
-        createElement("p", { className: "turn-presentation-item-text" }, item.text),
+        item.phase === "FINAL_ANSWER"
+          ? createElement(AssistantMarkdown, null, item.text)
+          : createElement("p", { className: "turn-presentation-item-text" }, item.text),
       );
     case "TOOL":
       return createElement(
