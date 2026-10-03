@@ -205,6 +205,7 @@ describe("SessionPresentationService", () => {
     });
 
     const response = await service.getPresentation(SESSION_ID, {});
+    expect(response.capabilityVersion).toBe(2);
     expect(response.items.map((item) => item.kind)).toEqual([
       "USER",
       "ASSISTANT",
@@ -215,8 +216,9 @@ describe("SessionPresentationService", () => {
     expect(response.items[1]).toMatchObject({
       phase: "COMMENTARY",
       text: expect.stringContaining("inspect"),
+      sourceStepId: STEP_ID,
     });
-    expect(response.items[3]).toMatchObject({ phase: "FINAL_ANSWER" });
+    expect(response.items[3]).toMatchObject({ phase: "FINAL_ANSWER", sourceStepId: STEP_ID });
     const tool = response.items[2] as ToolPresentationItem;
     expect(tool.preview).toBe("安全预览");
     expect(JSON.stringify(tool)).not.toContain("must-not-leak");

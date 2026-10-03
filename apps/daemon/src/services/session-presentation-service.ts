@@ -10,14 +10,14 @@ import type { AgentToolExecutionResult } from "@caelush/agent";
 import {
   AssistantMessagePhaseSchema,
   SessionTurnPresentationQuerySchema,
-  SessionTurnPresentationResponseSchema,
+  SessionTurnPresentationResponseV2Schema,
   type AgentRun,
   type DurableRunEvent,
   type RunStatus,
   type SessionId,
-  type SessionTurnPresentationResponse,
+  type SessionTurnPresentationResponseV2,
   type ToolPresentationItem,
-  type TurnPresentationItem,
+  type TurnPresentationItemV2,
   type VerificationPresentationItem,
 } from "@caelush/protocol";
 import type { JsonObject } from "@caelush/ai";
@@ -73,7 +73,7 @@ export interface SessionPresentationServiceOptions {
 }
 
 interface PositionedItem {
-  readonly item: TurnPresentationItem;
+  readonly item: TurnPresentationItemV2;
   readonly sequenceHint?: number;
   readonly createdAt: number;
   readonly stableId: string;
@@ -98,7 +98,7 @@ export class SessionPresentationService {
   async getPresentation(
     sessionId: SessionId,
     input: unknown,
-  ): Promise<SessionTurnPresentationResponse> {
+  ): Promise<SessionTurnPresentationResponseV2> {
     const query = SessionTurnPresentationQuerySchema.parse(input);
     const session = await this.options.sessions.get(sessionId);
     if (session === null) throw new StorageNotFoundError("AgentSession", sessionId);
@@ -124,8 +124,8 @@ export class SessionPresentationService {
       (maximum, projection) => Math.max(maximum, projection.highWatermark),
       0,
     );
-    return SessionTurnPresentationResponseSchema.parse({
-      capabilityVersion: 1,
+    return SessionTurnPresentationResponseV2Schema.parse({
+      capabilityVersion: 2,
       items: page,
       highWatermark,
       ...(end < items.length ? { nextCursor: String(end) } : {}),
@@ -231,7 +231,7 @@ export class SessionPresentationService {
     }
 
     if (TERMINAL_RUN_STATUSES.has(run.status)) {
-      const summary: TurnPresentationItem = {
+      const summary: TurnPresentationItemV2 = {
         id: `${run.id}:presentation:summary`,
         runId: run.id,
         conversationTurnId: `${run.id}:summary`,
@@ -258,7 +258,7 @@ export class SessionPresentationService {
     return { items: positioned, highWatermark: history.highWatermark };
   }
 
-  private projectMessage(record: AgentMessageRecord): TurnPresentationItem | undefined {
+  private projectMessage(record: AgentMessageRecord): TurnPresentationItemV2 | undefined {
     try {
       const message = this.options.codecs.decode(record);
       if (message.type === "USER") return projectUserMessage(message);
@@ -344,7 +344,7 @@ function groupRecordsByRun(
   return grouped;
 }
 
-function projectUserMessage(message: AgentUserMessage): TurnPresentationItem {
+function projectUserMessage(message: AgentUserMessage): TurnPresentationItemV2 {
   return {
     id: `${message.id}:presentation`,
     runId: message.runId,
@@ -359,7 +359,9 @@ function projectUserMessage(message: AgentUserMessage): TurnPresentationItem {
   };
 }
 
-function projectAssistantMessage(message: AgentAssistantMessage): TurnPresentationItem | undefined {
+function projectAssistantMessage(
+  message: AgentAssistantMessage,
+): TurnPresentationItemV2 | undefined {
   const text = message.content
     .map((part) => (part.type === "TEXT" ? part.text : ""))
     .filter((part) => part.length > 0)
@@ -375,6 +377,7 @@ function projectAssistantMessage(message: AgentAssistantMessage): TurnPresentati
     kind: "ASSISTANT",
     phase: AssistantMessagePhaseSchema.parse(message.phase),
     text,
+    ...(message.sourceStepId === undefined ? {} : { sourceStepId: message.sourceStepId }),
   };
 }
 
