@@ -30,7 +30,7 @@ export function AssistantMarkdown({ children }: { readonly children: string }): 
 function isExternalHttpUrl(href: string | undefined): boolean {
   if (href === undefined) return false;
   try {
-    const url = new URL(href);
+    const url = new URL(href.startsWith("//") ? `https:${href}` : href);
     return url.protocol === "https:" || url.protocol === "http:";
   } catch {
     return false;

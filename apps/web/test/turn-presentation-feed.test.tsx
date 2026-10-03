@@ -528,4 +528,34 @@ describe("TurnPresentationFeed", () => {
     expect(reply).not.toContain('href="javascript:');
     expect(reply).toContain("危险");
   });
+
+  it("opens protocol-relative Markdown links with safe external-link attributes", () => {
+    const html = renderToStaticMarkup(
+      <TurnPresentationFeed
+        presentation={{
+          capabilityVersion: 1,
+          highWatermark: 1,
+          items: [
+            {
+              id: "protocol-relative-final",
+              runId,
+              conversationTurnId: "turn-protocol-relative",
+              ordinal: 0,
+              status: "COMPLETED",
+              createdAt: 1,
+              kind: "ASSISTANT",
+              phase: "FINAL_ANSWER",
+              text: "[协议相对链接](//example.com/protocol)",
+            },
+          ],
+        }}
+      />,
+    );
+    const reply =
+      html.match(/<section class="turn-presentation-final"[\s\S]*?<\/section>/u)?.[0] ?? "";
+
+    expect(reply).toContain(
+      '<a href="//example.com/protocol" target="_blank" rel="noopener noreferrer">协议相对链接</a>',
+    );
+  });
 });
