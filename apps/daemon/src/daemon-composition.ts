@@ -524,6 +524,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     eventIdFactory: { create: createEventId },
     clock,
   });
+  const verificationModelTurnExecutor = createModelTurnExecutor({ gateway });
   /**
    * The Run identity a *host-driven* model turn executes for.
    *
@@ -551,7 +552,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
    */
   const verificationModelTurns: VerificationModelClient = {
     async execute({ identity, request, signal }) {
-      const result = await modelTurnExecutor.execute({
+      const result = await verificationModelTurnExecutor.execute({
         identity,
         turn: { stepId: createStepId(), sequence: 1 },
         request,

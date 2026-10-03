@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import type { AIAdapterEvent, ApiAdapter, ApiAdapterStreamInput } from "@caelush/ai";
-import { createRunId, createSessionId } from "@caelush/protocol";
+import { createRunId, createSessionId, createStepId } from "@caelush/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { composeDaemon, type DaemonComposition } from "../src/daemon-composition.js";
 import type { ModelWireDiagnosticEvent } from "../src/providers/model-wire-diagnostic.js";
@@ -39,6 +39,8 @@ afterEach(async () => {
 class RecordingAdapter implements ApiAdapter {
   readonly id = FIXTURE_API;
 
+  constructor(private readonly text = "answer") {}
+
   async *stream(input: ApiAdapterStreamInput): AsyncGenerator<AIAdapterEvent> {
     // The adapter *does* see the credential and the endpoint. That is exactly why the
     // diagnostic must be checked separately: seeing them here is legitimate, recording
@@ -57,12 +59,59 @@ class RecordingAdapter implements ApiAdapter {
         input: { path: SECRET_TOOL_ARGUMENT },
       },
     };
-    yield { type: "text.delta", payload: { text: "answer" } };
+    yield { type: "text.delta", payload: { text: this.text } };
     yield { type: "adapter.finish", payload: { finishReason: "TOOL_CALLS" } };
   }
 }
 
 describe("daemon model wire diagnostic", () => {
+  it("does not publish verification review text as a public transient model delta", async () => {
+    directory = await mkdtemp(join(tmpdir(), "caelush-verification-stream-silence-"));
+    storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
+    const transients: import("@caelush/protocol").TransientRunEvent[] = [];
+
+    composition = await composeDaemon({
+      storage,
+      modelSources: [fixtureModelSource()],
+      providerBindings: [fixtureBinding()],
+      adapterOverrides: [new RecordingAdapter('{"verdict":"PASS","summary":"ok"}')],
+      notifier: {
+        notifyCommitted: () => undefined,
+        emitTransient: (event) => transients.push(event),
+      },
+    });
+
+    const identity = composition.resolveTurnIdentity({
+      id: createRunId(),
+      sessionId: createSessionId(),
+      goal: "review a candidate answer",
+    });
+    const request = {
+      model: { provider: "fixture", model: "fixture-model" },
+      messages: [{ role: "user" as const, content: "Return a verification review." }],
+    };
+    const result = await composition.verificationModelTurns.execute({
+      identity,
+      request,
+      signal: new AbortController().signal,
+    });
+
+    expect(result).toMatchObject({ finishReason: "TOOL_CALLS" });
+    expect(transients.filter((event) => event.type === "model.text.delta")).toEqual([]);
+
+    await composition.modelTurnExecutor.execute({
+      identity,
+      turn: { stepId: createStepId(), sequence: 1 },
+      request,
+      signal: new AbortController().signal,
+    });
+    expect(transients.filter((event) => event.type === "model.text.delta")).toHaveLength(1);
+    expect(transients[0]).toMatchObject({
+      type: "model.text.delta",
+      payload: { text: '{"verdict":"PASS","summary":"ok"}' },
+    });
+  });
+
   it("records structural facts and never an endpoint, a credential, a prompt or a tool argument", async () => {
     directory = await mkdtemp(join(tmpdir(), "caelush-wire-diagnostic-"));
     storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
