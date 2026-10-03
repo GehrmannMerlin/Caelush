@@ -30,6 +30,38 @@ export interface TurnPresentationFeedProps {
  * Ephemeral deltas are rendered only as bounded live annotations and never become historical facts.
  */
 export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactElement {
+  const liveActivities = props.liveActivity?.activities ?? [];
+  const durableAssistantItems = props.presentation.items.filter(
+    (item) => item.kind === "ASSISTANT",
+  );
+  const settledStepKeys = new Set(
+    durableAssistantItems.flatMap((item) =>
+      "sourceStepId" in item && item.sourceStepId !== undefined
+        ? [`${item.runId}:${item.sourceStepId}`]
+        : [],
+    ),
+  );
+  const processActivities = liveActivities.filter((activity) => activity.kind !== "MODEL_TEXT");
+  const finalAnswers = durableAssistantItems.filter(
+    (item) => item.kind === "ASSISTANT" && item.phase === "FINAL_ANSWER",
+  );
+  const terminalRunIds = new Set(
+    props.presentation.items.flatMap((item) => (item.kind === "RUN_SUMMARY" ? [item.runId] : [])),
+  );
+  const modelDrafts = liveActivities.filter(
+    (activity) =>
+      activity.kind === "MODEL_TEXT" &&
+      (activity.status === "ACTIVE" || activity.status === "COMPLETED") &&
+      props.liveActivity?.terminal !== true &&
+      !terminalRunIds.has(activity.runId) &&
+      !settledStepKeys.has(`${activity.runId}:${activity.stepId ?? ""}`),
+  );
+  const summaries = props.presentation.items.filter((item) => {
+    if (item.kind !== "RUN_SUMMARY") return false;
+    return !(
+      item.runStatus === "COMPLETED" && finalAnswers.some((answer) => answer.runId === item.runId)
+    );
+  });
   const processItems = props.presentation.items.filter(
     (item) =>
       item.kind !== "USER" &&
@@ -37,13 +69,9 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
       !(item.kind === "ASSISTANT" && item.phase === "FINAL_ANSWER"),
   );
   const userItems = props.presentation.items.filter((item) => item.kind === "USER");
-  const finalItems = props.presentation.items.filter(
-    (item) =>
-      item.kind === "RUN_SUMMARY" || (item.kind === "ASSISTANT" && item.phase === "FINAL_ANSWER"),
-  );
-  const liveActivities = props.liveActivity?.activities ?? [];
+  const finalItems = [...finalAnswers, ...summaries];
   const hasProcess =
-    processItems.length > 0 || liveActivities.length > 0 || props.isActive === true;
+    processItems.length > 0 || processActivities.length > 0 || props.isActive === true;
   const regionRef = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(props.isActive === true);
   const wasActive = useRef(props.isActive === true);
@@ -93,7 +121,11 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
             createElement(
               "span",
               { className: "turn-presentation-summary-status" },
-              processSummary(props.isActive === true, processItems.length, liveActivities.length),
+              processSummary(
+                props.isActive === true,
+                processItems.length,
+                processActivities.length,
+              ),
             ),
             createElement(ChevronDown, {
               className: "turn-presentation-chevron",
@@ -105,16 +137,16 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
           createElement(
             "div",
             { className: "turn-presentation-body", ref: regionRef, tabIndex: 0 },
-            processItems.length === 0 && liveActivities.length === 0
+            processItems.length === 0 && processActivities.length === 0
               ? createElement("p", { className: "turn-presentation-empty" }, "正在准备任务活动……")
               : null,
             processItems.map((item) => renderItem(item)),
-            liveActivities.length === 0
+            processActivities.length === 0
               ? null
               : createElement(
                   "section",
                   { className: "turn-presentation-live", "aria-label": "实时活动" },
-                  liveActivities.map((activity) =>
+                  processActivities.map((activity) =>
                     createElement(
                       "div",
                       {
@@ -147,12 +179,27 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
           ),
         )
       : null,
-    finalItems.length === 0
+    finalItems.length === 0 && modelDrafts.length === 0
       ? null
       : createElement(
           "section",
-          { className: "turn-presentation-final", "aria-label": "任务结束报告" },
+          {
+            className: "turn-presentation-final",
+            "aria-label": summaries.length > 0 ? "任务结束报告" : "最终答复",
+          },
           finalItems.map((item) => renderItem(item)),
+          modelDrafts.map((activity) =>
+            createElement(
+              "article",
+              {
+                className:
+                  "turn-presentation-item turn-presentation-item--assistant turn-presentation-item--final_answer",
+                key: activity.id,
+              },
+              createElement("p", { className: "turn-presentation-item-label" }, "最终答复"),
+              createElement("p", { className: "turn-presentation-item-text" }, activity.text),
+            ),
+          ),
         ),
   );
 }

@@ -88,14 +88,14 @@ describe("TurnPresentationFeed", () => {
     expect(html).not.toContain(">COMPLETED<");
   });
 
-  it("collapses process detail after completion while leaving the final report visible below it", () => {
+  it("collapses process detail after completion while leaving the final answer visible below it", () => {
     const html = renderToStaticMarkup(
       <TurnPresentationFeed presentation={presentation()} isActive={false} />,
     );
     expect(html).not.toMatch(/class="turn-presentation-process" open=/u);
-    expect(html.indexOf("执行过程")).toBeLessThan(html.indexOf("任务结束报告"));
-    expect(html.indexOf("任务结束报告")).toBeLessThan(html.indexOf("检查完成，项目结构正常"));
-    expect(html).toContain("任务已完成");
+    expect(html.indexOf("我先检查工作区")).toBeLessThan(html.indexOf("检查完成，项目结构正常"));
+    expect(html).not.toContain("任务结束报告");
+    expect(html).not.toContain("任务已完成");
   });
 
   it("uses the Caelush logo as the process title without the redundant activity kicker", () => {
@@ -174,13 +174,239 @@ describe("TurnPresentationFeed", () => {
       />,
     );
 
-    expect(html.match(/turn-presentation-spinner/g)).toHaveLength(1);
-    expect(html).toContain('aria-label="状态：进行中"');
+    expect(html.match(/turn-presentation-spinner/g)).toBeNull();
+    expect(html).not.toContain('aria-label="状态：进行中"');
     expect(html).toContain('aria-label="状态：已完成"');
     expect(html).toContain('aria-label="状态：失败"');
     expect(html).toContain('aria-label="状态：已取消"');
     expect(html).toContain("lucide-circle-check");
     expect(html).toContain("lucide-circle-x");
     expect(html).toContain("lucide-circle-minus");
+  });
+
+  it("renders active and completed model text in the reply area while keeping other live activity in process", () => {
+    const initial = createInitialLiveActivityState(runId);
+    const html = renderToStaticMarkup(
+      <TurnPresentationFeed
+        presentation={{ capabilityVersion: 2, highWatermark: 0, items: [] }}
+        liveActivity={{
+          ...initial,
+          activities: [
+            {
+              id: "draft-active",
+              kind: "MODEL_TEXT",
+              status: "ACTIVE",
+              text: "正在生成",
+              streamKey: "model:1",
+              streamSequence: 1,
+              runId,
+              stepId: "step-1",
+            },
+            {
+              id: "draft-complete",
+              kind: "MODEL_TEXT",
+              status: "COMPLETED",
+              text: "已生成",
+              streamKey: "model:2",
+              streamSequence: 1,
+              runId,
+              stepId: "step-2",
+            },
+            {
+              id: "tool-live",
+              kind: "MODEL_TOOL_CALL",
+              status: "COMPLETED",
+              text: "读取文件",
+              streamKey: "tool:1",
+              streamSequence: 1,
+              runId,
+              stepId: "step-1",
+            },
+          ],
+        }}
+        isActive
+      />,
+    );
+    const process =
+      html.match(/<details class="turn-presentation-process"[\s\S]*?<\/details>/u)?.[0] ?? "";
+    const reply =
+      html.match(/<section class="turn-presentation-final"[\s\S]*?<\/section>/u)?.[0] ?? "";
+    expect(reply).toContain("正在生成");
+    expect(reply).toContain("已生成");
+    expect(process).not.toContain("正在生成");
+    expect(process).not.toContain("已生成");
+    expect(process).toContain("读取文件");
+  });
+
+  it("reconciles v2 drafts by run and step and places durable assistant text by phase", () => {
+    const initial = createInitialLiveActivityState(runId);
+    const otherRun = createRunId();
+    const items = [
+      {
+        id: "final",
+        runId,
+        conversationTurnId: "turn-1",
+        ordinal: 0,
+        status: "COMPLETED" as const,
+        createdAt: 1,
+        kind: "ASSISTANT" as const,
+        phase: "FINAL_ANSWER" as const,
+        text: "durable final",
+        sourceStepId: "step-final",
+      },
+      {
+        id: "commentary",
+        runId,
+        conversationTurnId: "turn-1",
+        ordinal: 1,
+        status: "COMPLETED" as const,
+        createdAt: 2,
+        kind: "ASSISTANT" as const,
+        phase: "COMMENTARY" as const,
+        text: "durable commentary",
+        sourceStepId: "step-commentary",
+      },
+      {
+        id: "unknown",
+        runId,
+        conversationTurnId: "turn-1",
+        ordinal: 2,
+        status: "COMPLETED" as const,
+        createdAt: 3,
+        kind: "ASSISTANT" as const,
+        phase: "UNKNOWN" as const,
+        text: "durable unknown",
+        sourceStepId: "step-unknown",
+      },
+    ];
+    const html = renderToStaticMarkup(
+      <TurnPresentationFeed
+        presentation={{ capabilityVersion: 2, highWatermark: 0, items }}
+        liveActivity={{
+          ...initial,
+          activities: [
+            {
+              id: "draft-final",
+              kind: "MODEL_TEXT",
+              status: "COMPLETED",
+              text: "duplicate final",
+              streamKey: "m:1",
+              streamSequence: 1,
+              runId,
+              stepId: "step-final",
+            },
+            {
+              id: "draft-commentary",
+              kind: "MODEL_TEXT",
+              status: "COMPLETED",
+              text: "duplicate commentary",
+              streamKey: "m:2",
+              streamSequence: 1,
+              runId,
+              stepId: "step-commentary",
+            },
+            {
+              id: "draft-other-run",
+              kind: "MODEL_TEXT",
+              status: "COMPLETED",
+              text: "other run draft",
+              streamKey: "m:3",
+              streamSequence: 1,
+              runId: otherRun,
+              stepId: "step-unknown",
+            },
+          ],
+        }}
+        isActive
+      />,
+    );
+    const process =
+      html.match(/<details class="turn-presentation-process"[\s\S]*?<\/details>/u)?.[0] ?? "";
+    const reply =
+      html.match(/<section class="turn-presentation-final"[\s\S]*?<\/section>/u)?.[0] ?? "";
+    expect(reply).toContain("durable final");
+    expect(reply).not.toContain("duplicate final");
+    expect(process).toContain("durable commentary");
+    expect(process).toContain("durable unknown");
+    expect(reply).toContain("other run draft");
+    expect(process).not.toContain("duplicate commentary");
+  });
+
+  it("hides failed and cancelled model drafts but retains non-success terminal summaries", () => {
+    const initial = createInitialLiveActivityState(runId);
+    const summaries = ["FAILED", "CANCELLED", "TIMEOUT", "COMPLETED"].map((runStatus) => ({
+      id: `summary-${runStatus}`,
+      runId,
+      conversationTurnId: "terminal",
+      ordinal: 0,
+      status: "COMPLETED" as const,
+      createdAt: 1,
+      kind: "RUN_SUMMARY" as const,
+      runStatus: runStatus as "FAILED" | "CANCELLED" | "TIMEOUT" | "COMPLETED",
+      text: `summary ${runStatus}`,
+    }));
+    const html = renderToStaticMarkup(
+      <TurnPresentationFeed
+        presentation={{ capabilityVersion: 2, highWatermark: 0, items: summaries }}
+        liveActivity={{
+          ...initial,
+          terminal: true,
+          activities: [
+            {
+              id: "draft-failed",
+              kind: "MODEL_TEXT",
+              status: "FAILED",
+              text: "failed partial",
+              streamKey: "m:1",
+              streamSequence: 1,
+              runId,
+              stepId: "step-1",
+            },
+            {
+              id: "draft-cancelled",
+              kind: "MODEL_TEXT",
+              status: "CANCELLED",
+              text: "cancelled partial",
+              streamKey: "m:2",
+              streamSequence: 1,
+              runId,
+              stepId: "step-2",
+            },
+          ],
+        }}
+      />,
+    );
+    expect(html).not.toContain("failed partial");
+    expect(html).not.toContain("cancelled partial");
+    expect(html).toContain("summary FAILED");
+    expect(html).toContain("summary CANCELLED");
+    expect(html).toContain("summary TIMEOUT");
+    expect(html).toContain("summary COMPLETED");
+  });
+
+  it("keeps a completed summary when no durable final answer exists", () => {
+    const html = renderToStaticMarkup(
+      <TurnPresentationFeed
+        presentation={{
+          capabilityVersion: 2,
+          highWatermark: 0,
+          items: [
+            {
+              id: "summary",
+              runId,
+              conversationTurnId: "terminal",
+              ordinal: 0,
+              status: "COMPLETED",
+              createdAt: 1,
+              kind: "RUN_SUMMARY",
+              runStatus: "COMPLETED",
+              text: "完成但无最终答复",
+            },
+          ],
+        }}
+      />,
+    );
+    expect(html).toContain("任务结束报告");
+    expect(html).toContain("完成但无最终答复");
   });
 });
