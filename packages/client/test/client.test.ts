@@ -4,6 +4,7 @@ import {
   createEventId,
   createRunId,
   createSessionId,
+  createStepId,
   createToolInvocationId,
   createWorkspaceId,
 } from "@caelush/protocol";
@@ -124,6 +125,43 @@ describe("CaelushClient", () => {
     expect(requests[0]?.url).toBe(
       `http://daemon.test/api/v1/sessions/ses_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9b/presentation?limit=10&runId=${encodeURIComponent(runId)}&cursor=0`,
     );
+  });
+
+  it("retains Session Turn Presentation v2 and its source step id", async () => {
+    const runId = createRunId();
+    const sourceStepId = createStepId();
+    const client = new CaelushClient({
+      baseUrl: "http://daemon.test",
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            capabilityVersion: 2,
+            highWatermark: 5,
+            items: [
+              {
+                id: "assistant-2",
+                runId,
+                conversationTurnId: "turn-2",
+                ordinal: 0,
+                status: "COMPLETED",
+                createdAt: 1,
+                kind: "ASSISTANT",
+                phase: "FINAL_ANSWER",
+                text: "answer",
+                sourceStepId,
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+    });
+
+    await expect(
+      client.getSessionTurnPresentation("ses_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9b" as never),
+    ).resolves.toMatchObject({
+      capabilityVersion: 2,
+      items: [{ kind: "ASSISTANT", sourceStepId }],
+    });
   });
 
   it("binds the ambient browser fetch before invoking it", async () => {

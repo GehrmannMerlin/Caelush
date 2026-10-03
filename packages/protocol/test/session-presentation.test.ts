@@ -1,6 +1,9 @@
 import {
+  AssistantPresentationItemV2Schema,
   SessionTurnPresentationQuerySchema,
   SessionTurnPresentationResponseSchema,
+  SessionTurnPresentationResponseV1Schema,
+  SessionTurnPresentationResponseV2Schema,
   TurnPresentationItemSchema,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
@@ -82,5 +85,59 @@ describe("session turn presentation protocol", () => {
       nextCursor: "seq_12",
     });
     expect(response.highWatermark).toBe(12);
+    expect(response.capabilityVersion).toBe(1);
+  });
+
+  it("keeps v1 assistant items strict and accepts unversioned responses as v1", () => {
+    const assistant = { ...base, kind: "ASSISTANT", phase: "FINAL_ANSWER", text: "done" };
+    expect(AssistantPresentationItemV2Schema.safeParse(assistant).success).toBe(true);
+    expect(
+      AssistantPresentationItemV2Schema.safeParse({
+        ...assistant,
+        sourceStepId: "stp_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9a",
+      }).success,
+    ).toBe(true);
+    expect(
+      SessionTurnPresentationResponseSchema.parse({ items: [assistant], highWatermark: 1 })
+        .capabilityVersion,
+    ).toBe(1);
+    expect(
+      SessionTurnPresentationResponseV1Schema.safeParse({
+        capabilityVersion: 1,
+        items: [{ ...assistant, sourceStepId: "stp_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9a" }],
+        highWatermark: 1,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("validates v2 assistant source steps and rejects unknown fields", () => {
+    const assistant = { ...base, kind: "ASSISTANT", phase: "FINAL_ANSWER", text: "done" };
+    expect(AssistantPresentationItemV2Schema.parse(assistant)).toEqual(assistant);
+    expect(
+      AssistantPresentationItemV2Schema.parse({
+        ...assistant,
+        sourceStepId: "stp_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9a",
+      }).sourceStepId,
+    ).toBe("stp_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9a");
+    expect(
+      AssistantPresentationItemV2Schema.safeParse({ ...assistant, sourceStepId: "bad" }).success,
+    ).toBe(false);
+    expect(AssistantPresentationItemV2Schema.safeParse({ ...assistant, extra: true }).success).toBe(
+      false,
+    );
+    expect(
+      SessionTurnPresentationResponseV2Schema.parse({
+        capabilityVersion: 2,
+        items: [assistant],
+        highWatermark: 1,
+      }).capabilityVersion,
+    ).toBe(2);
+    expect(
+      SessionTurnPresentationResponseV1Schema.safeParse({
+        capabilityVersion: 2,
+        items: [],
+        highWatermark: 1,
+      }).success,
+    ).toBe(false);
   });
 });

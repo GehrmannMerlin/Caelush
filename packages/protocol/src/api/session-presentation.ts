@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { AssistantMessagePhaseSchema } from "./transcript.js";
 import { RunStatusSchema } from "../run.js";
-import { RunIdSchema, ToolInvocationIdSchema } from "../primitives/ids.js";
+import { RunIdSchema, StepIdSchema, ToolInvocationIdSchema } from "../primitives/ids.js";
 import { TimestampMsSchema } from "../primitives/time.js";
 import { ToolNameSchema } from "../tool.js";
 
@@ -38,6 +38,14 @@ export const AssistantPresentationItemSchema = PresentationItemBaseSchema.extend
   text: z.string().max(64 * 1024),
 }).strict();
 export type AssistantPresentationItem = z.infer<typeof AssistantPresentationItemSchema>;
+
+export const AssistantPresentationItemV2Schema = PresentationItemBaseSchema.extend({
+  kind: z.literal("ASSISTANT"),
+  phase: AssistantMessagePhaseSchema,
+  text: z.string().max(64 * 1024),
+  sourceStepId: StepIdSchema.optional(),
+}).strict();
+export type AssistantPresentationItemV2 = z.infer<typeof AssistantPresentationItemV2Schema>;
 
 export const PresentationSafeFactSchema = z
   .object({
@@ -83,6 +91,15 @@ export const TurnPresentationItemSchema = z.discriminatedUnion("kind", [
 ]);
 export type TurnPresentationItem = z.infer<typeof TurnPresentationItemSchema>;
 
+export const TurnPresentationItemV2Schema = z.discriminatedUnion("kind", [
+  UserPresentationItemSchema,
+  AssistantPresentationItemV2Schema,
+  ToolPresentationItemSchema,
+  VerificationPresentationItemSchema,
+  RunPresentationSummaryItemSchema,
+]);
+export type TurnPresentationItemV2 = z.infer<typeof TurnPresentationItemV2Schema>;
+
 export const SessionTurnPresentationQuerySchema = z
   .object({
     runId: RunIdSchema.optional(),
@@ -92,7 +109,7 @@ export const SessionTurnPresentationQuerySchema = z
   .strict();
 export type SessionTurnPresentationQuery = z.infer<typeof SessionTurnPresentationQuerySchema>;
 
-export const SessionTurnPresentationResponseSchema = z
+export const SessionTurnPresentationResponseV1Schema = z
   .object({
     capabilityVersion: z.literal(1).default(1),
     items: z.array(TurnPresentationItemSchema).readonly(),
@@ -100,4 +117,24 @@ export const SessionTurnPresentationResponseSchema = z
     nextCursor: z.string().min(1).max(2048).optional(),
   })
   .strict();
+export type SessionTurnPresentationResponseV1 = z.infer<
+  typeof SessionTurnPresentationResponseV1Schema
+>;
+
+export const SessionTurnPresentationResponseV2Schema = z
+  .object({
+    capabilityVersion: z.literal(2),
+    items: z.array(TurnPresentationItemV2Schema).readonly(),
+    highWatermark: z.number().int().nonnegative().safe(),
+    nextCursor: z.string().min(1).max(2048).optional(),
+  })
+  .strict();
+export type SessionTurnPresentationResponseV2 = z.infer<
+  typeof SessionTurnPresentationResponseV2Schema
+>;
+
+export const SessionTurnPresentationResponseSchema = z.union([
+  SessionTurnPresentationResponseV1Schema,
+  SessionTurnPresentationResponseV2Schema,
+]);
 export type SessionTurnPresentationResponse = z.infer<typeof SessionTurnPresentationResponseSchema>;
