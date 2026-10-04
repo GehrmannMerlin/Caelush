@@ -65,6 +65,8 @@ function freezeBinding(binding: AIProviderBinding): AIProviderBinding {
     queryParams?: Readonly<Record<string, string>>;
     compatibility?: NonNullable<AIProviderBinding["compatibility"]>;
     transport?: NonNullable<AIProviderBinding["transport"]>;
+    rateLimitDomain?: string;
+    transportCandidates?: readonly NonNullable<AIProviderBinding["transportCandidates"]>[number][];
   } = {
     id: binding.id,
     endpoint: binding.endpoint,
@@ -87,6 +89,29 @@ function freezeBinding(binding: AIProviderBinding): AIProviderBinding {
   }
   if (binding.transport !== undefined) {
     frozen.transport = Object.freeze({ ...binding.transport });
+  }
+  if (binding.rateLimitDomain !== undefined) {
+    frozen.rateLimitDomain = binding.rateLimitDomain;
+  }
+  if (binding.transportCandidates !== undefined) {
+    frozen.transportCandidates = Object.freeze(
+      binding.transportCandidates.map((candidate) =>
+        Object.freeze({
+          id: candidate.id,
+          endpoint: candidate.endpoint,
+          api: candidate.api,
+          ...(candidate.compatibility === undefined
+            ? {}
+            : { compatibility: deepFreezeJson(candidate.compatibility) }),
+          ...(candidate.transport === undefined
+            ? {}
+            : { transport: Object.freeze({ ...candidate.transport }) }),
+          ...(candidate.rateLimitDomain === undefined
+            ? {}
+            : { rateLimitDomain: candidate.rateLimitDomain }),
+        }),
+      ),
+    );
   }
 
   return Object.freeze(frozen);

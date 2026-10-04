@@ -307,6 +307,7 @@ describe("one provider binding, two dialects", () => {
           ]),
         ),
         bodyText: typeof init?.body === "string" ? init.body : "",
+        signal: init?.signal ?? undefined,
         signalAborted: () => init?.signal?.aborted === true,
         hasSignal: () => init?.signal !== undefined && init?.signal !== null,
       };
@@ -326,6 +327,13 @@ describe("one provider binding, two dialects", () => {
       allowUnknownModels: false,
       credentials: { resolve: () => Promise.resolve({ apiKey: "fake-shared-secret" }) },
       transport: { fetch: router },
+      transportCandidates: [
+        {
+          id: "anthropic-route",
+          endpoint: "https://shared.example",
+          api: ANTHROPIC_API,
+        },
+      ],
     };
 
     const ai = createAISubsystem({
@@ -362,5 +370,20 @@ describe("one provider binding, two dialects", () => {
 
     expect(ai.providers.list()).toHaveLength(1);
     expect([...ai.adapters.listIds()].sort()).toEqual([ANTHROPIC_API, OPENAI_API]);
+  });
+
+  it("routes an explicitly selected equivalent candidate through the model's dialect", async () => {
+    const { ai, anthropicRequests } = sharedProviderHarness();
+    const result = await ai.gateway.complete(
+      {
+        model: { provider: SHARED_PROVIDER, model: "shared-model-b" },
+        messages: [{ role: "user", content: "hello" }],
+      },
+      { transportId: "anthropic-route" },
+    );
+
+    expect(result.resolution.api).toBe(ANTHROPIC_API);
+    expect(result.text).toBe("anthropic answer");
+    expect(anthropicRequests).toHaveLength(1);
   });
 });

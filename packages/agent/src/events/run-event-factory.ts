@@ -5,6 +5,8 @@ import type {
   AgentStep,
   EventId,
   RunSecurityPolicySnapshotV1,
+  RetryExhaustedEvent,
+  TransportFallbackSelectedEvent,
   TimestampMs,
   VerificationCheckId,
   VerificationPlan,
@@ -78,6 +80,20 @@ export interface RunEventFactory {
     step: AgentStep,
     attempt: number,
     maxAttempts: number,
+    eventId: EventId,
+    timestamp: TimestampMs,
+  ): DurableEventDraft;
+  retryExhausted(
+    run: AgentRun,
+    step: AgentStep,
+    payload: RetryExhaustedEvent["payload"],
+    eventId: EventId,
+    timestamp: TimestampMs,
+  ): DurableEventDraft;
+  transportFallbackSelected(
+    run: AgentRun,
+    step: AgentStep,
+    payload: TransportFallbackSelectedEvent["payload"],
     eventId: EventId,
     timestamp: TimestampMs,
   ): DurableEventDraft;
@@ -259,6 +275,16 @@ export function createRunEventFactory(): RunEventFactory {
       ...base(run, eventId, timestamp, step.id),
       type: "retry.started",
       payload: { attempt, maxAttempts },
+    }),
+    retryExhausted: (run, step, payload, eventId, timestamp) => ({
+      ...base(run, eventId, timestamp, step.id),
+      type: "retry.exhausted",
+      payload,
+    }),
+    transportFallbackSelected: (run, step, payload, eventId, timestamp) => ({
+      ...base(run, eventId, timestamp, step.id),
+      type: "transport.fallback.selected",
+      payload,
     }),
     reasoning: (run, _state, step, summary, eventId, timestamp) => ({
       ...base(run, eventId, timestamp, step.id),

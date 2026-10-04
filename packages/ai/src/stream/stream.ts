@@ -1,6 +1,10 @@
 import type { AIStreamEvent } from "./events.js";
 import type { LLMCallId } from "../ids/llm-call-id.js";
 
+export const DEFAULT_PROVIDER_NUDGE_AFTER_MS = 30_000;
+export const DEFAULT_PROVIDER_STREAM_IDLE_TIMEOUT_MS = 300_000;
+export const DEFAULT_PROVIDER_TEARDOWN_GRACE_MS = 5_000;
+
 /**
  * A gateway-owned model invocation stream.
  *
@@ -19,4 +23,12 @@ export interface AIStreamOptions {
   readonly signal?: AbortSignal;
   /** Invocation timeout in milliseconds; overrides the subsystem default. */
   readonly timeoutMs?: number;
+  /** A preconfigured equivalent Provider transport selected by the Run Layer. */
+  readonly transportId?: string;
+  /** Publish a recent-activity status after this many silent milliseconds. */
+  readonly nudgeAfterMs?: number;
+  /** Cancel the real Provider transport after this many silent milliseconds. */
+  readonly idleTimeoutMs?: number;
+  /** Maximum time to await adapter iterator teardown after cancellation. */
+  readonly teardownGraceMs?: number;
 }

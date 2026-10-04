@@ -1,6 +1,33 @@
 import { createElement, useState, type FormEvent, type ReactElement } from "react";
-import { ArrowLeft, KeyRound, LoaderCircle, X } from "lucide-react";
+import { ArrowLeft, KeyRound, LoaderCircle, Sparkles, X } from "lucide-react";
 import type { ModelView, ProviderView } from "@caelush/protocol";
+import anthropicIcon from "../assets/providers/anthropic.svg";
+import deepseekIcon from "../assets/providers/deepseek.svg";
+import geminiIcon from "../assets/providers/gemini.svg";
+import glmIcon from "../assets/providers/glm.svg";
+import groqIcon from "../assets/providers/groq.svg";
+import kimiIcon from "../assets/providers/kimi.svg";
+import minimaxIcon from "../assets/providers/minimax.svg";
+import mimoIcon from "../assets/providers/mimo.svg";
+import mistralIcon from "../assets/providers/mistral.svg";
+import openaiIcon from "../assets/providers/openai.svg";
+import openrouterIcon from "../assets/providers/openrouter.svg";
+import qwenIcon from "../assets/providers/qwen.svg";
+
+const PROVIDER_BRAND_ICONS: Readonly<Record<string, string>> = {
+  openai: openaiIcon,
+  deepseek: deepseekIcon,
+  openrouter: openrouterIcon,
+  anthropic: anthropicIcon,
+  kimi: kimiIcon,
+  glm: glmIcon,
+  minimax: minimaxIcon,
+  mimo: mimoIcon,
+  qwen: qwenIcon,
+  gemini: geminiIcon,
+  groq: groqIcon,
+  mistral: mistralIcon,
+};
 
 export interface SettingsSurfaceProps {
   readonly providers: readonly ProviderView[];
@@ -60,7 +87,12 @@ export function SettingsSurface(props: SettingsSurfaceProps): ReactElement {
                 createElement(
                   "span",
                   { className: "settings-provider-copy" },
-                  createElement("strong", null, provider.displayName),
+                  createElement(
+                    "span",
+                    { className: "settings-provider-name" },
+                    createProviderBrandIcon(provider.id),
+                    createElement("strong", null, provider.displayName),
+                  ),
                   createElement("small", null, provider.id),
                 ),
                 createElement(
@@ -126,7 +158,12 @@ function ProviderEditor(props: {
       createElement(ArrowLeft, { size: 15, "aria-hidden": true }),
       "全部 Provider",
     ),
-    createElement("h3", null, props.provider.displayName),
+    createElement(
+      "div",
+      { className: "settings-provider-editor-title" },
+      createProviderBrandIcon(props.provider.id),
+      createElement("h3", null, props.provider.displayName),
+    ),
     createElement(
       "p",
       { className: "settings-provider-state" },
@@ -205,4 +242,20 @@ function ProviderEditor(props: {
             : createElement("p", { className: "settings-inline-error" }, error),
         ),
   );
+}
+
+function createProviderBrandIcon(providerId: string): ReactElement {
+  const icon = PROVIDER_BRAND_ICONS[providerId];
+  return icon === undefined
+    ? createElement(Sparkles, {
+        className: "settings-provider-icon settings-provider-icon--fallback",
+        size: 22,
+        "aria-hidden": true,
+      })
+    : createElement("img", {
+        className: "settings-provider-icon",
+        src: icon,
+        alt: "",
+        "aria-hidden": true,
+      });
 }

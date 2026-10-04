@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { captureTurn } from "./support/harness.js";
+import { normalizeAnthropicHttpError } from "../../../src/adapters/anthropic-messages/error-normalizer.js";
 import {
   capturingTransport,
   errorEvent,
@@ -74,11 +75,26 @@ describe("Anthropic Messages HTTP error normalization", () => {
 
   it("leaves retryAfterMs absent for an unparsable retry-after", async () => {
     const turn = await captureTurn(request(), {
-      transport: failingTransport(429, "{}", { "retry-after": "Wed, 21 Oct 2026 07:28:00 GMT" }),
+      transport: failingTransport(429, "{}", { "retry-after": "not a date" }),
     });
 
     expect(turn.streamError?.code).toBe("AI_RATE_LIMIT");
     expect(turn.streamError?.retryAfterMs).toBeUndefined();
+  });
+
+  it("parses an HTTP-date Retry-After relative to the injected clock", () => {
+    const nowMs = Date.parse("2026-10-04T00:00:00.000Z");
+    const normalized = normalizeAnthropicHttpError(
+      {
+        status: 429,
+        headers: { "retry-after": "Wed, 21 Oct 2026 07:28:00 GMT" },
+        bodyText: "{}",
+      },
+      { provider: "anthropic-fixture", model: "fixture-model" },
+      nowMs,
+    );
+
+    expect(normalized.retryAfterMs).toBe(Date.parse("2026-10-21T07:28:00.000Z") - nowMs);
   });
 
   it("maps a spend-cap 429 to a non-retryable provider error", async () => {

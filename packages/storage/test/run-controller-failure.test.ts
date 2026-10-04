@@ -1,5 +1,6 @@
 import {
   AgentRunSchema,
+  computeSecurityPolicyDigest,
   createEventId,
   createLLMCallId,
   createRunId,
@@ -30,7 +31,20 @@ import {
 import { testRunMessageAuthority } from "../../core/test/support/run-message-authority.js";
 import { projectedRunMessages } from "./support/projected-run-messages.js";
 
-function makeRun(maxSteps = 4) {
+function makeRun(maxSteps = 4, timeoutMs = 10_000) {
+  const securityPolicy = {
+    schemaVersion: 1 as const,
+    preset: { id: "VIEW_ONLY" as const, version: 1 },
+    permissionProfile: "READ_ONLY" as const,
+    approvalPolicy: "ON_BOUNDARY" as const,
+    filesystemBoundary: "WORKSPACE_READ_ONLY" as const,
+    processBoundary: "READ_ONLY" as const,
+    requiredEnforcement: "OS_RESTRICTED" as const,
+    hardSafetyPolicyVersion: "hard-safety@1",
+    commandPolicyVersion: "command-policy@1",
+    secretPolicyVersion: "secret-policy@1",
+    createdAt: new Date(1).toISOString(),
+  };
   return AgentRunSchema.parse({
     id: createRunId(),
     sessionId: createSessionId(),
@@ -41,13 +55,18 @@ function makeRun(maxSteps = 4) {
     runtime: { id: "local", kind: "fixture" },
     permissionProfile: "READ_ONLY",
     approvalPolicy: "ALWAYS_ASK",
-    limits: { maxSteps, maxToolCalls: 4, timeoutMs: 10_000 },
+    securityPolicy: {
+      ...securityPolicy,
+      policyDigest: computeSecurityPolicyDigest(securityPolicy),
+    },
+    limits: { maxSteps, maxToolCalls: 4, timeoutMs },
     createdAt: createTimestampMs(1),
   });
 }
 
 async function setup(options: {
   maxSteps?: number;
+  timeoutMs?: number;
   complete: (count: number, signal: AbortSignal) => Promise<PartialTurnResult>;
   contextFailure?: unknown;
   /**
@@ -68,7 +87,7 @@ async function setup(options: {
   clockState?: { value: number };
 }) {
   const storage = await openCaelushStorage({ path: ":memory:" });
-  const run = makeRun(options.maxSteps);
+  const run = makeRun(options.maxSteps, options.timeoutMs);
   await storage.sessions.insert({
     id: run.sessionId,
     createdAt: 1,
@@ -271,6 +290,8 @@ describe("RunController failure and maxSteps boundaries", () => {
 
   it("exhausts bounded provider attempts without appending partial output", async () => {
     const fixture = await setup({
+      maxSteps: 8,
+      timeoutMs: 120_000,
       complete: async () => {
         throw aiError("AI_NETWORK", { message: "provider secret" });
       },
@@ -280,7 +301,7 @@ describe("RunController failure and maxSteps boundaries", () => {
     });
 
     let result = await fixture.controller.start(fixture.run.id);
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
       expect(result.status).toBe("WAITING_RETRY");
       if (result.status !== "WAITING_RETRY") throw new Error("expected retry boundary");
       fixture.setNow(result.nextAttemptAt);
@@ -288,15 +309,72 @@ describe("RunController failure and maxSteps boundaries", () => {
     }
 
     expect(result.status).toBe("FAILED");
-    expect(fixture.providerCalls()).toBe(3);
-    expect(await fixture.storage.steps.listByRun(fixture.run.id)).toHaveLength(3);
+    expect(fixture.providerCalls()).toBe(6);
+    expect(await fixture.storage.steps.listByRun(fixture.run.id)).toHaveLength(6);
     expect(
       (await projectedRunMessages(fixture.storage, fixture.run.id)).map((message) => message.role),
     ).toEqual(["user"]);
-    expect((await fixture.storage.runStates.get(fixture.run.id))?.usage.steps).toBe(3);
+    expect((await fixture.storage.runStates.get(fixture.run.id))?.usage.steps).toBe(6);
     expect(
       fixture.events.map((event) => event.type).filter((type) => type === "retry.scheduled"),
-    ).toHaveLength(2);
+    ).toHaveLength(5);
+    expect(fixture.events.filter((event) => event.type === "retry.exhausted")).toHaveLength(1);
+    expect(fixture.events.slice(-5).map((event) => event.type)).toEqual([
+      "llm.failed",
+      "retry.exhausted",
+      "error",
+      "status.changed",
+      "run.failed",
+    ]);
+    await fixture.storage.close();
+  });
+
+  it("does not commit or notify retry exhaustion when the final settlement transaction fails", async () => {
+    let beforeRejectedCommit: Awaited<ReturnType<RunExecutionStore["load"]>> | undefined;
+    const fixture = await setup({
+      maxSteps: 8,
+      timeoutMs: 120_000,
+      complete: async () => {
+        throw aiError("AI_NETWORK", { message: "provider secret" });
+      },
+      execution: (storage) => ({
+        load: (runId) => storage.execution.load(runId),
+        requestCancellation: (runId, intent) =>
+          storage.execution.requestCancellation(runId, intent),
+        commit: async (command) => {
+          if (command.events.some((event) => event.type === "retry.exhausted")) {
+            beforeRejectedCommit = await storage.execution.load(command.run.id);
+            throw new Error("retry exhaustion transaction failed");
+          }
+          return storage.execution.commit(command);
+        },
+      }),
+      retryTimer: { schedule: () => ({ cancel: () => undefined }) },
+    });
+
+    let result = await fixture.controller.start(fixture.run.id);
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      expect(result.status).toBe("WAITING_RETRY");
+      if (result.status !== "WAITING_RETRY") throw new Error("expected retry boundary");
+      fixture.setNow(result.nextAttemptAt);
+      result = await fixture.controller.recover(fixture.run.id);
+    }
+    expect(result.status).toBe("WAITING_RETRY");
+    if (result.status !== "WAITING_RETRY") throw new Error("expected fifth retry boundary");
+    fixture.setNow(result.nextAttemptAt);
+
+    await expect(fixture.controller.recover(fixture.run.id)).rejects.toBeInstanceOf(
+      RunControllerInfrastructureError,
+    );
+
+    expect(beforeRejectedCommit).toBeDefined();
+    expect(await fixture.storage.execution.load(fixture.run.id)).toEqual(beforeRejectedCommit);
+    expect(fixture.providerCalls()).toBe(6);
+    expect(fixture.events.filter((event) => event.type === "llm.failed")).toHaveLength(5);
+    expect(fixture.events.filter((event) => event.type === "retry.exhausted")).toHaveLength(0);
+    expect((await fixture.storage.runs.get(fixture.run.id))?.status).toBe("RUNNING");
+    expect((await fixture.storage.steps.listByRun(fixture.run.id)).at(-1)?.status).toBe("RUNNING");
+    expect(await fixture.storage.continuations.get(fixture.run.id)).toBeNull();
     await fixture.storage.close();
   });
 

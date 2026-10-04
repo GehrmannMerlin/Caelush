@@ -6,6 +6,7 @@ import {
   type RunId,
 } from "@caelush/protocol";
 import { isTerminalRunStatus } from "@caelush/core";
+import type { RunShutdownCheckpointResult } from "@caelush/core";
 import { StorageNotFoundError, type RunRepository } from "@caelush/storage";
 
 export interface RunExecutionController {
@@ -18,6 +19,8 @@ export interface RunExecutionController {
   ): Promise<unknown>;
   cancel(runId: RunId): Promise<unknown>;
   continueResourceGuard(runId: RunId): Promise<unknown>;
+  beginShutdown?(): void;
+  prepareForShutdown?(runId: RunId): Promise<RunShutdownCheckpointResult>;
 }
 
 export interface RunApprovalReader {
@@ -76,6 +79,7 @@ interface ActiveExecution {
 export class RunExecutionSupervisor {
   private readonly active = new Map<RunId, ActiveExecution>();
   private disposed = false;
+  private draining = false;
 
   constructor(private readonly options: RunExecutionSupervisorOptions) {}
 
@@ -156,13 +160,57 @@ export class RunExecutionSupervisor {
     return [...this.active.keys()];
   }
 
+  /** Stop scheduling work while preserving cancellation and shutdown checkpoint access. */
+  beginDrain(): void {
+    if (this.draining) return;
+    this.draining = true;
+    this.options.controller.beginShutdown?.();
+  }
+
+  async checkpointActive(): Promise<
+    readonly { readonly runId: RunId; readonly result: RunShutdownCheckpointResult }[]
+  > {
+    // A start/recover accepted immediately before beginDrain is queued in a microtask. Let that
+    // accepted task open its Core scope so the checkpoint observes its real execution boundary.
+    await Promise.resolve();
+    const prepare = this.options.controller.prepareForShutdown;
+    return Promise.all(
+      this.activeRunIds().map(async (runId) => ({
+        runId,
+        result:
+          prepare === undefined
+            ? ("UNSAFE_IN_FLIGHT" as const)
+            : await prepare.call(this.options.controller, runId),
+      })),
+    );
+  }
+
   async drain(): Promise<void> {
     while (this.active.size > 0) {
       await Promise.all([...this.active.values()].map((entry) => entry.task));
     }
   }
 
+  /** Wait a finite interval; a timeout never disposes or forgets active work. */
+  async drainWithin(timeoutMs: number): Promise<boolean> {
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+      throw new RangeError("Supervisor drain timeout must be a safe positive integer.");
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        this.drain().then(() => true),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
   async dispose(): Promise<void> {
+    this.beginDrain();
     this.disposed = true;
     await this.drain();
   }
@@ -178,7 +226,7 @@ export class RunExecutionSupervisor {
     operation: BackgroundOperation,
     task: () => Promise<unknown>,
   ): void {
-    if (this.disposed) {
+    if (this.disposed || this.draining) {
       throw new RunExecutionSupervisorConflictError("Supervisor is shutting down.");
     }
     const token = Symbol(operation);

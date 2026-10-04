@@ -7,8 +7,10 @@ import {
   createEventId,
   createRunId,
   createSessionId,
+  createStepId,
   createToolInvocationId,
   createWorkspaceId,
+  RunEventSchema,
 } from "@caelush/protocol";
 import { expandPermissionPreset } from "@caelush/security";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
@@ -135,6 +137,62 @@ describe("event stream route", () => {
     expect(text).toContain("event: shell.output");
     expect(text).toContain("id: 1");
     expect(text).toContain('"chunk":"hello"');
+    await reader.cancel();
+  });
+
+  it("streams model status without an SSE id because it is ephemeral", async () => {
+    const { app: server, eventHub: hub, run } = await makeServer();
+    await server.listen({ host: "127.0.0.1", port: 0 });
+    const address = server.server.address();
+    if (!address || typeof address === "string") throw new Error("server did not bind a TCP port");
+
+    const responsePromise = fetch(`http://127.0.0.1:${address.port}/api/v1/runs/${run.id}/events`, {
+      headers: { accept: "text/event-stream" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const stepId = createStepId();
+    hub.emitTransient(
+      RunEventSchema.parse({
+        eventId: createEventId(),
+        schemaVersion: 1,
+        runId: run.id,
+        sessionId: run.sessionId,
+        stepId,
+        timestamp: 1_700_000_000_001,
+        visibility: "USER_VISIBLE",
+        durability: {
+          kind: "EPHEMERAL",
+          version: 1,
+          deliveryClass: "COALESCIBLE",
+          streamKey: `model:status:${run.id}:${stepId}`,
+        },
+        type: "model.status",
+        payload: {
+          phase: "NO_RECENT_ACTIVITY",
+          lastActivityAt: 1_700_000_000_000,
+          idleForMs: 30_000,
+          idleTimeoutMs: 300_000,
+        },
+      }) as never,
+    );
+
+    const response = await responsePromise;
+    expect(response.status).toBe(200);
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("SSE response has no body");
+    const next = await Promise.race([
+      nextSseFrame(reader),
+      new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 750)),
+    ]);
+    expect(next).toBeDefined();
+    if (next === undefined) {
+      await reader.cancel();
+      return;
+    }
+    expect(sseFrameId(next.frame)).toBeUndefined();
+    expect(next.frame).toContain("event: model.status");
+    expect(next.frame).toContain('"phase":"NO_RECENT_ACTIVITY"');
+    expect(next.frame).not.toContain("id:");
     await reader.cancel();
   });
 

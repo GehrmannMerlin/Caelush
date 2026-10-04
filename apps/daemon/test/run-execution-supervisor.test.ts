@@ -54,6 +54,61 @@ function deferred<T>() {
 }
 
 describe("RunExecutionSupervisor", () => {
+  it("rejects new executions after draining begins and checkpoints each active Run", async () => {
+    const current = run();
+    const gate = deferred<void>();
+    const start = vi.fn(() => gate.promise);
+    const prepareForShutdown = vi.fn(async () => {
+      gate.resolve();
+      return "CHECKPOINTED" as const;
+    });
+    const supervisor = new RunExecutionSupervisor({
+      runs: { get: vi.fn(async () => current) },
+      controller: {
+        start,
+        recover: vi.fn(),
+        resolveApproval: vi.fn(),
+        cancel: vi.fn(),
+        beginShutdown: vi.fn(),
+        prepareForShutdown,
+      },
+    });
+
+    await supervisor.start(current.id);
+    await Promise.resolve();
+    supervisor.beginDrain();
+    const outcomes = await supervisor.checkpointActive();
+    await supervisor.drain();
+
+    expect(outcomes).toEqual([{ runId: current.id, result: "CHECKPOINTED" }]);
+    expect(prepareForShutdown).toHaveBeenCalledExactlyOnceWith(current.id);
+    expect(start).toHaveBeenCalledTimes(1);
+    await expect(supervisor.start(current.id)).rejects.toBeInstanceOf(
+      RunExecutionSupervisorConflictError,
+    );
+  });
+
+  it("reports a bounded drain timeout without disposing the active execution", async () => {
+    const current = run();
+    const gate = deferred<void>();
+    const supervisor = new RunExecutionSupervisor({
+      runs: { get: vi.fn(async () => current) },
+      controller: {
+        start: vi.fn(() => gate.promise),
+        recover: vi.fn(),
+        resolveApproval: vi.fn(),
+        cancel: vi.fn(),
+      },
+    });
+
+    await supervisor.start(current.id);
+    await Promise.resolve();
+    expect(await supervisor.drainWithin(1)).toBe(false);
+    expect(supervisor.activeRunIds()).toEqual([current.id]);
+    gate.resolve();
+    await supervisor.drain();
+  });
+
   it("schedules start without waiting and deduplicates the same Run", async () => {
     const current = run();
     const gate = deferred<void>();

@@ -2,7 +2,12 @@ import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { startDaemon, type DaemonHandle } from "./daemon.js";
-import { readProviderConfiguration } from "./config.js";
+import {
+  readProviderConfiguration,
+  readProviderStreamPolicy,
+  type ProviderStreamPolicy,
+} from "./config.js";
+import { providerStreamPolicyDiagnostic } from "./diagnostics.js";
 import { resolveProductPaths } from "./product-paths.js";
 import type { WebStaticHostOptions } from "./web/static-host.js";
 
@@ -15,8 +20,10 @@ export async function main(): Promise<void> {
   await mkdir(dirname(databasePath), { recursive: true });
 
   let daemon: DaemonHandle;
+  let providerStreamPolicy: ProviderStreamPolicy;
   try {
     const web = readWebHostOptions(process.env);
+    providerStreamPolicy = readProviderStreamPolicy(process.env);
     const compatibilityWorkspacePath = process.env.CAELUSH_WORKSPACE_PATH?.trim();
     daemon = await startDaemon({
       databasePath,
@@ -25,6 +32,7 @@ export async function main(): Promise<void> {
       // to the child, so a spawned daemon resolves the same fixed artifact as a direct start.
       environment: process.env,
       ...readProviderConfiguration(process.env),
+      providerStreamPolicy,
       ...(compatibilityWorkspacePath === undefined || compatibilityWorkspacePath.length === 0
         ? {}
         : { workspacePath: compatibilityWorkspacePath }),
@@ -35,6 +43,13 @@ export async function main(): Promise<void> {
     process.exitCode = 1;
     return;
   }
+
+  console.info(
+    JSON.stringify({
+      event: "provider_stream_policy.effective",
+      ...providerStreamPolicyDiagnostic(providerStreamPolicy),
+    }),
+  );
 
   let shuttingDown: Promise<void> | undefined;
   const shutdown = (): Promise<void> => {

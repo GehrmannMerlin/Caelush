@@ -29,6 +29,7 @@ import {
   type AgentStep,
   type RunId,
   type StepId,
+  type RetryExhaustedEvent,
 } from "@caelush/protocol";
 import {
   beginAgentStepState,
@@ -62,6 +63,7 @@ import {
 } from "./run-execution-state.js";
 import { markAgentStateTimedOut } from "./agent-state.js";
 import { RunExecutionScopeRegistry } from "./run-execution-scope.js";
+import type { RunShutdownCheckpointResult } from "./run-shutdown.js";
 import { RunDeadlineRegistry } from "./run-deadline-registry.js";
 import { semanticEqual } from "./semantic-equality.js";
 import { deriveRunDeadline, isRunDeadlineExceeded } from "./run-deadline.js";
@@ -131,7 +133,7 @@ import {
   type RunExecutionCommitView as RunExecutionCommit,
   type RunExecutionSnapshotView as RunExecutionSnapshot,
 } from "./run-execution-store.js";
-import { RetryController } from "./retry-controller.js";
+import { RetryController, type RetryStopReason } from "./retry-controller.js";
 import { RunRetryRegistry } from "./run-retry-registry.js";
 import type {
   DurableAgentEvent,
@@ -142,6 +144,10 @@ import type { CompletionEventEvidence } from "./run-commit-event-materializer.js
 import type { RunControllerResult } from "./run-controller-input.js";
 import { createRunEventFactory, type RunEventFactory } from "@caelush/agent";
 import type { RunControllerDependencies, ToolTurnPipeline } from "./run-controller-ports.js";
+import type {
+  ModelTransportRecoveryCheckpoint,
+  ModelTransportSelection,
+} from "./model-transport-recovery-port.js";
 import { toDurableRetryCode } from "./ai-invocation-projection.js";
 import type { AgentBudgetBlock } from "./agent-errors.js";
 
@@ -291,6 +297,7 @@ function unresolvedCompletionModel(ref: AgentRun["model"]): import("@caelush/ai"
 
 export class RunController {
   private readonly activeRuns = new Set<RunId>();
+  private shuttingDown = false;
   private readonly scopes: RunExecutionScopeRegistry;
   private readonly deadlineRegistry: RunDeadlineRegistry;
   private readonly retryRegistry: RunRetryRegistry;
@@ -353,11 +360,45 @@ export class RunController {
   }
 
   dispose(): void {
+    this.beginShutdown();
     this.deadlineRegistry.dispose();
     this.retryRegistry.dispose();
   }
 
+  /** Stop automatic retry timers before managed daemon shutdown begins. */
+  beginShutdown(): void {
+    if (this.shuttingDown) return;
+    this.shuttingDown = true;
+    this.retryRegistry.dispose();
+  }
+
+  /** Abort only a safe in-flight model attempt and durably checkpoint its retry before returning. */
+  async prepareForShutdown(runId: RunId): Promise<RunShutdownCheckpointResult> {
+    this.beginShutdown();
+    const before = await this.load(runId);
+    if (isTerminal(before.run.status)) return "ALREADY_SAFE";
+    const scope = this.scopes.get(runId);
+    if (scope === undefined) return "ALREADY_SAFE";
+
+    // Tool execution has durable per-invocation recovery and an unknown side-effect boundary;
+    // verification is similarly not a model Step. Neither can be reclassified as a model retry.
+    if (
+      before.continuation?.type === "WAITING_TOOL_RESULTS" ||
+      before.run.status === "VERIFYING"
+    ) {
+      return "UNSAFE_IN_FLIGHT";
+    }
+
+    scope.abort("MANAGED_RESTART");
+    await scope.settled;
+    const after = await this.load(runId);
+    if (isTerminal(after.run.status)) return "ALREADY_SAFE";
+    if (after.continuation?.type === "WAITING_RETRY") return "CHECKPOINTED";
+    return after.activeStep === undefined ? "ALREADY_SAFE" : "UNSAFE_IN_FLIGHT";
+  }
+
   async start(runId: RunId): Promise<RunControllerResult> {
+    if (this.shuttingDown) throw new RunControllerConflictError("Run controller is shutting down.");
     return this.withLock(runId, () => this.startLocked(runId));
   }
 
@@ -369,6 +410,7 @@ export class RunController {
   }
 
   async recover(runId: RunId): Promise<RunControllerResult> {
+    if (this.shuttingDown) throw new RunControllerConflictError("Run controller is shutting down.");
     return this.withLock(runId, () => this.recoverLocked(runId));
   }
 
@@ -1546,6 +1588,7 @@ export class RunController {
     if (state === undefined) throw new RunControllerInputError("Run execution has no AgentState");
 
     const execution = await this.dependencies.agentExecution.resolve(snapshot.run);
+    const transportSelection = this.resolveModelTransportSelection(snapshot);
     const signal = this.executionSignal(snapshot.run.id);
     const step = allocateRunAgentStep({
       state,
@@ -1566,6 +1609,7 @@ export class RunController {
     // did. The frozen result deliberately reports none of it, so this is the only channel through
     // which a boundary commit failure stays distinguishable from a model failure.
     const observation = createAgentTurnObservation();
+    observation.transportSelection = transportSelection;
     const pendingTurn = this.pendingAgentTurn(
       decision,
       directive,
@@ -1593,6 +1637,7 @@ export class RunController {
         modelTurnExecutor: createObservingModelTurnExecutor(
           execution.modelTurnExecutor,
           observation,
+          transportSelection?.transportId,
         ),
         ...(modelAdmission === undefined ? {} : { modelAdmission }),
         modelTurnBoundary: boundary,
@@ -1631,6 +1676,14 @@ export class RunController {
         `The Agent driver produced a ${effect.kind} effect for an ADVANCE_AGENT directive.`,
       );
     }
+    if (
+      effect.result.kind === "CANCELLED" &&
+      this.scopes.get(snapshot.run.id)?.abortCause === "MANAGED_RESTART"
+    ) {
+      const current = await this.load(snapshot.run.id);
+      if (current.activeStep === undefined) return this.resultFromSnapshot(current);
+      return this.settleManagedRestart(snapshot, current, effect.result, observation);
+    }
     if (requiresBoundaryRepair(observation)) {
       // The durable open-Step commit did not succeed. No provider call was allowed, no Agent effect
       // exists, and settling this as a model failure would durably record an answer the model never
@@ -1641,6 +1694,35 @@ export class RunController {
     }
 
     return this.settle(snapshot, directive, effect.result, observation);
+  }
+
+  private async settleManagedRestart(
+    before: RunExecutionSnapshot,
+    current: RunExecutionSnapshot,
+    cancelled: Extract<AgentLoopAdvanceResult, { kind: "CANCELLED" }>,
+    observation: AgentTurnObservation,
+  ): Promise<RunControllerResult> {
+    const step = current.activeStep;
+    if (step === undefined || step.status !== "RUNNING") {
+      throw new RunControllerInvariantError(
+        "A managed model restart requires the durable active model Step.",
+      );
+    }
+    const interrupted: AgentLoopFailedResult = {
+      kind: "FAILED",
+      turn: { stepId: step.id, sequence: step.sequence },
+      error: {
+        code: "NETWORK_ERROR",
+        message: "Model request was interrupted during managed daemon shutdown.",
+        retryable: true,
+        phase: "LLM",
+      },
+      retry: { code: "NETWORK", retryable: true },
+      messagesToAppend: cancelled.messagesToAppend,
+      ...(cancelled.context === undefined ? {} : { context: cancelled.context }),
+    };
+    observation.providerTurnState = "CANCELLED";
+    return this.settleRetryCompatibility(before, interrupted, observation);
   }
 
   /**
@@ -2398,6 +2480,18 @@ export class RunController {
             this.nextEventId(),
             now,
           ),
+          this.eventFactory.retryExhausted(
+            current.run,
+            failedStep,
+            retryExhaustedPayload(
+              attempt,
+              this.retryController.maxAttempts,
+              toDurableRetryCode(retry.code),
+              "MAX_STEPS_REACHED",
+            ),
+            this.nextEventId(),
+            now,
+          ),
           this.eventFactory.maxSteps(
             current.run,
             state,
@@ -2423,48 +2517,6 @@ export class RunController {
     }
 
     /* The original deadline, chunked to the deadline itself rather than a fresh attempt time. */
-    if (decision.kind === "STOP" && decision.reason === "DEADLINE_EXCEEDED") {
-      if (deadline === undefined) {
-        throw new RunControllerInvariantError(
-          "A deadline-exceeded retry decision has no Run deadline",
-        );
-      }
-      const run = AgentRunSchema.parse({ ...current.run, currentStepId: undefined });
-      const commit = await this.commit({
-        run,
-        state: settledState,
-        expectedStateRevision: current.stateRevision ?? null,
-        expectedContinuationRevision: current.continuationRevision ?? null,
-        stepWrites: [{ operation: "UPDATE", step: failedStep }],
-        messagesToAppend: [],
-        continuation: {
-          operation: "SET",
-          checkpoint: {
-            type: "WAITING_RETRY",
-            runId: run.id,
-            failedStepId: step.id,
-            attempt: attempt + 1,
-            maxAttempts: this.retryController.maxAttempts,
-            nextAttemptAt: deadline.deadlineAt,
-            errorCode: toDurableRetryCode(retry.code),
-            ...retryContext,
-          },
-          updatedAt: now,
-        },
-        events: [
-          this.eventFactory.llmFailed(
-            current.run,
-            failedStep,
-            result.error,
-            this.nextEventId(),
-            now,
-          ),
-        ],
-      });
-      this.notify(commit.events);
-      return this.resultFromSnapshot(commit.snapshot);
-    }
-
     /* Attempts exhausted: the Run fails, with the same event vocabulary as the planner's branch. */
     if (decision.kind === "STOP") {
       const state = markAgentStateFailed(settledState, result.error, now);
@@ -2490,6 +2542,20 @@ export class RunController {
           failedStep,
           now,
           observation.providerTurnState,
+          retryExhaustedReason(decision.reason) === undefined
+            ? undefined
+            : this.eventFactory.retryExhausted(
+                current.run,
+                failedStep,
+                retryExhaustedPayload(
+                  attempt,
+                  this.retryController.maxAttempts,
+                  toDurableRetryCode(retry.code),
+                  retryExhaustedReason(decision.reason)!,
+                ),
+                this.nextEventId(),
+                now,
+              ),
         ),
       });
       this.notify(commit.events);
@@ -2498,6 +2564,16 @@ export class RunController {
 
     const nextAttemptAt = addTimestamp(now, decision.delayMs);
     const run = AgentRunSchema.parse({ ...current.run, currentStepId: undefined });
+    const transportRecovery = this.nextModelTransportForRetry({
+      previous: before.continuation,
+      run: current.run,
+      step: failedStep,
+      selection: observation.transportSelection,
+      errorCode: toDurableRetryCode(retry.code),
+      attempt: decision.attempt,
+      maxAttempts: this.retryController.maxAttempts,
+      timestamp: now,
+    });
     const commit = await this.commit({
       run,
       state: settledState,
@@ -2518,11 +2594,15 @@ export class RunController {
           nextAttemptAt,
           errorCode: toDurableRetryCode(retry.code),
           ...retryContext,
+          ...(transportRecovery.checkpoint === undefined
+            ? {}
+            : { transport: transportRecovery.checkpoint }),
         },
         updatedAt: now,
       },
       events: [
         this.eventFactory.llmFailed(current.run, failedStep, result.error, this.nextEventId(), now),
+        ...(transportRecovery.event === undefined ? [] : [transportRecovery.event]),
         this.eventFactory.retryScheduled(
           current.run,
           failedStep,
@@ -2568,6 +2648,130 @@ export class RunController {
       };
     }
     return { mode: "START" };
+  }
+
+  private resolveModelTransportSelection(
+    snapshot: RunExecutionSnapshot,
+  ): ModelTransportSelection | undefined {
+    const recovery = this.dependencies.modelTransportRecovery;
+    if (recovery === undefined) {
+      if (
+        snapshot.continuation?.type === "WAITING_RETRY" &&
+        snapshot.continuation.transport !== undefined
+      ) {
+        throw new RunControllerInvariantError(
+          "A retry transport checkpoint requires its configured recovery port.",
+        );
+      }
+      return undefined;
+    }
+
+    const identity = {
+      providerId: snapshot.run.model.provider,
+      modelId: snapshot.run.model.model,
+    } as const;
+    const retryTransport =
+      snapshot.continuation?.type === "WAITING_RETRY"
+        ? snapshot.continuation.transport
+        : undefined;
+    const selection =
+      retryTransport === undefined
+        ? recovery.initial(identity)
+        : { ...identity, transportId: retryTransport.currentTransportId };
+
+    assertModelTransportSelection(selection, identity);
+    return selection;
+  }
+
+  private nextModelTransportForRetry(input: {
+    readonly previous: RunExecutionSnapshot["continuation"];
+    readonly run: AgentRun;
+    readonly step: AgentStep;
+    readonly selection: ModelTransportSelection | undefined;
+    readonly errorCode: "LLM_RATE_LIMIT" | "LLM_NETWORK" | "LLM_TIMEOUT";
+    readonly attempt: number;
+    readonly maxAttempts: number;
+    readonly timestamp: import("@caelush/protocol").TimestampMs;
+  }): {
+    readonly checkpoint?: ModelTransportRecoveryCheckpoint;
+    readonly event?: import("@caelush/agent").DurableRunEventDraft;
+  } {
+    const recovery = this.dependencies.modelTransportRecovery;
+    if (recovery === undefined) return {};
+    if (input.selection === undefined) {
+      throw new RunControllerInvariantError(
+        "A configured transport recovery port produced no current selection.",
+      );
+    }
+
+    const identity = {
+      providerId: input.run.model.provider,
+      modelId: input.run.model.model,
+    } as const;
+    assertModelTransportSelection(input.selection, identity);
+    const previousTransport =
+      input.previous?.type === "WAITING_RETRY" ? input.previous.transport : undefined;
+    const attemptedTransportIds =
+      previousTransport?.attemptedTransportIds ?? [input.selection.transportId];
+    if (
+      previousTransport !== undefined &&
+      previousTransport.currentTransportId !== input.selection.transportId
+    ) {
+      throw new RunControllerInvariantError(
+        "The active transport does not match the durable retry selection.",
+      );
+    }
+    if (!attemptedTransportIds.includes(input.selection.transportId)) {
+      throw new RunControllerInvariantError(
+        "The active transport is absent from the durable attempted transport set.",
+      );
+    }
+
+    const next = recovery.next({
+      current: input.selection,
+      attemptedTransportIds,
+      errorCode: input.errorCode,
+    });
+    if (next === undefined) {
+      return {
+        checkpoint: {
+          currentTransportId: input.selection.transportId,
+          attemptedTransportIds,
+        },
+      };
+    }
+    assertModelTransportSelection(next, identity);
+    if (
+      next.transportId === input.selection.transportId ||
+      attemptedTransportIds.includes(next.transportId)
+    ) {
+      throw new RunControllerInvariantError(
+        "The transport recovery port selected a transport that was already attempted.",
+      );
+    }
+    if (attemptedTransportIds.length >= 9) {
+      throw new RunControllerInvariantError("The durable transport candidate bound was exceeded.");
+    }
+
+    const checkpoint: ModelTransportRecoveryCheckpoint = {
+      currentTransportId: next.transportId,
+      attemptedTransportIds: [...attemptedTransportIds, next.transportId],
+    };
+    return {
+      checkpoint,
+      event: this.eventFactory.transportFallbackSelected(
+        input.run,
+        input.step,
+        {
+          attempt: input.attempt,
+          maxAttempts: input.maxAttempts,
+          fromTransportId: input.selection.transportId,
+          toTransportId: next.transportId,
+        },
+        this.nextEventId(),
+        input.timestamp,
+      ),
+    };
   }
 
   /**
@@ -2923,11 +3127,13 @@ export class RunController {
     step: AgentStep | undefined,
     timestamp: AgentRun["createdAt"],
     providerTurnState: AgentProviderTurnState = "NOT_STARTED",
+    retryExhausted?: DurableEventDraft,
   ): DurableEventDraft[] {
     return [
       ...(providerTurnState === "FAILED" && step !== undefined
         ? [this.eventFactory.llmFailed(run, step, error, this.nextEventId(), timestamp)]
         : []),
+      ...(retryExhausted === undefined ? [] : [retryExhausted]),
       this.eventFactory.error(run, error, step?.id, this.nextEventId(), timestamp),
       this.eventFactory.statusChanged(
         run,
@@ -3659,6 +3865,10 @@ export class RunController {
   }
 
   private reconcileRetry(snapshot: RunExecutionSnapshot): void {
+    if (this.shuttingDown) {
+      this.retryRegistry.disarm(snapshot.run.id);
+      return;
+    }
     if (snapshot.run.status !== "RUNNING" || snapshot.continuation?.type !== "WAITING_RETRY") {
       this.retryRegistry.disarm(snapshot.run.id);
       return;
@@ -3676,6 +3886,10 @@ export class RunController {
     nextAttemptAt: AgentRun["createdAt"],
     deadlineAt?: AgentRun["createdAt"],
   ): void {
+    if (this.shuttingDown) {
+      this.retryRegistry.disarm(runId);
+      return;
+    }
     if (deadlineAt !== undefined && nextAttemptAt >= deadlineAt) {
       this.retryRegistry.disarm(runId);
       return;
@@ -3906,6 +4120,61 @@ function toDurableRetryMetadata(retry: import("@caelush/agent").AgentRetryMetada
     code,
     retryable: true,
     ...(retry.retryAfterMs === undefined ? {} : { retryAfterMs: retry.retryAfterMs }),
+  };
+}
+
+const MODEL_TRANSPORT_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+
+function assertModelTransportSelection(
+  selection: ModelTransportSelection,
+  expected: Pick<ModelTransportSelection, "providerId" | "modelId">,
+): void {
+  if (
+    typeof selection !== "object" ||
+    selection === null ||
+    selection.providerId !== expected.providerId ||
+    selection.modelId !== expected.modelId
+  ) {
+    throw new RunControllerInvariantError(
+      "Transport recovery may not change the Run's Provider or model identity.",
+    );
+  }
+  if (
+    typeof selection.transportId !== "string" ||
+    !MODEL_TRANSPORT_ID_PATTERN.test(selection.transportId)
+  ) {
+    throw new RunControllerInvariantError("Transport recovery returned an invalid transport id.");
+  }
+}
+
+function retryExhaustedReason(
+  reason: RetryStopReason,
+): RetryExhaustedEvent["payload"]["reason"] | undefined {
+  switch (reason) {
+    case "ATTEMPTS_EXHAUSTED":
+    case "DEADLINE_EXCEEDED":
+    case "MAX_STEPS_REACHED":
+    case "RETRY_AFTER_EXCEEDS_POLICY":
+      return reason;
+    case "NOT_RETRYABLE":
+    case "CANCELLED":
+      return undefined;
+  }
+}
+
+function retryExhaustedPayload(
+  attempt: number,
+  maxAttempts: number,
+  errorCode: RetryExhaustedEvent["payload"]["errorCode"],
+  reason: RetryExhaustedEvent["payload"]["reason"],
+): RetryExhaustedEvent["payload"] {
+  return {
+    attempt,
+    maxAttempts,
+    retriesUsed: attempt - 1,
+    maxRetries: maxAttempts - 1,
+    errorCode,
+    reason,
   };
 }
 

@@ -102,7 +102,7 @@ export function createAnthropicMessagesApiAdapter(): ApiAdapter {
 
       // The dialect streams over a POST with custom headers, which `EventSource`
       // cannot do, so the response body is read directly.
-      const decoder = createTextDecoderStream(body);
+      const decoder = createTextDecoderStream(body, signal);
       for await (const text of decoder) {
         for (const event of parser.push(text)) {
           yield* observeAnthropicEvent(event, state);

@@ -1,5 +1,6 @@
 import { AIError, createAIError } from "../errors/ai-error.js";
 import { createAIModelTurnAssembler } from "../stream/turn-assembler.js";
+import { observeIteratorNext, waitForIteratorNext } from "../stream/idle-watchdog.js";
 import { createGatewayRequestResolver } from "./gateway-request-resolver.js";
 import { createToolCallTracker } from "../stream/tool-call-tracker.js";
 import { describeValue } from "../internal/assertions.js";
@@ -8,7 +9,12 @@ import type { AIErrorContext, AIErrorSanitizer } from "../errors/index.js";
 import type { AIFinishReason } from "../tools/tool-call.js";
 import type { AIModelRequest } from "../request/model-request.js";
 import type { AIModelTurnResult } from "../models/model-turn-result.js";
-import type { AIStream, AIStreamEvent, AIStreamOptions } from "../stream/index.js";
+import type {
+  AIStream,
+  AIStreamEvent,
+  AIStreamOptions,
+  AIStreamStatusEvent,
+} from "../stream/index.js";
 import type { AbortScope } from "../stream/abort-scope.js";
 import type { ApiAdapterRegistry } from "../adapters/api-adapter-registry.js";
 import type { CacheResolver } from "../cache/cache-resolver.js";
@@ -37,6 +43,10 @@ export interface AIGatewayDependencies {
 export interface AIGatewayOptions {
   readonly reasoningPolicy?: ReasoningResolutionPolicy;
   readonly defaultTimeoutMs?: number;
+  readonly defaultNudgeAfterMs?: number;
+  readonly defaultIdleTimeoutMs?: number;
+  readonly defaultTeardownGraceMs?: number;
+  readonly clock?: { now(): number };
 }
 
 /**
@@ -66,6 +76,15 @@ export function createAIGateway(
     ...(options.defaultTimeoutMs === undefined
       ? {}
       : { defaultTimeoutMs: options.defaultTimeoutMs }),
+    ...(options.defaultNudgeAfterMs === undefined
+      ? {}
+      : { defaultNudgeAfterMs: options.defaultNudgeAfterMs }),
+    ...(options.defaultIdleTimeoutMs === undefined
+      ? {}
+      : { defaultIdleTimeoutMs: options.defaultIdleTimeoutMs }),
+    ...(options.defaultTeardownGraceMs === undefined
+      ? {}
+      : { defaultTeardownGraceMs: options.defaultTeardownGraceMs }),
   });
 
   const gateway: AIGateway = {
@@ -77,9 +96,11 @@ export function createAIGateway(
         ...(streamOptions === undefined ? {} : { options: streamOptions }),
       });
 
+      const clock = options.clock;
+      const now = clock === undefined ? () => Date.now() : () => clock.now();
       return {
         callId: prepared.callId,
-        events: runGatewayStream(prepared, dependencies.errors),
+        events: runGatewayStream(prepared, dependencies.errors, now),
       };
     },
 
@@ -113,9 +134,22 @@ export function createAIGateway(
 async function* runGatewayStream(
   prepared: ResolvedGatewayRequest,
   sanitizer: AIErrorSanitizer,
+  now: () => number,
 ): AsyncGenerator<AIStreamEvent> {
-  const { adapter, connection, descriptor, request, scope, callId, model, providerId, resolution } =
-    prepared;
+  const {
+    adapter,
+    connection,
+    descriptor,
+    request,
+    scope,
+    callId,
+    model,
+    providerId,
+    resolution,
+    nudgeAfterMs,
+    idleTimeoutMs,
+    teardownGraceMs,
+  } = prepared;
 
   let terminal = false;
   let adapterIterator: AsyncIterator<AIAdapterEvent> | undefined;
@@ -130,6 +164,9 @@ async function* runGatewayStream(
     const tracker = createToolCallTracker();
     const context: AIErrorContext = { providerId, model };
     let adapterFinish: AdapterFinish | undefined;
+    let lastActivityAt = now();
+    let nudgeEmitted = false;
+    let phase: AIStreamStatusEvent["payload"]["phase"] = "WAITING_PROVIDER";
 
     const adapterStream = adapter.stream({
       model: descriptor,
@@ -138,10 +175,52 @@ async function* runGatewayStream(
       signal: scope.signal,
     });
     adapterIterator = adapterStream[Symbol.asyncIterator]();
+    let pendingNext = observeIteratorNext(adapterIterator);
 
     while (true) {
-      const step = await adapterIterator.next();
+      const outcome = await waitForIteratorNext({
+        pending: pendingNext,
+        aborted: scope.aborted,
+        lastActivityAt,
+        nudgeAfterMs,
+        idleTimeoutMs,
+        nudgeEmitted,
+        now,
+      });
+
+      if (outcome.kind === "NUDGE") {
+        nudgeEmitted = true;
+        phase = "NO_RECENT_ACTIVITY";
+        yield streamStatusEvent(phase, lastActivityAt, idleTimeoutMs, now);
+        continue;
+      }
+      if (outcome.kind === "IDLE_TIMEOUT") {
+        scope.abortIdle();
+        phase = "CANCELLING_IDLE_STREAM";
+        yield streamStatusEvent(phase, lastActivityAt, idleTimeoutMs, now);
+        throw createAIError("AI_TIMEOUT", undefined, context);
+      }
+      if (outcome.kind === "ABORT") {
+        throw createAIError(
+          outcome.abortKind === "timeout" || outcome.abortKind === "idle_timeout"
+            ? "AI_TIMEOUT"
+            : "AI_ABORTED",
+          undefined,
+          context,
+        );
+      }
+      if (outcome.kind === "ERROR") throw outcome.error;
+
+      const step = outcome.result;
       if (step.done === true) break;
+
+      lastActivityAt = now();
+      if (phase === "NO_RECENT_ACTIVITY") {
+        phase = "RECEIVING_PROVIDER_DATA";
+        yield streamStatusEvent(phase, lastActivityAt, idleTimeoutMs, now);
+      }
+      phase = "WAITING_PROVIDER";
+      nudgeEmitted = false;
 
       const adapterEvent = step.value;
       const finish = trackAdapterEvent(adapterEvent, tracker, context);
@@ -155,11 +234,13 @@ async function* runGatewayStream(
           );
         }
         adapterFinish = finish;
+        pendingNext = observeIteratorNext(adapterIterator);
         continue;
       }
 
       const publicEvent = toPublicEvent(adapterEvent, context);
       if (publicEvent !== undefined) yield publicEvent;
+      pendingNext = observeIteratorNext(adapterIterator);
     }
 
     if (adapterFinish === undefined) {
@@ -207,12 +288,47 @@ async function* runGatewayStream(
     if (!terminal) scope.abortConsumer();
     scope.cleanup();
     if (adapterIterator?.return !== undefined) {
-      try {
-        await adapterIterator.return();
-      } catch {
-        // Closing an already-failed adapter iterator must not mask the outcome.
-      }
+      await closeAdapterIterator(adapterIterator, teardownGraceMs);
     }
+  }
+}
+
+function streamStatusEvent(
+  phase: AIStreamStatusEvent["payload"]["phase"],
+  lastActivityAt: number,
+  idleTimeoutMs: number,
+  now: () => number,
+): AIStreamStatusEvent {
+  return {
+    type: "stream.status",
+    payload: {
+      phase,
+      lastActivityAt,
+      idleForMs: Math.max(0, now() - lastActivityAt),
+      idleTimeoutMs,
+    },
+  };
+}
+
+async function closeAdapterIterator(
+  iterator: AsyncIterator<AIAdapterEvent>,
+  teardownGraceMs: number,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const closing = Promise.resolve()
+    .then(() => iterator.return?.())
+    .then(
+      () => undefined,
+      () => undefined,
+    );
+  const grace = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, teardownGraceMs);
+  });
+
+  try {
+    await Promise.race([closing, grace]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
@@ -310,7 +426,9 @@ function normalizeRuntimeError(
     ...(error === undefined ? {} : { cause: error }),
   };
 
-  if (kind === "timeout") return createAIError("AI_TIMEOUT", undefined, context);
+  if (kind === "timeout" || kind === "idle_timeout") {
+    return createAIError("AI_TIMEOUT", undefined, context);
+  }
   if (kind !== undefined) return createAIError("AI_ABORTED", undefined, context);
 
   if (error instanceof AIError) {

@@ -3,13 +3,15 @@ export interface RetryPolicy {
   readonly baseDelayMs: number;
   readonly maxDelayMs: number;
   readonly jitterRatio: number;
+  readonly maxProviderRetryAfterMs: number;
 }
 
 export const DEFAULT_RETRY_POLICY: RetryPolicy = Object.freeze({
-  maxAttempts: 3,
+  maxAttempts: 6,
   baseDelayMs: 1_000,
   maxDelayMs: 30_000,
-  jitterRatio: 0,
+  jitterRatio: 0.1,
+  maxProviderRetryAfterMs: 300_000,
 });
 
 export const MAX_RETRY_ATTEMPTS = 10;
@@ -29,6 +31,9 @@ export function validateRetryPolicy(policy: RetryPolicy): RetryPolicy {
   }
   if (!Number.isFinite(policy.jitterRatio) || policy.jitterRatio < 0 || policy.jitterRatio > 1) {
     throw new Error("Retry jitterRatio must be a finite number between 0 and 1.");
+  }
+  if (!Number.isSafeInteger(policy.maxProviderRetryAfterMs) || policy.maxProviderRetryAfterMs <= 0) {
+    throw new Error("Retry maxProviderRetryAfterMs must be a safe positive integer.");
   }
   return Object.freeze({ ...policy });
 }

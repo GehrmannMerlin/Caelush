@@ -5,6 +5,7 @@ import type { ModelRef, StepId } from "@caelush/protocol";
 
 import type { AgentBudgetBlock } from "./agent-errors.js";
 import type { AgentProviderTurnState } from "./run-agent-types.js";
+import type { ModelTransportSelection } from "./model-transport-recovery-port.js";
 
 /**
  * The durable model turn boundary.
@@ -90,6 +91,8 @@ export interface AgentTurnObservation {
   admissionBlock: AgentBudgetBlock | undefined;
   admissionError: unknown;
   contextError: unknown;
+  /** Run-selected transport identity for the one Provider attempt, if configured. */
+  transportSelection: ModelTransportSelection | undefined;
 }
 
 /** A fresh, empty observation for one Agent turn. */
@@ -103,6 +106,7 @@ export function createAgentTurnObservation(): AgentTurnObservation {
     admissionBlock: undefined,
     admissionError: undefined,
     contextError: undefined,
+    transportSelection: undefined,
   };
 }
 
@@ -206,11 +210,14 @@ function assertBoundaryMatchesPendingTurn(
 export function createObservingModelTurnExecutor(
   executor: ModelTurnExecutor,
   observation: AgentTurnObservation,
+  transportId?: string,
 ): ModelTurnExecutor {
   return {
     async execute(input) {
       try {
-        const result = await executor.execute(input);
+        const result = await executor.execute(
+          transportId === undefined ? input : { ...input, transportId },
+        );
         observation.providerTurnState =
           result.kind === "COMPLETED"
             ? "COMPLETED"

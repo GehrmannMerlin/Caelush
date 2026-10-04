@@ -20,7 +20,8 @@ export type AIStreamState = "NOT_STARTED" | "STARTED" | "FINISHED" | "ERRORED";
  * The validator is the runtime half of the stream contract: it enforces that
  * `stream.start` happens exactly once and first, that content only follows it,
  * that exactly one terminal event closes the stream, that a tool-call lifecycle is
- * coherent, and that a successful finish leaves no tool call open.
+ * coherent, and that a successful finish leaves no tool call open. `stream.status` is
+ * presentation metadata and never participates in turn assembly.
  *
  * It never repairs a violation. A malformed sequence fails closed, because
  * silently fixing a broken stream would hide the defect that produced it.

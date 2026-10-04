@@ -87,9 +87,17 @@ export interface TimelineVerificationGroup {
 export interface TimelineRetry {
   readonly id: string;
   readonly attempt: number;
+  readonly maxAttempts: number;
+  readonly retryOrdinal: number;
+  readonly maxRetries: number;
   readonly text: string;
   readonly started: boolean;
   readonly reason?: string;
+  readonly exhaustedReason?: string;
+  readonly delayMs?: number;
+  readonly nextAttemptAt?: number;
+  readonly fromTransportId?: string;
+  readonly toTransportId?: string;
   readonly status: TimelineEntryStatus;
 }
 export interface TimelineResourceGuard {

@@ -33,6 +33,21 @@ export interface AIStreamStartEvent {
   };
 }
 
+/** Safe live status about Provider stream activity; it is never model content. */
+export interface AIStreamStatusEvent {
+  readonly type: "stream.status";
+  readonly payload: {
+    readonly phase:
+      | "WAITING_PROVIDER"
+      | "RECEIVING_PROVIDER_DATA"
+      | "NO_RECENT_ACTIVITY"
+      | "CANCELLING_IDLE_STREAM";
+    readonly lastActivityAt: number;
+    readonly idleForMs: number;
+    readonly idleTimeoutMs: number;
+  };
+}
+
 /** Assistant text. */
 export interface AITextDeltaEvent {
   readonly type: "text.delta";
@@ -94,6 +109,7 @@ export interface AIStreamErrorEvent {
 /** Any public AI stream event. */
 export type AIStreamEvent =
   | AIStreamStartEvent
+  | AIStreamStatusEvent
   | AITextDeltaEvent
   | AIReasoningSummaryDeltaEvent
   | AIToolCallStartEvent
@@ -106,6 +122,7 @@ export type AIStreamEvent =
 /** Every public stream event type, in canonical lifecycle order. */
 export const AI_STREAM_EVENT_TYPES = [
   "stream.start",
+  "stream.status",
   "text.delta",
   "reasoning.summary.delta",
   "tool_call.start",

@@ -7,6 +7,7 @@ import {
   createTimestampMs,
   createToolInvocationId,
   createWorkspaceId,
+  computeSecurityPolicyDigest,
   type AgentRun,
   type AgentSession,
   type AgentStep,
@@ -39,6 +40,19 @@ function makeSession(): AgentSession {
 }
 
 function makeRun(sessionId: AgentSession["id"], status: AgentRun["status"] = "RUNNING"): AgentRun {
+  const securityPolicy = {
+    schemaVersion: 1 as const,
+    preset: { id: "VIEW_ONLY" as const, version: 1 },
+    permissionProfile: "READ_ONLY" as const,
+    approvalPolicy: "ON_BOUNDARY" as const,
+    filesystemBoundary: "WORKSPACE_READ_ONLY" as const,
+    processBoundary: "READ_ONLY" as const,
+    requiredEnforcement: "OS_RESTRICTED" as const,
+    hardSafetyPolicyVersion: "hard-safety@1",
+    commandPolicyVersion: "command-policy@1",
+    secretPolicyVersion: "secret-policy@1",
+    createdAt: new Date(100).toISOString(),
+  };
   return {
     id: createRunId(),
     sessionId,
@@ -48,7 +62,11 @@ function makeRun(sessionId: AgentSession["id"], status: AgentRun["status"] = "RU
     model: { provider: "test", model: "test" },
     runtime: { id: "test", kind: "test" },
     permissionProfile: "READ_ONLY",
-    approvalPolicy: "NEVER_ASK",
+    approvalPolicy: "ON_BOUNDARY",
+    securityPolicy: {
+      ...securityPolicy,
+      policyDigest: computeSecurityPolicyDigest(securityPolicy),
+    },
     limits: { maxSteps: 10, maxToolCalls: 10, timeoutMs: 1000 },
     createdAt: createTimestampMs(100),
     startedAt: status === "RUNNING" ? createTimestampMs(101) : undefined,

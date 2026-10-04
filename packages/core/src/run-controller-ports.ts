@@ -26,6 +26,7 @@ import type { RunExecutionScopeRegistry } from "./run-execution-scope.js";
 import type { RunMessageAuthority } from "./run-message-materializer.js";
 import type { RunDeadlineRegistry } from "./run-deadline-registry.js";
 import type { RunRetryRegistry } from "./run-retry-registry.js";
+import type { ModelTransportRecoveryPort } from "./model-transport-recovery-port.js";
 import type { RetryJitterSource, RetryPolicy } from "./retry-controller.js";
 import type { RunBudgetPort } from "./budget-ports.js";
 import type { ResourceGovernancePort } from "./resource-governance-port.js";
@@ -240,6 +241,8 @@ export interface RunControllerDependencies {
   readonly retryRegistry?: RunRetryRegistry;
   readonly retryPolicy?: RetryPolicy;
   readonly retryJitter?: RetryJitterSource;
+  /** Optional host mapping for equivalent transports under the same provider/model identity. */
+  readonly modelTransportRecovery?: ModelTransportRecoveryPort;
   readonly resources?: RunOwnedResourceControllerPort;
   readonly budget?: RunBudgetPort;
   /** Core-side request estimator. The durable budget port receives plain numbers. */

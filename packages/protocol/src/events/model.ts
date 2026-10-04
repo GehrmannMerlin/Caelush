@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { createVersionedEventSchema, OrderedTransientEventMetaSchema } from "./base.js";
+import { TimestampMsSchema } from "../primitives/time.js";
+import {
+  CoalescibleTransientEventMetaSchema,
+  createVersionedEventSchema,
+  OrderedTransientEventMetaSchema,
+} from "./base.js";
 
 /** A provider-approved public assistant text delta; never a full assistant message. */
 export const ModelTextDeltaEventSchema = createVersionedEventSchema(
@@ -25,6 +30,60 @@ export const ModelToolCallDeltaEventSchema = createVersionedEventSchema(
   OrderedTransientEventMetaSchema,
 );
 
+const ModelStatusPhaseSchema = z.enum([
+  "WAITING_PROVIDER",
+  "RECEIVING_PROVIDER_DATA",
+  "NO_RECENT_ACTIVITY",
+  "CANCELLING_IDLE_STREAM",
+]);
+
+const SafeNonnegativeIntegerSchema = z
+  .number()
+  .int()
+  .nonnegative()
+  .refine(Number.isSafeInteger, "expected a nonnegative safe integer");
+
+const PositiveSafeIntegerSchema = z
+  .number()
+  .int()
+  .positive()
+  .refine(Number.isSafeInteger, "expected a positive safe integer");
+
+/** Provider wait state is a bounded presentation signal, never model text or an error payload. */
+export const ModelStatusEventSchema = createVersionedEventSchema(
+  "model.status",
+  1,
+  z
+    .object({
+      phase: ModelStatusPhaseSchema,
+      lastActivityAt: TimestampMsSchema,
+      idleForMs: SafeNonnegativeIntegerSchema,
+      idleTimeoutMs: PositiveSafeIntegerSchema,
+    })
+    .strict(),
+  CoalescibleTransientEventMetaSchema,
+).superRefine((event, context) => {
+  if (event.visibility !== "USER_VISIBLE") {
+    context.addIssue({
+      code: "custom",
+      path: ["visibility"],
+      message: "model status must be USER_VISIBLE",
+    });
+  }
+  if (
+    event.stepId === undefined ||
+    !("streamKey" in event.durability) ||
+    event.durability.streamKey !== `model:status:${event.runId}:${event.stepId}`
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["durability", "streamKey"],
+      message: "model status stream key must match its run and step",
+    });
+  }
+});
+
 export type ModelTextDeltaEvent = z.infer<typeof ModelTextDeltaEventSchema>;
 export type ModelReasoningSummaryDeltaEvent = z.infer<typeof ModelReasoningSummaryDeltaEventSchema>;
 export type ModelToolCallDeltaEvent = z.infer<typeof ModelToolCallDeltaEventSchema>;
+export type ModelStatusEvent = z.infer<typeof ModelStatusEventSchema>;

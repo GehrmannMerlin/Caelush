@@ -11,6 +11,7 @@ import type {
   VerificationPlanId,
 } from "@caelush/protocol";
 import type { AgentFinalCandidateDecision, AgentToolCallsDecision } from "./agent-decision.js";
+import type { ModelTransportRecoveryCheckpoint } from "./model-transport-recovery-port.js";
 
 export interface WaitingToolResultsContinuation {
   readonly type: "WAITING_TOOL_RESULTS";
@@ -72,6 +73,8 @@ interface WaitingRetryContinuationBase {
   readonly maxAttempts: number;
   readonly nextAttemptAt: import("@caelush/protocol").TimestampMs;
   readonly errorCode: RetryErrorCode;
+  /** Optional for backward decoding of retry checkpoints written before transport recovery. */
+  readonly transport?: ModelTransportRecoveryCheckpoint | undefined;
 }
 
 export type WaitingRetryContinuation =

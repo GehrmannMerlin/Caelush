@@ -18,6 +18,7 @@ import {
   createWorkspaceId,
   type SecurityCapabilitiesResponse,
 } from "@caelush/protocol";
+import { OPENAI_COMPATIBLE_API_ID } from "@caelush/ai/adapters/openai-compatible";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { composeDaemon, type DaemonComposition } from "../src/daemon-composition.js";
 import { startDaemon, type DaemonHandle, type DaemonOptions } from "../src/daemon.js";
@@ -51,6 +52,41 @@ describe("daemon production composition", () => {
     const source = await readFile(new URL("../src/daemon-composition.ts", import.meta.url), "utf8");
 
     expect(source).not.toMatch(/memoryExtractionJobs[\s\S]{0,100}\.createOrGet/u);
+  });
+
+  it("keeps equivalent transport candidates inside the shared AI subsystem", async () => {
+    directory = await mkdtemp(join(tmpdir(), "caelush-composition-transports-"));
+    storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
+    composition = await composeDaemon({
+      storage,
+      providerBindings: [
+        {
+          id: "transport-fixture",
+          endpoint: "https://primary.transport-fixture.invalid/v1",
+          defaultApi: OPENAI_COMPATIBLE_API_ID,
+          allowUnknownModels: true,
+          credentials: { resolve: async () => ({ apiKey: "fixture-secret" }) },
+          transportCandidates: [
+            {
+              id: "secondary",
+              endpoint: "https://secondary.transport-fixture.invalid/v1",
+              api: OPENAI_COMPATIBLE_API_ID,
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(composition.ai.providers.get("transport-fixture").transportCandidates).toEqual([
+      {
+        id: "secondary",
+        endpoint: "https://secondary.transport-fixture.invalid/v1",
+        api: OPENAI_COMPATIBLE_API_ID,
+      },
+    ]);
+    expect(composition.info.configuredProviders).toContain("transport-fixture");
+    expect(JSON.stringify(composition.info)).not.toContain("transport-fixture.invalid");
+    expect(JSON.stringify(composition.info)).not.toContain("fixture-secret");
   });
 
   it("builds one shared runtime, tool catalog, gateway, controller, and supervisor", async () => {
@@ -108,9 +144,17 @@ describe("daemon production composition", () => {
     expect(composition.ai.providers.list().map((provider) => provider.id)).toEqual([
       "anthropic",
       "deepseek",
+      "gemini",
+      "glm",
+      "groq",
+      "kimi",
+      "mimo",
+      "minimax",
+      "mistral",
       "openai",
       "openai-compatible",
       "openrouter",
+      "qwen",
     ]);
     // The legacy environment value states no per-model profile, so the catalog holds
     // no enumerable descriptor set; a fallback source describes whatever ref it is

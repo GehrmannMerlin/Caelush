@@ -17,7 +17,12 @@ export interface RetryDecisionInput {
 }
 
 export type RetryStopReason =
-  "NOT_RETRYABLE" | "ATTEMPTS_EXHAUSTED" | "CANCELLED" | "DEADLINE_EXCEEDED" | "MAX_STEPS_REACHED";
+  | "NOT_RETRYABLE"
+  | "ATTEMPTS_EXHAUSTED"
+  | "CANCELLED"
+  | "DEADLINE_EXCEEDED"
+  | "MAX_STEPS_REACHED"
+  | "RETRY_AFTER_EXCEEDS_POLICY";
 
 export type RetryDecision =
   | { readonly kind: "RETRY"; readonly attempt: number; readonly delayMs: number }
@@ -34,7 +39,7 @@ export class RetryController {
 
   constructor(options: RetryControllerOptions = {}) {
     this.policy = validateRetryPolicy(options.policy ?? DEFAULT_RETRY_POLICY);
-    this.jitter = options.jitter ?? { next: () => 0 };
+    this.jitter = options.jitter ?? { next: () => Math.random() };
   }
 
   get maxAttempts(): number {
@@ -56,6 +61,20 @@ export class RetryController {
     if (input.attempt >= this.policy.maxAttempts) {
       return { kind: "STOP", reason: "ATTEMPTS_EXHAUSTED" };
     }
+
+    if (isValidRetryAfter(input.retryAfterMs)) {
+      if (input.retryAfterMs > this.policy.maxProviderRetryAfterMs) {
+        return { kind: "STOP", reason: "RETRY_AFTER_EXCEEDS_POLICY" };
+      }
+      if (
+        input.deadlineAt !== undefined &&
+        input.retryAfterMs >= input.deadlineAt - input.now
+      ) {
+        return { kind: "STOP", reason: "DEADLINE_EXCEEDED" };
+      }
+      return { kind: "RETRY", attempt: input.attempt + 1, delayMs: input.retryAfterMs };
+    }
+
     const delayMs = this.delayFor(input);
     if (input.deadlineAt !== undefined && delayMs >= input.deadlineAt - input.now) {
       return { kind: "STOP", reason: "DEADLINE_EXCEEDED" };
@@ -68,9 +87,6 @@ export class RetryController {
   }
 
   private delayFor(input: RetryDecisionInput): number {
-    if (isValidRetryAfter(input.retryAfterMs, this.policy.maxDelayMs)) {
-      return input.retryAfterMs;
-    }
     const retryIndex = input.attempt - 1;
     let delay = this.policy.baseDelayMs;
     for (let index = 0; index < retryIndex && delay < this.policy.maxDelayMs; index += 1) {
@@ -86,8 +102,8 @@ export class RetryController {
   }
 }
 
-function isValidRetryAfter(value: number | undefined, maxDelayMs: number): value is number {
-  return value !== undefined && Number.isSafeInteger(value) && value > 0 && value <= maxDelayMs;
+function isValidRetryAfter(value: number | undefined): value is number {
+  return value !== undefined && Number.isSafeInteger(value) && value >= 0;
 }
 
 export { DEFAULT_RETRY_POLICY, MAX_RETRY_ATTEMPTS, validateRetryPolicy } from "./retry-policy.js";

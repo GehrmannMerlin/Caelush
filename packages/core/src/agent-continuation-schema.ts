@@ -219,6 +219,24 @@ export const WaitingResourceContinuationSchema = z
 
 const RetryErrorCodeSchema = z.enum(["LLM_RATE_LIMIT", "LLM_NETWORK", "LLM_TIMEOUT"]);
 const RetryAttemptSchema = z.number().int().positive().safe().max(10);
+const TransportIdSchema = z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/);
+const ModelTransportRecoverySchema = z
+  .object({
+    currentTransportId: TransportIdSchema,
+    attemptedTransportIds: z.array(TransportIdSchema).min(1).max(9),
+  })
+  .strict()
+  .superRefine((transport, context) => {
+    if (new Set(transport.attemptedTransportIds).size !== transport.attemptedTransportIds.length) {
+      context.addIssue({ code: "custom", message: "attempted transport ids must be unique" });
+    }
+    if (!transport.attemptedTransportIds.includes(transport.currentTransportId)) {
+      context.addIssue({
+        code: "custom",
+        message: "current transport must be included in attempted transport ids",
+      });
+    }
+  });
 const WaitingRetryBase = {
   type: z.literal("WAITING_RETRY"),
   runId: RunIdSchema,
@@ -227,6 +245,7 @@ const WaitingRetryBase = {
   maxAttempts: RetryAttemptSchema,
   nextAttemptAt: TimestampMsSchema,
   errorCode: RetryErrorCodeSchema,
+  transport: ModelTransportRecoverySchema.optional(),
 };
 
 export const WaitingRetryContinuationSchema = z.discriminatedUnion("mode", [

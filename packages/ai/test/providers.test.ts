@@ -132,6 +132,69 @@ describe("ProviderRegistryBuilder validation", () => {
     }
   });
 
+  it("validates and freezes equivalent transport candidates", () => {
+    const candidate = {
+      id: "backup",
+      endpoint: "https://backup.openai.example/v1",
+      api: "openai-compatible-chat",
+      rateLimitDomain: "backup-pool",
+    };
+    const registry = createProviderRegistryBuilder()
+      .register(
+        binding({
+          transportCandidates: [candidate],
+        } as unknown as Partial<AIProviderBinding>),
+      )
+      .build();
+
+    expect(registry.get("openai").transportCandidates).toEqual([candidate]);
+    expect(Object.isFrozen(registry.get("openai").transportCandidates)).toBe(true);
+    expect(Object.isFrozen(registry.get("openai").transportCandidates?.[0])).toBe(true);
+    candidate.endpoint = "https://mutated.example/v1";
+    expect(registry.get("openai").transportCandidates?.[0]?.endpoint).toBe(
+      "https://backup.openai.example/v1",
+    );
+  });
+
+  it("allows a candidate for another implemented model dialect on the same binding", () => {
+    const candidate = {
+      id: "anthropic-route",
+      endpoint: "https://anthropic.example/v1",
+      api: "anthropic-messages",
+    } as const;
+    const registry = createProviderRegistryBuilder()
+      .register(binding({ transportCandidates: [candidate] }))
+      .build();
+
+    expect(registry.get("openai").transportCandidates).toEqual([candidate]);
+  });
+
+  it("rejects duplicate, unsafe, incompatible or unbounded transport candidates", () => {
+    const invalidCandidates = [
+      [{ id: "default", endpoint: "https://backup.example/v1", api: "openai-compatible-chat" }],
+      [
+        { id: "backup", endpoint: "https://backup.example/v1", api: "openai-compatible-chat" },
+        { id: "backup", endpoint: "https://other.example/v1", api: "openai-compatible-chat" },
+      ],
+      [{ id: "backup", endpoint: "file:///tmp/evil", api: "openai-compatible-chat" }],
+      [
+        {
+          id: "x".repeat(65),
+          endpoint: "https://backup.example/v1",
+          api: "openai-compatible-chat",
+        },
+      ],
+    ];
+
+    for (const transportCandidates of invalidCandidates) {
+      expect(() =>
+        createProviderRegistryBuilder().register(
+          binding({ transportCandidates } as unknown as Partial<AIProviderBinding>),
+        ),
+      ).toThrow(TypeError);
+    }
+  });
+
   it("rejects an unknown binding field", () => {
     expect(() =>
       createProviderRegistryBuilder().register({

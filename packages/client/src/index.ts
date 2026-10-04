@@ -40,4 +40,6 @@ export type {
   LiveActivityKind,
   LiveActivityState,
   LiveActivityStatus,
+  ModelWaitPhase,
+  ModelWaitState,
 } from "./live-activity.js";

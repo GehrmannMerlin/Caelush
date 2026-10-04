@@ -1,5 +1,6 @@
 import { APICallError, InvalidResponseDataError, JSONParseError, TypeValidationError } from "ai";
 import { AIError, createAIError } from "../../errors/ai-error.js";
+import { parseRetryAfterMs } from "../../errors/retry-after.js";
 import type { AIErrorCode } from "../../errors/ai-error-code.js";
 import type { ModelRef } from "../../models/model-ref.js";
 
@@ -11,7 +12,11 @@ import type { ModelRef } from "../../models/model-ref.js";
  * must not be copied into an error message, and the gateway sanitizer is the final
  * line of defence, not the first.
  */
-export function normalizeOpenAICompatibleError(error: unknown, model: ModelRef): AIError {
+export function normalizeOpenAICompatibleError(
+  error: unknown,
+  model: ModelRef,
+  nowMs = Date.now(),
+): AIError {
   const context = { providerId: model.provider, model };
 
   if (error instanceof AIError) return error;
@@ -28,7 +33,7 @@ export function normalizeOpenAICompatibleError(error: unknown, model: ModelRef):
       return createAIError("AI_AUTHENTICATION", undefined, { ...context, cause: error });
     }
     if (statusCode === 429) {
-      const retryAfterMs = readRetryAfterMs(error.responseHeaders);
+      const retryAfterMs = parseRetryAfterMs(readRetryAfterValue(error.responseHeaders), nowMs);
       return createAIError("AI_RATE_LIMIT", undefined, {
         ...context,
         cause: error,
@@ -140,15 +145,11 @@ function containsOverflowMessage(text: string): boolean {
  * left absent rather than guessed, and a negative delta is rejected because the
  * frozen `retryAfterMs` contract is non-negative.
  */
-function readRetryAfterMs(headers: Record<string, string> | undefined): number | undefined {
+function readRetryAfterValue(headers: Record<string, string> | undefined): string | undefined {
   if (headers === undefined) return undefined;
 
   const entry = Object.entries(headers).find(([name]) => name.toLowerCase() === "retry-after");
   const raw = entry?.[1]?.trim();
   if (raw === undefined || raw.length === 0) return undefined;
-
-  const seconds = Number(raw);
-  if (!Number.isFinite(seconds) || seconds < 0) return undefined;
-  const milliseconds = Math.round(seconds * 1_000);
-  return Number.isSafeInteger(milliseconds) ? milliseconds : undefined;
+  return raw;
 }

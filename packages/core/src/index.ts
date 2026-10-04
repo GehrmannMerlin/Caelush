@@ -36,6 +36,12 @@ export type {
   WaitingRetryContinuation,
   WaitingToolResultsContinuation,
 } from "./agent-continuation.js";
+export type {
+  ModelTransportRecoveryCheckpoint,
+  ModelTransportRecoveryPort,
+  ModelTransportSelection,
+} from "./model-transport-recovery-port.js";
+export type { RunExecutionStopReason, RunShutdownCheckpointResult } from "./run-shutdown.js";
 export {
   AgentDecisionSchema,
   AgentFinalCandidateDecisionSchema,

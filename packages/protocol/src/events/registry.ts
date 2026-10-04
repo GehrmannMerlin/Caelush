@@ -20,6 +20,8 @@ import {
   LlmStartedEventSchema,
   RetryScheduledEventSchema,
   RetryStartedEventSchema,
+  RetryExhaustedEventSchema,
+  TransportFallbackSelectedEventSchema,
 } from "./llm.js";
 import {
   ProcessOutputEventSchema,
@@ -29,6 +31,7 @@ import {
 } from "./process.js";
 import {
   ModelReasoningSummaryDeltaEventSchema,
+  ModelStatusEventSchema,
   ModelTextDeltaEventSchema,
   ModelToolCallDeltaEventSchema,
 } from "./model.js";
@@ -132,6 +135,8 @@ const registeredSchemas: ReadonlyMap<string, RegisteredSchema> = new Map<string,
   ["llm.failed\u00001", LlmFailedEventSchema],
   ["retry.scheduled\u00001", RetryScheduledEventSchema],
   ["retry.started\u00001", RetryStartedEventSchema],
+  ["retry.exhausted\u00001", RetryExhaustedEventSchema],
+  ["transport.fallback.selected\u00001", TransportFallbackSelectedEventSchema],
   ["error\u00001", ErrorEventSchema],
   ["budget.exceeded\u00001", BudgetExceededEventSchema],
   ["resource.guard\u00001", ResourceGuardEventSchema],
@@ -140,6 +145,7 @@ const registeredSchemas: ReadonlyMap<string, RegisteredSchema> = new Map<string,
   ["model.text.delta\u00001", ModelTextDeltaEventSchema],
   ["model.reasoning_summary.delta\u00001", ModelReasoningSummaryDeltaEventSchema],
   ["model.tool_call.delta\u00001", ModelToolCallDeltaEventSchema],
+  ["model.status\u00001", ModelStatusEventSchema],
 ]);
 
 for (const definition of RUN_EVENT_TYPE_CATALOG) {

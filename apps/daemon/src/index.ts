@@ -24,8 +24,14 @@ export {
   assertLoopbackDaemonHost,
   createDaemonConfig,
   readProviderConfiguration,
+  readProviderStreamPolicy,
 } from "./config.js";
-export type { DaemonConfig, DaemonProviderStartupConfiguration } from "./config.js";
+export type {
+  DaemonConfigOverrides,
+  DaemonConfig,
+  DaemonProviderStartupConfiguration,
+  ProviderStreamPolicy,
+} from "./config.js";
 export { startDaemon } from "./daemon.js";
 export type { DaemonHandle, DaemonOptions } from "./daemon.js";
 export { daemonEntryPath } from "./entry.js";
@@ -69,8 +75,16 @@ export {
   createWorkspaceRef,
   normalizeWorkspaceIdentityPath,
 } from "./web/workspace-launch-context.js";
-export { checkNodePtyLoadability, inspectMigrationAssets } from "./diagnostics.js";
-export type { MigrationAssetInspection, NodePtyLoadability } from "./diagnostics.js";
+export {
+  checkNodePtyLoadability,
+  inspectMigrationAssets,
+  providerStreamPolicyDiagnostic,
+} from "./diagnostics.js";
+export type {
+  MigrationAssetInspection,
+  NodePtyLoadability,
+  ProviderStreamPolicyDiagnostic,
+} from "./diagnostics.js";
 export { composeDaemon, defaultProcessSandboxProviders } from "./daemon-composition.js";
 export { MemoryExtractionWorker } from "./memory/memory-extraction-worker.js";
 export type { MemoryExtractionWorkerOptions } from "./memory/memory-extraction-worker.js";

@@ -13,8 +13,16 @@ import type {
   ResolvedAIModelRequest,
 } from "../request/resolved-model-request.js";
 import type { AIModelRequest } from "../request/model-request.js";
-import type { AIProviderBinding } from "../providers/provider-binding.js";
+import type {
+  AIProviderBinding,
+  AIProviderTransportCandidate,
+} from "../providers/provider-binding.js";
 import type { AIStreamOptions } from "../stream/index.js";
+import {
+  DEFAULT_PROVIDER_NUDGE_AFTER_MS,
+  DEFAULT_PROVIDER_STREAM_IDLE_TIMEOUT_MS,
+  DEFAULT_PROVIDER_TEARDOWN_GRACE_MS,
+} from "../stream/stream.js";
 import type { ApiAdapter } from "../adapters/api-adapter.js";
 import type { ApiAdapterRegistry } from "../adapters/api-adapter-registry.js";
 import type { CacheResolver } from "../cache/cache-resolver.js";
@@ -47,6 +55,9 @@ export interface GatewayRequestResolverDependencies {
 export interface GatewayRequestResolverOptions {
   readonly reasoningPolicy?: ReasoningResolutionPolicy;
   readonly defaultTimeoutMs?: number;
+  readonly defaultNudgeAfterMs?: number;
+  readonly defaultIdleTimeoutMs?: number;
+  readonly defaultTeardownGraceMs?: number;
 }
 
 /** One request plus its per-call options. */
@@ -72,6 +83,9 @@ export interface ResolvedGatewayRequest {
   readonly resolution: AIInvocationResolution;
   readonly connection: ResolvedProviderConnection;
   readonly scope: AbortScope;
+  readonly nudgeAfterMs: number;
+  readonly idleTimeoutMs: number;
+  readonly teardownGraceMs: number;
 }
 
 /**
@@ -131,6 +145,15 @@ export function createGatewayRequestResolver(
       // Step 6 — resolve the API dialect adapter.
       const adapter = dependencies.adapters.get(descriptor.api);
 
+      // Resolve a host-selected route only from this provider's immutable binding.
+      // The route can change endpoint/fetch, never provider, model policy or API dialect.
+      const transport = resolveProviderTransport(
+        provider,
+        streamOptions?.transportId,
+        descriptor.api,
+        model,
+      );
+
       // Steps 7, 8 and 11 — tool semantics, capability rejection and the model's
       // output ceiling.
       validateAIModelRequestAgainstModel(request, descriptor);
@@ -165,6 +188,37 @@ export function createGatewayRequestResolver(
         provider.id,
         model,
       );
+      const nudgeAfterMs = validateDuration(
+        "nudgeAfterMs",
+        streamOptions?.nudgeAfterMs ??
+          options.defaultNudgeAfterMs ??
+          DEFAULT_PROVIDER_NUDGE_AFTER_MS,
+        provider.id,
+        model,
+      );
+      const idleTimeoutMs = validateDuration(
+        "idleTimeoutMs",
+        streamOptions?.idleTimeoutMs ??
+          options.defaultIdleTimeoutMs ??
+          DEFAULT_PROVIDER_STREAM_IDLE_TIMEOUT_MS,
+        provider.id,
+        model,
+      );
+      const teardownGraceMs = validateDuration(
+        "teardownGraceMs",
+        streamOptions?.teardownGraceMs ??
+          options.defaultTeardownGraceMs ??
+          DEFAULT_PROVIDER_TEARDOWN_GRACE_MS,
+        provider.id,
+        model,
+      );
+      if (nudgeAfterMs >= idleTimeoutMs) {
+        throw createAIError(
+          "AI_INVALID_REQUEST",
+          "AI stream nudgeAfterMs must be less than idleTimeoutMs.",
+          { providerId: provider.id, model },
+        );
+      }
 
       const resolution: AIInvocationResolution = {
         api: descriptor.api,
@@ -192,12 +246,14 @@ export function createGatewayRequestResolver(
       // specific, per-invocation value.
       const connection: ResolvedProviderConnection = {
         providerId: provider.id,
-        endpoint: provider.endpoint,
+        endpoint: transport.endpoint,
         credentials,
         headers: Object.freeze({ ...provider.headers, ...credentials.headers }),
         queryParams: Object.freeze({ ...provider.queryParams, ...credentials.queryParams }),
-        ...(provider.compatibility === undefined ? {} : { compatibility: provider.compatibility }),
-        ...(provider.transport === undefined ? {} : { transport: provider.transport }),
+        ...(transport.compatibility === undefined
+          ? {}
+          : { compatibility: transport.compatibility }),
+        ...(transport.transport === undefined ? {} : { transport: transport.transport }),
       };
 
       // Step 15 — mint the gateway-owned call id.
@@ -222,9 +278,62 @@ export function createGatewayRequestResolver(
         resolution,
         connection,
         scope,
+        nudgeAfterMs,
+        idleTimeoutMs,
+        teardownGraceMs,
       };
     },
   };
+}
+
+function resolveProviderTransport(
+  provider: AIProviderBinding,
+  requestedId: string | undefined,
+  requestApi: string,
+  model: ModelRef,
+): Pick<AIProviderTransportCandidate, "endpoint" | "compatibility" | "transport"> & {
+  readonly api: string;
+} {
+  const transportId = requestedId ?? "default";
+  if (typeof transportId !== "string" || transportId.length === 0 || transportId.length > 64) {
+    throw createAIError("AI_INVALID_REQUEST", "AI transport selection is invalid.", {
+      providerId: provider.id,
+      model,
+    });
+  }
+
+  const candidate =
+    transportId === "default"
+      ? undefined
+      : provider.transportCandidates?.find((item) => item.id === transportId);
+  if (transportId !== "default" && candidate === undefined) {
+    throw createAIError("AI_INVALID_REQUEST", "The selected AI transport is not configured.", {
+      providerId: provider.id,
+      model,
+    });
+  }
+
+  const compatibility = candidate?.compatibility ?? provider.compatibility;
+  const transport = candidate?.transport ?? provider.transport;
+  const resolved = {
+    endpoint: candidate?.endpoint ?? provider.endpoint,
+    // The legacy default route follows the selected model descriptor. One binding
+    // may intentionally serve different models through different native dialects.
+    api: candidate?.api ?? requestApi,
+    ...(compatibility === undefined ? {} : { compatibility }),
+    ...(transport === undefined ? {} : { transport }),
+  };
+  if (resolved.api !== requestApi) {
+    throw createAIError(
+      "AI_MODEL_UNSUPPORTED",
+      "The selected AI transport is not compatible with this model.",
+      {
+        providerId: provider.id,
+        model,
+      },
+    );
+  }
+  return resolved;
 }
 
 /** Step 5: the provider's model allowlist and unknown-model gate. */
@@ -271,6 +380,23 @@ function validateTimeout(
     );
   }
   return timeoutMs;
+}
+
+/** Stream recovery durations must always be finite, positive safe integers. */
+function validateDuration(
+  name: string,
+  durationMs: number,
+  providerId: string,
+  model: ModelRef,
+): number {
+  if (!Number.isSafeInteger(durationMs) || durationMs <= 0) {
+    throw createAIError(
+      "AI_INVALID_REQUEST",
+      `AI stream ${name} must be a positive safe integer.`,
+      { providerId, model },
+    );
+  }
+  return durationMs;
 }
 
 /** Step 13: resolve credentials, mapping a failure onto the preflight error set. */

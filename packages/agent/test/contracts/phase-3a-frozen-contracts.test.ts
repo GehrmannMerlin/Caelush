@@ -219,6 +219,7 @@ interface FrozenModelTurnExecutionInput {
   readonly identity: FrozenAgentExecutionIdentity;
   readonly turn: FrozenAgentTurnRef;
   readonly request: AIModelRequest;
+  readonly transportId?: string;
   readonly signal: AbortSignal;
   readonly streamSink?: import("@caelush/agent").ModelTurnStreamSink;
 }
@@ -378,10 +379,13 @@ type BoundaryInputExact = Expect<Equal<ModelTurnBoundaryInput, FrozenModelTurnBo
 type BoundaryInputKeys = Expect<Equal<Keys<ModelTurnBoundaryInput>, "identity" | "turn" | "model">>;
 type BoundaryModelIsRef = Expect<Equal<ModelTurnBoundaryInput["model"], ModelDescriptor["ref"]>>;
 
-/* The executor input keeps the sink; the loop input does not. */
+/* The durable execution boundary carries host-selected transport and stream sink; the loop input does not. */
 type ExecutorInputExact = Expect<Equal<ModelTurnExecutionInput, FrozenModelTurnExecutionInput>>;
 type ExecutorInputKeys = Expect<
-  Equal<Keys<ModelTurnExecutionInput>, "identity" | "turn" | "request" | "signal" | "streamSink">
+  Equal<
+    Keys<ModelTurnExecutionInput>,
+    "identity" | "turn" | "request" | "transportId" | "signal" | "streamSink"
+  >
 >;
 type ExecutorResultExact = Expect<
   Equal<

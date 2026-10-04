@@ -223,19 +223,19 @@ const assertPermissionSelector = async () => {
   if (selected !== "VIEW_ONLY")
     throw new Error("an unprepared workspace selected " + selected + " instead of 仅可查看");
 
-  // `PREPARATION_REQUIRED` has exactly one affordance, and it names the preset it prepares.
-  const prepare = page.locator("button.permission-selector-prepare");
-  await waitVisible(prepare);
-  const prepareLabel = (await prepare.innerText()).trim();
-  if (prepareLabel !== "准备工作区内修改")
-    throw new Error("the preparation affordance is mislabelled: " + prepareLabel);
-  await prepare.click();
-  await page
-    .locator("button.permission-selector-prepare")
-    .waitFor({ state: "detached", timeout: 15_000 });
-  const afterPrepare = await select.inputValue();
-  if (afterPrepare !== "WORKSPACE_WRITE")
-    throw new Error("preparing 工作区内修改 selected " + afterPrepare + " instead of it");
+  // Switching between the first two choices exercises both direct selection and the existing
+  // workspace-preparation path; PREPARATION_REQUIRED is selectable and prepares on selection.
+  await select.selectOption("WORKSPACE_WRITE");
+  await waitUntil(
+    async () => (await select.inputValue()) === "WORKSPACE_WRITE",
+    "workspace write permission to prepare",
+  );
+  await select.selectOption("VIEW_ONLY");
+  if ((await select.inputValue()) !== "VIEW_ONLY")
+    throw new Error("could not switch from 工作区内修改 back to 仅可查看");
+  await select.selectOption("WORKSPACE_WRITE");
+  if ((await select.inputValue()) !== "WORKSPACE_WRITE")
+    throw new Error("could not switch from 仅可查看 to 工作区内修改");
 
   // Full Access is the only preset gated behind an explicit confirmation, so the gate itself is the
   // assertion: the value must not move until the confirming button is pressed.
@@ -362,7 +362,10 @@ try {
   // The disclosure auto-collapses the instant the Run settles, so the settled report is the signal
   // that the collapse has already happened and the expansion below will stick.
   await waitVisible(
-    page.locator(".turn-presentation-final-title").filter({ hasText: "任务已完成" }),
+    page
+      .locator("button.workspace-session-item")
+      .filter({ hasText: "read browser fixture" })
+      .locator('.session-status-icon[aria-label="已完成"]'),
   );
   await openProcessDisclosure();
   // The presentation feed replaces the legacy timeline: a finished Tool is an item, and the path it
@@ -387,6 +390,74 @@ try {
   await page.reload({ waitUntil: "domcontentloaded" });
   await selectSession("read browser fixture");
   await waitVisible(exactText("Verified browser result."));
+  await assertAssistantMarkdownHeadingScale();
+  await assertPermissionSelectorAppearance();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.screenshot({
+    path: artifactDirectory + "/assistant-markdown-desktop.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 375, height: 812 });
+  const mobileSidebarToggle = page.locator(".sidebar-toggle-button");
+  if ((await mobileSidebarToggle.getAttribute("aria-expanded")) === "true") {
+    await mobileSidebarToggle.click();
+  }
+  await page.waitForTimeout(220);
+  await assertAssistantMarkdownHeadingScale();
+  await assertComposerControlsDoNotOverlap();
+  await page.screenshot({
+    path: artifactDirectory + "/assistant-markdown-mobile.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 1280, height: 720 });
+
+  await startNewSession();
+  await submitPrompt("observe Provider recovery");
+  await openProcessDisclosure();
+  const noActivity = page
+    .locator(".turn-presentation-thinking-detail")
+    .filter({ hasText: "模型近期没有返回新数据，仍在等待" });
+  await waitVisible(noActivity);
+  const thinkingTitle = page.locator(".turn-presentation-thinking-title").last();
+  const animationName = () =>
+    thinkingTitle.evaluate((element) => getComputedStyle(element).animationName);
+  await waitUntil(
+    async () => (await animationName()) === "turn-presentation-thinking-text",
+    "animated model-wait text",
+  );
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await waitUntil(async () => (await animationName()) === "none", "reduced-motion model-wait text");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  const retryScheduled = page
+    .locator(".turn-presentation-thinking-detail")
+    .filter({ hasText: /将在 \d+ 秒后重新连接 1\/5/u });
+  await waitVisible(retryScheduled);
+  await mkdir(artifactDirectory, { recursive: true });
+  await page.screenshot({
+    path: artifactDirectory + "/provider-retry-scheduled.png",
+    fullPage: true,
+  });
+  process.stdout.write(
+    "[browser-runner] retry scheduled details: " +
+      JSON.stringify(await page.locator(".turn-presentation-thinking-detail").allTextContents()) +
+      "\n",
+  );
+  await waitVisible(exactText("正在重新连接 1/5"));
+  await waitUntil(
+    async () => (await animationName()) === "turn-presentation-thinking-text",
+    "animated retry text",
+  );
+  await page.screenshot({
+    path: artifactDirectory + "/provider-retry-in-progress.png",
+    fullPage: true,
+  });
+  await waitVisible(exactText("Recovered after Provider recovery."));
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await selectSession("observe Provider recovery");
+  await waitVisible(exactText("Recovered after Provider recovery."));
+  if ((await page.locator("body").innerText()).includes("failed-attempt fragment")) {
+    throw new Error("failed-attempt Provider text leaked into the durable session transcript");
+  }
 
   // In-workspace work does not cross the boundary, so 工作区内修改 must not interrupt it with a review.
   // This is the negative half of the approval contract and the reason the scenarios below need an
@@ -398,7 +469,10 @@ try {
     throw new Error("an in-workspace patch under 工作区内修改 was gated behind an approval");
   }
   await waitVisible(
-    page.locator(".turn-presentation-final-title").filter({ hasText: "任务已完成" }),
+    page
+      .locator("button.workspace-session-item")
+      .filter({ hasText: "apply browser patch" })
+      .locator('.session-status-icon[aria-label="已完成"]'),
   );
   await openProcessDisclosure();
   // `apply_patch` is labelled 编辑文件 by the Tool presentation the Daemon projects (the legacy web
@@ -433,7 +507,10 @@ try {
   await page.locator(".approval-card").waitFor({ state: "detached", timeout: 15_000 });
   await waitVisible(exactText("Verified browser result.").last());
   await waitVisible(
-    page.locator(".turn-presentation-final-title").filter({ hasText: "任务已完成" }),
+    page
+      .locator("button.workspace-session-item")
+      .filter({ hasText: "review browser patch" })
+      .locator('.session-status-icon[aria-label="已完成"]'),
   );
   await openProcessDisclosure();
   await waitVisible(
@@ -584,3 +661,43 @@ try {
 }
 await context.tracing.stop();
 await browser.close();
+
+async function assertAssistantMarkdownHeadingScale() {
+  const title = page.getByRole("heading", { name: "Browser report", level: 1 });
+  await waitVisible(title);
+  const sizes = await title.evaluate((element) => {
+    const section = element.parentElement?.querySelector("h2");
+    if (!(section instanceof HTMLElement)) throw new Error("Markdown section heading missing");
+    return {
+      title: Number.parseFloat(getComputedStyle(element).fontSize),
+      section: Number.parseFloat(getComputedStyle(section).fontSize),
+    };
+  });
+  if (sizes.title <= sizes.section || sizes.title > sizes.section * 1.4) {
+    throw new Error(
+      `Markdown report title should be only slightly larger than its section heading; title=${sizes.title}px section=${sizes.section}px`,
+    );
+  }
+}
+
+async function assertPermissionSelectorAppearance() {
+  const select = page.locator("select.permission-selector-select");
+  const appearance = await select.evaluate((element) => ({
+    appearance: getComputedStyle(element).appearance,
+    width: element.getBoundingClientRect().width,
+  }));
+  if (appearance.appearance !== "auto")
+    throw new Error("permission selector lost its native dropdown affordance");
+  if (appearance.width < 120)
+    throw new Error("permission selector is too narrow to present its choices clearly");
+}
+
+async function assertComposerControlsDoNotOverlap() {
+  const controls = page.locator(".model-picker-trigger");
+  const submit = page.locator(".prompt-submit-button");
+  const bounds = await Promise.all([controls.boundingBox(), submit.boundingBox()]);
+  if (!bounds[0] || !bounds[1]) throw new Error("composer controls are not visible");
+  if (bounds[0].x + bounds[0].width > bounds[1].x) {
+    throw new Error("model picker overlaps the send button at the mobile viewport");
+  }
+}

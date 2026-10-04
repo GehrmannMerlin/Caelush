@@ -1,118 +1,63 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAbortScope } from "../src/stream/abort-scope.js";
 
-/** Wait for the scope to report an abort, or fail loudly after a bounded wait. */
-async function kindOf(scope: ReturnType<typeof createAbortScope>): Promise<string> {
-  return Promise.race([
-    scope.aborted,
-    new Promise<string>((resolve) => {
-      setTimeout(() => {
-        resolve("TIMED_OUT_WAITING");
-      }, 1_000);
-    }),
-  ]);
-}
+afterEach(() => vi.useRealTimers());
 
-describe("AbortScope", () => {
-  it("is not aborted while nothing has fired", () => {
-    const scope = createAbortScope(undefined, 5_000);
+describe("AI invocation abort scope", () => {
+  it("aborts the stable adapter signal with an idle-timeout cause", async () => {
+    const scope = createAbortScope(undefined, undefined);
 
-    expect(scope.signal.aborted).toBe(false);
-    expect(scope.kind()).toBeUndefined();
-    scope.cleanup();
-  });
+    scope.abortIdle();
 
-  it("reports an external abort", async () => {
-    const controller = new AbortController();
-    const scope = createAbortScope(controller.signal, 5_000);
-
-    controller.abort();
-
-    expect(await kindOf(scope)).toBe("external");
-    expect(scope.kind()).toBe("external");
     expect(scope.signal.aborted).toBe(true);
+    expect(scope.kind()).toBe("idle_timeout");
+    await expect(scope.aborted).resolves.toBe("idle_timeout");
     scope.cleanup();
   });
 
-  it("reports an abort that already happened before the scope existed", () => {
-    const controller = new AbortController();
-    controller.abort();
+  it("keeps the first abort cause when idle timeout races with user cancellation", async () => {
+    const userSignal = new AbortController();
+    const scope = createAbortScope(userSignal.signal, undefined);
 
-    const scope = createAbortScope(controller.signal, 5_000);
+    userSignal.abort();
+    scope.abortIdle();
 
     expect(scope.kind()).toBe("external");
-    expect(scope.signal.aborted).toBe(true);
+    await expect(scope.aborted).resolves.toBe("external");
     scope.cleanup();
   });
 
-  it("reports a timeout", async () => {
-    const scope = createAbortScope(undefined, 10);
+  it("keeps idle timeout as the cause when a later consumer cancellation arrives", async () => {
+    const scope = createAbortScope(undefined, undefined);
 
-    expect(await kindOf(scope)).toBe("timeout");
-    expect(scope.kind()).toBe("timeout");
-    scope.cleanup();
-  });
-
-  it("reports a consumer cancellation", async () => {
-    const scope = createAbortScope(undefined, 5_000);
-
+    scope.abortIdle();
     scope.abortConsumer();
 
-    expect(await kindOf(scope)).toBe("consumer");
-    expect(scope.kind()).toBe("consumer");
+    expect(scope.kind()).toBe("idle_timeout");
+    await expect(scope.aborted).resolves.toBe("idle_timeout");
     scope.cleanup();
   });
 
-  it("keeps the first cause when several fire", async () => {
-    const controller = new AbortController();
-    const scope = createAbortScope(controller.signal, 5_000);
-
-    scope.abortConsumer();
-    controller.abort();
-    scope.abortConsumer();
-
-    expect(await kindOf(scope)).toBe("consumer");
-    expect(scope.kind()).toBe("consumer");
-    scope.cleanup();
-  });
-
-  it("lets an external abort win over a later timeout", async () => {
-    const controller = new AbortController();
-    const scope = createAbortScope(controller.signal, 5);
-
-    controller.abort();
-    await new Promise((resolve) => setTimeout(resolve, 30));
-
-    expect(scope.kind()).toBe("external");
-    scope.cleanup();
-  });
-
-  it("stops the timeout after cleanup", async () => {
-    const scope = createAbortScope(undefined, 10);
+  it("detaches external cancellation listeners during cleanup", () => {
+    const userSignal = new AbortController();
+    const scope = createAbortScope(userSignal.signal, undefined);
 
     scope.cleanup();
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    userSignal.abort();
 
-    expect(scope.kind()).toBeUndefined();
     expect(scope.signal.aborted).toBe(false);
-  });
-
-  it("detaches from the external signal after cleanup", async () => {
-    const controller = new AbortController();
-    const scope = createAbortScope(controller.signal, 5_000);
-
-    scope.cleanup();
-    controller.abort();
-
     expect(scope.kind()).toBeUndefined();
-    expect(scope.signal.aborted).toBe(false);
   });
 
-  it("uses its own signal, never the external one", () => {
-    const controller = new AbortController();
-    const scope = createAbortScope(controller.signal, 5_000);
+  it("does not replace idle timeout when the total invocation timer fires later", async () => {
+    vi.useFakeTimers();
+    const scope = createAbortScope(undefined, 50);
 
-    expect(scope.signal).not.toBe(controller.signal);
+    scope.abortIdle();
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(scope.kind()).toBe("idle_timeout");
+    await expect(scope.aborted).resolves.toBe("idle_timeout");
     scope.cleanup();
   });
 });

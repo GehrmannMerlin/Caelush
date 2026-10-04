@@ -15,7 +15,12 @@ import {
   type GitToolAvailability,
 } from "@caelush/coding-agent";
 import { buildDaemonApp } from "./app.js";
-import { assertLoopbackDaemonHost, createDaemonConfig, type DaemonConfig } from "./config.js";
+import {
+  assertLoopbackDaemonHost,
+  createDaemonConfig,
+  type DaemonConfig,
+  type ProviderStreamPolicy,
+} from "./config.js";
 import {
   composeDaemon,
   defaultProcessSandboxProviders,
@@ -54,12 +59,16 @@ export interface DaemonOptions {
   readonly databasePath: string;
   readonly host?: string;
   readonly port?: number;
+  /** Finite managed-shutdown drain deadline; primarily injectable for lifecycle tests. */
+  readonly shutdownTimeoutMs?: number;
   readonly sseHeartbeatIntervalMs?: number;
   readonly runEventQueuePolicy?: SubscriberQueuePolicy;
   readonly logger?: boolean;
   readonly providers?: readonly DaemonModelProviderConfig[];
   readonly defaultModel?: ClientModelSelection;
   readonly environment?: Readonly<Record<string, string | undefined>>;
+  /** Finite Gateway watchdog overrides; omitted values retain production defaults. */
+  readonly providerStreamPolicy?: Partial<ProviderStreamPolicy>;
   readonly providerBindings?: readonly AIProviderBinding[];
   readonly modelSources?: readonly ModelDescriptorSourcePort[];
   readonly adapterOverrides?: readonly ApiAdapter[];
@@ -117,6 +126,9 @@ function resolveConfig(options: DaemonOptions): DaemonConfig {
     ...(options.runEventQueuePolicy === undefined
       ? {}
       : { runEventQueuePolicy: options.runEventQueuePolicy }),
+    ...(options.providerStreamPolicy === undefined
+      ? {}
+      : { providerStreamPolicy: options.providerStreamPolicy }),
   });
   assertLoopbackDaemonHost(config.host);
   return config;
@@ -124,6 +136,10 @@ function resolveConfig(options: DaemonOptions): DaemonConfig {
 
 export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle> {
   const config = resolveConfig(options);
+  const shutdownTimeoutMs = options.shutdownTimeoutMs ?? 15_000;
+  if (!Number.isSafeInteger(shutdownTimeoutMs) || shutdownTimeoutMs <= 0) {
+    throw new RangeError("Daemon shutdownTimeoutMs must be a finite positive safe integer.");
+  }
   /**
    * The one Runtime instance this daemon generation owns.
    *
@@ -249,6 +265,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     composition = await composeDaemon({
       storage,
       eventQueuePolicy: config.runEventQueuePolicy,
+      providerStreamPolicy: config.providerStreamPolicy,
       runtime,
       ...(options.providers === undefined ? {} : { providers: options.providers }),
       ...(options.defaultModel === undefined ? {} : { defaultModel: options.defaultModel }),
@@ -405,12 +422,32 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
     workspaceBackfill,
     ...(startupReconciliation === undefined ? {} : { startupReconciliation }),
     close: () => {
-      closePromise ??= (async () => {
-        for (const controller of activeStreams) controller.abort();
-        await app.close();
-        await composition.dispose();
-        await storage.close();
-      })();
+      if (closePromise === undefined) {
+        closePromise = (async () => {
+          composition.supervisor.beginDrain();
+          const checkpoints = await composition.supervisor.checkpointActive();
+          if (checkpoints.some(({ result }) => result === "UNSAFE_IN_FLIGHT")) {
+            throw new Error(
+              "Daemon shutdown is waiting for an in-flight Tool or verification effect to reach a safe boundary; storage remains open.",
+            );
+          }
+          if (!(await composition.supervisor.drainWithin(shutdownTimeoutMs))) {
+            throw new Error(
+              "Daemon shutdown drain timed out; active execution and storage remain available for a later retry.",
+            );
+          }
+          // Core has committed and notified every managed checkpoint before public streams close.
+          for (const controller of activeStreams) controller.abort();
+          await app.close();
+          await composition.dispose();
+          await storage.close();
+        })().catch((error: unknown) => {
+          // Do not leave a cached rejected close promise: callers may retry after an unsafe effect
+          // reaches a durable boundary. No underlying storage is closed on these paths.
+          closePromise = undefined;
+          throw error;
+        });
+      }
       return closePromise;
     },
   };

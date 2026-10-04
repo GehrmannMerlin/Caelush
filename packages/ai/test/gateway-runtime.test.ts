@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AIError, createAIError } from "../src/errors/ai-error.js";
 import { createAIGateway } from "../src/gateway/ai-gateway.js";
 import { modelDescriptor } from "./support/fixtures.js";
@@ -11,7 +11,7 @@ import {
 } from "./support/fake-adapter.js";
 import { testGatewayDependencies, testProviderBinding } from "./support/gateway-fixtures.js";
 import type { AIAdapterEvent } from "../src/adapters/api-adapter-event.js";
-import type { AIGateway } from "../src/gateway/ai-gateway.js";
+import type { AIGateway, AIGatewayOptions } from "../src/gateway/ai-gateway.js";
 import type { AIModelRequest } from "../src/request/model-request.js";
 import type { AIStreamEvent } from "../src/stream/events.js";
 import type { ApiAdapterStreamInput } from "../src/adapters/api-adapter.js";
@@ -34,8 +34,11 @@ function request(overrides: Partial<AIModelRequest> = {}): AIModelRequest {
   } as AIModelRequest;
 }
 
-function gatewayWith(adapter: FakeAdapter): AIGateway {
-  return createAIGateway(testGatewayDependencies({ descriptors: [MODEL], adapters: [adapter] }));
+function gatewayWith(adapter: FakeAdapter, options: AIGatewayOptions = {}): AIGateway {
+  return createAIGateway(
+    testGatewayDependencies({ descriptors: [MODEL], adapters: [adapter] }),
+    options,
+  );
 }
 
 async function collect(events: AsyncIterable<AIStreamEvent>): Promise<AIStreamEvent[]> {
@@ -46,6 +49,12 @@ async function collect(events: AsyncIterable<AIStreamEvent>): Promise<AIStreamEv
 
 function types(events: readonly AIStreamEvent[]): string[] {
   return events.map((event) => event.type);
+}
+
+afterEach(() => vi.useRealTimers());
+
+async function flushMicrotasks(): Promise<void> {
+  for (let iteration = 0; iteration < 10; iteration += 1) await Promise.resolve();
 }
 
 /** Yield the events, then wait for the abort signal, then fail like a transport. */
@@ -277,6 +286,159 @@ describe("AIGateway runtime error boundary", () => {
 });
 
 describe("AIGateway abort and timeout", () => {
+  it("reports inactivity and cancels a Provider read at the configured idle deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse("2026-10-04T00:00:00.000Z"));
+    let adapterSawAbort = false;
+    const adapter = createFakeAdapter("test-api", (input) =>
+      hangUntilAborted([{ type: "text.delta", payload: { text: "partial" } }], () => {
+        adapterSawAbort = true;
+      })(input),
+    );
+    const stream = await gatewayWith(adapter).stream(request(), {
+      nudgeAfterMs: 30,
+      idleTimeoutMs: 60,
+      teardownGraceMs: 10,
+    });
+    const iterator = stream.events[Symbol.asyncIterator]();
+
+    expect((await iterator.next()).value?.type).toBe("stream.start");
+    expect((await iterator.next()).value?.type).toBe("text.delta");
+
+    const nudgePromise = iterator.next();
+    await Promise.resolve();
+    expect(vi.getTimerCount()).toBe(2);
+    await vi.advanceTimersByTimeAsync(30);
+    await flushMicrotasks();
+    const nudge = (await nudgePromise).value;
+    expect(nudge).toMatchObject({
+      type: "stream.status",
+      payload: {
+        phase: "NO_RECENT_ACTIVITY",
+        lastActivityAt: Date.parse("2026-10-04T00:00:00.000Z"),
+        idleForMs: 30,
+        idleTimeoutMs: 60,
+      },
+    });
+
+    const cancellingPromise = iterator.next();
+    await vi.advanceTimersByTimeAsync(30);
+    await flushMicrotasks();
+    const cancelling = (await cancellingPromise).value;
+    expect(cancelling).toMatchObject({
+      type: "stream.status",
+      payload: { phase: "CANCELLING_IDLE_STREAM", idleTimeoutMs: 60 },
+    });
+
+    const error = (await iterator.next()).value;
+    expect(adapterSawAbort).toBe(true);
+    expect(error).toMatchObject({
+      type: "stream.error",
+      payload: { error: { code: "AI_TIMEOUT", retryable: true } },
+    });
+    expect((await iterator.next()).done).toBe(true);
+  });
+
+  it("resets the idle clock when the adapter yields another event", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.parse("2026-10-04T00:00:00.000Z"));
+    let releaseSecondEvent: (() => void) | undefined;
+    const secondEvent = new Promise<void>((resolve) => {
+      releaseSecondEvent = resolve;
+    });
+    const adapter = createFakeAdapter("test-api", (input) =>
+      (async function* script(): AsyncGenerator<AIAdapterEvent> {
+        yield { type: "text.delta", payload: { text: "first" } };
+        await secondEvent;
+        yield { type: "text.delta", payload: { text: "second" } };
+        await new Promise<void>((resolve) => {
+          input.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      })(),
+    );
+    const stream = await gatewayWith(adapter).stream(request(), {
+      nudgeAfterMs: 70,
+      idleTimeoutMs: 80,
+      teardownGraceMs: 10,
+    });
+    const iterator = stream.events[Symbol.asyncIterator]();
+
+    expect((await iterator.next()).value?.type).toBe("stream.start");
+    expect((await iterator.next()).value?.type).toBe("text.delta");
+    const secondEventPromise = iterator.next();
+    await vi.advanceTimersByTimeAsync(40);
+    releaseSecondEvent?.();
+    expect((await secondEventPromise).value).toMatchObject({
+      type: "text.delta",
+      payload: { text: "second" },
+    });
+
+    const nudgePromise = iterator.next();
+    await vi.advanceTimersByTimeAsync(40);
+    expect(await Promise.race([nudgePromise.then(() => true), Promise.resolve(false)])).toBe(false);
+    await vi.advanceTimersByTimeAsync(30);
+    await flushMicrotasks();
+    const nudge = (await nudgePromise).value;
+    expect(nudge).toMatchObject({
+      type: "stream.status",
+      payload: { phase: "NO_RECENT_ACTIVITY", idleForMs: 70 },
+    });
+    await iterator.return?.();
+  });
+
+  it("bounds iterator teardown and ignores an event delivered after the terminal fence", async () => {
+    vi.useFakeTimers();
+    let resolveLateEvent: ((value: IteratorResult<AIAdapterEvent>) => void) | undefined;
+    let adapterSignal: AbortSignal | undefined;
+    const adapter = createFakeAdapter("test-api", (input) => {
+      adapterSignal = input.signal;
+      const iterator: AsyncIterator<AIAdapterEvent> = {
+        next: () =>
+          new Promise<IteratorResult<AIAdapterEvent>>((resolve) => {
+            resolveLateEvent = resolve;
+          }),
+        return: () => new Promise<IteratorResult<AIAdapterEvent>>(() => {}),
+      };
+      return { [Symbol.asyncIterator]: () => iterator };
+    });
+    const stream = await gatewayWith(adapter).stream(request(), {
+      nudgeAfterMs: 10,
+      idleTimeoutMs: 20,
+      teardownGraceMs: 5,
+    });
+    const iterator = stream.events[Symbol.asyncIterator]();
+
+    expect((await iterator.next()).value?.type).toBe("stream.start");
+    const nudgePromise = iterator.next();
+    await vi.advanceTimersByTimeAsync(10);
+    await flushMicrotasks();
+    expect((await nudgePromise).value).toMatchObject({
+      type: "stream.status",
+      payload: { phase: "NO_RECENT_ACTIVITY" },
+    });
+    const cancellingPromise = iterator.next();
+    await vi.advanceTimersByTimeAsync(10);
+    await flushMicrotasks();
+    expect((await cancellingPromise).value).toMatchObject({
+      type: "stream.status",
+      payload: { phase: "CANCELLING_IDLE_STREAM" },
+    });
+    expect((await iterator.next()).value?.type).toBe("stream.error");
+
+    const settledPromise = iterator.next();
+    await vi.advanceTimersByTimeAsync(5);
+    await flushMicrotasks();
+    await expect(settledPromise).resolves.toMatchObject({ done: true });
+    expect(adapterSignal?.aborted).toBe(true);
+
+    resolveLateEvent?.({
+      done: false,
+      value: { type: "text.delta", payload: { text: "too late" } },
+    });
+    await Promise.resolve();
+    expect(await iterator.next()).toMatchObject({ done: true });
+  });
+
   it("aborts on the caller's signal and reports AI_ABORTED", async () => {
     const controller = new AbortController();
     let adapterSawAbort = false;

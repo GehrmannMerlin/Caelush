@@ -6,6 +6,11 @@ import { createLLMCallId } from "./ids/llm-call-id.js";
 import { createModelCatalogBuilder } from "./models/model-catalog-builder.js";
 import { createProviderRegistryBuilder } from "./providers/provider-registry-builder.js";
 import { createReasoningResolver } from "./reasoning/reasoning-resolver.js";
+import {
+  DEFAULT_PROVIDER_NUDGE_AFTER_MS,
+  DEFAULT_PROVIDER_STREAM_IDLE_TIMEOUT_MS,
+  DEFAULT_PROVIDER_TEARDOWN_GRACE_MS,
+} from "./stream/stream.js";
 import { describeValue } from "./internal/assertions.js";
 import type { AIErrorSanitizer } from "./errors/error-sanitizer.js";
 import type { AIGateway } from "./gateway/ai-gateway.js";
@@ -25,6 +30,9 @@ export interface CreateAISubsystemOptions {
   readonly adapters: readonly ApiAdapter[];
   readonly reasoningPolicy?: ReasoningResolutionPolicy;
   readonly defaultTimeoutMs?: number;
+  readonly defaultNudgeAfterMs?: number;
+  readonly defaultIdleTimeoutMs?: number;
+  readonly defaultTeardownGraceMs?: number;
   readonly callIdFactory?: { create(): LLMCallId };
   readonly errorSanitizer?: AIErrorSanitizer;
 }
@@ -87,6 +95,13 @@ export function createAISubsystem(options: CreateAISubsystemOptions): AISubsyste
         `AI provider "${descriptor.id}" declares defaultApi "${descriptor.defaultApi}", which no registered adapter implements.`,
       );
     }
+    for (const candidate of providersRegistry.get(descriptor.id).transportCandidates ?? []) {
+      if (!adaptersRegistry.has(candidate.api)) {
+        throw new TypeError(
+          `AI provider "${descriptor.id}" transport candidate "${candidate.id}" declares api "${candidate.api}", which no registered adapter implements.`,
+        );
+      }
+    }
   }
 
   // Every explicitly known model must name a registered dialect and a registered
@@ -118,6 +133,23 @@ export function createAISubsystem(options: CreateAISubsystemOptions): AISubsyste
       `AI subsystem defaultTimeoutMs must be a positive safe integer, received ${describeValue(options.defaultTimeoutMs)}.`,
     );
   }
+  const defaultNudgeAfterMs = options.defaultNudgeAfterMs ?? DEFAULT_PROVIDER_NUDGE_AFTER_MS;
+  const defaultIdleTimeoutMs =
+    options.defaultIdleTimeoutMs ?? DEFAULT_PROVIDER_STREAM_IDLE_TIMEOUT_MS;
+  const defaultTeardownGraceMs =
+    options.defaultTeardownGraceMs ?? DEFAULT_PROVIDER_TEARDOWN_GRACE_MS;
+  for (const [name, value] of [
+    ["defaultNudgeAfterMs", defaultNudgeAfterMs],
+    ["defaultIdleTimeoutMs", defaultIdleTimeoutMs],
+    ["defaultTeardownGraceMs", defaultTeardownGraceMs],
+  ] as const) {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new TypeError(`AI subsystem ${name} must be a positive safe integer.`);
+    }
+  }
+  if (defaultNudgeAfterMs >= defaultIdleTimeoutMs) {
+    throw new TypeError("AI subsystem defaultNudgeAfterMs must be less than defaultIdleTimeoutMs.");
+  }
   if (typeof callIdFactory.create !== "function") {
     throw new TypeError("AI subsystem callIdFactory must implement create().");
   }
@@ -142,6 +174,9 @@ export function createAISubsystem(options: CreateAISubsystemOptions): AISubsyste
       ...(options.defaultTimeoutMs === undefined
         ? {}
         : { defaultTimeoutMs: options.defaultTimeoutMs }),
+      defaultNudgeAfterMs,
+      defaultIdleTimeoutMs,
+      defaultTeardownGraceMs,
     },
   );
 

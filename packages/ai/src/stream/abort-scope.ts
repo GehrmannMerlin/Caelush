@@ -1,14 +1,15 @@
 /**
  * Why an AI invocation stopped.
  *
- * The three causes are deliberately distinct even though they all end in one
+ * The causes are deliberately distinct even though they all end in one
  * aborted `AbortSignal`. A caller needs to tell "the user cancelled", "we ran out
  * of time" and "the consumer stopped reading" apart: only the first is a user
  * intent, and only the second is a timeout.
  */
-export type AIAbortKind = "external" | "timeout" | "consumer";
+export type AIAbortKind = "external" | "timeout" | "idle_timeout" | "consumer";
 
 const timeoutAbortReason = Symbol("caelush-ai-timeout");
+const idleTimeoutAbortReason = Symbol("caelush-ai-idle-timeout");
 const externalAbortReason = Symbol("caelush-ai-external-abort");
 const consumerCancelledReason = Symbol("caelush-ai-consumer-cancelled");
 
@@ -25,6 +26,8 @@ export interface AbortScope {
   readonly aborted: Promise<AIAbortKind>;
   /** The first cause that fired, or `undefined` while the invocation is live. */
   kind(): AIAbortKind | undefined;
+  /** Cancel because the Provider stream exceeded its inter-event idle timeout. */
+  abortIdle(): void;
   /** Cancel because the consumer stopped reading the stream. */
   abortConsumer(): void;
   /** Detach the timer and the external listener. Always call this. */
@@ -79,6 +82,9 @@ export function createAbortScope(
     signal: controller.signal,
     aborted,
     kind: () => abortKind,
+    abortIdle: () => {
+      abort("idle_timeout", idleTimeoutAbortReason);
+    },
     abortConsumer: () => {
       abort("consumer", consumerCancelledReason);
     },

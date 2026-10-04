@@ -259,16 +259,25 @@ pnpm --filter @caelush/cli start
 
 常用环境变量：
 
-| 变量                        | 作用                                       |
-| --------------------------- | ------------------------------------------ |
-| `CAELUSH_WORKSPACE_PATH`    | 指定 Daemon 操作的工作区；默认使用当前目录 |
-| `CAELUSH_DAEMON_URL`        | 让客户端连接非默认 Daemon 地址             |
-| `CAELUSH_WEB_BUILD_ROOT`    | 指定非标准位置的 Web 构建产物              |
-| `CAELUSH_PROVIDER_ID`       | Provider 标识                              |
-| `CAELUSH_PROVIDER_BASE_URL` | Provider API 地址                          |
-| `CAELUSH_PROVIDER_API_KEY`  | Provider 凭据                              |
-| `CAELUSH_DEFAULT_PROVIDER`  | 默认 Provider                              |
-| `CAELUSH_DEFAULT_MODEL`     | 默认模型                                   |
+| 变量                                      | 作用                                                  |
+| ----------------------------------------- | ----------------------------------------------------- |
+| `CAELUSH_WORKSPACE_PATH`                  | 指定 Daemon 操作的工作区；默认使用当前目录            |
+| `CAELUSH_DAEMON_URL`                      | 让客户端连接非默认 Daemon 地址                        |
+| `CAELUSH_WEB_BUILD_ROOT`                  | 指定非标准位置的 Web 构建产物                         |
+| `CAELUSH_PROVIDER_ID`                     | Provider 标识                                         |
+| `CAELUSH_PROVIDER_BASE_URL`               | Provider API 地址                                     |
+| `CAELUSH_PROVIDER_API_KEY`                | Provider 凭据                                         |
+| `CAELUSH_DEFAULT_PROVIDER`                | 默认 Provider                                         |
+| `CAELUSH_DEFAULT_MODEL`                   | 默认模型                                              |
+| `CAELUSH_PROVIDER_NUDGE_AFTER_MS`         | 无 Provider 活动多久后提示仍在等待（默认 `30000`）    |
+| `CAELUSH_PROVIDER_STREAM_IDLE_TIMEOUT_MS` | 连续无 Provider 活动多久后中止并恢复（默认 `300000`） |
+| `CAELUSH_PROVIDER_TEARDOWN_GRACE_MS`      | 中止后等待传输清理的最长时间（默认 `5000`）           |
+
+Provider 流恢复策略：Daemon 默认在 30 秒没有 Provider 事件时提示“近期无新数据”，但这不代表连接已断开或不健康；连续静默 5 分钟才会取消本次请求。三个时长必须是有限的正安全整数，空闲超时不可设为 `0` 或无限值，且提示时间必须短于空闲超时。成功启动时，Daemon 会记录实际生效的三个时长，不记录 Provider 地址、密钥或模型标识。
+
+模型调用最多进行 6 次总尝试，即首次请求加最多 5 次重试。默认本地退避基线为 `1、2、4、8、16` 秒，采用 ±10% 抖动并封顶 30 秒；有效的 `Retry-After`（秒数或 HTTP 日期）优先于本地退避，最多接受 5 分钟，超出策略上限时不会提前重试，而是明确结束本次恢复。界面按“重试 1/5”到“5/5”显示，不把初次请求算作重试。
+
+只有预先配置、同一 Provider 与模型、协议和能力等价的备用传输才允许自动切换；如果没有经过验证的候选项，系统不会自行更换 Provider 或模型。Daemon 受控关闭时，会尽力把仍在等待模型的 Run 保存为可恢复重试状态；若进程硬崩溃且请求是否已被 Provider 接收无法确认，则继续采用 fail-closed，不自动重放请求或工具副作用。浏览器到本地 Daemon 的 SSE 连接状态与 Daemon 到 Provider 的传输状态分别显示；单纯没有 Token/事件只说明近期没有内容活动，不能据此断言连接不健康。
 
 ## 内置 Coding Tools
 

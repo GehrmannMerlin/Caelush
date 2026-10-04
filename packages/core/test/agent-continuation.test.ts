@@ -148,6 +148,43 @@ describe("durable continuation schemas", () => {
     ).toThrow();
   });
 
+  it("decodes legacy retry checkpoints and validates persisted transport recovery", () => {
+    const checkpoint = {
+      type: "WAITING_RETRY" as const,
+      runId,
+      failedStepId: sourceStepId,
+      attempt: 2,
+      maxAttempts: 6,
+      nextAttemptAt: 2_000,
+      errorCode: "LLM_NETWORK" as const,
+      mode: "START" as const,
+    };
+
+    expect(RunContinuationCheckpointSchema.parse(checkpoint)).toEqual(checkpoint);
+    expect(
+      RunContinuationCheckpointSchema.parse({
+        ...checkpoint,
+        transport: {
+          currentTransportId: "backup",
+          attemptedTransportIds: ["default", "backup"],
+        },
+      }),
+    ).toMatchObject({
+      transport: {
+        currentTransportId: "backup",
+        attemptedTransportIds: ["default", "backup"],
+      },
+    });
+    for (const transport of [
+      { currentTransportId: "backup", attemptedTransportIds: ["default"] },
+      { currentTransportId: "backup", attemptedTransportIds: ["default", "backup", "backup"] },
+      { currentTransportId: "../backup", attemptedTransportIds: ["../backup"] },
+      { currentTransportId: "backup", attemptedTransportIds: [] },
+    ]) {
+      expect(() => RunContinuationCheckpointSchema.parse({ ...checkpoint, transport })).toThrow();
+    }
+  });
+
   it("requires the complete Tool Result context for a retry continuation", () => {
     const checkpoint = {
       type: "WAITING_RETRY" as const,

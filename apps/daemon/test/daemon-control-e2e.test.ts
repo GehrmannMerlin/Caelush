@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createWorkspaceId, type AgentEvent } from "@caelush/protocol";
+import { createControlHookId } from "@caelush/agent";
 import {
   createAIError,
   type AIAdapterEvent,
@@ -19,6 +20,7 @@ import {
   fixtureBinding,
   fixtureModelSource,
 } from "./support/ai-fixture.js";
+import { restrictedProvider } from "./support/permission-flow-fixture.js";
 
 let directory: string | undefined;
 let daemon: { close(): Promise<void>; url: string } | undefined;
@@ -156,9 +158,9 @@ describe("production daemon control-plane E2E", () => {
   it("waits for approval, resolves through HTTP, resumes the exact Tool, and completes", async () => {
     const workspacePath = await makeWorkspace("caelush-approval-e2e-", "before\n");
     const provider = new ApprovalProvider();
-    daemon = await startFixtureDaemon(workspacePath, provider);
+    daemon = await startFixtureDaemon(workspacePath, provider, { requirePatchApproval: true });
     const client = new CaelushClient({ baseUrl: daemon.url });
-    const { session, run } = await createFixtureRun(client, workspacePath, "DANGEROUS_ONLY");
+    const { session, run } = await createFixtureRun(client, workspacePath, "WORKSPACE_WRITE");
 
     expect((await client.startRun(run.id)).disposition).toBe("SCHEDULED");
     const waiting = await waitForRun(client, run.id, "WAITING_APPROVAL");
@@ -228,7 +230,7 @@ describe("production daemon control-plane E2E", () => {
     }
   }, 20_000);
 
-  it("gracefully closes by cancelling active work before closing the SQLite lifecycle", async () => {
+  it("gracefully checkpoints an active model attempt before closing SQLite", async () => {
     const workspacePath = await makeWorkspace("caelush-shutdown-e2e-", "unchanged\n");
     const databasePath = join(workspacePath, "caelush.db");
     const provider = new BlockingProvider();
@@ -244,7 +246,14 @@ describe("production daemon control-plane E2E", () => {
 
     const storage = await openCaelushStorage({ path: databasePath });
     try {
-      expect((await storage.runs.get(run.id))?.status).toBe("CANCELLED");
+      const checkpoint = await storage.execution.load(run.id);
+      expect(checkpoint?.run.status).toBe("RUNNING");
+      expect(checkpoint?.continuation).toMatchObject({
+        type: "WAITING_RETRY",
+        attempt: 2,
+        maxAttempts: 6,
+        errorCode: "LLM_NETWORK",
+      });
     } finally {
       await storage.close();
     }
@@ -297,6 +306,7 @@ async function makeWorkspace(prefix: string, contents: string): Promise<string> 
 async function startFixtureDaemon(
   workspacePath: string,
   fixture: ApiAdapter,
+  options: { requirePatchApproval?: boolean } = {},
 ): Promise<{ close(): Promise<void>; url: string }> {
   return startDaemon({
     databasePath: join(workspacePath, "caelush.db"),
@@ -306,6 +316,29 @@ async function startFixtureDaemon(
     modelSources: [fixtureModelSource()],
     adapterOverrides: [fixture],
     defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
+    processSandboxProviders: [restrictedProvider],
+    ...(options.requirePatchApproval === true
+      ? {
+          beforeToolDispatchHooks: [
+            {
+              id: createControlHookId("daemon-control-e2e-approval"),
+              priority: 10,
+              criticality: "REQUIRED" as const,
+              timeoutMs: 100,
+              hook: {
+                evaluate: async (input: { readonly toolName: string }) =>
+                  input.toolName === "apply_patch"
+                    ? {
+                        kind: "REQUIRE_APPROVAL" as const,
+                        code: "TEST_REVIEW_REQUIRED",
+                        reason: "This test requires review before applying its patch.",
+                      }
+                    : { kind: "PASS" as const },
+              },
+            },
+          ],
+        }
+      : {}),
     logger: false,
   });
 }
@@ -313,19 +346,22 @@ async function startFixtureDaemon(
 async function createFixtureRun(
   client: CaelushClient,
   workspacePath: string,
-  approvalPolicy: "ALWAYS_ASK" | "DANGEROUS_ONLY" | "NEVER_ASK" = "NEVER_ASK",
+  preset: "WORKSPACE_WRITE" | "FULL_ACCESS" = "FULL_ACCESS",
 ) {
+  const requestedWorkspace = { id: createWorkspaceId(), path: workspacePath };
   const session = await client.createSession({
-    defaultWorkspace: { id: createWorkspaceId(), path: workspacePath },
+    defaultWorkspace: requestedWorkspace,
     defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
   });
   const run = await client.createRun(session.id, {
     goal: "complete the fixture task",
-    workspace: { id: createWorkspaceId(), path: workspacePath },
+    workspace: session.defaultWorkspace ?? requestedWorkspace,
     model: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
     runtime: { id: "local", kind: "local" },
-    permissionProfile: "PROJECT_ACCESS",
-    approvalPolicy,
+    preset: {
+      id: preset,
+      expectedVersion: 1,
+    },
     limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 10_000 },
   });
   return { session, run };

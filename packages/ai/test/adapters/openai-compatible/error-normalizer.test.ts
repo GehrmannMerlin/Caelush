@@ -31,8 +31,8 @@ function apiError(input: {
   });
 }
 
-function normalize(error: unknown): AIError {
-  return normalizeOpenAICompatibleError(error, MODEL);
+function normalize(error: unknown, nowMs?: number): AIError {
+  return normalizeOpenAICompatibleError(error, MODEL, nowMs);
 }
 
 describe("OpenAI-compatible error normalization", () => {
@@ -78,6 +78,15 @@ describe("OpenAI-compatible error normalization", () => {
       normalize(apiError({ statusCode: 429, responseHeaders: { "retry-after": "-5" } }))
         .retryAfterMs,
     ).toBeUndefined();
+  });
+
+  it("parses an HTTP-date Retry-After relative to the injected clock", () => {
+    expect(
+      normalize(
+        apiError({ statusCode: 429, responseHeaders: { "Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT" } }),
+        Date.parse("2026-10-04T00:00:00.000Z"),
+      ).retryAfterMs,
+    ).toBe(Date.parse("2026-10-21T07:28:00.000Z") - Date.parse("2026-10-04T00:00:00.000Z"));
   });
 
   it("maps other provider 4xx and 5xx to a non-retryable provider error", () => {

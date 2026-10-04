@@ -51,6 +51,8 @@ export interface ModelTurnExecutionInput {
   readonly identity: AgentExecutionIdentity;
   readonly turn: AgentTurnRef;
   readonly request: AIModelRequest;
+  /** Host-selected equivalent transport; contains no endpoint or credential data. */
+  readonly transportId?: string;
   /**
    * The caller's cancellation signal, forwarded to the gateway unchanged.
    *
@@ -110,7 +112,10 @@ export function createModelTurnExecutor(
       try {
         // Exactly one gateway invocation per execute(): the durable run layer owns
         // retry, never this boundary.
-        const stream = await dependencies.gateway.stream(input.request, { signal: input.signal });
+        const stream = await dependencies.gateway.stream(input.request, {
+          signal: input.signal,
+          ...(input.transportId === undefined ? {} : { transportId: input.transportId }),
+        });
         const assembler = createAIModelTurnAssembler();
         const signalProjector = createTurnProjector(dependencies);
 

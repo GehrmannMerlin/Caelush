@@ -7,6 +7,7 @@ import {
   createPlanItemId,
   createRunId,
   createSessionId,
+  createStepId,
   createToolInvocationId,
   createVerificationCheckId,
   createVerificationPlanId,
@@ -69,6 +70,67 @@ describe("DefaultPublicEventProjector", () => {
     });
     expect(event).toEqual(before);
     expect(PublicRunEventSchema.safeParse(projected).success).toBe(true);
+  });
+
+  it("projects coalescible model wait status without introducing arbitrary text", () => {
+    const runId = createRunId();
+    const stepId = createStepId();
+    const status = makeEvent(
+      "model.status",
+      {
+        phase: "CANCELLING_IDLE_STREAM",
+        lastActivityAt: 1_700_000_000_000,
+        idleForMs: 300_000,
+        idleTimeoutMs: 300_000,
+      },
+      {
+        runId,
+        stepId,
+        durability: {
+          kind: "EPHEMERAL",
+          version: 1,
+          deliveryClass: "COALESCIBLE",
+          streamKey: `model:status:${runId}:${stepId}`,
+        },
+      },
+    );
+
+    const projected = projector.project(status);
+
+    expect(projected).toMatchObject({
+      type: "model.status",
+      payload: {
+        phase: "CANCELLING_IDLE_STREAM",
+        lastActivityAt: 1_700_000_000_000,
+        idleForMs: 300_000,
+        idleTimeoutMs: 300_000,
+      },
+      durability: { kind: "EPHEMERAL", deliveryClass: "COALESCIBLE" },
+    });
+    expect(JSON.stringify(projected)).not.toContain("endpoint");
+    expect(JSON.stringify(projected)).not.toContain("message");
+  });
+
+  it("projects transport fallback as safe candidate ids only", () => {
+    const event = makeEvent("transport.fallback.selected", {
+      attempt: 2,
+      maxAttempts: 6,
+      fromTransportId: "default",
+      toTransportId: "backup",
+    });
+
+    const projected = projector.project(event);
+
+    expect(projected).toMatchObject({
+      type: "transport.fallback.selected",
+      payload: {
+        attempt: 2,
+        maxAttempts: 6,
+        fromTransportId: "default",
+        toTransportId: "backup",
+      },
+    });
+    expect(JSON.stringify(projected)).not.toMatch(/endpoint|https?:|credential|header/iu);
   });
 
   it.each([
@@ -209,6 +271,12 @@ describe("DefaultPublicEventProjector", () => {
       "model.text.delta": { text: "partial answer" },
       "model.reasoning_summary.delta": { text: "safe summary" },
       "model.tool_call.delta": { toolCallId: "call-1", delta: '{"path":' },
+      "model.status": {
+        phase: "NO_RECENT_ACTIVITY",
+        lastActivityAt: 1_700_000_000_000,
+        idleForMs: 30_000,
+        idleTimeoutMs: 300_000,
+      },
       "plan.updated": {
         plan: [{ id: createPlanItemId(), title: "step", status: "PENDING" }],
       },
@@ -312,6 +380,20 @@ describe("DefaultPublicEventProjector", () => {
         errorCode: "LLM_NETWORK",
       },
       "retry.started": { attempt: 1, maxAttempts: 2 },
+      "retry.exhausted": {
+        attempt: 6,
+        maxAttempts: 6,
+        retriesUsed: 5,
+        maxRetries: 5,
+        errorCode: "LLM_NETWORK",
+        reason: "ATTEMPTS_EXHAUSTED",
+      },
+      "transport.fallback.selected": {
+        attempt: 2,
+        maxAttempts: 6,
+        fromTransportId: "default",
+        toTransportId: "backup",
+      },
       "budget.exceeded": { dimension: "TOKENS", limit: 10, accounted: 11 },
       "resource.guard": { reason: "NO_PROGRESS", replanCount: 1, requestedToolCalls: 1 },
       "conversation.message.committed": {
@@ -326,9 +408,13 @@ describe("DefaultPublicEventProjector", () => {
     )) {
       const payload = payloads[definition.type];
       expect(payload, `fixture missing for ${definition.type}`).toBeDefined();
+      const statusRunId = definition.type === "model.status" ? createRunId() : undefined;
+      const statusStepId = definition.type === "model.status" ? createStepId() : undefined;
       const projected = projector.project(
         makeEvent(definition.type, payload, {
           schemaVersion: definition.schemaVersion,
+          ...(statusRunId === undefined ? {} : { runId: statusRunId }),
+          ...(statusStepId === undefined ? {} : { stepId: statusStepId }),
           durability:
             definition.delivery.kind === "DURABLE"
               ? { kind: "DURABLE", version: 1, sequence: 1 }
@@ -336,7 +422,10 @@ describe("DefaultPublicEventProjector", () => {
                   kind: "EPHEMERAL",
                   version: 1,
                   deliveryClass: definition.delivery.class,
-                  streamKey: `${definition.type}:fixture`,
+                  streamKey:
+                    statusRunId === undefined || statusStepId === undefined
+                      ? `${definition.type}:fixture`
+                      : `model:status:${statusRunId}:${statusStepId}`,
                   ...(definition.delivery.class === "ORDERED" ? { streamSequence: 1 } : {}),
                 },
         }),

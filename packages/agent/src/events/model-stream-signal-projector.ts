@@ -1,6 +1,7 @@
 import type { AIStreamEvent } from "@caelush/ai";
 import {
   ModelReasoningSummaryDeltaEventSchema,
+  ModelStatusEventSchema,
   ModelTextDeltaEventSchema,
   ModelToolCallDeltaEventSchema,
   type EventId,
@@ -89,6 +90,17 @@ export function createModelStreamSignalProjector(
             }) as TransientRunEvent,
         );
       }
+      case "stream.status": {
+        const streamKey = modelStatusStreamKey(identity.runId, stepId);
+        return [
+          ModelStatusEventSchema.parse({
+            ...base(identity.runId, identity.sessionId, stepId, dependencies),
+            type: "model.status",
+            durability: coalescible(streamKey),
+            payload: event.payload,
+          }) as TransientRunEvent,
+        ];
+      }
       default:
         return [];
     }
@@ -150,6 +162,15 @@ function ordered(streamKey: string, streamSequence: number) {
   };
 }
 
+function coalescible(streamKey: string) {
+  return {
+    kind: "EPHEMERAL" as const,
+    version: 1 as const,
+    deliveryClass: "COALESCIBLE" as const,
+    streamKey,
+  };
+}
+
 function nextSequence(sequences: Map<string, number>, streamKey: string): number {
   const next = (sequences.get(streamKey) ?? 0) + 1;
   sequences.set(streamKey, next);
@@ -166,4 +187,8 @@ function modelReasoningStreamKey(runId: RunId, stepId: StepId): string {
 
 function modelToolCallStreamKey(runId: RunId, stepId: StepId, toolCallId: string): string {
   return `model:tool-call:${runId}:${stepId}:${toolCallId}`;
+}
+
+function modelStatusStreamKey(runId: RunId, stepId: StepId): string {
+  return `model:status:${runId}:${stepId}`;
 }

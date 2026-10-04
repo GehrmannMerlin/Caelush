@@ -37,6 +37,7 @@ import {
 } from "./process.js";
 import {
   ModelReasoningSummaryDeltaEventSchema,
+  ModelStatusEventSchema,
   ModelTextDeltaEventSchema,
   ModelToolCallDeltaEventSchema,
 } from "./model.js";
@@ -57,6 +58,8 @@ import {
   LlmStartedEventSchema,
   RetryScheduledEventSchema,
   RetryStartedEventSchema,
+  RetryExhaustedEventSchema,
+  TransportFallbackSelectedEventSchema,
 } from "./llm.js";
 import { ErrorEventSchema } from "./error.js";
 import { BudgetExceededEventSchema } from "./budget.js";
@@ -96,11 +99,13 @@ export type {
 } from "./base.js";
 export {
   ModelReasoningSummaryDeltaEventSchema,
+  ModelStatusEventSchema,
   ModelTextDeltaEventSchema,
   ModelToolCallDeltaEventSchema,
 } from "./model.js";
 export type {
   ModelReasoningSummaryDeltaEvent,
+  ModelStatusEvent,
   ModelTextDeltaEvent,
   ModelToolCallDeltaEvent,
 } from "./model.js";
@@ -134,7 +139,14 @@ export { BudgetExceededEventSchema } from "./budget.js";
 export type { BudgetExceededEvent } from "./budget.js";
 export { ResourceGuardEventSchema } from "./resource.js";
 export type { ResourceGuardEvent } from "./resource.js";
-export { LlmFailedEventSchema, RetryScheduledEventSchema, RetryStartedEventSchema } from "./llm.js";
+export {
+  LlmFailedEventSchema,
+  RetryExhaustedEventSchema,
+  RetryScheduledEventSchema,
+  RetryStartedEventSchema,
+  TransportFallbackSelectedEventSchema,
+} from "./llm.js";
+export type { RetryExhaustedEvent, TransportFallbackSelectedEvent } from "./llm.js";
 export { RunTimedOutEventSchema } from "./run.js";
 export type { RunTimedOutEvent } from "./run.js";
 export { VerificationPlannedEventSchema } from "./verification.js";
@@ -192,6 +204,8 @@ const currentRunEventSchema = z.union([
   LlmFailedEventSchema,
   RetryScheduledEventSchema,
   RetryStartedEventSchema,
+  RetryExhaustedEventSchema,
+  TransportFallbackSelectedEventSchema,
   ErrorEventSchema,
   BudgetExceededEventSchema,
   ResourceGuardEventSchema,
@@ -199,6 +213,7 @@ const currentRunEventSchema = z.union([
   ContextCompactionCompletedEventSchema,
   ModelTextDeltaEventSchema,
   ModelReasoningSummaryDeltaEventSchema,
+  ModelStatusEventSchema,
   ModelToolCallDeltaEventSchema,
 ]);
 

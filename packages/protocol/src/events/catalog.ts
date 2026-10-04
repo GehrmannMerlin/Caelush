@@ -82,6 +82,8 @@ export const RUN_EVENT_TYPE_CATALOG: readonly RunEventTypeDefinition[] = Object.
   durable("llm.failed"),
   durable("retry.scheduled"),
   durable("retry.started"),
+  durable("retry.exhausted"),
+  durable("transport.fallback.selected"),
   durable("error", "DEBUG"),
   durable("budget.exceeded"),
   durable("resource.guard"),
@@ -93,6 +95,7 @@ export const RUN_EVENT_TYPE_CATALOG: readonly RunEventTypeDefinition[] = Object.
   transient("model.text.delta", 1, "ORDERED"),
   transient("model.reasoning_summary.delta", 1, "ORDERED"),
   transient("model.tool_call.delta", 1, "ORDERED"),
+  transient("model.status", 1, "COALESCIBLE"),
 ]);
 
 export const RunEventTypeCatalog = RUN_EVENT_TYPE_CATALOG;

@@ -113,7 +113,10 @@ export interface AdapterConformanceOptions {
   readonly textThenFailure: () => CapturingTransport;
 
   /** A transport that never completes until the request signal aborts. */
-  readonly hang: () => CapturingTransport & { readonly observedAbort: () => boolean };
+  readonly hang: () => CapturingTransport & {
+    readonly observedAbort: () => boolean;
+    readonly observedBodyAbort: () => boolean;
+  };
 
   readonly reasoning: ConformanceReasoningSupport;
   readonly cache: ConformanceCacheSupport;

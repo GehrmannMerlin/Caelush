@@ -11,6 +11,7 @@ import {
 } from "@caelush/protocol";
 import {
   ModelReasoningSummaryDeltaEventSchema,
+  ModelStatusEventSchema,
   ModelTextDeltaEventSchema,
   ModelToolCallDeltaEventSchema,
   ProcessOutputEventV2Schema,
@@ -105,6 +106,45 @@ describe("Phase 6E transient event contracts", () => {
     expect(RUN_EVENT_SCHEMA_REGISTRY.supports("model.reasoning_summary.delta", 1)).toBe(true);
     expect(RUN_EVENT_SCHEMA_REGISTRY.supports("model.tool_call.delta", 1)).toBe(true);
     expect(PublicRunEventSchema.parse(text)).toMatchObject({ type: "model.text.delta" });
+  });
+
+  it("registers bounded coalescible model status without arbitrary text", () => {
+    const base = common(1, {
+      kind: "EPHEMERAL",
+      version: 1,
+      deliveryClass: "COALESCIBLE",
+      streamKey: "",
+    });
+    const status = ModelStatusEventSchema.parse({
+      ...base,
+      type: "model.status",
+      durability: {
+        kind: "EPHEMERAL",
+        version: 1,
+        deliveryClass: "COALESCIBLE",
+        streamKey: `model:status:${base.runId}:${base.stepId}`,
+      },
+      payload: {
+        phase: "NO_RECENT_ACTIVITY",
+        lastActivityAt: 1_700_000_000_000,
+        idleForMs: 30_000,
+        idleTimeoutMs: 300_000,
+      },
+    });
+
+    expect(status).toMatchObject({ type: "model.status", visibility: "USER_VISIBLE" });
+    expect(RUN_EVENT_SCHEMA_REGISTRY.parse(status)).toMatchObject({ type: "model.status" });
+    expect(RUN_EVENT_SCHEMA_REGISTRY.supports("model.status", 1)).toBe(true);
+    expect(
+      RUN_EVENT_TYPE_CATALOG.find(({ type }) => type === "model.status"),
+    ).toMatchObject({ visibility: "USER_VISIBLE", delivery: { kind: "TRANSIENT", class: "COALESCIBLE" } });
+    expect(PublicRunEventSchema.parse(status)).toMatchObject({ type: "model.status" });
+
+    expect(ModelStatusEventSchema.safeParse({ ...status, payload: { ...status.payload, message: "waiting" } }).success).toBe(false);
+    expect(ModelStatusEventSchema.safeParse({
+      ...status,
+      durability: { ...status.durability, streamKey: "model:status:other:step" },
+    }).success).toBe(false);
   });
 
   it("provides ordered v2 shell and process output without accepting incomplete metadata", () => {

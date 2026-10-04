@@ -1,4 +1,5 @@
 import { AIError, createAIError } from "../../errors/ai-error.js";
+import { parseRetryAfterMs } from "../../errors/retry-after.js";
 import { isJsonObject } from "../../json/json-value.js";
 import type { AIErrorCode } from "../../errors/ai-error-code.js";
 import type { ModelRef } from "../../models/model-ref.js";
@@ -40,6 +41,7 @@ export interface AnthropicHttpFailure {
 export function normalizeAnthropicHttpError(
   failure: AnthropicHttpFailure,
   model: ModelRef,
+  nowMs = Date.now(),
 ): AIError {
   const context = { providerId: model.provider, model };
   const { status } = failure;
@@ -59,7 +61,7 @@ export function normalizeAnthropicHttpError(
       // reported as one, or a durable retry loop would never terminate.
       return createAIError("AI_PROVIDER_ERROR", undefined, context);
     }
-    const retryAfterMs = readRetryAfterMs(failure.headers);
+    const retryAfterMs = parseRetryAfterMs(readRetryAfterValue(failure.headers), nowMs);
     return createAIError("AI_RATE_LIMIT", undefined, {
       ...context,
       ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
@@ -196,13 +198,9 @@ function isSpendCap(failure: AnthropicHttpFailure): boolean {
  * left absent rather than guessed, so the frozen schema keeps `undefined` instead of
  * a fabricated delay.
  */
-function readRetryAfterMs(headers: Readonly<Record<string, string>>): number | undefined {
+function readRetryAfterValue(headers: Readonly<Record<string, string>>): string | undefined {
   const entry = Object.entries(headers).find(([name]) => name.toLowerCase() === "retry-after");
   const raw = entry?.[1]?.trim();
   if (raw === undefined || raw.length === 0) return undefined;
-
-  const seconds = Number(raw);
-  if (!Number.isFinite(seconds) || seconds < 0) return undefined;
-  const milliseconds = Math.round(seconds * 1_000);
-  return Number.isSafeInteger(milliseconds) ? milliseconds : undefined;
+  return raw;
 }

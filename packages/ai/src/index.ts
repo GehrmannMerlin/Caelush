@@ -183,6 +183,7 @@ export type { ProviderCredentialResolver, ProviderCredentials } from "./provider
 export { assertAIProviderBinding, assertProviderEndpoint } from "./providers/provider-binding.js";
 export type {
   AIProviderBinding,
+  AIProviderTransportCandidate,
   AIProviderTransportOverride,
 } from "./providers/provider-binding.js";
 export type { AIProviderDescriptor } from "./providers/provider-descriptor.js";
@@ -223,6 +224,7 @@ export type {
   AIStreamEvent,
   AIStreamFinishEvent,
   AIStreamStartEvent,
+  AIStreamStatusEvent,
   AITextDeltaEvent,
   AIToolCallCompletedEvent,
   AIToolCallDeltaEvent,
@@ -231,6 +233,11 @@ export type {
 } from "./stream/events.js";
 
 export type { AIStream, AIStreamOptions } from "./stream/stream.js";
+export {
+  DEFAULT_PROVIDER_NUDGE_AFTER_MS,
+  DEFAULT_PROVIDER_STREAM_IDLE_TIMEOUT_MS,
+  DEFAULT_PROVIDER_TEARDOWN_GRACE_MS,
+} from "./stream/stream.js";
 export { createStreamValidator } from "./stream/stream-validator.js";
 export type { AIStreamState, StreamValidator } from "./stream/stream-validator.js";
 export { createAIModelTurnAssembler } from "./stream/turn-assembler.js";

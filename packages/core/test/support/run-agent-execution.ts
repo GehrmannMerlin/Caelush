@@ -59,6 +59,7 @@ export type FrozenModelTurnScript = (
 export interface FakeFrozenModelTurnExecutor extends ModelTurnExecutor {
   readonly requests: readonly AIModelRequest[];
   readonly signals: readonly AbortSignal[];
+  readonly transportIds: readonly (string | undefined)[];
   callCount(): number;
   /**
    * Replace the script for the calls that have not happened yet.
@@ -82,9 +83,11 @@ export function fakeFrozenModelTurnExecutor(
 ): FakeFrozenModelTurnExecutor {
   const requests: AIModelRequest[] = [];
   const signals: AbortSignal[] = [];
+  const transportIds: (string | undefined)[] = [];
   const executor = {
     requests,
     signals,
+    transportIds,
     callCount: () => requests.length,
     resetScript(next: FrozenModelTurnScript): void {
       state.script = next;
@@ -95,6 +98,7 @@ export function fakeFrozenModelTurnExecutor(
       const callIndex = requests.length;
       requests.push(input.request);
       signals.push(input.signal);
+      transportIds.push((input as { readonly transportId?: string }).transportId);
       if (input.signal.aborted) return { kind: "CANCELLED" };
       try {
         const answer = await state.script(input.request, input.signal, callIndex);

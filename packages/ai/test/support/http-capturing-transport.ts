@@ -25,6 +25,8 @@ export interface CapturedHttpRequest {
   readonly signalAborted: () => boolean;
   /** Whether the request carried an `AbortSignal` at all. */
   readonly hasSignal: () => boolean;
+  /** The actual signal supplied to fetch, for controlled abort-aware transports. */
+  readonly signal: AbortSignal | undefined;
 }
 
 /** A recording transport: it answers with a scripted response and records requests. */
@@ -65,6 +67,7 @@ export function capturingTransport<TRequest extends CapturedHttpRequest = Captur
       bodyText: typeof init?.body === "string" ? init.body : "",
       signalAborted: () => init?.signal?.aborted === true,
       hasSignal: () => init?.signal !== undefined && init?.signal !== null,
+      signal: init?.signal ?? undefined,
     };
     requests.push(decorate === undefined ? (request as TRequest) : decorate(request));
     return respond(request as TRequest);
@@ -96,20 +99,24 @@ export function failingTransport(
  */
 export function hangingTransport<TRequest extends CapturedHttpRequest = CapturedHttpRequest>(
   decorate?: (request: CapturedHttpRequest) => TRequest,
-): CapturingTransport<TRequest> & { readonly observedAbort: () => boolean } {
+): CapturingTransport<TRequest> & {
+  readonly observedAbort: () => boolean;
+  readonly observedBodyAbort: () => boolean;
+} {
   let aborted = false;
+  let bodyAborted = false;
 
   const transport = capturingTransport<TRequest>((request) => {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
-        const signal = request.signalAborted;
-        const poll = setInterval(() => {
-          if (signal()) {
-            aborted = true;
-            clearInterval(poll);
-            controller.error(new Error("transport aborted"));
-          }
-        }, 5);
+        const signal = request.signal;
+        const onAbort = () => {
+          aborted = true;
+          bodyAborted = true;
+          controller.error(new DOMException("The request was aborted", "AbortError"));
+        };
+        if (signal?.aborted === true) onAbort();
+        else signal?.addEventListener("abort", onAbort, { once: true });
       },
     });
     return new Response(stream, {
@@ -118,7 +125,11 @@ export function hangingTransport<TRequest extends CapturedHttpRequest = Captured
     });
   }, decorate);
 
-  return { ...transport, observedAbort: () => aborted };
+  return {
+    ...transport,
+    observedAbort: () => aborted,
+    observedBodyAbort: () => bodyAborted,
+  };
 }
 
 /** Parse a captured body as JSON, failing loudly when it is not an object. */

@@ -63,9 +63,13 @@ export function PromptComposer(props: PromptComposerProps): ReactElement {
     createElement(
       "div",
       { className: "prompt-composer-footer" },
-      createElement(ContextUsageRing, { usage: props.contextUsage ?? null }),
+      createElement(
+        "div",
+        { className: "prompt-composer-context-controls" },
+        createElement(ContextUsageRing, { usage: props.contextUsage ?? null }),
+        props.permissionSelector ?? null,
+      ),
       createElement("span", { className: "prompt-hint" }, "Enter 发送 · Shift + Enter 换行"),
-      props.permissionSelector ?? null,
       props.modelPicker ?? null,
       createElement(
         "button",

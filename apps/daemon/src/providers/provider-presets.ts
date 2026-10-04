@@ -78,6 +78,102 @@ const BUILTIN_PRESETS: readonly ProviderPreset[] = [
     },
     compatibility: { anthropicMessages: { authMode: "api-key" } },
   },
+  {
+    id: "kimi",
+    displayName: "Kimi（月之暗面）",
+    endpoint: "https://api.moonshot.cn/v1",
+    api: OPENAI_COMPATIBLE_API_ID,
+    credentialReference: "CAELUSH_PROVIDER_API_KEY",
+    discovery: {
+      dialect: "OPENAI_MODELS",
+      path: "models",
+      credentialTransport: "BEARER",
+    },
+  },
+  {
+    id: "glm",
+    displayName: "GLM（智谱）",
+    endpoint: "https://open.bigmodel.cn/api/paas/v4",
+    api: OPENAI_COMPATIBLE_API_ID,
+    credentialReference: "CAELUSH_PROVIDER_API_KEY",
+    discovery: {
+      dialect: "OPENAI_MODELS",
+      path: "models",
+      credentialTransport: "BEARER",
+    },
+  },
+  {
+    id: "minimax",
+    displayName: "MiniMax",
+    endpoint: "https://api.minimax.io/v1",
+    api: OPENAI_COMPATIBLE_API_ID,
+    credentialReference: "CAELUSH_PROVIDER_API_KEY",
+    discovery: {
+      dialect: "OPENAI_MODELS",
+      path: "models",
+      credentialTransport: "BEARER",
+    },
+  },
+  {
+    id: "mimo",
+    displayName: "MiMo（小米）",
+    endpoint: "https://api.xiaomimimo.com/v1",
+    api: OPENAI_COMPATIBLE_API_ID,
+    credentialReference: "CAELUSH_PROVIDER_API_KEY",
+    discovery: {
+      dialect: "OPENAI_MODELS",
+      path: "models",
+      credentialTransport: "BEARER",
+    },
+  },
+  {
+    id: "qwen",
+    displayName: "Qwen（通义千问）",
+    endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    api: OPENAI_COMPATIBLE_API_ID,
+    credentialReference: "CAELUSH_PROVIDER_API_KEY",
+    discovery: {
+      dialect: "OPENAI_MODELS",
+      path: "models",
+      credentialTransport: "BEARER",
+    },
+  },
+  {
+    id: "gemini",
+    displayName: "Gemini",
+    endpoint: "https://generativelanguage.googleapis.com/v1beta/openai",
+    api: OPENAI_COMPATIBLE_API_ID,
+    credentialReference: "CAELUSH_PROVIDER_API_KEY",
+    discovery: {
+      dialect: "OPENAI_MODELS",
+      path: "models",
+      credentialTransport: "BEARER",
+    },
+  },
+  {
+    id: "groq",
+    displayName: "Groq",
+    endpoint: "https://api.groq.com/openai/v1",
+    api: OPENAI_COMPATIBLE_API_ID,
+    credentialReference: "CAELUSH_PROVIDER_API_KEY",
+    discovery: {
+      dialect: "OPENAI_MODELS",
+      path: "models",
+      credentialTransport: "BEARER",
+    },
+  },
+  {
+    id: "mistral",
+    displayName: "Mistral AI",
+    endpoint: "https://api.mistral.ai/v1",
+    api: OPENAI_COMPATIBLE_API_ID,
+    credentialReference: "CAELUSH_PROVIDER_API_KEY",
+    discovery: {
+      dialect: "OPENAI_MODELS",
+      path: "models",
+      credentialTransport: "BEARER",
+    },
+  },
 ];
 
 /** Immutable host-owned preset registry; it is not the AI ProviderRegistry. */

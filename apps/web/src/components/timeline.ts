@@ -23,6 +23,7 @@ import {
   timelineActivityCount,
   timelineActivityDelta,
 } from "./timeline-scroll.js";
+import { ModelWaitNotice, usePresentationNow } from "./model-wait-presentation.js";
 
 const WEB_TOOL_LABELS: Readonly<Record<string, string>> = Object.freeze({
   read_file: "读取文件",
@@ -53,6 +54,9 @@ export function Timeline(props: TimelineProps): ReactElement {
   const settled = props.timeline.settled.filter((entry) => entry.title !== "Tool output");
   const liveActivities = props.liveActivity?.activities ?? [];
   const activityCount = timelineActivityCount(props.timeline, props.liveActivity);
+  const modelWait = props.liveActivity?.modelWait;
+  const hasPendingRetry = props.timeline.retries.some((retry) => retry.status === "PENDING");
+  const now = usePresentationNow(modelWait !== undefined || hasPendingRetry);
   const regionRef = useRef<HTMLDivElement>(null);
   const seenActivityCount = useRef(activityCount);
   const [following, setFollowing] = useState(true);
@@ -177,6 +181,11 @@ export function Timeline(props: TimelineProps): ReactElement {
                   props.timeline.currentPlan.map(renderPlanItem),
                 ),
               ),
+          createElement(ModelWaitNotice, {
+            ...(modelWait === undefined ? {} : { modelWait }),
+            isModelActive: props.timeline.activeLlm.length > 0,
+            now,
+          }),
           active.length === 0
             ? null
             : createElement(
@@ -200,7 +209,7 @@ export function Timeline(props: TimelineProps): ReactElement {
                 createElement(
                   "ul",
                   { className: "timeline-retry-list" },
-                  props.timeline.retries.map(renderRetry),
+                  props.timeline.retries.map((retry) => renderRetry(retry, now)),
                 ),
               ),
           props.timeline.resourceGuard === undefined
@@ -297,10 +306,29 @@ function renderPlanItem(item: TimelineState["currentPlan"][number]): ReactElemen
   );
 }
 
-function renderRetry(retry: TimelineRetry): ReactElement {
+function renderRetry(retry: TimelineRetry, now: number): ReactElement {
+  const retryCount = `${retry.retryOrdinal}/${retry.maxRetries}`;
+  const isExhausted = retry.exhaustedReason !== undefined;
+  const remainingSeconds = Math.ceil(Math.max(0, (retry.nextAttemptAt ?? now) - now) / 1_000);
+  const text = isExhausted
+    ? `重试已耗尽：${retry.maxRetries}/${retry.maxRetries} 次重试后模型请求失败`
+    : retry.status === "FAILED"
+      ? `模型重试失败 ${retryCount}`
+      : retry.status === "PENDING"
+        ? `将在 ${remainingSeconds} 秒后重新连接 ${retryCount}`
+        : retry.status === "RUNNING"
+          ? `正在重新连接 ${retryCount}`
+          : `重试完成 ${retryCount}`;
+  const fallbackTransport = safeTransportId(retry.toTransportId);
   return createElement(
     "li",
-    { className: `timeline-retry timeline-retry--${retry.status.toLowerCase()}`, key: retry.id },
+    {
+      className: `timeline-retry timeline-retry--${retry.status.toLowerCase()}`,
+      key: retry.id,
+      ...(isExhausted || retry.status === "FAILED"
+        ? { role: "alert" }
+        : { role: "status", "aria-live": "polite" }),
+    },
     createElement(
       "span",
       { className: "timeline-entry-mark", "aria-hidden": "true" },
@@ -309,10 +337,18 @@ function renderRetry(retry: TimelineRetry): ReactElement {
     createElement(
       "span",
       { className: "timeline-retry-text" },
-      retry.started ? "正在重试模型调用" : "等待重试",
-      ` · 第 ${retry.attempt} 次`,
+      text,
+      fallbackTransport === undefined
+        ? null
+        : createElement("span", null, ` · 已切换备用传输 ${fallbackTransport}`),
     ),
   );
+}
+
+function safeTransportId(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const safe = value.replace(/[^A-Za-z0-9._-]/gu, "").slice(0, 64);
+  return safe.length === 0 ? undefined : safe;
 }
 
 function renderResourceGuard(guard: TimelineResourceGuard): ReactElement {

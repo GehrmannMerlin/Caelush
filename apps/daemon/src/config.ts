@@ -1,4 +1,9 @@
 import type { ClientModelSelection } from "@caelush/protocol";
+import {
+  DEFAULT_PROVIDER_NUDGE_AFTER_MS,
+  DEFAULT_PROVIDER_STREAM_IDLE_TIMEOUT_MS,
+  DEFAULT_PROVIDER_TEARDOWN_GRACE_MS,
+} from "@caelush/ai";
 import type { DaemonModelProviderConfig } from "./providers/model-canonicalizer.js";
 import {
   DEFAULT_SUBSCRIBER_QUEUE_POLICY,
@@ -11,7 +16,19 @@ export interface DaemonConfig {
   readonly port: number;
   readonly sseHeartbeatIntervalMs: number;
   readonly runEventQueuePolicy: SubscriberQueuePolicy;
+  readonly providerStreamPolicy: ProviderStreamPolicy;
 }
+
+/** Positive per-provider stream watchdog controls; partial host overrides keep production defaults. */
+export interface ProviderStreamPolicy {
+  readonly nudgeAfterMs: number;
+  readonly idleTimeoutMs: number;
+  readonly teardownGraceMs: number;
+}
+
+export type DaemonConfigOverrides = Omit<Partial<DaemonConfig>, "providerStreamPolicy"> & {
+  readonly providerStreamPolicy?: Partial<ProviderStreamPolicy>;
+};
 
 export interface DaemonProviderStartupConfiguration {
   readonly providers: readonly DaemonModelProviderConfig[];
@@ -23,12 +40,74 @@ export const DEFAULT_DAEMON_CONFIG: DaemonConfig = {
   port: 43120,
   sseHeartbeatIntervalMs: 15_000,
   runEventQueuePolicy: DEFAULT_SUBSCRIBER_QUEUE_POLICY,
+  providerStreamPolicy: Object.freeze({
+    nudgeAfterMs: DEFAULT_PROVIDER_NUDGE_AFTER_MS,
+    idleTimeoutMs: DEFAULT_PROVIDER_STREAM_IDLE_TIMEOUT_MS,
+    teardownGraceMs: DEFAULT_PROVIDER_TEARDOWN_GRACE_MS,
+  }),
 };
 
-export function createDaemonConfig(overrides: Partial<DaemonConfig> = {}): DaemonConfig {
-  const config = { ...DEFAULT_DAEMON_CONFIG, ...overrides };
+export function createDaemonConfig(overrides: DaemonConfigOverrides = {}): DaemonConfig {
+  const config: DaemonConfig = {
+    ...DEFAULT_DAEMON_CONFIG,
+    ...overrides,
+    providerStreamPolicy: createProviderStreamPolicy(overrides.providerStreamPolicy),
+  };
   validateSubscriberQueuePolicy(config.runEventQueuePolicy);
   return config;
+}
+
+export function readProviderStreamPolicy(
+  env: Readonly<Record<string, string | undefined>>,
+): ProviderStreamPolicy {
+  return createProviderStreamPolicy({
+    nudgeAfterMs: readPositiveSafeInteger(
+      env.CAELUSH_PROVIDER_NUDGE_AFTER_MS,
+      "CAELUSH_PROVIDER_NUDGE_AFTER_MS",
+      DEFAULT_DAEMON_CONFIG.providerStreamPolicy.nudgeAfterMs,
+    ),
+    idleTimeoutMs: readPositiveSafeInteger(
+      env.CAELUSH_PROVIDER_STREAM_IDLE_TIMEOUT_MS,
+      "CAELUSH_PROVIDER_STREAM_IDLE_TIMEOUT_MS",
+      DEFAULT_DAEMON_CONFIG.providerStreamPolicy.idleTimeoutMs,
+    ),
+    teardownGraceMs: readPositiveSafeInteger(
+      env.CAELUSH_PROVIDER_TEARDOWN_GRACE_MS,
+      "CAELUSH_PROVIDER_TEARDOWN_GRACE_MS",
+      DEFAULT_DAEMON_CONFIG.providerStreamPolicy.teardownGraceMs,
+    ),
+  });
+}
+
+function createProviderStreamPolicy(
+  overrides: Partial<ProviderStreamPolicy> = {},
+): ProviderStreamPolicy {
+  const policy = {
+    ...DEFAULT_DAEMON_CONFIG.providerStreamPolicy,
+    ...overrides,
+  };
+  for (const key of ["nudgeAfterMs", "idleTimeoutMs", "teardownGraceMs"] as const) {
+    if (!Number.isSafeInteger(policy[key]) || policy[key] <= 0) {
+      throw new RangeError(`providerStreamPolicy.${key} must be a finite positive safe integer.`);
+    }
+  }
+  if (policy.nudgeAfterMs >= policy.idleTimeoutMs) {
+    throw new RangeError("providerStreamPolicy.nudgeAfterMs must be less than idleTimeoutMs.");
+  }
+  return Object.freeze(policy);
+}
+
+function readPositiveSafeInteger(raw: string | undefined, key: string, fallback: number): number {
+  if (raw === undefined) return fallback;
+  const value = raw.trim();
+  if (!/^[0-9]+$/.test(value)) {
+    throw new Error(`${key} must be a finite positive safe integer in milliseconds.`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${key} must be a finite positive safe integer in milliseconds.`);
+  }
+  return parsed;
 }
 
 export function assertLoopbackDaemonHost(host: string): void {

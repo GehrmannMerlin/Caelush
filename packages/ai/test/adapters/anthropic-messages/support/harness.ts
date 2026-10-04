@@ -177,6 +177,7 @@ function emptyRequest(): CapturedRequest {
     body: {},
     signalAborted: () => false,
     hasSignal: () => false,
+    signal: undefined,
   };
 }
 

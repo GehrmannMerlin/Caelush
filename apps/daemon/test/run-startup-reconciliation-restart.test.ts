@@ -12,6 +12,7 @@ import {
   type AgentRun,
 } from "@caelush/protocol";
 import { RunController } from "@caelush/core";
+import { expandPermissionPreset } from "@caelush/security";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import { describe, expect, it } from "vitest";
 
@@ -75,6 +76,11 @@ function makeRun(
     runtime: { id: "local", kind: "fixture" },
     permissionProfile: "READ_ONLY",
     approvalPolicy: "ALWAYS_ASK",
+    securityPolicy: expandPermissionPreset({
+      presetId: "VIEW_ONLY",
+      expectedVersion: 1,
+      createdAt: new Date(options.createdAt).toISOString(),
+    }),
     limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 1000 },
     createdAt: createTimestampMs(options.createdAt),
     ...(options.status === undefined || options.status === "PENDING"

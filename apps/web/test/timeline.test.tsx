@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createEventId,
   createObservationId,
@@ -12,6 +12,7 @@ import {
   type PublicRunEvent,
 } from "@caelush/protocol";
 import {
+  createInitialLiveActivityState,
   createInitialTimelineState,
   reduceTimelineEvent,
   type TimelineState,
@@ -222,7 +223,10 @@ describe("Timeline", () => {
             {
               id: "retry-2",
               attempt: 2,
-              text: "Retry 2",
+              maxAttempts: 6,
+              retryOrdinal: 1,
+              maxRetries: 5,
+              text: "Retry 1/5",
               started: true,
               status: "RUNNING",
             },
@@ -240,11 +244,87 @@ describe("Timeline", () => {
     expect(html).toContain("扫描项目结构");
     expect(html).toContain("检查调用链");
     expect(html).toContain("重试活动");
-    expect(html).toContain("第 2 次");
+    expect(html).toContain("正在重新连接 1/5");
     expect(html).toContain("任务需要资源决策");
     expect(html).toContain("已重新规划：2 次");
     expect(html).toContain("本阶段已请求工具：17 次");
     expect(html).not.toContain("NO_PROGRESS");
+  });
+
+  it("renders retry countdown, safe transport switching, and an actionable exhausted alert", () => {
+    const now = new Date(2026, 9, 4, 12, 0, 0).getTime();
+    const runId = createRunId();
+    const liveActivity = {
+      ...createInitialLiveActivityState(runId),
+      modelWait: {
+        runId,
+        stepId: createStepId(),
+        phase: "RETRY_SCHEDULED" as const,
+        lastActivityAt: now - 5_000,
+        idleForMs: 5_000,
+        idleTimeoutMs: 300_000,
+        providerEventReceived: true,
+        attempt: 2,
+        maxAttempts: 6,
+        retryOrdinal: 1,
+        maxRetries: 5,
+        delayMs: 2_000,
+        nextAttemptAt: now + 2_000,
+      },
+    };
+    const scheduledTimeline = {
+      ...createInitialTimelineState(runId),
+      retries: [
+        {
+          id: "retry-active",
+          attempt: 2,
+          maxAttempts: 6,
+          retryOrdinal: 1,
+          maxRetries: 5,
+          text: "Retry 1/5",
+          started: false,
+          status: "PENDING" as const,
+          delayMs: 2_000,
+          nextAttemptAt: now + 2_000,
+          fromTransportId: "default",
+          toTransportId: "secondary",
+        },
+      ],
+    };
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      const scheduled = renderToStaticMarkup(
+        <Timeline timeline={scheduledTimeline} liveActivity={liveActivity} isActive />,
+      );
+      expect(scheduled).toContain("将在 2 秒后重新连接 1/5");
+      expect(scheduled).toContain("已切换备用传输 secondary");
+      expect(scheduled).not.toContain("https://");
+      expect(scheduled).toContain('role="status"');
+
+      const exhaustedTimeline = {
+        ...createInitialTimelineState(runId),
+        retries: [
+          {
+            ...scheduledTimeline.retries[0]!,
+            attempt: 6,
+            retryOrdinal: 5,
+            text: "Model retries exhausted · 5/5 retries used",
+            started: true,
+            status: "FAILED" as const,
+            reason: "LLM_TIMEOUT",
+            exhaustedReason: "ATTEMPTS_EXHAUSTED",
+          },
+        ],
+      };
+      const exhausted = renderToStaticMarkup(
+        <Timeline timeline={exhaustedTimeline} isActive={false} />,
+      );
+      expect(exhausted).toContain("重试已耗尽：5/5 次重试后模型请求失败");
+      expect(exhausted).toContain('role="alert"');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

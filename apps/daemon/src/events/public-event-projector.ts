@@ -96,6 +96,14 @@ export class DefaultPublicEventProjector implements PublicEventProjector {
           delta: terminalText(event.payload.delta, PUBLIC_EVENT_OUTPUT_BYTES),
         };
         break;
+      case "model.status":
+        payload = {
+          phase: event.payload.phase,
+          lastActivityAt: event.payload.lastActivityAt,
+          idleForMs: event.payload.idleForMs,
+          idleTimeoutMs: event.payload.idleTimeoutMs,
+        };
+        break;
       case "plan.updated":
         payload = {
           plan: event.payload.plan.slice(0, 32).map((item) => ({
@@ -320,6 +328,24 @@ export class DefaultPublicEventProjector implements PublicEventProjector {
         break;
       case "retry.started":
         payload = { attempt: event.payload.attempt, maxAttempts: event.payload.maxAttempts };
+        break;
+      case "retry.exhausted":
+        payload = {
+          attempt: event.payload.attempt,
+          maxAttempts: event.payload.maxAttempts,
+          retriesUsed: event.payload.retriesUsed,
+          maxRetries: event.payload.maxRetries,
+          errorCode: event.payload.errorCode,
+          reason: event.payload.reason,
+        };
+        break;
+      case "transport.fallback.selected":
+        payload = {
+          attempt: event.payload.attempt,
+          maxAttempts: event.payload.maxAttempts,
+          fromTransportId: event.payload.fromTransportId,
+          toTransportId: event.payload.toTransportId,
+        };
         break;
       case "error":
         payload = { error: projectError(event.payload.error) };

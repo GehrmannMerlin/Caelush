@@ -334,6 +334,8 @@ export function runAdapterConformance(options: AdapterConformanceOptions): void 
 
         expect(types.at(-1)).toBe("stream.error");
         expect(hanging.observedAbort()).toBe(true);
+        expect(hanging.observedBodyAbort()).toBe(true);
+        expect(types.filter((type) => type === "stream.error")).toHaveLength(1);
       });
 
       it("honours the gateway timeout", async () => {

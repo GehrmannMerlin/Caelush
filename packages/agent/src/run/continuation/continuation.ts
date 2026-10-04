@@ -106,6 +106,12 @@ export interface WaitingResourceContinuation {
 /** The durable retry error spellings, which are part of the persisted contract. */
 export type RetryErrorCode = "LLM_RATE_LIMIT" | "LLM_NETWORK" | "LLM_TIMEOUT";
 
+/** A bounded transport identity snapshot carried across a durable retry boundary. */
+export interface ModelTransportRecoveryCheckpoint {
+  readonly currentTransportId: string;
+  readonly attemptedTransportIds: readonly string[];
+}
+
 interface WaitingRetryContinuationBase {
   readonly type: "WAITING_RETRY";
   readonly runId: RunId;
@@ -120,6 +126,8 @@ interface WaitingRetryContinuationBase {
   readonly maxAttempts: number;
   readonly nextAttemptAt: TimestampMs;
   readonly errorCode: RetryErrorCode;
+  /** Optional for backward decoding of checkpoints written before transport recovery. */
+  readonly transport?: ModelTransportRecoveryCheckpoint | undefined;
 }
 
 export type WaitingRetryContinuation =

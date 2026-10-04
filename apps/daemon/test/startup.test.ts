@@ -7,7 +7,9 @@ import {
   createDaemonConfig,
   DEFAULT_DAEMON_CONFIG,
   readProviderConfiguration,
+  readProviderStreamPolicy,
 } from "../src/config.js";
+import { providerStreamPolicyDiagnostic } from "../src/diagnostics.js";
 
 describe("daemon command startup", () => {
   it("derives the default database path cross-platform", () => {
@@ -74,5 +76,63 @@ describe("daemon command startup", () => {
         },
       }),
     ).toThrow(/maxPendingBytes/);
+  });
+
+  it("uses finite, non-disableable Provider stream watchdog defaults", () => {
+    expect(DEFAULT_DAEMON_CONFIG.providerStreamPolicy).toEqual({
+      nudgeAfterMs: 30_000,
+      idleTimeoutMs: 300_000,
+      teardownGraceMs: 5_000,
+    });
+    for (const value of Object.values(DEFAULT_DAEMON_CONFIG.providerStreamPolicy)) {
+      expect(Number.isSafeInteger(value) && value > 0).toBe(true);
+    }
+    expect(
+      createDaemonConfig({ providerStreamPolicy: { idleTimeoutMs: 45_000 } }).providerStreamPolicy,
+    ).toEqual({ nudgeAfterMs: 30_000, idleTimeoutMs: 45_000, teardownGraceMs: 5_000 });
+  });
+
+  it.each([0, -1, Number.POSITIVE_INFINITY, Number.NaN, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects invalid idle watchdog timeout %s",
+    (idleTimeoutMs) => {
+      expect(() => createDaemonConfig({ providerStreamPolicy: { idleTimeoutMs } })).toThrow(
+        /idleTimeoutMs/,
+      );
+    },
+  );
+
+  it("rejects a nudge deadline that is not earlier than the idle deadline", () => {
+    expect(() =>
+      createDaemonConfig({
+        providerStreamPolicy: { nudgeAfterMs: 300_000, idleTimeoutMs: 300_000 },
+      }),
+    ).toThrow(/nudgeAfterMs must be less than idleTimeoutMs/);
+  });
+
+  it("reads bounded stream watchdog overrides from environment values", () => {
+    expect(readProviderStreamPolicy({})).toEqual(DEFAULT_DAEMON_CONFIG.providerStreamPolicy);
+    expect(
+      readProviderStreamPolicy({
+        CAELUSH_PROVIDER_NUDGE_AFTER_MS: "12000",
+        CAELUSH_PROVIDER_STREAM_IDLE_TIMEOUT_MS: "90000",
+        CAELUSH_PROVIDER_TEARDOWN_GRACE_MS: "2500",
+      }),
+    ).toEqual({ nudgeAfterMs: 12_000, idleTimeoutMs: 90_000, teardownGraceMs: 2_500 });
+    expect(() =>
+      readProviderStreamPolicy({ CAELUSH_PROVIDER_STREAM_IDLE_TIMEOUT_MS: "0" }),
+    ).toThrow(/CAELUSH_PROVIDER_STREAM_IDLE_TIMEOUT_MS/);
+    expect(() =>
+      readProviderStreamPolicy({ CAELUSH_PROVIDER_STREAM_IDLE_TIMEOUT_MS: "Infinity" }),
+    ).toThrow(/CAELUSH_PROVIDER_STREAM_IDLE_TIMEOUT_MS/);
+  });
+
+  it("projects only safe watchdog durations into startup diagnostics", () => {
+    expect(
+      providerStreamPolicyDiagnostic({
+        ...DEFAULT_DAEMON_CONFIG.providerStreamPolicy,
+        endpoint: "https://private.example/v1?token=secret",
+        apiKey: "secret",
+      } as typeof DEFAULT_DAEMON_CONFIG.providerStreamPolicy),
+    ).toEqual({ nudgeAfterMs: 30_000, idleTimeoutMs: 300_000, teardownGraceMs: 5_000 });
   });
 });

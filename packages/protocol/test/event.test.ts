@@ -300,12 +300,12 @@ describe("protocol AgentEvent", () => {
         payload: {
           attempt: 2,
           maxAttempts: 3,
-          delayMs: 1_000,
+          delayMs: 0,
           nextAttemptAt: 1_700_000_001_000,
           errorCode: "LLM_NETWORK",
         },
       }),
-    ).toMatchObject({ type: "retry.scheduled" });
+    ).toMatchObject({ type: "retry.scheduled", payload: { delayMs: 0 } });
     expect(
       eventSchema.parse({
         ...common,
@@ -314,6 +314,110 @@ describe("protocol AgentEvent", () => {
         payload: { attempt: 2, maxAttempts: 3 },
       }),
     ).toMatchObject({ type: "retry.started" });
+  });
+
+  it("parses bounded transport fallback selection without connection details", () => {
+    const eventSchema = getSchema("AgentEventSchema");
+    const createEventId = getFactory("createEventId");
+    const createRunId = getFactory("createRunId");
+    const createSessionId = getFactory("createSessionId");
+    if (
+      eventSchema === undefined ||
+      createEventId === undefined ||
+      createRunId === undefined ||
+      createSessionId === undefined
+    ) {
+      return;
+    }
+    const common = {
+      eventId: createEventId(),
+      schemaVersion: 1,
+      runId: createRunId(),
+      sessionId: createSessionId(),
+      timestamp: 1_700_000_000_000,
+      visibility: "USER_VISIBLE" as const,
+      durability: { kind: "DURABLE" as const, version: 1, sequence: 1 },
+      type: "transport.fallback.selected",
+    };
+    const payload = {
+      attempt: 2,
+      maxAttempts: 6,
+      fromTransportId: "default",
+      toTransportId: "backup",
+    };
+
+    expect(eventSchema.parse({ ...common, payload })).toMatchObject({
+      type: "transport.fallback.selected",
+      payload,
+    });
+    expect(eventSchema.safeParse({ ...common, payload: { ...payload, endpoint: "https://secret" } }).success).toBe(
+      false,
+    );
+    expect(
+      eventSchema.safeParse({ ...common, payload: { ...payload, toTransportId: "../backup" } })
+        .success,
+    ).toBe(false);
+  });
+
+  it("parses retry exhaustion with consistent bounded retry ordinals", () => {
+    const eventSchema = getSchema("AgentEventSchema");
+    const createEventId = getFactory("createEventId");
+    const createRunId = getFactory("createRunId");
+    const createSessionId = getFactory("createSessionId");
+    if (
+      eventSchema === undefined ||
+      createEventId === undefined ||
+      createRunId === undefined ||
+      createSessionId === undefined
+    ) {
+      return;
+    }
+    const common = {
+      eventId: createEventId(),
+      schemaVersion: 1,
+      runId: createRunId(),
+      sessionId: createSessionId(),
+      timestamp: 1_700_000_000_000,
+      visibility: "USER_VISIBLE" as const,
+      durability: { kind: "DURABLE" as const, version: 1, sequence: 1 },
+      type: "retry.exhausted",
+    };
+    const exhausted = {
+      attempt: 6,
+      maxAttempts: 6,
+      retriesUsed: 5,
+      maxRetries: 5,
+      errorCode: "LLM_RATE_LIMIT",
+      reason: "ATTEMPTS_EXHAUSTED",
+    };
+
+    expect(eventSchema.parse({ ...common, payload: exhausted })).toMatchObject({
+      type: "retry.exhausted",
+      payload: exhausted,
+    });
+    expect(eventSchema.safeParse({
+      ...common,
+      payload: { ...exhausted, retriesUsed: 4 },
+    }).success).toBe(false);
+    expect(eventSchema.safeParse({
+      ...common,
+      payload: { ...exhausted, maxRetries: 4 },
+    }).success).toBe(false);
+    expect(eventSchema.safeParse({
+      ...common,
+      payload: {
+        attempt: 10,
+        maxAttempts: 10,
+        retriesUsed: 9,
+        maxRetries: 9,
+        errorCode: "LLM_TIMEOUT",
+        reason: "RETRY_AFTER_EXCEEDS_POLICY",
+      },
+    }).success).toBe(true);
+    expect(eventSchema.safeParse({
+      ...common,
+      payload: { ...exhausted, message: "provider says wait" },
+    }).success).toBe(false);
   });
   it("parses a durable run.timed_out event with only deadline metadata", () => {
     const eventSchema = getSchema("AgentEventSchema");

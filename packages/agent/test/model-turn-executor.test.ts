@@ -81,9 +81,11 @@ function gateway(script: readonly AIStreamEvent[]): {
   callCount(): number;
   requests(): readonly AIModelRequest[];
   signals(): readonly AbortSignal[];
+  options(): readonly (Parameters<AIGateway["stream"]>[1])[];
 } {
   const requests: AIModelRequest[] = [];
   const signals: AbortSignal[] = [];
+  const streamOptions: (Parameters<AIGateway["stream"]>[1])[] = [];
   let calls = 0;
 
   const stub: AIGateway = {
@@ -93,6 +95,7 @@ function gateway(script: readonly AIStreamEvent[]): {
     ): Promise<AIStream> {
       calls += 1;
       requests.push(request);
+      streamOptions.push(options);
       if (options?.signal !== undefined) signals.push(options.signal);
       return Promise.resolve({
         callId: CALL_ID as never,
@@ -111,6 +114,7 @@ function gateway(script: readonly AIStreamEvent[]): {
     callCount: () => calls,
     requests: () => requests,
     signals: () => signals,
+    options: () => streamOptions,
   };
 }
 
@@ -199,6 +203,16 @@ describe("ModelTurnExecutor frozen result contract", () => {
 
     expect(fake.signals()[0]).toBe(controller.signal);
     expect(fake.requests()[0]).toBe(REQUEST);
+  });
+
+  it("forwards only the selected transport id as a gateway option", async () => {
+    const fake = gateway(textTurn("x"));
+    const executor = createModelTurnExecutor({ gateway: fake.gateway });
+
+    await executor.execute(input({ transportId: "backup" } as never));
+
+    expect(fake.options()[0]).toMatchObject({ transportId: "backup" });
+    expect(Object.keys(fake.options()[0] ?? {}).sort()).toEqual(["signal", "transportId"]);
   });
 
   it("never invokes the gateway twice for one execute", async () => {
@@ -303,6 +317,15 @@ describe("ModelTurnExecutor transient stream", () => {
   it("never publishes envelope, usage or tool-call lifecycle events", async () => {
     const fake = gateway([
       start(),
+      {
+        type: "stream.status",
+        payload: {
+          phase: "NO_RECENT_ACTIVITY",
+          lastActivityAt: 1_700_000_000_000,
+          idleForMs: 30_000,
+          idleTimeoutMs: 300_000,
+        },
+      },
       { type: "usage", payload: { inputTokens: 1 } },
       { type: "tool_call.start", payload: { toolCallId: "c1", toolName: "read_file" } },
       {
@@ -317,8 +340,9 @@ describe("ModelTurnExecutor transient stream", () => {
 
     await executor.execute(input({ streamSink: collected.sink }));
 
-    // stream.start, usage, tool_call.start, tool_call.completed and stream.finish are
-    // envelope, accounting and durable-lifecycle events. Only the transient deltas cross.
+    // stream.status is deliberately not part of the compatibility-only legacy sink;
+    // canonical model status is emitted only through RunEventNotifierPort.
+    // Envelope, accounting and durable-lifecycle events remain outside this sink too.
     expect(collected.events()).toEqual([
       { type: "text.delta", runId: IDENTITY.runId, stepId: TURN.stepId, text: "x" },
     ]);

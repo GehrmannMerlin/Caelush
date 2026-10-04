@@ -17,6 +17,16 @@ export interface AIProviderTransportOverride {
   readonly fetch?: typeof globalThis.fetch;
 }
 
+/** A preconfigured equivalent route for the same provider and API dialect. */
+export interface AIProviderTransportCandidate {
+  readonly id: string;
+  readonly endpoint: string;
+  readonly api: ApiId;
+  readonly compatibility?: JsonObject;
+  readonly transport?: AIProviderTransportOverride;
+  readonly rateLimitDomain?: string;
+}
+
 /**
  * One configured provider connection.
  *
@@ -35,6 +45,10 @@ export interface AIProviderBinding {
   readonly queryParams?: Readonly<Record<string, string>>;
   readonly compatibility?: JsonObject;
   readonly transport?: AIProviderTransportOverride;
+  /** Rate-limit identity of the source-compatible default transport. */
+  readonly rateLimitDomain?: string;
+  /** Additional routes; the legacy binding fields form the implicit `default` candidate. */
+  readonly transportCandidates?: readonly AIProviderTransportCandidate[];
 }
 
 /** The exact binding key set. An unknown field is a defect, not an extension. */
@@ -49,7 +63,21 @@ export const PROVIDER_BINDING_KEYS = [
   "queryParams",
   "compatibility",
   "transport",
+  "rateLimitDomain",
+  "transportCandidates",
 ] as const satisfies readonly (keyof AIProviderBinding)[];
+
+const PROVIDER_TRANSPORT_CANDIDATE_KEYS = [
+  "id",
+  "endpoint",
+  "api",
+  "compatibility",
+  "transport",
+  "rateLimitDomain",
+] as const;
+
+const MAX_TRANSPORT_CANDIDATES = 8;
+const TRANSPORT_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 
 /** Validate an endpoint: an absolute `http:` or `https:` URL. */
 export function assertProviderEndpoint(value: unknown, label: string): asserts value is string {
@@ -115,6 +143,95 @@ export function assertAIProviderBinding(value: unknown): asserts value is AIProv
   if (candidate.transport !== undefined) {
     assertTransportOverride(candidate.transport, candidate.id as string);
   }
+  if (candidate.rateLimitDomain !== undefined) {
+    assertTransportId(
+      candidate.rateLimitDomain,
+      `AI provider binding "${candidate.id as string}" rateLimitDomain`,
+    );
+  }
+  if (candidate.transportCandidates !== undefined) {
+    assertTransportCandidates(
+      candidate.transportCandidates,
+      candidate as unknown as AIProviderBinding,
+    );
+  }
+}
+
+function assertTransportCandidates(
+  value: unknown,
+  binding: AIProviderBinding,
+): asserts value is readonly AIProviderTransportCandidate[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_TRANSPORT_CANDIDATES) {
+    throw new TypeError(
+      `AI provider binding "${binding.id}" transportCandidates must contain 1 to ${MAX_TRANSPORT_CANDIDATES} candidates.`,
+    );
+  }
+
+  const seen = new Set<string>(["default"]);
+  for (const rawCandidate of value) {
+    if (typeof rawCandidate !== "object" || rawCandidate === null || Array.isArray(rawCandidate)) {
+      throw new TypeError(
+        `AI provider binding "${binding.id}" transport candidate must be an object.`,
+      );
+    }
+    const item = rawCandidate as Record<string, unknown>;
+    assertExactKeys(
+      item,
+      PROVIDER_TRANSPORT_CANDIDATE_KEYS,
+      `AI provider binding "${binding.id}" transport candidate`,
+    );
+    assertTransportId(item.id, `AI provider binding "${binding.id}" transport id`);
+    if (seen.has(item.id as string)) {
+      throw new TypeError(
+        `AI provider binding "${binding.id}" transport id "${item.id as string}" is duplicated or reserved.`,
+      );
+    }
+    seen.add(item.id as string);
+    assertProviderEndpoint(item.endpoint, `AI provider binding "${binding.id}" transport endpoint`);
+    if (typeof item.api !== "string" || !isValidApiId(item.api)) {
+      throw new TypeError(
+        `AI provider binding "${binding.id}" transport candidate api must be a valid api id, received ${describeValue(item.api)}.`,
+      );
+    }
+    if (item.compatibility !== undefined && !isJsonObject(item.compatibility)) {
+      throw new TypeError(
+        `AI provider binding "${binding.id}" transport compatibility must be a JSON object.`,
+      );
+    }
+    if (
+      canonicalJson(item.compatibility ?? binding.compatibility) !==
+      canonicalJson(binding.compatibility)
+    ) {
+      throw new TypeError(
+        `AI provider binding "${binding.id}" transport candidate must preserve provider compatibility.`,
+      );
+    }
+    if (item.transport !== undefined) assertTransportOverride(item.transport, binding.id);
+    if (item.rateLimitDomain !== undefined) {
+      assertTransportId(
+        item.rateLimitDomain,
+        `AI provider binding "${binding.id}" transport rateLimitDomain`,
+      );
+    }
+  }
+}
+
+function assertTransportId(value: unknown, label: string): asserts value is string {
+  if (typeof value !== "string" || !TRANSPORT_ID_PATTERN.test(value)) {
+    throw new TypeError(`${label} must be a lowercase safe id with at most 64 characters.`);
+  }
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === undefined) return "undefined";
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (typeof value === "object" && value !== null) {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([key, member]) => `${JSON.stringify(key)}:${canonicalJson(member)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function assertCredentialResolver(value: unknown, providerId: string): void {

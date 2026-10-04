@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AIError } from "../../../src/errors/ai-error.js";
 import { createOpenAICompatibleApiAdapter } from "../../../src/adapters/openai-compatible/index.js";
 import { modelDescriptor } from "../../support/fixtures.js";
 import {
   capturingTransport,
   finishChunk,
+  hangingTransport,
   openAIChunk,
   sseBody,
   sseResponse,
@@ -343,6 +344,21 @@ describe("OpenAI-compatible stream golden: finish and usage", () => {
 });
 
 describe("OpenAI-compatible stream golden: failures", () => {
+  it("settles a pending provider read on abort without an adapter retry", async () => {
+    const transport = hangingTransport();
+    const controller = new AbortController();
+    const pending = capture(createOpenAICompatibleApiAdapter(), transport, controller.signal);
+
+    await vi.waitFor(() => expect(transport.callCount()).toBe(1));
+    controller.abort();
+
+    const failure = await pending;
+    expect((failure as AIError).code).toBe("AI_ABORTED");
+    expect(transport.requests[0]?.hasSignal()).toBe(true);
+    expect(transport.observedBodyAbort()).toBe(true);
+    expect(transport.callCount()).toBe(1);
+  });
+
   it("normalizes a network failure as AI_NETWORK", async () => {
     const transport = capturingTransport(() => Promise.reject(new Error("socket closed")));
     const failure = await capture(createOpenAICompatibleApiAdapter(), transport);

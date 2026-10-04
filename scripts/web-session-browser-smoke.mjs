@@ -32,6 +32,7 @@ import { createWorkspaceRef, startDaemon } from "../apps/daemon/dist/index.js";
 
 const FIXTURE_PROVIDER_ID = "browser-fixture";
 const FIXTURE_MODEL_ID = "browser-fixture-model";
+let providerRecoveryAttempts = 0;
 
 /**
  * The sandbox Runner as a host with a working packaged artifact reports it.
@@ -168,11 +169,29 @@ async function handleModelRequest(request, response) {
     );
     return;
   }
+  if (promptText.includes("observe Provider recovery")) {
+    providerRecoveryAttempts += 1;
+    if (providerRecoveryAttempts === 1) {
+      holdSseFor(
+        response,
+        5_000,
+        [],
+        [chunk({ role: "assistant", content: "failed-attempt fragment" }, null)],
+      );
+    } else {
+      holdSseFor(response, 700, textChunks("Recovered after Provider recovery."));
+    }
+    return;
+  }
   if (promptText.includes("read browser fixture") && !hasToolResult) {
     writeSse(
       response,
       toolCallChunks("read_file", { path: "fixture.txt" }, "browser-read-fixture"),
     );
+    return;
+  }
+  if (promptText.includes("read browser fixture") && hasToolResult) {
+    writeSse(response, textChunks("# Browser report\n\n## Overview\n\nVerified browser result."));
     return;
   }
   if (promptText.includes("apply browser patch") && !hasToolResult) {
@@ -247,6 +266,20 @@ function writeSse(response, chunks) {
   response.end("data: [DONE]\n\n");
 }
 
+function holdSseFor(response, delayMs, chunks, initialChunks = []) {
+  response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
+  response.flushHeaders();
+  let timer;
+  const stopTimer = () => globalThis.clearTimeout(timer);
+  response.once("close", stopTimer);
+  for (const chunk of initialChunks) response.write(`data: ${JSON.stringify(chunk)}\n\n`);
+  timer = globalThis.setTimeout(() => {
+    if (response.destroyed) return;
+    for (const chunk of chunks) response.write(`data: ${JSON.stringify(chunk)}\n\n`);
+    response.end("data: [DONE]\n\n");
+  }, delayMs);
+}
+
 /** One chunk. `choices` is required by the provider schema even on a usage-only terminal chunk. */
 function chunk(delta, finishReason, usage) {
   return {
@@ -304,6 +337,11 @@ try {
     databasePath: join(directory, "caelush.db"),
     port: 0,
     sseHeartbeatIntervalMs: 250,
+    providerStreamPolicy: {
+      nudgeAfterMs: 1_000,
+      idleTimeoutMs: 1_500,
+      teardownGraceMs: 300,
+    },
     providers: [
       {
         provider: FIXTURE_PROVIDER_ID,

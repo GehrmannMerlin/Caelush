@@ -1,4 +1,4 @@
-import type { PublicRunEvent, RunId } from "@caelush/protocol";
+import type { PublicRunEvent, RunId, StepId } from "@caelush/protocol";
 
 export type LiveActivityKind =
   | "MODEL_TEXT"
@@ -26,6 +26,8 @@ export interface LiveActivity {
 export interface LiveActivityState {
   readonly runId?: RunId;
   readonly activities: readonly LiveActivity[];
+  readonly modelWait?: ModelWaitState;
+  readonly settledModelStepIds: readonly StepId[];
   readonly seenEventIds: readonly string[];
   readonly lastStreamSequences: Readonly<Record<string, number>>;
   readonly lastDurableSequence: number;
@@ -33,6 +35,41 @@ export interface LiveActivityState {
   readonly maxActivities: number;
   readonly maxTextBytes: number;
   readonly maxSeenEventIds: number;
+}
+
+export type ModelWaitPhase =
+  | "WAITING_PROVIDER"
+  | "RECEIVING_PROVIDER_DATA"
+  | "NO_RECENT_ACTIVITY"
+  | "CANCELLING_IDLE_STREAM"
+  | "ATTEMPT_FAILED"
+  | "RETRY_SCHEDULED"
+  | "RETRYING"
+  | "FALLBACK_SELECTED"
+  | "RETRY_EXHAUSTED";
+
+/**
+ * Bounded, public Provider progress for the active Run. It records application-level Provider
+ * activity only; it deliberately has no browser or transport-health assertion.
+ */
+export interface ModelWaitState {
+  readonly runId: RunId;
+  readonly stepId?: StepId;
+  readonly phase: ModelWaitPhase;
+  readonly lastActivityAt: number;
+  readonly idleForMs: number;
+  readonly providerEventReceived: boolean;
+  readonly idleTimeoutMs?: number;
+  readonly attempt?: number;
+  readonly maxAttempts?: number;
+  readonly retryOrdinal?: number;
+  readonly maxRetries?: number;
+  readonly delayMs?: number;
+  readonly nextAttemptAt?: number;
+  readonly errorCode?: string;
+  readonly exhaustionReason?: string;
+  readonly fromTransportId?: string;
+  readonly toTransportId?: string;
 }
 
 type OrderedLiveEvent = PublicRunEvent & {
@@ -61,6 +98,7 @@ export function createInitialLiveActivityState(runId?: RunId): LiveActivityState
   return {
     ...(runId === undefined ? {} : { runId }),
     activities: [],
+    settledModelStepIds: [],
     seenEventIds: [],
     lastStreamSequences: {},
     lastDurableSequence: 0,
@@ -86,6 +124,14 @@ export function reduceLiveActivityEvent(
   if (state.seenEventIds.includes(event.eventId)) return state;
 
   if (isTransientLiveEvent(event)) {
+    if (state.terminal) return state;
+    if (
+      isModelStreamEvent(event) &&
+      event.stepId !== undefined &&
+      state.settledModelStepIds.includes(event.stepId)
+    ) {
+      return remember(state, event.eventId);
+    }
     if (
       event.durability.deliveryClass === "ORDERED" &&
       event.durability.streamSequence <=
@@ -94,7 +140,10 @@ export function reduceLiveActivityEvent(
       return state;
     }
     const activity = activityFromTransient(event);
-    if (activity === null) return remember(state, event.eventId);
+    if (activity === null) {
+      const remembered = remember(state, event.eventId);
+      return withModelWait(remembered, updateModelWaitFromTransient(state, event));
+    }
     const existing = state.activities.find((item) => item.id === activity.id);
     const nextActivity: LiveActivity = {
       ...activity,
@@ -112,7 +161,7 @@ export function reduceLiveActivityEvent(
       ...state.activities.filter((item) => item.id !== activity.id),
       nextActivity,
     ].slice(-state.maxActivities);
-    return {
+    const next = {
       ...remember(state, event.eventId),
       activities,
       lastStreamSequences:
@@ -123,18 +172,200 @@ export function reduceLiveActivityEvent(
             }
           : state.lastStreamSequences,
     };
+    return withModelWait(next, updateModelWaitFromTransient(state, event));
   }
 
   if (!isDurableLiveEvent(event)) return remember(state, event.eventId);
   const sequence = event.durability.sequence;
   if (sequence <= state.lastDurableSequence) return state;
   const settled = settleForDurableEvent(state.activities, event);
-  return {
+  const next = {
     ...remember(state, event.eventId),
     activities: settled.activities,
     lastDurableSequence: sequence,
     terminal: settled.terminal || state.terminal,
   };
+  return reduceModelWaitFromDurable(next, event, settled.terminal);
+}
+
+const PROVIDER_WAIT_PHASES: ReadonlySet<ModelWaitPhase> = new Set([
+  "WAITING_PROVIDER",
+  "RECEIVING_PROVIDER_DATA",
+  "NO_RECENT_ACTIVITY",
+  "RETRYING",
+]);
+
+function updateModelWaitFromTransient(
+  state: LiveActivityState,
+  event: TransientLiveEvent,
+): ModelWaitState | undefined {
+  const current = state.modelWait;
+  if (current === undefined || !PROVIDER_WAIT_PHASES.has(current.phase)) return current;
+  if (event.stepId !== current.stepId) return current;
+  if (event.type === "model.status") {
+    return {
+      ...current,
+      phase: event.payload.phase,
+      lastActivityAt: event.payload.lastActivityAt,
+      idleForMs: event.payload.idleForMs,
+      idleTimeoutMs: event.payload.idleTimeoutMs,
+      providerEventReceived:
+        current.providerEventReceived || event.payload.phase === "RECEIVING_PROVIDER_DATA",
+    };
+  }
+  if (
+    event.type === "model.text.delta" ||
+    event.type === "model.reasoning_summary.delta" ||
+    event.type === "model.tool_call.delta"
+  ) {
+    return {
+      ...current,
+      phase: "RECEIVING_PROVIDER_DATA",
+      lastActivityAt: event.timestamp,
+      idleForMs: 0,
+      providerEventReceived: true,
+    };
+  }
+  return current;
+}
+
+function reduceModelWaitFromDurable(
+  state: LiveActivityState,
+  event: DurableLiveEvent,
+  terminal: boolean,
+): LiveActivityState {
+  if (terminal) return withModelWait(state, undefined);
+  let modelWait = state.modelWait;
+  let settledModelStepIds = state.settledModelStepIds;
+  switch (event.type) {
+    case "llm.started":
+      if (event.stepId === undefined) break;
+      settledModelStepIds = settledModelStepIds.filter((stepId) => stepId !== event.stepId);
+      modelWait =
+        modelWait?.runId === event.runId &&
+        modelWait.stepId === event.stepId &&
+        modelWait.phase === "RETRYING"
+          ? {
+              ...modelWait,
+              lastActivityAt: event.timestamp,
+              idleForMs: 0,
+              providerEventReceived: false,
+            }
+          : {
+              runId: event.runId,
+              stepId: event.stepId,
+              phase: "WAITING_PROVIDER",
+              lastActivityAt: event.timestamp,
+              idleForMs: 0,
+              providerEventReceived: false,
+            };
+      break;
+    case "llm.completed":
+      if (event.stepId !== undefined) {
+        settledModelStepIds = rememberSettledStep(settledModelStepIds, event.stepId);
+        if (modelWait?.stepId === event.stepId) modelWait = undefined;
+      }
+      break;
+    case "llm.failed":
+      if (event.stepId !== undefined) {
+        settledModelStepIds = rememberSettledStep(settledModelStepIds, event.stepId);
+        if (modelWait?.stepId === event.stepId)
+          modelWait = { ...modelWait, phase: "ATTEMPT_FAILED" };
+      }
+      break;
+    case "retry.scheduled":
+      modelWait = retryWaitState(modelWait, event, "RETRY_SCHEDULED");
+      break;
+    case "retry.started":
+      modelWait = retryWaitState(modelWait, event, "RETRYING");
+      break;
+    case "transport.fallback.selected":
+      modelWait = {
+        ...retryWaitState(modelWait, event, "FALLBACK_SELECTED"),
+        fromTransportId: event.payload.fromTransportId,
+        toTransportId: event.payload.toTransportId,
+      };
+      break;
+    case "retry.exhausted":
+      modelWait = {
+        ...retryWaitState(modelWait, event, "RETRY_EXHAUSTED"),
+        errorCode: event.payload.errorCode,
+        exhaustionReason: event.payload.reason,
+      };
+      break;
+    default:
+      break;
+  }
+  return {
+    ...withModelWait(state, modelWait),
+    settledModelStepIds,
+  };
+}
+
+function retryWaitState(
+  current: ModelWaitState | undefined,
+  event: Extract<
+    DurableLiveEvent,
+    {
+      type: "retry.scheduled" | "retry.started" | "transport.fallback.selected" | "retry.exhausted";
+    }
+  >,
+  phase: ModelWaitPhase,
+): ModelWaitState {
+  return {
+    runId: event.runId,
+    ...(event.stepId === undefined
+      ? current?.stepId === undefined
+        ? {}
+        : { stepId: current.stepId }
+      : { stepId: event.stepId }),
+    phase,
+    lastActivityAt:
+      phase === "RETRYING" ? event.timestamp : (current?.lastActivityAt ?? event.timestamp),
+    idleForMs: phase === "RETRYING" ? 0 : (current?.idleForMs ?? 0),
+    providerEventReceived: phase === "RETRYING" ? false : (current?.providerEventReceived ?? false),
+    ...(current?.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: current.idleTimeoutMs }),
+    attempt: event.payload.attempt,
+    maxAttempts: event.payload.maxAttempts,
+    retryOrdinal: event.payload.attempt - 1,
+    maxRetries: event.payload.maxAttempts - 1,
+    ...(event.type === "retry.scheduled"
+      ? {
+          delayMs: event.payload.delayMs,
+          nextAttemptAt: event.payload.nextAttemptAt,
+          errorCode: event.payload.errorCode,
+        }
+      : {}),
+    ...(event.type === "retry.exhausted"
+      ? { errorCode: event.payload.errorCode, exhaustionReason: event.payload.reason }
+      : {}),
+  };
+}
+
+function rememberSettledStep(steps: readonly StepId[], stepId: StepId): readonly StepId[] {
+  return [...steps.filter((current) => current !== stepId), stepId].slice(-64);
+}
+
+function withModelWait(
+  state: LiveActivityState,
+  modelWait: ModelWaitState | undefined,
+): LiveActivityState {
+  if (modelWait === undefined) {
+    if (state.modelWait === undefined) return state;
+    const next = { ...state };
+    delete next.modelWait;
+    return next;
+  }
+  return { ...state, modelWait };
+}
+
+function isModelStreamEvent(event: TransientLiveEvent): boolean {
+  return (
+    event.type === "model.status" ||
+    event.type === "model.text.delta" ||
+    event.type === "model.reasoning_summary.delta" ||
+    event.type === "model.tool_call.delta"
+  );
 }
 
 /**

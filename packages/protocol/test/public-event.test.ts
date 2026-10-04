@@ -73,4 +73,58 @@ describe("PublicRunEvent protocol contract", () => {
       ).success,
     ).toBe(false);
   });
+
+  it("publishes bounded retry exhaustion metadata without Provider prose", () => {
+    const payload = {
+      attempt: 6,
+      maxAttempts: 6,
+      retriesUsed: 5,
+      maxRetries: 5,
+      errorCode: "LLM_TIMEOUT",
+      reason: "ATTEMPTS_EXHAUSTED",
+    };
+    const exhausted = event({
+      type: "retry.exhausted",
+      payload,
+    });
+
+    expect(PublicRunEventSchema.parse(exhausted)).toMatchObject({
+      type: "retry.exhausted",
+      payload: { retriesUsed: 5, maxRetries: 5 },
+    });
+    expect(
+      PublicRunEventSchema.safeParse(
+        event({
+          type: "retry.exhausted",
+          payload: { ...payload, details: "private provider body" },
+        }),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("publishes only safe transport fallback identities", () => {
+    const payload = {
+      attempt: 2,
+      maxAttempts: 6,
+      fromTransportId: "default",
+      toTransportId: "backup",
+    };
+    const fallback = event({
+      type: "transport.fallback.selected",
+      payload,
+    });
+
+    expect(PublicRunEventSchema.parse(fallback)).toMatchObject({
+      type: "transport.fallback.selected",
+      payload: { fromTransportId: "default", toTransportId: "backup" },
+    });
+    expect(
+      PublicRunEventSchema.safeParse(
+        event({
+          type: "transport.fallback.selected",
+          payload: { ...payload, endpoint: "https://private.example" },
+        }),
+      ).success,
+    ).toBe(false);
+  });
 });

@@ -16,6 +16,8 @@ import {
 } from "@caelush/core";
 import { createLocalProjectInspector } from "@caelush/coding-agent";
 import { createAIError, createAISubsystem } from "@caelush/ai";
+import type { ProviderStreamPolicy } from "./config.js";
+import { createModelTransportRecoveryPort } from "./providers/model-transport-recovery.js";
 import {
   createDaemonApiAdapters,
   toModelDescriptorSources,
@@ -284,6 +286,8 @@ export interface DaemonCompositionOptions {
   readonly eventQueuePolicy?: SubscriberQueuePolicy;
   readonly providers?: readonly DaemonModelProviderConfig[];
   readonly defaultModel?: ClientModelSelection;
+  /** Finite Gateway watchdog overrides; omitted values use production defaults. */
+  readonly providerStreamPolicy?: Partial<ProviderStreamPolicy>;
   /** Environment is read on every credential resolution; it is never serialized. */
   readonly environment?: Readonly<Record<string, string | undefined>>;
   /** Optional host/test authority; production composes the SQLite-backed authority below. */
@@ -504,7 +508,20 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       ...(options.providerBindings ?? []),
     ],
     adapters: [...createDaemonApiAdapters(), ...(options.adapterOverrides ?? [])],
+    ...(options.providerStreamPolicy?.nudgeAfterMs === undefined
+      ? {}
+      : { defaultNudgeAfterMs: options.providerStreamPolicy.nudgeAfterMs }),
+    ...(options.providerStreamPolicy?.idleTimeoutMs === undefined
+      ? {}
+      : { defaultIdleTimeoutMs: options.providerStreamPolicy.idleTimeoutMs }),
+    ...(options.providerStreamPolicy?.teardownGraceMs === undefined
+      ? {}
+      : { defaultTeardownGraceMs: options.providerStreamPolicy.teardownGraceMs }),
   });
+  const modelTransportRecovery = createModelTransportRecoveryPort(
+    ai.providers,
+    ({ providerId, modelId }) => ai.models.resolve({ provider: providerId, model: modelId }).api,
+  );
   const modelDirectory = new RuntimeModelDirectoryService({
     presets: providerPresets,
     credentials: credentialAuthority,
@@ -1013,6 +1030,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
   const verificationGit = createRunBoundVerificationGit(runtime);
   const controller = new RunController({
     agentExecution,
+    modelTransportRecovery,
     executionStore: options.storage.execution,
     completionStore: options.storage.execution,
     events: eventNotifier,

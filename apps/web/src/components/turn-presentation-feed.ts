@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import caelushLogo from "../assets/logo/caelush-logo.png";
 import { AssistantMarkdown } from "./assistant-markdown.js";
+import { ModelWaitNotice, usePresentationNow } from "./model-wait-presentation.js";
 
 export interface TurnPresentationFeedProps {
   readonly presentation: SessionTurnPresentationResponse;
@@ -32,6 +33,9 @@ export interface TurnPresentationFeedProps {
  */
 export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactElement {
   const liveActivities = props.liveActivity?.activities ?? [];
+  const isModelThinking = (props.timeline?.activeLlm.length ?? 0) > 0;
+  const modelWait = props.liveActivity?.modelWait;
+  const now = usePresentationNow(isModelThinking || modelWait !== undefined);
   const durableAssistantItems = props.presentation.items.filter(
     (item) => item.kind === "ASSISTANT",
   );
@@ -74,7 +78,11 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
   const userItems = props.presentation.items.filter((item) => item.kind === "USER");
   const finalItems = [...finalAnswers, ...summaries];
   const hasProcess =
-    processItems.length > 0 || processActivities.length > 0 || props.isActive === true;
+    processItems.length > 0 ||
+    processActivities.length > 0 ||
+    modelWait !== undefined ||
+    isModelThinking ||
+    props.isActive === true;
   const regionRef = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(props.isActive === true);
   const wasActive = useRef(props.isActive === true);
@@ -140,7 +148,10 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
           createElement(
             "div",
             { className: "turn-presentation-body", ref: regionRef, tabIndex: 0 },
-            processItems.length === 0 && processActivities.length === 0
+            processItems.length === 0 &&
+              processActivities.length === 0 &&
+              !isModelThinking &&
+              modelWait === undefined
               ? createElement("p", { className: "turn-presentation-empty" }, "正在准备任务活动……")
               : null,
             processItems.map((item) => renderItem(item)),
@@ -172,6 +183,11 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
                     ),
                   ),
                 ),
+            createElement(ModelWaitNotice, {
+              ...(modelWait === undefined ? {} : { modelWait }),
+              isModelActive: isModelThinking,
+              now,
+            }),
             props.timeline?.resourceGuard === undefined
               ? null
               : createElement(

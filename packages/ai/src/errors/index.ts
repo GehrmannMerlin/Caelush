@@ -9,6 +9,8 @@ export type { AIErrorCode } from "./ai-error-code.js";
 export { AIError, createAIError, isAIError } from "./ai-error.js";
 export type { AIErrorContext } from "./ai-error.js";
 
+export { parseRetryAfterMs } from "./retry-after.js";
+
 export { createAIErrorSanitizer, redactSecrets, REDACTED } from "./error-sanitizer.js";
 export type { AIErrorSanitizer, CreateAIErrorSanitizerOptions } from "./error-sanitizer.js";
 

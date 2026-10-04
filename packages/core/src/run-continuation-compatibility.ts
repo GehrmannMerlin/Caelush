@@ -88,6 +88,7 @@ export function toDurableContinuation(checkpoint: AgentContinuation): DurableCon
             maxAttempts: checkpoint.maxAttempts,
             nextAttemptAt: checkpoint.nextAttemptAt,
             errorCode: checkpoint.errorCode,
+            ...(checkpoint.transport === undefined ? {} : { transport: checkpoint.transport }),
           }
         : {
             type: "WAITING_RETRY",
@@ -98,6 +99,7 @@ export function toDurableContinuation(checkpoint: AgentContinuation): DurableCon
             maxAttempts: checkpoint.maxAttempts,
             nextAttemptAt: checkpoint.nextAttemptAt,
             errorCode: checkpoint.errorCode,
+            ...(checkpoint.transport === undefined ? {} : { transport: checkpoint.transport }),
             pendingDecision: checkpoint.pendingDecision,
             receivedResults: checkpoint.receivedResults.map(asTool),
             ...(checkpoint.sourceStepId === undefined
@@ -185,6 +187,7 @@ export function toAgentContinuation(checkpoint: DurableContinuation): AgentConti
             maxAttempts: checkpoint.maxAttempts,
             nextAttemptAt: checkpoint.nextAttemptAt,
             errorCode: checkpoint.errorCode,
+            ...(checkpoint.transport === undefined ? {} : { transport: checkpoint.transport }),
           }
         : {
             type: "WAITING_RETRY",
@@ -195,6 +198,7 @@ export function toAgentContinuation(checkpoint: DurableContinuation): AgentConti
             maxAttempts: checkpoint.maxAttempts,
             nextAttemptAt: checkpoint.nextAttemptAt,
             errorCode: checkpoint.errorCode,
+            ...(checkpoint.transport === undefined ? {} : { transport: checkpoint.transport }),
             pendingDecision: checkpoint.pendingDecision,
             receivedResults: checkpoint.receivedResults.map(asTool),
             ...(checkpoint.sourceStepId === undefined

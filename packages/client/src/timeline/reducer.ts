@@ -63,9 +63,13 @@ export function flushTimelineForTerminal(
     next = appendSettled(next, {
       id: `retry:${retry.id}`,
       kind: "RETRY",
-      title: "Retry",
-      text: `Retry ${retry.attempt} · Interrupted by ${status}.`,
-      status: "INTERRUPTED",
+      title: retry.status === "FAILED" ? "Retry exhausted" : "Retry",
+      text:
+        retry.status === "FAILED"
+          ? retry.text
+          : `Retry ${retry.retryOrdinal}/${retry.maxRetries} · Interrupted by ${status}.`,
+      status:
+        retry.status === "FAILED" || retry.status === "COMPLETED" ? retry.status : "INTERRUPTED",
     });
   for (const group of state.verification)
     next = appendSettled(next, {
@@ -106,21 +110,21 @@ function reduceRegisteredEvent(state: TimelineState, event: PublicRunEvent): Tim
         ...(event.stepId === undefined ? {} : { stepId: event.stepId }),
       });
     case "llm.completed":
-      return settleActive(
-        state,
-        "activeLlm",
-        llmId(event),
+      return settleActiveRetry(
+        settleActive(
+          state,
+          "activeLlm",
+          llmId(event),
+          "COMPLETED",
+          `${event.payload.model.provider}/${event.payload.model.model}`,
+          { usage: publicUsage(event.payload.usage) },
+        ),
         "COMPLETED",
-        `${event.payload.model.provider}/${event.payload.model.model}`,
-        { usage: publicUsage(event.payload.usage) },
       );
     case "llm.failed":
-      return settleActive(
-        state,
-        "activeLlm",
-        llmId(event),
+      return settleActiveRetry(
+        settleActive(state, "activeLlm", llmId(event), "FAILED", safeError(event.payload.error)),
         "FAILED",
-        safeError(event.payload.error),
       );
     case "tool.requested":
       return upsertActive(state, "activeTools", {
@@ -230,6 +234,10 @@ function reduceRegisteredEvent(state: TimelineState, event: PublicRunEvent): Tim
       return upsertRetry(state, event, "PENDING");
     case "retry.started":
       return upsertRetry(state, event, "RUNNING");
+    case "transport.fallback.selected":
+      return upsertFallback(state, event);
+    case "retry.exhausted":
+      return upsertExhaustedRetry(state, event);
     case "verification.planned":
       return withVerificationPlan(
         state,
@@ -544,14 +552,42 @@ function upsertRetry(
   event: Extract<PublicRunEvent, { type: "retry.scheduled" | "retry.started" }>,
   status: TimelineEntryStatus,
 ): TimelineState {
-  const id = `${event.stepId ?? "run"}:${event.payload.attempt}`;
+  const pending =
+    status === "RUNNING"
+      ? state.retries.find(
+          (retry) =>
+            retry.status === "PENDING" &&
+            retry.attempt === event.payload.attempt &&
+            retry.maxAttempts === event.payload.maxAttempts,
+        )
+      : undefined;
+  const id = pending?.id ?? `${event.stepId ?? "run"}:${event.payload.attempt}`;
+  const existing = state.retries.find((retry) => retry.id === id) ?? pending;
+  const retryOrdinal = event.payload.attempt - 1;
+  const maxRetries = event.payload.maxAttempts - 1;
   const retry: TimelineRetry = {
     id,
     attempt: event.payload.attempt,
-    text: `Retry ${event.payload.attempt}`,
+    maxAttempts: event.payload.maxAttempts,
+    retryOrdinal,
+    maxRetries,
+    text: `Retry ${retryOrdinal}/${maxRetries}`,
     started: status === "RUNNING",
     status,
+    ...(existing?.exhaustedReason === undefined
+      ? {}
+      : { exhaustedReason: existing.exhaustedReason }),
+    ...(existing?.delayMs === undefined ? {} : { delayMs: existing.delayMs }),
+    ...(existing?.nextAttemptAt === undefined ? {} : { nextAttemptAt: existing.nextAttemptAt }),
+    ...(existing?.fromTransportId === undefined
+      ? {}
+      : { fromTransportId: existing.fromTransportId }),
+    ...(existing?.toTransportId === undefined ? {} : { toTransportId: existing.toTransportId }),
+    ...(existing?.reason === undefined ? {} : { reason: existing.reason }),
     ...("errorCode" in event.payload ? { reason: bound(event.payload.errorCode, state) } : {}),
+    ...(event.type === "retry.scheduled"
+      ? { delayMs: event.payload.delayMs, nextAttemptAt: event.payload.nextAttemptAt }
+      : {}),
   };
   return {
     ...state,
@@ -720,6 +756,88 @@ function isSafeVerificationAggregate(total: number, failed: number, error: numbe
     error >= 0 &&
     failed + error <= total
   );
+}
+
+function settleActiveRetry(state: TimelineState, status: "COMPLETED" | "FAILED"): TimelineState {
+  let changed = false;
+  const retries = state.retries.map((retry) => {
+    if (retry.status !== "RUNNING") return retry;
+    changed = true;
+    return {
+      ...retry,
+      status,
+      text: status === "COMPLETED" ? `${retry.text} · Completed` : `${retry.text} · Attempt failed`,
+    };
+  });
+  return changed ? { ...state, retries } : state;
+}
+
+function upsertFallback(
+  state: TimelineState,
+  event: Extract<PublicRunEvent, { type: "transport.fallback.selected" }>,
+): TimelineState {
+  const candidate = state.retries.find(
+    (retry) =>
+      retry.attempt === event.payload.attempt &&
+      retry.maxAttempts === event.payload.maxAttempts &&
+      (retry.status === "PENDING" || retry.status === "RUNNING"),
+  );
+  const id = candidate?.id ?? `${event.stepId ?? "run"}:${event.payload.attempt}`;
+  const retryOrdinal = event.payload.attempt - 1;
+  const maxRetries = event.payload.maxAttempts - 1;
+  const retry: TimelineRetry = {
+    id,
+    attempt: event.payload.attempt,
+    maxAttempts: event.payload.maxAttempts,
+    retryOrdinal,
+    maxRetries,
+    text: `Retry ${retryOrdinal}/${maxRetries}`,
+    started: candidate?.started ?? false,
+    status: candidate?.status ?? "PENDING",
+    ...(candidate?.reason === undefined ? {} : { reason: candidate.reason }),
+    ...(candidate?.delayMs === undefined ? {} : { delayMs: candidate.delayMs }),
+    ...(candidate?.nextAttemptAt === undefined ? {} : { nextAttemptAt: candidate.nextAttemptAt }),
+    fromTransportId: event.payload.fromTransportId,
+    toTransportId: event.payload.toTransportId,
+  };
+  return {
+    ...state,
+    retries: upsert(state.retries, retry, state.limits.maxActiveEntries),
+  };
+}
+
+function upsertExhaustedRetry(
+  state: TimelineState,
+  event: Extract<PublicRunEvent, { type: "retry.exhausted" }>,
+): TimelineState {
+  const candidate = state.retries.find(
+    (retry) =>
+      retry.attempt === event.payload.attempt && retry.maxAttempts === event.payload.maxAttempts,
+  );
+  const retryOrdinal = event.payload.attempt - 1;
+  const maxRetries = event.payload.maxAttempts - 1;
+  const retry: TimelineRetry = {
+    id: candidate?.id ?? `${event.stepId ?? "run"}:${event.payload.attempt}`,
+    attempt: event.payload.attempt,
+    maxAttempts: event.payload.maxAttempts,
+    retryOrdinal,
+    maxRetries,
+    text: `Model retries exhausted · ${retryOrdinal}/${maxRetries} retries used (${event.payload.attempt}/${event.payload.maxAttempts} attempts) · ${event.payload.errorCode}`,
+    started: true,
+    status: "FAILED",
+    reason: bound(event.payload.errorCode, state),
+    exhaustedReason: bound(event.payload.reason, state),
+    ...(candidate?.delayMs === undefined ? {} : { delayMs: candidate.delayMs }),
+    ...(candidate?.nextAttemptAt === undefined ? {} : { nextAttemptAt: candidate.nextAttemptAt }),
+    ...(candidate?.fromTransportId === undefined
+      ? {}
+      : { fromTransportId: candidate.fromTransportId }),
+    ...(candidate?.toTransportId === undefined ? {} : { toTransportId: candidate.toTransportId }),
+  };
+  return {
+    ...state,
+    retries: upsert(state.retries, retry, state.limits.maxActiveEntries),
+  };
 }
 function appendSettled(state: TimelineState, entry: TimelineEntry): TimelineState {
   let settled = [

@@ -171,6 +171,63 @@ describe("AIGateway preflight", () => {
     expect(stream.callId).toMatch(/^llm_/);
   });
 
+  it("selects only a preconfigured equivalent transport candidate", async () => {
+    const adapter = createFakeAdapter("test-api", () => adapterEvents(...textTurn("ok")));
+    const fetchImpl = (() => Promise.reject(new Error("unused"))) as unknown as typeof fetch;
+    const gateway = createAIGateway(
+      testGatewayDependencies({
+        descriptors: [MODEL],
+        providers: [
+          testProviderBinding({
+            transportCandidates: [
+              {
+                id: "backup",
+                endpoint: "https://backup.test.example/v1",
+                api: "test-api",
+                transport: { fetch: fetchImpl },
+              },
+            ],
+          } as unknown as Partial<AIProviderBinding>),
+        ],
+        adapters: [adapter],
+      }),
+    );
+
+    await gateway.complete(request(), { transportId: "backup" } as never);
+
+    expect(adapter.calls).toHaveLength(1);
+    expect(adapter.calls[0]?.provider.endpoint).toBe("https://backup.test.example/v1");
+    expect(adapter.calls[0]?.provider.transport?.fetch).toBe(fetchImpl);
+  });
+
+  it("rejects an unknown transport id before credentials or Provider I/O", async () => {
+    let credentialResolutionCount = 0;
+    const adapter = createFakeAdapter("test-api", () => adapterEvents(...textTurn("ok")));
+    const gateway = createAIGateway(
+      testGatewayDependencies({
+        descriptors: [MODEL],
+        providers: [
+          testProviderBinding({
+            credentials: {
+              resolve: () => {
+                credentialResolutionCount += 1;
+                return Promise.resolve({ apiKey: "unused" });
+              },
+            },
+          }),
+        ],
+        adapters: [adapter],
+      }),
+    );
+
+    await expect(gateway.stream(request(), { transportId: "not-configured" } as never)).rejects.toMatchObject({
+      code: "AI_INVALID_REQUEST",
+    });
+
+    expect(credentialResolutionCount).toBe(0);
+    expect(adapter.callCount()).toBe(0);
+  });
+
   it("rejects a model whose api dialect has no adapter", async () => {
     const { gateway, callCount } = harness({
       descriptors: [modelDescriptor({ ref: MODEL.ref, api: "anthropic-messages" })],
@@ -253,6 +310,42 @@ describe("AIGateway preflight", () => {
       });
     }
     expect(callCount()).toBe(0);
+  });
+
+  it("rejects a nonpositive or internally inconsistent stream inactivity policy", async () => {
+    const { gateway, callCount } = harness();
+    const invalidPolicies = [
+      { nudgeAfterMs: 0 },
+      { nudgeAfterMs: -1 },
+      { idleTimeoutMs: 0 },
+      { idleTimeoutMs: Number.POSITIVE_INFINITY },
+      { teardownGraceMs: 0 },
+      { nudgeAfterMs: 20, idleTimeoutMs: 20 },
+    ];
+
+    for (const options of invalidPolicies) {
+      await expect(gateway.stream(request(), options)).rejects.toMatchObject({
+        code: "AI_INVALID_REQUEST",
+      });
+    }
+    expect(callCount()).toBe(0);
+  });
+
+  it("rejects invalid default stream inactivity configuration before Provider I/O", async () => {
+    const adapter = createFakeAdapter("test-api", () => adapterEvents(...textTurn("hello")));
+    const dependencies = testGatewayDependencies({ descriptors: [MODEL], adapters: [adapter] });
+
+    for (const options of [
+      { defaultNudgeAfterMs: 0 },
+      { defaultIdleTimeoutMs: -1 },
+      { defaultTeardownGraceMs: Number.POSITIVE_INFINITY },
+    ]) {
+      const gateway = createAIGateway(dependencies, options);
+      await expect(gateway.stream(request())).rejects.toMatchObject({
+        code: "AI_INVALID_REQUEST",
+      });
+    }
+    expect(adapter.callCount()).toBe(0);
   });
 
   it("rejects an invalid default timeout configured on the gateway", async () => {

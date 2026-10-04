@@ -1,9 +1,15 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
-import { createInitialLiveActivityState } from "@caelush/client";
-import { createRunId, type SessionTurnPresentationResponse } from "@caelush/protocol";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createInitialLiveActivityState,
+  createInitialTimelineState,
+  type ModelWaitState,
+} from "@caelush/client";
+import { createRunId, createStepId, type SessionTurnPresentationResponse } from "@caelush/protocol";
 
 import { TurnPresentationFeed } from "../src/components/turn-presentation-feed.js";
+import { ReconnectBanner } from "../src/components/reconnect-banner.js";
+import { modelWaitMessage } from "../src/components/model-wait-presentation.js";
 
 const runId = createRunId();
 function presentation(): SessionTurnPresentationResponse {
@@ -77,6 +83,125 @@ function presentation(): SessionTurnPresentationResponse {
 }
 
 describe("TurnPresentationFeed", () => {
+  it("shows animated thinking text while an LLM is active without transient output", () => {
+    const timeline = {
+      ...createInitialTimelineState(runId),
+      activeLlm: [
+        {
+          id: "llm:step-thinking:deepseek:deepseek-flash",
+          kind: "LLM" as const,
+          title: "Model",
+          text: "deepseek/deepseek-flash",
+          status: "RUNNING" as const,
+          stepId: "step-thinking",
+        },
+      ],
+    };
+
+    const html = renderToStaticMarkup(
+      <TurnPresentationFeed
+        presentation={{ capabilityVersion: 2, highWatermark: 1, items: [] }}
+        liveActivity={createInitialLiveActivityState(runId)}
+        timeline={timeline}
+        isActive
+      />,
+    );
+    const thinking =
+      html.match(/<section class="turn-presentation-thinking"[\s\S]*?<\/section>/u)?.[0] ?? "";
+
+    expect(thinking).toContain('class="turn-presentation-thinking-title"');
+    expect(thinking).toContain(">思考中<");
+    expect(thinking).toContain('class="turn-presentation-thinking-detail"');
+    expect(thinking).toContain(">正在等待模型响应<");
+    expect(thinking).toContain('role="status"');
+    expect(thinking).toContain('aria-live="polite"');
+    expect(thinking).not.toContain("<svg");
+  });
+
+  it("shows accurate Provider silence timing without conflating local SSE reconnect", () => {
+    const now = new Date(2026, 9, 4, 12, 0, 35).getTime();
+    const startedAt = new Date(2026, 9, 4, 12, 0, 0).getTime();
+    const liveActivity = {
+      ...createInitialLiveActivityState(runId),
+      modelWait: {
+        runId,
+        stepId: createStepId(),
+        phase: "NO_RECENT_ACTIVITY" as const,
+        lastActivityAt: startedAt,
+        idleForMs: 35_000,
+        idleTimeoutMs: 300_000,
+        providerEventReceived: false,
+      },
+    };
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      const html = renderToStaticMarkup(
+        <>
+          <ReconnectBanner state="RECONNECTING" attempt={1} />
+          <TurnPresentationFeed
+            presentation={{ capabilityVersion: 2, highWatermark: 1, items: [] }}
+            liveActivity={liveActivity}
+            timeline={createInitialTimelineState(runId)}
+            isActive
+          />
+        </>,
+      );
+
+      expect(html).toContain("正在重新连接本地 Agent 服务");
+      expect(html).toContain("模型近期没有返回新数据，仍在等待");
+      expect(html).toContain("请求开始时间：12:00:00 · 已等待 35 秒");
+      expect(html).not.toContain("连接不健康");
+      expect(html).not.toContain("Provider 连接异常");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows the five-minute idle termination notice as text, not a loading mark", () => {
+    const liveActivity = {
+      ...createInitialLiveActivityState(runId),
+      modelWait: {
+        runId,
+        stepId: createStepId(),
+        phase: "CANCELLING_IDLE_STREAM" as const,
+        lastActivityAt: 1_700_000_000_000,
+        idleForMs: 300_000,
+        idleTimeoutMs: 300_000,
+        providerEventReceived: false,
+      },
+    };
+    const html = renderToStaticMarkup(
+      <TurnPresentationFeed
+        presentation={{ capabilityVersion: 2, highWatermark: 1, items: [] }}
+        liveActivity={liveActivity}
+        timeline={createInitialTimelineState(runId)}
+        isActive
+      />,
+    );
+    const thinking =
+      html.match(/<section class="turn-presentation-thinking"[\s\S]*?<\/section>/u)?.[0] ?? "";
+
+    expect(thinking).toContain("Provider 连续 5 分钟没有返回数据，正在终止本次请求");
+    expect(thinking).toContain('role="status"');
+    expect(thinking).not.toContain("<svg");
+  });
+
+  it("uses the configured idle duration in the termination notice", () => {
+    const wait: ModelWaitState = {
+      runId,
+      phase: "CANCELLING_IDLE_STREAM",
+      lastActivityAt: 1_700_000_000_000,
+      idleForMs: 1_250,
+      idleTimeoutMs: 1_250,
+      providerEventReceived: false,
+    };
+
+    expect(modelWaitMessage(wait, wait.lastActivityAt).detail).toBe(
+      "Provider 连续 1.3 秒没有返回数据，正在终止本次请求",
+    );
+  });
+
   it("keeps ordered public reasoning and Tool facts inside one active process disclosure", () => {
     const html = renderToStaticMarkup(
       <TurnPresentationFeed presentation={presentation()} isActive />,

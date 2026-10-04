@@ -151,6 +151,9 @@ export function failingTransport(
 }
 
 /** A transport whose response body never completes until the request is aborted. */
-export function hangingTransport(): CapturingTransport & { readonly observedAbort: () => boolean } {
+export function hangingTransport(): CapturingTransport & {
+  readonly observedAbort: () => boolean;
+  readonly observedBodyAbort: () => boolean;
+} {
   return hangingHttpTransport<CapturedRequest>(decorate);
 }

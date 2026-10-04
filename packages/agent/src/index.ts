@@ -560,6 +560,7 @@ export {
 } from "./run/continuation/continuation.js";
 export type {
   AwaitingVerificationContinuation,
+  ModelTransportRecoveryCheckpoint,
   RetryErrorCode,
   RunContinuationCheckpoint,
   WaitingResourceContinuation,

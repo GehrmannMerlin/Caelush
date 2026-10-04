@@ -1,7 +1,7 @@
 import type { AgentRun, RunCancellationIntent, TimestampMs } from "@caelush/protocol";
 import { deriveRunDeadline, isRunDeadlineExceeded } from "./run-deadline.js";
 
-export type RunExecutionAbortCause = "USER_REQUESTED" | "DEADLINE_EXCEEDED";
+export type RunExecutionAbortCause = "USER_REQUESTED" | "DEADLINE_EXCEEDED" | "MANAGED_RESTART";
 export type RunTerminationAuthority = "TERMINAL" | "CANCELLED" | "TIMEOUT" | "UNEXPECTED_ABORT";
 
 export interface ResolveRunTerminationAuthorityInput {
@@ -19,7 +19,7 @@ export function resolveRunTerminationAuthority(
   if (input.cancellationIntent !== undefined) return "CANCELLED";
   const deadline = deriveRunDeadline(input.run);
   if (deadline !== undefined && isRunDeadlineExceeded(deadline, input.now)) return "TIMEOUT";
-  if (input.aborted === true && input.abortCause === undefined) return "UNEXPECTED_ABORT";
+  if (input.aborted === true && input.abortCause !== "USER_REQUESTED") return "UNEXPECTED_ABORT";
   if (input.aborted === true && input.abortCause === "USER_REQUESTED") return "CANCELLED";
   return undefined;
 }

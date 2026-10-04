@@ -976,6 +976,92 @@ describe("shared Timeline reducer", () => {
     expect(state.retries).toEqual([expect.objectContaining({ attempt: 1, status: "RUNNING" })]);
   });
 
+  it("projects retry count and fallback consistently when a retry opens a new Step", () => {
+    const retryStepId = createStepId();
+    const nextAttemptStepId = createStepId();
+    let state = reduceTimelineEvent(
+      createInitialTimelineState(runId),
+      eventOf(
+        "transport.fallback.selected",
+        1,
+        {
+          attempt: 2,
+          maxAttempts: 6,
+          fromTransportId: "default",
+          toTransportId: "secondary",
+        },
+        { stepId: retryStepId },
+      ),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf(
+        "retry.scheduled",
+        2,
+        {
+          attempt: 2,
+          maxAttempts: 6,
+          delayMs: 2_000,
+          nextAttemptAt: 4_000,
+          errorCode: "LLM_NETWORK",
+        },
+        { stepId: retryStepId },
+      ),
+    );
+    state = reduceTimelineEvent(
+      state,
+      eventOf("retry.started", 3, { attempt: 2, maxAttempts: 6 }, { stepId: nextAttemptStepId }),
+    );
+
+    expect(state.retries).toHaveLength(1);
+    expect(state.retries[0]).toMatchObject({
+      retryOrdinal: 1,
+      maxRetries: 5,
+      attempt: 2,
+      maxAttempts: 6,
+      started: true,
+      status: "RUNNING",
+      delayMs: 2_000,
+      nextAttemptAt: 4_000,
+      fromTransportId: "default",
+      toTransportId: "secondary",
+    });
+    expect(JSON.stringify(state.retries)).not.toContain("https://");
+  });
+
+  it("keeps explicit five-retry exhaustion visible through terminal flush", () => {
+    let state = reduceTimelineEvent(
+      createInitialTimelineState(runId),
+      eventOf("retry.exhausted", 1, {
+        attempt: 6,
+        maxAttempts: 6,
+        retriesUsed: 5,
+        maxRetries: 5,
+        errorCode: "LLM_TIMEOUT",
+        reason: "ATTEMPTS_EXHAUSTED",
+      }),
+    );
+    expect(state.retries).toEqual([
+      expect.objectContaining({
+        attempt: 6,
+        maxAttempts: 6,
+        retryOrdinal: 5,
+        maxRetries: 5,
+        status: "FAILED",
+        exhaustedReason: "ATTEMPTS_EXHAUSTED",
+        reason: "LLM_TIMEOUT",
+      }),
+    ]);
+
+    state = flushTimelineForTerminal(state, "FAILED");
+    expect(state.settled.at(-1)).toMatchObject({
+      kind: "RETRY",
+      status: "FAILED",
+      text: expect.stringContaining("5/5"),
+    });
+    expect(state.settled.at(-1)?.text).toContain("LLM_TIMEOUT");
+  });
+
   it("retains approval read-only presentation data", () => {
     const approvalId = createApprovalRequestId();
     const state = reduceTimelineEvent(

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { captureTurn } from "./support/harness.js";
 import { mapAnthropicFinishReason } from "../../../src/adapters/anthropic-messages/finish-reason.js";
 import {
@@ -704,6 +704,35 @@ describe("Anthropic Messages stream golden: transport-level events", () => {
 });
 
 describe("Anthropic Messages stream golden: failures", () => {
+  it("cancels a pending response-body read when the caller aborts", async () => {
+    const controller = new AbortController();
+    let bodyReadStarted = false;
+    let readerCancelled = false;
+    const transport = capturingTransport(
+      () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            pull() {
+              bodyReadStarted = true;
+            },
+            cancel() {
+              readerCancelled = true;
+            },
+          }),
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        ),
+    );
+    const pending = captureTurn(request(), { transport, signal: controller.signal });
+
+    await vi.waitFor(() => expect(bodyReadStarted).toBe(true));
+    controller.abort();
+
+    const turn = await pending;
+    expect(readerCancelled).toBe(true);
+    expect(turn.streamError?.code).toBe("AI_ABORTED");
+    expect(turn.events.filter((event) => event.type === "stream.error")).toHaveLength(1);
+  }, 9_000);
+
   it("normalizes a mid-stream error event and reports no stream.error itself", async () => {
     const turn = await captureTurn(request(), {
       transport: turnTransport([

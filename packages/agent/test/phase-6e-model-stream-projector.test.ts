@@ -84,6 +84,42 @@ describe("ModelStreamSignalProjector", () => {
     ).toBe(4);
   });
 
+  it("maps model status onto a fixed coalescible run/step stream", () => {
+    const status = projector().project({
+      identity,
+      stepId: turn.stepId,
+      event: {
+        type: "stream.status",
+        payload: {
+          phase: "NO_RECENT_ACTIVITY",
+          lastActivityAt: 1_700_000_000_000,
+          idleForMs: 30_000,
+          idleTimeoutMs: 300_000,
+        },
+      },
+    });
+
+    expect(status).toMatchObject({
+      type: "model.status",
+      runId: identity.runId,
+      sessionId: identity.sessionId,
+      stepId: turn.stepId,
+      visibility: "USER_VISIBLE",
+      durability: {
+        kind: "EPHEMERAL",
+        version: 1,
+        deliveryClass: "COALESCIBLE",
+        streamKey: `model:status:${identity.runId}:${turn.stepId}`,
+      },
+      payload: {
+        phase: "NO_RECENT_ACTIVITY",
+        lastActivityAt: 1_700_000_000_000,
+        idleForMs: 30_000,
+        idleTimeoutMs: 300_000,
+      },
+    });
+  });
+
   it("emits canonical transient signals from the executor without changing the assembled result", async () => {
     const emitted: unknown[] = [];
     const start: AIStreamEvent = {
@@ -101,6 +137,15 @@ describe("ModelStreamSignalProjector", () => {
         events: (async function* () {
           yield start;
           yield { type: "text.delta", payload: { text: "answer" } } satisfies AIStreamEvent;
+          yield {
+            type: "stream.status",
+            payload: {
+              phase: "NO_RECENT_ACTIVITY",
+              lastActivityAt: 1_700_000_000_000,
+              idleForMs: 30_000,
+              idleTimeoutMs: 300_000,
+            },
+          } satisfies AIStreamEvent;
           yield {
             type: "reasoning.summary.delta",
             payload: { text: "safe" },
@@ -135,9 +180,13 @@ describe("ModelStreamSignalProjector", () => {
 
     expect(result.kind).toBe("COMPLETED");
     expect((result as { kind: "COMPLETED"; result: { text: string } }).result.text).toBe("answer");
-    expect(emitted).toHaveLength(2);
+    expect(emitted).toHaveLength(3);
     expect(emitted).toMatchObject([
       { type: "model.text.delta", payload: { text: "answer" } },
+      {
+        type: "model.status",
+        payload: { phase: "NO_RECENT_ACTIVITY", idleForMs: 30_000, idleTimeoutMs: 300_000 },
+      },
       { type: "model.reasoning_summary.delta", payload: { text: "safe" } },
     ]);
   });

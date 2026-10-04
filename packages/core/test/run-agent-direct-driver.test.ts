@@ -5,6 +5,7 @@ import { toContextObservationProjection } from "../src/agent-tool-batch.js";
 import { createUserMessageAppend } from "../src/run-message-materializer.js";
 import {
   AgentRunSchema,
+  computeSecurityPolicyDigest,
   createEventId,
   createLLMCallId,
   createRunId,
@@ -61,7 +62,28 @@ const clock = {
   now: () => createTimestampMs(10),
 };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 function makeRun(overrides: Record<string, unknown> = {}) {
+  const securityPolicy = {
+    schemaVersion: 1 as const,
+    preset: { id: "VIEW_ONLY" as const, version: 1 },
+    permissionProfile: "READ_ONLY" as const,
+    approvalPolicy: "ON_BOUNDARY" as const,
+    filesystemBoundary: "WORKSPACE_READ_ONLY" as const,
+    processBoundary: "READ_ONLY" as const,
+    requiredEnforcement: "OS_RESTRICTED" as const,
+    hardSafetyPolicyVersion: "hard-safety@1",
+    commandPolicyVersion: "command-policy@1",
+    secretPolicyVersion: "secret-policy@1",
+    createdAt: new Date(1).toISOString(),
+  };
   return AgentRunSchema.parse({
     id: createRunId(),
     sessionId: createSessionId(),
@@ -71,7 +93,8 @@ function makeRun(overrides: Record<string, unknown> = {}) {
     model: { provider: "fixture", model: "fixture-model" },
     runtime: { id: "local", kind: "fixture" },
     permissionProfile: "READ_ONLY",
-    approvalPolicy: "ALWAYS_ASK",
+    approvalPolicy: "ON_BOUNDARY",
+    securityPolicy: { ...securityPolicy, policyDigest: computeSecurityPolicyDigest(securityPolicy) },
     limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 100_000 },
     createdAt: createTimestampMs(1),
     ...overrides,
@@ -90,6 +113,7 @@ class MemoryExecutionStore implements RunExecutionStore {
   readonly commits: RunExecutionCommit[] = [];
   readonly steps = new Map<StepId, AgentStep>();
   private sequence = 0;
+  failNextCommit: Error | undefined;
 
   constructor(public snapshot: RunExecutionSnapshot) {
     this.stateRevision = snapshot.stateRevision;
@@ -110,6 +134,11 @@ class MemoryExecutionStore implements RunExecutionStore {
   }
 
   async commit(command: RunExecutionCommit) {
+    if (this.failNextCommit !== undefined) {
+      const error = this.failNextCommit;
+      this.failNextCommit = undefined;
+      throw error;
+    }
     this.commits.push(command);
     if (command.state !== undefined) this.stateRevision = (this.stateRevision ?? 0) + 1;
     for (const write of command.stepWrites) this.steps.set(write.step.id, write.step);
@@ -183,6 +212,7 @@ function harness(options: {
   readonly executor: FakeFrozenModelTurnExecutor;
   readonly contextEngine?: FakeContextEngine;
   readonly configResolver?: RunExecutionConfigResolver;
+  readonly clock?: { now(): ReturnType<typeof createTimestampMs> };
   readonly extra?: Record<string, unknown>;
 }): Harness {
   const run = options.run ?? makeRun();
@@ -219,7 +249,7 @@ function harness(options: {
     configResolver: options.configResolver ?? {
       resolve: async () => ({ baseSystemPrompt: "base", contextLimits: { maxInputTokens: 1000 } }),
     },
-    clock,
+    clock: options.clock ?? clock,
     eventIdFactory: { create: createEventId },
     // Phase 3D owns the real Tool boundary; this stands in for the one production composition
     // supplies so the Run round trip (`TOOL_REQUESTS → batch → accepted results → resume`) is
@@ -354,6 +384,112 @@ function toolThenAnswer(): FakeFrozenModelTurnExecutor {
 }
 
 describe("production ADVANCE_AGENT settlement", () => {
+  it("checkpoints an interrupted model turn before managed shutdown returns", async () => {
+    const enteredProvider = deferred<void>();
+    const call = fakeFrozenModelTurnExecutor((_request, signal) => {
+      enteredProvider.resolve();
+      return new Promise((resolve) => {
+        signal.addEventListener("abort", () => resolve({ kind: "CANCELLED" }), { once: true });
+      });
+    });
+    const h = harness({ executor: call, clock: { now: () => createTimestampMs(10) } });
+    const running = h.controller.start(h.store.snapshot.run.id);
+
+    await enteredProvider.promise;
+    const checkpoint = await h.controller.prepareForShutdown(h.store.snapshot.run.id);
+    await running;
+
+    expect(checkpoint).toBe("CHECKPOINTED");
+    expect(call.signals[0]?.aborted).toBe(true);
+    expect(h.store.snapshot.run.status).toBe("RUNNING");
+    expect(h.store.snapshot.continuation).toMatchObject({
+      type: "WAITING_RETRY",
+      errorCode: "LLM_NETWORK",
+      attempt: 2,
+    });
+    expect(h.store.steps.get(h.allocatedSteps[0]!)).toMatchObject({ status: "FAILED" });
+    expect(h.store.commits.at(-1)?.events.map((event) => event.type)).toEqual([
+      "llm.failed",
+      "retry.scheduled",
+    ]);
+  });
+
+  it("keeps user cancellation terminal instead of turning it into a managed retry", async () => {
+    const enteredProvider = deferred<void>();
+    const call = fakeFrozenModelTurnExecutor((_request, signal) => {
+      enteredProvider.resolve();
+      return new Promise((resolve) => {
+        signal.addEventListener("abort", () => resolve({ kind: "CANCELLED" }), { once: true });
+      });
+    });
+    const h = harness({ executor: call });
+    const running = h.controller.start(h.store.snapshot.run.id);
+
+    await enteredProvider.promise;
+    await h.controller.cancel(h.store.snapshot.run.id);
+    await running;
+
+    expect(h.store.snapshot.run.status).toBe("CANCELLED");
+    expect(h.store.snapshot.continuation).toBeUndefined();
+    expect(h.notifications.map((event) => event.type)).not.toContain("retry.scheduled");
+  });
+
+  it("does not claim a shutdown checkpoint when its retry transaction fails", async () => {
+    const enteredProvider = deferred<void>();
+    const call = fakeFrozenModelTurnExecutor((_request, signal) => {
+      enteredProvider.resolve();
+      return new Promise((resolve) => {
+        signal.addEventListener("abort", () => resolve({ kind: "CANCELLED" }), { once: true });
+      });
+    });
+    const h = harness({ executor: call });
+    const running = h.controller.start(h.store.snapshot.run.id);
+
+    await enteredProvider.promise;
+    h.store.failNextCommit = new Error("simulated transaction failure");
+    const checkpoint = await h.controller.prepareForShutdown(h.store.snapshot.run.id);
+    await expect(running).rejects.toThrow("Unable to persist Run execution");
+
+    expect(checkpoint).toBe("UNSAFE_IN_FLIGHT");
+    expect(h.store.snapshot.activeStep?.status).toBe("RUNNING");
+    expect(h.store.snapshot.continuation).toBeUndefined();
+    expect(h.notifications.map((event) => event.type)).not.toContain("retry.scheduled");
+  });
+
+  it("does not abort or reclassify an in-flight Tool batch as a model retry", async () => {
+    const enteredBatch = deferred<void>();
+    const releaseBatch = deferred<void>();
+    const batchFixture = toolCoordinatorFixture();
+    const executor = toolThenAnswer();
+    const h = harness({
+      executor,
+      extra: {
+        toolTurn: {
+          batches: {
+            async execute(request: Parameters<typeof batchFixture.execute>[0]) {
+              enteredBatch.resolve();
+              await releaseBatch.promise;
+              return batchFixture.execute(request);
+            },
+          },
+          feedback: createModelToolFeedbackProjector({ projection: toContextObservationProjection() }),
+          normalizer: createToolResultBatchNormalizer(),
+        },
+      },
+    });
+    const running = h.controller.start(h.store.snapshot.run.id);
+
+    await enteredBatch.promise;
+    const checkpoint = await h.controller.prepareForShutdown(h.store.snapshot.run.id);
+    expect(checkpoint).toBe("UNSAFE_IN_FLIGHT");
+    expect(executor.signals[0]?.aborted).toBe(false);
+    releaseBatch.resolve();
+    await running;
+
+    expect(h.notifications.map((event) => event.type)).not.toContain("retry.scheduled");
+    expect(h.store.snapshot.continuation?.type).toBe("AWAITING_VERIFICATION");
+  });
+
   it("drives a complete Tool round trip through the driver, the planner and the frozen loop", async () => {
     const executor = toolThenAnswer();
     const h = harness({ executor });
@@ -582,6 +718,7 @@ describe("production ADVANCE_AGENT settlement", () => {
       "status.changed",
       "run.failed",
     ]);
+    expect(h.notifications.map((event) => event.type)).not.toContain("retry.exhausted");
   });
 
   it("reports a classifier rejection of a completed provider turn without claiming the provider failed", async () => {
@@ -650,6 +787,159 @@ describe("production ADVANCE_AGENT settlement", () => {
     const retryStart = h.notifications.filter((event) => event.type === "retry.started");
     expect(retryStart).toHaveLength(1);
     expect(h.executor.callCount()).toBe(2);
+  });
+
+  it("runs one initial attempt plus five retries before terminal failure", async () => {
+    const call = fakeFrozenModelTurnExecutor(async () => {
+      throw aiError("AI_NETWORK");
+    });
+    const h = harness({ executor: call });
+
+    await h.controller.start(h.store.snapshot.run.id);
+    for (let retry = 0; retry < 5; retry += 1) {
+      const continuation = h.store.snapshot.continuation;
+      if (continuation?.type !== "WAITING_RETRY") break;
+      h.store.snapshot = {
+        ...h.store.snapshot,
+        continuation: { ...continuation, nextAttemptAt: createTimestampMs(0) },
+      };
+      await h.controller.recover(h.store.snapshot.run.id);
+    }
+
+    expect(call.callCount()).toBe(6);
+    expect(h.allocatedSteps).toHaveLength(6);
+    expect(new Set(h.allocatedSteps).size).toBe(6);
+    expect(h.allocatedSteps.map((stepId) => h.store.steps.get(stepId)?.status)).toEqual(
+      Array.from({ length: 6 }, () => "FAILED"),
+    );
+    expect(h.store.snapshot.run.status).toBe("FAILED");
+    expect(h.store.snapshot.continuation).toBeUndefined();
+    expect(h.notifications.filter((event) => event.type === "llm.failed")).toHaveLength(6);
+    expect(h.notifications.filter((event) => event.type === "retry.scheduled")).toHaveLength(5);
+    expect(h.notifications.filter((event) => event.type === "retry.started")).toHaveLength(5);
+    const exhausted = h.notifications.filter((event) => event.type === "retry.exhausted");
+    expect(exhausted).toHaveLength(1);
+    expect(exhausted[0]).toMatchObject({
+      payload: {
+        attempt: 6,
+        maxAttempts: 6,
+        retriesUsed: 5,
+        maxRetries: 5,
+        errorCode: "LLM_NETWORK",
+        reason: "ATTEMPTS_EXHAUSTED",
+      },
+    });
+    expect(h.store.commits.at(-1)?.events.map((event) => event.type)).toEqual([
+      "llm.failed",
+      "retry.exhausted",
+      "error",
+      "status.changed",
+      "run.failed",
+    ]);
+    expect(
+      h.store.commits
+        .filter((commit) => commit.events.some((event) => event.type === "llm.failed"))
+        .flatMap((commit) => commit.messagesToAppend),
+    ).toHaveLength(0);
+  });
+
+  it("persists and resumes a same-provider transport selection before retry I/O", async () => {
+    const call = fakeFrozenModelTurnExecutor(async () => {
+      throw aiError("AI_NETWORK");
+    });
+    const recovery = {
+      initial: ({ providerId, modelId }: { providerId: string; modelId: string }) => ({
+        providerId,
+        modelId,
+        transportId: "default",
+      }),
+      next: ({ current, attemptedTransportIds, errorCode }: {
+        current: { providerId: string; modelId: string; transportId: string };
+        attemptedTransportIds: readonly string[];
+        errorCode: string;
+      }) =>
+        errorCode === "LLM_NETWORK" && !attemptedTransportIds.includes("backup")
+          ? { ...current, transportId: "backup" }
+          : undefined,
+    };
+    let now = 10;
+    const h = harness({
+      executor: call,
+      clock: { now: () => createTimestampMs(now) },
+      extra: { modelTransportRecovery: recovery },
+    });
+
+    const waiting = await h.controller.start(h.store.snapshot.run.id);
+
+    expect(waiting.status).toBe("WAITING_RETRY");
+    expect(h.store.snapshot.continuation).toMatchObject({
+      type: "WAITING_RETRY",
+      transport: {
+        currentTransportId: "backup",
+        attemptedTransportIds: ["default", "backup"],
+      },
+    });
+    const retryCommit = h.store.commits.find((commit) =>
+      commit.events.some((event) => event.type === "retry.scheduled"),
+    );
+    expect(retryCommit?.events.map((event) => event.type)).toEqual([
+      "llm.failed",
+      "transport.fallback.selected",
+      "retry.scheduled",
+    ]);
+    expect(call.transportIds).toEqual(["default"]);
+
+    call.resetScript(async () => turn({ text: "recovered" }));
+    if (waiting.status !== "WAITING_RETRY") throw new Error("expected retry boundary");
+    now = Number(waiting.nextAttemptAt);
+    const recovered = await h.controller.recover(h.store.snapshot.run.id);
+
+    expect(recovered.status).not.toBe("WAITING_RETRY");
+    expect(call.transportIds).toEqual(["default", "backup"]);
+    expect(h.store.snapshot.continuation?.type).toBe("AWAITING_VERIFICATION");
+  });
+
+  it.each([
+    [
+      "deadline",
+      makeRun({ limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 15 } }),
+      () => aiError("AI_NETWORK"),
+      "DEADLINE_EXCEEDED",
+      "FAILED",
+    ],
+    [
+      "max steps",
+      makeRun({ limits: { maxSteps: 1, maxToolCalls: 8, timeoutMs: 100_000 } }),
+      () => aiError("AI_NETWORK"),
+      "MAX_STEPS_REACHED",
+      "MAX_STEPS_REACHED",
+    ],
+    [
+      "Retry-After policy",
+      makeRun(),
+      () => aiError("AI_RATE_LIMIT", { retryAfterMs: 300_001 }),
+      "RETRY_AFTER_EXCEEDS_POLICY",
+      "FAILED",
+    ],
+  ] as const)("records retry exhaustion when %s prevents another attempt", async (
+    _name,
+    run,
+    failure,
+    reason,
+    expectedStatus,
+  ) => {
+    const call = fakeFrozenModelTurnExecutor(async () => {
+      throw failure();
+    });
+    const h = harness({ run, executor: call });
+
+    await h.controller.start(h.store.snapshot.run.id);
+
+    expect(h.store.snapshot.run.status).toBe(expectedStatus);
+    expect(h.notifications.filter((event) => event.type === "retry.exhausted")).toMatchObject([
+      { payload: { attempt: 1, retriesUsed: 0, reason } },
+    ]);
+    expect(h.notifications.filter((event) => event.type === "retry.scheduled")).toHaveLength(0);
   });
 
   it("settles CANCELLED through the termination authority, leaving no open Step", async () => {

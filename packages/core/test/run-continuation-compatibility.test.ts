@@ -123,6 +123,7 @@ const CHECKPOINTS: readonly RunContinuationCheckpoint[] = [
     maxAttempts: 3,
     nextAttemptAt: createTimestampMs(500),
     errorCode: "LLM_TIMEOUT",
+    transport: { currentTransportId: "backup", attemptedTransportIds: ["default", "backup"] },
   },
   {
     type: "WAITING_RETRY",
@@ -137,6 +138,7 @@ const CHECKPOINTS: readonly RunContinuationCheckpoint[] = [
     receivedResults: [TOOL_RESULT],
     sourceStepId: STEP_ID,
     observationPolicy: OBSERVATION_POLICY,
+    transport: { currentTransportId: "backup", attemptedTransportIds: ["default", "backup"] },
   },
 ];
 
