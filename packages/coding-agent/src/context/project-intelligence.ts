@@ -563,9 +563,10 @@ function parsePackage(
   const engines = isRecord(value.engines) ? stringValue(value.engines.node) : undefined;
   const name = stringValue(value.name);
   const packageManager = stringValue(value.packageManager);
+  const packageDirectory = path.dirname(packagePath);
   return {
     path: packagePath,
-    relativePath: path.relative(projectRoot, packagePath),
+    relativePath: path.relative(projectRoot, packageDirectory).replaceAll("\\", "/"),
     scripts,
     ...(name === undefined ? {} : { name }),
     ...(packageManager === undefined ? {} : { packageManager }),

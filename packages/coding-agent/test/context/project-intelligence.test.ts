@@ -50,11 +50,47 @@ describe("Coding Project Intelligence", () => {
         source: "PACKAGE_MANAGER_FIELD",
       });
       expect(snapshot.profile.isMonorepo).toBe(true);
+      expect(snapshot.profile.rootPackage?.relativePath).toBe("");
+      expect(snapshot.profile.activePackage?.relativePath).toBe("apps/demo");
       expect(snapshot.profile.rootPackage?.scripts).toEqual([
         { name: "test", command: "vitest run" },
       ]);
       expect(snapshot.profile.activePackage?.scripts).toEqual([{ name: "build", command: "tsc" }]);
       expect(snapshot.instructions.entries[0]?.content).toContain("repository conventions");
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
+  it("stores a packages/* manifest location as its package directory", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "caelush-project-intelligence-"));
+    roots.push(root);
+    await mkdir(path.join(root, "packages", "core"), { recursive: true });
+    await writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "workspace-root" }),
+      "utf8",
+    );
+    await writeFile(path.join(root, "pnpm-workspace.yaml"), "packages:\n  - packages/*\n", "utf8");
+    await writeFile(
+      path.join(root, "packages", "core", "package.json"),
+      JSON.stringify({ name: "core", scripts: { build: "tsc" } }),
+      "utf8",
+    );
+
+    const runtime = new LocalRuntime();
+    try {
+      const snapshot = await createLocalProjectInspector(runtime).inspect({
+        workspace: { id: createWorkspaceId(), path: root },
+        cwd: "packages/core",
+      });
+
+      expect(snapshot.profile.rootPackage?.relativePath).toBe("");
+      expect(snapshot.profile.activePackage?.relativePath).toBe("packages/core");
+      expect(snapshot.profile.activePackage?.path).toBe(
+        path.join(root, "packages", "core", "package.json"),
+      );
+      expect(snapshot.profile.activePackage?.relativePath).not.toContain("package.json");
     } finally {
       await runtime.dispose();
     }

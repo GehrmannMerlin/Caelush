@@ -73,11 +73,35 @@ describe("Node project verification resolver", () => {
     if (result.kind !== "READY") return;
     expect(result.candidate.workdir).toBe(".");
     expect(result.candidate.provenance.evidencePath).toBe("package.json");
+    expect(result.candidate.provenance.evidencePath).not.toBe("package.json/package.json");
+    expect(result.candidate.workdir).not.toContain("package.json");
     expect(result.candidate.securityInputs.map((item) => item.label)).toEqual([
       "pretest",
       "test",
       "posttest",
     ]);
+  });
+
+  it.each([
+    ["POSIX", "packages/core"],
+    ["Windows", "packages\\core"],
+  ])("uses %s package paths as directories", (_style, relativePath) => {
+    const result = nodeProjectCheckResolver.resolve(
+      check("BUILD"),
+      profile({
+        rootPackage: { relativePath: ".", scripts: [] },
+        activePackage: {
+          relativePath,
+          scripts: [{ name: "build", command: "tsc -b" }],
+        },
+      }),
+    );
+
+    expect(result.kind).toBe("READY");
+    if (result.kind !== "READY") return;
+    expect(result.candidate.workdir).toBe("packages/core");
+    expect(result.candidate.provenance.evidencePath).toBe("packages/core/package.json");
+    expect(result.candidate.workdir).not.toContain("package.json");
   });
 
   it("falls back to the active package only when root lacks the exact alias", () => {
