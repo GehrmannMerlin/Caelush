@@ -25,7 +25,6 @@ import {
 import type { ToolInvocationExecutor } from "../execution/invocation-executor.js";
 import type { ToolExecutionUpdateSanitizerPort } from "../execution/update-sanitizer-port.js";
 import type { ToolResultPipeline } from "../result/result-pipeline.js";
-import { ToolResultValidationError } from "../result/result-sanitizer-port.js";
 import { canonicalJsonString } from "../schema/json-canonical.js";
 import type {
   ToolAdmissionCoordinator,
@@ -307,7 +306,6 @@ const INTERRUPTED_CONTENT =
   "Tool execution was interrupted before its result was durably recorded. The operation may have partially or fully executed. Do not automatically repeat the operation.";
 const RUNTIME_CONTENT =
   "Tool execution failed because the tool runtime encountered an internal error.";
-const OUTPUT_CONTENT = "Tool execution failed because its output violated the registered contract.";
 const UNCERTAIN_CONTENT =
   "Tool execution side effects could not be verified safely. Do not automatically repeat the operation.";
 
@@ -559,29 +557,23 @@ export function createDurableToolExecutionCoordinator(
       if (isToolExecutionUncertainError(error)) {
         return await settleDurableFailure({
           snapshot,
-          code: "TOOL_EXECUTION_ERROR",
+          code: "TOOL_OUTCOME_UNKNOWN",
           phase: "RUNTIME",
-          message: "Tool execution returned an error result.",
+          message: "Tool outcome could not be confirmed.",
           content: UNCERTAIN_CONTENT,
           // The disposition lives on the durable error's `details`, where recovery reads it to decide
           // that this call must not be repeated automatically.
           errorDetails: { ...uncertainExecutionDetails() },
         });
       }
-      // An unclassified handler throw keeps its existing durable semantics: the invocation settles
-      // FAILED as a runtime error, and only then does the boundary fail as infrastructure. The durable
-      // evidence is written first because a model that was told "the tool failed" would otherwise
-      // retry a call whose durable truth was never recorded.
-      await input.failureSettlement.settleFailure({
+      // Ordinary handler failures become one safe durable Tool result. No exception message or
+      // stack crosses into the durable invocation, observation, event, or model feedback.
+      return await settleDurableFailure({
         snapshot,
-        code: "RUNTIME_ERROR",
+        code: "TOOL_EXECUTION_ERROR",
         phase: "RUNTIME",
         message: "Tool execution returned an error result.",
-        content: boundFailureContent(RUNTIME_CONTENT),
-        now: input.clock.now(),
-      });
-      throw new ToolExecutionInfrastructureError("EXECUTION", "Tool execution failed.", {
-        cause: error,
+        content: RUNTIME_CONTENT,
       });
     }
 
@@ -590,9 +582,9 @@ export function createDurableToolExecutionCoordinator(
     // reference is bound here, because the frozen settlement signature has no field for it.
     rawArtifact.set(await archiveRawResult(input, snapshot.invocation, rawResult));
     const finishedAt = input.clock.now();
-    let settlement;
+    let processed: ReturnType<ToolResultPipeline["process"]>;
     try {
-      settlement = input
+      processed = input
         .resultPipelineFactory({
           invocation,
           environment: execution.environment,
@@ -605,23 +597,6 @@ export function createDurableToolExecutionCoordinator(
           now: finishedAt,
         });
     } catch (error) {
-      if (error instanceof ToolResultValidationError) {
-        await input.failureSettlement.settleFailure({
-          snapshot,
-          code: "TOOL_OUTPUT_ERROR",
-          phase: "TOOL",
-          message: "Tool execution returned an error result.",
-          content: boundFailureContent(OUTPUT_CONTENT),
-          now: input.clock.now(),
-        });
-        throw new ToolExecutionInfrastructureError(
-          "RESULT_PIPELINE",
-          "Tool result violated its registered contract.",
-          { cause: error },
-        );
-      }
-      // A pipeline infrastructure failure invents nothing: no successful settlement, no fabricated
-      // output error. The invocation stays RUNNING and the boundary fails.
       throw new ToolExecutionInfrastructureError(
         "RESULT_PIPELINE",
         "Tool result processing failed.",
@@ -629,9 +604,24 @@ export function createDurableToolExecutionCoordinator(
       );
     }
 
+    if (processed.kind === "FAILED") {
+      const { failure } = processed;
+      return await settleDurableFailure({
+        snapshot,
+        code: failure.error.code,
+        phase: failure.error.phase,
+        message: failure.error.message,
+        content: failure.feedback.content,
+        details: failure.feedback.details as unknown as JsonObject,
+        ...(failure.errorDetails === undefined
+          ? {}
+          : { errorDetails: failure.errorDetails as unknown as JsonObject }),
+      });
+    }
+
     const settledSnapshot = await settlementCoordinator.settle({
       snapshot,
-      settlement,
+      settlement: processed.settlement,
       now: finishedAt,
     });
     rawArtifact.clear();
@@ -801,11 +791,11 @@ export function createDurableToolExecutionCoordinator(
       // statement is an uncertain one, and the executor call count for this path is zero.
       return await settleDurableFailure({
         snapshot,
-        code: "TOOL_EXECUTION_ERROR",
-        phase: "TOOL",
-        message: "Tool execution returned an error result.",
+        code: "TOOL_OUTCOME_UNKNOWN",
+        phase: "RUNTIME",
+        message: "Tool outcome could not be confirmed.",
         content: INTERRUPTED_CONTENT,
-        errorDetails: { executionDisposition: "UNCERTAIN_SIDE_EFFECT" },
+        errorDetails: { ...uncertainExecutionDetails() },
       });
     }
     if (invocation.status === "CANCELLED") {

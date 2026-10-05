@@ -12,7 +12,7 @@ import type { AgentToolResult } from "../types/tool-result.js";
  *     readonly toolName: ToolName;
  *     readonly result: AgentToolResult;
  *     readonly invocation: ToolInvocation;
- *   }): AgentToolResult;
+ *   }): ToolResultSanitizationOutcome;
  * }
  * ```
  *
@@ -25,20 +25,26 @@ import type { AgentToolResult } from "../types/tool-result.js";
  * implementation, and every production Tool result passes through this port before it can become a
  * durable observation.
  *
- * ## Failure is settlement-blocking
+ * ## Refusal is all-or-nothing
  *
- * A throw here is a `RESULT_PIPELINE` infrastructure failure, never an `isError: true` result. The
- * difference from the transient update sanitizer is the point: an update that cannot be sanitized is
- * dropped and the Tool carries on, because nothing durable depends on it; a *final result* that
- * cannot be sanitized leaves no defensible durable record, and pretending the Tool merely failed
- * would invite a retry on top of an unredacted side effect.
+ * The Security implementation returns `REFUSED` without a result when it cannot prove complete
+ * sanitization. The Result Pipeline converts that ordinary output failure into bounded model
+ * feedback; it never substitutes the raw value or a partially scanned object. Thrown sanitizer
+ * failures follow the same safe output-failure path.
  */
+export type ToolResultSanitizationRefusalReason =
+  "SCAN_NODE_LIMIT" | "SCAN_DEPTH_LIMIT" | "TEXT_LIMIT";
+
+export type ToolResultSanitizationOutcome =
+  | { readonly kind: "SANITIZED"; readonly result: AgentToolResult }
+  | { readonly kind: "REFUSED"; readonly reason: ToolResultSanitizationRefusalReason };
+
 export interface ToolResultSanitizerPort {
   sanitize(input: {
     readonly toolName: ToolName;
     readonly result: AgentToolResult;
     readonly invocation: ToolInvocation;
-  }): AgentToolResult;
+  }): ToolResultSanitizationOutcome;
 }
 
 /** The sanitizer that changes nothing, for a host with no redaction implementation configured. */
@@ -47,10 +53,10 @@ export const IDENTITY_TOOL_RESULT_SANITIZER: ToolResultSanitizerPort = Object.fr
     readonly toolName: ToolName;
     readonly result: AgentToolResult;
     readonly invocation: ToolInvocation;
-  }): AgentToolResult {
+  }): ToolResultSanitizationOutcome {
     void input.toolName;
     void input.invocation;
-    return input.result;
+    return { kind: "SANITIZED", result: input.result };
   },
 });
 
@@ -63,17 +69,17 @@ export const IDENTITY_TOOL_RESULT_SANITIZER: ToolResultSanitizerPort = Object.fr
  * DETAILS_SCHEMA  details failed the Tool's registered resultDetailsSchema
  * ```
  *
- * The kinds exist so the durable shell can keep telling a **result contract violation** apart from a
- * **pipeline infrastructure failure**: the first is settled as a fatal Tool output error, the second
- * is not, and merging them would change what a restart finds.
+ * The kinds let the Result Pipeline materialize expected result contract violations as bounded
+ * `TOOL_OUTPUT_ERROR` values while leaving unexpected implementation failures as infrastructure
+ * defects.
  */
 export type ToolResultValidationErrorKind = "SHAPE" | "DETAILS_BUDGET" | "DETAILS_SCHEMA";
 
 /**
  * The raw or sanitized result did not satisfy the registered result contract.
  *
- * This is a *typed cause*, not a model-facing failure: the caller decides how to settle it. Its
- * message never contains the offending value.
+ * This is a *typed local cause*, not a model-facing failure. Its message never contains the offending
+ * value; the Result Pipeline maps it to generic safe output feedback.
  */
 export class ToolResultValidationError extends Error {
   readonly kind: ToolResultValidationErrorKind;

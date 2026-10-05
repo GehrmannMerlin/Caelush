@@ -23,6 +23,25 @@ export interface SecretDetectionReport {
   readonly categories: readonly SecretCategory[];
 }
 
+export interface JsonRedactionLimits {
+  readonly maxNodes: number;
+  readonly maxDepth: number;
+  /** Maximum UTF-8 bytes accepted for each scanned string. */
+  readonly maxTextBytes: number;
+}
+
+export type JsonRedactionLimitReason = "SCAN_NODE_LIMIT" | "SCAN_DEPTH_LIMIT" | "TEXT_LIMIT";
+
+export interface JsonRedactionReport {
+  readonly redactionCount: number;
+  readonly categories: readonly SecretCategory[];
+  readonly nodesScanned: number;
+}
+
+export type JsonRedactionOutcome =
+  | { readonly kind: "REDACTED"; readonly value: JsonValue; readonly report: JsonRedactionReport }
+  | { readonly kind: "LIMIT_EXCEEDED"; readonly reason: JsonRedactionLimitReason };
+
 interface RedactionResult {
   readonly value: string;
   readonly count: number;
@@ -59,6 +78,152 @@ export function redactText(text: string): string {
 export function redactJson(value: JsonValue | unknown): JsonValue {
   const state = { nodes: 0 };
   return redactJsonValue(value, 0, state);
+}
+
+export function tryRedactJson(
+  value: JsonValue | unknown,
+  limits: Partial<JsonRedactionLimits> = {},
+): JsonRedactionOutcome {
+  const resolvedLimits: JsonRedactionLimits = {
+    maxNodes: limits.maxNodes ?? MAX_SECRET_JSON_NODES,
+    maxDepth: limits.maxDepth ?? MAX_SECRET_JSON_DEPTH,
+    maxTextBytes: limits.maxTextBytes ?? MAX_SECRET_SCAN_TEXT_BYTES,
+  };
+  if (
+    !Number.isSafeInteger(resolvedLimits.maxNodes) ||
+    resolvedLimits.maxNodes < 1 ||
+    !Number.isSafeInteger(resolvedLimits.maxDepth) ||
+    resolvedLimits.maxDepth < 1 ||
+    !Number.isSafeInteger(resolvedLimits.maxTextBytes) ||
+    resolvedLimits.maxTextBytes < 1
+  ) {
+    throw new RangeError("JSON redaction limits must be positive safe integers.");
+  }
+
+  const state: {
+    nodes: number;
+    redactionCount: number;
+    categories: Set<SecretCategory>;
+    active: WeakSet<object>;
+    reason?: JsonRedactionLimitReason;
+  } = { nodes: 0, redactionCount: 0, categories: new Set(), active: new WeakSet() };
+  const visit = (current: unknown, depth: number): JsonValue | undefined => {
+    if (state.reason) return undefined;
+    state.nodes += 1;
+    if (state.nodes > resolvedLimits.maxNodes) {
+      state.reason = "SCAN_NODE_LIMIT";
+      return undefined;
+    }
+    if (depth > resolvedLimits.maxDepth) {
+      state.reason = "SCAN_DEPTH_LIMIT";
+      return undefined;
+    }
+    if (current === null || typeof current === "number" || typeof current === "boolean") {
+      if (typeof current === "number" && !Number.isFinite(current)) {
+        state.reason = "SCAN_NODE_LIMIT";
+        return undefined;
+      }
+      return current;
+    }
+    if (typeof current === "string") {
+      if (Buffer.byteLength(current, "utf8") > resolvedLimits.maxTextBytes) {
+        state.reason = "TEXT_LIMIT";
+        return undefined;
+      }
+      const redacted = redactTextInternal(current);
+      if (redacted.categories.has("SCAN_LIMIT")) {
+        state.reason = "TEXT_LIMIT";
+        return undefined;
+      }
+      state.redactionCount += redacted.count;
+      for (const category of redacted.categories) state.categories.add(category);
+      return redacted.value;
+    }
+    if (typeof current !== "object") {
+      state.reason = "SCAN_NODE_LIMIT";
+      return undefined;
+    }
+
+    if (state.active.has(current)) {
+      state.reason = "SCAN_DEPTH_LIMIT";
+      return undefined;
+    }
+    state.active.add(current);
+    try {
+      if (Array.isArray(current)) {
+        const output: JsonValue[] = [];
+        const array = current as unknown[];
+        for (let index = 0; index < array.length; index += 1) {
+          output.push(visit(array[index], depth + 1) as JsonValue);
+          if (state.reason) return undefined;
+        }
+        return output;
+      }
+
+      const prototype = Object.getPrototypeOf(current);
+      if (prototype !== Object.prototype && prototype !== null) {
+        state.reason = "SCAN_NODE_LIMIT";
+        return undefined;
+      }
+      const output: Record<string, JsonValue> = {};
+      const record = current as Record<string, unknown>;
+      for (const key in record) {
+        if (!Object.prototype.hasOwnProperty.call(record, key)) continue;
+        const descriptor = Object.getOwnPropertyDescriptor(record, key);
+        if (!descriptor || !("value" in descriptor)) {
+          state.reason = "SCAN_NODE_LIMIT";
+          return undefined;
+        }
+        if (SENSITIVE_KEY.test(key)) {
+          state.nodes += 1;
+          if (state.nodes > resolvedLimits.maxNodes) {
+            state.reason = "SCAN_NODE_LIMIT";
+            return undefined;
+          }
+          if (depth + 1 > resolvedLimits.maxDepth) {
+            state.reason = "SCAN_DEPTH_LIMIT";
+            return undefined;
+          }
+          Object.defineProperty(output, key, {
+            value: REDACTED,
+            enumerable: true,
+            configurable: true,
+            writable: true,
+          });
+          state.redactionCount += 1;
+          state.categories.add(categoryForKey(key));
+        } else {
+          Object.defineProperty(output, key, {
+            value: visit(descriptor.value, depth + 1) as JsonValue,
+            enumerable: true,
+            configurable: true,
+            writable: true,
+          });
+          if (state.reason) return undefined;
+        }
+      }
+      return output;
+    } finally {
+      state.active.delete(current);
+    }
+  };
+
+  let redacted: JsonValue | undefined;
+  try {
+    redacted = visit(value, 0);
+  } catch {
+    state.reason ??= "SCAN_NODE_LIMIT";
+  }
+  if (state.reason) return { kind: "LIMIT_EXCEEDED", reason: state.reason };
+  return {
+    kind: "REDACTED",
+    value: redacted as JsonValue,
+    report: {
+      redactionCount: state.redactionCount,
+      categories: [...state.categories].sort(),
+      nodesScanned: state.nodes,
+    },
+  };
 }
 
 export function redactToolArgumentsForPresentation(args: JsonObject): JsonObject;

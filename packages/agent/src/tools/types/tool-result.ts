@@ -14,7 +14,7 @@ import type { JsonObject } from "@caelush/ai";
  * ```text
  * content   model-facing text
  * details   structured runtime/UI data, validated against the Tool's resultDetailsSchema
- * isError   true when this is a *model-recoverable* Tool failure
+ * isError   true when the handler returned a model-visible Tool failure
  * ```
  *
  * This is **not** a durable observation, not a UI event and not an AI message. Four result shapes
@@ -27,9 +27,10 @@ import type { JsonObject } from "@caelush/ai";
  * AIToolResultMessage      what the model is told next turn
  * ```
  *
- * `isError` is a Tool failure the model may read and recover from. An infrastructure failure, an
- * uncertain side effect or a broken result contract is never expressed by returning
- * `isError: true` — those leave the Tool boundary as failures of the pipeline, not as results.
+ * `isError` records what the Tool handler returned. The Result Pipeline separately materializes
+ * expected output-contract or sanitizer failures as bounded durable failure feedback; it never
+ * forwards an invalid or unsanitized handler result. Unknown side effects remain distinguishable
+ * from ordinary output failures and are not automatically replayed.
  *
  * ## Name collision with the frozen Phase 3 Tool turn contract
  *

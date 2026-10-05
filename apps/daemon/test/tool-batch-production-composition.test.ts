@@ -3,6 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
+import {
+  createObservationId,
+  createRunId,
+  createStepId,
+  createTimestampMs,
+  createToolInvocationId,
+} from "@caelush/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { composeDaemon, type DaemonComposition } from "../src/daemon-composition.js";
 
@@ -144,5 +151,65 @@ describe("Phase 4D daemon Tool batch composition", () => {
         isError: true,
       },
     ]);
+  });
+
+  it("preserves observed-error and not-started provenance in the production feedback pipeline", async () => {
+    const daemon = await compose();
+    const calls = [
+      { externalCallId: "call_failed", toolName: "read_file" as const, args: { path: "a" } },
+      { externalCallId: "call_not_started", toolName: "read_file" as const, args: { path: "b" } },
+    ];
+    const runId = createRunId();
+    const stepId = createStepId();
+    const failedInvocationId = createToolInvocationId();
+    const failedObservationId = createObservationId();
+    const items = [
+      {
+        kind: "OBSERVATION" as const,
+        call: calls[0]!,
+        invocationId: failedInvocationId,
+        finalStatus: "FAILED" as const,
+        observation: {
+          id: failedObservationId,
+          runId,
+          stepId,
+          kind: "TOOL" as const,
+          toolInvocationId: failedInvocationId,
+          content: "The Tool execution failed safely.",
+          details: { errorCode: "TOOL_EXECUTION_ERROR" },
+          isError: true,
+          createdAt: createTimestampMs(1),
+        },
+      },
+      {
+        kind: "SKIPPED" as const,
+        call: calls[1]!,
+        feedback: {
+          code: "TOOL_NOT_STARTED",
+          content: "This Tool call was not started after an earlier unknown outcome.",
+          details: {},
+          disposition: "SAFE_FAILURE" as const,
+        },
+      },
+    ];
+    const projected = daemon.toolTurn.feedback.project({
+      calls,
+      items,
+      policy: { maxSingleObservationTokens: 1_000, maxObservationBatchTokens: 4_000 },
+    });
+    const normalized = daemon.toolTurn.normalizer.normalize({
+      requests: calls,
+      results: projected.map((item) => item.message),
+    });
+
+    expect(projected.map((item) => item.observation)).toEqual([
+      { kind: "OBSERVATION", observationId: failedObservationId },
+      { kind: "NO_OBSERVATION" },
+    ]);
+    expect(normalized.map((message) => message.toolCallId)).toEqual([
+      "call_failed",
+      "call_not_started",
+    ]);
+    expect(normalized.map((message) => message.isError)).toEqual([true, true]);
   });
 });

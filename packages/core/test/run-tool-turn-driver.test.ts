@@ -14,12 +14,14 @@ import {
   eventTypes,
   harness3d,
   makeRunD,
+  testApprovalBoundary,
   stubToolBatches,
   stubToolTurnPipeline,
   toolResultItem,
   toolTurn,
   type ToolBatchAnswer,
 } from "./support/phase-3d-tool-turn.js";
+import { harness3e } from "./support/phase-3e-completion.js";
 
 /**
  * Phase 3D — the durable Tool turn driver.
@@ -104,18 +106,25 @@ async function parkOnToolBoundary(
     readonly input?: unknown;
   }[] = [{ id: "call_a", name: "read_file", input: { path: "a.ts" } }],
 ) {
-  const harness = harness3d({
-    script: (call) => (call === 0 ? toolTurn(calls) : answerTurn()),
-    toolBatches: scriptedBatches({
-      kind: "WAITING_APPROVAL",
-      // Nothing reached a final item outcome before the waiting call.
-      items: [],
-      pendingCall: { externalCallId: calls[0]!.id, toolName: calls[0]!.name, args: {} },
-      approval: approvalRequest({
-        id: "apr_waiting",
-        toolInvocationId: "tiv_waiting",
-      }),
+  const run = makeRunD();
+  const batches = scriptedBatches({
+    kind: "WAITING_APPROVAL",
+    // Nothing reached a final item outcome before the waiting call.
+    items: [],
+    pendingCall: { externalCallId: calls[0]!.id, toolName: calls[0]!.name, args: {} },
+    approval: approvalRequest({
+      id: "apr_waiting",
+      toolInvocationId: "tiv_waiting",
     }),
+  });
+  const approvals = testApprovalBoundary(run.id);
+  const harness = harness3e({
+    run,
+    script: (call) => (call === 0 ? toolTurn(calls) : answerTurn()),
+    extra: {
+      approvals: approvals.port,
+      toolTurn: stubToolTurnPipeline(batches),
+    },
   });
   const result = await harness.controller.start(harness.store.snapshot.run.id);
   const snapshot = harness.store.snapshot;
@@ -127,19 +136,23 @@ async function parkOnToolBoundary(
   }
   const waiting = snapshot.continuation.waitingApproval;
   if (waiting?.approvalId === undefined) throw new Error("no approval was created");
-  harness.approvals.declare({
+  approvals.declare({
     approvalId: waiting.approvalId,
     toolInvocationId: waiting.invocationId,
   });
-  return { harness, snapshot, approvalId: waiting.approvalId };
+  return {
+    harness: { ...harness, approvals, toolBatches: batches },
+    snapshot,
+    approvalId: waiting.approvalId,
+  };
 }
 describe("Phase 3D Tool turn driver", () => {
   it("drives EXECUTE_TOOL_BATCH through the frozen Run execution driver exactly once", async () => {
     const batches = scriptedBatches(completeAnswer("body", { invocationId: (i) => `tiv_${i}` }));
-    const h = harness3d({
+    const h = harness3e({
       script: (call) =>
         call === 0 ? toolTurn([{ id: "call_a", name: "read_file" }]) : answerTurn("finished"),
-      toolBatches: batches,
+      extra: { toolTurn: stubToolTurnPipeline(batches) },
     });
 
     const result = await h.controller.start(h.store.snapshot.run.id);
@@ -149,12 +162,144 @@ describe("Phase 3D Tool turn driver", () => {
     expect(batches.calls[0]!.operation).toBe("execute");
     expect(batches.physicalExecutions).toBe(1);
     expect(h.turns).toHaveLength(2);
-    expect(result.status).toBe("AWAITING_VERIFICATION");
+    expect(
+      h.store.commits.some(
+        (commit) =>
+          commit.continuation?.operation === "SET" &&
+          commit.continuation.checkpoint.type === "AWAITING_VERIFICATION",
+      ),
+    ).toBe(true);
+    expect(result.status).toBe("TERMINAL");
+    expect(h.store.snapshot.run.status).toBe("COMPLETED");
+  });
+
+  it("continues the provider turn after a complete success/error/success Tool batch", async () => {
+    const calls = [
+      { id: "call_success_before", name: "read_file" },
+      { id: "call_safe_failure", name: "exec_command" },
+      { id: "call_success_after", name: "read_file" },
+    ];
+    const batches = scriptedBatches({
+      kind: "COMPLETED",
+      items: [
+        toolResultItem({
+          externalCallId: "call_success_before",
+          toolName: "read_file",
+          content: "first result",
+          index: 0,
+        }),
+        toolResultItem({
+          externalCallId: "call_safe_failure",
+          toolName: "exec_command",
+          content: "The tool execution failed safely.",
+          isError: true,
+          index: 1,
+        }),
+        toolResultItem({
+          externalCallId: "call_success_after",
+          toolName: "read_file",
+          content: "third result",
+          index: 2,
+        }),
+      ],
+    });
+    const h = harness3e({
+      script: (call) =>
+        call === 0 ? toolTurn(calls) : answerTurn("finished after the tool error"),
+      extra: { toolTurn: stubToolTurnPipeline(batches) },
+    });
+
+    const result = await h.controller.start(h.store.snapshot.run.id);
+    const secondTurnTools = h.turns[1]?.request.messages.filter(
+      (message) => message.role === "tool",
+    );
+
+    expect(batches.calls).toHaveLength(1);
+    expect(h.turns).toHaveLength(2);
+    expect(secondTurnTools?.map((message) => message.toolCallId)).toEqual([
+      "call_success_before",
+      "call_safe_failure",
+      "call_success_after",
+    ]);
+    expect(secondTurnTools?.map((message) => message.isError)).toEqual([false, true, false]);
+    expect(
+      h.store.commits.some(
+        (commit) =>
+          commit.continuation?.operation === "SET" &&
+          commit.continuation.checkpoint.type === "AWAITING_VERIFICATION",
+      ),
+    ).toBe(true);
+    expect(result.status).toBe("TERMINAL");
+    expect(h.store.snapshot.run.status).toBe("COMPLETED");
+    expect(eventTypes(h.notifications)).not.toContain("run.failed");
+  });
+
+  it("feeds unknown and not-started Tool results once without redispatch", async () => {
+    const calls = [
+      { id: "call_unknown", name: "exec_command" },
+      { id: "call_not_started", name: "read_file" },
+    ];
+    const batches = scriptedBatches({
+      kind: "COMPLETED",
+      items: [
+        toolResultItem({
+          externalCallId: "call_unknown",
+          toolName: "exec_command",
+          content: "The tool outcome could not be confirmed.",
+          isError: true,
+          index: 0,
+        }),
+        {
+          kind: "SKIPPED",
+          call: {
+            externalCallId: "call_not_started",
+            toolName: "read_file",
+            args: {},
+          },
+          feedback: {
+            code: "TOOL_NOT_STARTED",
+            content: "This tool call was not started because an earlier tool outcome is unknown.",
+            details: {},
+            disposition: "SAFE_FAILURE",
+          },
+        },
+      ],
+    });
+    const h = harness3e({
+      script: (call) => (call === 0 ? toolTurn(calls) : answerTurn("inspect before proceeding")),
+      extra: { toolTurn: stubToolTurnPipeline(batches) },
+    });
+
+    const result = await h.controller.start(h.store.snapshot.run.id);
+    const secondTurnTools = h.turns[1]?.request.messages.filter(
+      (message) => message.role === "tool",
+    );
+
+    expect(batches.calls).toHaveLength(1);
+    expect(batches.physicalExecutions).toBe(1);
+    expect(h.turns).toHaveLength(2);
+    expect(secondTurnTools?.map((message) => message.toolCallId)).toEqual([
+      "call_unknown",
+      "call_not_started",
+    ]);
+    expect(secondTurnTools?.map((message) => message.isError)).toEqual([true, true]);
+    expect(
+      h.store.commits.some(
+        (commit) =>
+          commit.continuation?.operation === "SET" &&
+          commit.continuation.checkpoint.type === "AWAITING_VERIFICATION",
+      ),
+    ).toBe(true);
+    expect(result.status).toBe("TERMINAL");
+    expect(h.store.snapshot.run.status).toBe("COMPLETED");
+    expect(eventTypes(h.notifications)).not.toContain("run.failed");
   });
 
   it("hands the legacy Tool Layer only the frozen facts plus the captured Run-scoped ones", async () => {
     const batches = scriptedBatches(completeAnswer());
     const run = makeRunD({ permissionProfile: "PROJECT_ACCESS", approvalPolicy: "DANGEROUS_ONLY" });
+    if (run.securityPolicy === undefined)
+      throw new Error("the fixture Run needs a security policy");
     const h = harness3d({
       run,
       script: (call) =>
@@ -172,10 +317,20 @@ describe("Phase 3D Tool turn driver", () => {
     expect(request.runId).toBe(run.id);
     expect(request.sessionId).toBe(run.sessionId);
     expect(request.environment).toEqual({ workspace: run.workspace, runtime: run.runtime });
-    expect(request.securityContext).toEqual({
+    expect(request.securityContext).toMatchObject({
       permissionProfile: "PROJECT_ACCESS",
       approvalPolicy: "DANGEROUS_ONLY",
+      securityPolicy: {
+        presetId: "WORKSPACE_WRITE",
+        presetVersion: 1,
+        filesystemBoundary: "WORKSPACE_READ_WRITE",
+        processBoundary: "WORKSPACE_WRITE",
+        requiredEnforcement: "OS_RESTRICTED",
+        policyDigest: run.securityPolicy.policyDigest,
+      },
     });
+    expect(request.securityContext.securityPolicy).not.toHaveProperty("createdAt");
+    expect(request.securityContext.securityPolicy).not.toHaveProperty("schemaVersion");
     // The batch is the model's own request, in its own order, with its own arguments.
     expect(request.calls).toEqual([
       { externalCallId: "call_a", toolName: "read_file", args: { path: "a.ts" } },
@@ -405,9 +560,6 @@ describe("Phase 3D Tool turn driver", () => {
     harness.toolBatches.answerWith = completeAnswer("recovered", {
       invocationId: (i) => `tiv_${i}`,
     });
-    harness.executor.resetScript((_request, _signal, call) =>
-      call === 0 ? toolTurn([{ id: "call_a", name: "read_file" }]) : answerTurn("finished"),
-    );
 
     const result = await harness.controller.resolveApproval(snapshot.run.id, approvalId, {
       action: "APPROVE",
@@ -426,7 +578,15 @@ describe("Phase 3D Tool turn driver", () => {
     // call is not re-executed. `packages/storage/test/run-controller-tool-integration.test.ts` drives
     // the real canonical batch over a real Tool execution store and is where that is proven.
     expect(harness.toolBatches.physicalExecutions).toBe(2);
-    expect(result.status).toBe("AWAITING_VERIFICATION");
+    expect(
+      harness.store.commits.some(
+        (commit) =>
+          commit.continuation?.operation === "SET" &&
+          commit.continuation.checkpoint.type === "AWAITING_VERIFICATION",
+      ),
+    ).toBe(true);
+    expect(result.status).toBe("TERMINAL");
+    expect(harness.store.snapshot.run.status).toBe("COMPLETED");
   });
 
   it("re-presents the same batch on RECOVER instead of selecting a second entry point", async () => {
@@ -450,7 +610,15 @@ describe("Phase 3D Tool turn driver", () => {
     expect(harness.toolBatches.calls[1]!.request.sourceStepId).toBe(
       harness.toolBatches.calls[0]!.request.sourceStepId,
     );
-    expect(result.status).toBe("AWAITING_VERIFICATION");
+    expect(
+      harness.store.commits.some(
+        (commit) =>
+          commit.continuation?.operation === "SET" &&
+          commit.continuation.checkpoint.type === "AWAITING_VERIFICATION",
+      ),
+    ).toBe(true);
+    expect(result.status).toBe("TERMINAL");
+    expect(harness.store.snapshot.run.status).toBe("COMPLETED");
   });
 
   it("leaves a parked approval boundary exactly where it is", async () => {

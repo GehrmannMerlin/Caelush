@@ -1,8 +1,8 @@
 import type { TimestampMs, ToolInvocation } from "@caelush/protocol";
+import type { JsonObject } from "@caelush/ai";
 
 import type { PreparedToolCall } from "../call/tool-call-preparer.js";
 import { canonicalJsonString, jsonUtf8ByteLength } from "../schema/json-canonical.js";
-import { ToolExecutionInfrastructureError } from "../types/errors.js";
 import type { AgentToolResult } from "../types/tool-result.js";
 import {
   DEFAULT_TOOL_RESULT_LIMITS,
@@ -15,9 +15,14 @@ import {
   IDENTITY_TOOL_RESULT_SANITIZER,
   ToolResultValidationError,
   type ToolResultSanitizerPort,
+  type ToolResultSanitizationRefusalReason,
   type ValidatedToolResult,
 } from "./result-sanitizer-port.js";
 import { readSanitizedResultShape, validateToolResult } from "./result-validator.js";
+import type {
+  MaterializedToolFailure,
+  ToolResultProcessingOutcome,
+} from "./tool-result-processing-outcome.js";
 
 /**
  * The processed result a settlement may commit.
@@ -48,13 +53,13 @@ export interface PreparedToolSettlement {
  *     readonly invocation: ToolInvocation;
  *     readonly rawResult: AgentToolResult;
  *     readonly now: TimestampMs;
- *   }): PreparedToolSettlement;
+ *   }): ToolResultProcessingOutcome;
  * }
  * ```
  *
- * `process` is synchronous and total over its declared input. It cannot reach storage, an event bus,
- * a model, a context engine, an approval store or a budget ledger, because nothing of the sort is in
- * its options or its arguments.
+ * `process` is synchronous and total over expected result-contract failures. It cannot reach
+ * storage, an event bus, a model, a context engine, an approval store or a budget ledger, because
+ * nothing of the sort is in its options or its arguments.
  *
  * The frozen internal order, which later rounds must not reorder:
  *
@@ -70,7 +75,7 @@ export interface PreparedToolSettlement {
  * ⑨ resultDetailsSchema re-validation
  * ⑩ bound content to maxDurableContentBytes
  * ⑪ project the optional settlement extension
- * ⑫ return an immutable PreparedToolSettlement
+ * ⑫ return an ACCEPTED settlement or bounded FAILED feedback
  * ```
  *
  * Steps ⑦–⑨ exist because a sanitizer is not a trusted transform: it can drop a required field,
@@ -84,13 +89,13 @@ export interface ToolResultPipeline {
     readonly invocation: ToolInvocation;
     readonly rawResult: AgentToolResult;
     readonly now: TimestampMs;
-  }): PreparedToolSettlement;
+  }): ToolResultProcessingOutcome;
 }
 
 export interface ToolResultPipelineOptions {
   readonly sanitizer?: ToolResultSanitizerPort | undefined;
   readonly limits?: ToolResultLimits | undefined;
-  /** Optional opaque settlement extension projector. Its throw is a RESULT_PIPELINE failure. */
+  /** Optional opaque settlement extension projector. Its throw produces TOOL_OUTCOME_UNKNOWN. */
   readonly settlementExtension?: ToolSettlementExtensionProjector | undefined;
 }
 
@@ -102,37 +107,54 @@ export function createToolResultPipeline(
   const settlementExtension = options.settlementExtension;
 
   return {
-    process(input): PreparedToolSettlement {
+    process(input): ToolResultProcessingOutcome {
       // ①–⑤  the raw producer value never leaves this function unfrozen or unvalidated.
-      const validated: ValidatedToolResult = validateToolResult({
-        value: input.rawResult,
-        resolved: input.call.resolved,
-        limits,
-      });
+      let validated: ValidatedToolResult;
+      try {
+        validated = validateToolResult({
+          value: input.rawResult,
+          resolved: input.call.resolved,
+          limits,
+        });
+      } catch (error) {
+        if (error instanceof ToolResultValidationError) return outputFailure();
+        throw error;
+      }
 
-      // ⑥  sanitize. A result that cannot be sanitized has no defensible durable form: it is never
-      // downgraded to `isError: true`, and the raw result is never forwarded as a fallback.
+      // ⑥  a refusal or throw becomes safe output feedback; raw and partial values never leave here.
       let sanitizedValue: unknown;
       try {
-        sanitizedValue = sanitizer.sanitize({
+        const sanitizerOutcome: unknown = sanitizer.sanitize({
           toolName: input.call.resolved.tool.name,
           result: validated as AgentToolResult,
           invocation: input.invocation,
         });
-      } catch (error) {
-        throw new ToolExecutionInfrastructureError(
-          "RESULT_PIPELINE",
-          "Tool result sanitization failed.",
-          { cause: error },
-        );
+        if (typeof sanitizerOutcome !== "object" || sanitizerOutcome === null) {
+          return outputFailure();
+        }
+        const kind = (sanitizerOutcome as { readonly kind?: unknown }).kind;
+        if (kind === "REFUSED") {
+          const reason = (sanitizerOutcome as { readonly reason?: unknown }).reason;
+          return outputFailure(isRefusalReason(reason) ? reason : undefined);
+        }
+        if (kind !== "SANITIZED") return outputFailure();
+        sanitizedValue = (sanitizerOutcome as { readonly result?: unknown }).result;
+      } catch {
+        return outputFailure();
       }
 
       // ⑦–⑩  full re-validation of what the sanitizer produced, then the durable bound.
-      const sanitized = revalidateSanitized({
-        value: sanitizedValue,
-        call: input.call,
-        limits,
-      });
+      let sanitized: ValidatedToolResult;
+      try {
+        sanitized = revalidateSanitized({
+          value: sanitizedValue,
+          call: input.call,
+          limits,
+        });
+      } catch (error) {
+        if (error instanceof ToolResultValidationError) return outputFailure();
+        throw error;
+      }
 
       const result: AgentToolResult = Object.freeze({
         content: sanitized.content,
@@ -142,25 +164,74 @@ export function createToolResultPipeline(
 
       // ⑪  the extension sees only a safe, final result.
       if (settlementExtension === undefined) {
-        return Object.freeze({ result });
+        return Object.freeze({
+          kind: "ACCEPTED",
+          settlement: Object.freeze({ result }),
+        });
       }
       let extension: ToolSettlementExtension | undefined;
       try {
         extension = settlementExtension({ call: input.call, result, now: input.now });
-      } catch (error) {
-        throw new ToolExecutionInfrastructureError(
-          "RESULT_PIPELINE",
-          "Tool settlement extension projection failed.",
-          { cause: error },
-        );
+      } catch {
+        return unknownOutcomeFailure();
       }
 
       // ⑫  immutable settlement.
-      return Object.freeze(
-        extension === undefined ? { result } : { result, effects: Object.freeze(extension) },
-      );
+      return Object.freeze({
+        kind: "ACCEPTED",
+        settlement: Object.freeze(
+          extension === undefined ? { result } : { result, effects: Object.freeze(extension) },
+        ),
+      });
     },
   };
+}
+
+const OUTPUT_FAILURE_CONTENT =
+  "The tool output could not be safely validated. Use a narrower request or a different approach.";
+const UNKNOWN_OUTCOME_CONTENT =
+  "The tool's effects could not be confirmed. Do not repeat this call automatically; inspect the workspace before deciding what to do next.";
+
+function outputFailure(reason?: ToolResultSanitizationRefusalReason): ToolResultProcessingOutcome {
+  const details: JsonObject = reason === undefined ? {} : { reason };
+  const failure: MaterializedToolFailure = {
+    error: {
+      code: "TOOL_OUTPUT_ERROR",
+      phase: "TOOL",
+      message: "Tool output could not be safely processed.",
+    },
+    feedback: {
+      code: "TOOL_OUTPUT_ERROR",
+      content: OUTPUT_FAILURE_CONTENT,
+      details,
+      disposition: "SAFE_FAILURE",
+    },
+  };
+  return Object.freeze({ kind: "FAILED", failure: Object.freeze(failure) });
+}
+
+function isRefusalReason(value: unknown): value is ToolResultSanitizationRefusalReason {
+  return value === "SCAN_NODE_LIMIT" || value === "SCAN_DEPTH_LIMIT" || value === "TEXT_LIMIT";
+}
+
+function unknownOutcomeFailure(): ToolResultProcessingOutcome {
+  const details: JsonObject = { executionDisposition: "UNCERTAIN_SIDE_EFFECT" };
+  const failure: MaterializedToolFailure = {
+    error: {
+      code: "TOOL_OUTCOME_UNKNOWN",
+      phase: "RUNTIME",
+      message: "Tool outcome could not be confirmed.",
+    },
+    feedback: {
+      code: "TOOL_OUTCOME_UNKNOWN",
+      content: UNKNOWN_OUTCOME_CONTENT,
+      details,
+      disposition: "UNCERTAIN_SIDE_EFFECT",
+      blockToolFailures: true,
+    },
+    errorDetails: details,
+  };
+  return Object.freeze({ kind: "FAILED", failure: Object.freeze(failure) });
 }
 
 function revalidateSanitized(input: {

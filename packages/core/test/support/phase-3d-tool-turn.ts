@@ -42,6 +42,7 @@ import type {
 } from "@caelush/protocol";
 import {
   AgentRunSchema,
+  computeSecurityPolicyDigest,
   createEventId,
   createRunId,
   createSessionId,
@@ -559,7 +560,7 @@ export interface ApprovalBoundary {
   readonly port: unknown;
 }
 
-function testApprovalBoundary(runId: RunId): ApprovalBoundary {
+export function testApprovalBoundary(runId: RunId): ApprovalBoundary {
   let status: "PENDING" | "APPROVED" = "PENDING";
   let declaration: { readonly approvalId: string; readonly toolInvocationId: string } | undefined;
   const request = () => ({
@@ -590,6 +591,28 @@ function testApprovalBoundary(runId: RunId): ApprovalBoundary {
 }
 
 export function makeRunD(overrides: Partial<AgentRun> = {}): AgentRun {
+  const permissionProfile = overrides.permissionProfile ?? "READ_ONLY";
+  const approvalPolicy = overrides.approvalPolicy ?? "ALWAYS_ASK";
+  const securityPolicy = {
+    schemaVersion: 1 as const,
+    preset: {
+      id: permissionProfile === "READ_ONLY" ? ("VIEW_ONLY" as const) : ("WORKSPACE_WRITE" as const),
+      version: 1,
+    },
+    permissionProfile,
+    approvalPolicy,
+    filesystemBoundary:
+      permissionProfile === "READ_ONLY"
+        ? ("WORKSPACE_READ_ONLY" as const)
+        : ("WORKSPACE_READ_WRITE" as const),
+    processBoundary:
+      permissionProfile === "READ_ONLY" ? ("READ_ONLY" as const) : ("WORKSPACE_WRITE" as const),
+    requiredEnforcement: "OS_RESTRICTED" as const,
+    hardSafetyPolicyVersion: "hard-safety@1",
+    commandPolicyVersion: "command-policy@1",
+    secretPolicyVersion: "secret-policy@1",
+    createdAt: new Date(1).toISOString(),
+  };
   return AgentRunSchema.parse({
     id: createRunId(),
     sessionId: createSessionId(),
@@ -598,8 +621,12 @@ export function makeRunD(overrides: Partial<AgentRun> = {}): AgentRun {
     workspace: { id: createWorkspaceId(), path: "/repo" },
     model: { provider: "fixture", model: "fixture-model" },
     runtime: { id: "local", kind: "fixture" },
-    permissionProfile: "READ_ONLY",
-    approvalPolicy: "ALWAYS_ASK",
+    permissionProfile,
+    approvalPolicy,
+    securityPolicy: {
+      ...securityPolicy,
+      policyDigest: computeSecurityPolicyDigest(securityPolicy),
+    },
     limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 100_000 },
     createdAt: createTimestampMs(1),
     ...overrides,

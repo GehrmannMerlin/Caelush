@@ -17,9 +17,7 @@ import {
   isAgentToolResult,
   readResultShape,
   TOOL_RESULT_TRUNCATION_MARKER,
-  ToolExecutionInfrastructureError,
   ToolResultLimitError,
-  ToolResultValidationError,
   validateToolResult,
   validateToolResultLimits,
   type AgentTool,
@@ -106,16 +104,69 @@ function fixture(tool: AgentTool = agentTool()): {
 
 const NOW = createTimestampMs(2);
 
+function acceptedSettlement(outcome: unknown): {
+  readonly result: {
+    readonly content: string;
+    readonly details: JsonObject;
+    readonly isError: boolean;
+  };
+  readonly effects?: ToolSettlementExtension | undefined;
+} {
+  const value = outcome as {
+    readonly kind?: string;
+    readonly settlement?: {
+      readonly result: {
+        readonly content: string;
+        readonly details: JsonObject;
+        readonly isError: boolean;
+      };
+      readonly effects?: ToolSettlementExtension | undefined;
+    };
+  };
+  expect(value.kind).toBe("ACCEPTED");
+  if (value.settlement === undefined) throw new Error("expected an accepted settlement");
+  return value.settlement;
+}
+
+function expectOutputFailure(outcome: unknown): {
+  readonly failure: {
+    readonly error: { readonly code: string; readonly message: string };
+    readonly feedback: {
+      readonly disposition: string;
+      readonly details: JsonObject;
+      readonly blockToolFailures?: boolean;
+    };
+  };
+} {
+  const value = outcome as {
+    readonly kind?: string;
+    readonly failure?: {
+      readonly error: { readonly code: string; readonly message: string };
+      readonly feedback: {
+        readonly disposition: string;
+        readonly details: JsonObject;
+        readonly blockToolFailures?: boolean;
+      };
+    };
+  };
+  expect(value.kind).toBe("FAILED");
+  expect(value.failure?.error.code).toBe("TOOL_OUTPUT_ERROR");
+  expect(value.failure?.feedback.disposition).toBe("SAFE_FAILURE");
+  expect(value.failure?.feedback.blockToolFailures).toBeUndefined();
+  return value as ReturnType<typeof expectOutputFailure>;
+}
+
 describe("ToolResultPipeline result contract", () => {
   it("accepts an exact result and freezes it", () => {
     const { call, invocation } = fixture();
-    const settlement = createToolResultPipeline().process({
+    const outcome = createToolResultPipeline().process({
       call,
       invocation,
       rawResult: { content: "safe", details: { echoed: "safe" }, isError: false },
       now: NOW,
     });
 
+    const settlement = acceptedSettlement(outcome);
     expect(settlement.result).toEqual({
       content: "safe",
       details: { echoed: "safe" },
@@ -138,19 +189,13 @@ describe("ToolResultPipeline result contract", () => {
   ])("rejects %s as a SHAPE violation", (_label, rawResult) => {
     const { call, invocation } = fixture();
 
-    let thrown: unknown;
-    try {
-      createToolResultPipeline().process({
-        call,
-        invocation,
-        rawResult: rawResult as never,
-        now: NOW,
-      });
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(ToolResultValidationError);
-    expect((thrown as ToolResultValidationError).kind).toBe("SHAPE");
+    const outcome = createToolResultPipeline().process({
+      call,
+      invocation,
+      rawResult: rawResult as never,
+      now: NOW,
+    });
+    expectOutputFailure(outcome);
   });
 
   it("rejects a class instance that carries the right fields", () => {
@@ -161,39 +206,33 @@ describe("ToolResultPipeline result contract", () => {
     }
     const { call, invocation } = fixture();
 
-    expect(() =>
+    expectOutputFailure(
       createToolResultPipeline().process({
         call,
         invocation,
         rawResult: new Sneaky() as never,
         now: NOW,
       }),
-    ).toThrowError(ToolResultValidationError);
+    );
   });
 
   it("rejects details that violate the registered result schema", () => {
     const { call, invocation } = fixture();
 
-    let thrown: unknown;
-    try {
+    expectOutputFailure(
       createToolResultPipeline().process({
         call,
         invocation,
         rawResult: { content: "safe", details: { echoed: 42 }, isError: false },
         now: NOW,
-      });
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(ToolResultValidationError);
-    expect((thrown as ToolResultValidationError).kind).toBe("DETAILS_SCHEMA");
+      }),
+    );
   });
 
   it("rejects oversized details without truncating them", () => {
     const { call, invocation } = fixture();
 
-    let thrown: unknown;
-    try {
+    expectOutputFailure(
       createToolResultPipeline({
         limits: { maxDurableContentBytes: 1024, maxDetailsBytes: 8 },
       }).process({
@@ -201,19 +240,15 @@ describe("ToolResultPipeline result contract", () => {
         invocation,
         rawResult: { content: "safe", details: { echoed: "a".repeat(64) }, isError: false },
         now: NOW,
-      });
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(ToolResultValidationError);
-    expect((thrown as ToolResultValidationError).kind).toBe("DETAILS_BUDGET");
+      }),
+    );
   });
 
   it("bounds content at a whole-character UTF-8 boundary and marks it", () => {
     const { call, invocation } = fixture();
     const content = "ab中文🙂cd".repeat(10);
 
-    const settlement = createToolResultPipeline({
+    const outcome = createToolResultPipeline({
       limits: { maxDurableContentBytes: 30, maxDetailsBytes: 4096 },
     }).process({
       call,
@@ -222,6 +257,7 @@ describe("ToolResultPipeline result contract", () => {
       now: NOW,
     });
 
+    const settlement = acceptedSettlement(outcome);
     expect(settlement.result.content).toContain(TOOL_RESULT_TRUNCATION_MARKER);
     expect(Buffer.byteLength(settlement.result.content, "utf8")).toBeLessThanOrEqual(30);
     // No lone surrogate: the bounded text is valid UTF-8 end to end.
@@ -233,12 +269,15 @@ describe("ToolResultSanitizerPort", () => {
   it("receives the tool name, the invocation and the validated result", () => {
     const { call, invocation } = fixture();
     const sanitize = vi.fn(({ result }: { result: { content: string } }) => ({
-      content: `[safe] ${result.content}`,
-      details: { echoed: "safe" },
-      isError: false,
+      kind: "SANITIZED",
+      result: {
+        content: `[safe] ${result.content}`,
+        details: { echoed: "safe" },
+        isError: false,
+      },
     }));
 
-    const settlement = createToolResultPipeline({ sanitizer: { sanitize } }).process({
+    const outcome = createToolResultPipeline({ sanitizer: { sanitize } as never }).process({
       call,
       invocation,
       rawResult: { content: "unsafe", details: { echoed: "safe" }, isError: false },
@@ -255,120 +294,119 @@ describe("ToolResultSanitizerPort", () => {
     expect(received.invocation.id).toBe(invocation.id);
     expect(received.result.content).toBe("unsafe");
     expect(received.result.details).toEqual({ echoed: "safe" });
-    expect(settlement.result.content).toBe("[safe] unsafe");
+    expect(acceptedSettlement(outcome).result.content).toBe("[safe] unsafe");
   });
 
-  it("re-validates what the sanitizer returned: an introduced schema error is caught", () => {
-    const { call, invocation } = fixture();
-    const sanitizer: ToolResultSanitizerPort = {
-      sanitize: () => ({ content: "safe", details: { echoed: 42 }, isError: false }),
-    };
-
-    let thrown: unknown;
-    try {
-      createToolResultPipeline({ sanitizer }).process({
-        call,
-        invocation,
-        rawResult: { content: "safe", details: { echoed: "safe" }, isError: false },
-        now: NOW,
-      });
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(ToolResultValidationError);
-    expect((thrown as ToolResultValidationError).kind).toBe("DETAILS_SCHEMA");
-  });
-
-  it("re-validates the sanitized shape: a dropped field is caught", () => {
+  it("materializes a sanitizer-produced schema error as a safe Tool failure", () => {
     const { call, invocation } = fixture();
     const sanitizer = {
-      sanitize: () => ({ content: "safe", details: { echoed: "safe" } }) as never,
+      sanitize: () => ({
+        kind: "SANITIZED",
+        result: { content: "RAW_INVALID", details: { echoed: 42 }, isError: false },
+      }),
     };
 
-    let thrown: unknown;
-    try {
-      createToolResultPipeline({ sanitizer }).process({
-        call,
-        invocation,
-        rawResult: { content: "safe", details: { echoed: "safe" }, isError: false },
-        now: NOW,
-      });
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(ToolResultValidationError);
-    expect((thrown as ToolResultValidationError).kind).toBe("SHAPE");
+    const outcome = createToolResultPipeline({ sanitizer: sanitizer as never }).process({
+      call,
+      invocation,
+      rawResult: { content: "safe", details: { echoed: "safe" }, isError: false },
+      now: NOW,
+    });
+    expectOutputFailure(outcome);
+    expect(JSON.stringify(outcome)).not.toContain("RAW_INVALID");
   });
 
-  it("re-validates the sanitized details budget: a ballooned payload is caught", () => {
+  it("materializes a SANITIZED outcome with a missing field as a safe Tool failure", () => {
     const { call, invocation } = fixture();
-    const sanitizer: ToolResultSanitizerPort = {
-      sanitize: () => ({ content: "safe", details: { echoed: "a".repeat(200) }, isError: false }),
+    const sanitizer = {
+      sanitize: () => ({
+        kind: "SANITIZED",
+        result: { content: "RAW_MISSING", details: { echoed: "safe" } },
+      }),
     };
 
-    let thrown: unknown;
-    try {
-      createToolResultPipeline({
-        sanitizer,
-        limits: { maxDurableContentBytes: 4096, maxDetailsBytes: 32 },
-      }).process({
-        call,
-        invocation,
-        rawResult: { content: "safe", details: { echoed: "safe" }, isError: false },
-        now: NOW,
-      });
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(ToolResultValidationError);
-    expect((thrown as ToolResultValidationError).kind).toBe("DETAILS_BUDGET");
+    const outcome = createToolResultPipeline({ sanitizer: sanitizer as never }).process({
+      call,
+      invocation,
+      rawResult: { content: "safe", details: { echoed: "safe" }, isError: false },
+      now: NOW,
+    });
+    expectOutputFailure(outcome);
+    expect(JSON.stringify(outcome)).not.toContain("RAW_MISSING");
   });
 
-  it("turns a sanitizer throw into a RESULT_PIPELINE infrastructure failure", () => {
+  it("materializes a sanitized details-budget violation as a safe Tool failure", () => {
     const { call, invocation } = fixture();
-    const sanitizer: ToolResultSanitizerPort = {
+    const sanitizer = {
+      sanitize: () => ({
+        kind: "SANITIZED",
+        result: { content: "safe", details: { echoed: "a".repeat(200) }, isError: false },
+      }),
+    };
+
+    const outcome = createToolResultPipeline({
+      sanitizer: sanitizer as never,
+      limits: { maxDurableContentBytes: 4096, maxDetailsBytes: 32 },
+    }).process({
+      call,
+      invocation,
+      rawResult: { content: "safe", details: { echoed: "safe" }, isError: false },
+      now: NOW,
+    });
+    expectOutputFailure(outcome);
+  });
+
+  it("turns a sanitizer throw into a safe Tool failure without exposing its cause", () => {
+    const { call, invocation } = fixture();
+    const sanitizer = {
       sanitize: () => {
-        throw new Error("redaction table unavailable");
+        throw new Error("SECRET_TOKEN_12345678 C:\\Users\\alice\\repo\\file.ts STACK_MARKER");
       },
     };
 
-    let thrown: unknown;
-    try {
-      createToolResultPipeline({ sanitizer }).process({
-        call,
-        invocation,
-        rawResult: { content: "secret-bearing", details: { echoed: "safe" }, isError: false },
-        now: NOW,
-      });
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(ToolExecutionInfrastructureError);
-    expect((thrown as ToolExecutionInfrastructureError).phase).toBe("RESULT_PIPELINE");
-    // No unsanitized fallback: the raw content is nowhere in the failure.
-    expect((thrown as Error).message).not.toContain("secret-bearing");
+    const outcome = createToolResultPipeline({ sanitizer: sanitizer as never }).process({
+      call,
+      invocation,
+      rawResult: { content: "secret-bearing", details: { echoed: "safe" }, isError: false },
+      now: NOW,
+    });
+    const failure = expectOutputFailure(outcome);
+    expect(JSON.stringify(failure)).not.toContain("secret-bearing");
+    expect(JSON.stringify(failure)).not.toContain("SECRET_TOKEN_12345678");
+    expect(JSON.stringify(failure)).not.toContain("C:\\\\Users");
+    expect(JSON.stringify(failure)).not.toContain("STACK_MARKER");
   });
 
-  it("never returns an unsanitized result when the sanitizer fails", () => {
-    const { call, invocation } = fixture();
-    const sanitizer: ToolResultSanitizerPort = {
-      sanitize: () => {
-        throw new Error("boom");
-      },
-    };
-
-    let settlement: unknown;
-    try {
-      settlement = createToolResultPipeline({ sanitizer }).process({
+  it.each(["SCAN_NODE_LIMIT", "SCAN_DEPTH_LIMIT", "TEXT_LIMIT"] as const)(
+    "materializes sanitizer refusal %s with only its safe reason",
+    (reason) => {
+      const { call, invocation } = fixture();
+      const sanitizer = { sanitize: () => ({ kind: "REFUSED", reason }) };
+      const outcome = createToolResultPipeline({ sanitizer: sanitizer as never }).process({
         call,
         invocation,
-        rawResult: { content: "raw", details: { echoed: "safe" }, isError: false },
+        rawResult: { content: "RAW_RESULT", details: { echoed: "safe" }, isError: false },
         now: NOW,
       });
-    } catch {
-      settlement = undefined;
-    }
-    expect(settlement).toBeUndefined();
+      const failure = expectOutputFailure(outcome);
+      expect(failure.failure.feedback.details).toMatchObject({ reason });
+      expect(JSON.stringify(failure)).not.toContain("RAW_RESULT");
+    },
+  );
+
+  it("does not copy an unrecognized sanitizer refusal reason into feedback", () => {
+    const { call, invocation } = fixture();
+    const sanitizer = { sanitize: () => ({ kind: "REFUSED", reason: "SECRET_RAW_REASON" }) };
+    const outcome = createToolResultPipeline({ sanitizer: sanitizer as never }).process({
+      call,
+      invocation,
+      rawResult: { content: "safe", details: { echoed: "safe" }, isError: false },
+      now: NOW,
+    });
+
+    const failure = expectOutputFailure(outcome);
+    expect(failure.failure.feedback.details).toEqual({});
+    expect(JSON.stringify(failure)).not.toContain("SECRET_RAW_REASON");
   });
 });
 
@@ -381,13 +419,14 @@ describe("ToolSettlementExtension", () => {
     };
     const projector: ToolSettlementExtensionProjector = () => extension;
 
-    const settlement = createToolResultPipeline({ settlementExtension: projector }).process({
+    const outcome = createToolResultPipeline({ settlementExtension: projector }).process({
       call,
       invocation,
       rawResult: { content: "safe", details: { echoed: "safe" }, isError: false },
       now: NOW,
     });
 
+    const settlement = acceptedSettlement(outcome);
     expect(settlement.effects).toEqual(extension);
     expect(Object.isFrozen(settlement.effects)).toBe(true);
   });
@@ -396,7 +435,10 @@ describe("ToolSettlementExtension", () => {
     const { call, invocation } = fixture();
     const seen: { content?: string; details?: JsonObject; now?: number } = {};
     const sanitizer: ToolResultSanitizerPort = {
-      sanitize: () => ({ content: "SANITIZED", details: { echoed: "sanitized" }, isError: false }),
+      sanitize: () => ({
+        kind: "SANITIZED",
+        result: { content: "SANITIZED", details: { echoed: "sanitized" }, isError: false },
+      }),
     };
     const projector: ToolSettlementExtensionProjector = ({ result, now }) => {
       seen.content = result.content;
@@ -417,25 +459,25 @@ describe("ToolSettlementExtension", () => {
     expect(seen.now).toBe(NOW);
   });
 
-  it("turns a projector throw into a RESULT_PIPELINE infrastructure failure", () => {
+  it("turns an extension projector throw into an unknown side-effect failure", () => {
     const { call, invocation } = fixture();
     const projector: ToolSettlementExtensionProjector = () => {
       throw new Error("effect projection failed");
     };
 
-    let thrown: unknown;
-    try {
-      createToolResultPipeline({ settlementExtension: projector }).process({
-        call,
-        invocation,
-        rawResult: { content: "safe", details: { echoed: "safe" }, isError: false },
-        now: NOW,
-      });
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toBeInstanceOf(ToolExecutionInfrastructureError);
-    expect((thrown as ToolExecutionInfrastructureError).phase).toBe("RESULT_PIPELINE");
+    const outcome = createToolResultPipeline({ settlementExtension: projector }).process({
+      call,
+      invocation,
+      rawResult: { content: "safe", details: { echoed: "safe" }, isError: false },
+      now: NOW,
+    });
+    expect(outcome).toMatchObject({
+      kind: "FAILED",
+      failure: {
+        error: { code: "TOOL_OUTCOME_UNKNOWN" },
+        feedback: { disposition: "UNCERTAIN_SIDE_EFFECT", blockToolFailures: true },
+      },
+    });
   });
 });
 

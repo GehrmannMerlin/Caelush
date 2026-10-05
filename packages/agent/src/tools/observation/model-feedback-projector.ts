@@ -197,10 +197,18 @@ function projectThroughInjected(
   let projected: readonly string[];
   try {
     projected = projection.projectBatch({ candidates, policy });
-  } catch (error) {
-    // A projection dependency failure is infrastructure, never model feedback: a model told "your Tool
-    // result could not be rendered" would treat a host bug as a Tool failure and retry the call.
-    throw new Error("Model Tool feedback projection failed.", { cause: error });
+  } catch {
+    // Projection is a formatting dependency, not Tool execution truth. A broken host projector must
+    // not discard a durable Tool result or turn it into a retry-shaped model error.
+    return boundProportionally(candidates, policy);
+  }
+  if (
+    !Array.isArray(projected) ||
+    projected.length !== candidates.length ||
+    !projected.every((summary) => typeof summary === "string")
+  ) {
+    // Never pair partial or malformed injected output with requested call identities.
+    return boundProportionally(candidates, policy);
   }
   return projected;
 }
@@ -210,7 +218,8 @@ function projectThroughInjected(
  *
  * It exists so a host that wires no Context projection still gets bounded output rather than unbounded
  * output. It is not a second implementation of the Context algorithm: it knows no Tool names, applies no
- * head + tail treatment, and is only reachable when no projection was injected.
+ * head + tail treatment, and is reachable when no projection was injected or the injected projection
+ * fails its operation/count contract.
  */
 function boundProportionally(
   candidates: readonly ModelObservationCandidate[],

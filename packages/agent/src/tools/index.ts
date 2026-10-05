@@ -165,6 +165,8 @@ export {
 } from "./result/result-sanitizer-port.js";
 export type {
   ToolResultSanitizerPort,
+  ToolResultSanitizationOutcome,
+  ToolResultSanitizationRefusalReason,
   ToolResultValidationErrorKind,
   ValidatedToolResult,
 } from "./result/result-sanitizer-port.js";
@@ -180,6 +182,10 @@ export type {
   ToolResultPipeline,
   ToolResultPipelineOptions,
 } from "./result/result-pipeline.js";
+export type {
+  MaterializedToolFailure,
+  ToolResultProcessingOutcome,
+} from "./result/tool-result-processing-outcome.js";
 
 /* Admission: the Tool security context, durable metadata, policy, approval and budget boundaries. */
 export {
@@ -324,6 +330,8 @@ export type {
 } from "./batch/batch-types.js";
 export {
   createToolBatchCoordinator,
+  TOOL_NOT_STARTED,
+  TOOL_NOT_STARTED_CONTENT,
   SKIPPED_AFTER_UNCERTAIN_CONTENT,
   SKIPPED_AFTER_UNCERTAIN_EXECUTION,
 } from "./batch/batch-coordinator.js";

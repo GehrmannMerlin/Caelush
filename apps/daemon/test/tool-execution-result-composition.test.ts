@@ -4,7 +4,12 @@ import {
   CaelushToolResultSanitizer,
   createDefaultV1ToolExecutionSecurity,
 } from "@caelush/security";
-import { createToolResultPipeline } from "@caelush/agent";
+import {
+  createToolCallPreparer,
+  createToolResultPipeline,
+  DefaultAgentToolRegistryBuilder,
+  type AgentTool,
+} from "@caelush/agent";
 import {
   createRunId,
   createStepId,
@@ -52,14 +57,17 @@ const EXPECTED_DEFAULT_TOOL_ORDER = [
   "git_diff",
 ];
 
-function runningInvocation(toolName: ToolInvocation["toolName"]): ToolInvocation {
+function runningInvocation(
+  toolName: ToolInvocation["toolName"],
+  args: Record<string, unknown> = { path: "src/index.ts" },
+): ToolInvocation {
   return {
     id: createToolInvocationId(),
     runId: createRunId(),
     stepId: createStepId(),
     toolName,
     externalCallId: "call-1",
-    args: { path: "src/index.ts" },
+    args: args as ToolInvocation["args"],
     riskLevel: "LOW",
     status: "RUNNING",
     createdAt: createTimestampMs(1),
@@ -87,7 +95,7 @@ describe("production secure Tool result composition", () => {
     const resolved = registry.resolve("read_file");
     if (resolved === undefined) throw new Error("read_file must be registered");
 
-    const settlement = pipeline.process({
+    const outcome = pipeline.process({
       call: {
         request: {
           externalCallId: "call-1",
@@ -106,8 +114,122 @@ describe("production secure Tool result composition", () => {
       now: createTimestampMs(2),
     });
 
-    expect(settlement.result.content).not.toContain("supersecretvalue");
-    expect(settlement.result.content).toContain("[REDACTED]");
+    expect(outcome.kind).toBe("ACCEPTED");
+    if (outcome.kind !== "ACCEPTED") throw new Error("expected sanitized Tool output");
+    expect(outcome.settlement.result.content).not.toContain("supersecretvalue");
+    expect(outcome.settlement.result.content).toContain("[REDACTED]");
+  });
+
+  it.each([250, 500])(
+    "preserves all %i list_directory entries through real Security redaction",
+    (count) => {
+      const { registry } = createCodingToolComposition();
+      const resolved = registry.resolve("list_directory");
+      if (resolved === undefined) throw new Error("list_directory must be registered");
+      const args = { path: ".", offset: 1, limit: count };
+      const prepared = createToolCallPreparer(registry).prepare({
+        externalCallId: `call_list_${count}`,
+        toolName: "list_directory",
+        args,
+      });
+      if (prepared.kind !== "READY") throw new Error("list_directory arguments must be valid");
+
+      const entries = Array.from({ length: count }, (_, index) => ({
+        name: `entry-${String(index + 1).padStart(3, "0")}.ts`,
+        kind: "FILE",
+      }));
+      const security = createDefaultV1ToolExecutionSecurity({
+        terminalOutputSanitizer: (value) => value,
+      });
+      const result = createToolResultPipeline({
+        sanitizer: security.resultSanitizer,
+      }).process({
+        call: prepared.call,
+        invocation: runningInvocation("list_directory", args),
+        rawResult: {
+          content: entries.map(({ name }) => name).join("\n"),
+          details: {
+            ok: true,
+            path: ".",
+            offset: 1,
+            count,
+            truncated: true,
+            nextOffset: count + 1,
+            entries,
+          },
+          isError: false,
+        },
+        now: createTimestampMs(2),
+      });
+
+      expect(result.kind).toBe("ACCEPTED");
+      if (result.kind !== "ACCEPTED")
+        throw new Error("expected list_directory output to be accepted");
+      const details = result.settlement.result.details;
+      expect(Array.isArray(details.entries)).toBe(true);
+      expect(details.entries).toHaveLength(count);
+      expect(details.entries?.every((entry) => entry !== null && typeof entry === "object")).toBe(
+        true,
+      );
+      expect(details.entries?.at(-1)).toMatchObject({
+        name: `entry-${String(count).padStart(3, "0")}.ts`,
+      });
+      expect(typeof details.nextOffset).toBe("number");
+      expect(JSON.stringify(result)).not.toContain("[REDACTED:SCAN_LIMIT]");
+    },
+  );
+
+  it("materializes a real-Security refusal above the all-or-nothing 4096-node budget", () => {
+    const builder = new DefaultAgentToolRegistryBuilder();
+    const wideTool: AgentTool = {
+      name: "wide_result",
+      description: "Test-only wide result Tool.",
+      label: "Wide result",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      resultDetailsSchema: {
+        type: "object",
+        properties: {
+          items: { type: "array", items: { type: "integer" }, maxItems: 5_000 },
+        },
+        required: ["items"],
+        additionalProperties: false,
+      },
+      executionMode: "SEQUENTIAL",
+      execute: async () => ({ content: "unused", details: { items: [] }, isError: false }),
+    };
+    builder.register(wideTool);
+    const registry = builder.build();
+    const prepared = createToolCallPreparer(registry).prepare({
+      externalCallId: "call_wide_result",
+      toolName: "wide_result",
+      args: {},
+    });
+    if (prepared.kind !== "READY") throw new Error("wide_result arguments must be valid");
+    const security = createDefaultV1ToolExecutionSecurity({
+      terminalOutputSanitizer: (value) => value,
+    });
+
+    const outcome = createToolResultPipeline({
+      sanitizer: security.resultSanitizer,
+    }).process({
+      call: prepared.call,
+      invocation: runningInvocation("wide_result", {}),
+      rawResult: {
+        content: "wide output",
+        details: { items: Array.from({ length: 4_097 }, (_, index) => index) },
+        isError: false,
+      },
+      now: createTimestampMs(2),
+    });
+
+    expect(outcome).toMatchObject({
+      kind: "FAILED",
+      failure: {
+        error: { code: "TOOL_OUTPUT_ERROR" },
+        feedback: { code: "TOOL_OUTPUT_ERROR", details: { reason: "SCAN_NODE_LIMIT" } },
+      },
+    });
+    expect(JSON.stringify(outcome)).not.toContain("4096");
   });
 
   it("sends an obvious credential in a transient update through the update sanitizer", () => {

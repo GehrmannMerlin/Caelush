@@ -1,6 +1,15 @@
 import type { JsonObject } from "@caelush/protocol";
-import type { AgentToolExecutionResult, ToolResultSanitizerPort } from "@caelush/agent";
-import { redactJson, redactText } from "./secret-redaction.js";
+import type {
+  AgentToolExecutionResult,
+  ToolResultSanitizationOutcome,
+  ToolResultSanitizerPort,
+} from "@caelush/agent";
+import {
+  MAX_SECRET_JSON_DEPTH,
+  MAX_SECRET_SCAN_TEXT_BYTES,
+  redactText,
+  tryRedactJson,
+} from "./secret-redaction.js";
 import { classifySensitivePath } from "./sensitive-path.js";
 
 export class CaelushToolResultSanitizer implements ToolResultSanitizerPort {
@@ -8,14 +17,21 @@ export class CaelushToolResultSanitizer implements ToolResultSanitizerPort {
     readonly toolName: import("@caelush/protocol").ToolName;
     readonly result: AgentToolExecutionResult;
     readonly invocation: import("@caelush/protocol").ToolInvocation;
-  }): AgentToolExecutionResult {
+  }): ToolResultSanitizationOutcome {
     void input.toolName;
-    void input.invocation;
     let content = redactText(input.result.content);
     // The Tool System declares the execution-result JSON model locally (its `JsonObject` is the AI
     // package's, which may not depend on Protocol), so the two recursive types meet here. They
     // describe the same JSON value; only their declarations differ.
-    let details = redactJson(input.result.details as unknown as JsonObject) as JsonObject;
+    const redaction = tryRedactJson(input.result.details as unknown as JsonObject, {
+      maxNodes: 4096,
+      maxDepth: MAX_SECRET_JSON_DEPTH,
+      maxTextBytes: MAX_SECRET_SCAN_TEXT_BYTES,
+    });
+    if (redaction.kind === "LIMIT_EXCEEDED") {
+      return { kind: "REFUSED", reason: redaction.reason };
+    }
+    let details = redaction.value as JsonObject;
     if (input.toolName === "search_text") {
       // The Tool System declares its execution-result JSON model locally — its `JsonObject` is the AI
       // package's, which may not depend on Protocol — so the two recursive types meet here. They
@@ -35,9 +51,12 @@ export class CaelushToolResultSanitizer implements ToolResultSanitizerPort {
       content = "[SENSITIVE DIFF CONTENT REDACTED]";
     }
     return {
-      content,
-      details,
-      isError: input.result.isError,
+      kind: "SANITIZED",
+      result: {
+        content,
+        details,
+        isError: input.result.isError,
+      },
     };
   }
 }
@@ -94,6 +113,6 @@ function containsSensitiveDiffPath(content: string): boolean {
 
 export function sanitizeToolResult(
   input: Parameters<ToolResultSanitizerPort["sanitize"]>[0],
-): AgentToolExecutionResult {
+): ToolResultSanitizationOutcome {
   return new CaelushToolResultSanitizer().sanitize(input);
 }

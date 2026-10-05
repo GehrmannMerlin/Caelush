@@ -488,7 +488,7 @@ describe("canonical Tool batch — pre-invocation rejection", () => {
  * --------------------------------------------------------------------------------------------- */
 
 describe("canonical Tool batch — the uncertain barrier", () => {
-  it("skips every trailing call after an UNCERTAIN_SIDE_EFFECT settlement", async () => {
+  it("skips every trailing call after TOOL_OUTCOME_UNKNOWN", async () => {
     const executed: string[] = [];
     // call_1 succeeds, call_2 fails with an unproven side effect, call_3 and call_4 must be skipped.
     const batch = createToolBatchCoordinator({
@@ -506,11 +506,10 @@ describe("canonical Tool batch — the uncertain barrier", () => {
             const invocation = invocationOf(input.call.request, {
               status: "FAILED",
               error: {
-                code: "TOOL_EXECUTION_ERROR",
-                message: "Tool execution returned an error result.",
+                code: "TOOL_OUTCOME_UNKNOWN",
+                message: "Tool outcome could not be confirmed.",
                 retryable: false,
-                phase: "TOOL",
-                details: { executionDisposition: UNCERTAIN_SIDE_EFFECT },
+                phase: "RUNTIME",
               },
             });
             return {
@@ -542,15 +541,126 @@ describe("canonical Tool batch — the uncertain barrier", () => {
     const skipped = outcome.items.filter((item) => item.kind === "SKIPPED");
     for (const item of skipped) {
       if (item.kind !== "SKIPPED") continue;
-      expect(item.feedback.code).toBe(SKIPPED_AFTER_UNCERTAIN_EXECUTION);
-      expect(item.feedback.disposition).toBe(UNCERTAIN_SIDE_EFFECT);
+      expect(item.feedback.code).toBe("TOOL_NOT_STARTED");
+      expect(item.feedback.disposition).toBe("SAFE_FAILURE");
+      expect(item.feedback.blockToolFailures).toBeUndefined();
       // Safe, bounded and actionable: no raw exception, no host path, no command output.
-      expect(item.feedback.content).toMatch(/may have partially or fully completed/);
-      expect(item.feedback.content).toMatch(/re-inspect/i);
+      expect(item.feedback.content).toMatch(/was not started/i);
+      expect(item.feedback.content).toMatch(/outcome is unknown/i);
       expect(item.feedback.content).not.toMatch(/[A-Za-z]:\\|\/tmp\/|stack|at Object\./);
     }
     // One result per original call, in original order.
     expect(idsOf(outcome.items)).toEqual(["call_1", "call_2", "call_3", "call_4"]);
+  });
+
+  it("continues safe failure calls, then closes an unknown batch in source order", async () => {
+    const prepared: string[] = [];
+    const executed: string[] = [];
+    const basePreparer = readyPreparer();
+    const batch = createToolBatchCoordinator({
+      preparer: {
+        prepare(value) {
+          prepared.push(value.externalCallId);
+          return basePreparer.prepare(value);
+        },
+      },
+      budget: {
+        async preflight() {
+          return null;
+        },
+      },
+      durable: {
+        async execute(input): Promise<DurableToolExecutionOutcome> {
+          const id = input.call.request.externalCallId;
+          executed.push(id);
+          const unknown = id === "call_b";
+          const failed = id === "call_a" || unknown;
+          const invocation = invocationOf(input.call.request, {
+            status: failed ? "FAILED" : "COMPLETED",
+            ...(failed
+              ? {
+                  error: {
+                    code: unknown ? "TOOL_OUTCOME_UNKNOWN" : "TOOL_EXECUTION_ERROR",
+                    message: unknown ? "Tool outcome is unknown." : "Tool execution failed.",
+                    retryable: false,
+                    phase: unknown ? "RUNTIME" : "TOOL",
+                  },
+                }
+              : {}),
+          });
+          return {
+            kind: "SETTLED",
+            invocation,
+            observation: observationOf(invocation, `result:${id}`, failed),
+          };
+        },
+      },
+    });
+
+    const calls = [call("call_a"), call("call_b"), call("call_c"), call("call_d")];
+    const outcome = await batch.execute(request(calls));
+
+    if (outcome.kind !== "COMPLETED") throw new Error("expected COMPLETED");
+    expect(idsOf(outcome.items)).toEqual(calls.map(({ externalCallId }) => externalCallId));
+    expect(outcome.items.map((item) => item.kind)).toEqual([
+      "OBSERVATION",
+      "OBSERVATION",
+      "SKIPPED",
+      "SKIPPED",
+    ]);
+    const skipped = outcome.items.slice(2);
+    for (const item of skipped) {
+      expect(item).toMatchObject({
+        kind: "SKIPPED",
+        feedback: { code: "TOOL_NOT_STARTED", disposition: "SAFE_FAILURE" },
+      });
+      if (item.kind === "SKIPPED") expect(item.feedback.blockToolFailures).toBeUndefined();
+    }
+    expect(prepared).toEqual(["call_a", "call_b"]);
+    expect(executed).toEqual(["call_a", "call_b"]);
+  });
+
+  it("still recognizes historical uncertain disposition metadata", async () => {
+    const executed: string[] = [];
+    const batch = createToolBatchCoordinator({
+      preparer: readyPreparer(),
+      budget: {
+        async preflight() {
+          return null;
+        },
+      },
+      durable: {
+        async execute(input): Promise<DurableToolExecutionOutcome> {
+          const id = input.call.request.externalCallId;
+          executed.push(id);
+          const invocation = invocationOf(input.call.request, {
+            status: id === "call_a" ? "FAILED" : "COMPLETED",
+            ...(id === "call_a"
+              ? {
+                  error: {
+                    code: "TOOL_EXECUTION_ERROR",
+                    message: "historical uncertainty",
+                    retryable: false,
+                    phase: "TOOL",
+                    details: { executionDisposition: UNCERTAIN_SIDE_EFFECT },
+                  },
+                }
+              : {}),
+          });
+          return {
+            kind: "SETTLED",
+            invocation,
+            observation: observationOf(invocation),
+          };
+        },
+      },
+    });
+
+    const outcome = await batch.execute(request([call("call_a"), call("call_b")]));
+    if (outcome.kind !== "COMPLETED") throw new Error("expected COMPLETED");
+    expect(outcome.items.map((item) => item.kind)).toEqual(["OBSERVATION", "SKIPPED"]);
+    expect(executed).toEqual(["call_a"]);
+    expect(SKIPPED_AFTER_UNCERTAIN_EXECUTION).toBe("TOOL_NOT_STARTED");
   });
 
   it("does not skip trailing calls after an ordinary safe failure", async () => {
@@ -652,18 +762,36 @@ describe("canonical Tool batch — stops", () => {
     const controller = new AbortController();
     controller.abort();
 
-    const outcome = await h.coordinator.execute(request([call("call_a")], controller.signal));
+    const calls = [call("call_a"), call("call_b")];
+    const outcome = await h.coordinator.execute(request(calls, controller.signal));
     expect(outcome.kind).toBe("CANCELLED");
     if (outcome.kind !== "CANCELLED") throw new Error("expected CANCELLED");
-    expect(outcome.items).toEqual([]);
+    expect(idsOf(outcome.items)).toEqual(["call_a", "call_b"]);
+    expect(outcome.items.map((item) => item.kind)).toEqual(["SKIPPED", "SKIPPED"]);
+    for (const item of outcome.items) {
+      if (item.kind !== "SKIPPED") continue;
+      expect(item.feedback.code).toBe("TOOL_NOT_STARTED");
+      expect(item.feedback.disposition).toBe("SAFE_FAILURE");
+      expect(item.feedback.blockToolFailures).toBeUndefined();
+      expect(item.feedback.content).toMatch(/batch was cancelled/i);
+      expect(item).not.toHaveProperty("invocationId");
+    }
     // No preflight, no prepare, no execution: the batch stopped before any real Tool side effect.
     expect(h.events).toEqual([]);
   });
 
   it("returns CANCELLED with the items already decided when the abort arrives later", async () => {
     const controller = new AbortController();
+    const prepared: string[] = [];
+    const executed: string[] = [];
+    const basePreparer = readyPreparer();
     const batch = createToolBatchCoordinator({
-      preparer: readyPreparer(),
+      preparer: {
+        prepare(value) {
+          prepared.push(value.externalCallId);
+          return basePreparer.prepare(value);
+        },
+      },
       budget: {
         async preflight() {
           return null;
@@ -671,6 +799,7 @@ describe("canonical Tool batch — stops", () => {
       },
       durable: {
         async execute(input): Promise<DurableToolExecutionOutcome> {
+          executed.push(input.call.request.externalCallId);
           if (input.call.request.externalCallId === "call_a") {
             // The operator cancels while the first call settles.
             controller.abort();
@@ -682,12 +811,19 @@ describe("canonical Tool batch — stops", () => {
       },
     });
 
-    const outcome = await batch.execute(
-      request([call("call_a"), call("call_b")], controller.signal),
-    );
+    const calls = [call("call_a"), call("call_b"), call("call_c")];
+    const outcome = await batch.execute(request(calls, controller.signal));
     expect(outcome.kind).toBe("CANCELLED");
     if (outcome.kind !== "CANCELLED") throw new Error("expected CANCELLED");
-    expect(idsOf(outcome.items)).toEqual(["call_a"]);
+    expect(idsOf(outcome.items)).toEqual(["call_a", "call_b", "call_c"]);
+    expect(outcome.items.map((item) => item.kind)).toEqual(["OBSERVATION", "SKIPPED", "SKIPPED"]);
+    expect(prepared).toEqual(["call_a"]);
+    expect(executed).toEqual(["call_a"]);
+    for (const item of outcome.items.slice(1)) {
+      if (item.kind !== "SKIPPED") continue;
+      expect(item.feedback.code).toBe("TOOL_NOT_STARTED");
+      expect(item.feedback.content).toMatch(/batch was cancelled/i);
+    }
   });
 
   it("propagates a durably cancelled invocation as CANCELLED", async () => {
@@ -706,11 +842,16 @@ describe("canonical Tool batch — stops", () => {
       },
     });
 
-    const outcome = await batch.execute(request([call("call_a")]));
+    const outcome = await batch.execute(request([call("call_a"), call("call_b")]));
     expect(outcome.kind).toBe("CANCELLED");
     if (outcome.kind !== "CANCELLED") throw new Error("expected CANCELLED");
-    // No observation existed, so none was manufactured.
-    expect(outcome.items).toEqual([]);
+    // No observation existed for call_a, and call_b was never started.
+    expect(outcome.items).toHaveLength(1);
+    expect(outcome.items[0]).toMatchObject({
+      kind: "SKIPPED",
+      feedback: { code: "TOOL_NOT_STARTED", disposition: "SAFE_FAILURE" },
+    });
+    expect(outcome.items[0]?.call.externalCallId).toBe("call_b");
   });
 
   it("propagates a durably cancelled invocation's observation when one exists", async () => {
@@ -733,10 +874,16 @@ describe("canonical Tool batch — stops", () => {
       },
     });
 
-    const outcome = await batch.execute(request([call("call_a")]));
+    const outcome = await batch.execute(request([call("call_a"), call("call_b")]));
     if (outcome.kind !== "CANCELLED") throw new Error("expected CANCELLED");
-    expect(outcome.items).toHaveLength(1);
+    expect(outcome.items).toHaveLength(2);
     expect(outcome.items[0]).toMatchObject({ kind: "OBSERVATION", finalStatus: "CANCELLED" });
+    expect(outcome.items[0]?.call.externalCallId).toBe("call_a");
+    expect(outcome.items[1]).toMatchObject({
+      kind: "SKIPPED",
+      feedback: { code: "TOOL_NOT_STARTED", disposition: "SAFE_FAILURE" },
+    });
+    expect(outcome.items[1]?.call.externalCallId).toBe("call_b");
   });
 
   it("returns CANCELLED when the durable coordinator reports an abort", async () => {
@@ -755,8 +902,11 @@ describe("canonical Tool batch — stops", () => {
       },
     });
 
-    const outcome = await batch.execute(request([call("call_a")]));
+    const outcome = await batch.execute(request([call("call_a"), call("call_b")]));
     expect(outcome.kind).toBe("CANCELLED");
+    if (outcome.kind !== "CANCELLED") throw new Error("expected CANCELLED");
+    expect(idsOf(outcome.items)).toEqual(["call_a", "call_b"]);
+    expect(outcome.items.map((item) => item.kind)).toEqual(["SKIPPED", "SKIPPED"]);
   });
 });
 

@@ -21,6 +21,8 @@ import {
   createToolSettlementCoordinator,
   ToolExecutionConflictError,
   ToolExecutionUncertainError,
+  type RunEventNotifierPort,
+  type ToolResultProcessingOutcome,
   type AgentBudgetBlock,
   type DurableToolExecutionCoordinator,
   type ToolAdmissionPort,
@@ -140,6 +142,8 @@ function harness(options: {
   }>;
   readonly decision?: ToolPolicyDecision;
   readonly approvalLookup?: boolean;
+  readonly pipelineOutcome?: ToolResultProcessingOutcome;
+  readonly notifier?: RunEventNotifierPort;
 }): Harness {
   const store = new FakeStore();
   let executions = 0;
@@ -232,7 +236,8 @@ function harness(options: {
     }),
     updateSanitizer: { sanitize: () => null },
     resultPipelineFactory: () => ({
-      process: ({ rawResult }) => ({ result: rawResult }),
+      process: ({ rawResult }) =>
+        options.pipelineOutcome ?? { kind: "ACCEPTED", settlement: { result: rawResult } },
     }),
     preparedCallFactory: ({ invocation, externalCallId }) => ({
       request: Object.freeze({
@@ -249,6 +254,7 @@ function harness(options: {
       observationIdFactory: { create: createObservationId },
       eventIdFactory: { create: createEventId },
       boundContent: (content) => content,
+      ...(options.notifier === undefined ? {} : { notifier: options.notifier }),
     }),
   });
 
@@ -414,6 +420,7 @@ describe("DurableToolExecutionCoordinator", () => {
     expect(h.executions()).toBe(0);
     if (outcome.kind !== "SETTLED") throw new Error("expected settlement");
     expect(outcome.invocation.status).toBe("FAILED");
+    expect(outcome.invocation.error?.code).toBe("TOOL_OUTCOME_UNKNOWN");
     expect(outcome.invocation.error?.details?.executionDisposition).toBe("UNCERTAIN_SIDE_EFFECT");
     expect(outcome.observation.isError).toBe(true);
   });
@@ -523,24 +530,147 @@ describe("DurableToolExecutionCoordinator", () => {
     expect(outcome.kind).toBe("SETTLED");
     if (outcome.kind !== "SETTLED") throw new Error("expected settlement");
     expect(outcome.invocation.status).toBe("FAILED");
+    expect(outcome.invocation.error?.code).toBe("TOOL_OUTCOME_UNKNOWN");
     expect(outcome.invocation.error?.details?.executionDisposition).toBe("UNCERTAIN_SIDE_EFFECT");
     expect(outcome.observation.isError).toBe(true);
   });
 
-  it("settles a durable RUNTIME_ERROR and then throws infrastructure failure", async () => {
+  it("settles an ordinary handler throw as TOOL_EXECUTION_ERROR and returns SETTLED", async () => {
+    const h = harness({
+      execute: async () => {
+        throw new TypeError("SECRET_TOKEN_12345678 C:\\Users\\alice\\repo\\agent.ts");
+      },
+    });
+
+    const outcome = await h.coordinator.execute(request());
+
+    expect(outcome.kind).toBe("SETTLED");
+    if (outcome.kind !== "SETTLED") throw new Error("expected settlement");
+    expect(outcome.invocation.status).toBe("FAILED");
+    expect(outcome.invocation.error).toMatchObject({
+      code: "TOOL_EXECUTION_ERROR",
+      retryable: false,
+    });
+    expect(outcome.observation.isError).toBe(true);
+    expect(outcome.observation.content).toContain("runtime encountered an internal error");
+    const failureCommit = h.store.commits.at(-1)!;
+    expect(failureCommit.events.map(({ type }) => type)).toEqual(["tool.failed"]);
+    expect(
+      JSON.stringify({
+        invocation: outcome.invocation,
+        observation: outcome.observation,
+        failureCommit,
+      }),
+    ).not.toContain("SECRET_TOKEN_12345678");
+    expect(
+      JSON.stringify({
+        invocation: outcome.invocation,
+        observation: outcome.observation,
+        failureCommit,
+      }),
+    ).not.toContain("C:\\\\Users");
+  });
+
+  it("settles a materialized output failure and returns SETTLED without infrastructure escalation", async () => {
+    const h = harness({
+      pipelineOutcome: {
+        kind: "FAILED",
+        failure: {
+          error: {
+            code: "TOOL_OUTPUT_ERROR",
+            phase: "TOOL",
+            message: "Tool output could not be safely processed.",
+          },
+          feedback: {
+            code: "TOOL_OUTPUT_ERROR",
+            content: "Tool output could not be safely validated.",
+            details: { reason: "SCAN_NODE_LIMIT" },
+            disposition: "SAFE_FAILURE",
+          },
+        },
+      },
+    });
+
+    const outcome = await h.coordinator.execute(request());
+
+    expect(outcome.kind).toBe("SETTLED");
+    if (outcome.kind !== "SETTLED") throw new Error("expected settlement");
+    expect(outcome.invocation.status).toBe("FAILED");
+    expect(outcome.invocation.error?.code).toBe("TOOL_OUTPUT_ERROR");
+    expect(outcome.observation.isError).toBe(true);
+    expect(outcome.observation.details).toEqual({ reason: "SCAN_NODE_LIMIT" });
+    expect(h.store.commits.at(-1)?.events.map(({ type }) => type)).toEqual(["tool.failed"]);
+  });
+
+  it("keeps a failure commit error fail-closed", async () => {
     const h = harness({
       execute: async () => {
         throw new TypeError("internal bug");
       },
     });
+    const original = h.store.commit.bind(h.store);
+    h.store.commit = async (command: ToolExecutionCommit) => {
+      if (command.invocation.status === "FAILED") throw new Error("disk went away");
+      return await original(command);
+    };
 
-    await expect(h.coordinator.execute(request())).rejects.toMatchObject({ phase: "EXECUTION" });
-    // The durable evidence was written first: a restart finds the failure, not a stale RUNNING row.
-    expect(h.store.commits.map(({ invocation }) => invocation.status)).toEqual([
-      "REQUESTED",
-      "RUNNING",
-      "FAILED",
-    ]);
+    await expect(h.coordinator.execute(request())).rejects.toMatchObject({
+      name: "ToolExecutionInfrastructureError",
+      phase: "SETTLEMENT",
+    });
+    expect([...h.store.snapshots.values()][0]?.invocation.status).toBe("RUNNING");
+  });
+
+  it("notifies only after failure is durable and reuses it without executing again", async () => {
+    const harnessRef: { current: Harness | undefined } = { current: undefined };
+    let sawTerminalAtNotification = false;
+    const notifier: RunEventNotifierPort = {
+      notifyCommitted() {
+        const h = harnessRef.current;
+        if (h === undefined) throw new Error("harness must exist before Tool settlement");
+        sawTerminalAtNotification =
+          [...h.store.snapshots.values()][0]?.invocation.status === "FAILED";
+        throw new Error("subscriber failed");
+      },
+      emitTransient() {},
+    };
+    const h = harness({
+      notifier,
+      execute: async () => {
+        throw new Error("handler failed");
+      },
+    });
+    harnessRef.current = h;
+    const original = h.store.commit.bind(h.store);
+    h.store.commit = async (command: ToolExecutionCommit) => {
+      const result = await original(command);
+      return command.invocation.status === "FAILED"
+        ? { ...result, events: command.events as never }
+        : result;
+    };
+
+    const call = request();
+    await expect(h.coordinator.execute(call)).rejects.toThrow("subscriber failed");
+    expect(sawTerminalAtNotification).toBe(true);
+    const recovered = await h.coordinator.execute(call);
+    expect(recovered.kind).toBe("SETTLED");
+    expect(h.executions()).toBe(1);
+  });
+
+  it("fails closed when a terminal recovery snapshot has no observation", async () => {
+    const h = harness({});
+    const failed = seeded("FAILED", {
+      startedAt: createTimestampMs(110) as never,
+      finishedAt: createTimestampMs(120) as never,
+    });
+
+    await expect(
+      h.coordinator.recover(
+        { sessionId: createSessionId(), invocation: failed, revision: 3 },
+        { environment, securityContext, signal: new AbortController().signal },
+      ),
+    ).rejects.toMatchObject({ name: "ToolExecutionInfrastructureError" });
+    expect(h.executions()).toBe(0);
   });
 
   it("settles a policy denial as a safe failed Tool result", async () => {

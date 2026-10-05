@@ -7,7 +7,11 @@ import {
 } from "@caelush/agent";
 import type { EventId, SessionId, TimestampMs, ToolInvocation } from "@caelush/protocol";
 
-import { CODING_TOOL_EFFECTS_PAYLOAD_KIND, codingToolEffectsPayload, type ToolEffect } from "../effects/effects.js";
+import {
+  CODING_TOOL_EFFECTS_PAYLOAD_KIND,
+  codingToolEffectsPayload,
+  type ToolEffect,
+} from "../effects/effects.js";
 import { toolEffectsToEvents } from "../effects/event-projector.js";
 import type { CodingToolCatalog } from "../coding-tool-catalog.js";
 
@@ -74,12 +78,12 @@ export interface CodingSettlementContext {
  * single `commit` call as the terminal invocation, the observation, the events and the state projection.
  * Nothing here can split that transaction in two.
  *
- * ## A throwing projector fails closed
+ * ## A throwing projector produces an unknown outcome
  *
  * An effect that cannot be projected must not be silently dropped: the durable state would then disagree
- * with what actually happened on the workspace. Both an effect failure and an event failure become a
- * `RESULT_PIPELINE` infrastructure failure, which leaves the invocation `RUNNING` rather than settling it
- * without effects — the same disposition the pre-4F bridge had.
+ * with what actually happened on the workspace. Both an effect failure and an event failure are
+ * classified by the Result Pipeline as `TOOL_OUTCOME_UNKNOWN`, durably settled without replaying the
+ * Tool handler, and used as the existing batch uncertainty barrier.
  */
 export function createCodingToolSettlementExtensionProjector(input: {
   readonly catalog: Pick<CodingToolCatalog, "get">;
