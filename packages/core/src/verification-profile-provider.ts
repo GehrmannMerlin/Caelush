@@ -20,6 +20,7 @@ export interface CoreProjectProfile {
     readonly evidencePaths: readonly string[];
   }[];
   readonly isMonorepo: boolean;
+  readonly packages?: readonly CoreProjectPackage[];
   readonly rootPackage?: CoreProjectPackage;
   readonly activePackage?: CoreProjectPackage;
 }
@@ -70,6 +71,9 @@ export function toVerificationProjectProfile(
       evidencePaths: [...tool.evidencePaths],
     })),
     isMonorepo: profile.isMonorepo,
+    ...(profile.packages === undefined
+      ? {}
+      : { packages: profile.packages.map(toVerificationPackage) }),
     ...(profile.rootPackage === undefined
       ? {}
       : { rootPackage: toVerificationPackage(profile.rootPackage) }),

@@ -28,6 +28,10 @@ describe("Verification project intelligence boundary", () => {
         relativePath: "apps/demo",
         scripts: [{ name: "build", command: "tsc" }],
       },
+      packages: [
+        { relativePath: "", scripts: [{ name: "test", command: "vitest run" }] },
+        { relativePath: "apps/demo", scripts: [{ name: "build", command: "tsc" }] },
+      ],
     };
 
     expect(toVerificationProjectProfile(profile)).toEqual({
@@ -43,6 +47,10 @@ describe("Verification project intelligence boundary", () => {
         relativePath: "apps/demo",
         scripts: [{ name: "build", command: "tsc" }],
       },
+      packages: [
+        { relativePath: ".", scripts: [{ name: "test", command: "vitest run" }] },
+        { relativePath: "apps/demo", scripts: [{ name: "build", command: "tsc" }] },
+      ],
     });
   });
 });

@@ -11,6 +11,7 @@ import {
   type VerificationCheckId,
   type VerificationPlan,
   type VerificationPlanId,
+  type VerificationProjectFacts,
 } from "@caelush/protocol";
 
 import {
@@ -83,6 +84,7 @@ export interface CandidateBoundaryPlanningDependencies {
     { readonly type: "AWAITING_VERIFICATION" }
   >;
   readonly clock: { now(): import("@caelush/protocol").TimestampMs };
+  readonly projectFacts?: VerificationProjectFacts | undefined;
   readonly planner?: CompletionVerificationPlannerPort | undefined;
   readonly planIdFactory?: (() => VerificationPlanId) | undefined;
   readonly checkIdFactory?: (() => VerificationCheckId) | undefined;
@@ -170,6 +172,7 @@ function planCandidateBoundary(
     goal: dependencies.run.goal,
     workspace: dependencies.run.workspace,
     changedFiles: dependencies.state.changedFiles,
+    ...(dependencies.projectFacts === undefined ? {} : { projectFacts: dependencies.projectFacts }),
   });
   const planId = dependencies.planIdFactory?.() ?? createVerificationPlanId();
   const checkIdFactory: () => VerificationCheckId =

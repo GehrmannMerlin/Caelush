@@ -56,6 +56,7 @@ export interface ProjectProfile {
   readonly tooling: readonly ProjectToolEvidence[];
   readonly isMonorepo: boolean;
   readonly monorepoEvidence: readonly ProjectManifestEvidence[];
+  readonly packages?: readonly ProjectPackage[];
   readonly rootPackage?: ProjectPackage;
   readonly activePackage?: ProjectPackage;
 }
@@ -343,6 +344,7 @@ async function detectProfile(
       tooling,
       isMonorepo: monorepoEvidence.length > 0,
       monorepoEvidence,
+      packages,
       ...(rootPackage === undefined ? {} : { rootPackage }),
       ...(activePackage === undefined ? {} : { activePackage }),
     },
@@ -566,7 +568,7 @@ function parsePackage(
   const packageDirectory = path.dirname(packagePath);
   return {
     path: packagePath,
-    relativePath: path.relative(projectRoot, packageDirectory).replaceAll("\\", "/"),
+    relativePath: path.relative(projectRoot, packageDirectory).replaceAll("\\", "/") || ".",
     scripts,
     ...(name === undefined ? {} : { name }),
     ...(packageManager === undefined ? {} : { packageManager }),

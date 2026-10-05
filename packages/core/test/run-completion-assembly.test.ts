@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { createTimestampMs } from "@caelush/protocol";
+import type { AgentFinalCandidateDecision } from "@caelush/agent";
+import { createStepId, createTimestampMs, createVerificationPlanId } from "@caelush/protocol";
 
 import {
   CompletionGateIdentityError,
   RunDeadlineRegistry,
+  createInitialAgentState,
   createCodingCompletionAssembly,
   hasLegacyCompletionGroup,
   legacyCompletionDependencies,
   resolveRunCompletionAssembly,
+  startAgentState,
   type RunControllerDependencies,
 } from "../src/index.js";
 import {
@@ -17,6 +20,7 @@ import {
   stubReviewer,
   type CompletionCommitCounter,
 } from "./support/phase-3e-completion.js";
+import { makeRunD } from "./support/phase-3d-tool-turn.js";
 
 /**
  * Phase 3F — the converged completion assembly.
@@ -63,6 +67,89 @@ describe("Phase 3F completion assembly", () => {
     expect(harness.verified).toHaveLength(1);
     expect(harness.eventTypes()).toContain("verification.planned");
     expect(harness.eventTypes()).toContain("run.completed");
+  });
+
+  it("passes durable Run changes and discovered package directories to the planner", async () => {
+    const changedFiles = [
+      { path: "packages/core/src/run-controller.ts", changeType: "MODIFIED" as const },
+    ];
+    const pendingRun = makeRunD();
+    const startedAt = createTimestampMs(2);
+    const run = { ...pendingRun, status: "RUNNING" as const, startedAt };
+    const state = {
+      ...startAgentState(createInitialAgentState(pendingRun, pendingRun.createdAt), startedAt),
+      changedFiles,
+    };
+    const candidate: AgentFinalCandidateDecision = {
+      type: "FINAL_CANDIDATE",
+      modelTurn: {} as never,
+      candidateText: "the scoped answer",
+    };
+    const sourceStepId = createStepId();
+    let profileReads = 0;
+    const plannerInputs: import("@caelush/protocol").VerificationPlanningInput[] = [];
+    const assembly = createCodingCompletionAssembly({
+      clock: { now: () => startedAt },
+      configResolver: {
+        resolve: async () => ({ baseSystemPrompt: "b", contextLimits: { maxInputTokens: 1000 } }),
+      },
+      planner: {
+        plan(input) {
+          plannerInputs.push(input);
+          return {
+            runId: input.runId,
+            sourceStepId: input.sourceStepId,
+            plannerVersion: "phase-11a.v1",
+            planHash: "a".repeat(64),
+            checks: [
+              {
+                ordinal: 0,
+                stage: "ACCEPTANCE",
+                requirement: "REQUIRED",
+                spec: { kind: "TASK", purpose: "ACCEPTANCE", source: "SYSTEM" },
+              },
+            ],
+          };
+        },
+      },
+      profileProvider: {
+        async getFreshProfile() {
+          profileReads += 1;
+          return {
+            ecosystems: ["NODE"],
+            packageManager: { name: "pnpm" },
+            tooling: [],
+            isMonorepo: true,
+            rootPackage: { relativePath: ".", scripts: [] },
+            packages: [
+              { relativePath: ".", scripts: [] },
+              { relativePath: "packages/core", scripts: [{ name: "build", command: "tsc -b" }] },
+              { relativePath: "packages/protocol", scripts: [] },
+            ],
+          };
+        },
+      },
+    });
+
+    await assembly.planCandidateBoundary({
+      run,
+      state,
+      continuation: {
+        type: "AWAITING_VERIFICATION",
+        runId: run.id,
+        sourceStepId,
+        verificationPlanId: createVerificationPlanId(),
+        finalDecision: candidate,
+      },
+      candidate,
+    });
+
+    expect(profileReads).toBe(1);
+    expect(plannerInputs[0]?.changedFiles).toEqual(changedFiles);
+    expect(plannerInputs[0]?.projectFacts).toMatchObject({
+      isCodeProject: true,
+      packageDirectories: [".", "packages/core", "packages/protocol"],
+    });
   });
 
   it("reaches one assembly from both the canonical port and the flat compatibility group", async () => {

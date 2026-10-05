@@ -50,12 +50,16 @@ describe("Coding Project Intelligence", () => {
         source: "PACKAGE_MANAGER_FIELD",
       });
       expect(snapshot.profile.isMonorepo).toBe(true);
-      expect(snapshot.profile.rootPackage?.relativePath).toBe("");
+      expect(snapshot.profile.rootPackage?.relativePath).toBe(".");
       expect(snapshot.profile.activePackage?.relativePath).toBe("apps/demo");
       expect(snapshot.profile.rootPackage?.scripts).toEqual([
         { name: "test", command: "vitest run" },
       ]);
       expect(snapshot.profile.activePackage?.scripts).toEqual([{ name: "build", command: "tsc" }]);
+      expect(snapshot.profile.packages?.map((entry) => entry.relativePath)).toEqual([
+        ".",
+        "apps/demo",
+      ]);
       expect(snapshot.instructions.entries[0]?.content).toContain("repository conventions");
     } finally {
       await runtime.dispose();
@@ -85,8 +89,12 @@ describe("Coding Project Intelligence", () => {
         cwd: "packages/core",
       });
 
-      expect(snapshot.profile.rootPackage?.relativePath).toBe("");
+      expect(snapshot.profile.rootPackage?.relativePath).toBe(".");
       expect(snapshot.profile.activePackage?.relativePath).toBe("packages/core");
+      expect(snapshot.profile.packages?.map((entry) => entry.relativePath)).toEqual([
+        ".",
+        "packages/core",
+      ]);
       expect(snapshot.profile.activePackage?.path).toBe(
         path.join(root, "packages", "core", "package.json"),
       );

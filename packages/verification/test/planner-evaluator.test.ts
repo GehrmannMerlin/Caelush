@@ -60,6 +60,185 @@ function evidence(plan: VerificationPlan, check: VerificationCheck, details: Jso
 }
 
 describe("Phase 11A verification planner", () => {
+  it("plans only task acceptance when the current Run changed no files", () => {
+    const plan = new DefaultVerificationPlanner().plan(
+      planningInput({ changedFiles: [], projectFacts: undefined }),
+    );
+
+    expect(plan.checks).toHaveLength(1);
+    expect(plan.checks[0]).toMatchObject({
+      ordinal: 0,
+      stage: "ACCEPTANCE",
+      requirement: "REQUIRED",
+      spec: { kind: "TASK", purpose: "ACCEPTANCE", source: "SYSTEM" },
+    });
+  });
+
+  it("limits a reliably classified change to its single package", () => {
+    const plan = new DefaultVerificationPlanner().plan(
+      planningInput({
+        changedFiles: [{ path: "packages/core/src/run-controller.ts", changeType: "MODIFIED" }],
+        projectFacts: {
+          isCodeProject: true,
+          isGitRepository: true,
+          packageDirectories: [".", "packages/core", "packages/protocol"],
+        },
+      }),
+    );
+
+    expect(
+      plan.checks.map((check) => [
+        check.spec.kind,
+        check.spec.purpose,
+        check.spec.kind === "PROJECT" ? check.spec.packageRelativePath : undefined,
+      ]),
+    ).toEqual([
+      ["PROJECT", "LINT", "packages/core"],
+      ["PROJECT", "TYPECHECK", "packages/core"],
+      ["PROJECT", "TEST", "packages/core"],
+      ["PROJECT", "BUILD", "packages/core"],
+      ["WORKSPACE", "CHANGESET_SANITY", undefined],
+      ["GIT", "CHANGESET_REVIEW", undefined],
+      ["TASK", "ACCEPTANCE", undefined],
+    ]);
+  });
+
+  it("adds architecture and scoped package checks for cross-package and boundary changes", () => {
+    const planner = new DefaultVerificationPlanner();
+    const packages = [".", "packages/core", "packages/protocol"];
+    const crossPackage = planner.plan(
+      planningInput({
+        changedFiles: [
+          { path: "packages/core/src/run-controller.ts", changeType: "MODIFIED" },
+          { path: "packages/protocol/src/events.ts", changeType: "MODIFIED" },
+        ],
+        projectFacts: {
+          isCodeProject: true,
+          isGitRepository: true,
+          packageDirectories: packages,
+        },
+      }),
+    );
+    expect(crossPackage.checks[0]?.requirement).toBe("REQUIRED");
+    expect(crossPackage.checks.map((check) => [check.spec.kind, check.spec.purpose])).toEqual([
+      ["PROJECT", "ARCHITECTURE"],
+      ["PROJECT", "LINT"],
+      ["PROJECT", "TYPECHECK"],
+      ["PROJECT", "TEST"],
+      ["PROJECT", "BUILD"],
+      ["PROJECT", "LINT"],
+      ["PROJECT", "TYPECHECK"],
+      ["PROJECT", "TEST"],
+      ["PROJECT", "BUILD"],
+      ["WORKSPACE", "CHANGESET_SANITY"],
+      ["GIT", "CHANGESET_REVIEW"],
+      ["TASK", "ACCEPTANCE"],
+    ]);
+    expect(
+      crossPackage.checks
+        .filter((check) => check.spec.kind === "PROJECT")
+        .map((check) =>
+          check.spec.kind === "PROJECT" ? check.spec.packageRelativePath : undefined,
+        ),
+    ).toEqual([
+      undefined,
+      "packages/core",
+      "packages/core",
+      "packages/core",
+      "packages/core",
+      "packages/protocol",
+      "packages/protocol",
+      "packages/protocol",
+      "packages/protocol",
+    ]);
+
+    const boundary = planner.plan(
+      planningInput({
+        changedFiles: [{ path: "packages/protocol/src/events.ts", changeType: "MODIFIED" }],
+        projectFacts: {
+          isCodeProject: true,
+          packageDirectories: packages,
+        },
+      }),
+    );
+    expect(boundary.checks[0]).toMatchObject({
+      spec: { kind: "PROJECT", purpose: "ARCHITECTURE" },
+    });
+    expect(
+      boundary.checks
+        .filter((check) => check.spec.kind === "PROJECT")
+        .some(
+          (check) =>
+            check.spec.kind === "PROJECT" && check.spec.packageRelativePath === "packages/protocol",
+        ),
+    ).toBe(true);
+  });
+
+  it("uses full checks for unknown impact and explicit full-verification requests", () => {
+    const planner = new DefaultVerificationPlanner();
+    const unknown = planner.plan(
+      planningInput({
+        changedFiles: [{ path: "src/unknown.ts", changeType: "MODIFIED" }],
+        projectFacts: { isCodeProject: true, packageDirectories: ["packages/core"] },
+      }),
+    );
+    expect(unknown.checks.map((check) => check.spec.kind)).toContain("PROJECT");
+    expect(
+      unknown.checks
+        .filter((check) => check.spec.kind === "PROJECT")
+        .every(
+          (check) => check.spec.kind !== "PROJECT" || check.spec.packageRelativePath === undefined,
+        ),
+    ).toBe(true);
+
+    const explicitlyFull = planner.plan(
+      planningInput({
+        goal: "Please run the full project verification suite.",
+        changedFiles: [],
+        projectFacts: {
+          isCodeProject: true,
+          isGitRepository: true,
+          packageDirectories: [".", "packages/core"],
+        },
+      }),
+    );
+    expect(explicitlyFull.checks.map((check) => check.spec.kind)).toEqual([
+      "PROJECT",
+      "PROJECT",
+      "PROJECT",
+      "PROJECT",
+      "PROJECT",
+      "GIT",
+      "TASK",
+    ]);
+    expect(
+      explicitlyFull.checks
+        .filter((check) => check.spec.kind === "PROJECT")
+        .every(
+          (check) => check.spec.kind !== "PROJECT" || check.spec.packageRelativePath === undefined,
+        ),
+    ).toBe(true);
+  });
+
+  it("keeps historical Runs without package-scope facts on conservative project checks", () => {
+    const plan = new DefaultVerificationPlanner().plan(
+      planningInput({
+        projectFacts: { isCodeProject: true, isGitRepository: false },
+      }),
+    );
+
+    expect(
+      plan.checks
+        .filter((check) => check.spec.kind === "PROJECT")
+        .map((check) => [check.spec.purpose, check.spec.packageRelativePath]),
+    ).toEqual([
+      ["LINT", undefined],
+      ["TYPECHECK", undefined],
+      ["TEST", undefined],
+      ["BUILD", undefined],
+    ]);
+  });
+
   it("creates a deterministic, command-free default plan from explicit facts", () => {
     const input = planningInput();
     const draft = new DefaultVerificationPlanner().plan(input);
@@ -87,17 +266,43 @@ describe("Phase 11A verification planner", () => {
 
   it("uses conservative unknown facts and omits checks known to be unavailable", () => {
     const planner = new DefaultVerificationPlanner();
-    const unknown = planner.plan(planningInput({ projectFacts: undefined, changedFiles: [] }));
-    expect(unknown.checks).toHaveLength(6);
-    expect(unknown.checks.at(-1)?.spec.kind).toBe("TASK");
+    const unknownChanges = planner.plan(planningInput({ projectFacts: undefined }));
+    expect(unknownChanges.checks.map((check) => [check.spec.kind, check.spec.purpose])).toEqual([
+      ["PROJECT", "LINT"],
+      ["PROJECT", "TYPECHECK"],
+      ["PROJECT", "TEST"],
+      ["PROJECT", "BUILD"],
+      ["WORKSPACE", "CHANGESET_SANITY"],
+      ["GIT", "CHANGESET_REVIEW"],
+      ["TASK", "ACCEPTANCE"],
+    ]);
 
     const nonCode = planner.plan(
       planningInput({
         projectFacts: { isCodeProject: false, isGitRepository: false },
+      }),
+    );
+    expect(nonCode.checks.map((check) => check.spec.kind)).toEqual(["WORKSPACE", "TASK"]);
+
+    const notGit = planner.plan(
+      planningInput({ projectFacts: { isCodeProject: true, isGitRepository: false } }),
+    );
+    expect(notGit.checks.map((check) => check.spec.kind)).toEqual([
+      "PROJECT",
+      "PROJECT",
+      "PROJECT",
+      "PROJECT",
+      "WORKSPACE",
+      "TASK",
+    ]);
+
+    const noChangesWithPositiveFacts = planner.plan(
+      planningInput({
+        projectFacts: { isCodeProject: true, isGitRepository: true },
         changedFiles: [],
       }),
     );
-    expect(nonCode.checks.map((check) => check.spec.kind)).toEqual(["TASK"]);
+    expect(noChangesWithPositiveFacts.checks.map((check) => check.spec.kind)).toEqual(["TASK"]);
   });
 
   it("does not let random plan IDs or timestamps affect the canonical hash", () => {
@@ -107,6 +312,14 @@ describe("Phase 11A verification planner", () => {
     expect(second.planHash).toBe(first.planHash);
     expect(materialize(first, createTimestampMs(1_700_000_000_000)).planHash).toBe(first.planHash);
     expect(materialize(first, createTimestampMs(1_800_000_000_000)).planHash).toBe(first.planHash);
+
+    const readOnlyInput = planningInput({ changedFiles: [], projectFacts: undefined });
+    const readOnlyFirst = planner.plan(readOnlyInput);
+    const readOnlySecond = planner.plan({
+      ...readOnlyInput,
+      sourceStepId: readOnlyFirst.sourceStepId,
+    });
+    expect(readOnlySecond.planHash).toBe(readOnlyFirst.planHash);
   });
 });
 

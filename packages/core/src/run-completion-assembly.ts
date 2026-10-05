@@ -1,5 +1,5 @@
 import type { AgentFinalCandidateDecision, CompletionGate, RunExecutionMode } from "@caelush/agent";
-import type { AgentRun, AgentState } from "@caelush/protocol";
+import type { AgentRun, AgentState, VerificationProjectFacts } from "@caelush/protocol";
 import { compileVerificationRepairContext } from "@caelush/verification";
 
 import type { RunContinuationCheckpoint } from "./agent-continuation.js";
@@ -135,7 +135,7 @@ export interface RunCompletionAssembly {
   /** The gate identity every decision from this assembly is attributed to. */
   readonly gateId: string;
   openEvaluation(input: RunCompletionEvaluationInput): RunCompletionEvaluation | undefined;
-  planCandidateBoundary(input: RunCandidateBoundaryInput): CompletionBoundaryOpening;
+  planCandidateBoundary(input: RunCandidateBoundaryInput): Promise<CompletionBoundaryOpening>;
   compileRepairContext(
     input: RunRepairContextInput,
   ): Promise<{ readonly text: string } | undefined>;
@@ -225,12 +225,38 @@ export function createCodingCompletionAssembly(
       };
     },
 
-    planCandidateBoundary(input) {
+    async planCandidateBoundary(input) {
+      let projectFacts: VerificationProjectFacts | undefined;
+      if (input.state.changedFiles.length > 0) {
+        try {
+          const config = await dependencies.configResolver.resolve(input.run);
+          projectFacts = config.projectFacts;
+          if (dependencies.profileProvider !== undefined) {
+            const profile = await dependencies.profileProvider.getFreshProfile(input.run, config);
+            projectFacts = {
+              ...projectFacts,
+              isCodeProject: profile.ecosystems.length > 0,
+              ...(profile.packages === undefined
+                ? {}
+                : {
+                    packageDirectories: profile.packages.map((packageInfo) =>
+                      packageInfo.relativePath === "" ? "." : packageInfo.relativePath,
+                    ),
+                  }),
+            };
+          }
+        } catch {
+          // Scope discovery is an optimization. If fresh project facts are unavailable, the planner
+          // sees unknown impact and chooses the conservative project-wide checks.
+          projectFacts = undefined;
+        }
+      }
       return createRunCandidateBoundaryPlanner({
         run: input.run,
         state: input.state,
         continuation: input.continuation,
         clock: dependencies.clock,
+        ...(projectFacts === undefined ? {} : { projectFacts }),
         ...(dependencies.planner === undefined ? {} : { planner: dependencies.planner }),
         ...(dependencies.planIdFactory === undefined
           ? {}

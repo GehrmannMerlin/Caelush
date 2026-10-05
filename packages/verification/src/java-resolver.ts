@@ -23,7 +23,11 @@ export const javaProjectCheckResolver: ProjectCheckResolver & { readonly ecosyst
     if (check.spec.kind !== "PROJECT" || !profile.ecosystems.includes("JAVA")) {
       return { kind: "UNAVAILABLE", reason: "ECOSYSTEM_UNSUPPORTED" };
     }
-    if (check.spec.purpose === "LINT" || check.spec.purpose === "TYPECHECK") {
+    if (
+      check.spec.purpose === "LINT" ||
+      check.spec.purpose === "TYPECHECK" ||
+      check.spec.purpose === "ARCHITECTURE"
+    ) {
       return { kind: "UNAVAILABLE", reason: "TOOLING_UNAVAILABLE" };
     }
     const tools = profile.tooling.filter((item) => item.name === "maven" || item.name === "gradle");

@@ -298,4 +298,47 @@ describe("Phase 11A Verification contracts", () => {
     expect(inputSchema.parse(input)).toEqual(input);
     expect(inputSchema.safeParse({ ...input, storage: {} }).success).toBe(false);
   });
+
+  it("accepts only bounded workspace-relative package directories and scoped checks", () => {
+    const factsSchema = schema("VerificationProjectFactsSchema");
+    expect(
+      factsSchema.safeParse({ packageDirectories: [".", "packages/core", "apps/web"] }).success,
+    ).toBe(true);
+    for (const directory of [
+      "C:\\workspace\\packages\\core",
+      "/workspace/packages/core",
+      "../outside",
+    ]) {
+      expect(factsSchema.safeParse({ packageDirectories: [directory] }).success).toBe(false);
+    }
+    expect(
+      factsSchema.safeParse({ packageDirectories: ["packages/core", "packages/core"] }).success,
+    ).toBe(false);
+    expect(factsSchema.safeParse({ packageDirectories: ["x".repeat(1025)] }).success).toBe(false);
+
+    const checkSchema = schema("VerificationCheckSchema");
+    const planId = createVerificationPlanId();
+    const check = {
+      id: (api.createVerificationCheckId as () => string)(),
+      planId,
+      ordinal: 0,
+      stage: "FAST_STATIC",
+      requirement: "IF_AVAILABLE",
+      spec: {
+        kind: "PROJECT",
+        purpose: "TYPECHECK",
+        source: "SYSTEM",
+        packageRelativePath: "packages/core",
+      },
+      status: "PENDING",
+      createdAt: 1_700_000_000_000,
+    };
+    expect(checkSchema.safeParse(check).success).toBe(true);
+    expect(
+      checkSchema.safeParse({
+        ...check,
+        spec: { ...check.spec, packageRelativePath: "../../outside" },
+      }).success,
+    ).toBe(false);
+  });
 });

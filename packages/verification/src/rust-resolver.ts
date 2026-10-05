@@ -16,7 +16,7 @@ export const rustProjectCheckResolver: ProjectCheckResolver & { readonly ecosyst
     if (check.spec.kind !== "PROJECT" || !profile.ecosystems.includes("RUST")) {
       return { kind: "UNAVAILABLE", reason: "ECOSYSTEM_UNSUPPORTED" };
     }
-    if (check.spec.purpose === "LINT") {
+    if (check.spec.purpose === "LINT" || check.spec.purpose === "ARCHITECTURE") {
       return { kind: "UNAVAILABLE", reason: "TOOLING_UNAVAILABLE" };
     }
     const cargo = profile.tooling.find((item) => item.name === "cargo");

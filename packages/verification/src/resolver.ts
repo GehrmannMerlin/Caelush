@@ -14,6 +14,7 @@ export interface VerificationProjectProfile {
   readonly packageManager: { readonly name: string; readonly source?: string };
   readonly tooling: readonly { readonly name: string; readonly evidencePaths: readonly string[] }[];
   readonly isMonorepo: boolean;
+  readonly packages?: readonly VerificationProjectPackage[];
   readonly rootPackage?: VerificationProjectPackage;
   readonly activePackage?: VerificationProjectPackage;
 }

@@ -7,14 +7,22 @@ import {
 import { describe, expect, it } from "vitest";
 import { nodeProjectCheckResolver, type VerificationProjectProfile } from "../src/index.js";
 
-function check(purpose: "LINT" | "TYPECHECK" | "TEST" | "BUILD"): VerificationCheck {
+function check(
+  purpose: "LINT" | "TYPECHECK" | "TEST" | "BUILD" | "ARCHITECTURE",
+  packageRelativePath?: string,
+): VerificationCheck {
   return {
     id: createVerificationCheckId(),
     planId: createVerificationPlanId(),
     ordinal: 0,
     stage: "FAST_STATIC",
     requirement: "IF_AVAILABLE",
-    spec: { kind: "PROJECT", purpose, source: "SYSTEM" },
+    spec: {
+      kind: "PROJECT",
+      purpose,
+      source: "SYSTEM",
+      ...(packageRelativePath === undefined ? {} : { packageRelativePath }),
+    },
     status: "PENDING",
     createdAt: createTimestampMs(1_700_000_000_000),
   };
@@ -80,6 +88,45 @@ describe("Node project verification resolver", () => {
       "test",
       "posttest",
     ]);
+  });
+
+  it("resolves package-scoped checks from the discovered package inventory", () => {
+    const result = nodeProjectCheckResolver.resolve(
+      check("BUILD", "packages/core"),
+      profile({
+        rootPackage: { relativePath: ".", scripts: [] },
+        activePackage: { relativePath: "apps/demo", scripts: [] },
+        packages: [
+          { relativePath: ".", scripts: [] },
+          { relativePath: "apps/demo", scripts: [] },
+          { relativePath: "packages/core", scripts: [{ name: "build", command: "tsc -b" }] },
+        ],
+      }),
+    );
+
+    expect(result.kind).toBe("READY");
+    if (result.kind !== "READY") return;
+    expect(result.candidate.workdir).toBe("packages/core");
+    expect(result.candidate.provenance.evidencePath).toBe("packages/core/package.json");
+    expect(result.candidate.args).toEqual(["run", "build"]);
+  });
+
+  it("resolves architecture checks through the root architecture script", () => {
+    const result = nodeProjectCheckResolver.resolve(
+      check("ARCHITECTURE"),
+      profile({
+        rootPackage: {
+          relativePath: ".",
+          scripts: [{ name: "check:architecture:ci", command: "pnpm check:architecture:ci" }],
+        },
+      }),
+    );
+
+    expect(result.kind).toBe("READY");
+    if (result.kind !== "READY") return;
+    expect(result.candidate.workdir).toBe(".");
+    expect(result.candidate.provenance.evidencePath).toBe("package.json");
+    expect(result.candidate.provenance.scriptName).toBe("check:architecture:ci");
   });
 
   it.each([

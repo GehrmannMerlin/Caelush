@@ -12,6 +12,7 @@ const SCRIPT_ALIASES = {
   TYPECHECK: ["typecheck", "type-check"],
   TEST: ["test"],
   BUILD: ["build"],
+  ARCHITECTURE: ["check:architecture:ci", "architecture"],
 } as const;
 
 const SUPPORTED_PACKAGE_MANAGERS = new Set(["pnpm", "npm", "yarn", "bun"]);
@@ -66,7 +67,8 @@ export const nodeProjectCheckResolver: ProjectCheckResolver & { readonly ecosyst
   ecosystem: "NODE",
 
   resolve(check: VerificationCheck, profile: VerificationProjectProfile): ProjectCheckResolution {
-    if (check.spec.kind !== "PROJECT" || !profile.ecosystems.includes("NODE")) {
+    const spec = check.spec;
+    if (spec.kind !== "PROJECT" || !profile.ecosystems.includes("NODE")) {
       return { kind: "UNAVAILABLE", reason: "ECOSYSTEM_UNSUPPORTED" };
     }
 
@@ -75,12 +77,30 @@ export const nodeProjectCheckResolver: ProjectCheckResolver & { readonly ecosyst
       return { kind: "UNAVAILABLE", reason: packageManagerReason(profile.packageManager.name) };
     }
 
-    const aliases = SCRIPT_ALIASES[check.spec.purpose];
+    const aliases = SCRIPT_ALIASES[spec.purpose];
+    const packages =
+      profile.packages ??
+      [profile.rootPackage, profile.activePackage].filter(
+        (packageInfo): packageInfo is VerificationProjectPackage => packageInfo !== undefined,
+      );
+    const scopedPackage =
+      spec.packageRelativePath === undefined
+        ? undefined
+        : packages.find(
+            (packageInfo) =>
+              normalizeRelativePath(packageInfo.relativePath) ===
+              normalizeRelativePath(spec.packageRelativePath!),
+          );
+    if (spec.packageRelativePath !== undefined && scopedPackage === undefined) {
+      return { kind: "UNAVAILABLE", reason: "SCRIPT_NOT_DEFINED" };
+    }
     let selected:
       { packageInfo: VerificationProjectPackage; scriptName: string; command: string } | undefined;
     for (const alias of aliases) {
       selected =
-        findScript(profile.rootPackage, [alias]) ?? findScript(profile.activePackage, [alias]);
+        spec.packageRelativePath === undefined
+          ? (findScript(profile.rootPackage, [alias]) ?? findScript(profile.activePackage, [alias]))
+          : findScript(scopedPackage, [alias]);
       if (selected !== undefined) break;
     }
     if (selected === undefined) return { kind: "UNAVAILABLE", reason: "SCRIPT_NOT_DEFINED" };

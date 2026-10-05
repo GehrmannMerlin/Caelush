@@ -63,7 +63,13 @@ export const VerificationEvidenceKindSchema = z.enum([
 ]);
 export type VerificationEvidenceKind = z.infer<typeof VerificationEvidenceKindSchema>;
 
-export const VerificationProjectCheckPurposeSchema = z.enum(["LINT", "TYPECHECK", "TEST", "BUILD"]);
+export const VerificationProjectCheckPurposeSchema = z.enum([
+  "LINT",
+  "TYPECHECK",
+  "TEST",
+  "BUILD",
+  "ARCHITECTURE",
+]);
 export type VerificationProjectCheckPurpose = z.infer<typeof VerificationProjectCheckPurposeSchema>;
 
 export const VerificationCheckPurposeSchema = z.enum([
@@ -71,17 +77,35 @@ export const VerificationCheckPurposeSchema = z.enum([
   "TYPECHECK",
   "TEST",
   "BUILD",
+  "ARCHITECTURE",
   "CHANGESET_SANITY",
   "CHANGESET_REVIEW",
   "ACCEPTANCE",
 ]);
 export type VerificationCheckPurpose = z.infer<typeof VerificationCheckPurposeSchema>;
 
+const VerificationProjectRelativeDirectorySchema = z
+  .string()
+  .min(1)
+  .max(1024)
+  .refine(
+    (value) => {
+      const normalized = value.replaceAll("\\", "/");
+      if (normalized === ".") return true;
+      if (normalized.startsWith("/") || /^[A-Za-z]:/.test(normalized)) return false;
+      return normalized
+        .split("/")
+        .every((segment) => segment !== "" && segment !== "." && segment !== "..");
+    },
+    { message: "Package directory must be workspace-relative" },
+  );
+
 const VerificationProjectCheckSpecSchema = z
   .object({
     kind: z.literal("PROJECT"),
     purpose: VerificationProjectCheckPurposeSchema,
     source: VerificationCheckSourceSchema,
+    packageRelativePath: VerificationProjectRelativeDirectorySchema.optional(),
   })
   .strict();
 
@@ -329,6 +353,13 @@ export const VerificationProjectFactsSchema = z
   .object({
     isCodeProject: z.boolean().optional(),
     isGitRepository: z.boolean().optional(),
+    packageDirectories: z
+      .array(VerificationProjectRelativeDirectorySchema)
+      .max(512)
+      .refine((directories) => new Set(directories).size === directories.length, {
+        message: "Package directories must be unique",
+      })
+      .optional(),
   })
   .strict();
 export type VerificationProjectFacts = z.infer<typeof VerificationProjectFactsSchema>;

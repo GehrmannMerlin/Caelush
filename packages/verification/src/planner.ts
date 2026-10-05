@@ -60,6 +60,104 @@ function projectChecks(): VerificationCheckDraft[] {
   ];
 }
 
+function normalizeRelativePath(value: string): string | undefined {
+  const normalized = value.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/$/, "");
+  if (
+    normalized === "" ||
+    normalized.startsWith("/") ||
+    /^[A-Za-z]:/.test(normalized) ||
+    normalized.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
+  ) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function normalizePackageDirectory(value: string): string | undefined {
+  if (value.replaceAll("\\", "/") === ".") return ".";
+  return normalizeRelativePath(value);
+}
+
+function packageForChangedPath(
+  changedPath: string,
+  packageDirectories: readonly string[],
+): string | undefined {
+  const normalizedPath = normalizeRelativePath(changedPath);
+  if (normalizedPath === undefined) return undefined;
+  const candidates = packageDirectories
+    .map(normalizePackageDirectory)
+    .filter((directory): directory is string => directory !== undefined)
+    .sort((left, right) => right.length - left.length || left.localeCompare(right));
+  return candidates.find(
+    (directory) =>
+      directory === "." ||
+      normalizedPath === directory ||
+      normalizedPath.startsWith(`${directory}/`),
+  );
+}
+
+function rawPackageDirectory(changedPath: string): string | undefined {
+  const normalized = normalizeRelativePath(changedPath);
+  if (normalized === undefined) return undefined;
+  return /^(?:apps|packages)\/[^/]+/.exec(normalized)?.[0];
+}
+
+function isArchitectureBoundaryChange(changedPath: string): boolean {
+  const normalized = normalizeRelativePath(changedPath);
+  if (normalized === undefined) return false;
+  return (
+    normalized === "package.json" ||
+    normalized === "pnpm-workspace.yaml" ||
+    normalized === "pnpm-lock.yaml" ||
+    /^tsconfig(?:\.[^/]+)?\.json$/.test(normalized) ||
+    normalized.startsWith("scripts/architecture/") ||
+    normalized.startsWith("packages/protocol/") ||
+    normalized.startsWith("packages/agent/") ||
+    normalized.startsWith("apps/daemon/") ||
+    /^(?:apps|packages)\/[^/]+\/package\.json$/.test(normalized) ||
+    /^(?:apps|packages)\/[^/]+\/src\/index\.[cm]?[jt]sx?$/.test(normalized)
+  );
+}
+
+function explicitlyRequestsFullVerification(goal: string): boolean {
+  const normalized = goal.toLocaleLowerCase();
+  if (
+    /\b(?:do not|don't|never|skip|avoid)\b.{0,40}\b(?:full|complete|entire)\b.{0,24}\b(?:verification|validation|checks?|test suite)\b/i.test(
+      normalized,
+    ) ||
+    /(?:不要|无需|不必|别).{0,8}(?:全量|完整).{0,5}(?:校验|检查|测试)/.test(goal)
+  ) {
+    return false;
+  }
+  return (
+    /\b(?:full|complete|entire)\s+(?:project\s+)?(?:verification|validation|checks?|test suite)\b/i.test(
+      normalized,
+    ) || /(?:全量|完整)(?:项目)?(?:校验|检查|测试)/.test(goal)
+  );
+}
+
+function appendProjectChecks(checks: VerificationCheckDraft[], packageRelativePath?: string): void {
+  for (const check of projectChecks()) {
+    checks.push({
+      ...check,
+      ordinal: checks.length,
+      spec: {
+        ...check.spec,
+        ...(packageRelativePath === undefined ? {} : { packageRelativePath }),
+      },
+    });
+  }
+}
+
+function appendArchitectureCheck(checks: VerificationCheckDraft[]): void {
+  checks.push({
+    ordinal: checks.length,
+    stage: "FAST_STATIC",
+    requirement: "REQUIRED",
+    spec: { kind: "PROJECT", purpose: "ARCHITECTURE", source: "SYSTEM" },
+  });
+}
+
 export interface VerificationPlanner {
   plan(input: VerificationPlanningInput): VerificationPlanDraft;
 }
@@ -75,11 +173,41 @@ export class DefaultVerificationPlanner implements VerificationPlanner {
     const planningInput = VerificationPlanningInputSchema.parse(input);
     const checks: VerificationCheckDraft[] = [];
     const facts = planningInput.projectFacts;
+    const hasRunChanges = planningInput.changedFiles.length > 0;
+    const fullVerificationRequested = explicitlyRequestsFullVerification(planningInput.goal);
+    const runPaths = planningInput.changedFiles.map((file) => file.path);
+    const hasCodeProject = facts?.isCodeProject !== false || fullVerificationRequested;
 
-    if (facts?.isCodeProject !== false) {
-      checks.push(...projectChecks());
+    if (fullVerificationRequested && hasCodeProject) {
+      appendArchitectureCheck(checks);
+      appendProjectChecks(checks);
+    } else if (hasRunChanges && hasCodeProject) {
+      const packageDirectories = facts?.packageDirectories;
+      const affectedPackages =
+        packageDirectories === undefined
+          ? undefined
+          : runPaths.map((changedPath) => packageForChangedPath(changedPath, packageDirectories));
+      const scopeIsKnown =
+        affectedPackages !== undefined &&
+        affectedPackages.every((directory) => directory !== undefined);
+
+      if (!scopeIsKnown) {
+        const rawDirectories = new Set(runPaths.map(rawPackageDirectory).filter(Boolean));
+        if (rawDirectories.size > 1 || runPaths.some(isArchitectureBoundaryChange)) {
+          appendArchitectureCheck(checks);
+        }
+        appendProjectChecks(checks);
+      } else {
+        const directories = [...new Set(affectedPackages)].sort((left, right) =>
+          (left ?? "").localeCompare(right ?? ""),
+        ) as string[];
+        const architectureChange =
+          directories.length > 1 || runPaths.some(isArchitectureBoundaryChange);
+        if (architectureChange) appendArchitectureCheck(checks);
+        for (const directory of directories) appendProjectChecks(checks, directory);
+      }
     }
-    if (planningInput.changedFiles.length > 0) {
+    if (hasRunChanges) {
       checks.push({
         ordinal: checks.length,
         stage: "CHANGE_REVIEW",
@@ -87,7 +215,7 @@ export class DefaultVerificationPlanner implements VerificationPlanner {
         spec: { kind: "WORKSPACE", purpose: "CHANGESET_SANITY", source: "SYSTEM" },
       });
     }
-    if (facts?.isGitRepository !== false) {
+    if ((hasRunChanges || fullVerificationRequested) && facts?.isGitRepository !== false) {
       checks.push({
         ordinal: checks.length,
         stage: "CHANGE_REVIEW",

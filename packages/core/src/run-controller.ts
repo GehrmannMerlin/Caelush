@@ -2347,7 +2347,7 @@ export class RunController {
         "The verification planner is not configured, so no completion boundary can be opened.",
       );
     }
-    const opening = assembly.planCandidateBoundary({
+    const opening = await assembly.planCandidateBoundary({
       run: current.run,
       state: decisionState,
       continuation: { ...continuation, verificationPlanId: "" as never },
