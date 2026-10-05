@@ -358,25 +358,6 @@ describe("canonical model feedback — integrity", () => {
     ).toThrow(AgentToolResultBatchError);
   });
 
-  it("refuses a projection that returns a different number of summaries", () => {
-    const projector = createModelToolFeedbackProjector({
-      projection: {
-        projectBatch() {
-          // One candidate in, zero summaries out: a pairing would attach one Tool's output to another
-          // Tool's identity, so this fails closed.
-          return [];
-        },
-      },
-    });
-    expect(() =>
-      projector.project({
-        calls: [call("call_a")],
-        items: [observed(call("call_a"), "one")],
-        policy: GENEROUS,
-      }),
-    ).toThrow(AgentToolResultBatchError);
-  });
-
   it("refuses an unusable observation policy", () => {
     const projector = createModelToolFeedbackProjector();
     for (const policy of [
@@ -434,7 +415,7 @@ describe("canonical model feedback — the injection seam", () => {
     expect(messages[0]!.content).toBe("bounded");
   });
 
-  it("turns a projection dependency failure into an infrastructure failure, not a Tool error", () => {
+  it("falls back to bounded built-in feedback when the injected projection throws", () => {
     const projector = createModelToolFeedbackProjector({
       projection: {
         projectBatch() {
@@ -442,21 +423,61 @@ describe("canonical model feedback — the injection seam", () => {
         },
       },
     });
-    const calls = [call("call_a")];
-    const failure = (() => {
-      try {
-        projector.project({ calls, items: [observed(calls[0]!, "one")], policy: GENEROUS });
-      } catch (error) {
-        return error;
-      }
-      return undefined;
-    })();
+    const calls = [call("call_a", "read_file"), call("call_b", "exec_command")];
+    const messages = modelMessages(projector, {
+      calls,
+      items: [observed(calls[0]!, "first"), observed(calls[1]!, "second")],
+      policy: GENEROUS,
+    });
 
-    // A model told "your Tool result could not be rendered" would treat a host bug as a Tool failure
-    // and retry the call, so this is never an `AIToolResultMessage` with `isError: true`.
-    expect(failure).toBeInstanceOf(Error);
-    expect(failure).not.toBeInstanceOf(AgentToolResultBatchError);
-    expect((failure as Error).cause).toBeInstanceOf(Error);
+    expect(messages).toMatchObject([
+      { toolCallId: "call_a", toolName: "read_file", content: "first" },
+      { toolCallId: "call_b", toolName: "exec_command", content: "second" },
+    ]);
+  });
+
+  it("falls back when the injected projection returns the wrong number of summaries", () => {
+    const projector = createModelToolFeedbackProjector({
+      projection: { projectBatch: () => [] },
+    });
+    const calls = [call("call_a", "read_file"), call("call_b", "exec_command")];
+    const messages = modelMessages(projector, {
+      calls,
+      items: [observed(calls[0]!, "first"), rejected(calls[1]!, "second")],
+      policy: GENEROUS,
+    });
+
+    expect(messages).toMatchObject([
+      { toolCallId: "call_a", toolName: "read_file", content: "first" },
+      { toolCallId: "call_b", toolName: "exec_command", content: "second" },
+    ]);
+  });
+
+  it("keeps multibyte fallback output valid within an exact total token budget", () => {
+    const projector = createModelToolFeedbackProjector({
+      projection: {
+        projectBatch() {
+          throw new Error("projection unavailable");
+        },
+      },
+    });
+    const calls = [call("call_a"), call("call_b")];
+    const policy = { maxSingleObservationTokens: 8, maxObservationBatchTokens: 16 };
+    const messages = modelMessages(projector, {
+      calls,
+      items: calls.map((request) => observed(request, "🙂".repeat(20_000))),
+      policy,
+    });
+
+    const tokenEstimates = messages.map((message) =>
+      Math.ceil(Buffer.byteLength(message.content, "utf8") / 3),
+    );
+    for (const message of messages) {
+      expect(Buffer.from(message.content, "utf8").toString("utf8")).toBe(message.content);
+      expect(message.content).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+      expect(message.content).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+    }
+    expect(tokenEstimates.reduce((total, estimate) => total + estimate, 0)).toBe(16);
   });
 });
 

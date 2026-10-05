@@ -2,16 +2,33 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CaelushClient } from "@caelush/client";
-import { createControlHookId } from "@caelush/agent";
-import { createWorkspaceId } from "@caelush/protocol";
+import {
+  createControlHookId,
+  createModelToolFeedbackProjector,
+  type ToolBatchItemOutcome,
+} from "@caelush/agent";
+import {
+  createObservationId,
+  createRunId,
+  createSessionId,
+  createStepId,
+  createTimestampMs,
+  createToolInvocationId,
+  createWorkspaceId,
+  type ToolObservation,
+} from "@caelush/protocol";
 import type { AIAdapterEvent, ApiAdapter, ApiAdapterStreamInput } from "@caelush/ai";
+import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { composeDaemon, type DaemonComposition } from "../src/daemon-composition.js";
 import { startDaemon } from "../src/index.js";
 import { FIXTURE_API, fixtureBinding, fixtureModelSource } from "./support/ai-fixture.js";
 
 let directory: string | undefined;
 let daemon: { close(): Promise<void>; url: string } | undefined;
+let storage: CaelushStorage | undefined;
+let composition: DaemonComposition | undefined;
 
 class ControlPipelineProvider implements ApiAdapter {
   readonly id = FIXTURE_API;
@@ -53,8 +70,12 @@ class ControlPipelineProvider implements ApiAdapter {
 
 afterEach(async () => {
   await daemon?.close().catch(() => undefined);
+  await composition?.dispose().catch(() => undefined);
+  await storage?.close().catch(() => undefined);
   if (directory !== undefined) await rm(directory, { recursive: true, force: true });
   daemon = undefined;
+  composition = undefined;
+  storage = undefined;
   directory = undefined;
 });
 
@@ -155,6 +176,93 @@ describe("Phase 6G daemon Tool control composition", () => {
     );
     expect(JSON.stringify(provider.requests[1])).not.toContain("CAELUSH_PHASE_6G_SECRET_123");
   }, 20_000);
+
+  it("runs Feedback hooks only for observations and leaves TOOL_NOT_STARTED unchanged", async () => {
+    storage = await openCaelushStorage({ path: ":memory:" });
+    const feedbackInputs: unknown[] = [];
+    composition = await composeDaemon({
+      storage,
+      toolFeedbackContributionHooks: [
+        {
+          id: createControlHookId("observations-only-feedback"),
+          priority: 10,
+          criticality: "REQUIRED",
+          timeoutMs: 100,
+          hook: {
+            async contribute(input) {
+              feedbackInputs.push(input);
+              return [];
+            },
+          },
+        },
+      ],
+    });
+
+    const runId = createRunId();
+    const sessionId = createSessionId();
+    const sourceStepId = createStepId();
+    const calls = [
+      { externalCallId: "call_observed", toolName: "read_file", args: { path: "a.ts" } },
+      { externalCallId: "call_not_started", toolName: "exec_command", args: { command: "test" } },
+    ];
+    const observation: ToolObservation = {
+      id: createObservationId(),
+      runId,
+      stepId: sourceStepId,
+      kind: "TOOL",
+      toolInvocationId: createToolInvocationId(),
+      content: "safe observation",
+      isError: false,
+      createdAt: createTimestampMs(1),
+    };
+    const items: ToolBatchItemOutcome[] = [
+      {
+        kind: "OBSERVATION",
+        call: calls[0]!,
+        invocationId: observation.toolInvocationId,
+        finalStatus: "COMPLETED",
+        observation,
+      },
+      {
+        kind: "SKIPPED",
+        call: calls[1]!,
+        feedback: {
+          code: "TOOL_NOT_STARTED",
+          content: "This tool call was not started because an earlier tool outcome is unknown.",
+          details: {},
+          disposition: "SAFE_FAILURE",
+        },
+      },
+    ];
+    const projector = createModelToolFeedbackProjector();
+    const projected = projector.project({
+      calls,
+      items,
+      policy: { maxSingleObservationTokens: 1_000, maxObservationBatchTokens: 2_000 },
+    });
+    const syntheticBefore = projected[1];
+    const applier = composition.toolTurn.feedbackContributions;
+    if (applier === undefined) throw new Error("daemon must compose Tool Feedback contributions");
+
+    const output = await applier.apply({
+      runId,
+      sessionId,
+      sourceStepId,
+      mode: "EXECUTE",
+      signal: new AbortController().signal,
+      items,
+      projected,
+    });
+
+    expect(feedbackInputs).toHaveLength(1);
+    expect(feedbackInputs[0]).toMatchObject({
+      toolCallId: "call_observed",
+      toolName: "read_file",
+      observationId: observation.id,
+    });
+    expect(output[1]).toBe(syntheticBefore);
+    expect(output[1]).toEqual(syntheticBefore);
+  });
 });
 
 function isTerminal(status: string): boolean {

@@ -1,9 +1,16 @@
-import { createRunId, createSessionId, createStepId, createTimestampMs } from "@caelush/protocol";
+import {
+  createObservationId,
+  createRunId,
+  createSessionId,
+  createStepId,
+  createTimestampMs,
+} from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import {
   createControlHookId,
   createControlHookRegistryBuilder,
   createControlHookRunner,
+  ControlHookPipelineError,
   type ControlHookContext,
 } from "@caelush/agent";
 import {
@@ -154,5 +161,76 @@ describe("Phase 6G Coding control pipelines", () => {
 
     expect(result.content).toBe("before\n\nbuilt-in\n\n[REDACTED]");
     expect(result.receipts.map((receipt) => receipt.hookId)).toEqual(["prepend", "append"]);
+  });
+
+  it("skips an OPTIONAL Tool Feedback hook failure and retains built-in content", async () => {
+    const pipeline = createToolFeedbackContributionPipeline({
+      registrations: [
+        {
+          id: createControlHookId("optional-failure"),
+          priority: 1,
+          criticality: "OPTIONAL",
+          timeoutMs: 100,
+          hook: {
+            async contribute() {
+              throw new Error("optional hook failed");
+            },
+          },
+        },
+      ],
+      textSanitizer: (text) => text,
+    });
+
+    const result = await pipeline.contribute(
+      {
+        runId: context.identity.runId,
+        sessionId: context.identity.sessionId,
+        sourceStepId: context.stepId!,
+        toolCallId: "call-optional",
+        toolName: "exec_command",
+        observationId: createObservationId(),
+        isError: false,
+        builtInFeedback: "built-in feedback survives",
+      },
+      context,
+    );
+
+    expect(result.content).toBe("built-in feedback survives");
+    expect(result.contributions).toEqual([]);
+  });
+
+  it("fails closed when a REQUIRED Tool Feedback hook fails", async () => {
+    const pipeline = createToolFeedbackContributionPipeline({
+      registrations: [
+        {
+          id: createControlHookId("required-failure"),
+          priority: 1,
+          criticality: "REQUIRED",
+          timeoutMs: 100,
+          hook: {
+            async contribute() {
+              throw new Error("required hook failed");
+            },
+          },
+        },
+      ],
+      textSanitizer: (text) => text,
+    });
+
+    await expect(
+      pipeline.contribute(
+        {
+          runId: context.identity.runId,
+          sessionId: context.identity.sessionId,
+          sourceStepId: context.stepId!,
+          toolCallId: "call-required",
+          toolName: "exec_command",
+          observationId: createObservationId(),
+          isError: false,
+          builtInFeedback: "built-in feedback",
+        },
+        context,
+      ),
+    ).rejects.toBeInstanceOf(ControlHookPipelineError);
   });
 });
