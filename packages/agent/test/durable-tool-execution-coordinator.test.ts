@@ -622,22 +622,25 @@ describe("DurableToolExecutionCoordinator", () => {
   });
 
   it("notifies only after failure is durable and reuses it without executing again", async () => {
-    let h: Harness;
+    const harnessRef: { current: Harness | undefined } = { current: undefined };
     let sawTerminalAtNotification = false;
     const notifier: RunEventNotifierPort = {
       notifyCommitted() {
+        const h = harnessRef.current;
+        if (h === undefined) throw new Error("harness must exist before Tool settlement");
         sawTerminalAtNotification =
           [...h.store.snapshots.values()][0]?.invocation.status === "FAILED";
         throw new Error("subscriber failed");
       },
       emitTransient() {},
     };
-    h = harness({
+    const h = harness({
       notifier,
       execute: async () => {
         throw new Error("handler failed");
       },
     });
+    harnessRef.current = h;
     const original = h.store.commit.bind(h.store);
     h.store.commit = async (command: ToolExecutionCommit) => {
       const result = await original(command);

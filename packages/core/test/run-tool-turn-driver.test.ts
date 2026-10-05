@@ -298,6 +298,8 @@ describe("Phase 3D Tool turn driver", () => {
   it("hands the legacy Tool Layer only the frozen facts plus the captured Run-scoped ones", async () => {
     const batches = scriptedBatches(completeAnswer());
     const run = makeRunD({ permissionProfile: "PROJECT_ACCESS", approvalPolicy: "DANGEROUS_ONLY" });
+    if (run.securityPolicy === undefined)
+      throw new Error("the fixture Run needs a security policy");
     const h = harness3d({
       run,
       script: (call) =>

@@ -24,6 +24,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { composeDaemon, type DaemonComposition } from "../src/daemon-composition.js";
 import { startDaemon } from "../src/index.js";
 import { FIXTURE_API, fixtureBinding, fixtureModelSource } from "./support/ai-fixture.js";
+import { restrictedProvider } from "./support/permission-flow-fixture.js";
 
 let directory: string | undefined;
 let daemon: { close(): Promise<void>; url: string } | undefined;
@@ -94,6 +95,7 @@ describe("Phase 6G daemon Tool control composition", () => {
       providerBindings: [fixtureBinding()],
       modelSources: [fixtureModelSource()],
       adapterOverrides: [provider],
+      processSandboxProviders: [restrictedProvider],
       defaultModel: { provider: "fixture", model: "fixture-model" },
       beforeToolDispatchHooks: [
         {
@@ -132,17 +134,17 @@ describe("Phase 6G daemon Tool control composition", () => {
     });
 
     const client = new CaelushClient({ baseUrl: daemon.url });
+    const requestedWorkspace = { id: createWorkspaceId(), path: directory };
     const session = await client.createSession({
-      defaultWorkspace: { id: createWorkspaceId(), path: directory },
+      defaultWorkspace: requestedWorkspace,
       defaultModel: { provider: "fixture", model: "fixture-model" },
     });
     const run = await client.createRun(session.id, {
       goal: "inspect the file",
-      workspace: { id: createWorkspaceId(), path: directory },
+      workspace: session.defaultWorkspace ?? requestedWorkspace,
       model: { provider: "fixture", model: "fixture-model" },
       runtime: { id: "local", kind: "local" },
-      permissionProfile: "PROJECT_ACCESS",
-      approvalPolicy: "NEVER_ASK",
+      preset: { id: "WORKSPACE_WRITE", expectedVersion: 1 },
       limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 10_000 },
     });
     await client.startRun(run.id);
