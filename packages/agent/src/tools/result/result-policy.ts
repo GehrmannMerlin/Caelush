@@ -161,9 +161,9 @@ export const CODING_TOOL_EFFECTS_EXTENSION_KIND = "caelush.coding.effects.v1";
  *
  * It is called **after** sanitization and revalidation, so it only ever observes a result that is
  * known to be safe to commit. It is never called with the raw result, it may not mutate the result it
- * is given, and a throw is a `RESULT_PIPELINE` infrastructure failure — an effect that cannot be
- * projected safely must not be silently dropped, because the durable state would then disagree with
- * what actually happened.
+ * is given. A throw becomes `TOOL_OUTCOME_UNKNOWN`: an effect that cannot be projected safely must
+ * not be silently dropped, because the durable state would then disagree with what actually
+ * happened; the batch must not automatically replay that call.
  */
 export type ToolSettlementExtensionProjector = (input: {
   readonly call: PreparedToolCall;

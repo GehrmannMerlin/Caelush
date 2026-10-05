@@ -54,11 +54,13 @@ export class CaelushToolPresentation implements ToolPresentationPort {
     const title = TOOL_LABELS[input.invocation.toolName] ?? "使用工具";
     if (input.result === undefined) return { title, summary: "工具已完成" };
     try {
-      const safe = this.resultSanitizer.sanitize({
+      const sanitized = this.resultSanitizer.sanitize({
         toolName: input.invocation.toolName,
         invocation: input.invocation,
         result: input.result,
       });
+      if (sanitized.kind === "REFUSED") return { title, summary: "工具结果可用" };
+      const safe = sanitized.result;
       const summary = this.resultSummary(input.invocation, safe);
       if (
         input.invocation.toolName === "read_file" ||

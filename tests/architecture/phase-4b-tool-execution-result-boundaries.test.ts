@@ -411,6 +411,15 @@ describe("Phase 4B Agent Tool execution boundaries", () => {
 
     const sanitizerPort = executable(`${RESULT}result-sanitizer-port.ts`);
     expect(sanitizerPort).toContain("export interface ToolResultSanitizerPort");
+    expect(sanitizerPort).toContain("export type ToolResultSanitizationOutcome");
+    expect(sanitizerPort).toContain('readonly kind: "SANITIZED"');
+    expect(sanitizerPort).toContain('readonly kind: "REFUSED"');
+
+    const pipeline = executable(`${RESULT}result-pipeline.ts`);
+    expect(pipeline).toContain("ToolResultProcessingOutcome");
+    const processingOutcome = executable(`${RESULT}tool-result-processing-outcome.ts`);
+    expect(processingOutcome).toContain('readonly kind: "ACCEPTED"');
+    expect(processingOutcome).toContain('readonly kind: "FAILED"');
 
     const disposition = executable(`${EXECUTION}execution-disposition.ts`);
     expect(disposition).toContain("export const UNCERTAIN_SIDE_EFFECT");

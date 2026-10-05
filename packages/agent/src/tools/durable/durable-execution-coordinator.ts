@@ -592,7 +592,7 @@ export function createDurableToolExecutionCoordinator(
     const finishedAt = input.clock.now();
     let settlement;
     try {
-      settlement = input
+      const processed = input
         .resultPipelineFactory({
           invocation,
           environment: execution.environment,
@@ -604,6 +604,16 @@ export function createDurableToolExecutionCoordinator(
           rawResult,
           now: finishedAt,
         });
+      if (processed.kind === "FAILED") {
+        // The coordinator materializes this result as a durable Tool failure in the next boundary
+        // change. Until then, preserve the existing fail-closed behavior rather than committing a
+        // successful settlement without a validated result.
+        throw new ToolExecutionInfrastructureError(
+          "RESULT_PIPELINE",
+          "Tool result processing failed.",
+        );
+      }
+      settlement = processed.settlement;
     } catch (error) {
       if (error instanceof ToolResultValidationError) {
         await input.failureSettlement.settleFailure({

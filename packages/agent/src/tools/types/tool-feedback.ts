@@ -4,15 +4,16 @@ import type { JsonObject } from "@caelush/ai";
  * How a failure should be treated once it is known.
  *
  * ```text
- * SAFE_FAILURE            the failure is understood and safe to describe to the model
+ * SAFE_FAILURE            the failure is safely closed and safe to describe; this does not itself
+ *                         assert that the handler had no side effect or authorize a replay
  * UNCERTAIN_SIDE_EFFECT   the Tool may have partially or fully executed and nothing can prove
  *                         otherwise, so the batch must behave conservatively
  * ```
  *
- * The distinction is a first-class safety semantic, not a severity label. `SAFE_FAILURE` means "this
- * did not happen, and here is why"; `UNCERTAIN_SIDE_EFFECT` means "this may have happened, do not
- * automatically repeat it". Collapsing the second into the first is what produces duplicate patches,
- * duplicate commands and duplicate external requests after a restart.
+ * The distinction is a first-class safety semantic, not a severity label. `SAFE_FAILURE` means "the
+ * failure can be safely reported and the batch can continue"; `UNCERTAIN_SIDE_EFFECT` means "this
+ * may have happened, do not automatically repeat it". An identical retry remains a separate policy
+ * decision controlled by `blockToolFailures`, not by `isError` or the disposition alone.
  */
 export type ToolFailureDisposition = "SAFE_FAILURE" | "UNCERTAIN_SIDE_EFFECT";
 
