@@ -5,6 +5,7 @@ import { createGatewayRequestResolver } from "./gateway-request-resolver.js";
 import { createToolCallTracker } from "../stream/tool-call-tracker.js";
 import { describeValue } from "../internal/assertions.js";
 import type { AIAdapterEvent } from "../adapters/api-adapter-event.js";
+import { isAIMessagePhase } from "../messages/assistant-item.js";
 import type { AIErrorContext, AIErrorSanitizer } from "../errors/index.js";
 import type { AIFinishReason } from "../tools/tool-call.js";
 import type { AIModelRequest } from "../request/model-request.js";
@@ -238,7 +239,7 @@ async function* runGatewayStream(
         continue;
       }
 
-      const publicEvent = toPublicEvent(adapterEvent, context);
+      const publicEvent = toPublicEvent(adapterEvent, context, callId);
       if (publicEvent !== undefined) yield publicEvent;
       pendingNext = observeIteratorNext(adapterIterator);
     }
@@ -383,14 +384,43 @@ function trackAdapterEvent(
 }
 
 /** Map an adapter event onto the public stream event of the same shape. */
-function toPublicEvent(event: AIAdapterEvent, context: AIErrorContext): AIStreamEvent | undefined {
+function toPublicEvent(
+  event: AIAdapterEvent,
+  context: AIErrorContext,
+  callId: LLMCallId,
+): AIStreamEvent | undefined {
   switch (event.type) {
-    case "text.delta":
-      return { type: "text.delta", payload: { text: event.payload.text } };
+    case "text.delta": {
+      const assistantItemIndex = normalizeAssistantItemIndex(
+        event.payload.assistantItemIndex,
+        context,
+      );
+      return {
+        type: "text.delta",
+        payload: {
+          text: event.payload.text,
+          assistantItemId: assistantItemId(callId, assistantItemIndex),
+          phase: normalizeAssistantPhase(event.payload.phase, context),
+        },
+      };
+    }
     case "reasoning.summary.delta":
       return { type: "reasoning.summary.delta", payload: { text: event.payload.text } };
-    case "tool_call.start":
-      return { type: "tool_call.start", payload: { ...event.payload } };
+    case "tool_call.start": {
+      const assistantItemIndex = normalizeAssistantItemIndex(
+        event.payload.assistantItemIndex,
+        context,
+      );
+      return {
+        type: "tool_call.start",
+        payload: {
+          toolCallId: event.payload.toolCallId,
+          toolName: event.payload.toolName,
+          assistantItemId: assistantItemId(callId, assistantItemIndex),
+          phase: normalizeAssistantPhase(event.payload.phase, context),
+        },
+      };
+    }
     case "tool_call.delta":
       return { type: "tool_call.delta", payload: { ...event.payload } };
     case "tool_call.completed":
@@ -404,6 +434,35 @@ function toPublicEvent(event: AIAdapterEvent, context: AIErrorContext): AIStream
         context,
       );
   }
+}
+
+function normalizeAssistantItemIndex(value: number | undefined, context: AIErrorContext): number {
+  const normalized = value ?? 0;
+  if (!Number.isSafeInteger(normalized) || normalized < 0 || normalized > 255) {
+    throw createAIError(
+      "AI_INVALID_RESPONSE",
+      "AI adapter emitted an invalid assistant item index.",
+      context,
+    );
+  }
+  return normalized;
+}
+
+function assistantItemId(callId: LLMCallId, index: number): string {
+  return `${callId}:item:${String(index).padStart(3, "0")}`;
+}
+
+function normalizeAssistantPhase(
+  value: import("../messages/assistant-item.js").AIMessagePhase | undefined,
+  context: AIErrorContext,
+): import("../messages/assistant-item.js").AIMessagePhase {
+  if (value === undefined) return "UNKNOWN";
+  if (isAIMessagePhase(value)) return value;
+  throw createAIError(
+    "AI_INVALID_RESPONSE",
+    "AI adapter emitted an unsupported assistant message phase.",
+    context,
+  );
 }
 
 /**

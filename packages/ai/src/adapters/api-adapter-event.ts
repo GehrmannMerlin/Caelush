@@ -1,4 +1,5 @@
 import type { AIFinishReason, AIToolCall } from "../tools/tool-call.js";
+import type { AIMessagePhase } from "../messages/assistant-item.js";
 import type { ModelUsage } from "../models/model-usage.js";
 
 /**
@@ -15,11 +16,24 @@ import type { ModelUsage } from "../models/model-usage.js";
  * ids, or guess which call an ambiguous delta belongs to.
  */
 export type AIAdapterEvent =
-  | { readonly type: "text.delta"; readonly payload: { readonly text: string } }
+  | {
+      readonly type: "text.delta";
+      readonly payload: {
+        readonly text: string;
+        /** A bounded in-turn ordinal, never a provider-issued identifier. */
+        readonly assistantItemIndex?: number;
+        readonly phase?: AIMessagePhase;
+      };
+    }
   | { readonly type: "reasoning.summary.delta"; readonly payload: { readonly text: string } }
   | {
       readonly type: "tool_call.start";
-      readonly payload: { readonly toolCallId: string; readonly toolName: string };
+      readonly payload: {
+        readonly toolCallId: string;
+        readonly toolName: string;
+        readonly assistantItemIndex?: number;
+        readonly phase?: AIMessagePhase;
+      };
     }
   | {
       readonly type: "tool_call.delta";

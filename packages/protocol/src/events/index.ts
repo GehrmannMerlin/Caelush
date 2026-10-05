@@ -39,6 +39,7 @@ import {
   ModelReasoningSummaryDeltaEventSchema,
   ModelStatusEventSchema,
   ModelTextDeltaEventSchema,
+  ModelTextDeltaEventV2Schema,
   ModelToolCallDeltaEventSchema,
 } from "./model.js";
 import {
@@ -101,12 +102,14 @@ export {
   ModelReasoningSummaryDeltaEventSchema,
   ModelStatusEventSchema,
   ModelTextDeltaEventSchema,
+  ModelTextDeltaEventV2Schema,
   ModelToolCallDeltaEventSchema,
 } from "./model.js";
 export type {
   ModelReasoningSummaryDeltaEvent,
   ModelStatusEvent,
   ModelTextDeltaEvent,
+  ModelTextDeltaEventV2,
   ModelToolCallDeltaEvent,
 } from "./model.js";
 export { ProcessOutputEventV2Schema } from "./process.js";
@@ -212,6 +215,7 @@ const currentRunEventSchema = z.union([
   ConversationMessageCommittedEventSchema,
   ContextCompactionCompletedEventSchema,
   ModelTextDeltaEventSchema,
+  ModelTextDeltaEventV2Schema,
   ModelReasoningSummaryDeltaEventSchema,
   ModelStatusEventSchema,
   ModelToolCallDeltaEventSchema,

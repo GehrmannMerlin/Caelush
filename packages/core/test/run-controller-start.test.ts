@@ -615,7 +615,10 @@ describe("RunController project verification driving", () => {
         commit.continuation?.operation === "SET" &&
         commit.continuation.checkpoint.type === "AWAITING_VERIFICATION",
     );
-    if (candidateBoundary?.continuation?.operation !== "SET") {
+    if (
+      candidateBoundary?.continuation?.operation !== "SET" ||
+      candidateBoundary.continuation.checkpoint.type !== "AWAITING_VERIFICATION"
+    ) {
       throw new Error("expected the candidate boundary to commit before failure");
     }
     const continuation = candidateBoundary.continuation.checkpoint;

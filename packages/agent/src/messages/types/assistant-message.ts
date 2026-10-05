@@ -83,6 +83,43 @@ export interface AgentAssistantMessage extends AgentMessageBase {
   readonly providerState?: AIProviderOpaqueState;
 }
 
+/** User-visible text projected from one or more provider-neutral assistant items. */
+export interface AgentAssistantTextItem {
+  readonly assistantItemId?: string;
+  readonly phase: AssistantMessagePhase;
+  readonly text: string;
+}
+
+/**
+ * Split durable assistant text by its stable item identity while retaining the host-assigned phase
+ * for legacy/UNKNOWN items. Old records continue to project as one message-wide item.
+ */
+export function projectAgentAssistantTextItems(
+  message: Pick<AgentAssistantMessage, "content" | "phase">,
+): readonly AgentAssistantTextItem[] {
+  const items = new Map<
+    string,
+    { assistantItemId?: string; phase: AssistantMessagePhase; text: string }
+  >();
+  for (const part of message.content) {
+    if (part.type !== "TEXT" || part.text.length === 0) continue;
+    const phase = part.phase === undefined || part.phase === "UNKNOWN" ? message.phase : part.phase;
+    const assistantItemId = part.assistantItemId;
+    const key = assistantItemId === undefined ? `legacy:${phase}` : `item:${assistantItemId}`;
+    const existing = items.get(key);
+    if (existing === undefined) {
+      items.set(key, {
+        ...(assistantItemId === undefined ? {} : { assistantItemId }),
+        phase,
+        text: part.text,
+      });
+    } else {
+      existing.text += assistantItemId === undefined ? `\n${part.text}` : part.text;
+    }
+  }
+  return Object.freeze([...items.values()].map((item) => Object.freeze({ ...item })));
+}
+
 /** Create a frozen assistant message. */
 export function createAgentAssistantMessage(
   base: AgentMessageBase,

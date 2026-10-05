@@ -43,6 +43,7 @@ export const AssistantPresentationItemV2Schema = PresentationItemBaseSchema.exte
   kind: z.literal("ASSISTANT"),
   phase: AssistantMessagePhaseSchema,
   text: z.string().max(64 * 1024),
+  assistantItemId: z.string().min(1).max(512).optional(),
   sourceStepId: StepIdSchema.optional(),
 }).strict();
 export type AssistantPresentationItemV2 = z.infer<typeof AssistantPresentationItemV2Schema>;

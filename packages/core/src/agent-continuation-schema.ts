@@ -1,8 +1,10 @@
 import {
   AI_FINISH_REASONS,
+  assertAIContent,
   assertAIMessage,
   assertModelUsage,
   type AIAssistantMessage,
+  type AIContent,
   type AIMessage,
   type AIToolResultMessage,
   type ModelUsage,
@@ -16,20 +18,22 @@ import {
  * the frozen `ModelUsage` contract, which distinguishes an absent counter from a
  * present-but-undefined one.
  */
-const DurableModelUsageSchema = z.custom<ModelUsage>((value) => {
-  try {
-    assertModelUsage(value);
-    return true;
-  } catch {
-    return false;
-  }
-}).transform((usage): ModelUsage => {
-  const normalized: Record<string, number> = {};
-  for (const [key, value] of Object.entries(usage)) {
-    if (value !== undefined) normalized[key] = value as number;
-  }
-  return normalized as ModelUsage;
-});
+const DurableModelUsageSchema = z
+  .custom<ModelUsage>((value) => {
+    try {
+      assertModelUsage(value);
+      return true;
+    } catch {
+      return false;
+    }
+  })
+  .transform((usage): ModelUsage => {
+    const normalized: Record<string, number> = {};
+    for (const [key, value] of Object.entries(usage)) {
+      if (value !== undefined) normalized[key] = value as number;
+    }
+    return normalized as ModelUsage;
+  });
 
 const AIMessageSchema = z.custom<AIMessage>((value) => {
   try {
@@ -49,6 +53,22 @@ const AIToolResultMessageSchema = AIMessageSchema.refine(
 );
 
 const FinishReasonSchema = z.enum(AI_FINISH_REASONS);
+const AIMessagePhaseSchema = z.enum(["COMMENTARY", "FINAL_ANSWER", "UNKNOWN"]);
+const AIContentSchema = z.custom<AIContent>((value) => {
+  try {
+    assertAIContent(value);
+    return true;
+  } catch {
+    return false;
+  }
+});
+const AIModelTurnAssistantItemSchema = z
+  .object({
+    assistantItemId: z.string().min(1).max(512),
+    phase: AIMessagePhaseSchema,
+    content: z.array(AIContentSchema).min(1),
+  })
+  .strict();
 import {
   JsonObjectSchema,
   ApprovalRequestIdSchema,
@@ -71,9 +91,29 @@ export const AgentModelTurnSchema = z
     model: ModelRefSchema,
     finishReason: FinishReasonSchema,
     assistantMessage: AIAssistantMessageSchema,
+    // Optional for durable continuations written before phase-aware item identity existed.
+    assistantItems: z.array(AIModelTurnAssistantItemSchema).optional(),
     usage: DurableModelUsageSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((turn, context) => {
+    if (turn.assistantItems === undefined) return;
+    const ids = new Set<string>();
+    for (const item of turn.assistantItems) {
+      if (ids.has(item.assistantItemId)) {
+        context.addIssue({ code: "custom", message: "assistant item ids must be unique" });
+        return;
+      }
+      ids.add(item.assistantItemId);
+    }
+    const flattened = turn.assistantItems.flatMap((item) => item.content);
+    if (JSON.stringify(flattened) !== JSON.stringify(turn.assistantMessage.content)) {
+      context.addIssue({
+        code: "custom",
+        message: "assistant items do not match the model conversation message",
+      });
+    }
+  });
 
 export const AgentToolRequestSchema = z
   .object({

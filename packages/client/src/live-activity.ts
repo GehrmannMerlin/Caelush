@@ -1,4 +1,4 @@
-import type { PublicRunEvent, RunId, StepId } from "@caelush/protocol";
+import type { AssistantMessagePhase, PublicRunEvent, RunId, StepId } from "@caelush/protocol";
 
 export type LiveActivityKind =
   | "MODEL_TEXT"
@@ -17,6 +17,8 @@ export interface LiveActivity {
   readonly streamKey: string;
   readonly streamSequence: number;
   readonly runId: RunId;
+  readonly assistantItemId?: string;
+  readonly phase?: AssistantMessagePhase;
   readonly settledAtSequence?: number;
   readonly stepId?: string;
   readonly invocationId?: string;
@@ -402,6 +404,9 @@ function activityFromTransient(event: TransientLiveEvent): LiveActivity | null {
         id: `model:text:${event.durability.streamKey}`,
         kind: "MODEL_TEXT",
         text: event.payload.text,
+        ...("assistantItemId" in event.payload
+          ? { assistantItemId: event.payload.assistantItemId, phase: event.payload.phase }
+          : {}),
       };
     case "model.reasoning_summary.delta":
       return {

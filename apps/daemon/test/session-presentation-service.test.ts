@@ -278,4 +278,49 @@ describe("SessionPresentationService", () => {
     );
     expect(verification.some((item) => item.status === "STREAMING")).toBe(false);
   });
+
+  it("projects a bounded verification failure reason without exposing raw error data", async () => {
+    const failedRun = AgentRunSchema.parse({
+      ...RUN,
+      status: "FAILED",
+      finishedAt: createTimestampMs(Number(NOW) + 10),
+    });
+    const rawError = {
+      code: "VERIFICATION_FAILED",
+      message: "native exception at C:\\Users\\han\\secrets\\token=credential-value",
+      retryable: false,
+      phase: "VERIFICATION",
+      details: { stdout: "unbounded command output", absolutePath: "C:\\host\\workspace" },
+    };
+    const service = new SessionPresentationService({
+      sessions: { get: async () => ({ id: SESSION_ID }) as never },
+      runs: { listBySession: async () => [failedRun] },
+      messageRecords: { listBySession: async () => [] },
+      codecs,
+      toolInvocations: { listByRun: async () => [] },
+      observations: { listByRun: async () => [] },
+      eventReader: {
+        latestSequence: async () => 1,
+        replay: async () => [event(1, "error", { error: rawError })],
+      },
+      toolPresentation: {
+        presentInvocation: () => ({ title: "使用工具", summary: "工具调用" }),
+        presentResult: () => ({ title: "使用工具", summary: "工具结果" }),
+        presentShellCommand: () => "执行命令",
+      },
+    });
+
+    const response = await service.getPresentation(SESSION_ID, {});
+    const summary = response.items.find((item) => item.kind === "RUN_SUMMARY");
+
+    expect(summary).toMatchObject({
+      kind: "RUN_SUMMARY",
+      runStatus: "FAILED",
+      text: "校验未能完成，任务已失败。",
+    });
+    expect(JSON.stringify(response)).not.toContain("native exception");
+    expect(JSON.stringify(response)).not.toContain("credential-value");
+    expect(JSON.stringify(response)).not.toContain("unbounded command output");
+    expect(JSON.stringify(response)).not.toContain("C:\\\\host");
+  });
 });

@@ -159,6 +159,9 @@ class SeededStore implements RunExecutionStorePort {
       ...(nextContinuation === undefined || this.continuationRevision === undefined
         ? {}
         : { continuationRevision: this.continuationRevision }),
+      ...(this.snapshot.cancellationIntent === undefined
+        ? {}
+        : { cancellationIntent: this.snapshot.cancellationIntent }),
     };
     const events: DurableAgentEvent[] = command.events.map((draft) => ({
       ...draft,
@@ -452,6 +455,37 @@ describe("RunController Tool resume provenance", () => {
     expect(observed).toHaveLength(1);
     expect(observed[0]!.turn.stepId).not.toBe(ORIGINAL_TOOL_STEP);
     expect(observed[0]!.turn.stepId).not.toBe(FAILED_RETRY_STEP);
+  });
+
+  it("honors a pending cancellation before normalizing a legacy retry checkpoint", async () => {
+    const { store, run } = waitingToolResults();
+    store.snapshot = {
+      ...store.snapshot,
+      cancellationIntent: {
+        runId: run.id,
+        cause: "USER_REQUESTED",
+        requestedAt: createTimestampMs(8),
+      },
+      continuation: {
+        type: "WAITING_RETRY",
+        runId: run.id,
+        failedStepId: FAILED_RETRY_STEP,
+        attempt: 2,
+        maxAttempts: 3,
+        nextAttemptAt: createTimestampMs(5),
+        errorCode: "LLM_NETWORK",
+        mode: "TOOL_RESULTS",
+        pendingDecision: PENDING_DECISION,
+        receivedResults: RECEIVED_RESULTS,
+      } as never,
+    };
+    const observed: ObservedTurn[] = [];
+
+    const recovered = await controllerFor(store, observed).recover(run.id);
+
+    expect(recovered.run.status).toBe("CANCELLED");
+    expect(store.commits.some((commit) => commit.continuation?.operation === "SET")).toBe(false);
+    expect(observed).toHaveLength(0);
   });
 
   it("fails closed when a legacy retry checkpoint has no determinable source Step", async () => {

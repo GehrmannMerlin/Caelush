@@ -5,6 +5,7 @@ import type { LLMCallId } from "../ids/llm-call-id.js";
 import type { ModelRef } from "../models/model-ref.js";
 import type { ModelUsage } from "../models/model-usage.js";
 import type { ProviderId } from "../ids/provider-id.js";
+import type { AIMessagePhase } from "../messages/assistant-item.js";
 
 /**
  * The public AI stream contract.
@@ -51,7 +52,12 @@ export interface AIStreamStatusEvent {
 /** Assistant text. */
 export interface AITextDeltaEvent {
   readonly type: "text.delta";
-  readonly payload: { readonly text: string };
+  readonly payload: {
+    readonly text: string;
+    /** Absent only on legacy host-created streams; the assembler supplies a safe fallback. */
+    readonly assistantItemId?: string;
+    readonly phase?: AIMessagePhase;
+  };
 }
 
 /**
@@ -69,7 +75,13 @@ export interface AIReasoningSummaryDeltaEvent {
 /** A tool call has been announced. */
 export interface AIToolCallStartEvent {
   readonly type: "tool_call.start";
-  readonly payload: { readonly toolCallId: string; readonly toolName: string };
+  readonly payload: {
+    readonly toolCallId: string;
+    readonly toolName: string;
+    /** Absent only on legacy host-created streams; the assembler supplies a safe fallback. */
+    readonly assistantItemId?: string;
+    readonly phase?: AIMessagePhase;
+  };
 }
 
 /** Argument text for an announced tool call. */

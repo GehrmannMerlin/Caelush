@@ -26,6 +26,7 @@ import {
   type WatchRunEventsOptions,
 } from "@caelush/client";
 import { describe, expect, it, vi } from "vitest";
+import { SessionSelectionStore } from "../src/application/session-persistence.js";
 import { WebSessionManager, type WebSessionClient } from "../src/application/session-manager.js";
 
 const workspace: WorkspaceRef = { id: createWorkspaceId(), path: "C:\\workspace\\project" };
@@ -70,6 +71,40 @@ describe("WebSessionManager", () => {
     expect(client.createSession).not.toHaveBeenCalled();
 
     manager.dispose();
+  });
+
+  it("persists a newly created Session selection so it is restored after reload", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const pendingRun = makeRun({ sessionId: session.id, goal: "remember this session" });
+    const client = makeClient({
+      sessions: [session],
+      createSessionResult: session,
+      createRunResult: pendingRun,
+    });
+    const selectionStore = new SessionSelectionStore(new Map<string, string>());
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      info: makeInfo(),
+      selectionStore,
+    });
+
+    manager.beginDraft();
+    await expect(manager.submitPrompt("remember this session")).resolves.toBe(true);
+
+    expect(selectionStore.read(workspace.id)).toBe(session.id);
+    manager.dispose();
+
+    const reloadedManager = new WebSessionManager({
+      client,
+      workspace,
+      info: makeInfo(),
+      selectionStore,
+    });
+    await reloadedManager.loadSessions();
+
+    expect(reloadedManager.getSnapshot().selectedSessionId).toBe(session.id);
+    reloadedManager.dispose();
   });
 
   it("creates a Session on first submit and inherits daemon Run defaults", async () => {

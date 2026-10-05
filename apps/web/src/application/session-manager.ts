@@ -467,8 +467,14 @@ export class WebSessionManager {
                 metadata: {},
               },
         );
+        const candidates = this.upsertCandidate(session);
+        this.options.selectionStore?.setCandidates(
+          this.options.workspace.id,
+          candidates.map((candidate) => candidate.session.id),
+        );
+        this.options.selectionStore?.write(this.options.workspace.id, session.id);
         this.publish({
-          candidates: this.upsertCandidate(session),
+          candidates,
           selectedSession: session,
           selectedSessionId: session.id,
           isDraft: false,

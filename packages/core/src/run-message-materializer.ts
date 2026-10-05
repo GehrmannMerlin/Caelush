@@ -22,7 +22,7 @@ import {
   toolFeedbackPolicySnapshot,
   userMessageSource,
 } from "@caelush/agent";
-import type { AIToolResultMessage } from "@caelush/ai";
+import type { AIMessagePhase, AIToolResultMessage } from "@caelush/ai";
 import type { ToolObservationPolicySnapshot } from "@caelush/agent";
 import type { AgentRun, AssistantMessagePhase, StepId } from "@caelush/protocol";
 
@@ -157,18 +157,52 @@ function appendFromMessage(
 
 function assistantContent(modelTurn: AgentModelTurn): readonly AgentAssistantContentPart[] {
   const content: AgentAssistantContentPart[] = [];
-  for (const part of modelTurn.assistantMessage.content) {
-    if (part.type === "text") {
-      content.push(agentAssistantTextPart(part.text));
-    } else {
-      content.push(
-        agentAssistantToolCallPart({
-          toolCallId: part.toolCallId,
-          toolName: part.toolName,
-          input: part.input,
-        }),
-      );
+  if (modelTurn.assistantItems !== undefined) {
+    for (const item of modelTurn.assistantItems) {
+      const metadata = {
+        assistantItemId: item.assistantItemId,
+        phase: toProtocolAssistantPhase(item.phase),
+      };
+      for (const part of item.content) {
+        if (part.type === "text") {
+          content.push(agentAssistantTextPart(part.text, metadata));
+        } else {
+          content.push(
+            agentAssistantToolCallPart({
+              toolCallId: part.toolCallId,
+              toolName: part.toolName,
+              input: part.input,
+              ...metadata,
+            }),
+          );
+        }
+      }
+    }
+  } else {
+    for (const part of modelTurn.assistantMessage.content) {
+      if (part.type === "text") {
+        content.push(agentAssistantTextPart(part.text));
+      } else {
+        content.push(
+          agentAssistantToolCallPart({
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            input: part.input,
+          }),
+        );
+      }
     }
   }
   return Object.freeze(content);
+}
+
+function toProtocolAssistantPhase(phase: AIMessagePhase): AssistantMessagePhase {
+  switch (phase) {
+    case "COMMENTARY":
+      return "COMMENTARY";
+    case "FINAL_ANSWER":
+      return "FINAL_ANSWER";
+    case "UNKNOWN":
+      return "UNKNOWN";
+  }
 }

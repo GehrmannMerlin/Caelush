@@ -101,6 +101,7 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
         props.turnPresentation !== undefined
           ? createElement(TurnPresentationFeed, {
               presentation: props.turnPresentation,
+              activeRun: props.activeRun,
               liveActivity: props.liveActivity,
               timeline: props.timeline,
               isActive: props.activeRun !== undefined && isActiveRun(props.activeRun.status),

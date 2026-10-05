@@ -7,11 +7,13 @@ import type {
   ToolPresentationPort,
 } from "@caelush/agent";
 import type { AgentToolExecutionResult } from "@caelush/agent";
+import { projectAgentAssistantTextItems } from "@caelush/agent";
 import {
   AssistantMessagePhaseSchema,
   SessionTurnPresentationQuerySchema,
   SessionTurnPresentationResponseV2Schema,
   type AgentRun,
+  type AgentErrorCode,
   type DurableRunEvent,
   type RunStatus,
   type SessionId,
@@ -28,6 +30,7 @@ import type {
   ToolInvocationRepository,
 } from "@caelush/storage";
 import { StorageNotFoundError } from "@caelush/storage";
+import { projectPublicAssistantText } from "./assistant-text-projection.js";
 
 const TERMINAL_RUN_STATUSES = new Set<RunStatus>([
   "COMPLETED",
@@ -157,14 +160,15 @@ export class SessionPresentationService {
 
     const positioned: PositionedItem[] = [];
     for (const record of [...records].sort((left, right) => left.sequence - right.sequence)) {
-      const item = this.projectMessage(record);
-      if (item === undefined) continue;
-      positioned.push({
-        item,
-        sequenceHint: messageSequences.get(record.messageId) ?? record.sequence,
-        createdAt: Number(record.createdAt),
-        stableId: item.id,
-      });
+      const items = this.projectMessage(record);
+      for (const item of items) {
+        positioned.push({
+          item,
+          sequenceHint: messageSequences.get(record.messageId) ?? record.sequence,
+          createdAt: Number(record.createdAt),
+          stableId: `${record.messageId}:${String(item.ordinal).padStart(6, "0")}`,
+        });
+      }
     }
 
     const [invocations, observations] = await Promise.all([
@@ -245,7 +249,7 @@ export class SessionPresentationService {
         createdAt: run.finishedAt ?? run.createdAt,
         kind: "RUN_SUMMARY",
         runStatus: run.status,
-        text: runSummaryText(run.status, records),
+        text: runSummaryText(run.status, records, history.events),
       };
       positioned.push({
         item: summary,
@@ -258,16 +262,16 @@ export class SessionPresentationService {
     return { items: positioned, highWatermark: history.highWatermark };
   }
 
-  private projectMessage(record: AgentMessageRecord): TurnPresentationItemV2 | undefined {
+  private projectMessage(record: AgentMessageRecord): readonly TurnPresentationItemV2[] {
     try {
       const message = this.options.codecs.decode(record);
-      if (message.type === "USER") return projectUserMessage(message);
+      if (message.type === "USER") return [projectUserMessage(message)];
       if (message.type === "ASSISTANT") return projectAssistantMessage(message);
-      return undefined;
+      return [];
     } catch {
       // Unsupported historical payloads remain in the durable ledger, but the public feed must not
       // guess at their shape or echo opaque bytes. The transcript endpoint owns its own fixed gap.
-      return undefined;
+      return [];
     }
   }
 
@@ -361,24 +365,23 @@ function projectUserMessage(message: AgentUserMessage): TurnPresentationItemV2 {
 
 function projectAssistantMessage(
   message: AgentAssistantMessage,
-): TurnPresentationItemV2 | undefined {
-  const text = message.content
-    .map((part) => (part.type === "TEXT" ? part.text : ""))
-    .filter((part) => part.length > 0)
-    .join("\n");
-  if (text.length === 0) return undefined;
-  return {
-    id: `${message.id}:presentation`,
+): readonly TurnPresentationItemV2[] {
+  return projectAgentAssistantTextItems(message).map((item, ordinal) => ({
+    id:
+      item.assistantItemId === undefined
+        ? `${message.id}:presentation`
+        : `${message.id}:presentation:${String(ordinal).padStart(6, "0")}`,
     runId: message.runId,
     conversationTurnId: message.conversationTurnId,
-    ordinal: 0,
+    ordinal,
     status: "COMPLETED",
     createdAt: message.createdAt,
     kind: "ASSISTANT",
-    phase: AssistantMessagePhaseSchema.parse(message.phase),
-    text,
+    phase: AssistantMessagePhaseSchema.parse(item.phase),
+    ...(item.assistantItemId === undefined ? {} : { assistantItemId: item.assistantItemId }),
+    text: projectPublicAssistantText(item.text),
     ...(message.sourceStepId === undefined ? {} : { sourceStepId: message.sourceStepId }),
-  };
+  }));
 }
 
 function observationToExecutionResult(
@@ -460,7 +463,11 @@ function translateRisk(risk: string): string {
   }
 }
 
-function runSummaryText(status: RunStatus, records: readonly AgentMessageRecord[]): string {
+function runSummaryText(
+  status: RunStatus,
+  records: readonly AgentMessageRecord[],
+  events: readonly DurableRunEvent[],
+): string {
   if (status === "COMPLETED") {
     return records.some((record) => record.messageType === "ASSISTANT")
       ? "任务已完成"
@@ -470,6 +477,26 @@ function runSummaryText(status: RunStatus, records: readonly AgentMessageRecord[
   if (status === "TIMEOUT") return "任务因超时结束";
   if (status === "MAX_STEPS_REACHED") return "任务达到最大步骤数后结束";
   if (status === "BUDGET_EXCEEDED") return "任务因资源预算耗尽结束";
+  if (status === "FAILED") return safeFailureReason(events);
+  return "任务执行失败";
+}
+
+function safeFailureReason(events: readonly DurableRunEvent[]): string {
+  const safeReasonByCode: Partial<Record<AgentErrorCode, string>> = {
+    VERIFICATION_FAILED: "校验未能完成，任务已失败。",
+    COMMAND_FAILED: "检查命令执行失败，任务已失败。",
+    PROCESS_FAILED: "检查进程未能正常运行，任务已失败。",
+    RUNTIME_ERROR: "运行环境异常，任务已失败。",
+    INTERNAL_ERROR: "内部错误导致任务失败。",
+  };
+  for (const event of [...events].reverse()) {
+    if (event.type !== "error") continue;
+    const rawError = eventPayload(event)?.error;
+    if (!isRecord(rawError)) continue;
+    const code = stringValue(rawError.code) as AgentErrorCode | undefined;
+    const reason = code === undefined ? undefined : safeReasonByCode[code];
+    if (reason !== undefined) return reason;
+  }
   return "任务执行失败";
 }
 

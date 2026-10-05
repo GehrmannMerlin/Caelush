@@ -879,6 +879,7 @@ export type { AgentToolResult as AgentToolExecutionResult } from "./tools/types/
  * `@caelush/agent` and never from `@caelush/agent/src/messages/...`.
  */
 export {
+  projectAgentAssistantTextItems,
   agentAssistantTextPart,
   agentAssistantToolCallPart,
   agentAttachmentRefPart,
@@ -963,6 +964,7 @@ export {
   DefaultAgentMessageCodecRegistryBuilder,
   AGENT_ASSISTANT_MESSAGE_AUDIENCE,
   AGENT_ASSISTANT_MESSAGE_CODEC_V2,
+  AGENT_ASSISTANT_MESSAGE_CODEC_V3,
   AGENT_ASSISTANT_MESSAGE_CODEC_V1,
   AGENT_ASSISTANT_MESSAGE_PROJECTOR_V1,
   AGENT_ATTACHMENT_MARKER_VERSION,
@@ -1000,6 +1002,7 @@ export type {
   AgentAssistantContentPart,
   AgentAssistantMessage,
   AgentAssistantModelProvenance,
+  AgentAssistantTextItem,
   AgentAssistantTextPart,
   AgentAssistantToolCallPart,
   AgentAttachmentRefPart,

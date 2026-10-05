@@ -171,7 +171,12 @@ export class CaelushToolPresentation implements ToolPresentationPort {
       invocation.toolName === "stop_process"
     ) {
       const status = result.details.status;
-      return typeof status === "string" ? `进程${translateProcessStatus(status)}` : "进程结果";
+      if (typeof status !== "string") return "进程结果";
+      const summary = `进程${translateProcessStatus(status)}`;
+      const exitCode = result.details.exitCode;
+      return status === "EXITED" && typeof exitCode === "number" && Number.isInteger(exitCode)
+        ? `${summary}（退出码 ${exitCode}）`
+        : summary;
     }
     return `${TOOL_LABELS[invocation.toolName] ?? "工具"}已完成`;
   }
@@ -223,6 +228,8 @@ function translateProcessStatus(status: string): string {
       return "等待资源";
     case "RUNNING":
       return "运行中";
+    case "EXITED":
+      return "已退出";
     case "COMPLETED":
       return "已完成";
     case "FAILED":

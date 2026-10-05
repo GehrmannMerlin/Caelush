@@ -5,6 +5,7 @@ import type {
   AIFinishReason,
   AIModelTurnResult,
   AIToolCall,
+  AIModelTurnAssistantItem,
   ModelUsage,
 } from "@caelush/ai";
 import type { JsonObject, ToolName } from "@caelush/protocol";
@@ -44,6 +45,9 @@ export interface AgentModelTurn {
    * display is never durable assistant content.
    */
   readonly assistantMessage: AIAssistantMessage;
+  /** Ordered phase-aware provider items; presentation metadata never changes turn authority. */
+  /** Absent only on historical continuations written before phase-aware item metadata. */
+  readonly assistantItems?: readonly AIModelTurnAssistantItem[] | undefined;
   /**
    * The settled usage snapshot, when the provider reported one.
    *
@@ -119,6 +123,7 @@ export function toAgentModelTurn(result: AIModelTurnResult): AgentModelTurn | un
     model: result.model,
     finishReason: result.finishReason,
     assistantMessage: toAssistantMessage(result),
+    assistantItems: normalizeAssistantItems(result),
     ...(result.usage === undefined ? {} : { usage: result.usage }),
   };
 }
@@ -131,10 +136,16 @@ export function toAgentModelTurn(result: AIModelTurnResult): AgentModelTurn | un
  * normalized, which keeps a replayed turn byte-identical.
  */
 export function toAssistantMessage(result: AIModelTurnResult): AIAssistantMessage {
+  const content = normalizeAssistantItems(result).flatMap((item) =>
+    item.content.map((part): AIAssistantContent => ({ ...part })),
+  );
+  return { role: "assistant", content };
+}
+
+function normalizeAssistantItems(result: AIModelTurnResult): readonly AIModelTurnAssistantItem[] {
+  if (result.assistantItems !== undefined) return result.assistantItems;
   const content: AIAssistantContent[] = [];
-  if (result.text.length > 0) {
-    content.push({ type: "text", text: result.text });
-  }
+  if (result.text.length > 0) content.push({ type: "text", text: result.text });
   for (const toolCall of result.toolCalls) {
     content.push({
       type: "tool-call",
@@ -143,7 +154,13 @@ export function toAssistantMessage(result: AIModelTurnResult): AIAssistantMessag
       input: toolCall.input,
     });
   }
-  return { role: "assistant", content };
+  return [
+    Object.freeze({
+      assistantItemId: `${result.callId}:item:000`,
+      phase: "UNKNOWN",
+      content: Object.freeze(content),
+    }),
+  ];
 }
 
 /** One tool call, projected onto the frozen request shape. Not exported by the package root. */

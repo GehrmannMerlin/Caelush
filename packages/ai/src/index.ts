@@ -68,6 +68,8 @@ export type {
   AIToolResultMessage,
   AIUserMessage,
 } from "./messages/index.js";
+export { AI_MESSAGE_PHASES, isAIMessagePhase } from "./messages/index.js";
+export type { AIMessagePhase, AIModelTurnAssistantItem } from "./messages/index.js";
 
 export {
   assertAIFinishReason,

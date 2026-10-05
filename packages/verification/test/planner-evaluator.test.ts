@@ -230,7 +230,9 @@ describe("Phase 11A verification planner", () => {
     expect(
       plan.checks
         .filter((check) => check.spec.kind === "PROJECT")
-        .map((check) => [check.spec.purpose, check.spec.packageRelativePath]),
+        .map((check) =>
+          check.spec.kind === "PROJECT" ? [check.spec.purpose, check.spec.packageRelativePath] : [],
+        ),
     ).toEqual([
       ["LINT", undefined],
       ["TYPECHECK", undefined],

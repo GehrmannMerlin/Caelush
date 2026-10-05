@@ -380,6 +380,20 @@ try {
       .locator(".turn-presentation-item--tool .turn-presentation-item-text")
       .filter({ hasText: "fixture.txt" }),
   );
+  await assertTaskTimerSummaryLayout({ mobile: false });
+  const completedTaskElapsed = await page
+    .locator(".turn-presentation-summary-copy .turn-presentation-task-elapsed")
+    .first()
+    .textContent();
+  await page.waitForTimeout(1_200);
+  if (
+    (await page
+      .locator(".turn-presentation-summary-copy .turn-presentation-task-elapsed")
+      .first()
+      .textContent()) !== completedTaskElapsed
+  ) {
+    throw new Error("the completed task elapsed timer did not freeze");
+  }
   if ((await page.locator(".session-list-meta").count()) !== 0)
     throw new Error("status subtitle leaked");
   if ((await page.locator(".session-status-icon").count()) < 1)
@@ -418,6 +432,16 @@ try {
     .locator(".turn-presentation-thinking-detail")
     .filter({ hasText: "模型近期没有返回新数据，仍在等待" });
   await waitVisible(noActivity);
+  const activeTaskElapsed = page
+    .locator(".turn-presentation-summary-copy .turn-presentation-task-elapsed")
+    .first();
+  await waitVisible(activeTaskElapsed);
+  const activeElapsedBefore = await activeTaskElapsed.textContent();
+  await waitUntil(
+    async () => (await activeTaskElapsed.textContent()) !== activeElapsedBefore,
+    "active task elapsed timer to advance",
+    3_000,
+  );
   const thinkingTitle = page.locator(".turn-presentation-thinking-title").last();
   const animationName = () =>
     thinkingTitle.evaluate((element) => getComputedStyle(element).animationName);
@@ -615,6 +639,7 @@ try {
   await page.waitForTimeout(220);
   const body = await page.locator("body").innerText();
   if (!body.includes("pending browser task")) throw new Error("pending recovery title missing");
+  await assertTaskTimerSummaryLayout({ mobile: true });
   for (const forbidden of ["Inspector", "Terminal", "stdout"]) {
     if (body.includes(forbidden)) throw new Error(forbidden + " leaked into production UI");
   }
@@ -700,4 +725,43 @@ async function assertComposerControlsDoNotOverlap() {
   if (bounds[0].x + bounds[0].width > bounds[1].x) {
     throw new Error("model picker overlaps the send button at the mobile viewport");
   }
+}
+
+async function assertTaskTimerSummaryLayout({ mobile }) {
+  const summary = page.locator(".turn-presentation-summary").first();
+  await waitVisible(summary);
+  const layout = await summary.evaluate((element) => {
+    const logo = element.querySelector(".turn-presentation-logo");
+    const elapsed = element.querySelector(".turn-presentation-task-elapsed");
+    const status = element.querySelector(".turn-presentation-summary-status");
+    if (!(logo instanceof HTMLElement)) throw new Error("process logo missing");
+    if (!(elapsed instanceof HTMLElement)) throw new Error("task elapsed timer missing");
+    if (!(status instanceof HTMLElement)) throw new Error("process status missing");
+    const logoBounds = logo.getBoundingClientRect();
+    const elapsedBounds = elapsed.getBoundingClientRect();
+    const statusBounds = status.getBoundingClientRect();
+    return {
+      direction: getComputedStyle(elapsed.parentElement).flexDirection,
+      gap: Number.parseFloat(getComputedStyle(elapsed.parentElement).columnGap),
+      logoRight: logoBounds.right,
+      elapsedLeft: elapsedBounds.left,
+      elapsedRight: elapsedBounds.right,
+      statusLeft: statusBounds.left,
+      viewportWidth: window.innerWidth,
+      elapsedText: elapsed.textContent,
+    };
+  });
+  if (layout.direction !== "row") throw new Error("task timer is not on the logo row");
+  const actualGap = layout.elapsedLeft - layout.logoRight;
+  if (actualGap < 6 || actualGap > 20) {
+    throw new Error("task timer spacing beside the logo is not moderate: " + actualGap + "px");
+  }
+  if (layout.gap < 6 || layout.gap > 16)
+    throw new Error("task summary gap is outside the intended compact range: " + layout.gap + "px");
+  if (layout.elapsedRight >= layout.statusLeft)
+    throw new Error("task elapsed timer overlaps the process status");
+  if (mobile && layout.elapsedRight > layout.viewportWidth)
+    throw new Error("task elapsed timer overflows the mobile viewport");
+  if (!/^用时 (?:\d+小时)?(?:\d+分)?\d+秒$/u.test(layout.elapsedText ?? ""))
+    throw new Error("task elapsed timer has an unexpected label: " + layout.elapsedText);
 }

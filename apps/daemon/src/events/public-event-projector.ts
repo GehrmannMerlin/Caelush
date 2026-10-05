@@ -85,7 +85,14 @@ export class DefaultPublicEventProjector implements PublicEventProjector {
         payload = { summary: nonEmptyText(event.payload.summary, "Summary unavailable") };
         break;
       case "model.text.delta":
-        payload = { text: boundedText(event.payload.text, PUBLIC_EVENT_TEXT_BYTES) };
+        payload =
+          "assistantItemId" in event.payload
+            ? {
+                text: boundedText(event.payload.text, PUBLIC_EVENT_TEXT_BYTES),
+                assistantItemId: event.payload.assistantItemId,
+                phase: event.payload.phase,
+              }
+            : { text: boundedText(event.payload.text, PUBLIC_EVENT_TEXT_BYTES) };
         break;
       case "model.reasoning_summary.delta":
         payload = { text: boundedText(event.payload.text, PUBLIC_EVENT_TEXT_BYTES) };

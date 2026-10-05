@@ -9,6 +9,7 @@ import type {
 import type { StoredAgentMessage } from "../persistence/record.js";
 import type { AgentMessage } from "../types/agent-message.js";
 import type { AgentAssistantMessage } from "../types/assistant-message.js";
+import { projectAgentAssistantTextItems } from "../types/assistant-message.js";
 import type { AgentToolResultMessage } from "../types/tool-result-message.js";
 import type { AgentUserMessage } from "../types/user-message.js";
 
@@ -58,20 +59,17 @@ function projectAssistant(
   stored: StoredAgentMessage<AgentAssistantMessage>,
 ): readonly AssistantTranscriptEntry[] {
   const message = stored.message;
-  const text = message.content
-    .filter((part): part is Extract<typeof part, { type: "TEXT" }> => part.type === "TEXT")
-    .map((part) => part.text)
-    .join("\n");
-  return text.length === 0
-    ? []
-    : [
-        {
-          ...transcriptEnvelope(message),
-          kind: "ASSISTANT",
-          phase: message.phase,
-          text,
-        },
-      ];
+  return projectAgentAssistantTextItems(message).map((item, ordinal) => ({
+    ...transcriptEnvelope(message),
+    id:
+      item.assistantItemId === undefined
+        ? transcriptId(message.id)
+        : `${transcriptId(message.id)}:${String(ordinal).padStart(6, "0")}`,
+    kind: "ASSISTANT",
+    phase: item.phase,
+    ...(item.assistantItemId === undefined ? {} : { assistantItemId: item.assistantItemId }),
+    text: item.text,
+  }));
 }
 
 function projectToolResult(

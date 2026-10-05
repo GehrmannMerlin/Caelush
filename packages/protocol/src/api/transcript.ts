@@ -39,6 +39,7 @@ export type UserTranscriptEntry = z.infer<typeof UserTranscriptEntrySchema>;
 export const AssistantTranscriptEntrySchema = TranscriptEntryBaseSchema.extend({
   kind: z.literal("ASSISTANT"),
   phase: AssistantMessagePhaseSchema.default("UNKNOWN"),
+  assistantItemId: z.string().min(1).max(512).optional(),
   text: transcriptTextSchema,
 }).strict();
 export type AssistantTranscriptEntry = z.infer<typeof AssistantTranscriptEntrySchema>;

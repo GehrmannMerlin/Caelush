@@ -93,6 +93,7 @@ export const RUN_EVENT_TYPE_CATALOG: readonly RunEventTypeDefinition[] = Object.
   transient("shell.output", 2, "ORDERED"),
   transient("process.output", 2, "ORDERED"),
   transient("model.text.delta", 1, "ORDERED"),
+  transient("model.text.delta", 2, "ORDERED"),
   transient("model.reasoning_summary.delta", 1, "ORDERED"),
   transient("model.tool_call.delta", 1, "ORDERED"),
   transient("model.status", 1, "COALESCIBLE"),

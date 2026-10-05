@@ -135,6 +135,44 @@ export const AGENT_ASSISTANT_MESSAGE_CODEC_V2: AgentMessageCodec<AgentAssistantM
   },
 };
 
+/** The canonical phase/item-aware assistant codec. Historical v1/v2 records remain unchanged. */
+export const AGENT_ASSISTANT_MESSAGE_CODEC_V3: AgentMessageCodec<AgentAssistantMessage> = {
+  type: "ASSISTANT",
+  currentVersion: 3,
+  canDecode(version: AgentMessageSchemaVersion): boolean {
+    return version === 1 || version === 2 || version === 3;
+  },
+  encode(message: AgentAssistantMessage): JsonObject {
+    return {
+      content: message.content.map(encodeAssistantContentPartV3),
+      phase: message.phase,
+      model: encodeModelProvenance(message.model),
+      ...(message.providerState === undefined
+        ? {}
+        : { providerState: encodeProviderState(message.providerState) }),
+    };
+  },
+  decode(record: AgentMessageRecord): AgentAssistantMessage {
+    if (record.schemaVersion !== 1 && record.schemaVersion !== 2 && record.schemaVersion !== 3) {
+      throw new AgentMessageCodecError(
+        "UNSUPPORTED_SCHEMA_VERSION",
+        "ASSISTANT",
+        record.schemaVersion,
+      );
+    }
+    const base = decodeEnvelope(record, "ASSISTANT", record.schemaVersion);
+    const content =
+      record.schemaVersion === 3
+        ? decodeAssistantContentV3(record.data)
+        : decodeAssistantContent(record.data);
+    const phase =
+      record.schemaVersion === 1 ? "UNKNOWN" : decodeAssistantPhase(record.data["phase"]);
+    const model = decodeModelProvenance(record.data["model"], record);
+    const providerState = decodeProviderState(record.data["providerState"]);
+    return createAgentAssistantMessage(base, content, model, phase, providerState);
+  },
+};
+
 /** @deprecated Use the canonical assistant codec name; it still reads historical v1 rows. */
 export const AGENT_ASSISTANT_MESSAGE_CODEC_V1 = AGENT_ASSISTANT_MESSAGE_CODEC_V2;
 
@@ -180,7 +218,7 @@ export const AGENT_TOOL_RESULT_MESSAGE_CODEC_V1: AgentMessageCodec<AgentToolResu
 /** The three standard codecs, in canonical order. */
 export const STANDARD_AGENT_MESSAGE_CODECS = [
   AGENT_USER_MESSAGE_CODEC_V1,
-  AGENT_ASSISTANT_MESSAGE_CODEC_V2,
+  AGENT_ASSISTANT_MESSAGE_CODEC_V3,
   AGENT_TOOL_RESULT_MESSAGE_CODEC_V1,
 ] as const;
 
@@ -334,19 +372,59 @@ function encodeAssistantContentPart(part: AgentAssistantContentPart): JsonValue 
   };
 }
 
+function encodeAssistantContentPartV3(part: AgentAssistantContentPart): JsonValue {
+  const itemMetadata = {
+    ...(part.assistantItemId === undefined ? {} : { assistantItemId: part.assistantItemId }),
+    ...(part.phase === undefined ? {} : { phase: part.phase }),
+  };
+  if (part.type === "TEXT") return { type: "TEXT", text: part.text, ...itemMetadata };
+  return {
+    type: "TOOL_CALL",
+    toolCallId: part.toolCallId,
+    toolName: part.toolName,
+    input: part.input,
+    ...itemMetadata,
+  };
+}
+
 function decodeAssistantContent(data: JsonObject): readonly AgentAssistantContentPart[] {
+  return decodeAssistantContentVersion(data, false);
+}
+
+function decodeAssistantContentV3(data: JsonObject): readonly AgentAssistantContentPart[] {
+  return decodeAssistantContentVersion(data, true);
+}
+
+function decodeAssistantContentVersion(
+  data: JsonObject,
+  includesItemMetadata: boolean,
+): readonly AgentAssistantContentPart[] {
   const content = data["content"];
   if (!Array.isArray(content) || content.length === 0) {
     throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT");
   }
   return content.map((part) => {
     if (!isJsonObject(part)) throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT");
+    const allowedKeys =
+      part["type"] === "TEXT"
+        ? includesItemMetadata
+          ? ["type", "text", "assistantItemId", "phase"]
+          : ["type", "text"]
+        : part["type"] === "TOOL_CALL"
+          ? includesItemMetadata
+            ? ["type", "toolCallId", "toolName", "input", "assistantItemId", "phase"]
+            : ["type", "toolCallId", "toolName", "input"]
+          : [];
+    if (Object.keys(part).some((key) => !allowedKeys.includes(key))) {
+      throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT");
+    }
+    const itemMetadata = decodeAssistantItemMetadata(part, includesItemMetadata);
     if (part["type"] === "TEXT") {
       const text = part["text"];
       if (typeof text !== "string") {
         throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT");
       }
-      return { type: "TEXT" as const, text };
+      return { type: "TEXT" as const, text, ...itemMetadata };
     }
     if (part["type"] === "TOOL_CALL") {
       const toolCallId = part["toolCallId"];
@@ -359,10 +437,37 @@ function decodeAssistantContent(data: JsonObject): readonly AgentAssistantConten
         throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT");
       }
       if (!isJsonObject(input)) throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT");
-      return { type: "TOOL_CALL" as const, toolCallId, toolName, input };
+      return { type: "TOOL_CALL" as const, toolCallId, toolName, input, ...itemMetadata };
     }
     throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT");
   });
+}
+
+function decodeAssistantItemMetadata(
+  part: JsonObject,
+  includesItemMetadata: boolean,
+): Pick<AgentAssistantContentPart, "assistantItemId" | "phase"> {
+  if (!includesItemMetadata) return {};
+  const assistantItemId = part["assistantItemId"];
+  const phase = part["phase"];
+  if (
+    assistantItemId !== undefined &&
+    (typeof assistantItemId !== "string" ||
+      assistantItemId.length === 0 ||
+      assistantItemId.length > 512)
+  ) {
+    throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT");
+  }
+  if ((assistantItemId === undefined) !== (phase === undefined)) {
+    throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT");
+  }
+  if (phase === undefined) {
+    return {};
+  }
+  return {
+    ...(assistantItemId === undefined ? {} : { assistantItemId: assistantItemId as string }),
+    phase: decodeAssistantPhase(phase),
+  };
 }
 
 function decodeAssistantPhase(value: unknown): AssistantMessagePhase {

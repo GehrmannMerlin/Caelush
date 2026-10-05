@@ -3,6 +3,7 @@ import { createToolCallTracker } from "./tool-call-tracker.js";
 import type { AIErrorContext } from "../errors/ai-error.js";
 import type { AIStreamEvent } from "./events.js";
 import type { ToolCallTracker } from "./tool-call-tracker.js";
+import { isAIMessagePhase } from "../messages/assistant-item.js";
 
 /**
  * The frozen stream lifecycle states.
@@ -107,7 +108,11 @@ export function createStreamValidator(expected?: {
           // open. The partial call simply never reaches a turn result.
           state = "ERRORED";
           return;
+        case "text.delta":
+          assertAssistantItem(event.payload.assistantItemId, event.payload.phase, fail);
+          return;
         case "tool_call.start":
+          assertAssistantItem(event.payload.assistantItemId, event.payload.phase, fail);
           tracker.start(event.payload.toolCallId, event.payload.toolName, context);
           return;
         case "tool_call.delta":
@@ -140,4 +145,18 @@ export function createStreamValidator(expected?: {
       }
     },
   };
+}
+
+function assertAssistantItem(
+  assistantItemId: string | undefined,
+  phase: unknown,
+  fail: (message: string) => never,
+): void {
+  if (assistantItemId === undefined && phase === undefined) return;
+  if (typeof assistantItemId !== "string" || assistantItemId.length === 0) {
+    fail("AI assistant content event has no item identity.");
+  }
+  if (!isAIMessagePhase(phase)) {
+    fail("AI assistant content event has an unsupported phase.");
+  }
 }

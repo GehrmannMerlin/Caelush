@@ -2,7 +2,8 @@ import type { AIStreamEvent } from "@caelush/ai";
 import {
   ModelReasoningSummaryDeltaEventSchema,
   ModelStatusEventSchema,
-  ModelTextDeltaEventSchema,
+  ModelTextDeltaEventV2Schema,
+  type AssistantMessagePhase,
   ModelToolCallDeltaEventSchema,
   type EventId,
   type RunId,
@@ -11,6 +12,7 @@ import {
   type TimestampMs,
   type TransientRunEvent,
 } from "@caelush/protocol";
+import type { AIMessagePhase } from "@caelush/ai";
 import type { AgentExecutionIdentity } from "../loop/types.js";
 
 export interface EventIdFactory {
@@ -50,19 +52,31 @@ export function createModelStreamSignalProjector(
   dependencies: ModelStreamSignalProjectorDependencies,
 ): ModelStreamSignalProjector {
   const streamSequences = new Map<string, number>();
+  let currentCallId: string | undefined;
 
   const projectMany = (input: ModelStreamSignalProjectInput): readonly TransientRunEvent[] => {
     const { identity, stepId, event } = input;
     switch (event.type) {
+      case "stream.start":
+        currentCallId = event.payload.callId;
+        return [];
       case "text.delta": {
-        const streamKey = modelTextStreamKey(identity.runId, stepId);
+        const assistantItemId =
+          event.payload.assistantItemId ??
+          fallbackAssistantItemId(currentCallId, identity.runId, stepId);
+        const phase = event.payload.phase ?? "UNKNOWN";
+        const streamKey = modelTextStreamKey(identity.runId, stepId, assistantItemId);
         return splitTransientText(event.payload.text).map(
           (text) =>
-            ModelTextDeltaEventSchema.parse({
-              ...base(identity.runId, identity.sessionId, stepId, dependencies),
+            ModelTextDeltaEventV2Schema.parse({
+              ...base(identity.runId, identity.sessionId, stepId, dependencies, 2),
               type: "model.text.delta",
               durability: ordered(streamKey, nextSequence(streamSequences, streamKey)),
-              payload: { text },
+              payload: {
+                text,
+                assistantItemId,
+                phase: toProtocolAssistantPhase(phase),
+              },
             }) as TransientRunEvent,
         );
       }
@@ -90,6 +104,8 @@ export function createModelStreamSignalProjector(
             }) as TransientRunEvent,
         );
       }
+      case "tool_call.start":
+        return [];
       case "stream.status": {
         const streamKey = modelStatusStreamKey(identity.runId, stepId);
         return [
@@ -140,10 +156,11 @@ function base(
   sessionId: SessionId,
   stepId: StepId,
   dependencies: ModelStreamSignalProjectorDependencies,
+  schemaVersion = 1,
 ) {
   return {
     eventId: dependencies.eventIdFactory.create(),
-    schemaVersion: 1,
+    schemaVersion,
     runId,
     sessionId,
     stepId,
@@ -177,8 +194,25 @@ function nextSequence(sequences: Map<string, number>, streamKey: string): number
   return next;
 }
 
-function modelTextStreamKey(runId: RunId, stepId: StepId): string {
-  return `model:text:${runId}:${stepId}`;
+function modelTextStreamKey(runId: RunId, stepId: StepId, assistantItemId: string): string {
+  return `model:text:${runId}:${stepId}:${assistantItemId}`;
+}
+
+function fallbackAssistantItemId(callId: string | undefined, runId: RunId, stepId: StepId): string {
+  return `${callId ?? `${runId}:${stepId}`}:item:000`;
+}
+
+function toProtocolAssistantPhase(phase: AIMessagePhase): AssistantMessagePhase {
+  switch (phase) {
+    case "COMMENTARY":
+      return "COMMENTARY";
+    case "FINAL_ANSWER":
+      return "FINAL_ANSWER";
+    case "UNKNOWN":
+      return "UNKNOWN";
+    default:
+      throw new TypeError("Unsupported assistant phase at the Protocol boundary.");
+  }
 }
 
 function modelReasoningStreamKey(runId: RunId, stepId: StepId): string {

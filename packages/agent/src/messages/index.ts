@@ -88,10 +88,14 @@ export type { AgentMessageBase } from "./types/message-base.js";
 export { createAgentUserMessage } from "./types/user-message.js";
 export type { AgentUserMessage } from "./types/user-message.js";
 
-export { createAgentAssistantMessage } from "./types/assistant-message.js";
+export {
+  createAgentAssistantMessage,
+  projectAgentAssistantTextItems,
+} from "./types/assistant-message.js";
 export type {
   AgentAssistantMessage,
   AgentAssistantModelProvenance,
+  AgentAssistantTextItem,
 } from "./types/assistant-message.js";
 
 export {
@@ -185,6 +189,7 @@ export {
 export type { AgentMessageCodec, AgentMessageCodecErrorReason } from "./codec/codec.js";
 
 export {
+  AGENT_ASSISTANT_MESSAGE_CODEC_V3,
   AGENT_ASSISTANT_MESSAGE_CODEC_V2,
   AGENT_ASSISTANT_MESSAGE_CODEC_V1,
   AGENT_TOOL_RESULT_MESSAGE_CODEC_V1,

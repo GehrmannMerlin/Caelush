@@ -36,6 +36,21 @@ function failedInvocation(error: NonNullable<ToolInvocation["error"]>): ToolInvo
 }
 
 describe("Security Tool presentation", () => {
+  it.each([0, 3])("summarizes an EXITED process with exit code %i", (exitCode) => {
+    const value = new CaelushToolPresentation({
+      terminalOutputSanitizer: identityTerminalSanitizer,
+    }).presentResult({
+      invocation: invocation("exec_command", { cmd: "pnpm test" }),
+      result: {
+        content: `Process exited with exit code ${exitCode}.`,
+        details: { status: "EXITED", exitCode },
+        isError: false,
+      },
+    });
+
+    expect(value.summary).toBe(`进程已退出（退出码 ${exitCode}）`);
+  });
+
   it("redacts command secrets and terminal controls before display", () => {
     const value = new CaelushToolPresentation({
       terminalOutputSanitizer: identityTerminalSanitizer,

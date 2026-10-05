@@ -16,9 +16,15 @@ const components: Components = {
       children,
     );
   },
+  img: ({ alt }) =>
+    createElement(
+      "span",
+      { className: "assistant-markdown-image-disabled" },
+      alt === undefined || alt.length === 0 ? "[图片未加载]" : `[图片未加载：${alt}]`,
+    ),
 };
 
-/** Render user-authored assistant Markdown without enabling raw HTML. */
+/** Render assistant Markdown without raw HTML or implicit remote image requests. */
 export function AssistantMarkdown({ children }: { readonly children: string }): ReactElement {
   return createElement(
     "div",

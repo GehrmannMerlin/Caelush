@@ -382,10 +382,7 @@ export class RunController {
 
     // Tool execution has durable per-invocation recovery and an unknown side-effect boundary;
     // verification is similarly not a model Step. Neither can be reclassified as a model retry.
-    if (
-      before.continuation?.type === "WAITING_TOOL_RESULTS" ||
-      before.run.status === "VERIFYING"
-    ) {
+    if (before.continuation?.type === "WAITING_TOOL_RESULTS" || before.run.status === "VERIFYING") {
       return "UNSAFE_IN_FLIGHT";
     }
 
@@ -721,6 +718,8 @@ export class RunController {
 
   private async recoverLocked(runId: RunId): Promise<RunControllerResult> {
     const loaded = await this.load(runId);
+    if (isTerminal(loaded.run.status)) return this.resultFromSnapshot(loaded);
+    if (loaded.cancellationIntent !== undefined) return this.finalizeCancellation(loaded);
     // Legacy retry provenance is normalized *durably* before anything is routed, so the coordinator
     // only ever sees a state it can decide on and no runtime special case is needed for it.
     let normalized = await this.normalizeLegacyRetryProvenance(loaded);
@@ -2671,9 +2670,7 @@ export class RunController {
       modelId: snapshot.run.model.model,
     } as const;
     const retryTransport =
-      snapshot.continuation?.type === "WAITING_RETRY"
-        ? snapshot.continuation.transport
-        : undefined;
+      snapshot.continuation?.type === "WAITING_RETRY" ? snapshot.continuation.transport : undefined;
     const selection =
       retryTransport === undefined
         ? recovery.initial(identity)
@@ -2711,8 +2708,9 @@ export class RunController {
     assertModelTransportSelection(input.selection, identity);
     const previousTransport =
       input.previous?.type === "WAITING_RETRY" ? input.previous.transport : undefined;
-    const attemptedTransportIds =
-      previousTransport?.attemptedTransportIds ?? [input.selection.transportId];
+    const attemptedTransportIds = previousTransport?.attemptedTransportIds ?? [
+      input.selection.transportId,
+    ];
     if (
       previousTransport !== undefined &&
       previousTransport.currentTransportId !== input.selection.transportId

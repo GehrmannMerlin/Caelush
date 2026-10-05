@@ -13,7 +13,7 @@ export function ModelWaitNotice(props: ModelWaitNoticeProps): ReactElement | nul
 
   const message = modelWaitMessage(wait, props.now);
   const isExhausted = wait?.phase === "RETRY_EXHAUSTED";
-  const activity = wait === undefined ? undefined : activityDescription(wait, props.now);
+  const activity = wait === undefined ? undefined : activityDescription(wait);
   return createElement(
     "section",
     {
@@ -23,7 +23,9 @@ export function ModelWaitNotice(props: ModelWaitNoticeProps): ReactElement | nul
       "aria-label": isExhausted ? "模型请求失败" : "模型正在思考",
     },
     createElement("span", { className: "turn-presentation-thinking-title" }, message.title),
-    createElement("span", { className: "turn-presentation-thinking-detail" }, message.detail),
+    message.detail.length === 0
+      ? null
+      : createElement("span", { className: "turn-presentation-thinking-detail" }, message.detail),
     activity === undefined
       ? null
       : createElement("span", { className: "model-wait-activity", "aria-hidden": true }, activity),
@@ -51,14 +53,20 @@ export function modelWaitMessage(
   wait: ModelWaitState | undefined,
   now: number,
 ): { readonly title: string; readonly detail: string } {
-  if (wait === undefined) return { title: "思考中", detail: "正在等待模型响应" };
+  if (wait === undefined) return { title: "思考中", detail: "" };
 
   const retryOrdinal = wait.retryOrdinal ?? Math.max(0, (wait.attempt ?? 1) - 1);
   const maxRetries = wait.maxRetries ?? Math.max(0, (wait.maxAttempts ?? 1) - 1);
   const retryCount = `${retryOrdinal}/${maxRetries}`;
   switch (wait.phase) {
-    case "WAITING_PROVIDER":
-      return { title: "思考中", detail: "正在等待模型响应" };
+    case "WAITING_PROVIDER": {
+      const waitingForFirstResponse = wait.providerEventReceived !== true;
+      const hasWaitedThirtySeconds = now - wait.lastActivityAt >= 30_000;
+      if (waitingForFirstResponse && hasWaitedThirtySeconds) {
+        return { title: "正在等待模型响应", detail: "" };
+      }
+      return { title: "思考中", detail: "" };
+    }
     case "RECEIVING_PROVIDER_DATA":
       return { title: "思考中", detail: "正在接收模型响应" };
     case "NO_RECENT_ACTIVITY":
@@ -105,18 +113,14 @@ export function modelWaitMessage(
   }
 }
 
-function activityDescription(wait: ModelWaitState, now: number): string {
-  const label = wait.providerEventReceived ? "最后活动时间" : "请求开始时间";
+function activityDescription(wait: ModelWaitState): string | undefined {
+  if (wait.providerEventReceived !== true) return undefined;
+
   const timestamp = new Date(wait.lastActivityAt);
   const time = Number.isNaN(timestamp.getTime())
     ? "未知"
     : timestamp.toLocaleTimeString("zh-CN", { hour12: false });
-  const elapsedSeconds = Math.max(0, Math.floor((now - wait.lastActivityAt) / 1_000));
-  const elapsed =
-    elapsedSeconds < 60
-      ? `已等待 ${elapsedSeconds} 秒`
-      : `已等待 ${Math.floor(elapsedSeconds / 60)} 分钟 ${elapsedSeconds % 60} 秒`;
-  return `${label}：${time} · ${elapsed}`;
+  return `最后活动时间：${time}`;
 }
 
 function safeTransportId(value: string | undefined): string | undefined {

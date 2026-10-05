@@ -1,4 +1,5 @@
 import type { JsonObject } from "@caelush/ai";
+import type { AssistantMessagePhase } from "@caelush/protocol";
 
 /**
  * Agent message content parts.
@@ -63,6 +64,12 @@ export interface AgentAssistantTextPart {
   readonly type: "TEXT";
 
   readonly text: string;
+
+  /** AI-side item correlation used only for presentation reconciliation. */
+  readonly assistantItemId?: string;
+
+  /** Provider-neutral message phase; UNKNOWN falls back to the host turn phase. */
+  readonly phase?: AssistantMessagePhase;
 }
 
 /**
@@ -80,6 +87,10 @@ export interface AgentAssistantToolCallPart {
   readonly toolName: string;
 
   readonly input: JsonObject;
+
+  readonly assistantItemId?: string;
+
+  readonly phase?: AssistantMessagePhase;
 }
 
 /** What a user message may contain. */
@@ -118,8 +129,15 @@ export function agentAttachmentRefPart(input: {
 }
 
 /** Build an assistant text part. */
-export function agentAssistantTextPart(text: string): AgentAssistantTextPart {
-  return Object.freeze({ type: "TEXT", text });
+export function agentAssistantTextPart(
+  text: string,
+  item?: { readonly assistantItemId: string; readonly phase: AssistantMessagePhase },
+): AgentAssistantTextPart {
+  return Object.freeze({
+    type: "TEXT",
+    text,
+    ...(item === undefined ? {} : { assistantItemId: item.assistantItemId, phase: item.phase }),
+  });
 }
 
 /** Build an assistant tool-call part. */
@@ -127,12 +145,16 @@ export function agentAssistantToolCallPart(input: {
   readonly toolCallId: string;
   readonly toolName: string;
   readonly input: JsonObject;
+  readonly assistantItemId?: string;
+  readonly phase?: AssistantMessagePhase;
 }): AgentAssistantToolCallPart {
   return Object.freeze({
     type: "TOOL_CALL" as const,
     toolCallId: input.toolCallId,
     toolName: input.toolName,
     input: input.input,
+    ...(input.assistantItemId === undefined ? {} : { assistantItemId: input.assistantItemId }),
+    ...(input.phase === undefined ? {} : { phase: input.phase }),
   });
 }
 
@@ -223,6 +245,9 @@ export function assertAgentAssistantContent(
     throw new TypeError("Agent assistant message content must be a non-empty array.");
   }
   const toolCallIds = new Set<string>();
+  const itemPhases = new Map<string, AssistantMessagePhase>();
+  const closedAssistantItemIds = new Set<string>();
+  let activeAssistantItemId: string | undefined;
   for (const part of value) {
     if (typeof part !== "object" || part === null || Array.isArray(part)) {
       throw new TypeError("Agent assistant message content part must be an object.");
@@ -233,6 +258,12 @@ export function assertAgentAssistantContent(
       if (typeof text !== "string") {
         throw new TypeError("Agent assistant message text part text must be a string.");
       }
+      activeAssistantItemId = validateAssistantItemMetadata(
+        candidate,
+        itemPhases,
+        closedAssistantItemIds,
+        activeAssistantItemId,
+      );
       continue;
     }
     if (candidate.type === "TOOL_CALL") {
@@ -255,11 +286,66 @@ export function assertAgentAssistantContent(
       if (toolCallIds.has(toolCall.toolCallId)) {
         throw new TypeError("Agent assistant message must not announce the same toolCallId twice.");
       }
+      activeAssistantItemId = validateAssistantItemMetadata(
+        candidate,
+        itemPhases,
+        closedAssistantItemIds,
+        activeAssistantItemId,
+      );
       toolCallIds.add(toolCall.toolCallId);
       continue;
     }
     throw new TypeError("Agent assistant message content part type is unknown.");
   }
+}
+
+function validateAssistantItemMetadata(
+  candidate: object,
+  itemPhases: Map<string, AssistantMessagePhase>,
+  closedAssistantItemIds: Set<string>,
+  activeAssistantItemId: string | undefined,
+): string | undefined {
+  const record = candidate as Record<string, unknown>;
+  const assistantItemId = record["assistantItemId"];
+  const phase = record["phase"];
+  if (
+    assistantItemId !== undefined &&
+    (typeof assistantItemId !== "string" ||
+      assistantItemId.length === 0 ||
+      assistantItemId.length > 512)
+  ) {
+    throw new TypeError("Agent assistant item id must be a bounded non-empty string when present.");
+  }
+  if ((assistantItemId === undefined) !== (phase === undefined)) {
+    throw new TypeError("Agent assistant item id and phase must be present together.");
+  }
+  if (
+    phase !== undefined &&
+    phase !== "COMMENTARY" &&
+    phase !== "FINAL_ANSWER" &&
+    phase !== "UNKNOWN"
+  ) {
+    throw new TypeError("Agent assistant item phase is unsupported.");
+  }
+  if (assistantItemId === undefined) {
+    if (activeAssistantItemId !== undefined) closedAssistantItemIds.add(activeAssistantItemId);
+    return undefined;
+  }
+  if (assistantItemId !== activeAssistantItemId) {
+    if (activeAssistantItemId !== undefined) closedAssistantItemIds.add(activeAssistantItemId);
+    if (closedAssistantItemIds.has(assistantItemId)) {
+      throw new TypeError("An assistant item cannot resume after a later item begins.");
+    }
+    activeAssistantItemId = assistantItemId;
+  }
+  if (typeof assistantItemId === "string" && typeof phase === "string") {
+    const priorPhase = itemPhases.get(assistantItemId);
+    if (priorPhase !== undefined && priorPhase !== phase) {
+      throw new TypeError("One assistant item cannot change phase within a message.");
+    }
+    itemPhases.set(assistantItemId, phase as AssistantMessagePhase);
+  }
+  return activeAssistantItemId;
 }
 
 /** Every tool call an assistant content list announces, in announcement order. */

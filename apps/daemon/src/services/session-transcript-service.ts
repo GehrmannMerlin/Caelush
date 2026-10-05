@@ -12,10 +12,12 @@ import {
   type SessionId,
   type SessionTranscriptQuery,
   type SessionTranscriptResponse,
+  type TranscriptEntry,
 } from "@caelush/protocol";
 import type { RunRepository, SessionRepository } from "@caelush/storage";
 import { StorageNotFoundError } from "@caelush/storage";
 import { unsupportedHistoricalTranscriptEntry } from "@caelush/agent";
+import { projectPublicAssistantText } from "./assistant-text-projection.js";
 
 const TERMINAL_RUN_STATUSES = new Set<RunStatus>([
   "COMPLETED",
@@ -93,7 +95,7 @@ export class SessionTranscriptService {
     if (!record.audience.transcript) return [];
     try {
       const message = this.options.codecs.decode(record);
-      return this.options.transcriptProjectors.project({
+      const entries = this.options.transcriptProjectors.project({
         sequence: record.sequence,
         schemaVersion: record.schemaVersion,
         ...(record.modelProjectionVersion === undefined
@@ -101,6 +103,7 @@ export class SessionTranscriptService {
           : { modelProjectionVersion: record.modelProjectionVersion }),
         message,
       });
+      return entries.map(projectTranscriptEntry);
     } catch (error) {
       // Unknown historical schema/type is a user-visible gap, never a reason to expose data or
       // fail the whole Session. Keep the typed codec refusal local and return only a fixed label.
@@ -117,6 +120,12 @@ export class SessionTranscriptService {
       return [];
     }
   }
+}
+
+function projectTranscriptEntry(entry: TranscriptEntry): TranscriptEntry {
+  return entry.kind === "ASSISTANT"
+    ? { ...entry, text: projectPublicAssistantText(entry.text) }
+    : entry;
 }
 
 function parseCursor(cursor: string | undefined, itemCount: number): number {

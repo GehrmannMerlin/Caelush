@@ -111,8 +111,8 @@ describe("TurnPresentationFeed", () => {
 
     expect(thinking).toContain('class="turn-presentation-thinking-title"');
     expect(thinking).toContain(">思考中<");
-    expect(thinking).toContain('class="turn-presentation-thinking-detail"');
-    expect(thinking).toContain(">正在等待模型响应<");
+    expect(thinking).not.toContain('class="turn-presentation-thinking-detail"');
+    expect(thinking).not.toContain("正在等待模型响应");
     expect(thinking).toContain('role="status"');
     expect(thinking).toContain('aria-live="polite"');
     expect(thinking).not.toContain("<svg");
@@ -150,12 +150,31 @@ describe("TurnPresentationFeed", () => {
 
       expect(html).toContain("正在重新连接本地 Agent 服务");
       expect(html).toContain("模型近期没有返回新数据，仍在等待");
-      expect(html).toContain("请求开始时间：12:00:00 · 已等待 35 秒");
+      expect(html).not.toContain("请求开始时间");
+      expect(html).not.toContain("已等待");
       expect(html).not.toContain("连接不健康");
       expect(html).not.toContain("Provider 连接异常");
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps the concise thinking label until 30 seconds, then labels the model wait", () => {
+    const startedAt = new Date(2026, 9, 4, 12, 0, 0).getTime();
+    const wait: ModelWaitState = {
+      runId,
+      phase: "WAITING_PROVIDER",
+      lastActivityAt: startedAt,
+      idleForMs: 0,
+      idleTimeoutMs: 300_000,
+      providerEventReceived: false,
+    };
+
+    expect(modelWaitMessage(wait, startedAt + 29_999)).toEqual({ title: "思考中", detail: "" });
+    expect(modelWaitMessage(wait, startedAt + 30_000)).toEqual({
+      title: "正在等待模型响应",
+      detail: "",
+    });
   });
 
   it("shows the five-minute idle termination notice as text, not a loading mark", () => {
@@ -233,6 +252,176 @@ describe("TurnPresentationFeed", () => {
     expect(html).not.toContain("任务活动");
     expect(html).not.toContain('class="turn-presentation-kicker"');
     expect(html).not.toContain(">执行过程<");
+  });
+
+  it("places task elapsed time beside the logo and freezes it at the matching Run summary", () => {
+    const startedAt = new Date(2026, 9, 4, 12, 0, 0).getTime();
+    const completedAt = startedAt + 125_000;
+    const completedPresentation = {
+      ...presentation(),
+      items: presentation().items.map((item) =>
+        item.kind === "USER"
+          ? { ...item, createdAt: startedAt }
+          : item.kind === "RUN_SUMMARY"
+            ? { ...item, createdAt: completedAt }
+            : item,
+      ),
+    };
+
+    vi.useFakeTimers();
+    vi.setSystemTime(completedAt + 60_000);
+    try {
+      const html = renderToStaticMarkup(
+        <TurnPresentationFeed presentation={completedPresentation} isActive={false} />,
+      );
+      const summary =
+        html.match(/<summary class="turn-presentation-summary">[\s\S]*?<\/summary>/u)?.[0] ?? "";
+
+      expect(summary.indexOf('alt="Caelush"')).toBeLessThan(
+        summary.indexOf('class="turn-presentation-task-elapsed"'),
+      );
+      expect(summary).toContain('class="turn-presentation-task-elapsed"');
+      expect(summary).toContain("用时 2分5秒");
+      expect(summary).not.toContain("请求开始时间");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("treats the matching Run summary as the end time even while the active flag lags", () => {
+    const startedAt = new Date(2026, 9, 4, 12, 0, 0).getTime();
+    const completedAt = startedAt + 125_000;
+    const completedPresentation = {
+      ...presentation(),
+      items: presentation().items.map((item) =>
+        item.kind === "USER"
+          ? { ...item, createdAt: startedAt }
+          : item.kind === "RUN_SUMMARY"
+            ? { ...item, createdAt: completedAt }
+            : item,
+      ),
+    };
+
+    vi.useFakeTimers();
+    vi.setSystemTime(completedAt + 60_000);
+    try {
+      const html = renderToStaticMarkup(
+        <TurnPresentationFeed presentation={completedPresentation} isActive />,
+      );
+      const summary =
+        html.match(/<summary class="turn-presentation-summary">[\s\S]*?<\/summary>/u)?.[0] ?? "";
+
+      expect(summary).toContain("用时 2分5秒");
+      expect(summary).not.toContain("用时 3分5秒");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows that a final answer is still waiting for verification while the server Run is VERIFYING", () => {
+    const verifyingPresentation = {
+      ...presentation(),
+      items: presentation().items.filter((item) => item.kind !== "RUN_SUMMARY"),
+    };
+
+    const html = renderToStaticMarkup(
+      <TurnPresentationFeed
+        presentation={verifyingPresentation}
+        activeRun={{ id: runId, status: "VERIFYING" }}
+        isActive
+      />,
+    );
+
+    expect(html).toContain("检查完成，项目结构正常。");
+    expect(html).toContain("回复已生成，正在等待校验结果");
+  });
+
+  it("shows the elapsed time beside a running verification item", () => {
+    const startedAt = new Date(2026, 9, 4, 12, 0, 0).getTime();
+    const verifyingPresentation = {
+      ...presentation(),
+      items: [
+        ...presentation().items.filter((item) => item.kind !== "RUN_SUMMARY"),
+        {
+          id: "verification:check-1",
+          runId,
+          conversationTurnId: "turn-1",
+          ordinal: 4,
+          status: "STREAMING" as const,
+          createdAt: startedAt,
+          kind: "VERIFICATION" as const,
+          verificationId: "check-1",
+          title: "类型检查",
+          summary: "正在运行包类型检查",
+        },
+      ],
+    };
+
+    vi.useFakeTimers();
+    vi.setSystemTime(startedAt + 65_000);
+    try {
+      const html = renderToStaticMarkup(
+        <TurnPresentationFeed
+          presentation={verifyingPresentation}
+          activeRun={{ id: runId, status: "VERIFYING" }}
+          isActive
+        />,
+      );
+      const verification =
+        html.match(
+          /class="turn-presentation-item turn-presentation-item--verification[\s\S]*?<\/article>/u,
+        )?.[0] ?? "";
+
+      expect(verification).toContain("类型检查");
+      expect(verification).toContain('class="turn-presentation-verification-elapsed"');
+      expect(verification).toContain("用时 1分5秒");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("freezes elapsed time from the server FAILED status when the legacy active flag lags", () => {
+    const startedAt = new Date(2026, 9, 4, 12, 0, 0).getTime();
+    const lastActivityAt = startedAt + 45_000;
+    const failedPresentation = {
+      ...presentation(),
+      items: [
+        ...presentation()
+          .items.filter((item) => item.kind !== "RUN_SUMMARY")
+          .map((item) => (item.kind === "USER" ? { ...item, createdAt: startedAt } : item)),
+        {
+          id: "verification:failed-check",
+          runId,
+          conversationTurnId: "turn-1",
+          ordinal: 4,
+          status: "FAILED" as const,
+          createdAt: lastActivityAt,
+          kind: "VERIFICATION" as const,
+          verificationId: "failed-check",
+          title: "类型检查",
+          summary: "检查命令无法启动",
+        },
+      ],
+    };
+
+    vi.useFakeTimers();
+    vi.setSystemTime(startedAt + 65_000);
+    try {
+      const html = renderToStaticMarkup(
+        <TurnPresentationFeed
+          presentation={failedPresentation}
+          activeRun={{ id: runId, status: "FAILED" }}
+          isActive
+        />,
+      );
+      const summary =
+        html.match(/<summary class="turn-presentation-summary">[\s\S]*?<\/summary>/u)?.[0] ?? "";
+
+      expect(summary).toContain("用时 45秒");
+      expect(summary).not.toContain("用时 1分5秒");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("uses the open-source circular success icon for completed durable Tool rows", () => {

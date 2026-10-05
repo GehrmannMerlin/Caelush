@@ -51,6 +51,7 @@ import { createEventId } from "@caelush/protocol";
 import type { AgentMessageProjectorRegistry } from "@caelush/agent";
 import { createBudgetedContextSummarizer } from "./context-compaction-composition.js";
 import { createDeterministicCompactionFactsProvider } from "./deterministic-compaction-facts-adapter.js";
+import { createWorkCommentaryContextProvider } from "./work-commentary-context-provider.js";
 
 export interface DaemonV2ContextCompositionOptions {
   readonly input: RunAgentContextEngineInput;
@@ -208,6 +209,7 @@ function createSourceRegistry(options: {
     0,
     "REQUIRED",
   );
+  register(createWorkCommentaryContextProvider({ storage: options.storage }), 5, "OPTIONAL");
   register(createConversationContextSourceProvider(), 10, "REQUIRED");
   register(
     createCheckpointContextSourceProvider({

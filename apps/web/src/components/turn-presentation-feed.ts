@@ -19,6 +19,7 @@ import { ModelWaitNotice, usePresentationNow } from "./model-wait-presentation.j
 
 export interface TurnPresentationFeedProps {
   readonly presentation: SessionTurnPresentationResponse;
+  readonly activeRun?: { readonly id: string; readonly status: RunStatus } | undefined;
   readonly liveActivity?: LiveActivityState | undefined;
   readonly timeline?: TimelineState | undefined;
   readonly isActive?: boolean | undefined;
@@ -35,7 +36,27 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
   const liveActivities = props.liveActivity?.activities ?? [];
   const isModelThinking = (props.timeline?.activeLlm.length ?? 0) > 0;
   const modelWait = props.liveActivity?.modelWait;
-  const now = usePresentationNow(isModelThinking || modelWait !== undefined);
+  const isTaskActive =
+    props.activeRun === undefined
+      ? props.isActive === true
+      : isRunStatusActive(props.activeRun.status);
+  const now = usePresentationNow(isTaskActive || isModelThinking || modelWait !== undefined);
+  const verifyingRunId = props.activeRun?.status === "VERIFYING" ? props.activeRun.id : undefined;
+  const latestUserItem = [...props.presentation.items]
+    .reverse()
+    .find((item) => item.kind === "USER");
+  const taskElapsed =
+    latestUserItem === undefined
+      ? undefined
+      : formatTaskElapsed(
+          taskElapsedMs(
+            latestUserItem.runId,
+            latestUserItem.createdAt,
+            props.presentation.items,
+            isTaskActive,
+            now,
+          ),
+        );
   const durableAssistantItems = props.presentation.items.filter(
     (item) => item.kind === "ASSISTANT",
   );
@@ -43,6 +64,13 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
     durableAssistantItems.flatMap((item) =>
       "sourceStepId" in item && item.sourceStepId !== undefined
         ? [`${item.runId}:${item.sourceStepId}`]
+        : [],
+    ),
+  );
+  const settledAssistantItemKeys = new Set(
+    durableAssistantItems.flatMap((item) =>
+      item.kind === "ASSISTANT" && "assistantItemId" in item && item.assistantItemId !== undefined
+        ? [`${item.runId}:${item.assistantItemId}`]
         : [],
     ),
   );
@@ -61,7 +89,9 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
       (activity.status === "ACTIVE" || activity.status === "COMPLETED") &&
       !(props.liveActivity?.terminal === true && activity.status === "ACTIVE") &&
       !unsuccessfulTerminalRunIds.has(activity.runId) &&
-      !settledStepKeys.has(`${activity.runId}:${activity.stepId ?? ""}`),
+      (activity.assistantItemId === undefined
+        ? !settledStepKeys.has(`${activity.runId}:${activity.stepId ?? ""}`)
+        : !settledAssistantItemKeys.has(`${activity.runId}:${activity.assistantItemId}`)),
   );
   const summaries = props.presentation.items.filter((item) => {
     if (item.kind !== "RUN_SUMMARY") return false;
@@ -80,24 +110,25 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
   const hasProcess =
     processItems.length > 0 ||
     processActivities.length > 0 ||
+    modelDrafts.length > 0 ||
     modelWait !== undefined ||
     isModelThinking ||
-    props.isActive === true;
+    isTaskActive;
   const regionRef = useRef<HTMLDivElement>(null);
-  const [expanded, setExpanded] = useState(props.isActive === true);
-  const wasActive = useRef(props.isActive === true);
+  const [expanded, setExpanded] = useState(isTaskActive);
+  const wasActive = useRef(isTaskActive);
 
   useEffect(() => {
-    const active = props.isActive === true;
+    const active = isTaskActive;
     if (active) setExpanded(true);
     else if (wasActive.current) setExpanded(false);
     wasActive.current = active;
-  }, [props.isActive]);
+  }, [isTaskActive]);
 
   useEffect(() => {
-    if (props.isActive !== true || regionRef.current === null) return;
+    if (!isTaskActive || regionRef.current === null) return;
     regionRef.current.scrollTop = regionRef.current.scrollHeight;
-  }, [props.isActive, processItems.length, liveActivities.length]);
+  }, [isTaskActive, processItems.length, liveActivities.length]);
 
   return createElement(
     "div",
@@ -128,15 +159,18 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
                 src: caelushLogo,
                 alt: "Caelush",
               }),
+              taskElapsed === undefined
+                ? null
+                : createElement(
+                    "span",
+                    { className: "turn-presentation-task-elapsed" },
+                    taskElapsed,
+                  ),
             ),
             createElement(
               "span",
               { className: "turn-presentation-summary-status" },
-              processSummary(
-                props.isActive === true,
-                processItems.length,
-                processActivities.length,
-              ),
+              processSummary(isTaskActive, processItems.length, processActivities.length),
             ),
             createElement(ChevronDown, {
               className: "turn-presentation-chevron",
@@ -150,11 +184,34 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
             { className: "turn-presentation-body", ref: regionRef, tabIndex: 0 },
             processItems.length === 0 &&
               processActivities.length === 0 &&
+              modelDrafts.length === 0 &&
               !isModelThinking &&
               modelWait === undefined
               ? createElement("p", { className: "turn-presentation-empty" }, "正在准备任务活动……")
               : null,
-            processItems.map((item) => renderItem(item)),
+            processItems.map((item) => renderItem(item, now, item.runId === verifyingRunId)),
+            modelDrafts.length === 0
+              ? null
+              : createElement(
+                  "section",
+                  { className: "turn-presentation-model-drafts", "aria-label": "实时助手进度" },
+                  modelDrafts.map((activity) =>
+                    createElement(
+                      "article",
+                      {
+                        className: `turn-presentation-item turn-presentation-item--assistant turn-presentation-item--${(activity.phase ?? "UNKNOWN").toLowerCase()} turn-presentation-model-draft turn-presentation-model-draft--${activity.status.toLowerCase()}`,
+                        key: activity.id,
+                      },
+                      activity.phase === "COMMENTARY" || activity.phase === "FINAL_ANSWER"
+                        ? createElement(AssistantMarkdown, null, activity.text)
+                        : createElement(
+                            "p",
+                            { className: "turn-presentation-item-text" },
+                            activity.text,
+                          ),
+                    ),
+                  ),
+                ),
             processActivities.length === 0
               ? null
               : createElement(
@@ -198,7 +255,7 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
           ),
         )
       : null,
-    finalItems.length === 0 && modelDrafts.length === 0
+    finalItems.length === 0
       ? null
       : createElement(
           "section",
@@ -207,23 +264,23 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
             "aria-label": summaries.length > 0 ? "任务结束报告" : "最终答复",
           },
           finalItems.map((item) => renderItem(item)),
-          modelDrafts.map((activity) =>
-            createElement(
-              "article",
-              {
-                className:
-                  "turn-presentation-item turn-presentation-item--assistant turn-presentation-item--final_answer",
-                key: activity.id,
-              },
-              createElement("p", { className: "turn-presentation-item-label" }, "最终答复"),
-              createElement(AssistantMarkdown, null, activity.text),
-            ),
-          ),
+          verifyingRunId !== undefined &&
+            finalAnswers.some((answer) => answer.runId === verifyingRunId)
+            ? createElement(
+                "p",
+                { className: "turn-presentation-verification-pending", role: "status" },
+                "回复已生成，正在等待校验结果",
+              )
+            : null,
         ),
   );
 }
 
-function renderItem(item: TurnPresentationItem): ReactElement {
+function renderItem(
+  item: TurnPresentationItem,
+  now?: number,
+  isCurrentVerifyingRun = false,
+): ReactElement {
   switch (item.kind) {
     case "USER":
       return createElement(
@@ -231,22 +288,22 @@ function renderItem(item: TurnPresentationItem): ReactElement {
         { className: "turn-presentation-item turn-presentation-item--user", key: item.id },
         createElement("p", { className: "turn-presentation-user-bubble" }, item.text),
       );
-    case "ASSISTANT":
+    case "ASSISTANT": {
+      const label = assistantLabel(item.phase);
       return createElement(
         "article",
         {
           className: `turn-presentation-item turn-presentation-item--assistant turn-presentation-item--${item.phase.toLowerCase()}`,
           key: item.id,
         },
-        createElement(
-          "p",
-          { className: "turn-presentation-item-label" },
-          assistantLabel(item.phase),
-        ),
-        item.phase === "FINAL_ANSWER"
+        label === null
+          ? null
+          : createElement("p", { className: "turn-presentation-item-label" }, label),
+        item.phase === "FINAL_ANSWER" || item.phase === "COMMENTARY"
           ? createElement(AssistantMarkdown, null, item.text)
           : createElement("p", { className: "turn-presentation-item-text" }, item.text),
       );
+    }
     case "TOOL":
       return createElement(
         "article",
@@ -264,20 +321,37 @@ function renderItem(item: TurnPresentationItem): ReactElement {
           { className: "turn-presentation-item-main" },
           createElement("p", { className: "turn-presentation-item-label" }, item.title),
           createElement("p", { className: "turn-presentation-item-text" }, item.summary),
-          createElement(
-            "div",
-            { className: "turn-presentation-facts" },
-            item.facts.map((fact) =>
-              createElement(
-                "span",
-                { key: `${item.id}:${fact.key}` },
-                `${fact.key}：${fact.value}`,
-              ),
-            ),
-          ),
-          item.preview === undefined
+          item.facts.length === 0 && item.preview === undefined
             ? null
-            : createElement("pre", { className: "turn-presentation-preview" }, item.preview),
+            : createElement(
+                "details",
+                { className: "turn-presentation-tool-details" },
+                createElement("summary", null, "查看工具详情"),
+                createElement(
+                  "div",
+                  { className: "turn-presentation-tool-details-content" },
+                  item.facts.length === 0
+                    ? null
+                    : createElement(
+                        "div",
+                        { className: "turn-presentation-facts" },
+                        item.facts.map((fact) =>
+                          createElement(
+                            "span",
+                            { key: `${item.id}:${fact.key}` },
+                            `${fact.key}：${fact.value}`,
+                          ),
+                        ),
+                      ),
+                  item.preview === undefined
+                    ? null
+                    : createElement(
+                        "pre",
+                        { className: "turn-presentation-preview" },
+                        item.preview,
+                      ),
+                ),
+              ),
         ),
       );
     case "VERIFICATION":
@@ -300,6 +374,13 @@ function renderItem(item: TurnPresentationItem): ReactElement {
           item.evidence === undefined
             ? null
             : createElement("p", { className: "turn-presentation-item-evidence" }, item.evidence),
+          item.status === "STREAMING" && isCurrentVerifyingRun && now !== undefined
+            ? createElement(
+                "p",
+                { className: "turn-presentation-verification-elapsed" },
+                formatTaskElapsed(Math.max(0, now - Number(item.createdAt))),
+              )
+            : null,
         ),
       );
     case "RUN_SUMMARY":
@@ -320,10 +401,10 @@ function renderItem(item: TurnPresentationItem): ReactElement {
   }
 }
 
-function assistantLabel(phase: "COMMENTARY" | "FINAL_ANSWER" | "UNKNOWN"): string {
+function assistantLabel(phase: "COMMENTARY" | "FINAL_ANSWER" | "UNKNOWN"): string | null {
   switch (phase) {
     case "COMMENTARY":
-      return "工作说明";
+      return null;
     case "FINAL_ANSWER":
       return "最终答复";
     case "UNKNOWN":
@@ -406,6 +487,44 @@ function processSummary(active: boolean, durableCount: number, liveCount: number
   if (active) return liveCount > 0 ? `${liveCount} 条活动进行中` : "正在执行";
   if (durableCount > 0) return `${durableCount} 条活动`;
   return "无活动";
+}
+
+function isRunStatusActive(status: RunStatus): boolean {
+  return (
+    status === "PENDING" ||
+    status === "RUNNING" ||
+    status === "WAITING_APPROVAL" ||
+    status === "WAITING_RESOURCE" ||
+    status === "VERIFYING"
+  );
+}
+
+function taskElapsedMs(
+  runId: string,
+  startedAt: number,
+  items: readonly TurnPresentationItem[],
+  active: boolean,
+  now: number,
+): number {
+  const matchingSummary = items.find((item) => item.kind === "RUN_SUMMARY" && item.runId === runId);
+  if (matchingSummary !== undefined) return Math.max(0, matchingSummary.createdAt - startedAt);
+  if (active) return Math.max(0, now - startedAt);
+
+  const latestKnownRunActivityAt = items.reduce(
+    (latestAt, item) => (item.runId === runId ? Math.max(latestAt, item.createdAt) : latestAt),
+    startedAt,
+  );
+  return Math.max(0, latestKnownRunActivityAt - startedAt);
+}
+
+function formatTaskElapsed(durationMs: number): string {
+  const totalSeconds = Math.floor(durationMs / 1_000);
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `用时 ${hours}小时${minutes}分${seconds}秒`;
+  if (minutes > 0) return `用时 ${minutes}分${seconds}秒`;
+  return `用时 ${seconds}秒`;
 }
 
 function runStatusLabel(status: RunStatus): string {

@@ -4,6 +4,7 @@ import type { LLMCallId } from "../ids/llm-call-id.js";
 import type { ModelRef } from "./model-ref.js";
 import type { ModelUsage } from "./model-usage.js";
 import type { ProviderId } from "../ids/provider-id.js";
+import type { AIModelTurnAssistantItem } from "../messages/assistant-item.js";
 
 /**
  * The settled outcome of one model turn.
@@ -20,6 +21,8 @@ export interface AIModelTurnResult {
   readonly model: ModelRef;
   readonly text: string;
   readonly toolCalls: readonly AIToolCall[];
+  /** Ordered, phase-aware assistant items when produced by the canonical stream assembler. */
+  readonly assistantItems?: readonly AIModelTurnAssistantItem[];
   readonly finishReason: AIFinishReason;
   readonly usage?: ModelUsage;
   readonly resolution: AIInvocationResolution;

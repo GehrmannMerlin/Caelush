@@ -33,6 +33,7 @@ import {
   ModelReasoningSummaryDeltaEventSchema,
   ModelStatusEventSchema,
   ModelTextDeltaEventSchema,
+  ModelTextDeltaEventV2Schema,
   ModelToolCallDeltaEventSchema,
 } from "./model.js";
 import { PlanUpdatedEventSchema, ReasoningSummaryEventSchema } from "./reasoning.js";
@@ -143,6 +144,7 @@ const registeredSchemas: ReadonlyMap<string, RegisteredSchema> = new Map<string,
   ["conversation.message.committed\u00001", ConversationMessageCommittedEventSchema],
   ["context.compaction.completed\u00001", ContextCompactionCompletedEventSchema],
   ["model.text.delta\u00001", ModelTextDeltaEventSchema],
+  ["model.text.delta\u00002", ModelTextDeltaEventV2Schema],
   ["model.reasoning_summary.delta\u00001", ModelReasoningSummaryDeltaEventSchema],
   ["model.tool_call.delta\u00001", ModelToolCallDeltaEventSchema],
   ["model.status\u00001", ModelStatusEventSchema],

@@ -1,5 +1,8 @@
-import type { AIToolResultMessage } from "@caelush/ai";
-import type { RunContinuationCheckpoint as AgentContinuation } from "@caelush/agent";
+import type { AIModelTurnAssistantItem, AIToolResultMessage } from "@caelush/ai";
+import type {
+  AgentModelTurn,
+  RunContinuationCheckpoint as AgentContinuation,
+} from "@caelush/agent";
 import type { z } from "zod";
 import type { RunContinuationCheckpoint as DurableContinuation } from "./agent-continuation.js";
 import { RunContinuationCheckpointSchema } from "./agent-continuation-schema.js";
@@ -37,7 +40,10 @@ export function toDurableContinuation(checkpoint: AgentContinuation): DurableCon
         type: "WAITING_TOOL_RESULTS",
         runId: checkpoint.runId,
         sourceStepId: checkpoint.sourceStepId,
-        pendingDecision: checkpoint.pendingDecision,
+        pendingDecision: {
+          ...checkpoint.pendingDecision,
+          modelTurn: ensureAssistantItems(checkpoint.pendingDecision.modelTurn),
+        },
         ...(checkpoint.receivedResults === undefined
           ? {}
           : {
@@ -56,7 +62,10 @@ export function toDurableContinuation(checkpoint: AgentContinuation): DurableCon
         runId: checkpoint.runId,
         sourceStepId: checkpoint.sourceStepId,
         verificationPlanId: checkpoint.verificationPlanId,
-        finalDecision: checkpoint.finalDecision,
+        finalDecision: {
+          ...checkpoint.finalDecision,
+          modelTurn: ensureAssistantItems(checkpoint.finalDecision.modelTurn),
+        },
       };
     case "WAITING_VERIFICATION_REPAIR":
       return {
@@ -73,7 +82,10 @@ export function toDurableContinuation(checkpoint: AgentContinuation): DurableCon
         type: "WAITING_RESOURCE",
         runId: checkpoint.runId,
         sourceStepId: checkpoint.sourceStepId,
-        pendingDecision: checkpoint.pendingDecision,
+        pendingDecision: {
+          ...checkpoint.pendingDecision,
+          modelTurn: ensureAssistantItems(checkpoint.pendingDecision.modelTurn),
+        },
         reason: checkpoint.reason,
         replanCount: checkpoint.replanCount,
       };
@@ -100,7 +112,10 @@ export function toDurableContinuation(checkpoint: AgentContinuation): DurableCon
             nextAttemptAt: checkpoint.nextAttemptAt,
             errorCode: checkpoint.errorCode,
             ...(checkpoint.transport === undefined ? {} : { transport: checkpoint.transport }),
-            pendingDecision: checkpoint.pendingDecision,
+            pendingDecision: {
+              ...checkpoint.pendingDecision,
+              modelTurn: ensureAssistantItems(checkpoint.pendingDecision.modelTurn),
+            },
             receivedResults: checkpoint.receivedResults.map(asTool),
             ...(checkpoint.sourceStepId === undefined
               ? {}
@@ -112,6 +127,26 @@ export function toDurableContinuation(checkpoint: AgentContinuation): DurableCon
     default:
       return assertNever(checkpoint, "canonical continuation");
   }
+}
+
+function ensureAssistantItems(
+  modelTurn: AgentModelTurn,
+): AgentModelTurn & { readonly assistantItems: readonly AIModelTurnAssistantItem[] } {
+  if (modelTurn.assistantItems !== undefined) {
+    return modelTurn as AgentModelTurn & {
+      readonly assistantItems: readonly AIModelTurnAssistantItem[];
+    };
+  }
+  return {
+    ...modelTurn,
+    assistantItems: [
+      Object.freeze({
+        assistantItemId: `${modelTurn.callId}:item:000`,
+        phase: "UNKNOWN",
+        content: Object.freeze([...modelTurn.assistantMessage.content]),
+      }),
+    ],
+  };
 }
 
 /**
@@ -131,14 +166,19 @@ export function parseDurableContinuation(value: DurableContinuation) {
 }
 
 /** Project a persisted continuation onto the canonical domain. */
-export function toAgentContinuation(checkpoint: DurableContinuation): AgentContinuation {
+export function toAgentContinuation(
+  checkpoint: DurableContinuation | z.output<typeof RunContinuationCheckpointSchema>,
+): AgentContinuation {
   switch (checkpoint.type) {
     case "WAITING_TOOL_RESULTS":
       return {
         type: "WAITING_TOOL_RESULTS",
         runId: checkpoint.runId,
         sourceStepId: checkpoint.sourceStepId,
-        pendingDecision: checkpoint.pendingDecision,
+        pendingDecision: {
+          ...checkpoint.pendingDecision,
+          modelTurn: ensureAssistantItems(checkpoint.pendingDecision.modelTurn),
+        },
         ...(checkpoint.receivedResults === undefined
           ? {}
           : { receivedResults: checkpoint.receivedResults.map(asTool) }),
@@ -155,7 +195,10 @@ export function toAgentContinuation(checkpoint: DurableContinuation): AgentConti
         runId: checkpoint.runId,
         sourceStepId: checkpoint.sourceStepId,
         verificationPlanId: checkpoint.verificationPlanId,
-        finalDecision: checkpoint.finalDecision,
+        finalDecision: {
+          ...checkpoint.finalDecision,
+          modelTurn: ensureAssistantItems(checkpoint.finalDecision.modelTurn),
+        },
       };
     case "WAITING_VERIFICATION_REPAIR":
       return {
@@ -172,7 +215,10 @@ export function toAgentContinuation(checkpoint: DurableContinuation): AgentConti
         type: "WAITING_RESOURCE",
         runId: checkpoint.runId,
         sourceStepId: checkpoint.sourceStepId,
-        pendingDecision: checkpoint.pendingDecision,
+        pendingDecision: {
+          ...checkpoint.pendingDecision,
+          modelTurn: ensureAssistantItems(checkpoint.pendingDecision.modelTurn),
+        },
         reason: checkpoint.reason,
         replanCount: checkpoint.replanCount,
       };
@@ -199,7 +245,10 @@ export function toAgentContinuation(checkpoint: DurableContinuation): AgentConti
             nextAttemptAt: checkpoint.nextAttemptAt,
             errorCode: checkpoint.errorCode,
             ...(checkpoint.transport === undefined ? {} : { transport: checkpoint.transport }),
-            pendingDecision: checkpoint.pendingDecision,
+            pendingDecision: {
+              ...checkpoint.pendingDecision,
+              modelTurn: ensureAssistantItems(checkpoint.pendingDecision.modelTurn),
+            },
             receivedResults: checkpoint.receivedResults.map(asTool),
             ...(checkpoint.sourceStepId === undefined
               ? {}

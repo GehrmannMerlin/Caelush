@@ -48,7 +48,7 @@ export function ActiveTimeline({
       <VerificationActivity groups={timeline.verification} />
       {liveActivity.activities.map((activity) => (
         <Text key={activity.id}>
-          • {liveActivityLabel(activity.kind)}: {activity.text}
+          • {liveActivityLabel(activity.kind, activity.phase)}: {activity.text}
           {` · ${liveActivityStatusLabel(activity.status)}`}
         </Text>
       ))}
@@ -72,10 +72,17 @@ function liveActivityStatusLabel(
   }
 }
 
-function liveActivityLabel(kind: LiveActivityState["activities"][number]["kind"]): string {
+function liveActivityLabel(
+  kind: LiveActivityState["activities"][number]["kind"],
+  phase: LiveActivityState["activities"][number]["phase"],
+): string {
   switch (kind) {
     case "MODEL_TEXT":
-      return "Answer";
+      return phase === "COMMENTARY"
+        ? "Progress"
+        : phase === "FINAL_ANSWER"
+          ? "Answer"
+          : "Assistant text";
     case "MODEL_REASONING":
       return "Reasoning";
     case "MODEL_TOOL_CALL":

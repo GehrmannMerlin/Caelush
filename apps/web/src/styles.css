@@ -968,8 +968,17 @@ textarea:disabled {
 
 .turn-presentation-summary-copy {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+}
+
+.turn-presentation-task-elapsed {
+  flex: 0 0 auto;
+  color: #7891a8;
+  font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .turn-presentation-kicker,
@@ -1030,6 +1039,33 @@ textarea:disabled {
 
 .turn-presentation-item--assistant .turn-presentation-item-label {
   color: #1e5b96;
+}
+
+.assistant-markdown-image-disabled {
+  color: var(--web-muted, #64756d);
+  font-size: 0.9em;
+}
+
+.turn-presentation-item--commentary {
+  padding: 3px 0 1px 30px;
+}
+
+.turn-presentation-item--commentary + .turn-presentation-item--commentary {
+  margin-top: -3px;
+}
+
+.turn-presentation-item--commentary .assistant-markdown :is(p, ul, ol, blockquote, table, pre) {
+  margin-block: 0.45em;
+}
+
+.turn-presentation-model-drafts {
+  padding-top: 3px;
+  border-top: 1px dashed #e5edf5;
+}
+
+.turn-presentation-model-draft {
+  padding: 3px 0 1px 30px;
+  color: #45627e;
 }
 
 .assistant-markdown {
@@ -1209,6 +1245,27 @@ textarea:disabled {
   margin-top: 5px;
   color: #7c95ad;
   font-size: 0.72rem;
+}
+
+.turn-presentation-tool-details {
+  margin-top: 5px;
+  color: #6f879e;
+  font-size: 0.74rem;
+}
+
+.turn-presentation-tool-details > summary {
+  width: fit-content;
+  cursor: pointer;
+  user-select: none;
+}
+
+.turn-presentation-tool-details > summary:hover,
+.turn-presentation-tool-details > summary:focus-visible {
+  color: #315f8a;
+}
+
+.turn-presentation-tool-details-content {
+  padding-top: 2px;
 }
 
 .turn-presentation-preview {
@@ -5092,6 +5149,7 @@ body {
 
 .session-scroll {
   display: flex;
+  min-width: 0;
   min-height: auto;
   flex: 0 0 auto;
   flex-direction: column;
@@ -5103,6 +5161,8 @@ body {
 }
 
 .conversation-history {
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
   flex: 0 0 auto;
 }
 
@@ -5434,7 +5494,16 @@ body {
 /* Inline execution feed: the page owns scrolling, while the details element remains collapsible. */
 .turn-presentation-feed {
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   margin: 0;
+}
+
+.turn-presentation-process,
+.turn-presentation-body,
+.turn-presentation-final {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .turn-presentation-process {
@@ -5451,8 +5520,12 @@ body {
 }
 
 .turn-presentation-summary-copy {
-  align-items: flex-start;
-  gap: 0;
+  align-items: center;
+  gap: 12px;
+}
+
+.turn-presentation-task-elapsed {
+  font-size: 0.74rem;
 }
 
 .turn-presentation-logo {
@@ -5462,6 +5535,29 @@ body {
   max-width: min(100%, 9rem);
   object-fit: contain;
   object-position: left center;
+}
+
+@media (max-width: 640px) {
+  .turn-presentation-summary {
+    column-gap: 10px;
+  }
+
+  .turn-presentation-summary-copy {
+    gap: 8px;
+  }
+
+  .turn-presentation-logo {
+    height: 1.5rem;
+    max-width: min(100%, 6rem);
+  }
+
+  .turn-presentation-task-elapsed {
+    font-size: 0.7rem;
+  }
+
+  .turn-presentation-summary-status {
+    font-size: 0.7rem;
+  }
 }
 
 .turn-presentation-body {

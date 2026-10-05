@@ -3,6 +3,15 @@ import { defineConfig, loadEnv } from "vite";
 export default defineConfig(({ mode }) => {
   const environment = loadEnv(mode, process.cwd(), "");
   return {
+    plugins: [
+      {
+        name: "caelush-web-development-bootstrap",
+        apply: "serve",
+        transformIndexHtml(html) {
+          return html.replace("__CAELUSH_BOOTSTRAP__", "{}");
+        },
+      },
+    ],
     server: {
       host: "127.0.0.1",
       port: 5173,

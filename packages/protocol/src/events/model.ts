@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AssistantMessagePhaseSchema } from "../api/transcript.js";
 import { TimestampMsSchema } from "../primitives/time.js";
 import {
   CoalescibleTransientEventMetaSchema,
@@ -11,6 +12,20 @@ export const ModelTextDeltaEventSchema = createVersionedEventSchema(
   "model.text.delta",
   1,
   z.object({ text: z.string() }).strict(),
+  OrderedTransientEventMetaSchema,
+);
+
+/** Phase-aware assistant-item delta. V1 remains registered for historical live-event replay. */
+export const ModelTextDeltaEventV2Schema = createVersionedEventSchema(
+  "model.text.delta",
+  2,
+  z
+    .object({
+      text: z.string(),
+      assistantItemId: z.string().min(1).max(512),
+      phase: AssistantMessagePhaseSchema,
+    })
+    .strict(),
   OrderedTransientEventMetaSchema,
 );
 
@@ -84,6 +99,7 @@ export const ModelStatusEventSchema = createVersionedEventSchema(
 });
 
 export type ModelTextDeltaEvent = z.infer<typeof ModelTextDeltaEventSchema>;
+export type ModelTextDeltaEventV2 = z.infer<typeof ModelTextDeltaEventV2Schema>;
 export type ModelReasoningSummaryDeltaEvent = z.infer<typeof ModelReasoningSummaryDeltaEventSchema>;
 export type ModelToolCallDeltaEvent = z.infer<typeof ModelToolCallDeltaEventSchema>;
 export type ModelStatusEvent = z.infer<typeof ModelStatusEventSchema>;
