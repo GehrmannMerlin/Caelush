@@ -53,6 +53,7 @@ export {
   redactJson,
   redactToolArgumentsForPresentation,
   redactText,
+  tryRedactJson,
   secretDetector,
   secretRedactor,
   MAX_SECRET_JSON_DEPTH,
@@ -88,6 +89,10 @@ export type {
   V1ToolExecutionSecurity,
 } from "./default-composition.js";
 export type {
+  JsonRedactionLimitReason,
+  JsonRedactionLimits,
+  JsonRedactionOutcome,
+  JsonRedactionReport,
   SecretCategory,
   SecretDetectionReport,
   SecretDetector,
