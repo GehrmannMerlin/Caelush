@@ -3536,7 +3536,6 @@ export class RunController {
    * CANONICAL_ACCEPT          PLAN -> MATERIALIZE -> COMMIT -> NOTIFY -> onVerifiedCompletion
    * CANONICAL_REJECT          the same canonical path, to FAILED
    * REPAIR_COMPATIBILITY      the durable WAITING_VERIFICATION_REPAIR boundary
-   * RETRYABLE_ERROR_SUSPEND   nothing is written; the Run keeps its AWAITING_VERIFICATION
    * TERMINATION_AUTHORITY     cancellation or deadline, which own their own settlement
    * ```
    *
@@ -3570,11 +3569,6 @@ export class RunController {
         if (authority === "UNEXPECTED_ABORT") {
           return { kind: "RESULT", result: await this.finalizeAbortedExecution(current) };
         }
-        return { kind: "RESULT", result: this.resultFromSnapshot(current) };
-      case "RETRYABLE_ERROR_SUSPEND":
-        // The Run already holds exactly the boundary this outcome means: a durable
-        // `AWAITING_VERIFICATION` with its plan and its evidence intact. Nothing is committed and the
-        // drive ends here, which is what keeps a retryable completion error from becoming a busy loop.
         return { kind: "RESULT", result: this.resultFromSnapshot(current) };
       case "REPAIR_COMPATIBILITY": {
         const repaired = await this.settleVerificationRepair(current, directive, route);
@@ -3631,7 +3625,12 @@ export class RunController {
       ...(completion === undefined ? {} : { completion }),
       ownership: { eventIds: this.dependencies.eventIdFactory },
     });
-    const committed = await this.commitVerifiedCompletion(materialized, observation);
+    let committed: RunExecutionCommitResult;
+    try {
+      committed = await this.commitVerifiedCompletion(materialized, observation);
+    } catch {
+      return this.settleCompletionCommitFailure(current, directive, observation);
+    }
     this.notify(committed.events);
     if (committed.snapshot.run.status === "COMPLETED") {
       const finalResult = committed.snapshot.run.finalResult;
@@ -3642,6 +3641,61 @@ export class RunController {
         .catch(() => undefined);
     }
     return { kind: "RESULT", result: this.resultFromSnapshot(committed.snapshot) };
+  }
+
+  /**
+   * Settle a completion persistence failure against the latest durable boundary.
+   *
+   * The verified result was not committed, so it cannot be exposed as completed. Reload before
+   * settling so cancellation, timeout, or a concurrent terminal transition keeps its authority.
+   */
+  private async settleCompletionCommitFailure(
+    current: RunExecutionSnapshot,
+    directive: EvaluateCompletionDirective,
+    observation: CompletionGateObservation,
+  ): Promise<ToolEffectSettlement> {
+    const latest = await this.load(current.run.id);
+    const authority = this.resolveAuthority(latest, this.executionSignal(latest.run.id).aborted);
+    if (authority === "CANCELLED") {
+      return { kind: "RESULT", result: await this.finalizeCancellation(latest) };
+    }
+    if (authority === "TIMEOUT") {
+      return { kind: "RESULT", result: await this.finalizeTimeout(latest) };
+    }
+    if (authority === "UNEXPECTED_ABORT") {
+      return { kind: "RESULT", result: await this.finalizeAbortedExecution(latest) };
+    }
+    if (authority === "TERMINAL") {
+      return { kind: "RESULT", result: this.resultFromSnapshot(latest) };
+    }
+
+    const plan = observation.plan;
+    if (
+      latest.run.status !== "VERIFYING" ||
+      latest.continuation?.type !== "AWAITING_VERIFICATION" ||
+      latest.continuation.sourceStepId !== directive.sourceStepId ||
+      (plan !== undefined && latest.continuation.verificationPlanId !== plan.id)
+    ) {
+      return { kind: "RESULT", result: this.resultFromSnapshot(latest) };
+    }
+    if (latest.state === undefined) {
+      throw new RunControllerInfrastructureError(
+        "Verification could not be settled because Run state is unavailable.",
+      );
+    }
+
+    const now = this.dependencies.clock.now();
+    const error: AgentError = {
+      code: "VERIFICATION_FAILED",
+      message: "Verification could not be finalized.",
+      retryable: false,
+      phase: "VERIFICATION",
+    };
+    const failedRun = markAgentRunFailed(latest.run, now);
+    const failedState = markAgentStateFailed(latest.state, error, now);
+    const failed = await this.commitFailure(latest, failedRun, failedState, undefined);
+    this.notify(failed.events);
+    return { kind: "RESULT", result: this.resultFromSnapshot(failed.snapshot) };
   }
 
   /**

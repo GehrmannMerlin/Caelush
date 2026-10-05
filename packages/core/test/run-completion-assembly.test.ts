@@ -17,6 +17,7 @@ import {
   candidateTurn,
   completionGateOver,
   harness3e,
+  restoreCommittedCandidateBoundary,
   stubReviewer,
   type CompletionCommitCounter,
 } from "./support/phase-3e-completion.js";
@@ -275,9 +276,8 @@ describe("Phase 3F completion assembly", () => {
   });
 
   it("refuses a late evaluation carrying another Run's identity", async () => {
-    // The Run parks on its durable verification boundary: a host that composed no verification
-    // execution store cannot resolve completion, so the boundary stays open for the refusal to be
-    // aimed at it.
+    // A host without verification execution fails. Restore the committed boundary only to exercise
+    // the direct gate contract with a deliberately foreign identity.
     const harness = harness3e({
       script: () => candidateTurn("done"),
       composition: "CANONICAL_ASSEMBLY",
@@ -288,8 +288,12 @@ describe("Phase 3F completion assembly", () => {
       composition: "CANONICAL_ASSEMBLY",
       verificationStore: false,
     });
-    await harness.controller.start(harness.store.snapshot.run.id);
-    await other.controller.start(other.store.snapshot.run.id);
+    const failed = await harness.controller.start(harness.store.snapshot.run.id);
+    const otherFailed = await other.controller.start(other.store.snapshot.run.id);
+    expect(failed.run.status).toBe("FAILED");
+    expect(otherFailed.run.status).toBe("FAILED");
+    restoreCommittedCandidateBoundary(harness);
+    restoreCommittedCandidateBoundary(other);
     expect(harness.snapshot().run.status).toBe("VERIFYING");
 
     // A gate captured for this Run, handed another Run's identity, refuses loudly rather than

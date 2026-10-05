@@ -110,10 +110,15 @@ export function createRunCompletionGate(
     gate: {
       id: CODING_COMPLETION_GATE_ID,
       evaluate: async (input) => {
-        const outcome = await evaluateCompletion(dependencies, observation, input);
-        return outcome.kind === "ACCEPT"
-          ? { kind: "ACCEPT", finalResult: outcome.finalResult }
-          : outcome.decision;
+        try {
+          const outcome = await evaluateCompletion(dependencies, observation, input);
+          return outcome.kind === "ACCEPT"
+            ? { kind: "ACCEPT", finalResult: outcome.finalResult }
+            : outcome.decision;
+        } catch (error) {
+          if (error instanceof CompletionGateIdentityError) throw error;
+          return completionError("VERIFICATION_INFRASTRUCTURE_ERROR").decision;
+        }
       },
     },
   };
@@ -210,7 +215,7 @@ async function evaluateCompletion(
   // The Run Layer resolves termination before *and* after this call, and it wins. A gate that
   // returned REJECT here would turn a cancellation or a deadline into a failed Run, which the frozen
   // lifecycle forbids.
-  if (input.signal.aborted) return suspended("COMPLETION_INTERRUPTED");
+  if (input.signal.aborted) return completionError("COMPLETION_INTERRUPTED");
 
   assertInputMatchesRun(dependencies, input);
 
@@ -218,11 +223,11 @@ async function evaluateCompletion(
   if (plan === null) {
     // The Run is bound to a plan that does not exist. That is a corrupt ledger rather than a candidate
     // that failed verification, and it must never be read as an acceptable completion.
-    return suspended("VERIFICATION_PLAN_MISSING");
+    return completionError("VERIFICATION_PLAN_MISSING");
   }
   const candidateHash = computeVerificationCandidateTextHash(input.candidate.candidateText);
   if (plan.candidateHash !== candidateHash) {
-    return suspended("VERIFICATION_CANDIDATE_MISMATCH");
+    return completionError("VERIFICATION_CANDIDATE_MISMATCH");
   }
   observation.plan = plan;
   return runCompletionVerification(dependencies, observation, plan, candidateHash);
@@ -308,23 +313,19 @@ export class CompletionGateInfrastructureError extends Error {
  * A completion the gate could not decide.
  *
  * ```text
- * ERROR + retryable: true
+ * ERROR + retryable: false
  * ```
  *
- * Every one of these leaves the Run exactly where it is: `VERIFYING`, holding its durable
- * `AWAITING_VERIFICATION` boundary with its plan and its evidence intact. A later explicit recovery
- * evaluates the same candidate against the same plan, reusing whatever verification work is already
- * durable.
+ * Every verification error is settled by RunController as a failed Run. There is no durable retry
+ * schedule, so leaving the Run in `VERIFYING` would strand it without an owner that can resume it.
  *
- * `REJECT` would be the wrong answer and a dangerous one: it fails the Run with
- * `VERIFICATION_FAILED`, which is a claim that the candidate was *refused*. None of these outcomes is
- * a verdict about the candidate at all — the gate could not reach one — and recording a refusal that
- * never happened is exactly the fabrication the frozen contract's `ERROR` arm exists to prevent.
- *
- * The `retryable` flag is what stops a drive loop from spinning: the Run Layer ends its call on a
- * retryable completion ERROR rather than asking the gate again.
+ * None of these outcomes is a verdict about the candidate at all — the gate could not reach one. Keep
+ * that distinction in the frozen gate result; RunController maps the ERROR to its canonical FAILED
+ * transition because no durable retry schedule exists.
  */
-function suspended(reason: string): CompletionVerificationOutcome {
+function completionError(
+  reason: string,
+): Extract<CompletionVerificationOutcome, { readonly kind: "ERROR" }> {
   return {
     kind: "ERROR",
     decision: {
@@ -335,21 +336,19 @@ function suspended(reason: string): CompletionVerificationOutcome {
         retryable: false,
         phase: "VERIFICATION",
       },
-      retryable: true,
+      retryable: false,
     },
   };
 }
 
 /**
- * The sanitized error code a suspended completion carries.
+ * The sanitized error code a failed completion carries.
  *
  * The frozen `AgentError.code` is a closed vocabulary, so an internal reason is projected onto
- * `INTERNAL_ERROR` rather than invented. The reason itself never crosses: a durable error is public
+ * `VERIFICATION_FAILED`. The reason itself never crosses: a durable error is public
  * data, and a ledger or configuration failure may quote a path.
  */
 function completionErrorCode(reason: string): "INTERNAL_ERROR" | "VERIFICATION_FAILED" {
   void reason;
-  return "INTERNAL_ERROR";
+  return "VERIFICATION_FAILED";
 }
-
-export { suspended };

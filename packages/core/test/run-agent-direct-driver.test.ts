@@ -94,7 +94,10 @@ function makeRun(overrides: Record<string, unknown> = {}) {
     runtime: { id: "local", kind: "fixture" },
     permissionProfile: "READ_ONLY",
     approvalPolicy: "ON_BOUNDARY",
-    securityPolicy: { ...securityPolicy, policyDigest: computeSecurityPolicyDigest(securityPolicy) },
+    securityPolicy: {
+      ...securityPolicy,
+      policyDigest: computeSecurityPolicyDigest(securityPolicy),
+    },
     limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 100_000 },
     createdAt: createTimestampMs(1),
     ...overrides,
@@ -263,9 +266,8 @@ function harness(options: {
       }),
       normalizer: createToolResultBatchNormalizer(),
     },
-    // The FinalCandidate compatibility bridge is Phase 3E's authority to keep: a candidate moves the
-    // Run to VERIFYING with a real plan, and never to COMPLETED from here. The planner is the one
-    // production composition supplies; this fixture mirrors it so the bridge runs for real.
+    // The FinalCandidate compatibility bridge opens the durable plan. This fixture deliberately omits
+    // verification execution, so Core must fail the Run after the boundary instead of parking it.
     verificationPlanner: {
       plan: ({
         runId,
@@ -472,7 +474,9 @@ describe("production ADVANCE_AGENT settlement", () => {
               return batchFixture.execute(request);
             },
           },
-          feedback: createModelToolFeedbackProjector({ projection: toContextObservationProjection() }),
+          feedback: createModelToolFeedbackProjector({
+            projection: toContextObservationProjection(),
+          }),
           normalizer: createToolResultBatchNormalizer(),
         },
       },
@@ -487,7 +491,8 @@ describe("production ADVANCE_AGENT settlement", () => {
     await running;
 
     expect(h.notifications.map((event) => event.type)).not.toContain("retry.scheduled");
-    expect(h.store.snapshot.continuation?.type).toBe("AWAITING_VERIFICATION");
+    expect(h.store.snapshot.run.status).toBe("FAILED");
+    expect(h.store.snapshot.continuation).toBeUndefined();
   });
 
   it("drives a complete Tool round trip through the driver, the planner and the frozen loop", async () => {
@@ -539,26 +544,32 @@ describe("production ADVANCE_AGENT settlement", () => {
     const types = h.notifications.map((event) => event.type);
     expect(types.filter((type) => type === "llm.started")).toHaveLength(2);
     expect(types.filter((type) => type === "llm.completed")).toHaveLength(2);
-    // The second turn's answer is the candidate the verification bridge bound to a real plan; the
-    // Run is VERIFYING and has never completed.
-    expect(result.status).toBe("AWAITING_VERIFICATION");
-    expect(h.store.snapshot.run.status).toBe("VERIFYING");
+    // The second turn's answer is bound to a real plan, then the missing verification store fails it.
+    expect(result.status).toBe("FAILED");
+    expect(h.store.snapshot.run.status).toBe("FAILED");
     expect(types).toContain("verification.planned");
     expect(types).not.toContain("run.completed");
+    expect(types).toContain("run.failed");
   });
 
-  it("settles FINAL_CANDIDATE through the verification bridge, never to COMPLETED", async () => {
+  it("fails FINAL_CANDIDATE when verification execution is not composed", async () => {
     const h = harness({ executor: fakeFrozenModelTurnExecutor(async () => turn()) });
 
     const result = await h.controller.start(h.store.snapshot.run.id);
 
-    expect(result.status).toBe("AWAITING_VERIFICATION");
-    expect(h.store.snapshot.run.status).toBe("VERIFYING");
+    expect(result.status).toBe("FAILED");
+    expect(h.store.snapshot.run.status).toBe("FAILED");
     expect(h.store.snapshot.run.finalResult).toBeUndefined();
     // The candidate's Step settled exactly once, with the candidate text bound to a real plan.
     expect(h.store.steps.get(h.allocatedSteps[0]!)).toMatchObject({ status: "COMPLETED" });
     expect(h.store.snapshot.state?.usage.steps).toBe(1);
-    const continuation = h.store.snapshot.continuation;
+    const boundary = h.store.commits.find(
+      (commit) =>
+        commit.continuation?.operation === "SET" &&
+        commit.continuation.checkpoint.type === "AWAITING_VERIFICATION",
+    );
+    const continuation =
+      boundary?.continuation?.operation === "SET" ? boundary.continuation.checkpoint : undefined;
     expect(continuation?.type).toBe("AWAITING_VERIFICATION");
     expect(
       continuation?.type === "AWAITING_VERIFICATION" ? continuation.sourceStepId : undefined,
@@ -571,8 +582,9 @@ describe("production ADVANCE_AGENT settlement", () => {
     const types = h.notifications.map((event) => event.type);
     expect(types).toContain("verification.planned");
     expect(types).toContain("status.changed");
-    // Completion authority is Phase 3E: this bridge never completes a Run.
+    // Completion authority owns the outcome; a missing verifier fails, and never bypasses authority.
     expect(types).not.toContain("run.completed");
+    expect(types).toContain("run.failed");
     expect(types.filter((type) => type === "llm.completed")).toHaveLength(1);
     expect(types.filter((type) => type === "reasoning.summary")).toHaveLength(1);
   });
@@ -853,7 +865,11 @@ describe("production ADVANCE_AGENT settlement", () => {
         modelId,
         transportId: "default",
       }),
-      next: ({ current, attemptedTransportIds, errorCode }: {
+      next: ({
+        current,
+        attemptedTransportIds,
+        errorCode,
+      }: {
         current: { providerId: string; modelId: string; transportId: string };
         attemptedTransportIds: readonly string[];
         errorCode: string;
@@ -896,7 +912,8 @@ describe("production ADVANCE_AGENT settlement", () => {
 
     expect(recovered.status).not.toBe("WAITING_RETRY");
     expect(call.transportIds).toEqual(["default", "backup"]);
-    expect(h.store.snapshot.continuation?.type).toBe("AWAITING_VERIFICATION");
+    expect(recovered.status).toBe("FAILED");
+    expect(h.store.snapshot.continuation).toBeUndefined();
   });
 
   it.each([
@@ -921,26 +938,23 @@ describe("production ADVANCE_AGENT settlement", () => {
       "RETRY_AFTER_EXCEEDS_POLICY",
       "FAILED",
     ],
-  ] as const)("records retry exhaustion when %s prevents another attempt", async (
-    _name,
-    run,
-    failure,
-    reason,
-    expectedStatus,
-  ) => {
-    const call = fakeFrozenModelTurnExecutor(async () => {
-      throw failure();
-    });
-    const h = harness({ run, executor: call });
+  ] as const)(
+    "records retry exhaustion when %s prevents another attempt",
+    async (_name, run, failure, reason, expectedStatus) => {
+      const call = fakeFrozenModelTurnExecutor(async () => {
+        throw failure();
+      });
+      const h = harness({ run, executor: call });
 
-    await h.controller.start(h.store.snapshot.run.id);
+      await h.controller.start(h.store.snapshot.run.id);
 
-    expect(h.store.snapshot.run.status).toBe(expectedStatus);
-    expect(h.notifications.filter((event) => event.type === "retry.exhausted")).toMatchObject([
-      { payload: { attempt: 1, retriesUsed: 0, reason } },
-    ]);
-    expect(h.notifications.filter((event) => event.type === "retry.scheduled")).toHaveLength(0);
-  });
+      expect(h.store.snapshot.run.status).toBe(expectedStatus);
+      expect(h.notifications.filter((event) => event.type === "retry.exhausted")).toMatchObject([
+        { payload: { attempt: 1, retriesUsed: 0, reason } },
+      ]);
+      expect(h.notifications.filter((event) => event.type === "retry.scheduled")).toHaveLength(0);
+    },
+  );
 
   it("settles CANCELLED through the termination authority, leaving no open Step", async () => {
     const controller = new AbortController();

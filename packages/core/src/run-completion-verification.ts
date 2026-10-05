@@ -110,9 +110,9 @@ export async function runCompletionVerification(
     await settleInterruptedChecks(dependencies, plan);
     const reloaded = await loadPlan(dependencies);
     if (reloaded === null) return errorOutcome("VERIFICATION_PLAN_MISSING");
-    return continueVerification(dependencies, observation, reloaded, candidateHash, true);
+    return continueVerification(dependencies, observation, reloaded, candidateHash);
   }
-  return continueVerification(dependencies, observation, plan, candidateHash, false);
+  return continueVerification(dependencies, observation, plan, candidateHash);
 }
 
 async function continueVerification(
@@ -120,15 +120,10 @@ async function continueVerification(
   observation: CompletionGateObservation,
   plan: VerificationPlan,
   candidateHash: string,
-  recheckAfterInterruption: boolean,
 ): Promise<CompletionVerificationOutcome> {
-  const withProjectChecks = await ensureProjectChecks(dependencies, plan, recheckAfterInterruption);
-  if (withProjectChecks.kind !== "CONTINUE") return withProjectChecks.outcome;
-  const current = withProjectChecks.plan;
-
   const recovery = recoveryStore(dependencies);
   if (recovery === undefined) return errorOutcome("VERIFICATION_STORE_UNAVAILABLE");
-  let execution = await recovery.getPlanExecutionSnapshot(current.id);
+  let execution = await recovery.getPlanExecutionSnapshot(plan.id);
   if (execution === null) return errorOutcome("VERIFICATION_EVIDENCE_MISSING");
   observation.plan = execution.plan;
 
@@ -137,58 +132,34 @@ async function continueVerification(
   observation.failedCheckIds = evaluation.failedCheckIds;
   observation.errorCheckIds = evaluation.errorCheckIds;
 
-  if (evaluation.status === "ERROR" && dependencies.mode === "RECOVER") {
-    const retryCheckIds = reviewerInfrastructureErrorCheckIds(
-      execution.plan,
-      execution.evidence,
-      evaluation.errorCheckIds,
-    );
-    if (retryCheckIds.length > 0) {
-      const retried = await runChangeChecks(
-        dependencies,
-        observation,
-        execution.plan,
-        candidateHash,
-        retryCheckIds,
-      );
-      if (retried.kind !== "CONTINUE") return retried.outcome;
-      execution = await recovery.getPlanExecutionSnapshot(current.id);
-      if (execution === null) return errorOutcome("VERIFICATION_EVIDENCE_MISSING");
-      observation.plan = execution.plan;
-      evaluation = evaluateVerification(execution.plan, execution.evidence);
-      observation.verificationStatus = evaluation.status;
-      observation.failedCheckIds = evaluation.failedCheckIds;
-      observation.errorCheckIds = evaluation.errorCheckIds;
-    }
-  }
-
-  if (evaluation.status === "FAILED") {
-    return repairOrReject(
-      dependencies,
-      observation,
-      execution.plan,
-      execution.evidence,
-      evaluation,
-    );
-  }
-  if (evaluation.status === "ERROR") {
-    if (hasReviewerInfrastructureError(execution.evidence, evaluation.errorCheckIds)) {
-      return errorOutcome("VERIFICATION_INFRASTRUCTURE_ERROR");
-    }
-    return {
-      kind: "REJECT",
-      decision: rejectDecision(
-        evaluation.status,
-        evaluation.failedCheckIds,
-        evaluation.errorCheckIds,
-      ),
-    };
-  }
-
-  const blockingBeforeChange = execution.plan.checks.some(
-    (check) => check.status === "FAILED" || check.status === "ERROR" || check.status === "RUNNING",
+  const persistedBlock = await outcomeForBlockingEvaluation(
+    dependencies,
+    observation,
+    execution.plan,
+    execution.evidence,
+    evaluation,
   );
-  if (blockingBeforeChange) return errorOutcome("VERIFICATION_BLOCKED");
+  if (persistedBlock !== undefined) return persistedBlock;
+
+  const withProjectChecks = await ensureProjectChecks(dependencies, observation, execution.plan);
+  if (withProjectChecks.kind !== "CONTINUE") return withProjectChecks.outcome;
+
+  execution = await recovery.getPlanExecutionSnapshot(withProjectChecks.plan.id);
+  if (execution === null) return errorOutcome("VERIFICATION_EVIDENCE_MISSING");
+  observation.plan = execution.plan;
+  evaluation = evaluateVerification(execution.plan, execution.evidence);
+  observation.verificationStatus = evaluation.status;
+  observation.failedCheckIds = evaluation.failedCheckIds;
+  observation.errorCheckIds = evaluation.errorCheckIds;
+
+  const projectBlock = await outcomeForBlockingEvaluation(
+    dependencies,
+    observation,
+    execution.plan,
+    execution.evidence,
+    evaluation,
+  );
+  if (projectBlock !== undefined) return projectBlock;
 
   const pendingChangeChecks = execution.plan.checks.some(
     (check) => check.spec.kind !== "PROJECT" && check.status === "PENDING",
@@ -216,29 +187,35 @@ async function continueVerification(
       candidateHash,
     );
   }
-  if (finalEvaluation.status === "ERROR") {
-    if (hasReviewerInfrastructureError(settled.evidence, finalEvaluation.errorCheckIds)) {
-      return errorOutcome("VERIFICATION_INFRASTRUCTURE_ERROR");
-    }
-    return {
-      kind: "REJECT",
-      decision: rejectDecision(
-        finalEvaluation.status,
-        finalEvaluation.failedCheckIds,
-        finalEvaluation.errorCheckIds,
-      ),
-    };
-  }
-  if (finalEvaluation.status === "FAILED") {
-    return repairOrReject(
-      dependencies,
-      observation,
-      settled.plan,
-      settled.evidence,
-      finalEvaluation,
+  const settledBlock = await outcomeForBlockingEvaluation(
+    dependencies,
+    observation,
+    settled.plan,
+    settled.evidence,
+    finalEvaluation,
+  );
+  if (settledBlock !== undefined) return settledBlock;
+  return errorOutcome("VERIFICATION_INCOMPLETE");
+}
+
+async function outcomeForBlockingEvaluation(
+  dependencies: CompletionVerificationContext,
+  observation: CompletionGateObservation,
+  plan: VerificationPlan,
+  evidence: readonly VerificationEvidence[],
+  evaluation: ReturnType<typeof evaluateVerification>,
+): Promise<CompletionVerificationOutcome | undefined> {
+  if (evaluation.status === "ERROR") {
+    return errorOutcome(
+      hasReviewerInfrastructureError(evidence, evaluation.errorCheckIds)
+        ? "REVIEWER_INFRASTRUCTURE_ERROR"
+        : "VERIFICATION_INFRASTRUCTURE_ERROR",
     );
   }
-  return errorOutcome("VERIFICATION_INCOMPLETE");
+  if (evaluation.status === "FAILED") {
+    return repairOrReject(dependencies, observation, plan, evidence, evaluation);
+  }
+  return undefined;
 }
 
 /* ------------------------------------------------------ project checks */
@@ -256,8 +233,8 @@ type StepResult =
  */
 async function ensureProjectChecks(
   dependencies: CompletionVerificationContext,
+  observation: CompletionGateObservation,
   plan: VerificationPlan,
-  recheckAfterInterruption: boolean,
 ): Promise<StepResult> {
   const pending = plan.checks.some(
     (check) => check.spec.kind === "PROJECT" && check.status === "PENDING",
@@ -269,43 +246,80 @@ async function ensureProjectChecks(
   const security = dependencies.security;
   const sanitizer = dependencies.evidenceSanitizer;
   const profileProvider = dependencies.profileProvider;
+  const recovery = recoveryStore(dependencies);
   if (
     runner === undefined ||
     execution === undefined ||
     executionStore === undefined ||
+    recovery === undefined ||
     security === undefined ||
     sanitizer === undefined ||
     profileProvider === undefined
   ) {
-    // A host that composed project verification out is not a completion failure: the plan's project
-    // checks simply cannot run, and the Run stays on its durable boundary.
+    // A plan with project checks but no execution authority cannot establish completion.
     return { kind: "STOP", outcome: errorOutcome("VERIFICATION_NOT_COMPOSED") };
   }
-  const config = await dependencies.configResolver.resolve(dependencies.run);
-  const profile = await profileProvider.getFreshProfile(dependencies.run, config);
-  await runner.run({
-    runId: dependencies.run.id,
-    sessionId: dependencies.run.sessionId,
-    plan,
-    profile,
-    permissionProfile: dependencies.run.permissionProfile,
-    approvalPolicy: dependencies.run.approvalPolicy,
-    signal: dependencies.signal,
-    now: () => dependencies.clock.now(),
-    resolverRegistry: dependencies.resolverRegistry ?? new ProjectCheckResolverRegistry(),
-    security,
-    execution,
-    store: executionStore,
-    evidenceIdFactory: dependencies.evidenceIdFactory ?? createVerificationEvidenceId,
-    evidenceSanitizer: sanitizer,
-    onCommittedEvents: (events) =>
-      dependencies.notifyCommitted(events as readonly DurableAgentEvent[]),
-  });
-  void recheckAfterInterruption;
+  let runnerResult: import("@caelush/verification").VerificationRunnerResult;
+  try {
+    const config = await dependencies.configResolver.resolve(dependencies.run);
+    const profile = await profileProvider.getFreshProfile(dependencies.run, config);
+    runnerResult = await runner.run({
+      runId: dependencies.run.id,
+      sessionId: dependencies.run.sessionId,
+      plan,
+      profile,
+      permissionProfile: dependencies.run.permissionProfile,
+      approvalPolicy: dependencies.run.approvalPolicy,
+      signal: dependencies.signal,
+      now: () => dependencies.clock.now(),
+      resolverRegistry: dependencies.resolverRegistry ?? new ProjectCheckResolverRegistry(),
+      security,
+      execution,
+      store: executionStore,
+      evidenceIdFactory: dependencies.evidenceIdFactory ?? createVerificationEvidenceId,
+      evidenceSanitizer: sanitizer,
+      onCommittedEvents: (events) =>
+        dependencies.notifyCommitted(events as readonly DurableAgentEvent[]),
+    });
+  } catch {
+    return { kind: "STOP", outcome: errorOutcome("VERIFICATION_INFRASTRUCTURE_ERROR") };
+  }
+  if (runnerResult.outcome === "CANCELLED") {
+    return { kind: "STOP", outcome: errorOutcome("VERIFICATION_CANCELLED") };
+  }
   const reloaded = await loadPlan(dependencies);
   if (reloaded === null)
     return { kind: "STOP", outcome: errorOutcome("VERIFICATION_PLAN_MISSING") };
-  return { kind: "CONTINUE", plan: reloaded };
+  const executionSnapshot = await recovery.getPlanExecutionSnapshot(reloaded.id);
+  if (executionSnapshot === null) {
+    return { kind: "STOP", outcome: errorOutcome("VERIFICATION_EVIDENCE_MISSING") };
+  }
+  if (runnerResult.outcome === "BLOCKED") {
+    const evaluation = evaluateVerification(executionSnapshot.plan, executionSnapshot.evidence);
+    observation.plan = executionSnapshot.plan;
+    observation.verificationStatus = evaluation.status;
+    observation.failedCheckIds = evaluation.failedCheckIds;
+    observation.errorCheckIds = evaluation.errorCheckIds;
+    const outcome = await outcomeForBlockingEvaluation(
+      dependencies,
+      observation,
+      executionSnapshot.plan,
+      executionSnapshot.evidence,
+      evaluation,
+    );
+    return {
+      kind: "STOP",
+      outcome: outcome ?? errorOutcome("VERIFICATION_BLOCKED"),
+    };
+  }
+  if (
+    executionSnapshot.plan.checks.some(
+      (check) => check.spec.kind === "PROJECT" && check.status === "PENDING",
+    )
+  ) {
+    return { kind: "STOP", outcome: errorOutcome("VERIFICATION_INCOMPLETE") };
+  }
+  return { kind: "CONTINUE", plan: executionSnapshot.plan };
 }
 
 /* ------------------------------------------------------- change checks */
@@ -315,7 +329,6 @@ async function runChangeChecks(
   observation: CompletionGateObservation,
   plan: VerificationPlan,
   candidateHash: string,
-  retryCheckIds: readonly VerificationCheck["id"][] = [],
 ): Promise<
   | { readonly kind: "CONTINUE" }
   | { readonly kind: "STOP"; readonly outcome: CompletionVerificationOutcome }
@@ -347,7 +360,6 @@ async function runChangeChecks(
     store,
     signal,
     now: () => dependencies.clock.now(),
-    retryCheckIds,
     discoveryEvidence: (check, capturedAt) =>
       VerificationEvidenceSchema.parse({
         id: evidenceId(),
@@ -816,14 +828,14 @@ function rejectDecision(
 /**
  * A completion the gate could not decide.
  *
- * Every one of these is `retryable`, and that is the point: none is a verdict about the candidate, so
- * the Run stays on its durable `AWAITING_VERIFICATION` boundary and a later explicit recovery may
- * evaluate it again. Returning `REJECT` would durably record a failed verification nobody performed.
+ * None of these is a verdict about the candidate, but this Run has no durable retry schedule. The
+ * sanitized error therefore ends the Run through Core's canonical failure transition.
  */
 function errorOutcome(reason: string): CompletionVerificationOutcome {
+  void reason;
   const error: AgentError = {
-    code: "INTERNAL_ERROR",
-    message: "Completion evaluation could not reach a decision.",
+    code: "VERIFICATION_FAILED",
+    message: "Verification could not establish a trustworthy completion result.",
     retryable: false,
     phase: "VERIFICATION",
   };
@@ -831,8 +843,8 @@ function errorOutcome(reason: string): CompletionVerificationOutcome {
     kind: "ERROR",
     decision: {
       kind: "ERROR",
-      error: { ...error, code: reason as AgentError["code"] },
-      retryable: true,
+      error,
+      retryable: false,
     },
   };
 }
@@ -919,27 +931,6 @@ function hasReviewerInfrastructureError(
     const errorCode = stringValue(details?.errorCode);
     return errorCode?.startsWith("REVIEWER_") === true;
   });
-}
-
-function reviewerInfrastructureErrorCheckIds(
-  plan: VerificationPlan,
-  evidence: readonly VerificationEvidence[],
-  errorCheckIds: readonly VerificationCheck["id"][],
-): VerificationCheck["id"][] {
-  const errorIds = new Set(errorCheckIds);
-  return plan.checks
-    .filter(
-      (check) => check.spec.kind === "TASK" && check.status === "ERROR" && errorIds.has(check.id),
-    )
-    .filter((check) =>
-      evidence.some((item) => {
-        if (item.kind !== "TASK" || item.checkId !== check.id) return false;
-        const details = objectDetails(item.details);
-        const errorCode = stringValue(details?.errorCode);
-        return errorCode?.startsWith("REVIEWER_") === true;
-      }),
-    )
-    .map((check) => check.id);
 }
 
 function objectDetails(value: unknown): Record<string, unknown> | undefined {

@@ -15,7 +15,7 @@ import type { CompletionGateObservation } from "./run-completion-observation.js"
  * ```text
  * COMPLETION REPAIR                     needs a failed plan identity, failed check identities and
  *                                       evidence identities the frozen repair request does not carry
- * COMPLETION ERROR (retryable)          needs a retry schedule no durable continuation expresses
+ * COMPLETION ERROR                      a durable retry schedule is absent, so the Run must fail
  * ```
  *
  * This router is the boundary that decides *which* authority settles a completion effect, and it is
@@ -25,7 +25,6 @@ import type { CompletionGateObservation } from "./run-completion-observation.js"
  * CANONICAL_ACCEPT          the frozen planner completes the Run with the verified result
  * CANONICAL_REJECT          the frozen planner fails the Run with the gate's own error
  * REPAIR_COMPATIBILITY      the durable WAITING_VERIFICATION_REPAIR boundary, from the observation
- * RETRYABLE_ERROR_SUSPEND   the Run stays on its durable AWAITING_VERIFICATION boundary
  * TERMINATION_AUTHORITY     cancellation or a deadline, which own their own settlement
  * ```
  *
@@ -62,10 +61,6 @@ export type CompletionEffectSettlementRoute =
       readonly errorCheckIds: readonly import("@caelush/protocol").VerificationCheckId[];
       readonly evidenceIds: readonly import("@caelush/protocol").VerificationEvidenceId[];
       readonly repairCycle: number;
-    }
-  | {
-      readonly route: "RETRYABLE_ERROR_SUSPEND";
-      readonly error: import("@caelush/protocol").AgentError;
     }
   | { readonly route: "TERMINATION_AUTHORITY" };
 
@@ -116,20 +111,8 @@ export function classifyCompletionEffectSettlement(
         repairCycle: requireRepairCycle(input, decision),
       };
     case "ERROR":
-      if (decision.retryable) {
-        // ```text
-        // the gate could not decide
-        // ```
-        //
-        // The Run already holds exactly the boundary this outcome means: a durable
-        // `AWAITING_VERIFICATION` with its plan and evidence intact. Nothing is committed, and the
-        // settlement ends the current drive rather than asking the gate again — which is what keeps a
-        // retryable completion error from becoming a busy loop.
-        return { route: "RETRYABLE_ERROR_SUSPEND", error: decision.error };
-      }
-      // A non-retryable completion ERROR is a deterministic verification failure: the gate established
-      // that it cannot decide and that another attempt would not change the answer. It settles exactly
-      // like a rejection, through the same planner branch.
+      // Completion errors have no durable retry schedule. Preserve the sanitized error, but settle
+      // through the canonical Run failure path even if a legacy producer marked the decision retryable.
       return {
         route: "CANONICAL_REJECT",
         decision: { kind: "REJECT", error: decision.error },

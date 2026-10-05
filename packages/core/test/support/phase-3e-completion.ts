@@ -547,6 +547,9 @@ export interface Phase3EHarnessOptions {
     | readonly VerificationToolObservationInput[]
     | ((runId: RunId) => readonly VerificationToolObservationInput[]);
   readonly projectRunner?: StubProjectRunner;
+  readonly profileProvider?: RunCompletionGateDependencies["profileProvider"];
+  readonly execution?: RunCompletionGateDependencies["execution"];
+  readonly security?: RunCompletionGateDependencies["security"];
   readonly repairPolicy?: VerificationRepairPolicy;
   readonly planCount?: (runId: RunId) => Promise<number>;
   /** Compose the completion persistence port; `false` models a host with no coding completion path. */
@@ -687,6 +690,9 @@ export function harness3e(options: Phase3EHarnessOptions): Phase3EHarness {
     checkIdFactory: createVerificationCheckId,
     evidenceIdFactory: createVerificationEvidenceId,
     runner: projectRunner,
+    ...(options.profileProvider === undefined ? {} : { profileProvider: options.profileProvider }),
+    ...(options.execution === undefined ? {} : { execution: options.execution }),
+    ...(options.security === undefined ? {} : { security: options.security }),
     workspace,
     git,
     reviewer,
@@ -782,6 +788,30 @@ export function harness3e(options: Phase3EHarnessOptions): Phase3EHarness {
 }
 
 /* ----------------------------------------------------------------- helpers */
+
+/** Restore the committed pre-evaluation boundary for tests that call the gate directly. */
+export function restoreCommittedCandidateBoundary(harness: Phase3EHarness): void {
+  const boundary = harness.store.commits.find(
+    (commit) =>
+      commit.continuation?.operation === "SET" &&
+      commit.continuation.checkpoint.type === "AWAITING_VERIFICATION",
+  );
+  if (boundary?.continuation?.operation !== "SET" || boundary.state === undefined) {
+    throw new Error("the candidate verification boundary was not committed");
+  }
+  const stateRevision = (boundary.expectedStateRevision ?? 0) + 1;
+  const continuationRevision = (boundary.expectedContinuationRevision ?? 0) + 1;
+  harness.store.stateRevision = stateRevision;
+  harness.store.continuationRevision = continuationRevision;
+  harness.store.snapshot = {
+    ...harness.store.snapshot,
+    run: boundary.run,
+    state: boundary.state,
+    stateRevision,
+    continuationRevision,
+    continuation: boundary.continuation.checkpoint,
+  };
+}
 
 /**
  * A completion gate bound to the durable facts a parked Run is holding.

@@ -386,8 +386,9 @@ describe("RunController.start", () => {
     });
 
     const result = await controller.start(run.id);
-    expect(result.status).toBe("AWAITING_VERIFICATION");
-    expect(store.snapshot.run.status).toBe("VERIFYING");
+    expect(result.status).toBe("FAILED");
+    expect(store.snapshot.run.status).toBe("FAILED");
+    expect(store.snapshot.continuation).toBeUndefined();
     expect(store.commits[0]?.run.status).toBe("RUNNING");
     expect(store.commits[0]?.events.map((event) => event.type)).toEqual([
       "run.started",
@@ -399,10 +400,13 @@ describe("RunController.start", () => {
       conversationTurnId: store.commits[0]?.messagesToAppend[0]?.draft.conversationTurnId,
       messageType: store.commits[0]?.messagesToAppend[0]?.draft.messageType,
     });
-    expect(store.commits.at(-1)?.events.map((event) => event.type)).toContain(
-      "verification.planned",
-    );
+    expect(
+      store.commits.some((commit) =>
+        commit.events.some((event) => event.type === "verification.planned"),
+      ),
+    ).toBe(true);
     expect(notified.filter((event) => event.type === "run.started")).toHaveLength(1);
+    expect(notified.filter((event) => event.type === "run.failed")).toHaveLength(1);
     expect(providerCalls).toBe(1);
   });
 
@@ -427,7 +431,7 @@ describe("RunController.start", () => {
 
     await controller.start(run.id);
     const second = await controller.start(run.id);
-    expect(second.status).toBe("AWAITING_VERIFICATION");
+    expect(second.status).toBe("FAILED");
     expect(
       store.commits.filter((commit) => commit.events.some((event) => event.type === "run.started")),
     ).toHaveLength(1);
@@ -516,7 +520,7 @@ describe("RunController.cancel", () => {
 });
 
 describe("RunController project verification driving", () => {
-  it("drives project checks only after the Final Candidate transaction commits", async () => {
+  it("fails after the candidate boundary when verification recovery is not composed", async () => {
     const run = makeRun({ permissionProfile: "FULL_ACCESS", approvalPolicy: "DANGEROUS_ONLY" });
     const store = new MemoryExecutionStore(run);
     let runnerCalls = 0;
@@ -597,22 +601,27 @@ describe("RunController project verification driving", () => {
       },
     });
 
-    await controller.start(run.id);
-    // Phase 3E: the Final Candidate opens the durable completion boundary and stops. Verification is
-    // an *effect* now, so the checks run when the coordinator decides `EVALUATE_COMPLETION` — which is
-    // what recovery does — not while the boundary is being opened.
+    const result = await controller.start(run.id);
+    // The candidate boundary is durable before Core discovers that the verification recovery store
+    // is missing. The infrastructure error then fails the Run instead of leaving an ownerless boundary.
+    expect(result.status).toBe("FAILED");
     expect(runnerCalls).toBe(0);
     expect(profileCalls).toBe(0);
     expect(runtimeCalls).toBe(0);
-    expect(store.snapshot.run.status).toBe("VERIFYING");
-    const continuation = store.snapshot.continuation;
-    if (continuation?.type !== "AWAITING_VERIFICATION") {
-      throw new Error("expected an AWAITING_VERIFICATION boundary");
+    expect(store.snapshot.run.status).toBe("FAILED");
+    expect(store.snapshot.continuation).toBeUndefined();
+    const candidateBoundary = store.commits.find(
+      (commit) =>
+        commit.continuation?.operation === "SET" &&
+        commit.continuation.checkpoint.type === "AWAITING_VERIFICATION",
+    );
+    if (candidateBoundary?.continuation?.operation !== "SET") {
+      throw new Error("expected the candidate boundary to commit before failure");
     }
+    const continuation = candidateBoundary.continuation.checkpoint;
     expect(continuation.verificationPlanId).toMatch(/^vplan_/);
 
-    // The plan the boundary wrote is durable, and its checks start PENDING: nothing has been verified
-    // yet, and nothing may be reported as verified.
+    // The plan the boundary wrote remains available as evidence that Core failed the same candidate.
     const plan = await store.loadVerificationPlan(run.id, continuation.verificationPlanId);
     expect(plan?.checks.every((check) => check.status === "PENDING")).toBe(true);
   });

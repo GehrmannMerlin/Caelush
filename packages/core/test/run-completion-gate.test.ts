@@ -4,6 +4,8 @@ import {
   createTimestampMs,
   createToolInvocationId,
   createStepId,
+  createVerificationCheckId,
+  createVerificationEvidenceId,
 } from "@caelush/protocol";
 
 import {
@@ -18,6 +20,7 @@ import {
   committedRepairBoundary,
   completionGateOver,
   harness3e,
+  restoreCommittedCandidateBoundary,
   stubGit,
   stubReviewer,
   stubWorkspace,
@@ -80,7 +83,7 @@ describe("Phase 3E production completion gate", () => {
     expect(harness.verification.settled).toHaveLength(1);
   });
 
-  it("leaves the Run on its durable boundary when the host composed no verification", async () => {
+  it("fails the Run when the host composed no verification", async () => {
     const harness = harness3e({
       script: () => candidateTurn("done"),
       verificationStore: false,
@@ -88,10 +91,10 @@ describe("Phase 3E production completion gate", () => {
 
     const result = await harness.controller.start(harness.store.snapshot.run.id);
 
-    expect(result.status).toBe("AWAITING_VERIFICATION");
+    expect(result.run.status).toBe("FAILED");
     const snapshot = harness.snapshot();
-    expect(snapshot.run.status).toBe("VERIFYING");
-    expect(awaitingVerification(harness).sourceStepId).toBeDefined();
+    expect(snapshot.continuation).toBeUndefined();
+    expect(harness.eventTypes().filter((type) => type === "run.failed")).toHaveLength(1);
     expect(harness.reviewer.bundles).toHaveLength(0);
   });
 
@@ -156,9 +159,10 @@ describe("Phase 3E production completion gate", () => {
 
     const result = await harness.controller.start(harness.store.snapshot.run.id);
 
-    expect(result.status).toBe("AWAITING_VERIFICATION");
-    expect(harness.snapshot().run.status).toBe("VERIFYING");
+    expect(result.status).toBe("FAILED");
+    expect(harness.snapshot().run.status).toBe("FAILED");
     expect(harness.verified).toHaveLength(0);
+    expect(harness.eventTypes().filter((type) => type === "run.failed")).toHaveLength(1);
     // One inspection for the check, one for the recheck that must precede acceptance.
     expect(workspace.inspections).toBe(2);
   });
@@ -202,7 +206,7 @@ describe("Phase 3E completion termination", () => {
   it("never completes a Run the termination authority has claimed", async () => {
     const harness: Phase3EHarness = harness3e({
       script: () => candidateTurn("done"),
-      reviewer: stubReviewer({ status: "PASSED" }),
+      reviewer: stubReviewer({ status: "ERROR", errorCode: "REVIEWER_TIMEOUT" }),
     });
     const runId = harness.store.snapshot.run.id;
     harness.reviewer.onReview = async () => {
@@ -219,10 +223,11 @@ describe("Phase 3E completion termination", () => {
     expect(harness.snapshot().run.status).toBe("CANCELLED");
     expect(harness.eventTypes()).not.toContain("run.completed");
     expect(harness.verified).toHaveLength(0);
+    expect(harness.eventTypes()).not.toContain("run.failed");
   });
 });
 
-/** Park a Run on its durable verification boundary without evaluating it. */
+/** Restore the durable candidate boundary so a test can call the gate directly. */
 async function parkOnVerification(
   options: {
     readonly reviewer?: ReturnType<typeof stubReviewer>;
@@ -233,14 +238,15 @@ async function parkOnVerification(
 ): Promise<Phase3EHarness> {
   const harness = harness3e({
     script: () => candidateTurn("the candidate"),
-    // No verification execution store: the gate cannot reach a decision, so the Run stays exactly on
-    // the boundary the candidate opened. That is a real production state, not a fabricated one.
+    // No verification execution store exercises the error path. The helper below restores the
+    // previously committed candidate boundary only for direct gate contract tests.
     verificationStore: false,
     ...(options.reviewer === undefined ? {} : { reviewer: options.reviewer }),
     ...(options.persistence === undefined ? {} : { persistence: options.persistence }),
   });
   const result = await harness.controller.start(harness.store.snapshot.run.id);
-  expect(result.status).toBe("AWAITING_VERIFICATION");
+  expect(result.status).toBe("FAILED");
+  restoreCommittedCandidateBoundary(harness);
   return harness;
 }
 
@@ -302,7 +308,7 @@ describe("Phase 3E completion gate identity and integrity", () => {
     expect(harness.verification.started).toHaveLength(0);
   });
 
-  it("suspends rather than deciding when the evaluation is already aborted", async () => {
+  it("returns a bounded error when the evaluation is already aborted", async () => {
     const harness = await parkOnVerification();
     const { gate } = completionGateOver(harness);
     const continuation = awaitingVerification(harness);
@@ -317,11 +323,11 @@ describe("Phase 3E completion gate identity and integrity", () => {
       signal: controller.signal,
     });
 
-    expect(decision).toMatchObject({ kind: "ERROR", retryable: true });
+    expect(decision).toMatchObject({ kind: "ERROR", retryable: false });
     expect(harness.reviewer.bundles).toHaveLength(0);
   });
 
-  it("suspends when the Run's plan is missing from the ledger", async () => {
+  it("returns a non-retryable error when the Run's plan is missing from the ledger", async () => {
     const harness = await parkOnVerification();
     const { gate } = completionGateOver(harness, {
       persistence: {
@@ -340,11 +346,11 @@ describe("Phase 3E completion gate identity and integrity", () => {
       signal: new AbortController().signal,
     });
 
-    expect(decision).toMatchObject({ kind: "ERROR", retryable: true });
+    expect(decision).toMatchObject({ kind: "ERROR", retryable: false });
     expect(harness.reviewer.bundles).toHaveLength(0);
   });
 
-  it("suspends when the candidate is not the one the plan bounded", async () => {
+  it("returns a non-retryable error when the candidate does not match the plan", async () => {
     let plan: import("@caelush/protocol").VerificationPlan | undefined;
     const harness = await parkOnVerification({
       persistence: (port) => ({
@@ -375,7 +381,7 @@ describe("Phase 3E completion gate identity and integrity", () => {
       signal: new AbortController().signal,
     });
 
-    expect(decision).toMatchObject({ kind: "ERROR", retryable: true });
+    expect(decision).toMatchObject({ kind: "ERROR", retryable: false });
     expect(harness.reviewer.bundles).toHaveLength(0);
   });
 });
@@ -435,7 +441,7 @@ describe("Phase 3E verification freshness", () => {
     expect(harness.eventTypes()).not.toContain("run.completed");
   });
 
-  it("suspends when the repository moved after the evidence was taken", async () => {
+  it("fails when the repository moved after the evidence was taken", async () => {
     const git = stubGit((call) =>
       call === 1
         ? { available: true, clean: true, entries: [] }
@@ -455,14 +461,366 @@ describe("Phase 3E verification freshness", () => {
 
     const result = await harness.controller.start(harness.store.snapshot.run.id);
 
-    expect(result.status).toBe("AWAITING_VERIFICATION");
-    expect(harness.snapshot().run.status).toBe("VERIFYING");
+    expect(result.status).toBe("FAILED");
+    expect(harness.snapshot().run.status).toBe("FAILED");
     expect(harness.verified).toHaveLength(0);
     expect(git.statusCalls).toBe(2);
   });
 });
 
 describe("Phase 3E durable verification work", () => {
+  it("settles a BLOCKED project runner without continuing to task review", async () => {
+    const harness = harness3e({
+      script: () => candidateTurn("done"),
+      composition: "CANONICAL_ASSEMBLY",
+      checks: [
+        { kind: "PROJECT", requirement: "REQUIRED", stage: "FAST_STATIC" },
+        { kind: "TASK", requirement: "REQUIRED", stage: "ACCEPTANCE" },
+      ],
+      profileProvider: {
+        async getFreshProfile() {
+          return {
+            ecosystems: ["NODE"],
+            packageManager: { name: "pnpm" },
+            tooling: [],
+            isMonorepo: false,
+            rootPackage: { relativePath: ".", scripts: [] },
+          };
+        },
+      },
+      execution: {
+        async executeArgv() {
+          throw new Error("the blocked project runner owns this fixture");
+        },
+        async interact() {
+          throw new Error("the blocked project runner owns this fixture");
+        },
+      },
+      security: { assess: () => ({ kind: "ALLOW", safeReason: "test" }) },
+    });
+    let runnerCalls = 0;
+    harness.projectRunner.run = async ({ plan }) => {
+      runnerCalls += 1;
+      const projectCheck = plan.checks.find((check) => check.spec.kind === "PROJECT");
+      if (projectCheck === undefined) throw new Error("project check was not planned");
+      harness.verification.seed({
+        ...plan,
+        checks: plan.checks.map((check) =>
+          check.id === projectCheck.id
+            ? { ...check, status: "ERROR" as const, finishedAt: createTimestampMs(1_005) }
+            : check,
+        ),
+      });
+      harness.verification.evidence.push({
+        id: createVerificationEvidenceId(),
+        planId: plan.id,
+        checkId: projectCheck.id,
+        kind: "COMMAND",
+        summary: "Project check failed to start",
+        details: {
+          label: "project test",
+          candidateHash: plan.candidateHash ?? "0".repeat(64),
+          errorCode: "SPAWN_FAILED",
+          totalOutputBytes: 0,
+          omittedBytes: 0,
+          truncated: false,
+        },
+        capturedAt: createTimestampMs(1_005),
+      });
+      return {
+        outcome: "BLOCKED",
+        executedCount: 1,
+        passedCount: 0,
+        failedCount: 0,
+        errorCount: 1,
+        skippedCount: 0,
+        blockingCheckId: projectCheck.id,
+      };
+    };
+
+    const result = await harness.controller.start(harness.store.snapshot.run.id);
+
+    expect(result.run.status).toBe("FAILED");
+    expect(runnerCalls).toBe(1);
+    expect(harness.reviewer.bundles).toHaveLength(0);
+    expect(harness.store.snapshot.continuation).toBeUndefined();
+  });
+
+  it("keeps VERIFYING only while a project check is durably running", async () => {
+    const harness = await parkOnVerification();
+    const original = [...harness.verification.plans.values()][0];
+    if (original === undefined) throw new Error("candidate plan was not persisted");
+    const projectCheck = {
+      id: createVerificationCheckId(),
+      planId: original.id,
+      ordinal: 0,
+      stage: "FAST_STATIC" as const,
+      requirement: "REQUIRED" as const,
+      spec: { kind: "PROJECT" as const, purpose: "TEST" as const, source: "SYSTEM" as const },
+      status: "PENDING" as const,
+      createdAt: original.createdAt,
+    };
+    const plan = { ...original, checks: [projectCheck] };
+    harness.verification.seed(plan);
+
+    let releaseRunner!: () => void;
+    let notifyRunnerEntered!: () => void;
+    const runnerReleased = new Promise<void>((resolve) => {
+      releaseRunner = resolve;
+    });
+    const runnerEntered = new Promise<void>((resolve) => {
+      notifyRunnerEntered = resolve;
+    });
+    const { gate } = completionGateOver(harness, {
+      mode: "RECOVER",
+      persistence: {
+        loadVerificationPlan: async (_runId, planId) =>
+          harness.verification.plans.get(planId) ?? null,
+        commitCandidateBoundary: (command) => harness.store.commitCandidateBoundary(command),
+        commitVerifiedCompletion: (command) => harness.store.commitVerifiedCompletion(command),
+      },
+      runner: {
+        async run() {
+          harness.verification.seed({
+            ...plan,
+            checks: [{ ...projectCheck, status: "RUNNING", startedAt: createTimestampMs(1_004) }],
+          });
+          notifyRunnerEntered();
+          await runnerReleased;
+          return {
+            outcome: "PROJECT_CHECKS_PASSED",
+            executedCount: 1,
+            passedCount: 1,
+            failedCount: 0,
+            errorCount: 0,
+            skippedCount: 0,
+          };
+        },
+      },
+      profileProvider: {
+        async getFreshProfile() {
+          return {
+            ecosystems: ["NODE"],
+            packageManager: { name: "pnpm" },
+            tooling: [],
+            isMonorepo: false,
+            rootPackage: { relativePath: ".", scripts: [] },
+          };
+        },
+      },
+      execution: {
+        async executeArgv() {
+          throw new Error("not used by the held runner");
+        },
+        async interact() {
+          throw new Error("not used by the held runner");
+        },
+      },
+      security: { assess: () => ({ kind: "ALLOW", safeReason: "test" }) },
+      evidenceSanitizer: {
+        redactText: (value) => value,
+        boundText: (value, maxBytes) => ({
+          text: value.slice(0, maxBytes),
+          omittedBytes: Math.max(0, Buffer.byteLength(value, "utf8") - maxBytes),
+          truncated: Buffer.byteLength(value, "utf8") > maxBytes,
+        }),
+      },
+    });
+    const continuation = awaitingVerification(harness);
+    const evaluation = gate.evaluate({
+      identity: identityOf(harness),
+      sourceStepId: continuation.sourceStepId,
+      candidate: continuation.finalDecision,
+      mode: "RECOVER",
+      signal: new AbortController().signal,
+    });
+
+    await runnerEntered;
+    const active = await harness.verification.getPlanExecutionSnapshot(plan.id);
+    expect(harness.store.snapshot.run.status).toBe("VERIFYING");
+    expect(active?.plan.checks[0]?.status).toBe("RUNNING");
+    releaseRunner();
+    await expect(evaluation).resolves.toMatchObject({ kind: "ERROR", retryable: false });
+  });
+
+  it("fails a recovered ERROR plus PENDING plan without running the pending check", async () => {
+    const harness = harness3e({
+      script: () => candidateTurn("done"),
+    });
+    const completed = await harness.controller.start(harness.store.snapshot.run.id);
+    expect(completed.run.status).toBe("COMPLETED");
+
+    const original = [...harness.verification.plans.values()][0];
+    if (original === undefined) throw new Error("candidate plan was not persisted");
+    const task = original.checks.find((check) => check.spec.kind === "TASK");
+    if (task === undefined) throw new Error("task check was not planned");
+    const errorCheck = {
+      id: createVerificationCheckId(),
+      planId: original.id,
+      ordinal: 0,
+      stage: "FAST_STATIC" as const,
+      requirement: "REQUIRED" as const,
+      spec: { kind: "PROJECT" as const, purpose: "TEST" as const, source: "SYSTEM" as const },
+      status: "ERROR" as const,
+      createdAt: original.createdAt,
+      finishedAt: createTimestampMs(1_002),
+    };
+    const pendingCheck = {
+      id: createVerificationCheckId(),
+      ordinal: original.checks.length,
+      planId: original.id,
+      status: "PENDING" as const,
+      stage: "FAST_STATIC" as const,
+      requirement: "REQUIRED" as const,
+      spec: { kind: "PROJECT" as const, purpose: "BUILD" as const, source: "SYSTEM" as const },
+      createdAt: original.createdAt,
+    };
+    const plan = { ...original, checks: [errorCheck, task, pendingCheck] };
+    harness.verification.seed(plan);
+    harness.verification.evidence.push({
+      id: createVerificationEvidenceId(),
+      planId: plan.id,
+      checkId: errorCheck.id,
+      kind: "COMMAND",
+      summary: "Project check failed to start",
+      details: {
+        label: "project test",
+        candidateHash: plan.candidateHash ?? "0".repeat(64),
+        errorCode: "SPAWN_FAILED",
+        totalOutputBytes: 0,
+        omittedBytes: 0,
+        truncated: false,
+      },
+      capturedAt: createTimestampMs(1_003),
+    });
+    restoreCommittedCandidateBoundary(harness);
+    harness.notifications.splice(0, harness.notifications.length);
+    const projectRunsBeforeRecovery = harness.projectRunner.runs.length;
+
+    const failed = await harness.controller.recover(harness.store.snapshot.run.id);
+    const reopened = await harness.controller.recover(harness.store.snapshot.run.id);
+
+    expect(failed.run.status).toBe("FAILED");
+    expect(reopened.run.status).toBe("FAILED");
+    expect(harness.projectRunner.runs).toHaveLength(projectRunsBeforeRecovery);
+    expect(harness.eventTypes().filter((type) => type === "run.failed")).toHaveLength(1);
+  });
+
+  it("does not execute a pending project check when recovery finds a durable blocker", async () => {
+    const harness = await parkOnVerification();
+    const original = [...harness.verification.plans.values()][0];
+    if (original === undefined) throw new Error("candidate plan was not persisted");
+    const [task] = original.checks;
+    if (task === undefined) throw new Error("task acceptance check was not planned");
+    const errorCheck = {
+      id: createVerificationCheckId(),
+      planId: original.id,
+      ordinal: 0,
+      stage: "FAST_STATIC" as const,
+      requirement: "REQUIRED" as const,
+      spec: { kind: "PROJECT" as const, purpose: "TEST" as const, source: "SYSTEM" as const },
+      status: "ERROR" as const,
+      createdAt: original.createdAt,
+      finishedAt: createTimestampMs(1_001),
+    };
+    const pendingProjectCheck = {
+      id: createVerificationCheckId(),
+      planId: original.id,
+      ordinal: 1,
+      stage: "FAST_STATIC" as const,
+      requirement: "REQUIRED" as const,
+      spec: { kind: "PROJECT" as const, purpose: "BUILD" as const, source: "SYSTEM" as const },
+      status: "PENDING" as const,
+      createdAt: original.createdAt,
+    };
+    const pendingTaskCheck = { ...task, ordinal: 2 };
+    const plan = {
+      ...original,
+      checks: [errorCheck, pendingProjectCheck, pendingTaskCheck],
+    };
+    harness.verification.seed(plan);
+    harness.verification.evidence.push({
+      id: createVerificationEvidenceId(),
+      planId: plan.id,
+      checkId: errorCheck.id,
+      kind: "COMMAND",
+      summary: "Project test command failed to start",
+      details: {
+        label: "project test",
+        candidateHash: plan.candidateHash ?? "0".repeat(64),
+        errorCode: "SPAWN_FAILED",
+        totalOutputBytes: 0,
+        omittedBytes: 0,
+        truncated: false,
+      },
+      capturedAt: createTimestampMs(1_001),
+    });
+
+    let projectRunnerCalls = 0;
+    const { gate } = completionGateOver(harness, {
+      mode: "RECOVER",
+      persistence: {
+        loadVerificationPlan: async (_runId, planId) =>
+          harness.verification.plans.get(planId) ?? null,
+        commitCandidateBoundary: (command) => harness.store.commitCandidateBoundary(command),
+        commitVerifiedCompletion: (command) => harness.store.commitVerifiedCompletion(command),
+      },
+      runner: {
+        async run() {
+          projectRunnerCalls += 1;
+          return {
+            outcome: "PROJECT_CHECKS_PASSED",
+            executedCount: 0,
+            passedCount: 0,
+            failedCount: 0,
+            errorCount: 0,
+            skippedCount: 0,
+          };
+        },
+      },
+      profileProvider: {
+        async getFreshProfile() {
+          return {
+            ecosystems: ["NODE"],
+            packageManager: { name: "pnpm" },
+            tooling: [],
+            isMonorepo: false,
+            rootPackage: { relativePath: ".", scripts: [] },
+          };
+        },
+      },
+      execution: {
+        async executeArgv() {
+          throw new Error("the pending project check must not execute");
+        },
+        async interact() {
+          throw new Error("the pending project check must not interact");
+        },
+      },
+      security: { assess: () => ({ kind: "ALLOW", safeReason: "test" }) },
+      evidenceSanitizer: {
+        redactText: (value) => value,
+        boundText: (value, maxBytes) => ({
+          text: value.slice(0, maxBytes),
+          omittedBytes: Math.max(0, Buffer.byteLength(value, "utf8") - maxBytes),
+          truncated: Buffer.byteLength(value, "utf8") > maxBytes,
+        }),
+      },
+    });
+    const continuation = awaitingVerification(harness);
+
+    const decision = await gate.evaluate({
+      identity: identityOf(harness),
+      sourceStepId: continuation.sourceStepId,
+      candidate: continuation.finalDecision,
+      mode: "RECOVER",
+      signal: new AbortController().signal,
+    });
+
+    expect(decision.kind).toBe("ERROR");
+    expect(projectRunnerCalls).toBe(0);
+  });
+
   it("settles an interrupted check once and never replays it", async () => {
     let firstPlanId: string | undefined;
     const harness = harness3e({
@@ -503,7 +861,7 @@ describe("Phase 3E durable verification work", () => {
     });
   });
 
-  it("re-evaluates the same candidate after a suspension without redoing the review", async () => {
+  it("fails a Run when its verification plan is missing and never recovers it", async () => {
     let planLoaded = false;
     const reviewer = stubReviewer({ status: "PASSED" });
     const harness = harness3e({
@@ -525,15 +883,15 @@ describe("Phase 3E durable verification work", () => {
       }),
     });
 
-    const suspended = await harness.controller.start(harness.store.snapshot.run.id);
-    expect(suspended.status).toBe("AWAITING_VERIFICATION");
+    const failed = await harness.controller.start(harness.store.snapshot.run.id);
+    expect(failed.run.status).toBe("FAILED");
     expect(reviewer.bundles).toHaveLength(0);
 
     const recovered = await harness.controller.recover(harness.store.snapshot.run.id);
 
-    expect(recovered.run.status).toBe("COMPLETED");
-    // One review and one provider turn for the whole Run: recovery re-used the durable work.
-    expect(reviewer.bundles).toHaveLength(1);
+    expect(recovered.run.status).toBe("FAILED");
+    expect(harness.eventTypes().filter((type) => type === "run.failed")).toHaveLength(1);
+    expect(reviewer.bundles).toHaveLength(0);
     expect(harness.turns).toHaveLength(1);
   });
 
@@ -551,19 +909,19 @@ describe("Phase 3E durable verification work", () => {
       checks: WORKSPACE_AND_TASK,
     });
 
-    const suspended = await harness.controller.start(harness.store.snapshot.run.id);
-    expect(suspended.status).toBe("AWAITING_VERIFICATION");
+    const failed = await harness.controller.start(harness.store.snapshot.run.id);
+    expect(failed.status).toBe("FAILED");
     expect(reviewer.bundles).toHaveLength(1);
 
     const recovered = await harness.controller.recover(harness.store.snapshot.run.id);
 
-    expect(recovered.run.status).toBe("COMPLETED");
+    expect(recovered.run.status).toBe("FAILED");
     expect(reviewer.bundles).toHaveLength(1);
-    // One inspection for the check, one stale recheck, one recheck that finally agrees.
-    expect(workspace.inspections).toBe(3);
+    // The failed verification is terminal; recovery does not perform another inspection.
+    expect(workspace.inspections).toBe(2);
   });
 
-  it("refuses to commit a completion whose durable revision moved", async () => {
+  it("fails when completion cannot be committed", async () => {
     const harness = harness3e({
       script: () => candidateTurn("done"),
       persistence: (port) => ({
@@ -574,20 +932,20 @@ describe("Phase 3E durable verification work", () => {
       }),
     });
 
-    await expect(harness.controller.start(harness.store.snapshot.run.id)).rejects.toBeInstanceOf(
-      RunExecutionConflictError,
-    );
+    const result = await harness.controller.start(harness.store.snapshot.run.id);
 
     // The model turn and the review each ran once, and neither was replayed to resolve the conflict.
     expect(harness.turns).toHaveLength(1);
     expect(harness.reviewer.bundles).toHaveLength(1);
     expect(harness.eventTypes()).not.toContain("run.completed");
-    expect(harness.snapshot().run.status).toBe("VERIFYING");
+    expect(result.run.status).toBe("FAILED");
+    expect(harness.snapshot().run.status).toBe("FAILED");
+    expect(harness.eventTypes().filter((type) => type === "run.failed")).toHaveLength(1);
   });
 });
 
 describe("Phase 3E task acceptance review", () => {
-  it("suspends the Run when the reviewer cannot reach a verdict", async () => {
+  it("fails the Run when the reviewer cannot reach a verdict", async () => {
     const harness = harness3e({
       script: () => candidateTurn("done"),
       reviewer: stubReviewer({ status: "ERROR", errorCode: "REVIEWER_TIMEOUT" }),
@@ -595,15 +953,15 @@ describe("Phase 3E task acceptance review", () => {
 
     const result = await harness.controller.start(harness.store.snapshot.run.id);
 
-    expect(result.run.status).toBe("VERIFYING");
-    expect(harness.store.snapshot.continuation?.type).toBe("AWAITING_VERIFICATION");
+    expect(result.run.status).toBe("FAILED");
+    expect(harness.store.snapshot.continuation).toBeUndefined();
+    expect(harness.eventTypes().filter((type) => type === "run.failed")).toHaveLength(1);
     expect(harness.eventTypes()).not.toContain("run.completed");
-    // An unreviewable candidate is an errored check, not a refused one. The Run remains on its
-    // explicit verification boundary so infrastructure recovery cannot be mistaken for a candidate FAIL.
+    // An unreviewable candidate is an errored check. Without a durable retry schedule, the Run fails.
     expect(harness.eventTypes()).not.toContain("verification.repair.started");
   });
 
-  it("retries a reviewer infrastructure error on explicit recovery without rerunning workspace checks", async () => {
+  it("fails a reviewer infrastructure error without scheduling a recovery retry", async () => {
     const reviewer = stubReviewer({ status: "ERROR", errorCode: "REVIEWER_RESPONSE_INVALID" });
     const harness = harness3e({
       script: () => candidateTurn("done"),
@@ -611,19 +969,17 @@ describe("Phase 3E task acceptance review", () => {
       checks: WORKSPACE_AND_TASK,
     });
 
-    const suspended = await harness.controller.start(harness.store.snapshot.run.id);
-    expect(suspended.run.status).toBe("VERIFYING");
+    const failed = await harness.controller.start(harness.store.snapshot.run.id);
+    expect(failed.run.status).toBe("FAILED");
     expect(reviewer.bundles).toHaveLength(1);
     expect(harness.verification.started).toHaveLength(2);
 
-    reviewer.answerWith = { status: "PASSED" };
     const recovered = await harness.controller.recover(harness.store.snapshot.run.id);
 
-    expect(recovered.run.status).toBe("COMPLETED");
-    expect(reviewer.bundles).toHaveLength(2);
-    expect(harness.verification.started).toHaveLength(3);
-    expect(harness.verification.started[1]).toBe(harness.verification.started[2]);
-    expect(harness.workspace.inspections).toBe(2);
+    expect(recovered.run.status).toBe("FAILED");
+    expect(reviewer.bundles).toHaveLength(1);
+    expect(harness.verification.started).toHaveLength(2);
+    expect(harness.workspace.inspections).toBe(1);
   });
 
   it("never lets a task review read its own verdict as evidence", async () => {
@@ -689,14 +1045,14 @@ describe("Phase 3E completion settlement routing", () => {
     phase: "VERIFICATION",
   } as const;
 
-  it("suspends a retryable completion error instead of failing the Run", () => {
+  it("routes retryable completion errors through canonical Run failure", () => {
     const route = classifyCompletionEffectSettlement({
       decision: { kind: "ERROR", error, retryable: true },
       observation: createCompletionGateObservation({ effectiveMode: "EXECUTE" }),
       terminationDecided: false,
     });
 
-    expect(route.route).toBe("RETRYABLE_ERROR_SUSPEND");
+    expect(route.route).toBe("CANONICAL_REJECT");
   });
 
   it("settles a non-retryable completion error as a rejection", () => {
