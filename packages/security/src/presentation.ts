@@ -52,7 +52,12 @@ export class CaelushToolPresentation implements ToolPresentationPort {
     readonly result?: AgentToolExecutionResult;
   }): ToolResultPresentation {
     const title = TOOL_LABELS[input.invocation.toolName] ?? "使用工具";
-    if (input.result === undefined) return { title, summary: "工具已完成" };
+    if (input.result === undefined) {
+      return {
+        title,
+        summary: failureSummary(input.invocation) ?? "工具已完成",
+      };
+    }
     try {
       const sanitized = this.resultSanitizer.sanitize({
         toolName: input.invocation.toolName,
@@ -139,6 +144,9 @@ export class CaelushToolPresentation implements ToolPresentationPort {
   }
 
   private resultSummary(invocation: ToolInvocation, result: AgentToolExecutionResult): string {
+    const failure = failureSummary(invocation, result.isError);
+    if (failure !== undefined) return failure;
+
     const args = invocation.args;
     if (invocation.toolName === "read_file") {
       const path = safePath(args.path);
@@ -152,7 +160,6 @@ export class CaelushToolPresentation implements ToolPresentationPort {
         : undefined;
       return changes === undefined ? "补丁已应用" : `补丁已应用（修改 ${changes} 个文件）`;
     }
-    if (result.isError) return "工具报告可恢复错误";
     if (
       invocation.toolName === "exec_command" ||
       invocation.toolName === "write_stdin" ||
@@ -163,6 +170,22 @@ export class CaelushToolPresentation implements ToolPresentationPort {
     }
     return `${TOOL_LABELS[invocation.toolName] ?? "工具"}已完成`;
   }
+}
+
+function failureSummary(invocation: ToolInvocation, resultIsError = false): string | undefined {
+  const error = invocation.error;
+  if (
+    error?.code === "TOOL_OUTCOME_UNKNOWN" ||
+    error?.details?.executionDisposition === "UNCERTAIN_SIDE_EFFECT"
+  ) {
+    return "工具结果未知，请勿自动重试";
+  }
+
+  let summary: string | undefined;
+  if (error?.code === "TOOL_OUTPUT_ERROR") summary = "工具输出无法安全使用";
+  else if (error !== undefined || resultIsError) summary = "工具执行失败";
+  if (summary === undefined) return undefined;
+  return error?.retryable === true ? `${summary}（可重试）` : summary;
 }
 
 function safePath(value: unknown): string {

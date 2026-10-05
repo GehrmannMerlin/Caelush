@@ -27,6 +27,14 @@ function invocation(
   };
 }
 
+function failedInvocation(error: NonNullable<ToolInvocation["error"]>): ToolInvocation {
+  return {
+    ...invocation("exec_command", { cmd: "git status --short" }),
+    status: "FAILED",
+    error,
+  };
+}
+
 describe("Security Tool presentation", () => {
   it("redacts command secrets and terminal controls before display", () => {
     const value = new CaelushToolPresentation({
@@ -89,5 +97,98 @@ describe("Security Tool presentation", () => {
     expect(value.title).toBe("读取文件");
     expect(value.summary).toContain("src/index.ts");
     expect(value.summary).not.toContain("Read");
+  });
+
+  it("summarizes Tool failures from durable codes and never leaks raw error details", () => {
+    const presentation = new CaelushToolPresentation({
+      terminalOutputSanitizer: identityTerminalSanitizer,
+    });
+    const cases: readonly {
+      readonly name: string;
+      readonly error: NonNullable<ToolInvocation["error"]>;
+      readonly expected: string;
+    }[] = [
+      {
+        name: "execution failure",
+        error: {
+          code: "TOOL_EXECUTION_ERROR",
+          message: "RAW_ERROR_MESSAGE_SECRET",
+          retryable: false,
+          details: { diagnostic: "RAW_ERROR_DETAILS_SECRET" },
+        },
+        expected: "工具执行失败",
+      },
+      {
+        name: "output refusal",
+        error: {
+          code: "TOOL_OUTPUT_ERROR",
+          message: "RAW_ERROR_MESSAGE_SECRET",
+          retryable: false,
+          details: { diagnostic: "RAW_ERROR_DETAILS_SECRET" },
+        },
+        expected: "工具输出无法安全使用",
+      },
+      {
+        name: "unknown outcome",
+        error: {
+          code: "TOOL_OUTCOME_UNKNOWN",
+          message: "RAW_ERROR_MESSAGE_SECRET",
+          retryable: true,
+          details: { diagnostic: "RAW_ERROR_DETAILS_SECRET" },
+        },
+        expected: "工具结果未知，请勿自动重试",
+      },
+      {
+        name: "legacy uncertain disposition",
+        error: {
+          code: "TOOL_EXECUTION_ERROR",
+          message: "RAW_ERROR_MESSAGE_SECRET",
+          retryable: true,
+          details: {
+            executionDisposition: "UNCERTAIN_SIDE_EFFECT",
+            diagnostic: "RAW_ERROR_DETAILS_SECRET",
+          },
+        },
+        expected: "工具结果未知，请勿自动重试",
+      },
+      {
+        name: "explicit retryable error",
+        error: {
+          code: "TOOL_EXECUTION_ERROR",
+          message: "RAW_ERROR_MESSAGE_SECRET",
+          retryable: true,
+          details: { diagnostic: "RAW_ERROR_DETAILS_SECRET" },
+        },
+        expected: "工具执行失败（可重试）",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const result = presentation.presentResult({
+        invocation: failedInvocation(testCase.error),
+        result: { content: "safe result output", details: { status: "FAILED" }, isError: true },
+      });
+      expect(result.summary, testCase.name).toBe(testCase.expected);
+      expect(JSON.stringify(result), testCase.name).not.toContain("RAW_ERROR_MESSAGE_SECRET");
+      expect(JSON.stringify(result), testCase.name).not.toContain("RAW_ERROR_DETAILS_SECRET");
+    }
+  });
+
+  it("does not infer retryability from isError alone", () => {
+    const presentation = new CaelushToolPresentation({
+      terminalOutputSanitizer: identityTerminalSanitizer,
+    });
+    const failed = {
+      ...invocation("exec_command", { cmd: "git status --short" }),
+      status: "FAILED" as const,
+    };
+
+    const result = presentation.presentResult({
+      invocation: failed,
+      result: { content: "safe result output", details: { status: "FAILED" }, isError: true },
+    });
+
+    expect(result.summary).toBe("工具执行失败");
+    expect(result.summary).not.toContain("可重试");
   });
 });
