@@ -330,6 +330,8 @@ export type {
 } from "./batch/batch-types.js";
 export {
   createToolBatchCoordinator,
+  TOOL_NOT_STARTED,
+  TOOL_NOT_STARTED_CONTENT,
   SKIPPED_AFTER_UNCERTAIN_CONTENT,
   SKIPPED_AFTER_UNCERTAIN_EXECUTION,
 } from "./batch/batch-coordinator.js";

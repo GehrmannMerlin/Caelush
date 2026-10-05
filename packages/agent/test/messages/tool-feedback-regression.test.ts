@@ -1,18 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  NO_TOOL_RESULT_OBSERVATION,
   TOOL_FEEDBACK_PROJECTION_RECEIPT_VERSION,
   createModelToolFeedbackProjector,
   createStandardAgentMessageCodecRegistry,
   createStandardAgentMessageProjectorRegistry,
+  createToolResultBatchNormalizer,
   projectionVersionTable,
   toolFeedbackPolicySnapshot,
   toolMessageSource,
   toolResultObservation,
   AGENT_TOOL_RESULT_MESSAGE_CODEC_V1,
-  SKIPPED_AFTER_UNCERTAIN_EXECUTION,
-  UNCERTAIN_SIDE_EFFECT,
 } from "@caelush/agent";
 import type {
   AgentMessageRecord,
@@ -53,10 +51,10 @@ const projector = createModelToolFeedbackProjector();
 /** Turn one real batch item into the Agent Tool Result Message a Phase 5C writer would create. */
 function toToolResultMessage(
   item: ToolBatchItemOutcome,
-  observationBacked: boolean,
+  messageId = "amsg_0192f5b1-4d3a-7c2e-8a91-0000000000f1",
 ): AgentToolResultMessage {
   const projected = projector.project({
-    calls: [CALL],
+    calls: [item.call],
     items: [item],
     policy: { maxSingleObservationTokens: 1000, maxObservationBatchTokens: 4000 },
   });
@@ -66,7 +64,7 @@ function toToolResultMessage(
 
   return createAgentToolResultMessage(
     createAgentMessageBase({
-      id: "amsg_0192f5b1-4d3a-7c2e-8a91-0000000000f1" as never,
+      id: messageId as never,
       runId: RUN_ID as never,
       sessionId: SESSION_ID as never,
       conversationTurnId: turnIdFor(),
@@ -77,11 +75,8 @@ function toToolResultMessage(
     {
       toolCallId: message.toolCallId,
       toolName: message.toolName,
-      // A pre-execution rejection and an uncertain skip never reached a handler, so there is no
-      // observation to name. The arm states that rather than inventing an identity.
-      observation: observationBacked
-        ? toolResultObservation(OBSERVATION_ID as never)
-        : NO_TOOL_RESULT_OBSERVATION,
+      // Provenance comes from the real Tool System projector; never infer or fabricate it here.
+      observation: projectedFeedback.observation,
       isError: message.isError,
       projectedContent: message.content,
       projection: RECEIPT,
@@ -119,7 +114,7 @@ describe("Phase 5B regression — the Tool System produces non-observation feedb
     });
 
     // The corrected contract carries it: NO_OBSERVATION + SNAPSHOT.
-    const message = toToolResultMessage(item, false);
+    const message = toToolResultMessage(item);
     expect(message.observation).toEqual({ kind: "NO_OBSERVATION" });
     expect(message.projection.policy.kind).toBe("SNAPSHOT");
     expect(message.isError).toBe(true);
@@ -130,10 +125,12 @@ describe("Phase 5B regression — the Tool System produces non-observation feedb
       kind: "SKIPPED",
       call: CALL,
       feedback: {
-        code: SKIPPED_AFTER_UNCERTAIN_EXECUTION,
-        content: "skipped because a previous Tool's side effect could not be determined",
-        details: { disposition: UNCERTAIN_SIDE_EFFECT },
-        disposition: "UNCERTAIN_SIDE_EFFECT",
+        code: "TOOL_NOT_STARTED",
+        content:
+          "This tool call was not started because an earlier tool outcome is unknown. " +
+          "Do not continue or retry this dependent chain automatically; inspect current state first.",
+        details: {},
+        disposition: "SAFE_FAILURE",
       },
     };
 
@@ -145,7 +142,7 @@ describe("Phase 5B regression — the Tool System produces non-observation feedb
     expect(projected).toHaveLength(1);
     expect(projected[0]?.message.isError).toBe(true);
 
-    const message = toToolResultMessage(item, false);
+    const message = toToolResultMessage(item);
     expect(message.observation.kind).toBe("NO_OBSERVATION");
     expect(message.projectedContent).toBe(projected[0]?.message.content);
   });
@@ -170,7 +167,7 @@ describe("Phase 5B regression — the Tool System produces non-observation feedb
       },
     } as unknown as ToolBatchItemOutcome;
 
-    const message = toToolResultMessage(item, true);
+    const message = toToolResultMessage(item);
     expect(message.observation).toEqual({
       kind: "OBSERVATION",
       observationId: OBSERVATION_ID,
@@ -192,7 +189,7 @@ describe("Phase 5B regression — the Tool System produces non-observation feedb
         disposition: "SAFE_FAILURE",
       },
     };
-    const message = toToolResultMessage(rejected, false);
+    const message = toToolResultMessage(rejected);
 
     const draft = codecs.encode(message);
     const record: AgentMessageRecord = {
@@ -230,7 +227,7 @@ describe("Phase 5B regression — the Tool System produces non-observation feedb
         disposition: "SAFE_FAILURE",
       },
     };
-    const message = toToolResultMessage(rejected, false);
+    const message = toToolResultMessage(rejected);
     const projection = projectors.project({
       sequence: 1,
       schemaVersion: 1,
@@ -276,5 +273,78 @@ describe("Phase 5B regression — the Tool System produces non-observation feedb
         message: observed,
       }),
     ).toEqual(projection);
+  });
+
+  it("preserves an unknown observation plus not-started result without leaking execution details", () => {
+    const calls = [
+      { externalCallId: "call_unknown", toolName: "exec_command", args: { command: "one" } },
+      { externalCallId: "call_not_started", toolName: "exec_command", args: { command: "two" } },
+    ];
+    const unknown: ToolBatchItemOutcome = {
+      kind: "OBSERVATION",
+      call: calls[0]!,
+      invocationId: "tinv_hidden_unknown_invocation" as never,
+      finalStatus: "FAILED",
+      observation: {
+        id: OBSERVATION_ID as never,
+        toolInvocationId: "tinv_hidden_unknown_invocation" as never,
+        runId: RUN_ID as never,
+        stepId: "stp_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e01" as never,
+        kind: "TOOL",
+        isError: true,
+        content: "The tool outcome could not be confirmed.",
+        createdAt: CREATED_AT as never,
+        protocolVersion: 1,
+        rawArtifactRef: "HIDDEN_RAW_ARTIFACT",
+      },
+      details: { diagnostic: "HIDDEN_ERROR_DETAILS" },
+    } as unknown as ToolBatchItemOutcome;
+    const notStarted: ToolBatchItemOutcome = {
+      kind: "SKIPPED",
+      call: calls[1]!,
+      feedback: {
+        code: "TOOL_NOT_STARTED",
+        content:
+          "This tool call was not started because an earlier tool outcome is unknown. " +
+          "Do not continue or retry this dependent chain automatically; inspect current state first.",
+        details: { diagnostic: "HIDDEN_SKIPPED_DETAILS" },
+        disposition: "SAFE_FAILURE",
+      },
+    } as unknown as ToolBatchItemOutcome;
+
+    const projected = projector.project({
+      calls,
+      items: [unknown, notStarted],
+      policy: { maxSingleObservationTokens: 1000, maxObservationBatchTokens: 4000 },
+    });
+    const messages = [
+      toToolResultMessage(unknown, "amsg_0192f5b1-4d3a-7c2e-8a91-0000000000f2"),
+      toToolResultMessage(notStarted, "amsg_0192f5b1-4d3a-7c2e-8a91-0000000000f3"),
+    ];
+
+    expect(projected.map(({ message }) => message.isError)).toEqual([true, true]);
+    expect(messages.map(({ isError }) => isError)).toEqual([true, true]);
+    expect(messages.map(({ observation }) => observation.kind)).toEqual([
+      "OBSERVATION",
+      "NO_OBSERVATION",
+    ]);
+    const serialized = JSON.stringify(messages);
+    for (const hidden of [
+      "tinv_hidden_unknown_invocation",
+      "HIDDEN_ERROR_DETAILS",
+      "HIDDEN_SKIPPED_DETAILS",
+      "HIDDEN_RAW_ARTIFACT",
+    ]) {
+      expect(serialized).not.toContain(hidden);
+    }
+
+    const modelResults = createToolResultBatchNormalizer().normalize({
+      requests: calls,
+      results: projected.map(({ message }) => message).reverse(),
+    });
+    expect(modelResults.map(({ toolCallId }) => toolCallId)).toEqual([
+      "call_unknown",
+      "call_not_started",
+    ]);
   });
 });

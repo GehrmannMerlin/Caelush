@@ -1,4 +1,11 @@
-import type { ApprovalRequest, RunId, SessionId, StepId, ToolInvocationId, ToolObservation } from "@caelush/protocol";
+import type {
+  ApprovalRequest,
+  RunId,
+  SessionId,
+  StepId,
+  ToolInvocationId,
+  ToolObservation,
+} from "@caelush/protocol";
 
 import type { AgentBudgetBlock } from "../../loop/ports/model-request-admission.js";
 import type { ToolCallRequest } from "../call/tool-call-preparer.js";
@@ -28,7 +35,7 @@ import type { ToolSecurityContext } from "../admission/security-context.js";
  * ```text
  * OBSERVATION   a call that reached the durable ledger, carrying the DURABLE ToolObservation
  * REJECTED      a call the Preparer refused, carrying only safe model feedback
- * SKIPPED       a call the batch barrier refused, carrying only safe model feedback
+ * SKIPPED       a call never started after an unknown outcome or batch cancellation, carrying only safe model feedback
  * ```
  *
  * None of the three carries a raw `AgentToolResult`, a raw artifact, an exception, a `ToolEffect[]`,
@@ -39,6 +46,10 @@ import type { ToolSecurityContext } from "../admission/security-context.js";
  * Every arm carries the `ToolCallRequest` it is about, so a projection can derive both `toolCallId`
  * and `toolName` from the original call rather than by parsing a string. That is what makes "one
  * result per original call, same identity, original order" checkable rather than hoped for.
+ *
+ * A `SKIPPED` item is not a durable Tool invocation. It uses the stable `TOOL_NOT_STARTED` feedback
+ * code and has no invocation identity or observation; cancellation and unknown-outcome barriers remain
+ * batch-local scheduling facts.
  */
 
 /**

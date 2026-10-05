@@ -323,6 +323,21 @@ describe("Phase 4D canonical batch boundaries", () => {
     expect(planner).not.toContain('"CONCURRENT"');
   });
 
+  it("uses explicit unknown-outcome and not-started feedback without a new durable contract", () => {
+    const batch = read(`${BATCH}batch-coordinator.ts`);
+    expect(batch).toContain('export const TOOL_NOT_STARTED = "TOOL_NOT_STARTED";');
+    expect(batch).toContain("export const TOOL_NOT_STARTED_CONTENT");
+    expect(batch).toContain("code: TOOL_NOT_STARTED");
+    expect(batch).toContain('disposition: "SAFE_FAILURE"');
+    expect(batch).toContain('record.code === "TOOL_OUTCOME_UNKNOWN"');
+    expect(batch).toContain("executionDisposition");
+    expect(batch).toContain('"UNCERTAIN_SIDE_EFFECT"');
+
+    // These are model-feedback and scheduling facts only; neither changes the durable schema.
+    const protocol = codeUnder("packages/protocol/src/");
+    expect(protocol).not.toContain("TOOL_NOT_STARTED");
+  });
+
   it("keeps the pre-invocation rejection free of every durable side effect", () => {
     const batch = executable(`${BATCH}batch-coordinator.ts`);
 

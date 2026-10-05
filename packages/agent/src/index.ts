@@ -709,6 +709,8 @@ export {
   readResultShape,
   readSanitizedResultShape,
   requireToolDurableMetadata,
+  TOOL_NOT_STARTED,
+  TOOL_NOT_STARTED_CONTENT,
   SKIPPED_AFTER_UNCERTAIN_CONTENT,
   SKIPPED_AFTER_UNCERTAIN_EXECUTION,
   startToolInvocation,

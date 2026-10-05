@@ -50,7 +50,7 @@ import type {
  *        REJECTED  -> append REJECTED, continue
  *        READY     -> DurableToolExecutionCoordinator.execute(...)
  *                       SETTLED           -> append OBSERVATION
- *                                            if UNCERTAIN_SIDE_EFFECT: skipRemaining = true
+ *                                            if TOOL_OUTCOME_UNKNOWN: skipRemaining = true
  *                       WAITING_APPROVAL  -> return WAITING_APPROVAL
  *                       BUDGET_EXCEEDED   -> return BUDGET_EXCEEDED
  *                       CANCELLED         -> return CANCELLED
@@ -76,15 +76,15 @@ import type {
  * `RunController` here: each of those belongs to one of the three collaborators above, and a Batch that
  * held a second reference to them would be a second owner of somebody else's authority.
  *
- * ## Why a rejection is not a barrier but an uncertain execution is
+ * ## Why an ordinary failure is not a barrier but an unknown outcome is
  *
  * A `REJECTED` call executed nothing, so the next call is unaffected and the loop continues: the model
  * asked for two things, one of them was malformed, and the other is still worth doing.
  *
- * An `UNCERTAIN_SIDE_EFFECT` settlement means a Tool may have partially or fully changed the world. The
+ * A `TOOL_OUTCOME_UNKNOWN` settlement means a Tool may have partially or fully changed the world. The
  * remaining calls were chosen by a model that believed the earlier ones had not run, so running them
- * would apply a plan to a state nobody observed. They become `SKIPPED` — safe feedback, no durable row,
- * no execution.
+ * would apply a plan to a state nobody observed. They become `TOOL_NOT_STARTED` — safe feedback, no
+ * durable row, no execution. Ordinary safe Tool failures do not stop the batch.
  */
 export interface ToolBatchCoordinatorOptions {
   /** Resolves the model's Tool call against the active catalog. */
@@ -99,25 +99,23 @@ export interface ToolBatchCoordinatorOptions {
   readonly maxExternalCallIdBytes?: number | undefined;
 }
 
-/**
- * The model-facing code a skipped call carries.
- *
- * Stable and never localized, exactly like the rejection codes. It is deliberately the code the legacy
- * batch used, so a model that had learned to recognize it does not have to relearn it.
- */
-export const SKIPPED_AFTER_UNCERTAIN_EXECUTION = "SKIPPED_AFTER_UNCERTAIN_EXECUTION";
+/** Stable model-facing code for a call that the batch did not start. */
+export const TOOL_NOT_STARTED = "TOOL_NOT_STARTED";
 
-/**
- * The content a skipped call shows the model.
- *
- * It states three things and nothing more: an earlier Tool may have run, this dependent chain must not
- * continue automatically, and the state should be re-inspected before retrying. It carries no raw
- * exception, no absolute path, no command output, no secret and no stack — a skip is a *batch* fact, not
- * a report about somebody's failed operation.
- */
-export const SKIPPED_AFTER_UNCERTAIN_CONTENT =
-  "This tool call was skipped because an earlier tool execution may have partially or fully completed. " +
-  "Do not continue this dependent tool chain automatically; re-inspect the current state before retrying.";
+/** Safe, bounded feedback for a call withheld after an earlier result became unknown. */
+export const TOOL_NOT_STARTED_CONTENT =
+  "This tool call was not started because an earlier tool outcome is unknown. " +
+  "Do not continue or retry this dependent chain automatically; inspect current state first.";
+
+/** Safe, bounded feedback for a call withheld because the batch was cancelled. */
+const TOOL_NOT_STARTED_CANCELLED_CONTENT =
+  "This tool call was not started because the tool batch was cancelled.";
+
+/** @deprecated Use TOOL_NOT_STARTED. Kept as a source-compatible alias for existing Agent hosts. */
+export const SKIPPED_AFTER_UNCERTAIN_EXECUTION = TOOL_NOT_STARTED;
+
+/** @deprecated Use TOOL_NOT_STARTED_CONTENT. */
+export const SKIPPED_AFTER_UNCERTAIN_CONTENT = TOOL_NOT_STARTED_CONTENT;
 
 /**
  * Build the canonical Tool batch coordinator.
@@ -138,7 +136,7 @@ export function createToolBatchCoordinator(
 
       // Cancellation is checked before any real work. A pre-aborted batch has no Tool side effect, no
       // durable row and no budget reservation; the only correct statement is that it was cancelled.
-      if (request.signal.aborted) return cancelledOutcome([]);
+      if (request.signal.aborted) return cancelledOutcome([], request.calls);
 
       const block = await preflightBudget(options, request);
       if (block !== null) {
@@ -170,8 +168,12 @@ async function executeCalls(
 
   const items: ToolBatchItemOutcome[] = [];
   let skipRemaining = false;
+  let callIndex = 0;
 
   for (const call of request.calls) {
+    const notStartedCalls = request.calls.slice(callIndex);
+    callIndex += 1;
+
     if (skipRemaining) {
       // The call is not prepared, not admitted, not durably recorded and not executed. It is a
       // batch-level safe statement, not a fabricated Tool execution.
@@ -179,7 +181,7 @@ async function executeCalls(
       continue;
     }
 
-    if (request.signal.aborted) return cancelledOutcome(items);
+    if (request.signal.aborted) return cancelledOutcome(items, notStartedCalls);
 
     const prepared = prepareCall(options, call);
     if (prepared.kind === "REJECTED") {
@@ -190,7 +192,7 @@ async function executeCalls(
     }
 
     const settled = await executeOne(options, request, prepared.call);
-    if (settled.kind === "ABORTED") return cancelledOutcome(items);
+    if (settled.kind === "ABORTED") return cancelledOutcome(items, notStartedCalls);
     const outcome = settled.outcome;
     switch (outcome.kind) {
       case "SETTLED": {
@@ -206,7 +208,7 @@ async function executeCalls(
         );
         // A known, safe Tool failure is not a barrier: the loop continues. Only an unproven side
         // effect stops the batch.
-        if (isUncertainSettlement(invocation.error?.details)) skipRemaining = true;
+        if (isUncertainSettlement(invocation.error)) skipRemaining = true;
         break;
       }
       case "WAITING_APPROVAL": {
@@ -243,7 +245,7 @@ async function executeCalls(
             }),
           );
         }
-        return cancelledOutcome(items);
+        return cancelledOutcome(items, request.calls.slice(callIndex));
       }
     }
   }
@@ -365,18 +367,30 @@ async function preflightBudget(
  * Items
  * ---------------------------------------------------------------------------------------------- */
 
-function skippedItem(call: ToolCallRequest): ToolBatchItemOutcome {
+function skippedItem(
+  call: ToolCallRequest,
+  content: string = TOOL_NOT_STARTED_CONTENT,
+): ToolBatchItemOutcome {
   const feedback: ToolFailureFeedback = Object.freeze({
-    code: SKIPPED_AFTER_UNCERTAIN_EXECUTION,
-    content: SKIPPED_AFTER_UNCERTAIN_CONTENT,
+    code: TOOL_NOT_STARTED,
+    content,
     details: Object.freeze({}),
-    disposition: "UNCERTAIN_SIDE_EFFECT",
+    disposition: "SAFE_FAILURE",
   });
   return Object.freeze({ kind: "SKIPPED", call, feedback });
 }
 
-function cancelledOutcome(items: readonly ToolBatchItemOutcome[]): ToolBatchOutcome {
-  return Object.freeze({ kind: "CANCELLED", items: Object.freeze([...items]) });
+function cancelledOutcome(
+  items: readonly ToolBatchItemOutcome[],
+  notStartedCalls: readonly ToolCallRequest[] = [],
+): ToolBatchOutcome {
+  const cancelledItems = notStartedCalls.map((call) =>
+    skippedItem(call, TOOL_NOT_STARTED_CANCELLED_CONTENT),
+  );
+  return Object.freeze({
+    kind: "CANCELLED",
+    items: Object.freeze([...items, ...cancelledItems]),
+  });
 }
 
 /**
@@ -396,10 +410,14 @@ function finalStatusOf(status: string): "COMPLETED" | "FAILED" | "CANCELLED" {
 /**
  * Whether a durable invocation records an unproven side effect.
  *
- * Read from the durable error's `details`, which is where the settlement wrote it. The batch does not
- * infer uncertainty from a Tool name, an error message or a status: only the durable record decides.
+ * The current durable error code is authoritative. The details check remains as read compatibility for
+ * historical or host-authored records; uncertainty is never inferred from a Tool name or error text.
  */
-function isUncertainSettlement(details: unknown): boolean {
+function isUncertainSettlement(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const record = error as { readonly code?: unknown; readonly details?: unknown };
+  if (record.code === "TOOL_OUTCOME_UNKNOWN") return true;
+  const details = record.details;
   if (typeof details !== "object" || details === null) return false;
   return (
     (details as { readonly executionDisposition?: unknown }).executionDisposition ===
