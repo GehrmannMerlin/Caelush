@@ -191,4 +191,24 @@ describe("Security Tool presentation", () => {
     expect(result.summary).toBe("工具执行失败");
     expect(result.summary).not.toContain("可重试");
   });
+
+  it("does not present a refused result as available", () => {
+    const presentation = new CaelushToolPresentation({
+      terminalOutputSanitizer: identityTerminalSanitizer,
+    });
+    const details = Object.fromEntries(
+      Array.from({ length: 4_097 }, (_, index) => [`entry_${index}`, index]),
+    ) as JsonObject;
+
+    const result = presentation.presentResult({
+      invocation: failedInvocation({
+        code: "TOOL_OUTPUT_ERROR",
+        message: "safe internal message",
+        retryable: false,
+      }),
+      result: { content: "safe result output", details, isError: true },
+    });
+
+    expect(result.summary).toBe("工具输出无法安全使用");
+  });
 });

@@ -64,7 +64,12 @@ export class CaelushToolPresentation implements ToolPresentationPort {
         invocation: input.invocation,
         result: input.result,
       });
-      if (sanitized.kind === "REFUSED") return { title, summary: "工具结果可用" };
+      if (sanitized.kind === "REFUSED") {
+        return {
+          title,
+          summary: failureSummary(input.invocation, input.result.isError) ?? "工具输出无法安全使用",
+        };
+      }
       const safe = sanitized.result;
       const summary = this.resultSummary(input.invocation, safe);
       if (
