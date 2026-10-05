@@ -43,6 +43,32 @@ function getFactory(name: string): (() => string) | undefined {
  * `@caelush/coding-agent`. What remains here is what a **persisted row** actually stores.
  */
 describe("protocol tool contracts", () => {
+  it("parses TOOL_OUTCOME_UNKNOWN as an Agent error without changing Tool statuses", () => {
+    const errorCodeSchema = getSchema("AgentErrorCodeSchema");
+    const agentErrorSchema = getSchema("AgentErrorSchema");
+    const statusSchema = getSchema("ToolInvocationStatusSchema");
+    if (
+      errorCodeSchema === undefined ||
+      agentErrorSchema === undefined ||
+      statusSchema === undefined
+    ) {
+      return;
+    }
+
+    expect(errorCodeSchema.parse("TOOL_OUTCOME_UNKNOWN")).toBe("TOOL_OUTCOME_UNKNOWN");
+    expect(
+      (
+        agentErrorSchema.parse({
+          code: "TOOL_OUTCOME_UNKNOWN",
+          message: "Tool outcome is unknown.",
+          retryable: false,
+          phase: "RUNTIME",
+        }) as { readonly retryable: boolean }
+      ).retryable,
+    ).toBe(false);
+    expect(statusSchema.safeParse("UNKNOWN").success).toBe(false);
+  });
+
   it("parses a durable ToolInvocation and its status set", () => {
     const invocationSchema = getSchema("ToolInvocationSchema");
     const createRunId = getFactory("createRunId");
