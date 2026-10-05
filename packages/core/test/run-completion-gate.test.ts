@@ -739,4 +739,14 @@ describe("Phase 3E completion settlement routing", () => {
       ).toBe("TERMINATION_AUTHORITY");
     }
   });
+
+  it("preserves termination authority over a simultaneous verification error", () => {
+    const route = classifyCompletionEffectSettlement({
+      decision: { kind: "ERROR", error, retryable: false },
+      observation: createCompletionGateObservation({ effectiveMode: "EXECUTE" }),
+      terminationDecided: true,
+    });
+
+    expect(route.route).toBe("TERMINATION_AUTHORITY");
+  });
 });

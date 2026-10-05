@@ -78,9 +78,9 @@ export function evaluateVerification(
   }
 
   let status: VerificationEvaluationStatus = "PASSED";
-  if (incompleteCheckIds.length > 0) status = "INCOMPLETE";
+  if (errorCheckIds.length > 0) status = "ERROR";
   else if (failedCheckIds.length > 0) status = "FAILED";
-  else if (errorCheckIds.length > 0) status = "ERROR";
+  else if (incompleteCheckIds.length > 0) status = "INCOMPLETE";
 
   return { status, incompleteCheckIds, failedCheckIds, errorCheckIds, warnings };
 }

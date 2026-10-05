@@ -339,6 +339,55 @@ describe("Phase 11A verification evaluator", () => {
     expect(evaluateVerification(plan, []).status).toBe("INCOMPLETE");
   });
 
+  it("prioritizes settled blockers over pending checks", () => {
+    const plan = materialize(new DefaultVerificationPlanner().plan(planningInput()));
+    const passedChecks = plan.checks.map((check) => ({ ...check, status: "PASSED" as const }));
+    const passedPlan = { ...plan, checks: passedChecks };
+    const passedEvidence = passedChecks.map((check) => evidence(passedPlan, check, { ok: true }));
+    const pendingCheckId = passedChecks[1]?.id;
+    const evidenceWithoutPending = passedEvidence.filter((item) => item.checkId !== pendingCheckId);
+    const errorPendingChecks = passedChecks.map((check, index) =>
+      index === 0
+        ? { ...check, status: "ERROR" as const }
+        : index === 1
+          ? { ...check, status: "PENDING" as const }
+          : check,
+    );
+    const errorPendingPlan = { ...plan, checks: errorPendingChecks };
+    const failedPendingChecks = passedChecks.map((check, index) =>
+      index === 0
+        ? { ...check, status: "FAILED" as const }
+        : index === 1
+          ? { ...check, status: "PENDING" as const }
+          : check,
+    );
+    const failedPendingPlan = { ...plan, checks: failedPendingChecks };
+    const errorFailedChecks = passedChecks.map((check, index) =>
+      index === 0
+        ? { ...check, status: "ERROR" as const }
+        : index === 1
+          ? { ...check, status: "FAILED" as const }
+          : check,
+    );
+    const errorFailedPlan = { ...plan, checks: errorFailedChecks };
+
+    expect(evaluateVerification(errorPendingPlan, evidenceWithoutPending).status).toBe("ERROR");
+    expect(evaluateVerification(failedPendingPlan, evidenceWithoutPending).status).toBe("FAILED");
+    expect(evaluateVerification(errorFailedPlan, passedEvidence).status).toBe("ERROR");
+    expect(
+      evaluateVerification(
+        {
+          ...plan,
+          checks: passedChecks.map((check, index) =>
+            index === 1 ? { ...check, status: "PENDING" as const } : check,
+          ),
+        },
+        evidenceWithoutPending,
+      ).status,
+    ).toBe("INCOMPLETE");
+    expect(evaluateVerification(passedPlan, passedEvidence).status).toBe("PASSED");
+  });
+
   it("distinguishes blocking failure, infrastructure error, unavailable skip, and advisory warning", () => {
     const plan = materialize(new DefaultVerificationPlanner().plan(planningInput()));
     const checks = plan.checks.map((check) => ({ ...check, status: "PASSED" as const }));
