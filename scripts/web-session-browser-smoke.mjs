@@ -1,12 +1,13 @@
 /* global Buffer, URL, fetch */
 
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import process from "node:process";
 import { createWorkspaceRef, startDaemon } from "../apps/daemon/dist/index.js";
+import { resolvePromptCacheArtifactDirectory } from "./browser-smoke-artifact-path.mjs";
 
 /**
  * The browser smoke's model backend.
@@ -319,13 +320,20 @@ function toolCallChunks(name, input, toolCallId) {
   ];
 }
 
+const promptCacheOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "PROMPT_CACHE";
+const configuredArtifactDirectory = process.env.CAELUSH_BROWSER_SMOKE_ARTIFACT_DIR;
+const browserArtifacts = promptCacheOnly
+  ? await resolvePromptCacheArtifactDirectory(process.cwd(), configuredArtifactDirectory)
+  : configuredArtifactDirectory === undefined
+    ? join(process.cwd(), "test-results", "web-session-browser-smoke")
+    : resolve(configuredArtifactDirectory);
+
 const directory = await mkdtemp(join(tmpdir(), "caelush-web-browser-"));
 const workspace = createWorkspaceRef(directory);
 // The workspace's parent, i.e. just outside the boundary. The escaping-patch scenarios target this
 // file and the smoke asserts it is byte-identical afterwards: an approval is a review, not a way out.
 const outsideFixture = resolve(directory, "..", "caelush-web-browser-outside.txt");
 const outsideFixtureContent = "outside fixture\n";
-const browserArtifacts = join(process.cwd(), "test-results", "web-session-browser-smoke");
 const browserRunner = resolve(process.cwd(), "scripts", "web-session-browser-runner.mjs");
 const fakeProvider = await startFakeModelServer();
 await writeFile(outsideFixture, outsideFixtureContent, "utf8");
@@ -368,9 +376,12 @@ try {
   await assertModelConfigured(daemon.url);
   await assertPermissionsUsable(daemon.url);
   await writeFile(join(directory, "fixture.txt"), "browser fixture\n", "utf8");
-  await rm(browserArtifacts, { recursive: true, force: true });
+  if (configuredArtifactDirectory === undefined) {
+    await rm(browserArtifacts, { recursive: true, force: true });
+  }
+  await mkdir(browserArtifacts, { recursive: true });
   const result = await runBrowserSmoke(daemon.url + "/", browserArtifacts, workspace);
-  if (result === 0) {
+  if (result === 0 && !promptCacheOnly) {
     const fixture = await readFile(join(directory, "fixture.txt"), "utf8");
     if (fixture !== "patched browser fixture\n") {
       throw new Error("Browser approval flow did not persist the verified patch.");
@@ -438,7 +449,9 @@ async function assertModelConfigured(url) {
     );
   }
 
-  const modelsResponse = await fetch(new URL("/api/v1/ai/models", url));
+  const modelsResponse = await fetch(
+    new URL(`/api/v1/ai/models?provider=${encodeURIComponent(FIXTURE_PROVIDER_ID)}`, url),
+  );
   if (!modelsResponse.ok) {
     throw new Error(`The AI model directory route answered HTTP ${modelsResponse.status}.`);
   }

@@ -140,6 +140,8 @@ describe("Phase 7D canonical contracts", () => {
     };
     const sourceMessages: readonly StoredAgentMessage[] = [];
     const input: ContextSummarizationInput = {
+      purpose: "COMPACTION",
+      cacheEligibility: "NOT_ELIGIBLE",
       identity,
       reason: "PROACTIVE_PRESSURE",
       previousCheckpoint: checkpoint,

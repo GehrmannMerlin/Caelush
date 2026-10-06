@@ -101,7 +101,9 @@ function sameUsage(left: ModelUsage, right: ModelUsage): boolean {
     left.outputTokens === right.outputTokens &&
     left.totalTokens === right.totalTokens &&
     left.cachedInputTokens === right.cachedInputTokens &&
-    left.reasoningTokens === right.reasoningTokens
+    left.reasoningTokens === right.reasoningTokens &&
+    left.cacheMissInputTokens === right.cacheMissInputTokens &&
+    left.cacheWriteInputTokens === right.cacheWriteInputTokens
   );
 }
 

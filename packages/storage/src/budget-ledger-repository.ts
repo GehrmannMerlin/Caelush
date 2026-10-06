@@ -105,6 +105,16 @@ export class SqliteBudgetLedgerRepository {
     return row === undefined ? null : decode(row);
   }
 
+  /** Every durable request reservation for one Run, ordered by creation time and identity. */
+  async listByRun(runId: RunId): Promise<readonly BudgetLedgerEntry[]> {
+    const rows = this.database.client
+      .prepare(
+        "SELECT * FROM run_budget_entries WHERE run_id = ? ORDER BY created_at_ms ASC, id ASC",
+      )
+      .all(runId) as unknown as BudgetRow[];
+    return rows.map(decode);
+  }
+
   async reserve(input: NewBudgetLedgerEntry | BudgetLedgerEntry): Promise<BudgetLedgerEntry> {
     const existing = await this.get(input.runId, input.kind, input.ownerId);
     if (existing !== null) {

@@ -1,4 +1,6 @@
-import type { AIMessage } from "@caelush/ai";
+import { createHash, randomUUID } from "node:crypto";
+
+import type { AIMessage, AIModelSettings } from "@caelush/ai";
 import type { EventId, TimestampMs } from "@caelush/protocol";
 
 import type { RunEventNotifierPort } from "../../events/notifier-port.js";
@@ -6,6 +8,30 @@ import type { DurableRunEventDraft } from "../../events/durable-run-event-draft.
 import type { PreparedModelContext } from "../../loop/types.js";
 import type { StoredAgentMessage } from "../../messages/persistence/record.js";
 import type { ContextPrepareInput, ContextEnginePort } from "../contracts/context-engine.js";
+import type { PreparedPromptSurface } from "../contracts/prepared-agent-context.js";
+import {
+  assertPromptSurfaceEpochWithSnapshots,
+  createPromptSurfaceEpoch,
+  createPromptSurfaceEpochId,
+  createPromptSurfaceFingerprint,
+  createPromptSurfaceSnapshot,
+  PromptSurfaceIntegrityError,
+} from "../surface/prompt-surface.js";
+import type {
+  PromptSurfaceEpoch,
+  PromptSurfaceEpochWithSnapshots,
+  PromptSurfaceResetReason,
+} from "../surface/prompt-surface.js";
+import type { PromptSurfaceStorePort } from "../surface/prompt-surface-store.js";
+import {
+  latestCompletePromptSurfaceAnchor,
+  promptSurfaceAnchorsAreAvailable,
+} from "../surface/prompt-surface-anchors.js";
+import {
+  CLEARED_RUNTIME_CONTEXT_SNAPSHOT,
+  renderRuntimeContextSnapshot,
+  renderStableContextHead,
+} from "../surface/prompt-surface-renderer.js";
 import {
   createContextCheckpointId,
   type ContextCompactionReason,
@@ -102,8 +128,10 @@ import type {
   ContextCompactionDependencies,
   ContextCompactionRebuildInputWithIdentity,
   ContextCompactionRebuildResult,
+  ContextSummaryReplayPrefix,
   ContextSummarizerPort,
 } from "../compaction/context-compaction-contracts.js";
+import { createContextSummaryReplayPrefixFingerprint } from "../compaction/context-summary.js";
 import {
   createContextRecoveryPlanner,
   withRecoveryTailPolicy,
@@ -161,6 +189,11 @@ export function createContextCompactionEventFactory(): ContextCompactionEventFac
 }
 
 export interface V2ContextEngineOptions {
+  /** The daemon-owned durable Prompt Surface boundary for model-input projection. */
+  readonly promptSurfaceStore: PromptSurfaceStorePort;
+  /** Provider-neutral settings used only to freeze the model-input cache identity. */
+  readonly modelSettings?: AIModelSettings;
+  readonly promptSurfaceEpochIdFactory?: { create(): string };
   readonly sourceRegistry: ContextSourceRegistry;
   readonly checkpointRepository: ContextCheckpointRepositoryPort;
   readonly authorityProvider: ContextAuthorityProviderPort;
@@ -329,6 +362,56 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           ? recoveryPlan.actions.filter((action) => action !== "EXHAUSTED")
           : [];
       if (recoveryPlan.actions.includes("COMPACT_HISTORY")) {
+        const replayAuthorities = await options.authorityProvider.snapshot({
+          identity: input.identity,
+          signal: input.signal,
+        });
+        throwIfAborted(input.signal);
+        const replayProjection = await buildPreparedProjectionWithoutCompaction({
+          contextInput: input,
+          policy: withRecoveryTailPolicy(policy, recoveryPlan),
+          sourceResults: activeSources,
+          activeCoverage,
+          ...(activeCheckpoint?.checkpointId === undefined
+            ? {}
+            : { promptSurfaceCheckpointId: String(activeCheckpoint.checkpointId) }),
+          ...(activeCheckpoint === undefined || activeCheckpoint.schemaVersion !== 2
+            ? {}
+            : { activeCheckpoint: activeCheckpointProjection(activeCheckpoint) }),
+          authorities: replayAuthorities,
+          planner,
+          sourcePriorities: sourcePriorityMap(options.sourceRegistry),
+          rehydrator,
+          documentBuilder,
+          materializer: options.materializer,
+          receiptBuilder,
+          promptSurfaceStore: options.promptSurfaceStore,
+          ...(options.modelSettings === undefined ? {} : { modelSettings: options.modelSettings }),
+          ...(options.promptSurfaceEpochIdFactory === undefined
+            ? {}
+            : { promptSurfaceEpochIdFactory: options.promptSurfaceEpochIdFactory }),
+          tokenEstimator,
+          clock: options.clock,
+          replayOnlyPromptSurface: true,
+          recoveryPlan,
+          sourceCriticality,
+          atomicGroupByItemId,
+          compactionCount: 0,
+        });
+        const replayProjectionIsComplete = promptProjectionPreservesUncoveredModelMessages({
+          conversationMessages: input.conversation.turns.flatMap((turn) => turn.messages),
+          selectedMessages: replayProjection.selectedMessages,
+          coveredMessageIds: activeCoverage.coveredMessageIds,
+        });
+        const replayPrefix =
+          replayProjection.promptSurface.replayEligible && replayProjectionIsComplete
+            ? createContextSummaryReplayPrefix({
+                model: input.model,
+                tools: input.tools,
+                promptSurface: replayProjection.promptSurface,
+                messages: replayProjection.materializedMessages,
+              })
+            : undefined;
         const reason: ContextCompactionReason =
           pressure.trigger === "FORCED_PROVIDER_OVERFLOW"
             ? "FORCED_PROVIDER_OVERFLOW"
@@ -387,6 +470,12 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
           history: activeCoverage.history,
           policy: withRecoveryTailPolicy(policy, recoveryPlan),
           model: input.model,
+          ...(replayPrefix === undefined
+            ? {}
+            : {
+                replayPrefix,
+                replayPrefixFingerprint: createContextSummaryReplayPrefixFingerprint(replayPrefix),
+              }),
           reason,
           signal: input.signal,
         });
@@ -415,6 +504,9 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         policy: finalPolicy,
         sourceResults: activeSources,
         activeCoverage,
+        ...(activeCheckpoint?.checkpointId === undefined
+          ? {}
+          : { promptSurfaceCheckpointId: String(activeCheckpoint.checkpointId) }),
         ...(activeCheckpoint === undefined
           ? {}
           : {
@@ -430,6 +522,13 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
         documentBuilder,
         materializer: options.materializer,
         receiptBuilder,
+        promptSurfaceStore: options.promptSurfaceStore,
+        ...(options.modelSettings === undefined ? {} : { modelSettings: options.modelSettings }),
+        ...(options.promptSurfaceEpochIdFactory === undefined
+          ? {}
+          : { promptSurfaceEpochIdFactory: options.promptSurfaceEpochIdFactory }),
+        tokenEstimator,
+        clock: options.clock,
         recoveryPlan,
         sourceCriticality,
         atomicGroupByItemId,
@@ -471,6 +570,7 @@ interface ContextBuildProjection {
   readonly selectedMessages: readonly StoredAgentMessage[];
   readonly materializedMessages: readonly AIMessage[];
   readonly audit: ContextReceiptBuilderResult;
+  readonly promptSurface: PromptSurfacePreparationResult;
 }
 
 async function buildPreparedProjectionWithoutCompaction(input: {
@@ -479,6 +579,7 @@ async function buildPreparedProjectionWithoutCompaction(input: {
   readonly sourceResults: readonly ContextSourceResult[];
   readonly activeCoverage: ContextCompactionCoverage;
   readonly activeCheckpoint?: ActiveCheckpointProjection;
+  readonly promptSurfaceCheckpointId?: string;
   readonly authorities: ContextAuthoritySnapshot;
   readonly planner: ContextPlanner;
   readonly sourcePriorities: Readonly<Record<string, number>>;
@@ -486,6 +587,13 @@ async function buildPreparedProjectionWithoutCompaction(input: {
   readonly documentBuilder: ContextDocumentBuilder;
   readonly materializer: ContextMaterializer;
   readonly receiptBuilder: ContextReceiptBuilder;
+  readonly promptSurfaceStore: PromptSurfaceStorePort;
+  readonly modelSettings?: AIModelSettings;
+  readonly promptSurfaceEpochIdFactory?: { create(): string };
+  readonly tokenEstimator: ContextTokenEstimatorPort;
+  readonly clock: { now(): TimestampMs };
+  readonly persistPromptSurface?: boolean;
+  readonly replayOnlyPromptSurface?: boolean;
   readonly recoveryPlan?: ContextRecoveryPlan;
   readonly sourceCriticality?: Readonly<Record<string, "REQUIRED" | "OPTIONAL">>;
   readonly atomicGroupByItemId?: Readonly<Record<string, string>>;
@@ -526,6 +634,27 @@ async function buildPreparedProjectionWithoutCompaction(input: {
     input.activeCheckpoint?.checkpointId === undefined
       ? undefined
       : checkpointRef(input.activeCheckpoint);
+  const promptSurfaceCheckpointId =
+    input.promptSurfaceCheckpointId ?? input.activeCheckpoint?.checkpointId;
+  const promptSurface = await preparePromptSurface({
+    store: input.promptSurfaceStore,
+    contextInput: input.contextInput,
+    document,
+    conversationMessages: selectedMessages,
+    ...(promptSurfaceCheckpointId === undefined
+      ? {}
+      : { checkpointId: String(promptSurfaceCheckpointId) }),
+    tools: input.contextInput.tools,
+    ...(input.modelSettings === undefined ? {} : { modelSettings: input.modelSettings }),
+    clock: input.clock,
+    ...(input.promptSurfaceEpochIdFactory === undefined
+      ? {}
+      : { epochIdFactory: input.promptSurfaceEpochIdFactory }),
+    tokenEstimator: input.tokenEstimator,
+    compactionCommitted: input.compactionCount > 0,
+    persist: input.persistPromptSurface !== false,
+    replayOnly: input.replayOnlyPromptSurface === true,
+  });
   const provisional = input.receiptBuilder.build({
     identity: input.contextInput.identity,
     turn: input.contextInput.turn,
@@ -542,6 +671,7 @@ async function buildPreparedProjectionWithoutCompaction(input: {
     ...(input.compactionReceipt === undefined ? {} : { compaction: input.compactionReceipt }),
     compactionCount: input.compactionCount,
     ...(input.lastCompactionAt === undefined ? {} : { lastCompactionAt: input.lastCompactionAt }),
+    promptSurface: promptSurface.receipt,
   });
   const materializedMessages = await input.materializer.materialize({
     prepared: {
@@ -552,6 +682,7 @@ async function buildPreparedProjectionWithoutCompaction(input: {
       observationPolicy: input.policy.observationPolicy,
       ...(checkpoint === undefined ? {} : { checkpoint }),
       contextFingerprint: provisional.contextFingerprint,
+      promptSurface,
     },
     model: input.contextInput.model,
     signal: input.contextInput.signal,
@@ -574,8 +705,9 @@ async function buildPreparedProjectionWithoutCompaction(input: {
     ...(input.compactionReceipt === undefined ? {} : { compaction: input.compactionReceipt }),
     compactionCount: input.compactionCount,
     ...(input.lastCompactionAt === undefined ? {} : { lastCompactionAt: input.lastCompactionAt }),
+    promptSurface: promptSurface.receipt,
   });
-  return Object.freeze({ plan, selectedMessages, materializedMessages, audit });
+  return Object.freeze({ plan, selectedMessages, materializedMessages, audit, promptSurface });
 }
 
 interface CompactionCompositionInput {
@@ -644,6 +776,16 @@ function createCompactionComposition(input: CompactionCompositionInput): Compact
       documentBuilder: input.documentBuilder,
       materializer: input.options.materializer,
       receiptBuilder: input.receiptBuilder,
+      promptSurfaceStore: input.options.promptSurfaceStore,
+      ...(input.options.modelSettings === undefined
+        ? {}
+        : { modelSettings: input.options.modelSettings }),
+      ...(input.options.promptSurfaceEpochIdFactory === undefined
+        ? {}
+        : { promptSurfaceEpochIdFactory: input.options.promptSurfaceEpochIdFactory }),
+      tokenEstimator: input.options.tokenEstimator ?? createUtf8HeuristicTokenEstimator(),
+      clock: input.options.clock,
+      persistPromptSurface: false,
       recoveryPlan: input.recoveryPlan,
       sourceCriticality: input.sourceCriticality,
       atomicGroupByItemId: input.atomicGroupByItemId,
@@ -771,6 +913,40 @@ function selectedConversationMessages(plan: ContextPlan): readonly StoredAgentMe
   );
 }
 
+/**
+ * A later valid snapshot anchor does not prove that the planner retained earlier history.
+ * Cache replay is eligible only when every uncovered model-visible durable message remains
+ * in the current projection; otherwise the summary runs without a reusable prefix.
+ */
+interface PromptProjectionMessage {
+  readonly message: {
+    readonly id: string;
+    readonly audience: { readonly model: boolean };
+  };
+}
+
+export function promptProjectionPreservesUncoveredModelMessages(input: {
+  readonly conversationMessages: readonly PromptProjectionMessage[];
+  readonly selectedMessages: readonly PromptProjectionMessage[];
+  readonly coveredMessageIds: ReadonlySet<string>;
+}): boolean {
+  const uncoveredModelMessageIds = (messages: readonly PromptProjectionMessage[]) =>
+    messages
+      .filter(
+        (stored) =>
+          stored.message.audience.model && !input.coveredMessageIds.has(String(stored.message.id)),
+      )
+      .map((stored) => String(stored.message.id));
+  const expectedIds = uncoveredModelMessageIds(input.conversationMessages);
+  const selectedIds = uncoveredModelMessageIds(input.selectedMessages);
+  if (expectedIds.length !== selectedIds.length) return false;
+  const selected = new Set(selectedIds);
+  return (
+    selected.size === selectedIds.length &&
+    expectedIds.every((messageId) => selected.has(messageId))
+  );
+}
+
 function removeCoveredConversationMessages(
   results: readonly ContextSourceCollectionResult[],
   coveredMessageIds: ReadonlySet<string>,
@@ -849,4 +1025,542 @@ function throwIfAborted(signal: AbortSignal): void {
   const error = new Error("Context preparation was cancelled.");
   error.name = "AbortError";
   throw error;
+}
+
+interface PromptSurfacePreparationInput {
+  readonly store: PromptSurfaceStorePort;
+  readonly contextInput: ContextPrepareInput;
+  readonly document: import("../document/context-document.js").ContextDocument;
+  readonly conversationMessages: readonly StoredAgentMessage[];
+  readonly checkpointId?: string;
+  readonly tools: ContextPrepareInput["tools"];
+  readonly modelSettings?: AIModelSettings;
+  readonly epochIdFactory?: { create(): string };
+  readonly tokenEstimator: ContextTokenEstimatorPort;
+  readonly clock: { now(): TimestampMs };
+  readonly compactionCommitted: boolean;
+  readonly persist: boolean;
+  readonly replayOnly: boolean;
+}
+
+interface PromptSurfacePreparationResult extends PreparedPromptSurface {
+  /** True only when the existing epoch matches and the complete request can be replayed. */
+  readonly replayEligible: boolean;
+}
+
+async function preparePromptSurface(
+  input: PromptSurfacePreparationInput,
+): Promise<PromptSurfacePreparationResult> {
+  const identity = promptSurfaceIdentity(input);
+  if (input.replayOnly) return preparePromptSurfaceReplay(input, identity);
+  if (!input.persist) return preparePreviewSurface(input, identity);
+
+  let current: PromptSurfaceEpoch | undefined;
+  try {
+    current = await input.store.getCurrent(input.contextInput.identity.runId);
+  } catch (error) {
+    throw new PromptSurfaceIntegrityError("Prompt Surface epoch metadata could not be read.", {
+      cause: error,
+    });
+  }
+
+  let resetReason = resetReasonFor(current, identity, input);
+  let surface: PromptSurfaceEpochWithSnapshots | undefined;
+  if (current !== undefined && resetReason === undefined) {
+    try {
+      surface = await input.store.readEpoch(current.runId, current.epochId);
+      if (surface === undefined) throw new Error("missing surface");
+      assertPromptSurfaceEpochWithSnapshots(surface);
+    } catch (error) {
+      throw new PromptSurfaceIntegrityError("Persisted Prompt Surface failed integrity checks.", {
+        cause: error,
+      });
+    }
+    if (
+      !promptSurfaceAnchorsAreAvailable(
+        input.conversationMessages,
+        surface.snapshots.map((snapshot) => snapshot.anchorMessageSequence),
+      )
+    ) {
+      resetReason = "RECOVERY_INCOMPATIBLE";
+      surface = undefined;
+    }
+  }
+
+  if (resetReason !== undefined) {
+    if (current !== undefined && input.contextInput.turn.sequence < current.createdStepSequence) {
+      throw new PromptSurfaceIntegrityError(
+        "Prompt Surface reset would move behind the current durable Step.",
+      );
+    }
+    const epoch = createPromptSurfaceEpoch({
+      runId: input.contextInput.identity.runId,
+      epochId: createPromptSurfaceEpochId(input.epochIdFactory?.create() ?? randomUUID()),
+      modelRef: input.contextInput.model.ref,
+      stableHeadFingerprint: identity.stableHeadFingerprint,
+      toolSchemaFingerprint: identity.toolSchemaFingerprint,
+      cacheSettingsFingerprint: identity.cacheSettingsFingerprint,
+      resetReason,
+      createdStepSequence: input.contextInput.turn.sequence,
+      createdAt: input.clock.now(),
+    });
+    try {
+      await input.store.createEpoch(epoch);
+      surface = { ...epoch, snapshots: [] };
+    } catch (error) {
+      const concurrent = await readCurrentSurface(input.store, epoch.runId);
+      if (concurrent !== undefined && samePromptSurfaceIdentity(epoch, concurrent)) {
+        surface = concurrent;
+      } else {
+        throw new PromptSurfaceIntegrityError("Prompt Surface epoch could not be committed.", {
+          cause: error,
+        });
+      }
+    }
+  }
+
+  if (surface === undefined) {
+    throw new PromptSurfaceIntegrityError("Prompt Surface preparation has no complete epoch.");
+  }
+
+  const currentStepSnapshot = surface.snapshots.find(
+    (snapshot) => snapshot.sourceStepSequence === input.contextInput.turn.sequence,
+  );
+  if (currentStepSnapshot !== undefined) {
+    if (surface.snapshots.at(-1)?.sourceStepSequence !== input.contextInput.turn.sequence) {
+      throw new PromptSurfaceIntegrityError("Prompt Surface retry is not the latest durable Step.");
+    }
+    return preparedSurface(surface, input);
+  }
+  if (
+    surface.snapshots.some(
+      (snapshot) => snapshot.sourceStepSequence > input.contextInput.turn.sequence,
+    ) ||
+    input.contextInput.turn.sequence < surface.createdStepSequence
+  ) {
+    throw new PromptSurfaceIntegrityError(
+      "Prompt Surface Step order is incompatible with recovery.",
+    );
+  }
+
+  const lastSnapshot = surface.snapshots.at(-1);
+  let content = renderRuntimeContextSnapshot(input.document);
+  if (content === undefined) {
+    if (lastSnapshot === undefined || isClearedSnapshot(lastSnapshot.content)) {
+      return preparedSurface(surface, input);
+    }
+    content = CLEARED_RUNTIME_CONTEXT_SNAPSHOT;
+  } else if (lastSnapshot?.content === content) {
+    return preparedSurface(surface, input);
+  }
+
+  const anchorMessageSequence = latestCompletePromptSurfaceAnchor(input.conversationMessages);
+  if (lastSnapshot !== undefined && anchorMessageSequence < lastSnapshot.anchorMessageSequence) {
+    throw new PromptSurfaceIntegrityError("Prompt Surface anchor would move backwards.");
+  }
+  const snapshot = createPromptSurfaceSnapshot({
+    runId: surface.runId,
+    epochId: surface.epochId,
+    ordinal: surface.snapshots.length + 1,
+    anchorMessageSequence,
+    sourceStepSequence: input.contextInput.turn.sequence,
+    kind: "RUNTIME_CONTEXT_SNAPSHOT",
+    content,
+    createdAt: input.clock.now(),
+  });
+  const appendEpochId = surface.epochId;
+  try {
+    await input.store.appendSnapshot(snapshot, promptSurfaceEpochOnly(surface));
+    surface = await readCurrentSurface(input.store, snapshot.runId, appendEpochId);
+  } catch (error) {
+    const concurrent = await readCurrentSurface(input.store, snapshot.runId, appendEpochId);
+    const replay = concurrent?.snapshots.find(
+      (candidate) => candidate.sourceStepSequence === snapshot.sourceStepSequence,
+    );
+    if (
+      concurrent === undefined ||
+      replay === undefined ||
+      replay.anchorMessageSequence !== snapshot.anchorMessageSequence ||
+      replay.contentHash !== snapshot.contentHash
+    ) {
+      throw new PromptSurfaceIntegrityError("Prompt Surface snapshot could not be committed.", {
+        cause: error,
+      });
+    }
+    surface = concurrent;
+  }
+  if (surface === undefined) {
+    throw new PromptSurfaceIntegrityError("Prompt Surface snapshot commit returned no surface.");
+  }
+  try {
+    assertPromptSurfaceEpochWithSnapshots(surface);
+  } catch (error) {
+    throw new PromptSurfaceIntegrityError("Committed Prompt Surface failed integrity checks.", {
+      cause: error,
+    });
+  }
+  return preparedSurface(surface, input);
+}
+
+function preparePreviewSurface(
+  input: PromptSurfacePreparationInput,
+  identity: ReturnType<typeof promptSurfaceIdentity>,
+): PromptSurfacePreparationResult {
+  const epoch = createPromptSurfaceEpoch({
+    runId: input.contextInput.identity.runId,
+    epochId: `preview-${input.contextInput.turn.sequence}-${randomUUID()}`,
+    modelRef: input.contextInput.model.ref,
+    stableHeadFingerprint: identity.stableHeadFingerprint,
+    toolSchemaFingerprint: identity.toolSchemaFingerprint,
+    cacheSettingsFingerprint: identity.cacheSettingsFingerprint,
+    resetReason: "COMPACTION_COMMITTED",
+    createdStepSequence: input.contextInput.turn.sequence,
+    createdAt: input.clock.now(),
+  });
+  const content = renderRuntimeContextSnapshot(input.document);
+  const snapshots =
+    content === undefined
+      ? []
+      : [
+          createPromptSurfaceSnapshot({
+            runId: epoch.runId,
+            epochId: epoch.epochId,
+            ordinal: 1,
+            anchorMessageSequence: latestCompletePromptSurfaceAnchor(input.conversationMessages),
+            sourceStepSequence: input.contextInput.turn.sequence,
+            kind: "RUNTIME_CONTEXT_SNAPSHOT",
+            content,
+            createdAt: input.clock.now(),
+          }),
+        ];
+  return preparedSurface({ ...epoch, snapshots }, input, false);
+}
+
+/** Reconstruct the request surface without creating epochs or appending snapshots. */
+async function preparePromptSurfaceReplay(
+  input: PromptSurfacePreparationInput,
+  identity: ReturnType<typeof promptSurfaceIdentity>,
+): Promise<PromptSurfacePreparationResult> {
+  let current: PromptSurfaceEpoch | undefined;
+  try {
+    current = await input.store.getCurrent(input.contextInput.identity.runId);
+  } catch (error) {
+    throw new PromptSurfaceIntegrityError("Prompt Surface epoch metadata could not be read.", {
+      cause: error,
+    });
+  }
+  if (
+    current === undefined ||
+    !promptSurfaceReplayIdentityMatches({
+      current,
+      model: input.contextInput.model,
+      identity,
+    })
+  ) {
+    return preparePreviewSurface(input, identity);
+  }
+
+  let surface: PromptSurfaceEpochWithSnapshots;
+  try {
+    const loaded = await input.store.readEpoch(current.runId, current.epochId);
+    if (loaded === undefined) throw new Error("missing surface");
+    assertPromptSurfaceEpochWithSnapshots(loaded);
+    surface = loaded;
+  } catch (error) {
+    throw new PromptSurfaceIntegrityError("Persisted Prompt Surface failed integrity checks.", {
+      cause: error,
+    });
+  }
+  if (
+    !promptSurfaceAnchorsAreAvailable(
+      input.conversationMessages,
+      surface.snapshots.map((snapshot) => snapshot.anchorMessageSequence),
+    )
+  ) {
+    return preparePreviewSurface(input, identity);
+  }
+
+  const currentStepSnapshot = surface.snapshots.find(
+    (snapshot) => snapshot.sourceStepSequence === input.contextInput.turn.sequence,
+  );
+  if (currentStepSnapshot !== undefined) {
+    if (surface.snapshots.at(-1)?.sourceStepSequence !== input.contextInput.turn.sequence) {
+      throw new PromptSurfaceIntegrityError("Prompt Surface retry is not the latest durable Step.");
+    }
+    return preparedSurface(surface, input, true);
+  }
+  if (
+    surface.snapshots.some(
+      (snapshot) => snapshot.sourceStepSequence > input.contextInput.turn.sequence,
+    ) ||
+    input.contextInput.turn.sequence < surface.createdStepSequence
+  ) {
+    throw new PromptSurfaceIntegrityError(
+      "Prompt Surface Step order is incompatible with recovery.",
+    );
+  }
+
+  const lastSnapshot = surface.snapshots.at(-1);
+  let content = renderRuntimeContextSnapshot(input.document);
+  if (content === undefined) {
+    if (lastSnapshot === undefined || isClearedSnapshot(lastSnapshot.content)) {
+      return preparedSurface(surface, input, true);
+    }
+    content = CLEARED_RUNTIME_CONTEXT_SNAPSHOT;
+  } else if (lastSnapshot?.content === content) {
+    return preparedSurface(surface, input, true);
+  }
+
+  const anchorMessageSequence = latestCompletePromptSurfaceAnchor(input.conversationMessages);
+  if (lastSnapshot !== undefined && anchorMessageSequence < lastSnapshot.anchorMessageSequence) {
+    throw new PromptSurfaceIntegrityError("Prompt Surface anchor would move backwards.");
+  }
+  const snapshot = createPromptSurfaceSnapshot({
+    runId: surface.runId,
+    epochId: surface.epochId,
+    ordinal: surface.snapshots.length + 1,
+    anchorMessageSequence,
+    sourceStepSequence: input.contextInput.turn.sequence,
+    kind: "RUNTIME_CONTEXT_SNAPSHOT",
+    content,
+    createdAt: input.clock.now(),
+  });
+  surface = Object.freeze({
+    ...surface,
+    snapshots: Object.freeze([...surface.snapshots, snapshot]),
+  });
+  try {
+    assertPromptSurfaceEpochWithSnapshots(surface);
+  } catch (error) {
+    throw new PromptSurfaceIntegrityError("Replay Prompt Surface failed integrity checks.", {
+      cause: error,
+    });
+  }
+  return preparedSurface(surface, input, true);
+}
+
+interface PromptSurfaceIdentity {
+  readonly stableHeadFingerprint: string;
+  readonly toolSchemaFingerprint: string;
+  readonly cacheSettingsFingerprint: string;
+}
+
+function promptSurfaceIdentity(input: PromptSurfacePreparationInput): PromptSurfaceIdentity {
+  return {
+    stableHeadFingerprint: promptSurfaceStableHeadFingerprint({
+      stableHead: renderStableContextHead(input.document),
+      ...(input.checkpointId === undefined ? {} : { checkpointId: input.checkpointId }),
+    }),
+    toolSchemaFingerprint: fingerprint(stableJson(input.tools)),
+    cacheSettingsFingerprint: fingerprint(
+      stableJson({
+        api: input.contextInput.model.api,
+        promptCaching: input.contextInput.model.capabilities.promptCaching,
+        settings: input.modelSettings ?? null,
+      }),
+    ),
+  };
+}
+
+/** Bind the reusable stable head to the durable checkpoint revision it accompanies. */
+export function promptSurfaceStableHeadFingerprint(input: {
+  readonly stableHead: string;
+  readonly checkpointId?: string;
+}): string {
+  return fingerprint(
+    stableJson({
+      stableHead: input.stableHead,
+      checkpointId: input.checkpointId ?? null,
+    }),
+  );
+}
+
+/** Internal predicate shared by replay selection and focused identity tests. */
+export function promptSurfaceReplayIdentityMatches(input: {
+  readonly current: {
+    readonly modelRef: { readonly provider: string; readonly model: string };
+    readonly stableHeadFingerprint: string;
+    readonly toolSchemaFingerprint: string;
+    readonly cacheSettingsFingerprint: string;
+  };
+  readonly model: ContextPrepareInput["model"];
+  readonly identity: PromptSurfaceIdentity;
+}): boolean {
+  return (
+    input.current.modelRef.provider === input.model.ref.provider &&
+    input.current.modelRef.model === input.model.ref.model &&
+    input.current.stableHeadFingerprint === input.identity.stableHeadFingerprint &&
+    input.current.toolSchemaFingerprint === input.identity.toolSchemaFingerprint &&
+    input.current.cacheSettingsFingerprint === input.identity.cacheSettingsFingerprint
+  );
+}
+
+function createContextSummaryReplayPrefix(input: {
+  readonly model: ContextPrepareInput["model"];
+  readonly tools: ContextPrepareInput["tools"];
+  readonly promptSurface: PromptSurfacePreparationResult;
+  readonly messages: readonly AIMessage[];
+}): ContextSummaryReplayPrefix {
+  return Object.freeze({
+    modelRef: Object.freeze({ ...input.model.ref }),
+    api: input.model.api,
+    surfaceFingerprint: input.promptSurface.receipt.prefixFingerprint,
+    messages: Object.freeze([...input.messages]),
+    tools: Object.freeze([...input.tools]),
+  });
+}
+
+function resetReasonFor(
+  current: PromptSurfaceEpoch | undefined,
+  identity: ReturnType<typeof promptSurfaceIdentity>,
+  input: PromptSurfacePreparationInput,
+): PromptSurfaceResetReason | undefined {
+  if (current === undefined) {
+    return input.compactionCommitted ? "COMPACTION_COMMITTED" : "INITIAL";
+  }
+  if (
+    input.compactionCommitted &&
+    !(
+      current.createdStepSequence === input.contextInput.turn.sequence &&
+      current.resetReason === "COMPACTION_COMMITTED"
+    )
+  ) {
+    return "COMPACTION_COMMITTED";
+  }
+  if (
+    current.modelRef.provider !== input.contextInput.model.ref.provider ||
+    current.modelRef.model !== input.contextInput.model.ref.model
+  ) {
+    return "MODEL_CHANGED";
+  }
+  if (current.toolSchemaFingerprint !== identity.toolSchemaFingerprint) {
+    return "TOOL_SCHEMA_CHANGED";
+  }
+  if (current.stableHeadFingerprint !== identity.stableHeadFingerprint) {
+    return "STABLE_HEAD_CHANGED";
+  }
+  if (current.cacheSettingsFingerprint !== identity.cacheSettingsFingerprint) {
+    return "CACHE_SETTINGS_CHANGED";
+  }
+  return undefined;
+}
+
+async function readCurrentSurface(
+  store: PromptSurfaceStorePort,
+  runId: ContextPrepareInput["identity"]["runId"],
+  epochId?: PromptSurfaceEpoch["epochId"],
+): Promise<PromptSurfaceEpochWithSnapshots | undefined> {
+  try {
+    if (epochId !== undefined) return await store.readEpoch(runId, epochId);
+    const current = await store.getCurrent(runId);
+    return current === undefined ? undefined : await store.readEpoch(runId, current.epochId);
+  } catch (error) {
+    throw new PromptSurfaceIntegrityError("Persisted Prompt Surface could not be verified.", {
+      cause: error,
+    });
+  }
+}
+
+function samePromptSurfaceIdentity(left: PromptSurfaceEpoch, right: PromptSurfaceEpoch): boolean {
+  return (
+    left.runId === right.runId &&
+    left.createdStepSequence === right.createdStepSequence &&
+    left.resetReason === right.resetReason &&
+    left.modelRef.provider === right.modelRef.provider &&
+    left.modelRef.model === right.modelRef.model &&
+    left.stableHeadFingerprint === right.stableHeadFingerprint &&
+    left.toolSchemaFingerprint === right.toolSchemaFingerprint &&
+    left.cacheSettingsFingerprint === right.cacheSettingsFingerprint
+  );
+}
+
+function preparedSurface(
+  surface: PromptSurfaceEpochWithSnapshots,
+  input: PromptSurfacePreparationInput,
+  replayEligible = true,
+): PromptSurfacePreparationResult {
+  assertPromptSurfaceEpochWithSnapshots(surface);
+  const stableHead = renderStableContextHead(input.document);
+  const stableHeadTokens = estimatePromptSurfaceTokens(
+    input.tokenEstimator.estimateText(stableHead, input.contextInput.model),
+    "stable head",
+  );
+  const snapshotTokens = surface.snapshots.reduce(
+    (sum, snapshot) =>
+      sum +
+      estimatePromptSurfaceTokens(
+        input.tokenEstimator.estimateText(snapshot.content, input.contextInput.model),
+        "snapshot",
+      ),
+    0,
+  );
+  const expectedReusablePrefixTokens = estimatePromptSurfaceTokens(
+    stableHeadTokens + snapshotTokens,
+    "reusable prefix",
+  );
+  const prefixFingerprint = fingerprint(
+    stableJson({
+      stableHeadFingerprint: surface.stableHeadFingerprint,
+      toolSchemaFingerprint: surface.toolSchemaFingerprint,
+      cacheSettingsFingerprint: surface.cacheSettingsFingerprint,
+      snapshots: surface.snapshots.map((snapshot) => ({
+        ordinal: snapshot.ordinal,
+        anchorMessageSequence: snapshot.anchorMessageSequence,
+        contentHash: snapshot.contentHash,
+      })),
+    }),
+  );
+  return Object.freeze({
+    epoch: surface,
+    replayEligible,
+    receipt: Object.freeze({
+      epochId: surface.epochId,
+      prefixFingerprint,
+      stableHeadTokens,
+      snapshotTokens,
+      expectedReusablePrefixTokens,
+      resetReason: surface.resetReason,
+    }),
+  });
+}
+
+function promptSurfaceEpochOnly(surface: PromptSurfaceEpochWithSnapshots): PromptSurfaceEpoch {
+  return {
+    runId: surface.runId,
+    epochId: surface.epochId,
+    modelRef: surface.modelRef,
+    stableHeadFingerprint: surface.stableHeadFingerprint,
+    toolSchemaFingerprint: surface.toolSchemaFingerprint,
+    cacheSettingsFingerprint: surface.cacheSettingsFingerprint,
+    resetReason: surface.resetReason,
+    createdStepSequence: surface.createdStepSequence,
+    createdAt: surface.createdAt,
+  };
+}
+
+function estimatePromptSurfaceTokens(value: number, label: string): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new TypeError(`Prompt Surface ${label} token estimate is invalid.`);
+  }
+  return value;
+}
+
+function fingerprint(value: string): string {
+  const hash = createHash("sha256").update(value, "utf8").digest("hex");
+  return createPromptSurfaceFingerprint(`sha256:${hash}`);
+}
+
+function isClearedSnapshot(content: string): boolean {
+  return content.startsWith('<runtime_context_snapshot state="CLEARED">');
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }

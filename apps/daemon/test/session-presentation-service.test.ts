@@ -1,5 +1,6 @@
 import {
   AgentRunSchema,
+  PromptCacheUsageSchema,
   ToolInvocationSchema,
   ToolObservationSchema,
   createRunId,
@@ -26,6 +27,11 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { SessionPresentationService } from "../src/services/session-presentation-service.js";
+import {
+  projectPromptCacheUsage,
+  promptCacheSamplesFromDurableMessages,
+  type PromptCacheUsageSample,
+} from "../src/daemon-composition.js";
 
 const NOW = createTimestampMs(1_700_000_000_000);
 const SESSION_ID = createSessionId();
@@ -322,5 +328,348 @@ describe("SessionPresentationService", () => {
     expect(JSON.stringify(response)).not.toContain("credential-value");
     expect(JSON.stringify(response)).not.toContain("unbounded command output");
     expect(JSON.stringify(response)).not.toContain("C:\\\\host");
+  });
+});
+
+describe("Prompt Cache daemon projection", () => {
+  const usageInput = {
+    runId: RUN_ID,
+    modelRef: { provider: "fixture-provider", model: "fixture-model" },
+    contextWindowTokens: 16_000,
+    effectiveInputLimitTokens: 12_000,
+    estimatedInputTokens: 4_000,
+    remainingTokens: 8_000,
+    pressureState: "NORMAL",
+    compactionCount: 0,
+    breakdown: [],
+    lastBuildStatus: "SUCCESS",
+    updatedAt: NOW,
+    promptSurface: {
+      epochId: "epoch-safe-1",
+      prefixFingerprint: `sha256:${"a".repeat(64)}`,
+      stableHeadTokens: 800,
+      snapshotTokens: 200,
+      expectedReusablePrefixTokens: 1_000,
+      resetReason: "INITIAL",
+    },
+  } as never;
+  const initialEpoch = {
+    epochId: "epoch-safe-1",
+    resetReason: "INITIAL",
+    createdStepSequence: 1,
+    createdAt: NOW,
+  } as never;
+
+  it.each([
+    {
+      status: "WARM",
+      epoch: initialEpoch,
+      samples: [
+        {
+          purpose: "MAIN_AGENT",
+          measuredAt: NOW + 1,
+          usage: {
+            inputTokens: 100,
+            cachedInputTokens: 80,
+            cacheMissInputTokens: 20,
+            cacheWriteInputTokens: 5,
+          },
+        },
+      ],
+    },
+    {
+      status: "COLD_START",
+      epoch: initialEpoch,
+      samples: [
+        {
+          purpose: "MAIN_AGENT",
+          measuredAt: NOW + 1,
+          usage: {
+            inputTokens: 100,
+            cachedInputTokens: 0,
+            cacheMissInputTokens: 100,
+            cacheWriteInputTokens: 0,
+          },
+        },
+      ],
+    },
+    {
+      status: "RESET",
+      epoch: {
+        epochId: "epoch-safe-2",
+        resetReason: "CACHE_SETTINGS_CHANGED",
+        createdStepSequence: 3,
+        createdAt: NOW + 3,
+      },
+      samples: [
+        {
+          purpose: "MAIN_AGENT",
+          measuredAt: NOW + 1,
+          usage: {
+            inputTokens: 100,
+            cachedInputTokens: 80,
+            cacheMissInputTokens: 20,
+            cacheWriteInputTokens: 0,
+          },
+        },
+      ],
+    },
+    {
+      status: "UNREPORTED",
+      epoch: initialEpoch,
+      samples: [{ purpose: "MAIN_AGENT", measuredAt: NOW + 1 }],
+    },
+  ] as const)("projects the $status cache status", ({ status, epoch, samples }) => {
+    const result = projectPromptCacheUsage(
+      usageInput,
+      samples as readonly PromptCacheUsageSample[],
+      epoch,
+    );
+    expect(result.status).toBe(status);
+    if (status === "RESET") {
+      expect(result).toMatchObject({
+        resetReason: "CACHE_SETTINGS_CHANGED",
+        resetStepSequence: 3,
+        resetAt: NOW + 3,
+      });
+    }
+    if (status === "UNREPORTED") {
+      expect(result.latestHitRate).toBeUndefined();
+      expect(result.rollingHitRate).toBeUndefined();
+      expect(result.reusablePrefixEfficiency).toBeUndefined();
+    }
+  });
+
+  it("aggregates by purpose and weights rolling rates by tokens", () => {
+    const samples: readonly PromptCacheUsageSample[] = [
+      {
+        purpose: "MAIN_AGENT",
+        measuredAt: NOW + 1,
+        usage: {
+          inputTokens: 100,
+          cachedInputTokens: 80,
+          cacheMissInputTokens: 20,
+          cacheWriteInputTokens: 5,
+        },
+      },
+      {
+        purpose: "WARMUP",
+        measuredAt: NOW + 2,
+        usage: {
+          inputTokens: 1_000,
+          cachedInputTokens: 900,
+          cacheMissInputTokens: 100,
+          cacheWriteInputTokens: 0,
+        },
+      },
+      { purpose: "COMPACTION", measuredAt: NOW + 3 },
+    ];
+    const result = projectPromptCacheUsage(usageInput, samples, initialEpoch);
+
+    expect(result).toMatchObject({
+      status: "WARM",
+      sampleCount: 2,
+      totalRequestCount: 3,
+      totalInputTokens: 1_100,
+      totalOutputTokens: 0,
+      hitTokens: 980,
+      missTokens: 120,
+      writeTokens: 5,
+      unknownUsageCount: 1,
+      latestHitRate: 0.9,
+      rollingHitRate: 980 / 1_100,
+      expectedReusablePrefixTokens: 1_000,
+      reusablePrefixEfficiency: 0.9,
+      epochId: "epoch-safe-1",
+      resetReason: "INITIAL",
+      lastMeasuredAt: NOW + 2,
+    });
+    expect(result.purposes).toEqual([
+      {
+        purpose: "MAIN_AGENT",
+        requestCount: 1,
+        inputTokens: 100,
+        outputTokens: 0,
+        hitTokens: 80,
+        missTokens: 20,
+        writeTokens: 5,
+        unknownUsageCount: 0,
+      },
+      {
+        purpose: "WARMUP",
+        requestCount: 1,
+        inputTokens: 1_000,
+        outputTokens: 0,
+        hitTokens: 900,
+        missTokens: 100,
+        writeTokens: 0,
+        unknownUsageCount: 0,
+      },
+      {
+        purpose: "COMPACTION",
+        requestCount: 1,
+        inputTokens: 0,
+        outputTokens: 0,
+        hitTokens: 0,
+        missTokens: 0,
+        writeTokens: 0,
+        unknownUsageCount: 1,
+      },
+    ]);
+  });
+
+  it("ignores a zero-token latest request when reporting cache rates", () => {
+    const samples: readonly PromptCacheUsageSample[] = [
+      {
+        purpose: "MAIN_AGENT",
+        measuredAt: NOW + 1,
+        usage: {
+          inputTokens: 100,
+          cachedInputTokens: 80,
+          cacheMissInputTokens: 20,
+          cacheWriteInputTokens: 0,
+        },
+      },
+      {
+        purpose: "RETRY",
+        measuredAt: NOW + 2,
+        usage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cachedInputTokens: 0,
+          cacheMissInputTokens: 0,
+          cacheWriteInputTokens: 0,
+        },
+      },
+    ];
+
+    const result = PromptCacheUsageSchema.parse(
+      projectPromptCacheUsage(usageInput, samples, initialEpoch),
+    );
+
+    expect(result).toMatchObject({
+      status: "WARM",
+      sampleCount: 1,
+      totalRequestCount: 2,
+      totalInputTokens: 100,
+      latestHitRate: 0.8,
+      rollingHitRate: 0.8,
+      expectedReusablePrefixTokens: 1_000,
+      reusablePrefixEfficiency: 0.08,
+      lastMeasuredAt: NOW + 1,
+    });
+  });
+
+  it("leaves rates unreported when every measured request has zero cache tokens", () => {
+    const samples: readonly PromptCacheUsageSample[] = [
+      {
+        purpose: "MAIN_AGENT",
+        measuredAt: NOW + 1,
+        usage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cachedInputTokens: 0,
+          cacheMissInputTokens: 0,
+          cacheWriteInputTokens: 0,
+        },
+      },
+    ];
+
+    const result = PromptCacheUsageSchema.parse(
+      projectPromptCacheUsage(usageInput, samples, initialEpoch),
+    );
+
+    expect(result).toMatchObject({
+      status: "UNREPORTED",
+      sampleCount: 0,
+      totalRequestCount: 1,
+      totalInputTokens: 0,
+      expectedReusablePrefixTokens: 1_000,
+    });
+    expect(result.latestHitRate).toBeUndefined();
+    expect(result.rollingHitRate).toBeUndefined();
+    expect(result.reusablePrefixEfficiency).toBeUndefined();
+    expect(result.lastMeasuredAt).toBeUndefined();
+  });
+
+  it("combines durable assistant usage with unmatched auxiliary budget entries safely", () => {
+    const assistant = factory.createAssistant({
+      runId: RUN_ID,
+      sessionId: SESSION_ID,
+      conversationTurnId: TURN_ID,
+      sourceStepId: STEP_ID,
+      source: modelMessageSource("fixture-call"),
+      phase: "COMMENTARY",
+      content: [agentAssistantTextPart("private content must not be projected")],
+      model: {
+        kind: "MODEL_TURN",
+        callId: "fixture-call",
+        model: { provider: "fixture", model: "fixture-model" },
+        finishReason: "STOP",
+        usage: {
+          inputTokens: 100,
+          outputTokens: 10,
+          cachedInputTokens: 80,
+          cacheMissInputTokens: 20,
+          cacheWriteInputTokens: 5,
+        },
+      },
+    });
+    const samples = promptCacheSamplesFromDurableMessages([record(assistant, 1)], [
+      {
+        id: "budget-main",
+        runId: RUN_ID,
+        kind: "LLM_ATTEMPT",
+        ownerId: STEP_ID,
+        state: "SETTLED",
+        reservedToolCalls: 0,
+        reservedInputTokens: 100,
+        reservedOutputTokens: 50,
+        actualInputTokens: 100,
+        actualOutputTokens: 10,
+        reservedCostMicros: 0,
+        actualCostMicros: 0,
+        createdAt: NOW,
+        startedAt: NOW,
+        settledAt: NOW + 1,
+      },
+      {
+        id: "budget-compaction",
+        runId: RUN_ID,
+        kind: "CONTEXT_COMPACTION",
+        ownerId: "compaction-owner",
+        state: "SETTLED",
+        reservedToolCalls: 0,
+        reservedInputTokens: 300,
+        reservedOutputTokens: 100,
+        actualInputTokens: 250,
+        actualOutputTokens: 40,
+        reservedCostMicros: 0,
+        actualCostMicros: 0,
+        createdAt: NOW + 2,
+        startedAt: NOW + 2,
+        settledAt: NOW + 3,
+      },
+    ] as never);
+
+    expect(samples).toEqual([
+      {
+        purpose: "MAIN_AGENT",
+        measuredAt: NOW,
+        usage: {
+          inputTokens: 100,
+          outputTokens: 10,
+          cachedInputTokens: 80,
+          cacheMissInputTokens: 20,
+          cacheWriteInputTokens: 5,
+        },
+      },
+      {
+        purpose: "COMPACTION",
+        measuredAt: NOW + 3,
+        usage: { inputTokens: 250, outputTokens: 40 },
+      },
+    ]);
+    expect(JSON.stringify(samples)).not.toContain("private content");
   });
 });

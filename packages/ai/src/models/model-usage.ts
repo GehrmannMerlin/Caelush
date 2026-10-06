@@ -5,7 +5,8 @@ import { assertExactKeys, describeValue } from "../internal/assertions.js";
  *
  * Every field is optional: a provider may report nothing, a partial snapshot, or
  * a full one. `cachedInputTokens` and `reasoningTokens` are subsets of the
- * corresponding totals, never additional totals.
+ * corresponding totals, never additional totals. Cache miss and write buckets
+ * are provider-reported diagnostics; consumers must not add them to totals.
  */
 export interface ModelUsage {
   readonly inputTokens?: number;
@@ -13,6 +14,8 @@ export interface ModelUsage {
   readonly totalTokens?: number;
   readonly cachedInputTokens?: number;
   readonly reasoningTokens?: number;
+  readonly cacheMissInputTokens?: number;
+  readonly cacheWriteInputTokens?: number;
 }
 
 /** Every usage field, in canonical order. */
@@ -22,6 +25,8 @@ export const MODEL_USAGE_FIELDS = [
   "totalTokens",
   "cachedInputTokens",
   "reasoningTokens",
+  "cacheMissInputTokens",
+  "cacheWriteInputTokens",
 ] as const satisfies readonly (keyof ModelUsage)[];
 
 /** Assert a well-formed usage snapshot. `undefined` is a valid "no usage yet". */
@@ -58,6 +63,8 @@ export function normalizeModelUsage(value: ModelUsage | undefined): ModelUsage |
     totalTokens?: number;
     cachedInputTokens?: number;
     reasoningTokens?: number;
+    cacheMissInputTokens?: number;
+    cacheWriteInputTokens?: number;
   } = {};
 
   for (const field of MODEL_USAGE_FIELDS) {

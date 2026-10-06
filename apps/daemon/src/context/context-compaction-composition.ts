@@ -129,12 +129,10 @@ export function createBudgetedContextSummarizer(
 }
 
 function contextCompactionOwnerId(run: AgentRun, request: AIModelRequest): string {
-  const source = request.messages.at(-1)?.content ?? "";
-  const sourceDigest = digestJsonValue(String(source));
   return `context-compaction:${digestJsonValue({
+    purpose: "COMPACTION",
     runId: String(run.id),
-    sourceDigest,
-    model: { provider: request.model.provider, model: request.model.model },
+    requestDigest: digestJsonValue(request as never),
     summaryPromptVersion: CONTEXT_SUMMARY_PROMPT_VERSION,
   })}`;
 }

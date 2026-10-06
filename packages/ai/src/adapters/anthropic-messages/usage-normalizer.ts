@@ -8,14 +8,15 @@ import type { ModelUsage } from "../../models/model-usage.js";
  * input_tokens                -> inputTokens
  * output_tokens               -> outputTokens
  * cache_read_input_tokens     -> cachedInputTokens
+ * cache_creation_input_tokens -> cacheWriteInputTokens
  * output_tokens_details.thinking_tokens -> reasoningTokens   (only when reported)
  * totalTokens                 -> inputTokens + outputTokens  (when both are known)
  * ```
  *
  * `cache_read_input_tokens` is a *subset* of `input_tokens`, so it is never added
- * to the total. `cache_creation_input_tokens` describes writing a cache entry, has
- * no frozen field, and is deliberately dropped rather than folded into
- * `cachedInputTokens`, which would misreport a cache write as a cache read.
+ * to the total. `cache_creation_input_tokens` describes writing a cache entry and
+ * remains a separate diagnostic bucket; it is never folded into cache reads or
+ * added to the total.
  *
  * A counter the provider did not report stays absent; `0` would be a claim the
  * provider never made.
@@ -26,6 +27,7 @@ export function normalizeAnthropicUsage(value: unknown): ModelUsage | undefined 
   const inputTokens = readCount(value["input_tokens"]);
   const outputTokens = readCount(value["output_tokens"]);
   const cachedInputTokens = readCount(value["cache_read_input_tokens"]);
+  const cacheWriteInputTokens = readCount(value["cache_creation_input_tokens"]);
   const reasoningTokens = readReasoningTokens(value["output_tokens_details"]);
 
   const totalTokens =
@@ -39,6 +41,7 @@ export function normalizeAnthropicUsage(value: unknown): ModelUsage | undefined 
     ...(totalTokens === undefined ? {} : { totalTokens }),
     ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
     ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
+    ...(cacheWriteInputTokens === undefined ? {} : { cacheWriteInputTokens }),
   };
 
   return Object.keys(usage).length === 0 ? undefined : usage;
@@ -80,6 +83,12 @@ export function mergeAnthropicUsage(
       ? {}
       : { cachedInputTokens: merged.cachedInputTokens }),
     ...(merged.reasoningTokens === undefined ? {} : { reasoningTokens: merged.reasoningTokens }),
+    ...(merged.cacheMissInputTokens === undefined
+      ? {}
+      : { cacheMissInputTokens: merged.cacheMissInputTokens }),
+    ...(merged.cacheWriteInputTokens === undefined
+      ? {}
+      : { cacheWriteInputTokens: merged.cacheWriteInputTokens }),
   };
 }
 

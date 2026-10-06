@@ -1,4 +1,4 @@
-import type { AIFinishReason, ModelDescriptor, ModelRef } from "@caelush/ai";
+import type { AIMessage, AIFinishReason, AIToolSpec, ModelDescriptor, ModelRef } from "@caelush/ai";
 import type { RunId, TimestampMs } from "@caelush/protocol";
 
 import type { AgentExecutionIdentity } from "../../loop/types.js";
@@ -83,7 +83,20 @@ export interface ContextCompactionPlanner {
 
 export type ContextSummaryPromptVersion = number;
 
-export const CONTEXT_SUMMARY_PROMPT_VERSION = 2 as ContextSummaryPromptVersion;
+export const CONTEXT_SUMMARY_PROMPT_VERSION = 3 as ContextSummaryPromptVersion;
+
+export type ContextSummaryPurpose = "COMPACTION";
+export type ContextSummaryCacheEligibility = "CACHE_REUSE_ELIGIBLE" | "NOT_ELIGIBLE";
+
+/** The exact provider-neutral request prefix used by the most recent main model request. */
+export interface ContextSummaryReplayPrefix {
+  readonly modelRef: ModelRef;
+  readonly api: string;
+  /** Prompt Surface identity digest; contains no prompt text or provider endpoint. */
+  readonly surfaceFingerprint: string;
+  readonly messages: readonly AIMessage[];
+  readonly tools: readonly AIToolSpec[];
+}
 
 export function createContextSummaryPromptVersion(value: number): ContextSummaryPromptVersion {
   if (!Number.isSafeInteger(value) || value < 1) {
@@ -93,6 +106,10 @@ export function createContextSummaryPromptVersion(value: number): ContextSummary
 }
 
 export interface ContextSummarizationInput {
+  readonly purpose: ContextSummaryPurpose;
+  readonly cacheEligibility: ContextSummaryCacheEligibility;
+  readonly replayPrefixFingerprint?: string;
+  readonly replayPrefix?: ContextSummaryReplayPrefix;
   readonly identity: AgentExecutionIdentity;
   readonly reason: ContextCompactionReason;
   readonly previousCheckpoint?: StructuredCheckpoint;
@@ -195,6 +212,9 @@ export interface ContextCompactionRequest {
   readonly history: ContextHistoryIndex;
   readonly policy: ContextPolicy;
   readonly model: ModelDescriptor;
+  /** Present only when the current Context can prove a complete compatible replay prefix. */
+  readonly replayPrefix?: ContextSummaryReplayPrefix;
+  readonly replayPrefixFingerprint?: string;
   readonly reason: ContextCompactionReason;
   readonly signal: AbortSignal;
 }

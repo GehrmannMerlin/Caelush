@@ -5,12 +5,14 @@ import { parseOpenAICompatibleToolInput } from "./tool-call-parser.js";
 import {
   assertRawToolCallIdentity,
   createRawStreamState,
+  observeRawUsage,
   observeRawFinishReason,
 } from "./raw-tool-state.js";
 import { mapOpenAICompatibleFinishReason } from "./finish-reason.js";
-import { normalizeAISDKUsage } from "./usage-normalizer.js";
+import { mergeOpenAICompatibleUsage, normalizeAISDKUsage } from "./usage-normalizer.js";
 import type { AIAdapterEvent } from "../api-adapter-event.js";
 import type { ModelRef } from "../../models/model-ref.js";
+import type { ModelUsage } from "../../models/model-usage.js";
 import type { RawStreamState } from "./raw-tool-state.js";
 
 /**
@@ -70,8 +72,9 @@ export function* translateOpenAICompatiblePart(
       observeRawFinishReason(part.rawValue, state.raw);
       try {
         assertRawToolCallIdentity(part.rawValue, state.raw);
+        observeRawUsage(part.rawValue, state.raw);
       } catch {
-        throw invalidResponse(state, "The stream contained ambiguous tool identity.");
+        throw invalidResponse(state, "The stream contained invalid raw provider data.");
       }
       return;
     }
@@ -144,7 +147,12 @@ export function* translateOpenAICompatiblePart(
     }
 
     case "finish": {
-      const finalUsage = normalizeAISDKUsage(part.totalUsage);
+      let finalUsage: ModelUsage | undefined;
+      try {
+        finalUsage = mergeOpenAICompatibleUsage(part.totalUsage, state.raw.rawUsage());
+      } catch {
+        throw invalidResponse(state, "The stream contained inconsistent usage counters.");
+      }
       const finishReason = mapOpenAICompatibleFinishReason(part.finishReason);
       // The provider-native reason is preferred so a mapped `OTHER` stays
       // lossless; the SDK's normalised value is the fallback.

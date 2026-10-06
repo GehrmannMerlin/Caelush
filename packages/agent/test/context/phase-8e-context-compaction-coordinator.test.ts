@@ -41,8 +41,8 @@ const plan = {
   reason: "PROACTIVE_PRESSURE",
   cut: {
     kind: "TURN_BOUNDARY",
-     firstKeptTurnId: conversationTurnId("turn_kept"),
-     firstKeptMessageId: agentMessageId("message_kept"),
+    firstKeptTurnId: conversationTurnId("turn_kept"),
+    firstKeptMessageId: agentMessageId("message_kept"),
     firstKeptSequence: 3,
   },
   sourceRange: range,
@@ -90,7 +90,7 @@ const summary: ContextSummarizationResult = {
   },
   modelRef: { provider: "test", model: "phase-8e" },
   finishReason: "STOP",
-  summaryPromptVersion: 2,
+  summaryPromptVersion: 3,
   sourceDigest: "semantic-source",
   semanticDigest: "semantic",
 };
@@ -140,7 +140,7 @@ function dependencies(
     commit: {
       commit: async ({ checkpoint, events }) => ({
         checkpoint: { ...checkpoint, schemaVersion: 2 as const },
-          events: events as never,
+        events: events as never,
       }),
     },
     clock: { now: () => 1 as never },
@@ -178,7 +178,10 @@ describe("Phase 8E ContextCompactionCoordinator", () => {
           commit: {
             commit: async ({ checkpoint, events }) => {
               commitCalls += 1;
-        return { checkpoint: { ...checkpoint, schemaVersion: 2 as const }, events: events as never };
+              return {
+                checkpoint: { ...checkpoint, schemaVersion: 2 as const },
+                events: events as never,
+              };
             },
           },
         },

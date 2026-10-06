@@ -13,6 +13,7 @@ import {
   STANDARD_AGENT_MESSAGE_CODECS,
 } from "@caelush/agent";
 import type {
+  AgentAssistantMessage,
   AgentMessageCodec,
   AgentMessageDraft,
   AgentMessageRecord,
@@ -75,9 +76,10 @@ describe("Phase 5A codec — three standard codecs exist and declare their ident
     expect(AGENT_ASSISTANT_MESSAGE_CODEC_V1.type).toBe("ASSISTANT");
     expect(AGENT_TOOL_RESULT_MESSAGE_CODEC_V1.type).toBe("TOOL_RESULT");
     for (const codec of STANDARD_AGENT_MESSAGE_CODECS) {
-      expect(codec.currentVersion).toBe(codec.type === "ASSISTANT" ? 2 : 1);
+      expect(codec.currentVersion).toBe(codec.type === "ASSISTANT" ? 3 : 1);
       expect(codec.canDecode(1)).toBe(true);
       expect(codec.canDecode(2)).toBe(codec.type === "ASSISTANT");
+      expect(codec.canDecode(3)).toBe(codec.type === "ASSISTANT");
       expect(codec.canDecode(0)).toBe(false);
     }
   });
@@ -200,27 +202,75 @@ describe("Phase 5A codec — ASSISTANT round trip", () => {
   });
 
   it("preserves usage counters when present and omits the field when absent", () => {
-    const original = rawAssistantMessage([{ type: "TEXT", text: "hi" }]);
-    const base = AGENT_ASSISTANT_MESSAGE_CODEC_V1.encode(original);
-    const withUsage = {
-      ...base,
+    const message = rawAssistantMessage([{ type: "TEXT", text: "hi" }]);
+    if (message.model.kind !== "MODEL_TURN") throw new Error("unreachable");
+    const usage = {
+      inputTokens: 10,
+      outputTokens: 4,
+      totalTokens: 14,
+      cachedInputTokens: 2,
+      cacheMissInputTokens: 8,
+      cacheWriteInputTokens: 3,
+    };
+    const original: AgentAssistantMessage = {
+      ...message,
+      model: { ...message.model, usage },
+    };
+    const encoded = AGENT_ASSISTANT_MESSAGE_CODEC_V1.encode(original);
+    const decoded = AGENT_ASSISTANT_MESSAGE_CODEC_V1.decode(recordFor(original, encoded));
+    if (decoded.model.kind !== "MODEL_TURN") throw new Error("unreachable");
+    expect(decoded.model.usage).toEqual(usage);
+    expect(encoded.model).toMatchObject({ usage });
+
+    if (
+      encoded.model === null ||
+      typeof encoded.model !== "object" ||
+      Array.isArray(encoded.model)
+    ) {
+      throw new Error("unreachable");
+    }
+    const legacyUsageRecord = {
+      ...encoded,
       model: {
-        kind: "MODEL_TURN",
-        callId: "llm_fixture",
-        model: { provider: "example-provider", model: "example-model" },
-        finishReason: "TOOL_CALLS",
+        ...encoded.model,
         usage: { inputTokens: 10, outputTokens: 4, totalTokens: 14, cachedInputTokens: 2 },
       },
     };
-    const decoded = AGENT_ASSISTANT_MESSAGE_CODEC_V1.decode(recordFor(original, withUsage));
-    if (decoded.model.kind !== "MODEL_TURN") throw new Error("unreachable");
-    expect(decoded.model.usage).toEqual({
+    const decodedLegacy = AGENT_ASSISTANT_MESSAGE_CODEC_V1.decode(
+      recordFor(original, legacyUsageRecord, { schemaVersion: 2 }),
+    );
+    if (decodedLegacy.model.kind !== "MODEL_TURN") throw new Error("unreachable");
+    expect(decodedLegacy.model.usage).toEqual({
       inputTokens: 10,
       outputTokens: 4,
       totalTokens: 14,
       cachedInputTokens: 2,
     });
   });
+
+  it.each([{ inputTokens: -1 }, { cacheMissInputTokens: 1.5 }, { providerCacheTokens: 5 }])(
+    "rejects invalid or unknown durable usage keys: %o",
+    (usage) => {
+      const original = rawAssistantMessage([{ type: "TEXT", text: "hi" }]);
+      const data = AGENT_ASSISTANT_MESSAGE_CODEC_V1.encode(original);
+      const modelData = {
+        ...data,
+        model: {
+          kind: "MODEL_TURN",
+          callId: "llm_fixture",
+          model: { provider: "example-provider", model: "example-model" },
+          finishReason: "TOOL_CALLS",
+          usage,
+        },
+      };
+
+      expect(() =>
+        AGENT_ASSISTANT_MESSAGE_CODEC_V1.decode(
+          recordFor(original, modelData, { schemaVersion: 2 }),
+        ),
+      ).toThrow(AgentMessageCodecError);
+    },
+  );
 });
 
 describe("Phase 5A codec — TOOL_RESULT round trip", () => {

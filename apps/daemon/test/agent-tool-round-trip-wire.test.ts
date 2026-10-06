@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
   AgentRunSchema,
   createApprovalRequestId,
@@ -8,6 +10,8 @@ import {
   createStepId,
   createTimestampMs,
   createToolInvocationId,
+  createVerificationCheckId,
+  createVerificationPlanId,
   createWorkspaceId,
 } from "@caelush/protocol";
 import type { VerificationPlanDraft } from "@caelush/protocol";
@@ -25,8 +29,17 @@ import {
   createToolInvocationExecutor,
   createToolResultBatchNormalizer,
   createToolResultPipeline,
+  AGENT_CONTEXT_SOURCE_IDS,
+  createContextItemId,
+  createContextMaterializer,
+  createContextReceiptBuilder,
+  createContextSourceItem,
+  createContextSourceRegistryBuilder,
   createStandardAgentMessageProjectorRegistry,
-  projectStoredMessages,
+  createUtf8HeuristicTokenEstimator,
+  createV2ContextEngine,
+  createConversationContextSourceProvider,
+  createCorePolicyContextSourceProvider,
   UNBOUNDED_TOOL_BUDGET_ADMISSION,
   type AgentToolRegistry,
   type DurableToolExecutionCoordinator,
@@ -40,6 +53,7 @@ import {
   assertDefaultBuiltinSecurityCoverage,
   CaelushToolExecutionUpdateSanitizer,
   createDefaultV1ToolExecutionSecurity,
+  expandPermissionPreset,
   createV1ToolApprovalRequestFactory,
   DISCARDING_TOOL_UPDATE_CONSUMER,
 } from "@caelush/security";
@@ -128,9 +142,13 @@ function makeRun(workspace: string) {
     model: { provider: "deepseek-compatible", model: "deepseek-chat" },
     runtime: { id: "local", kind: "local" },
     permissionProfile: "READ_ONLY",
-    // The real Security gate is on this path, so the Run's policy is one that does not require review:
-    // an `ALWAYS_ASK` Run would park the round trip on an approval instead of exercising it.
-    approvalPolicy: "NEVER_ASK",
+    securityPolicy: expandPermissionPreset({
+      presetId: "VIEW_ONLY",
+      expectedVersion: 1,
+      createdAt: new Date(1).toISOString(),
+    }),
+    // The current VIEW_ONLY preset is immutable and carries ON_BOUNDARY approval policy.
+    approvalPolicy: "ON_BOUNDARY",
     limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 10_000 },
     createdAt: createTimestampMs(1),
   });
@@ -285,6 +303,83 @@ describe("real provider Tool Call round trip", () => {
     });
 
     const eventHub = new RunEventHub(storage.eventReader);
+    const contextClock = { now: () => createTimestampMs(Date.now()) };
+    const contextTokenEstimator = createUtf8HeuristicTokenEstimator();
+    const contextInputKinds: string[] = [];
+    const contextSourceRegistry = createContextSourceRegistryBuilder()
+      .register({
+        id: AGENT_CONTEXT_SOURCE_IDS.corePolicy,
+        priority: 0,
+        criticality: "REQUIRED",
+        provider: createCorePolicyContextSourceProvider({ text: "Inspect the workspace." }),
+      })
+      .register({
+        id: AGENT_CONTEXT_SOURCE_IDS.conversation,
+        priority: 10,
+        criticality: "REQUIRED",
+        provider: createConversationContextSourceProvider(),
+      })
+      .register({
+        id: AGENT_CONTEXT_SOURCE_IDS.branchContext,
+        priority: 20,
+        criticality: "REQUIRED",
+        provider: {
+          id: AGENT_CONTEXT_SOURCE_IDS.branchContext,
+          async collect(input) {
+            contextInputKinds.push(input.input.kind);
+            const text =
+              input.input.kind === "TOOL_RESULTS"
+                ? "runtime status after tool execution"
+                : "runtime status before tool execution";
+            return {
+              providerId: AGENT_CONTEXT_SOURCE_IDS.branchContext,
+              providerVersion: "tool-round-trip.v1",
+              items: [
+                createContextSourceItem({
+                  id: createContextItemId("agent.branch-context:tool-round-trip"),
+                  type: "agent.branch-context",
+                  source: {
+                    providerId: AGENT_CONTEXT_SOURCE_IDS.branchContext,
+                    sourceRef: "tool-round-trip-runtime",
+                    version: "v1",
+                  },
+                  scope: "RUN",
+                  retention: "RETRIEVABLE",
+                  priorityClass: "LOW",
+                  tokenEstimate: 12,
+                  cacheStability: "DYNAMIC",
+                  freshness: "CURRENT",
+                  sensitivity: "INTERNAL",
+                  whyLoaded: "controlled local Tool round-trip fixture",
+                  payload: { kind: "TEXT", text },
+                }),
+              ],
+              diagnostics: [],
+            };
+          },
+        },
+      })
+      .build();
+    const contextEngine = createV2ContextEngine({
+      promptSurfaceStore: storage.promptSurface,
+      sourceRegistry: contextSourceRegistry,
+      checkpointRepository: storage.contextCheckpointsV2,
+      authorityProvider: {
+        async snapshot() {
+          return { goal: "inspect the workspace" };
+        },
+      },
+      usageStore: storage.contextUsage,
+      materializer: createContextMaterializer({
+        projectors: createStandardAgentMessageProjectorRegistry(),
+        tokenEstimator: contextTokenEstimator,
+      }),
+      receiptBuilder: createContextReceiptBuilder({
+        now: contextClock.now,
+        tokenEstimator: contextTokenEstimator,
+      }),
+      clock: contextClock,
+    });
     /**
      * The production Tool composition.
      *
@@ -413,28 +508,7 @@ describe("real provider Tool Call round trip", () => {
           modelTurnExecutor: createModelTurnExecutor({ gateway: ai.gateway }),
           stepIds: { create: () => createStepId() },
           tools: [],
-          createContextEngine: () => ({
-            async prepare(input) {
-              return {
-                messages: projectStoredMessages(
-                  input.conversation.turns.flatMap((turn) => [...turn.messages]),
-                  createStandardAgentMessageProjectorRegistry(),
-                ).messages,
-                report: {
-                  estimatedInputTokens: 1,
-                  effectiveInputLimitTokens: input.model.limits.contextWindowTokens,
-                  remainingTokens: input.model.limits.contextWindowTokens - 1,
-                  pressure: "NORMAL" as const,
-                  compactionCount: 0,
-                  contributions: [],
-                },
-                observationPolicy: {
-                  maxSingleObservationTokens: 4_000,
-                  maxObservationBatchTokens: 12_000,
-                },
-              };
-            },
-          }),
+          createContextEngine: () => contextEngine,
         };
       },
     };
@@ -455,17 +529,73 @@ describe("real provider Tool Call round trip", () => {
       toolTurn,
       clock: { now: () => createTimestampMs(Date.now()) },
       eventIdFactory: { create: createEventId },
-      verificationPlanner,
+      completion: {
+        gateId: "tool-round-trip-wire-test",
+        openEvaluation() {
+          // This test stops at the durable verification boundary; completion review is outside scope.
+          return undefined;
+        },
+        async planCandidateBoundary(input) {
+          const draft = verificationPlanner.plan({
+            runId: input.run.id,
+            sourceStepId: input.continuation.sourceStepId,
+          });
+          const id = createVerificationPlanId();
+          const createdAt = createTimestampMs(Date.now());
+          return {
+            plan: {
+              id,
+              runId: draft.runId,
+              sourceStepId: draft.sourceStepId,
+              plannerVersion: draft.plannerVersion,
+              planHash: draft.planHash,
+              candidateHash: createHash("sha256")
+                .update(input.candidate.candidateText, "utf8")
+                .digest("hex"),
+              checks: draft.checks.map((check) => ({
+                ...check,
+                id: createVerificationCheckId(),
+                planId: id,
+                status: "PENDING" as const,
+                createdAt,
+              })),
+              createdAt,
+            },
+          };
+        },
+        async compileRepairContext() {
+          return undefined;
+        },
+      },
     });
 
     try {
       const result = await controller.start(run.id);
 
-      expect(result.status).toBe("AWAITING_VERIFICATION");
       // Two transport attempts for two Agent Steps: the gateway never retried.
       expect(responseNumber).toBe(2);
       expect(requests).toHaveLength(2);
+      expect(contextInputKinds).toEqual(["USER_INPUT", "TOOL_RESULTS"]);
+      expect(result.status).toBe("AWAITING_VERIFICATION");
+      const firstMessages = requests[0]?.messages ?? [];
       const secondMessages = requests[1]?.messages ?? [];
+      expect(firstMessages.map((message) => (message as { role?: string }).role)).toEqual([
+        "system",
+        "user",
+        "user",
+      ]);
+      expect(secondMessages.slice(0, firstMessages.length)).toEqual(firstMessages);
+      const assistantToolCallIndex = secondMessages.findIndex(
+        (message) =>
+          (message as { role?: string }).role === "assistant" &&
+          Array.isArray((message as { tool_calls?: unknown }).tool_calls),
+      );
+      const toolResultIndex = secondMessages.findIndex(
+        (message) => (message as { role?: string }).role === "tool",
+      );
+      expect(toolResultIndex).toBe(assistantToolCallIndex + 1);
+      expect((secondMessages.at(-1) as { role?: string }).role).toBe("user");
+      expect(JSON.stringify(secondMessages.at(-1))).toContain("after tool execution");
       expect(secondMessages).toEqual(
         expect.arrayContaining([
           expect.objectContaining({

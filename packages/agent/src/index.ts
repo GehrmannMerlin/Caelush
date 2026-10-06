@@ -129,6 +129,7 @@ export {
   createContextSourceItem,
   createContextSourceRegistryBuilder,
   createContextSummarizationRunner,
+  createContextSummaryReplayPrefixFingerprint,
   createCorePolicyContextSourceProvider,
   createContextCompactionEventFactory,
   createContextCompactionCoverage,
@@ -267,6 +268,9 @@ export type {
   ContextRecoveryApplicationInput,
   ContextCompactionReason,
   ContextMessageRange,
+  ContextSummaryPurpose,
+  ContextSummaryCacheEligibility,
+  ContextSummaryReplayPrefix,
   ProtocolSafeSplitCut,
   TurnBoundaryCut,
   ContextMaterializer,
@@ -312,7 +316,39 @@ export type {
   RehydratedContextState,
   ToolProtocolUnit,
   PreparedAgentContext,
+  PreparedPromptSurface,
   StructuredCheckpoint,
+} from "./context/index.js";
+
+export {
+  assertPromptSurfaceEpoch,
+  assertPromptSurfaceEpochWithSnapshots,
+  assertPromptSurfaceSnapshot,
+  assertPromptSurfaceSnapshotInput,
+  createPromptSurfaceEpoch,
+  createPromptSurfaceEpochId,
+  createPromptSurfaceFingerprint,
+  createPromptSurfaceSnapshot,
+  hashPromptSurfaceContent,
+  projectPromptSurface,
+  PROMPT_SURFACE_LIMITS,
+  PROMPT_SURFACE_RESET_REASONS,
+  PromptSurfaceIntegrityError,
+} from "./context/index.js";
+export type {
+  ContextPromptSurfaceReceipt,
+  PromptSurfaceAppendResult,
+  PromptSurfaceEpoch,
+  PromptSurfaceEpochId,
+  PromptSurfaceEpochInput,
+  PromptSurfaceEpochWithSnapshots,
+  PromptSurfaceFingerprint,
+  PromptSurfaceModelMessage,
+  PromptSurfaceModelRef,
+  PromptSurfaceResetReason,
+  PromptSurfaceSnapshot,
+  PromptSurfaceSnapshotInput,
+  PromptSurfaceStorePort,
 } from "./context/index.js";
 
 /* Decision classification. */

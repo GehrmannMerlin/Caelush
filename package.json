@@ -13,6 +13,7 @@
     "test": "vitest run",
     "lint": "eslint .",
     "format:check": "prettier --check .",
+    "prompt-cache:audit:offline": "node scripts/prompt-cache-audit.mjs",
     "check:architecture": "node scripts/architecture/check-boundaries.mjs",
     "check:architecture:verify": "node scripts/architecture/check-boundaries.mjs --verify-baseline",
     "check:architecture:readiness": "node scripts/architecture/check-migration-readiness.mjs",

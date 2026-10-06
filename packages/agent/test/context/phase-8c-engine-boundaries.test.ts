@@ -26,6 +26,7 @@ import {
 } from "@caelush/agent";
 
 import { snapshot, turn, turnIdFor, userMessage } from "../messages/fixtures.js";
+import { createPromptSurfaceMemoryStore } from "./support/prompt-surface-memory-store.js";
 
 const MODEL: ModelDescriptor = {
   ref: { provider: "test", model: "phase-8c-engine" },
@@ -60,7 +61,7 @@ function acceptedResult(): ContextSummarizationResult {
     },
     modelRef: MODEL.ref,
     finishReason: "STOP",
-    summaryPromptVersion: 2,
+    summaryPromptVersion: 3,
     sourceDigest: "source",
     semanticDigest: "semantic",
   };
@@ -137,6 +138,7 @@ function compactionFixture(options: {
     },
   };
   const engine = createV2ContextEngine({
+    promptSurfaceStore: createPromptSurfaceMemoryStore(),
     sourceRegistry: registry,
     checkpointRepository: {
       async create() {

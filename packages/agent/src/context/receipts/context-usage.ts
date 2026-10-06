@@ -3,6 +3,7 @@ import type { RunId, TimestampMs } from "@caelush/protocol";
 
 import type { ContextFingerprint } from "../contracts/context-fingerprint.js";
 import type { ContextPressureState } from "../policy/context-policy.js";
+import type { ContextPromptSurfaceReceipt } from "./context-build-receipt.js";
 
 export type ContextUsageBuildStatus = "SUCCESS" | "FAILED" | "CONTEXT_EXHAUSTED";
 
@@ -27,6 +28,7 @@ export interface ContextUsageSnapshot {
   readonly breakdown: readonly ContextUsageSourceBreakdown[];
   readonly lastBuildStatus: ContextUsageBuildStatus;
   readonly contextFingerprint?: ContextFingerprint;
+  readonly promptSurface?: ContextPromptSurfaceReceipt;
   readonly updatedAt: TimestampMs;
 }
 

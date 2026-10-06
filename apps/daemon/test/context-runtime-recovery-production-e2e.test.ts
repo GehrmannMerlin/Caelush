@@ -83,17 +83,17 @@ describe("Context Runtime production recovery E2E", () => {
       defaultModel: { provider: "fixture", model: "fixture-model" },
     });
     const client = new CaelushClient({ baseUrl: daemon.url });
+    const workspace = { id: createWorkspaceId(), path: directory };
     const session = await client.createSession({
-      defaultWorkspace: { id: createWorkspaceId(), path: directory },
+      defaultWorkspace: workspace,
       defaultModel: { provider: "fixture", model: "fixture-model" },
     });
     const run = await client.createRun(session.id, {
       goal: "inspect the large workspace file",
-      workspace: { id: createWorkspaceId(), path: directory },
+      workspace: session.defaultWorkspace ?? workspace,
       model: { provider: "fixture", model: "fixture-model" },
       runtime: { id: "local", kind: "local" },
-      permissionProfile: "PROJECT_ACCESS",
-      approvalPolicy: "NEVER_ASK",
+      preset: { id: "FULL_ACCESS", expectedVersion: 1 },
       limits: { maxSteps: 6, maxToolCalls: 6, timeoutMs: 15_000 },
     });
 
@@ -119,6 +119,21 @@ describe("Context Runtime production recovery E2E", () => {
     const recoveredRequest = provider.requests[2];
     expect(firstToolRequest).toBeDefined();
     expect(recoveredRequest).toBeDefined();
+    const firstSystemHead = firstToolRequest?.messages.find((message) => message.role === "system");
+    const recoveredSystemHead = recoveredRequest?.messages.find(
+      (message) => message.role === "system",
+    );
+    expect(
+      firstSystemHead !== undefined &&
+        recoveredSystemHead !== undefined &&
+        firstSystemHead.content === recoveredSystemHead.content,
+    ).toBe(true);
+    expect(firstToolRequest !== undefined && isToolBatchContiguous(firstToolRequest.messages)).toBe(
+      true,
+    );
+    expect(recoveredRequest !== undefined && isToolBatchContiguous(recoveredRequest.messages)).toBe(
+      true,
+    );
     const firstToolMessage = firstToolRequest?.messages.find((message) => message.role === "tool");
     const recoveredToolMessage = recoveredRequest?.messages.find(
       (message) => message.role === "tool",
@@ -144,6 +159,22 @@ describe("Context Runtime production recovery E2E", () => {
     daemon = undefined;
     const storage = await openCaelushStorage({ path: join(directory, "caelush.db") });
     try {
+      const usage = await storage.contextUsage.getByRun(run.id);
+      expect(usage?.compactionCount).toBe(0);
+      const currentSurfaceEpoch = await storage.promptSurface.getCurrent(run.id);
+      // This fixture tried the COMPACT_HISTORY recovery stage but produced no durable checkpoint,
+      // so the existing prompt epoch correctly remains compatible without a reset.
+      expect(currentSurfaceEpoch?.resetReason).toBe("INITIAL");
+      const currentSurface =
+        currentSurfaceEpoch === undefined
+          ? undefined
+          : await storage.promptSurface.readEpoch(run.id, currentSurfaceEpoch.epochId);
+      const currentSnapshots = currentSurface?.snapshots ?? [];
+      expect(currentSnapshots.length).toBeGreaterThan(0);
+      expect(new Set(currentSnapshots.map((snapshot) => snapshot.sourceStepSequence)).size).toBe(
+        currentSnapshots.length,
+      );
+
       const invocation = (await storage.toolInvocations.listByRun(run.id)).find(
         (item) => item.toolName === "read_file",
       );
@@ -178,4 +209,32 @@ function isTerminal(status: string): boolean {
     "MAX_STEPS_REACHED",
     "BUDGET_EXCEEDED",
   ].includes(status);
+}
+
+function isToolBatchContiguous(
+  messages: readonly { readonly role: string; readonly content?: unknown }[],
+): boolean {
+  const assistantIndex = messages.findIndex(
+    (message) =>
+      message.role === "assistant" &&
+      Array.isArray(message.content) &&
+      message.content.some(
+        (part) =>
+          typeof part === "object" &&
+          part !== null &&
+          (part as { readonly type?: unknown }).type === "tool-call",
+      ),
+  );
+  if (assistantIndex < 0) return false;
+  const assistant = messages[assistantIndex];
+  if (assistant === undefined || !Array.isArray(assistant.content)) return false;
+  const toolCallCount = assistant.content.filter(
+    (part) =>
+      typeof part === "object" &&
+      part !== null &&
+      (part as { readonly type?: unknown }).type === "tool-call",
+  ).length;
+  const toolMessages = messages.filter((message) => message.role === "tool");
+  if (toolMessages.length !== toolCallCount) return false;
+  return toolMessages.every((_, index) => messages[assistantIndex + index + 1]?.role === "tool");
 }

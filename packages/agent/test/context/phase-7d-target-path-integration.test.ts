@@ -132,7 +132,7 @@ describe("Phase 7D target path integration", () => {
           },
           modelRef: input.model.ref,
           finishReason: "STOP",
-          summaryPromptVersion: 2,
+          summaryPromptVersion: 3,
           sourceDigest: "ignored",
           semanticDigest: "ignored",
         };
@@ -140,6 +140,8 @@ describe("Phase 7D target path integration", () => {
     };
     const summary = await createContextSummarizationRunner({ summarizer }).summarize(
       {
+        purpose: "COMPACTION",
+        cacheEligibility: "NOT_ELIGIBLE",
         identity: sourceInput.identity,
         reason: "PROACTIVE_PRESSURE",
         sourceMessages,

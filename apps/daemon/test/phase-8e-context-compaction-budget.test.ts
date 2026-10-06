@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import type { AIGateway, AIModelTurnResult } from "@caelush/ai";
+import type { AIMessage, AIGateway, AIModelTurnResult } from "@caelush/ai";
 import {
   agentMessageId,
   conversationTurnId,
   createContextMessageRange,
+  createContextSummaryReplayPrefixFingerprint,
   type AgentExecutionIdentity,
   type ContextSummarizationInput,
 } from "@caelush/agent";
@@ -55,6 +56,8 @@ const model = {
 } as const;
 
 const input: ContextSummarizationInput = {
+  purpose: "COMPACTION",
+  cacheEligibility: "NOT_ELIGIBLE",
   identity,
   reason: "PROACTIVE_PRESSURE",
   sourceMessages: [],
@@ -117,9 +120,11 @@ function gatewayThat(
 
 function budgetFixture(overrides: Partial<ContextCompactionBudgetPort> = {}) {
   const calls = { admit: 0, settle: 0, conservative: 0 };
+  const owners: string[] = [];
   const budget: ContextCompactionBudgetPort = {
-    async admitContextCompactionLLM() {
+    async admitContextCompactionLLM(input) {
       calls.admit += 1;
+      owners.push(input.ownerId);
       return { kind: "ALLOWED", effectiveMaxOutputTokens: 40 };
     },
     async settleContextCompactionLLM() {
@@ -131,7 +136,7 @@ function budgetFixture(overrides: Partial<ContextCompactionBudgetPort> = {}) {
     },
     ...overrides,
   };
-  return { budget, calls };
+  return { budget, calls, owners };
 }
 
 describe("Phase 8E budgeted Context summarizer", () => {
@@ -190,5 +195,49 @@ describe("Phase 8E budgeted Context summarizer", () => {
     ).rejects.toThrow("provider failed");
     expect(budget.calls.conservative).toBe(1);
     expect(budget.calls.settle).toBe(0);
+  });
+
+  it("reuses the same bounded owner for an identical replay and separates a changed prefix", async () => {
+    const fixture = gatewayThat(async () => result);
+    const budget = budgetFixture();
+    const summarizer = createBudgetedContextSummarizer({
+      gateway: fixture.gateway,
+      budget: budget.budget,
+      run,
+      clock: { now: () => createTimestampMs(101) },
+    });
+    const makeReplayInput = (systemText: string): ContextSummarizationInput => {
+      const messages: readonly AIMessage[] = [
+        { role: "system", content: systemText },
+        { role: "user", content: "Current durable request." },
+      ];
+      const replayPrefix = {
+        modelRef: model.ref,
+        api: model.api,
+        surfaceFingerprint: `sha256:${"c".repeat(64)}`,
+        messages,
+        tools: [],
+      };
+      return {
+        ...input,
+        cacheEligibility: "CACHE_REUSE_ELIGIBLE",
+        replayPrefix,
+        replayPrefixFingerprint: createContextSummaryReplayPrefixFingerprint(replayPrefix),
+      };
+    };
+
+    await summarizer.summarize(makeReplayInput("Stable host context."), {
+      signal: new AbortController().signal,
+    });
+    await summarizer.summarize(makeReplayInput("Stable host context."), {
+      signal: new AbortController().signal,
+    });
+    await summarizer.summarize(makeReplayInput("Changed host context."), {
+      signal: new AbortController().signal,
+    });
+
+    expect(budget.owners).toHaveLength(3);
+    expect(budget.owners[0]).toBe(budget.owners[1]);
+    expect(budget.owners[2]).not.toBe(budget.owners[0]);
   });
 });

@@ -159,8 +159,19 @@ export {
   ContextUsagePressureStateSchema,
   ContextUsageProjectionSchema,
   ContextUsageResponseSchema,
+  PromptCacheRequestPurposeSchema,
+  PromptCachePurposeUsageSchema,
+  PromptCacheStatusSchema,
+  PromptCacheUsageSchema,
 } from "./context-usage.js";
-export type { ContextUsageProjection, ContextUsageResponse } from "./context-usage.js";
+export type {
+  ContextUsageProjection,
+  ContextUsageResponse,
+  PromptCacheRequestPurpose,
+  PromptCachePurposeUsage,
+  PromptCacheStatus,
+  PromptCacheUsage,
+} from "./context-usage.js";
 export {
   CreateWorkspaceRequestSchema,
   WorkspaceIdParamSchema,

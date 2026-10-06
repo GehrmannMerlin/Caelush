@@ -4,6 +4,11 @@ import { openCaelushStorage } from "@caelush/storage";
 import { createRuntimeProviderCredentialAuthority } from "../src/providers/credential-authority.js";
 import { ProviderPresetRegistry, type ProviderPreset } from "../src/providers/provider-presets.js";
 import { RuntimeModelDirectoryService } from "../src/providers/model-directory.js";
+import {
+  createCuratedModelDescriptorSources,
+  getCuratedModelMetadata,
+} from "../src/providers/curated-model-metadata.js";
+import { resolveDefaultCacheRequest } from "../src/daemon-composition.js";
 
 const stores: Array<Awaited<ReturnType<typeof openCaelushStorage>>> = [];
 
@@ -122,5 +127,70 @@ describe("RuntimeModelDirectoryService", () => {
       availability: "AVAILABLE",
     });
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("curated model cache capability", () => {
+  it("declares DeepSeek automatic short-prefix caching without a provider-id policy", () => {
+    for (const modelId of [
+      "deepseek-chat",
+      "deepseek-reasoner",
+      "deepseek-flash",
+      "deepseek-v4-flash",
+      "deepseek-v4-pro",
+    ]) {
+      const descriptor = getCuratedModelMetadata("deepseek", modelId)?.descriptor;
+      expect(descriptor).toMatchObject({
+        capabilities: { promptCaching: "SUPPORTED" },
+        cache: { supportedRetentions: ["NONE", "SHORT"], defaultRetention: "SHORT" },
+        adapterMetadata: {
+          "openai-compatible": { cacheDialect: "AUTOMATIC" },
+        },
+      });
+    }
+  });
+
+  it("preserves Anthropic's marker-capable short and long retentions", () => {
+    const descriptor = getCuratedModelMetadata("anthropic", "claude-sonnet-4-6")?.descriptor;
+
+    expect(descriptor).toMatchObject({
+      api: "anthropic-messages",
+      capabilities: { promptCaching: "SUPPORTED" },
+      cache: { supportedRetentions: ["NONE", "SHORT", "LONG"], defaultRetention: "SHORT" },
+      adapterMetadata: { anthropicMessages: { thinking: { supported: true } } },
+    });
+    expect(descriptor?.adapterMetadata).not.toHaveProperty("openai-compatible.cacheDialect");
+  });
+
+  it("defaults from descriptor metadata, preserves an explicit request, and leaves unknown fallback uncached", () => {
+    const deepSeek = getCuratedModelMetadata("deepseek", "deepseek-chat")?.descriptor;
+    if (deepSeek === undefined) throw new Error("expected curated DeepSeek metadata");
+
+    expect(resolveDefaultCacheRequest(deepSeek)).toEqual({ retention: "SHORT" });
+
+    const explicit = { retention: "NONE" as const, key: "explicit-cache-identity" };
+    expect(resolveDefaultCacheRequest(deepSeek, explicit)).toBe(explicit);
+
+    const preset = {
+      id: "deepseek",
+      displayName: "DeepSeek",
+      endpoint: "https://deepseek.example/v1",
+      api: "openai-compatible-chat",
+      credentialReference: "CAELUSH_PROVIDER_API_KEY",
+      discovery: {
+        dialect: "OPENAI_MODELS",
+        path: "models",
+        credentialTransport: "BEARER",
+      },
+    } satisfies ProviderPreset;
+    const fallback = createCuratedModelDescriptorSources([preset]).fallback.resolve({
+      provider: "deepseek",
+      model: "unknown-model",
+    });
+    if (fallback === undefined) throw new Error("expected the conservative fallback descriptor");
+
+    expect(fallback).toMatchObject({ capabilities: { promptCaching: "UNKNOWN" } });
+    expect(fallback).not.toHaveProperty("cache");
+    expect(resolveDefaultCacheRequest(fallback)).toBeUndefined();
   });
 });

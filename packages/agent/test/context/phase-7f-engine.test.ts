@@ -37,6 +37,7 @@ import {
 import { createEventId, createRunId, createSessionId } from "@caelush/protocol";
 
 import { snapshot, turn, turnIdFor, userMessage } from "../messages/fixtures.js";
+import { createPromptSurfaceMemoryStore } from "./support/prompt-surface-memory-store.js";
 
 const MODEL: ModelDescriptor = {
   ref: { provider: "test", model: "phase-7f" },
@@ -204,6 +205,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     const projectors = createStandardAgentMessageProjectorRegistry();
     const estimator = createUtf8HeuristicTokenEstimator();
     const engine = createV2ContextEngine({
+      promptSurfaceStore: createPromptSurfaceMemoryStore(),
       sourceRegistry: registry,
       checkpointRepository: checkpointRepository(),
       authorityProvider: authority,
@@ -264,22 +266,22 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
         runId: historicalRunId,
         turnId: historicalTurnId,
         sequence: 1,
-        text: "historical intent ".repeat(800),
+        text: "historical intent ".repeat(40),
       }),
       userMessage({
         runId: historicalRunId,
         turnId: historicalTurnId,
         sequence: 2,
-        text: "historical evidence ".repeat(200),
+        text: "historical evidence ".repeat(20),
       }),
     ];
     const current = userMessage({
       runId: currentRunId,
       turnId: currentTurnId,
       sequence: 10,
-      text: "current intent ".repeat(725),
+      text: "current intent ".repeat(180),
     });
-    const conversation = snapshot(
+    const warmConversation = snapshot(
       [
         turn(historical, { runId: historicalRunId, status: "CLOSED" }),
         turn([current], { runId: currentRunId, openedAt: 2 }),
@@ -287,14 +289,15 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       { runId: currentRunId },
     );
     const usage = usageStore();
+    const promptSurfaceStore = createPromptSurfaceMemoryStore();
     let verificationState = "OLD";
     let capturedRehydrationAuthority: string | undefined;
     let authoritySnapshotCount = 0;
+    const authoritySnapshotPhases: string[] = [];
     const authority: ContextAuthorityProviderPort = {
       async snapshot() {
         authoritySnapshotCount += 1;
-        if (authoritySnapshotCount === 1) expect(commitFinished).toBe(false);
-        else expect(commitFinished).toBe(true);
+        authoritySnapshotPhases.push(commitFinished ? "AFTER_COMMIT" : "BEFORE_COMMIT");
         return { goal: "current goal", verificationState };
       },
     };
@@ -320,7 +323,15 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       .build();
     const estimator = createUtf8HeuristicTokenEstimator();
     const committed: { eventCount: number } = { eventCount: 0 };
+    let commitAttempts = 0;
+    let commitShouldFail = false;
     let summaryTargetTokens: number | undefined;
+    let summaryPurpose: unknown;
+    let summaryCacheEligibility: unknown;
+    let summaryPrefixFingerprint: unknown;
+    let summaryReplayMessages: unknown;
+    let summaryReplayTools: unknown;
+    let summaryCallCount = 0;
     let summarySourceSequences: readonly number[] | undefined;
     let summarySourceRange:
       { readonly firstSequence: number; readonly lastSequence: number } | undefined;
@@ -346,9 +357,12 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     let notificationObservedAfterCommit = false;
     const compactionCommit: ContextCompactionCommitPort = {
       async commit(input) {
+        commitAttempts += 1;
+        if (commitShouldFail) throw new Error("durable summary commit unavailable");
         committed.eventCount = input.events.length;
         const checkpoint = Object.freeze({ ...input.checkpoint, schemaVersion: 2 as const });
         commitFinished = true;
+        verificationState = "NEW";
         return {
           checkpoint,
           events: input.events.map((event) => ({
@@ -359,6 +373,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       },
     };
     const engine = createV2ContextEngine({
+      promptSurfaceStore,
       sourceRegistry: registry,
       checkpointRepository: checkpointRepository(existingCheckpoint),
       authorityProvider: authority,
@@ -380,15 +395,24 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       policy: { outputReserveTokens: 128, safetyReserveTokens: 0 },
       requestOverheadEstimator: createContextRequestOverheadEstimator({
         tokenEstimator: estimator,
-        protocolOverheadTokens: 500,
+        protocolOverheadTokens: 400,
       }),
       summarizer: {
         async summarize(input) {
+          summaryCallCount += 1;
+          summaryPurpose = (input as typeof input & { purpose?: unknown }).purpose;
+          summaryCacheEligibility = (input as typeof input & { cacheEligibility?: unknown })
+            .cacheEligibility;
+          summaryPrefixFingerprint = (input as typeof input & { replayPrefixFingerprint?: unknown })
+            .replayPrefixFingerprint;
+          summaryReplayMessages = (input as typeof input & { replayPrefix?: { messages: unknown } })
+            .replayPrefix?.messages;
+          summaryReplayTools = (input as typeof input & { replayPrefix?: { tools: unknown } })
+            .replayPrefix?.tools;
           summaryTargetTokens = input.targetTokens;
           summarySourceSequences = input.sourceMessages.map((message) => message.sequence);
           summarySourceRange = input.sourceRange;
           summaryFinished = true;
-          verificationState = "NEW";
           return {
             semantic: {
               goal: input.identity.goal,
@@ -403,7 +427,7 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
             },
             modelRef: input.model.ref,
             finishReason: "STOP",
-            summaryPromptVersion: 2,
+            summaryPromptVersion: 3,
             sourceDigest: "source",
             semanticDigest: "semantic",
           };
@@ -444,23 +468,47 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       tokenEstimator: estimator,
     });
 
-    const prepared = await engine.prepare({
-      identity: {
-        runId: historicalRunId as never,
-        sessionId: createSessionId(),
-        goal: "current goal",
-      },
+    const runIdentity = {
+      runId: historicalRunId as never,
+      sessionId: createSessionId(),
+      goal: "current goal",
+    };
+    const warmPrepared = await engine.prepare({
+      identity: runIdentity,
       turn: { stepId: "step:phase-7f-compaction" as never, sequence: 1 },
-      conversation,
+      conversation: warmConversation,
       input: { kind: "USER_INPUT", userMessageId: current.message.id },
-      model: { ...MODEL, limits: { contextWindowTokens: 5_000, maxOutputTokens: 128 } },
+      model: { ...MODEL, limits: { contextWindowTokens: 4_000, maxOutputTokens: 128 } },
       tools: [],
       mode: "NORMAL",
       signal: new AbortController().signal,
     });
+    expect(summaryCallCount).toBe(0);
+    expect(promptSurfaceStore.inspect(runIdentity.runId)?.snapshots.length).toBeGreaterThan(0);
+    authoritySnapshotCount = 0;
+    authoritySnapshotPhases.length = 0;
+
+    const prepared = await engine.prepare({
+      identity: runIdentity,
+      turn: { stepId: "step:phase-7f-compaction" as never, sequence: 1 },
+      conversation: warmConversation,
+      input: { kind: "USER_INPUT", userMessageId: current.message.id },
+      model: { ...MODEL, limits: { contextWindowTokens: 4_000, maxOutputTokens: 128 } },
+      tools: [],
+      mode: "FORCED_RECOVERY",
+      signal: new AbortController().signal,
+    });
 
     expect(committed.eventCount).toBe(1);
-    expect(authoritySnapshotCount).toBe(2);
+    expect(authoritySnapshotCount).toBe(3);
+    expect(authoritySnapshotPhases).toContain("BEFORE_COMMIT");
+    expect(authoritySnapshotPhases).toContain("AFTER_COMMIT");
+    expect(summaryCallCount).toBe(1);
+    expect(summaryPurpose).toBe("COMPACTION");
+    expect(summaryCacheEligibility).toBe("CACHE_REUSE_ELIGIBLE");
+    expect(summaryPrefixFingerprint).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(summaryReplayMessages).toEqual(warmPrepared.messages);
+    expect(summaryReplayTools).toEqual([]);
     expect(summaryTargetTokens).toBe(7);
     expect(summarySourceSequences).toEqual([2]);
     expect(summarySourceRange).toMatchObject({ firstSequence: 1, lastSequence: 2 });
@@ -486,5 +534,25 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       firstSequence: 1,
       lastSequence: 2,
     });
+    expect(promptSurfaceStore.inspect(runIdentity.runId)?.resetReason).toBe("COMPACTION_COMMITTED");
+
+    const committedSurface = promptSurfaceStore.inspect(runIdentity.runId);
+    commitShouldFail = true;
+    commitFinished = false;
+    summaryFinished = false;
+    await expect(
+      engine.prepare({
+        identity: runIdentity,
+        turn: { stepId: "step:phase-7f-compaction" as never, sequence: 1 },
+        conversation: warmConversation,
+        input: { kind: "USER_INPUT", userMessageId: current.message.id },
+        model: { ...MODEL, limits: { contextWindowTokens: 4_000, maxOutputTokens: 128 } },
+        tools: [],
+        mode: "FORCED_RECOVERY",
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("durable summary commit unavailable");
+    expect(commitAttempts).toBe(2);
+    expect(promptSurfaceStore.inspect(runIdentity.runId)).toEqual(committedSurface);
   });
 });

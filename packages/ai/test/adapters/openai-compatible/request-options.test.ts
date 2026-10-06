@@ -4,6 +4,7 @@ import {
   resolveOpenAICompatibleNativeOptions,
   toOpenAICompatibleProviderOptions,
 } from "../../../src/adapters/openai-compatible/request-options.js";
+import { resolveOpenAICompatibleCacheOptions } from "../../../src/adapters/openai-compatible/cache-options.js";
 import { modelDescriptor } from "../../support/fixtures.js";
 import type { ModelDescriptor } from "../../../src/models/model-descriptor.js";
 import type { ResolvedAIModelRequest } from "../../../src/request/resolved-model-request.js";
@@ -146,24 +147,67 @@ describe("OpenAI-compatible native reasoning translation", () => {
 });
 
 describe("OpenAI-compatible native cache translation", () => {
-  it("adds nothing when the effective retention is NONE", () => {
+  it("returns NONE when the effective retention is NONE", () => {
     expect(
-      resolveOpenAICompatibleNativeOptions(model(), request({ effectiveCache: "NONE" })),
-    ).toEqual({});
+      resolveOpenAICompatibleCacheOptions(model(), request({ effectiveCache: "NONE" })),
+    ).toEqual({ mode: "NONE" });
   });
 
-  it("fails closed when a retention cannot be expressed by this dialect", () => {
-    // The pinned SDK exposes no prompt-cache control, so claiming to have applied
-    // SHORT or LONG would be dishonest.
-    for (const retention of ["SHORT", "LONG"] as CacheRetention[]) {
-      try {
-        resolveOpenAICompatibleNativeOptions(model(), request({ effectiveCache: retention }));
-        expect.unreachable(`${retention} must not be silently dropped`);
-      } catch (error) {
-        expect(error).toBeInstanceOf(AIError);
-        expect((error as AIError).code).toBe("AI_CAPABILITY_UNSUPPORTED");
-      }
+  it("selects automatic caching only when the descriptor and adapter metadata agree", () => {
+    const descriptor = model(undefined, {
+      cacheRetentions: ["NONE", "SHORT"],
+      adapterMetadata: { "openai-compatible": { cacheDialect: "AUTOMATIC" } },
+    });
+
+    expect(
+      resolveOpenAICompatibleCacheOptions(descriptor, request({ effectiveCache: "SHORT" })),
+    ).toEqual({ mode: "AUTOMATIC" });
+  });
+
+  it("fails closed when an effective retention has no matching dialect metadata", () => {
+    try {
+      resolveOpenAICompatibleCacheOptions(
+        model(undefined, { cacheRetentions: ["NONE", "SHORT"] }),
+        request({ effectiveCache: "SHORT" }),
+      );
+      expect.unreachable("a supported retention without a wire dialect must not be dropped");
+    } catch (error) {
+      expect(error).toBeInstanceOf(AIError);
+      expect((error as AIError).code).toBe("AI_CAPABILITY_UNSUPPORTED");
+      expect((error as AIError).retryable).toBe(false);
     }
+  });
+
+  it("rejects a resolved retention that contradicts the descriptor profile", () => {
+    expect(() =>
+      resolveOpenAICompatibleCacheOptions(
+        model(undefined, {
+          cacheRetentions: ["NONE"],
+          adapterMetadata: { "openai-compatible": { cacheDialect: "AUTOMATIC" } },
+        }),
+        request({ effectiveCache: "SHORT" }),
+      ),
+    ).toThrow(AIError);
+  });
+
+  it("rejects unknown cache dialect metadata", () => {
+    const descriptor = model(undefined, {
+      cacheRetentions: ["NONE", "SHORT"],
+      adapterMetadata: { "openai-compatible": { cacheDialect: "MAGIC" } },
+    });
+
+    expect(() =>
+      resolveOpenAICompatibleCacheOptions(descriptor, request({ effectiveCache: "SHORT" })),
+    ).toThrow(TypeError);
+  });
+
+  it("keeps downgraded NONE as NONE without requiring a dialect", () => {
+    expect(
+      resolveOpenAICompatibleCacheOptions(
+        model(undefined, { cacheRetentions: ["NONE"] }),
+        request({ effectiveCache: "NONE" }),
+      ),
+    ).toEqual({ mode: "NONE" });
   });
 });
 

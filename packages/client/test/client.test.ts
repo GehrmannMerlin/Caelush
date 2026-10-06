@@ -221,6 +221,72 @@ describe("CaelushClient", () => {
     await expect(client.getRunContextUsage(runId)).resolves.toMatchObject({ usedRatio: 0.25 });
   });
 
+  it("decodes the additive prompt-cache usage projection", async () => {
+    const runId = createRunId();
+    const client = new CaelushClient({
+      baseUrl: "http://daemon.test",
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            runId,
+            providerId: "fixture",
+            modelId: "small",
+            contextWindowTokens: 1000,
+            effectiveInputLimitTokens: 800,
+            estimatedInputTokens: 200,
+            usedRatio: 0.25,
+            remainingTokens: 600,
+            pressureState: "NORMAL",
+            compactionCount: 0,
+            breakdown: {
+              pinned: 0,
+              checkpoint: 0,
+              recentTail: 100,
+              project: 50,
+              files: 50,
+              toolObservations: 0,
+              memory: 0,
+            },
+            updatedAt: 1,
+            promptCache: {
+              status: "UNREPORTED",
+              sampleCount: 0,
+              totalRequestCount: 1,
+              totalInputTokens: 100,
+              totalOutputTokens: 2,
+              hitTokens: 0,
+              missTokens: 0,
+              writeTokens: 0,
+              unknownUsageCount: 1,
+              expectedReusablePrefixTokens: 500,
+              purposes: [
+                {
+                  purpose: "OTHER",
+                  requestCount: 1,
+                  inputTokens: 100,
+                  outputTokens: 2,
+                  hitTokens: 0,
+                  missTokens: 0,
+                  writeTokens: 0,
+                  unknownUsageCount: 1,
+                },
+              ],
+            },
+          }),
+          { status: 200 },
+        ),
+    });
+
+    await expect(client.getRunContextUsage(runId)).resolves.toMatchObject({
+      promptCache: {
+        status: "UNREPORTED",
+        totalRequestCount: 1,
+        totalInputTokens: 100,
+        totalOutputTokens: 2,
+      },
+    });
+  });
+
   it("uses typed HTTP methods and validates the response contract", async () => {
     const session = makeSession();
     const requests: Request[] = [];

@@ -570,6 +570,8 @@ const USAGE_FIELDS = [
   "totalTokens",
   "cachedInputTokens",
   "reasoningTokens",
+  "cacheMissInputTokens",
+  "cacheWriteInputTokens",
 ] as const satisfies readonly (keyof ModelUsage)[];
 
 function encodeUsage(usage: ModelUsage): JsonValue {
@@ -584,12 +586,17 @@ function encodeUsage(usage: ModelUsage): JsonValue {
 function decodeUsage(value: unknown): ModelUsage | undefined {
   if (value === undefined) return undefined;
   if (!isJsonObject(value)) throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT");
+  if (Object.keys(value).some((field) => !(USAGE_FIELDS as readonly string[]).includes(field))) {
+    throw new AgentMessageCodecError("INVALID_RECORD", "ASSISTANT");
+  }
   const usage: {
     inputTokens?: number;
     outputTokens?: number;
     totalTokens?: number;
     cachedInputTokens?: number;
     reasoningTokens?: number;
+    cacheMissInputTokens?: number;
+    cacheWriteInputTokens?: number;
   } = {};
   for (const field of USAGE_FIELDS) {
     const count = value[field];

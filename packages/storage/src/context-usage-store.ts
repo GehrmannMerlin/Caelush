@@ -1,8 +1,10 @@
 import type {
+  ContextPromptSurfaceReceipt,
   ContextUsageSnapshot,
   ContextUsageSourceBreakdown,
   ContextUsageStorePort,
 } from "@caelush/agent";
+import { PROMPT_SURFACE_RESET_REASONS } from "@caelush/agent";
 import type { RunId } from "@caelush/protocol";
 
 import type { CaelushDatabase } from "./database.js";
@@ -27,9 +29,10 @@ interface UsageRow {
 }
 
 interface UsageEnvelope {
-  readonly version: 2;
+  readonly version: 3;
   readonly breakdown: readonly ContextUsageSourceBreakdown[];
   readonly contextFingerprint: string | null;
+  readonly promptSurface: ContextPromptSurfaceReceipt | null;
 }
 
 export class SqliteContextUsageStore implements ContextUsageStorePort {
@@ -41,9 +44,10 @@ export class SqliteContextUsageStore implements ContextUsageStorePort {
       compareStrings(left.sourceId, right.sourceId),
     );
     const envelope: UsageEnvelope = {
-      version: 2,
+      version: 3,
       breakdown,
       contextFingerprint: snapshot.contextFingerprint ?? null,
+      promptSurface: snapshot.promptSurface ?? null,
     };
     try {
       this.database.client
@@ -164,6 +168,7 @@ function assertSnapshot(snapshot: ContextUsageSnapshot): void {
       throw new StorageError("Context Usage source breakdown values are invalid.");
     }
   }
+  if (snapshot.promptSurface !== undefined) assertPromptSurfaceReceipt(snapshot.promptSurface);
 }
 
 function decodeUsage(row: UsageRow): ContextUsageSnapshot {
@@ -207,11 +212,16 @@ function decodeUsage(row: UsageRow): ContextUsageSnapshot {
       throw new Error("invalid usage envelope");
     const candidate = envelope as Record<string, unknown>;
     if (
-      candidate.version !== 2 ||
+      (candidate.version !== 2 && candidate.version !== 3) ||
       !Array.isArray(candidate.breakdown) ||
       (candidate.contextFingerprint !== null && typeof candidate.contextFingerprint !== "string")
     )
       throw new Error("invalid usage envelope");
+    if (candidate.version === 2 && Object.hasOwn(candidate, "promptSurface")) {
+      throw new Error("invalid V2 usage envelope");
+    }
+    const promptSurface =
+      candidate.version === 3 ? decodePromptSurfaceReceipt(candidate.promptSurface) : undefined;
     const breakdown = candidate.breakdown.map((item) => decodeBreakdown(item));
     const ids = breakdown.map((item) => item.sourceId);
     if (new Set(ids).size !== ids.length) throw new Error("duplicate usage source");
@@ -235,6 +245,7 @@ function decodeUsage(row: UsageRow): ContextUsageSnapshot {
       ...(candidate.contextFingerprint === null
         ? {}
         : { contextFingerprint: candidate.contextFingerprint as never }),
+      ...(promptSurface === undefined ? {} : { promptSurface }),
       updatedAt: row.updated_at_ms as ContextUsageSnapshot["updatedAt"],
     });
   } catch (error) {
@@ -242,6 +253,67 @@ function decodeUsage(row: UsageRow): ContextUsageSnapshot {
       cause: error,
     });
   }
+}
+
+function decodePromptSurfaceReceipt(value: unknown): ContextPromptSurfaceReceipt | undefined {
+  if (value === null) return undefined;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("invalid Prompt Surface usage receipt");
+  }
+  const candidate = value as Record<string, unknown>;
+  const expectedKeys = [
+    "epochId",
+    "prefixFingerprint",
+    "stableHeadTokens",
+    "snapshotTokens",
+    "expectedReusablePrefixTokens",
+    "resetReason",
+  ].sort();
+  const actualKeys = Object.keys(candidate).sort();
+  if (
+    actualKeys.length !== expectedKeys.length ||
+    actualKeys.some((key, i) => key !== expectedKeys[i])
+  ) {
+    throw new Error("invalid Prompt Surface usage receipt shape");
+  }
+  if (
+    typeof candidate.epochId !== "string" ||
+    candidate.epochId.trim().length === 0 ||
+    new TextEncoder().encode(candidate.epochId).byteLength > 256 ||
+    typeof candidate.prefixFingerprint !== "string" ||
+    !/^sha256:[0-9a-f]{64}$/.test(candidate.prefixFingerprint) ||
+    !PROMPT_SURFACE_RESET_REASONS.some((reason) => reason === candidate.resetReason)
+  ) {
+    throw new Error("invalid Prompt Surface usage receipt identity");
+  }
+  for (const field of [
+    "stableHeadTokens",
+    "snapshotTokens",
+    "expectedReusablePrefixTokens",
+  ] as const) {
+    if (!Number.isSafeInteger(candidate[field]) || (candidate[field] as number) < 0) {
+      throw new Error("invalid Prompt Surface usage token estimate");
+    }
+  }
+  if (
+    candidate.expectedReusablePrefixTokens !==
+    (candidate.stableHeadTokens as number) + (candidate.snapshotTokens as number)
+  ) {
+    throw new Error("invalid Prompt Surface reusable prefix estimate");
+  }
+  const receipt: ContextPromptSurfaceReceipt = {
+    epochId: candidate.epochId,
+    prefixFingerprint: candidate.prefixFingerprint,
+    stableHeadTokens: candidate.stableHeadTokens as number,
+    snapshotTokens: candidate.snapshotTokens as number,
+    expectedReusablePrefixTokens: candidate.expectedReusablePrefixTokens as number,
+    resetReason: candidate.resetReason as ContextPromptSurfaceReceipt["resetReason"],
+  };
+  return Object.freeze(receipt);
+}
+
+function assertPromptSurfaceReceipt(value: ContextPromptSurfaceReceipt): void {
+  decodePromptSurfaceReceipt(value);
 }
 
 function decodeRecoveryStages(value: string | null): readonly string[] {

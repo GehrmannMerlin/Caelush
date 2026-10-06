@@ -23,6 +23,7 @@ import {
 } from "@caelush/agent";
 
 import { snapshot, turn, turnIdFor, userMessage } from "../messages/fixtures.js";
+import { createPromptSurfaceMemoryStore } from "./support/prompt-surface-memory-store.js";
 
 const MODEL: ModelDescriptor = {
   ref: { provider: "test", model: "phase-8d-engine" },
@@ -57,7 +58,7 @@ function acceptedResult(): ContextSummarizationResult {
     },
     modelRef: MODEL.ref,
     finishReason: "STOP",
-    summaryPromptVersion: 2,
+    summaryPromptVersion: 3,
     sourceDigest: "semantic-source",
     semanticDigest: "semantic",
   };
@@ -158,6 +159,7 @@ function fixture(
     },
   };
   const engine = createV2ContextEngine({
+    promptSurfaceStore: createPromptSurfaceMemoryStore(),
     sourceRegistry: registry,
     checkpointRepository: {
       async create() {
@@ -282,7 +284,7 @@ describe("Phase 8D tentative rebuild and durable fit", () => {
     const result = await fixtureState.engine.prepare(fixtureState.input);
 
     expect(fixtureState.commitCalls).toBe(1);
-    expect(fixtureState.authorityCalls).toBe(2);
+    expect(fixtureState.authorityCalls).toBe(3);
     expect(fixtureState.lastCheckpoint?.tokensAfter).toBe(result.report.estimatedInputTokens);
     expect(fixtureState.lastCheckpoint?.tokensAfter).not.toBe(0);
     expect(fixtureState.usageCalls).toBe(1);
@@ -312,14 +314,17 @@ describe("Phase 8D tentative rebuild and durable fit", () => {
     };
     const fixtureState = fixture({
       materializer,
-      authority: (call) => ({ goal: call === 1 ? "authority-A" : "authority-B" }),
+      authority: (call) => ({
+        goal: call === 1 ? "authority-A" : call === 2 ? "authority-B" : "authority-C",
+      }),
     });
 
     await fixtureState.engine.prepare(fixtureState.input);
 
-    expect(fixtureState.authorityCalls).toBe(2);
+    expect(fixtureState.authorityCalls).toBe(3);
     expect(documents[0]).toContain("authority-A");
-    expect(documents.at(-1)).toContain("authority-B");
+    expect(documents[1]).toContain("authority-B");
+    expect(documents.at(-1)).toContain("authority-C");
   });
 
   it("uses the same selected durable conversation IDs for tentative and final builds", async () => {
@@ -334,8 +339,9 @@ describe("Phase 8D tentative rebuild and durable fit", () => {
 
     await fixtureState.engine.prepare(fixtureState.input);
 
-    expect(selections).toHaveLength(2);
+    expect(selections).toHaveLength(3);
     expect(selections[0]).toEqual(selections[1]);
+    expect(selections[1]).toEqual(selections[2]);
     const userMessageId =
       fixtureState.input.input.kind === "USER_INPUT"
         ? fixtureState.input.input.userMessageId

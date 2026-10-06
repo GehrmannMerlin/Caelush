@@ -15,7 +15,7 @@ import {
   type RunMessageAuthority,
 } from "@caelush/core";
 import { createLocalProjectInspector } from "@caelush/coding-agent";
-import { createAIError, createAISubsystem } from "@caelush/ai";
+import { createAIError, createAISubsystem, createCacheResolver, isJsonObject } from "@caelush/ai";
 import type { ProviderStreamPolicy } from "./config.js";
 import { createModelTransportRecoveryPort } from "./providers/model-transport-recovery.js";
 import {
@@ -58,6 +58,7 @@ import {
   STANDARD_AGENT_MESSAGE_TRANSCRIPT_PROJECTORS,
 } from "@caelush/agent";
 import type {
+  AgentMessageRecord,
   AgentExecutionIdentity,
   ContextContributionHook,
   ContextContributionPipeline,
@@ -67,10 +68,14 @@ import type {
   ToolPresentationPort,
 } from "@caelush/agent";
 import type {
+  AICacheRequest,
   AISubsystem,
   AIGateway,
   AIModelRequest,
   AIStream,
+  ModelUsage,
+  ModelCatalog,
+  ModelDescriptor,
   ModelDescriptorSourcePort,
 } from "@caelush/ai";
 import {
@@ -91,6 +96,10 @@ import {
   type RunId,
   type TimestampMs,
   type ContextUsageProjection,
+  type PromptCachePurposeUsage,
+  type PromptCacheRequestPurpose,
+  type PromptCacheStatus,
+  type PromptCacheUsage,
 } from "@caelush/protocol";
 import {
   LocalRuntime,
@@ -170,7 +179,11 @@ import {
   verificationCommandSecurityPort,
   verificationEvidenceSanitizer,
 } from "@caelush/security";
-import { createSqliteToolBudgetAdmission, type CaelushStorage } from "@caelush/storage";
+import {
+  createSqliteToolBudgetAdmission,
+  type BudgetLedgerEntry,
+  type CaelushStorage,
+} from "@caelush/storage";
 import {
   SecurityCapabilityService,
   type WorkspacePreparationPort,
@@ -534,7 +547,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     options.wireDiagnosticWriter === undefined
       ? createSafeModelWireDiagnostic()
       : createModelWireDiagnostic({ writer: options.wireDiagnosticWriter });
-  const gateway = createDiagnosedGateway(ai.gateway, wireDiagnostic);
+  const gateway = createDiagnosedGateway(ai.gateway, wireDiagnostic, ai.models);
   const modelTurnExecutor = createModelTurnExecutor({
     gateway,
     notifier: eventNotifier,
@@ -980,6 +993,8 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
   const agentExecution: RunAgentExecutionContextFactory = {
     async resolve(run) {
       const config = await executionConfigResolver.resolve(run);
+      const model = ai.models.resolve(run.model);
+      const cacheRequest = resolveDefaultCacheRequest(model, config.modelSettings?.cache);
       const securityPrompt =
         run.securityPolicy === undefined
           ? undefined
@@ -993,11 +1008,14 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
             .filter((value): value is string => value !== undefined)
             .join("\n\n"),
           tools: activeToolRegistry.modelSpecs(),
-          ...(config.modelSettings === undefined && run.reasoningLevel === undefined
+          ...(config.modelSettings === undefined &&
+          cacheRequest === undefined &&
+          run.reasoningLevel === undefined
             ? {}
             : {
                 modelSettings: {
                   ...(config.modelSettings === undefined ? {} : config.modelSettings),
+                  ...(cacheRequest === undefined ? {} : { cache: cacheRequest }),
                   ...(run.reasoningLevel === undefined
                     ? {}
                     : { reasoning: { level: run.reasoningLevel } }),
@@ -1014,6 +1032,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
           createDaemonV2ContextEngine({
             input,
             storage: options.storage,
+            promptSurfaceStore: options.storage.promptSurface,
             runtime,
             gateway,
             messageProjectors,
@@ -1142,8 +1161,22 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     transcriptProjectors,
     contextUsage: {
       getContextUsage: async (runId) => {
-        const usage = await options.storage.contextUsage.getByRun(runId as RunId);
-        return usage === undefined ? undefined : projectV2ContextUsage(usage);
+        const typedRunId = runId as RunId;
+        const usage = await options.storage.contextUsage.getByRun(typedRunId);
+        if (usage === undefined) return undefined;
+        const [records, currentEpoch, budgetEntries] = await Promise.all([
+          options.storage.messageRecords.listByRun(typedRunId),
+          options.storage.promptSurface.getCurrent(typedRunId),
+          options.storage.budgetLedger.listByRun(typedRunId),
+        ]);
+        return {
+          ...projectV2ContextUsage(usage),
+          promptCache: projectPromptCacheUsage(
+            usage,
+            promptCacheSamplesFromDurableMessages(records, budgetEntries),
+            currentEpoch,
+          ),
+        };
       },
     },
     controller,
@@ -1245,6 +1278,324 @@ function projectV2ContextUsage(input: ContextUsageSnapshot) {
     lastRecoveryStages: [...(input.lastRecoveryStages ?? [])],
     lastBuildStatus: input.lastBuildStatus,
   } satisfies ContextUsageProjection;
+}
+
+/** One bounded provider-usage sample used to aggregate public prompt-cache facts. */
+export interface PromptCacheUsageSample {
+  readonly purpose: PromptCacheRequestPurpose;
+  readonly measuredAt: TimestampMs;
+  readonly usage?: ModelUsage;
+}
+
+/**
+ * Read only the provider-neutral usage tuple from durable assistant records.
+ * No message content, provider state, call identity, or raw model payload leaves this function.
+ */
+export function promptCacheSamplesFromDurableMessages(
+  records: readonly AgentMessageRecord[],
+  budgetEntries: readonly BudgetLedgerEntry[] = [],
+): readonly PromptCacheUsageSample[] {
+  const assistants = records.filter((record) => record.messageType === "ASSISTANT");
+  const assistantStepIds = new Set(
+    assistants.flatMap((record) =>
+      record.sourceStepId === undefined ? [] : [String(record.sourceStepId)],
+    ),
+  );
+  const assistantSamples = assistants.map((record) => {
+    const usage = readDurableAssistantUsage(record);
+    return {
+      purpose: "MAIN_AGENT" as const,
+      measuredAt: record.createdAt,
+      ...(usage === undefined ? {} : { usage }),
+    };
+  });
+  const auxiliarySamples = budgetEntries.flatMap((entry): PromptCacheUsageSample[] => {
+    if (entry.state === "RESERVED" || entry.state === "RELEASED") return [];
+    let purpose: PromptCacheRequestPurpose;
+    switch (entry.kind) {
+      case "LLM_ATTEMPT":
+        if (assistantStepIds.has(entry.ownerId)) return [];
+        purpose = "OTHER";
+        break;
+      case "CONTEXT_COMPACTION":
+        purpose = "COMPACTION";
+        break;
+      case "VERIFICATION_LLM":
+        purpose = "OTHER";
+        break;
+      case "TOOL_INVOCATION":
+        return [];
+    }
+    const usage: ModelUsage = {
+      ...(entry.actualInputTokens === undefined ? {} : { inputTokens: entry.actualInputTokens }),
+      ...(entry.actualOutputTokens === undefined ? {} : { outputTokens: entry.actualOutputTokens }),
+    };
+    const measuredAt = entry.settledAt ?? entry.startedAt ?? entry.createdAt;
+    return [
+      {
+        purpose,
+        measuredAt,
+        ...(Object.keys(usage).length === 0 ? {} : { usage }),
+      },
+    ];
+  });
+  return Object.freeze(
+    [...assistantSamples, ...auxiliarySamples].map((sample) => Object.freeze(sample)),
+  );
+}
+
+/** Build a safe Context Usage cache projection from durable usage and Prompt Surface metadata. */
+export function projectPromptCacheUsage(
+  contextUsage: Pick<ContextUsageSnapshot, "promptSurface" | "updatedAt">,
+  samples: readonly PromptCacheUsageSample[],
+  currentEpoch?: {
+    readonly epochId: string;
+    readonly resetReason: string;
+    readonly createdStepSequence: number;
+    readonly createdAt: TimestampMs;
+  },
+): PromptCacheUsage {
+  const purposeTotals = new Map<
+    PromptCacheRequestPurpose,
+    {
+      requestCount: number;
+      inputTokens: number;
+      outputTokens: number;
+      hitTokens: number;
+      missTokens: number;
+      writeTokens: number;
+      unknownUsageCount: number;
+    }
+  >();
+  const rateSamples: Array<{
+    readonly measuredAt: TimestampMs;
+    readonly hitTokens: number;
+    readonly missTokens: number;
+  }> = [];
+  const totals = {
+    inputTokens: 0,
+    outputTokens: 0,
+    hitTokens: 0,
+    missTokens: 0,
+    writeTokens: 0,
+    unknownUsageCount: 0,
+  };
+
+  for (const sample of samples) {
+    let purpose = purposeTotals.get(sample.purpose);
+    if (purpose === undefined) {
+      purpose = {
+        requestCount: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        hitTokens: 0,
+        missTokens: 0,
+        writeTokens: 0,
+        unknownUsageCount: 0,
+      };
+      purposeTotals.set(sample.purpose, purpose);
+    }
+    purpose.requestCount = addPromptCacheCount(purpose.requestCount, 1);
+
+    const usage = sample.usage;
+    addOptionalPromptCacheCount(totals, purpose, usage, "inputTokens", "inputTokens");
+    addOptionalPromptCacheCount(totals, purpose, usage, "outputTokens", "outputTokens");
+    addOptionalPromptCacheCount(totals, purpose, usage, "cachedInputTokens", "hitTokens");
+    addOptionalPromptCacheCount(totals, purpose, usage, "cacheMissInputTokens", "missTokens");
+    addOptionalPromptCacheCount(totals, purpose, usage, "cacheWriteInputTokens", "writeTokens");
+
+    const hitTokens = readUsageCount(usage?.cachedInputTokens);
+    const missTokens = readUsageCount(usage?.cacheMissInputTokens);
+    if (hitTokens === undefined || missTokens === undefined) {
+      purpose.unknownUsageCount = addPromptCacheCount(purpose.unknownUsageCount, 1);
+      totals.unknownUsageCount = addPromptCacheCount(totals.unknownUsageCount, 1);
+      continue;
+    }
+    if (hitTokens + missTokens > 0) {
+      rateSamples.push({ measuredAt: sample.measuredAt, hitTokens, missTokens });
+    }
+  }
+
+  const promptSurface = contextUsage.promptSurface;
+  const epochId = currentEpoch?.epochId ?? promptSurface?.epochId;
+  const resetReason = isPromptCacheResetReason(currentEpoch?.resetReason)
+    ? currentEpoch.resetReason
+    : promptSurface?.resetReason;
+  const expectedReusablePrefixTokens = promptSurface?.expectedReusablePrefixTokens ?? 0;
+  const orderedRateSamples = [...rateSamples].sort(
+    (left, right) => Number(left.measuredAt) - Number(right.measuredAt),
+  );
+  const latestRate = orderedRateSamples.at(-1);
+  const hitMissTokens = orderedRateSamples.reduce(
+    (sum, sample) =>
+      addPromptCacheCount(sum, addPromptCacheCount(sample.hitTokens, sample.missTokens)),
+    0,
+  );
+  const hitTokens = orderedRateSamples.reduce(
+    (sum, sample) => addPromptCacheCount(sum, sample.hitTokens),
+    0,
+  );
+  const resetBoundary = currentEpoch?.createdAt;
+  const measuredAfterCurrentReset =
+    latestRate !== undefined &&
+    (resetBoundary === undefined || Number(latestRate.measuredAt) >= Number(resetBoundary));
+  const resetPending =
+    resetReason !== undefined &&
+    resetReason !== "INITIAL" &&
+    (resetBoundary === undefined
+      ? latestRate === undefined || Number(latestRate.measuredAt) < Number(contextUsage.updatedAt)
+      : !measuredAfterCurrentReset);
+  const status: PromptCacheStatus = resetPending
+    ? "RESET"
+    : latestRate === undefined
+      ? "UNREPORTED"
+      : latestRate.hitTokens > 0
+        ? "WARM"
+        : "COLD_START";
+  const ratesReported = latestRate !== undefined;
+  const reusableRateReported =
+    ratesReported && measuredAfterCurrentReset && expectedReusablePrefixTokens > 0;
+
+  const purposeOrder: readonly PromptCacheRequestPurpose[] = [
+    "MAIN_AGENT",
+    "WARMUP",
+    "RETRY",
+    "COMPACTION",
+    "TITLE",
+    "OTHER",
+  ];
+  const purposes: PromptCachePurposeUsage[] = purposeOrder.flatMap((purpose) => {
+    const aggregate = purposeTotals.get(purpose);
+    return aggregate === undefined
+      ? []
+      : [
+          {
+            purpose,
+            ...aggregate,
+          },
+        ];
+  });
+
+  return {
+    status,
+    sampleCount: rateSamples.length,
+    totalRequestCount: samples.length,
+    totalInputTokens: totals.inputTokens,
+    totalOutputTokens: totals.outputTokens,
+    hitTokens: totals.hitTokens,
+    missTokens: totals.missTokens,
+    writeTokens: totals.writeTokens,
+    unknownUsageCount: totals.unknownUsageCount,
+    ...(ratesReported
+      ? {
+          latestHitRate: latestRate!.hitTokens / (latestRate!.hitTokens + latestRate!.missTokens),
+          rollingHitRate: hitTokens / hitMissTokens,
+        }
+      : {}),
+    expectedReusablePrefixTokens,
+    ...(reusableRateReported
+      ? {
+          reusablePrefixEfficiency:
+            Math.min(latestRate!.hitTokens, expectedReusablePrefixTokens) /
+            expectedReusablePrefixTokens,
+        }
+      : {}),
+    ...(epochId === undefined ? {} : { epochId }),
+    ...(resetReason === undefined ? {} : { resetReason }),
+    ...(currentEpoch === undefined || resetReason === undefined || resetReason === "INITIAL"
+      ? {}
+      : {
+          resetStepSequence: currentEpoch.createdStepSequence,
+          resetAt: currentEpoch.createdAt,
+        }),
+    ...(latestRate === undefined ? {} : { lastMeasuredAt: latestRate.measuredAt }),
+    purposes,
+  };
+}
+
+function readDurableAssistantUsage(record: AgentMessageRecord): ModelUsage | undefined {
+  const model = record.data["model"];
+  if (model === null || typeof model !== "object" || Array.isArray(model)) return undefined;
+  const candidate = model as Record<string, unknown>;
+  if (candidate["kind"] !== "MODEL_TURN") return undefined;
+  const usage = candidate["usage"];
+  if (usage === null || typeof usage !== "object" || Array.isArray(usage)) return undefined;
+  const counters: Record<string, number | undefined> = {};
+  for (const field of [
+    "inputTokens",
+    "outputTokens",
+    "totalTokens",
+    "cachedInputTokens",
+    "reasoningTokens",
+    "cacheMissInputTokens",
+    "cacheWriteInputTokens",
+  ] as const) {
+    const value = (usage as Record<string, unknown>)[field];
+    if (value === undefined) continue;
+    if (!isPromptCacheTokenCount(value)) return undefined;
+    counters[field] = value;
+  }
+  return counters as ModelUsage;
+}
+
+function addOptionalPromptCacheCount(
+  totals: {
+    inputTokens: number;
+    outputTokens: number;
+    hitTokens: number;
+    missTokens: number;
+    writeTokens: number;
+  },
+  purpose: {
+    inputTokens: number;
+    outputTokens: number;
+    hitTokens: number;
+    missTokens: number;
+    writeTokens: number;
+  },
+  usage: ModelUsage | undefined,
+  source:
+    | "inputTokens"
+    | "outputTokens"
+    | "cachedInputTokens"
+    | "cacheMissInputTokens"
+    | "cacheWriteInputTokens",
+  target: "inputTokens" | "outputTokens" | "hitTokens" | "missTokens" | "writeTokens",
+): void {
+  const count = readUsageCount(usage?.[source]);
+  if (count === undefined) return;
+  totals[target] = addPromptCacheCount(totals[target], count);
+  purpose[target] = addPromptCacheCount(purpose[target], count);
+}
+
+function readUsageCount(value: unknown): number | undefined {
+  return isPromptCacheTokenCount(value) ? value : undefined;
+}
+
+function isPromptCacheTokenCount(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function addPromptCacheCount(left: number, right: number): number {
+  const result = left + right;
+  if (!Number.isSafeInteger(result) || result < 0) {
+    throw new RangeError("Prompt-cache usage counter is outside the safe integer range.");
+  }
+  return result;
+}
+
+function isPromptCacheResetReason(
+  value: string | undefined,
+): value is NonNullable<ContextUsageSnapshot["promptSurface"]>["resetReason"] {
+  return (
+    value === "INITIAL" ||
+    value === "MODEL_CHANGED" ||
+    value === "TOOL_SCHEMA_CHANGED" ||
+    value === "STABLE_HEAD_CHANGED" ||
+    value === "CACHE_SETTINGS_CHANGED" ||
+    value === "COMPACTION_COMMITTED" ||
+    value === "RECOVERY_INCOMPATIBLE"
+  );
 }
 
 /**
@@ -1451,8 +1802,10 @@ function createRunBoundVerificationGit(runtime: LocalRuntime): VerificationGitPo
 function createDiagnosedGateway(
   gateway: AIGateway,
   diagnostic: ModelWireDiagnostic | undefined,
+  models: ModelCatalog,
 ): AIGateway {
   if (diagnostic === undefined) return gateway;
+  const cacheResolver = createCacheResolver();
 
   return {
     async stream(request: AIModelRequest, options): Promise<AIStream> {
@@ -1465,7 +1818,7 @@ function createDiagnosedGateway(
         model: request.model.model,
         messageRoles: request.messages.map((message) => message.role),
         toolNames: (request.tools ?? []).map((tool) => tool.name),
-        modelSettings: safeModelSettings(request),
+        modelSettings: safeModelSettings(request, models.resolve(request.model), cacheResolver),
       });
       return {
         callId: stream.callId,
@@ -1503,8 +1856,12 @@ async function* observeEvents(
   }
 }
 
-/** Numbers only. A settings object can never carry a credential. */
-function safeModelSettings(request: AIModelRequest): Record<string, string | number> {
+/** Numbers and bounded policy enums only; cache identity and credentials are omitted. */
+function safeModelSettings(
+  request: AIModelRequest,
+  model: ModelDescriptor,
+  cacheResolver: ReturnType<typeof createCacheResolver>,
+): Record<string, string | number> {
   const settings: Record<string, string | number> = {};
   if (request.settings?.maxOutputTokens !== undefined) {
     settings["maxOutputTokens"] = request.settings.maxOutputTokens;
@@ -1514,5 +1871,47 @@ function safeModelSettings(request: AIModelRequest): Record<string, string | num
   if (request.settings?.reasoning !== undefined)
     settings["reasoning"] = request.settings.reasoning.level;
   if (request.toolChoice !== undefined) settings["toolChoice"] = request.toolChoice.type;
+  const cache = cacheResolver.resolve({
+    model,
+    ...(request.settings?.cache === undefined ? {} : { request: request.settings.cache }),
+  });
+  settings["cacheRequestedRetention"] = cache.requested;
+  settings["cacheEffectiveRetention"] = cache.effective;
+  settings["cacheMode"] = cache.mode;
+  settings["cacheDialect"] = safeCacheDialect(model, cache.effective);
   return settings;
+}
+
+/** A bounded diagnostic projection of the selected adapter's cache behavior. */
+function safeCacheDialect(
+  model: ModelDescriptor,
+  retention: import("@caelush/ai").CacheRetention,
+): "NONE" | "AUTOMATIC" | "MARKER" | "UNKNOWN" {
+  if (retention === "NONE") return "NONE";
+  const descriptorSupportsRetention =
+    model.capabilities.promptCaching === "SUPPORTED" &&
+    model.cache?.supportedRetentions.includes(retention) === true;
+  if (!descriptorSupportsRetention) return "UNKNOWN";
+
+  const compatibleMetadata = model.adapterMetadata?.["openai-compatible"];
+  if (isJsonObject(compatibleMetadata) && compatibleMetadata["cacheDialect"] === "AUTOMATIC") {
+    return "AUTOMATIC";
+  }
+  if (
+    model.api === "anthropic-messages" &&
+    model.cache?.supportedRetentions.includes(retention) === true
+  ) {
+    return "MARKER";
+  }
+  return "UNKNOWN";
+}
+
+/** Preserve an explicit host request, otherwise derive intent from model metadata. */
+export function resolveDefaultCacheRequest(
+  model: ModelDescriptor,
+  explicit?: AICacheRequest,
+): AICacheRequest | undefined {
+  if (explicit !== undefined) return explicit;
+  const retention = model.cache?.defaultRetention;
+  return retention === undefined ? undefined : { retention };
 }

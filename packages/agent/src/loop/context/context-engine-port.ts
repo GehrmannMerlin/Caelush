@@ -1,4 +1,4 @@
-import type { AIModelSettings, AIToolSpec, ModelDescriptor } from "@caelush/ai";
+import type { AICacheRequest, AIModelSettings, AIToolSpec, ModelDescriptor } from "@caelush/ai";
 
 import type {
   AgentExecutionIdentity,
@@ -135,11 +135,13 @@ export function toAIModelSettings(settings: {
   readonly maxOutputTokens?: number;
   readonly temperature?: number;
   readonly reasoning?: AIModelSettings["reasoning"];
+  readonly cache?: AICacheRequest;
 }): AIModelSettings | undefined {
   if (
     settings.maxOutputTokens === undefined &&
     settings.temperature === undefined &&
-    settings.reasoning === undefined
+    settings.reasoning === undefined &&
+    settings.cache === undefined
   ) {
     return undefined;
   }
@@ -149,5 +151,6 @@ export function toAIModelSettings(settings: {
       : { maxOutputTokens: settings.maxOutputTokens }),
     ...(settings.temperature === undefined ? {} : { temperature: settings.temperature }),
     ...(settings.reasoning === undefined ? {} : { reasoning: settings.reasoning }),
+    ...(settings.cache === undefined ? {} : { cache: settings.cache }),
   };
 }

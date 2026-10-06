@@ -74,6 +74,8 @@ function semantic(overrides: Partial<Parameters<typeof createSemanticCheckpointD
 
 function input(): ContextSummarizationInput {
   return {
+    purpose: "COMPACTION",
+    cacheEligibility: "NOT_ELIGIBLE",
     identity,
     reason: "PROACTIVE_PRESSURE",
     sourceMessages,
@@ -96,7 +98,7 @@ function successfulSummarizer(): ContextSummarizerPort {
         semantic: semantic({ nextIntent: "Continue with verification." }),
         modelRef: MODEL.ref,
         finishReason: "STOP",
-        summaryPromptVersion: 2,
+        summaryPromptVersion: 3,
         sourceDigest: "ignored-by-runner",
         semanticDigest: "ignored-by-runner",
       };
@@ -161,7 +163,7 @@ describe("Phase 7D semantic summarization", () => {
       kind: "FALLBACK_REQUIRED",
       degraded: true,
       outcome: "FAILED",
-      summaryPromptVersion: 2,
+      summaryPromptVersion: 3,
     });
   });
 

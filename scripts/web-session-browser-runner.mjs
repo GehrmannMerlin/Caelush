@@ -1,7 +1,6 @@
 /* global URL, fetch, process, document, window, HTMLElement, getComputedStyle */
 
 import { chromium } from "@playwright/test";
-import { mkdir } from "node:fs/promises";
 
 const [url, artifactDirectory, workspaceJson] = process.argv.slice(2);
 if (url === undefined || artifactDirectory === undefined || workspaceJson === undefined) {
@@ -10,8 +9,8 @@ if (url === undefined || artifactDirectory === undefined || workspaceJson === un
 const workspace = JSON.parse(workspaceJson);
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext();
-await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
 const page = await context.newPage();
+const promptCacheOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "PROMPT_CACHE";
 const waitVisible = (locator, timeout = 15_000) => locator.waitFor({ state: "visible", timeout });
 const waitUntil = async (predicate, description, timeout = 15_000) => {
   const deadline = Date.now() + timeout;
@@ -65,7 +64,7 @@ const openProcessDisclosure = async () => {
     if (await body.isVisible()) return;
     if (Date.now() > deadline)
       throw new Error("the execution-process disclosure never stayed open");
-    await disclosure.locator("summary").click();
+    await disclosure.locator("summary").first().click();
     await page.waitForTimeout(150);
   }
 };
@@ -348,8 +347,10 @@ const assertSubmittedPreset = async (promptText, expectedId) => {
     );
 };
 
+let smokeStage = "browser navigation";
 try {
   await page.goto(url, { waitUntil: "domcontentloaded" });
+  smokeStage = "initial session flow";
   await waitVisible(page.locator(".workspace-sidebar"));
   await waitVisible(page.locator(".session-scroll"));
   // Nothing is selected yet, so this is the empty landing state: the column is deliberately fixed.
@@ -403,28 +404,87 @@ try {
 
   await page.reload({ waitUntil: "domcontentloaded" });
   await selectSession("read browser fixture");
+  smokeStage = "completed transcript rendering";
   await waitVisible(exactText("Verified browser result."));
   await assertAssistantMarkdownHeadingScale();
   await assertPermissionSelectorAppearance();
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.screenshot({
-    path: artifactDirectory + "/assistant-markdown-desktop.png",
-    fullPage: true,
-  });
+  smokeStage = "durable Context Usage refresh";
+  const contextUsageButton = page.locator("button.context-usage-ring-button");
+  await waitUntil(
+    async () =>
+      (await contextUsageButton.getAttribute("aria-label")) !== "工作上下文用量：暂无数据",
+    "the durable Context Usage projection to load",
+  );
+  smokeStage = "opening Context Usage inspector";
+  await contextUsageButton.click();
+  const cacheInspector = page.locator(".context-inspector");
+  await waitVisible(cacheInspector);
+  smokeStage = "checking prompt-cache facts";
+  for (const label of [
+    "平台实际命中率",
+    "Caelush 可复用前缀效率",
+    "缓存周期",
+    "最近重置",
+    "未上报 usage",
+  ]) {
+    if (!(await cacheInspector.innerText()).includes(label)) {
+      throw new Error("prompt-cache inspector is missing " + label);
+    }
+  }
+  if (!(await cacheInspector.innerText()).includes("未上报 usage")) {
+    throw new Error("fixture Provider usage was incorrectly displayed as a reported rate");
+  }
+  const cacheSection = cacheInspector.locator(".context-cache-section");
+  smokeStage = "capturing desktop cache inspector";
+  await cacheSection.screenshot({ path: artifactDirectory + "/prompt-cache-desktop.png" });
   await page.setViewportSize({ width: 375, height: 812 });
   const mobileSidebarToggle = page.locator(".sidebar-toggle-button");
   if ((await mobileSidebarToggle.getAttribute("aria-expanded")) === "true") {
     await mobileSidebarToggle.click();
   }
   await page.waitForTimeout(220);
+  smokeStage = "checking mobile cache overflow";
+  const cacheBounds = await cacheInspector.boundingBox();
+  const viewportBounds = await page.evaluate(() => ({
+    width: window.innerWidth,
+    height: window.innerHeight,
+    documentWidth: document.documentElement.scrollWidth,
+  }));
+  if (
+    cacheBounds === null ||
+    cacheBounds.x < 0 ||
+    cacheBounds.x + cacheBounds.width > viewportBounds.width + 1
+  ) {
+    smokeStage = "mobile prompt-cache panel bounds outside viewport";
+    throw new Error("prompt-cache inspector overflows the 375px mobile viewport");
+  }
+  if (cacheBounds.y < 0 || cacheBounds.y + cacheBounds.height > viewportBounds.height + 1) {
+    smokeStage = `mobile inspector vertical bounds y=${cacheBounds.y}, height=${cacheBounds.height}, viewport=${viewportBounds.height}`;
+    throw new Error("prompt-cache inspector exceeds the 375px mobile viewport height");
+  }
+  if (viewportBounds.documentWidth > viewportBounds.width + 1) {
+    smokeStage = "mobile document horizontal overflow";
+    throw new Error("prompt-cache inspector overflows the 375px mobile viewport");
+  }
+  await cacheSection.screenshot({ path: artifactDirectory + "/prompt-cache-mobile.png" });
+  if (promptCacheOnly) {
+    await context.close();
+    await browser.close();
+    process.stdout.write("[browser-runner] prompt-cache desktop/mobile checks passed.\n");
+    process.exit(0);
+  }
+  await contextUsageButton.click();
+  await page.setViewportSize({ width: 375, height: 812 });
+  if ((await mobileSidebarToggle.getAttribute("aria-expanded")) === "true") {
+    await mobileSidebarToggle.click();
+  }
+  await page.waitForTimeout(220);
   await assertAssistantMarkdownHeadingScale();
   await assertComposerControlsDoNotOverlap();
-  await page.screenshot({
-    path: artifactDirectory + "/assistant-markdown-mobile.png",
-    fullPage: true,
-  });
   await page.setViewportSize({ width: 1280, height: 720 });
 
+  smokeStage = "Provider recovery flow";
   await startNewSession();
   await submitPrompt("observe Provider recovery");
   await openProcessDisclosure();
@@ -456,25 +516,11 @@ try {
     .locator(".turn-presentation-thinking-detail")
     .filter({ hasText: /将在 \d+ 秒后重新连接 1\/5/u });
   await waitVisible(retryScheduled);
-  await mkdir(artifactDirectory, { recursive: true });
-  await page.screenshot({
-    path: artifactDirectory + "/provider-retry-scheduled.png",
-    fullPage: true,
-  });
-  process.stdout.write(
-    "[browser-runner] retry scheduled details: " +
-      JSON.stringify(await page.locator(".turn-presentation-thinking-detail").allTextContents()) +
-      "\n",
-  );
   await waitVisible(exactText("正在重新连接 1/5"));
   await waitUntil(
     async () => (await animationName()) === "turn-presentation-thinking-text",
     "animated retry text",
   );
-  await page.screenshot({
-    path: artifactDirectory + "/provider-retry-in-progress.png",
-    fullPage: true,
-  });
   await waitVisible(exactText("Recovered after Provider recovery."));
   await page.reload({ waitUntil: "domcontentloaded" });
   await selectSession("observe Provider recovery");
@@ -486,6 +532,7 @@ try {
   // In-workspace work does not cross the boundary, so 工作区内修改 must not interrupt it with a review.
   // This is the negative half of the approval contract and the reason the scenarios below need an
   // action the gate genuinely cannot describe.
+  smokeStage = "workspace edit flow";
   await startNewSession();
   await submitPrompt("apply browser patch");
   await waitVisible(exactText("Verified browser result.").last());
@@ -643,9 +690,6 @@ try {
   for (const forbidden of ["Inspector", "Terminal", "stdout"]) {
     if (body.includes(forbidden)) throw new Error(forbidden + " leaked into production UI");
   }
-  await mkdir(artifactDirectory, { recursive: true });
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.screenshot({ path: artifactDirectory + "/desktop.png", fullPage: true });
   await page.locator(".workspace-card").first().hover();
   await page.waitForTimeout(220);
   const tooltipStyle = await page
@@ -662,29 +706,14 @@ try {
     });
   if (tooltipStyle.backgroundColor !== "rgb(30, 79, 133)")
     throw new Error("workspace path tooltip is not solid blue");
-  await page.screenshot({
-    path: artifactDirectory + "/desktop-workspace-tooltip.png",
-    fullPage: true,
-  });
-  await page.setViewportSize({ width: 375, height: 812 });
-  await page.waitForTimeout(220);
-  await page.screenshot({ path: artifactDirectory + "/mobile.png", fullPage: true });
-} catch (error) {
-  await mkdir(artifactDirectory, { recursive: true });
-  await page.screenshot({ path: artifactDirectory + "/failure.png", fullPage: true });
-  await context.tracing.stop({ path: artifactDirectory + "/failure.zip" });
-  // The execution view is the fastest way to see what the page actually rendered: the selectors above
-  // describe a markup that only exists once a turn presentation has loaded, and a missing item is far
-  // easier to diagnose from its text than from a bare "element not visible".
-  const feed = await page
-    .locator(".turn-presentation-feed")
-    .first()
-    .innerText()
-    .catch(() => "(no turn presentation feed)");
-  process.stdout.write("[browser-runner] execution view at failure:\n" + feed + "\n");
-  throw error;
+} catch {
+  await context.close().catch(() => undefined);
+  await browser.close().catch(() => undefined);
+  throw new Error(
+    `Browser fixture smoke failed during ${smokeStage}; page content and screenshots were suppressed.`,
+  );
 }
-await context.tracing.stop();
+await context.close();
 await browser.close();
 
 async function assertAssistantMarkdownHeadingScale() {

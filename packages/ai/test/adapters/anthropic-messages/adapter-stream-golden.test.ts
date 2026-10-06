@@ -81,7 +81,7 @@ describe("Anthropic Messages stream golden: text", () => {
       "usage",
       "stream.finish",
     ]);
-    expect(turn.events[2]?.payload).toEqual({ text: "hello world" });
+    expect(turn.events[2]?.payload).toMatchObject({ text: "hello world" });
     expect(turn.events.at(-1)?.payload).toMatchObject({ finishReason: "STOP" });
   });
 
@@ -108,7 +108,7 @@ describe("Anthropic Messages stream golden: text", () => {
       ]),
     });
 
-    expect(payloads(turn.events, "text.delta")).toEqual([
+    expect(payloads(turn.events, "text.delta")).toMatchObject([
       { text: "a" },
       { text: "b" },
       { text: "c" },
@@ -211,6 +211,49 @@ describe("Anthropic Messages stream golden: usage", () => {
     expect(finish.finalUsage["cachedInputTokens"]).toBe(100);
   });
 
+  it("preserves Anthropic cache writes as a separate non-additive bucket", async () => {
+    const turn = await captureTurn(request(), {
+      transport: turnTransport([
+        messageStart({
+          input_tokens: 10,
+          output_tokens: 0,
+          cache_read_input_tokens: 3,
+          cache_creation_input_tokens: 4,
+        }),
+        textBlockStart(0),
+        textDelta(0, "hi"),
+        blockStop(0),
+        messageDelta("end_turn", { output_tokens: 2, cache_creation_input_tokens: 6 }),
+        messageStop(),
+      ]),
+    });
+
+    expect(payloads(turn.events, "usage")).toEqual([
+      {
+        inputTokens: 10,
+        outputTokens: 0,
+        totalTokens: 10,
+        cachedInputTokens: 3,
+        cacheWriteInputTokens: 4,
+      },
+      {
+        inputTokens: 10,
+        outputTokens: 2,
+        totalTokens: 12,
+        cachedInputTokens: 3,
+        cacheWriteInputTokens: 6,
+      },
+    ]);
+    expect(turn.events.at(-1)?.payload).toMatchObject({
+      finalUsage: {
+        inputTokens: 10,
+        outputTokens: 2,
+        totalTokens: 12,
+        cacheWriteInputTokens: 6,
+      },
+    });
+  });
+
   it("disables a later empty usage snapshot", async () => {
     const turn = await captureTurn(request(), {
       transport: turnTransport([
@@ -245,7 +288,7 @@ describe("Anthropic Messages stream golden: tools", () => {
       "usage",
       "stream.finish",
     ]);
-    expect(payloads(turn.events, "tool_call.start")).toEqual([
+    expect(payloads(turn.events, "tool_call.start")).toMatchObject([
       { toolCallId: "toolu_a", toolName: "read_file" },
     ]);
     expect(payloads(turn.events, "tool_call.completed")).toEqual([
@@ -259,7 +302,7 @@ describe("Anthropic Messages stream golden: tools", () => {
       transport: turnTransport(toolTurnEvents("toolu_native_7", "read_file")),
     });
 
-    expect(payloads(turn.events, "tool_call.start")).toEqual([
+    expect(payloads(turn.events, "tool_call.start")).toMatchObject([
       { toolCallId: "toolu_native_7", toolName: "read_file" },
     ]);
   });
@@ -521,7 +564,7 @@ describe("Anthropic Messages stream golden: thinking", () => {
       { text: "considering " },
       { text: "options" },
     ]);
-    expect(payloads(turn.events, "text.delta")).toEqual([{ text: "answer" }]);
+    expect(payloads(turn.events, "text.delta")).toMatchObject([{ text: "answer" }]);
   });
 
   it("never publishes thinking text when the native display is omitted", async () => {
@@ -633,7 +676,7 @@ describe("Anthropic Messages stream golden: thinking", () => {
     });
 
     const text = payloads(turn.events, "text.delta");
-    expect(text).toEqual([{ text: "public answer" }]);
+    expect(text).toMatchObject([{ text: "public answer" }]);
   });
 });
 
@@ -915,7 +958,7 @@ describe("Anthropic Messages stream golden: chunk boundaries", () => {
       }),
     });
 
-    expect(payloads(turn.events, "text.delta")).toEqual([{ text: "split text" }]);
+    expect(payloads(turn.events, "text.delta")).toMatchObject([{ text: "split text" }]);
     expect(turn.events.at(-1)?.payload).toMatchObject({ finishReason: "STOP" });
   });
 
@@ -940,7 +983,7 @@ describe("Anthropic Messages stream golden: chunk boundaries", () => {
       }),
     });
 
-    expect(payloads(turn.events, "text.delta")).toEqual([{ text: "héllo ☃" }]);
+    expect(payloads(turn.events, "text.delta")).toMatchObject([{ text: "héllo ☃" }]);
   });
 
   it("handles a stream delivered one byte at a time", async () => {
@@ -966,7 +1009,7 @@ describe("Anthropic Messages stream golden: chunk boundaries", () => {
       }),
     });
 
-    expect(payloads(turn.events, "text.delta")).toEqual([{ text: "byte wise" }]);
+    expect(payloads(turn.events, "text.delta")).toMatchObject([{ text: "byte wise" }]);
   });
 
   it("parses a CRLF stream", async () => {
@@ -976,6 +1019,6 @@ describe("Anthropic Messages stream golden: chunk boundaries", () => {
       transport: capturingTransport(() => rawSseResponse(body)),
     });
 
-    expect(payloads(turn.events, "text.delta")).toEqual([{ text: "crlf text" }]);
+    expect(payloads(turn.events, "text.delta")).toMatchObject([{ text: "crlf text" }]);
   });
 });

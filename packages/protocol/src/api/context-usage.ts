@@ -20,6 +20,127 @@ const ContextUsageBreakdownSchema = z
   })
   .strict();
 
+export const PromptCacheStatusSchema = z.enum(["WARM", "COLD_START", "RESET", "UNREPORTED"]);
+export const PromptCacheRequestPurposeSchema = z.enum([
+  "MAIN_AGENT",
+  "WARMUP",
+  "RETRY",
+  "COMPACTION",
+  "TITLE",
+  "OTHER",
+]);
+const PromptSurfaceResetReasonSchema = z.enum([
+  "INITIAL",
+  "MODEL_CHANGED",
+  "TOOL_SCHEMA_CHANGED",
+  "STABLE_HEAD_CHANGED",
+  "CACHE_SETTINGS_CHANGED",
+  "COMPACTION_COMMITTED",
+  "RECOVERY_INCOMPATIBLE",
+]);
+const SafeTokenCountSchema = z.number().int().nonnegative();
+const SafeRateSchema = z.number().finite().min(0).max(1);
+
+export const PromptCachePurposeUsageSchema = z
+  .object({
+    purpose: PromptCacheRequestPurposeSchema,
+    requestCount: SafeTokenCountSchema,
+    inputTokens: SafeTokenCountSchema,
+    outputTokens: SafeTokenCountSchema,
+    hitTokens: SafeTokenCountSchema,
+    missTokens: SafeTokenCountSchema,
+    writeTokens: SafeTokenCountSchema,
+    unknownUsageCount: SafeTokenCountSchema,
+  })
+  .strict()
+  .refine(
+    (usage) => usage.unknownUsageCount <= usage.requestCount,
+    "Purpose unknown usage count cannot exceed its request count.",
+  );
+
+export const PromptCacheUsageSchema = z
+  .object({
+    status: PromptCacheStatusSchema,
+    sampleCount: SafeTokenCountSchema,
+    totalRequestCount: SafeTokenCountSchema,
+    totalInputTokens: SafeTokenCountSchema,
+    totalOutputTokens: SafeTokenCountSchema,
+    hitTokens: SafeTokenCountSchema,
+    missTokens: SafeTokenCountSchema,
+    writeTokens: SafeTokenCountSchema,
+    unknownUsageCount: SafeTokenCountSchema,
+    latestHitRate: SafeRateSchema.optional(),
+    rollingHitRate: SafeRateSchema.optional(),
+    expectedReusablePrefixTokens: SafeTokenCountSchema,
+    reusablePrefixEfficiency: SafeRateSchema.optional(),
+    epochId: z.string().min(1).max(256).optional(),
+    resetReason: PromptSurfaceResetReasonSchema.optional(),
+    resetStepSequence: SafeTokenCountSchema.optional(),
+    resetAt: TimestampMsSchema.optional(),
+    lastMeasuredAt: TimestampMsSchema.optional(),
+    purposes: z.array(PromptCachePurposeUsageSchema).max(6),
+  })
+  .strict()
+  .superRefine((usage, context) => {
+    if (usage.sampleCount > usage.totalRequestCount) {
+      context.addIssue({
+        code: "custom",
+        path: ["sampleCount"],
+        message: "Prompt-cache sample count cannot exceed total requests.",
+      });
+    }
+    if (usage.unknownUsageCount > usage.totalRequestCount) {
+      context.addIssue({
+        code: "custom",
+        path: ["unknownUsageCount"],
+        message: "Prompt-cache unknown usage count cannot exceed total requests.",
+      });
+    }
+    if ((usage.resetStepSequence === undefined) !== (usage.resetAt === undefined)) {
+      context.addIssue({
+        code: "custom",
+        path: [usage.resetStepSequence === undefined ? "resetStepSequence" : "resetAt"],
+        message: "Prompt-cache reset step and time must be reported together.",
+      });
+    }
+    if (
+      usage.resetReason === "INITIAL" &&
+      (usage.resetStepSequence !== undefined || usage.resetAt !== undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["resetReason"],
+        message: "Initial Prompt Surface creation is not a reset.",
+      });
+    }
+    if (usage.status === "UNREPORTED") {
+      for (const field of [
+        "latestHitRate",
+        "rollingHitRate",
+        "reusablePrefixEfficiency",
+      ] as const) {
+        if (usage[field] !== undefined) {
+          context.addIssue({
+            code: "custom",
+            path: [field],
+            message: "Unreported prompt-cache usage cannot contain a rate.",
+          });
+        }
+      }
+    }
+    const seenPurposes = new Set<string>();
+    for (const [index, purpose] of usage.purposes.entries()) {
+      if (seenPurposes.has(purpose.purpose)) {
+        context.addIssue({
+          code: "custom",
+          path: ["purposes", index, "purpose"],
+          message: "Prompt-cache purposes must not be duplicated.",
+        });
+      }
+      seenPurposes.add(purpose.purpose);
+    }
+  });
+
 export const ContextUsagePressureStateSchema = z.enum(["NORMAL", "PROACTIVE", "EMERGENCY"]);
 const ContextProfileSourceSchema = z.enum([
   "CONFIGURATION",
@@ -49,9 +170,14 @@ export const ContextUsageProjectionSchema = z
     breakdown: ContextUsageBreakdownSchema,
     updatedAt: TimestampMsSchema,
     lastBuildStatus: z.enum(["SUCCESS", "FAILED", "CONTEXT_EXHAUSTED"]).optional(),
+    promptCache: PromptCacheUsageSchema.optional(),
   })
   .strict();
 
 export const ContextUsageResponseSchema = ContextUsageProjectionSchema.nullable();
+export type PromptCacheStatus = z.infer<typeof PromptCacheStatusSchema>;
+export type PromptCacheRequestPurpose = z.infer<typeof PromptCacheRequestPurposeSchema>;
+export type PromptCachePurposeUsage = z.infer<typeof PromptCachePurposeUsageSchema>;
+export type PromptCacheUsage = z.infer<typeof PromptCacheUsageSchema>;
 export type ContextUsageProjection = z.infer<typeof ContextUsageProjectionSchema>;
 export type ContextUsageResponse = z.infer<typeof ContextUsageResponseSchema>;

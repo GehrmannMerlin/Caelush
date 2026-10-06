@@ -1217,12 +1217,67 @@ export class CliConversationController {
 }
 
 function formatContextUsage(usage: ContextUsageProjection): string {
-  return [
+  const lines = [
     `Context: ${Math.round(usage.usedRatio * 100)}% used`,
     `Model ${usage.providerId}/${usage.modelId}`,
     `Capacity ${usage.effectiveInputLimitTokens} · Remaining ${usage.remainingTokens}`,
     `Pressure ${usage.pressureState} · Compactions ${usage.compactionCount}`,
-  ].join(" · ");
+  ];
+  const cache = usage.promptCache;
+  if (cache === undefined) return lines.join(" · ");
+
+  const statusLabel = promptCacheStatusLabel(cache.status);
+  const platformRate =
+    cache.rollingHitRate === undefined && cache.latestHitRate === undefined
+      ? "未上报 usage"
+      : `rolling ${formatRate(cache.rollingHitRate)} · latest ${formatRate(cache.latestHitRate)}`;
+  const resetReason = cache.resetReason === "INITIAL" ? undefined : cache.resetReason;
+  const resetDescription =
+    resetReason === undefined
+      ? "—"
+      : [
+          resetReason,
+          cache.resetStepSequence === undefined ? undefined : `Step ${cache.resetStepSequence}`,
+          cache.resetAt === undefined ? undefined : new Date(Number(cache.resetAt)).toISOString(),
+        ]
+          .filter((part): part is string => part !== undefined)
+          .join(" · ");
+
+  lines.push(
+    `Prompt cache ${statusLabel}`,
+    `平台实际命中率 ${platformRate}`,
+    `Caelush 可复用前缀效率 ${formatRate(cache.reusablePrefixEfficiency)}`,
+    `缓存周期 ${cache.epochId ?? "—"} · ${statusLabel}`,
+    `最近重置 ${resetDescription}`,
+    `Requests / tokens ${cache.totalRequestCount.toLocaleString()} requests · ${cache.totalInputTokens.toLocaleString()} input tokens · ${cache.totalOutputTokens.toLocaleString()} output tokens`,
+    `Cache samples ${cache.sampleCount.toLocaleString()}`,
+    `Hit / miss / write tokens ${cache.hitTokens.toLocaleString()} / ${cache.missTokens.toLocaleString()} / ${cache.writeTokens.toLocaleString()}`,
+    `未上报 usage ${cache.unknownUsageCount.toLocaleString()}`,
+    ...cache.purposes.map(
+      (purpose) =>
+        `${purpose.purpose} ${purpose.requestCount.toLocaleString()} ${purpose.requestCount === 1 ? "request" : "requests"} · ${purpose.inputTokens.toLocaleString()} input tokens · ${purpose.outputTokens.toLocaleString()} output tokens · ${purpose.unknownUsageCount.toLocaleString()} unknown`,
+    ),
+  );
+  return lines.join(" · ");
+}
+
+function formatRate(value: number | undefined): string {
+  return value === undefined ? "未上报 usage" : `${Math.round(value * 100)}%`;
+}
+
+function promptCacheStatusLabel(
+  status: NonNullable<ContextUsageProjection["promptCache"]>["status"],
+): string {
+  switch (status) {
+    case "WARM":
+      return "缓存已命中";
+    case "COLD_START":
+      return "冷启动";
+    case "RESET":
+      return "已重置";
+    case "UNREPORTED":
+      return "未上报 usage";
+  }
 }
 
 function isTranscriptEntry(

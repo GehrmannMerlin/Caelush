@@ -19,6 +19,7 @@ import type { ContextSourceResult } from "../source/context-source.js";
 import type {
   ContextCompactionReceipt,
   ContextBuildReceipt,
+  ContextPromptSurfaceReceipt,
   ContextSourceReceipt,
 } from "./context-build-receipt.js";
 import type { ContextUsageSnapshot, ContextUsageSourceBreakdown } from "./context-usage.js";
@@ -44,6 +45,7 @@ export interface ContextReceiptBuilderInput {
   readonly compaction?: ContextCompactionReceipt;
   readonly compactionCount?: number;
   readonly lastCompactionAt?: TimestampMs;
+  readonly promptSurface?: ContextPromptSurfaceReceipt;
 }
 
 export interface ContextReceiptBuilderResult {
@@ -104,6 +106,7 @@ export function createContextReceiptBuilder(
         ...(input.compaction === undefined ? {} : { compaction: input.compaction }),
         toolSchemaTokens: input.policy.requestOverhead.toolSchemaTokens,
         materializedTokens,
+        ...(input.promptSurface === undefined ? {} : { promptSurface: input.promptSurface }),
       });
       const contributions = Object.freeze(
         sources.map((source) => contributionFor(source, input.sourceResults)),
@@ -134,6 +137,7 @@ export function createContextReceiptBuilder(
         ),
         lastBuildStatus: "SUCCESS",
         contextFingerprint,
+        ...(input.promptSurface === undefined ? {} : { promptSurface: input.promptSurface }),
         updatedAt: now(),
       });
       return Object.freeze({ receipt, report, usage, contextFingerprint });

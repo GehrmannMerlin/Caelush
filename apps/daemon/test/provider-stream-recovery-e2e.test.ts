@@ -198,6 +198,27 @@ describe("Provider stream recovery daemon E2E", () => {
       maxAttempts: 6,
     });
     expect(provider.requests).toHaveLength(3);
+    const firstMessages = requestMessages(provider.requests[0]?.body);
+    const retriedMessages = requestMessages(provider.requests[1]?.body);
+    expect(isMessagePrefix(firstMessages, retriedMessages)).toBe(true);
+
+    const storage = await openCaelushStorage({ path: join(workspacePath, "caelush.db") });
+    try {
+      const currentEpoch = await storage.promptSurface.getCurrent(run.id);
+      expect(currentEpoch).toBeDefined();
+      const surface =
+        currentEpoch === undefined
+          ? undefined
+          : await storage.promptSurface.readEpoch(run.id, currentEpoch.epochId);
+      const snapshots = surface?.snapshots ?? [];
+      expect(snapshots.length).toBeGreaterThan(0);
+      expect(new Set(snapshots.map((snapshot) => snapshot.sourceStepSequence)).size).toBe(
+        snapshots.length,
+      );
+      expect(snapshots.every((snapshot, index) => snapshot.ordinal === index + 1)).toBe(true);
+    } finally {
+      await storage.close();
+    }
   }, 15_000);
 
   it("switches only to a preconfigured equivalent transport on the next durable attempt", async () => {
@@ -534,6 +555,19 @@ async function waitForRetryBoundary(
 
 function isReviewRequest(body: Readonly<Record<string, unknown>>): boolean {
   return JSON.stringify(body).includes("Review the supplied");
+}
+
+function requestMessages(body: Readonly<Record<string, unknown>> | undefined): readonly unknown[] {
+  const messages = body?.messages;
+  if (!Array.isArray(messages)) throw new Error("The controlled model request had no messages.");
+  return messages;
+}
+
+function isMessagePrefix(prefix: readonly unknown[], candidate: readonly unknown[]): boolean {
+  return (
+    candidate.length >= prefix.length &&
+    JSON.stringify(candidate.slice(0, prefix.length)) === JSON.stringify(prefix)
+  );
 }
 
 function isTerminal(status: string): boolean {

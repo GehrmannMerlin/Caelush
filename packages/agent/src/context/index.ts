@@ -65,6 +65,7 @@ export { createContextCheckpointBudgetResolver } from "./compaction/checkpoint-b
 export { createContextCompactionGainEvaluator } from "./compaction/compaction-gain.js";
 export {
   createContextSummarizationRunner,
+  createContextSummaryReplayPrefixFingerprint,
   serializeContextSummarySource,
 } from "./compaction/context-summary.js";
 export { createContextCompactionCoordinator } from "./compaction/context-compaction-coordinator.js";
@@ -114,6 +115,9 @@ export type {
   ContextCompactionPlanner,
   ContextCompactionReason,
   ContextMessageRange,
+  ContextSummaryPurpose,
+  ContextSummaryCacheEligibility,
+  ContextSummaryReplayPrefix,
   ContextSummarizationInput,
   ContextSummarizationResult,
   ContextSummarizerPort,
@@ -216,6 +220,7 @@ export type { ContextFingerprintInput } from "./contracts/context-fingerprint.js
 export type {
   ContextBuildReceipt,
   PreparedAgentContext,
+  PreparedPromptSurface,
 } from "./contracts/prepared-agent-context.js";
 export type {
   ArtifactSensitivity,
@@ -225,6 +230,7 @@ export type {
   ContextArtifactStorePort,
 } from "./artifacts/context-artifact.js";
 export type {
+  ContextPromptSurfaceReceipt,
   ContextCompactionReceipt,
   ContextContributionReport,
   ContextSourceReceipt,
@@ -244,6 +250,38 @@ export type {
 } from "./receipts/context-usage.js";
 export type { ContextCompactionCommitPort } from "./ports/context-compaction-commit-port.js";
 export type { RehydratedContextState as LegacyRehydratedContextState } from "./contracts/rehydrated-context-state.js";
+
+export {
+  assertPromptSurfaceEpoch,
+  assertPromptSurfaceEpochWithSnapshots,
+  assertPromptSurfaceSnapshot,
+  assertPromptSurfaceSnapshotInput,
+  createPromptSurfaceEpoch,
+  createPromptSurfaceEpochId,
+  createPromptSurfaceFingerprint,
+  createPromptSurfaceSnapshot,
+  hashPromptSurfaceContent,
+  PROMPT_SURFACE_LIMITS,
+  PROMPT_SURFACE_RESET_REASONS,
+  PromptSurfaceIntegrityError,
+} from "./surface/prompt-surface.js";
+export type {
+  PromptSurfaceEpoch,
+  PromptSurfaceEpochId,
+  PromptSurfaceEpochInput,
+  PromptSurfaceEpochWithSnapshots,
+  PromptSurfaceFingerprint,
+  PromptSurfaceModelRef,
+  PromptSurfaceResetReason,
+  PromptSurfaceSnapshot,
+  PromptSurfaceSnapshotInput,
+} from "./surface/prompt-surface.js";
+export { projectPromptSurface } from "./surface/prompt-surface-projector.js";
+export type { PromptSurfaceModelMessage } from "./surface/prompt-surface-projector.js";
+export type {
+  PromptSurfaceAppendResult,
+  PromptSurfaceStorePort,
+} from "./surface/prompt-surface-store.js";
 
 export {
   ContextDocumentConstructionError,

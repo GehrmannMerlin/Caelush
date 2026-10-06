@@ -1,0 +1,251 @@
+{
+  "cases": [
+    {
+      "name": "billing-96.999",
+      "expectedPassed": false,
+      "options": { "expectedScoredCount": 1, "observedProviderCallCount": 1 },
+      "samples": [
+        {
+          "callId": "boundary-96999",
+          "purpose": "MAIN_AGENT",
+          "inputTokens": 100000,
+          "hitTokens": 96999,
+          "missTokens": 3001,
+          "writeTokens": 0,
+          "epochId": "epoch-a",
+          "expectedReusablePrefixTokens": 96999,
+          "eligible": true,
+          "success": true
+        }
+      ]
+    },
+    {
+      "name": "billing-97.000",
+      "expectedPassed": true,
+      "options": { "expectedScoredCount": 1, "observedProviderCallCount": 1 },
+      "samples": [
+        {
+          "callId": "boundary-97000",
+          "purpose": "MAIN_AGENT",
+          "inputTokens": 100000,
+          "hitTokens": 97000,
+          "missTokens": 3000,
+          "writeTokens": 0,
+          "epochId": "epoch-a",
+          "expectedReusablePrefixTokens": 97000,
+          "eligible": true,
+          "success": true
+        }
+      ]
+    },
+    {
+      "name": "missing-usage",
+      "expectedPassed": false,
+      "options": { "expectedScoredCount": 1, "observedProviderCallCount": 1 },
+      "samples": [
+        {
+          "callId": "missing-usage",
+          "purpose": "MAIN_AGENT",
+          "inputTokens": 100000,
+          "writeTokens": 0,
+          "epochId": "epoch-a",
+          "expectedReusablePrefixTokens": 97000,
+          "eligible": true,
+          "success": true
+        }
+      ]
+    },
+    {
+      "name": "partial-missing-scored-usage",
+      "expectedPassed": false,
+      "options": { "expectedScoredCount": 2, "observedProviderCallCount": 2 },
+      "samples": [
+        {
+          "callId": "complete-scored-call",
+          "purpose": "MAIN_AGENT",
+          "inputTokens": 100000,
+          "hitTokens": 97000,
+          "missTokens": 3000,
+          "writeTokens": 0,
+          "epochId": "epoch-a",
+          "expectedReusablePrefixTokens": 97000,
+          "eligible": true,
+          "success": true
+        },
+        {
+          "callId": "incomplete-scored-call",
+          "purpose": "MAIN_AGENT",
+          "inputTokens": 100000,
+          "missTokens": 3000,
+          "writeTokens": 0,
+          "epochId": "epoch-a",
+          "expectedReusablePrefixTokens": 97000,
+          "eligible": true,
+          "success": true
+        }
+      ]
+    },
+    {
+      "name": "duplicate-call-identity",
+      "expectedPassed": false,
+      "options": { "expectedScoredCount": 2, "observedProviderCallCount": 2 },
+      "samples": [
+        {
+          "callId": "same-provider-call",
+          "purpose": "MAIN_AGENT",
+          "inputTokens": 100000,
+          "hitTokens": 97000,
+          "missTokens": 3000,
+          "writeTokens": 0,
+          "epochId": "epoch-a",
+          "expectedReusablePrefixTokens": 97000,
+          "eligible": true,
+          "success": true
+        },
+        {
+          "callId": "same-provider-call",
+          "purpose": "MAIN_AGENT",
+          "inputTokens": 100000,
+          "hitTokens": 97000,
+          "missTokens": 3000,
+          "writeTokens": 0,
+          "epochId": "epoch-a",
+          "expectedReusablePrefixTokens": 97000,
+          "eligible": true,
+          "success": true
+        }
+      ]
+    },
+    {
+      "name": "hidden-provider-call",
+      "expectedPassed": false,
+      "options": { "expectedScoredCount": 1, "observedProviderCallCount": 2 },
+      "samples": [
+        {
+          "callId": "only-recorded-call",
+          "purpose": "MAIN_AGENT",
+          "inputTokens": 100000,
+          "hitTokens": 97000,
+          "missTokens": 3000,
+          "writeTokens": 0,
+          "epochId": "epoch-a",
+          "expectedReusablePrefixTokens": 97000,
+          "eligible": true,
+          "success": true
+        }
+      ]
+    },
+    {
+      "name": "auxiliary-only",
+      "expectedPassed": false,
+      "options": { "expectedScoredCount": 1, "observedProviderCallCount": 5 },
+      "samples": [
+        {
+          "callId": "warmup",
+          "purpose": "WARMUP",
+          "inputTokens": 1000,
+          "hitTokens": 0,
+          "missTokens": 1000,
+          "writeTokens": 0,
+          "epochId": "epoch-a",
+          "eligible": true,
+          "success": true
+        },
+        {
+          "callId": "retry",
+          "purpose": "RETRY",
+          "inputTokens": 1000,
+          "hitTokens": 0,
+          "missTokens": 1000,
+          "writeTokens": 0,
+          "epochId": "epoch-a",
+          "eligible": true,
+          "success": true
+        },
+        {
+          "callId": "compaction",
+          "purpose": "COMPACTION",
+          "inputTokens": 1000,
+          "hitTokens": 0,
+          "missTokens": 1000,
+          "writeTokens": 0,
+          "epochId": "epoch-a",
+          "eligible": true,
+          "success": true
+        },
+        {
+          "callId": "title",
+          "purpose": "TITLE",
+          "inputTokens": 1000,
+          "hitTokens": 0,
+          "missTokens": 1000,
+          "writeTokens": 0,
+          "epochId": "epoch-a",
+          "eligible": true,
+          "success": true
+        },
+        {
+          "callId": "other",
+          "purpose": "OTHER",
+          "inputTokens": 1000,
+          "hitTokens": 0,
+          "missTokens": 1000,
+          "writeTokens": 0,
+          "epochId": "epoch-a",
+          "eligible": true,
+          "success": true
+        }
+      ]
+    },
+    {
+      "name": "weighted-tokens",
+      "expectedPassed": true,
+      "options": { "expectedScoredCount": 2, "observedProviderCallCount": 2 },
+      "samples": [
+        {
+          "callId": "large",
+          "purpose": "MAIN_AGENT",
+          "inputTokens": 100,
+          "hitTokens": 99,
+          "missTokens": 1,
+          "writeTokens": 0,
+          "epochId": "epoch-a",
+          "expectedReusablePrefixTokens": 100,
+          "eligible": true,
+          "success": true
+        },
+        {
+          "callId": "small",
+          "purpose": "MAIN_AGENT",
+          "inputTokens": 1,
+          "hitTokens": 0,
+          "missTokens": 1,
+          "writeTokens": 0,
+          "epochId": "epoch-a",
+          "expectedReusablePrefixTokens": 0,
+          "eligible": true,
+          "success": true
+        }
+      ]
+    },
+    {
+      "name": "empty-denominators",
+      "expectedPassed": false,
+      "options": { "expectedScoredCount": 1, "observedProviderCallCount": 1 },
+      "samples": [
+        {
+          "callId": "empty",
+          "purpose": "MAIN_AGENT",
+          "inputTokens": 0,
+          "hitTokens": 0,
+          "missTokens": 0,
+          "writeTokens": 0,
+          "epochId": "epoch-a",
+          "expectedReusablePrefixTokens": 0,
+          "eligible": true,
+          "success": true
+        }
+      ]
+    }
+  ]
+}

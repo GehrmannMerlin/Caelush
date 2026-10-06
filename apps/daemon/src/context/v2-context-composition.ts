@@ -23,6 +23,7 @@ import {
   type ContextSourceProvider,
   type ContextSourceRegistration,
   type ContextTokenEstimatorPort,
+  type PromptSurfaceStorePort,
   type RunEventNotifierPort,
 } from "@caelush/agent";
 import {
@@ -56,6 +57,7 @@ import { createWorkCommentaryContextProvider } from "./work-commentary-context-p
 export interface DaemonV2ContextCompositionOptions {
   readonly input: RunAgentContextEngineInput;
   readonly storage: CaelushStorage;
+  readonly promptSurfaceStore: PromptSurfaceStorePort;
   readonly runtime: Runtime;
   readonly gateway: AIGateway;
   readonly messageProjectors: AgentMessageProjectorRegistry;
@@ -105,6 +107,8 @@ export function createDaemonV2ContextEngine(options: DaemonV2ContextCompositionO
   const factsProvider = createDeterministicCompactionFactsProvider({ storage: options.storage });
 
   return createV2ContextEngine({
+    promptSurfaceStore: options.promptSurfaceStore,
+    ...(input.modelSettings === undefined ? {} : { modelSettings: input.modelSettings }),
     sourceRegistry: sources,
     checkpointRepository: options.storage.contextCheckpointsV2,
     authorityProvider,

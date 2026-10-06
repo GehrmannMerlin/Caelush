@@ -2,12 +2,23 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
-import type { AIAdapterEvent, ApiAdapter, ApiAdapterStreamInput } from "@caelush/ai";
+import type {
+  AIAdapterEvent,
+  ApiAdapter,
+  ApiAdapterStreamInput,
+  ModelDescriptor,
+  ModelDescriptorSourcePort,
+} from "@caelush/ai";
 import { createRunId, createSessionId, createStepId } from "@caelush/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { composeDaemon, type DaemonComposition } from "../src/daemon-composition.js";
 import type { ModelWireDiagnosticEvent } from "../src/providers/model-wire-diagnostic.js";
-import { FIXTURE_API, fixtureBinding, fixtureModelSource } from "./support/ai-fixture.js";
+import {
+  FIXTURE_API,
+  fixtureBinding,
+  fixtureDescriptor,
+  fixtureModelSource,
+} from "./support/ai-fixture.js";
 
 /**
  * The model wire diagnostic must be observable without being leaky.
@@ -62,6 +73,27 @@ class RecordingAdapter implements ApiAdapter {
     yield { type: "text.delta", payload: { text: this.text } };
     yield { type: "adapter.finish", payload: { finishReason: "TOOL_CALLS" } };
   }
+}
+
+function automaticCacheFixtureSource(): ModelDescriptorSourcePort & {
+  list(): readonly ModelDescriptor[];
+} {
+  const base = fixtureDescriptor();
+  const descriptor: ModelDescriptor = {
+    ...base,
+    capabilities: { ...base.capabilities, promptCaching: "SUPPORTED" },
+    cache: { supportedRetentions: ["NONE", "SHORT"], defaultRetention: "SHORT" },
+    adapterMetadata: { "openai-compatible": { cacheDialect: "AUTOMATIC" } },
+  };
+  return {
+    id: "wire-diagnostic-cache-fixture",
+    priority: 0,
+    resolve: (ref) =>
+      ref.provider === descriptor.ref.provider && ref.model === descriptor.ref.model
+        ? descriptor
+        : undefined,
+    list: () => [descriptor],
+  };
 }
 
 describe("daemon model wire diagnostic", () => {
@@ -119,7 +151,7 @@ describe("daemon model wire diagnostic", () => {
 
     composition = await composeDaemon({
       storage,
-      modelSources: [fixtureModelSource()],
+      modelSources: [automaticCacheFixtureSource()],
       providerBindings: [
         fixtureBinding({
           endpoint: SECRET_ENDPOINT,
@@ -150,6 +182,7 @@ describe("daemon model wire diagnostic", () => {
         ],
         tools: [{ name: "read_file", description: "read", inputSchema: { type: "object" } }],
         toolChoice: { type: "AUTO" },
+        settings: { cache: { retention: "SHORT", key: "CACHE_KEY_SENTINEL" } },
       },
       signal: new AbortController().signal,
     });
@@ -163,6 +196,12 @@ describe("daemon model wire diagnostic", () => {
       model: "fixture-model",
       messageRoles: ["system", "user"],
       toolNames: ["read_file"],
+      modelSettings: {
+        cacheRequestedRetention: "SHORT",
+        cacheEffectiveRetention: "SHORT",
+        cacheMode: "EXACT",
+        cacheDialect: "AUTOMATIC",
+      },
     });
     // Identity, roles and names are the whole payload; nothing else is available.
     expect(Object.keys(request ?? {}).sort()).toEqual([
@@ -174,6 +213,13 @@ describe("daemon model wire diagnostic", () => {
       "providerId",
       "toolNames",
     ]);
+    expect(Object.keys((request?.modelSettings ?? {}) as Record<string, unknown>).sort()).toEqual([
+      "cacheDialect",
+      "cacheEffectiveRetention",
+      "cacheMode",
+      "cacheRequestedRetention",
+      "toolChoice",
+    ]);
 
     const serialized = JSON.stringify(recorded);
     expect(serialized).not.toContain(SECRET_KEY);
@@ -181,6 +227,7 @@ describe("daemon model wire diagnostic", () => {
     expect(serialized).not.toContain("secret-host.internal");
     expect(serialized).not.toContain(SECRET_PROMPT);
     expect(serialized).not.toContain(SECRET_TOOL_ARGUMENT);
+    expect(serialized).not.toContain("CACHE_KEY_SENTINEL");
     // The response side is a finish reason and the requested tool name only.
     expect(recorded[1]).toMatchObject({
       phase: "RESPONSE",

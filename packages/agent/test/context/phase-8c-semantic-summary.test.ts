@@ -4,6 +4,7 @@ import { createRunId, createSessionId } from "@caelush/protocol";
 import type { ModelDescriptor } from "@caelush/ai";
 import {
   createContextMessageRange,
+  createContextSummaryReplayPrefixFingerprint,
   createContextSummarizationRunner,
   createSemanticCheckpointDraft,
   createSemanticSummaryValidator,
@@ -63,6 +64,8 @@ const semantic = createSemanticCheckpointDraft({
 
 function input(): ContextSummarizationInput {
   return {
+    purpose: "COMPACTION",
+    cacheEligibility: "NOT_ELIGIBLE",
     identity,
     reason: "PROACTIVE_PRESSURE",
     sourceMessages: [],
@@ -83,7 +86,7 @@ function result(overrides: Partial<ContextSummarizationResult> = {}): ContextSum
     semantic,
     modelRef: MODEL.ref,
     finishReason: "STOP",
-    summaryPromptVersion: 2,
+    summaryPromptVersion: 3,
     sourceDigest: "ignored-source-digest",
     semanticDigest: "ignored-semantic-digest",
     ...overrides,
@@ -134,9 +137,15 @@ describe("Phase 8C semantic summary contracts", () => {
 
   it("makes one semantic attempt, computes owned digests, and classifies provider failure", async () => {
     let calls = 0;
+    let observedPurpose: unknown;
+    let observedCacheEligibility: unknown;
     const summarizer: ContextSummarizerPort = {
-      async summarize() {
+      async summarize(request) {
         calls += 1;
+        observedPurpose = (request as ContextSummarizationInput & { purpose?: unknown }).purpose;
+        observedCacheEligibility = (
+          request as ContextSummarizationInput & { cacheEligibility?: unknown }
+        ).cacheEligibility;
         throw new Error("provider unavailable");
       },
     };
@@ -146,15 +155,103 @@ describe("Phase 8C semantic summary contracts", () => {
     });
 
     expect(calls).toBe(1);
+    expect(observedPurpose).toBe("COMPACTION");
+    expect(observedCacheEligibility).toBe("NOT_ELIGIBLE");
     expect(execution).toMatchObject({
       kind: "FALLBACK_REQUIRED",
       outcome: "FAILED",
       degraded: true,
-      summaryPromptVersion: 2,
+      summaryPromptVersion: 3,
     });
     expect(execution).not.toHaveProperty("result");
     if (execution.kind !== "FALLBACK_REQUIRED") throw new Error("expected fallback");
     expect(execution.sourceDigest).not.toBe("gateway-summary-source");
+  });
+
+  it("downgrades a requested warm replay when its prefix is incomplete", async () => {
+    let observedEligibility: unknown;
+    let observedFingerprint: unknown;
+    const summarizer: ContextSummarizerPort = {
+      async summarize(request) {
+        observedEligibility = (
+          request as ContextSummarizationInput & { cacheEligibility?: unknown }
+        ).cacheEligibility;
+        observedFingerprint = (
+          request as ContextSummarizationInput & { replayPrefixFingerprint?: unknown }
+        ).replayPrefixFingerprint;
+        return result();
+      },
+    };
+    const incomplete = {
+      ...input(),
+      purpose: "COMPACTION",
+      cacheEligibility: "CACHE_REUSE_ELIGIBLE",
+      replayPrefixFingerprint:
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    } as unknown as ContextSummarizationInput;
+
+    const execution = await createContextSummarizationRunner({ summarizer }).summarize(incomplete, {
+      signal: new AbortController().signal,
+    });
+
+    expect(execution.kind).toBe("ACCEPTED");
+    expect(observedEligibility).toBe("NOT_ELIGIBLE");
+    expect(observedFingerprint).toBeUndefined();
+  });
+
+  it("downgrades a changed-model or malformed claimed replay and still attempts the summary", async () => {
+    const prefix = {
+      modelRef: { ...MODEL.ref, model: "different-model" },
+      api: MODEL.api,
+      surfaceFingerprint: `sha256:${"b".repeat(64)}`,
+      messages: [{ role: "system" as const, content: "Stable host context." }],
+      tools: [],
+    };
+    const changedModel = {
+      ...input(),
+      cacheEligibility: "CACHE_REUSE_ELIGIBLE",
+      replayPrefix: prefix,
+      replayPrefixFingerprint: createContextSummaryReplayPrefixFingerprint(prefix),
+    } satisfies ContextSummarizationInput;
+    const malformed = {
+      ...input(),
+      cacheEligibility: "CACHE_REUSE_ELIGIBLE",
+      replayPrefixFingerprint: `sha256:${"c".repeat(64)}`,
+      replayPrefix: {
+        modelRef: MODEL.ref,
+        api: MODEL.api,
+        surfaceFingerprint: `sha256:${"b".repeat(64)}`,
+        tools: [],
+      },
+    } as unknown as ContextSummarizationInput;
+    const observed: Array<{
+      readonly eligibility: unknown;
+      readonly fingerprint: unknown;
+    }> = [];
+    const summarizer: ContextSummarizerPort = {
+      async summarize(request) {
+        observed.push({
+          eligibility: request.cacheEligibility,
+          fingerprint: request.replayPrefixFingerprint,
+        });
+        return result();
+      },
+    };
+    const runner = createContextSummarizationRunner({ summarizer });
+
+    const changedModelResult = await runner.summarize(changedModel, {
+      signal: new AbortController().signal,
+    });
+    const malformedResult = await runner.summarize(malformed, {
+      signal: new AbortController().signal,
+    });
+
+    expect(changedModelResult.kind).toBe("ACCEPTED");
+    expect(malformedResult.kind).toBe("ACCEPTED");
+    expect(observed).toEqual([
+      { eligibility: "NOT_ELIGIBLE", fingerprint: undefined },
+      { eligibility: "NOT_ELIGIBLE", fingerprint: undefined },
+    ]);
   });
 
   it("classifies typed malformed provider output separately from infrastructure failure", async () => {

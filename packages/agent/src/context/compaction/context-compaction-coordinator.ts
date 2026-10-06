@@ -76,6 +76,15 @@ export function createContextCompactionCoordinator(
       throwIfAborted(request.signal);
       const summary = await summaryRunner.summarize(
         {
+          purpose: "COMPACTION",
+          cacheEligibility:
+            request.replayPrefix !== undefined && request.replayPrefixFingerprint !== undefined
+              ? "CACHE_REUSE_ELIGIBLE"
+              : "NOT_ELIGIBLE",
+          ...(request.replayPrefix === undefined ? {} : { replayPrefix: request.replayPrefix }),
+          ...(request.replayPrefixFingerprint === undefined
+            ? {}
+            : { replayPrefixFingerprint: request.replayPrefixFingerprint }),
           identity: request.identity,
           reason: request.reason,
           ...(incremental.previousCheckpoint === undefined

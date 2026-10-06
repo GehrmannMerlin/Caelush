@@ -1,8 +1,10 @@
 import type { JsonObject } from "@caelush/ai";
+import { assertAIMessage, assertAIToolSpec } from "@caelush/ai";
 
 import { canonicalJsonText, digestJsonValue } from "../../messages/canonical-json.js";
 import {
   CONTEXT_SUMMARY_PROMPT_VERSION,
+  type ContextSummaryReplayPrefix,
   type ContextSummarizationInput,
   type ContextSummarizationResult,
   type ContextSummarizerPort,
@@ -40,6 +42,23 @@ export interface ContextSummarizationRunner {
   ): Promise<ContextSummaryExecutionResult>;
 }
 
+/** Stable identity for the complete provider-neutral prompt prefix and its model/tool dialect. */
+export function createContextSummaryReplayPrefixFingerprint(
+  prefix: ContextSummaryReplayPrefix,
+): string {
+  return `sha256:${digestJsonValue(
+    JSON.parse(
+      canonicalJsonText({
+        modelRef: prefix.modelRef,
+        api: prefix.api,
+        surfaceFingerprint: prefix.surfaceFingerprint,
+        messages: prefix.messages,
+        tools: prefix.tools,
+      } as never),
+    ),
+  )}`;
+}
+
 /** A host budget/storage invariant failure that must not degrade into fallback. */
 export class ContextSummarizationInfrastructureError extends Error {
   constructor(
@@ -64,7 +83,10 @@ export function createContextSummarizationRunner(options: {
       throwIfAborted(callOptions.signal);
       const sourceDigest = digestJsonValue(JSON.parse(serializeContextSummarySource(input)));
       try {
-        const summarized = await options.summarizer.summarize(input, callOptions);
+        const summarized = await options.summarizer.summarize(
+          normalizeSummaryReplayInput(input),
+          callOptions,
+        );
         throwIfAborted(callOptions.signal);
         const validated = validator.validate({ result: summarized });
         if (validated.outcome !== "ACCEPTED") {
@@ -95,6 +117,75 @@ export function createContextSummarizationRunner(options: {
         });
       }
     },
+  });
+}
+
+function normalizeSummaryReplayInput(input: ContextSummarizationInput): ContextSummarizationInput {
+  const prefix = input.replayPrefix;
+  try {
+    if (
+      input.purpose !== "COMPACTION" ||
+      input.cacheEligibility !== "CACHE_REUSE_ELIGIBLE" ||
+      prefix === undefined ||
+      input.replayPrefixFingerprint === undefined ||
+      !hasExactKeys(prefix, ["api", "messages", "modelRef", "surfaceFingerprint", "tools"]) ||
+      !isPlainRecord(prefix.modelRef) ||
+      !hasExactKeys(prefix.modelRef, ["model", "provider"]) ||
+      prefix.modelRef.provider !== input.model.ref.provider ||
+      prefix.modelRef.model !== input.model.ref.model ||
+      prefix.api !== input.model.api ||
+      !Array.isArray(prefix.messages) ||
+      !Array.isArray(prefix.tools) ||
+      prefix.messages.length === 0 ||
+      prefix.messages[0]?.role !== "system" ||
+      prefix.messages.slice(1).some((message) => message.role === "system") ||
+      !/^sha256:[0-9a-f]{64}$/.test(prefix.surfaceFingerprint)
+    ) {
+      return withoutReplayPrefix(input);
+    }
+    for (const message of prefix.messages) assertAIMessage(message);
+    for (const tool of prefix.tools) assertAIToolSpec(tool);
+    if (input.replayPrefixFingerprint !== createContextSummaryReplayPrefixFingerprint(prefix)) {
+      return withoutReplayPrefix(input);
+    }
+  } catch {
+    return withoutReplayPrefix(input);
+  }
+
+  return Object.freeze({
+    ...input,
+    cacheEligibility: "CACHE_REUSE_ELIGIBLE",
+    replayPrefixFingerprint: input.replayPrefixFingerprint,
+    replayPrefix: Object.freeze({
+      ...prefix,
+      modelRef: Object.freeze({ ...prefix.modelRef }),
+      messages: Object.freeze([...prefix.messages]),
+      tools: Object.freeze([...prefix.tools]),
+    }),
+  });
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasExactKeys(value: object, expected: readonly string[]): boolean {
+  const actualKeys = Object.keys(value).sort();
+  const expectedKeys = [...expected].sort();
+  return (
+    actualKeys.length === expectedKeys.length &&
+    actualKeys.every((key, index) => key === expectedKeys[index])
+  );
+}
+
+function withoutReplayPrefix(input: ContextSummarizationInput): ContextSummarizationInput {
+  const { replayPrefix, replayPrefixFingerprint, ...rest } = input;
+  void replayPrefix;
+  void replayPrefixFingerprint;
+  return Object.freeze({
+    ...rest,
+    purpose: "COMPACTION",
+    cacheEligibility: "NOT_ELIGIBLE",
   });
 }
 

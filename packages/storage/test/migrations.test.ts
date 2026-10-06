@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { mkdtemp, rm } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { deriveLegacyAgentMessageId } from "@caelush/agent";
@@ -8,6 +8,7 @@ import { openCaelushStorage } from "../src/index.js";
 import { StorageMigrationError } from "../src/errors.js";
 import { openCaelushDatabase } from "../src/database.js";
 import { getCaelushMigrationsFolder } from "../src/migrate.js";
+import { finalizeRunSecurityPolicies } from "../src/security-policy-migration.js";
 import {
   finalizeAgentMessages,
   migratePublishedStorage,
@@ -138,6 +139,8 @@ describe("committed storage migrations", () => {
         "event_sequences",
         "memory_extraction_jobs",
         "memory_records",
+        "prompt_surface_epochs",
+        "prompt_surface_snapshots",
         "run_budget_entries",
         "run_cancellation_requests",
         "run_resource_states",
@@ -147,10 +150,10 @@ describe("committed storage migrations", () => {
         "verification_plans",
         "workspaces",
       ]);
-      // Phase 5F, the Workspace Registry, and Runtime AI Management are all represented in the
-      // published migration ledger.
+      // Phase 5F, the Workspace Registry, Runtime AI Management, and Prompt Surface are all
+      // represented in the published migration ledger.
       expect(sqlite.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get()).toEqual({
-        count: 17,
+        count: 19,
       });
 
       // The final schema contains only the durable Message V2 envelope and payload.
@@ -192,6 +195,69 @@ describe("committed storage migrations", () => {
 
       // No turn table: a turn is derived from Run metadata plus message records.
       expect(tables.map(({ name }) => name)).not.toContain("conversation_turns");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("upgrades a database at the previous migration boundary without dropping existing tables", async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "caelush-storage-prompt-surface-upgrade-"),
+    );
+    temporaryDirectories.push(directory);
+    const databasePath = path.join(directory, "caelush.db");
+    const priorMigrationsFolder = path.join(directory, "prior-drizzle");
+    await mkdir(priorMigrationsFolder);
+    const publishedFolders = await readdir(getCaelushMigrationsFolder(), {
+      withFileTypes: true,
+    });
+    for (const entry of publishedFolders) {
+      if (
+        !entry.isDirectory() ||
+        entry.name === "20261006100000_prompt_surface" ||
+        entry.name === "20261006110000_prompt_surface_same_step_epochs"
+      )
+        continue;
+      await cp(
+        path.join(getCaelushMigrationsFolder(), entry.name),
+        path.join(priorMigrationsFolder, entry.name),
+        { recursive: true },
+      );
+    }
+
+    const priorDatabase = await openCaelushDatabase({ path: databasePath });
+    try {
+      migratePublishedStorage(priorDatabase, priorMigrationsFolder);
+      finalizeAgentMessages(priorDatabase, priorMigrationsFolder);
+      finalizeRunSecurityPolicies(priorDatabase);
+      expect(
+        priorDatabase.client.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get(),
+      ).toEqual({ count: 17 });
+    } finally {
+      priorDatabase.close();
+    }
+
+    const upgraded = await openCaelushStorage({ path: databasePath });
+    await upgraded.close();
+
+    const sqlite = new DatabaseSync(databasePath);
+    try {
+      const names = (
+        sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{
+          name: string;
+        }>
+      ).map(({ name }) => name);
+      expect(names).toEqual(
+        expect.arrayContaining([
+          "agent_messages",
+          "agent_runs",
+          "prompt_surface_epochs",
+          "prompt_surface_snapshots",
+        ]),
+      );
+      expect(sqlite.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get()).toEqual({
+        count: 19,
+      });
     } finally {
       sqlite.close();
     }

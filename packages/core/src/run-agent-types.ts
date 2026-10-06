@@ -1,4 +1,4 @@
-import type { AIToolChoice, ReasoningLevel } from "@caelush/ai";
+import type { AICacheRequest, AIToolChoice, ReasoningLevel } from "@caelush/ai";
 import type { StepId, TimestampMs } from "@caelush/protocol";
 
 /** Model settings kept at the Core-to-AI execution boundary. */
@@ -6,6 +6,7 @@ export interface AgentLoopModelSettings {
   readonly maxOutputTokens?: number;
   readonly temperature?: number;
   readonly reasoning?: { readonly level: ReasoningLevel };
+  readonly cache?: AICacheRequest;
   readonly toolChoice?: AIToolChoice;
 }
 

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createServer } from "node:http";
 import { createAISubsystem } from "../../../src/create-ai-subsystem.js";
 import { createOpenAICompatibleApiAdapter } from "../../../src/adapters/openai-compatible/index.js";
 import { modelDescriptor } from "../../support/fixtures.js";
@@ -59,6 +60,7 @@ function harness(
     readonly headers?: Readonly<Record<string, string>>;
     readonly queryParams?: Readonly<Record<string, string>>;
     readonly transport?: CapturingTransport;
+    readonly fetch?: typeof globalThis.fetch;
   } = {},
 ): Harness {
   const transport = options.transport ?? capturingTransport(() => textTurnResponse());
@@ -79,7 +81,7 @@ function harness(
         },
         ...(options.headers === undefined ? {} : { headers: options.headers }),
         ...(options.queryParams === undefined ? {} : { queryParams: options.queryParams }),
-        transport: { fetch: transport.fetch },
+        transport: { fetch: options.fetch ?? transport.fetch },
       },
     ],
     adapters: [createOpenAICompatibleApiAdapter()],
@@ -98,6 +100,19 @@ function harness(
       if (request === undefined) throw new Error("no provider request was captured");
       return request.url;
     },
+  };
+}
+
+function automaticCacheDescriptor(): ModelDescriptor {
+  const base = modelDescriptor({
+    ref: { provider: "compat-fixture", model: "fixture-model" },
+    api: API_ID,
+  });
+  return {
+    ...base,
+    capabilities: { ...base.capabilities, promptCaching: "SUPPORTED" },
+    cache: { supportedRetentions: ["NONE", "SHORT"], defaultRetention: "SHORT" },
+    adapterMetadata: { "openai-compatible": { cacheDialect: "AUTOMATIC" } },
   };
 }
 
@@ -415,6 +430,76 @@ describe("OpenAI-compatible request golden: settings", () => {
     const serialized = JSON.stringify(h.body());
     expect(serialized).not.toContain("cache");
     expect(serialized).not.toContain("conv-1");
+  });
+
+  it("keeps automatic cache intent and its key out of the provider wire body", async () => {
+    const h = harness({ descriptor: automaticCacheDescriptor() });
+    await h.ai.gateway.complete(
+      request({ settings: { cache: { retention: "SHORT", key: "cache-key-internal" } } }),
+    );
+
+    const serialized = JSON.stringify(h.body());
+    expect(serialized).not.toContain("cache");
+    expect(serialized).not.toContain("cache-key-internal");
+    expect(h.body()).not.toHaveProperty("user_id");
+    expect(h.body()).not.toHaveProperty("cache_control");
+  });
+
+  it("sends AUTOMATIC through the SDK to a controlled local server without cache wire fields", async () => {
+    let capturedBody: Record<string, unknown> | undefined;
+    const server = createServer(async (incoming, outgoing) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of incoming) chunks.push(Buffer.from(chunk));
+      capturedBody = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+      outgoing.writeHead(200, { "content-type": "text/event-stream" });
+      outgoing.end(await textTurnResponse().text());
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("the controlled local server did not open a TCP port");
+    }
+
+    try {
+      const h = harness({
+        descriptor: automaticCacheDescriptor(),
+        endpoint: `http://127.0.0.1:${String(address.port)}/v1`,
+        fetch: globalThis.fetch,
+      });
+      await h.ai.gateway.complete(
+        request({ settings: { cache: { retention: "SHORT", key: "local-cache-identity" } } }),
+      );
+
+      expect(capturedBody).toBeDefined();
+      const serialized = JSON.stringify(capturedBody);
+      expect(serialized).not.toContain("cache");
+      expect(serialized).not.toContain("local-cache-identity");
+      expect(capturedBody).not.toHaveProperty("user_id");
+      expect(capturedBody).not.toHaveProperty("cache_control");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error === undefined ? resolve() : reject(error)));
+      });
+    }
+  });
+
+  it("rejects cache support without an expressible adapter dialect before transport", async () => {
+    const base = modelDescriptor({
+      ref: { provider: "compat-fixture", model: "fixture-model" },
+      api: API_ID,
+    });
+    const h = harness({
+      descriptor: {
+        ...base,
+        capabilities: { ...base.capabilities, promptCaching: "SUPPORTED" },
+        cache: { supportedRetentions: ["NONE", "SHORT"], defaultRetention: "SHORT" },
+      },
+    });
+
+    await expect(
+      h.ai.gateway.complete(request({ settings: { cache: { retention: "SHORT" } } })),
+    ).rejects.toMatchObject({ code: "AI_CAPABILITY_UNSUPPORTED" });
+    expect(h.transport.requests).toHaveLength(0);
   });
 });
 

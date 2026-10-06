@@ -1,4 +1,14 @@
-import { integer, sqliteTable, text, uniqueIndex, index } from "drizzle-orm/sqlite-core";
+import {
+  check,
+  foreignKey,
+  index,
+  integer,
+  primaryKey,
+  sqliteTable,
+  text,
+  uniqueIndex,
+} from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
 
 export const workspaces = sqliteTable(
   "workspaces",
@@ -337,6 +347,70 @@ export const contextArtifacts = sqliteTable(
     content: text("content").notNull(),
   },
   (table) => [index("context_artifacts_run_id_idx").on(table.runId)],
+);
+
+export const promptSurfaceEpochs = sqliteTable(
+  "prompt_surface_epochs",
+  {
+    runId: text("run_id")
+      .notNull()
+      .references(() => agentRuns.id, { onDelete: "cascade" }),
+    epochId: text("epoch_id").notNull(),
+    modelProvider: text("model_provider").notNull(),
+    modelId: text("model_id").notNull(),
+    stableHeadFingerprint: text("stable_head_fingerprint").notNull(),
+    toolSchemaFingerprint: text("tool_schema_fingerprint").notNull(),
+    cacheSettingsFingerprint: text("cache_settings_fingerprint").notNull(),
+    resetReason: text("reset_reason").notNull(),
+    createdStepSequence: integer("created_step_sequence").notNull(),
+    createdAtMs: integer("created_at_ms").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.runId, table.epochId] }),
+    check("prompt_surface_epochs_created_step_check", sql`${table.createdStepSequence} >= 1`),
+    check("prompt_surface_epochs_created_at_check", sql`${table.createdAtMs} >= 0`),
+  ],
+);
+
+export const promptSurfaceSnapshots = sqliteTable(
+  "prompt_surface_snapshots",
+  {
+    runId: text("run_id").notNull(),
+    epochId: text("epoch_id").notNull(),
+    ordinal: integer("ordinal").notNull(),
+    anchorMessageSequence: integer("anchor_message_sequence").notNull(),
+    sourceStepSequence: integer("source_step_sequence").notNull(),
+    kind: text("kind").notNull(),
+    contentHash: text("content_hash").notNull(),
+    byteLength: integer("byte_length").notNull(),
+    createdAtMs: integer("created_at_ms").notNull(),
+    content: text("content").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.runId, table.epochId, table.ordinal] }),
+    check("prompt_surface_snapshots_ordinal_check", sql`${table.ordinal} >= 1`),
+    check(
+      "prompt_surface_snapshots_anchor_sequence_check",
+      sql`${table.anchorMessageSequence} >= 1`,
+    ),
+    check(
+      "prompt_surface_snapshots_source_step_sequence_check",
+      sql`${table.sourceStepSequence} >= 1`,
+    ),
+    check("prompt_surface_snapshots_kind_check", sql`${table.kind} = 'RUNTIME_CONTEXT_SNAPSHOT'`),
+    check("prompt_surface_snapshots_byte_length_check", sql`${table.byteLength} >= 0`),
+    check("prompt_surface_snapshots_created_at_check", sql`${table.createdAtMs} >= 0`),
+    uniqueIndex("prompt_surface_snapshots_source_step_unique").on(
+      table.runId,
+      table.epochId,
+      table.sourceStepSequence,
+    ),
+    foreignKey({
+      columns: [table.runId, table.epochId],
+      foreignColumns: [promptSurfaceEpochs.runId, promptSurfaceEpochs.epochId],
+      name: "prompt_surface_snapshots_epoch_fk",
+    }).onDelete("cascade"),
+  ],
 );
 
 export const contextRuntimeStates = sqliteTable("context_runtime_states", {

@@ -14,6 +14,7 @@ import {
   resolveOpenAICompatibleNativeOptions,
   toOpenAICompatibleProviderOptions,
 } from "./request-options.js";
+import { resolveOpenAICompatibleCacheOptions } from "./cache-options.js";
 import type { AIAdapterEvent } from "../api-adapter-event.js";
 import type { ApiAdapter, ApiAdapterStreamInput } from "../api-adapter.js";
 import type { ApiId } from "../../ids/api-id.js";
@@ -47,6 +48,7 @@ export function createOpenAICompatibleApiAdapter(): ApiAdapter {
       // Fail closed before any transport is created when the resolution cannot be
       // expressed in this dialect.
       const nativeOptions = resolveOpenAICompatibleNativeOptions(model, request);
+      resolveOpenAICompatibleCacheOptions(model, request);
 
       const client = createOpenAICompatibleClient(provider);
       const translated = translateOpenAICompatibleMessages(request.messages);

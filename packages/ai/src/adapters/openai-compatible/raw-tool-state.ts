@@ -1,3 +1,6 @@
+import { parseOpenAICompatibleRawUsage } from "./raw-usage.js";
+import type { OpenAICompatibleRawUsage } from "./raw-usage.js";
+
 /**
  * Observations taken directly from the raw provider chunks.
  *
@@ -24,6 +27,10 @@ export interface RawStreamState {
   nativeFinishReason(): string | undefined;
   /** Record a provider-native finish reason. Called only by the adapter. */
   observeFinishReason(reason: string): void;
+  /** The latest field-wise raw usage snapshot, when the provider supplied one. */
+  rawUsage(): OpenAICompatibleRawUsage | undefined;
+  /** Record provider-native usage counters without adding cumulative snapshots. */
+  observeUsage(usage: OpenAICompatibleRawUsage): void;
 }
 
 /** Create the per-turn raw observation state. */
@@ -31,6 +38,7 @@ export function createRawStreamState(): RawStreamState {
   const ids = new Set<string>();
   const indexes = new Set<number>();
   let nativeFinishReason: string | undefined;
+  let rawUsage: OpenAICompatibleRawUsage | undefined;
 
   return {
     ids,
@@ -39,7 +47,18 @@ export function createRawStreamState(): RawStreamState {
     observeFinishReason: (reason) => {
       nativeFinishReason = reason;
     },
+    rawUsage: () => rawUsage,
+    observeUsage: (usage) => {
+      rawUsage = { ...rawUsage, ...usage };
+    },
   };
+}
+
+/** Capture adapter-private usage facts from one raw provider chunk. */
+export function observeRawUsage(rawValue: unknown, state: RawStreamState): void {
+  if (!isRecord(rawValue) || rawValue.usage === undefined) return;
+  const usage = parseOpenAICompatibleRawUsage(rawValue.usage);
+  if (usage !== undefined) state.observeUsage(usage);
 }
 
 /**

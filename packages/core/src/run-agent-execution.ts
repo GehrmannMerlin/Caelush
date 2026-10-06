@@ -82,6 +82,8 @@ export interface RunAgentExecutionDependencies {
 export interface RunAgentContextEngineInput {
   readonly run: AgentRun;
   readonly identity: AgentExecutionIdentity;
+  /** Provider-neutral effective request settings, available only for cache identity hashing. */
+  readonly modelSettings?: AIModelSettings | undefined;
   readonly baseSystemPrompt: string;
   readonly cwd?: string | undefined;
   readonly explicitPaths?: readonly string[] | undefined;
@@ -164,19 +166,20 @@ export function createRunAgentExecutionContext(
   dependencies: RunAgentExecutionContextFactoryDependencies,
 ): RunAgentExecutionContext {
   const { config } = dependencies;
+  const modelSettings =
+    config.modelSettings === undefined ? undefined : toAIModelSettings(config.modelSettings);
   return {
     models: dependencies.models,
     modelTurnExecutor: dependencies.modelTurnExecutor,
     stepIds: dependencies.stepIds,
     tools: [...config.tools],
-    ...(config.modelSettings === undefined
-      ? {}
-      : { modelSettings: toAIModelSettings(config.modelSettings) }),
+    ...(modelSettings === undefined ? {} : { modelSettings }),
     ...(config.historyPrefix === undefined ? {} : { historyPrefix: config.historyPrefix }),
     createContextEngine: (run, verificationRepairContext, runMode) =>
       dependencies.createContextEngine({
         run,
         identity: { runId: run.id, sessionId: run.sessionId, goal: run.goal },
+        ...(modelSettings === undefined ? {} : { modelSettings }),
         baseSystemPrompt: config.baseSystemPrompt,
         ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
         ...(config.explicitPaths === undefined ? {} : { explicitPaths: config.explicitPaths }),

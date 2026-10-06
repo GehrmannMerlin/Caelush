@@ -40,18 +40,6 @@ export function resolveOpenAICompatibleNativeOptions(
   request: ResolvedAIModelRequest,
 ): OpenAICompatibleNativeOptions {
   const reasoningEffort = resolveReasoningEffort(model, request);
-  // A cache retention this dialect cannot express is a configuration contradiction
-  // rather than something to drop, because the resolution already reported the
-  // effective retention to the caller.
-  const cacheRetention = request.settings.cache.effective;
-  if (cacheRetention !== "NONE") {
-    throw createAIError(
-      "AI_CAPABILITY_UNSUPPORTED",
-      `The OpenAI-compatible chat dialect has no prompt-cache control, so the effective cache retention "${cacheRetention}" cannot be applied.`,
-      { providerId: model.ref.provider, model: model.ref },
-    );
-  }
-
   return reasoningEffort === undefined ? {} : { reasoningEffort };
 }
 

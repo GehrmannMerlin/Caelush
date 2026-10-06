@@ -2502,9 +2502,10 @@ body {
 .context-inspector {
   position: absolute;
   z-index: 5;
-  right: 0;
+  left: 0;
   bottom: 36px;
   width: min(260px, calc(100vw - 32px));
+  box-sizing: border-box;
   padding: 12px 14px;
   border: 1px solid #dce7f5;
   border-radius: 10px;
@@ -2533,7 +2534,7 @@ body {
 
 .context-inspector-grid {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
   margin: 10px 0 0;
   gap: 6px 12px;
 }
@@ -2546,9 +2547,90 @@ body {
 .context-inspector-grid dd {
   min-width: 0;
   overflow: hidden;
+  overflow-wrap: anywhere;
   text-align: right;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.context-cache-section {
+  min-width: 0;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #edf2f8;
+}
+
+.context-cache-heading,
+.context-cache-purpose {
+  display: flex;
+  min-width: 0;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.context-cache-heading {
+  padding-bottom: 7px;
+}
+
+.context-cache-details {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  margin: 0;
+  gap: 6px 10px;
+}
+
+.context-cache-details dt,
+.context-cache-details dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.context-cache-details dd {
+  color: #71839a;
+  text-align: right;
+}
+
+.context-cache-purpose-list {
+  display: grid;
+  min-width: 0;
+  margin: 9px 0 0;
+  padding: 8px 0 0;
+  gap: 7px;
+  border-top: 1px solid #edf2f8;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+
+.context-cache-purpose {
+  flex-wrap: wrap;
+}
+
+.context-cache-purpose span {
+  min-width: 0;
+  color: #71839a;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 480px) {
+  .context-inspector {
+    width: min(320px, calc(100vw - 28px));
+    max-height: calc(100dvh - 120px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .context-inspector-grid,
+  .context-cache-details {
+    grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+    gap: 6px 8px;
+  }
+
+  .context-inspector-grid dd,
+  .context-cache-details dd,
+  .context-cache-purpose span {
+    text-align: left;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

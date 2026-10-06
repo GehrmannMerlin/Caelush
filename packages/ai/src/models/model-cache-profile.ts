@@ -10,6 +10,7 @@ import type { CacheRetention } from "../cache/cache-retention.js";
  */
 export interface ModelCacheProfile {
   readonly supportedRetentions: readonly CacheRetention[];
+  /** The host's semantic default request; it does not describe a wire option. */
   readonly defaultRetention?: CacheRetention;
 }
 

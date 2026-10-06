@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import type { AIGateway, AIModelTurnResult, ModelDescriptor } from "@caelush/ai";
+import type {
+  AIMessage,
+  AIGateway,
+  AIModelTurnResult,
+  AIToolSpec,
+  ModelDescriptor,
+} from "@caelush/ai";
 import { createRunId, createSessionId } from "@caelush/protocol";
 import {
   createContextMessageRange,
+  createContextSummaryReplayPrefixFingerprint,
   type AgentExecutionIdentity,
   type ContextSummarizationInput,
 } from "@caelush/agent";
@@ -36,6 +43,8 @@ const identity: AgentExecutionIdentity = {
 };
 
 const input: ContextSummarizationInput = {
+  purpose: "COMPACTION",
+  cacheEligibility: "NOT_ELIGIBLE",
   identity,
   reason: "PROACTIVE_PRESSURE",
   sourceMessages: [],
@@ -102,6 +111,47 @@ function fakeGateway(result: AIModelTurnResult): {
 }
 
 describe("Phase 8C Daemon semantic summarizer adapter", () => {
+  it("replays the complete eligible prefix unchanged and appends one fixed tail instruction", async () => {
+    const messages: readonly AIMessage[] = [
+      { role: "system", content: "Stable host context." },
+      { role: "user", content: "Earlier durable input." },
+      { role: "assistant", content: [{ type: "TEXT", text: "Earlier answer." }] },
+    ];
+    const tools: readonly AIToolSpec[] = [
+      { name: "read_file", description: "Read one file", inputSchema: { type: "object" } },
+    ];
+    const replayPrefix = {
+      modelRef: input.model.ref,
+      api: input.model.api,
+      surfaceFingerprint: `sha256:${"b".repeat(64)}`,
+      messages,
+      tools,
+    };
+    const eligible = {
+      ...input,
+      purpose: "COMPACTION",
+      cacheEligibility: "CACHE_REUSE_ELIGIBLE",
+      replayPrefixFingerprint: createContextSummaryReplayPrefixFingerprint(replayPrefix),
+      replayPrefix,
+    } satisfies ContextSummarizationInput;
+    const fixture = fakeGateway(gatewayResult());
+
+    await createAIContextSummarizerAdapter(fixture.gateway).summarize(eligible, {
+      signal: new AbortController().signal,
+    });
+
+    const request = fixture.requests[0]!;
+    expect(request.messages.slice(0, messages.length)).toEqual(messages);
+    expect(request.tools).toEqual(tools);
+    expect(request.toolChoice).toEqual({ type: "NONE" });
+    expect(request.messages).toHaveLength(messages.length + 1);
+    expect(request.messages.at(-1)).toMatchObject({
+      role: "user",
+      content: expect.stringContaining("SemanticCheckpointDraft"),
+    });
+    expect(request.messages.at(-1)?.content).toContain("UNTRUSTED_DATA");
+  });
+
   it("uses the current model, disables tools, asks for semantic JSON, and forwards resolved metadata", async () => {
     const fixture = fakeGateway(gatewayResult());
     const result = await createAIContextSummarizerAdapter(fixture.gateway).summarize(input, {
@@ -111,21 +161,18 @@ describe("Phase 8C Daemon semantic summarizer adapter", () => {
 
     expect(request.model).toEqual(input.model.ref);
     expect(request.tools).toEqual([]);
+    expect(request.toolChoice).toEqual({ type: "NONE" });
+    expect(request.messages).toHaveLength(1);
     expect(request.messages[0]).toMatchObject({
-      role: "system",
+      role: "user",
       content: expect.stringContaining("SemanticCheckpointDraft"),
     });
-    expect(request.messages[0]).toMatchObject({
-      content: expect.stringContaining("verificationState"),
-    });
-    expect(request.messages[1]).toMatchObject({
-      role: "user",
-      content: expect.stringContaining("UNTRUSTED_DATA"),
-    });
+    expect(request.messages[0]?.content).toContain("verificationState");
+    expect(request.messages[0]?.content).toContain("UNTRUSTED_DATA");
     expect(result.semantic).toEqual(semantic);
     expect(result.modelRef).toEqual({ provider: "test", model: "resolved-phase-8c" });
     expect(result.finishReason).toBe("STOP");
-    expect(result.summaryPromptVersion).toBe(2);
+    expect(result.summaryPromptVersion).toBe(3);
   });
 
   it.each(["LENGTH", "CONTENT_FILTER", "TOOL_CALLS", "OTHER"] as const)(

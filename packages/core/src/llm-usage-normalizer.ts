@@ -4,6 +4,9 @@ export interface NormalizedLLMUsage {
   readonly inputTokens?: number;
   readonly outputTokens?: number;
   readonly totalTokens?: number;
+  readonly cachedInputTokens?: number;
+  readonly cacheMissInputTokens?: number;
+  readonly cacheWriteInputTokens?: number;
   readonly confidence: "EXACT" | "CONSERVATIVE" | "UNKNOWN";
   readonly exceedsReservation?: boolean;
 }
@@ -16,11 +19,16 @@ export function normalizeLLMUsageForBudget(
   const inputTokens = safeField(usage.inputTokens);
   const outputTokens = safeField(usage.outputTokens);
   const reportedTotal = safeField(usage.totalTokens);
+  const cachedInputTokens = safeField(usage.cachedInputTokens);
+  const cacheMissInputTokens = safeField(usage.cacheMissInputTokens);
+  const cacheWriteInputTokens = safeField(usage.cacheWriteInputTokens);
   if (
     (usage.inputTokens !== undefined && inputTokens === undefined) ||
     (usage.outputTokens !== undefined && outputTokens === undefined) ||
     (usage.totalTokens !== undefined && reportedTotal === undefined) ||
-    (usage.cachedInputTokens !== undefined && safeField(usage.cachedInputTokens) === undefined) ||
+    (usage.cachedInputTokens !== undefined && cachedInputTokens === undefined) ||
+    (usage.cacheMissInputTokens !== undefined && cacheMissInputTokens === undefined) ||
+    (usage.cacheWriteInputTokens !== undefined && cacheWriteInputTokens === undefined) ||
     (usage.reasoningTokens !== undefined && safeField(usage.reasoningTokens) === undefined)
   ) {
     return { confidence: "CONSERVATIVE" };
@@ -42,6 +50,9 @@ export function normalizeLLMUsageForBudget(
     ...(inputTokens === undefined ? {} : { inputTokens }),
     ...(outputTokens === undefined ? {} : { outputTokens }),
     ...(totalTokens === undefined ? {} : { totalTokens }),
+    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+    ...(cacheMissInputTokens === undefined ? {} : { cacheMissInputTokens }),
+    ...(cacheWriteInputTokens === undefined ? {} : { cacheWriteInputTokens }),
     confidence,
     ...(totalTokens !== undefined &&
     reservation.reservedTotalTokens !== undefined &&

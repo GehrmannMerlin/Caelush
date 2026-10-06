@@ -9,6 +9,17 @@ import type {
 import type { ContextBudgetSnapshot, ContextPressureState } from "../policy/context-policy.js";
 import type { ContextItemId, ContextSourceId } from "../item/context-item.js";
 import type { ContextBuildContribution } from "../../loop/types.js";
+import type { PromptSurfaceResetReason } from "../surface/prompt-surface.js";
+
+/** Safe, Context-owned accounting for the reusable Prompt Surface. */
+export interface ContextPromptSurfaceReceipt {
+  readonly epochId: string;
+  readonly prefixFingerprint: string;
+  readonly stableHeadTokens: number;
+  readonly snapshotTokens: number;
+  readonly expectedReusablePrefixTokens: number;
+  readonly resetReason: PromptSurfaceResetReason;
+}
 
 export type ContextContributionReport = ContextBuildContribution;
 
@@ -40,4 +51,5 @@ export interface ContextBuildReceipt {
   readonly compaction?: ContextCompactionReceipt;
   readonly toolSchemaTokens: number;
   readonly materializedTokens: number;
+  readonly promptSurface?: ContextPromptSurfaceReceipt;
 }

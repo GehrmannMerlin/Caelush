@@ -92,4 +92,34 @@ describe("SqliteBudgetLedgerRepository", () => {
     );
     expect((await ledger.snapshot(run.id)).toolCallsConsumed).toBe(1);
   });
+
+  it("lists every request reservation for one Run in stable creation order", async () => {
+    const database = await openCaelushDatabase({ path: ":memory:" });
+    databases.push(database);
+    await migrateCaelushDatabase(database);
+    const session = makeSession();
+    const run = makeRun(session.id, { status: "RUNNING", startedAt: createTimestampMs(100) });
+    await new SqliteSessionRepository(database).insert(session);
+    await new SqliteRunRepository(database).insert(run);
+    const ledger = new SqliteBudgetLedgerRepository(database);
+    await ledger.reserve({
+      id: "budget-late",
+      runId: run.id,
+      kind: "CONTEXT_COMPACTION",
+      ownerId: "compaction-owner",
+      createdAt: createTimestampMs(103),
+    });
+    await ledger.reserve({
+      id: "budget-early",
+      runId: run.id,
+      kind: "LLM_ATTEMPT",
+      ownerId: "step-owner",
+      createdAt: createTimestampMs(101),
+    });
+
+    await expect(ledger.listByRun(run.id)).resolves.toMatchObject([
+      { id: "budget-early", kind: "LLM_ATTEMPT" },
+      { id: "budget-late", kind: "CONTEXT_COMPACTION" },
+    ]);
+  });
 });

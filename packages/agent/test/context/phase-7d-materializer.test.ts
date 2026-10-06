@@ -12,6 +12,8 @@ import {
   createStandardAgentMessageProjectorRegistry,
   createUtf8HeuristicTokenEstimator,
   createContextFingerprint,
+  createPromptSurfaceEpoch,
+  createPromptSurfaceSnapshot,
   type AgentMessageProjectorRegistry,
   type PreparedAgentContext,
 } from "@caelush/agent";
@@ -98,6 +100,28 @@ function prepared(): PreparedAgentContext {
   const currentUser = userMessage({ sequence: 5, text: "current question" });
   const currentOpenCall = assistantMessage({ sequence: 6, toolCalls: ["open_call"] });
   const hidden = userMessage({ sequence: 7, text: "hidden message", modelVisible: false });
+  const runId = historicalUser.message.runId;
+  const epoch = createPromptSurfaceEpoch({
+    runId,
+    epochId: "epoch-phase-7d",
+    modelRef: MODEL.ref,
+    stableHeadFingerprint: `sha256:${"a".repeat(64)}`,
+    toolSchemaFingerprint: `sha256:${"b".repeat(64)}`,
+    cacheSettingsFingerprint: `sha256:${"c".repeat(64)}`,
+    resetReason: "INITIAL",
+    createdStepSequence: 1,
+    createdAt: 1 as never,
+  });
+  const surfaceSnapshot = createPromptSurfaceSnapshot({
+    runId,
+    epochId: epoch.epochId,
+    ordinal: 1,
+    anchorMessageSequence: 1,
+    sourceStepSequence: 1,
+    kind: "RUNTIME_CONTEXT_SNAPSHOT",
+    content: "<runtime_context_snapshot>\n[REDACTED:HOST_PATH]\n</runtime_context_snapshot>",
+    createdAt: 1 as never,
+  });
 
   return {
     conversationMessages: [
@@ -121,6 +145,17 @@ function prepared(): PreparedAgentContext {
       pressure: plan.pressure,
       toolSchemaTokens: 0,
       materializedTokens: 0,
+    },
+    promptSurface: {
+      epoch: { ...epoch, snapshots: [surfaceSnapshot] },
+      receipt: {
+        epochId: epoch.epochId,
+        prefixFingerprint: `sha256:${"d".repeat(64)}`,
+        stableHeadTokens: 16,
+        snapshotTokens: 8,
+        expectedReusablePrefixTokens: 24,
+        resetReason: "INITIAL",
+      },
     },
     observationPolicy: {
       maxSingleObservationTokens: 100,
@@ -158,10 +193,16 @@ describe("Phase 7D ContextMaterializer", () => {
 
     expect(messages[0]).toMatchObject({ role: "system" });
     expect(messages[0]?.content).toContain("Reference context");
-    expect(messages[0]?.content).toContain("<context_contributions>");
-    expect(messages[0]?.content).toContain("[REDACTED:HOST_PATH]");
+    expect(messages[0]?.content).not.toContain("<context_contributions>");
+    expect(messages[0]?.content).not.toContain("[REDACTED:HOST_PATH]");
+    expect(messages[2]).toMatchObject({
+      role: "user",
+      content: "<runtime_context_snapshot>\n[REDACTED:HOST_PATH]\n</runtime_context_snapshot>",
+    });
+    expect(messages[2]).not.toHaveProperty("source");
     expect(messages.map((message) => message.role)).toEqual([
       "system",
+      "user",
       "user",
       "assistant",
       "assistant",

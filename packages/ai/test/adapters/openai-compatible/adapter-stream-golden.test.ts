@@ -341,6 +341,57 @@ describe("OpenAI-compatible stream golden: finish and usage", () => {
       reasoningTokens: 1,
     });
   });
+
+  it("preserves DeepSeek prompt hit and miss counters from the raw final chunk", async () => {
+    const events = await run([
+      finishChunk({
+        id: "c1",
+        model: "fixture-model",
+        finishReason: "stop",
+        usage: {
+          prompt_tokens: 1_000,
+          completion_tokens: 10,
+          total_tokens: 1_010,
+          prompt_tokens_details: { cached_tokens: 970 },
+          prompt_cache_hit_tokens: 970,
+          prompt_cache_miss_tokens: 30,
+          completion_tokens_details: { reasoning_tokens: 2 },
+        },
+      }),
+    ]);
+
+    expect(events.at(-1)).toMatchObject({
+      type: "adapter.finish",
+      payload: {
+        finalUsage: {
+          inputTokens: 1_000,
+          outputTokens: 10,
+          totalTokens: 1_010,
+          cachedInputTokens: 970,
+          cacheMissInputTokens: 30,
+          reasoningTokens: 2,
+        },
+      },
+    });
+  });
+
+  it("fails closed when the final raw prompt count disagrees with hit plus miss", async () => {
+    await expect(
+      run([
+        finishChunk({
+          id: "c1",
+          model: "fixture-model",
+          finishReason: "stop",
+          usage: {
+            prompt_tokens: 1_000,
+            completion_tokens: 10,
+            prompt_cache_hit_tokens: 970,
+            prompt_cache_miss_tokens: 29,
+          },
+        }),
+      ]),
+    ).rejects.toMatchObject({ code: "AI_INVALID_RESPONSE" });
+  });
 });
 
 describe("OpenAI-compatible stream golden: failures", () => {

@@ -2,6 +2,7 @@ import type {
   EnumerableModelDescriptorSourcePort,
   ModelDescriptor,
   ModelDescriptorSourcePort,
+  ModelCacheProfile,
   ModelReasoningProfile,
 } from "@caelush/ai";
 import type { ReasoningLevel } from "@caelush/ai";
@@ -16,6 +17,7 @@ interface CuratedModelRecord {
   readonly maxOutputTokens: number;
   readonly capabilities: ModelDescriptor["capabilities"];
   readonly reasoning?: ModelReasoningProfile;
+  readonly cache?: ModelCacheProfile;
   readonly adapterMetadata?: ModelDescriptor["adapterMetadata"];
   readonly reasoningPresentation?: ReasoningPresentation;
 }
@@ -50,6 +52,16 @@ const anthropicReasoning: ModelReasoningProfile = {
   supportsSummary: "SUPPORTED",
 };
 
+const deepSeekCacheProfile: ModelCacheProfile = {
+  supportedRetentions: ["NONE", "SHORT"],
+  defaultRetention: "SHORT",
+};
+
+const anthropicCacheProfile: ModelCacheProfile = {
+  supportedRetentions: ["NONE", "SHORT", "LONG"],
+  defaultRetention: "SHORT",
+};
+
 const records: readonly CuratedModelRecord[] = [
   model(
     "openai",
@@ -81,7 +93,17 @@ const records: readonly CuratedModelRecord[] = [
     },
     presentation(openAIReasoning, { XHIGH: "Max" }),
   ),
-  model("deepseek", "deepseek-chat", "DeepSeek Chat", 64_000, 8_192),
+  model(
+    "deepseek",
+    "deepseek-chat",
+    "DeepSeek Chat",
+    64_000,
+    8_192,
+    undefined,
+    { "openai-compatible": { cacheDialect: "AUTOMATIC" } },
+    undefined,
+    deepSeekCacheProfile,
+  ),
   model(
     "deepseek",
     "deepseek-reasoner",
@@ -89,8 +111,14 @@ const records: readonly CuratedModelRecord[] = [
     64_000,
     8_192,
     deepSeekReasoning,
-    { "openai-compatible": { reasoningEffortByLevel: { LOW: "low", HIGH: "high" } } },
+    {
+      "openai-compatible": {
+        reasoningEffortByLevel: { LOW: "low", HIGH: "high" },
+        cacheDialect: "AUTOMATIC",
+      },
+    },
     presentation(deepSeekReasoning),
+    deepSeekCacheProfile,
   ),
   currentModel("deepseek", "deepseek-flash", "DeepSeek V4.1 Flash", true, deepSeekV4Reasoning),
   currentModel("deepseek", "deepseek-v4-flash", "DeepSeek V4 Flash", true, deepSeekV4Reasoning),
@@ -104,6 +132,7 @@ const records: readonly CuratedModelRecord[] = [
     anthropicReasoning,
     anthropicMetadata(),
     presentation(anthropicReasoning, { XHIGH: "Extra High" }),
+    anthropicCacheProfile,
   ),
   model(
     "anthropic",
@@ -114,6 +143,7 @@ const records: readonly CuratedModelRecord[] = [
     anthropicReasoning,
     anthropicMetadata(),
     presentation(anthropicReasoning, { XHIGH: "Extra High" }),
+    anthropicCacheProfile,
   ),
   model(
     "anthropic",
@@ -124,6 +154,7 @@ const records: readonly CuratedModelRecord[] = [
     anthropicReasoning,
     anthropicMetadata(),
     presentation(anthropicReasoning, { XHIGH: "Extra High" }),
+    anthropicCacheProfile,
   ),
   model(
     "anthropic",
@@ -134,6 +165,7 @@ const records: readonly CuratedModelRecord[] = [
     anthropicReasoning,
     anthropicMetadata(),
     presentation(anthropicReasoning, { XHIGH: "Extra High" }),
+    anthropicCacheProfile,
   ),
   model(
     "anthropic",
@@ -144,6 +176,7 @@ const records: readonly CuratedModelRecord[] = [
     anthropicReasoning,
     anthropicMetadata(),
     presentation(anthropicReasoning, { XHIGH: "Extra High" }),
+    anthropicCacheProfile,
   ),
   model(
     "anthropic",
@@ -154,6 +187,7 @@ const records: readonly CuratedModelRecord[] = [
     anthropicReasoning,
     anthropicMetadata(),
     presentation(anthropicReasoning, { XHIGH: "Extra High" }),
+    anthropicCacheProfile,
   ),
   model(
     "anthropic",
@@ -164,6 +198,7 @@ const records: readonly CuratedModelRecord[] = [
     anthropicReasoning,
     anthropicMetadata(),
     presentation(anthropicReasoning, { XHIGH: "Extra High" }),
+    anthropicCacheProfile,
   ),
   model(
     "anthropic",
@@ -174,6 +209,7 @@ const records: readonly CuratedModelRecord[] = [
     anthropicReasoning,
     anthropicMetadata(),
     presentation(anthropicReasoning, { XHIGH: "Extra High" }),
+    anthropicCacheProfile,
   ),
 ];
 
@@ -247,6 +283,7 @@ function model(
   reasoning?: ModelReasoningProfile,
   adapterMetadata?: ModelDescriptor["adapterMetadata"],
   reasoningPresentation?: ReasoningPresentation,
+  cache?: ModelCacheProfile,
 ): CuratedModelRecord {
   return {
     provider,
@@ -262,10 +299,11 @@ function model(
       vision: "UNKNOWN",
       reasoning: reasoning === undefined ? "UNKNOWN" : "SUPPORTED",
       reasoningSummary: reasoning?.supportsSummary ?? "UNKNOWN",
-      promptCaching: "UNKNOWN",
+      promptCaching: cache === undefined ? "UNKNOWN" : "SUPPORTED",
       usageReporting: "UNKNOWN",
     },
     ...(reasoning === undefined ? {} : { reasoning }),
+    ...(cache === undefined ? {} : { cache }),
     ...(adapterMetadata === undefined ? {} : { adapterMetadata }),
     ...(reasoningPresentation === undefined ? {} : { reasoningPresentation }),
   };
@@ -294,10 +332,11 @@ function currentModel(
       vision: vision ? "SUPPORTED" : "UNSUPPORTED",
       reasoning: "SUPPORTED",
       reasoningSummary: "UNKNOWN",
-      promptCaching: "UNKNOWN",
+      promptCaching: "SUPPORTED",
       usageReporting: "UNKNOWN",
     },
     reasoning,
+    cache: deepSeekCacheProfile,
     adapterMetadata: {
       "openai-compatible": {
         reasoningEffortByLevel: {
@@ -307,6 +346,7 @@ function currentModel(
           HIGH: "high",
           XHIGH: "max",
         },
+        cacheDialect: "AUTOMATIC",
       },
     },
     reasoningPresentation: presentation(reasoning, { XHIGH: "Max" }),
@@ -324,6 +364,7 @@ function descriptorFromRecord(record: CuratedModelRecord): ModelDescriptor {
     },
     capabilities: record.capabilities,
     ...(record.reasoning === undefined ? {} : { reasoning: record.reasoning }),
+    ...(record.cache === undefined ? {} : { cache: record.cache }),
     source: "BUILTIN",
     ...(record.adapterMetadata === undefined ? {} : { adapterMetadata: record.adapterMetadata }),
   };

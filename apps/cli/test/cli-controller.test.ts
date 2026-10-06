@@ -7,6 +7,7 @@ import {
   type PublicRunEvent,
   type ClientAgentRun,
   type ClientAgentSession,
+  type ContextUsageProjection,
   type DaemonInfo,
   type DefaultRunConfiguration,
   type HealthResponse,
@@ -250,6 +251,53 @@ describe("CliConversationController", () => {
     controller.dispose();
   });
 
+  it("prints cache status, separate rates, resets, and purpose totals without inferring zero", async () => {
+    const run = makeRun("the first prompt");
+    let usage = makeContextUsage(run, "WARM");
+    const client = makeClient({
+      createRun: async () => run,
+      getRunContextUsage: async () => usage,
+    });
+    const controller = new CliConversationController({
+      client,
+      workspacePath: "C:\\workspace\\project",
+    });
+    await controller.bootstrap();
+    await controller.submitPrompt("the first prompt");
+
+    await controller.submitPrompt("/context");
+    expect(controller.getState().notice).toContain("平台实际命中率 rolling 80%");
+    expect(controller.getState().notice).toContain("Caelush 可复用前缀效率 80%");
+    expect(controller.getState().notice).toContain("最近重置 —");
+    expect(controller.getState().notice).not.toContain("最近重置 INITIAL");
+    expect(controller.getState().notice).toContain("2 requests");
+    expect(controller.getState().notice).toContain("COMPACTION 1 request");
+
+    usage = makeContextUsage(run, "COLD_START");
+    await controller.submitPrompt("/context");
+    expect(controller.getState().notice).toContain("冷启动");
+    expect(controller.getState().notice).toContain("平台实际命中率 rolling 0%");
+
+    usage = makeContextUsage(run, "RESET");
+    await controller.submitPrompt("/context");
+    expect(controller.getState().notice).toContain("缓存周期 cycle-4");
+    expect(controller.getState().notice).toContain("最近重置 COMPACTION_COMMITTED");
+    expect(controller.getState().notice).toContain("Step 3");
+
+    usage = makeContextUsage(run, "UNREPORTED");
+    await controller.submitPrompt("/context");
+    expect(controller.getState().notice).toContain("未上报 usage");
+    expect(controller.getState().notice).not.toContain("rolling 0%");
+    expect(controller.getState().notice).not.toContain("latest 0%");
+    expect(controller.getState().notice).toContain("Caelush 可复用前缀效率 未上报 usage");
+
+    usage = { ...makeContextUsage(run, "WARM"), promptCache: undefined };
+    await controller.submitPrompt("/context");
+    expect(controller.getState().notice).toContain("Context: 50% used");
+    expect(controller.getState().notice).not.toContain("平台实际命中率");
+    controller.dispose();
+  });
+
   it("ignores empty prompts and refuses prompts above the UTF-8 bound", async () => {
     const client = makeClient();
     const controller = new CliConversationController({
@@ -409,6 +457,84 @@ export function makeRun(goal: string): ClientAgentRun {
     limits: defaultRunConfiguration.limits,
     model: { provider: "fixture", model: "fixture-model" },
     createdAt: 1,
+  };
+}
+
+function makeContextUsage(
+  run: ClientAgentRun,
+  status: "WARM" | "COLD_START" | "RESET" | "UNREPORTED",
+): ContextUsageProjection {
+  const isUnreported = status === "UNREPORTED";
+  const isColdStart = status === "COLD_START";
+  const hitTokens = isUnreported || isColdStart ? 0 : 400;
+  const missTokens = isUnreported ? 0 : isColdStart ? 500 : 100;
+  return {
+    runId: run.id,
+    providerId: "fixture",
+    modelId: "small",
+    contextWindowTokens: 1000,
+    effectiveInputLimitTokens: 800,
+    estimatedInputTokens: 400,
+    usedRatio: 0.5,
+    remainingTokens: 400,
+    pressureState: "NORMAL",
+    compactionCount: 1,
+    breakdown: {
+      pinned: 0,
+      checkpoint: 0,
+      recentTail: 0,
+      project: 0,
+      files: 0,
+      toolObservations: 0,
+      memory: 0,
+    },
+    updatedAt: 1,
+    promptCache: {
+      status,
+      sampleCount: isUnreported ? 0 : 1,
+      totalRequestCount: 2,
+      totalInputTokens: 560,
+      totalOutputTokens: 25,
+      hitTokens,
+      missTokens,
+      writeTokens: 20,
+      unknownUsageCount: isUnreported ? 2 : 1,
+      ...(isUnreported
+        ? {}
+        : {
+            latestHitRate: isColdStart ? 0 : 0.8,
+            rollingHitRate: isColdStart ? 0 : 0.8,
+            reusablePrefixEfficiency: isColdStart ? 0 : 0.8,
+          }),
+      expectedReusablePrefixTokens: 500,
+      epochId: "cycle-4",
+      resetReason: status === "RESET" ? "COMPACTION_COMMITTED" : "INITIAL",
+      ...(status === "RESET"
+        ? { resetReason: "COMPACTION_COMMITTED" as const, resetStepSequence: 3, resetAt: 4 }
+        : {}),
+      purposes: [
+        {
+          purpose: "MAIN_AGENT",
+          requestCount: 1,
+          inputTokens: 500,
+          outputTokens: 20,
+          hitTokens,
+          missTokens,
+          writeTokens: 20,
+          unknownUsageCount: 0,
+        },
+        {
+          purpose: "COMPACTION",
+          requestCount: 1,
+          inputTokens: 60,
+          outputTokens: 5,
+          hitTokens: 0,
+          missTokens: 0,
+          writeTokens: 0,
+          unknownUsageCount: 1,
+        },
+      ],
+    },
   };
 }
 
