@@ -5,6 +5,11 @@ import { RunStatusSchema } from "../run.js";
 import { RunIdSchema, StepIdSchema, ToolInvocationIdSchema } from "../primitives/ids.js";
 import { TimestampMsSchema } from "../primitives/time.js";
 import { ToolNameSchema } from "../tool.js";
+import {
+  ToolPresentationCategorySchema,
+  ToolPresentationEffectSchema,
+  ToolPresentationPhaseSchema,
+} from "../tool-presentation.js";
 
 /** Display lifecycle for one stable item in a session turn feed. */
 export const TurnPresentationItemStatusSchema = z.enum([
@@ -67,6 +72,21 @@ export const ToolPresentationItemSchema = PresentationItemBaseSchema.extend({
 }).strict();
 export type ToolPresentationItem = z.infer<typeof ToolPresentationItemSchema>;
 
+/** V3 Tool item with one invocation identity and structured, safe effects. */
+export const ToolPresentationItemV3Schema = PresentationItemBaseSchema.extend({
+  kind: z.literal("TOOL"),
+  toolInvocationId: ToolInvocationIdSchema,
+  toolName: ToolNameSchema,
+  category: ToolPresentationCategorySchema,
+  phase: ToolPresentationPhaseSchema,
+  title: z.string().min(1).max(256),
+  summary: z.string().max(1024),
+  facts: z.array(PresentationSafeFactSchema).max(16),
+  effects: z.array(ToolPresentationEffectSchema).max(128),
+  preview: z.string().max(8192).optional(),
+}).strict();
+export type ToolPresentationItemV3 = z.infer<typeof ToolPresentationItemV3Schema>;
+
 export const VerificationPresentationItemSchema = PresentationItemBaseSchema.extend({
   kind: z.literal("VERIFICATION"),
   verificationId: z.string().min(1).max(512),
@@ -100,6 +120,15 @@ export const TurnPresentationItemV2Schema = z.discriminatedUnion("kind", [
   RunPresentationSummaryItemSchema,
 ]);
 export type TurnPresentationItemV2 = z.infer<typeof TurnPresentationItemV2Schema>;
+
+export const TurnPresentationItemV3Schema = z.discriminatedUnion("kind", [
+  UserPresentationItemSchema,
+  AssistantPresentationItemV2Schema,
+  ToolPresentationItemV3Schema,
+  VerificationPresentationItemSchema,
+  RunPresentationSummaryItemSchema,
+]);
+export type TurnPresentationItemV3 = z.infer<typeof TurnPresentationItemV3Schema>;
 
 export const SessionTurnPresentationQuerySchema = z
   .object({
@@ -147,7 +176,7 @@ export const SessionTurnPresentationTurnV3Schema = z
     /** Durable RunEvent high-watermark, scoped to `runId`. */
     highWatermark: z.number().int().nonnegative().safe(),
     /** Complete Turn contents; a V3 page never cuts this array across page boundaries. */
-    items: z.array(TurnPresentationItemV2Schema).readonly(),
+    items: z.array(TurnPresentationItemV3Schema).readonly(),
   })
   .strict()
   .superRefine((turn, context) => {

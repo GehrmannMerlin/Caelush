@@ -1,10 +1,11 @@
 import { createElement, useEffect, useRef, useState, type ReactElement } from "react";
-import type { LiveActivityState, TimelineState } from "@caelush/client";
+import type { LiveActivity, LiveActivityState, TimelineState } from "@caelush/client";
 import type {
   RunStatus,
   SessionTurnPresentationResponse,
   TurnPresentationItem,
   TurnPresentationItemV2,
+  TurnPresentationItemV3,
 } from "@caelush/protocol";
 import {
   ChevronDown,
@@ -29,7 +30,7 @@ export interface TurnPresentationFeedProps {
 /** Temporary adapter for the V1/V2 renderer; V3 Turn boundaries remain canonical in Protocol. */
 export function flattenTurnsForLegacyRenderer(
   presentation: SessionTurnPresentationResponse,
-): readonly (TurnPresentationItem | TurnPresentationItemV2)[] {
+): readonly (TurnPresentationItem | TurnPresentationItemV2 | TurnPresentationItemV3)[] {
   return presentation.capabilityVersion === 3
     ? presentation.turns.flatMap((turn) => turn.items)
     : presentation.items;
@@ -41,6 +42,20 @@ export function hasTurnPresentationItems(
   return presentation !== undefined && flattenTurnsForLegacyRenderer(presentation).length > 0;
 }
 
+function bindLiveActivitiesToTurns(
+  presentation: SessionTurnPresentationResponse,
+  activities: readonly LiveActivity[],
+): readonly LiveActivity[] {
+  if (presentation.capabilityVersion !== 3) return activities;
+  const conversationTurnIdByRunId = new Map(
+    presentation.turns.map((turn) => [turn.runId, turn.conversationTurnId]),
+  );
+  return activities.map((activity) => {
+    const conversationTurnId = conversationTurnIdByRunId.get(activity.runId);
+    return conversationTurnId === undefined ? activity : { ...activity, conversationTurnId };
+  });
+}
+
 /**
  * Codex-style ordered execution feed.
  *
@@ -50,7 +65,10 @@ export function hasTurnPresentationItems(
  */
 export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactElement {
   const presentationItems = flattenTurnsForLegacyRenderer(props.presentation);
-  const liveActivities = props.liveActivity?.activities ?? [];
+  const liveActivities = bindLiveActivitiesToTurns(
+    props.presentation,
+    props.liveActivity?.activities ?? [],
+  );
   const isModelThinking = (props.timeline?.activeLlm.length ?? 0) > 0;
   const modelWait = props.liveActivity?.modelWait;
   const isTaskActive =
@@ -87,7 +105,22 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
         : [],
     ),
   );
-  const processActivities = liveActivities.filter((activity) => activity.kind !== "MODEL_TEXT");
+  const processActivities = liveActivities.filter(
+    (activity) =>
+      activity.kind !== "MODEL_TEXT" &&
+      !(
+        activity.kind === "TOOL_ACTIVITY" &&
+        activity.toolInvocationId !== undefined &&
+        presentationItems.some(
+          (item) =>
+            item.kind === "TOOL" &&
+            item.toolInvocationId === activity.toolInvocationId &&
+            item.runId === activity.runId &&
+            (activity.conversationTurnId === undefined ||
+              item.conversationTurnId === activity.conversationTurnId),
+        )
+      ),
+  );
   const finalAnswers = durableAssistantItems.filter(
     (item) => item.kind === "ASSISTANT" && item.phase === "FINAL_ANSWER",
   );
@@ -236,6 +269,9 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
                       {
                         className: `turn-presentation-live-item turn-presentation-live-item--${activity.status.toLowerCase()}`,
                         key: activity.id,
+                        ...(activity.conversationTurnId === undefined
+                          ? {}
+                          : { "data-conversation-turn-id": activity.conversationTurnId }),
                       },
                       createElement(
                         "span",
@@ -248,8 +284,24 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
                       createElement(
                         "span",
                         null,
-                        `${liveActivityLabel(activity.kind)}：${activity.text}`,
+                        `${liveActivityLabel(activity)}：${activity.text}`,
                       ),
+                      activity.kind === "TOOL_ACTIVITY" && activity.effects !== undefined
+                        ? createElement(
+                            "ul",
+                            {
+                              className: "turn-presentation-tool-effects",
+                              "aria-label": "文件变化",
+                            },
+                            activity.effects.map((effect, index) =>
+                              createElement(
+                                "li",
+                                { key: `${activity.id}:effect:${index}` },
+                                formatToolEffect(effect),
+                              ),
+                            ),
+                          )
+                        : null,
                     ),
                   ),
                 ),
@@ -290,7 +342,7 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
 }
 
 function renderItem(
-  item: TurnPresentationItem,
+  item: TurnPresentationItem | TurnPresentationItemV2 | TurnPresentationItemV3,
   now?: number,
   isCurrentVerifyingRun = false,
 ): ReactElement {
@@ -317,7 +369,8 @@ function renderItem(
           : createElement("p", { className: "turn-presentation-item-text" }, item.text),
       );
     }
-    case "TOOL":
+    case "TOOL": {
+      const effects = "effects" in item ? item.effects : [];
       return createElement(
         "article",
         {
@@ -332,8 +385,25 @@ function renderItem(
         createElement(
           "div",
           { className: "turn-presentation-item-main" },
-          createElement("p", { className: "turn-presentation-item-label" }, item.title),
+          createElement(
+            "p",
+            { className: "turn-presentation-item-label" },
+            "phase" in item ? durableToolTitle(item.title, item.phase) : item.title,
+          ),
           createElement("p", { className: "turn-presentation-item-text" }, item.summary),
+          effects.length === 0
+            ? null
+            : createElement(
+                "ul",
+                { className: "turn-presentation-tool-effects", "aria-label": "文件变化" },
+                effects.map((effect, index) =>
+                  createElement(
+                    "li",
+                    { key: `${item.id}:effect:${index}` },
+                    formatToolEffect(effect),
+                  ),
+                ),
+              ),
           item.facts.length === 0 && item.preview === undefined
             ? null
             : createElement(
@@ -367,6 +437,7 @@ function renderItem(
               ),
         ),
       );
+    }
     case "VERIFICATION":
       return createElement(
         "article",
@@ -425,8 +496,27 @@ function assistantLabel(phase: "COMMENTARY" | "FINAL_ANSWER" | "UNKNOWN"): strin
   }
 }
 
-function liveActivityLabel(kind: string): string {
-  switch (kind) {
+function liveActivityLabel(activity: LiveActivity): string {
+  if (activity.kind === "TOOL_ACTIVITY") {
+    const title = activity.title ?? toolCategoryTitle(activity.category);
+    switch (activity.toolPhase) {
+      case "REQUESTED":
+        return `正在调用${title}`;
+      case "WAITING_APPROVAL":
+        return `等待批准：${title}`;
+      case "RUNNING":
+        return `正在${title}`;
+      case "COMPLETED":
+        return `${title}已完成`;
+      case "FAILED":
+        return `${title}失败`;
+      case "CANCELLED":
+        return `${title}已取消`;
+      default:
+        return title;
+    }
+  }
+  switch (activity.kind) {
     case "MODEL_REASONING":
       return "推理摘要";
     case "MODEL_TOOL_CALL":
@@ -440,6 +530,66 @@ function liveActivityLabel(kind: string): string {
     default:
       return "助手消息";
   }
+}
+
+function toolCategoryTitle(category: LiveActivity["category"]): string {
+  switch (category) {
+    case "READ":
+      return "读取文件";
+    case "SEARCH":
+      return "搜索文件";
+    case "EDIT":
+      return "编辑文件";
+    case "COMMAND":
+      return "执行命令";
+    case "PROCESS":
+      return "进程操作";
+    case "GIT":
+      return "Git 操作";
+    default:
+      return "使用工具";
+  }
+}
+
+function durableToolTitle(
+  title: string,
+  phase: import("@caelush/protocol").ToolPresentationPhase,
+): string {
+  switch (phase) {
+    case "REQUESTED":
+      return `正在调用${title}`;
+    case "WAITING_APPROVAL":
+      return `等待批准：${title}`;
+    case "RUNNING":
+      return `正在${title}`;
+    case "COMPLETED":
+    case "FAILED":
+    case "CANCELLED":
+      return title;
+  }
+}
+
+function formatToolEffect(effect: import("@caelush/protocol").ToolPresentationEffect): string {
+  if (effect.type !== "FILE_CHANGE") return "";
+  const change =
+    effect.changeType === "CREATED"
+      ? "新建"
+      : effect.changeType === "MODIFIED"
+        ? "修改"
+        : effect.changeType === "DELETED"
+          ? "删除"
+          : "移动";
+  const path =
+    effect.changeType === "MOVED" && effect.fromPath !== undefined
+      ? `${effect.fromPath} → ${effect.path}`
+      : effect.path;
+  const counts = [
+    effect.additions === undefined || effect.additions === 0 ? undefined : `+${effect.additions}`,
+    effect.deletions === undefined || effect.deletions === 0 ? undefined : `-${effect.deletions}`,
+  ]
+    .filter((value): value is string => value !== undefined)
+    .join(" ");
+  return `${path}　${change}${counts.length === 0 ? "" : `　${counts}`}`;
 }
 
 function liveActivityStatusLabel(

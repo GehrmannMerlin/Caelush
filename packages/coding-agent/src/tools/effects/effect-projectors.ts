@@ -61,7 +61,7 @@ export function projectReadFileEffect(input: ToolEffectProjectorInput): readonly
   const value = input.result.details.path;
   return input.result.isError || typeof value !== "string"
     ? []
-    : [{ type: "FILE_READ", path: value }];
+    : [{ type: "FILE_READ", path: value, invocationId: input.request.invocationId }];
 }
 
 /**
@@ -83,6 +83,7 @@ export function projectPatchEffects(input: ToolEffectProjectorInput): readonly T
     if (change.kind === "MOVE" && typeof change.toPath === "string") {
       effects.push({
         type: "FILE_CHANGE",
+        invocationId: input.request.invocationId,
         ...(typeof change.fromPath === "string" ? { fromPath: change.fromPath } : {}),
         toPath: change.toPath,
         summary: {
@@ -100,6 +101,7 @@ export function projectPatchEffects(input: ToolEffectProjectorInput): readonly T
         change.kind === "ADD" ? "CREATED" : change.kind === "UPDATE" ? "MODIFIED" : "DELETED";
       effects.push({
         type: "FILE_CHANGE",
+        invocationId: input.request.invocationId,
         summary: {
           path: change.path,
           changeType,

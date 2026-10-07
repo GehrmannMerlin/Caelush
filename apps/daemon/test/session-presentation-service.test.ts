@@ -12,7 +12,7 @@ import {
   createVerificationPlanId,
   createWorkspaceId,
   type DurableRunEvent,
-  type ToolPresentationItem,
+  type ToolPresentationItemV3,
 } from "@caelush/protocol";
 import {
   createAgentMessageFactory,
@@ -27,6 +27,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { SessionPresentationService } from "../src/services/session-presentation-service.js";
+import { CaelushToolPresentation } from "@caelush/security";
 import {
   projectPromptCacheUsage,
   promptCacheSamplesFromDurableMessages,
@@ -227,7 +228,12 @@ describe("SessionPresentationService", () => {
       sourceStepId: STEP_ID,
     });
     expect(items[3]).toMatchObject({ phase: "FINAL_ANSWER", sourceStepId: STEP_ID });
-    const tool = items[2] as ToolPresentationItem;
+    const tool = items[2] as ToolPresentationItemV3;
+    expect(tool).toMatchObject({
+      category: "READ",
+      phase: "COMPLETED",
+      effects: [],
+    });
     expect(tool.preview).toBe("安全预览");
     expect(JSON.stringify(tool)).not.toContain("must-not-leak");
     expect(items[4]).toMatchObject({ kind: "RUN_SUMMARY", runStatus: "COMPLETED" });
@@ -241,6 +247,100 @@ describe("SessionPresentationService", () => {
       closedAt: RUN.finishedAt,
       highWatermark: 6,
     });
+  });
+
+  it("restores structured apply_patch effects on the owning invocation after refresh", async () => {
+    const firstInvocation = ToolInvocationSchema.parse({
+      id: createToolInvocationId(),
+      runId: RUN_ID,
+      stepId: STEP_ID,
+      toolName: "apply_patch",
+      args: { patch: "redacted" },
+      riskLevel: "HIGH",
+      status: "COMPLETED",
+      createdAt: NOW + 1,
+      finishedAt: NOW + 2,
+    });
+    const secondInvocation = ToolInvocationSchema.parse({
+      ...firstInvocation,
+      id: createToolInvocationId(),
+      createdAt: NOW + 3,
+      finishedAt: NOW + 4,
+    });
+    const observations = [
+      ToolObservationSchema.parse({
+        id: "obs_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9a",
+        kind: "TOOL",
+        runId: RUN_ID,
+        stepId: STEP_ID,
+        toolInvocationId: firstInvocation.id,
+        content: "Patch applied.",
+        details: {
+          changes: [{ kind: "ADD", path: "login.html", additions: 214, deletions: 0 }],
+        },
+        isError: false,
+        createdAt: NOW + 5,
+      }),
+      ToolObservationSchema.parse({
+        id: "obs_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9b",
+        kind: "TOOL",
+        runId: RUN_ID,
+        stepId: STEP_ID,
+        toolInvocationId: secondInvocation.id,
+        content: "Patch applied.",
+        details: {
+          changes: [{ kind: "UPDATE", path: "src/style.css", additions: 36, deletions: 12 }],
+        },
+        isError: false,
+        createdAt: NOW + 6,
+      }),
+    ];
+    const service = new SessionPresentationService({
+      sessions: { get: async () => ({ id: SESSION_ID }) as never },
+      runs: { listBySession: async () => [RUN] },
+      messageRecords: { listBySession: async () => [] },
+      codecs,
+      toolInvocations: { listByRun: async () => [firstInvocation, secondInvocation] },
+      observations: { listByRun: async () => observations },
+      eventReader: { latestSequence: async () => 0, replay: async () => [] },
+      toolPresentation: new CaelushToolPresentation({ terminalOutputSanitizer: (value) => value }),
+    });
+
+    const response = await service.getPresentation(SESSION_ID, {});
+    const toolItems = response.turns[0]!.items.filter(
+      (item): item is ToolPresentationItemV3 => item.kind === "TOOL",
+    );
+
+    expect(toolItems).toHaveLength(2);
+    expect(toolItems[0]).toMatchObject({
+      toolInvocationId: firstInvocation.id,
+      category: "EDIT",
+      phase: "COMPLETED",
+      effects: [
+        {
+          type: "FILE_CHANGE",
+          path: "login.html",
+          changeType: "CREATED",
+          additions: 214,
+          deletions: 0,
+        },
+      ],
+    });
+    expect(toolItems[1]).toMatchObject({
+      toolInvocationId: secondInvocation.id,
+      category: "EDIT",
+      effects: [
+        {
+          type: "FILE_CHANGE",
+          path: "src/style.css",
+          changeType: "MODIFIED",
+          additions: 36,
+          deletions: 12,
+        },
+      ],
+    });
+    expect(JSON.stringify(toolItems[0])).not.toContain("src/style.css");
+    expect(JSON.stringify(toolItems[1])).not.toContain("login.html");
   });
 
   it("merges verification lifecycle pairs and leaves no streaming rows for a terminal Run", async () => {

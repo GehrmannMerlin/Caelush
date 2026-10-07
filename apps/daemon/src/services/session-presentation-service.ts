@@ -15,6 +15,7 @@ import {
   AssistantMessagePhaseSchema,
   SessionTurnPresentationQuerySchema,
   SessionTurnPresentationResponseV3Schema,
+  toolPresentationCategory,
   type AgentRun,
   type AgentErrorCode,
   type DurableRunEvent,
@@ -23,8 +24,8 @@ import {
   type SessionTurnPresentationResponseV3,
   type SessionTurnPresentationTurnV3,
   type RunId,
-  type ToolPresentationItem,
-  type TurnPresentationItemV2,
+  type ToolPresentationItemV3,
+  type TurnPresentationItemV3,
   type VerificationPresentationItem,
 } from "@caelush/protocol";
 import type { JsonObject } from "@caelush/ai";
@@ -89,7 +90,7 @@ export interface SessionPresentationServiceOptions {
 }
 
 interface PositionedItem {
-  readonly item: TurnPresentationItemV2;
+  readonly item: TurnPresentationItemV3;
   readonly createdAt: number;
   readonly stableId: string;
 }
@@ -213,7 +214,7 @@ export class SessionPresentationService {
     }
 
     if (TERMINAL_RUN_STATUSES.has(run.status)) {
-      const summary: TurnPresentationItemV2 = {
+      const summary: TurnPresentationItemV3 = {
         id: `${run.id}:presentation:summary`,
         runId: run.id,
         conversationTurnId: turnId,
@@ -248,7 +249,7 @@ export class SessionPresentationService {
     };
   }
 
-  private projectMessage(record: AgentMessageRecord): readonly TurnPresentationItemV2[] {
+  private projectMessage(record: AgentMessageRecord): readonly TurnPresentationItemV3[] {
     try {
       const message = this.options.codecs.decode(record);
       if (message.type === "USER") return [projectUserMessage(message)];
@@ -265,7 +266,7 @@ export class SessionPresentationService {
     invocation: import("@caelush/protocol").ToolInvocation,
     observation: Extract<import("@caelush/protocol").Observation, { kind: "TOOL" }> | undefined,
     turnId: string,
-  ): ToolPresentationItem {
+  ): ToolPresentationItemV3 {
     const invocationPresentation = safePresentInvocation(this.options.toolPresentation, invocation);
     const result =
       observation === undefined ? undefined : observationToExecutionResult(observation);
@@ -282,12 +283,18 @@ export class SessionPresentationService {
       kind: "TOOL",
       toolInvocationId: invocation.id,
       toolName: invocation.toolName,
+      category:
+        resultPresentation.category ??
+        invocationPresentation.category ??
+        toolPresentationCategory(invocation.toolName),
+      phase: observation?.isError === true ? "FAILED" : invocation.status,
       title: result === undefined ? invocationPresentation.title : resultPresentation.title,
       summary: result === undefined ? invocationPresentation.summary : resultPresentation.summary,
       facts: [
         { key: "状态", value: translateToolStatus(invocation.status) },
         { key: "风险", value: translateRisk(invocation.riskLevel) },
       ],
+      effects: observation?.isError === true ? [] : [...(resultPresentation.effects ?? [])],
       ...(preview === undefined || preview.length === 0 ? {} : { preview }),
     };
   }
@@ -335,7 +342,7 @@ function groupRecordsByRun(
   return grouped;
 }
 
-function projectUserMessage(message: AgentUserMessage): TurnPresentationItemV2 {
+function projectUserMessage(message: AgentUserMessage): TurnPresentationItemV3 {
   return {
     id: `${message.id}:presentation`,
     runId: message.runId,
@@ -352,7 +359,7 @@ function projectUserMessage(message: AgentUserMessage): TurnPresentationItemV2 {
 
 function projectAssistantMessage(
   message: AgentAssistantMessage,
-): readonly TurnPresentationItemV2[] {
+): readonly TurnPresentationItemV3[] {
   return projectAgentAssistantTextItems(message).map((item, ordinal) => ({
     id:
       item.assistantItemId === undefined
@@ -609,7 +616,7 @@ function comparePositionedItems(left: PositionedItem, right: PositionedItem): nu
 }
 
 /** USER opens a Turn, FINAL_ANSWER closes its process disclosure, and summary is terminal. */
-function presentationRegion(item: TurnPresentationItemV2): number {
+function presentationRegion(item: TurnPresentationItemV3): number {
   if (item.kind === "USER") return 0;
   if (item.kind === "RUN_SUMMARY") return 3;
   if (item.kind === "ASSISTANT" && item.phase === "FINAL_ANSWER") return 2;

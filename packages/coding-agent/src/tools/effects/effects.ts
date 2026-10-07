@@ -30,9 +30,14 @@ export const SAFE_SHELL_COMMAND_LABEL = "shell command";
 export const MAX_CHANGED_FILES = 500;
 
 export type ToolEffect =
-  | { readonly type: "FILE_READ"; readonly path: string }
+  | {
+      readonly type: "FILE_READ";
+      readonly path: string;
+      readonly invocationId: ToolInvocationId;
+    }
   | {
       readonly type: "FILE_CHANGE";
+      readonly invocationId: ToolInvocationId;
       readonly summary: FileChangeSummary;
       readonly fromPath?: string;
       readonly toPath?: string;

@@ -12,7 +12,7 @@ import { CaelushToolPresentation } from "../src/index.js";
 const identityTerminalSanitizer = (value: string): string => value;
 
 function invocation(
-  toolName: "exec_command" | "read_file" | "write_stdin",
+  toolName: "apply_patch" | "exec_command" | "read_file" | "write_stdin",
   args: Record<string, unknown>,
 ): ToolInvocation {
   return {
@@ -36,6 +36,70 @@ function failedInvocation(error: NonNullable<ToolInvocation["error"]>): ToolInvo
 }
 
 describe("Security Tool presentation", () => {
+  it("projects bounded file change metadata without exposing patch content or unsafe paths", () => {
+    const presentation = new CaelushToolPresentation({
+      terminalOutputSanitizer: identityTerminalSanitizer,
+    });
+    const safe = presentation.presentResult({
+      invocation: invocation("apply_patch", { patch: "*** Begin Patch\n+secret body" }),
+      result: {
+        content: "Patch applied.",
+        details: {
+          changes: [
+            { kind: "ADD", path: "login.html", additions: 214, deletions: 0 },
+            { kind: "UPDATE", path: ".env", additions: 1, deletions: 1 },
+          ],
+        },
+        isError: false,
+      },
+    });
+
+    expect(safe.category).toBe("EDIT");
+    expect(safe.effects).toEqual([
+      {
+        type: "FILE_CHANGE",
+        path: "login.html",
+        changeType: "CREATED",
+        additions: 214,
+        deletions: 0,
+      },
+      {
+        type: "FILE_CHANGE",
+        path: "[敏感路径]",
+        changeType: "MODIFIED",
+        additions: 1,
+        deletions: 1,
+      },
+    ]);
+    expect(JSON.stringify(safe)).not.toContain("secret body");
+    expect(JSON.stringify(safe)).not.toContain(".env");
+  });
+
+  it("does not present file changes as successful effects for a failed patch", () => {
+    const result = new CaelushToolPresentation({
+      terminalOutputSanitizer: identityTerminalSanitizer,
+    }).presentResult({
+      invocation: {
+        ...invocation("apply_patch", { patch: "*** Begin Patch\n+secret body" }),
+        status: "FAILED",
+        error: {
+          code: "TOOL_OUTCOME_UNKNOWN",
+          message: "raw failure",
+          retryable: false,
+          details: { executionDisposition: "UNCERTAIN_SIDE_EFFECT" },
+        },
+      },
+      result: {
+        content: "failed",
+        details: { changes: [{ kind: "ADD", path: "login.html", additions: 214 }] },
+        isError: true,
+      },
+    });
+
+    expect(result.summary).toBe("工具结果未知，请勿自动重试");
+    expect(result.effects ?? []).toEqual([]);
+  });
+
   it.each([0, 3])("summarizes an EXITED process with exit code %i", (exitCode) => {
     const value = new CaelushToolPresentation({
       terminalOutputSanitizer: identityTerminalSanitizer,

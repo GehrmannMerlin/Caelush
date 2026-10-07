@@ -138,7 +138,7 @@ export function createToolStartedEvent(input: EventInput): DraftOf<"tool.started
     ...baseEvent(input),
     ...presentationFields(presentation),
     type: "tool.started",
-    payload: { invocationId: input.invocation.id },
+    payload: { invocationId: input.invocation.id, toolName: input.invocation.toolName },
   };
 }
 

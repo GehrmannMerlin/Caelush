@@ -136,7 +136,10 @@ export class DefaultPublicEventProjector implements PublicEventProjector {
         };
         break;
       case "tool.started":
-        payload = { invocationId: event.payload.invocationId };
+        payload = {
+          invocationId: event.payload.invocationId,
+          ...(event.payload.toolName === undefined ? {} : { toolName: event.payload.toolName }),
+        };
         break;
       case "tool.output":
         payload = {
@@ -158,22 +161,47 @@ export class DefaultPublicEventProjector implements PublicEventProjector {
         };
         break;
       case "file.read":
-        payload = { path: publicPath(event.payload.path) };
+        payload = {
+          path: publicPath(event.payload.path),
+          ...(event.payload.invocationId === undefined
+            ? {}
+            : { invocationId: event.payload.invocationId }),
+        };
         break;
       case "file.created":
-        payload = { summary: projectFileSummary(event.payload.summary) };
+        payload = {
+          summary: projectFileSummary(event.payload.summary),
+          ...(event.payload.invocationId === undefined
+            ? {}
+            : { invocationId: event.payload.invocationId }),
+        };
         break;
       case "file.modified":
-        payload = { summary: projectFileSummary(event.payload.summary) };
+        payload = {
+          summary: projectFileSummary(event.payload.summary),
+          ...(event.payload.invocationId === undefined
+            ? {}
+            : { invocationId: event.payload.invocationId }),
+        };
         break;
       case "file.moved":
         payload = {
           fromPath: publicPath(event.payload.fromPath),
           toPath: publicPath(event.payload.toPath),
+          ...(event.payload.invocationId === undefined
+            ? {}
+            : { invocationId: event.payload.invocationId }),
+          ...(event.payload.additions === undefined ? {} : { additions: event.payload.additions }),
+          ...(event.payload.deletions === undefined ? {} : { deletions: event.payload.deletions }),
         };
         break;
       case "file.deleted":
-        payload = { summary: projectFileSummary(event.payload.summary) };
+        payload = {
+          summary: projectFileSummary(event.payload.summary),
+          ...(event.payload.invocationId === undefined
+            ? {}
+            : { invocationId: event.payload.invocationId }),
+        };
         break;
       case "shell.started":
         payload = {

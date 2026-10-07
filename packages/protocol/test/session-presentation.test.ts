@@ -182,6 +182,56 @@ describe("session turn presentation protocol", () => {
     ).toBe(false);
   });
 
+  it("parses structured Tool Activity lifecycle and file effects in V3", () => {
+    const tool = {
+      ...base,
+      ordinal: 0,
+      kind: "TOOL",
+      toolInvocationId: "tinv_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9a",
+      toolName: "apply_patch",
+      category: "EDIT",
+      phase: "COMPLETED",
+      title: "编辑文件",
+      summary: "补丁已应用",
+      facts: [],
+      effects: [
+        {
+          type: "FILE_CHANGE",
+          path: "login.html",
+          changeType: "CREATED",
+          additions: 214,
+          deletions: 0,
+        },
+      ],
+    };
+    const response = {
+      capabilityVersion: 3,
+      turns: [
+        {
+          runId: base.runId,
+          conversationTurnId: base.conversationTurnId,
+          runStatus: "COMPLETED",
+          openedAt: base.createdAt,
+          highWatermark: 8,
+          items: [tool],
+        },
+      ],
+    };
+
+    expect(SessionTurnPresentationResponseV3Schema.parse(response)).toEqual(response);
+    expect(
+      SessionTurnPresentationResponseV3Schema.safeParse({
+        ...response,
+        turns: [
+          {
+            ...response.turns[0],
+            items: [{ ...tool, effects: [{ ...tool.effects[0], path: "C:/private/.env" }] }],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
   it("continues to parse legacy v1 and v2 response contracts", () => {
     expect(
       SessionTurnPresentationResponseSchema.parse({

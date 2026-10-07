@@ -1,4 +1,8 @@
-import type { ToolInvocation } from "@caelush/protocol";
+import {
+  toolPresentationCategory,
+  type ToolFileChangeEffect,
+  type ToolInvocation,
+} from "@caelush/protocol";
 import type {
   AgentToolExecutionResult,
   ToolInvocationPresentation,
@@ -40,10 +44,11 @@ export class CaelushToolPresentation implements ToolPresentationPort {
   presentInvocation(input: { readonly invocation: ToolInvocation }): ToolInvocationPresentation {
     const { invocation } = input;
     const title = TOOL_LABELS[invocation.toolName] ?? "使用工具";
+    const category = toolPresentationCategory(invocation.toolName);
     try {
-      return { title, summary: this.invocationSummary(invocation) };
+      return { title, summary: this.invocationSummary(invocation), category };
     } catch {
-      return { title, summary: "请求使用工具" };
+      return { title, summary: "请求使用工具", category };
     }
   }
 
@@ -52,10 +57,13 @@ export class CaelushToolPresentation implements ToolPresentationPort {
     readonly result?: AgentToolExecutionResult;
   }): ToolResultPresentation {
     const title = TOOL_LABELS[input.invocation.toolName] ?? "使用工具";
+    const category = toolPresentationCategory(input.invocation.toolName);
     if (input.result === undefined) {
       return {
         title,
         summary: failureSummary(input.invocation) ?? "工具已完成",
+        category,
+        effects: [],
       };
     }
     try {
@@ -68,10 +76,16 @@ export class CaelushToolPresentation implements ToolPresentationPort {
         return {
           title,
           summary: failureSummary(input.invocation, input.result.isError) ?? "工具输出无法安全使用",
+          category,
+          effects: [],
         };
       }
       const safe = sanitized.result;
       const summary = this.resultSummary(input.invocation, safe);
+      const effects =
+        input.invocation.toolName === "apply_patch" && !safe.isError
+          ? projectSafeFileChanges(safe.details)
+          : [];
       if (
         input.invocation.toolName === "read_file" ||
         input.invocation.toolName === "apply_patch"
@@ -79,6 +93,8 @@ export class CaelushToolPresentation implements ToolPresentationPort {
         return {
           title,
           summary,
+          category,
+          effects,
           output: {
             stream: "stdout",
             chunk:
@@ -96,10 +112,12 @@ export class CaelushToolPresentation implements ToolPresentationPort {
       return {
         title,
         summary,
+        category,
+        effects,
         ...(chunk.length === 0 ? {} : { output: { stream: "stdout" as const, chunk } }),
       };
     } catch {
-      return { title, summary: "工具结果可用" };
+      return { title, summary: "工具结果可用", category, effects: [] };
     }
   }
 
@@ -180,6 +198,48 @@ export class CaelushToolPresentation implements ToolPresentationPort {
     }
     return `${TOOL_LABELS[invocation.toolName] ?? "工具"}已完成`;
   }
+}
+
+function projectSafeFileChanges(
+  details: AgentToolExecutionResult["details"],
+): ToolFileChangeEffect[] {
+  if (!Array.isArray(details.changes)) return [];
+  const effects: ToolFileChangeEffect[] = [];
+  for (const value of details.changes.slice(0, 128)) {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) continue;
+    const change = value as Record<string, unknown>;
+    const additions = safeCount(change.additions);
+    const deletions = safeCount(change.deletions);
+    if (change.kind === "MOVE" && typeof change.toPath === "string") {
+      effects.push({
+        type: "FILE_CHANGE",
+        path: safePath(change.toPath),
+        changeType: "MOVED",
+        ...(typeof change.fromPath === "string" ? { fromPath: safePath(change.fromPath) } : {}),
+        ...(additions === undefined ? {} : { additions }),
+        ...(deletions === undefined ? {} : { deletions }),
+      });
+      continue;
+    }
+    if (
+      (change.kind === "ADD" || change.kind === "UPDATE" || change.kind === "DELETE") &&
+      typeof change.path === "string"
+    ) {
+      effects.push({
+        type: "FILE_CHANGE",
+        path: safePath(change.path),
+        changeType:
+          change.kind === "ADD" ? "CREATED" : change.kind === "UPDATE" ? "MODIFIED" : "DELETED",
+        ...(additions === undefined ? {} : { additions }),
+        ...(deletions === undefined ? {} : { deletions }),
+      });
+    }
+  }
+  return effects;
+}
+
+function safeCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 function failureSummary(invocation: ToolInvocation, resultIsError = false): string | undefined {

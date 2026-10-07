@@ -46,6 +46,7 @@ import type {
   SessionTurnPresentationResponse,
   SessionTurnPresentationTurnV3,
   TurnPresentationItem,
+  TurnPresentationItemV3,
   WorkspaceRef,
   WorkspaceSessionSummary,
   ContextUsageProjection,
@@ -1873,7 +1874,7 @@ function reconcileTurnPresentation(
       );
       if (additions.length === 0) return turn;
       changed = true;
-      const items: TurnPresentationItem[] = [
+      const items: TurnPresentationItemV3[] = [
         ...additions.map((item) => ({
           ...item,
           conversationTurnId: turn.conversationTurnId,

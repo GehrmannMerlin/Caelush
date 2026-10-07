@@ -5,7 +5,12 @@ import {
   createInitialTimelineState,
   type ModelWaitState,
 } from "@caelush/client";
-import { createRunId, createStepId, type SessionTurnPresentationResponse } from "@caelush/protocol";
+import {
+  createRunId,
+  createStepId,
+  createToolInvocationId,
+  type SessionTurnPresentationResponse,
+} from "@caelush/protocol";
 
 import {
   flattenTurnsForLegacyRenderer,
@@ -15,6 +20,7 @@ import { ReconnectBanner } from "../src/components/reconnect-banner.js";
 import { modelWaitMessage } from "../src/components/model-wait-presentation.js";
 
 const runId = createRunId();
+const toolInvocationId = createToolInvocationId();
 function presentation(): SessionTurnPresentationResponse {
   return {
     capabilityVersion: 1,
@@ -86,6 +92,157 @@ function presentation(): SessionTurnPresentationResponse {
 }
 
 describe("TurnPresentationFeed", () => {
+  it("renders a live non-streaming Tool as an invocation activity and durable file effects", () => {
+    const liveActivity = {
+      ...createInitialLiveActivityState(runId),
+      activities: [
+        {
+          id: `tool-activity:${toolInvocationId}`,
+          kind: "TOOL_ACTIVITY" as const,
+          status: "ACTIVE" as const,
+          toolPhase: "RUNNING" as const,
+          category: "EDIT" as const,
+          toolName: "apply_patch",
+          title: "编辑文件",
+          text: "应用已验证的工作区补丁",
+          streamKey: "durable:run",
+          streamSequence: 0,
+          runId,
+          toolInvocationId,
+          effects: [
+            {
+              type: "FILE_CHANGE" as const,
+              path: "login.html",
+              changeType: "CREATED" as const,
+              additions: 214,
+              deletions: 0,
+            },
+          ],
+        },
+      ],
+    };
+    const liveHtml = renderToStaticMarkup(
+      <TurnPresentationFeed
+        presentation={{
+          capabilityVersion: 3,
+          turns: [
+            {
+              runId,
+              conversationTurnId: "turn-1",
+              runStatus: "RUNNING",
+              openedAt: 1,
+              highWatermark: 0,
+              items: [],
+            },
+          ],
+        }}
+        liveActivity={liveActivity}
+      />,
+    );
+
+    expect(liveHtml).toContain("正在编辑文件");
+    expect(liveHtml).toContain('data-conversation-turn-id="turn-1"');
+    expect(liveHtml).toContain("login.html");
+    expect(liveHtml).toContain("新建");
+    expect(liveHtml).toContain("+214");
+
+    const durable = {
+      capabilityVersion: 3,
+      turns: [
+        {
+          runId,
+          conversationTurnId: "turn-1",
+          runStatus: "COMPLETED",
+          openedAt: 1,
+          highWatermark: 4,
+          items: [
+            {
+              id: `tool-activity:${toolInvocationId}`,
+              runId,
+              conversationTurnId: "turn-1",
+              ordinal: 0,
+              status: "COMPLETED",
+              createdAt: 1,
+              kind: "TOOL",
+              toolInvocationId,
+              toolName: "apply_patch",
+              category: "EDIT",
+              phase: "COMPLETED",
+              title: "编辑文件",
+              summary: "补丁已应用",
+              facts: [],
+              effects: [
+                {
+                  type: "FILE_CHANGE",
+                  path: "login.html",
+                  changeType: "CREATED",
+                  additions: 214,
+                  deletions: 0,
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    } as SessionTurnPresentationResponse;
+    const durableHtml = renderToStaticMarkup(<TurnPresentationFeed presentation={durable} />);
+    expect(durableHtml).toContain("login.html");
+    expect(durableHtml).toContain("新建");
+    expect(durableHtml).toContain("+214");
+    expect(durableHtml).not.toContain("*** Begin Patch");
+
+    const reconciledHtml = renderToStaticMarkup(
+      <TurnPresentationFeed presentation={durable} liveActivity={liveActivity} />,
+    );
+    expect(reconciledHtml).toContain("login.html");
+    expect(reconciledHtml).not.toContain("turn-presentation-live-item");
+    expect(reconciledHtml).not.toContain("正在编辑文件");
+  });
+
+  it("keeps durable approval waiting visible after the live row is reconciled", () => {
+    const waitingPresentation = {
+      capabilityVersion: 3,
+      turns: [
+        {
+          runId,
+          conversationTurnId: "turn-approval",
+          runStatus: "WAITING_APPROVAL",
+          openedAt: 1,
+          highWatermark: 2,
+          items: [
+            {
+              id: "tool-approval",
+              runId,
+              conversationTurnId: "turn-approval",
+              ordinal: 0,
+              status: "STREAMING",
+              createdAt: 1,
+              kind: "TOOL",
+              toolInvocationId: "invocation-approval",
+              toolName: "apply_patch",
+              category: "EDIT",
+              phase: "WAITING_APPROVAL",
+              title: "编辑文件",
+              summary: "等待批准后执行",
+              facts: [],
+              effects: [],
+            },
+          ],
+        },
+      ],
+    } as SessionTurnPresentationResponse;
+
+    const html = renderToStaticMarkup(
+      <TurnPresentationFeed
+        presentation={waitingPresentation}
+        activeRun={{ id: runId, status: "WAITING_APPROVAL" }}
+      />,
+    );
+
+    expect(html).toContain("等待批准：编辑文件");
+    expect(html).toContain("等待批准后执行");
+  });
+
   it("adapts V3 Turns for the legacy renderer without changing their Run grouping order", () => {
     const runOneId = createRunId();
     const runTwoId = createRunId();

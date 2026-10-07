@@ -103,6 +103,19 @@ export type { WorkspaceRecord, WorkspaceRef, WorkspaceSummary } from "./workspac
 export { ToolInvocationSchema, ToolInvocationStatusSchema, ToolNameSchema } from "./tool.js";
 export type { ToolInvocation, ToolInvocationStatus, ToolName } from "./tool.js";
 export {
+  ToolFileChangeEffectSchema,
+  ToolPresentationCategorySchema,
+  ToolPresentationEffectSchema,
+  ToolPresentationPhaseSchema,
+  toolPresentationCategory,
+} from "./tool-presentation.js";
+export type {
+  ToolFileChangeEffect,
+  ToolPresentationCategory,
+  ToolPresentationEffect,
+  ToolPresentationPhase,
+} from "./tool-presentation.js";
+export {
   ObservationSchema,
   SystemObservationSchema,
   ToolObservationSchema,
@@ -367,8 +380,10 @@ export {
   SessionTurnPresentationResponseV3Schema,
   SessionTurnPresentationTurnV3Schema,
   ToolPresentationItemSchema,
+  ToolPresentationItemV3Schema,
   TurnPresentationItemSchema,
   TurnPresentationItemV2Schema,
+  TurnPresentationItemV3Schema,
   TurnPresentationItemStatusSchema,
   UserPresentationItemSchema,
   VerificationPresentationItemSchema,
@@ -456,8 +471,10 @@ export type {
   SessionTurnPresentationResponseV3,
   SessionTurnPresentationTurnV3,
   ToolPresentationItem,
+  ToolPresentationItemV3,
   TurnPresentationItem,
   TurnPresentationItemV2,
+  TurnPresentationItemV3,
   TurnPresentationItemStatus,
   UserPresentationItem,
   VerificationPresentationItem,

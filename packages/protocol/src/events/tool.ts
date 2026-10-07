@@ -24,7 +24,7 @@ export const ToolRequestedEventSchema = createEventSchema(
 );
 export const ToolStartedEventSchema = createEventSchema(
   "tool.started",
-  z.object({ invocationId: ToolInvocationIdSchema }).strict(),
+  z.object({ invocationId: ToolInvocationIdSchema, toolName: ToolNameSchema.optional() }).strict(),
 );
 export const ToolOutputEventSchema = createEventSchema(
   "tool.output",

@@ -104,16 +104,32 @@ export function toolEffectsToEvents(
     const payload = (value: unknown): JsonObject => value as JsonObject;
     switch (effect.type) {
       case "FILE_READ":
-        return { ...base, type: "file.read", payload: payload({ path: effect.path }) };
+        return {
+          ...base,
+          type: "file.read",
+          payload: payload({ path: effect.path, invocationId: effect.invocationId }),
+        };
       case "FILE_CHANGE":
         if (effect.summary.changeType === "CREATED") {
-          return { ...base, type: "file.created", payload: payload({ summary: effect.summary }) };
+          return {
+            ...base,
+            type: "file.created",
+            payload: payload({ summary: effect.summary, invocationId: effect.invocationId }),
+          };
         }
         if (effect.summary.changeType === "MODIFIED") {
-          return { ...base, type: "file.modified", payload: payload({ summary: effect.summary }) };
+          return {
+            ...base,
+            type: "file.modified",
+            payload: payload({ summary: effect.summary, invocationId: effect.invocationId }),
+          };
         }
         if (effect.summary.changeType === "DELETED") {
-          return { ...base, type: "file.deleted", payload: payload({ summary: effect.summary }) };
+          return {
+            ...base,
+            type: "file.deleted",
+            payload: payload({ summary: effect.summary, invocationId: effect.invocationId }),
+          };
         }
         return {
           ...base,
@@ -121,6 +137,13 @@ export function toolEffectsToEvents(
           payload: payload({
             fromPath: effect.fromPath ?? effect.summary.path,
             toPath: effect.toPath ?? effect.summary.path,
+            invocationId: effect.invocationId,
+            ...(effect.summary.additions === undefined
+              ? {}
+              : { additions: effect.summary.additions }),
+            ...(effect.summary.deletions === undefined
+              ? {}
+              : { deletions: effect.summary.deletions }),
           }),
         };
       case "SHELL_STARTED":

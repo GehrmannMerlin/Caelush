@@ -333,7 +333,7 @@ describe("effects fidelity", () => {
       [
         "read_file",
         projectReadFileEffect({ request, result: result({ ok: true, path: "a.ts" }), now: 1 }),
-        [{ type: "FILE_READ", path: "a.ts" }],
+        [{ type: "FILE_READ", path: "a.ts", invocationId: request.invocationId }],
       ],
       [
         "apply_patch",
@@ -351,10 +351,12 @@ describe("effects fidelity", () => {
         [
           {
             type: "FILE_CHANGE",
+            invocationId: request.invocationId,
             summary: { path: "a.ts", changeType: "CREATED", additions: 1, deletions: 0 },
           },
           {
             type: "FILE_CHANGE",
+            invocationId: request.invocationId,
             summary: { path: "b.ts", changeType: "DELETED", additions: 0, deletions: 2 },
           },
         ],

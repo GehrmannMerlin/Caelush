@@ -43,6 +43,20 @@ function getFactory(name: string): (() => string) | undefined {
  * `@caelush/coding-agent`. What remains here is what a **persisted row** actually stores.
  */
 describe("protocol tool contracts", () => {
+  it("maps built-in Tools to presentation-only categories and defaults unknown Tools safely", () => {
+    const category = api["toolPresentationCategory"];
+    expect(category).toBeTypeOf("function");
+    if (typeof category !== "function") return;
+
+    expect((category as (toolName: string) => string)("read_file")).toBe("READ");
+    expect((category as (toolName: string) => string)("find_files")).toBe("SEARCH");
+    expect((category as (toolName: string) => string)("apply_patch")).toBe("EDIT");
+    expect((category as (toolName: string) => string)("exec_command")).toBe("COMMAND");
+    expect((category as (toolName: string) => string)("write_stdin")).toBe("PROCESS");
+    expect((category as (toolName: string) => string)("git_status")).toBe("GIT");
+    expect((category as (toolName: string) => string)("host_specific_tool")).toBe("OTHER");
+  });
+
   it("parses TOOL_OUTCOME_UNKNOWN as an Agent error without changing Tool statuses", () => {
     const errorCodeSchema = getSchema("AgentErrorCodeSchema");
     const agentErrorSchema = getSchema("AgentErrorSchema");

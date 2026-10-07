@@ -1,9 +1,21 @@
-import type { AssistantMessagePhase, PublicRunEvent, RunId, StepId } from "@caelush/protocol";
+import {
+  ToolPresentationEffectSchema,
+  toolPresentationCategory,
+  type AssistantMessagePhase,
+  type PublicRunEvent,
+  type RunId,
+  type StepId,
+  type ToolInvocationId,
+  type ToolPresentationCategory,
+  type ToolPresentationEffect,
+  type ToolPresentationPhase,
+} from "@caelush/protocol";
 
 export type LiveActivityKind =
   | "MODEL_TEXT"
   | "MODEL_REASONING"
   | "MODEL_TOOL_CALL"
+  | "TOOL_ACTIVITY"
   | "TOOL_OUTPUT"
   | "SHELL_OUTPUT"
   | "PROCESS_OUTPUT";
@@ -17,12 +29,22 @@ export interface LiveActivity {
   readonly streamKey: string;
   readonly streamSequence: number;
   readonly runId: RunId;
+  /** Bound by the Web presentation seam from the owning V3 Turn, never synthesized here. */
+  readonly conversationTurnId?: string;
   readonly assistantItemId?: string;
   readonly phase?: AssistantMessagePhase;
   readonly settledAtSequence?: number;
   readonly stepId?: string;
   readonly invocationId?: string;
+  readonly toolInvocationId?: ToolInvocationId;
+  readonly toolName?: string;
+  readonly category?: ToolPresentationCategory;
+  readonly toolPhase?: ToolPresentationPhase;
+  readonly title?: string;
+  readonly approvalId?: string;
   readonly processId?: string;
+  readonly effects?: readonly ToolPresentationEffect[];
+  readonly effectEventIds?: readonly string[];
 }
 
 export interface LiveActivityState {
@@ -180,7 +202,8 @@ export function reduceLiveActivityEvent(
   if (!isDurableLiveEvent(event)) return remember(state, event.eventId);
   const sequence = event.durability.sequence;
   if (sequence <= state.lastDurableSequence) return state;
-  const settled = settleForDurableEvent(state.activities, event);
+  const withToolLifecycle = projectToolLifecycleEvent(state.activities, event);
+  const settled = settleForDurableEvent(withToolLifecycle, event);
   const next = {
     ...remember(state, event.eventId),
     activities: settled.activities,
@@ -188,6 +211,222 @@ export function reduceLiveActivityEvent(
     terminal: settled.terminal || state.terminal,
   };
   return reduceModelWaitFromDurable(next, event, settled.terminal);
+}
+
+function projectToolLifecycleEvent(
+  activities: readonly LiveActivity[],
+  event: DurableLiveEvent,
+): readonly LiveActivity[] {
+  switch (event.type) {
+    case "tool.requested":
+      return upsertToolActivity(activities, {
+        id: `tool-activity:${event.payload.invocationId}`,
+        kind: "TOOL_ACTIVITY",
+        toolInvocationId: event.payload.invocationId,
+        toolName: event.payload.toolName,
+        category: toolPresentationCategory(event.payload.toolName),
+        toolPhase: "REQUESTED",
+        title: event.title ?? toolTitle(event.payload.toolName),
+        text: event.summary ?? "正在请求工具执行",
+        status: "ACTIVE",
+        streamKey: `durable:${event.runId}`,
+        streamSequence: 0,
+        runId: event.runId,
+        ...(event.stepId === undefined ? {} : { stepId: event.stepId }),
+      });
+    case "tool.started": {
+      const existing = activities.find(
+        (activity) =>
+          activity.kind === "TOOL_ACTIVITY" &&
+          activity.toolInvocationId === event.payload.invocationId,
+      );
+      const toolName = event.payload.toolName ?? existing?.toolName;
+      if (toolName === undefined) return activities;
+      return upsertToolActivity(activities, {
+        ...existing,
+        id: `tool-activity:${event.payload.invocationId}`,
+        kind: "TOOL_ACTIVITY",
+        toolInvocationId: event.payload.invocationId,
+        toolName,
+        category: toolPresentationCategory(toolName),
+        toolPhase: "RUNNING",
+        title: event.title ?? existing?.title ?? toolTitle(toolName),
+        text: event.summary ?? existing?.text ?? "工具正在运行",
+        status: "ACTIVE",
+        streamKey: existing?.streamKey ?? `durable:${event.runId}`,
+        streamSequence: existing?.streamSequence ?? 0,
+        runId: event.runId,
+        ...(event.stepId === undefined ? {} : { stepId: event.stepId }),
+      });
+    }
+    case "approval.requested": {
+      const invocationId = event.payload.approval.toolInvocationId;
+      return activities.map((activity) =>
+        activity.kind === "TOOL_ACTIVITY" && activity.toolInvocationId === invocationId
+          ? {
+              ...activity,
+              toolPhase: "WAITING_APPROVAL",
+              approvalId: event.payload.approval.id,
+              text: "等待批准后执行",
+            }
+          : activity,
+      );
+    }
+    case "approval.resolved":
+      return activities.map((activity) => {
+        if (activity.kind !== "TOOL_ACTIVITY" || activity.approvalId !== event.payload.approvalId) {
+          return activity;
+        }
+        const { approvalId: _approvalId, ...withoutApproval } = activity;
+        void _approvalId;
+        return {
+          ...withoutApproval,
+          ...(event.payload.status === "APPROVED" ? { toolPhase: "REQUESTED" as const } : {}),
+        };
+      });
+    case "tool.completed":
+      return settleToolActivity(activities, event.payload.invocationId, "COMPLETED", event);
+    case "tool.failed":
+      return settleToolActivity(
+        activities,
+        event.payload.invocationId,
+        "FAILED",
+        event,
+        failedToolSummary(event),
+      );
+    case "file.created":
+      return addToolFileEffect(activities, event, {
+        type: "FILE_CHANGE",
+        path: event.payload.summary.path,
+        changeType: "CREATED",
+        ...(event.payload.summary.additions === undefined
+          ? {}
+          : { additions: event.payload.summary.additions }),
+        ...(event.payload.summary.deletions === undefined
+          ? {}
+          : { deletions: event.payload.summary.deletions }),
+      });
+    case "file.modified":
+      return addToolFileEffect(activities, event, {
+        type: "FILE_CHANGE",
+        path: event.payload.summary.path,
+        changeType: "MODIFIED",
+        ...(event.payload.summary.additions === undefined
+          ? {}
+          : { additions: event.payload.summary.additions }),
+        ...(event.payload.summary.deletions === undefined
+          ? {}
+          : { deletions: event.payload.summary.deletions }),
+      });
+    case "file.deleted":
+      return addToolFileEffect(activities, event, {
+        type: "FILE_CHANGE",
+        path: event.payload.summary.path,
+        changeType: "DELETED",
+        ...(event.payload.summary.additions === undefined
+          ? {}
+          : { additions: event.payload.summary.additions }),
+        ...(event.payload.summary.deletions === undefined
+          ? {}
+          : { deletions: event.payload.summary.deletions }),
+      });
+    case "file.moved":
+      return addToolFileEffect(activities, event, {
+        type: "FILE_CHANGE",
+        path: event.payload.toPath,
+        changeType: "MOVED",
+        fromPath: event.payload.fromPath,
+        ...(event.payload.additions === undefined ? {} : { additions: event.payload.additions }),
+        ...(event.payload.deletions === undefined ? {} : { deletions: event.payload.deletions }),
+      });
+    default:
+      return activities;
+  }
+}
+
+function addToolFileEffect(
+  activities: readonly LiveActivity[],
+  event: Extract<
+    DurableLiveEvent,
+    { type: "file.created" | "file.modified" | "file.deleted" | "file.moved" }
+  >,
+  candidate: unknown,
+): readonly LiveActivity[] {
+  const invocationId = event.payload.invocationId;
+  if (invocationId === undefined) return activities;
+  const effect = ToolPresentationEffectSchema.safeParse(candidate);
+  if (!effect.success) return activities;
+  return activities.map((activity) => {
+    if (
+      activity.kind !== "TOOL_ACTIVITY" ||
+      activity.runId !== event.runId ||
+      activity.toolInvocationId !== invocationId ||
+      activity.status !== "ACTIVE" ||
+      activity.effectEventIds?.includes(event.eventId) === true
+    ) {
+      return activity;
+    }
+    return {
+      ...activity,
+      effects: [...(activity.effects ?? []), effect.data].slice(-128),
+      effectEventIds: [...(activity.effectEventIds ?? []), event.eventId].slice(-128),
+    };
+  });
+}
+
+function upsertToolActivity(
+  activities: readonly LiveActivity[],
+  activity: LiveActivity,
+): readonly LiveActivity[] {
+  return [...activities.filter((item) => item.id !== activity.id), activity].slice(-64);
+}
+
+function settleToolActivity(
+  activities: readonly LiveActivity[],
+  invocationId: ToolInvocationId,
+  phase: "COMPLETED" | "FAILED",
+  event: DurableLiveEvent,
+  text?: string,
+): readonly LiveActivity[] {
+  return activities.map((activity) =>
+    activity.kind === "TOOL_ACTIVITY" && activity.toolInvocationId === invocationId
+      ? {
+          ...activity,
+          status: phase,
+          toolPhase: phase,
+          text: text ?? event.summary ?? activity.text,
+          settledAtSequence: event.durability.sequence,
+        }
+      : activity,
+  );
+}
+
+function toolTitle(toolName: string): string {
+  switch (toolPresentationCategory(toolName)) {
+    case "READ":
+      return "读取文件";
+    case "SEARCH":
+      return "搜索文件";
+    case "EDIT":
+      return "编辑文件";
+    case "COMMAND":
+      return "执行命令";
+    case "PROCESS":
+      return "进程操作";
+    case "GIT":
+      return "Git 操作";
+    case "OTHER":
+      return "使用工具";
+  }
+}
+
+function failedToolSummary(event: Extract<DurableLiveEvent, { type: "tool.failed" }>): string {
+  return (
+    event.summary ??
+    (event.payload.error.code === "TOOL_OUTCOME_UNKNOWN"
+      ? "工具结果未知，请勿自动重试"
+      : "工具执行失败")
+  );
 }
 
 const PROVIDER_WAIT_PHASES: ReadonlySet<ModelWaitPhase> = new Set([
@@ -460,11 +699,15 @@ function settleForDurableEvent(
   let terminal = false;
   switch (event.type) {
     case "tool.completed":
-      predicate = (activity) => activity.invocationId === event.payload.invocationId;
+      predicate = (activity) =>
+        activity.invocationId === event.payload.invocationId ||
+        activity.toolInvocationId === event.payload.invocationId;
       status = "COMPLETED";
       break;
     case "tool.failed":
-      predicate = (activity) => activity.invocationId === event.payload.invocationId;
+      predicate = (activity) =>
+        activity.invocationId === event.payload.invocationId ||
+        activity.toolInvocationId === event.payload.invocationId;
       status = "FAILED";
       break;
     case "shell.completed":
@@ -516,7 +759,14 @@ function settleForDurableEvent(
   return {
     activities: activities.map((activity) =>
       predicate?.(activity) && activity.status === "ACTIVE" && status !== undefined
-        ? { ...activity, status, settledAtSequence: event.durability.sequence }
+        ? {
+            ...activity,
+            status,
+            ...(activity.kind === "TOOL_ACTIVITY"
+              ? { toolPhase: status === "COMPLETED" ? "COMPLETED" : status }
+              : {}),
+            settledAtSequence: event.durability.sequence,
+          }
         : activity,
     ),
     terminal,

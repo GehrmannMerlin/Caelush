@@ -1,4 +1,8 @@
-import type { ToolInvocation } from "@caelush/protocol";
+import type {
+  ToolInvocation,
+  ToolPresentationCategory,
+  ToolPresentationEffect,
+} from "@caelush/protocol";
 
 import type { AgentToolResult } from "./tool-result.js";
 
@@ -22,11 +26,14 @@ import type { AgentToolResult } from "./tool-result.js";
 export interface ToolInvocationPresentation {
   readonly title: string;
   readonly summary: string;
+  readonly category?: ToolPresentationCategory | undefined;
 }
 
 export interface ToolResultPresentation {
   readonly title: string;
   readonly summary: string;
+  readonly category?: ToolPresentationCategory | undefined;
+  readonly effects?: readonly ToolPresentationEffect[] | undefined;
   readonly output?:
     | {
         readonly stream: "stdout" | "stderr";

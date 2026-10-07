@@ -164,20 +164,24 @@ describe("apply_patch target builtin", () => {
     ).toEqual([
       {
         type: "FILE_CHANGE",
+        invocationId: request.invocationId,
         summary: { path: "a.ts", changeType: "CREATED", additions: 3, deletions: 0 },
       },
       {
         type: "FILE_CHANGE",
+        invocationId: request.invocationId,
         summary: { path: "b.ts", changeType: "MODIFIED", additions: 1, deletions: 2 },
       },
       {
         type: "FILE_CHANGE",
+        invocationId: request.invocationId,
         fromPath: "old.ts",
         toPath: "c.ts",
         summary: { path: "c.ts", changeType: "MOVED", additions: 0, deletions: 0 },
       },
       {
         type: "FILE_CHANGE",
+        invocationId: request.invocationId,
         summary: { path: "d.ts", changeType: "DELETED", additions: 0, deletions: 4 },
       },
     ]);

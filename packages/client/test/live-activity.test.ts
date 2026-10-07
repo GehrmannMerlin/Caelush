@@ -1,6 +1,7 @@
 import {
   PublicRunEventSchema,
   createEventId,
+  createApprovalRequestId,
   createRunId,
   createSessionId,
   createStepId,
@@ -45,6 +46,204 @@ function transient(
 }
 
 describe("LiveActivity projection", () => {
+  it("reconciles durable Tool lifecycle events into one invocation-scoped activity", () => {
+    let state = reduceLiveActivityEvent(
+      createInitialLiveActivityState(runId),
+      durableEvent(
+        "tool.requested",
+        { invocationId, toolName: "apply_patch", riskLevel: "HIGH" },
+        1,
+        100,
+      ),
+    );
+    expect(state.activities).toHaveLength(1);
+    expect(state.activities[0]).toMatchObject({
+      id: `tool-activity:${invocationId}`,
+      kind: "TOOL_ACTIVITY",
+      toolInvocationId: invocationId,
+      toolName: "apply_patch",
+      category: "EDIT",
+      toolPhase: "REQUESTED",
+      status: "ACTIVE",
+    });
+
+    state = reduceLiveActivityEvent(
+      state,
+      durableEvent("tool.started", { invocationId, toolName: "apply_patch" }, 2, 101),
+    );
+    expect(state.activities).toHaveLength(1);
+    expect(state.activities[0]).toMatchObject({ toolPhase: "RUNNING", status: "ACTIVE" });
+
+    state = reduceLiveActivityEvent(
+      state,
+      durableEvent(
+        "tool.completed",
+        { invocationId, observationId: "obs_0195f3a0-0000-7000-8000-000000000000" },
+        3,
+        102,
+      ),
+    );
+    expect(state.activities).toHaveLength(1);
+    expect(state.activities[0]).toMatchObject({
+      toolPhase: "COMPLETED",
+      status: "COMPLETED",
+      settledAtSequence: 3,
+    });
+    expect(pruneProjectedLiveActivities(state, 3).activities).toEqual([]);
+  });
+
+  it("attaches safe file events only to the matching live Tool invocation", () => {
+    let state = reduceLiveActivityEvent(
+      createInitialLiveActivityState(runId),
+      durableEvent(
+        "tool.requested",
+        { invocationId, toolName: "apply_patch", riskLevel: "HIGH" },
+        1,
+      ),
+    );
+    state = reduceLiveActivityEvent(
+      state,
+      durableEvent("tool.started", { invocationId, toolName: "apply_patch" }, 2),
+    );
+    state = reduceLiveActivityEvent(
+      state,
+      durableEvent(
+        "file.created",
+        {
+          summary: {
+            path: "login.html",
+            changeType: "CREATED",
+            additions: 214,
+            deletions: 0,
+          },
+        },
+        3,
+      ),
+    );
+    expect(state.activities[0]?.effects).toBeUndefined();
+
+    state = reduceLiveActivityEvent(
+      state,
+      durableEvent(
+        "file.created",
+        {
+          invocationId,
+          summary: {
+            path: "login.html",
+            changeType: "CREATED",
+            additions: 214,
+            deletions: 0,
+          },
+        },
+        4,
+      ),
+    );
+    expect(state.activities).toHaveLength(1);
+    expect(state.activities[0]).toMatchObject({
+      toolPhase: "RUNNING",
+      effects: [
+        {
+          type: "FILE_CHANGE",
+          path: "login.html",
+          changeType: "CREATED",
+          additions: 214,
+          deletions: 0,
+        },
+      ],
+    });
+  });
+
+  it("shows approval waiting and preserves uncertain Tool failure guidance", () => {
+    let state = reduceLiveActivityEvent(
+      createInitialLiveActivityState(runId),
+      durableEvent(
+        "tool.requested",
+        { invocationId, toolName: "apply_patch", riskLevel: "HIGH" },
+        1,
+      ),
+    );
+    const approvalId = createApprovalRequestId();
+    state = reduceLiveActivityEvent(
+      state,
+      durableEvent(
+        "approval.requested",
+        {
+          approval: {
+            id: approvalId,
+            runId,
+            toolInvocationId: invocationId,
+            riskLevel: "HIGH",
+            title: "Approve patch",
+            reason: "Patch changes workspace files",
+            action: {},
+            status: "PENDING",
+            scope: "ONCE",
+            createdAt: 101,
+          },
+        },
+        2,
+      ),
+    );
+    expect(state.activities[0]).toMatchObject({
+      toolPhase: "WAITING_APPROVAL",
+      status: "ACTIVE",
+      approvalId,
+    });
+
+    state = reduceLiveActivityEvent(
+      state,
+      durableEvent(
+        "approval.resolved",
+        { approvalId, status: "APPROVED", grantedScope: "ONCE" },
+        3,
+      ),
+    );
+    expect(state.activities[0]).toMatchObject({ toolPhase: "REQUESTED", status: "ACTIVE" });
+    expect(state.activities[0]).not.toHaveProperty("approvalId");
+
+    state = reduceLiveActivityEvent(
+      state,
+      durableEvent(
+        "tool.failed",
+        {
+          invocationId,
+          error: {
+            code: "TOOL_OUTCOME_UNKNOWN",
+            message: "safe error",
+            retryable: false,
+          },
+        },
+        4,
+      ),
+    );
+    expect(state.activities[0]).toMatchObject({
+      toolPhase: "FAILED",
+      status: "FAILED",
+      text: "工具结果未知，请勿自动重试",
+      settledAtSequence: 4,
+    });
+  });
+
+  it("settles an active Tool activity as cancelled when its Run is cancelled", () => {
+    let state = reduceLiveActivityEvent(
+      createInitialLiveActivityState(runId),
+      durableEvent("tool.requested", { invocationId, toolName: "read_file", riskLevel: "LOW" }, 1),
+    );
+    state = reduceLiveActivityEvent(
+      state,
+      durableEvent("tool.started", { invocationId, toolName: "read_file" }, 2),
+    );
+    state = reduceLiveActivityEvent(state, durableEvent("run.cancelled", { reason: "user" }, 3));
+
+    expect(state.activities).toHaveLength(1);
+    expect(state.activities[0]).toMatchObject({
+      toolPhase: "CANCELLED",
+      status: "CANCELLED",
+      settledAtSequence: 3,
+    });
+    expect(state.terminal).toBe(true);
+  });
+
   it("tracks Provider wait status and activity time without inferring connection health", () => {
     const stepStarted = durableEvent(
       "llm.started",

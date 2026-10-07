@@ -229,6 +229,54 @@ describe("DefaultPublicEventProjector", () => {
     expect(traversal?.payload).toEqual({ path: "[path omitted]" });
   });
 
+  it("preserves file effect invocation identity while sanitizing its visible paths", () => {
+    const invocationId = createToolInvocationId();
+    const created = projector.project(
+      makeEvent("file.created", {
+        invocationId,
+        summary: {
+          path: "src/login.html",
+          changeType: "CREATED",
+          additions: 214,
+          deletions: 0,
+        },
+      }),
+    );
+    const moved = projector.project(
+      makeEvent("file.moved", {
+        invocationId,
+        fromPath: "src/login.html",
+        toPath: "D:\\private\\repo\\login.html",
+        additions: 3,
+        deletions: 1,
+      }),
+    );
+    const legacy = projector.project(
+      makeEvent("file.created", {
+        summary: { path: ".env", changeType: "CREATED" },
+      }),
+    );
+
+    expect(created?.payload).toEqual({
+      invocationId,
+      summary: {
+        path: "src/login.html",
+        changeType: "CREATED",
+        additions: 214,
+        deletions: 0,
+      },
+    });
+    expect(moved?.payload).toEqual({
+      invocationId,
+      fromPath: "src/login.html",
+      toPath: "[path omitted]",
+      additions: 3,
+      deletions: 1,
+    });
+    expect(legacy?.payload).toMatchObject({ summary: { path: "[sensitive path]" } });
+    expect(legacy?.payload).not.toHaveProperty("invocationId");
+  });
+
   it("drops hidden reasoning fields from arbitrary completion results and bounds UTF-8 text", () => {
     const result = {
       answer: "可见结果".repeat(10_000),

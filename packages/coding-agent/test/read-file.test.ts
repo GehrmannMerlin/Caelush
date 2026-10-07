@@ -205,7 +205,7 @@ describe("read_file target builtin", () => {
         result: { content: "x", details: { ok: true, path: "src/a.ts" }, isError: false },
         now: 1,
       }),
-    ).toEqual([{ type: "FILE_READ", path: "src/a.ts" }]);
+    ).toEqual([{ type: "FILE_READ", path: "src/a.ts", invocationId: request.invocationId }]);
 
     expect(
       definition.effectProjector?.({
