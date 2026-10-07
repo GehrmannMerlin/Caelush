@@ -12,7 +12,11 @@ import type { SessionTurnPresentationResponse } from "@caelush/protocol";
 import type { WebControlMode } from "../application/session-manager.js";
 import { runStatusClass, runStatusLabel } from "./run-status.js";
 import { Timeline } from "./timeline.js";
-import { hasTurnPresentationItems, TurnPresentationFeed } from "./turn-presentation-feed.js";
+import {
+  hasTurnPresentationItems,
+  SessionConversation,
+  TurnPresentationFeed,
+} from "./turn-presentation-feed.js";
 import { ApprovalCard } from "./approval-card.js";
 import { RecoveryPanel, type RecoveryRunView } from "./recovery-panel.js";
 import caelushLogo from "../assets/logo/caelush-logo.png";
@@ -98,51 +102,66 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
           className: `conversation-history${isPristineSession ? " conversation-history--empty" : ""}`,
           "aria-live": "polite",
         },
-        props.turnPresentation !== undefined
-          ? createElement(TurnPresentationFeed, {
+        props.turnPresentation?.capabilityVersion === 3
+          ? createElement(SessionConversation, {
               presentation: props.turnPresentation,
-              activeRun: props.activeRun,
+              activeRun:
+                props.activeRun === undefined || !isActiveRun(props.activeRun.status)
+                  ? undefined
+                  : props.activeRun,
+              optimisticUsers: props.history.filter(
+                (entry): entry is Extract<TranscriptEntry, { kind: "USER" }> =>
+                  entry.kind === "USER" &&
+                  (entry.id.startsWith("optimistic:user:") || entry.runId === props.activeRun?.id),
+              ),
               liveActivity: props.liveActivity,
               timeline: props.timeline,
-              isActive: props.activeRun !== undefined && isActiveRun(props.activeRun.status),
             })
-          : isPristineSession
-            ? createElement(
-                "div",
-                { className: "conversation-welcome" },
-                createElement("img", { src: caelushLogo, alt: "Caelush" }),
-                createElement("p", null, "保持对未知的探索热情"),
-              )
-            : props.history.map((entry) =>
-                createElement(
-                  "article",
-                  {
-                    className: `conversation-entry conversation-entry--${entry.kind.toLowerCase()}${
-                      entry.kind === "RUN_TERMINAL" ? " conversation-entry--report" : ""
-                    }`,
-                    key: entry.id,
-                  },
-                  entry.kind === "USER"
-                    ? null
-                    : createElement(
-                        "p",
-                        { className: "conversation-author" },
-                        historyAuthor(entry.kind),
-                      ),
+          : props.turnPresentation !== undefined
+            ? createElement(TurnPresentationFeed, {
+                presentation: props.turnPresentation,
+                activeRun: props.activeRun,
+                liveActivity: props.liveActivity,
+                timeline: props.timeline,
+                isActive: props.activeRun !== undefined && isActiveRun(props.activeRun.status),
+              })
+            : isPristineSession
+              ? createElement(
+                  "div",
+                  { className: "conversation-welcome" },
+                  createElement("img", { src: caelushLogo, alt: "Caelush" }),
+                  createElement("p", null, "保持对未知的探索热情"),
+                )
+              : props.history.map((entry) =>
                   createElement(
-                    "p",
+                    "article",
                     {
-                      className:
-                        entry.kind === "USER"
-                          ? "conversation-bubble conversation-bubble--user"
-                          : entry.kind === "RUN_TERMINAL"
-                            ? "conversation-text conversation-report-text"
-                            : "conversation-text",
+                      className: `conversation-entry conversation-entry--${entry.kind.toLowerCase()}${
+                        entry.kind === "RUN_TERMINAL" ? " conversation-entry--report" : ""
+                      }`,
+                      key: entry.id,
                     },
-                    entry.text,
+                    entry.kind === "USER"
+                      ? null
+                      : createElement(
+                          "p",
+                          { className: "conversation-author" },
+                          historyAuthor(entry.kind),
+                        ),
+                    createElement(
+                      "p",
+                      {
+                        className:
+                          entry.kind === "USER"
+                            ? "conversation-bubble conversation-bubble--user"
+                            : entry.kind === "RUN_TERMINAL"
+                              ? "conversation-text conversation-report-text"
+                              : "conversation-text",
+                      },
+                      entry.text,
+                    ),
                   ),
                 ),
-              ),
       ),
       props.turnPresentation !== undefined
         ? null

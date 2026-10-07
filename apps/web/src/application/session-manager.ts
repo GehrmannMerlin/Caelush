@@ -519,13 +519,18 @@ export class WebSessionManager {
       };
       const optimisticPresentation = optimisticPresentationUser(run, goal);
       this.publish({
+        history: reconcileSessionTranscript(this.snapshot.history, [optimisticUser]),
+      });
+      const history = await this.loadSessionTranscript(session.id, [optimisticUser]);
+      const turnPresentation = await this.loadSessionTurnPresentation(session.id, [
+        optimisticPresentation,
+      ]);
+      this.publish({
         candidates: this.upsertCandidate(session, run),
         status: "READY",
         runs,
-        history: await this.loadSessionTranscript(session.id, [optimisticUser]),
-        turnPresentation: await this.loadSessionTurnPresentation(session.id, [
-          optimisticPresentation,
-        ]),
+        history,
+        turnPresentation,
         activeRuns: [run],
         activeRun: run,
         timeline: createInitialTimelineState(run.id),

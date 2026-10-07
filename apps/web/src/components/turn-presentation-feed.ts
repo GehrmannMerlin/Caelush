@@ -1,8 +1,14 @@
 import { createElement, useEffect, useRef, useState, type ReactElement } from "react";
-import type { LiveActivity, LiveActivityState, TimelineState } from "@caelush/client";
+import type {
+  LiveActivity,
+  LiveActivityState,
+  TimelineState,
+  TranscriptEntry,
+} from "@caelush/client";
 import type {
   RunStatus,
   SessionTurnPresentationResponse,
+  SessionTurnPresentationTurnV3,
   TurnPresentationItem,
   TurnPresentationItemV2,
   TurnPresentationItemV3,
@@ -16,6 +22,7 @@ import {
   LoaderCircle,
 } from "lucide-react";
 import caelushLogo from "../assets/logo/caelush-logo.png";
+import { projectTurnPresentation } from "../application/turn-presentation-view-model.js";
 import { AssistantMarkdown } from "./assistant-markdown.js";
 import { ModelWaitNotice, usePresentationNow } from "./model-wait-presentation.js";
 
@@ -27,69 +34,248 @@ export interface TurnPresentationFeedProps {
   readonly isActive?: boolean | undefined;
 }
 
-/** Temporary adapter for the V1/V2 renderer; V3 Turn boundaries remain canonical in Protocol. */
+export interface TurnPresentationProps {
+  readonly turn: SessionTurnPresentationTurnV3;
+  readonly optimisticUser?: Extract<TranscriptEntry, { kind: "USER" }> | undefined;
+  readonly activeRun?: { readonly id: string; readonly status: RunStatus } | undefined;
+  readonly liveActivity?: LiveActivityState | undefined;
+  readonly timeline?: TimelineState | undefined;
+}
+
+export interface SessionConversationProps {
+  readonly presentation: Extract<SessionTurnPresentationResponse, { capabilityVersion: 3 }>;
+  readonly optimisticUsers?: readonly Extract<TranscriptEntry, { kind: "USER" }>[] | undefined;
+  readonly activeRun?: { readonly id: string; readonly status: RunStatus } | undefined;
+  readonly liveActivity?: LiveActivityState | undefined;
+  readonly timeline?: TimelineState | undefined;
+}
+
+/** V1/V2 are item-page contracts, so their isolated fallback reads only their item arrays. */
 export function flattenTurnsForLegacyRenderer(
-  presentation: SessionTurnPresentationResponse,
-): readonly (TurnPresentationItem | TurnPresentationItemV2 | TurnPresentationItemV3)[] {
-  return presentation.capabilityVersion === 3
-    ? presentation.turns.flatMap((turn) => turn.items)
-    : presentation.items;
+  presentation: Exclude<SessionTurnPresentationResponse, { capabilityVersion: 3 }>,
+): readonly (TurnPresentationItem | TurnPresentationItemV2)[] {
+  return presentation.items;
 }
 
 export function hasTurnPresentationItems(
   presentation: SessionTurnPresentationResponse | undefined,
 ): boolean {
-  return presentation !== undefined && flattenTurnsForLegacyRenderer(presentation).length > 0;
+  if (presentation === undefined) return false;
+  return presentation.capabilityVersion === 3
+    ? presentation.turns.some((turn) => turn.items.length > 0)
+    : presentation.items.length > 0;
 }
 
-function bindLiveActivitiesToTurns(
-  presentation: SessionTurnPresentationResponse,
-  activities: readonly LiveActivity[],
-): readonly LiveActivity[] {
-  if (presentation.capabilityVersion !== 3) return activities;
-  const conversationTurnIdByRunId = new Map(
-    presentation.turns.map((turn) => [turn.runId, turn.conversationTurnId]),
+/** The V3 production path maps one canonical Turn to one React rendering unit. */
+export function SessionConversation(props: SessionConversationProps): ReactElement {
+  const conversationRef = useRef<HTMLDivElement>(null);
+  const nearBottom = useRef(true);
+  const turnRunIds = new Set(props.presentation.turns.map((turn) => turn.runId));
+  const pendingUsers = (props.optimisticUsers ?? []).filter((item) => !turnRunIds.has(item.runId));
+
+  useEffect(() => {
+    const conversation = conversationRef.current;
+    const scrollContainer =
+      conversation?.closest<HTMLElement>(".workspace-column") ??
+      conversation?.closest<HTMLElement>(".session-scroll");
+    if (scrollContainer === null || scrollContainer === undefined) return;
+    const updateNearBottom = (): void => {
+      nearBottom.current =
+        scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight <=
+        120;
+    };
+    updateNearBottom();
+    scrollContainer.addEventListener("scroll", updateNearBottom, { passive: true });
+    return () => scrollContainer.removeEventListener("scroll", updateNearBottom);
+  }, []);
+
+  useEffect(() => {
+    if (!nearBottom.current) return;
+    const conversation = conversationRef.current;
+    const scrollContainer =
+      conversation?.closest<HTMLElement>(".workspace-column") ??
+      conversation?.closest<HTMLElement>(".session-scroll");
+    if (scrollContainer === null || scrollContainer === undefined) return;
+    scrollContainer.scrollTop = scrollContainer.scrollHeight;
+  }, [props.presentation.turns, props.optimisticUsers, props.activeRun?.id, props.liveActivity]);
+
+  return createElement(
+    "div",
+    { className: "session-conversation", ref: conversationRef },
+    props.presentation.turns.map((turn) => {
+      const optimisticUser = (props.optimisticUsers ?? []).find(
+        (item) =>
+          item.runId === turn.runId && !turn.items.some((turnItem) => turnItem.kind === "USER"),
+      );
+      return createElement(TurnPresentation, {
+        key: turn.runId,
+        turn,
+        ...(optimisticUser === undefined ? {} : { optimisticUser }),
+        ...(props.activeRun === undefined ? {} : { activeRun: props.activeRun }),
+        ...(props.liveActivity === undefined ? {} : { liveActivity: props.liveActivity }),
+        ...(props.timeline === undefined ? {} : { timeline: props.timeline }),
+      });
+    }),
+    pendingUsers.map((item) =>
+      createElement(
+        "article",
+        {
+          className: "turn-presentation-turn turn-presentation-turn--optimistic",
+          key: item.runId,
+          "data-run-id": item.runId,
+          "data-optimistic-run": true,
+        },
+        createElement(
+          "div",
+          { className: "turn-presentation-users", "aria-label": "任务" },
+          createElement(
+            "article",
+            { className: "turn-presentation-item turn-presentation-item--user" },
+            createElement("p", { className: "turn-presentation-user-bubble" }, item.text),
+          ),
+        ),
+      ),
+    ),
   );
-  return activities.map((activity) => {
-    const conversationTurnId = conversationTurnIdByRunId.get(activity.runId);
-    return conversationTurnId === undefined ? activity : { ...activity, conversationTurnId };
-  });
 }
 
 /**
- * Codex-style ordered execution feed.
+ * Render one V3 Run as one conversation Turn.
  *
  * Durable commentary, Tools and verification stay together in one readable process disclosure;
  * final answers and the terminal Run report remain directly below it after the disclosure collapses.
  * Ephemeral deltas are rendered only as bounded live annotations and never become historical facts.
  */
+export function TurnPresentation(props: TurnPresentationProps): ReactElement {
+  const isCurrentRun = props.activeRun?.id === props.turn.runId;
+  const isActive =
+    props.activeRun !== undefined && isCurrentRun && isRunStatusActive(props.activeRun.status);
+  const liveActivity =
+    isActive && props.liveActivity?.runId === props.turn.runId ? props.liveActivity : undefined;
+  const timeline =
+    isActive && (props.timeline?.runId === undefined || props.timeline.runId === props.turn.runId)
+      ? props.timeline
+      : undefined;
+  const matchingActiveRun = isCurrentRun ? props.activeRun : undefined;
+  return createElement(
+    "article",
+    {
+      className: "turn-presentation-turn",
+      "data-run-id": props.turn.runId,
+      "data-conversation-turn-id": props.turn.conversationTurnId,
+      "data-run-status": matchingActiveRun?.status ?? props.turn.runStatus,
+      ...(props.optimisticUser === undefined ? {} : { "data-optimistic-run": true }),
+    },
+    createElement(TurnPresentationContent, {
+      items: props.turn.items,
+      turn: props.turn,
+      ...(props.optimisticUser === undefined ? {} : { optimisticUser: props.optimisticUser }),
+      runId: props.turn.runId,
+      conversationTurnId: props.turn.conversationTurnId,
+      openedAt: Number(props.turn.openedAt),
+      ...(props.turn.closedAt === undefined ? {} : { closedAt: Number(props.turn.closedAt) }),
+      runStatus: matchingActiveRun?.status ?? props.turn.runStatus,
+      isActive,
+      ...(matchingActiveRun === undefined ? {} : { activeRun: matchingActiveRun }),
+      ...(liveActivity === undefined ? {} : { liveActivity }),
+      ...(timeline === undefined ? {} : { timeline }),
+    }),
+  );
+}
+
+/** V1/V2 stay on a clearly isolated legacy Session-wide renderer until old daemons retire. */
 export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactElement {
-  const presentationItems = flattenTurnsForLegacyRenderer(props.presentation);
-  const liveActivities = bindLiveActivitiesToTurns(
-    props.presentation,
-    props.liveActivity?.activities ?? [],
+  if (props.presentation.capabilityVersion === 3) {
+    return createElement(SessionConversation, {
+      presentation: props.presentation,
+      ...(props.activeRun === undefined ? {} : { activeRun: props.activeRun }),
+      ...(props.liveActivity === undefined ? {} : { liveActivity: props.liveActivity }),
+      ...(props.timeline === undefined ? {} : { timeline: props.timeline }),
+    });
+  }
+  const items = flattenTurnsForLegacyRenderer(props.presentation);
+  const latestUser = [...items].reverse().find((item) => item.kind === "USER");
+  const legacyRunId = latestUser?.runId;
+  const openedAt = latestUser === undefined ? undefined : Number(latestUser.createdAt);
+  return createElement(TurnPresentationContent, {
+    items,
+    ...(legacyRunId === undefined ? {} : { runId: legacyRunId }),
+    ...(openedAt === undefined ? {} : { openedAt }),
+    isActive:
+      props.activeRun === undefined
+        ? props.isActive === true
+        : isRunStatusActive(props.activeRun.status),
+    ...(props.activeRun === undefined ? {} : { activeRun: props.activeRun }),
+    ...(props.liveActivity === undefined ? {} : { liveActivity: props.liveActivity }),
+    ...(props.timeline === undefined ? {} : { timeline: props.timeline }),
+  });
+}
+
+interface TurnPresentationContentProps {
+  readonly items: readonly (
+    TurnPresentationItem | TurnPresentationItemV2 | TurnPresentationItemV3
+  )[];
+  readonly turn?: SessionTurnPresentationTurnV3 | undefined;
+  readonly optimisticUser?: Extract<TranscriptEntry, { kind: "USER" }> | undefined;
+  readonly runId?: string | undefined;
+  readonly conversationTurnId?: string | undefined;
+  readonly openedAt?: number | undefined;
+  readonly closedAt?: number | undefined;
+  readonly runStatus?: RunStatus | undefined;
+  readonly isActive: boolean;
+  readonly activeRun?: { readonly id: string; readonly status: RunStatus } | undefined;
+  readonly liveActivity?: LiveActivityState | undefined;
+  readonly timeline?: TimelineState | undefined;
+}
+
+function TurnPresentationContent(props: TurnPresentationContentProps): ReactElement {
+  const presentationItems = props.items;
+  const liveActivities = (props.liveActivity?.activities ?? []).filter(
+    (activity) =>
+      (props.runId === undefined || activity.runId === props.runId) &&
+      (props.conversationTurnId === undefined ||
+        activity.conversationTurnId === undefined ||
+        activity.conversationTurnId === props.conversationTurnId),
   );
   const isModelThinking = (props.timeline?.activeLlm.length ?? 0) > 0;
-  const modelWait = props.liveActivity?.modelWait;
-  const isTaskActive =
-    props.activeRun === undefined
-      ? props.isActive === true
-      : isRunStatusActive(props.activeRun.status);
+  const modelWait = props.liveActivity?.terminal ? undefined : props.liveActivity?.modelWait;
+  const isTaskActive = props.isActive;
   const now = usePresentationNow(isTaskActive || isModelThinking || modelWait !== undefined);
-  const verifyingRunId = props.activeRun?.status === "VERIFYING" ? props.activeRun.id : undefined;
-  const latestUserItem = [...presentationItems].reverse().find((item) => item.kind === "USER");
-  const taskElapsed =
-    latestUserItem === undefined
+  const verifyingRunId =
+    props.activeRun !== undefined &&
+    props.activeRun.id === props.runId &&
+    props.activeRun.status === "VERIFYING"
+      ? props.activeRun.id
+      : undefined;
+  const openedAt =
+    props.openedAt ??
+    presentationItems.find((item) => item.kind === "USER")?.createdAt ??
+    presentationItems[0]?.createdAt;
+  const viewModel =
+    props.turn === undefined
       ? undefined
-      : formatTaskElapsed(
-          taskElapsedMs(
-            latestUserItem.runId,
-            latestUserItem.createdAt,
-            presentationItems,
-            isTaskActive,
-            now,
-          ),
+      : projectTurnPresentation(
+          props.turn,
+          props.activeRun?.id === props.turn.runId ? props.activeRun : undefined,
+          now,
         );
+  const elapsedDuration =
+    viewModel?.elapsedMs ??
+    (openedAt === undefined
+      ? undefined
+      : Math.max(
+          0,
+          (props.closedAt ??
+            presentationItems.find((item) => item.kind === "RUN_SUMMARY")?.createdAt ??
+            (!isRunStatusActive(props.runStatus ?? props.activeRun?.status ?? "PENDING")
+              ? presentationItems.reduce(
+                  (latest, item) => Math.max(latest, Number(item.createdAt)),
+                  openedAt,
+                )
+              : now)) - Number(openedAt),
+        ));
+  const taskElapsed =
+    elapsedDuration === undefined ? undefined : formatTaskElapsed(elapsedDuration);
   const durableAssistantItems = presentationItems.filter((item) => item.kind === "ASSISTANT");
   const settledStepKeys = new Set(
     durableAssistantItems.flatMap((item) =>
@@ -121,9 +307,11 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
         )
       ),
   );
-  const finalAnswers = durableAssistantItems.filter(
-    (item) => item.kind === "ASSISTANT" && item.phase === "FINAL_ANSWER",
-  );
+  const finalAnswers =
+    viewModel?.finalAnswerItems ??
+    durableAssistantItems.filter(
+      (item) => item.kind === "ASSISTANT" && item.phase === "FINAL_ANSWER",
+    );
   const unsuccessfulTerminalRunIds = new Set(
     presentationItems.flatMap((item) =>
       item.kind === "RUN_SUMMARY" && item.runStatus !== "COMPLETED" ? [item.runId] : [],
@@ -139,20 +327,33 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
         ? !settledStepKeys.has(`${activity.runId}:${activity.stepId ?? ""}`)
         : !settledAssistantItemKeys.has(`${activity.runId}:${activity.assistantItemId}`)),
   );
-  const summaries = presentationItems.filter((item) => {
-    if (item.kind !== "RUN_SUMMARY") return false;
-    return !(
-      item.runStatus === "COMPLETED" && finalAnswers.some((answer) => answer.runId === item.runId)
+  const summaries =
+    viewModel?.runSummaries.filter(
+      (item) =>
+        item.runStatus !== "COMPLETED" ||
+        !finalAnswers.some((answer) => answer.runId === item.runId),
+    ) ??
+    presentationItems.filter((item) => {
+      if (item.kind !== "RUN_SUMMARY") return false;
+      return !(
+        item.runStatus === "COMPLETED" && finalAnswers.some((answer) => answer.runId === item.runId)
+      );
+    });
+  const processItems =
+    viewModel?.processItems ??
+    presentationItems.filter(
+      (item) =>
+        item.kind !== "USER" &&
+        item.kind !== "RUN_SUMMARY" &&
+        !(item.kind === "ASSISTANT" && item.phase === "FINAL_ANSWER"),
     );
-  });
-  const processItems = presentationItems.filter(
-    (item) =>
-      item.kind !== "USER" &&
-      item.kind !== "RUN_SUMMARY" &&
-      !(item.kind === "ASSISTANT" && item.phase === "FINAL_ANSWER"),
-  );
-  const userItems = presentationItems.filter((item) => item.kind === "USER");
+  const userItems =
+    viewModel?.userItems ?? presentationItems.filter((item) => item.kind === "USER");
   const finalItems = [...finalAnswers, ...summaries];
+  const activityCount =
+    (viewModel?.activityCount ?? processItems.length) +
+    processActivities.length +
+    modelDrafts.length;
   const hasProcess =
     processItems.length > 0 ||
     processActivities.length > 0 ||
@@ -160,7 +361,6 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
     modelWait !== undefined ||
     isModelThinking ||
     isTaskActive;
-  const regionRef = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(isTaskActive);
   const wasActive = useRef(isTaskActive);
 
@@ -171,20 +371,27 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
     wasActive.current = active;
   }, [isTaskActive]);
 
-  useEffect(() => {
-    if (!isTaskActive || regionRef.current === null) return;
-    regionRef.current.scrollTop = regionRef.current.scrollHeight;
-  }, [isTaskActive, processItems.length, liveActivities.length]);
-
   return createElement(
     "div",
-    { className: "turn-presentation-feed" },
-    userItems.length === 0
+    {
+      className: "turn-presentation-feed",
+    },
+    userItems.length === 0 && props.optimisticUser === undefined
       ? null
       : createElement(
           "div",
           { className: "turn-presentation-users", "aria-label": "任务" },
-          userItems.map((item) => renderItem(item)),
+          userItems.length === 0
+            ? createElement(
+                "article",
+                { className: "turn-presentation-item turn-presentation-item--user" },
+                createElement(
+                  "p",
+                  { className: "turn-presentation-user-bubble" },
+                  props.optimisticUser?.text,
+                ),
+              )
+            : userItems.map((item) => renderItem(item)),
         ),
     hasProcess
       ? createElement(
@@ -216,7 +423,7 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
             createElement(
               "span",
               { className: "turn-presentation-summary-status" },
-              processSummary(isTaskActive, processItems.length, processActivities.length),
+              processSummary(isTaskActive, activityCount),
             ),
             createElement(ChevronDown, {
               className: "turn-presentation-chevron",
@@ -227,7 +434,7 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
           ),
           createElement(
             "div",
-            { className: "turn-presentation-body", ref: regionRef, tabIndex: 0 },
+            { className: "turn-presentation-body", tabIndex: 0 },
             processItems.length === 0 &&
               processActivities.length === 0 &&
               modelDrafts.length === 0 &&
@@ -247,6 +454,7 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
                       {
                         className: `turn-presentation-item turn-presentation-item--assistant turn-presentation-item--${(activity.phase ?? "UNKNOWN").toLowerCase()} turn-presentation-model-draft turn-presentation-model-draft--${activity.status.toLowerCase()}`,
                         key: activity.id,
+                        title: activity.text,
                       },
                       activity.phase === "COMMENTARY" || activity.phase === "FINAL_ANSWER"
                         ? createElement(AssistantMarkdown, null, activity.text)
@@ -262,13 +470,28 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
               ? null
               : createElement(
                   "section",
-                  { className: "turn-presentation-live", "aria-label": "实时活动" },
+                  {
+                    className: "turn-presentation-live",
+                    "aria-label": "实时活动",
+                    ...(props.runId === undefined ? {} : { "data-run-id": props.runId }),
+                    ...(props.conversationTurnId === undefined
+                      ? {}
+                      : { "data-conversation-turn-id": props.conversationTurnId }),
+                  },
                   processActivities.map((activity) =>
                     createElement(
                       "div",
                       {
                         className: `turn-presentation-live-item turn-presentation-live-item--${activity.status.toLowerCase()}`,
                         key: activity.id,
+                        ...(activity.kind === "TOOL_ACTIVITY"
+                          ? { "data-tool-category": activity.category }
+                          : {}),
+                        ...(activity.kind === "TOOL_ACTIVITY" &&
+                        activity.toolInvocationId !== undefined
+                          ? { "data-tool-invocation-id": activity.toolInvocationId }
+                          : {}),
+                        title: activity.text,
                         ...(activity.conversationTurnId === undefined
                           ? {}
                           : { "data-conversation-turn-id": activity.conversationTurnId }),
@@ -371,11 +594,14 @@ function renderItem(
     }
     case "TOOL": {
       const effects = "effects" in item ? item.effects : [];
+      const category = "category" in item ? item.category : undefined;
       return createElement(
         "article",
         {
           className: `turn-presentation-item turn-presentation-item--tool turn-presentation-item--${item.status.toLowerCase()}`,
           key: item.id,
+          ...(category === undefined ? {} : { "data-tool-category": category }),
+          "data-tool-invocation-id": item.toolInvocationId,
         },
         createElement(
           "span",
@@ -399,7 +625,11 @@ function renderItem(
                 effects.map((effect, index) =>
                   createElement(
                     "li",
-                    { key: `${item.id}:effect:${index}` },
+                    {
+                      key: `${item.id}:effect:${index}`,
+                      title: formatToolEffect(effect),
+                      className: "turn-presentation-tool-effect",
+                    },
                     formatToolEffect(effect),
                   ),
                 ),
@@ -646,10 +876,9 @@ function renderPresentationStatusIcon(
   }
 }
 
-function processSummary(active: boolean, durableCount: number, liveCount: number): string {
-  if (active) return liveCount > 0 ? `${liveCount} 条活动进行中` : "正在执行";
-  if (durableCount > 0) return `${durableCount} 条活动`;
-  return "无活动";
+function processSummary(active: boolean, activityCount: number): string {
+  if (active && activityCount === 0) return "正在启动任务";
+  return active ? `${activityCount} 项活动 · 运行中` : `${activityCount} 项活动`;
 }
 
 function isRunStatusActive(status: RunStatus): boolean {
@@ -660,24 +889,6 @@ function isRunStatusActive(status: RunStatus): boolean {
     status === "WAITING_RESOURCE" ||
     status === "VERIFYING"
   );
-}
-
-function taskElapsedMs(
-  runId: string,
-  startedAt: number,
-  items: readonly TurnPresentationItem[],
-  active: boolean,
-  now: number,
-): number {
-  const matchingSummary = items.find((item) => item.kind === "RUN_SUMMARY" && item.runId === runId);
-  if (matchingSummary !== undefined) return Math.max(0, matchingSummary.createdAt - startedAt);
-  if (active) return Math.max(0, now - startedAt);
-
-  const latestKnownRunActivityAt = items.reduce(
-    (latestAt, item) => (item.runId === runId ? Math.max(latestAt, item.createdAt) : latestAt),
-    startedAt,
-  );
-  return Math.max(0, latestKnownRunActivityAt - startedAt);
 }
 
 function formatTaskElapsed(durationMs: number): string {

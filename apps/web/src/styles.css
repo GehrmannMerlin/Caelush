@@ -5581,6 +5581,49 @@ body {
   margin: 0;
 }
 
+.session-conversation {
+  width: min(100%, 860px);
+  min-width: 0;
+  margin: 0 auto;
+}
+
+.turn-presentation-turn {
+  min-width: 0;
+  scroll-margin-block: 24px;
+}
+
+.turn-presentation-turn + .turn-presentation-turn {
+  margin-top: 30px;
+  padding-top: 20px;
+  border-top: 1px solid var(--web-line);
+}
+
+.session-scroll,
+.prompt-composer {
+  width: min(calc(100% - 96px), 860px);
+}
+
+@media (max-width: 880px) {
+  .session-scroll,
+  .prompt-composer {
+    width: min(calc(100% - 56px), 860px);
+  }
+}
+
+@media (max-width: 720px) {
+  .session-scroll,
+  .prompt-composer {
+    width: min(calc(100% - 36px), 860px);
+  }
+}
+
+@media (max-width: 480px) {
+  .session-scroll,
+  .prompt-composer {
+    width: min(calc(100% - 28px), 860px);
+  }
+}
+
 .turn-presentation-process,
 .turn-presentation-body,
 .turn-presentation-final {
@@ -5647,6 +5690,31 @@ body {
   overflow: visible;
   padding: 12px 0 4px;
   border-top: 0;
+}
+
+.turn-presentation-live {
+  padding: 2px 0 2px 30px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.turn-presentation-tool-effects {
+  display: grid;
+  gap: 3px;
+  max-width: 100%;
+  margin: 5px 0 0;
+  padding: 0;
+  color: #58718a;
+  font-size: 0.78rem;
+  list-style: none;
+}
+
+.turn-presentation-tool-effects li {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Fixed approval overlay keeps required decisions available while the session scrolls. */

@@ -11,6 +11,7 @@ const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext();
 const page = await context.newPage();
 const promptCacheOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "PROMPT_CACHE";
+const multiTurnOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "MULTI_TURN";
 const waitVisible = (locator, timeout = 15_000) => locator.waitFor({ state: "visible", timeout });
 const waitUntil = async (predicate, description, timeout = 15_000) => {
   const deadline = Date.now() + timeout;
@@ -357,6 +358,186 @@ try {
   await assertViewportSplitLayout({ scrollable: false });
   await startNewSession();
   await assertPermissionSelector();
+  if (multiTurnOnly) {
+    smokeStage = "focused multi-turn conversation rendering";
+    smokeStage = "submitting first completed Turn";
+    await submitPrompt("read browser fixture");
+    smokeStage = "first Turn final answer";
+    await waitVisible(exactText("Browser report"));
+    smokeStage = "first Run terminal status";
+    await waitVisible(
+      page
+        .locator("button.workspace-session-item")
+        .filter({ hasText: "read browser fixture" })
+        .locator('.session-status-icon[aria-label="已完成"]'),
+    );
+
+    smokeStage = "submitting second completed Turn";
+    await submitPrompt("multi-turn second task");
+    smokeStage = "second Turn final answer";
+    await waitVisible(exactText("Verified browser result."));
+    smokeStage = "second Run terminal status";
+    await waitVisible(
+      page
+        .locator("button.workspace-session-item")
+        .filter({ hasText: "read browser fixture" })
+        .locator('.session-status-icon[aria-label="已完成"]'),
+    );
+    const turns = page.locator(".turn-presentation-turn");
+    smokeStage = "two canonical Turns rendered";
+    await waitUntil(async () => (await turns.count()) === 2, "two independent presentation Turns");
+    const firstTurn = turns.nth(0);
+    const secondTurn = turns.nth(1);
+    smokeStage = "Turn 1 and Turn 2 ownership";
+    if (
+      !(await firstTurn.locator(".turn-presentation-item--user").innerText()).includes(
+        "read browser fixture",
+      )
+    ) {
+      throw new Error("the first Run user prompt is not inside Turn 1");
+    }
+    if (
+      !(await secondTurn.locator(".turn-presentation-item--user").innerText()).includes(
+        "multi-turn second task",
+      )
+    ) {
+      throw new Error("the second Run user prompt is not inside Turn 2");
+    }
+    if (
+      !(await firstTurn.locator(".turn-presentation-final").innerText()).includes("Browser report")
+    ) {
+      throw new Error("Turn 1 final answer is not inside Turn 1");
+    }
+    if (
+      !(await secondTurn.locator(".turn-presentation-final").innerText()).includes(
+        "Verified browser result.",
+      )
+    ) {
+      throw new Error("Turn 2 final answer is not inside Turn 2");
+    }
+    const firstSummary = firstTurn.locator("details.turn-presentation-process > summary");
+    const secondSummary = secondTurn.locator("details.turn-presentation-process > summary");
+    smokeStage = "Turn-local collapse state";
+    await firstSummary.click();
+    await waitUntil(
+      () => firstTurn.locator("details.turn-presentation-process").evaluate((node) => node.open),
+      "Turn 1 process to expand",
+    );
+    if (
+      await secondTurn.locator("details.turn-presentation-process").evaluate((node) => node.open)
+    ) {
+      throw new Error("expanding Turn 1 also expanded Turn 2");
+    }
+    await secondSummary.click();
+    await waitUntil(
+      () => secondTurn.locator("details.turn-presentation-process").evaluate((node) => node.open),
+      "Turn 2 process to expand",
+    );
+    await firstSummary.click();
+    await waitUntil(
+      () => firstTurn.locator("details.turn-presentation-process").evaluate((node) => !node.open),
+      "Turn 1 process to collapse",
+    );
+    if (!(await firstTurn.locator(".turn-presentation-final").isVisible())) {
+      throw new Error("collapsing Turn 1 hid its Final answer");
+    }
+    if (
+      !(await secondTurn.locator("details.turn-presentation-process").evaluate((node) => node.open))
+    ) {
+      throw new Error("collapsing Turn 1 changed Turn 2's expanded state");
+    }
+    const conversationText = await page.locator(".session-conversation").innerText();
+    if (
+      !(
+        conversationText.indexOf("Browser report") <
+        conversationText.indexOf("multi-turn second task")
+      )
+    ) {
+      throw new Error("the second User prompt appears before the first Turn final answer");
+    }
+
+    smokeStage = "submitting active Tool Turn";
+    await submitPrompt("multi-turn patch fixture");
+    smokeStage = "active Run control";
+    await waitVisible(page.locator("button.cancel-button"));
+    smokeStage = "durable structured Tool row";
+    const activeTurn = turns.nth(2);
+    try {
+      await waitVisible(activeTurn.locator('[data-tool-category="EDIT"]'));
+    } catch (error) {
+      const evidence = await activeTurn.evaluate((element) => ({
+        runStatus: element.getAttribute("data-run-status"),
+        items: Array.from(
+          element.querySelectorAll(".turn-presentation-item, .turn-presentation-live-item"),
+        ).map((item) => ({
+          className: item.className,
+          category: item.getAttribute("data-tool-category"),
+          text: item.textContent?.slice(0, 500),
+        })),
+      }));
+      throw new Error(
+        "Active Turn has no EDIT Tool Activity: " + JSON.stringify(evidence) + "; " + error.message,
+      );
+    }
+    smokeStage = "structured File effect";
+    await waitVisible(
+      activeTurn.locator(".turn-presentation-tool-effects").filter({ hasText: "fixture.txt" }),
+    );
+    smokeStage = "Live and durable invocation reconciliation";
+    await waitUntil(
+      async () => (await activeTurn.locator("[data-tool-invocation-id]").count()) === 1,
+      "the durable Tool row to reconcile its live invocation",
+    );
+    smokeStage = "historical Turn live-state isolation";
+    if (
+      (await firstTurn.locator(".turn-presentation-live, .turn-presentation-thinking").count()) !==
+      0
+    ) {
+      throw new Error("the active Run's live state leaked into a historical Turn");
+    }
+    if (
+      (await secondTurn.locator(".turn-presentation-live, .turn-presentation-thinking").count()) !==
+      0
+    ) {
+      throw new Error("the active Run's live state leaked into a historical Turn");
+    }
+    if (
+      !(await activeTurn.locator(".turn-presentation-item--tool").innerText()).includes(
+        "fixture.txt",
+      )
+    ) {
+      throw new Error("the completed Tool effect is missing from the active Turn process");
+    }
+
+    smokeStage = "cancel active Tool Turn";
+    await page.locator("button.cancel-button").click();
+    smokeStage = "cancelled Run status";
+    await waitUntil(
+      async () => (await activeTurn.getAttribute("data-run-status")) === "CANCELLED",
+      "the active Turn to settle as CANCELLED",
+    );
+    smokeStage = "cancelled Run summary and retained File effect";
+    await waitVisible(activeTurn.locator(".turn-presentation-item--run-summary"));
+    await activeTurn.locator("details.turn-presentation-process > summary").click();
+    await waitUntil(
+      () => activeTurn.locator("details.turn-presentation-process").evaluate((node) => node.open),
+      "cancelled Turn process to expand",
+    );
+    if (
+      !(await activeTurn.locator(".turn-presentation-item--tool").innerText()).includes(
+        "fixture.txt",
+      )
+    ) {
+      throw new Error("cancelling the Run hid its already completed File effect");
+    }
+
+    await context.close();
+    await browser.close();
+    process.stdout.write(
+      "[browser-runner] focused multi-turn rendering, isolation, Tool effects, and collapse checks passed.\n",
+    );
+    process.exit(0);
+  }
   await submitPrompt("read browser fixture");
   await waitVisible(exactText("Verified browser result."));
   await assertSubmittedPreset("read browser fixture", "WORKSPACE_WRITE");
@@ -706,11 +887,11 @@ try {
     });
   if (tooltipStyle.backgroundColor !== "rgb(30, 79, 133)")
     throw new Error("workspace path tooltip is not solid blue");
-} catch {
+} catch (error) {
   await context.close().catch(() => undefined);
   await browser.close().catch(() => undefined);
   throw new Error(
-    `Browser fixture smoke failed during ${smokeStage}; page content and screenshots were suppressed.`,
+    `Browser fixture smoke failed during ${smokeStage}: ${error instanceof Error ? error.message : "unknown error"}; page content and screenshots were suppressed.`,
   );
 }
 await context.close();

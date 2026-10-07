@@ -901,6 +901,49 @@ describe("WebSessionManager", () => {
     manager.dispose();
   });
 
+  it("publishes the optimistic user before waiting for the V3 presentation refresh", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const run = makeRun({ sessionId: session.id, goal: "show immediately" });
+    const client = makeClient({ createSessionResult: session, createRunResult: run });
+    let resolvePresentation!: (response: SessionTurnPresentationResponseV3) => void;
+    const presentationPromise = new Promise<SessionTurnPresentationResponseV3>((resolve) => {
+      resolvePresentation = resolve;
+    });
+    client.getSessionTurnPresentation.mockImplementation(async () => presentationPromise);
+    const info = makeInfo({
+      capabilities: {
+        ...makeInfo().capabilities,
+        sessionTranscript: true,
+        sessionTurnPresentation: true,
+      },
+    });
+    const manager = new WebSessionManager({ client, workspace, info });
+    manager.beginDraft();
+
+    const submission = manager.submitPrompt("show immediately");
+    await waitFor(() =>
+      manager.getSnapshot().history.some((entry) => entry.id === `optimistic:user:${run.id}`),
+    );
+
+    expect(manager.getSnapshot().history).toContainEqual(
+      expect.objectContaining({
+        id: `optimistic:user:${run.id}`,
+        runId: run.id,
+        kind: "USER",
+        text: "show immediately",
+      }),
+    );
+    expect(manager.getSnapshot().turnPresentation).toBeUndefined();
+
+    resolvePresentation({ capabilityVersion: 3, turns: [] });
+    await expect(submission).resolves.toBe(true);
+    expect(
+      manager.getSnapshot().history.some((entry) => entry.id === `optimistic:user:${run.id}`),
+    ).toBe(true);
+    expect(manager.getSnapshot().turnPresentation).toEqual({ capabilityVersion: 3, turns: [] });
+    manager.dispose();
+  });
+
   it("retains no fabricated history when Session admission fails", async () => {
     const client = makeClient();
     client.createSession.mockRejectedValue(new Error("database detail"));

@@ -14,6 +14,7 @@ import {
 
 import {
   flattenTurnsForLegacyRenderer,
+  SessionConversation,
   TurnPresentationFeed,
 } from "../src/components/turn-presentation-feed.js";
 import { ReconnectBanner } from "../src/components/reconnect-banner.js";
@@ -122,7 +123,7 @@ describe("TurnPresentationFeed", () => {
       ],
     };
     const liveHtml = renderToStaticMarkup(
-      <TurnPresentationFeed
+      <SessionConversation
         presentation={{
           capabilityVersion: 3,
           turns: [
@@ -136,6 +137,7 @@ describe("TurnPresentationFeed", () => {
             },
           ],
         }}
+        activeRun={{ id: runId, status: "RUNNING" }}
         liveActivity={liveActivity}
       />,
     );
@@ -185,14 +187,22 @@ describe("TurnPresentationFeed", () => {
         },
       ],
     } as SessionTurnPresentationResponse;
-    const durableHtml = renderToStaticMarkup(<TurnPresentationFeed presentation={durable} />);
+    const durableHtml = renderToStaticMarkup(
+      <SessionConversation
+        presentation={durable as Extract<SessionTurnPresentationResponse, { capabilityVersion: 3 }>}
+      />,
+    );
     expect(durableHtml).toContain("login.html");
     expect(durableHtml).toContain("新建");
     expect(durableHtml).toContain("+214");
     expect(durableHtml).not.toContain("*** Begin Patch");
 
     const reconciledHtml = renderToStaticMarkup(
-      <TurnPresentationFeed presentation={durable} liveActivity={liveActivity} />,
+      <SessionConversation
+        presentation={durable as Extract<SessionTurnPresentationResponse, { capabilityVersion: 3 }>}
+        activeRun={{ id: runId, status: "RUNNING" }}
+        liveActivity={liveActivity}
+      />,
     );
     expect(reconciledHtml).toContain("login.html");
     expect(reconciledHtml).not.toContain("turn-presentation-live-item");
@@ -233,8 +243,10 @@ describe("TurnPresentationFeed", () => {
     } as SessionTurnPresentationResponse;
 
     const html = renderToStaticMarkup(
-      <TurnPresentationFeed
-        presentation={waitingPresentation}
+      <SessionConversation
+        presentation={
+          waitingPresentation as Extract<SessionTurnPresentationResponse, { capabilityVersion: 3 }>
+        }
         activeRun={{ id: runId, status: "WAITING_APPROVAL" }}
       />,
     );
@@ -243,83 +255,11 @@ describe("TurnPresentationFeed", () => {
     expect(html).toContain("等待批准后执行");
   });
 
-  it("adapts V3 Turns for the legacy renderer without changing their Run grouping order", () => {
-    const runOneId = createRunId();
-    const runTwoId = createRunId();
-    const response = {
-      capabilityVersion: 3,
-      turns: [
-        {
-          runId: runOneId,
-          conversationTurnId: "turn-one",
-          runStatus: "COMPLETED",
-          openedAt: 1,
-          closedAt: 2,
-          highWatermark: 85,
-          items: [
-            {
-              id: "run-one-user",
-              runId: runOneId,
-              conversationTurnId: "turn-one",
-              ordinal: 0,
-              status: "COMPLETED",
-              createdAt: 1,
-              kind: "USER",
-              text: "first",
-            },
-            {
-              id: "run-one-final",
-              runId: runOneId,
-              conversationTurnId: "turn-one",
-              ordinal: 1,
-              status: "COMPLETED",
-              createdAt: 2,
-              kind: "ASSISTANT",
-              phase: "FINAL_ANSWER",
-              text: "first done",
-            },
-          ],
-        },
-        {
-          runId: runTwoId,
-          conversationTurnId: "turn-two",
-          runStatus: "COMPLETED",
-          openedAt: 3,
-          closedAt: 4,
-          highWatermark: 7,
-          items: [
-            {
-              id: "run-two-user",
-              runId: runTwoId,
-              conversationTurnId: "turn-two",
-              ordinal: 0,
-              status: "COMPLETED",
-              createdAt: 3,
-              kind: "USER",
-              text: "second",
-            },
-            {
-              id: "run-two-final",
-              runId: runTwoId,
-              conversationTurnId: "turn-two",
-              ordinal: 1,
-              status: "COMPLETED",
-              createdAt: 4,
-              kind: "ASSISTANT",
-              phase: "FINAL_ANSWER",
-              text: "second done",
-            },
-          ],
-        },
-      ],
-    } as SessionTurnPresentationResponse;
-
-    expect(flattenTurnsForLegacyRenderer(response).map((item) => item.id)).toEqual([
-      "run-one-user",
-      "run-one-final",
-      "run-two-user",
-      "run-two-final",
-    ]);
+  it("keeps the V1/V2 compatibility renderer limited to its legacy item page", () => {
+    const legacy = presentation();
+    expect(flattenTurnsForLegacyRenderer(legacy).map((item) => item.id)).toEqual(
+      legacy.items.map((item) => item.id),
+    );
   });
 
   it("shows animated thinking text while an LLM is active without transient output", () => {

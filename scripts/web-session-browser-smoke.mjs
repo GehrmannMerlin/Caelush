@@ -34,6 +34,7 @@ import { resolvePromptCacheArtifactDirectory } from "./browser-smoke-artifact-pa
 const FIXTURE_PROVIDER_ID = "browser-fixture";
 const FIXTURE_MODEL_ID = "browser-fixture-model";
 let providerRecoveryAttempts = 0;
+let multiTurnPatchRequests = 0;
 
 /**
  * The sandbox Runner as a host with a working packaged artifact reports it.
@@ -158,6 +159,11 @@ async function handleModelRequest(request, response) {
   const promptText = messages
     .map((message) => (typeof message?.content === "string" ? message.content : ""))
     .join("\n");
+  const multiTurnPromptIndex = messages.findLastIndex(
+    (message) =>
+      typeof message?.content === "string" && message.content.includes("multi-turn patch fixture"),
+  );
+  const isMultiTurnPatch = multiTurnPromptIndex >= 0;
 
   // The task-acceptance review is a host action, not an Agent turn: it must answer with strict JSON and
   // no tool calls, or the completion gate reports REVIEWER_RESPONSE_INVALID.
@@ -189,6 +195,25 @@ async function handleModelRequest(request, response) {
       response,
       toolCallChunks("read_file", { path: "fixture.txt" }, "browser-read-fixture"),
     );
+    return;
+  }
+  if (isMultiTurnPatch) {
+    multiTurnPatchRequests += 1;
+    if (multiTurnPatchRequests === 1) {
+      writeSse(
+        response,
+        toolCallChunks(
+          "apply_patch",
+          {
+            patch:
+              "*** Begin Patch\n*** Update File: fixture.txt\n@@\n-browser fixture\n+multi-turn fixture\n*** End Patch",
+          },
+          "browser-multi-turn-patch",
+        ),
+      );
+    } else {
+      holdStreamOpen(request, response);
+    }
     return;
   }
   if (promptText.includes("read browser fixture") && hasToolResult) {
@@ -321,6 +346,7 @@ function toolCallChunks(name, input, toolCallId) {
 }
 
 const promptCacheOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "PROMPT_CACHE";
+const multiTurnOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "MULTI_TURN";
 const configuredArtifactDirectory = process.env.CAELUSH_BROWSER_SMOKE_ARTIFACT_DIR;
 const browserArtifacts = promptCacheOnly
   ? await resolvePromptCacheArtifactDirectory(process.cwd(), configuredArtifactDirectory)
@@ -381,7 +407,18 @@ try {
   }
   await mkdir(browserArtifacts, { recursive: true });
   const result = await runBrowserSmoke(daemon.url + "/", browserArtifacts, workspace);
-  if (result === 0 && !promptCacheOnly) {
+  if (result === 0 && multiTurnOnly) {
+    const fixture = await readFile(join(directory, "fixture.txt"), "utf8");
+    if (fixture !== "multi-turn fixture\n") {
+      throw new Error(
+        "Focused multi-turn presentation did not persist its Tool effect: " + fixture,
+      );
+    }
+    process.stdout.write(
+      "[browser-smoke] focused multi-turn Tool effect persisted: " + JSON.stringify(fixture) + "\n",
+    );
+  }
+  if (result === 0 && !promptCacheOnly && !multiTurnOnly) {
     const fixture = await readFile(join(directory, "fixture.txt"), "utf8");
     if (fixture !== "patched browser fixture\n") {
       throw new Error("Browser approval flow did not persist the verified patch.");
