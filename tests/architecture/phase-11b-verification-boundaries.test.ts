@@ -27,9 +27,7 @@ describe("Phase 11B verification boundaries", () => {
       /from\s+["']@caelush\/(?:core|tools|storage|llm|daemon|events)["']/,
     );
     expect(verification).not.toMatch(/from\s+["']node:(?:child_process|fs|net|http|https)["']/);
-    expect(verification).not.toMatch(
-      /\b(?:ToolInvocation|AgentStep|Conversation)\b/,
-    );
+    expect(verification).not.toMatch(/\b(?:ToolInvocation|AgentStep|Conversation)\b/);
     expect(verification).not.toMatch(/\b(?:run\.completed|COMPLETED)\b/);
   });
 
@@ -51,7 +49,9 @@ describe("Phase 11B verification boundaries", () => {
   it("keeps verification command admission and execution free of host side effects", async () => {
     const verification = await packageSources("verification");
     const security = await packageSources("security");
-    expect(verification).not.toMatch(/(?<![.\w])(?:spawn|exec|execFile|fetch|readFile|writeFile)\s*\(/);
+    expect(verification).not.toMatch(
+      /(?<![.\w])(?:spawn|exec|execFile|fetch|readFile|writeFile)\s*\(/,
+    );
     expect(security).not.toMatch(/(?<![.\w])(?:spawn|execFile|fetch|readFile|writeFile)\s*\(/);
   });
 
@@ -76,8 +76,8 @@ describe("Phase 11B verification boundaries", () => {
       "utf8",
     );
     expect(contextDocs).toContain("ProjectInspector.inspect()");
-    expect(readme).toContain("Phase 11B — Verification Execution: **COMPLETED**");
-    expect(readme).toContain("Phase 11D — Completion Authority & Finalization: **COMPLETED**");
+    expect(readme).toContain("完成候选");
+    expect(readme).toContain("只有 Core/RunController 拥有把 Run 转为 `COMPLETED` 的权限");
     expect(agents).toContain("Phase 11B rules:");
   });
 });

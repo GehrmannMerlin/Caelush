@@ -1,12 +1,7 @@
-import {
-  AgentRunSchema,
-  createRunId,
-  createSessionId,
-  createTimestampMs,
-  createWorkspaceId,
-} from "@caelush/protocol";
+import { createSessionId, createTimestampMs } from "@caelush/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { openCaelushStorage, type CaelushStorage } from "../src/index.js";
+import { makeRun as makeStorageRun } from "./support/fixtures.js";
 
 const stores: CaelushStorage[] = [];
 
@@ -15,15 +10,11 @@ afterEach(async () => {
 });
 
 async function addRun(storage: CaelushStorage) {
-  const run = AgentRunSchema.parse({
-    id: createRunId(),
-    sessionId: createSessionId(),
+  const run = makeStorageRun(createSessionId(), {
     goal: "Phase 7E artifact",
     status: "RUNNING",
-    workspace: { id: createWorkspaceId(), path: "/repo" },
     model: { provider: "fixture", model: "fixture" },
     runtime: { id: "local", kind: "fixture" },
-    permissionProfile: "READ_ONLY",
     approvalPolicy: "ALWAYS_ASK",
     limits: { maxSteps: 2, maxToolCalls: 2, timeoutMs: 1000 },
     createdAt: createTimestampMs(1),

@@ -233,7 +233,10 @@ describeWindows("native Windows sandbox enforcement boundaries", () => {
     await expect(controller.getStatus(junctionRoot, "WORKSPACE_WRITE")).resolves.toBe(
       "UNAVAILABLE",
     );
-    await expect(controller.prepare(junctionRoot, "WORKSPACE_WRITE")).resolves.toBe("UNAVAILABLE");
+    await expect(controller.prepare(junctionRoot, "WORKSPACE_WRITE")).resolves.toEqual({
+      status: "FAILED",
+      reasonCode: "WINDOWS_PATH_BOUNDARY_REPARSE_UNSUPPORTED",
+    });
 
     // The control proves those two answers come from the reparse point and not from a controller
     // that cannot prepare anything at all.

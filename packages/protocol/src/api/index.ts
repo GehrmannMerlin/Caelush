@@ -161,6 +161,7 @@ export {
   ContextUsageResponseSchema,
   PromptCacheRequestPurposeSchema,
   PromptCachePurposeUsageSchema,
+  PromptCacheSurfaceSegmentsSchema,
   PromptCacheStatusSchema,
   PromptCacheUsageSchema,
 } from "./context-usage.js";
@@ -169,6 +170,7 @@ export type {
   ContextUsageResponse,
   PromptCacheRequestPurpose,
   PromptCachePurposeUsage,
+  PromptCacheSurfaceSegments,
   PromptCacheStatus,
   PromptCacheUsage,
 } from "./context-usage.js";

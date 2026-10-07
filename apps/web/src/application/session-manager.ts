@@ -1325,6 +1325,17 @@ export class WebSessionManager {
           return;
         }
         if (!this.isCurrentStream(active, generation)) return;
+        // A status.changed event can describe an earlier nonterminal boundary while a fast Run has
+        // already advanced further in Storage. Keep consuming the ordered event stream in that case;
+        // settling from the newer read would cancel the stream before its committed verification and
+        // terminal events reached the Timeline.
+        if (
+          isTerminalRunStatus(refreshed.status) &&
+          event.type === "status.changed" &&
+          !isTerminalRunStatus(event.payload.to)
+        ) {
+          continue;
+        }
         const terminalTimeline = isTimelineTerminalRunStatus(refreshed.status)
           ? flushTimelineForTerminal(this.snapshot.timeline, refreshed.status)
           : this.snapshot.timeline;

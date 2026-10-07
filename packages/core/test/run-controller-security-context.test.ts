@@ -51,6 +51,14 @@ describe("RunController security authority", () => {
     expect(createToolSecurityContext(run, state)).toEqual({
       permissionProfile: "PROJECT_ACCESS",
       approvalPolicy: "ON_BOUNDARY",
+      securityPolicy: {
+        presetId: "WORKSPACE_WRITE",
+        presetVersion: 1,
+        filesystemBoundary: "WORKSPACE_READ_WRITE",
+        processBoundary: "WORKSPACE_WRITE",
+        requiredEnforcement: "OS_RESTRICTED",
+        policyDigest: run.securityPolicy!.policyDigest,
+      },
     });
   });
 

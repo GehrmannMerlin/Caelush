@@ -10,6 +10,7 @@ import {
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildDaemonApp, RunEventHub, startDaemon } from "../src/index.js";
+import { SecurityCapabilityService } from "../src/services/security-capability-service.js";
 import { nextSseFrame, sseFrameId } from "./support/sse-client.js";
 import { commitDurableTestEvent } from "./support/committed-event.js";
 
@@ -72,6 +73,7 @@ async function startFactory(databasePath: string) {
     runs: storage.runs,
     eventHub,
     activeStreams,
+    securityCapabilityService: new SecurityCapabilityService(),
     config: { host: "127.0.0.1", port: 0, sseHeartbeatIntervalMs: 0 },
   });
   await app.listen({ host: "127.0.0.1", port: 0 });
@@ -110,8 +112,7 @@ describe("Caelush local service E2E", () => {
         workspace: { id: createWorkspaceId(), path: "C:/workspace" },
         model: { provider: "test", model: "test-model" },
         runtime: { id: "local", kind: "test" },
-        permissionProfile: "READ_ONLY",
-        approvalPolicy: "ALWAYS_ASK",
+        preset: { id: "FULL_ACCESS", expectedVersion: 1 },
         limits: { maxSteps: 10, maxToolCalls: 10, timeoutMs: 1000 },
       }),
     });
@@ -152,7 +153,7 @@ describe("Caelush local service E2E", () => {
     await publishDurable(hub, durableDraft(run.id, session.id, "4"));
     const liveAResult = await liveA;
     const liveBResult = await liveB;
-    expect(sseFrameId(new TextDecoder().decode(liveAResult.value))).toBe("4");
+    expect(sseFrameId(new TextDecoder().decode(liveAResult.value))).toBe("5");
     expect(new TextDecoder().decode(liveBResult.value)).toContain('"chunk":"4"');
 
     const ephemeralA = reconnectReader.read();

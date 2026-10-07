@@ -109,13 +109,14 @@ async function runOnce(
     defaultWorkspace: workspace,
     defaultModel: { provider: "fixture", model: "fixture-model" },
   });
+  const registeredWorkspace = session.defaultWorkspace;
+  if (registeredWorkspace === undefined) throw new Error("test Workspace was not registered");
   const run = await client.createRun(session.id, {
     goal: "describe the workspace",
-    workspace,
+    workspace: registeredWorkspace,
     model: { provider: "fixture", model: "fixture-model" },
     runtime: { id: "local", kind: "local" },
-    permissionProfile: "PROJECT_ACCESS",
-    approvalPolicy: "NEVER_ASK",
+    preset: { id: "FULL_ACCESS", expectedVersion: 1 },
     limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 15_000 },
   });
   await client.startRun(run.id);

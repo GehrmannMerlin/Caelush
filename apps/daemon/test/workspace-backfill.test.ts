@@ -9,6 +9,7 @@ import {
   createWorkspaceId,
 } from "@caelush/protocol";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
+import { expandPermissionPreset } from "@caelush/security";
 import { afterEach, describe, expect, it } from "vitest";
 import { WorkspaceService } from "../src/workspaces/workspace-service.js";
 import { backfillSessionWorkspaceOwnership } from "../src/workspaces/workspace-backfill.js";
@@ -56,7 +57,12 @@ function run(sessionId: ReturnType<typeof createSessionId>, workspace: string) {
     model: { provider: "test", model: "test" },
     runtime: { id: "local", kind: "test" },
     permissionProfile: "READ_ONLY",
-    approvalPolicy: "ALWAYS_ASK",
+    approvalPolicy: "ON_BOUNDARY",
+    securityPolicy: expandPermissionPreset({
+      presetId: "VIEW_ONLY",
+      expectedVersion: 1,
+      createdAt: new Date(1).toISOString(),
+    }),
     limits: { maxSteps: 1, maxToolCalls: 1, timeoutMs: 1000 },
     createdAt: 1,
     finishedAt: 2,

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildDaemonApp } from "../src/index.js";
+import { SecurityCapabilityService } from "../src/services/security-capability-service.js";
 import { WorkspaceService } from "../src/workspaces/workspace-service.js";
 
 let storage: CaelushStorage | undefined;
@@ -30,6 +31,7 @@ async function createApp() {
     runs: storage.runs,
     workspaces: storage.workspaces,
     workspaceService,
+    securityCapabilityService: new SecurityCapabilityService(),
     eventHub: { watch: async function* () {} } as never,
     config: { host: "127.0.0.1", port: 43120, sseHeartbeatIntervalMs: 15_000 },
   });
@@ -48,8 +50,7 @@ const runInput = (workspace: { id: string; path: string }) => ({
   workspace,
   model: { provider: "test", model: "test-model" },
   runtime: { id: "local", kind: "test" },
-  permissionProfile: "READ_ONLY",
-  approvalPolicy: "ALWAYS_ASK",
+  preset: { id: "FULL_ACCESS", expectedVersion: 1 },
   limits: { maxSteps: 10, maxToolCalls: 10, timeoutMs: 1_000 },
 });
 

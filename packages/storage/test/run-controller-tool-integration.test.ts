@@ -7,12 +7,14 @@ import {
   createApprovalRequestId,
   createEventId,
   createLLMCallId,
-  createRunId,
   createSessionId,
   createStepId,
   createTimestampMs,
   createToolInvocationId,
   createWorkspaceId,
+  createVerificationCheckId,
+  createVerificationEvidenceId,
+  createVerificationPlanId,
   type TimestampMs,
   type ToolInvocationId,
 } from "@caelush/protocol";
@@ -20,6 +22,7 @@ import {
   RunController,
   RunDeadlineRegistry,
   RunRetryRegistry,
+  createCodingCompletionAssembly,
   toContextObservationProjection,
   type AIModelTurnResult,
 } from "@caelush/core";
@@ -59,7 +62,7 @@ import {
 import { describe, expect, it } from "vitest";
 import { LocalRuntime, createLocalRuntimeResolver } from "@caelush/runtime";
 import type { CaelushStorage } from "../src/index.js";
-import { verificationPlanner } from "./support/fixtures.js";
+import { makeRun as makeStorageRun, verificationPlanner } from "./support/fixtures.js";
 import { openToolStorage } from "./support/tool-settlement-decoder.js";
 import { CaelushToolExecutionGate, createV1ToolApprovalRequestFactory } from "@caelush/security";
 import { aiError, modelTurnResult } from "./support/model-turns.js";
@@ -166,9 +169,7 @@ function makeRun(
   runtimeKind = "fixture",
   overrides: Partial<ReturnType<typeof AgentRunSchema.parse>> = {},
 ) {
-  return AgentRunSchema.parse({
-    id: createRunId(),
-    sessionId: createSessionId(),
+  return makeStorageRun(createSessionId(), {
     goal: "inspect values",
     status: "PENDING",
     workspace: { id: createWorkspaceId(), path: pathname },
@@ -415,21 +416,55 @@ function createController(
     ...(runtime === undefined ? {} : { tools: runtime.registry.modelSpecs() }),
     createStepId: () => createStepId(),
   });
+  const configResolver = {
+    resolve: async () => ({
+      baseSystemPrompt: "synthetic",
+      contextLimits: { maxInputTokens: 1000 },
+    }),
+  };
+  const completion = createCodingCompletionAssembly({
+    clock,
+    configResolver,
+    planner: verificationPlanner,
+    planIdFactory: createVerificationPlanId,
+    checkIdFactory: createVerificationCheckId,
+    evidenceIdFactory: createVerificationEvidenceId,
+    executionStore: storage.verificationExecution,
+    executionRecovery: storage.verificationExecution,
+    reviewer: {
+      review: async ({ bundle }) => ({
+        status: "PASSED" as const,
+        review: { verdict: "PASS" as const, summary: "The fixture candidate is acceptable." },
+        reviewInputHash: bundle.reviewInputHash,
+      }),
+    },
+    workspace: {
+      inspect: async () => ({ inspectionComplete: true, paths: [] }),
+    },
+    git: {
+      status: async () => ({ available: false }),
+      diff: async ({ path: changedPath }) => ({ path: changedPath, diff: "", truncated: false }),
+    },
+    evidenceSanitizer: {
+      redactText: (value) => value,
+      boundText: (value, maxBytes) => ({
+        text: value.slice(0, maxBytes),
+        omittedBytes: Math.max(0, Buffer.byteLength(value, "utf8") - maxBytes),
+        truncated: Buffer.byteLength(value, "utf8") > maxBytes,
+      }),
+    },
+  });
   return new RunController({
     agentExecution: agentExecution.factory,
     executionStore: storage.execution,
+    completionStore: storage.execution,
     events: eventBus,
-    configResolver: {
-      resolve: async () => ({
-        baseSystemPrompt: "synthetic",
-        contextLimits: { maxInputTokens: 1000 },
-      }),
-    },
+    configResolver,
     messages,
+    completion,
     ...(runtime === undefined ? {} : { toolTurn: canonicalToolTurn(runtime) }),
     clock,
     eventIdFactory: { create: createEventId },
-    verificationPlanner,
     approvals: storage.approvals,
     ...(deadlineRegistry === undefined ? {} : { deadlineRegistry }),
     ...(retryRegistry === undefined ? {} : { retryRegistry }),
@@ -512,7 +547,8 @@ describe("RunController automatic Tool Batch integration", () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     expect(toolCalls).toEqual(["call-tool"]);
-    expect((await storage.runs.get(run.id))?.status).toBe("VERIFYING");
+    const retriedRun = await storage.runs.get(run.id);
+    expect(retriedRun?.status).toBe("COMPLETED");
     expect(await storage.steps.listByRun(run.id)).toHaveLength(3);
     expect((await projectedMessages(storage, run.id)).map((entry) => entry.role)).toEqual([
       "user",
@@ -560,7 +596,7 @@ describe("RunController automatic Tool Batch integration", () => {
             {
               id: "call-search",
               name: "search_text",
-              input: { pattern: "AgentLoop", include: "*.ts" },
+              input: { pattern: "AgentLoop", include: "src/*.ts" },
             },
           ],
           "TOOL_CALLS",
@@ -574,7 +610,8 @@ describe("RunController automatic Tool Batch integration", () => {
     try {
       const result = await controller.start(run.id);
 
-      expect(result.status).toBe("AWAITING_VERIFICATION");
+      expect(result.status).toBe("TERMINAL");
+      expect(result.run.status).toBe("COMPLETED");
       expect(observed[0]?.tools).toEqual(runtime.registry.modelSpecs());
       expect(observed[1]?.messages.slice(-4)).toEqual([
         expect.objectContaining({ toolCallId: "call-list", isError: false }),
@@ -618,7 +655,7 @@ describe("RunController automatic Tool Batch integration", () => {
     const beforeReadme = await readFile(path.join(workspace, "README.md"));
 
     const storage = await openToolStorage({ path: ":memory:" });
-    const run = makeRun(workspace, "local");
+    const run = makeRun(workspace, "local", { permissionProfile: "PROJECT_ACCESS" });
     await seedRun(storage, run);
     const eventBus = new EventBus(storage.eventReader);
     const runtime = createFilesystemRuntime(storage, eventBus);
@@ -668,7 +705,8 @@ describe("RunController automatic Tool Batch integration", () => {
     try {
       const result = await controller.start(run.id);
 
-      expect(result.status).toBe("AWAITING_VERIFICATION");
+      expect(result.status).toBe("TERMINAL");
+      expect(result.run.status).toBe("COMPLETED");
       expect(observed[1]?.messages.slice(-3)).toEqual([
         expect.objectContaining({
           toolCallId: "call-patch",
@@ -707,16 +745,15 @@ describe("RunController automatic Tool Batch integration", () => {
     }
   });
 
-  it("derives policy from AgentRun and stops a dangerous patch at approval", async () => {
+  it("derives the workspace-write preset from AgentRun and admits a workspace patch", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "caelush-phase-9a-approval-e2e-"));
     const workspace = path.join(directory, "workspace");
     await mkdir(workspace, { recursive: true });
     await writeFile(path.join(workspace, "README.md"), "unchanged\n", "utf8");
     const storage = await openToolStorage({ path: ":memory:" });
-    const run = AgentRunSchema.parse({
-      ...makeRun(workspace, "local"),
+    const run = makeRun(workspace, "local", {
       permissionProfile: "PROJECT_ACCESS",
-      approvalPolicy: "DANGEROUS_ONLY",
+      approvalPolicy: "ON_BOUNDARY",
     });
     await seedRun(storage, run);
     const eventBus = new EventBus(storage.eventReader);
@@ -745,18 +782,22 @@ describe("RunController automatic Tool Batch integration", () => {
           ],
           "TOOL_CALLS",
         ),
+        turn("Patch applied successfully.", [], "STOP"),
       ],
       runtime,
+      [],
+      Date.now() + 60_000,
     );
 
     try {
       const result = await controller.start(run.id);
-      expect(result.status).toBe("WAITING_APPROVAL");
-      expect(await readFile(path.join(workspace, "README.md"), "utf8")).toBe("unchanged\n");
+      expect(result.status).toBe("TERMINAL");
+      expect(result.run.status).toBe("COMPLETED");
+      expect(await readFile(path.join(workspace, "README.md"), "utf8")).toBe("changed\n");
       expect(await storage.toolInvocations.listByRun(run.id)).toMatchObject([
-        { status: "WAITING_APPROVAL", toolName: "apply_patch" },
+        { status: "COMPLETED", toolName: "apply_patch" },
       ]);
-      expect((await storage.runs.get(run.id))?.status).toBe("WAITING_APPROVAL");
+      expect((await storage.runs.get(run.id))?.status).toBe("COMPLETED");
     } finally {
       await storage.close();
       await rm(directory, { recursive: true, force: true });
@@ -805,7 +846,8 @@ describe("RunController automatic Tool Batch integration", () => {
 
     const result = await controller.start(run.id);
 
-    expect(result.status).toBe("AWAITING_VERIFICATION");
+    expect(result.status).toBe("TERMINAL");
+    expect(result.run.status).toBe("COMPLETED");
     expect(order).toEqual(["start:call-A", "finish:call-A", "start:call-B", "finish:call-B"]);
     expect(maxActive).toBe(1);
     expect(observed).toHaveLength(2);
@@ -848,7 +890,7 @@ describe("RunController automatic Tool Batch integration", () => {
           limit: 1000,
         })
       ).map((event) => event.type),
-    ).not.toContain("run.completed");
+    ).toContain("run.completed");
     await storage.close();
   });
 
@@ -1035,7 +1077,8 @@ describe("RunController automatic Tool Batch integration", () => {
       action: "APPROVE",
       scope: "ONCE",
     });
-    expect(resolved.status).toBe("AWAITING_VERIFICATION");
+    expect(resolved.status).toBe("TERMINAL");
+    expect(resolved.run.status).toBe("COMPLETED");
     expect(calls).toEqual(["call-A", "call-B", "call-C"]);
     expect(observed).toHaveLength(2);
     expect(observed[1]?.messages.slice(-3)).toEqual([
@@ -1085,7 +1128,8 @@ describe("RunController automatic Tool Batch integration", () => {
 
     const result = await controller.start(run.id);
 
-    expect(result.status).toBe("AWAITING_VERIFICATION");
+    expect(result.status).toBe("TERMINAL");
+    expect(result.run.status).toBe("COMPLETED");
     expect(calls).toEqual(["call-A", "call-B"]);
     expect(providerRequests).toHaveLength(3);
     expect(await storage.toolInvocations.listByRun(run.id)).toHaveLength(2);
@@ -1131,7 +1175,8 @@ describe("RunController automatic Tool Batch integration", () => {
 
     const result = await controller.start(run.id);
 
-    expect(result.status).toBe("AWAITING_VERIFICATION");
+    expect(result.status).toBe("TERMINAL");
+    expect(result.run.status).toBe("COMPLETED");
     expect(calls).toEqual(["call-known"]);
     expect(await storage.toolInvocations.listByRun(run.id)).toHaveLength(1);
     expect(requests[1]?.messages.slice(-2)).toEqual([
@@ -1145,7 +1190,7 @@ describe("RunController automatic Tool Batch integration", () => {
     await storage.close();
   });
 
-  it("fails the Run on Tool infrastructure failure without submitting a partial batch", async () => {
+  it("returns a complete safe Tool-result batch after a Tool infrastructure failure", async () => {
     const storage = await openToolStorage({ path: ":memory:" });
     const run = makeRun("/repo");
     await seedRun(storage, run);
@@ -1156,6 +1201,7 @@ describe("RunController automatic Tool Batch integration", () => {
       if (externalCallId === "call-B") throw new Error("handler-secret");
       return { content: "A", details: {}, isError: false };
     });
+    const observed: Array<{ tools?: unknown; messages: readonly unknown[] }> = [];
     const controller = createController(
       storage,
       eventBus,
@@ -1171,19 +1217,29 @@ describe("RunController automatic Tool Batch integration", () => {
         turn("must not run", [], "STOP"),
       ],
       runtime,
+      observed,
     );
 
     const result = await controller.start(run.id);
 
-    expect(result.status).toBe("FAILED");
+    expect(result.status).toBe("TERMINAL");
+    expect(result.run.status).toBe("COMPLETED");
     expect(calls).toEqual(["call-A", "call-B"]);
     expect(await storage.toolInvocations.listByRun(run.id)).toHaveLength(2);
     expect(await storage.observations.listByRun(run.id)).toHaveLength(2);
-    expect((await storage.runs.get(run.id))?.status).toBe("FAILED");
+    expect((await storage.runs.get(run.id))?.status).toBe("COMPLETED");
     expect(await storage.continuations.get(run.id)).toBeNull();
     expect((await projectedMessages(storage, run.id)).map((entry) => entry.role)).toEqual([
       "user",
       "assistant",
+      "tool",
+      "tool",
+      "assistant",
+    ]);
+    expect(observed).toHaveLength(2);
+    expect(observed[1]?.messages.slice(-2)).toEqual([
+      expect.objectContaining({ toolCallId: "call-A", isError: false }),
+      expect.objectContaining({ toolCallId: "call-B", isError: true }),
     ]);
     expect(
       JSON.stringify(
@@ -1255,7 +1311,8 @@ describe("RunController automatic Tool Batch integration", () => {
 
     const result = await controller.recover(run.id);
 
-    expect(result.status).toBe("AWAITING_VERIFICATION");
+    expect(result.status).toBe("TERMINAL");
+    expect(result.run.status).toBe("COMPLETED");
     expect(observed).toHaveLength(1);
     expect(observed[0]?.messages.slice(-1)).toEqual([
       {
@@ -1364,7 +1421,8 @@ describe("RunController automatic Tool Batch integration", () => {
 
     const result = await controller.recover(run.id);
 
-    expect(result.status).toBe("AWAITING_VERIFICATION");
+    expect(result.status).toBe("TERMINAL");
+    expect(result.run.status).toBe("COMPLETED");
     expect(firstCalls).toBe(1);
     expect(recoveredObserved[0]?.messages.slice(-3)).toEqual([
       expect.objectContaining({ toolCallId: "call-A", isError: false }),

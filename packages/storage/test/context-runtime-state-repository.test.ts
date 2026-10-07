@@ -14,6 +14,7 @@ import { openCaelushDatabase } from "../src/database.js";
 import { migrateCaelushDatabase } from "../src/migrate.js";
 import { SqliteContextRuntimeStateRepository } from "../src/context-runtime-state-repository.js";
 import { StorageDecodeError } from "../src/errors.js";
+import { makeSecurityPolicy } from "./support/fixtures.js";
 
 const stores: Array<Awaited<ReturnType<typeof openCaelushStorage>>> = [];
 const temporaryDirectories: string[] = [];
@@ -43,7 +44,8 @@ describe("SqliteContextRuntimeStateRepository", () => {
       model: { provider: "fixture", model: "large" },
       runtime: { id: "local", kind: "fixture" },
       permissionProfile: "READ_ONLY",
-      approvalPolicy: "ALWAYS_ASK",
+      approvalPolicy: "ON_BOUNDARY",
+      securityPolicy: makeSecurityPolicy(),
       limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 1000 },
       createdAt: createTimestampMs(1),
       startedAt: createTimestampMs(2),

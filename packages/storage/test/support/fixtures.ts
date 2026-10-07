@@ -3,6 +3,9 @@ import {
   createSessionId,
   createStepId,
   createTimestampMs,
+  createVerificationCheckId,
+  createVerificationEvidenceId,
+  createVerificationPlanId,
   createWorkspaceId,
   computeSecurityPolicyDigest,
 } from "@caelush/protocol";
@@ -10,9 +13,12 @@ import type {
   AgentRun,
   AgentSession,
   AgentState,
+  TimestampMs,
   AgentStep,
   VerificationPlanDraft,
 } from "@caelush/protocol";
+import { createCodingCompletionAssembly } from "@caelush/core";
+import type { CaelushStorage } from "../../src/index.js";
 
 export function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
   return {
@@ -24,23 +30,54 @@ export function makeSession(overrides: Partial<AgentSession> = {}): AgentSession
   };
 }
 
-export function makeRun(
-  sessionId: AgentSession["id"],
-  overrides: Partial<AgentRun> = {},
-): AgentRun {
-  const securityPolicy = {
+export function makeSecurityPolicy(
+  permissionProfile: AgentRun["permissionProfile"] = "READ_ONLY",
+  approvalPolicy: AgentRun["approvalPolicy"] = "ON_BOUNDARY",
+): NonNullable<AgentRun["securityPolicy"]> {
+  const preset =
+    permissionProfile === "READ_ONLY"
+      ? { id: "VIEW_ONLY" as const, version: 1 }
+      : permissionProfile === "PROJECT_ACCESS"
+        ? { id: "WORKSPACE_WRITE" as const, version: 1 }
+        : { id: "FULL_ACCESS" as const, version: 1 };
+  const securityPolicyWithoutDigest = {
     schemaVersion: 1 as const,
-    preset: { id: "VIEW_ONLY" as const, version: 1 },
-    permissionProfile: "READ_ONLY" as const,
-    approvalPolicy: "ON_BOUNDARY" as const,
-    filesystemBoundary: "WORKSPACE_READ_ONLY" as const,
-    processBoundary: "READ_ONLY" as const,
-    requiredEnforcement: "OS_RESTRICTED" as const,
+    preset,
+    permissionProfile,
+    approvalPolicy,
+    filesystemBoundary:
+      permissionProfile === "READ_ONLY"
+        ? ("WORKSPACE_READ_ONLY" as const)
+        : permissionProfile === "PROJECT_ACCESS"
+          ? ("WORKSPACE_READ_WRITE" as const)
+          : ("HOST_USER_SCOPE" as const),
+    processBoundary:
+      permissionProfile === "READ_ONLY"
+        ? ("READ_ONLY" as const)
+        : permissionProfile === "PROJECT_ACCESS"
+          ? ("WORKSPACE_WRITE" as const)
+          : ("UNRESTRICTED" as const),
+    requiredEnforcement:
+      permissionProfile === "FULL_ACCESS"
+        ? ("HARD_SAFETY_ONLY" as const)
+        : ("OS_RESTRICTED" as const),
     hardSafetyPolicyVersion: "hard-safety@1",
     commandPolicyVersion: "command-policy@1",
     secretPolicyVersion: "secret-policy@1",
     createdAt: new Date(100).toISOString(),
   };
+  return {
+    ...securityPolicyWithoutDigest,
+    policyDigest: computeSecurityPolicyDigest(securityPolicyWithoutDigest),
+  };
+}
+
+export function makeRun(
+  sessionId: AgentSession["id"],
+  overrides: Partial<AgentRun> = {},
+): AgentRun {
+  const permissionProfile = overrides.permissionProfile ?? "READ_ONLY";
+  const approvalPolicy = overrides.approvalPolicy ?? "ON_BOUNDARY";
   return {
     id: createRunId(),
     sessionId,
@@ -49,15 +86,13 @@ export function makeRun(
     workspace: { id: createWorkspaceId(), path: "C:/workspace" },
     model: { provider: "test", model: "test-model" },
     runtime: { id: "local", kind: "test" },
-    permissionProfile: "READ_ONLY",
-    approvalPolicy: "ON_BOUNDARY",
+    permissionProfile,
+    approvalPolicy,
     limits: { maxSteps: 10, maxToolCalls: 10, timeoutMs: 1000 },
     createdAt: createTimestampMs(100),
-    securityPolicy: {
-      ...securityPolicy,
-      policyDigest: computeSecurityPolicyDigest(securityPolicy),
-    },
     ...overrides,
+    securityPolicy:
+      overrides.securityPolicy ?? makeSecurityPolicy(permissionProfile, approvalPolicy),
   };
 }
 
@@ -113,3 +148,46 @@ export const verificationPlanner = {
     ],
   }),
 };
+
+export function createStorageTestCompletionAssembly(
+  storage: CaelushStorage,
+  clock: { now(): TimestampMs },
+) {
+  return createCodingCompletionAssembly({
+    clock,
+    configResolver: {
+      resolve: async () => ({
+        baseSystemPrompt: "synthetic",
+        contextLimits: { maxInputTokens: 1000 },
+      }),
+    },
+    planner: verificationPlanner,
+    planIdFactory: createVerificationPlanId,
+    checkIdFactory: createVerificationCheckId,
+    evidenceIdFactory: createVerificationEvidenceId,
+    executionStore: storage.verificationExecution,
+    executionRecovery: storage.verificationExecution,
+    reviewer: {
+      review: async ({ bundle }) => ({
+        status: "PASSED" as const,
+        review: { verdict: "PASS" as const, summary: "The fixture candidate is acceptable." },
+        reviewInputHash: bundle.reviewInputHash,
+      }),
+    },
+    evidenceSanitizer: {
+      redactText: (value) => value,
+      boundText: (value, maxBytes) => ({
+        text: value.slice(0, maxBytes),
+        omittedBytes: Math.max(0, Buffer.byteLength(value, "utf8") - maxBytes),
+        truncated: Buffer.byteLength(value, "utf8") > maxBytes,
+      }),
+    },
+    workspace: {
+      inspect: async () => ({ inspectionComplete: true, paths: [] }),
+    },
+    git: {
+      status: async () => ({ available: false }),
+      diff: async ({ path }) => ({ path, diff: "", truncated: false }),
+    },
+  });
+}

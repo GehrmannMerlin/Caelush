@@ -98,6 +98,19 @@ describe("real daemon to Web timeline E2E", () => {
     await waitFor(() => manager?.getSnapshot().activeRun === undefined);
 
     const snapshot = manager.getSnapshot();
+    const terminalRun = snapshot.runs.find(
+      (run) => run.finalResult?.type === "VERIFIED_COMPLETION",
+    );
+    const replayedEventTypes: string[] = [];
+    if (terminalRun !== undefined) {
+      for await (const event of client.watchRunEvents(terminalRun.id, { afterSequence: 0 })) {
+        replayedEventTypes.push(event.type);
+        if (event.type === "run.completed") break;
+      }
+    }
+    expect(terminalRun?.finalResult?.type).toBe("VERIFIED_COMPLETION");
+    expect(replayedEventTypes).toContain("verification.finalized");
+    expect(replayedEventTypes).toContain("run.completed");
     expect(snapshot.timeline.settled).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ kind: "TOOL", status: "COMPLETED", filePath: "src/message.txt" }),

@@ -73,8 +73,10 @@ describe("daemon Session conversation history E2E", () => {
       defaultWorkspace: workspace,
       defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
     });
+    const registeredWorkspace = session.defaultWorkspace;
+    if (registeredWorkspace === undefined) throw new Error("test Workspace was not registered");
 
-    const first = await createRun(client, session.id, workspace, "first goal");
+    const first = await createRun(client, session.id, registeredWorkspace, "first goal");
     await client.startRun(first.id);
     const firstCompleted = await waitForRun(client, first.id, "COMPLETED");
     expect(firstCompleted.finalResult).toMatchObject({
@@ -82,7 +84,7 @@ describe("daemon Session conversation history E2E", () => {
       text: "first verified answer",
     });
 
-    const second = await createRun(client, session.id, workspace, "second goal");
+    const second = await createRun(client, session.id, registeredWorkspace, "second goal");
     await client.startRun(second.id);
     const secondCompleted = await waitForRun(client, second.id, "COMPLETED");
     expect(secondCompleted.sessionId).toBe(session.id);
@@ -122,8 +124,7 @@ async function createRun(
     workspace,
     model: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
     runtime: { id: "local", kind: "local" },
-    permissionProfile: "PROJECT_ACCESS",
-    approvalPolicy: "DANGEROUS_ONLY",
+    preset: { id: "FULL_ACCESS", expectedVersion: 1 },
     limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 10_000 },
   });
 }

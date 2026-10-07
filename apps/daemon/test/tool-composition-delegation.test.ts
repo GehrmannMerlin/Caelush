@@ -349,11 +349,15 @@ describe("production Tool composition delegation", () => {
       now: createTimestampMs(2),
     });
 
+    expect(settlement.kind).toBe("ACCEPTED");
+    if (settlement.kind !== "ACCEPTED") {
+      throw new Error("expected the sanitized Tool result to be accepted");
+    }
     // The real Security sanitizer, not an identity pass-through.
-    expect(settlement.result.content).not.toContain("supersecretvalue");
-    expect(settlement.result.content).toContain("[REDACTED]");
+    expect(settlement.settlement.result.content).not.toContain("supersecretvalue");
+    expect(settlement.settlement.result.content).toContain("[REDACTED]");
     // And the Coding settlement extension travels beside the result, opaquely, from the catalog.
-    expect(settlement.effects?.kind).toBe(CODING_TOOL_EFFECTS_PAYLOAD_KIND);
+    expect(settlement.settlement.effects?.kind).toBe(CODING_TOOL_EFFECTS_PAYLOAD_KIND);
   });
 
   it("asks the real Security gate rather than a private policy", async () => {

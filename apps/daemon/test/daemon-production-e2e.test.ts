@@ -126,13 +126,14 @@ describe("daemon production composition E2E", () => {
       defaultWorkspace: { id: createWorkspaceId(), path: workspacePath },
       defaultModel: { provider: "fixture", model: "fixture-model" },
     });
+    const workspace = session.defaultWorkspace;
+    if (workspace === undefined) throw new Error("test Workspace was not registered");
     const run = await client.createRun(session.id, {
       goal: "report the clean fixture workspace",
-      workspace: { id: createWorkspaceId(), path: workspacePath },
+      workspace,
       model: { provider: "fixture", model: "fixture-model" },
       runtime: { id: "local", kind: "local" },
-      permissionProfile: "PROJECT_ACCESS",
-      approvalPolicy: "NEVER_ASK",
+      preset: { id: "FULL_ACCESS", expectedVersion: 1 },
       limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 10_000 },
     });
 

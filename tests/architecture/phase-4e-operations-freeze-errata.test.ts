@@ -69,11 +69,12 @@ function methodInputMembers(
 }
 
 describe("Phase 4E errata — SearchTextOperations", () => {
-  it("has exactly environment, pattern, path?, include?, limit, signal", async () => {
+  it("has optional policy context plus pattern, path?, include?, limit, signal", async () => {
     const text = await read("search-text-operations.ts");
 
     expect(methodInputMembers(text, "SearchTextOperations", "search")).toEqual([
       "environment",
+      "securityContext?",
       "pattern",
       "path?",
       "include?",
@@ -138,33 +139,39 @@ describe("Phase 4E errata — GitOperations", () => {
   });
 });
 
-describe("Phase 4E errata — the six contracts it promised not to touch", () => {
+describe("Phase 4E errata — frozen capabilities with optional durable policy context", () => {
   const unchanged: readonly (readonly [string, string, string, readonly string[]])[] = [
     [
       "read-file-operations.ts",
       "ReadFileOperations",
       "read",
-      ["environment", "path", "offset", "limit", "signal"],
+      ["environment", "securityContext?", "path", "offset", "limit", "signal"],
     ],
     [
       "list-directory-operations.ts",
       "ListDirectoryOperations",
       "list",
-      ["environment", "path", "limit", "signal"],
+      ["environment", "securityContext?", "path", "limit", "signal"],
     ],
     [
       "find-files-operations.ts",
       "FindFilesOperations",
       "find",
-      ["environment", "pattern", "path?", "limit", "signal"],
+      ["environment", "securityContext?", "pattern", "path?", "limit", "signal"],
     ],
-    ["patch-operations.ts", "PatchOperations", "apply", ["environment", "patch", "signal"]],
+    [
+      "patch-operations.ts",
+      "PatchOperations",
+      "apply",
+      ["environment", "securityContext?", "patch", "signal"],
+    ],
     [
       "exec-operations.ts",
       "ExecOperations",
       "execute",
       [
         "environment",
+        "securityContext?",
         "ownerRunId",
         "command",
         "workdir?",
@@ -178,7 +185,16 @@ describe("Phase 4E errata — the six contracts it promised not to touch", () =>
       "process-operations.ts",
       "ProcessOperations",
       "interact",
-      ["environment", "ownerRunId", "sessionId", "chars", "yieldTimeMs", "signal", "onOutput?"],
+      [
+        "environment",
+        "securityContext?",
+        "ownerRunId",
+        "sessionId",
+        "chars",
+        "yieldTimeMs",
+        "signal",
+        "onOutput?",
+      ],
     ],
   ];
 

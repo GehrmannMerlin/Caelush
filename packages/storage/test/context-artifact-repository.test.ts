@@ -10,6 +10,7 @@ import {
 } from "@caelush/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
+import { makeSecurityPolicy } from "./support/fixtures.js";
 
 const directories: string[] = [];
 
@@ -33,7 +34,8 @@ describe("SqliteContextArtifactRepository", () => {
       model: { provider: "fixture", model: "fixture-model" },
       runtime: { id: "local", kind: "fixture" },
       permissionProfile: "READ_ONLY",
-      approvalPolicy: "ALWAYS_ASK",
+      approvalPolicy: "ON_BOUNDARY",
+      securityPolicy: makeSecurityPolicy(),
       limits: { maxSteps: 2, maxToolCalls: 2, timeoutMs: 1000 },
       createdAt: createTimestampMs(1),
       startedAt: createTimestampMs(2),

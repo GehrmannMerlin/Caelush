@@ -46,6 +46,21 @@ function toolCallDecision(sourceStepId: StepId, runId: RunId): RunContinuationCh
         callId: CALL_ID as never,
         model: { provider: "fixture", model: "fixture-model" },
         finishReason: "TOOL_CALLS",
+        assistantItems: [
+          {
+            assistantItemId: `${CALL_ID}:item:000`,
+            phase: "UNKNOWN",
+            content: [
+              { type: "text", text: "reading" },
+              {
+                type: "tool-call",
+                toolCallId: "call_a",
+                toolName: "read_file",
+                input: { path: "a" },
+              },
+            ],
+          },
+        ],
         assistantMessage: {
           role: "assistant",
           content: [

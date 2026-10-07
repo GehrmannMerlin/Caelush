@@ -82,6 +82,7 @@ const RUNNING_PROCESS_STAGES = FAULT_STAGES.slice(8);
 /** The grandchild waits this long before writing, so a killed tree has time to prove itself dead. */
 const GRANDCHILD_DELAY_MS = 2_000;
 const GRANDCHILD_DEADLINE_MS = 5_000;
+const PROCESS_TREE_TEST_TIMEOUT_MS = 15_000;
 
 describeWindows("native Windows sandbox fault closure", () => {
   let buildDirectory = "";
@@ -150,20 +151,24 @@ describeWindows("native Windows sandbox fault closure", () => {
     expect(declaredFaultStages(faultRunnerBytes)).toEqual([...FAULT_STAGES]);
   });
 
-  it("runs the payload to completion when no fault is injected", async () => {
-    // The positive control for every post-start case below. Without it, "the delayed write is
-    // absent" would be satisfied by a payload that never schedules anything.
-    const workspace = await createWorkflow();
-    const adapter = await createProvider().create(createSpec(workspace, "control"));
-    const exit = await waitForAdapter(adapter);
-    await adapter.close().catch(() => undefined);
-    await settleGrandchild();
+  it(
+    "runs the payload to completion when no fault is injected",
+    async () => {
+      // The positive control for every post-start case below. Without it, "the delayed write is
+      // absent" would be satisfied by a payload that never schedules anything.
+      const workspace = await createWorkflow();
+      const adapter = await createProvider().create(createSpec(workspace, "control"));
+      const exit = await waitForAdapter(adapter);
+      await adapter.close().catch(() => undefined);
+      await settleGrandchild();
 
-    expect(exit).toMatchObject({ exitCode: 0 });
-    await expect(readFile(join(workspace, "started.txt"), "utf8")).resolves.toBe("started\r\n");
-    await expect(readFile(join(workspace, "late.txt"), "utf8")).resolves.toBe("late\r\n");
-    await expect(readdir(privateTempBaseDirectory)).resolves.toEqual([]);
-  });
+      expect(exit).toMatchObject({ exitCode: 0 });
+      await expect(readFile(join(workspace, "started.txt"), "utf8")).resolves.toBe("started\r\n");
+      await expect(readFile(join(workspace, "late.txt"), "utf8")).resolves.toBe("late\r\n");
+      await expect(readdir(privateTempBaseDirectory)).resolves.toEqual([]);
+    },
+    PROCESS_TREE_TEST_TIMEOUT_MS,
+  );
 
   for (const stage of NO_PROCESS_STAGES) {
     it(`never starts the payload when '${stage}' fails`, async () => {
@@ -190,52 +195,60 @@ describeWindows("native Windows sandbox fault closure", () => {
   });
 
   for (const stage of RUNNING_PROCESS_STAGES) {
-    it(`terminates the process tree when '${stage}' fails after the payload started`, async () => {
-      const result = await runFaultCase(stage);
-      if (stage === "ready") {
-        // READY is never sent, so the Run is refused before it is handed to the caller.
-        expectFailureBeforeReady(result, stage);
-      } else {
-        // READY was sent, so the failure surfaces as the Run's own exit code.
-        expect(result.rejection).toBeUndefined();
-        expect(result.exit).toMatchObject({ exitCode: 1 });
-      }
-      await expect(access(join(result.workspace, "late.txt"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-    });
+    it(
+      `terminates the process tree when '${stage}' fails after the payload started`,
+      async () => {
+        const result = await runFaultCase(stage);
+        if (stage === "ready") {
+          // READY is never sent, so the Run is refused before it is handed to the caller.
+          expectFailureBeforeReady(result, stage);
+        } else {
+          // READY was sent, so the failure surfaces as the Run's own exit code.
+          expect(result.rejection).toBeUndefined();
+          expect(result.exit).toMatchObject({ exitCode: 1 });
+        }
+        await expect(access(join(result.workspace, "late.txt"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      },
+      PROCESS_TREE_TEST_TIMEOUT_MS,
+    );
   }
 
-  it("leaves the workspace usable by the host user and by later Runs after every fault", async () => {
-    // "Unchanged user ACEs" observed the only way it can be observed from outside: the host user
-    // can still do ordinary file work, a fresh Run can still be prepared and confined, and no
-    // private temp directory is left behind from any of the faults above.
-    await expect(readdir(privateTempBaseDirectory)).resolves.toEqual([]);
+  it(
+    "leaves the workspace usable by the host user and by later Runs after every fault",
+    async () => {
+      // "Unchanged user ACEs" observed the only way it can be observed from outside: the host user
+      // can still do ordinary file work, a fresh Run can still be prepared and confined, and no
+      // private temp directory is left behind from any of the faults above.
+      await expect(readdir(privateTempBaseDirectory)).resolves.toEqual([]);
 
-    // The grant that was prepared before the faults is still whole, not half-applied or orphaned:
-    // the Runner still confirms it. Paired with the unprepared workspace below, which must still
-    // report REQUIRED, so neither answer is a controller that always says the same thing.
-    const workspace = await createWorkflow();
-    await expect(controller.getStatus(workspace, "WORKSPACE_WRITE")).resolves.toBe("READY");
+      // The grant that was prepared before the faults is still whole, not half-applied or orphaned:
+      // the Runner still confirms it. Paired with the unprepared workspace below, which must still
+      // report REQUIRED, so neither answer is a controller that always says the same thing.
+      const workspace = await createWorkflow();
+      await expect(controller.getStatus(workspace, "WORKSPACE_WRITE")).resolves.toBe("READY");
 
-    const untouched = join(fixtureDirectory, `workspace-unprepared-${caseIndex}`);
-    caseIndex += 1;
-    await mkdir(untouched, { recursive: true });
-    await expect(controller.getStatus(untouched, "WORKSPACE_WRITE")).resolves.toBe("REQUIRED");
+      const untouched = join(fixtureDirectory, `workspace-unprepared-${caseIndex}`);
+      caseIndex += 1;
+      await mkdir(untouched, { recursive: true });
+      await expect(controller.getStatus(untouched, "WORKSPACE_WRITE")).resolves.toBe("REQUIRED");
 
-    const scratch = join(workspace, "host-created.txt");
-    await writeFile(scratch, "host-created\r\n");
-    await expect(readFile(scratch, "utf8")).resolves.toBe("host-created\r\n");
-    await rm(scratch);
+      const scratch = join(workspace, "host-created.txt");
+      await writeFile(scratch, "host-created\r\n");
+      await expect(readFile(scratch, "utf8")).resolves.toBe("host-created\r\n");
+      await rm(scratch);
 
-    const adapter = await createProvider().create(createSpec(workspace, "recovery"));
-    const exit = await waitForAdapter(adapter);
-    await adapter.close().catch(() => undefined);
-    await settleGrandchild();
-    expect(exit).toMatchObject({ exitCode: 0 });
-    await expect(readFile(join(workspace, "late.txt"), "utf8")).resolves.toBe("late\r\n");
-    await expect(readdir(privateTempBaseDirectory)).resolves.toEqual([]);
-  });
+      const adapter = await createProvider().create(createSpec(workspace, "recovery"));
+      const exit = await waitForAdapter(adapter);
+      await adapter.close().catch(() => undefined);
+      await settleGrandchild();
+      expect(exit).toMatchObject({ exitCode: 0 });
+      await expect(readFile(join(workspace, "late.txt"), "utf8")).resolves.toBe("late\r\n");
+      await expect(readdir(privateTempBaseDirectory)).resolves.toEqual([]);
+    },
+    PROCESS_TREE_TEST_TIMEOUT_MS,
+  );
 
   function createProvider() {
     return createWindowsAclRestrictedTokenProvider({
@@ -296,7 +309,7 @@ describeWindows("native Windows sandbox fault closure", () => {
       rejection = error;
     } finally {
       await adapter?.close().catch(() => undefined);
-      await settleGrandchild();
+      if (stage === "ready" || stage === "child-start") await settleGrandchild();
     }
     return { workspace, rejection, exit };
   }

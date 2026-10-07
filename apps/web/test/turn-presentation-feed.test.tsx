@@ -498,7 +498,7 @@ describe("TurnPresentationFeed", () => {
     expect(html).toContain("lucide-circle-minus");
   });
 
-  it("renders active and completed model text in the reply area while keeping other live activity in process", () => {
+  it("renders active and completed model text in the process disclosure alongside other live activity", () => {
     const initial = createInitialLiveActivityState(runId);
     const html = renderToStaticMarkup(
       <TurnPresentationFeed
@@ -541,14 +541,18 @@ describe("TurnPresentationFeed", () => {
         isActive
       />,
     );
+    const processStart = html.indexOf('<details class="turn-presentation-process"');
+    const replyStart = html.indexOf('<section class="turn-presentation-final"');
     const process =
-      html.match(/<details class="turn-presentation-process"[\s\S]*?<\/details>/u)?.[0] ?? "";
+      processStart < 0
+        ? ""
+        : html.slice(processStart, replyStart > processStart ? replyStart : html.length);
     const reply =
       html.match(/<section class="turn-presentation-final"[\s\S]*?<\/section>/u)?.[0] ?? "";
-    expect(reply).toContain("正在生成");
-    expect(reply).toContain("已生成");
-    expect(process).not.toContain("正在生成");
-    expect(process).not.toContain("已生成");
+    expect(process).toContain("正在生成");
+    expect(process).toContain("已生成");
+    expect(reply).not.toContain("正在生成");
+    expect(reply).not.toContain("已生成");
     expect(process).toContain("读取文件");
   });
 
@@ -642,7 +646,7 @@ describe("TurnPresentationFeed", () => {
     expect(reply).not.toContain("duplicate final");
     expect(process).toContain("durable commentary");
     expect(process).toContain("durable unknown");
-    expect(reply).toContain("other run draft");
+    expect(process).toContain("other run draft");
     expect(process).not.toContain("duplicate commentary");
   });
 
@@ -779,6 +783,7 @@ describe("TurnPresentationFeed", () => {
               kind: "MODEL_TEXT",
               status: "ACTIVE",
               text: "### 草稿\n\n运行 `pnpm build`。",
+              phase: "COMMENTARY",
               streamKey: "model:markdown",
               streamSequence: 1,
               runId,
@@ -790,8 +795,10 @@ describe("TurnPresentationFeed", () => {
     );
     const reply =
       html.match(/<section class="turn-presentation-final"[\s\S]*?<\/section>/u)?.[0] ?? "";
+    const processStart = html.indexOf('<details class="turn-presentation-process"');
+    const replyStart = html.indexOf('<section class="turn-presentation-final"');
     const process =
-      html.match(/<details class="turn-presentation-process"[\s\S]*?<\/details>/u)?.[0] ?? "";
+      processStart >= 0 && replyStart > processStart ? html.slice(processStart, replyStart) : "";
 
     expect(reply).toContain("<h2>结果</h2>");
     expect(reply).toContain("<ul>");
@@ -805,8 +812,9 @@ describe("TurnPresentationFeed", () => {
     expect(reply).toContain('<a href="https://example.com/docs"');
     expect(reply).toContain("<code>apps/web/src/file.ts</code>");
     expect(reply).toContain('<pre><code class="language-ts">const answer = true;\n</code></pre>');
-    expect(reply).toContain("<h3>草稿</h3>");
-    expect(reply).toContain("<code>pnpm build</code>");
+    expect(process).toContain("<h3>草稿</h3>");
+    expect(process).toContain("<code>pnpm build</code>");
+    expect(reply).not.toContain("草稿");
     expect(process).toContain("读取 src/index.ts");
     expect(process).toContain('class="turn-presentation-preview">安全预览</pre>');
     expect(process).not.toContain("<h2>");

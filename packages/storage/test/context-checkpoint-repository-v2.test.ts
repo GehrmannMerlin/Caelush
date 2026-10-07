@@ -9,18 +9,13 @@ import {
   createStructuredCheckpoint,
   conversationTurnId,
 } from "@caelush/agent";
-import {
-  AgentRunSchema,
-  createRunId,
-  createSessionId,
-  createTimestampMs,
-  createWorkspaceId,
-} from "@caelush/protocol";
+import { createSessionId, createTimestampMs, createWorkspaceId } from "@caelush/protocol";
 import type { RunId } from "@caelush/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
 import type { ContextCheckpointCreateInputV2 } from "@caelush/agent";
 import { StorageConflictError } from "../src/errors.js";
+import { makeRun as makeStorageRun } from "./support/fixtures.js";
 
 const directories: string[] = [];
 const storages: Array<{ close(): Promise<void> }> = [];
@@ -33,15 +28,12 @@ afterEach(async () => {
 });
 
 function makeRun() {
-  return AgentRunSchema.parse({
-    id: createRunId(),
-    sessionId: createSessionId(),
+  return makeStorageRun(createSessionId(), {
     goal: "persist Context Checkpoint V2",
     status: "RUNNING",
     workspace: { id: createWorkspaceId(), path: "/repo" },
     model: { provider: "fixture", model: "fixture-model" },
     runtime: { id: "local", kind: "fixture" },
-    permissionProfile: "READ_ONLY",
     approvalPolicy: "ALWAYS_ASK",
     limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 1000 },
     createdAt: createTimestampMs(1),

@@ -74,8 +74,7 @@ async function runToCompletion(
     workspace: session.defaultWorkspace ?? { id: createWorkspaceId(), path: workspacePath },
     model: { provider, model },
     runtime: { id: "local", kind: "local" },
-    permissionProfile: "PROJECT_ACCESS",
-    approvalPolicy: "NEVER_ASK",
+    preset: { id: "FULL_ACCESS", expectedVersion: 1 },
     limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 20_000 },
   });
 

@@ -77,6 +77,10 @@ function scriptedGateway(): { readonly gateway: AIGateway; calls(): number } {
       },
       { type: "text.delta", payload: { text: "one moment" } },
       {
+        type: "tool_call.start",
+        payload: { toolCallId: "call_echo", toolName: "echo" },
+      },
+      {
         type: "tool_call.completed",
         payload: { id: "call_echo", name: "echo", input: { text: "hello" } },
       },
@@ -214,7 +218,9 @@ describe("General Agent Kernel, standalone", () => {
       input: { kind: "USER_INPUT", userMessageId: USER_MESSAGE_ID },
     } satisfies AgentLoopAdvanceInput);
 
-    expect(first.kind).toBe("TOOL_REQUESTS");
+    expect(first.kind, first.kind === "FAILED" ? first.error.message : undefined).toBe(
+      "TOOL_REQUESTS",
+    );
     if (first.kind !== "TOOL_REQUESTS") throw new Error("expected a decision");
     const requested: AgentDecision = first.decision;
     expect(requested.type).toBe("TOOL_CALLS_REQUESTED");

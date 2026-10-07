@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   RunController,
   RunDeadlineRegistry,
@@ -1169,12 +1170,25 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
           options.storage.promptSurface.getCurrent(typedRunId),
           options.storage.budgetLedger.listByRun(typedRunId),
         ]);
+        const currentSurface =
+          currentEpoch === undefined
+            ? undefined
+            : await options.storage.promptSurface.readEpoch(typedRunId, currentEpoch.epochId);
+        const projectedContextUsage = projectV2ContextUsage(usage);
         return {
-          ...projectV2ContextUsage(usage),
+          ...projectedContextUsage,
           promptCache: projectPromptCacheUsage(
             usage,
             promptCacheSamplesFromDurableMessages(records, budgetEntries),
             currentEpoch,
+            currentSurface === undefined || usage.promptSurface === undefined
+              ? undefined
+              : projectPromptCacheSegments({
+                  epoch: currentSurface,
+                  promptSurface: usage.promptSurface,
+                  records,
+                  recentTailTokens: projectedContextUsage.breakdown.recentTail,
+                }),
           ),
         };
       },
@@ -1287,6 +1301,83 @@ export interface PromptCacheUsageSample {
   readonly usage?: ModelUsage;
 }
 
+/** Safe, irreversible Prompt Surface and current recent-tail fingerprints. */
+export function projectPromptCacheSegments(input: {
+  readonly epoch: {
+    readonly modelRef: { readonly provider: string; readonly model: string };
+    readonly stableHeadFingerprint: string;
+    readonly toolSchemaFingerprint: string;
+    readonly cacheSettingsFingerprint: string;
+    readonly snapshots: readonly {
+      readonly ordinal: number;
+      readonly anchorMessageSequence: number;
+      readonly sourceStepSequence: number;
+      readonly content: string;
+      readonly contentHash: string;
+    }[];
+  };
+  readonly promptSurface: {
+    readonly prefixFingerprint: string;
+    readonly stableHeadTokens: number;
+    readonly snapshotTokens: number;
+  };
+  readonly records: readonly AgentMessageRecord[];
+  readonly recentTailTokens: number;
+}): NonNullable<PromptCacheUsage["surfaceSegments"]> {
+  const lastAnchor = input.epoch.snapshots.at(-1)?.anchorMessageSequence ?? 0;
+  const tailRecords = input.records.filter((record) => record.sequence > lastAnchor).slice(-256);
+  const tailProjection = tailRecords.map((record) => {
+    const promptData = safePromptFingerprintValue(record.data);
+    const encoded = canonicalJson(promptData);
+    return {
+      messageType: boundedFingerprintText(record.messageType, 64),
+      sequence: record.sequence,
+      bytes: Buffer.byteLength(encoded, "utf8"),
+      promptData,
+    };
+  });
+  const snapshotProjection = input.epoch.snapshots.map((snapshot) => ({
+    ordinal: snapshot.ordinal,
+    anchorMessageSequence: snapshot.anchorMessageSequence,
+    sourceStepSequence: snapshot.sourceStepSequence,
+    contentHash: snapshot.contentHash,
+    bytes: Buffer.byteLength(snapshot.content, "utf8"),
+  }));
+  return {
+    prefixFingerprint: normalizeSha256(input.promptSurface.prefixFingerprint),
+    modelFingerprint: fingerprint({
+      provider: input.epoch.modelRef.provider,
+      model: input.epoch.modelRef.model,
+    }),
+    stableHeadFingerprint: normalizeSha256(input.epoch.stableHeadFingerprint),
+    toolCatalogFingerprint: normalizeSha256(input.epoch.toolSchemaFingerprint),
+    cacheSettingsFingerprint: normalizeSha256(input.epoch.cacheSettingsFingerprint),
+    checkpointFingerprint: fingerprint(snapshotProjection),
+    recentTailFingerprint: fingerprint(
+      tailProjection.map(({ messageType, sequence, promptData }) => ({
+        messageType,
+        sequence,
+        promptData,
+      })),
+    ),
+    roleSizeVectorFingerprint: fingerprint(
+      tailProjection.map(({ messageType, bytes }) => ({ messageType, bytes })),
+    ),
+    stableHeadTokens: assertPromptCacheCount(input.promptSurface.stableHeadTokens),
+    snapshotTokens: assertPromptCacheCount(input.promptSurface.snapshotTokens),
+    recentTailTokens: assertPromptCacheCount(input.recentTailTokens),
+    checkpointBytes: addPromptCacheCount(
+      0,
+      snapshotProjection.reduce((total, item) => total + item.bytes, 0),
+    ),
+    recentTailBytes: addPromptCacheCount(
+      0,
+      tailProjection.reduce((total, item) => total + item.bytes, 0),
+    ),
+    recentTailMessageCount: tailProjection.length,
+  };
+}
+
 /**
  * Read only the provider-neutral usage tuple from durable assistant records.
  * No message content, provider state, call identity, or raw model payload leaves this function.
@@ -1354,6 +1445,7 @@ export function projectPromptCacheUsage(
     readonly createdStepSequence: number;
     readonly createdAt: TimestampMs;
   },
+  surfaceSegments?: NonNullable<PromptCacheUsage["surfaceSegments"]>,
 ): PromptCacheUsage {
   const purposeTotals = new Map<
     PromptCacheRequestPurpose,
@@ -1510,7 +1602,61 @@ export function projectPromptCacheUsage(
         }),
     ...(latestRate === undefined ? {} : { lastMeasuredAt: latestRate.measuredAt }),
     purposes,
+    ...(surfaceSegments === undefined ? {} : { surfaceSegments }),
   };
+}
+
+function fingerprint(value: unknown): string {
+  return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
+}
+
+function normalizeSha256(value: string): string {
+  const normalized = value.startsWith("sha256:") ? value.slice("sha256:".length) : value;
+  if (!/^[a-f0-9]{64}$/.test(normalized)) {
+    throw new TypeError("Prompt Surface fingerprint is invalid.");
+  }
+  return normalized;
+}
+
+function safePromptFingerprintValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(safePromptFingerprintValue);
+  if (value === null || typeof value !== "object") return value;
+  const safe: Record<string, unknown> = {};
+  for (const [key, member] of Object.entries(value)) {
+    if (
+      /(?:provider.?state|reasoning|credential|api.?key|secret|endpoint|session.?id|run.?id|step.?id|message.?id)/i.test(
+        key,
+      )
+    ) {
+      continue;
+    }
+    safe[key] = safePromptFingerprintValue(member);
+  }
+  return safe;
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  return `{${Object.entries(value)
+    .filter(([, member]) => member !== undefined)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(([key, member]) => `${JSON.stringify(key)}:${canonicalJson(member)}`)
+    .join(",")}}`;
+}
+
+function boundedFingerprintText(value: string, maxLength: number): string {
+  if (value.length === 0 || value.length > maxLength) {
+    throw new TypeError("Prompt Surface message role is invalid.");
+  }
+  return value;
+}
+
+function assertPromptCacheCount(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new RangeError("Prompt-cache segment count is outside the safe integer range.");
+  }
+  return value;
 }
 
 function readDurableAssistantUsage(record: AgentMessageRecord): ModelUsage | undefined {

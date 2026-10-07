@@ -485,7 +485,9 @@ describe("Phase 4E guard — production composition", () => {
   it("has the daemon bootstrap compose the target Coding layer too", async () => {
     const source = code(await read("apps/daemon/src/daemon.ts"));
 
-    expect(source).toContain("createDefaultCodingTools(");
+    expect(source).toContain("composeDaemon(");
+    expect(source).toContain('from "./daemon-composition.js"');
+    expect(source).not.toContain("createDefaultCodingTools(");
     expect(source).not.toContain("createDefaultBuiltinToolRegistrations");
     expect(source).not.toContain("buildCodingCatalog");
   });

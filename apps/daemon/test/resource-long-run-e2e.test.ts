@@ -6,6 +6,7 @@ import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildDaemonApp } from "../src/app.js";
 import { composeDaemon, DEFAULT_ADAPTIVE_RESOURCE_POLICY } from "../src/daemon-composition.js";
+import { SecurityCapabilityService } from "../src/services/security-capability-service.js";
 
 let directory: string | undefined;
 let storage: CaelushStorage | undefined;
@@ -49,13 +50,17 @@ describe("daemon adaptive long-run boundary", () => {
       },
       info: composition.info,
       modelCanonicalizer: composition.modelCanonicalizer,
+      securityCapabilityService: new SecurityCapabilityService(),
     });
 
     const session = await app.inject({
       method: "POST",
       url: "/api/v1/sessions",
       headers: { host: "127.0.0.1", "content-type": "application/json" },
-      payload: { metadata: {} },
+      payload: {
+        defaultWorkspace: { id: createWorkspaceId(), path: process.cwd() },
+        metadata: {},
+      },
     });
     expect(session.statusCode).toBe(201);
     const sessionId = session.json().id as string;
@@ -65,11 +70,10 @@ describe("daemon adaptive long-run boundary", () => {
       headers: { host: "127.0.0.1", "content-type": "application/json" },
       payload: {
         goal: "inspect a large workspace",
-        workspace: { id: createWorkspaceId(), path: process.cwd() },
+        workspace: session.json().defaultWorkspace,
         model: { provider: "openai-compatible", model: "fixture-model" },
         runtime: { id: "local", kind: "local" },
-        permissionProfile: "PROJECT_ACCESS",
-        approvalPolicy: "DANGEROUS_ONLY",
+        preset: { id: "FULL_ACCESS", expectedVersion: 1 },
         resourcePolicy: DEFAULT_ADAPTIVE_RESOURCE_POLICY,
       },
     });

@@ -12,6 +12,7 @@ import {
   type RunId,
 } from "@caelush/protocol";
 import { openCaelushStorage, type CaelushStorage } from "@caelush/storage";
+import { expandPermissionPreset } from "@caelush/security";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildDaemonApp } from "../src/app.js";
 import type { DaemonExecutionSurface } from "../src/routes/execution.js";
@@ -100,7 +101,12 @@ function durableRun(status: AgentRun["status"], sessionId: AgentRun["sessionId"]
     model: { provider: "test", model: "test-model" },
     runtime: { id: "local", kind: "local" },
     permissionProfile: "READ_ONLY",
-    approvalPolicy: "ALWAYS_ASK",
+    approvalPolicy: "ON_BOUNDARY",
+    securityPolicy: expandPermissionPreset({
+      presetId: "VIEW_ONLY",
+      expectedVersion: 1,
+      createdAt: new Date(1).toISOString(),
+    }),
     limits: { maxSteps: 3, maxToolCalls: 3, timeoutMs: 1_000 },
     resourcePolicy: RESOURCE_POLICY,
     createdAt: createTimestampMs(1),
@@ -162,12 +168,20 @@ function post(app: ReturnType<typeof buildDaemonApp>, runId: RunId) {
 describe("recover route over the real control plane", () => {
   it("answers 202 for every non-terminal production Run shape", async () => {
     const sessionId = createSessionId();
-    for (const status of ["RUNNING", "VERIFYING", "WAITING_APPROVAL", "WAITING_RESOURCE"] as const) {
+    for (const status of [
+      "RUNNING",
+      "VERIFYING",
+      "WAITING_APPROVAL",
+      "WAITING_RESOURCE",
+    ] as const) {
       const run = durableRun(status, sessionId);
       const app = await boot(run);
       const response = await post(app, run.id);
       expect(response.statusCode, `${status}: ${response.body.slice(0, 300)}`).toBe(202);
-      expect(response.json(), status).toMatchObject({ action: "RECOVER", disposition: "SCHEDULED" });
+      expect(response.json(), status).toMatchObject({
+        action: "RECOVER",
+        disposition: "SCHEDULED",
+      });
       await app.close();
     }
   });

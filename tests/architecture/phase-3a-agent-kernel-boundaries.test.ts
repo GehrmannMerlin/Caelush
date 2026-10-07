@@ -192,9 +192,8 @@ describe("Phase 3A agent kernel dependency boundaries", () => {
      * whose fields are the Workspace and Runtime *references* a Run already declared. It is a
      * locator, not a capability — the Agent Tool Layer never reads a path or opens a file from it.
      *
-     * The exception is therefore bounded to the single declaration rather than waived: any other
-     * kernel file that reaches for the word, or any permission/approval vocabulary at all, still
-     * fails this guard.
+     * The exceptions are bounded to the declarations and projections that own generic Run policy;
+     * any other kernel file that reaches for host vocabulary still fails this guard.
      *
      * ```text
      * Phase 4C restates the exception, and keeps it bounded.
@@ -205,8 +204,12 @@ describe("Phase 3A agent kernel dependency boundaries", () => {
      * is still not the kernel's: it is the Tool Layer's, and the AgentLoop, the Run Layer and the
      * decision layer remain forbidden from naming it.
      *
-     * So the two allowed files are named explicitly, and the blanket `not.toMatch` below still covers
-     * every other file in the package.
+     * `run-event-factory.ts` projects the path-free policy into its durable Protocol event, while
+     * `result-pipeline.ts` uses "workspace" only in safe model-facing recovery guidance. Neither
+     * gives the Agent Kernel host execution authority.
+     *
+     * Every allowed file is named explicitly, and the blanket `not.toMatch` below still covers every
+     * other file in the package.
      * ```
      */
     const hostVocabulary = /\b(?:workspace|cwd|permissionProfile|approvalPolicy)\b/;
@@ -216,13 +219,15 @@ describe("Phase 3A agent kernel dependency boundaries", () => {
         (file) =>
           !file.endsWith("tools/types/execution-environment.ts") &&
           !file.endsWith("tools/admission/security-context.ts") &&
+          !file.endsWith("events/run-event-factory.ts") &&
+          !file.endsWith("tools/result/result-pipeline.ts") &&
           // Phase 7C extends the existing semantic document authority table with the
           // provider-neutral coding.workspace source type. The document is still a pure
           // projection boundary; it does not access a workspace or host execution API.
           !file.endsWith("context/document/context-document.ts"),
       )
       .map((file) => relative(root, file).replaceAll("\\", "/"));
-    expect(offenders).toEqual([]);
+    expect(offenders, offenders.join("\n")).toEqual([]);
     // `cwd` remains forbidden everywhere: nothing in this package may read a working directory.
     expect(source).not.toMatch(/\bcwd\b/);
   });

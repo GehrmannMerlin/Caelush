@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CaelushClient } from "@caelush/client";
+import { createControlHookId } from "@caelush/agent";
 import {
   createAIError,
   type AIAdapterEvent,
@@ -12,7 +13,8 @@ import {
 import { render } from "ink-testing-library";
 import React from "react";
 import { afterEach, describe, expect, it } from "vitest";
-import { startDaemon } from "../../daemon/src/index.js";
+import type { ProcessSandboxProvider } from "@caelush/runtime";
+import { startDaemon as startProductionDaemon } from "../../daemon/src/index.js";
 import { CliConversationController } from "../src/application/cli-controller.js";
 import type { CliTimer, CliTimerHandle } from "../src/application/reconnect-scheduler.js";
 import { App } from "../src/components/App.js";
@@ -27,6 +29,39 @@ import {
 let directory: string | undefined;
 let daemon: { close(): Promise<void>; url: string } | undefined;
 let controller: CliConversationController | undefined;
+
+const testRestrictedProvider: ProcessSandboxProvider = {
+  id: "fixture-restricted",
+  kind: "RESTRICTED",
+  enforcement: "HARD",
+  create: async () => ({}) as never,
+  probe: async () => ({ available: true, enforcement: "HARD" }),
+};
+
+function startDaemon(options: Parameters<typeof startProductionDaemon>[0]) {
+  return startProductionDaemon({
+    ...options,
+    processSandboxProviders: [testRestrictedProvider],
+    beforeToolDispatchHooks: [
+      {
+        id: createControlHookId("cli-phase-12d-approval"),
+        priority: 10,
+        criticality: "REQUIRED",
+        timeoutMs: 100,
+        hook: {
+          evaluate: async (input: { readonly toolName: string }) =>
+            input.toolName === "apply_patch"
+              ? {
+                  kind: "REQUIRE_APPROVAL",
+                  code: "TEST_REVIEW_REQUIRED",
+                  reason: "This test requires review before applying its patch.",
+                }
+              : { kind: "PASS" },
+        },
+      },
+    ],
+  });
+}
 
 afterEach(async () => {
   controller?.dispose();
@@ -549,5 +584,17 @@ async function waitFor(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 400 && !predicate(); attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  expect(predicate()).toBe(true);
+  const state = controller?.getState();
+  expect(
+    predicate(),
+    JSON.stringify({
+      bootstrap: state?.bootstrap,
+      selectedPreset: state?.selectedPreset,
+      availablePermissionPresets: state?.availablePermissionPresets,
+      pendingRunId: state?.pendingRunId,
+      activeRun: state?.activeRun?.status,
+      controlError: state?.controlError,
+      fatalError: state?.fatalError,
+    }),
+  ).toBe(true);
 }

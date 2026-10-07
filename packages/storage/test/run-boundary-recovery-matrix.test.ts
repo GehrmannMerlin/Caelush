@@ -14,6 +14,7 @@ import {
   type RunId,
   type StepId,
   type TimestampMs,
+  type AgentRun,
 } from "@caelush/protocol";
 import {
   RunController,
@@ -26,7 +27,12 @@ import { createModelToolFeedbackProjector, createToolResultBatchNormalizer } fro
 import { EventBus } from "./support/test-event-notifier.js";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage, type CaelushStorage } from "../src/index.js";
-import { makeState, makeStep, verificationPlanner } from "./support/fixtures.js";
+import {
+  makeSecurityPolicy,
+  makeState,
+  makeStep,
+  verificationPlanner,
+} from "./support/fixtures.js";
 import {
   fakeFrozenModelTurnExecutor,
   testRunAgentExecution,
@@ -79,6 +85,9 @@ const TOOL_DECISION = {
 };
 
 function makeRun(overrides: Record<string, unknown> = {}) {
+  const permissionProfile = (overrides.permissionProfile ??
+    "READ_ONLY") as AgentRun["permissionProfile"];
+  const approvalPolicy = (overrides.approvalPolicy ?? "ON_BOUNDARY") as AgentRun["approvalPolicy"];
   return AgentRunSchema.parse({
     id: createRunId(),
     sessionId: createSessionId(),
@@ -87,12 +96,14 @@ function makeRun(overrides: Record<string, unknown> = {}) {
     workspace: { id: createWorkspaceId(), path: "/repo" },
     model: { provider: "fixture", model: "fixture-model" },
     runtime: { id: "local", kind: "fixture" },
-    permissionProfile: "READ_ONLY",
-    approvalPolicy: "ALWAYS_ASK",
+    permissionProfile,
+    approvalPolicy,
     limits: { maxSteps: 8, maxToolCalls: 8, timeoutMs: 86_400_000 },
     createdAt: createTimestampMs(1),
     startedAt: createTimestampMs(2),
     ...overrides,
+    securityPolicy:
+      overrides.securityPolicy ?? makeSecurityPolicy(permissionProfile, approvalPolicy),
   });
 }
 

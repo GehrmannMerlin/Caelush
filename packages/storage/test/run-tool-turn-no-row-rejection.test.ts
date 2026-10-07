@@ -28,7 +28,11 @@ import {
 import { describe, expect, it } from "vitest";
 
 import type { CaelushStorage } from "../src/index.js";
-import { verificationPlanner } from "./support/fixtures.js";
+import {
+  createStorageTestCompletionAssembly,
+  makeSecurityPolicy,
+  verificationPlanner,
+} from "./support/fixtures.js";
 import { openToolStorage } from "./support/tool-settlement-decoder.js";
 import { createCanonicalToolRuntime } from "./support/canonical-tool-runtime.js";
 import { modelTurnResult } from "./support/model-turns.js";
@@ -107,7 +111,8 @@ function makeRun(workspacePath: string) {
     model: { provider: "fixture", model: "fixture-model" },
     runtime: { id: "local", kind: "fixture" },
     permissionProfile: "PROJECT_ACCESS",
-    approvalPolicy: "NEVER_ASK",
+    approvalPolicy: "ON_BOUNDARY",
+    securityPolicy: makeSecurityPolicy("PROJECT_ACCESS", "ON_BOUNDARY"),
     limits: { maxSteps: 6, maxToolCalls: 8, timeoutMs: 10_000 },
     createdAt: createTimestampMs(1),
   });
@@ -197,6 +202,7 @@ async function harness(input: {
     startTimestamp: 10,
   });
   let now = 10;
+  const clock = { now: () => createTimestampMs(++now) };
 
   const observed: Array<{ tools?: unknown; messages: readonly unknown[] }> = [];
   const turns: Array<AIModelTurnResult | Error> = [
@@ -220,6 +226,7 @@ async function harness(input: {
   const controller = new RunController({
     agentExecution: agentExecution.factory,
     executionStore: storage.execution,
+    completionStore: storage.execution,
     messages: testRunMessageAuthority({
       records: (runId) => storage.messageRecords.listByRun(runId),
     }),
@@ -231,8 +238,9 @@ async function harness(input: {
       }),
     },
     toolTurn: canonicalToolTurn(registry, runtime),
-    clock: { now: () => createTimestampMs(++now) },
+    clock,
     eventIdFactory: { create: createEventId },
+    completion: createStorageTestCompletionAssembly(storage, clock),
     verificationPlanner,
     approvals: storage.approvals,
   });
@@ -263,7 +271,7 @@ describe("Phase 4D pre-invocation rejection — the durable ledger stays empty",
       const result = await h.controller.start(h.run.id);
 
       // The Run completed the Tool turn and moved on: a rejection is model-correctable, not fatal.
-      expect(result.status).toBe("AWAITING_VERIFICATION");
+      expect(result.status).toBe("TERMINAL");
 
       // No durable Tool fact of any kind exists for a call that never executed.
       expect(await h.ledger()).toEqual({ invocations: 0, observations: 0, approvals: 0 });
@@ -296,7 +304,7 @@ describe("Phase 4D pre-invocation rejection — the durable ledger stays empty",
     try {
       const result = await h.controller.start(h.run.id);
 
-      expect(result.status).toBe("AWAITING_VERIFICATION");
+      expect(result.status).toBe("TERMINAL");
       expect(await h.storage.toolInvocations.listByRun(h.run.id)).toHaveLength(0);
       expect(await h.ledger()).toEqual({ invocations: 0, observations: 0, approvals: 0 });
       expect(h.toolExecutions).toEqual([]);
@@ -326,7 +334,7 @@ describe("Phase 4D pre-invocation rejection — the durable ledger stays empty",
     try {
       const result = await h.controller.start(h.run.id);
 
-      expect(result.status).toBe("AWAITING_VERIFICATION");
+      expect(result.status).toBe("TERMINAL");
       expect(await h.storage.toolInvocations.listByRun(h.run.id)).toHaveLength(0);
       expect(await h.ledger()).toEqual({ invocations: 0, observations: 0, approvals: 0 });
       expect(h.toolExecutions).toEqual([]);
@@ -350,7 +358,7 @@ describe("Phase 4D pre-invocation rejection — the durable ledger stays empty",
     try {
       const result = await h.controller.start(h.run.id);
 
-      expect(result.status).toBe("AWAITING_VERIFICATION");
+      expect(result.status).toBe("TERMINAL");
       // Exactly one durable invocation: the rejected call created none, and the valid one ran.
       const invocations = await h.storage.toolInvocations.listByRun(h.run.id);
       expect(invocations).toHaveLength(1);

@@ -1,11 +1,9 @@
 import {
   createEventId,
   createObservationId,
-  createRunId,
   createSessionId,
   createTimestampMs,
   createToolInvocationId,
-  createWorkspaceId,
   type AgentRun,
   type AgentSession,
   type AgentStep,
@@ -20,7 +18,7 @@ import {
 } from "@caelush/agent";
 import type { ToolEffect } from "@caelush/coding-agent";
 import { openCaelushStorage, type ToolSettlementExtensionDecoder } from "../src/index.js";
-import { makeState, makeStep } from "./support/fixtures.js";
+import { makeRun as makeStorageRun, makeState, makeStep } from "./support/fixtures.js";
 import {
   codingEffectsExtension,
   toolSettlementExtensionDecoder,
@@ -53,20 +51,12 @@ function makeSession(): AgentSession {
 }
 
 function makeRun(sessionId: AgentSession["id"]): AgentRun {
-  return {
-    id: createRunId(),
-    sessionId,
+  return makeStorageRun(sessionId, {
     goal: "atomic settlement",
     status: "RUNNING",
-    workspace: { id: createWorkspaceId(), path: "C:/workspace" },
-    model: { provider: "test", model: "test" },
-    runtime: { id: "test", kind: "test" },
-    permissionProfile: "READ_ONLY",
     approvalPolicy: "NEVER_ASK",
-    limits: { maxSteps: 10, maxToolCalls: 10, timeoutMs: 1000 },
-    createdAt: createTimestampMs(100),
     startedAt: createTimestampMs(101),
-  };
+  });
 }
 
 function completedStep(runId: AgentRun["id"]): AgentStep {

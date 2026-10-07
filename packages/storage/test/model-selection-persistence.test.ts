@@ -9,6 +9,7 @@ import {
   type AgentSession,
 } from "@caelush/protocol";
 import { openCaelushStorage } from "../src/index.js";
+import { makeSecurityPolicy } from "./support/fixtures.js";
 
 const stores: Array<Awaited<ReturnType<typeof openCaelushStorage>>> = [];
 
@@ -46,7 +47,8 @@ describe("durable model and reasoning selection", () => {
       reasoningLevel: "XHIGH",
       runtime: { id: "local", kind: "local" },
       permissionProfile: "PROJECT_ACCESS",
-      approvalPolicy: "NEVER_ASK",
+      approvalPolicy: "ON_BOUNDARY",
+      securityPolicy: makeSecurityPolicy("PROJECT_ACCESS", "ON_BOUNDARY"),
       limits: { maxSteps: 1, maxToolCalls: 1, timeoutMs: 5_000 },
       createdAt: now,
     });
@@ -76,7 +78,8 @@ describe("durable model and reasoning selection", () => {
       model: { provider: "deepseek", model: "deepseek-chat" },
       runtime: { id: "local", kind: "local" },
       permissionProfile: "PROJECT_ACCESS",
-      approvalPolicy: "NEVER_ASK",
+      approvalPolicy: "ON_BOUNDARY",
+      securityPolicy: makeSecurityPolicy("PROJECT_ACCESS", "ON_BOUNDARY"),
       limits: { maxSteps: 1, maxToolCalls: 1, timeoutMs: 5_000 },
       createdAt: now,
     });

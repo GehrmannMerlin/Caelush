@@ -171,10 +171,12 @@ function streamStart(callId: string): AIStreamEvent {
 const TOOL_TURN_SCRIPT: readonly AIStreamEvent[] = [
   streamStart("llm_0195f3a0-0000-7000-8000-000000000001"),
   { type: "text.delta", payload: { text: "let me look" } },
+  { type: "tool_call.start", payload: { toolCallId: "call_echo_1", toolName: "echo" } },
   {
     type: "tool_call.completed",
     payload: { id: "call_echo_1", name: "echo", input: { text: "alpha" } },
   },
+  { type: "tool_call.start", payload: { toolCallId: "call_echo_2", toolName: "echo" } },
   {
     type: "tool_call.completed",
     payload: { id: "call_echo_2", name: "echo", input: { text: "beta" } },
@@ -301,7 +303,10 @@ describe("General Agent Run execution, standalone", () => {
 
     expect(first.kind).toBe("AGENT");
     if (first.kind !== "AGENT") throw new Error("expected an Agent effect");
-    expect(first.result.kind).toBe("TOOL_REQUESTS");
+    expect(
+      first.result.kind,
+      first.result.kind === "FAILED" ? first.result.error.message : undefined,
+    ).toBe("TOOL_REQUESTS");
     if (first.result.kind !== "TOOL_REQUESTS") throw new Error("expected Tool requests");
     const requested = first.result.decision;
     expect(requested.type).toBe("TOOL_CALLS_REQUESTED");

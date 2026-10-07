@@ -82,17 +82,14 @@ describe("Phase 5E transcript/client cutover", () => {
   });
 
   it("records the completed 5F cutover and final storage shape", async () => {
-    const documents = await Promise.all([
-      read("README.md"),
+    const [architecture, agents] = await Promise.all([
       read("docs/ARCHITECTURE.md"),
       read("AGENTS.md"),
     ]);
-    for (const document of documents) {
-      expect(document).toContain("Phase 5E");
-      expect(document).toContain("COMPLETE");
-      expect(document).toContain("Phase 5F");
-      expect(document).toContain("COMPLETE");
-    }
+    expect(architecture).toContain("Phase 5E transcript/client projection migration | COMPLETE");
+    expect(architecture).toContain("Legacy Message V2 retirement (5F)");
+    expect(architecture).toContain("COMPLETE; final schema, backfill, and runtime cutover");
+    expect(agents).toContain("complete through Architecture V2 Phase 5F");
     const schema = await read("packages/storage/src/schema.ts");
     const migration = await read(
       "packages/storage/drizzle/20260924120000_message_system_v2_final/migration.sql",

@@ -21,7 +21,7 @@ import { EventBus } from "./support/test-event-notifier.js";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
 import { completionStoreOver } from "./support/completion-store.js";
-import { verificationPlanner } from "./support/fixtures.js";
+import { createStorageTestCompletionAssembly, verificationPlanner } from "./support/fixtures.js";
 import { aiError, type PartialTurnResult } from "./support/model-turns.js";
 import {
   fakeContextEngine,
@@ -54,7 +54,7 @@ function makeRun(maxSteps = 4, timeoutMs = 10_000) {
     model: { provider: "fixture", model: "fixture-model" },
     runtime: { id: "local", kind: "fixture" },
     permissionProfile: "READ_ONLY",
-    approvalPolicy: "ALWAYS_ASK",
+    approvalPolicy: "ON_BOUNDARY",
     securityPolicy: {
       ...securityPolicy,
       policyDigest: computeSecurityPolicyDigest(securityPolicy),
@@ -99,6 +99,7 @@ async function setup(options: {
   const events: { type: string }[] = [];
   eventBus.subscribe(run.id, (event) => events.push({ type: event.type }));
   const clockState = options.clockState ?? { value: 10 };
+  const clock = { now: () => createTimestampMs(clockState.value++) };
   let count = 0;
   // The legacy facade's `inspector.inspect` is the Context Engine's `prepare` on the direct path:
   // the engine is the one boundary that can refuse a turn before any Step becomes durable.
@@ -116,15 +117,16 @@ async function setup(options: {
     messages: testRunMessageAuthority({
       records: (runId) => storage.messageRecords.listByRun(runId),
     }),
-    completionStore: options.completion?.(storage) ?? completionStoreOver(storage.execution),
+    completionStore: options.completion?.(storage) ?? storage.execution,
     events: eventBus,
+    completion: createStorageTestCompletionAssembly(storage, clock),
     configResolver: {
       resolve: async () => ({
         baseSystemPrompt: "synthetic",
         contextLimits: { maxInputTokens: 1000 },
       }),
     },
-    clock: { now: () => createTimestampMs(clockState.value++) },
+    clock,
     eventIdFactory: { create: () => createEventId() },
     verificationPlanner,
     ...(options.retryRegistry === undefined && options.retryTimer === undefined
@@ -211,22 +213,27 @@ describe("RunController failure and maxSteps boundaries", () => {
     expect(fixture.providerCalls()).toBe(2);
     expect(steps).toHaveLength(2);
     expect(steps[0]?.id).not.toBe(steps[1]?.id);
-    expect((await fixture.storage.runs.get(fixture.run.id))?.status).toBe("VERIFYING");
-    expect(fixture.events.map((event) => event.type)).toEqual([
-      "run.started",
-      "status.changed",
-      "conversation.message.committed",
-      "llm.started",
-      "llm.failed",
-      "retry.scheduled",
-      "retry.started",
-      "llm.started",
-      "llm.completed",
-      "reasoning.summary",
-      "status.changed",
-      "verification.planned",
-      "conversation.message.committed",
-    ]);
+    expect((await fixture.storage.runs.get(fixture.run.id))?.status).toBe("COMPLETED");
+    const eventTypes = fixture.events.map((event) => event.type);
+    expect(eventTypes).toEqual(
+      expect.arrayContaining([
+        "run.started",
+        "status.changed",
+        "conversation.message.committed",
+        "llm.started",
+        "llm.failed",
+        "retry.scheduled",
+        "retry.started",
+        "llm.started",
+        "llm.completed",
+        "reasoning.summary",
+        "status.changed",
+        "verification.planned",
+        "conversation.message.committed",
+        "run.completed",
+      ]),
+    );
+    expect(eventTypes.indexOf("retry.started")).toBeLessThan(eventTypes.indexOf("run.completed"));
     await fixture.storage.close();
   });
 

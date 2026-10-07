@@ -41,6 +41,16 @@ const PENDING_DECISION = {
     callId: "llm_01a04963-5904-73ad-909e-2134fe57547e",
     model: { provider: "fixture", model: "fixture-model" },
     finishReason: "TOOL_CALLS",
+    assistantItems: [
+      {
+        assistantItemId: "llm_01a04963-5904-73ad-909e-2134fe57547e:item:000",
+        phase: "UNKNOWN",
+        content: [
+          { type: "text", text: "reading" },
+          { type: "tool-call", toolCallId: "call_a", toolName: "read_file", input: { path: "a" } },
+        ],
+      },
+    ],
     assistantMessage: {
       role: "assistant",
       content: [
@@ -61,6 +71,13 @@ const FINAL_DECISION = {
     callId: "llm_01a04963-5904-73ad-909e-2134fe57547e",
     model: { provider: "fixture", model: "fixture-model" },
     finishReason: "STOP",
+    assistantItems: [
+      {
+        assistantItemId: "llm_01a04963-5904-73ad-909e-2134fe57547e:item:000",
+        phase: "UNKNOWN",
+        content: [{ type: "text", text: "done" }],
+      },
+    ],
     assistantMessage: { role: "assistant", content: [{ type: "text", text: "done" }] },
   },
   candidateText: "done",

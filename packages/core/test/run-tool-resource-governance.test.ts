@@ -12,13 +12,14 @@ import type {
 import {
   answerTurn,
   eventTypes,
-  harness3d,
   makeRunD,
   stubToolBatches,
+  stubToolTurnPipeline,
   toolResultItem,
   toolTurn,
   type ToolBatchAnswer,
 } from "./support/phase-3d-tool-turn.js";
+import { harness3e } from "./support/phase-3e-completion.js";
 
 /**
  * Phase 3D — resource admission, budget refusal and cancellation at the Tool boundary.
@@ -119,17 +120,16 @@ describe("Phase 3D resource admission", () => {
   it("admits a normal batch and records no allocation", async () => {
     const ledger = resourceLedger();
     const batches = stubToolBatches([completeAnswer()]);
-    const h = harness3d({
+    const h = harness3e({
       run: makePolicyRun(policy()),
       script: (call) =>
         call === 0 ? toolTurn([{ id: "call_a", name: "read_file" }]) : answerTurn(),
-      toolBatches: batches,
-      extra: { resourceGovernance: ledger.port },
+      extra: { resourceGovernance: ledger.port, toolTurn: stubToolTurnPipeline(batches) },
     });
 
     const result = await h.controller.start(h.store.snapshot.run.id);
 
-    expect(result.status).toBe("AWAITING_VERIFICATION");
+    expect(result.status).toBe("TERMINAL");
     // No lease was renewed and no replan was recorded, because the governor decided neither.
     expect(ledger.cas).toHaveLength(1);
     expect(ledger.current().leaseEpoch).toBe(1);
@@ -140,7 +140,7 @@ describe("Phase 3D resource admission", () => {
   it("renews an expired lease through the durable CAS before the batch runs", async () => {
     const ledger = resourceLedger({ agentTurnsConsumed: 5, leaseStartAgentTurns: 0 });
     const batches = stubToolBatches([completeAnswer()]);
-    const h = harness3d({
+    const h = harness3e({
       run: makePolicyRun(
         policy({
           operationalLease: { maxAgentTurns: 1, maxToolOperations: 1_000 },
@@ -148,13 +148,12 @@ describe("Phase 3D resource admission", () => {
       ),
       script: (call) =>
         call === 0 ? toolTurn([{ id: "call_a", name: "read_file" }]) : answerTurn(),
-      toolBatches: batches,
-      extra: { resourceGovernance: ledger.port },
+      extra: { resourceGovernance: ledger.port, toolTurn: stubToolTurnPipeline(batches) },
     });
 
     const result = await h.controller.start(h.store.snapshot.run.id);
 
-    expect(result.status).toBe("AWAITING_VERIFICATION");
+    expect(result.status).toBe("TERMINAL");
     // The lease was renewed exactly once, and the batch ran only afterwards.
     expect(ledger.current().leaseEpoch).toBe(2);
     expect(batches.physicalExecutions).toBe(1);
@@ -169,11 +168,10 @@ describe("Phase 3D resource admission", () => {
       { id: "call_b", name: "read_file" },
       { id: "call_c", name: "read_file" },
     ];
-    const h = harness3d({
+    const h = harness3e({
       run: makePolicyRun(policy({ batch: { maxToolCallsPerTurn: 1 } })),
       script: (call) => (call === 0 ? toolTurn(calls) : answerTurn("done")),
-      toolBatches: batches,
-      extra: { resourceGovernance: ledger.port },
+      extra: { resourceGovernance: ledger.port, toolTurn: stubToolTurnPipeline(batches) },
     });
 
     const result = await h.controller.start(h.store.snapshot.run.id);
@@ -200,13 +198,13 @@ describe("Phase 3D resource admission", () => {
       "call_c",
     ]);
     // The Run kept reasoning rather than failing.
-    expect(result.status).toBe("AWAITING_VERIFICATION");
+    expect(result.status).toBe("TERMINAL");
   });
 
   it("parks the Run on WAITING_RESOURCE with the exact durable replan count", async () => {
     const ledger = resourceLedger({ consecutiveNoProgressTurns: 3, replanCount: 2 });
     const batches = stubToolBatches([completeAnswer()]);
-    const h = harness3d({
+    const h = harness3e({
       run: makePolicyRun(
         policy({
           progress: {
@@ -219,8 +217,7 @@ describe("Phase 3D resource admission", () => {
       ),
       script: (call) =>
         call === 0 ? toolTurn([{ id: "call_a", name: "read_file" }]) : answerTurn(),
-      toolBatches: batches,
-      extra: { resourceGovernance: ledger.port },
+      extra: { resourceGovernance: ledger.port, toolTurn: stubToolTurnPipeline(batches) },
     });
 
     const result = await h.controller.start(h.store.snapshot.run.id);
@@ -249,7 +246,7 @@ describe("Phase 3D resource admission", () => {
     // more against a limit of six: the batch cannot fit, so it must not run at all.
     const ledger = resourceLedger({ toolOperationsConsumed: 5 });
     const batches = stubToolBatches([completeAnswer()]);
-    const h = harness3d({
+    const h = harness3e({
       run: makePolicyRun(policy({ hardLimits: { maxToolCalls: 6 } })),
       script: (call) =>
         call === 0
@@ -258,9 +255,9 @@ describe("Phase 3D resource admission", () => {
               { id: "call_b", name: "read_file", input: { path: "b.ts" } },
             ])
           : answerTurn(),
-      toolBatches: batches,
       extra: {
         resourceGovernance: ledger.port,
+        toolTurn: stubToolTurnPipeline(batches),
         resources: {
           cancelOwnedResources: async () => ({ stoppedResourceIds: [], confirmed: true }),
         },

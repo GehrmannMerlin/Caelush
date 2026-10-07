@@ -27,6 +27,7 @@ import { openCaelushDatabase } from "../src/database.js";
 import { appendDurableEventsInTransaction } from "../src/events/sqlite-durable-event-store.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { openCaelushStorage, type CaelushStorage } from "../src/index.js";
+import { makeSecurityPolicy } from "./support/fixtures.js";
 
 const stores: CaelushStorage[] = [];
 const directories: string[] = [];
@@ -48,7 +49,8 @@ async function addRun(storage: CaelushStorage, runId: RunId = createRunId()) {
     model: { provider: "fixture", model: "fixture" },
     runtime: { id: "local", kind: "fixture" },
     permissionProfile: "READ_ONLY",
-    approvalPolicy: "ALWAYS_ASK",
+    approvalPolicy: "ON_BOUNDARY",
+    securityPolicy: makeSecurityPolicy(),
     limits: { maxSteps: 2, maxToolCalls: 2, timeoutMs: 1000 },
     createdAt: createTimestampMs(1),
     startedAt: createTimestampMs(2),

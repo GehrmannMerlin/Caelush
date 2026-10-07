@@ -14,7 +14,11 @@ import { RunController, type RunControllerResult } from "@caelush/core";
 import { EventBus } from "./support/test-event-notifier.js";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
-import { verificationPlanner } from "./support/fixtures.js";
+import {
+  createStorageTestCompletionAssembly,
+  makeSecurityPolicy,
+  verificationPlanner,
+} from "./support/fixtures.js";
 import { modelTurnResult } from "./support/model-turns.js";
 import {
   fakeFrozenModelTurnExecutor,
@@ -56,7 +60,8 @@ function makeRun(workspacePath: string) {
     model: { provider: "fixture", model: "fixture-model" },
     runtime: { id: "local", kind: "fixture" },
     permissionProfile: "READ_ONLY",
-    approvalPolicy: "ALWAYS_ASK",
+    approvalPolicy: "ON_BOUNDARY",
+    securityPolicy: makeSecurityPolicy(),
     limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 1000 },
     createdAt: createTimestampMs(1),
   });
@@ -74,9 +79,11 @@ function createController(
     executor: modelTurns,
     createStepId: () => createStepId(),
   });
+  const clock = { now: () => createTimestampMs(now.value++) };
   return new RunController({
     agentExecution: execution.factory,
     executionStore: storage.execution,
+    completionStore: storage.execution,
     messages: testRunMessageAuthority({
       records: (runId) => storage.messageRecords.listByRun(runId),
     }),
@@ -87,8 +94,9 @@ function createController(
         contextLimits: { maxInputTokens: 1000 },
       }),
     },
-    clock: { now: () => createTimestampMs(now.value++) },
+    clock,
     eventIdFactory: { create: () => createEventId() },
+    completion: createStorageTestCompletionAssembly(storage, clock),
     verificationPlanner,
   });
 }
@@ -115,7 +123,7 @@ function assertWaiting(result: RunControllerResult) {
 }
 
 describe("RunController file-backed restart recovery", () => {
-  it("recovers tool and verification boundaries across real SQLite restarts", async () => {
+  it("recovers the Tool boundary and persists verified completion across SQLite restarts", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "caelush-phase-6c-"));
     await mkdir(path.join(directory, "project"));
     const run = makeRun(path.join(directory, "project"));
@@ -153,9 +161,13 @@ describe("RunController file-backed restart recovery", () => {
         isError: false,
       },
     ]);
-    expect(final.status).toBe("AWAITING_VERIFICATION");
+    expect(final.status).toBe("TERMINAL");
+    expect(final.run.status).toBe("COMPLETED");
     expect(modelTurns.callCount()).toBe(2);
-    expect((await secondStorage.runs.get(run.id))?.finalResult).toBeUndefined();
+    expect((await secondStorage.runs.get(run.id))?.finalResult).toMatchObject({
+      type: "VERIFIED_COMPLETION",
+      text: "updated parser",
+    });
     expect(
       (await projectedRunMessages(secondStorage, run.id)).map((message) => message.role),
     ).toEqual(["user", "assistant", "tool", "assistant"]);
@@ -164,11 +176,11 @@ describe("RunController file-backed restart recovery", () => {
     const thirdStorage = await openCaelushStorage({ path: path.join(directory, "caelush.sqlite") });
     const thirdController = createController(thirdStorage, modelTurns, now);
     const recoveredFinal = await thirdController.recover(run.id);
-    expect(recoveredFinal.status).toBe("AWAITING_VERIFICATION");
-    if (recoveredFinal.status !== "AWAITING_VERIFICATION")
-      throw new Error("expected verification result");
-    expect(recoveredFinal.candidateText).toBe("updated parser");
-    expect(recoveredFinal.verificationPlanId).toBeDefined();
+    expect(recoveredFinal.status).toBe("TERMINAL");
+    expect(recoveredFinal.run.status).toBe("COMPLETED");
+    expect(await thirdStorage.verification.getLatestPlan(run.id)).toMatchObject({
+      candidateHash: expect.any(String),
+    });
     expect(modelTurns.callCount()).toBe(2);
     const events = await thirdStorage.eventReader.replay(run.id, {
       afterSequence: 0,
@@ -178,7 +190,7 @@ describe("RunController file-backed restart recovery", () => {
     expect(events.map((event) => event.durability.sequence)).toEqual(
       Array.from({ length: events.length }, (_, index) => index + 1),
     );
-    expect(events.map((event) => event.type)).not.toContain("run.completed");
+    expect(events.map((event) => event.type)).toContain("run.completed");
     expect(events.map((event) => event.type)).toContain("verification.planned");
     await thirdStorage.close();
     await rm(directory, { recursive: true, force: true });

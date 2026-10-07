@@ -25,7 +25,7 @@ import {
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
-import { makeSession } from "./support/fixtures.js";
+import { makeSecurityPolicy, makeSession } from "./support/fixtures.js";
 import { testRunMessageAuthority } from "../../core/test/support/run-message-authority.js";
 
 /**
@@ -82,11 +82,17 @@ function makeRun(overrides: Partial<AgentRun> = {}): AgentRun {
     model: { provider: "fixture", model: "fixture-model" },
     runtime: { id: "local", kind: "fixture" },
     permissionProfile: "READ_ONLY",
-    approvalPolicy: "ALWAYS_ASK",
+    approvalPolicy: "ON_BOUNDARY",
     limits: { maxSteps: 6, maxToolCalls: 8, timeoutMs: 10_000 },
     createdAt: AT,
     startedAt: AT,
     ...overrides,
+    securityPolicy:
+      overrides.securityPolicy ??
+      makeSecurityPolicy(
+        overrides.permissionProfile ?? "READ_ONLY",
+        overrides.approvalPolicy ?? "ON_BOUNDARY",
+      ),
   });
 }
 

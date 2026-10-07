@@ -11,6 +11,8 @@
     "build": "pnpm -r --if-present run build",
     "typecheck": "pnpm build && tsc -p tsconfig.json --noEmit && pnpm -r --if-present run typecheck",
     "test": "vitest run",
+    "test:prompt-cache:deepseek": "node scripts/deepseek-prompt-cache-audit.mjs --local-fixture",
+    "test:prompt-cache:stage8": "node scripts/stage8-long-run-audit.mjs --local-fixture",
     "lint": "eslint .",
     "format:check": "prettier --check .",
     "prompt-cache:audit:offline": "node scripts/prompt-cache-audit.mjs",
@@ -27,6 +29,7 @@
   "devDependencies": {
     "@caelush/agent": "workspace:*",
     "@caelush/ai": "workspace:*",
+    "@caelush/client": "workspace:*",
     "@caelush/coding-agent": "workspace:*",
     "@caelush/runtime": "workspace:*",
     "@caelush/security": "workspace:*",

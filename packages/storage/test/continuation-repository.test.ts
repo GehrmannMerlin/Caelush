@@ -11,6 +11,15 @@ import { openCaelushStorage } from "../src/index.js";
 import { makeRun, makeSession, makeStep } from "./support/fixtures.js";
 
 function waitingCheckpoint(runId: RunId, sourceStepId: StepId): WaitingToolResultsContinuation {
+  const callId = createLLMCallId();
+  const assistantContent = [
+    {
+      type: "tool-call" as const,
+      toolCallId: "call_a",
+      toolName: "read_file" as const,
+      input: { path: "src/index.ts" },
+    },
+  ];
   return {
     type: "WAITING_TOOL_RESULTS" as const,
     runId,
@@ -18,19 +27,19 @@ function waitingCheckpoint(runId: RunId, sourceStepId: StepId): WaitingToolResul
     pendingDecision: {
       type: "TOOL_CALLS_REQUESTED" as const,
       modelTurn: {
-        callId: createLLMCallId(),
+        callId,
         model: { provider: "fixture", model: "fixture-model" },
         finishReason: "TOOL_CALLS" as const,
+        assistantItems: [
+          {
+            assistantItemId: `${callId}:item:000`,
+            phase: "UNKNOWN",
+            content: assistantContent,
+          },
+        ],
         assistantMessage: {
           role: "assistant" as const,
-          content: [
-            {
-              type: "tool-call" as const,
-              toolCallId: "call_a",
-              toolName: "read_file" as const,
-              input: { path: "src/index.ts" },
-            },
-          ],
+          content: assistantContent,
         },
       },
       toolRequests: [

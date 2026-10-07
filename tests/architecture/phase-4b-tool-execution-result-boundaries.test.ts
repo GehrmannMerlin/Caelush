@@ -137,17 +137,19 @@ describe("Phase 4B Agent Tool execution boundaries", () => {
   it("keeps the executor free of admission, durability and Run vocabulary", () => {
     const executor = executable(`${EXECUTION}invocation-executor.ts`);
 
-    // The frozen public contract, exactly: call, identity, environment, signal.
+    // The frozen public contract includes the optional durable Run policy context: call, identity,
+    // environment, securityContext?, signal.
     expect(executor).toContain("export interface ToolInvocationExecutor {");
     expect(executor).toContain("readonly call: PreparedToolCall;");
     expect(executor).toContain("readonly identity: ToolExecutionIdentity;");
     expect(executor).toContain("readonly environment: ToolExecutionEnvironment;");
+    expect(executor).toContain("readonly securityContext?: ToolSecurityContext | undefined;");
     expect(executor).toContain("readonly signal: AbortSignal;");
     const contract = executor.slice(
       executor.indexOf("export interface ToolInvocationExecutor {"),
       executor.indexOf("}", executor.indexOf("export interface ToolInvocationExecutor {")),
     );
-    expect(contract.match(/readonly /g) ?? []).toHaveLength(4);
+    expect(contract.match(/readonly /g) ?? []).toHaveLength(5);
 
     for (const forbidden of [
       "approval",

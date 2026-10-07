@@ -31,7 +31,11 @@ import {
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
-import { verificationPlanner } from "./support/fixtures.js";
+import {
+  createStorageTestCompletionAssembly,
+  makeSecurityPolicy,
+  verificationPlanner,
+} from "./support/fixtures.js";
 import { modelTurnResult, aiError } from "./support/model-turns.js";
 import {
   fakeFrozenModelTurnExecutor,
@@ -107,7 +111,8 @@ function makeRun(maxSteps = 4) {
     model: { provider: "fixture", model: "fixture-model" },
     runtime: { id: "local", kind: "fixture" },
     permissionProfile: "READ_ONLY",
-    approvalPolicy: "ALWAYS_ASK",
+    approvalPolicy: "ON_BOUNDARY",
+    securityPolicy: makeSecurityPolicy(),
     limits: { maxSteps, maxToolCalls: 4, timeoutMs: 10_000 },
     createdAt: createTimestampMs(1),
   });
@@ -139,6 +144,7 @@ interface SetupOptions {
   readonly maxSteps?: number;
   readonly complete: (count: number, signal: AbortSignal) => Promise<AIModelTurnResult>;
   readonly store?: (storage: Awaited<ReturnType<typeof openCaelushStorage>>) => RunExecutionStore;
+  readonly verifyCompletion?: boolean;
 }
 
 async function setup(options: SetupOptions) {
@@ -157,6 +163,7 @@ async function setup(options: SetupOptions) {
   eventBus.subscribe(run.id, (event) => events.push({ type: event.type }));
 
   const clockState = { value: 10 };
+  const clock = { now: () => createTimestampMs(clockState.value++) };
   const planner = spyPlanner();
   // The settlement order is recorded in one sequence so PLAN -> MATERIALIZE -> COMMIT -> NOTIFY is
   // observable as a single fact rather than inferred from three separate counters.
@@ -222,8 +229,11 @@ async function setup(options: SetupOptions) {
         contextLimits: { maxInputTokens: 1000 },
       }),
     },
-    clock: { now: () => createTimestampMs(clockState.value++) },
+    clock,
     eventIdFactory: { create: () => createEventId() },
+    ...(options.verifyCompletion
+      ? { completion: createStorageTestCompletionAssembly(storage, clock) }
+      : {}),
     verificationPlanner,
     transitionPlanner: planner.planner,
     eventMaterializer: materializer.materializer,
@@ -427,29 +437,22 @@ describe("production Agent effect cutover", () => {
     await storage.close();
   });
 
-  it("keeps a FinalCandidate on the verification compatibility bridge", async () => {
-    const fixture = await setup({ complete: async () => finalTurn() });
+  it("plans and verifies a FinalCandidate through the durable completion boundary", async () => {
+    const fixture = await setup({ complete: async () => finalTurn(), verifyCompletion: true });
     const result = await fixture.controller.start(fixture.run.id);
 
-    // The planner's FINAL_CANDIDATE branch stays fail-closed and is not used as a fallback, so the
-    // legacy verification bridge settles this transition and no plan is produced for it.
-    expect(fixture.planner.inputs).toHaveLength(0);
-    expect(result.status).toBe("AWAITING_VERIFICATION");
+    // The transition planner owns the final-candidate boundary; the configured completion assembly
+    // evaluates the candidate and commits the verified result through the Run's durable authority.
+    expect(fixture.planner.inputs).toHaveLength(1);
+    expect(result.status).toBe("TERMINAL");
+    expect(result.run.status).toBe("COMPLETED");
+    expect(result.run.finalResult).toMatchObject({ type: "VERIFIED_COMPLETION", text: "answer" });
 
-    const snapshot = await fixture.storage.execution.load(fixture.run.id);
-    expect(snapshot?.run.status).toBe("VERIFYING");
-    if (snapshot?.continuation?.type !== "AWAITING_VERIFICATION") {
-      throw new Error("expected an AWAITING_VERIFICATION boundary");
-    }
-    // A real plan identity, minted by the host, and a durable plan row the boundary actually wrote.
-    const planId = snapshot.continuation.verificationPlanId;
-    expect(planId).toMatch(/^vplan_/);
-    const plan = await (
-      fixture.storage.execution as unknown as RunCompletionPersistencePort
-    ).loadVerificationPlan(snapshot.run.id, planId);
-    expect(plan?.id).toBe(planId);
+    const plan = await fixture.storage.verification.getLatestPlan(fixture.run.id);
+    expect(plan?.id).toMatch(/^vplan_/);
     expect(plan?.candidateHash).toBeDefined();
     expect(plan?.checks.length).toBeGreaterThan(0);
+    expect(fixture.events.map(({ type }) => type)).toContain("run.completed");
     await fixture.storage.close();
   });
 });

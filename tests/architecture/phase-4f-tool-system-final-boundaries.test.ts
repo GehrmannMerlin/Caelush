@@ -769,7 +769,8 @@ describe("Phase 4F guard — production composition is the canonical one", () =>
 
   it("keeps the daemon bootstrap free of any legacy Tool composition", async () => {
     const source = code(await read("apps/daemon/src/daemon.ts"));
-    expect(source).toContain("createDefaultCodingTools(");
+    expect(source).toContain("composeDaemon(");
+    expect(source).not.toContain("createDefaultCodingTools(");
     expect(source).toContain("createCodingToolSettlementExtensionDecoder");
     for (const dead of [
       "createDefaultBuiltinToolRegistrations",

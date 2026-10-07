@@ -167,7 +167,7 @@ describe("read-only filesystem tools through the canonical Tool pipeline", () =>
 
       const searched = await dispatch("search", "search_text", {
         pattern: "needle",
-        include: "*.ts",
+        include: "**/*.ts",
       });
       expect(searched.observation.content).toContain("src/app.ts:1:");
 

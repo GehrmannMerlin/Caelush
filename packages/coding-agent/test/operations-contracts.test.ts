@@ -122,11 +122,11 @@ const UNCHANGED_FILES = [
   "git-operations.ts",
 ];
 
-describe("Operations exact contracts — the six unchanged contracts", () => {
+describe("Operations exact contracts — frozen capabilities with optional policy context", () => {
   it("ReadFileOperations is exactly environment, path, offset, limit, signal", () => {
     expect(
       methodInputMembers(declaration("read-file-operations.ts"), "ReadFileOperations", "read"),
-    ).toEqual(["environment", "path", "offset", "limit", "signal"]);
+    ).toEqual(["environment", "securityContext?", "path", "offset", "limit", "signal"]);
   });
 
   it("ListDirectoryOperations is exactly environment, path, limit, signal", () => {
@@ -136,19 +136,19 @@ describe("Operations exact contracts — the six unchanged contracts", () => {
         "ListDirectoryOperations",
         "list",
       ),
-    ).toEqual(["environment", "path", "limit", "signal"]);
+    ).toEqual(["environment", "securityContext?", "path", "limit", "signal"]);
   });
 
   it("FindFilesOperations is exactly environment, pattern, path?, limit, signal", () => {
     expect(
       methodInputMembers(declaration("find-files-operations.ts"), "FindFilesOperations", "find"),
-    ).toEqual(["environment", "pattern", "path?", "limit", "signal"]);
+    ).toEqual(["environment", "securityContext?", "pattern", "path?", "limit", "signal"]);
   });
 
   it("PatchOperations is exactly environment, patch, signal", () => {
     expect(
       methodInputMembers(declaration("patch-operations.ts"), "PatchOperations", "apply"),
-    ).toEqual(["environment", "patch", "signal"]);
+    ).toEqual(["environment", "securityContext?", "patch", "signal"]);
   });
 
   it("ExecOperations is exactly environment, ownerRunId, command, workdir?, tty, yieldTimeMs, signal, onOutput?", () => {
@@ -156,6 +156,7 @@ describe("Operations exact contracts — the six unchanged contracts", () => {
       methodInputMembers(declaration("exec-operations.ts"), "ExecOperations", "execute"),
     ).toEqual([
       "environment",
+      "securityContext?",
       "ownerRunId",
       "command",
       "workdir?",
@@ -171,6 +172,7 @@ describe("Operations exact contracts — the six unchanged contracts", () => {
       methodInputMembers(declaration("process-operations.ts"), "ProcessOperations", "interact"),
     ).toEqual([
       "environment",
+      "securityContext?",
       "ownerRunId",
       "sessionId",
       "chars",
@@ -192,7 +194,15 @@ describe("Operations exact contracts — the two errata-corrected contracts", ()
         "SearchTextOperations",
         "search",
       ),
-    ).toEqual(["environment", "pattern", "path?", "include?", "limit", "signal"]);
+    ).toEqual([
+      "environment",
+      "securityContext?",
+      "pattern",
+      "path?",
+      "include?",
+      "limit",
+      "signal",
+    ]);
     expect(declaration("search-text-operations.ts")).toContain(
       "PHASE_4E_OPERATIONS_INTERFACE_FREEZE_ERRATA.md",
     );

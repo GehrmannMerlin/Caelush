@@ -1,11 +1,12 @@
 import {
   createConversationTurn,
+  createAgentMessageCodecRegistry,
   createAgentMessageFactory,
   createAgentMessageIdFactory,
   createDeterministicConversationTurnIdFactory,
-  createStandardAgentMessageCodecRegistry,
   createStandardAgentMessageProjectorRegistry,
   createSingleTurnConversationSnapshot,
+  STANDARD_AGENT_MESSAGE_CODECS,
 } from "@caelush/agent";
 import { createTimestampMs } from "@caelush/protocol";
 import type { RunId } from "@caelush/protocol";
@@ -23,7 +24,10 @@ export function testRunMessageAuthority(
   } = {},
 ): RunMessageAuthority {
   const projectors = createStandardAgentMessageProjectorRegistry();
-  const codecs = createStandardAgentMessageCodecRegistry((type) => projectors.currentVersion(type));
+  const codecs = createAgentMessageCodecRegistry({
+    codecs: STANDARD_AGENT_MESSAGE_CODECS,
+    projectionVersionOf: (type) => projectors.currentVersion(type),
+  });
   const turns = createDeterministicConversationTurnIdFactory();
   return {
     codecs,
@@ -101,7 +105,7 @@ export function testRunMessageAuthority(
 
 function decodeRecord(
   record: AgentMessageRecord,
-  codecs: ReturnType<typeof createStandardAgentMessageCodecRegistry>,
+  codecs: ReturnType<typeof createAgentMessageCodecRegistry>,
 ) {
   return Object.freeze({
     sequence: record.sequence,

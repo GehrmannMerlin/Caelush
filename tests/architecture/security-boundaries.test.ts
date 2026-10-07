@@ -80,7 +80,7 @@ describe("security architecture boundaries", () => {
     }
   });
 
-  it("keeps Phase 9C sanitizer injection explicit and documents the Phase 9D boundary", async () => {
+  it("keeps Security sanitizer injection explicit and documents current policy boundaries", async () => {
     // The sanitizer is injected into the canonical result pipeline, so "explicit, never defaulted to a
     // no-op" is now a property of the composition and of the canonical pipeline contract.
     const composition = await readFile(
@@ -102,8 +102,7 @@ describe("security architecture boundaries", () => {
     expect(securitySource).not.toContain("SECRET_APPROVAL_9C_TOKEN");
 
     const readme = await readFile(path.join(repositoryRoot, "README.md"), "utf8");
-    expect(readme).toContain("Phase 9C");
-    expect(readme).toContain("Phase 9D — V1 Security Integration");
+    expect(readme).toContain("Security 在工具执行前评估权限档位");
     expect(
       await readFile(
         path.join(repositoryRoot, "docs", "architecture", "input-security-policy.md"),

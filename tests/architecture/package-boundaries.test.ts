@@ -154,16 +154,14 @@ describe("package boundaries", () => {
     ]);
   });
 
-  it("keeps Runtime below the Tool layer and limits host process access to the fixed search adapter", async () => {
+  it("keeps Runtime below the Tool layer and declares only used package dependencies", async () => {
     const manifest = await readManifest("packages/runtime/package.json");
     const dependencies = dependencyEntries(manifest);
     expect(dependencies[protocolPackageName]).toBe("workspace:*");
-    expect(dependencies["@caelush/shared"]).toBe("workspace:*");
     expect(dependencies["fast-glob"]).toBe("3.3.3");
     expect(dependencies["node-pty"]).toBe("1.1.0");
     expect(Object.keys(dependencies).sort()).toEqual([
       "@caelush/protocol",
-      "@caelush/shared",
       "fast-glob",
       "node-pty",
     ]);
@@ -182,8 +180,24 @@ describe("package boundaries", () => {
       .filter(({ relativePath }) => relativePath === "packages/runtime/src/patch/committer.ts")
       .map(({ contents }) => contents)
       .join("\n");
+    const nativeRunnerProbeSource = sources
+      .filter(
+        ({ relativePath }) =>
+          relativePath === "packages/runtime/src/sandbox/native-runner-probe.ts",
+      )
+      .map(({ contents }) => contents)
+      .join("\n");
+    const privateTempSource = sources
+      .filter(({ relativePath }) => relativePath === "packages/runtime/src/sandbox/private-temp.ts")
+      .map(({ contents }) => contents)
+      .join("\n");
+    const workspaceMutationHelpers = new Set([
+      "packages/runtime/src/patch/committer.ts",
+      "packages/runtime/src/sandbox/native-runner-probe.ts",
+      "packages/runtime/src/sandbox/private-temp.ts",
+    ]);
     const nonMutationSource = sources
-      .filter(({ relativePath }) => relativePath !== "packages/runtime/src/patch/committer.ts")
+      .filter(({ relativePath }) => !workspaceMutationHelpers.has(relativePath))
       .map(({ contents }) => contents)
       .join("\n");
     expect(source).not.toMatch(
@@ -193,6 +207,9 @@ describe("package boundaries", () => {
       /\b(?:writeFile|appendFile|rename|unlink|rm|truncate|copyFile|chmod|chown)\s*\(/,
     );
     expect(patchCommitterSource).toMatch(/writePatchFile|removePatchFile|movePatchFile/);
+    // Sandbox probes and marked private temp directories mutate only disposable OS-temp paths.
+    expect(nativeRunnerProbeSource).toContain("tmpdir()");
+    expect(privateTempSource).toContain("os.tmpdir()");
     const childProcessImports = sources
       .filter(({ contents }) => contents.includes('from "node:child_process"'))
       .map(({ relativePath }) => relativePath);
@@ -200,6 +217,9 @@ describe("package boundaries", () => {
       "packages/runtime/src/exec/pipe-process-adapter.ts",
       "packages/runtime/src/exec/process-tree.ts",
       "packages/runtime/src/git/git-runner.ts",
+      "packages/runtime/src/sandbox/control-transport.ts",
+      "packages/runtime/src/sandbox/native-runner-adapter.ts",
+      "packages/runtime/src/sandbox/native-workspace-controller.ts",
       "packages/runtime/src/search/ripgrep-runner.ts",
     ]);
     expect(source).not.toContain("shell: true");

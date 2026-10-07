@@ -13,9 +13,27 @@ import {
   fixtureBinding,
   fixtureModelSource,
 } from "./support/ai-fixture.js";
+import { restrictedProvider } from "./support/permission-flow-fixture.js";
 
 let directory: string | undefined;
 let daemon: { close(): Promise<void>; url: string } | undefined;
+
+/** Keep this lifecycle test on the compatibility model selection path. */
+function withoutAIControlPlane(client: CaelushClient): CaelushClient {
+  return new Proxy(client, {
+    get(target, property, receiver) {
+      if (
+        property === "listAIProviders" ||
+        property === "getAIModelDirectory" ||
+        property === "getDefaultAISelection"
+      ) {
+        return undefined;
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
 
 afterEach(async () => {
   await daemon?.close().catch(() => undefined);
@@ -59,9 +77,10 @@ describe("Web Session model production lifecycle", () => {
       modelSources: [fixtureModelSource()],
       adapterOverrides: [provider],
       defaultModel: { provider: FIXTURE_PROVIDER, model: FIXTURE_MODEL },
+      processSandboxProviders: [restrictedProvider],
       web: { buildRoot: join(process.cwd(), "apps", "web", "dist"), workspace },
     });
-    const client = new CaelushClient({ baseUrl: daemon.url });
+    const client = withoutAIControlPlane(new CaelushClient({ baseUrl: daemon.url }));
     const indexResponse = await fetch(`${daemon.url}/`);
     expect(indexResponse.status).toBe(200);
     expect(await indexResponse.text()).toContain('id="caelush-bootstrap"');
@@ -72,7 +91,17 @@ describe("Web Session model production lifecycle", () => {
 
     await manager.loadSessions();
     manager.beginDraft();
-    await expect(manager.submitPrompt("complete the web lifecycle")).resolves.toBe(true);
+    const submitted = await manager.submitPrompt("complete the web lifecycle");
+    expect(
+      submitted,
+      JSON.stringify({
+        error: manager.getSnapshot().error,
+        selectedPreset: manager.getSnapshot().selectedPreset,
+        availablePresets: manager.getSnapshot().availablePresets,
+        submission: manager.getSnapshot().submission,
+        selectedSession: manager.getSnapshot().selectedSession?.id,
+      }),
+    ).toBe(true);
     await waitFor(() => manager.getSnapshot().submission === "IDLE");
 
     const snapshot = manager.getSnapshot();

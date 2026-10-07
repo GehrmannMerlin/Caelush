@@ -282,7 +282,6 @@ describe("Phase 3E completion authority boundaries", () => {
       "CANONICAL_ACCEPT",
       "CANONICAL_REJECT",
       "REPAIR_COMPATIBILITY",
-      "RETRYABLE_ERROR_SUSPEND",
       "TERMINATION_AUTHORITY",
     ]) {
       expect(router, route).toContain(route);
@@ -366,15 +365,13 @@ describe("Phase 3E completion authority boundaries", () => {
     expect(commit).toContain("verificationPlan: plan,");
     // A verification conflict stays a conflict rather than becoming an infrastructure failure.
     expect(commit).toContain("error instanceof RunExecutionConflictError");
-    // A retryable suspension commits nothing at all.
+    // The Run layer applies only the typed route classified above.
     const settle = controller.slice(
       at(controller, "private async settleCompletionEffect("),
       at(controller, "private async settleCanonicalCompletion("),
     );
-    expect(settle).toContain('case "RETRYABLE_ERROR_SUSPEND":');
-    expect(settle).toContain(
-      'return { kind: "RESULT", result: this.resultFromSnapshot(current) };',
-    );
+    expect(settle).toContain("classifyCompletionEffectSettlement({");
+    expect(settle).toContain("switch (route.route)");
   });
 
   it("keeps the plan bound to the candidate the boundary wrote", () => {
@@ -393,9 +390,13 @@ describe("Phase 3E completion authority boundaries", () => {
     // A refusal is loud rather than a fabricated verdict.
     expect(gate).toContain("CompletionGateIdentityError");
     expect(gate).toContain("CompletionGateInfrastructureError");
-    // And an undecidable completion suspends instead of failing the Run.
-    expect(gate).toContain("retryable: true");
-    expect(gate).toContain("function suspended(");
+    // An undecidable verification remains an explicit nonretryable error because no durable retry
+    // schedule exists; the effect router settles that error through the canonical Run failure path.
+    const verification = executable("packages/core/src/run-completion-verification.ts");
+    expect(verification).toContain("retryable: false");
+    const settlement = executable("packages/core/src/run-completion-effect-settlement.ts");
+    expect(settlement).toContain('case "ERROR":');
+    expect(settlement).toContain('route: "CANONICAL_REJECT"');
 
     // The plan is loaded by the identity the continuation names, and refused when it is not this
     // Run's.

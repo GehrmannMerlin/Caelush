@@ -14,6 +14,7 @@ import { openCaelushDatabase } from "../src/database.js";
 import { migrateCaelushDatabase } from "../src/migrate.js";
 import { SqliteContextCheckpointRepository } from "../src/context-checkpoint-repository.js";
 import { StorageDecodeError } from "../src/errors.js";
+import { makeSecurityPolicy } from "./support/fixtures.js";
 
 const directories: string[] = [];
 const databases: Array<{ close(): void }> = [];
@@ -35,7 +36,8 @@ function makeRun() {
     model: { provider: "fixture", model: "fixture-model" },
     runtime: { id: "local", kind: "fixture" },
     permissionProfile: "READ_ONLY",
-    approvalPolicy: "ALWAYS_ASK",
+    approvalPolicy: "ON_BOUNDARY",
+    securityPolicy: makeSecurityPolicy(),
     limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 1000 },
     createdAt: createTimestampMs(1),
     startedAt: createTimestampMs(2),

@@ -16,7 +16,12 @@ import {
 import { EventBus } from "./support/test-event-notifier.js";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
-import { makeState, makeStep, verificationPlanner } from "./support/fixtures.js";
+import {
+  makeSecurityPolicy,
+  makeState,
+  makeStep,
+  verificationPlanner,
+} from "./support/fixtures.js";
 import {
   fakeFrozenModelTurnExecutor,
   testRunAgentExecution,
@@ -34,7 +39,8 @@ function run() {
     model: { provider: "fixture", model: "fixture-model" },
     runtime: { id: "local", kind: "fixture" },
     permissionProfile: "READ_ONLY",
-    approvalPolicy: "ALWAYS_ASK",
+    approvalPolicy: "ON_BOUNDARY",
+    securityPolicy: makeSecurityPolicy(),
     limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 1000 },
     createdAt: createTimestampMs(1),
   });

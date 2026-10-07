@@ -1296,10 +1296,7 @@ describe("architecture v2 repository baseline integration", () => {
       const kinds = new Set(entries.map((entry) => entry.edgeClass as string));
 
       expect([...kinds].sort()).toEqual(["package-manifest", "target-to-legacy"]);
-      expect([...new Set(entries.map((entry) => entry.sourcePackage))].sort()).toEqual([
-        "runtime",
-        "storage",
-      ]);
+      expect([...new Set(entries.map((entry) => entry.sourcePackage))].sort()).toEqual(["storage"]);
 
       for (const entry of entries) {
         if (entry.kind === "package-manifest") {

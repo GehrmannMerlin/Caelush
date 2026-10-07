@@ -65,15 +65,16 @@ describe("daemon provider and public model boundary", () => {
       defaultWorkspace: { id: createWorkspaceId(), path: directory },
       defaultModel: { provider: "configured", model: "allowed-model" },
     });
+    const workspace = session.defaultWorkspace;
+    if (workspace === undefined) throw new Error("test Workspace was not registered");
     expect(session.defaultModel).toEqual({ provider: "configured", model: "allowed-model" });
     expect(JSON.stringify(session)).not.toContain("provider.example");
 
     const baseRun = {
       goal: "inspect",
-      workspace: session.defaultWorkspace ?? { id: createWorkspaceId(), path: directory },
+      workspace,
       runtime: { id: "local", kind: "local" as const },
-      permissionProfile: "PROJECT_ACCESS" as const,
-      approvalPolicy: "NEVER_ASK" as const,
+      preset: { id: "FULL_ACCESS" as const, expectedVersion: 1 },
       limits: { maxSteps: 2, maxToolCalls: 2, timeoutMs: 5_000 },
     };
     await expect(

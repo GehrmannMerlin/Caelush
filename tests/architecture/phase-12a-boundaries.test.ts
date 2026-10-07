@@ -75,11 +75,27 @@ describe("Phase 12A daemon and shared-client boundaries", () => {
     expect(source).not.toMatch(/from\s+["']@caelush\/tools["']/);
   });
 
-  it("keeps provider and Runtime host execution out of daemon production adapters", async () => {
+  it("keeps provider and Run-process execution out of daemon production adapters", async () => {
     const daemon = await sourceTree("apps/daemon/src");
-    expect(daemon).not.toMatch(/\b(?:fetch|spawn|execFile|nodePty)\s*\(/);
-    expect(daemon).not.toMatch(/from\s+["']node:child_process["']/);
-    expect(daemon).not.toMatch(
+    const pickerPath = path.join(
+      repositoryRoot,
+      "apps",
+      "daemon",
+      "src",
+      "workspaces",
+      "workspace-picker.ts",
+    );
+    const picker = await readFile(pickerPath, "utf8");
+    const daemonWithoutPicker = daemon.replace(picker, "");
+    // The one host process exception is a bounded Windows folder dialog. It is not a Run command or
+    // provider transport; Run process execution remains behind Runtime.
+    expect(picker).toContain('import { execFile } from "node:child_process"');
+    expect(picker).toContain("System.Windows.Forms.FolderBrowserDialog");
+    expect(picker).toContain("WORKSPACE_PICKER_TIMEOUT_MS");
+    expect(picker).toContain("child.kill()");
+    expect(daemonWithoutPicker).not.toMatch(/\b(?:fetch|spawn|execFile|nodePty)\s*\(/);
+    expect(daemonWithoutPicker).not.toMatch(/from\s+["']node:child_process["']/);
+    expect(daemonWithoutPicker).not.toMatch(
       /\b(?:React|Ink|EventSource|WebSocket|cors|MCP|Browser|Computer)\b/i,
     );
   });

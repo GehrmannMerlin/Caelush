@@ -406,7 +406,14 @@ describe("DefaultPublicEventProjector", () => {
     for (const definition of RUN_EVENT_TYPE_CATALOG.filter(
       (item) => item.visibility === "USER_VISIBLE",
     )) {
-      const payload = payloads[definition.type];
+      const payload =
+        definition.type === "model.text.delta" && definition.schemaVersion === 2
+          ? {
+              ...(payloads[definition.type] as Record<string, unknown>),
+              assistantItemId: "assistant_item_fixture",
+              phase: "FINAL_ANSWER",
+            }
+          : payloads[definition.type];
       expect(payload, `fixture missing for ${definition.type}`).toBeDefined();
       const statusRunId = definition.type === "model.status" ? createRunId() : undefined;
       const statusStepId = definition.type === "model.status" ? createStepId() : undefined;

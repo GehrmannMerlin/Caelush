@@ -58,6 +58,27 @@ export const PromptCachePurposeUsageSchema = z
     "Purpose unknown usage count cannot exceed its request count.",
   );
 
+const PromptCacheFingerprintSchema = z.string().regex(/^(?:sha256:)?[a-f0-9]{64}$/);
+
+export const PromptCacheSurfaceSegmentsSchema = z
+  .object({
+    prefixFingerprint: PromptCacheFingerprintSchema,
+    modelFingerprint: PromptCacheFingerprintSchema,
+    stableHeadFingerprint: PromptCacheFingerprintSchema,
+    toolCatalogFingerprint: PromptCacheFingerprintSchema,
+    cacheSettingsFingerprint: PromptCacheFingerprintSchema,
+    checkpointFingerprint: PromptCacheFingerprintSchema,
+    recentTailFingerprint: PromptCacheFingerprintSchema,
+    roleSizeVectorFingerprint: PromptCacheFingerprintSchema,
+    stableHeadTokens: SafeTokenCountSchema,
+    snapshotTokens: SafeTokenCountSchema,
+    recentTailTokens: SafeTokenCountSchema,
+    checkpointBytes: SafeTokenCountSchema,
+    recentTailBytes: SafeTokenCountSchema,
+    recentTailMessageCount: SafeTokenCountSchema,
+  })
+  .strict();
+
 export const PromptCacheUsageSchema = z
   .object({
     status: PromptCacheStatusSchema,
@@ -79,6 +100,7 @@ export const PromptCacheUsageSchema = z
     resetAt: TimestampMsSchema.optional(),
     lastMeasuredAt: TimestampMsSchema.optional(),
     purposes: z.array(PromptCachePurposeUsageSchema).max(6),
+    surfaceSegments: PromptCacheSurfaceSegmentsSchema.optional(),
   })
   .strict()
   .superRefine((usage, context) => {
@@ -178,6 +200,7 @@ export const ContextUsageResponseSchema = ContextUsageProjectionSchema.nullable(
 export type PromptCacheStatus = z.infer<typeof PromptCacheStatusSchema>;
 export type PromptCacheRequestPurpose = z.infer<typeof PromptCacheRequestPurposeSchema>;
 export type PromptCachePurposeUsage = z.infer<typeof PromptCachePurposeUsageSchema>;
+export type PromptCacheSurfaceSegments = z.infer<typeof PromptCacheSurfaceSegmentsSchema>;
 export type PromptCacheUsage = z.infer<typeof PromptCacheUsageSchema>;
 export type ContextUsageProjection = z.infer<typeof ContextUsageProjectionSchema>;
 export type ContextUsageResponse = z.infer<typeof ContextUsageResponseSchema>;

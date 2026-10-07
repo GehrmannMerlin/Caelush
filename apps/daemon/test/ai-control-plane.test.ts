@@ -117,8 +117,7 @@ describe("AI runtime configuration control plane", () => {
       goal: "selection snapshot",
       workspace: { id: workspace.id, path: directory },
       runtime: { id: "local", kind: "local" as const },
-      permissionProfile: "PROJECT_ACCESS" as const,
-      approvalPolicy: "NEVER_ASK" as const,
+      preset: { id: "FULL_ACCESS" as const, expectedVersion: 1 },
       limits: { maxSteps: 1, maxToolCalls: 1, timeoutMs: 5_000 },
     };
     const firstRun = await client.createRun(session.id, baseRun);

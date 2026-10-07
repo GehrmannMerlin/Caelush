@@ -72,7 +72,7 @@ describe("Phase 2C daemon model authority", () => {
     expect(composition).toMatch(/models:\s*ai\.models/);
     // A host-driven turn is executed by the one executor, under the identity its caller names.
     expect(composition).toMatch(/verificationModelTurns:\s*VerificationModelClient/);
-    expect(composition).toContain("modelTurnExecutor.execute({");
+    expect(composition).toContain("modelTurnExecutor,");
     // Verification reviews through the same executor, not through a second generation: Phase 3E
     // retired the throw-based facade, so the explicit-identity client *is* the executor wrapper.
     expect(composition).toMatch(/const verificationModelTurns: VerificationModelClient = \{/);
@@ -700,6 +700,25 @@ describe("Phase 2C package edges", () => {
         "deriveLegacyAgentMessageId",
         "toToolFeedbackProjectionPolicyJson",
         "toToolFeedbackProjectionReceiptJson",
+        // Current prompt-surface and assistant projection contracts used by Context caching.
+        "AGENT_ASSISTANT_MESSAGE_CODEC_V3",
+        "PROMPT_SURFACE_LIMITS",
+        "PROMPT_SURFACE_RESET_REASONS",
+        "PromptSurfaceIntegrityError",
+        "TOOL_NOT_STARTED",
+        "TOOL_NOT_STARTED_CONTENT",
+        "assertPromptSurfaceEpoch",
+        "assertPromptSurfaceEpochWithSnapshots",
+        "assertPromptSurfaceSnapshot",
+        "assertPromptSurfaceSnapshotInput",
+        "createContextSummaryReplayPrefixFingerprint",
+        "createPromptSurfaceEpoch",
+        "createPromptSurfaceEpochId",
+        "createPromptSurfaceFingerprint",
+        "createPromptSurfaceSnapshot",
+        "hashPromptSurfaceContent",
+        "projectAgentAssistantTextItems",
+        "projectPromptSurface",
       ].sort(),
     );
   });

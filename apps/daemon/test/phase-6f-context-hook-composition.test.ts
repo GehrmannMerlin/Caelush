@@ -85,17 +85,19 @@ describe("Phase 6F production Context Hook composition", () => {
     });
 
     const client = new CaelushClient({ baseUrl: daemon.url });
+    const workspace = { id: createWorkspaceId(), path: directory };
     const session = await client.createSession({
-      defaultWorkspace: { id: createWorkspaceId(), path: directory },
+      defaultWorkspace: workspace,
       defaultModel: { provider: "fixture", model: "fixture-model" },
     });
+    if (session.defaultWorkspace === undefined)
+      throw new Error("test Workspace was not registered");
     const run = await client.createRun(session.id, {
       goal: "inspect the workspace",
-      workspace: { id: createWorkspaceId(), path: directory },
+      workspace: session.defaultWorkspace,
       model: { provider: "fixture", model: "fixture-model" },
       runtime: { id: "local", kind: "local" },
-      permissionProfile: "PROJECT_ACCESS",
-      approvalPolicy: "NEVER_ASK",
+      preset: { id: "FULL_ACCESS", expectedVersion: 1 },
       limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 10_000 },
     });
     await client.startRun(run.id);

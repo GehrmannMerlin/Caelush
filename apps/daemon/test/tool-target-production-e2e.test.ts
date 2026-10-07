@@ -112,13 +112,14 @@ async function drive(provider: ApiAdapter, files: Record<string, string>) {
     defaultWorkspace: workspace,
     defaultModel: { provider: "fixture", model: "fixture-model" },
   });
+  const registeredWorkspace = session.defaultWorkspace;
+  if (registeredWorkspace === undefined) throw new Error("test Workspace was not registered");
   const run = await client.createRun(session.id, {
     goal: "exercise the production tool",
-    workspace,
+    workspace: registeredWorkspace,
     model: { provider: "fixture", model: "fixture-model" },
     runtime: { id: "local", kind: "local" },
-    permissionProfile: "FULL_ACCESS",
-    approvalPolicy: "NEVER_ASK",
+    preset: { id: "FULL_ACCESS", expectedVersion: 1 },
     limits: { maxSteps: 6, maxToolCalls: 6, timeoutMs: 20_000 },
   });
   await client.startRun(run.id);

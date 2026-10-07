@@ -17,7 +17,11 @@ import {
 import { EventBus } from "./support/test-event-notifier.js";
 import { describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
-import { verificationPlanner } from "./support/fixtures.js";
+import {
+  createStorageTestCompletionAssembly,
+  makeSecurityPolicy,
+  verificationPlanner,
+} from "./support/fixtures.js";
 import type { PartialTurnResult } from "./support/model-turns.js";
 import {
   fakeFrozenModelTurnExecutor,
@@ -36,7 +40,8 @@ function makeRun() {
     model: { provider: "fixture", model: "fixture-model" },
     runtime: { id: "local", kind: "fixture" },
     permissionProfile: "READ_ONLY",
-    approvalPolicy: "ALWAYS_ASK",
+    approvalPolicy: "ON_BOUNDARY",
+    securityPolicy: makeSecurityPolicy(),
     limits: { maxSteps: 4, maxToolCalls: 4, timeoutMs: 1000 },
     createdAt: createTimestampMs(1),
   });
@@ -128,7 +133,7 @@ describe("RunController durable boundaries", () => {
     await storage.close();
   });
 
-  it("persists a tool boundary, accepts results before resume, and persists VERIFYING candidate", async () => {
+  it("persists a tool boundary and accepts a durable result batch before verified completion", async () => {
     const storage = await openCaelushStorage({ path: ":memory:" });
     const run = makeRun();
     const session = { id: run.sessionId, createdAt: 1, updatedAt: 1, metadata: {} } as never;
@@ -146,6 +151,7 @@ describe("RunController durable boundaries", () => {
       turn("fixed", [], "STOP"),
     ];
     let now = 10;
+    const clock = { now: () => createTimestampMs(now++) };
     const agentExecution = testRunAgentExecution({
       executor: fakeFrozenModelTurnExecutor(async () => results.shift()!),
       createStepId: () => createStepId(),
@@ -153,6 +159,7 @@ describe("RunController durable boundaries", () => {
     const controller = new RunController({
       agentExecution,
       executionStore: storage.execution,
+      completionStore: storage.execution,
       messages: testRunMessageAuthority({
         records: (runId) => storage.messageRecords.listByRun(runId),
       }),
@@ -163,8 +170,9 @@ describe("RunController durable boundaries", () => {
           contextLimits: { maxInputTokens: 1000 },
         }),
       },
-      clock: { now: () => createTimestampMs(now++) },
+      clock,
       eventIdFactory: { create: () => createEventId() },
+      completion: createStorageTestCompletionAssembly(storage, clock),
       verificationPlanner,
     });
 
@@ -187,30 +195,27 @@ describe("RunController durable boundaries", () => {
         isError: false,
       },
     ]);
-    expect(final.status).toBe("AWAITING_VERIFICATION");
-    expect((await storage.runs.get(run.id))?.status).toBe("VERIFYING");
-    expect((await storage.runStates.get(run.id))?.status).toBe("VERIFYING");
+    expect(final.status).toBe("TERMINAL");
+    expect(final.run.status).toBe("COMPLETED");
+    expect((await storage.runs.get(run.id))?.status).toBe("COMPLETED");
+    expect((await storage.runStates.get(run.id))?.status).toBe("COMPLETED");
     expect((await projectedRunMessages(storage, run.id)).map((message) => message.role)).toEqual([
       "user",
       "assistant",
       "tool",
       "assistant",
     ]);
-    expect((await storage.continuations.get(run.id))?.checkpoint.type).toBe(
-      "AWAITING_VERIFICATION",
-    );
-    const storedPlan = await storage.verification.getPlanForRun(
-      run.id,
-      (final as Extract<typeof final, { status: "AWAITING_VERIFICATION" }>).sourceStepId,
-    );
-    expect(storedPlan?.id).toBe(
-      (final as Extract<typeof final, { status: "AWAITING_VERIFICATION" }>).verificationPlanId,
-    );
+    expect(await storage.continuations.get(run.id)).toBeNull();
+    const storedPlan = await storage.verification.getLatestPlan(run.id);
+    expect(storedPlan?.candidateHash).toBeDefined();
     expect(events.map((event) => (event as { type: string }).type)).toContain(
       "verification.planned",
     );
-    expect((await storage.runs.get(run.id))?.finalResult).toBeUndefined();
-    expect(events.map((event) => (event as { type: string }).type)).not.toContain("run.completed");
+    expect((await storage.runs.get(run.id))?.finalResult).toMatchObject({
+      type: "VERIFIED_COMPLETION",
+      text: "fixed",
+    });
+    expect(events.map((event) => (event as { type: string }).type)).toContain("run.completed");
     expect(await storage.eventReader.latestSequence(run.id)).toBeGreaterThan(0);
     const records = await storage.messageRecords.listByRun(run.id);
     const committedMessageEvents = (
@@ -247,6 +252,7 @@ describe("RunController durable boundaries", () => {
       turn("fixed", [], "STOP"),
     ];
     let now = 10;
+    const clock = { now: () => createTimestampMs(now++) };
     let calls = 0;
     const controller = new RunController({
       agentExecution: testRunAgentExecution({
@@ -257,6 +263,7 @@ describe("RunController durable boundaries", () => {
         createStepId: () => createStepId(),
       }).factory,
       executionStore: storage.execution,
+      completionStore: storage.execution,
       messages: testRunMessageAuthority({
         records: (runId) => storage.messageRecords.listByRun(runId),
       }),
@@ -267,8 +274,9 @@ describe("RunController durable boundaries", () => {
           contextLimits: { maxInputTokens: 1000 },
         }),
       },
-      clock: { now: () => createTimestampMs(now++) },
+      clock,
       eventIdFactory: { create: () => createEventId() },
+      completion: createStorageTestCompletionAssembly(storage, clock),
       verificationPlanner,
     });
     await controller.start(run.id);
@@ -305,7 +313,8 @@ describe("RunController durable boundaries", () => {
       controller.submitToolResults(run.id, [{ ...accepted[0]!, content: "different" }]),
     ).rejects.toBeInstanceOf(RunControllerConflictError);
     const result = await controller.submitToolResults(run.id, accepted);
-    expect(result.status).toBe("AWAITING_VERIFICATION");
+    expect(result.status).toBe("TERMINAL");
+    expect(result.run.status).toBe("COMPLETED");
     expect(calls).toBe(2);
     await storage.close();
   });

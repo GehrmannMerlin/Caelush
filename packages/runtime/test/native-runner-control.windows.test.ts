@@ -153,10 +153,10 @@ describeWindows("native Windows Runner control handshake", () => {
         spec: sandboxedSpec(),
         privateRunTemp: missingPrivateTemp(),
       }),
-    ).rejects.toThrow(/expected READY/i);
+    ).rejects.toThrow(/WINDOWS_PATH_BOUNDARY_INVALID/);
   });
 
-  it("does not start the payload when the requested mode is not implemented", async () => {
+  it("does not start the payload when the private temp path is invalid", async () => {
     const sentinel = join(temporaryDirectory, "workspace-write-payload-started.txt");
     const input = sandboxedSpec();
     await expect(
@@ -172,7 +172,7 @@ describeWindows("native Windows Runner control handshake", () => {
         },
         privateRunTemp: missingPrivateTemp(),
       }),
-    ).rejects.toThrow(/expected READY/i);
+    ).rejects.toThrow(/WINDOWS_PATH_BOUNDARY_INVALID/);
     await expect(access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
@@ -278,7 +278,7 @@ function readOnlySpec(): SandboxedSpawnSpec {
 }
 
 function missingPrivateTemp(): PrivateRunTemp {
-  const root = join(process.cwd(), ".caelush-missing-private-temp");
+  const root = join(tmpdir(), ".caelush-missing-private-temp");
   return {
     root,
     markerPath: join(root, ".caelush-private-temp.json"),
