@@ -35,6 +35,7 @@ const FIXTURE_PROVIDER_ID = "browser-fixture";
 const FIXTURE_MODEL_ID = "browser-fixture-model";
 let providerRecoveryAttempts = 0;
 let multiTurnPatchRequests = 0;
+let s0PatchServed = false;
 
 /**
  * The sandbox Runner as a host with a working packaged artifact reports it.
@@ -190,6 +191,36 @@ async function handleModelRequest(request, response) {
     }
     return;
   }
+  if (promptText.includes("s0 streaming buffer") && (hasToolResult || s0PatchServed)) {
+    writeSse(response, textChunks("S0 streaming regression completed."));
+    return;
+  }
+  if (promptText.includes("s0 streaming buffer") && !s0PatchServed) {
+    s0PatchServed = true;
+    const fixtureHtml = [
+      "<!doctype html>",
+      '<html lang="zh-CN">',
+      '<head><meta charset="utf-8"><title>S0 stream fixture</title></head>',
+      '<body><form><label>邮箱<input type="email" required></label><button>注册</button></form>',
+      `<!-- ${"x".repeat(20_000)} -->`,
+      "</body>",
+      "</html>",
+    ].join("\n");
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: s0-stream-fixture.html",
+      ...fixtureHtml.split("\n").map((line) => `+${line}`),
+      "*** End Patch",
+    ].join("\n");
+    const streamedArguments = streamedToolCallChunks(
+      "apply_patch",
+      JSON.stringify({ patch }),
+      "browser-s0-streaming-patch",
+      1_000,
+    );
+    await writeSseDelayed(response, streamedArguments, 4, 500);
+    return;
+  }
   if (promptText.includes("read browser fixture") && !hasToolResult) {
     writeSse(
       response,
@@ -292,6 +323,19 @@ function writeSse(response, chunks) {
   response.end("data: [DONE]\n\n");
 }
 
+async function writeSseDelayed(response, chunks, delayMs, initialPauseMs = 0) {
+  response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
+  for (let index = 0; index < chunks.length; index += 1) {
+    if (response.destroyed) return;
+    response.write(`data: ${JSON.stringify(chunks[index])}\n\n`);
+    const delay = index === 0 ? initialPauseMs : delayMs;
+    if (delay > 0) {
+      await new Promise((resolvePromise) => globalThis.setTimeout(resolvePromise, delay));
+    }
+  }
+  response.end("data: [DONE]\n\n");
+}
+
 function holdSseFor(response, delayMs, chunks, initialChunks = []) {
   response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
   response.flushHeaders();
@@ -345,13 +389,54 @@ function toolCallChunks(name, input, toolCallId) {
   ];
 }
 
+function streamedToolCallChunks(name, argumentsText, toolCallId, deltaCount) {
+  const initialCharacters = 16 * 1024 + 64;
+  const initialArguments = argumentsText.slice(0, initialCharacters);
+  const remainder = argumentsText.slice(initialCharacters);
+  if (remainder.length < deltaCount) {
+    throw new Error("The S0 fixture needs at least one character in each streamed Tool delta.");
+  }
+
+  const chunks = [
+    chunk(
+      {
+        role: "assistant",
+        tool_calls: [
+          {
+            index: 0,
+            id: toolCallId,
+            type: "function",
+            function: { name, arguments: initialArguments },
+          },
+        ],
+      },
+      null,
+    ),
+  ];
+  for (let index = 0; index < deltaCount; index += 1) {
+    const start = Math.floor((remainder.length * index) / deltaCount);
+    const end = Math.floor((remainder.length * (index + 1)) / deltaCount);
+    chunks.push(
+      chunk(
+        { tool_calls: [{ index: 0, function: { arguments: remainder.slice(start, end) } }] },
+        null,
+      ),
+    );
+  }
+  chunks.push(chunk({}, "tool_calls", USAGE));
+  return chunks;
+}
+
 const promptCacheOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "PROMPT_CACHE";
 const multiTurnOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "MULTI_TURN";
+const s0Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S0";
 const configuredArtifactDirectory = process.env.CAELUSH_BROWSER_SMOKE_ARTIFACT_DIR;
 const browserArtifacts = promptCacheOnly
   ? await resolvePromptCacheArtifactDirectory(process.cwd(), configuredArtifactDirectory)
   : configuredArtifactDirectory === undefined
-    ? join(process.cwd(), "test-results", "web-session-browser-smoke")
+    ? s0Only
+      ? join(tmpdir(), `caelush-web-browser-smoke-s0-${process.pid}`)
+      : join(process.cwd(), "test-results", "web-session-browser-smoke")
     : resolve(configuredArtifactDirectory);
 
 const directory = await mkdtemp(join(tmpdir(), "caelush-web-browser-"));
@@ -407,6 +492,15 @@ try {
   }
   await mkdir(browserArtifacts, { recursive: true });
   const result = await runBrowserSmoke(daemon.url + "/", browserArtifacts, workspace);
+  if (result === 0 && s0Only) {
+    const fixture = await readFile(join(directory, "s0-stream-fixture.html"), "utf8");
+    if (!fixture.includes("S0 stream fixture") || fixture.length < 20_000) {
+      throw new Error("The S0 streaming Tool fixture was not written completely.");
+    }
+    process.stdout.write(
+      `[browser-smoke] S0 streamed Tool fixture persisted (${fixture.length} characters).\n`,
+    );
+  }
   if (result === 0 && multiTurnOnly) {
     const fixture = await readFile(join(directory, "fixture.txt"), "utf8");
     if (fixture !== "multi-turn fixture\n") {
@@ -418,7 +512,7 @@ try {
       "[browser-smoke] focused multi-turn Tool effect persisted: " + JSON.stringify(fixture) + "\n",
     );
   }
-  if (result === 0 && !promptCacheOnly && !multiTurnOnly) {
+  if (result === 0 && !promptCacheOnly && !multiTurnOnly && !s0Only) {
     const fixture = await readFile(join(directory, "fixture.txt"), "utf8");
     if (fixture !== "patched browser fixture\n") {
       throw new Error("Browser approval flow did not persist the verified patch.");

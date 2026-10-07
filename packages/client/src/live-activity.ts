@@ -10,6 +10,11 @@ import {
   type ToolPresentationEffect,
   type ToolPresentationPhase,
 } from "@caelush/protocol";
+import {
+  appendBoundedLiveText,
+  createEmptyBoundedLiveText,
+  type BoundedLiveText,
+} from "./bounded-live-text.js";
 
 export type LiveActivityKind =
   | "MODEL_TEXT"
@@ -26,6 +31,10 @@ export interface LiveActivity {
   readonly kind: LiveActivityKind;
   readonly status: LiveActivityStatus;
   readonly text: string;
+  /** Present on streamed text activities; retained bytes are maintained incrementally. */
+  readonly retainedBytes?: number;
+  readonly truncated?: boolean;
+  readonly omittedBytes?: number;
   readonly streamKey: string;
   readonly streamSequence: number;
   readonly runId: RunId;
@@ -169,12 +178,17 @@ export function reduceLiveActivityEvent(
       return withModelWait(remembered, updateModelWaitFromTransient(state, event));
     }
     const existing = state.activities.find((item) => item.id === activity.id);
+    const previousText =
+      existing === undefined
+        ? createEmptyBoundedLiveText()
+        : boundedTextStateFor(existing, state.maxTextBytes);
+    const boundedText = appendBoundedLiveText(previousText, activity.text, state.maxTextBytes);
     const nextActivity: LiveActivity = {
       ...activity,
+      ...boundedText,
       ...(existing === undefined
         ? {}
         : {
-            text: appendBounded(existing.text, activity.text, state.maxTextBytes),
             status: existing.status === "ACTIVE" ? activity.status : existing.status,
             ...(existing.settledAtSequence === undefined
               ? {}
@@ -780,22 +794,20 @@ function remember(state: LiveActivityState, eventId: string): LiveActivityState 
   };
 }
 
-function appendBounded(previous: string, next: string, maxBytes: number): string {
-  return truncateUtf8(`${previous}${next}`, maxBytes);
-}
-
-function truncateUtf8(value: string, maxBytes: number): string {
-  if (utf8ByteLength(value) <= maxBytes) return value;
-  let result = "";
-  for (const character of value) {
-    if (utf8ByteLength(`${result}${character}`) > maxBytes) break;
-    result += character;
+function boundedTextStateFor(activity: LiveActivity, maxBytes: number): BoundedLiveText {
+  if (
+    activity.retainedBytes !== undefined &&
+    activity.truncated !== undefined &&
+    activity.omittedBytes !== undefined
+  ) {
+    return {
+      text: activity.text,
+      retainedBytes: activity.retainedBytes,
+      truncated: activity.truncated,
+      omittedBytes: activity.omittedBytes,
+    };
   }
-  return result;
-}
-
-function utf8ByteLength(value: string): number {
-  return new TextEncoder().encode(value).byteLength;
+  return appendBoundedLiveText(createEmptyBoundedLiveText(), activity.text, maxBytes);
 }
 
 function isTransientLiveEvent(event: PublicRunEvent): event is TransientLiveEvent {

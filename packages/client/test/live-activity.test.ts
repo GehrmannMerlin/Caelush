@@ -468,6 +468,81 @@ describe("LiveActivity projection", () => {
     expect(state.activities.every((item) => item.status === "COMPLETED")).toBe(true);
   });
 
+  it("bounds the first streamed text chunk and records its UTF-8 accounting", () => {
+    const maxTextBytes = 16 * 1024;
+    const text = "a".repeat(maxTextBytes + 10);
+    const state = reduceLiveActivityEvent(
+      createInitialLiveActivityState(runId),
+      transient("model.tool_call.delta", { toolCallId: "call-s0", delta: text }, "tool-call:s0", 1),
+    );
+
+    expect(state.activities[0]).toMatchObject({
+      kind: "MODEL_TOOL_CALL",
+      text: "a".repeat(maxTextBytes),
+      retainedBytes: maxTextBytes,
+      truncated: true,
+      omittedBytes: 10,
+    });
+  });
+
+  it("uses bounded text accounting for every streaming activity kind", () => {
+    const maxTextBytes = 16 * 1024;
+    const chunk = "x".repeat(maxTextBytes + 5);
+    const cases = [
+      {
+        type: "model.text.delta",
+        payload: { text: chunk },
+        streamKey: "model:text:s0",
+        kind: "MODEL_TEXT",
+      },
+      {
+        type: "model.reasoning_summary.delta",
+        payload: { text: chunk },
+        streamKey: "model:reasoning:s0",
+        kind: "MODEL_REASONING",
+      },
+      {
+        type: "model.tool_call.delta",
+        payload: { toolCallId: "call-s0", delta: chunk },
+        streamKey: "model:tool-call:s0",
+        kind: "MODEL_TOOL_CALL",
+      },
+      {
+        type: "tool.output",
+        payload: { invocationId, stream: "stdout", chunk },
+        streamKey: `tool:${invocationId}`,
+        kind: "TOOL_OUTPUT",
+      },
+      {
+        type: "shell.output",
+        payload: { invocationId, stream: "stdout", chunk },
+        streamKey: `shell:${invocationId}`,
+        kind: "SHELL_OUTPUT",
+      },
+      {
+        type: "process.output",
+        payload: { processId: "process-s0", stream: "stdout", chunk },
+        streamKey: "process:process-s0",
+        kind: "PROCESS_OUTPUT",
+      },
+    ];
+
+    for (const [index, item] of cases.entries()) {
+      const state = reduceLiveActivityEvent(
+        createInitialLiveActivityState(runId),
+        transient(item.type, item.payload, item.streamKey, index + 1),
+      );
+
+      expect(state.activities[0]).toMatchObject({
+        kind: item.kind,
+        text: "x".repeat(maxTextBytes),
+        retainedBytes: maxTextBytes,
+        truncated: true,
+        omittedBytes: 5,
+      });
+    }
+  });
+
   it("preserves failed and cancelled terminal outcomes for live rows", () => {
     const toolOutput = transient(
       "tool.output",

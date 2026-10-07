@@ -12,6 +12,7 @@ const context = await browser.newContext();
 const page = await context.newPage();
 const promptCacheOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "PROMPT_CACHE";
 const multiTurnOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "MULTI_TURN";
+const s0Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S0";
 const waitVisible = (locator, timeout = 15_000) => locator.waitFor({ state: "visible", timeout });
 const waitUntil = async (predicate, description, timeout = 15_000) => {
   const deadline = Date.now() + timeout;
@@ -358,6 +359,57 @@ try {
   await assertViewportSplitLayout({ scrollable: false });
   await startNewSession();
   await assertPermissionSelector();
+  if (s0Only) {
+    smokeStage = "S0 browser heartbeat setup";
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => {
+      window.__caelushS0HeartbeatTicks = 0;
+      window.setInterval(() => {
+        window.__caelushS0HeartbeatTicks += 1;
+      }, 25);
+    });
+    const heartbeatBefore = await page.evaluate(() => window.__caelushS0HeartbeatTicks ?? 0);
+
+    smokeStage = "S0 16 KiB Tool Call stream";
+    await submitPrompt("s0 streaming buffer");
+    await waitVisible(page.locator("button.cancel-button"));
+    await page.waitForTimeout(1_000);
+    const heartbeatDuringStream = await page.evaluate(() => window.__caelushS0HeartbeatTicks ?? 0);
+    if (heartbeatDuringStream <= heartbeatBefore) {
+      throw new Error("the browser heartbeat stopped during the streamed Tool Call");
+    }
+
+    smokeStage = "S0 mobile sidebar button responsiveness";
+    const sidebarToggle = page.locator("button.sidebar-toggle-button");
+    const sidebarStateBefore = await sidebarToggle.getAttribute("aria-expanded");
+    await sidebarToggle.click({ timeout: 2_000 });
+    const sidebarStateDuringStream = await sidebarToggle.getAttribute("aria-expanded");
+    if (sidebarStateDuringStream === sidebarStateBefore) {
+      throw new Error("the sidebar button did not respond while Tool deltas were streaming");
+    }
+    await sidebarToggle.click({ timeout: 2_000 });
+
+    smokeStage = "S0 heartbeat and final durable completion";
+    await waitUntil(
+      async () =>
+        (await page.evaluate(() => window.__caelushS0HeartbeatTicks ?? 0)) >= heartbeatBefore + 2,
+      "the browser heartbeat to continue during the Tool stream",
+      2_000,
+    );
+    await waitVisible(exactText("S0 streaming regression completed."));
+    await waitVisible(
+      page
+        .locator("button.workspace-session-item")
+        .filter({ hasText: "s0 streaming buffer" })
+        .locator('.session-status-icon[aria-label="已完成"]'),
+    );
+
+    await browser.close();
+    process.stdout.write(
+      "[browser-runner] S0 Tool stream kept the browser heartbeat and sidebar button responsive, then consumed run.completed.\n",
+    );
+    process.exit(0);
+  }
   if (multiTurnOnly) {
     smokeStage = "focused multi-turn conversation rendering";
     smokeStage = "submitting first completed Turn";
