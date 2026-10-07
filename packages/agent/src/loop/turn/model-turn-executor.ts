@@ -136,13 +136,15 @@ export function createModelTurnExecutor(
 }
 
 /**
- * Forward only the three transient delta kinds to the sink.
+ * Forward public model text, reasoning, and safe Tool preparation signals to the sink.
  *
  * The gateway's envelope events — `stream.start`, `stream.finish`, `stream.error` —
- * plus `usage`, `tool_call.start` and `tool_call.completed` are deliberately not
- * forwarded: envelope lifecycle, accounting and the durable tool-call lifecycle each
- * belong to their own owner, and a host that received them here would have a second
- * unversioned copy of the turn lifecycle next to the frozen result.
+ * plus `usage` and `tool_call.completed` are deliberately not forwarded: envelope
+ * lifecycle, accounting and the durable tool-call lifecycle each belong to their own
+ * owner. Tool argument deltas are suppressed by the canonical projector; only the
+ * safe identity and name from `tool_call.start` become a public preparation signal.
+ * A host therefore cannot receive a second unversioned copy of the turn lifecycle next
+ * to the frozen result or raw argument text through this presentation path.
  *
  * A sink failure is isolated. Presentation can never fail a model turn, and it can never
  * change the frozen result the durable layer will persist.
@@ -225,12 +227,7 @@ function toTransientEvent(
     case "reasoning.summary.delta":
       return { type: "thinking.delta", ...correlation, text: event.payload.text };
     case "tool_call.delta":
-      return {
-        type: "tool_call.delta",
-        ...correlation,
-        toolCallId: event.payload.toolCallId,
-        delta: event.payload.delta,
-      };
+      return undefined;
     default:
       return undefined;
   }

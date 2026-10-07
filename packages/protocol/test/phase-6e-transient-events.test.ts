@@ -13,6 +13,7 @@ import {
   ModelReasoningSummaryDeltaEventSchema,
   ModelStatusEventSchema,
   ModelTextDeltaEventSchema,
+  ModelToolCallStartedEventSchema,
   ModelToolCallDeltaEventSchema,
   ProcessOutputEventV2Schema,
   ShellOutputEventV2Schema,
@@ -77,7 +78,7 @@ describe("Phase 6E transient event contracts", () => {
     ).toEqual({ kind: "TRANSIENT", class: "ORDERED" });
   });
 
-  it("registers canonical model delta events with minimal ordered payloads", () => {
+  it("registers safe Tool preparation metadata while keeping argument deltas non-public", () => {
     const base = common(1, ordered("model:text:run:step", 1));
     const text = ModelTextDeltaEventSchema.parse({
       ...base,
@@ -91,21 +92,45 @@ describe("Phase 6E transient event contracts", () => {
       type: "model.reasoning_summary.delta",
       payload: { text: "public summary" },
     });
-    const tool = ModelToolCallDeltaEventSchema.parse({
+    const toolStarted = ModelToolCallStartedEventSchema.parse({
+      ...base,
+      durability: ordered(`model:tool-call:${base.runId}:${base.stepId}:call`, 1),
+      type: "model.tool_call.started",
+      payload: { toolCallId: "call", toolName: "apply_patch" },
+    });
+    const toolDelta = ModelToolCallDeltaEventSchema.parse({
       ...base,
       eventId: createEventId(),
       durability: ordered("model:tool-call:run:step:call", 1),
+      visibility: "DEBUG",
       type: "model.tool_call.delta",
-      payload: { toolCallId: "call", delta: '{"path":' },
+      payload: { toolCallId: "call", delta: '{"apiKey":"secret-value-123"}' },
     });
 
     expect(text).toMatchObject({ type: "model.text.delta", payload: { text: "hi" } });
     expect(reasoning).toMatchObject({ type: "model.reasoning_summary.delta" });
-    expect(tool).toMatchObject({ type: "model.tool_call.delta", payload: { toolCallId: "call" } });
+    expect(toolStarted).toMatchObject({
+      type: "model.tool_call.started",
+      payload: { toolCallId: "call", toolName: "apply_patch" },
+    });
+    expect(toolDelta).toMatchObject({
+      type: "model.tool_call.delta",
+      visibility: "DEBUG",
+      payload: { toolCallId: "call" },
+    });
     expect(RUN_EVENT_SCHEMA_REGISTRY.supports("model.text.delta", 1)).toBe(true);
     expect(RUN_EVENT_SCHEMA_REGISTRY.supports("model.reasoning_summary.delta", 1)).toBe(true);
     expect(RUN_EVENT_SCHEMA_REGISTRY.supports("model.tool_call.delta", 1)).toBe(true);
+    expect(RUN_EVENT_SCHEMA_REGISTRY.supports("model.tool_call.started", 1)).toBe(true);
     expect(PublicRunEventSchema.parse(text)).toMatchObject({ type: "model.text.delta" });
+    expect(PublicRunEventSchema.parse(toolStarted)).toMatchObject({
+      type: "model.tool_call.started",
+      payload: { toolCallId: "call", toolName: "apply_patch" },
+    });
+    expect(PublicRunEventSchema.safeParse(toolDelta).success).toBe(false);
+    expect(
+      RUN_EVENT_TYPE_CATALOG.find(({ type }) => type === "model.tool_call.delta")?.visibility,
+    ).toBe("DEBUG");
   });
 
   it("registers bounded coalescible model status without arbitrary text", () => {
@@ -135,16 +160,24 @@ describe("Phase 6E transient event contracts", () => {
     expect(status).toMatchObject({ type: "model.status", visibility: "USER_VISIBLE" });
     expect(RUN_EVENT_SCHEMA_REGISTRY.parse(status)).toMatchObject({ type: "model.status" });
     expect(RUN_EVENT_SCHEMA_REGISTRY.supports("model.status", 1)).toBe(true);
-    expect(
-      RUN_EVENT_TYPE_CATALOG.find(({ type }) => type === "model.status"),
-    ).toMatchObject({ visibility: "USER_VISIBLE", delivery: { kind: "TRANSIENT", class: "COALESCIBLE" } });
+    expect(RUN_EVENT_TYPE_CATALOG.find(({ type }) => type === "model.status")).toMatchObject({
+      visibility: "USER_VISIBLE",
+      delivery: { kind: "TRANSIENT", class: "COALESCIBLE" },
+    });
     expect(PublicRunEventSchema.parse(status)).toMatchObject({ type: "model.status" });
 
-    expect(ModelStatusEventSchema.safeParse({ ...status, payload: { ...status.payload, message: "waiting" } }).success).toBe(false);
-    expect(ModelStatusEventSchema.safeParse({
-      ...status,
-      durability: { ...status.durability, streamKey: "model:status:other:step" },
-    }).success).toBe(false);
+    expect(
+      ModelStatusEventSchema.safeParse({
+        ...status,
+        payload: { ...status.payload, message: "waiting" },
+      }).success,
+    ).toBe(false);
+    expect(
+      ModelStatusEventSchema.safeParse({
+        ...status,
+        durability: { ...status.durability, streamKey: "model:status:other:step" },
+      }).success,
+    ).toBe(false);
   });
 
   it("provides ordered v2 shell and process output without accepting incomplete metadata", () => {

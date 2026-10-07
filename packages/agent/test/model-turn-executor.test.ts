@@ -81,11 +81,11 @@ function gateway(script: readonly AIStreamEvent[]): {
   callCount(): number;
   requests(): readonly AIModelRequest[];
   signals(): readonly AbortSignal[];
-  options(): readonly (Parameters<AIGateway["stream"]>[1])[];
+  options(): readonly Parameters<AIGateway["stream"]>[1][];
 } {
   const requests: AIModelRequest[] = [];
   const signals: AbortSignal[] = [];
-  const streamOptions: (Parameters<AIGateway["stream"]>[1])[] = [];
+  const streamOptions: Parameters<AIGateway["stream"]>[1][] = [];
   let calls = 0;
 
   const stub: AIGateway = {
@@ -279,7 +279,7 @@ describe("ModelTurnExecutor transient stream", () => {
     expect(JSON.stringify(result)).not.toContain("thinking");
   });
 
-  it("publishes tool-call argument deltas", async () => {
+  it("keeps tool-call arguments out of the compatibility presentation sink", async () => {
     const fake = gateway([
       start(),
       { type: "tool_call.start", payload: { toolCallId: "c1", toolName: "read_file" } },
@@ -294,24 +294,15 @@ describe("ModelTurnExecutor transient stream", () => {
     const executor = createModelTurnExecutor({ gateway: fake.gateway });
     const collected = collectingSink();
 
-    await executor.execute(input({ streamSink: collected.sink }));
+    const result = completed(await executor.execute(input({ streamSink: collected.sink })));
 
-    expect(collected.events()).toEqual([
-      {
-        type: "tool_call.delta",
-        runId: IDENTITY.runId,
-        stepId: TURN.stepId,
-        toolCallId: "c1",
-        delta: '{"path"',
-      },
-      {
-        type: "tool_call.delta",
-        runId: IDENTITY.runId,
-        stepId: TURN.stepId,
-        toolCallId: "c1",
-        delta: ':"a.ts"}',
-      },
-    ]);
+    expect(collected.events()).toEqual([]);
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.toolCalls[0]).toMatchObject({
+      id: "c1",
+      name: "read_file",
+      input: { path: "a.ts" },
+    });
   });
 
   it("never publishes envelope, usage or tool-call lifecycle events", async () => {

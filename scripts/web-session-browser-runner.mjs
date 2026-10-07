@@ -13,6 +13,7 @@ const page = await context.newPage();
 const promptCacheOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "PROMPT_CACHE";
 const multiTurnOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "MULTI_TURN";
 const s0Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S0";
+const s1Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S1";
 const waitVisible = (locator, timeout = 15_000) => locator.waitFor({ state: "visible", timeout });
 const waitUntil = async (predicate, description, timeout = 15_000) => {
   const deadline = Date.now() + timeout;
@@ -407,6 +408,126 @@ try {
     await browser.close();
     process.stdout.write(
       "[browser-runner] S0 Tool stream kept the browser heartbeat and sidebar button responsive, then consumed run.completed.\n",
+    );
+    process.exit(0);
+  }
+  if (s1Only) {
+    smokeStage = "S1 large Tool argument cutover";
+    const assertS1DomPrivate = async (stage) => {
+      const html = await page.locator("html").evaluate((node) => node.outerHTML);
+      if (
+        html.includes("*** Begin Patch") ||
+        html.includes("S1_RAW_ARGS_SECRET_VALUE_123") ||
+        html.includes('"apiKey"')
+      ) {
+        throw new Error(`raw Tool arguments entered the Web DOM during ${stage}`);
+      }
+    };
+    await page.evaluate(() => {
+      window.__caelushS1SawRunningEdit = false;
+      const observer = new MutationObserver(() => {
+        if (document.body.innerText.includes("正在编辑文件")) {
+          window.__caelushS1SawRunningEdit = true;
+          observer.disconnect();
+        }
+      });
+      observer.observe(document.body, { childList: true, characterData: true, subtree: true });
+    });
+    await submitPrompt("s1 tool argument cutover");
+    await waitVisible(page.locator("button.cancel-button"));
+    await openProcessDisclosure();
+    await waitVisible(exactText("正在准备编辑文件"));
+
+    smokeStage = "S1 preparation DOM privacy";
+    const bodyDuringPreparation = await page.locator("body").innerText();
+    const preparationRow = page.locator(".turn-presentation-live-item").filter({
+      hasText: "正在准备编辑文件",
+    });
+    if (!(await preparationRow.isVisible())) {
+      throw new Error("the Web page did not show the semantic apply_patch preparation activity");
+    }
+    const preparationTitle = await preparationRow.getAttribute("title");
+    if (
+      bodyDuringPreparation.includes("*** Begin Patch") ||
+      bodyDuringPreparation.includes("S1_RAW_ARGS_SECRET_VALUE_123") ||
+      bodyDuringPreparation.includes('"apiKey"') ||
+      preparationTitle?.includes("*** Begin Patch") ||
+      preparationTitle?.includes("S1_RAW_ARGS_SECRET_VALUE_123") ||
+      preparationTitle?.includes('"apiKey"')
+    ) {
+      throw new Error("raw model Tool arguments or a secret-like value entered preparation text");
+    }
+    await assertS1DomPrivate("preparation");
+    if (preparationTitle !== "正在准备编辑文件") {
+      throw new Error("the preparation title attribute contains non-semantic content");
+    }
+
+    smokeStage = "S1 Tool execution handoff";
+    const executionRow = page.locator('.turn-presentation-live-item[data-tool-category="EDIT"]');
+    await waitUntil(async () => {
+      const liveCount = await executionRow.count();
+      const durableCount = await page.locator(".turn-presentation-item--tool").count();
+      return liveCount > 0 || durableCount > 0;
+    }, "the apply_patch invocation to take over preparation");
+    const executionObservation = await page.evaluate(() => ({
+      sawRunningEdit: window.__caelushS1SawRunningEdit === true,
+      preparationVisible: document.body.innerText.includes("正在准备编辑文件"),
+      runningEditVisible: document.body.innerText.includes("正在编辑文件"),
+      rawPatchVisible: document.body.innerText.includes("*** Begin Patch"),
+      secretVisible: document.body.innerText.includes("S1_RAW_ARGS_SECRET_VALUE_123"),
+      liveEditCount: document.querySelectorAll(
+        '.turn-presentation-live-item[data-tool-category="EDIT"]',
+      ).length,
+      durableToolCount: document.querySelectorAll(".turn-presentation-item--tool").length,
+    }));
+    if (!executionObservation.sawRunningEdit && !executionObservation.runningEditVisible) {
+      throw new Error("the browser never rendered the running apply_patch Tool activity");
+    }
+    if (executionObservation.liveEditCount + executionObservation.durableToolCount > 1) {
+      throw new Error("live and durable Tool presentation remained as duplicate rows");
+    }
+    if (
+      executionObservation.preparationVisible ||
+      executionObservation.rawPatchVisible ||
+      executionObservation.secretVisible
+    ) {
+      throw new Error("raw Tool arguments or a stale preparation row remained during execution");
+    }
+    await assertS1DomPrivate("execution");
+
+    smokeStage = "S1 completed durable Tool effect";
+    await waitVisible(exactText("S1 Tool presentation completed."));
+    await openProcessDisclosure();
+    await waitUntil(async () => {
+      const body = await page.locator("body").innerText();
+      return body.includes("register.html") && body.includes("新建") && /\+\d+/u.test(body);
+    }, "the completed register.html FileChange effect");
+    const completedBody = await page.locator("body").innerText();
+    if (completedBody.includes("正在准备编辑文件")) {
+      throw new Error("the completed presentation retained the transient preparation row");
+    }
+    await assertS1DomPrivate("completion");
+
+    smokeStage = "S1 durable refresh recovery";
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await selectSession("s1 tool argument cutover");
+    await openProcessDisclosure();
+    await waitUntil(async () => {
+      const body = await page.locator("body").innerText();
+      return body.includes("register.html") && body.includes("新建") && /\+\d+/u.test(body);
+    }, "the durable FileChange effect after refresh");
+    const bodyAfterRefresh = await page.locator("body").innerText();
+    if (bodyAfterRefresh.includes("正在准备编辑文件")) {
+      throw new Error("refresh unexpectedly restored transient model preparation");
+    }
+    await assertS1DomPrivate("refresh");
+    if ((await page.locator(".turn-presentation-item--tool").count()) !== 1) {
+      throw new Error("durable ToolActivity did not restore exactly once after refresh");
+    }
+
+    await browser.close();
+    process.stdout.write(
+      "[browser-runner] S1 100 KiB Tool arguments stayed out of the DOM; preparation handed off to one durable ToolActivity and its FileChange effect survived refresh.\n",
     );
     process.exit(0);
   }

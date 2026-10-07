@@ -29,7 +29,7 @@ function projector(): ModelStreamSignalProjector {
 }
 
 describe("ModelStreamSignalProjector", () => {
-  it("maps only public model deltas onto canonical ordered transient events", () => {
+  it("maps model Tool starts to safe preparation metadata and suppresses argument deltas", () => {
     const project = projector();
     const text = project.project({
       identity,
@@ -46,10 +46,21 @@ describe("ModelStreamSignalProjector", () => {
       stepId: turn.stepId,
       event: { type: "reasoning.summary.delta", payload: { text: "safe summary" } },
     });
-    const toolCall = project.project({
+    const toolPreparation = project.project({
       identity,
       stepId: turn.stepId,
-      event: { type: "tool_call.delta", payload: { toolCallId: "call-1", delta: '{"path":' } },
+      event: {
+        type: "tool_call.start",
+        payload: { toolCallId: "call-1", toolName: "apply_patch" },
+      },
+    });
+    const toolArguments = project.project({
+      identity,
+      stepId: turn.stepId,
+      event: {
+        type: "tool_call.delta",
+        payload: { toolCallId: "call-1", delta: '{"patch":"*** Begin Patch\\nsecret-value' },
+      },
     });
 
     expect(text).toMatchObject({
@@ -74,14 +85,57 @@ describe("ModelStreamSignalProjector", () => {
       payload: { text: "safe summary" },
       durability: { streamSequence: 1 },
     });
-    expect(toolCall).toMatchObject({
-      type: "model.tool_call.delta",
-      payload: { toolCallId: "call-1", delta: '{"path":' },
+    expect(toolPreparation).toMatchObject({
+      type: "model.tool_call.started",
+      payload: { toolCallId: "call-1", toolName: "apply_patch" },
       durability: { streamSequence: 1 },
     });
+    expect(toolArguments).toBeNull();
+    expect(JSON.stringify(toolPreparation)).not.toContain("secret-value");
     expect(
-      new Set([text?.eventId, text2?.eventId, reasoning?.eventId, toolCall?.eventId]).size,
+      new Set([text?.eventId, text2?.eventId, reasoning?.eventId, toolPreparation?.eventId]).size,
     ).toBe(4);
+  });
+
+  it("keeps presentation bounded for 20 KiB and 100 KiB tool argument streams", () => {
+    const project = projector();
+    const preparation = project.project({
+      identity,
+      stepId: turn.stepId,
+      event: {
+        type: "tool_call.start",
+        payload: { toolCallId: "call-large", toolName: "apply_patch" },
+      },
+    });
+    const projections = [
+      project.projectMany?.({
+        identity,
+        stepId: turn.stepId,
+        event: {
+          type: "tool_call.delta",
+          payload: { toolCallId: "call-large", delta: "x".repeat(20 * 1024) },
+        },
+      }) ?? [],
+      project.projectMany?.({
+        identity,
+        stepId: turn.stepId,
+        event: {
+          type: "tool_call.delta",
+          payload: { toolCallId: "call-large", delta: "secret-value-123" + "y".repeat(100 * 1024) },
+        },
+      }) ?? [],
+    ];
+    const visibleEvents = [preparation, ...projections.flat()].filter(
+      (event): event is NonNullable<typeof event> => event !== null,
+    );
+    const presentation = JSON.stringify(visibleEvents);
+
+    expect(visibleEvents).toHaveLength(1);
+    expect(Buffer.byteLength(presentation, "utf8")).toBeLessThan(1_024);
+    expect(presentation).toContain("apply_patch");
+    expect(presentation).not.toContain("secret-value-123");
+    expect(presentation).not.toContain("x".repeat(20 * 1024));
+    expect(presentation).not.toContain("y".repeat(100 * 1024));
   });
 
   it("maps model status onto a fixed coalescible run/step stream", () => {
@@ -138,6 +192,18 @@ describe("ModelStreamSignalProjector", () => {
           yield start;
           yield { type: "text.delta", payload: { text: "answer" } } satisfies AIStreamEvent;
           yield {
+            type: "tool_call.start",
+            payload: { toolCallId: "call-safe", toolName: "apply_patch" },
+          } satisfies AIStreamEvent;
+          yield {
+            type: "tool_call.delta",
+            payload: { toolCallId: "call-safe", delta: '{"patch":"*** Begin Patch secret-value' },
+          } satisfies AIStreamEvent;
+          yield {
+            type: "tool_call.completed",
+            payload: { id: "call-safe", name: "apply_patch", input: {} },
+          } satisfies AIStreamEvent;
+          yield {
             type: "stream.status",
             payload: {
               phase: "NO_RECENT_ACTIVITY",
@@ -180,20 +246,28 @@ describe("ModelStreamSignalProjector", () => {
 
     expect(result.kind).toBe("COMPLETED");
     expect((result as { kind: "COMPLETED"; result: { text: string } }).result.text).toBe("answer");
-    expect(emitted).toHaveLength(3);
+    expect(emitted).toHaveLength(4);
     expect(emitted).toMatchObject([
       { type: "model.text.delta", payload: { text: "answer" } },
+      {
+        type: "model.tool_call.started",
+        payload: { toolCallId: "call-safe", toolName: "apply_patch" },
+      },
       {
         type: "model.status",
         payload: { phase: "NO_RECENT_ACTIVITY", idleForMs: 30_000, idleTimeoutMs: 300_000 },
       },
       { type: "model.reasoning_summary.delta", payload: { text: "safe" } },
     ]);
+    expect(JSON.stringify(emitted)).not.toContain("*** Begin Patch");
+    expect(JSON.stringify(emitted)).not.toContain("secret-value");
+    expect(
+      (result as { kind: "COMPLETED"; result: { toolCalls: readonly unknown[] } }).result.toolCalls,
+    ).toHaveLength(1);
   });
 
   const ignoredEvents = [
     { type: "stream.start", payload: { callId: "call" } },
-    { type: "tool_call.start", payload: { toolCallId: "call", name: "read_file" } },
     { type: "tool_call.completed", payload: { toolCallId: "call", name: "read_file" } },
     { type: "usage", payload: { inputTokens: 1, outputTokens: 1 } },
     { type: "stream.finish", payload: { reason: "stop" } },

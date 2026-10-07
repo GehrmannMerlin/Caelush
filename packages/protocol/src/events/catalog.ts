@@ -95,7 +95,8 @@ export const RUN_EVENT_TYPE_CATALOG: readonly RunEventTypeDefinition[] = Object.
   transient("model.text.delta", 1, "ORDERED"),
   transient("model.text.delta", 2, "ORDERED"),
   transient("model.reasoning_summary.delta", 1, "ORDERED"),
-  transient("model.tool_call.delta", 1, "ORDERED"),
+  transient("model.tool_call.delta", 1, "ORDERED", "DEBUG"),
+  transient("model.tool_call.started", 1, "ORDERED"),
   transient("model.status", 1, "COALESCIBLE"),
 ]);
 

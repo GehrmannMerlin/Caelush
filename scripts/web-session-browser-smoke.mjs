@@ -36,6 +36,7 @@ const FIXTURE_MODEL_ID = "browser-fixture-model";
 let providerRecoveryAttempts = 0;
 let multiTurnPatchRequests = 0;
 let s0PatchServed = false;
+let s1PatchServed = false;
 
 /**
  * The sandbox Runner as a host with a working packaged artifact reports it.
@@ -219,6 +220,40 @@ async function handleModelRequest(request, response) {
       1_000,
     );
     await writeSseDelayed(response, streamedArguments, 4, 500);
+    return;
+  }
+  if (promptText.includes("s1 tool argument cutover") && (hasToolResult || s1PatchServed)) {
+    writeSse(response, textChunks("S1 Tool presentation completed."));
+    return;
+  }
+  if (promptText.includes("s1 tool argument cutover") && !s1PatchServed) {
+    s1PatchServed = true;
+    const fixtureHtml = [
+      "<!doctype html>",
+      '<html lang="zh-CN">',
+      '<head><meta charset="utf-8"><title>S1 stream fixture</title></head>',
+      "<body>",
+      '<!-- "apiKey":"S1_RAW_ARGS_SECRET_VALUE_123" -->',
+      ...Array.from(
+        { length: 60 },
+        (_, index) => `<!-- S1_RAW_ARGS_SECRET_VALUE_123-${index}-${"x".repeat(1_700)} -->`,
+      ),
+      "</body>",
+      "</html>",
+    ].join("\n");
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: register.html",
+      ...fixtureHtml.split("\n").map((line) => `+${line}`),
+      "*** End Patch",
+    ].join("\n");
+    const streamedArguments = streamedToolCallChunks(
+      "apply_patch",
+      JSON.stringify({ patch }),
+      "browser-s1-streaming-patch",
+      200,
+    );
+    await writeSseDelayed(response, streamedArguments, 3, 500);
     return;
   }
   if (promptText.includes("read browser fixture") && !hasToolResult) {
@@ -430,13 +465,16 @@ function streamedToolCallChunks(name, argumentsText, toolCallId, deltaCount) {
 const promptCacheOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "PROMPT_CACHE";
 const multiTurnOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "MULTI_TURN";
 const s0Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S0";
+const s1Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S1";
 const configuredArtifactDirectory = process.env.CAELUSH_BROWSER_SMOKE_ARTIFACT_DIR;
 const browserArtifacts = promptCacheOnly
   ? await resolvePromptCacheArtifactDirectory(process.cwd(), configuredArtifactDirectory)
   : configuredArtifactDirectory === undefined
     ? s0Only
       ? join(tmpdir(), `caelush-web-browser-smoke-s0-${process.pid}`)
-      : join(process.cwd(), "test-results", "web-session-browser-smoke")
+      : s1Only
+        ? join(tmpdir(), `caelush-web-browser-smoke-s1-${process.pid}`)
+        : join(process.cwd(), "test-results", "web-session-browser-smoke")
     : resolve(configuredArtifactDirectory);
 
 const directory = await mkdtemp(join(tmpdir(), "caelush-web-browser-"));
@@ -501,6 +539,19 @@ try {
       `[browser-smoke] S0 streamed Tool fixture persisted (${fixture.length} characters).\n`,
     );
   }
+  if (result === 0 && s1Only) {
+    const fixture = await readFile(join(directory, "register.html"), "utf8");
+    if (
+      !fixture.includes("S1 stream fixture") ||
+      !fixture.includes("S1_RAW_ARGS_SECRET_VALUE_123") ||
+      Buffer.byteLength(fixture, "utf8") < 100_000
+    ) {
+      throw new Error("The S1 large Tool argument fixture was not written completely.");
+    }
+    process.stdout.write(
+      `[browser-smoke] S1 Tool fixture persisted (${Buffer.byteLength(fixture, "utf8")} bytes).\n`,
+    );
+  }
   if (result === 0 && multiTurnOnly) {
     const fixture = await readFile(join(directory, "fixture.txt"), "utf8");
     if (fixture !== "multi-turn fixture\n") {
@@ -512,7 +563,7 @@ try {
       "[browser-smoke] focused multi-turn Tool effect persisted: " + JSON.stringify(fixture) + "\n",
     );
   }
-  if (result === 0 && !promptCacheOnly && !multiTurnOnly && !s0Only) {
+  if (result === 0 && !promptCacheOnly && !multiTurnOnly && !s0Only && !s1Only) {
     const fixture = await readFile(join(directory, "fixture.txt"), "utf8");
     if (fixture !== "patched browser fixture\n") {
       throw new Error("Browser approval flow did not persist the verified patch.");

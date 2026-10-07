@@ -228,9 +228,7 @@ export function Timeline(props: TimelineProps): ReactElement {
                     createElement(
                       "li",
                       { key: activity.id },
-                      `${liveActivityLabel(activity.kind)}：${activity.text} · ${liveActivityStatusLabel(
-                        activity.status,
-                      )}`,
+                      `${activity.kind === "TOOL_PREPARATION" ? activity.text : `${liveActivityLabel(activity.kind)}：${activity.text}`} · ${liveActivityStatusLabel(activity.status)}`,
                     ),
                   ),
                 ),
@@ -404,8 +402,8 @@ function liveActivityLabel(kind: LiveActivityState["activities"][number]["kind"]
       return "助手输出";
     case "MODEL_REASONING":
       return "推理摘要";
-    case "MODEL_TOOL_CALL":
-      return "工具调用";
+    case "TOOL_PREPARATION":
+      return "工具准备";
     case "TOOL_ACTIVITY":
       return "工具活动";
     case "TOOL_OUTPUT":

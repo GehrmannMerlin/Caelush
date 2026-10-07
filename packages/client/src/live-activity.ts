@@ -19,7 +19,7 @@ import {
 export type LiveActivityKind =
   | "MODEL_TEXT"
   | "MODEL_REASONING"
-  | "MODEL_TOOL_CALL"
+  | "TOOL_PREPARATION"
   | "TOOL_ACTIVITY"
   | "TOOL_OUTPUT"
   | "SHELL_OUTPUT"
@@ -46,6 +46,7 @@ export interface LiveActivity {
   readonly stepId?: string;
   readonly invocationId?: string;
   readonly toolInvocationId?: ToolInvocationId;
+  readonly toolCallId?: string;
   readonly toolName?: string;
   readonly category?: ToolPresentationCategory;
   readonly toolPhase?: ToolPresentationPhase;
@@ -233,21 +234,52 @@ function projectToolLifecycleEvent(
 ): readonly LiveActivity[] {
   switch (event.type) {
     case "tool.requested":
-      return upsertToolActivity(activities, {
-        id: `tool-activity:${event.payload.invocationId}`,
-        kind: "TOOL_ACTIVITY",
-        toolInvocationId: event.payload.invocationId,
-        toolName: event.payload.toolName,
-        category: toolPresentationCategory(event.payload.toolName),
-        toolPhase: "REQUESTED",
-        title: event.title ?? toolTitle(event.payload.toolName),
-        text: event.summary ?? "正在请求工具执行",
-        status: "ACTIVE",
-        streamKey: `durable:${event.runId}`,
-        streamSequence: 0,
-        runId: event.runId,
-        ...(event.stepId === undefined ? {} : { stepId: event.stepId }),
-      });
+      return upsertToolActivity(
+        event.payload.externalCallId === undefined
+          ? activities
+          : activities.filter(
+              (activity) =>
+                !(
+                  activity.kind === "TOOL_PREPARATION" &&
+                  activity.runId === event.runId &&
+                  activity.toolCallId === event.payload.externalCallId &&
+                  (event.stepId === undefined || activity.stepId === event.stepId)
+                ),
+            ),
+        {
+          id: `tool-activity:${event.payload.invocationId}`,
+          kind: "TOOL_ACTIVITY",
+          toolInvocationId: event.payload.invocationId,
+          toolName: event.payload.toolName,
+          category: toolPresentationCategory(event.payload.toolName),
+          toolPhase: "REQUESTED",
+          title: event.title ?? toolTitle(event.payload.toolName),
+          text: event.summary ?? "正在请求工具执行",
+          status: "ACTIVE",
+          streamKey: `durable:${event.runId}`,
+          streamSequence: 0,
+          runId: event.runId,
+          ...(event.stepId === undefined ? {} : { stepId: event.stepId }),
+        },
+      );
+    case "llm.started":
+      return activities.filter(
+        (activity) =>
+          activity.kind !== "TOOL_PREPARATION" ||
+          activity.runId !== event.runId ||
+          activity.stepId === event.stepId,
+      );
+    case "llm.failed":
+      return event.stepId === undefined
+        ? activities
+        : activities.filter(
+            (activity) =>
+              !(
+                activity.kind === "TOOL_PREPARATION" &&
+                activity.runId === event.runId &&
+                activity.stepId === event.stepId
+              ),
+          );
     case "tool.started": {
       const existing = activities.find(
         (activity) =>
@@ -434,6 +466,38 @@ function toolTitle(toolName: string): string {
   }
 }
 
+function toolPreparationText(toolName: string): string {
+  let title: string;
+  switch (toolPresentationCategory(toolName)) {
+    case "READ":
+      title = "读取文件";
+      break;
+    case "SEARCH":
+      title =
+        toolName === "list_directory"
+          ? "浏览目录"
+          : toolName === "search_text"
+            ? "搜索内容"
+            : "搜索文件";
+      break;
+    case "EDIT":
+      title = "编辑文件";
+      break;
+    case "COMMAND":
+      title = "执行命令";
+      break;
+    case "PROCESS":
+      title = toolName === "stop_process" ? "停止进程" : "向进程输入";
+      break;
+    case "GIT":
+      title = toolName === "git_status" ? "查看 Git 状态" : "查看 Git 修改";
+      break;
+    case "OTHER":
+      return "正在准备调用工具";
+  }
+  return `正在准备${title}`;
+}
+
 function failedToolSummary(event: Extract<DurableLiveEvent, { type: "tool.failed" }>): string {
   return (
     event.summary ??
@@ -471,6 +535,7 @@ function updateModelWaitFromTransient(
   if (
     event.type === "model.text.delta" ||
     event.type === "model.reasoning_summary.delta" ||
+    event.type === "model.tool_call.started" ||
     event.type === "model.tool_call.delta"
   ) {
     return {
@@ -619,6 +684,7 @@ function isModelStreamEvent(event: TransientLiveEvent): boolean {
     event.type === "model.status" ||
     event.type === "model.text.delta" ||
     event.type === "model.reasoning_summary.delta" ||
+    event.type === "model.tool_call.started" ||
     event.type === "model.tool_call.delta"
   );
 }
@@ -668,12 +734,16 @@ function activityFromTransient(event: TransientLiveEvent): LiveActivity | null {
         kind: "MODEL_REASONING",
         text: event.payload.text,
       };
-    case "model.tool_call.delta":
+    case "model.tool_call.started":
       return {
         ...common,
-        id: `model:tool-call:${event.durability.streamKey}`,
-        kind: "MODEL_TOOL_CALL",
-        text: event.payload.delta,
+        id: `model:tool-preparation:${event.durability.streamKey}`,
+        kind: "TOOL_PREPARATION",
+        toolCallId: event.payload.toolCallId,
+        toolName: event.payload.toolName,
+        category: toolPresentationCategory(event.payload.toolName),
+        title: toolPreparationText(event.payload.toolName),
+        text: toolPreparationText(event.payload.toolName),
       };
     case "tool.output":
       return {
@@ -711,6 +781,7 @@ function settleForDurableEvent(
   let predicate: ((activity: LiveActivity) => boolean) | undefined;
   let status: Exclude<LiveActivityStatus, "ACTIVE"> | undefined;
   let terminal = false;
+  let failedModelStepId: string | undefined;
   switch (event.type) {
     case "tool.completed":
       predicate = (activity) =>
@@ -749,6 +820,7 @@ function settleForDurableEvent(
     case "llm.failed":
       predicate = (activity) => event.stepId !== undefined && activity.stepId === event.stepId;
       status = "FAILED";
+      failedModelStepId = event.stepId;
       break;
     case "run.completed":
       terminal = true;
@@ -770,18 +842,25 @@ function settleForDurableEvent(
     default:
       return { activities, terminal: false };
   }
+  const settledActivities: readonly LiveActivity[] = activities.map((activity): LiveActivity =>
+    predicate?.(activity) && activity.status === "ACTIVE" && status !== undefined
+      ? {
+          ...activity,
+          status,
+          ...(activity.kind === "TOOL_ACTIVITY"
+            ? {
+                toolPhase: (status === "COMPLETED" ? "COMPLETED" : status) as ToolPresentationPhase,
+              }
+            : {}),
+          settledAtSequence: event.durability.sequence,
+        }
+      : activity,
+  );
   return {
-    activities: activities.map((activity) =>
-      predicate?.(activity) && activity.status === "ACTIVE" && status !== undefined
-        ? {
-            ...activity,
-            status,
-            ...(activity.kind === "TOOL_ACTIVITY"
-              ? { toolPhase: status === "COMPLETED" ? "COMPLETED" : status }
-              : {}),
-            settledAtSequence: event.durability.sequence,
-          }
-        : activity,
+    activities: settledActivities.filter(
+      (activity) =>
+        activity.kind !== "TOOL_PREPARATION" ||
+        (!terminal && !(failedModelStepId !== undefined && activity.stepId === failedModelStepId)),
     ),
     terminal,
   };

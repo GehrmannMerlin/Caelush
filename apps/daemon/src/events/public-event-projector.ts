@@ -97,10 +97,10 @@ export class DefaultPublicEventProjector implements PublicEventProjector {
       case "model.reasoning_summary.delta":
         payload = { text: boundedText(event.payload.text, PUBLIC_EVENT_TEXT_BYTES) };
         break;
-      case "model.tool_call.delta":
+      case "model.tool_call.started":
         payload = {
           toolCallId: boundedText(event.payload.toolCallId, PUBLIC_EVENT_TEXT_BYTES),
-          delta: terminalText(event.payload.delta, PUBLIC_EVENT_OUTPUT_BYTES),
+          toolName: event.payload.toolName,
         };
         break;
       case "model.status":

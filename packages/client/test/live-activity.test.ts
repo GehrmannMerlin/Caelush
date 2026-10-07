@@ -1,11 +1,13 @@
 import {
   PublicRunEventSchema,
+  RunEventSchema,
   createEventId,
   createApprovalRequestId,
   createRunId,
   createSessionId,
   createStepId,
   createToolInvocationId,
+  type PublicRunEvent,
 } from "@caelush/protocol";
 import {
   createInitialLiveActivityState,
@@ -468,23 +470,6 @@ describe("LiveActivity projection", () => {
     expect(state.activities.every((item) => item.status === "COMPLETED")).toBe(true);
   });
 
-  it("bounds the first streamed text chunk and records its UTF-8 accounting", () => {
-    const maxTextBytes = 16 * 1024;
-    const text = "a".repeat(maxTextBytes + 10);
-    const state = reduceLiveActivityEvent(
-      createInitialLiveActivityState(runId),
-      transient("model.tool_call.delta", { toolCallId: "call-s0", delta: text }, "tool-call:s0", 1),
-    );
-
-    expect(state.activities[0]).toMatchObject({
-      kind: "MODEL_TOOL_CALL",
-      text: "a".repeat(maxTextBytes),
-      retainedBytes: maxTextBytes,
-      truncated: true,
-      omittedBytes: 10,
-    });
-  });
-
   it("uses bounded text accounting for every streaming activity kind", () => {
     const maxTextBytes = 16 * 1024;
     const chunk = "x".repeat(maxTextBytes + 5);
@@ -500,12 +485,6 @@ describe("LiveActivity projection", () => {
         payload: { text: chunk },
         streamKey: "model:reasoning:s0",
         kind: "MODEL_REASONING",
-      },
-      {
-        type: "model.tool_call.delta",
-        payload: { toolCallId: "call-s0", delta: chunk },
-        streamKey: "model:tool-call:s0",
-        kind: "MODEL_TOOL_CALL",
       },
       {
         type: "tool.output",
@@ -541,6 +520,103 @@ describe("LiveActivity projection", () => {
         omittedBytes: 5,
       });
     }
+  });
+
+  it("shows semantic preparations for independent Tool calls and ignores legacy raw deltas", () => {
+    let state = reduceLiveActivityEvent(
+      createInitialLiveActivityState(runId),
+      toolCallStarted("call_A", "read_file", 1),
+    );
+    state = reduceLiveActivityEvent(state, toolCallStarted("call_B", "apply_patch", 1));
+
+    expect(state.activities).toHaveLength(2);
+    expect(state.activities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "TOOL_PREPARATION",
+          toolCallId: "call_A",
+          toolName: "read_file",
+          text: "正在准备读取文件",
+        }),
+        expect.objectContaining({
+          kind: "TOOL_PREPARATION",
+          toolCallId: "call_B",
+          toolName: "apply_patch",
+          text: "正在准备编辑文件",
+        }),
+      ]),
+    );
+
+    const rawPatch = JSON.stringify({
+      patch: `*** Begin Patch\n${"html-css-js".repeat(2_000)}\nsecret-value-123`,
+      apiKey: "secret-value-123",
+    });
+    const presentationLengthBefore = JSON.stringify(state.activities).length;
+    state = reduceLiveActivityEvent(state, legacyToolCallDelta("call_B", rawPatch, 2));
+
+    expect(state.activities).toHaveLength(2);
+    expect(JSON.stringify(state.activities)).not.toContain("*** Begin Patch");
+    expect(JSON.stringify(state.activities)).not.toContain("secret-value-123");
+    expect(JSON.stringify(state.activities).length).toBe(presentationLengthBefore);
+  });
+
+  it("hands a preparation off only to its matching durable externalCallId", () => {
+    let state = reduceLiveActivityEvent(
+      createInitialLiveActivityState(runId),
+      toolCallStarted("call_A", "read_file", 1),
+    );
+    state = reduceLiveActivityEvent(state, toolCallStarted("call_B", "apply_patch", 1));
+    state = reduceLiveActivityEvent(
+      state,
+      durableEvent(
+        "tool.requested",
+        {
+          invocationId,
+          toolName: "read_file",
+          externalCallId: "call_A",
+          riskLevel: "LOW",
+        },
+        1,
+      ),
+    );
+
+    expect(state.activities).toHaveLength(2);
+    expect(state.activities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "TOOL_ACTIVITY", toolInvocationId: invocationId }),
+        expect.objectContaining({
+          kind: "TOOL_PREPARATION",
+          toolCallId: "call_B",
+          toolName: "apply_patch",
+        }),
+      ]),
+    );
+    expect(state.activities).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ toolCallId: "call_A" })]),
+    );
+  });
+
+  it("uses a safe fallback for unknown Tool names and removes failed preparations", () => {
+    let state = reduceLiveActivityEvent(
+      createInitialLiveActivityState(runId),
+      toolCallStarted("call-unknown", "unknown_tool_123", 1),
+    );
+    expect(state.activities[0]).toMatchObject({
+      kind: "TOOL_PREPARATION",
+      text: "正在准备调用工具",
+    });
+    state = reduceLiveActivityEvent(
+      state,
+      durableEvent(
+        "llm.failed",
+        {
+          model: { provider: "fixture", model: "fixture-model" },
+          error: { code: "NETWORK_ERROR", message: "safe", retryable: false, phase: "LLM" },
+        },
+        1,
+      ),
+    );
+    expect(state.activities).toEqual([]);
   });
 
   it("preserves failed and cancelled terminal outcomes for live rows", () => {
@@ -700,4 +776,38 @@ function modelStatus(
       idleTimeoutMs,
     },
   });
+}
+
+function toolCallStarted(toolCallId: string, toolName: string, streamSequence: number) {
+  return transient(
+    "model.tool_call.started",
+    { toolCallId, toolName },
+    `model:tool-call:${runId}:${stepId}:${toolCallId}`,
+    streamSequence,
+  );
+}
+
+function legacyToolCallDelta(
+  toolCallId: string,
+  delta: string,
+  streamSequence: number,
+): PublicRunEvent {
+  return RunEventSchema.parse({
+    eventId: createEventId(),
+    schemaVersion: 1,
+    runId,
+    sessionId,
+    stepId,
+    timestamp: 1_700_000_000_000 + streamSequence,
+    visibility: "USER_VISIBLE",
+    durability: {
+      kind: "EPHEMERAL",
+      version: 1,
+      deliveryClass: "ORDERED",
+      streamKey: `model:tool-call:${runId}:${stepId}:${toolCallId}`,
+      streamSequence,
+    },
+    type: "model.tool_call.delta",
+    payload: { toolCallId, delta },
+  }) as unknown as PublicRunEvent;
 }

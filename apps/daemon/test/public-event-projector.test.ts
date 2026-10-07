@@ -293,6 +293,55 @@ describe("DefaultPublicEventProjector", () => {
     expect(projected?.payload.result).toMatchObject({ nested: { safe: "保留" } });
   });
 
+  it("drops legacy model Tool argument deltas and projects only safe Tool start metadata", () => {
+    const rawDelta = projector.project(
+      makeEvent(
+        "model.tool_call.delta",
+        {
+          toolCallId: "call-1",
+          delta: '{"apiKey":"secret-value-123","patch":"*** Begin Patch"}',
+        },
+        {
+          visibility: "USER_VISIBLE",
+          durability: {
+            kind: "EPHEMERAL",
+            version: 1,
+            deliveryClass: "ORDERED",
+            streamKey: "model:tool-call:run:step:call-1",
+            streamSequence: 1,
+          },
+        },
+      ),
+    );
+    const runId = createRunId();
+    const stepId = createStepId();
+    const toolStarted = projector.project(
+      makeEvent(
+        "model.tool_call.started",
+        { toolCallId: "call-1", toolName: "apply_patch" },
+        {
+          runId,
+          stepId,
+          durability: {
+            kind: "EPHEMERAL",
+            version: 1,
+            deliveryClass: "ORDERED",
+            streamKey: `model:tool-call:${runId}:${stepId}:call-1`,
+            streamSequence: 1,
+          },
+        },
+      ),
+    );
+
+    expect(rawDelta).toBeNull();
+    expect(toolStarted).toMatchObject({
+      type: "model.tool_call.started",
+      payload: { toolCallId: "call-1", toolName: "apply_patch" },
+    });
+    expect(JSON.stringify(toolStarted)).not.toContain("secret-value-123");
+    expect(JSON.stringify(toolStarted)).not.toContain("*** Begin Patch");
+  });
+
   it("has an explicit projection for every catalog USER_VISIBLE event type", () => {
     const ids = commonIds();
     const payloads: Record<string, unknown> = {
@@ -318,7 +367,7 @@ describe("DefaultPublicEventProjector", () => {
       "reasoning.summary": { summary: "safe summary" },
       "model.text.delta": { text: "partial answer" },
       "model.reasoning_summary.delta": { text: "safe summary" },
-      "model.tool_call.delta": { toolCallId: "call-1", delta: '{"path":' },
+      "model.tool_call.started": { toolCallId: "call-1", toolName: "apply_patch" },
       "model.status": {
         phase: "NO_RECENT_ACTIVITY",
         lastActivityAt: 1_700_000_000_000,
@@ -463,8 +512,15 @@ describe("DefaultPublicEventProjector", () => {
             }
           : payloads[definition.type];
       expect(payload, `fixture missing for ${definition.type}`).toBeDefined();
-      const statusRunId = definition.type === "model.status" ? createRunId() : undefined;
-      const statusStepId = definition.type === "model.status" ? createStepId() : undefined;
+      const modelScoped = definition.type.startsWith("model.");
+      const statusRunId = modelScoped ? createRunId() : undefined;
+      const statusStepId = modelScoped ? createStepId() : undefined;
+      const streamKey =
+        definition.type === "model.status"
+          ? `model:status:${statusRunId}:${statusStepId}`
+          : definition.type === "model.tool_call.started"
+            ? `model:tool-call:${statusRunId}:${statusStepId}:call-1`
+            : `${definition.type}:fixture`;
       const projected = projector.project(
         makeEvent(definition.type, payload, {
           schemaVersion: definition.schemaVersion,
@@ -477,10 +533,7 @@ describe("DefaultPublicEventProjector", () => {
                   kind: "EPHEMERAL",
                   version: 1,
                   deliveryClass: definition.delivery.class,
-                  streamKey:
-                    statusRunId === undefined || statusStepId === undefined
-                      ? `${definition.type}:fixture`
-                      : `model:status:${statusRunId}:${statusStepId}`,
+                  streamKey,
                   ...(definition.delivery.class === "ORDERED" ? { streamSequence: 1 } : {}),
                 },
         }),

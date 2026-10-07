@@ -35,6 +35,7 @@ import {
   ModelTextDeltaEventSchema,
   ModelTextDeltaEventV2Schema,
   ModelToolCallDeltaEventSchema,
+  ModelToolCallStartedEventSchema,
 } from "./model.js";
 import { PlanUpdatedEventSchema, ReasoningSummaryEventSchema } from "./reasoning.js";
 import { ResourceGuardEventSchema } from "./resource.js";
@@ -147,6 +148,7 @@ const registeredSchemas: ReadonlyMap<string, RegisteredSchema> = new Map<string,
   ["model.text.delta\u00002", ModelTextDeltaEventV2Schema],
   ["model.reasoning_summary.delta\u00001", ModelReasoningSummaryDeltaEventSchema],
   ["model.tool_call.delta\u00001", ModelToolCallDeltaEventSchema],
+  ["model.tool_call.started\u00001", ModelToolCallStartedEventSchema],
   ["model.status\u00001", ModelStatusEventSchema],
 ]);
 

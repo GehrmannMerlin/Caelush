@@ -6,6 +6,7 @@ import {
   createVersionedEventSchema,
   OrderedTransientEventMetaSchema,
 } from "./base.js";
+import { ToolNameSchema } from "../tool.js";
 
 /** A provider-approved public assistant text delta; never a full assistant message. */
 export const ModelTextDeltaEventSchema = createVersionedEventSchema(
@@ -37,13 +38,41 @@ export const ModelReasoningSummaryDeltaEventSchema = createVersionedEventSchema(
   OrderedTransientEventMetaSchema,
 );
 
-/** Partial tool-call argument text; it is display-only and is not executable input. */
+/** Legacy internal tool-call argument delta. The event catalog classifies it as DEBUG. */
 export const ModelToolCallDeltaEventSchema = createVersionedEventSchema(
   "model.tool_call.delta",
   1,
   z.object({ toolCallId: z.string().min(1), delta: z.string() }).strict(),
   OrderedTransientEventMetaSchema,
 );
+
+/** Safe preparation metadata for one model Tool call; arguments never enter this event. */
+export const ModelToolCallStartedEventSchema = createVersionedEventSchema(
+  "model.tool_call.started",
+  1,
+  z.object({ toolCallId: z.string().min(1), toolName: ToolNameSchema }).strict(),
+  OrderedTransientEventMetaSchema,
+).superRefine((event, context) => {
+  if (event.visibility !== "USER_VISIBLE") {
+    context.addIssue({
+      code: "custom",
+      path: ["visibility"],
+      message: "model Tool preparation must be USER_VISIBLE",
+    });
+  }
+  if (
+    event.stepId === undefined ||
+    !("streamKey" in event.durability) ||
+    event.durability.streamKey !==
+      `model:tool-call:${event.runId}:${event.stepId}:${event.payload.toolCallId}`
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["durability", "streamKey"],
+      message: "model Tool preparation stream key must match its call identity",
+    });
+  }
+});
 
 const ModelStatusPhaseSchema = z.enum([
   "WAITING_PROVIDER",
@@ -102,4 +131,5 @@ export type ModelTextDeltaEvent = z.infer<typeof ModelTextDeltaEventSchema>;
 export type ModelTextDeltaEventV2 = z.infer<typeof ModelTextDeltaEventV2Schema>;
 export type ModelReasoningSummaryDeltaEvent = z.infer<typeof ModelReasoningSummaryDeltaEventSchema>;
 export type ModelToolCallDeltaEvent = z.infer<typeof ModelToolCallDeltaEventSchema>;
+export type ModelToolCallStartedEvent = z.infer<typeof ModelToolCallStartedEventSchema>;
 export type ModelStatusEvent = z.infer<typeof ModelStatusEventSchema>;

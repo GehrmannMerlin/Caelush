@@ -48,7 +48,10 @@ export function ActiveTimeline({
       <VerificationActivity groups={timeline.verification} />
       {liveActivity.activities.map((activity) => (
         <Text key={activity.id}>
-          • {liveActivityLabel(activity.kind, activity.phase)}: {activity.text}
+          •{" "}
+          {activity.kind === "TOOL_PREPARATION"
+            ? activity.text
+            : `${liveActivityLabel(activity.kind, activity.phase)}: ${activity.text}`}
           {` · ${liveActivityStatusLabel(activity.status)}`}
         </Text>
       ))}
@@ -85,8 +88,10 @@ function liveActivityLabel(
           : "Assistant text";
     case "MODEL_REASONING":
       return "Reasoning";
-    case "MODEL_TOOL_CALL":
-      return "Tool call";
+    case "TOOL_PREPARATION":
+      return "Tool preparation";
+    case "TOOL_ACTIVITY":
+      return "Tool activity";
     case "TOOL_OUTPUT":
       return "Tool output";
     case "SHELL_OUTPUT":

@@ -504,11 +504,7 @@ function TurnPresentationContent(props: TurnPresentationContentProps): ReactElem
                         },
                         renderLiveActivityStatusIcon(activity.status),
                       ),
-                      createElement(
-                        "span",
-                        null,
-                        `${liveActivityLabel(activity)}：${activity.text}`,
-                      ),
+                      createElement("span", null, liveActivityText(activity)),
                       activity.kind === "TOOL_ACTIVITY" && activity.effects !== undefined
                         ? createElement(
                             "ul",
@@ -749,8 +745,8 @@ function liveActivityLabel(activity: LiveActivity): string {
   switch (activity.kind) {
     case "MODEL_REASONING":
       return "推理摘要";
-    case "MODEL_TOOL_CALL":
-      return "工具调用";
+    case "TOOL_PREPARATION":
+      return "工具准备";
     case "TOOL_OUTPUT":
       return "工具输出";
     case "SHELL_OUTPUT":
@@ -760,6 +756,12 @@ function liveActivityLabel(activity: LiveActivity): string {
     default:
       return "助手消息";
   }
+}
+
+function liveActivityText(activity: LiveActivity): string {
+  return activity.kind === "TOOL_PREPARATION"
+    ? activity.text
+    : `${liveActivityLabel(activity)}：${activity.text}`;
 }
 
 function toolCategoryTitle(category: LiveActivity["category"]): string {

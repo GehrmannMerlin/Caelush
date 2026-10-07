@@ -2,9 +2,9 @@ import type { AIStreamEvent } from "@caelush/ai";
 import {
   ModelReasoningSummaryDeltaEventSchema,
   ModelStatusEventSchema,
+  ModelToolCallStartedEventSchema,
   ModelTextDeltaEventV2Schema,
   type AssistantMessagePhase,
-  ModelToolCallDeltaEventSchema,
   type EventId,
   type RunId,
   type SessionId,
@@ -41,7 +41,8 @@ export interface ModelStreamSignalProjectorDependencies {
 }
 
 /**
- * Projects the three public AI delta events onto the canonical Protocol transient domain.
+ * Projects public model text and Tool preparation metadata onto the canonical Protocol transient
+ * domain. Tool argument deltas remain inside AI assembly and never enter public presentation.
  *
  * The projector is deliberately turn-scoped: its sequence map is bounded by one model turn,
  * and it never consults provider identifiers or durable Storage for ordering. Lifecycle and
@@ -93,19 +94,22 @@ export function createModelStreamSignalProjector(
         );
       }
       case "tool_call.delta": {
-        const streamKey = modelToolCallStreamKey(identity.runId, stepId, event.payload.toolCallId);
-        return splitTransientText(event.payload.delta).map(
-          (delta) =>
-            ModelToolCallDeltaEventSchema.parse({
-              ...base(identity.runId, identity.sessionId, stepId, dependencies),
-              type: "model.tool_call.delta",
-              durability: ordered(streamKey, nextSequence(streamSequences, streamKey)),
-              payload: { toolCallId: event.payload.toolCallId, delta },
-            }) as TransientRunEvent,
-        );
-      }
-      case "tool_call.start":
         return [];
+      }
+      case "tool_call.start": {
+        const streamKey = modelToolCallStreamKey(identity.runId, stepId, event.payload.toolCallId);
+        return [
+          ModelToolCallStartedEventSchema.parse({
+            ...base(identity.runId, identity.sessionId, stepId, dependencies),
+            type: "model.tool_call.started",
+            durability: ordered(streamKey, nextSequence(streamSequences, streamKey)),
+            payload: {
+              toolCallId: event.payload.toolCallId,
+              toolName: event.payload.toolName,
+            },
+          }) as TransientRunEvent,
+        ];
+      }
       case "stream.status": {
         const streamKey = modelStatusStreamKey(identity.runId, stepId);
         return [

@@ -41,6 +41,7 @@ import {
   ModelTextDeltaEventSchema,
   ModelTextDeltaEventV2Schema,
   ModelToolCallDeltaEventSchema,
+  ModelToolCallStartedEventSchema,
 } from "./model.js";
 import {
   VerificationCompletedEventSchema,
@@ -104,6 +105,7 @@ export {
   ModelTextDeltaEventSchema,
   ModelTextDeltaEventV2Schema,
   ModelToolCallDeltaEventSchema,
+  ModelToolCallStartedEventSchema,
 } from "./model.js";
 export type {
   ModelReasoningSummaryDeltaEvent,
@@ -111,6 +113,7 @@ export type {
   ModelTextDeltaEvent,
   ModelTextDeltaEventV2,
   ModelToolCallDeltaEvent,
+  ModelToolCallStartedEvent,
 } from "./model.js";
 export { ProcessOutputEventV2Schema } from "./process.js";
 export type { ProcessOutputEventV2 } from "./process.js";
@@ -219,6 +222,7 @@ const currentRunEventSchema = z.union([
   ModelReasoningSummaryDeltaEventSchema,
   ModelStatusEventSchema,
   ModelToolCallDeltaEventSchema,
+  ModelToolCallStartedEventSchema,
 ]);
 
 /**

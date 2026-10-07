@@ -3,10 +3,15 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createInitialLiveActivityState,
   createInitialTimelineState,
+  reduceLiveActivityEvent,
   type ModelWaitState,
 } from "@caelush/client";
 import {
+  PublicRunEventSchema,
+  RunEventSchema,
+  createEventId,
   createRunId,
+  createSessionId,
   createStepId,
   createToolInvocationId,
   type SessionTurnPresentationResponse,
@@ -196,6 +201,7 @@ describe("TurnPresentationFeed", () => {
     expect(durableHtml).toContain("新建");
     expect(durableHtml).toContain("+214");
     expect(durableHtml).not.toContain("*** Begin Patch");
+    expect(durableHtml).not.toContain("secret-value-123");
 
     const reconciledHtml = renderToStaticMarkup(
       <SessionConversation
@@ -207,6 +213,86 @@ describe("TurnPresentationFeed", () => {
     expect(reconciledHtml).toContain("login.html");
     expect(reconciledHtml).not.toContain("turn-presentation-live-item");
     expect(reconciledHtml).not.toContain("正在编辑文件");
+  });
+
+  it("keeps 20 KiB and 100 KiB raw Tool arguments out of live Web text and titles", () => {
+    const toolStepId = createStepId();
+    const toolCallId = "call_s1";
+    let liveActivity = reduceLiveActivityEvent(
+      createInitialLiveActivityState(runId),
+      PublicRunEventSchema.parse({
+        eventId: createEventId(),
+        schemaVersion: 1,
+        runId,
+        sessionId: createSessionId(),
+        stepId: toolStepId,
+        timestamp: 1,
+        visibility: "USER_VISIBLE",
+        durability: {
+          kind: "EPHEMERAL",
+          version: 1,
+          deliveryClass: "ORDERED",
+          streamKey: `model:tool-call:${runId}:${toolStepId}:${toolCallId}`,
+          streamSequence: 1,
+        },
+        type: "model.tool_call.started",
+        payload: { toolCallId, toolName: "apply_patch" },
+      }),
+    );
+    const rawPatch = JSON.stringify({
+      patch: `*** Begin Patch\n<!doctype html>${"<style>body{color:blue}</style>".repeat(3_000)}`,
+      apiKey: "secret-value-123",
+    });
+    for (const [index, delta] of [rawPatch.slice(0, 20 * 1024), rawPatch].entries()) {
+      liveActivity = reduceLiveActivityEvent(
+        liveActivity,
+        RunEventSchema.parse({
+          eventId: createEventId(),
+          schemaVersion: 1,
+          runId,
+          sessionId: createSessionId(),
+          stepId: toolStepId,
+          timestamp: 2 + index,
+          visibility: "USER_VISIBLE",
+          durability: {
+            kind: "EPHEMERAL",
+            version: 1,
+            deliveryClass: "ORDERED",
+            streamKey: `model:tool-call:${runId}:${toolStepId}:${toolCallId}`,
+            streamSequence: index + 2,
+          },
+          type: "model.tool_call.delta",
+          payload: { toolCallId, delta },
+        }) as never,
+      );
+    }
+    const html = renderToStaticMarkup(
+      <SessionConversation
+        presentation={{
+          capabilityVersion: 3,
+          turns: [
+            {
+              runId,
+              conversationTurnId: "turn-s1",
+              runStatus: "RUNNING",
+              openedAt: 1,
+              highWatermark: 0,
+              items: [],
+            },
+          ],
+        }}
+        activeRun={{ id: runId, status: "RUNNING" }}
+        liveActivity={liveActivity}
+      />,
+    );
+
+    expect(html).toContain("正在准备编辑文件");
+    expect(html).toContain('title="正在准备编辑文件"');
+    expect(html).not.toContain("*** Begin Patch");
+    expect(html).not.toContain("secret-value-123");
+    expect(html).not.toContain("apiKey");
+    expect(liveActivity.activities[0]?.text).toBe("正在准备编辑文件");
+    expect(html.length).toBeLessThan(5_000);
   });
 
   it("keeps durable approval waiting visible after the live row is reconciled", () => {
@@ -635,7 +721,7 @@ describe("TurnPresentationFeed", () => {
         {
           ...common,
           id: "live-completed",
-          kind: "MODEL_TOOL_CALL" as const,
+          kind: "TOOL_PREPARATION" as const,
           status: "COMPLETED" as const,
           text: "读取文件",
           streamKey: "tool:completed",
@@ -707,7 +793,7 @@ describe("TurnPresentationFeed", () => {
             },
             {
               id: "tool-live",
-              kind: "MODEL_TOOL_CALL",
+              kind: "TOOL_PREPARATION",
               status: "COMPLETED",
               text: "读取文件",
               streamKey: "tool:1",
