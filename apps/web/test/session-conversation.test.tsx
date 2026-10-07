@@ -13,6 +13,14 @@ import {
 } from "@caelush/protocol";
 
 import { SessionWorkspace } from "../src/components/session-workspace.js";
+import {
+  cancelScrollReconciliation,
+  scheduleScrollReconciliation,
+} from "../src/components/turn-presentation-feed.js";
+import type {
+  FrameHandle,
+  FrameScheduler,
+} from "../src/application/frame-publication-scheduler.js";
 
 const runOneId = createRunId();
 const runTwoId = createRunId();
@@ -152,6 +160,83 @@ function liveToolActivity(runId: ReturnType<typeof createRunId>): LiveActivitySt
 }
 
 describe("SessionConversation V3 rendering", () => {
+  it("coalesces near-bottom scroll reconciliation to one frame", () => {
+    const scheduler = new TestScrollFrameScheduler();
+    const pending: { current: FrameHandle | undefined } = { current: undefined };
+    let mounted = true;
+    let nearBottom = true;
+    let scrollTop = 100;
+    let reconciliations = 0;
+
+    for (let update = 0; update < 20; update += 1) {
+      scheduleScrollReconciliation(
+        scheduler,
+        pending,
+        () => mounted,
+        () => nearBottom,
+        () => {
+          reconciliations += 1;
+          scrollTop = 1_000;
+        },
+      );
+    }
+
+    expect(scheduler.scheduleCount).toBe(1);
+    expect(scheduler.pendingCount).toBe(1);
+    scheduler.flushNext();
+    expect(reconciliations).toBe(1);
+    expect(scrollTop).toBe(1_000);
+    mounted = false;
+  });
+
+  it("keeps the user's scroll position when they move away from the bottom before a frame", () => {
+    const scheduler = new TestScrollFrameScheduler();
+    const pending: { current: FrameHandle | undefined } = { current: undefined };
+    let mounted = true;
+    let nearBottom = true;
+    let scrollTop = 240;
+    let reconciliations = 0;
+
+    scheduleScrollReconciliation(
+      scheduler,
+      pending,
+      () => mounted,
+      () => nearBottom,
+      () => {
+        reconciliations += 1;
+        scrollTop = 1_000;
+      },
+    );
+    nearBottom = false;
+    scheduler.flushNext();
+
+    expect(reconciliations).toBe(0);
+    expect(scrollTop).toBe(240);
+    mounted = false;
+  });
+
+  it("cancels pending scroll reconciliation on unmount and ignores a stale callback", () => {
+    const scheduler = new TestScrollFrameScheduler();
+    const pending: { current: FrameHandle | undefined } = { current: undefined };
+    let mounted = true;
+    let domOperations = 0;
+
+    scheduleScrollReconciliation(
+      scheduler,
+      pending,
+      () => mounted,
+      () => true,
+      () => (domOperations += 1),
+    );
+    mounted = false;
+    cancelScrollReconciliation(scheduler, pending);
+    scheduler.flushStale();
+
+    expect(scheduler.pendingCount).toBe(0);
+    expect(pending.current).toBeUndefined();
+    expect(domOperations).toBe(0);
+  });
+
   it("renders complete Turns in server order and gives live state only to the active Run", () => {
     const live = liveToolActivity(runThreeId);
     const html = renderToStaticMarkup(
@@ -387,3 +472,53 @@ describe("SessionConversation V3 rendering", () => {
     expect(afterRefresh.indexOf("结果二")).toBeLessThan(afterRefresh.indexOf("下一项任务"));
   });
 });
+
+class TestScrollFrameScheduler implements FrameScheduler {
+  private nextHandleId = 0;
+  private readonly callbacks: Array<{
+    readonly handle: FrameHandle;
+    readonly callback: () => void;
+    cancelled: boolean;
+    flushed: boolean;
+    staleFlushed: boolean;
+  }> = [];
+  scheduleCount = 0;
+
+  get pendingCount(): number {
+    return this.callbacks.filter((item) => !item.cancelled && !item.flushed).length;
+  }
+
+  schedule(callback: () => void): FrameHandle {
+    const handle = { id: this.nextHandleId++ };
+    this.callbacks.push({
+      handle,
+      callback,
+      cancelled: false,
+      flushed: false,
+      staleFlushed: false,
+    });
+    this.scheduleCount += 1;
+    return handle;
+  }
+
+  cancel(handle: FrameHandle): void {
+    const callback = this.callbacks.find((item) => item.handle === handle);
+    if (callback !== undefined) callback.cancelled = true;
+  }
+
+  flushNext(): void {
+    const callback = this.callbacks.find((item) => !item.cancelled && !item.flushed);
+    if (callback === undefined) throw new Error("No pending scroll frame callback to flush.");
+    callback.flushed = true;
+    callback.callback();
+  }
+
+  flushStale(): void {
+    for (const callback of this.callbacks) {
+      if (callback.cancelled && !callback.staleFlushed) {
+        callback.staleFlushed = true;
+        callback.callback();
+      }
+    }
+  }
+}

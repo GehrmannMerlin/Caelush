@@ -37,6 +37,12 @@ let providerRecoveryAttempts = 0;
 let multiTurnPatchRequests = 0;
 let s0PatchServed = false;
 let s1PatchServed = false;
+let s2ChunksServed = 0;
+
+const S2_CANCEL_TEXT = `S2_CANCEL_${"cancel ".repeat(1_800)}`;
+const S2_COMPLETE_TEXT = `S2_COMPLETE ${"word ".repeat(1_800).trim()}`;
+const S2_CANCEL_CHUNK_COUNT = 1_800;
+const S2_COMPLETE_CHUNK_COUNT = 2_000;
 
 /**
  * The sandbox Runner as a host with a working packaged artifact reports it.
@@ -161,6 +167,9 @@ async function handleModelRequest(request, response) {
   const promptText = messages
     .map((message) => (typeof message?.content === "string" ? message.content : ""))
     .join("\n");
+  const latestUserText = [...messages]
+    .reverse()
+    .find((message) => message?.role === "user" && typeof message.content === "string")?.content;
   const multiTurnPromptIndex = messages.findLastIndex(
     (message) =>
       typeof message?.content === "string" && message.content.includes("multi-turn patch fixture"),
@@ -254,6 +263,16 @@ async function handleModelRequest(request, response) {
       200,
     );
     await writeSseDelayed(response, streamedArguments, 3, 500);
+    return;
+  }
+  if (latestUserText?.includes("s2 cancel stream")) {
+    const chunks = streamedTextChunks(S2_CANCEL_TEXT, S2_CANCEL_CHUNK_COUNT);
+    s2ChunksServed += await writeSseDelayed(response, chunks, 2);
+    return;
+  }
+  if (latestUserText?.includes("s2 complete stream")) {
+    const chunks = streamedTextChunks(S2_COMPLETE_TEXT, S2_COMPLETE_CHUNK_COUNT);
+    s2ChunksServed += await writeSseDelayed(response, chunks, 1);
     return;
   }
   if (promptText.includes("read browser fixture") && !hasToolResult) {
@@ -360,15 +379,18 @@ function writeSse(response, chunks) {
 
 async function writeSseDelayed(response, chunks, delayMs, initialPauseMs = 0) {
   response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
+  let delivered = 0;
   for (let index = 0; index < chunks.length; index += 1) {
-    if (response.destroyed) return;
+    if (response.destroyed) return delivered;
     response.write(`data: ${JSON.stringify(chunks[index])}\n\n`);
+    delivered += 1;
     const delay = index === 0 ? initialPauseMs : delayMs;
     if (delay > 0) {
       await new Promise((resolvePromise) => globalThis.setTimeout(resolvePromise, delay));
     }
   }
   response.end("data: [DONE]\n\n");
+  return delivered;
 }
 
 function holdSseFor(response, delayMs, chunks, initialChunks = []) {
@@ -402,6 +424,20 @@ const USAGE = { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 };
 
 function textChunks(text) {
   return [chunk({ role: "assistant", content: text }, null), chunk({}, "stop", USAGE)];
+}
+
+function streamedTextChunks(text, deltaCount) {
+  if (text.length < deltaCount) {
+    throw new Error("The S2 fixture needs at least one character in each text delta.");
+  }
+  const chunks = [chunk({ role: "assistant" }, null)];
+  for (let index = 0; index < deltaCount; index += 1) {
+    const start = Math.floor((text.length * index) / deltaCount);
+    const end = Math.floor((text.length * (index + 1)) / deltaCount);
+    chunks.push(chunk({ content: text.slice(start, end) }, null));
+  }
+  chunks.push(chunk({}, "stop", USAGE));
+  return chunks;
 }
 
 function toolCallChunks(name, input, toolCallId) {
@@ -466,6 +502,7 @@ const promptCacheOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "PROMPT_CACH
 const multiTurnOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "MULTI_TURN";
 const s0Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S0";
 const s1Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S1";
+const s2Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S2";
 const configuredArtifactDirectory = process.env.CAELUSH_BROWSER_SMOKE_ARTIFACT_DIR;
 const browserArtifacts = promptCacheOnly
   ? await resolvePromptCacheArtifactDirectory(process.cwd(), configuredArtifactDirectory)
@@ -474,7 +511,9 @@ const browserArtifacts = promptCacheOnly
       ? join(tmpdir(), `caelush-web-browser-smoke-s0-${process.pid}`)
       : s1Only
         ? join(tmpdir(), `caelush-web-browser-smoke-s1-${process.pid}`)
-        : join(process.cwd(), "test-results", "web-session-browser-smoke")
+        : s2Only
+          ? join(tmpdir(), `caelush-web-browser-smoke-s2-${process.pid}`)
+          : join(process.cwd(), "test-results", "web-session-browser-smoke")
     : resolve(configuredArtifactDirectory);
 
 const directory = await mkdtemp(join(tmpdir(), "caelush-web-browser-"));
@@ -552,6 +591,9 @@ try {
       `[browser-smoke] S1 Tool fixture persisted (${Buffer.byteLength(fixture, "utf8")} bytes).\n`,
     );
   }
+  if (result === 0 && s2Only) {
+    process.stdout.write(`[browser-smoke] S2 provider text chunks served: ${s2ChunksServed}.\n`);
+  }
   if (result === 0 && multiTurnOnly) {
     const fixture = await readFile(join(directory, "fixture.txt"), "utf8");
     if (fixture !== "multi-turn fixture\n") {
@@ -563,7 +605,7 @@ try {
       "[browser-smoke] focused multi-turn Tool effect persisted: " + JSON.stringify(fixture) + "\n",
     );
   }
-  if (result === 0 && !promptCacheOnly && !multiTurnOnly && !s0Only && !s1Only) {
+  if (result === 0 && !promptCacheOnly && !multiTurnOnly && !s0Only && !s1Only && !s2Only) {
     const fixture = await readFile(join(directory, "fixture.txt"), "utf8");
     if (fixture !== "patched browser fixture\n") {
       throw new Error("Browser approval flow did not persist the verified patch.");

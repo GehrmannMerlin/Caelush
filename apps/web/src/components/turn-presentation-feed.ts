@@ -22,6 +22,11 @@ import {
   LoaderCircle,
 } from "lucide-react";
 import caelushLogo from "../assets/logo/caelush-logo.png";
+import {
+  browserFrameScheduler,
+  type FrameHandle,
+  type FrameScheduler,
+} from "../application/frame-publication-scheduler.js";
 import { projectTurnPresentation } from "../application/turn-presentation-view-model.js";
 import { AssistantMarkdown } from "./assistant-markdown.js";
 import { ModelWaitNotice, usePresentationNow } from "./model-wait-presentation.js";
@@ -50,6 +55,33 @@ export interface SessionConversationProps {
   readonly timeline?: TimelineState | undefined;
 }
 
+export function scheduleScrollReconciliation(
+  scheduler: FrameScheduler,
+  pending: { current: FrameHandle | undefined },
+  isMounted: () => boolean,
+  shouldFollow: () => boolean,
+  reconcile: () => void,
+): void {
+  if (pending.current !== undefined) return;
+  let handle: FrameHandle;
+  handle = scheduler.schedule(() => {
+    if (!isMounted() || pending.current !== handle) return;
+    pending.current = undefined;
+    if (shouldFollow()) reconcile();
+  });
+  pending.current = handle;
+}
+
+export function cancelScrollReconciliation(
+  scheduler: FrameScheduler,
+  pending: { current: FrameHandle | undefined },
+): void {
+  const handle = pending.current;
+  if (handle === undefined) return;
+  pending.current = undefined;
+  scheduler.cancel(handle);
+}
+
 /** V1/V2 are item-page contracts, so their isolated fallback reads only their item arrays. */
 export function flattenTurnsForLegacyRenderer(
   presentation: Exclude<SessionTurnPresentationResponse, { capabilityVersion: 3 }>,
@@ -70,8 +102,18 @@ export function hasTurnPresentationItems(
 export function SessionConversation(props: SessionConversationProps): ReactElement {
   const conversationRef = useRef<HTMLDivElement>(null);
   const nearBottom = useRef(true);
+  const mounted = useRef(false);
+  const pendingScrollFrame = useRef<FrameHandle | undefined>(undefined);
   const turnRunIds = new Set(props.presentation.turns.map((turn) => turn.runId));
   const pendingUsers = (props.optimisticUsers ?? []).filter((item) => !turnRunIds.has(item.runId));
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      cancelScrollReconciliation(browserFrameScheduler, pendingScrollFrame);
+    };
+  }, []);
 
   useEffect(() => {
     const conversation = conversationRef.current;
@@ -90,13 +132,21 @@ export function SessionConversation(props: SessionConversationProps): ReactEleme
   }, []);
 
   useEffect(() => {
-    if (!nearBottom.current) return;
-    const conversation = conversationRef.current;
-    const scrollContainer =
-      conversation?.closest<HTMLElement>(".workspace-column") ??
-      conversation?.closest<HTMLElement>(".session-scroll");
-    if (scrollContainer === null || scrollContainer === undefined) return;
-    scrollContainer.scrollTop = scrollContainer.scrollHeight;
+    scheduleScrollReconciliation(
+      browserFrameScheduler,
+      pendingScrollFrame,
+      () => mounted.current,
+      () => nearBottom.current,
+      () => {
+        const conversation = conversationRef.current;
+        if (conversation?.isConnected !== true) return;
+        const scrollContainer =
+          conversation.closest<HTMLElement>(".workspace-column") ??
+          conversation.closest<HTMLElement>(".session-scroll");
+        if (scrollContainer === null || scrollContainer === undefined) return;
+        scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      },
+    );
   }, [props.presentation.turns, props.optimisticUsers, props.activeRun?.id, props.liveActivity]);
 
   return createElement(

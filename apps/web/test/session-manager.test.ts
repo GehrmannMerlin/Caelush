@@ -6,6 +6,7 @@ import {
   createSessionId,
   createStepId,
   createTimestampMs,
+  createToolInvocationId,
   createVerificationPlanId,
   createWorkspaceId,
   type PublicRunEvent,
@@ -28,6 +29,10 @@ import {
   type WatchRunEventsOptions,
 } from "@caelush/client";
 import { describe, expect, it, vi } from "vitest";
+import type {
+  FrameHandle,
+  FrameScheduler,
+} from "../src/application/frame-publication-scheduler.js";
 import { SessionSelectionStore } from "../src/application/session-persistence.js";
 import { WebSessionManager, type WebSessionClient } from "../src/application/session-manager.js";
 
@@ -670,6 +675,211 @@ describe("WebSessionManager", () => {
     manager.dispose();
   });
 
+  it("reduces 1000 stream deltas immediately and publishes their latest snapshot once per frame", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const pendingRun = makeRun({ sessionId: session.id });
+    const runningRun = makeRun({ ...pendingRun, status: "RUNNING" });
+    const stream = new TestRunEventStream();
+    const frameScheduler = new TestFrameScheduler();
+    const client = makeClient({ createSessionResult: session, createRunResult: pendingRun });
+    client.startRun.mockResolvedValue(actionResponse(runningRun, pendingRun.id));
+    client.watchRunEvents.mockImplementation((_runId, options) => {
+      options?.onOpen?.();
+      return stream;
+    });
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      info: makeInfo(),
+      frameScheduler,
+    });
+    manager.beginDraft();
+    const listener = vi.fn();
+    manager.subscribe(listener);
+
+    await expect(manager.submitPrompt("stream a bounded answer")).resolves.toBe(true);
+    const notificationsBeforeStream = listener.mock.calls.length;
+    const chunks = ["A", "B", "C", ...Array.from({ length: 997 }, () => "x")];
+    chunks.forEach((text, index) => stream.push(textDeltaEvent(runningRun, index + 1, text)));
+    await waitFor(() => modelText(manager.getSnapshot()) === chunks.join(""));
+
+    expect(modelText(manager.getSnapshot())).toBe(chunks.join(""));
+    expect(frameScheduler.scheduleCount).toBe(1);
+    expect(frameScheduler.pendingCount).toBe(1);
+    expect(listener).toHaveBeenCalledTimes(notificationsBeforeStream);
+
+    frameScheduler.flushNext();
+
+    expect(listener).toHaveBeenCalledTimes(notificationsBeforeStream + 1);
+    expect(modelText(listener.mock.lastCall?.[0] as ReturnType<typeof manager.getSnapshot>)).toBe(
+      chunks.join(""),
+    );
+    manager.dispose();
+    stream.close();
+  });
+
+  it("publishes two stream batches once each when separated by frame flushes", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const pendingRun = makeRun({ sessionId: session.id });
+    const runningRun = makeRun({ ...pendingRun, status: "RUNNING" });
+    const stream = new TestRunEventStream();
+    const frameScheduler = new TestFrameScheduler();
+    const client = makeClient({ createSessionResult: session, createRunResult: pendingRun });
+    client.startRun.mockResolvedValue(actionResponse(runningRun, pendingRun.id));
+    client.watchRunEvents.mockImplementation((_runId, options) => {
+      options?.onOpen?.();
+      return stream;
+    });
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      info: makeInfo(),
+      frameScheduler,
+    });
+    manager.beginDraft();
+    const listener = vi.fn();
+    manager.subscribe(listener);
+    await expect(manager.submitPrompt("stream two batches")).resolves.toBe(true);
+    const notificationsBeforeStream = listener.mock.calls.length;
+
+    for (let index = 1; index <= 500; index += 1) {
+      stream.push(textDeltaEvent(runningRun, index, "x"));
+    }
+    await waitFor(() => modelText(manager.getSnapshot()).length === 500);
+    expect(frameScheduler.pendingCount).toBe(1);
+    frameScheduler.flushNext();
+    expect(listener).toHaveBeenCalledTimes(notificationsBeforeStream + 1);
+
+    for (let index = 501; index <= 1000; index += 1) {
+      stream.push(textDeltaEvent(runningRun, index, "x"));
+    }
+    await waitFor(() => modelText(manager.getSnapshot()).length === 1000);
+    expect(frameScheduler.pendingCount).toBe(1);
+    frameScheduler.flushNext();
+
+    expect(frameScheduler.scheduleCount).toBe(2);
+    expect(listener).toHaveBeenCalledTimes(notificationsBeforeStream + 2);
+    expect(modelText(manager.getSnapshot())).toBe("x".repeat(1000));
+    manager.dispose();
+    stream.close();
+  });
+
+  it("lets durable Tool admission immediately publish pending text and hand off preparation", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const pendingRun = makeRun({ sessionId: session.id });
+    const runningRun = makeRun({ ...pendingRun, status: "RUNNING" });
+    const stream = new TestRunEventStream();
+    const frameScheduler = new TestFrameScheduler();
+    const client = makeClient({ createSessionResult: session, createRunResult: pendingRun });
+    client.startRun.mockResolvedValue(actionResponse(runningRun, pendingRun.id));
+    client.watchRunEvents.mockImplementation((_runId, options) => {
+      options?.onOpen?.();
+      return stream;
+    });
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      info: makeInfo(),
+      frameScheduler,
+    });
+    manager.beginDraft();
+    const listener = vi.fn();
+    manager.subscribe(listener);
+    await expect(manager.submitPrompt("prepare a file edit")).resolves.toBe(true);
+    const notificationsBeforeStream = listener.mock.calls.length;
+    const callId = `call-${runningRun.id}`;
+    const stepId = createStepId();
+    stream.push(textDeltaEvent(runningRun, 1, "A"));
+    stream.push(textDeltaEvent(runningRun, 2, "B"));
+    stream.push(toolPreparationEvent(runningRun, stepId, callId));
+    await waitFor(() =>
+      manager
+        .getSnapshot()
+        .liveActivity.activities.some((activity) => activity.kind === "TOOL_PREPARATION"),
+    );
+    expect(frameScheduler.pendingCount).toBe(1);
+
+    const callNotificationsBeforeDurable = listener.mock.calls.length;
+    stream.push(toolRequestedEvent(runningRun, stepId, 1, callId));
+    await waitFor(() => manager.getSnapshot().timeline.activeTools.length === 1);
+
+    expect(listener.mock.calls.length).toBe(callNotificationsBeforeDurable + 1);
+    expect(modelText(manager.getSnapshot())).toBe("AB");
+    expect(manager.getSnapshot().liveActivity.activities).toContainEqual(
+      expect.objectContaining({ kind: "TOOL_ACTIVITY", toolPhase: "REQUESTED" }),
+    );
+    expect(manager.getSnapshot().liveActivity.activities).not.toContainEqual(
+      expect.objectContaining({ kind: "TOOL_PREPARATION" }),
+    );
+    frameScheduler.flushStale();
+    expect(listener).toHaveBeenCalledTimes(callNotificationsBeforeDurable + 1);
+    stream.push(textDeltaEvent(runningRun, 3, "C"));
+    await waitFor(() => modelText(manager.getSnapshot()) === "ABC");
+    expect(frameScheduler.scheduleCount).toBe(2);
+    frameScheduler.flushStale();
+    expect(listener).toHaveBeenCalledTimes(callNotificationsBeforeDurable + 1);
+    frameScheduler.flushNext();
+    expect(listener).toHaveBeenCalledTimes(callNotificationsBeforeDurable + 2);
+    expect(modelText(manager.getSnapshot())).toBe("ABC");
+    expect(notificationsBeforeStream).toBeGreaterThan(0);
+    manager.dispose();
+    stream.close();
+  });
+
+  it("invalidates a pending stream publication on disposal", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const pendingRun = makeRun({ sessionId: session.id });
+    const runningRun = makeRun({ ...pendingRun, status: "RUNNING" });
+    const stream = new TestRunEventStream();
+    const frameScheduler = new TestFrameScheduler();
+    const client = makeClient({ createSessionResult: session, createRunResult: pendingRun });
+    client.startRun.mockResolvedValue(actionResponse(runningRun, pendingRun.id));
+    client.watchRunEvents.mockImplementation((_runId, options) => {
+      options?.onOpen?.();
+      return stream;
+    });
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      info: makeInfo(),
+      frameScheduler,
+    });
+    manager.beginDraft();
+    const listener = vi.fn();
+    manager.subscribe(listener);
+    await expect(manager.submitPrompt("dispose a pending frame")).resolves.toBe(true);
+    const notificationsBeforeStream = listener.mock.calls.length;
+    stream.push(textDeltaEvent(runningRun, 1, "pending"));
+    await waitFor(() => modelText(manager.getSnapshot()) === "pending");
+    expect(frameScheduler.pendingCount).toBe(1);
+
+    manager.dispose();
+    expect(frameScheduler.pendingCount).toBe(0);
+    frameScheduler.flushStale();
+
+    expect(listener).toHaveBeenCalledTimes(notificationsBeforeStream);
+    stream.close();
+  });
+
+  it("publishes ordinary submission state immediately without waiting for a stream frame", async () => {
+    const manager = new WebSessionManager({
+      client: makeClient(),
+      workspace,
+      info: makeInfo(),
+      frameScheduler: new TestFrameScheduler(),
+    });
+    manager.beginDraft();
+    const listener = vi.fn();
+    manager.subscribe(listener);
+
+    const submission = manager.submitPrompt("ordinary local state");
+
+    expect(listener).toHaveBeenCalled();
+    expect(listener.mock.lastCall?.[0].submission).toBe("SUBMITTING");
+    await submission;
+    manager.dispose();
+  });
+
   it("prunes live activity using the active Run's V3 event watermark", async () => {
     const session = makeSession({ defaultWorkspace: workspace });
     const pendingRun = makeRun({ sessionId: session.id, goal: "persist the execution feed" });
@@ -1007,6 +1217,8 @@ describe("WebSessionManager", () => {
       { session: activeSession, latestRun: activeRun, lastActivityAt: 2 },
       { session: otherSession, lastActivityAt: 1 },
     ];
+    const stream = new TestRunEventStream();
+    const frameScheduler = new TestFrameScheduler();
     const client = makeClient({
       latestRuns: new Map([[activeSession.id, [activeRun]]]),
     });
@@ -1015,17 +1227,35 @@ describe("WebSessionManager", () => {
       items: sessionId === activeSession.id ? [activeRun] : [],
     }));
     client.cancelRun.mockResolvedValue(actionResponse(activeRun, activeRun.id));
+    client.watchRunEvents.mockImplementation((_runId, options) => {
+      options?.onOpen?.();
+      return stream;
+    });
 
-    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo(), frameScheduler });
     await manager.loadSessions();
     await expect(manager.selectSession(activeSession.id)).resolves.toBe(true);
+    const listener = vi.fn();
+    manager.subscribe(listener);
+    const notificationsBeforeStream = listener.mock.calls.length;
+    stream.push(textDeltaEvent(activeRun, 1, "old Session text"));
+    await waitFor(() => modelText(manager.getSnapshot()) === "old Session text");
+    expect(listener).toHaveBeenCalledTimes(notificationsBeforeStream);
+    expect(frameScheduler.pendingCount).toBe(1);
+
     await expect(manager.selectSession(otherSession.id)).resolves.toBe(true);
+    const notificationsAfterSwitch = listener.mock.calls.length;
 
     expect(manager.getSnapshot().selectedSessionId).toBe(otherSession.id);
+    expect(modelText(manager.getSnapshot())).toBe("");
+    expect(frameScheduler.pendingCount).toBe(0);
     expect(client.cancelRun).not.toHaveBeenCalled();
     expect(client.listSessions).not.toHaveBeenCalled();
     expect(client.listWorkspaceSessions).toHaveBeenCalledTimes(1);
+    frameScheduler.flushStale();
+    expect(listener).toHaveBeenCalledTimes(notificationsAfterSwitch);
     manager.dispose();
+    stream.close();
   });
 
   it("fails closed when a Session has multiple non-terminal Runs", async () => {
@@ -1476,6 +1706,162 @@ function lifecycleEvent(type: string, run: ClientAgentRun): PublicRunEvent {
     durability: { kind: "EPHEMERAL" },
     payload: {},
   } as PublicRunEvent;
+}
+
+function textDeltaEvent(run: ClientAgentRun, sequence: number, text: string): PublicRunEvent {
+  return {
+    type: "model.text.delta",
+    eventId: `evt_00000000-0000-7000-8000-${String(sequence).padStart(12, "0")}`,
+    schemaVersion: 1,
+    runId: run.id,
+    sessionId: run.sessionId,
+    timestamp: sequence,
+    visibility: "USER_VISIBLE",
+    durability: {
+      kind: "EPHEMERAL",
+      version: 1,
+      deliveryClass: "ORDERED",
+      streamKey: `model:text:${run.id}`,
+      streamSequence: sequence,
+    },
+    payload: { text },
+  } as PublicRunEvent;
+}
+
+function toolPreparationEvent(
+  run: ClientAgentRun,
+  stepId: ReturnType<typeof createStepId>,
+  toolCallId: string,
+): PublicRunEvent {
+  return {
+    type: "model.tool_call.started",
+    eventId: "evt_00000000-0000-7000-8000-000000000201",
+    schemaVersion: 1,
+    runId: run.id,
+    sessionId: run.sessionId,
+    stepId,
+    timestamp: 101,
+    visibility: "USER_VISIBLE",
+    durability: {
+      kind: "EPHEMERAL",
+      version: 1,
+      deliveryClass: "ORDERED",
+      streamKey: `model:tool-call:${run.id}:${stepId}:${toolCallId}`,
+      streamSequence: 1,
+    },
+    payload: { toolCallId, toolName: "apply_patch" },
+  } as PublicRunEvent;
+}
+
+function toolRequestedEvent(
+  run: ClientAgentRun,
+  stepId: ReturnType<typeof createStepId>,
+  sequence: number,
+  externalCallId: string,
+): PublicRunEvent {
+  return {
+    type: "tool.requested",
+    eventId: `evt_00000000-0000-7000-8000-${String(300 + sequence).padStart(12, "0")}`,
+    schemaVersion: 1,
+    runId: run.id,
+    sessionId: run.sessionId,
+    stepId,
+    timestamp: sequence,
+    visibility: "USER_VISIBLE",
+    durability: { kind: "DURABLE", version: 1, sequence },
+    payload: {
+      invocationId: createToolInvocationId(),
+      toolName: "apply_patch",
+      externalCallId,
+      riskLevel: "HIGH",
+    },
+  } as PublicRunEvent;
+}
+
+function modelText(snapshot: ReturnType<WebSessionManager["getSnapshot"]>): string {
+  return (
+    snapshot.liveActivity.activities.find((activity) => activity.kind === "MODEL_TEXT")?.text ?? ""
+  );
+}
+
+class TestFrameScheduler implements FrameScheduler {
+  private nextHandle = 1;
+  private readonly callbacks: Array<{
+    readonly handle: FrameHandle;
+    readonly callback: () => void;
+    cancelled: boolean;
+    flushed: boolean;
+    staleFlushed: boolean;
+  }> = [];
+  scheduleCount = 0;
+
+  get pendingCount(): number {
+    return this.callbacks.filter((item) => !item.cancelled && !item.flushed).length;
+  }
+
+  schedule(callback: () => void): FrameHandle {
+    const handle = { id: this.nextHandle++ };
+    this.scheduleCount += 1;
+    this.callbacks.push({
+      handle,
+      callback,
+      cancelled: false,
+      flushed: false,
+      staleFlushed: false,
+    });
+    return handle;
+  }
+
+  cancel(handle: FrameHandle): void {
+    const scheduled = this.callbacks.find((item) => item.handle === handle);
+    if (scheduled !== undefined) scheduled.cancelled = true;
+  }
+
+  flushNext(): void {
+    const scheduled = this.callbacks.find((item) => !item.cancelled && !item.flushed);
+    if (scheduled === undefined) throw new Error("No pending frame callback to flush.");
+    scheduled.flushed = true;
+    scheduled.callback();
+  }
+
+  flushStale(): void {
+    for (const scheduled of this.callbacks) {
+      if (scheduled.cancelled && !scheduled.staleFlushed) {
+        scheduled.staleFlushed = true;
+        scheduled.callback();
+      }
+    }
+  }
+}
+
+class TestRunEventStream implements AsyncIterable<PublicRunEvent> {
+  private readonly queued: PublicRunEvent[] = [];
+  private readonly waiters: Array<(result: IteratorResult<PublicRunEvent, undefined>) => void> = [];
+  private closed = false;
+
+  [Symbol.asyncIterator](): AsyncIterator<PublicRunEvent, undefined> {
+    return this;
+  }
+
+  next(): Promise<IteratorResult<PublicRunEvent, undefined>> {
+    const event = this.queued.shift();
+    if (event !== undefined) return Promise.resolve({ done: false, value: event });
+    if (this.closed) return Promise.resolve({ done: true, value: undefined });
+    return new Promise((resolve) => this.waiters.push(resolve));
+  }
+
+  push(event: PublicRunEvent): void {
+    const waiter = this.waiters.shift();
+    if (waiter === undefined) this.queued.push(event);
+    else waiter({ done: false, value: event });
+  }
+
+  close(): void {
+    this.closed = true;
+    for (const waiter of this.waiters.splice(0)) {
+      waiter({ done: true, value: undefined });
+    }
+  }
 }
 
 function reasoningEvent(run: ClientAgentRun, summary: string): PublicRunEvent {

@@ -14,6 +14,8 @@ const promptCacheOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "PROMPT_CACH
 const multiTurnOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "MULTI_TURN";
 const s0Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S0";
 const s1Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S1";
+const s2Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S2";
+const S2_COMPLETE_TEXT = `S2_COMPLETE ${"word ".repeat(1_800).trim()}`;
 const waitVisible = (locator, timeout = 15_000) => locator.waitFor({ state: "visible", timeout });
 const waitUntil = async (predicate, description, timeout = 15_000) => {
   const deadline = Date.now() + timeout;
@@ -528,6 +530,131 @@ try {
     await browser.close();
     process.stdout.write(
       "[browser-runner] S1 100 KiB Tool arguments stayed out of the DOM; preparation handed off to one durable ToolActivity and its FileChange effect survived refresh.\n",
+    );
+    process.exit(0);
+  }
+  if (s2Only) {
+    smokeStage = "S2 frame and scroll instrumentation";
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => {
+      const scrollContainer = document.querySelector(".workspace-column");
+      if (!(scrollContainer instanceof HTMLElement)) {
+        throw new Error("the S2 conversation scroll container is missing");
+      }
+      let prototype = scrollContainer;
+      let descriptor;
+      while (prototype !== null && descriptor === undefined) {
+        descriptor = Object.getOwnPropertyDescriptor(prototype, "scrollTop");
+        prototype = Object.getPrototypeOf(prototype);
+      }
+      if (descriptor?.get === undefined || descriptor.set === undefined) {
+        throw new Error("the S2 scrollTop property cannot be instrumented");
+      }
+      const originalRequestAnimationFrame = window.requestAnimationFrame.bind(window);
+      window.__caelushS2FrameTimestamp = undefined;
+      window.__caelushS2ScrollWrites = [];
+      window.requestAnimationFrame = (callback) =>
+        originalRequestAnimationFrame((timestamp) => {
+          window.__caelushS2FrameTimestamp = timestamp;
+          callback(timestamp);
+        });
+      Object.defineProperty(scrollContainer, "scrollTop", {
+        configurable: true,
+        get: () => descriptor.get.call(scrollContainer),
+        set: (value) => {
+          window.__caelushS2ScrollWrites.push({
+            frame: window.__caelushS2FrameTimestamp,
+            value,
+          });
+          descriptor.set.call(scrollContainer, value);
+        },
+      });
+    });
+
+    smokeStage = "S2 streamed cancellation interaction";
+    await submitPrompt("s2 cancel stream");
+    await waitVisible(page.locator("button.cancel-button"));
+    await waitUntil(
+      async () => (await page.locator(".session-conversation").innerText()).includes("S2_CANCEL_"),
+      "S2 cancellation stream text to appear",
+    );
+    await page.waitForTimeout(300);
+    const nearBottomObservation = await page.evaluate(() => ({
+      scrollWrites: [...(window.__caelushS2ScrollWrites ?? [])],
+      scrollHeight: document.querySelector(".workspace-column")?.scrollHeight ?? 0,
+      clientHeight: document.querySelector(".workspace-column")?.clientHeight ?? 0,
+    }));
+    if (nearBottomObservation.scrollWrites.length === 0) {
+      throw new Error("near-bottom streaming did not schedule a scroll reconciliation");
+    }
+    const writesByFrame = new Map();
+    for (const write of nearBottomObservation.scrollWrites) {
+      if (write.frame === undefined) continue;
+      writesByFrame.set(write.frame, (writesByFrame.get(write.frame) ?? 0) + 1);
+    }
+    if ([...writesByFrame.values()].some((count) => count > 1)) {
+      throw new Error("streaming performed more than one scroll reconciliation in a frame");
+    }
+    await page.locator("button.cancel-button").click();
+    await waitVisible(
+      page
+        .locator("button.workspace-session-item")
+        .filter({ hasText: "s2 cancel stream" })
+        .locator('.session-status-icon[aria-label="已取消"]'),
+    );
+
+    smokeStage = "S2 complete ordered text stream";
+    await submitPrompt("s2 complete stream");
+    await waitVisible(page.locator("button.cancel-button"));
+    await waitUntil(
+      async () => (await page.locator(".session-conversation").innerText()).length > 3_000,
+      "S2 long text deltas to fill the conversation",
+    );
+    const userScrollTop = await page.evaluate(() => {
+      const scrollContainer = document.querySelector(".workspace-column");
+      if (!(scrollContainer instanceof HTMLElement)) throw new Error("scroll container missing");
+      scrollContainer.scrollTop = 0;
+      scrollContainer.dispatchEvent(new Event("scroll"));
+      return scrollContainer.scrollTop;
+    });
+    await page.waitForTimeout(300);
+    const scrolledUpObservation = await page.evaluate(() => {
+      const scrollContainer = document.querySelector(".workspace-column");
+      if (!(scrollContainer instanceof HTMLElement)) throw new Error("scroll container missing");
+      return {
+        scrollTop: scrollContainer.scrollTop,
+        maxScrollTop: scrollContainer.scrollHeight - scrollContainer.clientHeight,
+      };
+    });
+    if (userScrollTop > 5 || scrolledUpObservation.scrollTop > 5) {
+      throw new Error("streaming pulled a user who scrolled up back to the bottom");
+    }
+    if (scrolledUpObservation.maxScrollTop <= 120) {
+      throw new Error("S2 text fixture did not create a meaningful scrollable history");
+    }
+    await waitUntil(
+      async () => (await page.locator(".session-conversation").innerText()).includes("S2_COMPLETE"),
+      "S2 complete answer text to appear",
+    );
+    await waitVisible(
+      page
+        .locator("button.workspace-session-item")
+        .filter({ hasText: "s2 complete stream" })
+        .locator('.session-status-icon[aria-label="已完成"]'),
+    );
+    const completedText = await page.locator(".session-conversation").innerText();
+    if (!completedText.replace(/\s+/gu, " ").includes(S2_COMPLETE_TEXT.replace(/\s+/gu, " "))) {
+      throw new Error("the final durable Turn does not contain every streamed text chunk");
+    }
+    const finalScrollTop = await page
+      .locator(".workspace-column")
+      .evaluate((node) => node.scrollTop);
+    if (finalScrollTop > 5) {
+      throw new Error("terminal publication moved a user who scrolled up back to the bottom");
+    }
+    await browser.close();
+    process.stdout.write(
+      `[browser-runner] S2 streamed cancellation stayed interactive; ordered final text and terminal state appeared; near-bottom writes=${nearBottomObservation.scrollWrites.length}, scrolled-up top=${finalScrollTop}.\n`,
     );
     process.exit(0);
   }

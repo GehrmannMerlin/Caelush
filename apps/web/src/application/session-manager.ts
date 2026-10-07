@@ -63,6 +63,11 @@ import type {
 } from "@caelush/protocol";
 import { derivePromptTitle, validatePrompt, type PromptError } from "./prompt.js";
 import type { WebHostClient } from "../host/bootstrap.js";
+import {
+  browserFrameScheduler,
+  type FrameHandle,
+  type FrameScheduler,
+} from "./frame-publication-scheduler.js";
 import { PermissionPresetSelectionStore, SessionSelectionStore } from "./session-persistence.js";
 import {
   choosePermissionPreset,
@@ -261,6 +266,9 @@ interface OptimisticPresentationUser {
 export class WebSessionManager {
   private readonly listeners = new Set<WebSessionListener>();
   private snapshot: WebSessionSnapshot = initialSnapshot();
+  private pendingPublicationFrame:
+    { readonly token: object; readonly handle: FrameHandle } | undefined;
+  private readonly frameScheduler: FrameScheduler;
   private activeLifecycle: ActiveLifecycle | undefined;
   private readonly resolvingApprovals = new Set<ApprovalRequestId>();
   private approvalContextGeneration = 0;
@@ -278,10 +286,13 @@ export class WebSessionManager {
       readonly workspace: WorkspaceRef;
       readonly info: DaemonInfo;
       readonly timer?: Timer;
+      readonly frameScheduler?: FrameScheduler;
       readonly selectionStore?: SessionSelectionStore;
       readonly permissionPresetStore?: PermissionPresetSelectionStore;
     },
-  ) {}
+  ) {
+    this.frameScheduler = options.frameScheduler ?? browserFrameScheduler;
+  }
 
   getSnapshot(): WebSessionSnapshot {
     return this.snapshot;
@@ -1111,6 +1122,7 @@ export class WebSessionManager {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.cancelPendingPublicationFrame();
     this.cancelActiveLifecycle();
     this.listeners.clear();
   }
@@ -1331,7 +1343,10 @@ export class WebSessionManager {
         if (event.runId !== active.run.id) continue;
         const liveActivity = reduceLiveActivityEvent(this.snapshot.liveActivity, event);
         const timeline = reduceTimelineEvent(this.snapshot.timeline, event);
-        this.publish({ timeline, liveActivity });
+        this.publish(
+          { timeline, liveActivity },
+          shouldPublishEventOnFrame(event) ? "FRAME" : "IMMEDIATE",
+        );
         if (event.durability.kind === "DURABLE") {
           void this.refreshTurnPresentation(active, generation);
         }
@@ -1826,10 +1841,53 @@ export class WebSessionManager {
     ]);
   }
 
-  private publish(patch: WebSessionSnapshotPatch): void {
+  private publish(patch: WebSessionSnapshotPatch, mode: "IMMEDIATE" | "FRAME" = "IMMEDIATE"): void {
     if (this.disposed) return;
     this.snapshot = { ...this.snapshot, ...patch } as WebSessionSnapshot;
+    if (mode === "FRAME") {
+      this.scheduleFramePublication();
+      return;
+    }
+    this.cancelPendingPublicationFrame();
+    this.notifyListeners();
+  }
+
+  private scheduleFramePublication(): void {
+    if (this.pendingPublicationFrame !== undefined) return;
+    const token = {};
+    const handle = this.frameScheduler.schedule(() => {
+      if (this.disposed || this.pendingPublicationFrame?.token !== token) return;
+      this.pendingPublicationFrame = undefined;
+      this.notifyListeners();
+    });
+    this.pendingPublicationFrame = { token, handle };
+  }
+
+  private cancelPendingPublicationFrame(): void {
+    const pending = this.pendingPublicationFrame;
+    if (pending === undefined) return;
+    this.pendingPublicationFrame = undefined;
+    this.frameScheduler.cancel(pending.handle);
+  }
+
+  private notifyListeners(): void {
     for (const listener of this.listeners) listener(this.snapshot);
+  }
+}
+
+function shouldPublishEventOnFrame(event: PublicRunEvent): boolean {
+  if (event.durability.kind === "DURABLE" || event.visibility !== "USER_VISIBLE") return false;
+  switch (event.type) {
+    case "model.text.delta":
+    case "model.reasoning_summary.delta":
+    case "model.tool_call.started":
+    case "model.status":
+    case "tool.output":
+    case "shell.output":
+    case "process.output":
+      return true;
+    default:
+      return false;
   }
 }
 
