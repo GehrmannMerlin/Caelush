@@ -76,12 +76,13 @@ describe("Anthropic Messages stream golden: text", () => {
 
     expect(types(turn.events)).toEqual([
       "stream.start",
+      "stream.status",
       "usage",
       "text.delta",
       "usage",
       "stream.finish",
     ]);
-    expect(turn.events[2]?.payload).toMatchObject({ text: "hello world" });
+    expect(turn.events[3]?.payload).toMatchObject({ text: "hello world" });
     expect(turn.events.at(-1)?.payload).toMatchObject({ finishReason: "STOP" });
   });
 
@@ -280,6 +281,7 @@ describe("Anthropic Messages stream golden: tools", () => {
 
     expect(types(turn.events)).toEqual([
       "stream.start",
+      "stream.status",
       "usage",
       "tool_call.start",
       "tool_call.delta",
@@ -607,6 +609,50 @@ describe("Anthropic Messages stream golden: thinking", () => {
     expect(JSON.stringify(turn.events)).not.toContain("hidden chain of thought");
   });
 
+  it("reports provider activity while a hidden-only thinking stream has no displayable text", async () => {
+    const turn = await captureTurn(request({ settings: { reasoning: { level: "HIGH" } } }), {
+      descriptor: modelDescriptor({
+        ref: { provider: "anthropic-fixture", model: "fixture-model" },
+        api: "anthropic-messages",
+        reasoning: {
+          supportedLevels: ["OFF", "LOW", "HIGH"],
+          supportsSummary: "SUPPORTED",
+        },
+        adapterMetadata: {
+          anthropicMessages: {
+            thinking: {
+              supported: true,
+              defaultEnabled: false,
+              disableSupported: true,
+              display: "omitted",
+              budgetTokensByLevel: { HIGH: 16_384 },
+              effortByLevel: { LOW: "low", HIGH: "high" },
+            },
+          },
+        },
+      }),
+      transport: turnTransport([
+        messageStart(),
+        thinkingBlockStart(0),
+        thinkingDelta(0, "S3_SECRET_REASONING_SENTINEL"),
+        blockStop(0),
+        messageDelta("end_turn"),
+        messageStop(),
+      ]),
+    });
+
+    expect(turn.events).toContainEqual(
+      expect.objectContaining({
+        type: "stream.status",
+        payload: expect.objectContaining({ phase: "RECEIVING_PROVIDER_DATA" }),
+      }),
+    );
+    expect(payloads(turn.events, "text.delta")).toEqual([]);
+    expect(payloads(turn.events, "reasoning.summary.delta")).toEqual([]);
+    expect(JSON.stringify(turn.events)).not.toContain("S3_SECRET_REASONING_SENTINEL");
+    expect(turn.events.at(-1)?.type).toBe("stream.finish");
+  });
+
   it("never publishes a signature or a redacted thinking block", async () => {
     const turn = await captureTurn(request({ settings: { reasoning: { level: "HIGH" } } }), {
       descriptor: thinkingDescriptor,
@@ -698,6 +744,7 @@ describe("Anthropic Messages stream golden: transport-level events", () => {
 
     expect(types(turn.events)).toEqual([
       "stream.start",
+      "stream.status",
       "usage",
       "text.delta",
       "usage",

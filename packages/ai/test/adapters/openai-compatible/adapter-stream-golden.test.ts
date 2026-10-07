@@ -51,7 +51,11 @@ function adapterInput(
 /** Run the adapter over a scripted SSE response and collect the adapter events. */
 async function run(
   chunks: readonly Record<string, unknown>[],
-  options: { readonly adapter?: ApiAdapter; readonly signal?: AbortSignal } = {},
+  options: {
+    readonly adapter?: ApiAdapter;
+    readonly signal?: AbortSignal;
+    readonly includeProviderActivity?: boolean;
+  } = {},
 ): Promise<AIAdapterEvent[]> {
   const transport = capturingTransport(() => sseResponse(chunks));
   const adapter = options.adapter ?? createOpenAICompatibleApiAdapter();
@@ -60,6 +64,12 @@ async function run(
   for await (const event of adapter.stream(
     adapterInput(transport, options.signal === undefined ? {} : { signal: options.signal }),
   )) {
+    if (
+      options.includeProviderActivity !== true &&
+      (event as { readonly type: string }).type === "provider.activity"
+    ) {
+      continue;
+    }
     events.push(event);
   }
   return events;
@@ -106,15 +116,36 @@ describe("OpenAI-compatible stream golden: text", () => {
       openAIChunk({
         id: "c1",
         model: "fixture-model",
-        delta: { reasoning_content: "secret chain of thought" },
+        delta: { reasoning_content: "S3_SECRET_REASONING_SENTINEL" },
       }),
       openAIChunk({ id: "c1", model: "fixture-model", delta: { content: "answer" } }),
       finishChunk({ id: "c1", model: "fixture-model", finishReason: "stop" }),
     ]);
 
     expect(types(events)).toEqual(["text.delta", "adapter.finish"]);
-    expect(JSON.stringify(events)).not.toContain("chain of thought");
+    expect(JSON.stringify(events)).not.toContain("S3_SECRET_REASONING_SENTINEL");
     expect(JSON.stringify(events)).not.toContain("reasoning");
+  });
+
+  it("emits a content-free activity signal for filtered reasoning and raw chunks", async () => {
+    const events = await run(
+      [
+        openAIChunk({
+          id: "c1",
+          model: "fixture-model",
+          delta: { reasoning_content: "S3_SECRET_REASONING_SENTINEL" },
+        }),
+        finishChunk({ id: "c1", model: "fixture-model", finishReason: "stop" }),
+      ],
+      { includeProviderActivity: true },
+    );
+    const activity = events.filter(
+      (event) => (event as { readonly type: string }).type === "provider.activity",
+    );
+
+    expect(activity.length).toBeGreaterThan(0);
+    expect(activity.every((event) => Object.keys(event).length === 1)).toBe(true);
+    expect(JSON.stringify(events)).not.toContain("S3_SECRET_REASONING_SENTINEL");
   });
 });
 

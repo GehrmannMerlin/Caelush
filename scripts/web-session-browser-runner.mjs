@@ -15,6 +15,7 @@ const multiTurnOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "MULTI_TURN";
 const s0Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S0";
 const s1Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S1";
 const s2Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S2";
+const s3Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S3";
 const S2_COMPLETE_TEXT = `S2_COMPLETE ${"word ".repeat(1_800).trim()}`;
 const waitVisible = (locator, timeout = 15_000) => locator.waitFor({ state: "visible", timeout });
 const waitUntil = async (predicate, description, timeout = 15_000) => {
@@ -655,6 +656,86 @@ try {
     await browser.close();
     process.stdout.write(
       `[browser-runner] S2 streamed cancellation stayed interactive; ordered final text and terminal state appeared; near-bottom writes=${nearBottomObservation.scrollWrites.length}, scrolled-up top=${finalScrollTop}.\n`,
+    );
+    process.exit(0);
+  }
+  if (s3Only) {
+    smokeStage = "S3 hidden Provider activity DOM guard";
+    await page.evaluate(() => {
+      window.__caelushS3SawFalseIdle = false;
+      window.__caelushS3SawProviderActive = false;
+      window.__caelushS3SawSecretReasoning = false;
+      const observe = () => {
+        const body = document.body.innerText;
+        if (body.includes("模型仍在处理")) {
+          window.__caelushS3SawProviderActive = true;
+        }
+        if (
+          window.__caelushS3SawProviderActive === true &&
+          body.includes("模型近期没有返回新数据，仍在等待")
+        ) {
+          window.__caelushS3SawFalseIdle = true;
+        }
+        if (body.includes("S3_SECRET_REASONING_SENTINEL")) {
+          window.__caelushS3SawSecretReasoning = true;
+        }
+      };
+      const observer = new MutationObserver(observe);
+      observer.observe(document.body, { childList: true, characterData: true, subtree: true });
+      window.__caelushS3Observer = observer;
+    });
+    await submitPrompt("s3 hidden provider activity");
+    await openProcessDisclosure();
+    await waitVisible(exactText("模型仍在处理"), 5_000);
+    await waitVisible(exactText("S3 hidden activity completed."), 10_000);
+    await waitVisible(
+      page
+        .locator("button.workspace-session-item")
+        .filter({ hasText: "s3 hidden provider activity" })
+        .locator('.session-status-icon[aria-label="已完成"]'),
+    );
+    const hiddenActivityObservation = await page.evaluate(() => {
+      window.__caelushS3Observer?.disconnect();
+      return {
+        sawProviderActive: window.__caelushS3SawProviderActive === true,
+        sawFalseIdle: window.__caelushS3SawFalseIdle === true,
+        sawSecretReasoning: window.__caelushS3SawSecretReasoning === true,
+        body: document.body.innerText,
+      };
+    });
+    if (!hiddenActivityObservation.sawProviderActive) {
+      throw new Error("the Web page did not show the hidden Provider activity state");
+    }
+    if (hiddenActivityObservation.sawFalseIdle) {
+      throw new Error("hidden Provider activity was presented as false idle");
+    }
+    if (
+      hiddenActivityObservation.sawSecretReasoning ||
+      hiddenActivityObservation.body.includes("S3_SECRET_REASONING_SENTINEL")
+    ) {
+      throw new Error("hidden raw reasoning entered the Web DOM");
+    }
+
+    smokeStage = "S3 durable presentation settlement";
+    await startNewSession();
+    await submitPrompt("s3 durable burst");
+    await waitVisible(exactText("S3 durable refresh completed."), 10_000);
+    await waitVisible(
+      page
+        .locator("button.workspace-session-item")
+        .filter({ hasText: "s3 durable burst" })
+        .locator('.session-status-icon[aria-label="已完成"]'),
+    );
+    await openProcessDisclosure();
+    await waitUntil(
+      async () =>
+        (await page.locator(".turn-presentation-process").innerText()).includes("fixture.txt"),
+      "the completed S3 FileChange presentation",
+      5_000,
+    );
+    await browser.close();
+    process.stdout.write(
+      "[browser-runner] S3 hidden Provider activity stayed live without false idle or raw reasoning; durable Tool effect and terminal presentation settled.\n",
     );
     process.exit(0);
   }

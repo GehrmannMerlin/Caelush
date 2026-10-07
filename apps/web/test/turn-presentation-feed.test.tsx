@@ -396,6 +396,7 @@ describe("TurnPresentationFeed", () => {
         idleForMs: 35_000,
         idleTimeoutMs: 300_000,
         providerEventReceived: false,
+        displayableEventReceived: false,
       },
     };
     vi.useFakeTimers();
@@ -433,6 +434,7 @@ describe("TurnPresentationFeed", () => {
       idleForMs: 0,
       idleTimeoutMs: 300_000,
       providerEventReceived: false,
+      displayableEventReceived: false,
     };
 
     expect(modelWaitMessage(wait, startedAt + 29_999)).toEqual({ title: "思考中", detail: "" });
@@ -440,6 +442,25 @@ describe("TurnPresentationFeed", () => {
       title: "正在等待模型响应",
       detail: "",
     });
+  });
+
+  it("distinguishes hidden Provider activity from displayable response content", () => {
+    const wait: ModelWaitState = {
+      runId,
+      phase: "RECEIVING_PROVIDER_DATA",
+      lastActivityAt: 1_700_000_000_000,
+      idleForMs: 0,
+      providerEventReceived: true,
+      displayableEventReceived: false,
+    };
+
+    expect(modelWaitMessage(wait, wait.lastActivityAt)).toEqual({
+      title: "思考中",
+      detail: "模型仍在处理",
+    });
+    expect(
+      modelWaitMessage({ ...wait, displayableEventReceived: true }, wait.lastActivityAt),
+    ).toEqual({ title: "思考中", detail: "正在接收模型响应" });
   });
 
   it("shows the five-minute idle termination notice as text, not a loading mark", () => {
@@ -453,6 +474,7 @@ describe("TurnPresentationFeed", () => {
         idleForMs: 300_000,
         idleTimeoutMs: 300_000,
         providerEventReceived: false,
+        displayableEventReceived: false,
       },
     };
     const html = renderToStaticMarkup(
@@ -479,6 +501,7 @@ describe("TurnPresentationFeed", () => {
       idleForMs: 1_250,
       idleTimeoutMs: 1_250,
       providerEventReceived: false,
+      displayableEventReceived: false,
     };
 
     expect(modelWaitMessage(wait, wait.lastActivityAt).detail).toBe(

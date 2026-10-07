@@ -264,6 +264,7 @@ describe("Timeline", () => {
         idleForMs: 5_000,
         idleTimeoutMs: 300_000,
         providerEventReceived: true,
+        displayableEventReceived: false,
         attempt: 2,
         maxAttempts: 6,
         retryOrdinal: 1,

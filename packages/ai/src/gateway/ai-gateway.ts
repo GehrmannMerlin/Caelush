@@ -165,7 +165,8 @@ async function* runGatewayStream(
     const tracker = createToolCallTracker();
     const context: AIErrorContext = { providerId, model };
     let adapterFinish: AdapterFinish | undefined;
-    let lastActivityAt = now();
+    let providerLastActivityAt = now();
+    let providerEventReceived = false;
     let nudgeEmitted = false;
     let phase: AIStreamStatusEvent["payload"]["phase"] = "WAITING_PROVIDER";
 
@@ -182,7 +183,7 @@ async function* runGatewayStream(
       const outcome = await waitForIteratorNext({
         pending: pendingNext,
         aborted: scope.aborted,
-        lastActivityAt,
+        providerLastActivityAt,
         nudgeAfterMs,
         idleTimeoutMs,
         nudgeEmitted,
@@ -192,13 +193,13 @@ async function* runGatewayStream(
       if (outcome.kind === "NUDGE") {
         nudgeEmitted = true;
         phase = "NO_RECENT_ACTIVITY";
-        yield streamStatusEvent(phase, lastActivityAt, idleTimeoutMs, now);
+        yield streamStatusEvent(phase, providerLastActivityAt, idleTimeoutMs, now);
         continue;
       }
       if (outcome.kind === "IDLE_TIMEOUT") {
         scope.abortIdle();
         phase = "CANCELLING_IDLE_STREAM";
-        yield streamStatusEvent(phase, lastActivityAt, idleTimeoutMs, now);
+        yield streamStatusEvent(phase, providerLastActivityAt, idleTimeoutMs, now);
         throw createAIError("AI_TIMEOUT", undefined, context);
       }
       if (outcome.kind === "ABORT") {
@@ -215,15 +216,17 @@ async function* runGatewayStream(
       const step = outcome.result;
       if (step.done === true) break;
 
-      lastActivityAt = now();
-      if (phase === "NO_RECENT_ACTIVITY") {
-        phase = "RECEIVING_PROVIDER_DATA";
-        yield streamStatusEvent(phase, lastActivityAt, idleTimeoutMs, now);
-      }
-      phase = "WAITING_PROVIDER";
-      nudgeEmitted = false;
-
       const adapterEvent = step.value;
+      providerLastActivityAt = now();
+      nudgeEmitted = false;
+      if (
+        phase === "NO_RECENT_ACTIVITY" ||
+        (!providerEventReceived && !isDisplayableAdapterEvent(adapterEvent))
+      ) {
+        phase = "RECEIVING_PROVIDER_DATA";
+        yield streamStatusEvent(phase, providerLastActivityAt, idleTimeoutMs, now);
+      }
+      providerEventReceived = true;
       const finish = trackAdapterEvent(adapterEvent, tracker, context);
 
       if (finish !== undefined) {
@@ -235,6 +238,11 @@ async function* runGatewayStream(
           );
         }
         adapterFinish = finish;
+        pendingNext = observeIteratorNext(adapterIterator);
+        continue;
+      }
+
+      if (adapterEvent.type === "provider.activity") {
         pendingNext = observeIteratorNext(adapterIterator);
         continue;
       }
@@ -296,7 +304,7 @@ async function* runGatewayStream(
 
 function streamStatusEvent(
   phase: AIStreamStatusEvent["payload"]["phase"],
-  lastActivityAt: number,
+  providerLastActivityAt: number,
   idleTimeoutMs: number,
   now: () => number,
 ): AIStreamStatusEvent {
@@ -304,8 +312,8 @@ function streamStatusEvent(
     type: "stream.status",
     payload: {
       phase,
-      lastActivityAt,
-      idleForMs: Math.max(0, now() - lastActivityAt),
+      lastActivityAt: providerLastActivityAt,
+      idleForMs: Math.max(0, now() - providerLastActivityAt),
       idleTimeoutMs,
     },
   };
@@ -356,6 +364,7 @@ function trackAdapterEvent(
     case "text.delta":
     case "reasoning.summary.delta":
     case "usage":
+    case "provider.activity":
       return undefined;
     case "tool_call.start":
       tracker.start(event.payload.toolCallId, event.payload.toolName, context);
@@ -390,6 +399,8 @@ function toPublicEvent(
   callId: LLMCallId,
 ): AIStreamEvent | undefined {
   switch (event.type) {
+    case "provider.activity":
+      return undefined;
     case "text.delta": {
       const assistantItemIndex = normalizeAssistantItemIndex(
         event.payload.assistantItemIndex,
@@ -434,6 +445,14 @@ function toPublicEvent(
         context,
       );
   }
+}
+
+function isDisplayableAdapterEvent(event: AIAdapterEvent): boolean {
+  return (
+    event.type === "text.delta" ||
+    event.type === "reasoning.summary.delta" ||
+    event.type === "tool_call.start"
+  );
 }
 
 function normalizeAssistantItemIndex(value: number | undefined, context: AIErrorContext): number {

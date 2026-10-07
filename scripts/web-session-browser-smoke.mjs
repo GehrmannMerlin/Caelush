@@ -38,6 +38,8 @@ let multiTurnPatchRequests = 0;
 let s0PatchServed = false;
 let s1PatchServed = false;
 let s2ChunksServed = 0;
+let s3HiddenChunksServed = 0;
+let s3PatchServed = false;
 
 const S2_CANCEL_TEXT = `S2_CANCEL_${"cancel ".repeat(1_800)}`;
 const S2_COMPLETE_TEXT = `S2_COMPLETE ${"word ".repeat(1_800).trim()}`;
@@ -199,6 +201,34 @@ async function handleModelRequest(request, response) {
     } else {
       holdSseFor(response, 700, textChunks("Recovered after Provider recovery."));
     }
+    return;
+  }
+  if (latestUserText?.includes("s3 hidden provider activity")) {
+    const chunks = Array.from({ length: 45 }, (_, index) =>
+      chunk({ reasoning_content: `S3_SECRET_REASONING_SENTINEL_${index}` }, null),
+    );
+    s3HiddenChunksServed += await writeSseDelayed(
+      response,
+      [...chunks, ...textChunks("S3 hidden activity completed.")],
+      20,
+    );
+    return;
+  }
+  if (latestUserText?.includes("s3 durable burst")) {
+    if (hasToolResult || s3PatchServed) {
+      writeSse(response, textChunks("S3 durable refresh completed."));
+      return;
+    }
+    s3PatchServed = true;
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: fixture.txt",
+      "@@",
+      "-browser fixture",
+      "+S3 durable effect",
+      "*** End Patch",
+    ].join("\n");
+    writeSse(response, toolCallChunks("apply_patch", { patch }, "browser-s3-durable-patch"));
     return;
   }
   if (promptText.includes("s0 streaming buffer") && (hasToolResult || s0PatchServed)) {
@@ -503,6 +533,7 @@ const multiTurnOnly = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "MULTI_TURN";
 const s0Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S0";
 const s1Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S1";
 const s2Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S2";
+const s3Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S3";
 const configuredArtifactDirectory = process.env.CAELUSH_BROWSER_SMOKE_ARTIFACT_DIR;
 const browserArtifacts = promptCacheOnly
   ? await resolvePromptCacheArtifactDirectory(process.cwd(), configuredArtifactDirectory)
@@ -513,7 +544,9 @@ const browserArtifacts = promptCacheOnly
         ? join(tmpdir(), `caelush-web-browser-smoke-s1-${process.pid}`)
         : s2Only
           ? join(tmpdir(), `caelush-web-browser-smoke-s2-${process.pid}`)
-          : join(process.cwd(), "test-results", "web-session-browser-smoke")
+          : s3Only
+            ? join(tmpdir(), `caelush-web-browser-smoke-s3-${process.pid}`)
+            : join(process.cwd(), "test-results", "web-session-browser-smoke")
     : resolve(configuredArtifactDirectory);
 
 const directory = await mkdtemp(join(tmpdir(), "caelush-web-browser-"));
@@ -534,8 +567,8 @@ try {
     port: 0,
     sseHeartbeatIntervalMs: 250,
     providerStreamPolicy: {
-      nudgeAfterMs: 1_000,
-      idleTimeoutMs: 1_500,
+      nudgeAfterMs: s3Only ? 250 : 1_000,
+      idleTimeoutMs: s3Only ? 500 : 1_500,
       teardownGraceMs: 300,
     },
     providers: [
@@ -594,6 +627,17 @@ try {
   if (result === 0 && s2Only) {
     process.stdout.write(`[browser-smoke] S2 provider text chunks served: ${s2ChunksServed}.\n`);
   }
+  if (result === 0 && s3Only) {
+    process.stdout.write(
+      `[browser-smoke] S3 hidden Provider chunks served: ${s3HiddenChunksServed}; durable Tool call served: ${s3PatchServed}.\n`,
+    );
+    const fixture = await readFile(join(directory, "fixture.txt"), "utf8");
+    if (fixture !== "S3 durable effect\n") {
+      throw new Error(
+        "S3 durable presentation fixture did not persist its Tool effect: " + fixture,
+      );
+    }
+  }
   if (result === 0 && multiTurnOnly) {
     const fixture = await readFile(join(directory, "fixture.txt"), "utf8");
     if (fixture !== "multi-turn fixture\n") {
@@ -605,7 +649,15 @@ try {
       "[browser-smoke] focused multi-turn Tool effect persisted: " + JSON.stringify(fixture) + "\n",
     );
   }
-  if (result === 0 && !promptCacheOnly && !multiTurnOnly && !s0Only && !s1Only && !s2Only) {
+  if (
+    result === 0 &&
+    !promptCacheOnly &&
+    !multiTurnOnly &&
+    !s0Only &&
+    !s1Only &&
+    !s2Only &&
+    !s3Only
+  ) {
     const fixture = await readFile(join(directory, "fixture.txt"), "utf8");
     if (fixture !== "patched browser fixture\n") {
       throw new Error("Browser approval flow did not persist the verified patch.");

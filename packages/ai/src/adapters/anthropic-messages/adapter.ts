@@ -104,6 +104,7 @@ export function createAnthropicMessagesApiAdapter(): ApiAdapter {
       // cannot do, so the response body is read directly.
       const decoder = createTextDecoderStream(body, signal);
       for await (const text of decoder) {
+        if (text.length > 0) yield { type: "provider.activity" };
         for (const event of parser.push(text)) {
           yield* observeAnthropicEvent(event, state);
         }

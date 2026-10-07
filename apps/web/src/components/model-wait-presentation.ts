@@ -68,7 +68,9 @@ export function modelWaitMessage(
       return { title: "思考中", detail: "" };
     }
     case "RECEIVING_PROVIDER_DATA":
-      return { title: "思考中", detail: "正在接收模型响应" };
+      return wait.displayableEventReceived === true
+        ? { title: "思考中", detail: "正在接收模型响应" }
+        : { title: "思考中", detail: "模型仍在处理" };
     case "NO_RECENT_ACTIVITY":
       return { title: "思考中", detail: "模型近期没有返回新数据，仍在等待" };
     case "CANCELLING_IDLE_STREAM": {

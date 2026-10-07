@@ -26,6 +26,8 @@ export type AIAdapterEvent =
       };
     }
   | { readonly type: "reasoning.summary.delta"; readonly payload: { readonly text: string } }
+  /** Content-free signal that a real Provider stream part arrived but was not projected. */
+  | { readonly type: "provider.activity" }
   | {
       readonly type: "tool_call.start";
       readonly payload: {
@@ -54,6 +56,7 @@ export type AIAdapterEvent =
 export const AI_ADAPTER_EVENT_TYPES = [
   "text.delta",
   "reasoning.summary.delta",
+  "provider.activity",
   "tool_call.start",
   "tool_call.delta",
   "tool_call.completed",

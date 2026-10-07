@@ -490,6 +490,495 @@ describe("WebSessionManager", () => {
     manager.dispose();
   });
 
+  it("single-flights a durable burst and merges one Active V3 Turn into the full Session", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const previousRun = makeCompletedRun(makeRun({ sessionId: session.id, createdAt: 1 }));
+    const pendingRun = makeRun({ sessionId: session.id, createdAt: 2, goal: "singleflight goal" });
+    const runningRun = makeRun({ ...pendingRun, status: "RUNNING" });
+    const stream = new TestRunEventStream();
+    const previousTurn = {
+      runId: previousRun.id,
+      conversationTurnId: `turn:${previousRun.id}`,
+      runStatus: "COMPLETED" as const,
+      openedAt: previousRun.createdAt,
+      closedAt: previousRun.finishedAt,
+      highWatermark: 12,
+      items: [
+        {
+          id: `presentation:user:${previousRun.id}`,
+          runId: previousRun.id,
+          conversationTurnId: `turn:${previousRun.id}`,
+          ordinal: 0,
+          status: "COMPLETED" as const,
+          createdAt: previousRun.createdAt,
+          kind: "USER" as const,
+          text: previousRun.goal,
+        },
+      ],
+    };
+    const activeTurn = (
+      highWatermark: number,
+      items: SessionTurnPresentationResponseV3["turns"][number]["items"] = [],
+    ) => ({
+      runId: pendingRun.id,
+      conversationTurnId: `turn:${pendingRun.id}`,
+      runStatus: "RUNNING" as const,
+      openedAt: pendingRun.createdAt,
+      highWatermark,
+      items,
+    });
+    const initialPresentation: SessionTurnPresentationResponseV3 = {
+      capabilityVersion: 3,
+      turns: [previousTurn],
+    };
+    const firstRefresh = deferred<SessionTurnPresentationResponseV3>();
+    const trailingRefresh = deferred<SessionTurnPresentationResponseV3>();
+    let targetedRequestCount = 0;
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const client = makeClient({
+      sessions: [session],
+      latestRuns: new Map([[session.id, [previousRun]]]),
+      createRunResult: pendingRun,
+      turnPresentationResponse: initialPresentation,
+    });
+    client.listRuns.mockResolvedValue({ items: [previousRun] });
+    client.startRun.mockResolvedValue(actionResponse(runningRun, pendingRun.id));
+    client.watchRunEvents.mockImplementation((_runId, options) => {
+      options?.onOpen?.();
+      return stream;
+    });
+    client.getSessionTurnPresentation.mockImplementation(async (_sessionId, query) => {
+      if (query?.runId === undefined) return initialPresentation;
+      targetedRequestCount += 1;
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      try {
+        return await (targetedRequestCount === 1 ? firstRefresh.promise : trailingRefresh.promise);
+      } finally {
+        inFlight -= 1;
+      }
+    });
+    const info = makeInfo({
+      capabilities: {
+        ...makeInfo().capabilities,
+        sessionTranscript: true,
+        sessionTurnPresentation: true,
+      },
+    });
+    const manager = new WebSessionManager({ client, workspace, info });
+
+    await manager.loadSessions();
+    await expect(manager.selectSession(session.id)).resolves.toBe(true);
+    await expect(manager.submitPrompt(pendingRun.goal)).resolves.toBe(true);
+
+    const stepId = createStepId();
+    const completedInvocationId = createToolInvocationId();
+    for (let sequence = 1; sequence <= 97; sequence += 1) {
+      stream.push(toolRequestedEvent(runningRun, stepId, sequence, `call-${String(sequence)}`));
+    }
+    stream.push(toolRequestedEvent(runningRun, stepId, 98, "call-settled", completedInvocationId));
+    stream.push(toolStartedEvent(runningRun, stepId, 99, completedInvocationId));
+    stream.push(toolCompletedEvent(runningRun, stepId, 100, completedInvocationId));
+    await waitFor(() => manager.getSnapshot().timeline.lastDurableSequence === 100);
+    await waitFor(() => targetedRequestCount === 1);
+
+    expect(maxInFlight).toBe(1);
+    expect(client.getSessionTurnPresentation).toHaveBeenLastCalledWith(session.id, {
+      runId: pendingRun.id,
+      limit: 1,
+    });
+    expect(manager.getSnapshot().turnPresentation?.turns.map((turn) => turn.runId)).toEqual([
+      previousRun.id,
+    ]);
+
+    firstRefresh.resolve({ capabilityVersion: 3, turns: [activeTurn(99)] });
+    await waitFor(() => targetedRequestCount === 2);
+    await waitFor(() => manager.getSnapshot().turnPresentation?.turns.length === 2);
+    expect(manager.getSnapshot().turnPresentation?.turns[0]).toEqual(previousTurn);
+    expect(manager.getSnapshot().turnPresentation?.turns[1]).toMatchObject({
+      runId: pendingRun.id,
+      highWatermark: 99,
+      items: [expect.objectContaining({ id: `optimistic:presentation:user:${pendingRun.id}` })],
+    });
+    expect(manager.getSnapshot().liveActivity.activities).toContainEqual(
+      expect.objectContaining({
+        kind: "TOOL_ACTIVITY",
+        toolInvocationId: completedInvocationId,
+        settledAtSequence: 100,
+      }),
+    );
+
+    const canonicalUser = {
+      id: `presentation:user:${pendingRun.id}`,
+      runId: pendingRun.id,
+      conversationTurnId: `turn:${pendingRun.id}`,
+      ordinal: 0,
+      status: "COMPLETED" as const,
+      createdAt: pendingRun.createdAt,
+      kind: "USER" as const,
+      text: pendingRun.goal,
+    };
+    trailingRefresh.resolve({ capabilityVersion: 3, turns: [activeTurn(100, [canonicalUser])] });
+    await waitFor(() => manager.getSnapshot().turnPresentation?.turns[1]?.highWatermark === 100);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(targetedRequestCount).toBe(2);
+    expect(maxInFlight).toBe(1);
+    expect(manager.getSnapshot().turnPresentation?.turns[1]?.items).toEqual([canonicalUser]);
+    expect(manager.getSnapshot().liveActivity.activities).not.toContainEqual(
+      expect.objectContaining({ toolInvocationId: completedInvocationId }),
+    );
+    manager.dispose();
+    stream.close();
+  });
+
+  it("ignores an Active-turn response after switching Sessions", async () => {
+    const firstSession = makeSession({ defaultWorkspace: workspace });
+    const secondSession = makeSession({ defaultWorkspace: workspace });
+    const firstRun = makeRun({
+      sessionId: firstSession.id,
+      status: "WAITING_RESOURCE",
+      createdAt: 1,
+    });
+    const firstStream = new TestRunEventStream();
+    const secondStream = new TestRunEventStream();
+    const firstPresentation: SessionTurnPresentationResponseV3 = {
+      capabilityVersion: 3,
+      turns: [],
+    };
+    const secondPresentation: SessionTurnPresentationResponseV3 = {
+      capabilityVersion: 3,
+      turns: [],
+    };
+    const staleRefresh = deferred<SessionTurnPresentationResponseV3>();
+    const client = makeClient({ sessions: [firstSession, secondSession] });
+    client.listRuns.mockImplementation(async (sessionId: string) => ({
+      items: sessionId === firstSession.id ? [firstRun] : [],
+    }));
+    client.watchRunEvents.mockImplementation((runId, options) => {
+      options?.onOpen?.();
+      return runId === firstRun.id ? firstStream : secondStream;
+    });
+    client.getSessionTurnPresentation.mockImplementation(async (sessionId, query) => {
+      if (query?.runId !== undefined) return staleRefresh.promise;
+      return sessionId === firstSession.id ? firstPresentation : secondPresentation;
+    });
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      info: makeInfo({
+        capabilities: {
+          ...makeInfo().capabilities,
+          sessionTranscript: true,
+          sessionTurnPresentation: true,
+        },
+      }),
+    });
+
+    await manager.loadSessions();
+    await expect(manager.selectSession(firstSession.id)).resolves.toBe(true);
+    firstStream.push(toolRequestedEvent(firstRun, createStepId(), 1, "call-stale"));
+    await waitFor(() =>
+      client.getSessionTurnPresentation.mock.calls.some((call) => call[1]?.runId === firstRun.id),
+    );
+
+    await expect(manager.selectSession(secondSession.id)).resolves.toBe(true);
+    staleRefresh.resolve({
+      capabilityVersion: 3,
+      turns: [
+        {
+          runId: firstRun.id,
+          conversationTurnId: `turn:${firstRun.id}`,
+          runStatus: "WAITING_RESOURCE",
+          openedAt: firstRun.createdAt,
+          highWatermark: 99,
+          items: [],
+        },
+      ],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(manager.getSnapshot().selectedSessionId).toBe(secondSession.id);
+    expect(manager.getSnapshot().turnPresentation).toEqual(secondPresentation);
+    manager.dispose();
+    firstStream.close();
+    secondStream.close();
+  });
+
+  it("ignores an old refresh after stream reconnect and runs one current-generation trailing read", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const activeRun = makeRun({ sessionId: session.id, status: "WAITING_RESOURCE" });
+    const firstStream = new TestRunEventStream();
+    const secondStream = new TestRunEventStream();
+    const initialPresentation: SessionTurnPresentationResponseV3 = {
+      capabilityVersion: 3,
+      turns: [
+        {
+          runId: activeRun.id,
+          conversationTurnId: `turn:${activeRun.id}`,
+          runStatus: "WAITING_RESOURCE",
+          openedAt: activeRun.createdAt,
+          highWatermark: 1,
+          items: [],
+        },
+      ],
+    };
+    const oldRefresh = deferred<SessionTurnPresentationResponseV3>();
+    const currentRefresh = deferred<SessionTurnPresentationResponseV3>();
+    const timer = new TestTimer();
+    let streamCount = 0;
+    let refreshCount = 0;
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const client = makeClient({
+      sessions: [session],
+      latestRuns: new Map([[session.id, [activeRun]]]),
+      turnPresentationResponse: initialPresentation,
+    });
+    client.listRuns.mockResolvedValue({ items: [activeRun] });
+    client.watchRunEvents.mockImplementation((_runId, options) => {
+      options?.onOpen?.();
+      streamCount += 1;
+      return streamCount === 1 ? firstStream : secondStream;
+    });
+    client.getSessionTurnPresentation.mockImplementation(async (_sessionId, query) => {
+      if (query?.runId === undefined) return initialPresentation;
+      refreshCount += 1;
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      try {
+        return await (refreshCount === 1 ? oldRefresh.promise : currentRefresh.promise);
+      } finally {
+        inFlight -= 1;
+      }
+    });
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      timer,
+      info: makeInfo({
+        capabilities: {
+          ...makeInfo().capabilities,
+          sessionTranscript: true,
+          sessionTurnPresentation: true,
+        },
+      }),
+    });
+
+    await manager.loadSessions();
+    await expect(manager.selectSession(session.id)).resolves.toBe(true);
+    firstStream.push(toolRequestedEvent(activeRun, createStepId(), 1, "call-reconnect"));
+    await waitFor(() => refreshCount === 1);
+    firstStream.close();
+    await waitFor(() => timer.pendingCount === 1);
+    timer.flush();
+    await waitFor(() => streamCount === 2);
+
+    oldRefresh.resolve({
+      capabilityVersion: 3,
+      turns: [
+        {
+          ...initialPresentation.turns[0]!,
+          highWatermark: 4,
+        },
+      ],
+    });
+    await waitFor(() => refreshCount === 2);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(manager.getSnapshot().turnPresentation).toEqual(initialPresentation);
+    expect(maxInFlight).toBe(1);
+    expect(client.getSessionTurnPresentation).toHaveBeenLastCalledWith(session.id, {
+      runId: activeRun.id,
+      limit: 1,
+    });
+
+    currentRefresh.resolve({
+      capabilityVersion: 3,
+      turns: [
+        {
+          ...initialPresentation.turns[0]!,
+          highWatermark: 5,
+        },
+      ],
+    });
+    await waitFor(
+      () =>
+        manager.getSnapshot().turnPresentation?.capabilityVersion === 3 &&
+        manager.getSnapshot().turnPresentation.turns[0]?.highWatermark === 5,
+    );
+
+    expect(maxInFlight).toBe(1);
+    expect(manager.getSnapshot().turnPresentation?.turns[0]?.highWatermark).toBe(5);
+    manager.dispose();
+    firstStream.close();
+    secondStream.close();
+  });
+
+  it("waits for an Active-turn read, then performs full-session presentation settlement at terminal", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const historyRun = makeCompletedRun(makeRun({ sessionId: session.id, createdAt: 1 }));
+    const activeRun = makeRun({ sessionId: session.id, status: "WAITING_RESOURCE", createdAt: 2 });
+    const completedRun = makeCompletedRun(activeRun);
+    const stream = new TestRunEventStream();
+    const historyTurn = {
+      runId: historyRun.id,
+      conversationTurnId: `turn:${historyRun.id}`,
+      runStatus: "COMPLETED" as const,
+      openedAt: historyRun.createdAt,
+      highWatermark: 10,
+      items: [],
+    };
+    const activeTurn = (highWatermark: number, runStatus: "WAITING_RESOURCE" | "COMPLETED") => ({
+      runId: activeRun.id,
+      conversationTurnId: `turn:${activeRun.id}`,
+      runStatus,
+      openedAt: activeRun.createdAt,
+      ...(runStatus === "COMPLETED" ? { closedAt: completedRun.finishedAt } : {}),
+      highWatermark,
+      items: [],
+    });
+    const initialPresentation: SessionTurnPresentationResponseV3 = {
+      capabilityVersion: 3,
+      turns: [historyTurn, activeTurn(1, "WAITING_RESOURCE")],
+    };
+    const terminalPresentation: SessionTurnPresentationResponseV3 = {
+      capabilityVersion: 3,
+      turns: [historyTurn, activeTurn(3, "COMPLETED")],
+    };
+    const targetedRefresh = deferred<SessionTurnPresentationResponseV3>();
+    let fullSessionReadCount = 0;
+    const client = makeClient({
+      sessions: [session],
+      latestRuns: new Map([[session.id, [activeRun]]]),
+      turnPresentationResponse: initialPresentation,
+    });
+    client.listRuns.mockResolvedValue({ items: [activeRun] });
+    client.getRun.mockResolvedValue(completedRun);
+    client.watchRunEvents.mockImplementation((_runId, options) => {
+      options?.onOpen?.();
+      return stream;
+    });
+    client.getSessionTurnPresentation.mockImplementation(async (_sessionId, query) => {
+      if (query?.runId !== undefined) return targetedRefresh.promise;
+      fullSessionReadCount += 1;
+      return fullSessionReadCount === 1 ? initialPresentation : terminalPresentation;
+    });
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      info: makeInfo({
+        capabilities: {
+          ...makeInfo().capabilities,
+          sessionTranscript: true,
+          sessionTurnPresentation: true,
+        },
+      }),
+    });
+
+    await manager.loadSessions();
+    await expect(manager.selectSession(session.id)).resolves.toBe(true);
+    expect(manager.getSnapshot().activeRun?.id).toBe(activeRun.id);
+    expect(client.watchRunEvents).toHaveBeenCalledTimes(1);
+    client.listRuns.mockResolvedValue({ items: [completedRun] });
+    stream.push(toolRequestedEvent(activeRun, createStepId(), 1, "call-terminal"));
+    stream.push(lifecycleEvent("run.completed", activeRun));
+    await waitFor(() => manager.getSnapshot().timeline.lastDurableSequence === 1);
+    await waitFor(() => client.getSessionTurnPresentation.mock.calls.length === 2);
+    await waitFor(() => client.getRun.mock.calls.length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(client.getSessionTurnPresentation).toHaveBeenNthCalledWith(1, session.id, {
+      limit: 100,
+    });
+    expect(client.getSessionTurnPresentation).toHaveBeenNthCalledWith(2, session.id, {
+      runId: activeRun.id,
+      limit: 1,
+    });
+    expect(fullSessionReadCount).toBe(1);
+
+    targetedRefresh.resolve({
+      capabilityVersion: 3,
+      turns: [activeTurn(2, "WAITING_RESOURCE")],
+    });
+    await waitFor(() => client.getSessionTurnPresentation.mock.calls.length === 3);
+    await waitFor(() => manager.getSnapshot().activeRun === undefined);
+
+    expect(client.getSessionTurnPresentation).toHaveBeenNthCalledWith(3, session.id, {
+      limit: 100,
+    });
+    expect(manager.getSnapshot().turnPresentation).toEqual(terminalPresentation);
+    manager.dispose();
+    stream.close();
+  });
+
+  it("keeps legacy presentation refreshes on the full-session path", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const activeRun = makeRun({ sessionId: session.id, status: "WAITING_RESOURCE" });
+    const stream = new TestRunEventStream();
+    const presentation: SessionTurnPresentationResponse = {
+      capabilityVersion: 2,
+      items: [
+        {
+          id: "canonical-legacy-user",
+          runId: activeRun.id,
+          conversationTurnId: activeRun.id,
+          ordinal: 0,
+          status: "COMPLETED",
+          createdAt: activeRun.createdAt,
+          kind: "USER",
+          text: "canonical user text",
+        },
+      ],
+      highWatermark: 4,
+    };
+    const client = makeClient({
+      sessions: [session],
+      latestRuns: new Map([[session.id, [activeRun]]]),
+      turnPresentationResponse: presentation,
+    });
+    client.listRuns.mockResolvedValue({ items: [activeRun] });
+    client.watchRunEvents.mockImplementation((_runId, options) => {
+      options?.onOpen?.();
+      return stream;
+    });
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      info: makeInfo({
+        capabilities: {
+          ...makeInfo().capabilities,
+          sessionTranscript: true,
+          sessionTurnPresentation: true,
+        },
+      }),
+    });
+
+    await manager.loadSessions();
+    await expect(manager.selectSession(session.id)).resolves.toBe(true);
+    stream.push(toolRequestedEvent(activeRun, createStepId(), 1, "legacy-call"));
+    await waitFor(() => client.getSessionTurnPresentation.mock.calls.length >= 2);
+
+    expect(
+      client.getSessionTurnPresentation.mock.calls.every((call) => call[1]?.runId === undefined),
+    ).toBe(true);
+    expect(manager.getSnapshot().turnPresentation).toMatchObject({
+      capabilityVersion: 2,
+      highWatermark: 4,
+      items: [
+        expect.objectContaining({
+          id: "canonical-legacy-user",
+          runId: activeRun.id,
+          kind: "USER",
+          text: "canonical user text",
+        }),
+      ],
+    });
+    manager.dispose();
+    stream.close();
+  });
+
   it("rejects mixed turn presentation page versions without publishing partial data", async () => {
     const session = makeSession({ defaultWorkspace: workspace });
     const run = makeCompletedRun(makeRun({ sessionId: session.id }));
@@ -1758,6 +2247,7 @@ function toolRequestedEvent(
   stepId: ReturnType<typeof createStepId>,
   sequence: number,
   externalCallId: string,
+  invocationId = createToolInvocationId(),
 ): PublicRunEvent {
   return {
     type: "tool.requested",
@@ -1770,10 +2260,53 @@ function toolRequestedEvent(
     visibility: "USER_VISIBLE",
     durability: { kind: "DURABLE", version: 1, sequence },
     payload: {
-      invocationId: createToolInvocationId(),
+      invocationId,
       toolName: "apply_patch",
       externalCallId,
       riskLevel: "HIGH",
+    },
+  } as PublicRunEvent;
+}
+
+function toolStartedEvent(
+  run: ClientAgentRun,
+  stepId: ReturnType<typeof createStepId>,
+  sequence: number,
+  invocationId: ReturnType<typeof createToolInvocationId>,
+): PublicRunEvent {
+  return {
+    type: "tool.started",
+    eventId: `evt_00000000-0000-7000-8000-${String(700 + sequence).padStart(12, "0")}`,
+    schemaVersion: 1,
+    runId: run.id,
+    sessionId: run.sessionId,
+    stepId,
+    timestamp: sequence,
+    visibility: "USER_VISIBLE",
+    durability: { kind: "DURABLE", version: 1, sequence },
+    payload: { invocationId, toolName: "apply_patch" },
+  } as PublicRunEvent;
+}
+
+function toolCompletedEvent(
+  run: ClientAgentRun,
+  stepId: ReturnType<typeof createStepId>,
+  sequence: number,
+  invocationId: ReturnType<typeof createToolInvocationId>,
+): PublicRunEvent {
+  return {
+    type: "tool.completed",
+    eventId: `evt_00000000-0000-7000-8000-${String(900 + sequence).padStart(12, "0")}`,
+    schemaVersion: 1,
+    runId: run.id,
+    sessionId: run.sessionId,
+    stepId,
+    timestamp: sequence,
+    visibility: "USER_VISIBLE",
+    durability: { kind: "DURABLE", version: 1, sequence },
+    payload: {
+      invocationId,
+      observationId: "obs_0195f3a0-0000-7000-8000-000000000000",
     },
   } as PublicRunEvent;
 }
@@ -1914,8 +2447,20 @@ async function waitFor(predicate: () => boolean): Promise<void> {
   expect(predicate()).toBe(true);
 }
 
+function deferred<T>(): { readonly promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
 class TestTimer implements Timer {
   private readonly callbacks: Array<() => void> = [];
+
+  get pendingCount(): number {
+    return this.callbacks.length;
+  }
 
   schedule(_delayMs: number, callback: () => void) {
     this.callbacks.push(callback);

@@ -286,6 +286,141 @@ describe("AIGateway runtime error boundary", () => {
 });
 
 describe("AIGateway abort and timeout", () => {
+  it("reports the first content-free Provider activity without publishing it as content", async () => {
+    const activity = { type: "provider.activity" } as unknown as AIAdapterEvent;
+    const adapter = createFakeAdapter("test-api", () =>
+      adapterEvents(activity, { type: "adapter.finish", payload: { finishReason: "STOP" } }),
+    );
+    const events = await collect((await gatewayWith(adapter).stream(request())).events);
+
+    expect(types(events)).toEqual(["stream.start", "stream.status", "stream.finish"]);
+    expect(events[1]).toMatchObject({
+      type: "stream.status",
+      payload: { phase: "RECEIVING_PROVIDER_DATA" },
+    });
+    expect(JSON.stringify(events)).not.toContain("provider.activity");
+  });
+
+  it("keeps the watchdog alive through repeated hidden Provider activity", async () => {
+    vi.useFakeTimers();
+    const activity = { type: "provider.activity" } as unknown as AIAdapterEvent;
+    const adapter = createFakeAdapter("test-api", () =>
+      (async function* script(): AsyncGenerator<AIAdapterEvent> {
+        for (let index = 0; index < 15; index += 1) {
+          yield activity;
+          await new Promise<void>((resolve) => setTimeout(resolve, 10));
+        }
+        yield { type: "adapter.finish", payload: { finishReason: "STOP" } };
+      })(),
+    );
+    const eventsPromise = collect(
+      (
+        await gatewayWith(adapter).stream(request(), {
+          nudgeAfterMs: 30,
+          idleTimeoutMs: 100,
+        })
+      ).events,
+    );
+    await flushMicrotasks();
+
+    for (let index = 0; index < 15; index += 1) {
+      await vi.advanceTimersByTimeAsync(10);
+      await flushMicrotasks();
+    }
+    const events = await eventsPromise;
+
+    expect(events.filter((event) => event.type === "stream.status")).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({ phase: "RECEIVING_PROVIDER_DATA" }),
+      }),
+    ]);
+    expect(types(events)).not.toContain("stream.error");
+    expect(types(events)).toContain("stream.finish");
+  });
+
+  it("recovers from Provider silence when hidden activity resumes", async () => {
+    vi.useFakeTimers();
+    const activity = { type: "provider.activity" } as unknown as AIAdapterEvent;
+    const adapter = createFakeAdapter("test-api", (input) =>
+      (async function* script(): AsyncGenerator<AIAdapterEvent> {
+        yield activity;
+        await new Promise<void>((resolve) => setTimeout(resolve, 40));
+        yield activity;
+        await new Promise<void>((resolve) => {
+          input.signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      })(),
+    );
+    const stream = await gatewayWith(adapter).stream(request(), {
+      nudgeAfterMs: 30,
+      idleTimeoutMs: 100,
+      teardownGraceMs: 1,
+    });
+    const iterator = stream.events[Symbol.asyncIterator]();
+
+    expect((await iterator.next()).value?.type).toBe("stream.start");
+    expect((await iterator.next()).value).toMatchObject({
+      type: "stream.status",
+      payload: { phase: "RECEIVING_PROVIDER_DATA" },
+    });
+    const nudgePromise = iterator.next();
+    await vi.advanceTimersByTimeAsync(30);
+    await flushMicrotasks();
+    expect((await nudgePromise).value).toMatchObject({
+      type: "stream.status",
+      payload: { phase: "NO_RECENT_ACTIVITY" },
+    });
+
+    const recoveryPromise = iterator.next();
+    await vi.advanceTimersByTimeAsync(10);
+    await flushMicrotasks();
+    expect((await recoveryPromise).value).toMatchObject({
+      type: "stream.status",
+      payload: { phase: "RECEIVING_PROVIDER_DATA" },
+    });
+    await iterator.return?.();
+  });
+
+  it("nudges and times out when the Provider never emits its first stream part", async () => {
+    vi.useFakeTimers();
+    let adapterSawAbort = false;
+    const adapter = createFakeAdapter("test-api", (input) =>
+      hangUntilAborted([], () => {
+        adapterSawAbort = true;
+      })(input),
+    );
+    const stream = await gatewayWith(adapter).stream(request(), {
+      nudgeAfterMs: 30,
+      idleTimeoutMs: 60,
+      teardownGraceMs: 1,
+    });
+    const iterator = stream.events[Symbol.asyncIterator]();
+
+    expect((await iterator.next()).value?.type).toBe("stream.start");
+    const nudgePromise = iterator.next();
+    await vi.advanceTimersByTimeAsync(30);
+    await flushMicrotasks();
+    expect((await nudgePromise).value).toMatchObject({
+      type: "stream.status",
+      payload: { phase: "NO_RECENT_ACTIVITY", idleForMs: 30, idleTimeoutMs: 60 },
+    });
+
+    const cancellingPromise = iterator.next();
+    await vi.advanceTimersByTimeAsync(30);
+    await flushMicrotasks();
+    expect((await cancellingPromise).value).toMatchObject({
+      type: "stream.status",
+      payload: { phase: "CANCELLING_IDLE_STREAM", idleTimeoutMs: 60 },
+    });
+
+    expect((await iterator.next()).value).toMatchObject({
+      type: "stream.error",
+      payload: { error: { code: "AI_TIMEOUT", retryable: true } },
+    });
+    expect(adapterSawAbort).toBe(true);
+    expect((await iterator.next()).done).toBe(true);
+  });
+
   it("reports inactivity and cancels a Provider read at the configured idle deadline", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(Date.parse("2026-10-04T00:00:00.000Z"));

@@ -85,11 +85,29 @@ export function createOpenAICompatibleApiAdapter(): ApiAdapter {
 
       try {
         for await (const part of result.fullStream) {
-          yield* translateOpenAICompatiblePart(part, state);
+          const translatedEvents = [...translateOpenAICompatiblePart(part, state)];
+          if (translatedEvents.length === 0 && isProviderOutputPart(part)) {
+            yield { type: "provider.activity" };
+          }
+          yield* translatedEvents;
         }
       } catch (error) {
         throw normalizeOpenAICompatibleError(error, model.ref);
       }
     },
   };
+}
+
+function isProviderOutputPart(part: import("ai").TextStreamPart<import("ai").ToolSet>): boolean {
+  switch (part.type) {
+    case "start":
+    case "start-step":
+    case "finish-step":
+    case "finish":
+    case "error":
+    case "abort":
+      return false;
+    default:
+      return true;
+  }
 }

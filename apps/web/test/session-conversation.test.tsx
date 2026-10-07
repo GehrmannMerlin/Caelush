@@ -155,6 +155,7 @@ function liveToolActivity(runId: ReturnType<typeof createRunId>): LiveActivitySt
       idleForMs: 0,
       idleTimeoutMs: 300_000,
       providerEventReceived: false,
+      displayableEventReceived: false,
     },
   } as LiveActivityState;
 }

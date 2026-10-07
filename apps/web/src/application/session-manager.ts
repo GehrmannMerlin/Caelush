@@ -63,6 +63,7 @@ import type {
 } from "@caelush/protocol";
 import { derivePromptTitle, validatePrompt, type PromptError } from "./prompt.js";
 import type { WebHostClient } from "../host/bootstrap.js";
+import { mergeActiveTurnPresentation } from "./session-presentation-merge.js";
 import {
   browserFrameScheduler,
   type FrameHandle,
@@ -244,6 +245,8 @@ interface ActiveLifecycle {
   recoveryRevoked: boolean;
   recoveryOnOpen: boolean;
   streamOpenGeneration?: number;
+  presentationRefreshPending: boolean;
+  presentationRefreshPromise?: Promise<void>;
   readonly scheduler: ReconnectScheduler;
   failure?: "RUN_STREAM_FAILED" | "RUN_REFRESH_FAILED";
 }
@@ -277,7 +280,6 @@ export class WebSessionManager {
   private contextUsageRefreshGeneration = 0;
   private contextUsageRefreshTimer: TimerHandle | undefined;
   private contextUsageRefreshRunId: RunId | undefined;
-  private turnPresentationRefreshGeneration = 0;
   private disposed = false;
 
   constructor(
@@ -1307,6 +1309,7 @@ export class WebSessionManager {
       recoveryAdmitted: false,
       recoveryRevoked: false,
       recoveryOnOpen: recoverOnOpen,
+      presentationRefreshPending: false,
       scheduler: new ReconnectScheduler({
         timer: this.options.timer ?? systemWebTimer,
         onAttempt: (attempt) => this.retryActiveStream(active, attempt),
@@ -1323,6 +1326,9 @@ export class WebSessionManager {
     active.controller = new AbortController();
     const generation = active.streamGeneration + 1;
     active.streamGeneration = generation;
+    if (active.presentationRefreshPromise !== undefined) {
+      active.presentationRefreshPending = true;
+    }
     active.recoveryAdmitted = false;
     active.recoveryOnOpen = recoverOnOpen;
     void this.consumeLifecycle(active, generation, recoverOnOpen);
@@ -1348,7 +1354,7 @@ export class WebSessionManager {
           shouldPublishEventOnFrame(event) ? "FRAME" : "IMMEDIATE",
         );
         if (event.durability.kind === "DURABLE") {
-          void this.refreshTurnPresentation(active, generation);
+          this.requestTurnPresentationRefresh(active, generation);
         }
         if (timeline.error !== undefined) {
           this.handleTerminalStreamError(active, generation);
@@ -1411,16 +1417,9 @@ export class WebSessionManager {
     active: ActiveLifecycle,
     generation: number,
   ): Promise<void> {
-    if (this.options.info.capabilities.sessionTurnPresentation !== true) return;
     try {
-      const refreshGeneration = ++this.turnPresentationRefreshGeneration;
-      const response = await this.loadSessionTurnPresentation(active.run.sessionId);
-      if (
-        response === undefined ||
-        !this.isCurrentStream(active, generation) ||
-        refreshGeneration !== this.turnPresentationRefreshGeneration
-      )
-        return;
+      const response = await this.loadActiveTurnPresentation(active);
+      if (response === undefined || !this.isCurrentStream(active, generation)) return;
       this.publish({
         turnPresentation: response,
         liveActivity: prunePresentationForRun(this.snapshot.liveActivity, response, active.run.id),
@@ -1429,6 +1428,65 @@ export class WebSessionManager {
       // The durable timeline remains authoritative if the optional read-model refresh races a
       // reconnect or an older daemon. It must never interrupt Run control.
     }
+  }
+
+  private requestTurnPresentationRefresh(active: ActiveLifecycle, generation: number): void {
+    if (
+      this.options.info.capabilities.sessionTurnPresentation !== true ||
+      !this.isCurrentStream(active, generation)
+    ) {
+      return;
+    }
+    if (active.presentationRefreshPromise !== undefined) {
+      active.presentationRefreshPending = true;
+      return;
+    }
+
+    active.presentationRefreshPending = false;
+    const refresh = this.refreshTurnPresentation(active, generation);
+    active.presentationRefreshPromise = refresh;
+    void refresh.then(
+      () => this.completeTurnPresentationRefresh(active, refresh),
+      () => this.completeTurnPresentationRefresh(active, refresh),
+    );
+  }
+
+  private completeTurnPresentationRefresh(active: ActiveLifecycle, refresh: Promise<void>): void {
+    if (active.presentationRefreshPromise !== refresh) return;
+    delete active.presentationRefreshPromise;
+    const pending = active.presentationRefreshPending;
+    active.presentationRefreshPending = false;
+    if (pending && this.activeLifecycle === active && !this.disposed) {
+      this.requestTurnPresentationRefresh(active, active.streamGeneration);
+    }
+  }
+
+  private async loadActiveTurnPresentation(
+    active: ActiveLifecycle,
+  ): Promise<SessionTurnPresentationResponse | undefined> {
+    const client = this.options.client;
+    const getPresentation = client.getSessionTurnPresentation;
+    if (
+      this.options.info.capabilities.sessionTurnPresentation !== true ||
+      getPresentation === undefined
+    ) {
+      return undefined;
+    }
+
+    const optimistic = [optimisticPresentationUser(active.run, active.run.goal)];
+    const current = this.snapshot.turnPresentation;
+    if (current?.capabilityVersion !== 3) {
+      return this.loadSessionTurnPresentation(active.run.sessionId, optimistic);
+    }
+
+    const targeted = await getPresentation.call(client, active.run.sessionId, {
+      runId: active.run.id,
+      limit: 1,
+    });
+    if (targeted.capabilityVersion !== 3) {
+      return this.loadSessionTurnPresentation(active.run.sessionId, optimistic);
+    }
+    return mergeActiveTurnPresentation(current, targeted, this.snapshot.runs, active.run);
   }
 
   private async admitRecovery(active: ActiveLifecycle, generation: number): Promise<void> {
@@ -1493,6 +1551,8 @@ export class WebSessionManager {
       const runs = (await this.options.client.listRuns(run.sessionId, { limit: 100 })).items;
       if (this.activeLifecycle !== active || this.disposed) return;
       this.cancelActiveLifecycle();
+      await active.presentationRefreshPromise;
+      if (this.disposed) return;
       this.clearApprovals();
       const activeRuns = nonTerminalRuns(runs);
       const activeRun = activeRuns.length === 1 ? activeRuns[0] : undefined;
@@ -1666,7 +1726,11 @@ export class WebSessionManager {
     }
     runs = upsertConfirmedTerminalRun(runs, run);
     if (this.disposed || !this.isCurrentApprovalContext(context)) return;
-    if (this.activeLifecycle?.run.id === run.id) this.cancelActiveLifecycle();
+    const activeLifecycle =
+      this.activeLifecycle?.run.id === run.id ? this.activeLifecycle : undefined;
+    if (activeLifecycle !== undefined) this.cancelActiveLifecycle();
+    await activeLifecycle?.presentationRefreshPromise;
+    if (this.disposed || !this.isCurrentApprovalContext(context)) return;
     const activeRuns = nonTerminalRuns(runs);
     const activeRun = activeRuns.length === 1 ? activeRuns[0] : undefined;
     this.clearApprovals();
@@ -1806,8 +1870,12 @@ export class WebSessionManager {
 
   private cancelActiveLifecycle(): void {
     this.invalidateContextUsageRefresh();
-    this.activeLifecycle?.scheduler.dispose();
-    this.activeLifecycle?.controller.abort();
+    const active = this.activeLifecycle;
+    if (active !== undefined) {
+      active.presentationRefreshPending = false;
+      active.scheduler.dispose();
+      active.controller.abort();
+    }
     this.activeLifecycle = undefined;
   }
 
@@ -1932,8 +2000,7 @@ function reconcileTurnPresentation(
     const turns = response.turns.map((turn) => {
       const additions = optimistic.filter(
         (candidate) =>
-          candidate.runId === turn.runId &&
-          !turn.items.some((item) => item.kind === "USER" && item.text === candidate.text),
+          candidate.runId === turn.runId && !turn.items.some((item) => item.kind === "USER"),
       );
       if (additions.length === 0) return turn;
       changed = true;
@@ -1955,12 +2022,7 @@ function reconcileTurnPresentation(
   const canonical = response.items;
   const additions = optimistic.filter(
     (candidate) =>
-      !canonical.some(
-        (item) =>
-          item.kind === candidate.kind &&
-          item.runId === candidate.runId &&
-          (item.kind !== "USER" || (candidate.kind === "USER" && item.text === candidate.text)),
-      ),
+      !canonical.some((item) => item.kind === candidate.kind && item.runId === candidate.runId),
   );
   if (additions.length === 0) return response;
   const legacyAdditions: TurnPresentationItem[] = additions.map((item) => ({

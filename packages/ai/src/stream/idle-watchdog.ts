@@ -13,7 +13,7 @@ export type IdleWatchdogOutcome<T> =
 export interface IdleWatchdogInput<T> {
   readonly pending: Promise<SettledIteratorNext<T>>;
   readonly aborted: Promise<AIAbortKind>;
-  readonly lastActivityAt: number;
+  readonly providerLastActivityAt: number;
   readonly nudgeAfterMs: number;
   readonly idleTimeoutMs: number;
   readonly nudgeEmitted: boolean;
@@ -21,7 +21,9 @@ export interface IdleWatchdogInput<T> {
 }
 
 /** Observe a single iterator read and convert synchronous or asynchronous throws into a value. */
-export function observeIteratorNext<T>(iterator: AsyncIterator<T>): Promise<SettledIteratorNext<T>> {
+export function observeIteratorNext<T>(
+  iterator: AsyncIterator<T>,
+): Promise<SettledIteratorNext<T>> {
   return Promise.resolve()
     .then(() => iterator.next())
     .then<SettledIteratorNext<T>, SettledIteratorNext<T>>(
@@ -37,7 +39,7 @@ export function observeIteratorNext<T>(iterator: AsyncIterator<T>): Promise<Sett
 export async function waitForIteratorNext<T>(
   input: IdleWatchdogInput<T>,
 ): Promise<IdleWatchdogOutcome<T>> {
-  const elapsedMs = Math.max(0, input.now() - input.lastActivityAt);
+  const elapsedMs = Math.max(0, input.now() - input.providerLastActivityAt);
   const timers: ReturnType<typeof setTimeout>[] = [];
   const outcomes: Promise<IdleWatchdogOutcome<T>>[] = [
     input.pending,

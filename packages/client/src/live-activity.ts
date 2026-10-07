@@ -93,6 +93,7 @@ export interface ModelWaitState {
   readonly lastActivityAt: number;
   readonly idleForMs: number;
   readonly providerEventReceived: boolean;
+  readonly displayableEventReceived: boolean;
   readonly idleTimeoutMs?: number;
   readonly attempt?: number;
   readonly maxAttempts?: number;
@@ -535,8 +536,7 @@ function updateModelWaitFromTransient(
   if (
     event.type === "model.text.delta" ||
     event.type === "model.reasoning_summary.delta" ||
-    event.type === "model.tool_call.started" ||
-    event.type === "model.tool_call.delta"
+    event.type === "model.tool_call.started"
   ) {
     return {
       ...current,
@@ -544,6 +544,7 @@ function updateModelWaitFromTransient(
       lastActivityAt: event.timestamp,
       idleForMs: 0,
       providerEventReceived: true,
+      displayableEventReceived: true,
     };
   }
   return current;
@@ -570,6 +571,7 @@ function reduceModelWaitFromDurable(
               lastActivityAt: event.timestamp,
               idleForMs: 0,
               providerEventReceived: false,
+              displayableEventReceived: false,
             }
           : {
               runId: event.runId,
@@ -578,6 +580,7 @@ function reduceModelWaitFromDurable(
               lastActivityAt: event.timestamp,
               idleForMs: 0,
               providerEventReceived: false,
+              displayableEventReceived: false,
             };
       break;
     case "llm.completed":
@@ -644,6 +647,8 @@ function retryWaitState(
       phase === "RETRYING" ? event.timestamp : (current?.lastActivityAt ?? event.timestamp),
     idleForMs: phase === "RETRYING" ? 0 : (current?.idleForMs ?? 0),
     providerEventReceived: phase === "RETRYING" ? false : (current?.providerEventReceived ?? false),
+    displayableEventReceived:
+      phase === "RETRYING" ? false : (current?.displayableEventReceived ?? false),
     ...(current?.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: current.idleTimeoutMs }),
     attempt: event.payload.attempt,
     maxAttempts: event.payload.maxAttempts,

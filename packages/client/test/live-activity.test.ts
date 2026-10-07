@@ -269,6 +269,34 @@ describe("LiveActivity projection", () => {
       modelStatus(stepId, "RECEIVING_PROVIDER_DATA", 0, 300_000),
     );
 
+    expect(state.modelWait).toMatchObject({
+      providerEventReceived: true,
+      displayableEventReceived: false,
+    });
+    const rawToolDelta = {
+      type: "model.tool_call.delta",
+      eventId: createEventId(),
+      schemaVersion: 1,
+      runId,
+      sessionId,
+      stepId,
+      timestamp: 1_700_000_000_010,
+      visibility: "DEBUG",
+      durability: {
+        kind: "EPHEMERAL",
+        version: 1,
+        deliveryClass: "ORDERED",
+        streamKey: `model:tool-call:${runId}:${stepId}:call-a`,
+        streamSequence: 1,
+      },
+      payload: { toolCallId: "call-a", delta: '{"path":' },
+    } as unknown as PublicRunEvent;
+    state = reduceLiveActivityEvent(state, rawToolDelta);
+    expect(state.modelWait).toMatchObject({
+      providerEventReceived: true,
+      displayableEventReceived: false,
+    });
+
     const delta = transient("model.text.delta", { text: "thinking" }, "model:text", 1);
     state = reduceLiveActivityEvent(state, delta);
 
@@ -280,6 +308,7 @@ describe("LiveActivity projection", () => {
       idleForMs: 0,
       idleTimeoutMs: 300_000,
       providerEventReceived: true,
+      displayableEventReceived: true,
     });
     expect(state.modelWait).not.toHaveProperty("connectionHealth");
 
