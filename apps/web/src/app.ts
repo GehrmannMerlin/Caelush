@@ -42,6 +42,7 @@ import { WorkspaceDialog } from "./components/workspace-dialog.js";
 import { ModelPicker } from "./components/model-picker.js";
 import { SettingsSurface } from "./components/settings-surface.js";
 import { PermissionSelector } from "./components/permission-selector.js";
+import { hasTurnPresentationItems } from "./components/turn-presentation-feed.js";
 
 const sessionSelectionStore = new SessionSelectionStore();
 const permissionPresetSelectionStore = new PermissionPresetSelectionStore();
@@ -567,7 +568,7 @@ export function hasScrollableSessionContent(
 ): boolean {
   return (
     snapshot.history.length > 0 ||
-    (snapshot.turnPresentation?.items.length ?? 0) > 0 ||
+    hasTurnPresentationItems(snapshot.turnPresentation) ||
     snapshot.activeRun !== undefined ||
     snapshot.activeRuns.length > 0 ||
     (snapshot.approvalState?.requests.length ?? 0) > 0

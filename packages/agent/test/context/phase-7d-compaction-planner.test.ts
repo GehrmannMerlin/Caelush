@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createRunId, createTimestampMs } from "@caelush/protocol";
 import {
   createContextCheckpointId,
+  createContextCompactionCoverageForRange,
   createContextCompactionPlanner,
   createContextMessageRange,
   createContextSummaryPromptVersion,
@@ -228,5 +229,65 @@ describe("Phase 7D semantic compaction planner", () => {
     expect(legacy.history.units.map((candidate) => candidate.id)).toEqual(["new"]);
     expect(legacy.previousCheckpoint?.goal).toBe("goal");
     expect(legacy.trustedPreviousCheckpointId).toBeUndefined();
+  });
+
+  it("keeps V2 coverage scoped when two Runs reuse the same local sequence range", () => {
+    const firstRun = createRunId();
+    const secondRun = createRunId();
+    const firstTurn = conversationTurnId("cturn_v2_coverage_first");
+    const secondTurn = conversationTurnId("cturn_v2_coverage_second");
+    const firstMessages = [1, 2].map((sequence) => ({
+      messageId: agentMessageId(`amsg_v2_first_${String(sequence)}`),
+      runId: firstRun,
+      conversationTurnId: firstTurn,
+      sequence,
+      tokenEstimate: 1,
+    }));
+    const secondMessages = [1, 2].map((sequence) => ({
+      messageId: agentMessageId(`amsg_v2_second_${String(sequence)}`),
+      runId: secondRun,
+      conversationTurnId: secondTurn,
+      sequence,
+      tokenEstimate: 1,
+    }));
+    const index = history([
+      {
+        id: "conversation:first",
+        kind: "CONVERSATION_TURN",
+        status: "CLOSED",
+        messages: firstMessages,
+        tokenEstimate: 2,
+        atomicGroupId: "first",
+        compactionEligible: true,
+      },
+      {
+        id: "conversation:second",
+        kind: "CONVERSATION_TURN",
+        status: "CLOSED",
+        messages: secondMessages,
+        tokenEstimate: 2,
+        atomicGroupId: "second",
+        compactionEligible: true,
+      },
+    ]);
+
+    const coverage = createContextCompactionCoverageForRange({
+      history: index,
+      sourceRange: createContextMessageRange({
+        runId: secondRun,
+        conversationTurnId: secondTurn,
+        firstMessageId: secondMessages[0]!.messageId,
+        lastMessageId: secondMessages[1]!.messageId,
+        firstSequence: 1,
+        lastSequence: 2,
+      }),
+    });
+
+    expect([...coverage.coveredMessageIds]).toEqual(
+      secondMessages.map((message) => message.messageId),
+    );
+    expect(
+      coverage.history.units.map((unit) => unit.messages.map((message) => message.messageId)),
+    ).toEqual([firstMessages.map((message) => message.messageId)]);
   });
 });

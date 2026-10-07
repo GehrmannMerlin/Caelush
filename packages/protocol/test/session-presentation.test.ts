@@ -4,6 +4,7 @@ import {
   SessionTurnPresentationResponseSchema,
   SessionTurnPresentationResponseV1Schema,
   SessionTurnPresentationResponseV2Schema,
+  SessionTurnPresentationResponseV3Schema,
   TurnPresentationItemSchema,
 } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
@@ -139,5 +140,62 @@ describe("session turn presentation protocol", () => {
         highWatermark: 1,
       }).success,
     ).toBe(false);
+  });
+
+  it("parses turn-first v3 pages and validates each Turn's item scope", () => {
+    const turn = {
+      runId: base.runId,
+      conversationTurnId: base.conversationTurnId,
+      runStatus: "RUNNING",
+      openedAt: 1_700_000_000_000,
+      highWatermark: 7,
+      items: [{ ...base, ordinal: 0, kind: "USER", text: "hello" }],
+    };
+    const response = SessionTurnPresentationResponseSchema.parse({
+      capabilityVersion: 3,
+      turns: [turn],
+    });
+
+    expect(response).toMatchObject({ capabilityVersion: 3, turns: [turn] });
+    expect(
+      SessionTurnPresentationResponseV3Schema.safeParse({
+        capabilityVersion: 3,
+        turns: [
+          {
+            ...turn,
+            items: [{ ...turn.items[0], runId: "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9c" }],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      SessionTurnPresentationResponseV3Schema.safeParse({
+        capabilityVersion: 3,
+        turns: [{ ...turn, items: [{ ...turn.items[0], conversationTurnId: "another-turn" }] }],
+      }).success,
+    ).toBe(false);
+    expect(
+      SessionTurnPresentationResponseV3Schema.safeParse({
+        capabilityVersion: 3,
+        turns: [{ ...turn, items: [{ ...turn.items[0], ordinal: 2 }] }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("continues to parse legacy v1 and v2 response contracts", () => {
+    expect(
+      SessionTurnPresentationResponseSchema.parse({
+        capabilityVersion: 1,
+        items: [],
+        highWatermark: 3,
+      }).capabilityVersion,
+    ).toBe(1);
+    expect(
+      SessionTurnPresentationResponseSchema.parse({
+        capabilityVersion: 2,
+        items: [],
+        highWatermark: 5,
+      }).capabilityVersion,
+    ).toBe(2);
   });
 });

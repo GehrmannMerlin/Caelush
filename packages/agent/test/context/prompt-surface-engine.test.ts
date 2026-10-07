@@ -369,7 +369,8 @@ describe("Prompt Surface Context Engine integration", () => {
 
   it("reuses one same-Step snapshot, skips unchanged state, and appends CLEARED exactly once", async () => {
     const value = fixture();
-    const firstHistory = fullHistory(value.runId, value.sessionId, 2);
+    const completeHistory = fullHistory(value.runId, value.sessionId, 8);
+    const firstHistory = completeHistory.slice(0, 1);
     const firstRequest = request(value.runId, value.sessionId, 1, [firstHistory[0]!]);
     const engine = value.engine();
     const first = await engine.prepare(firstRequest);
@@ -388,7 +389,7 @@ describe("Prompt Surface Context Engine integration", () => {
     });
 
     value.state.dynamicText = "workspace state: clean";
-    const secondMessages = fullHistory(value.runId, value.sessionId, 4);
+    const secondMessages = completeHistory.slice(0, 3);
     const second = await engine.prepare(
       request(value.runId, value.sessionId, 2, secondMessages.slice(0, 3)),
     );
@@ -400,7 +401,7 @@ describe("Prompt Surface Context Engine integration", () => {
     expect(value.store.inspect(value.runId)?.snapshots).toHaveLength(1);
 
     value.state.dynamicText = undefined;
-    const thirdMessages = fullHistory(value.runId, value.sessionId, 6);
+    const thirdMessages = completeHistory.slice(0, 5);
     const third = await engine.prepare(
       request(value.runId, value.sessionId, 3, thirdMessages.slice(0, 5)),
     );
@@ -409,7 +410,7 @@ describe("Prompt Surface Context Engine integration", () => {
     expect(cleared?.content).toContain('state="CLEARED"');
     expect(third.messages.at(-1)?.content).toBe(cleared?.content);
 
-    const fourthMessages = fullHistory(value.runId, value.sessionId, 8);
+    const fourthMessages = completeHistory.slice(0, 7);
     const fourth = await engine.prepare(
       request(value.runId, value.sessionId, 4, fourthMessages.slice(0, 7)),
     );

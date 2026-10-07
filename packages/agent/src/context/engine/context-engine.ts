@@ -10,6 +10,7 @@ import type { StoredAgentMessage } from "../../messages/persistence/record.js";
 import type { ContextPrepareInput, ContextEnginePort } from "../contracts/context-engine.js";
 import type { PreparedPromptSurface } from "../contracts/prepared-agent-context.js";
 import {
+  PROMPT_SURFACE_ANCHOR_VERSION,
   assertPromptSurfaceEpochWithSnapshots,
   createPromptSurfaceEpoch,
   createPromptSurfaceEpochId,
@@ -18,12 +19,14 @@ import {
   PromptSurfaceIntegrityError,
 } from "../surface/prompt-surface.js";
 import type {
+  PromptSurfaceAnchor,
   PromptSurfaceEpoch,
   PromptSurfaceEpochWithSnapshots,
   PromptSurfaceResetReason,
 } from "../surface/prompt-surface.js";
 import type { PromptSurfaceStorePort } from "../surface/prompt-surface-store.js";
 import {
+  comparePromptSurfaceAnchorOrder,
   latestCompletePromptSurfaceAnchor,
   promptSurfaceAnchorsAreAvailable,
 } from "../surface/prompt-surface-anchors.js";
@@ -908,8 +911,7 @@ function selectedConversationMessages(plan: ContextPlan): readonly StoredAgentMe
         if (seen.has(stored.message.id)) return false;
         seen.add(stored.message.id);
         return true;
-      })
-      .sort((left, right) => left.sequence - right.sequence),
+      }),
   );
 }
 
@@ -1079,7 +1081,7 @@ async function preparePromptSurface(
     if (
       !promptSurfaceAnchorsAreAvailable(
         input.conversationMessages,
-        surface.snapshots.map((snapshot) => snapshot.anchorMessageSequence),
+        surface.snapshots.map((snapshot) => snapshot.anchor),
       )
     ) {
       resetReason = "RECOVERY_INCOMPATIBLE";
@@ -1154,15 +1156,18 @@ async function preparePromptSurface(
     return preparedSurface(surface, input);
   }
 
-  const anchorMessageSequence = latestCompletePromptSurfaceAnchor(input.conversationMessages);
-  if (lastSnapshot !== undefined && anchorMessageSequence < lastSnapshot.anchorMessageSequence) {
+  const anchor = latestCompletePromptSurfaceAnchor(input.conversationMessages);
+  if (
+    lastSnapshot !== undefined &&
+    comparePromptSurfaceAnchorOrder(input.conversationMessages, anchor, lastSnapshot.anchor) < 0
+  ) {
     throw new PromptSurfaceIntegrityError("Prompt Surface anchor would move backwards.");
   }
   const snapshot = createPromptSurfaceSnapshot({
     runId: surface.runId,
     epochId: surface.epochId,
     ordinal: surface.snapshots.length + 1,
-    anchorMessageSequence,
+    anchor,
     sourceStepSequence: input.contextInput.turn.sequence,
     kind: "RUNTIME_CONTEXT_SNAPSHOT",
     content,
@@ -1180,7 +1185,7 @@ async function preparePromptSurface(
     if (
       concurrent === undefined ||
       replay === undefined ||
-      replay.anchorMessageSequence !== snapshot.anchorMessageSequence ||
+      !samePromptSurfaceAnchor(replay.anchor, snapshot.anchor) ||
       replay.contentHash !== snapshot.contentHash
     ) {
       throw new PromptSurfaceIntegrityError("Prompt Surface snapshot could not be committed.", {
@@ -1226,7 +1231,7 @@ function preparePreviewSurface(
             runId: epoch.runId,
             epochId: epoch.epochId,
             ordinal: 1,
-            anchorMessageSequence: latestCompletePromptSurfaceAnchor(input.conversationMessages),
+            anchor: latestCompletePromptSurfaceAnchor(input.conversationMessages),
             sourceStepSequence: input.contextInput.turn.sequence,
             kind: "RUNTIME_CONTEXT_SNAPSHOT",
             content,
@@ -1274,7 +1279,7 @@ async function preparePromptSurfaceReplay(
   if (
     !promptSurfaceAnchorsAreAvailable(
       input.conversationMessages,
-      surface.snapshots.map((snapshot) => snapshot.anchorMessageSequence),
+      surface.snapshots.map((snapshot) => snapshot.anchor),
     )
   ) {
     return preparePreviewSurface(input, identity);
@@ -1311,15 +1316,18 @@ async function preparePromptSurfaceReplay(
     return preparedSurface(surface, input, true);
   }
 
-  const anchorMessageSequence = latestCompletePromptSurfaceAnchor(input.conversationMessages);
-  if (lastSnapshot !== undefined && anchorMessageSequence < lastSnapshot.anchorMessageSequence) {
+  const anchor = latestCompletePromptSurfaceAnchor(input.conversationMessages);
+  if (
+    lastSnapshot !== undefined &&
+    comparePromptSurfaceAnchorOrder(input.conversationMessages, anchor, lastSnapshot.anchor) < 0
+  ) {
     throw new PromptSurfaceIntegrityError("Prompt Surface anchor would move backwards.");
   }
   const snapshot = createPromptSurfaceSnapshot({
     runId: surface.runId,
     epochId: surface.epochId,
     ordinal: surface.snapshots.length + 1,
-    anchorMessageSequence,
+    anchor,
     sourceStepSequence: input.contextInput.turn.sequence,
     kind: "RUNTIME_CONTEXT_SNAPSHOT",
     content,
@@ -1474,6 +1482,15 @@ function samePromptSurfaceIdentity(left: PromptSurfaceEpoch, right: PromptSurfac
   );
 }
 
+function samePromptSurfaceAnchor(left: PromptSurfaceAnchor, right: PromptSurfaceAnchor): boolean {
+  return (
+    left.messageId === right.messageId &&
+    left.runId === right.runId &&
+    left.conversationTurnId === right.conversationTurnId &&
+    left.sequence === right.sequence
+  );
+}
+
 function preparedSurface(
   surface: PromptSurfaceEpochWithSnapshots,
   input: PromptSurfacePreparationInput,
@@ -1500,12 +1517,13 @@ function preparedSurface(
   );
   const prefixFingerprint = fingerprint(
     stableJson({
+      anchorIdentityVersion: PROMPT_SURFACE_ANCHOR_VERSION,
       stableHeadFingerprint: surface.stableHeadFingerprint,
       toolSchemaFingerprint: surface.toolSchemaFingerprint,
       cacheSettingsFingerprint: surface.cacheSettingsFingerprint,
       snapshots: surface.snapshots.map((snapshot) => ({
         ordinal: snapshot.ordinal,
-        anchorMessageSequence: snapshot.anchorMessageSequence,
+        anchor: snapshot.anchor,
         contentHash: snapshot.contentHash,
       })),
     }),

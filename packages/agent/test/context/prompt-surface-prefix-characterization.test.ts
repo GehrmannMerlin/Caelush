@@ -132,16 +132,24 @@ function prepared(workCommentaries: readonly string[]): PreparedAgentContext {
     createdAt: 1 as never,
   });
   const snapshots = workCommentaries.map((commentary, index) =>
-    createPromptSurfaceSnapshot({
-      runId,
-      epochId: epoch.epochId,
-      ordinal: index + 1,
-      anchorMessageSequence: index === 0 ? 1 : 3,
-      sourceStepSequence: index + 1,
-      kind: "RUNTIME_CONTEXT_SNAPSHOT",
-      content: `<runtime_context_snapshot>\n${commentary}\n</runtime_context_snapshot>`,
-      createdAt: (index + 1) as never,
-    }),
+    (() => {
+      const anchored = index === 0 ? conversationMessages[0]! : conversationMessages.at(-1)!;
+      return createPromptSurfaceSnapshot({
+        runId,
+        epochId: epoch.epochId,
+        ordinal: index + 1,
+        anchor: {
+          messageId: anchored.message.id,
+          runId: anchored.message.runId,
+          conversationTurnId: anchored.message.conversationTurnId,
+          sequence: anchored.sequence,
+        },
+        sourceStepSequence: index + 1,
+        kind: "RUNTIME_CONTEXT_SNAPSHOT",
+        content: `<runtime_context_snapshot>\n${commentary}\n</runtime_context_snapshot>`,
+        createdAt: (index + 1) as never,
+      });
+    })(),
   );
 
   return {

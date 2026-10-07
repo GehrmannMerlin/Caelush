@@ -47,14 +47,12 @@ export function createContextCompactionDigestBuilder(): ContextCompactionDigestB
                   checkpointDigest: input.previousCheckpoint.checkpointDigest,
                   sourceRange: input.previousCheckpoint.sourceRange,
                 },
-          newSourceMessages: input.newSourceMessages
-            .map((stored) => ({
-              messageId: String(stored.message.id),
-              sequence: stored.sequence,
-              schemaVersion: stored.schemaVersion,
-              modelProjectionVersion: stored.modelProjectionVersion ?? null,
-            }))
-            .sort(compareMessageEnvelope),
+          newSourceMessages: input.newSourceMessages.map((stored) => ({
+            messageId: String(stored.message.id),
+            sequence: stored.sequence,
+            schemaVersion: stored.schemaVersion,
+            modelProjectionVersion: stored.modelProjectionVersion ?? null,
+          })),
           newSourceRange: input.newSourceRange,
           cumulativeSourceRange: input.cumulativeSourceRange,
         }),
@@ -73,27 +71,6 @@ export function createContextCompactionDigestBuilder(): ContextCompactionDigestB
   });
 }
 
-function compareMessageEnvelope(
-  left: {
-    readonly messageId: string;
-    readonly sequence: number;
-    readonly schemaVersion: number;
-    readonly modelProjectionVersion: number | null;
-  },
-  right: {
-    readonly messageId: string;
-    readonly sequence: number;
-    readonly schemaVersion: number;
-    readonly modelProjectionVersion: number | null;
-  },
-): number {
-  return left.sequence - right.sequence || compareStrings(left.messageId, right.messageId);
-}
-
 function toJson(value: unknown): JsonValue {
   return value as JsonValue;
-}
-
-function compareStrings(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
 }

@@ -259,7 +259,7 @@ function repositoryWithLatest(
 }
 
 describe("Phase 8B canonical Context checkpoint coverage", () => {
-  it("removes a cross-Turn V2 range and counts overlapping refs once", () => {
+  it("fails closed when a V2 range crosses ConversationTurn scope", () => {
     const turnARefs = [messageRef("a_1", 1, "a", 10), messageRef("a_2", 2, "a", 10)];
     const turnBRefs = [messageRef("b_1", 3, "b", 20), messageRef("b_2", 4, "b", 20)];
     const turnCRefs = [messageRef("c_1", 5, "c", 30), messageRef("c_2", 6, "c", 30)];
@@ -270,15 +270,11 @@ describe("Phase 8B canonical Context checkpoint coverage", () => {
       protocolUnit("b", [turnBRefs[0]!, turnBRefs[1]!], turnBRefs[0]!),
     ]);
 
-    const projection = createContextCompactionCoverage({
-      history: indexed,
-      latestCheckpoint: checkpoint(turnARefs[0]!, turnBRefs[1]!),
-    });
-
-    expect(projection.history.units.map((unit) => unit.id)).toEqual(["conversation:c"]);
-    expect(projection.history.estimatedTokens).toBe(60);
-    expect([...projection.coveredMessageIds]).toEqual(
-      ["a_1", "a_2", "b_1", "b_2"].map((name) => `amsg_phase_8b_${name}`),
+    expectInconsistentPlan(() =>
+      createContextCompactionCoverage({
+        history: indexed,
+        latestCheckpoint: checkpoint(turnARefs[0]!, turnBRefs[1]!),
+      }),
     );
   });
 

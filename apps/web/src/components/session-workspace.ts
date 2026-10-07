@@ -12,7 +12,7 @@ import type { SessionTurnPresentationResponse } from "@caelush/protocol";
 import type { WebControlMode } from "../application/session-manager.js";
 import { runStatusClass, runStatusLabel } from "./run-status.js";
 import { Timeline } from "./timeline.js";
-import { TurnPresentationFeed } from "./turn-presentation-feed.js";
+import { hasTurnPresentationItems, TurnPresentationFeed } from "./turn-presentation-feed.js";
 import { ApprovalCard } from "./approval-card.js";
 import { RecoveryPanel, type RecoveryRunView } from "./recovery-panel.js";
 import caelushLogo from "../assets/logo/caelush-logo.png";
@@ -41,7 +41,7 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
   const approvals = props.approvals ?? [];
   const isPristineSession =
     props.history.length === 0 &&
-    (props.turnPresentation?.items.length ?? 0) === 0 &&
+    !hasTurnPresentationItems(props.turnPresentation) &&
     props.activeRun === undefined &&
     approvals.length === 0 &&
     !hasRecoveryControl(props);

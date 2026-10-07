@@ -35,7 +35,12 @@ function makeSnapshot(overrides: Partial<PromptSurfaceSnapshotInput> = {}) {
     runId: firstRun,
     epochId: createPromptSurfaceEpochId("epoch-1"),
     ordinal: 1,
-    anchorMessageSequence: 1,
+    anchor: {
+      messageId: "amsg_prompt_surface_anchor_1" as never,
+      runId: firstRun,
+      conversationTurnId: "cturn_prompt_surface_anchor_1" as never,
+      sequence: 1,
+    },
     sourceStepSequence: 1,
     kind: "RUNTIME_CONTEXT_SNAPSHOT",
     content: "runtime context",
@@ -50,7 +55,12 @@ describe("Prompt Surface projector", () => {
     const snapshot = makeSnapshot({
       content: "snapshot café 😀",
       ordinal: 1,
-      anchorMessageSequence: 4,
+      anchor: {
+        messageId: "amsg_prompt_surface_anchor_1" as never,
+        runId: firstRun,
+        conversationTurnId: "cturn_prompt_surface_anchor_1" as never,
+        sequence: 4,
+      },
       sourceStepSequence: 2,
     });
 
@@ -66,7 +76,12 @@ describe("Prompt Surface projector", () => {
           runId: firstRun,
           epochId: "epoch-1",
           ordinal: 1,
-          anchorMessageSequence: 4,
+          anchor: {
+            messageId: "amsg_prompt_surface_anchor_1",
+            runId: firstRun,
+            conversationTurnId: "cturn_prompt_surface_anchor_1",
+            sequence: 4,
+          },
           sourceStepSequence: 2,
           contentHash: "6ba7eee2689ff65bf3db9c8fff72b4921d398539505443f6a50aaa0567113f4b",
         },
@@ -81,7 +96,12 @@ describe("Prompt Surface projector", () => {
       content: "second",
       ordinal: 2,
       sourceStepSequence: 2,
-      anchorMessageSequence: 2,
+      anchor: {
+        messageId: "amsg_prompt_surface_anchor_2" as never,
+        runId: firstRun,
+        conversationTurnId: "cturn_prompt_surface_anchor_1" as never,
+        sequence: 2,
+      },
     });
 
     expect(

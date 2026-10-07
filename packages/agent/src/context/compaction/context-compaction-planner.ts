@@ -8,7 +8,10 @@ import type {
 import { createContextMessageRange } from "./context-compaction-contracts.js";
 import { createContextCutPointSelector } from "./context-cut-point-selector.js";
 import type { ContextCompactionCutCandidate } from "./context-compaction-cut.js";
-import type { ContextHistoryUnit } from "../history/semantic-history-unit.js";
+import {
+  orderContextHistoryUnits,
+  type ContextHistoryUnit,
+} from "../history/semantic-history-unit.js";
 import type { ContextPolicy } from "../policy/context-policy.js";
 
 /** Create the pure, deterministic semantic compaction planner. */
@@ -62,10 +65,11 @@ function planCompaction(
  * same durable message through a second semantic view.
  */
 function canonicalUnits(units: readonly ContextHistoryUnit[]): readonly ContextHistoryUnit[] {
-  const ordered = [...units].sort(compareUnits);
   const coveredMessageIds = new Set<string>();
   const result: ContextHistoryUnit[] = [];
-  for (const unit of ordered) {
+  // Units arrive in canonical ConversationTurn order. Preserve it instead of flattening
+  // Runs into a Session-wide sequence order.
+  for (const unit of orderContextHistoryUnits(units)) {
     if (unit.messages.length === 0) continue;
     if (unit.messages.some((message) => coveredMessageIds.has(message.messageId))) continue;
     result.push(unit);
@@ -85,8 +89,19 @@ function createRange(
     cut.kind === "TURN_BOUNDARY"
       ? primaryTurns.filter((unit) => selectedIds.has(unit.id)).flatMap((unit) => unit.messages)
       : (() => {
+          const splitMessage = units.find((unit) => unit.id === cut.firstKeptProtocolUnitId)
+            ?.messages[0];
+          if (
+            splitMessage === undefined ||
+            String(splitMessage.conversationTurnId) !== String(cut.conversationTurnId)
+          ) {
+            return [];
+          }
           const splitTurnIndex = primaryTurns.findIndex(
-            (unit) => unit.messages[0]?.conversationTurnId === cut.conversationTurnId,
+            (unit) =>
+              String(unit.messages[0]?.runId) === String(splitMessage?.runId) &&
+              String(unit.messages[0]?.conversationTurnId) ===
+                String(splitMessage.conversationTurnId),
           );
           if (splitTurnIndex < 0) return [];
           return primaryTurns.flatMap((unit, index) => {
@@ -95,11 +110,16 @@ function createRange(
             return unit.messages.filter((message) => message.sequence < cut.firstKeptSequence);
           });
         })();
-  const sortedRefs = refs.sort(compareRefs);
-  const first = sortedRefs[0];
-  const last = sortedRefs[sortedRefs.length - 1];
+  const first = refs[0];
+  const last = refs[refs.length - 1];
   if (first === undefined || last === undefined) return null;
-  if (sortedRefs.some((ref) => ref.runId !== first.runId)) return null;
+  if (
+    refs.some(
+      (ref) => ref.runId !== first.runId || ref.conversationTurnId !== first.conversationTurnId,
+    )
+  ) {
+    return null;
+  }
   return createContextMessageRange({
     runId: first.runId,
     conversationTurnId: first.conversationTurnId,
@@ -108,24 +128,4 @@ function createRange(
     firstSequence: first.sequence,
     lastSequence: last.sequence,
   });
-}
-
-function compareUnits(left: ContextHistoryUnit, right: ContextHistoryUnit): number {
-  return (
-    (left.messages[0]?.sequence ?? Number.MAX_SAFE_INTEGER) -
-      (right.messages[0]?.sequence ?? Number.MAX_SAFE_INTEGER) ||
-    (left.kind === "CONVERSATION_TURN" ? 0 : 1) - (right.kind === "CONVERSATION_TURN" ? 0 : 1) ||
-    compareStrings(left.id, right.id)
-  );
-}
-
-function compareRefs(
-  left: ContextHistoryUnit["messages"][number],
-  right: ContextHistoryUnit["messages"][number],
-): number {
-  return left.sequence - right.sequence || compareStrings(left.messageId, right.messageId);
-}
-
-function compareStrings(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
 }

@@ -147,6 +147,59 @@ describe("Phase 7B semantic history units", () => {
     expect(protocol?.compactionEligible).toBe(false);
     expect(index.openUnits).toContain(protocol);
   });
+
+  it("keeps semantic history in ConversationTurn order when Run-local sequences collide", () => {
+    const run1 = "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9a";
+    const run2 = "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9b";
+    const run3 = "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9c";
+    const first = [
+      userMessage({ runId: run1, sequence: 1 }),
+      assistantMessage({ runId: run1, sequence: 2, toolCalls: ["shared_call"] }),
+      toolResultMessage({ runId: run1, sequence: 3, toolCallId: "shared_call" }),
+      assistantMessage({ runId: run1, sequence: 4, text: "first final" }),
+    ];
+    const second = [
+      userMessage({ runId: run2, sequence: 1 }),
+      assistantMessage({ runId: run2, sequence: 2, toolCalls: ["shared_call"] }),
+      toolResultMessage({ runId: run2, sequence: 3, toolCallId: "shared_call" }),
+    ];
+    const third = [
+      userMessage({ runId: run3, sequence: 1 }),
+      assistantMessage({ runId: run3, sequence: 2, text: "third answer" }),
+    ];
+    const conversation = snapshot(
+      [
+        turn(first, { runId: run1, status: "CLOSED", openedAt: 1 }),
+        turn(second, { runId: run2, status: "CLOSED", openedAt: 2 }),
+        turn(third, { runId: run3, openedAt: 3 }),
+      ],
+      { runId: run3 },
+    );
+
+    const index = createContextHistoryIndexer().index({ conversation, model: MODEL });
+
+    expect(index.units.map((unit) => [unit.kind, unit.messages[0]?.runId])).toEqual([
+      ["CONVERSATION_TURN", run1],
+      ["TOOL_PROTOCOL", run1],
+      ["CONVERSATION_TURN", run2],
+      ["TOOL_PROTOCOL", run2],
+      ["CONVERSATION_TURN", run3],
+    ]);
+    expect(
+      index.units
+        .filter((unit) => unit.kind === "TOOL_PROTOCOL")
+        .map((unit) => unit.messages.map((message) => [message.runId, message.sequence])),
+    ).toEqual([
+      [
+        [run1, 2],
+        [run1, 3],
+      ],
+      [
+        [run2, 2],
+        [run2, 3],
+      ],
+    ]);
+  });
 });
 
 describe("Phase 7B ContextPlanner", () => {
@@ -316,6 +369,57 @@ describe("Phase 7B ContextPlanner", () => {
       disposition: "SELECTED",
       reason: "RECENT",
     });
+  });
+
+  it("preserves selected ConversationTurn order alongside non-history context items", () => {
+    const runs = [
+      "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9a",
+      "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9b",
+      "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9c",
+    ];
+    const messages = runs.flatMap((runId, index) => [
+      userMessage({ runId, sequence: 1, text: `Run ${String(index + 1)} user` }),
+      assistantMessage({ runId, sequence: 2, text: `Run ${String(index + 1)} assistant` }),
+    ]);
+    const turns = runs.map((runId, index) =>
+      turn(messages.slice(index * 2, index * 2 + 2), {
+        runId,
+        status: "CLOSED",
+        openedAt: index + 1,
+      }),
+    );
+    const history = createContextHistoryIndexer().index({
+      conversation: snapshot(turns),
+      model: MODEL,
+    });
+    const ids = [
+      "z_history_user_1",
+      "z_history_assistant_1",
+      "a_history_user_2",
+      "a_history_assistant_2",
+      "n_history_user_3",
+      "n_history_assistant_3",
+    ];
+    const messageItems = messages.map((message, index) =>
+      createContextItem({
+        ...item(ids[index]!, 1, { retention: "RECENT" }),
+        payload: { kind: "AGENT_MESSAGE", message },
+      }),
+    );
+    const nonHistoryItem = item("m_interleaved_context", 1);
+
+    const plan = createContextPlanner().plan({
+      items: [messageItems[0]!, messageItems[1]!, nonHistoryItem, ...messageItems.slice(2)],
+      policy: policy(),
+      history,
+      currentTurnId: turns[2]!.id,
+    });
+
+    expect(
+      plan.selectedItems.flatMap((entry) =>
+        entry.payload.kind === "AGENT_MESSAGE" ? [entry.payload.message.message.id] : [],
+      ),
+    ).toEqual(messages.map((message) => message.message.id));
   });
 
   it("produces the same plan for the same semantic input regardless of item insertion order", () => {

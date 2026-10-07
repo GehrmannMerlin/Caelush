@@ -36,6 +36,8 @@ export function createContextIncrementalCompactionResolver(): ContextIncremental
       if (
         previousCheckpoint !== undefined &&
         (String(previousCheckpoint.runId) !== String(newSourceRange.runId) ||
+          String(previousCheckpoint.sourceRange.conversationTurnId) !==
+            String(newSourceRange.conversationTurnId) ||
           newSourceRange.firstSequence <= previousCheckpoint.sourceRange.lastSequence)
       ) {
         throw new ContextPlanningError("INCONSISTENT_PLAN");
@@ -74,17 +76,9 @@ function selectNewSourceMessages(
       (stored) =>
         stored.message.audience.model &&
         String(stored.message.runId) === String(range.runId) &&
+        String(stored.message.conversationTurnId) === String(range.conversationTurnId) &&
         stored.sequence >= range.firstSequence &&
         stored.sequence <= range.lastSequence,
-    )
-    .sort(
-      (left, right) =>
-        left.sequence - right.sequence ||
-        (String(left.message.id) < String(right.message.id)
-          ? -1
-          : String(left.message.id) > String(right.message.id)
-            ? 1
-            : 0),
     );
   const first = selected[0];
   const last = selected[selected.length - 1];

@@ -82,7 +82,7 @@ export function createPromptSurfaceMemoryStore(): PromptSurfaceMemoryStore {
       if (existing !== undefined) {
         if (
           existing.contentHash !== snapshot.contentHash ||
-          existing.anchorMessageSequence !== snapshot.anchorMessageSequence
+          !sameAnchor(existing.anchor, snapshot.anchor)
         ) {
           throw new Error("test source Step snapshot conflict");
         }
@@ -101,6 +101,18 @@ export function createPromptSurfaceMemoryStore(): PromptSurfaceMemoryStore {
       return byRun.get(runId)?.find((candidate) => candidate.epochId === epochId);
     },
   };
+}
+
+function sameAnchor(
+  left: PromptSurfaceEpochWithSnapshots["snapshots"][number]["anchor"],
+  right: PromptSurfaceEpochWithSnapshots["snapshots"][number]["anchor"],
+): boolean {
+  return (
+    left.messageId === right.messageId &&
+    left.runId === right.runId &&
+    left.conversationTurnId === right.conversationTurnId &&
+    left.sequence === right.sequence
+  );
 }
 
 function sameEpoch(left: PromptSurfaceEpoch, right: PromptSurfaceEpoch): boolean {

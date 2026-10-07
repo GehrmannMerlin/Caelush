@@ -37,6 +37,9 @@ interface SnapshotRow {
   epoch_id: string;
   ordinal: number;
   anchor_message_sequence: number;
+  anchor_message_id: string | null;
+  anchor_run_id: string | null;
+  anchor_conversation_turn_id: string | null;
   source_step_sequence: number;
   kind: string;
   content_hash: string;
@@ -48,7 +51,6 @@ interface SnapshotRow {
 interface SnapshotStatsRow {
   count: number;
   max_ordinal: number;
-  max_anchor_message_sequence: number;
   max_source_step_sequence: number;
   total_bytes: number;
 }
@@ -193,8 +195,6 @@ export class SqlitePromptSurfaceStore implements PromptSurfaceStorePort {
           stats.total_bytes > PROMPT_SURFACE_LIMITS.maxEpochUtf8Bytes ||
           !Number.isSafeInteger(stats.max_ordinal) ||
           stats.max_ordinal < 0 ||
-          !Number.isSafeInteger(stats.max_anchor_message_sequence) ||
-          stats.max_anchor_message_sequence < 0 ||
           !Number.isSafeInteger(stats.max_source_step_sequence) ||
           stats.max_source_step_sequence < 0
         ) {
@@ -222,9 +222,6 @@ export class SqlitePromptSurfaceStore implements PromptSurfaceStorePort {
         if (snapshot.sourceStepSequence <= stats.max_source_step_sequence) {
           throw new StorageConflictError("Prompt Surface source step sequence must advance.");
         }
-        if (snapshot.anchorMessageSequence < stats.max_anchor_message_sequence) {
-          throw new StorageConflictError("Prompt Surface anchor sequence must not move backward.");
-        }
         if (stats.total_bytes + byteLength > PROMPT_SURFACE_LIMITS.maxEpochUtf8Bytes) {
           throw new StorageError("Prompt Surface epoch exceeds its UTF-8 byte limit.");
         }
@@ -232,15 +229,19 @@ export class SqlitePromptSurfaceStore implements PromptSurfaceStorePort {
         this.database.client
           .prepare(
             `INSERT INTO prompt_surface_snapshots
-             (run_id, epoch_id, ordinal, anchor_message_sequence, source_step_sequence,
-              kind, content_hash, byte_length, created_at_ms, content)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (run_id, epoch_id, ordinal, anchor_message_sequence, anchor_message_id, anchor_run_id,
+              anchor_conversation_turn_id, source_step_sequence, kind, content_hash, byte_length,
+              created_at_ms, content)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             snapshot.runId,
             snapshot.epochId,
             snapshot.ordinal,
-            snapshot.anchorMessageSequence,
+            snapshot.anchor.sequence,
+            snapshot.anchor.messageId,
+            snapshot.anchor.runId,
+            snapshot.anchor.conversationTurnId,
             snapshot.sourceStepSequence,
             snapshot.kind,
             snapshot.contentHash,
@@ -274,7 +275,8 @@ export class SqlitePromptSurfaceStore implements PromptSurfaceStorePort {
       const epoch = decodeEpoch(row);
       const rows = this.database.client
         .prepare(
-          `SELECT run_id, epoch_id, ordinal, anchor_message_sequence,
+          `SELECT run_id, epoch_id, ordinal, anchor_message_sequence, anchor_message_id,
+                  anchor_run_id, anchor_conversation_turn_id,
                   source_step_sequence, kind, content_hash, byte_length, created_at_ms, content
            FROM prompt_surface_snapshots
            WHERE run_id = ? AND epoch_id = ?
@@ -330,7 +332,8 @@ export class SqlitePromptSurfaceStore implements PromptSurfaceStorePort {
   ): SnapshotRow | undefined {
     return this.database.client
       .prepare(
-        `SELECT run_id, epoch_id, ordinal, anchor_message_sequence,
+        `SELECT run_id, epoch_id, ordinal, anchor_message_sequence, anchor_message_id,
+                anchor_run_id, anchor_conversation_turn_id,
                 source_step_sequence, kind, content_hash, byte_length, created_at_ms, content
          FROM prompt_surface_snapshots
          WHERE run_id = ? AND epoch_id = ? AND source_step_sequence = ?`,
@@ -343,7 +346,6 @@ export class SqlitePromptSurfaceStore implements PromptSurfaceStorePort {
       .prepare(
         `SELECT COUNT(*) AS count,
                 COALESCE(MAX(ordinal), 0) AS max_ordinal,
-                COALESCE(MAX(anchor_message_sequence), 0) AS max_anchor_message_sequence,
                 COALESCE(MAX(source_step_sequence), 0) AS max_source_step_sequence,
                 COALESCE(SUM(byte_length), 0) AS total_bytes
          FROM prompt_surface_snapshots WHERE run_id = ? AND epoch_id = ?`,
@@ -378,11 +380,24 @@ function decodeEpoch(row: EpochRow): PromptSurfaceEpoch {
 
 function decodeSnapshot(row: SnapshotRow): PromptSurfaceSnapshot {
   try {
+    if (
+      row.anchor_message_id === null ||
+      row.anchor_run_id === null ||
+      row.anchor_conversation_turn_id === null
+    ) {
+      throw new Error("Legacy Prompt Surface anchor has no provable scoped identity.");
+    }
     const snapshot = createPromptSurfaceSnapshot({
       runId: row.run_id as RunId,
       epochId: createPromptSurfaceEpochId(row.epoch_id),
       ordinal: row.ordinal,
-      anchorMessageSequence: row.anchor_message_sequence,
+      anchor: {
+        messageId: row.anchor_message_id as PromptSurfaceSnapshot["anchor"]["messageId"],
+        runId: row.anchor_run_id as RunId,
+        conversationTurnId:
+          row.anchor_conversation_turn_id as PromptSurfaceSnapshot["anchor"]["conversationTurnId"],
+        sequence: row.anchor_message_sequence,
+      },
       sourceStepSequence: row.source_step_sequence,
       kind: row.kind as PromptSurfaceSnapshot["kind"],
       content: row.content,
@@ -426,7 +441,10 @@ function sameSnapshot(left: PromptSurfaceSnapshot, right: PromptSurfaceSnapshot)
     left.runId === right.runId &&
     left.epochId === right.epochId &&
     left.ordinal === right.ordinal &&
-    left.anchorMessageSequence === right.anchorMessageSequence &&
+    left.anchor.messageId === right.anchor.messageId &&
+    left.anchor.runId === right.anchor.runId &&
+    left.anchor.conversationTurnId === right.anchor.conversationTurnId &&
+    left.anchor.sequence === right.anchor.sequence &&
     left.sourceStepSequence === right.sourceStepSequence &&
     left.kind === right.kind &&
     left.contentHash === right.contentHash &&

@@ -5,9 +5,11 @@ import type { StoredAgentMessage } from "../../messages/persistence/record.js";
 import type { ToolObservationPolicySnapshot } from "../../loop/types.js";
 import type { PreparedAgentContext } from "../contracts/prepared-agent-context.js";
 import type { ContextTokenEstimatorPort } from "../token/context-token-estimator.js";
-import { completePromptSurfaceAnchorSequences } from "../surface/prompt-surface-anchors.js";
+import type { AgentMessageId } from "../../messages/types/ids.js";
+import { completePromptSurfaceAnchors } from "../surface/prompt-surface-anchors.js";
 import { projectPromptSurface } from "../surface/prompt-surface-projector.js";
 import { PromptSurfaceIntegrityError } from "../surface/prompt-surface.js";
+import type { PromptSurfaceAnchor } from "../surface/prompt-surface.js";
 import { renderStableContextHead } from "../surface/prompt-surface-renderer.js";
 
 export interface ContextMaterializer {
@@ -59,14 +61,14 @@ export function createContextMaterializer(
       assertEstimate(options.tokenEstimator.estimateText(documentText, input.model), "document");
       throwIfAborted(input.signal);
 
-      const ordered = orderStoredMessages(input.prepared.conversationMessages);
+      const conversation = withRecoveryTailMessageIds(input.prepared.conversationMessages);
       const messages: AIMessage[] = [Object.freeze({ role: "system", content: documentText })];
       const surfaceMessages = projectPromptSurface(input.prepared.promptSurface?.epoch);
       const snapshotsByAnchor = snapshotsByValidAnchor(
         input.prepared.conversationMessages,
         surfaceMessages,
       );
-      for (const stored of ordered.messages) {
+      for (const stored of conversation.messages) {
         throwIfAborted(input.signal);
         await appendProjection(
           messages,
@@ -75,10 +77,10 @@ export function createContextMaterializer(
           input.model,
           input.signal,
           input.reprojectOpenToolObservations === true &&
-            ordered.tailMessageIds.has(stored.message.id),
+            conversation.tailMessageIds.has(stored.message.id),
           input.prepared,
         );
-        for (const surfaceMessage of snapshotsByAnchor.get(stored.sequence) ?? []) {
+        for (const surfaceMessage of snapshotsByAnchor.get(stored.message.id) ?? []) {
           throwIfAborted(input.signal);
           assertEstimate(
             options.tokenEstimator.estimateText(surfaceMessage.content, input.model),
@@ -127,21 +129,24 @@ async function appendProjection(
   for (const message of projection.messages) messages.push(Object.freeze({ ...message }));
 }
 
-function orderStoredMessages(messages: readonly StoredAgentMessage[]): {
+function withRecoveryTailMessageIds(messages: readonly StoredAgentMessage[]): {
   readonly messages: readonly StoredAgentMessage[];
   readonly tailMessageIds: ReadonlySet<string>;
 } {
-  const ordered = [...messages].sort(compareStoredMessages);
-  const latestTurnId = ordered.at(-1)?.message.conversationTurnId;
-  const openProtocolMessageIds = openProtocolMessages(ordered);
-  const tail = ordered.filter(
+  const latest = messages.at(-1)?.message;
+  const latestTurnScope =
+    latest === undefined ? undefined : messageTurnScope(latest.runId, latest.conversationTurnId);
+  const openProtocolMessageIds = openProtocolMessages(messages);
+  const tail = messages.filter(
     (stored) =>
-      stored.message.conversationTurnId === latestTurnId ||
-      openProtocolMessageIds.has(stored.message.id),
+      messageTurnScope(stored.message.runId, stored.message.conversationTurnId) ===
+        latestTurnScope || openProtocolMessageIds.has(stored.message.id),
   );
   const tailIds = new Set(tail.map((stored) => stored.message.id));
   return Object.freeze({
-    messages: Object.freeze(ordered),
+    // `PreparedAgentContext` already carries the selected messages in Snapshot order.
+    // Run-local sequence restarts at each ConversationTurn, so this layer must not sort it.
+    messages,
     tailMessageIds: tailIds,
   });
 }
@@ -151,53 +156,71 @@ type ProjectedSurfaceMessage = ReturnType<typeof projectPromptSurface>[number];
 function snapshotsByValidAnchor(
   messages: readonly StoredAgentMessage[],
   snapshots: readonly ProjectedSurfaceMessage[],
-): ReadonlyMap<number, readonly ProjectedSurfaceMessage[]> {
+): ReadonlyMap<AgentMessageId, readonly ProjectedSurfaceMessage[]> {
   if (snapshots.length === 0) return new Map();
-  const visible = [...messages]
-    .filter((stored) => stored.message.audience.model)
-    .sort(compareStoredMessages);
-  const boundaries = completePromptSurfaceAnchorSequences(visible);
-  const result = new Map<number, ProjectedSurfaceMessage[]>();
+  const visible = messages.filter((stored) => stored.message.audience.model);
+  const boundaries = completePromptSurfaceAnchors(visible);
+  const result = new Map<AgentMessageId, ProjectedSurfaceMessage[]>();
   for (const snapshot of snapshots) {
-    const anchor = snapshot.source.anchorMessageSequence;
-    if (!boundaries.has(anchor)) {
+    const anchor = snapshot.source.anchor;
+    const boundary = boundaries.get(anchor.messageId);
+    if (boundary === undefined || !sameAnchor(boundary, anchor)) {
       throw new PromptSurfaceIntegrityError(
         "Prompt Surface snapshot anchor is missing or splits a Tool result batch.",
       );
     }
-    const anchored = result.get(anchor) ?? [];
+    const anchored = result.get(anchor.messageId) ?? [];
     anchored.push(snapshot);
-    result.set(anchor, anchored);
+    result.set(anchor.messageId, anchored);
   }
   return result;
 }
 
 function openProtocolMessages(messages: readonly StoredAgentMessage[]): ReadonlySet<string> {
-  const toolResults = new Set<string>();
+  const messagesByTurn = new Map<string, StoredAgentMessage[]>();
   for (const stored of messages) {
-    if (stored.message.type === "TOOL_RESULT") toolResults.add(stored.message.toolCallId);
+    if (!stored.message.audience.model) continue;
+    const scope = messageTurnScope(stored.message.runId, stored.message.conversationTurnId);
+    const turnMessages = messagesByTurn.get(scope) ?? [];
+    turnMessages.push(stored);
+    messagesByTurn.set(scope, turnMessages);
   }
-  const openAssistantIds = new Set<string>();
-  const openCallIds = new Set<string>();
-  for (const stored of messages) {
-    if (stored.message.type !== "ASSISTANT") continue;
-    const calls = stored.message.content.filter((part) => part.type === "TOOL_CALL");
-    const missing = calls.filter((call) => !toolResults.has(call.toolCallId));
-    if (missing.length === 0) continue;
-    openAssistantIds.add(stored.message.id);
-    for (const call of calls) openCallIds.add(call.toolCallId);
-  }
-  const ids = new Set<string>(openAssistantIds);
-  for (const stored of messages) {
-    if (stored.message.type === "TOOL_RESULT" && openCallIds.has(stored.message.toolCallId)) {
-      ids.add(stored.message.id);
+
+  const openMessageIds = new Set<string>();
+  for (const turnMessages of messagesByTurn.values()) {
+    const toolResults = new Set<string>();
+    for (const stored of turnMessages) {
+      if (stored.message.type === "TOOL_RESULT") toolResults.add(stored.message.toolCallId);
+    }
+    const openCallIds = new Set<string>();
+    for (const stored of turnMessages) {
+      if (stored.message.type !== "ASSISTANT") continue;
+      const calls = stored.message.content.filter((part) => part.type === "TOOL_CALL");
+      const missing = calls.filter((call) => !toolResults.has(call.toolCallId));
+      if (missing.length === 0) continue;
+      openMessageIds.add(stored.message.id);
+      for (const call of calls) openCallIds.add(call.toolCallId);
+    }
+    for (const stored of turnMessages) {
+      if (stored.message.type === "TOOL_RESULT" && openCallIds.has(stored.message.toolCallId)) {
+        openMessageIds.add(stored.message.id);
+      }
     }
   }
-  return ids;
+  return openMessageIds;
 }
 
-function compareStoredMessages(left: StoredAgentMessage, right: StoredAgentMessage): number {
-  return left.sequence - right.sequence || compareStrings(left.message.id, right.message.id);
+function sameAnchor(left: PromptSurfaceAnchor, right: PromptSurfaceAnchor): boolean {
+  return (
+    left.messageId === right.messageId &&
+    left.runId === right.runId &&
+    left.conversationTurnId === right.conversationTurnId &&
+    left.sequence === right.sequence
+  );
+}
+
+function messageTurnScope(runId: string, conversationTurnId: string): string {
+  return JSON.stringify([runId, conversationTurnId]);
 }
 
 function assertEstimate(value: number, label: string): void {
@@ -212,8 +235,4 @@ function throwIfAborted(signal: AbortSignal): void {
     error.name = "AbortError";
     throw error;
   }
-}
-
-function compareStrings(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
 }

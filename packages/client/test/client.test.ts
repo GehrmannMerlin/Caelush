@@ -164,6 +164,48 @@ describe("CaelushClient", () => {
     });
   });
 
+  it("parses turn-first Session Turn Presentation v3 without a Session watermark", async () => {
+    const runId = createRunId();
+    const client = new CaelushClient({
+      baseUrl: "http://daemon.test",
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            capabilityVersion: 3,
+            turns: [
+              {
+                runId,
+                conversationTurnId: "turn-canonical",
+                runStatus: "RUNNING",
+                openedAt: 1,
+                highWatermark: 7,
+                items: [
+                  {
+                    id: "user-1",
+                    runId,
+                    conversationTurnId: "turn-canonical",
+                    ordinal: 0,
+                    status: "COMPLETED",
+                    createdAt: 1,
+                    kind: "USER",
+                    text: "inspect",
+                  },
+                ],
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+    });
+
+    await expect(
+      client.getSessionTurnPresentation("ses_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9b" as never),
+    ).resolves.toMatchObject({
+      capabilityVersion: 3,
+      turns: [{ runId, highWatermark: 7, items: [{ kind: "USER", text: "inspect" }] }],
+    });
+  });
+
   it("binds the ambient browser fetch before invoking it", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = function (this: typeof globalThis) {

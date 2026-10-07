@@ -5,10 +5,11 @@ import type {
   TurnBoundaryCut,
 } from "./context-compaction-cut.js";
 import { freezeContextCompactionCutCandidate } from "./context-compaction-cut.js";
-import type {
-  ContextHistoryIndex,
-  ContextHistoryUnit,
-  ToolProtocolUnit,
+import {
+  orderContextHistoryUnits,
+  type ContextHistoryIndex,
+  type ContextHistoryUnit,
+  type ToolProtocolUnit,
 } from "../history/semantic-history-unit.js";
 
 /** Create the pure, deterministic safe-cut selector for indexed durable history. */
@@ -20,11 +21,15 @@ export function createContextCutPointSelector(): ContextCutPointSelector {
       assertBudget("targetRecentTailTokens", input.targetRecentTailTokens);
       assertBudget("minRecentTailTokens", input.minRecentTailTokens);
 
-      const turns = canonicalTurns(input.history.units);
+      const history = Object.freeze({
+        ...input.history,
+        units: orderContextHistoryUnits(input.history.units),
+      });
+      const turns = canonicalTurns(history.units);
       if (turns.length < 2) return null;
 
       const fullTurnCandidate = selectFullTurnBoundary(
-        input.history,
+        history,
         turns,
         input.targetRecentTailTokens,
         input.minRecentTailTokens,
@@ -32,7 +37,7 @@ export function createContextCutPointSelector(): ContextCutPointSelector {
       return (
         fullTurnCandidate ??
         selectProtocolSafeSplit(
-          input.history,
+          history,
           turns,
           input.targetRecentTailTokens,
           input.minRecentTailTokens,
@@ -175,26 +180,26 @@ function protocolsForTurn(
   units: readonly ContextHistoryUnit[],
   turn: ContextHistoryUnit,
 ): readonly ToolProtocolUnit[] {
-  return units
-    .filter(
-      (unit): unit is ToolProtocolUnit =>
-        unit.kind === "TOOL_PROTOCOL" &&
-        unit.messages.length > 0 &&
-        unit.messages.every(
-          (message) => message.conversationTurnId === turn.messages[0]?.conversationTurnId,
-        ),
-    )
-    .sort(compareUnits);
+  // The history index already follows Snapshot Turn order and each Turn's message sequence.
+  // Filtering preserves that authority; a cross-Turn sequence sort would interleave Runs.
+  return units.filter(
+    (unit): unit is ToolProtocolUnit =>
+      unit.kind === "TOOL_PROTOCOL" &&
+      unit.messages.length > 0 &&
+      unit.messages.every(
+        (message) =>
+          message.runId === turn.messages[0]?.runId &&
+          message.conversationTurnId === turn.messages[0]?.conversationTurnId,
+      ),
+  );
 }
 
 function canonicalTurns(units: readonly ContextHistoryUnit[]): readonly ContextHistoryUnit[] {
-  return units
-    .filter((unit) => unit.kind === "CONVERSATION_TURN" && unit.messages.length > 0)
-    .sort(compareUnits);
+  return units.filter((unit) => unit.kind === "CONVERSATION_TURN" && unit.messages.length > 0);
 }
 
 function canonicalUnits(units: readonly ContextHistoryUnit[]): readonly ContextHistoryUnit[] {
-  const ordered = [...units].filter((unit) => unit.messages.length > 0).sort(compareUnits);
+  const ordered = units.filter((unit) => unit.messages.length > 0);
   const coveredMessageIds = new Set<string>();
   const result: ContextHistoryUnit[] = [];
   for (const unit of ordered) {
@@ -219,21 +224,8 @@ function isBetterCandidate(
   );
 }
 
-function compareUnits(left: ContextHistoryUnit, right: ContextHistoryUnit): number {
-  return (
-    (left.messages[0]?.sequence ?? Number.MAX_SAFE_INTEGER) -
-      (right.messages[0]?.sequence ?? Number.MAX_SAFE_INTEGER) ||
-    (left.kind === "CONVERSATION_TURN" ? 0 : 1) - (right.kind === "CONVERSATION_TURN" ? 0 : 1) ||
-    compareStrings(left.id, right.id)
-  );
-}
-
 function assertBudget(name: string, value: number): void {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new RangeError(`${name} must be a non-negative safe integer.`);
   }
-}
-
-function compareStrings(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
 }

@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 
 import type { RunId, TimestampMs } from "@caelush/protocol";
 
+import type { AgentMessageId, ConversationTurnId } from "../../messages/types/ids.js";
+
 export const PROMPT_SURFACE_RESET_REASONS = [
   "INITIAL",
   "MODEL_CHANGED",
@@ -19,6 +21,8 @@ export const PROMPT_SURFACE_LIMITS = Object.freeze({
   maxSnapshotUtf8Bytes: 1_048_576,
   maxEpochUtf8Bytes: 4_194_304,
 });
+
+export const PROMPT_SURFACE_ANCHOR_VERSION = 2 as const;
 
 declare const PromptSurfaceEpochIdBrand: unique symbol;
 declare const PromptSurfaceFingerprintBrand: unique symbol;
@@ -59,11 +63,20 @@ export interface PromptSurfaceEpochInput extends Omit<
   readonly cacheSettingsFingerprint: string;
 }
 
+/** Scoped durable identity for a Prompt Surface boundary message. */
+export interface PromptSurfaceAnchor {
+  readonly messageId: AgentMessageId;
+  readonly runId: RunId;
+  readonly conversationTurnId: ConversationTurnId;
+  /** Run-local position for validation and diagnostics only. */
+  readonly sequence: number;
+}
+
 export interface PromptSurfaceSnapshot {
   readonly runId: RunId;
   readonly epochId: PromptSurfaceEpochId;
   readonly ordinal: number;
-  readonly anchorMessageSequence: number;
+  readonly anchor: PromptSurfaceAnchor;
   readonly sourceStepSequence: number;
   readonly kind: "RUNTIME_CONTEXT_SNAPSHOT";
   readonly contentHash: string;
@@ -107,6 +120,11 @@ export function createPromptSurfaceEpoch(input: PromptSurfaceEpochInput): Prompt
     modelRef: Object.freeze({ ...input.modelRef }),
   };
   return Object.freeze(epoch);
+}
+
+export function createPromptSurfaceAnchor(input: PromptSurfaceAnchor): PromptSurfaceAnchor {
+  assertPromptSurfaceAnchor(input);
+  return Object.freeze({ ...input });
 }
 
 export function assertPromptSurfaceEpoch(value: unknown): asserts value is PromptSurfaceEpoch {
@@ -169,7 +187,6 @@ export function assertPromptSurfaceEpochWithSnapshots(
   const encoder = new TextEncoder();
   let totalBytes = 0;
   let previousStepSequence = epoch.createdStepSequence - 1;
-  let previousAnchorSequence = 0;
   for (let index = 0; index < snapshots.length; index += 1) {
     const snapshot = snapshots[index];
     assertPromptSurfaceSnapshot(snapshot);
@@ -182,10 +199,7 @@ export function assertPromptSurfaceEpochWithSnapshots(
         "Prompt Surface snapshot identity or order is invalid.",
       );
     }
-    if (
-      snapshot.sourceStepSequence <= previousStepSequence ||
-      snapshot.anchorMessageSequence < previousAnchorSequence
-    ) {
+    if (snapshot.sourceStepSequence <= previousStepSequence) {
       throw new PromptSurfaceIntegrityError("Prompt Surface snapshot order is invalid.");
     }
     totalBytes += encoder.encode(snapshot.content).byteLength;
@@ -193,7 +207,6 @@ export function assertPromptSurfaceEpochWithSnapshots(
       throw new RangeError("Prompt Surface epoch exceeds its UTF-8 byte limit.");
     }
     previousStepSequence = snapshot.sourceStepSequence;
-    previousAnchorSequence = snapshot.anchorMessageSequence;
   }
 }
 
@@ -203,6 +216,7 @@ export function createPromptSurfaceSnapshot(
   assertPromptSurfaceSnapshotInput(input);
   const snapshot: PromptSurfaceSnapshot = {
     ...input,
+    anchor: createPromptSurfaceAnchor(input.anchor),
     contentHash: hashPromptSurfaceContent(input.content),
   };
   assertPromptSurfaceSnapshot(snapshot);
@@ -222,7 +236,7 @@ export function assertPromptSurfaceSnapshot(
       "runId",
       "epochId",
       "ordinal",
-      "anchorMessageSequence",
+      "anchor",
       "sourceStepSequence",
       "kind",
       "contentHash",
@@ -234,6 +248,7 @@ export function assertPromptSurfaceSnapshot(
   const input = { ...candidate };
   delete input.contentHash;
   assertPromptSurfaceSnapshotInput(input);
+  assertPromptSurfaceAnchor(candidate.anchor);
   if (typeof candidate.content !== "string") {
     throw new PromptSurfaceIntegrityError("Prompt Surface snapshot content is invalid.");
   }
@@ -254,22 +269,13 @@ export function assertPromptSurfaceSnapshotInput(
   const candidate = value as Record<string, unknown>;
   assertExactKeys(
     candidate,
-    [
-      "runId",
-      "epochId",
-      "ordinal",
-      "anchorMessageSequence",
-      "sourceStepSequence",
-      "kind",
-      "content",
-      "createdAt",
-    ],
+    ["runId", "epochId", "ordinal", "anchor", "sourceStepSequence", "kind", "content", "createdAt"],
     "Prompt Surface snapshot input",
   );
   assertBoundedText(candidate.runId, "Prompt Surface run id", 256);
   createPromptSurfaceEpochId(requiredText(candidate.epochId, "Prompt Surface epoch id"));
   assertPositiveSafeInteger(candidate.ordinal, "Prompt Surface ordinal");
-  assertPositiveSafeInteger(candidate.anchorMessageSequence, "Prompt Surface anchor sequence");
+  assertPromptSurfaceAnchor(candidate.anchor);
   assertPositiveSafeInteger(candidate.sourceStepSequence, "Prompt Surface source step sequence");
   if (candidate.kind !== "RUNTIME_CONTEXT_SNAPSHOT") {
     throw new TypeError("Prompt Surface snapshot kind is unsupported.");
@@ -282,6 +288,22 @@ export function assertPromptSurfaceSnapshotInput(
     throw new RangeError("Prompt Surface snapshot exceeds its UTF-8 byte limit.");
   }
   assertTimestamp(candidate.createdAt, "Prompt Surface snapshot timestamp");
+}
+
+export function assertPromptSurfaceAnchor(value: unknown): asserts value is PromptSurfaceAnchor {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError("Prompt Surface anchor must be an object.");
+  }
+  const candidate = value as Record<string, unknown>;
+  assertExactKeys(
+    candidate,
+    ["messageId", "runId", "conversationTurnId", "sequence"],
+    "Prompt Surface anchor",
+  );
+  assertBoundedText(candidate.messageId, "Prompt Surface anchor message id", 256);
+  assertBoundedText(candidate.runId, "Prompt Surface anchor Run id", 256);
+  assertBoundedText(candidate.conversationTurnId, "Prompt Surface anchor ConversationTurn id", 256);
+  assertPositiveSafeInteger(candidate.sequence, "Prompt Surface anchor Run-local sequence");
 }
 
 export function hashPromptSurfaceContent(content: string): string {

@@ -4,6 +4,7 @@ import type {
   RunStatus,
   SessionTurnPresentationResponse,
   TurnPresentationItem,
+  TurnPresentationItemV2,
 } from "@caelush/protocol";
 import {
   ChevronDown,
@@ -25,6 +26,21 @@ export interface TurnPresentationFeedProps {
   readonly isActive?: boolean | undefined;
 }
 
+/** Temporary adapter for the V1/V2 renderer; V3 Turn boundaries remain canonical in Protocol. */
+export function flattenTurnsForLegacyRenderer(
+  presentation: SessionTurnPresentationResponse,
+): readonly (TurnPresentationItem | TurnPresentationItemV2)[] {
+  return presentation.capabilityVersion === 3
+    ? presentation.turns.flatMap((turn) => turn.items)
+    : presentation.items;
+}
+
+export function hasTurnPresentationItems(
+  presentation: SessionTurnPresentationResponse | undefined,
+): boolean {
+  return presentation !== undefined && flattenTurnsForLegacyRenderer(presentation).length > 0;
+}
+
 /**
  * Codex-style ordered execution feed.
  *
@@ -33,6 +49,7 @@ export interface TurnPresentationFeedProps {
  * Ephemeral deltas are rendered only as bounded live annotations and never become historical facts.
  */
 export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactElement {
+  const presentationItems = flattenTurnsForLegacyRenderer(props.presentation);
   const liveActivities = props.liveActivity?.activities ?? [];
   const isModelThinking = (props.timeline?.activeLlm.length ?? 0) > 0;
   const modelWait = props.liveActivity?.modelWait;
@@ -42,9 +59,7 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
       : isRunStatusActive(props.activeRun.status);
   const now = usePresentationNow(isTaskActive || isModelThinking || modelWait !== undefined);
   const verifyingRunId = props.activeRun?.status === "VERIFYING" ? props.activeRun.id : undefined;
-  const latestUserItem = [...props.presentation.items]
-    .reverse()
-    .find((item) => item.kind === "USER");
+  const latestUserItem = [...presentationItems].reverse().find((item) => item.kind === "USER");
   const taskElapsed =
     latestUserItem === undefined
       ? undefined
@@ -52,14 +67,12 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
           taskElapsedMs(
             latestUserItem.runId,
             latestUserItem.createdAt,
-            props.presentation.items,
+            presentationItems,
             isTaskActive,
             now,
           ),
         );
-  const durableAssistantItems = props.presentation.items.filter(
-    (item) => item.kind === "ASSISTANT",
-  );
+  const durableAssistantItems = presentationItems.filter((item) => item.kind === "ASSISTANT");
   const settledStepKeys = new Set(
     durableAssistantItems.flatMap((item) =>
       "sourceStepId" in item && item.sourceStepId !== undefined
@@ -79,7 +92,7 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
     (item) => item.kind === "ASSISTANT" && item.phase === "FINAL_ANSWER",
   );
   const unsuccessfulTerminalRunIds = new Set(
-    props.presentation.items.flatMap((item) =>
+    presentationItems.flatMap((item) =>
       item.kind === "RUN_SUMMARY" && item.runStatus !== "COMPLETED" ? [item.runId] : [],
     ),
   );
@@ -93,19 +106,19 @@ export function TurnPresentationFeed(props: TurnPresentationFeedProps): ReactEle
         ? !settledStepKeys.has(`${activity.runId}:${activity.stepId ?? ""}`)
         : !settledAssistantItemKeys.has(`${activity.runId}:${activity.assistantItemId}`)),
   );
-  const summaries = props.presentation.items.filter((item) => {
+  const summaries = presentationItems.filter((item) => {
     if (item.kind !== "RUN_SUMMARY") return false;
     return !(
       item.runStatus === "COMPLETED" && finalAnswers.some((answer) => answer.runId === item.runId)
     );
   });
-  const processItems = props.presentation.items.filter(
+  const processItems = presentationItems.filter(
     (item) =>
       item.kind !== "USER" &&
       item.kind !== "RUN_SUMMARY" &&
       !(item.kind === "ASSISTANT" && item.phase === "FINAL_ANSWER"),
   );
-  const userItems = props.presentation.items.filter((item) => item.kind === "USER");
+  const userItems = presentationItems.filter((item) => item.kind === "USER");
   const finalItems = [...finalAnswers, ...summaries];
   const hasProcess =
     processItems.length > 0 ||

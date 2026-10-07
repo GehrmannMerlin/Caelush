@@ -79,7 +79,7 @@ describe("Session presentation route", () => {
       headers: { host: "127.0.0.1" },
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ capabilityVersion: 2, items: [], highWatermark: 0 });
+    expect(response.json()).toEqual({ capabilityVersion: 3, turns: [] });
 
     const info = await app.inject({
       method: "GET",

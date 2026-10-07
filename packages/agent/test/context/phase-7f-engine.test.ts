@@ -36,7 +36,14 @@ import {
 } from "@caelush/agent";
 import { createEventId, createRunId, createSessionId } from "@caelush/protocol";
 
-import { snapshot, turn, turnIdFor, userMessage } from "../messages/fixtures.js";
+import {
+  assistantMessage,
+  snapshot,
+  toolResultMessage,
+  turn,
+  turnIdFor,
+  userMessage,
+} from "../messages/fixtures.js";
 import { createPromptSurfaceMemoryStore } from "./support/prompt-surface-memory-store.js";
 
 const MODEL: ModelDescriptor = {
@@ -132,6 +139,55 @@ function usageStore(): ContextUsageStorePort & { readonly values: ContextUsageSn
       return values.at(-1);
     },
   };
+}
+
+function createTestContextEngine() {
+  const tokenEstimator = createUtf8HeuristicTokenEstimator();
+  const registry = createContextSourceRegistryBuilder()
+    .register({
+      id: AGENT_CONTEXT_SOURCE_IDS.conversation,
+      priority: 20,
+      criticality: "REQUIRED",
+      provider: createConversationContextSourceProvider(),
+    })
+    .register({
+      id: AGENT_CONTEXT_SOURCE_IDS.corePolicy,
+      priority: 0,
+      criticality: "REQUIRED",
+      provider: createCorePolicyContextSourceProvider({ text: "Current task policy." }),
+    })
+    .build();
+
+  return createV2ContextEngine({
+    promptSurfaceStore: createPromptSurfaceMemoryStore(),
+    sourceRegistry: registry,
+    checkpointRepository: checkpointRepository(),
+    authorityProvider: {
+      async snapshot() {
+        return { goal: "current goal", verificationState: "NOT_RUN" };
+      },
+    },
+    usageStore: usageStore(),
+    policy: { outputReserveTokens: 128, safetyReserveTokens: 0 },
+    requestOverheadEstimator: createContextRequestOverheadEstimator({
+      tokenEstimator,
+      protocolOverheadTokens: 7,
+    }),
+    historyIndexer: createContextHistoryIndexer(),
+    planner: createContextPlanner(),
+    rehydrator: createContextRehydrator(),
+    documentBuilder: createContextDocumentBuilder(),
+    materializer: createContextMaterializer({
+      projectors: createStandardAgentMessageProjectorRegistry(),
+      tokenEstimator,
+    }),
+    receiptBuilder: createContextReceiptBuilder({
+      now: () => 1000 as never,
+      tokenEstimator,
+    }),
+    tokenEstimator,
+    clock: { now: () => 1000 as never },
+  });
 }
 
 describe("Phase 7F production-capable Agent ContextEngine", () => {
@@ -254,6 +310,69 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
     expect(usage.values).toHaveLength(1);
     expect(usage.values[0]?.contextFingerprint).toBe(prepared.contextFingerprint);
     expect(authoritySnapshotCount).toBe(1);
+  });
+
+  it("prepares the next model Context after a second Run's Tool result", async () => {
+    const firstRun = "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9a";
+    const secondRun = "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9b";
+    const firstMessages = [
+      userMessage({ runId: firstRun, sequence: 1, text: "Run 1 request." }),
+      assistantMessage({ runId: firstRun, sequence: 2, toolCalls: ["shared_call"] }),
+      toolResultMessage({ runId: firstRun, sequence: 3, toolCallId: "shared_call" }),
+      assistantMessage({ runId: firstRun, sequence: 4, text: "Run 1 final." }),
+    ];
+    const secondUser = userMessage({ runId: secondRun, sequence: 1, text: "Run 2 request." });
+    const secondToolCall = assistantMessage({
+      runId: secondRun,
+      sequence: 2,
+      toolCalls: ["apply_patch_call"],
+    });
+    const secondToolResult = toolResultMessage({
+      runId: secondRun,
+      sequence: 3,
+      toolCallId: "apply_patch_call",
+    });
+    const conversation = snapshot(
+      [
+        turn(firstMessages, { runId: firstRun, status: "CLOSED", openedAt: 1 }),
+        turn([secondUser, secondToolCall, secondToolResult], {
+          runId: secondRun,
+          openedAt: 2,
+        }),
+      ],
+      { runId: secondRun },
+    );
+
+    const prepared = await createTestContextEngine().prepare({
+      identity: {
+        runId: secondRun as never,
+        sessionId: conversation.sessionId,
+        goal: "current goal",
+      },
+      turn: { stepId: "step:run-2-next-model" as never, sequence: 4 },
+      conversation,
+      input: { kind: "USER_INPUT", userMessageId: secondUser.message.id },
+      model: MODEL,
+      tools: [],
+      mode: "NORMAL",
+      signal: new AbortController().signal,
+    });
+
+    const userContent = prepared.messages
+      .filter((message) => message.role === "user")
+      .map((message) => message.content);
+    expect(userContent.slice(0, 2)).toEqual(["Run 1 request.", "Run 2 request."]);
+    expect(prepared.messages.map((message) => message.role)).toEqual([
+      "system",
+      "user",
+      "assistant",
+      "tool",
+      "assistant",
+      "user",
+      "assistant",
+      "tool",
+      "user",
+    ]);
   });
 
   it("commits compaction facts atomically before notifying and removes the covered tail", async () => {

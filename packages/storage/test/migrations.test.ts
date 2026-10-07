@@ -150,10 +150,10 @@ describe("committed storage migrations", () => {
         "verification_plans",
         "workspaces",
       ]);
-      // Phase 5F, the Workspace Registry, Runtime AI Management, and Prompt Surface are all
-      // represented in the published migration ledger.
+      // Phase 5F, the Workspace Registry, Runtime AI Management, and scoped Prompt Surface
+      // anchors are all represented in the published migration ledger.
       expect(sqlite.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get()).toEqual({
-        count: 19,
+        count: 20,
       });
 
       // The final schema contains only the durable Message V2 envelope and payload.
@@ -178,6 +178,17 @@ describe("committed storage migrations", () => {
       ]);
       expect(names).not.toEqual(
         expect.arrayContaining(["role", "protocol_version", "v2_data_json"]),
+      );
+
+      const promptSurfaceColumns = sqlite
+        .prepare("PRAGMA table_info('prompt_surface_snapshots')")
+        .all() as Array<{ name: string }>;
+      expect(promptSurfaceColumns.map(({ name }) => name)).toEqual(
+        expect.arrayContaining([
+          "anchor_message_id",
+          "anchor_run_id",
+          "anchor_conversation_turn_id",
+        ]),
       );
 
       const indexes = sqlite
@@ -215,7 +226,8 @@ describe("committed storage migrations", () => {
       if (
         !entry.isDirectory() ||
         entry.name === "20261006100000_prompt_surface" ||
-        entry.name === "20261006110000_prompt_surface_same_step_epochs"
+        entry.name === "20261006110000_prompt_surface_same_step_epochs" ||
+        entry.name === "20261007120000_prompt_surface_scoped_anchors"
       )
         continue;
       await cp(
@@ -256,7 +268,7 @@ describe("committed storage migrations", () => {
         ]),
       );
       expect(sqlite.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get()).toEqual({
-        count: 19,
+        count: 20,
       });
     } finally {
       sqlite.close();

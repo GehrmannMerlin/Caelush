@@ -4,6 +4,7 @@ import type {
   ContextHistoryUnit,
   ContextHistoryUnitKind,
 } from "../history/semantic-history-unit.js";
+import { orderContextHistoryUnits } from "../history/semantic-history-unit.js";
 import {
   assertContextItem,
   createContextItem,
@@ -45,6 +46,8 @@ interface PreparedItem {
 
 interface HistoryMembership {
   readonly groupId: string;
+  readonly scope: string;
+  readonly turnOrder: number;
   readonly kind: ContextHistoryUnitKind;
   readonly openProtocol: boolean;
   readonly currentTurn: boolean;
@@ -66,7 +69,6 @@ interface PlanningGroup {
   readonly pinned: boolean;
   readonly currentTurn: boolean;
   readonly openProtocol: boolean;
-  readonly historySequence: number;
 }
 
 interface GroupDecision {
@@ -267,12 +269,25 @@ function indexHistory(
   readonly membershipByMessageId: ReadonlyMap<string, HistoryMembership>;
 } {
   if (history === undefined) return { membershipByMessageId: new Map() };
-  const units = [...history.units];
-  const latestConversation = [...units]
-    .filter((unit) => unit.kind === "CONVERSATION_TURN")
-    .sort(compareHistoryUnits)
-    .at(-1);
+  const units = orderContextHistoryUnits(history.units);
+  const latestConversation = [...units].filter((unit) => unit.kind === "CONVERSATION_TURN").at(-1);
   const activeTurnId = currentTurnId ?? latestConversation?.id.replace(/^conversation:/, "");
+  const turnOrderByScope = new Map<string, number>();
+  for (const unit of units) {
+    if (unit.kind !== "CONVERSATION_TURN") continue;
+    for (const ref of unit.messages) {
+      const scope = messageTurnScope(ref.runId, ref.conversationTurnId);
+      if (!turnOrderByScope.has(scope)) turnOrderByScope.set(scope, turnOrderByScope.size);
+    }
+  }
+  // ContextHistoryIndex.units is emitted in the snapshot's ConversationTurn order. Keep that
+  // order as the cross-Run authority; `sequence` is used only after scope has been established.
+  for (const unit of units) {
+    for (const ref of unit.messages) {
+      const scope = messageTurnScope(ref.runId, ref.conversationTurnId);
+      if (!turnOrderByScope.has(scope)) turnOrderByScope.set(scope, turnOrderByScope.size);
+    }
+  }
   const membershipByMessageId = new Map<string, HistoryMembership>();
 
   for (const unit of units) {
@@ -285,8 +300,11 @@ function indexHistory(
     for (const ref of unit.messages) {
       const prior = membershipByMessageId.get(ref.messageId);
       if (prior?.kind === "TOOL_PROTOCOL") continue;
+      const scope = messageTurnScope(ref.runId, ref.conversationTurnId);
       membershipByMessageId.set(ref.messageId, {
         groupId: unit.atomicGroupId,
+        scope,
+        turnOrder: turnOrderByScope.get(scope) ?? Number.MAX_SAFE_INTEGER,
         kind: unit.kind,
         openProtocol: unit.kind === "TOOL_PROTOCOL" && unit.status === "OPEN",
         currentTurn: ref.conversationTurnId === activeTurnId,
@@ -374,9 +392,6 @@ function buildGroups(
       pinned: entries.some((entry) => entry.item.retention === "PINNED"),
       currentTurn: entries.some((entry) => entry.history?.currentTurn === true),
       openProtocol: entries.some((entry) => entry.history?.openProtocol === true),
-      historySequence: Math.min(
-        ...entries.map((entry) => entry.history?.sequence ?? Number.MAX_SAFE_INTEGER),
-      ),
     } satisfies PlanningGroup;
   });
 }
@@ -494,18 +509,28 @@ function compareGroups(left: PlanningGroup, right: PlanningGroup): number {
 }
 
 function comparePreparedItems(left: PreparedItem, right: PreparedItem): number {
-  return (
-    (left.history?.sequence ?? Number.MAX_SAFE_INTEGER) -
-      (right.history?.sequence ?? Number.MAX_SAFE_INTEGER) ||
-    compareStrings(left.item.source.sourceRef, right.item.source.sourceRef) ||
-    compareStrings(left.item.id, right.item.id)
-  );
-}
+  const leftHistory = left.history;
+  const rightHistory = right.history;
+  if (leftHistory === undefined || rightHistory === undefined) {
+    if (leftHistory !== rightHistory) return leftHistory === undefined ? 1 : -1;
+    return (
+      compareStrings(left.item.source.sourceRef, right.item.source.sourceRef) ||
+      compareStrings(left.item.id, right.item.id)
+    );
+  }
 
-function compareHistoryUnits(left: ContextHistoryUnit, right: ContextHistoryUnit): number {
-  const leftSequence = left.messages[0]?.sequence ?? Number.MAX_SAFE_INTEGER;
-  const rightSequence = right.messages[0]?.sequence ?? Number.MAX_SAFE_INTEGER;
-  return leftSequence - rightSequence || compareStrings(left.id, right.id);
+  if (leftHistory.turnOrder !== rightHistory.turnOrder) {
+    return leftHistory.turnOrder - rightHistory.turnOrder;
+  }
+  if (leftHistory.scope === rightHistory.scope && leftHistory.sequence !== rightHistory.sequence) {
+    return leftHistory.sequence - rightHistory.sequence;
+  }
+  if (leftHistory.scope !== rightHistory.scope) {
+    return compareStrings(leftHistory.scope, rightHistory.scope);
+  }
+  const leftMessageId = messageIdOf(left.item) ?? left.item.id;
+  const rightMessageId = messageIdOf(right.item) ?? right.item.id;
+  return compareStrings(leftMessageId, rightMessageId);
 }
 
 function messageIdOf(item: ContextItem): string | undefined {
@@ -514,4 +539,8 @@ function messageIdOf(item: ContextItem): string | undefined {
 
 function compareStrings(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function messageTurnScope(runId: string, conversationTurnId: string): string {
+  return JSON.stringify([runId, conversationTurnId]);
 }

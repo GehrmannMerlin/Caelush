@@ -507,21 +507,21 @@ describe("Phase 8A deterministic safe cut selector", () => {
     expect(candidate?.retainedUnitIds).toEqual(primary.slice(1).map((unit) => unit.id));
   });
 
-  it("uses stable sequence ordering for shuffled input", () => {
+  it("keeps Snapshot Turn order when Run-local sequences restart", () => {
     const turns = [
       closedTurn("shuffled_one", 1, 1, "one"),
-      closedTurn("shuffled_two", 2, 3, "two"),
-      closedTurn("shuffled_current", 3, 5, "current"),
+      closedTurn("shuffled_two", 2, 1, "two"),
+      closedTurn("shuffled_current", 3, 1, "current"),
     ];
     const history = indexTurns(turns);
-    const shuffled: ContextHistoryIndex = {
-      ...history,
-      units: [...history.units].reverse(),
-    };
     const primary = history.units.filter((unit) => unit.kind === "CONVERSATION_TURN");
-    const target = primary[1]!.tokenEstimate + primary[2]!.tokenEstimate;
 
-    expect(select(shuffled, target, target)).toEqual(select(history, target, target));
+    expect(primary.map((unit) => unit.messages.map((message) => message.sequence))).toEqual([
+      [1, 2],
+      [1, 2],
+      [1, 2],
+    ]);
+    expect(select(history, primary[1]!.tokenEstimate, 0)).not.toBeNull();
   });
 
   it("produces stable estimates for English, Chinese, emoji, and code text", () => {
@@ -545,11 +545,11 @@ describe("Phase 8A deterministic safe cut selector", () => {
 });
 
 describe("Phase 8A planner integration", () => {
-  it("anchors a multi-turn range at the first selected message without requiring one Turn id", () => {
+  it("fails closed when a V2 compaction range would span multiple ConversationTurns", () => {
     const units = [
       manualTurnUnit("turn-a", "a", 1, 2, 40),
-      manualTurnUnit("turn-b", "b", 3, 4, 40),
-      manualTurnUnit("turn-current", "current", 5, 6, 20),
+      manualTurnUnit("turn-b", "b", 1, 2, 40),
+      manualTurnUnit("turn-current", "current", 1, 2, 20),
     ];
     const history: ContextHistoryIndex = {
       units,
@@ -568,15 +568,6 @@ describe("Phase 8A planner integration", () => {
       reason: "SELECTION_PRESSURE",
     });
 
-    expect(plan?.cut.kind).toBe("TURN_BOUNDARY");
-    expect(plan?.selectedUnitIds).toEqual(["turn-a", "turn-b"]);
-    expect(plan?.retainedUnitIds).toEqual(["turn-current"]);
-    expect(plan?.sourceRange).toMatchObject({
-      conversationTurnId: units[0]!.messages[0]!.conversationTurnId,
-      firstSequence: 1,
-      lastSequence: 4,
-    });
-    expect(plan?.retainedTokens).toBe(20);
-    expect(plan?.minRecentTailTokens).toBe(20);
+    expect(plan).toBeNull();
   });
 });

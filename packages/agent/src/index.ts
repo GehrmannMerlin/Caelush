@@ -167,6 +167,7 @@ export {
   createBranchContextSourceProvider,
   createUtf8HeuristicTokenEstimator,
   freezeContextSourceResult,
+  orderContextHistoryUnits,
   planContext,
   Utf8HeuristicTokenEstimator,
 } from "./context/index.js";
@@ -321,16 +322,23 @@ export type {
 } from "./context/index.js";
 
 export {
+  assertPromptSurfaceAnchor,
   assertPromptSurfaceEpoch,
   assertPromptSurfaceEpochWithSnapshots,
   assertPromptSurfaceSnapshot,
   assertPromptSurfaceSnapshotInput,
+  createPromptSurfaceAnchor,
   createPromptSurfaceEpoch,
   createPromptSurfaceEpochId,
   createPromptSurfaceFingerprint,
   createPromptSurfaceSnapshot,
   hashPromptSurfaceContent,
   projectPromptSurface,
+  comparePromptSurfaceAnchorOrder,
+  completePromptSurfaceAnchors,
+  latestCompletePromptSurfaceAnchor,
+  promptSurfaceAnchorsAreAvailable,
+  PROMPT_SURFACE_ANCHOR_VERSION,
   PROMPT_SURFACE_LIMITS,
   PROMPT_SURFACE_RESET_REASONS,
   PromptSurfaceIntegrityError,
@@ -338,6 +346,7 @@ export {
 export type {
   ContextPromptSurfaceReceipt,
   PromptSurfaceAppendResult,
+  PromptSurfaceAnchor,
   PromptSurfaceEpoch,
   PromptSurfaceEpochId,
   PromptSurfaceEpochInput,

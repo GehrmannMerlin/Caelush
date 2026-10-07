@@ -5,7 +5,11 @@ import type {
   ContextMessageRange,
 } from "./context-compaction-contracts.js";
 import type { StructuredCheckpoint } from "../checkpoint/structured-checkpoint.js";
-import type { ContextHistoryUnit, ContextMessageRef } from "../history/semantic-history-unit.js";
+import {
+  orderContextHistoryUnits,
+  type ContextHistoryUnit,
+  type ContextMessageRef,
+} from "../history/semantic-history-unit.js";
 import type { AgentMessageId } from "../../messages/types/ids.js";
 import type { ContextCheckpointId } from "./context-compaction-contracts.js";
 import { ContextPlanningError } from "../planner/context-planning-errors.js";
@@ -172,7 +176,19 @@ function collectUniqueMessageRefs(
 ): ReadonlyMap<string, ContextMessageRef> {
   const refs = new Map<string, ContextMessageRef>();
   for (const unit of units) {
+    const first = unit.messages[0];
+    const scope =
+      first === undefined
+        ? undefined
+        : JSON.stringify([String(first.runId), String(first.conversationTurnId)]);
+    let previousSequence = 0;
     for (const ref of unit.messages) {
+      const currentScope = JSON.stringify([String(ref.runId), String(ref.conversationTurnId)]);
+      if (currentScope !== scope || ref.sequence <= previousSequence) {
+        throw new ContextPlanningError("INCONSISTENT_PLAN");
+      }
+      previousSequence = ref.sequence;
+
       const key = String(ref.messageId);
       const previous = refs.get(key);
       if (
@@ -212,24 +228,30 @@ function resolveRangeCoverage(
       firstRef.sequence !== range.firstSequence ||
       lastRef.sequence !== range.lastSequence ||
       (range.conversationTurnId !== undefined &&
-        String(firstRef.conversationTurnId) !== range.conversationTurnId)
+        (String(firstRef.conversationTurnId) !== range.conversationTurnId ||
+          String(lastRef.conversationTurnId) !== range.conversationTurnId))
     ) {
       throw new ContextPlanningError("INCONSISTENT_PLAN");
     }
   }
 
   const covered: AgentMessageId[] = [];
-  const messageIdBySequence = new Map<number, AgentMessageId>();
+  const messageIdBySequence = new Map<string, AgentMessageId>();
   for (const ref of refs.values()) {
-    if (ref.sequence < range.firstSequence || ref.sequence > range.lastSequence) continue;
-    if (String(ref.runId) !== range.runId) {
-      throw new ContextPlanningError("INCONSISTENT_PLAN");
+    if (String(ref.runId) !== range.runId) continue;
+    if (
+      range.conversationTurnId !== undefined &&
+      String(ref.conversationTurnId) !== range.conversationTurnId
+    ) {
+      continue;
     }
-    const existingMessageId = messageIdBySequence.get(ref.sequence);
+    if (ref.sequence < range.firstSequence || ref.sequence > range.lastSequence) continue;
+    const sequenceIdentity = JSON.stringify([range.runId, range.conversationTurnId, ref.sequence]);
+    const existingMessageId = messageIdBySequence.get(sequenceIdentity);
     if (existingMessageId !== undefined && existingMessageId !== ref.messageId) {
       throw new ContextPlanningError("INCONSISTENT_PLAN");
     }
-    messageIdBySequence.set(ref.sequence, ref.messageId);
+    messageIdBySequence.set(sequenceIdentity, ref.messageId);
     covered.push(ref.messageId);
   }
   return covered;
@@ -296,7 +318,9 @@ function rebuildUnit(
 }
 
 function rebuildHistory(units: readonly ContextHistoryUnit[]): ContextHistoryIndex {
-  const ordered = Object.freeze([...units].sort(compareUnits));
+  // Coverage removes refs from canonical units; it must not reconstruct order from local
+  // sequences, which restart at each Run.
+  const ordered = orderContextHistoryUnits(units);
   const unique = new Set<string>();
   let estimatedTokens = 0;
   for (const unit of ordered) {
@@ -313,15 +337,4 @@ function rebuildHistory(units: readonly ContextHistoryUnit[]): ContextHistoryInd
     closedUnits: Object.freeze(ordered.filter((unit) => unit.status === "CLOSED")),
     estimatedTokens,
   });
-}
-
-function compareUnits(left: ContextHistoryUnit, right: ContextHistoryUnit): number {
-  return (
-    (left.messages[0]?.sequence ?? Number.MAX_SAFE_INTEGER) -
-      (right.messages[0]?.sequence ?? Number.MAX_SAFE_INTEGER) || compareStrings(left.id, right.id)
-  );
-}
-
-function compareStrings(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
 }

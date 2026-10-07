@@ -70,13 +70,22 @@ function makeSnapshot(
     runId: epoch.runId,
     epochId: epoch.epochId,
     ordinal: 1,
-    anchorMessageSequence: 1,
+    anchor: anchorFor(epoch, 1),
     sourceStepSequence: 1,
     kind: "RUNTIME_CONTEXT_SNAPSHOT",
     content: "bounded runtime snapshot",
     createdAt: createTimestampMs(10),
     ...overrides,
   });
+}
+
+function anchorFor(epoch: ReturnType<typeof makeEpoch>, sequence: number) {
+  return {
+    messageId: `amsg_prompt_surface_${String(sequence)}` as never,
+    runId: epoch.runId,
+    conversationTurnId: "cturn_prompt_surface_store" as never,
+    sequence,
+  };
 }
 
 describe("SqlitePromptSurfaceStore", () => {
@@ -204,7 +213,7 @@ describe("SqlitePromptSurfaceStore", () => {
     const first = makeSnapshot(epoch);
     const second = makeSnapshot(epoch, {
       ordinal: 2,
-      anchorMessageSequence: 2,
+      anchor: anchorFor(epoch, 2),
       sourceStepSequence: 2,
       content: "second runtime snapshot",
     });
@@ -222,6 +231,34 @@ describe("SqlitePromptSurfaceStore", () => {
       ...epoch,
       snapshots: [first, second],
     });
+  });
+
+  it("fails closed when a stored Prompt Surface anchor has only legacy sequence identity", async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "caelush-prompt-surface-legacy-anchor-"),
+    );
+    temporaryDirectories.push(directory);
+    const databasePath = path.join(directory, "caelush.db");
+    const storage = await openCaelushStorage({ path: databasePath });
+    stores.push(storage);
+    const run = await addRun(storage);
+    const epoch = makeEpoch(run.id, "epoch-legacy-anchor", 1);
+    await storage.promptSurface.createEpoch(epoch);
+    await storage.promptSurface.appendSnapshot(makeSnapshot(epoch), epoch);
+
+    const raw = new DatabaseSync(databasePath);
+    rawDatabases.push(raw);
+    raw
+      .prepare(
+        `UPDATE prompt_surface_snapshots
+         SET anchor_message_id = NULL, anchor_run_id = NULL, anchor_conversation_turn_id = NULL
+         WHERE run_id = ? AND epoch_id = ? AND ordinal = 1`,
+      )
+      .run(run.id, epoch.epochId);
+
+    await expect(storage.promptSurface.readEpoch(run.id, epoch.epochId)).rejects.toBeInstanceOf(
+      StorageDecodeError,
+    );
   });
 
   it("rejects duplicate ordinals, duplicate source steps, and snapshots for another Run", async () => {
@@ -272,7 +309,7 @@ describe("SqlitePromptSurfaceStore", () => {
     const first = makeSnapshot(epoch);
     const second = makeSnapshot(epoch, {
       ordinal: 2,
-      anchorMessageSequence: 2,
+      anchor: anchorFor(epoch, 2),
       sourceStepSequence: 2,
       content: "second runtime snapshot",
     });
@@ -318,7 +355,7 @@ describe("SqlitePromptSurfaceStore", () => {
     const first = makeSnapshot(epoch);
     const second = makeSnapshot(epoch, {
       ordinal: 2,
-      anchorMessageSequence: 2,
+      anchor: anchorFor(epoch, 2),
       sourceStepSequence: 2,
       content: "second runtime snapshot",
     });
@@ -358,7 +395,7 @@ describe("SqlitePromptSurfaceStore", () => {
       await storage.promptSurface.appendSnapshot(
         makeSnapshot(epoch, {
           ordinal: index,
-          anchorMessageSequence: index,
+          anchor: anchorFor(epoch, index),
           sourceStepSequence: index,
           content: "x".repeat(900_000),
         }),
@@ -367,7 +404,7 @@ describe("SqlitePromptSurfaceStore", () => {
     }
     const fifth = makeSnapshot(epoch, {
       ordinal: 5,
-      anchorMessageSequence: 5,
+      anchor: anchorFor(epoch, 5),
       sourceStepSequence: 5,
       content: "x".repeat(900_000),
     });
@@ -400,7 +437,7 @@ describe("SqlitePromptSurfaceStore", () => {
     `);
     const second = makeSnapshot(epoch, {
       ordinal: 2,
-      anchorMessageSequence: 2,
+      anchor: anchorFor(epoch, 2),
       sourceStepSequence: 2,
       content: "second runtime snapshot",
     });

@@ -7,17 +7,22 @@ import type {
   ToolPresentationPort,
 } from "@caelush/agent";
 import type { AgentToolExecutionResult } from "@caelush/agent";
-import { projectAgentAssistantTextItems } from "@caelush/agent";
+import {
+  createDeterministicConversationTurnIdFactory,
+  projectAgentAssistantTextItems,
+} from "@caelush/agent";
 import {
   AssistantMessagePhaseSchema,
   SessionTurnPresentationQuerySchema,
-  SessionTurnPresentationResponseV2Schema,
+  SessionTurnPresentationResponseV3Schema,
   type AgentRun,
   type AgentErrorCode,
   type DurableRunEvent,
   type RunStatus,
   type SessionId,
-  type SessionTurnPresentationResponseV2,
+  type SessionTurnPresentationResponseV3,
+  type SessionTurnPresentationTurnV3,
+  type RunId,
   type ToolPresentationItem,
   type TurnPresentationItemV2,
   type VerificationPresentationItem,
@@ -53,11 +58,19 @@ const VERIFICATION_EVENT_TYPES = new Set([
 ]);
 
 const MAX_EVENT_PAGE = 1_000;
+const conversationTurnIds = createDeterministicConversationTurnIdFactory();
 
 export class SessionPresentationCursorError extends Error {
   constructor() {
     super("The session presentation cursor is invalid.");
     this.name = "SessionPresentationCursorError";
+  }
+}
+
+class SessionPresentationIdentityError extends Error {
+  constructor() {
+    super("Session presentation source identity is inconsistent.");
+    this.name = "SessionPresentationIdentityError";
   }
 }
 
@@ -77,14 +90,8 @@ export interface SessionPresentationServiceOptions {
 
 interface PositionedItem {
   readonly item: TurnPresentationItemV2;
-  readonly sequenceHint?: number;
   readonly createdAt: number;
   readonly stableId: string;
-}
-
-interface RunProjection {
-  readonly items: readonly PositionedItem[];
-  readonly highWatermark: number;
 }
 
 /**
@@ -101,7 +108,7 @@ export class SessionPresentationService {
   async getPresentation(
     sessionId: SessionId,
     input: unknown,
-  ): Promise<SessionTurnPresentationResponseV2> {
+  ): Promise<SessionTurnPresentationResponseV3> {
     const query = SessionTurnPresentationQuerySchema.parse(input);
     const session = await this.options.sessions.get(sessionId);
     if (session === null) throw new StorageNotFoundError("AgentSession", sessionId);
@@ -112,59 +119,38 @@ export class SessionPresentationService {
     ]);
     const runs = [...allRuns]
       .filter((run) => query.runId === undefined || run.id === query.runId)
-      .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+      .sort(compareRuns);
+    const start = parseRunCursor(query.cursor, runs);
+    const pageRuns = runs.slice(start, start + query.limit);
     const recordsByRun = groupRecordsByRun(allRecords);
-    const projections = await Promise.all(
-      runs.map((run) => this.projectRun(run, recordsByRun.get(run.id) ?? [])),
+    const turns = await Promise.all(
+      pageRuns.map((run) => this.projectRun(run, recordsByRun.get(run.id) ?? [])),
     );
-    const positioned = projections.flatMap((projection) => projection.items);
-    positioned.sort(comparePositionedItems);
-    const items = positioned.map((entry, index) => ({ ...entry.item, ordinal: index }));
-    const start = parseCursor(query.cursor, items.length);
-    const page = items.slice(start, start + query.limit);
-    const end = start + page.length;
-    const highWatermark = projections.reduce(
-      (maximum, projection) => Math.max(maximum, projection.highWatermark),
-      0,
-    );
-    return SessionTurnPresentationResponseV2Schema.parse({
-      capabilityVersion: 2,
-      items: page,
-      highWatermark,
-      ...(end < items.length ? { nextCursor: String(end) } : {}),
+    const end = start + turns.length;
+    return SessionTurnPresentationResponseV3Schema.parse({
+      capabilityVersion: 3,
+      turns,
+      ...(end < runs.length && turns.length > 0
+        ? { nextCursor: turns[turns.length - 1]!.runId }
+        : {}),
     });
   }
 
   private async projectRun(
     run: AgentRun,
     records: readonly AgentMessageRecord[],
-  ): Promise<RunProjection> {
+  ): Promise<SessionTurnPresentationTurnV3> {
     const history = await readDurableEvents(this.options.eventReader, run.id);
-    const messageSequences = new Map<string, number>();
-    const toolSequences = new Map<string, number>();
-    for (const event of history.events) {
-      const sequence = durableSequence(event);
-      if (sequence === undefined) continue;
-      const payload = eventPayload(event);
-      if (event.type === "conversation.message.committed") {
-        const messageId = stringValue(payload?.messageId);
-        if (messageId !== undefined) messageSequences.set(messageId, sequence);
-      }
-      if (event.type.startsWith("tool.")) {
-        const invocationId = stringValue(payload?.invocationId);
-        if (invocationId !== undefined && !toolSequences.has(invocationId)) {
-          toolSequences.set(invocationId, sequence);
-        }
-      }
-    }
-
+    const turnId = conversationTurnIds.forRun(run.id);
     const positioned: PositionedItem[] = [];
     for (const record of [...records].sort((left, right) => left.sequence - right.sequence)) {
       const items = this.projectMessage(record);
       for (const item of items) {
+        if (item.runId !== run.id || item.conversationTurnId !== turnId) {
+          throw new SessionPresentationIdentityError();
+        }
         positioned.push({
           item,
-          sequenceHint: messageSequences.get(record.messageId) ?? record.sequence,
           createdAt: Number(record.createdAt),
           stableId: `${record.messageId}:${String(item.ordinal).padStart(6, "0")}`,
         });
@@ -184,24 +170,21 @@ export class SessionPresentationService {
         observationsByInvocation.set(observation.toolInvocationId, observation);
     }
     for (const invocation of invocations) {
+      if (invocation.runId !== run.id) throw new SessionPresentationIdentityError();
       const observation = observationsByInvocation.get(invocation.id);
-      const item = this.projectTool(invocation, observation);
-      const sequenceHint = toolSequences.get(invocation.id);
+      const item = this.projectTool(invocation, observation, turnId);
       positioned.push({
         item,
-        ...(sequenceHint === undefined ? {} : { sequenceHint }),
         createdAt: Number(invocation.createdAt),
         stableId: item.id,
       });
     }
 
-    const turnId = firstConversationTurnId(records) ?? `${run.id}:turn`;
     const verificationItems = new Map<string, PositionedItem>();
     const pendingGeneralVerificationKeys: string[] = [];
     let generalVerificationIndex = 0;
     for (const event of history.events) {
       if (!VERIFICATION_EVENT_TYPES.has(event.type)) continue;
-      const sequence = durableSequence(event);
       const lifecycleKey = verificationLifecycleKey(
         event,
         pendingGeneralVerificationKeys,
@@ -217,11 +200,6 @@ export class SessionPresentationService {
       };
       verificationItems.set(lifecycleKey, {
         item: stableItem,
-        ...(existing?.sequenceHint !== undefined
-          ? { sequenceHint: existing.sequenceHint }
-          : sequence === undefined
-            ? {}
-            : { sequenceHint: sequence }),
         createdAt,
         stableId: stableItem.id,
       });
@@ -238,7 +216,7 @@ export class SessionPresentationService {
       const summary: TurnPresentationItemV2 = {
         id: `${run.id}:presentation:summary`,
         runId: run.id,
-        conversationTurnId: `${run.id}:summary`,
+        conversationTurnId: turnId,
         ordinal: 0,
         status:
           run.status === "CANCELLED"
@@ -253,13 +231,21 @@ export class SessionPresentationService {
       };
       positioned.push({
         item: summary,
-        ...(history.highWatermark > 0 ? { sequenceHint: history.highWatermark } : {}),
         createdAt: Number(summary.createdAt),
         stableId: summary.id,
       });
     }
 
-    return { items: positioned, highWatermark: history.highWatermark };
+    positioned.sort(comparePositionedItems);
+    return {
+      runId: run.id,
+      conversationTurnId: turnId,
+      runStatus: run.status,
+      openedAt: run.createdAt,
+      ...(run.finishedAt === undefined ? {} : { closedAt: run.finishedAt }),
+      highWatermark: history.highWatermark,
+      items: positioned.map((entry, ordinal) => ({ ...entry.item, ordinal })),
+    };
   }
 
   private projectMessage(record: AgentMessageRecord): readonly TurnPresentationItemV2[] {
@@ -278,6 +264,7 @@ export class SessionPresentationService {
   private projectTool(
     invocation: import("@caelush/protocol").ToolInvocation,
     observation: Extract<import("@caelush/protocol").Observation, { kind: "TOOL" }> | undefined,
+    turnId: string,
   ): ToolPresentationItem {
     const invocationPresentation = safePresentInvocation(this.options.toolPresentation, invocation);
     const result =
@@ -288,7 +275,7 @@ export class SessionPresentationService {
     return {
       id: `${invocation.id}:presentation`,
       runId: invocation.runId,
-      conversationTurnId: `${invocation.stepId}:turn`,
+      conversationTurnId: turnId,
       ordinal: 0,
       status,
       createdAt: invocation.createdAt,
@@ -606,18 +593,27 @@ function translateVerificationStatus(status: string | undefined): string {
   }
 }
 
-function firstConversationTurnId(records: readonly AgentMessageRecord[]): string | undefined {
-  return [...records].sort((left, right) => left.sequence - right.sequence)[0]?.conversationTurnId;
+function compareRuns(left: AgentRun, right: AgentRun): number {
+  if (left.createdAt !== right.createdAt) return left.createdAt - right.createdAt;
+  return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
 }
 
 function comparePositionedItems(left: PositionedItem, right: PositionedItem): number {
-  const leftHint = left.sequenceHint ?? Number.MAX_SAFE_INTEGER;
-  const rightHint = right.sequenceHint ?? Number.MAX_SAFE_INTEGER;
+  const leftRegion = presentationRegion(left.item);
+  const rightRegion = presentationRegion(right.item);
   return (
-    leftHint - rightHint ||
+    leftRegion - rightRegion ||
     left.createdAt - right.createdAt ||
-    left.stableId.localeCompare(right.stableId)
+    (left.stableId < right.stableId ? -1 : left.stableId > right.stableId ? 1 : 0)
   );
+}
+
+/** USER opens a Turn, FINAL_ANSWER closes its process disclosure, and summary is terminal. */
+function presentationRegion(item: TurnPresentationItemV2): number {
+  if (item.kind === "USER") return 0;
+  if (item.kind === "RUN_SUMMARY") return 3;
+  if (item.kind === "ASSISTANT" && item.phase === "FINAL_ANSWER") return 2;
+  return 1;
 }
 
 async function readDurableEvents(
@@ -669,12 +665,9 @@ function numberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) ? value : undefined;
 }
 
-function parseCursor(cursor: string | undefined, itemCount: number): number {
+function parseRunCursor(cursor: string | undefined, runs: readonly AgentRun[]): number {
   if (cursor === undefined) return 0;
-  if (!/^\d+$/.test(cursor)) throw new SessionPresentationCursorError();
-  const value = Number(cursor);
-  if (!Number.isSafeInteger(value) || value < 0 || value > itemCount) {
-    throw new SessionPresentationCursorError();
-  }
-  return value;
+  const index = runs.findIndex((run) => run.id === (cursor as RunId));
+  if (index < 0) throw new SessionPresentationCursorError();
+  return index + 1;
 }

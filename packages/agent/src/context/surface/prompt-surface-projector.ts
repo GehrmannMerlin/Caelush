@@ -1,7 +1,7 @@
 import type { RunId } from "@caelush/protocol";
 
 import { assertPromptSurfaceEpochWithSnapshots } from "./prompt-surface.js";
-import type { PromptSurfaceEpochWithSnapshots } from "./prompt-surface.js";
+import type { PromptSurfaceAnchor, PromptSurfaceEpochWithSnapshots } from "./prompt-surface.js";
 
 export interface PromptSurfaceModelMessage {
   readonly role: "user";
@@ -11,7 +11,7 @@ export interface PromptSurfaceModelMessage {
     readonly runId: RunId;
     readonly epochId: string;
     readonly ordinal: number;
-    readonly anchorMessageSequence: number;
+    readonly anchor: PromptSurfaceAnchor;
     readonly sourceStepSequence: number;
     readonly contentHash: string;
   };
@@ -36,7 +36,7 @@ export function projectPromptSurface(
           runId: snapshot.runId,
           epochId: snapshot.epochId,
           ordinal: snapshot.ordinal,
-          anchorMessageSequence: snapshot.anchorMessageSequence,
+          anchor: snapshot.anchor,
           sourceStepSequence: snapshot.sourceStepSequence,
           contentHash: snapshot.contentHash,
         }),

@@ -44,6 +44,7 @@ import type {
   SessionId,
   SessionTranscriptResponse,
   SessionTurnPresentationResponse,
+  SessionTurnPresentationTurnV3,
   TurnPresentationItem,
   WorkspaceRef,
   WorkspaceSessionSummary,
@@ -245,6 +246,15 @@ interface ApprovalContext {
   readonly generation: number;
   readonly sessionId: SessionId | undefined;
   readonly runId: RunId;
+}
+
+interface OptimisticPresentationUser {
+  readonly id: string;
+  readonly runId: RunId;
+  readonly status: "COMPLETED";
+  readonly createdAt: ClientAgentRun["createdAt"];
+  readonly kind: "USER";
+  readonly text: string;
 }
 
 export class WebSessionManager {
@@ -1123,7 +1133,7 @@ export class WebSessionManager {
 
   private async loadSessionTurnPresentation(
     sessionId: SessionId,
-    optimistic: readonly TurnPresentationItem[] = [],
+    optimistic: readonly OptimisticPresentationUser[] = [],
   ): Promise<SessionTurnPresentationResponse | undefined> {
     const getPresentation = this.options.client.getSessionTurnPresentation;
     if (
@@ -1133,10 +1143,13 @@ export class WebSessionManager {
       return undefined;
     }
     const items: TurnPresentationItem[] = [];
+    const turns: SessionTurnPresentationTurnV3[] = [];
+    const seenRunIds = new Set<RunId>();
+    const seenTurnIds = new Set<string>();
     const seenCursors = new Set<string>();
     let cursor: string | undefined;
     let highWatermark = 0;
-    let capabilityVersion: 1 | 2 | undefined;
+    let capabilityVersion: 1 | 2 | 3 | undefined;
     do {
       const response = await getPresentation.call(this.options.client, sessionId, {
         limit: 100,
@@ -1146,18 +1159,26 @@ export class WebSessionManager {
         throw new CaelushProtocolCompatibilityError();
       }
       capabilityVersion ??= response.capabilityVersion;
-      items.push(...response.items);
-      highWatermark = Math.max(highWatermark, response.highWatermark);
+      if (response.capabilityVersion === 3) {
+        for (const turn of response.turns) {
+          if (seenRunIds.has(turn.runId) || seenTurnIds.has(turn.conversationTurnId)) {
+            throw new CaelushProtocolCompatibilityError();
+          }
+          seenRunIds.add(turn.runId);
+          seenTurnIds.add(turn.conversationTurnId);
+          turns.push(turn);
+        }
+      } else {
+        items.push(...response.items);
+        highWatermark = Math.max(highWatermark, response.highWatermark);
+      }
       cursor = nextPageCursor(response.nextCursor, seenCursors);
     } while (cursor !== undefined);
-    return reconcileTurnPresentation(
-      {
-        capabilityVersion: capabilityVersion ?? 1,
-        items,
-        highWatermark,
-      },
-      optimistic,
-    );
+    const presentation: SessionTurnPresentationResponse =
+      capabilityVersion === 3
+        ? { capabilityVersion: 3, turns }
+        : { capabilityVersion: capabilityVersion ?? 1, items, highWatermark };
+    return reconcileTurnPresentation(presentation, optimistic);
   }
 
   private async listWorkspaceSessionCandidates(): Promise<readonly SessionCandidate[]> {
@@ -1381,10 +1402,7 @@ export class WebSessionManager {
         return;
       this.publish({
         turnPresentation: response,
-        liveActivity: pruneProjectedLiveActivities(
-          this.snapshot.liveActivity,
-          response.highWatermark,
-        ),
+        liveActivity: prunePresentationForRun(this.snapshot.liveActivity, response, active.run.id),
       });
     } catch {
       // The durable timeline remains authoritative if the optional read-model refresh races a
@@ -1465,9 +1483,10 @@ export class WebSessionManager {
       const retainedLiveActivity =
         turnPresentation === undefined
           ? this.snapshot.liveActivity
-          : pruneProjectedLiveActivities(
+          : prunePresentationForRun(
               this.snapshot.liveActivity,
-              turnPresentation.highWatermark,
+              turnPresentation,
+              activeRun?.id ?? run.id,
             );
       this.publish({
         candidates: this.snapshot.selectedSession
@@ -1638,7 +1657,11 @@ export class WebSessionManager {
     const retainedLiveActivity =
       turnPresentation === undefined
         ? this.snapshot.liveActivity
-        : pruneProjectedLiveActivities(this.snapshot.liveActivity, turnPresentation.highWatermark);
+        : prunePresentationForRun(
+            this.snapshot.liveActivity,
+            turnPresentation,
+            activeRun?.id ?? run.id,
+          );
     this.publish({
       candidates: this.snapshot.selectedSession
         ? this.upsertCandidate(this.snapshot.selectedSession, latestRun(runs))
@@ -1824,12 +1847,10 @@ function initialSnapshot(): WebSessionSnapshot {
   };
 }
 
-function optimisticPresentationUser(run: ClientAgentRun, text: string): TurnPresentationItem {
+function optimisticPresentationUser(run: ClientAgentRun, text: string): OptimisticPresentationUser {
   return {
     id: `optimistic:presentation:user:${run.id}`,
     runId: run.id,
-    conversationTurnId: run.id,
-    ordinal: 0,
     status: "COMPLETED",
     createdAt: run.createdAt,
     kind: "USER",
@@ -1839,9 +1860,34 @@ function optimisticPresentationUser(run: ClientAgentRun, text: string): TurnPres
 
 function reconcileTurnPresentation(
   response: SessionTurnPresentationResponse,
-  optimistic: readonly TurnPresentationItem[],
+  optimistic: readonly OptimisticPresentationUser[],
 ): SessionTurnPresentationResponse {
   if (optimistic.length === 0) return response;
+  if (response.capabilityVersion === 3) {
+    let changed = false;
+    const turns = response.turns.map((turn) => {
+      const additions = optimistic.filter(
+        (candidate) =>
+          candidate.runId === turn.runId &&
+          !turn.items.some((item) => item.kind === "USER" && item.text === candidate.text),
+      );
+      if (additions.length === 0) return turn;
+      changed = true;
+      const items: TurnPresentationItem[] = [
+        ...additions.map((item) => ({
+          ...item,
+          conversationTurnId: turn.conversationTurnId,
+          ordinal: 0,
+        })),
+        ...turn.items,
+      ];
+      return {
+        ...turn,
+        items: items.map((item, ordinal) => ({ ...item, ordinal })),
+      };
+    });
+    return changed ? { ...response, turns } : response;
+  }
   const canonical = response.items;
   const additions = optimistic.filter(
     (candidate) =>
@@ -1853,10 +1899,27 @@ function reconcileTurnPresentation(
       ),
   );
   if (additions.length === 0) return response;
-  const items = [...canonical, ...additions]
+  const legacyAdditions: TurnPresentationItem[] = additions.map((item) => ({
+    ...item,
+    conversationTurnId: item.runId,
+    ordinal: 0,
+  }));
+  const items = [...canonical, ...legacyAdditions]
     .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id))
     .map((item, ordinal) => ({ ...item, ordinal }));
   return { ...response, items };
+}
+
+function prunePresentationForRun(
+  state: LiveActivityState,
+  presentation: SessionTurnPresentationResponse,
+  runId: RunId,
+): LiveActivityState {
+  const highWatermark =
+    presentation.capabilityVersion === 3
+      ? presentation.turns.find((turn) => turn.runId === runId)?.highWatermark
+      : presentation.highWatermark;
+  return highWatermark === undefined ? state : pruneProjectedLiveActivities(state, highWatermark);
 }
 
 function nextPageCursor(

@@ -211,24 +211,36 @@ describe("SessionPresentationService", () => {
     });
 
     const response = await service.getPresentation(SESSION_ID, {});
-    expect(response.capabilityVersion).toBe(2);
-    expect(response.items.map((item) => item.kind)).toEqual([
+    expect(response.capabilityVersion).toBe(3);
+    expect(response.turns).toHaveLength(1);
+    const items = response.turns[0]!.items;
+    expect(items.map((item) => item.kind)).toEqual([
       "USER",
       "ASSISTANT",
       "TOOL",
       "ASSISTANT",
       "RUN_SUMMARY",
     ]);
-    expect(response.items[1]).toMatchObject({
+    expect(items[1]).toMatchObject({
       phase: "COMMENTARY",
       text: expect.stringContaining("inspect"),
       sourceStepId: STEP_ID,
     });
-    expect(response.items[3]).toMatchObject({ phase: "FINAL_ANSWER", sourceStepId: STEP_ID });
-    const tool = response.items[2] as ToolPresentationItem;
+    expect(items[3]).toMatchObject({ phase: "FINAL_ANSWER", sourceStepId: STEP_ID });
+    const tool = items[2] as ToolPresentationItem;
     expect(tool.preview).toBe("安全预览");
     expect(JSON.stringify(tool)).not.toContain("must-not-leak");
-    expect(response.items[4]).toMatchObject({ kind: "RUN_SUMMARY", runStatus: "COMPLETED" });
+    expect(items[4]).toMatchObject({ kind: "RUN_SUMMARY", runStatus: "COMPLETED" });
+    expect(new Set(items.map((item) => item.conversationTurnId))).toEqual(new Set([TURN_ID]));
+    expect(items.every((item, ordinal) => item.ordinal === ordinal)).toBe(true);
+    expect(response.turns[0]).toMatchObject({
+      runId: RUN_ID,
+      conversationTurnId: TURN_ID,
+      runStatus: "COMPLETED",
+      openedAt: RUN.createdAt,
+      closedAt: RUN.finishedAt,
+      highWatermark: 6,
+    });
   });
 
   it("merges verification lifecycle pairs and leaves no streaming rows for a terminal Run", async () => {
@@ -264,7 +276,7 @@ describe("SessionPresentationService", () => {
     });
 
     const response = await service.getPresentation(SESSION_ID, {});
-    const verification = response.items.filter((item) => item.kind === "VERIFICATION");
+    const verification = response.turns[0]!.items.filter((item) => item.kind === "VERIFICATION");
     expect(verification).toHaveLength(3);
     expect(verification).toEqual(
       expect.arrayContaining([
@@ -283,6 +295,9 @@ describe("SessionPresentationService", () => {
       ]),
     );
     expect(verification.some((item) => item.status === "STREAMING")).toBe(false);
+    expect(new Set(verification.map((item) => item.conversationTurnId))).toEqual(
+      new Set([TURN_ID]),
+    );
   });
 
   it("projects a bounded verification failure reason without exposing raw error data", async () => {
@@ -317,17 +332,322 @@ describe("SessionPresentationService", () => {
     });
 
     const response = await service.getPresentation(SESSION_ID, {});
-    const summary = response.items.find((item) => item.kind === "RUN_SUMMARY");
+    const summary = response.turns[0]!.items.find((item) => item.kind === "RUN_SUMMARY");
 
     expect(summary).toMatchObject({
       kind: "RUN_SUMMARY",
       runStatus: "FAILED",
       text: "校验未能完成，任务已失败。",
     });
+    expect(response.turns[0]).toMatchObject({ conversationTurnId: turns.forRun(failedRun.id) });
     expect(JSON.stringify(response)).not.toContain("native exception");
     expect(JSON.stringify(response)).not.toContain("credential-value");
     expect(JSON.stringify(response)).not.toContain("unbounded command output");
     expect(JSON.stringify(response)).not.toContain("C:\\\\host");
+  });
+
+  it("keeps colliding local message sequences, summaries and event watermarks inside their Run Turns", async () => {
+    const runOneId = createRunId();
+    const runTwoId = createRunId();
+    const runThreeId = createRunId();
+    const runOne = AgentRunSchema.parse({
+      ...RUN,
+      id: runOneId,
+      status: "COMPLETED",
+      createdAt: NOW,
+      finishedAt: NOW + 20,
+    });
+    const runTwo = AgentRunSchema.parse({
+      ...RUN,
+      id: runTwoId,
+      status: "FAILED",
+      createdAt: NOW + 30,
+      finishedAt: NOW + 50,
+    });
+    const runThree = AgentRunSchema.parse({
+      ...RUN,
+      id: runThreeId,
+      status: "COMPLETED",
+      createdAt: NOW + 60,
+      finishedAt: NOW + 80,
+    });
+    const runOneTurnId = turns.forRun(runOneId);
+    const runTwoTurnId = turns.forRun(runTwoId);
+    const runThreeTurnId = turns.forRun(runThreeId);
+    const runOneUser = factory.createUser({
+      runId: runOneId,
+      sessionId: SESSION_ID,
+      conversationTurnId: runOneTurnId,
+      source: userMessageSource("GOAL"),
+      content: [agentTextPart("first task")],
+    });
+    const runOneCommentary = factory.createAssistant({
+      runId: runOneId,
+      sessionId: SESSION_ID,
+      conversationTurnId: runOneTurnId,
+      sourceStepId: STEP_ID,
+      source: modelMessageSource("run-one-commentary"),
+      phase: "COMMENTARY",
+      content: [agentAssistantTextPart("first task is starting")],
+      model: {
+        kind: "MODEL_TURN",
+        callId: "run-one-commentary",
+        model: { provider: "fixture", model: "fixture-model" },
+        finishReason: "TOOL_CALLS",
+      },
+    });
+    const runOneFinal = factory.createAssistant({
+      runId: runOneId,
+      sessionId: SESSION_ID,
+      conversationTurnId: runOneTurnId,
+      sourceStepId: STEP_ID,
+      source: modelMessageSource("run-one-final"),
+      phase: "FINAL_ANSWER",
+      content: [agentAssistantTextPart("first task complete")],
+      model: {
+        kind: "MODEL_TURN",
+        callId: "run-one-final",
+        model: { provider: "fixture", model: "fixture-model" },
+        finishReason: "STOP",
+      },
+    });
+    const runTwoUser = factory.createUser({
+      runId: runTwoId,
+      sessionId: SESSION_ID,
+      conversationTurnId: runTwoTurnId,
+      source: userMessageSource("GOAL"),
+      content: [agentTextPart("second task")],
+    });
+    const runTwoCommentary = factory.createAssistant({
+      runId: runTwoId,
+      sessionId: SESSION_ID,
+      conversationTurnId: runTwoTurnId,
+      sourceStepId: STEP_ID,
+      source: modelMessageSource("run-two-commentary"),
+      phase: "COMMENTARY",
+      content: [agentAssistantTextPart("second task is starting")],
+      model: {
+        kind: "MODEL_TURN",
+        callId: "run-two-commentary",
+        model: { provider: "fixture", model: "fixture-model" },
+        finishReason: "TOOL_CALLS",
+      },
+    });
+    const runTwoFinal = factory.createAssistant({
+      runId: runTwoId,
+      sessionId: SESSION_ID,
+      conversationTurnId: runTwoTurnId,
+      sourceStepId: STEP_ID,
+      source: modelMessageSource("run-two-final"),
+      phase: "FINAL_ANSWER",
+      content: [agentAssistantTextPart("second task failed")],
+      model: {
+        kind: "MODEL_TURN",
+        callId: "run-two-final",
+        model: { provider: "fixture", model: "fixture-model" },
+        finishReason: "STOP",
+      },
+    });
+    const runThreeUser = factory.createUser({
+      runId: runThreeId,
+      sessionId: SESSION_ID,
+      conversationTurnId: runThreeTurnId,
+      source: userMessageSource("GOAL"),
+      content: [agentTextPart("third task")],
+    });
+    const runThreeFinal = factory.createAssistant({
+      runId: runThreeId,
+      sessionId: SESSION_ID,
+      conversationTurnId: runThreeTurnId,
+      sourceStepId: STEP_ID,
+      source: modelMessageSource("run-three-final"),
+      phase: "FINAL_ANSWER",
+      content: [agentAssistantTextPart("third task complete")],
+      model: {
+        kind: "MODEL_TURN",
+        callId: "run-three-final",
+        model: { provider: "fixture", model: "fixture-model" },
+        finishReason: "STOP",
+      },
+    });
+    const runOneTool = ToolInvocationSchema.parse({
+      id: createToolInvocationId(),
+      runId: runOneId,
+      stepId: STEP_ID,
+      externalCallId: "run-one-call",
+      toolName: "read_file",
+      args: { path: "src/one.ts" },
+      riskLevel: "LOW",
+      status: "COMPLETED",
+      createdAt: NOW + 4,
+      finishedAt: NOW + 5,
+    });
+    const runTwoTool = ToolInvocationSchema.parse({
+      id: createToolInvocationId(),
+      runId: runTwoId,
+      stepId: STEP_ID,
+      externalCallId: "run-two-call",
+      toolName: "read_file",
+      args: { path: "src/two.ts" },
+      riskLevel: "LOW",
+      status: "COMPLETED",
+      createdAt: NOW + 34,
+      finishedAt: NOW + 35,
+    });
+    const service = new SessionPresentationService({
+      sessions: { get: async () => ({ id: SESSION_ID }) as never },
+      // Deliberately return reverse order; Session order comes from Run createdAt + stable id.
+      runs: { listBySession: async () => [runThree, runTwo, runOne] },
+      messageRecords: {
+        listBySession: async () => [
+          record(runThreeUser, 1),
+          record(runThreeFinal, 5),
+          record(runTwoUser, 1),
+          record(runTwoCommentary, 2),
+          record(runTwoFinal, 3),
+          record(runOneUser, 1),
+          record(runOneCommentary, 2),
+          record(runOneFinal, 8),
+        ],
+      },
+      codecs,
+      toolInvocations: {
+        listByRun: async (runId) =>
+          runId === runOneId ? [runOneTool] : runId === runTwoId ? [runTwoTool] : [],
+      },
+      observations: { listByRun: async () => [] },
+      eventReader: {
+        latestSequence: async (runId) => (runId === runOneId ? 85 : runId === runTwoId ? 7 : 4),
+        replay: async () => [],
+      },
+      toolPresentation: {
+        presentInvocation: () => ({ title: "使用工具", summary: "工具调用" }),
+        presentResult: () => ({ title: "使用工具", summary: "工具结果" }),
+        presentShellCommand: () => "执行命令",
+      },
+    });
+
+    const response = await service.getPresentation(SESSION_ID, {});
+
+    expect(response.capabilityVersion).toBe(3);
+    expect(response).not.toHaveProperty("highWatermark");
+    expect(response.turns.map((turn) => turn.runId)).toEqual([runOneId, runTwoId, runThreeId]);
+    expect(response.turns.map((turn) => turn.highWatermark)).toEqual([85, 7, 4]);
+    expect(response.turns[0]!.items.map((item) => item.kind)).toEqual([
+      "USER",
+      "ASSISTANT",
+      "TOOL",
+      "ASSISTANT",
+      "RUN_SUMMARY",
+    ]);
+    expect(response.turns[1]!.items.map((item) => item.kind)).toEqual([
+      "USER",
+      "ASSISTANT",
+      "TOOL",
+      "ASSISTANT",
+      "RUN_SUMMARY",
+    ]);
+    expect(response.turns[2]!.items.map((item) => item.kind)).toEqual([
+      "USER",
+      "ASSISTANT",
+      "RUN_SUMMARY",
+    ]);
+    expect(response.turns[0]!.items.every((item) => item.runId === runOneId)).toBe(true);
+    expect(response.turns[1]!.items.every((item) => item.runId === runTwoId)).toBe(true);
+    expect(response.turns[2]!.items.every((item) => item.runId === runThreeId)).toBe(true);
+    expect(response.turns[0]!.items.every((item) => item.conversationTurnId === runOneTurnId)).toBe(
+      true,
+    );
+    expect(response.turns[1]!.items.every((item) => item.conversationTurnId === runTwoTurnId)).toBe(
+      true,
+    );
+    expect(
+      response.turns[2]!.items.every((item) => item.conversationTurnId === runThreeTurnId),
+    ).toBe(true);
+    expect(response.turns[1]!.items.at(-1)).toMatchObject({
+      kind: "RUN_SUMMARY",
+      runStatus: "FAILED",
+      conversationTurnId: runTwoTurnId,
+    });
+  });
+
+  it("paginates only at Turn boundaries and includes empty-message Runs", async () => {
+    const emptyRunId = createRunId();
+    const followingRunId = createRunId();
+    const emptyRun = AgentRunSchema.parse({
+      ...RUN,
+      id: emptyRunId,
+      status: "RUNNING",
+      createdAt: NOW,
+      finishedAt: undefined,
+    });
+    const followingRun = AgentRunSchema.parse({
+      ...RUN,
+      id: followingRunId,
+      status: "RUNNING",
+      createdAt: NOW + 1,
+      finishedAt: undefined,
+    });
+    let commentaryTime = Number(NOW);
+    const commentaryFactory = createAgentMessageFactory({
+      ids: createAgentMessageIdFactory(),
+      now: () => createTimestampMs(++commentaryTime),
+      turns,
+    });
+    const manyComments = Array.from({ length: 20 }, (_, index) => {
+      const callId = `commentary-${index + 1}`;
+      return commentaryFactory.createAssistant({
+        runId: followingRunId,
+        sessionId: SESSION_ID,
+        conversationTurnId: turns.forRun(followingRunId),
+        sourceStepId: STEP_ID,
+        source: modelMessageSource(callId),
+        phase: "COMMENTARY",
+        content: [agentAssistantTextPart(`commentary ${index + 1}`)],
+        model: {
+          kind: "MODEL_TURN",
+          callId,
+          model: { provider: "fixture", model: "fixture-model" },
+          finishReason: "TOOL_CALLS",
+        },
+      });
+    });
+    const service = new SessionPresentationService({
+      sessions: { get: async () => ({ id: SESSION_ID }) as never },
+      runs: { listBySession: async () => [followingRun, emptyRun] },
+      messageRecords: {
+        listBySession: async () => manyComments.map((message, index) => record(message, index + 1)),
+      },
+      codecs,
+      toolInvocations: { listByRun: async () => [] },
+      observations: { listByRun: async () => [] },
+      eventReader: { latestSequence: async () => 0, replay: async () => [] },
+      toolPresentation: {
+        presentInvocation: () => ({ title: "使用工具", summary: "工具调用" }),
+        presentResult: () => ({ title: "使用工具", summary: "工具结果" }),
+        presentShellCommand: () => "执行命令",
+      },
+    });
+
+    const firstPage = await service.getPresentation(SESSION_ID, { limit: 1 });
+    expect(firstPage.turns).toHaveLength(1);
+    expect(firstPage.turns[0]).toMatchObject({
+      runId: emptyRunId,
+      conversationTurnId: turns.forRun(emptyRunId),
+      items: [],
+    });
+    expect(firstPage.nextCursor).toBe(emptyRunId);
+
+    const secondPage = await service.getPresentation(SESSION_ID, {
+      limit: 1,
+      cursor: firstPage.nextCursor,
+    });
+    expect(secondPage.turns).toHaveLength(1);
+    expect(secondPage.turns[0]!.items).toHaveLength(20);
+    expect(secondPage.turns[0]!.items.map((item) => item.ordinal)).toEqual(
+      Array.from({ length: 20 }, (_, index) => index),
+    );
+    expect(secondPage.nextCursor).toBeUndefined();
   });
 });
 

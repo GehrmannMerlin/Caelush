@@ -7,7 +7,10 @@ import {
 } from "@caelush/client";
 import { createRunId, createStepId, type SessionTurnPresentationResponse } from "@caelush/protocol";
 
-import { TurnPresentationFeed } from "../src/components/turn-presentation-feed.js";
+import {
+  flattenTurnsForLegacyRenderer,
+  TurnPresentationFeed,
+} from "../src/components/turn-presentation-feed.js";
 import { ReconnectBanner } from "../src/components/reconnect-banner.js";
 import { modelWaitMessage } from "../src/components/model-wait-presentation.js";
 
@@ -83,6 +86,85 @@ function presentation(): SessionTurnPresentationResponse {
 }
 
 describe("TurnPresentationFeed", () => {
+  it("adapts V3 Turns for the legacy renderer without changing their Run grouping order", () => {
+    const runOneId = createRunId();
+    const runTwoId = createRunId();
+    const response = {
+      capabilityVersion: 3,
+      turns: [
+        {
+          runId: runOneId,
+          conversationTurnId: "turn-one",
+          runStatus: "COMPLETED",
+          openedAt: 1,
+          closedAt: 2,
+          highWatermark: 85,
+          items: [
+            {
+              id: "run-one-user",
+              runId: runOneId,
+              conversationTurnId: "turn-one",
+              ordinal: 0,
+              status: "COMPLETED",
+              createdAt: 1,
+              kind: "USER",
+              text: "first",
+            },
+            {
+              id: "run-one-final",
+              runId: runOneId,
+              conversationTurnId: "turn-one",
+              ordinal: 1,
+              status: "COMPLETED",
+              createdAt: 2,
+              kind: "ASSISTANT",
+              phase: "FINAL_ANSWER",
+              text: "first done",
+            },
+          ],
+        },
+        {
+          runId: runTwoId,
+          conversationTurnId: "turn-two",
+          runStatus: "COMPLETED",
+          openedAt: 3,
+          closedAt: 4,
+          highWatermark: 7,
+          items: [
+            {
+              id: "run-two-user",
+              runId: runTwoId,
+              conversationTurnId: "turn-two",
+              ordinal: 0,
+              status: "COMPLETED",
+              createdAt: 3,
+              kind: "USER",
+              text: "second",
+            },
+            {
+              id: "run-two-final",
+              runId: runTwoId,
+              conversationTurnId: "turn-two",
+              ordinal: 1,
+              status: "COMPLETED",
+              createdAt: 4,
+              kind: "ASSISTANT",
+              phase: "FINAL_ANSWER",
+              text: "second done",
+            },
+          ],
+        },
+      ],
+    } as SessionTurnPresentationResponse;
+
+    expect(flattenTurnsForLegacyRenderer(response).map((item) => item.id)).toEqual([
+      "run-one-user",
+      "run-one-final",
+      "run-two-user",
+      "run-two-final",
+    ]);
+  });
+
   it("shows animated thinking text while an LLM is active without transient output", () => {
     const timeline = {
       ...createInitialTimelineState(runId),

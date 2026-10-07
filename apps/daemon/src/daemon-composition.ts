@@ -1304,13 +1304,19 @@ export interface PromptCacheUsageSample {
 /** Safe, irreversible Prompt Surface and current recent-tail fingerprints. */
 export function projectPromptCacheSegments(input: {
   readonly epoch: {
+    readonly runId: RunId;
     readonly modelRef: { readonly provider: string; readonly model: string };
     readonly stableHeadFingerprint: string;
     readonly toolSchemaFingerprint: string;
     readonly cacheSettingsFingerprint: string;
     readonly snapshots: readonly {
       readonly ordinal: number;
-      readonly anchorMessageSequence: number;
+      readonly anchor: {
+        readonly messageId: string;
+        readonly runId: RunId;
+        readonly conversationTurnId: string;
+        readonly sequence: number;
+      };
       readonly sourceStepSequence: number;
       readonly content: string;
       readonly contentHash: string;
@@ -1324,8 +1330,13 @@ export function projectPromptCacheSegments(input: {
   readonly records: readonly AgentMessageRecord[];
   readonly recentTailTokens: number;
 }): NonNullable<PromptCacheUsage["surfaceSegments"]> {
-  const lastAnchor = input.epoch.snapshots.at(-1)?.anchorMessageSequence ?? 0;
-  const tailRecords = input.records.filter((record) => record.sequence > lastAnchor).slice(-256);
+  const scopedSnapshots = input.epoch.snapshots.filter(
+    (snapshot) => snapshot.anchor.runId === input.epoch.runId,
+  );
+  const lastAnchor = scopedSnapshots.at(-1)?.anchor.sequence ?? 0;
+  const tailRecords = input.records
+    .filter((record) => record.runId === input.epoch.runId && record.sequence > lastAnchor)
+    .slice(-256);
   const tailProjection = tailRecords.map((record) => {
     const promptData = safePromptFingerprintValue(record.data);
     const encoded = canonicalJson(promptData);
@@ -1338,7 +1349,12 @@ export function projectPromptCacheSegments(input: {
   });
   const snapshotProjection = input.epoch.snapshots.map((snapshot) => ({
     ordinal: snapshot.ordinal,
-    anchorMessageSequence: snapshot.anchorMessageSequence,
+    anchor: {
+      messageId: snapshot.anchor.messageId,
+      runId: snapshot.anchor.runId,
+      conversationTurnId: snapshot.anchor.conversationTurnId,
+      sequence: snapshot.anchor.sequence,
+    },
     sourceStepSequence: snapshot.sourceStepSequence,
     contentHash: snapshot.contentHash,
     bytes: Buffer.byteLength(snapshot.content, "utf8"),

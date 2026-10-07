@@ -252,20 +252,24 @@ export type { ContextCompactionCommitPort } from "./ports/context-compaction-com
 export type { RehydratedContextState as LegacyRehydratedContextState } from "./contracts/rehydrated-context-state.js";
 
 export {
+  assertPromptSurfaceAnchor,
   assertPromptSurfaceEpoch,
   assertPromptSurfaceEpochWithSnapshots,
   assertPromptSurfaceSnapshot,
   assertPromptSurfaceSnapshotInput,
+  createPromptSurfaceAnchor,
   createPromptSurfaceEpoch,
   createPromptSurfaceEpochId,
   createPromptSurfaceFingerprint,
   createPromptSurfaceSnapshot,
   hashPromptSurfaceContent,
+  PROMPT_SURFACE_ANCHOR_VERSION,
   PROMPT_SURFACE_LIMITS,
   PROMPT_SURFACE_RESET_REASONS,
   PromptSurfaceIntegrityError,
 } from "./surface/prompt-surface.js";
 export type {
+  PromptSurfaceAnchor,
   PromptSurfaceEpoch,
   PromptSurfaceEpochId,
   PromptSurfaceEpochInput,
@@ -276,6 +280,12 @@ export type {
   PromptSurfaceSnapshot,
   PromptSurfaceSnapshotInput,
 } from "./surface/prompt-surface.js";
+export {
+  comparePromptSurfaceAnchorOrder,
+  completePromptSurfaceAnchors,
+  latestCompletePromptSurfaceAnchor,
+  promptSurfaceAnchorsAreAvailable,
+} from "./surface/prompt-surface-anchors.js";
 export { projectPromptSurface } from "./surface/prompt-surface-projector.js";
 export type { PromptSurfaceModelMessage } from "./surface/prompt-surface-projector.js";
 export type {
@@ -294,7 +304,10 @@ export type {
   ContextSectionAuthority,
 } from "./document/context-document.js";
 
-export { createContextHistoryIndexer } from "./history/semantic-history-unit.js";
+export {
+  createContextHistoryIndexer,
+  orderContextHistoryUnits,
+} from "./history/semantic-history-unit.js";
 export type {
   ContextHistoryIndex,
   ContextHistoryIndexer,

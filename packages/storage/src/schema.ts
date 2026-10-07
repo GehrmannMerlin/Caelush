@@ -378,7 +378,10 @@ export const promptSurfaceSnapshots = sqliteTable(
     runId: text("run_id").notNull(),
     epochId: text("epoch_id").notNull(),
     ordinal: integer("ordinal").notNull(),
-    anchorMessageSequence: integer("anchor_message_sequence").notNull(),
+    anchorSequence: integer("anchor_message_sequence").notNull(),
+    anchorMessageId: text("anchor_message_id"),
+    anchorRunId: text("anchor_run_id"),
+    anchorConversationTurnId: text("anchor_conversation_turn_id"),
     sourceStepSequence: integer("source_step_sequence").notNull(),
     kind: text("kind").notNull(),
     contentHash: text("content_hash").notNull(),
@@ -389,10 +392,7 @@ export const promptSurfaceSnapshots = sqliteTable(
   (table) => [
     primaryKey({ columns: [table.runId, table.epochId, table.ordinal] }),
     check("prompt_surface_snapshots_ordinal_check", sql`${table.ordinal} >= 1`),
-    check(
-      "prompt_surface_snapshots_anchor_sequence_check",
-      sql`${table.anchorMessageSequence} >= 1`,
-    ),
+    check("prompt_surface_snapshots_anchor_sequence_check", sql`${table.anchorSequence} >= 1`),
     check(
       "prompt_surface_snapshots_source_step_sequence_check",
       sql`${table.sourceStepSequence} >= 1`,

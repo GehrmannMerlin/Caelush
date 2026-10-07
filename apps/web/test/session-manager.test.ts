@@ -5,6 +5,7 @@ import {
   createRunId,
   createSessionId,
   createStepId,
+  createTimestampMs,
   createVerificationPlanId,
   createWorkspaceId,
   type PublicRunEvent,
@@ -16,6 +17,7 @@ import {
   type SessionTranscriptResponse,
   type SessionTurnPresentationResponse,
   type SessionTurnPresentationResponseV2,
+  type SessionTurnPresentationResponseV3,
   type TranscriptEntry,
   type WorkspaceSessionSummary,
   type WorkspaceRef,
@@ -383,6 +385,106 @@ describe("WebSessionManager", () => {
     manager.dispose();
   });
 
+  it("keeps v3 pages as whole Run Turns in canonical order", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const runOne = makeCompletedRun(makeRun({ sessionId: session.id, createdAt: 1 }));
+    const runTwo = makeCompletedRun(makeRun({ sessionId: session.id, createdAt: 2 }));
+    const turnOne = {
+      runId: runOne.id,
+      conversationTurnId: "turn-one-canonical",
+      runStatus: "COMPLETED" as const,
+      openedAt: runOne.createdAt,
+      closedAt: runOne.finishedAt,
+      highWatermark: 85,
+      items: [
+        {
+          id: "run-one-user",
+          runId: runOne.id,
+          conversationTurnId: "turn-one-canonical",
+          ordinal: 0,
+          status: "COMPLETED" as const,
+          createdAt: runOne.createdAt,
+          kind: "USER" as const,
+          text: "first request",
+        },
+        {
+          id: "run-one-final",
+          runId: runOne.id,
+          conversationTurnId: "turn-one-canonical",
+          ordinal: 1,
+          status: "COMPLETED" as const,
+          createdAt: runOne.finishedAt ?? runOne.createdAt,
+          kind: "ASSISTANT" as const,
+          phase: "FINAL_ANSWER" as const,
+          text: "first done",
+        },
+      ],
+    };
+    const turnTwo = {
+      runId: runTwo.id,
+      conversationTurnId: "turn-two-canonical",
+      runStatus: "COMPLETED" as const,
+      openedAt: runTwo.createdAt,
+      closedAt: runTwo.finishedAt,
+      highWatermark: 7,
+      items: [
+        {
+          id: "run-two-user",
+          runId: runTwo.id,
+          conversationTurnId: "turn-two-canonical",
+          ordinal: 0,
+          status: "COMPLETED" as const,
+          createdAt: runTwo.createdAt,
+          kind: "USER" as const,
+          text: "second request",
+        },
+        {
+          id: "run-two-final",
+          runId: runTwo.id,
+          conversationTurnId: "turn-two-canonical",
+          ordinal: 1,
+          status: "COMPLETED" as const,
+          createdAt: runTwo.finishedAt ?? runTwo.createdAt,
+          kind: "ASSISTANT" as const,
+          phase: "FINAL_ANSWER" as const,
+          text: "second done",
+        },
+      ],
+    };
+    const client = makeClient({
+      sessions: [session],
+      latestRuns: new Map([[session.id, [runOne, runTwo]]]),
+    });
+    client.getSessionTurnPresentation.mockImplementation(async (_sessionId, query) =>
+      query?.cursor === runOne.id
+        ? { capabilityVersion: 3, turns: [turnTwo] }
+        : { capabilityVersion: 3, turns: [turnOne], nextCursor: runOne.id },
+    );
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      info: makeInfo({
+        capabilities: { ...makeInfo().capabilities, sessionTurnPresentation: true },
+      }),
+    });
+
+    await manager.loadSessions();
+    await expect(manager.selectSession(session.id)).resolves.toBe(true);
+
+    expect(client.getSessionTurnPresentation).toHaveBeenNthCalledWith(1, session.id, {
+      limit: 100,
+    });
+    expect(client.getSessionTurnPresentation).toHaveBeenNthCalledWith(2, session.id, {
+      limit: 100,
+      cursor: runOne.id,
+    });
+    expect(manager.getSnapshot().turnPresentation).toEqual({
+      capabilityVersion: 3,
+      turns: [turnOne, turnTwo],
+    } satisfies SessionTurnPresentationResponseV3);
+    manager.dispose();
+  });
+
   it("rejects mixed turn presentation page versions without publishing partial data", async () => {
     const session = makeSession({ defaultWorkspace: workspace });
     const run = makeCompletedRun(makeRun({ sessionId: session.id }));
@@ -568,10 +670,11 @@ describe("WebSessionManager", () => {
     manager.dispose();
   });
 
-  it("removes settled transient duplicates after the durable presentation catches up", async () => {
+  it("prunes live activity using the active Run's V3 event watermark", async () => {
     const session = makeSession({ defaultWorkspace: workspace });
     const pendingRun = makeRun({ sessionId: session.id, goal: "persist the execution feed" });
     const completedRun = makeCompletedRun(pendingRun);
+    const earlierRunId = createRunId();
     const terminalEvent = {
       type: "run.completed",
       eventId: "evt_00000000-0000-7000-8000-000000000012",
@@ -580,14 +683,36 @@ describe("WebSessionManager", () => {
       sessionId: pendingRun.sessionId,
       timestamp: 2,
       visibility: "USER_VISIBLE",
-      durability: { kind: "DURABLE", version: 1, sequence: 2 },
+      durability: { kind: "DURABLE", version: 1, sequence: 8 },
       payload: { result: { status: "COMPLETED" } },
     } as PublicRunEvent;
     const client = makeClient({
       createSessionResult: session,
       createRunResult: pendingRun,
       watchEvents: [reasoningEvent(pendingRun, "temporary live copy"), terminalEvent],
-      turnPresentationResponse: { capabilityVersion: 1, items: [], highWatermark: 2 },
+      turnPresentationResponse: {
+        capabilityVersion: 3,
+        turns: [
+          {
+            runId: earlierRunId,
+            conversationTurnId: "earlier-turn",
+            runStatus: "COMPLETED",
+            openedAt: createTimestampMs(Number(pendingRun.createdAt) - 1),
+            closedAt: createTimestampMs(Number(pendingRun.createdAt) - 1),
+            highWatermark: 85,
+            items: [],
+          },
+          {
+            runId: pendingRun.id,
+            conversationTurnId: "active-turn",
+            runStatus: "COMPLETED",
+            openedAt: pendingRun.createdAt,
+            closedAt: completedRun.finishedAt,
+            highWatermark: 7,
+            items: [],
+          },
+        ],
+      },
     });
     client.getRun.mockResolvedValue(completedRun);
     client.listRuns.mockResolvedValue({ items: [completedRun] });
@@ -606,8 +731,15 @@ describe("WebSessionManager", () => {
     await expect(manager.submitPrompt("persist the execution feed")).resolves.toBe(true);
     await waitFor(() => manager.getSnapshot().submission === "IDLE");
 
-    expect(manager.getSnapshot().turnPresentation?.highWatermark).toBe(2);
-    expect(manager.getSnapshot().liveActivity.activities).toEqual([]);
+    expect(manager.getSnapshot().turnPresentation).toMatchObject({
+      capabilityVersion: 3,
+      turns: [{ highWatermark: 85 }, { runId: pendingRun.id, highWatermark: 7 }],
+    });
+    expect(manager.getSnapshot().liveActivity.activities).toHaveLength(1);
+    expect(manager.getSnapshot().liveActivity.activities[0]).toMatchObject({
+      status: "COMPLETED",
+      settledAtSequence: 8,
+    });
     manager.dispose();
   });
 

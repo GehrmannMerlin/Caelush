@@ -10,6 +10,8 @@ import {
   type ContextSourceResult,
 } from "@caelush/agent";
 
+import { userMessage } from "../messages/fixtures.js";
+
 const RUN_ID = createRunId();
 const MODEL: ModelDescriptor = {
   ref: { provider: "test", model: "phase-7e" },
@@ -129,5 +131,30 @@ describe("Phase 7E receipt and fingerprint builder", () => {
     expect(sourceDrift.receipt.contextFingerprint).not.toBe(first.receipt.contextFingerprint);
     expect(toolDrift.receipt.contextFingerprint).not.toBe(first.receipt.contextFingerprint);
     expect(toolDrift.receipt.toolSchemaTokens).not.toBe(first.receipt.toolSchemaTokens);
+  });
+
+  it("binds the canonical ConversationTurn message order into the Context fingerprint", () => {
+    const firstRunMessage = userMessage({
+      runId: "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9a",
+      sequence: 1,
+      text: "first Run",
+    });
+    const secondRunMessage = userMessage({
+      runId: "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9b",
+      sequence: 1,
+      text: "second Run",
+    });
+    const facts = buildFacts();
+    const builder = createContextReceiptBuilder({ now: () => 1234 as never });
+    const first = builder.build({
+      ...facts,
+      conversationMessages: [firstRunMessage, secondRunMessage],
+    });
+    const reordered = builder.build({
+      ...facts,
+      conversationMessages: [secondRunMessage, firstRunMessage],
+    });
+
+    expect(reordered.receipt.contextFingerprint).not.toBe(first.receipt.contextFingerprint);
   });
 });

@@ -112,6 +112,7 @@ describe("Stage 8 long-run audit local fixtures", () => {
     const rawPromptText = "private checkpoint content that must not be projected";
     const result = projectPromptCacheSegments({
       epoch: {
+        runId: "run_stage8" as never,
         modelRef: { provider: "deepseek", model: "deepseek-flash" },
         stableHeadFingerprint: "a".repeat(64),
         toolSchemaFingerprint: "b".repeat(64),
@@ -119,7 +120,12 @@ describe("Stage 8 long-run audit local fixtures", () => {
         snapshots: [
           {
             ordinal: 1,
-            anchorMessageSequence: 2,
+            anchor: {
+              messageId: "message-stage8" as never,
+              runId: "run_stage8" as never,
+              conversationTurnId: "turn-stage8",
+              sequence: 2,
+            },
             content: rawPromptText,
             contentHash: "d".repeat(64),
             sourceStepSequence: 1,
@@ -132,8 +138,24 @@ describe("Stage 8 long-run audit local fixtures", () => {
         snapshotTokens: 100,
       },
       records: [
-        { sequence: 1, messageType: "USER", data: { content: [{ text: "prior" }] } },
-        { sequence: 3, messageType: "ASSISTANT", data: { content: [{ text: "tail-only" }] } },
+        {
+          runId: "run_stage8" as never,
+          sequence: 1,
+          messageType: "USER",
+          data: { content: [{ text: "prior" }] },
+        },
+        {
+          runId: "run_stage8" as never,
+          sequence: 3,
+          messageType: "ASSISTANT",
+          data: { content: [{ text: "tail-only" }] },
+        },
+        {
+          runId: "run_other" as never,
+          sequence: 100,
+          messageType: "ASSISTANT",
+          data: { content: [{ text: "other-run-tail" }] },
+        },
       ],
       recentTailTokens: 75,
     });
@@ -150,6 +172,7 @@ describe("Stage 8 long-run audit local fixtures", () => {
     });
     expect(JSON.stringify(result)).not.toContain(rawPromptText);
     expect(JSON.stringify(result)).not.toContain("tail-only");
+    expect(JSON.stringify(result)).not.toContain("other-run-tail");
     expect(result.checkpointFingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(result.recentTailFingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(result.roleSizeVectorFingerprint).toMatch(/^[a-f0-9]{64}$/);

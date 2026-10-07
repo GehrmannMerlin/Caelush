@@ -53,6 +53,65 @@ export interface ContextHistoryIndexer {
 }
 
 /**
+ * Order semantic views without comparing Run-local sequences across Turns.
+ *
+ * The first occurrence of each `(runId, conversationTurnId)` group is already in the
+ * Snapshot's canonical Session order. Inside that group, local sequence orders a Turn's
+ * conversation and Tool protocol views; equal positions put the full Turn view first.
+ */
+export function orderContextHistoryUnits(
+  units: readonly ContextHistoryUnit[],
+): readonly ContextHistoryUnit[] {
+  const byTurn = new Map<string, ContextHistoryUnit[]>();
+  const messageIdentityById = new Map<string, string>();
+  const messageIdByScopedSequence = new Map<string, string>();
+  const emptyUnits: ContextHistoryUnit[] = [];
+  for (const unit of units) {
+    const first = unit.messages[0];
+    if (first === undefined) {
+      emptyUnits.push(unit);
+      continue;
+    }
+    const scope = messageTurnScope(first.runId, first.conversationTurnId);
+    let previousSequence = 0;
+    for (const message of unit.messages) {
+      if (messageTurnScope(message.runId, message.conversationTurnId) !== scope) {
+        throw new TypeError("A Context history unit cannot span ConversationTurns.");
+      }
+      if (message.sequence <= previousSequence) {
+        throw new TypeError(
+          "Context history messages must be ordered within their ConversationTurn.",
+        );
+      }
+      previousSequence = message.sequence;
+
+      const messageId = String(message.messageId);
+      const identity = JSON.stringify([scope, message.sequence]);
+      const priorIdentity = messageIdentityById.get(messageId);
+      const priorMessageId = messageIdByScopedSequence.get(identity);
+      if (priorIdentity !== undefined && priorIdentity !== identity) {
+        throw new TypeError("Context message identity has conflicting ConversationTurn scope.");
+      }
+      if (priorMessageId !== undefined && priorMessageId !== messageId) {
+        throw new TypeError("Context message sequence is ambiguous within its ConversationTurn.");
+      }
+      messageIdentityById.set(messageId, identity);
+      messageIdByScopedSequence.set(identity, messageId);
+    }
+    const scopedUnits = byTurn.get(scope) ?? [];
+    scopedUnits.push(unit);
+    byTurn.set(scope, scopedUnits);
+  }
+
+  const ordered: ContextHistoryUnit[] = [];
+  for (const scopedUnits of byTurn.values()) {
+    ordered.push(...scopedUnits.sort(compareUnitsWithinTurn));
+  }
+  ordered.push(...emptyUnits);
+  return Object.freeze(ordered);
+}
+
+/**
  * Build the Context-level semantic history view from the Message Domain snapshot.
  *
  * Conversation turns and Tool protocol units intentionally coexist in the index: a turn is
@@ -83,12 +142,13 @@ function indexConversation(
   for (const turn of conversation.turns) {
     const visible = turn.messages.filter((stored) => stored.message.audience.model);
     for (const stored of visible) allVisible.set(stored.message.id, stored);
+    // Snapshot order already is Session order. Keep each Turn together, and let the
+    // Tool protocol views follow their assistant message order inside that Turn.
     if (visible.length > 0) units.push(createConversationTurnUnit(turn, visible, model, estimator));
     units.push(...createToolProtocolUnits(turn, visible, model, estimator));
   }
 
-  const ordered = units.sort(compareUnits);
-  const frozenUnits = ordered.map(freezeUnit);
+  const frozenUnits = orderContextHistoryUnits(units).map(freezeUnit);
   const openUnits = frozenUnits.filter((unit) => unit.status === "OPEN");
   const closedUnits = frozenUnits.filter((unit) => unit.status === "CLOSED");
   const estimatedTokens = [...allVisible.values()].reduce(
@@ -153,10 +213,10 @@ function createToolProtocolUnits(
     const resultMessageIds = new Set(
       [...results.values()].map((candidate) => candidate.message.id),
     );
-    const members = [
-      stored,
-      ...turn.messages.filter((candidate) => resultMessageIds.has(candidate.message.id)),
-    ].sort((left, right) => left.sequence - right.sequence);
+    const members = turn.messages.filter(
+      (candidate) =>
+        candidate.message.id === stored.message.id || resultMessageIds.has(candidate.message.id),
+    );
     const resultIds = calls
       .map((call) => results.get(call.toolCallId)?.message.id)
       .filter((id): id is AgentMessageId => id !== undefined);
@@ -205,7 +265,7 @@ function toMessageRef(
   });
 }
 
-function compareUnits(left: ContextHistoryUnit, right: ContextHistoryUnit): number {
+function compareUnitsWithinTurn(left: ContextHistoryUnit, right: ContextHistoryUnit): number {
   const leftSequence = left.messages[0]?.sequence ?? Number.MAX_SAFE_INTEGER;
   const rightSequence = right.messages[0]?.sequence ?? Number.MAX_SAFE_INTEGER;
   return (
@@ -217,6 +277,10 @@ function compareUnits(left: ContextHistoryUnit, right: ContextHistoryUnit): numb
 
 function unitKindRank(kind: ContextHistoryUnitKind): number {
   return kind === "CONVERSATION_TURN" ? 0 : 1;
+}
+
+function messageTurnScope(runId: string, conversationTurnId: string): string {
+  return JSON.stringify([runId, conversationTurnId]);
 }
 
 function compareStrings(left: string, right: string): number {

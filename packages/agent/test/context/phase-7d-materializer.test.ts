@@ -116,7 +116,12 @@ function prepared(): PreparedAgentContext {
     runId,
     epochId: epoch.epochId,
     ordinal: 1,
-    anchorMessageSequence: 1,
+    anchor: {
+      messageId: historicalUser.message.id,
+      runId: historicalUser.message.runId,
+      conversationTurnId: historicalUser.message.conversationTurnId,
+      sequence: historicalUser.sequence,
+    },
     sourceStepSequence: 1,
     kind: "RUNTIME_CONTEXT_SNAPSHOT",
     content: "<runtime_context_snapshot>\n[REDACTED:HOST_PATH]\n</runtime_context_snapshot>",
@@ -238,6 +243,59 @@ describe("Phase 7D ContextMaterializer", () => {
     await expect(
       materializer.materialize({ prepared: prepared(), model: MODEL, signal: controller.signal }),
     ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("preserves three ConversationTurns when Run-local sequences collide", async () => {
+    const runs = [
+      "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9a",
+      "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9b",
+      "run_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9c",
+    ];
+    const messages = [
+      ...Array.from({ length: 8 }, (_, index) =>
+        userMessage({
+          runId: runs[0],
+          sequence: index + 1,
+          text: `run1-${String(index + 1)}`,
+        }),
+      ),
+      ...Array.from({ length: 3 }, (_, index) =>
+        userMessage({
+          runId: runs[1],
+          sequence: index + 1,
+          text: `run2-${String(index + 1)}`,
+        }),
+      ),
+      ...Array.from({ length: 6 }, (_, index) =>
+        userMessage({
+          runId: runs[2],
+          sequence: index + 1,
+          text: `run3-${String(index + 1)}`,
+        }),
+      ),
+    ];
+    const { promptSurface: _promptSurface, ...basePrepared } = prepared();
+    void _promptSurface;
+    const multiTurnPrepared: PreparedAgentContext = {
+      ...basePrepared,
+      conversationMessages: messages,
+    };
+    const materializer = createContextMaterializer({
+      projectors: createStandardAgentMessageProjectorRegistry(),
+      tokenEstimator: createUtf8HeuristicTokenEstimator(),
+    });
+
+    const projected = await materializer.materialize({
+      prepared: multiTurnPrepared,
+      model: MODEL,
+      signal: new AbortController().signal,
+    });
+
+    expect(projected.slice(1).map((message) => message.content)).toEqual([
+      ...Array.from({ length: 8 }, (_, index) => `run1-${String(index + 1)}`),
+      ...Array.from({ length: 3 }, (_, index) => `run2-${String(index + 1)}`),
+      ...Array.from({ length: 6 }, (_, index) => `run3-${String(index + 1)}`),
+    ]);
   });
 
   it("reprojects only the recovery tail while preserving normal historical projection", async () => {

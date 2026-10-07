@@ -22,7 +22,7 @@ export function assertContextFingerprint(value: unknown): asserts value is Conte
 }
 
 export const CONTEXT_DOCUMENT_RENDERER_VERSION = "1";
-export const CONTEXT_MATERIALIZER_VERSION = "1";
+export const CONTEXT_MATERIALIZER_VERSION = "2";
 
 export interface ContextFingerprintInput {
   readonly identity: AgentExecutionIdentity;
@@ -58,12 +58,13 @@ export function buildContextFingerprint(input: ContextFingerprintInput): Context
         type: item.type,
       }))
       .sort((left, right) => compareStrings(left.id, right.id)),
-    messages: input.conversationMessages
-      .map((stored) => ({
-        messageId: stored.message.id,
-        modelProjectionVersion: stored.modelProjectionVersion ?? null,
-      }))
-      .sort((left, right) => compareStrings(left.messageId, right.messageId)),
+    // Array order is the Message Domain's canonical Session order: ConversationTurns first,
+    // then Run-local message order. Sorting by message id would make a reordered model prompt
+    // share a fingerprint with a different request.
+    messages: input.conversationMessages.map((stored) => ({
+      messageId: stored.message.id,
+      modelProjectionVersion: stored.modelProjectionVersion ?? null,
+    })),
     tools: [...input.tools]
       .sort((left, right) => compareStrings(left.name, right.name))
       .map((tool) => tool),
