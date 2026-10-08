@@ -63,6 +63,15 @@ const basePromptCache: PromptCacheUsage = {
       hitTokens: 400,
       missTokens: 100,
       writeTokens: 20,
+      reasoningTokens: 0,
+      usageFieldCoverage: {
+        inputTokens: 1,
+        outputTokens: 1,
+        hitTokens: 1,
+        missTokens: 1,
+        writeTokens: 1,
+        reasoningTokens: 0,
+      },
       unknownUsageCount: 0,
     },
     {
@@ -73,9 +82,72 @@ const basePromptCache: PromptCacheUsage = {
       hitTokens: 0,
       missTokens: 0,
       writeTokens: 0,
+      reasoningTokens: 0,
+      usageFieldCoverage: {
+        inputTokens: 1,
+        outputTokens: 1,
+        hitTokens: 0,
+        missTokens: 0,
+        writeTokens: 0,
+        reasoningTokens: 0,
+      },
       unknownUsageCount: 1,
     },
   ],
+  metricsV2: {
+    fullRun: {
+      mainAgent: { requestCount: 2, hitTokens: 400, accountedTokens: 500, hitRate: 0.8 },
+      allPurposes: { requestCount: 2, hitTokens: 400, accountedTokens: 500, hitRate: 0.8 },
+    },
+    warm: {
+      mainAgent: { requestCount: 1, hitTokens: 400, accountedTokens: 500, hitRate: 0.8 },
+      allPurposes: { requestCount: 1, hitTokens: 400, accountedTokens: 500, hitRate: 0.8 },
+    },
+    rolling: {
+      windowSize: 10,
+      mainAgent: { requestCount: 1, hitTokens: 400, accountedTokens: 500, hitRate: 0.8 },
+      allPurposes: { requestCount: 1, hitTokens: 400, accountedTokens: 500, hitRate: 0.8 },
+    },
+    latestRequest: {
+      purpose: "MAIN_AGENT",
+      inputTokens: 500,
+      hitTokens: 400,
+      missTokens: 100,
+      cacheUsageReported: true,
+    },
+    previousInputCoverage: {
+      classification: "DIAGNOSTIC_PROXY",
+      hitTokens: 400,
+      previousInputTokens: 500,
+      coverage: 0.8,
+    },
+    usageCoverage: {
+      observedRequestCount: 2,
+      completeCacheUsageCount: 1,
+      incompleteOrUnknownCount: 1,
+      providerUsageUnreportedCount: 0,
+      providerUsageWithoutCacheBreakdownCount: 1,
+      failedOrCancelledWithoutUsageCount: 0,
+      inProgressInvocationCount: 0,
+      missingInvocationRecordCount: 1,
+      legacyWithoutCacheBreakdownCount: 1,
+      unidentifiedLegacySampleCount: 0,
+      coverageRate: 0.5,
+      status: "PARTIAL",
+    },
+    surfaceDelta: {
+      availability: "AVAILABLE",
+      baselineCount: 1,
+      deltaCount: 1,
+      noopCount: 0,
+      setCount: 2,
+      clearCount: 0,
+      newModelVisibleBytes: 900,
+      estimatedNewContextTokens: 300,
+      unchangedSectionReemissionCount: 0,
+      tokenEstimateKind: "ESTIMATED",
+    },
+  },
 };
 
 describe("ContextUsageRing", () => {
@@ -147,15 +219,54 @@ describe("ContextUsageRing", () => {
             latestHitRate: undefined,
             rollingHitRate: undefined,
             reusablePrefixEfficiency: undefined,
+            metricsV2: {
+              ...basePromptCache.metricsV2,
+              previousInputCoverage: undefined,
+              fullRun: {
+                mainAgent: { requestCount: 0, hitTokens: 0, accountedTokens: 0 },
+                allPurposes: { requestCount: 0, hitTokens: 0, accountedTokens: 0 },
+              },
+              warm: {
+                mainAgent: { requestCount: 0, hitTokens: 0, accountedTokens: 0 },
+                allPurposes: { requestCount: 0, hitTokens: 0, accountedTokens: 0 },
+              },
+              rolling: {
+                windowSize: 10,
+                mainAgent: { requestCount: 0, hitTokens: 0, accountedTokens: 0 },
+                allPurposes: { requestCount: 0, hitTokens: 0, accountedTokens: 0 },
+              },
+              latestRequest: { purpose: "MAIN_AGENT", cacheUsageReported: false },
+              usageCoverage: {
+                observedRequestCount: 1,
+                completeCacheUsageCount: 0,
+                incompleteOrUnknownCount: 1,
+                providerUsageUnreportedCount: 1,
+                providerUsageWithoutCacheBreakdownCount: 0,
+                failedOrCancelledWithoutUsageCount: 1,
+                inProgressInvocationCount: 0,
+                missingInvocationRecordCount: 0,
+                legacyWithoutCacheBreakdownCount: 0,
+                unidentifiedLegacySampleCount: 0,
+                coverageRate: 0,
+                status: "UNREPORTED",
+              },
+            },
+            purposes: [],
           },
         }}
       />,
     );
 
-    expect(warm).toContain("平台实际命中率");
-    expect(warm).toContain("Caelush 可复用前缀效率");
+    expect(warm).toContain("暖请求命中率（Provider Usage）");
+    expect(warm).toContain("当前 Run 累计命中率");
+    expect(warm).not.toContain("可复用前缀效率 100%");
+    expect(warm).toContain("Usage Coverage");
+    expect(warm).toContain("已上报 Token 但无 Hit/Miss 1");
+    expect(warm).toContain("500 input tokens");
+    expect(warm).toContain("cache hit 未上报");
+    expect(warm).toContain("Previous Input Coverage Proxy（诊断代理量）");
     expect(warm).toContain("缓存周期");
-    expect(warm).toContain("80%");
+    expect(warm).toContain("80.0%");
     expect(cold).toContain("冷启动");
     expect(reset).toContain("最近重置");
     expect(reset).toContain("COMPACTION_COMMITTED");
@@ -163,12 +274,11 @@ describe("ContextUsageRing", () => {
     expect(initialEpoch).toMatch(/最近重置<\/dt><dd>—<\/dd>/);
     expect(initialEpoch).not.toContain("INITIAL");
     expect(unreported).toContain("未上报 usage");
-    expect(unreported).not.toContain("rolling 0%");
-    expect(unreported).not.toContain("latest 0%");
-    expect(unreported).toMatch(/Caelush 可复用前缀效率<\/dt><dd>未上报 usage/);
+    expect(unreported).not.toContain("0.0%");
+    expect(unreported).not.toContain("可复用前缀效率");
   });
 
-  it("keeps legacy Context Usage and auxiliary request totals visible", () => {
+  it("keeps Purpose-specific Usage visible without claiming missing fields are zero", () => {
     const legacy = renderToStaticMarkup(<ContextInspector usage={baseUsage} />);
     const withAuxiliary = renderToStaticMarkup(
       <ContextInspector usage={{ ...baseUsage, promptCache: basePromptCache }} />,
@@ -177,10 +287,11 @@ describe("ContextUsageRing", () => {
     expect(legacy).toContain("工作上下文");
     expect(legacy).not.toContain("平台实际命中率");
     expect(withAuxiliary).toContain("压缩请求");
-    expect(withAuxiliary).toContain("2 requests");
-    expect(withAuxiliary).toContain("560 input tokens");
-    expect(withAuxiliary).toContain("25 output tokens");
-    expect(withAuxiliary).toContain("1 unknown");
+    expect(withAuxiliary).toContain("1 request");
+    expect(withAuxiliary).toContain("500 input tokens");
+    expect(withAuxiliary).toContain("60 input tokens");
+    expect(withAuxiliary).toContain("cache hit 未上报");
+    expect(withAuxiliary).toContain("Usage Coverage");
   });
 
   it("defines narrow-screen cache layout constraints", () => {

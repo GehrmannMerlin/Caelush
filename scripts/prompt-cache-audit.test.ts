@@ -68,7 +68,11 @@ describe("offline prompt-cache audit", () => {
 
     expect(result.sampleStatuses).toEqual([{ index: 0, status: "UNREPORTED" }]);
     expect(result.billingHitRate).toBe("UNREPORTED");
-    expect(result.reusablePrefixEfficiency).toBe("UNREPORTED");
+    expect(result.metricsV2.usageCoverage).toMatchObject({
+      observedRequestCount: 1,
+      completeCacheUsageCount: 0,
+      status: "UNREPORTED",
+    });
     expect(result.unknownUsageCount).toBe(1);
     expect(result.passed).toBe(false);
   });
@@ -88,7 +92,7 @@ describe("offline prompt-cache audit", () => {
     ]);
     expect(result.unknownUsageCount).toBe(1);
     expect(result.billingHitRate).toBe("UNREPORTED");
-    expect(result.reusablePrefixEfficiency).toBe("UNREPORTED");
+    expect(result.metricsV2.usageCoverage.incompleteOrUnknownCount).toBe(1);
     expect(result.passed).toBe(false);
   });
 
@@ -105,7 +109,7 @@ describe("offline prompt-cache audit", () => {
     expect(result.scoredCount).toBe(1);
     expect(result.duplicateCallIdCount).toBe(1);
     expect(result.billingHitRate).toBe("UNREPORTED");
-    expect(result.reusablePrefixEfficiency).toBe("UNREPORTED");
+    expect(result.metricsV2.usageCoverage.observedRequestCount).toBe(1);
     expect(result.totalInputTokens).toBe("UNREPORTED");
     expect(result.passed).toBe(false);
     expect(JSON.stringify(result)).not.toContain("same-call");
@@ -184,7 +188,9 @@ describe("offline prompt-cache audit", () => {
     );
 
     expect(result.billingHitRate).toBe(99 / 101);
-    expect(result.reusablePrefixEfficiency).toBe(0.99);
+    expect(result.metricsV2.fullRun.mainAgent.hitRate).toBe(99 / 101);
+    expect(result.metricsV2.previousInputCoverageProxy).toBe("UNREPORTED");
+    expect("reusablePrefixEfficiency" in result).toBe(false);
     expect(result.passed).toBe(true);
   });
 
@@ -202,7 +208,7 @@ describe("offline prompt-cache audit", () => {
     );
 
     expect(result.billingHitRate).toBe("UNREPORTED");
-    expect(result.reusablePrefixEfficiency).toBe("UNREPORTED");
+    expect(result.metricsV2.fullRun.mainAgent.hitRate).toBeUndefined();
     expect(result.passed).toBe(false);
   });
 
@@ -225,6 +231,85 @@ describe("offline prompt-cache audit", () => {
     expect(output).not.toContain("DO_NOT_EMIT");
   });
 
+  it("reports the original eight-request sample with token-weighted Full and Warm rates", () => {
+    const inputs = [15_153, 31_192, 37_252, 45_670, 57_639, 64_418, 69_321, 74_248];
+    const hits = [512, 15_104, 31_104, 37_248, 45_568, 57_600, 64_384, 69_248];
+    const samples = inputs.map((inputTokens, index) =>
+      sample(`call-${index + 1}`, {
+        inputTokens,
+        hitTokens: hits[index],
+        missTokens: inputTokens - hits[index],
+      }),
+    );
+    const result = evaluatePromptCacheAudit(
+      samples,
+      options({ expectedScoredCount: 8, observedProviderCallCount: 8 }),
+    );
+
+    expect(result.metricsV2.fullRun.mainAgent.hitRate).toBeCloseTo(0.8123, 4);
+    expect(result.metricsV2.warm.mainAgent.hitRate).toBeCloseTo(0.8434, 4);
+    expect(result.metricsV2.warm.mainAgent.requestCount).toBe(7);
+  });
+
+  it("never turns the legacy expected-prefix formula into a cache health metric", () => {
+    const legacySample = sample("legacy-prefix", {
+      hitTokens: 69_248,
+      expectedReusablePrefixTokens: 39_306,
+    });
+    const result = evaluatePromptCacheAudit([legacySample], options());
+
+    expect(Math.min(69_248, 39_306) / 39_306).toBe(1);
+    expect(result.metricsV2.previousInputCoverageProxy).toBe("UNREPORTED");
+    expect("reusablePrefixEfficiency" in result).toBe(false);
+  });
+
+  it("keeps provider-reported hit/miss coverage separate from incomplete Usage", () => {
+    const partial = sample("partial", { inputTokens: 123 });
+    delete (partial as Partial<typeof partial>).hitTokens;
+    delete (partial as Partial<typeof partial>).missTokens;
+    const result = evaluatePromptCacheAudit([partial], options());
+
+    expect(result.metricsV2.fullRun.mainAgent.hitRate).toBeUndefined();
+    expect(result.metricsV2.usageCoverage).toMatchObject({
+      observedRequestCount: 1,
+      completeCacheUsageCount: 0,
+      incompleteOrUnknownCount: 1,
+    });
+    expect(result.metricsV2.latestRequest).toMatchObject({ cacheUsageReported: false });
+  });
+
+  it("resets the Warm boundary for a new cache Epoch and bounds Rolling to ten calls", () => {
+    const epochs = [
+      sample("epoch-a-cold", { hitTokens: 0, missTokens: 100 }),
+      sample("epoch-a-warm-1", { hitTokens: 90, missTokens: 10 }),
+      sample("epoch-a-warm-2", { hitTokens: 90, missTokens: 10 }),
+      {
+        ...sample("epoch-b-reset", { hitTokens: 0, missTokens: 100 }),
+        epochId: "epoch-b",
+        resetReason: "provider-reset",
+      },
+      { ...sample("epoch-b-warm", { hitTokens: 80, missTokens: 20 }), epochId: "epoch-b" },
+    ];
+    const epochResult = evaluatePromptCacheAudit(
+      epochs,
+      options({ expectedScoredCount: 4, observedProviderCallCount: epochs.length }),
+    );
+    const rolling = Array.from({ length: 12 }, (_, index) =>
+      sample(`rolling-${index}`, {
+        hitTokens: index < 1 ? 99 : 0,
+        missTokens: index < 1 ? 1 : 100,
+      }),
+    );
+    const rollingResult = evaluatePromptCacheAudit(
+      rolling,
+      options({ expectedScoredCount: rolling.length, observedProviderCallCount: rolling.length }),
+    );
+
+    expect(epochResult.metricsV2.warm.mainAgent.requestCount).toBe(3);
+    expect(rollingResult.metricsV2.rolling.mainAgent.requestCount).toBe(10);
+    expect(rollingResult.metricsV2.rolling.mainAgent.hitRate).toBe(0);
+  });
+
   it("runs the checked-in fixture through the offline CLI", () => {
     const run = spawnSync(process.execPath, ["scripts/prompt-cache-audit.mjs"], {
       cwd: process.cwd(),
@@ -237,6 +322,7 @@ describe("offline prompt-cache audit", () => {
       readonly cases: readonly { readonly name: string; readonly passed: boolean }[];
     };
     expect(report.fixtureCheckPassed).toBe(true);
+    expect(report.compatibilityMode).toBe("LEGACY_FIXTURE_INPUTS");
     expect(report.cases.map(({ name, passed }) => [name, passed])).toEqual([
       ["billing-96.999", false],
       ["billing-97.000", true],

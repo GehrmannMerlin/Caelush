@@ -20,6 +20,7 @@ describe("LLM budget usage normalization", () => {
       cachedInputTokens: 80,
       cacheMissInputTokens: 20,
       cacheWriteInputTokens: 5,
+      reasoningTokens: 20,
       confidence: "EXACT",
     });
   });

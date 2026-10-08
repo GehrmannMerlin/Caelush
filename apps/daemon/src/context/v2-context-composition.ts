@@ -1,4 +1,4 @@
-import type { AIGateway } from "@caelush/ai";
+import type { AIGateway, AIInvocationAccountingObserver } from "@caelush/ai";
 import {
   createBranchContextSourceProvider,
   createCheckpointContextSourceProvider,
@@ -43,7 +43,7 @@ import {
 } from "@caelush/coding-agent";
 import type { RunAgentContextEngineInput } from "@caelush/core";
 import type { ContextContribution, ContextMemoryProjection } from "@caelush/agent";
-import type { TimestampMs, ToolName } from "@caelush/protocol";
+import type { RunId, TimestampMs, ToolName } from "@caelush/protocol";
 import type { Runtime } from "@caelush/runtime";
 import type { CaelushStorage } from "@caelush/storage";
 import { MemoryRetriever } from "@caelush/memory";
@@ -61,6 +61,7 @@ export interface DaemonV2ContextCompositionOptions {
   readonly promptSurfaceStore: PromptSurfaceStorePort;
   readonly runtime: Runtime;
   readonly gateway: AIGateway;
+  readonly invocationObserverFactory?: (runId: RunId) => AIInvocationAccountingObserver;
   readonly messageProjectors: AgentMessageProjectorRegistry;
   readonly notifier: RunEventNotifierPort;
   readonly contributionPipeline: ContextContributionPipeline;
@@ -104,6 +105,9 @@ export function createDaemonV2ContextEngine(options: DaemonV2ContextCompositionO
     budget: options.storage.budget,
     run: input.run,
     clock: options.clock,
+    ...(options.invocationObserverFactory === undefined
+      ? {}
+      : { invocationObserver: options.invocationObserverFactory(input.run.id) }),
   });
   const factsProvider = createDeterministicCompactionFactsProvider({ storage: options.storage });
 

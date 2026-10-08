@@ -5,6 +5,7 @@ import {
   ToolObservationSchema,
   createRunId,
   createSessionId,
+  createLLMCallId,
   createStepId,
   createTimestampMs,
   createToolInvocationId,
@@ -28,6 +29,7 @@ import { describe, expect, it } from "vitest";
 
 import { SessionPresentationService } from "../src/services/session-presentation-service.js";
 import { CaelushToolPresentation } from "@caelush/security";
+import type { ProviderInvocationUsageRecord } from "@caelush/storage";
 import {
   projectPromptCacheUsage,
   promptCacheSamplesFromDurableMessages,
@@ -865,6 +867,10 @@ describe("Prompt Cache daemon projection", () => {
       {
         purpose: "MAIN_AGENT",
         measuredAt: NOW + 1,
+        invocationId: "call-main-1",
+        cacheEpochId: "cache-epoch-1",
+        continuityGroup: "profile-1",
+        prefixFingerprint: "prefix-1",
         usage: {
           inputTokens: 100,
           cachedInputTokens: 80,
@@ -875,6 +881,10 @@ describe("Prompt Cache daemon projection", () => {
       {
         purpose: "WARMUP",
         measuredAt: NOW + 2,
+        invocationId: "call-warmup-1",
+        cacheEpochId: "cache-epoch-1",
+        continuityGroup: "profile-1",
+        prefixFingerprint: "prefix-1",
         usage: {
           inputTokens: 1_000,
           cachedInputTokens: 900,
@@ -897,13 +907,16 @@ describe("Prompt Cache daemon projection", () => {
       writeTokens: 5,
       unknownUsageCount: 1,
       latestHitRate: 0.9,
-      rollingHitRate: 980 / 1_100,
       expectedReusablePrefixTokens: 1_000,
-      reusablePrefixEfficiency: 0.9,
       epochId: "epoch-safe-1",
       resetReason: "INITIAL",
       lastMeasuredAt: NOW + 2,
     });
+    expect(result.metricsV2?.fullRun.allPurposes.hitRate).toBeCloseTo(980 / 1_100);
+    expect(result.metricsV2?.rolling.allPurposes.hitRate).toBeCloseTo(980 / 1_100);
+    expect(result.metricsV2?.warm.allPurposes.hitRate).toBe(0.9);
+    expect(result.rollingHitRate).toBeUndefined();
+    expect(result.reusablePrefixEfficiency).toBeUndefined();
     expect(result.purposes).toEqual([
       {
         purpose: "MAIN_AGENT",
@@ -913,6 +926,15 @@ describe("Prompt Cache daemon projection", () => {
         hitTokens: 80,
         missTokens: 20,
         writeTokens: 5,
+        reasoningTokens: 0,
+        usageFieldCoverage: {
+          inputTokens: 1,
+          outputTokens: 0,
+          hitTokens: 1,
+          missTokens: 1,
+          writeTokens: 1,
+          reasoningTokens: 0,
+        },
         unknownUsageCount: 0,
       },
       {
@@ -923,6 +945,15 @@ describe("Prompt Cache daemon projection", () => {
         hitTokens: 900,
         missTokens: 100,
         writeTokens: 0,
+        reasoningTokens: 0,
+        usageFieldCoverage: {
+          inputTokens: 1,
+          outputTokens: 0,
+          hitTokens: 1,
+          missTokens: 1,
+          writeTokens: 1,
+          reasoningTokens: 0,
+        },
         unknownUsageCount: 0,
       },
       {
@@ -933,9 +964,269 @@ describe("Prompt Cache daemon projection", () => {
         hitTokens: 0,
         missTokens: 0,
         writeTokens: 0,
+        reasoningTokens: 0,
+        usageFieldCoverage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          hitTokens: 0,
+          missTokens: 0,
+          writeTokens: 0,
+          reasoningTokens: 0,
+        },
         unknownUsageCount: 1,
       },
     ]);
+  });
+
+  it("projects the original eight-request sample as full-run and epoch-warm token rates", () => {
+    const inputs = [15153, 31192, 37252, 45670, 57639, 64418, 69321, 74248];
+    const hits = [512, 15104, 31104, 37248, 45568, 57600, 64384, 69248];
+    const samples = inputs.map((inputTokens, index) => ({
+      purpose: "MAIN_AGENT" as const,
+      measuredAt: NOW + index,
+      invocationId: `call-${index}`,
+      cacheEpochId: "provider-epoch-a",
+      continuityGroup: "deepseek:model:api:settings-a",
+      prefixFingerprint: "stable-prefix-a",
+      usage: {
+        inputTokens,
+        cachedInputTokens: hits[index],
+        cacheMissInputTokens: inputTokens - hits[index],
+      },
+    }));
+
+    const result = projectPromptCacheUsage(usageInput, samples, initialEpoch);
+    expect(result.metricsV2?.fullRun.mainAgent.hitRate).toBeCloseTo(0.8123, 4);
+    expect(result.metricsV2?.warm.mainAgent.hitRate).toBeCloseTo(0.8434, 4);
+    expect(result.metricsV2?.warm.mainAgent.requestCount).toBe(7);
+    expect(result.metricsV2?.previousInputCoverage?.coverage).toBeCloseTo(69_248 / 69_321, 8);
+    expect(result.rollingHitRate).toBeUndefined();
+    expect(result.reusablePrefixEfficiency).toBeUndefined();
+    expect(result.metricsV2?.previousInputCoverage?.classification).toBe("DIAGNOSTIC_PROXY");
+  });
+
+  it("keeps unidentified cache usage out of invocation coverage and rates", () => {
+    const result = projectPromptCacheUsage(
+      usageInput,
+      [
+        {
+          purpose: "MAIN_AGENT",
+          measuredAt: NOW + 1,
+          usage: { inputTokens: 100, outputTokens: 10 },
+        },
+      ],
+      initialEpoch,
+    );
+
+    expect(result.metricsV2).toMatchObject({
+      usageCoverage: {
+        observedRequestCount: 0,
+        completeCacheUsageCount: 0,
+        incompleteOrUnknownCount: 0,
+        unidentifiedLegacySampleCount: 1,
+        status: "UNREPORTED",
+      },
+      fullRun: {
+        mainAgent: { requestCount: 0, hitTokens: 0, accountedTokens: 0 },
+      },
+    });
+  });
+
+  it("replaces the legacy 100 percent prefix score with a bounded previous-input proxy", () => {
+    const result = projectPromptCacheUsage(
+      {
+        ...usageInput,
+        promptSurface: { ...usageInput.promptSurface!, expectedReusablePrefixTokens: 39_306 },
+      },
+      [
+        {
+          purpose: "MAIN_AGENT",
+          measuredAt: NOW + 1,
+          invocationId: "previous-call",
+          cacheEpochId: "cache-epoch-a",
+          continuityGroup: "profile-a",
+          prefixFingerprint: "same-prefix",
+          usage: { inputTokens: 74_248, cachedInputTokens: 60_000, cacheMissInputTokens: 14_248 },
+        },
+        {
+          purpose: "MAIN_AGENT",
+          measuredAt: NOW + 2,
+          invocationId: "latest-call",
+          cacheEpochId: "cache-epoch-a",
+          continuityGroup: "profile-a",
+          prefixFingerprint: "same-prefix",
+          usage: { inputTokens: 74_248, cachedInputTokens: 69_248, cacheMissInputTokens: 5_000 },
+        },
+      ],
+      initialEpoch,
+    );
+
+    expect(
+      Math.min(69_248, 39_306) / 39_306,
+      "the retired formula would have reported 100 percent",
+    ).toBe(1);
+    expect(result.reusablePrefixEfficiency).toBeUndefined();
+    expect(result.metricsV2?.fullRun.mainAgent.hitRate).toBeCloseTo(129_248 / 148_496);
+    expect(result.metricsV2?.previousInputCoverage?.coverage).toBeCloseTo(69_248 / 74_248);
+  });
+
+  it("starts a new Warm boundary per Cache Epoch and never pairs across reset", () => {
+    const usage = { inputTokens: 100, cachedInputTokens: 80, cacheMissInputTokens: 20 };
+    const result = projectPromptCacheUsage(
+      usageInput,
+      [
+        {
+          purpose: "MAIN_AGENT",
+          measuredAt: NOW + 1,
+          invocationId: "a1",
+          cacheEpochId: "A",
+          continuityGroup: "P",
+          prefixFingerprint: "x",
+          usage,
+        },
+        {
+          purpose: "MAIN_AGENT",
+          measuredAt: NOW + 2,
+          invocationId: "a2",
+          cacheEpochId: "A",
+          continuityGroup: "P",
+          prefixFingerprint: "x",
+          usage,
+        },
+        {
+          purpose: "MAIN_AGENT",
+          measuredAt: NOW + 3,
+          invocationId: "a3",
+          cacheEpochId: "A",
+          continuityGroup: "P",
+          prefixFingerprint: "x",
+          usage,
+        },
+        {
+          purpose: "MAIN_AGENT",
+          measuredAt: NOW + 4,
+          invocationId: "b1",
+          cacheEpochId: "B",
+          continuityGroup: "P",
+          prefixFingerprint: "x",
+          usage,
+        },
+      ],
+      initialEpoch,
+    );
+
+    expect(result.metricsV2?.fullRun.mainAgent.requestCount).toBe(4);
+    expect(result.metricsV2?.warm.mainAgent.requestCount).toBe(2);
+    expect(result.metricsV2?.previousInputCoverage?.coverage).toBeUndefined();
+  });
+
+  it("uses only the last ten complete calls for token-weighted rolling metrics", () => {
+    const samples: PromptCacheUsageSample[] = [
+      {
+        purpose: "MAIN_AGENT",
+        measuredAt: NOW,
+        invocationId: "large-old",
+        usage: { inputTokens: 100_000, cachedInputTokens: 100_000, cacheMissInputTokens: 0 },
+      },
+      ...Array.from({ length: 10 }, (_, index) => ({
+        purpose: "MAIN_AGENT" as const,
+        measuredAt: NOW + index + 1,
+        invocationId: `recent-${index}`,
+        usage: { inputTokens: 100, cachedInputTokens: 0, cacheMissInputTokens: 100 },
+      })),
+    ];
+    const result = projectPromptCacheUsage(usageInput, samples, initialEpoch);
+
+    expect(result.metricsV2?.rolling.mainAgent.requestCount).toBe(10);
+    expect(result.metricsV2?.rolling.mainAgent.hitRate).toBe(0);
+    expect(result.metricsV2?.fullRun.mainAgent.hitRate).toBeCloseTo(100_000 / 101_000);
+  });
+
+  it("keeps failed and unknown-usage invocations in coverage without inventing misses", () => {
+    const result = projectPromptCacheUsage(
+      usageInput,
+      [
+        { purpose: "MAIN_AGENT", measuredAt: NOW + 1, invocationId: "failed-call" },
+        {
+          purpose: "VERIFICATION_LLM",
+          measuredAt: NOW + 2,
+          invocationId: "verification-call",
+          usage: { inputTokens: 16_017, outputTokens: 1_311 },
+        },
+      ],
+      initialEpoch,
+    );
+
+    expect(result.metricsV2?.usageCoverage).toMatchObject({
+      observedRequestCount: 2,
+      completeCacheUsageCount: 0,
+      incompleteOrUnknownCount: 2,
+      coverageRate: 0,
+      status: "UNREPORTED",
+    });
+    expect(result.metricsV2?.fullRun.allPurposes.hitRate).toBeUndefined();
+    expect(result.missTokens).toBe(0);
+  });
+
+  it("distinguishes missing cache breakdown, no usage, failed calls, in-progress calls, and legacy gaps", () => {
+    const result = projectPromptCacheUsage(
+      usageInput,
+      [
+        {
+          purpose: "MAIN_AGENT",
+          measuredAt: NOW + 1,
+          invocationId: "total-only",
+          invocationStatus: "COMPLETE",
+          source: "GATEWAY",
+          usage: { totalTokens: 110 },
+        },
+        {
+          purpose: "MAIN_AGENT",
+          measuredAt: NOW + 2,
+          invocationId: "failed-no-usage",
+          invocationStatus: "FAILED",
+          source: "GATEWAY",
+        },
+        {
+          purpose: "VERIFICATION_LLM",
+          measuredAt: NOW + 3,
+          invocationId: "in-progress-partial",
+          invocationStatus: "OBSERVED",
+          source: "GATEWAY",
+          usage: { inputTokens: 20 },
+        },
+        {
+          purpose: "CONTEXT_COMPACTION",
+          measuredAt: NOW + 4,
+          invocationId: "legacy-without-cache-split",
+          invocationStatus: "COMPLETE",
+          source: "ASSISTANT_MESSAGE",
+          usage: { inputTokens: 50, outputTokens: 10 },
+        },
+        {
+          purpose: "OTHER",
+          measuredAt: NOW + 5,
+          source: "BUDGET_LEDGER",
+          usage: { inputTokens: 5 },
+        },
+      ],
+      initialEpoch,
+    );
+
+    expect(result.metricsV2?.usageCoverage).toMatchObject({
+      observedRequestCount: 4,
+      completeCacheUsageCount: 0,
+      incompleteOrUnknownCount: 4,
+      providerUsageUnreportedCount: 1,
+      providerUsageWithoutCacheBreakdownCount: 3,
+      failedOrCancelledWithoutUsageCount: 1,
+      inProgressInvocationCount: 1,
+      missingInvocationRecordCount: 1,
+      legacyWithoutCacheBreakdownCount: 1,
+      unidentifiedLegacySampleCount: 1,
+      coverageRate: 0,
+      status: "UNREPORTED",
+    });
   });
 
   it("ignores a zero-token latest request when reporting cache rates", () => {
@@ -943,6 +1234,7 @@ describe("Prompt Cache daemon projection", () => {
       {
         purpose: "MAIN_AGENT",
         measuredAt: NOW + 1,
+        invocationId: "call-1",
         usage: {
           inputTokens: 100,
           cachedInputTokens: 80,
@@ -953,6 +1245,7 @@ describe("Prompt Cache daemon projection", () => {
       {
         purpose: "RETRY",
         measuredAt: NOW + 2,
+        invocationId: "call-2",
         usage: {
           inputTokens: 0,
           outputTokens: 0,
@@ -973,11 +1266,10 @@ describe("Prompt Cache daemon projection", () => {
       totalRequestCount: 2,
       totalInputTokens: 100,
       latestHitRate: 0.8,
-      rollingHitRate: 0.8,
       expectedReusablePrefixTokens: 1_000,
-      reusablePrefixEfficiency: 0.08,
       lastMeasuredAt: NOW + 1,
     });
+    expect(result.metricsV2?.rolling.allPurposes.hitRate).toBe(0.8);
   });
 
   it("leaves rates unreported when every measured request has zero cache tokens", () => {
@@ -985,6 +1277,7 @@ describe("Prompt Cache daemon projection", () => {
       {
         purpose: "MAIN_AGENT",
         measuredAt: NOW + 1,
+        invocationId: "call-zero",
         usage: {
           inputTokens: 0,
           outputTokens: 0,
@@ -1010,6 +1303,7 @@ describe("Prompt Cache daemon projection", () => {
     expect(result.rollingHitRate).toBeUndefined();
     expect(result.reusablePrefixEfficiency).toBeUndefined();
     expect(result.lastMeasuredAt).toBeUndefined();
+    expect(result.metricsV2?.fullRun.mainAgent.hitRate).toBeUndefined();
   });
 
   it("combines durable assistant usage with unmatched auxiliary budget entries safely", () => {
@@ -1074,8 +1368,11 @@ describe("Prompt Cache daemon projection", () => {
 
     expect(samples).toEqual([
       {
+        invocationId: "fixture-call",
+        invocationStatus: "COMPLETE",
         purpose: "MAIN_AGENT",
         measuredAt: NOW,
+        source: "ASSISTANT_MESSAGE",
         usage: {
           inputTokens: 100,
           outputTokens: 10,
@@ -1085,11 +1382,172 @@ describe("Prompt Cache daemon projection", () => {
         },
       },
       {
-        purpose: "COMPACTION",
+        purpose: "CONTEXT_COMPACTION",
         measuredAt: NOW + 3,
+        source: "BUDGET_LEDGER",
         usage: { inputTokens: 250, outputTokens: 40 },
       },
     ]);
     expect(JSON.stringify(samples)).not.toContain("private content");
+  });
+
+  it("uses durable Gateway invocation samples once across Assistant and auxiliary budget sources", () => {
+    const mainCallId = createLLMCallId();
+    const verificationCallId = createLLMCallId();
+    const assistant = factory.createAssistant({
+      runId: RUN_ID,
+      sessionId: SESSION_ID,
+      conversationTurnId: TURN_ID,
+      sourceStepId: STEP_ID,
+      source: modelMessageSource(mainCallId),
+      phase: "COMMENTARY",
+      content: [agentAssistantTextPart("safe semantic content")],
+      model: {
+        kind: "MODEL_TURN",
+        callId: mainCallId,
+        model: { provider: "fixture", model: "fixture-model" },
+        finishReason: "STOP",
+        usage: {
+          inputTokens: 100,
+          outputTokens: 10,
+          cachedInputTokens: 70,
+          cacheMissInputTokens: 30,
+        },
+      },
+    });
+    const makeInvocation = (
+      callId: ProviderInvocationUsageRecord["callId"],
+      purpose: ProviderInvocationUsageRecord["purpose"],
+      observedAt: ProviderInvocationUsageRecord["observedAt"],
+      inputTokens: number,
+      cacheHitInputTokens: number,
+      cacheMissInputTokens: number,
+    ): ProviderInvocationUsageRecord => ({
+      callId,
+      runId: RUN_ID,
+      purpose,
+      status: "COMPLETE",
+      providerId: "fixture",
+      modelId: "fixture-model",
+      api: "fixture-api",
+      continuityGroup: "a".repeat(64),
+      cacheEpochId: "b".repeat(64),
+      prefixFingerprint: "c".repeat(64),
+      requestFingerprint: "d".repeat(64),
+      observedAt,
+      settledAt: createTimestampMs(Number(observedAt) + 1),
+      inputTokens,
+      outputTokens: 10,
+      cacheHitInputTokens,
+      cacheMissInputTokens,
+    });
+    const invocations = [
+      makeInvocation(mainCallId, "MAIN_AGENT", NOW + 1, 100, 80, 20),
+      makeInvocation(verificationCallId, "VERIFICATION_LLM", NOW + 2, 50, 40, 10),
+    ];
+    const budgetEntries = [
+      {
+        id: "verification-budget",
+        runId: RUN_ID,
+        kind: "VERIFICATION_LLM" as const,
+        ownerId: "verification-owner",
+        state: "SETTLED" as const,
+        reservedToolCalls: 0,
+        reservedInputTokens: 50,
+        reservedOutputTokens: 10,
+        actualInputTokens: 50,
+        actualOutputTokens: 10,
+        cacheHitInputTokens: 40,
+        cacheMissInputTokens: 10,
+        providerCallId: verificationCallId,
+        reservedCostMicros: 0,
+        actualCostMicros: 0,
+        createdAt: NOW,
+        settledAt: NOW + 3,
+      },
+    ];
+
+    const samples = promptCacheSamplesFromDurableMessages(
+      [record(assistant, 1)],
+      budgetEntries as never,
+      invocations,
+    );
+    const projected = projectPromptCacheUsage(usageInput, samples, initialEpoch);
+
+    expect(samples).toHaveLength(2);
+    expect(samples.map((sample) => [sample.purpose, sample.invocationId])).toEqual([
+      ["MAIN_AGENT", mainCallId],
+      ["VERIFICATION_LLM", verificationCallId],
+    ]);
+    expect(projected.metricsV2?.usageCoverage).toMatchObject({
+      observedRequestCount: 2,
+      completeCacheUsageCount: 2,
+    });
+    expect(projected.metricsV2?.fullRun.mainAgent.requestCount).toBe(1);
+    expect(projected.metricsV2?.fullRun.allPurposes.requestCount).toBe(2);
+    expect(projected.metricsV2?.warm.mainAgent.requestCount).toBe(0);
+  });
+
+  it("derives V3 Baseline, repeated NOOP, SET, CLEAR, bytes, and estimates from metadata only", () => {
+    const stableHash = "a".repeat(64);
+    const initial = projectPromptCacheUsage(usageInput, [], initialEpoch, undefined, [
+      {
+        kind: "BASELINE",
+        updates: [{ op: "SET", stateKey: "files.readme", contentHash: stableHash }],
+        byteLength: 10_240,
+      },
+      ...Array.from({ length: 8 }, () => ({
+        kind: "NOOP" as const,
+        updates: [],
+        byteLength: 0,
+      })),
+    ]);
+    expect(initial.metricsV2?.surfaceDelta).toEqual({
+      availability: "AVAILABLE",
+      baselineCount: 1,
+      deltaCount: 0,
+      noopCount: 8,
+      setCount: 1,
+      clearCount: 0,
+      newModelVisibleBytes: 10_240,
+      estimatedNewContextTokens: Math.ceil(10_240 / 3),
+      unchangedSectionReemissionCount: 0,
+      tokenEstimateKind: "ESTIMATED",
+    });
+
+    const updated = projectPromptCacheUsage(usageInput, [], initialEpoch, undefined, [
+      {
+        kind: "BASELINE",
+        updates: [{ op: "SET", stateKey: "files.readme", contentHash: stableHash }],
+        byteLength: 10_240,
+      },
+      {
+        kind: "DELTA",
+        updates: [
+          { op: "SET", stateKey: "files.readme", contentHash: stableHash },
+          { op: "CLEAR", stateKey: "files.removed" },
+        ],
+        byteLength: 0,
+      },
+      {
+        kind: "DELTA",
+        updates: [
+          { op: "SET", stateKey: "files.readme", contentHash: "b".repeat(64) },
+          { op: "SET", stateKey: "files.notes", contentHash: "c".repeat(64) },
+        ],
+        byteLength: 1_024,
+      },
+    ]);
+    expect(updated.metricsV2?.surfaceDelta).toMatchObject({
+      baselineCount: 1,
+      deltaCount: 2,
+      noopCount: 0,
+      setCount: 4,
+      clearCount: 1,
+      newModelVisibleBytes: 11_264,
+      estimatedNewContextTokens: Math.ceil(11_264 / 3),
+      unchangedSectionReemissionCount: 1,
+      tokenEstimateKind: "ESTIMATED",
+    });
   });
 });

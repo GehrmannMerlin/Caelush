@@ -9,10 +9,11 @@ import type {
   ModelDescriptor,
   ModelDescriptorSourcePort,
 } from "@caelush/ai";
-import { createRunId, createSessionId, createStepId } from "@caelush/protocol";
+import { createStepId } from "@caelush/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { composeDaemon, type DaemonComposition } from "../src/daemon-composition.js";
 import type { ModelWireDiagnosticEvent } from "../src/providers/model-wire-diagnostic.js";
+import { makeRun, makeSession } from "../../../packages/storage/test/support/fixtures.js";
 import {
   FIXTURE_API,
   fixtureBinding,
@@ -113,11 +114,7 @@ describe("daemon model wire diagnostic", () => {
       },
     });
 
-    const identity = composition.resolveTurnIdentity({
-      id: createRunId(),
-      sessionId: createSessionId(),
-      goal: "review a candidate answer",
-    });
+    const identity = await createDurableTurnIdentity("review a candidate answer");
     const request = {
       model: { provider: "fixture", model: "fixture-model" },
       messages: [{ role: "user" as const, content: "Return a verification review." }],
@@ -138,7 +135,7 @@ describe("daemon model wire diagnostic", () => {
       signal: new AbortController().signal,
     });
     expect(transients.filter((event) => event.type === "model.text.delta")).toHaveLength(1);
-    expect(transients[0]).toMatchObject({
+    expect(transients.find((event) => event.type === "model.text.delta")).toMatchObject({
       type: "model.text.delta",
       payload: { text: '{"verdict":"PASS","summary":"ok"}' },
     });
@@ -166,11 +163,7 @@ describe("daemon model wire diagnostic", () => {
     // model turn boundary commits against a Run and a Session. Phase 3E removed the mutable
     // global this used to be published through: the identity is a pure projection of a Run
     // and travels with the turn, so nothing here depends on publish ordering.
-    const identity = composition.resolveTurnIdentity({
-      id: createRunId(),
-      sessionId: createSessionId(),
-      goal: "diagnose the model wire",
-    });
+    const identity = await createDurableTurnIdentity("diagnose the model wire");
 
     await composition.verificationModelTurns.execute({
       identity,
@@ -254,11 +247,7 @@ describe("daemon model wire diagnostic", () => {
         adapterOverrides: [new RecordingAdapter()],
       });
 
-      const identity = composition.resolveTurnIdentity({
-        id: createRunId(),
-        sessionId: createSessionId(),
-        goal: "diagnose the model wire",
-      });
+      const identity = await createDurableTurnIdentity("diagnose the model wire");
 
       await composition.verificationModelTurns.execute({
         identity,
@@ -276,3 +265,14 @@ describe("daemon model wire diagnostic", () => {
     expect(written.join("")).not.toContain("REQUEST");
   });
 });
+
+async function createDurableTurnIdentity(goal: string) {
+  if (storage === undefined || composition === undefined) {
+    throw new Error("The diagnostic fixture must compose Storage and Daemon first.");
+  }
+  const session = makeSession();
+  const run = makeRun(session.id, { goal });
+  await storage.sessions.insert(session);
+  await storage.runs.insert(run);
+  return composition.resolveTurnIdentity(run);
+}

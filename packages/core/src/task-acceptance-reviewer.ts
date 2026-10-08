@@ -139,7 +139,7 @@ export class TaskAcceptanceReviewer implements VerificationTaskReviewerPort {
         if (attempt + 1 < maxAttempts) continue;
         return errorResult(input.bundle, "REVIEWER_PROVIDER_ERROR");
       }
-      const settlement = await this.settle(attemptOwnerId, input.run.id, turn.usage);
+      const settlement = await this.settle(attemptOwnerId, input.run.id, turn.usage, turn.callId);
       if (settlement?.kind === "EXCEEDED") {
         return { ...errorResult(input.bundle, "BUDGET_EXCEEDED"), budget: settlement };
       }
@@ -167,11 +167,17 @@ export class TaskAcceptanceReviewer implements VerificationTaskReviewerPort {
     return errorResult(input.bundle, "REVIEWER_RESPONSE_INVALID");
   }
 
-  private async settle(ownerId: string, runId: AgentRun["id"], usage: AIModelTurnResult["usage"]) {
+  private async settle(
+    ownerId: string,
+    runId: AgentRun["id"],
+    usage: AIModelTurnResult["usage"],
+    providerCallId?: string,
+  ) {
     const settlementInput = {
       runId,
       ownerId,
       settledAt: this.dependencies.clock.now(),
+      ...(providerCallId === undefined ? {} : { providerCallId }),
       ...(usage === undefined ? {} : { usage }),
     };
     return this.dependencies.budget.settleVerificationLLM?.(settlementInput);

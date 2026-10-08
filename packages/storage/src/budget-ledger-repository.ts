@@ -17,6 +17,14 @@ export interface BudgetLedgerEntry {
   readonly reservedOutputTokens: number;
   readonly actualInputTokens?: number;
   readonly actualOutputTokens?: number;
+  readonly cacheHitInputTokens?: number;
+  readonly cacheMissInputTokens?: number;
+  readonly cacheWriteInputTokens?: number;
+  readonly reasoningTokens?: number;
+  readonly providerCallId?: string;
+  readonly cacheEpochId?: string;
+  readonly continuityGroup?: string;
+  readonly prefixFingerprint?: string;
   readonly reservedCostMicros: number;
   readonly actualCostMicros?: number;
   readonly modelProvider?: string;
@@ -72,6 +80,14 @@ interface BudgetRow {
   reserved_output_tokens: number;
   actual_input_tokens: number | null;
   actual_output_tokens: number | null;
+  cache_hit_input_tokens: number | null;
+  cache_miss_input_tokens: number | null;
+  cache_write_input_tokens: number | null;
+  reasoning_tokens: number | null;
+  provider_call_id: string | null;
+  cache_epoch_id: string | null;
+  continuity_group: string | null;
+  prefix_fingerprint: string | null;
   reserved_cost_micros: number;
   actual_cost_micros: number | null;
   model_provider: string | null;
@@ -176,17 +192,47 @@ export class SqliteBudgetLedgerRepository {
       readonly actualOutputTokens: number;
       readonly actualCostMicros: number;
       readonly settledAt: TimestampMs;
+      readonly cachedInputTokens?: number;
+      readonly cacheMissInputTokens?: number;
+      readonly cacheWriteInputTokens?: number;
+      readonly reasoningTokens?: number;
+      readonly providerCallId?: string;
+      readonly cacheEpochId?: string;
+      readonly continuityGroup?: string;
+      readonly prefixFingerprint?: string;
     },
   ): Promise<void> {
+    const current = await this.get(runId, kind, ownerId);
+    if (current === null) {
+      throw new BudgetLedgerInvariantError("Only an IN_FLIGHT budget entry can settle.");
+    }
+    if (current.state === "SETTLED") {
+      if (sameSettlement(current, input)) return;
+      throw new StorageConflictError("A settled provider usage sample cannot be overwritten.");
+    }
+    if (current.state !== "IN_FLIGHT") {
+      throw new BudgetLedgerInvariantError("Only an IN_FLIGHT budget entry can settle.");
+    }
     const result = this.database.client
       .prepare(
         `UPDATE run_budget_entries SET state = 'SETTLED', actual_input_tokens = ?, actual_output_tokens = ?,
-         actual_cost_micros = ?, settled_at_ms = ? WHERE run_id = ? AND kind = ? AND owner_id = ? AND state = 'IN_FLIGHT'`,
+         actual_cost_micros = ?, cache_hit_input_tokens = ?, cache_miss_input_tokens = ?,
+         cache_write_input_tokens = ?, reasoning_tokens = ?, provider_call_id = ?, cache_epoch_id = ?,
+         continuity_group = ?, prefix_fingerprint = ?, settled_at_ms = ?
+         WHERE run_id = ? AND kind = ? AND owner_id = ? AND state = 'IN_FLIGHT'`,
       )
       .run(
         input.actualInputTokens,
         input.actualOutputTokens,
         input.actualCostMicros,
+        input.cachedInputTokens ?? null,
+        input.cacheMissInputTokens ?? null,
+        input.cacheWriteInputTokens ?? null,
+        input.reasoningTokens ?? null,
+        input.providerCallId ?? null,
+        input.cacheEpochId ?? null,
+        input.continuityGroup ?? null,
+        input.prefixFingerprint ?? null,
         input.settledAt,
         runId,
         kind,
@@ -305,6 +351,20 @@ function decode(row: BudgetRow): BudgetLedgerEntry {
     reservedOutputTokens: row.reserved_output_tokens,
     ...(row.actual_input_tokens === null ? {} : { actualInputTokens: row.actual_input_tokens }),
     ...(row.actual_output_tokens === null ? {} : { actualOutputTokens: row.actual_output_tokens }),
+    ...(row.cache_hit_input_tokens === null
+      ? {}
+      : { cacheHitInputTokens: row.cache_hit_input_tokens }),
+    ...(row.cache_miss_input_tokens === null
+      ? {}
+      : { cacheMissInputTokens: row.cache_miss_input_tokens }),
+    ...(row.cache_write_input_tokens === null
+      ? {}
+      : { cacheWriteInputTokens: row.cache_write_input_tokens }),
+    ...(row.reasoning_tokens === null ? {} : { reasoningTokens: row.reasoning_tokens }),
+    ...(row.provider_call_id === null ? {} : { providerCallId: row.provider_call_id }),
+    ...(row.cache_epoch_id === null ? {} : { cacheEpochId: row.cache_epoch_id }),
+    ...(row.continuity_group === null ? {} : { continuityGroup: row.continuity_group }),
+    ...(row.prefix_fingerprint === null ? {} : { prefixFingerprint: row.prefix_fingerprint }),
     reservedCostMicros: row.reserved_cost_micros,
     ...(row.actual_cost_micros === null ? {} : { actualCostMicros: row.actual_cost_micros }),
     ...(row.model_provider === null ? {} : { modelProvider: row.model_provider }),
@@ -320,6 +380,38 @@ function decode(row: BudgetRow): BudgetLedgerEntry {
     ...(row.started_at_ms === null ? {} : { startedAt: row.started_at_ms as TimestampMs }),
     ...(row.settled_at_ms === null ? {} : { settledAt: row.settled_at_ms as TimestampMs }),
   };
+}
+
+function sameSettlement(
+  existing: BudgetLedgerEntry,
+  input: {
+    readonly actualInputTokens: number;
+    readonly actualOutputTokens: number;
+    readonly actualCostMicros: number;
+    readonly settledAt: TimestampMs;
+    readonly cachedInputTokens?: number;
+    readonly cacheMissInputTokens?: number;
+    readonly cacheWriteInputTokens?: number;
+    readonly reasoningTokens?: number;
+    readonly providerCallId?: string;
+    readonly cacheEpochId?: string;
+    readonly continuityGroup?: string;
+    readonly prefixFingerprint?: string;
+  },
+): boolean {
+  return (
+    existing.actualInputTokens === input.actualInputTokens &&
+    existing.actualOutputTokens === input.actualOutputTokens &&
+    existing.actualCostMicros === input.actualCostMicros &&
+    existing.cacheHitInputTokens === input.cachedInputTokens &&
+    existing.cacheMissInputTokens === input.cacheMissInputTokens &&
+    existing.cacheWriteInputTokens === input.cacheWriteInputTokens &&
+    existing.reasoningTokens === input.reasoningTokens &&
+    existing.providerCallId === input.providerCallId &&
+    existing.cacheEpochId === input.cacheEpochId &&
+    existing.continuityGroup === input.continuityGroup &&
+    existing.prefixFingerprint === input.prefixFingerprint
+  );
 }
 
 function isKind(value: string): value is BudgetEntryKind {

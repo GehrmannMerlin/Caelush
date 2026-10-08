@@ -7,6 +7,7 @@ import type {
   AIModelTurnResult,
   AIPrivateCompletion,
   AIPrivateReplayResolver,
+  AIInvocationAccountingObserver,
   ModelDescriptor,
   AIStreamEvent,
 } from "@caelush/ai";
@@ -103,6 +104,10 @@ export type ModelTurnExecutionResult =
 /** The frozen collaborators of a model turn executor. */
 export interface ModelTurnExecutorDependencies {
   readonly gateway: AIGateway;
+  /** Host-owned durable usage observer, scoped to one invocation and one Run. */
+  readonly invocationObserverFactory?: (
+    input: ModelTurnExecutionInput,
+  ) => AIInvocationAccountingObserver | undefined;
   /** Host-controlled, execution-scoped resolver factory over Context-selected message IDs. */
   readonly privateReplayResolverFactory?: (
     scope: PrivateReplayReadScope,
@@ -135,10 +140,12 @@ export function createModelTurnExecutor(
         // Exactly one gateway invocation per execute(): the durable run layer owns
         // retry, never this boundary.
         const privateReplayResolver = createPrivateReplayResolver(input, dependencies);
+        const invocationObserver = dependencies.invocationObserverFactory?.(input);
         stream = await dependencies.gateway.stream(input.request, {
           signal: input.signal,
           ...(input.transportId === undefined ? {} : { transportId: input.transportId }),
           ...(privateReplayResolver === undefined ? {} : { privateReplayResolver }),
+          ...(invocationObserver === undefined ? {} : { invocationObserver }),
         });
         const assembler = createAIModelTurnAssembler();
         const signalProjector = createTurnProjector(dependencies);

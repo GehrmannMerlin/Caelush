@@ -775,6 +775,45 @@ describe("AIGateway makes exactly one provider turn", () => {
 });
 
 describe("AIGateway.complete", () => {
+  it("records one safe invocation identity only when the lazy Provider stream starts", async () => {
+    const observer = {
+      onStarted: vi.fn(),
+      onSettled: vi.fn(),
+    };
+    const adapter = createFakeAdapter("test-api", () =>
+      adapterEvents(...textTurn("hello"), {
+        type: "usage",
+        payload: { inputTokens: 3, cachedInputTokens: 2, cacheMissInputTokens: 1 },
+      }),
+    );
+    const gateway = gatewayWith(adapter);
+    const stream = await gateway.stream(request(), { invocationObserver: observer });
+
+    expect(observer.onStarted).not.toHaveBeenCalled();
+    const iterator = stream.events[Symbol.asyncIterator]();
+    expect((await iterator.next()).value?.type).toBe("stream.start");
+    await iterator.return?.();
+    expect(observer.onStarted).not.toHaveBeenCalled();
+    expect(observer.onSettled).not.toHaveBeenCalled();
+    expect(adapter.callCount()).toBe(0);
+
+    const completed = await gateway.stream(request(), { invocationObserver: observer });
+    const events = await collect(completed.events);
+    expect(events.at(-1)?.type).toBe("stream.finish");
+    expect(observer.onStarted).toHaveBeenCalledTimes(1);
+    const identity = observer.onStarted.mock.calls[0]?.[0];
+    expect(identity?.callId).toBe(completed.callId);
+    expect(identity?.continuityGroup).toMatch(/^[a-f0-9]{64}$/);
+    expect(identity?.requestFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(identity)).not.toContain("hello");
+    expect(JSON.stringify(identity)).not.toContain(SECRET);
+    expect(observer.onSettled).toHaveBeenCalledWith({
+      callId: completed.callId,
+      status: "COMPLETE",
+      usage: { inputTokens: 3, cachedInputTokens: 2, cacheMissInputTokens: 1 },
+    });
+  });
+
   it("consumes the same stream and returns the assembled turn", async () => {
     const adapter = createFakeAdapter("test-api", () =>
       adapterEvents(...textTurn("hello"), { type: "usage", payload: { inputTokens: 3 } }),

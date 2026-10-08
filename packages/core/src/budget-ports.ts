@@ -49,6 +49,7 @@ export interface RunBudgetPort {
   settleLLM(input: {
     readonly runId: RunId;
     readonly stepId: StepId;
+    readonly providerCallId?: string;
     readonly usage?: ModelUsage;
     readonly settledAt: TimestampMs;
   }): Promise<RunBudgetSettlement | void>;
@@ -60,6 +61,7 @@ export interface RunBudgetPort {
   settleVerificationLLM?(input: {
     readonly runId: RunId;
     readonly ownerId: string;
+    readonly providerCallId?: string;
     readonly usage?: ModelUsage;
     readonly settledAt: TimestampMs;
   }): Promise<RunBudgetSettlement | void>;

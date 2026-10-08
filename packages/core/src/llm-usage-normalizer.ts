@@ -7,6 +7,7 @@ export interface NormalizedLLMUsage {
   readonly cachedInputTokens?: number;
   readonly cacheMissInputTokens?: number;
   readonly cacheWriteInputTokens?: number;
+  readonly reasoningTokens?: number;
   readonly confidence: "EXACT" | "CONSERVATIVE" | "UNKNOWN";
   readonly exceedsReservation?: boolean;
 }
@@ -22,6 +23,7 @@ export function normalizeLLMUsageForBudget(
   const cachedInputTokens = safeField(usage.cachedInputTokens);
   const cacheMissInputTokens = safeField(usage.cacheMissInputTokens);
   const cacheWriteInputTokens = safeField(usage.cacheWriteInputTokens);
+  const reasoningTokens = safeField(usage.reasoningTokens);
   if (
     (usage.inputTokens !== undefined && inputTokens === undefined) ||
     (usage.outputTokens !== undefined && outputTokens === undefined) ||
@@ -29,7 +31,7 @@ export function normalizeLLMUsageForBudget(
     (usage.cachedInputTokens !== undefined && cachedInputTokens === undefined) ||
     (usage.cacheMissInputTokens !== undefined && cacheMissInputTokens === undefined) ||
     (usage.cacheWriteInputTokens !== undefined && cacheWriteInputTokens === undefined) ||
-    (usage.reasoningTokens !== undefined && safeField(usage.reasoningTokens) === undefined)
+    (usage.reasoningTokens !== undefined && reasoningTokens === undefined)
   ) {
     return { confidence: "CONSERVATIVE" };
   }
@@ -53,6 +55,7 @@ export function normalizeLLMUsageForBudget(
     ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
     ...(cacheMissInputTokens === undefined ? {} : { cacheMissInputTokens }),
     ...(cacheWriteInputTokens === undefined ? {} : { cacheWriteInputTokens }),
+    ...(reasoningTokens === undefined ? {} : { reasoningTokens }),
     confidence,
     ...(totalTokens !== undefined &&
     reservation.reservedTotalTokens !== undefined &&

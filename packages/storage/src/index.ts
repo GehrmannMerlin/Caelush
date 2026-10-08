@@ -22,6 +22,12 @@ export type {
   BudgetLedgerSnapshot,
   NewBudgetLedgerEntry,
 } from "./budget-ledger-repository.js";
+export {
+  SqliteProviderInvocationUsageStore,
+  type ProviderInvocationObservationInput,
+  type ProviderInvocationStatus,
+  type ProviderInvocationUsageRecord,
+} from "./provider-invocation-usage-store.js";
 export { createSqliteToolBudgetAdmission, SqliteRunBudgetPort } from "./run-budget-port.js";
 export type { SqliteRunBudgetPortOptions, ToolBudgetAdmissionLegacy } from "./run-budget-port.js";
 export {

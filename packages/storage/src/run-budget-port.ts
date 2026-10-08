@@ -301,6 +301,7 @@ export class SqliteRunBudgetPort implements RunBudgetPort {
   async settleLLM(input: {
     readonly runId: RunId;
     readonly stepId: StepId;
+    readonly providerCallId?: string;
     readonly usage?: BudgetModelUsage;
     readonly settledAt: TimestampMs;
   }): Promise<import("@caelush/core").RunBudgetSettlement | void> {
@@ -310,6 +311,7 @@ export class SqliteRunBudgetPort implements RunBudgetPort {
   async settleVerificationLLM(input: {
     readonly runId: RunId;
     readonly ownerId: string;
+    readonly providerCallId?: string;
     readonly usage?: BudgetModelUsage;
     readonly settledAt: TimestampMs;
   }): Promise<import("@caelush/core").RunBudgetSettlement | void> {
@@ -318,6 +320,7 @@ export class SqliteRunBudgetPort implements RunBudgetPort {
   async settleContextCompactionLLM(input: {
     readonly runId: RunId;
     readonly ownerId: string;
+    readonly providerCallId?: string;
     readonly usage?: BudgetModelUsage;
     readonly settledAt: TimestampMs;
   }): Promise<import("@caelush/core").RunBudgetSettlement | void> {
@@ -328,6 +331,7 @@ export class SqliteRunBudgetPort implements RunBudgetPort {
     readonly runId: RunId;
     readonly ownerId: string;
     readonly usage?: BudgetModelUsage;
+    readonly providerCallId?: string;
     readonly settledAt: TimestampMs;
     readonly kind: "LLM_ATTEMPT" | "VERIFICATION_LLM" | "CONTEXT_COMPACTION";
   }): Promise<import("@caelush/core").RunBudgetSettlement | void> {
@@ -356,6 +360,19 @@ export class SqliteRunBudgetPort implements RunBudgetPort {
       actualInputTokens: normalized.inputTokens,
       actualOutputTokens: normalized.outputTokens,
       actualCostMicros,
+      ...(normalized.cachedInputTokens === undefined
+        ? {}
+        : { cachedInputTokens: normalized.cachedInputTokens }),
+      ...(normalized.cacheMissInputTokens === undefined
+        ? {}
+        : { cacheMissInputTokens: normalized.cacheMissInputTokens }),
+      ...(normalized.cacheWriteInputTokens === undefined
+        ? {}
+        : { cacheWriteInputTokens: normalized.cacheWriteInputTokens }),
+      ...(normalized.reasoningTokens === undefined
+        ? {}
+        : { reasoningTokens: normalized.reasoningTokens }),
+      ...(input.providerCallId === undefined ? {} : { providerCallId: input.providerCallId }),
       settledAt: input.settledAt,
     });
     return this.checkPostSettlementBudget(input.runId);

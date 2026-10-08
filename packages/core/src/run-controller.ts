@@ -2914,9 +2914,11 @@ export class RunController {
       return undefined;
     }
     const usage = resolveResultUsage(result);
+    const providerCallId = resolveResultCallId(result);
     const settlement = await budget.settleLLM({
       runId: current.run.id,
       stepId: step.id,
+      ...(providerCallId === undefined ? {} : { providerCallId }),
       ...(usage === undefined ? {} : { usage }),
       settledAt: this.dependencies.clock.now(),
     });
@@ -4216,6 +4218,14 @@ function resolveResultUsage(
   if (result.kind === "FINAL_CANDIDATE" || result.kind === "TOOL_REQUESTS") {
     return result.modelTurn.usage;
   }
+  return undefined;
+}
+
+function resolveResultCallId(result: AgentLoopAdvanceResult): string | undefined {
+  if (result.kind === "TOOL_REQUESTS" || result.kind === "FINAL_CANDIDATE") {
+    return result.modelTurn.callId;
+  }
+  if (result.kind === "FAILED") return result.modelTurn?.callId;
   return undefined;
 }
 

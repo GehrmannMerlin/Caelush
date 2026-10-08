@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { AIError, createAIError } from "../errors/ai-error.js";
 import { createAIModelTurnAssembler } from "../stream/turn-assembler.js";
 import { observeIteratorNext, waitForIteratorNext } from "../stream/idle-watchdog.js";
@@ -15,6 +16,8 @@ import type {
   AIStreamEvent,
   AIStreamOptions,
   AIStreamStatusEvent,
+  AIInvocationAccountingIdentity,
+  AIInvocationAccountingObserver,
 } from "../stream/index.js";
 import type { AbortScope } from "../stream/abort-scope.js";
 import type { ApiAdapterRegistry } from "../adapters/api-adapter-registry.js";
@@ -104,6 +107,8 @@ export function createAIGateway(
         ...(streamOptions === undefined ? {} : { options: streamOptions }),
       });
 
+      const invocationIdentity = createInvocationAccountingIdentity(prepared);
+      const invocationObserver = streamOptions?.invocationObserver;
       const clock = options.clock;
       const now = clock === undefined ? () => Date.now() : () => clock.now();
       const privateCompletion = createPrivateCompletionSlot(
@@ -120,6 +125,8 @@ export function createAIGateway(
           now,
           privateCompletion,
           streamOptions?.privateReplayResolver,
+          invocationObserver,
+          invocationIdentity,
         ),
         takePrivateCompletion: () => privateCompletion.take(),
       };
@@ -163,6 +170,8 @@ async function* runGatewayStream(
   now: () => number,
   privateCompletion: PrivateCompletionSlot,
   privateReplayResolver: AIPrivateReplayResolver | undefined,
+  invocationObserver: AIInvocationAccountingObserver | undefined,
+  invocationIdentity: AIInvocationAccountingIdentity,
 ): AsyncGenerator<AIStreamEvent> {
   const {
     adapter,
@@ -180,6 +189,9 @@ async function* runGatewayStream(
   } = prepared;
 
   let terminal = false;
+  let settlementStatus: "COMPLETE" | "FAILED" | "CANCELLED" = "FAILED";
+  let settlementUsage: ModelUsage | undefined;
+  let invocationObserved = false;
   let adapterIterator: AsyncIterator<AIAdapterEvent> | undefined;
 
   try {
@@ -196,6 +208,21 @@ async function* runGatewayStream(
     let providerEventReceived = false;
     let nudgeEmitted = false;
     let phase: AIStreamStatusEvent["payload"]["phase"] = "WAITING_PROVIDER";
+
+    if (invocationObserver !== undefined) {
+      try {
+        // `events` is lazy. Persist identity only when the caller actually starts consuming it,
+        // directly before entering the provider adapter's execution path.
+        await invocationObserver.onStarted(invocationIdentity);
+        invocationObserved = true;
+      } catch {
+        throw createAIError(
+          "AI_PROVIDER_ERROR",
+          "Provider request accounting could not start.",
+          context,
+        );
+      }
+    }
 
     const adapterStream = adapter.stream({
       model: descriptor,
@@ -246,6 +273,9 @@ async function* runGatewayStream(
       if (step.done === true) break;
 
       const adapterEvent = step.value;
+      if (adapterEvent.type === "usage") {
+        settlementUsage = mergeUsage(settlementUsage, adapterEvent.payload);
+      }
       providerLastActivityAt = now();
       nudgeEmitted = false;
       if (
@@ -310,10 +340,14 @@ async function* runGatewayStream(
           : { providerReason: adapterFinish.providerReason }),
       },
     };
+    settlementStatus = "COMPLETE";
+    settlementUsage = mergeUsage(settlementUsage, adapterFinish.finalUsage);
     privateCompletion.settleSuccessfully();
     terminal = true;
     yield finishEvent;
   } catch (error) {
+    settlementStatus =
+      error instanceof AIError && error.code === "AI_ABORTED" ? "CANCELLED" : "FAILED";
     privateCompletion.fail();
     terminal = true;
     yield {
@@ -323,7 +357,10 @@ async function* runGatewayStream(
       },
     };
   } finally {
-    if (!terminal) privateCompletion.fail();
+    if (!terminal) {
+      settlementStatus = "CANCELLED";
+      privateCompletion.fail();
+    }
     // A consumer that stopped reading is a distinct internal cause: signal it
     // before closing the adapter iterator so an in-flight transport can unwind.
     if (!terminal) scope.abortConsumer();
@@ -331,7 +368,74 @@ async function* runGatewayStream(
     if (adapterIterator?.return !== undefined) {
       await closeAdapterIterator(adapterIterator, teardownGraceMs);
     }
+    if (invocationObserver !== undefined && invocationObserved) {
+      try {
+        await invocationObserver.onSettled({
+          callId: invocationIdentity.callId,
+          status: settlementStatus,
+          ...(settlementUsage === undefined ? {} : { usage: settlementUsage }),
+        });
+      } catch {
+        // A failed accounting update leaves the durable invocation incomplete. It cannot replace
+        // the Provider result or leak the observer failure into the public stream.
+      }
+    }
   }
+}
+
+function createInvocationAccountingIdentity(
+  prepared: ResolvedGatewayRequest,
+): AIInvocationAccountingIdentity {
+  const connectionIdentity = safeEndpointIdentity(prepared.connection.endpoint);
+  return {
+    callId: prepared.callId,
+    providerId: prepared.providerId as import("../ids/provider-id.js").ProviderId,
+    model: prepared.model,
+    api: prepared.descriptor.api,
+    continuityGroup: accountingFingerprint({
+      providerId: prepared.providerId,
+      model: prepared.model,
+      api: prepared.descriptor.api,
+      connectionIdentity,
+      compatibility: prepared.connection.compatibility,
+      cache: prepared.resolution.cache,
+    }),
+    requestFingerprint: accountingFingerprint({
+      messages: prepared.request.messages,
+      tools: prepared.request.tools,
+      toolChoice: prepared.request.toolChoice,
+      settings: prepared.request.settings,
+    }),
+  };
+}
+
+function safeEndpointIdentity(endpoint: string): string {
+  const parsed = new URL(endpoint);
+  // Query, user info, credentials, headers and transport secrets are deliberately excluded.
+  return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+}
+
+function mergeUsage(
+  previous: ModelUsage | undefined,
+  next: ModelUsage | undefined,
+): ModelUsage | undefined {
+  if (previous === undefined) return next;
+  if (next === undefined) return previous;
+  return { ...previous, ...next };
+}
+
+function accountingFingerprint(value: unknown): string {
+  return createHash("sha256").update(stableJson(value), "utf8").digest("hex");
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  return `{${Object.entries(value as Record<string, unknown>)
+    .filter(([, member]) => member !== undefined)
+    .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+    .map(([key, member]) => `${JSON.stringify(key)}:${stableJson(member)}`)
+    .join(",")}}`;
 }
 
 interface PrivateCompletionSlot {

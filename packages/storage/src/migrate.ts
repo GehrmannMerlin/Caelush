@@ -3,6 +3,7 @@ import { StorageMigrationError } from "./errors.js";
 import type { CaelushDatabase } from "./database.js";
 import {
   finalizeAgentMessages,
+  migratePostMessageV2Storage,
   migratePublishedStorage,
 } from "./messages/migration/finalize-agent-messages.js";
 import { finalizeRunSecurityPolicies } from "./security-policy-migration.js";
@@ -16,6 +17,7 @@ export async function migrateCaelushDatabase(database: CaelushDatabase): Promise
     const migrationsFolder = getCaelushMigrationsFolder();
     migratePublishedStorage(database, migrationsFolder);
     finalizeAgentMessages(database, migrationsFolder);
+    migratePostMessageV2Storage(database, migrationsFolder);
     finalizeRunSecurityPolicies(database);
   } catch (error) {
     if (error instanceof StorageMigrationError) throw error;

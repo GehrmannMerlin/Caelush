@@ -16,7 +16,7 @@ import {
 } from "../src/messages/migration/finalize-agent-messages.js";
 import { backfillLegacyAgentMessages } from "../src/messages/legacy/backfill.js";
 import { parseHistoricalLegacyMessage } from "../src/messages/migration/legacy-parser.js";
-import { makeSecurityPolicy } from "./support/fixtures.js";
+import { makeRun, makeSecurityPolicy } from "./support/fixtures.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -141,10 +141,12 @@ describe("committed storage migrations", () => {
         "event_sequences",
         "memory_extraction_jobs",
         "memory_records",
+        "private_replays",
         "prompt_surface_epochs",
         "prompt_surface_records",
         "prompt_surface_section_state",
         "prompt_surface_snapshots",
+        "provider_invocation_usage",
         "run_budget_entries",
         "run_cancellation_requests",
         "run_resource_states",
@@ -157,7 +159,7 @@ describe("committed storage migrations", () => {
       // Phase 5F, the Workspace Registry, Runtime AI Management, scoped Prompt Surface anchors,
       // and Prompt Surface V3 state are represented in the published migration ledger.
       expect(sqlite.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get()).toEqual({
-        count: 21,
+        count: 24,
       });
 
       // The final schema contains only the durable Message V2 envelope and payload.
@@ -232,7 +234,10 @@ describe("committed storage migrations", () => {
         entry.name === "20261006100000_prompt_surface" ||
         entry.name === "20261006110000_prompt_surface_same_step_epochs" ||
         entry.name === "20261007120000_prompt_surface_scoped_anchors" ||
-        entry.name === "20261008100000_prompt_surface_v3"
+        entry.name === "20261008100000_prompt_surface_v3" ||
+        entry.name === "20261008120000_private_replay" ||
+        entry.name === "20261008140000_cache_usage_accounting" ||
+        entry.name === "20261008160000_provider_invocation_usage"
       )
         continue;
       await cp(
@@ -247,6 +252,33 @@ describe("committed storage migrations", () => {
       migratePublishedStorage(priorDatabase, priorMigrationsFolder);
       finalizeAgentMessages(priorDatabase, priorMigrationsFolder);
       finalizeRunSecurityPolicies(priorDatabase);
+      const cacheMigrationSessionId = createSessionId();
+      const cacheMigrationRun = AgentRunSchema.parse(
+        makeRun(cacheMigrationSessionId, { status: "COMPLETED" }),
+      );
+      priorDatabase.client
+        .prepare(
+          "INSERT INTO agent_sessions (id, protocol_version, created_at_ms, updated_at_ms, data_json) VALUES (?, 1, 1, 1, '{}')",
+        )
+        .run(cacheMigrationSessionId);
+      priorDatabase.client
+        .prepare(
+          "INSERT INTO agent_runs (id, session_id, protocol_version, status, created_at_ms, data_json) VALUES (?, ?, 1, 'COMPLETED', 1, ?)",
+        )
+        .run(cacheMigrationRun.id, cacheMigrationSessionId, JSON.stringify(cacheMigrationRun));
+      priorDatabase.client
+        .prepare(
+          `INSERT INTO run_budget_entries
+           (id, run_id, kind, owner_id, state, reserved_tool_calls, reserved_input_tokens,
+            reserved_output_tokens, actual_input_tokens, actual_output_tokens, reserved_cost_micros,
+            actual_cost_micros, model_provider, model_id, pricing_snapshot_id,
+            input_rate_micros_per_million, output_rate_micros_per_million, created_at_ms,
+            started_at_ms, settled_at_ms)
+           VALUES ('legacy-cache-usage', ?, 'VERIFICATION_LLM', 'verify-old',
+                   'SETTLED', 0, 18000, 2000, 16017, 1311, 0, 123, 'fixture', 'model', NULL,
+                   NULL, NULL, 1, 1, 2)`,
+        )
+        .run(cacheMigrationRun.id);
       expect(
         priorDatabase.client.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get(),
       ).toEqual({ count: 17 });
@@ -275,7 +307,21 @@ describe("committed storage migrations", () => {
         ]),
       );
       expect(sqlite.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get()).toEqual({
-        count: 21,
+        count: 24,
+      });
+      expect(
+        sqlite
+          .prepare(
+            "SELECT actual_input_tokens, actual_output_tokens, actual_cost_micros, cache_hit_input_tokens, cache_miss_input_tokens, cache_write_input_tokens FROM run_budget_entries WHERE id = 'legacy-cache-usage'",
+          )
+          .get(),
+      ).toEqual({
+        actual_input_tokens: 16_017,
+        actual_output_tokens: 1_311,
+        actual_cost_micros: 123,
+        cache_hit_input_tokens: null,
+        cache_miss_input_tokens: null,
+        cache_write_input_tokens: null,
       });
     } finally {
       sqlite.close();

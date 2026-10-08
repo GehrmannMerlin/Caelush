@@ -62,6 +62,44 @@ const basePromptCache = {
       unknownUsageCount: 1,
     },
   ],
+  metricsV2: {
+    fullRun: {
+      mainAgent: { requestCount: 2, hitTokens: 1_700, accountedTokens: 2_000, hitRate: 0.85 },
+      allPurposes: { requestCount: 2, hitTokens: 1_700, accountedTokens: 2_000, hitRate: 0.85 },
+    },
+    warm: {
+      mainAgent: { requestCount: 1, hitTokens: 1_700, accountedTokens: 2_000, hitRate: 0.85 },
+      allPurposes: { requestCount: 1, hitTokens: 1_700, accountedTokens: 2_000, hitRate: 0.85 },
+    },
+    rolling: {
+      windowSize: 10,
+      mainAgent: { requestCount: 2, hitTokens: 1_700, accountedTokens: 2_000, hitRate: 0.85 },
+      allPurposes: { requestCount: 2, hitTokens: 1_700, accountedTokens: 2_000, hitRate: 0.85 },
+    },
+    latestRequest: {
+      purpose: "MAIN_AGENT",
+      inputTokens: 1_000,
+      hitTokens: 900,
+      missTokens: 100,
+      writeTokens: 0,
+      cacheUsageReported: true,
+    },
+    usageCoverage: {
+      observedRequestCount: 3,
+      completeCacheUsageCount: 2,
+      incompleteOrUnknownCount: 1,
+      providerUsageUnreportedCount: 0,
+      providerUsageWithoutCacheBreakdownCount: 1,
+      failedOrCancelledWithoutUsageCount: 0,
+      inProgressInvocationCount: 0,
+      missingInvocationRecordCount: 0,
+      legacyWithoutCacheBreakdownCount: 0,
+      unidentifiedLegacySampleCount: 0,
+      coverageRate: 2 / 3,
+      status: "PARTIAL",
+    },
+    surfaceDelta: { availability: "NOT_AVAILABLE_FOR_V2" },
+  },
 } as const;
 
 describe("Context Usage Protocol projection", () => {
@@ -69,6 +107,7 @@ describe("Context Usage Protocol projection", () => {
     expect(protocol.PromptCacheStatusSchema).toBeDefined();
     expect(protocol.PromptCacheRequestPurposeSchema).toBeDefined();
     expect(protocol.PromptCacheUsageSchema).toBeDefined();
+    expect(protocol.CacheMetricsV2Schema).toBeDefined();
   });
 
   it.each(["WARM", "COLD_START", "RESET", "UNREPORTED"] as const)(
@@ -146,6 +185,53 @@ describe("Context Usage Protocol projection", () => {
     { sampleCount: Number.MAX_SAFE_INTEGER + 1 },
     { resetReason: "RAW_EXCEPTION_TEXT" },
     { purposes: [{ ...basePromptCache.purposes[0], inputTokens: -1 }] },
+    {
+      metricsV2: {
+        ...basePromptCache.metricsV2,
+        rolling: {
+          ...basePromptCache.metricsV2.rolling,
+          windowSize: 9,
+        },
+      },
+    },
+    {
+      metricsV2: {
+        ...basePromptCache.metricsV2,
+        fullRun: {
+          ...basePromptCache.metricsV2.fullRun,
+          mainAgent: {
+            ...basePromptCache.metricsV2.fullRun.mainAgent,
+            hitRate: 0.9,
+          },
+        },
+      },
+    },
+    {
+      metricsV2: {
+        ...basePromptCache.metricsV2,
+        latestRequest: {
+          purpose: "MAIN_AGENT",
+          hitTokens: 10,
+          missTokens: 2,
+          cacheUsageReported: false,
+        },
+      },
+    },
+    {
+      purposes: [
+        {
+          ...basePromptCache.purposes[0],
+          usageFieldCoverage: {
+            inputTokens: 3,
+            outputTokens: 0,
+            hitTokens: 0,
+            missTokens: 0,
+            writeTokens: 0,
+            reasoningTokens: 0,
+          },
+        },
+      ],
+    },
   ])("rejects malformed prompt-cache fields: %o", (patch) => {
     expect(
       protocol.ContextUsageProjectionSchema.safeParse({
@@ -188,5 +274,30 @@ describe("Context Usage Protocol projection", () => {
     ).toBe(false);
     expect(protocol.ContextUsageProjectionSchema.parse(baseUsage)).toEqual(baseUsage);
     expect(protocol.ContextUsageResponseSchema.parse(null)).toBeNull();
+  });
+
+  it("validates complete cache metrics and rejects non-safe or inconsistent coverage counts", () => {
+    expect(
+      protocol.ContextUsageProjectionSchema.parse({
+        ...baseUsage,
+        promptCache: { status: "WARM", ...basePromptCache },
+      }).promptCache?.metricsV2?.usageCoverage.coverageRate,
+    ).toBe(2 / 3);
+    expect(
+      protocol.ContextUsageProjectionSchema.safeParse({
+        ...baseUsage,
+        promptCache: {
+          status: "WARM",
+          ...basePromptCache,
+          metricsV2: {
+            ...basePromptCache.metricsV2,
+            usageCoverage: {
+              ...basePromptCache.metricsV2.usageCoverage,
+              observedRequestCount: Number.MAX_SAFE_INTEGER + 1,
+            },
+          },
+        },
+      }).success,
+    ).toBe(false);
   });
 });

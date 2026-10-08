@@ -251,7 +251,7 @@ describe("CliConversationController", () => {
     controller.dispose();
   });
 
-  it("prints cache status, separate rates, resets, and purpose totals without inferring zero", async () => {
+  it("prints Cache Metrics V2 rates, Usage Coverage, and Purpose fields without inventing zeros", async () => {
     const run = makeRun("the first prompt");
     let usage = makeContextUsage(run, "WARM");
     const client = makeClient({
@@ -266,17 +266,21 @@ describe("CliConversationController", () => {
     await controller.submitPrompt("the first prompt");
 
     await controller.submitPrompt("/context");
-    expect(controller.getState().notice).toContain("平台实际命中率 rolling 80%");
-    expect(controller.getState().notice).toContain("Caelush 可复用前缀效率 80%");
+    expect(controller.getState().notice).toContain("MAIN_AGENT 暖请求命中率 80%");
+    expect(controller.getState().notice).toContain("MAIN_AGENT 全程命中率 80%");
+    expect(controller.getState().notice).toContain("Usage Coverage 1 / 2 · PARTIAL");
+    expect(controller.getState().notice).toContain("Usage Coverage 诊断");
+    expect(controller.getState().notice).toContain("已上报 Token 但无 Hit/Miss 1");
+    expect(controller.getState().notice).not.toContain("可复用前缀效率");
     expect(controller.getState().notice).toContain("最近重置 —");
     expect(controller.getState().notice).not.toContain("最近重置 INITIAL");
-    expect(controller.getState().notice).toContain("2 requests");
+    expect(controller.getState().notice).toContain("MAIN_AGENT 1 request");
     expect(controller.getState().notice).toContain("COMPACTION 1 request");
 
     usage = makeContextUsage(run, "COLD_START");
     await controller.submitPrompt("/context");
     expect(controller.getState().notice).toContain("冷启动");
-    expect(controller.getState().notice).toContain("平台实际命中率 rolling 0%");
+    expect(controller.getState().notice).toContain("MAIN_AGENT 全程命中率 0%");
 
     usage = makeContextUsage(run, "RESET");
     await controller.submitPrompt("/context");
@@ -287,14 +291,14 @@ describe("CliConversationController", () => {
     usage = makeContextUsage(run, "UNREPORTED");
     await controller.submitPrompt("/context");
     expect(controller.getState().notice).toContain("未上报 usage");
-    expect(controller.getState().notice).not.toContain("rolling 0%");
-    expect(controller.getState().notice).not.toContain("latest 0%");
-    expect(controller.getState().notice).toContain("Caelush 可复用前缀效率 未上报 usage");
+    expect(controller.getState().notice).not.toContain("MAIN_AGENT 全程命中率 0%");
+    expect(controller.getState().notice).toContain("MAIN_AGENT 全程命中率 未上报 usage");
+    expect(controller.getState().notice).not.toContain("可复用前缀效率");
 
     usage = { ...makeContextUsage(run, "WARM"), promptCache: undefined };
     await controller.submitPrompt("/context");
     expect(controller.getState().notice).toContain("Context: 50% used");
-    expect(controller.getState().notice).not.toContain("平台实际命中率");
+    expect(controller.getState().notice).not.toContain("MAIN_AGENT 暖请求命中率");
     controller.dispose();
   });
 
@@ -504,7 +508,6 @@ function makeContextUsage(
         : {
             latestHitRate: isColdStart ? 0 : 0.8,
             rollingHitRate: isColdStart ? 0 : 0.8,
-            reusablePrefixEfficiency: isColdStart ? 0 : 0.8,
           }),
       expectedReusablePrefixTokens: 500,
       epochId: "cycle-4",
@@ -521,7 +524,16 @@ function makeContextUsage(
           hitTokens,
           missTokens,
           writeTokens: 20,
-          unknownUsageCount: 0,
+          reasoningTokens: 0,
+          usageFieldCoverage: {
+            inputTokens: 1,
+            outputTokens: 1,
+            hitTokens: isUnreported ? 0 : 1,
+            missTokens: isUnreported ? 0 : 1,
+            writeTokens: 1,
+            reasoningTokens: 0,
+          },
+          unknownUsageCount: isUnreported ? 1 : 0,
         },
         {
           purpose: "COMPACTION",
@@ -531,9 +543,96 @@ function makeContextUsage(
           hitTokens: 0,
           missTokens: 0,
           writeTokens: 0,
+          reasoningTokens: 0,
+          usageFieldCoverage: {
+            inputTokens: 1,
+            outputTokens: 1,
+            hitTokens: 0,
+            missTokens: 0,
+            writeTokens: 0,
+            reasoningTokens: 0,
+          },
           unknownUsageCount: 1,
         },
       ],
+      metricsV2: {
+        fullRun: {
+          mainAgent: isUnreported
+            ? { requestCount: 0, hitTokens: 0, accountedTokens: 0 }
+            : {
+                requestCount: 1,
+                hitTokens,
+                accountedTokens: hitTokens + missTokens,
+                hitRate:
+                  hitTokens + missTokens === 0 ? undefined : hitTokens / (hitTokens + missTokens),
+              },
+          allPurposes: isUnreported
+            ? { requestCount: 0, hitTokens: 0, accountedTokens: 0 }
+            : {
+                requestCount: 1,
+                hitTokens,
+                accountedTokens: hitTokens + missTokens,
+                hitRate:
+                  hitTokens + missTokens === 0 ? undefined : hitTokens / (hitTokens + missTokens),
+              },
+        },
+        warm: {
+          mainAgent:
+            isUnreported || isColdStart
+              ? { requestCount: 0, hitTokens: 0, accountedTokens: 0 }
+              : { requestCount: 1, hitTokens: 400, accountedTokens: 500, hitRate: 0.8 },
+          allPurposes:
+            isUnreported || isColdStart
+              ? { requestCount: 0, hitTokens: 0, accountedTokens: 0 }
+              : { requestCount: 1, hitTokens: 400, accountedTokens: 500, hitRate: 0.8 },
+        },
+        rolling: {
+          windowSize: 10,
+          mainAgent: isUnreported
+            ? { requestCount: 0, hitTokens: 0, accountedTokens: 0 }
+            : {
+                requestCount: 1,
+                hitTokens,
+                accountedTokens: hitTokens + missTokens,
+                hitRate:
+                  hitTokens + missTokens === 0 ? undefined : hitTokens / (hitTokens + missTokens),
+              },
+          allPurposes: isUnreported
+            ? { requestCount: 0, hitTokens: 0, accountedTokens: 0 }
+            : {
+                requestCount: 1,
+                hitTokens,
+                accountedTokens: hitTokens + missTokens,
+                hitRate:
+                  hitTokens + missTokens === 0 ? undefined : hitTokens / (hitTokens + missTokens),
+              },
+        },
+        latestRequest: isUnreported
+          ? { purpose: "MAIN_AGENT", inputTokens: 500, cacheUsageReported: false }
+          : {
+              purpose: "MAIN_AGENT",
+              inputTokens: 500,
+              hitTokens,
+              missTokens,
+              writeTokens: 20,
+              cacheUsageReported: true,
+            },
+        usageCoverage: {
+          observedRequestCount: 2,
+          completeCacheUsageCount: isUnreported ? 0 : 1,
+          incompleteOrUnknownCount: isUnreported ? 2 : 1,
+          providerUsageUnreportedCount: 0,
+          providerUsageWithoutCacheBreakdownCount: isUnreported ? 2 : 1,
+          failedOrCancelledWithoutUsageCount: 0,
+          inProgressInvocationCount: 0,
+          missingInvocationRecordCount: isUnreported ? 2 : 1,
+          legacyWithoutCacheBreakdownCount: isUnreported ? 2 : 1,
+          unidentifiedLegacySampleCount: 0,
+          coverageRate: isUnreported ? 0 : 0.5,
+          status: isUnreported ? "UNREPORTED" : "PARTIAL",
+        },
+        surfaceDelta: { availability: "NOT_AVAILABLE_FOR_V2" },
+      },
     },
   };
 }

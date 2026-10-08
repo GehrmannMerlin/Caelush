@@ -164,6 +164,7 @@ export type {
 export { EventStreamQuerySchema } from "./event-stream.js";
 export type { EventStreamQuery } from "./event-stream.js";
 export {
+  CacheMetricsV2Schema,
   ContextUsagePressureStateSchema,
   ContextUsageProjectionSchema,
   ContextUsageResponseSchema,
@@ -174,6 +175,7 @@ export {
   PromptCacheUsageSchema,
 } from "./context-usage.js";
 export type {
+  CacheMetricsV2,
   ContextUsageProjection,
   ContextUsageResponse,
   PromptCacheRequestPurpose,

@@ -22,6 +22,7 @@ import type {
   TranscriptEntry,
   WorkspaceRef,
   ContextUsageProjection,
+  CacheMetricsV2,
   PermissionPresetSelection,
   SecurityCapabilitiesResponse,
   WorkspaceSecurityCapabilitiesResponse,
@@ -1227,10 +1228,7 @@ function formatContextUsage(usage: ContextUsageProjection): string {
   if (cache === undefined) return lines.join(" · ");
 
   const statusLabel = promptCacheStatusLabel(cache.status);
-  const platformRate =
-    cache.rollingHitRate === undefined && cache.latestHitRate === undefined
-      ? "未上报 usage"
-      : `rolling ${formatRate(cache.rollingHitRate)} · latest ${formatRate(cache.latestHitRate)}`;
+  const metrics = cache.metricsV2;
   const resetReason = cache.resetReason === "INITIAL" ? undefined : cache.resetReason;
   const resetDescription =
     resetReason === undefined
@@ -1245,24 +1243,66 @@ function formatContextUsage(usage: ContextUsageProjection): string {
 
   lines.push(
     `Prompt cache ${statusLabel}`,
-    `平台实际命中率 ${platformRate}`,
-    `Caelush 可复用前缀效率 ${formatRate(cache.reusablePrefixEfficiency)}`,
+    `MAIN_AGENT 暖请求命中率 ${metrics === undefined ? "历史统计不可用" : formatRate(metrics.warm.mainAgent.hitRate)}`,
+    `MAIN_AGENT 全程命中率 ${metrics === undefined ? "历史统计不可用" : formatRate(metrics.fullRun.mainAgent.hitRate)}`,
+    `MAIN_AGENT 最近 ${metrics?.rolling.windowSize ?? 10} 次命中率 ${metrics === undefined ? "历史统计不可用" : `${formatRate(metrics.rolling.mainAgent.hitRate)} · ${metrics.rolling.mainAgent.requestCount} 个请求`}`,
+    `全部用途暖请求命中率 ${metrics === undefined ? "历史统计不可用" : formatRate(metrics.warm.allPurposes.hitRate)}`,
+    `全部用途全程命中率 ${metrics === undefined ? "历史统计不可用" : formatRate(metrics.fullRun.allPurposes.hitRate)}`,
+    `最近请求未命中 ${metrics?.latestRequest?.missTokens === undefined ? "未上报" : `${metrics.latestRequest.missTokens.toLocaleString()} tokens`}`,
+    `Usage Coverage ${metrics === undefined ? "历史统计不可用" : `${metrics.usageCoverage.completeCacheUsageCount} / ${metrics.usageCoverage.observedRequestCount} · ${metrics.usageCoverage.status}`}`,
+    `Usage Coverage 诊断 ${metrics === undefined ? "历史统计不可用" : formatUsageCoverageDetails(metrics.usageCoverage)}`,
     `缓存周期 ${cache.epochId ?? "—"} · ${statusLabel}`,
     `最近重置 ${resetDescription}`,
-    `Requests / tokens ${cache.totalRequestCount.toLocaleString()} requests · ${cache.totalInputTokens.toLocaleString()} input tokens · ${cache.totalOutputTokens.toLocaleString()} output tokens`,
-    `Cache samples ${cache.sampleCount.toLocaleString()}`,
-    `Hit / miss / write tokens ${cache.hitTokens.toLocaleString()} / ${cache.missTokens.toLocaleString()} / ${cache.writeTokens.toLocaleString()}`,
-    `未上报 usage ${cache.unknownUsageCount.toLocaleString()}`,
     ...cache.purposes.map(
       (purpose) =>
-        `${purpose.purpose} ${purpose.requestCount.toLocaleString()} ${purpose.requestCount === 1 ? "request" : "requests"} · ${purpose.inputTokens.toLocaleString()} input tokens · ${purpose.outputTokens.toLocaleString()} output tokens · ${purpose.unknownUsageCount.toLocaleString()} unknown`,
+        `${purpose.purpose} ${purpose.requestCount.toLocaleString()} ${purpose.requestCount === 1 ? "request" : "requests"} · ${purposeUsageDetail(purpose)}`,
     ),
+    ...(metrics?.previousInputCoverage === undefined
+      ? []
+      : [
+          `Previous Input Coverage Proxy（诊断代理量）${formatRate(metrics.previousInputCoverage.coverage)}`,
+        ]),
   );
   return lines.join(" · ");
 }
 
 function formatRate(value: number | undefined): string {
   return value === undefined ? "未上报 usage" : `${Math.round(value * 100)}%`;
+}
+
+function formatUsageCoverageDetails(coverage: CacheMetricsV2["usageCoverage"]): string {
+  const diagnostics = [
+    ["Provider 未上报 Usage", coverage.providerUsageUnreportedCount],
+    ["已上报 Token 但无 Hit/Miss", coverage.providerUsageWithoutCacheBreakdownCount],
+    ["失败/取消且无 Usage", coverage.failedOrCancelledWithoutUsageCount],
+    ["仍在执行或未结算", coverage.inProgressInvocationCount],
+    ["缺少 Gateway 调用记录", coverage.missingInvocationRecordCount],
+    ["旧记录缺少 Cache 字段", coverage.legacyWithoutCacheBreakdownCount],
+    ["无 Invocation ID 的样本", coverage.unidentifiedLegacySampleCount],
+  ] as const;
+  const visible = diagnostics
+    .filter(([, count]) => count > 0)
+    .map(([label, count]) => `${label} ${count.toLocaleString()}`);
+  return visible.length === 0 ? "未发现覆盖缺口" : visible.join(" · ");
+}
+
+function purposeUsageDetail(
+  purpose: NonNullable<ContextUsageProjection["promptCache"]>["purposes"][number],
+): string {
+  const coverage = purpose.usageFieldCoverage;
+  if (coverage === undefined) return "旧版本未保存字段上报覆盖";
+  const field = (label: string, tokens: number, reported: number) =>
+    reported === 0
+      ? `${label} 未上报`
+      : `${tokens.toLocaleString()} ${label}${reported < purpose.requestCount ? ` (${reported}/${purpose.requestCount} reported)` : ""}`;
+  return [
+    field("input tokens", purpose.inputTokens, coverage.inputTokens),
+    field("output tokens", purpose.outputTokens, coverage.outputTokens),
+    field("cache hit tokens", purpose.hitTokens, coverage.hitTokens),
+    field("cache miss tokens", purpose.missTokens, coverage.missTokens),
+    field("cache write tokens", purpose.writeTokens, coverage.writeTokens),
+    field("reasoning tokens", purpose.reasoningTokens ?? 0, coverage.reasoningTokens),
+  ].join(" · ");
 }
 
 function promptCacheStatusLabel(

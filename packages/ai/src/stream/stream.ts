@@ -1,6 +1,10 @@
 import type { AIStreamEvent } from "./events.js";
 import type { LLMCallId } from "../ids/llm-call-id.js";
 import type { AIPrivateCompletion, AIPrivateReplayResolver } from "./private-completion.js";
+import type { ApiId } from "../ids/api-id.js";
+import type { ProviderId } from "../ids/provider-id.js";
+import type { ModelRef } from "../models/model-ref.js";
+import type { ModelUsage } from "../models/model-usage.js";
 
 export const DEFAULT_PROVIDER_NUDGE_AFTER_MS = 30_000;
 export const DEFAULT_PROVIDER_STREAM_IDLE_TIMEOUT_MS = 300_000;
@@ -39,4 +43,26 @@ export interface AIStreamOptions {
   readonly teardownGraceMs?: number;
   /** Host-only resolver for private state attached to the messages in this exact request. */
   readonly privateReplayResolver?: AIPrivateReplayResolver;
+  /** Host-only durable accounting sideband; it never enters the public stream or provider request. */
+  readonly invocationObserver?: AIInvocationAccountingObserver;
+}
+
+export interface AIInvocationAccountingIdentity {
+  readonly callId: LLMCallId;
+  readonly providerId: ProviderId;
+  readonly model: ModelRef;
+  readonly api: ApiId;
+  readonly continuityGroup: string;
+  readonly requestFingerprint: string;
+}
+
+export interface AIInvocationAccountingObserver {
+  /** Runs after Gateway preflight and before the adapter can issue provider I/O. */
+  onStarted(identity: AIInvocationAccountingIdentity): void | Promise<void>;
+  /** Runs once after normal finish, provider failure, timeout, or consumer cancellation. */
+  onSettled(input: {
+    readonly callId: LLMCallId;
+    readonly status: "COMPLETE" | "FAILED" | "CANCELLED";
+    readonly usage?: ModelUsage;
+  }): void | Promise<void>;
 }

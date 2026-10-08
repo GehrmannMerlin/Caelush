@@ -105,6 +105,14 @@ export const runBudgetEntries = sqliteTable(
     reservedOutputTokens: integer("reserved_output_tokens").notNull(),
     actualInputTokens: integer("actual_input_tokens"),
     actualOutputTokens: integer("actual_output_tokens"),
+    cacheHitInputTokens: integer("cache_hit_input_tokens"),
+    cacheMissInputTokens: integer("cache_miss_input_tokens"),
+    cacheWriteInputTokens: integer("cache_write_input_tokens"),
+    reasoningTokens: integer("reasoning_tokens"),
+    providerCallId: text("provider_call_id"),
+    cacheEpochId: text("cache_epoch_id"),
+    continuityGroup: text("continuity_group"),
+    prefixFingerprint: text("prefix_fingerprint"),
     reservedCostMicros: integer("reserved_cost_micros").notNull(),
     actualCostMicros: integer("actual_cost_micros"),
     modelProvider: text("model_provider"),
@@ -118,8 +126,46 @@ export const runBudgetEntries = sqliteTable(
   },
   (table) => [
     uniqueIndex("run_budget_entries_owner_unique").on(table.runId, table.kind, table.ownerId),
+    uniqueIndex("run_budget_entries_provider_call_unique").on(table.providerCallId),
     index("run_budget_entries_run_id_idx").on(table.runId),
     index("run_budget_entries_state_idx").on(table.state),
+  ],
+);
+
+/** Per-Gateway-call Provider usage identity, independent of budget owner/retry identities. */
+export const providerInvocationUsage = sqliteTable(
+  "provider_invocation_usage",
+  {
+    callId: text("call_id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => agentRuns.id, { onDelete: "cascade" }),
+    purpose: text("purpose").notNull(),
+    status: text("status").notNull(),
+    providerId: text("provider_id").notNull(),
+    modelId: text("model_id").notNull(),
+    api: text("api").notNull(),
+    continuityGroup: text("continuity_group").notNull(),
+    cacheEpochId: text("cache_epoch_id"),
+    prefixFingerprint: text("prefix_fingerprint"),
+    requestFingerprint: text("request_fingerprint").notNull(),
+    observedAtMs: integer("observed_at_ms").notNull(),
+    settledAtMs: integer("settled_at_ms"),
+    totalTokens: integer("total_tokens"),
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    cacheHitInputTokens: integer("cache_hit_input_tokens"),
+    cacheMissInputTokens: integer("cache_miss_input_tokens"),
+    cacheWriteInputTokens: integer("cache_write_input_tokens"),
+    reasoningTokens: integer("reasoning_tokens"),
+  },
+  (table) => [
+    index("provider_invocation_usage_run_order_idx").on(
+      table.runId,
+      table.observedAtMs,
+      table.callId,
+    ),
+    index("provider_invocation_usage_purpose_idx").on(table.runId, table.purpose),
   ],
 );
 
@@ -646,6 +692,7 @@ export const storageSchema = {
   agentRuns,
   runCancellationRequests,
   runBudgetEntries,
+  providerInvocationUsage,
   runResourceStates,
   agentSteps,
   agentStateSnapshots,

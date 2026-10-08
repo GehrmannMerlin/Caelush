@@ -6,6 +6,7 @@ import { backfillLegacyAgentMessages } from "../legacy/backfill.js";
 import { parseHistoricalLegacyMessage } from "./legacy-parser.js";
 
 const FINAL_MIGRATION_NAME = "20260924120000_message_system_v2_final";
+const POST_MESSAGE_V2_MIGRATION_NAMES = new Set(["20261008120000_private_replay"]);
 
 /** Apply all published migrations before the final physical Message V2 rebuild. */
 export function migratePublishedStorage(database: CaelushDatabase, migrationsFolder: string): void {
@@ -15,9 +16,24 @@ export function migratePublishedStorage(database: CaelushDatabase, migrationsFol
     throw new StorageMigrationError("Final Message V2 migration asset is missing");
   }
   migrateSync(
-    migrations.filter((migration) => migration.name !== FINAL_MIGRATION_NAME),
+    migrations.filter(
+      (migration) =>
+        migration.name !== FINAL_MIGRATION_NAME &&
+        !POST_MESSAGE_V2_MIGRATION_NAMES.has(migration.name),
+    ),
     database.drizzle._.session,
   );
+}
+
+/** Apply migrations whose foreign keys depend on the final Message V2 primary key. */
+export function migratePostMessageV2Storage(
+  database: CaelushDatabase,
+  migrationsFolder: string,
+): void {
+  const migrations = readMigrationFiles({ migrationsFolder }).filter((migration) =>
+    POST_MESSAGE_V2_MIGRATION_NAMES.has(migration.name),
+  );
+  migrateSync(migrations, database.drizzle._.session);
 }
 
 /**

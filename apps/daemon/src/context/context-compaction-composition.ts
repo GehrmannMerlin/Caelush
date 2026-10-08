@@ -1,4 +1,9 @@
-import type { AIGateway, AIModelRequest, AIModelTurnResult } from "@caelush/ai";
+import type {
+  AIGateway,
+  AIInvocationAccountingObserver,
+  AIModelRequest,
+  AIModelTurnResult,
+} from "@caelush/ai";
 import {
   CONTEXT_SUMMARY_PROMPT_VERSION,
   ContextSummarizationInfrastructureError,
@@ -25,6 +30,7 @@ export interface ContextCompactionBudgetPort {
   settleContextCompactionLLM(input: {
     readonly runId: AgentRun["id"];
     readonly ownerId: string;
+    readonly providerCallId?: string;
     readonly usage?: AIModelTurnResult["usage"];
     readonly settledAt: TimestampMs;
   }): Promise<RunBudgetSettlement | void>;
@@ -40,6 +46,7 @@ export interface BudgetedContextSummarizerOptions {
   readonly budget: ContextCompactionBudgetPort;
   readonly run: AgentRun;
   readonly clock: { now(): TimestampMs };
+  readonly invocationObserver?: AIInvocationAccountingObserver;
 }
 
 export class ContextCompactionBudgetDeniedError extends Error {
@@ -103,7 +110,12 @@ export function createBudgetedContextSummarizer(
       };
       let result: AIModelTurnResult;
       try {
-        result = await options.gateway.complete(admittedRequest, callOptions);
+        result = await options.gateway.complete(admittedRequest, {
+          ...callOptions,
+          ...(options.invocationObserver === undefined
+            ? {}
+            : { invocationObserver: options.invocationObserver }),
+        });
       } catch (error) {
         await markConservative(options, ownerId);
         throw error;
@@ -112,6 +124,7 @@ export function createBudgetedContextSummarizer(
         await options.budget.settleContextCompactionLLM({
           runId: options.run.id,
           ownerId,
+          providerCallId: result.callId,
           usage: result.usage,
           settledAt: options.clock.now(),
         });

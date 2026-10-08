@@ -78,11 +78,13 @@ import type {
   ModelCatalog,
   ModelDescriptor,
   ModelDescriptorSourcePort,
+  AIInvocationAccountingObserver,
 } from "@caelush/ai";
 import {
   DaemonInfoSchema,
   createApprovalRequestId,
   createEventId,
+  LLMCallIdSchema,
   createObservationId,
   createStepId,
   createTimestampMs,
@@ -97,6 +99,7 @@ import {
   type RunId,
   type TimestampMs,
   type ContextUsageProjection,
+  type CacheMetricsV2,
   type PromptCachePurposeUsage,
   type PromptCacheRequestPurpose,
   type PromptCacheStatus,
@@ -183,6 +186,7 @@ import {
 import {
   createSqliteToolBudgetAdmission,
   type BudgetLedgerEntry,
+  type ProviderInvocationUsageRecord,
   type CaelushStorage,
 } from "@caelush/storage";
 import {
@@ -552,13 +556,29 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
   const gateway = createDiagnosedGateway(ai.gateway, wireDiagnostic, ai.models);
   const modelTurnExecutor = createModelTurnExecutor({
     gateway,
+    invocationObserverFactory: (input) =>
+      createProviderInvocationAccountingObserver({
+        storage: options.storage,
+        runId: input.identity.runId as RunId,
+        purpose: "MAIN_AGENT",
+        clock,
+      }),
     privateReplayResolverFactory: (scope) =>
       createDaemonPrivateReplayResolver(options.storage.privateReplay, scope),
     notifier: eventNotifier,
     eventIdFactory: { create: createEventId },
     clock,
   });
-  const verificationModelTurnExecutor = createModelTurnExecutor({ gateway });
+  const verificationModelTurnExecutor = createModelTurnExecutor({
+    gateway,
+    invocationObserverFactory: (input) =>
+      createProviderInvocationAccountingObserver({
+        storage: options.storage,
+        runId: input.identity.runId as RunId,
+        purpose: "VERIFICATION_LLM",
+        clock,
+      }),
+  });
   /**
    * The Run identity a *host-driven* model turn executes for.
    *
@@ -1039,6 +1059,13 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
             promptSurfaceStore: options.storage.promptSurface,
             runtime,
             gateway,
+            invocationObserverFactory: (runId) =>
+              createProviderInvocationAccountingObserver({
+                storage: options.storage,
+                runId,
+                purpose: "CONTEXT_COMPACTION",
+                clock,
+              }),
             messageProjectors,
             contributionPipeline,
             notifier: eventNotifier,
@@ -1169,10 +1196,11 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
         const typedRunId = runId as RunId;
         const usage = await options.storage.contextUsage.getByRun(typedRunId);
         if (usage === undefined) return undefined;
-        const [records, currentEpoch, budgetEntries] = await Promise.all([
+        const [records, currentEpoch, budgetEntries, invocationEntries] = await Promise.all([
           options.storage.messageRecords.listByRun(typedRunId),
           options.storage.promptSurface.getCurrent(typedRunId),
           options.storage.budgetLedger.listByRun(typedRunId),
+          options.storage.providerInvocationUsage.listByRun(typedRunId),
         ]);
         const currentSurface =
           currentEpoch === undefined
@@ -1183,7 +1211,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
           ...projectedContextUsage,
           promptCache: projectPromptCacheUsage(
             usage,
-            promptCacheSamplesFromDurableMessages(records, budgetEntries),
+            promptCacheSamplesFromDurableMessages(records, budgetEntries, invocationEntries),
             currentEpoch,
             currentSurface === undefined || usage.promptSurface === undefined
               ? undefined
@@ -1193,6 +1221,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
                   records,
                   recentTailTokens: projectedContextUsage.breakdown.recentTail,
                 }),
+            currentSurface?.records,
           ),
         };
       },
@@ -1302,7 +1331,83 @@ function projectV2ContextUsage(input: ContextUsageSnapshot) {
 export interface PromptCacheUsageSample {
   readonly purpose: PromptCacheRequestPurpose;
   readonly measuredAt: TimestampMs;
+  /** Gateway-owned call identity. Budget owner ids and Step ids are never substituted here. */
+  readonly invocationId?: string;
+  readonly invocationStatus?: ProviderInvocationUsageRecord["status"];
+  readonly source?: "GATEWAY" | "ASSISTANT_MESSAGE" | "BUDGET_LEDGER";
+  /** Cache continuity accounting epoch, independent of Prompt Surface's semantic epoch. */
+  readonly cacheEpochId?: string;
+  /** Opaque compatibility group derived from provider/model/API/cache settings. */
+  readonly continuityGroup?: string;
+  /** Stable prompt-prefix fingerprint; contains no prompt text. */
+  readonly prefixFingerprint?: string;
   readonly usage?: ModelUsage;
+}
+
+export function createProviderInvocationAccountingObserver(input: {
+  readonly storage: CaelushStorage;
+  readonly runId: RunId;
+  readonly purpose: PromptCacheRequestPurpose;
+  readonly clock: { now(): TimestampMs };
+}): AIInvocationAccountingObserver {
+  return {
+    async onStarted(identity) {
+      const context = await input.storage.contextUsage.getByRun(input.runId);
+      const surface = context?.promptSurface;
+      const prefixFingerprint =
+        surface === undefined ? undefined : normalizeSha256(surface.prefixFingerprint);
+      const cacheEpochId =
+        surface === undefined
+          ? undefined
+          : fingerprint({
+              runId: String(input.runId),
+              continuityGroup: identity.continuityGroup,
+              promptSurfaceEpochId: surface.epochId,
+              resetReason: surface.resetReason,
+            });
+      await input.storage.providerInvocationUsage.observe({
+        callId: LLMCallIdSchema.parse(String(identity.callId)),
+        runId: input.runId,
+        purpose: input.purpose,
+        providerId: identity.providerId,
+        modelId: identity.model.model,
+        api: identity.api,
+        continuityGroup: identity.continuityGroup,
+        ...(cacheEpochId === undefined ? {} : { cacheEpochId }),
+        ...(prefixFingerprint === undefined ? {} : { prefixFingerprint }),
+        requestFingerprint: identity.requestFingerprint,
+        observedAt: input.clock.now(),
+      });
+    },
+    async onSettled(settlement) {
+      await input.storage.providerInvocationUsage.settle({
+        callId: LLMCallIdSchema.parse(String(settlement.callId)),
+        status: settlement.status,
+        settledAt: input.clock.now(),
+        ...(settlement.usage?.totalTokens === undefined
+          ? {}
+          : { totalTokens: settlement.usage.totalTokens }),
+        ...(settlement.usage?.inputTokens === undefined
+          ? {}
+          : { inputTokens: settlement.usage.inputTokens }),
+        ...(settlement.usage?.outputTokens === undefined
+          ? {}
+          : { outputTokens: settlement.usage.outputTokens }),
+        ...(settlement.usage?.cachedInputTokens === undefined
+          ? {}
+          : { cacheHitInputTokens: settlement.usage.cachedInputTokens }),
+        ...(settlement.usage?.cacheMissInputTokens === undefined
+          ? {}
+          : { cacheMissInputTokens: settlement.usage.cacheMissInputTokens }),
+        ...(settlement.usage?.cacheWriteInputTokens === undefined
+          ? {}
+          : { cacheWriteInputTokens: settlement.usage.cacheWriteInputTokens }),
+        ...(settlement.usage?.reasoningTokens === undefined
+          ? {}
+          : { reasoningTokens: settlement.usage.reasoningTokens }),
+      });
+    },
+  };
 }
 
 /** Safe, irreversible Prompt Surface and current recent-tail fingerprints. */
@@ -1405,20 +1510,57 @@ export function projectPromptCacheSegments(input: {
 export function promptCacheSamplesFromDurableMessages(
   records: readonly AgentMessageRecord[],
   budgetEntries: readonly BudgetLedgerEntry[] = [],
+  invocationEntries: readonly ProviderInvocationUsageRecord[] = [],
 ): readonly PromptCacheUsageSample[] {
+  const knownInvocationIds = new Set(invocationEntries.map((entry) => String(entry.callId)));
+  const samples: PromptCacheUsageSample[] = invocationEntries.map((entry) => ({
+    purpose: entry.purpose,
+    measuredAt: entry.observedAt,
+    invocationId: String(entry.callId),
+    invocationStatus: entry.status,
+    source: "GATEWAY",
+    ...(entry.cacheEpochId === undefined ? {} : { cacheEpochId: entry.cacheEpochId }),
+    continuityGroup: entry.continuityGroup,
+    ...(entry.prefixFingerprint === undefined
+      ? {}
+      : { prefixFingerprint: entry.prefixFingerprint }),
+    usage: {
+      ...(entry.totalTokens === undefined ? {} : { totalTokens: entry.totalTokens }),
+      ...(entry.inputTokens === undefined ? {} : { inputTokens: entry.inputTokens }),
+      ...(entry.outputTokens === undefined ? {} : { outputTokens: entry.outputTokens }),
+      ...(entry.cacheHitInputTokens === undefined
+        ? {}
+        : { cachedInputTokens: entry.cacheHitInputTokens }),
+      ...(entry.cacheMissInputTokens === undefined
+        ? {}
+        : { cacheMissInputTokens: entry.cacheMissInputTokens }),
+      ...(entry.cacheWriteInputTokens === undefined
+        ? {}
+        : { cacheWriteInputTokens: entry.cacheWriteInputTokens }),
+      ...(entry.reasoningTokens === undefined ? {} : { reasoningTokens: entry.reasoningTokens }),
+    },
+  }));
   const assistants = records.filter((record) => record.messageType === "ASSISTANT");
   const assistantStepIds = new Set(
     assistants.flatMap((record) =>
       record.sourceStepId === undefined ? [] : [String(record.sourceStepId)],
     ),
   );
-  const assistantSamples = assistants.map((record) => {
+  const assistantSamples = assistants.flatMap((record): PromptCacheUsageSample[] => {
     const usage = readDurableAssistantUsage(record);
-    return {
-      purpose: "MAIN_AGENT" as const,
-      measuredAt: record.createdAt,
-      ...(usage === undefined ? {} : { usage }),
-    };
+    const invocationId = readDurableAssistantCallId(record);
+    if (invocationId !== undefined && knownInvocationIds.has(invocationId)) return [];
+    if (invocationId !== undefined) knownInvocationIds.add(invocationId);
+    return [
+      {
+        purpose: "MAIN_AGENT",
+        measuredAt: record.createdAt,
+        ...(invocationId === undefined ? {} : { invocationId }),
+        ...(invocationId === undefined ? {} : { invocationStatus: "COMPLETE" as const }),
+        source: "ASSISTANT_MESSAGE",
+        ...(usage === undefined ? {} : { usage }),
+      },
+    ];
   });
   const auxiliarySamples = budgetEntries.flatMap((entry): PromptCacheUsageSample[] => {
     if (entry.state === "RESERVED" || entry.state === "RELEASED") return [];
@@ -1426,33 +1568,54 @@ export function promptCacheSamplesFromDurableMessages(
     switch (entry.kind) {
       case "LLM_ATTEMPT":
         if (assistantStepIds.has(entry.ownerId)) return [];
-        purpose = "OTHER";
+        purpose = entry.providerCallId === undefined ? "OTHER" : "MAIN_AGENT";
         break;
       case "CONTEXT_COMPACTION":
-        purpose = "COMPACTION";
+        purpose = "CONTEXT_COMPACTION";
         break;
       case "VERIFICATION_LLM":
-        purpose = "OTHER";
+        purpose = "VERIFICATION_LLM";
         break;
       case "TOOL_INVOCATION":
         return [];
     }
+    if (entry.providerCallId !== undefined && knownInvocationIds.has(entry.providerCallId)) {
+      return [];
+    }
+    if (entry.providerCallId !== undefined) knownInvocationIds.add(entry.providerCallId);
     const usage: ModelUsage = {
       ...(entry.actualInputTokens === undefined ? {} : { inputTokens: entry.actualInputTokens }),
       ...(entry.actualOutputTokens === undefined ? {} : { outputTokens: entry.actualOutputTokens }),
+      ...(entry.cacheHitInputTokens === undefined
+        ? {}
+        : { cachedInputTokens: entry.cacheHitInputTokens }),
+      ...(entry.cacheMissInputTokens === undefined
+        ? {}
+        : { cacheMissInputTokens: entry.cacheMissInputTokens }),
+      ...(entry.cacheWriteInputTokens === undefined
+        ? {}
+        : { cacheWriteInputTokens: entry.cacheWriteInputTokens }),
+      ...(entry.reasoningTokens === undefined ? {} : { reasoningTokens: entry.reasoningTokens }),
     };
     const measuredAt = entry.settledAt ?? entry.startedAt ?? entry.createdAt;
     return [
       {
         purpose,
         measuredAt,
+        ...(entry.providerCallId === undefined ? {} : { invocationId: entry.providerCallId }),
+        ...(entry.providerCallId === undefined ? {} : { invocationStatus: "COMPLETE" as const }),
+        source: "BUDGET_LEDGER",
+        ...(entry.cacheEpochId === undefined ? {} : { cacheEpochId: entry.cacheEpochId }),
+        ...(entry.continuityGroup === undefined ? {} : { continuityGroup: entry.continuityGroup }),
+        ...(entry.prefixFingerprint === undefined
+          ? {}
+          : { prefixFingerprint: entry.prefixFingerprint }),
         ...(Object.keys(usage).length === 0 ? {} : { usage }),
       },
     ];
   });
-  return Object.freeze(
-    [...assistantSamples, ...auxiliarySamples].map((sample) => Object.freeze(sample)),
-  );
+  samples.push(...assistantSamples, ...auxiliarySamples);
+  return Object.freeze(samples.map((sample) => Object.freeze(sample)));
 }
 
 /** Build a safe Context Usage cache projection from durable usage and Prompt Surface metadata. */
@@ -1466,6 +1629,15 @@ export function projectPromptCacheUsage(
     readonly createdAt: TimestampMs;
   },
   surfaceSegments?: NonNullable<PromptCacheUsage["surfaceSegments"]>,
+  surfaceRecords?: readonly {
+    readonly kind: "BASELINE" | "DELTA" | "NOOP";
+    readonly updates: readonly {
+      readonly op: "SET" | "CLEAR";
+      readonly stateKey: string;
+      readonly contentHash?: string;
+    }[];
+    readonly byteLength: number;
+  }[],
 ): PromptCacheUsage {
   const purposeTotals = new Map<
     PromptCacheRequestPurpose,
@@ -1476,6 +1648,15 @@ export function projectPromptCacheUsage(
       hitTokens: number;
       missTokens: number;
       writeTokens: number;
+      reasoningTokens: number;
+      usageFieldCoverage: {
+        inputTokens: number;
+        outputTokens: number;
+        hitTokens: number;
+        missTokens: number;
+        writeTokens: number;
+        reasoningTokens: number;
+      };
       unknownUsageCount: number;
     }
   >();
@@ -1503,6 +1684,15 @@ export function projectPromptCacheUsage(
         hitTokens: 0,
         missTokens: 0,
         writeTokens: 0,
+        reasoningTokens: 0,
+        usageFieldCoverage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          hitTokens: 0,
+          missTokens: 0,
+          writeTokens: 0,
+          reasoningTokens: 0,
+        },
         unknownUsageCount: 0,
       };
       purposeTotals.set(sample.purpose, purpose);
@@ -1515,6 +1705,25 @@ export function projectPromptCacheUsage(
     addOptionalPromptCacheCount(totals, purpose, usage, "cachedInputTokens", "hitTokens");
     addOptionalPromptCacheCount(totals, purpose, usage, "cacheMissInputTokens", "missTokens");
     addOptionalPromptCacheCount(totals, purpose, usage, "cacheWriteInputTokens", "writeTokens");
+    const reasoningTokens = readUsageCount(usage?.reasoningTokens);
+    if (reasoningTokens !== undefined) {
+      purpose.reasoningTokens = addPromptCacheCount(purpose.reasoningTokens, reasoningTokens);
+    }
+    for (const [source, field] of [
+      ["inputTokens", "inputTokens"],
+      ["outputTokens", "outputTokens"],
+      ["cachedInputTokens", "hitTokens"],
+      ["cacheMissInputTokens", "missTokens"],
+      ["cacheWriteInputTokens", "writeTokens"],
+      ["reasoningTokens", "reasoningTokens"],
+    ] as const) {
+      if (readUsageCount(usage?.[source]) !== undefined) {
+        purpose.usageFieldCoverage[field] = addPromptCacheCount(
+          purpose.usageFieldCoverage[field],
+          1,
+        );
+      }
+    }
 
     const hitTokens = readUsageCount(usage?.cachedInputTokens);
     const missTokens = readUsageCount(usage?.cacheMissInputTokens);
@@ -1538,15 +1747,6 @@ export function projectPromptCacheUsage(
     (left, right) => Number(left.measuredAt) - Number(right.measuredAt),
   );
   const latestRate = orderedRateSamples.at(-1);
-  const hitMissTokens = orderedRateSamples.reduce(
-    (sum, sample) =>
-      addPromptCacheCount(sum, addPromptCacheCount(sample.hitTokens, sample.missTokens)),
-    0,
-  );
-  const hitTokens = orderedRateSamples.reduce(
-    (sum, sample) => addPromptCacheCount(sum, sample.hitTokens),
-    0,
-  );
   const resetBoundary = currentEpoch?.createdAt;
   const measuredAfterCurrentReset =
     latestRate !== undefined &&
@@ -1565,11 +1765,10 @@ export function projectPromptCacheUsage(
         ? "WARM"
         : "COLD_START";
   const ratesReported = latestRate !== undefined;
-  const reusableRateReported =
-    ratesReported && measuredAfterCurrentReset && expectedReusablePrefixTokens > 0;
-
   const purposeOrder: readonly PromptCacheRequestPurpose[] = [
     "MAIN_AGENT",
+    "VERIFICATION_LLM",
+    "CONTEXT_COMPACTION",
     "WARMUP",
     "RETRY",
     "COMPACTION",
@@ -1599,19 +1798,9 @@ export function projectPromptCacheUsage(
     writeTokens: totals.writeTokens,
     unknownUsageCount: totals.unknownUsageCount,
     ...(ratesReported
-      ? {
-          latestHitRate: latestRate!.hitTokens / (latestRate!.hitTokens + latestRate!.missTokens),
-          rollingHitRate: hitTokens / hitMissTokens,
-        }
+      ? { latestHitRate: latestRate!.hitTokens / (latestRate!.hitTokens + latestRate!.missTokens) }
       : {}),
     expectedReusablePrefixTokens,
-    ...(reusableRateReported
-      ? {
-          reusablePrefixEfficiency:
-            Math.min(latestRate!.hitTokens, expectedReusablePrefixTokens) /
-            expectedReusablePrefixTokens,
-        }
-      : {}),
     ...(epochId === undefined ? {} : { epochId }),
     ...(resetReason === undefined ? {} : { resetReason }),
     ...(currentEpoch === undefined || resetReason === undefined || resetReason === "INITIAL"
@@ -1622,12 +1811,282 @@ export function projectPromptCacheUsage(
         }),
     ...(latestRate === undefined ? {} : { lastMeasuredAt: latestRate.measuredAt }),
     purposes,
+    metricsV2: projectCacheMetricsV2(samples, surfaceRecords),
     ...(surfaceSegments === undefined ? {} : { surfaceSegments }),
   };
 }
 
 function fingerprint(value: unknown): string {
   return createHash("sha256").update(canonicalJson(value), "utf8").digest("hex");
+}
+
+const CACHE_ROLLING_WINDOW = 10;
+
+/**
+ * One aggregation authority for provider-reported cache counters. Samples without the durable
+ * Gateway call id remain visible in the legacy totals, but cannot enter V2 rates or the request
+ * coverage denominator because they cannot be deduplicated safely.
+ */
+function projectCacheMetricsV2(
+  samples: readonly PromptCacheUsageSample[],
+  surfaceRecords: Parameters<typeof projectPromptCacheUsage>[4],
+): CacheMetricsV2 {
+  const identifiedByCall = new Map<string, PromptCacheUsageSample>();
+  for (const sample of samples) {
+    const id = sample.invocationId;
+    if (id === undefined) continue;
+    const previous = identifiedByCall.get(id);
+    if (previous === undefined) {
+      identifiedByCall.set(id, sample);
+      continue;
+    }
+    if (canonicalJson(sample) !== canonicalJson(previous)) {
+      throw new TypeError("One provider call identity has conflicting cache usage samples.");
+    }
+  }
+  const observed = [...identifiedByCall.values()].sort((left, right) => {
+    const byTime = Number(left.measuredAt) - Number(right.measuredAt);
+    return byTime === 0
+      ? (left.invocationId ?? "").localeCompare(right.invocationId ?? "")
+      : byTime;
+  });
+  const complete = observed.filter((sample) => hasCompleteCacheUsage(sample));
+  const main = observed.filter((sample) => sample.purpose === "MAIN_AGENT");
+  const warmAll = warmSamples(observed);
+  const warmMain = warmAll.filter((sample) => sample.purpose === "MAIN_AGENT");
+  const rollingAll = complete
+    .filter((sample) => hasPositiveCacheDenominator(sample))
+    .slice(-CACHE_ROLLING_WINDOW);
+  const rollingMain = complete
+    .filter((sample) => sample.purpose === "MAIN_AGENT" && hasPositiveCacheDenominator(sample))
+    .slice(-CACHE_ROLLING_WINDOW);
+  const latest = observed.at(-1);
+  const previousInputCoverage = previousInputCoverageProxy(main);
+  const completeCount = complete.length;
+  const observedCount = observed.length;
+  const providerUsageUnreportedCount = observed.filter(
+    (sample) => !hasAnyProviderUsage(sample),
+  ).length;
+  const providerUsageWithoutCacheBreakdownCount = observed.filter(
+    (sample) => hasAnyProviderUsage(sample) && !hasCompleteCacheUsage(sample),
+  ).length;
+  const failedOrCancelledWithoutUsageCount = observed.filter(
+    (sample) =>
+      (sample.invocationStatus === "FAILED" || sample.invocationStatus === "CANCELLED") &&
+      !hasAnyProviderUsage(sample),
+  ).length;
+  const inProgressInvocationCount = observed.filter(
+    (sample) => sample.invocationStatus === "OBSERVED",
+  ).length;
+  const missingInvocationRecordCount = observed.filter(
+    (sample) => sample.source !== undefined && sample.source !== "GATEWAY",
+  ).length;
+  const legacyWithoutCacheBreakdownCount = observed.filter(
+    (sample) =>
+      sample.source !== undefined && sample.source !== "GATEWAY" && !hasCompleteCacheUsage(sample),
+  ).length;
+  const surfaceDelta = projectSurfaceDeltaDiagnostics(surfaceRecords);
+
+  return {
+    fullRun: { mainAgent: cacheRate(main), allPurposes: cacheRate(observed) },
+    warm: { mainAgent: cacheRate(warmMain), allPurposes: cacheRate(warmAll) },
+    rolling: {
+      windowSize: CACHE_ROLLING_WINDOW,
+      mainAgent: cacheRate(rollingMain),
+      allPurposes: cacheRate(rollingAll),
+    },
+    ...(latest === undefined
+      ? {}
+      : {
+          latestRequest: {
+            purpose: latest.purpose,
+            ...(readUsageCount(latest.usage?.inputTokens) === undefined
+              ? {}
+              : { inputTokens: latest.usage!.inputTokens }),
+            ...(readUsageCount(latest.usage?.cachedInputTokens) === undefined
+              ? {}
+              : { hitTokens: latest.usage!.cachedInputTokens }),
+            ...(readUsageCount(latest.usage?.cacheMissInputTokens) === undefined
+              ? {}
+              : { missTokens: latest.usage!.cacheMissInputTokens }),
+            ...(readUsageCount(latest.usage?.cacheWriteInputTokens) === undefined
+              ? {}
+              : { writeTokens: latest.usage!.cacheWriteInputTokens }),
+            cacheUsageReported: hasCompleteCacheUsage(latest),
+          },
+        }),
+    ...(previousInputCoverage === undefined ? {} : { previousInputCoverage }),
+    usageCoverage: {
+      observedRequestCount: observedCount,
+      completeCacheUsageCount: completeCount,
+      incompleteOrUnknownCount: observedCount - completeCount,
+      providerUsageUnreportedCount,
+      providerUsageWithoutCacheBreakdownCount,
+      failedOrCancelledWithoutUsageCount,
+      inProgressInvocationCount,
+      missingInvocationRecordCount,
+      legacyWithoutCacheBreakdownCount,
+      unidentifiedLegacySampleCount: samples.filter((sample) => sample.invocationId === undefined)
+        .length,
+      ...(observedCount === 0 ? {} : { coverageRate: completeCount / observedCount }),
+      status:
+        observedCount === 0
+          ? "UNREPORTED"
+          : completeCount === observedCount
+            ? "REPORTED"
+            : completeCount === 0
+              ? "UNREPORTED"
+              : "PARTIAL",
+    },
+    surfaceDelta,
+  };
+}
+
+function hasAnyProviderUsage(sample: PromptCacheUsageSample): boolean {
+  const usage = sample.usage;
+  if (usage === undefined) return false;
+  return [
+    usage.totalTokens,
+    usage.inputTokens,
+    usage.outputTokens,
+    usage.cachedInputTokens,
+    usage.cacheMissInputTokens,
+    usage.cacheWriteInputTokens,
+    usage.reasoningTokens,
+  ].some((value) => readUsageCount(value) !== undefined);
+}
+
+function hasCompleteCacheUsage(sample: PromptCacheUsageSample): boolean {
+  return (
+    readUsageCount(sample.usage?.cachedInputTokens) !== undefined &&
+    readUsageCount(sample.usage?.cacheMissInputTokens) !== undefined
+  );
+}
+
+function hasPositiveCacheDenominator(sample: PromptCacheUsageSample): boolean {
+  const hit = readUsageCount(sample.usage?.cachedInputTokens);
+  const miss = readUsageCount(sample.usage?.cacheMissInputTokens);
+  return hit !== undefined && miss !== undefined && hit + miss > 0;
+}
+
+function cacheRate(
+  samples: readonly PromptCacheUsageSample[],
+): CacheMetricsV2["fullRun"]["mainAgent"] {
+  let requestCount = 0;
+  let hitTokens = 0;
+  let accountedTokens = 0;
+  for (const sample of samples) {
+    if (!hasCompleteCacheUsage(sample)) continue;
+    const hit = sample.usage!.cachedInputTokens!;
+    const miss = sample.usage!.cacheMissInputTokens!;
+    requestCount = addPromptCacheCount(requestCount, 1);
+    hitTokens = addPromptCacheCount(hitTokens, hit);
+    accountedTokens = addPromptCacheCount(accountedTokens, addPromptCacheCount(hit, miss));
+  }
+  return {
+    requestCount,
+    hitTokens,
+    accountedTokens,
+    ...(accountedTokens === 0 ? {} : { hitRate: hitTokens / accountedTokens }),
+  };
+}
+
+/** First MAIN_AGENT call in each explicitly identified Cache Epoch is the cold boundary. */
+function warmSamples(samples: readonly PromptCacheUsageSample[]): PromptCacheUsageSample[] {
+  const firstMainCallByEpoch = new Map<string, string>();
+  for (const sample of samples) {
+    if (sample.purpose !== "MAIN_AGENT" || sample.cacheEpochId === undefined) continue;
+    const key = `${sample.continuityGroup ?? ""}\u0000${sample.cacheEpochId}`;
+    if (!firstMainCallByEpoch.has(key)) firstMainCallByEpoch.set(key, sample.invocationId ?? "");
+  }
+  return samples.filter((sample) => {
+    if (sample.cacheEpochId === undefined) return false;
+    const key = `${sample.continuityGroup ?? ""}\u0000${sample.cacheEpochId}`;
+    const first = firstMainCallByEpoch.get(key);
+    return first !== undefined && sample.invocationId !== first;
+  });
+}
+
+function previousInputCoverageProxy(
+  samples: readonly PromptCacheUsageSample[],
+): CacheMetricsV2["previousInputCoverage"] {
+  for (let index = samples.length - 1; index > 0; index -= 1) {
+    const current = samples[index]!;
+    const previous = samples[index - 1]!;
+    if (
+      current.cacheEpochId === undefined ||
+      current.cacheEpochId !== previous.cacheEpochId ||
+      current.continuityGroup === undefined ||
+      current.continuityGroup !== previous.continuityGroup ||
+      current.prefixFingerprint === undefined ||
+      current.prefixFingerprint !== previous.prefixFingerprint ||
+      !hasCompleteCacheUsage(current)
+    ) {
+      return undefined;
+    }
+    const previousInput = readUsageCount(previous.usage?.inputTokens);
+    if (previousInput === undefined || previousInput === 0) return undefined;
+    const hit = current.usage!.cachedInputTokens!;
+    const boundedHit = Math.min(hit, previousInput);
+    return {
+      classification: "DIAGNOSTIC_PROXY",
+      hitTokens: boundedHit,
+      previousInputTokens: previousInput,
+      coverage: boundedHit / previousInput,
+    };
+  }
+  return undefined;
+}
+
+function projectSurfaceDeltaDiagnostics(
+  records: Parameters<typeof projectPromptCacheUsage>[4],
+): CacheMetricsV2["surfaceDelta"] {
+  if (records === undefined) return { availability: "NOT_AVAILABLE_FOR_V2" };
+  let baselineCount = 0;
+  let deltaCount = 0;
+  let noopCount = 0;
+  let setCount = 0;
+  let clearCount = 0;
+  let bytes = 0;
+  let unchangedSectionReemissionCount = 0;
+  const activeHashes = new Map<string, string>();
+  for (const record of records) {
+    if (!Number.isSafeInteger(record.byteLength) || record.byteLength < 0) {
+      throw new RangeError("Prompt Surface record byte length is invalid.");
+    }
+    bytes = addPromptCacheCount(bytes, record.byteLength);
+    if (record.kind === "BASELINE") baselineCount = addPromptCacheCount(baselineCount, 1);
+    else if (record.kind === "DELTA") deltaCount = addPromptCacheCount(deltaCount, 1);
+    else noopCount = addPromptCacheCount(noopCount, 1);
+    if (record.kind === "NOOP" && record.byteLength !== 0) {
+      throw new TypeError("Prompt Surface NOOP record must not add model-visible bytes.");
+    }
+    for (const update of record.updates) {
+      if (update.op === "CLEAR") {
+        clearCount = addPromptCacheCount(clearCount, 1);
+        activeHashes.delete(update.stateKey);
+      } else {
+        setCount = addPromptCacheCount(setCount, 1);
+        const priorHash = activeHashes.get(update.stateKey);
+        if (priorHash !== undefined && priorHash === update.contentHash) {
+          unchangedSectionReemissionCount = addPromptCacheCount(unchangedSectionReemissionCount, 1);
+        }
+        if (update.contentHash !== undefined) activeHashes.set(update.stateKey, update.contentHash);
+      }
+    }
+  }
+  return {
+    availability: "AVAILABLE",
+    baselineCount,
+    deltaCount,
+    noopCount,
+    setCount,
+    clearCount,
+    newModelVisibleBytes: bytes,
+    estimatedNewContextTokens: Math.ceil(bytes / 3),
+    unchangedSectionReemissionCount,
+    tokenEstimateKind: "ESTIMATED",
+  };
 }
 
 function normalizeSha256(value: string): string {
@@ -1702,6 +2161,15 @@ function readDurableAssistantUsage(record: AgentMessageRecord): ModelUsage | und
     counters[field] = value;
   }
   return counters as ModelUsage;
+}
+
+function readDurableAssistantCallId(record: AgentMessageRecord): string | undefined {
+  const model = record.data["model"];
+  if (model === null || typeof model !== "object" || Array.isArray(model)) return undefined;
+  const candidate = model as Record<string, unknown>;
+  if (candidate["kind"] !== "MODEL_TURN") return undefined;
+  const callId = candidate["callId"];
+  return typeof callId === "string" && callId.length > 0 ? callId : undefined;
 }
 
 function addOptionalPromptCacheCount(

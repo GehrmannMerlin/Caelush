@@ -13,7 +13,12 @@ export type {
   AIUsageEvent,
 } from "./events.js";
 
-export type { AIStream, AIStreamOptions } from "./stream.js";
+export type {
+  AIInvocationAccountingIdentity,
+  AIInvocationAccountingObserver,
+  AIStream,
+  AIStreamOptions,
+} from "./stream.js";
 export type {
   AIAdapterPrivateCompletionCandidate,
   AIPrivateCompletion,
