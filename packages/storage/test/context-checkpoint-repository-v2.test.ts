@@ -272,6 +272,81 @@ describe("SqliteContextCheckpointRepositoryV2", () => {
     );
   });
 
+  it("allows a checkpoint over an earlier closed Run only within the same Session", async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "caelush-context-checkpoint-v2-cross-run-"),
+    );
+    directories.push(directory);
+    const storage = await openCaelushStorage({ path: path.join(directory, "caelush.db") });
+    storages.push(storage);
+    const sessionId = createSessionId();
+    await storage.sessions.insert({
+      id: sessionId,
+      createdAt: createTimestampMs(1),
+      updatedAt: createTimestampMs(1),
+      metadata: {},
+    });
+    const priorRun = makeStorageRun(sessionId, {
+      status: "COMPLETED",
+      createdAt: createTimestampMs(2),
+      startedAt: createTimestampMs(3),
+      finishedAt: createTimestampMs(4),
+    });
+    const currentRun = makeStorageRun(sessionId, {
+      status: "RUNNING",
+      createdAt: createTimestampMs(5),
+      startedAt: createTimestampMs(6),
+    });
+    await storage.runs.insert(priorRun);
+    await storage.runs.insert(currentRun);
+
+    const valid = {
+      ...checkpoint(priorRun.id, 1, 2),
+      checkpointId: createContextCheckpointId("checkpoint:cross-run-valid"),
+      runId: currentRun.id,
+    };
+    await expect(storage.contextCheckpointsV2.create(valid)).resolves.toMatchObject({
+      runId: currentRun.id,
+      sourceRange: { runId: priorRun.id },
+    });
+
+    const otherSessionId = createSessionId();
+    await storage.sessions.insert({
+      id: otherSessionId,
+      createdAt: createTimestampMs(1),
+      updatedAt: createTimestampMs(1),
+      metadata: {},
+    });
+    const foreignRun = makeStorageRun(otherSessionId, {
+      status: "COMPLETED",
+      createdAt: createTimestampMs(2),
+      startedAt: createTimestampMs(3),
+      finishedAt: createTimestampMs(4),
+    });
+    await storage.runs.insert(foreignRun);
+    const foreign = {
+      ...checkpoint(foreignRun.id, 3, 4),
+      checkpointId: createContextCheckpointId("checkpoint:cross-run-foreign"),
+      runId: currentRun.id,
+    };
+    await expect(storage.contextCheckpointsV2.create(foreign)).rejects.toThrow(
+      "same durable Session",
+    );
+
+    const openPriorRun = makeStorageRun(sessionId, {
+      status: "RUNNING",
+      createdAt: createTimestampMs(7),
+      startedAt: createTimestampMs(8),
+    });
+    await storage.runs.insert(openPriorRun);
+    const open = {
+      ...checkpoint(openPriorRun.id, 5, 6),
+      checkpointId: createContextCheckpointId("checkpoint:cross-run-open"),
+      runId: currentRun.id,
+    };
+    await expect(storage.contextCheckpointsV2.create(open)).rejects.toThrow("earlier closed Run");
+  });
+
   it("reloads the same immutable V2 record after restart and preserves replay identity", async () => {
     const directory = await mkdtemp(
       path.join(os.tmpdir(), "caelush-context-checkpoint-v2-restart-"),

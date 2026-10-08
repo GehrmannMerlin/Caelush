@@ -301,6 +301,24 @@ describe("Phase 8B canonical Context checkpoint coverage", () => {
     expect(projection.history.estimatedTokens).toBe(30);
   });
 
+  it("applies a current Run checkpoint to its closed same-session prior-Run source range", () => {
+    const first = messageRef("prior_run_first", 1, "prior_run", 10, OTHER_RUN_ID);
+    const last = messageRef("prior_run_last", 2, "prior_run", 10, OTHER_RUN_ID);
+    const indexed = history([turnUnit("prior_run", [first, last])]);
+    const currentRunCheckpoint = {
+      ...checkpoint(first, last),
+      runId: RUN_ID,
+    };
+
+    const projection = createContextCompactionCoverage({
+      history: indexed,
+      latestCheckpoint: currentRunCheckpoint,
+    });
+
+    expect([...projection.coveredMessageIds]).toEqual([first.messageId, last.messageId]);
+    expect(projection.history.units).toHaveLength(0);
+  });
+
   it("fails closed when a V2 range bisects a ToolProtocolUnit", () => {
     const refs = [messageRef("call", 1, "protocol", 10), messageRef("result", 2, "protocol", 10)];
     const indexed = history([turnUnit("protocol", refs), protocolUnit("protocol", refs, refs[0]!)]);

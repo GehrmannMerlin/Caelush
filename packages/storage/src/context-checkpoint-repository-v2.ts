@@ -120,6 +120,7 @@ export function writeContextCheckpointV2InTransaction(
   input: ContextCheckpointCreateInputV2,
 ): ContextCheckpointV2WriteResult {
   assertCreateInput(input);
+  assertSourceRangeRunScope(client, input);
   const existing = client.prepare(`${SELECT} WHERE id = ?`).get(input.checkpointId) as
     CheckpointRow | undefined;
   if (existing !== undefined) {
@@ -216,9 +217,6 @@ function canonicalImmutableRecord(
 }
 
 function assertCreateInput(input: ContextCheckpointCreateInputV2): void {
-  if (input.sourceRange.runId !== input.runId) {
-    throw new StorageError("Context Checkpoint V2 source range must belong to its Run.");
-  }
   if (
     input.sourceRange.firstSequence < 1 ||
     input.sourceRange.lastSequence < input.sourceRange.firstSequence
@@ -241,6 +239,42 @@ function assertCreateInput(input: ContextCheckpointCreateInputV2): void {
   if (input.structuredCheckpoint.sourceRange.to !== input.sourceRange.lastSequence) {
     throw new StorageError(
       "Context Checkpoint V2 payload source range does not match its envelope.",
+    );
+  }
+}
+
+function assertSourceRangeRunScope(
+  client: CaelushDatabase["client"],
+  input: ContextCheckpointCreateInputV2,
+): void {
+  if (input.runId === input.sourceRange.runId) return;
+  const runColumns = "session_id, created_at_ms, finished_at_ms";
+  const owner = client
+    .prepare(`SELECT ${runColumns} FROM agent_runs WHERE id = ?`)
+    .get(input.runId) as
+    | {
+        readonly session_id: string;
+        readonly created_at_ms: number;
+        readonly finished_at_ms: number | null;
+      }
+    | undefined;
+  const source = client
+    .prepare(`SELECT ${runColumns} FROM agent_runs WHERE id = ?`)
+    .get(input.sourceRange.runId) as
+    | {
+        readonly session_id: string;
+        readonly created_at_ms: number;
+        readonly finished_at_ms: number | null;
+      }
+    | undefined;
+  if (owner === undefined || source === undefined || owner.session_id !== source.session_id) {
+    throw new StorageError(
+      "Context Checkpoint V2 source range must belong to the same durable Session.",
+    );
+  }
+  if (source.finished_at_ms === null || source.finished_at_ms > owner.created_at_ms) {
+    throw new StorageError(
+      "Context Checkpoint V2 cross-Run source range must belong to an earlier closed Run.",
     );
   }
 }
