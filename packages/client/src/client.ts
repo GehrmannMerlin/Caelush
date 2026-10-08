@@ -26,6 +26,8 @@ import {
   SessionListResponseSchema,
   SessionTranscriptQuerySchema,
   SessionTranscriptResponseSchema,
+  SessionContinuityPreflightQuerySchema,
+  SessionContinuityPreflightResponseSchema,
   SessionTurnPresentationQuerySchema,
   SessionTurnPresentationResponseSchema,
   UpdateAISelectionRequestSchema,
@@ -61,6 +63,8 @@ import {
   type SessionListResponse,
   type SessionTranscriptQuery,
   type SessionTranscriptResponse,
+  type SessionContinuityPreflightQuery,
+  type SessionContinuityPreflightResponse,
   type SessionTurnPresentationQuery,
   type SessionTurnPresentationResponse,
   type UpdateAISelectionRequest,
@@ -422,6 +426,21 @@ export class CaelushClient {
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/transcript?limit=${encodeURIComponent(String(parsed.limit))}${cursor}`,
       { method: "GET" },
       SessionTranscriptResponseSchema,
+      [200],
+      options,
+    );
+  }
+
+  async getSessionContinuityPreflight(
+    sessionId: SessionId,
+    query: SessionContinuityPreflightQuery,
+    options: CaelushClientRequestOptions = {},
+  ): Promise<SessionContinuityPreflightResponse> {
+    const parsed = SessionContinuityPreflightQuerySchema.parse(query);
+    return this.request(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/continuity-preflight?provider=${encodeURIComponent(parsed.provider)}&model=${encodeURIComponent(parsed.model)}`,
+      { method: "GET" },
+      SessionContinuityPreflightResponseSchema,
       [200],
       options,
     );

@@ -51,7 +51,14 @@ export type ModelTurnExecutionErrorCode =
   | "PROVIDER_ERROR"
   | "INVALID_RESPONSE"
   | "UNSUPPORTED_MODEL"
-  | "UNSUPPORTED_CAPABILITY";
+  | "UNSUPPORTED_CAPABILITY"
+  | "CONVERSATION_CONTINUITY_INCOMPATIBLE";
+
+export type ConversationContinuityIncompatibilityReason =
+  | "LEGACY_REPLAY_MISSING"
+  | "REPLAY_DATA_UNAVAILABLE"
+  | "PROVIDER_INCOMPATIBLE"
+  | "MODEL_INCOMPATIBLE";
 
 /** Every frozen failure code, in canonical order. */
 export const MODEL_TURN_EXECUTION_ERROR_CODES = [
@@ -64,6 +71,7 @@ export const MODEL_TURN_EXECUTION_ERROR_CODES = [
   "INVALID_RESPONSE",
   "UNSUPPORTED_MODEL",
   "UNSUPPORTED_CAPABILITY",
+  "CONVERSATION_CONTINUITY_INCOMPATIBLE",
 ] as const satisfies readonly ModelTurnExecutionErrorCode[];
 
 /**
@@ -101,6 +109,7 @@ export interface ModelTurnExecutionError {
   readonly code: ModelTurnExecutionErrorCode;
   readonly message: string;
   readonly retryable: boolean;
+  readonly continuityReason?: ConversationContinuityIncompatibilityReason;
   /** A bounded provider hint in milliseconds, when one was reported safely. */
   readonly retryAfterMs?: number;
 }

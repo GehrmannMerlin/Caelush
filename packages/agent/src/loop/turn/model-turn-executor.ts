@@ -24,7 +24,11 @@ import {
 import type { AgentTransientStreamEvent } from "../events/transient-stream-event.js";
 import type { ModelTurnStreamSink } from "../events/transient-stream-event.js";
 import type { AgentExecutionIdentity, AgentTurnRef } from "../types.js";
-import type { ModelTurnExecutionError, ModelTurnExecutionErrorCode } from "./model-turn-error.js";
+import type {
+  ConversationContinuityIncompatibilityReason,
+  ModelTurnExecutionError,
+  ModelTurnExecutionErrorCode,
+} from "./model-turn-error.js";
 import {
   isRetryableModelTurnErrorCode,
   toModelTurnExecutionErrorCode,
@@ -136,15 +140,18 @@ export function createModelTurnExecutor(
 
       let stream: Awaited<ReturnType<AIGateway["stream"]>> | undefined;
       let transferredPrivateCompletion = false;
+      let preparedReplay: PreparedPrivateReplay | undefined;
       try {
         // Exactly one gateway invocation per execute(): the durable run layer owns
         // retry, never this boundary.
-        const privateReplayResolver = createPrivateReplayResolver(input, dependencies);
+        preparedReplay = await preparePrivateReplayResolver(input, dependencies);
         const invocationObserver = dependencies.invocationObserverFactory?.(input);
         stream = await dependencies.gateway.stream(input.request, {
           signal: input.signal,
           ...(input.transportId === undefined ? {} : { transportId: input.transportId }),
-          ...(privateReplayResolver === undefined ? {} : { privateReplayResolver }),
+          ...(preparedReplay === undefined
+            ? {}
+            : { privateReplayResolver: preparedReplay.resolver }),
           ...(invocationObserver === undefined ? {} : { invocationObserver }),
         });
         const assembler = createAIModelTurnAssembler();
@@ -166,7 +173,10 @@ export function createModelTurnExecutor(
           (input.request.tools?.length ?? 0) > 0 &&
           privateCompletion?.completeness !== "COMPLETE"
         ) {
-          throw replayUnavailable(input.model);
+          throw new AIError(
+            "AI_CAPABILITY_UNSUPPORTED",
+            "Required native replay is unavailable for this model turn.",
+          );
         }
         if (privateCompletion !== undefined) {
           if (
@@ -196,8 +206,12 @@ export function createModelTurnExecutor(
         }
         return { kind: "COMPLETED", result };
       } catch (error) {
+        if (error instanceof ConversationContinuityPreflightError) {
+          return continuityFailure(error.reason);
+        }
         return classifyTurnFailure(error, input.signal);
       } finally {
+        preparedReplay?.dispose();
         if (!transferredPrivateCompletion && stream !== undefined) {
           const privateCompletion = stream.takePrivateCompletion?.();
           if (privateCompletion?.completeness === "COMPLETE") privateCompletion.payload.fill(0);
@@ -207,10 +221,22 @@ export function createModelTurnExecutor(
   };
 }
 
-function createPrivateReplayResolver(
+interface PreparedPrivateReplay {
+  readonly resolver: AIPrivateReplayResolver;
+  dispose(): void;
+}
+
+class ConversationContinuityPreflightError extends Error {
+  constructor(readonly reason: ConversationContinuityIncompatibilityReason) {
+    super("The selected model cannot safely continue this conversation.");
+    this.name = "ConversationContinuityPreflightError";
+  }
+}
+
+async function preparePrivateReplayResolver(
   input: ModelTurnExecutionInput,
   dependencies: ModelTurnExecutorDependencies,
-): AIPrivateReplayResolver | undefined {
+): Promise<PreparedPrivateReplay | undefined> {
   const descriptor = input.model;
   if (
     descriptor === undefined ||
@@ -220,31 +246,41 @@ function createPrivateReplayResolver(
   )
     return undefined;
 
+  const assistantMessages = input.request.messages.filter(
+    (message) => message.role === "assistant",
+  );
   const sources = input.selectedAssistantReplaySources;
-  if (
-    sources === undefined &&
-    input.request.messages.some((message) => message.role === "assistant")
-  ) {
-    throw replayUnavailable(descriptor);
+  if (sources === undefined && assistantMessages.length > 0) {
+    throw new ConversationContinuityPreflightError("LEGACY_REPLAY_MISSING");
   }
   const selectedIds = new Set(input.selectedMessageIds ?? []);
   for (const source of sources ?? []) {
-    if (!selectedIds.has(source.messageId)) throw replayUnavailable(descriptor);
+    if (!selectedIds.has(source.messageId)) {
+      throw new ConversationContinuityPreflightError("REPLAY_DATA_UNAVAILABLE");
+    }
     if (source.providerId === undefined || source.model === undefined) {
       // A legacy assistant has no reliable Provider/Model identity. In a mode that requires
       // complete history, guessing that it is unrelated would silently omit required state.
-      throw replayUnavailable(descriptor);
+      throw new ConversationContinuityPreflightError("LEGACY_REPLAY_MISSING");
     }
-    if (source.providerId !== descriptor.ref.provider || source.model !== descriptor.ref.model) {
-      throw replayUnavailable(descriptor);
+    if (source.providerId !== descriptor.ref.provider) {
+      throw new ConversationContinuityPreflightError("PROVIDER_INCOMPATIBLE");
     }
-    if (!source.hasProviderState || source.api !== descriptor.api || source.callId === undefined) {
-      throw replayUnavailable(descriptor);
+    if (source.model !== descriptor.ref.model) {
+      throw new ConversationContinuityPreflightError("MODEL_INCOMPATIBLE");
+    }
+    if (!source.hasProviderState || source.callId === undefined || source.api === undefined) {
+      throw new ConversationContinuityPreflightError("LEGACY_REPLAY_MISSING");
+    }
+    if (source.api !== descriptor.api) {
+      throw new ConversationContinuityPreflightError("PROVIDER_INCOMPATIBLE");
     }
   }
 
-  if (dependencies.privateReplayResolverFactory === undefined) throw replayUnavailable(descriptor);
-  return dependencies.privateReplayResolverFactory({
+  if (dependencies.privateReplayResolverFactory === undefined) {
+    throw new ConversationContinuityPreflightError("REPLAY_DATA_UNAVAILABLE");
+  }
+  const scope: PrivateReplayReadScope = {
     sessionId: input.identity.sessionId,
     executionRunId: input.identity.runId,
     providerId: descriptor.ref.provider,
@@ -252,15 +288,71 @@ function createPrivateReplayResolver(
     api: descriptor.api,
     selectedMessageIds: input.selectedMessageIds ?? [],
     selectedAssistantMessageIds: sources?.map((source) => source.messageId) ?? [],
-  });
+  };
+  let resolver: AIPrivateReplayResolver;
+  try {
+    resolver = dependencies.privateReplayResolverFactory(scope);
+  } catch {
+    throw new ConversationContinuityPreflightError("REPLAY_DATA_UNAVAILABLE");
+  }
+
+  const replayBytes: Uint8Array[] = [];
+  try {
+    for (const message of assistantMessages) {
+      if (message.role !== "assistant" || message.providerState === undefined) {
+        throw new ConversationContinuityPreflightError("LEGACY_REPLAY_MISSING");
+      }
+      const bytes = await resolver.resolve({
+        providerState: message.providerState,
+        providerId: descriptor.ref.provider,
+        model: descriptor.ref,
+        api: descriptor.api,
+      });
+      if (!(bytes instanceof Uint8Array)) {
+        throw new ConversationContinuityPreflightError("REPLAY_DATA_UNAVAILABLE");
+      }
+      replayBytes.push(bytes);
+    }
+  } catch (error) {
+    for (const bytes of replayBytes) bytes.fill(0);
+    if (error instanceof ConversationContinuityPreflightError) throw error;
+    throw new ConversationContinuityPreflightError("REPLAY_DATA_UNAVAILABLE");
+  }
+
+  let nextReplayIndex = 0;
+  return {
+    resolver: {
+      ...(scope.selectedAssistantMessageIds === undefined
+        ? {}
+        : { selectedAssistantMessageIds: scope.selectedAssistantMessageIds }),
+      async resolve() {
+        const bytes = replayBytes[nextReplayIndex];
+        nextReplayIndex += 1;
+        if (bytes === undefined)
+          throw new ConversationContinuityPreflightError("REPLAY_DATA_UNAVAILABLE");
+        return bytes;
+      },
+    },
+    dispose() {
+      for (const bytes of replayBytes) bytes.fill(0);
+      replayBytes.length = 0;
+    },
+  };
 }
 
-function replayUnavailable(model: ModelDescriptor): AIError {
-  return new AIError(
-    "AI_CAPABILITY_UNSUPPORTED",
-    "Required native replay is unavailable for the selected conversation.",
-    { providerId: model.ref.provider, model: model.ref },
-  );
+function continuityFailure(
+  reason: ConversationContinuityIncompatibilityReason,
+): ModelTurnExecutionResult {
+  return {
+    kind: "FAILED",
+    error: {
+      code: "CONVERSATION_CONTINUITY_INCOMPATIBLE",
+      message:
+        "This conversation cannot safely continue with the selected model. Start a new session in the same workspace.",
+      retryable: false,
+      continuityReason: reason,
+    },
+  };
 }
 
 /**

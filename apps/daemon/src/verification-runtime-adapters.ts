@@ -121,12 +121,55 @@ export function createRunBoundVerificationExecution(
         runs,
         input.ownerRunId,
       );
-      return scope.exec.executeArgvAuthorized({ ...input, authorization });
+      return scope.exec.executeArgvAuthorized({
+        ...adaptVerificationPackageManagerArgv(input),
+        authorization,
+      });
     },
     async interact(input: VerificationRuntimeProcessInteractionRequest) {
       const { scope } = await openAuthorizedVerificationScope(runtime, runs, input.ownerRunId);
       return scope.exec.interact(input);
     },
+  };
+}
+
+const WINDOWS_NODE_PACKAGE_MANAGERS = new Set(["npm", "pnpm", "yarn"]);
+const WINDOWS_VERIFICATION_SCRIPT_NAMES = new Set([
+  "lint",
+  "typecheck",
+  "type-check",
+  "test",
+  "build",
+  "architecture",
+  "check:architecture:ci",
+]);
+
+/**
+ * Windows installs Node package managers as `.cmd` launchers, which `spawn(..., { shell: false })`
+ * cannot start directly. Translate only the resolver's closed `manager run known-script` argv into
+ * a fixed command-processor command. The package script remains the already-reviewed lifecycle
+ * input; no manifest text or arbitrary argv is interpolated into the command line.
+ */
+export function adaptVerificationPackageManagerArgv(
+  request: VerificationRuntimeArgvRequest,
+  platform: NodeJS.Platform | string = process.platform,
+): VerificationRuntimeArgvRequest {
+  const manager = request.executable.toLowerCase();
+  const [operation, scriptName, ...extraArgs] = request.args;
+  if (
+    platform !== "win32" ||
+    !WINDOWS_NODE_PACKAGE_MANAGERS.has(manager) ||
+    operation !== "run" ||
+    scriptName === undefined ||
+    extraArgs.length > 0 ||
+    !WINDOWS_VERIFICATION_SCRIPT_NAMES.has(scriptName)
+  ) {
+    return request;
+  }
+  return {
+    ...request,
+    executable: "cmd.exe",
+    args: ["/d", "/s", "/c", `${manager}.cmd run ${scriptName}`],
   };
 }
 

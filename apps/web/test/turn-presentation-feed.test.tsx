@@ -938,8 +938,14 @@ describe("TurnPresentationFeed", () => {
     expect(process).not.toContain("duplicate commentary");
   });
 
-  it("hides failed and cancelled model drafts but retains non-success terminal summaries", () => {
+  it("hides failed and cancelled drafts and renders only compact terminal statuses", () => {
     const initial = createInitialLiveActivityState(runId);
+    const summaryText: Record<string, string> = {
+      FAILED: "校验未能完成，任务已失败。",
+      CANCELLED: "任务已取消",
+      TIMEOUT: "任务因超时结束",
+      COMPLETED: "任务已完成，但未生成可验证的最终答复",
+    };
     const summaries = ["FAILED", "CANCELLED", "TIMEOUT", "COMPLETED"].map((runStatus) => ({
       id: `summary-${runStatus}`,
       runId,
@@ -949,7 +955,7 @@ describe("TurnPresentationFeed", () => {
       createdAt: 1,
       kind: "RUN_SUMMARY" as const,
       runStatus: runStatus as "FAILED" | "CANCELLED" | "TIMEOUT" | "COMPLETED",
-      text: `summary ${runStatus}`,
+      text: summaryText[runStatus]!,
     }));
     const html = renderToStaticMarkup(
       <TurnPresentationFeed
@@ -984,13 +990,13 @@ describe("TurnPresentationFeed", () => {
     );
     expect(html).not.toContain("failed partial");
     expect(html).not.toContain("cancelled partial");
-    expect(html).toContain("summary FAILED");
-    expect(html).toContain("summary CANCELLED");
-    expect(html).toContain("summary TIMEOUT");
-    expect(html).toContain("summary COMPLETED");
+    expect(html).not.toContain("任务结束报告");
+    expect(html).toContain("校验未能完成，任务已失败。");
+    expect(html).toContain("任务已取消");
+    expect(html).toContain("任务因超时结束");
   });
 
-  it("keeps a completed summary when no durable final answer exists", () => {
+  it("shows a compact completion status when no durable final answer exists", () => {
     const initial = createInitialLiveActivityState(runId);
     const html = renderToStaticMarkup(
       <TurnPresentationFeed
@@ -1028,9 +1034,28 @@ describe("TurnPresentationFeed", () => {
         }}
       />,
     );
-    expect(html).toContain("任务结束报告");
+    expect(html).not.toContain("任务结束报告");
+    expect(html).not.toContain("turn-presentation-item--run-summary");
     expect(html).toContain("完成但无最终答复");
     expect(html).toContain("完成摘要之后的答复草稿");
+  });
+
+  it("keeps a failed candidate answer and marks verification failure without a summary card", () => {
+    const failed = {
+      ...presentation(),
+      items: presentation().items.map((item) =>
+        item.kind === "RUN_SUMMARY"
+          ? { ...item, runStatus: "FAILED" as const, text: "校验未能完成，任务已失败。" }
+          : item,
+      ),
+    };
+    const html = renderToStaticMarkup(<TurnPresentationFeed presentation={failed} />);
+
+    expect(html).toContain("检查完成，项目结构正常。");
+    expect(html).toContain("最终验证未通过");
+    expect(html).toContain("校验未能完成，任务已失败。");
+    expect(html).not.toContain("任务结束报告");
+    expect(html).not.toContain("turn-presentation-item--run-summary");
   });
 
   it("renders durable final answers and live drafts as safe Markdown", () => {

@@ -3,6 +3,8 @@ import {
   CreateSessionRequestSchema,
   SessionListQuerySchema,
   SessionListResponseSchema,
+  SessionContinuityPreflightQuerySchema,
+  SessionContinuityPreflightResponseSchema,
   SessionTurnPresentationQuerySchema,
   SessionTurnPresentationResponseSchema,
   SessionTranscriptQuerySchema,
@@ -80,6 +82,23 @@ export function registerSessionRoutes(
   );
 
   if (dependencies.transcript !== undefined) {
+    app.get(
+      "/api/v1/sessions/:sessionId/continuity-preflight",
+      {
+        schema: {
+          querystring: SessionContinuityPreflightQuerySchema,
+          response: { 200: SessionContinuityPreflightResponseSchema },
+        },
+      },
+      async (request) => {
+        const { sessionId } = request.params as { sessionId: string };
+        return dependencies.transcript!.getContinuityPreflight(
+          sessionId as never,
+          request.query as import("@caelush/protocol").SessionContinuityPreflightQuery,
+        );
+      },
+    );
+
     app.get(
       "/api/v1/sessions/:sessionId/transcript",
       {

@@ -996,8 +996,8 @@ describe("Prompt Cache daemon projection", () => {
     }));
 
     const result = projectPromptCacheUsage(usageInput, samples, initialEpoch);
-    expect(result.metricsV2?.fullRun.mainAgent.hitRate).toBeCloseTo(0.8123, 4);
-    expect(result.metricsV2?.warm.mainAgent.hitRate).toBeCloseTo(0.8434, 4);
+    expect(result.metricsV2?.fullRun.mainAgent.hitRate).toBeCloseTo(0.812291, 6);
+    expect(result.metricsV2?.warm.mainAgent.hitRate).toBeCloseTo(0.843356, 6);
     expect(result.metricsV2?.warm.mainAgent.requestCount).toBe(7);
     expect(result.metricsV2?.previousInputCoverage?.coverage).toBeCloseTo(69_248 / 69_321, 8);
     expect(result.rollingHitRate).toBeUndefined();

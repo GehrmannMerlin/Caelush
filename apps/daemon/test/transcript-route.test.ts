@@ -57,6 +57,14 @@ describe("Session transcript route", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ items: [] });
 
+    const continuity = await app.inject({
+      method: "GET",
+      url: `/api/v1/sessions/${sessionId}/continuity-preflight?provider=deepseek&model=deepseek-reasoner`,
+      headers: { host: "127.0.0.1" },
+    });
+    expect(continuity.statusCode).toBe(200);
+    expect(continuity.json()).toEqual({ status: "UNKNOWN" });
+
     const missing = await app.inject({
       method: "GET",
       url: "/api/v1/sessions/ses_00000000-0000-7000-8000-000000000000/transcript",

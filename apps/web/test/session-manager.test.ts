@@ -19,6 +19,7 @@ import {
   type SessionTurnPresentationResponse,
   type SessionTurnPresentationResponseV2,
   type SessionTurnPresentationResponseV3,
+  type SessionContinuityPreflightResponse,
   type TranscriptEntry,
   type WorkspaceSessionSummary,
   type WorkspaceRef,
@@ -77,6 +78,89 @@ describe("WebSessionManager", () => {
     });
     expect(client.createSession).not.toHaveBeenCalled();
 
+    manager.dispose();
+  });
+
+  it("offers a same-workspace continuity session without copying history or submitting", async () => {
+    const oldSession = makeSession({
+      defaultWorkspace: workspace,
+      defaultModel: { provider: "fixture", model: "fixture-model" },
+      defaultReasoningLevel: "HIGH",
+    });
+    const oldRun = makeCompletedRun(
+      makeRun({
+        sessionId: oldSession.id,
+        goal: "old task",
+        securityPolicy: {
+          schemaVersion: 1,
+          preset: { id: "WORKSPACE_WRITE", version: 1 },
+          permissionProfile: "PROJECT_ACCESS",
+          approvalPolicy: "DANGEROUS_ONLY",
+          filesystemBoundary: "WORKSPACE_READ_WRITE",
+          processBoundary: "WORKSPACE_WRITE",
+          requiredEnforcement: "OS_RESTRICTED",
+          hardSafetyPolicyVersion: "hard-safety@1",
+          commandPolicyVersion: "command-policy@1",
+          secretPolicyVersion: "secret-policy@1",
+          createdAt: new Date(1).toISOString(),
+          policyDigest: "a".repeat(64),
+        },
+      }),
+    );
+    const newSession = makeSession({
+      defaultWorkspace: workspace,
+      defaultModel: { provider: "fixture", model: "fixture-model" },
+      defaultReasoningLevel: "HIGH",
+    });
+    const client = makeClient({
+      sessions: [oldSession],
+      latestRuns: new Map([[oldSession.id, [oldRun]]]),
+      createSessionResult: newSession,
+      transcriptResponse: { items: [userTranscript(oldRun, "old prompt")] },
+    });
+    client.getSessionContinuityPreflight.mockResolvedValue({ status: "POSSIBLE_INCOMPATIBILITY" });
+    const manager = new WebSessionManager({
+      client,
+      workspace,
+      info: makeInfo({
+        capabilities: { ...makeInfo().capabilities, sessionContinuityPreflight: true },
+      }),
+    });
+
+    await manager.loadSessions();
+    await expect(manager.selectSession(oldSession.id)).resolves.toBe(true);
+    await waitFor(() => manager.getSnapshot().continuityWarning);
+    expect(manager.getSnapshot().history).toEqual([userTranscript(oldRun, "old prompt")]);
+    expect(manager.getSnapshot().selectedPreset).toEqual({
+      id: "WORKSPACE_WRITE",
+      expectedVersion: 1,
+    });
+
+    await expect(manager.createContinuitySession()).resolves.toBe(true);
+
+    expect(client.createSession).toHaveBeenCalledWith({
+      title: "旧会话（新会话）",
+      defaultWorkspace: workspace,
+      defaultModel: { provider: "fixture", model: "fixture-model" },
+      defaultReasoningLevel: "HIGH",
+      metadata: {},
+    });
+    expect(client.createRun).not.toHaveBeenCalled();
+    expect(manager.getSnapshot()).toMatchObject({
+      selectedSessionId: newSession.id,
+      selectedSession: newSession,
+      history: [],
+      runs: [],
+      composerEnabled: true,
+      continuityWarning: false,
+      selectedPreset: { id: "WORKSPACE_WRITE", expectedVersion: 1 },
+    });
+    expect(manager.getSnapshot().candidates.map((candidate) => candidate.session.id)).toContain(
+      oldSession.id,
+    );
+    expect(manager.getSnapshot().candidates.map((candidate) => candidate.session.id)).toContain(
+      newSession.id,
+    );
     manager.dispose();
   });
 
@@ -1940,6 +2024,149 @@ describe("WebSessionManager", () => {
     manager.dispose();
   });
 
+  it("reconciles terminal usage once more when durable coverage first remains PARTIAL", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const pendingRun = makeRun({ sessionId: session.id, goal: "finish usage accounting" });
+    const runningRun = makeRun({ ...pendingRun, status: "RUNNING" });
+    const completedRun = makeCompletedRun(pendingRun);
+    const partial = makeUsageCoverage(completedRun, 20, 19);
+    const reported = makeUsageCoverage(completedRun, 20, 20);
+    const timer = new TestTimer();
+    const client = makeClient({ createSessionResult: session, createRunResult: pendingRun });
+    client.getRun.mockResolvedValue(completedRun);
+    client.listRuns.mockResolvedValue({ items: [completedRun] });
+    client.startRun.mockResolvedValue(actionResponse(runningRun, runningRun.id));
+    let usageRead = 0;
+    client.getRunContextUsage.mockImplementation(async () =>
+      usageRead++ === 0 ? partial : reported,
+    );
+    client.watchRunEvents.mockImplementation(async function* (_runId, options) {
+      options?.onOpen?.();
+      yield lifecycleEvent("run.completed", completedRun);
+    });
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo(), timer });
+    manager.beginDraft();
+
+    await expect(manager.submitPrompt("finish usage accounting")).resolves.toBe(true);
+    await waitFor(() => client.getRunContextUsage.mock.calls.length === 1);
+    expect(manager.getSnapshot().activeRun).toBeUndefined();
+    expect(manager.getSnapshot().contextUsage?.promptCache?.metricsV2?.usageCoverage).toMatchObject(
+      {
+        completeCacheUsageCount: 19,
+        missingInvocationRecordCount: 1,
+        status: "PARTIAL",
+      },
+    );
+
+    timer.flush();
+    await waitFor(() => client.getRunContextUsage.mock.calls.length === 2);
+    await waitFor(
+      () =>
+        manager.getSnapshot().contextUsage?.promptCache?.metricsV2?.usageCoverage?.status ===
+        "REPORTED",
+    );
+
+    expect(manager.getSnapshot().contextUsage).toEqual(reported);
+    expect(manager.getSnapshot().contextUsage?.promptCache?.metricsV2?.usageCoverage).toMatchObject(
+      {
+        observedRequestCount: 20,
+        completeCacheUsageCount: 20,
+        incompleteOrUnknownCount: 0,
+        missingInvocationRecordCount: 0,
+        status: "REPORTED",
+      },
+    );
+    expect(client.createRun).toHaveBeenCalledTimes(1);
+    manager.dispose();
+  });
+
+  it("reconciles terminal usage after a confirmed cancellation", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const runningRun = makeRun({ sessionId: session.id, status: "RUNNING" });
+    const cancelledRun = makeRun({ ...runningRun, status: "CANCELLED", finishedAt: 4 });
+    const usage = makeUsageCoverage(cancelledRun, 20, 20);
+    const client = makeClient({
+      sessions: [session],
+      latestRuns: new Map([[session.id, [runningRun]]]),
+    });
+    client.listRuns.mockResolvedValue({ items: [runningRun] });
+    client.cancelRun.mockResolvedValue(actionResponse(cancelledRun, runningRun.id));
+    client.getRunContextUsage.mockResolvedValue(usage);
+    client.watchRunEvents.mockImplementation(async function* (_runId, options) {
+      options?.onOpen?.();
+      await new Promise<void>(() => undefined);
+      yield* [] as PublicRunEvent[];
+    });
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo() });
+
+    await manager.loadSessions();
+    await expect(manager.selectSession(session.id)).resolves.toBe(true);
+    await expect(manager.cancelRun()).resolves.toBe(true);
+    await waitFor(() => manager.getSnapshot().contextUsage?.runId === cancelledRun.id);
+
+    expect(manager.getSnapshot()).toMatchObject({
+      activeRun: undefined,
+      composerEnabled: true,
+      runs: [{ status: "CANCELLED" }],
+      contextUsage: usage,
+    });
+    expect(client.getRunContextUsage).toHaveBeenCalledTimes(1);
+    expect(client.getRunContextUsage).toHaveBeenCalledWith(cancelledRun.id);
+    manager.dispose();
+  });
+
+  it("ignores a delayed live PARTIAL response after terminal REPORTED usage", async () => {
+    const session = makeSession({ defaultWorkspace: workspace });
+    const runningRun = makeRun({ sessionId: session.id, status: "RUNNING" });
+    const completedRun = makeCompletedRun(runningRun);
+    const partial = makeUsageCoverage(completedRun, 20, 19);
+    const reported = makeUsageCoverage(completedRun, 20, 20);
+    const delayedLiveUsage = deferred<ContextUsageProjection>();
+    const stream = new TestRunEventStream();
+    const timer = new TestTimer();
+    const client = makeClient({
+      sessions: [session],
+      latestRuns: new Map([[session.id, [runningRun]]]),
+    });
+    client.listRuns.mockResolvedValue({ items: [runningRun] });
+    client.getRun.mockResolvedValue(completedRun);
+    client.watchRunEvents.mockImplementation((_runId, options) => {
+      options?.onOpen?.();
+      return stream;
+    });
+    client.getRunContextUsage.mockImplementation(async () =>
+      client.getRunContextUsage.mock.calls.length === 1 ? delayedLiveUsage.promise : reported,
+    );
+    const manager = new WebSessionManager({ client, workspace, info: makeInfo(), timer });
+
+    await manager.loadSessions();
+    await expect(manager.selectSession(session.id)).resolves.toBe(true);
+    timer.flush();
+    await waitFor(() => client.getRunContextUsage.mock.calls.length === 1);
+
+    client.listRuns.mockResolvedValue({ items: [completedRun] });
+    stream.push(lifecycleEvent("run.completed", runningRun));
+    await waitFor(() => client.getRunContextUsage.mock.calls.length === 2);
+    await waitFor(
+      () =>
+        manager.getSnapshot().contextUsage?.promptCache?.metricsV2?.usageCoverage?.status ===
+        "REPORTED",
+    );
+    delayedLiveUsage.resolve(partial);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(manager.getSnapshot().contextUsage).toEqual(reported);
+    expect(manager.getSnapshot().contextUsage?.promptCache?.metricsV2?.usageCoverage).toMatchObject(
+      {
+        completeCacheUsageCount: 20,
+        incompleteOrUnknownCount: 0,
+        status: "REPORTED",
+      },
+    );
+    manager.dispose();
+    stream.close();
+  });
+
   it("ignores a delayed context usage response after disposal", async () => {
     const session = makeSession({ defaultWorkspace: workspace });
     const activeRun = makeRun({ sessionId: session.id, status: "RUNNING" });
@@ -1980,6 +2207,7 @@ function makeClient(
     watchEvents?: readonly PublicRunEvent[];
     refreshedRuns?: readonly ClientAgentRun[];
     transcriptResponse?: SessionTranscriptResponse;
+    continuityPreflight?: SessionContinuityPreflightResponse;
     turnPresentationResponse?: SessionTurnPresentationResponse;
     contextUsage?: ContextUsageProjection | Promise<ContextUsageProjection | null> | null;
   } = {},
@@ -1989,6 +2217,7 @@ function makeClient(
   readonly startRun: ReturnType<typeof vi.fn>;
   readonly getRun: ReturnType<typeof vi.fn>;
   readonly getSessionTranscript: ReturnType<typeof vi.fn>;
+  readonly getSessionContinuityPreflight: ReturnType<typeof vi.fn>;
   readonly getSessionTurnPresentation: ReturnType<typeof vi.fn>;
   readonly watchRunEvents: ReturnType<typeof vi.fn>;
   readonly watchEvents: readonly PublicRunEvent[];
@@ -2016,6 +2245,9 @@ function makeClient(
       async () => options.refreshedRuns?.at(-1) ?? options.createRunResult ?? makeRun(),
     ),
     getSessionTranscript: vi.fn(async () => options.transcriptResponse ?? { items: [] }),
+    getSessionContinuityPreflight: vi.fn(
+      async () => options.continuityPreflight ?? { status: "NO_OBVIOUS_GAP" },
+    ),
     getSessionTurnPresentation: vi.fn(
       async () =>
         options.turnPresentationResponse ?? { capabilityVersion: 1, items: [], highWatermark: 0 },
@@ -2036,6 +2268,7 @@ function makeClient(
     readonly startRun: ReturnType<typeof vi.fn>;
     readonly getRun: ReturnType<typeof vi.fn>;
     readonly getSessionTranscript: ReturnType<typeof vi.fn>;
+    readonly getSessionContinuityPreflight: ReturnType<typeof vi.fn>;
     readonly getSessionTurnPresentation: ReturnType<typeof vi.fn>;
     readonly watchRunEvents: ReturnType<typeof vi.fn>;
     readonly watchEvents: readonly PublicRunEvent[];
@@ -2180,6 +2413,61 @@ function makeContextUsage(
     },
     updatedAt: 3,
     lastBuildStatus: "SUCCESS",
+  };
+}
+
+function makeUsageCoverage(
+  run: ClientAgentRun,
+  observedRequestCount: number,
+  completeCacheUsageCount: number,
+): ContextUsageProjection {
+  const incompleteOrUnknownCount = observedRequestCount - completeCacheUsageCount;
+  const rate = {
+    requestCount: observedRequestCount,
+    hitTokens: 95,
+    accountedTokens: 100,
+    hitRate: 0.95,
+  };
+  return {
+    ...makeContextUsage(run, 320),
+    promptCache: {
+      status: "WARM",
+      sampleCount: completeCacheUsageCount,
+      totalRequestCount: observedRequestCount,
+      totalInputTokens: 100,
+      totalOutputTokens: 0,
+      hitTokens: 95,
+      missTokens: 5,
+      writeTokens: 0,
+      unknownUsageCount: incompleteOrUnknownCount,
+      expectedReusablePrefixTokens: 0,
+      purposes: [],
+      metricsV2: {
+        fullRun: { mainAgent: rate, allPurposes: rate },
+        warm: { mainAgent: rate, allPurposes: rate },
+        rolling: { windowSize: 10, mainAgent: rate, allPurposes: rate },
+        usageCoverage: {
+          observedRequestCount,
+          completeCacheUsageCount,
+          incompleteOrUnknownCount,
+          providerUsageUnreportedCount: 0,
+          providerUsageWithoutCacheBreakdownCount: 0,
+          failedOrCancelledWithoutUsageCount: 0,
+          inProgressInvocationCount: 0,
+          missingInvocationRecordCount: incompleteOrUnknownCount,
+          legacyWithoutCacheBreakdownCount: 0,
+          unidentifiedLegacySampleCount: 0,
+          coverageRate:
+            observedRequestCount === 0 ? undefined : completeCacheUsageCount / observedRequestCount,
+          status:
+            completeCacheUsageCount === observedRequestCount
+              ? "REPORTED"
+              : completeCacheUsageCount === 0
+                ? "UNREPORTED"
+                : "PARTIAL",
+        },
+      },
+    },
   };
 }
 

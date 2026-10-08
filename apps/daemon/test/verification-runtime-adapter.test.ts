@@ -10,6 +10,7 @@ import { expandPermissionPreset } from "@caelush/security";
 import { createRunId, createWorkspaceId, type AgentRun } from "@caelush/protocol";
 import { describe, expect, it } from "vitest";
 import {
+  adaptVerificationPackageManagerArgv,
   createRunBoundVerificationExecution,
   createRuntimeWorkspaceVerificationPort,
 } from "../src/verification-runtime-adapters.js";
@@ -43,6 +44,25 @@ function runWithPreset(presetId: "WORKSPACE_WRITE" | "FULL_ACCESS"): AgentRun {
 }
 
 describe("runtime workspace verification adapter", () => {
+  it("uses a bounded Windows command-processor bridge for known Node lifecycle argv", () => {
+    const request = {
+      ownerRunId: createRunId(),
+      executable: "pnpm",
+      args: ["run", "build"],
+      workdir: ".",
+      yieldTimeMs: 250,
+    } as const;
+
+    expect(adaptVerificationPackageManagerArgv(request, "win32")).toMatchObject({
+      executable: "cmd.exe",
+      args: ["/d", "/s", "/c", "pnpm.cmd run build"],
+    });
+    expect(adaptVerificationPackageManagerArgv(request, "linux")).toEqual(request);
+    expect(
+      adaptVerificationPackageManagerArgv({ ...request, args: ["run", "build & whoami"] }, "win32"),
+    ).toEqual({ ...request, args: ["run", "build & whoami"] });
+  });
+
   it("executes verification through the Run-bound authorized argv path", async () => {
     const run = runWithPreset("FULL_ACCESS");
     let openOptions: unknown;

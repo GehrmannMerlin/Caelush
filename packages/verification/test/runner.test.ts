@@ -39,7 +39,9 @@ const profile: VerificationProjectProfile = {
   },
 };
 
-function planFor(...purposes: Array<"LINT" | "TYPECHECK" | "TEST" | "BUILD">): VerificationPlan {
+function planFor(
+  ...purposes: Array<"LINT" | "TYPECHECK" | "TEST" | "BUILD" | "ARCHITECTURE">
+): VerificationPlan {
   const planId = createVerificationPlanId();
   const now = createTimestampMs(1_700_000_000_000);
   return {
@@ -222,6 +224,64 @@ describe("storage-free verification runner", () => {
     expect(reviewed.outcome).toBe("BLOCKED");
     expect(reviewedProcess.calls).toEqual([]);
     expect(reviewedStore.calls).toEqual(["settle:ERROR"]);
+  });
+
+  it("executes a Vue/Vite Build script when the project has no other check scripts", async () => {
+    const process = execution();
+    const durable = store();
+    const result = await new VerificationRunner().run(
+      input(planFor("BUILD"), process.port, durable, {
+        profile: {
+          ...profile,
+          rootPackage: {
+            relativePath: ".",
+            scripts: [{ name: "build", command: "vite build" }],
+          },
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      outcome: "PROJECT_CHECKS_PASSED",
+      executedCount: 1,
+      passedCount: 1,
+    });
+    expect(process.calls).toEqual(["execute:pnpm:run build"]);
+    expect(durable.calls).toContain("settle:PASSED");
+  });
+
+  it("blocks when a REQUIRED Architecture script was removed from the project profile", async () => {
+    const build = planFor("BUILD");
+    const buildCheck = build.checks[0]!;
+    const architectureCheck = {
+      ...buildCheck,
+      id: createVerificationCheckId(),
+      ordinal: 1,
+      requirement: "REQUIRED" as const,
+      spec: {
+        kind: "PROJECT" as const,
+        purpose: "ARCHITECTURE" as const,
+        source: "SYSTEM" as const,
+      },
+    };
+    const plan = { ...build, checks: [buildCheck, architectureCheck] };
+    const process = execution();
+    const durable = store();
+    const result = await new VerificationRunner().run(
+      input(plan, process.port, durable, {
+        profile: {
+          ...profile,
+          rootPackage: {
+            relativePath: ".",
+            scripts: [{ name: "build", command: "vite build" }],
+          },
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({ outcome: "BLOCKED", passedCount: 1, errorCount: 1 });
+    expect(process.calls).toEqual(["execute:pnpm:run build"]);
+    expect(durable.calls).toContain("settle:ERROR");
   });
 
   it("fails fast after a blocking non-zero exit and preserves bounded redacted output through evidence", async () => {

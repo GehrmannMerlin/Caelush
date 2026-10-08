@@ -1,6 +1,9 @@
 import type { AgentFinalCandidateDecision, CompletionGate, RunExecutionMode } from "@caelush/agent";
 import type { AgentRun, AgentState, VerificationProjectFacts } from "@caelush/protocol";
-import { compileVerificationRepairContext } from "@caelush/verification";
+import {
+  compileVerificationRepairContext,
+  type VerificationProjectProfile,
+} from "@caelush/verification";
 
 import type { RunContinuationCheckpoint } from "./agent-continuation.js";
 import type { RunBudgetPort } from "./budget-ports.js";
@@ -227,15 +230,24 @@ export function createCodingCompletionAssembly(
 
     async planCandidateBoundary(input) {
       let projectFacts: VerificationProjectFacts | undefined;
-      if (input.state.changedFiles.length > 0) {
-        try {
-          const config = await dependencies.configResolver.resolve(input.run);
-          projectFacts = config.projectFacts;
-          if (dependencies.profileProvider !== undefined) {
+      try {
+        const config = await dependencies.configResolver.resolve(input.run);
+        projectFacts = config.projectFacts;
+        if (dependencies.profileProvider !== undefined) {
+          try {
             const profile = await dependencies.profileProvider.getFreshProfile(input.run, config);
+            const architectureScripts = new Set(["check:architecture:ci", "architecture"]);
+            const architectureCheckAvailable = [profile.rootPackage, profile.activePackage].some(
+              (packageInfo) =>
+                packageInfo?.scripts.some((script) => architectureScripts.has(script.name)) ===
+                true,
+            );
+            const architecturePolicy = resolveProfileArchitecturePolicy(profile);
             projectFacts = {
               ...projectFacts,
               isCodeProject: profile.ecosystems.length > 0,
+              architectureCheckAvailable,
+              ...(architecturePolicy === undefined ? {} : { architecturePolicy }),
               ...(profile.packages === undefined
                 ? {}
                 : {
@@ -244,12 +256,24 @@ export function createCodingCompletionAssembly(
                     ),
                   }),
             };
+          } catch {
+            // Preserve trusted config facts; an unavailable fresh profile is not proof that a
+            // previously declared architecture contract disappeared.
           }
-        } catch {
-          // Scope discovery is an optimization. If fresh project facts are unavailable, the planner
-          // sees unknown impact and chooses the conservative project-wide checks.
-          projectFacts = undefined;
         }
+      } catch {
+        // Scope discovery is an optimization. If fresh project facts are unavailable, the planner
+        // sees unknown impact and chooses the conservative project-wide checks.
+        projectFacts = undefined;
+      }
+      if (
+        await hasRemovedRequiredArchitecturePolicy(
+          dependencies.git,
+          input.run,
+          input.state.changedFiles,
+        )
+      ) {
+        projectFacts = { ...projectFacts, architecturePolicy: "REQUIRED" };
       }
       return createRunCandidateBoundaryPlanner({
         run: input.run,
@@ -297,6 +321,52 @@ export function createCodingCompletionAssembly(
       return { text: repairContext.text };
     },
   };
+}
+
+function resolveProfileArchitecturePolicy(
+  profile: VerificationProjectProfile,
+): "REQUIRED" | "IF_AVAILABLE" | "NOT_APPLICABLE" | undefined {
+  const policies = [
+    profile.rootPackage?.verificationPolicy?.architecture,
+    profile.activePackage?.verificationPolicy?.architecture,
+    ...(profile.packages ?? []).map((packageInfo) => packageInfo.verificationPolicy?.architecture),
+  ];
+  if (policies.includes("REQUIRED")) return "REQUIRED";
+  if (policies.includes("IF_AVAILABLE")) return "IF_AVAILABLE";
+  if (policies.includes("NOT_APPLICABLE")) return "NOT_APPLICABLE";
+  return undefined;
+}
+
+async function hasRemovedRequiredArchitecturePolicy(
+  git: CodingCompletionAssemblyDependencies["git"],
+  run: AgentRun,
+  changedFiles: AgentState["changedFiles"],
+): Promise<boolean> {
+  if (git === undefined) return false;
+  const packageManifests = new Set(
+    changedFiles.flatMap(({ path }) => {
+      const normalized = path.replaceAll("\\", "/").replace(/^\.\//, "");
+      return normalized === "package.json" || normalized.endsWith("/package.json")
+        ? [normalized]
+        : [];
+    }),
+  );
+  for (const path of packageManifests) {
+    try {
+      const result = await git.diff({ workspace: run.workspace, path, scope: "ALL" });
+      if (
+        result.diff.split(/\r?\n/).some((line) => {
+          if (!line.startsWith("-") || line.startsWith("---")) return false;
+          return /^\s*"architecture"\s*:\s*"REQUIRED"\s*,?\s*$/.test(line.slice(1));
+        })
+      ) {
+        return true;
+      }
+    } catch {
+      // A missing baseline diff is unknown evidence; it does not establish either policy.
+    }
+  }
+  return false;
 }
 
 /**

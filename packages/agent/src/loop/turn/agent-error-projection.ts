@@ -40,6 +40,9 @@ export function toAgentError(error: ModelTurnExecutionError): AgentError {
     message: error.message,
     retryable: error.retryable,
     phase: "LLM",
+    ...(error.continuityReason === undefined
+      ? {}
+      : { details: { continuityReason: error.continuityReason } }),
   };
 }
 
@@ -102,6 +105,8 @@ export function toAgentErrorCode(code: ModelTurnExecutionErrorCode): AgentErrorC
     case "UNSUPPORTED_MODEL":
     case "UNSUPPORTED_CAPABILITY":
       return "MODEL_ERROR";
+    case "CONVERSATION_CONTINUITY_INCOMPATIBLE":
+      return "CONVERSATION_CONTINUITY_INCOMPATIBLE";
     default:
       return assertUnmappedCode(code);
   }

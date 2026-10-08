@@ -361,6 +361,7 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
         messageRecords: storage.messageRecords,
         codecs: composition.messages.codecs,
         transcriptProjectors: composition.transcriptProjectors,
+        models: composition.ai.models,
       }),
       presentation: new SessionPresentationService({
         sessions: storage.sessions,

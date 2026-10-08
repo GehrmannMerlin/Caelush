@@ -43,6 +43,25 @@ function getFactory(name: string): (() => string) | undefined {
  * `@caelush/coding-agent`. What remains here is what a **persisted row** actually stores.
  */
 describe("protocol tool contracts", () => {
+  it("accepts the safe legacy conversation continuity error", () => {
+    const codeSchema = getSchema("AgentErrorCodeSchema");
+    const errorSchema = getSchema("AgentErrorSchema");
+    if (codeSchema === undefined || errorSchema === undefined) return;
+
+    expect(codeSchema.parse("CONVERSATION_CONTINUITY_INCOMPATIBLE")).toBe(
+      "CONVERSATION_CONTINUITY_INCOMPATIBLE",
+    );
+    expect(
+      errorSchema.parse({
+        code: "CONVERSATION_CONTINUITY_INCOMPATIBLE",
+        message: "This conversation cannot safely continue with the selected model.",
+        retryable: false,
+        phase: "LLM",
+        details: { continuityReason: "LEGACY_REPLAY_MISSING" },
+      }),
+    ).toMatchObject({ code: "CONVERSATION_CONTINUITY_INCOMPATIBLE", retryable: false });
+  });
+
   it("maps built-in Tools to presentation-only categories and defaults unknown Tools safely", () => {
     const category = api["toolPresentationCategory"];
     expect(category).toBeTypeOf("function");

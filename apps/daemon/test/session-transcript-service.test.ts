@@ -148,6 +148,60 @@ describe("Phase 5E Session Transcript Service", () => {
     expect(JSON.stringify(response)).not.toContain("do not expose");
   });
 
+  it("reports a non-blocking continuity risk for legacy history under a native replay model", async () => {
+    const service = new SessionTranscriptService({
+      sessions: { get: async () => session },
+      runs: { listBySession: async () => [run] },
+      messageRecords: {
+        listBySession: async () => [
+          record(1, "ASSISTANT", "amsg_0192f5b1-4d3a-7c2e-8a91-000000000006", {
+            content: [{ type: "TEXT", text: "older answer" }],
+            model: {
+              kind: "MODEL_TURN",
+              callId: "llm_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9d",
+              model: { provider: "deepseek", model: "deepseek-reasoner" },
+              finishReason: "STOP",
+            },
+          }),
+        ],
+      },
+      codecs: createStandardAgentMessageCodecRegistry(
+        projectionVersionTable({ USER: 1, ASSISTANT: 1, TOOL_RESULT: 1 }),
+      ),
+      transcriptProjectors: createStandardAgentMessageTranscriptProjectorRegistry(),
+      models: {
+        resolve: () =>
+          ({
+            ref: { provider: "deepseek", model: "deepseek-reasoner" },
+            api: "openai-compatible-chat",
+            limits: { contextWindowTokens: 10_000, maxOutputTokens: 1_000 },
+            capabilities: {
+              streaming: "SUPPORTED",
+              toolCalling: "SUPPORTED",
+              parallelToolCalls: "SUPPORTED",
+              structuredOutput: "UNKNOWN",
+              vision: "UNKNOWN",
+              reasoning: "SUPPORTED",
+              reasoningSummary: "UNKNOWN",
+              promptCaching: "UNKNOWN",
+              usageReporting: "UNKNOWN",
+            },
+            source: "CONFIGURATION",
+            adapterMetadata: {
+              "openai-compatible": { requiresReasoningReplayWithTools: true },
+            },
+          }) as never,
+      },
+    });
+
+    const result = await service.getContinuityPreflight(sessionId, {
+      provider: "deepseek",
+      model: "deepseek-reasoner",
+    });
+
+    expect(result).toEqual({ status: "POSSIBLE_INCOMPATIBILITY" });
+  });
+
   it("returns a typed missing-session failure rather than an empty transcript", async () => {
     const service = new SessionTranscriptService({
       sessions: { get: async () => null },

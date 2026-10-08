@@ -377,18 +377,11 @@ function TurnPresentationContent(props: TurnPresentationContentProps): ReactElem
         ? !settledStepKeys.has(`${activity.runId}:${activity.stepId ?? ""}`)
         : !settledAssistantItemKeys.has(`${activity.runId}:${activity.assistantItemId}`)),
   );
-  const summaries =
-    viewModel?.runSummaries.filter(
-      (item) =>
-        item.runStatus !== "COMPLETED" ||
-        !finalAnswers.some((answer) => answer.runId === item.runId),
-    ) ??
-    presentationItems.filter((item) => {
-      if (item.kind !== "RUN_SUMMARY") return false;
-      return !(
-        item.runStatus === "COMPLETED" && finalAnswers.some((answer) => answer.runId === item.runId)
-      );
-    });
+  const summaries = viewModel?.runSummaries ?? presentationItems.filter(isRunSummary);
+  const terminalStates = summaries.filter(
+    (item) =>
+      item.runStatus !== "COMPLETED" || !finalAnswers.some((answer) => answer.runId === item.runId),
+  );
   const processItems =
     viewModel?.processItems ??
     presentationItems.filter(
@@ -399,7 +392,6 @@ function TurnPresentationContent(props: TurnPresentationContentProps): ReactElem
     );
   const userItems =
     viewModel?.userItems ?? presentationItems.filter((item) => item.kind === "USER");
-  const finalItems = [...finalAnswers, ...summaries];
   const activityCount =
     (viewModel?.activityCount ?? processItems.length) +
     processActivities.length +
@@ -410,7 +402,8 @@ function TurnPresentationContent(props: TurnPresentationContentProps): ReactElem
     modelDrafts.length > 0 ||
     modelWait !== undefined ||
     isModelThinking ||
-    isTaskActive;
+    isTaskActive ||
+    terminalStates.length > 0;
   const [expanded, setExpanded] = useState(isTaskActive);
   const wasActive = useRef(isTaskActive);
 
@@ -473,7 +466,7 @@ function TurnPresentationContent(props: TurnPresentationContentProps): ReactElem
             createElement(
               "span",
               { className: "turn-presentation-summary-status" },
-              processSummary(isTaskActive, activityCount),
+              processSummary(isTaskActive, activityCount, terminalStates.at(-1)?.text),
             ),
             createElement(ChevronDown, {
               className: "turn-presentation-chevron",
@@ -489,10 +482,23 @@ function TurnPresentationContent(props: TurnPresentationContentProps): ReactElem
               processActivities.length === 0 &&
               modelDrafts.length === 0 &&
               !isModelThinking &&
-              modelWait === undefined
+              modelWait === undefined &&
+              terminalStates.length === 0
               ? createElement("p", { className: "turn-presentation-empty" }, "正在准备任务活动……")
               : null,
             processItems.map((item) => renderItem(item, now, item.runId === verifyingRunId)),
+            terminalStates.map((item) =>
+              createElement(
+                "p",
+                {
+                  className: `turn-presentation-terminal-state turn-presentation-terminal-state--${item.runStatus.toLowerCase()}`,
+                  key: `terminal:${item.id}`,
+                  role: "status",
+                  "data-run-id": item.runId,
+                },
+                item.text,
+              ),
+            ),
             modelDrafts.length === 0
               ? null
               : createElement(
@@ -589,15 +595,29 @@ function TurnPresentationContent(props: TurnPresentationContentProps): ReactElem
           ),
         )
       : null,
-    finalItems.length === 0
+    finalAnswers.length === 0
       ? null
       : createElement(
           "section",
           {
             className: "turn-presentation-final",
-            "aria-label": summaries.length > 0 ? "任务结束报告" : "最终答复",
+            "aria-label": "最终答复",
           },
-          finalItems.map((item) => renderItem(item)),
+          terminalStates.some(
+            (item) =>
+              item.runStatus === "FAILED" &&
+              finalAnswers.some((answer) => answer.runId === item.runId),
+          )
+            ? createElement(
+                "p",
+                {
+                  className: "turn-presentation-verification-failed",
+                  role: "status",
+                },
+                "最终验证未通过",
+              )
+            : null,
+          finalAnswers.map((item) => renderItem(item)),
           verifyingRunId !== undefined &&
             finalAnswers.some((answer) => answer.runId === verifyingRunId)
             ? createElement(
@@ -745,20 +765,25 @@ function renderItem(
       );
     case "RUN_SUMMARY":
       return createElement(
-        "article",
+        "p",
         {
-          className: `turn-presentation-item turn-presentation-item--run-summary turn-presentation-item--${item.status.toLowerCase()}`,
+          className: `turn-presentation-terminal-state turn-presentation-terminal-state--${item.runStatus.toLowerCase()}`,
           key: item.id,
+          role: "status",
+          "data-run-id": item.runId,
         },
-        createElement("p", { className: "turn-presentation-final-kicker" }, "任务结束报告"),
-        createElement(
-          "h3",
-          { className: "turn-presentation-final-title" },
-          runStatusLabel(item.runStatus),
-        ),
-        createElement("p", { className: "turn-presentation-item-text" }, item.text),
+        item.text,
       );
   }
+}
+
+function isRunSummary(
+  item: TurnPresentationItem | TurnPresentationItemV2 | TurnPresentationItemV3,
+): item is Extract<
+  TurnPresentationItem | TurnPresentationItemV2 | TurnPresentationItemV3,
+  { kind: "RUN_SUMMARY" }
+> {
+  return item.kind === "RUN_SUMMARY";
 }
 
 function assistantLabel(phase: "COMMENTARY" | "FINAL_ANSWER" | "UNKNOWN"): string | null {
@@ -928,7 +953,8 @@ function renderPresentationStatusIcon(
   }
 }
 
-function processSummary(active: boolean, activityCount: number): string {
+function processSummary(active: boolean, activityCount: number, terminalSummary?: string): string {
+  if (!active && terminalSummary !== undefined) return terminalSummary;
   if (active && activityCount === 0) return "正在启动任务";
   return active ? `${activityCount} 项活动 · 运行中` : `${activityCount} 项活动`;
 }
@@ -951,21 +977,4 @@ function formatTaskElapsed(durationMs: number): string {
   if (hours > 0) return `用时 ${hours}小时${minutes}分${seconds}秒`;
   if (minutes > 0) return `用时 ${minutes}分${seconds}秒`;
   return `用时 ${seconds}秒`;
-}
-
-function runStatusLabel(status: RunStatus): string {
-  const labels: Record<RunStatus, string> = {
-    PENDING: "任务准备中",
-    RUNNING: "任务运行中",
-    WAITING_APPROVAL: "等待审批",
-    WAITING_RESOURCE: "等待资源决策",
-    VERIFYING: "验证中",
-    COMPLETED: "任务已完成",
-    FAILED: "任务失败",
-    CANCELLED: "任务已取消",
-    TIMEOUT: "任务超时",
-    MAX_STEPS_REACHED: "达到步骤上限",
-    BUDGET_EXCEEDED: "达到预算限制",
-  };
-  return labels[status];
 }

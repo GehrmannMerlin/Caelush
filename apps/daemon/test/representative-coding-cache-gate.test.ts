@@ -7,11 +7,22 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ModelDescriptor, ModelDescriptorSourcePort } from "@caelush/ai";
 import {
+  agentAssistantTextPart,
+  agentAssistantToolCallPart,
   agentTextPart,
+  createAgentMessageFactory,
+  createAgentMessageIdFactory,
   createContextContributionPipeline,
+  createDeterministicConversationTurnIdFactory,
   createStandardAgentMessageProjectorRegistry,
+  modelMessageSource,
+  NO_TOOL_RESULT_OBSERVATION,
   projectPromptSurface,
+  toolFeedbackPolicySnapshot,
+  toolMessageSource,
   userMessageSource,
+  type AgentMessage,
+  type AgentMessageRecordDraft,
 } from "@caelush/agent";
 import { createStepId, createTimestampMs } from "@caelush/protocol";
 import {
@@ -30,6 +41,7 @@ import {
 } from "../src/daemon-composition.js";
 import type { DaemonComposition } from "../src/daemon-composition.js";
 import { createDaemonV2ContextEngine } from "../src/context/v2-context-composition.js";
+import { SessionTranscriptService } from "../src/services/session-transcript-service.js";
 import { WorkspaceService } from "../src/workspaces/workspace-service.js";
 import {
   beginOpenAISse,
@@ -259,6 +271,52 @@ async function prepareWorkspace(scenarioId: RepresentativeScenarioId): Promise<{
       id: workspace.workspace.id,
       path: workspace.workspace.canonicalPath,
     },
+  };
+}
+
+async function prepareVueViteWorkspace(): Promise<{
+  readonly workspacePath: string;
+  readonly workspaceRef: { readonly id: string; readonly path: string };
+}> {
+  directory = await mkdtemp(join(tmpdir(), "caelush-post-c5-vue-vite-"));
+  const workspacePath = join(directory, "workspace");
+  await mkdir(join(workspacePath, "src"), { recursive: true });
+  const html = (title: string) =>
+    `<!doctype html>\n<html><head><meta charset="UTF-8"><title>${title}</title></head><body><main id="app"></main><script type="module" src="/src/main.js"></script></body></html>\n`;
+  const files: Readonly<Record<string, string>> = {
+    "package.json": JSON.stringify(
+      {
+        name: "post-c5-vue-vite-fixture",
+        private: true,
+        type: "module",
+        packageManager: "pnpm@10.10.0",
+        scripts: { dev: "vite", build: "vite build", preview: "vite preview" },
+        dependencies: { vue: "3.5.22" },
+        devDependencies: { vite: "8.2.2" },
+      },
+      null,
+      2,
+    ),
+    "vite.config.js":
+      "export default { build: { rollupOptions: { input: ['index.html', 'login.html', 'register.html'] } } };\n",
+    "index.html": html("Home"),
+    "login.html": html("Login"),
+    "register.html": html("Register"),
+    "src/main.js": 'document.querySelector("#app").textContent = "Initial view";\n',
+  };
+  for (const [relativePath, content] of Object.entries(files)) {
+    await writeFile(join(workspacePath, relativePath), content, "utf8");
+  }
+  initializeFixtureGit(workspacePath);
+  storage = await openStore(join(directory, "caelush.db"));
+  const workspace = await new WorkspaceService({
+    repository: storage.workspaces,
+  }).registerWorkspace({
+    path: workspacePath,
+  });
+  return {
+    workspacePath,
+    workspaceRef: { id: workspace.workspace.id, path: workspace.workspace.canonicalPath },
   };
 }
 
@@ -708,6 +766,344 @@ describe("representative coding cache gate manifests", () => {
 });
 
 describe("REPRESENTATIVE_CODING production cache gate", () => {
+  it("runs a Vue/Vite workspace through Tool replay, verification and terminal Usage", async () => {
+    const manifest = representativeCodingScenarioManifests[0];
+    if (manifest === undefined) throw new Error("Scenario A manifest is missing.");
+    const fixture = await prepareVueViteWorkspace();
+    const patchText = [
+      "*** Begin Patch",
+      "*** Update File: src/main.js",
+      "@@",
+      '-document.querySelector("#app").textContent = "Initial view";',
+      '+document.querySelector("#app").textContent = "Updated login view";',
+      "*** End Patch",
+    ].join("\n");
+    provider = await scriptedProvider(
+      [
+        toolTurn("post-c5-vite-1", "apply_patch", JSON.stringify({ patch: patchText }), 1),
+        answer("Updated the login view and verified the Vue/Vite production build.", 2),
+        verifier(),
+      ],
+      manifest,
+    );
+    const publicEvents: unknown[] = [];
+    let tick = 100;
+    const { run } = await createRunForScenario({
+      workspaceRef: fixture.workspaceRef,
+      goal: "Update the login view text and verify the project build.",
+    });
+    composition = await composeFixture({
+      explicitPaths: ["src/main.js"],
+      publicEvents,
+      clock: { now: () => createTimestampMs(tick++) },
+    });
+
+    const result = await composition.controller.start(run.id);
+    const plans = await storage!.verification.listPlans(run.id);
+    const checks =
+      plans[0] === undefined ? [] : await storage!.verification.listChecks(plans[0].id);
+    const checkStatuses = new Map(
+      checks.map((check) => [`${check.spec.kind}:${check.spec.purpose}`, check.status]),
+    );
+    expect(result.run.status, JSON.stringify(Object.fromEntries(checkStatuses))).toBe("COMPLETED");
+    expect(await readFile(join(fixture.workspacePath, "src/main.js"), "utf8")).toContain(
+      "Updated login view",
+    );
+    expect(provider.requests).toHaveLength(3);
+    const replayedCalls = allRawCalls(provider.requests.slice(1, 2));
+    expect(replayedCalls).toContainEqual(
+      expect.objectContaining({
+        id: "post-c5-vite-1",
+        name: "apply_patch",
+        arguments: JSON.stringify({ patch: patchText }),
+        reasoning: `${FIXTURE_REASONING_PREFIX}1`,
+      }),
+    );
+
+    expect(plans).toHaveLength(1);
+    expect(checks.find((check) => check.spec.purpose === "ARCHITECTURE")).toBeUndefined();
+    expect(Object.fromEntries(checkStatuses)).toMatchObject({
+      "PROJECT:LINT": "SKIPPED",
+      "PROJECT:TYPECHECK": "SKIPPED",
+      "PROJECT:TEST": "SKIPPED",
+      "PROJECT:BUILD": "PASSED",
+      "WORKSPACE:CHANGESET_SANITY": "PASSED",
+      "TASK:ACCEPTANCE": "PASSED",
+    });
+    const usage = await composition.contextUsage.getContextUsage(String(run.id));
+    expect(usage?.promptCache?.metricsV2?.usageCoverage).toMatchObject({
+      observedRequestCount: 3,
+      completeCacheUsageCount: 3,
+      status: "REPORTED",
+    });
+    expect(usage?.promptCache?.metricsV2?.surfaceDelta.unchangedSectionReemissionCount).toBe(0);
+  }, 60_000);
+
+  it("keeps a Vue/Vite Run failed when the real production Build command fails", async () => {
+    const manifest = representativeCodingScenarioManifests[0];
+    if (manifest === undefined) throw new Error("Scenario A manifest is missing.");
+    const fixture = await prepareVueViteWorkspace();
+    const patchText = [
+      "*** Begin Patch",
+      "*** Update File: src/main.js",
+      "@@",
+      '-document.querySelector("#app").textContent = "Initial view";',
+      "+const = ;",
+      "*** End Patch",
+    ].join("\n");
+    provider = await scriptedProvider(
+      [
+        toolTurn("post-c5-vite-fail-1", "apply_patch", JSON.stringify({ patch: patchText }), 1),
+        answer("Updated the login view.", 2),
+        answer("Verification repair attempt one.", 3),
+        answer("Verification repair attempt two.", 4),
+        answer("Verification repair attempt three.", 5),
+      ],
+      manifest,
+    );
+    const publicEvents: unknown[] = [];
+    let tick = 100;
+    const { run } = await createRunForScenario({
+      workspaceRef: fixture.workspaceRef,
+      goal: "Update the login view and verify the project build.",
+    });
+    composition = await composeFixture({
+      explicitPaths: ["src/main.js"],
+      publicEvents,
+      clock: { now: () => createTimestampMs(tick++) },
+    });
+
+    const result = await composition.controller.start(run.id);
+    expect(result.run.status).toBe("FAILED");
+    const plans = await storage!.verification.listPlans(run.id);
+    expect(plans.length).toBeGreaterThan(0);
+    expect(
+      plans.every((plan) => plan.checks.every((check) => check.spec.purpose !== "ARCHITECTURE")),
+    ).toBe(true);
+    const buildChecks = (
+      await Promise.all(plans.map((plan) => storage!.verification.listChecks(plan.id)))
+    )
+      .flat()
+      .filter((check) => check.spec.kind === "PROJECT" && check.spec.purpose === "BUILD");
+    expect(buildChecks.some((check) => check.status === "FAILED")).toBe(true);
+    expect(publicEvents.some((event) => (event as { type?: string }).type === "run.failed")).toBe(
+      true,
+    );
+    expect(
+      publicEvents.some((event) => (event as { type?: string }).type === "run.completed"),
+    ).toBe(false);
+  }, 60_000);
+
+  it("blocks legacy native replay without dispatch and completes in a fresh same-workspace Session", async () => {
+    const manifest = representativeCodingScenarioManifests[0];
+    if (manifest === undefined) throw new Error("Scenario A manifest is missing.");
+    const fixture = await prepareVueViteWorkspace();
+    provider = await scriptedProvider(
+      [answer("The new session completed its first model turn.", 1), verifier()],
+      manifest,
+    );
+    let tick = 100;
+    const publicEvents: unknown[] = [];
+    composition = await composeFixture({
+      explicitPaths: ["index.html"],
+      publicEvents,
+      clock: { now: () => createTimestampMs(tick++) },
+    });
+
+    const oldSession = makeSession({
+      workspaceId: fixture.workspaceRef.id as ReturnType<typeof makeSession>["workspaceId"],
+      defaultWorkspace: fixture.workspaceRef,
+      defaultModel: { provider: "deepseek", model: MODEL_ID },
+      defaultReasoningLevel: "HIGH",
+    });
+    const oldRun = makeRun(oldSession.id, {
+      goal: "A legacy task whose answer remains visible.",
+      status: "COMPLETED",
+      workspace: fixture.workspaceRef,
+      model: { provider: "deepseek", model: MODEL_ID },
+      reasoningLevel: "HIGH",
+      createdAt: createTimestampMs(50),
+      startedAt: createTimestampMs(51),
+      finishedAt: createTimestampMs(52),
+    });
+    await storage!.sessions.insert(oldSession);
+    await storage!.runs.insert(oldRun);
+
+    const turns = createDeterministicConversationTurnIdFactory();
+    const conversationTurnId = turns.forRun(oldRun.id);
+    const messageFactory = createAgentMessageFactory({
+      ids: createAgentMessageIdFactory(),
+      now: () => createTimestampMs(tick++),
+      turns,
+    });
+    const callId = "legacy-native-call-without-private-state";
+    const legacyToolCallId = "legacy-tool-call-without-private-state";
+    const legacyToolModelCallId = "legacy-tool-model-call-without-private-state";
+    const oldMessages: AgentMessage[] = [
+      messageFactory.createUser({
+        runId: oldRun.id,
+        sessionId: oldSession.id,
+        conversationTurnId,
+        source: userMessageSource("GOAL"),
+        content: [agentTextPart("Legacy user prompt preserved in the old transcript.")],
+      }),
+      messageFactory.createAssistant({
+        runId: oldRun.id,
+        sessionId: oldSession.id,
+        conversationTurnId,
+        source: modelMessageSource(legacyToolModelCallId),
+        phase: "COMMENTARY",
+        content: [
+          agentAssistantToolCallPart({
+            toolCallId: legacyToolCallId,
+            toolName: "read_file",
+            input: { path: "src/main.js" },
+          }),
+        ],
+        model: {
+          kind: "MODEL_TURN",
+          callId: legacyToolModelCallId,
+          model: { provider: "deepseek", model: MODEL_ID },
+          finishReason: "TOOL_CALLS",
+        },
+      }),
+      messageFactory.createToolResult({
+        runId: oldRun.id,
+        sessionId: oldSession.id,
+        conversationTurnId,
+        source: toolMessageSource(),
+        toolCallId: legacyToolCallId,
+        toolName: "read_file",
+        observation: NO_TOOL_RESULT_OBSERVATION,
+        isError: false,
+        projectedContent: "LEGACY_TOOL_RESULT_WITHOUT_PRIVATE_REPLAY_SENTINEL",
+        projection: {
+          policy: toolFeedbackPolicySnapshot({
+            maxSingleObservationTokens: 4_096,
+            maxObservationBatchTokens: 8_192,
+          }),
+          fingerprint: `sha256:${"0".repeat(64)}`,
+          version: 1,
+        },
+      }),
+      messageFactory.createAssistant({
+        runId: oldRun.id,
+        sessionId: oldSession.id,
+        conversationTurnId,
+        source: modelMessageSource(callId),
+        phase: "FINAL_ANSWER",
+        content: [
+          agentAssistantTextPart("LEGACY_ASSISTANT_WITHOUT_PRIVATE_REPLAY_SENTINEL", {
+            assistantItemId: "legacy-assistant-item",
+            phase: "FINAL_ANSWER",
+          }),
+        ],
+        model: {
+          kind: "MODEL_TURN",
+          callId,
+          model: { provider: "deepseek", model: MODEL_ID },
+          finishReason: "STOP",
+        },
+      }),
+    ];
+    const legacyDrafts: AgentMessageRecordDraft[] = oldMessages.map((message) => {
+      const encoded = composition!.messages.codecs.encode(message);
+      return {
+        messageId: message.id,
+        sessionId: message.sessionId,
+        conversationTurnId: message.conversationTurnId,
+        messageType: message.type,
+        schemaVersion: encoded.schemaVersion,
+        ...(encoded.modelProjectionVersion === undefined
+          ? {}
+          : { modelProjectionVersion: encoded.modelProjectionVersion }),
+        ...(message.sourceStepId === undefined ? {} : { sourceStepId: message.sourceStepId }),
+        createdAt: message.createdAt,
+        source: message.source,
+        audience: message.audience,
+        data: encoded.data,
+      };
+    });
+    await storage!.messageRecords.append(oldRun.id, legacyDrafts);
+
+    const transcript = new SessionTranscriptService({
+      sessions: storage!.sessions,
+      runs: storage!.runs,
+      messageRecords: storage!.messageRecords,
+      codecs: composition.messages.codecs,
+      transcriptProjectors: composition.transcriptProjectors,
+      models: composition.ai.models,
+    });
+    const preflight = await transcript.getContinuityPreflight(oldSession.id, {
+      provider: "deepseek",
+      model: MODEL_ID,
+    });
+    expect(preflight).toEqual({ status: "POSSIBLE_INCOMPATIBILITY" });
+    const priorTranscript = await transcript.getTranscript(oldSession.id, {});
+    expect(JSON.stringify(priorTranscript)).toContain(
+      "LEGACY_ASSISTANT_WITHOUT_PRIVATE_REPLAY_SENTINEL",
+    );
+    const oldRecordsBeforeMigration = await storage!.messageRecords.listByRun(oldRun.id);
+    expect(JSON.stringify(oldRecordsBeforeMigration)).toContain(
+      "LEGACY_TOOL_RESULT_WITHOUT_PRIVATE_REPLAY_SENTINEL",
+    );
+
+    const incompatibleRun = makeRun(oldSession.id, {
+      goal: "Continue with the selected native-replay model.",
+      workspace: fixture.workspaceRef,
+      model: { provider: "deepseek", model: MODEL_ID },
+      reasoningLevel: "HIGH",
+      permissionProfile: "FULL_ACCESS",
+      approvalPolicy: "NEVER_ASK",
+      createdAt: createTimestampMs(60),
+      limits: { maxSteps: 12, maxToolCalls: 4, timeoutMs: 60_000 },
+    });
+    await storage!.runs.insert(incompatibleRun);
+    const incompatibleResult = await composition.controller.start(incompatibleRun.id);
+    expect(incompatibleResult.run.status).toBe("FAILED");
+    expect(provider.requests).toHaveLength(0);
+    expect(
+      publicEvents.some(
+        (event) =>
+          (event as { type?: string }).type === "run.failed" &&
+          (event as { payload?: { error?: { code?: string } } }).payload?.error?.code ===
+            "CONVERSATION_CONTINUITY_INCOMPATIBLE",
+      ),
+    ).toBe(true);
+    const oldTranscriptBeforeMigration = await transcript.getTranscript(oldSession.id, {});
+
+    const { session: freshSession, run: freshRun } = await createRunForScenario({
+      workspaceRef: fixture.workspaceRef,
+      goal: "Run a fresh task without importing old assistant history.",
+    });
+    expect(freshSession.defaultWorkspace).toMatchObject(fixture.workspaceRef);
+    expect(freshRun.workspace).toMatchObject(fixture.workspaceRef);
+    const freshResult = await composition.controller.start(freshRun.id);
+    expect(freshResult.run.status).toBe("COMPLETED");
+    expect(provider.requests).toHaveLength(2);
+    const firstRequestMessages = provider.requests[0]?.body["messages"];
+    expect(JSON.stringify(firstRequestMessages)).not.toContain(
+      "LEGACY_ASSISTANT_WITHOUT_PRIVATE_REPLAY_SENTINEL",
+    );
+    expect(JSON.stringify(firstRequestMessages)).not.toContain(
+      "LEGACY_TOOL_RESULT_WITHOUT_PRIVATE_REPLAY_SENTINEL",
+    );
+    const freshRecords = await storage!.messageRecords.listBySession(freshSession.id);
+    expect(freshRecords.every((record) => record.sessionId === freshSession.id)).toBe(true);
+    expect(JSON.stringify(freshRecords)).not.toContain(
+      "LEGACY_ASSISTANT_WITHOUT_PRIVATE_REPLAY_SENTINEL",
+    );
+    expect(JSON.stringify(freshRecords)).not.toContain(
+      "LEGACY_TOOL_RESULT_WITHOUT_PRIVATE_REPLAY_SENTINEL",
+    );
+    const transcriptAfterMigration = await transcript.getTranscript(oldSession.id, {});
+    expect(transcriptAfterMigration.items).toEqual(oldTranscriptBeforeMigration.items);
+    expect(await storage!.messageRecords.listByRun(oldRun.id)).toEqual(oldRecordsBeforeMigration);
+    expect(transcriptAfterMigration.items).toContainEqual(
+      expect.objectContaining({ text: "LEGACY_ASSISTANT_WITHOUT_PRIVATE_REPLAY_SENTINEL" }),
+    );
+  }, 60_000);
+
   it("runs Scenario A through the production Run path with a 10 KB login edit", async () => {
     const manifest = representativeCodingScenarioManifests[0];
     if (manifest === undefined) throw new Error("Scenario A manifest is missing.");

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createModelTurnExecutor } from "../src/loop/turn/model-turn-executor.js";
+import { toAgentError } from "../src/index.js";
 import type {
   AgentExecutionIdentity,
   AgentTransientStreamEvent,
@@ -183,6 +184,25 @@ function completed(result: ModelTurnExecutionResult): AIModelTurnResult {
 }
 
 describe("ModelTurnExecutor frozen result contract", () => {
+  it("projects continuity incompatibility into the safe durable Protocol error", () => {
+    expect(
+      toAgentError({
+        code: "CONVERSATION_CONTINUITY_INCOMPATIBLE",
+        message:
+          "This conversation cannot safely continue with the selected model. Start a new session in the same workspace.",
+        retryable: false,
+        continuityReason: "LEGACY_REPLAY_MISSING",
+      }),
+    ).toEqual({
+      code: "CONVERSATION_CONTINUITY_INCOMPATIBLE",
+      message:
+        "This conversation cannot safely continue with the selected model. Start a new session in the same workspace.",
+      retryable: false,
+      phase: "LLM",
+      details: { continuityReason: "LEGACY_REPLAY_MISSING" },
+    });
+  });
+
   it("resolves COMPLETED with the assembled turn result", async () => {
     const fake = gateway(textTurn("hello"));
     const executor = createModelTurnExecutor({ gateway: fake.gateway });
@@ -354,7 +374,10 @@ describe("ModelTurnExecutor frozen result contract", () => {
         selectedAssistantMessageIds: ["selected-assistant"],
       },
     ]);
-    expect(fake.options()[0]?.privateReplayResolver).toBe(resolver);
+    expect(fake.options()[0]?.privateReplayResolver).toMatchObject({
+      selectedAssistantMessageIds: ["selected-assistant"],
+    });
+    expect(fake.options()[0]?.privateReplayResolver).not.toBe(resolver);
   });
 
   it("fails before provider I/O when a selected same-model Assistant lacks required replay", async () => {
@@ -381,8 +404,116 @@ describe("ModelTurnExecutor frozen result contract", () => {
       }),
     );
 
-    expect(result.kind).toBe("FAILED");
+    expect(result).toMatchObject({
+      kind: "FAILED",
+      error: {
+        code: "CONVERSATION_CONTINUITY_INCOMPATIBLE",
+        continuityReason: "LEGACY_REPLAY_MISSING",
+      },
+    });
     expect(fake.callCount()).toBe(0);
+  });
+
+  it("preflights selected private replay data before invoking the Provider", async () => {
+    const fake = gateway(textTurn("answer"));
+    const rawReplayFailure = "PRIVATE_REPLAY_STORAGE_PATH_SECRET";
+    const executor = createModelTurnExecutor({
+      gateway: fake.gateway,
+      privateReplayResolverFactory: () => ({
+        selectedAssistantMessageIds: ["old-assistant"],
+        resolve: async () => {
+          throw new Error(rawReplayFailure);
+        },
+      }),
+    });
+    const providerState = {
+      providerId: "deepseek",
+      api: "openai-compatible-chat",
+      version: 1,
+      payload: {
+        kind: "caelush.private-replay.v1",
+        replayId: "old-assistant",
+        sessionId: IDENTITY.sessionId,
+        runId: "run-previous",
+        callId: "previous-call",
+        model: "deepseek-reasoner",
+        replayVersion: 1,
+      },
+    } as never;
+    const result = await executor.execute(
+      input({
+        request: {
+          ...REPLAY_REQUEST,
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "previous answer" }],
+              providerState,
+            },
+            { role: "user", content: "continue" },
+          ],
+        },
+        model: REPLAY_MODEL,
+        selectedMessageIds: ["old-assistant"],
+        selectedAssistantReplaySources: [
+          {
+            messageId: "old-assistant",
+            runId: "run-previous",
+            callId: "previous-call",
+            providerId: "deepseek",
+            model: "deepseek-reasoner",
+            api: "openai-compatible-chat",
+            hasProviderState: true,
+          },
+        ],
+      }),
+    );
+
+    expect(result).toMatchObject({
+      kind: "FAILED",
+      error: {
+        code: "CONVERSATION_CONTINUITY_INCOMPATIBLE",
+        continuityReason: "REPLAY_DATA_UNAVAILABLE",
+      },
+    });
+    expect(fake.callCount()).toBe(0);
+    expect(JSON.stringify(result)).not.toContain(rawReplayFailure);
+  });
+
+  it("does not require DeepSeek native replay for providers without that capability", async () => {
+    const fake = gateway(textTurn("answer"));
+    const executor = createModelTurnExecutor({ gateway: fake.gateway });
+    const model = {
+      ...REPLAY_MODEL,
+      ref: { provider: "fixture", model: "fixture-model" },
+      adapterMetadata: {},
+    } satisfies ModelDescriptor;
+    const result = await executor.execute(
+      input({
+        model,
+        request: {
+          ...REPLAY_REQUEST,
+          model: model.ref,
+          messages: [
+            { role: "assistant", content: [{ type: "text", text: "older answer" }] },
+            { role: "user", content: "continue" },
+          ],
+        },
+        selectedMessageIds: ["legacy-assistant"],
+        selectedAssistantReplaySources: [
+          {
+            messageId: "legacy-assistant",
+            runId: "run-previous",
+            providerId: "fixture",
+            model: "fixture-model",
+            hasProviderState: false,
+          },
+        ],
+      }),
+    );
+
+    expect(result.kind).toBe("COMPLETED");
+    expect(fake.callCount()).toBe(1);
   });
 
   it.each([

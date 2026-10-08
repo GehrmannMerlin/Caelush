@@ -51,6 +51,30 @@ describe("CLI PublicRunEvent projection", () => {
     expect(JSON.stringify(result.state)).not.toContain("provider output");
   });
 
+  it("shows a safe continuity recovery hint for legacy native replay failures", () => {
+    const state = {
+      ...createInitialCliState(),
+      bootstrap: "READY" as const,
+      activeRun: { runId, status: "RUNNING" as const },
+    };
+    const event = eventOf("run.failed", {
+      error: {
+        code: "CONVERSATION_CONTINUITY_INCOMPATIBLE",
+        message: "This conversation cannot safely continue with the selected model.",
+        retryable: false,
+        phase: "LLM",
+        details: { continuityReason: "REPLAY_DATA_UNAVAILABLE" },
+      },
+    });
+
+    const result = projectPublicRunEvent(state, event);
+
+    expect(result.state.notice).toContain("transcript is preserved");
+    expect(result.state.notice).toContain("new session in the same workspace");
+    expect(result.terminal).toBe(true);
+    expect(JSON.stringify(result.state)).not.toContain("REPLAY_DATA_UNAVAILABLE");
+  });
+
   it("ignores valid detailed or mismatched events", () => {
     const state = {
       ...createInitialCliState(),

@@ -1160,6 +1160,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
       approvals: true,
       sseReplay: true,
       sessionTranscript: true,
+      sessionContinuityPreflight: true,
       sessionTurnPresentation: true,
     },
     runtimeKinds: ["local"],

@@ -25,6 +25,7 @@ describe("Coding Project Intelligence", () => {
         name: "workspace-root",
         packageManager: "pnpm@11.21.0",
         scripts: { test: "vitest run" },
+        caelush: { verification: { architecture: "REQUIRED" } },
       }),
       "utf8",
     );
@@ -55,6 +56,9 @@ describe("Coding Project Intelligence", () => {
       expect(snapshot.profile.rootPackage?.scripts).toEqual([
         { name: "test", command: "vitest run" },
       ]);
+      expect(snapshot.profile.rootPackage?.verificationPolicy).toEqual({
+        architecture: "REQUIRED",
+      });
       expect(snapshot.profile.activePackage?.scripts).toEqual([{ name: "build", command: "tsc" }]);
       expect(snapshot.profile.packages?.map((entry) => entry.relativePath)).toEqual([
         ".",

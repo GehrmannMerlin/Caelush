@@ -28,6 +28,9 @@ export interface CoreProjectProfile {
 export interface CoreProjectPackage {
   readonly relativePath: string;
   readonly scripts: readonly { readonly name: string; readonly command: string }[];
+  readonly verificationPolicy?: {
+    readonly architecture?: "REQUIRED" | "IF_AVAILABLE" | "NOT_APPLICABLE";
+  };
 }
 
 export interface CoreProjectProfileInspector {
@@ -91,5 +94,8 @@ function toVerificationPackage(packageInfo: CoreProjectPackage | undefined): {
   return {
     relativePath: packageInfo.relativePath === "" ? "." : packageInfo.relativePath,
     scripts: packageInfo.scripts.map((script) => ({ name: script.name, command: script.command })),
+    ...(packageInfo.verificationPolicy === undefined
+      ? {}
+      : { verificationPolicy: { ...packageInfo.verificationPolicy } }),
   };
 }

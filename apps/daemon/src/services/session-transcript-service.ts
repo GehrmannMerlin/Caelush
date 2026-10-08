@@ -1,17 +1,22 @@
 import {
+  PRIVATE_REPLAY_REFERENCE_KIND,
   AgentMessageCodecError,
   type AgentMessageCodecRegistry,
   type AgentMessageRecord,
   type AgentMessageTranscriptProjectorRegistry,
   type SessionReadableAgentMessageRecordStore,
 } from "@caelush/agent";
+import { requiresReasoningReplayWithTools, type ModelCatalog } from "@caelush/ai";
 import {
+  SessionContinuityPreflightQuerySchema,
   SessionTranscriptQuerySchema,
   type AgentRun,
   type RunStatus,
   type SessionId,
   type SessionTranscriptQuery,
   type SessionTranscriptResponse,
+  type SessionContinuityPreflightQuery,
+  type SessionContinuityPreflightResponse,
   type TranscriptEntry,
 } from "@caelush/protocol";
 import type { RunRepository, SessionRepository } from "@caelush/storage";
@@ -34,11 +39,49 @@ export interface SessionTranscriptServiceOptions {
   readonly messageRecords: SessionReadableAgentMessageRecordStore;
   readonly codecs: AgentMessageCodecRegistry;
   readonly transcriptProjectors: AgentMessageTranscriptProjectorRegistry;
+  readonly models?: Pick<ModelCatalog, "resolve">;
 }
 
 /** Read-only server-side projection of durable AgentMessage records for a Session. */
 export class SessionTranscriptService {
   constructor(private readonly options: SessionTranscriptServiceOptions) {}
+
+  async getContinuityPreflight(
+    sessionId: SessionId,
+    input: SessionContinuityPreflightQuery,
+  ): Promise<SessionContinuityPreflightResponse> {
+    const query = SessionContinuityPreflightQuerySchema.parse(input);
+    const session = await this.options.sessions.get(sessionId);
+    if (session === null) throw new StorageNotFoundError("AgentSession", sessionId);
+    if (this.options.models === undefined) return { status: "UNKNOWN" };
+
+    let model;
+    try {
+      model = this.options.models.resolve({ provider: query.provider, model: query.model });
+      if (!requiresReasoningReplayWithTools(model)) {
+        return { status: "NO_NATIVE_REPLAY_REQUIRED" };
+      }
+    } catch {
+      return { status: "UNKNOWN" };
+    }
+
+    const records = await this.options.messageRecords.listBySession(sessionId);
+    for (const record of records) {
+      if (record.messageType !== "ASSISTANT" || !record.audience.model) continue;
+      try {
+        const message = this.options.codecs.decode(record);
+        if (
+          message.type !== "ASSISTANT" ||
+          !hasCompatiblePrivateReplayReference(message, record, model.ref, model.api)
+        ) {
+          return { status: "POSSIBLE_INCOMPATIBILITY" };
+        }
+      } catch {
+        return { status: "POSSIBLE_INCOMPATIBILITY" };
+      }
+    }
+    return { status: "NO_OBVIOUS_GAP" };
+  }
 
   async getTranscript(
     sessionId: SessionId,
@@ -120,6 +163,41 @@ export class SessionTranscriptService {
       return [];
     }
   }
+}
+
+function hasCompatiblePrivateReplayReference(
+  message: Extract<import("@caelush/agent").AgentMessage, { type: "ASSISTANT" }>,
+  record: AgentMessageRecord,
+  model: { readonly provider: string; readonly model: string },
+  api: string,
+): boolean {
+  const state = message.providerState;
+  if (
+    state === undefined ||
+    state.providerId !== model.provider ||
+    state.api !== api ||
+    message.model.kind !== "MODEL_TURN" ||
+    message.model.model.provider !== model.provider ||
+    message.model.model.model !== model.model
+  ) {
+    return false;
+  }
+  const payload = object(state.payload);
+  return (
+    payload.kind === PRIVATE_REPLAY_REFERENCE_KIND &&
+    payload.replayId === record.messageId &&
+    payload.sessionId === record.sessionId &&
+    payload.runId === record.runId &&
+    payload.callId === message.model.callId &&
+    payload.model === model.model &&
+    payload.replayVersion === 1
+  );
+}
+
+function object(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 function projectTranscriptEntry(entry: TranscriptEntry): TranscriptEntry {

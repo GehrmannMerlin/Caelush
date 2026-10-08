@@ -82,6 +82,29 @@ describe("CaelushClient", () => {
     );
   });
 
+  it("loads the safe Session continuity preflight", async () => {
+    const requests: Request[] = [];
+    const client = new CaelushClient({
+      baseUrl: "http://daemon.test",
+      fetch: async (input, init) => {
+        requests.push(new Request(input, init));
+        return new Response(JSON.stringify({ status: "POSSIBLE_INCOMPATIBILITY" }), {
+          status: 200,
+        });
+      },
+    });
+
+    await expect(
+      client.getSessionContinuityPreflight("ses_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9b" as never, {
+        provider: "deepseek",
+        model: "deepseek-reasoner",
+      }),
+    ).resolves.toEqual({ status: "POSSIBLE_INCOMPATIBILITY" });
+    expect(requests[0]?.url).toBe(
+      "http://daemon.test/api/v1/sessions/ses_0192f5b1-4d3a-7c2e-8a91-3f0b6c7d8e9b/continuity-preflight?provider=deepseek&model=deepseek-reasoner",
+    );
+  });
+
   it("loads the ordered Session Turn Presentation snapshot", async () => {
     const runId = createRunId();
     const requests: Request[] = [];

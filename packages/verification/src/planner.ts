@@ -7,7 +7,7 @@ import {
   type VerificationPlanningInput,
 } from "@caelush/protocol";
 
-export const DEFAULT_VERIFICATION_PLANNER_VERSION = "phase-11a.v1";
+export const DEFAULT_VERIFICATION_PLANNER_VERSION = "phase-11a.v2";
 
 type VerificationPlanHashInput = Pick<
   VerificationPlanDraft,
@@ -149,13 +149,34 @@ function appendProjectChecks(checks: VerificationCheckDraft[], packageRelativePa
   }
 }
 
-function appendArchitectureCheck(checks: VerificationCheckDraft[]): void {
+function appendArchitectureCheck(
+  checks: VerificationCheckDraft[],
+  requirement: "REQUIRED" | "IF_AVAILABLE",
+): void {
   checks.push({
     ordinal: checks.length,
     stage: "FAST_STATIC",
-    requirement: "REQUIRED",
+    requirement,
     spec: { kind: "PROJECT", purpose: "ARCHITECTURE", source: "SYSTEM" },
   });
+}
+
+function explicitlyRequestsArchitectureCheck(goal: string): boolean {
+  return (
+    /\b(?:run|execute|perform)\s+(?:the\s+)?architecture\s+(?:check|verification)\b/i.test(goal) ||
+    /(?:运行|执行|进行)(?:一下)?(?:项目)?架构(?:检查|校验|验证)/.test(goal)
+  );
+}
+
+function architectureRequirement(
+  input: VerificationPlanningInput,
+): "REQUIRED" | "IF_AVAILABLE" | undefined {
+  if (explicitlyRequestsArchitectureCheck(input.goal)) return "REQUIRED";
+  const facts = input.projectFacts;
+  if (facts?.architecturePolicy === "REQUIRED") return "REQUIRED";
+  if (facts?.architecturePolicy === "NOT_APPLICABLE") return undefined;
+  if (facts?.architecturePolicy === "IF_AVAILABLE") return "IF_AVAILABLE";
+  return facts?.architectureCheckAvailable === true ? "IF_AVAILABLE" : undefined;
 }
 
 export interface VerificationPlanner {
@@ -175,11 +196,14 @@ export class DefaultVerificationPlanner implements VerificationPlanner {
     const facts = planningInput.projectFacts;
     const hasRunChanges = planningInput.changedFiles.length > 0;
     const fullVerificationRequested = explicitlyRequestsFullVerification(planningInput.goal);
+    const architectureCheckRequirement = architectureRequirement(planningInput);
     const runPaths = planningInput.changedFiles.map((file) => file.path);
     const hasCodeProject = facts?.isCodeProject !== false || fullVerificationRequested;
 
     if (fullVerificationRequested && hasCodeProject) {
-      appendArchitectureCheck(checks);
+      if (architectureCheckRequirement !== undefined) {
+        appendArchitectureCheck(checks, architectureCheckRequirement);
+      }
       appendProjectChecks(checks);
     } else if (hasRunChanges && hasCodeProject) {
       const packageDirectories = facts?.packageDirectories;
@@ -193,8 +217,11 @@ export class DefaultVerificationPlanner implements VerificationPlanner {
 
       if (!scopeIsKnown) {
         const rawDirectories = new Set(runPaths.map(rawPackageDirectory).filter(Boolean));
-        if (rawDirectories.size > 1 || runPaths.some(isArchitectureBoundaryChange)) {
-          appendArchitectureCheck(checks);
+        if (
+          architectureCheckRequirement !== undefined &&
+          (rawDirectories.size > 1 || runPaths.some(isArchitectureBoundaryChange))
+        ) {
+          appendArchitectureCheck(checks, architectureCheckRequirement);
         }
         appendProjectChecks(checks);
       } else {
@@ -203,7 +230,9 @@ export class DefaultVerificationPlanner implements VerificationPlanner {
         ) as string[];
         const architectureChange =
           directories.length > 1 || runPaths.some(isArchitectureBoundaryChange);
-        if (architectureChange) appendArchitectureCheck(checks);
+        if (architectureChange && architectureCheckRequirement !== undefined) {
+          appendArchitectureCheck(checks, architectureCheckRequirement);
+        }
         for (const directory of directories) appendProjectChecks(checks, directory);
       }
     }

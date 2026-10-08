@@ -1391,6 +1391,27 @@ textarea:disabled {
   padding: 4px 2px 12px;
 }
 
+.turn-presentation-terminal-state {
+  margin: 4px 0;
+  color: #6f7f8d;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.turn-presentation-terminal-state--failed {
+  color: #a04f49;
+}
+
+.turn-presentation-verification-failed {
+  margin: 0;
+  padding: 8px 10px;
+  border-left: 3px solid #bf6058;
+  background: #fff6f4;
+  color: #a04f49;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
 .turn-presentation-final .turn-presentation-item--assistant,
 .turn-presentation-final .turn-presentation-item--run-summary {
   padding: 0 0 0 2px;
@@ -3114,6 +3135,33 @@ body {
   background: var(--web-danger-soft);
   color: var(--web-danger);
   font-size: 0.78rem;
+}
+
+.continuity-warning {
+  width: min(100%, 980px);
+  margin: 12px auto;
+  padding: 12px 14px;
+  border: 1px solid #e2c78f;
+  border-radius: var(--web-radius-sm);
+  background: #fff9ec;
+  color: #71582f;
+  font-size: 0.8rem;
+  line-height: 1.55;
+}
+
+.continuity-warning p {
+  margin: 0 0 9px;
+}
+
+.continuity-warning-action {
+  padding: 7px 10px;
+  border: 1px solid #c59b4e;
+  border-radius: 7px;
+  background: #fff;
+  color: #674d20;
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 700;
 }
 
 .workspace-dialog-backdrop {

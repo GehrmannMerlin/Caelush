@@ -7,6 +7,9 @@ import { rustProjectCheckResolver } from "./rust-resolver.js";
 export interface VerificationProjectPackage {
   readonly relativePath: string;
   readonly scripts: readonly { readonly name: string; readonly command: string }[];
+  readonly verificationPolicy?: {
+    readonly architecture?: "REQUIRED" | "IF_AVAILABLE" | "NOT_APPLICABLE";
+  };
 }
 
 export interface VerificationProjectProfile {

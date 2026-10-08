@@ -41,6 +41,13 @@ export function projectPublicRunEvent(
       : lifecycle.status === "RUNNING" && state.controlMode === "RESOURCE_GUARD"
         ? { controlMode: "NONE" as const }
         : {}),
+    ...(event.type === "run.failed" &&
+    event.payload.error.code === "CONVERSATION_CONTINUITY_INCOMPATIBLE"
+      ? {
+          notice:
+            "This older session lacks native history required by the selected model. Its transcript is preserved; start a new session in the same workspace and submit your prompt there.",
+        }
+      : {}),
   };
   if (lifecycle.terminal) {
     return { state: nextState, terminal: true, terminalStatus: lifecycle.status };

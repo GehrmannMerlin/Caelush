@@ -353,6 +353,8 @@ export const VerificationProjectFactsSchema = z
   .object({
     isCodeProject: z.boolean().optional(),
     isGitRepository: z.boolean().optional(),
+    architecturePolicy: z.enum(["REQUIRED", "IF_AVAILABLE", "NOT_APPLICABLE"]).optional(),
+    architectureCheckAvailable: z.boolean().optional(),
     packageDirectories: z
       .array(VerificationProjectRelativeDirectorySchema)
       .max(512)

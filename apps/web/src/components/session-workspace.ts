@@ -39,6 +39,8 @@ export interface SessionWorkspaceProps {
     | undefined;
   readonly onSelectRecoveryRun?: ((runId: RunId) => Promise<boolean> | void) | undefined;
   readonly onConfirmPendingRun?: ((runId: RunId) => Promise<boolean> | void) | undefined;
+  readonly continuityWarning?: boolean;
+  readonly onCreateContinuitySession?: (() => Promise<boolean> | void) | undefined;
 }
 
 export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
@@ -48,6 +50,7 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
     !hasTurnPresentationItems(props.turnPresentation) &&
     props.activeRun === undefined &&
     approvals.length === 0 &&
+    !props.continuityWarning &&
     !hasRecoveryControl(props);
 
   return createElement(
@@ -95,6 +98,28 @@ export function SessionWorkspace(props: SessionWorkspaceProps): ReactElement {
             onSelectRun: props.onSelectRecoveryRun ?? (() => undefined),
             onConfirmPending: props.onConfirmPendingRun ?? (() => undefined),
           })
+        : null,
+      props.continuityWarning === true
+        ? createElement(
+            "aside",
+            { className: "continuity-warning", role: "alert" },
+            createElement(
+              "p",
+              null,
+              "这段旧会话可能缺少当前模型所需的原生推理记录。原会话和历史内容仍会保留；为安全继续，请在当前工作区新建连续会话，再自行编辑并提交任务。",
+            ),
+            props.onCreateContinuitySession === undefined
+              ? null
+              : createElement(
+                  "button",
+                  {
+                    type: "button",
+                    className: "continuity-warning-action",
+                    onClick: props.onCreateContinuitySession,
+                  },
+                  "在当前工作区新建会话",
+                ),
+          )
         : null,
       createElement(
         "div",

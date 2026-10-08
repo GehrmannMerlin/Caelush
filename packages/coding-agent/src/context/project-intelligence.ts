@@ -26,6 +26,10 @@ export interface ProjectScript {
   readonly command: string;
 }
 
+export interface ProjectVerificationPolicy {
+  readonly architecture?: "REQUIRED" | "IF_AVAILABLE" | "NOT_APPLICABLE";
+}
+
 export interface ProjectPackage {
   readonly path: string;
   readonly relativePath: string;
@@ -34,6 +38,7 @@ export interface ProjectPackage {
   readonly nodeVersionRange?: string;
   readonly scripts: readonly ProjectScript[];
   readonly workspaces?: boolean | readonly string[];
+  readonly verificationPolicy?: ProjectVerificationPolicy;
 }
 
 export interface PackageManagerInfo {
@@ -563,6 +568,16 @@ function parsePackage(
       ? value.workspaces
       : undefined;
   const engines = isRecord(value.engines) ? stringValue(value.engines.node) : undefined;
+  const caelush = isRecord(value.caelush) ? value.caelush : undefined;
+  const verification =
+    caelush !== undefined && isRecord(caelush.verification) ? caelush.verification : undefined;
+  const architecturePolicy = verification?.architecture;
+  const verificationPolicy: ProjectVerificationPolicy | undefined =
+    architecturePolicy === "REQUIRED" ||
+    architecturePolicy === "IF_AVAILABLE" ||
+    architecturePolicy === "NOT_APPLICABLE"
+      ? { architecture: architecturePolicy }
+      : undefined;
   const name = stringValue(value.name);
   const packageManager = stringValue(value.packageManager);
   const packageDirectory = path.dirname(packagePath);
@@ -574,6 +589,7 @@ function parsePackage(
     ...(packageManager === undefined ? {} : { packageManager }),
     ...(engines === undefined ? {} : { nodeVersionRange: engines }),
     ...(workspaces === undefined ? {} : { workspaces }),
+    ...(verificationPolicy === undefined ? {} : { verificationPolicy }),
   };
 }
 

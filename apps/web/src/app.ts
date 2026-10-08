@@ -55,6 +55,7 @@ const EMPTY_SESSION_SNAPSHOT: WebSessionSnapshot = {
   history: [],
   turnPresentation: undefined,
   activeRuns: [],
+  continuityWarning: false,
   timeline: createInitialTimelineState(),
   liveActivity: createInitialLiveActivityState(),
   availablePresets: [],
@@ -472,6 +473,7 @@ function renderWorkspaceApp(input: {
               turnPresentation: snapshot.turnPresentation,
               timeline: snapshot.timeline,
               liveActivity: snapshot.liveActivity,
+              continuityWarning: snapshot.continuityWarning,
               composer: createElement(PromptComposer, {
                 disabled: composerInteractionDisabled,
                 modelReady,
@@ -512,6 +514,8 @@ function renderWorkspaceApp(input: {
                 (await input.sessionManager?.selectRecoveryRun(runId)) ?? false,
               onConfirmPendingRun: async (runId) =>
                 (await input.sessionManager?.confirmPendingRun(runId)) ?? false,
+              onCreateContinuitySession: async () =>
+                (await input.sessionManager?.createContinuitySession()) ?? false,
             })
           : createElement(WorkspaceEmptyState, {
               hasWorkspaces: input.workspaceState.workspaces.length > 0,

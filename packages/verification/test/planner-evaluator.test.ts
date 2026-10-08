@@ -74,6 +74,92 @@ describe("Phase 11A verification planner", () => {
     });
   });
 
+  it("does not require Architecture for a root manifest change without an architecture policy", () => {
+    const plan = new DefaultVerificationPlanner().plan(
+      planningInput({
+        changedFiles: [{ path: "package.json", changeType: "MODIFIED" }],
+        projectFacts: {
+          isCodeProject: true,
+          isGitRepository: true,
+          packageDirectories: ["."],
+        },
+      }),
+    );
+
+    expect(
+      plan.checks.map((check) => [check.spec.kind, check.spec.purpose, check.requirement]),
+    ).toEqual([
+      ["PROJECT", "LINT", "IF_AVAILABLE"],
+      ["PROJECT", "TYPECHECK", "IF_AVAILABLE"],
+      ["PROJECT", "TEST", "IF_AVAILABLE"],
+      ["PROJECT", "BUILD", "IF_AVAILABLE"],
+      ["WORKSPACE", "CHANGESET_SANITY", "REQUIRED"],
+      ["GIT", "CHANGESET_REVIEW", "REQUIRED"],
+      ["TASK", "ACCEPTANCE", "REQUIRED"],
+    ]);
+  });
+
+  it("does not require Architecture solely because full verification was requested", () => {
+    const plan = new DefaultVerificationPlanner().plan(
+      planningInput({
+        goal: "Please run the full project verification suite.",
+        changedFiles: [],
+        projectFacts: {
+          isCodeProject: true,
+          isGitRepository: true,
+          packageDirectories: ["."],
+        },
+      }),
+    );
+
+    expect(
+      plan.checks.some(
+        (check) => check.spec.kind === "PROJECT" && check.spec.purpose === "ARCHITECTURE",
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps a governed Architecture check required when its script was removed", () => {
+    const plan = new DefaultVerificationPlanner().plan(
+      planningInput({
+        changedFiles: [{ path: "package.json", changeType: "MODIFIED" }],
+        projectFacts: {
+          isCodeProject: true,
+          isGitRepository: true,
+          packageDirectories: ["."],
+          architecturePolicy: "REQUIRED",
+          architectureCheckAvailable: false,
+        },
+      }),
+    );
+
+    expect(
+      plan.checks.find(
+        (check) => check.spec.kind === "PROJECT" && check.spec.purpose === "ARCHITECTURE",
+      )?.requirement,
+    ).toBe("REQUIRED");
+  });
+
+  it("plans an available Architecture script as optional without a governance policy", () => {
+    const plan = new DefaultVerificationPlanner().plan(
+      planningInput({
+        changedFiles: [{ path: "package.json", changeType: "MODIFIED" }],
+        projectFacts: {
+          isCodeProject: true,
+          isGitRepository: true,
+          packageDirectories: ["."],
+          architectureCheckAvailable: true,
+        },
+      }),
+    );
+
+    expect(
+      plan.checks.find(
+        (check) => check.spec.kind === "PROJECT" && check.spec.purpose === "ARCHITECTURE",
+      )?.requirement,
+    ).toBe("IF_AVAILABLE");
+  });
+
   it("limits a reliably classified change to its single package", () => {
     const plan = new DefaultVerificationPlanner().plan(
       planningInput({
@@ -116,6 +202,7 @@ describe("Phase 11A verification planner", () => {
           isCodeProject: true,
           isGitRepository: true,
           packageDirectories: packages,
+          architecturePolicy: "REQUIRED",
         },
       }),
     );
@@ -158,6 +245,7 @@ describe("Phase 11A verification planner", () => {
         projectFacts: {
           isCodeProject: true,
           packageDirectories: packages,
+          architecturePolicy: "REQUIRED",
         },
       }),
     );
@@ -203,7 +291,6 @@ describe("Phase 11A verification planner", () => {
       }),
     );
     expect(explicitlyFull.checks.map((check) => check.spec.kind)).toEqual([
-      "PROJECT",
       "PROJECT",
       "PROJECT",
       "PROJECT",

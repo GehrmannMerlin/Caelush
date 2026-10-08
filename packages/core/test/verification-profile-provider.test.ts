@@ -23,13 +23,18 @@ describe("Verification project intelligence boundary", () => {
       rootPackage: {
         relativePath: "",
         scripts: [{ name: "test", command: "vitest run" }],
+        verificationPolicy: { architecture: "REQUIRED" },
       },
       activePackage: {
         relativePath: "apps/demo",
         scripts: [{ name: "build", command: "tsc" }],
       },
       packages: [
-        { relativePath: "", scripts: [{ name: "test", command: "vitest run" }] },
+        {
+          relativePath: "",
+          scripts: [{ name: "test", command: "vitest run" }],
+          verificationPolicy: { architecture: "REQUIRED" },
+        },
         { relativePath: "apps/demo", scripts: [{ name: "build", command: "tsc" }] },
       ],
     };
@@ -42,13 +47,18 @@ describe("Verification project intelligence boundary", () => {
       rootPackage: {
         relativePath: ".",
         scripts: [{ name: "test", command: "vitest run" }],
+        verificationPolicy: { architecture: "REQUIRED" },
       },
       activePackage: {
         relativePath: "apps/demo",
         scripts: [{ name: "build", command: "tsc" }],
       },
       packages: [
-        { relativePath: ".", scripts: [{ name: "test", command: "vitest run" }] },
+        {
+          relativePath: ".",
+          scripts: [{ name: "test", command: "vitest run" }],
+          verificationPolicy: { architecture: "REQUIRED" },
+        },
         { relativePath: "apps/demo", scripts: [{ name: "build", command: "tsc" }] },
       ],
     });

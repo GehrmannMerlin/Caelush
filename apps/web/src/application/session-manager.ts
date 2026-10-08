@@ -45,6 +45,7 @@ import type {
   SessionTranscriptResponse,
   SessionTurnPresentationResponse,
   SessionTurnPresentationTurnV3,
+  SessionContinuityPreflightResponse,
   TurnPresentationItem,
   TurnPresentationItemV3,
   WorkspaceRef,
@@ -110,6 +111,10 @@ export interface WebSessionClient extends SessionCandidateClient, WebHostClient 
     sessionId: SessionId,
     query?: { readonly limit?: number; readonly cursor?: string },
   ): Promise<SessionTranscriptResponse>;
+  getSessionContinuityPreflight?(
+    sessionId: SessionId,
+    model: { readonly provider: string; readonly model: string },
+  ): Promise<SessionContinuityPreflightResponse>;
   getSessionTurnPresentation?(
     sessionId: SessionId,
     query?: { readonly runId?: RunId; readonly limit?: number; readonly cursor?: string },
@@ -162,7 +167,8 @@ export type WebSessionErrorCode =
   | "PERMISSION_PRESET_UNAVAILABLE"
   | "PERMISSION_PREPARATION_FAILED"
   | "PROMPT_REQUIRED"
-  | "PROMPT_TOO_LARGE";
+  | "PROMPT_TOO_LARGE"
+  | "CONVERSATION_CONTINUITY_INCOMPATIBLE";
 
 export interface WebSessionError {
   readonly code: WebSessionErrorCode;
@@ -183,6 +189,7 @@ export interface WebSessionSnapshot {
   readonly timeline: TimelineState;
   readonly liveActivity: LiveActivityState;
   readonly contextUsage?: ContextUsageProjection | null;
+  readonly continuityWarning: boolean;
   readonly aiProviders?: AIProvidersResponse["providers"];
   readonly modelDirectory?: AIModelDirectoryResponse["models"];
   readonly permissionCapabilities?: SecurityCapabilitiesResponse | undefined;
@@ -280,6 +287,7 @@ export class WebSessionManager {
   private contextUsageRefreshGeneration = 0;
   private contextUsageRefreshTimer: TimerHandle | undefined;
   private contextUsageRefreshRunId: RunId | undefined;
+  private continuityPreflightGeneration = 0;
   private disposed = false;
 
   constructor(
@@ -356,6 +364,7 @@ export class WebSessionManager {
       runs: [],
       history: [],
       turnPresentation: undefined,
+      continuityWarning: false,
       activeRuns: [],
       activeRun: undefined,
       timeline: createInitialTimelineState(),
@@ -403,6 +412,7 @@ export class WebSessionManager {
             activeRuns: [],
             activeRun: undefined,
             contextUsage: null,
+            continuityWarning: false,
             isDraft: false,
             composerEnabled: false,
             error: sessionError("SESSION_SELECTION_FAILED"),
@@ -590,6 +600,83 @@ export class WebSessionManager {
     }
   }
 
+  async createContinuitySession(): Promise<boolean> {
+    const oldSession = this.snapshot.selectedSession;
+    const selection = this.currentModelSelection();
+    if (
+      this.disposed ||
+      oldSession === undefined ||
+      !this.snapshot.continuityWarning ||
+      this.snapshot.activeRuns.length > 0 ||
+      this.snapshot.submission !== "IDLE" ||
+      selection === undefined ||
+      !this.isSelectionAvailable(selection)
+    ) {
+      return false;
+    }
+
+    const title = `${oldSession.title ?? "旧会话"}（新会话）`;
+    const model = { provider: selection.provider, model: selection.model };
+    this.publish({ submission: "SUBMITTING", error: undefined });
+    try {
+      const session = await this.options.client.createSession(
+        this.options.client.listWorkspaceSessions === undefined
+          ? {
+              title,
+              defaultWorkspace: this.options.workspace,
+              defaultModel: model,
+              ...(selection.reasoningLevel === undefined
+                ? {}
+                : { defaultReasoningLevel: selection.reasoningLevel }),
+              metadata: {},
+            }
+          : {
+              title,
+              workspaceId: this.options.workspace.id,
+              defaultModel: model,
+              ...(selection.reasoningLevel === undefined
+                ? {}
+                : { defaultReasoningLevel: selection.reasoningLevel }),
+              metadata: {},
+            },
+      );
+      const candidates = this.upsertCandidate(session);
+      this.options.selectionStore?.setCandidates(
+        this.options.workspace.id,
+        candidates.map((candidate) => candidate.session.id),
+      );
+      this.options.selectionStore?.write(this.options.workspace.id, session.id);
+      this.cancelActiveLifecycle();
+      this.clearApprovals();
+      this.publish({
+        status: "READY",
+        candidates,
+        selectedSession: session,
+        selectedSessionId: session.id,
+        runs: [],
+        history: [],
+        turnPresentation: undefined,
+        activeRuns: [],
+        activeRun: undefined,
+        timeline: createInitialTimelineState(),
+        liveActivity: createInitialLiveActivityState(),
+        contextUsage: null,
+        continuityWarning: false,
+        modelSelection: selection,
+        isDraft: false,
+        composerEnabled: true,
+        submission: "IDLE",
+        controlMode: "NONE",
+        approvalState: undefined,
+        error: undefined,
+      });
+      return true;
+    } catch {
+      this.publish({ submission: "IDLE", error: sessionError("SESSION_CREATE_FAILED") });
+      return false;
+    }
+  }
+
   async selectModel(selection: ClientModelSelectionWithReasoning): Promise<boolean> {
     if (this.disposed || this.hasActiveRun()) return false;
     try {
@@ -612,6 +699,7 @@ export class WebSessionManager {
           candidates: this.upsertCandidate(updated),
           error: undefined,
         });
+        void this.refreshContinuityPreflight(updated.id, selection);
         return true;
       }
       if (this.options.client.setDefaultAISelection !== undefined) {
@@ -1239,12 +1327,14 @@ export class WebSessionManager {
       activeRun: activeRuns.length === 1 ? activeRuns[0] : undefined,
       selectedPreset:
         (activeRuns.length === 1 ? runPermissionPreset(activeRuns[0]) : undefined) ??
+        runPermissionPreset(latestRun(runs)) ??
         this.snapshot.selectedPreset,
       timeline: createInitialTimelineState(activeRuns.length === 1 ? activeRuns[0]?.id : undefined),
       liveActivity: createInitialLiveActivityState(
         activeRuns.length === 1 ? activeRuns[0]?.id : undefined,
       ),
       contextUsage: null,
+      continuityWarning: false,
       modelSelection:
         session.defaultModel === undefined
           ? undefined
@@ -1265,14 +1355,52 @@ export class WebSessionManager {
       approvalState: undefined,
       error: activeRuns.length > 1 ? sessionError("MULTIPLE_ACTIVE_RUNS") : undefined,
     });
+    void this.refreshContinuityPreflight(
+      session.id,
+      session.defaultModel ?? this.currentModelSelection(),
+    );
     if (activeRuns.length > 1) this.publish({ controlMode: "RECOVERY_PICKER" });
     if (activeRuns.length === 1 && activeRuns[0] !== undefined) {
       await this.prepareRecoveryRun(activeRuns[0]);
       this.scheduleContextUsageRefresh(activeRuns[0].id);
     } else if (contextUsageRun !== undefined) {
-      void this.refreshContextUsage(contextUsageRun.id);
+      if (isTerminalRunStatus(contextUsageRun.status)) {
+        void this.reconcileTerminalContextUsage(contextUsageRun);
+      } else {
+        void this.refreshContextUsage(contextUsageRun.id);
+      }
     }
     return true;
+  }
+
+  private async refreshContinuityPreflight(
+    sessionId: SessionId,
+    model: { readonly provider: string; readonly model: string } | undefined,
+  ): Promise<void> {
+    const generation = ++this.continuityPreflightGeneration;
+    const getPreflight = this.options.client.getSessionContinuityPreflight;
+    if (
+      this.options.info.capabilities.sessionContinuityPreflight !== true ||
+      getPreflight === undefined ||
+      model === undefined
+    ) {
+      return;
+    }
+    try {
+      const result = await getPreflight.call(this.options.client, sessionId, model);
+      const currentModel = this.currentModelSelection();
+      if (
+        this.disposed ||
+        this.continuityPreflightGeneration !== generation ||
+        this.snapshot.selectedSessionId !== sessionId ||
+        currentModel?.provider !== model.provider ||
+        currentModel.model !== model.model
+      )
+        return;
+      this.publish({ continuityWarning: result.status === "POSSIBLE_INCOMPATIBILITY" });
+    } catch {
+      // This advisory check never blocks transcript access or Run creation.
+    }
   }
 
   private async requestCancellation(
@@ -1355,6 +1483,15 @@ export class WebSessionManager {
         );
         if (event.durability.kind === "DURABLE") {
           this.requestTurnPresentationRefresh(active, generation);
+        }
+        if (
+          event.type === "run.failed" &&
+          event.payload.error.code === "CONVERSATION_CONTINUITY_INCOMPATIBLE"
+        ) {
+          this.publish({
+            continuityWarning: true,
+            error: sessionError("CONVERSATION_CONTINUITY_INCOMPATIBLE"),
+          });
         }
         if (timeline.error !== undefined) {
           this.handleTerminalStreamError(active, generation);
@@ -1561,6 +1698,7 @@ export class WebSessionManager {
         this.optimisticTranscriptEntries(),
       );
       const turnPresentation = await this.loadSessionTurnPresentation(run.sessionId);
+      if (this.snapshot.selectedSessionId !== run.sessionId) return;
       const retainedLiveActivity =
         turnPresentation === undefined
           ? this.snapshot.liveActivity
@@ -1597,6 +1735,9 @@ export class WebSessionManager {
         controlMode: "NONE",
         error: activeRuns.length > 1 ? sessionError("MULTIPLE_ACTIVE_RUNS") : undefined,
       });
+      if (isTerminalRunStatus(run.status) && this.currentContextUsageRunId() === run.id) {
+        void this.reconcileTerminalContextUsage(run);
+      }
     } catch {
       if (this.activeLifecycle !== active || this.disposed) return;
       this.publish({ error: sessionError("RUN_REFRESH_FAILED") });
@@ -1656,21 +1797,74 @@ export class WebSessionManager {
   private async refreshContextUsage(
     runId: RunId,
     generation = this.contextUsageRefreshGeneration,
-  ): Promise<void> {
+    sessionId = this.snapshot.selectedSessionId,
+  ): Promise<ContextUsageProjection | null | undefined> {
     const getContextUsage = this.options.client.getRunContextUsage;
-    if (getContextUsage === undefined || this.disposed) return;
+    if (getContextUsage === undefined || this.disposed || sessionId === undefined) return undefined;
     try {
       const usage = await getContextUsage.call(this.options.client, runId);
       if (
         this.disposed ||
         this.contextUsageRefreshGeneration !== generation ||
+        this.snapshot.selectedSessionId !== sessionId ||
         this.currentContextUsageRunId() !== runId
       )
-        return;
+        return undefined;
       this.publish({ contextUsage: usage ?? null });
+      return usage;
     } catch {
       // Context diagnostics are optional UI and never change Run control state.
+      return undefined;
     }
+  }
+
+  private async reconcileTerminalContextUsage(run: ClientAgentRun): Promise<void> {
+    if (
+      !isTerminalRunStatus(run.status) ||
+      this.options.client.getRunContextUsage === undefined ||
+      this.disposed ||
+      this.snapshot.selectedSessionId !== run.sessionId ||
+      this.currentContextUsageRunId() !== run.id
+    ) {
+      return;
+    }
+
+    // Invalidate a queued/in-flight live read, then give this terminal reconciliation its own
+    // generation and Run/Session identity before its immediate durable projection request.
+    this.invalidateContextUsageRefresh();
+    const generation = ++this.contextUsageRefreshGeneration;
+    this.contextUsageRefreshRunId = run.id;
+    const usage = await this.refreshContextUsage(run.id, generation, run.sessionId);
+    if (
+      usage?.promptCache?.metricsV2?.usageCoverage?.status !== "PARTIAL" ||
+      !this.isCurrentContextUsageRequest(run.sessionId, run.id, generation)
+    ) {
+      return;
+    }
+
+    // One bounded retry allows durable invocation rows to settle. A second PARTIAL stays true.
+    this.contextUsageRefreshTimer = (this.options.timer ?? systemWebTimer).schedule(
+      TERMINAL_CONTEXT_USAGE_RETRY_DELAY_MS,
+      () => {
+        this.contextUsageRefreshTimer = undefined;
+        if (!this.isCurrentContextUsageRequest(run.sessionId, run.id, generation)) return;
+        void this.refreshContextUsage(run.id, generation, run.sessionId);
+      },
+    );
+  }
+
+  private isCurrentContextUsageRequest(
+    sessionId: SessionId,
+    runId: RunId,
+    generation: number,
+  ): boolean {
+    return (
+      !this.disposed &&
+      this.contextUsageRefreshGeneration === generation &&
+      this.contextUsageRefreshRunId === runId &&
+      this.snapshot.selectedSessionId === sessionId &&
+      this.currentContextUsageRunId() === runId
+    );
   }
 
   private projectApprovalEvent(event: PublicRunEvent): void {
@@ -1734,11 +1928,18 @@ export class WebSessionManager {
     const activeRuns = nonTerminalRuns(runs);
     const activeRun = activeRuns.length === 1 ? activeRuns[0] : undefined;
     this.clearApprovals();
+    const reconciliationGeneration = this.approvalContextGeneration;
     const history = await this.loadSessionTranscript(
       run.sessionId,
       this.optimisticTranscriptEntries(),
     );
     const turnPresentation = await this.loadSessionTurnPresentation(run.sessionId);
+    if (
+      this.disposed ||
+      this.snapshot.selectedSessionId !== context.sessionId ||
+      this.approvalContextGeneration !== reconciliationGeneration
+    )
+      return;
     const retainedLiveActivity =
       turnPresentation === undefined
         ? this.snapshot.liveActivity
@@ -1774,6 +1975,9 @@ export class WebSessionManager {
       controlMode: "NONE",
       error: activeRuns.length > 1 ? sessionError("MULTIPLE_ACTIVE_RUNS") : undefined,
     });
+    if (isTerminalRunStatus(run.status) && this.currentContextUsageRunId() === run.id) {
+      void this.reconcileTerminalContextUsage(run);
+    }
   }
 
   private publishApprovals(
@@ -1970,6 +2174,7 @@ function initialSnapshot(): WebSessionSnapshot {
     timeline: createInitialTimelineState(),
     liveActivity: createInitialLiveActivityState(),
     contextUsage: null,
+    continuityWarning: false,
     availablePresets: [],
     isDraft: false,
     composerEnabled: false,
@@ -2066,6 +2271,7 @@ const systemWebTimer: Timer = {
 };
 
 const CONTEXT_USAGE_REFRESH_DELAY_MS = 750;
+const TERMINAL_CONTEXT_USAGE_RETRY_DELAY_MS = 250;
 
 function isTerminalStreamError(error: unknown): boolean {
   return (
@@ -2169,6 +2375,8 @@ function sessionError(code: WebSessionErrorCode): WebSessionError {
     PERMISSION_PREPARATION_FAILED: "工作区准备失败，已阻止创建任务。",
     PROMPT_REQUIRED: "请输入任务内容。",
     PROMPT_TOO_LARGE: "任务内容不能超过 32 KiB。",
+    CONVERSATION_CONTINUITY_INCOMPATIBLE:
+      "旧会话缺少当前模型安全续接所需的历史记录。请在当前工作区新建会话，再自行提交任务。",
   };
   return { code, message: messages[code] };
 }

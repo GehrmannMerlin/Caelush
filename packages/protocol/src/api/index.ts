@@ -140,6 +140,14 @@ export type {
   UpdateSessionModelSelectionRequest,
 } from "./session.js";
 export { UpdateSessionModelSelectionRequestSchema } from "./session.js";
+export {
+  SessionContinuityPreflightQuerySchema,
+  SessionContinuityPreflightResponseSchema,
+} from "./session-continuity.js";
+export type {
+  SessionContinuityPreflightQuery,
+  SessionContinuityPreflightResponse,
+} from "./session-continuity.js";
 export { CreateRunRequestSchema, RunListQuerySchema, RunListResponseSchema } from "./run.js";
 export type { CreateRunRequest, RunListQuery, RunListResponse } from "./run.js";
 export {

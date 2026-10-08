@@ -121,7 +121,11 @@ describe("Phase 3F completion assembly", () => {
             packageManager: { name: "pnpm" },
             tooling: [],
             isMonorepo: true,
-            rootPackage: { relativePath: ".", scripts: [] },
+            rootPackage: {
+              relativePath: ".",
+              scripts: [{ name: "check:architecture:ci", command: "pnpm check:architecture:ci" }],
+              verificationPolicy: { architecture: "REQUIRED" },
+            },
             packages: [
               { relativePath: ".", scripts: [] },
               { relativePath: "packages/core", scripts: [{ name: "build", command: "tsc -b" }] },
@@ -149,7 +153,101 @@ describe("Phase 3F completion assembly", () => {
     expect(plannerInputs[0]?.changedFiles).toEqual(changedFiles);
     expect(plannerInputs[0]?.projectFacts).toMatchObject({
       isCodeProject: true,
+      architecturePolicy: "REQUIRED",
+      architectureCheckAvailable: true,
       packageDirectories: [".", "packages/core", "packages/protocol"],
+    });
+  });
+
+  it("keeps an explicit architecture requirement when a changed manifest removes its contract", async () => {
+    const pendingRun = makeRunD();
+    const startedAt = createTimestampMs(2);
+    const run = { ...pendingRun, status: "RUNNING" as const, startedAt };
+    const state = {
+      ...startAgentState(createInitialAgentState(pendingRun, pendingRun.createdAt), startedAt),
+      changedFiles: [{ path: "package.json", changeType: "MODIFIED" as const }],
+    };
+    const candidate: AgentFinalCandidateDecision = {
+      type: "FINAL_CANDIDATE",
+      modelTurn: {} as never,
+      candidateText: "the candidate answer",
+    };
+    const sourceStepId = createStepId();
+    const plannerInputs: import("@caelush/protocol").VerificationPlanningInput[] = [];
+    const assembly = createCodingCompletionAssembly({
+      clock: { now: () => startedAt },
+      configResolver: {
+        resolve: async () => ({
+          baseSystemPrompt: "b",
+          contextLimits: { maxInputTokens: 1000 },
+          projectFacts: { isCodeProject: true },
+        }),
+      },
+      planner: {
+        plan(input) {
+          plannerInputs.push(input);
+          return {
+            runId: input.runId,
+            sourceStepId: input.sourceStepId,
+            plannerVersion: "phase-11a.v2",
+            planHash: "b".repeat(64),
+            checks: [
+              {
+                ordinal: 0,
+                stage: "FAST_STATIC",
+                requirement: "REQUIRED",
+                spec: { kind: "PROJECT", purpose: "ARCHITECTURE", source: "SYSTEM" },
+              },
+            ],
+          };
+        },
+      },
+      profileProvider: {
+        async getFreshProfile() {
+          return {
+            ecosystems: ["NODE"],
+            packageManager: { name: "npm" },
+            tooling: [],
+            isMonorepo: false,
+            rootPackage: { relativePath: ".", scripts: [] },
+            packages: [{ relativePath: ".", scripts: [] }],
+          };
+        },
+      },
+      git: {
+        async diff({ path }) {
+          expect(path).toBe("package.json");
+          return {
+            path,
+            truncated: false,
+            diff: [
+              "diff --git a/package.json b/package.json",
+              "--- a/package.json",
+              "+++ b/package.json",
+              '-      "architecture": "REQUIRED"',
+              '-      "check:architecture:ci": "pnpm check:architecture:ci"',
+            ].join("\n"),
+          };
+        },
+      } as never,
+    });
+
+    await assembly.planCandidateBoundary({
+      run,
+      state,
+      continuation: {
+        type: "AWAITING_VERIFICATION",
+        runId: run.id,
+        sourceStepId,
+        verificationPlanId: createVerificationPlanId(),
+        finalDecision: candidate,
+      },
+      candidate,
+    });
+
+    expect(plannerInputs[0]?.projectFacts).toMatchObject({
+      architecturePolicy: "REQUIRED",
+      architectureCheckAvailable: false,
     });
   });
 
