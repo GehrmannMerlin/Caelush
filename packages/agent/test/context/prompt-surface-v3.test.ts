@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  applyPromptSurfaceSectionUpdates,
   createPromptSurfaceSectionStates,
   diffPromptSurfaceSections,
   renderPromptSurfaceRecord,
@@ -87,6 +88,60 @@ describe("Prompt Surface V3 semantic sections", () => {
     expect(diff.updates).toHaveLength(1);
     expect(diff.updates[0]?.content).toContain("T2");
     expect(diff.updates[0]?.content).not.toContain("same");
+  });
+
+  it("updates one changed file while carrying the unchanged file state forward", () => {
+    const previous = createPromptSurfaceSectionStates(
+      document(file("login v1"), {
+        ...file("keep original"),
+        id: "coding.relevant-files:help.html",
+      }),
+    );
+    const current = createPromptSurfaceSectionStates(
+      document(file("login v2"), {
+        ...file("keep original"),
+        id: "coding.relevant-files:help.html",
+      }),
+    );
+    const diff = diffPromptSurfaceSections(previous, current, false);
+
+    expect(diff.kind).toBe("DELTA");
+    expect(diff.updates).toHaveLength(1);
+    expect(diff.updates[0]?.content).toContain("login v2");
+    expect(applyPromptSurfaceSectionUpdates(previous, diff.kind, diff.updates)).toEqual(current);
+  });
+
+  it("aggregates three Section changes into one Delta record body", () => {
+    const previous = createPromptSurfaceSectionStates(
+      document(
+        file("login v1"),
+        { ...file("help v1"), id: "coding.relevant-files:help.html" },
+        {
+          ...file("clock v1"),
+          id: "coding.temporal:current",
+          sourceRef: "coding.temporal@v1:clock:injected",
+          authority: "RUNTIME_FACT",
+        },
+      ),
+    );
+    const current = createPromptSurfaceSectionStates(
+      document(
+        file("login v2"),
+        { ...file("help v2"), id: "coding.relevant-files:help.html" },
+        {
+          ...file("clock v2"),
+          id: "coding.temporal:current",
+          sourceRef: "coding.temporal@v1:clock:injected",
+          authority: "RUNTIME_FACT",
+        },
+      ),
+    );
+    const diff = diffPromptSurfaceSections(previous, current, false);
+    const rendered = renderPromptSurfaceRecord("DELTA", diff.updates);
+
+    expect(diff.kind).toBe("DELTA");
+    expect(diff.updates).toHaveLength(3);
+    expect(rendered.match(/<set /g)).toHaveLength(3);
   });
 
   it("clears an item that left a complete view and sets changed items deterministically", () => {
