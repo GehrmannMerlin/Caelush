@@ -46,6 +46,18 @@ const deepSeekV4Reasoning: ModelReasoningProfile = {
   supportsSummary: "UNKNOWN",
 };
 
+const deepSeekV4ReasoningDescriptions: Partial<Record<ReasoningLevel, string>> = {
+  OFF: "使用模型 / Provider 默认推理策略；Caelush 不主动指定推理强度。",
+  MINIMAL:
+    "速度优先，适合简单文件修改、静态页面、普通代码编辑和常规查询；与 Low 一样使用 Provider 的 low 档位。",
+  LOW: "速度优先，适合简单文件修改、静态页面、普通代码编辑和常规查询；与 Minimal 一样映射到 Provider 的 low 档位。",
+  MEDIUM:
+    "适合多文件修改、复杂调试、代码分析和多步骤任务；与 High 一样使用 Provider 的 high 档位。",
+  HIGH: "更强推理，适合多文件修改、复杂调试、代码分析和多步骤任务；与 Medium 一样映射到 Provider 的 high 档位。",
+  XHIGH:
+    "最高推理强度，可能显著增加等待时间、推理 Token 使用量和 Provider 资源消耗；适合复杂架构分析、难调试问题和高难度推理。简单编辑任务通常没有必要使用 Max。",
+};
+
 const anthropicReasoning: ModelReasoningProfile = {
   supportedLevels: ["OFF", "MINIMAL", "LOW", "MEDIUM", "HIGH", "XHIGH"],
   defaultLevel: "MEDIUM",
@@ -349,7 +361,11 @@ function currentModel(
         cacheDialect: "AUTOMATIC",
       },
     },
-    reasoningPresentation: presentation(reasoning, { XHIGH: "Max" }),
+    reasoningPresentation: presentation(
+      reasoning,
+      { OFF: "Auto", XHIGH: "Max" },
+      deepSeekV4ReasoningDescriptions,
+    ),
   };
 }
 
@@ -393,12 +409,14 @@ function fallbackDescriptor(preset: ProviderPreset, modelId: string): ModelDescr
 function presentation(
   profile: ModelReasoningProfile,
   overrides: Partial<Record<ReasoningLevel, string>> = {},
+  descriptions: Partial<Record<ReasoningLevel, string>> = {},
 ): ReasoningPresentation {
   return {
     ...(profile.defaultLevel === undefined ? {} : { defaultLevel: profile.defaultLevel }),
     options: profile.supportedLevels.map((level) => ({
       level,
       displayName: overrides[level] ?? titleCase(level),
+      ...(descriptions[level] === undefined ? {} : { description: descriptions[level] }),
     })),
   };
 }

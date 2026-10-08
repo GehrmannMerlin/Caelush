@@ -102,6 +102,11 @@ function createRootMenu(input: {
   readonly onModels: () => void;
   readonly onReasoning: () => void;
 }): ReactElement {
+  const selectedOption =
+    input.reasoning?.options.find((option) => option.level === input.selection?.reasoningLevel) ??
+    input.reasoning?.options.find(
+      (option) => option.level === input.selectedModel?.reasoning?.defaultLevel,
+    );
   return createElement(
     "div",
     { className: "model-picker-menu-list" },
@@ -110,13 +115,9 @@ function createRootMenu(input: {
       ? null
       : menuButton(
           "推理强度",
-          input.reasoning.options.find((option) => option.level === input.selection?.reasoningLevel)
-            ?.displayName ??
-            input.reasoning.options.find(
-              (option) => option.level === input.selectedModel?.reasoning?.defaultLevel,
-            )?.displayName ??
-            "选择强度",
+          selectedOption?.displayName ?? "选择强度",
           input.onReasoning,
+          selectedOption?.description,
         ),
   );
 }
@@ -251,13 +252,25 @@ export function selectionForModel(
     : { provider: model.provider, model: model.id, reasoningLevel };
 }
 
-function menuButton(label: string, value: string, onClick: () => void): ReactElement {
+function menuButton(
+  label: string,
+  value: string,
+  onClick: () => void,
+  description?: string,
+): ReactElement {
   return createElement(
     "button",
-    { type: "button", className: "model-picker-row", onClick },
+    {
+      type: "button",
+      className: `model-picker-row${description === undefined ? "" : " model-picker-row--described"}`,
+      onClick,
+    },
     createElement("span", null, label),
     createElement("span", { className: "model-picker-row-value" }, value),
     createElement(ChevronRight, { size: 14, "aria-hidden": true }),
+    description === undefined
+      ? null
+      : createElement("small", { className: "model-picker-row-description" }, description),
   );
 }
 

@@ -2060,6 +2060,20 @@ body {
   white-space: nowrap;
 }
 
+.model-picker-row--described {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 14px;
+  row-gap: 4px;
+}
+
+.model-picker-row-description {
+  grid-column: 1 / -1;
+  color: var(--web-muted);
+  font-size: 0.66rem;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
 .model-picker-back {
   justify-content: flex-start;
   color: var(--web-muted);

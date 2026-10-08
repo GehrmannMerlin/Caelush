@@ -31,8 +31,10 @@ import { resolvePromptCacheArtifactDirectory } from "./browser-smoke-artifact-pa
  * The turn script is the one the previous in-process fixture implemented, only expressed on the wire.
  */
 
-const FIXTURE_PROVIDER_ID = "browser-fixture";
-const FIXTURE_MODEL_ID = "browser-fixture-model";
+const S5Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S5";
+const FIXTURE_PROVIDER_ID = S5Only ? "deepseek" : "browser-fixture";
+const FIXTURE_MODEL_ID = S5Only ? "deepseek-flash" : "browser-fixture-model";
+const S5_UNSUPPORTED_MODEL_ID = "deepseek-chat";
 let providerRecoveryAttempts = 0;
 let multiTurnPatchRequests = 0;
 let s0PatchServed = false;
@@ -45,6 +47,7 @@ let s4ModelBytesServed = 0;
 let s4ProcessCalls = 0;
 let s4ProcessBytesEmitted = 0;
 let s4RawPatchServed = false;
+const s5ProviderRequests = [];
 
 const S2_CANCEL_TEXT = `S2_CANCEL_${"cancel ".repeat(1_800)}`;
 const S2_COMPLETE_TEXT = `S2_COMPLETE ${"word ".repeat(1_800).trim()}`;
@@ -175,13 +178,14 @@ function createFixtureWorkspacePreparation() {
 
 async function startFakeModelServer() {
   const server = createServer((request, response) => {
-    if (request.method === "GET" && request.url === "/__s4/status") {
+    if (request.method === "GET" && request.url === (S5Only ? "/__s5/status" : "/__s4/status")) {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(
         JSON.stringify({
           modelChunksServed: s4ModelChunksServed,
           modelBytesServed: s4ModelBytesServed,
           processBytesEmitted: s4ProcessBytesEmitted,
+          reasoningRequests: s5ProviderRequests,
         }),
       );
       return;
@@ -200,7 +204,7 @@ async function startFakeModelServer() {
   let closed;
   return {
     url: `http://127.0.0.1:${address.port}/v1`,
-    statusUrl: `http://127.0.0.1:${address.port}/__s4/status`,
+    statusUrl: `http://127.0.0.1:${address.port}/${S5Only ? "__s5" : "__s4"}/status`,
     close: () =>
       (closed ??= new Promise((resolvePromise) => {
         // A held "waiting" stream is still open by design; closeAllConnections is what guarantees the
@@ -219,7 +223,12 @@ async function handleModelRequest(request, response) {
   if (request.method === "GET" && request.url === "/v1/models") {
     const body = JSON.stringify({
       object: "list",
-      data: [{ id: FIXTURE_MODEL_ID, object: "model", owned_by: FIXTURE_PROVIDER_ID }],
+      data: [
+        { id: FIXTURE_MODEL_ID, object: "model", owned_by: FIXTURE_PROVIDER_ID },
+        ...(S5Only
+          ? [{ id: S5_UNSUPPORTED_MODEL_ID, object: "model", owned_by: FIXTURE_PROVIDER_ID }]
+          : []),
+      ],
     });
     response.writeHead(200, { "content-type": "application/json" });
     response.end(body);
@@ -236,6 +245,16 @@ async function handleModelRequest(request, response) {
     response.writeHead(400).end();
     return;
   }
+  if (S5Only) {
+    const latestUserMessage = [...(Array.isArray(payload?.messages) ? payload.messages : [])]
+      .reverse()
+      .find((message) => message?.role === "user" && typeof message.content === "string");
+    s5ProviderRequests.push({
+      prompt: latestUserMessage?.content ?? "",
+      hasReasoningEffort: Object.hasOwn(payload, "reasoning_effort"),
+      reasoningEffort: payload.reasoning_effort,
+    });
+  }
   const messages = Array.isArray(payload?.messages) ? payload.messages : [];
   const isReview = messages.some(
     (message) =>
@@ -251,6 +270,14 @@ async function handleModelRequest(request, response) {
   const latestUserText = [...messages]
     .reverse()
     .find((message) => message?.role === "user" && typeof message.content === "string")?.content;
+  if (!isReview && latestUserText?.includes("S5 Max guidance test")) {
+    writeSse(response, textChunks("<h1>Reasoning guidance</h1>"));
+    return;
+  }
+  if (!isReview && latestUserText?.includes("S5 Auto guidance test")) {
+    writeSse(response, textChunks("A simple static page with one short description."));
+    return;
+  }
   const multiTurnPromptIndex = messages.findLastIndex(
     (message) =>
       typeof message?.content === "string" && message.content.includes("multi-turn patch fixture"),
@@ -701,6 +728,7 @@ const s1Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S1";
 const s2Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S2";
 const s3Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S3";
 const s4Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S4";
+const s5Only = S5Only;
 const configuredArtifactDirectory = process.env.CAELUSH_BROWSER_SMOKE_ARTIFACT_DIR;
 const browserArtifacts = promptCacheOnly
   ? await resolvePromptCacheArtifactDirectory(process.cwd(), configuredArtifactDirectory)
@@ -715,7 +743,9 @@ const browserArtifacts = promptCacheOnly
             ? join(tmpdir(), `caelush-web-browser-smoke-s3-${process.pid}`)
             : s4Only
               ? join(tmpdir(), `caelush-web-browser-smoke-s4-${process.pid}`)
-              : join(process.cwd(), "test-results", "web-session-browser-smoke")
+              : s5Only
+                ? join(tmpdir(), `caelush-web-browser-smoke-s5-${process.pid}`)
+                : join(process.cwd(), "test-results", "web-session-browser-smoke")
     : resolve(configuredArtifactDirectory);
 
 const directory = await mkdtemp(join(tmpdir(), "caelush-web-browser-"));
@@ -745,14 +775,18 @@ try {
         provider: FIXTURE_PROVIDER_ID,
         baseUrl: fakeProvider.url,
         apiKey: "browser-fixture-key",
-        allowedModels: [FIXTURE_MODEL_ID],
-        modelProfiles: {
-          [FIXTURE_MODEL_ID]: {
-            contextWindowTokens: 128_000,
-            maxOutputTokens: 8_192,
-            recommendedOutputReserveTokens: 4_096,
-          },
-        },
+        allowedModels: [FIXTURE_MODEL_ID, ...(S5Only ? [S5_UNSUPPORTED_MODEL_ID] : [])],
+        ...(S5Only
+          ? {}
+          : {
+              modelProfiles: {
+                [FIXTURE_MODEL_ID]: {
+                  contextWindowTokens: 128_000,
+                  maxOutputTokens: 8_192,
+                  recommendedOutputReserveTokens: 4_096,
+                },
+              },
+            }),
       },
     ],
     defaultModel: { provider: FIXTURE_PROVIDER_ID, model: FIXTURE_MODEL_ID },
@@ -831,6 +865,26 @@ try {
       `[browser-smoke] S4 model chunks=${s4ModelChunksServed} / ${s4ModelBytesServed} bytes; in-process output=${s4ProcessBytesEmitted} bytes; private Tool args=${Buffer.byteLength(fixture, "utf8")} bytes.\n`,
     );
   }
+  if (result === 0 && S5Only) {
+    const maxRequest = s5ProviderRequests.find((entry) =>
+      entry.prompt.includes("S5 Max guidance test"),
+    );
+    const autoRequest = s5ProviderRequests.find((entry) =>
+      entry.prompt.includes("S5 Auto guidance test"),
+    );
+    if (
+      maxRequest?.reasoningEffort !== "max" ||
+      !maxRequest.hasReasoningEffort ||
+      autoRequest?.hasReasoningEffort !== false
+    ) {
+      throw new Error(
+        `The S5 browser fixtures missed exact Max/Auto wire semantics: ${JSON.stringify({ maxRequest, autoRequest })}`,
+      );
+    }
+    process.stdout.write(
+      "[browser-smoke] S5 local DeepSeek fixture captured Max and Auto request settings.\n",
+    );
+  }
   if (result === 0 && multiTurnOnly) {
     const fixture = await readFile(join(directory, "fixture.txt"), "utf8");
     if (fixture !== "multi-turn fixture\n") {
@@ -850,7 +904,8 @@ try {
     !s1Only &&
     !s2Only &&
     !s3Only &&
-    !s4Only
+    !s4Only &&
+    !s5Only
   ) {
     const fixture = await readFile(join(directory, "fixture.txt"), "utf8");
     if (fixture !== "patched browser fixture\n") {

@@ -35,7 +35,7 @@ describe("AI runtime configuration control plane", () => {
       }
       return new Response(
         JSON.stringify({
-          data: [{ id: "deepseek-reasoner" }, { id: "deepseek-chat" }],
+          data: [{ id: "deepseek-reasoner" }, { id: "deepseek-chat" }, { id: "deepseek-flash" }],
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
@@ -73,7 +73,7 @@ describe("AI runtime configuration control plane", () => {
 
     const connected = await client.connectAIProvider("deepseek", { apiKey: "candidate-key" });
     expect(connected.directory.models.map((model) => model.id).sort()).toEqual(
-      ["deepseek-reasoner", "deepseek-chat"].sort(),
+      ["deepseek-reasoner", "deepseek-chat", "deepseek-flash"].sort(),
     );
     expect(JSON.stringify(connected)).not.toContain("candidate-key");
     expect(JSON.stringify(connected)).not.toContain("Authorization");
@@ -96,13 +96,13 @@ describe("AI runtime configuration control plane", () => {
 
     const selection = await client.setDefaultAISelection({
       provider: "deepseek",
-      model: "deepseek-reasoner",
-      reasoningLevel: "HIGH",
+      model: "deepseek-flash",
+      reasoningLevel: "XHIGH",
     });
     expect(selection.selection).toEqual({
       provider: "deepseek",
-      model: "deepseek-reasoner",
-      reasoningLevel: "HIGH",
+      model: "deepseek-flash",
+      reasoningLevel: "XHIGH",
     });
 
     const workspace = (await client.listWorkspaces()).items[0];
@@ -110,8 +110,8 @@ describe("AI runtime configuration control plane", () => {
     const session = await client.createSession({
       defaultWorkspace: { id: workspace.id, path: directory },
     });
-    expect(session.defaultModel).toEqual({ provider: "deepseek", model: "deepseek-reasoner" });
-    expect(session.defaultReasoningLevel).toBe("HIGH");
+    expect(session.defaultModel).toEqual({ provider: "deepseek", model: "deepseek-flash" });
+    expect(session.defaultReasoningLevel).toBe("XHIGH");
 
     const baseRun = {
       goal: "selection snapshot",
@@ -121,17 +121,17 @@ describe("AI runtime configuration control plane", () => {
       limits: { maxSteps: 1, maxToolCalls: 1, timeoutMs: 5_000 },
     };
     const firstRun = await client.createRun(session.id, baseRun);
-    expect(firstRun.model).toEqual({ provider: "deepseek", model: "deepseek-reasoner" });
-    expect(firstRun.reasoningLevel).toBe("HIGH");
+    expect(firstRun.model).toEqual({ provider: "deepseek", model: "deepseek-flash" });
+    expect(firstRun.reasoningLevel).toBe("XHIGH");
 
     const updatedSession = await client.updateSessionModelSelection(session.id, {
-      defaultModel: { provider: "deepseek", model: "deepseek-reasoner" },
+      defaultModel: { provider: "deepseek", model: "deepseek-flash" },
       defaultReasoningLevel: "LOW",
     });
     expect(updatedSession.defaultReasoningLevel).toBe("LOW");
     const secondRun = await client.createRun(session.id, baseRun);
     expect(secondRun.reasoningLevel).toBe("LOW");
-    expect((await client.getRun(firstRun.id)).reasoningLevel).toBe("HIGH");
+    expect((await client.getRun(firstRun.id)).reasoningLevel).toBe("XHIGH");
 
     await client.disconnectAIProvider("deepseek");
     const afterDisconnect = await client.listAIProviders();

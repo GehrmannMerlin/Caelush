@@ -194,3 +194,53 @@ describe("curated model cache capability", () => {
     expect(resolveDefaultCacheRequest(fallback)).toBeUndefined();
   });
 });
+
+describe("curated DeepSeek V4 reasoning policy", () => {
+  const modelIds = ["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"];
+
+  it("keeps HIGH as the new-model default and publishes latency guidance for every level", () => {
+    for (const modelId of modelIds) {
+      const metadata = getCuratedModelMetadata("deepseek", modelId);
+      if (metadata === undefined) throw new Error(`expected curated metadata for ${modelId}`);
+
+      expect(metadata.descriptor.reasoning).toEqual({
+        supportedLevels: ["OFF", "MINIMAL", "LOW", "MEDIUM", "HIGH", "XHIGH"],
+        defaultLevel: "HIGH",
+        supportsSummary: "UNKNOWN",
+      });
+      expect(metadata.descriptor.adapterMetadata?.["openai-compatible"]).toMatchObject({
+        reasoningEffortByLevel: {
+          MINIMAL: "low",
+          LOW: "low",
+          MEDIUM: "high",
+          HIGH: "high",
+          XHIGH: "max",
+        },
+      });
+      expect(
+        metadata.descriptor.adapterMetadata?.["openai-compatible"]?.reasoningEffortByLevel,
+      ).not.toHaveProperty("OFF");
+      expect(metadata.reasoningPresentation?.defaultLevel).toBe("HIGH");
+
+      const options = metadata.reasoningPresentation?.options;
+      expect(options).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ level: "OFF", displayName: "Auto" }),
+          expect.objectContaining({ level: "MINIMAL", displayName: "Minimal" }),
+          expect.objectContaining({ level: "LOW", displayName: "Low" }),
+          expect.objectContaining({ level: "MEDIUM", displayName: "Medium" }),
+          expect.objectContaining({ level: "HIGH", displayName: "High" }),
+          expect.objectContaining({ level: "XHIGH", displayName: "Max" }),
+        ]),
+      );
+      const option = (level: string) => options?.find((candidate) => candidate.level === level);
+      expect(option("OFF")?.description?.toLowerCase()).toMatch(/provider|模型默认/);
+      expect(option("LOW")?.description).toMatch(/速度优先/);
+      expect(option("LOW")?.description).toMatch(/简单/);
+      expect(option("HIGH")?.description).toMatch(/多文件|复杂调试/);
+      expect(option("XHIGH")?.description).toMatch(/最高推理/);
+      expect(option("XHIGH")?.description?.toLowerCase()).toMatch(/等待|token/);
+      expect(option("XHIGH")?.description).toMatch(/简单编辑/);
+    }
+  });
+});

@@ -24,6 +24,7 @@ const s1Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S1";
 const s2Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S2";
 const s3Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S3";
 const s4Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S4";
+const s5Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S5";
 const S2_COMPLETE_TEXT = `S2_COMPLETE ${"word ".repeat(1_800).trim()}`;
 const waitVisible = (locator, timeout = 15_000) => locator.waitFor({ state: "visible", timeout });
 const waitUntil = async (predicate, description, timeout = 15_000) => {
@@ -36,7 +37,8 @@ const waitUntil = async (predicate, description, timeout = 15_000) => {
 };
 const readFixtureStatus = async () => {
   const response = await fetch(fixtureStatusUrl);
-  if (!response.ok) throw new Error("the S4 fixture status endpoint returned " + response.status);
+  if (!response.ok)
+    throw new Error("the streaming fixture status endpoint returned " + response.status);
   return response.json();
 };
 const exactText = (value) => page.getByText(value, { exact: true });
@@ -366,6 +368,46 @@ const assertSubmittedPreset = async (promptText, expectedId) => {
     );
 };
 
+const assertReasoningSelection = async (sessionId, expectedLevel) => {
+  const selectedSession = await getJson("/api/v1/sessions/" + sessionId);
+  if (selectedSession.defaultReasoningLevel !== expectedLevel) {
+    throw new Error(
+      "the Session stored reasoning level " +
+        selectedSession.defaultReasoningLevel +
+        " instead of " +
+        expectedLevel,
+    );
+  }
+  const runs = await getJson("/api/v1/sessions/" + sessionId + "/runs");
+  const run = (runs.items ?? []).find((item) => item.reasoningLevel === expectedLevel);
+  if (run === undefined) {
+    throw new Error("the Session created no Run with reasoning level " + expectedLevel);
+  }
+  return { sessionLevel: selectedSession.defaultReasoningLevel, runLevel: run.reasoningLevel };
+};
+
+const waitForS5SessionCompletion = async (sessionId, expectedLevel) => {
+  let settledRun;
+  await waitUntil(async () => {
+    const runs = await getJson("/api/v1/sessions/" + sessionId + "/runs");
+    const run = (runs.items ?? []).find((item) => item.reasoningLevel === expectedLevel);
+    if (run === undefined) return false;
+    if (["FAILED", "CANCELLED", "TIMEOUT", "BUDGET_EXCEEDED"].includes(run.status)) {
+      throw new Error("the S5 Run settled as " + run.status);
+    }
+    if (run.status !== "COMPLETED") return false;
+    settledRun = run;
+    return true;
+  }, "the S5 Run to commit its completed status");
+  const presentation = await getJson(
+    "/api/v1/sessions/" + sessionId + "/presentation?runId=" + encodeURIComponent(settledRun.id),
+  );
+  const turn = presentation.turns?.find((item) => item.runId === settledRun.id);
+  if (turn?.runStatus !== "COMPLETED") {
+    throw new Error("the S5 durable presentation did not converge to COMPLETED");
+  }
+};
+
 let smokeStage = "browser navigation";
 try {
   await page.goto(url, { waitUntil: "domcontentloaded" });
@@ -376,6 +418,166 @@ try {
   await assertViewportSplitLayout({ scrollable: false });
   await startNewSession();
   await assertPermissionSelector();
+  if (s5Only) {
+    smokeStage = "S5 curated DeepSeek reasoning guidance";
+    const picker = page.locator(".model-picker-trigger").first();
+    await waitVisible(picker);
+    const ensureRootMenu = async () => {
+      if ((await picker.getAttribute("aria-expanded")) !== "true") await picker.click();
+      await waitVisible(page.locator(".model-picker-menu"));
+    };
+
+    const openModelMenu = async (modelName) => {
+      await ensureRootMenu();
+      const modelRow = page.locator(".model-picker-row").first();
+      await waitVisible(modelRow);
+      await modelRow.click();
+      const modelOption = page.locator(".model-picker-item").filter({ hasText: modelName });
+      await waitVisible(modelOption);
+      await modelOption.click();
+      await waitUntil(
+        async () => (await picker.innerText()).includes(modelName),
+        "the model picker to select " + modelName,
+      );
+    };
+    const openReasoningMenu = async () => {
+      await ensureRootMenu();
+      const reasoningRow = page.locator(".model-picker-row").filter({ hasText: "推理强度" });
+      await waitVisible(reasoningRow);
+      await reasoningRow.click();
+      await waitVisible(page.locator(".model-picker-item").first());
+    };
+    const selectReasoning = async (label) => {
+      await openReasoningMenu();
+      const option = page.locator(".model-picker-item").filter({ hasText: label }).first();
+      await waitVisible(option);
+      await option.click();
+      await waitUntil(
+        async () => (await picker.innerText()).includes("· " + label),
+        "the reasoning picker to select " + label,
+      );
+    };
+
+    await openModelMenu("DeepSeek Chat");
+    await picker.click();
+    if ((await page.locator(".model-picker-row").filter({ hasText: "推理强度" }).count()) !== 0) {
+      throw new Error("the reasoning-unsupported DeepSeek Chat model displayed a reasoning menu");
+    }
+
+    await openModelMenu("DeepSeek V4.1 Flash");
+    const newModelTrigger = (await picker.innerText()).trim();
+    if (!newModelTrigger.includes("DeepSeek V4.1 Flash · High")) {
+      throw new Error(
+        "a new DeepSeek V4 model did not retain its curated HIGH default; trigger=" +
+          JSON.stringify(newModelTrigger),
+      );
+    }
+
+    await openReasoningMenu();
+    const reasoningOptions = (await page.locator(".model-picker-item").allInnerTexts()).join("\n");
+    for (const expected of [
+      "Auto",
+      "Provider 默认",
+      "Low",
+      "速度优先",
+      "High",
+      "复杂调试",
+      "Max",
+      "最高推理",
+      "等待时间",
+      "简单编辑",
+    ]) {
+      if (!reasoningOptions.includes(expected)) {
+        throw new Error("the S5 reasoning menu omitted guidance text: " + expected);
+      }
+    }
+    await page.locator(".model-picker-back").click();
+    await picker.click();
+
+    smokeStage = "S5 load a deterministic DeepSeek V4 session";
+    const s5Session = await postJson("/api/v1/sessions", {
+      title: "S5 reasoning setup",
+      defaultWorkspace: workspace,
+      defaultModel: { provider: "deepseek", model: "deepseek-flash" },
+      defaultReasoningLevel: "HIGH",
+      metadata: {},
+    });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await waitVisible(page.locator(".workspace-sidebar"));
+    await waitVisible(
+      page.locator("button.workspace-session-item").filter({ hasText: "S5 reasoning setup" }),
+    );
+    await selectSession("S5 reasoning setup");
+    await waitUntil(
+      async () => (await picker.innerText()).includes("DeepSeek V4.1 Flash · High"),
+      "the S5 session's curated HIGH selection to load",
+    );
+    const s5SessionId = s5Session.id;
+
+    smokeStage = "S5 explicit Max selection reaches Session, Run, and Provider wire";
+    await selectReasoning("Max");
+    const maxTrigger = (await picker.innerText()).trim();
+    if (!maxTrigger.includes("DeepSeek V4.1 Flash · Max")) {
+      throw new Error(
+        "the selected Max level was not visible in the picker trigger: " +
+          JSON.stringify(maxTrigger),
+      );
+    }
+    await picker.click();
+    const maxReasoningRow = page.locator(".model-picker-row").filter({ hasText: "推理强度" });
+    if (!(await maxReasoningRow.innerText()).includes("简单编辑任务通常没有必要使用 Max")) {
+      throw new Error("the root menu did not show the selected Max latency guidance");
+    }
+    await picker.click();
+    await picker.click();
+    await submitPrompt("Return a single HTML heading for the S5 Max guidance test.");
+    await waitVisible(exactText("<h1>Reasoning guidance</h1>"));
+    const maxSession = await assertReasoningSelection(s5SessionId, "XHIGH");
+    if (maxSession.runLevel !== "XHIGH") {
+      throw new Error("the explicit Max level changed before Run creation: " + maxSession.runLevel);
+    }
+    await waitForS5SessionCompletion(s5SessionId, "XHIGH");
+    const maxRequest = (await readFixtureStatus()).reasoningRequests.find((entry) =>
+      entry.prompt.includes("S5 Max guidance test"),
+    );
+    if (!maxRequest?.hasReasoningEffort || maxRequest.reasoningEffort !== "max") {
+      throw new Error("the fake Provider did not receive reasoning_effort=max");
+    }
+
+    smokeStage = "S5 Auto selection omits Provider reasoning steering";
+    await selectReasoning("Auto");
+    if (!(await picker.innerText()).includes("DeepSeek V4.1 Flash · Auto")) {
+      throw new Error("the selected OFF level was not presented as Auto in the picker trigger");
+    }
+    await picker.click();
+    const autoReasoningRow = page.locator(".model-picker-row").filter({ hasText: "推理强度" });
+    if (!(await autoReasoningRow.innerText()).includes("Caelush 不主动指定推理强度")) {
+      throw new Error("the root menu did not show the selected Auto/no-steering guidance");
+    }
+    await picker.click();
+    await picker.click();
+    await submitPrompt("Return a short static page description for the S5 Auto guidance test.");
+    await waitVisible(exactText("A simple static page with one short description."));
+    const autoSession = await assertReasoningSelection(s5SessionId, "OFF");
+    if (autoSession.runLevel !== "OFF") {
+      throw new Error(
+        "the explicit Auto/OFF level changed before Run creation: " + autoSession.runLevel,
+      );
+    }
+    await waitForS5SessionCompletion(s5SessionId, "OFF");
+    const autoRequest = (await readFixtureStatus()).reasoningRequests.find((entry) =>
+      entry.prompt.includes("S5 Auto guidance test"),
+    );
+    if (autoRequest?.hasReasoningEffort !== false) {
+      throw new Error("the OFF selection sent reasoning_effort instead of leaving it unset");
+    }
+
+    await browser.close();
+    process.stdout.write(
+      "[browser-runner] S5 Auto/Low/High/Max guidance, selected labels, unsupported-model behavior, Session/Run authority, Max wire mapping, and OFF omission passed.\n",
+    );
+    process.exit(0);
+  }
   if (s0Only) {
     smokeStage = "S0 browser heartbeat setup";
     await page.setViewportSize({ width: 390, height: 844 });

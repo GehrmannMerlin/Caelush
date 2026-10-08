@@ -101,16 +101,16 @@ describe("OpenAI-compatible native reasoning translation", () => {
     }
   });
 
-  it("honours an explicit model-level effort override", () => {
+  it("maps explicit XHIGH to a model-level Max effort override", () => {
     const descriptor = model(["XHIGH"], {
       adapterMetadata: {
-        "openai-compatible": { reasoningEffortByLevel: { XHIGH: "xhigh" } },
+        "openai-compatible": { reasoningEffortByLevel: { XHIGH: "max" } },
       },
     });
 
     expect(
       resolveOpenAICompatibleNativeOptions(descriptor, request({ effectiveReasoning: "XHIGH" })),
-    ).toEqual({ reasoningEffort: "xhigh" });
+    ).toEqual({ reasoningEffort: "max" });
   });
 
   it("ignores an unusable override value and still fails closed", () => {

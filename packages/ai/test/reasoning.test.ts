@@ -52,6 +52,12 @@ describe("ReasoningResolver PREFER_BUDGET", () => {
       mode: "EXACT",
       policy: "PREFER_BUDGET",
     });
+    expect(resolve(["OFF", "MINIMAL", "LOW", "MEDIUM", "HIGH", "XHIGH"], "XHIGH")).toEqual({
+      requested: "XHIGH",
+      effective: "XHIGH",
+      mode: "EXACT",
+      policy: "PREFER_BUDGET",
+    });
   });
 
   it("clamps down to the highest supported level at or below the request", () => {
