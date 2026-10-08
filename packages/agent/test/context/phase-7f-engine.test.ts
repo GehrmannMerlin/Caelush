@@ -603,9 +603,12 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       signal: new AbortController().signal,
     });
     expect(summaryCallCount).toBe(0);
-    expect(promptSurfaceStore.inspect(runIdentity.runId)?.snapshots.length).toBeGreaterThan(0);
+    const warmSurface = promptSurfaceStore.inspect(runIdentity.runId)!;
+    expect(warmSurface.formatVersion).toBe(3);
+    expect(warmSurface.records?.map((record) => record.kind)).toEqual(["BASELINE"]);
     authoritySnapshotCount = 0;
     authoritySnapshotPhases.length = 0;
+    verificationState = "CHANGED BEFORE REPLAY";
 
     const prepared = await engine.prepare({
       identity: runIdentity,
@@ -653,7 +656,16 @@ describe("Phase 7F production-capable Agent ContextEngine", () => {
       firstSequence: 1,
       lastSequence: 2,
     });
-    expect(promptSurfaceStore.inspect(runIdentity.runId)?.resetReason).toBe("COMPACTION_COMMITTED");
+    const surfaces = promptSurfaceStore.inspectEpochs(runIdentity.runId);
+    expect(surfaces).toHaveLength(2);
+    expect(surfaces[0]?.records).toEqual(warmSurface.records);
+    expect(surfaces[1]?.resetReason).toBe("COMPACTION_COMMITTED");
+    expect(surfaces[1]?.records?.map((record) => record.kind)).toEqual(["BASELINE"]);
+    expect(
+      surfaces[1]?.records?.[0]?.updates.some(
+        (update) => update.op === "SET" && update.content.includes("NEW"),
+      ),
+    ).toBe(true);
 
     const committedSurface = promptSurfaceStore.inspect(runIdentity.runId);
     commitShouldFail = true;

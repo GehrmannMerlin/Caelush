@@ -255,7 +255,6 @@ export function assertPromptSurfaceEpochWithSnapshots(
     if (
       snapshot.runId !== candidate.runId ||
       snapshot.epochId !== candidate.epochId ||
-      snapshot.anchor.runId !== snapshot.runId ||
       snapshot.ordinal !== index + 1
     ) {
       throw new PromptSurfaceIntegrityError(
@@ -305,7 +304,6 @@ function assertPromptSurfaceV3Records(
     if (
       record.runId !== epoch.runId ||
       record.epochId !== epoch.epochId ||
-      record.anchor.runId !== record.runId ||
       record.ordinal !== index + 1 ||
       record.sourceStepSequence <= previousStepSequence ||
       record.sourceStepSequence < epoch.createdStepSequence ||
@@ -453,9 +451,6 @@ export function assertPromptSurfaceRecordInput(
     throw new PromptSurfaceIntegrityError("Prompt Surface V3 record operations are invalid.");
   }
   const anchor = candidate["anchor"] as PromptSurfaceAnchor;
-  if (anchor.runId !== candidate["runId"]) {
-    throw new PromptSurfaceIntegrityError("Prompt Surface V3 anchor belongs to another Run.");
-  }
   for (const update of candidate["updates"]) assertSectionUpdate(update);
   const kind = candidate["kind"] as PromptSurfaceRecordKind;
   if (
