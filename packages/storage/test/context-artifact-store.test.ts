@@ -81,7 +81,7 @@ describe("SqliteContextArtifactStore", () => {
       sourceRef: "tool:exec",
       content: "😀".repeat(100),
       mimeType: "text/plain",
-      sensitivity: "SENSITIVE",
+      sensitivity: "INTERNAL",
       createdSequence: 1,
       createdAt: createTimestampMs(3),
     });
@@ -90,7 +90,49 @@ describe("SqliteContextArtifactStore", () => {
 
     expect(metadata).toBeDefined();
     expect(metadata).not.toHaveProperty("content");
-    expect(metadata?.sensitivity).toBe("SENSITIVE");
+    expect(metadata?.sensitivity).toBe("INTERNAL");
     expect(Buffer.byteLength(safe ?? "", "utf8")).toBeLessThanOrEqual(32);
+  });
+
+  it("refuses sensitive generic projection while preserving controlled internal reads", async () => {
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    stores.push(storage);
+    const run = await addRun(storage);
+    const artifact = await storage.contextArtifactsV2.createOrGet({
+      runId: run.id,
+      kind: "private",
+      sourceRef: "fixture",
+      content: "C3_PRIVATE_REASONING_SENTINEL",
+      mimeType: "text/plain",
+      sensitivity: "SENSITIVE",
+      createdSequence: 1,
+      createdAt: createTimestampMs(3),
+    });
+    const newProjectionRejected = await storage.contextArtifactsV2
+      .readSafeProjection(artifact.artifactId, 1024)
+      .then(
+        () => false,
+        (error: unknown) =>
+          error instanceof Error && error.message === "Sensitive artifact projection is forbidden.",
+      );
+    const legacyProjectionRejected = await storage.contextArtifacts
+      .readSafeProjection(artifact.artifactId, 1024)
+      .then(
+        () => false,
+        (error: unknown) =>
+          error instanceof Error && error.message === "Sensitive artifact projection is forbidden.",
+      );
+    const controlledInternalReadSucceeded =
+      (await storage.contextArtifactsV2.readInternal(artifact.artifactId))?.content ===
+      "C3_PRIVATE_REASONING_SENTINEL";
+    expect({
+      newProjectionRejected,
+      legacyProjectionRejected,
+      controlledInternalReadSucceeded,
+    }).toEqual({
+      newProjectionRejected: true,
+      legacyProjectionRejected: true,
+      controlledInternalReadSucceeded: true,
+    });
   });
 });

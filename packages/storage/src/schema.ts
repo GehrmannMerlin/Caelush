@@ -204,6 +204,30 @@ export const agentMessages = sqliteTable(
   ],
 );
 
+/** Ciphertext only. The host owns key material and the scoped plaintext reader. */
+export const privateReplays = sqliteTable(
+  "private_replays",
+  {
+    messageId: text("message_id")
+      .primaryKey()
+      .references(() => agentMessages.messageId, { onDelete: "cascade" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => agentRuns.id, { onDelete: "cascade" }),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => agentSessions.id, { onDelete: "cascade" }),
+    identityJson: text("identity_json").notNull(),
+    envelopeJson: text("envelope_json").notNull(),
+    keyId: text("key_id").notNull(),
+    nonce: text("nonce").notNull(),
+  },
+  (table) => [
+    index("private_replays_run_idx").on(table.runId),
+    uniqueIndex("private_replays_key_nonce_unique").on(table.keyId, table.nonce),
+  ],
+);
+
 export const agentRunContinuations = sqliteTable("agent_run_continuations", {
   runId: text("run_id")
     .primaryKey()

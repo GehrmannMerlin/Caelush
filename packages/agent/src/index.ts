@@ -1142,3 +1142,4 @@ export {
   createStandardAgentMessageTranscriptProjectorRegistry,
 } from "./messages/transcript/registry.js";
 export type { AgentMessageTranscriptProjectorRegistry } from "./messages/transcript/registry.js";
+export * from "./messages/private-replay.js";

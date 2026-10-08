@@ -7,6 +7,8 @@ import type {
 } from "@caelush/agent";
 
 import type { CaelushDatabase } from "../database.js";
+import { hasPrivateReplayReference, PRIVATE_REPLAY_COMMIT } from "../private-replay-store.js";
+import { PrivateReplayError } from "@caelush/agent";
 import { StorageConflictError, StorageDecodeError, StorageError } from "../errors.js";
 
 /**
@@ -88,8 +90,11 @@ export function appendAgentMessageRecordsInTransaction(
   client: CaelushDatabase["client"],
   runId: RunId,
   drafts: readonly AgentMessageRecordDraft[],
+  replayCommit?: typeof PRIVATE_REPLAY_COMMIT,
 ): AgentMessageRecord[] {
   if (drafts.length === 0) return [];
+  if (replayCommit !== PRIVATE_REPLAY_COMMIT && drafts.some(hasPrivateReplayReference))
+    throw new PrivateReplayError();
 
   const run = client.prepare("SELECT session_id FROM agent_runs WHERE id = ?").get(runId) as
     { session_id: string } | undefined;

@@ -5,6 +5,8 @@ import {
   type RunExecutionStorePort,
 } from "@caelush/agent";
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { SqlitePrivateReplayStore, PRIVATE_REPLAY_COMMIT } from "./private-replay-store.js";
 import {
   assertRunExecutionInvariant,
   type RunCandidateBoundaryCommit,
@@ -195,7 +197,10 @@ export class SqliteRunExecutionStore
   private readonly continuations: SqliteContinuationRepository;
   private readonly cancellations: SqliteCancellationRepository;
 
-  constructor(private readonly database: CaelushDatabase) {
+  constructor(
+    private readonly database: CaelushDatabase,
+    private readonly privateReplay = new SqlitePrivateReplayStore(database),
+  ) {
     this.runs = new SqliteRunRepository(database);
     this.states = new SqliteRunStateRepository(database);
     this.steps = new SqliteStepRepository(database);
@@ -257,8 +262,24 @@ export class SqliteRunExecutionStore
   }
 
   async commit(command: RunExecutionCommitView): Promise<RunExecutionCommitResult> {
+    const privateReplayWrites = await this.privateReplay.validateWrites(
+      command.privateReplayWrites ?? [],
+    );
     const before = await this.load(command.run.id);
     if (before === null) throw new StorageError(`AgentRun ${command.run.id} was not found`);
+    const replayIds = new Set(privateReplayWrites.map((write) => write.identity.messageId));
+    // Only exact retries of replay-backed messages may reuse a durable message identity.
+    const messagesToAppend = command.messagesToAppend.filter(({ draft }) => {
+      const existing = before.conversationRecords.find(
+        (record) => record.messageId === draft.messageId,
+      );
+      if (existing === undefined || !replayIds.has(draft.messageId)) return true;
+      if (!isDeepStrictEqual(existing, recordFromDraft(command.run.id, existing.sequence, draft))) {
+        throw new RunExecutionConflictError("Private replay message retry conflicted.");
+      }
+      return false;
+    });
+    command = { ...command, messagesToAppend };
     const candidateContinuation =
       command.continuation?.operation === "SET"
         ? {
@@ -325,6 +346,12 @@ export class SqliteRunExecutionStore
       appendAgentMessageRecordsInTransaction(
         client,
         command.run.id,
+        command.messagesToAppend.map((entry) => entry.draft),
+        PRIVATE_REPLAY_COMMIT,
+      );
+      this.privateReplay.writeInTransaction(
+        command.run.id,
+        privateReplayWrites,
         command.messagesToAppend.map((entry) => entry.draft),
       );
       if (command.continuation?.operation === "SET") {
@@ -449,6 +476,9 @@ export class SqliteRunExecutionStore
   async commitCandidateBoundary(
     command: RunCandidateBoundaryCommit,
   ): Promise<RunExecutionCommitResult> {
+    const privateReplayWrites = await this.privateReplay.validateWrites(
+      command.privateReplayWrites ?? [],
+    );
     const plan = VerificationPlanSchema.parse(command.verificationPlan);
     const parsedRun = CurrentAgentRunSchema.parse(command.run);
     if (parsedRun.status !== "VERIFYING" || command.state.status !== "VERIFYING") {
@@ -520,6 +550,12 @@ export class SqliteRunExecutionStore
       appendAgentMessageRecordsInTransaction(
         client,
         parsedRun.id,
+        command.messagesToAppend.map((entry) => entry.draft),
+        PRIVATE_REPLAY_COMMIT,
+      );
+      this.privateReplay.writeInTransaction(
+        parsedRun.id,
+        privateReplayWrites,
         command.messagesToAppend.map((entry) => entry.draft),
       );
       setContinuationInTransaction(

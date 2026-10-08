@@ -9,6 +9,7 @@ import type {
 } from "@caelush/protocol";
 
 import type { RunContinuationCheckpoint } from "../continuation/continuation.js";
+import type { PrivateReplayWrite } from "../../messages/private-replay.js";
 import type { DurableRunEventDraft } from "../../events/durable-run-event-draft.js";
 import type {
   AgentMessageRecord,
@@ -92,6 +93,8 @@ export type RunExecutionContinuationWrite =
  * leaves it alone", never "this transition clears it".
  */
 export interface RunExecutionCommit {
+  /** Already encrypted by the host. Written with the Assistant reference in this transaction. */
+  readonly privateReplayWrites?: readonly PrivateReplayWrite[];
   readonly run: AgentRun;
   readonly state?: AgentState;
   readonly expectedStateRevision: number | null;

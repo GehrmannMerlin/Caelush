@@ -144,3 +144,9 @@ export type {
   VerificationCommandSecurityPort,
   VerificationSecurityDecision,
 } from "./verification-admission.js";
+export {
+  createReplayProtection,
+  createInjectedReplayKeyProvider,
+  MAX_PRIVATE_REPLAY_BYTES,
+} from "./private-replay.js";
+export type { ReplayKey, ReplayKeyProvider } from "./private-replay.js";

@@ -1,3 +1,4 @@
+import { dirname, join } from "node:path";
 import type { AIProviderBinding, ApiAdapter, ModelDescriptorSourcePort } from "@caelush/ai";
 import type { ContextContributionRegistration } from "@caelush/agent";
 import type {
@@ -7,6 +8,7 @@ import type {
 } from "@caelush/coding-agent";
 import type { ClientModelSelection } from "@caelush/protocol";
 import { openCaelushStorage, toHostToolEffectsPort } from "@caelush/storage";
+import { createReplayProtection, type ReplayKeyProvider } from "@caelush/security";
 import { LocalRuntime, type ProcessSandboxProvider } from "@caelush/runtime";
 import {
   applyToolEffectsToAgentState,
@@ -54,8 +56,11 @@ import {
   backfillSessionWorkspaceOwnership,
   type WorkspaceBackfillSummary,
 } from "./workspaces/workspace-backfill.js";
+import { createHostReplayKeyProvider } from "./replay/replay-key-provider.js";
 
 export interface DaemonOptions {
+  /** Persistent trusted-host secret injection; never accepted over HTTP or placed in config JSON. */
+  readonly replayKeyProvider?: ReplayKeyProvider;
   readonly databasePath: string;
   readonly host?: string;
   readonly port?: number;
@@ -173,6 +178,12 @@ export async function startDaemon(options: DaemonOptions): Promise<DaemonHandle>
    */
   const storage = await openCaelushStorage({
     path: options.databasePath,
+    replayProtection: createReplayProtection(
+      createHostReplayKeyProvider({
+        keyFile: join(dirname(options.databasePath), "private-replay-keys", "master.v1.json"),
+        ...(options.replayKeyProvider === undefined ? {} : { injected: options.replayKeyProvider }),
+      }),
+    ),
     toolSettlementExtension: createCodingToolSettlementExtensionDecoder({
       effects: toHostToolEffectsPort({
         changesState: effectsChangeAgentState,

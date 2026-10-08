@@ -100,6 +100,8 @@ export class SqliteContextArtifactStore implements ContextArtifactStorePort {
       throw new RangeError("maxBytes must be a positive safe integer.");
     }
     const artifact = await this.readInternal(artifactId);
+    if (artifact?.sensitivity === "SENSITIVE")
+      throw new StorageError("Sensitive artifact projection is forbidden.");
     return artifact === undefined ? undefined : safeProjection(artifact.content, maxBytes);
   }
 

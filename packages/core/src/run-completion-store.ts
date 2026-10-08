@@ -71,6 +71,7 @@ export interface RunCompletionPersistencePort {
 
 /** The one atomic transition that opens a candidate's verification boundary. */
 export interface RunCandidateBoundaryCommit {
+  readonly privateReplayWrites?: import("@caelush/agent").RunExecutionCommit["privateReplayWrites"];
   readonly run: AgentRun;
   readonly state: AgentState;
   /** The plan this boundary binds, written in the same transaction. */
