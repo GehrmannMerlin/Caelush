@@ -27,6 +27,36 @@ const sourceInput = {
 } as unknown as ContextSourceInput;
 
 describe("Phase 7C Coding runtime/context providers", () => {
+  it("uses one current Git section and canonicalizes changed-path order", async () => {
+    let projection = {
+      sourceRef: "git:workspace_1",
+      version: "git-v1",
+      branch: "main",
+      changedPaths: ["zeta.ts", "alpha.ts"],
+      summary: "clean=false ahead=0 behind=0",
+    };
+    const provider = createGitStateContextSourceProvider({
+      port: {
+        async read() {
+          return projection;
+        },
+      },
+    });
+
+    const first = await provider.collect(sourceInput);
+    projection = {
+      ...projection,
+      sourceRef: "git:workspace_1/reopened",
+      version: "git-v2",
+      changedPaths: [...projection.changedPaths].reverse(),
+    };
+    const reopened = await provider.collect(sourceInput);
+
+    expect(reopened.items[0]?.id).toBe("coding.git-state:current");
+    expect(reopened.items[0]?.id).toBe(first.items[0]?.id);
+    expect(reopened.items[0]?.payload).toEqual(first.items[0]?.payload);
+  });
+
   it("maps already-bounded relevant file sections as retrievable references", async () => {
     const projection: RelevantFileProjection = {
       sections: [
@@ -183,17 +213,35 @@ describe("Phase 7C Coding runtime/context providers", () => {
   });
 
   it("is deterministic for the same injected clock and changes only with the clock", async () => {
-    let now = 1_700_000_000_000;
+    let now = Date.parse("2026-10-08T12:29:00.001Z");
     const provider = createTemporalContextSourceProvider({ clock: { now: () => now } });
 
     const one = await provider.collect(sourceInput);
+    now += 50_000;
     const two = await provider.collect(sourceInput);
     expect(one.items).toEqual(two.items);
     expect(one.providerVersion).toBe(two.providerVersion);
+    expect(one.items[0]?.payload).toMatchObject({
+      kind: "TEXT",
+      text: "Current UTC time (minute precision): 2026-10-08 12:29 UTC",
+    });
+    expect(one.items[0]?.payload.kind === "TEXT" && one.items[0].payload.text).not.toContain(
+      "timestampMs",
+    );
 
-    now += 86_400_000;
+    now = Date.parse("2026-10-08T12:30:00.000Z");
     const next = await provider.collect(sourceInput);
     expect(next.items).not.toEqual(one.items);
     expect(next.items[0]!.source.providerId).toBe(CODING_CONTEXT_SOURCE_IDS.temporal);
+
+    now = Date.parse("2026-10-08T23:59:59.999Z");
+    const beforeUtcDateChange = await provider.collect(sourceInput);
+    now = Date.parse("2026-10-09T00:00:00.000Z");
+    const afterUtcDateChange = await provider.collect(sourceInput);
+    expect(afterUtcDateChange.items).not.toEqual(beforeUtcDateChange.items);
+    expect(afterUtcDateChange.items[0]?.payload).toMatchObject({
+      kind: "TEXT",
+      text: "Current UTC time (minute precision): 2026-10-09 00:00 UTC",
+    });
   });
 });

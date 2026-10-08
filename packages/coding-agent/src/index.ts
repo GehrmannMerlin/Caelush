@@ -58,6 +58,7 @@ export {
   createWorkspaceContextSourceProvider,
 } from "./context/index.js";
 export type {
+  CodingRuntimeFact,
   CodingContextProviderOptions,
   CodingProjectDiagnostic,
   CodingWorkspaceScope,

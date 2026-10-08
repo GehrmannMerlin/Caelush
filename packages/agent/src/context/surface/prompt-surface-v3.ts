@@ -226,6 +226,15 @@ function sectionProviderNamespace(section: ContextDocumentSection): string {
 
 function modelLabel(id: string): string {
   if (id.startsWith("coding.relevant-files:")) return id.slice("coding.relevant-files:".length);
+  if (id.startsWith("coding.project-instructions:")) {
+    return `project instruction ${id
+      .slice("coding.project-instructions:".length)
+      .replace(/[\r\n\t]/g, " ")}`;
+  }
+  if (id.startsWith("coding.runtime-facts:")) {
+    const key = id.slice("coding.runtime-facts:".length);
+    return key === "unkeyed" ? "unkeyed runtime facts" : `runtime fact ${key}`;
+  }
   if (id.startsWith("authority.current.")) return id.slice("authority.current.".length);
   if (id.startsWith("coding.temporal:")) return "current time";
   if (id.startsWith("daemon.work-commentary-state:")) return "work progress";

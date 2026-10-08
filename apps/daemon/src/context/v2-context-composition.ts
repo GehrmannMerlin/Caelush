@@ -53,6 +53,7 @@ import type { AgentMessageProjectorRegistry } from "@caelush/agent";
 import { createBudgetedContextSummarizer } from "./context-compaction-composition.js";
 import { createDeterministicCompactionFactsProvider } from "./deterministic-compaction-facts-adapter.js";
 import { createWorkCommentaryContextProvider } from "./work-commentary-context-provider.js";
+import { projectModelResourceGovernance } from "./resource-governance-context.js";
 
 export interface DaemonV2ContextCompositionOptions {
   readonly input: RunAgentContextEngineInput;
@@ -416,10 +417,7 @@ function createAuthorityProvider(options: {
         plan === null
           ? "NO_VERIFICATION_PLAN"
           : `plan=${plan.id} checks=${plan.checks.map((check) => `${check.spec.kind}:${check.status}`).join(",")}`;
-      const resourceGovernance =
-        resources === null
-          ? "NO_RESOURCE_STATE"
-          : `${resources.mode}:${resources.resourceGuardState}:turns=${String(resources.agentTurnsConsumed)}:tools=${String(resources.toolOperationsConsumed)}`;
+      const resourceGovernance = projectModelResourceGovernance(resources);
       return {
         goal: options.input.identity.goal,
         changedFiles,

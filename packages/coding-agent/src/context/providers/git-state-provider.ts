@@ -12,7 +12,7 @@ import {
 } from "../provider-helpers.js";
 import { CODING_CONTEXT_SOURCE_IDS } from "../source-ids.js";
 
-const PROVIDER_VERSION = "git-state-v1";
+const PROVIDER_VERSION = "git-state-v2";
 const MAX_CHANGED_PATHS = 128;
 const MAX_PATH_BYTES = 4096;
 const MAX_SUMMARY_BYTES = 8 * 1024;
@@ -47,7 +47,7 @@ export function createGitStateContextSourceProvider(
       }
       assertBoundedText(projection.summary, MAX_SUMMARY_BYTES, "Git summary");
       const item = createCodingTextItem({
-        id: `coding.git-state:${projection.sourceRef}`,
+        id: "coding.git-state:current",
         providerId: CODING_CONTEXT_SOURCE_IDS.gitState,
         sourceRef: projection.sourceRef,
         version: projection.version,
@@ -61,7 +61,7 @@ export function createGitStateContextSourceProvider(
         whyLoaded: "bounded Git state reference",
         text: stableJson({
           branch: projection.branch ?? null,
-          changedPaths: projection.changedPaths,
+          changedPaths: [...projection.changedPaths].sort(comparePaths),
           summary: projection.summary,
         }),
         input,
@@ -70,4 +70,8 @@ export function createGitStateContextSourceProvider(
       return createCodingSourceResult(CODING_CONTEXT_SOURCE_IDS.gitState, PROVIDER_VERSION, [item]);
     },
   });
+}
+
+function comparePaths(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }

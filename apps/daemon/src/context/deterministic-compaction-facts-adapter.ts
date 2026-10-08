@@ -5,6 +5,7 @@ import {
 } from "@caelush/agent";
 import { projectCodingCompactionFacts, type CodingCompactionFacts } from "@caelush/coding-agent";
 import type { CaelushStorage } from "@caelush/storage";
+import { projectModelResourceGovernance } from "./resource-governance-context.js";
 
 type DurableFactsStorage = Pick<
   CaelushStorage,
@@ -47,10 +48,7 @@ export function createDeterministicCompactionFactsProvider(options: {
           plan === null
             ? "NO_VERIFICATION_PLAN"
             : `plan=${plan.id} checks=${plan.checks.map((check) => `${check.spec.kind}:${check.status}`).join(",")}`,
-        resourceGovernance:
-          resources === null
-            ? "NO_RESOURCE_STATE"
-            : `${resources.mode}:${resources.resourceGuardState}:turns=${String(resources.agentTurnsConsumed)}:tools=${String(resources.toolOperationsConsumed)}`,
+        resourceGovernance: projectModelResourceGovernance(resources),
       });
     },
   });

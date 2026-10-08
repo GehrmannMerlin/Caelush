@@ -11,7 +11,7 @@ import {
 } from "../provider-helpers.js";
 import { CODING_CONTEXT_SOURCE_IDS } from "../source-ids.js";
 
-const PROVIDER_VERSION = "project-metadata-v1";
+const PROVIDER_VERSION = "project-metadata-v2";
 const MAX_METADATA_BYTES = 32 * 1024;
 
 export interface ProjectMetadataContextSourceProviderOptions extends CodingContextProviderOptions {
@@ -32,7 +32,7 @@ export function createProjectMetadataContextSourceProvider(
       const text = stableJson(projection.metadata);
       assertBoundedText(text, MAX_METADATA_BYTES, "Project metadata");
       const item = createCodingTextItem({
-        id: `coding.project-metadata:${projection.sourceRef}`,
+        id: "coding.project-metadata:current",
         providerId: CODING_CONTEXT_SOURCE_IDS.projectMetadata,
         sourceRef: projection.sourceRef,
         version: projection.version,

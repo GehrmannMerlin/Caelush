@@ -20,7 +20,13 @@ export interface CodingWorkspacePort {
 export interface CodingRuntimeFactsProjection {
   readonly sourceRef: string;
   readonly version: string;
-  readonly facts: readonly string[];
+  readonly facts: readonly (CodingRuntimeFact | string)[];
+}
+
+/** A fact with an explicit semantic slot, stable independently of collection order. */
+export interface CodingRuntimeFact {
+  readonly key: string;
+  readonly value: string;
 }
 
 export interface CodingRuntimeFactsPort {

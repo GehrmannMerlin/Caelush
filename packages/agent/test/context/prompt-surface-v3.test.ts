@@ -219,4 +219,39 @@ describe("Prompt Surface V3 semantic sections", () => {
     expect(delta).not.toContain("step-secret");
     expect(delta).toContain("work progress");
   });
+
+  it("labels separate project instruction Sections with safe relative paths", () => {
+    const instructions: ContextDocument = {
+      sections: [
+        {
+          id: "coding.project-instructions:AGENTS.md",
+          authority: "PROJECT_INSTRUCTION",
+          sourceRef: "coding.project-instructions@v1:project/AGENTS.md",
+          cacheStability: "SEMI_STABLE",
+          priorityClass: "HIGH",
+          freshness: "CURRENT",
+          sensitivity: "INTERNAL",
+          text: "root guidance",
+        },
+        {
+          id: "coding.project-instructions:packages/app/AGENTS.override.md",
+          authority: "PROJECT_INSTRUCTION",
+          sourceRef: "coding.project-instructions@v1:project/packages/app/AGENTS.override.md",
+          cacheStability: "SEMI_STABLE",
+          priorityClass: "HIGH",
+          freshness: "CURRENT",
+          sensitivity: "INTERNAL",
+          text: "nested guidance",
+        },
+      ],
+    };
+    const rendered = renderPromptSurfaceRecord(
+      "BASELINE",
+      diffPromptSurfaceSections([], createPromptSurfaceSectionStates(instructions), true).updates,
+    );
+
+    expect(rendered).toContain('label="project instruction AGENTS.md"');
+    expect(rendered).toContain('label="project instruction packages/app/AGENTS.override.md"');
+    expect(rendered).not.toContain("C:\\");
+  });
 });

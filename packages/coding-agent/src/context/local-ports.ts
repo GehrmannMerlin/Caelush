@@ -60,13 +60,16 @@ export function createLocalCodingContextPorts(
         const status = await readGitStatus(opened, input.signal);
         return {
           sourceRef: `runtime:${options.workspace.id}`,
-          version: "local-runtime-v1",
+          version: "local-runtime-v2",
           facts: Object.freeze([
-            `runtimeKind=local`,
-            `workspace=${options.workspace.id}`,
-            `gitRepository=${String(status !== undefined)}`,
-            `gitClean=${status === undefined ? "unknown" : String(status.clean)}`,
-            `changedPathCount=${String(status?.entries.length ?? 0)}`,
+            Object.freeze({ key: "runtimeKind", value: "local" }),
+            Object.freeze({ key: "workspace", value: options.workspace.id }),
+            Object.freeze({ key: "gitRepository", value: String(status !== undefined) }),
+            Object.freeze({
+              key: "gitClean",
+              value: status === undefined ? "unknown" : String(status.clean),
+            }),
+            Object.freeze({ key: "changedPathCount", value: String(status?.entries.length ?? 0) }),
           ]),
         };
       },
@@ -104,9 +107,11 @@ export function createLocalCodingContextPorts(
         const status = await readGitStatus(opened, input.signal);
         return {
           sourceRef: `git:${options.workspace.id}`,
-          version: "runtime-git-v1",
+          version: "runtime-git-v2",
           ...(status === undefined || status.branch === undefined ? {} : { branch: status.branch }),
-          changedPaths: Object.freeze(status?.entries.map((entry) => entry.path) ?? []),
+          changedPaths: Object.freeze(
+            (status?.entries.map((entry) => entry.path) ?? []).sort(comparePaths),
+          ),
           summary:
             status === undefined
               ? "repository=none clean=unknown ahead=0 behind=0"
@@ -115,6 +120,10 @@ export function createLocalCodingContextPorts(
       },
     },
   });
+}
+
+function comparePaths(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 type LocalGitStatus = Awaited<ReturnType<RuntimeWorkspaceScope["git"]["status"]>>;

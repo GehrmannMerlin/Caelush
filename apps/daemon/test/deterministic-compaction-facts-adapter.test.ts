@@ -112,7 +112,7 @@ describe("Phase 8C Daemon deterministic facts composition", () => {
     expect(facts.pendingApprovals).toEqual(["approval-1:toolinv-approval:HIGH"]);
     expect(facts.verificationState).toContain("plan=plan-1");
     expect(facts.verificationState).toContain("TASK:FAILED");
-    expect(facts.resourceGovernance).toBe("ADAPTIVE:NONE:turns=2:tools=3");
+    expect(facts.resourceGovernance).toBe("ADAPTIVE:NONE");
     expect(JSON.stringify(facts)).not.toContain("SECRET RAW OBSERVATION");
     expect(JSON.stringify(facts)).not.toContain("artifact-secret");
   });

@@ -5,12 +5,11 @@ import {
   createCodingSourceResult,
   createCodingTextItem,
   resolveCodingTokenEstimator,
-  stableJson,
   type CodingContextProviderOptions,
 } from "../provider-helpers.js";
 import { CODING_CONTEXT_SOURCE_IDS } from "../source-ids.js";
 
-const PROVIDER_VERSION = "temporal-v1";
+const PROVIDER_VERSION = "temporal-v2";
 
 export interface TemporalContextSourceProviderOptions extends CodingContextProviderOptions {
   readonly clock: ContextClock;
@@ -27,7 +26,7 @@ export function createTemporalContextSourceProvider(
       if (!Number.isSafeInteger(now)) {
         throw new TypeError("Context clock must return a safe integer timestamp.");
       }
-      const utc = new Date(now).toISOString();
+      const utcMinute = new Date(now).toISOString().slice(0, 16).replace("T", " ");
       const item = createCodingTextItem({
         id: "coding.temporal:current",
         providerId: CODING_CONTEXT_SOURCE_IDS.temporal,
@@ -41,7 +40,7 @@ export function createTemporalContextSourceProvider(
         freshness: "CURRENT",
         sensitivity: "INTERNAL",
         whyLoaded: "injected current time anchor",
-        text: stableJson({ date: utc.slice(0, 10), timestampMs: now, utc }),
+        text: `Current UTC time (minute precision): ${utcMinute} UTC`,
         input,
         tokenEstimator,
       });

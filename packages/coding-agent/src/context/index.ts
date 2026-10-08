@@ -2,6 +2,7 @@ export { CODING_CONTEXT_SOURCE_IDS } from "./source-ids.js";
 export { projectCodingCompactionFacts } from "./compaction/coding-compaction-facts.js";
 export type { CodingCompactionFacts } from "./compaction/coding-compaction-facts.js";
 export type {
+  CodingRuntimeFact,
   CodingRuntimeFactsProjection,
   CodingRuntimeFactsPort,
   CodingWorkspaceDescriptor,

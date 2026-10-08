@@ -18,6 +18,48 @@ const WORKSPACE: WorkspaceRef = {
 };
 
 describe("Phase 7F local Coding Context ports", () => {
+  it("selects an instruction override and falls back when the override is removed", async () => {
+    const content: Record<string, string> = {
+      "AGENTS.md": "Base instructions.",
+      "AGENTS.override.md": "Override instructions.",
+    };
+    const runtime: Runtime = {
+      kind: "local",
+      supports: () => true,
+      async openWorkspace() {
+        return fakeScope(content);
+      },
+    };
+    const ports = createLocalCodingContextPorts({ runtime, workspace: WORKSPACE });
+    const input = {
+      identity: {
+        runId: "run_phase_7f" as never,
+        sessionId: "session_phase_7f" as never,
+        goal: "inspect instruction precedence",
+      },
+      signal: new AbortController().signal,
+    };
+
+    const overridden = await ports.projectInstructions.load(input);
+    delete content["AGENTS.override.md"];
+    const fallback = await ports.projectInstructions.load(input);
+
+    expect(overridden.entries).toEqual([
+      expect.objectContaining({
+        relativePath: "AGENTS.override.md",
+        kind: "OVERRIDE",
+        content: "Override instructions.",
+      }),
+    ]);
+    expect(fallback.entries).toEqual([
+      expect.objectContaining({
+        relativePath: "AGENTS.md",
+        kind: "AGENTS",
+        content: "Base instructions.",
+      }),
+    ]);
+  });
+
   it("keeps instructions ordered and excludes ignored, sensitive, and escaped files", async () => {
     const content: Record<string, string> = {
       ".gitignore": "ignored.ts\nsrc/ignored.ts\n",
@@ -86,11 +128,11 @@ describe("Phase 7F local Coding Context ports", () => {
     });
 
     expect(projection.facts).toEqual([
-      "runtimeKind=local",
-      `workspace=${WORKSPACE.id}`,
-      "gitRepository=false",
-      "gitClean=unknown",
-      "changedPathCount=0",
+      { key: "runtimeKind", value: "local" },
+      { key: "workspace", value: WORKSPACE.id },
+      { key: "gitRepository", value: "false" },
+      { key: "gitClean", value: "unknown" },
+      { key: "changedPathCount", value: "0" },
     ]);
 
     const git = await ports.gitState.read({
@@ -104,7 +146,7 @@ describe("Phase 7F local Coding Context ports", () => {
 
     expect(git).toEqual({
       sourceRef: `git:${WORKSPACE.id}`,
-      version: "runtime-git-v1",
+      version: "runtime-git-v2",
       changedPaths: [],
       summary: "repository=none clean=unknown ahead=0 behind=0",
     });

@@ -11,7 +11,7 @@ import type { VerificationCheckStatus } from "@caelush/protocol";
 import type { CaelushStorage } from "@caelush/storage";
 
 const SOURCE_ID = createContextSourceId("daemon.work-commentary-state");
-const SOURCE_VERSION = "work-commentary-state-v1";
+const SOURCE_VERSION = "work-commentary-state-v2";
 const MAX_RECENT_TOOL_RESULTS = 6;
 const MAX_CONTEXT_BYTES = 4 * 1024;
 
@@ -126,9 +126,7 @@ export function createWorkCommentaryContextProvider(options: {
         MAX_CONTEXT_BYTES,
       );
       const item = createContextSourceItem({
-        id: createContextItemId(
-          `daemon.work-commentary-state:${input.identity.runId}:${input.turn.stepId}`,
-        ),
+        id: createContextItemId(`daemon.work-commentary-state:${input.identity.runId}:current`),
         type: "daemon.work-commentary-state",
         source: {
           providerId: SOURCE_ID,
