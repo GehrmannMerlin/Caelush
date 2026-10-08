@@ -12,6 +12,8 @@ export interface RepresentativeCodingScenarioManifest {
   readonly modelRef: { readonly providerId: "deepseek"; readonly modelId: "deepseek-reasoner" };
   readonly api: "openai-compatible-chat";
   readonly reasoningLevel: "HIGH";
+  readonly contextWindowTokens: 64_000 | 16_384;
+  readonly offlineCompactionContextWindowTokens?: 8_192;
   readonly cacheSettings: {
     readonly retention: "LONG";
     readonly key: "caelush-c5-representative-v1";
@@ -131,6 +133,8 @@ function fingerprintFixture(files: Readonly<Record<string, string>>): string {
 
 function manifest(input: {
   readonly scenarioId: RepresentativeScenarioId;
+  readonly contextWindowTokens: 64_000 | 16_384;
+  readonly offlineCompactionContextWindowTokens?: 8_192;
   readonly expectedTaskType: string;
   readonly expectedFileChanges: readonly string[];
   readonly expectedVerification: readonly string[];
@@ -144,6 +148,10 @@ function manifest(input: {
     modelRef: MODEL_REF,
     api: "openai-compatible-chat",
     reasoningLevel: "HIGH",
+    contextWindowTokens: input.contextWindowTokens,
+    ...(input.offlineCompactionContextWindowTokens === undefined
+      ? {}
+      : { offlineCompactionContextWindowTokens: input.offlineCompactionContextWindowTokens }),
     cacheSettings: CACHE_SETTINGS,
     expectedTaskType: input.expectedTaskType,
     expectedFileChanges: Object.freeze([...input.expectedFileChanges]),
@@ -161,6 +169,7 @@ export const representativeCodingScenarioManifests: readonly RepresentativeCodin
   Object.freeze([
     manifest({
       scenarioId: "SCENARIO_A_SIMPLE_LOGIN_EDIT",
+      contextWindowTokens: 64_000,
       expectedTaskType: "SIMPLE_FILE_EDIT",
       expectedFileChanges: ["src/login.html", "src/login.css"],
       expectedVerification: ["updated login markup and focus styling"],
@@ -169,6 +178,7 @@ export const representativeCodingScenarioManifests: readonly RepresentativeCodin
     }),
     manifest({
       scenarioId: "SCENARIO_B_MULTI_FILE_FEATURE",
+      contextWindowTokens: 64_000,
       expectedTaskType: "MULTI_FILE_BROWSER_FEATURE",
       expectedFileChanges: ["src/app.js", "src/utils.js"],
       expectedVerification: ["node syntax checks", "Git status contains both edits"],
@@ -177,6 +187,8 @@ export const representativeCodingScenarioManifests: readonly RepresentativeCodin
     }),
     manifest({
       scenarioId: "SCENARIO_C_LONG_TASK_RECOVERY",
+      contextWindowTokens: 64_000,
+      offlineCompactionContextWindowTokens: 8_192,
       expectedTaskType: "LONG_TASK_RECOVERY_AND_CROSS_RUN",
       expectedFileChanges: ["src/utils.js"],
       expectedVerification: [
@@ -205,6 +217,10 @@ export function fingerprintRepresentativeScenario(
     modelRef: value.modelRef,
     api: value.api,
     reasoningLevel: value.reasoningLevel,
+    contextWindowTokens: value.contextWindowTokens,
+    ...(value.offlineCompactionContextWindowTokens === undefined
+      ? {}
+      : { offlineCompactionContextWindowTokens: value.offlineCompactionContextWindowTokens }),
     cacheSettings: value.cacheSettings,
     expectedTaskType: value.expectedTaskType,
     expectedFileChanges: value.expectedFileChanges,

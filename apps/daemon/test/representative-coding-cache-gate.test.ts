@@ -69,7 +69,7 @@ afterEach(async () => {
 });
 
 interface ScriptedTurn {
-  readonly kind: "TOOL" | "ANSWER" | "VERIFICATION" | "SUMMARY";
+  readonly kind: "TOOL" | "ANSWER" | "VERIFICATION";
   readonly id?: string;
   readonly toolName?: string;
   readonly rawArguments?: string;
@@ -79,11 +79,14 @@ interface ScriptedTurn {
   readonly cacheHitTokens?: number;
 }
 
-function deepSeekModelSource(): ModelDescriptorSourcePort {
+function deepSeekModelSource(
+  contextWindowTokens = 64_000,
+  maxOutputTokens = 16_384,
+): ModelDescriptorSourcePort {
   const descriptor: ModelDescriptor = {
     ref: { provider: "deepseek", model: MODEL_ID },
     api: API_ID,
-    limits: { contextWindowTokens: 64_000, maxOutputTokens: 16_384 },
+    limits: { contextWindowTokens, maxOutputTokens },
     capabilities: {
       streaming: "SUPPORTED",
       toolCalling: "SUPPORTED",
@@ -227,26 +230,6 @@ function verifier(usage: Pick<ScriptedTurn, "inputTokens" | "cacheHitTokens"> = 
   };
 }
 
-function summary(): ScriptedTurn {
-  return {
-    kind: "SUMMARY",
-    reasoning: `${FIXTURE_REASONING_PREFIX}summary`,
-    inputTokens: 16_000,
-    cacheHitTokens: 0,
-    text: JSON.stringify({
-      goal: "Normalize whitespace-only names in the welcome utility.",
-      constraints: ["Preserve the utility module API."],
-      completedWork: ["Inspected the project and verified the updated utility syntax."],
-      inProgress: [],
-      blocked: [],
-      importantDiscoveries: ["Empty normalized names need a friendly fallback."],
-      keyDecisions: ["Keep the existing formatWelcome export."],
-      criticalReferences: ["src/utils.js"],
-      nextIntent: "Continue from the verified utility behavior.",
-    }),
-  };
-}
-
 async function prepareWorkspace(scenarioId: RepresentativeScenarioId): Promise<{
   readonly workspacePath: string;
   readonly databasePath: string;
@@ -311,6 +294,7 @@ async function openStore(databasePath: string): Promise<CaelushStorage> {
 function composeFixture(input: {
   readonly explicitPaths: readonly string[];
   readonly publicEvents: unknown[];
+  readonly contextWindowTokens?: number;
   readonly failAfterToolResults?: number;
   readonly toolResultCount?: { value: number };
   readonly clock: { now(): ReturnType<typeof createTimestampMs> };
@@ -338,7 +322,7 @@ function composeFixture(input: {
         input.publicEvents.push(event);
       },
     },
-    modelSources: [deepSeekModelSource()],
+    modelSources: [deepSeekModelSource(input.contextWindowTokens)],
     providers: [
       {
         provider: "deepseek",
@@ -1050,11 +1034,11 @@ describe("REPRESENTATIVE_CODING production cache gate", () => {
       toolTurn("c5-c-9", "exec_command", '{"cmd":"node --check src/utils.js"}', 9),
       answer("The empty-name behavior is updated and the source syntax check passed.", 10),
       verifier(),
-      summary(),
-      answer("The compacted history retains the verified utility outcome.", 12, {
+      answer("The verified greeting utility keeps its API and handles blank names safely.", 11, {
         inputTokens: 16_000,
         cacheHitTokens: 0,
       }),
+      verifier(),
     ];
     provider = await scriptedProvider(turns, manifest);
     const publicEvents: unknown[] = [];
@@ -1069,6 +1053,7 @@ describe("REPRESENTATIVE_CODING production cache gate", () => {
     composition = await composeFixture({
       explicitPaths: ["src/utils.js"],
       publicEvents,
+      contextWindowTokens: manifest.contextWindowTokens,
       failAfterToolResults: 2,
       toolResultCount,
       clock,
@@ -1088,6 +1073,7 @@ describe("REPRESENTATIVE_CODING production cache gate", () => {
     composition = await composeFixture({
       explicitPaths: ["src/utils.js"],
       publicEvents,
+      contextWindowTokens: manifest.contextWindowTokens,
       toolResultCount,
       clock,
     });
@@ -1095,6 +1081,15 @@ describe("REPRESENTATIVE_CODING production cache gate", () => {
     const recoveredUsageBefore = await storage.providerInvocationUsage.listByRun(run.id);
     expect(recoveredUsageBefore).toHaveLength(2);
     const recovered = await composition.controller.recover(run.id);
+    if (recovered.status !== "TERMINAL") {
+      throw new Error(
+        `C5 first-run recovery diagnostics: ${JSON.stringify({
+          status: recovered.status,
+          error: recovered.status === "FAILED" ? recovered.error : undefined,
+          requestCount: provider.requests.length,
+        })}`,
+      );
+    }
     expect(recovered.status).toBe("TERMINAL");
     expect(recovered.run.status).toBe("COMPLETED");
     expect(provider.requests).toHaveLength(11);
@@ -1180,22 +1175,113 @@ describe("REPRESENTATIVE_CODING production cache gate", () => {
       composition.messages.codecs.encode(crossRunUser),
     ]);
     expect(provider.requests).toHaveLength(11);
+    const crossRunResult = await composition.controller.start(crossRun.id);
+    expect(crossRunResult.status).toBe("TERMINAL");
+    expect(crossRunResult.run.status).toBe("COMPLETED");
+    const crossRunRequestIndex = 11;
+    expect(provider.requests).toHaveLength(crossRunRequestIndex + 2);
+    const crossRunUsage = await storage.providerInvocationUsage.listByRun(crossRun.id);
+    expect(crossRunUsage).toHaveLength(2);
+    expect(crossRunUsage.filter(({ purpose }) => purpose === "VERIFICATION_LLM")).toHaveLength(1);
+    expect(provider.requests.length).toBeLessThanOrEqual(manifest.maxModelCalls);
+    const scenarioRecords = [...firstRunUsage, ...crossRunUsage];
+    expect(new Set(scenarioRecords.map(({ callId }) => callId)).size).toBe(scenarioRecords.length);
+    expect(
+      scenarioRecords.reduce((total, record) => total + (record.cacheMissInputTokens ?? 0), 0),
+    ).toBeLessThanOrEqual(manifest.maxMissTokens);
+    const trajectory = safeNumericTrajectory(provider.requests, scenarioRecords);
+    expect(trajectory).toHaveLength(provider.requests.length);
+    expect(trajectory.at(-2)?.cacheHitTokens).toBe(0);
 
-    const historySnapshot = await composition.messages.conversation.loadSnapshot({
+    const crossRunMetrics = (await composition.contextUsage.getContextUsage(String(crossRun.id)))
+      ?.promptCache?.metricsV2;
+    expect(crossRunMetrics?.fullRun.allPurposes.requestCount).toBe(crossRunUsage.length);
+    expect(crossRunMetrics?.surfaceDelta.unchangedSectionReemissionCount).toBe(0);
+    expect(provider.requests[crossRunRequestIndex]?.body["max_tokens"]).toBe(2_048);
+    expect(provider.requests[crossRunRequestIndex + 1]?.body["max_tokens"]).toBe(8_192);
+
+    const crossRunMessages = provider.requests[crossRunRequestIndex]?.body["messages"] as
+      readonly Record<string, unknown>[] | undefined;
+    expect(crossRunMessages).toBeDefined();
+    const crossRunMessageText = (crossRunMessages ?? [])
+      .filter((message) => message.role === "user")
+      .map((message) => (typeof message.content === "string" ? message.content : ""))
+      .join("\n");
+    expect(crossRunMessageText).toContain(secondGoal);
+    const toolResultIndex =
+      crossRunMessages?.findIndex(
+        (message) => message.role === "tool" && message.tool_call_id === "c5-c-9",
+      ) ?? -1;
+    expect(toolResultIndex).toBeGreaterThan(0);
+    const toolResult = crossRunMessages?.[toolResultIndex];
+    const precedingAssistant = (crossRunMessages ?? [])
+      .slice(0, toolResultIndex)
+      .reverse()
+      .find((message) => message.role === "assistant");
+    const precedingCalls = Array.isArray(precedingAssistant?.tool_calls)
+      ? (precedingAssistant.tool_calls as readonly Record<string, unknown>[])
+      : [];
+    expect(precedingCalls.some((call) => call.id === toolResult?.tool_call_id)).toBe(true);
+    const followUpUserIndex = (crossRunMessages ?? []).findIndex(
+      (message, index) =>
+        index > toolResultIndex &&
+        message.role === "user" &&
+        typeof message.content === "string" &&
+        message.content.includes(secondGoal),
+    );
+    expect(followUpUserIndex).toBeGreaterThan(toolResultIndex);
+
+    const conversation = await composition.messages.conversation.loadSnapshot({
       sessionId: session.id,
       currentRunId: crossRun.id,
     });
-    const runTurn = historySnapshot.turns.find(({ runId }) => runId === crossRun.id);
-    const latestUser = runTurn?.messages
-      .filter((stored) => stored.message.type === "USER")
-      .at(-1)?.message;
-    if (latestUser?.type !== "USER") {
-      throw new Error("C5 compaction fixture has no durable current user input.");
-    }
+    expect(conversation.turns.map(({ runId }) => runId)).toContain(run.id);
+    expect(conversation.turns.map(({ runId }) => runId)).toContain(crossRun.id);
+    expect(
+      conversation.turns
+        .find(({ runId }) => runId === crossRun.id)
+        ?.messages.some(({ message }) => message.type === "ASSISTANT"),
+    ).toBe(true);
+    const crossSurface = await readSurface(crossRun.id);
+    const currentEpoch = await storage.promptSurface.getCurrent(crossRun.id);
+    expect(currentEpoch?.resetReason).toBe("INITIAL");
+    expect(crossSurface.records?.every(({ runId }) => runId === crossRun.id)).toBe(true);
+    await assertSyntheticUsageAndSafeReport(run.id, manifest, 11);
+    await assertSyntheticUsageAndSafeReport(crossRun.id, manifest, crossRunUsage.length, false, 1);
+
+    // The controlled compaction fixture uses a separate offline-only Context budget and a fresh
+    // Run surface. It follows the completed coding Runs, so the completed same-session history is
+    // eligible for a real production Context checkpoint without inserting a Step into an active Run.
+    const compactionRun = makeRun(session.id, {
+      createdAt: clock.now(),
+      goal: "Exercise the controlled offline compaction recovery boundary.",
+      workspace: fixture.workspaceRef,
+      model: { provider: "deepseek", model: MODEL_ID },
+      reasoningLevel: "HIGH",
+      runtime: { id: "local", kind: "local" },
+      permissionProfile: "FULL_ACCESS",
+      approvalPolicy: "NEVER_ASK",
+      limits: { maxSteps: 4, maxToolCalls: 2, timeoutMs: 90_000 },
+    });
+    await storage.runs.insert(compactionRun);
+    const compactionUser = composition.messages.factory.createUser({
+      runId: compactionRun.id,
+      sessionId: compactionRun.sessionId,
+      conversationTurnId: composition.messages.turns.forRun(compactionRun.id),
+      source: userMessageSource("FOLLOW_UP"),
+      content: [agentTextPart(compactionRun.goal)],
+    });
+    await composition.messages.conversation.append(compactionRun.id, [
+      composition.messages.codecs.encode(compactionUser),
+    ]);
+    const compactionConversation = await composition.messages.conversation.loadSnapshot({
+      sessionId: session.id,
+      currentRunId: compactionRun.id,
+    });
     const contextEngine = createDaemonV2ContextEngine({
       input: {
-        run: crossRun,
-        identity: composition.resolveTurnIdentity(crossRun),
+        run: compactionRun,
+        identity: composition.resolveTurnIdentity(compactionRun),
         runMode: "EXECUTE",
         baseSystemPrompt:
           "Use repository instructions and current file evidence. Keep edits minimal and verify results with Tools.",
@@ -1225,200 +1311,76 @@ describe("REPRESENTATIVE_CODING production cache gate", () => {
       clock,
       activeToolNames: composition.toolRegistry.names(),
     });
-    const modelDescriptor = composition.ai.models.resolve(crossRun.model);
-    // The offline fixture lowers only the Context budget; representative task content stays small.
-    const model: ModelDescriptor = {
-      ...modelDescriptor,
-      limits: { contextWindowTokens: 8_192, maxOutputTokens: 2_048 },
+    const compactionModel: ModelDescriptor = {
+      ...composition.ai.models.resolve(compactionRun.model),
+      limits: {
+        contextWindowTokens: manifest.offlineCompactionContextWindowTokens ?? 8_192,
+        maxOutputTokens: 2_048,
+      },
     };
-    const priorSteps = await storage.steps.listByRun(crossRun.id);
-    const postCompactionStep = makeStep(crossRun.id, {
+    const compactionStep = makeStep(compactionRun.id, {
       id: createStepId(),
-      sequence: Math.max(0, ...priorSteps.map(({ sequence }) => sequence)) + 1,
+      sequence: 1,
       startedAt: clock.now(),
     });
-    await storage.steps.insert(postCompactionStep);
-    const compactedContext = await contextEngine.prepare({
-      identity: composition.resolveTurnIdentity(crossRun),
-      turn: { stepId: postCompactionStep.id, sequence: postCompactionStep.sequence },
-      conversation: historySnapshot,
-      input: { kind: "USER_INPUT", userMessageId: latestUser.id },
-      model,
+    await storage.steps.insert(compactionStep);
+    await contextEngine.prepare({
+      identity: composition.resolveTurnIdentity(compactionRun),
+      turn: { stepId: compactionStep.id, sequence: compactionStep.sequence },
+      conversation: compactionConversation,
+      input: { kind: "USER_INPUT", userMessageId: compactionUser.id },
+      model: compactionModel,
       tools: composition.toolRegistry.modelSpecs(),
       mode: "FORCED_RECOVERY",
       signal: new AbortController().signal,
     });
-    const postCompactionSurface = await readSurface(crossRun.id);
-    const postCompactionEpoch = await storage.promptSurface.getCurrent(crossRun.id);
-    if (postCompactionEpoch?.resetReason !== "COMPACTION_COMMITTED") {
-      const contextUsage = await composition.contextUsage.getContextUsage(String(crossRun.id));
-      throw new Error(
-        `C5 safe compaction diagnostics: ${JSON.stringify({
-          resetReason: postCompactionEpoch?.resetReason,
-          createdStepSequence: postCompactionEpoch?.createdStepSequence,
-          currentSequence: postCompactionEpoch?.currentSequence,
-          recordKinds: postCompactionSurface.records?.map(({ kind }) => kind),
-          compactionCount: contextUsage?.compactionCount,
-          compactionRecords: (await storage.providerInvocationUsage.listByRun(crossRun.id)).filter(
-            ({ purpose }) => purpose === "CONTEXT_COMPACTION",
-          ).length,
-          requestCount: provider.requests.length,
-        })}`,
-      );
-    }
-    expect(postCompactionEpoch?.resetReason).toBe("COMPACTION_COMMITTED");
-    expect(postCompactionSurface.records?.map(({ kind }) => kind)).toEqual(["BASELINE"]);
-    const postCompactionContextUsage = await composition.contextUsage.getContextUsage(
-      String(crossRun.id),
-    );
-    expect(postCompactionContextUsage?.compactionCount).toBe(1);
-    expect(postCompactionContextUsage?.promptCache?.resetReason).toBe("COMPACTION_COMMITTED");
-
-    const compactionRecordsBeforeMainTurn = (
-      await storage.providerInvocationUsage.listByRun(crossRun.id)
-    ).filter(({ purpose }) => purpose === "CONTEXT_COMPACTION");
-    const compactionProviderCalls = compactionRecordsBeforeMainTurn.length;
-    expect(compactionProviderCalls).toBe(0);
-    expect(provider.requests).toHaveLength(11 + compactionProviderCalls);
-
-    await storage.budget.admitLLM({
-      run: crossRun,
-      step: postCompactionStep,
-      admission: { configuredMaxOutputTokens: 2_048 },
-    });
-    const postCompactionTurn = await composition.modelTurnExecutor.execute({
-      identity: composition.resolveTurnIdentity(crossRun),
-      turn: { stepId: postCompactionStep.id, sequence: postCompactionStep.sequence },
-      model: modelDescriptor,
-      request: {
-        model: crossRun.model,
-        messages: compactedContext.messages,
-        tools: composition.toolRegistry.modelSpecs(),
-        settings: {
-          maxOutputTokens: 2_048,
-          temperature: 0.2,
-          reasoning: { level: "HIGH" },
-          cache: { retention: "LONG", key: "caelush-c5-representative-v1" },
-        },
-      },
-      selectedMessageIds: compactedContext.selectedMessageIds,
-      selectedAssistantReplaySources: compactedContext.selectedAssistantReplaySources,
-      signal: new AbortController().signal,
-    });
-    if (postCompactionTurn.kind === "FAILED") {
-      throw new Error(`C5 post-compaction Gateway failed with ${postCompactionTurn.error.code}.`);
-    }
-    expect(postCompactionTurn.kind).toBe("COMPLETED");
-    if (postCompactionTurn.kind !== "COMPLETED") {
-      throw new Error("Synthetic post-compaction Gateway turn did not complete.");
-    }
-    await storage.budget.settleLLM({
-      runId: crossRun.id,
-      stepId: postCompactionStep.id,
-      providerCallId: postCompactionTurn.result.callId,
-      usage: postCompactionTurn.result.usage,
-      settledAt: clock.now(),
-    });
-    await storage.steps.update({
-      ...postCompactionStep,
-      status: "COMPLETED",
-      finishedAt: clock.now(),
-    });
-    const postCompactionRequestIndex = 11 + compactionProviderCalls;
-    expect(provider.requests).toHaveLength(postCompactionRequestIndex + 1);
-    const afterCompactionRecords = await storage.providerInvocationUsage.listByRun(crossRun.id);
-    expect(afterCompactionRecords).toHaveLength(1 + compactionProviderCalls);
-    expect(provider.requests.length).toBeLessThanOrEqual(manifest.maxModelCalls);
-    const scenarioRecords = [...firstRunUsage, ...afterCompactionRecords];
-    expect(new Set(scenarioRecords.map(({ callId }) => callId)).size).toBe(scenarioRecords.length);
+    const compactionSurface = await readSurface(compactionRun.id);
+    const compactionEpoch = await storage.promptSurface.getCurrent(compactionRun.id);
+    expect(compactionEpoch?.resetReason).toBe("COMPACTION_COMMITTED");
+    expect(compactionSurface.records?.map(({ kind }) => kind)).toEqual(["BASELINE"]);
     expect(
-      scenarioRecords.reduce((total, record) => total + (record.cacheMissInputTokens ?? 0), 0),
-    ).toBeLessThanOrEqual(manifest.maxMissTokens);
-    const trajectory = safeNumericTrajectory(provider.requests, scenarioRecords);
-    expect(trajectory).toHaveLength(provider.requests.length);
-    expect(trajectory.at(-1)?.cacheHitTokens).toBe(0);
-    const postCompactionMainRecord = afterCompactionRecords
-      .filter(({ purpose }) => purpose === "MAIN_AGENT")
-      .at(-1);
-    expect(postCompactionMainRecord?.status).toBe("COMPLETE");
-    expect(postCompactionMainRecord?.cacheHitInputTokens).toBe(0);
+      (await composition.contextUsage.getContextUsage(String(compactionRun.id)))?.compactionCount,
+    ).toBe(1);
+    const compactionProviderRecords = await storage.providerInvocationUsage.listByRun(
+      compactionRun.id,
+    );
+    expect(compactionProviderRecords).toHaveLength(0);
+    expect(provider.requests).toHaveLength(crossRunRequestIndex + 2);
+
     const compactionSegments = {
-      preCompactionMainCalls: 0,
-      compactionProviderCalls,
+      preCompactionMainCalls:
+        preCompactionMainRecords.length +
+        crossRunUsage.filter(({ purpose }) => purpose === "MAIN_AGENT").length,
+      compactionProviderCalls: compactionProviderRecords.length,
+      postCompactionMainCalls: 0,
+      postCompactionVerificationCalls: 0,
+      crossRunMainCalls: crossRunUsage.filter(({ purpose }) => purpose === "MAIN_AGENT").length,
+      crossRunVerificationCalls: crossRunUsage.filter(
+        ({ purpose }) => purpose === "VERIFICATION_LLM",
+      ).length,
       checkpoints:
-        (await storage.contextCheckpointsV2.getLatestByRun(crossRun.id)) === undefined ? 0 : 1,
-      postCompactionMainCalls: 1,
-      postCompactionInputTokens: postCompactionMainRecord?.inputTokens,
-      resetReason: postCompactionEpoch?.resetReason,
+        (await storage.contextCheckpointsV2.getLatestByRun(compactionRun.id)) === undefined ? 0 : 1,
+      resetReason: compactionEpoch?.resetReason,
     };
     expect(compactionSegments).toMatchObject({
-      preCompactionMainCalls: 0,
-      compactionProviderCalls,
+      preCompactionMainCalls: 11,
+      compactionProviderCalls: 0,
+      postCompactionMainCalls: 0,
+      postCompactionVerificationCalls: 0,
+      crossRunMainCalls: 1,
+      crossRunVerificationCalls: 1,
       checkpoints: 1,
-      postCompactionMainCalls: 1,
       resetReason: "COMPACTION_COMMITTED",
     });
-    const postCompactionMetrics = (
-      await composition.contextUsage.getContextUsage(String(crossRun.id))
-    )?.promptCache?.metricsV2;
-    expect(postCompactionMetrics?.fullRun.allPurposes.requestCount).toBe(
-      afterCompactionRecords.length,
-    );
-    expect(postCompactionMetrics?.surfaceDelta.unchangedSectionReemissionCount).toBe(0);
-    expect(provider.requests[postCompactionRequestIndex]?.body["max_tokens"]).toBe(2_048);
-
-    const crossRunMessages = provider.requests[postCompactionRequestIndex]?.body["messages"] as
-      readonly Record<string, unknown>[] | undefined;
-    expect(crossRunMessages).toBeDefined();
-    const crossRunMessageText = (crossRunMessages ?? [])
-      .filter((message) => message.role === "user")
-      .map((message) => (typeof message.content === "string" ? message.content : ""))
-      .join("\n");
-    expect(crossRunMessageText).toContain(secondGoal);
-    const toolResultIndex = crossRunMessages?.findIndex((message) => message.role === "tool") ?? -1;
-    expect(toolResultIndex).toBeGreaterThan(0);
-    const toolResult = crossRunMessages?.[toolResultIndex];
-    expect(toolResult?.tool_call_id).toBe("c5-c-9");
-    const precedingAssistant = (crossRunMessages ?? [])
-      .slice(0, toolResultIndex)
-      .reverse()
-      .find((message) => message.role === "assistant");
-    const precedingCalls = Array.isArray(precedingAssistant?.tool_calls)
-      ? (precedingAssistant.tool_calls as readonly Record<string, unknown>[])
-      : [];
-    expect(precedingCalls.some((call) => call.id === toolResult?.tool_call_id)).toBe(true);
-    const followUpUserIndex = (crossRunMessages ?? []).findIndex(
-      (message, index) =>
-        index > toolResultIndex &&
-        message.role === "user" &&
-        typeof message.content === "string" &&
-        message.content.includes(secondGoal),
-    );
-    expect(followUpUserIndex).toBeGreaterThan(toolResultIndex);
-
-    const conversation = await composition.messages.conversation.loadSnapshot({
-      sessionId: session.id,
-      currentRunId: crossRun.id,
+    const safePublicJson = JSON.stringify({
+      publicEvents,
+      transcript: conversation.turns
+        .flatMap((turn) => turn.messages)
+        .flatMap((message) => composition!.transcriptProjectors.project(message)),
+      recovered,
+      crossRunResult,
+      compactionEpoch,
     });
-    expect(conversation.turns.map(({ runId }) => runId)).toContain(run.id);
-    expect(conversation.turns.map(({ runId }) => runId)).toContain(crossRun.id);
-    const crossSurface = await readSurface(crossRun.id);
-    const currentEpoch = await storage.promptSurface.getCurrent(crossRun.id);
-    expect(currentEpoch?.resetReason).toBe("COMPACTION_COMMITTED");
-    expect(crossSurface.records?.every(({ runId }) => runId === crossRun.id)).toBe(true);
-    await assertSyntheticUsageAndSafeReport(run.id, manifest, 11);
-    await assertSyntheticUsageAndSafeReport(
-      crossRun.id,
-      manifest,
-      afterCompactionRecords.length,
-      false,
-      0,
-    );
-
-    const transcript = conversation.turns
-      .flatMap((turn) => turn.messages)
-      .flatMap((message) => composition!.transcriptProjectors.project(message));
-    const safePublicJson = JSON.stringify({ publicEvents, transcript, recovered });
     expect(safePublicJson).not.toContain(FIXTURE_REASONING_PREFIX);
     expect(safePublicJson).not.toContain("fixture-only");
     expect(safePublicJson).not.toContain(patchText);
