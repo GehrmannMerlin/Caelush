@@ -127,6 +127,7 @@ const records: readonly CuratedModelRecord[] = [
       "openai-compatible": {
         reasoningEffortByLevel: { LOW: "low", HIGH: "high" },
         cacheDialect: "AUTOMATIC",
+        requiresReasoningReplayWithTools: true,
       },
     },
     presentation(deepSeekReasoning),
@@ -359,6 +360,7 @@ function currentModel(
           XHIGH: "max",
         },
         cacheDialect: "AUTOMATIC",
+        requiresReasoningReplayWithTools: true,
       },
     },
     reasoningPresentation: presentation(

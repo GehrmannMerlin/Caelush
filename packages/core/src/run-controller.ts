@@ -7,6 +7,7 @@ import {
   type AdvanceAgentDirective,
   type AgentLoopAdvanceResult,
   type AgentLoopFailedResult,
+  type AgentModelTurn,
   type CompletionGateDecision,
   type EvaluateCompletionDirective,
   type ExecuteToolBatchDirective,
@@ -122,6 +123,7 @@ import {
 import { allocateRunAgentStep, createRunAgentLoop } from "./run-agent-execution.js";
 import {
   createAssistantMessageAppend,
+  createAssistantMessageAppendWithPrivateReplay,
   createExternalToolResultMessageAppend,
   createToolResultMessageAppend,
   createUserMessageAppend,
@@ -1656,43 +1658,54 @@ export class RunController {
       completionGate: MISROUTED_COMPLETION_GATE,
     });
 
-    const effect = await driver.execute(directive, {
-      identity: {
-        runId: snapshot.run.id,
-        sessionId: snapshot.run.sessionId,
-        goal: snapshot.run.goal,
-      },
-      turn: { stepId: step.id, sequence: step.sequence },
-      conversation,
-      model: execution.models.resolve(snapshot.run.model),
-      tools: execution.tools,
-      ...(execution.modelSettings === undefined ? {} : { modelSettings: execution.modelSettings }),
-      signal,
-    });
-
-    if (effect.kind !== "AGENT") {
-      throw new RunControllerInvariantError(
-        `The Agent driver produced a ${effect.kind} effect for an ADVANCE_AGENT directive.`,
-      );
-    }
-    if (
-      effect.result.kind === "CANCELLED" &&
-      this.scopes.get(snapshot.run.id)?.abortCause === "MANAGED_RESTART"
-    ) {
-      const current = await this.load(snapshot.run.id);
-      if (current.activeStep === undefined) return this.resultFromSnapshot(current);
-      return this.settleManagedRestart(snapshot, current, effect.result, observation);
-    }
-    if (requiresBoundaryRepair(observation)) {
-      // The durable open-Step commit did not succeed. No provider call was allowed, no Agent effect
-      // exists, and settling this as a model failure would durably record an answer the model never
-      // gave. The Run stays recoverable and the caller repairs or retries.
-      throw new RunControllerInfrastructureError("Unable to durably open the model turn", {
-        cause: observation.boundaryError,
+    try {
+      const effect = await driver.execute(directive, {
+        identity: {
+          runId: snapshot.run.id,
+          sessionId: snapshot.run.sessionId,
+          goal: snapshot.run.goal,
+        },
+        turn: { stepId: step.id, sequence: step.sequence },
+        conversation,
+        model: execution.models.resolve(snapshot.run.model),
+        tools: execution.tools,
+        ...(execution.modelSettings === undefined
+          ? {}
+          : { modelSettings: execution.modelSettings }),
+        signal,
+        privateCompletionSink: (completion) => {
+          observation.privateCompletion = completion;
+        },
       });
-    }
 
-    return this.settle(snapshot, directive, effect.result, observation);
+      if (effect.kind !== "AGENT") {
+        throw new RunControllerInvariantError(
+          `The Agent driver produced a ${effect.kind} effect for an ADVANCE_AGENT directive.`,
+        );
+      }
+      if (
+        effect.result.kind === "CANCELLED" &&
+        this.scopes.get(snapshot.run.id)?.abortCause === "MANAGED_RESTART"
+      ) {
+        const current = await this.load(snapshot.run.id);
+        if (current.activeStep === undefined) return this.resultFromSnapshot(current);
+        return this.settleManagedRestart(snapshot, current, effect.result, observation);
+      }
+      if (requiresBoundaryRepair(observation)) {
+        // The durable open-Step commit did not succeed. No provider call was allowed, no Agent effect
+        // exists, and settling this as a model failure would durably record an answer the model never
+        // gave. The Run stays recoverable and the caller repairs or retries.
+        throw new RunControllerInfrastructureError("Unable to durably open the model turn", {
+          cause: observation.boundaryError,
+        });
+      }
+
+      return await this.settle(snapshot, directive, effect.result, observation);
+    } finally {
+      const privateCompletion = observation.privateCompletion;
+      if (privateCompletion?.completeness === "COMPLETE") privateCompletion.payload.fill(0);
+      observation.privateCompletion = undefined;
+    }
   }
 
   private async settleManagedRestart(
@@ -2088,6 +2101,71 @@ export class RunController {
     }
   }
 
+  /** Prepare one Assistant append and its encrypted sidecar before the authoritative Run commit. */
+  private async prepareAssistantMessageCommit(
+    run: AgentRun,
+    sourceStepId: StepId,
+    modelTurn: AgentModelTurn,
+    phase: "COMMENTARY" | "FINAL_ANSWER",
+    observation: AgentTurnObservation,
+  ): Promise<{
+    readonly messagesToAppend: RunExecutionCommit["messagesToAppend"];
+    readonly privateReplayWrites?: NonNullable<RunExecutionCommit["privateReplayWrites"]>;
+  }> {
+    const completion = observation.privateCompletion;
+    if (completion === undefined || completion.completeness === "INCOMPLETE") {
+      return {
+        messagesToAppend: [
+          createAssistantMessageAppend(
+            this.dependencies.messages,
+            run,
+            sourceStepId,
+            modelTurn,
+            phase,
+          ),
+        ],
+      };
+    }
+    if (
+      completion.callId !== modelTurn.callId ||
+      completion.providerId !== modelTurn.model.provider ||
+      completion.model.provider !== modelTurn.model.provider ||
+      completion.model.model !== modelTurn.model.model ||
+      completion.model.baseUrl !== modelTurn.model.baseUrl ||
+      completion.payload.byteLength === 0 ||
+      completion.payload.byteLength > 8 * 1024 * 1024
+    ) {
+      throw new RunControllerInfrastructureError("Private replay identity is invalid.");
+    }
+    const replayStore = this.dependencies.privateReplayStore;
+    if (replayStore === undefined) {
+      throw new RunControllerInfrastructureError("Private replay storage is unavailable.");
+    }
+    const prepared = createAssistantMessageAppendWithPrivateReplay(
+      this.dependencies.messages,
+      run,
+      sourceStepId,
+      modelTurn,
+      phase,
+      {
+        providerId: completion.providerId,
+        model: completion.model.model,
+        api: completion.api,
+      },
+    );
+    try {
+      const write = await replayStore.prepare(prepared.identity, completion.payload);
+      return {
+        messagesToAppend: [prepared.append],
+        privateReplayWrites: [write],
+      };
+    } catch (error) {
+      throw new RunControllerInfrastructureError("Unable to prepare private replay", {
+        cause: error,
+      });
+    }
+  }
+
   /**
    * Settle an Agent effect the frozen planner can express.
    *
@@ -2135,21 +2213,19 @@ export class RunController {
     const effect: RunExecutionEffectResult = { kind: "AGENT", result };
 
     const planned = this.transitionPlanner.plan({ snapshot, directive, effect, now });
-    const plannedWithMessages =
-      result.kind === "TOOL_REQUESTS"
-        ? {
-            ...planned,
-            messagesToAppend: [
-              createAssistantMessageAppend(
-                this.dependencies.messages,
-                current.run,
-                result.turn.stepId,
-                result.modelTurn,
-                "COMMENTARY",
-              ),
-            ],
-          }
-        : planned;
+    let plannedWithMessages = planned;
+    if (result.kind === "TOOL_REQUESTS") {
+      plannedWithMessages = {
+        ...planned,
+        ...(await this.prepareAssistantMessageCommit(
+          current.run,
+          result.turn.stepId,
+          result.modelTurn,
+          "COMMENTARY",
+          observation,
+        )),
+      };
+    }
     const materialized = this.eventMaterializer.materialize({
       snapshot: current,
       directive,
@@ -2352,6 +2428,13 @@ export class RunController {
       continuation: { ...continuation, verificationPlanId: "" as never },
       candidate: result.decision,
     });
+    const assistantCommit = await this.prepareAssistantMessageCommit(
+      current.run,
+      result.turn.stepId,
+      result.modelTurn,
+      "FINAL_ANSWER",
+      observation,
+    );
 
     const commit = await this.commitCandidateBoundary({
       run,
@@ -2361,15 +2444,7 @@ export class RunController {
       expectedStateRevision: current.stateRevision ?? null,
       expectedContinuationRevision: current.continuationRevision ?? null,
       stepWrites: [{ operation: "UPDATE", step: completedStep }],
-      messagesToAppend: [
-        createAssistantMessageAppend(
-          this.dependencies.messages,
-          current.run,
-          result.turn.stepId,
-          result.modelTurn,
-          "FINAL_ANSWER",
-        ),
-      ],
+      ...assistantCommit,
       events: [
         ...this.successEvents(current.run, decisionState, completedStep, observation, now),
         this.eventFactory.statusChanged(

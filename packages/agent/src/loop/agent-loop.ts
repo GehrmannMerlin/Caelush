@@ -179,7 +179,7 @@ export function createAgentLoop(dependencies: AgentLoopDependencies): AgentLoop 
       }
 
       /* 4. The model turn. At most two provider attempts, and only for overflow. */
-      let execution = await executeTurn(dependencies.modelTurnExecutor, input, request);
+      let execution = await executeTurn(dependencies.modelTurnExecutor, input, request, context);
 
       if (
         execution.kind === "FAILED" &&
@@ -200,7 +200,7 @@ export function createAgentLoop(dependencies: AgentLoopDependencies): AgentLoop 
         context = recovered.context;
         recovery = "FORCED_CONTEXT_RECOVERY";
         request = buildRequest(requestBuilder, input, context);
-        execution = await executeTurn(dependencies.modelTurnExecutor, input, request);
+        execution = await executeTurn(dependencies.modelTurnExecutor, input, request, context);
       }
 
       const contextReceipt = receipt(context, recovery);
@@ -271,6 +271,7 @@ function executeTurn(
   executor: ModelTurnExecutor,
   input: AgentLoopAdvanceInput,
   request: ReturnType<ModelRequestBuilder["build"]>,
+  context: PreparedModelContext,
 ): ReturnType<ModelTurnExecutor["execute"]> {
   // No stream sink crosses here. Live deltas belong to the executor the composition root
   // binds, so `advance()` needs no presentation input at all.
@@ -278,7 +279,17 @@ function executeTurn(
     identity: input.identity,
     turn: input.turn,
     request,
+    model: input.model,
+    ...(context.selectedMessageIds === undefined
+      ? {}
+      : { selectedMessageIds: context.selectedMessageIds }),
+    ...(context.selectedAssistantReplaySources === undefined
+      ? {}
+      : { selectedAssistantReplaySources: context.selectedAssistantReplaySources }),
     signal: input.signal,
+    ...(input.privateCompletionSink === undefined
+      ? {}
+      : { privateCompletionSink: input.privateCompletionSink }),
   });
 }
 

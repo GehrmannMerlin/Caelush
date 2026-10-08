@@ -14,6 +14,7 @@ import {
 } from "../../support/openai-compatible-transport.js";
 import type { AIAdapterEvent } from "../../../src/adapters/api-adapter-event.js";
 import type { ApiAdapter, ApiAdapterStreamInput } from "../../../src/adapters/api-adapter.js";
+import type { AIAdapterPrivateCompletionCandidate } from "../../../src/stream/private-completion.js";
 
 const API_ID = "openai-compatible-chat";
 const MODEL_REF = { provider: "compat-fixture", model: "fixture-model" };
@@ -80,6 +81,110 @@ function types(events: readonly AIAdapterEvent[]): string[] {
 }
 
 describe("OpenAI-compatible stream golden: text", () => {
+  it.each(["abort", "provider error"])(
+    "discards raw reasoning when the Provider stream ends by %s",
+    async (termination) => {
+      const controller = new AbortController();
+      const transport = capturingTransport((request) => {
+        const body = new ReadableStream<Uint8Array>({
+          start(bodyController) {
+            bodyController.enqueue(
+              new TextEncoder().encode(
+                `data: ${JSON.stringify(
+                  openAIChunk({
+                    id: "private-partial",
+                    model: "deepseek-reasoner",
+                    delta: { reasoning_content: "C3_PRIVATE_REASONING_SENTINEL" },
+                  }),
+                )}\n\n`,
+              ),
+            );
+            if (termination === "provider error") {
+              queueMicrotask(() => bodyController.error(new Error("fixture provider failure")));
+            } else {
+              request.signal?.addEventListener(
+                "abort",
+                () => bodyController.error(new DOMException("cancelled", "AbortError")),
+                { once: true },
+              );
+            }
+          },
+        });
+        return new Response(body, {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      });
+      const descriptor = modelDescriptor({
+        ref: { provider: "deepseek", model: "deepseek-reasoner" },
+        api: API_ID,
+        adapterMetadata: { "openai-compatible": { requiresReasoningReplayWithTools: true } },
+      });
+      let completion: AIAdapterPrivateCompletionCandidate | undefined;
+      const input = adapterInput(transport, {
+        model: descriptor,
+        signal: controller.signal,
+        capturePrivateCompletion: (candidate) => {
+          completion = candidate;
+        },
+      });
+      const iterator = createOpenAICompatibleApiAdapter().stream(input)[Symbol.asyncIterator]();
+      const publicEvents: AIAdapterEvent[] = [];
+      let failure: unknown;
+      try {
+        while (true) {
+          const next = await iterator.next();
+          if (next.done) break;
+          publicEvents.push(next.value);
+          if (termination === "abort" && next.value.type === "provider.activity") {
+            controller.abort();
+          }
+        }
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure instanceof AIError).toBe(true);
+      expect(
+        publicEvents.every(
+          (event) => !JSON.stringify(event).includes("C3_PRIVATE_REASONING_SENTINEL"),
+        ),
+      ).toBe(true);
+      expect(completion).toBeUndefined();
+    },
+  );
+
+  it.each(["length", "content_filter"])(
+    "refuses complete replay after %s termination",
+    async (finishReason) => {
+      const transport = capturingTransport(() =>
+        sseResponse([
+          openAIChunk({
+            id: "partial",
+            model: "deepseek-reasoner",
+            delta: { reasoning_content: "private" },
+          }),
+          finishChunk({ id: "partial", model: "deepseek-reasoner", finishReason }),
+        ]),
+      );
+      const descriptor = modelDescriptor({
+        ref: { provider: "deepseek", model: "deepseek-reasoner" },
+        api: API_ID,
+        adapterMetadata: { "openai-compatible": { requiresReasoningReplayWithTools: true } },
+      });
+      let completion: AIAdapterPrivateCompletionCandidate | undefined;
+      const input = adapterInput(transport, {
+        model: descriptor,
+        capturePrivateCompletion: (value) => {
+          completion = value;
+        },
+      });
+      for await (const _event of createOpenAICompatibleApiAdapter().stream(input)) {
+        /* drain */
+      }
+      expect(completion?.completeness).toBe("INCOMPLETE");
+    },
+  );
+
   it("emits text deltas then a single adapter.finish", async () => {
     const events = await run([
       openAIChunk({
@@ -123,7 +228,7 @@ describe("OpenAI-compatible stream golden: text", () => {
     ]);
 
     expect(types(events)).toEqual(["text.delta", "adapter.finish"]);
-    expect(JSON.stringify(events)).not.toContain("S3_SECRET_REASONING_SENTINEL");
+    expect(JSON.stringify(events).includes("S3_SECRET_REASONING_SENTINEL")).toBe(false);
     expect(JSON.stringify(events)).not.toContain("reasoning");
   });
 
@@ -145,7 +250,138 @@ describe("OpenAI-compatible stream golden: text", () => {
 
     expect(activity.length).toBeGreaterThan(0);
     expect(activity.every((event) => Object.keys(event).length === 1)).toBe(true);
-    expect(JSON.stringify(events)).not.toContain("S3_SECRET_REASONING_SENTINEL");
+    expect(JSON.stringify(events).includes("S3_SECRET_REASONING_SENTINEL")).toBe(false);
+  });
+
+  it("captures DeepSeek native reasoning privately while public events remain clean", async () => {
+    const transport = capturingTransport(() =>
+      sseResponse([
+        openAIChunk({
+          id: "c3",
+          model: "deepseek-reasoner",
+          delta: { reasoning_content: "C3_PRIVATE_REASONING_SENTINEL" },
+        }),
+        openAIChunk({
+          id: "c3",
+          model: "deepseek-reasoner",
+          delta: { content: "answer" },
+        }),
+        finishChunk({ id: "c3", model: "deepseek-reasoner", finishReason: "stop" }),
+      ]),
+    );
+    const descriptor = modelDescriptor({
+      ref: { provider: "deepseek", model: "deepseek-reasoner" },
+      api: API_ID,
+      adapterMetadata: {
+        "openai-compatible": { requiresReasoningReplayWithTools: true },
+      },
+    });
+    let privateCandidate: AIAdapterPrivateCompletionCandidate | undefined;
+    const input = {
+      ...adapterInput(transport),
+      model: descriptor,
+      request: {
+        ...adapterInput(transport).request,
+        model: descriptor,
+      },
+      capturePrivateCompletion: (candidate: AIAdapterPrivateCompletionCandidate) => {
+        privateCandidate = candidate;
+      },
+    } as ApiAdapterStreamInput;
+    const events: AIAdapterEvent[] = [];
+    for await (const event of createOpenAICompatibleApiAdapter().stream(input)) events.push(event);
+
+    expect(JSON.stringify(events).includes("C3_PRIVATE_REASONING_SENTINEL")).toBe(false);
+    expect(privateCandidate?.completeness).toBe("COMPLETE");
+    if (privateCandidate?.completeness !== "COMPLETE") throw new Error("expected replay payload");
+    const payload = JSON.parse(new TextDecoder().decode(privateCandidate.payload)) as {
+      reasoning: { state: string; content?: string };
+    };
+    expect(
+      payload.reasoning.state === "PRESENT" &&
+        payload.reasoning.content === "C3_PRIVATE_REASONING_SENTINEL",
+    ).toBe(true);
+  });
+
+  it("keeps interleaved raw Tool Arguments associated with their exact call IDs", async () => {
+    const transport = capturingTransport(() =>
+      sseResponse([
+        openAIChunk({
+          id: "c3",
+          model: "deepseek-reasoner",
+          delta: {
+            tool_calls: [
+              toolCallDelta({
+                index: 0,
+                id: "call-a",
+                name: "apply_patch",
+                arguments: '{"path":"a",',
+              }),
+            ],
+          },
+        }),
+        openAIChunk({
+          id: "c3",
+          model: "deepseek-reasoner",
+          delta: {
+            tool_calls: [
+              toolCallDelta({
+                index: 1,
+                id: "call-b",
+                name: "read_file",
+                arguments: '{"path":"b"}',
+              }),
+            ],
+          },
+        }),
+        openAIChunk({
+          id: "c3",
+          model: "deepseek-reasoner",
+          delta: { tool_calls: [toolCallDelta({ index: 0, arguments: '"content":"x"}' })] },
+        }),
+        finishChunk({ id: "c3", model: "deepseek-reasoner", finishReason: "tool_calls" }),
+      ]),
+    );
+    const descriptor = modelDescriptor({
+      ref: { provider: "deepseek", model: "deepseek-reasoner" },
+      api: API_ID,
+      adapterMetadata: {
+        "openai-compatible": { requiresReasoningReplayWithTools: true },
+      },
+    });
+    let candidate: AIAdapterPrivateCompletionCandidate | undefined;
+    const base = adapterInput(transport);
+    const input = {
+      ...base,
+      model: descriptor,
+      request: { ...base.request, model: descriptor },
+      capturePrivateCompletion: (value: AIAdapterPrivateCompletionCandidate) => {
+        candidate = value;
+      },
+    } satisfies ApiAdapterStreamInput;
+    const events: AIAdapterEvent[] = [];
+    for await (const event of createOpenAICompatibleApiAdapter().stream(input)) events.push(event);
+
+    expect(candidate?.completeness).toBe("COMPLETE");
+    if (candidate?.completeness !== "COMPLETE") throw new Error("expected replay payload");
+    const payload = JSON.parse(new TextDecoder().decode(candidate.payload)) as {
+      toolCalls: readonly { id: string; name: string; rawArguments: string }[];
+    };
+    expect(payload.toolCalls).toEqual([
+      {
+        id: "call-a",
+        name: "apply_patch",
+        rawArguments: '{"path":"a","content":"x"}',
+        argumentMode: "PROVIDER_JSON",
+      },
+      {
+        id: "call-b",
+        name: "read_file",
+        rawArguments: '{"path":"b"}',
+        argumentMode: "PROVIDER_JSON",
+      },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("reasoning_content");
   });
 });
 

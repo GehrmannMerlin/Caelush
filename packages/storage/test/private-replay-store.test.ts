@@ -162,8 +162,23 @@ describe("private replay storage and Run transaction", () => {
     await store.execution.commit(command);
     const secondRun = makeRun(command.run.sessionId);
     await store.runs.insert(secondRun);
+    const selectedHistory = store.privateReplay.forExecution({
+      ...scope,
+      executionRunId: secondRun.id,
+    });
+    const historicalBytes = await selectedHistory.read(identity);
+    const expectedBytes = bytes();
+    expect(Buffer.from(historicalBytes).equals(expectedBytes)).toBe(true);
+    historicalBytes.fill(0);
+    expectedBytes.fill(0);
     await expectReplayReadDenied(
-      store.privateReplay.forExecution({ ...scope, executionRunId: secondRun.id }).read(identity),
+      store.privateReplay
+        .forExecution({
+          ...scope,
+          executionRunId: secondRun.id,
+          selectedMessageIds: [],
+        })
+        .read(identity),
     );
     const conflict = await store.privateReplay.prepare(identity, Buffer.from("different"));
     await expect(

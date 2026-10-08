@@ -28,6 +28,13 @@ import type { ReasoningResolutionPolicy } from "../reasoning/reasoning-resolutio
 import type { ReasoningResolver } from "../reasoning/reasoning-resolver.js";
 import type { ResolvedGatewayRequest } from "./gateway-request-resolver.js";
 import type { ToolCallTracker } from "../stream/tool-call-tracker.js";
+import type {
+  AIAdapterPrivateCompletionCandidate,
+  AIPrivateCompletion,
+  AIPrivateReplayResolver,
+} from "../stream/private-completion.js";
+
+const MAX_PRIVATE_COMPLETION_BYTES = 8 * 1024 * 1024;
 
 /** The collaborators an {@link AIGateway} needs. */
 export interface AIGatewayDependencies {
@@ -99,9 +106,22 @@ export function createAIGateway(
 
       const clock = options.clock;
       const now = clock === undefined ? () => Date.now() : () => clock.now();
+      const privateCompletion = createPrivateCompletionSlot(
+        prepared.callId,
+        prepared.descriptor.ref.provider,
+        prepared.model,
+        prepared.descriptor.api,
+      );
       return {
         callId: prepared.callId,
-        events: runGatewayStream(prepared, dependencies.errors, now),
+        events: runGatewayStream(
+          prepared,
+          dependencies.errors,
+          now,
+          privateCompletion,
+          streamOptions?.privateReplayResolver,
+        ),
+        takePrivateCompletion: () => privateCompletion.take(),
       };
     },
 
@@ -114,10 +134,15 @@ export function createAIGateway(
       const stream = await gateway.stream(request, streamOptions);
       const assembler = createAIModelTurnAssembler();
 
-      for await (const event of stream.events) assembler.accept(event);
-
-      // Throws an AIError when the stream errored or never finished.
-      return assembler.result();
+      try {
+        for await (const event of stream.events) assembler.accept(event);
+        // Throws an AIError when the stream errored or never finished.
+        return assembler.result();
+      } finally {
+        // `complete()` has no private-replay consumer. Wipe even if assembly fails.
+        const privateCompletion = stream.takePrivateCompletion();
+        if (privateCompletion?.completeness === "COMPLETE") privateCompletion.payload.fill(0);
+      }
     },
   };
 
@@ -136,6 +161,8 @@ async function* runGatewayStream(
   prepared: ResolvedGatewayRequest,
   sanitizer: AIErrorSanitizer,
   now: () => number,
+  privateCompletion: PrivateCompletionSlot,
+  privateReplayResolver: AIPrivateReplayResolver | undefined,
 ): AsyncGenerator<AIStreamEvent> {
   const {
     adapter,
@@ -175,6 +202,8 @@ async function* runGatewayStream(
       provider: connection,
       request,
       signal: scope.signal,
+      ...(privateReplayResolver === undefined ? {} : { privateReplayResolver }),
+      capturePrivateCompletion: (candidate) => privateCompletion.capture(candidate),
     });
     adapterIterator = adapterStream[Symbol.asyncIterator]();
     let pendingNext = observeIteratorNext(adapterIterator);
@@ -281,9 +310,11 @@ async function* runGatewayStream(
           : { providerReason: adapterFinish.providerReason }),
       },
     };
+    privateCompletion.settleSuccessfully();
     terminal = true;
     yield finishEvent;
   } catch (error) {
+    privateCompletion.fail();
     terminal = true;
     yield {
       type: "stream.error",
@@ -292,6 +323,7 @@ async function* runGatewayStream(
       },
     };
   } finally {
+    if (!terminal) privateCompletion.fail();
     // A consumer that stopped reading is a distinct internal cause: signal it
     // before closing the adapter iterator so an in-flight transport can unwind.
     if (!terminal) scope.abortConsumer();
@@ -300,6 +332,72 @@ async function* runGatewayStream(
       await closeAdapterIterator(adapterIterator, teardownGraceMs);
     }
   }
+}
+
+interface PrivateCompletionSlot {
+  capture(candidate: AIAdapterPrivateCompletionCandidate): void;
+  settleSuccessfully(): void;
+  fail(): void;
+  take(): AIPrivateCompletion | undefined;
+}
+
+function createPrivateCompletionSlot(
+  callId: LLMCallId,
+  providerId: import("../ids/provider-id.js").ProviderId,
+  model: ModelRef,
+  api: import("../ids/api-id.js").ApiId,
+): PrivateCompletionSlot {
+  let candidate: AIAdapterPrivateCompletionCandidate | undefined;
+  let settled = false;
+  let failed = false;
+  let consumed = false;
+
+  return {
+    capture(next) {
+      if (candidate !== undefined || settled || failed) {
+        throw createAIError(
+          "AI_INVALID_RESPONSE",
+          "The provider adapter produced an invalid private completion.",
+          { providerId, model },
+        );
+      }
+      if (next.completeness === "COMPLETE") {
+        if (next.payload.byteLength > MAX_PRIVATE_COMPLETION_BYTES) {
+          next.payload.fill(0);
+          candidate = { completeness: "INCOMPLETE" };
+          return;
+        }
+        candidate = { completeness: "COMPLETE", payload: next.payload.slice() };
+        next.payload.fill(0);
+        return;
+      }
+      candidate = { completeness: "INCOMPLETE" };
+    },
+    settleSuccessfully() {
+      settled = true;
+    },
+    fail() {
+      failed = true;
+      if (candidate?.completeness === "COMPLETE") candidate.payload.fill(0);
+      candidate = undefined;
+    },
+    take() {
+      if (!settled || failed || consumed || candidate === undefined) return undefined;
+      consumed = true;
+      const value = candidate;
+      candidate = undefined;
+      return value.completeness === "COMPLETE"
+        ? {
+            callId,
+            providerId,
+            model,
+            api,
+            completeness: "COMPLETE",
+            payload: value.payload,
+          }
+        : { callId, providerId, model, api, completeness: "INCOMPLETE" };
+    },
+  };
 }
 
 function streamStatusEvent(

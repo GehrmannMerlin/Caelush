@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createServer } from "node:http";
 import { createAISubsystem } from "../../../src/create-ai-subsystem.js";
 import { createOpenAICompatibleApiAdapter } from "../../../src/adapters/openai-compatible/index.js";
+import { deepSeekReplayConnectionFingerprint } from "../../../src/adapters/openai-compatible/private-replay.js";
 import { modelDescriptor } from "../../support/fixtures.js";
 import {
   capturingTransport,
@@ -19,6 +20,13 @@ import type { AISubsystem } from "../../../src/create-ai-subsystem.js";
 
 const ENDPOINT = "http://127.0.0.1:4321/v1";
 const API_ID = "openai-compatible-chat";
+const CONNECTION_FINGERPRINT = deepSeekReplayConnectionFingerprint(
+  {
+    endpoint: ENDPOINT,
+    queryParams: {},
+  },
+  { requiresReasoningReplayWithTools: true },
+);
 
 const READ_FILE: AIToolSpec = {
   name: "read_file",
@@ -30,6 +38,15 @@ const SEARCH_TEXT: AIToolSpec = {
   name: "search_text",
   description: "Search text.",
   inputSchema: { type: "object", properties: { query: { type: "string" } } },
+};
+
+const APPLY_PATCH: AIToolSpec = {
+  name: "apply_patch",
+  description: "Apply a patch.",
+  inputSchema: {
+    type: "object",
+    properties: { path: { type: "string" }, patch: { type: "string" } },
+  },
 };
 
 /** A successful text turn. */
@@ -125,6 +142,165 @@ function request(overrides: Partial<AIModelRequest> = {}): AIModelRequest {
 }
 
 describe("OpenAI-compatible request golden: messages", () => {
+  it.each(["missing", "provider", "model", "api", "corrupt", "tool-id", "arguments"])(
+    "fails closed before HTTP for unavailable required history (%s)",
+    async (mode) => {
+      const descriptor = modelDescriptor({
+        ref: { provider: "deepseek", model: "deepseek-reasoner" },
+        api: API_ID,
+        adapterMetadata: { "openai-compatible": { requiresReasoningReplayWithTools: true } },
+      });
+      const h = harness({ descriptor });
+      const bytes = new TextEncoder().encode(
+        mode === "corrupt"
+          ? "not json"
+          : JSON.stringify({
+              version: 1,
+              providerId: "deepseek",
+              model: "deepseek-reasoner",
+              api: API_ID,
+              connectionFingerprint: CONNECTION_FINGERPRINT,
+              reasoning: { state: "PRESENT", content: "" },
+              toolCalls: [
+                {
+                  id: mode === "tool-id" ? "other-call" : "call-a",
+                  name: "read_file",
+                  rawArguments: mode === "arguments" ? '{"path":"other"}' : '{"path":"a"}',
+                  argumentMode: "PROVIDER_JSON",
+                },
+              ],
+            }),
+      );
+      await expect(
+        h.ai.gateway.complete(
+          request({
+            model: descriptor.ref,
+            tools: [READ_FILE],
+            messages: [
+              {
+                role: "assistant",
+                content: [
+                  {
+                    type: "tool-call",
+                    toolCallId: "call-a",
+                    toolName: "read_file",
+                    input: { path: "a" },
+                  },
+                ],
+                ...(mode === "missing"
+                  ? {}
+                  : {
+                      providerState: {
+                        providerId: mode === "provider" ? "other" : "deepseek",
+                        api: mode === "api" ? "other-api" : API_ID,
+                        version: 1 as const,
+                        payload: { model: mode === "model" ? "other-model" : "deepseek-reasoner" },
+                      },
+                    }),
+              },
+              {
+                role: "tool",
+                toolCallId: "call-a",
+                toolName: "read_file",
+                content: "result",
+                isError: false,
+              },
+            ],
+          }),
+          { privateReplayResolver: { resolve: async () => bytes } },
+        ),
+      ).rejects.toMatchObject({ code: "AI_CAPABILITY_UNSUPPORTED" });
+      expect(h.transport.requests.length).toBe(0);
+      bytes.fill(0);
+    },
+  );
+
+  it.each([
+    { enabled: true, tools: false },
+    { enabled: false, tools: true },
+  ])(
+    "does not resolve or send private history when replay is inapplicable (%j)",
+    async ({ enabled, tools }) => {
+      const descriptor = modelDescriptor({
+        ref: { provider: "compat-fixture", model: "fixture-model" },
+        api: API_ID,
+        adapterMetadata: { "openai-compatible": { requiresReasoningReplayWithTools: enabled } },
+      });
+      const h = harness({ descriptor });
+      const resolve = vi.fn(async () => {
+        throw new Error("resolver must not run");
+      });
+      await h.ai.gateway.complete(
+        request({
+          model: descriptor.ref,
+          ...(tools ? { tools: [READ_FILE] } : {}),
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "public answer" }],
+              providerState: {
+                providerId: "deepseek",
+                api: API_ID,
+                version: 1,
+                payload: { model: "deepseek-reasoner" },
+              },
+            },
+            { role: "user", content: "continue" },
+          ],
+        }),
+        { privateReplayResolver: { resolve } },
+      );
+      expect(resolve).not.toHaveBeenCalled();
+      expect(JSON.stringify(h.body()).includes("reasoning_content")).toBe(false);
+    },
+  );
+
+  it("rejects replay from a different resolved Provider connection before HTTP", async () => {
+    const descriptor = modelDescriptor({
+      ref: { provider: "deepseek", model: "deepseek-reasoner" },
+      api: API_ID,
+      adapterMetadata: { "openai-compatible": { requiresReasoningReplayWithTools: true } },
+    });
+    const h = harness({ descriptor });
+    const payload = new TextEncoder().encode(
+      JSON.stringify({
+        version: 1,
+        providerId: descriptor.ref.provider,
+        model: descriptor.ref.model,
+        api: API_ID,
+        connectionFingerprint: "0".repeat(64),
+        reasoning: { state: "PRESENT", content: "" },
+        toolCalls: [],
+      }),
+    );
+    await expect(
+      h.ai.gateway.complete(
+        request({
+          model: descriptor.ref,
+          tools: [READ_FILE],
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "historical answer" }],
+              providerState: {
+                providerId: descriptor.ref.provider,
+                api: API_ID,
+                version: 1,
+                payload: { model: descriptor.ref.model },
+              },
+            },
+            { role: "user", content: "continue" },
+          ],
+        }),
+        { privateReplayResolver: { resolve: async () => payload } },
+      ),
+    ).rejects.toMatchObject({
+      code: "AI_CAPABILITY_UNSUPPORTED",
+    });
+    expect(h.transport.requests.length).toBe(0);
+    expect(payload.every((byte) => byte === 0)).toBe(true);
+  });
+
   it("sends a single user message", async () => {
     const h = harness();
     await h.ai.gateway.complete(request());
@@ -135,6 +311,250 @@ describe("OpenAI-compatible request golden: messages", () => {
       stream: true,
       stream_options: { include_usage: true },
     });
+  });
+
+  it("reconstructs DeepSeek reasoning and raw Tool Arguments in the final SDK HTTP body", async () => {
+    const descriptor = modelDescriptor({
+      ref: { provider: "deepseek", model: "deepseek-reasoner" },
+      api: API_ID,
+      adapterMetadata: {
+        "openai-compatible": { requiresReasoningReplayWithTools: true },
+      },
+    });
+    const h = harness({ descriptor });
+    const replay = {
+      version: 1,
+      providerId: "deepseek",
+      model: "deepseek-reasoner",
+      api: API_ID,
+      reasoning: { state: "PRESENT", content: "C3_PRIVATE_REASONING_SENTINEL" },
+      connectionFingerprint: CONNECTION_FINGERPRINT,
+      toolCalls: [
+        {
+          id: "call-raw",
+          name: "apply_patch",
+          rawArguments: '{"path":"src/a.ts", "patch":"add"}',
+          argumentMode: "PROVIDER_JSON",
+        },
+      ],
+    };
+    await h.ai.gateway.complete(
+      request({
+        model: descriptor.ref,
+        messages: [
+          { role: "user", content: "change a file" },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "tool-call",
+                toolCallId: "call-raw",
+                toolName: "apply_patch",
+                input: { path: "src/a.ts", patch: "add" },
+              },
+            ],
+            providerState: {
+              providerId: "deepseek",
+              api: API_ID,
+              version: 1,
+              payload: {
+                kind: "caelush.private-replay.v1",
+                replayId: "msg-1",
+                replayVersion: 1,
+                sessionId: "session-1",
+                runId: "run-1",
+                callId: "llm_01j00000000000000000000000",
+                model: "deepseek-reasoner",
+              },
+            },
+          },
+          {
+            role: "tool",
+            toolCallId: "call-raw",
+            toolName: "apply_patch",
+            content: "applied",
+            isError: false,
+          },
+          { role: "user", content: "continue" },
+        ],
+        tools: [
+          {
+            name: "apply_patch",
+            description: "Apply a patch.",
+            inputSchema: {
+              type: "object",
+              properties: { path: { type: "string" }, patch: { type: "string" } },
+              required: ["path", "patch"],
+            },
+          },
+        ],
+      }),
+      {
+        privateReplayResolver: {
+          async resolve({ providerState, providerId, model, api }) {
+            expect(providerState.payload.replayId).toBe("msg-1");
+            expect(providerId).toBe("deepseek");
+            expect(model.model).toBe("deepseek-reasoner");
+            expect(api).toBe(API_ID);
+            return new TextEncoder().encode(JSON.stringify(replay));
+          },
+        },
+      },
+    );
+
+    const body = h.body();
+    expect(body.messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "tool",
+      "user",
+    ]);
+    const replayedAssistant = body.messages[1];
+    expect(
+      replayedAssistant.role === "assistant" &&
+        replayedAssistant.content === null &&
+        replayedAssistant.reasoning_content === "C3_PRIVATE_REASONING_SENTINEL" &&
+        replayedAssistant.tool_calls?.[0]?.id === "call-raw" &&
+        replayedAssistant.tool_calls?.[0]?.function.arguments ===
+          '{"path":"src/a.ts", "patch":"add"}',
+    ).toBe(true);
+    expect(body.messages[2]).toEqual({
+      role: "tool",
+      tool_call_id: "call-raw",
+      content: "applied",
+    });
+    expect(body.messages[3]).toEqual({ role: "user", content: "continue" });
+  });
+
+  it("replays every selected historical Assistant in original Tool protocol order", async () => {
+    const descriptor = modelDescriptor({
+      ref: { provider: "deepseek", model: "deepseek-reasoner" },
+      api: API_ID,
+      adapterMetadata: {
+        "openai-compatible": { requiresReasoningReplayWithTools: true },
+      },
+    });
+    const h = harness({ descriptor });
+    const histories = [
+      {
+        id: "message-a",
+        callId: "call-a",
+        tool: "apply_patch",
+        args: '{"path":"a", "patch":"1"}',
+        reasoning: "reasoning A",
+      },
+      {
+        id: "message-b",
+        callId: "call-b",
+        tool: "read_file",
+        args: '{"path":"b"}',
+        reasoning: "reasoning B",
+      },
+    ] as const;
+    const messages: AIModelRequest["messages"] = [
+      { role: "user", content: "make two changes" },
+      ...histories.flatMap((history) => [
+        {
+          role: "assistant" as const,
+          content: [
+            {
+              type: "tool-call" as const,
+              toolCallId: history.callId,
+              toolName: history.tool,
+              input: history.tool === "apply_patch" ? { path: "a", patch: "1" } : { path: "b" },
+            },
+          ],
+          providerState: {
+            providerId: "deepseek",
+            api: API_ID,
+            version: 1 as const,
+            payload: {
+              kind: "caelush.private-replay.v1",
+              replayId: history.id,
+              replayVersion: 1,
+              sessionId: "session-a",
+              runId: "run-a",
+              callId: history.callId,
+              model: "deepseek-reasoner",
+            },
+          },
+        },
+        {
+          role: "tool" as const,
+          toolCallId: history.callId,
+          toolName: history.tool,
+          content: `result ${history.id}`,
+          isError: false,
+        },
+        { role: "user" as const, content: `continue ${history.id}` },
+      ]),
+    ];
+    const replayPayload = (history: (typeof histories)[number]) =>
+      new TextEncoder().encode(
+        JSON.stringify({
+          version: 1,
+          providerId: "deepseek",
+          model: "deepseek-reasoner",
+          api: API_ID,
+          reasoning: { state: "PRESENT", content: history.reasoning },
+          connectionFingerprint: CONNECTION_FINGERPRINT,
+          toolCalls: [
+            {
+              id: history.callId,
+              name: history.tool,
+              rawArguments: history.args,
+              argumentMode: "PROVIDER_JSON",
+            },
+          ],
+        }),
+      );
+    await h.ai.gateway.complete(
+      request({ model: descriptor.ref, messages, tools: [APPLY_PATCH, READ_FILE, SEARCH_TEXT] }),
+      {
+        privateReplayResolver: {
+          async resolve({ providerState }) {
+            const replayId = providerState.payload["replayId"];
+            const history = histories.find((entry) => entry.id === replayId);
+            return history === undefined ? undefined : replayPayload(history);
+          },
+        },
+      },
+    );
+
+    const wireMessages = h.body()["messages"] as Record<string, unknown>[];
+    expect(wireMessages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "tool",
+      "user",
+      "assistant",
+      "tool",
+      "user",
+    ]);
+    const wireReasoning = wireMessages
+      .filter((message) => message.role === "assistant")
+      .map((message) => message.reasoning_content);
+    expect(
+      wireReasoning.length === 2 &&
+        wireReasoning[0] === "reasoning A" &&
+        wireReasoning[1] === "reasoning B",
+    ).toBe(true);
+    const assistantWire = wireMessages.filter((message) => message.role === "assistant") as {
+      readonly tool_calls: readonly { readonly function: { readonly arguments: string } }[];
+    }[];
+    expect(assistantWire.map((message) => message.tool_calls[0]?.function.arguments)).toEqual([
+      '{"path":"a", "patch":"1"}',
+      '{"path":"b"}',
+    ]);
+    expect(wireMessages.map((message) => message.tool_call_id)).toEqual([
+      undefined,
+      undefined,
+      "call-a",
+      undefined,
+      undefined,
+      "call-b",
+      undefined,
+    ]);
   });
 
   it("sends system messages as one leading system message, not as user content", async () => {
@@ -377,6 +797,20 @@ describe("OpenAI-compatible request golden: tools", () => {
 
     expect(h.body()).not.toHaveProperty("tools");
     expect(h.body()).not.toHaveProperty("tool_choice");
+  });
+
+  it("allows a tool-free request to explicitly forbid tools", async () => {
+    const h = harness();
+    await h.ai.gateway.complete(request({ toolChoice: { type: "NONE" } }));
+
+    expect(h.body()).toMatchObject({
+      model: "fixture-model",
+      messages: [{ role: "user", content: "hello" }],
+    });
+    // The SDK omits `tool_choice` when no tool definitions exist; without a `tools` member the
+    // provider has no executable functions available to call.
+    expect(h.body()).not.toHaveProperty("tool_choice");
+    expect(h.body()).not.toHaveProperty("tools");
   });
 });
 

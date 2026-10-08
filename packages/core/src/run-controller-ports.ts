@@ -202,6 +202,8 @@ export interface RunControllerDependencies {
    * plan; the General Run surface it exposes is exactly the agent contract.
    */
   readonly executionStore: RunExecutionStore;
+  /** Host-owned encrypted Private Replay preparer; writes still commit through executionStore. */
+  readonly privateReplayStore?: import("@caelush/agent").PrivateReplayStorePort;
   /**
    * The Core-private completion persistence boundary.
    *

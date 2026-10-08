@@ -86,6 +86,7 @@ export type { ModelUsage } from "./models/model-usage.js";
 /* Models. */
 export { assertModelDescriptor, assertModelRef } from "./models/model-descriptor.js";
 export type { ModelDescriptor } from "./models/model-descriptor.js";
+export { requiresReasoningReplayWithTools } from "./models/native-replay-capability.js";
 
 export { assertModelLimits } from "./models/model-limits.js";
 export type { ModelLimits } from "./models/model-limits.js";
@@ -235,6 +236,11 @@ export type {
 } from "./stream/events.js";
 
 export type { AIStream, AIStreamOptions } from "./stream/stream.js";
+export type {
+  AIAdapterPrivateCompletionCandidate,
+  AIPrivateCompletion,
+  AIPrivateReplayResolver,
+} from "./stream/private-completion.js";
 export {
   DEFAULT_PROVIDER_NUDGE_AFTER_MS,
   DEFAULT_PROVIDER_STREAM_IDLE_TIMEOUT_MS,

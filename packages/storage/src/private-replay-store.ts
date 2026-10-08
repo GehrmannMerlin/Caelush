@@ -105,7 +105,6 @@ export class SqlitePrivateReplayStore implements PrivateReplayStorePort {
           if (
             this.protection === undefined ||
             requested.sessionId !== bound.sessionId ||
-            requested.runId !== bound.executionRunId ||
             requested.providerId !== bound.providerId ||
             requested.model !== bound.model ||
             requested.api !== bound.api ||
@@ -116,6 +115,10 @@ export class SqlitePrivateReplayStore implements PrivateReplayStorePort {
             .prepare("SELECT session_id FROM agent_runs WHERE id = ?")
             .get(bound.executionRunId);
           if (execution?.session_id !== bound.sessionId) throw new PrivateReplayError();
+          const sourceRun = this.database.client
+            .prepare("SELECT session_id FROM agent_runs WHERE id = ?")
+            .get(requested.runId);
+          if (sourceRun?.session_id !== bound.sessionId) throw new PrivateReplayError();
           const row = this.row(requested.messageId);
           if (
             row === undefined ||

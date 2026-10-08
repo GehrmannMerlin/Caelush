@@ -1,6 +1,7 @@
 import type { ModelMessage } from "ai";
 import type { AIAssistantContent } from "../../messages/content.js";
 import type { AIAssistantMessage, AIMessage, AIToolResultMessage } from "../../messages/message.js";
+import type { DeepSeekNativeReplayPayloadV1 } from "./private-replay.js";
 
 type AssistantModelMessage = Extract<ModelMessage, { role: "assistant" }>;
 type ToolModelMessage = Extract<ModelMessage, { role: "tool" }>;
@@ -26,11 +27,12 @@ export interface TranslatedMessages {
  */
 export function translateOpenAICompatibleMessages(
   messages: readonly AIMessage[],
+  nativeReplayByMessageIndex: ReadonlyMap<number, DeepSeekNativeReplayPayloadV1> = new Map(),
 ): TranslatedMessages {
   const systemMessages: string[] = [];
   const translated: ModelMessage[] = [];
 
-  for (const message of messages) {
+  for (const [messageIndex, message] of messages.entries()) {
     switch (message.role) {
       case "system":
         systemMessages.push(message.content);
@@ -39,7 +41,7 @@ export function translateOpenAICompatibleMessages(
         translated.push({ role: "user", content: message.content });
         break;
       case "assistant":
-        translated.push(toAssistantMessage(message));
+        translated.push(toAssistantMessage(message, nativeReplayByMessageIndex.get(messageIndex)));
         break;
       case "tool":
         translated.push(toToolMessage(message));
@@ -53,10 +55,43 @@ export function translateOpenAICompatibleMessages(
   };
 }
 
-function toAssistantMessage(message: AIAssistantMessage): AssistantModelMessage {
+function toAssistantMessage(
+  message: AIAssistantMessage,
+  replay?: DeepSeekNativeReplayPayloadV1,
+): AssistantModelMessage {
+  const rawToolArguments = new Map(replay?.toolCalls.map((call) => [call.id, call]) ?? []);
+  const content: AssistantPart[] = [];
+  if (replay?.reasoning.state === "PRESENT") {
+    content.push({ type: "reasoning", text: replay.reasoning.content });
+  }
+  for (const part of message.content) {
+    if (part.type === "text") {
+      content.push(toAssistantContent(part));
+      continue;
+    }
+    const raw = rawToolArguments.get(part.toolCallId);
+    content.push(
+      raw === undefined
+        ? toAssistantContent(part)
+        : {
+            type: "tool-call" as const,
+            toolCallId: part.toolCallId,
+            toolName: part.toolName,
+            input: part.input,
+            providerOptions: {
+              openaiCompatible: {
+                function: { name: part.toolName, arguments: raw.rawArguments },
+              },
+            },
+          },
+    );
+  }
   return {
     role: "assistant",
-    content: message.content.map(toAssistantContent),
+    content,
+    ...(replay?.reasoning.state === "PRESENT"
+      ? { providerOptions: { openaiCompatible: { reasoning_content: replay.reasoning.content } } }
+      : {}),
   };
 }
 

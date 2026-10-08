@@ -556,6 +556,27 @@ export function createV2ContextEngine(options: V2ContextEngineOptions): ContextE
       throwIfAborted(input.signal);
       return Object.freeze({
         messages: finalProjection.materializedMessages,
+        selectedMessageIds: Object.freeze(
+          finalProjection.selectedMessages.map(({ message }) => String(message.id)),
+        ),
+        selectedAssistantReplaySources: Object.freeze(
+          finalProjection.selectedMessages.flatMap(({ message }) => {
+            if (message.type !== "ASSISTANT") return [];
+            const model = message.model.kind === "MODEL_TURN" ? message.model.model : undefined;
+            const providerId = model?.provider ?? message.providerState?.providerId;
+            return [
+              Object.freeze({
+                messageId: String(message.id),
+                runId: String(message.runId),
+                ...(message.model.kind === "MODEL_TURN" ? { callId: message.model.callId } : {}),
+                ...(providerId === undefined ? {} : { providerId }),
+                ...(model === undefined ? {} : { model: model.model }),
+                ...(message.providerState === undefined ? {} : { api: message.providerState.api }),
+                hasProviderState: message.providerState !== undefined,
+              }),
+            ];
+          }),
+        ),
         report: finalProjection.audit.report,
         observationPolicy: finalPolicy.observationPolicy,
         ...checkpointReference(activeCheckpoint),

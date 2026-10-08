@@ -1,6 +1,7 @@
 import type { ModelTurnExecutor } from "@caelush/agent";
 import { RunExecutionInvariantError } from "@caelush/agent";
 import type { ModelTurnBoundaryInput, ModelTurnBoundaryPort } from "@caelush/agent";
+import type { AIPrivateCompletion } from "@caelush/ai";
 import type { ModelRef, StepId } from "@caelush/protocol";
 
 import type { AgentBudgetBlock } from "./agent-errors.js";
@@ -93,6 +94,8 @@ export interface AgentTurnObservation {
   contextError: unknown;
   /** Run-selected transport identity for the one Provider attempt, if configured. */
   transportSelection: ModelTransportSelection | undefined;
+  /** Core-private completion for this invocation; never included in an Agent result or event. */
+  privateCompletion: AIPrivateCompletion | undefined;
 }
 
 /** A fresh, empty observation for one Agent turn. */
@@ -107,6 +110,7 @@ export function createAgentTurnObservation(): AgentTurnObservation {
     admissionError: undefined,
     contextError: undefined,
     transportSelection: undefined,
+    privateCompletion: undefined,
   };
 }
 

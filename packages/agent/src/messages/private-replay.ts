@@ -42,6 +42,8 @@ export interface PrivateReplayReadScope {
   readonly model: string;
   readonly api: string;
   readonly selectedMessageIds: readonly string[];
+  /** Ordered Assistant subset from this same Context selection; binds each opaque reference to its message. */
+  readonly selectedAssistantMessageIds?: readonly string[];
 }
 
 export interface PrivateReplayReader {
@@ -75,6 +77,10 @@ export function createPrivateReplayReference(
     payload: Object.freeze({
       kind: PRIVATE_REPLAY_REFERENCE_KIND,
       replayId: identity.messageId,
+      sessionId: identity.sessionId,
+      runId: identity.runId,
+      callId: identity.callId,
+      model: identity.model,
       replayVersion: 1,
     }),
   });

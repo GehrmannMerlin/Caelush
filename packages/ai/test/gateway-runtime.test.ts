@@ -182,9 +182,60 @@ describe("AIGateway runtime forwarding", () => {
     expect(input?.provider.endpoint).toBe("https://api.test.example/v1");
     expect(input?.signal).toBeInstanceOf(AbortSignal);
   });
+
+  it("keeps private completion scoped to a successfully finished Gateway stream", async () => {
+    const makeAdapter = (payload: Uint8Array) =>
+      createFakeAdapter("test-api", async function* (input) {
+        input.capturePrivateCompletion?.({ completeness: "COMPLETE", payload });
+        yield* adapterEvents(...textTurn("public answer"));
+      });
+    const firstAdapter = makeAdapter(new TextEncoder().encode("private-one"));
+    const secondAdapter = makeAdapter(new TextEncoder().encode("private-two"));
+    const firstStream = await gatewayWith(firstAdapter).stream(request());
+    const secondStream = await gatewayWith(secondAdapter).stream(request());
+
+    const [firstEvents, secondEvents] = await Promise.all([
+      collect(firstStream.events),
+      collect(secondStream.events),
+    ]);
+    const first = firstStream.takePrivateCompletion();
+    const second = secondStream.takePrivateCompletion();
+
+    expect(JSON.stringify(firstEvents)).not.toContain("private-one");
+    expect(JSON.stringify(secondEvents)).not.toContain("private-two");
+    expect(first?.completeness).toBe("COMPLETE");
+    expect(second?.completeness).toBe("COMPLETE");
+    if (first?.completeness !== "COMPLETE" || second?.completeness !== "COMPLETE") {
+      throw new Error("expected completed private sidebands");
+    }
+    expect(new TextDecoder().decode(first.payload)).toBe("private-one");
+    expect(new TextDecoder().decode(second.payload)).toBe("private-two");
+    expect(first.callId).toBe(firstStream.callId);
+    expect(second.callId).toBe(secondStream.callId);
+    first.payload.fill(0);
+    second.payload.fill(0);
+    expect(firstStream.takePrivateCompletion()).toBeUndefined();
+  });
 });
 
 describe("AIGateway runtime error boundary", () => {
+  it("discards a private candidate when the Provider stream fails", async () => {
+    const adapter = createFakeAdapter("test-api", async function* (input) {
+      input.capturePrivateCompletion?.({
+        completeness: "COMPLETE",
+        payload: new TextEncoder().encode("C3_PRIVATE_REASONING_SENTINEL"),
+      });
+      yield { type: "text.delta", payload: { text: "public" } };
+      throw new Error("synthetic transport failure");
+    });
+    const stream = await gatewayWith(adapter).stream(request());
+    const events = await collect(stream.events);
+
+    expect(types(events).at(-1)).toBe("stream.error");
+    expect(JSON.stringify(events).includes("C3_PRIVATE_REASONING_SENTINEL")).toBe(false);
+    expect(stream.takePrivateCompletion()).toBeUndefined();
+  });
+
   it("turns an adapter AIError into a sanitized stream.error", async () => {
     const adapter = createFakeAdapter("test-api", () =>
       adapterEventsThenThrow(

@@ -1,6 +1,17 @@
 import { createAIModelTurnAssembler } from "@caelush/ai";
 import { AIError } from "@caelush/ai";
-import type { AIGateway, AIModelRequest, AIModelTurnResult, AIStreamEvent } from "@caelush/ai";
+import { requiresReasoningReplayWithTools } from "@caelush/ai";
+import type {
+  AIGateway,
+  AIModelRequest,
+  AIModelTurnResult,
+  AIPrivateCompletion,
+  AIPrivateReplayResolver,
+  ModelDescriptor,
+  AIStreamEvent,
+} from "@caelush/ai";
+import type { PrivateReplayReadScope } from "../../messages/private-replay.js";
+import type { SelectedAssistantReplaySource } from "../types.js";
 
 import type { RunEventNotifierPort } from "../../events/notifier-port.js";
 import {
@@ -51,6 +62,9 @@ export interface ModelTurnExecutionInput {
   readonly identity: AgentExecutionIdentity;
   readonly turn: AgentTurnRef;
   readonly request: AIModelRequest;
+  readonly model?: ModelDescriptor;
+  readonly selectedMessageIds?: readonly string[];
+  readonly selectedAssistantReplaySources?: readonly SelectedAssistantReplaySource[];
   /** Host-selected equivalent transport; contains no endpoint or credential data. */
   readonly transportId?: string;
   /**
@@ -61,6 +75,8 @@ export interface ModelTurnExecutionInput {
   readonly signal: AbortSignal;
   /** Presentation-only. Nothing it receives is durable. */
   readonly streamSink?: ModelTurnStreamSink;
+  /** Core-private, invocation-scoped completion sideband; never part of the frozen result. */
+  readonly privateCompletionSink?: (completion: AIPrivateCompletion) => void;
 }
 
 /** The turn produced a settled result. */
@@ -87,6 +103,10 @@ export type ModelTurnExecutionResult =
 /** The frozen collaborators of a model turn executor. */
 export interface ModelTurnExecutorDependencies {
   readonly gateway: AIGateway;
+  /** Host-controlled, execution-scoped resolver factory over Context-selected message IDs. */
+  readonly privateReplayResolverFactory?: (
+    scope: PrivateReplayReadScope,
+  ) => AIPrivateReplayResolver;
   /** Canonical live-event sink. It has no durable write authority. */
   readonly notifier?: RunEventNotifierPort;
   /** Injected so the Agent projector never manufactures IDs internally. */
@@ -109,12 +129,16 @@ export function createModelTurnExecutor(
       // Already cancelled before any provider work: no gateway invocation at all.
       if (input.signal.aborted) return { kind: "CANCELLED" };
 
+      let stream: Awaited<ReturnType<AIGateway["stream"]>> | undefined;
+      let transferredPrivateCompletion = false;
       try {
         // Exactly one gateway invocation per execute(): the durable run layer owns
         // retry, never this boundary.
-        const stream = await dependencies.gateway.stream(input.request, {
+        const privateReplayResolver = createPrivateReplayResolver(input, dependencies);
+        stream = await dependencies.gateway.stream(input.request, {
           signal: input.signal,
           ...(input.transportId === undefined ? {} : { transportId: input.transportId }),
+          ...(privateReplayResolver === undefined ? {} : { privateReplayResolver }),
         });
         const assembler = createAIModelTurnAssembler();
         const signalProjector = createTurnProjector(dependencies);
@@ -127,12 +151,109 @@ export function createModelTurnExecutor(
 
         // Throws the reconstructed AIError for a failed stream and AI_INVALID_RESPONSE
         // for a stream that never finished.
-        return { kind: "COMPLETED", result: assembler.result() };
+        const result = assembler.result();
+        const privateCompletion = stream.takePrivateCompletion?.();
+        if (
+          input.model !== undefined &&
+          requiresReasoningReplayWithTools(input.model) &&
+          (input.request.tools?.length ?? 0) > 0 &&
+          privateCompletion?.completeness !== "COMPLETE"
+        ) {
+          throw replayUnavailable(input.model);
+        }
+        if (privateCompletion !== undefined) {
+          if (
+            privateCompletion.callId !== stream.callId ||
+            privateCompletion.providerId !== input.request.model.provider ||
+            privateCompletion.model.provider !== input.request.model.provider ||
+            privateCompletion.model.model !== input.request.model.model ||
+            privateCompletion.model.baseUrl !== input.request.model.baseUrl
+          ) {
+            if (privateCompletion.completeness === "COMPLETE") privateCompletion.payload.fill(0);
+            throw new AIError(
+              "AI_INVALID_RESPONSE",
+              "Private model completion identity is invalid.",
+            );
+          }
+          if (input.privateCompletionSink === undefined) {
+            if (privateCompletion.completeness === "COMPLETE") privateCompletion.payload.fill(0);
+          } else {
+            try {
+              input.privateCompletionSink(privateCompletion);
+            } catch (error) {
+              if (privateCompletion.completeness === "COMPLETE") privateCompletion.payload.fill(0);
+              throw error;
+            }
+            transferredPrivateCompletion = true;
+          }
+        }
+        return { kind: "COMPLETED", result };
       } catch (error) {
         return classifyTurnFailure(error, input.signal);
+      } finally {
+        if (!transferredPrivateCompletion && stream !== undefined) {
+          const privateCompletion = stream.takePrivateCompletion?.();
+          if (privateCompletion?.completeness === "COMPLETE") privateCompletion.payload.fill(0);
+        }
       }
     },
   };
+}
+
+function createPrivateReplayResolver(
+  input: ModelTurnExecutionInput,
+  dependencies: ModelTurnExecutorDependencies,
+): AIPrivateReplayResolver | undefined {
+  const descriptor = input.model;
+  if (
+    descriptor === undefined ||
+    input.request.tools === undefined ||
+    input.request.tools.length === 0 ||
+    !requiresReasoningReplayWithTools(descriptor)
+  )
+    return undefined;
+
+  const sources = input.selectedAssistantReplaySources;
+  if (
+    sources === undefined &&
+    input.request.messages.some((message) => message.role === "assistant")
+  ) {
+    throw replayUnavailable(descriptor);
+  }
+  const selectedIds = new Set(input.selectedMessageIds ?? []);
+  for (const source of sources ?? []) {
+    if (!selectedIds.has(source.messageId)) throw replayUnavailable(descriptor);
+    if (source.providerId === undefined || source.model === undefined) {
+      // A legacy assistant has no reliable Provider/Model identity. In a mode that requires
+      // complete history, guessing that it is unrelated would silently omit required state.
+      throw replayUnavailable(descriptor);
+    }
+    if (source.providerId !== descriptor.ref.provider || source.model !== descriptor.ref.model) {
+      throw replayUnavailable(descriptor);
+    }
+    if (!source.hasProviderState || source.api !== descriptor.api || source.callId === undefined) {
+      throw replayUnavailable(descriptor);
+    }
+  }
+
+  if (dependencies.privateReplayResolverFactory === undefined) throw replayUnavailable(descriptor);
+  return dependencies.privateReplayResolverFactory({
+    sessionId: input.identity.sessionId,
+    executionRunId: input.identity.runId,
+    providerId: descriptor.ref.provider,
+    model: descriptor.ref.model,
+    api: descriptor.api,
+    selectedMessageIds: input.selectedMessageIds ?? [],
+    selectedAssistantMessageIds: sources?.map((source) => source.messageId) ?? [],
+  });
+}
+
+function replayUnavailable(model: ModelDescriptor): AIError {
+  return new AIError(
+    "AI_CAPABILITY_UNSUPPORTED",
+    "Required native replay is unavailable for the selected conversation.",
+    { providerId: model.ref.provider, model: model.ref },
+  );
 }
 
 /**

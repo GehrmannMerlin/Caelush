@@ -211,6 +211,7 @@ import {
 import { DAEMON_VERSION } from "./version.js";
 import { RunEventHub, type SubscriberQueuePolicy } from "./events/index.js";
 import { createDaemonV2ContextEngine } from "./context/v2-context-composition.js";
+import { createDaemonPrivateReplayResolver } from "./replay/private-replay-resolver.js";
 
 /**
  * Project durable invocation state back onto the canonical prepared call.
@@ -551,6 +552,8 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
   const gateway = createDiagnosedGateway(ai.gateway, wireDiagnostic, ai.models);
   const modelTurnExecutor = createModelTurnExecutor({
     gateway,
+    privateReplayResolverFactory: (scope) =>
+      createDaemonPrivateReplayResolver(options.storage.privateReplay, scope),
     notifier: eventNotifier,
     eventIdFactory: { create: createEventId },
     clock,
@@ -1052,6 +1055,7 @@ export async function composeDaemon(options: DaemonCompositionOptions): Promise<
     agentExecution,
     modelTransportRecovery,
     executionStore: options.storage.execution,
+    privateReplayStore: options.storage.privateReplay,
     completionStore: options.storage.execution,
     events: eventNotifier,
     configResolver: executionConfigResolver,
@@ -1985,6 +1989,7 @@ function createDiagnosedGateway(
       return {
         callId: stream.callId,
         events: observeEvents(stream.events, stream.callId, request, startedAt, diagnostic),
+        takePrivateCompletion: () => stream.takePrivateCompletion(),
       };
     },
     complete(request: AIModelRequest, options) {

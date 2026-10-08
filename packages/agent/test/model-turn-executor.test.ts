@@ -14,6 +14,8 @@ import type {
   AIModelTurnResult,
   AIStream,
   AIStreamEvent,
+  AIPrivateCompletion,
+  ModelDescriptor,
 } from "@caelush/ai";
 import type { RunId, SessionId, StepId } from "@caelush/protocol";
 
@@ -30,6 +32,31 @@ const CALL_ID = "llm_0195f3a0-0000-7000-8000-000000000000";
 const REQUEST: AIModelRequest = {
   model: { provider: "test", model: "model-a" },
   messages: [{ role: "user", content: "hello" }],
+};
+
+const REPLAY_MODEL: ModelDescriptor = {
+  ref: { provider: "deepseek", model: "deepseek-reasoner" },
+  api: "openai-compatible-chat",
+  limits: { contextWindowTokens: 10_000, maxOutputTokens: 1_000 },
+  capabilities: {
+    streaming: "SUPPORTED",
+    toolCalling: "SUPPORTED",
+    parallelToolCalls: "SUPPORTED",
+    structuredOutput: "UNKNOWN",
+    vision: "UNKNOWN",
+    reasoning: "SUPPORTED",
+    reasoningSummary: "UNKNOWN",
+    promptCaching: "UNKNOWN",
+    usageReporting: "UNKNOWN",
+  },
+  source: "CONFIGURATION",
+  adapterMetadata: { "openai-compatible": { requiresReasoningReplayWithTools: true } },
+};
+
+const REPLAY_REQUEST: AIModelRequest = {
+  model: REPLAY_MODEL.ref,
+  messages: [{ role: "user", content: "continue" }],
+  tools: [{ name: "read_file", description: "Read a file", inputSchema: { type: "object" } }],
 };
 
 const IDENTITY: AgentExecutionIdentity = {
@@ -76,7 +103,10 @@ function errorEvent(code: string, retryable: boolean, retryAfterMs?: number): AI
 }
 
 /** A gateway that replays a fixed event script and counts invocations. */
-function gateway(script: readonly AIStreamEvent[]): {
+function gateway(
+  script: readonly AIStreamEvent[],
+  privateCompletion?: AIPrivateCompletion,
+): {
   readonly gateway: AIGateway;
   callCount(): number;
   requests(): readonly AIModelRequest[];
@@ -97,11 +127,17 @@ function gateway(script: readonly AIStreamEvent[]): {
       requests.push(request);
       streamOptions.push(options);
       if (options?.signal !== undefined) signals.push(options.signal);
+      let completion = privateCompletion;
       return Promise.resolve({
         callId: CALL_ID as never,
         events: (async function* generate(): AsyncGenerator<AIStreamEvent> {
           for (const event of script) yield event;
         })(),
+        takePrivateCompletion: () => {
+          const current = completion;
+          completion = undefined;
+          return current;
+        },
       });
     },
     async complete(): Promise<AIModelTurnResult> {
@@ -159,6 +195,228 @@ describe("ModelTurnExecutor frozen result contract", () => {
     expect(completed(result).providerId).toBe("test");
     expect(fake.callCount()).toBe(1);
   });
+
+  it("delivers private completion only through the invocation sink, outside the durable AI result", async () => {
+    const privatePayload = new TextEncoder().encode("C3_PRIVATE_REASONING_SENTINEL");
+    const completion: AIPrivateCompletion = {
+      callId: CALL_ID as never,
+      providerId: "test",
+      model: REQUEST.model,
+      api: "test-api",
+      completeness: "COMPLETE",
+      payload: privatePayload,
+    };
+    const fake = gateway(textTurn("answer"), completion);
+    const executor = createModelTurnExecutor({ gateway: fake.gateway });
+    let received: AIPrivateCompletion | undefined;
+
+    const result = await executor.execute(
+      input({ privateCompletionSink: (value: AIPrivateCompletion) => (received = value) } as never),
+    );
+
+    expect(result.kind).toBe("COMPLETED");
+    expect(received?.callId).toBe(CALL_ID);
+    expect(JSON.stringify(result).includes("C3_PRIVATE_REASONING_SENTINEL")).toBe(false);
+    if (result.kind !== "COMPLETED") throw new Error("expected completed result");
+    expect(Object.hasOwn(result.result, "privateCompletion")).toBe(false);
+    received?.payload.fill(0);
+  });
+
+  it.each(["Tool", "final"])(
+    "refuses a %s decision when a required native replay is incomplete",
+    async (kind) => {
+      const privateCompletion: AIPrivateCompletion = {
+        callId: CALL_ID as never,
+        providerId: REPLAY_MODEL.ref.provider,
+        model: REPLAY_MODEL.ref,
+        api: REPLAY_MODEL.api,
+        completeness: "INCOMPLETE",
+      };
+      const fake = gateway(
+        kind === "Tool"
+          ? [
+              {
+                type: "stream.start",
+                payload: {
+                  callId: CALL_ID as never,
+                  providerId: REPLAY_MODEL.ref.provider,
+                  model: REPLAY_MODEL.ref,
+                  resolution: RESOLUTION as never,
+                },
+              },
+              {
+                type: "tool_call.start",
+                payload: {
+                  toolCallId: "call-next",
+                  toolName: "read_file",
+                  assistantItemId: "item",
+                },
+              },
+              {
+                type: "tool_call.completed",
+                payload: {
+                  id: "call-next",
+                  name: "read_file",
+                  input: { path: "README.md" },
+                  assistantItemId: "item",
+                },
+              },
+              { type: "stream.finish", payload: { finishReason: "TOOL_CALLS" } },
+            ]
+          : textTurn("final answer"),
+        privateCompletion,
+      );
+      const executor = createModelTurnExecutor({
+        gateway: fake.gateway,
+        privateReplayResolverFactory: () => ({ resolve: async () => undefined }),
+      });
+      let sinkCalled = false;
+
+      const result = await executor.execute(
+        input({
+          request: REPLAY_REQUEST,
+          model: REPLAY_MODEL,
+          privateCompletionSink: () => {
+            sinkCalled = true;
+          },
+        }),
+      );
+
+      expect(result.kind).toBe("FAILED");
+      expect(sinkCalled).toBe(false);
+      expect(fake.callCount()).toBe(1);
+    },
+  );
+
+  it("clears private completion bytes when the private sink rejects ownership", async () => {
+    const payload = new TextEncoder().encode("private completion bytes");
+    const fake = gateway(textTurn("answer"), {
+      callId: CALL_ID as never,
+      providerId: "test",
+      model: REQUEST.model,
+      api: "test-api",
+      completeness: "COMPLETE",
+      payload,
+    });
+    const executor = createModelTurnExecutor({ gateway: fake.gateway });
+
+    const result = await executor.execute(
+      input({
+        privateCompletionSink: () => {
+          throw new Error("sink unavailable");
+        },
+      }),
+    );
+
+    expect(result.kind).toBe("FAILED");
+    expect(payload.every((byte) => byte === 0)).toBe(true);
+  });
+
+  it("builds the resolver scope from this Run and the exact Context-selected IDs", async () => {
+    const fake = gateway(textTurn("answer"));
+    const selectedScopes: unknown[] = [];
+    const resolver = { resolve: async () => undefined };
+    const executor = createModelTurnExecutor({
+      gateway: fake.gateway,
+      privateReplayResolverFactory: (scope) => {
+        selectedScopes.push(scope);
+        return resolver;
+      },
+    });
+
+    await executor.execute(
+      input({
+        request: REPLAY_REQUEST,
+        model: REPLAY_MODEL,
+        selectedMessageIds: ["selected-assistant"],
+        selectedAssistantReplaySources: [
+          {
+            messageId: "selected-assistant",
+            runId: "run-previous",
+            callId: "previous-call",
+            providerId: "deepseek",
+            model: "deepseek-reasoner",
+            api: "openai-compatible-chat",
+            hasProviderState: true,
+          },
+        ],
+      }),
+    );
+
+    expect(selectedScopes).toEqual([
+      {
+        sessionId: IDENTITY.sessionId,
+        executionRunId: IDENTITY.runId,
+        providerId: "deepseek",
+        model: "deepseek-reasoner",
+        api: "openai-compatible-chat",
+        selectedMessageIds: ["selected-assistant"],
+        selectedAssistantMessageIds: ["selected-assistant"],
+      },
+    ]);
+    expect(fake.options()[0]?.privateReplayResolver).toBe(resolver);
+  });
+
+  it("fails before provider I/O when a selected same-model Assistant lacks required replay", async () => {
+    const fake = gateway(textTurn("answer"));
+    const executor = createModelTurnExecutor({
+      gateway: fake.gateway,
+      privateReplayResolverFactory: () => ({ resolve: async () => undefined }),
+    });
+    const result = await executor.execute(
+      input({
+        request: REPLAY_REQUEST,
+        model: REPLAY_MODEL,
+        selectedMessageIds: ["old-assistant"],
+        selectedAssistantReplaySources: [
+          {
+            messageId: "old-assistant",
+            runId: "run-previous",
+            callId: "old-call",
+            providerId: "deepseek",
+            model: "deepseek-reasoner",
+            hasProviderState: false,
+          },
+        ],
+      }),
+    );
+
+    expect(result.kind).toBe("FAILED");
+    expect(fake.callCount()).toBe(0);
+  });
+
+  it.each([
+    { providerId: "other-provider", model: "deepseek-reasoner", api: "openai-compatible-chat" },
+    { providerId: "deepseek", model: "other-model", api: "openai-compatible-chat" },
+    { providerId: "deepseek", model: "deepseek-reasoner", api: "other-api" },
+  ])(
+    "fails before Provider I/O after an incompatible historical identity switch (%j)",
+    async (source) => {
+      const fake = gateway(textTurn("answer"));
+      const executor = createModelTurnExecutor({
+        gateway: fake.gateway,
+        privateReplayResolverFactory: () => ({ resolve: async () => undefined }),
+      });
+      const result = await executor.execute(
+        input({
+          request: REPLAY_REQUEST,
+          model: REPLAY_MODEL,
+          selectedMessageIds: ["selected-assistant"],
+          selectedAssistantReplaySources: [
+            {
+              messageId: "selected-assistant",
+              runId: "run-previous",
+              callId: "previous-call",
+              ...source,
+              hasProviderState: true,
+            },
+          ],
+        }),
+      );
+      expect(result.kind).toBe("FAILED");
+      expect(fake.callCount()).toBe(0);
+    },
+  );
 
   it("preserves usage and resolution", async () => {
     const fake = gateway([

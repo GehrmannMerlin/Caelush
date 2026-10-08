@@ -1,6 +1,7 @@
 import type { AIModelSettings, AIToolSpec, ModelDescriptor } from "@caelush/ai";
 
 import type { AgentLoop } from "../loop/agent-loop.js";
+import type { AIPrivateCompletion } from "@caelush/ai";
 import type { AgentExecutionIdentity, AgentTurnRef } from "../loop/types.js";
 import type { AgentConversationSnapshot } from "../messages/conversation/conversation-snapshot.js";
 import type { RunExecutionDirective } from "./directive.js";
@@ -83,6 +84,8 @@ export interface RunExecutionEffectContext {
    * forwards this signal unchanged, and Run cancellation stays a Run Layer authority.
    */
   readonly signal: AbortSignal;
+  /** Core-private per-invocation completion sideband; it is not returned by the Agent loop. */
+  readonly privateCompletionSink?: (completion: AIPrivateCompletion) => void;
 }
 
 /** Create the frozen driver over its three ports. */
@@ -110,6 +113,9 @@ export function createRunExecutionDriver(
               ? {}
               : { modelSettings: context.modelSettings }),
             signal: context.signal,
+            ...(context.privateCompletionSink === undefined
+              ? {}
+              : { privateCompletionSink: context.privateCompletionSink }),
           });
           return { kind: "AGENT", result };
         }

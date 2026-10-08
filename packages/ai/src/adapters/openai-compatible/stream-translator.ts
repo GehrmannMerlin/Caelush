@@ -14,6 +14,7 @@ import type { AIAdapterEvent } from "../api-adapter-event.js";
 import type { ModelRef } from "../../models/model-ref.js";
 import type { ModelUsage } from "../../models/model-usage.js";
 import type { RawStreamState } from "./raw-tool-state.js";
+import type { DeepSeekPrivateReplayCapture } from "./private-replay.js";
 
 /**
  * The CAELUSH tool-name shape, reproduced here as an adapter-private guard.
@@ -35,18 +36,21 @@ export interface StreamTranslationState {
   readonly raw: RawStreamState;
   readonly signal: AbortSignal;
   readonly model: ModelRef;
+  readonly privateReplayCapture?: DeepSeekPrivateReplayCapture;
 }
 
 /** Create the per-turn stream translation state. */
 export function createStreamTranslationState(
   signal: AbortSignal,
   model: ModelRef,
+  privateReplayCapture?: DeepSeekPrivateReplayCapture,
 ): StreamTranslationState {
   return {
     toolLifecycles: new Map(),
     raw: createRawStreamState(),
     signal,
     model,
+    ...(privateReplayCapture === undefined ? {} : { privateReplayCapture }),
   };
 }
 
@@ -69,6 +73,7 @@ export function* translateOpenAICompatiblePart(
 ): Generator<AIAdapterEvent> {
   switch (part.type) {
     case "raw": {
+      state.privateReplayCapture?.observeRawReasoning(part.rawValue);
       observeRawFinishReason(part.rawValue, state.raw);
       try {
         assertRawToolCallIdentity(part.rawValue, state.raw);
@@ -90,6 +95,7 @@ export function* translateOpenAICompatiblePart(
         throw invalidResponse(state, "The stream repeated a tool call id.");
       }
       state.toolLifecycles.set(part.id, { name: part.toolName, completed: false });
+      state.privateReplayCapture?.startTool(part.id, part.toolName);
       yield {
         type: "tool_call.start",
         payload: { toolCallId: part.id, toolName: part.toolName },
@@ -102,6 +108,7 @@ export function* translateOpenAICompatiblePart(
       if (lifecycle === undefined || lifecycle.completed) {
         throw invalidResponse(state, "The stream emitted an inactive tool input delta.");
       }
+      state.privateReplayCapture?.appendTool(part.id, part.delta);
       yield { type: "tool_call.delta", payload: { toolCallId: part.id, delta: part.delta } };
       return;
     }
@@ -117,6 +124,7 @@ export function* translateOpenAICompatiblePart(
       assertToolName(part.toolName, state);
 
       const call = { id: part.toolCallId, name: part.toolName, input };
+      state.privateReplayCapture?.completeTool(call.id, call.name, call.input);
       const lifecycle = state.toolLifecycles.get(call.id);
       if (lifecycle === undefined) {
         // The SDK buffered the call until a late function name arrived, so the

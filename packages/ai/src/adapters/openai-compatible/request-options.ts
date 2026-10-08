@@ -1,5 +1,6 @@
 import { createAIError } from "../../errors/ai-error.js";
 import type { ModelDescriptor } from "../../models/model-descriptor.js";
+export { requiresReasoningReplayWithTools } from "../../models/native-replay-capability.js";
 import type { ReasoningLevel } from "../../reasoning/reasoning-level.js";
 import type { ResolvedAIModelRequest } from "../../request/resolved-model-request.js";
 

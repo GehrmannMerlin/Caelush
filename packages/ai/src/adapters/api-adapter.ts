@@ -3,6 +3,10 @@ import type { ApiId } from "../ids/api-id.js";
 import type { ModelDescriptor } from "../models/model-descriptor.js";
 import type { ResolvedAIModelRequest } from "../request/resolved-model-request.js";
 import type { ResolvedProviderConnection } from "../providers/resolved-provider-connection.js";
+import type {
+  AIAdapterPrivateCompletionCandidate,
+  AIPrivateReplayResolver,
+} from "../stream/private-completion.js";
 
 /**
  * Everything an adapter needs for one provider turn.
@@ -18,6 +22,10 @@ export interface ApiAdapterStreamInput {
   readonly provider: ResolvedProviderConnection;
   readonly request: ResolvedAIModelRequest;
   readonly signal: AbortSignal;
+  /** Gateway-owned, per-stream private replay resolution capability. */
+  readonly privateReplayResolver?: AIPrivateReplayResolver;
+  /** Adapter candidate; the Gateway exposes it only if the full turn settles successfully. */
+  readonly capturePrivateCompletion?: (candidate: AIAdapterPrivateCompletionCandidate) => void;
 }
 
 /**

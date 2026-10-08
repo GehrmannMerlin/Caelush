@@ -14,6 +14,11 @@ export type {
 } from "./events.js";
 
 export type { AIStream, AIStreamOptions } from "./stream.js";
+export type {
+  AIAdapterPrivateCompletionCandidate,
+  AIPrivateCompletion,
+  AIPrivateReplayResolver,
+} from "./private-completion.js";
 export {
   DEFAULT_PROVIDER_NUDGE_AFTER_MS,
   DEFAULT_PROVIDER_STREAM_IDLE_TIMEOUT_MS,

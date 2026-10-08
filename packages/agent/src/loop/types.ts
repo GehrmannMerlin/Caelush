@@ -2,6 +2,7 @@ import type {
   AIMessage,
   AIModelSettings,
   AIToolSpec,
+  AIPrivateCompletion,
   ModelDescriptor,
   ModelUsage,
 } from "@caelush/ai";
@@ -247,6 +248,12 @@ export type { ContextCheckpointRef } from "../context/compaction/context-compact
 export interface PreparedModelContext {
   readonly messages: readonly AIMessage[];
 
+  /** Durable message IDs selected by this exact Context plan, in ledger order. */
+  readonly selectedMessageIds?: readonly string[];
+
+  /** Selected assistant provenance used only to fail closed on missing native replay. */
+  readonly selectedAssistantReplaySources?: readonly SelectedAssistantReplaySource[];
+
   readonly report: ContextBuildReport;
 
   readonly observationPolicy: ToolObservationPolicySnapshot;
@@ -256,6 +263,17 @@ export interface PreparedModelContext {
 
   /** A stable digest of the prepared context, for recovery comparisons. */
   readonly contextFingerprint?: string;
+}
+
+/** Safe provenance copied from Context-selected Assistant records; it contains no message body. */
+export interface SelectedAssistantReplaySource {
+  readonly messageId: string;
+  readonly runId: string;
+  readonly callId?: string;
+  readonly providerId?: string;
+  readonly model?: string;
+  readonly api?: string;
+  readonly hasProviderState: boolean;
 }
 
 /**
@@ -320,6 +338,9 @@ export interface AgentLoopAdvanceInput {
   readonly modelSettings?: AIModelSettings;
 
   readonly signal: AbortSignal;
+
+  /** Core-private completion path. The payload never enters AgentLoopAdvanceResult. */
+  readonly privateCompletionSink?: (completion: AIPrivateCompletion) => void;
 }
 
 /* ------------------------------------------------------------- retry metadata */

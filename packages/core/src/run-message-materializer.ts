@@ -7,6 +7,7 @@ import type {
   AgentMessageProjectorRegistry,
   AgentMessageRecordDraft,
   AgentConversationRepository,
+  PrivateReplayIdentity,
   ConversationTurnIdFactory,
   ToolFeedbackProjectionReceipt,
   ToolResultObservationRef,
@@ -21,6 +22,7 @@ import {
   fingerprintProjection,
   toolFeedbackPolicySnapshot,
   userMessageSource,
+  createPrivateReplayReference,
 } from "@caelush/agent";
 import type { AIMessagePhase, AIToolResultMessage } from "@caelush/ai";
 import type { ToolObservationPolicySnapshot } from "@caelush/agent";
@@ -69,7 +71,47 @@ export function createAssistantMessageAppend(
   modelTurn: AgentModelTurn,
   phase: AssistantMessagePhase,
 ): RunExecutionMessageAppend {
-  const message = authority.factory.createAssistant({
+  return appendFromMessage(
+    authority,
+    createAssistantMessage(authority, run, sourceStepId, modelTurn, phase),
+  );
+}
+
+/** Create the same Assistant record with an opaque private replay reference bound to its real ID. */
+export function createAssistantMessageAppendWithPrivateReplay(
+  authority: RunMessageAuthority,
+  run: AgentRun,
+  sourceStepId: StepId,
+  modelTurn: AgentModelTurn,
+  phase: AssistantMessagePhase,
+  replay: Pick<PrivateReplayIdentity, "providerId" | "model" | "api">,
+): { readonly append: RunExecutionMessageAppend; readonly identity: PrivateReplayIdentity } {
+  const message = createAssistantMessage(authority, run, sourceStepId, modelTurn, phase);
+  const identity: PrivateReplayIdentity = Object.freeze({
+    sessionId: String(run.sessionId),
+    runId: String(run.id),
+    messageId: String(message.id),
+    callId: modelTurn.callId,
+    providerId: replay.providerId,
+    model: replay.model,
+    api: replay.api,
+    replayVersion: 1,
+  });
+  const withReference = Object.freeze({
+    ...message,
+    providerState: createPrivateReplayReference(identity),
+  });
+  return Object.freeze({ append: appendFromMessage(authority, withReference), identity });
+}
+
+function createAssistantMessage(
+  authority: RunMessageAuthority,
+  run: AgentRun,
+  sourceStepId: StepId,
+  modelTurn: AgentModelTurn,
+  phase: AssistantMessagePhase,
+) {
+  return authority.factory.createAssistant({
     runId: run.id,
     sessionId: run.sessionId,
     conversationTurnId: authority.turns.forRun(run.id),
@@ -88,7 +130,6 @@ export function createAssistantMessageAppend(
       ? {}
       : { providerState: modelTurn.assistantMessage.providerState }),
   });
-  return appendFromMessage(authority, message);
 }
 
 export function createToolResultMessageAppend(
