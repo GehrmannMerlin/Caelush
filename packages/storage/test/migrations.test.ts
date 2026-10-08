@@ -2,7 +2,8 @@ import { DatabaseSync } from "node:sqlite";
 import { cp, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { deriveLegacyAgentMessageId } from "@caelush/agent";
+import { deriveLegacyAgentMessageId, hashPromptSurfaceContent } from "@caelush/agent";
+import { AgentRunSchema, createRunId, createSessionId, createWorkspaceId } from "@caelush/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { openCaelushStorage } from "../src/index.js";
 import { StorageMigrationError } from "../src/errors.js";
@@ -15,6 +16,7 @@ import {
 } from "../src/messages/migration/finalize-agent-messages.js";
 import { backfillLegacyAgentMessages } from "../src/messages/legacy/backfill.js";
 import { parseHistoricalLegacyMessage } from "../src/messages/migration/legacy-parser.js";
+import { makeSecurityPolicy } from "./support/fixtures.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -140,6 +142,8 @@ describe("committed storage migrations", () => {
         "memory_extraction_jobs",
         "memory_records",
         "prompt_surface_epochs",
+        "prompt_surface_records",
+        "prompt_surface_section_state",
         "prompt_surface_snapshots",
         "run_budget_entries",
         "run_cancellation_requests",
@@ -150,10 +154,10 @@ describe("committed storage migrations", () => {
         "verification_plans",
         "workspaces",
       ]);
-      // Phase 5F, the Workspace Registry, Runtime AI Management, and scoped Prompt Surface
-      // anchors are all represented in the published migration ledger.
+      // Phase 5F, the Workspace Registry, Runtime AI Management, scoped Prompt Surface anchors,
+      // and Prompt Surface V3 state are represented in the published migration ledger.
       expect(sqlite.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get()).toEqual({
-        count: 20,
+        count: 21,
       });
 
       // The final schema contains only the durable Message V2 envelope and payload.
@@ -227,7 +231,8 @@ describe("committed storage migrations", () => {
         !entry.isDirectory() ||
         entry.name === "20261006100000_prompt_surface" ||
         entry.name === "20261006110000_prompt_surface_same_step_epochs" ||
-        entry.name === "20261007120000_prompt_surface_scoped_anchors"
+        entry.name === "20261007120000_prompt_surface_scoped_anchors" ||
+        entry.name === "20261008100000_prompt_surface_v3"
       )
         continue;
       await cp(
@@ -264,14 +269,127 @@ describe("committed storage migrations", () => {
           "agent_messages",
           "agent_runs",
           "prompt_surface_epochs",
+          "prompt_surface_records",
+          "prompt_surface_section_state",
           "prompt_surface_snapshots",
         ]),
       );
       expect(sqlite.prepare('SELECT COUNT(*) AS count FROM "__drizzle_migrations"').get()).toEqual({
-        count: 20,
+        count: 21,
       });
     } finally {
       sqlite.close();
+    }
+  });
+
+  it("adds V3 storage without rewriting existing V2 Prompt Surface records", async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), "caelush-prompt-surface-v2-data-upgrade-"),
+    );
+    temporaryDirectories.push(directory);
+    const databasePath = path.join(directory, "caelush.db");
+    const priorMigrationsFolder = path.join(directory, "prior-drizzle");
+    await mkdir(priorMigrationsFolder);
+    const publishedFolders = await readdir(getCaelushMigrationsFolder(), { withFileTypes: true });
+    for (const entry of publishedFolders) {
+      if (!entry.isDirectory() || entry.name === "20261008100000_prompt_surface_v3") continue;
+      await cp(
+        path.join(getCaelushMigrationsFolder(), entry.name),
+        path.join(priorMigrationsFolder, entry.name),
+        {
+          recursive: true,
+        },
+      );
+    }
+
+    const priorDatabase = await openCaelushDatabase({ path: databasePath });
+    const runId = createRunId();
+    const sessionId = createSessionId();
+    const content =
+      '<runtime_context_snapshot state="CURRENT">immutable V2</runtime_context_snapshot>';
+    const contentHash = hashPromptSurfaceContent(content);
+    try {
+      migratePublishedStorage(priorDatabase, priorMigrationsFolder);
+      seedHistoricalRun(priorDatabase, runId, sessionId);
+      const historicalRun = AgentRunSchema.parse({
+        id: runId,
+        sessionId,
+        goal: "preserve V2 surface data",
+        status: "COMPLETED",
+        workspace: { id: createWorkspaceId(), path: directory },
+        model: { provider: "deepseek", model: "deepseek-chat" },
+        runtime: { id: "local", kind: "local" },
+        permissionProfile: "READ_ONLY",
+        approvalPolicy: "ON_BOUNDARY",
+        securityPolicy: makeSecurityPolicy(),
+        limits: { maxSteps: 10, maxToolCalls: 10, timeoutMs: 10_000 },
+        createdAt: 1,
+      });
+      priorDatabase.client
+        .prepare("UPDATE agent_runs SET data_json = ? WHERE id = ?")
+        .run(JSON.stringify(historicalRun), historicalRun.id);
+      finalizeRunSecurityPolicies(priorDatabase);
+      priorDatabase.client
+        .prepare(
+          `INSERT INTO prompt_surface_epochs
+         (run_id, epoch_id, model_provider, model_id, stable_head_fingerprint,
+          tool_schema_fingerprint, cache_settings_fingerprint, reset_reason,
+          created_step_sequence, created_at_ms)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          runId,
+          "epoch_prompt_surface_v2",
+          "deepseek",
+          "deepseek-chat",
+          `sha256:${"1".repeat(64)}`,
+          `sha256:${"2".repeat(64)}`,
+          `sha256:${"3".repeat(64)}`,
+          "INITIAL",
+          1,
+          2,
+        );
+      priorDatabase.client
+        .prepare(
+          `INSERT INTO prompt_surface_snapshots
+         (run_id, epoch_id, ordinal, anchor_message_sequence, anchor_message_id, anchor_run_id,
+          anchor_conversation_turn_id, source_step_sequence, kind, content_hash, byte_length,
+          created_at_ms, content)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          runId,
+          "epoch_prompt_surface_v2",
+          1,
+          1,
+          "amsg_prompt_surface_v2",
+          runId,
+          "cturn_prompt_surface_v2",
+          1,
+          "RUNTIME_CONTEXT_SNAPSHOT",
+          contentHash,
+          Buffer.byteLength(content, "utf8"),
+          3,
+          content,
+        );
+    } finally {
+      priorDatabase.close();
+    }
+
+    const upgraded = await openCaelushStorage({ path: databasePath });
+    try {
+      await expect(upgraded.promptSurface.getCurrent(runId)).resolves.toMatchObject({
+        formatVersion: 2,
+        epochId: "epoch_prompt_surface_v2",
+      });
+      await expect(
+        upgraded.promptSurface.readEpoch(runId, "epoch_prompt_surface_v2" as never),
+      ).resolves.toMatchObject({
+        formatVersion: 2,
+        snapshots: [{ content, contentHash }],
+      });
+    } finally {
+      await upgraded.close();
     }
   });
 

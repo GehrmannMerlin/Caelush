@@ -22,5 +22,8 @@ describe("production migration assets", () => {
       "migration.sql",
     );
     expect(existsSync(promptSurfaceSameStepMigration)).toBe(true);
+    expect(existsSync(path.join(folder, "20261008100000_prompt_surface_v3", "migration.sql"))).toBe(
+      true,
+    );
   });
 });

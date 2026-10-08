@@ -4,6 +4,7 @@ import type {
   PromptSurfaceEpoch,
   PromptSurfaceEpochId,
   PromptSurfaceEpochWithSnapshots,
+  PromptSurfaceRecord,
   PromptSurfaceSnapshot,
 } from "./prompt-surface.js";
 
@@ -21,6 +22,11 @@ export interface PromptSurfaceStorePort {
   appendSnapshot(
     snapshot: PromptSurfaceSnapshot,
     expectedCurrentEpoch: PromptSurfaceEpoch,
+  ): Promise<PromptSurfaceAppendResult>;
+  appendRecord(
+    record: PromptSurfaceRecord,
+    expectedCurrentEpoch: PromptSurfaceEpoch,
+    expectedRecordOrdinal: number,
   ): Promise<PromptSurfaceAppendResult>;
   readEpoch(
     runId: RunId,

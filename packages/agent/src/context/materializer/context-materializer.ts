@@ -57,7 +57,10 @@ export function createContextMaterializer(
       readonly reprojectOpenToolObservations?: boolean;
     }): Promise<readonly AIMessage[]> {
       throwIfAborted(input.signal);
-      const documentText = renderStableContextHead(input.prepared.document);
+      const documentText = renderStableContextHead(
+        input.prepared.document,
+        input.prepared.promptSurface?.epoch.formatVersion ?? 3,
+      );
       assertEstimate(options.tokenEstimator.estimateText(documentText, input.model), "document");
       throwIfAborted(input.signal);
 
@@ -160,15 +163,25 @@ function snapshotsByValidAnchor(
   if (snapshots.length === 0) return new Map();
   const visible = messages.filter((stored) => stored.message.audience.model);
   const boundaries = completePromptSurfaceAnchors(visible);
+  const positions = new Map<AgentMessageId, number>();
+  visible.forEach((stored, index) => positions.set(stored.message.id, index));
   const result = new Map<AgentMessageId, ProjectedSurfaceMessage[]>();
+  let previousPosition = -1;
   for (const snapshot of snapshots) {
     const anchor = snapshot.source.anchor;
     const boundary = boundaries.get(anchor.messageId);
-    if (boundary === undefined || !sameAnchor(boundary, anchor)) {
+    const position = positions.get(anchor.messageId);
+    if (
+      boundary === undefined ||
+      position === undefined ||
+      position < previousPosition ||
+      !sameAnchor(boundary, anchor)
+    ) {
       throw new PromptSurfaceIntegrityError(
-        "Prompt Surface snapshot anchor is missing or splits a Tool result batch.",
+        "Prompt Surface anchor is missing, out of order, or splits a Tool result batch.",
       );
     }
+    previousPosition = position;
     const anchored = result.get(anchor.messageId) ?? [];
     anchored.push(snapshot);
     result.set(anchor.messageId, anchored);

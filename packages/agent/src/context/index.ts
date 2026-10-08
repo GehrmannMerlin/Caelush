@@ -257,11 +257,14 @@ export {
   assertPromptSurfaceEpochWithSnapshots,
   assertPromptSurfaceSnapshot,
   assertPromptSurfaceSnapshotInput,
+  assertPromptSurfaceRecord,
+  assertPromptSurfaceRecordInput,
   createPromptSurfaceAnchor,
   createPromptSurfaceEpoch,
   createPromptSurfaceEpochId,
   createPromptSurfaceFingerprint,
   createPromptSurfaceSnapshot,
+  createPromptSurfaceRecord,
   hashPromptSurfaceContent,
   PROMPT_SURFACE_ANCHOR_VERSION,
   PROMPT_SURFACE_LIMITS,
@@ -279,7 +282,23 @@ export type {
   PromptSurfaceResetReason,
   PromptSurfaceSnapshot,
   PromptSurfaceSnapshotInput,
+  PromptSurfaceRecord,
+  PromptSurfaceRecordInput,
+  PromptSurfaceRecordKind,
 } from "./surface/prompt-surface.js";
+export {
+  applyPromptSurfaceSectionUpdates,
+  assertPromptSurfaceSectionStates,
+  assertSectionUpdate,
+  createPromptSurfaceSectionStates,
+  diffPromptSurfaceSections,
+  renderPromptSurfaceRecord,
+} from "./surface/prompt-surface-v3.js";
+export type {
+  PromptSurfaceSectionDiff,
+  PromptSurfaceSectionState,
+  PromptSurfaceSectionUpdate,
+} from "./surface/prompt-surface-v3.js";
 export {
   comparePromptSurfaceAnchorOrder,
   completePromptSurfaceAnchors,

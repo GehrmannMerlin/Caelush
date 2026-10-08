@@ -15,13 +15,14 @@ import {
   createPromptSurfaceEpoch,
   createPromptSurfaceEpochId,
   createPromptSurfaceFingerprint,
-  createPromptSurfaceSnapshot,
+  createPromptSurfaceRecord,
   PromptSurfaceIntegrityError,
 } from "../surface/prompt-surface.js";
 import type {
   PromptSurfaceAnchor,
   PromptSurfaceEpoch,
   PromptSurfaceEpochWithSnapshots,
+  PromptSurfaceRecord,
   PromptSurfaceResetReason,
 } from "../surface/prompt-surface.js";
 import type { PromptSurfaceStorePort } from "../surface/prompt-surface-store.js";
@@ -30,11 +31,14 @@ import {
   latestCompletePromptSurfaceAnchor,
   promptSurfaceAnchorsAreAvailable,
 } from "../surface/prompt-surface-anchors.js";
+import { renderStableContextHead } from "../surface/prompt-surface-renderer.js";
 import {
-  CLEARED_RUNTIME_CONTEXT_SNAPSHOT,
-  renderRuntimeContextSnapshot,
-  renderStableContextHead,
-} from "../surface/prompt-surface-renderer.js";
+  applyPromptSurfaceSectionUpdates,
+  createPromptSurfaceSectionStates,
+  diffPromptSurfaceSections,
+  renderPromptSurfaceRecord,
+} from "../surface/prompt-surface-v3.js";
+import type { PromptSurfaceSectionState } from "../surface/prompt-surface-v3.js";
 import {
   createContextCheckpointId,
   type ContextCompactionReason,
@@ -643,6 +647,9 @@ async function buildPreparedProjectionWithoutCompaction(input: {
     store: input.promptSurfaceStore,
     contextInput: input.contextInput,
     document,
+    allowSectionClear: input.sourceResults.every((result) =>
+      result.diagnostics.every((diagnostic) => diagnostic.severity === "INFO"),
+    ),
     conversationMessages: selectedMessages,
     ...(promptSurfaceCheckpointId === undefined
       ? {}
@@ -1033,6 +1040,8 @@ interface PromptSurfacePreparationInput {
   readonly store: PromptSurfaceStorePort;
   readonly contextInput: ContextPrepareInput;
   readonly document: import("../document/context-document.js").ContextDocument;
+  /** A warning/error means missing Sections cannot be interpreted as leaving the target view. */
+  readonly allowSectionClear: boolean;
   readonly conversationMessages: readonly StoredAgentMessage[];
   readonly checkpointId?: string;
   readonly tools: ContextPrepareInput["tools"];
@@ -1054,7 +1063,7 @@ async function preparePromptSurface(
   input: PromptSurfacePreparationInput,
 ): Promise<PromptSurfacePreparationResult> {
   const identity = promptSurfaceIdentity(input);
-  if (input.replayOnly) return preparePromptSurfaceReplay(input, identity);
+  if (input.replayOnly) return preparePromptSurfaceReplay(input);
   if (!input.persist) return preparePreviewSurface(input, identity);
 
   let current: PromptSurfaceEpoch | undefined;
@@ -1081,8 +1090,9 @@ async function preparePromptSurface(
     if (
       !promptSurfaceAnchorsAreAvailable(
         input.conversationMessages,
-        surface.snapshots.map((snapshot) => snapshot.anchor),
-      )
+        promptSurfaceAnchors(surface),
+      ) ||
+      !promptSurfaceAnchorsAreOrdered(input.conversationMessages, surface)
     ) {
       resetReason = "RECOVERY_INCOMPATIBLE";
       surface = undefined;
@@ -1090,6 +1100,11 @@ async function preparePromptSurface(
   }
 
   if (resetReason !== undefined) {
+    if (current !== undefined && !input.allowSectionClear) {
+      throw new PromptSurfaceIntegrityError(
+        "Prompt Surface cannot reset from an incomplete Context view.",
+      );
+    }
     if (current !== undefined && input.contextInput.turn.sequence < current.createdStepSequence) {
       throw new PromptSurfaceIntegrityError(
         "Prompt Surface reset would move behind the current durable Step.",
@@ -1099,6 +1114,7 @@ async function preparePromptSurface(
       runId: input.contextInput.identity.runId,
       epochId: createPromptSurfaceEpochId(input.epochIdFactory?.create() ?? randomUUID()),
       modelRef: input.contextInput.model.ref,
+      formatVersion: 3,
       stableHeadFingerprint: identity.stableHeadFingerprint,
       toolSchemaFingerprint: identity.toolSchemaFingerprint,
       cacheSettingsFingerprint: identity.cacheSettingsFingerprint,
@@ -1108,7 +1124,7 @@ async function preparePromptSurface(
     });
     try {
       await input.store.createEpoch(epoch);
-      surface = { ...epoch, snapshots: [] };
+      surface = { ...epoch, snapshots: [], records: [], sectionStates: [] };
     } catch (error) {
       const concurrent = await readCurrentSurface(input.store, epoch.runId);
       if (concurrent !== undefined && samePromptSurfaceIdentity(epoch, concurrent)) {
@@ -1125,95 +1141,30 @@ async function preparePromptSurface(
     throw new PromptSurfaceIntegrityError("Prompt Surface preparation has no complete epoch.");
   }
 
-  const currentStepSnapshot = surface.snapshots.find(
-    (snapshot) => snapshot.sourceStepSequence === input.contextInput.turn.sequence,
-  );
-  if (currentStepSnapshot !== undefined) {
-    if (surface.snapshots.at(-1)?.sourceStepSequence !== input.contextInput.turn.sequence) {
-      throw new PromptSurfaceIntegrityError("Prompt Surface retry is not the latest durable Step.");
-    }
-    return preparedSurface(surface, input);
-  }
-  if (
-    surface.snapshots.some(
-      (snapshot) => snapshot.sourceStepSequence > input.contextInput.turn.sequence,
-    ) ||
-    input.contextInput.turn.sequence < surface.createdStepSequence
-  ) {
+  if (surface.formatVersion !== 3) {
     throw new PromptSurfaceIntegrityError(
-      "Prompt Surface Step order is incompatible with recovery.",
+      "V2 Prompt Surface must be reset before a new Step executes.",
     );
   }
-
-  const lastSnapshot = surface.snapshots.at(-1);
-  let content = renderRuntimeContextSnapshot(input.document);
-  if (content === undefined) {
-    if (lastSnapshot === undefined || isClearedSnapshot(lastSnapshot.content)) {
-      return preparedSurface(surface, input);
-    }
-    content = CLEARED_RUNTIME_CONTEXT_SNAPSHOT;
-  } else if (lastSnapshot?.content === content) {
-    return preparedSurface(surface, input);
-  }
-
-  const anchor = latestCompletePromptSurfaceAnchor(input.conversationMessages);
-  if (
-    lastSnapshot !== undefined &&
-    comparePromptSurfaceAnchorOrder(input.conversationMessages, anchor, lastSnapshot.anchor) < 0
-  ) {
-    throw new PromptSurfaceIntegrityError("Prompt Surface anchor would move backwards.");
-  }
-  const snapshot = createPromptSurfaceSnapshot({
-    runId: surface.runId,
-    epochId: surface.epochId,
-    ordinal: surface.snapshots.length + 1,
-    anchor,
-    sourceStepSequence: input.contextInput.turn.sequence,
-    kind: "RUNTIME_CONTEXT_SNAPSHOT",
-    content,
-    createdAt: input.clock.now(),
-  });
-  const appendEpochId = surface.epochId;
-  try {
-    await input.store.appendSnapshot(snapshot, promptSurfaceEpochOnly(surface));
-    surface = await readCurrentSurface(input.store, snapshot.runId, appendEpochId);
-  } catch (error) {
-    const concurrent = await readCurrentSurface(input.store, snapshot.runId, appendEpochId);
-    const replay = concurrent?.snapshots.find(
-      (candidate) => candidate.sourceStepSequence === snapshot.sourceStepSequence,
-    );
-    if (
-      concurrent === undefined ||
-      replay === undefined ||
-      !samePromptSurfaceAnchor(replay.anchor, snapshot.anchor) ||
-      replay.contentHash !== snapshot.contentHash
-    ) {
-      throw new PromptSurfaceIntegrityError("Prompt Surface snapshot could not be committed.", {
-        cause: error,
-      });
-    }
-    surface = concurrent;
-  }
-  if (surface === undefined) {
-    throw new PromptSurfaceIntegrityError("Prompt Surface snapshot commit returned no surface.");
-  }
-  try {
-    assertPromptSurfaceEpochWithSnapshots(surface);
-  } catch (error) {
-    throw new PromptSurfaceIntegrityError("Committed Prompt Surface failed integrity checks.", {
-      cause: error,
-    });
-  }
-  return preparedSurface(surface, input);
+  return prepareV3PromptSurface(input, surface);
 }
 
 function preparePreviewSurface(
   input: PromptSurfacePreparationInput,
   identity: ReturnType<typeof promptSurfaceIdentity>,
 ): PromptSurfacePreparationResult {
+  const runId = input.contextInput.identity.runId;
+  const previewKey = fingerprint(
+    stableJson({
+      runId,
+      step: input.contextInput.turn.sequence,
+      identity,
+    }),
+  ).slice("sha256:".length);
   const epoch = createPromptSurfaceEpoch({
-    runId: input.contextInput.identity.runId,
-    epochId: `preview-${input.contextInput.turn.sequence}-${randomUUID()}`,
+    runId,
+    formatVersion: 3,
+    epochId: `preview-${previewKey}`,
     modelRef: input.contextInput.model.ref,
     stableHeadFingerprint: identity.stableHeadFingerprint,
     toolSchemaFingerprint: identity.toolSchemaFingerprint,
@@ -1222,29 +1173,144 @@ function preparePreviewSurface(
     createdStepSequence: input.contextInput.turn.sequence,
     createdAt: input.clock.now(),
   });
-  const content = renderRuntimeContextSnapshot(input.document);
-  const snapshots =
-    content === undefined
-      ? []
-      : [
-          createPromptSurfaceSnapshot({
-            runId: epoch.runId,
-            epochId: epoch.epochId,
-            ordinal: 1,
-            anchor: latestCompletePromptSurfaceAnchor(input.conversationMessages),
-            sourceStepSequence: input.contextInput.turn.sequence,
-            kind: "RUNTIME_CONTEXT_SNAPSHOT",
-            content,
-            createdAt: input.clock.now(),
-          }),
-        ];
-  return preparedSurface({ ...epoch, snapshots }, input, false);
+  const states = createPromptSurfaceSectionStates(input.document);
+  const anchor = latestCompletePromptSurfaceAnchor(input.conversationMessages);
+  const decisionFingerprint = sectionDecisionFingerprint(states, anchor);
+  const baseline = diffPromptSurfaceSections([], states, true);
+  const record = createPromptSurfaceRecord({
+    runId: epoch.runId,
+    epochId: epoch.epochId,
+    ordinal: 1,
+    anchor,
+    sourceStepSequence: input.contextInput.turn.sequence,
+    kind: baseline.kind,
+    updates: baseline.updates,
+    decisionFingerprint,
+    createdAt: input.clock.now(),
+  });
+  const sectionStates = states;
+  const surface: PromptSurfaceEpochWithSnapshots = {
+    ...epoch,
+    snapshots: [],
+    records: [record],
+    sectionStates,
+  };
+  return preparedSurface(surface, input, false);
+}
+
+function prepareV3PromptSurface(
+  input: PromptSurfacePreparationInput,
+  surface: PromptSurfaceEpochWithSnapshots,
+): Promise<PromptSurfacePreparationResult> {
+  if (surface.records === undefined || surface.sectionStates === undefined) {
+    throw new PromptSurfaceIntegrityError(
+      "V3 Prompt Surface is missing its durable Section state.",
+    );
+  }
+  if (surface.formatVersion !== 3) {
+    throw new PromptSurfaceIntegrityError("V3 preparation received a legacy Prompt Surface.");
+  }
+  const stepSequence = input.contextInput.turn.sequence;
+  const records = surface.records;
+  const existingIndex = records.findIndex((record) => record.sourceStepSequence === stepSequence);
+  if (existingIndex >= 0 && existingIndex !== records.length - 1) {
+    throw new PromptSurfaceIntegrityError("Prompt Surface retry is not the latest durable Step.");
+  }
+  if (records.some((record) => record.sourceStepSequence > stepSequence)) {
+    throw new PromptSurfaceIntegrityError(
+      "Prompt Surface Step order is incompatible with recovery.",
+    );
+  }
+  if (stepSequence < surface.createdStepSequence) {
+    throw new PromptSurfaceIntegrityError("Prompt Surface Step predates the current Epoch.");
+  }
+
+  const priorRecords = existingIndex >= 0 ? records.slice(0, existingIndex) : records;
+  const priorStates = replayPromptSurfaceSectionStates(priorRecords);
+  const currentStates = createPromptSurfaceSectionStates(input.document);
+  const anchor = latestCompletePromptSurfaceAnchor(input.conversationMessages);
+  const priorAnchor = priorRecords.at(-1)?.anchor;
+  if (
+    priorAnchor !== undefined &&
+    comparePromptSurfaceAnchorOrder(input.conversationMessages, anchor, priorAnchor) < 0
+  ) {
+    throw new PromptSurfaceIntegrityError("Prompt Surface anchor would move backwards.");
+  }
+  const diff = diffPromptSurfaceSections(
+    priorStates,
+    currentStates,
+    priorRecords.length === 0,
+    input.allowSectionClear,
+  );
+  const targetStates = applyPromptSurfaceSectionUpdates(priorStates, diff.kind, diff.updates);
+  const candidate = createPromptSurfaceRecord({
+    runId: surface.runId,
+    epochId: surface.epochId,
+    ordinal: existingIndex >= 0 ? records[existingIndex]!.ordinal : records.length + 1,
+    anchor,
+    sourceStepSequence: stepSequence,
+    kind: diff.kind,
+    updates: diff.updates,
+    decisionFingerprint: sectionDecisionFingerprint(targetStates, anchor),
+    createdAt: input.clock.now(),
+  });
+
+  if (existingIndex >= 0) {
+    if (records[existingIndex]!.contentHash !== candidate.contentHash) {
+      throw new PromptSurfaceIntegrityError(
+        "Prompt Surface Step retry differs from its durable Section decision.",
+      );
+    }
+    return Promise.resolve(preparedSurface(surface, input, true));
+  }
+
+  return input.store
+    .appendRecord(candidate, promptSurfaceEpochOnly(surface), records.length)
+    .then(async () => {
+      const committed = await input.store.readEpoch(surface.runId, surface.epochId);
+      if (committed === undefined) {
+        throw new PromptSurfaceIntegrityError(
+          "Committed Prompt Surface V3 record could not be read.",
+        );
+      }
+      assertPromptSurfaceEpochWithSnapshots(committed);
+      const stored = committed.records?.find(
+        (record) => record.sourceStepSequence === stepSequence,
+      );
+      if (stored === undefined || stored.contentHash !== candidate.contentHash) {
+        throw new PromptSurfaceIntegrityError(
+          "Committed Prompt Surface decision differs from its request.",
+        );
+      }
+      if (
+        !promptSurfaceAnchorsAreAvailable(
+          input.conversationMessages,
+          promptSurfaceAnchors(committed),
+        )
+      ) {
+        throw new PromptSurfaceIntegrityError("Committed Prompt Surface anchor is unavailable.");
+      }
+      return preparedSurface(committed, input, true);
+    })
+    .catch((error: unknown) => {
+      if (error instanceof PromptSurfaceIntegrityError) throw error;
+      throw error;
+    });
+}
+
+function replayPromptSurfaceSectionStates(
+  records: readonly PromptSurfaceRecord[],
+): readonly PromptSurfaceSectionState[] {
+  let states: readonly PromptSurfaceSectionState[] = Object.freeze([]);
+  for (const record of records) {
+    states = applyPromptSurfaceSectionUpdates(states, record.kind, record.updates);
+  }
+  return states;
 }
 
 /** Reconstruct the request surface without creating epochs or appending snapshots. */
 async function preparePromptSurfaceReplay(
   input: PromptSurfacePreparationInput,
-  identity: ReturnType<typeof promptSurfaceIdentity>,
 ): Promise<PromptSurfacePreparationResult> {
   let current: PromptSurfaceEpoch | undefined;
   try {
@@ -1254,15 +1320,12 @@ async function preparePromptSurfaceReplay(
       cause: error,
     });
   }
-  if (
-    current === undefined ||
-    !promptSurfaceReplayIdentityMatches({
-      current,
-      model: input.contextInput.model,
-      identity,
-    })
-  ) {
-    return preparePreviewSurface(input, identity);
+  if (current === undefined) {
+    return preparePreviewSurface(input, promptSurfaceIdentity(input));
+  }
+  const identity = promptSurfaceIdentity(input, current.formatVersion);
+  if (!promptSurfaceReplayIdentityMatches({ current, model: input.contextInput.model, identity })) {
+    return preparePreviewSurface(input, promptSurfaceIdentity(input));
   }
 
   let surface: PromptSurfaceEpochWithSnapshots;
@@ -1276,75 +1339,68 @@ async function preparePromptSurfaceReplay(
       cause: error,
     });
   }
+  if (input.contextInput.turn.sequence < surface.createdStepSequence) {
+    throw new PromptSurfaceIntegrityError("Prompt Surface replay Step predates its durable Epoch.");
+  }
+
+  const targetSequence = input.contextInput.turn.sequence;
+  if (surface.formatVersion === 3) {
+    const records = surface.records;
+    if (records === undefined || surface.sectionStates === undefined) {
+      throw new PromptSurfaceIntegrityError("V3 replay is missing durable Section state.");
+    }
+    let targetIndex = -1;
+    for (let index = 0; index < records.length; index += 1) {
+      if (records[index]!.sourceStepSequence <= targetSequence) targetIndex = index;
+      else break;
+    }
+    if (targetIndex < 0) {
+      return preparePreviewSurface(input, promptSurfaceIdentity(input));
+    }
+    const replayedRecords = Object.freeze(records.slice(0, targetIndex + 1));
+    const replayed: PromptSurfaceEpochWithSnapshots = Object.freeze({
+      ...surface,
+      records: replayedRecords,
+      sectionStates: replayPromptSurfaceSectionStates(replayedRecords),
+    });
+    assertPromptSurfaceEpochWithSnapshots(replayed);
+    if (
+      !promptSurfaceAnchorsAreAvailable(
+        input.conversationMessages,
+        promptSurfaceAnchors(replayed),
+      ) ||
+      !promptSurfaceAnchorsAreOrdered(input.conversationMessages, replayed)
+    ) {
+      throw new PromptSurfaceIntegrityError(
+        "V3 replay anchor is unavailable in the durable conversation.",
+      );
+    }
+    return preparedSurface(replayed, input, true);
+  }
+
+  const replayedSnapshots = Object.freeze(
+    surface.snapshots.filter((snapshot) => snapshot.sourceStepSequence <= targetSequence),
+  );
   if (
     !promptSurfaceAnchorsAreAvailable(
       input.conversationMessages,
-      surface.snapshots.map((snapshot) => snapshot.anchor),
-    )
-  ) {
-    return preparePreviewSurface(input, identity);
-  }
-
-  const currentStepSnapshot = surface.snapshots.find(
-    (snapshot) => snapshot.sourceStepSequence === input.contextInput.turn.sequence,
-  );
-  if (currentStepSnapshot !== undefined) {
-    if (surface.snapshots.at(-1)?.sourceStepSequence !== input.contextInput.turn.sequence) {
-      throw new PromptSurfaceIntegrityError("Prompt Surface retry is not the latest durable Step.");
-    }
-    return preparedSurface(surface, input, true);
-  }
-  if (
-    surface.snapshots.some(
-      (snapshot) => snapshot.sourceStepSequence > input.contextInput.turn.sequence,
+      replayedSnapshots.map(({ anchor }) => anchor),
     ) ||
-    input.contextInput.turn.sequence < surface.createdStepSequence
+    !promptSurfaceAnchorsAreOrdered(input.conversationMessages, {
+      ...surface,
+      snapshots: replayedSnapshots,
+    })
   ) {
     throw new PromptSurfaceIntegrityError(
-      "Prompt Surface Step order is incompatible with recovery.",
+      "V2 replay anchor is unavailable in the durable conversation.",
     );
   }
-
-  const lastSnapshot = surface.snapshots.at(-1);
-  let content = renderRuntimeContextSnapshot(input.document);
-  if (content === undefined) {
-    if (lastSnapshot === undefined || isClearedSnapshot(lastSnapshot.content)) {
-      return preparedSurface(surface, input, true);
-    }
-    content = CLEARED_RUNTIME_CONTEXT_SNAPSHOT;
-  } else if (lastSnapshot?.content === content) {
-    return preparedSurface(surface, input, true);
-  }
-
-  const anchor = latestCompletePromptSurfaceAnchor(input.conversationMessages);
-  if (
-    lastSnapshot !== undefined &&
-    comparePromptSurfaceAnchorOrder(input.conversationMessages, anchor, lastSnapshot.anchor) < 0
-  ) {
-    throw new PromptSurfaceIntegrityError("Prompt Surface anchor would move backwards.");
-  }
-  const snapshot = createPromptSurfaceSnapshot({
-    runId: surface.runId,
-    epochId: surface.epochId,
-    ordinal: surface.snapshots.length + 1,
-    anchor,
-    sourceStepSequence: input.contextInput.turn.sequence,
-    kind: "RUNTIME_CONTEXT_SNAPSHOT",
-    content,
-    createdAt: input.clock.now(),
-  });
-  surface = Object.freeze({
+  const replayed: PromptSurfaceEpochWithSnapshots = Object.freeze({
     ...surface,
-    snapshots: Object.freeze([...surface.snapshots, snapshot]),
+    snapshots: replayedSnapshots,
   });
-  try {
-    assertPromptSurfaceEpochWithSnapshots(surface);
-  } catch (error) {
-    throw new PromptSurfaceIntegrityError("Replay Prompt Surface failed integrity checks.", {
-      cause: error,
-    });
-  }
-  return preparedSurface(surface, input, true);
+  assertPromptSurfaceEpochWithSnapshots(replayed);
+  return preparedSurface(replayed, input, true);
 }
 
 interface PromptSurfaceIdentity {
@@ -1353,10 +1409,13 @@ interface PromptSurfaceIdentity {
   readonly cacheSettingsFingerprint: string;
 }
 
-function promptSurfaceIdentity(input: PromptSurfacePreparationInput): PromptSurfaceIdentity {
+function promptSurfaceIdentity(
+  input: PromptSurfacePreparationInput,
+  formatVersion: 2 | 3 = 3,
+): PromptSurfaceIdentity {
   return {
     stableHeadFingerprint: promptSurfaceStableHeadFingerprint({
-      stableHead: renderStableContextHead(input.document),
+      stableHead: renderStableContextHead(input.document, formatVersion),
       ...(input.checkpointId === undefined ? {} : { checkpointId: input.checkpointId }),
     }),
     toolSchemaFingerprint: fingerprint(stableJson(input.tools)),
@@ -1435,6 +1494,9 @@ function resetReasonFor(
   ) {
     return "COMPACTION_COMMITTED";
   }
+  if (current.formatVersion !== 3) {
+    return "RECOVERY_INCOMPATIBLE";
+  }
   if (
     current.modelRef.provider !== input.contextInput.model.ref.provider ||
     current.modelRef.model !== input.contextInput.model.ref.model
@@ -1472,6 +1534,7 @@ async function readCurrentSurface(
 function samePromptSurfaceIdentity(left: PromptSurfaceEpoch, right: PromptSurfaceEpoch): boolean {
   return (
     left.runId === right.runId &&
+    left.formatVersion === right.formatVersion &&
     left.createdStepSequence === right.createdStepSequence &&
     left.resetReason === right.resetReason &&
     left.modelRef.provider === right.modelRef.provider &&
@@ -1491,26 +1554,78 @@ function samePromptSurfaceAnchor(left: PromptSurfaceAnchor, right: PromptSurface
   );
 }
 
+function promptSurfaceAnchors(
+  surface: PromptSurfaceEpochWithSnapshots,
+): readonly PromptSurfaceAnchor[] {
+  return surface.formatVersion === 3
+    ? (surface.records ?? []).map((record) => record.anchor)
+    : surface.snapshots.map((snapshot) => snapshot.anchor);
+}
+
+function promptSurfaceAnchorsAreOrdered(
+  messages: readonly StoredAgentMessage[],
+  surface: PromptSurfaceEpochWithSnapshots,
+): boolean {
+  const anchors = promptSurfaceAnchors(surface);
+  for (let index = 1; index < anchors.length; index += 1) {
+    if (comparePromptSurfaceAnchorOrder(messages, anchors[index]!, anchors[index - 1]!) < 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function sectionDecisionFingerprint(
+  states: readonly PromptSurfaceSectionState[],
+  anchor: PromptSurfaceAnchor,
+): string {
+  return createHash("sha256")
+    .update(
+      stableJson({
+        states: states.map((state) => ({
+          stateKey: state.stateKey,
+          contentHash: state.contentHash,
+        })),
+        anchor,
+      }),
+      "utf8",
+    )
+    .digest("hex");
+}
+
 function preparedSurface(
   surface: PromptSurfaceEpochWithSnapshots,
   input: PromptSurfacePreparationInput,
   replayEligible = true,
 ): PromptSurfacePreparationResult {
   assertPromptSurfaceEpochWithSnapshots(surface);
-  const stableHead = renderStableContextHead(input.document);
+  const stableHead = renderStableContextHead(input.document, surface.formatVersion);
   const stableHeadTokens = estimatePromptSurfaceTokens(
     input.tokenEstimator.estimateText(stableHead, input.contextInput.model),
     "stable head",
   );
-  const snapshotTokens = surface.snapshots.reduce(
-    (sum, snapshot) =>
-      sum +
-      estimatePromptSurfaceTokens(
-        input.tokenEstimator.estimateText(snapshot.content, input.contextInput.model),
-        "snapshot",
-      ),
-    0,
-  );
+  const snapshotTokens =
+    surface.formatVersion === 3
+      ? (surface.records ?? []).reduce((sum, record) => {
+          if (record.kind === "NOOP") return sum;
+          const content = renderPromptSurfaceRecord(record.kind, record.updates);
+          return (
+            sum +
+            estimatePromptSurfaceTokens(
+              input.tokenEstimator.estimateText(content, input.contextInput.model),
+              "runtime context record",
+            )
+          );
+        }, 0)
+      : surface.snapshots.reduce(
+          (sum, snapshot) =>
+            sum +
+            estimatePromptSurfaceTokens(
+              input.tokenEstimator.estimateText(snapshot.content, input.contextInput.model),
+              "snapshot",
+            ),
+          0,
+        );
   const expectedReusablePrefixTokens = estimatePromptSurfaceTokens(
     stableHeadTokens + snapshotTokens,
     "reusable prefix",
@@ -1518,14 +1633,26 @@ function preparedSurface(
   const prefixFingerprint = fingerprint(
     stableJson({
       anchorIdentityVersion: PROMPT_SURFACE_ANCHOR_VERSION,
+      epochId: surface.epochId,
+      formatVersion: surface.formatVersion,
       stableHeadFingerprint: surface.stableHeadFingerprint,
       toolSchemaFingerprint: surface.toolSchemaFingerprint,
       cacheSettingsFingerprint: surface.cacheSettingsFingerprint,
-      snapshots: surface.snapshots.map((snapshot) => ({
-        ordinal: snapshot.ordinal,
-        anchor: snapshot.anchor,
-        contentHash: snapshot.contentHash,
-      })),
+      runtimeRecords:
+        surface.formatVersion === 3
+          ? (surface.records ?? [])
+              .filter((record) => record.kind !== "NOOP")
+              .map((record) => ({
+                ordinal: record.ordinal,
+                kind: record.kind,
+                anchor: record.anchor,
+                contentHash: record.contentHash,
+              }))
+          : surface.snapshots.map((snapshot) => ({
+              ordinal: snapshot.ordinal,
+              anchor: snapshot.anchor,
+              contentHash: snapshot.contentHash,
+            })),
     }),
   );
   return Object.freeze({
@@ -1544,6 +1671,7 @@ function preparedSurface(
 
 function promptSurfaceEpochOnly(surface: PromptSurfaceEpochWithSnapshots): PromptSurfaceEpoch {
   return {
+    formatVersion: surface.formatVersion,
     runId: surface.runId,
     epochId: surface.epochId,
     modelRef: surface.modelRef,
@@ -1566,10 +1694,6 @@ function estimatePromptSurfaceTokens(value: number, label: string): number {
 function fingerprint(value: string): string {
   const hash = createHash("sha256").update(value, "utf8").digest("hex");
   return createPromptSurfaceFingerprint(`sha256:${hash}`);
-}
-
-function isClearedSnapshot(content: string): boolean {
-  return content.startsWith('<runtime_context_snapshot state="CLEARED">');
 }
 
 function stableJson(value: unknown): string {

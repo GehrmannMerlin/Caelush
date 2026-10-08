@@ -7,8 +7,11 @@ import {
   createPromptSurfaceEpoch,
   createPromptSurfaceEpochId,
   createPromptSurfaceSnapshot,
+  createPromptSurfaceRecord,
+  hashPromptSurfaceContent,
   type PromptSurfaceEpochInput,
   type PromptSurfaceSnapshotInput,
+  type PromptSurfaceRecordInput,
 } from "@caelush/agent";
 import {
   StorageConflictError,
@@ -88,7 +91,168 @@ function anchorFor(epoch: ReturnType<typeof makeEpoch>, sequence: number) {
   };
 }
 
+function makeSetUpdate(key: string, content: string) {
+  const modelContent = `<section authority="REFERENCE" stability="SEMI_STABLE" sensitivity="INTERNAL" priority="NORMAL" freshness="CURRENT" label="fixture"><![CDATA[${content}]]></section>`;
+  return {
+    op: "SET" as const,
+    stateKey: `sha256:${key.repeat(64 / key.length)}`,
+    contentHash: hashPromptSurfaceContent(modelContent),
+    content: modelContent,
+  };
+}
+
+function makeV3Record(
+  epoch: ReturnType<typeof makeEpoch>,
+  input: Omit<PromptSurfaceRecordInput, "runId" | "epochId" | "createdAt">,
+) {
+  return createPromptSurfaceRecord({
+    runId: epoch.runId,
+    epochId: epoch.epochId,
+    createdAt: createTimestampMs(100 + input.sourceStepSequence),
+    ...input,
+  });
+}
+
 describe("SqlitePromptSurfaceStore", () => {
+  it("commits V3 decisions and current Section state atomically with exact Step idempotency", async () => {
+    const storage = await openCaelushStorage({ path: ":memory:" });
+    stores.push(storage);
+    const run = await addRun(storage);
+    const epoch = makeEpoch(run.id, "epoch-v3-atomic", 1, { formatVersion: 3 });
+    await storage.promptSurface.createEpoch(epoch);
+    const firstState = makeSetUpdate("a", "file state v1");
+    const baseline = makeV3Record(epoch, {
+      ordinal: 1,
+      anchor: anchorFor(epoch, 1),
+      sourceStepSequence: 1,
+      kind: "BASELINE",
+      updates: [firstState],
+      decisionFingerprint: "a".repeat(64),
+    });
+
+    await expect(storage.promptSurface.appendRecord(baseline, epoch, 0)).resolves.toBe("APPENDED");
+    await expect(storage.promptSurface.appendRecord(baseline, epoch, 0)).resolves.toBe(
+      "IDEMPOTENT",
+    );
+    await expect(storage.promptSurface.readEpoch(run.id, epoch.epochId)).resolves.toMatchObject({
+      records: [baseline],
+      sectionStates: [
+        {
+          stateKey: firstState.stateKey,
+          contentHash: firstState.contentHash,
+          content: firstState.content,
+        },
+      ],
+    });
+
+    const changedState = makeSetUpdate("a", "file state v2");
+    const delta = makeV3Record(epoch, {
+      ordinal: 2,
+      anchor: anchorFor(epoch, 2),
+      sourceStepSequence: 2,
+      kind: "DELTA",
+      updates: [changedState],
+      decisionFingerprint: "b".repeat(64),
+    });
+    await expect(storage.promptSurface.appendRecord(delta, epoch, 1)).resolves.toBe("APPENDED");
+    await expect(
+      storage.promptSurface.appendRecord(
+        makeV3Record(epoch, {
+          ordinal: 2,
+          anchor: anchorFor(epoch, 2),
+          sourceStepSequence: 2,
+          kind: "DELTA",
+          updates: [firstState],
+          decisionFingerprint: "c".repeat(64),
+        }),
+        epoch,
+        2,
+      ),
+    ).rejects.toBeInstanceOf(StorageConflictError);
+  });
+
+  it("rolls back a V3 record when its Section state write fails", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "caelush-prompt-surface-v3-atomic-"));
+    temporaryDirectories.push(directory);
+    const databasePath = path.join(directory, "caelush.db");
+    const storage = await openCaelushStorage({ path: databasePath });
+    stores.push(storage);
+    const run = await addRun(storage);
+    const epoch = makeEpoch(run.id, "epoch-v3-rollback", 1, { formatVersion: 3 });
+    await storage.promptSurface.createEpoch(epoch);
+    const original = makeSetUpdate("a", "original");
+    const baseline = makeV3Record(epoch, {
+      ordinal: 1,
+      anchor: anchorFor(epoch, 1),
+      sourceStepSequence: 1,
+      kind: "BASELINE",
+      updates: [original],
+      decisionFingerprint: "a".repeat(64),
+    });
+    await storage.promptSurface.appendRecord(baseline, epoch, 0);
+
+    const raw = new DatabaseSync(databasePath);
+    rawDatabases.push(raw);
+    raw.exec(`CREATE TRIGGER fail_v3_section_update BEFORE UPDATE ON prompt_surface_section_state
+      BEGIN SELECT RAISE(ABORT, 'injected Section state failure'); END;`);
+    const changed = makeSetUpdate("a", "changed");
+    const delta = makeV3Record(epoch, {
+      ordinal: 2,
+      anchor: anchorFor(epoch, 2),
+      sourceStepSequence: 2,
+      kind: "DELTA",
+      updates: [changed],
+      decisionFingerprint: "b".repeat(64),
+    });
+
+    await expect(storage.promptSurface.appendRecord(delta, epoch, 1)).rejects.toBeInstanceOf(
+      StorageError,
+    );
+    await expect(storage.promptSurface.readEpoch(run.id, epoch.epochId)).resolves.toMatchObject({
+      records: [baseline],
+      sectionStates: [
+        {
+          stateKey: original.stateKey,
+          contentHash: original.contentHash,
+          content: original.content,
+        },
+      ],
+    });
+  });
+
+  it("fails closed when durable V3 Section state disagrees with the committed record log", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "caelush-prompt-surface-v3-corrupt-"));
+    temporaryDirectories.push(directory);
+    const databasePath = path.join(directory, "caelush.db");
+    const storage = await openCaelushStorage({ path: databasePath });
+    stores.push(storage);
+    const run = await addRun(storage);
+    const epoch = makeEpoch(run.id, "epoch-v3-corrupt-state", 1, { formatVersion: 3 });
+    await storage.promptSurface.createEpoch(epoch);
+    const state = makeSetUpdate("a", "original");
+    const baseline = makeV3Record(epoch, {
+      ordinal: 1,
+      anchor: anchorFor(epoch, 1),
+      sourceStepSequence: 1,
+      kind: "BASELINE",
+      updates: [state],
+      decisionFingerprint: "a".repeat(64),
+    });
+    await storage.promptSurface.appendRecord(baseline, epoch, 0);
+
+    const raw = new DatabaseSync(databasePath);
+    rawDatabases.push(raw);
+    raw
+      .prepare(
+        "UPDATE prompt_surface_section_state SET content = ? WHERE run_id = ? AND epoch_id = ? AND state_key = ?",
+      )
+      .run("corrupt durable state", run.id, epoch.epochId, state.stateKey);
+
+    await expect(storage.promptSurface.readEpoch(run.id, epoch.epochId)).rejects.toBeInstanceOf(
+      StorageDecodeError,
+    );
+  });
+
   it("starts empty and makes a newly created compatible boundary the current epoch", async () => {
     const storage = await openCaelushStorage({ path: ":memory:" });
     stores.push(storage);

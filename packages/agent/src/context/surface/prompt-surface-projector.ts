@@ -2,12 +2,14 @@ import type { RunId } from "@caelush/protocol";
 
 import { assertPromptSurfaceEpochWithSnapshots } from "./prompt-surface.js";
 import type { PromptSurfaceAnchor, PromptSurfaceEpochWithSnapshots } from "./prompt-surface.js";
+import { renderPromptSurfaceRecord } from "./prompt-surface-v3.js";
 
 export interface PromptSurfaceModelMessage {
   readonly role: "user";
   readonly content: string;
   readonly source: {
-    readonly kind: "RUNTIME_CONTEXT_SNAPSHOT";
+    readonly kind:
+      "RUNTIME_CONTEXT_SNAPSHOT" | "RUNTIME_CONTEXT_BASELINE" | "RUNTIME_CONTEXT_DELTA";
     readonly runId: RunId;
     readonly epochId: string;
     readonly ordinal: number;
@@ -25,6 +27,31 @@ export function projectPromptSurface(
 ): readonly PromptSurfaceModelMessage[] {
   if (surface === undefined) return EMPTY_PROJECTION;
   assertPromptSurfaceEpochWithSnapshots(surface);
+
+  if (surface.formatVersion === 3) {
+    return Object.freeze(
+      (surface.records ?? [])
+        .filter((record) => record.kind !== "NOOP")
+        .map((record) =>
+          Object.freeze({
+            role: "user" as const,
+            content: renderPromptSurfaceRecord(record.kind as "BASELINE" | "DELTA", record.updates),
+            source: Object.freeze({
+              kind:
+                record.kind === "BASELINE"
+                  ? ("RUNTIME_CONTEXT_BASELINE" as const)
+                  : ("RUNTIME_CONTEXT_DELTA" as const),
+              runId: record.runId,
+              epochId: record.epochId,
+              ordinal: record.ordinal,
+              anchor: record.anchor,
+              sourceStepSequence: record.sourceStepSequence,
+              contentHash: record.contentHash,
+            }),
+          }),
+        ),
+    );
+  }
 
   return Object.freeze(
     surface.snapshots.map((snapshot) =>

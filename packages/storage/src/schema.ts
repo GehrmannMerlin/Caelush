@@ -356,6 +356,7 @@ export const promptSurfaceEpochs = sqliteTable(
       .notNull()
       .references(() => agentRuns.id, { onDelete: "cascade" }),
     epochId: text("epoch_id").notNull(),
+    formatVersion: integer("format_version").notNull().default(2),
     modelProvider: text("model_provider").notNull(),
     modelId: text("model_id").notNull(),
     stableHeadFingerprint: text("stable_head_fingerprint").notNull(),
@@ -369,6 +370,66 @@ export const promptSurfaceEpochs = sqliteTable(
     primaryKey({ columns: [table.runId, table.epochId] }),
     check("prompt_surface_epochs_created_step_check", sql`${table.createdStepSequence} >= 1`),
     check("prompt_surface_epochs_created_at_check", sql`${table.createdAtMs} >= 0`),
+    check("prompt_surface_epochs_format_version_check", sql`${table.formatVersion} IN (2, 3)`),
+  ],
+);
+
+export const promptSurfaceRecords = sqliteTable(
+  "prompt_surface_records",
+  {
+    runId: text("run_id").notNull(),
+    epochId: text("epoch_id").notNull(),
+    ordinal: integer("ordinal").notNull(),
+    anchorSequence: integer("anchor_message_sequence").notNull(),
+    anchorMessageId: text("anchor_message_id").notNull(),
+    anchorRunId: text("anchor_run_id").notNull(),
+    anchorConversationTurnId: text("anchor_conversation_turn_id").notNull(),
+    sourceStepSequence: integer("source_step_sequence").notNull(),
+    kind: text("kind").notNull(),
+    updatesJson: text("updates_json").notNull(),
+    decisionFingerprint: text("decision_fingerprint").notNull(),
+    contentHash: text("content_hash").notNull(),
+    byteLength: integer("byte_length").notNull(),
+    createdAtMs: integer("created_at_ms").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.runId, table.epochId, table.ordinal] }),
+    check("prompt_surface_records_ordinal_check", sql`${table.ordinal} >= 1`),
+    check("prompt_surface_records_anchor_sequence_check", sql`${table.anchorSequence} >= 1`),
+    check("prompt_surface_records_step_sequence_check", sql`${table.sourceStepSequence} >= 1`),
+    check("prompt_surface_records_kind_check", sql`${table.kind} IN ('BASELINE', 'DELTA', 'NOOP')`),
+    check("prompt_surface_records_byte_length_check", sql`${table.byteLength} >= 0`),
+    uniqueIndex("prompt_surface_records_source_step_unique").on(
+      table.runId,
+      table.epochId,
+      table.sourceStepSequence,
+    ),
+    foreignKey({
+      columns: [table.runId, table.epochId],
+      foreignColumns: [promptSurfaceEpochs.runId, promptSurfaceEpochs.epochId],
+      name: "prompt_surface_records_epoch_fk",
+    }).onDelete("cascade"),
+  ],
+);
+
+export const promptSurfaceSectionState = sqliteTable(
+  "prompt_surface_section_state",
+  {
+    runId: text("run_id").notNull(),
+    epochId: text("epoch_id").notNull(),
+    stateKey: text("state_key").notNull(),
+    contentHash: text("content_hash").notNull(),
+    content: text("content").notNull(),
+    updatedOrdinal: integer("updated_ordinal").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.runId, table.epochId, table.stateKey] }),
+    check("prompt_surface_section_state_ordinal_check", sql`${table.updatedOrdinal} >= 1`),
+    foreignKey({
+      columns: [table.runId, table.epochId],
+      foreignColumns: [promptSurfaceEpochs.runId, promptSurfaceEpochs.epochId],
+      name: "prompt_surface_section_state_epoch_fk",
+    }).onDelete("cascade"),
   ],
 );
 

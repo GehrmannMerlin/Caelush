@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import {
   AGENT_CONTEXT_SOURCE_IDS,
   PromptSurfaceIntegrityError,
+  createPromptSurfaceEpoch,
+  createPromptSurfaceSnapshot,
   createContextDocumentBuilder,
   createContextHistoryIndexer,
   createContextItemId,
@@ -17,6 +19,7 @@ import {
   createCorePolicyContextSourceProvider,
   createStandardAgentMessageProjectorRegistry,
   createUtf8HeuristicTokenEstimator,
+  latestCompletePromptSurfaceAnchor,
   createV2ContextEngine,
   type ContextUsageSnapshot,
   type StoredAgentMessage,
@@ -67,6 +70,7 @@ const TOOL_B: AIToolSpec = {
 
 interface FixtureState {
   dynamicText: string | undefined;
+  dynamicSourceFails: boolean;
   readonly usage: ContextUsageSnapshot[];
   now: number;
   epochId: number;
@@ -87,6 +91,7 @@ function fixture(): {
   const store = createPromptSurfaceMemoryStore();
   const state: FixtureState = {
     dynamicText: "workspace state: clean",
+    dynamicSourceFails: false,
     usage: [],
     now: 100,
     epochId: 0,
@@ -121,6 +126,7 @@ function fixture(): {
           provider: {
             id: dynamicSourceId,
             async collect() {
+              if (state.dynamicSourceFails) throw new Error("optional context source failed");
               const text = state.dynamicText;
               return {
                 providerId: dynamicSourceId,
@@ -367,7 +373,7 @@ describe("Prompt Surface Context Engine integration", () => {
     ).toBe(false);
   });
 
-  it("reuses one same-Step snapshot, skips unchanged state, and appends CLEARED exactly once", async () => {
+  it("persists one V3 decision per Step and emits only changed Section state", async () => {
     const value = fixture();
     const completeHistory = fullHistory(value.runId, value.sessionId, 8);
     const firstHistory = completeHistory.slice(0, 1);
@@ -375,46 +381,54 @@ describe("Prompt Surface Context Engine integration", () => {
     const engine = value.engine();
     const first = await engine.prepare(firstRequest);
     const firstSurface = value.store.inspect(value.runId)!;
-    const firstSnapshot = firstSurface.snapshots[0]!;
+    const firstRecord = firstSurface.records?.[0]!;
+
+    const sameRetry = await engine.prepare(firstRequest);
+    expect(sameRetry.messages).toEqual(first.messages);
+    expect(value.store.inspect(value.runId)?.records).toHaveLength(1);
 
     value.state.dynamicText = "workspace state: changed during retry";
-    const retry = await engine.prepare(firstRequest);
-    expect(retry.messages).toEqual(first.messages);
-    expect(value.store.inspect(value.runId)?.snapshots).toHaveLength(1);
-    expect(value.store.inspect(value.runId)?.snapshots[0]).toMatchObject({
-      ordinal: firstSnapshot.ordinal,
-      sourceStepSequence: firstSnapshot.sourceStepSequence,
-      contentHash: firstSnapshot.contentHash,
-      createdAt: firstSnapshot.createdAt,
+    await expect(engine.prepare(firstRequest)).rejects.toBeInstanceOf(PromptSurfaceIntegrityError);
+    expect(value.store.inspect(value.runId)?.records?.[0]).toMatchObject({
+      ordinal: firstRecord.ordinal,
+      sourceStepSequence: firstRecord.sourceStepSequence,
+      contentHash: firstRecord.contentHash,
+      createdAt: firstRecord.createdAt,
     });
 
     value.state.dynamicText = "workspace state: clean";
     const secondMessages = completeHistory.slice(0, 3);
-    const second = await engine.prepare(
-      request(value.runId, value.sessionId, 2, secondMessages.slice(0, 3)),
-    );
+    const secondRequest = request(value.runId, value.sessionId, 2, secondMessages.slice(0, 3));
+    const second = await engine.prepare(secondRequest);
     expect(
       first.messages.every(
         (message, index) => JSON.stringify(message) === JSON.stringify(second.messages[index]),
       ),
     ).toBe(true);
-    expect(value.store.inspect(value.runId)?.snapshots).toHaveLength(1);
+    expect(value.store.inspect(value.runId)?.records).toHaveLength(2);
+    expect(value.store.inspect(value.runId)?.records?.at(-1)?.kind).toBe("NOOP");
+    await engine.prepare(secondRequest);
+    expect(value.store.inspect(value.runId)?.records).toHaveLength(2);
+    value.state.dynamicText = "changed on NOOP retry";
+    await expect(engine.prepare(secondRequest)).rejects.toBeInstanceOf(PromptSurfaceIntegrityError);
+    expect(value.store.inspect(value.runId)?.records).toHaveLength(2);
 
     value.state.dynamicText = undefined;
     const thirdMessages = completeHistory.slice(0, 5);
     const third = await engine.prepare(
       request(value.runId, value.sessionId, 3, thirdMessages.slice(0, 5)),
     );
-    const cleared = value.store.inspect(value.runId)?.snapshots.at(-1);
-    expect(cleared).toMatchObject({ ordinal: 2, sourceStepSequence: 3 });
-    expect(cleared?.content).toContain('state="CLEARED"');
-    expect(third.messages.at(-1)?.content).toBe(cleared?.content);
+    const cleared = value.store.inspect(value.runId)?.records?.at(-1);
+    expect(cleared).toMatchObject({ ordinal: 3, sourceStepSequence: 3, kind: "DELTA" });
+    expect(cleared?.updates).toEqual([expect.objectContaining({ op: "CLEAR" })]);
+    expect(third.messages.some((message) => message.content.includes("<clear key="))).toBe(true);
 
     const fourthMessages = completeHistory.slice(0, 7);
     const fourth = await engine.prepare(
       request(value.runId, value.sessionId, 4, fourthMessages.slice(0, 7)),
     );
-    expect(value.store.inspect(value.runId)?.snapshots).toHaveLength(2);
+    expect(value.store.inspect(value.runId)?.records).toHaveLength(4);
+    expect(value.store.inspect(value.runId)?.records?.at(-1)?.kind).toBe("NOOP");
     expect(fourth.messages.slice(0, third.messages.length)).toEqual(third.messages);
     expect(fourth.messages.at(-1)?.content).toBe("Follow-up request.");
     expect(value.state.usage[0]?.promptSurface?.resetReason).toBe("INITIAL");
@@ -498,6 +512,77 @@ describe("Prompt Surface Context Engine integration", () => {
     ).rejects.toBeInstanceOf(PromptSurfaceIntegrityError);
   });
 
+  it("does not interpret an optional Context source failure as a Section CLEAR", async () => {
+    const value = fixture();
+    const engine = value.engine();
+    const completeHistory = fullHistory(value.runId, value.sessionId, 3);
+    const firstHistory = completeHistory.slice(0, 1);
+    await engine.prepare(request(value.runId, value.sessionId, 1, firstHistory));
+    const initial = value.store.inspect(value.runId)!;
+    expect(
+      initial.sectionStates?.some((state) => state.content.includes("workspace state: clean")),
+    ).toBe(true);
+
+    value.state.dynamicSourceFails = true;
+    const second = await engine.prepare(request(value.runId, value.sessionId, 2, completeHistory));
+    expect(value.store.inspectEpochs(value.runId)).toHaveLength(1);
+    expect(value.store.inspect(value.runId)?.records?.at(-1)?.kind).toBe("NOOP");
+    expect(value.store.inspect(value.runId)?.sectionStates).toEqual(initial.sectionStates);
+    expect(
+      second.messages.filter(
+        (message) =>
+          message.role === "user" &&
+          typeof message.content === "string" &&
+          message.content.startsWith("<runtime_context_"),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("keeps a V2 Epoch immutable and performs one durable compatibility reset to V3", async () => {
+    const value = fixture();
+    const history = fullHistory(value.runId, value.sessionId, 1);
+    const legacy = createPromptSurfaceEpoch({
+      runId: value.runId,
+      epochId: "legacy-v2-epoch",
+      modelRef: MODEL.ref,
+      stableHeadFingerprint: `sha256:${"a".repeat(64)}`,
+      toolSchemaFingerprint: `sha256:${"b".repeat(64)}`,
+      cacheSettingsFingerprint: `sha256:${"c".repeat(64)}`,
+      resetReason: "INITIAL",
+      createdStepSequence: 1,
+      createdAt: 1 as TimestampMs,
+    });
+    await value.store.createEpoch(legacy);
+    const anchor = latestCompletePromptSurfaceAnchor(history);
+    const legacySnapshot = createPromptSurfaceSnapshot({
+      runId: value.runId,
+      epochId: legacy.epochId,
+      ordinal: 1,
+      anchor,
+      sourceStepSequence: 1,
+      kind: "RUNTIME_CONTEXT_SNAPSHOT",
+      content: "immutable V2 complete snapshot",
+      createdAt: 2 as TimestampMs,
+    });
+    await value.store.appendSnapshot(legacySnapshot, legacy);
+
+    const engine = value.engine();
+    const input = request(value.runId, value.sessionId, 1, history);
+    await engine.prepare(input);
+    const firstReset = value.store.inspect(value.runId)!;
+    expect(firstReset.formatVersion).toBe(3);
+    expect(firstReset.resetReason).toBe("RECOVERY_INCOMPATIBLE");
+    expect(value.store.inspectEpochs(value.runId)).toHaveLength(2);
+    expect(value.store.inspectEpochs(value.runId)[0]).toMatchObject({
+      formatVersion: 2,
+      snapshots: [legacySnapshot],
+    });
+
+    await engine.prepare(input);
+    expect(value.store.inspectEpochs(value.runId)).toHaveLength(2);
+    expect(value.store.inspect(value.runId)?.records).toHaveLength(1);
+  });
+
   it("fails closed on a corrupt surface before compaction replay and leaves it unchanged", async () => {
     const value = fixture();
     const historicalRunId = createRunId();
@@ -531,7 +616,7 @@ describe("Prompt Surface Context Engine integration", () => {
     const engine = value.engine();
     await engine.prepare(warmRequest);
     const warmSurface = value.store.inspect(value.runId)!;
-    expect(warmSurface.snapshots).toHaveLength(1);
+    expect(warmSurface.records).toHaveLength(1);
 
     value.store.corruptLatestSnapshot(value.runId);
     const corruptedSurface = value.store.inspect(value.runId)!;

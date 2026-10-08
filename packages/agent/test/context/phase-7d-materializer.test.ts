@@ -13,7 +13,9 @@ import {
   createUtf8HeuristicTokenEstimator,
   createContextFingerprint,
   createPromptSurfaceEpoch,
+  createPromptSurfaceRecord,
   createPromptSurfaceSnapshot,
+  hashPromptSurfaceContent,
   type AgentMessageProjectorRegistry,
   type PreparedAgentContext,
 } from "@caelush/agent";
@@ -243,6 +245,98 @@ describe("Phase 7D ContextMaterializer", () => {
     await expect(
       materializer.materialize({ prepared: prepared(), model: MODEL, signal: controller.signal }),
     ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("projects V3 deltas only after the complete Tool batch", async () => {
+    const base = prepared();
+    const runId = base.conversationMessages[0]!.message.runId;
+    const user = base.conversationMessages[0]!;
+    const toolResult = base.conversationMessages[3]!;
+    const epoch = createPromptSurfaceEpoch({
+      runId,
+      formatVersion: 3,
+      epochId: "epoch-v3-tool-safe",
+      modelRef: MODEL.ref,
+      stableHeadFingerprint: `sha256:${"a".repeat(64)}`,
+      toolSchemaFingerprint: `sha256:${"b".repeat(64)}`,
+      cacheSettingsFingerprint: `sha256:${"c".repeat(64)}`,
+      resetReason: "INITIAL",
+      createdStepSequence: 1,
+      createdAt: 1 as never,
+    });
+    const baseline = createPromptSurfaceRecord({
+      runId,
+      epochId: epoch.epochId,
+      ordinal: 1,
+      anchor: {
+        messageId: user.message.id,
+        runId: user.message.runId,
+        conversationTurnId: user.message.conversationTurnId,
+        sequence: user.sequence,
+      },
+      sourceStepSequence: 1,
+      kind: "BASELINE",
+      updates: [],
+      decisionFingerprint: "d".repeat(64),
+      createdAt: 1 as never,
+    });
+    const content =
+      '<section authority="REFERENCE" stability="DYNAMIC" sensitivity="INTERNAL" priority="NORMAL" freshness="CURRENT" label="tool observation"><![CDATA[after complete tool batch]]></section>';
+    const set = {
+      op: "SET" as const,
+      stateKey: `sha256:${"e".repeat(64)}`,
+      contentHash: hashPromptSurfaceContent(content),
+      content,
+    };
+    const delta = createPromptSurfaceRecord({
+      runId,
+      epochId: epoch.epochId,
+      ordinal: 2,
+      anchor: {
+        messageId: toolResult.message.id,
+        runId: toolResult.message.runId,
+        conversationTurnId: toolResult.message.conversationTurnId,
+        sequence: toolResult.sequence,
+      },
+      sourceStepSequence: 2,
+      kind: "DELTA",
+      updates: [set],
+      decisionFingerprint: "f".repeat(64),
+      createdAt: 2 as never,
+    });
+    const v3Prepared: PreparedAgentContext = {
+      ...base,
+      promptSurface: {
+        ...base.promptSurface!,
+        epoch: {
+          ...epoch,
+          snapshots: [],
+          records: [baseline, delta],
+          sectionStates: [
+            { stateKey: set.stateKey, contentHash: set.contentHash, content: set.content },
+          ],
+        },
+      },
+    };
+    const materializer = createContextMaterializer({
+      projectors: createStandardAgentMessageProjectorRegistry(),
+      tokenEstimator: createUtf8HeuristicTokenEstimator(),
+    });
+
+    const projected = await materializer.materialize({
+      prepared: v3Prepared,
+      model: MODEL,
+      signal: new AbortController().signal,
+    });
+    const toolResultIndex = projected.findIndex((message) => message.role === "tool");
+    const deltaIndex = projected.findIndex((message) =>
+      message.content.includes("after complete tool batch"),
+    );
+
+    expect(projected[toolResultIndex - 1]).toMatchObject({ role: "assistant" });
+    expect(projected[toolResultIndex + 1]).toMatchObject({ role: "user" });
+    expect(deltaIndex).toBe(toolResultIndex + 1);
+    expect(projected[deltaIndex + 1]).toMatchObject({ role: "user", content: "current question" });
   });
 
   it("preserves three ConversationTurns when Run-local sequences collide", async () => {
