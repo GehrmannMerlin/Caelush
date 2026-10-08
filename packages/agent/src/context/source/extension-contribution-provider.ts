@@ -10,6 +10,7 @@ import {
   estimateContextTokens,
   mapLegacyPriority,
 } from "./generic-provider-helpers.js";
+import { utf8ByteLength, utf8PrefixByBytes } from "../../utils/utf8.js";
 
 const PROVIDER_VERSION = "extension-contributions-v1";
 const MAX_ITEM_BYTES = 16 * 1024;
@@ -85,14 +86,7 @@ export function createExtensionContributionContextSourceProvider(
 
 function boundedSafeText(value: string, maxBytes: number): string {
   const safe = safeContributionText(value);
-  if (new TextEncoder().encode(safe).byteLength <= maxBytes) return safe;
-  let output = "";
-  for (const character of safe) {
-    const candidate = output + character;
-    if (new TextEncoder().encode(candidate).byteLength > maxBytes) break;
-    output = candidate;
-  }
-  return output;
+  return utf8ByteLength(safe) <= maxBytes ? safe : utf8PrefixByBytes(safe, maxBytes);
 }
 
 function safeContributionText(value: string): string {

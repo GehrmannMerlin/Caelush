@@ -10,6 +10,7 @@ import {
   type ToolName,
   type TransientRunEvent,
 } from "@caelush/protocol";
+import { splitUtf8ByBytes } from "./utf8.js";
 
 export interface CodingRuntimeProgressEnvelope {
   readonly sessionId: SessionId;
@@ -98,22 +99,7 @@ export function createRuntimeProgressSignalProjector(
 const MAX_RUNTIME_TRANSIENT_BYTES = 8 * 1024;
 
 function splitTransientText(value: string): readonly string[] {
-  if (value.length === 0) return [""];
-  const chunks: string[] = [];
-  let current = "";
-  for (const character of value) {
-    if (current.length > 0 && byteLength(`${current}${character}`) > MAX_RUNTIME_TRANSIENT_BYTES) {
-      chunks.push(current);
-      current = "";
-    }
-    current += character;
-  }
-  if (current.length > 0) chunks.push(current);
-  return chunks;
-}
-
-function byteLength(value: string): number {
-  return new TextEncoder().encode(value).byteLength;
+  return splitUtf8ByBytes(value, MAX_RUNTIME_TRANSIENT_BYTES);
 }
 
 function base(

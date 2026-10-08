@@ -14,6 +14,7 @@ import {
 } from "@caelush/protocol";
 import type { AIMessagePhase } from "@caelush/ai";
 import type { AgentExecutionIdentity } from "../loop/types.js";
+import { splitUtf8ByBytes } from "../utils/utf8.js";
 
 export interface EventIdFactory {
   create(): EventId;
@@ -137,22 +138,7 @@ export function createModelStreamSignalProjector(
 const MAX_MODEL_TRANSIENT_BYTES = 8 * 1024;
 
 function splitTransientText(value: string): readonly string[] {
-  if (value.length === 0) return [""];
-  const chunks: string[] = [];
-  let current = "";
-  for (const character of value) {
-    if (current.length > 0 && byteLength(`${current}${character}`) > MAX_MODEL_TRANSIENT_BYTES) {
-      chunks.push(current);
-      current = "";
-    }
-    current += character;
-  }
-  if (current.length > 0) chunks.push(current);
-  return chunks;
-}
-
-function byteLength(value: string): number {
-  return new TextEncoder().encode(value).byteLength;
+  return splitUtf8ByBytes(value, MAX_MODEL_TRANSIENT_BYTES);
 }
 
 function base(

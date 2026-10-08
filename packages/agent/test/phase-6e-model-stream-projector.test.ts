@@ -12,7 +12,7 @@ import {
   type ModelStreamSignalProjector,
 } from "../src/events/model-stream-signal-projector.js";
 import { createModelTurnExecutor } from "../src/loop/turn/model-turn-executor.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const identity: AgentExecutionIdentity = {
   runId: createRunId(),
@@ -29,6 +29,69 @@ function projector(): ModelStreamSignalProjector {
 }
 
 describe("ModelStreamSignalProjector", () => {
+  it("keeps a mixed Unicode delta intact across the exact 8 KiB boundary", () => {
+    const source = `${"x".repeat(8 * 1024 - 1)}😀中文z`;
+    const events = projector().projectMany?.({
+      identity,
+      stepId: turn.stepId,
+      event: { type: "text.delta", payload: { text: source } },
+    });
+
+    expect(events).toHaveLength(2);
+    expect(events!.map((event) => event.payload.text)).toEqual([
+      "x".repeat(8 * 1024 - 1),
+      "😀中文z",
+    ]);
+    expect(
+      events!.every((event) => Buffer.byteLength(event.payload.text, "utf8") <= 8 * 1024),
+    ).toBe(true);
+    expect(events!.every((event) => event.payload.text.isWellFormed())).toBe(true);
+    expect(events!.map((event) => event.durability.streamSequence)).toEqual([1, 2]);
+    expect(events!.map((event) => event.payload.text).join("")).toBe(source);
+  });
+
+  it("splits a 1 MiB text delta linearly into ordered UTF-8 bounded events", () => {
+    const source = "x".repeat(1024 * 1024);
+    const sourceBytes = Buffer.byteLength(source, "utf8");
+    const project = projector();
+    const originalEncode = TextEncoder.prototype.encode;
+    let encodedBytes = 0;
+    const encodeSpy = vi.spyOn(TextEncoder.prototype, "encode").mockImplementation(function (
+      this: TextEncoder,
+      value?: string,
+    ) {
+      const encoded = originalEncode.call(this, value);
+      encodedBytes += encoded.byteLength;
+      if (encodedBytes > sourceBytes * 16) {
+        throw new Error("text splitting repeatedly encoded a growing prefix");
+      }
+      return encoded;
+    });
+
+    let events;
+    try {
+      events = project.projectMany?.({
+        identity,
+        stepId: turn.stepId,
+        event: {
+          type: "text.delta",
+          payload: { text: source, assistantItemId: "assistant-large", phase: "FINAL_ANSWER" },
+        },
+      });
+    } finally {
+      encodeSpy.mockRestore();
+    }
+
+    expect(encodedBytes).toBeLessThanOrEqual(sourceBytes * 2);
+    expect(events).toHaveLength(128);
+    const chunks = events!.map((event) => event.payload.text);
+    expect(chunks.every((chunk) => Buffer.byteLength(chunk, "utf8") <= 8 * 1024)).toBe(true);
+    expect(chunks.join("")).toBe(source);
+    expect(events!.map((event) => event.durability.streamSequence)).toEqual(
+      Array.from({ length: 128 }, (_, index) => index + 1),
+    );
+  });
+
   it("maps model Tool starts to safe preparation metadata and suppresses argument deltas", () => {
     const project = projector();
     const text = project.project({

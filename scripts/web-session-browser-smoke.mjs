@@ -40,11 +40,22 @@ let s1PatchServed = false;
 let s2ChunksServed = 0;
 let s3HiddenChunksServed = 0;
 let s3PatchServed = false;
+let s4ModelChunksServed = 0;
+let s4ModelBytesServed = 0;
+let s4ProcessCalls = 0;
+let s4ProcessBytesEmitted = 0;
+let s4RawPatchServed = false;
 
 const S2_CANCEL_TEXT = `S2_CANCEL_${"cancel ".repeat(1_800)}`;
 const S2_COMPLETE_TEXT = `S2_COMPLETE ${"word ".repeat(1_800).trim()}`;
 const S2_CANCEL_CHUNK_COUNT = 1_800;
 const S2_COMPLETE_CHUNK_COUNT = 2_000;
+const S4_CANCEL_TEXT = `S4_CANCEL_${"cancel ".repeat(26_000)}`;
+const S4_COMPLETE_TEXT = `S4_COMPLETE ${"large-output-".repeat(2_384)}`;
+const S4_MODEL_CHUNK_COUNT = 600;
+const S4_COMPLETE_MODEL_CHUNK_COUNT = 1_000;
+const S4_PROCESS_CHUNK_BYTES = 4 * 1024;
+const S4_PROCESS_CHUNK_COUNT = 256;
 
 /**
  * The sandbox Runner as a host with a working packaged artifact reports it.
@@ -61,14 +72,69 @@ const S2_COMPLETE_CHUNK_COUNT = 2_000;
  * refuses every prompt before a browser is even launched. This fixture is what "a host with a working
  * Runner" looks like — it probes available with a real enforcement mode.
  *
- * It is a fixture, not a sandbox: `create` throws, because the smoke never runs a restricted process.
+ * Restricted commands fail closed except for the S4 deterministic process-output fixture. That
+ * fixture is an in-process ManagedProcessAdapter, so the browser gate exercises Runtime buffering
+ * without invoking a host shell or depending on OS-specific command behavior.
  */
 const fixtureSandboxProvider = {
   id: "browser-fixture-runner",
   kind: "RESTRICTED",
   enforcement: "HARD",
-  create: async () => {
-    throw new Error("The browser smoke never executes a restricted process.");
+  create: async ({ launch }) => {
+    if (!launch.args.some((argument) => argument.includes("CAELUSH_S4_OUTPUT_FIXTURE"))) {
+      throw new Error("The browser smoke only executes its S4 in-process output fixture.");
+    }
+    s4ProcessCalls += 1;
+    const startListeners = new Set();
+    const outputListeners = new Set();
+    const exitListeners = new Set();
+    let closed = false;
+    const emitOutput = (index) => {
+      if (closed) return;
+      const text =
+        index === 0
+          ? `S4_PROCESS_HEAD\n${"P".repeat(S4_PROCESS_CHUNK_BYTES - 16)}`
+          : index === S4_PROCESS_CHUNK_COUNT - 1
+            ? `${"T".repeat(S4_PROCESS_CHUNK_BYTES - 16)}\nS4_PROCESS_TAIL\n`
+            : "P".repeat(S4_PROCESS_CHUNK_BYTES);
+      s4ProcessBytesEmitted += Buffer.byteLength(text, "utf8");
+      for (const listener of outputListeners) listener({ stream: "stdout", text });
+      if (index + 1 === S4_PROCESS_CHUNK_COUNT) {
+        setTimeout(() => {
+          if (closed) return;
+          for (const listener of exitListeners) listener({ exitCode: 0 });
+        }, 5);
+      }
+    };
+    setTimeout(() => {
+      if (closed) return;
+      for (const listener of startListeners) listener();
+      for (let index = 0; index < S4_PROCESS_CHUNK_COUNT; index += 1) {
+        setTimeout(() => emitOutput(index), index * 2 + 1);
+      }
+    }, 0);
+    return {
+      tty: false,
+      onStart(listener) {
+        startListeners.add(listener);
+        return () => startListeners.delete(listener);
+      },
+      onOutput(listener) {
+        outputListeners.add(listener);
+        return () => outputListeners.delete(listener);
+      },
+      onExit(listener) {
+        exitListeners.add(listener);
+        return () => exitListeners.delete(listener);
+      },
+      onError(listener) {
+        return () => undefined;
+      },
+      async write() {},
+      async close() {
+        closed = true;
+      },
+    };
   },
   probe: async () => ({ available: true, enforcement: "HARD" }),
 };
@@ -109,6 +175,17 @@ function createFixtureWorkspacePreparation() {
 
 async function startFakeModelServer() {
   const server = createServer((request, response) => {
+    if (request.method === "GET" && request.url === "/__s4/status") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          modelChunksServed: s4ModelChunksServed,
+          modelBytesServed: s4ModelBytesServed,
+          processBytesEmitted: s4ProcessBytesEmitted,
+        }),
+      );
+      return;
+    }
     void handleModelRequest(request, response);
   });
   await new Promise((resolvePromise, reject) => {
@@ -123,6 +200,7 @@ async function startFakeModelServer() {
   let closed;
   return {
     url: `http://127.0.0.1:${address.port}/v1`,
+    statusUrl: `http://127.0.0.1:${address.port}/__s4/status`,
     close: () =>
       (closed ??= new Promise((resolvePromise) => {
         // A held "waiting" stream is still open by design; closeAllConnections is what guarantees the
@@ -161,9 +239,10 @@ async function handleModelRequest(request, response) {
   const messages = Array.isArray(payload?.messages) ? payload.messages : [];
   const isReview = messages.some(
     (message) =>
-      message?.role === "system" &&
-      typeof message.content === "string" &&
-      message.content.includes("Review the supplied"),
+      typeof message?.content === "string" &&
+      (message.content.includes("Review the supplied") ||
+        message.content.includes("independent task-acceptance reviewer") ||
+        message.content.includes("UNTRUSTED REVIEW BUNDLE BEGIN")),
   );
   const hasToolResult = messages.some((message) => message?.role === "tool");
   const promptText = messages
@@ -212,6 +291,78 @@ async function handleModelRequest(request, response) {
       [...chunks, ...textChunks("S3 hidden activity completed.")],
       20,
     );
+    return;
+  }
+  if (latestUserText?.includes("s4 cancel model stream")) {
+    const chunks = streamedTextChunks(S4_CANCEL_TEXT, S4_MODEL_CHUNK_COUNT);
+    await writeSseDelayed(
+      response,
+      chunks,
+      4,
+      0,
+      (sentChunk) => recordS4ModelChunk(sentChunk),
+      false,
+    );
+    return;
+  }
+  if (latestUserText?.includes("s4 complete model stream")) {
+    const chunks = streamedTextChunks(S4_COMPLETE_TEXT, S4_COMPLETE_MODEL_CHUNK_COUNT);
+    await writeSseDelayed(response, chunks, 4, 0, (sentChunk) => recordS4ModelChunk(sentChunk));
+    return;
+  }
+  if (latestUserText?.includes("s4 hidden provider activity")) {
+    const chunks = Array.from({ length: 45 }, (_, index) =>
+      chunk({ reasoning_content: `S4_SECRET_REASONING_SENTINEL_${index}` }, null),
+    );
+    s4ModelChunksServed += await writeSseDelayed(
+      response,
+      [...chunks, ...textChunks("S4 hidden activity completed.")],
+      20,
+    );
+    return;
+  }
+  if (latestUserText?.includes("s4 shell output stress")) {
+    if (hasToolResult) {
+      writeSse(response, textChunks("S4 shell output completed."));
+      return;
+    }
+    writeSse(
+      response,
+      toolCallChunks(
+        "exec_command",
+        { cmd: "CAELUSH_S4_OUTPUT_FIXTURE" },
+        "browser-s4-process-output",
+      ),
+    );
+    return;
+  }
+  if (latestUserText?.includes("s4 raw Tool args stress") && (hasToolResult || s4RawPatchServed)) {
+    writeSse(response, textChunks("S4 private Tool arguments completed."));
+    return;
+  }
+  if (latestUserText?.includes("s4 raw Tool args stress") && !s4RawPatchServed) {
+    s4RawPatchServed = true;
+    const fixtureHtml = [
+      "<!doctype html>",
+      '<html lang="zh-CN"><head><meta charset="utf-8"><title>S4 private args</title></head>',
+      "<body>",
+      '<!-- S4_RAW_ARGS_SECRET_SENTINEL "apiKey":"S4_PRIVATE_ARGUMENT_VALUE" -->',
+      ...Array.from({ length: 64 }, (_, index) => `<!-- ${index}-${"x".repeat(1_700)} -->`),
+      "</body></html>",
+    ].join("\n");
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: s4-private-args.html",
+      ...fixtureHtml.split("\n").map((line) => `+${line}`),
+      "*** End Patch",
+    ].join("\n");
+    const streamedArguments = streamedToolCallChunks(
+      "apply_patch",
+      JSON.stringify({ patch }),
+      "browser-s4-private-args",
+      1_000,
+    );
+    await writeSseDelayed(response, streamedArguments, 2, 300);
     return;
   }
   if (latestUserText?.includes("s3 durable burst")) {
@@ -407,20 +558,35 @@ function writeSse(response, chunks) {
   response.end("data: [DONE]\n\n");
 }
 
-async function writeSseDelayed(response, chunks, delayMs, initialPauseMs = 0) {
+async function writeSseDelayed(
+  response,
+  chunks,
+  delayMs,
+  initialPauseMs = 0,
+  onChunk,
+  endResponse = true,
+) {
   response.writeHead(200, { "content-type": "text/event-stream", connection: "close" });
   let delivered = 0;
   for (let index = 0; index < chunks.length; index += 1) {
     if (response.destroyed) return delivered;
     response.write(`data: ${JSON.stringify(chunks[index])}\n\n`);
     delivered += 1;
+    onChunk?.(chunks[index]);
     const delay = index === 0 ? initialPauseMs : delayMs;
     if (delay > 0) {
       await new Promise((resolvePromise) => globalThis.setTimeout(resolvePromise, delay));
     }
   }
-  response.end("data: [DONE]\n\n");
+  if (endResponse) response.end("data: [DONE]\n\n");
   return delivered;
+}
+
+function recordS4ModelChunk(sentChunk) {
+  const content = sentChunk.choices?.[0]?.delta?.content;
+  if (typeof content !== "string") return;
+  s4ModelChunksServed += 1;
+  s4ModelBytesServed += Buffer.byteLength(content, "utf8");
 }
 
 function holdSseFor(response, delayMs, chunks, initialChunks = []) {
@@ -534,6 +700,7 @@ const s0Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S0";
 const s1Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S1";
 const s2Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S2";
 const s3Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S3";
+const s4Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S4";
 const configuredArtifactDirectory = process.env.CAELUSH_BROWSER_SMOKE_ARTIFACT_DIR;
 const browserArtifacts = promptCacheOnly
   ? await resolvePromptCacheArtifactDirectory(process.cwd(), configuredArtifactDirectory)
@@ -546,7 +713,9 @@ const browserArtifacts = promptCacheOnly
           ? join(tmpdir(), `caelush-web-browser-smoke-s2-${process.pid}`)
           : s3Only
             ? join(tmpdir(), `caelush-web-browser-smoke-s3-${process.pid}`)
-            : join(process.cwd(), "test-results", "web-session-browser-smoke")
+            : s4Only
+              ? join(tmpdir(), `caelush-web-browser-smoke-s4-${process.pid}`)
+              : join(process.cwd(), "test-results", "web-session-browser-smoke")
     : resolve(configuredArtifactDirectory);
 
 const directory = await mkdtemp(join(tmpdir(), "caelush-web-browser-"));
@@ -567,8 +736,8 @@ try {
     port: 0,
     sseHeartbeatIntervalMs: 250,
     providerStreamPolicy: {
-      nudgeAfterMs: s3Only ? 250 : 1_000,
-      idleTimeoutMs: s3Only ? 500 : 1_500,
+      nudgeAfterMs: s3Only || s4Only ? 250 : 1_000,
+      idleTimeoutMs: s3Only || s4Only ? 500 : 1_500,
       teardownGraceMs: 300,
     },
     providers: [
@@ -601,7 +770,12 @@ try {
     await rm(browserArtifacts, { recursive: true, force: true });
   }
   await mkdir(browserArtifacts, { recursive: true });
-  const result = await runBrowserSmoke(daemon.url + "/", browserArtifacts, workspace);
+  const result = await runBrowserSmoke(
+    daemon.url + "/",
+    browserArtifacts,
+    workspace,
+    fakeProvider.statusUrl,
+  );
   if (result === 0 && s0Only) {
     const fixture = await readFile(join(directory, "s0-stream-fixture.html"), "utf8");
     if (!fixture.includes("S0 stream fixture") || fixture.length < 20_000) {
@@ -638,6 +812,25 @@ try {
       );
     }
   }
+  if (result === 0 && s4Only) {
+    const fixture = await readFile(join(directory, "s4-private-args.html"), "utf8");
+    if (
+      !fixture.includes("S4_RAW_ARGS_SECRET_SENTINEL") ||
+      Buffer.byteLength(fixture, "utf8") < 100_000 ||
+      s4ProcessCalls !== 1 ||
+      s4ProcessBytesEmitted < 1024 * 1024 ||
+      s4ModelChunksServed < 1_000 ||
+      s4ModelBytesServed < 100 * 1024 ||
+      !s4RawPatchServed
+    ) {
+      throw new Error(
+        `The S4 browser fixtures missed a scale or completion guard: ${JSON.stringify({ modelChunks: s4ModelChunksServed, modelBytes: s4ModelBytesServed, processCalls: s4ProcessCalls, processBytes: s4ProcessBytesEmitted, rawPatch: s4RawPatchServed, privateArgsBytes: Buffer.byteLength(fixture, "utf8") })}`,
+      );
+    }
+    process.stdout.write(
+      `[browser-smoke] S4 model chunks=${s4ModelChunksServed} / ${s4ModelBytesServed} bytes; in-process output=${s4ProcessBytesEmitted} bytes; private Tool args=${Buffer.byteLength(fixture, "utf8")} bytes.\n`,
+    );
+  }
   if (result === 0 && multiTurnOnly) {
     const fixture = await readFile(join(directory, "fixture.txt"), "utf8");
     if (fixture !== "multi-turn fixture\n") {
@@ -656,7 +849,8 @@ try {
     !s0Only &&
     !s1Only &&
     !s2Only &&
-    !s3Only
+    !s3Only &&
+    !s4Only
   ) {
     const fixture = await readFile(join(directory, "fixture.txt"), "utf8");
     if (fixture !== "patched browser fixture\n") {
@@ -801,11 +995,11 @@ async function assertPermissionsUsable(url) {
   process.stdout.write(`[browser-smoke] workspace permissions: ${JSON.stringify(statuses)}\n`);
 }
 
-function runBrowserSmoke(url, artifactDirectory, workspaceRef) {
+function runBrowserSmoke(url, artifactDirectory, workspaceRef, fixtureStatusUrl) {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(
       process.execPath,
-      [browserRunner, url, artifactDirectory, JSON.stringify(workspaceRef)],
+      [browserRunner, url, artifactDirectory, JSON.stringify(workspaceRef), fixtureStatusUrl],
       { stdio: "inherit" },
     );
     child.once("error", reject);

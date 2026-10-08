@@ -11,7 +11,7 @@ import {
   createRuntimeProgressSignalProjector,
   type CodingRuntimeProgressEnvelope,
 } from "../src/tools/runtime-progress-signal-projector.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const sessionId = createSessionId();
 const runId = createRunId();
@@ -55,6 +55,79 @@ function projector() {
 }
 
 describe("RuntimeProgressSignalProjector", () => {
+  it("keeps a mixed Unicode chunk intact across the exact 8 KiB boundary", () => {
+    const source = `${"x".repeat(8 * 1024 - 1)}😀中文z`;
+    const events = projector().projectMany?.(
+      input("exec_command", { kind: "OUTPUT", stream: "stdout", chunk: source }),
+    );
+
+    expect(events).toHaveLength(2);
+    expect(events!.map((event) => event.payload.chunk)).toEqual([
+      "x".repeat(8 * 1024 - 1),
+      "😀中文z",
+    ]);
+    expect(
+      events!.every((event) => Buffer.byteLength(event.payload.chunk, "utf8") <= 8 * 1024),
+    ).toBe(true);
+    expect(events!.every((event) => event.payload.chunk.isWellFormed())).toBe(true);
+    expect(events!.map((event) => event.durability.streamSequence)).toEqual([1, 2]);
+    expect(events!.map((event) => event.payload.chunk).join("")).toBe(source);
+  });
+
+  it("projects 1 MiB shell, process and generic output without growing-prefix re-encoding", () => {
+    const source = "r".repeat(1024 * 1024);
+    const sourceBytes = Buffer.byteLength(source, "utf8");
+    const project = projector();
+    const originalEncode = TextEncoder.prototype.encode;
+    let encodedBytes = 0;
+    const encodeSpy = vi.spyOn(TextEncoder.prototype, "encode").mockImplementation(function (
+      this: TextEncoder,
+      value?: string,
+    ) {
+      const encoded = originalEncode.call(this, value);
+      encodedBytes += encoded.byteLength;
+      if (encodedBytes > sourceBytes * 16) {
+        throw new Error("runtime splitting repeatedly encoded a growing prefix");
+      }
+      return encoded;
+    });
+
+    let shellEvents;
+    let processEvents;
+    let toolEvents;
+    try {
+      shellEvents = project.projectMany?.(
+        input("exec_command", { kind: "OUTPUT", stream: "stdout", chunk: source }),
+      );
+      processEvents = project.projectMany?.(
+        input(
+          "write_stdin",
+          { kind: "OUTPUT", stream: "stdout", chunk: source },
+          { session_id: "proc_large" },
+        ),
+      );
+      toolEvents = project.projectMany?.(
+        input("read_file", { kind: "OUTPUT", stream: "stdout", chunk: source }),
+      );
+    } finally {
+      encodeSpy.mockRestore();
+    }
+
+    expect(encodedBytes).toBeLessThanOrEqual(sourceBytes * 6);
+    for (const events of [shellEvents!, processEvents!, toolEvents!]) {
+      const chunks = events.map((event) => event.payload.chunk);
+      expect(events).toHaveLength(128);
+      expect(chunks.every((chunk) => Buffer.byteLength(chunk, "utf8") <= 8 * 1024)).toBe(true);
+      expect(chunks.join("")).toBe(source);
+      expect(events.map((event) => event.durability.streamSequence)).toEqual(
+        Array.from({ length: 128 }, (_, index) => index + 1),
+      );
+    }
+    expect(shellEvents!.every((event) => event.type === "shell.output")).toBe(true);
+    expect(processEvents!.every((event) => event.type === "process.output")).toBe(true);
+    expect(toolEvents!.every((event) => event.type === "tool.output")).toBe(true);
+  });
+
   it("maps one sanitized output update to one ordered canonical signal", () => {
     const project = projector();
     const shellInvocation = invocation("exec_command", {});

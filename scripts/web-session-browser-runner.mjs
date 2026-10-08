@@ -2,9 +2,16 @@
 
 import { chromium } from "@playwright/test";
 
-const [url, artifactDirectory, workspaceJson] = process.argv.slice(2);
-if (url === undefined || artifactDirectory === undefined || workspaceJson === undefined) {
-  throw new Error("Browser smoke requires URL, artifact directory, and workspace JSON.");
+const [url, artifactDirectory, workspaceJson, fixtureStatusUrl] = process.argv.slice(2);
+if (
+  url === undefined ||
+  artifactDirectory === undefined ||
+  workspaceJson === undefined ||
+  fixtureStatusUrl === undefined
+) {
+  throw new Error(
+    "Browser smoke requires URL, artifact directory, workspace JSON, and fixture status URL.",
+  );
 }
 const workspace = JSON.parse(workspaceJson);
 const browser = await chromium.launch({ headless: true });
@@ -16,6 +23,7 @@ const s0Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S0";
 const s1Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S1";
 const s2Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S2";
 const s3Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S3";
+const s4Only = process.env.CAELUSH_BROWSER_SMOKE_SCOPE === "S4";
 const S2_COMPLETE_TEXT = `S2_COMPLETE ${"word ".repeat(1_800).trim()}`;
 const waitVisible = (locator, timeout = 15_000) => locator.waitFor({ state: "visible", timeout });
 const waitUntil = async (predicate, description, timeout = 15_000) => {
@@ -25,6 +33,11 @@ const waitUntil = async (predicate, description, timeout = 15_000) => {
     if (Date.now() > deadline) throw new Error("timed out waiting for " + description);
     await page.waitForTimeout(100);
   }
+};
+const readFixtureStatus = async () => {
+  const response = await fetch(fixtureStatusUrl);
+  if (!response.ok) throw new Error("the S4 fixture status endpoint returned " + response.status);
+  return response.json();
 };
 const exactText = (value) => page.getByText(value, { exact: true });
 const startNewSession = async () => {
@@ -736,6 +749,310 @@ try {
     await browser.close();
     process.stdout.write(
       "[browser-runner] S3 hidden Provider activity stayed live without false idle or raw reasoning; durable Tool effect and terminal presentation settled.\n",
+    );
+    process.exit(0);
+  }
+  if (s4Only) {
+    smokeStage = "S4 browser heartbeat and S2 frame instrumentation";
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.evaluate(() => {
+      window.__caelushS4HeartbeatTicks = 0;
+      window.__caelushS4FrameTimestamp = undefined;
+      window.__caelushS4ScrollWrites = [];
+      window.setInterval(() => {
+        window.__caelushS4HeartbeatTicks += 1;
+      }, 50);
+      const scrollContainer = document.querySelector(".workspace-column");
+      if (!(scrollContainer instanceof HTMLElement)) {
+        throw new Error("the S4 conversation scroll container is missing");
+      }
+      let prototype = scrollContainer;
+      let descriptor;
+      while (prototype !== null && descriptor === undefined) {
+        descriptor = Object.getOwnPropertyDescriptor(prototype, "scrollTop");
+        prototype = Object.getPrototypeOf(prototype);
+      }
+      if (descriptor?.get === undefined || descriptor.set === undefined) {
+        throw new Error("the S4 scrollTop property cannot be instrumented");
+      }
+      const originalRequestAnimationFrame = window.requestAnimationFrame.bind(window);
+      window.requestAnimationFrame = (callback) =>
+        originalRequestAnimationFrame((timestamp) => {
+          window.__caelushS4FrameTimestamp = timestamp;
+          callback(timestamp);
+        });
+      Object.defineProperty(scrollContainer, "scrollTop", {
+        configurable: true,
+        get: () => descriptor.get.call(scrollContainer),
+        set: (value) => {
+          window.__caelushS4ScrollWrites.push(window.__caelushS4FrameTimestamp);
+          descriptor.set.call(scrollContainer, value);
+        },
+      });
+    });
+
+    smokeStage = "S4 100 KiB model stream remains interactive and cancellable";
+    const heartbeatBeforeModel = await page.evaluate(() => window.__caelushS4HeartbeatTicks);
+    const modelBytesBeforeCancel = (await readFixtureStatus()).modelBytesServed;
+    await submitPrompt("s4 cancel model stream");
+    await waitVisible(page.locator("button.cancel-button"));
+    await waitUntil(
+      async () =>
+        (await readFixtureStatus()).modelBytesServed >= modelBytesBeforeCancel + 100 * 1024,
+      "100 KiB of S4 model deltas to reach the live browser stream",
+      30_000,
+    );
+    const liveDraft = page.locator(".turn-presentation-model-draft").last();
+    await waitVisible(liveDraft);
+    const liveDraftBytes = await liveDraft.evaluate((node) => {
+      const text = node.getAttribute("title") ?? node.innerText;
+      return new TextEncoder().encode(text).byteLength;
+    });
+    if (liveDraftBytes > 16 * 1024) {
+      throw new Error(
+        `the live S4 model draft exceeded the 16 KiB client bound: ${liveDraftBytes}`,
+      );
+    }
+    const cancelScrollWrites = await page.evaluate(() => [...window.__caelushS4ScrollWrites]);
+    if (cancelScrollWrites.length === 0) {
+      throw new Error("the S4 model stream did not exercise frame-coalesced publication");
+    }
+    const writesByFrame = new Map();
+    for (const frame of cancelScrollWrites) {
+      if (frame === undefined) continue;
+      writesByFrame.set(frame, (writesByFrame.get(frame) ?? 0) + 1);
+    }
+    if ([...writesByFrame.values()].some((count) => count > 1)) {
+      throw new Error("the S4 model stream made multiple scroll writes in one animation frame");
+    }
+    const sidebarToggle = page.locator("button.sidebar-toggle-button");
+    const sidebarBefore = await sidebarToggle.getAttribute("aria-expanded");
+    await sidebarToggle.click({ timeout: 2_000 });
+    if ((await sidebarToggle.getAttribute("aria-expanded")) === sidebarBefore) {
+      throw new Error("the browser stopped responding during the S4 model stream");
+    }
+    await sidebarToggle.click({ timeout: 2_000 });
+    await page.locator("button.cancel-button").click();
+    await waitVisible(
+      page
+        .locator("button.workspace-session-item")
+        .filter({ hasText: "s4 cancel model stream" })
+        .locator('.session-status-icon[aria-label="已取消"]'),
+    );
+
+    smokeStage = "S4 completed bounded model presentation";
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await startNewSession();
+    await page.evaluate(() => {
+      window.__caelushS4MaxModelDraftBytes = 0;
+      const sample = () => {
+        for (const node of document.querySelectorAll(".turn-presentation-model-draft")) {
+          const bytes = new TextEncoder().encode(node.innerText).byteLength;
+          window.__caelushS4MaxModelDraftBytes = Math.max(
+            window.__caelushS4MaxModelDraftBytes,
+            bytes,
+          );
+        }
+      };
+      window.__caelushS4SampleModelDraft = sample;
+      new MutationObserver(sample).observe(document.documentElement, {
+        childList: true,
+        characterData: true,
+        subtree: true,
+      });
+      sample();
+    });
+    await submitPrompt("s4 complete model stream");
+    await waitVisible(page.locator("button.cancel-button"));
+    await waitUntil(
+      async () => (await page.locator(".session-conversation").innerText()).includes("S4_COMPLETE"),
+      "S4 large model answer to render",
+      20_000,
+    );
+    const completedModelSession = page
+      .locator("button.workspace-session-item")
+      .filter({ hasText: "s4 complete model stream" });
+    await waitVisible(
+      completedModelSession.locator('.session-status-icon[aria-label="已完成"]'),
+      20_000,
+    );
+    const finalAnswer = page.locator(".turn-presentation-item--assistant").last();
+    const boundedAnswer = await finalAnswer.evaluate((node) => ({
+      text: node.innerText,
+      bytes: new TextEncoder().encode(node.innerText).byteLength,
+    }));
+    const modelDraftPeakBytes = await page.evaluate(() => {
+      window.__caelushS4SampleModelDraft?.();
+      return window.__caelushS4MaxModelDraftBytes;
+    });
+    if (
+      boundedAnswer.bytes > 64 * 1024 ||
+      !boundedAnswer.text.includes("S4_COMPLETE") ||
+      modelDraftPeakBytes !== 16 * 1024
+    ) {
+      throw new Error(
+        `the S4 1,000-delta presentation bounds failed: answer=${boundedAnswer.bytes} bytes; live draft peak=${modelDraftPeakBytes} bytes`,
+      );
+    }
+    const heartbeatAfterModel = await page.evaluate(() => window.__caelushS4HeartbeatTicks);
+    if (heartbeatAfterModel < heartbeatBeforeModel + 10) {
+      throw new Error("the browser heartbeat stalled while handling the S4 model stream");
+    }
+
+    smokeStage = "S4 1 MiB in-process shell output chain";
+    await startNewSession();
+    await page.evaluate(() => {
+      window.__caelushS4MaxProcessOutputBytes = 0;
+      const sample = () => {
+        for (const node of document.querySelectorAll(".turn-presentation-process")) {
+          const bytes = new TextEncoder().encode(node.innerText).byteLength;
+          window.__caelushS4MaxProcessOutputBytes = Math.max(
+            window.__caelushS4MaxProcessOutputBytes,
+            bytes,
+          );
+        }
+      };
+      window.__caelushS4SampleProcessOutput = sample;
+      new MutationObserver(sample).observe(document.documentElement, {
+        childList: true,
+        characterData: true,
+        subtree: true,
+      });
+      sample();
+    });
+    await submitPrompt("s4 shell output stress");
+    await waitVisible(page.locator("button.cancel-button"));
+    await openProcessDisclosure();
+    await waitUntil(
+      async () =>
+        (await page.locator(".turn-presentation-process").last().innerText()).includes(
+          "S4_PROCESS_HEAD",
+        ),
+      "the deterministic S4 process output to reach the browser",
+      15_000,
+    );
+    await waitVisible(exactText("S4 shell output completed."), 20_000);
+    await waitVisible(
+      page
+        .locator("button.workspace-session-item")
+        .filter({ hasText: "s4 shell output stress" })
+        .locator('.session-status-icon[aria-label="已完成"]'),
+      20_000,
+    );
+    const processOutputBytes = await page.evaluate(() => {
+      window.__caelushS4SampleProcessOutput?.();
+      return window.__caelushS4MaxProcessOutputBytes;
+    });
+    const completedProcessStatus = await readFixtureStatus();
+    if (
+      processOutputBytes === 0 ||
+      processOutputBytes > 24 * 1024 ||
+      completedProcessStatus.processBytesEmitted < 1024 * 1024
+    ) {
+      throw new Error(
+        `the S4 process stream failed its full-run bound: rendered peak=${processOutputBytes} bytes, emitted=${completedProcessStatus.processBytesEmitted} bytes`,
+      );
+    }
+
+    smokeStage = "S4 raw Tool argument DOM privacy";
+    await startNewSession();
+    await submitPrompt("s4 raw Tool args stress");
+    const assertS4DomPrivate = async (stage) => {
+      const html = await page.locator("html").evaluate((node) => node.outerHTML);
+      if (
+        html.includes("*** Begin Patch") ||
+        html.includes("S4_RAW_ARGS_SECRET_SENTINEL") ||
+        html.includes("S4_PRIVATE_ARGUMENT_VALUE") ||
+        html.includes('"apiKey"')
+      ) {
+        throw new Error(`raw S4 Tool arguments entered the Web DOM during ${stage}`);
+      }
+    };
+    await waitVisible(page.locator("button.cancel-button"));
+    await openProcessDisclosure();
+    await waitUntil(
+      async () =>
+        (await exactText("正在准备编辑文件").count()) > 0 ||
+        (await page.locator(".approval-card").count()) > 0 ||
+        (await page.locator('.turn-presentation-live-item[data-tool-category="EDIT"]').count()) >
+          0 ||
+        (await page.locator(".turn-presentation-item--tool").count()) > 0,
+      "S4 apply_patch admission or execution presentation",
+    );
+    await assertS4DomPrivate("admission and execution");
+    await waitVisible(exactText("S4 private Tool arguments completed."), 20_000);
+    await waitVisible(
+      page
+        .locator("button.workspace-session-item")
+        .filter({ hasText: "s4 raw Tool args stress" })
+        .locator('.session-status-icon[aria-label="已完成"]'),
+      20_000,
+    );
+    await openProcessDisclosure();
+    await waitUntil(
+      async () =>
+        (await page.locator(".turn-presentation-process").innerText()).includes(
+          "s4-private-args.html",
+        ),
+      "the S4 durable FileChange presentation",
+    );
+    await assertS4DomPrivate("completion");
+
+    smokeStage = "S4 Provider liveness regression guard";
+    await startNewSession();
+    await page.evaluate(() => {
+      window.__caelushS4SawProviderActive = false;
+      window.__caelushS4SawFalseIdle = false;
+      window.__caelushS4SawSecretReasoning = false;
+      const observe = () => {
+        const body = document.body.innerText;
+        if (body.includes("模型仍在处理")) window.__caelushS4SawProviderActive = true;
+        if (
+          window.__caelushS4SawProviderActive === true &&
+          body.includes("模型近期没有返回新数据，仍在等待")
+        ) {
+          window.__caelushS4SawFalseIdle = true;
+        }
+        if (body.includes("S4_SECRET_REASONING_SENTINEL")) {
+          window.__caelushS4SawSecretReasoning = true;
+        }
+      };
+      const observer = new MutationObserver(observe);
+      observer.observe(document.body, { childList: true, characterData: true, subtree: true });
+      window.__caelushS4Observer = observer;
+    });
+    await submitPrompt("s4 hidden provider activity");
+    await openProcessDisclosure();
+    await waitVisible(exactText("模型仍在处理"), 5_000);
+    await waitVisible(exactText("S4 hidden activity completed."), 15_000);
+    await waitVisible(
+      page
+        .locator("button.workspace-session-item")
+        .filter({ hasText: "s4 hidden provider activity" })
+        .locator('.session-status-icon[aria-label="已完成"]'),
+      15_000,
+    );
+    const providerObservation = await page.evaluate(() => {
+      window.__caelushS4Observer?.disconnect();
+      return {
+        sawProviderActive: window.__caelushS4SawProviderActive === true,
+        sawFalseIdle: window.__caelushS4SawFalseIdle === true,
+        sawSecretReasoning: window.__caelushS4SawSecretReasoning === true,
+      };
+    });
+    if (
+      !providerObservation.sawProviderActive ||
+      providerObservation.sawFalseIdle ||
+      providerObservation.sawSecretReasoning
+    ) {
+      throw new Error(
+        `the S4 Provider liveness guard failed: ${JSON.stringify(providerObservation)}`,
+      );
+    }
+
+    await browser.close();
+    process.stdout.write(
+      `[browser-runner] S4 cancel draft=${liveDraftBytes} bytes; 1,000-delta draft peak=${modelDraftPeakBytes} bytes (16 KiB client bound); completed answer=${boundedAnswer.bytes} bytes (64 KiB public bound); process output peak=${processOutputBytes} browser bytes; cancellation, raw-argument privacy, heartbeat, frame coalescing and Provider liveness passed.\n`,
     );
     process.exit(0);
   }

@@ -8,6 +8,7 @@ import {
   type ToolName,
 } from "@caelush/protocol";
 import { describe, expect, it, vi } from "vitest";
+import { boundToolResultContent as boundToolResultContentFromSource } from "../src/tools/result/result-policy.js";
 import {
   boundToolResultContent,
   createToolCallPreparer,
@@ -511,6 +512,35 @@ describe("ToolResultLimits and the standalone helpers", () => {
     expect(boundToolResultContent("中文", { maxDurableContentBytes: 1, maxDetailsBytes: 10 })).toBe(
       "",
     );
+  });
+
+  it("bounds a 1 MiB Unicode result linearly within the default 64 KiB budget", () => {
+    const source = "a中😀b".repeat(116_508) + "abcd";
+    const sourceBytes = Buffer.byteLength(source, "utf8");
+    expect(sourceBytes).toBe(1024 * 1024);
+    const originalCharCodeAt = String.prototype.charCodeAt;
+    let scannedCodeUnits = 0;
+    const scanSpy = vi.spyOn(String.prototype, "charCodeAt").mockImplementation(function (
+      this: string,
+      index: number,
+    ) {
+      scannedCodeUnits += 1;
+      return originalCharCodeAt.call(this, index);
+    });
+
+    let result: string;
+    try {
+      result = boundToolResultContentFromSource(source);
+    } finally {
+      scanSpy.mockRestore();
+    }
+
+    expect(scannedCodeUnits).toBeGreaterThan(0);
+    expect(scannedCodeUnits).toBeLessThanOrEqual(source.length * 2);
+    expect(Buffer.byteLength(result!, "utf8")).toBeLessThanOrEqual(64 * 1024);
+    expect(result!.endsWith(TOOL_RESULT_TRUNCATION_MARKER)).toBe(true);
+    expect(result!.isWellFormed()).toBe(true);
+    expect(source.startsWith(result!.slice(0, -TOOL_RESULT_TRUNCATION_MARKER.length))).toBe(true);
   });
 
   it("validates a result through the standalone entry point", () => {

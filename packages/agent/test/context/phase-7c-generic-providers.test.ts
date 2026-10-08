@@ -213,6 +213,42 @@ describe("Phase 7C Generic Source Providers", () => {
     expect(result.items[0]!.source.sourceRef).toBe("host.extension/extension_1/fact_1");
   });
 
+  it("keeps oversized Unicode extension text at a safe 16 KiB prefix", async () => {
+    const content = "a中😀b".repeat(20_000);
+    const provider = createExtensionContributionContextSourceProvider({
+      loader: {
+        async load() {
+          return [
+            {
+              id: "large-extension",
+              source: "host.extension",
+              replay: "SNAPSHOT" as const,
+              items: [
+                {
+                  id: "large-fact",
+                  priorityClass: "NORMAL" as const,
+                  content,
+                  whyLoaded: "large test contribution",
+                },
+              ],
+            },
+          ];
+        },
+      },
+    });
+
+    const result = await provider.collect(sourceInput);
+    const projected = result.items[0]!.payload;
+    expect(projected.kind).toBe("TEXT");
+    if (projected.kind !== "TEXT") throw new Error("expected bounded text contribution");
+    expect(Buffer.byteLength(projected.text, "utf8")).toBeLessThanOrEqual(16 * 1024);
+    expect(projected.text.isWellFormed()).toBe(true);
+    expect(content.startsWith(projected.text)).toBe(true);
+    const nextCharacter = Array.from(content.slice(projected.text.length))[0];
+    expect(nextCharacter).toBeDefined();
+    expect(Buffer.byteLength(projected.text + nextCharacter, "utf8")).toBeGreaterThan(16 * 1024);
+  });
+
   it("redacts contribution secrets and host paths before they enter ContextItems", async () => {
     const provider = createExtensionContributionContextSourceProvider({
       loader: {

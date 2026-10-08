@@ -4,6 +4,7 @@ import type { TimestampMs } from "@caelush/protocol";
 import type { PreparedToolCall } from "../call/tool-call-preparer.js";
 import type { AgentToolResult } from "../types/tool-result.js";
 import type { DurableToolEventDraft } from "../durable/execution-store-port.js";
+import { utf8ByteLength, utf8PrefixByBytes } from "../../utils/utf8.js";
 
 /**
  * How much of a Tool result this layer will commit.
@@ -66,24 +67,13 @@ export function boundToolResultContent(
   limits: ToolResultLimits = DEFAULT_TOOL_RESULT_LIMITS,
 ): string {
   validateToolResultLimits(limits);
-  if (Buffer.byteLength(content, "utf8") <= limits.maxDurableContentBytes) return content;
+  if (utf8ByteLength(content) <= limits.maxDurableContentBytes) return content;
 
-  const markerBytes = Buffer.byteLength(TOOL_RESULT_TRUNCATION_MARKER, "utf8");
+  const markerBytes = utf8ByteLength(TOOL_RESULT_TRUNCATION_MARKER);
   if (markerBytes > limits.maxDurableContentBytes) {
-    return wholeCharacterPrefix(content, limits.maxDurableContentBytes);
+    return utf8PrefixByBytes(content, limits.maxDurableContentBytes);
   }
-  return `${wholeCharacterPrefix(content, limits.maxDurableContentBytes - markerBytes)}${TOOL_RESULT_TRUNCATION_MARKER}`;
-}
-
-/** The longest whole-character prefix of `content` within `maxBytes` UTF-8 bytes. */
-function wholeCharacterPrefix(content: string, maxBytes: number): string {
-  if (maxBytes <= 0) return "";
-  let prefix = "";
-  for (const character of content) {
-    if (Buffer.byteLength(prefix + character, "utf8") > maxBytes) break;
-    prefix += character;
-  }
-  return prefix;
+  return `${utf8PrefixByBytes(content, limits.maxDurableContentBytes - markerBytes)}${TOOL_RESULT_TRUNCATION_MARKER}`;
 }
 
 /** A result limit must be a positive integer; a zero or non-integer budget is refused, not clamped. */
