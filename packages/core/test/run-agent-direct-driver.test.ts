@@ -448,6 +448,37 @@ describe("production ADVANCE_AGENT settlement", () => {
     expect(h.notifications.map((event) => event.type)).not.toContain("retry.scheduled");
   });
 
+  it("lets a durable cancellation that wins at the final-candidate boundary prevent natural completion", async () => {
+    let store: MemoryExecutionStore | undefined;
+    const call = fakeFrozenModelTurnExecutor(async () => {
+      if (store === undefined) throw new Error("execution store is not ready");
+      const runId = store.snapshot.run.id;
+      await store.requestCancellation(runId, {
+        runId,
+        cause: "USER_REQUESTED",
+        requestedAt: createTimestampMs(20),
+      });
+      return turn({ text: "candidate after cancellation" });
+    });
+    const h = harness({ executor: call });
+    store = h.store;
+
+    const result = await h.controller.start(h.store.snapshot.run.id);
+
+    expect(result.status).toBe("TERMINAL");
+    expect(h.store.snapshot.run.status).toBe("CANCELLED");
+    expect(h.store.snapshot.run.finalResult).toBeUndefined();
+    expect(
+      h.store.commits.some(
+        (commit) =>
+          typeof commit.run.finalResult === "object" &&
+          commit.run.finalResult !== null &&
+          "type" in commit.run.finalResult &&
+          commit.run.finalResult.type === "NORMAL_COMPLETION",
+      ),
+    ).toBe(false);
+  });
+
   it("does not claim a shutdown checkpoint when its retry transaction fails", async () => {
     const enteredProvider = deferred<void>();
     const call = fakeFrozenModelTurnExecutor((_request, signal) => {

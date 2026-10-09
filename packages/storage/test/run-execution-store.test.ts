@@ -196,6 +196,21 @@ describe("SqliteRunExecutionStore", () => {
     expect(await storage.messageRecords.listByRun(pendingRun.id)).toHaveLength(0);
     expect(await storage.eventReader.latestSequence(pendingRun.id)).toBe(0);
 
+    // Fail after Run and Step writes have started, when a duplicate durable event ID reaches SQLite.
+    // The transaction must roll those writes and the final message back together.
+    await expect(
+      storage.execution.commit({
+        ...finalCommit,
+        events: [
+          ...finalCommit.events,
+          event(pendingRun.id, session.id, finalCommit.events[0]!.eventId),
+        ],
+      }),
+    ).rejects.toBeInstanceOf(RunExecutionConflictError);
+    expect((await storage.execution.load(pendingRun.id))?.run.status).toBe("RUNNING");
+    expect(await storage.messageRecords.listByRun(pendingRun.id)).toHaveLength(0);
+    expect(await storage.eventReader.latestSequence(pendingRun.id)).toBe(0);
+
     const result = await storage.execution.commit(finalCommit);
     expect(result.snapshot.run.status).toBe("COMPLETED");
     expect(result.snapshot.run.finalResult).toEqual(finalResult);
